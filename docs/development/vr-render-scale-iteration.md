@@ -13,6 +13,15 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 18: portable baseline and matched-pose evidence
+
+The [publication record](gameft-publication-20260918/README.md) adds complete
+baseline-repeat and matched-pose ledgers, preserving the settings/FOV
+corrections, prior raw-trace deletions, missing after-settings receipts and
+full-history health limits. The current 10 ms scheduler reassessment passes
+24/24 baseline windows and 35/36 matched-pose windows; historical flags and
+raw values remain unchanged. No new runtime measurement was performed.
+
 ## September 17: three material repeats and interrupted run
 
 The [material comparison](material-comparison-20260917/README.md) retains
@@ -949,10 +958,10 @@ setup used for render-scale and LLF crash triage keeps all Ghidra projects,
 cache, settings, and dumps on `D:`:
 
 ```text
-D:\Coding\GitHub\codex-ghidra-live
+${LOCAL_PATH_a15dc16347f2}
 ```
 
-Do not place persistent Ghidra projects or dumps under `C:\tmp`. Keep the helper
+Do not place persistent Ghidra projects or dumps under `${LOCAL_PATH_69a52e79b6c9}`. Keep the helper
 workspace outside the repository and untracked. It contains:
 
 ```text
@@ -974,12 +983,12 @@ or manual HTTP commands.
 Ghidra 12.1.2 launches successfully on the local machine when JDK 25 is forced:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-25.0.3.9-hotspot'
+$env:JAVA_HOME = '${PROGRAMFILES}\Eclipse Adoptium\jdk-25.0.3.9-hotspot'
 $env:GHIDRA_JAVA_HOME = $env:JAVA_HOME
 ```
 
 The reusable helper sets these environment variables automatically and also
-redirects Ghidra config/cache to `D:\Coding\GitHub\codex-ghidra-live`.
+redirects Ghidra config/cache to `${LOCAL_PATH_a15dc16347f2}`.
 
 For MCP analysis, install the repository-pinned GhidrAssistMCP extension and
 register its loopback endpoint as described in
@@ -991,7 +1000,7 @@ VR's decrypted executable bytes.
 Dump and disassemble a live helper window:
 
 ```powershell
-& 'D:\Coding\GitHub\codex-ghidra-live\Invoke-LiveGhidraDisasm.ps1' `
+& '${LOCAL_PATH_acb6f8399cea}' `
   -Rva 0x134C370 `
   -Length 0x700 `
   -Name shadow-helper
@@ -1000,17 +1009,17 @@ Dump and disassemble a live helper window:
 This writes:
 
 ```text
-D:\Coding\GitHub\codex-ghidra-live\dumps\<timestamp>-shadow-helper.bin
-D:\Coding\GitHub\codex-ghidra-live\dumps\<timestamp>-shadow-helper.meta.json
-D:\Coding\GitHub\codex-ghidra-live\dumps\<timestamp>-shadow-helper.disasm.txt
+${LOCAL_PATH_11de63cdd7da}<timestamp>-shadow-helper.bin
+${LOCAL_PATH_11de63cdd7da}<timestamp>-shadow-helper.meta.json
+${LOCAL_PATH_11de63cdd7da}<timestamp>-shadow-helper.disasm.txt
 ```
 
 Reuse a saved dump without a live Skyrim process by passing the `dumpBaseAddress`
 from the matching `.meta.json`:
 
 ```powershell
-& 'D:\Coding\GitHub\codex-ghidra-live\Invoke-LiveGhidraDisasm.ps1' `
-  -DumpPath 'D:\Coding\GitHub\codex-ghidra-live\dumps\<dump>.bin' `
+& '${LOCAL_PATH_acb6f8399cea}' `
+  -DumpPath '${LOCAL_PATH_11de63cdd7da}<dump>.bin' `
   -BaseAddress 0x7FF69492C370 `
   -Name shadow-helper-replay
 ```

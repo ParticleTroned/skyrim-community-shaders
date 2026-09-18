@@ -19,6 +19,9 @@ same PR. Earlier snapshots stay unchanged. See the
 | 0006    | [Material comparison, part 1](vr-render-scale-ledger-0006-investigation.csv)  |      See [coverage receipt](material-comparison-20260917/coverage.json) | Selected Balanced 1/3/4 cells, original traced reference, current R1/R2; complete receipts and WPR analysis                                                  |
 | 0007    | [Material comparison, part 2](vr-render-scale-ledger-0007-investigation.csv)  |      See [coverage receipt](material-comparison-20260917/coverage.json) | Current interrupted repeat and R3; missing Save 13 explicit; complete campaign comparisons/settings audit                                                    |
 
+| 0008 | [Gameft publication](vr-render-scale-ledger-0008-investigation.csv) | 89,987,702 bytes | Selected baseline/repeats, complete portable receipts and comparisons; [coverage](gameft-publication-20260918/coverage.json) |
+| 0009 | [Gameft publication](vr-render-scale-ledger-0009-investigation.csv) | 61,432,527 bytes | Selected baseline/repeats, complete portable receipts and comparisons; [coverage](gameft-publication-20260918/coverage.json) |
+
 The archives differ by 120,213 bytes. The original three are plain CSV files below
 100 MiB. Their column headers retain exact run and compiled-source
 identities; each has all 1,228 metric rows. Historical files are balanced

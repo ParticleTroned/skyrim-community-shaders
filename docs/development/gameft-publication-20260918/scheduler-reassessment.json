@@ -1,0 +1,442 @@
+{
+    "schema": "gameft-scheduler-reassessment-v1",
+    "policyId": "gameft-sw-scheduler-coverage-10ms-20260918",
+    "toleranceMs": 10.0,
+    "windowMs": 10000.0,
+    "cohorts": {
+        "baseline-repeat-comparison-20260917": {
+            "windows": 24,
+            "historicalPassed": 23,
+            "currentPassed": 24,
+            "rows": [
+                {
+                    "run": "Original",
+                    "save": "08",
+                    "errorMs": 0.16430000077707518,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Original",
+                    "save": "09",
+                    "errorMs": 0.20850000017344428,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Original",
+                    "save": "10",
+                    "errorMs": 0.11930001170912874,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Original",
+                    "save": "11",
+                    "errorMs": 4.253400003819479,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Original",
+                    "save": "12",
+                    "errorMs": 1.3675000140538032,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Original",
+                    "save": "13",
+                    "errorMs": 2.7528000030761177,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R1",
+                    "save": "08",
+                    "errorMs": 0.15850000123828067,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R1",
+                    "save": "09",
+                    "errorMs": 1.8379999936005333,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R1",
+                    "save": "10",
+                    "errorMs": 1.007100025213731,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R1",
+                    "save": "11",
+                    "errorMs": 1.2718999939825153,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R1",
+                    "save": "12",
+                    "errorMs": 6.286300028517871,
+                    "historical5msPassed": false,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R1",
+                    "save": "13",
+                    "errorMs": 1.6206000134843634,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R2",
+                    "save": "08",
+                    "errorMs": 0.2408000005689246,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R2",
+                    "save": "09",
+                    "errorMs": 0.7945000031486416,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R2",
+                    "save": "10",
+                    "errorMs": 0.5074000294443977,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R2",
+                    "save": "11",
+                    "errorMs": 1.4368999982398236,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R2",
+                    "save": "12",
+                    "errorMs": 1.616800033052641,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R2",
+                    "save": "13",
+                    "errorMs": 4.133000015757716,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R3",
+                    "save": "08",
+                    "errorMs": 0.18850000232669117,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R3",
+                    "save": "09",
+                    "errorMs": 0.2718999976059422,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R3",
+                    "save": "10",
+                    "errorMs": 0.14840003758581588,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R3",
+                    "save": "11",
+                    "errorMs": 1.5569000011128082,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R3",
+                    "save": "12",
+                    "errorMs": 2.9777000288358977,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Today R3",
+                    "save": "13",
+                    "errorMs": 0.6354000170213112,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                }
+            ]
+        },
+        "matched-pose-comparison-20260917": {
+            "windows": 36,
+            "historicalPassed": 33,
+            "currentPassed": 35,
+            "rows": [
+                {
+                    "run": "Head R1",
+                    "save": "08",
+                    "errorMs": 0.06890000259591034,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R1",
+                    "save": "09",
+                    "errorMs": 0.5275999971981946,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R1",
+                    "save": "10",
+                    "errorMs": 0.16770002398516226,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R1",
+                    "save": "11",
+                    "errorMs": 1.5611999966731673,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R1",
+                    "save": "12",
+                    "errorMs": 7.532000018558392,
+                    "historical5msPassed": false,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R1",
+                    "save": "13",
+                    "errorMs": 0.8732000150212116,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R2",
+                    "save": "08",
+                    "errorMs": 0.10160000088399102,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R2",
+                    "save": "09",
+                    "errorMs": 1.6277000020127161,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R2",
+                    "save": "10",
+                    "errorMs": 0.10480002042095293,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R2",
+                    "save": "11",
+                    "errorMs": 2.147500007209601,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R2",
+                    "save": "12",
+                    "errorMs": 11.382900023627371,
+                    "historical5msPassed": false,
+                    "current10msPassed": false
+                },
+                {
+                    "run": "Head R2",
+                    "save": "13",
+                    "errorMs": 0.9890000165105448,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R3",
+                    "save": "08",
+                    "errorMs": 0.2784999997475097,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R3",
+                    "save": "09",
+                    "errorMs": 0.44330000056470453,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R3",
+                    "save": "10",
+                    "errorMs": 0.41990001986778225,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R3",
+                    "save": "11",
+                    "errorMs": 1.8803000095849711,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R3",
+                    "save": "12",
+                    "errorMs": 1.9299000263363268,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Head R3",
+                    "save": "13",
+                    "errorMs": 7.180200013845024,
+                    "historical5msPassed": false,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R1",
+                    "save": "08",
+                    "errorMs": 0.10189999991780496,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R1",
+                    "save": "09",
+                    "errorMs": 1.6583999987324205,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R1",
+                    "save": "10",
+                    "errorMs": 0.1879000255066785,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R1",
+                    "save": "11",
+                    "errorMs": 1.1828000029527175,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R1",
+                    "save": "12",
+                    "errorMs": 1.043500022176886,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R1",
+                    "save": "13",
+                    "errorMs": 0.9375000148083927,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R2",
+                    "save": "08",
+                    "errorMs": 0.6258000010257092,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R2",
+                    "save": "09",
+                    "errorMs": 0.4162999985819624,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R2",
+                    "save": "10",
+                    "errorMs": 0.08960002269304823,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R2",
+                    "save": "11",
+                    "errorMs": 1.0374000063129643,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R2",
+                    "save": "12",
+                    "errorMs": 0.9969000253840932,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R2",
+                    "save": "13",
+                    "errorMs": 0.7468000140615914,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R3",
+                    "save": "08",
+                    "errorMs": 0.49610000298707746,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R3",
+                    "save": "09",
+                    "errorMs": 1.495999992977886,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R3",
+                    "save": "10",
+                    "errorMs": 0.08840002033684868,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R3",
+                    "save": "11",
+                    "errorMs": 3.6411999995907536,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R3",
+                    "save": "12",
+                    "errorMs": 1.084600022451923,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                },
+                {
+                    "run": "Baseline R3",
+                    "save": "13",
+                    "errorMs": 0.8702000123048492,
+                    "historical5msPassed": true,
+                    "current10msPassed": true
+                }
+            ]
+        }
+    }
+}

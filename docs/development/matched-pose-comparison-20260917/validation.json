@@ -1,0 +1,122 @@
+{
+    "metricRows": 36,
+    "traceQualityPassed": 6,
+    "lateModeChecks": 108,
+    "schedulerCoveragePassed": 33,
+    "schedulerFlags": [
+        {
+            "run": "Head R1",
+            "save": "12",
+            "errorMs": 7.532000018558392
+        },
+        {
+            "run": "Head R2",
+            "save": "12",
+            "errorMs": 11.382900023627371
+        },
+        {
+            "run": "Head R3",
+            "save": "13",
+            "errorMs": 7.180200013845024
+        }
+    ],
+    "hashMatchedPdbs": 6,
+    "savedMeansReconstructed": 36,
+    "sameProtocolHashes": true,
+    "sameWprProfile": true,
+    "outputs": [
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\analysis-scripts.json",
+            "bytes": 3863,
+            "sha256": "51f37662b0d1402f205438b0458e2b1c37ee1a072fcce9e4880abd7bb65095c5"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\comparison.json",
+            "bytes": 4012070,
+            "sha256": "07fb92209e2043c20b2c9792bd3def60bb70d582c92280ced384520ddb58e593"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\health.md",
+            "bytes": 16591,
+            "sha256": "ca3fff0640263155c31cc169d3ccbc4af898131b3d23fc60a4f429fcf99ea785"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\late-health-counters.json",
+            "bytes": 415093,
+            "sha256": "fa543bc4471f43ea9fa6ddcb111785c63911fee607cd3302716bb7f4616c14b2"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\late-health-counters.md",
+            "bytes": 9618,
+            "sha256": "3eebe0f8c37c24894e4793af83c237badef61a6ddc2798129b7698842284218d"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\native-pages.json",
+            "bytes": 701606,
+            "sha256": "fb106c634d80aaaf0debf797dd5fa81e088a58bbb0e55229b4cc52f6b2ad3315"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\native-pages.md",
+            "bytes": 4898,
+            "sha256": "a099bc7b2df8cc2c4c2b59a153ccf59de0c9cff8414176db5c6499949b8fe9f8"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\README.md",
+            "bytes": 18337,
+            "sha256": "1e3bd316e2412719f2cf4a7f4bc68ce455f1f2453d78ae0b91ba78ebb7761645"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\reproduction.md",
+            "bytes": 4671,
+            "sha256": "1fb907178597f3dc786c240cddaa3119b5a2489598c4375ab6b16d5aa4ebe8a5"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\settings-provenance.md",
+            "bytes": 3968,
+            "sha256": "62ceb3c0b25ee833b6a586cde41b664aee33c17ef3b1c63b44a8b8e3c11a164c"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\timing-metrics.csv",
+            "bytes": 4626,
+            "sha256": "b28bccfa65c83749023ff2310134f3af729bb066373090983c9fc9ae77aa7917"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\timing-tables.md",
+            "bytes": 18749,
+            "sha256": "3daf8555b9b1bf052bc5102e6dbaf474e15670bc02ba8da137e82fe7d8743788"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\trace-archives.json",
+            "bytes": 2577,
+            "sha256": "19dd187b76dd570cfba39bb3d7b090835e719a5075ca7b8369b34606a5df6391"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\wpr-comparison.json",
+            "bytes": 671333,
+            "sha256": "9ec23b50403274710c94006408571807d97d42806c3a37aecb01323d77a9bc2c"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\wpr-comparison.md",
+            "bytes": 84906,
+            "sha256": "2f7e3ea4c1602e01d4657f179332afb3d67b72e0892ac5881853bb7c224f3cbd"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\wpr-evidence.json",
+            "bytes": 24499478,
+            "sha256": "53685b4fce8c98911e3d2b6a8ae03c303f2ed8736d6cd2b1de73fbc9e13f106e"
+        },
+        {
+            "path": "${CSX_ROOT}\\docs\\development\\matched-pose-comparison-20260917\\wpr-metrics.csv",
+            "bytes": 86049,
+            "sha256": "0cbf21ae886eaaafe379b3c10aae67312d79889e86b3a1362264ad211c73b887"
+        }
+    ],
+    "missingAfterSettings": ["Baseline R1", "Baseline R3"],
+    "renderingCodeChanged": false,
+    "validationScript": {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\verify-matched-pose-20260918.py",
+        "bytes": 4962,
+        "sha256": "7EF749F127D6955BFBF226B609A0D2E0259ACB277F4BD81077745B05D3D3C9F8"
+    },
+    "publicationNote": "Original measurements/check verdicts retained. Output hashes refreshed for portable publication copies; original hashes preserved in the publication inventory."
+}

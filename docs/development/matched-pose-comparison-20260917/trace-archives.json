@@ -1,0 +1,44 @@
+[
+    {
+        "source": "${CSX_ROOT}\\build\\bisect\\measurements\\gameft-sw-20260917T213527647Z-1a97665f\\stack-wait\\cpu-stack-wait.etl",
+        "archive": "${LOG_ARCHIVE}\\head-6588831a-r1__20260917T225740201Z__550d4654__cpu-stack-wait.etl",
+        "bytes": 25507659776,
+        "sha256": "6E172BBD391377ED32EE0EB161B46C68FAB1CD82C4169D9FDA6A4D464C4E8E1B",
+        "verifiedUtc": "2026-09-17T22:58:31.075851+00:00"
+    },
+    {
+        "source": "${CSX_ROOT}\\build\\bisect\\measurements\\gameft-sw-20260917T214645079Z-6bad4ad8\\stack-wait\\cpu-stack-wait.etl",
+        "archive": "${LOG_ARCHIVE}\\head-6588831a-r2__20260917T230315156Z__479053dc__cpu-stack-wait.etl",
+        "bytes": 17688428544,
+        "sha256": "0FA1E4227D0AA5B9481C63898C1364FBFB02B6479B60DFFF34E10B16A7351BEE",
+        "verifiedUtc": "2026-09-17T23:03:47.100608+00:00"
+    },
+    {
+        "source": "${CSX_ROOT}\\build\\bisect\\measurements\\gameft-sw-20260917T215707046Z-694f5b87\\stack-wait\\cpu-stack-wait.etl",
+        "archive": "${LOG_ARCHIVE}\\head-6588831a-r3__20260917T230347102Z__57969cbb__cpu-stack-wait.etl",
+        "bytes": 19011731456,
+        "sha256": "1514D09723B9CB8984F22925B07462B6F6C50500361A9E9BE3BCC8918E68026C",
+        "verifiedUtc": "2026-09-17T23:04:25.213889+00:00"
+    },
+    {
+        "source": "${CSX_ROOT}\\build\\bisect\\measurements\\gameft-sw-20260917T221703107Z-72ffc12f\\stack-wait\\cpu-stack-wait.etl",
+        "archive": "${LOG_ARCHIVE}\\baseline-a1a11fe0-r1__20260917T230425215Z__7ee01ad7__cpu-stack-wait.etl",
+        "bytes": 19455279104,
+        "sha256": "44B9ED242B291551180E180707CDF888D2596A60AC1224CAF9A7C0603ED72DB9",
+        "verifiedUtc": "2026-09-17T23:05:03.591296+00:00"
+    },
+    {
+        "source": "${CSX_ROOT}\\build\\bisect\\measurements\\gameft-sw-20260917T223011161Z-775f252e\\stack-wait\\cpu-stack-wait.etl",
+        "archive": "${LOG_ARCHIVE}\\baseline-a1a11fe0-r2__20260917T230503592Z__36df9924__cpu-stack-wait.etl",
+        "bytes": 18216910848,
+        "sha256": "A0E26277613AB96794183239449C64E088387C52F619FC13B594DB2BA3912F6E",
+        "verifiedUtc": "2026-09-17T23:05:37.346498+00:00"
+    },
+    {
+        "source": "${CSX_ROOT}\\build\\bisect\\measurements\\gameft-sw-20260917T224224002Z-ec7a9c43\\stack-wait\\cpu-stack-wait.etl",
+        "archive": "${LOG_ARCHIVE}\\baseline-a1a11fe0-r3__20260917T230537347Z__37560ba4__cpu-stack-wait.etl",
+        "bytes": 20076036096,
+        "sha256": "DC9C967A32A5CF2B73DF8CCB35F8C49185DABEA61DCAD2025EC25D882900A3E3",
+        "verifiedUtc": "2026-09-17T23:06:17.557174+00:00"
+    }
+]

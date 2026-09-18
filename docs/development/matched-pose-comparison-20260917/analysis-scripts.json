@@ -1,0 +1,92 @@
+[
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\matched-pose-cohort-20260917.py",
+        "bytes": 1506,
+        "sha256": "0BB2E4A1F65DB503A2BD524B96629CE53486C22D6309B11D7D486360CA08D3CD"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\archive-matched-pose-20260917.py",
+        "bytes": 2569,
+        "sha256": "A635894B1E3EB7D9A0B3A0FC12C9EFA4EB1EB4FF87A611FDDB71333B5102453F"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\matched-pose-wpr-20260917.py",
+        "bytes": 1520,
+        "sha256": "C695878A7F6FADB5145DF36F2DDD9EB2FC276302C046AD428F45450F2C44B5FD"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\complete-matched-pose-wpr-20260918.py",
+        "bytes": 1614,
+        "sha256": "17967E3E9C7BE34DD8F6186800DFDBACC5DBD5EA4F8535491CE5FC85224166D2"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\report-matched-pose-20260917.py",
+        "bytes": 10364,
+        "sha256": "C9925539FA6BB041C136FC50E38F888871DB9F50C48B0F9E3934B6A2A075D8B4"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\report-matched-pose-wpr-20260918.py",
+        "bytes": 11527,
+        "sha256": "8729500B45BC280F4872B837AD820171EF8E29A45AB6FEA6C6602DD16FB3A0B8"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\report-matched-pose-counters-20260918.py",
+        "bytes": 4952,
+        "sha256": "C5E8D4C3B74FDAB4557B20AB9D822F4D22DD38C1E570812C2F5BFC9739E4D843"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\verify-matched-pose-20260918.py",
+        "bytes": 4962,
+        "sha256": "7EF749F127D6955BFBF226B609A0D2E0259ACB277F4BD81077745B05D3D3C9F8"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\baseline-repeat-wpr-20260917.py",
+        "bytes": 8810,
+        "sha256": "2757D6942A3D79CB92A9B1901CE583237FEC7E33D7D040E12470A0D0C8A902FF"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\finalize-baseline-wpr-20260917.py",
+        "bytes": 2146,
+        "sha256": "8A224CBF9C6495648A0C6761A575C8798642E5CCA8A2F0737BBB9C0199BC354A"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\prepare-wpa-analysis.py",
+        "bytes": 3422,
+        "sha256": "73D362805D9443663909E44F7214506A66BBF406D96335657AD20B79480BE1A1"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\prepare-sw-evidence.py",
+        "bytes": 3404,
+        "sha256": "FE616C52C036FE45C13E9E4908E4F6B50E0C183F9FBF7955CABAD3E1719540FC"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\count-sw-tail-frames.py",
+        "bytes": 1785,
+        "sha256": "3C71E24EFECCAF665EA2E291B6FF734E83D884EE5D66A396EDDFAA32D1464DB4"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\prepare-sw-211541758-precise.py",
+        "bytes": 1578,
+        "sha256": "65E7DB9B3BBA251B788823E8D0A3298D78AC342F6DBC84DB3C735A467C5707D9"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\analyze-sw-wpa.py",
+        "bytes": 9939,
+        "sha256": "BFEE24EA9AAA2432CB2D6BD0E8061A9A7739A10F7204A13E45DE4BAF29499C9B"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\analyze-culling-wpr-20260916.py",
+        "bytes": 11542,
+        "sha256": "4C9CBC292F4E2BC85DCE7631AFC24115BD11748F763AF12F0CB7AA2F9F66FF8F"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\cross-build-differential-20260916.py",
+        "bytes": 22548,
+        "sha256": "852A8EA5E2BDAA04F5ADC2B430D16B7CD8465D362D46C7EF3442B119AEBCEC59"
+    },
+    {
+        "path": "${CSX_ROOT}\\build\\cpu-burst-diagnostics\\culling-wpr-contexts-20260916.py",
+        "bytes": 4491,
+        "sha256": "2C1179BA2292BE08BFACA59EBA3A82D1D89A576BD5E7D1B94A6CF05B1B43BABF"
+    }
+]

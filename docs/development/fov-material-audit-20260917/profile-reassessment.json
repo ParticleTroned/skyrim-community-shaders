@@ -1,0 +1,795 @@
+{
+    "schema": "fov-profile-reassessment-v1",
+    "createdUtc": "2026-09-17T09:59:12.292472+00:00",
+    "cullingRunCount": 8,
+    "cullingBeforeAfterReceipts": 16,
+    "baselineRunCount": 4,
+    "baselineBeforeAfterReceipts": 8,
+    "sourceEvidence": [
+        {
+            "commit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+            "file": "src/Features/Upscaling.cpp",
+            "profileSelectionLine": 4813,
+            "fovOnlyControlLine": 16921
+        },
+        {
+            "commit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+            "file": "src/Features/Upscaling.cpp",
+            "profileSelectionLine": 4890,
+            "inactiveExplanationLine": 17231
+        }
+    ],
+    "selection": "GetFoveatedMaskProfileParams selects periphery_taa_center_area for the FOV+TAA profile, otherwise foveatedCenterArea.",
+    "correction": "Today baseline foveatedCenterArea=0.60 is an inactive FOV-only preference, not an active centre mismatch. Culling periphery_taa_center_area=0.60 was independently verified; retain those labels.",
+    "limitation": "Before/after snapshots establish recorded endpoints, not every instant within holds. Other feature settings can still differ.",
+    "receipts": [
+        {
+            "label": "Balanced 1",
+            "run": "gameft-sw-20260916T152832143Z-3828ffef",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T152832143Z-3828ffef/stack-wait/before.json",
+                "sha256": "8e13a89de80af30258c4bd2de2f5e12b86745a57a6f7a6d08ddd41a41c103c3b"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Balanced 1",
+            "run": "gameft-sw-20260916T152832143Z-3828ffef",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T152832143Z-3828ffef/stack-wait/after.json",
+                "sha256": "152eaa718ac27b314ad07ee58907dab8fd3ff6b970e022fa51e1fafff65e6143"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Performance",
+            "run": "gameft-sw-20260916T154518977Z-a6e09be6",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T154518977Z-a6e09be6/stack-wait/before.json",
+                "sha256": "9d27517a3d4427f1ac6cd37730fcd673e2721b0a63e6dba048189dd5fc95d65d"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Performance",
+            "run": "gameft-sw-20260916T154518977Z-a6e09be6",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T154518977Z-a6e09be6/stack-wait/after.json",
+                "sha256": "d1d1c9637e59b808e91b1865257d28e89daa385551bab9382eccb5c3db5cd031"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Legacy",
+            "run": "gameft-sw-20260916T155929972Z-2a6a7693",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T155929972Z-2a6a7693/stack-wait/before.json",
+                "sha256": "8f7423a6a62dd677b330789df162a731772416b65349cec1d1fbf0b8f5f15b60"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Legacy",
+            "run": "gameft-sw-20260916T155929972Z-2a6a7693",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T155929972Z-2a6a7693/stack-wait/after.json",
+                "sha256": "9e78802e375ea2f8bb54e1367c4d311845c067bb7025f6431c640fc8435ab904"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Balanced 2 uncertain",
+            "run": "gameft-sw-20260916T161424154Z-401a5499",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T161424154Z-401a5499/stack-wait/before.json",
+                "sha256": "9e6b13279f71383983630aef7d3b5ab38466846ea0a5d83fdeff1ff2388a560d"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Balanced 2 uncertain",
+            "run": "gameft-sw-20260916T161424154Z-401a5499",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T161424154Z-401a5499/stack-wait/after.json",
+                "sha256": "6d3f5ff4f5e53d600d079b443a5274e4814c27220cfd6a1e0fa084b279a73b98"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Balanced 3",
+            "run": "gameft-sw-20260916T163602908Z-a26f2ef1",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T163602908Z-a26f2ef1/stack-wait/before.json",
+                "sha256": "83e4e4b2ce2d2b4be9686da0fbd8c4a0e8de8a07a729a6f5f8da856e880a900b"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Balanced 3",
+            "run": "gameft-sw-20260916T163602908Z-a26f2ef1",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T163602908Z-a26f2ef1/stack-wait/after.json",
+                "sha256": "25bae2734c8bbbdd90285ccd88988d0575453e1533728304d9f66e5b0cf8c676"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Balanced 4",
+            "run": "gameft-sw-20260916T165146902Z-36b2c165",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T165146902Z-36b2c165/stack-wait/before.json",
+                "sha256": "e97b1ebf6019f1e5bc1b1f780917edd32abf9530ff16b9bf84f85e76d1be2878"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Balanced 4",
+            "run": "gameft-sw-20260916T165146902Z-36b2c165",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T165146902Z-36b2c165/stack-wait/after.json",
+                "sha256": "5638ec7de52647438c5ae7f837783495a12973ef516063243d0e39c811e96498"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Legacy 2",
+            "run": "gameft-sw-20260916T172315555Z-43f348bd",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T172315555Z-43f348bd/stack-wait/before.json",
+                "sha256": "d12c1fd9e4b79db346ee77b3555ea85cf80d5220b78aeb52cbba507673d7a2ab"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Legacy 2",
+            "run": "gameft-sw-20260916T172315555Z-43f348bd",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T172315555Z-43f348bd/stack-wait/after.json",
+                "sha256": "ba866f4c913c3ef5ab1f8bd98b6d7dcd429555256496562b8d7329a89b04f36c"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Depth off",
+            "run": "gameft-sw-20260916T190211584Z-812d171f",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T190211584Z-812d171f/stack-wait/before.json",
+                "sha256": "89a17ed97ea6b1b151be73ea38c78c9cbbaa660bb3e401c1113986d55c947250"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Depth off",
+            "run": "gameft-sw-20260916T190211584Z-812d171f",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260916T190211584Z-812d171f/stack-wait/after.json",
+                "sha256": "91c11b79464badbaf4175f9cdf9e97b0a6893f25e87b9ec81c3f3af548466d39"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "caf9feac1bce8608281b02ddeadbc5b507c68fb739a04044d5f57a6c18b905dd",
+                "buildIdShort": "caf9feac1bce",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "503fbfc92b5a9a58f5ba14a2343c3b0b119c40dc",
+                "sourceDescribe": "v3.19.0-pr39-308-g503fbfc92",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.6000000238418579,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.6,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Original baseline",
+            "run": "gameft-sw-20260915T183826985Z",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260915T183826985Z/stack-wait/before.json",
+                "sha256": "6620f46dd2765d2369c1c8150a6f9b46b3d1c438db57a9621246920009167efb"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.30000001192092896,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Original baseline",
+            "run": "gameft-sw-20260915T183826985Z",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260915T183826985Z/stack-wait/after.json",
+                "sha256": "05ae618c7d1f99cfaf2617470bea181887bd12463e45e6a630c99b544fc5d676"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.30000001192092896,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Baseline today R1",
+            "run": "gameft-sw-20260917T091738372Z-574152f4",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260917T091738372Z-574152f4/stack-wait/before.json",
+                "sha256": "c00ee8656511d141fc7507f97f8db28111f08528e83463f55ace30bd27ab138e"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Baseline today R1",
+            "run": "gameft-sw-20260917T091738372Z-574152f4",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260917T091738372Z-574152f4/stack-wait/after.json",
+                "sha256": "59d1c6bf6ca0c62b755456c92156d4a9efcf7a479c3302fb3e7a2a2a4015aca8"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Baseline today R2",
+            "run": "gameft-sw-20260917T093110225Z-6abc5f75",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260917T093110225Z-6abc5f75/stack-wait/before.json",
+                "sha256": "77f949e87158f01eafc91a5af045697e90b7aebc43f8566727eeba2f393f21fc"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Baseline today R2",
+            "run": "gameft-sw-20260917T093110225Z-6abc5f75",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260917T093110225Z-6abc5f75/stack-wait/after.json",
+                "sha256": "d326733648db47bd473e32615751237cd3fc5267e77b9a8263e0ebdd5d687578"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Baseline today R3",
+            "run": "gameft-sw-20260917T094258533Z-3bc4de9e",
+            "phase": "before",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260917T094258533Z-3bc4de9e/stack-wait/before.json",
+                "sha256": "b9ba03425727e011a93fc7b743bf21cc1821a2857d2bc6b56ea7217f756a33d2"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        },
+        {
+            "label": "Baseline today R3",
+            "run": "gameft-sw-20260917T094258533Z-3bc4de9e",
+            "phase": "after",
+            "source": {
+                "path": "build/bisect/measurements/gameft-sw-20260917T094258533Z-3bc4de9e/stack-wait/after.json",
+                "sha256": "14d4fc73bf2a9eed6e3f8ab14b006f1f962a31a528c8f0687eb381cbe62bf53b"
+            },
+            "producer": {
+                "artifactSha256": "",
+                "buildId": "ee97357e1005ab9fc04025938a1875e7af689c1c4409a0df74e756b6b2974ca6",
+                "buildIdShort": "ee97357e1005",
+                "component": "CommunityShaders",
+                "configuration": "Release",
+                "manifestError": "runtime artifact verification delegated to deployment harness",
+                "manifestVerified": false,
+                "shaderCacheAbiId": "85f71f8f713542badba1027e6216e07f42a762782165d185f004e4c14af1d5c6",
+                "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.19041.7663",
+                "sourceCommit": "a1a11fe0d722fd6dbc18315a023701e0ec4a84de",
+                "sourceDescribe": "v3.19.0-pr39-232-ga1a11fe0d",
+                "sourceDirty": false
+            },
+            "fields": {
+                "periphery_taa_enable": true,
+                "periphery_taa_center_area": 0.30000001192092896,
+                "periphery_taa_outer_scale": 0.699999988079071,
+                "foveatedCenterArea": 0.6000000238418579,
+                "foveatedVendorDispatch": true
+            },
+            "fovTaaCentre": 0.3,
+            "fovOnlyApplicability": "Inactive saved profile while FOV+TAA is active"
+        }
+    ]
+}

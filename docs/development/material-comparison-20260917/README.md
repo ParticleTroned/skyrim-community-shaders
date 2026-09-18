@@ -1,5 +1,14 @@
 # Material candidate: repeated CPU/GPU assessment
 
+**Later comparison audit (17 September):** the fresh baseline repeats
+expose an SSGI/AO mismatch with these head repeats. Their menu settings
+match, but the baseline records SSGI enabled after loading and contains
+active AO-path stacks in measured interior windows. These head repeats
+record SSGI disabled before and after the assay. Retain the results below
+as historical observations; they do not establish a settings-matched
+whole-build performance comparison. See the
+[settings and stack verification](../baseline-repeat-comparison-20260917/head-settings-audit.md).
+
 The material change does **not demonstrate a consistent time saving**.
 Current CPU latency remains above the original traced baseline in all six
 saves, while GPU time is lower for DLAA and higher for DLSS. Those CPU
@@ -57,6 +66,12 @@ have it enabled with **0.60**. Both use outer scale 0.70. With FOV+TAA
 enabled, `GetFoveatedMaskProfileParams` selects this periphery centre, so
 this is an active rendering setting, not an irrelevant saved preference.
 Other recorded non-Upscaling feature settings match the later reference.
+
+This refers specifically to `periphery_taa_center_area`, not
+`foveatedCenterArea`. The latter stores the FOV-only profile and is inactive
+while FOV+TAA is active. All sixteen before/after receipts from the eight
+culling runs were rechecked: their enabled FOV+TAA centre itself is 0.60.
+See the [profile reassessment](../fov-material-audit-20260917/profile-reassessment.json).
 
 Consequently, the later comparison is **not an isolated material A/B**.
 The original baseline also differs in source and vendor libraries:
@@ -223,3 +238,7 @@ python docs/development/material-comparison-20260917/verify.py
 This publication changes analysis/documentation only. Rendering code,
 settings, shader caches and the saved measurement protocol were untouched.
 It is not a new physical-HMD visual qualification or proof of CTD resolution.
+
+Publication note: machine-specific paths use portable root labels. Historical
+scheduler flags retain their original policy; see the additive
+[10 ms reassessment and complete ledger record](../gameft-publication-20260918/README.md).

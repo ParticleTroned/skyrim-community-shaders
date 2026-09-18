@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 
 namespace
@@ -17,11 +18,6 @@ namespace
 	constexpr float kCausticsTilingMin = 0.25f;
 	constexpr float kCausticsTilingMax = 4.0f;
 	constexpr float kCausticsSpeedMax = 3.0f;
-
-	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
-	{
-		return std::isfinite(a_value) ? std::clamp(a_value, a_min, a_max) : a_default;
-	}
 
 	void DrawTooltip(const char* a_text)
 	{
@@ -187,7 +183,7 @@ WaterAppearance::Profile WaterAppearance::LerpProfiles(const Profile& a_a, const
 	SanitizeProfile(from);
 	SanitizeProfile(to);
 
-	const float t = std::clamp(std::isfinite(a_t) ? a_t : 0.0f, 0.0f, 1.0f);
+	const float t = Util::ClampFinite(a_t, 0.0f, 1.0f, 0.0f);
 	const auto lerp = [&](float a_start, float a_end) {
 		return std::lerp(a_start, a_end, t);
 	};
@@ -215,51 +211,51 @@ WaterAppearance::Profile WaterAppearance::LerpProfiles(const Profile& a_a, const
 void WaterAppearance::SanitizeProfile(Profile& a_profile)
 {
 	const Profile defaults{};
-	a_profile.WaterBrightness = ClampFiniteOrDefault(
+	a_profile.WaterBrightness = Util::ClampFinite(
 		a_profile.WaterBrightness,
 		kWaterBrightnessMin,
 		kWaterBrightnessMax,
 		defaults.WaterBrightness);
-	a_profile.GlobalReflectionAmount = ClampFiniteOrDefault(
+	a_profile.GlobalReflectionAmount = Util::ClampFinite(
 		a_profile.GlobalReflectionAmount,
 		kWaterAmountMin,
 		kWaterAmountMax,
 		defaults.GlobalReflectionAmount);
-	a_profile.RefractionAmount = ClampFiniteOrDefault(
+	a_profile.RefractionAmount = Util::ClampFinite(
 		a_profile.RefractionAmount,
 		kWaterAmountMin,
 		kWaterAmountMax,
 		defaults.RefractionAmount);
-	a_profile.SunSpecularMultiplier = ClampFiniteOrDefault(
+	a_profile.SunSpecularMultiplier = Util::ClampFinite(
 		a_profile.SunSpecularMultiplier,
 		kWaterAmountMin,
 		kWaterSunSpecularMax,
 		defaults.SunSpecularMultiplier);
-	a_profile.WaveAmplitude = ClampFiniteOrDefault(
+	a_profile.WaveAmplitude = Util::ClampFinite(
 		a_profile.WaveAmplitude,
 		kWaterAmountMin,
 		kWaterAmountMax,
 		defaults.WaveAmplitude);
-	a_profile.FresnelMin = ClampFiniteOrDefault(
+	a_profile.FresnelMin = Util::ClampFinite(
 		a_profile.FresnelMin,
 		kWaterFresnelMin,
 		kWaterFresnelMax,
 		defaults.FresnelMin);
-	a_profile.FresnelMax = ClampFiniteOrDefault(
+	a_profile.FresnelMax = Util::ClampFinite(
 		a_profile.FresnelMax,
 		kWaterFresnelMin,
 		kWaterFresnelMax,
 		defaults.FresnelMax);
 	a_profile.FresnelMin = std::min(a_profile.FresnelMin, a_profile.FresnelMax);
-	a_profile.Muddiness = ClampFiniteOrDefault(
+	a_profile.Muddiness = Util::ClampFinite(
 		a_profile.Muddiness,
 		kWaterAmountMin,
 		kWaterAmountMax,
 		defaults.Muddiness);
-	a_profile.CausticsStrength = ClampFiniteOrDefault(a_profile.CausticsStrength, kWaterAmountMin, kWaterAmountMax, defaults.CausticsStrength);
-	a_profile.CausticsTiling = ClampFiniteOrDefault(a_profile.CausticsTiling, kCausticsTilingMin, kCausticsTilingMax, defaults.CausticsTiling);
-	a_profile.CausticsSpeed = ClampFiniteOrDefault(a_profile.CausticsSpeed, kWaterAmountMin, kCausticsSpeedMax, defaults.CausticsSpeed);
-	a_profile.CausticsDispersion = ClampFiniteOrDefault(a_profile.CausticsDispersion, kWaterAmountMin, kWaterAmountMax, defaults.CausticsDispersion);
-	a_profile.ParallaxStrength = ClampFiniteOrDefault(a_profile.ParallaxStrength, kWaterAmountMin, kWaterAmountMax, defaults.ParallaxStrength);
+	a_profile.CausticsStrength = Util::ClampFinite(a_profile.CausticsStrength, kWaterAmountMin, kWaterAmountMax, defaults.CausticsStrength);
+	a_profile.CausticsTiling = Util::ClampFinite(a_profile.CausticsTiling, kCausticsTilingMin, kCausticsTilingMax, defaults.CausticsTiling);
+	a_profile.CausticsSpeed = Util::ClampFinite(a_profile.CausticsSpeed, kWaterAmountMin, kCausticsSpeedMax, defaults.CausticsSpeed);
+	a_profile.CausticsDispersion = Util::ClampFinite(a_profile.CausticsDispersion, kWaterAmountMin, kWaterAmountMax, defaults.CausticsDispersion);
+	a_profile.ParallaxStrength = Util::ClampFinite(a_profile.ParallaxStrength, kWaterAmountMin, kWaterAmountMax, defaults.ParallaxStrength);
 	a_profile.ParallaxQuality = std::clamp(a_profile.ParallaxQuality, Profile::kMinParallaxQuality, Profile::kMaxParallaxQuality);
 }

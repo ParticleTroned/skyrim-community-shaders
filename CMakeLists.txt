@@ -3189,6 +3189,8 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(profiler_timing_test PRIVATE d3d11.lib runtimeobject.lib)
 
+    include(tests/profiler_capture.cmake)
+
     add_controller_test(
         ab_test_aggregator_test
         ABTestAggregator

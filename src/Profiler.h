@@ -21,6 +21,14 @@ public:
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
 
+	enum class CaptureMode : uint8_t
+	{
+		None = 0,
+		GPU = 1,
+		CPU = 2,
+		Both = 3
+	};
+
 	struct RollingHistory
 	{
 		float history[kHistorySize]{};
@@ -123,7 +131,8 @@ public:
 	void Release();
 	void SetUserEnabled(bool a_enabled);
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
-	void RequestCapture();
+	/** @brief Requests sources for the next frame; concurrent requests combine. */
+	void RequestCapture(CaptureMode a_mode = CaptureMode::Both);
 	bool StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId);
 	bool CancelBoundedCapture(uint64_t a_sessionId);
 	CaptureSessionProgress GetBoundedCaptureProgress() const;
@@ -155,6 +164,17 @@ public:
 	uint32_t GetAcquiredSlots() const { return acquiredSlots; }
 	uint32_t GetPeakAcquiredSlots() const { return peakAcquiredSlots; }
 	uint32_t GetSlotRefusals() const { return slotRefusals; }
+	/** @brief CPU results published at their own frame boundary, independently of GPU queries. */
+	const std::vector<TimerResult>& GetImmediateCpuResults() const { return immediateCpuResults; }
+	/** @brief Engine frame stamped on the retained independent CPU publication. */
+	uint32_t GetCapturedCpuFrameCount() const { return capturedCpuFrameCount; }
+	/** @brief CPU publications since initialization or history reset; zero means no data. */
+	uint64_t GetCpuPublicationCount() const { return cpuPublicationCount; }
+	/** @brief Sum of CPU self times in the retained publication, including while idle. */
+	float GetImmediateCpuTotalTimeMs() const { return immediateCpuTotalMs; }
+	/** @brief Cumulative CPU-only/fallback capacity refusals since initialization. */
+	uint32_t GetCpuSlotRefusals() const { return cpuSlotRefusals; }
+	bool IsCpuCaptureActive() const { return IsEnabled() && Captures(CaptureMode::CPU); }
 	void ClearTimers();
 	void ClearTimersForFeature(const std::string& featureName);
 
@@ -229,6 +249,7 @@ private:
 		uint32_t activeCount = 0;
 		uint32_t capturedFrame = 0;
 		uint64_t captureSessionId = 0;
+		bool capturedCpu = false;
 		bool inFlight = false;
 	};
 
@@ -237,12 +258,16 @@ private:
 	FrameQueries frames[kFrameLatency];
 	uint32_t writeFrame = 0;
 	uint32_t readFrame = 0;
-	uint32_t framesSinceInit = 0;
 	bool initialized = false;
 	bool frameActive = false;
 	std::atomic_bool userEnabled{ false };
-	std::atomic_bool captureRequested{ false };
+	std::atomic<uint8_t> captureRequested{ 0 };
 	std::atomic_bool captureActive{ false };
+	CaptureMode activeCaptureMode = CaptureMode::None;
+	uint64_t activeCaptureSessionId = 0;
+	bool gpuAcquisitionBlocked = false;
+	// Each successful BeginPass owns either a GPU interval or a CPU fallback scope.
+	std::vector<bool> activePassUsesGpu;
 	double cpuTicksToMs = 0.0;
 
 	PerfEventCallback beginPerfEvent;
@@ -302,6 +327,32 @@ private:
 	std::vector<CaptureKnownTimer> boundedCaptureTimers;
 	std::unordered_map<std::string, size_t> boundedCaptureTimerIndex;
 	std::vector<TimerResult> boundedCaptureResults;
+
+	struct ImmediateCpuTimer
+	{
+		std::string name;
+		RollingHistory history;
+		RollingHistory outermost;
+		uint64_t lastSampleCycle = 0;
+		bool active = false;
+	};
+	std::vector<ImmediateCpuTimer> immediateCpuTimers;
+	std::unordered_map<std::string, size_t> immediateCpuTimerIndex;
+	std::vector<TimerResult> immediateCpuResults;
+	uint32_t capturedCpuFrameCount = 0;
+	uint64_t cpuPublicationCount = 0;
+	float immediateCpuTotalMs = 0.0f;
+	uint32_t cpuSlotRefusals = 0;
+
+	bool Captures(CaptureMode a_mode) const
+	{
+		return (static_cast<uint8_t>(activeCaptureMode) & static_cast<uint8_t>(a_mode)) != 0;
+	}
+	void LatchCaptureRequest();
+	bool BeginFallbackCpuPass(std::string_view name, bool fireCallbacks);
+	void PublishImmediateCpuResults(uint32_t a_frameCount);
+	void RebuildImmediateCpuResults();
+	void ClearImmediateCpuResults();
 
 	bool CollectResults();
 	KnownTimer& GetOrCreateTimer(const std::string& name);

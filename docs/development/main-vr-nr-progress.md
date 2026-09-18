@@ -150,3 +150,13 @@ timings and overhead remain unmeasured. The [transaction report](main-vr-nr-tran
 records exact producer identity, findings and scope. No new measurements,
 settings changes, branch migration, build, deployment or push occurred in
 this evidence review.
+
+## Task 2: native replay tooling
+
+The bounded developer capture, standalone admitted-runtime replay and
+cost-report tooling are implemented. See the [native replay checkpoint](main-vr-nr-native-replay.md)
+for contracts, actual SDK/runtime inspection, validation and explicit
+measurement gaps. The test AIO enables the DevBench bridge; deployment
+and push remain manual. Numeric A/B/C cost tables require new native input
+bundles. Earlier screenshots cannot provide depth/motion inputs. Task 3
+ROI descriptor changes remain separate and have not been started here.

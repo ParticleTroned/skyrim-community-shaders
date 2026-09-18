@@ -109,3 +109,26 @@ target_include_directories(neural_execution_evidence_test PRIVATE "${_neural_exe
 
 add_controller_test(neural_character_evidence_test NeuralCharacterEvidence tests/neural_character_evidence_test.cpp)
 target_link_libraries(neural_character_evidence_test PRIVATE nlohmann_json::nlohmann_json)
+
+add_controller_test(neural_replay_capture_test NeuralReplayCapture tests/neural_replay_capture_test.cpp)
+target_sources(neural_replay_capture_test PRIVATE
+    src/Features/Upscaling/NeuralRendering/ReplayCapture.cpp src/Utils/CryptoHash.cpp)
+target_compile_definitions(neural_replay_capture_test PRIVATE DEVBENCH_BRIDGE_ENABLED NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(neural_replay_capture_test PRIVATE nlohmann_json::nlohmann_json d3d11 dxgi dxguid bcrypt)
+set_tests_properties(NeuralReplayCapture PROPERTIES TIMEOUT 30)
+add_test(NAME NeuralReplayReport COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_color/replay_report_test.py")
+set_tests_properties(NeuralReplayReport PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
+
+set(_neural_replay_request_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_replay_request")
+add_custom_command(
+    OUTPUT "${_neural_replay_request_dir}/neural_replay_request_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_replay_request_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_replay_request.cmake"
+    DEPENDS src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp tests/extract_neural_replay_request.cmake
+    VERBATIM)
+add_controller_test(neural_replay_request_test NeuralReplayRequest tests/neural_replay_request_test.cpp)
+target_sources(neural_replay_request_test PRIVATE "${_neural_replay_request_dir}/neural_replay_request_under_test.h")
+target_include_directories(neural_replay_request_test PRIVATE "${_neural_replay_request_dir}")
+target_link_libraries(neural_replay_request_test PRIVATE nlohmann_json::nlohmann_json)

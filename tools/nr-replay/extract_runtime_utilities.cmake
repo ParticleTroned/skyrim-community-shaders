@@ -1,0 +1,18 @@
+# Reuse the exact production platform helpers without linking game machinery.
+function(nr_extract source begin end result)
+    file(READ "${REPOSITORY_ROOT}/${source}" _text)
+    string(FIND "${_text}" "${begin}" _start)
+    string(FIND "${_text}" "${end}" _end)
+    if(_start EQUAL -1 OR _end LESS _start)
+        message(FATAL_ERROR "NR replay utility boundary changed: ${source}")
+    endif()
+    math(EXPR _length "${_end} - ${_start}")
+    string(SUBSTRING "${_text}" ${_start} ${_length} _body)
+    set(${result} "${_body}" PARENT_SCOPE)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${REPOSITORY_ROOT}/${source}")
+endfunction()
+nr_extract(src/Utils/FileSystem.cpp "\t\tstd::filesystem::path GetDataPath()" "\n\t\tstd::filesystem::path GetCommunityShaderPath()" _path)
+nr_extract(src/Utils/WinApi.cpp "\tstd::optional<REL::Version> GetDllVersion(" "\n\tuint32_t GetPerformanceCoreCount()" _version)
+nr_extract(src/Utils/Format.cpp "\tstd::string GetFormattedVersion(" "\n\tstd::string DefinesToString(" _format)
+file(WRITE "${OUTPUT_DIRECTORY}/runtime_utilities.cpp"
+    "#include \"replay_platform.h\"\n#include \"d3d_resource_naming.h\"\nnamespace Util {\n${_version}\n${_format}\nnamespace PathHelpers {\n${_path}\n}\n}\n")

@@ -6,6 +6,12 @@
 #include "PipelinePolicy.h"
 #include "Utils/D3D.h"
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "BuildProvenance.h"
+#	include "ExecutionEvidenceJson.h"
+#	include "ReplayCapture.h"
+#endif
+
 #include <DirectXTex.h>
 #include <SKSE/SKSE.h>
 #include <algorithm>
@@ -671,6 +677,12 @@ namespace NeuralRendering
 
 			explicit operator bool() const noexcept { return FAILED(result); }
 		};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		void CaptureReplayBatch(std::span<const RendererApplyArgs> args,
+			std::span<Slot* const> slots, std::span<const ValidatedResources> resources,
+			const std::shared_ptr<ExecutionEvidence>& execution) noexcept;
+#endif
 
 		bool ApplyLocked(
 			const RendererApplyArgs& a_args,
@@ -2689,6 +2701,11 @@ namespace NeuralRendering
 
 		// Reconstruct ALL physical regions before the first external write. This is
 		// shared by standard, single-ROI and multi-ROI NR, before character blending.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (Replay::IsArmed())
+			CaptureReplayBatch(a_args, std::span(slots.data(), a_args.size()),
+				std::span(resources.data(), a_args.size()), execution);
+#endif
 		if (colorConfiguration_.Enabled()) {
 			for (std::size_t index = 0; index < a_args.size(); ++index) {
 				const auto copiedBefore = slots[index]->colorWork.observation.copiedLogicalBytes;
@@ -2768,6 +2785,82 @@ namespace NeuralRendering
 		executionCompletion.succeeded = true;
 		return true;
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void Renderer::State::CaptureReplayBatch(std::span<const RendererApplyArgs> args,
+		std::span<Slot* const> slots, std::span<const ValidatedResources> resources,
+		const std::shared_ptr<ExecutionEvidence>& execution) noexcept
+	try {
+		Replay::Batch batch;
+		batch.supported = !args.empty() && args.size() <= 2 &&
+		                  !colorConfiguration_.experiments.transportBypass && colorConfiguration_.experiments.applyModelEdit;
+		batch.unsupportedReason = "replay requires proven full initialized auto-mask inputs with at most two eyes";
+		if (args.empty()) {
+			Replay::Fail(batch.unsupportedReason);
+			return;
+		}
+		const auto& first = args.front();
+		const auto& context = first.executionContext;
+		batch.supported &= context.renderingMode.has_value() && context.sourceTransactionId != 0 &&
+		                   context.jitterPixels.has_value() && context.sourceColorOrigin.has_value() && context.sourceGuideOrigin.has_value();
+		if (!batch.supported) {
+			Replay::Fail(batch.unsupportedReason);
+			return;
+		}
+		const auto& tuning = first.tuning;
+		batch.metadata = {
+			{ "frame", first.frameId }, { "sourceWorldFrame", first.sourceWorldFrame }, { "generation", first.generation },
+			{ "insertionPoint", static_cast<uint32_t>(first.insertionPoint) },
+			{ "mode", static_cast<uint32_t>(*context.renderingMode) },
+			{ "arrangement", static_cast<uint32_t>(ResolvePipelineArrangement(*context.renderingMode)) },
+			{ "source", Evidence::ContextJson(context) }, { "colorRevision", colorConfiguration_.revision },
+			{ "inputEpoch", colorConfiguration_.inputEpoch[static_cast<size_t>(first.insertionPoint)] },
+			{ "colorConfiguration", Color::ConfigurationEvidenceJson(colorConfiguration_) },
+			{ "characterSelection", first.characterVisualIsolation },
+			{ "tuning", { { "intensity", tuning.intensity }, { "localToneStrength", tuning.localToneStrength },
+							{ "localStructureStrength", tuning.localStructureStrength }, { "skinStructureStrength", tuning.skinStructureStrength },
+							{ "style", tuning.style }, { "useAutoMask", tuning.useAutoMask }, { "uiCorrection", tuning.uiCorrection },
+							{ "singleSubrectScale", tuning.singleSubrectScale } } },
+			{ "execution", execution ? Evidence::ExecutionJson(*execution) : nlohmann::json(nullptr) },
+			{ "stage", "native_nr_before_colour_reconstruction_and_csx_composite" }
+		};
+		BuildProvenance::AttachProducer(batch.metadata);
+		auto& runtime = Runtime::Instance();
+		batch.runtime = { { "path", runtime.Path().string() }, { "sha256", runtime.Hash() }, { "version", runtime.Version() } };
+		ComPtr<IDXGIDevice> dxgi;
+		ComPtr<IDXGIAdapter> adapter;
+		DXGI_ADAPTER_DESC desc{};
+		if (FAILED(first.device->QueryInterface(IID_PPV_ARGS(&dxgi))) || FAILED(dxgi->GetAdapter(&adapter)) ||
+			FAILED(adapter->GetDesc(&desc))) {
+			Replay::Fail("replay adapter identity unavailable");
+			return;
+		}
+		batch.adapter = { { "vendorId", desc.VendorId }, { "deviceId", desc.DeviceId },
+			{ "description", std::filesystem::path(desc.Description).string() },
+			{ "luid", { { "low", desc.AdapterLuid.LowPart }, { "high", desc.AdapterLuid.HighPart } } } };
+		LARGE_INTEGER driverVersion{};
+		batch.adapter["driverVersion"] = SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driverVersion)) ?
+		                                     nlohmann::json(driverVersion.QuadPart) :
+		                                     nlohmann::json(nullptr);
+		for (size_t index = 0; index < args.size(); ++index) {
+			const auto& value = args[index];
+			const auto& rect = resources[index].outputSubrect;
+			const auto& guideRect = resources[index].guideSubrect;
+			const auto& colorRect = resources[index].colorSubrect;
+			batch.supported &= value.featureSlot < 4 && !value.controlMask && value.tuning.useAutoMask &&
+			                   value.colorWidth == value.outputWidth && value.colorHeight == value.outputHeight &&
+			                   guideRect.baseX == 0 && guideRect.baseY == 0 && guideRect.width == value.guideWidth && guideRect.height == value.guideHeight &&
+			                   colorRect.baseX == 0 && colorRect.baseY == 0 && colorRect.width == value.colorWidth && colorRect.height == value.colorHeight &&
+			                   rect.baseX == 0 && rect.baseY == 0 && rect.width == value.outputWidth && rect.height == value.outputHeight &&
+			                   value.executionContext.sourceTransactionId == context.sourceTransactionId;
+			const auto scale = UpscalingDLSS::BuildMotionVectorPixelScale(value.viewportCrop);
+			batch.eyes.push_back({ .slot = value.featureSlot, .outputSubrect = rect, .motionVectorScale = { scale.x, scale.y }, .featureUpscaling = value.featureUpscaling, .color = slots[index]->color.resource11.Get(), .depth = slots[index]->depth.resource11.Get(), .motion = slots[index]->motionVectors.resource11.Get(), .output = slots[index]->output.resource11.Get(), .metadata = { { "source", Evidence::ContextJson(value.executionContext) }, { "viewport", Evidence::ViewportJson(value.viewportCrop) }, { "callerReset", value.reset }, { "synchronizedHistoryReset", value.synchronizedHistoryReset } } });
+		}
+		Replay::OfferBatch(first.device, first.context, batch);
+	} catch (...) {
+		Replay::Fail("native replay metadata could not be retained");
+	}
+#endif
 
 	bool Renderer::State::ResetLocked(bool a_resetShader, bool a_destruction)
 	{

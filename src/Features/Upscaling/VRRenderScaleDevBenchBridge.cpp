@@ -19,6 +19,7 @@
 #	include "Utils/RendererContextAccess.h"
 #	include "Utils/VRLoadingMenuClear.h"
 #	include "Utils/Form.h"
+#	include "Utils/FileSystem.h"
 #	include "VRAPI/CSserviceapi.h"
 #	include "VRAPI/CSupscalingapi.h"
 
@@ -50,6 +51,8 @@
 #	include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
 #	include "Features/Upscaling/NeuralRendering/Renderer.h"
+#	include "Features/Upscaling/NeuralRendering/ReplayCapture.h"
+#	include "Features/Upscaling/NeuralRendering/ColorPipeline.h"
 
 #	include "Profiler.h"
 
@@ -10766,6 +10769,50 @@ namespace
 		};
 	}
 
+	json BuildNeuralReplayResult(const json& args)
+	{
+		if (!args.is_object() || !args.contains("action") || !args["action"].is_string())
+			return { { "ok", false }, { "error", "action is required" } };
+		const auto action = args["action"].get<std::string>();
+		for (const auto& [key, value] : args.items()) {
+			(void)value;
+			if (key != "action" && !(action == "capture" && (key == "frames" || key == "timeoutMs")) &&
+				!(action == "cancel" && key == "requestId"))
+				return { { "ok", false }, { "error", "unexpected replay argument" }, { "field", key } };
+		}
+		return RunOnMainThread([args, action]() -> json {
+			if (action == "status")
+				return NeuralRendering::Replay::Status();
+			if (action == "cancel") {
+				if (!args.contains("requestId") || !args["requestId"].is_string())
+					return { { "ok", false }, { "error", "cancel requires the capture requestId" } };
+				return NeuralRendering::Replay::Cancel(args["requestId"].get<std::string>());
+			}
+			if (action != "capture")
+				return { { "ok", false }, { "error", "unknown replay action" } };
+			if (!globals::state || !globals::state->IsDeveloperMode())
+				return { { "ok", false }, { "error", "native replay capture requires developer mode" } };
+			const auto color = NeuralRendering::Color::Registry::Instance().Snapshot();
+			if (!color.experiments.captureFrameEvidence || color.experiments.transportBypass || !color.experiments.applyModelEdit)
+				return { { "ok", false }, { "error", "enable captureFrameEvidence and actual model edits, with transportBypass disabled" } };
+			for (const auto* key : { "frames", "timeoutMs" }) {
+				if (args.contains(key) && (!args[key].is_number_integer() || args[key] < 1 ||
+											  args[key] > (std::string_view(key) == "frames" ? 32 : 30000)))
+					return { { "ok", false }, { "error", "replay count or deadline is out of range" } };
+			}
+			const auto logPath = Util::PathHelpers::GetLogPath();
+			if (logPath.empty())
+				return { { "ok", false }, { "error", "SKSE evidence directory is unavailable" } };
+			return NeuralRendering::Replay::Request(args.value("frames", 1u), args.value("timeoutMs", 30000u),
+				logPath.parent_path() / "NRReplay");
+		});
+	}
+
+	void NeuralReplayToolHandler(void*, const char* args, void* sink, DevBenchAPI::WriteFn write)
+	{
+		RunHandler(&BuildNeuralReplayResult, args, sink, write);
+	}
+
 	void RenderScaleToolHandler(
 		void*,
 		const char* a_argsJson,
@@ -10849,6 +10896,16 @@ namespace VRRenderScaleDevBenchBridge
 			return result.dump();
 		}();
 		devBench->RegisterTool("communityshaders.neural_rendering", descriptor.c_str(), &RenderScaleToolHandler, nullptr);
+		devBench->RegisterTool("communityshaders.nr_replay", R"json({
+			"description":"Developer-only native NR input export for bounded offline replay. Capture 1..32 consecutive source frames, at most 512 MiB of logical staging/CPU payload reservation and 30 seconds, from successful full-rectangle auto-mask NR; preserves scaled guide grids and feature mode. Requires captureFrameEvidence, real model edits and no transport bypass. Partial/character ROI exports fail explicitly; capture a full initialized source first. Does not change rendering settings. Retains prepared colour, depth, motion and native output with source/colour/runtime evidence. This is diagnostic capture, not a performance measurement. Evidence is saved beside the SKSE log under NRReplay. Status reports the immutable bundle path or explicit failure; cancel requires its requestId. Static repeated sources require reset; temporal replay requires consecutive sources and independent initialized contexts.",
+			"inputSchema":{"type":"object","required":["action"],"additionalProperties":false,
+				"properties":{"action":{"type":"string","enum":["capture","status","cancel"]},
+					"frames":{"type":"integer","minimum":1,"maximum":32},
+					"timeoutMs":{"type":"integer","minimum":1,"maximum":30000},
+					"requestId":{"type":"string","minLength":1}},
+				"allOf":[{"if":{"properties":{"action":{"const":"cancel"}}},"then":{"required":["requestId"]}}]}}
+		)json",
+			&NeuralReplayToolHandler, nullptr);
 		logger::info("VRRenderScaleDevBenchBridge: registered communityshaders.neural_rendering");
 	}
 

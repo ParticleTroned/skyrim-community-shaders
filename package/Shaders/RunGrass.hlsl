@@ -801,7 +801,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	if (dirShadow > 0.0 && !SharedData::InInterior) {
 #			if defined(SCREEN_SPACE_SHADOWS)
-		if (dirLightAngle >= 0.0)
+		if (dirLightAngle >= 0.0 || SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #			endif  // SCREEN_SPACE_SHADOWS
 

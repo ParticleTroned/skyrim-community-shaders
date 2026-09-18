@@ -346,6 +346,10 @@ struct PS_OUTPUT
 
 #	ifdef PSHADER
 
+#		if defined(REFRACTIONS)
+#			include "Common/WaterRefraction.hlsli"
+#		endif
+
 SamplerState ReflectionSampler : register(s0);
 SamplerState RefractionSampler : register(s1);
 SamplerState DisplacementSampler : register(s2);
@@ -1571,6 +1575,24 @@ struct DiffuseOutput
 	float waterColumnDepthUnits;
 };
 
+/** Retains the ordinary water colour when a usable refraction footprint is unavailable. */
+DiffuseOutput GetWaterDiffuseColorWithoutRefraction(float3 normal, float3 viewDirection, float fresnel, float waterColumnDepthUnits)
+{
+	DiffuseOutput output;
+	float3 baseWaterColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel);
+#			if defined(UNIFIED_WATER)
+	baseWaterColor = ApplyUnifiedWaterBaseTint(baseWaterColor);
+#			endif
+	output.refractionColor = baseWaterColor * GetLdotN(normal);
+	output.refractionDiffuseColor = output.refractionColor;
+	output.depth = 1;
+	output.refractionMul = 1;
+	output.refractedViewDirection = viewDirection;
+	output.skylightingDiffuse = 1.0;
+	output.waterColumnDepthUnits = waterColumnDepthUnits;
+	return output;
+}
+
 DiffuseOutput GetWaterDiffuseColor(
 	PS_INPUT input,
 	float3 normal,
@@ -1603,6 +1625,19 @@ DiffuseOutput GetWaterDiffuseColor(
 
 	float2 refractionUvRaw = float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
 	refractionUvRaw = Stereo::ConvertToStereoUV(refractionUvRaw, eyeIndex);  // need to convert here for VR due to refractionNormal values
+
+	uint2 refractionDimensions;
+	RefractionTex.GetDimensions(refractionDimensions.x, refractionDimensions.y);
+	float2 refractionMinUV;
+	float2 refractionMaxUV;
+	if (!WaterRefraction::TryGetUVBounds(
+			float2(refractionDimensions) * FrameBuffer::DynamicResolutionParams1.xy,
+			FrameBuffer::DynamicResolutionParams1.xy / VPOSOffset.xy,
+			eyeIndex, refractionMinUV, refractionMaxUV))
+		return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel, waterColumnDepthUnits);
+
+	float2 fallbackRefractionUV = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
+	refractionUvRaw = WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
 
 #				if defined(VR)
 	float2 refractionUvRawNoStereo = Stereo::ConvertFromStereoUV(refractionUvRaw, eyeIndex, 1);
@@ -1643,7 +1678,7 @@ DiffuseOutput GetWaterDiffuseColor(
 		all(isfinite(unclampedRefractionDistanceMul));
 
 	if (!refractionDepthValid) {
-		refractionUvRaw = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;  // This value is already stereo converted for VR
+		refractionUvRaw = fallbackRefractionUV;
 	} else {
 		depth = refractionDepth;
 		distanceMul = saturate(unclampedRefractionDistanceMul);
@@ -1664,7 +1699,9 @@ DiffuseOutput GetWaterDiffuseColor(
 #					endif
 #				endif
 
-	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
+	// The bounds already select the eye; inferring it again from a distorted UV can cross the seam.
+	float2 refractionUV = FrameBuffer::DynamicResolutionParams1.xy *
+	                      WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
 	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
 	float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
 #				if defined(UNIFIED_WATER)
@@ -1707,19 +1744,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	output.waterColumnDepthUnits = refractionWaterColumnDepthUnits;
 	return output;
 #			else
-	DiffuseOutput output;
-	float3 baseWaterColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel);
-#				if defined(UNIFIED_WATER)
-	baseWaterColor = ApplyUnifiedWaterBaseTint(baseWaterColor);
-#				endif
-	output.refractionColor = baseWaterColor * GetLdotN(normal);
-	output.refractionDiffuseColor = output.refractionColor;
-	output.depth = 1;
-	output.refractionMul = 1;
-	output.refractedViewDirection = viewDirection;
-	output.skylightingDiffuse = 1.0;
-	output.waterColumnDepthUnits = waterColumnDepthUnits;
-	return output;
+	return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel, waterColumnDepthUnits);
 #			endif
 }
 

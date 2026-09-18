@@ -7,9 +7,13 @@ settings. It takes effect at runtime; save settings to retain the choice.
 The existing LOD terrain option is independent. Disable at Boot disables
 both terrain and mesh variation.
 
-Eligibility requires a wrapping lighting material and either a diffuse path
-under `landscape/` or a path referenced by a loaded landscape texture record
-or its seasonal swap. Paths are case-insensitive and texture-relative.
+Eligibility requires a wrapping lighting material and a diffuse path
+referenced by a loaded landscape texture record or its seasonal swap.
+When landscape records are unavailable, paths under `landscape/` provide a
+fallback. An available but empty record list admits no mesh textures.
+Directory membership alone does not qualify a texture when records are
+available, protecting unrelated cliff-root and other authored mesh maps.
+Paths are case-insensitive and texture-relative.
 Tree textures under `landscape/trees/` are excluded even if a landscape record
 references them. Alpha-tested or blended meshes, trees, decals, skinned and
 character materials, LOD objects, projected UV materials and vanilla
@@ -45,15 +49,22 @@ builds on SE, AE and VR.
 
 ## Validation
 
-`TerrainVariationMesh` exercises the production draw eligibility and runtime
-disable functions against controlled engine stand-ins, plus the production
-texture-path policy. It checks stale-bit removal, preservation of unrelated
-descriptor bits, missing data, material exclusions, registered custom paths,
-and tree-folder protection. It does not validate the engine ABI or GPU output.
+`TerrainVariationMesh` exercises production record loading, cached texture
+lookup, draw eligibility and runtime disable against controlled engine
+stand-ins, plus the production texture-path policy. It checks stale-bit
+removal, preservation of unrelated descriptor bits, missing data, material
+exclusions, registered custom and seasonal paths, and tree-folder
+protection. Record reloads check that cached positive and negative decisions
+are invalidated, including transitions between unavailable records, empty
+records and populated records. It also checks rejection of unregistered
+cliff-root textures and directory fallback when records are unavailable.
+It does not validate the engine ABI or GPU output.
 
-The initial port has source and preprocessing checks only. C++ fixtures and
-shader bytecode were not compiled, and SE/AE/VR runtime rendering was not
-exercised. Visual acceptance should compare eligible ordinary, complex and
-PBR meshes with mesh variation on/off, including parallax and shadows in both
-VR eyes; excluded draws and the existing landscape path should retain their
-appearance. Measure GPU cost separately in the same scene.
+The initial port had source and preprocessing checks only. The texture
+eligibility correction compiled and passed `TerrainVariationMesh` with MSVC
+(`/std:c++latest /EHsc /W4 /WX /MD /UNDEBUG`). Shader bytecode and SE/AE/VR
+runtime rendering remain unvalidated. Visual acceptance should
+compare eligible ordinary, complex and PBR meshes with mesh variation
+on/off, including parallax and shadows in both VR eyes; excluded draws and
+the existing landscape path should retain their appearance. Measure GPU
+cost separately in the same scene.

@@ -16,16 +16,16 @@ namespace RE
 namespace Util
 {
 	/**
-     * @brief Extracts the shape bounds from a collision object.
+     * @brief Extracts a world-space bounding sphere; native capsules use their geometric midpoint.
      * @param collisionObj Pointer to the collision object.
      * @param centerPos Output: center position of the shape.
      * @param radius Output: radius of the shape.
-     * @return True if bounds were successfully extracted, false otherwise.
+     * @return False for missing/list shapes, invalid capsules or non-finite centers; outputs remain unchanged on failure.
      */
 	bool GetShapeBound(RE::bhkNiCollisionObject* collisionObj, RE::NiPoint3& centerPos, float& radius);
 
 	/**
-     * @brief Extracts the shape bounds from a hkpShape.
+     * @brief Estimates a shape radius in world units; native capsules use radius plus half endpoint separation.
      * @param shape Pointer to the shape.
      * @param radius Output: radius of the shape.
      * @return True if bounds were successfully extracted, false otherwise.

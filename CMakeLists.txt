@@ -1731,6 +1731,7 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(D3DContextProtection PROPERTIES TIMEOUT 60)
 
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
 
     add_controller_test(
         vr_loading_menu_clear_test

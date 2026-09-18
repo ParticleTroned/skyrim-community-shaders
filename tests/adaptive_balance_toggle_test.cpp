@@ -23,6 +23,7 @@ struct float3
 #include "Features/Bloom.h"
 #include "Features/SharedLighting.h"
 #include "Features/WaterAppearance.h"
+#include "Utils/Finite.h"
 
 struct LinearLighting
 {

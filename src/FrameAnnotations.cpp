@@ -11,6 +11,10 @@
 #include "Util.h"
 #include "Utils/D3D.h"
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/VRFrustumTelemetry.h"
+#endif
+
 #pragma comment(lib, "dxguid.lib")
 
 namespace FrameAnnotations
@@ -467,6 +471,9 @@ namespace FrameAnnotations
 
 	void OnPostPostLoad()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRFrustumTelemetry::Install();
+#endif
 		// Always install shadowmask phase tracking (required by Terrain Blending regardless of annotations).
 		stl::detour_thunk<Main_RenderShadowmasks>(REL::RelocationID(100422, 107140));
 		// VR menu diagnostics need the accumulator nesting even when frame annotations are disabled.

@@ -26,6 +26,7 @@ set(_prepare_coc_found FALSE)
 set(_prepare_tuning_found FALSE)
 set(_set_layout_unlocked_found FALSE)
 set(_depth_culling_telemetry_enabled_found FALSE)
+set(_frustum_telemetry_enabled_found FALSE)
 set(_depth_culling_telemetry_reset_found FALSE)
 set(_adaptive_balance_enabled_found FALSE)
 set(_foliage_lighting_enabled_found FALSE)
@@ -42,6 +43,8 @@ foreach(_index RANGE 0 ${_action_last})
         set(_prepare_tuning_found TRUE)
     elseif(_action STREQUAL "set_depth_culling_telemetry_enabled")
         set(_depth_culling_telemetry_enabled_found TRUE)
+    elseif(_action STREQUAL "set_frustum_telemetry_enabled")
+        set(_frustum_telemetry_enabled_found TRUE)
     elseif(_action STREQUAL "reset_depth_culling_telemetry")
         set(_depth_culling_telemetry_reset_found TRUE)
     elseif(_action STREQUAL "set_adaptive_balance_enabled")
@@ -70,6 +73,9 @@ if(NOT _depth_culling_telemetry_enabled_found)
     message(FATAL_ERROR
         "Menu DevBench schema is missing set_depth_culling_telemetry_enabled"
     )
+endif()
+if(NOT _frustum_telemetry_enabled_found)
+    message(FATAL_ERROR "Menu DevBench schema is missing set_frustum_telemetry_enabled")
 endif()
 if(NOT _depth_culling_telemetry_reset_found)
     message(FATAL_ERROR
@@ -112,6 +118,8 @@ if(NOT _performance_resolution EQUAL 128 OR NOT _quality_resolution EQUAL 256)
 endif()
 
 foreach(_required_behavior IN ITEMS
+    "VRFrustumTelemetry::SetEnabled(enabled)"
+    "VRFrustumTelemetry::GetStatus()"
     "return CSX::Api::RunDevBenchMainThreadTask(SKSE::GetTaskInterface(), std::move(a_run));"
     "if (action == \"prepare_coc\")"
     "if (action == \"prepare_tuning\")"

@@ -14,6 +14,7 @@
 #include <type_traits>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/VRFrustumTelemetry.h"
 #	include <array>
 #	include <chrono>
 #endif
@@ -191,6 +192,9 @@ namespace VRDepthCullingTemporal
 
 		void RecoverHighRiskObjects(void* a_culler)
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			auto recoveryContext = VRFrustumTelemetry::EnterScope(VRFrustumTelemetry::Pass::Recovery);
+#endif
 			if (!g_cullingEnabled.load(std::memory_order_acquire) ||
 				g_mode.load(std::memory_order_acquire) != Mode::Balanced) {
 				return;

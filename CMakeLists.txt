@@ -2710,6 +2710,24 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE DEVBENCH_BRIDGE_ENABLED
     )
     add_controller_test(
+        vr_frustum_telemetry_test
+        VRFrustumTelemetry
+        tests/vr_frustum_telemetry_test.cpp
+    )
+    target_compile_definitions(
+        vr_frustum_telemetry_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    add_controller_test(
+        vr_frustum_telemetry_off_test
+        VRFrustumTelemetryOff
+        tests/vr_frustum_telemetry_off_test.cpp
+    )
+    target_sources(
+        vr_frustum_telemetry_off_test
+        PRIVATE src/Diagnostics/VRFrustumTelemetry.cpp
+    )
+    add_controller_test(
         vr_depth_culling_temporal_policy_test
         VRDepthCullingTemporalPolicy
         tests/vr_depth_culling_temporal_policy_test.cpp

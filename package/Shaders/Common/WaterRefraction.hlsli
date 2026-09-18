@@ -1,7 +1,7 @@
 #ifndef __WATER_REFRACTION_HLSLI__
 #define __WATER_REFRACTION_HLSLI__
 
-#include "VR.hlsli"
+#include "Common/VR.hlsli"
 
 namespace WaterRefraction
 {

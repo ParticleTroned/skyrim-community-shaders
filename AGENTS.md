@@ -234,7 +234,9 @@ contradict this policy.
 
 -   When the user invokes `gameft-sw`, follow
     `docs/development/gameft-sw.md`: ask its exact save-number question and
-    use its wrapper around the unchanged saved `game-ft` runner. Stack/wait
+    use the maintained `skyrim-vr-automation/tools/gameft-sw` wrapper and
+    versioned `game-ft` runner. Local ignored legacy copies remain historical.
+    Stack/wait
     tracing is explicit and DevBench-only. Present timing and health before
     provenance or stack analysis; never silently change the base protocol.
 

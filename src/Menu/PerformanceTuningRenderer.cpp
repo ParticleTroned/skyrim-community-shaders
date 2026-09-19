@@ -723,9 +723,9 @@ namespace
 		if (shortName == "VR") {
 			json mask = MakeJsonMask({ "EnableDepthBufferCullingExterior",
 				"EnableDepthBufferCullingInterior",
-				"DepthCullingPerformanceMode",
 				"DepthCullingLegacyMode",
-				"MinOccludeeBoxExtent",
+				"MinOccludeeBoxExtentExterior",
+				"MinOccludeeBoxExtentInterior",
 				"EnableStereoBlend",
 				"EnableLightingFoveation",
 				"EnableSSRFoveation",
@@ -902,9 +902,6 @@ namespace
 
 		if (feature->GetShortName() == "VR") {
 			feature->RestorePerformanceCostMeasurementState(restoredSettings);
-			if (globals::features::vr.gMinOccludeeBoxExtent) {
-				*globals::features::vr.gMinOccludeeBoxExtent = globals::features::vr.settings.MinOccludeeBoxExtent;
-			}
 		}
 	}
 

@@ -2730,6 +2730,60 @@ if(BUILD_CONTROLLER_TESTS)
         vr_depth_culling_telemetry_policy_test
         PRIVATE DEVBENCH_BRIDGE_ENABLED
     )
+    set(_depth_culling_ui_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/depth-culling-ui"
+    )
+    set(_depth_culling_ui_test_headers
+        "${_depth_culling_ui_test_dir}/vr_depth_culling_settings_members.h"
+        "${_depth_culling_ui_test_dir}/vr_depth_culling_settings_ui_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_depth_culling_ui_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_depth_culling_ui_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_depth_culling_settings.cmake"
+        DEPENDS
+            src/Features/VR.cpp
+            src/Features/VR.h
+            tests/extract_vr_depth_culling_settings.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_depth_culling_settings_ui_test
+        VRDepthCullingSettingsUI
+        tests/vr_depth_culling_settings_ui_test.cpp
+    )
+    target_sources(
+        vr_depth_culling_settings_ui_test
+        PRIVATE ${_depth_culling_ui_test_headers}
+    )
+    target_include_directories(
+        vr_depth_culling_settings_ui_test
+        PRIVATE "${_depth_culling_ui_test_dir}"
+    )
+    add_controller_test(
+        vr_depth_culling_settings_test
+        VRDepthCullingSettings
+        tests/vr_depth_culling_settings_test.cpp
+    )
+    target_link_libraries(
+        vr_depth_culling_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
+        menu_depth_culling_settings_policy_test
+        MenuDepthCullingSettingsPolicy
+        tests/menu_depth_culling_settings_policy_test.cpp
+    )
+    target_compile_definitions(
+        menu_depth_culling_settings_policy_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    target_link_libraries(
+        menu_depth_culling_settings_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_controller_test(
         vr_depth_culling_temporal_policy_test
         VRDepthCullingTemporalPolicy

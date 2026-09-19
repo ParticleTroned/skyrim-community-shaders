@@ -44425,10 +44425,13 @@ bool Upscaling::PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, I
 				return false;
 			context->CopySubresourceRegion(foveatedCenterColorIn[0]->resource.get(), 0, 0, 0, 0, color, 0, &sourceBox);
 			context->CopySubresourceRegion(foveatedCenterMotionVectors[0]->resource.get(), 0, 0, 0, 0, motion, 0, &sourceBox);
-			RecordNeuralStageWork(capture, uint64_t(width) * height,
-				NeuralRendering::LogicalTextureBytes(foveatedCenterColorIn[0]->desc.Format, width, height) +
-					NeuralRendering::LogicalTextureBytes(foveatedCenterDepth[0]->desc.Format, width, height) +
-					NeuralRendering::LogicalTextureBytes(foveatedCenterMotionVectors[0]->desc.Format, width, height));
+			const auto colorBytes = NeuralRendering::LogicalTextureBytes(foveatedCenterColorIn[0]->desc.Format, width, height);
+			const auto depthBytes = NeuralRendering::LogicalTextureBytes(foveatedCenterDepth[0]->desc.Format, width, height);
+			const auto motionBytes = NeuralRendering::LogicalTextureBytes(foveatedCenterMotionVectors[0]->desc.Format, width, height);
+			const auto copiedBytes = colorBytes && depthBytes && motionBytes ?
+			                             std::optional<uint64_t>(*colorBytes + *depthBytes + *motionBytes) :
+			                             std::nullopt;
+			RecordNeuralStageWork(capture, uint64_t(width) * height, copiedBytes);
 		}
 		auto& args = batchArgs[0];
 		args.device = globals::d3d::device;

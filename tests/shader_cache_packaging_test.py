@@ -278,6 +278,60 @@ class ShaderCachePackagingTests(unittest.TestCase):
             self.assertFalse((out_root / ".VR.publishing").exists())
             self.assertFalse((out_root / ".VR.previous").exists())
 
+    def test_publication_copy_preserves_competing_staging_owner(self) -> None:
+        for directory in (False, True):
+            with self.subTest(directory=directory), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "candidate"
+                staging = root / ".publishing"
+                if directory:
+                    source.mkdir()
+                    (source / "marker").write_bytes(b"candidate")
+                else:
+                    source.write_bytes(b"candidate")
+                original_exists = BUILDER.path_entry_exists
+                raced = False
+
+                def competing_owner(path: Path) -> bool:
+                    nonlocal raced
+                    if path == staging and not raced:
+                        raced = True
+                        if directory:
+                            staging.mkdir()
+                            (staging / "marker").write_bytes(b"other invocation")
+                        else:
+                            staging.write_bytes(b"other invocation")
+                        return False
+                    return original_exists(path)
+
+                with (
+                    mock.patch.object(BUILDER, "path_entry_exists", side_effect=competing_owner),
+                    self.assertRaisesRegex(SystemExit, "failed to stage"),
+                ):
+                    BUILDER.copy_publication_candidate(source, staging, "test cache")
+
+                marker = staging / "marker" if directory else staging
+                self.assertEqual(marker.read_bytes(), b"other invocation")
+
+    def test_publication_copy_cleans_only_its_failed_copy(self) -> None:
+        for directory in (False, True):
+            with self.subTest(directory=directory), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "candidate"
+                staging = root / ".publishing"
+                if directory:
+                    source.mkdir()
+                else:
+                    source.write_bytes(b"candidate")
+                copy_name = "copytree" if directory else "copy2"
+                with (
+                    mock.patch.object(BUILDER.shutil, copy_name, side_effect=PermissionError("copy failed")),
+                    self.assertRaisesRegex(SystemExit, "failed to stage"),
+                ):
+                    BUILDER.copy_publication_candidate(source, staging, "test cache")
+                self.assertFalse(staging.exists())
+                self.assertTrue(source.exists())
+
     def test_runtime_publication_restores_previous_cache_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

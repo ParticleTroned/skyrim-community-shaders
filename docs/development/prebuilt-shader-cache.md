@@ -297,6 +297,8 @@ replacement fails. If both publication and restoration fail, the validated
 candidate remains in `.<runtime>.publishing` and the old cache remains in
 `.<runtime>.previous/<runtime>`, both beneath the durable output root. Resolve
 or recover those paths before rerunning; the builder will not overwrite them.
+Staging directories and archive files are acquired exclusively before copying;
+a competing invocation cannot overwrite or clean up another invocation's work.
 The output root may live under the repository (the default is
 `dist/shader-cache`), but it must not be inside any shader source tree that the
 staging pass copies.

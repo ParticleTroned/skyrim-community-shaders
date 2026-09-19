@@ -2323,13 +2323,19 @@ def copy_publication_candidate(source: Path, staging: Path, label: str) -> None:
             f"refusing to replace unexpected publication staging path: {staging}"
         )
 
+    staging_owned = False
     try:
         if source.is_dir():
-            shutil.copytree(source, staging)
+            staging.mkdir()
+            staging_owned = True
+            shutil.copytree(source, staging, dirs_exist_ok=True)
         else:
+            with staging.open("xb"):
+                staging_owned = True
             shutil.copy2(source, staging)
     except OSError as exc:
-        discard_publication_staging(staging)
+        if staging_owned:
+            discard_publication_staging(staging)
         raise SystemExit(f"failed to stage {label} for publication: {staging}") from exc
 
 

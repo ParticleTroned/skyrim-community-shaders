@@ -3082,6 +3082,8 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    include(tests/screenshot_settings.cmake)
+
     set(_screenshot_dispatch_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-dispatch"
     )

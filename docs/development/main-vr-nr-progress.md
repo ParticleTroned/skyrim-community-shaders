@@ -1,5 +1,12 @@
 # main-vr-nr progress and continuation record
 
+## September 19 main-VR integration
+
+[Integration record](main-vr-nr-sync-20260919.md): merge local `main-VR`
+through `63e40d610`, including CommonLib 8.3.0, while retaining NR routes,
+colour/capture contracts and the Render Scale guard. Source/tooling checks
+pass. The existing AIO predates this merge; compilation is still pending.
+
 ## Renderscale NR dependency (2026-09-19)
 
 [Dependency guard and validation](nr-renderscale-dependency-20260919.md):

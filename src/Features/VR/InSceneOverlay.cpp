@@ -860,8 +860,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						VRNativeRestoreCyclePresentationPath::
 							BlackKeepalive);
 			const auto rejectQuarantinedSubmit = [&](
-													 const vr::Texture_t* a_texture,
-													 const vr::VRTextureBounds_t* a_bounds) {
+													 [[maybe_unused]] const vr::Texture_t* a_texture,
+													 [[maybe_unused]] const vr::VRTextureBounds_t* a_bounds) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				VRRenderScaleDevBenchBridge::RecordPresentationAuditObservation({
 					.valid = true,
@@ -885,7 +885,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				upscaling.CompleteVRLoadPresentationProbeSubmit(
 					probeSequence,
 					vr::VRCompositorError_RequestFailed);
-#endif
 				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 					"post-load-cycle-quarantine",
 					eEye,
@@ -893,6 +892,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					a_bounds,
 					nSubmitFlags,
 					vr::VRCompositorError_RequestFailed);
+#endif
 				return vr::VRCompositorError_RequestFailed;
 			};
 			if (upscaling.ShouldQuarantineVRPostLoadCompositorCycle(
@@ -1104,7 +1104,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							PresentationAuditSelection::BlackKeepalive,
 					});
 				}
-#endif
 				Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 					a_path,
 					submitPacket.eye,
@@ -1112,6 +1111,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					retainedBounds,
 					submitPacket.flags,
 					result);
+#endif
 				lastSubmitPacket = submitPacket;
 				return result;
 			};
@@ -1473,6 +1473,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 															 bool a_recordStrictObservation = false) {
 				if (nativeRestoreCycle.path ==
 					VRNativeRestoreCyclePresentationPath::Rejected) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 						"native-restore-cycle-rejected",
 						eEye,
@@ -1480,6 +1481,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						pBounds,
 						nSubmitFlags,
 						nativeRestoreCycle.rejectionResult);
+#endif
 					return nativeRestoreCycle.rejectionResult;
 				}
 				if (!nativeRestoreCycle.lifetime ||
@@ -1569,6 +1571,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						pTexture,
 						pBounds,
 						keepalive)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 						"native-restore-keepalive-unavailable",
 						eEye,
@@ -1576,6 +1579,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						pBounds,
 						nSubmitFlags,
 						vr::VRCompositorError_RequestFailed);
+#endif
 					return rejectNativeRestoreCycle(
 						vr::VRCompositorError_RequestFailed);
 				}

@@ -19,9 +19,15 @@ fpsVR through Steam/SteamVR and waits at Skyrim VR's main loading screen.
 Prepare WPR permissions/tools outside the live start; do not restart any of
 these applications. Do not build or deploy during measurement.
 
+The maintained wrapper and versioned protocol live in the
+`skyrim-vr-automation` repository. Run the commands below from that checkout;
+adjust the example checkout and fpsVR paths for the machine. This also works
+when the CSX checkout is a linked worktree.
+
 Before launching Skyrim, validate the recorder from an elevated PowerShell 7:
 
 ```powershell
+Set-Location -LiteralPath 'D:\Coding\GitHub\skyrim-vr-automation'
 pwsh ./tools/gameft-sw/Test-GameFtStackWaitRecorder.ps1
 ```
 
@@ -38,8 +44,9 @@ installed Windows Performance Toolkit `wpr.exe`; an explicit `-WprPath` is
 supported. Versions older than 10.0.19650.0 are rejected, including the Windows
 10 system recorder with its known `0x80010106` finalization failure.
 
-Successful validation is retained under `build/gameft-sw`. The live wrapper
-checks that receipt before accessing the session. Changed recorder/control or
+Successful validation is retained under the automation checkout's
+`build/gameft-sw`. The live wrapper checks that receipt before accessing the
+session. Changed recorder/control or
 analysis binaries, Windows version, profile or recording/validation scripts
 require fresh validation before measurement. Failed, missing or changed evidence
 prevents loading any save. A cached valid receipt makes this a file check at
@@ -48,15 +55,19 @@ live start, not an extra recording or warm-up inside the measurement.
 Then run from an elevated PowerShell 7 with the existing SteamVR session intact:
 
 ```powershell
-pwsh ./tools/gameft-sw/Invoke-GameFtStackWait.ps1 -SaveNumberText '05, 07, 08'
+Set-Location -LiteralPath 'D:\Coding\GitHub\skyrim-vr-automation'
+pwsh ./tools/gameft-sw/Invoke-GameFtStackWait.ps1 -SaveNumberText '05, 07, 08' `
+    -FpsVrCmd '<fpsVR installation>/fpsVRcmd.exe' -ArchiveDirectory 'D:\Coding\GitHub\CS logs'
 ```
 
 One invocation starts stack/wait recording, delegates all save loads and fpsVR
-recording to `build/bisect/protocol/Invoke-SaveLoadTimingV2.ps1`, and requests
-trace stop after all holds. It checks the saved runner/reporter/comparison
-hashes; missing or changed scripts cause an explicit failure, never a fallback.
-These existing local protocol files must accompany the repository on another
-machine. Update those pins only for a user-authorized protocol revision.
+recording to `tools/gameft-sw/protocol/Invoke-SaveLoadTimingV2.ps1` in the
+automation checkout, and requests trace stop after all holds. It checks the
+saved runner/reporter/comparison hashes; missing or changed scripts cause an
+explicit failure, never a fallback. These scripts are versioned together under
+`tools/gameft-sw/protocol/`. Update those pins only for a user-authorized
+protocol revision. The repository migration changes path/parameter plumbing;
+measurement windows, sample pacing and calculations remain unchanged.
 
 The new snapshot capability is checked before loading. It must return
 `csx-cpu-burst-snapshot-v1`, `devbenchOnly=true`, the current Skyrim process,
@@ -138,10 +149,20 @@ evidence. A generated ETL alone does not prove complete or symbolized stacks.
    retaining boundary uncertainty. Report top stacks, wait causes, thread IDs,
    symbol gaps and lost events separately from fpsVR frame-time statistics.
 
+Scheduler reconstruction accepts an absolute accounting error of **10 ms**
+per **10,000 ms** tail window, including the boundary. Use the shared
+`tools/gameft-sw-analysis/scheduler_coverage.py` implementation in the automation
+repository, policy `gameft-sw-scheduler-coverage-10ms-20260918`. Preserve the
+measured durations and signed errors, and name the applied policy and tolerance
+in each report. Historical receipts retain their original verdicts. This
+user-requested rule replaces the former 5 ms tolerance as of 2026-09-18; timing
+and health rules are unchanged.
+
 After presenting the timing table, inspect trace finalization without another
 live game call:
 
 ```powershell
+Set-Location -LiteralPath 'D:\Coding\GitHub\skyrim-vr-automation'
 pwsh ./tools/gameft-sw/Get-GameFtStackWaitResult.ps1 -RunDirectory '<exact run directory>'
 ```
 
@@ -159,3 +180,17 @@ statistics, drop spikes or turn missing stack symbols into a root-cause claim.
 Microsoft references: [WPR commands](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/wpr-command-line-options),
 [recording profiles](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/authoring-recording-profiles),
 [WPR instance ownership](https://devblogs.microsoft.com/performance-diagnostics/controlling-the-event-session-name-with-the-instance-name/).
+
+## Repository ownership
+
+The automation repository owns the recorder, protocol scripts and offline
+runner tests. CSX retains the producer implementation and its contract tests.
+Use the maintained automation checkout or its verified marketplace bundle;
+ignored legacy copies in a CSX checkout are historical, not the active runner.
+Do not replace a runner or its validated recorder during an active measurement.
+
+For an installed bundle, supply durable `-RunDirectory` and
+`-RecorderValidationPath` locations outside the versioned cache so rotation
+preserves the evidence. Pass that same validation receipt as `-ValidationPath`
+when validating the recorder. Supply machine-specific fpsVR and archive paths
+explicitly; the default DevBench controller is in the same checkout or bundle.

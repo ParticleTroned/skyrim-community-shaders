@@ -436,11 +436,11 @@ foreach(_freshness_contract IN ITEMS
     [[VRSubmitInputFreshnessPolicy::CanConsumePeerInputs( submitInputProof, eyeIndex)]]
     [[neuralSubmitSourceSignatureProven = submitSourceSignatureProven && peerInputFreshnessProven;]]
     [[VRSubmitInputFreshnessPolicy::MatchesProducerProof( submitStageNeuralStereoState.inputProof, submitInputProof)]]
-    [[submitStageNeuralStereoState.sourceDepthOwner.get() != depth.texture]]
-    [[submitStageNeuralStereoState.sourceMotionVectorOwner.get() != motionVector.texture]]
+    [[submitStageNeuralStereoState.sourceDepthOwner.get() != REX::W32::AsReal(depth.texture)]]
+    [[submitStageNeuralStereoState.sourceMotionVectorOwner.get() != REX::W32::AsReal(motionVector.texture)]]
     [[submitStageNeuralStereoState.inputProof = submitInputProof;]]
-    [[submitStageNeuralStereoState.sourceDepthOwner.copy_from(depth.texture);]]
-    [[submitStageNeuralStereoState.sourceMotionVectorOwner.copy_from(motionVector.texture);]]
+    [[submitStageNeuralStereoState.sourceDepthOwner.copy_from(REX::W32::AsReal(depth.texture));]]
+    [[submitStageNeuralStereoState.sourceMotionVectorOwner.copy_from(REX::W32::AsReal(motionVector.texture));]]
 )
     string(FIND "${_upscaling_source_normalized}" "${_freshness_contract}" _position)
     if(_position EQUAL -1)

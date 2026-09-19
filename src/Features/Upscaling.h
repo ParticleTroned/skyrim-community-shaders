@@ -3114,10 +3114,10 @@ public:
 		uint32_t a_renderFlags, int a_groupIndex);
 	static void EndVRMenuAccumulatorTrace(void* a_accumulator, uint32_t a_firstPass, uint32_t a_lastPass,
 		uint32_t a_renderFlags, int a_groupIndex);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	static void TraceVRMenuPresentationOpenVRSubmit(const char* a_path, vr::EVREye a_eye,
 		const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds, vr::EVRSubmitFlags a_flags,
 		vr::EVRCompositorError a_result) noexcept;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	static void InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context);
 #endif
 	/** Install only indexed scene submission hooks, without enabling developer tracing. */
@@ -3592,6 +3592,9 @@ public:
 	};
 
 private:
+	/** Requires ownership of perfModeRenderTargetRecreateQueueMutex. */
+	bool RequiresVRRenderScaleRelatchFrameBoundaryLocked() const;
+
 	mutable std::mutex submitTemporalInputsMutex;
 	SubmitTemporalInputs submitTemporalInputs;
 	std::atomic_uint64_t submitTemporalCompositorCycle{ 0 };

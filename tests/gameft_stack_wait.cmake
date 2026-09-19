@@ -25,8 +25,8 @@ target_include_directories(
     PRIVATE "${PROJECT_SOURCE_DIR}/include"
 )
 add_test(
-    NAME GameFtStackWait
+    NAME DevBenchCpuSnapshotContract
     COMMAND
         pwsh -NoProfile -File
-        "${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait_test.ps1"
+        "${PROJECT_SOURCE_DIR}/tests/devbench_cpu_snapshot_contract_test.ps1"
 )

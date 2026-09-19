@@ -90,6 +90,11 @@ contracts are unchanged, retain the revision and base, regenerate the
 packages, and verify that only compatibility metadata changed in their
 settings. Never bypass the source check or refresh its hash automatically.
 
+Capture settings keep `FrameCaptureEye` authoritative. The base selects
+`Left`, so its legacy `Sequence.Outputs.SeparateEyes` mirror is false.
+This normalization retains the selected eye and settings schema; rendering
+quality and tier choices are unaffected.
+
 CSX validates marked settings before canonicalization, migration, or merge.
 Malformed metadata, an unsupported compatibility-contract version, the wrong
 runtime, or a CSX version outside the declared range rejects the complete user

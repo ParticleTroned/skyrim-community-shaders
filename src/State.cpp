@@ -214,7 +214,7 @@ namespace
 		}
 
 		D3D11_TEXTURE2D_DESC texDesc{};
-		main.texture->GetDesc(&texDesc);
+		REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
 		return { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
 	}
 

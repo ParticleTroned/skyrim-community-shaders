@@ -84,7 +84,10 @@ balances the acquisition it opened when profiling is disabled mid-frame.
 `GetCpuHistorySample` expose a separate CPU catalog. These read-only calls do
 not request capture. CPU samples publish at their engine-frame boundary,
 including when the GPU query ring is pending or GPU interval capacity is
-exhausted. GPU-backed CPU samples and CPU-only scopes retain CSX self-time
+exhausted. Missing frame or timestamp query objects also use CPU fallback
+when CPU capture is requested; GPU-only capture refuses the affected scope.
+No GPU sample is generated for that scope. Device reinitialization recreates
+the query resources. GPU-backed CPU samples and CPU-only scopes retain CSX self-time
 and feature-root accounting. Same-name scopes contribute one summed history
 sample per CPU capture cycle; absent known timers receive zero. GPU-only and
 idle cycles do not advance this CPU history.
@@ -125,11 +128,11 @@ request from silently changing the user's profiling preference.
 
 Each session reports:
 
-- `captureId`: process-local monotonic identity;
-- `requestedFrames`: the contract target;
-- `submittedFrames`: frames for which CSX closed a profiler query set;
-- `resolvedFrames`: submitted query sets whose GPU/CPU data have resolved;
-- terminal state: `completed` or `cancelled`.
+-   `captureId`: process-local monotonic identity;
+-   `requestedFrames`: the contract target;
+-   `submittedFrames`: frames for which CSX closed a profiler query set;
+-   `resolvedFrames`: submitted query sets whose GPU/CPU data have resolved;
+-   terminal state: `completed` or `cancelled`.
 
 Completion is based on resolved query sets, not sleeps, wall-clock guesses, or
 poll count. CSX continues requesting profiler work until the requested number
@@ -179,13 +182,13 @@ Example:
 
 ```json
 {
-  "contractMajor": 1,
-  "clientId": "shader-lab",
-  "commandId": "capture-quality-001",
-  "expectedBuildId": "<exact loaded build id>",
-  "action": "start_capture",
-  "frameCount": 120,
-  "clearHistory": true
+    "contractMajor": 1,
+    "clientId": "shader-lab",
+    "commandId": "capture-quality-001",
+    "expectedBuildId": "<exact loaded build id>",
+    "action": "start_capture",
+    "frameCount": 120,
+    "clearHistory": true
 }
 ```
 
@@ -197,10 +200,23 @@ with test conditions; a timer average alone is not sufficient provenance.
 
 `ProfilerCapture` compiles the production profiler with deterministic clock
 and D3D query inputs. It covers pending queries, CPU-only and GPU-only modes,
-combined requests, nested accounting, capacity fallback, partial ring draining,
+combined requests, nested accounting, capacity fallback, failed frame and
+timestamp query allocation, device recovery, partial ring draining,
 bounded ownership, feature removal, and reinitialization. `ProfilerTiming`
 retains the real D3D11 WARP self-time and bounded-capture test.
 `ApiProfilerContract` checks the legacy ABI prefix and the new structure.
 
-These additions require compiled and in-game validation before treating them
-as runtime-verified; they were prepared under a no-build instruction.
+The initial API additions were prepared under a no-build instruction.
+On 2026-09-19, the query-allocation safeguard backport passed both
+`ProfilerCapture` and `ProfilerTiming`, compiling the actual main-VR
+`src/Profiler.cpp` in an isolated MSVC Release harness. The allocation
+matrix covers 15 combinations: CPU/GPU/Both capture with a missing frame
+query, either first-scope timestamp, or either nested-scope timestamp.
+It checks immediate CPU publication, nesting, absence of fabricated GPU
+samples, and successful query recreation. Before the guards, the new test
+failed with `Begin received a missing query`.
+
+Local evidence is in `build/profiler-query-validation-20260919/`, including
+`before-guards.xml`, `after-guards.xml`, and the standalone CMake harness.
+This focused validation includes real D3D11 WARP timing; it does not
+establish in-game behaviour or constitute a new full-DLL/shader build.

@@ -16482,7 +16482,7 @@ namespace
 	void DrawVRRenderScaleModeTooltip()
 	{
 		ImGui::TextUnformatted("Can provide a strong performance boost, but it is not fully tested in all situations.");
-		ImGui::TextUnformatted("DLSS/FSR VR only.");
+		ImGui::TextUnformatted("DLSS/FSR VR only. Required while Renderscale NR before DLSS is enabled.");
 		ImGui::TextUnformatted("CSX applies changes while render targets rebuild.");
 		ImGui::TextUnformatted("Restart Skyrim VR if the change stays pending.");
 	}
@@ -16768,6 +16768,8 @@ void Upscaling::DrawSettings()
 		if (!ImGui::TreeNodeEx("Render Pipeline"))
 			return;
 		DrawVRRenderScaleLinkSetting(upscaleMethod);
+		if (IsNeuralRenderingRenderScaleRequired())
+			ImGui::TextWrapped("Renderscale NR requires Render Scale and a scaled preset. Disable NR or select another NR mode to turn Render Scale off.");
 
 		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
 		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
@@ -16786,8 +16788,10 @@ void Upscaling::DrawSettings()
 			startupNativeFallbackActive ?
 				IsVRStartupNativeFallbackSavedIntentActive() :
 				vrRenderScaleRequested;
+		const bool neuralRenderScaleLocked = IsNeuralRenderingRenderScaleRequired() &&
+		                                     publicRenderScaleRequested && !startupNativeFallbackActive;
 		const bool publicRenderScaleCanEdit =
-			!openCompositeBlocksUpscaling &&
+			!neuralRenderScaleLocked && !openCompositeBlocksUpscaling &&
 			((renderScaleMethodEligible && renderScaleQualitySelected) ||
 				publicRenderScaleRequested);
 
@@ -16899,7 +16903,7 @@ void Upscaling::DrawSettings()
 		const bool qualityChanged = ImGui::SliderInt(
 			"Upscale Preset",
 			&qualityMode,
-			0,
+			IsNeuralRenderingRenderScaleRequired() ? 1 : 0,
 			static_cast<int>(kQualityModeMaxIndex),
 			labelWithScale.c_str());
 		const bool qualityEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
@@ -16909,7 +16913,7 @@ void Upscaling::DrawSettings()
 				qualityEditCommitted);
 		if (qualityEditDispatch.publishRequest) {
 			const uint32_t requestedQualityMode = static_cast<uint32_t>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
-			const bool targetRenderScaleMode = GetVRRenderScalePreferenceForSelection(upscaleMethod);
+			const bool targetRenderScaleMode = IsNeuralRenderingRenderScaleRequired() || GetVRRenderScalePreferenceForSelection(upscaleMethod);
 			ApplyCSMenuUpscalingTransition(
 				upscaleMethod,
 				targetRenderScaleMode,
@@ -17559,7 +17563,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			Upscaling::GetQualityModeResolutionScale(effectiveQualityMode));
 
 		int qualityMode = static_cast<int>(effectiveQualityMode);
-		const bool qualityChanged = ImGui::SliderInt("Upscale Preset", &qualityMode, 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str());
+		const bool qualityChanged = ImGui::SliderInt("Upscale Preset", &qualityMode, IsNeuralRenderingRenderScaleRequired() ? 1 : 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str());
 		const bool qualityEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
 		const auto qualityEditDispatch =
 			VRVendorRelatchPolicy::SelectMenuEditDispatch(
@@ -17567,7 +17571,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 				qualityEditCommitted);
 		if (qualityEditDispatch.publishRequest) {
 			const uint32_t requestedQualityMode = static_cast<uint32_t>(std::clamp(qualityMode, 0, static_cast<int>(kQualityModeMaxIndex)));
-			const bool targetRenderScaleMode = GetVRRenderScalePreferenceForSelection(upscaleMethod);
+			const bool targetRenderScaleMode = IsNeuralRenderingRenderScaleRequired() || GetVRRenderScalePreferenceForSelection(upscaleMethod);
 			ApplyCSMenuUpscalingTransition(
 				upscaleMethod,
 				targetRenderScaleMode,
@@ -17632,6 +17636,8 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 	if (globals::game::isVR) {
 		DrawVRRenderScaleLinkSetting(upscaleMethod);
+		if (IsNeuralRenderingRenderScaleRequired())
+			ImGui::TextWrapped("Renderscale NR requires Render Scale and a scaled preset. Disable NR or select another NR mode to turn Render Scale off.");
 		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
 		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
 		const bool renderScaleQualitySelected = IsRenderScaleQualityMode(renderScaleQualityMode);
@@ -17641,8 +17647,10 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			startupNativeFallbackActive ?
 				IsVRStartupNativeFallbackSavedIntentActive() :
 				GetVRRenderScaleModePreference();
+		const bool neuralRenderScaleLocked = IsNeuralRenderingRenderScaleRequired() &&
+		                                     publicRenderScaleRequested && !startupNativeFallbackActive;
 		const bool publicRenderScaleCanEdit =
-			!openCompositeBlocksUpscaling &&
+			!neuralRenderScaleLocked && !openCompositeBlocksUpscaling &&
 			((renderScaleMethodEligible && renderScaleQualitySelected) ||
 				publicRenderScaleRequested);
 
@@ -17883,10 +17891,24 @@ void Upscaling::SetNeuralRenderingFeatureAvailable(bool a_available)
 	}
 }
 
+bool Upscaling::IsNeuralRenderingRenderScaleRequired() const noexcept
+{
+	return neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled &&
+	       NeuralRendering::RequiresVRRenderScale(globals::game::isVR, GetNeuralRenderingMode());
+}
+
+bool Upscaling::IsNeuralRenderingRenderScaleAvailable() const noexcept
+{
+	return !NeuralRendering::RequiresVRRenderScale(globals::game::isVR, GetNeuralRenderingMode()) ||
+	       (GetVRRenderScaleModeRequested() && IsVRRenderScaleModeLatched() &&
+			   IsVRRenderScaleModeActive());
+}
+
 bool Upscaling::IsNeuralRenderingRequested() const noexcept
 {
 	return neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled &&
 	       NeuralRendering::IsRenderingConfigurationSupported(globals::game::isVR, GetNeuralRenderingMode()) &&
+	       IsNeuralRenderingRenderScaleAvailable() &&
 	       (!NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) ||
 			   IsNeuralRenderingFovConfigurationAvailable());
 }
@@ -17921,7 +17943,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		static constexpr const char* renderingModeHelp[]{
 			"Runs NR at full output resolution on the final scene before UI. Restrict to FOV mask limits the result to your eye masks; otherwise NR covers the whole scene.",
 			"Runs NR on the final scene inside your DLSS-upscaled FOV region, after post-processing and before UI. Characters only can narrow the selection.",
-			"Runs NR at the current render resolution before DLSS, which then reconstructs the final image. Requires DLSS. It covers the whole image unless Use FOV mask for Renderscale NR is enabled in VR. Character selection is optional."
+			"Runs NR at the current render resolution before DLSS, which then reconstructs the final image. Requires DLSS and, in VR, enabled Render Scale with a scaled preset. It covers the whole image unless Use FOV mask for Renderscale NR is enabled in VR. Character selection is optional."
 		};
 		const bool renderingModeOpen = ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())]);
 		if (!renderingModeOpen) {
@@ -17989,9 +18011,11 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			auto guard = Util::DisableGuard(missingFov || !settings.neuralCharacterRenderingEnabled);
 			drawCharacterCategories();
 		}
-		const bool routeAvailable = !missingFov && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
-													   (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
-		if (!routeAvailable && !missingFov)
+		const bool missingRenderScale = !IsNeuralRenderingRenderScaleAvailable();
+		if (missingRenderScale)
+			ImGui::TextWrapped("Renderscale NR is inactive until Render Scale is active. Enable Render Scale and select a scaled DLSS preset in Upscaling, or choose another NR mode.");
+		const bool routeAvailable = !missingRenderScale && !missingFov && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution || (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
+		if (!routeAvailable && !missingFov && !missingRenderScale)
 			ImGui::TextDisabled("This mode requires NVIDIA DLSS.");
 		if (showDiagnostics)
 			ImGui::TextDisabled("Pipeline arrangement: %s", NeuralRendering::GetPipelineArrangementName(GetNeuralRenderingArrangement()));
@@ -23013,6 +23037,15 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 		targetMethodRenderScaleEligible, renderScaleQuality, a_renderScaleModeEnabled);
 	const bool targetRenderScalePreference = targetRenderScale.preference;
 	const bool targetRenderScaleMode = targetRenderScale.enabled;
+	if (IsNeuralRenderingRenderScaleRequired() && !targetRenderScaleMode &&
+		a_origin != VRUpscalingTransitionOrigin::RecoveryRelatch &&
+		a_startupFallbackControl == VRVendorRelatchPolicy::StartupNativeFallbackControl::None) {
+		logger::warn("[NeuralRendering] Renderscale NR requires Render Scale and a scaled preset; disable NR or select another NR mode before turning Render Scale off.");
+		return {
+			.disposition = UpscalingTransitionApplyDisposition::Rejected,
+			.rejection = UpscalingTransitionApplyRejection::NeuralRenderScaleRequired,
+		};
+	}
 	const bool renderScalePreferenceTargetChanged = isVR &&
 	                                                currentDesiredProfile.renderScaleModePreference != targetRenderScalePreference;
 	const bool startupNativeFallbackActive =

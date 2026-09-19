@@ -7,6 +7,10 @@
 int main()
 {
 	using NeuralRendering::RenderingMode;
+	static_assert(NeuralRendering::RequiresVRRenderScale(true, RenderingMode::ReducedResolution));
+	static_assert(!NeuralRendering::RequiresVRRenderScale(false, RenderingMode::ReducedResolution));
+	static_assert(!NeuralRendering::RequiresVRRenderScale(true, RenderingMode::FullResolution));
+	static_assert(!NeuralRendering::RequiresVRRenderScale(true, RenderingMode::Foveated));
 	static_assert(NeuralRendering::ParseRenderingModeName("full_resolution") == RenderingMode::FullResolution);
 	static_assert(NeuralRendering::ParseRenderingModeName("foveated") == RenderingMode::Foveated);
 	static_assert(NeuralRendering::ParseRenderingModeName("reduced_resolution") == RenderingMode::ReducedResolution);

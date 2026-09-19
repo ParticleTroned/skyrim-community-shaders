@@ -935,7 +935,7 @@ if(NOT _descriptor_two_value_maximum EQUAL 1)
 endif()
 
 foreach(_status_contract IN ITEMS
-    [[{ "apiVersion", 9 }]]
+    [[{ "apiVersion", 10 }]]
     [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
     [[{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() }]]
     [[{ "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) }]]
@@ -3479,3 +3479,24 @@ string(JSON _fov_taa_disabled_type GET "${_descriptor_json}"
 if(NOT _fov_taa_disabled_type STREQUAL "boolean")
     message(FATAL_ERROR "NR FOV normalization result must be exposed as a boolean")
 endif()
+
+foreach(_field IN ITEMS required available locked)
+    string(JSON _type GET "${_descriptor_json}"
+        outputSchema properties neuralRendering properties renderScalePrerequisite properties ${_field} type)
+    if(NOT _type STREQUAL "boolean")
+        message(FATAL_ERROR "Render Scale prerequisite ${_field} must be exposed as a boolean")
+    endif()
+endforeach()
+
+# A rejected native target must not queue work or change saved settings.
+string(FIND "${_upscaling}" "Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransition(" _transition_start)
+string(FIND "${_upscaling}" "void Upscaling::SetVRUpscalingTransitionProfile(" _transition_end)
+math(EXPR _transition_length "${_transition_end} - ${_transition_start}")
+string(SUBSTRING "${_upscaling}" ${_transition_start} ${_transition_length} _transition)
+string(FIND "${_transition}" "UpscalingTransitionApplyRejection::NeuralRenderScaleRequired" _dependency_guard)
+foreach(_mutation IN ITEMS "QueueVR" "settings.renderScaleMode =")
+    string(FIND "${_transition}" "${_mutation}" _mutation_position)
+    if(_dependency_guard LESS 0 OR _mutation_position LESS_EQUAL _dependency_guard)
+        message(FATAL_ERROR "NR dependency rejection must precede transition publication: ${_mutation}")
+    endif()
+endforeach()

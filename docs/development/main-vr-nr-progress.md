@@ -1,5 +1,13 @@
 # main-vr-nr progress and continuation record
 
+## Renderscale NR dependency (2026-09-19)
+
+[Dependency guard and validation](nr-renderscale-dependency-20260919.md):
+enabled VR Renderscale NR protects Render Scale in UI/profile controls and
+waits for physically active scaled targets at runtime. Full/Foveated NR
+and flat behavior stay independent. All 12 focused C++ host tests pass;
+in-game validation is pending.
+
 ## Persistent branch directive
 
 User direction dated **2026-09-18 (Europe/London)** applies to this and

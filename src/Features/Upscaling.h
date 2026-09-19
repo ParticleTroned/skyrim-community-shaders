@@ -898,7 +898,8 @@ public:
 		OpenComposite,
 		StartupNativeFallback,
 		TransitionOwnership,
-		QueueRejected
+		QueueRejected,
+		NeuralRenderScaleRequired
 	};
 
 	/** Exact outcome from the internal atomic profile transition entry point. */
@@ -2499,6 +2500,10 @@ public:
 	bool ApplyNeuralRenderingConfiguration(const json& a_configuration, std::string& a_error);
 	bool ResetNeuralRenderingConfiguration();
 	void SetNeuralRenderingFeatureAvailable(bool a_available);
+	/** Configured NR dependency, independent of temporary runtime admission. */
+	[[nodiscard]] bool IsNeuralRenderingRenderScaleRequired() const noexcept;
+	/** Pre-DLSS VR work waits for physically active, requested scaled targets. */
+	[[nodiscard]] bool IsNeuralRenderingRenderScaleAvailable() const noexcept;
 	[[nodiscard]] bool IsNeuralRenderingRequested() const noexcept;
 	[[nodiscard]] NeuralRendering::RenderingMode GetNeuralRenderingMode() const noexcept;
 	[[nodiscard]] NeuralRendering::PipelineArrangement GetNeuralRenderingArrangement() const noexcept;

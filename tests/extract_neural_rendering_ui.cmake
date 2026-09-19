@@ -33,7 +33,7 @@ extract("src/Features/Upscaling.cpp"
     "\t\tconst bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);"
     "\t\tconst bool routeAvailable =" selection_controls)
 extract("src/Features/Upscaling.cpp"
-    "bool Upscaling::IsNeuralRenderingRequested() const noexcept"
+    "bool Upscaling::IsNeuralRenderingRenderScaleRequired() const noexcept"
     "NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode()" execution_gate)
 extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsFoveatedVendorDispatchEnabled("

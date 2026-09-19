@@ -67,6 +67,12 @@ namespace NeuralRendering
 		return isVR || mode == RenderingMode::FullResolution || mode == RenderingMode::ReducedResolution;
 	}
 
+	/** The VR pre-DLSS route requires scaled scene targets; flat owns its own inputs. */
+	[[nodiscard]] constexpr bool RequiresVRRenderScale(bool isVR, RenderingMode mode) noexcept
+	{
+		return isVR && mode == RenderingMode::ReducedResolution;
+	}
+
 	/** A missing/reset Renderscale NR preference follows configured VR FOV. */
 	[[nodiscard]] constexpr bool DefaultRenderscaleFov(bool isVR, bool fovEnabled) noexcept
 	{

@@ -31,7 +31,8 @@ namespace CSX::Api
 			kConditionRelatchPending |
 			kConditionProviderCheckPending |
 			kConditionProviderUnavailable |
-			kConditionPersistenceUnavailable;
+			kConditionPersistenceUnavailable |
+			kConditionNeuralRenderScaleRequired;
 		const bool loadingDoorCandidate =
 			(decision.observedConditions & kConditionLoadingTransition) != 0 &&
 			(decision.observedConditions & hardConditions) == 0;

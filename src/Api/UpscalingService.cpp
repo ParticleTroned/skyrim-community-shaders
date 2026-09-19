@@ -828,6 +828,8 @@ namespace
 				output.flags |= kSnapshotRenderScaleLatched;
 			if (upscaling.IsVRRenderScaleModeActive())
 				output.flags |= kSnapshotRenderScaleActive;
+			if (upscaling.IsNeuralRenderingRenderScaleRequired())
+				output.flags |= kSnapshotNeuralRenderScaleRequired;
 			return output;
 		}
 
@@ -903,6 +905,9 @@ namespace
 			}
 
 			std::uint64_t observed = currentSnapshot.observedConditions;
+			if ((currentSnapshot.flags & kSnapshotNeuralRenderScaleRequired) != 0 &&
+				!a_request.target.renderScaleMode)
+				observed |= kConditionNeuralRenderScaleRequired;
 			const auto methodIndex = static_cast<std::uint32_t>(a_request.target.method);
 			const auto methodBit = Bit(methodIndex);
 			if ((currentCapabilities.pendingMethodMask & methodBit) != 0)
@@ -929,7 +934,7 @@ namespace
 						PreflightDecision::kUnsupported :
 						PreflightDecision::kBlocked;
 				result.retryable =
-					(admission.blockingConditions & (kConditionOpenCompositeUpscaling | kConditionProviderUnavailable | kConditionPersistenceUnavailable)) == 0;
+					(admission.blockingConditions & (kConditionOpenCompositeUpscaling | kConditionProviderUnavailable | kConditionPersistenceUnavailable | kConditionNeuralRenderScaleRequired)) == 0;
 				evaluation.status = Status::kSuccess;
 				return evaluation;
 			}
@@ -1036,6 +1041,10 @@ namespace
 						live.snapshot.result = Status::kBlocked;
 						live.snapshot.observedConditions |= kConditionRestartRequired;
 						live.snapshot.blockingConditions |= kConditionRestartRequired;
+					} else if (applied.rejection == Upscaling::UpscalingTransitionApplyRejection::NeuralRenderScaleRequired) {
+						live.snapshot.result = Status::kBlocked;
+						live.snapshot.observedConditions |= kConditionNeuralRenderScaleRequired;
+						live.snapshot.blockingConditions |= kConditionNeuralRenderScaleRequired;
 					} else {
 						live.snapshot.result = Status::kBusy;
 						live.snapshot.observedConditions |= kConditionTransitionPending;

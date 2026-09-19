@@ -67,6 +67,12 @@ namespace globals
 			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
 			bool IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod a_upscaleMethod) const;
+			bool renderScaleRequested = true, renderScaleLatched = true, renderScaleActive = true;
+			bool GetVRRenderScaleModeRequested() const { return renderScaleRequested; }
+			bool IsVRRenderScaleModeLatched() const { return renderScaleLatched; }
+			bool IsVRRenderScaleModeActive() const { return renderScaleActive; }
+			bool IsNeuralRenderingRenderScaleRequired() const noexcept;
+			bool IsNeuralRenderingRenderScaleAvailable() const noexcept;
 			bool IsNeuralRenderingRequested() const noexcept;
 			bool IsFoveatedVendorDispatchEnabled(UpscaleMethod) const;
 			bool IsActiveUpscalingFoveatedProfileAvailable() const;
@@ -742,4 +748,37 @@ int main()
 		}
 	}
 	upscaling.runtimeMethod.reset();
+	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	// Saved off/native settings and an in-flight relatch must never admit pre-DLSS VR NR.
+	for (const bool isVR : { false, true }) {
+		globals::game::isVR = isVR;
+		for (const auto mode : { ModeChoice::FullResolution, ModeChoice::Foveated, ModeChoice::ReducedResolution }) {
+			for (const bool requested : { false, true }) {
+				for (const bool latched : { false, true }) {
+					for (const bool active : { false, true }) {
+						upscaling.settings = {};
+						upscaling.settings.neuralRenderingEnabled = true;
+						upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
+						upscaling.renderScaleRequested = requested;
+						upscaling.renderScaleLatched = latched;
+						upscaling.renderScaleActive = active;
+						const bool required = isVR && mode == ModeChoice::ReducedResolution;
+						const bool supported = isVR || mode != ModeChoice::Foveated;
+						require(upscaling.IsNeuralRenderingRenderScaleRequired() == required, "Only enabled VR renderscale NR locks Render Scale");
+						require(upscaling.IsNeuralRenderingRequested() == (supported && (!required || (requested && latched && active))),
+							"VR renderscale NR requires requested and physical scaling; Full/Foveated and flat remain independent");
+						ImGui::Clear("Enabled");
+						upscaling.DrawSelectionControls();
+						require(!ImGui::Disabled("Enabled") && !upscaling.IsNeuralRenderingRenderScaleRequired(),
+							"Master remains editable and disabling NR releases the dependency");
+						upscaling.settings.neuralRenderingEnabled = true;
+						upscaling.neuralRenderingFeatureAvailable = false;
+						require(!upscaling.IsNeuralRenderingRenderScaleRequired() && !upscaling.IsNeuralRenderingRequested(),
+							"Unloaded NR cannot lock Render Scale or run the model");
+						upscaling.neuralRenderingFeatureAvailable = true;
+					}
+				}
+			}
+		}
+	}
 }

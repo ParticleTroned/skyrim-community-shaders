@@ -49,6 +49,16 @@ int main()
 			false);
 		Check((providerPending.blockingConditions & kConditionProviderCheckPending) != 0, "loading handoff bypassed provider readiness");
 
+		for (const auto purpose : { RequestPurpose::kDirect, RequestPurpose::kEnvironmentProfileTransition }) {
+			const auto neuralDependency = CSX::Api::ResolveUpscalingAdmission(
+				kConditionLoadingTransition | kConditionNeuralRenderScaleRequired,
+				purpose, PersistencePolicy::kRuntimeOnly, false);
+			Check((neuralDependency.blockingConditions & kConditionNeuralRenderScaleRequired) != 0,
+				"NR dependency must block direct and environment-profile scale-off requests");
+			Check(neuralDependency.route == AdmissionRoute::kDirect,
+				"NR dependency must not enter a loading-door handoff");
+		}
+
 		const auto persistenceUnavailable = CSX::Api::ResolveUpscalingAdmission(
 			kConditionLoadingTransition,
 			RequestPurpose::kEnvironmentProfileTransition,

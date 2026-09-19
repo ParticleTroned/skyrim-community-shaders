@@ -67,13 +67,14 @@ namespace
 			Require(!queueLockHeld);
 			if (onRender)
 				onRender();
-			Require(references > 0);
+			Require(references > 0 || sceneOwned);
 			++renderCalls;
 			a_index += indexStep;
 		}
 		std::function<void()> onRender;
 		unsigned renderCalls = 0;
 		std::uint32_t indexStep = 1;
+		bool sceneOwned = false;
 	};
 
 	using Snapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<Light>>;
@@ -113,6 +114,22 @@ namespace RE
 	};
 	struct ShadowSceneNode
 	{
+		void IncRefCount()
+		{
+			Require(!verifyCaptureLock || queueLockHeld);
+			++references;
+		}
+		void DecRefCount()
+		{
+			if (--references == 0) {
+				Require(deleteOnZero && !queueLockHeld);
+				delete this;
+			}
+		}
+		std::atomic<unsigned> references{ 1 };
+		bool deleteOnZero = false;
+		std::unique_ptr<ShadowLight> sunOwner;
+		ShadowLight* sunShadowDirLight = nullptr;
 		std::vector<NiPointer<Light>> activeLights;
 		std::vector<NiPointer<ShadowLight>> activeShadowLights;
 		std::vector<NiPointer<Light>> lightQueueAdd;
@@ -348,7 +365,7 @@ void TestEmptyNativeRender()
 		Require(allocationsUntilFailure == 0);
 		allocationsUntilFailure = -1;
 		Require(a_index == initialIndex && !queueLockHeld && loggedFailures == before);
-		Require(light->references == 2 && light->renderCalls == 0);
+		Require(light->references == 2 && light->renderCalls == 0 && node.references == 1);
 	};
 	checkEmpty(0);
 	node.shadowLightsAccum = { nullptr, light.get() };
@@ -356,6 +373,102 @@ void TestEmptyNativeRender()
 	checkEmpty(2);
 	checkEmpty(UINT32_MAX);
 	std::cout << "Empty native passes allocate nothing\n";
+}
+
+void TestSceneOwnedSunRender()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	node.sunOwner = std::make_unique<ShadowLight>(destroyed);
+	node.sunShadowDirLight = node.sunOwner.get();
+	auto* sun = node.sunShadowDirLight;
+	sun->sceneOwned = true;
+	sun->indexStep = 3;
+	auto first = RE::make_nismart<ShadowLight>(destroyed);
+	auto last = RE::make_nismart<ShadowLight>(destroyed);
+	node.activeShadowLights = { first, last };
+	node.shadowLightsAccum = { first.get(), sun, sun, sun, last.get(), nullptr };
+	unsigned sunCalls = 0;
+	unsigned lastCalls = 0;
+	sun->onRender = [&] {
+		Require(sun->references == 0 && node.references == 2);
+		++sunCalls;
+		std::thread cleanup([&] {
+			RE::BSSpinLockGuard lock{ node.lightQueueLock };
+			node.activeShadowLights.clear();
+			node.shadowLightsAccum.clear();
+		});
+		cleanup.join();
+		Require(destroyed == 0);
+	};
+	last->onRender = [&] { ++lastCalls; };
+	first.reset();
+	last.reset();
+	std::uint32_t index = 0;
+	verifyCaptureLock = true;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	verifyCaptureLock = false;
+	Require(index == 5 && sunCalls == 1 && lastCalls == 1);
+	Require(destroyed == 2 && sun->references == 0 && node.references == 1);
+
+	// Another unretained light cannot acquire the scene-owned sun exemption.
+	node.shadowLightsAccum = { reinterpret_cast<ShadowLight*>(0x33509950), sun };
+	index = 0;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 0 && sunCalls == 1 && node.references == 1);
+}
+
+void TestSceneOwnerLifetime()
+{
+	for (const bool throws : { false, true }) {
+		std::atomic<unsigned> destroyed{ 0 };
+		auto* node = new RE::ShadowSceneNode;
+		node->references = 0;
+		node->deleteOnZero = true;
+		RE::NiPointer<RE::ShadowSceneNode> owner{ node };
+		node->sunOwner = std::make_unique<ShadowLight>(destroyed);
+		node->sunShadowDirLight = node->sunOwner.get();
+		auto* sun = node->sunShadowDirLight;
+		sun->sceneOwned = true;
+		node->shadowLightsAccum = { sun, nullptr };
+		sun->onRender = [&] {
+			Require(node->references == 2 && sun->references == 0);
+			owner.reset();
+			Require(destroyed == 0 && node->references == 1);
+			if (throws)
+				throw std::bad_alloc{};
+		};
+		std::uint32_t index = 0;
+		bool propagated = false;
+		const auto before = loggedFailures;
+		try {
+			LightLimitFix::RenderVRShadowLights(node, index);
+		} catch (const std::bad_alloc&) {
+			propagated = true;
+		}
+		Require(propagated == throws && index == (throws ? 0u : 1u));
+		Require(!owner && destroyed == 1 && !queueLockHeld && loggedFailures == before);
+	}
+}
+
+void TestSceneOwnedSunCaptureFailure()
+{
+	std::atomic<unsigned> destroyed{ 0 };
+	RE::ShadowSceneNode node;
+	node.sunOwner = std::make_unique<ShadowLight>(destroyed);
+	node.sunShadowDirLight = node.sunOwner.get();
+	auto* sun = node.sunShadowDirLight;
+	sun->sceneOwned = true;
+	node.shadowLightsAccum = { sun, nullptr };
+	const auto before = loggedFailures;
+	std::uint32_t index = 0;
+	allocationsUntilFailure = 0;
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	allocationsUntilFailure = -1;
+	Require(loggedFailures == before + 1 && index == 0 && sun->renderCalls == 0);
+	Require(node.references == 1 && sun->references == 0 && destroyed == 0 && !queueLockHeld);
+	LightLimitFix::RenderVRShadowLights(&node, index);
+	Require(index == 1 && sun->renderCalls == 1 && sun->references == 0 && node.references == 1);
 }
 
 void TestNativeRenderSelection()
@@ -409,7 +522,7 @@ void TestNativeRenderAllocationFailures()
 		allocationsUntilFailure = failureAfter;
 		LightLimitFix::RenderVRShadowLights(&node, index);
 		allocationsUntilFailure = -1;
-		Require(!queueLockHeld && light->references == 2);
+		Require(!queueLockHeld && light->references == 2 && node.references == 1);
 		if (index == 1) {
 			Require(failures > 0 && light->renderCalls == 1 && loggedFailures == before);
 			std::cout << failures << " native render allocation failures passed\n";
@@ -446,7 +559,7 @@ void TestNativeRenderUnwind()
 		propagated = true;
 	}
 	Require(propagated && index == 0 && !queueLockHeld);
-	Require(destroyed == 1 && loggedFailures == before);
+	Require(destroyed == 1 && loggedFailures == before && node.references == 1);
 }
 
 int main()
@@ -457,6 +570,9 @@ int main()
 	TestEnumerationOwnership();
 	TestNativeRenderLifetime();
 	TestEmptyNativeRender();
+	TestSceneOwnedSunRender();
+	TestSceneOwnerLifetime();
+	TestSceneOwnedSunCaptureFailure();
 	TestNativeRenderSelection();
 	TestNativeRenderAllocationFailures();
 	TestNativeRenderUnwind();

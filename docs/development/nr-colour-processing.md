@@ -62,6 +62,18 @@ Both layouts share the same settings and transition handling. Advanced
 additionally exposes image tuning, character strengths and colour controls;
 Developer Mode controls diagnostic visibility within Advanced.
 
+Every NR toggle, slider, selector and action has its own concise tooltip,
+including disabled controls. Faces, Skin and Hair each explain their own
+selection and strength; colour sliders explain their endpoints separately.
+
+**Full resolution + Restrict to FOV mask** runs NR at full output resolution
+on the final scene before UI, limited to the configured eye masks. Pixels
+outside those masks retain the normal scene. **Foveated** runs NR across the
+DLSS-upscaled FOV region and blends its edges into the scene; Insertion Point
+chooses when that region is processed. FOV restriction selects the region,
+not a weaker model setting. Characters only can further limit edited pixels
+in either mode.
+
 The Advanced colour section provides:
 
 -   **Enable colour processing**: retain the chosen mode/sliders while bypassing

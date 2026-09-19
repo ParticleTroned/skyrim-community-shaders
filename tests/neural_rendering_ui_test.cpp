@@ -110,7 +110,6 @@ namespace ImGui
 		Record(label);
 	}
 	void TextUnformatted(const char* label) { Record(label); }
-	void SetItemTooltip(const char*) {}
 	void SeparatorText(const char* label) { Record(label); }
 	void Separator() {}
 	void PushID(int) {}
@@ -167,6 +166,7 @@ namespace ImGui
 }
 namespace Util
 {
+	bool HoverTooltipWrapper() { return false; }
 	class DisableGuard
 	{
 		bool disabled_;

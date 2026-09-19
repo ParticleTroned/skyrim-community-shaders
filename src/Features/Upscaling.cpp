@@ -17880,7 +17880,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 	const bool showDiagnostics = !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();
 	if (ImGui::TreeNodeEx("Neural Rendering", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
 		ImGui::TextWrapped("Neural Rendering uses AI to enhance scene detail and character appearance.");
-		ImGui::TextWrapped("Full resolution runs on the final scene before UI. Foveated uses the current FOV pipeline. Reduced resolution runs NR at render resolution before DLSS; DLSS owns temporal reconstruction. Character selection combines with every mode.");
+		ImGui::TextWrapped("Full resolution runs NR on the final scene before UI; its FOV option limits NR to your eye masks. Foveated runs NR across the DLSS-upscaled FOV region. Reduced resolution runs NR before DLSS. Character selection combines with every mode.");
 		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
@@ -17892,17 +17892,31 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 															   globals::game::isVR, GetNeuralRenderingMode(), settings.neuralCharacterRenderingEnabled)) &&
 											!settings.neuralRenderingEnabled);
 			ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Turns Neural Rendering on or off. Disabling it restores the normal scene; enabling it turns off FOV + TAA.");
 		}
 		ApplyNeuralRenderingFovConstraint(settings);
 		DrawNeuralRenderingFovWarning(true);
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Reduced resolution before DLSS" };
-		if (ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())])) {
+		static constexpr const char* renderingModeHelp[]{
+			"Runs NR at full output resolution on the final scene before UI. Restrict to FOV mask limits the result to your eye masks; otherwise NR covers the whole scene.",
+			"Runs NR across the DLSS-upscaled region inside your FOV masks, then blends its edges into the scene. Insertion Point chooses when it runs; Characters only can narrow the selection.",
+			"Runs NR at the lower render resolution before DLSS, which then reconstructs the final image. Requires DLSS; FOV restriction and character selection are optional."
+		};
+		const bool renderingModeOpen = ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())]);
+		if (!renderingModeOpen) {
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(renderingModeHelp[static_cast<uint>(GetNeuralRenderingMode())]);
+		}
+		if (renderingModeOpen) {
 			for (uint index = 0; index < IM_ARRAYSIZE(renderingModes); ++index) {
 				const auto mode = static_cast<NeuralRendering::RenderingMode>(index);
 				const bool selected = mode == GetNeuralRenderingMode();
 				auto guard = Util::DisableGuard(!NeuralRendering::IsRenderingModeSelectable(globals::game::isVR, mode, fovAvailable));
 				if (ImGui::Selectable(renderingModes[index], selected))
 					settings.neuralRenderingMode = index;
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(renderingModeHelp[index]);
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
@@ -17913,6 +17927,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		if (GetNeuralRenderingMode() != NeuralRendering::RenderingMode::Foveated) {
 			auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingFovOnly);
 			ImGui::Checkbox("Restrict to FOV mask", &settings.neuralRenderingFovOnly);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Limits NR to the configured left and right eye masks; pixels outside keep the normal scene. Full resolution still runs on the final scene before UI. Set up the masks in Upscaling > FOV.");
 		}
 		const bool missingFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly) &&
 		                        !fovAvailable;
@@ -17923,15 +17939,21 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		{
 			auto guard = Util::DisableGuard(missingFov || (!globals::game::isVR && !settings.neuralCharacterRenderingEnabled));
 			ImGui::Checkbox("Characters only", &settings.neuralCharacterRenderingEnabled);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Limits visible NR edits to the selected face, skin and hair pixels. Works with every rendering mode in VR; unselected pixels keep the normal scene.");
 		}
-		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Apply Neural Rendering only to selected face, skin and hair pixels. Combines with every rendering mode in VR.");
 		const auto drawCharacterCategories = [&]() {
 			ImGui::Checkbox("Faces", &settings.neuralCharacterFacesEnabled);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Includes visible face pixels in character NR. Face Strength controls how much of the neural result is blended in.");
 			ImGui::SameLine();
 			ImGui::Checkbox("Skin", &settings.neuralCharacterSkinEnabled);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Includes visible body-skin pixels in character NR. Skin Strength controls how much of the neural result is blended in.");
 			ImGui::SameLine();
 			ImGui::Checkbox("Hair", &settings.neuralCharacterHairEnabled);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Includes visible hair pixels in character NR. Hair Strength controls how much of the neural result is blended in.");
 		};
 		if (a_essentialsOnly) {
 			auto guard = Util::DisableGuard(missingFov || !globals::game::isVR || !settings.neuralCharacterRenderingEnabled);
@@ -17965,12 +17987,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						NeuralRendering::ClampInsertionPoint(
 							static_cast<uint32_t>(insertionPoint)));
 				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(
-						"Upscaled Centre runs immediately after DLSS and before feathering.");
-					ImGui::TextUnformatted(
-						"Final LDR runs after scene post-processing and sharpening, immediately before UI.");
-				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Upscaled Centre runs NR just after DLSS, before scene post-processing. Final LDR runs it on the final scene before UI. Both use the FOV region.");
 			} else {
 				ImGui::TextUnformatted(reducedResolution ?
 										   "Placement: Render resolution, before DLSS" :
@@ -17989,12 +18007,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						IM_ARRAYSIZE(stereoSubmissionModes))) {
 					settings.neuralRenderingBatchedStereo = stereoSubmission != 0;
 				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(
-						"Per-eye submits one D3D12 Feature 18 transaction for each eye.");
-					ImGui::TextUnformatted(
-						"Batched evaluates both eyes in one command-list and fence transaction.");
-				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Per-eye submits each eye separately; Batched submits both together. This changes GPU scheduling, not the selected pixels or image tuning.");
 
 				static constexpr const char* outputCommitModes[]{
 					"Staged",
@@ -18013,12 +18027,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							IM_ARRAYSIZE(outputCommitModes))) {
 						settings.neuralRenderingDirectCommit = outputCommit != 0;
 					}
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(
-						"Staged writes NR output privately, then publishes the completed image.");
-					ImGui::TextUnformatted(
-						"Direct writes successful NR output to the private output resources.");
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Staged holds NR output separately before publishing it; Direct writes to the final private output. Reduced resolution and character isolation require Staged output.");
 				}
 				if (requiresStagedOutput) {
 					ImGui::TextDisabled(reducedResolution ?
@@ -18054,16 +18064,26 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 				(void)ApplyNeuralRenderingPreset(
 					settings, static_cast<uint32_t>(preset));
 			}
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Sets Intensity, Local Tone, Local Structure and Skin Structure together. Natural is gentler; Fabric Detail emphasizes texture; Strong increases the effect. Custom keeps your values.");
 
 			bool customTuningChanged = false;
 			customTuningChanged |= ImGui::SliderFloat(
 				"Intensity", &settings.neuralRenderingIntensity, 0.0f, 2.0f, "%.2f");
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Adjusts the model's overall enhancement strength. Higher values request a stronger neural effect; use Enabled to turn NR off.");
 			customTuningChanged |= ImGui::SliderFloat(
 				"Local Tone", &settings.neuralRenderingLocalTone, 0.0f, 2.0f, "%.2f");
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Adjusts the model's local brightness and contrast changes. Higher values request stronger tonal changes; Preserve source can limit the visible result.");
 			customTuningChanged |= ImGui::SliderFloat(
 				"Local Structure", &settings.neuralRenderingLocalStructure, 0.0f, 2.0f, "%.2f");
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Adjusts the model's emphasis on local texture and shape detail. Higher values request stronger detail enhancement.");
 			customTuningChanged |= ImGui::SliderFloat(
 				"Skin Structure", &settings.neuralRenderingSkinStructure, 0.0f, 2.0f, "%.2f");
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Adjusts the model's skin-detail enhancement. This tunes the model; Skin Strength separately controls blending on selected body-skin pixels.");
 			static constexpr const char* styles[]{
 				"Style 0", "Style 1", "Style 2", "Style 3"
 			};
@@ -18073,6 +18093,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 				settings.neuralRenderingStyle = static_cast<uint>(style);
 				customTuningChanged = true;
 			}
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Selects one of the model's four appearance styles. Compare them in the same scene; style numbers do not represent quality levels.");
 			if (customTuningChanged)
 				settings.neuralRenderingPreset = 0;
 
@@ -18092,6 +18114,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						settings.neuralCharacterVisualIsolationEnabled = true;
 						settings.neuralCharacterVisibilityDepthTestEnabled = true;
 					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Clears character debug and forced-mask overrides, disables Multi-ROI, and restores exact character masking and visibility tests. Your category choices and strengths stay unchanged.");
 				}
 				drawCharacterCategories();
 
@@ -18102,6 +18126,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						"Face Strength", &settings.neuralCharacterFaceStrength,
 						NeuralRendering::CharacterPolicy::kMinimumStrength,
 						NeuralRendering::CharacterPolicy::kMaximumStrength, "%.2f");
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Blends the neural result onto selected face pixels: 0 keeps the original face; 1 applies the full result, subject to edge fading and colour settings.");
 				}
 				{
 					auto guard = Util::DisableGuard(
@@ -18110,6 +18136,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						"Skin Strength", &settings.neuralCharacterSkinStrength,
 						NeuralRendering::CharacterPolicy::kMinimumStrength,
 						NeuralRendering::CharacterPolicy::kMaximumStrength, "%.2f");
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Blends the neural result onto selected body-skin pixels: 0 keeps the original skin; 1 applies the full result, subject to edge fading and colour settings.");
 				}
 				{
 					auto guard = Util::DisableGuard(
@@ -18118,21 +18146,16 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						"Hair Strength", &settings.neuralCharacterHairStrength,
 						NeuralRendering::CharacterPolicy::kMinimumStrength,
 						NeuralRendering::CharacterPolicy::kMaximumStrength, "%.2f");
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Blends the neural result onto selected hair pixels: 0 keeps the original hair; 1 applies the full result, subject to edge fading and colour settings.");
 				}
 				ImGui::SliderFloat(
 					"NR Distance Cull", &settings.neuralCharacterMaximumDistanceMeters,
 					NeuralRendering::CharacterPolicy::kMinimumDistanceMeters,
 					NeuralRendering::CharacterPolicy::kMaximumDistanceMeters,
 					"%.1f m", ImGuiSliderFlags_AlwaysClamp);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(
-						"Softly fades NR during the final up-to-one metre, then excludes actor bounds and mask pixels.");
-					ImGui::TextUnformatted(
-						"The selected distance is the exact zero/cull point; 0 m disables culling.");
-					ImGui::Text(
-						"The range ends at %.0f m, beyond the useful face-detail range.",
-						NeuralRendering::CharacterPolicy::kMaximumDistanceMeters);
-				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Fades character NR out over the last metre before this distance, then excludes it. 0 m disables distance culling.");
 				if (showDiagnostics && ImGui::TreeNodeEx(
 										   "Character diagnostics and experiments",
 										   ImGuiTreeNodeFlags_SpanAvailWidth)) {
@@ -18142,20 +18165,12 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							static_cast<int>(NeuralRendering::CharacterPolicy::kMaximumFacePixelSize), "%d px"))
 						settings.neuralCharacterMinimumFacePixelSize = static_cast<uint>(minimumFacePixels);
 					if (auto tooltip = Util::HoverTooltipWrapper())
-						ImGui::TextUnformatted("Admits a face at this size and retains it down to 75% to prevent boundary flicker.");
+						ImGui::TextUnformatted("Excludes actors whose projected face is smaller than this many pixels. Selected actors are retained down to 75% of the threshold to reduce flicker.");
 					ImGui::Checkbox(
 						"Deterministic Mask Composite",
 						&settings.neuralCharacterVisualIsolationEnabled);
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::TextUnformatted(
-							"Blends Feature 18 output over normal DLSS using the authored 0..1 category strength.");
-						ImGui::TextUnformatted(
-							"Frozen/current depth rejects later depth-writing occluders; translucent overlays remain approximate.");
-						ImGui::TextUnformatted(
-							"The private NVIDIA ControlMask ABI is not used for character selection.");
-						ImGui::TextUnformatted(
-							"Disable only to compare normal full-center Feature 18 output.");
-					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Keeps neural edits on the selected face, skin and hair pixels using their strengths. Disable only to diagnose NR across the full region.");
 					{
 						auto guard = Util::DisableGuard(
 							!settings.neuralCharacterVisualIsolationEnabled &&
@@ -18163,60 +18178,27 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						ImGui::Checkbox(
 							"Experimental Multi-ROI",
 							&settings.neuralCharacterMultiRoiEnabled);
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::TextUnformatted(
-								"Uses at most two persistent Feature 18 regions per eye, derived from current-source GPU face/skin/hair category bounds when ready.");
-							ImGui::TextUnformatted(
-								"Early GPU bounds are read without waiting and expanded for crop, jitter, sampling and feathering. Geometry is only a fallback when matching GPU evidence is unavailable; stale masks cannot exclude new pixels.");
-							ImGui::TextUnformatted(
-								"With the savings gate enabled, a split must save a 65,536-pixel reserve for its extra invocation plus 25% of the single-region area (20% to retain a split). This is a cost heuristic, not a measured GPU break-even.");
-							ImGui::TextUnformatted(
-								"Nearby, overlapping or insufficiently separated clusters use one enclosing region. Exact face/skin/hair compositing is unchanged.");
-							ImGui::TextUnformatted(
-								"Experimental, off by default: extra instances increase VRAM; GPU savings and image stability need in-game validation.");
-							ImGui::TextUnformatted(
-								"This is not native sparse-ROI support. Compare summed planned pixels, not the enclosing rectangle, and measure complete-frame time as well as NR GPU time.");
-							ImGui::TextUnformatted(
-								"Split regions use one atomic batch even with Sequential Stereo selected. Turning this off retires the extra runtime instances.");
-							ImGui::TextUnformatted(
-								"Debug views and forced-mask tests use the single-region fallback. Diagnostics report the active region count and fallback reason.");
-						}
+						if (auto tooltip = Util::HoverTooltipWrapper())
+							ImGui::TextUnformatted("Tries up to two separate character regions per eye instead of one enclosing region. May reduce evaluated area but uses extra model instances and VRAM; faster rendering is not guaranteed.");
 					}
 					{
 						auto guard = Util::DisableGuard(!settings.neuralCharacterMultiRoiEnabled);
 						ImGui::Checkbox("Multi-ROI Savings Gate", &settings.neuralCharacterMultiRoiSavingsGateEnabled);
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::TextUnformatted("Requires the extra-invocation reserve plus relative savings against the actual padded single-ROI fallback.");
-							ImGui::TextUnformatted("Disable to try any smaller split. Complete coverage, disjoint bounds and valid dimensions remain mandatory. Extra invocations can still be slower.");
-							ImGui::TextUnformatted("Session only; enabled again when settings load. DevBench reports candidate rectangles, exact pixel costs and rejection counts.");
-						}
+						if (auto tooltip = Util::HoverTooltipWrapper())
+							ImGui::TextUnformatted("Requires a meaningful area saving before splitting character regions. Off allows any smaller valid split, which may be slower. This session-only option returns to On when settings load.");
 					}
 					ImGui::Checkbox(
 						"Adaptive ROI Performance",
 						&settings.neuralCharacterAdaptiveRoiSelectionEnabled);
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::TextUnformatted(
-							"Prioritizes actors by player distance and projected face detail.");
-						ImGui::Text(
-							"Subject to Minimum Face Size, keeps actors within %.0f m or with a face at least %u px across.",
-							NeuralRendering::CharacterRegionPolicy::kAdaptiveDetailDistanceMeters,
-							NeuralRendering::CharacterRegionPolicy::kAdaptiveDetailFacePixelSize);
-						ImGui::TextUnformatted(
-							"This can omit low-detail distant actors from Neural Rendering.");
-						ImGui::TextUnformatted(
-							"Selected actors use a 1 m / 75% exit margin to prevent boundary flicker.");
-					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Skips distant actors with too little projected face detail. Nearby or large faces remain eligible; exit margins reduce selection flicker.");
 					ImGui::SliderFloat(
 						"Eligibility Margin", &settings.neuralCharacterRoiMargin,
 						NeuralRendering::CharacterPolicy::kMinimumRoiMargin,
 						NeuralRendering::CharacterPolicy::kMaximumRoiMargin,
 						"%.2f", ImGuiSliderFlags_AlwaysClamp);
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::TextUnformatted(
-							"Expands projected actor bounds before building the provider compute rectangles.");
-						ImGui::TextUnformatted(
-							"Smaller values reduce inference area; the exact mask still controls final pixels.");
-					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Expands projected actor bounds used for character NR coverage. Larger margins retain more context and can cost more; the exact character mask still determines edited pixels.");
 					int holdFrames = static_cast<int>(
 						settings.neuralCharacterRoiHoldFrames);
 					if (ImGui::SliderInt(
@@ -18227,6 +18209,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						settings.neuralCharacterRoiHoldFrames =
 							static_cast<uint>(holdFrames);
 					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Keeps a recently eligible actor selected for this many frames after its face falls below the size threshold. Higher values reduce selection flicker; 0 removes the extra hold.");
 
 					ImGui::TextDisabled(
 						"The provider takes one rectangle per evaluation; Multi-ROI uses separate feature instances.");
@@ -18234,16 +18218,14 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 					ImGui::Checkbox(
 						"Visibility Depth Test",
 						&settings.neuralCharacterVisibilityDepthTestEnabled);
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::TextUnformatted(
-							"Rejects frozen character pixels hidden by later depth-writing geometry.");
-						ImGui::TextUnformatted(
-							"This is independent of edge feathering and can be disabled for diagnosis.");
-					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Prevents character NR from showing through later opaque objects. Disable only to diagnose missing character edits; transparent overlays remain approximate.");
 
 					ImGui::Checkbox(
 						"Depth-aware Edge Feather",
 						&settings.neuralCharacterDepthAwareFeatherEnabled);
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Softens character-mask edges while avoiding smoothing across depth breaks. Edge Radius sets the width; Relative Depth Threshold controls depth separation.");
 					{
 						auto guard = Util::DisableGuard(
 							!settings.neuralCharacterDepthAwareFeatherEnabled);
@@ -18257,15 +18239,15 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							settings.neuralCharacterFeatherRadius =
 								static_cast<uint>(featherRadius);
 						}
+						if (auto tooltip = Util::HoverTooltipWrapper())
+							ImGui::TextUnformatted("Sets character-edge smoothing width in input pixels. Larger values soften a wider edge; 0 disables this optional smoothing.");
 						ImGui::SliderFloat(
 							"Relative Depth Threshold", &settings.neuralCharacterDepthThreshold,
 							0.0f,
 							NeuralRendering::CharacterPolicy::kMaximumFeatherDepthThreshold,
 							"%.4f");
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::TextUnformatted(
-								"Compares linearized view depth with a one-game-unit minimum tolerance.");
-						}
+						if (auto tooltip = Util::HoverTooltipWrapper())
+							ImGui::TextUnformatted("Sets how different neighbouring depths may be during edge smoothing. Lower values better separate surfaces; higher values allow smoothing across larger depth differences.");
 					}
 
 					static constexpr const char* debugViews[]{
@@ -18281,6 +18263,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							NeuralRendering::ClampCharacterDebugView(
 								static_cast<uint32_t>(debugView)));
 					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Replaces the normal view with the character mask, eligibility rectangles or raw NR output. Choose Off to return to the normal composite.");
 
 					static constexpr const char* maskTestModes[]{
 						"Authored", "Force Zero", "Force One", "Force Half", "Invert Authored",
@@ -18296,6 +18280,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							NeuralRendering::ClampCharacterMaskTestMode(
 								static_cast<uint32_t>(maskTestMode)));
 					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Overrides the character mask for diagnosis: zero, full, half, inverted, or without visibility rejection. Authored restores normal face, skin and hair selection.");
 					if (maskTestMode != 0) {
 						ImGui::TextColored(
 							Util::Colors::GetWarning(),
@@ -18314,7 +18300,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 				ImGui::SliderFloat("FOV edge feather", &settings.neuralRenderingBlendFeather,
 					kPeripheryTAACenterBlendFeatherMin, kPeripheryTAACenterBlendFeatherMax, "%.3f");
 				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Softens the boundary between the neural image and the surrounding scene.");
+					ImGui::TextUnformatted("Sets how softly the NR region blends into the surrounding scene. Higher values widen the transition; this does not change the selected model strength.");
 			}
 
 			ImGui::SeparatorText("Runtime");
@@ -18554,13 +18540,17 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			}
 			if (neuralStatus.quarantined)
 				ImGui::TextWrapped("Neural Rendering could not recover safely. Restart the game to try again.");
-			if ((showDiagnostics || neuralStatus.failureLatched) && !neuralStatus.quarantined &&
-				ImGui::Button("Reset Neural Rendering Runtime")) {
-				if (NeuralRendering::Renderer::Instance().Reset()) {
-					NeuralRendering::CharacterRendering::Instance().Reset();
-					RequestHistoryReset();
-				} else {
-					ImGui::TextWrapped("Neural Rendering is still busy or unavailable. Its resources have been retained.");
+			if ((showDiagnostics || neuralStatus.failureLatched) && !neuralStatus.quarantined) {
+				const bool resetRuntime = ImGui::Button("Reset Neural Rendering Runtime");
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Recreates the NR runtime and clears its temporal history to recover from a failure. Your settings stay unchanged; quarantined failures require a game restart.");
+				if (resetRuntime) {
+					if (NeuralRendering::Renderer::Instance().Reset()) {
+						NeuralRendering::CharacterRendering::Instance().Reset();
+						RequestHistoryReset();
+					} else {
+						ImGui::TextWrapped("Neural Rendering is still busy or unavailable. Its resources have been retained.");
+					}
 				}
 			}
 		}

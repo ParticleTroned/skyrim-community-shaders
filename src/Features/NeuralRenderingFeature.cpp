@@ -681,8 +681,20 @@ void NeuralRenderingFeature::DrawSettings()
 	bool changed = false;
 	ImGui::TextWrapped("These controls apply to full-resolution, FOV and before-upscaling NR, including characters.");
 	changed |= ImGui::Checkbox("Enable colour processing", &config.settings.enabled);
+	if (auto tooltip = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Applies the selected colour mode and preservation settings. Off uses Original model output while NR stays on; your colour settings are retained.");
 	static constexpr std::array colourModes{ "Original", "Managed (experimental)", "Preserve source" };
-	if (ImGui::BeginCombo("Colour mode", colourModes[static_cast<std::size_t>(config.settings.mode)])) {
+	static constexpr std::array colourModeHelp{
+		"Uses the model output directly, without source-colour preservation. NR remains active.",
+		"Uses experimental colour and exposure reconstruction with session-only calibration. Preservation sliders do not apply.",
+		"Keeps the game's colour and adds neural brightness detail. The preservation sliders control how much lighting and model appearance may change."
+	};
+	const bool colourModeOpen = ImGui::BeginCombo("Colour mode", colourModes[static_cast<std::size_t>(config.settings.mode)]);
+	if (!colourModeOpen) {
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(colourModeHelp[static_cast<std::size_t>(config.settings.mode)]);
+	}
+	if (colourModeOpen) {
 		for (std::size_t index = 0; index < colourModes.size(); ++index) {
 			const auto mode = static_cast<Mode>(index);
 			if (mode == Mode::Managed && !showDiagnostics)
@@ -692,6 +704,8 @@ void NeuralRenderingFeature::DrawSettings()
 				config.settings.mode = mode;
 				changed = true;
 			}
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(colourModeHelp[index]);
 			if (selected)
 				ImGui::SetItemDefaultFocus();
 		}
@@ -713,7 +727,8 @@ void NeuralRenderingFeature::DrawSettings()
 			config.settings.lightingPreservation = preservationPercent / 100.0f;
 			changed = true;
 		}
-		ImGui::SetItemTooltip("100%% suppresses smooth neural brightness changes; 0%% allows them. Fine detail can remain at either end. Neural appearance mix independently blends in the model's colour and tone.");
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("100% suppresses broad neural brightness changes; 0% allows them. Fine detail can remain at either end. Applies to Preserve source; Neural appearance mix can add model lighting back.");
 	}
 	if (config.settings.mode != Mode::PreserveSource)
 		ImGui::TextWrapped("Choose Preserve source to adjust lighting preservation.");
@@ -725,10 +740,14 @@ void NeuralRenderingFeature::DrawSettings()
 		ImGui::TextWrapped("Raise Detail contribution and Maximum detail gain above zero to use lighting preservation.");
 	if (config.settings.mode == Mode::PreserveSource) {
 		changed |= ImGui::SliderFloat("Detail contribution", &config.settings.detailStrength, 0, 2);
-		ImGui::SetItemTooltip("Adjust the strength of retained neural brightness changes. Lower lighting preservation also allows broader changes.");
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Sets the strength of neural brightness detail added to source colour. 0 removes this detail contribution; 1 uses its normal strength; 2 doubles it before the gain limit.");
 		changed |= ImGui::SliderFloat("Neural appearance mix", &config.settings.appearanceMix, 0, 1);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("0 uses source colour with the selected neural detail; 1 uses the reconstructed model appearance. Higher values admit more model colour and lighting and bypass more preservation.");
 		changed |= ImGui::SliderFloat("Maximum detail gain (stops)", &config.settings.maximumDetailStops, 0, 2);
-		ImGui::SetItemTooltip("Limit brightening and darkening from preserved neural detail. Neural appearance mix can add changes beyond this limit.");
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Caps brightening and darkening from preserved neural detail: 1 stop allows up to twice or half the source brightness. Neural appearance mix is outside this limit.");
 	}
 	const bool outputOverrideActive = config.experiments.transportBypass || !config.experiments.applyModelEdit ||
 	                                  (config.EffectiveMode() != Mode::LegacyRaw &&
@@ -740,14 +759,22 @@ void NeuralRenderingFeature::DrawSettings()
 			config.experiments = {};
 			changed = true;
 		}
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Clears session-only colour experiments and restores visible neural edits. Keeps your saved colour mode and preservation sliders.");
 	}
 	if (showDiagnostics && ImGui::TreeNode("Colour experiments and diagnostics")) {
 		ImGui::TextWrapped("Save Settings stores the colour mode and sliders. Assessment overrides are session only.");
 		changed |= ImGui::Checkbox("Apply neural edit (A/B; inference stays running)", &config.experiments.applyModelEdit);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Shows or hides the neural edit while keeping inference running for same-scene comparisons. Use the main NR switch for NR-off performance measurements.");
 		ImGui::TextWrapped("Uncheck Apply neural edit to show the original image while inference keeps running. Use the main NR switch to measure NR-off performance.");
 		ImGui::SeparatorText("Exposure and assessment");
 		changed |= ImGui::Checkbox("Capture engine HDR exposure", &config.experiments.captureEngineExposure);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Records the game's HDR exposure for diagnostics and exposure experiments. Recording alone does not change NR colour or select an exposure correction.");
 		changed |= ImGui::Checkbox("Capture HMD frame provenance", &config.experiments.captureFrameEvidence);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Attaches source-frame and NR configuration evidence to HMD captures. Does not alter the image; useful for attributing comparisons to exact settings.");
 		ImGui::TextWrapped("Captures the actual HDR-pass AvgTex.y/x and frame-gamma evidence. A matching source frame is required; capture arriving after early NR is unavailable, not silently taken from the previous frame. Capturing exposure does not identify NR's expected colour space.");
 		for (std::size_t i = 0; i < config.experiments.profiles.size(); ++i) {
 			ImGui::PushID(static_cast<int>(i));
@@ -756,6 +783,8 @@ void NeuralRenderingFeature::DrawSettings()
 			auto& p = config.experiments.profiles[i];
 			int domain = static_cast<int>(p.domain), transform = static_cast<int>(p.transform);
 			changed |= ImGui::Combo("Source-domain candidate", &domain, "Unknown/native\0Linear RGB\0sRGB encoded\0");
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Declares how this route's input colour should be interpreted for experiments. Non-identity transforms require Linear RGB; changing away from it restores Identity.");
 			p.domain = static_cast<Domain>(domain);
 			if (p.domain != Domain::Linear && p.transform != Transform::Identity) {
 				p.transform = Transform::Identity;
@@ -764,6 +793,8 @@ void NeuralRenderingFeature::DrawSettings()
 			if (p.domain == Domain::Linear) {
 				transform = static_cast<int>(p.transform);
 				changed |= ImGui::Combo("Model input transform", &transform, "Identity\0Linear to sRGB\0Reversible proxy + sRGB\0");
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Identity leaves input colour unchanged. Linear to sRGB encodes it; Reversible proxy also compresses its range. Experimental transforms are reversed during reconstruction.");
 				p.transform = static_cast<Transform>(transform);
 			}
 			if (p.transform == Transform::Identity) {
@@ -772,21 +803,31 @@ void NeuralRenderingFeature::DrawSettings()
 			} else {
 				int source = static_cast<int>(p.exposureSource);
 				changed |= ImGui::Combo("Exposure source", &source, "Manual calibration\0Captured engine HDR (current frame)\0Captured engine HDR (previous frame)\0");
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Uses manual calibration or captured HDR exposure from the matching current or previous source frame. Previous-frame capture is for early-route experiments; missing evidence cannot supply that correction.");
 				p.exposureSource = static_cast<ExposureSource>(source);
 				float stops = std::log2(p.exposureMultiplier);
 				if (ImGui::SliderFloat("Calibration multiplier (EV)", &stops, -8, 8)) {
 					p.exposureMultiplier = std::exp2(stops);
 					changed = true;
 				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Adjusts exposure before the model, then removes it during reconstruction. +1 EV doubles exposure; -1 EV halves it. Multiplies the selected exposure source.");
 			}
 			ImGui::PopID();
 		}
 		changed |= ImGui::Checkbox("Transport bypass (skip neural evaluation)", &config.experiments.transportBypass);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Skips model evaluation to inspect the colour transport path. This is a diagnostic bypass, not a valid NR performance result.");
 		changed |= ImGui::Checkbox("Bounded asynchronous colour samples", &config.experiments.diagnostics);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Collects small, asynchronous input and output colour measurements for diagnostics. Off stops new samples; this does not change the selected colour mode.");
 		if (ImGui::Button("Reset assessment overrides")) {
 			config.experiments = {};
 			changed = true;
 		}
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Resets all session-only colour experiments, including calibration, captures and bypasses. Keeps the saved colour mode and preservation sliders.");
 		if (ImGui::TreeNode("Colour diagnostics")) {
 			const auto text = StatusJson().dump(2);
 			ImGui::TextUnformatted(text.c_str());
@@ -795,6 +836,8 @@ void NeuralRenderingFeature::DrawSettings()
 		static std::string assets;
 		if (ImGui::Button("Check installed colour shaders"))
 			assets = AssetsJson().dump(2);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Checks that the required colour shader files are present and reports their identities. This does not compile shaders or verify their rendered output.");
 		if (!assets.empty())
 			ImGui::TextUnformatted(assets.c_str());
 		ImGui::TreePop();

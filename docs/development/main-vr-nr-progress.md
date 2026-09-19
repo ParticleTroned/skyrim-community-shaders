@@ -331,3 +331,21 @@ settings fingerprint was refreshed without changing preset revision 6 or
 its tier values. Compiled regression execution and in-game UI testing were
 not run: the user requires explicit authorization before another build.
 No DLL, shaders, test executable or AIO was built, pushed or deployed.
+
+## Individual NR tooltips (2026-09-19)
+
+Every NR toggle, slider, selector and action now has individual, wrapped
+hover help, available even when disabled. The inventory covers 37 rendering
+and character control/choice call sites and 19 colour call sites. Rendering
+and colour dropdown choices also describe themselves. Existing long
+experimental tooltips were shortened; controls do not share grouped help.
+Full resolution with FOV restriction is identified as the final-scene route
+limited to eye masks, while Foveated uses the DLSS-upscaled FOV region.
+Character selection can further narrow either route. Runtime settings,
+rendering, colour processing and the contextual warning rules are unchanged.
+
+Validation: the source inventory found no control without individual help;
+UI extraction, the NR DevBench source contract and all eight colour source
+contract tests passed. Preset generation/check retains revision 6 and tier
+values, with updated source fingerprints. No DLL, shader, test executable,
+AIO build, in-game validation, deployment or push was performed.

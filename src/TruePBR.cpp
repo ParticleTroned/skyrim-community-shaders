@@ -1018,6 +1018,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 		const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
 		auto lightingFlags = shader->currentRawTechnique & ~(~0u << 24);
 		auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((shader->currentRawTechnique >> 24) & 0x3F);
+		const bool isObjectTechnique = lightingType == None || lightingType == TreeAnim || lightingType == LODObjects || lightingType == LODObjectHD;
 
 		auto shadowState = globals::game::shadowState;
 		auto renderer = globals::game::renderer;
@@ -1026,6 +1027,21 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 
 		RE::BSGraphics::Renderer::PrepareVSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
 		RE::BSGraphics::Renderer::PreparePSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
+
+		if (isObjectTechnique && (lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0) {
+			// Texture fallback still needs this draw's projected material constants.
+			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
+			std::array<float, 4> PBRProjectedUVParams1{};
+			PBRProjectedUVParams1[0] = pbrMaterial->GetProjectedMaterialBaseColorScale()[0];
+			PBRProjectedUVParams1[1] = pbrMaterial->GetProjectedMaterialBaseColorScale()[1];
+			PBRProjectedUVParams1[2] = pbrMaterial->GetProjectedMaterialBaseColorScale()[2];
+			shadowState->SetPSConstant(PBRProjectedUVParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MaterialObjectRGBScale);
+
+			std::array<float, 4> PBRProjectedUVParams2{};
+			PBRProjectedUVParams2[0] = pbrMaterial->GetProjectedMaterialRoughness();
+			PBRProjectedUVParams2[1] = pbrMaterial->GetProjectedMaterialSpecularLevel();
+			shadowState->SetPSConstant(PBRProjectedUVParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.ParallaxOccData);
+		}
 
 		if (lightingType == MTLand || lightingType == MTLandLODBlend) {
 			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBRLandscape*>(material);
@@ -1108,7 +1124,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 				lodTexParams[3] = pbrMaterial->terrainTexFade;
 				shadowState->SetPSConstant(lodTexParams, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.LODTexParams);
 			}
-		} else if ((lightingType == None || lightingType == TreeAnim) && !PBRMaterialHasRequiredTextures(material)) {
+		} else if (isObjectTechnique && !PBRMaterialHasRequiredTextures(material)) {
 			WarnMissingPBRTexturesOnce(static_cast<const BSLightingShaderMaterialPBR*>(material)->inputFilePath);
 			// Bind deterministic defaults so PS slots 0/1/5 don't leak the previous draw's textures.
 			// Black RMAOS = dielectric, no AO; safe neutral rather than draw-order-dependent garbage.
@@ -1129,7 +1145,7 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			shadowState->SetPSConstant(stl::enumeration<PBRShaderFlags>{}, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRFlags);
 			const std::array<float, 3> neutralPBRParams1 = { 1.f, 0.f, 0.f };  // full roughness, no displacement, no specular
 			shadowState->SetPSConstant(neutralPBRParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.PBRParams1);
-		} else if (lightingType == None || lightingType == TreeAnim) {
+		} else if (isObjectTechnique) {
 			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
 			const auto renderTargetIndex = pbrMaterial->diffuseRenderTargetSourceIndex;
 			if (Util::IsValidRenderTargetIndex(renderTargetIndex)) {
@@ -1208,30 +1224,18 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 						GlintParameters[3] = pbrMaterial->GetGlintParameters().densityRandomization;
 						shadowState->SetPSConstant(GlintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MultiLayerParallaxData);
 					}
-					if ((lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0 && pbrMaterial->GetProjectedMaterialGlintParameters().enabled) {
-						shaderFlags.set(PBRShaderFlags::ProjectedGlint);
-
-						std::array<float, 4> ProjectedGlintParameters;
-						ProjectedGlintParameters[0] = pbrMaterial->GetProjectedMaterialGlintParameters().screenSpaceScale;
-						ProjectedGlintParameters[1] = 40.f - pbrMaterial->GetProjectedMaterialGlintParameters().logMicrofacetDensity;
-						ProjectedGlintParameters[2] = pbrMaterial->GetProjectedMaterialGlintParameters().microfacetRoughness;
-						ProjectedGlintParameters[3] = pbrMaterial->GetProjectedMaterialGlintParameters().densityRandomization;
-						shadowState->SetPSConstant(ProjectedGlintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.SparkleParams);
-					}
 				}
 			}
 
-			{
-				std::array<float, 4> PBRProjectedUVParams1;
-				PBRProjectedUVParams1[0] = pbrMaterial->GetProjectedMaterialBaseColorScale()[0];
-				PBRProjectedUVParams1[1] = pbrMaterial->GetProjectedMaterialBaseColorScale()[1];
-				PBRProjectedUVParams1[2] = pbrMaterial->GetProjectedMaterialBaseColorScale()[2];
-				shadowState->SetPSConstant(PBRProjectedUVParams1, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.MaterialObjectRGBScale);
+			if ((lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0 && pbrMaterial->GetProjectedMaterialGlintParameters().enabled) {
+				shaderFlags.set(PBRShaderFlags::ProjectedGlint);
 
-				std::array<float, 4> PBRProjectedUVParams2;
-				PBRProjectedUVParams2[0] = pbrMaterial->GetProjectedMaterialRoughness();
-				PBRProjectedUVParams2[1] = pbrMaterial->GetProjectedMaterialSpecularLevel();
-				shadowState->SetPSConstant(PBRProjectedUVParams2, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.ParallaxOccData);
+				std::array<float, 4> ProjectedGlintParameters;
+				ProjectedGlintParameters[0] = pbrMaterial->GetProjectedMaterialGlintParameters().screenSpaceScale;
+				ProjectedGlintParameters[1] = 40.f - pbrMaterial->GetProjectedMaterialGlintParameters().logMicrofacetDensity;
+				ProjectedGlintParameters[2] = pbrMaterial->GetProjectedMaterialGlintParameters().microfacetRoughness;
+				ProjectedGlintParameters[3] = pbrMaterial->GetProjectedMaterialGlintParameters().densityRandomization;
+				shadowState->SetPSConstant(ProjectedGlintParameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, lightingPSConstants.SparkleParams);
 			}
 
 			const bool hasEmissive = pbrMaterial->emissiveTexture != nullptr && pbrMaterial->emissiveTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
@@ -1555,7 +1559,7 @@ struct BSTempEffectSimpleDecal_SetupGeometry
 		auto unknownProperty = geometry->GetGeometryRuntimeData().shaderProperty.get();
 		if (auto shaderProperty = unknownProperty->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(unknownProperty) : nullptr;
 			shaderProperty != nullptr && singleton->IsPBRTextureSet(textureSet)) {
-			BSLightingShaderMaterialPBR probeMaterial;
+			BSLightingShaderMaterialPBR probeMaterial{};
 			if (!ProbePBRTextureSet(textureSet, probeMaterial)) {
 				WarnInvalidPBRDecalTextureSetOnce(textureSet);
 				return;
@@ -1593,7 +1597,7 @@ struct BSTempEffectGeometryDecal_Initialize
 
 		if (decal->decal != nullptr && singleton->IsPBRTextureSet(decal->texSet)) {
 			// Probe before allocating so a mislinked set never allocates a decal property.
-			BSLightingShaderMaterialPBR probeMaterial;
+			BSLightingShaderMaterialPBR probeMaterial{};
 			if (!ProbePBRTextureSet(decal->texSet, probeMaterial)) {
 				WarnInvalidPBRDecalTextureSetOnce(decal->texSet);
 				return;

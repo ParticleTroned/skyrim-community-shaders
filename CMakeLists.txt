@@ -1725,6 +1725,11 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(d3d_context_protection_test PRIVATE d3d11 dxgi user32)
     set_tests_properties(D3DContextProtection PROPERTIES TIMEOUT 60)
 
+    include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_blur.cmake")
+
     add_controller_test(
         vr_loading_menu_clear_test
         VRLoadingMenuClear
@@ -3274,6 +3279,8 @@ if(BUILD_CONTROLLER_TESTS)
         profiler_timing_test
         PRIVATE d3d11.lib runtimeobject.lib
     )
+
+    include(tests/profiler_capture.cmake)
 
     add_controller_test(
         ab_test_aggregator_test

@@ -160,3 +160,74 @@ measurement gaps. The test AIO enables the DevBench bridge; deployment
 and push remain manual. Numeric A/B/C cost tables require new native input
 bundles. Earlier screenshots cannot provide depth/motion inputs. Task 3
 ROI descriptor changes remain separate and have not been started here.
+
+## Local main-VR integration: 2026-09-19
+
+Integrated the 29 local main-VR commits through
+`5dcbf163ee08c0bbd652bd47eedd3dbbbec2d25e` into NR checkpoint
+`9fde1e74bfce2953eda91dcc40012a801863f869` by merge, preserving both
+histories. The companion main-VR commit
+`d63de104b4fe43ca4463eef727a641a2e48c1813` carries the NR Subsurface
+Scattering installation guard back to the shared renderer baseline. Its
+ancestry is incorporated separately after this integration commit.
+
+The user selected main-VR profiler capture behaviour with NR query checks,
+and the NR Subsurface Scattering implementation. The integration retains:
+
+-   Main-VR CPU/GPU/Both capture modes, immediate CPU publication and CPU
+    fallback when GPU queries are unavailable. Its profiler API and service
+    match main-VR, with NR per-invocation and detail evidence retained.
+-   Checked NR query acquisition and explicit unavailable/failure outcomes.
+    Retained evidence respects capture modes, preserves source-frame identity
+    and avoids CPU clock sampling during GPU-only capture.
+-   The shared NR D3D draw hooks, including underwater-depth-of-field and
+    exposure observation, together with main-VR hook failure handling.
+    Character-category authoring and terrain mesh permutation updates both
+    run; their descriptor fields remain separate.
+-   The Subsurface Scattering `std::call_once` guard on both branches.
+    The NR ROI/route and colour implementation directories are unchanged
+    from the pre-merge checkpoint, including Lighting preservation.
+-   NR preset policy revision 6 and settings. Generated source fingerprints
+    were refreshed for the merged implementation; settings did not change.
+    Later NR historical reports and numbered measurement ledgers are retained.
+
+A diagnostics-disabled build exposed an integration defect: required NR
+submit/publication methods and route labels were inside the DevBench
+conditional block. Their declarations and definitions now remain available
+in production. The viewport-crop formatter also remains available to
+production error logging. DevBench controls retain their existing guard.
+
+### Validation and limitations
+
+`pwsh ./tools/validate-local.ps1 -OutputDirectory
+build/validation/main-vr-merge-final-20260919` passed on the merged working
+tree: **165/165 tests**, none missing, disabled, skipped or failed, plus
+preset-generator tests, generated-preset checks, diff checks and DLL
+manifest verification. The universal SE/AE/VR build used
+`DEVBENCH_BRIDGE=ON`, `TRACY_SUPPORT=OFF`; deployment and archive targets
+were disabled. Full workflow time was 308.224 seconds; CTest took 77.220
+seconds. Build ID:
+`625b46fc478bba9ea3119f152b495668f402ac4535bed8b6cf3197ef85fe9427`.
+The producer records pre-commit HEAD `9fde1e74b` with dirty digest
+`3c44097da61d081803b50fbad2c2d1fc17adc93e799efbd5c18d0b112713f13e`.
+This documentation was added after that source-stability check.
+
+The same universal DLL also built with `DEVBENCH_BRIDGE=OFF`; its manifest
+verified. Evidence and preserved DLL/manifest are under
+`build/validation/main-vr-merge-production-20260919/`, including
+`build-corrected.log` and `bridge-off-artifacts/`. Build ID:
+`294aa98a893576e41819ae149672b6f9fac05828bb58aff1c85edd7fe130cfea`.
+The final full suite used the bridge-enabled configuration. The main-VR
+SSS commit passed its scoped hooks and preset-generator tests; its identical
+hook header compiled in these merged universal builds.
+
+Earlier validation directories retain the interrupted build, compiler-PDB
+failure, stale preset-fingerprint failure and initial diagnostics-disabled
+compile failure. The interrupted PDB was preserved before regeneration;
+all were resolved for the final successful checks. Existing dependency and
+assertion-build warnings remain warnings, not a warning-free result.
+
+No live-game, HMD quality or performance measurement was made for this
+integration. No production NR defaults changed. Task 3 descriptor work and
+Task 2 native replay measurement gaps remain separate. These are local
+commits; no push, game deployment or replacement AIO is part of this update.

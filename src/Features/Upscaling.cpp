@@ -32828,7 +32828,7 @@ void Upscaling::RecordVRRenderScaleCommonTargetResidencyDrain(
 				}
 				return true;
 			};
-		bool recorded = recordMetricsDrain(
+		[[maybe_unused]] bool recorded = recordMetricsDrain(
 			vrRenderScaleTransitionController.metrics.current);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (!recorded) {
@@ -32976,7 +32976,7 @@ bool Upscaling::ServiceVRRenderScaleMemoryTrim(const char* a_reason)
 				return true;
 			};
 
-			bool recorded = recordMetricsTrim(vrRenderScaleTransitionController.metrics.current);
+			[[maybe_unused]] bool recorded = recordMetricsTrim(vrRenderScaleTransitionController.metrics.current);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (!recorded) {
 				for (auto& archived : vrRenderScaleTransitionController.metrics.recent) {
@@ -60229,6 +60229,8 @@ Upscaling::NeuralSubmitCycleSnapshot Upscaling::GetLatestNeuralSubmitCycleSnapsh
 	return latestNeuralSubmitCycleSnapshot;
 }
 
+#endif
+
 uint64_t Upscaling::BeginNeuralSubmitPairBoundary(
 	uint64_t a_compositorCycle,
 	uintptr_t a_sourceIdentity,
@@ -60542,6 +60544,7 @@ void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot
 	}
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 void Upscaling::StartVRRenderScaleStressSession()
 {
 	SampleVRRenderScaleMemory(true, "stress capture start");
@@ -63257,7 +63260,7 @@ void Upscaling::RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VR
 		RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::Backend);
 }
 
-void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame)
+void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked([[maybe_unused]] bool a_completed, [[maybe_unused]] bool a_superseded, [[maybe_unused]] uint32_t a_frame)
 {
 	auto& metrics = vrRenderScaleTransitionController.metrics;
 	if (!metrics.current.valid)

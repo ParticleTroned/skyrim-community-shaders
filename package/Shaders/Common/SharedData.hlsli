@@ -205,7 +205,7 @@ namespace SharedData
 		float RainContactWetnessScale;
 
 		float GrassWetnessPhase;
-		float GrassWetRoughness;
+		float GrassControlPadding;
 		float GrassWetDarkeningStrength;
 		uint PuddleMaskMode;
 	};
@@ -276,7 +276,8 @@ namespace SharedData
 	struct TerrainVariationSettings
 	{
 		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
-		uint3 pad;
+		uint enableMeshSupport;        ///< 1 = apply variation to eligible meshes.
+		uint2 pad;
 	};
 
 	struct IBLSettings
@@ -313,6 +314,8 @@ namespace SharedData
 		float linearSpotlightMult;
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
+		float skySaturation;
+		float3 pad;
 	};
 
 	struct LinearLightingSettings
@@ -398,7 +401,13 @@ namespace SharedData
 		float FresnelMax;
 
 		float Muddiness;
-		float3 pad;
+		float CausticsStrength;
+		float CausticsTiling;
+		float CausticsSpeed;
+		float CausticsDispersion;
+		float ParallaxStrength;
+		uint ParallaxQuality;
+		float pad;
 	};
 
 	struct BloomSettings

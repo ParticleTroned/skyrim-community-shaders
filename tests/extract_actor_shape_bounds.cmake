@@ -1,0 +1,13 @@
+if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_FILE)
+    message(FATAL_ERROR "PROJECT_ROOT and OUTPUT_FILE are required")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/Utils/ActorUtils.cpp" _source)
+string(FIND "${_source}" "namespace\n{" _start)
+if(_start EQUAL -1)
+    message(FATAL_ERROR "Actor shape bounds test cannot find implementation")
+endif()
+string(SUBSTRING "${_source}" ${_start} -1 _implementation)
+get_filename_component(_output_directory "${OUTPUT_FILE}" DIRECTORY)
+file(MAKE_DIRECTORY "${_output_directory}")
+file(WRITE "${OUTPUT_FILE}" "${_implementation}")

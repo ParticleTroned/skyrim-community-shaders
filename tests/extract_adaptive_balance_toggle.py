@@ -45,6 +45,7 @@ def extract(root, output):
         function(source, "\tbool UsesClassifiedPointLightMultipliers("),
         between(source, "\tfloat SafeFinite(", "\tfloat WrapHour("),
         between(source, "\tvoid SanitizeWaterWindSettings(AdaptiveBrightness::WaterWindSettings& a_settings)\n", "\tvoid NormalizeBaseSettings("),
+        function(source, "\tvoid ClampProfileSettings("),
         function(source, "bool AdaptiveBrightness::IsRuntimeAvailable()"),
         function(source, "void AdaptiveBrightness::SetEnabled("),
         function(source, "void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled("),

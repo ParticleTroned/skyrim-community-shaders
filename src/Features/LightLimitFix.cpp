@@ -13,6 +13,7 @@
 #include "Util.h"
 #include "Utils/D3D.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/Finite.h"
 #include "Utils/StringUtils.h"
 
 #include "RE/B/BSMultiBoundRoom.h"
@@ -690,14 +691,6 @@ namespace
 #endif
 	}
 
-	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
-	{
-		if (!std::isfinite(a_value)) {
-			return a_default;
-		}
-		return std::clamp(a_value, a_min, a_max);
-	}
-
 	void SanitizeSettings(LightLimitFix::Settings& a_settings)
 	{
 		a_settings.LightsVisualisationMode = std::min(a_settings.LightsVisualisationMode, kLightsVisualisationModeMax);
@@ -706,22 +699,22 @@ namespace
 		a_settings.ParticleContactShadowBudget = std::min(a_settings.ParticleContactShadowBudget, kParticleContactShadowBudgetMax);
 		a_settings.StrictContactShadowBudget = std::min(a_settings.StrictContactShadowBudget, kStrictContactShadowBudgetMax);
 		a_settings.ParticleLightsSaturation =
-			ClampFiniteOrDefault(a_settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, 1.0f);
+			Util::ClampFinite(a_settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, 1.0f);
 		a_settings.ParticleBrightness =
-			ClampFiniteOrDefault(a_settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, 1.0f);
+			Util::ClampFinite(a_settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, 1.0f);
 		a_settings.ParticleRadius =
-			ClampFiniteOrDefault(a_settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, 1.0f);
+			Util::ClampFinite(a_settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, 1.0f);
 		a_settings.BillboardBrightness =
-			ClampFiniteOrDefault(a_settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, 1.0f);
+			Util::ClampFinite(a_settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, 1.0f);
 		a_settings.BillboardRadius =
-			ClampFiniteOrDefault(a_settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, 1.0f);
+			Util::ClampFinite(a_settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, 1.0f);
 		a_settings.ParticleClusterThreshold =
-			ClampFiniteOrDefault(a_settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, 32.0f);
+			Util::ClampFinite(a_settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, 32.0f);
 		a_settings.MaxParticlesPerEmitter = std::clamp(a_settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
 		a_settings.MaxParticleDistance =
-			ClampFiniteOrDefault(a_settings.MaxParticleDistance, kMaxParticleDistanceMin, kMaxParticleDistanceMax, 6000.0f);
+			Util::ClampFinite(a_settings.MaxParticleDistance, kMaxParticleDistanceMin, kMaxParticleDistanceMax, 6000.0f);
 		a_settings.JsonPlacedLightIntensity =
-			ClampFiniteOrDefault(a_settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, 1.0f);
+			Util::ClampFinite(a_settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, 1.0f);
 	}
 
 	uint PackContactShadowFlags(const LightLimitFix::Settings& a_settings)
@@ -815,7 +808,7 @@ namespace
 
 	float ResolveParticleSaturation(float a_globalSaturation, float a_configSaturation)
 	{
-		const float configSaturation = ClampFiniteOrDefault(
+		const float configSaturation = Util::ClampFinite(
 			a_configSaturation,
 			kParticleConfigSaturationMin,
 			kParticleConfigSaturationMax,

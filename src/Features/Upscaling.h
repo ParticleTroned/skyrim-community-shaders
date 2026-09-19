@@ -2145,6 +2145,7 @@ public:
 	std::array<NeuralStereoRouteSnapshot, 2> GetNeuralStereoRouteSnapshot() const;
 	/** @brief Returns the latest valid-eye submit entry used to judge route freshness. */
 	NeuralSubmitCycleSnapshot GetLatestNeuralSubmitCycleSnapshot() const;
+#endif
 	/** @brief Captures an engine-owned outer submit scope using an opaque source identity. */
 	uint64_t BeginNeuralSubmitPairBoundary(
 		uint64_t a_compositorCycle,
@@ -2162,6 +2163,7 @@ public:
 	static const char* GetNeuralStereoRouteRoleName(NeuralStereoRouteRole a_role);
 	static const char* GetNeuralStereoPairDispositionName(NeuralStereoPairDisposition a_disposition);
 	static const char* GetNeuralStereoFallbackReasonName(NeuralStereoFallbackReason a_reason);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	void StartVRRenderScaleStressSession();
 	void StopVRRenderScaleStressSession();
 	void ResetVRRenderScaleStressSession();

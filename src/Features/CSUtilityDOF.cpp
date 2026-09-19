@@ -2,6 +2,7 @@
 
 #include "Globals.h"
 #include "UnderwaterDepthOfField.h"
+#include "Utils/Finite.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
@@ -82,13 +83,6 @@ namespace
 		static_cast<uint16_t>(SkyBlurRadius::kNoSky_Radius7),
 	};
 
-	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
-	{
-		if (!std::isfinite(a_value))
-			return a_default;
-		return std::clamp(a_value, a_min, a_max);
-	}
-
 	uint32_t ClampDofMode(uint32_t a_mode)
 	{
 		return std::min(a_mode, kDofModeMask);
@@ -108,7 +102,7 @@ namespace
 	void SanitizeDepthOfFieldAutoFocusSettings(DofAutoFocusSettings& a_settings)
 	{
 		for (const auto& definition : kDofAutoFocusSettingDefinitions) {
-			a_settings.*definition.member = ClampFiniteOrDefault(
+			a_settings.*definition.member = Util::ClampFinite(
 				a_settings.*definition.member,
 				definition.minValue,
 				definition.maxValue,
@@ -699,9 +693,9 @@ namespace
 void CSUtility::SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings)
 {
 	const DepthOfFieldSettings defaults{};
-	a_settings.strength = ClampFiniteOrDefault(a_settings.strength, kDofStrengthMin, kDofStrengthMax, defaults.strength);
-	a_settings.distance = ClampFiniteOrDefault(a_settings.distance, kDofDistanceMin, kDofDistanceMax, defaults.distance);
-	a_settings.range = ClampFiniteOrDefault(a_settings.range, kDofRangeMin, kDofRangeMax, defaults.range);
+	a_settings.strength = Util::ClampFinite(a_settings.strength, kDofStrengthMin, kDofStrengthMax, defaults.strength);
+	a_settings.distance = Util::ClampFinite(a_settings.distance, kDofDistanceMin, kDofDistanceMax, defaults.distance);
+	a_settings.range = Util::ClampFinite(a_settings.range, kDofRangeMin, kDofRangeMax, defaults.range);
 	a_settings.mode = ClampDofMode(a_settings.mode);
 	SanitizeDepthOfFieldAutoFocusSettings(a_settings.autoFocusSettings);
 	a_settings.blurRadius = ClampDofBlurRadius(a_settings.blurRadius);

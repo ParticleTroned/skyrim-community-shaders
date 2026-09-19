@@ -8,6 +8,8 @@ namespace CSX::ProfilerAPI
 	inline constexpr std::uint32_t ServiceMajor = 1;
 	inline constexpr std::uint32_t ServiceMinor = 1;
 	inline constexpr std::uint32_t SchemaRevision = 2;
+	inline constexpr std::uint32_t SourceServiceMinor = 2;
+	inline constexpr std::uint32_t SourceSchemaRevision = 3;
 
 	enum class Status : std::uint32_t
 	{
@@ -32,7 +34,9 @@ namespace CSX::ProfilerAPI
 		kCapabilityRuntimeControl = 1ull << 4,
 		kCapabilityHistoryReset = 1ull << 5,
 		/** Timer values, statistics, and histories exclude profiled descendants. */
-		kCapabilitySelfTime = 1ull << 6
+		kCapabilitySelfTime = 1ull << 6,
+		/** Independent CPU publication and source-selective capture requests. */
+		kCapabilityIndependentCpu = 1ull << 7
 	};
 
 	inline constexpr std::uint64_t ServiceCapabilities =
@@ -142,5 +146,45 @@ namespace CSX::ProfilerAPI
 		std::uint32_t (*GetCaptureTimerCount)(const void* context, std::uint64_t captureId) = nullptr;
 		Status (*GetCaptureTimerDescriptor)(const void* context, std::uint64_t captureId, std::uint32_t index, TimerDescriptor001* output) = nullptr;
 		Status (*GetCaptureHistorySample)(const void* context, std::uint64_t captureId, std::uint32_t timerIndex, TimingDomain domain, std::uint32_t sampleIndex, float* outputMs) = nullptr;
+	};
+
+	enum class CaptureMode : std::uint32_t
+	{
+		kGpu = 1,
+		kCpu = 2,
+		kBoth = 3
+	};
+
+	/** CPU-only view whose frame and totals are independent of GPU resolution. */
+	struct CpuSnapshot001
+	{
+		std::uint32_t structSize = sizeof(CpuSnapshot001);
+		std::uint32_t available = 0;
+		std::uint32_t enabled = 0;
+		std::uint32_t capturing = 0;
+		std::uint32_t timerCount = 0;
+		std::uint32_t capturedFrameCount = 0;
+		std::uint64_t publicationCount = 0;
+		std::uint32_t historyCapacity = 0;
+		std::uint32_t maximumTimersPerFrame = 0;
+		std::uint32_t slotRefusals = 0;
+		float resolvedTotalMs = 0.0f;
+		const char* buildId = nullptr;
+	};
+
+	/**
+	 * Additive 1.2 interface. The first member preserves the complete 1.1 ABI.
+	 * Query minor 2 and check the returned size before using the extension.
+	 */
+	struct Interface002
+	{
+		Interface001 paired;
+		/** Requests one future frame; requests combine and bounded sessions require both sources. */
+		Status (*RequestCapture)(const void* context, CaptureMode mode) = nullptr;
+		Status (*GetCpuSnapshot)(const void* context, CpuSnapshot001* output) = nullptr;
+		std::uint32_t (*GetCpuTimerCount)(const void* context) = nullptr;
+		/** CPU catalog indices are independent of the paired and bounded catalogs. */
+		Status (*GetCpuTimerDescriptor)(const void* context, std::uint32_t index, TimerDescriptor001* output) = nullptr;
+		Status (*GetCpuHistorySample)(const void* context, std::uint32_t timerIndex, std::uint32_t sampleIndex, float* outputMs) = nullptr;
 	};
 }

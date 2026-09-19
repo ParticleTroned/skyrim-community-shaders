@@ -17947,6 +17947,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 	const Settings previousSettings = settings;
 	const bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();
 	if (ImGui::TreeNodeEx("Neural Rendering", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
+		ImGui::TextWrapped("Neural Rendering uses AI to enhance scene detail and character appearance.");
+		ImGui::TextWrapped("Full resolution runs on the final scene before UI. Foveated uses the current FOV pipeline. Reduced resolution runs NR at render resolution before DLSS; DLSS owns temporal reconstruction. Character selection combines with every mode.");
 		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
@@ -17992,7 +17994,6 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 		}
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Apply Neural Rendering only to selected face, skin and hair pixels. Combines with every rendering mode in VR.");
-		ImGui::TextWrapped("Full resolution runs on the final scene before UI. Foveated uses the current FOV pipeline. Reduced resolution runs NR at render resolution before DLSS; DLSS owns temporal reconstruction. Character selection combines with every mode.");
 		const bool routeAvailable = !missingFov && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
 													   (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
 		if (!routeAvailable && !missingFov)

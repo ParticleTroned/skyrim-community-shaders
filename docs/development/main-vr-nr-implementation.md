@@ -44,10 +44,11 @@ Character selection is orthogonal to the mode and uses the existing
 category, actor and ROI admission policies. Reduced-resolution NR runs
 before upscaling; the existing upscaler retains temporal ownership.
 All routes use the shared colour transport and reconstruction pipeline.
-The complete A/B/C plus character matrix is for VR. SE/AE supports the
-full-resolution route; VR foveation, reduced-resolution routing and
-character-category authoring are rejected explicitly on flat runtimes.
-The port preserves their ordinary renderer allocations and shader layout.
+The complete A/B/C matrix is for VR. The later
+[flat character extension](nr-flat-character-support-20260919.md) adds
+face/skin/hair selection, strengths and ROI/Multi-ROI to SE/AE Full resolution.
+Foveated and Reduced resolution remain VR-only. The original port checkpoint
+below predates that extension and its pending compiled/live qualification.
 
 `communityshaders.neural_rendering` exposes NR configuration, status,
 readiness and stereo implementation-lane cycling. `nr_configure.mode`
@@ -86,7 +87,8 @@ this change. See the [runtime packaging instructions](../../features/Upscaling/S
     inventory, and a lifecycle test verifies preservation.
 -   Character mask preparation assumed two eyes. Allocation, capture,
     reduction and readback now account for an explicit eye count. This does
-    not expand the VR-only category-authoring contract to flat runtimes.
+    not itself expand category authoring to flat runtimes; the linked extension
+    above supplies that later change.
 -   NR and SSS could install the same draw hook twice. Shared installation
     is guarded with `std::call_once` to preserve the original-call address.
 -   Malformed per-eye screenshot evidence could throw while joining

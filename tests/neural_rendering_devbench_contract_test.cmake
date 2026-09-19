@@ -1099,6 +1099,10 @@ foreach(_status_contract IN ITEMS
     [[{ "fovPrerequisite", { { "required", fovRequired }, { "available", fovAvailable },]]
     [["fov_not_configured");]]
     [[nr_configure accepts valid settings even when FOV is unavailable]]
+    [[{ "character", true }]]
+    [[{ "stereoSubmission", globals::game::isVR }]]
+    [[A and character ROI/Multi-ROI support SE/AE/VR]]
+    [[eyeIndex < (globals::game::isVR ? 2u : 1u)]]
     [[{ "plan", FoveatedPlanJson(a_upscaling, activeProfile) }]]
     [[{ "observedFrame", observedFrame }]]
     [[{ "currentWorkFrame", std::move(currentWorkFrameJson) }]]
@@ -2448,6 +2452,13 @@ foreach(_forbidden_full_capture IN ITEMS
     endif()
 endforeach()
 
+string(FIND "${_deferred}"
+    [[SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, NeuralRendering::kCharacterCategoryFormat,]]
+    _shared_tuple_allocation)
+if(_shared_tuple_allocation EQUAL -1)
+    message(FATAL_ERROR "Every runtime must allocate the category tuple consumed by character capture")
+endif()
+
 string(FIND
     "${_deferred}"
     [[NeuralRendering::kCharacterCategoryFormat]]
@@ -2465,7 +2476,7 @@ string(FIND
 if(_vr_tuple_format_position EQUAL -1 OR _vr_tuple_precision_position EQUAL -1 OR
    _vr_capture_tuple_format_position EQUAL -1 OR _selection_mask_format_position EQUAL -1)
     message(FATAL_ERROR
-        "VR category provenance must preserve R16 AO using shared RG16 UNORM and the selection mask R8 UNORM"
+        "SE/AE/VR category provenance must preserve R16 AO using shared RG16 UNORM and the selection mask R8 UNORM"
     )
 endif()
 
@@ -2557,13 +2568,18 @@ if(_prepare_failure_invalidation_site_count LESS 3)
     )
 endif()
 
-function(_require_vr_deferred_producer
+function(_require_deferred_producer
     _variable_name
     _label
     _opacity_contract
     _minimum_writes
 )
     set(_shader_text "${${_variable_name}}")
+    string(FIND "${_shader_text}" [=[#include "Common/CharacterCategoryMask.hlsli"]=]
+        _shared_category_include)
+    if(_shared_category_include EQUAL -1)
+        message(FATAL_ERROR "${_label} category encoding must be available to flat and VR permutations")
+    endif()
     string(FIND "${_shader_text}" [[SV_Target7]] _target7_position)
     string(FIND
         "${_shader_text}"
@@ -2585,36 +2601,36 @@ function(_require_vr_deferred_producer
         _opacity_position EQUAL -1 OR
         _category_write_count LESS _minimum_writes)
         message(FATAL_ERROR
-            "${_label} must write the VR deferred category tuple to target 7 and preserve output opacity"
+            "${_label} must write the deferred category tuple to target 7 and preserve output opacity"
         )
     endif()
 endfunction()
 
-_require_vr_deferred_producer(
+_require_deferred_producer(
     _lighting_shader
     "Lighting"
     [[characterCategory, psout.Diffuse.w);]]
     1
 )
-_require_vr_deferred_producer(
+_require_deferred_producer(
     _grass_shader
     "RunGrass"
     [[0, psout.Diffuse.w);]]
     2
 )
-_require_vr_deferred_producer(
+_require_deferred_producer(
     _effect_shader
     "Effect"
     [[0u, psout.Diffuse.w);]]
     1
 )
-_require_vr_deferred_producer(
+_require_deferred_producer(
     _distant_tree_shader
     "DistantTree"
     [[0u, psout.Diffuse.w);]]
     1
 )
-_require_vr_deferred_producer(
+_require_deferred_producer(
     _sky_shader
     "Sky"
     [[0u, psout.Color.w);]]

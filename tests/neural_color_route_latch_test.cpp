@@ -81,7 +81,7 @@ namespace
 	void CheckTransaction(const TransactionCase& fixture, bool stereo, bool submit, std::uint32_t characterRegionsPerEye)
 	{
 		LatchState state;
-		Require(IsRenderingConfigurationSupported(stereo, fixture.mode, characterRegionsPerEye != 0),
+		Require(IsRenderingConfigurationSupported(stereo, fixture.mode),
 			"Fixture must represent a supported runtime configuration");
 		Require(stereo || (!submit && !RequiresFoveatedMask(fixture.mode, fixture.fovOnly)),
 			"The supported mono fixture must use main full-resolution rendering without FOV");
@@ -104,13 +104,15 @@ namespace
 		Color::liveConfiguration.settings.lightingPreservation = 0.75f;
 		++Color::liveConfiguration.revision;
 
-		const std::array<std::uint32_t, 4> mainSlots{ 0, 1, 4, 5 };
-		const std::array<std::uint32_t, 4> submitSlots{ 2, 3, 6, 7 };
-		const auto& slots = submit ? submitSlots : mainSlots;
+		const std::uint32_t eyeCount = stereo ? 2u : 1u;
 		std::array<Color::Work, 4> work{};
-		const std::size_t regionCount = (stereo ? 2u : 1u) * std::max(characterRegionsPerEye, 1u);
+		const std::size_t regionCount = eyeCount * std::max(characterRegionsPerEye, 1u);
 		for (std::size_t region = 0; region < regionCount; ++region) {
-			args.featureSlot = slots[region];
+			args.featureSlot = PhysicalRegionFeatureSlot(
+				(submit ? 2u : 0u) + static_cast<std::uint32_t>(region % eyeCount),
+				static_cast<std::uint32_t>(region / eyeCount));
+			if (!stereo)
+				Require(args.featureSlot == (region == 0 ? 0u : 4u), "Mono regions must use independent main-route slots without a right eye");
 			state.CaptureColorConfiguration(args);
 			Require(Color::snapshots == 1 && state.colorConfiguration_.settings.lightingPreservation == 0.25f,
 				"Registry updates cannot split eye or character-region configurations");
@@ -119,7 +121,7 @@ namespace
 			observation.slot = args.featureSlot;
 			observation.rect = fixture.region;
 			if (characterRegionsPerEye != 0) {
-				observation.rect.baseX += static_cast<std::uint32_t>(region / 2u);
+				observation.rect.baseX += static_cast<std::uint32_t>(region / eyeCount);
 				observation.rect.width /= 2u;
 				observation.rect.height /= 2u;
 			}
@@ -196,14 +198,14 @@ int main()
 					}
 					++transactions;
 				}
-			Require(!IsRenderingConfigurationSupported(false, fixture.mode, true),
-				"Character rendering must remain unavailable on flat runtimes");
 			if (fixture.mode != RenderingMode::FullResolution)
-				Require(!IsRenderingConfigurationSupported(false, fixture.mode, false),
+				Require(!IsRenderingConfigurationSupported(false, fixture.mode),
 					"Flat runtimes must reject the VR-only foveated and reduced routes");
 		}
-		CheckTransaction(transactionCases.front(), false, false, 0u);
-		++transactions;
+		for (const std::uint32_t characterRegions : { 0u, 1u, 2u }) {
+			CheckTransaction(transactionCases.front(), false, false, characterRegions);
+			++transactions;
+		}
 		CheckReconstructionPreflight();
 		NeuralRendering::LatchState interleaved;
 		NeuralRendering::RendererApplyArgs args;

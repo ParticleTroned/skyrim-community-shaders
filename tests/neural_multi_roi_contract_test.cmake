@@ -267,15 +267,11 @@ foreach(_ui_contract IN ITEMS
     [["Multi-ROI Savings Gate"]]
     [[&settings.neuralCharacterMultiRoiSavingsGateEnabled]]
     [[&settings.neuralCharacterMultiRoiEnabled]]
-    [[Uses at most two persistent Feature 18 regions per eye]]
+    [[Tries up to two separate character regions per view]]
+    [[uses extra model instances and VRAM; faster rendering is not guaranteed.]]
     [[Multi-ROI uses separate feature instances.]]
-    [[current-source GPU face/skin/hair category bounds when ready]]
-    [[Early GPU bounds are read without waiting]]
-    [[Geometry is only a fallback when matching GPU evidence is unavailable]]
-    [[stale masks cannot exclude new pixels]]
-    [[65,536-pixel reserve for its extra invocation plus 25%]]
-    [[This is not native sparse-ROI support.]]
-    [[Compare summed planned pixels, not the enclosing rectangle]]
+    [[Requires a meaningful area saving before splitting character regions.]]
+    [[This session-only option returns to On when settings load.]]
 )
     string(FIND "${_upscaling_source}" "${_ui_contract}"
         _ui_contract_position)

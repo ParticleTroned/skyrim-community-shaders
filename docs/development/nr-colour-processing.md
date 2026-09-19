@@ -57,7 +57,8 @@ for the current routes and validation; the source-build history above is
 retained for provenance. Essentials shows Enabled, Rendering mode,
 Restrict to FOV mask (where applicable), Characters only, and Faces/Skin/Hair.
 The category choices stay visible but are disabled when character selection
-is inactive, the runtime is not VR, or required FOV setup is unavailable.
+is inactive or required FOV setup is unavailable. On SE/AE, use Full
+resolution without FOV restriction for face, skin and hair selection.
 Enabled is the master preference and never becomes disabled because of a
 child setting. A missing FOV prerequisite leaves enabled NR waiting, with
 an explicit explanation, and the runtime gate prevents evaluation. Selected

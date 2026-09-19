@@ -347,13 +347,22 @@ int main()
 								require(upscaling.settings.neuralRenderingFovOnly == fovOnly && upscaling.settings.neuralCharacterRenderingEnabled == characters,
 									"Master must preserve child preferences");
 								const auto route = upscaling.GetNeuralRenderingMode();
-								const bool executable = enabled && NeuralRendering::IsRenderingConfigurationSupported(isVR, route, characters) &&
+								const bool executable = enabled && NeuralRendering::IsRenderingConfigurationSupported(isVR, route) &&
 								                        (!NeuralRendering::RequiresFoveatedMask(route, fovOnly) || upscaling.IsNeuralRenderingFovConfigurationAvailable());
 								require(upscaling.IsNeuralRenderingRequested() == executable, "Editable master must not bypass execution prerequisites");
 								upscaling.neuralRenderingFeatureAvailable = false;
 								require(!upscaling.IsNeuralRenderingRequested(), "Unloaded NR must not execute even with valid preferences");
 								upscaling.neuralRenderingFeatureAvailable = true;
 								require(ImGui::disableDepth == 0 && ImGui::comboDepth == 0, "Routing controls must restore UI state");
+							}
+							if (!isVR && mode == 0 && !fovOnly && !characters) {
+								ImGui::Clear("Characters only");
+								upscaling.DrawSelectionControls();
+								require(!ImGui::Disabled("Characters only") && upscaling.settings.neuralCharacterRenderingEnabled,
+									"Flat Full resolution must allow character selection without VR FOV");
+								ImGui::Clear("Enabled");
+								upscaling.DrawSelectionControls();
+								require(upscaling.IsNeuralRenderingRequested(), "Enabled flat character selection must reach the shared mono route");
 							}
 							if (characters) {
 								ImGui::Clear("Characters only");

@@ -24,12 +24,12 @@ int main()
 	static_assert(!NeuralRendering::IsCompleteNeuralImageResult(1, 0, true));
 	static_assert(NeuralRendering::IsCompleteNeuralImageResult(1, 2, true));
 	static_assert(NeuralRendering::IsCompleteNeuralImageResult(3, 0, true));
-	static_assert(NeuralRendering::IsRenderingConfigurationSupported(true, RenderingMode::Foveated, true));
-	static_assert(NeuralRendering::IsRenderingConfigurationSupported(true, RenderingMode::ReducedResolution, true));
-	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::FullResolution, false));
-	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::FullResolution, true));
-	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::Foveated, false));
-	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::ReducedResolution, false));
+	static_assert(NeuralRendering::IsRenderingConfigurationSupported(true, RenderingMode::FullResolution));
+	static_assert(NeuralRendering::IsRenderingConfigurationSupported(true, RenderingMode::Foveated));
+	static_assert(NeuralRendering::IsRenderingConfigurationSupported(true, RenderingMode::ReducedResolution));
+	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::FullResolution));
+	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::Foveated));
+	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::ReducedResolution));
 	using NeuralRendering::FeatureSlotRoute;
 	using NeuralRendering::InsertionPoint;
 	using NeuralRendering::PipelineArrangement;

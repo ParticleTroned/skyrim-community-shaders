@@ -260,11 +260,8 @@ void Deferred::SetupResources()
 		SetupRenderTarget(NORMALROUGHNESS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 		// Masks
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-		// VR adds exact categories without reducing the original vertex AO precision.
-		const auto masks2Format = globals::game::isVR ?
-		                              NeuralRendering::kCharacterCategoryFormat :
-		                              DXGI_FORMAT_R16_UNORM;
-		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, masks2Format, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		// Exact categories share the attachment without reducing vertex AO precision.
+		SetupRenderTarget(MASKS2, texDesc, srvDesc, rtvDesc, uavDesc, NeuralRendering::kCharacterCategoryFormat, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		// TAA Water Buffers
 		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_1, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);

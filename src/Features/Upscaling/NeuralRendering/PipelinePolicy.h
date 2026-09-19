@@ -54,16 +54,16 @@ namespace NeuralRendering
 		return std::nullopt;
 	}
 
-	/** The flat renderer keeps its native category format; character authoring is VR-only. */
-	[[nodiscard]] constexpr bool IsRenderingConfigurationSupported(bool isVR, RenderingMode mode, bool character) noexcept
+	/** Full-resolution NR supports mono and stereo, including character selection. */
+	[[nodiscard]] constexpr bool IsRenderingConfigurationSupported(bool isVR, RenderingMode mode) noexcept
 	{
-		return isVR || (mode == RenderingMode::FullResolution && !character);
+		return isVR || mode == RenderingMode::FullResolution;
 	}
 
 	/** Route choices remain escapable when a saved FOV prerequisite is unavailable. */
 	[[nodiscard]] constexpr bool IsRenderingModeSelectable(bool isVR, RenderingMode mode, bool fovAvailable) noexcept
 	{
-		return IsRenderingConfigurationSupported(isVR, mode, false) &&
+		return IsRenderingConfigurationSupported(isVR, mode) &&
 		       (mode != RenderingMode::Foveated || fovAvailable);
 	}
 

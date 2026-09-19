@@ -17805,8 +17805,8 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 		if (candidate.neuralRenderingMode > 2u || !candidate.neuralRenderingAutoMask || candidate.neuralRenderingUICorrection)
 			throw std::invalid_argument("Unsupported Neural Rendering mode or provider mask contract");
 		if (candidate.neuralRenderingEnabled && !NeuralRendering::IsRenderingConfigurationSupported(
-													IsVRRuntimeActive(), NeuralRendering::ClampRenderingMode(candidate.neuralRenderingMode), candidate.neuralCharacterRenderingEnabled))
-			throw std::invalid_argument("Foveated, reduced-resolution and character NR require Skyrim VR; use full-resolution NR without character selection on SE/AE");
+													IsVRRuntimeActive(), NeuralRendering::ClampRenderingMode(candidate.neuralRenderingMode)))
+			throw std::invalid_argument("Foveated and reduced-resolution NR require Skyrim VR; use full-resolution NR on SE/AE");
 		SanitizeUpscalingSettings(candidate);
 		const json sanitized = candidate;
 		for (const auto& [name, value] : a_configuration.items())
@@ -17859,7 +17859,7 @@ void Upscaling::SetNeuralRenderingFeatureAvailable(bool a_available)
 bool Upscaling::IsNeuralRenderingRequested() const noexcept
 {
 	return neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled &&
-	       NeuralRendering::IsRenderingConfigurationSupported(globals::game::isVR, GetNeuralRenderingMode(), settings.neuralCharacterRenderingEnabled) &&
+	       NeuralRendering::IsRenderingConfigurationSupported(globals::game::isVR, GetNeuralRenderingMode()) &&
 	       (!NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly) ||
 			   IsNeuralRenderingFovConfigurationAvailable());
 }
@@ -17916,7 +17916,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			ImGui::EndCombo();
 		}
 		if (!globals::game::isVR)
-			ImGui::TextDisabled("SE/AE supports full-resolution NR. Foveated, reduced-resolution and character NR require Skyrim VR.");
+			ImGui::TextDisabled("SE/AE supports full-resolution NR, including character selection. Foveated and reduced-resolution NR require Skyrim VR.");
 		if (GetNeuralRenderingMode() != NeuralRendering::RenderingMode::Foveated) {
 			auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingFovOnly);
 			ImGui::Checkbox("Restrict to FOV mask", &settings.neuralRenderingFovOnly);
@@ -17932,10 +17932,10 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		else if (!fovAvailable && globals::game::isVR)
 			ImGui::TextDisabled("Set up and enable Foveated Upscaling (FOV) to use FOV-dependent NR options.");
 		{
-			auto guard = Util::DisableGuard((missingFov || !globals::game::isVR) && !settings.neuralCharacterRenderingEnabled);
+			auto guard = Util::DisableGuard(missingFov && !settings.neuralCharacterRenderingEnabled);
 			ImGui::Checkbox("Characters only", &settings.neuralCharacterRenderingEnabled);
 			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Limits visible NR edits to the selected face, skin and hair pixels. Works with every rendering mode in VR; unselected pixels keep the normal scene.");
+				ImGui::TextUnformatted("Limits visible NR edits to the selected face, skin and hair pixels. Works with Full resolution on SE/AE and every mode in VR; unselected pixels keep the normal scene.");
 		}
 		const auto drawCharacterCategories = [&]() {
 			ImGui::Checkbox("Faces", &settings.neuralCharacterFacesEnabled);
@@ -17951,7 +17951,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 				ImGui::TextUnformatted("Includes visible hair pixels in character NR. Hair Strength controls how much of the neural result is blended in.");
 		};
 		if (a_essentialsOnly) {
-			auto guard = Util::DisableGuard(missingFov || !globals::game::isVR || !settings.neuralCharacterRenderingEnabled);
+			auto guard = Util::DisableGuard(missingFov || !settings.neuralCharacterRenderingEnabled);
 			drawCharacterCategories();
 		}
 		const bool routeAvailable = !missingFov && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
@@ -17990,20 +17990,24 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 										   "Placement: Final scene, before UI");
 			}
 			if (showDiagnostics && ImGui::TreeNode("Execution diagnostics")) {
-				static constexpr const char* stereoSubmissionModes[]{
-					"Per-eye",
-					"Batched"
-				};
-				int stereoSubmission = settings.neuralRenderingBatchedStereo ? 1 : 0;
-				if (ImGui::Combo(
-						"Stereo Submission",
-						&stereoSubmission,
-						stereoSubmissionModes,
-						IM_ARRAYSIZE(stereoSubmissionModes))) {
-					settings.neuralRenderingBatchedStereo = stereoSubmission != 0;
+				if (globals::game::isVR) {
+					static constexpr const char* stereoSubmissionModes[]{
+						"Per-eye",
+						"Batched"
+					};
+					int stereoSubmission = settings.neuralRenderingBatchedStereo ? 1 : 0;
+					if (ImGui::Combo(
+							"Stereo Submission",
+							&stereoSubmission,
+							stereoSubmissionModes,
+							IM_ARRAYSIZE(stereoSubmissionModes))) {
+						settings.neuralRenderingBatchedStereo = stereoSubmission != 0;
+					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Per-eye submits each eye separately; Batched submits both together. This changes GPU scheduling, not the selected pixels or image tuning.");
+				} else {
+					ImGui::TextDisabled("Submission: Mono");
 				}
-				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Per-eye submits each eye separately; Batched submits both together. This changes GPU scheduling, not the selected pixels or image tuning.");
 
 				static constexpr const char* outputCommitModes[]{
 					"Staged",
@@ -18040,12 +18044,15 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						ImVec4(0.40f, 0.85f, 0.50f, 1.0f) :
 						ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 					"Effective execution: %s",
-					NeuralRendering::GetImplementationDisplayName(
-						batchedStereo, directCommit));
-				ImGui::TextDisabled(
-					"Comparison role: %s",
-					NeuralRendering::GetImplementationPurpose(
-						batchedStereo, directCommit));
+					globals::game::isVR ? NeuralRendering::GetImplementationDisplayName(
+											  batchedStereo, directCommit) :
+										  (directCommit ? "Mono + direct" : "Mono + staged"));
+				if (globals::game::isVR) {
+					ImGui::TextDisabled(
+						"Comparison role: %s",
+						NeuralRendering::GetImplementationPurpose(
+							batchedStereo, directCommit));
+				}
 				ImGui::TreePop();
 			}
 
@@ -18174,7 +18181,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							"Experimental Multi-ROI",
 							&settings.neuralCharacterMultiRoiEnabled);
 						if (auto tooltip = Util::HoverTooltipWrapper())
-							ImGui::TextUnformatted("Tries up to two separate character regions per eye instead of one enclosing region. May reduce evaluated area but uses extra model instances and VRAM; faster rendering is not guaranteed.");
+							ImGui::TextUnformatted("Tries up to two separate character regions per view instead of one enclosing region. May reduce evaluated area but uses extra model instances and VRAM; faster rendering is not guaranteed.");
 					}
 					{
 						auto guard = Util::DisableGuard(!settings.neuralCharacterMultiRoiEnabled);
@@ -18345,14 +18352,14 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							characterStatus.categoryCaptureFailures),
 						static_cast<unsigned long long>(
 							characterStatus.categoryCaptureEmptyBypasses));
-					for (uint32_t eye = 0; eye < characterStatus.eyes.size(); ++eye) {
+					for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 						const auto& eyeStatus = characterStatus.eyes[eye];
 						const auto* disposition =
 							NeuralRendering::GetCharacterFeature18DispositionName(
 								eyeStatus.feature18Disposition);
 						ImGui::TextDisabled(
 							"%s: %ux%u, face actors %u, selected actors %u, culled %u, mask %s%.2f%%, eligibility %.2f%%, request %s, outcome %s",
-							eye == 0 ? "Left" : "Right",
+							globals::game::isVR ? (eye == 0 ? "Left" : "Right") : "Mono",
 							eyeStatus.evaluationWidth,
 							eyeStatus.evaluationHeight,
 							eyeStatus.visibleFaces,
@@ -18450,7 +18457,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						ImGui::SeparatorText("Last Character Debug Preview");
 						ImGui::TextDisabled(
 							"Hard menu/loading contexts suppress Neural Rendering; safe late-menu continuity may update these images.");
-						for (uint32_t eye = 0; eye < 2; ++eye) {
+						for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 							ID3D11ShaderResourceView* preview = nullptr;
 							Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
 								previewOwner;
@@ -18475,7 +18482,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							if (!preview) {
 								ImGui::TextDisabled(
 									"%s preview unavailable until the route completes.",
-									eye == 0 ? "Left" : "Right");
+									globals::game::isVR ? (eye == 0 ? "Left" : "Right") : "Mono");
 								continue;
 							}
 
@@ -18502,7 +18509,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							                            std::to_string(eyeStatus.frame);
 							ImGui::TextDisabled(
 								"%s eye | frame %s | slot %u (%s) | %ux%u",
-								eye == 0 ? "Left" : "Right",
+								globals::game::isVR ? (eye == 0 ? "Left" : "Right") : "Mono",
 								frameLabel.c_str(),
 								eyeStatus.featureSlot,
 								eyeStatus.featureSlot < 2 ? "main" : "submit",

@@ -12,9 +12,12 @@ from that partial result reach the image. The default-off **Experimental Multi-R
 toggle can instead evaluate two separated regions through persistent feature
 instances. This is not a provider ROI-list API and still requires live qualification.
 
-The current route integration is Skyrim VR only. SE/AE builds compile the shared
-runtime and rectangle code, but their flat presentation path does not yet author
-the character category attachment or invoke this selective-NR route.
+On `main-vr-nr`, SE/AE supports character selection through Full resolution;
+VR also supports the Foveated and Reduced resolution routes. All runtimes
+author the same category attachment and use the shared character masks,
+strengths, ROI/Multi-ROI and colour stages. Flat uses one view and hides stereo
+submission controls. See the [flat extension record](nr-flat-character-support-20260919.md)
+for implementation details and pending compiled/live qualification.
 
 ## Architecture
 

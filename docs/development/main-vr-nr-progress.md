@@ -33,6 +33,14 @@ Source checks passed as recorded; compiled/live validation remains pending
 under the user's no-build instruction. The flat character NR extension was
 paused at the user's request to prioritize this correction.
 
+## Flat character NR extension, 2026-09-19
+
+Resumed after master-toggle correction `153af7cbc`. The
+[flat support record](nr-flat-character-support-20260919.md) describes shared
+category authoring, mono character selection and ROI/Multi-ROI, compatibility
+limits and validation. The previous production AIO still contains only the
+master-toggle correction; no replacement archive was requested for this work.
+
 ## Task 0 verified checkpoint
 
 -   Existing worktree: `C:/src/skyrim-community-shaders/build/worktrees/main-vr-nr`.

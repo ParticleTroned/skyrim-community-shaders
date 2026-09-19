@@ -1,6 +1,7 @@
 #define LIGHTING
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
+#include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -8,9 +9,6 @@
 #include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
-#ifdef VR
-#	include "Common/CharacterCategoryMask.hlsli"
-#endif
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
@@ -4359,7 +4357,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion.
-#		ifdef VR
 	// Exact R8 codes reject interpolated IDs. The output alpha still supplies
 	// the inherited MRT source blend factor without becoming stored target data.
 	const uint characterCategory =
@@ -4370,9 +4367,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				Permutation::ExtraFlags::CharacterCategoryShift);
 	psout.Masks2 = CharacterCategoryMask::Encode(
 		1.0 - vertexAO, characterCategory, psout.Diffuse.w);
-#		else
-	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, psout.Diffuse.w);
-#		endif
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;

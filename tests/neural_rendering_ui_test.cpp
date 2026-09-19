@@ -432,9 +432,11 @@ int main()
 	upscaling.settings.foveatedCenterArea = 1.0f;
 	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Full coverage is not an active FOV mask");
 	upscaling.settings.periphery_taa_enable = true;
-	require(upscaling.IsNeuralRenderingFovConfigurationAvailable(), "FOV+TAA readiness follows its active centre profile");
+	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "NR readiness requires the centre-only profile even before enabling NR");
+	upscaling.settings.foveatedCenterArea = 0.6f;
+	require(upscaling.IsNeuralRenderingFovConfigurationAvailable(), "NR readiness must use the saved centre-only mask");
 	upscaling.settings.periphery_taa_center_area = 1.0f;
-	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Full-coverage FOV+TAA is also inactive");
+	require(upscaling.IsNeuralRenderingFovConfigurationAvailable(), "The incompatible TAA profile must not block a valid NR centre-only mask");
 	globals::game::isVR = false;
 	upscaling.settings.periphery_taa_center_area = 0.3f;
 	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Flat runtimes cannot supply the VR shared FOV mask");

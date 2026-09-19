@@ -5092,6 +5092,7 @@ namespace
 
 	void SanitizeFoveatedSettings(Upscaling::Settings& settings)
 	{
+		Upscaling::ApplyNeuralRenderingFovConstraint(settings);
 		settings.neuralRenderingInsertionPoint = static_cast<uint>(
 			NeuralRendering::ClampInsertionPoint(settings.neuralRenderingInsertionPoint));
 		settings.neuralRenderingPreset = std::min(settings.neuralRenderingPreset, 4u);
@@ -17746,7 +17747,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 		const bool foveatedDispatchRequestedForMethod = IsFoveatedVendorDispatchRequested(settings, upscaleMethod);
 		auto foveatedGuard = Util::DisableGuard(!foveatedDispatchRequestedForMethod);
-		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
+		DrawPeripheryTAAControl();
 	}
 
 	if (a_advanced && streamline.reflexSupportedOnCurrentAdapter) {
@@ -17769,6 +17770,38 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 void Upscaling::DrawEssentialSettings()
 {
 	DrawPerformanceSettings(false);
+}
+
+namespace
+{
+	void DrawNeuralRenderingFovWarning(const Upscaling::Settings& a_settings)
+	{
+		if (globals::game::isVR && a_settings.neuralRenderingEnabled && a_settings.foveatedVendorDispatch)
+			Util::Text::WrappedError("NR uses FOV centre without TAA. Set both eye masks precisely to cover your visible headset view.");
+	}
+}
+
+bool Upscaling::ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept
+{
+	if (!a_settings.neuralRenderingEnabled || !a_settings.periphery_taa_enable)
+		return false;
+	a_settings.periphery_taa_enable = false;
+	return true;
+}
+
+void Upscaling::DrawPeripheryTAAControl()
+{
+	{
+		auto guard = Util::DisableGuard(settings.neuralRenderingEnabled);
+		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Enables periphery-only TAA outside the smaller vendor center region.");
+		ImGui::TextUnformatted("When ON, the FOV + TAA center scale becomes the active DLSS/FSR dispatch center.");
+		ImGui::TextUnformatted("The visible outer scale defines the shared HMD-visible mask boundary.");
+		ImGui::TextUnformatted("Expand and eye offsets are shared with the upscaling controls.");
+	}
+	DrawNeuralRenderingFovWarning(settings);
 }
 
 bool Upscaling::ApplyNeuralRenderingPreset(
@@ -17926,6 +17959,8 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod)
 											!settings.neuralRenderingEnabled);
 			ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
 		}
+		ApplyNeuralRenderingFovConstraint(settings);
+		DrawNeuralRenderingFovWarning(settings);
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Reduced resolution before DLSS" };
 		if (ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())])) {
 			for (uint index = 0; index < IM_ARRAYSIZE(renderingModes); ++index) {
@@ -18853,13 +18888,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::Separator();
 	ImGui::TextUnformatted("Upscaling FOV + TAA Settings");
-	ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enables periphery-only TAA outside the smaller vendor center region.");
-		ImGui::TextUnformatted("When ON, the FOV + TAA center scale becomes the active DLSS/FSR dispatch center.");
-		ImGui::TextUnformatted("The visible outer scale defines the shared HMD-visible mask boundary.");
-		ImGui::TextUnformatted("Expand and eye offsets are shared with the upscaling controls above.");
-	}
+	DrawPeripheryTAAControl();
 	ImGui::BeginDisabled(!settings.periphery_taa_enable);
 	if (!settings.periphery_taa_enable)
 		ImGui::TextDisabled(a_essentialsLayout ?
@@ -19986,14 +20015,18 @@ void Upscaling::RestoreDefaultSettings()
 
 bool Upscaling::HandleNeuralRenderingSettingsTransition(
 	const Settings& a_previousSettings,
-	const char* a_reason)
+	const char* a_reason,
+	bool* a_backendResetSucceeded)
 {
+	if (a_backendResetSucceeded)
+		*a_backendResetSucceeded = false;
+	const bool fovChanged = ApplyNeuralRenderingFovConstraint(settings);
 	// A disabled character/master switch can hide this setting from the render
 	// cache key, but switching the experiment off must still reclaim its slots.
 	const bool multiRoiChanged =
 		a_previousSettings.neuralCharacterMultiRoiEnabled !=
 		settings.neuralCharacterMultiRoiEnabled;
-	if (!multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings)) {
+	if (!fovChanged && !multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings)) {
 		return true;
 	}
 
@@ -20007,6 +20040,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 		a_previousSettings.neuralRenderingFovOnly != settings.neuralRenderingFovOnly;
 
 	RequestHistoryReset();
+	InvalidateFrameScopedUpscalingState();
 	mainFinalLdrNeuralState = {};
 	mainFinalLdrPresentationState = {};
 	if (insertionPointChanged) {
@@ -20023,12 +20057,15 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 	}
 
 	const bool resetSucceeded = neuralRenderer.Reset();
+	if (a_backendResetSucceeded)
+		*a_backendResetSucceeded = resetSucceeded;
 	if (!resetSucceeded) {
 		logger::error(
 			"[DLSSNR] Backend retirement failed during {}; NR remains fail-closed",
 			a_reason ? a_reason : "settings transition");
 	}
-	return resetSucceeded;
+	// Failed retirement retains unsafe resources, but must never force NR back on.
+	return resetSucceeded || !settings.neuralRenderingEnabled;
 }
 
 NeuralRendering::InsertionPoint Upscaling::GetNeuralRenderingInsertionPoint() const noexcept
@@ -41529,7 +41566,7 @@ bool Upscaling::IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) c
 	if (!IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod))
 		return false;
 
-	const bool usePeripheryTAAProfile = settings.periphery_taa_enable;
+	const bool usePeripheryTAAProfile = settings.periphery_taa_enable && !settings.neuralRenderingEnabled;
 	const float centerScale = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile).centerScale;
 	// 1.0 is effectively full-frame vendor dispatch, so keep the default path.
 	return FoveatedCommon::IsActiveCoverage(centerScale);
@@ -41551,7 +41588,7 @@ bool Upscaling::IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const
 
 bool Upscaling::IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const
 {
-	return IsFoveatedVendorDispatchEnabled(a_upscaleMethod) && settings.periphery_taa_enable;
+	return !settings.neuralRenderingEnabled && IsFoveatedVendorDispatchEnabled(a_upscaleMethod) && settings.periphery_taa_enable;
 }
 
 bool Upscaling::IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const
@@ -41574,7 +41611,7 @@ bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable() const
 bool Upscaling::IsNeuralRenderingFovConfigurationAvailable() const
 {
 	return loaded && IsFoveatedVendorDispatchRequested(settings, GetRuntimeUpscaleMethod()) &&
-	       FoveatedCommon::IsActiveCoverage(GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable).centerScale);
+	       FoveatedCommon::IsActiveCoverage(GetFoveatedMaskProfileParams(settings, false).centerScale);
 }
 
 const char* Upscaling::GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode)

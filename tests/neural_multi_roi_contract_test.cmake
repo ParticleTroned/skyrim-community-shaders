@@ -305,7 +305,7 @@ string(REGEX REPLACE "[\r\n\t ]+" " "
 
 foreach(_transition_contract IN ITEMS
     [[const bool multiRoiChanged = a_previousSettings.neuralCharacterMultiRoiEnabled != settings.neuralCharacterMultiRoiEnabled;]]
-    [[if (!multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings))]]
+    [[if (!fovChanged && !multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings))]]
     [[RequestHistoryReset();]]
     [[NeuralRendering::RequiresBackendRetirement(]]
     [[multiRoiChanged, insertionPointChanged,]]
@@ -323,7 +323,7 @@ endforeach()
 string(FIND "${_settings_transition_normalized}"
     [[const bool multiRoiChanged =]] _multi_roi_changed_position)
 string(FIND "${_settings_transition_normalized}"
-    [[if (!multiRoiChanged && HasSameNeuralRenderingSettingsKey]]
+    [[if (!fovChanged && !multiRoiChanged && HasSameNeuralRenderingSettingsKey]]
     _same_key_early_return_position)
 string(FIND "${_settings_transition_normalized}"
     [[neuralRenderer.Reset();]]

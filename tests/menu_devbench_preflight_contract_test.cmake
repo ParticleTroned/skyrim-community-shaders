@@ -124,6 +124,8 @@ foreach(_required_behavior IN ITEMS
     "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Coc)"
     "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Tuning)"
     "CaptureCocPreflightSnapshot"
+    ".neuralRenderingEnabled = settings.neuralRenderingEnabled"
+    "nr_must_be_disabled_for_taa_fixture"
     "GetVRFpsStabilizerSessionConfig()"
     "IsVRFpsStabilizerSyncActive()"
     "CanApplyRuntimeSettings(before.state, a_preparation)"

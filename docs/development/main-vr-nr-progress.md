@@ -231,3 +231,63 @@ No live-game, HMD quality or performance measurement was made for this
 integration. No production NR defaults changed. Task 3 descriptor work and
 Task 2 native replay measurement gaps remain separate. These are local
 commits; no push, game deployment or replacement AIO is part of this update.
+
+## NR master toggle and FOV compatibility (2026-09-19)
+
+The reported stuck master checkbox has a reproducible rollback path:
+backend retirement failure previously rejected the disabled configuration,
+so menu/configuration callers restored the prior enabled setting. Off now
+remains accepted after a failed reset. Unsafe resources remain owned by
+the renderer; re-enabling still requires successful retirement. History,
+frame-scoped resource checks and pending NR presentation are invalidated.
+DevBench reports configuration acceptance and retirement independently;
+`transitionSucceeded=true` can accompany `resetSucceeded=false` for Off.
+
+Enabled NR selects the saved centre-only FOV profile. The common settings
+sanitizer handles saved loads and restores, both menu layouts disable the
+FOV + TAA checkbox, and the runtime dispatch guard rejects that combination.
+Neither saved mask profile is overwritten. FOV-dependent NR readiness uses
+the centre-only profile even before enabling NR. A red warning asks the
+player to set both eye masks precisely to cover the visible headset view.
+
+`nr_configure` reports `fovTaaDisabled`; explicit foveation requests to
+enable TAA while NR is enabled are rejected. The fixed `prepare_coc` and
+`prepare_tuning` TAA fixtures reject enabled NR before any mutation rather
+than changing the assay's fixture. Their ordinary NR-off behavior remains.
+No shader, colour reconstruction, ROI ownership or A/B/C route policy was
+changed. Preset keys, defaults, schema revision 6 and tier values remain;
+only their reviewed source fingerprint and generated hashes changed.
+
+Validation compiled the universal SE/AE/VR Release DLL with DevBench on
+and Tracy off using `tools/validate-local.ps1`. The initial workflows
+exposed stale transition-source assertions and a packaging test that did
+not recognize the optional local NR DLL. The corrected packaging check
+requires the configured provider's exact source hash and retains the
+complete SDK manifest check. A focused transition-contract rerun passed.
+The final complete CTest rerun passed **166/166**, with zero failures or
+skips (67.08 seconds); preset-generator tests, generated-preset checks,
+diff checks and DLL manifest verification passed afterward. Evidence:
+`build/validation/nr-menu-fov-checks-20260919/summary.json` and siblings.
+Earlier failed workflow records remain under `nr-menu-fov-20260919` and
+`nr-menu-fov-final-20260919`; the final rerun changed only test assertions,
+not the compiled runtime code. Bridge-enabled producer Build ID:
+d41415c32c41dc49cb2c1bf893b85b5f0cc9e1c0ddca25558c3a890779f55e0d.
+Its source is `23c1e0f86` plus dirty digest
+`dcee68c2710a561c14eace74385308cb69219394e63d5c34566594b27678ecf6`.
+This handover was appended after validation. The user then instructed that
+builds must only run when explicitly requested. No production rebuild or
+replacement AIO was started. The existing production archive is unchanged;
+these fixes need an explicitly requested production build before testing
+that configuration in game.
+No live-game control, HMD quality, performance or render-scale release
+qualification was performed for these fixes. No push or deployment occurs.
+
+The user additionally reports little visible NR effect with Preserve source.
+This is unmeasured, not evidence of cancelled inference. Colour processing
+Off selects Original/raw NR without disabling NR. Managed uses the selected
+colour/exposure reconstruction profile; the default identity profile can
+look similar to raw NR. Preserve source retains source colour and, at 100%
+Lighting preservation, suppresses broad neural brightness changes. Its
+appearance-mix endpoint of 1 returns the same candidate as Managed. A
+same-scene raw/Managed/Preserve comparison with a known nonzero neural edit
+is the next quality check before changing preservation strength or defaults.

@@ -3450,3 +3450,9 @@ foreach(_timing_contract IN ITEMS
 endforeach()
 
 message(STATUS "Neural Rendering DevBench contract passed")
+
+string(JSON _fov_taa_disabled_type GET "${_descriptor_json}"
+    outputSchema properties fovTaaDisabled type)
+if(NOT _fov_taa_disabled_type STREQUAL "boolean")
+    message(FATAL_ERROR "NR FOV normalization result must be exposed as a boolean")
+endif()

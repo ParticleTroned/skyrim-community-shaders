@@ -2491,6 +2491,10 @@ public:
 	/** Apply the shared menu/API link policy without bypassing transition admission. */
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
 	void DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod);
+	/** Selects the saved centre-only FOV profile whenever NR is enabled. */
+	static bool ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept;
+	/** Shared FOV toggle and NR incompatibility warning for both menu layouts. */
+	void DrawPeripheryTAAControl();
 	/** Persist only the Neural Rendering feature's renderer-facing configuration. */
 	[[nodiscard]] json GetNeuralRenderingConfiguration() const;
 	/** Apply feature configuration through the existing history transition. */
@@ -2507,10 +2511,11 @@ public:
 	virtual void OnSettingsSaved() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
-	/** Retires NR on enable/insertion transitions and invalidates history for every NR setting change. */
+	/** Disabling remains accepted when retirement fails; enabling still requires safe retirement. */
 	bool HandleNeuralRenderingSettingsTransition(
 		const Settings& a_previousSettings,
-		const char* a_reason);
+		const char* a_reason,
+		bool* a_backendResetSucceeded = nullptr);
 	/** Applies one complete NR preset; preset zero preserves custom tuning values. */
 	static bool ApplyNeuralRenderingPreset(
 		Settings& a_settings,

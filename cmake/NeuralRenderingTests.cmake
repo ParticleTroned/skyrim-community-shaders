@@ -11,11 +11,34 @@ foreach(_policy IN ITEMS
 endforeach()
 
 foreach(_test IN ITEMS character_settings character_multi_roi character_mask_roi
-    compute_subrect frame_telemetry_ring dlss_viewport_crop foveated_center_alignment foveated_region_plan)
+    compute_subrect frame_telemetry_ring dlss_viewport_crop foveated_region_plan)
     add_controller_test(${_test}_test ${_test} tests/${_test}_test.cpp)
 endforeach()
 target_link_libraries(character_settings_test PRIVATE nlohmann_json::nlohmann_json)
 
+set(_foveated_geometry_test_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/foveated_geometry_test"
+)
+add_custom_command(
+    OUTPUT "${_foveated_geometry_test_dir}/foveated_mask_geometry_under_test.h"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_foveated_geometry_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_foveated_mask_geometry.cmake"
+    DEPENDS
+        src/Features/Upscaling.cpp
+        tests/extract_foveated_mask_geometry.cmake
+    VERBATIM
+)
+add_controller_test(foveated_mask_geometry_test FoveatedMaskGeometry tests/foveated_mask_geometry_test.cpp)
+target_sources(
+    foveated_mask_geometry_test
+    PRIVATE "${_foveated_geometry_test_dir}/foveated_mask_geometry_under_test.h"
+)
+target_include_directories(
+    foveated_mask_geometry_test
+    PRIVATE "${_foveated_geometry_test_dir}"
+)
 set(_neural_full_resolution_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_full_resolution_test")
 add_custom_command(
     OUTPUT "${_neural_full_resolution_test_dir}/neural_full_resolution_preparation_under_test.h"

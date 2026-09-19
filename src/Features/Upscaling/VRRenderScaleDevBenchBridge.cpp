@@ -1548,8 +1548,6 @@ namespace
       "characterMaskTestMode":{"type":"string","enum":["authored","force_zero","force_one","force_half","invert_authored","authored_without_visibility_depth"]},
       "foveatedEnabled":{"type":"boolean"},
       "peripheryTaaEnabled":{"type":"boolean","description":"Enabling FOV + TAA is rejected while NR is enabled; NR uses the saved centre-only profile."},
-      "centerOrigin":{"type":"string","enum":["image_center","optical_center"]},
-      "horizontalAnchor":{"type":"string","enum":["symmetric","outward"]},
       "fovOnlyCenterScale":{"type":"number","minimum":0.25,"maximum":1.0},
       "peripheryTaaCenterScale":{"type":"number","minimum":0.25,"maximum":1.0},
       "peripheryTaaOuterScale":{"type":"number","minimum":0.3,"maximum":1.0},
@@ -1558,21 +1556,19 @@ namespace
       "leftEyeOffsetY":{"type":"number","minimum":-0.3,"maximum":0.3},
       "rightEyeOffsetX":{"type":"number","minimum":-0.3,"maximum":0.3},
       "rightEyeOffsetY":{"type":"number","minimum":-0.3,"maximum":0.3},
-      "fovOnlyBlendFeather":{"type":"number","minimum":0.0,"maximum":0.1},
       "peripheryTaaBlendFeather":{"type":"number","minimum":0.0,"maximum":0.1},
       "neuralFinalLdrBlendFeather":{"type":"number","minimum":0.0,"maximum":0.1},
-      "reconstructionGuardBandPixels":{"type":"integer","minimum":0,"maximum":64},
       "maskVisualization":{"type":"boolean"},
-      "control":{"type":"string","enum":["master","periphery_taa","center_origin","horizontal_anchor","fov_only_center_scale","periphery_taa_center_scale","periphery_taa_outer_scale","center_horizontal_scale","left_eye_offset_x","left_eye_offset_y","right_eye_offset_x","right_eye_offset_y","fov_only_blend_feather","periphery_taa_blend_feather","neural_final_ldr_blend_feather","reconstruction_guard_band_pixels","mask_visualization"]},
+      "control":{"type":"string","enum":["master","periphery_taa","fov_only_center_scale","periphery_taa_center_scale","periphery_taa_outer_scale","center_horizontal_scale","left_eye_offset_x","left_eye_offset_y","right_eye_offset_x","right_eye_offset_y","periphery_taa_blend_feather","neural_final_ldr_blend_feather","mask_visualization"]},
       "valueIndex":{"type":"integer","minimum":0,"maximum":2},
       "expectedConfigurationFingerprint":{"type":"string","pattern":"^[0-9a-f]{32}$","description":"Reject nr_configure before mutation if requested full configuration changed."}
     },
     "required":["action"],
     "allOf":[
       {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","expectedBuildId","expectedConfigurationFingerprint","enabled","mode","fovOnly","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterVisualIsolationEnabled","experimentalMultiRoi","experimentalMultiRoiSavingsGate","characterFaces","characterSkin","characterHair","characterFaceStrength","characterSkinStrength","characterHairStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterMinimumFacePixelSize","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
-      {"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","foveatedEnabled","peripheryTaaEnabled","centerOrigin","horizontalAnchor","fovOnlyCenterScale","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","fovOnlyBlendFeather","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","reconstructionGuardBandPixels","maskVisualization"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["centerOrigin"]},{"required":["horizontalAnchor"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["fovOnlyBlendFeather"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["reconstructionGuardBandPixels"]},{"required":["maskVisualization"]}]}},
+      {"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","foveatedEnabled","peripheryTaaEnabled","fovOnlyCenterScale","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","maskVisualization"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["maskVisualization"]}]}},
       {"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","expectedBuildId","control","valueIndex"]}}},
-      {"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_origin","horizontal_anchor","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}}
+      {"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}}
     ]
   }
 })nr";
@@ -1649,8 +1645,6 @@ namespace
 	{
 		Master,
 		PeripheryTAA,
-		CenterOrigin,
-		HorizontalAnchor,
 		FovOnlyCenterScale,
 		PeripheryTAACenterScale,
 		PeripheryTAAOuterScale,
@@ -1659,10 +1653,8 @@ namespace
 		LeftEyeOffsetY,
 		RightEyeOffsetX,
 		RightEyeOffsetY,
-		FovOnlyBlendFeather,
 		PeripheryTAABlendFeather,
 		NeuralFinalLdrBlendFeather,
-		ReconstructionGuardBandPixels,
 		MaskVisualization,
 	};
 
@@ -1675,8 +1667,6 @@ namespace
 	constexpr std::array kFoveationControlDescriptors{
 		FoveationControlDescriptor{ FoveationCycleControl::Master, "master" },
 		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAA, "periphery_taa" },
-		FoveationControlDescriptor{ FoveationCycleControl::CenterOrigin, "center_origin" },
-		FoveationControlDescriptor{ FoveationCycleControl::HorizontalAnchor, "horizontal_anchor" },
 		FoveationControlDescriptor{ FoveationCycleControl::FovOnlyCenterScale, "fov_only_center_scale" },
 		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAACenterScale, "periphery_taa_center_scale" },
 		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAAOuterScale, "periphery_taa_outer_scale" },
@@ -1685,36 +1675,29 @@ namespace
 		FoveationControlDescriptor{ FoveationCycleControl::LeftEyeOffsetY, "left_eye_offset_y" },
 		FoveationControlDescriptor{ FoveationCycleControl::RightEyeOffsetX, "right_eye_offset_x" },
 		FoveationControlDescriptor{ FoveationCycleControl::RightEyeOffsetY, "right_eye_offset_y" },
-		FoveationControlDescriptor{ FoveationCycleControl::FovOnlyBlendFeather, "fov_only_blend_feather" },
 		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAABlendFeather, "periphery_taa_blend_feather" },
 		FoveationControlDescriptor{ FoveationCycleControl::NeuralFinalLdrBlendFeather, "neural_final_ldr_blend_feather" },
-		FoveationControlDescriptor{ FoveationCycleControl::ReconstructionGuardBandPixels, "reconstruction_guard_band_pixels" },
 		FoveationControlDescriptor{ FoveationCycleControl::MaskVisualization, "mask_visualization" },
 	};
 
 	constexpr std::array<float, 3> kCenterScaleCycleValues{
-		FoveatedCenterAlignment::kCenterScaleMin,
+		FoveatedCommon::kCenterScaleMin,
 		0.60f,
-		FoveatedCenterAlignment::kCenterScaleMax,
+		FoveatedCommon::kCenterScaleMax,
 	};
 	constexpr std::array<float, 2> kHorizontalScaleCycleValues{
-		FoveatedCenterAlignment::kCenterHorizontalScaleMin,
-		FoveatedCenterAlignment::kCenterHorizontalScaleMax,
+		FoveatedCommon::kCenterHorizontalScaleMin,
+		FoveatedCommon::kCenterHorizontalScaleMax,
 	};
 	constexpr std::array<float, 3> kManualOffsetCycleValues{
-		FoveatedCenterAlignment::kManualOffsetMin,
+		Upscaling::kFoveatedManualOffsetMin,
 		0.0f,
-		FoveatedCenterAlignment::kManualOffsetMax,
+		Upscaling::kFoveatedManualOffsetMax,
 	};
 	constexpr std::array<float, 3> kBlendFeatherCycleValues{
 		Upscaling::kFoveatedBlendFeatherMin,
 		0.05f,
 		Upscaling::kFoveatedBlendFeatherMax,
-	};
-	constexpr std::array<uint32_t, 3> kGuardBandCycleValues{
-		0u,
-		Upscaling::kFoveatedReconstructionGuardBandMax / 2u,
-		Upscaling::kFoveatedReconstructionGuardBandMax,
 	};
 	constexpr double kCenterScaleRequestMin = 0.25;
 	constexpr double kCenterScaleRequestMax = 1.0;
@@ -1735,17 +1718,17 @@ namespace
 	}
 
 	static_assert(RequestBoundMatchesRuntime(kCenterScaleRequestMin,
-		FoveatedCenterAlignment::kCenterScaleMin));
+		FoveatedCommon::kCenterScaleMin));
 	static_assert(RequestBoundMatchesRuntime(kCenterScaleRequestMax,
-		FoveatedCenterAlignment::kCenterScaleMax));
+		FoveatedCommon::kCenterScaleMax));
 	static_assert(RequestBoundMatchesRuntime(kCenterHorizontalScaleRequestMin,
-		FoveatedCenterAlignment::kCenterHorizontalScaleMin));
+		FoveatedCommon::kCenterHorizontalScaleMin));
 	static_assert(RequestBoundMatchesRuntime(kCenterHorizontalScaleRequestMax,
-		FoveatedCenterAlignment::kCenterHorizontalScaleMax));
+		FoveatedCommon::kCenterHorizontalScaleMax));
 	static_assert(RequestBoundMatchesRuntime(kManualOffsetRequestMin,
-		FoveatedCenterAlignment::kManualOffsetMin));
+		Upscaling::kFoveatedManualOffsetMin));
 	static_assert(RequestBoundMatchesRuntime(kManualOffsetRequestMax,
-		FoveatedCenterAlignment::kManualOffsetMax));
+		Upscaling::kFoveatedManualOffsetMax));
 	static_assert(RequestBoundMatchesRuntime(kBlendFeatherRequestMin,
 		Upscaling::kFoveatedBlendFeatherMin));
 	static_assert(RequestBoundMatchesRuntime(kBlendFeatherRequestMax,
@@ -1774,50 +1757,10 @@ namespace
 		return std::nullopt;
 	}
 
-	const char* GetFoveatedInputValidityName(
-		FoveatedCenterAlignment::InputValidity a_validity)
-	{
-		switch (a_validity) {
-		case FoveatedCenterAlignment::InputValidity::Unavailable:
-			return "unavailable";
-		case FoveatedCenterAlignment::InputValidity::Invalid:
-			return "invalid";
-		case FoveatedCenterAlignment::InputValidity::Valid:
-			return "valid";
-		default:
-			return "unknown";
-		}
-	}
-
 	template <class T>
 	json FoveatedPointJson(const T& a_point)
 	{
 		return { { "x", a_point.x }, { "y", a_point.y } };
-	}
-
-	json FoveatedEyeAlignmentJson(
-		const FoveatedCenterAlignment::EyeDiagnostics& a_eye)
-	{
-		return {
-			{ "eye", a_eye.eyeIndex },
-			{ "source", FoveatedCenterAlignment::GetOpticalCenterSourceName(a_eye.source) },
-			{ "fallbackReason", FoveatedCenterAlignment::GetOpticalFallbackReasonName(a_eye.fallbackReason) },
-			{ "projectionValidity", GetFoveatedInputValidityName(a_eye.projectionValidity) },
-			{ "tangentValidity", GetFoveatedInputValidityName(a_eye.tangentValidity) },
-			{ "projectionCenterUV", FoveatedPointJson(a_eye.projectionCenterUV) },
-			{ "tangentCenterUV", FoveatedPointJson(a_eye.tangentCenterUV) },
-			{ "baseCenterUV", FoveatedPointJson(a_eye.baseCenterUV) },
-			{ "baseOffset", FoveatedPointJson(a_eye.baseOffset) },
-			{ "anchorOffset", FoveatedPointJson(a_eye.anchorOffset) },
-			{ "requestedManualOffset", FoveatedPointJson(a_eye.requestedManualOffset) },
-			{ "manualOffset", FoveatedPointJson(a_eye.manualOffset) },
-			{ "unclampedOffset", FoveatedPointJson(a_eye.unclampedOffset) },
-			{ "finalOffset", FoveatedPointJson(a_eye.finalOffset) },
-			{ "manualOffsetClampedX", a_eye.manualOffsetClampedX },
-			{ "manualOffsetClampedY", a_eye.manualOffsetClampedY },
-			{ "finalOffsetClampedX", a_eye.finalOffsetClampedX },
-			{ "finalOffsetClampedY", a_eye.finalOffsetClampedY },
-		};
 	}
 
 	void AppendDistinctFoveationCycleValue(
@@ -1855,19 +1798,9 @@ namespace
 
 	json FoveationCycleMatrixJson(const Upscaling::Settings& a_settings)
 	{
-		const auto originImage = FoveatedCenterAlignment::GetCenterOriginName(
-			FoveatedCenterAlignment::CenterOrigin::ImageCenter);
-		const auto originOptical = FoveatedCenterAlignment::GetCenterOriginName(
-			FoveatedCenterAlignment::CenterOrigin::OpticalCenter);
-		const auto anchorSymmetric = FoveatedCenterAlignment::GetHorizontalAnchorName(
-			FoveatedCenterAlignment::HorizontalAnchor::Symmetric);
-		const auto anchorOutward = FoveatedCenterAlignment::GetHorizontalAnchorName(
-			FoveatedCenterAlignment::HorizontalAnchor::Outward);
 		return json::array({
 			{ { "control", "master" }, { "values", json::array({ false, true }) } },
 			{ { "control", "periphery_taa" }, { "values", json::array({ false, true }) } },
-			{ { "control", "center_origin" }, { "values", json::array({ originImage, originOptical }) } },
-			{ { "control", "horizontal_anchor" }, { "values", json::array({ anchorSymmetric, anchorOutward }) } },
 			{ { "control", "fov_only_center_scale" }, { "values", kCenterScaleCycleValues } },
 			{ { "control", "periphery_taa_center_scale" }, { "values", kCenterScaleCycleValues } },
 			{ { "control", "periphery_taa_outer_scale" }, { "values", GetPeripheryTAAOuterScaleCycleValues(a_settings) } },
@@ -1876,10 +1809,8 @@ namespace
 			{ { "control", "left_eye_offset_y" }, { "values", kManualOffsetCycleValues } },
 			{ { "control", "right_eye_offset_x" }, { "values", kManualOffsetCycleValues } },
 			{ { "control", "right_eye_offset_y" }, { "values", kManualOffsetCycleValues } },
-			{ { "control", "fov_only_blend_feather" }, { "values", kBlendFeatherCycleValues } },
 			{ { "control", "periphery_taa_blend_feather" }, { "values", kBlendFeatherCycleValues } },
 			{ { "control", "neural_final_ldr_blend_feather" }, { "values", kBlendFeatherCycleValues } },
-			{ { "control", "reconstruction_guard_band_pixels" }, { "values", kGuardBandCycleValues } },
 			{ { "control", "mask_visualization" }, { "values", json::array({ false, true }) } },
 		});
 	}
@@ -1912,24 +1843,12 @@ namespace
 
 	json FoveatedPlanEyeJson(
 		const FoveatedRegionPlan::Eye& a_eye,
-		uint32_t a_eyeIndex,
-		uint32_t a_outputWidth,
-		uint32_t a_outputHeight,
-		uint32_t a_guardPixels)
+		uint32_t a_eyeIndex)
 	{
-		const uint32_t sourceOffsetX =
-			a_eye.visibleOutput.minX >= a_eye.output.minX ?
-				a_eye.visibleOutput.minX - a_eye.output.minX :
-				0u;
-		const uint32_t sourceOffsetY =
-			a_eye.visibleOutput.minY >= a_eye.output.minY ?
-				a_eye.visibleOutput.minY - a_eye.output.minY :
-				0u;
 		return {
 			{ "eye", a_eyeIndex },
 			{ "centerOffset", FoveatedPointJson(a_eye.centerOffset) },
 			{ "pinholeOffset", FoveatedPointJson(a_eye.pinholeOffset) },
-			{ "visibleOutput", FoveatedRectJson(a_eye.visibleOutput) },
 			{ "output", FoveatedRectJson(a_eye.output) },
 			{ "input", FoveatedRectJson(a_eye.input) },
 			{ "encodeInput", FoveatedRectJson(a_eye.encodeInput) },
@@ -1938,13 +1857,6 @@ namespace
 			{ "peripheryTaaOuterOutput", FoveatedRectJson(a_eye.peripheryTAAOuterOutput) },
 			{ "peripheryTaaHistoryOutput", FoveatedRectJson(a_eye.peripheryTAAHistoryOutput) },
 			{ "peripheryTaaOuterInput", FoveatedRectJson(a_eye.peripheryTAAOuterInput) },
-			{ "sourceOffset", { { "x", sourceOffsetX }, { "y", sourceOffsetY } } },
-			{ "guardClipped", {
-								  { "left", a_guardPixels > a_eye.visibleOutput.minX },
-								  { "top", a_guardPixels > a_eye.visibleOutput.minY },
-								  { "right", a_guardPixels > a_outputWidth - std::min(a_eye.visibleOutput.maxX, a_outputWidth) },
-								  { "bottom", a_guardPixels > a_outputHeight - std::min(a_eye.visibleOutput.maxY, a_outputHeight) },
-							  } },
 		};
 	}
 
@@ -1980,9 +1892,6 @@ namespace
 		if (!plan.IsValid() ||
 			a_resolutionPlan.peripheryTAAActive !=
 				a_profile.usesPeripheryTAAOuterMask ||
-			plan.reconstructionGuardBandPixels != std::min(
-													  a_upscaling.settings.foveatedReconstructionGuardBandPixels,
-													  Upscaling::kFoveatedReconstructionGuardBandMax) ||
 			!NearlyEqualFoveationValue(plan.centerScale, a_profile.vendorCenterScale) ||
 			!NearlyEqualFoveationValue(
 				plan.centerHorizontalScale, a_profile.centerHorizontalScale) ||
@@ -2034,7 +1943,7 @@ namespace
 		const float normalBlendFeather = ClampFoveationFeatherForStatus(
 			peripheryPathActive ?
 				a_upscaling.settings.periphery_taa_center_blend_feather :
-				a_upscaling.settings.foveatedCenterBlendFeather);
+				FoveatedCommon::kCenterFeather);
 		const bool finalLdrNeuralSupportRequested =
 			a_upscaling.GetRuntimeUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
 			a_upscaling.settings.neuralRenderingEnabled &&
@@ -2058,10 +1967,7 @@ namespace
 		for (uint32_t eye = 0; eye < 2u; ++eye) {
 			eyes.push_back(FoveatedPlanEyeJson(
 				plan.eyes[eye],
-				eye,
-				plan.outputWidthPerEye,
-				plan.outputHeight,
-				plan.reconstructionGuardBandPixels));
+				eye));
 		}
 
 		json latchedFrameJson = nullptr;
@@ -2108,7 +2014,6 @@ namespace
 			{ "finalLdrBlendFeather", finalLdrBlendFeather },
 			{ "expectedSupportFeather", expectedSupportFeather },
 			{ "effectiveSupportFeather", plan.centerFeather },
-			{ "reconstructionGuardBandPixels", plan.reconstructionGuardBandPixels },
 			{ "centerHorizontalScale", plan.centerHorizontalScale },
 			{ "peripheryTaaOuterScale", plan.peripheryTAAOuterScale },
 			{ "eyes", std::move(eyes) },
@@ -2118,13 +2023,7 @@ namespace
 	json FoveationStatusJson(const Upscaling& a_upscaling)
 	{
 		const auto& settings = a_upscaling.settings;
-		const auto alignment = a_upscaling.GetResolvedFoveatedCenterAlignment(
-			settings.periphery_taa_enable);
 		const auto activeProfile = a_upscaling.GetActiveUpscalingFoveatedProfile();
-		json eyes = json::array();
-		for (const auto& eye : alignment.eyes)
-			eyes.push_back(FoveatedEyeAlignmentJson(eye));
-
 		json activeOffsets = json::array();
 		for (const auto& offset : activeProfile.centerOffsets) {
 			activeOffsets.push_back({ { "x", offset.x }, { "y", offset.y } });
@@ -2134,10 +2033,6 @@ namespace
 			{ "settings", {
 							  { "foveatedEnabled", settings.foveatedVendorDispatch },
 							  { "peripheryTaaEnabled", settings.periphery_taa_enable },
-							  { "centerOrigin", FoveatedCenterAlignment::GetCenterOriginName(alignment.origin) },
-							  { "centerOriginValue", static_cast<uint32_t>(alignment.origin) },
-							  { "horizontalAnchor", FoveatedCenterAlignment::GetHorizontalAnchorName(alignment.anchor) },
-							  { "horizontalAnchorValue", static_cast<uint32_t>(alignment.anchor) },
 							  { "fovOnlyCenterScale", settings.foveatedCenterArea },
 							  { "peripheryTaaCenterScale", settings.periphery_taa_center_area },
 							  { "peripheryTaaOuterScale", settings.periphery_taa_outer_scale },
@@ -2146,10 +2041,8 @@ namespace
 							  { "leftEyeOffsetY", settings.foveatedLeftEyeMaskOffsetY },
 							  { "rightEyeOffsetX", settings.foveatedRightEyeMaskOffsetX },
 							  { "rightEyeOffsetY", settings.foveatedRightEyeMaskOffsetY },
-							  { "fovOnlyBlendFeather", settings.foveatedCenterBlendFeather },
 							  { "peripheryTaaBlendFeather", settings.periphery_taa_center_blend_feather },
 							  { "neuralFinalLdrBlendFeather", settings.neuralRenderingBlendFeather },
-							  { "reconstructionGuardBandPixels", settings.foveatedReconstructionGuardBandPixels },
 							  { "maskVisualization", settings.foveatedPeripheryMaskVisualization },
 						  } },
 			{ "active", {
@@ -2166,24 +2059,12 @@ namespace
 							{ "maskVisualization", settings.foveatedPeripheryMaskVisualization },
 							{ "neuralSuppressedByMaskVisualization", settings.neuralRenderingEnabled && settings.foveatedPeripheryMaskVisualization },
 						} },
-			{ "alignment", {
-							   { "frame", globals::state ? globals::state->frameCount : 0u },
-							   { "profile", settings.periphery_taa_enable ? "periphery_taa" : "fov_only" },
-							   { "origin", FoveatedCenterAlignment::GetCenterOriginName(alignment.origin) },
-							   { "originValue", static_cast<uint32_t>(alignment.origin) },
-							   { "horizontalAnchor", FoveatedCenterAlignment::GetHorizontalAnchorName(alignment.anchor) },
-							   { "horizontalAnchorValue", static_cast<uint32_t>(alignment.anchor) },
-							   { "centerScale", alignment.centerScale },
-							   { "centerHorizontalScale", alignment.centerHorizontalScale },
-							   { "eyes", std::move(eyes) },
-						   } },
 			{ "ranges", {
-							{ "centerScale", { { "minimum", FoveatedCenterAlignment::kCenterScaleMin }, { "maximum", FoveatedCenterAlignment::kCenterScaleMax } } },
-							{ "centerHorizontalScale", { { "minimum", FoveatedCenterAlignment::kCenterHorizontalScaleMin }, { "maximum", FoveatedCenterAlignment::kCenterHorizontalScaleMax } } },
-							{ "manualOffset", { { "minimum", FoveatedCenterAlignment::kManualOffsetMin }, { "maximum", FoveatedCenterAlignment::kManualOffsetMax } } },
+							{ "centerScale", { { "minimum", FoveatedCommon::kCenterScaleMin }, { "maximum", FoveatedCommon::kCenterScaleMax } } },
+							{ "centerHorizontalScale", { { "minimum", FoveatedCommon::kCenterHorizontalScaleMin }, { "maximum", FoveatedCommon::kCenterHorizontalScaleMax } } },
+							{ "manualOffset", { { "minimum", Upscaling::kFoveatedManualOffsetMin }, { "maximum", Upscaling::kFoveatedManualOffsetMax } } },
 							{ "blendFeather", { { "minimum", Upscaling::kFoveatedBlendFeatherMin }, { "maximum", Upscaling::kFoveatedBlendFeatherMax } } },
 							{ "peripheryTaaOuterScale", { { "minimum", Upscaling::kPeripheryTAAOuterScaleMin }, { "maximum", Upscaling::kPeripheryTAAOuterScaleMax } } },
-							{ "reconstructionGuardBandPixels", { { "minimum", 0u }, { "maximum", Upscaling::kFoveatedReconstructionGuardBandMax } } },
 						} },
 			{ "plan", FoveatedPlanJson(a_upscaling, activeProfile) },
 			{ "cycleMatrix", FoveationCycleMatrixJson(settings) },
@@ -7880,8 +7761,6 @@ namespace
 	{
 		std::optional<bool> foveatedEnabled;
 		std::optional<bool> peripheryTaaEnabled;
-		std::optional<FoveatedCenterAlignment::CenterOrigin> centerOrigin;
-		std::optional<FoveatedCenterAlignment::HorizontalAnchor> horizontalAnchor;
 		std::optional<float> fovOnlyCenterScale;
 		std::optional<float> peripheryTaaCenterScale;
 		std::optional<float> peripheryTaaOuterScale;
@@ -7890,22 +7769,18 @@ namespace
 		std::optional<float> leftEyeOffsetY;
 		std::optional<float> rightEyeOffsetX;
 		std::optional<float> rightEyeOffsetY;
-		std::optional<float> fovOnlyBlendFeather;
 		std::optional<float> peripheryTaaBlendFeather;
 		std::optional<float> neuralFinalLdrBlendFeather;
-		std::optional<uint32_t> reconstructionGuardBandPixels;
 		std::optional<bool> maskVisualization;
 
 		[[nodiscard]] bool HasAnyControl() const noexcept
 		{
-			return foveatedEnabled || peripheryTaaEnabled || centerOrigin ||
-			       horizontalAnchor || fovOnlyCenterScale ||
+			return foveatedEnabled || peripheryTaaEnabled || fovOnlyCenterScale ||
 			       peripheryTaaCenterScale || peripheryTaaOuterScale ||
 			       centerHorizontalScale ||
 			       leftEyeOffsetX || leftEyeOffsetY || rightEyeOffsetX ||
-			       rightEyeOffsetY || fovOnlyBlendFeather ||
-			       peripheryTaaBlendFeather || neuralFinalLdrBlendFeather ||
-			       reconstructionGuardBandPixels || maskVisualization;
+			       rightEyeOffsetY || peripheryTaaBlendFeather || neuralFinalLdrBlendFeather ||
+			       maskVisualization;
 		}
 	};
 
@@ -7913,8 +7788,6 @@ namespace
 		std::string_view{ "action" },
 		std::string_view{ "foveatedEnabled" },
 		std::string_view{ "peripheryTaaEnabled" },
-		std::string_view{ "centerOrigin" },
-		std::string_view{ "horizontalAnchor" },
 		std::string_view{ "fovOnlyCenterScale" },
 		std::string_view{ "peripheryTaaCenterScale" },
 		std::string_view{ "peripheryTaaOuterScale" },
@@ -7923,10 +7796,8 @@ namespace
 		std::string_view{ "leftEyeOffsetY" },
 		std::string_view{ "rightEyeOffsetX" },
 		std::string_view{ "rightEyeOffsetY" },
-		std::string_view{ "fovOnlyBlendFeather" },
 		std::string_view{ "peripheryTaaBlendFeather" },
 		std::string_view{ "neuralFinalLdrBlendFeather" },
-		std::string_view{ "reconstructionGuardBandPixels" },
 		std::string_view{ "maskVisualization" },
 	};
 	constexpr std::array kFoveationCycleFields{
@@ -8015,132 +7886,6 @@ namespace
 		return true;
 	}
 
-	bool TryParseFoveationGuardBand(
-		const json& a_args,
-		std::optional<uint32_t>& a_output,
-		json& a_error)
-	{
-		constexpr const char* name = "reconstructionGuardBandPixels";
-		const auto value = a_args.find(name);
-		if (value == a_args.end())
-			return true;
-
-		uint64_t requested = 0;
-		if (value->is_number_unsigned()) {
-			requested = value->get<uint64_t>();
-		} else if (value->is_number_integer()) {
-			const auto signedValue = value->get<int64_t>();
-			if (signedValue < 0) {
-				a_error = {
-					{ "error", std::format("{} is outside 0..{}", name, Upscaling::kFoveatedReconstructionGuardBandMax) },
-					{ "errorCode", "foveation_guard_band_out_of_range" },
-					{ "field", name },
-					{ "requested", signedValue },
-				};
-				return false;
-			}
-			requested = static_cast<uint64_t>(signedValue);
-		} else {
-			a_error = {
-				{ "error", std::format("{} must be an integer", name) },
-				{ "errorCode", "foveation_guard_band_type_invalid" },
-				{ "field", name },
-			};
-			return false;
-		}
-
-		if (requested > Upscaling::kFoveatedReconstructionGuardBandMax) {
-			a_error = {
-				{ "error", std::format("{} is outside 0..{}", name, Upscaling::kFoveatedReconstructionGuardBandMax) },
-				{ "errorCode", "foveation_guard_band_out_of_range" },
-				{ "field", name },
-				{ "requested", requested },
-			};
-			return false;
-		}
-
-		a_output = static_cast<uint32_t>(requested);
-		return true;
-	}
-
-	bool TryParseFoveationCenterOrigin(
-		const json& a_args,
-		std::optional<FoveatedCenterAlignment::CenterOrigin>& a_output,
-		json& a_error)
-	{
-		constexpr const char* name = "centerOrigin";
-		const auto value = a_args.find(name);
-		if (value == a_args.end())
-			return true;
-		if (!value->is_string()) {
-			a_error = {
-				{ "error", std::format("{} must be a string", name) },
-				{ "errorCode", "foveation_center_origin_type_invalid" },
-				{ "field", name },
-			};
-			return false;
-		}
-
-		const auto requested = value->get<std::string>();
-		constexpr std::array values{
-			FoveatedCenterAlignment::CenterOrigin::ImageCenter,
-			FoveatedCenterAlignment::CenterOrigin::OpticalCenter,
-		};
-		for (const auto candidate : values) {
-			if (requested == FoveatedCenterAlignment::GetCenterOriginName(candidate)) {
-				a_output = candidate;
-				return true;
-			}
-		}
-
-		a_error = {
-			{ "error", "centerOrigin is not supported" },
-			{ "errorCode", "foveation_center_origin_unknown" },
-			{ "field", name },
-			{ "requested", requested },
-		};
-		return false;
-	}
-
-	bool TryParseFoveationHorizontalAnchor(
-		const json& a_args,
-		std::optional<FoveatedCenterAlignment::HorizontalAnchor>& a_output,
-		json& a_error)
-	{
-		constexpr const char* name = "horizontalAnchor";
-		const auto value = a_args.find(name);
-		if (value == a_args.end())
-			return true;
-		if (!value->is_string()) {
-			a_error = {
-				{ "error", std::format("{} must be a string", name) },
-				{ "errorCode", "foveation_horizontal_anchor_type_invalid" },
-				{ "field", name },
-			};
-			return false;
-		}
-
-		const auto requested = value->get<std::string>();
-		constexpr std::array values{
-			FoveatedCenterAlignment::HorizontalAnchor::Symmetric,
-			FoveatedCenterAlignment::HorizontalAnchor::Outward,
-		};
-		for (const auto candidate : values) {
-			if (requested == FoveatedCenterAlignment::GetHorizontalAnchorName(candidate)) {
-				a_output = candidate;
-				return true;
-			}
-		}
-
-		a_error = {
-			{ "error", "horizontalAnchor is not supported" },
-			{ "errorCode", "foveation_horizontal_anchor_unknown" },
-			{ "field", name },
-			{ "requested", requested },
-		};
-		return false;
-	}
-
 	bool TryParseFoveationConfiguration(
 		const json& a_args,
 		FoveationConfigurationRequest& a_request,
@@ -8150,8 +7895,6 @@ namespace
 				a_args, kFoveationConfigureFields, a_error) ||
 			!TryParseFoveationBoolean(a_args, "foveatedEnabled", a_request.foveatedEnabled, a_error) ||
 			!TryParseFoveationBoolean(a_args, "peripheryTaaEnabled", a_request.peripheryTaaEnabled, a_error) ||
-			!TryParseFoveationCenterOrigin(a_args, a_request.centerOrigin, a_error) ||
-			!TryParseFoveationHorizontalAnchor(a_args, a_request.horizontalAnchor, a_error) ||
 			!TryParseFoveationFloat(a_args, "fovOnlyCenterScale", kCenterScaleRequestMin, kCenterScaleRequestMax, a_request.fovOnlyCenterScale, a_error) ||
 			!TryParseFoveationFloat(a_args, "peripheryTaaCenterScale", kCenterScaleRequestMin, kCenterScaleRequestMax, a_request.peripheryTaaCenterScale, a_error) ||
 			!TryParseFoveationFloat(a_args, "peripheryTaaOuterScale", kPeripheryTAAOuterScaleRequestMin, kPeripheryTAAOuterScaleRequestMax, a_request.peripheryTaaOuterScale, a_error) ||
@@ -8160,10 +7903,8 @@ namespace
 			!TryParseFoveationFloat(a_args, "leftEyeOffsetY", kManualOffsetRequestMin, kManualOffsetRequestMax, a_request.leftEyeOffsetY, a_error) ||
 			!TryParseFoveationFloat(a_args, "rightEyeOffsetX", kManualOffsetRequestMin, kManualOffsetRequestMax, a_request.rightEyeOffsetX, a_error) ||
 			!TryParseFoveationFloat(a_args, "rightEyeOffsetY", kManualOffsetRequestMin, kManualOffsetRequestMax, a_request.rightEyeOffsetY, a_error) ||
-			!TryParseFoveationFloat(a_args, "fovOnlyBlendFeather", kBlendFeatherRequestMin, kBlendFeatherRequestMax, a_request.fovOnlyBlendFeather, a_error) ||
 			!TryParseFoveationFloat(a_args, "peripheryTaaBlendFeather", kBlendFeatherRequestMin, kBlendFeatherRequestMax, a_request.peripheryTaaBlendFeather, a_error) ||
 			!TryParseFoveationFloat(a_args, "neuralFinalLdrBlendFeather", kBlendFeatherRequestMin, kBlendFeatherRequestMax, a_request.neuralFinalLdrBlendFeather, a_error) ||
-			!TryParseFoveationGuardBand(a_args, a_request.reconstructionGuardBandPixels, a_error) ||
 			!TryParseFoveationBoolean(a_args, "maskVisualization", a_request.maskVisualization, a_error)) {
 			return false;
 		}
@@ -8186,10 +7927,6 @@ namespace
 			a_settings.foveatedVendorDispatch = *a_request.foveatedEnabled;
 		if (a_request.peripheryTaaEnabled)
 			a_settings.periphery_taa_enable = *a_request.peripheryTaaEnabled;
-		if (a_request.centerOrigin)
-			a_settings.foveatedCenterOrigin = static_cast<uint>(*a_request.centerOrigin);
-		if (a_request.horizontalAnchor)
-			a_settings.foveatedHorizontalAnchor = static_cast<uint>(*a_request.horizontalAnchor);
 		if (a_request.fovOnlyCenterScale)
 			a_settings.foveatedCenterArea = *a_request.fovOnlyCenterScale;
 		if (a_request.peripheryTaaCenterScale)
@@ -8206,14 +7943,10 @@ namespace
 			a_settings.foveatedRightEyeMaskOffsetX = *a_request.rightEyeOffsetX;
 		if (a_request.rightEyeOffsetY)
 			a_settings.foveatedRightEyeMaskOffsetY = *a_request.rightEyeOffsetY;
-		if (a_request.fovOnlyBlendFeather)
-			a_settings.foveatedCenterBlendFeather = *a_request.fovOnlyBlendFeather;
 		if (a_request.peripheryTaaBlendFeather)
 			a_settings.periphery_taa_center_blend_feather = *a_request.peripheryTaaBlendFeather;
 		if (a_request.neuralFinalLdrBlendFeather)
 			a_settings.neuralRenderingBlendFeather = *a_request.neuralFinalLdrBlendFeather;
-		if (a_request.reconstructionGuardBandPixels)
-			a_settings.foveatedReconstructionGuardBandPixels = *a_request.reconstructionGuardBandPixels;
 		if (a_request.maskVisualization)
 			a_settings.foveatedPeripheryMaskVisualization = *a_request.maskVisualization;
 	}
@@ -8224,8 +7957,6 @@ namespace
 	{
 		return a_left.foveatedVendorDispatch == a_right.foveatedVendorDispatch &&
 		       a_left.periphery_taa_enable == a_right.periphery_taa_enable &&
-		       a_left.foveatedCenterOrigin == a_right.foveatedCenterOrigin &&
-		       a_left.foveatedHorizontalAnchor == a_right.foveatedHorizontalAnchor &&
 		       a_left.foveatedCenterArea == a_right.foveatedCenterArea &&
 		       a_left.periphery_taa_center_area == a_right.periphery_taa_center_area &&
 		       a_left.periphery_taa_outer_scale == a_right.periphery_taa_outer_scale &&
@@ -8234,10 +7965,8 @@ namespace
 		       a_left.foveatedLeftEyeMaskOffsetY == a_right.foveatedLeftEyeMaskOffsetY &&
 		       a_left.foveatedRightEyeMaskOffsetX == a_right.foveatedRightEyeMaskOffsetX &&
 		       a_left.foveatedRightEyeMaskOffsetY == a_right.foveatedRightEyeMaskOffsetY &&
-		       a_left.foveatedCenterBlendFeather == a_right.foveatedCenterBlendFeather &&
 		       a_left.periphery_taa_center_blend_feather == a_right.periphery_taa_center_blend_feather &&
 		       a_left.neuralRenderingBlendFeather == a_right.neuralRenderingBlendFeather &&
-		       a_left.foveatedReconstructionGuardBandPixels == a_right.foveatedReconstructionGuardBandPixels &&
 		       a_left.foveatedPeripheryMaskVisualization == a_right.foveatedPeripheryMaskVisualization;
 	}
 
@@ -8550,58 +8279,6 @@ namespace
 					static_cast<uint32_t>(values.size()));
 				break;
 			}
-		case FoveationCycleControl::CenterOrigin:
-			{
-				constexpr std::array values{
-					FoveatedCenterAlignment::CenterOrigin::ImageCenter,
-					FoveatedCenterAlignment::CenterOrigin::OpticalCenter,
-				};
-				const auto current =
-					static_cast<FoveatedCenterAlignment::CenterOrigin>(
-						settings.foveatedCenterOrigin);
-				FoveatedCenterAlignment::CenterOrigin selected{};
-				if (!SelectExactCycleValue(
-						current,
-						values,
-						a_requestedIndex,
-						selected,
-						selectedIndex,
-						error)) {
-					break;
-				}
-				request.centerOrigin = selected;
-				recordSelection(
-					FoveatedCenterAlignment::GetCenterOriginName(current),
-					FoveatedCenterAlignment::GetCenterOriginName(selected),
-					static_cast<uint32_t>(values.size()));
-				break;
-			}
-		case FoveationCycleControl::HorizontalAnchor:
-			{
-				constexpr std::array values{
-					FoveatedCenterAlignment::HorizontalAnchor::Symmetric,
-					FoveatedCenterAlignment::HorizontalAnchor::Outward,
-				};
-				const auto current =
-					static_cast<FoveatedCenterAlignment::HorizontalAnchor>(
-						settings.foveatedHorizontalAnchor);
-				FoveatedCenterAlignment::HorizontalAnchor selected{};
-				if (!SelectExactCycleValue(
-						current,
-						values,
-						a_requestedIndex,
-						selected,
-						selectedIndex,
-						error)) {
-					break;
-				}
-				request.horizontalAnchor = selected;
-				recordSelection(
-					FoveatedCenterAlignment::GetHorizontalAnchorName(current),
-					FoveatedCenterAlignment::GetHorizontalAnchorName(selected),
-					static_cast<uint32_t>(values.size()));
-				break;
-			}
 		case FoveationCycleControl::FovOnlyCenterScale:
 			{
 				float selected = 0.0f;
@@ -8732,15 +8409,12 @@ namespace
 					static_cast<uint32_t>(kManualOffsetCycleValues.size()));
 				break;
 			}
-		case FoveationCycleControl::FovOnlyBlendFeather:
 		case FoveationCycleControl::PeripheryTAABlendFeather:
 		case FoveationCycleControl::NeuralFinalLdrBlendFeather:
 			{
-				float current = settings.foveatedCenterBlendFeather;
-				if (a_control == FoveationCycleControl::PeripheryTAABlendFeather)
-					current = settings.periphery_taa_center_blend_feather;
-				else if (a_control == FoveationCycleControl::NeuralFinalLdrBlendFeather)
-					current = settings.neuralRenderingBlendFeather;
+				const float current = a_control == FoveationCycleControl::PeripheryTAABlendFeather ?
+				                          settings.periphery_taa_center_blend_feather :
+				                          settings.neuralRenderingBlendFeather;
 				float selected = 0.0f;
 				if (!SelectFloatCycleValue(
 						current,
@@ -8751,33 +8425,13 @@ namespace
 						error)) {
 					break;
 				}
-				if (a_control == FoveationCycleControl::FovOnlyBlendFeather)
-					request.fovOnlyBlendFeather = selected;
-				else if (a_control == FoveationCycleControl::PeripheryTAABlendFeather)
+				if (a_control == FoveationCycleControl::PeripheryTAABlendFeather)
 					request.peripheryTaaBlendFeather = selected;
 				else
 					request.neuralFinalLdrBlendFeather = selected;
 				recordSelection(
 					current, selected,
 					static_cast<uint32_t>(kBlendFeatherCycleValues.size()));
-				break;
-			}
-		case FoveationCycleControl::ReconstructionGuardBandPixels:
-			{
-				uint32_t selected = 0;
-				if (!SelectExactCycleValue(
-						settings.foveatedReconstructionGuardBandPixels,
-						kGuardBandCycleValues,
-						a_requestedIndex,
-						selected,
-						selectedIndex,
-						error)) {
-					break;
-				}
-				request.reconstructionGuardBandPixels = selected;
-				recordSelection(
-					settings.foveatedReconstructionGuardBandPixels, selected,
-					static_cast<uint32_t>(kGuardBandCycleValues.size()));
 				break;
 			}
 		case FoveationCycleControl::MaskVisualization:

@@ -51,9 +51,6 @@ struct FoveatedRegionPlan
 
 	struct Eye
 	{
-		// Blend-support bounds are never enlarged by the reconstruction guard.
-		Rect visibleOutput;
-		// Private vendor/NR work bounds may extend beyond visibleOutput.
 		Rect output;
 		Rect input;
 		Rect centerInteriorOutput;
@@ -67,7 +64,7 @@ struct FoveatedRegionPlan
 
 		[[nodiscard]] bool IsValid() const
 		{
-			return visibleOutput.IsValid() && output.IsValid() && input.IsValid();
+			return output.IsValid() && input.IsValid();
 		}
 	};
 
@@ -78,7 +75,6 @@ struct FoveatedRegionPlan
 	bool isVR = false;
 	float centerScale = FoveatedCommon::kCenterScaleMax;
 	float centerFeather = FoveatedCommon::kCenterFeather;
-	uint32_t reconstructionGuardBandPixels = 0;
 	float centerHorizontalScale = 1.0f;
 	float peripheryTAAOuterScale = 0.0f;
 	std::array<Eye, 2> eyes{};
@@ -100,7 +96,6 @@ struct FoveatedRegionPlan
 		const std::array<float2, 2>& a_centerOffsets,
 		uint32_t a_inputPadding = 0u,
 		float a_peripheryTAAOuterScale = 0.0f,
-		uint32_t a_reconstructionGuardBandPixels = 0u,
 		uint32_t a_centerUnderlayHolePadding = kDefaultUnderlayHolePadding,
 		uint32_t a_peripheryHistoryPadding = kDefaultPeripheryHistoryPadding,
 		uint32_t a_peripheryInputPadding = kDefaultPeripheryInputPadding)
@@ -113,7 +108,6 @@ struct FoveatedRegionPlan
 		plan.isVR = a_isVR;
 		plan.centerScale = FoveatedCommon::ClampCenterScale(a_centerScale);
 		plan.centerFeather = std::isfinite(a_centerFeather) ? std::max(0.0f, a_centerFeather) : FoveatedCommon::kCenterFeather;
-		plan.reconstructionGuardBandPixels = a_reconstructionGuardBandPixels;
 		plan.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_centerHorizontalScale);
 		plan.peripheryTAAOuterScale = std::isfinite(a_peripheryTAAOuterScale) && a_peripheryTAAOuterScale > 0.0f ?
 		                                  std::max(plan.centerScale, FoveatedCommon::ClampCenterScale(a_peripheryTAAOuterScale)) :
@@ -127,18 +121,13 @@ struct FoveatedRegionPlan
 			auto& eye = plan.eyes[eyeIndex];
 			eye.centerOffset = a_centerOffsets[eyeIndex];
 
-			eye.visibleOutput = BuildCenteredOutputRect(
+			eye.output = BuildCenteredOutputRect(
 				a_outputWidthPerEye,
 				a_outputHeight,
 				plan.centerScale,
 				plan.centerFeather,
 				plan.centerHorizontalScale,
 				eye.centerOffset);
-			eye.output = ExpandRect(
-				eye.visibleOutput,
-				plan.reconstructionGuardBandPixels,
-				a_outputWidthPerEye,
-				a_outputHeight);
 			if (!eye.output.IsValid())
 				continue;
 

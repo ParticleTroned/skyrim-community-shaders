@@ -390,11 +390,7 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingUICorrection)           \
 	OP(neuralRenderingSingleSubrectScale)     \
 	OP(neuralRenderingBlendFeather)           \
-	OP(foveatedCenterOrigin)                  \
-	OP(foveatedHorizontalAnchor)              \
 	OP(foveatedCenterArea)                    \
-	OP(foveatedCenterBlendFeather)            \
-	OP(foveatedReconstructionGuardBandPixels) \
 	OP(foveatedCenterHorizontalScale)         \
 	OP(foveatedLeftEyeMaskOffsetX)            \
 	OP(foveatedLeftEyeMaskOffsetY)            \
@@ -686,8 +682,6 @@ namespace
 		Upscaling::kFoveatedBlendFeatherMin;
 	constexpr float kPeripheryTAACenterBlendFeatherMax =
 		Upscaling::kFoveatedBlendFeatherMax;
-	constexpr uint32_t kFoveatedReconstructionGuardBandMax =
-		Upscaling::kFoveatedReconstructionGuardBandMax;
 	constexpr float kDynamicResolutionUpscalingScaleThreshold = 0.99f;
 	// An active-to-native relatch keeps the last known-good presentation latch
 	// until physical native targets converge. Only the synchronous engine-create
@@ -905,10 +899,10 @@ namespace
 	}
 
 	constexpr uint32_t kVRRaceSexPostClosePresentationTailFrames = 60u;
-	constexpr float kFoveatedMaskOffsetAdjustMin =
-		FoveatedCenterAlignment::kManualOffsetMin;
-	constexpr float kFoveatedMaskOffsetAdjustMax =
-		FoveatedCenterAlignment::kManualOffsetMax;
+	constexpr float kFoveatedMaskOffsetAdjustMin = Upscaling::kFoveatedManualOffsetMin;
+	constexpr float kFoveatedMaskOffsetAdjustMax = Upscaling::kFoveatedManualOffsetMax;
+	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
+	constexpr float kFoveatedMaskOffsetResolvedMax = 0.30f;
 	enum class VRStartupLoadKind : uint32_t
 	{
 		Unknown,
@@ -3507,24 +3501,6 @@ namespace
 		return std::clamp(value, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax);
 	}
 
-	uint ClampFoveatedCenterOriginUInt(uint value)
-	{
-		const auto origin =
-			static_cast<FoveatedCenterAlignment::CenterOrigin>(value);
-		return static_cast<uint>(FoveatedCenterAlignment::IsValid(origin) ?
-									 origin :
-									 FoveatedCenterAlignment::kCompatibilityCenterOrigin);
-	}
-
-	uint ClampFoveatedHorizontalAnchorUInt(uint value)
-	{
-		const auto anchor =
-			static_cast<FoveatedCenterAlignment::HorizontalAnchor>(value);
-		return static_cast<uint>(FoveatedCenterAlignment::IsValid(anchor) ?
-									 anchor :
-									 FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
-	}
-
 	uint ClampToggleUInt(uint value)
 	{
 		return std::min<uint>(value, 1u);
@@ -4940,11 +4916,6 @@ namespace
 		return ClampPeripheryTAACenterBlendFeather(value);
 	}
 
-	uint32_t ClampFoveatedReconstructionGuardBandPixels(uint32_t value)
-	{
-		return std::min(value, kFoveatedReconstructionGuardBandMax);
-	}
-
 	float GetNormalFoveatedBlendFeather(
 		const Upscaling::Settings& settings,
 		bool usePeripheryTAAPath)
@@ -4952,8 +4923,7 @@ namespace
 		return usePeripheryTAAPath ?
 		           ClampPeripheryTAACenterBlendFeather(
 					   settings.periphery_taa_center_blend_feather) :
-		           ClampFoveatedBlendFeather(
-					   settings.foveatedCenterBlendFeather);
+		           FoveatedCommon::kCenterFeather;
 	}
 
 	bool UsesFinalLdrNeuralBlend(const Upscaling::Settings& settings)
@@ -5128,16 +5098,7 @@ namespace
 		// Feature 18 on its known-working automatic-mask invocation.
 		settings.neuralRenderingAutoMask = true;
 		settings.neuralRenderingUICorrection = false;
-		settings.foveatedCenterOrigin =
-			ClampFoveatedCenterOriginUInt(settings.foveatedCenterOrigin);
-		settings.foveatedHorizontalAnchor =
-			ClampFoveatedHorizontalAnchorUInt(settings.foveatedHorizontalAnchor);
 		settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
-		settings.foveatedCenterBlendFeather =
-			ClampFoveatedBlendFeather(settings.foveatedCenterBlendFeather);
-		settings.foveatedReconstructionGuardBandPixels =
-			ClampFoveatedReconstructionGuardBandPixels(
-				settings.foveatedReconstructionGuardBandPixels);
 		settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 		settings.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
 		settings.foveatedLeftEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY);
@@ -5324,9 +5285,6 @@ namespace
 		};
 
 		return nearlyEqual(settings.foveatedCenterArea, defaults.foveatedCenterArea) &&
-		       settings.foveatedCenterOrigin == defaults.foveatedCenterOrigin &&
-		       settings.foveatedHorizontalAnchor == defaults.foveatedHorizontalAnchor &&
-		       nearlyEqual(settings.foveatedCenterBlendFeather, defaults.foveatedCenterBlendFeather) &&
 		       nearlyEqual(settings.foveatedCenterHorizontalScale, defaults.foveatedCenterHorizontalScale) &&
 		       nearlyEqual(settings.foveatedLeftEyeMaskOffsetX, defaults.foveatedLeftEyeMaskOffsetX) &&
 		       nearlyEqual(settings.foveatedLeftEyeMaskOffsetY, defaults.foveatedLeftEyeMaskOffsetY) &&
@@ -5465,13 +5423,7 @@ namespace
 			NeuralRendering::CharacterDebugView::Off);
 		settings.neuralCharacterMaskTestMode = static_cast<uint>(
 			NeuralRendering::CharacterMaskTestMode::Authored);
-		settings.foveatedCenterOrigin = static_cast<uint>(
-			FoveatedCenterAlignment::kCompatibilityCenterOrigin);
-		settings.foveatedHorizontalAnchor = static_cast<uint>(
-			FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 		settings.foveatedCenterArea = 0.3f;
-		settings.foveatedCenterBlendFeather = FoveatedCommon::kCenterFeather;
-		settings.foveatedReconstructionGuardBandPixels = 0u;
 		settings.foveatedCenterHorizontalScale = 1.0f;
 		settings.foveatedLeftEyeMaskOffsetX = 0.0f;
 		settings.foveatedLeftEyeMaskOffsetY = 0.0f;
@@ -5530,11 +5482,7 @@ namespace
 		o_json.erase("neuralCharacterDepthThreshold");
 		o_json.erase("neuralCharacterDebugView");
 		o_json.erase("neuralCharacterMaskTestMode");
-		o_json.erase("foveatedCenterOrigin");
-		o_json.erase("foveatedHorizontalAnchor");
 		o_json.erase("foveatedCenterArea");
-		o_json.erase("foveatedCenterBlendFeather");
-		o_json.erase("foveatedReconstructionGuardBandPixels");
 		o_json.erase("foveatedCenterHorizontalScale");
 		o_json.erase("foveatedLeftEyeMaskOffsetX");
 		o_json.erase("foveatedLeftEyeMaskOffsetY");
@@ -6595,14 +6543,10 @@ namespace
 			add(static_cast<uint64_t>(NeuralRendering::ClampInsertionPoint(
 				a_settings.neuralRenderingInsertionPoint)));
 		}
-		add(ClampFoveatedCenterOriginUInt(a_settings.foveatedCenterOrigin));
-		add(ClampFoveatedHorizontalAnchorUInt(a_settings.foveatedHorizontalAnchor));
 		if (UsesFinalLdrNeuralBlend(a_settings)) {
 			addFloat(ClampFoveatedBlendFeather(
 				a_settings.neuralRenderingBlendFeather));
 		}
-		add(ClampFoveatedReconstructionGuardBandPixels(
-			a_settings.foveatedReconstructionGuardBandPixels));
 		addFloat(ClampFoveatedCenterHorizontalScale(a_settings.foveatedCenterHorizontalScale));
 		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedLeftEyeMaskOffsetX));
 		addFloat(ClampFoveatedMaskOffsetAdjustment(a_settings.foveatedLeftEyeMaskOffsetY));
@@ -6615,17 +6559,12 @@ namespace
 			addFloat(ClampPeripheryTAAOuterScaleForCenter(
 				a_settings.periphery_taa_outer_scale,
 				centerArea));
-			if (a_settings.foveatedPeripheryMaskVisualization) {
-				addFloat(ClampFoveatedBlendFeather(
-					a_settings.foveatedCenterBlendFeather));
-			} else {
+			if (!a_settings.foveatedPeripheryMaskVisualization) {
 				addFloat(ClampPeripheryTAACenterBlendFeather(
 					a_settings.periphery_taa_center_blend_feather));
 			}
 		} else {
 			addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
-			addFloat(ClampFoveatedBlendFeather(
-				a_settings.foveatedCenterBlendFeather));
 		}
 		return hash;
 	}
@@ -6698,11 +6637,6 @@ namespace
 			a_settings.foveatedPeripheryMaskVisualization;
 		add(visualizeMask);
 
-		add(ClampFoveatedReconstructionGuardBandPixels(
-			a_settings.foveatedReconstructionGuardBandPixels));
-		add(ClampFoveatedCenterOriginUInt(a_settings.foveatedCenterOrigin));
-		add(ClampFoveatedHorizontalAnchorUInt(
-			a_settings.foveatedHorizontalAnchor));
 		addFloat(ClampFoveatedCenterHorizontalScale(
 			a_settings.foveatedCenterHorizontalScale));
 		addFloat(ClampFoveatedMaskOffsetAdjustment(
@@ -6726,8 +6660,6 @@ namespace
 				centerArea));
 		} else {
 			addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
-			addFloat(ClampFoveatedBlendFeather(
-				a_settings.foveatedCenterBlendFeather));
 		}
 		return hash;
 	}
@@ -6776,8 +6708,6 @@ namespace
 				a_upscaling.IsPeripheryTAAPathActive(a_upscaleMethod);
 			add(peripheryTAAEnabled);
 			add(peripheryTAAPathActive);
-			add(ClampFoveatedCenterOriginUInt(settings.foveatedCenterOrigin));
-			add(ClampFoveatedHorizontalAnchorUInt(settings.foveatedHorizontalAnchor));
 			addFloat(GetNormalFoveatedBlendFeather(
 				settings,
 				peripheryTAAPathActive));
@@ -6786,8 +6716,6 @@ namespace
 				addFloat(ClampFoveatedBlendFeather(
 					settings.neuralRenderingBlendFeather));
 			}
-			add(ClampFoveatedReconstructionGuardBandPixels(
-				settings.foveatedReconstructionGuardBandPixels));
 			addFloat(ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale));
 			addFloat(ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX));
 			addFloat(ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY));
@@ -18761,40 +18689,6 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::TextUnformatted("Upscaling FOV Controls");
 
-	const char* centerOriginLabels[] = {
-		"Image Center (Compatibility)",
-		"Optical Center"
-	};
-	int centerOrigin = static_cast<int>(settings.foveatedCenterOrigin);
-	if (ImGui::Combo(
-			"FOV Center Origin",
-			&centerOrigin,
-			centerOriginLabels,
-			static_cast<int>(std::size(centerOriginLabels)))) {
-		settings.foveatedCenterOrigin = static_cast<uint>(centerOrigin);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Image Center preserves the original fixed mask placement.");
-		ImGui::TextUnformatted("Optical Center aligns each eye to its asymmetric HMD projection.");
-	}
-
-	const char* horizontalAnchorLabels[] = {
-		"Symmetric",
-		"Outward (Compatibility)"
-	};
-	int horizontalAnchor = static_cast<int>(settings.foveatedHorizontalAnchor);
-	if (ImGui::Combo(
-			"Horizontal Expansion Anchor",
-			&horizontalAnchor,
-			horizontalAnchorLabels,
-			static_cast<int>(std::size(horizontalAnchorLabels)))) {
-		settings.foveatedHorizontalAnchor = static_cast<uint>(horizontalAnchor);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Symmetric widens both eye masks around their selected center.");
-		ImGui::TextUnformatted("Outward also shifts the masks apart, preserving the original behavior.");
-	}
-
 	{
 		auto areaGuard = Util::DisableGuard(settings.periphery_taa_enable);
 		ImGui::SliderFloat("FOV Only Visible Scale", &settings.foveatedCenterArea, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
@@ -18810,45 +18704,6 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 		}
 	}
 	settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
-	{
-		auto featherGuard = Util::DisableGuard(settings.periphery_taa_enable);
-		ImGui::SliderFloat(
-			"FOV Only Blend Feather",
-			&settings.foveatedCenterBlendFeather,
-			kPeripheryTAACenterBlendFeatherMin,
-			kPeripheryTAACenterBlendFeatherMax,
-			"%.3f");
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted(
-			"Softens the normal DLSS/FSR center boundary in FOV-only mode.");
-		ImGui::TextUnformatted(
-			"FOV + TAA uses its separate Center Blend/TAA Transition control.");
-	}
-	settings.foveatedCenterBlendFeather =
-		ClampFoveatedBlendFeather(settings.foveatedCenterBlendFeather);
-
-	int reconstructionGuardBandPixels = static_cast<int>(
-		settings.foveatedReconstructionGuardBandPixels);
-	if (ImGui::SliderInt(
-			"Reconstruction Guard Band",
-			&reconstructionGuardBandPixels,
-			0,
-			static_cast<int>(kFoveatedReconstructionGuardBandMax),
-			"%d px")) {
-		settings.foveatedReconstructionGuardBandPixels =
-			static_cast<uint32_t>(std::max(reconstructionGuardBandPixels, 0));
-	}
-	settings.foveatedReconstructionGuardBandPixels =
-		ClampFoveatedReconstructionGuardBandPixels(
-			settings.foveatedReconstructionGuardBandPixels);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted(
-			"Expands private vendor work beyond the visible blend boundary.");
-		ImGui::TextUnformatted(
-			"Final LDR NR reads same-domain surrounding eye pixels; guard pixels are never composited directly.");
-	}
-
 	ImGui::SliderFloat("Expand FOV Scale R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Widens the upscaling center mask horizontally.");
@@ -18880,19 +18735,6 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	settings.foveatedLeftEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY);
 	settings.foveatedRightEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetX);
 	settings.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetY);
-	const auto centerAlignment = GetResolvedFoveatedCenterAlignment(
-		settings.periphery_taa_enable);
-	ImGui::TextDisabled(
-		"Resolved offsets: L %.3f, %.3f (%s) | R %.3f, %.3f (%s)",
-		centerAlignment.eyes[0].finalOffset.x,
-		centerAlignment.eyes[0].finalOffset.y,
-		FoveatedCenterAlignment::GetOpticalCenterSourceName(
-			centerAlignment.eyes[0].source),
-		centerAlignment.eyes[1].finalOffset.x,
-		centerAlignment.eyes[1].finalOffset.y,
-		FoveatedCenterAlignment::GetOpticalCenterSourceName(
-			centerAlignment.eyes[1].source));
-
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 	ImGui::Separator();
 	ImGui::TextUnformatted("Upscaling FOV + TAA Settings");
@@ -22729,9 +22571,7 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 			profile.centerHorizontalScale,
 			centerOffsets,
 			0u,
-			peripheryTAAOuterScale,
-			ClampFoveatedReconstructionGuardBandPixels(
-				settings.foveatedReconstructionGuardBandPixels));
+			peripheryTAAOuterScale);
 	}
 
 	runtimeResolutionPlan = plan;
@@ -40668,12 +40508,9 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 
 	struct FoveatedLayoutKey
 	{
-		uint32_t centerOrigin = 0;
-		uint32_t horizontalAnchor = 0;
 		int32_t centerScaleQ = 0;
 		int32_t centerHorizontalScaleQ = 0;
 		int32_t centerFeatherQ = 0;
-		uint32_t reconstructionGuardBandPixels = 0;
 		std::array<int32_t, 4> centerOffsetQ{};
 	};
 
@@ -40688,16 +40525,9 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		const auto centerOffsets = GetResolvedFoveatedMaskCenterOffsets(usePeripheryTAAProfile);
 
 		FoveatedLayoutKey key{};
-		key.centerOrigin = ClampFoveatedCenterOriginUInt(
-			settings.foveatedCenterOrigin);
-		key.horizontalAnchor = ClampFoveatedHorizontalAnchorUInt(
-			settings.foveatedHorizontalAnchor);
 		key.centerScaleQ = QuantizePeripheryTAATileParam(profile.centerScale);
 		key.centerHorizontalScaleQ = QuantizePeripheryTAATileParam(profile.centerHorizontalScale);
 		key.centerFeatherQ = QuantizePeripheryTAATileParam(centerFeather);
-		key.reconstructionGuardBandPixels =
-			ClampFoveatedReconstructionGuardBandPixels(
-				settings.foveatedReconstructionGuardBandPixels);
 		key.centerOffsetQ = {
 			QuantizePeripheryTAATileParam(centerOffsets[0].x),
 			QuantizePeripheryTAATileParam(centerOffsets[0].y),
@@ -40774,13 +40604,9 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	const bool foveatedDispatchToggleChanged = previousFoveatedDispatch != foveatedDispatchCurrent;
 	const bool foveatedGeometryChanged =
 		compareFoveatedScale &&
-		(previousFoveatedLayout.centerOrigin != foveatedLayoutCurrent.centerOrigin ||
-			previousFoveatedLayout.horizontalAnchor != foveatedLayoutCurrent.horizontalAnchor ||
-			previousFoveatedLayout.centerScaleQ != foveatedLayoutCurrent.centerScaleQ ||
+		(previousFoveatedLayout.centerScaleQ != foveatedLayoutCurrent.centerScaleQ ||
 			previousFoveatedLayout.centerHorizontalScaleQ != foveatedLayoutCurrent.centerHorizontalScaleQ ||
 			previousFoveatedLayout.centerFeatherQ != foveatedLayoutCurrent.centerFeatherQ ||
-			previousFoveatedLayout.reconstructionGuardBandPixels !=
-				foveatedLayoutCurrent.reconstructionGuardBandPixels ||
 			previousFoveatedLayout.centerOffsetQ != foveatedLayoutCurrent.centerOffsetQ);
 	const bool foveatedDispatchChanged = foveatedDispatchToggleChanged || foveatedGeometryChanged;
 	const bool peripheryTAAChanged = previousPeripheryTAA != peripheryTAACurrent;
@@ -41677,64 +41503,6 @@ float Upscaling::GetActiveFoveatedCenterHorizontalScale() const
 	return GetActiveUpscalingFoveatedProfile().centerHorizontalScale;
 }
 
-FoveatedCenterAlignment::StereoDiagnostics Upscaling::GetResolvedFoveatedCenterAlignment(
-	bool usePeripheryTAAProfile) const
-{
-	const auto params = GetFoveatedMaskProfileParams(
-		settings, usePeripheryTAAProfile);
-	FoveatedCenterAlignment::Settings alignmentSettings{};
-	alignmentSettings.origin =
-		static_cast<FoveatedCenterAlignment::CenterOrigin>(
-			settings.foveatedCenterOrigin);
-	alignmentSettings.anchor =
-		static_cast<FoveatedCenterAlignment::HorizontalAnchor>(
-			settings.foveatedHorizontalAnchor);
-	alignmentSettings.centerScale = params.centerScale;
-	alignmentSettings.centerHorizontalScale = params.centerHorizontalScale;
-	alignmentSettings.manualOffsets[0] = {
-		params.leftOffsetX,
-		params.leftOffsetY
-	};
-	alignmentSettings.manualOffsets[1] = {
-		params.rightOffsetX,
-		params.rightOffsetY
-	};
-
-	std::array<FoveatedCenterAlignment::EyeOpticalInputs, 2> opticalInputs{};
-	if (globals::game::isVR) {
-		for (uint32_t eyeIndex = 0; eyeIndex < opticalInputs.size(); ++eyeIndex) {
-			const auto projection = globals::game::frameBufferCached
-			                            .GetCameraProjUnjittered(eyeIndex)
-			                            .Transpose();
-			auto& projectionInput = opticalInputs[eyeIndex].projection;
-			projectionInput.available = true;
-			projectionInput.values = {
-				projection._11, projection._12, projection._13, projection._14,
-				projection._21, projection._22, projection._23, projection._24,
-				projection._31, projection._32, projection._33, projection._34,
-				projection._41, projection._42, projection._43, projection._44
-			};
-		}
-
-		if (auto* openVR = RE::BSOpenVR::GetSingleton();
-			openVR && openVR->vrSystem) {
-			for (uint32_t eyeIndex = 0; eyeIndex < opticalInputs.size(); ++eyeIndex) {
-				auto& tangents = opticalInputs[eyeIndex].tangents;
-				tangents.available = true;
-				openVR->vrSystem->GetProjectionRaw(
-					eyeIndex == 0 ? vr::Eye_Left : vr::Eye_Right,
-					&tangents.left,
-					&tangents.right,
-					&tangents.bottom,
-					&tangents.top);
-			}
-		}
-	}
-
-	return FoveatedCenterAlignment::ResolveStereo(
-		alignmentSettings, opticalInputs);
-}
-
 float2 Upscaling::GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const
 {
 	(void)eyeIndex;
@@ -41743,26 +41511,29 @@ float2 Upscaling::GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const
 
 float2 Upscaling::GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile) const
 {
-	const auto alignment = GetResolvedFoveatedCenterAlignment(
-		usePeripheryTAAProfile);
-	if (eyeIndex >= alignment.eyes.size())
-		return { 0.0f, 0.0f };
-	const auto& resolved = alignment.eyes[eyeIndex].finalOffset;
-	return { resolved.x, resolved.y };
+	float2 resolved = GetDefaultFoveatedMaskCenterOffset(eyeIndex);
+	const bool isLeftEye = eyeIndex == 0;
+	const auto params = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
+	const float userAdjustX = isLeftEye ? params.leftOffsetX : params.rightOffsetX;
+	const float userAdjustY = isLeftEye ? params.leftOffsetY : params.rightOffsetY;
+	resolved.x += ClampFoveatedMaskOffsetAdjustment(userAdjustX);
+	resolved.y += ClampFoveatedMaskOffsetAdjustment(userAdjustY);
+
+	if (globals::game::isVR) {
+		const float centerScale = params.centerScale;
+		const float centerHorizontalScale = params.centerHorizontalScale;
+		const float outwardExpansion = centerScale * 0.5f * std::max(0.0f, centerHorizontalScale - 1.0f);
+		resolved.x += isLeftEye ? -outwardExpansion : outwardExpansion;
+	}
+
+	resolved.x = std::clamp(resolved.x, kFoveatedMaskOffsetResolvedMin, kFoveatedMaskOffsetResolvedMax);
+	resolved.y = std::clamp(resolved.y, kFoveatedMaskOffsetResolvedMin, kFoveatedMaskOffsetResolvedMax);
+	return resolved;
 }
 
 std::array<float2, 2> Upscaling::GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile) const
 {
-	const auto alignment = GetResolvedFoveatedCenterAlignment(
-		usePeripheryTAAProfile);
-	return {
-		float2{
-			alignment.eyes[0].finalOffset.x,
-			alignment.eyes[0].finalOffset.y },
-		float2{
-			alignment.eyes[1].finalOffset.x,
-			alignment.eyes[1].finalOffset.y }
-	};
+	return { GetResolvedFoveatedMaskCenterOffset(0, usePeripheryTAAProfile), GetResolvedFoveatedMaskCenterOffset(1, usePeripheryTAAProfile) };
 }
 
 std::array<float2, 2> Upscaling::GetActiveResolvedFoveatedMaskCenterOffsets() const
@@ -41831,9 +41602,6 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 	}
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
-	const uint32_t reconstructionGuardBandPixels =
-		ClampFoveatedReconstructionGuardBandPixels(
-			settings.foveatedReconstructionGuardBandPixels);
 	const float taaOuterScale = usePeripheryTAAProfile ?
 	                                ClampPeripheryTAAOuterScaleForCenter(
 										settings.periphery_taa_outer_scale,
@@ -41855,7 +41623,6 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 		cache.isVR != isVR ||
 		std::abs(cache.centerScale - centerScale) > 1e-6f ||
 		std::abs(cache.centerFeather - centerFeather) > 1e-6f ||
-		cache.reconstructionGuardBandPixels != reconstructionGuardBandPixels ||
 		std::abs(cache.centerHorizontalScale - centerHorizontalScale) > 1e-6f ||
 		std::abs(cache.peripheryTAAOuterScale - taaOuterScale) > 1e-6f ||
 		std::abs(cache.centerOffsets[0].x - centerOffsets[0].x) > 1e-6f ||
@@ -41873,7 +41640,6 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 	cache.isVR = isVR;
 	cache.centerScale = centerScale;
 	cache.centerFeather = centerFeather;
-	cache.reconstructionGuardBandPixels = reconstructionGuardBandPixels;
 	cache.centerHorizontalScale = centerHorizontalScale;
 	cache.peripheryTAAOuterScale = taaOuterScale;
 	cache.centerOffsets = centerOffsets;
@@ -41890,8 +41656,7 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 		centerHorizontalScale,
 		centerOffsets,
 		0u,
-		taaOuterScale,
-		reconstructionGuardBandPixels);
+		taaOuterScale);
 	cache.plan = plan;
 
 	auto copyEyeRect = [&](uint32_t eyeIndex) {
@@ -42906,8 +42671,7 @@ bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	const float centerFeather = showThreeZoneMask ?
 	                                ClampPeripheryTAACenterBlendFeather(
 										settings.periphery_taa_center_blend_feather) :
-	                                ClampFoveatedBlendFeather(
-										settings.foveatedCenterBlendFeather);
+	                                FoveatedCommon::kCenterFeather;
 	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, centerScale);
 	cbData.centerAndMask = {
 		centerOffsetX,
@@ -44172,8 +43936,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 	}
 	const float centerBlendFeather = std::isfinite(centerFeather) ?
 	                                     ClampFoveatedBlendFeather(centerFeather) :
-	                                     ClampFoveatedBlendFeather(
-											 settings.foveatedCenterBlendFeather);
+	                                     FoveatedCommon::kCenterFeather;
 
 	const auto routeRole =
 		dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
@@ -44187,7 +43950,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		false,
 		currentFrame);
 	auto blendVisibleOutput =
-		foveatedRectCache.plan.eyes[eyeIndex].visibleOutput;
+		foveatedRectCache.plan.eyes[eyeIndex].output;
 	if (neuralAppliedForComposite && useSubmitNeuralFloatBridge &&
 		!characterVisualIsolation) {
 		const auto computeSubrect = NeuralRendering::BuildCenteredComputeSubrect(
@@ -45053,7 +44816,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			}
 			const auto& rect = foveatedRectCache.rects[eye];
 			auto blendVisibleOutput =
-				foveatedRectCache.plan.eyes[eye].visibleOutput;
+				foveatedRectCache.plan.eyes[eye].output;
 			blendVisibleOutput = RestrictVisibleOutputToComputeSubrect(
 				blendVisibleOutput, rect, neuralArgs[eye].computeSubrect);
 			if (!blendVisibleOutput.IsValid()) {
@@ -46059,7 +45822,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		!params.usePeripheryTAA && !params.visualizeMask && params.centerAlreadyPrepared &&
 		IsNeuralRenderingRequested() && GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution &&
 		!settings.neuralRenderingFovOnly && neuralResult && neuralResult->dlssEvaluated &&
-		eyePlan.visibleOutput.CoversExtent(params.outputWidthPerEye, params.outputHeight) &&
+		eyePlan.output.CoversExtent(params.outputWidthPerEye, params.outputHeight) &&
 		preparedRect.outputOffsetX == 0u && preparedRect.outputOffsetY == 0u &&
 		preparedRect.outputWidth == params.outputWidthPerEye && preparedRect.outputHeight == params.outputHeight &&
 		preparedCenter && preparedCenter->srv &&
@@ -46172,8 +45935,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 
 		const float centerBlendFeather = std::isfinite(params.centerBlendFeather) ?
 		                                     ClampFoveatedBlendFeather(params.centerBlendFeather) :
-		                                     ClampFoveatedBlendFeather(
-												 settings.foveatedCenterBlendFeather);
+		                                     FoveatedCommon::kCenterFeather;
 		const auto routeRole =
 			params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 				NeuralStereoRouteRole::Submit :
@@ -46189,7 +45951,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 			false,
 			frame);
 		auto blendVisibleOutput =
-			foveatedRectCache.plan.eyes[eyeIndex].visibleOutput;
+			foveatedRectCache.plan.eyes[eyeIndex].output;
 		if (useSubmitNeuralFloatOutput && !isolateCharacterOutput) {
 			const auto computeSubrect =
 				NeuralRendering::BuildCenteredComputeSubrect(
@@ -64835,13 +64597,6 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool finalLdrNeuralLayout =
 		foveatedDispatchEnabled && a_upscaleMethod == UpscaleMethod::kDLSS &&
 		UsesFinalLdrNeuralBlend(settings);
-	const uint32_t foveatedReconstructionGuardBandPixels =
-		ClampFoveatedReconstructionGuardBandPixels(
-			settings.foveatedReconstructionGuardBandPixels);
-	const uint32_t foveatedCenterOrigin =
-		ClampFoveatedCenterOriginUInt(settings.foveatedCenterOrigin);
-	const uint32_t foveatedHorizontalAnchor =
-		ClampFoveatedHorizontalAnchorUInt(settings.foveatedHorizontalAnchor);
 	const float peripheryTAACenterBlendFeather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	const float peripheryTAAOuterScale = ClampPeripheryTAAOuterScaleForCenter(
 		settings.periphery_taa_outer_scale,
@@ -64918,12 +64673,9 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 			foveatedDispatchEnabled != previousHistoryFoveatedDispatch ||
 			(compareFoveatedScale && foveatedMaskVisualization !=
 										 previousHistoryFoveatedMaskVisualization) ||
-			(compareFoveatedScale && foveatedCenterOrigin != previousHistoryFoveatedCenterOrigin) ||
-			(compareFoveatedScale && foveatedHorizontalAnchor != previousHistoryFoveatedHorizontalAnchor) ||
 			(compareFoveatedScale && std::abs(foveatedCenterScale - previousHistoryFoveatedCenterScale) > 1e-4f) ||
 			foveatedBlendFeatherChanged ||
 			finalLdrNeuralLayoutChanged ||
-			(compareFoveatedScale && foveatedReconstructionGuardBandPixels != previousHistoryFoveatedReconstructionGuardBandPixels) ||
 			(compareFoveatedScale && std::abs(foveatedCenterHorizontalScale - previousHistoryFoveatedCenterHorizontalScale) > 1e-4f) ||
 			foveatedOffsetsChanged;
 		const bool longFrameGap = globals::game::deltaTime &&
@@ -64977,14 +64729,10 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	previousHistoryInMapMenu = inMapMenu;
 	previousHistoryUpscaleMethod = a_upscaleMethod;
 	previousHistoryFoveatedDispatch = foveatedDispatchEnabled;
-	previousHistoryFoveatedCenterOrigin = foveatedCenterOrigin;
-	previousHistoryFoveatedHorizontalAnchor = foveatedHorizontalAnchor;
 	previousHistoryFoveatedCenterScale = foveatedCenterScale;
 	previousHistoryFoveatedCenterBlendFeather = foveatedCenterBlendFeather;
 	previousHistoryNeuralBlendFeather = neuralBlendFeather;
 	previousHistoryFinalLdrNeuralLayout = finalLdrNeuralLayout;
-	previousHistoryFoveatedReconstructionGuardBandPixels =
-		foveatedReconstructionGuardBandPixels;
 	previousHistoryFoveatedMaskVisualization = foveatedMaskVisualization;
 	previousHistoryFoveatedCenterHorizontalScale = foveatedCenterHorizontalScale;
 	previousHistoryFoveatedCenterOffsets = foveatedCenterOffsets;

@@ -351,11 +351,19 @@ both axes for compatibility. Invalid preset, style, and tuning ranges are
 rejected rather than silently clamped so automated comparisons retain their
 requested identity.
 
+The shared FOV mask uses the same image-centred manual eye offsets and
+outward horizontal expansion as `main-VR`. The same saved geometry therefore
+positions ordinary DLSS/FSR, FOV + TAA and NR; NR does not select another
+origin or expansion rule. The ordinary FOV-only blend uses the common fixed
+feather. NR retains its own final colour blend, and its prepared inputs cover
+that blend when necessary. Full-resolution NR restricted to FOV consumes the
+active shared visible mask, including the outer mask when FOV + TAA is on.
+There is no independent reconstruction margin or persisted placement mode.
+
 `foveation_configure` applies one or more FOV controls atomically on the main
-thread. It covers the master and FOV + TAA switches, center origin and anchor,
-both center scales, the visible outer scale, horizontal expansion, four
-per-eye offsets, all three blend feathers, the reconstruction guard, and mask
-visualization. `foveation_cycle` advances one named axis or selects its exact
+thread. It covers the master and FOV + TAA switches, both center scales,
+the visible outer scale, horizontal expansion, four per-eye offsets, the
+FOV + TAA and NR blend feathers, and mask visualization. `foveation_cycle` advances one named axis or selects its exact
 `valueIndex`; `nr_status.foveation.cycleMatrix` is the authoritative value
 matrix. The outer-scale values are derived from the current center-scale floor.
 Selecting a larger center through the cycle action raises the outer scale in
@@ -367,8 +375,8 @@ a temporal-history reset. `effectiveNotBeforeFrame` records the mutation frame,
 while `measurementSafeFromFrame` identifies the following frame as the first
 unambiguous comparison boundary. Inspect
 `nr_status.foveation.plan` before attributing visual or timing results: it
-reports the actual latched input, visible output, guarded work output, source
-offsets, effective feathers, and `matchesRequestedSettings`. A pending or
+reports the actual latched input and output regions, effective feathers,
+and `matchesRequestedSettings`. A pending or
 mismatched plan is not evidence for the requested configuration.
 If a main-thread task outlives the bounded response window,
 `mainThreadTaskClaimed=true` and `mutationOutcome=indeterminate` mean callers

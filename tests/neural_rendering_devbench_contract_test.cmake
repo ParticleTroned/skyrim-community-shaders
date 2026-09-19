@@ -915,8 +915,8 @@ string(JSON
     then
     anyOf
 )
-if(NOT _descriptor_configure_field_count EQUAL 17)
-    message(FATAL_ERROR "foveation_configure schema must require at least one of 17 controls")
+if(NOT _descriptor_configure_field_count EQUAL 13)
+    message(FATAL_ERROR "foveation_configure schema must require at least one of 13 controls")
 endif()
 string(JSON
     _descriptor_two_value_maximum
@@ -1106,10 +1106,8 @@ foreach(_status_contract IN ITEMS
     [[{ "matchesRequestedSettings", FoveatedPlanMatchesSettings(]]
     [[{ "finalLdrNeuralSupportRequested", finalLdrNeuralSupportRequested }]]
     [[{ "finalLdrNeuralSupportLatched", finalLdrNeuralSupportLatched }]]
-    [[{ "visibleOutput", FoveatedRectJson(a_eye.visibleOutput) }]]
     [[{ "output", FoveatedRectJson(a_eye.output) }]]
     [[{ "input", FoveatedRectJson(a_eye.input) }]]
-    [[{ "sourceOffset", { { "x", sourceOffsetX }, { "y", sourceOffsetY } } }]]
 )
     string(FIND "${_bridge}" "${_status_contract}" _status_position)
     if(_status_position EQUAL -1)
@@ -3060,8 +3058,6 @@ endforeach()
 set(_foveation_configuration_fields
     foveatedEnabled
     peripheryTaaEnabled
-    centerOrigin
-    horizontalAnchor
     fovOnlyCenterScale
     peripheryTaaCenterScale
     peripheryTaaOuterScale
@@ -3070,10 +3066,8 @@ set(_foveation_configuration_fields
     leftEyeOffsetY
     rightEyeOffsetX
     rightEyeOffsetY
-    fovOnlyBlendFeather
     peripheryTaaBlendFeather
     neuralFinalLdrBlendFeather
-    reconstructionGuardBandPixels
     maskVisualization
 )
 foreach(_foveation_field IN LISTS _foveation_configuration_fields)
@@ -3088,8 +3082,6 @@ endforeach()
 set(_foveation_cycle_controls
     master
     periphery_taa
-    center_origin
-    horizontal_anchor
     fov_only_center_scale
     periphery_taa_center_scale
     periphery_taa_outer_scale
@@ -3098,10 +3090,8 @@ set(_foveation_cycle_controls
     left_eye_offset_y
     right_eye_offset_x
     right_eye_offset_y
-    fov_only_blend_feather
     periphery_taa_blend_feather
     neural_final_ldr_blend_feather
-    reconstruction_guard_band_pixels
     mask_visualization
 )
 foreach(_foveation_control IN LISTS _foveation_cycle_controls)

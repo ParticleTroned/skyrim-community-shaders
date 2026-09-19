@@ -12,11 +12,8 @@ using std::uint64_t;
 float ClampFoveatedCenterScale(float value) { return value; }
 float ClampFoveatedCenterHorizontalScale(float value) { return value; }
 float ClampFoveatedMaskOffsetAdjustment(float value) { return value; }
-uint ClampFoveatedCenterOriginUInt(uint value) { return value; }
-uint ClampFoveatedHorizontalAnchorUInt(uint value) { return value; }
 float ClampPeripheryTAACenterBlendFeather(float value) { return value; }
 float ClampFoveatedBlendFeather(float value) { return value; }
-uint ClampFoveatedReconstructionGuardBandPixels(uint value) { return value; }
 float ClampPeripheryTAAOuterScaleForCenter(float value, float) { return value; }
 
 #include "neural_settings_key_under_test.h"

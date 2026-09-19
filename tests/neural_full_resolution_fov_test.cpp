@@ -32,9 +32,8 @@ struct Upscaling
 		float foveatedCenterHorizontalScale = 1.1f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f, foveatedLeftEyeMaskOffsetY = 0.0f;
 		float foveatedRightEyeMaskOffsetX = 0.0f, foveatedRightEyeMaskOffsetY = 0.0f;
-		float foveatedCenterBlendFeather = 0.02f, periphery_taa_center_blend_feather = 0.03f;
+		float periphery_taa_center_blend_feather = 0.03f;
 		float neuralRenderingBlendFeather = 0.10f;
-		uint foveatedReconstructionGuardBandPixels = 7;
 	} settings;
 #include "neural_full_resolution_fov_types.h"
 	bool available = true;
@@ -85,10 +84,10 @@ void CheckSharedPlan(Upscaling& upscaling)
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		const auto offset = profile.centerOffsets[eye];
 		Require(cache.plan.eyes[eye].centerOffset.x == offset.x && cache.plan.eyes[eye].centerOffset.y == offset.y,
-			"Active profile optical offsets must remain pinned");
+			"Active profile eye offsets must remain pinned");
 		const auto bounds = FoveatedCommon::BuildCenteredDispatchBounds(0, 1511, 1217,
 			profile.sharedVisibleScale, offset.x, offset.y, FoveatedCommon::kCenterFeather, profile.centerHorizontalScale);
-		Require(Equal(cache.plan.eyes[eye].visibleOutput,
+		Require(Equal(cache.plan.eyes[eye].output,
 					{ uint(bounds.minX), uint(bounds.minY), uint(bounds.maxX), uint(bounds.maxY) }),
 			"Visible NR support must equal shared FOV support for each eye");
 		Require(cache.rects[eye].outputOffsetX == cache.plan.eyes[eye].output.minX &&
@@ -108,19 +107,18 @@ int main()
 		Require(profile.vendorCenterScale == 0.35f && profile.sharedVisibleScale == 0.8f && profile.usesPeripheryTAAOuterMask,
 			"FOV+TAA must use its outer visible mask, not either vendor center");
 		CheckSharedPlan(upscaling);
-		Require(!Equal(centerOnly.eyes[0].visibleOutput, upscaling.foveatedRectCache.plan.eyes[0].visibleOutput),
+		Require(!Equal(centerOnly.eyes[0].output, upscaling.foveatedRectCache.plan.eyes[0].output),
 			"Switching active profiles must rebuild the prepared guide crop");
 		const auto taaPlan = upscaling.foveatedRectCache.plan;
 		upscaling.settings.neuralRenderingBlendFeather = 0.0f;
-		upscaling.settings.foveatedCenterBlendFeather = 0.10f;
 		upscaling.settings.periphery_taa_center_blend_feather = 0.10f;
 		CheckSharedPlan(upscaling);
-		Require(Equal(taaPlan.eyes[1].visibleOutput, upscaling.foveatedRectCache.plan.eyes[1].visibleOutput),
+		Require(Equal(taaPlan.eyes[1].output, upscaling.foveatedRectCache.plan.eyes[1].output),
 			"Independent NR/vendor feathers cannot alter the shared mask");
 		upscaling.taaOffsets[1].x -= 0.03f;
 		CheckSharedPlan(upscaling);
-		Require(!Equal(taaPlan.eyes[1].visibleOutput, upscaling.foveatedRectCache.plan.eyes[1].visibleOutput),
-			"Optical offset changes must invalidate prepared geometry");
+		Require(!Equal(taaPlan.eyes[1].output, upscaling.foveatedRectCache.plan.eyes[1].output),
+			"Eye offset changes must invalidate prepared geometry");
 		upscaling.settings.periphery_taa_outer_scale = 1.0f;
 		const auto fullSharedProfile = upscaling.GetActiveUpscalingFoveatedProfile();
 		Require(fullSharedProfile.available && fullSharedProfile.vendorCenterScale < 0.999f &&
@@ -130,7 +128,7 @@ int main()
 					0.35f, 0.10f, 1.1f, Upscaling::UpscaleMethod::kDLSS, true, &fullSharedProfile),
 			"Full shared coverage must be supported");
 		for (uint32_t eye = 0; eye < 2; ++eye) {
-			Require(upscaling.foveatedRectCache.plan.eyes[eye].visibleOutput.CoversExtent(1511, 1217) &&
+			Require(upscaling.foveatedRectCache.plan.eyes[eye].output.CoversExtent(1511, 1217) &&
 						upscaling.foveatedRectCache.centerOffsets[eye].x == 0.0f &&
 						upscaling.foveatedRectCache.centerOffsets[eye].y == 0.0f,
 				"Inactive shared foveation must include both full eyes, including corners");

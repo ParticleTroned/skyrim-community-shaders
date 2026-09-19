@@ -5,7 +5,6 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
-#include "Upscaling/FoveatedCenterAlignment.h"
 #include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
@@ -309,11 +308,12 @@ public:
 	// stay disabled to avoid stacking a second timed black hold.
 	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 0.0f;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
+	static constexpr float kFoveatedManualOffsetMin = -0.30f;
+	static constexpr float kFoveatedManualOffsetMax = 0.30f;
 	static constexpr float kFoveatedBlendFeatherMin = 0.0f;
 	static constexpr float kFoveatedBlendFeatherMax = 0.10f;
 	static constexpr float kPeripheryTAAOuterScaleMin = 0.30f;
 	static constexpr float kPeripheryTAAOuterScaleMax = 1.0f;
-	static constexpr uint32_t kFoveatedReconstructionGuardBandMax = 64u;
 	// Explicit profile changes remain blocked while RaceSex owns presentation or its handoff tail.
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexMenu = 1u << 0;
 	static constexpr uint32_t kVRUpscalingApplyBlockRaceSexStartupTail = 1u << 1;
@@ -517,13 +517,7 @@ public:
 			NeuralRendering::CharacterDebugView::Off);
 		uint neuralCharacterMaskTestMode = static_cast<uint>(
 			NeuralRendering::CharacterMaskTestMode::Authored);
-		uint foveatedCenterOrigin = static_cast<uint>(
-			FoveatedCenterAlignment::kCompatibilityCenterOrigin);
-		uint foveatedHorizontalAnchor = static_cast<uint>(
-			FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 		float foveatedCenterArea = 0.3f;
-		float foveatedCenterBlendFeather = 0.05f;
-		uint foveatedReconstructionGuardBandPixels = 0;
 		float foveatedCenterHorizontalScale = 1.0f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f;
 		float foveatedLeftEyeMaskOffsetY = 0.0f;
@@ -2422,7 +2416,6 @@ public:
 		bool isVR = false;
 		float centerScale = -1.0f;
 		float centerFeather = -1.0f;
-		uint32_t reconstructionGuardBandPixels = 0;
 		float centerHorizontalScale = 1.0f;
 		float peripheryTAAOuterScale = 0.0f;
 		std::array<float2, 2> centerOffsets{};
@@ -3327,15 +3320,10 @@ public:
 	bool previousHistoryInMapMenu = false;
 	UpscaleMethod previousHistoryUpscaleMethod = UpscaleMethod::kNONE;
 	bool previousHistoryFoveatedDispatch = false;
-	uint32_t previousHistoryFoveatedCenterOrigin = static_cast<uint32_t>(
-		FoveatedCenterAlignment::kCompatibilityCenterOrigin);
-	uint32_t previousHistoryFoveatedHorizontalAnchor = static_cast<uint32_t>(
-		FoveatedCenterAlignment::kCompatibilityHorizontalAnchor);
 	float previousHistoryFoveatedCenterScale = 1.0f;
 	float previousHistoryFoveatedCenterBlendFeather = 0.05f;
 	float previousHistoryNeuralBlendFeather = 0.05f;
 	bool previousHistoryFinalLdrNeuralLayout = false;
-	uint32_t previousHistoryFoveatedReconstructionGuardBandPixels = 0;
 	bool previousHistoryFoveatedMaskVisualization = false;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
@@ -4080,7 +4068,6 @@ public:
 	bool IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const;
-	FoveatedCenterAlignment::StereoDiagnostics GetResolvedFoveatedCenterAlignment(bool usePeripheryTAAProfile = false) const;
 	float2 GetDefaultFoveatedMaskCenterOffset(uint32_t eyeIndex) const;
 	float2 GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool usePeripheryTAAProfile = false) const;
 	std::array<float2, 2> GetResolvedFoveatedMaskCenterOffsets(bool usePeripheryTAAProfile = false) const;

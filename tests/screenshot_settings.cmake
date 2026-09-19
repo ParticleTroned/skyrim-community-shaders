@@ -50,3 +50,8 @@ target_link_libraries(
     screenshot_settings_test
     PRIVATE nlohmann_json::nlohmann_json
 )
+# The extracted production path uses u8path with deprecation warnings disabled.
+target_compile_definitions(
+    screenshot_settings_test
+    PRIVATE _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING
+)

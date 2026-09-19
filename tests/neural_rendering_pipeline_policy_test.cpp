@@ -34,8 +34,14 @@ int main()
 	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::FullResolution, false));
 	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::ReducedResolution, false));
 	static_assert(!NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::Foveated, true));
-	static_assert(!NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, false));
-	static_assert(NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, true));
+	static_assert(!NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, false, false));
+	static_assert(NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, true, false));
+	static_assert(NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, false, true));
+	static_assert(NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, true, true));
+	static_assert(!NeuralRendering::RequiresFoveatedMask(RenderingMode::FullResolution, false, true));
+	static_assert(NeuralRendering::RequiresFoveatedMask(RenderingMode::FullResolution, true, true));
+	static_assert(!NeuralRendering::IsRenderingModeSelectable(true, RenderingMode::ReducedResolution, false));
+	static_assert(NeuralRendering::IsRenderingModeSelectable(true, RenderingMode::ReducedResolution, true));
 	constexpr auto preDlssInputTransitions = []() {
 		NeuralRendering::PreDlssInputHistory history;
 		if (history.NeedsReset(false) || !history.NeedsReset(true))

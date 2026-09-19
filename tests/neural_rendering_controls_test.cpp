@@ -194,7 +194,7 @@ int main()
 						upscaling.settings.neuralRenderingFovOnly = fovOnly;
 						Util::Text::warning.clear();
 						upscaling.DrawNeuralRenderingFovWarning(true);
-						Require(!Util::Text::warning.empty() == (isVR && priorTaa && fovAvailable && (mode == 1 || fovOnly)),
+						Require(!Util::Text::warning.empty() == (isVR && priorTaa && fovAvailable && (mode != 0 || fovOnly)),
 							"NR menu requires prior TAA and a configured FOV-dependent selection");
 						Util::Text::warning.clear();
 						upscaling.DrawNeuralRenderingFovWarning(false);

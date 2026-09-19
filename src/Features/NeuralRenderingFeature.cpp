@@ -673,7 +673,7 @@ void NeuralRenderingFeature::DrawSettings()
 		globals::features::upscaling.GetUpscaleMethod());
 	const auto& upscaling = globals::features::upscaling;
 	auto fovAvailabilityGuard = Util::DisableGuard(
-		NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly) &&
+		NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly, globals::game::isVR) &&
 		!upscaling.IsNeuralRenderingFovConfigurationAvailable(upscaling.GetUpscaleMethod()));
 	ImGui::SeparatorText("Colour processing");
 	const bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();

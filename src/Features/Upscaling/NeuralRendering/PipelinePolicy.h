@@ -19,10 +19,16 @@ namespace NeuralRendering
 		ReducedResolution = 2,
 	};
 
-	/** Foveated NR and optional FOV restriction require the shared configured mask. */
-	[[nodiscard]] constexpr bool RequiresFoveatedMask(RenderingMode mode, bool fovOnly) noexcept
+	/** VR centre routes always use the shared FOV mask; flat reduced NR stays mono. */
+	[[nodiscard]] constexpr bool UsesAutomaticFoveatedMask(RenderingMode mode, bool isVR) noexcept
 	{
-		return mode == RenderingMode::Foveated || fovOnly;
+		return mode == RenderingMode::Foveated || (isVR && mode == RenderingMode::ReducedResolution);
+	}
+
+	/** Combines route-owned masking with the saved optional full-resolution restriction. */
+	[[nodiscard]] constexpr bool RequiresFoveatedMask(RenderingMode mode, bool fovOnly, bool isVR) noexcept
+	{
+		return UsesAutomaticFoveatedMask(mode, isVR) || fovOnly;
 	}
 
 	[[nodiscard]] constexpr RenderingMode ClampRenderingMode(std::uint32_t a_value) noexcept
@@ -64,7 +70,7 @@ namespace NeuralRendering
 	[[nodiscard]] constexpr bool IsRenderingModeSelectable(bool isVR, RenderingMode mode, bool fovAvailable) noexcept
 	{
 		return IsRenderingConfigurationSupported(isVR, mode) &&
-		       (mode != RenderingMode::Foveated || fovAvailable);
+		       (!UsesAutomaticFoveatedMask(mode, isVR) || fovAvailable);
 	}
 
 	struct PipelineImplementation

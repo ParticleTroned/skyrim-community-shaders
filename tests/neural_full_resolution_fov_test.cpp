@@ -152,7 +152,43 @@ int main()
 			"Existing vendor planning must remain available");
 		Require(upscaling.foveatedRectCache.centerFeather == 0.08f,
 			"Ordinary foveated reconstruction must retain its independent NR support feather");
-		std::cout << "Full-resolution NR shared FOV geometry passed\n";
+		upscaling.settings.neuralRenderingInsertionPoint = static_cast<uint>(NeuralRendering::InsertionPoint::UpscaledCenter);
+		for (const float scale : { 0.26f, 0.60f, 0.95f }) {
+			for (const float offset : { -0.25f, 0.0f, 0.25f }) {
+				upscaling.fovOffsets = { float2{ offset, -offset }, float2{ -offset, offset } };
+				upscaling.mode = NeuralRendering::RenderingMode::Foveated;
+				Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, true,
+							scale, 0.02f, 1.1f, Upscaling::UpscaleMethod::kDLSS, false),
+					"Foveated reference plan failed");
+				const auto reference = upscaling.foveatedRectCache;
+				upscaling.mode = NeuralRendering::RenderingMode::ReducedResolution;
+				for (const bool savedRestriction : { false, true }) {
+					upscaling.settings.neuralRenderingFovOnly = savedRestriction;
+					Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, true,
+								scale, 0.02f, 1.1f, Upscaling::UpscaleMethod::kDLSS, false),
+						"Renderscale FOV plan failed");
+					const auto& actual = upscaling.foveatedRectCache;
+					Require(actual.centerScale == reference.centerScale && actual.centerFeather == reference.centerFeather,
+						"Renderscale and Foveated must share mask scale and support feather");
+					for (uint eye = 0; eye < 2; ++eye) {
+						Require(Equal(actual.plan.eyes[eye].input, reference.plan.eyes[eye].input) &&
+									Equal(actual.plan.eyes[eye].output, reference.plan.eyes[eye].output),
+							"Renderscale must preserve Foveated input/output coverage at odd dimensions and screen edges");
+						Require(actual.centerOffsets[eye].x == reference.centerOffsets[eye].x &&
+									actual.centerOffsets[eye].y == reference.centerOffsets[eye].y,
+							"Renderscale must retain independent eye offsets");
+					}
+				}
+			}
+		}
+		globals::game::isVR = false;
+		upscaling.settings.neuralRenderingFovOnly = false;
+		Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, false,
+					0.6f, 0.02f, 1.1f, Upscaling::UpscaleMethod::kDLSS, false) &&
+					upscaling.foveatedRectCache.plan.eyes[0].input.CoversExtent(1007, 811) &&
+					upscaling.foveatedRectCache.plan.eyes[0].output.CoversExtent(1511, 1217),
+			"Flat renderscale NR must retain complete mono coverage");
+		std::cout << "Shared FOV geometry passed, including 18 VR renderscale comparisons and flat coverage\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

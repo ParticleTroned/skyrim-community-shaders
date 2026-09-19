@@ -83,7 +83,7 @@ namespace
 		LatchState state;
 		Require(IsRenderingConfigurationSupported(stereo, fixture.mode),
 			"Fixture must represent a supported runtime configuration");
-		Require(stereo || (!submit && !RequiresFoveatedMask(fixture.mode, fixture.fovOnly)),
+		Require(stereo || (!submit && !RequiresFoveatedMask(fixture.mode, fixture.fovOnly, stereo)),
 			"The supported mono fixture must use a main route without VR FOV");
 		const auto insertion = ResolveInsertionPoint(fixture.mode, static_cast<std::uint32_t>(fixture.insertion));
 		Require(insertion == fixture.insertion, "Fixture must use its effective production insertion");

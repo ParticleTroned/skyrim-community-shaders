@@ -4,6 +4,11 @@
 #include <cstdint>
 #include <stdexcept>
 
+namespace globals::game
+{
+	bool isVR = true;
+}
+
 using uint = unsigned int;
 using std::int64_t;
 using std::uint64_t;
@@ -48,6 +53,10 @@ int main()
 		baseline.neuralRenderingFovOnly = false;
 		changed = baseline;
 		changed.foveatedCenterArea = 0.5f;
+		require((BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(baseline)) ==
+				(mode == NeuralRendering::RenderingMode::FullResolution));
+		globals::game::isVR = false;
 		require(BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(baseline));
+		globals::game::isVR = true;
 	}
 }

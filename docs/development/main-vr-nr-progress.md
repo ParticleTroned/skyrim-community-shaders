@@ -59,6 +59,15 @@ unchanged; DLSS owns temporal reconstruction. B/foveated and FOV restriction
 remain VR-only. Source implementation does not establish flat visual quality
 or performance; those require runtime evidence.
 
+## Automatic renderscale NR FOV, 2026-09-19
+
+The label is now **Renderscale NR before DLSS**. In VR this route
+automatically uses configured FOV like Foveated, preserving the optional
+Full resolution preference and complete mono coverage on SE/AE. The
+[implementation record](nr-renderscale-fov-20260919.md) covers crop/blend
+policy, readiness and focused CPU validation. No production archive or
+runtime visual evidence was produced for this change.
+
 ## Task 0 verified checkpoint
 
 -   Existing worktree: `C:/src/skyrim-community-shaders/build/worktrees/main-vr-nr`.

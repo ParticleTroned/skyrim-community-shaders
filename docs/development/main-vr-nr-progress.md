@@ -23,6 +23,16 @@ source before editing. Do not automatically push, deploy or alter a live
 game. Do not edit agent policy or unrelated rendering. This document
 records the user's task directive without changing repository policy.
 
+## NR master control correction, 2026-09-19
+
+The [control correction](nr-master-toggle-fix-20260919.md) makes Enabled
+independent of missing FOV prerequisites and keeps selected restrictions
+removable. Runtime readiness still gates execution. DevBench now accepts
+valid pending FOV-dependent settings and reports their readiness separately.
+Source checks passed as recorded; compiled/live validation remains pending
+under the user's no-build instruction. The flat character NR extension was
+paused at the user's request to prioritize this correction.
+
 ## Task 0 verified checkpoint
 
 -   Existing worktree: `C:/src/skyrim-community-shaders/build/worktrees/main-vr-nr`.

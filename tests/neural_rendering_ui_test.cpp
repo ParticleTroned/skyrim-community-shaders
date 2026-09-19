@@ -49,23 +49,35 @@ namespace globals
 			bool loaded = true;
 			struct Settings
 			{
-				bool neuralRenderingFovOnly = false;
+				bool neuralRenderingFovOnly = false, neuralRenderingEnabled = false, neuralCharacterRenderingEnabled = false;
+				unsigned neuralRenderingMode = 0;
 				bool foveatedVendorDispatch = true, periphery_taa_enable = false;
 				float periphery_taa_center_area = 0.3f, foveatedCenterArea = 0.3f;
 				float foveatedCenterHorizontalScale = 1.0f;
 				float foveatedLeftEyeMaskOffsetX = 0.0f, foveatedLeftEyeMaskOffsetY = 0.0f;
 				float foveatedRightEyeMaskOffsetX = 0.0f, foveatedRightEyeMaskOffsetY = 0.0f;
 			} settings;
-			NeuralRendering::RenderingMode mode = NeuralRendering::RenderingMode::FullResolution;
+			bool neuralRenderingFeatureAvailable = true;
 			UpscaleMethod method = UpscaleMethod::kDLSS;
-			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return mode; }
+			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
+			bool IsNeuralRenderingRequested() const noexcept;
+			void DrawSelectionControls();
+			void DrawNeuralRenderingFovWarning(bool) const {}
+			static bool ApplyNeuralRenderingFovConstraint(Settings& value)
+			{
+				if (!value.neuralRenderingEnabled || !value.periphery_taa_enable)
+					return false;
+				value.periphery_taa_enable = false;
+				return true;
+			}
 			UpscaleMethod GetRuntimeUpscaleMethod() const { return method; }
 			void DrawNeuralRenderingSettings(UpscaleMethod, bool = false) { ++draws; }
 		} upscaling;
 	}
 }
 using Upscaling = globals::features::Upscaling;
+using uint = unsigned;
 float ClampFoveatedCenterScale(float value) { return FoveatedCommon::ClampCenterScale(value); }
 float ClampFoveatedCenterHorizontalScale(float value) { return FoveatedCommon::ClampCenterHorizontalScale(value); }
 float ClampFoveatedMaskOffsetAdjustment(float value) { return value; }
@@ -106,6 +118,11 @@ namespace ImGui
 	}
 	template <class... Args>
 	void TextWrapped(const char* label, Args&&...)
+	{
+		Record(label);
+	}
+	template <class... Args>
+	void TextDisabled(const char* label, Args&&...)
 	{
 		Record(label);
 	}
@@ -308,6 +325,59 @@ int main()
 	require(globals::features::upscaling.draws > 0, "Feature must retain the main NR controls");
 
 	auto& upscaling = globals::features::upscaling;
+	// Exercise the actual routing controls independently of world-frame availability.
+	for (const bool haveWorldState : { false, true }) {
+		globals::state = haveWorldState ? &state : nullptr;
+		for (const bool isVR : { false, true }) {
+			globals::game::isVR = isVR;
+			for (unsigned mode = 0; mode < 3; ++mode) {
+				for (const bool fovAvailable : { false, true }) {
+					for (const bool fovOnly : { false, true }) {
+						for (const bool characters : { false, true }) {
+							upscaling.settings = {};
+							upscaling.settings.neuralRenderingMode = mode;
+							upscaling.settings.foveatedVendorDispatch = fovAvailable;
+							upscaling.settings.neuralRenderingFovOnly = fovOnly;
+							upscaling.settings.neuralCharacterRenderingEnabled = characters;
+							for (const bool enabled : { true, false, true, false }) {
+								ImGui::Clear("Enabled");
+								upscaling.DrawSelectionControls();
+								require(!ImGui::Disabled("Enabled") && upscaling.settings.neuralRenderingEnabled == enabled,
+									"Master must remain editable across repeated toggles, saved child settings and the main menu");
+								require(upscaling.settings.neuralRenderingFovOnly == fovOnly && upscaling.settings.neuralCharacterRenderingEnabled == characters,
+									"Master must preserve child preferences");
+								const auto route = upscaling.GetNeuralRenderingMode();
+								const bool executable = enabled && NeuralRendering::IsRenderingConfigurationSupported(isVR, route, characters) &&
+								                        (!NeuralRendering::RequiresFoveatedMask(route, fovOnly) || upscaling.IsNeuralRenderingFovConfigurationAvailable());
+								require(upscaling.IsNeuralRenderingRequested() == executable, "Editable master must not bypass execution prerequisites");
+								upscaling.neuralRenderingFeatureAvailable = false;
+								require(!upscaling.IsNeuralRenderingRequested(), "Unloaded NR must not execute even with valid preferences");
+								upscaling.neuralRenderingFeatureAvailable = true;
+								require(ImGui::disableDepth == 0 && ImGui::comboDepth == 0, "Routing controls must restore UI state");
+							}
+							if (characters) {
+								ImGui::Clear("Characters only");
+								upscaling.DrawSelectionControls();
+								require(!upscaling.settings.neuralCharacterRenderingEnabled, "Selected character restriction must always be removable");
+							}
+							if (mode == 1) {
+								ImGui::Clear("Full resolution");
+								upscaling.DrawSelectionControls();
+								require(upscaling.settings.neuralRenderingMode == 0, "Unavailable Foveated mode must allow return to Full resolution");
+							}
+							if (fovOnly) {
+								ImGui::Clear("Restrict to FOV mask");
+								upscaling.DrawSelectionControls();
+								require(!upscaling.settings.neuralRenderingFovOnly, "Selected FOV restriction must always be removable");
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	globals::game::isVR = true;
+	upscaling.settings = {};
 	globals::state = &state;
 	registry.configuration = {};
 	using ModeChoice = NeuralRendering::RenderingMode;
@@ -323,7 +393,7 @@ int main()
 			 NeuralRendering::RenderingMode::ReducedResolution }) {
 		for (const bool fovOnly : { false, true }) {
 			for (const bool available : { false, true }) {
-				upscaling.mode = mode;
+				upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
 				upscaling.settings.neuralRenderingFovOnly = fovOnly;
 				upscaling.settings.foveatedVendorDispatch = available;
 				const bool blocked = !available && (mode == NeuralRendering::RenderingMode::Foveated || fovOnly);
@@ -358,7 +428,7 @@ int main()
 	}
 	upscaling.settings.foveatedVendorDispatch = true;
 	upscaling.settings.neuralRenderingFovOnly = false;
-	upscaling.mode = ModeChoice::FullResolution;
+	upscaling.settings.neuralRenderingMode = static_cast<unsigned>(ModeChoice::FullResolution);
 	const auto checkInactivePreservation = [&]() {
 		const auto prior = registry.Snapshot();
 		for (const auto level : { spdlog::level::info, spdlog::level::debug }) {

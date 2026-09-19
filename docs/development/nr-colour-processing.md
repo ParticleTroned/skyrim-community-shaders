@@ -58,6 +58,19 @@ retained for provenance. Essentials shows Enabled, Rendering mode,
 Restrict to FOV mask (where applicable), Characters only, and Faces/Skin/Hair.
 The category choices stay visible but are disabled when character selection
 is inactive, the runtime is not VR, or required FOV setup is unavailable.
+Enabled is the master preference and never becomes disabled because of a
+child setting. A missing FOV prerequisite leaves enabled NR waiting, with
+an explicit explanation, and the runtime gate prevents evaluation. Selected
+FOV and character restrictions can always be removed; Full resolution
+remains selectable to leave an unavailable Foveated route. Disabling NR
+retains child preferences and remains accepted even if backend retirement
+fails. Re-enabling still requires safe backend retirement.
+
+DevBench `nr_configure` also accepts valid pending FOV-dependent settings;
+`nr_readiness` and `nr_status.fovPrerequisite` distinguish acceptance from
+execution readiness. Unsupported runtime configurations and invalid provider
+contracts remain rejected. NR still excludes FOV + TAA when enabled.
+
 Both layouts share the same settings and transition handling. Advanced
 additionally exposes image tuning, character strengths and colour controls;
 Developer Mode controls diagnostic visibility within Advanced.

@@ -17885,16 +17885,9 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
 		const bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable();
-		{
-			const bool missingFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly) &&
-			                        !fovAvailable;
-			auto guard = Util::DisableGuard((missingFov || !NeuralRendering::IsRenderingConfigurationSupported(
-															   globals::game::isVR, GetNeuralRenderingMode(), settings.neuralCharacterRenderingEnabled)) &&
-											!settings.neuralRenderingEnabled);
-			ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
-			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Turns Neural Rendering on or off. Disabling it restores the normal scene; enabling it turns off FOV + TAA.");
-		}
+		ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Turns Neural Rendering on or off. Missing route prerequisites keep NR inactive without locking this switch. Enabling NR turns off FOV + TAA.");
 		ApplyNeuralRenderingFovConstraint(settings);
 		DrawNeuralRenderingFovWarning(true);
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Reduced resolution before DLSS" };
@@ -17933,11 +17926,13 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		const bool missingFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly) &&
 		                        !fovAvailable;
 		if (missingFov)
-			ImGui::TextWrapped("Neural Rendering is inactive. Set up and enable Foveated Upscaling (FOV) in Upscaling > FOV first, or select a mode without FOV restriction.");
+			ImGui::TextWrapped(settings.neuralRenderingEnabled ?
+								   "Neural Rendering is enabled but waiting for FOV. Enable and configure FOV in Upscaling, or select a mode without FOV restriction." :
+								   "This selection requires FOV. Configure it in Upscaling, or select a mode without FOV restriction.");
 		else if (!fovAvailable && globals::game::isVR)
 			ImGui::TextDisabled("Set up and enable Foveated Upscaling (FOV) to use FOV-dependent NR options.");
 		{
-			auto guard = Util::DisableGuard(missingFov || (!globals::game::isVR && !settings.neuralCharacterRenderingEnabled));
+			auto guard = Util::DisableGuard((missingFov || !globals::game::isVR) && !settings.neuralCharacterRenderingEnabled);
 			ImGui::Checkbox("Characters only", &settings.neuralCharacterRenderingEnabled);
 			if (auto tooltip = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted("Limits visible NR edits to the selected face, skin and hair pixels. Works with every rendering mode in VR; unselected pixels keep the normal scene.");

@@ -29,6 +29,12 @@ extract("src/Features/Upscaling.cpp"
 extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()"
     "const char* Upscaling::GetFoveatedUpscalingModeName(" fov_readiness)
+extract("src/Features/Upscaling.cpp"
+    "\t\tconst bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable();"
+    "\t\tconst auto drawCharacterCategories =" selection_controls)
+extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsNeuralRenderingRequested() const noexcept"
+    "NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode()" execution_gate)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
-    "${fov_request}\n${fov_profile}\n${fov_readiness}\n${developer_mode}\n${draw_settings}")
+    "${fov_request}\n${fov_profile}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${execution_gate}\nvoid Upscaling::DrawSelectionControls() {\n${selection_controls}\n}\n")

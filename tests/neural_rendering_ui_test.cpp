@@ -61,7 +61,7 @@ namespace globals
 			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return mode; }
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
 			UpscaleMethod GetRuntimeUpscaleMethod() const { return method; }
-			void DrawNeuralRenderingSettings(UpscaleMethod) { ++draws; }
+			void DrawNeuralRenderingSettings(UpscaleMethod, bool = false) { ++draws; }
 		} upscaling;
 	}
 }
@@ -226,6 +226,7 @@ nlohmann::json AssetsJson()
 struct NeuralRenderingFeature
 {
 	void DrawSettings();
+	void DrawEssentialSettings();
 };
 #include "neural_rendering_ui_under_test.h"
 

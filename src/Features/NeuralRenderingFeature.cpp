@@ -802,6 +802,10 @@ void NeuralRenderingFeature::DrawSettings()
 	if (changed && !Registry::Instance().Configure(config.settings, config.experiments, config.revision))
 		ImGui::TextWrapped("Settings changed concurrently; retry after the next UI refresh.");
 }
+void NeuralRenderingFeature::DrawEssentialSettings()
+{
+	globals::features::upscaling.DrawNeuralRenderingSettings(globals::features::upscaling.GetRuntimeUpscaleMethod(), true);
+}
 void NeuralRenderingFeature::DataLoaded()
 {
 	globals::features::upscaling.SetNeuralRenderingFeatureAvailable(loaded);

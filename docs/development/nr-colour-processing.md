@@ -48,7 +48,15 @@ records the same-frame evidence and WARP/hardware regressions.
 On `main-vr-nr`, **Display > Neural Rendering** owns rendering,
 character and colour controls. See the [port report](main-vr-nr-implementation.md)
 for the current routes and validation; the source-build history above is
-retained for provenance. The colour section provides:
+retained for provenance. Essentials shows Enabled, Rendering mode,
+Restrict to FOV mask (where applicable), Characters only, and Faces/Skin/Hair.
+The category choices stay visible but are disabled when character selection
+is inactive, the runtime is not VR, or required FOV setup is unavailable.
+Both layouts share the same settings and transition handling. Advanced
+additionally exposes image tuning, character strengths and colour controls;
+Developer Mode controls diagnostic visibility within Advanced.
+
+The Advanced colour section provides:
 
 -   **Enable colour processing**: retain the chosen mode/sliders while bypassing
     their application. The NR master switch is in the same feature panel.

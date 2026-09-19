@@ -16,6 +16,8 @@ struct NeuralRenderingFeature : Feature
 	void SaveSettings(nlohmann::json&) override;
 	void RestoreDefaultSettings() override;
 	void DrawSettings() override;
+	bool HasEssentialSettings() const override { return true; }
+	void DrawEssentialSettings() override;
 	void DataLoaded() override;
 	void EarlyPrepass() override;
 };

@@ -4,8 +4,11 @@
 
 [Integration record](main-vr-nr-sync-20260919.md): merge local `main-VR`
 through `63e40d610`, including CommonLib 8.3.0, while retaining NR routes,
-colour/capture contracts and the Render Scale guard. Source/tooling checks
-pass. The existing AIO predates this merge; compilation is still pending.
+colour/capture contracts and the Render Scale guard. The September 20
+adversarial follow-up adds the subsequent `09eb8523f` preset-default commit
+and verifies that existing settings are unchanged. Fourteen source contracts
+and preset checks pass. The existing AIO predates these merges; compilation
+is still pending.
 
 ## Renderscale NR dependency (2026-09-19)
 

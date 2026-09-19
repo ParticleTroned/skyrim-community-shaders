@@ -80,3 +80,68 @@ Compilation against the upgraded CommonLib, shader execution and in-game
 validation have not run under the standing no-unrequested-build instruction.
 No production archive was rebuilt or deployed. The previous `4b037c7a9`
 AIO remains the pre-merge build. No automatic push is performed.
+
+## Adversarial follow-up, September 20
+
+The original merge is `b087db1e790efcef73a1b4642e7b9c784e763e39`.
+Review checked its two parents and conflict resolutions, then compared
+its shared and NR-specific paths. No additional runtime integration defect
+was identified by this source review; this is not a compiled or runtime
+qualification result.
+
+One synchronization gap was found: after the original merge, local and
+origin `main-VR` advanced to `09eb8523f1cde5c79815f313ed2dca64d5d33c34`
+(`build(presets): pin adaptive balance defaults`). Merge that commit with
+its ancestry and regenerate the NR preset report from the combined base.
+Retain NR revision 8, its source inventory and source fingerprint.
+The incoming values match the runtime defaults in `SharedLighting.h`,
+`AdaptiveBrightness.h` and `WaterAppearance.h`.
+
+The semantic comparison against `b087db1e7` confirms exactly 42 neutral
+Adaptive Balance additions in the base and each of the three generated
+settings files: seven settings across Global and five profiles. No existing
+setting changed and no field was removed. In particular, NR settings and
+colour/Lighting preservation defaults are intact. The merged base hash is
+`5F7916D7B4B1447F5AF6A63F51DE5735B4638C870DF1A65991F1B4B67BFEBC5A`.
+
+### Integration checks
+
+-   All twelve commits in the original source snapshot are ancestors of
+    the merge, including CommonLib 8.3.0. The submodule checkout is clean
+    at the pinned `abe9ca7b7` revision.
+-   The NR implementation directory, feature UI, public API guard,
+    DevBench controls, profiler and shaders have no changes relative to
+    the NR parent. Shared Upscaling and Deferred call sites retain the
+    flat pre-DLSS route, source/depth proofs and stereo ownership while
+    adapting engine pointers through the CommonLib bridge. No new image
+    copies or allocations are introduced by these adaptations.
+-   NR-only CommonLib consumers were inspected, including character
+    category authoring, projection inputs, HDR producer hooks, final-LDR
+    presentation and retained depth/motion owners. The relevant updated
+    CommonLib declarations were checked against those call sites.
+-   Subsurface scattering changes are engine/SDK pointer adaptations;
+    the NR branch's existing implementation remains intact.
+-   Relatch callers holding the queue mutex use the locked helper. The
+    public helper still acquires ownership. All four submit-trace calls,
+    their declaration and definition share the DevBench compilation gate.
+-   Screenshot settings expansion still uses the common descriptor
+    builder. NR acquisition pinning, immutable terminal companions and
+    their DevBench output schema remain present. Menu fixture preparation
+    still rejects enabled NR before applying incompatible FOV plus TAA.
+-   Managed shader-cache changes are retained from main-VR. No new
+    competing implementation or duplicate helper was introduced here.
+
+### Additional validation
+
+Seven additional CMake source contracts passed: editor light picker,
+feature preset compatibility, NVIDIA pipeline, performance tuning DevBench,
+render-scale link, VR menu UI, and VR render-scale DevBench. Together with
+the original seven, all fourteen top-level source contract scripts pass.
+The follow-up also passes generated-preset `-Check` and the semantic
+settings audit described above. Evidence is under the existing validation
+directory as `audit-*.log` and `audit-*.json`.
+
+The follow-up changes only presets and documentation. Compilation against
+CommonLib 8.3.0 and live SE/AE/VR behavior remain unverified under the
+no-unrequested-build instruction. The existing production AIO still
+contains the pre-merge `4b037c7a9` build. No deployment or push is performed.

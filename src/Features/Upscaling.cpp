@@ -13773,6 +13773,7 @@ void Upscaling::EndVRMenuAccumulatorTrace(
 					DescribeVRMenuPresentationTraceMenuMask(context.menuMask)); });
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 void Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 	const char* a_path,
 	vr::EVREye a_eye,
@@ -13820,6 +13821,7 @@ void Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 				GetVRMenuPresentationTraceScopeDescription());
 		});
 }
+#endif
 
 void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 {

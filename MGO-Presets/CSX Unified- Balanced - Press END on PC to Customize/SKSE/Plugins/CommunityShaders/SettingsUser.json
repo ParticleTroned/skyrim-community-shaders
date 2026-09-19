@@ -79,8 +79,8 @@
       "maximumVersionExclusive": "3.20"
     },
     "settingsContract": {
-      "revision": 7,
-      "sourceTreeSha256": "D4644FAA4F1F58A264DB57E0CE69D2EC286DB9EF4E63AFDF94F732D0440933C9"
+      "revision": 8,
+      "sourceTreeSha256": "42E7AC3095604B39BEE3AE5B844CFA21E3613F7E303FFB3AF092C173D9E43A56"
     }
   },
   "Upscaling": {
@@ -129,7 +129,7 @@
       "neuralCharacterFaceStrength": 1.0,
       "neuralCharacterFacesEnabled": true,
       "neuralCharacterFeatherRadius": 1,
-      "neuralCharacterHairEnabled": false,
+      "neuralCharacterHairEnabled": true,
       "neuralCharacterHairStrength": 0.6499999761581421,
       "neuralCharacterMaximumDistanceMeters": 10.0,
       "neuralCharacterMinimumFacePixelSize": 64,
@@ -147,7 +147,7 @@
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
       "neuralRenderingRenderscaleFov": false,
-      "neuralRenderingInsertionPoint": 0,
+      "neuralRenderingInsertionPoint": 1,
       "neuralRenderingIntensity": 0.800000011920929,
       "neuralRenderingLocalStructure": 0.8999999761581421,
       "neuralRenderingLocalTone": 0.75,

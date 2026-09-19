@@ -37,6 +37,26 @@ int main()
 			require(request.characterEnabled == true && request.characterVisualIsolationEnabled == true);
 		}
 	}
+	// Explicit placement is an assertion, resolved against the final requested mode.
+	for (const auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::Foveated,
+			 NeuralRendering::RenderingMode::ReducedResolution }) {
+		for (const auto insertion : { NeuralRendering::InsertionPoint::UpscaledCenter, NeuralRendering::InsertionPoint::FinalLdrPreUi }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" },
+															 { "insertionPoint", NeuralRendering::GetInsertionPointName(insertion) } },
+				request, error));
+			const auto required = NeuralRendering::ResolveInsertionPoint(mode);
+			require(TryValidateNeuralRenderingPlacement(request, mode, error) == (insertion == required));
+			if (insertion != required) {
+				require(error.at("errorCode") == "nr_insertion_point_conflict" && error.at("settingsChanged") == false);
+				require(error.at("requiredValue") == NeuralRendering::GetInsertionPointName(required));
+			}
+		}
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryValidateNeuralRenderingPlacement(request, mode, error) && error.is_null());
+	}
 	for (const auto& invalid : { json(-1), json(3), json(std::numeric_limits<std::uint64_t>::max()),
 			 json(1.5), json(true), json(nullptr), json::array(), json::object(), json("unknown") }) {
 		NeuralRenderingConfigurationRequest request;

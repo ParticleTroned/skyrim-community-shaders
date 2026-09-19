@@ -52,7 +52,7 @@ namespace globals
 			{
 				bool neuralRenderingFovOnly = false, neuralRenderingEnabled = false, neuralCharacterRenderingEnabled = false;
 				bool neuralRenderingRenderscaleFov = false;
-				bool neuralCharacterFacesEnabled = true, neuralCharacterSkinEnabled = true, neuralCharacterHairEnabled = false;
+				bool neuralCharacterFacesEnabled = true, neuralCharacterSkinEnabled = true, neuralCharacterHairEnabled = true;
 				unsigned neuralRenderingMode = 0;
 				bool foveatedVendorDispatch = true, periphery_taa_enable = false;
 				float periphery_taa_center_area = 0.3f, foveatedCenterArea = 0.3f;
@@ -459,7 +459,7 @@ int main()
 			require(ImGui::Seen(category) && !ImGui::Disabled(category), "Both flat modes must expose editable essential character categories");
 		}
 		require(!upscaling.settings.neuralCharacterFacesEnabled && !upscaling.settings.neuralCharacterSkinEnabled &&
-					upscaling.settings.neuralCharacterHairEnabled,
+					!upscaling.settings.neuralCharacterHairEnabled,
 			"Flat category edits must update their independent selections");
 		ImGui::Clear("Foveated");
 		upscaling.DrawSelectionControls();

@@ -75,9 +75,11 @@ The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
 package version, VR runtime, inclusive minimum `3.19`, exclusive maximum
 `3.20`, and the settings-contract fingerprint used to generate it.
-The generator and runtime loader both use settings-contract revision 6. Revision 6 adds the independent Neural
-Rendering envelope; revision 5 marked packages must be regenerated for
-this build. Unmarked user settings retain the existing migration path.
+The generator and runtime loader both use settings-contract revision 8.
+Revision 8 pins final-scene placement for Foveated NR and enables character
+hair selection by default. Earlier marked packages must be regenerated for
+this build. Unmarked user settings retain the existing migration path,
+including explicitly saved hair selections.
 The Release compatibility regression loads every generated tier to verify
 that the shipping loader accepts its metadata.
 

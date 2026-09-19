@@ -4931,8 +4931,8 @@ namespace
 	{
 		return settings.neuralRenderingEnabled &&
 		       !settings.foveatedPeripheryMaskVisualization &&
-		       NeuralRendering::ClampInsertionPoint(
-				   settings.neuralRenderingInsertionPoint) ==
+		       NeuralRendering::ResolveInsertionPoint(
+				   NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)) ==
 		           NeuralRendering::InsertionPoint::FinalLdrPreUi;
 	}
 
@@ -5065,7 +5065,7 @@ namespace
 	{
 		Upscaling::ApplyNeuralRenderingFovConstraint(settings);
 		settings.neuralRenderingInsertionPoint = static_cast<uint>(
-			NeuralRendering::ClampInsertionPoint(settings.neuralRenderingInsertionPoint));
+			NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)));
 		settings.neuralRenderingPreset = std::min(settings.neuralRenderingPreset, 4u);
 		settings.neuralRenderingIntensity = std::clamp(
 			std::isfinite(settings.neuralRenderingIntensity) ? settings.neuralRenderingIntensity : 0.8f,
@@ -5386,8 +5386,8 @@ namespace
 		settings.pipelineDiagnosticsStructured = false;
 		settings.foveatedVendorDispatch = false;
 		settings.neuralRenderingEnabled = false;
-		settings.neuralRenderingInsertionPoint =
-			static_cast<uint>(NeuralRendering::kDefaultInsertionPoint);
+		settings.neuralRenderingInsertionPoint = static_cast<uint>(NeuralRendering::ResolveInsertionPoint(
+			NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)));
 		settings.neuralRenderingBatchedStereo = true;
 		settings.neuralRenderingDirectCommit = true;
 		settings.neuralRenderingPreset = 3;
@@ -6563,8 +6563,8 @@ namespace
 		add(peripheryTAARequested);
 		add(a_settings.neuralRenderingEnabled);
 		if (a_settings.neuralRenderingEnabled) {
-			add(static_cast<uint64_t>(NeuralRendering::ClampInsertionPoint(
-				a_settings.neuralRenderingInsertionPoint)));
+			add(static_cast<uint64_t>(NeuralRendering::ResolveInsertionPoint(
+				NeuralRendering::ClampRenderingMode(a_settings.neuralRenderingMode))));
 		}
 		if (UsesFinalLdrNeuralBlend(a_settings)) {
 			addFloat(ClampFoveatedBlendFeather(
@@ -17824,6 +17824,8 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 			merged[name] = value;
 		}
 		auto candidate = merged.get<Settings>();
+		candidate.neuralRenderingRenderscaleFov = a_configuration.value("neuralRenderingRenderscaleFov",
+			NeuralRendering::DefaultRenderscaleFov(IsVRRuntimeActive(), settings.foveatedVendorDispatch));
 		candidate.neuralCharacterDebugView = settings.neuralCharacterDebugView;
 		candidate.neuralCharacterMaskTestMode = settings.neuralCharacterMaskTestMode;
 		if (candidate.neuralRenderingMode > 2u || !candidate.neuralRenderingAutoMask || candidate.neuralRenderingUICorrection)
@@ -17833,9 +17835,7 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 			throw std::invalid_argument("Foveated NR requires Skyrim VR; use full-resolution or reduced-resolution NR on SE/AE");
 		SanitizeUpscalingSettings(candidate);
 		const json sanitized = candidate;
-		for (const auto& [name, value] : a_configuration.items())
-			if (sanitized.at(name) != value)
-				throw std::invalid_argument("Neural Rendering setting is outside its valid range: " + name);
+		NeuralRendering::ValidateRenderingSettingsNormalization(a_configuration, sanitized);
 		const auto previous = settings;
 		settings = std::move(candidate);
 		if (!HandleNeuralRenderingSettingsTransition(previous, "Neural Rendering feature configuration")) {
@@ -17854,7 +17854,10 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 
 bool Upscaling::ResetNeuralRenderingConfiguration()
 {
-	const auto configuration = NeuralRendering::RenderingSettings(Settings{});
+	auto defaults = Settings{};
+	defaults.neuralRenderingRenderscaleFov = NeuralRendering::DefaultRenderscaleFov(
+		IsVRRuntimeActive(), settings.foveatedVendorDispatch);
+	const auto configuration = NeuralRendering::RenderingSettings(defaults);
 	std::string error;
 	const bool applied = ApplyNeuralRenderingConfiguration(configuration, error);
 	if (applied) {
@@ -17904,7 +17907,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 	const bool showDiagnostics = !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();
 	if (ImGui::TreeNodeEx("Neural Rendering", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
 		ImGui::TextWrapped("Neural Rendering uses AI to enhance scene detail and character appearance.");
-		ImGui::TextWrapped("Full resolution runs NR on the final scene before UI; its FOV option limits NR to your eye masks. Foveated runs NR across the DLSS-upscaled FOV region. Renderscale NR runs before DLSS, with optional FOV masking in VR. Character selection combines with every mode.");
+		ImGui::TextWrapped("Full resolution runs NR on the final scene before UI; its FOV option limits NR to your eye masks. Foveated runs NR on the final scene inside the DLSS-upscaled FOV region. Renderscale NR runs before DLSS, with optional FOV masking in VR. Character selection combines with every mode.");
 		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
@@ -17917,7 +17920,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Renderscale NR before DLSS" };
 		static constexpr const char* renderingModeHelp[]{
 			"Runs NR at full output resolution on the final scene before UI. Restrict to FOV mask limits the result to your eye masks; otherwise NR covers the whole scene.",
-			"Runs NR across the DLSS-upscaled region inside your FOV masks, then blends its edges into the scene. Insertion Point chooses when it runs; Characters only can narrow the selection.",
+			"Runs NR on the final scene inside your DLSS-upscaled FOV region, after post-processing and before UI. Characters only can narrow the selection.",
 			"Runs NR at the current render resolution before DLSS, which then reconstructs the final image. Requires DLSS. It covers the whole image unless Use FOV mask for Renderscale NR is enabled in VR. Character selection is optional."
 		};
 		const bool renderingModeOpen = ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())]);
@@ -17950,7 +17953,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingRenderscaleFov);
 			ImGui::Checkbox("Use FOV mask for Renderscale NR", &settings.neuralRenderingRenderscaleFov);
 			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Off: runs NR then DLSS across the whole eye. On: crops both to your FOV masks and fills the periphery without NR or DLSS. Requires configured VR FOV; independent of Full resolution restriction.");
+				ImGui::TextUnformatted("On: crops NR and DLSS to your FOV masks and fills the periphery without either. Off: processes the whole eye. Defaults on when VR FOV is enabled; saved choices are preserved. Independent of Full resolution restriction.");
 		}
 		const bool missingFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) &&
 		                        !fovAvailable;
@@ -17996,31 +17999,14 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		if (!a_essentialsOnly && (settings.neuralRenderingEnabled || missingFov)) {
 			auto fovAvailabilityGuard = Util::DisableGuard(missingFov);
 			ImGui::SeparatorText("Pipeline");
-			static constexpr const char* insertionPointModes[]{
-				NeuralRendering::GetInsertionPointDisplayName(
-					NeuralRendering::InsertionPoint::UpscaledCenter),
-				NeuralRendering::GetInsertionPointDisplayName(
-					NeuralRendering::InsertionPoint::FinalLdrPreUi)
-			};
 			const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;
-			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated) {
-				int insertionPoint = static_cast<int>(GetNeuralRenderingInsertionPoint());
-				if (ImGui::Combo(
-						"Insertion Point",
-						&insertionPoint,
-						insertionPointModes,
-						IM_ARRAYSIZE(insertionPointModes))) {
-					settings.neuralRenderingInsertionPoint = static_cast<uint>(
-						NeuralRendering::ClampInsertionPoint(
-							static_cast<uint32_t>(insertionPoint)));
-				}
-				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Upscaled Centre runs NR just after DLSS, before scene post-processing. Final LDR runs it on the final scene before UI. Both use the FOV region.");
-			} else {
+			ImGui::TextUnformatted(reducedResolution ?
+									   "Placement: Render resolution, before DLSS" :
+									   "Placement: Final scene, before UI");
+			if (auto tooltip = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted(reducedResolution ?
-										   "Placement: Render resolution, before DLSS" :
-										   "Placement: Final scene, before UI");
-			}
+										   "NR runs before DLSS at render resolution. DLSS then reconstructs the final image." :
+										   "NR runs after scene post-processing to preserve fire and bright lights. Foveated uses the FOV region with Render Scale on or off.");
 			if (showDiagnostics && ImGui::TreeNode("Execution diagnostics")) {
 				if (globals::game::isVR) {
 					static constexpr const char* stereoSubmissionModes[]{
@@ -19915,10 +19901,10 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 		return acceptTransition();
 	}
 
-	const auto previousInsertionPoint = NeuralRendering::ClampInsertionPoint(
-		a_previousSettings.neuralRenderingInsertionPoint);
-	const auto currentInsertionPoint = NeuralRendering::ClampInsertionPoint(
-		settings.neuralRenderingInsertionPoint);
+	const auto previousInsertionPoint = NeuralRendering::ResolveInsertionPoint(
+		NeuralRendering::ClampRenderingMode(a_previousSettings.neuralRenderingMode));
+	const auto currentInsertionPoint = NeuralRendering::ResolveInsertionPoint(
+		NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode));
 	const bool insertionPointChanged =
 		previousInsertionPoint != currentInsertionPoint ||
 		a_previousSettings.neuralRenderingMode != settings.neuralRenderingMode ||

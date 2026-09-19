@@ -78,6 +78,14 @@ namespace
 		Require(Read(json::parse(saved.dump())) == settings,
 			"Character settings changed after persisted text round trip");
 		Require(Read(json::object()) == FlatSettings{}, "Empty character object must use defaults");
+		Require(Read(json::object()).neuralCharacterHairEnabled,
+			"Missing hair selection must inherit the enabled default");
+		const auto hairOff = Read(json{ { "neuralCharacterHairEnabled", false } });
+		Require(!hairOff.neuralCharacterHairEnabled && hairOff.neuralCharacterHairStrength == 0.65f,
+			"Saved hair-off preference and existing default strength must remain intact");
+		json hairOffSaved;
+		WriteUpscalingCharacterSettingsJson(hairOffSaved, hairOff);
+		Require(Read(hairOffSaved) == hairOff, "Saved hair-off preference must survive a round trip");
 		auto expected = FlatSettings{};
 		expected.neuralCharacterRenderingEnabled = true;
 		expected.neuralCharacterMinimumFacePixelSize = 200;
@@ -245,9 +253,8 @@ namespace
 		static_assert(CharacterPolicy::CategoryBit(static_cast<CharacterCategory>(0xFFFFFFFFu)) == 0);
 		CharacterSettings settings{};
 		Require(IsValidCharacterSettings(settings), "Default character policy must be valid");
-		Require(GetEnabledCharacterCategoryMask(settings) == 6u, "Default mask must include face and skin only");
+		Require(GetEnabledCharacterCategoryMask(settings) == 14u, "Default mask must include face, skin and hair");
 		settings.skinStrength = 0.0f;
-		settings.hair = true;
 		Require(GetEnabledCharacterCategoryMask(settings) == 10u, "Category mask must respect strengths and switches");
 		Require(!IsCharacterCategoryEnabled(static_cast<CharacterCategory>(4), settings), "Unknown category must remain disabled");
 		settings.faceStrength = std::numeric_limits<float>::quiet_NaN();

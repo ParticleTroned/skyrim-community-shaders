@@ -90,6 +90,27 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering feature settings invariant");
 	};
+	for (const auto legacy : { Json(0u), Json(1u), Json(2u), Json(-1), Json(0.5), Json("invalid"), Json(false) }) {
+		for (const unsigned resolved : { 0u, 1u }) {
+			bool accepted = false;
+			try {
+				NeuralRendering::ValidateRenderingSettingsNormalization(
+					{ { "neuralRenderingInsertionPoint", legacy } },
+					{ { "neuralRenderingInsertionPoint", resolved } });
+				accepted = true;
+			} catch (const std::invalid_argument&) {
+			}
+			require(accepted == (legacy == 0u || legacy == 1u));
+		}
+	}
+	bool tuningRejected = false;
+	try {
+		NeuralRendering::ValidateRenderingSettingsNormalization(
+			{ { "neuralRenderingIntensity", -1.0 } }, { { "neuralRenderingIntensity", 0.0 } });
+	} catch (const std::invalid_argument&) {
+		tuningRejected = true;
+	}
+	require(tuningRejected);
 	NeuralRenderingFeature feature;
 	auto& backend = globals::features::upscaling;
 	auto& colour = NeuralRendering::Color::Registry::Instance();

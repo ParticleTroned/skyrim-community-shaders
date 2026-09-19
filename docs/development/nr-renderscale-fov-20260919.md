@@ -6,7 +6,16 @@ remains `reduced_resolution` / `2`. Following a reported slowdown after
 the cropped FOV path as a toggle for comparison. This is not a measured
 performance fix or a diagnosis of the reported CPU increase.
 
-## Behavior
+## Conditional-default follow-up
+
+Missing saved Renderscale NR FOV values and restoring NR defaults now use
+FOV when it is enabled in VR. Otherwise they select the full image. An
+explicit saved true/false value takes precedence. This is a settings-load
+and reset default, not a forced setting on every FOV toggle or frame.
+DevBench patches that omit `renderscaleFov` retain the current choice.
+The route implementations and performance claims below are unchanged.
+
+## Original optional-toggle behavior
 
 VR Renderscale NR exposes **Use FOV mask for Renderscale NR** below the
 mode selector, including Essential settings. Its independent persistent

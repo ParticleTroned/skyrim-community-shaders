@@ -46,6 +46,18 @@ namespace NeuralRendering
 		return rendering;
 	}
 
+	/** Accepts migrated placement while rejecting other out-of-range persisted values. */
+	inline void ValidateRenderingSettingsNormalization(const nlohmann::json& requested, const nlohmann::json& normalized)
+	{
+		for (const auto& [name, value] : requested.items()) {
+			if (normalized.at(name) == value)
+				continue;
+			if (name == "neuralRenderingInsertionPoint" && (value == 0u || value == 1u))
+				continue;
+			throw std::invalid_argument("Neural Rendering setting is outside its valid range: " + name);
+		}
+	}
+
 	/** Keeps an independent feature's live settings intact during an upscaler edit. */
 	template <class Settings>
 	void CopyRenderingSettings(Settings& destination, const Settings& source)

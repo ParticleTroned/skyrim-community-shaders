@@ -9,11 +9,11 @@ renderer adapter and migration reader; its settings writer excludes NR keys.
 
 ## Routes and image domains
 
-| Mode                       | Model input and placement                                       | FOV restriction                      | Character selection                        |
-| -------------------------- | --------------------------------------------------------------- | ------------------------------------ | ------------------------------------------ |
-| Full resolution            | Final scene at output resolution, before UI                     | Optional, shared FOV geometry        | Exact authored mask and bounded ROIs       |
-| Foveated                   | Existing vendor centre; selectable centre/final-scene insertion | Existing FOV pipeline                | Exact authored mask and bounded ROIs       |
-| Renderscale NR before DLSS | Render-resolution NR, followed by DLSS                          | Automatic in VR; full image on SE/AE | Selection before DLSS at render resolution |
+| Mode                       | Model input and placement                                  | FOV restriction                     | Character selection                        |
+| -------------------------- | ---------------------------------------------------------- | ----------------------------------- | ------------------------------------------ |
+| Full resolution            | Final scene at output resolution, before UI                | Optional, shared FOV geometry       | Exact authored mask and bounded ROIs       |
+| Foveated                   | Final scene inside the DLSS-upscaled FOV region, before UI | Existing FOV pipeline               | Exact authored mask and bounded ROIs       |
+| Renderscale NR before DLSS | Render-resolution NR, followed by DLSS                     | Optional in VR; full image on SE/AE | Selection before DLSS at render resolution |
 
 Full resolution prepares depth and motion guides independently from vendor
 upscaling and the FOV toggle. The full-image blend explicitly covers the
@@ -31,11 +31,21 @@ into ordinary DLSS. Failed preparation or inference leaves DLSS on the
 original scene. This adds no independent model downscale or alternate
 character/colour algorithm.
 
-In VR, [Renderscale NR before DLSS](nr-renderscale-fov-20260919.md) uses the
-same configured crop, eye offsets and outer mask composition as Foveated.
-Both require enabled FOV; the saved `fovOnly` preference applies only to
-Full resolution there. Switching modes preserves that preference. An
-unavailable mask pauses execution without locking the master switch.
+In VR, [Renderscale NR before DLSS](nr-renderscale-fov-20260919.md) defaults
+to FOV when loading/resetting NR with FOV enabled, otherwise the full eye.
+Saved choices take precedence. Its separate `renderscaleFov` switch selects the configured
+crop, eye offsets and outer mask composition. Foveated always requires FOV;
+the saved `fovOnly` preference applies only to Full resolution. Switching
+modes preserves these preferences. An unavailable required mask pauses
+execution without locking the master switch.
+
+Full resolution and Foveated use Final LDR before UI, after scene
+post-processing, with Render Scale on or off. Legacy early Foveated
+insertion settings resolve to that placement automatically. Renderscale NR
+remains before DLSS. The [placement correction](nr-final-scene-placement-20260919.md)
+records the fire/light report, settings migration and validation limits.
+DevBench `insertionPoint` is an optional consistency assertion of the mode's
+placement; a conflicting assertion rejects the request before mutation.
 
 Reduced resolution uses Feature 18 at 1:1: colour, guide, output, and both
 sides of its crop transform describe the render-resolution domain. Feature

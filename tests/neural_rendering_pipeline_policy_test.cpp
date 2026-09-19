@@ -15,7 +15,17 @@ int main()
 	static_assert(NeuralRendering::ResolveInsertionPoint(RenderingMode::FullResolution, 0) == NeuralRendering::InsertionPoint::FinalLdrPreUi);
 	static_assert(NeuralRendering::ResolveInsertionPoint(RenderingMode::ReducedResolution, 1) == NeuralRendering::InsertionPoint::UpscaledCenter);
 	static_assert(NeuralRendering::ResolveInsertionPoint(RenderingMode::Foveated, 1) == NeuralRendering::InsertionPoint::FinalLdrPreUi);
-	static_assert(NeuralRendering::ResolveInsertionPoint(RenderingMode::Foveated, 99) == NeuralRendering::InsertionPoint::UpscaledCenter);
+	static_assert(NeuralRendering::ResolveInsertionPoint(RenderingMode::Foveated, 99) == NeuralRendering::InsertionPoint::FinalLdrPreUi);
+	// Legacy selections cannot revive the pre-post-processing Foveated path.
+	static_assert([] {
+		for (auto legacy : { 0u, 1u, 2u, 99u, std::numeric_limits<std::uint32_t>::max() }) {
+			if (NeuralRendering::ResolveInsertionPoint(RenderingMode::Foveated, legacy) != NeuralRendering::InsertionPoint::FinalLdrPreUi ||
+				NeuralRendering::ResolveInsertionPoint(RenderingMode::FullResolution, legacy) != NeuralRendering::InsertionPoint::FinalLdrPreUi ||
+				NeuralRendering::ResolveInsertionPoint(RenderingMode::ReducedResolution, legacy) != NeuralRendering::InsertionPoint::UpscaledCenter)
+				return false;
+		}
+		return true;
+	}());
 	static_assert(NeuralRendering::ResolvePipelineArrangement(RenderingMode::ReducedResolution) == NeuralRendering::PipelineArrangement::NeuralThenDlss);
 	static_assert(NeuralRendering::ResolvePipelineArrangement(RenderingMode::FullResolution) == NeuralRendering::PipelineArrangement::DlssThenNeural);
 	static_assert(NeuralRendering::IsCompleteNeuralImageResult(1, 0, false));
@@ -31,6 +41,10 @@ int main()
 	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::FullResolution));
 	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::Foveated));
 	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::ReducedResolution));
+	static_assert(!NeuralRendering::DefaultRenderscaleFov(false, false));
+	static_assert(!NeuralRendering::DefaultRenderscaleFov(false, true));
+	static_assert(!NeuralRendering::DefaultRenderscaleFov(true, false));
+	static_assert(NeuralRendering::DefaultRenderscaleFov(true, true));
 	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::FullResolution, false));
 	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::ReducedResolution, false));
 	static_assert(!NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::Foveated, true));

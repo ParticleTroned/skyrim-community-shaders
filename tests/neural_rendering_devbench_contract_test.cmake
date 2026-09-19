@@ -3206,7 +3206,10 @@ foreach(_insertion_point_contract IN ITEMS
     [[const bool resetAttempted =]]
     [[NeuralRendering::RequiresBackendRetirement(]]
     [[enableStateChanged, multiRoiChanged, insertionPointChanged,]]
-    [["insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"]}]]
+    [["insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"],"description":]]
+    [[TryValidateNeuralRenderingPlacement(request,]]
+    [["nr_insertion_point_conflict"]]
+    [["requiredValue", NeuralRendering::GetInsertionPointName(required)]]
 )
     string(FIND "${_bridge}" "${_insertion_point_contract}" _insertion_point_position)
     if(_insertion_point_position EQUAL -1)

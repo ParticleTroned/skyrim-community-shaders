@@ -73,6 +73,19 @@ also separated shared-mask availability from the full-eye adapter, removed
 redundant full-coverage baseline copies and tightened capture identity
 checks; the implementation record retains validation and scope details.
 
+## Foveated final-scene placement and hair defaults, 2026-09-19
+
+The [placement/default correction](nr-final-scene-placement-20260919.md)
+makes Foveated use Final LDR before UI, including legacy early insertion
+settings, following the tester's successful fire/light workaround. Full
+resolution and Renderscale NR retain their respective late and pre-DLSS
+placements. Hair now defaults enabled at the existing 0.65 strength;
+explicit saved hair selections remain intact. Source checks passed;
+compiled and live verification remain pending under the no-build instruction.
+The same update defaults Renderscale NR FOV on when loading/resetting NR
+with VR FOV enabled, preserving explicit saved choices. Valid old placement
+values migrate without rejecting the rest of the saved profile.
+
 ## Task 0 verified checkpoint
 
 -   Existing worktree: `C:/src/skyrim-community-shaders/build/worktrees/main-vr-nr`.

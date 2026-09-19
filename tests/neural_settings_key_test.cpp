@@ -29,6 +29,16 @@ int main()
 		if (!value)
 			throw std::runtime_error("NR effective settings-key invariant");
 	};
+	Upscaling::Settings foveated{};
+	foveated.neuralRenderingEnabled = true;
+	foveated.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
+	const auto foveatedKey = BuildNeuralRenderingSettingsKey(foveated);
+	for (const uint legacy : { 0u, 1u, 99u }) {
+		foveated.neuralRenderingInsertionPoint = legacy;
+		require(BuildNeuralRenderingSettingsKey(foveated) == foveatedKey);
+	}
+	foveated.neuralRenderingBlendFeather = 0.1f;
+	require(BuildNeuralRenderingSettingsKey(foveated) != foveatedKey);
 	for (const auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::ReducedResolution }) {
 		Upscaling::Settings baseline{};
 		baseline.neuralRenderingEnabled = true;

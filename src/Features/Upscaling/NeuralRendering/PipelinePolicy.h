@@ -67,6 +67,12 @@ namespace NeuralRendering
 		return isVR || mode == RenderingMode::FullResolution || mode == RenderingMode::ReducedResolution;
 	}
 
+	/** A missing/reset Renderscale NR preference follows configured VR FOV. */
+	[[nodiscard]] constexpr bool DefaultRenderscaleFov(bool isVR, bool fovEnabled) noexcept
+	{
+		return isVR && fovEnabled;
+	}
+
 	/** Route choices remain escapable when a saved FOV prerequisite is unavailable. */
 	[[nodiscard]] constexpr bool IsRenderingModeSelectable(bool isVR, RenderingMode mode, bool fovAvailable) noexcept
 	{
@@ -135,12 +141,10 @@ namespace NeuralRendering
 		           kDefaultInsertionPoint;
 	}
 
-	/** Public mode selection fixes image domains; only the foveated route selects an insertion. */
-	[[nodiscard]] constexpr InsertionPoint ResolveInsertionPoint(RenderingMode mode, std::uint32_t selected) noexcept
+	/** Final-scene NR keeps emissives after post-processing, regardless of legacy placement. */
+	[[nodiscard]] constexpr InsertionPoint ResolveInsertionPoint(RenderingMode mode, [[maybe_unused]] std::uint32_t legacySelected = 0) noexcept
 	{
-		return mode == RenderingMode::FullResolution    ? InsertionPoint::FinalLdrPreUi :
-		       mode == RenderingMode::ReducedResolution ? InsertionPoint::UpscaledCenter :
-		                                                  ClampInsertionPoint(selected);
+		return mode == RenderingMode::ReducedResolution ? InsertionPoint::UpscaledCenter : InsertionPoint::FinalLdrPreUi;
 	}
 
 	/** Reduced resolution runs stateless Feature 18 before the temporal upscaler. */

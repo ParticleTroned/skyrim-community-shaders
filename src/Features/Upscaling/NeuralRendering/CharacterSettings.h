@@ -67,7 +67,7 @@ namespace NeuralRendering
 		inline constexpr bool kDefaultVisualIsolation = true;
 		inline constexpr bool kDefaultFaces = true;
 		inline constexpr bool kDefaultSkin = true;
-		inline constexpr bool kDefaultHair = false;
+		inline constexpr bool kDefaultHair = true;
 		inline constexpr float kDefaultFaceStrength = 1.0f;
 		inline constexpr float kDefaultSkinStrength = 1.0f;
 		inline constexpr float kDefaultHairStrength = 0.65f;

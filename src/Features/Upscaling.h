@@ -463,9 +463,11 @@ public:
 		bool neuralRenderingEnabled = false;
 		uint neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
 		bool neuralRenderingFovOnly = false;
+		// Loading/resetting NR defaults follows configured VR FOV; explicit choices persist.
 		bool neuralRenderingRenderscaleFov = false;
-		uint neuralRenderingInsertionPoint =
-			static_cast<uint>(NeuralRendering::kDefaultInsertionPoint);
+		// Retained for saved-settings compatibility; effective placement follows the mode.
+		uint neuralRenderingInsertionPoint = static_cast<uint>(
+			NeuralRendering::ResolveInsertionPoint(NeuralRendering::RenderingMode::Foveated));
 		bool neuralRenderingBatchedStereo = true;
 		bool neuralRenderingDirectCommit = true;
 		uint neuralRenderingPreset = 3;

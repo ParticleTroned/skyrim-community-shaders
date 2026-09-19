@@ -72,7 +72,7 @@ namespace
 	constexpr std::array transactionCases{
 		TransactionCase{ "A full", RenderingMode::FullResolution, false, InsertionPoint::FinalLdrPreUi, { 0u, 0u, 64u, 40u } },
 		TransactionCase{ "A FOV", RenderingMode::FullResolution, true, InsertionPoint::FinalLdrPreUi, { 3u, 5u, 35u, 19u } },
-		TransactionCase{ "B centre", RenderingMode::Foveated, false, InsertionPoint::UpscaledCenter, { 3u, 5u, 35u, 19u } },
+		TransactionCase{ "B legacy centre migrated", RenderingMode::Foveated, false, InsertionPoint::UpscaledCenter, { 3u, 5u, 35u, 19u } },
 		TransactionCase{ "B final", RenderingMode::Foveated, false, InsertionPoint::FinalLdrPreUi, { 3u, 5u, 35u, 19u } },
 		TransactionCase{ "C full", RenderingMode::ReducedResolution, false, InsertionPoint::UpscaledCenter, { 0u, 0u, 32u, 20u } },
 		TransactionCase{ "C FOV", RenderingMode::ReducedResolution, true, InsertionPoint::UpscaledCenter, { 3u, 5u, 17u, 9u } },
@@ -86,7 +86,8 @@ namespace
 		Require(stereo || (!submit && !RequiresFoveatedMask(fixture.mode, fixture.fovOnly, stereo, fixture.fovOnly)),
 			"The supported mono fixture must use a main route without VR FOV");
 		const auto insertion = ResolveInsertionPoint(fixture.mode, static_cast<std::uint32_t>(fixture.insertion));
-		Require(insertion == fixture.insertion, "Fixture must use its effective production insertion");
+		Require(insertion == (fixture.mode == RenderingMode::ReducedResolution ? InsertionPoint::UpscaledCenter : InsertionPoint::FinalLdrPreUi),
+			"Foveated colour work must select the late profile even with a legacy early selection");
 		const std::uint32_t routeIndex = submit ? 1u : 0u;
 		RendererApplyArgs args;
 		args.insertionPoint = insertion;

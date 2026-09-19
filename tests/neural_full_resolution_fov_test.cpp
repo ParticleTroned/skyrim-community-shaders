@@ -28,6 +28,7 @@ struct Upscaling
 		bool neuralRenderingEnabled = true, neuralRenderingFovOnly = true;
 		bool neuralRenderingRenderscaleFov = false;
 		bool foveatedPeripheryMaskVisualization = false, periphery_taa_enable = false;
+		uint neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::FullResolution);
 		uint neuralRenderingInsertionPoint = static_cast<uint>(NeuralRendering::InsertionPoint::FinalLdrPreUi);
 		float foveatedCenterArea = 0.50f, periphery_taa_center_area = 0.35f, periphery_taa_outer_scale = 0.8f;
 		float foveatedCenterHorizontalScale = 1.1f;
@@ -38,11 +39,10 @@ struct Upscaling
 	} settings;
 #include "neural_full_resolution_fov_types.h"
 	bool available = true;
-	NeuralRendering::RenderingMode mode = NeuralRendering::RenderingMode::FullResolution;
 	std::array<float2, 2> fovOffsets{ float2{ -0.03f, 0.02f }, float2{ 0.04f, -0.01f } };
 	std::array<float2, 2> taaOffsets{ float2{ -0.06f, 0.03f }, float2{ 0.07f, -0.02f } };
 	bool IsNeuralRenderingRequested() const { return settings.neuralRenderingEnabled; }
-	auto GetNeuralRenderingMode() const { return mode; }
+	auto GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 	UpscaleMethod GetRuntimeUpscaleMethod() const { return UpscaleMethod::kDLSS; }
 	bool IsActiveUpscalingFoveatedProfileAvailable() const { return available; }
 	bool IsPeripheryTAAEnabled(UpscaleMethod) const { return available && settings.periphery_taa_enable; }
@@ -146,7 +146,7 @@ int main()
 		Require(upscaling.foveatedRectCache.plan.eyes[0].output.CoversExtent(1511, 1217) &&
 					upscaling.foveatedRectCache.plan.eyes[1].output.CoversExtent(1511, 1217),
 			"Full NR must cover both complete eyes");
-		upscaling.mode = NeuralRendering::RenderingMode::Foveated;
+		upscaling.settings.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
 		upscaling.settings.neuralRenderingBlendFeather = 0.08f;
 		Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, true,
 					0.5f, 0.02f, 1.0f, Upscaling::UpscaleMethod::kDLSS, false),
@@ -154,15 +154,19 @@ int main()
 		Require(upscaling.foveatedRectCache.centerFeather == 0.08f,
 			"Ordinary foveated reconstruction must retain its independent NR support feather");
 		upscaling.settings.neuralRenderingInsertionPoint = static_cast<uint>(NeuralRendering::InsertionPoint::UpscaledCenter);
+		Require(UsesFinalLdrNeuralBlend(upscaling.settings),
+			"Legacy early placement must retain final-LDR support for Foveated");
+		// Match support widths when comparing crop geometry across different placements.
+		upscaling.settings.neuralRenderingBlendFeather = 0.02f;
 		for (const float scale : { 0.26f, 0.60f, 0.95f }) {
 			for (const float offset : { -0.25f, 0.0f, 0.25f }) {
 				upscaling.fovOffsets = { float2{ offset, -offset }, float2{ -offset, offset } };
-				upscaling.mode = NeuralRendering::RenderingMode::Foveated;
+				upscaling.settings.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
 				Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, true,
 							scale, 0.02f, 1.1f, Upscaling::UpscaleMethod::kDLSS, false),
 					"Foveated reference plan failed");
 				const auto reference = upscaling.foveatedRectCache;
-				upscaling.mode = NeuralRendering::RenderingMode::ReducedResolution;
+				upscaling.settings.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::ReducedResolution);
 				for (const bool savedRestriction : { false, true }) {
 					upscaling.settings.neuralRenderingFovOnly = savedRestriction;
 					upscaling.settings.neuralRenderingRenderscaleFov = true;

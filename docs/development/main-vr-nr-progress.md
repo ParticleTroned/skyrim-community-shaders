@@ -33,6 +33,11 @@ Source checks passed as recorded; compiled/live validation remains pending
 under the user's no-build instruction. The flat character NR extension was
 paused at the user's request to prioritize this correction.
 
+The [FOV menu follow-up](nr-fov-menu-selection-20260919.md) keeps configured
+VR Foveated choices editable while startup or transition handling pauses
+runtime upscaling. Execution still uses the effective runtime method, and
+the UI now distinguishes configured-but-waiting FOV from inactive FOV.
+
 ## Flat character NR extension, 2026-09-19
 
 Resumed after master-toggle correction `153af7cbc`. The

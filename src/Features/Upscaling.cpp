@@ -5531,6 +5531,12 @@ namespace
 		return SupportsFoveatedVendorDispatch(a_upscaleMethod) && settings.foveatedVendorDispatch;
 	}
 
+	bool IsFoveatedMaskConfigured(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod, bool usePeripheryTAAProfile)
+	{
+		return IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod) &&
+		       FoveatedCommon::IsActiveCoverage(GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile).centerScale);
+	}
+
 	bool ShouldUseReducedResolutionForUpscaling(Upscaling::UpscaleMethod a_upscaleMethod, const float2& a_resolutionScale)
 	{
 		return IsVendorUpscalingMethod(a_upscaleMethod) &&
@@ -17062,11 +17068,13 @@ void Upscaling::DrawSettings()
 			if (foveatedDispatchSupportedForMethod) {
 				const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
 				const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.sharedVisibleScale);
+				const bool fovConfigured = IsFoveatedMaskConfigured(settings, upscaleMethod, settings.periphery_taa_enable && !settings.neuralRenderingEnabled);
 				ImGui::TextDisabled("Configure foveated upscaling in VR > FOV.");
 				ImGui::TextColored(
 					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 					"FOV: %s",
-					fovActive ? "active" : "inactive");
+					fovActive ? "active" : fovConfigured ? "configured; waiting for runtime upscaling" :
+														   "inactive");
 			} else {
 				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 			}
@@ -17722,7 +17730,7 @@ void Upscaling::DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const
 		return;
 	if (a_neuralRenderingMenu && (!neuralRenderingReplacedFovTaa ||
 									 !NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly) ||
-									 !IsNeuralRenderingFovConfigurationAvailable()))
+									 !IsNeuralRenderingFovConfigurationAvailable(GetUpscaleMethod())))
 		return;
 	Util::Text::WrappedError("NR uses FOV centre without TAA. Set both eye masks precisely to cover your visible headset view.");
 }
@@ -17898,7 +17906,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
-		const bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable();
+		const bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);
 		ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Turns Neural Rendering on or off. Missing route prerequisites keep NR inactive without locking this switch. Enabling NR turns off FOV + TAA.");
@@ -17945,6 +17953,9 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 								   "This selection requires FOV. Configure it in Upscaling, or select a mode without FOV restriction.");
 		else if (!fovAvailable && globals::game::isVR)
 			ImGui::TextDisabled("Set up and enable Foveated Upscaling (FOV) to use FOV-dependent NR options.");
+		else if (NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly) &&
+				 !IsNeuralRenderingFovConfigurationAvailable())
+			ImGui::TextDisabled("FOV is configured; this NR route waits until runtime upscaling is available.");
 		{
 			auto guard = Util::DisableGuard(missingFov && !settings.neuralCharacterRenderingEnabled);
 			ImGui::Checkbox("Characters only", &settings.neuralCharacterRenderingEnabled);
@@ -18671,6 +18682,8 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 				"Active FOV mode: %s, visible %.2f",
 				GetFoveatedUpscalingModeName(activeFoveatedProfile.mode),
 				activeFoveatedProfile.sharedVisibleScale);
+		} else if (IsFoveatedMaskConfigured(settings, upscaleMethod, settings.periphery_taa_enable && !settings.neuralRenderingEnabled)) {
+			ImGui::TextDisabled("FOV is configured; waiting for runtime upscaling.");
 		} else {
 			ImGui::TextDisabled("Active FOV mode: Off (full visible coverage).");
 		}
@@ -41460,8 +41473,12 @@ bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable() const
 
 bool Upscaling::IsNeuralRenderingFovConfigurationAvailable() const
 {
-	return loaded && IsFoveatedVendorDispatchRequested(settings, GetRuntimeUpscaleMethod()) &&
-	       FoveatedCommon::IsActiveCoverage(GetFoveatedMaskProfileParams(settings, false).centerScale);
+	return IsNeuralRenderingFovConfigurationAvailable(GetRuntimeUpscaleMethod());
+}
+
+bool Upscaling::IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod a_upscaleMethod) const
+{
+	return loaded && IsFoveatedMaskConfigured(settings, a_upscaleMethod, false);
 }
 
 const char* Upscaling::GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode)

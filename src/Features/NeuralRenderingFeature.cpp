@@ -670,11 +670,11 @@ void NeuralRenderingFeature::EarlyPrepass()
 void NeuralRenderingFeature::DrawSettings()
 {
 	globals::features::upscaling.DrawNeuralRenderingSettings(
-		globals::features::upscaling.GetRuntimeUpscaleMethod());
+		globals::features::upscaling.GetUpscaleMethod());
 	const auto& upscaling = globals::features::upscaling;
 	auto fovAvailabilityGuard = Util::DisableGuard(
 		NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly) &&
-		!upscaling.IsNeuralRenderingFovConfigurationAvailable());
+		!upscaling.IsNeuralRenderingFovConfigurationAvailable(upscaling.GetUpscaleMethod()));
 	ImGui::SeparatorText("Colour processing");
 	const bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();
 	auto config = Registry::Instance().Snapshot();
@@ -847,7 +847,7 @@ void NeuralRenderingFeature::DrawSettings()
 }
 void NeuralRenderingFeature::DrawEssentialSettings()
 {
-	globals::features::upscaling.DrawNeuralRenderingSettings(globals::features::upscaling.GetRuntimeUpscaleMethod(), true);
+	globals::features::upscaling.DrawNeuralRenderingSettings(globals::features::upscaling.GetUpscaleMethod(), true);
 }
 void NeuralRenderingFeature::DataLoaded()
 {

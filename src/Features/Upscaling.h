@@ -2647,8 +2647,10 @@ public:
 	bool AdjustVRRenderScaleRenderTargetProperties(RE::RENDER_TARGETS::RENDER_TARGET a_target, RE::BSGraphics::RenderTargetProperties* a_properties) const;
 	bool UseActiveFoveatedPeripheryTAAProfile() const;
 	bool IsActiveUpscalingFoveatedProfileAvailable() const;
-	/** Tests the configured FOV prerequisite without the reduced-NR dispatch override. */
+	/** Tests FOV execution readiness using the effective runtime upscaler. */
 	bool IsNeuralRenderingFovConfigurationAvailable() const;
+	/** Tests a mask against a supplied upscaler; UI passes the configured method. */
+	bool IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod a_upscaleMethod) const;
 	enum class FoveatedUpscalingMode : uint8_t
 	{
 		Disabled,

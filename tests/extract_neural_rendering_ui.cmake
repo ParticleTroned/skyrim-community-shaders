@@ -30,11 +30,11 @@ extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()"
     "const char* Upscaling::GetFoveatedUpscalingModeName(" fov_readiness)
 extract("src/Features/Upscaling.cpp"
-    "\t\tconst bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable();"
+    "\t\tconst bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);"
     "\t\tconst bool routeAvailable =" selection_controls)
 extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingRequested() const noexcept"
     "NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode()" execution_gate)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
-    "${fov_request}\n${fov_profile}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${execution_gate}\nvoid Upscaling::DrawSelectionControls(bool a_essentialsOnly) {\n${selection_controls}\n}\n")
+    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${execution_gate}\nvoid Upscaling::DrawSelectionControls(bool a_essentialsOnly) {\nconst auto a_upscaleMethod = GetUpscaleMethod();\n${selection_controls}\n}\n")

@@ -3,6 +3,7 @@
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -60,8 +61,11 @@ namespace globals
 			} settings;
 			bool neuralRenderingFeatureAvailable = true;
 			UpscaleMethod method = UpscaleMethod::kDLSS;
+			std::optional<UpscaleMethod> runtimeMethod;
+			UpscaleMethod lastDrawMethod = UpscaleMethod::kNONE;
 			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
+			bool IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod a_upscaleMethod) const;
 			bool IsNeuralRenderingRequested() const noexcept;
 			void DrawSelectionControls(bool a_essentialsOnly = true);
 			void DrawNeuralRenderingFovWarning(bool) const {}
@@ -72,8 +76,13 @@ namespace globals
 				value.periphery_taa_enable = false;
 				return true;
 			}
-			UpscaleMethod GetRuntimeUpscaleMethod() const { return method; }
-			void DrawNeuralRenderingSettings(UpscaleMethod, bool = false) { ++draws; }
+			UpscaleMethod GetUpscaleMethod() const { return method; }
+			UpscaleMethod GetRuntimeUpscaleMethod() const { return runtimeMethod.value_or(method); }
+			void DrawNeuralRenderingSettings(UpscaleMethod value, bool = false)
+			{
+				++draws;
+				lastDrawMethod = value;
+			}
 		} upscaling;
 	}
 }
@@ -603,4 +612,91 @@ int main()
 	globals::game::isVR = false;
 	upscaling.settings.periphery_taa_center_area = 0.3f;
 	require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(), "Flat runtimes cannot supply the VR shared FOV mask");
+
+	globals::game::isVR = true;
+	upscaling.settings = {};
+	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	upscaling.settings.foveatedCenterArea = 1.0f;
+	upscaling.settings.periphery_taa_center_area = 0.3f;
+	require(!IsFoveatedMaskConfigured(upscaling.settings, upscaling.method, false) &&
+				IsFoveatedMaskConfigured(upscaling.settings, upscaling.method, true) &&
+				!upscaling.IsNeuralRenderingFovConfigurationAvailable(upscaling.method),
+		"FOV status may use the TAA profile, while NR requires its saved centre-only mask");
+	upscaling.settings.foveatedCenterArea = 0.6f;
+	upscaling.settings.periphery_taa_center_area = 1.0f;
+	require(IsFoveatedMaskConfigured(upscaling.settings, upscaling.method, false) &&
+				!IsFoveatedMaskConfigured(upscaling.settings, upscaling.method, true) &&
+				upscaling.IsNeuralRenderingFovConfigurationAvailable(upscaling.method),
+		"The NR prerequisite must not borrow full coverage from the independent TAA profile");
+	upscaling.settings.periphery_taa_center_area = 0.3f;
+	for (const bool taaProfile : { false, true }) {
+		for (const auto unsupported : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA })
+			require(!IsFoveatedMaskConfigured(upscaling.settings, unsupported, taaProfile), "Neither mask profile admits a nonvendor upscaler");
+		upscaling.settings.foveatedVendorDispatch = false;
+		require(!IsFoveatedMaskConfigured(upscaling.settings, upscaling.method, taaProfile), "Unchecked FOV cannot be reported as configured");
+		upscaling.settings.foveatedVendorDispatch = true;
+		globals::game::isVR = false;
+		require(!IsFoveatedMaskConfigured(upscaling.settings, upscaling.method, taaProfile), "Both configured mask profiles remain VR-only");
+		globals::game::isVR = true;
+	}
+	upscaling.loaded = false;
+	require(IsFoveatedMaskConfigured(upscaling.settings, upscaling.method, false) &&
+				!upscaling.IsNeuralRenderingFovConfigurationAvailable(upscaling.method) && !upscaling.IsNeuralRenderingFovConfigurationAvailable(),
+		"Saved mask geometry remains configured while an unloaded upscaler blocks both NR prerequisite overloads");
+	upscaling.loaded = true;
+
+	// Main/loading menus can temporarily mask the selected vendor with NONE or TAA.
+	for (const auto configured : { Upscaling::UpscaleMethod::kDLSS, Upscaling::UpscaleMethod::kFSR }) {
+		for (const auto effective : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA }) {
+			for (const auto mode : { ModeChoice::FullResolution, ModeChoice::Foveated, ModeChoice::ReducedResolution }) {
+				globals::game::isVR = true;
+				upscaling.settings = {};
+				upscaling.method = configured;
+				upscaling.runtimeMethod = effective;
+				upscaling.settings.foveatedCenterArea = 0.6f;
+				upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
+				upscaling.settings.neuralRenderingFovOnly = true;
+				upscaling.settings.neuralRenderingEnabled = true;
+				require(upscaling.IsNeuralRenderingFovConfigurationAvailable(configured) &&
+							!upscaling.IsNeuralRenderingFovConfigurationAvailable() && !upscaling.IsNeuralRenderingRequested(),
+					"Configured FOV remains editable while effective runtime admission waits for the vendor");
+				ImGui::Clear("Characters only");
+				upscaling.DrawSelectionControls();
+				require(ImGui::Seen("FOV is configured; this NR route waits until runtime upscaling is available."),
+					"Pending runtime admission must not be reported as missing FOV configuration");
+				require(!ImGui::Disabled("Foveated") && !ImGui::Disabled("Characters only") &&
+							upscaling.settings.neuralCharacterRenderingEnabled,
+					"A temporarily masked vendor must not disable configured FOV or character selection");
+				for (const auto* category : { "Faces", "Skin", "Hair" })
+					require(ImGui::Seen(category) && !ImGui::Disabled(category), "Pending FOV must retain editable character categories");
+				if (mode != ModeChoice::Foveated)
+					require(!ImGui::Disabled("Restrict to FOV mask"), "Configured FOV restriction remains editable in main/loading menus");
+				registry.configuration = {};
+				registry.configuration.settings.mode = Mode::PreserveSource;
+				registry.configuration.settings.lightingPreservation = 0.25f;
+				ImGui::sliderEditValue = 61.0f;
+				draw("Lighting preservation");
+				require(upscaling.lastDrawMethod == configured && !ImGui::Disabled("Enable colour processing") &&
+							!ImGui::Disabled("Colour mode") && !ImGui::Disabled("Lighting preservation") &&
+							registry.configuration.settings.lightingPreservation == 0.61f,
+					"Actual NR feature UI must use configured readiness for pending FOV colour edits");
+				feature.DrawEssentialSettings();
+				require(upscaling.lastDrawMethod == configured, "Essential NR UI must use the configured vendor too");
+				for (const bool enabled : { false, true }) {
+					ImGui::Clear("Enabled");
+					upscaling.DrawSelectionControls();
+					require(!ImGui::Disabled("Enabled") && upscaling.settings.neuralRenderingEnabled == enabled &&
+								!upscaling.IsNeuralRenderingRequested(),
+						"Pending FOV must leave the master editable without admitting runtime work");
+				}
+				upscaling.runtimeMethod = configured;
+				require(upscaling.IsNeuralRenderingRequested(), "Restoring the effective vendor must admit the configured FOV request");
+				upscaling.runtimeMethod = effective;
+				globals::game::isVR = false;
+				require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(configured) && !upscaling.IsNeuralRenderingRequested(),
+					"Configured vendor readiness cannot expose VR FOV on flat runtimes");
+			}
+		}
+	}
+	upscaling.runtimeMethod.reset();
 }

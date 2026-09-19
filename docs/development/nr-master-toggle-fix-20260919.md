@@ -15,6 +15,11 @@ Child preferences survive toggling the master. NR still disables FOV + TAA;
 failed backend retirement still prevents unsafe re-enabling and never
 prevents disabling NR. No shader or render-route algorithm changed.
 
+The [menu FOV follow-up](nr-fov-menu-selection-20260919.md) separates valid
+configured masks from temporary runtime suppression, so the Foveated mode
+and dependent settings remain editable at the startup menu. This original
+master correction did not yet resolve that separate mode-selection gate.
+
 DevBench accepts valid pending FOV-dependent configuration, matching the
 menu and persistent feature configuration. Readiness still reports
 `fov_not_configured`; unsupported runtimes and invalid provider parameters

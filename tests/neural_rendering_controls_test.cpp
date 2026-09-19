@@ -108,7 +108,8 @@ struct Upscaling
 	bool neuralRenderingReplacedFovTaa = false;
 	bool fovAvailable = true;
 	NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
-	bool IsNeuralRenderingFovConfigurationAvailable() const { return fovAvailable; }
+	UpscaleMethod GetUpscaleMethod() const { return UpscaleMethod::kDLSS; }
+	bool IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod) const { return fovAvailable; }
 	void DrawNeuralRenderingFovWarning(bool) const;
 	void DrawPeripheryTAAControl();
 	bool HandleNeuralRenderingSettingsTransition(const Settings&, const char*, bool* = nullptr);

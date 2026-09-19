@@ -57,7 +57,9 @@ struct ScreenshotFeature : public Feature
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override { DrawSettings(); }
+	/** Load a settings layer, migrating a supplied legacy eye only when canonical selection is absent. */
 	virtual void LoadSettings(json& a_json) override;
+	/** Persist canonical capture choices and their backward-compatible sequence mirror. */
 	virtual void SaveSettings(json& a_json) override;
 	virtual void PostPostLoad() override;
 
@@ -120,6 +122,7 @@ struct ScreenshotFeature : public Feature
 
 private:
 	friend class ScreenshotApi;
+	/** Expand one eye/format selection into outputs without adding other views. */
 	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard) const;
 	std::string uiSequenceRequestId;
 	std::chrono::steady_clock::time_point nextUiSequencePoll{};

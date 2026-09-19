@@ -77,7 +77,7 @@ namespace
 			return false;
 		}
 
-		logger::info("Registered legacy CSAP and versioned CSXR API message listener at PostLoad");
+		logger::info("Registered legacy CSAP and versioned CSXR API listener for currently loaded plugins");
 		return true;
 	}
 
@@ -159,8 +159,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
-			// A wildcard listener registered during DLL load only covers plugins
-			// already loaded at that instant. PostLoad includes every SKSE plugin.
+			// Keep early consumers reachable; refresh the wildcard registration
+			// for plugins loaded after CSX before their PostLoad callbacks.
 			if (!RegisterCommunityShadersAPIMessageListener())
 				break;
 
@@ -384,6 +384,8 @@ bool Load()
 		return false;
 	}
 	CSX::Api::InitializeServiceRegistryProvider();
+	if (!RegisterCommunityShadersAPIMessageListener())
+		return false;
 
 	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
 		logger::error("Failed to register SKSE message listener");

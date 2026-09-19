@@ -35,6 +35,7 @@ public:
 	ScreenshotApi();
 	~ScreenshotApi();
 
+	/** Validate and dispatch a contract request while retaining its idempotent receipt. */
 	json HandleRequest(ScreenshotFeature& a_feature, const json& a_request);
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
@@ -217,12 +218,16 @@ private:
 	static constexpr uint32_t kMaximumSequenceFrames = 10000;
 
 	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request);
+	/** Freeze and validate a still or sequence descriptor using its own settings. */
 	json NormalizeCaptureDescriptor(
 		const ScreenshotFeature& a_feature,
 		const json& a_request,
 		bool a_sequenceSettings = false) const;
+	/** Validate every supported patch field before any setting is changed. */
 	json ValidateSettingsPatch(const json& a_patch) const;
+	/** Apply a validated patch; canonical eye selection owns the legacy mirror. */
 	void ApplySettingsPatch(ScreenshotFeature& a_feature, const json& a_patch) const;
+	/** Report separate still/sequence defaults and the synchronized legacy eye. */
 	json BuildSettings(const ScreenshotFeature& a_feature) const;
 
 	json MakeEnvelope(const json& a_request, bool a_ok) const;

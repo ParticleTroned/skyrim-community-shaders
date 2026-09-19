@@ -1801,6 +1801,7 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		copyToClipboard = a_json["CopyToClipboard"];
 	screenshotEye = ParseCaptureEye(a_json, "ScreenshotEye", screenshotEye);
 	const bool hasCanonicalFrameCaptureEye = a_json.contains("FrameCaptureEye");
+	bool hasLegacyFrameCaptureEye = false;
 	frameCaptureEye = ParseCaptureEye(a_json, "FrameCaptureEye", frameCaptureEye);
 	vr::EVREye legacyFramedEye = vr::Eye_Left;
 	if (a_json.contains("VRCaptureSource") && a_json["VRCaptureSource"].is_string()) {
@@ -1856,8 +1857,10 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sequenceDefaults.frameCount = std::clamp(sequence->value("FrameCount", sequenceDefaults.frameCount), 1u, 10000u);
 		if (sequence->contains("Schedule") && (*sequence)["Schedule"].is_object())
 			sequenceDefaults.intervalFrames = std::max(1u, (*sequence)["Schedule"].value("IntervalFrames", sequenceDefaults.intervalFrames));
-		if (sequence->contains("Outputs") && (*sequence)["Outputs"].is_object())
+		if (sequence->contains("Outputs") && (*sequence)["Outputs"].is_object()) {
+			hasLegacyFrameCaptureEye = (*sequence)["Outputs"].contains("SeparateEyes");
 			sequenceDefaults.saveSeparateEyes = (*sequence)["Outputs"].value("SeparateEyes", sequenceDefaults.saveSeparateEyes);
+		}
 		if (sequence->contains("Packaging") && (*sequence)["Packaging"].is_object()) {
 			const auto& packaging = (*sequence)["Packaging"];
 			if (packaging.contains("PreviewVideo") && packaging["PreviewVideo"].is_object()) {
@@ -1870,10 +1873,11 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sequenceDefaults.frameCount = std::clamp(a_json.value("SequenceFrameCount", sequenceDefaults.frameCount), 1u, 10000u);
 		sequenceDefaults.intervalFrames = std::max(1u, a_json.value("SequenceFrameInterval", sequenceDefaults.intervalFrames));
 		sequenceDefaults.previewFramesPerSecond = std::clamp(a_json.value("SequencePreviewFramesPerSecond", sequenceDefaults.previewFramesPerSecond), 1u, 240u);
+		hasLegacyFrameCaptureEye = a_json.contains("SequenceSaveSeparateEyes");
 		sequenceDefaults.saveSeparateEyes = a_json.value("SequenceSaveSeparateEyes", sequenceDefaults.saveSeparateEyes);
 		sequenceDefaults.writePreviewVideo = a_json.value("SequenceWritePreviewVideo", sequenceDefaults.writePreviewVideo);
 	}
-	if (!hasCanonicalFrameCaptureEye)
+	if (!hasCanonicalFrameCaptureEye && hasLegacyFrameCaptureEye)
 		frameCaptureEye = sequenceDefaults.saveSeparateEyes ? CaptureEye::Both : CaptureEye::Left;
 	sequenceDefaults.saveSeparateEyes = frameCaptureEye == CaptureEye::Both;
 

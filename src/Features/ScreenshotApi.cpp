@@ -475,8 +475,6 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 		json descriptor;
 		try {
 			descriptor = NormalizeCaptureDescriptor(a_feature, descriptorRequest, true);
-			descriptor["destination"]["resolvedDirectory"] =
-				PathUtf8(ResolveDestinationDirectory(a_feature, descriptor, true));
 		} catch (const std::exception& e) {
 			const std::string message = e.what();
 			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos;
@@ -781,7 +779,7 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		{ "clipboard", clipboard },
 		{ "tags", std::move(tags) },
 	};
-	normalized["destination"]["resolvedDirectory"] = PathUtf8(ResolveDestinationDirectory(a_feature, normalized));
+	normalized["destination"]["resolvedDirectory"] = PathUtf8(ResolveDestinationDirectory(a_feature, normalized, a_sequenceSettings));
 	return normalized;
 }
 

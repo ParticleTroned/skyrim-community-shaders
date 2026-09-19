@@ -20,6 +20,8 @@ target_include_directories(
     PRIVATE "${_api_discovery_test_dir}"
 )
 
+include("${PROJECT_SOURCE_DIR}/tests/plugin_load.cmake")
+
 set(_screenshot_settings_test_dir
     "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-settings"
 )

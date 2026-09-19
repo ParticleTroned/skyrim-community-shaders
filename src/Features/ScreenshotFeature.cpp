@@ -1564,7 +1564,7 @@ namespace
 		winrt::com_ptr<ID3D11Texture2D>& holder)
 	{
 		if (slot.texture) {
-			return slot.texture;
+			return REX::W32::AsReal(slot.texture);
 		}
 		auto resolveFromView = [&](ID3D11View* view) -> ID3D11Texture2D* {
 			if (!view) {
@@ -1580,10 +1580,10 @@ namespace
 			}
 			return holder.get();
 		};
-		if (auto* tex = resolveFromView(slot.SRV)) {
+		if (auto* tex = resolveFromView(REX::W32::AsReal(slot.SRV))) {
 			return tex;
 		}
-		return resolveFromView(slot.RTV);
+		return resolveFromView(REX::W32::AsReal(slot.RTV));
 	}
 
 	// Picks the capture source for this branch:
@@ -1602,14 +1602,14 @@ namespace
 		if (globals::game::isVR) {
 			auto& slot = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
 			src.texture = ResolveSlotTexture(slot, holder);
-			src.srv = slot.SRV;
+			src.srv = REX::W32::AsReal(slot.SRV);
 			src.description = "VR SBS framebuffer";
 			return src;
 		}
 
 		auto& slot = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
 		src.texture = ResolveSlotTexture(slot, holder);
-		src.srv = slot.SRV;
+		src.srv = REX::W32::AsReal(slot.SRV);
 		src.needsPreviewCache = true;
 		src.description = "kFRAMEBUFFER";
 		return src;

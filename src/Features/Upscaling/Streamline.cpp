@@ -2419,7 +2419,8 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	uint32_t qualityMode,
 	uint32_t dlssPreset
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	, VRRenderScaleRetryTelemetry::ViewportObservation* a_observation
+	,
+	VRRenderScaleRetryTelemetry::ViewportObservation* a_observation
 #endif
 )
 {
@@ -2471,9 +2472,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 				if (a_observation) {
 					a_observation->reason = "cache_hit_superseded_recycle";
 					a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
-						VRRenderScaleRetryTelemetry::FenceResult::Pending :
-						idleFenceResult == D3D11IdleFenceResult::Ready ?
-						VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Pending :
+					                             idleFenceResult == D3D11IdleFenceResult::Ready ?
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Ready :
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Failed;
 				}
 #endif
 				if (idleFenceResult == D3D11IdleFenceResult::Failed)
@@ -2520,9 +2522,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 			if (a_observation) {
 				a_observation->reason = "viewport_recycle_fence";
 				a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
-					VRRenderScaleRetryTelemetry::FenceResult::Pending :
-					idleFenceResult == D3D11IdleFenceResult::Ready ?
-					VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Pending :
+				                             idleFenceResult == D3D11IdleFenceResult::Ready ?
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Ready :
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Failed;
 			}
 #endif
 			if (idleFenceResult == D3D11IdleFenceResult::Pending) {
@@ -3173,7 +3176,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		sharpenerOutputReady &&
 		upscaling.ShouldRouteDLSSMainPassThroughSharpener();
 	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
-	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : mainTarget.UAV;
+	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : REX::W32::AsReal(mainTarget.UAV);
 	const bool outputToSharpener = useSharpenerOutput;
 
 	// VR: Combined-buffer mode with extent offsets causes temporal ghosting on the right eye
@@ -3254,7 +3257,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// per-eye depth for both eyes.
 		if (!upscaling.PreparePerEyeInputs(
 				a_upscalingTexture,
-				depthTexture.texture,
+				REX::W32::AsReal(depthTexture.texture),
 				a_motionVectors,
 				a_reactiveMask,
 				a_transparencyCompositionMask,
@@ -3351,7 +3354,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// Eye 0 writes directly to combined output.
 		const bool leftEvaluated = EvaluateDLSS(viewport, 0,
 			upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
-			depthTexture.texture, upscaling.vrIntermediateMotionVectors[0]->resource.get(),
+			REX::W32::AsReal(depthTexture.texture), upscaling.vrIntermediateMotionVectors[0]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
 			0.0f,
@@ -3380,8 +3383,8 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		if (leftEvaluated && rightEvaluated) {
 			if (depthTexture.depthSRV) {
-				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
-				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, REX::W32::AsReal(depthTexture.depthSRV), eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), REX::W32::AsReal(depthTexture.depthSRV), eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
 			}
 
 			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
@@ -3419,7 +3422,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		const bool evaluated = EvaluateDLSS(viewport, 0,
 			a_upscalingTexture, colorOut,
-			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
+			REX::W32::AsReal(depthTexture.texture), a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 			extentIn, extentOut, (uint)screenSize.x,
 			0.0f,
 			0.0f,

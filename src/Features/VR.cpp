@@ -796,7 +796,7 @@ bool VR::EnsureStereoBlendResources()
 		return false;
 
 	D3D11_TEXTURE2D_DESC mainDesc{};
-	main.texture->GetDesc(&mainDesc);
+	REX::W32::AsReal(main.texture)->GetDesc(&mainDesc);
 	if (mainDesc.ArraySize != 1 || mainDesc.SampleDesc.Count != 1)
 		return false;
 
@@ -872,7 +872,7 @@ void VR::DrawStereoBlend()
 	ID3D11UnorderedAccessView* nullUavs[3]{ nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
 
-	context->CopyResource(stereoBlendCopyTex->resource.get(), main.texture);
+	context->CopyResource(stereoBlendCopyTex->resource.get(), REX::W32::AsReal(main.texture));
 
 	StereoBlendCB cbData{};
 	cbData.FrameDim[0] = resolution.x;
@@ -889,7 +889,7 @@ void VR::DrawStereoBlend()
 	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 	auto* cbPtr = stereoBlendCB->CB();
 	ID3D11ShaderResourceView* srvs[2]{ stereoBlendCopyTex->srv.get(), depthSRV };
-	ID3D11UnorderedAccessView* uavs[1]{ main.UAV };
+	ID3D11UnorderedAccessView* uavs[1]{ REX::W32::AsReal(main.UAV) };
 
 	context->CSSetConstantBuffers(1, 1, &cbPtr);
 	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -4567,9 +4567,9 @@ void VR::UpdateDepthBufferCulling()
 		// Do not refresh after the effective location policy has switched culling off.
 		depthCullingCacheRefreshPending.store(false, std::memory_order_release);
 	} else if (ShouldRequest(
-			desired,
-			depthCullingCacheRefreshCompleted.load(std::memory_order_acquire),
-			depthCullingCacheRefreshPending.load(std::memory_order_acquire))) {
+				   desired,
+				   depthCullingCacheRefreshCompleted.load(std::memory_order_acquire),
+				   depthCullingCacheRefreshPending.load(std::memory_order_acquire))) {
 		depthCullingCacheRefreshPending.store(true, std::memory_order_release);
 	}
 

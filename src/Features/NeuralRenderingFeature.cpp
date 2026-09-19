@@ -339,7 +339,7 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
@@ -454,6 +454,7 @@ namespace
           },
           "mode": {
             "type": "string",
+            "description": "managed is experimental colour/exposure reconstruction, not a calibrated production preset. Its menu entry requires Developer Mode; API and saved enum values remain supported. Preservation sliders affect preserve_source only.",
             "enum": [
               "legacy_raw",
               "managed",
@@ -680,11 +681,29 @@ void NeuralRenderingFeature::DrawSettings()
 	bool changed = false;
 	ImGui::TextWrapped("These controls apply to full-resolution, FOV and before-upscaling NR, including characters.");
 	changed |= ImGui::Checkbox("Enable colour processing", &config.settings.enabled);
-	static constexpr const char* colourModes[]{ "Original", "Managed", "Preserve source" };
-	int mode = static_cast<int>(config.settings.mode);
-	changed |= ImGui::Combo("Colour mode", &mode, colourModes, IM_ARRAYSIZE(colourModes));
-	config.settings.mode = static_cast<Mode>(mode);
-	ImGui::TextWrapped("Original uses the model output directly. Managed applies colour reconstruction. Preserve source lets you retain the scene's colour and lighting while adding neural detail.");
+	static constexpr std::array colourModes{ "Original", "Managed (experimental)", "Preserve source" };
+	if (ImGui::BeginCombo("Colour mode", colourModes[static_cast<std::size_t>(config.settings.mode)])) {
+		for (std::size_t index = 0; index < colourModes.size(); ++index) {
+			const auto mode = static_cast<Mode>(index);
+			if (mode == Mode::Managed && !showDiagnostics)
+				continue;
+			const bool selected = config.settings.mode == mode;
+			if (ImGui::Selectable(colourModes[index], selected)) {
+				config.settings.mode = mode;
+				changed = true;
+			}
+			if (selected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::TextWrapped("Original uses the model output directly. Preserve source retains the game's colour and adds selected neural detail. Turning colour processing off uses Original while NR stays enabled.");
+	if (config.settings.mode == Mode::Managed) {
+		ImGui::TextWrapped("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.");
+		ImGui::TextWrapped(showDiagnostics ?
+							   "Adjust its session-only calibration under Colour experiments and diagnostics. Identity calibration can look like Original." :
+							   "Your saved mode is retained. Choose Original or Preserve source, or set Log Level to Debug to inspect its calibration.");
+	}
 	{
 		const bool preservationActive = config.EffectiveMode() == Mode::PreserveSource && config.settings.appearanceMix < 1.0f &&
 		                                config.settings.detailStrength > 0.0f && config.settings.maximumDetailStops > 0.0f;

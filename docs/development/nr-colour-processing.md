@@ -52,7 +52,13 @@ retained for provenance. The colour section provides:
 
 -   **Enable colour processing**: retain the chosen mode/sliders while bypassing
     their application. The NR master switch is in the same feature panel.
--   Colour mode and **Lighting preservation (0–100%)**, shared by full-resolution
+-   Normal colour-mode choices are **Original** and **Preserve source**.
+    Colour processing Off selects Original/raw NR without disabling NR.
+    **Managed (experimental)** is offered only in Developer Mode
+    (Debug/Trace). Existing saved Managed selections remain visibly labelled
+    and unchanged at normal log levels; either normal mode can replace them.
+    Its API value and saved enum remain supported.
+-   **Lighting preservation (0–100%)**, shared by full-resolution
     NR with or without FOV restriction, NR through FOV, and NR before upscaling.
     Character selection uses the same setting. The slider defaults to 100%.
 -   The slider remains visible with a notice when inactive. Choose **Preserve
@@ -62,6 +68,11 @@ retained for provenance. The colour section provides:
 -   Preserve-source detail contribution, neural appearance mix and maximum
     detail gain. Unavailable FOV prerequisites disable dependent NR controls
     with a setup notice; mode selection remains available for recovery.
+
+Managed uses the session-only colour/exposure calibration under **Colour
+experiments and diagnostics**; it is not a validated production preset.
+Default Identity conversion and unit exposure can look like Original.
+The preservation sliders affect Preserve source only.
 
 **Debug/Trace** additionally exposes A/B comparison, engine HDR exposure
 capture, separate early/late domain and exposure experiments, transport

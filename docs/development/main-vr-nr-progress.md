@@ -291,3 +291,23 @@ Lighting preservation, suppresses broad neural brightness changes. Its
 appearance-mix endpoint of 1 returns the same candidate as Managed. A
 same-scene raw/Managed/Preserve comparison with a known nonzero neural edit
 is the next quality check before changing preservation strength or defaults.
+
+## Managed colour mode visibility (2026-09-19)
+
+The normal colour dropdown offers Original and Preserve source. Developer
+Mode (Debug/Trace) additionally offers Managed (experimental). A saved or
+API-selected Managed mode remains visibly labelled when Developer Mode is
+off; passive redraw never replaces it, and either normal choice can exit
+it. Help text identifies the session-only calibration and makes clear that
+preservation sliders apply only to Preserve source. Saved enum values,
+DevBench access, processing algorithms and defaults are unchanged.
+
+The existing extracted UI regression covers normal/developer choices,
+missing state, saved-mode retention, leaving Managed and balanced combo
+scopes. It was updated but not compiled or run because the user explicitly
+requires a request before any build. Source-only validation passed:
+`python tests/neural_color/source_contract_test.py` (8 tests),
+`pwsh ./tools/generate-unified-presets.ps1 -Check`, scoped pre-commit and
+`git diff --check`. Preset revision 6 and tier settings are unchanged; the
+reviewed source fingerprint and generated hashes were refreshed. No DLL,
+shader, test executable or AIO build, push, deployment or live test occurred.

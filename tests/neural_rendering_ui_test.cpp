@@ -75,7 +75,8 @@ namespace ImGui
 	std::vector<std::string> items;
 	std::vector<bool> disabledItems;
 	std::string clicked;
-	int treeDepth = 0;
+	int treeDepth = 0, comboDepth = 0;
+	std::string colourPreview;
 	unsigned disableDepth = 0;
 	bool openTrees = true;
 	float sliderEditValue = 50.0f;
@@ -100,7 +101,8 @@ namespace ImGui
 		items.clear();
 		disabledItems.clear();
 		clicked = click;
-		treeDepth = 0;
+		treeDepth = comboDepth = 0;
+		colourPreview.clear();
 	}
 	template <class... Args>
 	void TextWrapped(const char* label, Args&&...)
@@ -133,6 +135,18 @@ namespace ImGui
 		*value = comboEditValue;
 		return true;
 	}
+	bool BeginCombo(const char* label, const char* preview)
+	{
+		Record(label);
+		colourPreview = preview;
+		if (disableDepth != 0)
+			return false;
+		++comboDepth;
+		return true;
+	}
+	bool Selectable(const char* label, bool) { return Button(label); }
+	void SetItemDefaultFocus() {}
+	void EndCombo() { --comboDepth; }
 	bool SliderFloat(const char* label, float* value, float minimum, float maximum, const char* = "%.3f", int flags = 0)
 	{
 		if (std::string_view(label) == "Lighting preservation")
@@ -231,7 +245,7 @@ int main()
 	const auto draw = [&](std::string_view click = {}) {
 		ImGui::Clear(click);
 		feature.DrawSettings();
-		require(ImGui::treeDepth == 0, "UI tree scopes must be balanced");
+		require(ImGui::treeDepth == 0 && ImGui::comboDepth == 0, "UI tree and combo scopes must be balanced");
 		require(ImGui::disableDepth == 0, "UI disable scopes must be balanced");
 	};
 	for (auto level : { spdlog::level::info, spdlog::level::warn, spdlog::level::err,
@@ -243,6 +257,8 @@ int main()
 			"Production colour controls remain available");
 		require(!ImGui::Seen("Colour experiments and diagnostics") && statusReads == 0 && assetReads == 0,
 			"Info and quieter levels cannot expose or generate diagnostics");
+		require(ImGui::Seen("Original") && ImGui::Seen("Preserve source") && !ImGui::Seen("Managed (experimental)"),
+			"Normal mode choices must exclude experimental Managed");
 	}
 	for (auto level : { spdlog::level::debug, spdlog::level::trace }) {
 		state.level = level;
@@ -251,6 +267,7 @@ int main()
 				 "Capture HMD frame provenance", "Source-domain candidate", "Transport bypass (skip neural evaluation)",
 				 "Bounded asynchronous colour samples", "Colour diagnostics", "Check installed colour shaders" })
 			require(ImGui::Seen(control), "Debug and Trace expose the complete assessment controls");
+		require(ImGui::Seen("Managed (experimental)"), "Developer mode must explicitly label the Managed choice experimental");
 	}
 	require(statusReads == 2 && assetReads == 0, "Asset checks run only on explicit request");
 	draw("Check installed colour shaders");
@@ -286,6 +303,7 @@ int main()
 	globals::state = nullptr;
 	draw();
 	require(!ImGui::Seen("Colour experiments and diagnostics"), "Missing state fails closed for diagnostics");
+	require(!ImGui::Seen("Managed (experimental)"), "Missing state must not offer experimental colour selection");
 	require(globals::features::upscaling.draws > 0, "Feature must retain the main NR controls");
 
 	auto& upscaling = globals::features::upscaling;
@@ -382,10 +400,28 @@ int main()
 		require(ImGui::Disabled("Lighting preservation") == !enabled,
 			"The preservation control must follow the effective colour mode immediately");
 	}
-	for (const auto mode : { Mode::LegacyRaw, Mode::Managed, Mode::PreserveSource }) {
+	registry.configuration.settings.mode = Mode::Managed;
+	const auto savedManaged = registry.Snapshot();
+	draw();
+	require(ImGui::colourPreview == "Managed (experimental)" && !ImGui::Seen("Managed (experimental)") &&
+				registry.configuration.settings == savedManaged.settings && registry.configuration.revision == savedManaged.revision,
+		"A saved Managed mode must remain visible without passive migration or a normal-menu selection");
+	for (const auto* choice : { "Preserve source", "Original" }) {
+		draw(choice);
+		require(registry.configuration.settings.mode == (std::string_view(choice) == "Original" ? Mode::LegacyRaw : Mode::PreserveSource),
+			"Users must be able to leave a saved Managed mode without enabling developer mode");
+	}
+	const auto normalMode = registry.Snapshot();
+	draw("Managed (experimental)");
+	require(registry.configuration.settings == normalMode.settings && registry.configuration.revision == normalMode.revision,
+		"Normal UI must not accept an experimental Managed selection");
+	state.level = spdlog::level::debug;
+	for (const auto* choice : { "Preserve source", "Managed (experimental)", "Original", "Preserve source" }) {
+		const auto mode = std::string_view(choice) == "Original"        ? Mode::LegacyRaw :
+		                  std::string_view(choice) == "Preserve source" ? Mode::PreserveSource :
+		                                                                  Mode::Managed;
 		const auto prior = registry.Snapshot();
-		ImGui::comboEditValue = static_cast<int>(mode);
-		draw("Colour mode");
+		draw(choice);
 		auto expected = prior.settings;
 		expected.mode = mode;
 		require(registry.configuration.settings == expected && registry.configuration.revision == prior.revision + 1,
@@ -393,6 +429,7 @@ int main()
 		require(ImGui::Disabled("Lighting preservation") == (mode != Mode::PreserveSource),
 			"Changing colour mode must update slider availability in the same draw");
 	}
+	state.level = spdlog::level::info;
 	registry.configuration.settings.lightingPreservation = 0.3737f;
 	const auto beforePassiveDraw = registry.Snapshot();
 	draw();

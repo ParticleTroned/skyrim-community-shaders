@@ -292,7 +292,7 @@ void VolumetricShadows::CopyShadowLightData()
 		auto* renderer = globals::game::renderer;
 		auto& esramDepthStencil = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM];
 
-		ID3D11ShaderResourceView* csSRVs[2]{ shadowView, esramDepthStencil.depthSRV };
+		ID3D11ShaderResourceView* csSRVs[2]{ shadowView, REX::W32::AsReal(esramDepthStencil.depthSRV) };
 		context->CSSetShaderResources(0, 2, csSRVs);
 		context->CSSetSamplers(0, 1, &linearSampler);
 

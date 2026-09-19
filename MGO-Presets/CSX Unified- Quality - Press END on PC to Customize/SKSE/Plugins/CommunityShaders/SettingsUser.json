@@ -79,7 +79,7 @@
     },
     "settingsContract": {
       "revision": 5,
-      "sourceTreeSha256": "D6FE762DC674CD4E031FA5F85C8FDE6EFCBBDD0B7AAABDD4DA488BFC831E9F56"
+      "sourceTreeSha256": "9F5311CC17DACA8D1258A514264E32B67DF2E2EB4E134F59C25973AFD45F1CF3"
     }
   },
   "Upscaling": {
@@ -273,7 +273,7 @@
       "FailurePolicy": "continue",
       "FrameCount": 30,
       "Outputs": {
-        "SeparateEyes": true
+        "SeparateEyes": false
       },
       "Packaging": {
         "PreviewVideo": {

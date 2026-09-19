@@ -72,13 +72,12 @@ namespace
 			return false;
 		}
 
-		CSX::Api::InitializeServiceRegistryProvider();
 		if (!messaging->RegisterListener(nullptr, CommunityShadersAPIMessageHandler)) {
 			PushStartupError("Failed to register CSX API message listener. Check CommunityShaders.log for details.");
 			return false;
 		}
 
-		logger::info("Registered legacy CSAP and versioned CSXR API message listener before PostLoad dispatch");
+		logger::info("Registered legacy CSAP and versioned CSXR API listener for currently loaded plugins");
 		return true;
 	}
 
@@ -125,7 +124,7 @@ void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::
 	spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%t] [%s:%#] %v");
 }
 
-extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
+SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* a_skse)
 {
 #ifndef NDEBUG
 	while (!REX::W32::IsDebuggerPresent()) {};
@@ -133,8 +132,12 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::BUILD_LABEL);
 	BuildProvenance::LogRuntimeIdentity();
-	SKSE::Init(a_skse);
-	SKSE::AllocTrampoline(kTrampolineCapacity);
+	// CSX owns the startup log and its build identity records.
+	SKSE::Init(a_skse, { .log = false, .trampoline = true, .trampolineSize = kTrampolineCapacity });
+	if (!SKSE::GetTrampolineInterface()) {
+		// Loaders without a branch pool still need storage for CSX hooks.
+		SKSE::GetTrampoline().create(kTrampolineCapacity);
+	}
 	return Load();
 }
 
@@ -147,7 +150,7 @@ extern "C" DLLEXPORT constinit auto SKSEPlugin_Version = []() noexcept {
 	return v;
 }();
 
-extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
+SKSE_PLUGIN_QUERY(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
 {
 	pluginInfo->name = SKSEPlugin_Version.pluginName;
 	pluginInfo->infoVersion = SKSE::PluginInfo::kVersion;
@@ -160,6 +163,11 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
+			// Keep early consumers reachable; refresh the wildcard registration
+			// for plugins loaded after CSX before their PostLoad callbacks.
+			if (!RegisterCommunityShadersAPIMessageListener())
+				break;
+
 			// Establish the API owner from an actual SKSE game-thread task. The
 			// lifecycle callback itself is not a reliable thread-affinity oracle.
 			CSX::Api::ScheduleRuntimeMainThreadBinding();
@@ -379,6 +387,7 @@ bool Load()
 		logger::error("SKSE messaging interface unavailable");
 		return false;
 	}
+	CSX::Api::InitializeServiceRegistryProvider();
 	if (!RegisterCommunityShadersAPIMessageListener())
 		return false;
 

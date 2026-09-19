@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "E0064B1E4D16B6D93C0D47161FFC21FFA139A5F072FA90D1356293CE00D366FE"
+        "sha256": "1BE896176D2370AED4ACD50203DF373B461A9C1E7AA087E84E0DC32B0BF85FE2"
     },
     "runtimeSettingsContract": {
         "revision": 5,
-        "sourceTreeSha256": "D6FE762DC674CD4E031FA5F85C8FDE6EFCBBDD0B7AAABDD4DA488BFC831E9F56",
+        "sourceTreeSha256": "9F5311CC17DACA8D1258A514264E32B67DF2E2EB4E134F59C25973AFD45F1CF3",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",

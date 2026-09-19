@@ -1097,7 +1097,7 @@ namespace
 		ID3D11ShaderResourceView* savedMenuBGSRV = nullptr;
 		ID3D11ShaderResourceView* savedMenuBGSRVCopy = nullptr;
 		ID3D11UnorderedAccessView* savedMenuBGUAV = nullptr;
-		D3D11_VIEWPORT savedViewport{};
+		REX::W32::D3D11_VIEWPORT savedViewport{};
 		std::array<ID3D11DepthStencilView*, 8> savedDepthViews{};
 		std::array<ID3D11DepthStencilView*, 8> savedReadOnlyDepthViews{};
 	};
@@ -2484,8 +2484,8 @@ namespace
 			[&](RE::RENDER_TARGETS::RENDER_TARGET a_target) {
 				const auto& target =
 					renderer->GetRuntimeData().renderTargets[a_target];
-				appendTexture(target.texture);
-				appendTexture(target.textureCopy);
+				appendTexture(REX::W32::AsReal(target.texture));
+				appendTexture(REX::W32::AsReal(target.textureCopy));
 			};
 
 		for (const auto target : kVRRenderScaleEngineSizedTargets)
@@ -2499,9 +2499,9 @@ namespace
 		const auto& depthStencils =
 			renderer->GetDepthStencilData().depthStencils;
 		appendTexture(
-			depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
+			REX::W32::AsReal(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture));
 		appendTexture(
-			depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY].texture);
+			REX::W32::AsReal(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY].texture));
 		if (offer.resourceCount == 0) {
 			offer.result = E_FAIL;
 			return offer;
@@ -2711,7 +2711,7 @@ namespace
 
 		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		for (const auto target : kSubmittedVRPresentationTargets) {
-			if (renderTargets[target].texture == a_texture)
+			if (REX::W32::AsReal(renderTargets[target].texture) == a_texture)
 				return true;
 		}
 
@@ -2734,7 +2734,7 @@ namespace
 			if (targetIndex < 0 || targetIndex >= targetCount)
 				continue;
 
-			if (renderTargets[targetIndex].texture == a_texture || renderTargets[targetIndex].textureCopy == a_texture)
+			if (REX::W32::AsReal(renderTargets[targetIndex].texture) == a_texture || REX::W32::AsReal(renderTargets[targetIndex].textureCopy) == a_texture)
 				return true;
 		}
 
@@ -2756,14 +2756,14 @@ namespace
 		const auto& mainTarget =
 			renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		if (mainTarget.texture &&
-			GetCOMIdentityAddress(mainTarget.texture) == sourceIdentity) {
+			GetCOMIdentityAddress(REX::W32::AsReal(mainTarget.texture)) == sourceIdentity) {
 			return true;
 		}
 
 		const auto& vrFramebuffer =
 			renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kVR_FRAMEBUFFER];
 		if (vrFramebuffer.texture &&
-			GetCOMIdentityAddress(vrFramebuffer.texture) == sourceIdentity) {
+			GetCOMIdentityAddress(REX::W32::AsReal(vrFramebuffer.texture)) == sourceIdentity) {
 			return true;
 		}
 
@@ -2938,7 +2938,7 @@ namespace
 				continue;
 
 			const auto& renderTarget = renderTargets[targetIndex];
-			if (renderTarget.texture != texture && renderTarget.textureCopy != texture)
+			if (REX::W32::AsReal(renderTarget.texture) != texture && REX::W32::AsReal(renderTarget.textureCopy) != texture)
 				continue;
 
 			D3D11_TEXTURE2D_DESC desc{};
@@ -2953,7 +2953,7 @@ namespace
 			a_outMatch.samples = desc.SampleDesc.Count;
 			a_outMatch.format = desc.Format;
 			a_outMatch.resourceIdentity = GetCOMIdentityAddress(a_resource);
-			a_outMatch.usesTextureCopy = renderTarget.textureCopy == texture;
+			a_outMatch.usesTextureCopy = REX::W32::AsReal(renderTarget.textureCopy) == texture;
 			return true;
 		}
 
@@ -3073,7 +3073,7 @@ namespace
 		if (!a_renderTarget.texture)
 			return a_options.allowMissing;
 
-		if (!RenderTargetTextureSizeMatches(a_renderTarget.texture, a_width, a_height)) {
+		if (!RenderTargetTextureSizeMatches(REX::W32::AsReal(a_renderTarget.texture), a_width, a_height)) {
 			return false;
 		}
 
@@ -3087,7 +3087,7 @@ namespace
 			return false;
 
 		if (a_renderTarget.textureCopy) {
-			if (!RenderTargetTextureSizeMatches(a_renderTarget.textureCopy, a_width, a_height) ||
+			if (!RenderTargetTextureSizeMatches(REX::W32::AsReal(a_renderTarget.textureCopy), a_width, a_height) ||
 				(a_options.requireViews && !a_renderTarget.SRVCopy)) {
 				return false;
 			}
@@ -3143,7 +3143,7 @@ namespace
 		bool a_requireStencilSRV,
 		bool a_requireViews = true)
 	{
-		if (!RenderTargetTextureSizeMatches(a_depthStencil.texture, a_width, a_height)) {
+		if (!RenderTargetTextureSizeMatches(REX::W32::AsReal(a_depthStencil.texture), a_width, a_height)) {
 			return false;
 		}
 
@@ -3273,9 +3273,9 @@ namespace
 				probeTexture(nullptr, a_width, a_height, a_index, a_required);
 				return;
 			}
-			probeTexture(renderTarget.texture, a_width, a_height, a_index, a_required);
+			probeTexture(REX::W32::AsReal(renderTarget.texture), a_width, a_height, a_index, a_required);
 			if (renderTarget.textureCopy)
-				probeTexture(renderTarget.textureCopy, a_width, a_height, a_index, false);
+				probeTexture(REX::W32::AsReal(renderTarget.textureCopy), a_width, a_height, a_index, false);
 		};
 
 		const uint32_t engineWidth = ClampPositiveDimension(a_engineSize.x);
@@ -3298,13 +3298,13 @@ namespace
 
 		const auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
 		probeTexture(
-			depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture,
+			REX::W32::AsReal(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture),
 			engineWidth,
 			engineHeight,
 			kVRRenderScaleDepthMainProbeIndex,
 			true);
 		probeTexture(
-			depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY].texture,
+			REX::W32::AsReal(depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY].texture),
 			engineWidth,
 			engineHeight,
 			kVRRenderScaleDepthCopyProbeIndex,
@@ -7436,9 +7436,9 @@ namespace
 			renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		if (!mainDepth.texture ||
 			!mainDepth.depthSRV ||
-			a_depthSRV != mainDepth.depthSRV ||
+			a_depthSRV != REX::W32::AsReal(mainDepth.depthSRV) ||
 			GetCOMIdentityAddress(depthResource.get()) !=
-				GetCOMIdentityAddress(mainDepth.texture)) {
+				GetCOMIdentityAddress(REX::W32::AsReal(mainDepth.texture))) {
 			return std::nullopt;
 		}
 
@@ -7632,7 +7632,7 @@ namespace
 			renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		const bool combinedOutputOwned =
 			(mainTarget.texture &&
-				GetCOMIdentityAddress(mainTarget.texture) == colorIdentity) ||
+				GetCOMIdentityAddress(REX::W32::AsReal(mainTarget.texture)) == colorIdentity) ||
 			(a_upscaling.sharpenerTexture &&
 				a_upscaling.sharpenerTexture->resource &&
 				a_upscaling.sharpenerTexture->uav &&
@@ -7646,9 +7646,9 @@ namespace
 			renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		if (!mainDepth.texture ||
 			!mainDepth.depthSRV ||
-			a_depthSRV != mainDepth.depthSRV ||
+			a_depthSRV != REX::W32::AsReal(mainDepth.depthSRV) ||
 			GetCOMIdentityAddress(depthResource.get()) !=
-				GetCOMIdentityAddress(mainDepth.texture)) {
+				GetCOMIdentityAddress(REX::W32::AsReal(mainDepth.texture))) {
 			return false;
 		}
 
@@ -7695,16 +7695,16 @@ namespace
 		const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		for (int targetIndex = 0; targetIndex < Util::GetRenderTargetCount(); ++targetIndex) {
 			const auto& target = renderTargets[targetIndex];
-			if (target.texture == texture.get() || target.textureCopy == texture.get()) {
+			if (REX::W32::AsReal(target.texture) == texture.get() || REX::W32::AsReal(target.textureCopy) == texture.get()) {
 				info.renderTargetIndex = targetIndex;
-				info.textureCopy = target.textureCopy == texture.get();
+				info.textureCopy = REX::W32::AsReal(target.textureCopy) == texture.get();
 				return info;
 			}
 		}
 
 		const auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
 		for (int depthIndex = 0; depthIndex < Util::GetDepthStencilCount(); ++depthIndex) {
-			if (depthStencils[depthIndex].texture == texture.get()) {
+			if (REX::W32::AsReal(depthStencils[depthIndex].texture) == texture.get()) {
 				info.depthStencilIndex = depthIndex;
 				return info;
 			}
@@ -12916,8 +12916,8 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 	                     .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kHUDMENU];
 	if (vrMapMenuUISupersamplingActive) {
 		return vrMapMenuUISupersampleColor &&
-		       hudTarget.texture == vrMapMenuUISupersampleColor->resource.get() &&
-		       hudDepth.texture == vrMapMenuUISupersampleDepth.get();
+		       REX::W32::AsReal(hudTarget.texture) == vrMapMenuUISupersampleColor->resource.get() &&
+		       REX::W32::AsReal(hudDepth.texture) == vrMapMenuUISupersampleDepth.get();
 	}
 
 	D3D11_TEXTURE2D_DESC nativeColorDesc{};
@@ -12929,8 +12929,8 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 		hudTarget.SRVCopy ||
 		hudTarget.UAV ||
 		!hudDepth.texture ||
-		!TryGetTexture2DDesc(hudTarget.texture, nativeColorDesc) ||
-		!TryGetTexture2DDesc(hudDepth.texture, nativeDepthDesc) ||
+		!TryGetTexture2DDesc(REX::W32::AsReal(hudTarget.texture), nativeColorDesc) ||
+		!TryGetTexture2DDesc(REX::W32::AsReal(hudDepth.texture), nativeDepthDesc) ||
 		nativeColorDesc.SampleDesc.Count != 1 ||
 		nativeDepthDesc.SampleDesc.Count != 1 ||
 		nativeColorDesc.ArraySize != 1 ||
@@ -12969,10 +12969,10 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 		auto supersampleColor = eastl::make_unique<Texture2D>(colorDesc, "VRMapMenuDisplayResolutionUI");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC colorSRVDesc{};
-		hudTarget.SRV->GetDesc(&colorSRVDesc);
+		REX::W32::AsReal(hudTarget.SRV)->GetDesc(&colorSRVDesc);
 		supersampleColor->CreateSRV(colorSRVDesc);
 		D3D11_RENDER_TARGET_VIEW_DESC colorRTVDesc{};
-		hudTarget.RTV->GetDesc(&colorRTVDesc);
+		REX::W32::AsReal(hudTarget.RTV)->GetDesc(&colorRTVDesc);
 		supersampleColor->CreateRTV(colorRTVDesc);
 
 		auto depthDesc = nativeDepthDesc;
@@ -12998,8 +12998,8 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 				a_destination.put()));
 		};
 		for (size_t index = 0; index < depthViews.size(); ++index) {
-			if (!createDepthView(hudDepth.views[index], depthViews[index]) ||
-				!createDepthView(hudDepth.readOnlyViews[index], readOnlyDepthViews[index])) {
+			if (!createDepthView(REX::W32::AsReal(hudDepth.views[index]), depthViews[index]) ||
+				!createDepthView(REX::W32::AsReal(hudDepth.readOnlyViews[index]), readOnlyDepthViews[index])) {
 				return false;
 			}
 		}
@@ -13016,24 +13016,24 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 				&viewDesc,
 				a_destination.put()));
 		};
-		if (!createDepthSRV(hudDepth.depthSRV, depthSRV) ||
-			!createDepthSRV(hudDepth.stencilSRV, stencilSRV)) {
+		if (!createDepthSRV(REX::W32::AsReal(hudDepth.depthSRV), depthSRV) ||
+			!createDepthSRV(REX::W32::AsReal(hudDepth.stencilSRV), stencilSRV)) {
 			return false;
 		}
 
-		vrMapMenuSavedHUDTexture = hudTarget.texture;
-		vrMapMenuSavedHUDTextureCopy = hudTarget.textureCopy;
-		vrMapMenuSavedHUDRTV = hudTarget.RTV;
-		vrMapMenuSavedHUDSRV = hudTarget.SRV;
-		vrMapMenuSavedHUDSRVCopy = hudTarget.SRVCopy;
-		vrMapMenuSavedHUDUAV = hudTarget.UAV;
-		vrMapMenuSavedHUDDepthTexture = hudDepth.texture;
+		vrMapMenuSavedHUDTexture = REX::W32::AsReal(hudTarget.texture);
+		vrMapMenuSavedHUDTextureCopy = REX::W32::AsReal(hudTarget.textureCopy);
+		vrMapMenuSavedHUDRTV = REX::W32::AsReal(hudTarget.RTV);
+		vrMapMenuSavedHUDSRV = REX::W32::AsReal(hudTarget.SRV);
+		vrMapMenuSavedHUDSRVCopy = REX::W32::AsReal(hudTarget.SRVCopy);
+		vrMapMenuSavedHUDUAV = REX::W32::AsReal(hudTarget.UAV);
+		vrMapMenuSavedHUDDepthTexture = REX::W32::AsReal(hudDepth.texture);
 		for (size_t index = 0; index < vrMapMenuSavedHUDDepthViews.size(); ++index) {
-			vrMapMenuSavedHUDDepthViews[index] = hudDepth.views[index];
-			vrMapMenuSavedHUDReadOnlyDepthViews[index] = hudDepth.readOnlyViews[index];
+			vrMapMenuSavedHUDDepthViews[index] = REX::W32::AsReal(hudDepth.views[index]);
+			vrMapMenuSavedHUDReadOnlyDepthViews[index] = REX::W32::AsReal(hudDepth.readOnlyViews[index]);
 		}
-		vrMapMenuSavedHUDDepthSRV = hudDepth.depthSRV;
-		vrMapMenuSavedHUDStencilSRV = hudDepth.stencilSRV;
+		vrMapMenuSavedHUDDepthSRV = REX::W32::AsReal(hudDepth.depthSRV);
+		vrMapMenuSavedHUDStencilSRV = REX::W32::AsReal(hudDepth.stencilSRV);
 
 		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		vrMapMenuUISupersampleColor = std::move(supersampleColor);
@@ -13047,19 +13047,19 @@ bool Upscaling::EnsureVRMapMenuUISupersampling()
 		vrMapMenuUISupersampleWidth = supersampleWidth;
 		vrMapMenuUISupersampleHeight = supersampleHeight;
 
-		hudTarget.texture = vrMapMenuUISupersampleColor->resource.get();
+		hudTarget.texture = REX::W32::AsW32(vrMapMenuUISupersampleColor->resource.get());
 		hudTarget.textureCopy = nullptr;
-		hudTarget.RTV = vrMapMenuUISupersampleColor->rtv.get();
-		hudTarget.SRV = vrMapMenuUISupersampleColor->srv.get();
+		hudTarget.RTV = REX::W32::AsW32(vrMapMenuUISupersampleColor->rtv.get());
+		hudTarget.SRV = REX::W32::AsW32(vrMapMenuUISupersampleColor->srv.get());
 		hudTarget.SRVCopy = nullptr;
 		hudTarget.UAV = nullptr;
-		hudDepth.texture = vrMapMenuUISupersampleDepth.get();
+		hudDepth.texture = REX::W32::AsW32(vrMapMenuUISupersampleDepth.get());
 		for (size_t index = 0; index < vrMapMenuUISupersampleDepthViews.size(); ++index) {
-			hudDepth.views[index] = vrMapMenuUISupersampleDepthViews[index].get();
-			hudDepth.readOnlyViews[index] = vrMapMenuUISupersampleReadOnlyDepthViews[index].get();
+			hudDepth.views[index] = REX::W32::AsW32(vrMapMenuUISupersampleDepthViews[index].get());
+			hudDepth.readOnlyViews[index] = REX::W32::AsW32(vrMapMenuUISupersampleReadOnlyDepthViews[index].get());
 		}
-		hudDepth.depthSRV = vrMapMenuUISupersampleDepthSRV.get();
-		hudDepth.stencilSRV = vrMapMenuUISupersampleStencilSRV.get();
+		hudDepth.depthSRV = REX::W32::AsW32(vrMapMenuUISupersampleDepthSRV.get());
+		hudDepth.stencilSRV = REX::W32::AsW32(vrMapMenuUISupersampleStencilSRV.get());
 		vrMapMenuUISupersamplingActive = true;
 
 		static constexpr float kTransparent[4] = {};
@@ -13108,22 +13108,22 @@ void Upscaling::ReleaseVRMapMenuUISupersampling()
 		auto& hudDepth = renderer->GetDepthStencilData()
 		                     .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kHUDMENU];
 		if (vrMapMenuUISupersampleColor &&
-			hudTarget.texture == vrMapMenuUISupersampleColor->resource.get()) {
-			hudTarget.texture = vrMapMenuSavedHUDTexture;
-			hudTarget.textureCopy = vrMapMenuSavedHUDTextureCopy;
-			hudTarget.RTV = vrMapMenuSavedHUDRTV;
-			hudTarget.SRV = vrMapMenuSavedHUDSRV;
-			hudTarget.SRVCopy = vrMapMenuSavedHUDSRVCopy;
-			hudTarget.UAV = vrMapMenuSavedHUDUAV;
+			REX::W32::AsReal(hudTarget.texture) == vrMapMenuUISupersampleColor->resource.get()) {
+			hudTarget.texture = REX::W32::AsW32(vrMapMenuSavedHUDTexture);
+			hudTarget.textureCopy = REX::W32::AsW32(vrMapMenuSavedHUDTextureCopy);
+			hudTarget.RTV = REX::W32::AsW32(vrMapMenuSavedHUDRTV);
+			hudTarget.SRV = REX::W32::AsW32(vrMapMenuSavedHUDSRV);
+			hudTarget.SRVCopy = REX::W32::AsW32(vrMapMenuSavedHUDSRVCopy);
+			hudTarget.UAV = REX::W32::AsW32(vrMapMenuSavedHUDUAV);
 		}
-		if (hudDepth.texture == vrMapMenuUISupersampleDepth.get()) {
-			hudDepth.texture = vrMapMenuSavedHUDDepthTexture;
+		if (REX::W32::AsReal(hudDepth.texture) == vrMapMenuUISupersampleDepth.get()) {
+			hudDepth.texture = REX::W32::AsW32(vrMapMenuSavedHUDDepthTexture);
 			for (size_t index = 0; index < vrMapMenuSavedHUDDepthViews.size(); ++index) {
-				hudDepth.views[index] = vrMapMenuSavedHUDDepthViews[index];
-				hudDepth.readOnlyViews[index] = vrMapMenuSavedHUDReadOnlyDepthViews[index];
+				hudDepth.views[index] = REX::W32::AsW32(vrMapMenuSavedHUDDepthViews[index]);
+				hudDepth.readOnlyViews[index] = REX::W32::AsW32(vrMapMenuSavedHUDReadOnlyDepthViews[index]);
 			}
-			hudDepth.depthSRV = vrMapMenuSavedHUDDepthSRV;
-			hudDepth.stencilSRV = vrMapMenuSavedHUDStencilSRV;
+			hudDepth.depthSRV = REX::W32::AsW32(vrMapMenuSavedHUDDepthSRV);
+			hudDepth.stencilSRV = REX::W32::AsW32(vrMapMenuSavedHUDStencilSRV);
 		}
 		if (globals::game::stateUpdateFlags) {
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
@@ -13163,7 +13163,7 @@ bool Upscaling::EnsureVRMenuFullResolutionDepth(uint32_t a_width, uint32_t a_hei
 		return false;
 	auto& sourceDepth = globals::game::renderer->GetDepthStencilData()
 	                        .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	const auto sourceIdentity = GetCOMIdentityAddress(sourceDepth.texture);
+	const auto sourceIdentity = GetCOMIdentityAddress(REX::W32::AsReal(sourceDepth.texture));
 	auto matchingViewCompatible = [](ID3D11DepthStencilView* a_source, ID3D11DepthStencilView* a_cached) {
 		if (!a_source || !a_cached)
 			return a_source == a_cached;
@@ -13180,10 +13180,10 @@ bool Upscaling::EnsureVRMenuFullResolutionDepth(uint32_t a_width, uint32_t a_hei
 	bool cachedViewsComplete = true;
 	for (size_t index = 0; index < vrMenuFullResolutionDepthViews.size(); ++index) {
 		cachedViewsComplete &= matchingViewCompatible(
-			sourceDepth.views[index],
+			REX::W32::AsReal(sourceDepth.views[index]),
 			vrMenuFullResolutionDepthViews[index].get());
 		cachedViewsComplete &= matchingViewCompatible(
-			sourceDepth.readOnlyViews[index],
+			REX::W32::AsReal(sourceDepth.readOnlyViews[index]),
 			vrMenuFullResolutionReadOnlyDepthViews[index].get());
 	}
 	if (vrMenuFullResolutionDepth && vrMenuFullResolutionDSV &&
@@ -13214,7 +13214,7 @@ bool Upscaling::EnsureVRMenuFullResolutionDepth(uint32_t a_width, uint32_t a_hei
 		return false;
 
 	D3D11_TEXTURE2D_DESC textureDesc{};
-	source->GetDesc(&textureDesc);
+	REX::W32::AsReal(source)->GetDesc(&textureDesc);
 	textureDesc.Width = a_width;
 	textureDesc.Height = a_height;
 	textureDesc.MipLevels = 1;
@@ -13241,8 +13241,8 @@ bool Upscaling::EnsureVRMenuFullResolutionDepth(uint32_t a_width, uint32_t a_hei
 			a_destinationView.put()));
 	};
 	for (size_t index = 0; index < depthViews.size(); ++index) {
-		if (!createMatchingView(sourceDepth.views[index], depthViews[index]) ||
-			!createMatchingView(sourceDepth.readOnlyViews[index], readOnlyDepthViews[index])) {
+		if (!createMatchingView(REX::W32::AsReal(sourceDepth.views[index]), depthViews[index]) ||
+			!createMatchingView(REX::W32::AsReal(sourceDepth.readOnlyViews[index]), readOnlyDepthViews[index])) {
 			return false;
 		}
 	}
@@ -13308,45 +13308,45 @@ bool Upscaling::BeginVRMenuDisplayResolutionPass()
 		return false;
 	auto& menuBG = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMENUBG];
 	D3D11_TEXTURE2D_DESC menuBGDesc{};
-	if (!TryGetTexture2DDesc(menuBG.texture, menuBGDesc) ||
+	if (!TryGetTexture2DDesc(REX::W32::AsReal(menuBG.texture), menuBGDesc) ||
 		!EnsureVRMenuFullResolutionDepth(width, height) ||
 		!EnsureVRMenuFinalCompositeLayer(width, height, menuBGDesc.Format)) {
 		return false;
 	}
 
-	semantic.savedMenuBGTexture = menuBG.texture;
-	semantic.savedMenuBGTextureCopy = menuBG.textureCopy;
-	semantic.savedMenuBGRTV = menuBG.RTV;
-	semantic.savedMenuBGSRV = menuBG.SRV;
-	semantic.savedMenuBGSRVCopy = menuBG.SRVCopy;
-	semantic.savedMenuBGUAV = menuBG.UAV;
-	menuBG.texture = static_cast<ID3D11Texture2D*>(vrMenuFinalCompositeLayer->resource.get());
+	semantic.savedMenuBGTexture = REX::W32::AsReal(menuBG.texture);
+	semantic.savedMenuBGTextureCopy = REX::W32::AsReal(menuBG.textureCopy);
+	semantic.savedMenuBGRTV = REX::W32::AsReal(menuBG.RTV);
+	semantic.savedMenuBGSRV = REX::W32::AsReal(menuBG.SRV);
+	semantic.savedMenuBGSRVCopy = REX::W32::AsReal(menuBG.SRVCopy);
+	semantic.savedMenuBGUAV = REX::W32::AsReal(menuBG.UAV);
+	menuBG.texture = REX::W32::AsW32(static_cast<ID3D11Texture2D*>(vrMenuFinalCompositeLayer->resource.get()));
 	menuBG.textureCopy = nullptr;
-	menuBG.RTV = vrMenuFinalCompositeLayer->rtv.get();
-	menuBG.SRV = vrMenuFinalCompositeLayer->srv.get();
+	menuBG.RTV = REX::W32::AsW32(vrMenuFinalCompositeLayer->rtv.get());
+	menuBG.SRV = REX::W32::AsW32(vrMenuFinalCompositeLayer->srv.get());
 	menuBG.SRVCopy = nullptr;
 	menuBG.UAV = nullptr;
 
 	auto& mainDepth = renderer->GetDepthStencilData()
 	                      .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	for (size_t index = 0; index < semantic.savedDepthViews.size(); ++index) {
-		semantic.savedDepthViews[index] = mainDepth.views[index];
-		semantic.savedReadOnlyDepthViews[index] = mainDepth.readOnlyViews[index];
+		semantic.savedDepthViews[index] = REX::W32::AsReal(mainDepth.views[index]);
+		semantic.savedReadOnlyDepthViews[index] = REX::W32::AsReal(mainDepth.readOnlyViews[index]);
 		if (mainDepth.views[index])
-			mainDepth.views[index] = vrMenuFullResolutionDepthViews[index].get();
+			mainDepth.views[index] = REX::W32::AsW32(vrMenuFullResolutionDepthViews[index].get());
 		if (mainDepth.readOnlyViews[index])
-			mainDepth.readOnlyViews[index] = vrMenuFullResolutionReadOnlyDepthViews[index].get();
+			mainDepth.readOnlyViews[index] = REX::W32::AsW32(vrMenuFullResolutionReadOnlyDepthViews[index].get());
 	}
 
 	auto& viewport = shadowState->GetVRRuntimeData().viewPort;
 	semantic.savedViewport = viewport;
 	semantic.viewportSaved = true;
-	viewport.TopLeftX = 0.0f;
-	viewport.TopLeftY = 0.0f;
-	viewport.Width = static_cast<float>(width);
-	viewport.Height = static_cast<float>(height);
-	viewport.MinDepth = 0.0f;
-	viewport.MaxDepth = 1.0f;
+	viewport.topLeftX = 0.0f;
+	viewport.topLeftY = 0.0f;
+	viewport.width = static_cast<float>(width);
+	viewport.height = static_cast<float>(height);
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
 
 	if (vrMenuFinalCompositeLayerClearedFrame != frame) {
 		static constexpr float kTransparent[4] = {};
@@ -13382,17 +13382,17 @@ void Upscaling::EndVRMenuDisplayResolutionPass()
 	auto* updateFlags = globals::game::stateUpdateFlags;
 	if (renderer) {
 		auto& menuBG = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMENUBG];
-		menuBG.texture = semantic.savedMenuBGTexture;
-		menuBG.textureCopy = semantic.savedMenuBGTextureCopy;
-		menuBG.RTV = semantic.savedMenuBGRTV;
-		menuBG.SRV = semantic.savedMenuBGSRV;
-		menuBG.SRVCopy = semantic.savedMenuBGSRVCopy;
-		menuBG.UAV = semantic.savedMenuBGUAV;
+		menuBG.texture = REX::W32::AsW32(semantic.savedMenuBGTexture);
+		menuBG.textureCopy = REX::W32::AsW32(semantic.savedMenuBGTextureCopy);
+		menuBG.RTV = REX::W32::AsW32(semantic.savedMenuBGRTV);
+		menuBG.SRV = REX::W32::AsW32(semantic.savedMenuBGSRV);
+		menuBG.SRVCopy = REX::W32::AsW32(semantic.savedMenuBGSRVCopy);
+		menuBG.UAV = REX::W32::AsW32(semantic.savedMenuBGUAV);
 		auto& mainDepth = renderer->GetDepthStencilData()
 		                      .depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		for (size_t index = 0; index < semantic.savedDepthViews.size(); ++index) {
-			mainDepth.views[index] = semantic.savedDepthViews[index];
-			mainDepth.readOnlyViews[index] = semantic.savedReadOnlyDepthViews[index];
+			mainDepth.views[index] = REX::W32::AsW32(semantic.savedDepthViews[index]);
+			mainDepth.readOnlyViews[index] = REX::W32::AsW32(semantic.savedReadOnlyDepthViews[index]);
 		}
 	}
 	if (shadowState && semantic.viewportSaved)
@@ -14525,7 +14525,7 @@ bool Upscaling::PrewarmVRMenuFinalCompositeResources(DXGI_FORMAT a_layerFormat)
 		}
 
 		const auto& menuBg = globals::game::renderer->GetRuntimeData().renderTargets[menuBgTarget];
-		ID3D11Resource* menuBgResource = menuBg.texture ? menuBg.texture : menuBg.textureCopy;
+		ID3D11Resource* menuBgResource = REX::W32::AsReal(menuBg.texture) ? REX::W32::AsReal(menuBg.texture) : REX::W32::AsReal(menuBg.textureCopy);
 		D3D11_TEXTURE2D_DESC menuBgDesc{};
 		if (!TryGetTexture2DDesc(menuBgResource, menuBgDesc) ||
 			menuBgDesc.SampleDesc.Count != 1 ||
@@ -16776,7 +16776,7 @@ void Upscaling::DrawSettings()
 
 				DisplayRT("kMAIN (Color Input)", (ID3D11Texture2D*)main.texture, (ID3D11ShaderResourceView*)main.SRV);
 				DisplayRT("Motion Vectors", (ID3D11Texture2D*)mvec.texture, (ID3D11ShaderResourceView*)mvec.SRV);
-				DisplayRT("Depth", depth.texture, depth.depthSRV);
+				DisplayRT("Depth", REX::W32::AsReal(depth.texture), REX::W32::AsReal(depth.depthSRV));
 
 				if (reactiveMaskTexture)
 					BUFFER_VIEWER_NODE_TITLE(reactiveMaskTexture, "Reactive Mask", debugRescale)
@@ -20768,8 +20768,8 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 		.outputHeight = ClampPositiveDimension(outputSize.y),
 		.compositorCycle = submitTemporalCompositorCycle.load(std::memory_order_acquire),
 	};
-	auto* depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture;
-	auto* motion = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture;
+	auto* depth = REX::W32::AsReal(renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
+	auto* motion = REX::W32::AsReal(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture);
 	std::lock_guard lock(submitTemporalInputsMutex);
 	if (submitTemporalInputs.snapshot.valid && VRSubmitTemporalSnapshot::IsSameProducer(submitTemporalInputs.snapshot.key, key)) {
 		if (!submitTemporalInputs.snapshot.Matches(key) || submitTemporalInputs.depth.get() != depth || submitTemporalInputs.motion.get() != motion) {
@@ -22249,9 +22249,9 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 	D3D11_TEXTURE2D_DESC texDesc{};
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-	main.texture->GetDesc(&texDesc);
-	main.SRV->GetDesc(&srvDesc);
-	main.UAV->GetDesc(&uavDesc);
+	REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
+	REX::W32::AsReal(main.SRV)->GetDesc(&srvDesc);
+	REX::W32::AsReal(main.UAV)->GetDesc(&uavDesc);
 
 	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	bool unboundForReplacement = false;
@@ -22299,7 +22299,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 		a_upscalemethod == UpscaleMethod::kFSR &&
 		fidelityFX.ShouldUseRuntimeUpscalerForFSR()) {
 		D3D11_TEXTURE2D_DESC mainDesc{};
-		main.texture->GetDesc(&mainDesc);
+		REX::W32::AsReal(main.texture)->GetDesc(&mainDesc);
 		const auto depthDesc = BuildFlatRuntimeFsrDepthDesc(mainDesc);
 		if (runtimeFsrDepthTexture &&
 			!IsCommonVendorTextureCompatible(runtimeFsrDepthTexture, depthDesc)) {
@@ -22330,7 +22330,7 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 			a_upscalemethod == UpscaleMethod::kFSR)) {
 		auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 		D3D11_TEXTURE2D_DESC motionTexDesc{};
-		motionVector.texture->GetDesc(&motionTexDesc);
+		REX::W32::AsReal(motionVector.texture)->GetDesc(&motionTexDesc);
 		if (motionVectorCopyTexture &&
 			!IsCommonVendorTextureCompatible(motionVectorCopyTexture, motionTexDesc)) {
 			unbindOnceForReplacement();
@@ -22349,8 +22349,8 @@ void Upscaling::CreateUpscalingTextureResources(UpscaleMethod a_upscalemethod)
 
 	// Shared DLSS sharpener texture - matches kMAIN format for HDR sharpening
 	if (a_upscalemethod == UpscaleMethod::kDLSS) {
-		main.texture->GetDesc(&texDesc);
-		main.SRV->GetDesc(&srvDesc);
+		REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
+		REX::W32::AsReal(main.SRV)->GetDesc(&srvDesc);
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		if (sharpenerTexture &&
 			!IsCommonVendorTextureCompatible(sharpenerTexture, texDesc)) {
@@ -22475,9 +22475,9 @@ void Upscaling::PublishCommonVendorResourceContract(
 	contract.generation = commonVendorResourceGeneration;
 	contract.method = a_upscaleMethod;
 	contract.device = globals::d3d::device;
-	contract.mainTexture = main.texture;
-	contract.mainSRV = main.SRV;
-	contract.mainUAV = main.UAV;
+	contract.mainTexture = REX::W32::AsReal(main.texture);
+	contract.mainSRV = REX::W32::AsReal(main.SRV);
+	contract.mainUAV = REX::W32::AsReal(main.UAV);
 	contract.reactiveMask = captureTexture(reactiveMaskTexture);
 	contract.transparencyMask = captureTexture(transparencyCompositionMaskTexture);
 	if (!globals::game::isVR) {
@@ -22527,9 +22527,9 @@ bool Upscaling::IsCommonVendorResourceContractCurrent(
 	if (!renderer)
 		return false;
 	const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	if (contract.mainTexture != main.texture ||
-		contract.mainSRV != main.SRV ||
-		contract.mainUAV != main.UAV) {
+	if (contract.mainTexture != REX::W32::AsReal(main.texture) ||
+		contract.mainSRV != REX::W32::AsReal(main.SRV) ||
+		contract.mainUAV != REX::W32::AsReal(main.UAV)) {
 		return false;
 	}
 
@@ -22589,16 +22589,16 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 		return false;
 
 	winrt::com_ptr<ID3D11Device> mainDevice;
-	main.texture->GetDevice(mainDevice.put());
+	REX::W32::AsReal(main.texture)->GetDevice(mainDevice.put());
 	if (GetCOMIdentityAddress(mainDevice.get()) !=
 			GetCOMIdentityAddress(globals::d3d::device) ||
-		!ViewReferencesResource(main.SRV, main.texture) ||
-		!ViewReferencesResource(main.UAV, main.texture)) {
+		!ViewReferencesResource(REX::W32::AsReal(main.SRV), REX::W32::AsReal(main.texture)) ||
+		!ViewReferencesResource(REX::W32::AsReal(main.UAV), REX::W32::AsReal(main.texture))) {
 		return false;
 	}
 
 	D3D11_TEXTURE2D_DESC mainDesc{};
-	main.texture->GetDesc(&mainDesc);
+	REX::W32::AsReal(main.texture)->GetDesc(&mainDesc);
 	auto maskDesc = mainDesc;
 	maskDesc.Format = DXGI_FORMAT_R8_UNORM;
 	maskDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -22612,7 +22612,7 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 		if (!motionVector.texture)
 			return false;
 		D3D11_TEXTURE2D_DESC motionDesc{};
-		motionVector.texture->GetDesc(&motionDesc);
+		REX::W32::AsReal(motionVector.texture)->GetDesc(&motionDesc);
 		if (!IsCommonVendorTextureCompatible(motionVectorCopyTexture, motionDesc))
 			return false;
 
@@ -22830,12 +22830,12 @@ namespace
 		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		for (uint32_t index = 0; index < renderTargetCount; ++index) {
 			const auto& target = renderTargets[index];
-			markObject(target.texture);
-			markObject(target.textureCopy);
-			markView(target.RTV);
-			markView(target.SRV);
-			markView(target.SRVCopy);
-			markView(target.UAV);
+			markObject(REX::W32::AsReal(target.texture));
+			markObject(REX::W32::AsReal(target.textureCopy));
+			markView(REX::W32::AsReal(target.RTV));
+			markView(REX::W32::AsReal(target.SRV));
+			markView(REX::W32::AsReal(target.SRVCopy));
+			markView(REX::W32::AsReal(target.UAV));
 		}
 
 		constexpr uint32_t depthStencilCount =
@@ -22843,13 +22843,13 @@ namespace
 		auto& depthStencils = renderer->GetDepthStencilData().depthStencils;
 		for (uint32_t index = 0; index < depthStencilCount; ++index) {
 			const auto& target = depthStencils[index];
-			markObject(target.texture);
+			markObject(REX::W32::AsReal(target.texture));
 			for (auto* view : target.views)
-				markView(view);
+				markView(REX::W32::AsReal(view));
 			for (auto* view : target.readOnlyViews)
-				markView(view);
-			markView(target.depthSRV);
-			markView(target.stencilSRV);
+				markView(REX::W32::AsReal(view));
+			markView(REX::W32::AsReal(target.depthSRV));
+			markView(REX::W32::AsReal(target.stencilSRV));
 		}
 		return reachability;
 	}
@@ -23103,7 +23103,7 @@ namespace
 		if (a_pointer &&
 			a_provenance.address == slot.address &&
 			a_provenance.pointer == a_pointer) {
-			slot.provenReference = static_cast<IUnknown*>(a_pointer);
+			slot.provenReference = static_cast<IUnknown*>(REX::W32::AsReal(a_pointer));
 			if (a_snapshot.provenPointerCount != std::numeric_limits<uint32_t>::max())
 				++a_snapshot.provenPointerCount;
 		} else {
@@ -25755,9 +25755,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 							  VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other,
 							  uint64_t a_nativeRestoreRetirementSerial = 0
 #ifdef DEVBENCH_BRIDGE_ENABLED
-							  , std::source_location a_retrySource = std::source_location::current()
+							  ,
+							  std::source_location a_retrySource = std::source_location::current()
 #endif
-	) {
+						  ) {
 		const auto controllerSnapshot = GetVRRenderScaleTransitionSnapshot();
 		if (relatchEpoch != 0 &&
 			controllerSnapshot.targetEpoch != 0 &&
@@ -27313,7 +27314,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				relatchSettings.dlssPreset,
 				perfMode.trueHMDEyeWidth,
 				perfMode.trueHMDEyeHeight,
-				relatchColorInput);
+				REX::W32::AsReal(relatchColorInput));
 		const bool inactiveDLSSAllocationContractReady =
 			relatchUpscaleMethod == UpscaleMethod::kDLSS &&
 			!previousBootWasActiveDLSS &&
@@ -27336,7 +27337,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				previousInactivePhysicalProfile->dlssPreset,
 				perfMode.trueHMDEyeWidth,
 				perfMode.trueHMDEyeHeight,
-				relatchColorInput);
+				REX::W32::AsReal(relatchColorInput));
 		const bool exactInactiveFoveatedCenterDLSSAllocationReady = [&]() {
 			const auto& cache = foveatedRectCache;
 			if (!inactiveDLSSAllocationContractReady ||
@@ -30131,9 +30132,9 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 	}
 	const auto revokeProofDrivenRelease = [&](
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		const char* a_reason
+											  const char* a_reason
 #endif
-	) {
+										  ) {
 		const std::scoped_lock lock(
 			submitStageVendorResumeStableEyeMaskMutex);
 		if (stabilitySerial == submitStageVendorResumeStabilitySerial) {
@@ -30170,7 +30171,8 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 			qualityMode,
 			dlssPreset
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			, &fullEyeObservation
+			,
+			&fullEyeObservation
 #endif
 		);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -30184,7 +30186,8 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 				qualityMode,
 				dlssPreset
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				, &centerObservation
+				,
+				&centerObservation
 #endif
 			);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -30223,7 +30226,8 @@ void Upscaling::TryPromoteVRRenderScaleSubmitStageContract(uint32_t a_currentFra
 					"submit-stage viewport recycle");
 				RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind::Backend
 #ifdef DEVBENCH_BRIDGE_ENABLED
-					, "dlss_viewport_recycle"
+					,
+					"dlss_viewport_recycle"
 #endif
 				);
 			}
@@ -31850,7 +31854,8 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(
 		RecordVRRenderScaleTransitionRetry(
 			recoverySnapshot.cleanupDrained ? VRRenderScaleRetryKind::Pressure : VRRenderScaleRetryKind::Retirement
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			, recoverySnapshot.cleanupDrained ? "post_load_memory_settle" : "post_load_cleanup_drain"
+			,
+			recoverySnapshot.cleanupDrained ? "post_load_memory_settle" : "post_load_cleanup_drain"
 #endif
 		);
 	}
@@ -41429,23 +41434,23 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		const auto& centerRect = foveatedRectCache.rects[eyeIndex];
 		auto& centerOutput = foveatedCenterColorOut[eyeIndex];
 		const bool composited = centerOutput && centerOutput->srv &&
-		       DispatchFoveatedSpatialComposite(
-				   params.peripherySourceSRV,
-				   centerOutput->srv.get(),
-				   outputColorUAV,
-				   params.peripherySourceWidth,
-				   params.peripherySourceHeight,
-				   params.outputWidthPerEye,
-				   params.outputHeight,
-				   centerRect,
-				   params.peripherySourceScaleX,
-				   params.peripherySourceScaleY,
-				   params.peripherySourceOffsetX,
-				   params.peripherySourceOffsetY,
-				   params.centerScale,
-				   params.centerHorizontalScale,
-				   centerOffset,
-				   params.centerBlendFeather);
+		                        DispatchFoveatedSpatialComposite(
+									params.peripherySourceSRV,
+									centerOutput->srv.get(),
+									outputColorUAV,
+									params.peripherySourceWidth,
+									params.peripherySourceHeight,
+									params.outputWidthPerEye,
+									params.outputHeight,
+									centerRect,
+									params.peripherySourceScaleX,
+									params.peripherySourceScaleY,
+									params.peripherySourceOffsetX,
+									params.peripherySourceOffsetY,
+									params.centerScale,
+									params.centerHorizontalScale,
+									centerOffset,
+									params.centerBlendFeather);
 		return composited ? FidelityFX::UpscaleResult::Ready : FidelityFX::UpscaleResult::Failed;
 	}
 
@@ -41964,7 +41969,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 			HMDMaskClearPhase::SubmitStageFoveatedOutput,
 			eyeIndex,
 			outputUAV,
-			depthTexture.depthSRV,
+			REX::W32::AsReal(depthTexture.depthSRV),
 			inputWidthPerEye,
 			inputHeight,
 			outputWidthPerEye,
@@ -42567,7 +42572,7 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 			const uint32_t depthOffset = i == 1 ? eyeWidthIn : 0u;
 			(void)DispatchHMDMaskClear(
 				vrIntermediateColorIn[i]->uav.get(),
-				depthTexture.depthSRV,
+				REX::W32::AsReal(depthTexture.depthSRV),
 				eyeWidthIn,
 				eyeHeightIn,
 				eyeWidthIn,
@@ -42871,7 +42876,7 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 					HMDMaskClearPhase::PerEyeOutput,
 					i,
 					vrIntermediateColorOut[i]->uav.get(),
-					depthTexture.depthSRV,
+					REX::W32::AsReal(depthTexture.depthSRV),
 					eyeWidthIn,
 					eyeHeightIn,
 					eyeWidthOut,
@@ -43495,7 +43500,7 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 
 	static bool loggedEncodeDispatchFailure = false;
 	try {
-		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, sourceMotionVector.SRV, depth.depthSRV };
+		ID3D11ShaderResourceView* views[4] = { REX::W32::AsReal(temporalAAMask.SRV), REX::W32::AsReal(normals.SRV), REX::W32::AsReal(sourceMotionVector.SRV), REX::W32::AsReal(depth.depthSRV) };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		auto upscalingBuffer = upscalingDataCB->CB();
@@ -44903,9 +44908,9 @@ void Upscaling::SetupResources()
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 
-	main.texture->GetDesc(&texDesc);
-	main.SRV->GetDesc(&srvDesc);
-	main.UAV->GetDesc(&uavDesc);
+	REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
+	REX::W32::AsReal(main.SRV)->GetDesc(&srvDesc);
+	REX::W32::AsReal(main.UAV)->GetDesc(&uavDesc);
 
 	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
@@ -45079,7 +45084,7 @@ void Upscaling::CopySharedD3D12Resources()
 	auto context = globals::d3d::context;
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
+	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), REX::W32::AsReal(motionVector.texture));
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto* vertexShader = GetUpscaleVS();
@@ -45117,7 +45122,7 @@ void Upscaling::CopySharedD3D12Resources()
 		context->OMSetBlendState(upscaleBlendState.get(), nullptr, 0xffffffff);
 
 		// Set up pixel shader resources
-		ID3D11ShaderResourceView* views[1] = { depth.depthSRV };
+		ID3D11ShaderResourceView* views[1] = { REX::W32::AsReal(depth.depthSRV) };
 		context->PSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		// Set render target view for pixel shader output
@@ -45541,12 +45546,12 @@ bool Upscaling::TryRepairVRPostLoadFixedCompositorCandidate(
 		renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kVR_FRAMEBUFFER];
 	ID3D11UnorderedAccessView* registeredUAV = nullptr;
 	if (mainTarget.texture &&
-		GetCOMIdentityAddress(mainTarget.texture) == candidateIdentity) {
-		registeredUAV = mainTarget.UAV;
+		GetCOMIdentityAddress(REX::W32::AsReal(mainTarget.texture)) == candidateIdentity) {
+		registeredUAV = REX::W32::AsReal(mainTarget.UAV);
 	} else if (
 		vrFramebuffer.texture &&
-		GetCOMIdentityAddress(vrFramebuffer.texture) == candidateIdentity) {
-		registeredUAV = vrFramebuffer.UAV;
+		GetCOMIdentityAddress(REX::W32::AsReal(vrFramebuffer.texture)) == candidateIdentity) {
+		registeredUAV = REX::W32::AsReal(vrFramebuffer.UAV);
 	} else if (
 		sharpenerTexture &&
 		sharpenerTexture->resource &&
@@ -45595,7 +45600,7 @@ bool Upscaling::TryRepairVRPostLoadFixedCompositorCandidate(
 		return false;
 
 	winrt::com_ptr<ID3D11ShaderResourceView> depthSRV;
-	if (FAILED(mainDepth.depthSRV->QueryInterface(IID_PPV_ARGS(depthSRV.put()))) ||
+	if (FAILED(REX::W32::AsReal(mainDepth.depthSRV)->QueryInterface(IID_PPV_ARGS(depthSRV.put()))) ||
 		!depthSRV) {
 		return false;
 	}
@@ -45605,7 +45610,7 @@ bool Upscaling::TryRepairVRPostLoadFixedCompositorCandidate(
 	const auto depthIdentity = GetCOMIdentityAddress(depthResource.get());
 	if (!depthResource ||
 		!depthIdentity ||
-		depthIdentity != GetCOMIdentityAddress(mainDepth.texture) ||
+		depthIdentity != GetCOMIdentityAddress(REX::W32::AsReal(mainDepth.texture)) ||
 		!TryGetTexture2DDesc(depthResource.get(), depthDesc) ||
 		depthDesc.ArraySize != 1 ||
 		depthDesc.MipLevels != 1 ||
@@ -45827,10 +45832,10 @@ bool Upscaling::ClearVRCompositorCandidateKeepaliveLocked(
 	if (renderer) {
 		auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 		(void)adoptCandidateUAV(
-			renderTargets[RE::RENDER_TARGETS::kMAIN].UAV);
+			REX::W32::AsReal(renderTargets[RE::RENDER_TARGETS::kMAIN].UAV));
 		if (!candidateUAV) {
 			(void)adoptCandidateUAV(
-				renderTargets[RE::RENDER_TARGETS::kVR_FRAMEBUFFER].UAV);
+				REX::W32::AsReal(renderTargets[RE::RENDER_TARGETS::kVR_FRAMEBUFFER].UAV));
 		}
 	}
 	const auto adoptTextureUAV = [&](const Texture2D* a_texture) {
@@ -47191,7 +47196,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 					if (currentFramebuffer.texture) {
 						auto currentFramebufferSubmit =
 							makeFramebufferSubmitTexture(
-								currentFramebuffer.texture);
+								REX::W32::AsReal(currentFramebuffer.texture));
 						if (PrepareVRPostLoadCompositorKeepaliveLocked(
 								&currentFramebufferSubmit,
 								&framebufferEyeBounds,
@@ -47743,7 +47748,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 							// hook call evaluates the new epoch from the top.
 							auto currentFramebufferSubmit =
 								makeFramebufferSubmitTexture(
-									currentFramebuffer.texture);
+									REX::W32::AsReal(currentFramebuffer.texture));
 							return suppressWithKeepalive(
 								&currentFramebufferSubmit,
 								&framebufferEyeBounds);
@@ -50498,7 +50503,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				eyeWidthOut,
 				eyeHeightOut,
 				sourceTexture,
-				renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture,
+				REX::W32::AsReal(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].texture),
 				reactiveMaskTexture ? reactiveMaskTexture->resource.get() : nullptr,
 				transparencyCompositionMaskTexture ? transparencyCompositionMaskTexture->resource.get() : nullptr,
 				existingProviderGeneration);
@@ -50796,8 +50801,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		{
 			std::lock_guard lock(submitTemporalInputsMutex);
 			temporalReady = submitTemporalInputs.snapshot.MatchesForDispatch(key) &&
-			                submitTemporalInputs.depth.get() == depth.texture &&
-			                submitTemporalInputs.motion.get() == motionVector.texture;
+			                submitTemporalInputs.depth.get() == REX::W32::AsReal(depth.texture) &&
+			                submitTemporalInputs.motion.get() == REX::W32::AsReal(motionVector.texture);
 			producerFrame = submitTemporalInputs.snapshot.key.frame;
 		}
 		const auto identity = GetOrdinarySavePresentationIdentity();
@@ -50977,14 +50982,14 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		!presentationOnly && !peerInputFreshnessProven &&
 		submitStageCurrentEyePreparedInputs.Matches(currentEyeInputIdentity) &&
 		currentEyeSourceOwners.color.get() == sourceTexture &&
-		currentEyeSourceOwners.depth.get() == depth.texture &&
-		currentEyeSourceOwners.motionVectors.get() == motionVector.texture;
+		currentEyeSourceOwners.depth.get() == REX::W32::AsReal(depth.texture) &&
+		currentEyeSourceOwners.motionVectors.get() == REX::W32::AsReal(motionVector.texture);
 	const bool preparedInputProofMatches =
 		VRSubmitInputFreshnessPolicy::MatchesProducerProof(
 			submitStagePreparedInputProof, submitInputProof) &&
 		submitStagePreparedColorSourceOwner.get() == sourceTexture &&
-		submitStagePreparedDepthSourceOwner.get() == depth.texture &&
-		submitStagePreparedMotionVectorSourceOwner.get() == motionVector.texture;
+		submitStagePreparedDepthSourceOwner.get() == REX::W32::AsReal(depth.texture) &&
+		submitStagePreparedMotionVectorSourceOwner.get() == REX::W32::AsReal(motionVector.texture);
 	const bool submitStagePreparedThisFrame = currentEyePreparedInputsMatch || (VRSubmitTemporalSnapshot::MatchesProducer(submitStagePreparedFrame, submitStagePreparedCycle, currentFrame, a_compositorCycleToken) &&
 																				   submitStagePreparedGeneration == activeContractGeneration &&
 																				   ((presentationOnly && submitStagePreparedFramePresentationOnly) ||
@@ -51006,8 +51011,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			submitStageCurrentEyePreparedInputs.Record(currentEyeInputIdentity, a_foveatedRegionEncode);
 			auto& owners = submitStageCurrentEyeSourceOwners[eyeIndex];
 			owners.color.copy_from(sourceTexture);
-			owners.depth.copy_from(depth.texture);
-			owners.motionVectors.copy_from(motionVector.texture);
+			owners.depth.copy_from(REX::W32::AsReal(depth.texture));
+			owners.motionVectors.copy_from(REX::W32::AsReal(motionVector.texture));
 		}
 	};
 	if (!submitStagePreparedThisFrame && !presentationOnly) {
@@ -51054,8 +51059,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		{
 			std::lock_guard lock(submitTemporalInputsMutex);
 			if (submitTemporalInputs.snapshot.MatchesForDispatch(temporalKey) &&
-				submitTemporalInputs.depth.get() == depth.texture &&
-				submitTemporalInputs.motion.get() == motionVector.texture) {
+				submitTemporalInputs.depth.get() == REX::W32::AsReal(depth.texture) &&
+				submitTemporalInputs.motion.get() == REX::W32::AsReal(motionVector.texture)) {
 				temporalInputs = submitTemporalInputs;
 			}
 		}
@@ -51113,7 +51118,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStagePreparedMotionVectorSourceOwner = nullptr;
 	} else if (!submitStagePreparedThisFrame || submitStagePreparedFramePresentationOnly) {
 		bool encodedFoveatedRegions = false;
-		if (!EncodeSubmitStageVRInputs(sourceTexture, motionVector.texture, depth.texture, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, submitStageNeedsRawDepthInput, foveatedRequested, &encodedFoveatedRegions, activeContractGeneration, requiredPreparedEyeMask)) {
+		if (!EncodeSubmitStageVRInputs(sourceTexture, REX::W32::AsReal(motionVector.texture), REX::W32::AsReal(depth.texture), eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, submitStageNeedsRawDepthInput, foveatedRequested, &encodedFoveatedRegions, activeContractGeneration, requiredPreparedEyeMask)) {
 			if (IsSubmitStageDeviceLost())
 				return false;
 			return false;
@@ -51129,9 +51134,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		recordCurrentEyePreparation(encodedFoveatedRegions);
 		if (submitInputProof.IsValid()) {
 			submitStagePreparedColorSourceOwner.copy_from(sourceTexture);
-			submitStagePreparedDepthSourceOwner.copy_from(depth.texture);
+			submitStagePreparedDepthSourceOwner.copy_from(REX::W32::AsReal(depth.texture));
 			submitStagePreparedMotionVectorSourceOwner.copy_from(
-				motionVector.texture);
+				REX::W32::AsReal(motionVector.texture));
 		} else {
 			submitStagePreparedColorSourceOwner = nullptr;
 			submitStagePreparedDepthSourceOwner = nullptr;
@@ -51162,7 +51167,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			HMDMaskClearPhase::SubmitStageOutput,
 			eyeIndex,
 			vrIntermediateColorOut[eyeIndex]->uav.get(),
-			depth.depthSRV,
+			REX::W32::AsReal(depth.depthSRV),
 			sourceRegion.depthWidth,
 			sourceRegion.depthHeight,
 			eyeWidthOut,
@@ -51391,7 +51396,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 #endif
 			inputMaskCleared = DispatchHMDMaskClear(
 				vrIntermediateColorIn[targetEyeIndex]->uav.get(),
-				depth.depthSRV,
+				REX::W32::AsReal(depth.depthSRV),
 				targetSourceRegion.depthWidth,
 				targetSourceRegion.depthHeight,
 				eyeWidthIn,
@@ -51522,7 +51527,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			const bool currentMotion = submitInputProof.IsValid() && !ShouldResetHistoryThisFrame() &&
 			                           !resolutionPlan.menuContextActive && !resolutionPlan.loadingMenuActive && !presentationRenderTarget;
 			if (!ApplySubmitStageDLSSSharpening(targetEyeIndex, targetVendorColorOutput,
-					currentMotion ? motionVector.SRV : nullptr, motionRegion)) {
+					currentMotion ? REX::W32::AsReal(motionVector.SRV) : nullptr, motionRegion)) {
 				if (IsSubmitStageDeviceLost())
 					return false;
 				context->CopyResource(vrIntermediateColorOut[targetEyeIndex]->resource.get(), targetVendorColorOutput.resource.get());
@@ -51555,7 +51560,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				HMDMaskClearPhase::SubmitStageOutput,
 				targetEyeIndex,
 				vrIntermediateColorOut[targetEyeIndex]->uav.get(),
-				depth.depthSRV,
+				REX::W32::AsReal(depth.depthSRV),
 				clearDepthWidth,
 				clearDepthHeight,
 				eyeWidthOut,
@@ -51820,8 +51825,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		bool encodedFoveatedRegions = false;
 		fullEyeVendorFallbackAvailable = EncodeSubmitStageVRInputs(
 			sourceTexture,
-			motionVector.texture,
-			depth.texture,
+			REX::W32::AsReal(motionVector.texture),
+			REX::W32::AsReal(depth.texture),
 			eyeWidthIn,
 			eyeHeightIn,
 			eyeWidthOut,
@@ -51845,9 +51850,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			recordCurrentEyePreparation(false);
 			if (submitInputProof.IsValid()) {
 				submitStagePreparedColorSourceOwner.copy_from(sourceTexture);
-				submitStagePreparedDepthSourceOwner.copy_from(depth.texture);
+				submitStagePreparedDepthSourceOwner.copy_from(REX::W32::AsReal(depth.texture));
 				submitStagePreparedMotionVectorSourceOwner.copy_from(
-					motionVector.texture);
+					REX::W32::AsReal(motionVector.texture));
 			} else {
 				submitStagePreparedColorSourceOwner = nullptr;
 				submitStagePreparedDepthSourceOwner = nullptr;
@@ -53432,7 +53437,9 @@ VRRenderScaleRetryTelemetry::Context Upscaling::CaptureVRRenderScaleRetryContext
 		return {};
 	const auto controller = GetVRRenderScaleTransitionSnapshot();
 	const auto& profile = controller.applying.valid && controller.applying.transitionEpoch == controller.targetEpoch ?
-		controller.applying : controller.requested.valid ? controller.requested : controller.applied;
+	                          controller.applying :
+	                      controller.requested.valid ? controller.requested :
+	                                                   controller.applied;
 	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
 	if (!vrRenderScaleStressSession.active)
 		return {};
@@ -53530,14 +53537,16 @@ void Upscaling::RecordVRRenderScaleViewportPreparation(
 	if (viewport.pending) {
 		event.type = EventType::ViewportWaitEnd;
 		event.reason = a_result == Streamline::DLSSViewportPreparationResult::Ready ?
-			"viewport_preparation_ready" : "viewport_preparation_failed";
+		                   "viewport_preparation_ready" :
+		                   "viewport_preparation_failed";
 		event.beginSequence = viewport.begin.sequence;
 		event.beginQpc = viewport.begin.qpc;
 		event.beginFrame = viewport.begin.frame;
 		event.pendingObservations = viewport.pendingObservations;
 	} else {
-		event.type = pending ? EventType::ViewportWaitBegin :
-			a_result == Streamline::DLSSViewportPreparationResult::Ready ? EventType::ViewportReady : EventType::Failure;
+		event.type = pending                                                      ? EventType::ViewportWaitBegin :
+		             a_result == Streamline::DLSSViewportPreparationResult::Ready ? EventType::ViewportReady :
+		                                                                            EventType::Failure;
 		event.pendingObservations = pending ? 1u : 0u;
 	}
 	event.sequence = telemetry.nextSequence;
@@ -53624,7 +53633,8 @@ json Upscaling::BuildVRRenderScaleRetryTelemetry() const
 			{ "stableCycles", event.stableCycles }, { "requiredStableCycles", event.requiredStableCycles },
 			{ "proofDrivenRelease", event.proofDrivenRelease }, { "settleGuardRequired", event.settleGuardRequired },
 			{ "guardDeadlineFrame", event.guardStartFrame != 0 && event.settleGuardRequired ?
-				json(static_cast<uint64_t>(event.guardStartFrame) + event.minimumSettleFrames) : json(nullptr) }
+										json(static_cast<uint64_t>(event.guardStartFrame) + event.minimumSettleFrames) :
+										json(nullptr) }
 		};
 		if (event.viewportObserved) {
 			const auto& viewport = event.viewport;
@@ -53962,7 +53972,7 @@ void Upscaling::StartVRRenderScaleStressSession()
 			eye.consecutiveFrames = 0;
 		++vrRenderScaleTransitionController.revision;
 	}
-#ifdef DEVBENCH_BRIDGE_ENABLED
+#	ifdef DEVBENCH_BRIDGE_ENABLED
 	{
 		std::scoped_lock telemetryLock(
 			vrRenderScalePreparationTelemetryMutex);
@@ -53979,7 +53989,7 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleRetryTelemetry.sessionID = sessionID;
 		vrRenderScaleRetryTelemetry.qpcFrequency = presentationQpcFrequency;
 	}
-#endif
+#	endif
 	vrRenderScaleStressSessionActive.store(true, std::memory_order_release);
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
 	logger::debug("[VRRenderScale][Stress] Started deterministic CSX-menu capture session {} at frame {}.", sessionID, frame);
@@ -54039,7 +54049,7 @@ void Upscaling::StopVRRenderScaleStressSession()
 		count = vrRenderScaleStressSession.count;
 		overwritten = vrRenderScaleStressSession.overwrittenEvents;
 	}
-#ifdef DEVBENCH_BRIDGE_ENABLED
+#	ifdef DEVBENCH_BRIDGE_ENABLED
 	{
 		std::scoped_lock telemetryLock(vrRenderScaleRetryTelemetryMutex);
 		CloseVRRenderScaleViewportWaitsLocked("capture_stopped");
@@ -54065,12 +54075,12 @@ void Upscaling::ResetVRRenderScaleStressSession()
 			vrRenderScalePresentationStretchSessionTelemetry);
 		vrRenderScaleStressSession = {};
 	}
-#ifdef DEVBENCH_BRIDGE_ENABLED
+#	ifdef DEVBENCH_BRIDGE_ENABLED
 	std::scoped_lock telemetryLock(
 		vrRenderScalePreparationTelemetryMutex, vrRenderScaleRetryTelemetryMutex);
 	vrRenderScalePreparationTelemetry = {};
 	vrRenderScaleRetryTelemetry = {};
-#endif
+#	endif
 }
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
@@ -54259,9 +54269,9 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "existingVendorDispatchReady", event.existingVendorDispatchReady } });
 	}
 	record["events"] = std::move(events);
-#ifdef DEVBENCH_BRIDGE_ENABLED
+#	ifdef DEVBENCH_BRIDGE_ENABLED
 	record["retryTelemetry"] = BuildVRRenderScaleRetryTelemetry();
-#endif
+#	endif
 
 	json metrics = json::array();
 	uint32_t maximumRetries = 0;
@@ -56792,7 +56802,7 @@ void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_ty
 	event.vendorLifecycleMutationDeferred = vendorWorkGate.lifecycleMutationDeferred;
 	event.existingVendorDispatchReady = vendorWorkGate.existingVendorDispatchReady;
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
+#	ifdef DEVBENCH_BRIDGE_ENABLED
 	if (a_type == VRRenderScaleStressEventType::Retry || a_type == VRRenderScaleStressEventType::Applied ||
 		a_type == VRRenderScaleStressEventType::Stable || a_type == VRRenderScaleStressEventType::Failure) {
 		using namespace VRRenderScaleRetryTelemetry;
@@ -56800,16 +56810,17 @@ void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_ty
 		diagnostic.context = { event.sessionID, event.requestID, event.transitionEpoch,
 			static_cast<uint32_t>(event.method), event.qualityMode, event.dlssPreset };
 		diagnostic.frame = event.frame;
-		diagnostic.type = a_type == VRRenderScaleStressEventType::Retry ? EventType::Retry :
-			a_type == VRRenderScaleStressEventType::Applied ? EventType::Applied :
-			a_type == VRRenderScaleStressEventType::Stable ? EventType::Stable : EventType::Failure;
+		diagnostic.type = a_type == VRRenderScaleStressEventType::Retry   ? EventType::Retry :
+		                  a_type == VRRenderScaleStressEventType::Applied ? EventType::Applied :
+		                  a_type == VRRenderScaleStressEventType::Stable  ? EventType::Stable :
+		                                                                    EventType::Failure;
 		diagnostic.reason = a_reason;
 		diagnostic.retryKind = static_cast<uint32_t>(a_retryKind);
 		diagnostic.sourceFile = a_source.file_name();
 		diagnostic.sourceLine = a_source.line();
 		RecordVRRenderScaleRetryEvent(diagnostic);
 	}
-#endif
+#	endif
 
 	if (event.type == VRRenderScaleStressEventType::Retry && vrRenderScaleStressSession.count != 0) {
 		const uint32_t capacity = static_cast<uint32_t>(vrRenderScaleStressSession.events.size());
@@ -57278,7 +57289,7 @@ void Upscaling::PreparePendingVRRenderScaleTransition(
 					a_request.dlssPreset,
 					perfMode.trueHMDEyeWidth,
 					perfMode.trueHMDEyeHeight,
-					colorInput);
+					REX::W32::AsReal(colorInput));
 		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		stageEndQpc = QueryVRRenderScalePresentationQpc();
@@ -58027,7 +58038,7 @@ void Upscaling::FillMenuCameraMotionVectors()
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	ID3D11ShaderResourceView* srvs[] = { depth.depthSRV };
+	ID3D11ShaderResourceView* srvs[] = { REX::W32::AsReal(depth.depthSRV) };
 	context->PSSetShaderResources(0, 1, srvs);
 
 	// b1 is restored by the local state scope above.
@@ -58039,14 +58050,14 @@ void Upscaling::FillMenuCameraMotionVectors()
 	context->RSSetState(nullptr);
 
 	D3D11_TEXTURE2D_DESC motionVectorDesc{};
-	static_cast<ID3D11Texture2D*>(motionVector.texture)->GetDesc(&motionVectorDesc);
+	static_cast<ID3D11Texture2D*>(REX::W32::AsReal(motionVector.texture))->GetDesc(&motionVectorDesc);
 	D3D11_VIEWPORT viewport{};
 	viewport.Width = static_cast<float>(motionVectorDesc.Width);
 	viewport.Height = static_cast<float>(motionVectorDesc.Height);
 	viewport.MaxDepth = 1.0f;
 	context->RSSetViewports(1, &viewport);
 
-	ID3D11RenderTargetView* rtv = motionVector.RTV;
+	ID3D11RenderTargetView* rtv = REX::W32::AsReal(motionVector.RTV);
 	context->OMSetRenderTargets(1, &rtv, nullptr);
 	context->Draw(3, 0);
 
@@ -58551,11 +58562,11 @@ void Upscaling::Upscale()
 			return;
 		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		try {
-			if (!EnsureVRPresentationTextures(inputWidth, inputHeight, outputWidth, outputHeight, main.texture, !vendorLifecycleMutationDeferred))
+			if (!EnsureVRPresentationTextures(inputWidth, inputHeight, outputWidth, outputHeight, REX::W32::AsReal(main.texture), !vendorLifecycleMutationDeferred))
 				return;
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			if (DispatchFoveatedMaskVisualization(0) && DispatchFoveatedMaskVisualization(1))
-				FinalizePerEyeOutputs(main.texture);
+				FinalizePerEyeOutputs(REX::W32::AsReal(main.texture));
 		} catch (const std::exception& e) {
 			static bool loggedMaskPreviewFailure = false;
 			LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping the original frame", e);
@@ -58639,7 +58650,7 @@ void Upscaling::Upscale()
 			return false;
 		}
 
-		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
+		ID3D11ShaderResourceView* views[4] = { REX::W32::AsReal(temporalAAMask.SRV), REX::W32::AsReal(normals.SRV), REX::W32::AsReal(motionVector.SRV), REX::W32::AsReal(depth.depthSRV) };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		auto upscalingBuffer = upscalingDataCB->CB();
@@ -58684,8 +58695,8 @@ void Upscaling::Upscale()
 					eyeHeightIn,
 					eyeWidthOut,
 					eyeHeightOut,
-					main.texture,
-					motionVector.texture,
+					REX::W32::AsReal(main.texture),
+					REX::W32::AsReal(motionVector.texture),
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
 					contractGeneration)) {
@@ -58697,7 +58708,7 @@ void Upscaling::Upscale()
 
 			try {
 				EnsureVRIntermediateTextures(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut,
-					main.texture, motionVector.texture, reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), contractGeneration);
+					REX::W32::AsReal(main.texture), REX::W32::AsReal(motionVector.texture), reactiveMaskTexture->resource.get(), transparencyCompositionMaskTexture->resource.get(), contractGeneration);
 			} catch (const std::exception& e) {
 				logger::warn("[Upscaling] Failed to create VR encode intermediates: {}", e.what());
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -58823,7 +58834,7 @@ void Upscaling::Upscale()
 		return;
 
 	{
-		ID3D11Resource* motionVectorResource = globals::game::isVR ? motionVector.texture : motionVectorCopyTexture->resource.get();
+		ID3D11Resource* motionVectorResource = globals::game::isVR ? REX::W32::AsReal(motionVector.texture) : motionVectorCopyTexture->resource.get();
 		bool dispatched = false;
 		bool vendorDispatchCompleted = false;
 		static bool loggedFoveatedFallback = false;
@@ -58845,13 +58856,13 @@ void Upscaling::Upscale()
 				sharpenerTexture->resource &&
 				sharpenerTexture->srv &&
 				main.UAV;
-			ID3D11Resource* foveatedOutput = foveatedOutputToSharpener ? sharpenerTexture->resource.get() : main.texture;
+			ID3D11Resource* foveatedOutput = foveatedOutputToSharpener ? sharpenerTexture->resource.get() : REX::W32::AsReal(main.texture);
 			{
 				CS_GPU_PASS("Upscaling::Upscale");
 				const auto foveatedResult = DispatchFoveatedVendorUpscaling(
 					upscaleMethod,
-					main.texture,
-					depth.texture,
+					REX::W32::AsReal(main.texture),
+					REX::W32::AsReal(depth.texture),
 					motionVectorResource,
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
@@ -58892,7 +58903,7 @@ void Upscaling::Upscale()
 			} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 				CS_GPU_PASS("Upscaling::Upscale");
 				vendorDispatchCompleted = streamline.Upscale(
-					main.texture,
+					REX::W32::AsReal(main.texture),
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
 					motionVectorResource);
@@ -58902,12 +58913,12 @@ void Upscaling::Upscale()
 				ID3D11Resource* fsrDepth =
 					!globals::game::isVR && runtimeFsrDepthTexture ?
 						runtimeFsrDepthTexture->resource.get() :
-						depth.texture;
+						REX::W32::AsReal(depth.texture);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				recordMainPassStage(VRMainPassDispatchStage::FidelityDispatchStarted);
 #endif
 				const auto fsrResult = fidelityFX.Upscale(
-					main.texture,
+					REX::W32::AsReal(main.texture),
 					fsrDepth,
 					reactiveMaskTexture->resource.get(),
 					transparencyCompositionMaskTexture->resource.get(),
@@ -59104,27 +59115,27 @@ void Upscaling::UpscaleDepth()
 			IsKnownGameMenuContextActive() ||
 			deferVRDynamicDepthCopyPropagationForUnderwaterMask;
 		if (refreshDepthCopyBeforeDepthUpscale) {
-			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
+			CopyResourceIfNonAliased(context, REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
 		}
 
 		// Clear stencil to be 0xFF
 		if (isVR) {
-			context->ClearDepthStencilView(depthCopy.views[0], D3D11_CLEAR_STENCIL, 1.0f, 0xFF);
+			context->ClearDepthStencilView(REX::W32::AsReal(depthCopy.views[0]), D3D11_CLEAR_STENCIL, 1.0f, 0xFF);
 		}
 
 		// Set depth stencil state to write 0x00
 		context->OMSetDepthStencilState(upscaleDepthStencilState.get(), 0x00);
 
-		CopyResourceIfNonAliased(context, refractionNormals.textureCopy, refractionNormals.texture);
+		CopyResourceIfNonAliased(context, REX::W32::AsReal(refractionNormals.textureCopy), REX::W32::AsReal(refractionNormals.texture));
 
-		ID3D11ShaderResourceView* srvs[] = { refractionNormals.SRVCopy, depthCopy.depthSRV, depthCopy.stencilSRV };
+		ID3D11ShaderResourceView* srvs[] = { REX::W32::AsReal(refractionNormals.SRVCopy), REX::W32::AsReal(depthCopy.depthSRV), REX::W32::AsReal(depthCopy.stencilSRV) };
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 		// kSAO_CAMERAZ is at quarter-stereo resolution in VR; the full-stereo viewport would
 		// corrupt only the top-left quarter. The engine's ISSAOCameraZ pass populates it correctly.
-		ID3D11RenderTargetView* rtvs[] = { refractionNormals.RTV,
-			isVR ? nullptr : saoCameraZ.RTV };
-		context->OMSetRenderTargets(2, rtvs, depth.views[0]);
+		ID3D11RenderTargetView* rtvs[] = { REX::W32::AsReal(refractionNormals.RTV),
+			isVR ? nullptr : REX::W32::AsReal(saoCameraZ.RTV) };
+		context->OMSetRenderTargets(2, rtvs, REX::W32::AsReal(depth.views[0]));
 
 		context->PSSetShader(depthUpscalePS, nullptr, 0);
 		context->Draw(3, 0);
@@ -59133,13 +59144,13 @@ void Upscaling::UpscaleDepth()
 		// repair needs the original dynamic depth until the mask pass completes.
 		if (isVR && !deferVRDynamicDepthCopyPropagationForUnderwaterMask) {
 			CS_GPU_PASS("Upscaling::DepthVRPropagate");
-			CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
+			CopyResourceIfNonAliased(context, REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
 		}
 	} else {
 		CS_GPU_PASS("Upscaling::FullResolutionUnderwaterMaskDepthCopy");
 
 		// Full-resolution paths only need to refresh the underwater mask depth source.
-		CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
+		CopyResourceIfNonAliased(context, REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
 	}
 
 	if (!(isVR && ShouldDeferVRProjectedMaskRepair(*this, state))) {
@@ -59153,12 +59164,12 @@ void Upscaling::UpscaleDepth()
 		// intentionally disables stencil-based HAM carving for this classification.
 		const bool underwaterMaskPassBound = BindUnderwaterMaskPassResources(
 			context,
-			underwaterMask.textureCopy,
-			underwaterMask.texture,
-			underwaterMask.RTV,
-			underwaterMask.SRVCopy,
-			depthCopy.depthSRV,
-			useVRDynamicDepthNoStencilUnderwaterMask ? nullptr : depthCopy.stencilSRV);
+			REX::W32::AsReal(underwaterMask.textureCopy),
+			REX::W32::AsReal(underwaterMask.texture),
+			REX::W32::AsReal(underwaterMask.RTV),
+			REX::W32::AsReal(underwaterMask.SRVCopy),
+			REX::W32::AsReal(depthCopy.depthSRV),
+			useVRDynamicDepthNoStencilUnderwaterMask ? nullptr : REX::W32::AsReal(depthCopy.stencilSRV));
 
 		if (underwaterMaskPassBound) {
 			context->PSSetShader(underwaterMaskPS, nullptr, 0);
@@ -59170,7 +59181,7 @@ void Upscaling::UpscaleDepth()
 
 	if (deferVRDynamicDepthCopyPropagationForUnderwaterMask) {
 		CS_GPU_PASS("Upscaling::DepthVRPropagate");
-		CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
+		CopyResourceIfNonAliased(context, REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
 	}
 }
 
@@ -59215,7 +59226,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 		return;
 	}
 	D3D11_TEXTURE2D_DESC underwaterMaskDesc{};
-	if (!TryGetTexture2DDesc(underwaterMask.texture, underwaterMaskDesc) || !underwaterMaskDesc.Width || !underwaterMaskDesc.Height) {
+	if (!TryGetTexture2DDesc(REX::W32::AsReal(underwaterMask.texture), underwaterMaskDesc) || !underwaterMaskDesc.Width || !underwaterMaskDesc.Height) {
 		return;
 	}
 
@@ -59277,14 +59288,14 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	// Unbind the vanilla RTV before copying kUNDERWATER_MASK into its SRV copy.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	CopyResourceIfNonAliased(context, depthCopy.texture, depth.texture);
+	CopyResourceIfNonAliased(context, REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
 	const bool underwaterMaskPassBound = BindUnderwaterMaskPassResources(
 		context,
-		underwaterMask.textureCopy,
-		underwaterMask.texture,
-		underwaterMask.RTV,
-		underwaterMask.SRVCopy,
-		depthCopy.depthSRV,
+		REX::W32::AsReal(underwaterMask.textureCopy),
+		REX::W32::AsReal(underwaterMask.texture),
+		REX::W32::AsReal(underwaterMask.RTV),
+		REX::W32::AsReal(underwaterMask.SRVCopy),
+		REX::W32::AsReal(depthCopy.depthSRV),
 		nullptr);
 
 	if (underwaterMaskPassBound) {
@@ -59352,18 +59363,18 @@ void Upscaling::ApplySharpening()
 				};
 			}
 			motionRegionCount = eyeCount;
-			motionSRV = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].SRV;
+			motionSRV = REX::W32::AsReal(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].SRV);
 		}
 	}
 	if (!shouldApplySharpening ||
 		!main.UAV ||
 		!sharpenerTexture->srv ||
-		!DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), main.UAV, motionSRV,
+		!DispatchDLSSSharpener(*this, sharpenerTexture->srv.get(), REX::W32::AsReal(main.UAV), motionSRV,
 			std::span<const MotionSharpening::Region>(motionRegions.data(), motionRegionCount))) {
 		// Preserve DLSS output if the optional external sharpener is disabled or
 		// unavailable. This copy is the required non-aliasing finalization path,
 		// not an additional sharpening round trip.
-		context->CopyResource(main.texture, sharpenerTexture->resource.get());
+		context->CopyResource(REX::W32::AsReal(main.texture), sharpenerTexture->resource.get());
 	}
 
 	if (globals::game::stateUpdateFlags)

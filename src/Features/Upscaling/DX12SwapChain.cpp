@@ -1004,8 +1004,8 @@ void DX12SwapChain::SetUIBuffer()
 {
 	if (!globals::game::ui->GameIsPaused()) {
 		auto& data = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
-		data.RTV = uiBufferWrapped->rtv.get();
-		d3d11Context->OMSetRenderTargets(1, &data.RTV, nullptr);
+		data.RTV = REX::W32::AsW32(uiBufferWrapped->rtv.get());
+		d3d11Context->OMSetRenderTargets(1, REX::W32::AsReal(&data.RTV), nullptr);
 	}
 }
 
@@ -1016,13 +1016,13 @@ void DX12SwapChain::CreateSharedResources()
 	// Create depth buffer
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	D3D11_TEXTURE2D_DESC texDesc{};
-	main.texture->GetDesc(&texDesc);
+	REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
 	texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 	auto newDepthBuffer = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	// Create motion vector buffer
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	motionVector.texture->GetDesc(&texDesc);
+	REX::W32::AsReal(motionVector.texture)->GetDesc(&texDesc);
 	auto newMotionVectorBuffer = std::make_unique<WrappedResource>(texDesc, d3d11Device.get(), d3d12Device.get());
 
 	depthBufferShared12 = std::move(newDepthBuffer);

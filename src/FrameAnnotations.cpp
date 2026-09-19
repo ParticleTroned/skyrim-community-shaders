@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <limits>
-#include <limits>
 
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
@@ -118,7 +117,7 @@ namespace FrameAnnotations
 				globals::state->BeginPerfEvent("{} Draw", BuildEventName(EffectType));
 
 			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
-			              EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade) {
+						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade) {
 				// Image-space setup may replace PS constant buffers. Refresh the active
 				// profile and rebind b5/b6 immediately before the consuming draw.
 				globals::state->UpdateFeatureData(true);
@@ -1163,7 +1162,7 @@ namespace FrameAnnotations
 			const auto renderTargetName = magic_enum::enum_name(
 				static_cast<RE::RENDER_TARGETS::RENDER_TARGET>(renderTargetIndex));
 			if (auto texture = renderer->GetRuntimeData().renderTargets[renderTargetIndex].texture) {
-				texture->SetPrivateData(WKPDID_D3DDebugObjectName,
+				REX::W32::AsReal(texture)->SetPrivateData(WKPDID_D3DDebugObjectName,
 					static_cast<UINT>(renderTargetName.size()), renderTargetName.data());
 			}
 		}
@@ -1174,7 +1173,7 @@ namespace FrameAnnotations
 			const auto renderTargetName = magic_enum::enum_name(
 				static_cast<RE::RENDER_TARGETS_CUBEMAP::RENDER_TARGET_CUBEMAP>(renderTargetIndex));
 			if (auto texture = renderer->GetRendererData().cubemapRenderTargets[renderTargetIndex].texture) {
-				texture->SetPrivateData(WKPDID_D3DDebugObjectName,
+				REX::W32::AsReal(texture)->SetPrivateData(WKPDID_D3DDebugObjectName,
 					static_cast<UINT>(renderTargetName.size()), renderTargetName.data());
 			}
 		}
@@ -1186,7 +1185,7 @@ namespace FrameAnnotations
 				static_cast<RE::RENDER_TARGETS_DEPTHSTENCIL::RENDER_TARGET_DEPTHSTENCIL>(
 					renderTargetIndex));
 			if (auto texture = renderer->GetDepthStencilData().depthStencils[renderTargetIndex].texture) {
-				texture->SetPrivateData(WKPDID_D3DDebugObjectName,
+				REX::W32::AsReal(texture)->SetPrivateData(WKPDID_D3DDebugObjectName,
 					static_cast<UINT>(renderTargetName.size()), renderTargetName.data());
 			}
 		}

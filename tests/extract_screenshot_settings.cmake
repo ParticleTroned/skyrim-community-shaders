@@ -1,0 +1,37 @@
+if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
+    message(FATAL_ERROR "PROJECT_ROOT and OUTPUT_DIRECTORY are required")
+endif()
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.cpp" _api)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp" _feature)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.h" _header)
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+function(extract_settings_region source start end output)
+    string(FIND "${source}" "${start}" _start)
+    if(_start EQUAL -1)
+        message(FATAL_ERROR "Screenshot settings test cannot find ${start}")
+    endif()
+    string(SUBSTRING "${source}" ${_start} -1 _remaining)
+    string(FIND "${_remaining}" "${end}" _end)
+    if(_end EQUAL -1)
+        message(FATAL_ERROR "Screenshot settings test cannot find ${end}")
+    endif()
+    string(SUBSTRING "${_remaining}" 0 ${_end} _extracted)
+    set(${output} "${_extracted}" PARENT_SCOPE)
+endfunction()
+extract_settings_region("${_header}" "enum class VRCaptureSource" "virtual ~ScreenshotFeature" _types)
+extract_settings_region("${_header}" "struct SequenceDefaults" "SequenceDefaults sequenceDefaults" _sequence)
+file(
+    WRITE "${OUTPUT_DIRECTORY}/screenshot_settings_types.h"
+    "${_types}\n${_sequence}"
+)
+extract_settings_region("${_feature}" "ScreenshotFeature::CaptureEye ParseCaptureEye(" "std::filesystem::path ResolveCapturePath(" _parse)
+extract_settings_region("${_feature}" "json ScreenshotFeature::BuildCaptureDescriptor(" "ScreenshotFeature::ScreenshotFeature()" _descriptor)
+extract_settings_region("${_feature}" "void ScreenshotFeature::LoadSettings(" "void ScreenshotFeature::SaveSettings(" _load)
+extract_settings_region("${_api}" "std::string SourceName(" "std::string CaptureEyeName(" _source_view)
+extract_settings_region("${_api}" "ScreenshotFeature::CaptureEye CaptureEyeFromName(" "bool IsTerminal(" _eye)
+extract_settings_region("${_api}" "ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(" "ScreenshotApi::json ScreenshotApi::BuildSettings(" _normalize)
+extract_settings_region("${_api}" "ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(" "ScreenshotApi::json ScreenshotApi::BuildCapabilities(" _patch)
+file(
+    WRITE "${OUTPUT_DIRECTORY}/screenshot_settings_under_test.h"
+    "${_parse}\n${_source_view}\n${_eye}\n${_descriptor}\n${_load}\n${_normalize}\n${_patch}"
+)

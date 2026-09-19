@@ -116,7 +116,7 @@ void CloudShadows::SkyShaderHacks()
 
 		int side = -1;
 		for (int i = 0; i < 6; ++i)
-			if (rtvs[0] == reflections.cubeSideRTV[i]) {
+			if (rtvs[0] == REX::W32::AsReal(reflections.cubeSideRTV[i])) {
 				side = i;
 				break;
 			}
@@ -134,7 +134,7 @@ void CloudShadows::SkyShaderHacks()
 		context->OMSetBlendState(cloudShadowBlendState, blendFactor, sampleMask);
 
 		auto cubemapDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kCUBEMAP_REFLECTIONS];
-		context->PSSetShaderResources(17, 1, &cubemapDepth.depthSRV);
+		context->PSSetShaderResources(17, 1, REX::W32::AsReal(&cubemapDepth.depthSRV));
 
 		// Release COM objects to prevent memory leaks
 		for (int i = 0; i < 3; ++i) {
@@ -218,8 +218,8 @@ void CloudShadows::SetupResources()
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
 
-		reflections.texture->GetDesc(&texDesc);
-		reflections.SRV->GetDesc(&srvDesc);
+		REX::W32::AsReal(reflections.texture)->GetDesc(&texDesc);
+		REX::W32::AsReal(reflections.SRV)->GetDesc(&srvDesc);
 
 		texDesc.Format = srvDesc.Format = DXGI_FORMAT_R8_UNORM;
 
@@ -227,7 +227,7 @@ void CloudShadows::SetupResources()
 		texCubemapCloudOcc->CreateSRV(srvDesc);
 
 		for (int i = 0; i < 6; ++i) {
-			reflections.cubeSideRTV[i]->GetDesc(&rtvDesc);
+			REX::W32::AsReal(reflections.cubeSideRTV[i])->GetDesc(&rtvDesc);
 			rtvDesc.Format = texDesc.Format;
 			DX::ThrowIfFailed(device->CreateRenderTargetView(texCubemapCloudOcc->resource.get(), &rtvDesc, cubemapCloudOccRTVs + i));
 		}
@@ -236,7 +236,7 @@ void CloudShadows::SetupResources()
 		texCubemapCloudOccCopy->CreateSRV(srvDesc);
 
 		for (int i = 0; i < 6; ++i) {
-			reflections.cubeSideRTV[i]->GetDesc(&rtvDesc);
+			REX::W32::AsReal(reflections.cubeSideRTV[i])->GetDesc(&rtvDesc);
 			rtvDesc.Format = texDesc.Format;
 			DX::ThrowIfFailed(device->CreateRenderTargetView(texCubemapCloudOccCopy->resource.get(), &rtvDesc, cubemapCloudOccCopyRTVs + i));
 		}

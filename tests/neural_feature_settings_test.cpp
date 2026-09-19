@@ -107,6 +107,16 @@ int main()
 	feature.LoadSettings(saved);
 	require(backend.applies == 1 && !backend.rendering.contains("neuralCharacterMultiRoiEnabled"));
 	require(!colour.state.experiments.captureFrameEvidence);
+	for (const bool masked : { true, false }) {
+		backend.rendering["neuralRenderingFovOnly"] = !masked;
+		backend.rendering["neuralRenderingRenderscaleFov"] = masked;
+		Json roundTrip;
+		feature.SaveSettings(roundTrip);
+		backend.rendering = Json::object();
+		feature.LoadSettings(roundTrip);
+		require(backend.rendering.at("neuralRenderingRenderscaleFov") == masked &&
+				backend.rendering.at("neuralRenderingFovOnly") == !masked);
+	}
 	const auto priorColour = colour.Snapshot();
 	const auto priorChanges = colour.changes;
 	backend.accept = false;

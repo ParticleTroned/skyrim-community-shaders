@@ -86,6 +86,34 @@ class TransactionEvidenceTests(unittest.TestCase):
                         self.assertEqual(joined["executionEvidence"]["executions"][0]["actualEvaluationCount"], eyes)
                         self.assertEqual(frozen["executionEvidence"]["executions"][0]["regions"][0]["timing"]["evaluationGpu"]["state"], "pending")
 
+    def test_renderscale_fov_is_immutable_optional_evidence(self):
+        for masked in (False, True):
+            frozen, delayed = fixture("reduced_resolution")
+            for envelope in (frozen["executionEvidence"], delayed["executionEvidence"]):
+                envelope["renderscaleFov"] = masked
+                for context in envelope["sourceContexts"]:
+                    context["renderscaleFov"] = masked
+                for execution in envelope["executions"]:
+                    execution["source"]["renderscaleFov"] = masked
+                    for region in execution["regions"]:
+                        region["source"]["renderscaleFov"] = masked
+            self.assertEqual(tx.join_execution_evidence(frozen, delayed)["companionState"], "joined")
+            targets = [delayed["executionEvidence"],
+                       delayed["executionEvidence"]["executions"][0]["source"],
+                       delayed["executionEvidence"]["executions"][0]["regions"][0]["source"]]
+            for target in targets:
+                for invalid in (not masked, 0, None, "false"):
+                    target["renderscaleFov"] = invalid
+                    with self.subTest(masked=masked, invalid=invalid), self.assertRaises(tx.TransactionEvidenceError):
+                        tx.join_execution_evidence(frozen, delayed)
+                del target["renderscaleFov"]
+                with self.assertRaises(tx.TransactionEvidenceError):
+                    tx.join_execution_evidence(frozen, delayed)
+                target["renderscaleFov"] = masked
+        # Older captures omit this additive field on both sides.
+        frozen, delayed = fixture("reduced_resolution")
+        self.assertEqual(tx.join_execution_evidence(frozen, delayed)["companionState"], "joined")
+
     def test_all_producer_identity_mismatches_rejected(self):
         for field in tx.IDENTITY:
             frozen, delayed = fixture()

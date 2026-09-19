@@ -51,6 +51,7 @@ namespace globals
 			struct Settings
 			{
 				bool neuralRenderingFovOnly = false, neuralRenderingEnabled = false, neuralCharacterRenderingEnabled = false;
+				bool neuralRenderingRenderscaleFov = false;
 				bool neuralCharacterFacesEnabled = true, neuralCharacterSkinEnabled = true, neuralCharacterHairEnabled = false;
 				unsigned neuralRenderingMode = 0;
 				bool foveatedVendorDispatch = true, periphery_taa_enable = false;
@@ -67,6 +68,8 @@ namespace globals
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
 			bool IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod a_upscaleMethod) const;
 			bool IsNeuralRenderingRequested() const noexcept;
+			bool IsFoveatedVendorDispatchEnabled(UpscaleMethod) const;
+			bool IsActiveUpscalingFoveatedProfileAvailable() const;
 			void DrawSelectionControls(bool a_essentialsOnly = true);
 			void DrawNeuralRenderingFovWarning(bool) const {}
 			static bool ApplyNeuralRenderingFovConstraint(Settings& value)
@@ -359,7 +362,7 @@ int main()
 									"Master must preserve child preferences");
 								const auto route = upscaling.GetNeuralRenderingMode();
 								const bool executable = enabled && NeuralRendering::IsRenderingConfigurationSupported(isVR, route) &&
-								                        (!NeuralRendering::RequiresFoveatedMask(route, fovOnly, isVR) || upscaling.IsNeuralRenderingFovConfigurationAvailable());
+								                        (!NeuralRendering::RequiresFoveatedMask(route, fovOnly, isVR, upscaling.settings.neuralRenderingRenderscaleFov) || upscaling.IsNeuralRenderingFovConfigurationAvailable());
 								require(upscaling.IsNeuralRenderingRequested() == executable, "Editable master must not bypass execution prerequisites");
 								upscaling.neuralRenderingFeatureAvailable = false;
 								require(!upscaling.IsNeuralRenderingRequested(), "Unloaded NR must not execute even with valid preferences");
@@ -385,7 +388,7 @@ int main()
 								upscaling.DrawSelectionControls();
 								require(upscaling.settings.neuralRenderingMode == 0, "Unavailable Foveated mode must allow return to Full resolution");
 							}
-							if (fovOnly) {
+							if (fovOnly && upscaling.GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution) {
 								ImGui::Clear("Restrict to FOV mask");
 								upscaling.DrawSelectionControls();
 								require(!upscaling.settings.neuralRenderingFovOnly, "Selected FOV restriction must always be removable");
@@ -404,7 +407,7 @@ int main()
 	require(!NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::Foveated, false), "Unavailable FOV cannot be newly selected");
 	require(NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::Foveated, true), "Configured FOV enables the foveated choice");
 	require(NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::FullResolution, false), "Full resolution allows escape from unavailable automatic FOV modes");
-	require(!NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::ReducedResolution, false), "VR renderscale mode requires configured FOV like Foveated");
+	require(NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::ReducedResolution, false), "VR renderscale mode remains selectable without FOV");
 	require(NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::ReducedResolution, false) &&
 				!NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::Foveated, true) &&
 				NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::FullResolution, false),
@@ -414,18 +417,36 @@ int main()
 	ImGui::Clear("Renderscale NR before DLSS");
 	upscaling.DrawSelectionControls();
 	require(upscaling.GetNeuralRenderingMode() == ModeChoice::ReducedResolution && upscaling.IsNeuralRenderingRequested(),
-		"VR renderscale selection uses configured FOV without an optional restriction");
-	require(!ImGui::Seen("Restrict to FOV mask") && !upscaling.settings.neuralRenderingFovOnly,
-		"Automatic FOV must not expose an ineffective checkbox or rewrite the Full resolution preference");
+		"VR renderscale selection defaults to the unrestricted route");
+	require(ImGui::Seen("Use FOV mask for Renderscale NR") && !upscaling.settings.neuralRenderingRenderscaleFov,
+		"Renderscale must expose an independent, default-off FOV switch");
+	upscaling.settings.neuralRenderingFovOnly = true;
+	for (const bool masked : { true, false, true }) {
+		ImGui::Clear("Use FOV mask for Renderscale NR");
+		upscaling.DrawSelectionControls();
+		require(upscaling.settings.neuralRenderingRenderscaleFov == masked && upscaling.settings.neuralRenderingFovOnly,
+			"Repeated renderscale comparisons must preserve the Full resolution restriction");
+	}
 	upscaling.settings.foveatedVendorDispatch = false;
 	ImGui::Clear();
 	upscaling.DrawSelectionControls();
 	require(!upscaling.IsNeuralRenderingRequested() && !ImGui::Disabled("Enabled"),
-		"Removing FOV pauses VR renderscale NR without locking its master");
+		"An enabled renderscale FOV restriction must wait for configured FOV without locking its master");
+	ImGui::Clear("Use FOV mask for Renderscale NR");
+	upscaling.DrawSelectionControls();
+	require(!upscaling.settings.neuralRenderingRenderscaleFov && upscaling.IsNeuralRenderingRequested() &&
+				upscaling.IsFoveatedVendorDispatchEnabled(Upscaling::UpscaleMethod::kDLSS),
+		"Removing an unavailable FOV restriction must restore the full-eye NR dispatch adapter");
+	require(!upscaling.IsActiveUpscalingFoveatedProfileAvailable(),
+		"Full-eye NR dispatch must not enable shared shader foveation while global FOV is off");
+	ImGui::Clear("Use FOV mask for Renderscale NR");
+	upscaling.DrawSelectionControls();
+	require(ImGui::Disabled("Use FOV mask for Renderscale NR") && !upscaling.settings.neuralRenderingRenderscaleFov,
+		"Missing configured FOV must prevent newly enabling the restriction");
 	ImGui::Clear("Full resolution");
 	upscaling.DrawSelectionControls();
-	require(upscaling.IsNeuralRenderingRequested() && !upscaling.settings.neuralRenderingFovOnly,
-		"Returning to Full resolution restores the saved unrestricted preference");
+	require(!upscaling.IsNeuralRenderingRequested() && upscaling.settings.neuralRenderingFovOnly,
+		"Returning to Full resolution retains its independent saved restriction");
 	globals::game::isVR = false;
 	for (const auto mode : { ModeChoice::FullResolution, ModeChoice::ReducedResolution }) {
 		upscaling.settings = {};
@@ -445,7 +466,9 @@ int main()
 		require(ImGui::Disabled("Foveated") && upscaling.GetNeuralRenderingMode() == mode, "Flat modes cannot select the VR Foveated route");
 		ImGui::Clear("Restrict to FOV mask");
 		upscaling.DrawSelectionControls();
-		require(ImGui::Disabled("Restrict to FOV mask") && !upscaling.settings.neuralRenderingFovOnly,
+		require((mode == ModeChoice::ReducedResolution ? !ImGui::Seen("Use FOV mask for Renderscale NR") :
+														 ImGui::Disabled("Restrict to FOV mask")) &&
+					!upscaling.settings.neuralRenderingFovOnly,
 			"Flat modes cannot newly enable VR FOV restriction");
 	}
 	for (const auto method : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA,
@@ -477,7 +500,8 @@ int main()
 				upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
 				upscaling.settings.neuralRenderingFovOnly = fovOnly;
 				upscaling.settings.foveatedVendorDispatch = available;
-				const bool blocked = !available && (mode != NeuralRendering::RenderingMode::FullResolution || fovOnly);
+				const bool blocked = !available && (mode == NeuralRendering::RenderingMode::Foveated ||
+													   (mode == NeuralRendering::RenderingMode::FullResolution && fovOnly));
 				const auto beforeFovEdit = registry.Snapshot();
 				draw("Enable colour processing");
 				require(ImGui::Disabled("Colour mode") == blocked && ImGui::Disabled("Enable colour processing") == blocked,
@@ -673,6 +697,7 @@ int main()
 				upscaling.settings.foveatedCenterArea = 0.6f;
 				upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
 				upscaling.settings.neuralRenderingFovOnly = true;
+				upscaling.settings.neuralRenderingRenderscaleFov = true;
 				upscaling.settings.neuralRenderingEnabled = true;
 				require(upscaling.IsNeuralRenderingFovConfigurationAvailable(configured) &&
 							!upscaling.IsNeuralRenderingFovConfigurationAvailable() && !upscaling.IsNeuralRenderingRequested(),
@@ -710,7 +735,8 @@ int main()
 				require(upscaling.IsNeuralRenderingRequested(), "Restoring the effective vendor must admit the configured FOV request");
 				upscaling.runtimeMethod = effective;
 				globals::game::isVR = false;
-				require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(configured) && !upscaling.IsNeuralRenderingRequested(),
+				require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(configured) &&
+							upscaling.IsNeuralRenderingRequested() == (mode == ModeChoice::ReducedResolution),
 					"Configured vendor readiness cannot expose VR FOV on flat runtimes");
 			}
 		}

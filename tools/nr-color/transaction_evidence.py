@@ -11,6 +11,7 @@ class TransactionEvidenceError(ValueError):
 
 IDENTITY = ("sourceTransactionId", "publicationSequence", "frame", "sourceWorldFrame", "generation",
             "captureEpoch", "configurationEpoch", "route", "mode", "fovOnly", "logicalEyeCount")
+OPTIONAL_CONTEXT_IDENTITY = ("renderscaleFov",)
 CONTEXT_IDENTITY = ("sourceTransactionId", "captureEpoch", "configurationEpoch", "mode", "fovOnly", "sourceContext")
 REGION_DESCRIPTOR = ("physicalSlot", "logicalSlot", "eye", "region", "regionIdentity", "clusterIdentity",
                      "source", "nrInput", "nrOutput", "nrDepthGuide", "nrMotionGuide", "controlMask",
@@ -149,6 +150,8 @@ def validate_envelope(evidence: dict) -> dict[int, dict]:
     require(evidence.get("route") in ("main", "submit") and evidence.get("mode") in
             ("full_resolution", "foveated", "reduced_resolution") and type(evidence.get("fovOnly")) is bool,
             "invalid rendering route/mode")
+    if "renderscaleFov" in evidence:
+        require(type(evidence["renderscaleFov"]) is bool, "invalid renderscale FOV setting")
     require(type(evidence.get("logicalEyeCount")) is int and evidence["logicalEyeCount"] in (1, 2), "invalid eye count")
     require(isinstance(evidence.get("sourceContext"), str) and bool(evidence["sourceContext"]), "missing source context")
     incomplete = evidence.get("rendererEvidenceIncomplete", False)
@@ -169,6 +172,7 @@ def validate_envelope(evidence: dict) -> dict[int, dict]:
             require(type(execution["evidenceFailed"]) is bool, "invalid execution evidence failure state")
         exact(evidence, execution, ("frame", "sourceWorldFrame", "generation", "route"), "execution producer")
         exact(evidence, execution.get("source"), CONTEXT_IDENTITY, "execution context")
+        optional_exact(evidence, execution.get("source"), OPTIONAL_CONTEXT_IDENTITY, "execution context")
         require(type(execution.get("logicalEyeCount")) is int and 1 <= execution["logicalEyeCount"] <= evidence["logicalEyeCount"],
                 "execution eye count exceeds transaction")
         regions = execution.get("regions")
@@ -178,6 +182,7 @@ def validate_envelope(evidence: dict) -> dict[int, dict]:
         for region in regions:
             require(isinstance(region, dict), "physical region descriptor missing")
             exact(evidence, region.get("source"), CONTEXT_IDENTITY, "physical region context")
+            optional_exact(evidence, region.get("source"), OPTIONAL_CONTEXT_IDENTITY, "physical region context")
             slot, logical, eye = region.get("physicalSlot"), region.get("logicalSlot"), region.get("eye")
             require(uint(slot, 7) and slot not in slots and uint(logical, 3) and logical == slot % 4
                     and logical // 2 == route_index and uint(eye, 1) and eye == logical % 2
@@ -255,6 +260,7 @@ def join_execution_evidence(acquisition: dict, diagnostics: dict | None = None) 
             companion_state = "unavailable"
         else:
             exact(frozen, delayed, IDENTITY + ("sourceContext",), "delayed producer")
+            optional_exact(frozen, delayed, OPTIONAL_CONTEXT_IDENTITY, "delayed route configuration")
             require(delayed.get("finalized") is True, "delayed companion is not finalized")
             delayed_ids = validate_envelope(delayed)
             for field in ("sourceContexts", "workOutcome", "producerBoundary", "droppedStageCount", "dlssDispatches",

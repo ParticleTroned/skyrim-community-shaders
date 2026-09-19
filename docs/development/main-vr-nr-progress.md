@@ -59,14 +59,19 @@ unchanged; DLSS owns temporal reconstruction. B/foveated and FOV restriction
 remain VR-only. Source implementation does not establish flat visual quality
 or performance; those require runtime evidence.
 
-## Automatic renderscale NR FOV, 2026-09-19
+## Optional renderscale NR FOV, 2026-09-19
 
-The label is now **Renderscale NR before DLSS**. In VR this route
-automatically uses configured FOV like Foveated, preserving the optional
-Full resolution preference and complete mono coverage on SE/AE. The
-[implementation record](nr-renderscale-fov-20260919.md) covers crop/blend
-policy, readiness and focused CPU validation. No production archive or
-runtime visual evidence was produced for this change.
+**Renderscale NR before DLSS** defaults to full-eye NR then DLSS again.
+The independent **Use FOV mask for Renderscale NR** switch opts into the
+cropped behavior introduced by `20717c138`, enabling an in-game comparison.
+Full resolution keeps its separate restriction; Foveated keeps automatic
+masking. SE/AE remains mono without FOV. The
+[implementation record](nr-renderscale-fov-20260919.md) covers settings,
+crop/blend policy, readiness and focused CPU validation. This change has
+not been compiled into a production archive or measured in game. Review
+also separated shared-mask availability from the full-eye adapter, removed
+redundant full-coverage baseline copies and tightened capture identity
+checks; the implementation record retains validation and scope details.
 
 ## Task 0 verified checkpoint
 

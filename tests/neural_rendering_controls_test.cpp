@@ -90,6 +90,7 @@ struct Upscaling
 	struct Settings
 	{
 		bool neuralRenderingEnabled = false, neuralCharacterMultiRoiEnabled = false;
+		bool neuralRenderingRenderscaleFov = false;
 		bool neuralRenderingFovOnly = false, periphery_taa_enable = false, foveatedVendorDispatch = true;
 		uint32_t neuralRenderingInsertionPoint = 0, neuralRenderingMode = 0;
 		float foveatedCenterArea = 0.8f, periphery_taa_center_area = 0.3f;
@@ -126,6 +127,26 @@ void Require(bool value, const char* reason)
 int main()
 {
 	auto& renderer = NeuralRendering::Renderer::Instance();
+	{
+		globals::State frame;
+		globals::state = &frame;
+		Upscaling upscaling;
+		upscaling.settings.neuralRenderingEnabled = true;
+		upscaling.settings.neuralRenderingMode = 2;
+		upscaling.settings.neuralRenderingFovOnly = true;
+		renderer = {};
+		for (const bool masked : { true, false, true, false }) {
+			const auto before = upscaling.settings;
+			upscaling.settings.neuralRenderingRenderscaleFov = masked;
+			const auto resets = upscaling.historyResets;
+			Require(upscaling.HandleNeuralRenderingSettingsTransition(before, "renderscale FOV"), "Both renderscale routes must accept transitions");
+			Require(upscaling.historyResets == resets + 1 && upscaling.neuralInsertionPointTransitionFrame == frame.frameCount,
+				"Mask changes must invalidate history and block the current transition frame");
+			Require(renderer.resets == 0 && upscaling.settings.neuralRenderingFovOnly,
+				"Healthy mask transitions must retain backend ownership and the separate Full resolution preference");
+			++frame.frameCount;
+		}
+	}
 	for (const bool menuWithoutFrame : { true, false }) {
 		globals::State frame;
 		globals::state = menuWithoutFrame ? nullptr : &frame;
@@ -194,7 +215,7 @@ int main()
 						upscaling.settings.neuralRenderingFovOnly = fovOnly;
 						Util::Text::warning.clear();
 						upscaling.DrawNeuralRenderingFovWarning(true);
-						Require(!Util::Text::warning.empty() == (isVR && priorTaa && fovAvailable && (mode != 0 || fovOnly)),
+						Require(!Util::Text::warning.empty() == (isVR && priorTaa && fovAvailable && (mode == 1 || (mode == 0 && fovOnly))),
 							"NR menu requires prior TAA and a configured FOV-dependent selection");
 						Util::Text::warning.clear();
 						upscaling.DrawNeuralRenderingFovWarning(false);

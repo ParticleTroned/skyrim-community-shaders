@@ -99,6 +99,21 @@ add_test(NAME NeuralRenderingRuntimeStaging COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_rendering_runtime_test.py")
 set_tests_properties(NeuralRenderingRuntimeStaging PROPERTIES LABELS "ControllerTests" TIMEOUT 300)
 
+set(_neural_reduced_selection_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_reduced_selection_test")
+add_custom_command(
+    OUTPUT "${_neural_reduced_selection_test_dir}/neural_reduced_selection_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_reduced_selection_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_reduced_selection.cmake"
+    DEPENDS src/Features/Upscaling.cpp tests/extract_neural_reduced_selection.cmake
+    VERBATIM
+)
+add_controller_test(neural_reduced_selection_test NeuralReducedSelection
+    tests/neural_reduced_selection_test.cpp)
+target_sources(neural_reduced_selection_test PRIVATE
+    "${_neural_reduced_selection_test_dir}/neural_reduced_selection_under_test.h")
+target_include_directories(neural_reduced_selection_test PRIVATE "${_neural_reduced_selection_test_dir}")
+
 set(_neural_full_resolution_fov_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_full_resolution_fov_test")
 add_custom_command(
     OUTPUT "${_neural_full_resolution_fov_test_dir}/neural_full_resolution_fov_under_test.h"

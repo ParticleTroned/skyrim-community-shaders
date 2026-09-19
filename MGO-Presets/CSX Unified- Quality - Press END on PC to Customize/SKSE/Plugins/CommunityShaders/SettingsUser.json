@@ -79,8 +79,8 @@
       "maximumVersionExclusive": "3.20"
     },
     "settingsContract": {
-      "revision": 6,
-      "sourceTreeSha256": "556CCAD2F0DA3278295E376FEED7C9DD156996586C490F2575CABBF0FD4B2D6C"
+      "revision": 7,
+      "sourceTreeSha256": "D4644FAA4F1F58A264DB57E0CE69D2EC286DB9EF4E63AFDF94F732D0440933C9"
     }
   },
   "Upscaling": {
@@ -146,6 +146,7 @@
       "neuralRenderingDirectCommit": true,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
+      "neuralRenderingRenderscaleFov": false,
       "neuralRenderingInsertionPoint": 0,
       "neuralRenderingIntensity": 0.800000011920929,
       "neuralRenderingLocalStructure": 0.8999999761581421,

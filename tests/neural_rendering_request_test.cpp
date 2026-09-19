@@ -63,4 +63,14 @@ int main()
 	json error;
 	require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "fovOnly", false } }, request, error));
 	require(request.HasAnyControl() && request.fovOnly.has_value());
+	for (const bool enabled : { false, true }) {
+		request = {};
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "renderscaleFov", enabled } }, request, error));
+		require(request.HasAnyControl() && request.renderscaleFov == enabled && !request.fovOnly.has_value());
+	}
+	for (const auto& invalid : { json(0), json("true"), json(nullptr), json::array() }) {
+		request = {};
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "renderscaleFov", invalid } }, request, error));
+		require(error.at("errorCode") == "nr_renderscale_fov_invalid");
+	}
 }

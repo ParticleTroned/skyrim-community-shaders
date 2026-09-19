@@ -34,7 +34,7 @@ namespace NeuralRendering::Evidence
 	{
 		return { { "sourceTransactionId", value.sourceTransactionId },
 			{ "mode", value.renderingMode ? Json(GetRenderingModeName(*value.renderingMode)) : Json(nullptr) },
-			{ "fovOnly", OptionalJson(value.fovOnly) }, { "captureEpoch", OptionalJson(value.captureEpoch) },
+			{ "fovOnly", OptionalJson(value.fovOnly) }, { "renderscaleFov", OptionalJson(value.renderscaleFov) }, { "captureEpoch", OptionalJson(value.captureEpoch) },
 			{ "configurationEpoch", OptionalJson(value.configurationEpoch) }, { "sourceContext", value.sourceContext },
 			{ "dlssRouteGrid", value.dlssViewportCrop ? ViewportJson(*value.dlssViewportCrop) : Json(nullptr) },
 			{ "dlssRouteGridRole", "caller_contract_actual_dispatches_recorded_separately" },

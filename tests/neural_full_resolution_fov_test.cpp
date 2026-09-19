@@ -26,6 +26,7 @@ struct Upscaling
 	struct Settings
 	{
 		bool neuralRenderingEnabled = true, neuralRenderingFovOnly = true;
+		bool neuralRenderingRenderscaleFov = false;
 		bool foveatedPeripheryMaskVisualization = false, periphery_taa_enable = false;
 		uint neuralRenderingInsertionPoint = static_cast<uint>(NeuralRendering::InsertionPoint::FinalLdrPreUi);
 		float foveatedCenterArea = 0.50f, periphery_taa_center_area = 0.35f, periphery_taa_outer_scale = 0.8f;
@@ -43,7 +44,7 @@ struct Upscaling
 	bool IsNeuralRenderingRequested() const { return settings.neuralRenderingEnabled; }
 	auto GetNeuralRenderingMode() const { return mode; }
 	UpscaleMethod GetRuntimeUpscaleMethod() const { return UpscaleMethod::kDLSS; }
-	bool IsFoveatedVendorDispatchEnabled(UpscaleMethod) const { return available; }
+	bool IsActiveUpscalingFoveatedProfileAvailable() const { return available; }
 	bool IsPeripheryTAAEnabled(UpscaleMethod) const { return available && settings.periphery_taa_enable; }
 	auto GetResolvedFoveatedMaskCenterOffsets(bool taa) const { return taa ? taaOffsets : fovOffsets; }
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
@@ -164,6 +165,7 @@ int main()
 				upscaling.mode = NeuralRendering::RenderingMode::ReducedResolution;
 				for (const bool savedRestriction : { false, true }) {
 					upscaling.settings.neuralRenderingFovOnly = savedRestriction;
+					upscaling.settings.neuralRenderingRenderscaleFov = true;
 					Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, true,
 								scale, 0.02f, 1.1f, Upscaling::UpscaleMethod::kDLSS, false),
 						"Renderscale FOV plan failed");
@@ -178,17 +180,27 @@ int main()
 									actual.centerOffsets[eye].y == reference.centerOffsets[eye].y,
 							"Renderscale must retain independent eye offsets");
 					}
+					upscaling.settings.neuralRenderingRenderscaleFov = false;
+					Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, true,
+								scale, 0.02f, 1.1f, Upscaling::UpscaleMethod::kDLSS, false),
+						"Disabling renderscale FOV must restore full-eye planning");
+					for (const auto& eye : upscaling.foveatedRectCache.plan.eyes) {
+						Require(eye.input.CoversExtent(1007, 811) && eye.output.CoversExtent(1511, 1217) &&
+									eye.centerOffset.x == 0.0f && eye.centerOffset.y == 0.0f,
+							"Unmasked renderscale must include every input/output pixel despite saved masks and offsets");
+					}
 				}
 			}
 		}
 		globals::game::isVR = false;
-		upscaling.settings.neuralRenderingFovOnly = false;
+		upscaling.settings.neuralRenderingFovOnly = true;
+		upscaling.settings.neuralRenderingRenderscaleFov = true;
 		Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, false,
 					0.6f, 0.02f, 1.1f, Upscaling::UpscaleMethod::kDLSS, false) &&
 					upscaling.foveatedRectCache.plan.eyes[0].input.CoversExtent(1007, 811) &&
 					upscaling.foveatedRectCache.plan.eyes[0].output.CoversExtent(1511, 1217),
 			"Flat renderscale NR must retain complete mono coverage");
-		std::cout << "Shared FOV geometry passed, including 18 VR renderscale comparisons and flat coverage\n";
+		std::cout << "Shared FOV geometry passed, including 18 VR renderscale on/off comparisons and flat coverage\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

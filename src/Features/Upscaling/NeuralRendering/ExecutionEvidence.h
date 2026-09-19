@@ -32,6 +32,7 @@ namespace NeuralRendering
 	{
 		std::optional<RenderingMode> renderingMode;
 		std::optional<bool> fovOnly;
+		std::optional<bool> renderscaleFov;
 		std::optional<std::uint64_t> captureEpoch;
 		std::optional<std::uint64_t> configurationEpoch;
 		// Captured records outlive the caller; use process-lifetime literals only.

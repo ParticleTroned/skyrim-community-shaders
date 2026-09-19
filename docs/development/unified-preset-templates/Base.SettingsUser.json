@@ -132,6 +132,7 @@
       "neuralRenderingDirectCommit": true,
       "neuralRenderingEnabled": false,
       "neuralRenderingFovOnly": false,
+      "neuralRenderingRenderscaleFov": false,
       "neuralRenderingInsertionPoint": 0,
       "neuralRenderingIntensity": 0.800000011920929,
       "neuralRenderingLocalStructure": 0.8999999761581421,

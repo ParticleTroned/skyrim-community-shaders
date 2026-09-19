@@ -34,6 +34,7 @@ int main()
 		baseline.neuralRenderingEnabled = true;
 		baseline.neuralRenderingMode = static_cast<uint>(mode);
 		baseline.neuralRenderingFovOnly = true;
+		baseline.neuralRenderingRenderscaleFov = true;
 		baseline.foveatedCenterArea = 0.3f;
 		baseline.foveatedCenterHorizontalScale = 1.0f;
 		const auto key = BuildNeuralRenderingSettingsKey(baseline);
@@ -51,10 +52,15 @@ int main()
 		changed.foveatedCenterArea = 0.5f;
 		require(BuildNeuralRenderingSettingsKey(changed) != BuildNeuralRenderingSettingsKey(baseline));
 		baseline.neuralRenderingFovOnly = false;
+		baseline.neuralRenderingRenderscaleFov = false;
 		changed = baseline;
 		changed.foveatedCenterArea = 0.5f;
-		require((BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(baseline)) ==
-				(mode == NeuralRendering::RenderingMode::FullResolution));
+		require(BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(baseline));
+		changed = baseline;
+		changed.neuralRenderingRenderscaleFov = true;
+		require(BuildNeuralRenderingSettingsKey(changed) != BuildNeuralRenderingSettingsKey(baseline));
+		changed = baseline;
+		changed.foveatedCenterArea = 0.5f;
 		globals::game::isVR = false;
 		require(BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(baseline));
 		globals::game::isVR = true;

@@ -120,6 +120,7 @@ try {
 	context.configurationEpoch = begin.configurationEpoch;
 	context.renderingMode = NeuralRendering::ClampRenderingMode(begin.settings.neuralRenderingMode);
 	context.fovOnly = begin.settings.neuralRenderingFovOnly;
+	context.renderscaleFov = begin.settings.neuralRenderingRenderscaleFov;
 	context.dlssViewportCrop = dlssCrop;
 	context.jitterPixels = { dispatchJitter.x, dispatchJitter.y };
 	context.sourceColorOrigin = colorOrigin;
@@ -301,6 +302,7 @@ nlohmann::json Upscaling::SerializeNeuralCaptureRecord(const NeuralCaptureRecord
 		{ "frame", route.frame }, { "sourceWorldFrame", world }, { "generation", route.generation },
 		{ "route", GetNeuralStereoRouteRoleName(route.role) }, { "logicalEyeCount", globals::game::isVR ? 2u : 1u },
 		{ "mode", NeuralRendering::GetRenderingModeName(mode) }, { "fovOnly", record.settings.neuralRenderingFovOnly },
+		{ "renderscaleFov", record.settings.neuralRenderingRenderscaleFov },
 		{ "characterSelectionEnabled", record.settings.neuralCharacterRenderingEnabled && record.settings.neuralCharacterVisualIsolationEnabled },
 		{ "captureEpoch", record.captureEpoch }, { "configurationEpoch", record.configurationEpoch },
 		{ "sourceContext", mode == NeuralRendering::RenderingMode::ReducedResolution                                     ? "render_resolution_before_dlss" :

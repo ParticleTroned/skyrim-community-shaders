@@ -463,6 +463,7 @@ public:
 		bool neuralRenderingEnabled = false;
 		uint neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
 		bool neuralRenderingFovOnly = false;
+		bool neuralRenderingRenderscaleFov = false;
 		uint neuralRenderingInsertionPoint =
 			static_cast<uint>(NeuralRendering::kDefaultInsertionPoint);
 		bool neuralRenderingBatchedStereo = true;

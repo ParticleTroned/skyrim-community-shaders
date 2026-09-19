@@ -95,52 +95,6 @@ namespace
 		       a_state == "dropped";
 	}
 
-	json BuildCaptureDescriptor(
-		const ScreenshotFeature& a_feature,
-		ScreenshotFeature::CaptureEye a_eye,
-		bool a_usePng,
-		bool a_clipboard)
-	{
-		const bool vrRuntime = globals::game::isVR;
-		const bool framed = a_feature.vrCaptureSource == ScreenshotFeature::VRCaptureSource::FramedEye ||
-		                    a_feature.vrCaptureSource == ScreenshotFeature::VRCaptureSource::FramedStereo;
-		json outputs = json::array();
-		auto append = [&](std::string_view a_view, std::string_view a_suffix) {
-			outputs.push_back({
-				{ "view", a_view },
-				{ "encoding", { { "format", a_usePng ? "png" : "bmp" }, { "colourContract", "sdr_srgb" } } },
-				{ "nameSuffix", a_suffix },
-			});
-		};
-
-		if (!vrRuntime || a_feature.vrCaptureSource == ScreenshotFeature::VRCaptureSource::DesktopMirror) {
-			append("source_native", "desktop");
-		} else if (framed) {
-			if (a_eye == ScreenshotFeature::CaptureEye::Both)
-				append("framed_combined", "combined");
-			else if (a_eye == ScreenshotFeature::CaptureEye::Right)
-				append("framed_right", "right");
-			else
-				append("framed_left", "left");
-		} else if (a_eye == ScreenshotFeature::CaptureEye::Both) {
-			append("left_eye", "left");
-			append("right_eye", "right");
-		} else if (a_eye == ScreenshotFeature::CaptureEye::Right) {
-			append("right_eye", "right");
-		} else {
-			append("left_eye", "left");
-		}
-
-		return {
-			{ "source", {
-							{ "kind", vrRuntime && a_feature.vrCaptureSource != ScreenshotFeature::VRCaptureSource::DesktopMirror ? "hmd_submission" : "desktop_mirror" },
-							{ "fallback", "reject" },
-						} },
-			{ "outputs", std::move(outputs) },
-			{ "destination", { { "policy", "settings_default" }, { "overwrite", "never" } } },
-			{ "clipboard", a_clipboard ? "file_reference" : "none" },
-		};
-	}
 	constexpr auto kReadbackMapRetryDelay = std::chrono::milliseconds(1);
 	constexpr uint32_t kFramedEyeOutputWidth = 2560;
 	constexpr uint32_t kFramedEyeOutputHeight = 1440;
@@ -1704,6 +1658,55 @@ namespace
 
 }
 
+json ScreenshotFeature::BuildCaptureDescriptor(
+	CaptureEye a_eye,
+	bool a_usePng,
+	bool a_clipboard) const
+{
+	const bool vrRuntime = globals::game::isVR;
+	const bool framed = vrCaptureSource == VRCaptureSource::FramedEye ||
+	                    vrCaptureSource == VRCaptureSource::FramedStereo;
+	json outputs = json::array();
+	auto append = [&](std::string_view a_view, std::string_view a_suffix) {
+		json output = {
+			{ "view", a_view },
+			{ "encoding", { { "format", a_usePng ? "png" : "bmp" }, { "colourContract", "sdr_srgb" } } },
+			{ "nameSuffix", a_suffix },
+		};
+		if (a_view == "framed_combined")
+			output["dominantEye"] = vrFramedDominantEye == vr::Eye_Right ? "right" : "left";
+		outputs.push_back(std::move(output));
+	};
+
+	if (!vrRuntime || vrCaptureSource == VRCaptureSource::DesktopMirror) {
+		append("source_native", "desktop");
+	} else if (framed) {
+		if (a_eye == CaptureEye::Both)
+			append("framed_combined", "combined");
+		else if (a_eye == CaptureEye::Right)
+			append("framed_right", "right");
+		else
+			append("framed_left", "left");
+	} else if (a_eye == CaptureEye::Both) {
+		append("left_eye", "left");
+		append("right_eye", "right");
+	} else if (a_eye == CaptureEye::Right) {
+		append("right_eye", "right");
+	} else {
+		append("left_eye", "left");
+	}
+
+	return {
+		{ "source", {
+						{ "kind", vrRuntime && vrCaptureSource != VRCaptureSource::DesktopMirror ? "hmd_submission" : "desktop_mirror" },
+						{ "fallback", "reject" },
+					} },
+		{ "outputs", std::move(outputs) },
+		{ "destination", { { "policy", "settings_default" }, { "overwrite", "never" } } },
+		{ "clipboard", a_clipboard ? "file_reference" : "none" },
+	};
+}
+
 ScreenshotFeature::ScreenshotFeature() :
 	screenshotWorkerState(std::make_shared<ScreenshotWorkerState>())
 {
@@ -1797,6 +1800,8 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 	if (a_json.contains("CopyToClipboard"))
 		copyToClipboard = a_json["CopyToClipboard"];
 	screenshotEye = ParseCaptureEye(a_json, "ScreenshotEye", screenshotEye);
+	const bool hasCanonicalFrameCaptureEye = a_json.contains("FrameCaptureEye");
+	bool hasLegacyFrameCaptureEye = false;
 	frameCaptureEye = ParseCaptureEye(a_json, "FrameCaptureEye", frameCaptureEye);
 	vr::EVREye legacyFramedEye = vr::Eye_Left;
 	if (a_json.contains("VRCaptureSource") && a_json["VRCaptureSource"].is_string()) {
@@ -1852,8 +1857,10 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sequenceDefaults.frameCount = std::clamp(sequence->value("FrameCount", sequenceDefaults.frameCount), 1u, 10000u);
 		if (sequence->contains("Schedule") && (*sequence)["Schedule"].is_object())
 			sequenceDefaults.intervalFrames = std::max(1u, (*sequence)["Schedule"].value("IntervalFrames", sequenceDefaults.intervalFrames));
-		if (sequence->contains("Outputs") && (*sequence)["Outputs"].is_object())
+		if (sequence->contains("Outputs") && (*sequence)["Outputs"].is_object()) {
+			hasLegacyFrameCaptureEye = (*sequence)["Outputs"].contains("SeparateEyes");
 			sequenceDefaults.saveSeparateEyes = (*sequence)["Outputs"].value("SeparateEyes", sequenceDefaults.saveSeparateEyes);
+		}
 		if (sequence->contains("Packaging") && (*sequence)["Packaging"].is_object()) {
 			const auto& packaging = (*sequence)["Packaging"];
 			if (packaging.contains("PreviewVideo") && packaging["PreviewVideo"].is_object()) {
@@ -1866,9 +1873,13 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sequenceDefaults.frameCount = std::clamp(a_json.value("SequenceFrameCount", sequenceDefaults.frameCount), 1u, 10000u);
 		sequenceDefaults.intervalFrames = std::max(1u, a_json.value("SequenceFrameInterval", sequenceDefaults.intervalFrames));
 		sequenceDefaults.previewFramesPerSecond = std::clamp(a_json.value("SequencePreviewFramesPerSecond", sequenceDefaults.previewFramesPerSecond), 1u, 240u);
+		hasLegacyFrameCaptureEye = a_json.contains("SequenceSaveSeparateEyes");
 		sequenceDefaults.saveSeparateEyes = a_json.value("SequenceSaveSeparateEyes", sequenceDefaults.saveSeparateEyes);
 		sequenceDefaults.writePreviewVideo = a_json.value("SequenceWritePreviewVideo", sequenceDefaults.writePreviewVideo);
 	}
+	if (!hasCanonicalFrameCaptureEye && hasLegacyFrameCaptureEye)
+		frameCaptureEye = sequenceDefaults.saveSeparateEyes ? CaptureEye::Both : CaptureEye::Left;
+	sequenceDefaults.saveSeparateEyes = frameCaptureEye == CaptureEye::Both;
 
 	subrect.LoadSettings(a_json);
 	SetEnabled(captureEnabled);
@@ -1924,7 +1935,7 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 		{ "Schedule", { { "Basis", "game_frames" }, { "IntervalFrames", sequenceDefaults.intervalFrames } } },
 		{ "Backpressure", { { "Policy", "skip" }, { "MaximumConsecutiveSkips", 10 } } },
 		{ "FailurePolicy", "continue" },
-		{ "Outputs", { { "SeparateEyes", sequenceDefaults.saveSeparateEyes } } },
+		{ "Outputs", { { "SeparateEyes", frameCaptureEye == CaptureEye::Both } } },
 		{ "Packaging", { { "PreviewVideo", { { "Requested", sequenceDefaults.writePreviewVideo }, { "FramesPerSecond", sequenceDefaults.previewFramesPerSecond } } } } },
 	};
 	// Remove migrated experimental spellings so preset layers have one
@@ -2162,7 +2173,7 @@ void ScreenshotFeature::DrawSettings()
 	ImGui::BeginDisabled(!IsRuntimeEnabled());
 	if (uiSequenceRequestId.empty()) {
 		if (ImGui::Button("Start Frame Capture")) {
-			auto capture = BuildCaptureDescriptor(*this, frameCaptureEye, frameCaptureUsePng, false);
+			auto capture = BuildCaptureDescriptor(frameCaptureEye, frameCaptureUsePng, false);
 			const auto response = CSX::Api::DispatchScreenshotServiceRequest({
 				{ "contractMajor", 1 },
 				{ "action", "sequence_start" },
@@ -2412,7 +2423,7 @@ nlohmann::json ScreenshotFeature::RequestApiCapture(std::string_view a_origin)
 		{ "clientId", std::format("csx.control:{}", a_origin) },
 		{ "commandId", std::format("{}:{}", GetTickCount64(), commandSequence.fetch_add(1, std::memory_order_relaxed)) },
 		{ "useSettings", false },
-		{ "capture", BuildCaptureDescriptor(*this, screenshotEye, sdrUsePng, copyToClipboard) },
+		{ "capture", BuildCaptureDescriptor(screenshotEye, sdrUsePng, copyToClipboard) },
 	});
 }
 

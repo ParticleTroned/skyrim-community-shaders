@@ -41,6 +41,19 @@ category authoring, mono character selection and ROI/Multi-ROI, compatibility
 limits and validation. The previous production AIO still contains only the
 master-toggle correction; no replacement archive was requested for this work.
 
+## Flat reduced-resolution NR extension, 2026-09-19
+
+SE/AE now supports A/full resolution and C/reduced resolution, both sharing
+face/skin/hair selection, strengths and ROI/Multi-ROI. The
+[flat reduced-resolution record](nr-flat-reduced-resolution-20260919.md)
+describes the mono adapter: C processes the active render-resolution image,
+then supplies its complete private candidate to ordinary DLSS. Preparation
+or inference failure retains the original DLSS input. The shared exact mask,
+private outputs, colour/Lighting preservation and stateless NR policy are
+unchanged; DLSS owns temporal reconstruction. B/foveated and FOV restriction
+remain VR-only. Source implementation does not establish flat visual quality
+or performance; those require runtime evidence.
+
 ## Task 0 verified checkpoint
 
 -   Existing worktree: `C:/src/skyrim-community-shaders/build/worktrees/main-vr-nr`.
@@ -61,8 +74,9 @@ master-toggle correction; no replacement archive was requested for this work.
     character selection remains orthogonal. Keep FOV prerequisites, shared
     mask geometry/feathering and normal DLSS fallback.
 -   Preserve exact character texel loads, produced-ROI bounds, source-frame
-    identity and complete stereo publication. SE/AE keeps supported A;
-    unsupported flat B/C/character routes remain disabled.
+    identity and complete mono/stereo publication. SE/AE supports A and C,
+    including shared character selection and ROI/Multi-ROI; B/foveated and
+    FOV restriction remain VR-only.
 -   Native NR remains D3D12 with the existing interop. Do not modify NVIDIA
     binaries or admission and do not reopen native-D3D11 NR experiments.
 -   Keep the independent `NeuralRendering` feature and saved

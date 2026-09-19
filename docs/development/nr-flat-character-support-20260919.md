@@ -11,7 +11,9 @@ its existing savings policy; this change makes no new performance claim.
 
 Full-resolution NR runs on the final scene before UI. All shared colour
 modes and Preserve source/Lighting preservation remain in the same logical
-filter domain. Foveated and Reduced resolution remain VR-only. Stereo
+filter domain. The subsequent
+[flat reduced-resolution extension](nr-flat-reduced-resolution-20260919.md)
+also supports character selection before DLSS. Foveated remains VR-only. Stereo
 submission controls are hidden on flat, and character previews/DevBench
 report a single view. Saved stereo preferences are retained but ignored by
 the mono provider path. The master-toggle correction remains intact.
@@ -55,7 +57,8 @@ work without a new API version or defaults.
 
 ## Validation
 
-Route-policy tests cover flat Full resolution and reject flat B/C routes.
+At this checkpoint, route-policy tests covered flat Full resolution and
+rejected flat B/C routes; the linked extension adds flat C coverage.
 The extracted UI regression matrix now verifies enabling flat characters
 without FOV and retains the always-editable master cases. Colour transaction
 tests now cover mono full-scene, one-region and two-region character work

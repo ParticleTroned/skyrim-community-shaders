@@ -50,6 +50,7 @@ namespace globals
 			struct Settings
 			{
 				bool neuralRenderingFovOnly = false, neuralRenderingEnabled = false, neuralCharacterRenderingEnabled = false;
+				bool neuralCharacterFacesEnabled = true, neuralCharacterSkinEnabled = true, neuralCharacterHairEnabled = false;
 				unsigned neuralRenderingMode = 0;
 				bool foveatedVendorDispatch = true, periphery_taa_enable = false;
 				float periphery_taa_center_area = 0.3f, foveatedCenterArea = 0.3f;
@@ -62,7 +63,7 @@ namespace globals
 			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
 			bool IsNeuralRenderingRequested() const noexcept;
-			void DrawSelectionControls();
+			void DrawSelectionControls(bool a_essentialsOnly = true);
 			void DrawNeuralRenderingFovWarning(bool) const {}
 			static bool ApplyNeuralRenderingFovConstraint(Settings& value)
 			{
@@ -129,6 +130,7 @@ namespace ImGui
 	void TextUnformatted(const char* label) { Record(label); }
 	void SeparatorText(const char* label) { Record(label); }
 	void Separator() {}
+	void SameLine() {}
 	void PushID(int) {}
 	void PopID() {}
 	bool Button(const char* label)
@@ -355,11 +357,11 @@ int main()
 								upscaling.neuralRenderingFeatureAvailable = true;
 								require(ImGui::disableDepth == 0 && ImGui::comboDepth == 0, "Routing controls must restore UI state");
 							}
-							if (!isVR && mode == 0 && !fovOnly && !characters) {
+							if (!isVR && mode != 1 && !fovOnly && !characters) {
 								ImGui::Clear("Characters only");
 								upscaling.DrawSelectionControls();
 								require(!ImGui::Disabled("Characters only") && upscaling.settings.neuralCharacterRenderingEnabled,
-									"Flat Full resolution must allow character selection without VR FOV");
+									"Both flat modes must allow character selection without VR FOV");
 								ImGui::Clear("Enabled");
 								upscaling.DrawSelectionControls();
 								require(upscaling.IsNeuralRenderingRequested(), "Enabled flat character selection must reach the shared mono route");
@@ -394,10 +396,54 @@ int main()
 	require(NeuralRendering::IsRenderingModeSelectable(true, ModeChoice::Foveated, true), "Configured FOV enables the foveated choice");
 	for (const auto escape : { ModeChoice::FullResolution, ModeChoice::ReducedResolution })
 		require(NeuralRendering::IsRenderingModeSelectable(true, escape, false), "Non-FOV choices allow escape from an unavailable saved mode");
-	require(!NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::ReducedResolution, true) &&
+	require(NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::ReducedResolution, false) &&
 				!NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::Foveated, true) &&
 				NeuralRendering::IsRenderingModeSelectable(false, ModeChoice::FullResolution, false),
 		"Mode availability preserves flat-runtime support");
+	globals::game::isVR = false;
+	for (const auto mode : { ModeChoice::FullResolution, ModeChoice::ReducedResolution }) {
+		upscaling.settings = {};
+		upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
+		upscaling.settings.foveatedVendorDispatch = false;
+		upscaling.settings.neuralCharacterRenderingEnabled = true;
+		for (const auto* category : { "Faces", "Skin", "Hair" }) {
+			ImGui::Clear(category);
+			upscaling.DrawSelectionControls();
+			require(ImGui::Seen(category) && !ImGui::Disabled(category), "Both flat modes must expose editable essential character categories");
+		}
+		require(!upscaling.settings.neuralCharacterFacesEnabled && !upscaling.settings.neuralCharacterSkinEnabled &&
+					upscaling.settings.neuralCharacterHairEnabled,
+			"Flat category edits must update their independent selections");
+		ImGui::Clear("Foveated");
+		upscaling.DrawSelectionControls();
+		require(ImGui::Disabled("Foveated") && upscaling.GetNeuralRenderingMode() == mode, "Flat modes cannot select the VR Foveated route");
+		ImGui::Clear("Restrict to FOV mask");
+		upscaling.DrawSelectionControls();
+		require(ImGui::Disabled("Restrict to FOV mask") && !upscaling.settings.neuralRenderingFovOnly,
+			"Flat modes cannot newly enable VR FOV restriction");
+	}
+	for (const auto method : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA,
+			 Upscaling::UpscaleMethod::kFSR, Upscaling::UpscaleMethod::kDLSS }) {
+		upscaling.settings = {};
+		upscaling.method = method;
+		upscaling.settings.neuralCharacterRenderingEnabled = true;
+		ImGui::Clear("Reduced resolution before DLSS");
+		upscaling.DrawSelectionControls();
+		require(!ImGui::Disabled("Reduced resolution before DLSS") && upscaling.GetNeuralRenderingMode() == ModeChoice::ReducedResolution,
+			"Flat reduced mode remains selectable independently of backend readiness");
+		for (const bool enabled : { true, false }) {
+			ImGui::Clear("Enabled");
+			upscaling.DrawSelectionControls();
+			require(!ImGui::Disabled("Enabled") && upscaling.settings.neuralRenderingEnabled == enabled,
+				"Flat reduced mode cannot make the master stale when the upscaler changes");
+		}
+		ImGui::Clear("Full resolution");
+		upscaling.DrawSelectionControls();
+		require(upscaling.GetNeuralRenderingMode() == ModeChoice::FullResolution && upscaling.settings.neuralCharacterRenderingEnabled,
+			"Full resolution remains a selectable fallback without losing character selection");
+	}
+	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	globals::game::isVR = true;
 	for (auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::Foveated,
 			 NeuralRendering::RenderingMode::ReducedResolution }) {
 		for (const bool fovOnly : { false, true }) {

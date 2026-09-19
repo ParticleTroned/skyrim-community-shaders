@@ -16,6 +16,24 @@ foreach(_test IN ITEMS character_settings character_multi_roi character_mask_roi
 endforeach()
 target_link_libraries(character_settings_test PRIVATE nlohmann_json::nlohmann_json)
 
+set(_neural_compute_guard_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_compute_guard_test")
+add_custom_command(
+    OUTPUT "${_neural_compute_guard_test_dir}/d3d_resource_naming.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_compute_guard_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_d3d_resource_naming.cmake"
+    DEPENDS src/Utils/D3D.cpp tests/extract_d3d_resource_naming.cmake
+    VERBATIM
+)
+add_controller_test(neural_compute_state_guard_test NeuralComputeStateGuard
+    tests/neural_compute_state_guard_test.cpp)
+target_sources(neural_compute_state_guard_test PRIVATE
+    "${_neural_compute_guard_test_dir}/d3d_resource_naming.h")
+target_include_directories(neural_compute_state_guard_test PRIVATE "${_neural_compute_guard_test_dir}")
+target_compile_definitions(neural_compute_state_guard_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(neural_compute_state_guard_test PRIVATE d3d11)
+set_tests_properties(NeuralComputeStateGuard PROPERTIES TIMEOUT 30)
+
 set(_foveated_geometry_test_dir
     "${CMAKE_CURRENT_BINARY_DIR}/foveated_geometry_test"
 )

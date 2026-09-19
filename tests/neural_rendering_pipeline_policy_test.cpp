@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/PreDlssInputHistory.h"
 
 #include <limits>
 #include <string_view>
@@ -29,7 +30,40 @@ int main()
 	static_assert(NeuralRendering::IsRenderingConfigurationSupported(true, RenderingMode::ReducedResolution));
 	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::FullResolution));
 	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::Foveated));
-	static_assert(!NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::ReducedResolution));
+	static_assert(NeuralRendering::IsRenderingConfigurationSupported(false, RenderingMode::ReducedResolution));
+	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::FullResolution, false));
+	static_assert(NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::ReducedResolution, false));
+	static_assert(!NeuralRendering::IsRenderingModeSelectable(false, RenderingMode::Foveated, true));
+	static_assert(!NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, false));
+	static_assert(NeuralRendering::RequiresFoveatedMask(RenderingMode::ReducedResolution, true));
+	constexpr auto preDlssInputTransitions = []() {
+		NeuralRendering::PreDlssInputHistory history;
+		if (history.NeedsReset(false) || !history.NeedsReset(true))
+			return false;
+		history.Complete(false, true);
+		if (history.NeedsReset(false))
+			return false;
+		history.Complete(true, false);
+		if (!history.NeedsReset(true) || history.NeedsReset(false))
+			return false;
+		history.Complete(true, true);
+		if (history.NeedsReset(true) || !history.NeedsReset(false))
+			return false;
+		history.Complete(true, true);
+		if (history.NeedsReset(true))
+			return false;
+		history.Complete(false, false);
+		if (!history.NeedsReset(false) || history.NeedsReset(true))
+			return false;
+		// Disable, NR failure and empty selection all use the original input.
+		history.Complete(false, true);
+		if (history.NeedsReset(false) || !history.NeedsReset(true))
+			return false;
+		history.Complete(true, true);
+		return !history.NeedsReset(true) && history.NeedsReset(false);
+	};
+	static_assert(preDlssInputTransitions());
+
 	using NeuralRendering::FeatureSlotRoute;
 	using NeuralRendering::InsertionPoint;
 	using NeuralRendering::PipelineArrangement;

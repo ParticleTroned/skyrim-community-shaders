@@ -19,9 +19,17 @@ Full resolution prepares depth and motion guides independently from vendor
 upscaling and the FOV toggle. The full-image blend explicitly covers the
 square image, including its corners; an ellipse with radius one is not a
 full-image mask. VR submit ownership stays with the existing presentation
-pipeline. The main pre-UI path supports mono SE/AE and stereo VR. Foveated,
-reduced-resolution and character routes require VR; incompatible enabled settings
-are rejected with a capability explanation rather than silently ignored.
+pipeline. SE/AE supports Full resolution and Reduced resolution, both with
+shared character selection; VR supports all three routes. Foveated rendering
+and FOV restriction remain VR-only. A saved unavailable FOV restriction
+keeps NR pending and removable without disabling the master switch.
+Unsupported enabled rendering modes are rejected with a capability explanation.
+
+The [flat reduced-resolution adapter](nr-flat-reduced-resolution-20260919.md)
+uses the active mono render extent, then feeds the complete private result
+into ordinary DLSS. Failed preparation or inference leaves DLSS on the
+original scene. This adds no independent model downscale or alternate
+character/colour algorithm.
 
 Reduced resolution uses Feature 18 at 1:1: colour, guide, output, and both
 sides of its crop transform describe the render-resolution domain. Feature
@@ -42,16 +50,18 @@ remains enabled.
 For reduced resolution, projection and mask extents use the render domain.
 After successful inference, each private candidate starts with a complete
 copy of the original low-resolution image. Only validated produced regions
-are composited, using the exact character mask when enabled. Both private
-candidates must be complete before either DLSS eye consumes NR. Undefined
-gaps between disjoint ROIs are neither copied nor sampled. A candidate
-failure leaves both eyes on their original DLSS input. Empty character eyes
-bypass inference while remaining part of the coherent image transaction.
+are composited, using the exact character mask when enabled. Mono requires
+one complete candidate; VR requires both before either DLSS eye consumes
+NR. Undefined gaps between disjoint ROIs are neither copied nor sampled.
+A candidate failure retains the original input for the complete mono/stereo
+transaction. Empty character views bypass inference while remaining part
+of that coherent image transaction.
 
-Mono full-resolution processing uses one required eye; VR requires both.
-Character selection and the source colour reconstruction share the same
-transaction machinery for every supported VR route. SE/AE retains its native
-MASKS2 format and does not expose the VR character-authoring path.
+Both flat routes use one required view; VR requires two. Character selection,
+private outputs and source colour/Lighting reconstruction share the same
+transaction machinery across the supported routes. SE/AE and VR share the
+RG16 MASKS2 tuple: 16-bit inverse vertex AO in the first channel and authored
+face/skin/hair category tags in the second.
 
 ## Problems found and corrected during integration
 
@@ -95,5 +105,6 @@ results. Static policy tests cover mode parsing, enforced image placement,
 reduced-before-DLSS arrangement, and coherent mono/stereo success/bypass
 masks. Source colour and character GPU tests cover their preserved graphics
 contracts. Compilation alone does not establish runtime visual fidelity or
-performance; VR A/B/C with character selection and FOV restriction require
-runtime evidence before making those claims.
+performance. Flat A/C with character selection, and VR A/B/C with character
+selection and FOV restriction, require runtime evidence before making those
+claims.

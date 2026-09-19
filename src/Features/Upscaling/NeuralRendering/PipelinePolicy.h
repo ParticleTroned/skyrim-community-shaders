@@ -54,10 +54,10 @@ namespace NeuralRendering
 		return std::nullopt;
 	}
 
-	/** Full-resolution NR supports mono and stereo, including character selection. */
+	/** Full and reduced-resolution NR support mono and stereo character selection. */
 	[[nodiscard]] constexpr bool IsRenderingConfigurationSupported(bool isVR, RenderingMode mode) noexcept
 	{
-		return isVR || mode == RenderingMode::FullResolution;
+		return isVR || mode == RenderingMode::FullResolution || mode == RenderingMode::ReducedResolution;
 	}
 
 	/** Route choices remain escapable when a saved FOV prerequisite is unavailable. */

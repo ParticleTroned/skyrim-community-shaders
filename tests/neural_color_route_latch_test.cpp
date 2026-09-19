@@ -84,7 +84,7 @@ namespace
 		Require(IsRenderingConfigurationSupported(stereo, fixture.mode),
 			"Fixture must represent a supported runtime configuration");
 		Require(stereo || (!submit && !RequiresFoveatedMask(fixture.mode, fixture.fovOnly)),
-			"The supported mono fixture must use main full-resolution rendering without FOV");
+			"The supported mono fixture must use a main route without VR FOV");
 		const auto insertion = ResolveInsertionPoint(fixture.mode, static_cast<std::uint32_t>(fixture.insertion));
 		Require(insertion == fixture.insertion, "Fixture must use its effective production insertion");
 		const std::uint32_t routeIndex = submit ? 1u : 0u;
@@ -198,13 +198,17 @@ int main()
 					}
 					++transactions;
 				}
-			if (fixture.mode != RenderingMode::FullResolution)
+			if (fixture.mode == RenderingMode::Foveated)
 				Require(!IsRenderingConfigurationSupported(false, fixture.mode),
-					"Flat runtimes must reject the VR-only foveated and reduced routes");
+					"Flat runtimes must reject the VR-only foveated route");
 		}
-		for (const std::uint32_t characterRegions : { 0u, 1u, 2u }) {
-			CheckTransaction(transactionCases.front(), false, false, characterRegions);
-			++transactions;
+		for (const auto& fixture : transactionCases) {
+			if (fixture.fovOnly || fixture.mode == RenderingMode::Foveated)
+				continue;
+			for (const std::uint32_t characterRegions : { 0u, 1u, 2u }) {
+				CheckTransaction(fixture, false, false, characterRegions);
+				++transactions;
+			}
 		}
 		CheckReconstructionPreflight();
 		NeuralRendering::LatchState interleaved;

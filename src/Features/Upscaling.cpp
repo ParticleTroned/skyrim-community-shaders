@@ -5107,6 +5107,20 @@ namespace
 		settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
 	}
 
+	NeuralRendering::Tuning BuildNeuralRenderingTuning(const Upscaling::Settings& settings) noexcept
+	{
+		return {
+			.intensity = settings.neuralRenderingIntensity,
+			.localToneStrength = settings.neuralRenderingLocalTone,
+			.localStructureStrength = settings.neuralRenderingLocalStructure,
+			.skinStructureStrength = settings.neuralRenderingSkinStructure,
+			.style = settings.neuralRenderingStyle,
+			.useAutoMask = settings.neuralRenderingAutoMask,
+			.uiCorrection = settings.neuralRenderingUICorrection,
+			.singleSubrectScale = settings.neuralRenderingSingleSubrectScale,
+		};
+	}
+
 	NeuralRendering::CharacterSettings BuildCharacterSettings(
 		const Upscaling::Settings& a_settings,
 		std::uint32_t a_sourceFrame = std::numeric_limits<std::uint32_t>::max()) noexcept
@@ -17806,7 +17820,7 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 			throw std::invalid_argument("Unsupported Neural Rendering mode or provider mask contract");
 		if (candidate.neuralRenderingEnabled && !NeuralRendering::IsRenderingConfigurationSupported(
 													IsVRRuntimeActive(), NeuralRendering::ClampRenderingMode(candidate.neuralRenderingMode)))
-			throw std::invalid_argument("Foveated and reduced-resolution NR require Skyrim VR; use full-resolution NR on SE/AE");
+			throw std::invalid_argument("Foveated NR requires Skyrim VR; use full-resolution or reduced-resolution NR on SE/AE");
 		SanitizeUpscalingSettings(candidate);
 		const json sanitized = candidate;
 		for (const auto& [name, value] : a_configuration.items())
@@ -17916,7 +17930,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			ImGui::EndCombo();
 		}
 		if (!globals::game::isVR)
-			ImGui::TextDisabled("SE/AE supports full-resolution NR, including character selection. Foveated and reduced-resolution NR require Skyrim VR.");
+			ImGui::TextDisabled("SE/AE supports Full resolution and Reduced resolution before DLSS, both with character selection. Foveated NR requires Skyrim VR.");
 		if (GetNeuralRenderingMode() != NeuralRendering::RenderingMode::Foveated) {
 			auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingFovOnly);
 			ImGui::Checkbox("Restrict to FOV mask", &settings.neuralRenderingFovOnly);
@@ -17935,7 +17949,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			auto guard = Util::DisableGuard(missingFov && !settings.neuralCharacterRenderingEnabled);
 			ImGui::Checkbox("Characters only", &settings.neuralCharacterRenderingEnabled);
 			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Limits visible NR edits to the selected face, skin and hair pixels. Works with Full resolution on SE/AE and every mode in VR; unselected pixels keep the normal scene.");
+				ImGui::TextUnformatted("Selects face, skin and hair pixels for NR. Full resolution preserves the surrounding final scene; Reduced resolution selects pixels before DLSS reconstructs the image. Works with both flat modes and every VR mode.");
 		}
 		const auto drawCharacterCategories = [&]() {
 			ImGui::Checkbox("Faces", &settings.neuralCharacterFacesEnabled);
@@ -21876,7 +21890,8 @@ bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const
 		settings.neuralCharacterRenderingEnabled &&
 		settings.neuralCharacterVisualIsolationEnabled &&
 		(GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
-			(GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS && IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS))) &&
+			(GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS &&
+				(GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS)))) &&
 		!settings.foveatedPeripheryMaskVisualization &&
 		settings.frameGenerationMode == 0 &&
 		!IsFrameGenerationDx12PathActive();
@@ -41397,7 +41412,7 @@ bool Upscaling::IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) c
 {
 	if (IsNeuralRenderingRequested() && a_upscaleMethod == UpscaleMethod::kDLSS &&
 		GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution)
-		return true;
+		return globals::game::isVR;
 	if (!IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod))
 		return false;
 
@@ -43642,16 +43657,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 				return false;
 			args.featureUpscaling = *featureUpscaling;
 			args.reset = NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement()) || ShouldResetHistoryThisFrame();
-			args.tuning = {
-				.intensity = settings.neuralRenderingIntensity,
-				.localToneStrength = settings.neuralRenderingLocalTone,
-				.localStructureStrength = settings.neuralRenderingLocalStructure,
-				.skinStructureStrength = settings.neuralRenderingSkinStructure,
-				.style = settings.neuralRenderingStyle,
-				.useAutoMask = settings.neuralRenderingAutoMask,
-				.uiCorrection = settings.neuralRenderingUICorrection,
-				.singleSubrectScale = settings.neuralRenderingSingleSubrectScale,
-			};
+			args.tuning = BuildNeuralRenderingTuning(settings);
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eyeIndex, neuralSourceFrame,
@@ -44329,6 +44335,145 @@ namespace
 	}
 }
 
+bool Upscaling::PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, ID3D11Resource* depth,
+	ID3D11Resource* motion, NeuralStereoRouteSnapshot& route) noexcept
+{
+	route = {};
+	if (globals::game::isVR || !globals::state || !IsNeuralRenderingRequested() ||
+		GetNeuralRenderingMode() != NeuralRendering::RenderingMode::ReducedResolution)
+		return false;
+	route.valid = route.requested = true;
+	route.role = NeuralStereoRouteRole::Main;
+	route.frame = globals::state->frameCount;
+	route.generation = std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u);
+	route.arrangement = static_cast<uint32_t>(NeuralRendering::PipelineArrangement::NeuralThenDlss);
+	route.insertionPoint = static_cast<uint32_t>(NeuralRendering::InsertionPoint::UpscaledCenter);
+	route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
+	route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
+	std::array<NeuralCenterDispatchResult, 2> results{};
+	std::array<NeuralRendering::RendererApplyArgs, 2> batchArgs{};
+	bool dispositionsResolved = false;
+	const auto resolveAborted = ScopeExit([&]() {
+		if (!dispositionsResolved)
+			ResolveAbortedCharacterFeature18Preparations(results, batchArgs);
+	});
+	try {
+		BeginNeuralCaptureFrame(NeuralStereoRouteRole::Main, route.frame);
+		route.hardMenuBlocked = IsNeuralRenderingHardMenuBlocked(*this, globals::state);
+		route.menuContinuityAllowed = !route.hardMenuBlocked;
+		route.temporalAdmission = BuildNeuralTemporalAdmission(route.role, route.hardMenuBlocked, route.menuContinuityAllowed);
+		ObserveNeuralTemporalAdmission(route.role, route.temporalAdmission);
+		if (!route.temporalAdmission.admitted || route.temporalAdmission.sourceWorldFrame != route.frame) {
+			route.fallbackReason = !route.temporalAdmission.admitted ?
+			                           GetNeuralTemporalFallbackReason(route.temporalAdmission) :
+			                           NeuralStereoFallbackReason::TemporalSourceStale;
+			return false;
+		}
+		route.frameGenerationActive = settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+		route.frameGenerationGatePassed = !route.frameGenerationActive;
+		if (route.frameGenerationActive) {
+			route.fallbackReason = NeuralStereoFallbackReason::FrameGeneration;
+			return false;
+		}
+		if (!TryClaimNeuralRenderingRoute(route.role)) {
+			route.fallbackReason = NeuralStereoFallbackReason::RouteIneligible;
+			return false;
+		}
+		auto* context = globals::d3d::context;
+		uint32_t width = 0, height = 0, displayWidth = 0, displayHeight = 0;
+		if (!context || !globals::d3d::device || !globals::deferred || !globals::deferred->linearSampler ||
+			!foveatedCenterBlendCB || !GetRuntimeFoveatedRegionDimensions(width, height, displayWidth, displayHeight) ||
+			!width || !height || width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
+			return false;
+		for (auto* source : { color, depth, motion }) {
+			D3D11_TEXTURE2D_DESC desc{};
+			if (!TryGetTexture2DDesc(source, desc) || width > desc.Width || height > desc.Height ||
+				desc.SampleDesc.Count != 1 || desc.ArraySize != 1 || desc.MipLevels != 1)
+				return false;
+		}
+		// Private staging isolates active source pixels from spare engine allocation capacity.
+		if (!GetFoveatedCenterBlendCS() ||
+			!EnsureFoveatedTexture(foveatedCenterColorIn[0], color, width, height,
+				false, true, false, false, "NeuralRendering::ReducedColorMono") ||
+			!EnsureFoveatedTexture(foveatedCenterNeuralOut[0], color, width, height,
+				false, true, true, false, "NeuralRendering::ReducedOutputMono") ||
+			!EnsureFoveatedTexture(foveatedCenterNeuralSelected[0], color, width, height,
+				false, true, true, false, "NeuralRendering::ReducedSelectedMono") ||
+			!EnsureFoveatedTexture(foveatedCenterDepth[0], depth, width, height,
+				false, true, true, false, "NeuralRendering::ReducedDepthMono", DXGI_FORMAT_R32_FLOAT) ||
+			!EnsureFoveatedTexture(foveatedCenterMotionVectors[0], motion, width, height,
+				false, true, false, false, "NeuralRendering::ReducedMotionMono"))
+			return false;
+		NeuralRendering::Color::ComputeStateGuard<4, 4> stateGuard(context);
+		const auto capture = CaptureNeuralStage(route.role, 0u, route.frame,
+			route.temporalAdmission.sourceWorldFrame, route.generation, "reduced_mono_input_preparation");
+		{
+			CS_GPU_PASS_CAPTURE("NeuralRendering::PrepareReducedMonoInputs", capture);
+			const D3D11_BOX sourceBox{ 0u, 0u, 0u, width, height, 1u };
+			if (!CopyRawDepthRegion(depth, *foveatedCenterDepth[0], sourceBox))
+				return false;
+			context->CopySubresourceRegion(foveatedCenterColorIn[0]->resource.get(), 0, 0, 0, 0, color, 0, &sourceBox);
+			context->CopySubresourceRegion(foveatedCenterMotionVectors[0]->resource.get(), 0, 0, 0, 0, motion, 0, &sourceBox);
+			RecordNeuralStageWork(capture, uint64_t(width) * height,
+				NeuralRendering::LogicalTextureBytes(foveatedCenterColorIn[0]->desc.Format, width, height) +
+					NeuralRendering::LogicalTextureBytes(foveatedCenterDepth[0]->desc.Format, width, height) +
+					NeuralRendering::LogicalTextureBytes(foveatedCenterMotionVectors[0]->desc.Format, width, height));
+		}
+		auto& args = batchArgs[0];
+		args.device = globals::d3d::device;
+		args.context = context;
+		args.featureSlot = 0;
+		args.frameId = route.frame;
+		args.sourceWorldFrame = route.temporalAdmission.sourceWorldFrame;
+		args.generation = route.generation;
+		args.insertionPoint = NeuralRendering::InsertionPoint::UpscaledCenter;
+		args.colorInput = foveatedCenterColorIn[0]->resource.get();
+		args.colorOutput = foveatedCenterNeuralOut[0]->resource.get();
+		args.depthGuide = foveatedCenterDepth[0]->resource.get();
+		args.depthGuideSRV = foveatedCenterDepth[0]->srv.get();
+		args.motionVectors = foveatedCenterMotionVectors[0]->resource.get();
+		args.colorWidth = args.guideWidth = args.outputWidth = width;
+		args.colorHeight = args.guideHeight = args.outputHeight = height;
+		args.viewportCrop = { .fullInput = { width, height }, .input = { 0, 0, width, height }, .fullOutput = { width, height }, .output = { 0, 0, width, height } };
+		auto dlssCrop = args.viewportCrop;
+		dlssCrop.fullOutput = { displayWidth, displayHeight };
+		dlssCrop.output = { 0, 0, displayWidth, displayHeight };
+		SetNeuralExecutionContext(args, dlssCrop, { 0, 0 }, { 0, 0 });
+		args.featureUpscaling = false;
+		args.reset = true;  // Route C leaves temporal reconstruction to ordinary DLSS.
+		args.tuning = BuildNeuralRenderingTuning(settings);
+		bool requiresEvaluation = true;
+		if (!PrepareCharacterSelectionMask(settings, 0, args.sourceWorldFrame, requiresEvaluation, args))
+			return false;
+		if (requiresEvaluation && !args.computeSubrect.IsValid())
+			args.computeSubrect = NeuralRendering::BuildCenteredComputeSubrect(width, height, args.tuning.singleSubrectScale);
+		results[0].requested = results[0].prepared = true;
+		results[0].bypassed = !requiresEvaluation;
+		route.eligible = route.sourceBatchEligible = route.sourceSignatureProven = true;
+		const auto hdr = GetDLSSColorResourceHDR(color);
+		route.colorBuffersHDRKnown = hdr.has_value();
+		route.colorBuffersHDR = hdr.value_or(false);
+		const auto summary = EvaluatePreparedNeuralStereo(*this, results, batchArgs, false, route.role);
+		dispositionsResolved = summary.preparedEyeMask == 1u;
+		route.preparedEyeMask = summary.preparedEyeMask;
+		route.attemptedEyeMask = results[0].attempted ? 1u : 0u;
+		route.appliedEyeMask = summary.successfulEyeMask;
+		route.bypassedEyeMask = summary.bypassedEyeMask;
+		route.fallbackReason = summary.pairApplied || summary.pairBypassed ?
+		                           NeuralStereoFallbackReason::None :
+		                           NeuralStereoFallbackReason::NeuralEvaluationFailed;
+		return summary.pairApplied;
+	} catch (const std::exception& error) {
+		static bool loggedFailure = false;
+		LogWarnOnce(loggedFailure, "[NeuralRendering] Mono pre-DLSS preparation failed; preserving the original DLSS input", error);
+	} catch (...) {
+		static bool loggedFailure = false;
+		LogWarnOnce(loggedFailure, "[NeuralRendering] Mono pre-DLSS preparation failed; preserving the original DLSS input");
+	}
+	RequestHistoryReset();
+	return false;
+}
+
 bool Upscaling::ApplyFinalLdrNeuralStereo(
 	NeuralStereoRouteRole a_role,
 	const std::array<FinalLdrNeuralEyeTarget, 2>& a_targets,
@@ -44671,16 +44816,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				return false;
 			args.featureUpscaling = *featureUpscaling;
 			args.reset = ShouldResetHistoryThisFrame();
-			args.tuning = {
-				.intensity = settings.neuralRenderingIntensity,
-				.localToneStrength = settings.neuralRenderingLocalTone,
-				.localStructureStrength = settings.neuralRenderingLocalStructure,
-				.skinStructureStrength = settings.neuralRenderingSkinStructure,
-				.style = settings.neuralRenderingStyle,
-				.useAutoMask = settings.neuralRenderingAutoMask,
-				.uiCorrection = settings.neuralRenderingUICorrection,
-				.singleSubrectScale = settings.neuralRenderingSingleSubrectScale,
-			};
+			args.tuning = BuildNeuralRenderingTuning(settings);
 			bool characterEvaluationRequired = true;
 			if (!PrepareCharacterSelectionMask(
 					settings, eye, a_neuralSourceFrame,
@@ -65380,12 +65516,33 @@ void Upscaling::Upscale()
 			if (!fallbackEncodeOk) {
 				logger::warn("[Upscaling] Full-frame {} fallback skipped because input encoding failed.", magic_enum::enum_name(upscaleMethod));
 			} else if (upscaleMethod == UpscaleMethod::kDLSS) {
-				CS_GPU_PASS("Upscaling::Upscale");
-				vendorDispatchCompleted = streamline.Upscale(
-					main.texture,
-					reactiveMaskTexture->resource.get(),
-					transparencyCompositionMaskTexture->resource.get(),
-					motionVectorResource);
+				NeuralStereoRouteSnapshot flatNeuralRoute{};
+				const bool flatNeuralInput = !globals::game::isVR && PrepareFlatReducedResolutionNeuralInput(
+																		 main.texture, renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture,
+																		 motionVectorResource, flatNeuralRoute);
+				if (!globals::game::isVR && flatDlssInputHistory.NeedsReset(flatNeuralInput))
+					historyResetThisFrame = true;
+				{
+					CS_GPU_PASS("Upscaling::Upscale");
+					vendorDispatchCompleted = streamline.Upscale(
+						flatNeuralInput ? foveatedCenterNeuralSelected[0]->resource.get() : main.texture,
+						reactiveMaskTexture->resource.get(),
+						transparencyCompositionMaskTexture->resource.get(),
+						motionVectorResource);
+				}
+				if (!globals::game::isVR)
+					flatDlssInputHistory.Complete(flatNeuralInput, vendorDispatchCompleted);
+				if (flatNeuralRoute.valid) {
+					flatNeuralRoute.dlssEyeMask = vendorDispatchCompleted ? 1u : 0u;
+					flatNeuralRoute.pairComplete = vendorDispatchCompleted;
+					flatNeuralRoute.committedEyeMask = flatNeuralInput && vendorDispatchCompleted ? 1u : 0u;
+					flatNeuralRoute.disposition = flatNeuralRoute.committedEyeMask ?
+					                                  NeuralStereoPairDisposition::NeuralPair :
+					                                  NeuralStereoPairDisposition::NormalDLSSPair;
+					if (!vendorDispatchCompleted)
+						flatNeuralRoute.fallbackReason = NeuralStereoFallbackReason::StereoDispatchFailed;
+					PublishNeuralStereoRouteSnapshot(flatNeuralRoute);
+				}
 			} else if (upscaleMethod == UpscaleMethod::kFSR) {
 				CS_GPU_PASS("Upscaling::Upscale");
 				auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];

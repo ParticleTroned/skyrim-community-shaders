@@ -11,6 +11,7 @@
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/MainDepthPresentation.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Upscaling/NeuralRendering/PreDlssInputHistory.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/VROrdinarySaveRecovery.h"
@@ -3288,6 +3289,7 @@ public:
 	bool depthUpscaleUseWideKernel = false;
 	bool historyResetRequested = true;
 	bool historyResetThisFrame = false;
+	NeuralRendering::PreDlssInputHistory flatDlssInputHistory;
 	std::atomic<uint32_t> neuralTemporalAdmissionLatch{ 0 };
 	uint32_t neuralInsertionPointLatchedFrame = std::numeric_limits<uint32_t>::max();
 	NeuralRendering::InsertionPoint neuralInsertionPointLatched =
@@ -4166,6 +4168,9 @@ public:
 	/** Resolves immutable staged character-isolation inputs for one eye. */
 	/** Builds a complete low-resolution candidate before DLSS consumes either eye. */
 	bool PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralRendering::RendererApplyArgs& args);
+	/** Prepares a private mono C candidate; failure leaves the original DLSS input untouched. */
+	bool PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, ID3D11Resource* depth,
+		ID3D11Resource* motion, NeuralStereoRouteSnapshot& route) noexcept;
 	bool ResolveCharacterCompositeInputs(
 		uint32_t a_eyeIndex,
 		Streamline::DLSSViewportRole a_viewportRole,

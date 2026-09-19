@@ -17,6 +17,7 @@
 #include "Utils/StringUtils.h"
 
 #include "RE/B/BSMultiBoundRoom.h"
+#include "RE/B/BSShadowDirectionalLight.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1655,6 +1656,8 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 {
 	if (!a_node)
 		return;
+	RE::NiPointer<RE::ShadowSceneNode> sceneOwner;
+	RE::BSShadowLight* sceneSun = nullptr;
 	std::optional<SceneLightSnapshot> snapshot;
 	std::vector<RE::BSShadowLight*> renderOrder;
 	try {
@@ -1662,6 +1665,9 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 		const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
 		if (a_index >= runtime.shadowLightsAccum.size() || !runtime.shadowLightsAccum[a_index])
 			return;
+		// The scene directly deletes its sun; retaining the sun itself would misapply intrusive ownership.
+		sceneOwner.reset(a_node);
+		sceneSun = runtime.sunShadowDirLight;
 		snapshot.emplace();
 		// Native dispatch uses accumulated order and needs no clustered-light enumeration.
 		snapshot->RetainScene(runtime, false);
@@ -1672,8 +1678,9 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 	}
 
 	while (a_index < renderOrder.size()) {
-		// Raw accumulated entries are keys; only owning-list references authorize a virtual call.
-		auto* light = snapshot->Find(renderOrder[a_index]);
+		// Only this scene's sun bypasses the queued-light owner lookup; the scene remains retained.
+		auto* key = renderOrder[a_index];
+		auto* light = key == sceneSun ? static_cast<RE::BSLight*>(sceneSun) : snapshot->Find(key);
 		if (!light || !light->IsShadowLight())
 			break;
 		const auto previousIndex = a_index;

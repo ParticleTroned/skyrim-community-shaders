@@ -103,8 +103,10 @@ The hook replaces the raw selection/dispatch loop at SkyrimVR+`0x13231FB`
 through `0x1323230`. Ghidra analysis of the retained PID 22880 image verifies
 the native selector at `0x12FA250`: it indexes the raw array at node+`0x258`.
 The replacement checks keys against retained owners before reading a light
-or its virtual table. It preserves the original render order, the native
-index passed by reference, and null-terminated traversal, and additionally
+or its virtual table. The one exception is the exact `sunShadowDirLight`
+owned directly by the retained scene node, described below. It preserves
+the original render order, the native index passed by reference and
+null-terminated traversal, and additionally
 bounds traversal by the captured array size. An unknown owner, a non-shadow
 object, or a non-advancing index ends the pass. Allocation failure skips the
 pass after releasing the lock and any acquired references. Rendering
@@ -121,6 +123,57 @@ jump to the original loop continuation. Existing native render virtual hooks
 remain in the call path. This fix has no dependency on the shadow-lifetime
 observer or driver-command recorder. SE and AE receive no new executable
 patch or render-path change.
+
+### Scene-owned sun regression and correction
+
+The 2026-09-19 visual bisect isolated the player-following dark circle to
+PR96. The user reported its parent `5adb39d62981f855fd57af77c45bd57cf9b8a233`
+as good and `2e6d87cf763633917dbee54805476c7da0d2c995` as bad. Their AIOs
+have 351 byte-identical payload files, including every shader and vendor
+runtime DLL; only the CSX DLL, PDB and build manifest differ.
+
+-   Good Build ID: `19f694edc6364157dc69db8e5b10ce6efb9d49b8ccd373ce7c9ae523ab6e8fcc`.
+-   Bad Build ID: `3805f77bf2a16fd88c6b28889e1262b254a7c25fa76be213eedcc06b81392de2`.
+
+Read-only live-memory inspection of SkyrimVR PID 8724 establishes a
+different ownership contract for the sun's shadow light. The scene
+constructor stores it at node+`0x238` (`0x12F62F7`), and the scene destructor
+directly deletes it (`0x12F6551` through `0x12F6565`). It is not an owner
+from the queued-light lists. Its captured reference count was zero; its
+`IsShadowLight` virtual target (`0x134D130`) returns true. The native
+selector (`0x12FA250`) simply indexes the accumulated raw array.
+These observations came from live process bytes, not the packed executable.
+
+The previous owner lookup rejected this legitimate light and terminated
+the native shadow pass. The correction retains the scene node for a
+nonempty pass and recognizes only its exact captured `sunShadowDirLight`
+pointer. It never adds a reference to the directly owned sun: doing so
+could delete it when that artificial reference is released. Ordinary
+lights still require the existing owning-list snapshot. Unknown raw
+pointers, wrong types, stalled indices and capture failures retain their
+existing rejection behavior. The render order and index semantics are
+unchanged. Scene and light references are released outside the queue lock,
+including on exceptions; empty passes still acquire no references.
+
+The production-function regression test failed before this correction when
+the sun appeared between queued lights. With the correction it covers
+multi-cascade index advancement, queued-light teardown, zero sun reference
+traffic, retention of the scene through rendering and exceptions, capture
+failure/retry with only the sun present, and rejection of unrelated raw
+pointers. `SceneLightSnapshot` and
+`VRSceneGuards` pass; the latter reports 743 assertions. Corrected in-game
+visual and COC stability validation remains pending.
+
+Local bisect receipts, hashed live snapshots and test output are retained
+under `build/dark-circle-bisect/`. No new runtime hook, setting or diagnostic
+instrumentation is introduced by the correction.
+
+Adversarial review checked the narrow pointer-identity exception, destruction
+order, empty-pass behavior, and failure unwinding. The review added the
+sun-only capture allocation failure/retry case and explicit scene-reference
+balance assertions to the existing empty-pass, capture-failure and render
+exception tests. The shared capture helper and executable hook remain
+unchanged; both branches carry the same correction and tests.
 
 Focused validation after the second PR #96 adversarial review:
 

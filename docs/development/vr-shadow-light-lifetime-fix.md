@@ -161,8 +161,19 @@ multi-cascade index advancement, queued-light teardown, zero sun reference
 traffic, retention of the scene through rendering and exceptions, capture
 failure/retry with only the sun present, and rejection of unrelated raw
 pointers. `SceneLightSnapshot` and
-`VRSceneGuards` pass; the latter reports 743 assertions. Corrected in-game
-visual and COC stability validation remains pending.
+`VRSceneGuards` pass; the latter reports 743 assertions.
+
+On 2026-09-19 the user confirmed "cricle gone" after receiving the corrected
+main-VR-NR AIO built from `e7be5cd29e965fa8445e32ca7582d1f287abf881`.
+Its verified producer Build ID is
+`47ea3a454e3f769f4aedc442b4d39d79504a00325f08d6a10f7aff74f59ca679`,
+and its DLL SHA-256 is
+`ae0475924f326de35cf6dc9327829872578be99b699dad82ade863453fc049b5`.
+This closes the reported dark-circle symptom for that delivered build.
+The confirmation is a user visual observation; runtime identity was not
+queried again. COC stability qualification remains pending, and later branch
+revisions are not qualified by this observation. The identical correction
+is committed on main-VR as `012e5139e0d3b96109c9a077137ba073ced35218`.
 
 Local bisect receipts, hashed live snapshots and test output are retained
 under `build/dark-circle-bisect/`. No new runtime hook, setting or diagnostic

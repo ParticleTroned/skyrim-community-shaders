@@ -341,6 +341,8 @@ void Profiler::BeginFrame()
 		return;
 
 	auto& frame = frames[writeFrame];
+	if (!frame.disjoint)
+		return;
 	ResetFrameState(frame);
 	frame.inFlight = true;
 	if (activeCaptureSessionId == boundedCapture.sessionId && activeCaptureSessionId != 0 &&
@@ -375,6 +377,9 @@ bool Profiler::BeginPass(std::string_view name, bool fireCallbacks)
 		slotRefusals++;
 		return BeginFallbackCpuPass(name, fireCallbacks);
 	}
+
+	if (!frame.timers[frame.activeCount].begin || !frame.timers[frame.activeCount].end)
+		return BeginFallbackCpuPass(name, fireCallbacks);
 
 	const uint32_t timerIndex = frame.activeCount++;
 	acquiredSlotsThisFrame++;

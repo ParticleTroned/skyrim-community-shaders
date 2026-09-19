@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 // This target compiles the production profiler against deterministic query and clock inputs.
 using UINT = unsigned int;
@@ -50,8 +51,14 @@ struct ID3D11Query
 
 struct ID3D11Device
 {
+	int failedQueryIndex = -1;
+	int queryCreations = 0;
 	HRESULT CreateQuery(const D3D11_QUERY_DESC* desc, ID3D11Query** output)
 	{
+		if (queryCreations++ == failedQueryIndex) {
+			*output = nullptr;
+			return E_FAIL;
+		}
 		*output = new ID3D11Query{ desc->Query };
 		return S_OK;
 	}
@@ -65,14 +72,23 @@ struct ID3D11DeviceContext
 	UINT64 clock = 0;
 	UINT writes = 0;
 	UINT reads = 0;
-	void Begin(ID3D11Query*) { ++writes; }
+	void Begin(ID3D11Query* query)
+	{
+		if (!query)
+			throw std::runtime_error("Begin received a missing query");
+		++writes;
+	}
 	void End(ID3D11Query* query)
 	{
+		if (!query)
+			throw std::runtime_error("End received a missing query");
 		++writes;
 		query->timestamp = ++clock;
 	}
 	HRESULT GetData(ID3D11Query* query, void* output, UINT, UINT)
 	{
+		if (!query)
+			throw std::runtime_error("GetData received a missing query");
 		++reads;
 		if (pending)
 			return S_FALSE;

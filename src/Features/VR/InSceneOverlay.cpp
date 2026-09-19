@@ -837,8 +837,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						VRNativeRestoreCyclePresentationPath::
 							BlackKeepalive);
 			const auto rejectQuarantinedSubmit = [&](
-													 const vr::Texture_t* a_texture,
-													 const vr::VRTextureBounds_t* a_bounds) {
+													 [[maybe_unused]] const vr::Texture_t* a_texture,
+													 [[maybe_unused]] const vr::VRTextureBounds_t* a_bounds) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				VRRenderScaleDevBenchBridge::RecordPresentationAuditObservation({
 					.valid = true,

@@ -67,6 +67,13 @@ wet-grass darkening, locked VR menu placement, depth-culling policy modes, and
 opt-in verbose PBR diagnostics. Their retired keys are explicitly rejected so
 a package cannot silently fall back through legacy migration on first load.
 
+Global and all five Adaptive Balance profiles explicitly include Sky
+Saturation, Caustics Strength, Tiling, Speed and Color Dispersion, and Water
+Parallax Strength at their neutral value of `1.0`, with Parallax Quality
+at `16`. These appearance defaults are shared across tiers and GPU vendors.
+Wind-driven waves remain opt-in; their existing settings are explicit in
+every profile.
+
 ## CSX compatibility contract
 
 The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`

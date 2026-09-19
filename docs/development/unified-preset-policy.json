@@ -15,7 +15,7 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "1BE896176D2370AED4ACD50203DF373B461A9C1E7AA087E84E0DC32B0BF85FE2"
+        "sha256": "1AF5E2A3F435BAB7D31BB920FA93029C891033438079B0585537249817467651"
     },
     "runtimeSettingsContract": {
         "revision": 5,
@@ -555,6 +555,31 @@
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
             { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },
             { "path": ["Adaptive Balance", "globalProfile", "advanced"], "value": true },
+            { "path": ["Adaptive Balance", "globalProfile", "skySaturation"], "value": 1.0 },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "water", "CausticsStrength"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "water", "CausticsTiling"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "water", "CausticsSpeed"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "water", "CausticsDispersion"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "water", "ParallaxStrength"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "water", "ParallaxQuality"],
+                "value": 16
+            },
             {
                 "path": ["Adaptive Balance", "globalProfile", "waterWind", "overrideEnabled"],
                 "value": true

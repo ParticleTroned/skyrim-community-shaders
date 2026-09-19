@@ -105,6 +105,11 @@ struct Upscaling
 	void InvalidateFrameScopedUpscalingState() { ++invalidations; }
 	static bool HasSameNeuralRenderingSettingsKey(const Settings& a, const Settings& b) { return a == b; }
 	static bool ApplyNeuralRenderingFovConstraint(Settings&) noexcept;
+	bool neuralRenderingReplacedFovTaa = false;
+	bool fovAvailable = true;
+	NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
+	bool IsNeuralRenderingFovConfigurationAvailable() const { return fovAvailable; }
+	void DrawNeuralRenderingFovWarning(bool) const;
 	void DrawPeripheryTAAControl();
 	bool HandleNeuralRenderingSettingsTransition(const Settings&, const char*, bool* = nullptr);
 };
@@ -169,5 +174,51 @@ int main()
 		Require(ImGui::checkboxDisabled == nrEnabled && ImGui::disabled == 0, "FOV+TAA UI must be greyed out only while NR is enabled");
 		Require(upscaling.settings.periphery_taa_enable == (nrEnabled ? taaBeforeDraw : !taaBeforeDraw), "Disabled FOV+TAA control must not change its value");
 		Require(!Util::Text::warning.empty() == nrEnabled, "NR FOV must display the shared red mask warning");
+	}
+	for (const bool priorTaa : { false, true }) {
+		Upscaling upscaling;
+		renderer = {};
+		upscaling.settings.periphery_taa_enable = priorTaa;
+		auto previous = upscaling.settings;
+		upscaling.settings.neuralRenderingEnabled = true;
+		Require(upscaling.HandleNeuralRenderingSettingsTransition(previous, "enable NR"), "Enabling NR must succeed");
+		Require(upscaling.neuralRenderingReplacedFovTaa == priorTaa, "Warning must remember an actual TAA fallback only");
+		for (const bool isVR : { false, true }) {
+			globals::game::isVR = isVR;
+			for (const bool fovAvailable : { false, true }) {
+				upscaling.fovAvailable = fovAvailable;
+				for (uint32_t mode = 0; mode < 3; ++mode) {
+					upscaling.settings.neuralRenderingMode = mode;
+					for (const bool fovOnly : { false, true }) {
+						upscaling.settings.neuralRenderingFovOnly = fovOnly;
+						Util::Text::warning.clear();
+						upscaling.DrawNeuralRenderingFovWarning(true);
+						Require(!Util::Text::warning.empty() == (isVR && priorTaa && fovAvailable && (mode == 1 || fovOnly)),
+							"NR menu requires prior TAA and a configured FOV-dependent selection");
+						Util::Text::warning.clear();
+						upscaling.DrawNeuralRenderingFovWarning(false);
+						Require(!Util::Text::warning.empty() == isVR, "Upscaling must retain its NR-on warning regardless of prior TAA or NR mode");
+					}
+				}
+			}
+		}
+		globals::game::isVR = true;
+		previous = upscaling.settings;
+		Require(upscaling.HandleNeuralRenderingSettingsTransition(previous, "redraw"), "Passive redraw must succeed");
+		Require(upscaling.neuralRenderingReplacedFovTaa == priorTaa, "Passive redraw must retain the actual fallback notice");
+		upscaling.settings.neuralRenderingEnabled = false;
+		renderer.resetSucceeds = false;
+		Require(upscaling.HandleNeuralRenderingSettingsTransition(previous, "disable NR"), "Disabling must remain accepted after failed retirement");
+		Require(!upscaling.neuralRenderingReplacedFovTaa, "Disabling NR must clear the fallback notice");
+		for (const bool nrMenu : { false, true }) {
+			Util::Text::warning.clear();
+			upscaling.DrawNeuralRenderingFovWarning(nrMenu);
+			Require(Util::Text::warning.empty(), "Neither menu may warn while NR is off");
+		}
+		previous = upscaling.settings;
+		previous.periphery_taa_enable = true;
+		upscaling.settings.neuralRenderingEnabled = true;
+		Require(!upscaling.HandleNeuralRenderingSettingsTransition(previous, "rejected enable"), "Unsafe enabling must still fail");
+		Require(!upscaling.neuralRenderingReplacedFovTaa, "Rejected transitions must not create a fallback notice");
 	}
 }

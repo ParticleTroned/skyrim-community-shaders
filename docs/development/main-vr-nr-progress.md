@@ -311,3 +311,23 @@ requires a request before any build. Source-only validation passed:
 `git diff --check`. Preset revision 6 and tier settings are unchanged; the
 reviewed source fingerprint and generated hashes were refreshed. No DLL,
 shader, test executable or AIO build, push, deployment or live test occurred.
+
+## Contextual FOV warning (2026-09-19)
+
+The NR menu shows the red centre-only mask warning only for an enabled,
+configured FOV-dependent selection after an accepted transition replaced
+FOV + TAA during the current NR-enabled session. Passive redraw retains
+that notice; disabling NR clears it, and rejected transitions cannot create
+it. The Upscaling menu retains its warning whenever NR and FOV are enabled,
+regardless of NR route or the previous TAA selection. Neither menu warns
+when NR is off. The runtime TAA constraint and saved mask profiles are
+unchanged; this notice is session-only and is not a persisted setting.
+
+The extracted control regression now covers both menu contexts, prior TAA,
+all three NR modes, FOV restriction and availability, non-VR, redraw,
+disabling and rejected enable transitions. Source extraction, the NR
+DevBench contract, preset generation/check and diff checks passed. The
+settings fingerprint was refreshed without changing preset revision 6 or
+its tier values. Compiled regression execution and in-game UI testing were
+not run: the user requires explicit authorization before another build.
+No DLL, shaders, test executable or AIO was built, pushed or deployed.

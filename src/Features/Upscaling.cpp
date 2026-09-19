@@ -17702,13 +17702,15 @@ void Upscaling::DrawEssentialSettings()
 	DrawPerformanceSettings(false);
 }
 
-namespace
+void Upscaling::DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const
 {
-	void DrawNeuralRenderingFovWarning(const Upscaling::Settings& a_settings)
-	{
-		if (globals::game::isVR && a_settings.neuralRenderingEnabled && a_settings.foveatedVendorDispatch)
-			Util::Text::WrappedError("NR uses FOV centre without TAA. Set both eye masks precisely to cover your visible headset view.");
-	}
+	if (!globals::game::isVR || !settings.neuralRenderingEnabled || !settings.foveatedVendorDispatch)
+		return;
+	if (a_neuralRenderingMenu && (!neuralRenderingReplacedFovTaa ||
+									 !NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly) ||
+									 !IsNeuralRenderingFovConfigurationAvailable()))
+		return;
+	Util::Text::WrappedError("NR uses FOV centre without TAA. Set both eye masks precisely to cover your visible headset view.");
 }
 
 bool Upscaling::ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept
@@ -17731,7 +17733,7 @@ void Upscaling::DrawPeripheryTAAControl()
 		ImGui::TextUnformatted("The visible outer scale defines the shared HMD-visible mask boundary.");
 		ImGui::TextUnformatted("Expand and eye offsets are shared with the upscaling controls.");
 	}
-	DrawNeuralRenderingFovWarning(settings);
+	DrawNeuralRenderingFovWarning(false);
 }
 
 bool Upscaling::ApplyNeuralRenderingPreset(
@@ -17892,7 +17894,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
 		}
 		ApplyNeuralRenderingFovConstraint(settings);
-		DrawNeuralRenderingFovWarning(settings);
+		DrawNeuralRenderingFovWarning(true);
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Reduced resolution before DLSS" };
 		if (ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())])) {
 			for (uint index = 0; index < IM_ARRAYSIZE(renderingModes); ++index) {
@@ -19873,13 +19875,18 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 	if (a_backendResetSucceeded)
 		*a_backendResetSucceeded = false;
 	const bool fovChanged = ApplyNeuralRenderingFovConstraint(settings);
+	const auto acceptTransition = [&]() {
+		neuralRenderingReplacedFovTaa = settings.neuralRenderingEnabled &&
+		                                (neuralRenderingReplacedFovTaa || a_previousSettings.periphery_taa_enable);
+		return true;
+	};
 	// A disabled character/master switch can hide this setting from the render
 	// cache key, but switching the experiment off must still reclaim its slots.
 	const bool multiRoiChanged =
 		a_previousSettings.neuralCharacterMultiRoiEnabled !=
 		settings.neuralCharacterMultiRoiEnabled;
 	if (!fovChanged && !multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings)) {
-		return true;
+		return acceptTransition();
 	}
 
 	const auto previousInsertionPoint = NeuralRendering::ClampInsertionPoint(
@@ -19905,7 +19912,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 			a_previousSettings.neuralRenderingEnabled != settings.neuralRenderingEnabled,
 			multiRoiChanged, insertionPointChanged,
 			neuralRenderer.IsFailureLatched() || neuralRenderer.IsQuarantined())) {
-		return true;
+		return acceptTransition();
 	}
 
 	const bool resetSucceeded = neuralRenderer.Reset();
@@ -19917,7 +19924,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 			a_reason ? a_reason : "settings transition");
 	}
 	// Failed retirement retains unsafe resources, but must never force NR back on.
-	return resetSucceeded || !settings.neuralRenderingEnabled;
+	return (resetSucceeded || !settings.neuralRenderingEnabled) && acceptTransition();
 }
 
 NeuralRendering::InsertionPoint Upscaling::GetNeuralRenderingInsertionPoint() const noexcept

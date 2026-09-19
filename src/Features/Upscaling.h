@@ -4295,6 +4295,9 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	/** NR's own menu warns only after a FOV + TAA fallback in this enabled session. */
+	void DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const;
+	bool neuralRenderingReplacedFovTaa = false;
 	std::once_flag upscalingSDKLoadOnce;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic<VRMainPassDispatchStage> vrMainPassDispatchLastStage{ VRMainPassDispatchStage::None };

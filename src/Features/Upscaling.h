@@ -3242,6 +3242,9 @@ public:
 	};
 
 private:
+	/** Requires ownership of perfModeRenderTargetRecreateQueueMutex. */
+	bool RequiresVRRenderScaleRelatchFrameBoundaryLocked() const;
+
 	mutable std::mutex submitTemporalInputsMutex;
 	SubmitTemporalInputs submitTemporalInputs;
 	std::atomic_uint64_t submitTemporalCompositorCycle{ 0 };

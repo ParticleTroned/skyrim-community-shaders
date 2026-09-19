@@ -24647,6 +24647,11 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 bool Upscaling::RequiresVRRenderScaleRelatchFrameBoundary() const
 {
 	const std::scoped_lock queueLock(perfModeRenderTargetRecreateQueueMutex);
+	return RequiresVRRenderScaleRelatchFrameBoundaryLocked();
+}
+
+bool Upscaling::RequiresVRRenderScaleRelatchFrameBoundaryLocked() const
+{
 	if (!globals::game::isVR || !pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 		pendingPerfModeRenderTargetRecreateRecoveryEpoch.load(std::memory_order_acquire) != 0 ||
 		pendingPerfModeRenderTargetRecreateForcePhysical.load(std::memory_order_acquire) ||
@@ -24751,7 +24756,7 @@ void Upscaling::ServiceVRRenderScaleRelatchAtFrameBoundary()
 		return;
 	const std::scoped_lock queueLock(perfModeRenderTargetRecreateQueueMutex);
 	const auto epoch = pendingPerfModeRenderTargetRecreateEpoch.load(std::memory_order_acquire);
-	const bool boundaryRequired = RequiresVRRenderScaleRelatchFrameBoundary();
+	const bool boundaryRequired = RequiresVRRenderScaleRelatchFrameBoundaryLocked();
 	if (vrRenderScaleRelatchDrain.epoch != 0 &&
 		(!boundaryRequired || vrRenderScaleRelatchDrain.epoch != epoch ||
 			vrRenderScaleRelatchDrain.sourceGeneration != perfMode.GetBootSnapshot().generation ||
@@ -25165,7 +25170,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 	// validation through the complete physical transaction.
 	const std::unique_lock relatchQueueOwnershipLock(
 		perfModeRenderTargetRecreateQueueMutex);
-	const bool boundaryOwnedRelatch = RequiresVRRenderScaleRelatchFrameBoundary();
+	const bool boundaryOwnedRelatch = RequiresVRRenderScaleRelatchFrameBoundaryLocked();
 	if (vrRenderScaleRelatchDrain.epoch != 0 &&
 		(!boundaryOwnedRelatch || vrRenderScaleRelatchDrain.epoch !=
 									  pendingPerfModeRenderTargetRecreateEpoch.load(std::memory_order_acquire)))

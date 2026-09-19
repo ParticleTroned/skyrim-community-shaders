@@ -110,6 +110,7 @@ if(BUILD_CONTROLLER_TESTS)
         COMMAND
             "${CMAKE_COMMAND}" "-DBUILD_ROOT=${PROJECT_BINARY_DIR}"
             "-DSDK_ROOT=${STREAMLINE_RUNTIME_EXTRACT_ROOT}"
+            "-DNR_RUNTIME_FILE=${CSX_LOCAL_DLSSNR_RUNTIME_FILE}"
             "-DTEST_CONFIG=$<CONFIG>" -P
             "${PROJECT_SOURCE_DIR}/tests/streamline_runtime_packaging_test.cmake"
     )

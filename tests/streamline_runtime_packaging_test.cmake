@@ -57,6 +57,19 @@ foreach(
     endif()
 endforeach()
 
+if(DEFINED NR_RUNTIME_FILE AND NOT "${NR_RUNTIME_FILE}" STREQUAL "")
+    set(_nr_destination "${_prefix}/Shaders/Upscaling/Streamline/nvngx_dlssnr.dll")
+    list(APPEND _expected "${_nr_destination}")
+    if(NOT _nr_destination IN_LIST _installed)
+        message(FATAL_ERROR "StreamlineRuntime did not install the configured NR provider")
+    endif()
+    file(SHA256 "${NR_RUNTIME_FILE}" _nr_source_hash)
+    file(SHA256 "${_nr_destination}" _nr_installed_hash)
+    if(NOT _nr_source_hash STREQUAL _nr_installed_hash)
+        message(FATAL_ERROR "Installed NR provider differs from the configured source")
+    endif()
+endif()
+
 list(SORT _installed)
 list(SORT _expected)
 if(NOT _installed STREQUAL _expected)
@@ -67,5 +80,5 @@ if(NOT _installed STREQUAL _expected)
 endif()
 message(
     STATUS
-    "StreamlineRuntime installs all six production DLLs and five original notices"
+    "StreamlineRuntime installs the exact configured DLLs and five original notices"
 )

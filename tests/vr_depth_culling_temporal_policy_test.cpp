@@ -109,12 +109,16 @@ namespace
 
 	constexpr bool CoversMutuallyExclusiveModes()
 	{
-		return VRDepthCullingTemporal::SelectMode(false, false) == Mode::Balanced &&
-		       VRDepthCullingTemporal::SelectMode(true, false) == Mode::Performance &&
-		       VRDepthCullingTemporal::SelectMode(false, true) == Mode::Legacy &&
-		       VRDepthCullingTemporal::SelectMode(true, true) == Mode::Balanced &&
+		return VRDepthCullingTemporal::SelectMode(false) == Mode::Balanced &&
+		       VRDepthCullingTemporal::SelectMode(true) == Mode::Legacy &&
+		       static_cast<int>(Mode::Balanced) == 0 &&
+		       static_cast<int>(Mode::Legacy) == 2 &&
+		       VRDepthCullingTemporal::NormalizeMode(Mode::Balanced) == Mode::Balanced &&
+		       VRDepthCullingTemporal::NormalizeMode(Mode::Legacy) == Mode::Legacy &&
+		       VRDepthCullingTemporal::NormalizeMode(static_cast<Mode>(1)) == Mode::Balanced &&
+		       VRDepthCullingTemporal::NormalizeMode(static_cast<Mode>(-1)) == Mode::Balanced &&
+		       VRDepthCullingTemporal::NormalizeMode(static_cast<Mode>(3)) == Mode::Balanced &&
 		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Balanced)) == "balanced" &&
-		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Performance)) == "performance" &&
 		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Legacy)) == "legacy";
 	}
 

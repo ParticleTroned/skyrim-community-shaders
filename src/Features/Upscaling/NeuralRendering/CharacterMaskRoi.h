@@ -93,12 +93,16 @@ namespace NeuralRendering
 	 * retain this state but use the CPU fallback, not cachedResult's rectangles.
 	 * CPU eligibility rectangles are intentionally absent: they are conservative
 	 * mask-authoring limits, not the exact support that inference must cover.
+	 * An optional shared single-region envelope lets CPU fallback and GPU bounds
+	 * retain one history. Only valid nonempty results commit that shared state;
+	 * the caller owns its crop/generation resets and must not pre-age it here.
 	 */
 	[[nodiscard]] inline CharacterMaskRoiResult ResolveCharacterMaskRoi(
 		std::span<const CharacterMaskRoiTileBounds> a_tiles,
 		std::span<const std::uint64_t> a_actorLifetimeIds,
 		std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_sourceFrame,
-		StableCharacterMaskRoi& a_state, bool a_savingsGate = true, bool a_allowSplit = true)
+		StableCharacterMaskRoi& a_state, bool a_savingsGate = true, bool a_allowSplit = true,
+		StableCharacterComputeSubrect* a_sharedSingle = nullptr)
 	{
 		using namespace CharacterMaskRoiDetail;
 		const auto invalid = [&]() {
@@ -120,14 +124,20 @@ namespace NeuralRendering
 			return invalid();
 		if (a_state.width != a_width || a_state.height != a_height)
 			a_state = {};
-		if (a_state.cacheValid && a_state.frame == a_sourceFrame &&
-			a_state.cachedSavingsGate == a_savingsGate && a_state.cachedAllowSplit == a_allowSplit &&
-			a_state.cachedOwners == owners && std::ranges::equal(a_state.cachedTiles, a_tiles))
+		const bool sameSourceFrame = a_state.cacheValid && a_state.frame == a_sourceFrame;
+		const bool sameInputs = sameSourceFrame &&
+		                        a_state.cachedSavingsGate == a_savingsGate && a_state.cachedAllowSplit == a_allowSplit &&
+		                        a_state.cachedOwners == owners && std::ranges::equal(a_state.cachedTiles, a_tiles);
+		if (sameInputs &&
+			(!a_sharedSingle || a_state.cachedResult.empty ||
+				(a_sharedSingle->width == a_width && a_sharedSingle->height == a_height &&
+					a_state.cachedResult.diagnostics.singleRegion == a_sharedSingle->provider)))
 			return a_state.cachedResult;
-		// A changed same-frame policy must not age a history repeatedly. The
-		// ordinary identical frozen-world replay above is completely idempotent.
-		if (a_state.cacheValid && (a_state.frame == a_sourceFrame || a_state.cachedOwners != owners)) {
-			a_state.single = {};
+		auto single = a_sharedSingle ? *a_sharedSingle : a_state.single;
+		// Changed ownership/policy starts a new episode; readback availability
+		// alone must retain the shared conservative envelope.
+		if (a_state.cacheValid && ((sameSourceFrame && !sameInputs) || a_state.cachedOwners != owners)) {
+			single = {};
 			a_state.multi = {};
 		}
 
@@ -161,12 +171,12 @@ namespace NeuralRendering
 		result.occupiedTiles = static_cast<std::uint32_t>(occupied.size());
 		result.multiRoiReason = CharacterMultiRoiReason::TooFewActors;
 		if (result.empty) {
-			a_state.single = {};
+			single = {};
 			a_state.multi = {};
 		} else {
 			result.requiredSubrect = BuildCharacterComputeSubrect(std::span(&all, 1), a_width, a_height);
 			result.computeSubrect = ResolveStableCharacterComputeSubrect(
-				result.requiredSubrect, a_width, a_height, a_state.single);
+				result.requiredSubrect, a_width, a_height, single);
 			if (!result.computeSubrect.Fits(a_width, a_height))
 				return invalid();
 			result.diagnostics.singleRegion = result.computeSubrect;
@@ -265,6 +275,9 @@ namespace NeuralRendering
 		a_state.height = a_height;
 		a_state.frame = a_sourceFrame;
 		a_state.cacheValid = true;
+		a_state.single = single;
+		if (a_sharedSingle && !result.empty)
+			*a_sharedSingle = single;
 		return result;
 	}
 }

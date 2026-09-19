@@ -47,6 +47,14 @@ namespace
 		return result;
 	}
 
+	bool SameEnvelopeState(const StableCharacterComputeSubrect& left, const StableCharacterComputeSubrect& right)
+	{
+		return left.provider == right.provider && left.recentRequired == right.recentRequired &&
+		       left.recentCursor == right.recentCursor && left.recentCount == right.recentCount &&
+		       left.framesSinceContraction == right.framesSinceContraction &&
+		       left.width == right.width && left.height == right.height;
+	}
+
 	bool Covered(const CharacterMaskRoiResult& result, std::span<const CharacterMaskRoiTileBounds> tiles,
 		std::uint32_t width = kWidth, std::uint32_t height = kHeight)
 	{
@@ -320,6 +328,113 @@ int main()
 		CHECK(Covered(generatedResult, generated, width, height));
 		CHECK(ResolveCharacterMaskRoi(generated, reversedOwners, width, height, 400 + sample, state) == generatedResult);
 	}
+	// Ready/pending GPU bounds select one current support before updating the
+	// shared provider envelope; scheduling alone cannot shrink it next frame.
+	StableCharacterMaskRoi sharedMask;
+	StableCharacterComputeSubrect sharedEnvelope;
+	const std::array tightSupport{ CharacterRect{ 560, 170, 660, 320 } };
+	const auto tightTiles = Tiles(tightSupport);
+	const std::array broadSupport{ CharacterRect{ 400, 100, 800, 1000 } };
+	const auto fallbackRequired = BuildCharacterComputeSubrect(broadSupport, kWidth, kHeight);
+	const auto initialShared = ResolveCharacterMaskRoi(tightTiles, oneOwner, kWidth, kHeight, 10,
+		sharedMask, true, false, &sharedEnvelope);
+	CHECK(Covered(initialShared, tightTiles));
+	CHECK(sharedEnvelope.recentCount == 1);
+	const auto frozenEnvelope = sharedEnvelope;
+	for (unsigned replay = 0; replay < 100; ++replay) {
+		CHECK(ResolveCharacterMaskRoi(tightTiles, oneOwner, kWidth, kHeight, 10,
+				  sharedMask, true, false, &sharedEnvelope) == initialShared);
+		CHECK(SameEnvelopeState(sharedEnvelope, frozenEnvelope));
+	}
+	const auto fallbackProvider = ResolveStableCharacterComputeSubrect(
+		fallbackRequired, kWidth, kHeight, sharedEnvelope);
+	CHECK(ContainsComputeSubrect(fallbackProvider, fallbackRequired));
+	CHECK(fallbackProvider.Area() > initialShared.computeSubrect.Area());
+	const auto resumed = ResolveCharacterMaskRoi(tightTiles, oneOwner, kWidth, kHeight, 12,
+		sharedMask, true, false, &sharedEnvelope);
+	CHECK(Covered(resumed, tightTiles));
+	CHECK(resumed.computeSubrect == fallbackProvider && sharedEnvelope.recentCount == 3);
+	for (std::uint32_t frame = 13; frame < 50; ++frame) {
+		if (frame % 2) {
+			CHECK(ResolveStableCharacterComputeSubrect(fallbackRequired, kWidth, kHeight,
+					  sharedEnvelope) == fallbackProvider);
+		} else {
+			const auto ready = ResolveCharacterMaskRoi(tightTiles, oneOwner, kWidth, kHeight, frame,
+				sharedMask, true, false, &sharedEnvelope);
+			CHECK(Covered(ready, tightTiles) && ready.computeSubrect == fallbackProvider);
+		}
+		CHECK(ContainsComputeSubrect(sharedEnvelope.provider, fallbackRequired));
+	}
+	// Once conservative fallback support ages out, normal bounded contraction
+	// reclaims its extra context instead of permanently locking a large ROI.
+	for (std::uint32_t frame = 50; frame <= 150; ++frame) {
+		const auto ready = ResolveCharacterMaskRoi(tightTiles, oneOwner, kWidth, kHeight, frame,
+			sharedMask, true, false, &sharedEnvelope);
+		CHECK(Covered(ready, tightTiles));
+	}
+	CHECK(sharedEnvelope.provider == initialShared.computeSubrect);
+	const std::array<std::uint64_t, 1> replacementOwner{ 303 };
+	CHECK(ResolveCharacterMaskRoi(tightTiles, replacementOwner, kWidth, kHeight, 151,
+		sharedMask, true, false, &sharedEnvelope)
+			.valid);
+	CHECK(sharedEnvelope.recentCount == 1);
+
+	// Unusable GPU evidence cannot erase or age the shared CPU fallback state.
+	const auto beforeRejected = sharedEnvelope;
+	auto malformedTight = tightTiles;
+	malformedTight[0] = { 0, 0, 33, 1 };
+	CHECK(!ResolveCharacterMaskRoi(malformedTight, replacementOwner, kWidth, kHeight, 152,
+		sharedMask, true, false, &sharedEnvelope)
+			.valid);
+	CHECK(SameEnvelopeState(sharedEnvelope, beforeRejected));
+	CHECK(ResolveCharacterMaskRoi(emptyTiles, replacementOwner, kWidth, kHeight, 153,
+		sharedMask, true, false, &sharedEnvelope)
+			.empty);
+	CHECK(SameEnvelopeState(sharedEnvelope, beforeRejected));
+	const std::array movingFallback{ CharacterRect{ 1400, 900, kWidth, kHeight } };
+	const auto movingRequired = BuildCharacterComputeSubrect(movingFallback, kWidth, kHeight);
+	CHECK(ContainsComputeSubrect(ResolveStableCharacterComputeSubrect(
+									 movingRequired, kWidth, kHeight, sharedEnvelope),
+		movingRequired));
+	const auto movingTiles = Tiles(movingFallback);
+	const auto movingReady = ResolveCharacterMaskRoi(movingTiles, replacementOwner, kWidth, kHeight, 155,
+		sharedMask, true, false, &sharedEnvelope);
+	CHECK(Covered(movingReady, movingTiles));
+	CHECK(ContainsComputeSubrect(movingReady.computeSubrect, movingRequired));
+
+	// The same source cannot republish cached bounds after its caller resets
+	// or enlarges the shared envelope while retaining the mask reduction.
+	sharedEnvelope = {};
+	CHECK(ResolveCharacterMaskRoi(movingTiles, replacementOwner, kWidth, kHeight, 155,
+		sharedMask, true, false, &sharedEnvelope)
+			.valid);
+	CHECK(sharedEnvelope.recentCount == 1);
+	const auto reexpanded = ResolveStableCharacterComputeSubrect(
+		fallbackRequired, kWidth, kHeight, sharedEnvelope);
+	const auto repeatedAfterFallback = ResolveCharacterMaskRoi(movingTiles, replacementOwner, kWidth, kHeight, 155,
+		sharedMask, true, false, &sharedEnvelope);
+	CHECK(ContainsComputeSubrect(repeatedAfterFallback.computeSubrect, reexpanded));
+	const auto repeatedEnvelope = sharedEnvelope;
+	CHECK(ResolveCharacterMaskRoi(movingTiles, replacementOwner, kWidth, kHeight, 155,
+			  sharedMask, true, false, &sharedEnvelope) == repeatedAfterFallback);
+	CHECK(SameEnvelopeState(sharedEnvelope, repeatedEnvelope));
+
+	// Odd canvases and clipped edge support obey the same coverage contract.
+	for (const auto dimensions : { std::array{ 65u, 33u }, std::array{ 1535u, 1023u } }) {
+		const auto width = dimensions[0], height = dimensions[1];
+		const std::array corner{ CharacterRect{ width - 5u, height - 3u, width, height } };
+		const auto cornerTiles = Tiles(corner, width, height);
+		sharedMask = {};
+		sharedEnvelope = {};
+		CHECK(Covered(ResolveCharacterMaskRoi(cornerTiles, oneOwner, width, height, 1,
+						  sharedMask, true, false, &sharedEnvelope),
+			cornerTiles, width, height));
+		const ComputeSubrect full{ 0, 0, width, height };
+		CHECK(ResolveStableCharacterComputeSubrect(full, width, height, sharedEnvelope) == full);
+		const auto edgeReady = ResolveCharacterMaskRoi(cornerTiles, oneOwner, width, height, 3,
+			sharedMask, true, false, &sharedEnvelope);
+		CHECK(Covered(edgeReady, cornerTiles, width, height) && edgeReady.computeSubrect == full);
+	}
 	// Match all possible authored taps, not just the center pixel, under crops,
 	// fractional jitter, scaling and the maximum depth-aware feather radius.
 	const std::array sourcePieces{ CharacterRect{ 0, 0, 1, 1 }, CharacterRect{ 16, 12, 17, 13 },
@@ -344,9 +459,11 @@ int main()
 						const auto sy = (y + 0.5) * crop.height / 73.0 - 0.5 + jitter;
 						const auto bx = static_cast<int>(std::floor(sx)), by = static_cast<int>(std::floor(sy));
 						bool positive = sourceSelected(bx, by) || sourceSelected(bx + 1, by) || sourceSelected(bx, by + 1) || sourceSelected(bx + 1, by + 1);
-						for (int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); ++dy)
-							for (int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius); ++dx)
-								positive = positive || sourceSelected(static_cast<int>(std::floor(sx + 0.5)) + dx, static_cast<int>(std::floor(sy + 0.5)) + dy);
+						// Conservatively include every tap in the fractional kernel's
+						// square footprint, even where its radial weight becomes zero.
+						for (int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius) + 1; ++dy)
+							for (int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius) + 1; ++dx)
+								positive = positive || sourceSelected(bx + dx, by + dy);
 						if (positive) {
 							const auto& tile = mapped[(y / 32u) * 3u + x / 32u];
 							CHECK(x >= tile.minX && x < tile.maxX && y >= tile.minY && y < tile.maxY);

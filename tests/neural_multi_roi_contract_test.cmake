@@ -222,9 +222,9 @@ string(REGEX REPLACE "[\r\n\t ]+" " "
     _character_source_normalized "${_character_source}")
 foreach(_history_contract IN ITEMS
     [[void InvalidatePreparedMasks(bool a_preserveMultiRoiHistory = false)]]
-    [[if (!a_preserveMultiRoiHistory) { slot.stableMultiRoi = {}; slot.stableMaskRoi = {}; }]]
+    [[if (!a_preserveMultiRoiHistory) { slot.stableComputeSubrect = {}; slot.stableMultiRoi = {}; slot.stableMaskRoi = {}; }]]
     [[state_->InvalidatePreparedMasks(true);]]
-    [[if (slot.multiRoiPolicyKey != key.settings) { slot.stableMultiRoi = {};]]
+    [[if (slot.multiRoiPolicyKey != key.settings) { slot.stableMultiRoi = {}; slot.stableMaskRoi = {}; slot.stableComputeSubrect = {};]]
 )
     string(FIND "${_character_source_normalized}" "${_history_contract}"
         _history_contract_position)

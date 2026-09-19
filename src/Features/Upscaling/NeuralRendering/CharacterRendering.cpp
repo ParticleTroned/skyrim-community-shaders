@@ -430,6 +430,7 @@ namespace NeuralRendering
 			std::uintptr_t currentDepthIdentity = 0;
 			float captureJitterX = 0.0f;
 			float captureJitterY = 0.0f;
+			bool outputIsJittered = false;
 
 			bool operator==(const PrepareKey&) const = default;
 		};
@@ -696,6 +697,7 @@ namespace NeuralRendering
 				slot.prepared = false;
 				slot.computeRegions = {};
 				if (!a_preserveMultiRoiHistory) {
+					slot.stableComputeSubrect = {};
 					slot.stableMultiRoi = {};
 					slot.stableMaskRoi = {};
 				}
@@ -1477,16 +1479,18 @@ namespace NeuralRendering
 				const auto count = selected->tiles.size() / selected->eyeCount;
 				std::vector<CharacterMaskRoiTileBounds> mapped;
 				const auto& input = a_args.viewportCrop.input;
+				const auto samplingJitter = ResolveCharacterMaskSamplingJitter(a_args.outputIsJittered, capturedJitterX_, capturedJitterY_);
 				if (!MapEarlyCharacterMaskBounds(std::span(selected->tiles).subspan(a_args.eyeIndex * count, count),
 						selected->width, selected->height, { input.left, input.top, input.Width(), input.Height() },
-						a_args.outputWidth, a_args.outputHeight, capturedJitterX_, capturedJitterY_,
+						a_args.outputWidth, a_args.outputHeight, samplingJitter[0], samplingJitter[1],
 						a_args.settings.depthAwareFeather ? a_args.settings.featherRadius : 0u, mapped))
 					return FailEarlyMaskBounds("early_bounds_mapping_invalid", E_INVALIDARG);
 				std::vector<std::uint64_t> owners;
 				for (const auto& actor : a_plan.actorRegions)
 					owners.push_back(actor.identity);
 				const auto tight = ResolveCharacterMaskRoi(mapped, owners, a_args.outputWidth, a_args.outputHeight,
-					a_args.sourceWorldFrame, a_slot.stableMaskRoi, a_args.settings.multiRoiSavingsGate, a_args.settings.multiRoi);
+					a_args.sourceWorldFrame, a_slot.stableMaskRoi, a_args.settings.multiRoiSavingsGate, a_args.settings.multiRoi,
+					&a_slot.stableComputeSubrect);
 				if (!tight.valid)
 					return FailEarlyMaskBounds("early_bounds_plan_invalid", E_INVALIDARG);
 				if (tight.empty) {
@@ -1757,6 +1761,7 @@ namespace NeuralRendering
 			};
 			add(a_args.eyeIndex);
 			add(a_args.featureSlot);
+			add(a_args.outputIsJittered);
 			add(a_args.outputWidth);
 			add(a_args.outputHeight);
 			add(a_sourceEyeWidth);
@@ -1967,8 +1972,9 @@ namespace NeuralRendering
 			constants.cameraProjInverse =
 				globals::game::frameBufferCached.GetCameraProjInverse(
 					a_args.eyeIndex);
-			constants.jitter[0] = capturedJitterX_;
-			constants.jitter[1] = capturedJitterY_;
+			const auto samplingJitter = ResolveCharacterMaskSamplingJitter(a_args.outputIsJittered, capturedJitterX_, capturedJitterY_);
+			constants.jitter[0] = samplingJitter[0];
+			constants.jitter[1] = samplingJitter[1];
 			const auto& capturedRegion = capturedSourceRects_[a_args.eyeIndex];
 			constants.authoredRegion[0] = capturedRegion.baseX;
 			constants.authoredRegion[1] = capturedRegion.baseY;
@@ -2683,6 +2689,7 @@ namespace NeuralRendering
 		if (evidence) {
 			evidence->key = { a_args.frameId, a_args.sourceWorldFrame, a_args.eyeIndex, a_args.featureSlot,
 				a_args.generation, 0, BuildSettingsKey(a_args.settings), Color::Registry::Instance().CaptureEpoch(), a_args.viewportCrop };
+			evidence->key.outputIsJittered = a_args.outputIsJittered;
 			evidence->reused = true;
 			evidence->maskTiming = AllocateEvidence<Util::PassTimingCapture>();
 		}
@@ -2846,6 +2853,7 @@ namespace NeuralRendering
 				.currentDepthIdentity = currentDepthIdentity,
 				.captureJitterX = state_->capturedJitterX_,
 				.captureJitterY = state_->capturedJitterY_,
+				.outputIsJittered = a_args.outputIsJittered,
 			};
 			if (retainedSource) {
 				// Retained menu frames reuse the exact mask/ROI that was produced
@@ -2990,6 +2998,7 @@ namespace NeuralRendering
 				if (slot.multiRoiPolicyKey != key.settings) {
 					slot.stableMultiRoi = {};
 					slot.stableMaskRoi = {};
+					slot.stableComputeSubrect = {};
 					slot.multiRoiPolicyKey = key.settings;
 				}
 				const auto planningStart = std::chrono::steady_clock::now();
@@ -3009,14 +3018,8 @@ namespace NeuralRendering
 					// retain a potentially large stale ROI for the next character.
 					// Diagnostic full-eye modes must not contaminate authored ROI state.
 					slot.stableComputeSubrect = {};
-					slot.computeSubrect = requiredComputeSubrect;
-				} else {
-					slot.computeSubrect = ResolveStableCharacterComputeSubrect(
-						requiredComputeSubrect,
-						a_args.outputWidth,
-						a_args.outputHeight,
-						slot.stableComputeSubrect);
 				}
+				slot.computeSubrect = requiredComputeSubrect;
 				slot.computeRegions = {};
 				slot.multiRoiReason = CharacterMultiRoiReason::Disabled;
 				slot.multiRoiDiagnostics = {};
@@ -3030,6 +3033,13 @@ namespace NeuralRendering
 				const bool usedEarlyBounds = canUseEarlyBounds && state_->TryApplyEarlyMaskBounds(a_args, slot, plan);
 				if (canUseEarlyBounds && !usedEarlyBounds)
 					Increment(state_->snapshot_.earlyMaskBounds.geometryFallbacks);
+				if (!usedEarlyBounds && !cpuProvenEmpty && !fullOutputMask) {
+					// Stabilize exactly the selected current support. Pending GPU
+					// bounds must not alternate independently retained envelopes.
+					slot.computeSubrect = ResolveStableCharacterComputeSubrect(
+						requiredComputeSubrect, a_args.outputWidth, a_args.outputHeight,
+						slot.stableComputeSubrect);
+				}
 				if (!usedEarlyBounds && a_args.settings.multiRoi) {
 					if (!authoredMode || a_args.settings.debugView != CharacterDebugView::Off) {
 						slot.multiRoiReason = CharacterMultiRoiReason::DiagnosticMode;
@@ -3331,7 +3341,8 @@ namespace NeuralRendering
 					slot.prepareKey.generation != args.generation ||
 					slot.prepareKey.width != args.outputWidth || slot.prepareKey.height != args.outputHeight ||
 					slot.prepareKey.crop != args.viewportCrop ||
-					slot.prepareKey.settings != BuildSettingsKey(args.settings))
+					slot.prepareKey.settings != BuildSettingsKey(args.settings) ||
+					slot.prepareKey.outputIsJittered != args.outputIsJittered)
 					return false;
 				if (slot.prepareKey.currentDepthIdentity != 0) {
 					ComPtr<ID3D11Resource> depth;
@@ -3593,7 +3604,8 @@ namespace NeuralRendering
 				return slot.prepared && slot.contentSerial == evidence->key.contentSerial &&
 				       slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame && slot.prepareKey.generation == a_generation &&
 				       slot.prepareKey.crop == evidence->key.crop && slot.prepareKey.settings == evidence->key.settingsKey &&
-				       slot.prepareKey.captureJitterX == evidence->key.jitterX && slot.prepareKey.captureJitterY == evidence->key.jitterY;
+				       slot.prepareKey.captureJitterX == evidence->key.jitterX && slot.prepareKey.captureJitterY == evidence->key.jitterY &&
+				       slot.prepareKey.outputIsJittered == evidence->key.outputIsJittered;
 			};
 			const auto& latest = state_->latestPreparationEvidence_[a_featureSlot];
 			if (matches(latest))

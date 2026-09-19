@@ -241,6 +241,8 @@ namespace NeuralRendering
 		std::uint32_t outputHeight = 0;
 		UpscalingDLSS::ViewportCrop viewportCrop{};
 		CharacterSettings settings{};
+		/** True when compositing into the source raster before temporal upscaling. */
+		bool outputIsJittered = false;
 	};
 
 	struct CharacterMaskPrepareResult

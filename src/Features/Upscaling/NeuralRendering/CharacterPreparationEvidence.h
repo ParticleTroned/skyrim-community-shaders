@@ -23,6 +23,7 @@ namespace NeuralRendering
 		std::uint64_t generation = 0, contentSerial = 0, settingsKey = 0, captureEpoch = 0;
 		UpscalingDLSS::ViewportCrop crop{};
 		float jitterX = 0.0f, jitterY = 0.0f;
+		bool outputIsJittered = false;
 		bool operator==(const CharacterPreparationKey&) const = default;
 	};
 

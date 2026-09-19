@@ -10,7 +10,7 @@ namespace NeuralRendering::Evidence
 		return { { "frame", key.frame }, { "sourceWorldFrame", key.sourceWorldFrame }, { "eye", key.eye },
 			{ "logicalSlot", key.featureSlot }, { "generation", key.generation }, { "contentSerial", key.contentSerial },
 			{ "settingsKey", key.settingsKey }, { "captureEpoch", key.captureEpoch }, { "viewport", ViewportJson(key.crop) },
-			{ "capturedJitterPixels", { key.jitterX, key.jitterY } } };
+			{ "capturedJitterPixels", { key.jitterX, key.jitterY } }, { "outputIsJittered", key.outputIsJittered } };
 	}
 
 	inline Json CharacterCpuMilliseconds(bool available, double milliseconds, const char* absentReason)

@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 
 #include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
+#include "Features/Upscaling/NeuralRendering/CharacterMaskWorkPolicy.h"
 #include "ShaderPackageIncludes.h"
 
 #include <algorithm>
@@ -814,6 +815,91 @@ namespace
 		}
 	}
 
+	void MaskSamplingMatchesOutputGrid(Harness& gpu)
+	{
+		constexpr std::uint32_t width = 9, height = 5, faceX = 4, faceY = 2;
+		std::vector<Tuple> categories(width * height);
+		categories[faceY * width + faceX] = { 0, 85 };
+		for (const auto& phase : { std::array{ -0.499f, 0.33f }, std::array{ 0.501f, -0.25f } }) {
+			for (bool outputIsJittered : { false, true }) {
+				auto constants = Defaults(width, height);
+				const auto samplingJitter = NeuralRendering::ResolveCharacterMaskSamplingJitter(
+					outputIsJittered, phase[0], phase[1]);
+				std::copy(samplingJitter.begin(), samplingJitter.end(), constants.jitter);
+				const auto result = gpu.Mask(constants, width, categories);
+				for (std::uint32_t y = 0; y < height; ++y) {
+					for (std::uint32_t x = 0; x < width; ++x) {
+						const float dx = static_cast<float>(x) - faceX - (outputIsJittered ? 0.0f : phase[0]);
+						const float dy = static_cast<float>(y) - faceY - (outputIsJittered ? 0.0f : phase[1]);
+						const float coverage = std::max(0.0f, 1.0f - std::abs(dx)) *
+						                       std::max(0.0f, 1.0f - std::abs(dy));
+						ExpectByte(result.pixels[y * width + x], static_cast<int>(std::lround(255.0f * coverage)),
+							outputIsJittered ? "Pre-DLSS mask must exactly match source category texels" :
+											   "Post-DLSS mask must reconstruct unjittered coverage");
+					}
+				}
+			}
+		}
+	}
+
+	void FractionalFeatherCoverage(Harness& gpu)
+	{
+		constexpr std::uint32_t width = 17, height = 17, faceX = 5, faceY = 5;
+		std::vector<Tuple> categories(width * height);
+		categories[faceY * width + faceX] = { 0, 85 };
+		const std::array phases{
+			std::array{ 0.0f, 0.0f }, std::array{ 0.499f, 0.0f }, std::array{ 0.501f, 0.0f },
+			std::array{ 0.0f, 0.499f }, std::array{ 0.0f, 0.501f },
+			std::array{ 0.499f, 0.499f }, std::array{ 0.501f, 0.501f },
+			std::array{ -0.51f, 0.25f }, std::array{ 0.51f, -0.25f }
+		};
+		for (const auto& phase : phases) {
+			auto constants = Defaults(width, height);
+			std::copy(phase.begin(), phase.end(), constants.jitter);
+			const auto unfeathered = gpu.Mask(constants, width, categories);
+			constants.options[3] = 1;
+			const auto zeroRadius = gpu.Mask(constants, width, categories);
+			Require(zeroRadius.pixels == unfeathered.pixels,
+				"Zero-radius feather must preserve current-frame coverage");
+			for (std::uint32_t radius : { 1u, 4u }) {
+				constants.options[2] = radius;
+				const auto result = gpu.Mask(constants, width, categories);
+				for (std::uint32_t y = 0; y < height; ++y) {
+					for (std::uint32_t x = 0; x < width; ++x) {
+						const float dx = static_cast<float>(x) - phase[0] - faceX;
+						const float dy = static_cast<float>(y) - phase[1] - faceY;
+						const float coverage = std::max(0.0f, 1.0f - std::abs(dx)) *
+						                       std::max(0.0f, 1.0f - std::abs(dy));
+						const float feather = std::max(0.0f,
+							1.0f - std::hypot(dx, dy) / static_cast<float>(radius + 1));
+						ExpectByte(result.pixels[y * width + x],
+							static_cast<int>(std::lround(255.0f * std::max(coverage, feather))),
+							"Feather must remain continuous across source-texel jitter phases");
+					}
+				}
+			}
+			constants.options[3] = 0;
+			Require(gpu.Mask(constants, width, categories).pixels == unfeathered.pixels,
+				"Disabled feather must preserve current-frame coverage regardless of radius");
+		}
+		auto constants = Defaults(width, height);
+		constants.options[2] = 4;
+		constants.options[3] = 1;
+		constants.jitter[0] = 0.501f;
+		const auto interior = gpu.Mask(constants, width, std::vector<Tuple>(width * height, { 0, 85 }));
+		Require(std::ranges::all_of(interior.pixels, [](auto value) { return value == 255; }),
+			"Feather ceiling optimization must preserve fully covered interiors");
+		std::vector<float> depths(width * height, 0.2f);
+		depths[faceY * width + faceX] = 0.9f;
+		const auto depthEdge = gpu.Mask(constants, width, categories, depths, depths);
+		Require(depthEdge.pixels[faceY * width + faceX + 2] == 0,
+			"Continuous feather must not cross a rejected depth boundary");
+		constants.visibilityOptions[2] = constants.visibilityOptions[3] = 0.1f;
+		const auto distant = gpu.Mask(constants, width, categories, depths, depths);
+		Require(std::ranges::all_of(distant.pixels, [](auto value) { return value == 0; }),
+			"Continuous feather must not restore distance-culled category samples");
+	}
+
 	void VisibilityAndDistance(Harness& gpu)
 	{
 		auto constants = Defaults(1, 1);
@@ -964,6 +1050,8 @@ int wmain(int argc, wchar_t** argv)
 		gpu.VertexAoPreservesOriginalPrecision();
 		gpu.CompositeRespectsCurrentMaskBounds();
 		SelectionAndCoverage(gpu);
+		MaskSamplingMatchesOutputGrid(gpu);
+		FractionalFeatherCoverage(gpu);
 		VisibilityAndDistance(gpu);
 		CurrentDepthAllowsLargerAllocation(gpu);
 		CropsDirtyRegionsAndStereo(gpu);

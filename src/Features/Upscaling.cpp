@@ -5190,6 +5190,8 @@ namespace
 			.outputHeight = a_args.outputHeight,
 			.viewportCrop = a_args.viewportCrop,
 			.settings = BuildCharacterSettings(a_settings, a_sourceWorldFrame),
+			.outputIsJittered = NeuralRendering::RunsBeforeDlss(NeuralRendering::ResolvePipelineArrangement(
+				NeuralRendering::ClampRenderingMode(a_settings.neuralRenderingMode))),
 		};
 	}
 

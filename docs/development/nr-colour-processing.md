@@ -43,6 +43,12 @@ Other storage formats and the existing early-return endpoints are unchanged.
 The [packed-rounding correction](nr-colour-packed-rounding-fix-20260917.md)
 records the same-frame evidence and WARP/hardware regressions.
 
+The [character stability corrections](nr-character-stability-fix-20260919.md)
+address optional feather discontinuities, pre-DLSS mask alignment and
+readback-driven single-ROI history churn. They preserve colour reconstruction
+and require a new live comparison before claiming the reported flashes are
+resolved.
+
 ## In-game controls: no editable configuration INI
 
 On `main-vr-nr`, **Display > Neural Rendering** owns rendering,

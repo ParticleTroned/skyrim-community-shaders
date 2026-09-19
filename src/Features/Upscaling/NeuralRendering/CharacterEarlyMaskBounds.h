@@ -28,7 +28,7 @@ namespace NeuralRendering
 		const auto outputRows = (a_outputHeight + 31u) / 32u;
 		a_outputTiles.resize(static_cast<std::size_t>(outputColumns) * outputRows);
 		const auto guard = [&](float jitter, std::uint32_t extent) {
-			// Bilinear reconstruction and nearest-sample feathering read at most
+			// Bilinear reconstruction and continuous feathering read at most
 			// radius+2 source pixels away; jitter can shift either edge outward.
 			return a_featherRadius + 2u + static_cast<std::uint32_t>(std::min(static_cast<double>(extent), std::ceil(std::abs(static_cast<double>(jitter)))));
 		};

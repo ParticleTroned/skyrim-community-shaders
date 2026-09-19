@@ -3,10 +3,18 @@
 #include "ComputeSubrect.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 
 namespace NeuralRendering
 {
+	/** Before temporal upscaling, selection shares the source raster's jittered grid. */
+	[[nodiscard]] constexpr std::array<float, 2> ResolveCharacterMaskSamplingJitter(
+		bool a_outputIsJittered, float a_capturedX, float a_capturedY) noexcept
+	{
+		return a_outputIsJittered ? std::array<float, 2>{} : std::array{ a_capturedX, a_capturedY };
+	}
+
 	enum class CharacterDepthExtentPolicy
 	{
 		ExactCapture,

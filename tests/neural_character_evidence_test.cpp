@@ -36,6 +36,7 @@ int main()
 	changedKey([](auto& k) { ++k.crop.fullOutput.height; });
 	changedKey([](auto& k) { k.jitterX = -0.25f; });
 	changedKey([](auto& k) { k.jitterY = 0.5f; });
+	changedKey([](auto& k) { k.outputIsJittered = true; });
 
 	Require(CharacterPreparationJson({})["available"] == false, "absent preparation must be unavailable");
 	auto preparation = std::make_shared<CharacterPreparationEvidence>();

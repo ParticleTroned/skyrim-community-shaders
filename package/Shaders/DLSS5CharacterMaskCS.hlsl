@@ -168,15 +168,13 @@ float GetDistanceWeight(int2 localSourcePixel, float rawDepth)
 // Reconstruct coverage, never interpolate encoded categorical IDs. All samples
 // belong to this source frame; no stale temporal mask can ghost onto an occluder.
 float ReconstructCoverage(float2 sourcePosition, uint centerCategory,
-	float referenceDepth, out bool coverageEdge)
+	float referenceDepth)
 {
-	coverageEdge = false;
 	if (centerCategory != 0u && GetCategoryStrength(centerCategory) <= 0.0)
 		return 0.0;
 	const int2 basePixel = int2(floor(sourcePosition));
 	const float2 fraction = frac(sourcePosition);
 	float mask = 0.0;
-	float supportedCoverage = 0.0;
 	[unroll] for (int y = 0; y < 2; ++y)
 	{
 		[unroll] for (int x = 0; x < 2; ++x)
@@ -200,11 +198,9 @@ float ReconstructCoverage(float2 sourcePosition, uint centerCategory,
 				if (authoredDepth > referenceDepth + tolerance)
 					continue;
 			}
-			supportedCoverage += weight;
 			mask += weight * strength * GetDistanceWeight(samplePixel, authoredRawDepth);
 		}
 	}
-	coverageEdge = supportedCoverage < 0.999;
 	return mask;
 }
 
@@ -270,40 +266,46 @@ void CountCategory(uint category, uint firstCounter)
 					}
 				}
 			}
-			bool coverageEdge = false;
 			mask = centerEligible ? ReconstructCoverage(
-										sourcePosition, centerCategory, centerDepth, coverageEdge) :
+										sourcePosition, centerCategory, centerDepth) :
 			                        0.0;
 			// Keep the exact center-surface cull/fade authoritative at the edge.
 			if (centerCategory != 0u)
 				mask = min(mask, GetCategoryStrength(centerCategory) * centerDistanceWeight);
 
-			if (centerEligible && coverageEdge && Options.w != 0 && Options.z != 0 &&
+			const float featherCeiling = centerCategory != 0u ?
+			                                 GetCategoryStrength(centerCategory) * centerDistanceWeight :
+			                                 max(CategoryStrengths.x, max(CategoryStrengths.y, CategoryStrengths.z));
+			if (centerEligible && mask < featherCeiling && Options.w != 0 && Options.z != 0 &&
 				(centerCategory == 0u || GetCategoryStrength(centerCategory) > 0.0)) {
 				const int radius = min(int(Options.z), 4);
-				[loop] for (int y = -radius; y <= radius; ++y)
+				const int2 basePixel = int2(floor(sourcePosition));
+				// Include the complete continuous kernel; entering/leaving samples have
+				// zero weight instead of jumping when the nearest source texel changes.
+				[loop] for (int y = -radius; y <= radius + 1; ++y)
 				{
-					[loop] for (int x = -radius; x <= radius; ++x)
+					[loop] for (int x = -radius; x <= radius + 1; ++x)
 					{
-						const int2 offset = int2(x, y);
-						if (all(offset == 0))
+						const int2 samplePixel = basePixel + int2(x, y);
+						const float spatialWeight = saturate(1.0 -
+															 length(float2(samplePixel) - sourcePosition) / float(radius + 1));
+						if (spatialWeight <= 0.0)
 							continue;
-						const uint neighborCategory =
-							ReadAuthoredCategory(sourcePixel + offset);
+						const uint neighborCategory = ReadAuthoredCategory(samplePixel);
+						const float neighborStrength = GetCategoryStrength(neighborCategory);
 						// Preserve category toggles inside character geometry while
 						// allowing an enabled category to feather into background.
-						if (neighborCategory == 0u ||
+						if (neighborStrength <= 0.0 ||
 							(centerCategory != 0u && neighborCategory != centerCategory))
 							continue;
 						float neighborDepth = 0.0;
 						float neighborAuthoredRawDepth = 0.0;
 						if (!IsAuthoredSurfaceVisible(
-								sourcePixel + offset, neighborDepth,
+								samplePixel, neighborDepth,
 								neighborAuthoredRawDepth))
 							continue;
 						const float neighborDistanceWeight = GetDistanceWeight(
-							sourcePixel + offset,
-							neighborAuthoredRawDepth);
+							samplePixel, neighborAuthoredRawDepth);
 						if (neighborDistanceWeight <= 0.0)
 							continue;
 						const float depthTolerance = max(
@@ -311,12 +313,8 @@ void CountCategory(uint category, uint firstCounter)
 							max(centerDepth, neighborDepth) * FeatherOptions.x);
 						if (abs(neighborDepth - centerDepth) > depthTolerance)
 							continue;
-						const float spatialWeight =
-							saturate(1.0 - length(float2(offset)) / float(radius + 1));
-						mask = max(
-							mask,
-							GetCategoryStrength(neighborCategory) * spatialWeight *
-								neighborDistanceWeight);
+						mask = max(mask,
+							neighborStrength * spatialWeight * neighborDistanceWeight);
 					}
 				}
 			}

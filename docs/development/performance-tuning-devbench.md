@@ -35,9 +35,10 @@ corresponding render scale. A latched or unsupported FSR provider fails closed
 instead of reporting its FSR3 fallback as FSR4. Every case is independently
 compared with None.
 
-Each case uses a five-second cooldown after CS closes, five one-second target
-windows, a nine-second wait after switching to None, five one-second None
-windows, and exact case restoration. A ten-second cooldown separates cases.
+Each case uses a ten-second cooldown after CS closes, five one-second target
+windows, a ten-second wait after switching to None, five one-second None
+windows, one second of exact case restoration, and a ten-second cooldown
+before the next case.
 The original Upscaling state is restored after completion, cancellation, or
 failure. CS reopens only when it was open before the sweep.
 

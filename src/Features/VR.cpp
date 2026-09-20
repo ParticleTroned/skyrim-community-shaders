@@ -1112,6 +1112,19 @@ namespace
 	void DrawVRFpsStabilizerSettings();
 	void DrawKeyBindings();
 	void DrawDebugSection();
+	bool pendingFovTabSelection = false;
+}
+
+bool VR::OpenFovSettings()
+{
+	if (!globals::game::isVR || !globals::menu || !globals::state || !loaded ||
+		globals::state->IsFeatureDisabled(GetShortName()))
+		return false;
+
+	FeatureListRenderer::ShowAdvancedSettings(this);
+	globals::menu->SelectFeatureMenu(GetShortName());
+	pendingFovTabSelection = true;
+	return true;
 }
 
 void VR::DrawSettings()
@@ -1119,6 +1132,8 @@ void VR::DrawSettings()
 	auto menu = globals::menu;
 	if (!menu)
 		return;
+	if (pendingFovTabSelection)
+		ImGui::SetScrollY(0.0f);
 	if (ImGui::BeginTabBar("##VRTabs", ImGuiTabBarFlags_None)) {
 		// General Settings Tab
 		if (BeginTabItemWithFont("General", Menu::FontRole::Subheading)) {
@@ -1132,8 +1147,13 @@ void VR::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		if (BeginTabItemWithFont("FOV", Menu::FontRole::Subheading)) {
+		const auto fovTabFlags = pendingFovTabSelection ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+		if (BeginTabItemWithFont("FOV", Menu::FontRole::Subheading, fovTabFlags)) {
 			if (ImGui::BeginChild("##VRFoveatedFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
+				if (pendingFovTabSelection) {
+					ImGui::SetScrollY(0.0f);
+					pendingFovTabSelection = false;
+				}
 				DrawFoveationSettings();
 			}
 			ImGui::EndChild();

@@ -2465,6 +2465,8 @@ public:
 	bool IsUpscalingActive() const;
 
 	// Feature interface overrides
+	/** Show compact DLSS guidance and VR FOV status beneath the feature description. */
+	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;

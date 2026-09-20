@@ -188,6 +188,8 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	/** Queue navigation to the FOV tab; return false when VR settings are unavailable. */
+	bool OpenFovSettings();
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }

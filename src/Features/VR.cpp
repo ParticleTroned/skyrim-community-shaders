@@ -13,6 +13,7 @@
 #include "RE/B/BSOpenVRControllerDevice.h"
 #include "RE/N/NiPoint3.h"
 #include "RE/P/PlayerCharacter.h"
+#include "RenderDoc.h"
 #include "ScreenSpaceGI.h"
 #include "ScreenSpaceShadows.h"
 #include "ShaderCache.h"
@@ -1003,6 +1004,13 @@ bool VR::ShouldPresentOverlayInHeadset() const
 bool VR::ShouldUseInSceneOverlay() const
 {
 	if (!openVRInfo.isCompatible) {
+		return false;
+	}
+
+	// Keep the menu off the eye-submit path while RenderDoc owns the device.
+	if (openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR &&
+		openVRInfo.hasOverlayInterface &&
+		globals::features::renderDoc.ShouldBlockUpscaling()) {
 		return false;
 	}
 
@@ -2431,7 +2439,8 @@ namespace
 				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Auto uses in-scene for OpenComposite, IVROverlay for SteamVR when available.");
+				ImGui::Text("Auto uses in-scene at the main menu and for OpenComposite, otherwise IVROverlay when available.");
+				ImGui::Text("RenderDoc uses IVROverlay on SteamVR while capture is enabled or loaded, regardless of this setting.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
 			}

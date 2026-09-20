@@ -2707,6 +2707,7 @@ namespace
 		for (const bool targetActive : { false, true }) {
 			request.targetActive = targetActive;
 			request.csMenuOrigin = false;
+			request.directMenuEdit = true;
 			request.retryAdmitted = true;
 			for (const auto control : {
 					 StartupNativeFallbackControl::None,
@@ -2721,6 +2722,7 @@ namespace
 		}
 
 		request.csMenuOrigin = true;
+		request.directMenuEdit = false;
 		request.retryAdmitted = false;
 		request.control = StartupNativeFallbackControl::None;
 		request.targetActive = false;
@@ -2737,6 +2739,11 @@ namespace
 		request.control =
 			StartupNativeFallbackControl::DisableSavedProfile;
 		request.targetActive = false;
+		if (SelectStartupNativeFallbackControlAction(request) !=
+			StartupNativeFallbackControlAction::Reject) {
+			return false;
+		}
+		request.directMenuEdit = true;
 		if (SelectStartupNativeFallbackControlAction(request) !=
 			StartupNativeFallbackControlAction::ResolveDisabled) {
 			return false;
@@ -2767,24 +2774,80 @@ namespace
 			return false;
 		}
 
-		return !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::PassThrough,
-				   true) &&
-		       !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::Reject,
-				   true) &&
-		       !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveDisabled,
-				   false) &&
-		       CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveDisabled,
-				   true) &&
-		       !CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveRetry,
-				   false) &&
-		       CanResolveStartupNativeFallback(
-				   StartupNativeFallbackControlAction::ResolveRetry,
-				   true);
+		StartupNativeFallbackPublication publication{
+			.action = StartupNativeFallbackControlAction::ResolveDisabled,
+			.requestID = 17,
+			.transitionEpoch = 23,
+			.authoritativeRequestValid = true,
+			.authoritativeStateRequested = true,
+			.authoritativeRequestID = 17,
+			.authoritativeTransitionEpoch = 23,
+			.latestRequestID = 17,
+		};
+		if (!CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.requestID = 0;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.requestID = 17;
+		publication.transitionEpoch = 0;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.transitionEpoch = 23;
+		publication.authoritativeRequestValid = false;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.authoritativeRequestValid = true;
+		publication.authoritativeStateRequested = false;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.authoritativeStateRequested = true;
+		publication.action = StartupNativeFallbackControlAction::PassThrough;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.action = StartupNativeFallbackControlAction::ResolveDisabled;
+		publication.authoritativeRequestID = 18;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.authoritativeRequestID = 17;
+		publication.authoritativeTransitionEpoch = 24;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.authoritativeTransitionEpoch = 23;
+		publication.latestRequestID = 18;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.latestRequestID = 17;
+		publication.action = StartupNativeFallbackControlAction::ResolveRetry;
+		if (CanResolveStartupNativeFallback(publication))
+			return false;
+		publication.retryRevalidated = true;
+		if (!CanResolveStartupNativeFallback(publication))
+			return false;
+
+		StartupNativeFallbackAuthorityState authority{
+			.publication = publication,
+			.fallbackActive = true,
+		};
+		if (!TryResolveStartupNativeFallback(authority) ||
+			authority.fallbackActive ||
+			TryResolveStartupNativeFallback(authority)) {
+			return false;
+		}
+
+		authority = {
+			.publication = publication,
+			.fallbackActive = true,
+		};
+		authority.publication.latestRequestID = 18;
+		if (TryResolveStartupNativeFallback(authority) ||
+			!authority.fallbackActive) {
+			return false;
+		}
+		authority.publication.latestRequestID = 17;
+		authority.publication.authoritativeRequestValid = false;
+		return !TryResolveStartupNativeFallback(authority) &&
+		       authority.fallbackActive;
 	}
 
 	constexpr bool CoversBoundedPostMutationRecovery()

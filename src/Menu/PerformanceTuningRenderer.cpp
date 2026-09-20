@@ -37,9 +37,9 @@ namespace
 	constexpr double kFeatureCostMeasurementSeconds = 5.0;
 	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
 	constexpr double kFeatureCostIntervalMilliseconds = 1000.0;
-	constexpr double kFeatureCostInitialWaitSeconds = 5.0;
-	constexpr double kFeatureCostComparisonWaitSeconds = 9.0;
-	constexpr double kFeatureCostRestoreWaitSeconds = 0.5;
+	constexpr double kFeatureCostInitialWaitSeconds = 10.0;
+	constexpr double kFeatureCostComparisonWaitSeconds = 10.0;
+	constexpr double kFeatureCostRestoreWaitSeconds = 1.0;
 	constexpr double kFeatureCostRestartCooldownSeconds = 10.0;
 	constexpr double kFeatureCostMaximumRunSeconds = 45.0;
 	constexpr std::size_t kFeatureCostMaximumMissingMetricSamples = 2;
@@ -2047,8 +2047,8 @@ namespace
 		}
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 25 seconds; a small overlay shows progress and CS reopens with the results.");
-			ImGui::TextWrapped("After a five-second cooldown following menu closure, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits nine seconds, and measures five more one-second intervals before restoring the exact prior state.");
+			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 31 seconds; a small overlay shows progress and CS reopens with the results.");
+			ImGui::TextWrapped("After a ten-second cooldown following menu closure, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits ten seconds, and measures five more one-second intervals before restoring the exact prior state for one second.");
 			ImGui::TextWrapped("If game-frame timing is interrupted during capture, only that five-second measurement restarts.");
 			ImGui::TextWrapped("GPU and CPU rows tolerate up to two missing raw samples across both states. Three or more make only that row unavailable; missing data never blocks Game or FPS.");
 			ImGui::TextWrapped("The automatic idle/vanity camera remains suppressed for the complete run and its previous delay is restored afterward.");

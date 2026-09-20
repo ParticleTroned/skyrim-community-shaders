@@ -37,6 +37,19 @@ the TAA pass is present. If you need to validate a vendor-upscaling-only path,
 use a dedicated diagnostic branch or another capture strategy instead of
 removing the safety guard from normal builds.
 
+On SteamVR, enabling or loading CSX's RenderDoc integration also forces the
+CSX menu through `IVROverlay` when that interface is available. This overrides
+`Menu Overlay Path` for the session without changing its saved value, keeping
+menu presentation off the eye-texture Submit path. OpenComposite and runtimes
+without the overlay interface retain their existing selection behavior.
+
+Use a fresh game launch to test this route: a Submit hook installed earlier
+in the session is not removed by changing the menu setting. Disabling capture
+also requires a restart to unload RenderDoc and restore the saved menu route.
+An overlay texture error may leave the menu unavailable; it does not switch
+the menu back to in-scene presentation. This route still requires live
+RenderDoc startup and menu-display validation.
+
 Keep HDR and frame-generation off for this workflow unless the exact permutation
 under test requires them; interop/present paths can hide the D3D11 draw stream
 that the harness needs.

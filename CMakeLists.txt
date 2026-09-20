@@ -2638,6 +2638,7 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/ScreenSpaceGI.cpp
             src/ProfilerDevBenchBridge.cpp
             src/Api/AcceptedDrawService.cpp
+            tests/extract_source_region.cmake
             tests/extract_ocu_effect_integration.cmake
         VERBATIM
     )
@@ -2871,6 +2872,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${PROJECT_SOURCE_DIR}/include" "${_ocu_effect_test_dir}"
     )
     set_tests_properties(AcceptedDrawService PROPERTIES TIMEOUT 30)
+    include(tests/vr_menu_pointer.cmake)
     add_executable(
         preset_compatibility_test
         EXCLUDE_FROM_ALL

@@ -3067,6 +3067,17 @@ namespace SIE
 		}
 	}
 
+	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor)
+	{
+		const auto typeIndex = static_cast<size_t>(shader.shaderType.underlying());
+		if (typeIndex >= vertexShaders.size())
+			return nullptr;
+		std::lock_guard lockGuard(vertexShadersMutex);
+		const auto& typeCache = vertexShaders[typeIndex];
+		const auto it = typeCache.find(descriptor);
+		return it != typeCache.end() ? it->second.get() : nullptr;
+	}
+
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
@@ -3100,14 +3111,8 @@ namespace SIE
 			}
 		}
 
-		{
-			std::lock_guard lockGuard(vertexShadersMutex);
-			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.underlying())];
-			auto it = typeCache.find(descriptor);
-			if (it != typeCache.end()) {
-				return it->second.get();
-			}
-		}
+		if (auto* cached = GetVertexShaderIfCached(shader, descriptor))
+			return cached;
 		if (IsSaveLoadSafeModeActive()) {
 			return nullptr;
 		}

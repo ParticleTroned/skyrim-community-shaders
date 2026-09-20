@@ -38,6 +38,7 @@
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
 #include "Upscaling/UpscalingProviderSelectionPolicy.h"
+#include "Upscaling/VRMenuPointerShader.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Upscaling/VRRenderScaleModePolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
@@ -12480,6 +12481,8 @@ namespace
 		}
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_startIndexLocation, INT a_baseVertexLocation)
 		{
+			Upscaling::TryCaptureVRMenuPointerDraw(a_context, a_indexCount, 1,
+				a_startIndexLocation, a_baseVertexLocation, 0, false);
 			func(a_context, a_indexCount, a_startIndexLocation, a_baseVertexLocation);
 			CSX::Api::PublishAcceptedDraw(a_context,
 				{ CSXAcceptedDrawAPI::Indexed, a_indexCount, 1, a_startIndexLocation, a_baseVertexLocation, 0 }, &Replay);
@@ -12520,6 +12523,8 @@ namespace
 			INT a_baseVertexLocation,
 			UINT a_startInstanceLocation)
 		{
+			Upscaling::TryCaptureVRMenuPointerDraw(a_context, a_indexCountPerInstance, a_instanceCount,
+				a_startIndexLocation, a_baseVertexLocation, a_startInstanceLocation, true);
 			func(
 				a_context,
 				a_indexCountPerInstance,
@@ -14964,6 +14969,14 @@ void Upscaling::VRMapMenuPostDisplayHook::thunk(RE::MapMenu* a_menu)
 
 void Upscaling::ResetVRMenuFinalCompositeLayer()
 {
+	vrMenuPointerOverlay.Reset();
+	vrMenuPointerOverlayPS.Reset();
+	vrMenuPointerCompositePS.Reset();
+	ResetVRMenuPointerVertexShaderValidation();
+	vrMenuPointerGeometry = nullptr;
+	vrMenuPointerPresentationFrame = std::numeric_limits<uint32_t>::max();
+	vrMenuPointerPresentationVisible = false;
+	vrMenuPointerCaptureFailed = false;
 	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	ReleaseVRMapMenuUISupersampling();
 	// A resource reset can be requested while Map's semantic epoch has replaced
@@ -15541,6 +15554,131 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	return decide(successReason, true);
 }
 
+bool Upscaling::CaptureVRMenuPointerOverlay(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+	UINT a_startIndex, INT a_baseVertex, UINT a_startInstance, bool a_instanced)
+{
+	const uint32_t frame = globals::state ? globals::state->frameCount : 0;
+	const uint32_t generation = GetActiveVRRenderScaleContractGeneration();
+	auto reject = [&]() {
+		vrMenuPointerOverlay.Invalidate(frame, generation);
+		return false;
+	};
+	// Once either eye is presented, both eyes must consume the same pointer image.
+	if (!globals::state || vrMenuPointerCaptureFailed)
+		return reject();
+	if (vrMenuFrameTransaction.frame == frame && vrMenuFrameTransaction.presentationDecisionLatched) {
+		return false;
+	}
+	try {
+		if (!ValidateVRMenuPointerVertexShader(a_context)) {
+			vrMenuPointerOverlay.Invalidate(frame, generation);
+			return false;
+		}
+		auto* pixelShader = vrMenuPointerOverlayPS.Get(
+			L"Data/Shaders/Upscaling/VRMenuPointerOverlayPS.hlsl", {}, "ps_5_0", "main", "Upscaling::VRMenuPointerOverlayPS");
+		if (!pixelShader)
+			return reject();
+		static const std::vector<std::pair<const char*, const char*>> pointerDefines{ { "POINTER_OVERLAY", "1" } };
+		if (!vrMenuPointerCompositePS.Get(L"Data/Shaders/Upscaling/VRMenuLayerCompositePS.hlsl",
+				pointerDefines, "ps_5_0", "main", "Upscaling::VRMenuPointerCompositePS"))
+			return reject();
+		const auto& plan = GetRuntimeResolutionPlan();
+		const uint32_t renderWidth = ClampPositiveDimension(plan.engineRenderSize.x);
+		const uint32_t renderHeight = ClampPositiveDimension(plan.engineRenderSize.y);
+		const uint32_t displayWidth = ClampPositiveDimension(plan.finalOutputSize.x);
+		const uint32_t displayHeight = ClampPositiveDimension(plan.finalOutputSize.y);
+		if (!renderWidth || !renderHeight || (displayWidth & 1u))
+			return reject();
+		CS_GPU_PASS("Upscaling::VRMenuPointerCapture");
+		CSX::Api::SuppressAcceptedDraw suppressAcceptedDraw;
+		vrMenuParallelBridgeDrawInProgress = true;
+		auto restoreReplay = ScopeExit([&]() { vrMenuParallelBridgeDrawInProgress = false; });
+		const float offsetX = jitter.x * static_cast<float>(displayWidth) / renderWidth;
+		const float offsetY = jitter.y * static_cast<float>(displayHeight) / renderHeight;
+		const bool captured = vrMenuPointerOverlay.Capture(a_context, pixelShader,
+			{ a_indexCount, a_instanceCount, a_startIndex, a_baseVertex, a_startInstance, a_instanced },
+			renderWidth, renderHeight, displayWidth, displayHeight, frame, generation,
+			offsetX, offsetY, nullptr);
+		return captured;
+	} catch (const std::exception& e) {
+		vrMenuPointerCaptureFailed = true;
+		static bool loggedFailure = false;
+		LogWarnOnce(loggedFailure, "[VRMenuPointer] Overlay capture unavailable", e);
+		return reject();
+	} catch (...) {
+		vrMenuPointerCaptureFailed = true;
+		static bool loggedFailure = false;
+		LogWarnOnce(loggedFailure, "[VRMenuPointer] Overlay capture unavailable");
+		return reject();
+	}
+}
+
+namespace
+{
+	bool IsVRMenuPointerVisible(const RE::NiAVObject* a_pointer)
+	{
+		// A hidden ancestor must hide the final overlay too, including during menu closure.
+		for (uint32_t depth = 0; a_pointer && depth < 128; ++depth, a_pointer = a_pointer->parent) {
+			if (a_pointer->GetAppCulled())
+				return false;
+			if (!a_pointer->parent)
+				return true;
+		}
+		return false;
+	}
+}
+
+bool Upscaling::TryCaptureVRMenuPointerDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+	UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, bool a_instanced)
+{
+	if (!globals::game::isVR || !globals::state || !a_context || a_context != globals::d3d::context ||
+		!a_indexCount || !a_instanceCount)
+		return false;
+	auto& upscaling = globals::features::upscaling;
+	if (upscaling.vrMenuParallelBridgeDrawInProgress)
+		return false;
+	const auto* geometry = CSX::Api::GetCurrentAcceptedDrawGeometry();
+	if (!geometry)
+		return false;
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* nodes = player ? player->GetVRNodeData() : nullptr;
+	// Only the engine-owned object qualifies; similarly named mod geometry does not.
+	if (!nodes || nodes->UIPointerGeo.get() != geometry ||
+		!upscaling.IsVRRenderScaleModeLatched() || !IsExplicitVRMenuPresentationContextActive())
+		return false;
+	const uint32_t frame = globals::state->frameCount;
+	if (upscaling.vrMenuPointerPresentationFrame == frame)
+		return false;
+	if (!IsVRMenuPointerVisible(nodes->UIPointerGeo.get())) {
+		upscaling.vrMenuPointerOverlay.Invalidate(frame, upscaling.GetActiveVRRenderScaleContractGeneration());
+		return false;
+	}
+	const bool captured = upscaling.CaptureVRMenuPointerOverlay(a_context, a_indexCount, a_instanceCount,
+		a_startIndexLocation, a_baseVertexLocation, a_startInstanceLocation, a_instanced);
+	if (captured)
+		upscaling.vrMenuPointerGeometry = geometry;
+	return captured;
+}
+
+ID3D11ShaderResourceView* Upscaling::GetCurrentVRMenuPointerOverlay(uint32_t a_frame)
+{
+	auto* layer = vrMenuPointerOverlay.GetLayer(a_frame, GetActiveVRRenderScaleContractGeneration());
+	if (vrMenuPointerPresentationFrame == a_frame)
+		return vrMenuPointerPresentationVisible ? layer : nullptr;
+	vrMenuPointerPresentationFrame = a_frame;
+	vrMenuPointerPresentationVisible = false;
+	if (!layer)
+		return nullptr;
+	if (!globals::game::isVR || !IsVRRenderScaleModeLatched() || !IsExplicitVRMenuPresentationContextActive())
+		return nullptr;
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* nodes = player ? player->GetVRNodeData() : nullptr;
+	if (!nodes || nodes->UIPointerGeo.get() != vrMenuPointerGeometry)
+		return nullptr;
+	vrMenuPointerPresentationVisible = IsVRMenuPointerVisible(nodes->UIPointerGeo.get());
+	return vrMenuPointerPresentationVisible ? layer : nullptr;
+}
+
 bool Upscaling::ShouldTraceVRMenuBridgeDrawOperation(const char** a_decisionReason)
 {
 	auto decide = [&](const char* a_reason, bool a_result) {
@@ -15946,6 +16084,11 @@ bool Upscaling::ApplyKnownGameMenuFinalComposite(uint32_t a_eyeIndex, Texture2D&
 		traceResult("rejected", "pixel-shader-unavailable");
 		return false;
 	}
+
+	auto* pointerLayer = GetCurrentVRMenuPointerOverlay(a_frame);
+	if (pointerLayer)
+		pixelShader = vrMenuPointerCompositePS.get();
+	VRMenuPointerOverlay::CompositeBinding pointerBinding(context, pointerLayer);
 
 	ID3D11VertexShader* previousVS = nullptr;
 	ID3D11PixelShader* previousPS = nullptr;
@@ -48074,6 +48217,13 @@ bool Upscaling::BlitVRRenderScaleDesktopMirror(
 	if (!vrDesktopMirrorBlitRTV) {
 		return false;
 	}
+
+	auto* pointerLayer = a_compositeCommittedMenuLayer && globals::state ?
+	                         GetCurrentVRMenuPointerOverlay(globals::state->frameCount) :
+	                         nullptr;
+	if (pointerLayer)
+		pixelShader = vrMenuPointerCompositePS.get();
+	VRMenuPointerOverlay::CompositeBinding pointerBinding(context, pointerLayer);
 
 	ID3D11VertexShader* previousVS = nullptr;
 	ID3D11PixelShader* previousPS = nullptr;

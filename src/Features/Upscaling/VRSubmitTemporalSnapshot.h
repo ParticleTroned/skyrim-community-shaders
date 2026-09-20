@@ -61,6 +61,53 @@ namespace VRSubmitTemporalSnapshot
 		return a_capturedReset || a_lateReset || a_pendingReset;
 	}
 
+	[[nodiscard]] constexpr bool HasMatchingCameraContract(const Key& a_previous, const Key& a_candidate) noexcept
+	{
+		return a_previous.generation == a_candidate.generation &&
+		       a_previous.method == a_candidate.method &&
+		       a_previous.inputWidth == a_candidate.inputWidth &&
+		       a_previous.inputHeight == a_candidate.inputHeight &&
+		       a_previous.outputWidth == a_candidate.outputWidth &&
+		       a_previous.outputHeight == a_candidate.outputHeight;
+	}
+
+	[[nodiscard]] constexpr bool IsImmediateCameraHistorySuccessor(const Key& a_previous, const Key& a_candidate) noexcept
+	{
+		if (!IsValid(a_previous) || !IsValid(a_candidate) || !HasMatchingCameraContract(a_previous, a_candidate))
+			return false;
+		if (a_previous.compositorCycle != 0 && a_candidate.compositorCycle != 0) {
+			const auto distance = a_candidate.compositorCycle >= a_previous.compositorCycle ?
+			                          a_candidate.compositorCycle - a_previous.compositorCycle :
+			                          MaxCompositorCycle - a_previous.compositorCycle + a_candidate.compositorCycle;
+			return distance == 1;
+		}
+		if (a_previous.compositorCycle != 0)
+			return false;
+		return a_candidate.frame - a_previous.frame == 1;
+	}
+
+	/** A reset frame may seed unavailable history; an adjacent frame may use retained history. */
+	template <class EyeCamera>
+	[[nodiscard]] bool PrepareCameraHistoryForPublication(
+		EyeCamera& a_eye,
+		bool a_historyReset,
+		bool a_currentCameraValid,
+		bool a_previousCameraValid,
+		const EyeCamera* a_retainedPrevious = nullptr)
+	{
+		if (!a_currentCameraValid)
+			return false;
+		if (a_previousCameraValid)
+			return true;
+		if (!a_historyReset && !a_retainedPrevious)
+			return false;
+
+		const auto& previous = a_historyReset ? a_eye : *a_retainedPrevious;
+		a_eye.previousViewProjectionUnjittered = previous.viewProjectionUnjittered;
+		a_eye.previousPosition = previous.position;
+		return true;
+	}
+
 	[[nodiscard]] constexpr bool MatchesProducer(std::uint32_t a_cachedFrame, std::uint64_t a_cachedCycle, std::uint32_t a_frame, std::uint64_t a_cycle) noexcept
 	{
 		return a_cachedFrame != std::numeric_limits<std::uint32_t>::max() &&
@@ -99,9 +146,13 @@ namespace VRSubmitTemporalSnapshot
 		[[nodiscard]] bool MatchesForDispatch(const Key& a_key) const noexcept
 		{
 			return valid && IsValid(a_key) && IsSameProducer(key, a_key) &&
-			       key.generation == a_key.generation && key.method == a_key.method &&
-			       key.inputWidth == a_key.inputWidth && key.inputHeight == a_key.inputHeight &&
-			       key.outputWidth == a_key.outputWidth && key.outputHeight == a_key.outputHeight;
+			       HasMatchingCameraContract(key, a_key);
+		}
+
+		/** Returns immutable current cameras only for the immediately following matching producer. */
+		[[nodiscard]] const std::array<EyeCamera, 2>* PreviousCamerasFor(const Key& a_key) const noexcept
+		{
+			return valid && IsImmediateCameraHistorySuccessor(key, a_key) ? &eyes : nullptr;
 		}
 
 		/** Repeated producer visits retain the first capture; a changed producer contract invalidates it. */

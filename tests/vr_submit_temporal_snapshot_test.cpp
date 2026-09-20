@@ -22,6 +22,14 @@ namespace
 
 	using Snapshot = Policy::Snapshot<EyeCamera>;
 
+	struct RecoveryEyeCamera
+	{
+		int viewProjectionUnjittered = 0;
+		int previousViewProjectionUnjittered = 0;
+		std::array<float, 3> position{};
+		std::array<float, 3> previousPosition{};
+	};
+
 	Policy::Key ValidKey()
 	{
 		return { 42, 7, 3, 1200, 1300, 1800, 1950 };
@@ -193,6 +201,126 @@ namespace
 		return snapshot.Publish(key, scalars, {}) &&
 		       Policy::ResolveHistoryReset(snapshot.scalars.historyReset, false) &&
 		       Policy::ResolveHistoryReset(snapshot.scalars.historyReset, true);
+	}
+
+	bool ResetBootstrapsOnlyMissingPreviousCameraHistory()
+	{
+		const RecoveryEyeCamera source{
+			.viewProjectionUnjittered = 17,
+			.previousViewProjectionUnjittered = 0,
+			.position = { 1.0f, 2.0f, 3.0f },
+			.previousPosition = { 0.0f, 0.0f, 0.0f },
+		};
+
+		auto withoutReset = source;
+		if (Policy::PrepareCameraHistoryForPublication(withoutReset, false, true, false) ||
+			withoutReset.previousViewProjectionUnjittered != 0 ||
+			withoutReset.previousPosition != source.previousPosition) {
+			return false;
+		}
+
+		auto reset = source;
+		if (!Policy::PrepareCameraHistoryForPublication(reset, true, true, false) ||
+			reset.previousViewProjectionUnjittered != reset.viewProjectionUnjittered ||
+			reset.previousPosition != reset.position) {
+			return false;
+		}
+
+		auto invalidCurrent = source;
+		const RecoveryEyeCamera retained{
+			.viewProjectionUnjittered = 23,
+			.position = { 4.0f, 5.0f, 6.0f },
+		};
+		if (Policy::PrepareCameraHistoryForPublication(invalidCurrent, true, false, false, &retained))
+			return false;
+		auto resetWithRetained = source;
+		if (!Policy::PrepareCameraHistoryForPublication(resetWithRetained, true, true, false, &retained) ||
+			resetWithRetained.previousViewProjectionUnjittered != source.viewProjectionUnjittered ||
+			resetWithRetained.previousPosition != source.position) {
+			return false;
+		}
+
+		auto validHistory = source;
+		validHistory.previousViewProjectionUnjittered = 9;
+		validHistory.previousPosition = { -1.0f, -2.0f, -3.0f };
+		const auto expectedHistory = validHistory;
+		return Policy::PrepareCameraHistoryForPublication(validHistory, true, true, true) &&
+		       validHistory.previousViewProjectionUnjittered == expectedHistory.previousViewProjectionUnjittered &&
+		       validHistory.previousPosition == expectedHistory.previousPosition;
+	}
+
+	bool RetainedCameraHistoryRequiresAdjacentMatchingContract()
+	{
+		using RecoverySnapshot = Policy::Snapshot<RecoveryEyeCamera>;
+		RecoverySnapshot snapshot;
+		auto previousKey = ValidKey();
+		previousKey.frame = 40;
+		previousKey.compositorCycle = 70;
+		const std::array<RecoveryEyeCamera, 2> previousEyes{
+			RecoveryEyeCamera{ .viewProjectionUnjittered = 11, .position = { 1.0f, 2.0f, 3.0f } },
+			RecoveryEyeCamera{ .viewProjectionUnjittered = 12, .position = { 4.0f, 5.0f, 6.0f } },
+		};
+		if (!snapshot.Publish(previousKey, ValidScalars(), previousEyes))
+			return false;
+
+		auto candidate = previousKey;
+		++candidate.frame;
+		++candidate.compositorCycle;
+		const auto* retained = snapshot.PreviousCamerasFor(candidate);
+		if (!retained || (*retained)[0].viewProjectionUnjittered != 11 || (*retained)[1].position[2] != 6.0f)
+			return false;
+
+		auto eye = RecoveryEyeCamera{ .viewProjectionUnjittered = 17, .position = { 7.0f, 8.0f, 9.0f } };
+		if (!Policy::PrepareCameraHistoryForPublication(eye, false, true, false, &(*retained)[0]) ||
+			eye.previousViewProjectionUnjittered != 11 || eye.previousPosition != previousEyes[0].position) {
+			return false;
+		}
+
+		auto skipped = candidate;
+		++skipped.compositorCycle;
+		if (snapshot.PreviousCamerasFor(skipped))
+			return false;
+		auto changedGeneration = candidate;
+		++changedGeneration.generation;
+		if (snapshot.PreviousCamerasFor(changedGeneration))
+			return false;
+		auto changedMethod = candidate;
+		++changedMethod.method;
+		if (snapshot.PreviousCamerasFor(changedMethod))
+			return false;
+		auto changedSize = candidate;
+		++changedSize.inputWidth;
+		if (snapshot.PreviousCamerasFor(changedSize))
+			return false;
+		auto resetCycle = candidate;
+		resetCycle.compositorCycle = 0;
+		if (snapshot.PreviousCamerasFor(resetCycle))
+			return false;
+
+		snapshot.Invalidate();
+		if (snapshot.PreviousCamerasFor(candidate))
+			return false;
+
+		RecoverySnapshot preCycleSnapshot;
+		auto preCycle = previousKey;
+		preCycle.frame = 90;
+		preCycle.compositorCycle = 0;
+		if (!preCycleSnapshot.Publish(preCycle, ValidScalars(), previousEyes))
+			return false;
+		auto firstCycle = preCycle;
+		++firstCycle.frame;
+		firstCycle.compositorCycle = 1;
+		if (!preCycleSnapshot.PreviousCamerasFor(firstCycle))
+			return false;
+
+		RecoverySnapshot wrappedSnapshot;
+		auto wrapped = previousKey;
+		wrapped.compositorCycle = Policy::MaxCompositorCycle;
+		if (!wrappedSnapshot.Publish(wrapped, ValidScalars(), previousEyes))
+			return false;
+		++wrapped.frame;
+		wrapped.compositorCycle = 1;
+		return wrappedSnapshot.PreviousCamerasFor(wrapped) != nullptr;
 	}
 
 	bool CompositorCycleSurvivesDesktopPresent()
@@ -388,6 +516,8 @@ int main()
 		InvalidInputsCannotBecomePublished,
 		FrameOrderingAndNativeGeneration,
 		RecoveryResetCanStrengthenCapturedDecision,
+		ResetBootstrapsOnlyMissingPreviousCameraHistory,
+		RetainedCameraHistoryRequiresAdjacentMatchingContract,
 		CompositorCycleSurvivesDesktopPresent,
 		CycleWrapAndNewerFrameTokenRemainSafe,
 		NewCycleRequiresNewLogicalFrame,

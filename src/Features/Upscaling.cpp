@@ -22698,9 +22698,13 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 			submitTemporalInputs.snapshot.Invalidate();
 			submitTemporalInputs.depth = nullptr;
 			submitTemporalInputs.motion = nullptr;
+			RequestHistoryReset();
 		}
 		return;
 	}
+	const auto* retainedCameras = submitTemporalInputs.snapshot.PreviousCamerasFor(key);
+	const bool captureHistoryReset = VRSubmitTemporalSnapshot::ResolveHistoryReset(
+		historyResetThisFrame, false, historyResetRequested);
 	const VRSubmitTemporalSnapshot::Scalars scalars{
 		.jitterX = jitter.x,
 		.jitterY = jitter.y,
@@ -22708,7 +22712,7 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 		.cameraFar = *globals::game::cameraFar,
 		.verticalFov = Util::GetVerticalFOVRad(),
 		.frameTimeMilliseconds = *globals::game::deltaTime * 1000.0f,
-		.historyReset = historyResetThisFrame,
+		.historyReset = captureHistoryReset,
 	};
 	std::array<SubmitEyeCamera, 2> eyes{};
 	const auto& camera = globals::game::frameBufferCached;
@@ -22733,15 +22737,22 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 			.previousPosition = camera.GetCameraPreviousPosAdjust(eye),
 		};
 		const auto& captured = eyes[eye];
-		validCameras = validCameras && validMatrix(captured.viewInverse) && validMatrix(captured.projectionUnjittered) &&
-		               validMatrix(captured.viewProjectionUnjittered) && validMatrix(captured.previousViewProjectionUnjittered) &&
-		               std::isfinite(captured.position.x) && std::isfinite(captured.position.y) && std::isfinite(captured.position.z) &&
-		               std::isfinite(captured.previousPosition.x) && std::isfinite(captured.previousPosition.y) && std::isfinite(captured.previousPosition.z);
+		const bool currentCameraValid =
+			validMatrix(captured.viewInverse) && validMatrix(captured.projectionUnjittered) &&
+			validMatrix(captured.viewProjectionUnjittered) &&
+			std::isfinite(captured.position.x) && std::isfinite(captured.position.y) && std::isfinite(captured.position.z);
+		const bool previousCameraValid =
+			validMatrix(captured.previousViewProjectionUnjittered) &&
+			std::isfinite(captured.previousPosition.x) && std::isfinite(captured.previousPosition.y) && std::isfinite(captured.previousPosition.z);
+		const auto* retainedEye = retainedCameras ? &(*retainedCameras)[eye] : nullptr;
+		validCameras = validCameras && VRSubmitTemporalSnapshot::PrepareCameraHistoryForPublication(
+										   eyes[eye], captureHistoryReset, currentCameraValid, previousCameraValid, retainedEye);
 	}
 	if (!submitTemporalInputs.snapshot.Publish(key, scalars, eyes) || !validCameras || !depth || !motion) {
 		submitTemporalInputs.snapshot.Invalidate();
 		submitTemporalInputs.depth = nullptr;
 		submitTemporalInputs.motion = nullptr;
+		RequestHistoryReset();
 		return;
 	}
 	submitTemporalInputs.depth.copy_from(depth);

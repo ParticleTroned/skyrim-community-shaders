@@ -15989,6 +15989,71 @@ void Upscaling::DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod)
 	}
 }
 
+void Upscaling::DrawSettingsHeaderControls()
+{
+	const auto upscaleMethod = GetUpscaleMethod();
+	const bool showDLSSGuidance = fidelityFX.IsNvidiaAdapterDetected() && upscaleMethod == UpscaleMethod::kDLSS;
+	const bool showFovStatus = globals::game::isVR;
+	if (!showDLSSGuidance && !showFovStatus)
+		return;
+
+	{
+		MenuFonts::FontRoleGuard infoFont(Menu::FontRole::Subtext);
+		const float labelWidth = std::max(ImGui::CalcTextSize("DLSS profiles").x, ImGui::CalcTextSize("FOV: unavailable").x);
+		const float minimumTextWidth = ImGui::CalcTextSize("Performance / Ultra Performance").x;
+		const bool inlineLabels = ImGui::GetContentRegionAvail().x >= labelWidth + minimumTextWidth + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+		if (ImGui::BeginTable("##UpscalingOverview", inlineLabels ? 2 : 1, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX)) {
+			auto endTable = ScopeExit([]() { ImGui::EndTable(); });
+			if (inlineLabels)
+				ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+			ImGui::TableSetupColumn("Information", ImGuiTableColumnFlags_WidthStretch);
+
+			auto drawLabel = [&](const char* a_label, bool a_active = false) {
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				if (a_active)
+					Util::Text::WrappedSuccess("%s", a_label);
+				else
+					ImGui::TextWrapped("%s", a_label);
+				ImGui::TableNextColumn();
+			};
+
+			if (showDLSSGuidance) {
+				drawLabel("DLSS profiles");
+				ImGui::TextWrapped(
+					"K for DLAA, Quality and Balanced. L/M for Performance and Ultra Performance on newer RTX cards.\n"
+					"RTX 3000 series: start with F; compare E.");
+			}
+			if (showFovStatus) {
+				if (SupportsFoveatedVendorDispatch(upscaleMethod)) {
+					const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
+					const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.sharedVisibleScale);
+					drawLabel(fovActive ? "FOV: active" : "FOV: inactive", fovActive);
+				} else {
+					drawLabel("FOV: unavailable");
+					ImGui::TextWrapped("Choose DLSS or FSR to enable foveated upscaling.");
+				}
+				const bool linkFitsInline = ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Configure in VR > FOV").x + ImGui::GetStyle().ItemSpacing.x;
+				ImGui::TextWrapped("Configure in");
+				if (linkFitsInline)
+					ImGui::SameLine();
+				{
+					auto& vr = globals::features::vr;
+					auto disabled = Util::DisableGuard(!vr.loaded || (globals::state && globals::state->IsFeatureDisabled(vr.GetShortName())));
+					if (ImGui::TextLink("VR > FOV"))
+						vr.OpenFovSettings();
+				}
+				if (auto tooltip = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Open VR settings on the FOV tab to configure foveated upscaling.");
+				}
+			}
+		}
+	}
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+}
+
 void Upscaling::DrawSettings()
 {
 	const uint64_t resourceSettingsKeyBefore = BuildUpscalingResourceMutationSettingsKey(settings);
@@ -16000,7 +16065,6 @@ void Upscaling::DrawSettings()
 		const char* label;
 	};
 
-	const bool isNvidiaAdapter = fidelityFX.IsNvidiaAdapterDetected();
 	const bool runtimeUpscalerPresent = fidelityFX.IsRuntimeUpscalerPresent();
 	const bool runtimeFsr4AutoEligible = fidelityFX.IsRuntimeFsr4AutoEligible();
 	const bool featureDLSS = streamline.featureDLSS;
@@ -16164,14 +16228,9 @@ void Upscaling::DrawSettings()
 		}
 	}
 
-	auto drawRenderPipelineBlock = [&]() {
+	auto drawRenderScaleSettings = [&]() {
 		if (!globals::game::isVR)
 			return;
-
-		ImGui::Separator();
-		if (!ImGui::TreeNodeEx("Render Pipeline"))
-			return;
-		DrawVRRenderScaleLinkSetting(upscaleMethod);
 
 		const bool renderScaleMethodEligible = IsRenderScaleMethodEligible(upscaleMethod);
 		const uint32_t renderScaleQualityMode = renderScaleMethodEligible ? GetEffectiveUpscalingQualityMode() : settings.qualityMode;
@@ -16229,6 +16288,7 @@ void Upscaling::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			DrawVRRenderScaleModeTooltip();
 		}
+		DrawVRRenderScaleLinkSetting(upscaleMethod);
 		if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
 		}
@@ -16284,8 +16344,6 @@ void Upscaling::DrawSettings()
 			}
 		}
 #endif
-
-		ImGui::TreePop();
 	};
 
 	// Display upscaling settings if applicable
@@ -16332,6 +16390,9 @@ void Upscaling::DrawSettings()
 		}
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
+			drawRenderScaleSettings();
+			ImGui::Spacing();
+			ImGui::Spacing();
 			if (ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f"))
 				InvalidateFrameScopedUpscalingState();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -16429,6 +16490,10 @@ void Upscaling::DrawSettings()
 				DrawDLSSPresetTooltip(displayedDLSSPreset);
 			}
 
+			drawRenderScaleSettings();
+			ImGui::Spacing();
+			ImGui::Spacing();
+
 			int dlssSharpenerMode = static_cast<int>(ClampDLSSSharpenerModeUInt(settings.dlssSharpener));
 			if (ImGui::Combo("Sharpener", &dlssSharpenerMode, kDLSSSharpenerModeNames.data(), static_cast<int>(kDLSSSharpenerModeNames.size()))) {
 				settings.dlssSharpener = ClampDLSSSharpenerModeUInt(static_cast<uint>(std::max(dlssSharpenerMode, 0)));
@@ -16462,27 +16527,13 @@ void Upscaling::DrawSettings()
 					}
 				}
 			}
-
-			if (isNvidiaAdapter) {
-				ImGui::TextWrapped("Note: Use K for DLAA/Quality/Balanced. For Performance and Ultra Performance, use L/M on newer RTX cards. On RTX 3000-series cards, start with F and compare E if you want the other legacy profile.");
-			}
 		}
 
 		if (globals::game::isVR) {
 			SanitizeFoveatedSettings(settings);
-			const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
-			if (foveatedDispatchSupportedForMethod) {
-				const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
-				const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.sharedVisibleScale);
-				ImGui::TextDisabled("Configure foveated upscaling in VR > FOV.");
-				ImGui::TextColored(
-					fovActive ? ImVec4(0.40f, 0.85f, 0.50f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
-					"FOV: %s",
-					fovActive ? "active" : "inactive");
-			} else {
-				ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
-			}
 		}
+	} else {
+		drawRenderScaleSettings();
 	}
 
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
@@ -16552,10 +16603,6 @@ void Upscaling::DrawSettings()
 
 	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex")) {
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
-		const auto markerOptimization = ReflexPolicy::ResolveCSXMarkerOptimization(
-			reflexAvailable,
-			streamline.featurePCL,
-			settings.reflexUseMarkersToOptimize);
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
 		const char* toggleModes[] = { "Disabled", "Enabled" };
 
@@ -16593,27 +16640,6 @@ void Upscaling::DrawSettings()
 		if (!settings.reflexLowLatencyMode)
 			ImGui::EndDisabled();
 
-		if (!markerOptimization.available)
-			ImGui::BeginDisabled();
-
-		int markersToOptimize = markerOptimization.enabled ? 1 : 0;
-		ImGui::SliderInt("Use Markers To Optimize", &markersToOptimize, 0, 1, toggleModes[markersToOptimize]);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Uses frame markers for tighter Reflex timing.");
-			ImGui::TextUnformatted("Requires authoritative full-frame marker coverage.");
-		}
-		if (markerOptimization.available)
-			settings.reflexUseMarkersToOptimize = markersToOptimize > 0;
-
-		if (!markerOptimization.available)
-			ImGui::EndDisabled();
-
-		if (!markerOptimization.available)
-			ImGui::TextDisabled(
-				reflexAvailable && streamline.featurePCL ?
-					"Marker optimization is disabled until authoritative full-frame marker coverage is available." :
-					"Marker optimization unavailable (Reflex/PCL not loaded).");
-
 		int useFPSLimit = settings.reflexUseFPSLimit ? 1 : 0;
 		ImGui::SliderInt("Use FPS Limit", &useFPSLimit, 0, 1, toggleModes[useFPSLimit]);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -16643,9 +16669,38 @@ void Upscaling::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	drawRenderPipelineBlock();
-
 	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
+		if (globals::state && globals::state->IsDeveloperMode() && streamline.reflexSupportedOnCurrentAdapter) {
+			ImGui::SeparatorText("Reflex Debug");
+			const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
+			const auto markerOptimization = ReflexPolicy::ResolveCSXMarkerOptimization(
+				reflexAvailable,
+				streamline.featurePCL,
+				settings.reflexUseMarkersToOptimize);
+			const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
+			const bool markersAvailable = markerOptimization.available && !reflexBlockedByFrameGeneration;
+			{
+				ImGui::BeginDisabled(!markersAvailable);
+				auto restoreDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
+				const char* toggleModes[] = { "Disabled", "Enabled" };
+				int markersToOptimize = markerOptimization.enabled ? 1 : 0;
+				if (ImGui::SliderInt("Use Markers To Optimize", &markersToOptimize, 0, 1, toggleModes[markersToOptimize]) && markersAvailable)
+					settings.reflexUseMarkersToOptimize = markersToOptimize > 0;
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Requests marker-based Reflex scheduling.");
+					ImGui::TextUnformatted("Requires authoritative full-frame marker coverage.");
+				}
+			}
+			if (reflexBlockedByFrameGeneration)
+				ImGui::TextDisabled("Reflex is disabled while Frame Generation is active on the DX12 swap chain.");
+			if (!markerOptimization.available)
+				ImGui::TextDisabled(
+					reflexAvailable && streamline.featurePCL ?
+						"Marker optimization is disabled until authoritative full-frame marker coverage is available." :
+						"Marker optimization unavailable (Reflex/PCL not loaded).");
+			ImGui::Separator();
+		}
+
 		if (IsVRRuntimeActive()) {
 			if (ImGui::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics) &&
 				!settings.pipelineDiagnostics) {

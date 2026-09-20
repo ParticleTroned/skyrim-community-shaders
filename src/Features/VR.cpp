@@ -2689,16 +2689,15 @@ namespace
 		upscaling.DrawFoveatedSettings();
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
-		const bool foveatedProfileActive = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
+		const bool foveatedProfileActive = upscaling.IsSharedFoveatedMaskActive();
 		const bool ssrAvailable = dynamicCubemaps.IsSSRRuntimeActive();
 		const bool waterParallaxAvailable = waterEffects.loaded;
 		const bool wetnessEffectsRuntimeActive = wetnessEffects.IsRuntimeActive();
 		const bool wetternessFeatureAvailable = wetterness.loaded && !wetnessEffectsRuntimeActive;
 		const bool wetternessSettingsAvailable = wetternessFeatureAvailable && wetterness.IsRuntimeActive();
 		const bool wetternessFoveationRuntimeActive = wetterness.IsRuntimeProcessingActive() && !wetnessEffectsRuntimeActive;
-		const bool screenSpaceShadowsRuntimeActive = screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
-		const bool screenSpaceGIFeatureAvailable = screenSpaceGI.loaded;
-		const bool screenSpaceGIRuntimeActive = screenSpaceGIFeatureAvailable && screenSpaceGI.settings.Enabled;
+		const bool screenSpaceShadowsRuntimeActive = screenSpaceShadows.IsRuntimeEnabled();
+		const bool screenSpaceGIRuntimeActive = screenSpaceGI.IsRuntimeEnabled();
 		const bool dynamicCubemapsRuntimeActive = dynamicCubemaps.loaded;
 		const bool lightingFoveationAvailable = foveatedProfileActive;
 		const bool ssrFoveationAvailable = foveatedProfileActive && ssrAvailable;
@@ -2736,23 +2735,15 @@ namespace
 		const bool screenSpaceGIEnabled = screenSpaceGIRuntimeActive && screenSpaceGI.settings.EnableFoveated;
 
 		drawSection("Screen-Space Effects");
-		ImGui::BeginDisabled(!foveatedProfileActive || !screenSpaceShadowsRuntimeActive);
 		screenSpaceShadows.DrawFoveationSettings();
-		ImGui::EndDisabled();
 		if (!screenSpaceShadows.loaded)
 			ImGui::TextDisabled("Screen Space Shadows FOV requires Screen Space Shadows.");
-		else if (screenSpaceShadows.bendSettings.Enable == 0)
+		else if (!screenSpaceShadowsRuntimeActive)
 			ImGui::TextDisabled("Screen Space Shadows FOV requires Screen Space Shadows to be enabled.");
 		ImGui::Separator();
-		ImGui::BeginDisabled(!foveatedProfileActive || !screenSpaceGIRuntimeActive);
 		screenSpaceGI.DrawFoveationSettings();
-		ImGui::EndDisabled();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Screen-space foveation requires active foveated upscaling with shared visible scale below 1.00.");
-		if (!screenSpaceGIFeatureAvailable)
-			ImGui::TextDisabled("SSGI FOV requires Screen Space GI.");
-		else if (!screenSpaceGI.settings.Enabled)
-			ImGui::TextDisabled("SSGI FOV requires Screen Space GI to be enabled.");
+			ImGui::TextDisabled("SSGI FOV and Screen Space Shadows FOV require active upscaling with shared visible scale below 1.00.");
 
 		drawSection("Shader FOV");
 		{

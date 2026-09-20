@@ -52,6 +52,10 @@ public:
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	/** Reports whether the feature is loaded and its current effect switch is on. */
+	bool IsRuntimeEnabled() const;
+	/** Stage shared-mask selection and synchronize its shader settings. */
+	void SetFoveationEnabled(bool a_enabled);
 	void DrawFoveationSettings();
 	void DrawOCUEffectFoveationSettings();
 	/** Stage optional sampling for the next render pass; shared by UI and DevBench. */

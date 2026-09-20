@@ -1733,6 +1733,7 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/fov_settings.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_blur.cmake")
 
     add_controller_test(

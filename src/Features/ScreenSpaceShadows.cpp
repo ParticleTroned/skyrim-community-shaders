@@ -240,6 +240,11 @@ void ScreenSpaceShadows::RestorePerformanceCostMeasurementState(const json& a_st
 	useStereoReproject = a_state.value("UseStereoReproject", useStereoReproject);
 }
 
+bool ScreenSpaceShadows::IsRuntimeEnabled() const
+{
+	return loaded && bendSettings.Enable != 0;
+}
+
 void ScreenSpaceShadows::DrawFoveationSettings()
 {
 	if (!globals::game::isVR) {
@@ -247,9 +252,8 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 		return;
 	}
 
-	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
-	const bool foveatedAvailable = foveatedState.available;
-	const bool featureRuntimeActive = loaded && bendSettings.Enable != 0;
+	const bool foveatedAvailable = globals::features::upscaling.IsSharedFoveatedMaskActive();
+	const bool featureRuntimeActive = IsRuntimeEnabled();
 	bool foveatedEnabled = bendSettings.EnableFoveated != 0;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
@@ -261,13 +265,13 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 		ImGui::TextUnformatted("Can improve performance, but shadows may fade near the edge of your view.");
 		if (!loaded)
 			ImGui::TextUnformatted("Requires Screen Space Shadows.");
-		else if (bendSettings.Enable == 0)
+		else if (!featureRuntimeActive)
 			ImGui::TextUnformatted("Requires Screen Space Shadows to be enabled.");
 		else if (!foveatedAvailable)
 			ImGui::TextUnformatted("Requires active foveated upscaling.");
 	}
 
-	ImGui::TextDisabled("%s", foveatedEnabled && featureRuntimeActive && foveatedState.active ? "active" : "inactive");
+	ImGui::TextDisabled("%s", foveatedEnabled && featureRuntimeActive && foveatedAvailable ? "active" : "inactive");
 }
 
 void ScreenSpaceShadows::InvalidateRaymarchShaders()

@@ -17151,7 +17151,9 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		SanitizeFoveatedSettings(settings);
 		const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 		if (foveatedDispatchSupportedForMethod) {
-			ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
+			bool fovEnabled = settings.foveatedVendorDispatch;
+			if (ImGui::Checkbox("Foveated Upscaling (FOV)", &fovEnabled))
+				SetFoveatedUpscalingEnabled(fovEnabled);
 		} else {
 			ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);
 		}
@@ -17181,6 +17183,33 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 void Upscaling::DrawEssentialSettings()
 {
 	DrawPerformanceSettings(false);
+}
+
+bool Upscaling::IsSharedFoveatedMaskActive() const
+{
+	if (!REL::Module::IsVR() || !loaded)
+		return false;
+	const auto profile = GetActiveUpscalingFoveatedProfile();
+	return profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
+}
+
+bool Upscaling::SetFoveatedUpscalingEnabled(bool a_enabled)
+{
+	if (!globals::game::isVR || !loaded || !globals::state ||
+		(a_enabled && !SupportsFoveatedVendorDispatch(GetUpscaleMethod())))
+		return false;
+	if (settings.foveatedVendorDispatch == a_enabled)
+		return true;
+
+	settings.foveatedVendorDispatch = a_enabled;
+	if (a_enabled) {
+		globals::features::screenSpaceShadows.bendSettings.EnableFoveated = 1u;
+		globals::features::screenSpaceGI.SetFoveationEnabled(true);
+	}
+	InvalidateFrameScopedUpscalingState();
+	if (globals::menu)
+		globals::menu->RequestSettingsDirtyCheck();
+	return true;
 }
 
 void Upscaling::DrawFoveatedSetupInstructions()
@@ -17226,10 +17255,13 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 
 	if (foveatedDispatchSupportedForMethod) {
-		ImGui::Checkbox("Foveated Upscaling (FOV)", &settings.foveatedVendorDispatch);
+		bool fovEnabled = settings.foveatedVendorDispatch;
+		if (ImGui::Checkbox("Foveated Upscaling (FOV)", &fovEnabled))
+			SetFoveatedUpscalingEnabled(fovEnabled);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Master switch for VR FOV-mask upscaling.");
 			ImGui::TextUnformatted("On: enables foveated upscaling controls and the shared FOV mask used by VR foveated effects.");
+			ImGui::TextUnformatted("Also selects SSGI FOV and Screen Space Shadows FOV. Their parent effects stay unchanged.");
 		}
 	} else {
 		ImGui::TextDisabled(kFoveatedUpscalingMethodAvailabilityText);

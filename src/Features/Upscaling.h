@@ -2212,6 +2212,8 @@ public:
 	void DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod);
 	/** Apply the shared menu/API link policy without bypassing transition admission. */
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
+	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */
+	bool SetFoveatedUpscalingEnabled(bool a_enabled);
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
@@ -2355,6 +2357,8 @@ public:
 	};
 	static const char* GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode);
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
+	/** Reports whether loaded VR upscaling provides a shared mask below full coverage. */
+	bool IsSharedFoveatedMaskActive() const;
 	float GetActiveFoveatedSharedVisibleScale() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;

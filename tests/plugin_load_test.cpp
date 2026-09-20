@@ -14,7 +14,6 @@ namespace
 		bool interfacePresent = true;
 		bool poolSucceeds = true;
 		bool loadResult = true;
-		bool initializing = false;
 		bool initialized = false;
 		int loggerInitializations = 0;
 		int loggerReplacements = 0;
@@ -23,7 +22,6 @@ namespace
 		int poolAttempts = 0;
 		int poolAllocations = 0;
 		int commonlibAllocations = 0;
-		int pluginAllocations = 0;
 		std::size_t requestedCapacity = 0;
 		std::size_t capacity = 0;
 		std::vector<std::string> log;
@@ -71,12 +69,6 @@ namespace SKSE
 {
 	struct LoadInterface
 	{};
-	struct InitInfo
-	{
-		bool log = true;
-		bool trampoline = false;
-		std::size_t trampolineSize = 0;
-	};
 	struct TrampolineInterface
 	{
 		void* AllocateFromBranchPool(std::size_t capacity) const
@@ -96,7 +88,7 @@ namespace SKSE
 		}
 		void create(std::size_t capacity)
 		{
-			++(fixture.initializing ? fixture.commonlibAllocations : fixture.pluginAllocations);
+			++fixture.commonlibAllocations;
 			fixture.capacity = capacity;
 		}
 	};
@@ -113,26 +105,14 @@ namespace SKSE
 		return trampoline;
 	}
 
-	// CommonLib initializes logging by default and allocates only when its
-	// trampoline interface exists; CSX must supply the missing-interface path.
-	void Init(const LoadInterface* interface, InitInfo info = {})
+	void AllocTrampoline(std::size_t size, bool trySKSEReserve = true);
+#include "commonlib_trampoline_under_test.h"
+
+	void Init(const LoadInterface* interface, bool log = true)
 	{
 		Check(interface == &loadInterface, "The SKSE load interface must be forwarded");
+		Check(!log, "CSX must retain ownership of its startup logger");
 		++fixture.initCalls;
-		if (info.log) {
-			++fixture.loggerReplacements;
-			fixture.log.clear();
-		}
-		fixture.initializing = true;
-		if (info.trampoline) {
-			if (const auto trampolineInterface = GetTrampolineInterface()) {
-				if (auto memory = trampolineInterface->AllocateFromBranchPool(info.trampolineSize))
-					GetTrampoline().set_trampoline(memory, info.trampolineSize);
-				else
-					GetTrampoline().create(info.trampolineSize);
-			}
-		}
-		fixture.initializing = false;
 		fixture.initialized = true;
 	}
 }
@@ -145,7 +125,8 @@ bool Load()
 	return fixture.loadResult;
 }
 
-#define SKSE_PLUGIN_LOAD(...) bool SKSEPlugin_Load(__VA_ARGS__)
+#define DLLEXPORT
+#define SKSEAPI
 #include "plugin_load_under_test.h"
 
 void TestLoad(bool interfacePresent, bool poolSucceeds, bool loadResult)
@@ -167,8 +148,7 @@ void TestLoad(bool interfacePresent, bool poolSucceeds, bool loadResult)
 	if (interfacePresent)
 		Check(fixture.requestedCapacity == kTrampolineCapacity, "SKSE must receive the requested hook capacity");
 	Check(fixture.poolAllocations == (interfacePresent && poolSucceeds ? 1 : 0), "Successful SKSE allocations must be reused");
-	Check(fixture.commonlibAllocations == (interfacePresent && !poolSucceeds ? 1 : 0), "CommonLib must own the exhausted-pool fallback");
-	Check(fixture.pluginAllocations == (!interfacePresent ? 1 : 0), "CSX must allocate only when the SKSE interface is absent");
+	Check(fixture.commonlibAllocations == (interfacePresent && poolSucceeds ? 0 : 1), "CommonLib must provide the absent or exhausted pool fallback");
 }
 
 int main()

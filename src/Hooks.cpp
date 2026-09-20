@@ -889,7 +889,7 @@ namespace WaterBlendHistory
 					if (rtv) {
 						// Clear stale coverage left by discarded non-water pixels.
 						constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
-						globals::d3d::context->ClearRenderTargetView(REX::W32::AsReal(rtv), clearColor);
+						globals::d3d::context->ClearRenderTargetView(rtv, clearColor);
 					}
 				}
 			}

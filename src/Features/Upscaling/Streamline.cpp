@@ -3176,7 +3176,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		sharpenerOutputReady &&
 		upscaling.ShouldRouteDLSSMainPassThroughSharpener();
 	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
-	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : REX::W32::AsReal(mainTarget.UAV);
+	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : mainTarget.UAV;
 	const bool outputToSharpener = useSharpenerOutput;
 
 	// VR: Combined-buffer mode with extent offsets causes temporal ghosting on the right eye
@@ -3257,7 +3257,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// per-eye depth for both eyes.
 		if (!upscaling.PreparePerEyeInputs(
 				a_upscalingTexture,
-				REX::W32::AsReal(depthTexture.texture),
+				depthTexture.texture,
 				a_motionVectors,
 				a_reactiveMask,
 				a_transparencyCompositionMask,
@@ -3354,7 +3354,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// Eye 0 writes directly to combined output.
 		const bool leftEvaluated = EvaluateDLSS(viewport, 0,
 			upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
-			REX::W32::AsReal(depthTexture.texture), upscaling.vrIntermediateMotionVectors[0]->resource.get(),
+			depthTexture.texture, upscaling.vrIntermediateMotionVectors[0]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
 			0.0f,
@@ -3383,8 +3383,8 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		if (leftEvaluated && rightEvaluated) {
 			if (depthTexture.depthSRV) {
-				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, REX::W32::AsReal(depthTexture.depthSRV), eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
-				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), REX::W32::AsReal(depthTexture.depthSRV), eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
 			}
 
 			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
@@ -3422,7 +3422,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		const bool evaluated = EvaluateDLSS(viewport, 0,
 			a_upscalingTexture, colorOut,
-			REX::W32::AsReal(depthTexture.texture), a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
+			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 			extentIn, extentOut, (uint)screenSize.x,
 			0.0f,
 			0.0f,

@@ -81,7 +81,7 @@ namespace Util
 			return nullptr;
 		auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 		if (globals::deferred && globals::deferred->IsSceneDepthFinal())
-			return REX::W32::AsReal(depthCopy.depthSRV);
+			return depthCopy.depthSRV;
 
 		auto& tb = globals::features::terrainBlending;
 		if (tb.loaded && tb.settings.Enabled) {
@@ -90,7 +90,7 @@ namespace Util
 				return srv;
 		}
 
-		return REX::W32::AsReal(depthCopy.depthSRV);
+		return depthCopy.depthSRV;
 	}
 
 	void BindFrameBufferConstantBuffersForCS(ID3D11DeviceContext* a_context)
@@ -151,8 +151,8 @@ namespace Util
 			if (auto r = globals::game::renderer) {
 				for (int i = 0; i < GetRenderTargetCount(); i++) {
 					auto rt = r->GetRuntimeData().renderTargets[i];
-					if (a_rtv == REX::W32::AsReal(rt.RTV)) {
-						return REX::W32::AsReal(rt.SRV);
+					if (a_rtv == rt.RTV) {
+						return rt.SRV;
 					}
 				}
 			}
@@ -166,8 +166,8 @@ namespace Util
 			if (auto r = globals::game::renderer) {
 				for (int i = 0; i < GetRenderTargetCount(); i++) {
 					auto rt = r->GetRuntimeData().renderTargets[i];
-					if (a_srv == REX::W32::AsReal(rt.SRV) || a_srv == REX::W32::AsReal(rt.SRVCopy)) {
-						return REX::W32::AsReal(rt.RTV);
+					if (a_srv == rt.SRV || a_srv == rt.SRVCopy) {
+						return rt.RTV;
 					}
 				}
 			}
@@ -183,7 +183,7 @@ namespace Util
 			if (auto r = globals::game::renderer) {
 				for (int i = 0; i < GetRenderTargetCount(); i++) {
 					auto rt = r->GetRuntimeData().renderTargets[i];
-					if (a_srv == REX::W32::AsReal(rt.SRV) || a_srv == REX::W32::AsReal(rt.SRVCopy)) {
+					if (a_srv == rt.SRV || a_srv == rt.SRVCopy) {
 						return std::string(magic_enum::enum_name(static_cast<RENDER_TARGET>(i)));
 					}
 				}
@@ -199,7 +199,7 @@ namespace Util
 			if (auto r = globals::game::renderer) {
 				for (int i = 0; i < GetRenderTargetCount(); i++) {
 					auto rt = r->GetRuntimeData().renderTargets[i];
-					if (a_rtv == REX::W32::AsReal(rt.RTV)) {
+					if (a_rtv == rt.RTV) {
 						return std::string(magic_enum::enum_name(static_cast<RENDER_TARGET>(i)));
 					}
 				}

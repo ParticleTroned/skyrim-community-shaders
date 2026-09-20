@@ -1183,7 +1183,7 @@ void ScreenSpaceGI::SetupResources()
 		};
 
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		REX::W32::AsReal(mainTex.texture)->GetDesc(&texDesc);
+		mainTex.texture->GetDesc(&texDesc);
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.CPUAccessFlags = 0;
 		texDesc.MiscFlags = 0;
@@ -2121,12 +2121,12 @@ void ScreenSpaceGI::DrawSSGI()
 	// fetch radiance and disocclusion (optional in AO-only + no temporal mode)
 	if (runRadianceDisoccPass) {
 		resetViews();
-		srvs.at(0) = REX::W32::AsReal(runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr);
+		srvs.at(0) = runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr;
 		srvs.at(1) = texWorkingDepth->srv.get();
-		srvs.at(2) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(2) = rts[NORMALROUGHNESS].SRV;
 		if (temporalEnabled) {
 			srvs.at(3) = texPrevGeo->srv.get();
-			srvs.at(4) = REX::W32::AsReal(rts[RE::RENDER_TARGET::kMOTION_VECTOR].SRV);
+			srvs.at(4) = rts[RE::RENDER_TARGET::kMOTION_VECTOR].SRV;
 			srvs.at(5) = texAccumFrames[lastFrameAccumTexIdx]->srv.get();
 			srvs.at(6) = texAo[inputAoTexIdx]->srv.get();
 			if (runILPath) {
@@ -2186,7 +2186,7 @@ void ScreenSpaceGI::DrawSSGI()
 	// Prefilter normals for the regular AO/GI path.
 	if (!foveatedSsgiActive) {
 		resetViews();
-		srvs.at(0) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(0) = rts[NORMALROUGHNESS].SRV;
 		uavs.at(0) = uavNormal[0].get();
 		uavs.at(1) = uavNormal[1].get();
 		uavs.at(2) = uavNormal[2].get();
@@ -2206,7 +2206,7 @@ void ScreenSpaceGI::DrawSSGI()
 	if (!foveatedSsgiActive) {
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
-		srvs.at(1) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(1) = rts[NORMALROUGHNESS].SRV;
 		srvs.at(2) = runILPath ? texRadiance->srv.get() : nullptr;
 		srvs.at(3) = texNoise->srv.get();
 		if (temporalEnabled) {
@@ -2328,7 +2328,7 @@ void ScreenSpaceGI::DrawSSGI()
 	if (blurEnabled) {
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
-		srvs.at(1) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(1) = rts[NORMALROUGHNESS].SRV;
 		srvs.at(2) = temporalEnabled ? texAccumFrames[lastFrameAccumTexIdx]->srv.get() : nullptr;
 		srvs.at(3) = texIlY[inputGITexIdx]->srv.get();
 		srvs.at(4) = texIlCoCg[inputGITexIdx]->srv.get();
@@ -2397,10 +2397,10 @@ void ScreenSpaceGI::DrawSSGI()
 		{
 			resetViews();
 			srvs.at(0) = texWorkingDepth->srv.get();
-			srvs.at(1) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+			srvs.at(1) = rts[NORMALROUGHNESS].SRV;
 			srvs.at(2) = runILPath ? texRadiance->srv.get() : nullptr;
 			srvs.at(3) = texNoise->srv.get();
-			srvs.at(9) = REX::W32::AsReal(runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr);
+			srvs.at(9) = runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr;
 			srvs.at(10) = texNormal->srv.get();
 
 			uavs.at(0) = centerBlendNeeded ? texCenterAo->uav.get() : texAo[!inputAoTexIdx]->uav.get();

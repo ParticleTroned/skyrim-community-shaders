@@ -40,7 +40,7 @@ class PreviewIntegration(unittest.TestCase):
         self.assertLess(main.index("if (vrRenderScaleSubmitStageOwnsOutput)"), preview)
         self.assertLess(preview, main.index("auto encodeUpscalingTextures ="))
         draw = main[preview:main.index("pendingDLSSHistoryReset.exchange", preview)]
-        self.assertIn("REX::W32::AsReal(main.texture), !vendorLifecycleMutationDeferred", draw)
+        self.assertIn("main.texture, !vendorLifecycleMutationDeferred", draw)
         self.assertIn("DispatchFoveatedMaskVisualization(0) && DispatchFoveatedMaskVisualization(1)", draw)
         self.assertIn("RequestHistoryReset();", draw)
 

@@ -124,7 +124,7 @@ void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::
 	spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%t] [%s:%#] %v");
 }
 
-SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* a_skse)
+extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
 #ifndef NDEBUG
 	while (!REX::W32::IsDebuggerPresent()) {};
@@ -132,12 +132,8 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* a_skse)
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::BUILD_LABEL);
 	BuildProvenance::LogRuntimeIdentity();
-	// CSX owns the startup log and its build identity records.
-	SKSE::Init(a_skse, { .log = false, .trampoline = true, .trampolineSize = kTrampolineCapacity });
-	if (!SKSE::GetTrampolineInterface()) {
-		// Loaders without a branch pool still need storage for CSX hooks.
-		SKSE::GetTrampoline().create(kTrampolineCapacity);
-	}
+	SKSE::Init(a_skse, false);
+	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();
 }
 
@@ -150,7 +146,7 @@ extern "C" DLLEXPORT constinit auto SKSEPlugin_Version = []() noexcept {
 	return v;
 }();
 
-SKSE_PLUGIN_QUERY(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
+extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
 {
 	pluginInfo->name = SKSEPlugin_Version.pluginName;
 	pluginInfo->infoVersion = SKSE::PluginInfo::kVersion;

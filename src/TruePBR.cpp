@@ -749,7 +749,7 @@ struct ExtendedRendererState
 
 	void SetPSTexture(size_t textureIndex, RE::BSGraphics::Texture* newTexture)
 	{
-		ID3D11ShaderResourceView* resourceView = newTexture ? REX::W32::AsReal(newTexture->resourceView) : nullptr;
+		ID3D11ShaderResourceView* resourceView = newTexture ? newTexture->resourceView : nullptr;
 		//if (PSTexture[textureIndex] != resourceView)
 		{
 			PSTexture[textureIndex] = resourceView;

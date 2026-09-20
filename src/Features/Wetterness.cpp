@@ -2680,7 +2680,7 @@ void Wetterness::Prepass()
 	ID3D11ShaderResourceView* precipOcclusionSrv = nullptr;
 	auto& precipOcclusionTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
 	if (precipOcclusionTexture.depthSRV) {
-		precipOcclusionSrv = REX::W32::AsReal(precipOcclusionTexture.depthSRV);
+		precipOcclusionSrv = precipOcclusionTexture.depthSRV;
 	}
 
 	context->PSSetShaderResources(kWetnessPsSrvPrecipOcclusionSlot, 1, &precipOcclusionSrv);

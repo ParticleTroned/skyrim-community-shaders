@@ -731,10 +731,10 @@ void VolumetricLighting::ClearVolumetricLightingTargets()
 	auto clearRT = [&](RE::RENDER_TARGET index) {
 		auto& target = renderer->GetRuntimeData().renderTargets[index];
 		if (target.RTV) {
-			context->ClearRenderTargetView(REX::W32::AsReal(target.RTV), clearColor);
+			context->ClearRenderTargetView(target.RTV, clearColor);
 		}
 		if (target.UAV) {
-			context->ClearUnorderedAccessViewFloat(REX::W32::AsReal(target.UAV), clearColor);
+			context->ClearUnorderedAccessViewFloat(target.UAV, clearColor);
 		}
 	};
 

@@ -1,4 +1,3 @@
-#include "commonlib_d3d_bridge_fake.h"
 #include <array>
 #include <chrono>
 #include <cstdint>

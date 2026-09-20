@@ -8,7 +8,7 @@ string(FIND "${_upscale}" "const bool depthUpscaleActive" _validation)
 if(_reset LESS 0 OR _validation LESS _reset)
     message(FATAL_ERROR "Depth producer must invalidate proof before any early exit")
 endif()
-if(NOT _upscale MATCHES "context->PSSetShader\\(depthUpscalePS, nullptr, 0\\);[\n\r\t ]+context->Draw\\(3, 0\\);[\n\r\t ]+if \\(neuralDepthProofRequested\\)[\n\r\t ]+mainFinalLdrDepthProof = \\{ state->frameCount, GetCOMIdentityAddress\\(REX::W32::AsReal\\(depth.texture\\)\\) \\};")
+if(NOT _upscale MATCHES "context->PSSetShader\\(depthUpscalePS, nullptr, 0\\);[\n\r\t ]+context->Draw\\(3, 0\\);[\n\r\t ]+if \\(neuralDepthProofRequested\\)[\n\r\t ]+mainFinalLdrDepthProof = \\{ state->frameCount, GetCOMIdentityAddress\\(depth.texture\\) \\};")
     message(FATAL_ERROR "Depth proof must follow the actual depth reconstruction draw")
 endif()
 string(FIND "${_source}" "void Upscaling::FinalizeMainFinalLdrNeuralPresentation()" _start)
@@ -17,10 +17,10 @@ string(FIND "${_tail}" "\n}\n" _length)
 string(SUBSTRING "${_tail}" 0 ${_length} _finalize)
 foreach(_required IN ITEMS
     "mainFinalLdrDepthProof.SupportsOutputLayout("
-    "pending.frame, GetCOMIdentityAddress(REX::W32::AsReal(depth.texture))"
+    "pending.frame, GetCOMIdentityAddress(depth.texture)"
     "depthDesc.Width != outputLayout.width"
     "depthDesc.Height != outputLayout.height"
-    "REX::W32::AsReal(depth.depthSRV), pending.outputWidthPerEye,"
+    "depth.depthSRV, pending.outputWidthPerEye,"
     "pending.outputHeight, outputLayout.eyes[eye].minX,")
     string(FIND "${_finalize}" "${_required}" _found)
     if(_found LESS 0)

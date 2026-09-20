@@ -1561,7 +1561,7 @@ void EditorWindow::Draw()
 			auto& framebuffer = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
 			if (framebuffer.SRV) {
 				ID3D11Resource* resource = nullptr;
-				REX::W32::AsReal(framebuffer.SRV)->GetResource(&resource);
+				framebuffer.SRV->GetResource(&resource);
 
 				if (resource) {
 					auto texture = static_cast<ID3D11Texture2D*>(resource);
@@ -1580,7 +1580,7 @@ void EditorWindow::Draw()
 						tempTexture = nullptr;
 
 						D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-						REX::W32::AsReal(framebuffer.SRV)->GetDesc(&srvDesc);
+						framebuffer.SRV->GetDesc(&srvDesc);
 
 						tempTexture = new Texture2D(texDesc);
 						tempTexture->CreateSRV(srvDesc);

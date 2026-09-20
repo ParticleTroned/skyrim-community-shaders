@@ -170,10 +170,10 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 
 	auto& data = renderer->GetRuntimeData().renderTargets[target];
 	ReleaseRenderTargetSlot(target);
-	data.texture = REX::W32::AsW32(texture);
-	data.SRV = REX::W32::AsW32(srv);
-	data.RTV = REX::W32::AsW32(rtv);
-	data.UAV = REX::W32::AsW32(uav);
+	data.texture = texture;
+	data.SRV = srv;
+	data.RTV = rtv;
+	data.UAV = uav;
 }
 
 void Deferred::ReleaseRenderTargets()
@@ -221,10 +221,10 @@ void Deferred::SetupResources()
 		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 
-		REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
-		REX::W32::AsReal(main.SRV)->GetDesc(&srvDesc);
-		REX::W32::AsReal(main.RTV)->GetDesc(&rtvDesc);
-		REX::W32::AsReal(main.UAV)->GetDesc(&uavDesc);
+		main.texture->GetDesc(&texDesc);
+		main.SRV->GetDesc(&srvDesc);
+		main.RTV->GetDesc(&rtvDesc);
+		main.UAV->GetDesc(&uavDesc);
 
 		// Available targets:
 		// MAIN ONLY ALPHA
@@ -349,7 +349,7 @@ void Deferred::SetupResources()
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		REX::W32::AsReal(mainTex.texture)->GetDesc(&texDesc);
+		mainTex.texture->GetDesc(&texDesc);
 
 		texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
 		texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -637,10 +637,10 @@ bool Deferred::CopySceneDepth()
 	auto& terrainBlending = globals::features::terrainBlending;
 	if (terrainBlending.loaded && terrainBlending.blendedDepthTexture) {
 		auto* blendedDepthSRV = terrainBlending.blendedDepthTexture->srv.get();
-		if (blendedDepthSRV && REX::W32::AsReal(depth.depthSRV) == blendedDepthSRV)
-			depth.depthSRV = REX::W32::AsW32(terrainBlending.depthSRVBackup);
-		if (blendedDepthSRV && REX::W32::AsReal(depthCopy.depthSRV) == blendedDepthSRV)
-			depthCopy.depthSRV = REX::W32::AsW32(terrainBlending.prepassSRVBackup);
+		if (blendedDepthSRV && depth.depthSRV == blendedDepthSRV)
+			depth.depthSRV = terrainBlending.depthSRVBackup;
+		if (blendedDepthSRV && depthCopy.depthSRV == blendedDepthSRV)
+			depthCopy.depthSRV = terrainBlending.prepassSRVBackup;
 	}
 
 	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV)
@@ -648,7 +648,7 @@ bool Deferred::CopySceneDepth()
 
 	CS_GPU_PASS("Deferred::CopySceneDepth");
 	// Water also consumes this copy, including pixels outside the active scaled area.
-	context->CopyResource(REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
+	context->CopyResource(depthCopy.texture, depth.texture);
 	finalSceneDepthFrame = globals::state->frameCount;
 	return true;
 }
@@ -714,16 +714,16 @@ void Deferred::DeferredPasses()
 		Util::BindGlobalConstantBuffersForCS(context);
 
 		ID3D11ShaderResourceView* srvs[16]{
-			REX::W32::AsReal(specular.SRV),
-			REX::W32::AsReal(albedo.SRV),
-			REX::W32::AsReal(normalRoughness.SRV),
-			REX::W32::AsReal(masks.SRV),
+			specular.SRV,
+			albedo.SRV,
+			normalRoughness.SRV,
+			masks.SRV,
 			dynamicCubemaps.loaded || REL::Module::IsVR() ? Util::GetCurrentSceneDepthSRV(false) : nullptr,
-			dynamicCubemaps.loaded ? REX::W32::AsReal(reflectance.SRV) : nullptr,
+			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
 			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,
 			dynamicCubemaps.loaded && skylighting.IsRuntimeActive() ? skylighting.texProbeArray->srv.get() : nullptr,
-			REX::W32::AsReal(masks2.SRV),
+			masks2.SRV,
 			ssgi_ao,
 			ssgi_hq_spec ? nullptr : ssgi_y,
 			ssgi_hq_spec ? nullptr : ssgi_cocg,
@@ -737,7 +737,7 @@ void Deferred::DeferredPasses()
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		ID3D11UnorderedAccessView* uavs[3]{ REX::W32::AsReal(main.UAV), REX::W32::AsReal(normals.UAV), REX::W32::AsReal(motionVectors.UAV) };
+		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		if (auto* shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite()) {
@@ -1024,8 +1024,8 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 					.CaptureAuthoredCategories(
 						globals::d3d::device,
 						globals::d3d::context,
-						REX::W32::AsReal(categorySource.texture),
-						REX::W32::AsReal(depthSource.depthSRV),
+						categorySource.texture,
+						depthSource.depthSRV,
 						inputWidthPerEye,
 						inputHeight,
 						globals::state->frameCount,

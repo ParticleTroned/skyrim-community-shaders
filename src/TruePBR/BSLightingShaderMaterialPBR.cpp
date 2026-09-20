@@ -195,7 +195,7 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 		}
 		BSLightingShaderMaterialBase::OnLoadTextureSet(arg1, inTextureSet);
 
-		auto* lock = reinterpret_cast<volatile long*>(&textureSetLock);
+		auto* lock = &unk98;
 		while (_InterlockedCompareExchange(lock, 1, 0)) {
 			Sleep(0);
 		}

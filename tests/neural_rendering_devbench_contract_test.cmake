@@ -2832,8 +2832,8 @@ endif()
 foreach(_deferred_capture_contract IN ITEMS
     [[deferred && deferred->deferredPass]]
     [[upscaling.GetRuntimeFoveatedRegionDimensions(]]
-    [[REX::W32::AsReal(categorySource.texture),]]
-    [[REX::W32::AsReal(depthSource.depthSRV),]]
+    [[categorySource.texture,]]
+    [[depthSource.depthSRV,]]
     [[inputWidthPerEye,]]
     [[inputHeight,]]
 )

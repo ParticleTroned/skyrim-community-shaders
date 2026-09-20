@@ -1135,6 +1135,10 @@ void VR::DrawSettings()
 	if (pendingFovTabSelection)
 		ImGui::SetScrollY(0.0f);
 	if (ImGui::BeginTabBar("##VRTabs", ImGuiTabBarFlags_None)) {
+		// Resolve navigation before the first tab triggers layout.
+		if (pendingFovTabSelection)
+			ImGui::TabBarQueueFocus(ImGui::GetCurrentTabBar(), "FOV");
+
 		// General Settings Tab
 		if (BeginTabItemWithFont("General", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRGeneralFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
@@ -1147,8 +1151,7 @@ void VR::DrawSettings()
 			ImGui::EndTabItem();
 		}
 
-		const auto fovTabFlags = pendingFovTabSelection ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-		if (BeginTabItemWithFont("FOV", Menu::FontRole::Subheading, fovTabFlags)) {
+		if (BeginTabItemWithFont("FOV", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRFoveatedFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
 				if (pendingFovTabSelection) {
 					ImGui::SetScrollY(0.0f);

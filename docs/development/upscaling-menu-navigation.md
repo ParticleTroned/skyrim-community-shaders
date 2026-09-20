@@ -9,6 +9,8 @@ link clears the feature search, expands the destination category, reveals
 VR's Advanced settings when using Essentials, and scrolls the destination
 to the top. The global UI mode and graphics settings stay unchanged.
 Navigation is unavailable when the VR feature is unloaded or disabled.
+FOV is selected on the first destination render, including the first visit
+and when another VR tab was previously selected.
 
 Render Scale appears below DLSS Profile, or below Upscale Preset for FSR.
 The linking option and status remain alongside it. Sharpening controls

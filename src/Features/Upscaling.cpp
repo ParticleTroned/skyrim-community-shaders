@@ -11658,7 +11658,9 @@ const Upscaling::VRFpsStabilizerConfig& Upscaling::GetVRFpsStabilizerSessionConf
 
 bool Upscaling::IsVRFpsStabilizerSyncActive() const
 {
-	if (!globals::game::isVR || IsOpenCompositeUpscalingBlocked())
+	if (!globals::game::isVR ||
+		IsOpenCompositeUpscalingBlocked() ||
+		IsRenderDocUpscalingBlocked())
 		return false;
 
 	const auto& config = GetVRFpsStabilizerSessionConfig();
@@ -46525,7 +46527,8 @@ bool Upscaling::ArmVRPostLoadCompositorHold(
 	if ((!a_beginLoadProtection &&
 			!vrInitialLoadPresentationProtectionActive.load(std::memory_order_acquire)) ||
 		!globals::game::isVR ||
-		IsOpenCompositeUpscalingBlocked()) {
+		IsOpenCompositeUpscalingBlocked() ||
+		IsRenderDocUpscalingBlocked()) {
 		FinishVRInitialLoadPresentationProtectionLocked();
 		return false;
 	}
@@ -47081,6 +47084,7 @@ bool Upscaling::ShouldSuppressVRPostLoadCompositorSubmit(
 	if (!globals::game::isVR ||
 		IsSubmitStageDeviceLost() ||
 		IsOpenCompositeUpscalingBlocked() ||
+		IsRenderDocUpscalingBlocked() ||
 		(a_eye != vr::Eye_Left && a_eye != vr::Eye_Right)) {
 		return resetAndFailOpen();
 	}

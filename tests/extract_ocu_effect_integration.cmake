@@ -7,21 +7,29 @@ file(READ "${PROJECT_ROOT}/src/ProfilerDevBenchBridge.cpp" _bridge)
 file(READ "${PROJECT_ROOT}/src/Api/AcceptedDrawService.cpp" _draw_service)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 
-function(extract_between source start end output)
-    string(FIND "${source}" "${start}" _start)
-    if(_start EQUAL -1)
-        message(FATAL_ERROR "OCU integration test cannot find ${start}")
-    endif()
-    string(SUBSTRING "${source}" ${_start} -1 _remaining)
-    string(FIND "${_remaining}" "${end}" _end)
-    if(_end EQUAL -1)
-        message(FATAL_ERROR "OCU integration test cannot find ${end}")
-    endif()
-    string(SUBSTRING "${_remaining}" 0 ${_end} _extracted)
-    file(WRITE "${OUTPUT_DIRECTORY}/${output}" "${_extracted}")
-endfunction()
+include("${CMAKE_CURRENT_LIST_DIR}/extract_source_region.cmake")
 
-extract_between("${_ssgi}" "bool ScreenSpaceGI::CompileComputeShaders(" "bool ScreenSpaceGI::ShadersOK()" "ocu_shader_batch_under_test.h")
-extract_between("${_ssgi}" "void ScreenSpaceGI::SetOCUEffectFoveationEnabled(" "void ScreenSpaceGI::DrawOCUEffectFoveationSettings()" "ocu_setting_under_test.h")
-extract_between("${_bridge}" "json BuildOCUEffectFoveationResult(" "json BuildProfilerResult(" "ocu_devbench_under_test.h")
-extract_between("${_draw_service}" "void PublishAcceptedDraw(" "const API* GetAcceptedDrawAPI()" "accepted_draw_publish_under_test.h")
+extract_between(
+    "${_ssgi}"
+    "bool ScreenSpaceGI::CompileComputeShaders("
+    "bool ScreenSpaceGI::ShadersOK()"
+    "ocu_shader_batch_under_test.h"
+)
+extract_between(
+    "${_ssgi}"
+    "void ScreenSpaceGI::SetOCUEffectFoveationEnabled("
+    "void ScreenSpaceGI::DrawOCUEffectFoveationSettings()"
+    "ocu_setting_under_test.h"
+)
+extract_between(
+    "${_bridge}"
+    "json BuildOCUEffectFoveationResult("
+    "json BuildProfilerResult("
+    "ocu_devbench_under_test.h"
+)
+extract_between(
+    "${_draw_service}"
+    "void PublishAcceptedDraw("
+    "const API* GetAcceptedDrawAPI()"
+    "accepted_draw_publish_under_test.h"
+)

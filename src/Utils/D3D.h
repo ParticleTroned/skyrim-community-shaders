@@ -1,4 +1,5 @@
 #pragma once
+#include "ResourceName.h"
 #include <array>
 #include <cstdint>
 #include <d3d11.h>
@@ -28,7 +29,6 @@ namespace Util
 	ID3D11RenderTargetView* GetRTVFromSRV(ID3D11ShaderResourceView* a_srv);
 	std::string GetNameFromSRV(ID3D11ShaderResourceView* a_srv);
 	std::string GetNameFromRTV(ID3D11RenderTargetView* a_rtv);
-	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...);
 
 	/** @brief Optional QPC accumulator separating compiler and device creation cost. */
 	struct ShaderCompileTiming

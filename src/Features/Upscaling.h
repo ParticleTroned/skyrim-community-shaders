@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VRMenuPointerOverlay.h"
 #include "Upscaling/VROrdinarySaveRecovery.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRRelatchReleasePolicy.h"
@@ -2786,6 +2787,9 @@ public:
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		const char** a_decisionReason = nullptr);
 	static bool ShouldTraceVRMenuBridgeDrawOperation(const char** a_decisionReason = nullptr);
+	/** Capture the native VR UI pointer without suppressing its scene draw. */
+	static bool TryCaptureVRMenuPointerDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, bool a_instanced);
 	static bool TraceVRMenuBridgeDrawOperation(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva,
 		const char** a_decisionReason = nullptr);
@@ -4207,6 +4211,16 @@ private:
 	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
 	eastl::unique_ptr<Texture2D> vrMenuFinalCompositeLayer;
 	eastl::unique_ptr<Texture2D> vrMenuCommittedCompositeLayer;
+	VRMenuPointerOverlay vrMenuPointerOverlay;
+	Util::LazyShader<ID3D11PixelShader> vrMenuPointerOverlayPS;
+	Util::LazyShader<ID3D11PixelShader> vrMenuPointerCompositePS;
+	const void* vrMenuPointerGeometry = nullptr;
+	uint32_t vrMenuPointerPresentationFrame = std::numeric_limits<uint32_t>::max();
+	bool vrMenuPointerPresentationVisible = false;
+	bool vrMenuPointerCaptureFailed = false;
+	bool CaptureVRMenuPointerOverlay(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndex, INT a_baseVertex, UINT a_startInstance, bool a_instanced);
+	ID3D11ShaderResourceView* GetCurrentVRMenuPointerOverlay(uint32_t a_frame);
 	winrt::com_ptr<ID3D11Texture2D> vrMenuFullResolutionDepth;
 	winrt::com_ptr<ID3D11DepthStencilView> vrMenuFullResolutionDSV;
 	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMenuFullResolutionDepthViews{};

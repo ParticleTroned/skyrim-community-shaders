@@ -13,6 +13,21 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 20: native menu pointer overlay
+
+The [native pointer correction](vr-menu-pointer-overlay.md) captures only
+the engine-owned UI pointer and composites it above the existing final
+menu layer. It preserves native rendering, menu transaction policy and
+the render-scale-off path. Capture resources and signature validation are
+cached; the pointer shares the existing menu draw without recurring
+diagnostic logging. Unsupported captures fall back to native rendering.
+
+Source review, focused controller tests and D3D11 WARP exercise ownership,
+stereo placement, native output preservation and graphics state restoration.
+Exact-build headset validation and matched CPU/GPU measurements remain
+pending. This implementation adds no runtime measurements or numbered
+ledger snapshot.
+
 ## September 16: eight-run depth-culling comparison
 
 The [complete culling handover](depth-culling-comparison-20260916/README.md)

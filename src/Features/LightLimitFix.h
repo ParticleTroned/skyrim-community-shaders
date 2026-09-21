@@ -26,7 +26,7 @@ private:
 	bool sceneLightSnapshotFailed = false;
 	/// Retain VR lights on the render thread until frame or load reset.
 	const SceneLightSnapshot* GetSceneLightSnapshot(RE::ShadowSceneNode* a_node);
-	/// Retain the native VR shadow pass's lights before virtual dispatch, through render completion.
+	/// Select live native VR shadow work and retain its owner through each render call.
 	static void RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index);
 
 public:

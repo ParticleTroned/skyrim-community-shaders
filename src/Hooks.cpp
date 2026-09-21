@@ -1,5 +1,6 @@
 #include "Hooks.h"
 #include "Api/AcceptedDrawService.h"
+#include "EngineFixes/VRShadowBatch.h"
 
 #include "Utils/CharacterCategoryAuthoring.h"
 
@@ -2028,6 +2029,7 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		VRShadowBatch::Install();
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();

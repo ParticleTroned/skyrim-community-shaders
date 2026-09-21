@@ -44,6 +44,31 @@ struct ExtendedMaterials : Feature
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 16,
+			T("menu.performance_tuning.feature.extended_materials.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.extended_materials.comparison_details", "complex materials, parallax, legacy terrain parallax, height blending, parallax shadows, and curvature correction are switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return {
+			{ "EnableComplexMaterial", true },
+			{ "EnableParallax", true },
+			{ "EnableTerrain", true },
+			{ "EnableHeightBlending", true },
+			{ "EnableShadows", true },
+			{ "EnableParallaxWarpingFix", true }
+		};
+	}
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	virtual json CapturePerformanceCostMeasurementState() const override;
+	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -51,4 +76,7 @@ struct ExtendedMaterials : Feature
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool IsCore() const override { return true; };
+
+private:
+	static void SanitizeSettings(Settings& a_settings);
 };

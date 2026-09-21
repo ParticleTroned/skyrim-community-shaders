@@ -100,8 +100,24 @@ void Skylighting::ApplyPerformanceSettings()
 	ResetSkylighting();
 }
 
+void Skylighting::QueueResetSkylighting()
+{
+	queuedResetSkylighting.store(true, std::memory_order_release);
+}
+
+bool Skylighting::UpdateInteriorState()
+{
+	const bool interior = Util::IsInterior();
+	if (previousInteriorState && *previousInteriorState != interior)
+		QueueResetSkylighting();
+	previousInteriorState = interior;
+	return interior;
+}
+
 void Skylighting::ResetSkylighting()
 {
+	// Consume first so a load notification delivered during the clear survives.
+	queuedResetSkylighting.exchange(false, std::memory_order_acq_rel);
 	probeRefreshCounts.fill(0);
 	probeUpdateCaptureSerial = occlusionCaptureSerial;
 
@@ -111,7 +127,7 @@ void Skylighting::ResetSkylighting()
 		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
 		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
 		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
-		queuedResetSkylighting = true;
+		QueueResetSkylighting();
 		return;
 	}
 
@@ -134,7 +150,6 @@ void Skylighting::ResetSkylighting()
 
 	float clearVisibility[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clearVisibility);
-	queuedResetSkylighting = false;
 }
 
 void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
@@ -151,7 +166,7 @@ bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 
 bool Skylighting::IsPerformanceCostMeasurementReady() const
 {
-	if (!loaded || queuedResetSkylighting || inOcclusion)
+	if (!loaded || queuedResetSkylighting.load(std::memory_order_acquire) || inOcclusion)
 		return false;
 
 	// The disabled comparison is ready once its accumulation reset has been
@@ -401,7 +416,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!a_inWorld)
 		return data;
 
-	if (!IsRuntimeActive())
+	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire))
 		return data;
 
 	if (globals::state->isMapMenuOpen)
@@ -443,7 +458,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 void Skylighting::Prepass()
 {
 	auto context = globals::d3d::context;
-	if (!IsRuntimeActive()) {
+	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire)) {
 		if (context) {
 			ID3D11ShaderResourceView* srv = nullptr;
 			context->PSSetShaderResources(50, 1, &srv);
@@ -506,7 +521,7 @@ void Skylighting::Prepass()
 
 			// Count only a dispatch backed by a newly rendered occlusion mask.
 			// Multiple prepasses cannot advance refresh progress from stale data.
-			if (!queuedResetSkylighting &&
+			if (!queuedResetSkylighting.load(std::memory_order_acquire) &&
 				probeUpdateCompute.get() && comparisonSampler.get() &&
 				texOcclusion && texOcclusion->srv.get() && texOcclusion->dsv.get() &&
 				texProbeArray && texProbeArray->srv.get() && texProbeArray->uav.get() &&
@@ -782,7 +797,7 @@ void Skylighting::RenderOcclusion()
 		return;
 	}
 
-	if (Util::IsInterior())
+	if (UpdateInteriorState())
 		return;
 
 	{
@@ -813,13 +828,14 @@ void Skylighting::RenderOcclusion()
 	auto occlusionCamera = precip->occlusionData.camera;
 	if (!occlusionCamera)
 		return;
+	if (queuedResetSkylighting.load(std::memory_order_acquire))
+		ResetSkylighting();
+	if (queuedResetSkylighting.load(std::memory_order_acquire))
+		return;
 
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Skylighting Mask");
 		state->BeginPerfEvent("Skylighting Mask");
-
-		if (queuedResetSkylighting)
-			ResetSkylighting();
 
 		frameCount++;
 
@@ -921,11 +937,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 
 RE::BSEventNotifyControl Skylighting::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
-	// When entering a new cell through a loadscreen, update every frame until completion
-	if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
-		if (!a_event->opening)
-			globals::features::skylighting.queuedResetSkylighting = true;
-	}
+	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
+		globals::features::skylighting.QueueResetSkylighting();
 
 	return RE::BSEventNotifyControl::kContinue;
 }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <optional>
 
 struct Skylighting : Feature
 {
@@ -116,7 +118,8 @@ public:
 	float occlusionDistance = 10000.f;
 
 	// cached variables
-	bool queuedResetSkylighting = true;
+	std::atomic_bool queuedResetSkylighting{ true };
+	std::optional<bool> previousInteriorState;
 	bool inOcclusion = false;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
@@ -132,7 +135,12 @@ public:
 	uint64_t probeUpdateCaptureSerial = 0;
 	uint occlusionCaptureQuadrant = 0;
 
+	/** @brief Queues a render-thread history rebuild without touching graphics resources. */
+	void QueueResetSkylighting();
+	/** @brief Clears probe history on the render thread. */
 	void ResetSkylighting();
+	/** @brief Tracks interior transitions and queues stale outdoor history for replacement. */
+	bool UpdateInteriorState();
 
 	std::chrono::time_point<std::chrono::system_clock> lastUpdateTimer = std::chrono::system_clock::now();
 

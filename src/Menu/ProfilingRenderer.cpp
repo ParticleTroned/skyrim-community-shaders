@@ -10,6 +10,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "Features/Upscaling.h"
 #include "Globals.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/M/Misc.h"
@@ -261,6 +262,43 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 	}
 
 	ApplyOpenVRTimingCache(cache, frameCount, summary);
+}
+
+static void CaptureFlatGameTiming(Profiler& profiler, ProfilingRenderer::PerformanceTimingSummary& summary)
+{
+	summary.flatTiming = true;
+	const auto* history = profiler.GetFlatTiming();
+	if (!history)
+		return;
+	summary.flatPresentId = history->presentId;
+	summary.flatTimingEpoch = history->epoch;
+	// D3D11 timestamps cannot describe the frame-generation swap chain's D3D12 work.
+	if (globals::features::upscaling.IsFrameGenerationDx12PathActive())
+		return;
+	summary.flatSamples.assign(history->samples.begin(), history->samples.end());
+	TimingAverage gpuAverage, cpuAverage;
+	uint32_t count = 0;
+	for (auto it = history->samples.rbegin(); it != history->samples.rend() && count < kDisplayedRollingFrameCount; ++it) {
+		if (!it->resolved)
+			continue;
+		++count;
+		if (it->hasGpu)
+			gpuAverage.Push(it->gpuMs);
+		if (it->hasCpu)
+			cpuAverage.Push(it->cpuMs);
+		if (count == 1) {
+			summary.samplePresentId = it->presentId;
+			summary.sampleFrameCount = it->frame;
+			summary.gameGpuSampleMs = it->gpuMs;
+			summary.gameCpuSampleMs = it->cpuMs;
+			summary.hasGameGpuSample = it->hasGpu;
+			summary.hasGameCpuSample = it->hasCpu;
+		}
+	}
+	summary.gameGpuMs = gpuAverage.Get();
+	summary.gameCpuMs = cpuAverage.Get();
+	summary.hasGameGpu = gpuAverage.HasSamples() && summary.hasGameGpuSample;
+	summary.hasGameCpu = cpuAverage.HasSamples() && summary.hasGameCpuSample;
 }
 
 static void NormalizeGameFrameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -1324,7 +1362,11 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	summary.frameMs = GetAverageGameFrameMs(summary.frameSampleMs, summary.hasFrameSample);
 	summary.fps = summary.frameMs > 0.0f ? 1000.0f / summary.frameMs : 0.0f;
 	summary.fpsSample = summary.frameSampleMs > 0.0f ? 1000.0f / summary.frameSampleMs : 0.0f;
-	CaptureOpenVRGameTiming(summary);
+	if (globals::game::isVR) {
+		CaptureOpenVRGameTiming(summary);
+	} else {
+		CaptureFlatGameTiming(profiler, summary);
+	}
 	if (gpuTotalSamples.HasSamples())
 		summary.gpuTotalMs = gpuTotalSamples.GetStats(false).avgMs;
 	if (cpuTotalSamples.HasSamples())

@@ -769,7 +769,8 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
-	globals::profiler->EndFrame(frameCount);
+	if (globals::game::isVR)
+		globals::profiler->EndFrame(frameCount);
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -1846,7 +1847,7 @@ void State::SetupResources()
 	}
 
 	if (globals::profiler && globals::d3d::device && globals::d3d::context) {
-		globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
+		globals::profiler->Initialize(globals::d3d::device, globals::d3d::context, !globals::game::isVR);
 		if (frameAnnotations) {
 			globals::profiler->SetPerfEventCallbacks(
 				[this](std::string_view a_title) { BeginPerfEvent(a_title); },

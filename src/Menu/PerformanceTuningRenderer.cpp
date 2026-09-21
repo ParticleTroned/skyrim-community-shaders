@@ -117,6 +117,7 @@ namespace
 		FeatureCostMetricSample gameGpu;
 		FeatureCostMetricSample gameCpu;
 		uint32_t lastFrameCount = 0;
+		std::deque<Util::FlatFrameTiming::PendingSample<kFeatureCostMeasurementBlockCount>> pendingFlatSamples;
 	};
 
 	struct FeatureCostMetricDelta
@@ -230,6 +231,9 @@ namespace
 		double runElapsedMs = 0.0;
 		double phaseElapsedMs = 0.0;
 		std::uint32_t frameCount = 0;
+		std::uint32_t sampleFrameCount = 0;
+		std::uint64_t samplePresentId = 0;
+		bool flatTiming = false;
 		float frameMs = 0.0f;
 		float gameGpuMs = 0.0f;
 		float gameCpuMs = 0.0f;
@@ -506,6 +510,9 @@ namespace
 		sample.runElapsedMs = std::max(0.0, currentTime - runStartTime) * 1000.0;
 		sample.phaseElapsedMs = std::max(0.0, currentTime - phaseStartTime) * 1000.0;
 		sample.frameCount = summary.frameCount;
+		sample.sampleFrameCount = summary.flatTiming ? summary.sampleFrameCount : summary.frameCount;
+		sample.samplePresentId = summary.samplePresentId;
+		sample.flatTiming = summary.flatTiming;
 		sample.hasFrame = summary.hasFrameSample && IsValidFeatureCostTiming(summary.frameSampleMs);
 		sample.hasGameGpu = summary.hasGameGpuSample && IsValidFeatureCostTiming(summary.gameGpuSampleMs);
 		sample.hasGameCpu = summary.hasGameCpuSample && IsValidFeatureCostTiming(summary.gameCpuSampleMs);
@@ -999,6 +1006,27 @@ namespace
 		return PerformanceUserDefaultsRestoreResult::Restored;
 	}
 
+	void ResolveFlatFeatureCostSamples(FeatureCostSample& sample, const ProfilingRenderer::PerformanceTimingSummary& summary, bool finalize = false)
+	{
+		Util::FlatFrameTiming::ResolvePending(sample.pendingFlatSamples, summary.flatSamples,
+			summary.flatPresentId, summary.flatTimingEpoch, finalize, [&](const auto& pending, const auto* match) {
+				const bool hasGpu = match && match->resolved && match->hasGpu;
+				const bool hasCpu = match && match->hasCpu;
+				if (!hasGpu)
+					RecordMissingFeatureCostSample(sample.gameGpu);
+				if (!hasCpu)
+					RecordMissingFeatureCostSample(sample.gameCpu);
+				for (std::size_t block = 0; block < pending.weights.size(); ++block) {
+					if (pending.weights[block] <= 0.0)
+						continue;
+					if (hasGpu)
+						AddFeatureCostMoment(sample.gameGpu, block, match->gpuMs, pending.weights[block]);
+					if (hasCpu)
+						AddFeatureCostMoment(sample.gameCpu, block, match->cpuMs, pending.weights[block]);
+				}
+			});
+	}
+
 	FeatureCostSampleResult AddFeatureCostSample(
 		FeatureCostSample& sample,
 		const ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -1039,10 +1067,12 @@ namespace
 			summary.hasGameGpuSample && IsValidFeatureCostTiming(summary.gameGpuSampleMs);
 		const bool validGameCpuSample =
 			summary.hasGameCpuSample && IsValidFeatureCostTiming(summary.gameCpuSampleMs);
-		if (!validGameGpuSample)
+		if (!summary.flatTiming && !validGameGpuSample)
 			RecordMissingFeatureCostSample(sample.gameGpu);
-		if (!validGameCpuSample)
+		if (!summary.flatTiming && !validGameCpuSample)
 			RecordMissingFeatureCostSample(sample.gameCpu);
+		if (summary.flatTiming)
+			sample.pendingFlatSamples.push_back({ summary.flatPresentId + 1, summary.flatTimingEpoch, {} });
 
 		double remainingSampleWeight = std::min(1.0, remainingDurationMs / frameMs);
 		while (remainingSampleWeight > 1.0e-9) {
@@ -1060,9 +1090,11 @@ namespace
 				break;
 
 			AddFeatureCostMoment(sample.frame, blockIndex, summary.frameSampleMs, chunkWeight);
-			if (validGameGpuSample)
+			if (summary.flatTiming)
+				sample.pendingFlatSamples.back().weights[blockIndex] += chunkWeight;
+			if (!summary.flatTiming && validGameGpuSample)
 				AddFeatureCostMoment(sample.gameGpu, blockIndex, summary.gameGpuSampleMs, chunkWeight);
-			if (validGameCpuSample)
+			if (!summary.flatTiming && validGameCpuSample)
 				AddFeatureCostMoment(sample.gameCpu, blockIndex, summary.gameCpuSampleMs, chunkWeight);
 
 			sample.sampledDurationMs = completesBlock ?
@@ -1387,6 +1419,10 @@ namespace
 		if (!feature || !IsFeatureCostMeasurementActive(state) ||
 			state.phase == FeatureCostMeasurementPhase::AwaitingMenuClose)
 			return;
+		if (current.flatTiming) {
+			ResolveFlatFeatureCostSamples(state.currentSample, current);
+			ResolveFlatFeatureCostSamples(state.testSample, current);
+		}
 
 		if (state.phase == FeatureCostMeasurementPhase::PreparingCurrent) {
 			if (currentTime < state.phaseDeadlineTime || !feature->IsPerformanceCostMeasurementReady())
@@ -1418,6 +1454,10 @@ namespace
 			if (currentTime < state.phaseDeadlineTime || !feature->IsPerformanceCostMeasurementReady())
 				return;
 
+			if (current.flatTiming) {
+				ResolveFlatFeatureCostSamples(state.currentSample, current, true);
+				ResolveFlatFeatureCostSamples(state.testSample, current, true);
+			}
 			FinalizeFeatureCostMeasurement(state);
 			state.phase = FeatureCostMeasurementPhase::Complete;
 			StartFeatureCostRestartCooldown(currentTime);
@@ -2449,6 +2489,14 @@ namespace
 		};
 	}
 
+	void AppendFlatTimingSource(json& timing, const FeatureCostTraceSample& sample)
+	{
+		if (!sample.flatTiming)
+			return;
+		timing["gpuCpuFrameCount"] = sample.samplePresentId != 0 ? json(sample.sampleFrameCount) : json(nullptr);
+		timing["gpuCpuPresentId"] = sample.samplePresentId != 0 ? json(sample.samplePresentId) : json(nullptr);
+	}
+
 	json FeatureCostTraceJson(std::uint64_t afterSequence, std::size_t maximumSamples)
 	{
 		maximumSamples = std::clamp<std::size_t>(maximumSamples, 1, kFeatureCostMaximumTracePageSize);
@@ -2480,6 +2528,7 @@ namespace
 				{ "gameGpuMs", sample.hasGameGpu ? json(sample.gameGpuMs) : json(nullptr) },
 				{ "gameCpuMs", sample.hasGameCpu ? json(sample.gameCpuMs) : json(nullptr) },
 			});
+			AppendFlatTimingSource(samples.back(), sample);
 			nextAfterSequence = sample.sequence;
 		}
 
@@ -2566,6 +2615,7 @@ namespace
 				{ "gameGpuMs", sample.hasGameGpu ? json(sample.gameGpuMs) : json(nullptr) },
 				{ "gameCpuMs", sample.hasGameCpu ? json(sample.gameCpuMs) : json(nullptr) },
 			};
+			AppendFlatTimingSource(latestTiming, sample);
 		}
 
 		const bool sweepKnown = g_upscalingCostSweep.phase != UpscalingCostSweepPhase::Idle;

@@ -1,9 +1,19 @@
 #include "Profiler.h"
+#include "Utils/ResourceName.h"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+
+namespace Util
+{
+	void SetResourceName(ID3D11DeviceChild* resource, const char* format, ...)
+	{
+		if (!resource || !std::string_view(format).starts_with("Profiler::WholeFrame"))
+			throw std::runtime_error("profiler query missing shared resource naming");
+	}
+}
 
 namespace
 {

@@ -990,15 +990,19 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
-	ImGui::Checkbox("Enable Adaptive Profiles", &settings.enabled);
+	bool enabled = settings.enabled;
+	if (ImGui::Checkbox("Enable", &enabled))
+		SetEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Blend the active lighting, atmosphere, Bloom, and water appearance profile by location and exterior time.");
-		ImGui::Text("%s", T(TKEY("profile_direct_controls_tooltip"), "Each profile defines its own scene brightness, Bloom, and Unified Water appearance."));
+		ImGui::Text("Enable all Adaptive Balance adjustments across profiles and location overrides.");
+		ImGui::Text("When off, lighting, Bloom, and water appearance adjustments are bypassed.");
 	}
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();
 		ImGui::TextWrapped("%s", contextLabel.c_str());
+	} else {
+		ImGui::TextDisabled("Adaptive Balance is off. Saved adjustments are preserved.");
 	}
 }
 
@@ -2255,6 +2259,11 @@ bool AdaptiveBrightness::ImportFullPreset()
 		settings.locationOverrides.size(),
 		stats.skipped);
 	return true;
+}
+
+void AdaptiveBrightness::SetEnabled(bool a_enabled)
+{
+	settings.enabled = a_enabled;
 }
 
 bool AdaptiveBrightness::IsRuntimeEnabled() const

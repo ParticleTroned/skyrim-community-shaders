@@ -176,6 +176,35 @@ set_tests_properties(
     PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;VolumetricLighting"
 )
 
+set(_skylighting_settings_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/skylighting-settings")
+set(_skylighting_settings_test_header "${_skylighting_settings_test_dir}/skylighting_settings_under_test.h")
+add_custom_command(
+    OUTPUT "${_skylighting_settings_test_header}"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_SOURCE_DIR}"
+        "-DOUTPUT_FILE=${_skylighting_settings_test_header}" -P
+        "${CMAKE_SOURCE_DIR}/tests/extract_skylighting_settings.cmake"
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/src/Features/Skylighting.cpp
+        ${CMAKE_SOURCE_DIR}/tests/extract_skylighting_settings.cmake
+    VERBATIM
+)
+add_executable(
+    skylighting_settings_test
+    ${CMAKE_SOURCE_DIR}/tests/skylighting_settings_test.cpp
+    "${_skylighting_settings_test_header}"
+)
+target_compile_features(skylighting_settings_test PRIVATE cxx_std_23)
+target_include_directories(skylighting_settings_test PRIVATE "${_skylighting_settings_test_dir}")
+if(MSVC)
+    target_compile_options(skylighting_settings_test PRIVATE /W4 /WX /permissive-)
+endif()
+add_test(NAME SkylightingSettings COMMAND skylighting_settings_test)
+set_tests_properties(
+    SkylightingSettings
+    PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;Skylighting"
+)
+
 add_custom_target(
     run_host_tests
     COMMAND $<TARGET_FILE:performance_tuning_tests> --reporter compact
@@ -183,12 +212,14 @@ add_custom_target(
     COMMAND $<TARGET_FILE:unified_water_flowmap_test>
     COMMAND $<TARGET_FILE:virtual_function_hook_test>
     COMMAND $<TARGET_FILE:volumetric_lighting_blur_test>
+    COMMAND $<TARGET_FILE:skylighting_settings_test>
     DEPENDS
         performance_tuning_tests
         scene_depth_test
         unified_water_flowmap_test
         virtual_function_hook_test
         volumetric_lighting_blur_test
+        skylighting_settings_test
     WORKING_DIRECTORY $<TARGET_FILE_DIR:performance_tuning_tests>
     COMMENT "Running host-side C++ unit tests..."
     VERBATIM

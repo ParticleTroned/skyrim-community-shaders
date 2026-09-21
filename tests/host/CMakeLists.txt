@@ -141,17 +141,54 @@ set_tests_properties(
     PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;Hooks"
 )
 
+set(_vl_blur_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/volumetric-blur")
+set(_vl_blur_test_header "${_vl_blur_test_dir}/volumetric_blur_under_test.h")
+add_custom_command(
+    OUTPUT "${_vl_blur_test_header}"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_SOURCE_DIR}"
+        "-DOUTPUT_FILE=${_vl_blur_test_header}" -P
+        "${CMAKE_SOURCE_DIR}/tests/extract_volumetric_lighting_blur.cmake"
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/src/Features/VolumetricLighting.cpp
+        ${CMAKE_SOURCE_DIR}/tests/extract_volumetric_lighting_blur.cmake
+    VERBATIM
+)
+add_executable(
+    volumetric_lighting_blur_test
+    ${CMAKE_SOURCE_DIR}/tests/volumetric_lighting_blur_test.cpp
+    "${_vl_blur_test_header}"
+)
+target_compile_features(volumetric_lighting_blur_test PRIVATE cxx_std_23)
+target_include_directories(
+    volumetric_lighting_blur_test
+    PRIVATE "${_vl_blur_test_dir}"
+)
+if(MSVC)
+    target_compile_options(
+        volumetric_lighting_blur_test
+        PRIVATE /W4 /WX /permissive- "$<$<CONFIG:Release>:/fp:fast>"
+    )
+endif()
+add_test(NAME VolumetricLightingBlur COMMAND volumetric_lighting_blur_test)
+set_tests_properties(
+    VolumetricLightingBlur
+    PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;VolumetricLighting"
+)
+
 add_custom_target(
     run_host_tests
     COMMAND $<TARGET_FILE:performance_tuning_tests> --reporter compact
     COMMAND $<TARGET_FILE:scene_depth_test>
     COMMAND $<TARGET_FILE:unified_water_flowmap_test>
     COMMAND $<TARGET_FILE:virtual_function_hook_test>
+    COMMAND $<TARGET_FILE:volumetric_lighting_blur_test>
     DEPENDS
         performance_tuning_tests
         scene_depth_test
         unified_water_flowmap_test
         virtual_function_hook_test
+        volumetric_lighting_blur_test
     WORKING_DIRECTORY $<TARGET_FILE_DIR:performance_tuning_tests>
     COMMENT "Running host-side C++ unit tests..."
     VERBATIM

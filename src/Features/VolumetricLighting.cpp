@@ -526,22 +526,45 @@ void VolumetricLighting::SetupResources()
 	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>());
 }
 
-void VolumetricLighting::EarlyPrepass()
+void VolumetricLighting::UpdateBlurDimensions()
 {
 	const auto* viewport = globals::game::graphicsState;
-	int32_t width = static_cast<int32_t>(viewport ? viewport->screenWidth : 0);
-	int32_t height = static_cast<int32_t>(viewport ? viewport->screenHeight : 0);
+	blurDimensionsValid = false;
+	if (!viewport || !vlDataCB)
+		return;
 
-	if (width != vlData.screenX || height != vlData.screenY) {
+	const float2 fullSize{ static_cast<float>(viewport->screenWidth), static_cast<float>(viewport->screenHeight) };
+	const auto renderSize = Util::ConvertToDynamic(fullSize);
+	const auto validDimension = [](float a_size, float a_minimum, float a_maximum) {
+		return std::isfinite(a_size) && a_size >= a_minimum && a_size <= a_maximum;
+	};
+	if (!validDimension(fullSize.x, 1.0f, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+		!validDimension(fullSize.y, 1.0f, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+		!validDimension(renderSize.x, 1.0f, fullSize.x) ||
+		!validDimension(renderSize.y, 1.0f, fullSize.y)) {
+		return;
+	}
+
+	const auto fullWidth = static_cast<int32_t>(fullSize.x);
+	const auto fullHeight = static_cast<int32_t>(fullSize.y);
+	if (fullWidth != fullScreenX || fullHeight != fullScreenY) {
 		blurHCS = nullptr;
 		blurVCS = nullptr;
 	}
+	fullScreenX = fullWidth;
+	fullScreenY = fullHeight;
 
-	vlData.screenX = width;
-	vlData.screenY = height;
-	vlData.screenXMin1 = width - 1;
-	vlData.screenYMin1 = height - 1;
+	vlData.screenX = static_cast<int32_t>(renderSize.x);
+	vlData.screenY = static_cast<int32_t>(renderSize.y);
+	vlData.screenXMin1 = vlData.screenX - 1;
+	vlData.screenYMin1 = vlData.screenY - 1;
 	vlDataCB->Update(vlData);
+	blurDimensionsValid = true;
+}
+
+void VolumetricLighting::EarlyPrepass()
+{
+	UpdateBlurDimensions();
 
 	const bool currentlyInInterior = LocationContext::HasInteriorCell();
 	const bool nextInteriorWithSun = LocationContext::IsInteriorWithSun();
@@ -711,12 +734,14 @@ void VolumetricLighting::SetDimensionsCB() const
 	globals::d3d::context->CSSetConstantBuffers(1, 1, &cb);
 }
 
-void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX) const
+void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const
 {
 	threadGroupCountX = (vlData.screenX + BlurThreadGroupSizeX - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeX - BlurWindow * 2u);
+	threadGroupCountY = static_cast<uint32_t>(vlData.screenY);
 }
 
-void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountY) const
+void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const
 {
+	threadGroupCountX = static_cast<uint32_t>(vlData.screenX);
 	threadGroupCountY = (vlData.screenY + BlurThreadGroupSizeY - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeY - BlurWindow * 2u);
 }

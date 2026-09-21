@@ -23,6 +23,7 @@
 
 #include "ShaderTools/BSShaderHooks.h"
 
+#include <d3d11_1.h>
 #include <intrin.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
@@ -1110,10 +1111,26 @@ namespace Hooks
 				auto state = globals::state;
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
+				bool blurBufferBound = false;
+				winrt::com_ptr<ID3D11Buffer> previousBlurBuffer;
+				winrt::com_ptr<ID3D11DeviceContext1> blurContext1;
+				UINT firstConstant = 0;
+				UINT numConstants = 0;
+				const SKSE::stl::scope_exit restoreBlurBuffer([&]() noexcept {
+					if (blurBufferBound) {
+						auto buffer = previousBlurBuffer.get();
+						if (blurContext1)
+							blurContext1->CSSetConstantBuffers1(1, 1, &buffer, &firstConstant, &numConstants);
+						else
+							globals::d3d::context->CSSetConstantBuffers(1, 1, &buffer);
+					}
+				});
 
 				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
+					bool horizontalBlur = false;
+					bool verticalBlur = false;
 					if (vl.loaded) {
 						if (CurrentlyDispatchedShader == nullptr) {
 							techniqueId = 0;
@@ -1124,19 +1141,31 @@ namespace Hooks
 							}
 						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurHCS"sv) {
 							techniqueId = 0;
-							isShader = vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
-							vl.SetDimensionsCB();
-							vl.SetGroupCountsHCS(threadGroupCountX);
+							horizontalBlur = true;
+							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader) : nullptr;
 						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurVCS"sv) {
 							techniqueId = 0;
-							isShader = vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
-							vl.SetDimensionsCB();
-							vl.SetGroupCountsVCS(threadGroupCountY);
+							verticalBlur = true;
+							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader) : nullptr;
 						}
 					}
 					if (isShader != nullptr) {
 						if (auto* computeShader = shaderCache->GetComputeShader(*isShader, techniqueId)) {
 							shader = computeShader;
+							// Native fallback keeps its original dispatch and constant-buffer layout.
+							if (horizontalBlur || verticalBlur) {
+								auto* context = globals::d3d::context;
+								if (SUCCEEDED(context->QueryInterface(__uuidof(ID3D11DeviceContext1), blurContext1.put_void())))
+									blurContext1->CSGetConstantBuffers1(1, 1, previousBlurBuffer.put(), &firstConstant, &numConstants);
+								else
+									context->CSGetConstantBuffers(1, 1, previousBlurBuffer.put());
+								blurBufferBound = true;
+								vl.SetDimensionsCB();
+								if (horizontalBlur)
+									vl.SetGroupCountsHCS(threadGroupCountX, threadGroupCountY);
+								else
+									vl.SetGroupCountsVCS(threadGroupCountX, threadGroupCountY);
+							}
 						}
 					}
 				}

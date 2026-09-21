@@ -32,7 +32,7 @@ namespace SharedData
 		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -FLT_MAX when no water body found
 		float RefractionScale;    // Global scale for ImageSpace refraction heat warp
 		uint VolumetricShadowsEnabled;
-		float pad0;
+		float VolumetricLightingOpacity;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;

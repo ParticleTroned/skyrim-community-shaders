@@ -237,6 +237,31 @@ set_tests_properties(
     PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;Grass"
 )
 
+add_executable(
+    volumetric_lighting_tuning_policy_test
+    ${CMAKE_SOURCE_DIR}/tests/volumetric_lighting_tuning_policy_test.cpp
+)
+target_compile_features(volumetric_lighting_tuning_policy_test PRIVATE cxx_std_23)
+target_include_directories(
+    volumetric_lighting_tuning_policy_test
+    PRIVATE ${CMAKE_SOURCE_DIR}/src
+)
+target_link_libraries(
+    volumetric_lighting_tuning_policy_test
+    PRIVATE nlohmann_json::nlohmann_json
+)
+if(MSVC)
+    target_compile_options(
+        volumetric_lighting_tuning_policy_test
+        PRIVATE /W4 /WX /permissive-
+    )
+endif()
+add_test(NAME VolumetricLightingTuningPolicy COMMAND volumetric_lighting_tuning_policy_test)
+set_tests_properties(
+    VolumetricLightingTuningPolicy
+    PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;VolumetricLighting"
+)
+
 add_custom_target(
     run_host_tests
     COMMAND $<TARGET_FILE:performance_tuning_tests> --reporter compact
@@ -246,6 +271,7 @@ add_custom_target(
     COMMAND $<TARGET_FILE:volumetric_lighting_blur_test>
     COMMAND $<TARGET_FILE:skylighting_settings_test>
     COMMAND $<TARGET_FILE:actor_shape_bounds_test>
+    COMMAND $<TARGET_FILE:volumetric_lighting_tuning_policy_test>
     DEPENDS
         performance_tuning_tests
         scene_depth_test
@@ -254,6 +280,7 @@ add_custom_target(
         volumetric_lighting_blur_test
         skylighting_settings_test
         actor_shape_bounds_test
+        volumetric_lighting_tuning_policy_test
     WORKING_DIRECTORY $<TARGET_FILE_DIR:performance_tuning_tests>
     COMMENT "Running host-side C++ unit tests..."
     VERBATIM

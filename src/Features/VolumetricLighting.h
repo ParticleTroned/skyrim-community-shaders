@@ -1,10 +1,13 @@
 #pragma once
 
 #include "RE/B/BSVolumetricLightingRenderData.h"
+#include "VolumetricLightingTuning.h"
 
 struct VolumetricLighting : Feature
 {
 public:
+	using GodrayProfile = VolumetricLightingTuning::Profile;
+
 	struct TextureSize
 	{
 		int32_t Width = 320;
@@ -16,17 +19,11 @@ public:
 	{
 		bool ExteriorEnabled = true;
 		bool DisableWeatherInteractionDuringRain = false;
-		float GodrayIntensity = 1.0f;
-		float GodrayShaftIntensity = 1.0f;
-		float GodrayOpacity = 1.0f;
-		float GodraySaturation = 1.0f;
-		float CustomColorContribution = 0.0f;
-		float CustomColorRed = 1.0f;
-		float CustomColorGreen = 1.0f;
-		float CustomColorBlue = 1.0f;
+		GodrayProfile ExteriorGodrays;
 		int32_t ExteriorQuality = 2;
 		TextureSize ExteriorCustomSize;
 		bool InteriorEnabled = true;
+		GodrayProfile InteriorGodrays;
 		int32_t InteriorQuality = 2;
 		TextureSize InteriorCustomSize;
 	};
@@ -75,17 +72,23 @@ public:
 		return {
 			{ "ExteriorEnabled", true },
 			{ "DisableWeatherInteractionDuringRain", true },
-			{ "GodrayIntensity", true },
-			{ "GodrayShaftIntensity", true },
-			{ "GodrayOpacity", true },
-			{ "GodraySaturation", true },
-			{ "CustomColorContribution", true },
-			{ "CustomColorRed", true },
-			{ "CustomColorGreen", true },
-			{ "CustomColorBlue", true },
+			{ "ExteriorGodrays", { { "ShaftIntensity", true },
+									 { "Opacity", true },
+									 { "Saturation", true },
+									 { "CustomColorContribution", true },
+									 { "CustomColorRed", true },
+									 { "CustomColorGreen", true },
+									 { "CustomColorBlue", true } } },
 			{ "ExteriorQuality", true },
 			{ "ExteriorCustomSize", true },
 			{ "InteriorEnabled", true },
+			{ "InteriorGodrays", { { "ShaftIntensity", true },
+									 { "Opacity", true },
+									 { "Saturation", true },
+									 { "CustomColorContribution", true },
+									 { "CustomColorRed", true },
+									 { "CustomColorGreen", true },
+									 { "CustomColorBlue", true } } },
 			{ "InteriorQuality", true },
 			{ "InteriorCustomSize", true }
 		};
@@ -120,6 +123,8 @@ public:
 	}
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
+	/** @return The active context's finite-safe shader opacity, or neutral when tuning is unavailable. */
+	float GetRuntimeGodrayOpacity() const;
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
@@ -155,9 +160,10 @@ private:
 	static void SetVLQuality(VolumetricLightingDescriptor& descriptor, std::uint32_t quality);
 
 	void DrawGodrayTuningSettings();
+	void DrawGodrayProfileSettings(const char* label, GodrayProfile& profile);
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
-	static void SanitizeSettings(Settings& a_settings);
+	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
 	void SetupVL();
 	void UpdateBlurDimensions();
@@ -188,6 +194,7 @@ private:
 	bool inInterior = false;
 	bool inInteriorWithSun = false;
 	bool rainOnlySuppressionActive = false;
+	VolumetricLightingDescriptor runtimeDescriptor{};
 
 	struct VLData
 	{

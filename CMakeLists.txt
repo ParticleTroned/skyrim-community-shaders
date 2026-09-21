@@ -1673,6 +1673,67 @@ if(BUILD_CONTROLLER_TESTS)
 
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
 
+    add_controller_test(
+        shadow_batch_submissions_test
+        ShadowBatchSubmissions
+        tests/shadow_batch_submissions_test.cpp
+    )
+    target_link_libraries(
+        shadow_batch_submissions_test
+        PRIVATE unordered_dense::unordered_dense
+    )
+    set_tests_properties(ShadowBatchSubmissions PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
+        shadow_batch_hooks_test
+        ShadowBatchHooks
+        tests/shadow_batch_hooks_test.cpp
+    )
+    set(_shadow_batch_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/shadow-batch"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_shadow_batch_test_dir}/shadow_batch_hooks.h"
+            "${_shadow_batch_test_dir}/shadow_batch_install.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_shadow_batch_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_shadow_batch.cmake"
+        DEPENDS
+            src/EngineFixes/VRShadowBatch.cpp
+            tests/extract_shadow_batch.cmake
+        VERBATIM
+    )
+    target_sources(
+        shadow_batch_hooks_test
+        PRIVATE "${_shadow_batch_test_dir}/shadow_batch_hooks.h"
+    )
+    target_include_directories(
+        shadow_batch_hooks_test
+        PRIVATE "${_shadow_batch_test_dir}"
+    )
+    target_link_libraries(
+        shadow_batch_hooks_test
+        PRIVATE unordered_dense::unordered_dense
+    )
+    set_tests_properties(ShadowBatchHooks PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
+        shadow_batch_install_test
+        ShadowBatchInstall
+        tests/shadow_batch_install_test.cpp
+    )
+    target_sources(
+        shadow_batch_install_test
+        PRIVATE "${_shadow_batch_test_dir}/shadow_batch_install.h"
+    )
+    target_include_directories(
+        shadow_batch_install_test
+        PRIVATE "${_shadow_batch_test_dir}"
+    )
+    set_tests_properties(ShadowBatchInstall PROPERTIES TIMEOUT 30)
+
     set(_adaptive_balance_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-toggle"
     )

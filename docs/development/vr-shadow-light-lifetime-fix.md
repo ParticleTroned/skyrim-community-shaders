@@ -1,5 +1,11 @@
 # VR light ownership during COC
 
+The native dispatch implementation was revised on 2026-09-21 to retain
+only the current light and reselect live work after each render call.
+See [the PR96 dispatch review](vr-shadow-dispatch-review.md) for the
+regression, current validation and the unresolved circular-pass freeze.
+Historical build and runtime results below do not qualify this revision.
+
 ## Observed failure
 
 The 2026-09-12 diagnostic run in SkyrimVR PID 5236 completed its first
@@ -86,31 +92,43 @@ the descriptor-render call. No exception was recorded in this run. The
 zero-length NVIDIA command observed in the hang remains a separate finding;
 the capture does not establish which code wrote that command.
 
-The VR native shadow loop now takes its own local owning snapshot. It copies
-the active and pending owning lists and the accumulated render order under
-`lightQueueLock`, then releases the lock before virtual dispatch. The owning
-references survive the entire loop, independently of LLF frame/load resets.
-Rendering and final reference releases occur outside the engine lock.
-The shared `SceneLightSnapshot::RetainScene` method supplies the same list
-coverage to both native rendering and existing LLF consumers. Native capture
-omits the unused active-light enumeration and copies render order in one
-range assignment to avoid repeated vector growth under the queue lock.
-An empty, exhausted or initially null-terminated pass returns under the
-same lock before constructing the snapshot. It performs no allocation or
-light-reference acquisition.
+The VR native shadow loop selects from the live accumulated array under
+`lightQueueLock` before each dispatch. It copies only the selected light's
+reference from the active or pending owning lists, then releases the lock
+before virtual dispatch. That reference survives the complete render call,
+independently of LLF frame/load resets, and is released before selecting
+the next light. Rendering and lease releases occur outside the engine lock.
+`SceneLightSnapshot::OwnerIndex` stores non-owning list/slot hints, built
+once with reserved capacity on the first ordinary-light dispatch. Every
+hint is checked against the live owning list before acquiring a reference;
+moved or newly added owners use a live fallback lookup. Both this index
+and the existing frame snapshot share one owning-list traversal policy;
+clustered-light enumeration is unchanged. Empty and sun-only passes
+allocate nothing. An empty, exhausted or initially null-terminated pass
+acquires neither light nor scene references.
 
 The hook replaces the raw selection/dispatch loop at SkyrimVR+`0x13231FB`
 through `0x1323230`. Ghidra analysis of the retained PID 22880 image verifies
 the native selector at `0x12FA250`: it indexes the raw array at node+`0x258`.
-The replacement checks keys against retained owners before reading a light
-or its virtual table. The one exception is the exact `sunShadowDirLight`
-owned directly by the retained scene node, described below. It preserves
-the original render order, the native index passed by reference and
-null-terminated traversal, and additionally
-bounds traversal by the captured array size. An unknown owner, a non-shadow
-object, or a non-advancing index ends the pass. Allocation failure skips the
-pass after releasing the lock and any acquired references. Rendering
-exceptions propagate normally while local references unwind.
+The replacement acquires a current owner before reading a light or its
+virtual table. Ordinary lights require an owning-list reference; the exact
+`sunShadowDirLight` requires ownership of the scene that directly deletes
+it. The scene remains retained until the dispatch loop exits. No intrusive
+reference is added to the sun. The loop preserves the live render order,
+native index passed by reference and null termination, with an additional
+current-array bounds check. Cleared, shortened or null-terminated work is
+not replayed from a saved order. An unknown owner, a non-shadow object or a
+non-advancing index ends the pass. Rendering exceptions propagate normally
+while local references unwind. Index allocation failure releases the lock,
+logs once and skips the remainder of this pass; a subsequent call may retry.
+
+PR96 originally retained all lights and copied the work order for the whole
+loop. Its tests explicitly continued to render that copy after a worker
+cleared the live array. This differed from native selection and is no
+longer the contract. Lifetime retention alone does not keep withdrawn
+render work valid. The new regression fails against the original copied
+order and passes against live selection; it does not establish that this
+specific divergence created the later circular render-pass list.
 
 Installation is restricted to Skyrim VR 1.4.15 and requires all 184 bytes of
 the native function to match before either write. This covers the setup of
@@ -124,7 +142,7 @@ remain in the call path. This fix has no dependency on the shadow-lifetime
 observer or driver-command recorder. SE and AE receive no new executable
 patch or render-path change.
 
-### Scene-owned sun regression and correction
+### Historical scene-owned sun regression and correction
 
 The 2026-09-19 visual bisect isolated the player-following dark circle to
 PR96. The user reported its parent `5adb39d62981f855fd57af77c45bd57cf9b8a233`

@@ -85,6 +85,7 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 
 void Deferred::SetupResources()
 {
+	finalSceneDepthFrame.reset();
 	auto renderer = globals::game::renderer;
 
 	{
@@ -211,6 +212,7 @@ void Deferred::EarlyPrepasses()
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Early Prepass");
+	finalSceneDepthFrame.reset();
 
 	auto shaderCache = globals::shaderCache;
 
@@ -248,6 +250,7 @@ void Deferred::PrepassPasses()
 
 void Deferred::StartDeferred()
 {
+	finalSceneDepthFrame.reset();
 	if (!globals::state->inWorld)
 		return;
 	globals::state->UpdateSharedData(true, false);
@@ -294,6 +297,41 @@ void Deferred::StartDeferred()
 	OverrideBlendStates();
 }
 
+bool Deferred::IsSceneDepthFinal() const
+{
+	return globals::state && finalSceneDepthFrame && *finalSceneDepthFrame == globals::state->frameCount;
+}
+
+bool Deferred::CopySceneDepth()
+{
+	auto renderer = globals::game::renderer;
+	auto context = globals::d3d::context;
+	if (!renderer || !context || !globals::state)
+		return false;
+
+	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+
+	// A master-switch change can skip terrain rendering after its SRV redirection.
+	auto& terrainBlending = globals::features::terrainBlending;
+	if (terrainBlending.loaded && terrainBlending.blendedDepthTexture) {
+		auto* blendedDepthSRV = terrainBlending.blendedDepthTexture->srv.get();
+		if (blendedDepthSRV && depth.depthSRV == blendedDepthSRV)
+			depth.depthSRV = terrainBlending.depthSRVBackup;
+		if (blendedDepthSRV && depthCopy.depthSRV == blendedDepthSRV)
+			depthCopy.depthSRV = terrainBlending.prepassSRVBackup;
+	}
+
+	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV)
+		return false;
+
+	TracyD3D11Zone(globals::state->tracyCtx, "Deferred - Copy Scene Depth");
+	// Water also consumes this copy, including pixels outside the active scaled area.
+	context->CopyResource(depthCopy.texture, depth.texture);
+	finalSceneDepthFrame = globals::state->frameCount;
+	return true;
+}
+
 void Deferred::DeferredPasses()
 {
 	ZoneScoped;
@@ -301,6 +339,7 @@ void Deferred::DeferredPasses()
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	CopySceneDepth();
 
 	{
 		ID3D11Buffer* buffers[1] = { *globals::game::perFrame };
@@ -637,6 +676,8 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 
 void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
 {
+	// Each opaque pass invalidates the prior copy, even with deferred rendering disabled.
+	globals::deferred->finalSceneDepthFrame.reset();
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
 		// Here is where the first opaque objects start rendering
 		globals::deferred->StartDeferred();
@@ -663,16 +704,9 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	deferred->EndDeferred();
 
-	// Copy depth from before water
-	auto renderer = globals::game::renderer;
-	auto context = globals::d3d::context;
-
-	auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	auto depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-
-	context->CopyResource(depthCopy.texture, depth.texture);
-
-	// After this point, water starts rendering
+	// Water still needs completed opaque depth when no deferred pass produced it.
+	if (!deferred->IsSceneDepthFinal())
+		deferred->CopySceneDepth();
 };
 
 void Deferred::Hooks::BSCubeMapCamera_RenderCubemap::thunk(RE::NiAVObject* camera, int a2, bool a3, bool a4, bool a5)

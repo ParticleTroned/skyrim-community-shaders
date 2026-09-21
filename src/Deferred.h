@@ -3,6 +3,7 @@
 #include "Buffer.h"
 #include "Utils/LazyShader.h"
 #include <DirectXMath.h>
+#include <optional>
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
@@ -39,6 +40,8 @@ public:
 	void ResetBlendStates();
 	void DeferredPasses();
 	void EndDeferred();
+	/// True once the current frame has published completed opaque depth.
+	bool IsSceneDepthFinal() const;
 
 	void PrepassPasses();
 
@@ -101,6 +104,12 @@ public:
 	Buffer* perShadow = nullptr;
 	ID3D11ShaderResourceView* shadowView = nullptr;
 
+private:
+	/// Copies completed opaque depth without changing the active render targets.
+	bool CopySceneDepth();
+	std::optional<uint32_t> finalSceneDepthFrame;
+
+public:
 	struct Hooks
 	{
 		struct Main_RenderShadowMaps

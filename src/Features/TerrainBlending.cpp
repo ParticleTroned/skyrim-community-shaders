@@ -625,6 +625,6 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 			globals::state->EndPerfEvent();
 	}
 
-	RestoreTerrainBlendingMainDepthSrv(renderer, depthSRVBackup);
+	RestoreTerrainBlendingDepthSrvs(renderer, depthSRVBackup, prepassSRVBackup);
 }
 #undef I18N_KEY_PREFIX

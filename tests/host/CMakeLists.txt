@@ -58,10 +58,37 @@ set_tests_properties(
         LABELS "Host;UnitTests;PerformanceTuning"
 )
 
+set(_scene_depth_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/scene-depth")
+add_custom_command(
+    OUTPUT "${_scene_depth_test_dir}/scene_depth_under_test.h"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_scene_depth_test_dir}" -P
+        "${CMAKE_SOURCE_DIR}/tests/extract_scene_depth.cmake"
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/src/Deferred.cpp
+        ${CMAKE_SOURCE_DIR}/src/Utils/D3D.cpp
+        ${CMAKE_SOURCE_DIR}/tests/extract_scene_depth.cmake
+    VERBATIM
+)
+add_executable(
+    scene_depth_test
+    ${CMAKE_SOURCE_DIR}/tests/scene_depth_test.cpp
+    "${_scene_depth_test_dir}/scene_depth_under_test.h"
+)
+target_compile_features(scene_depth_test PRIVATE cxx_std_23)
+target_include_directories(scene_depth_test PRIVATE "${_scene_depth_test_dir}")
+if(MSVC)
+    target_compile_options(scene_depth_test PRIVATE /W4 /WX /permissive-)
+endif()
+add_test(NAME SceneDepth COMMAND scene_depth_test)
+set_tests_properties(SceneDepth PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;SceneDepth")
+
 add_custom_target(
     run_host_tests
     COMMAND $<TARGET_FILE:performance_tuning_tests> --reporter compact
-    DEPENDS performance_tuning_tests
+    COMMAND $<TARGET_FILE:scene_depth_test>
+    DEPENDS performance_tuning_tests scene_depth_test
     WORKING_DIRECTORY $<TARGET_FILE_DIR:performance_tuning_tests>
     COMMENT "Running host-side C++ unit tests..."
     VERBATIM

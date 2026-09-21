@@ -1,0 +1,707 @@
+{
+    "action": "run",
+    "async": true,
+    "continueOnError": false,
+    "steps": [
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 1
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 1,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 1,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 2
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 2,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 2,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 3
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 3,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 3,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 4
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 4,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 4,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 5
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 5,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 5,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 6
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 6,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 6,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 7
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 7,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 7,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 8
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 8,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 8,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 9
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 9,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 9,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 10
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 10,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 10,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 11
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 11,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 11,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 12
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 12,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 12,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 13
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 13,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 13,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 14
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 14,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 14,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 15
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 15,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 15,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 16
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 16,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 16,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 17
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 17,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 17,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 18
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 18,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 18,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 19
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 19,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 19,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 20
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 20,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+                "ownerId": "shadow-coc20-5s-pid22880-20260912T114320Z",
+                "transitionId": 20,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        }
+    ]
+}

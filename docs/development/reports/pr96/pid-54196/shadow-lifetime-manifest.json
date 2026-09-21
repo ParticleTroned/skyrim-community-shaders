@@ -1,0 +1,97 @@
+[
+    {
+        "name": "shadow-owner.wds",
+        "bytes": 470,
+        "sha256": "9BAD088986F258B22371E55A8E4ACE32BDF6EE3F7D57221276F9F3C0E183DC57"
+    },
+    {
+        "name": "shadow-owner.txt",
+        "bytes": 29071,
+        "sha256": "090CF64F961664AC4AE3EC76F07A1674077B09D81F61E91C405EE97098A2CD1E"
+    },
+    {
+        "name": "shadow-owner-stdout.txt",
+        "bytes": 27313,
+        "sha256": "2928FB092C536F54B2DB317C9B08819A00642A6B1D3BEBC3B53DE151D958C2FE"
+    },
+    {
+        "name": "shadow-descriptor.wds",
+        "bytes": 393,
+        "sha256": "174BC9E7089069A93FE04D6A168547999FC360D93002D46997A653D11FEB3F3F"
+    },
+    {
+        "name": "shadow-descriptor.txt",
+        "bytes": 18903,
+        "sha256": "132C2305C4E96F5E81C512524B1EC92A8CDED088A41B19EA20FF62DF5977EB94"
+    },
+    {
+        "name": "shadow-descriptor-stdout.txt",
+        "bytes": 17145,
+        "sha256": "35E02E3DE0CB48BC4C26861D8EA76D026E9F5218BE39B5BCA35EE6C89FDE18D7"
+    },
+    {
+        "name": "shadow-list.wds",
+        "bytes": 442,
+        "sha256": "997BE4B3F757112A7002A94DB10EDEFE29EE325E07000C41BE6D19A4FECD88E7"
+    },
+    {
+        "name": "shadow-list.txt",
+        "bytes": 16640,
+        "sha256": "9EE919F5AD581A36A9F9172ABD6A365C50392B351AA478CB5C29D17EF60CF64D"
+    },
+    {
+        "name": "shadow-list-stdout.txt",
+        "bytes": 14882,
+        "sha256": "D159F5BF7868E3A5CD8014904F55CF6FCADE8D60EDB92D10B8040E508D66D5B6"
+    },
+    {
+        "name": "shadow-release.wds",
+        "bytes": 342,
+        "sha256": "5127B68B7909F14F1C6DBE212D1CEBE874BD56E78E7DF8AA21804FA12F98A5BC"
+    },
+    {
+        "name": "shadow-release.txt",
+        "bytes": 14097,
+        "sha256": "E1007E41F2AFDE76FB43BE952D8EE168B915A0FDA2EE62C7C0B5CF16F7A14149"
+    },
+    {
+        "name": "shadow-release-stdout.txt",
+        "bytes": 12339,
+        "sha256": "5B47E80CAE9159424D80DA2058DBFC2BB72F43626CA22AF97CD3697D2CD6BFE7"
+    },
+    {
+        "name": "shadow-destruction.wds",
+        "bytes": 153,
+        "sha256": "F8D95503991081287AB82D25AD636285DABF37A4CF9231AE44C409A1FA43BDF0"
+    },
+    {
+        "name": "shadow-destruction.txt",
+        "bytes": 21826,
+        "sha256": "05B87B6F63F16F737FAEE75745E5BD529AE81795C3AE39EB26A7132D179C0F88"
+    },
+    {
+        "name": "shadow-destruction-stdout.txt",
+        "bytes": 20068,
+        "sha256": "F47BC060791E6480D8EE66DD7AC4507362D9E8B089FAEBB8B8CD757C1C9C2737"
+    },
+    {
+        "name": "descriptor-lifetime.wds",
+        "bytes": 204,
+        "sha256": "4B063121B01415B216EA9A21040BB6108D88EDC6B2AD283475EB6D185C319349"
+    },
+    {
+        "name": "descriptor-lifetime.txt",
+        "bytes": 16787,
+        "sha256": "D8D82CF73FE69BBDD78B150A5FB714D3BDDE68501380F5FE9CAF99298B4E2E23"
+    },
+    {
+        "name": "descriptor-lifetime-stdout.txt",
+        "bytes": 15029,
+        "sha256": "DB1C8C9B80FF6A3ABE851F479CFEC2BB3659ACCB4000F0002C20C8BF7E51CE25"
+    },
+    {
+        "name": "shadow-lifetime-findings.md",
+        "bytes": 7323,
+        "sha256": "17CE54693B0C9E519F01409AE3F542D28944D72759A764250F433656512FA4CD"
+    }
+]

@@ -1,0 +1,9 @@
+{
+    "base": "0x7ff886a80000",
+    "bytes": 65536,
+    "sha256": "22e1d8ee058147d48e8c79bfc5546cf4d6c849ce3b596c1213dfab7e8e42ca9c",
+    "function": "LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights",
+    "entry": "0x7ff886a84030",
+    "call": "0x7ff886a84410",
+    "producerBuildId": "d1b5a347cf75b29973f8e5a8d22477ce3e4a112b057566f329a7c218da4a7e6d"
+}

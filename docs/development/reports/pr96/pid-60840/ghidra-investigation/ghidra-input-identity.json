@@ -1,0 +1,89 @@
+{
+    "pid": 60840,
+    "dump": "[REDACTED_LOCAL_PATH]",
+    "modules": {
+        "nvidia": {
+            "moduleBase": "0x7ff852d20000",
+            "captureBase": "0x7ff8532b0000",
+            "captureBytes": 655360,
+            "sha256": "38d7737a8531718e68fdbd10009f7097f6942acc981cd6e06088d0e9ef246c9e",
+            "file": "[REDACTED_LOCAL_PATH]",
+            "functions": [
+                {
+                    "ip": "0x7ff8532b8859",
+                    "bounds": ["0x7ff8532b8710", "0x7ff8532b88b0", "0x7ff85689ee58"]
+                },
+                {
+                    "ip": "0x7ff8532b8aa1",
+                    "bounds": ["0x7ff8532b89d0", "0x7ff8532b8af5", "0x7ff8568751f4"]
+                },
+                {
+                    "ip": "0x7ff8532b9300",
+                    "bounds": ["0x7ff8532b92a0", "0x7ff8532b9345", "0x7ff8568741a8"]
+                },
+                {
+                    "ip": "0x7ff8532b938a",
+                    "bounds": ["0x7ff8532b9350", "0x7ff8532b93ad", "0x7ff85687a07c"]
+                },
+                {
+                    "ip": "0x7ff8532b9e5b",
+                    "bounds": ["0x7ff8532b9e20", "0x7ff8532b9e6f", "0x7ff856876850"]
+                },
+                {
+                    "ip": "0x7ff85334854c",
+                    "bounds": ["0x7ff853348530", "0x7ff85334857c", "0x7ff8568736a0"]
+                }
+            ]
+        },
+        "steamvr": {
+            "moduleBase": "0x7ff8583e0000",
+            "captureBase": "0x7ff858520000",
+            "captureBytes": 131072,
+            "sha256": "ea022a854546205ee9a0182664efe736198d6815c9f825d033b5d9272076f07f",
+            "file": "[REDACTED_LOCAL_PATH]",
+            "functions": [
+                {
+                    "ip": "0x7ff85852d998",
+                    "bounds": ["0x7ff85852d8f0", "0x7ff85852da38", "0x7ff8588087b8"]
+                },
+                {
+                    "ip": "0x7ff858524b06",
+                    "bounds": ["0x7ff858524886", "0x7ff858524bd3", "0x7ff858817578"]
+                },
+                {
+                    "ip": "0x7ff858522de3",
+                    "bounds": ["0x7ff858522db0", "0x7ff858522de8", "0x7ff8588087c0"]
+                }
+            ]
+        },
+        "csx": {
+            "moduleBase": "0x7ff85f9a0000",
+            "captureBase": "0x7ff8600c0000",
+            "captureBytes": 65536,
+            "sha256": "4388a16189cb5a4383c5184b2640ea9440837c66d7db440810786899939951a4",
+            "file": "[REDACTED_LOCAL_PATH]",
+            "functions": [
+                {
+                    "ip": "0x7ff8600c556f",
+                    "bounds": ["0x7ff8600c4c40", "0x7ff8600c5cbf", "0x7ff860cfdea0"]
+                },
+                {
+                    "ip": "0x7ff8600c6ca2",
+                    "bounds": ["0x7ff8600c5f40", "0x7ff8600c8898", "0x7ff860cfdfa8"]
+                }
+            ]
+        }
+    },
+    "nvidiaContext": {
+        "address": "0x29e65a1a810",
+        "fields": {
+            "0x530": "0x17d4",
+            "0x538": "0xde3c",
+            "0x540": "0x0",
+            "0x548": "0x29e65a1a810",
+            "0x550": "0x17cc",
+            "0x558": "0x17d0",
+            "0x6c8": "0x29e65694c80"
+        }
+    }
+}

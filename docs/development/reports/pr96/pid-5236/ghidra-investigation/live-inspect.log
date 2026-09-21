@@ -1,0 +1,188 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.032 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+*** wait with pending attach
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+Symbol search path is: srv*
+Executable search path is:
+WARNING: Process 5236 is not attached as a debuggee
+         The process can be examined but debug events will not be received
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+(1474.b96c): Wake debugger - code 80000007 (first chance)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .sympath+ [REDACTED_LOCAL_PATH]
+Symbol search path is: srv*;[REDACTED_LOCAL_PATH]
+Expanded Symbol search path is: cache*;SRV*[REDACTED_ENDPOINT]]
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+OK                                             [REDACTED_LOCAL_PATH]
+0:000> .reload /f CommunityShaders.dll
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+0:000> .echo ==== LIVE_MAIN_THREAD ====
+==== LIVE_MAIN_THREAD ====
+0:000> ~0s
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> k 40
+Child-SP          RetAddr               Call Site
+0000001a`174fa6c8 00007ff9`8753be9f     ntdll!NtWaitForSingleObject+0x14
+0000001a`174fa6d0 00007ff8`532b8859     KERNELBASE!WaitForSingleObjectEx+0xaf
+0000001a`174fa770 00007ff8`532b8aa1     nvwgf2umx!SetDependencyInfo+0x69e79
+0000001a`174faa50 00007ff8`532b9300     nvwgf2umx!SetDependencyInfo+0x6a0c1
+0000001a`174faa80 00007ff8`532b938a     nvwgf2umx!SetDependencyInfo+0x6a920
+0000001a`174faab0 00007ff8`532b9e5b     nvwgf2umx!SetDependencyInfo+0x6a9aa
+0000001a`174faae0 00007ff8`5334854c     nvwgf2umx!SetDependencyInfo+0x6b47b
+0000001a`174fab10 00007ff9`820a95d2     nvwgf2umx!OpenAdapter10+0x24c
+0000001a`174fab40 00007ff9`820a9351     d3d11!NDXGI::CDevice::Flush+0x82
+0000001a`174fab70 00007ff9`821d4b50     d3d11!NDXGI::CDevice::FlushAndEnqueueSetEvent+0x55
+0000001a`174fac80 00007ff8`5852d998     d3d11!CContext::TID3D11DeviceContext_Flush_AppEntered+0x70
+0000001a`174facf0 00007ff8`58524b06     vrclient_x64!HmdSystemFactory+0xe7b8
+0000001a`174fad20 00007ff8`58522de3     vrclient_x64!HmdSystemFactory+0x5926
+0000001a`174faf20 00007ff8`86d23c5f     vrclient_x64!HmdSystemFactory+0x3c03
+(Inline Function) --------`--------     CommunityShaders!REL::invoke+0x1c
+(Inline Function) --------`--------     CommunityShaders!REL::Relocation<enum vr::EVRCompositorError __cdecl(vr::IVRCompositor *,enum vr::EVREye,vr::Texture_t const *,vr::VRTextureBounds_t const *,enum vr::EVRSubmitFlags)>::operator()+0x28
+0000001a`174faf80 00007ff8`86d25392     CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+0000001a`174fb460 00007ff6`271039d3     CommunityShaders!`anonymous namespace'::IVRCompositor_Submit::thunk+0xd62
+0000001a`174ff1e0 00007ff8`86d272b0     SkyrimVR+0xc539d3
+(Inline Function) --------`--------     CommunityShaders!REL::invoke+0x13
+(Inline Function) --------`--------     CommunityShaders!REL::Relocation<enum vr::EVRCompositorError __cdecl(RE::BSOpenVR *,vr::Texture_t const *,vr::VRTextureBounds_t const *,enum vr::EVRSubmitFlags)>::operator()+0x13
+0000001a`174ff360 00007ff6`277d3f00     CommunityShaders!`anonymous namespace'::BSOpenVR_Submit::thunk+0x290
+0000001a`174ff470 00007ff6`26a69bce     SkyrimVR+0x1323f00
+0000001a`174ff4a0 00007ff6`26a692fc     SkyrimVR+0x5b9bce
+0000001a`174ff580 00007ff6`26a68ca3     SkyrimVR+0x5b92fc
+0000001a`174ff5e0 00007ff6`26a6b18d     SkyrimVR+0x5b8ca3
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+0000001a`174ff770 00007ff8`82f4b5c5     SkyrimVR+0x5bb18d
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+0000001a`174ff7c0 00007ff8`c085395e     PlayerRotationGPSupport!SKSEPlugin_Load+0x55ac5
+0000001a`174ff860 00007ff6`26a66e94     hdtsmp64+0x4395e
+0000001a`174ff8a0 00007ff6`26a642c5     SkyrimVR+0x5b6e94
+0000001a`174ff930 00007ff6`2783af0a     SkyrimVR+0x5b42c5
+0000001a`174ff960 00007ff9`891ccd87     SkyrimVR+0x138af0a
+0000001a`174ff9a0 00007ff9`8a04caec     KERNEL32!BaseThreadInitThunk+0x17
+0000001a`174ff9d0 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+0:000> r
+rax=0000000000000004 rbx=00000000000017a4 rcx=00000000000017a4
+rdx=0000000000000000 rsi=00000000000003e8 rdi=0000000000000000
+rip=00007ff98a100e44 rsp=0000001a174fa6c8 rbp=0000000000000083
+ r8=0000001a174fa6f8  r9=0000000000000000 r10=00000000000017a4
+r11=00000000000017a4 r12=0000000000000001 r13=0000000000000000
+r14=0000001a174fa6f8 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .echo ==== EXCEPTION_ADDRESS ====
+==== EXCEPTION_ADDRESS ====
+0:000> !address 33509950
+
+Usage:                  Free
+Base Address:           00000000`0041e000
+End Address:            00000000`53d80000
+Region Size:            00000000`53962000 (   1.306 GB)
+State:                  00010000          MEM_FREE
+Protect:                00000001          PAGE_NOACCESS
+Type:                   <info not present at the target>
+
+
+Content source: 0 (invalid), length: 208766b0
+0:000> .echo ==== SHADOW_HOOK_TARGETS ====
+==== SHADOW_HOOK_TARGETS ====
+0:000> x CommunityShaders!*ShadowLifetime*g_construct*
+00007ff8`8810c078 CommunityShaders!Diagnostics::ShadowLifetime::g_constructLight = 0x00007ff5`e6d80d80
+00007ff8`8810c060 CommunityShaders!Diagnostics::ShadowLifetime::g_constructAccumulator = 0x00007ff5`e6d80de0
+0:000> x CommunityShaders!*ShadowLifetime*g_destroy*
+00007ff8`8810c058 CommunityShaders!Diagnostics::ShadowLifetime::g_destroyLight = 0x00007ff5`e6d80e40
+00007ff8`8810c070 CommunityShaders!Diagnostics::ShadowLifetime::g_destroyAccumulator = 0x00007ff5`e6d80ea0
+00007ff8`8810c068 CommunityShaders!Diagnostics::ShadowLifetime::g_destroyDescriptor = 0x00007ff5`e6d80fc0
+0:000> x CommunityShaders!*ShadowLifetime*g_release*
+00007ff8`8810c040 CommunityShaders!Diagnostics::ShadowLifetime::g_release = 0x00007ff5`e6d80f60
+0:000> x CommunityShaders!*ShadowLifetime*g_render*
+00007ff8`8810c050 CommunityShaders!Diagnostics::ShadowLifetime::g_renderDescriptor = 0x00007ff6`277fc370
+00007ff8`8810c048 CommunityShaders!Diagnostics::ShadowLifetime::g_render = 0x00007ff5`e6d80f00
+0:000> .echo ==== LOADED_MODULES ====
+==== LOADED_MODULES ====
+0:000> lm m SkyrimVR
+start             end                 module name
+00007ff6`264b0000 00007ff6`29e09000   SkyrimVR C (no symbols)
+0:000> lm m CommunityShaders
+start             end                 module name
+00007ff8`86600000 00007ff8`8827c000   CommunityShaders C (private pdb symbols)  [REDACTED_LOCAL_PATH]
+0:000> lm m nvwgf2umx
+start             end                 module name
+00007ff8`52d20000 00007ff8`582c5000   nvwgf2umx   (export symbols)       [REDACTED_LOCAL_PATH]
+0:000> lm m vrclient_x64
+start             end                 module name
+00007ff8`583e0000 00007ff8`588c4000   vrclient_x64   (export symbols)       [REDACTED_LOCAL_PATH]
+0:000> qd
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

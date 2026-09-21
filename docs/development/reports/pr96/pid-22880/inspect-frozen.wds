@@ -1,0 +1,22 @@
+.sympath [REDACTED_LOCAL_PATH]
+.reload /f CommunityShaders.dll
+.lines -e
+~0s
+kv 30
+.frame /r 2
+r
+.frame /r e
+dv /t /v
+.frame /r f
+dv /t /v
+~~[8b34]s
+r
+kv 30
+.frame /r c
+r
+.frame /r b
+r
+lmvm nvwgf2umx
+lmvm vrclient_x64
+ln 7ffce8fc1928
+q

@@ -1,0 +1,18 @@
+[
+    {
+        "function": "command_consumer",
+        "rva": "0x598370",
+        "bytes": 918,
+        "identical": true,
+        "currentSha256": "c5ff0b308dc2681ea7541eea69d3b8107944939a8e759c24163ef5e7f5face46",
+        "previousSha256": "c5ff0b308dc2681ea7541eea69d3b8107944939a8e759c24163ef5e7f5face46"
+    },
+    {
+        "function": "opcode_zero_handler",
+        "rva": "0x2ec840",
+        "bytes": 266,
+        "identical": true,
+        "currentSha256": "d03b630d424a57e997c891ccc785c68eb6f3b1e3150124ddc1bef308dfe8431e",
+        "previousSha256": "d03b630d424a57e997c891ccc785c68eb6f3b1e3150124ddc1bef308dfe8431e"
+    }
+]

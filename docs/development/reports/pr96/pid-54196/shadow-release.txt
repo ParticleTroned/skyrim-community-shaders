@@ -1,0 +1,239 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+OK                                             [REDACTED_LOCAL_PATH]
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.015 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+OK                                             [REDACTED_LOCAL_PATH]
+Symbol search path is: [REDACTED_LOCAL_PATH];[REDACTED_LOCAL_PATH]
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 00:34:07.000 2026 (UTC + 2:00)
+System Uptime: 2 days 3:23:31.656
+Process Uptime: 0 days 0:08:37.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+..................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(d3b4.7848): Access violation - code c0000005 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtGetContextThread+0x14:
+00007ff9`8a102d14 c3              ret
+0:000> .echo === SHADOW LIST SELECTOR ===
+=== SHADOW LIST SELECTOR ===
+0:000> u SkyrimVR+12fa250 SkyrimVR+12fa2b0
+*** WARNING: Unable to verify checksum for SkyrimVR.exe
+SkyrimVR+0x12fa250:
+00007ff6`724aa250 488b8158020000  mov     rax,qword ptr [rcx+258h]
+00007ff6`724aa257 8bd2            mov     edx,edx
+00007ff6`724aa259 488b04d0        mov     rax,qword ptr [rax+rdx*8]
+00007ff6`724aa25d c3              ret
+00007ff6`724aa25e cc              int     3
+00007ff6`724aa25f cc              int     3
+00007ff6`724aa260 cc              int     3
+00007ff6`724aa261 cc              int     3
+00007ff6`724aa262 cc              int     3
+00007ff6`724aa263 cc              int     3
+00007ff6`724aa264 cc              int     3
+00007ff6`724aa265 cc              int     3
+00007ff6`724aa266 cc              int     3
+00007ff6`724aa267 cc              int     3
+00007ff6`724aa268 cc              int     3
+00007ff6`724aa269 cc              int     3
+00007ff6`724aa26a cc              int     3
+00007ff6`724aa26b cc              int     3
+00007ff6`724aa26c cc              int     3
+00007ff6`724aa26d cc              int     3
+00007ff6`724aa26e cc              int     3
+00007ff6`724aa26f cc              int     3
+00007ff6`724aa270 4533d2          xor     r10d,r10d
+00007ff6`724aa273 4c8bc1          mov     r8,rcx
+00007ff6`724aa276 418bc2          mov     eax,r10d
+00007ff6`724aa279 398168020000    cmp     dword ptr [rcx+268h],eax
+00007ff6`724aa27f 7642            jbe     SkyrimVR+0x12fa2c3 (00007ff6`724aa2c3)
+00007ff6`724aa281 0f1f4000        nop     dword ptr [rax]
+00007ff6`724aa285 6666660f1f840000000000 nop word ptr [rax+rax]
+00007ff6`724aa290 498b8858020000  mov     rcx,qword ptr [r8+258h]
+00007ff6`724aa297 8bd0            mov     edx,eax
+00007ff6`724aa299 4c8b0cd1        mov     r9,qword ptr [rcx+rdx*8]
+00007ff6`724aa29d 4d85c9          test    r9,r9
+00007ff6`724aa2a0 7416            je      SkyrimVR+0x12fa2b8 (00007ff6`724aa2b8)
+00007ff6`724aa2a2 41c78180050000ff000000 mov dword ptr [r9+580h],0FFh
+00007ff6`724aa2ad 498b8858020000  mov     rcx,qword ptr [r8+258h]
+0:000> .echo === ACCUMULATED SHADOW POINTERS ===
+=== ACCUMULATED SHADOW POINTERS ===
+0:000> dps 269105a4770 La
+00000269`105a4770  00000000`00000000
+00000269`105a4778  00000000`00000000
+00000269`105a4780  00000000`00000000
+00000269`105a4788  00000000`00000000
+00000269`105a4790  00000000`00000000
+00000269`105a4798  00000000`00000000
+00000269`105a47a0  00000000`00000000
+00000269`105a47a8  00000000`00000000
+00000269`105a47b0  00000000`00000000
+00000269`105a47b8  00000000`00000000
+0:000> .echo === PARABOLIC SHADOW LIGHT DELETE ===
+=== PARABOLIC SHADOW LIGHT DELETE ===
+0:000> uf SkyrimVR+13714b0
+SkyrimVR+0x13714b0:
+00007ff6`725214b0 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ff6`725214b5 57              push    rdi
+00007ff6`725214b6 4883ec20        sub     rsp,20h
+00007ff6`725214ba 83b94001000002  cmp     dword ptr [rcx+140h],2
+00007ff6`725214c1 488d0528ad5900  lea     rax,[SkyrimVR+0x190c1f0 (00007ff6`72abc1f0)]
+00007ff6`725214c8 488901          mov     qword ptr [rcx],rax
+00007ff6`725214cb 8bfa            mov     edi,edx
+00007ff6`725214cd 488bd9          mov     rbx,rcx
+00007ff6`725214d0 7511            jne     SkyrimVR+0x13714e3 (00007ff6`725214e3)
+
+SkyrimVR+0x13714d2:
+00007ff6`725214d2 488b8148010000  mov     rax,qword ptr [rcx+148h]
+00007ff6`725214d9 c7806c010000ffffffff mov dword ptr [rax+16Ch],0FFFFFFFFh
+
+SkyrimVR+0x13714e3:
+00007ff6`725214e3 e8289ffdff      call    SkyrimVR+0x134b410 (00007ff6`724fb410)
+00007ff6`725214e8 40f6c701        test    dil,1
+00007ff6`725214ec 740d            je      SkyrimVR+0x13714fb (00007ff6`725214fb)
+
+SkyrimVR+0x13714ee:
+00007ff6`725214ee bac0050000      mov     edx,5C0h
+00007ff6`725214f3 488bcb          mov     rcx,rbx
+00007ff6`725214f6 e8b18c0100      call    SkyrimVR+0x138a1ac (00007ff6`7253a1ac)
+
+SkyrimVR+0x13714fb:
+00007ff6`725214fb 488bc3          mov     rax,rbx
+00007ff6`725214fe 488b5c2430      mov     rbx,qword ptr [rsp+30h]
+00007ff6`72521503 4883c420        add     rsp,20h
+00007ff6`72521507 5f              pop     rdi
+00007ff6`72521508 c3              ret
+0:000> .echo === PARABOLIC RETURN SHADOWMAPS ===
+=== PARABOLIC RETURN SHADOWMAPS ===
+0:000> uf SkyrimVR+1371440
+SkyrimVR+0x134b8f0:
+00007ff6`724fb8f0 33d2            xor     edx,edx
+00007ff6`724fb8f2 4c8bc1          mov     r8,rcx
+00007ff6`724fb8f5 399140010000    cmp     dword ptr [rcx+140h],edx
+00007ff6`724fb8fb 765b            jbe     SkyrimVR+0x134b958 (00007ff6`724fb958)
+
+SkyrimVR+0x134b8fd:
+00007ff6`724fb8fd 0f1f00          nop     dword ptr [rax]
+
+SkyrimVR+0x134b900:
+00007ff6`724fb900 8bc2            mov     eax,edx
+00007ff6`724fb902 4c69c808010000  imul    r9,rax,108h
+00007ff6`724fb909 498b8048010000  mov     rax,qword ptr [r8+148h]
+00007ff6`724fb910 42837c0864ff    cmp     dword ptr [rax+r9+64h],0FFFFFFFFh
+00007ff6`724fb916 7435            je      SkyrimVR+0x134b94d (00007ff6`724fb94d)
+
+SkyrimVR+0x134b918:
+00007ff6`724fb918 428b4c0870      mov     ecx,dword ptr [rax+r9+70h]
+00007ff6`724fb91d b801000000      mov     eax,1
+00007ff6`724fb922 d3e0            shl     eax,cl
+00007ff6`724fb924 0905c6a9b800    or      dword ptr [SkyrimVR+0x1ed62f0 (00007ff6`730862f0)],eax
+00007ff6`724fb92a 498b8048010000  mov     rax,qword ptr [r8+148h]
+00007ff6`724fb931 42c7440864ffffffff mov   dword ptr [rax+r9+64h],0FFFFFFFFh
+00007ff6`724fb93a 498b8048010000  mov     rax,qword ptr [r8+148h]
+00007ff6`724fb941 42c78408e40000000000803f mov dword ptr [rax+r9+0E4h],3F800000h
+
+SkyrimVR+0x134b94d:
+00007ff6`724fb94d ffc2            inc     edx
+00007ff6`724fb94f 413b9040010000  cmp     edx,dword ptr [r8+140h]
+00007ff6`724fb956 72a8            jb      SkyrimVR+0x134b900 (00007ff6`724fb900)
+
+SkyrimVR+0x134b958:
+00007ff6`724fb958 c3              ret
+
+SkyrimVR+0x1371440:
+00007ff6`72521440 83b94001000002  cmp     dword ptr [rcx+140h],2
+00007ff6`72521447 7511            jne     SkyrimVR+0x137145a (00007ff6`7252145a)
+
+SkyrimVR+0x1371449:
+00007ff6`72521449 488b8148010000  mov     rax,qword ptr [rcx+148h]
+00007ff6`72521450 c7806c010000ffffffff mov dword ptr [rax+16Ch],0FFFFFFFFh
+
+SkyrimVR+0x137145a:
+00007ff6`7252145a e991a4fdff      jmp     SkyrimVR+0x134b8f0 (00007ff6`724fb8f0)
+0:000> .echo === PARABOLIC RTTI ===
+=== PARABOLIC RTTI ===
+0:000> dd poi(SkyrimVR+190c1f0-8) L6
+00007ff6`72be3448  00000001 00000000 00000000 01f80ec0
+00007ff6`72be3458  01a33470 01a33448
+0:000> .echo === COMPLETE ===
+=== COMPLETE ===
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

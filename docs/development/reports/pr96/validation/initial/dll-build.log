@@ -1,0 +1,1694 @@
+Initialized the MSVC environment with [REDACTED_LOCAL_PATH]
+Using vcpkg at [REDACTED_LOCAL_PATH]
+MSBuild version 18.8.2+ce25c0108 for .NET Framework
+
+  Checking File Globs
+  1>Refreshing canonical CSX build provenance
+  d8c33e2807eacc0101b746a8b37e161e4f2da89720f3dd9aa867ebdc6f3229c0
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass_16bit_permutations.h
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  Scanning sources for module dependencies...
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  ffx_assert.cpp
+  ffx_message.cpp
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  ffx_assert.cpp
+  ffx_message.cpp
+  AIFormulas.cpp
+  AIProcess.cpp
+  ffx_assert.cpp
+  ffx_message.cpp
+  ffx_object_management.cpp
+  ffx_frameinterpolation.cpp
+  ffx_object_management.cpp
+  ffx_fsr3upscaler.cpp
+  ffx_object_management.cpp
+  ffx_opticalflow.cpp
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  AITimer.cpp
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass_permutations.h
+  ActiveEffect.cpp
+  ffx_fsr3upscaler_x64.vcxproj -> [REDACTED_LOCAL_PATH]
+  ffx_frameinterpolation_x64.vcxproj -> [REDACTED_LOCAL_PATH]
+  ActiveEffectFactory.cpp
+  ffx_opticalflow_x64.vcxproj -> [REDACTED_LOCAL_PATH]
+  Actor.cpp
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass_wave64_16bit_permutations.h
+  ActorEquipManager.cpp
+  ActorKill.cpp
+  ActorValueList.cpp
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass_wave64_permutations.h
+  ActorValueOwner.cpp
+  AddCallbackVisitor.cpp
+  AnimationClipDataSingleton.cpp
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_inpainting_pyramid_pass_16bit_permutations.h
+  AnimationSystemUtils.cpp
+  ArmorRatingVisitor.cpp
+  ArmorRatingVisitorBase.cpp
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_inpainting_pyramid_pass_permutations.h
+  Array.cpp
+  AutoVanityState.cpp
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_inpainting_pyramid_pass_wave64_16bit_permutations.h
+  BGSAcousticSpace.cpp
+  BGSAttackData.cpp
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_compute_inpainting_pyramid_pass_wave64_permutations.h
+  BGSBaseAlias.cpp
+  BGSBipedObjectForm.cpp
+  BGSColorForm.cpp
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl
+  ffx_frameinterpolation_compute_inpainting_pyramid_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_debug_view_pass_16bit_permutations.h
+  BGSConstructibleObject.cpp
+  ffx_frameinterpolation_debug_view_pass.hlsl
+  ffx_frameinterpolation_debug_view_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_debug_view_pass_permutations.h
+  ffx_frameinterpolation_debug_view_pass.hlsl
+  ffx_frameinterpolation_debug_view_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_debug_view_pass_wave64_16bit_permutations.h
+  BGSCreatedObjectManager.cpp
+  ffx_frameinterpolation_debug_view_pass.hlsl
+  ffx_frameinterpolation_debug_view_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_debug_view_pass_wave64_permutations.h
+  ffx_frameinterpolation_debug_view_pass.hlsl
+  ffx_frameinterpolation_debug_view_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_disocclusion_mask_pass_16bit_permutations.h
+  BGSDebris.cpp
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_disocclusion_mask_pass_permutations.h
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_disocclusion_mask_pass_wave64_16bit_permutations.h
+  BGSDecalNode.cpp
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_disocclusion_mask_pass_wave64_permutations.h
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl
+  ffx_frameinterpolation_disocclusion_mask_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_game_motion_vector_field_pass_16bit_permutations.h
+  BGSDefaultObjectManager.cpp
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_game_motion_vector_field_pass_permutations.h
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_game_motion_vector_field_pass_wave64_16bit_permutations.h
+  BGSEntryPointFunctionDataActivateChoice.cpp
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_game_motion_vector_field_pass_wave64_permutations.h
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl
+  ffx_frameinterpolation_game_motion_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_inpainting_pass_16bit_permutations.h
+  BGSEntryPointPerkEntry.cpp
+  ffx_frameinterpolation_inpainting_pass.hlsl
+  ffx_frameinterpolation_inpainting_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_inpainting_pass_permutations.h
+  ffx_frameinterpolation_inpainting_pass.hlsl
+  ffx_frameinterpolation_inpainting_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_inpainting_pass_wave64_16bit_permutations.h
+  BGSFootstepManager.cpp
+  ffx_frameinterpolation_inpainting_pass.hlsl
+  ffx_frameinterpolation_inpainting_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_inpainting_pass_wave64_permutations.h
+  BGSHeadPart.cpp
+  ffx_frameinterpolation_inpainting_pass.hlsl
+  ffx_frameinterpolation_inpainting_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_optical_flow_vector_field_pass_16bit_permutations.h
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_optical_flow_vector_field_pass_permutations.h
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_optical_flow_vector_field_pass_wave64_16bit_permutations.h
+  BGSIdleCollection.cpp
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_optical_flow_vector_field_pass_wave64_permutations.h
+  BGSKeyword.cpp
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl
+  ffx_frameinterpolation_optical_flow_vector_field_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_pass_16bit_permutations.h
+  ffx_frameinterpolation_pass.hlsl
+  ffx_frameinterpolation_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_pass_permutations.h
+  BGSKeywordForm.cpp
+  ffx_frameinterpolation_pass.hlsl
+  ffx_frameinterpolation_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_pass_wave64_16bit_permutations.h
+  BGSListForm.cpp
+  ffx_frameinterpolation_pass.hlsl
+  ffx_frameinterpolation_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_pass_wave64_permutations.h
+  BGSLocation.cpp
+  ffx_frameinterpolation_pass.hlsl
+  ffx_frameinterpolation_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_and_dilate_pass_16bit_permutations.h
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl: Processed 8 shader permutations, found 4 duplicates (4 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_and_dilate_pass_permutations.h
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl: Processed 8 shader permutations, found 4 duplicates (4 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_and_dilate_pass_wave64_16bit_permutations.h
+  BGSOpenCloseForm.cpp
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl: Processed 8 shader permutations, found 4 duplicates (4 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_and_dilate_pass_wave64_permutations.h
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl
+  ffx_frameinterpolation_reconstruct_and_dilate_pass.hlsl: Processed 8 shader permutations, found 4 duplicates (4 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_previous_depth_pass_16bit_permutations.h
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_previous_depth_pass_permutations.h
+  BGSPerkEntry.cpp
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_previous_depth_pass_wave64_16bit_permutations.h
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_reconstruct_previous_depth_pass_wave64_permutations.h
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl
+  ffx_frameinterpolation_reconstruct_previous_depth_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_setup_pass_16bit_permutations.h
+  BGSPerkRankArray.cpp
+  ffx_frameinterpolation_setup_pass.hlsl
+  ffx_frameinterpolation_setup_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_setup_pass_permutations.h
+  ffx_frameinterpolation_setup_pass.hlsl
+  ffx_frameinterpolation_setup_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_setup_pass_wave64_16bit_permutations.h
+  ffx_frameinterpolation_setup_pass.hlsl
+  ffx_frameinterpolation_setup_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_frameinterpolation_setup_pass_wave64_permutations.h
+  ffx_frameinterpolation_setup_pass.hlsl
+  ffx_frameinterpolation_setup_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (6 found early).
+  Generating ../shaders/dx11/ffx_fsr1_easu_pass_16bit_permutations.h
+  BGSRefAlias.cpp
+  BGSSaveLoadManager.cpp
+  ffx_fsr1_easu_pass.hlsl
+  ffx_fsr1_easu_pass.hlsl: Processed 8 shader permutations, found 4 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr1_easu_pass_permutations.h
+  BGSSkillPerkTreeNode.cpp
+  BGSSoundCategory.cpp
+  BGSStoryTeller.cpp
+  ffx_fsr1_easu_pass.hlsl
+  ffx_fsr1_easu_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (0 found early).
+  BSAtomic.cpp
+  Generating ../shaders/dx11/ffx_fsr1_easu_pass_wave64_16bit_permutations.h
+  BSAudioManager.cpp
+  BSCompoundFrustum.cpp
+  ffx_fsr1_easu_pass.hlsl
+  ffx_fsr1_easu_pass.hlsl: Processed 8 shader permutations, found 4 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr1_easu_pass_wave64_permutations.h
+  BSCubeMapCamera.cpp
+  BSCullingProcess.cpp
+  ffx_fsr1_easu_pass.hlsl
+  ffx_fsr1_easu_pass.hlsl: Processed 8 shader permutations, found 6 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr1_rcas_pass_16bit_permutations.h
+  ffx_fsr1_rcas_pass.hlsl
+  ffx_fsr1_rcas_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (4 found early).
+  BSDirectInputManager.cpp
+  Generating ../shaders/dx11/ffx_fsr1_rcas_pass_permutations.h
+  BSEffectShaderData.cpp
+  ffx_fsr1_rcas_pass.hlsl
+  ffx_fsr1_rcas_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (4 found early).
+  Generating ../shaders/dx11/ffx_fsr1_rcas_pass_wave64_16bit_permutations.h
+  ffx_fsr1_rcas_pass.hlsl
+  ffx_fsr1_rcas_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (4 found early).
+  Generating ../shaders/dx11/ffx_fsr1_rcas_pass_wave64_permutations.h
+  ffx_fsr1_rcas_pass.hlsl
+  ffx_fsr1_rcas_pass.hlsl: Processed 8 shader permutations, found 7 duplicates (4 found early).
+  Generating ../shaders/dx11/ffx_fsr2_accumulate_pass_16bit_permutations.h
+  BSExtraData.cpp
+  BSFaceGenAnimationData.cpp
+  BSFaceGenKeyframeMultiple.cpp
+  BSFaceGenNiNode.cpp
+  BSFadeNode.cpp
+  BSFixedString.cpp
+  ffx_fsr2_accumulate_pass.hlsl
+  ffx_fsr2_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr2_accumulate_pass_permutations.h
+  BSGamepadDevice.cpp
+  BSGameSound.cpp
+  BSGeometry.cpp
+  BSHandleRefObject.cpp
+  BSIStream.cpp
+  BSInputDevice.cpp
+  ffx_fsr2_accumulate_pass.hlsl
+  ffx_fsr2_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr2_accumulate_pass_wave64_16bit_permutations.h
+  BSInputDeviceFactory.cpp
+  BSInputDeviceManager.cpp
+  BSInputEventQueue.cpp
+  BSInstanceTriShape.cpp
+  BSInvMarker.cpp
+  ffx_fsr2_accumulate_pass.hlsl
+  ffx_fsr2_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr2_accumulate_pass_wave64_permutations.h
+  BSKeyboardDevice.cpp
+  BSLeafAnimNode.cpp
+  BSLightingShaderMaterialBase.cpp
+  BSLightingShaderProperty.cpp
+  BSModelDB.cpp
+  ffx_fsr2_accumulate_pass.hlsl
+  ffx_fsr2_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr2_autogen_reactive_pass_16bit_permutations.h
+  ffx_fsr2_autogen_reactive_pass.hlsl
+  ffx_fsr2_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_autogen_reactive_pass_permutations.h
+  ffx_fsr2_autogen_reactive_pass.hlsl
+  ffx_fsr2_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_autogen_reactive_pass_wave64_16bit_permutations.h
+  BSMouseDevice.cpp
+  ffx_fsr2_autogen_reactive_pass.hlsl
+  ffx_fsr2_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_autogen_reactive_pass_wave64_permutations.h
+  ffx_fsr2_autogen_reactive_pass.hlsl
+  ffx_fsr2_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_compute_luminance_pyramid_pass_16bit_permutations.h
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  BSMultiBoundNode.cpp
+  Generating ../shaders/dx11/ffx_fsr2_compute_luminance_pyramid_pass_permutations.h
+  BSOcclusionPlane.cpp
+  BSOpenVR.cpp
+  BSPCGamepadDeviceDelegate.cpp
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_compute_luminance_pyramid_pass_wave64_16bit_permutations.h
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_compute_luminance_pyramid_pass_wave64_permutations.h
+  BSPCGamepadDeviceHandler.cpp
+  BSPCOrbisGamepadDevice.cpp
+  BSParticleSystemManager.cpp
+  BSPathingLocation.cpp
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl
+  ffx_fsr2_compute_luminance_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_debug_blit_16bit_permutations.h
+  ffx_fsr2_debug_blit.hlsl
+  ffx_fsr2_debug_blit.hlsl: Processed 64 shader permutations, found 63 duplicates (63 found early).
+  Generating ../shaders/dx11/ffx_fsr2_debug_blit_permutations.h
+  ffx_fsr2_debug_blit.hlsl
+  ffx_fsr2_debug_blit.hlsl: Processed 64 shader permutations, found 63 duplicates (63 found early).
+  Generating ../shaders/dx11/ffx_fsr2_debug_blit_wave64_16bit_permutations.h
+  ffx_fsr2_debug_blit.hlsl
+  ffx_fsr2_debug_blit.hlsl: Processed 64 shader permutations, found 63 duplicates (63 found early).
+  Generating ../shaders/dx11/ffx_fsr2_debug_blit_wave64_permutations.h
+  ffx_fsr2_debug_blit.hlsl
+  ffx_fsr2_debug_blit.hlsl: Processed 64 shader permutations, found 63 duplicates (63 found early).
+  Generating ../shaders/dx11/ffx_fsr2_depth_clip_pass_16bit_permutations.h
+  BSPathingRequest.cpp
+  ffx_fsr2_depth_clip_pass.hlsl
+  ffx_fsr2_depth_clip_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr2_depth_clip_pass_permutations.h
+  BSPointerHandle.cpp
+  ffx_fsr2_depth_clip_pass.hlsl
+  ffx_fsr2_depth_clip_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr2_depth_clip_pass_wave64_16bit_permutations.h
+  BSPortalGraph.cpp
+  ffx_fsr2_depth_clip_pass.hlsl
+  ffx_fsr2_depth_clip_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr2_depth_clip_pass_wave64_permutations.h
+  BSPortalGraphEntry.cpp
+  ffx_fsr2_depth_clip_pass.hlsl
+  ffx_fsr2_depth_clip_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr2_lock_pass_16bit_permutations.h
+  ffx_fsr2_lock_pass.hlsl
+  ffx_fsr2_lock_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_lock_pass_permutations.h
+  ffx_fsr2_lock_pass.hlsl
+  ffx_fsr2_lock_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_lock_pass_wave64_16bit_permutations.h
+  BSProceduralLightningController.cpp
+  ffx_fsr2_lock_pass.hlsl
+  ffx_fsr2_lock_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_lock_pass_wave64_permutations.h
+  BSProceduralLightningTasklet.cpp
+  ffx_fsr2_lock_pass.hlsl
+  ffx_fsr2_lock_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_rcas_pass_16bit_permutations.h
+  ffx_fsr2_rcas_pass.hlsl
+  ffx_fsr2_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_rcas_pass_permutations.h
+  BSResourceNiBinaryStream.cpp
+  ffx_fsr2_rcas_pass.hlsl
+  ffx_fsr2_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_rcas_pass_wave64_16bit_permutations.h
+  BSResponse.cpp
+  ffx_fsr2_rcas_pass.hlsl
+  ffx_fsr2_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_rcas_pass_wave64_permutations.h
+  ffx_fsr2_rcas_pass.hlsl
+  ffx_fsr2_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_reconstruct_previous_depth_pass_16bit_permutations.h
+  BSScaleformManager.cpp
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl: Processed 64 shader permutations, found 48 duplicates (48 found early).
+  Generating ../shaders/dx11/ffx_fsr2_reconstruct_previous_depth_pass_permutations.h
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl: Processed 64 shader permutations, found 48 duplicates (48 found early).
+  Generating ../shaders/dx11/ffx_fsr2_reconstruct_previous_depth_pass_wave64_16bit_permutations.h
+  BSScaleformTranslator.cpp
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl: Processed 64 shader permutations, found 48 duplicates (48 found early).
+  Generating ../shaders/dx11/ffx_fsr2_reconstruct_previous_depth_pass_wave64_permutations.h
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl
+  ffx_fsr2_reconstruct_previous_depth_pass.hlsl: Processed 64 shader permutations, found 48 duplicates (48 found early).
+  Generating ../shaders/dx11/ffx_fsr2_tcr_autogen_pass_16bit_permutations.h
+  ffx_fsr2_tcr_autogen_pass.hlsl
+  ffx_fsr2_tcr_autogen_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_tcr_autogen_pass_permutations.h
+  ffx_fsr2_tcr_autogen_pass.hlsl
+  ffx_fsr2_tcr_autogen_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_tcr_autogen_pass_wave64_16bit_permutations.h
+  BSScriptObjectBindPolicy.cpp
+  ffx_fsr2_tcr_autogen_pass.hlsl
+  ffx_fsr2_tcr_autogen_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr2_tcr_autogen_pass_wave64_permutations.h
+  ffx_fsr2_tcr_autogen_pass.hlsl
+  ffx_fsr2_tcr_autogen_pass.hlsl: Processed 64 shader permutations, found 62 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_accumulate_pass_16bit_permutations.h
+  BSShaderProperty.cpp
+  BSShaderTextureSet.cpp
+  BSStringPool.cpp
+  BSSoundHandle.cpp
+  BSSystemFileStorage.cpp
+  BSTArray.cpp
+  ffx_fsr3upscaler_accumulate_pass.hlsl
+  ffx_fsr3upscaler_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_accumulate_pass_permutations.h
+  BSTCreateFactoryManager.cpp
+  BSTempNodeManager.cpp
+  BSTreeNode.cpp
+  BSUIMessageData.cpp
+  BSVisit.cpp
+  BSVirtualKeyboardDevice.cpp
+  ffx_fsr3upscaler_accumulate_pass.hlsl
+  ffx_fsr3upscaler_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_accumulate_pass_wave64_16bit_permutations.h
+  BSWin32KeyboardDevice.cpp
+  BSWin32GamepadDevice.cpp
+  BSWin32SaveDataSystemUtility.cpp
+  BSWin32MouseDevice.cpp
+  BSWin32VirtualKeyboardDevice.cpp
+  BSWindModifier.cpp
+  BSXAudio2GameSound.cpp
+  BSXFlags.cpp
+  ffx_fsr3upscaler_accumulate_pass.hlsl
+  ffx_fsr3upscaler_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_accumulate_pass_wave64_permutations.h
+  BeamProjectile.cpp
+  BarterMenu.cpp
+  BleedoutCameraState.cpp
+  BipedAnim.cpp
+  BookMenu.cpp
+  BooksRead.cpp
+  ffx_fsr3upscaler_accumulate_pass.hlsl
+  ffx_fsr3upscaler_accumulate_pass.hlsl: Processed 64 shader permutations, found 40 duplicates (0 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_autogen_reactive_pass_16bit_permutations.h
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_autogen_reactive_pass_permutations.h
+  bhkCharProxyController.cpp
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_autogen_reactive_pass_wave64_16bit_permutations.h
+  bhkRigidBody.cpp
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_autogen_reactive_pass_wave64_permutations.h
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl
+  ffx_fsr3upscaler_autogen_reactive_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_debug_view_pass_16bit_permutations.h
+  ffx_fsr3upscaler_debug_view_pass.hlsl
+  ffx_fsr3upscaler_debug_view_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_debug_view_pass_permutations.h
+  ffx_fsr3upscaler_debug_view_pass.hlsl
+  ffx_fsr3upscaler_debug_view_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_debug_view_pass_wave64_16bit_permutations.h
+  ffx_fsr3upscaler_debug_view_pass.hlsl
+  ffx_fsr3upscaler_debug_view_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_debug_view_pass_wave64_permutations.h
+  CFilter.cpp
+  ffx_fsr3upscaler_debug_view_pass.hlsl
+  ffx_fsr3upscaler_debug_view_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_instability_pass_16bit_permutations.h
+  Calendar.cpp
+  ffx_fsr3upscaler_luma_instability_pass.hlsl
+  ffx_fsr3upscaler_luma_instability_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_instability_pass_permutations.h
+  ffx_fsr3upscaler_luma_instability_pass.hlsl
+  ffx_fsr3upscaler_luma_instability_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_instability_pass_wave64_16bit_permutations.h
+  ffx_fsr3upscaler_luma_instability_pass.hlsl
+  ffx_fsr3upscaler_luma_instability_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_instability_pass_wave64_permutations.h
+  ffx_fsr3upscaler_luma_instability_pass.hlsl
+  ffx_fsr3upscaler_luma_instability_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_pyramid_pass_16bit_permutations.h
+  ChainExplosion.cpp
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_pyramid_pass_permutations.h
+  ChestsLooted.cpp
+  ChildSelectorBase.cpp
+  CollisionLayers.cpp
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_pyramid_pass_wave64_16bit_permutations.h
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_luma_pyramid_pass_wave64_permutations.h
+  Color.cpp
+  ColorUtil.cpp
+  CombatAcquireItem.cpp
+  CombatAimController.cpp
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl
+  ffx_fsr3upscaler_luma_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_inputs_pass_16bit_permutations.h
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_inputs_pass_permutations.h
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_inputs_pass_wave64_16bit_permutations.h
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_inputs_pass_wave64_permutations.h
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl
+  ffx_fsr3upscaler_prepare_inputs_pass.hlsl: Processed 64 shader permutations, found 56 duplicates (56 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_reactivity_pass_16bit_permutations.h
+  CombatAnimation.cpp
+  CombatBehavior.cpp
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_reactivity_pass_permutations.h
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_reactivity_pass_wave64_16bit_permutations.h
+  CombatBehaviorAccessors.cpp
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_prepare_reactivity_pass_wave64_permutations.h
+  CombatBehaviorAcquireItem.cpp
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl
+  ffx_fsr3upscaler_prepare_reactivity_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_rcas_pass_16bit_permutations.h
+  ffx_fsr3upscaler_rcas_pass.hlsl
+  ffx_fsr3upscaler_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_rcas_pass_permutations.h
+  CombatBehaviorAcquireResource.cpp
+  ffx_fsr3upscaler_rcas_pass.hlsl
+  ffx_fsr3upscaler_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_rcas_pass_wave64_16bit_permutations.h
+  CombatBehaviorAdvance.cpp
+  ffx_fsr3upscaler_rcas_pass.hlsl
+  ffx_fsr3upscaler_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_rcas_pass_wave64_permutations.h
+  ffx_fsr3upscaler_rcas_pass.hlsl
+  ffx_fsr3upscaler_rcas_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pass_16bit_permutations.h
+  ffx_fsr3upscaler_shading_change_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pass_permutations.h
+  CombatBehaviorBackoff.cpp
+  ffx_fsr3upscaler_shading_change_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pass_wave64_16bit_permutations.h
+  ffx_fsr3upscaler_shading_change_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pass_wave64_permutations.h
+  CombatBehaviorBlock.cpp
+  ffx_fsr3upscaler_shading_change_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pyramid_pass_16bit_permutations.h
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pyramid_pass_permutations.h
+  CombatBehaviorBlockAttack.cpp
+  CombatBehaviorChildSelector.cpp
+  CombatBehaviorCircle.cpp
+  CombatBehaviorCircleDistant.cpp
+  CombatBehaviorContext.cpp
+  CombatBehaviorContextAcquireWeapon.cpp
+  CombatBehaviorContextBlock.cpp
+  CombatBehaviorContextCloseMovement.cpp
+  CombatBehaviorContextDodgeThreat.cpp
+  CombatBehaviorContextFlankingMovement.cpp
+  CombatBehaviorContextFlee.cpp
+  CombatBehaviorContextMagic.cpp
+  CombatBehaviorContextMelee.cpp
+  CombatBehaviorContextRangedMovement.cpp
+  CombatBehaviorContextSearch.cpp
+  CombatBehaviorContextShout.cpp
+  CombatBehaviorController.cpp
+  CombatBehaviorDodgeThreat.cpp
+  CombatBehaviorDynamicConditionalNode.cpp
+  CombatBehaviorEquipContext.cpp
+  CombatBehaviorFallback.cpp
+  CombatBehaviorFallbackSelector.cpp
+  CombatBehaviorFallbackToRanged.cpp
+  CombatBehaviorFindWeapon.cpp
+  CombatBehaviorIdle.cpp
+  CombatBehaviorParallel.cpp
+  CombatBehaviorPause.cpp
+  CombatBehaviorRepeat.cpp
+  CombatBehaviorReposition.cpp
+  CombatBehaviorResource.cpp
+  CombatBehaviorSequence.cpp
+  CombatBehaviorSpawnParallel.cpp
+  CombatBehaviorStack.cpp
+  CombatBehaviorSurround.cpp
+  CombatBehaviorThread.cpp
+  CombatBehaviorTree.cpp
+  CombatBehaviorTreeLinkNode.cpp
+  CombatBehaviorTreeManager.cpp
+  CombatBehaviorTreeNode.cpp
+  CombatBehaviorTreeNodeEvaluateFunction.cpp
+  CombatBehaviorTreeNodeObject.cpp
+  CombatBehaviorTreeRootNode.cpp
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pyramid_pass_wave64_16bit_permutations.h
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_fsr3upscaler_shading_change_pyramid_pass_wave64_permutations.h
+  CombatBehaviorTreeUtils.cpp
+  CombatBehaviorTrees.cpp
+  CombatBlackboard.cpp
+  CombatBlackboardFlag.cpp
+  CombatBlackboardManager.cpp
+  CombatController.cpp
+  CombatGroup.cpp
+  CombatInventory.cpp
+  CombatPath.cpp
+  CombatState.cpp
+  CombatTargetLocation.cpp
+  CombatTargetLocationSearch.cpp
+  CombatTargetLocationSearchResult.cpp
+  CombatThreat.cpp
+  CommandTable.cpp
+  ConditionalChildSelector.cpp
+  ConeProjectile.cpp
+  Console.cpp
+  ConsoleLog.cpp
+  ContainerItemExtra.cpp
+  ContainerMenu.cpp
+  ControlMap.cpp
+  CriticalHit.cpp
+  DisarmedEvent.cpp
+  DragonCameraState.cpp
+  DragonSoulsGained.cpp
+  Effect.cpp
+  EffectSetting.cpp
+  EnchantConstructMenu.cpp
+  Explosion.cpp
+  ExtraAliasInstanceArray.cpp
+  ExtraAshPileRef.cpp
+  ExtraCanTalkToPlayer.cpp
+  ExtraCannotWear.cpp
+  ExtraCharge.cpp
+  ExtraContainerChanges.cpp
+  ExtraCount.cpp
+  ExtraDataList.cpp
+  ExtraEnchantment.cpp
+  ExtraEncounterZone.cpp
+  ExtraForcedTarget.cpp
+  ExtraHealth.cpp
+  ExtraHotkey.cpp
+  ExtraLevCreaModifier.cpp
+  ExtraLightData.cpp
+  ExtraLinkedRef.cpp
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl
+  ffx_fsr3upscaler_shading_change_pyramid_pass.hlsl: Processed 64 shader permutations, found 63 duplicates (60 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_luminance_pyramid_pass_16bit_permutations.h
+  ExtraLock.cpp
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_luminance_pyramid_pass_permutations.h
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_luminance_pyramid_pass_wave64_16bit_permutations.h
+  ExtraMissingLinkedRefIDs.cpp
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_luminance_pyramid_pass_wave64_permutations.h
+  ExtraNorthRotation.cpp
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl
+  ffx_opticalflow_compute_luminance_pyramid_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_optical_flow_advanced_pass_v5_16bit_permutations.h
+  ExtraOwnership.cpp
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_optical_flow_advanced_pass_v5_permutations.h
+  ExtraPoison.cpp
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_optical_flow_advanced_pass_v5_wave64_16bit_permutations.h
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  ExtraRank.cpp
+  Generating ../shaders/dx11/ffx_opticalflow_compute_optical_flow_advanced_pass_v5_wave64_permutations.h
+  ExtraReferenceHandle.cpp
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_compute_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_scd_divergence_pass_16bit_permutations.h
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_scd_divergence_pass_permutations.h
+  ExtraSoul.cpp
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_scd_divergence_pass_wave64_16bit_permutations.h
+  ExtraTextDisplayData.cpp
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_compute_scd_divergence_pass_wave64_permutations.h
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl
+  ffx_opticalflow_compute_scd_divergence_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_filter_optical_flow_pass_v5_16bit_permutations.h
+  ExtraUniqueID.cpp
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_filter_optical_flow_pass_v5_permutations.h
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_filter_optical_flow_pass_v5_wave64_16bit_permutations.h
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_filter_optical_flow_pass_v5_wave64_permutations.h
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl
+  ffx_opticalflow_filter_optical_flow_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  FindMaxMagnitudeVisitor.cpp
+  Generating ../shaders/dx11/ffx_opticalflow_generate_scd_histogram_pass_16bit_permutations.h
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_generate_scd_histogram_pass_permutations.h
+  FirstPersonState.cpp
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_generate_scd_histogram_pass_wave64_16bit_permutations.h
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_generate_scd_histogram_pass_wave64_permutations.h
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl
+  ffx_opticalflow_generate_scd_histogram_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_prepare_luma_pass_16bit_permutations.h
+  FormTypes.cpp
+  ffx_opticalflow_prepare_luma_pass.hlsl
+  ffx_opticalflow_prepare_luma_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_prepare_luma_pass_permutations.h
+  ffx_opticalflow_prepare_luma_pass.hlsl
+  ffx_opticalflow_prepare_luma_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_prepare_luma_pass_wave64_16bit_permutations.h
+  ffx_opticalflow_prepare_luma_pass.hlsl
+  ffx_opticalflow_prepare_luma_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_prepare_luma_pass_wave64_permutations.h
+  FurnitureCameraState.cpp
+  ffx_opticalflow_prepare_luma_pass.hlsl
+  ffx_opticalflow_prepare_luma_pass.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_scale_optical_flow_advanced_pass_v5_16bit_permutations.h
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_scale_optical_flow_advanced_pass_v5_permutations.h
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_scale_optical_flow_advanced_pass_v5_wave64_16bit_permutations.h
+  FxDelegate.cpp
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Generating ../shaders/dx11/ffx_opticalflow_scale_optical_flow_advanced_pass_v5_wave64_permutations.h
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl
+  ffx_opticalflow_scale_optical_flow_advanced_pass_v5.hlsl: Processed 2 shader permutations, found 1 duplicates (1 found early).
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  FxDelegateArgs.cpp
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  GAtomic.cpp
+  DXBCChecksum.c
+  md5.c
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  GFxLoader.cpp
+  ffx_dx11.cpp
+  ffx_shader_blobs.cpp
+  ffx_assert.cpp
+  ffx_message.cpp
+  ffx_assert.cpp
+  GFxLog.cpp
+  ffx_object_management.cpp
+  ffx_fsr3.cpp
+  ffx_fsr1_shaderblobs.cpp
+  GFxMovie.cpp
+  GFxMovieDataDef.cpp
+  ffx_fsr2_shaderblobs.cpp
+  ffx_fsr3_x64.vcxproj -> [REDACTED_LOCAL_PATH]
+  GFxMovieDef.cpp
+  GFxMovieView.cpp
+  ffx_fsr3upscaler_shaderblobs.cpp
+  GFxRenderConfig.cpp
+  GFxResource.cpp
+  GFxResourceID.cpp
+  GFxResourceKey.cpp
+  GFxState.cpp
+  GFxStateBag.cpp
+  GFxTranslator.cpp
+  ffx_frameinterpolation_shaderblobs.cpp
+  GFxValue.cpp
+  GFxWStringBuffer.cpp
+  ffx_opticalflow_shaderblobs.cpp
+  GFxWWHelper.cpp
+  GMemory.cpp
+  GMemoryHeap.cpp
+  ffx_backend_dx11_x64.vcxproj -> [REDACTED_LOCAL_PATH]
+  GRefCountImpl.cpp
+  GRefCountNTSImpl.cpp
+  GRenderer.cpp
+  GStd.cpp
+  GString.cpp
+  GViewport.cpp
+  GameSettingCollection.cpp
+  GetWornMaskVisitor.cpp
+  GiftMenu.cpp
+  HUDMeter.cpp
+  HUDObject.cpp
+  Hazard.cpp
+  HeapBlock.cpp
+  HeldStateHandler.cpp
+  HorseCameraState.cpp
+  hkBaseTypes.cpp
+  hkReferencedObject.cpp
+  hkStringPtr.cpp
+  hkVector4.cpp
+  hkbBehaviorGraph.cpp
+  hkbBehaviorGraphData.cpp
+  hkbVariableValueSet.cpp
+  hkpAabbPhantom.cpp
+  hkpBroadPhase.cpp
+  hkpCdBody.cpp
+  hkpCharacterProxyListener.cpp
+  hkpCharacterRigidBody.cpp
+  hkpMaterial.cpp
+  hkpProperty.cpp
+  hkpRigidBody.cpp
+  hkpShapePhantom.cpp
+  hkpWorldObject.cpp
+  IAnimationGraphManagerHolder.cpp
+  IFormFactory.cpp
+  IFunction.cpp
+  IHandlerFunctor.cpp
+  IMemoryStore.cpp
+  IMenu.cpp
+  IMovementState.cpp
+  INIPrefSettingCollection.cpp
+  INISettingCollection.cpp
+  IObjectHandlePolicy.cpp
+  IStackCallbackFunctor.cpp
+  IVirtualMachine.cpp
+  IngredientItem.cpp
+  InputEvent.cpp
+  InterfaceStrings.cpp
+  Inventory.cpp
+  Inventory3DManager.cpp
+  InventoryChanges.cpp
+  InventoryEntryData.cpp
+  ItemCrafted.cpp
+  ItemHarvested.cpp
+  ItemList.cpp
+  ItemsPickpocketed.cpp
+  LevelIncrease.cpp
+  LocalMapCamera.cpp
+  Location.cpp
+  LocationCleared.cpp
+  LocationDiscovery.cpp
+  LockpickingMenu.cpp
+  LooseFileStream.cpp
+  MagicCaster.cpp
+  MagicFavorites.cpp
+  MagicFormulas.cpp
+  MagicItem.cpp
+  MagicItemDataCollector.cpp
+  MagicItemList.cpp
+  MagicSystem.cpp
+  MagicTarget.cpp
+  MagicUtilities.cpp
+  Main.cpp
+  MaterialIDs.cpp
+  MemoryPage.cpp
+  MenuControls.cpp
+  MenuCursor.cpp
+  MenuEventHandler.cpp
+  MessageBoxMenu.cpp
+  Misc.cpp
+  MissileProjectile.cpp
+  NativeFunctionBase.cpp
+  NextChildSelector.cpp
+  NiAVObject.cpp
+  NiAlphaProperty.cpp
+  NiAnimationKey.cpp
+  NiBinaryStream.cpp
+  NiBooleanExtraData.cpp
+  NiCamera.cpp
+  NiColor.cpp
+  NiColorData.cpp
+  NiColorKey.cpp
+  NiControllerManager.cpp
+  NiControllerSequence.cpp
+  NiCullingProcess.cpp
+  NiExtraData.cpp
+  NiFloatData.cpp
+  NiFloatExtraData.cpp
+  NiFloatKey.cpp
+  NiFloatsExtraData.cpp
+  NiGeometry.cpp
+  NiIntegerExtraData.cpp
+  NiIntegersExtraData.cpp
+  NiInterpolator.cpp
+  NiMath.cpp
+  NiMatrix3.cpp
+  NiMemManager.cpp
+  NiNode.cpp
+  NiObject.cpp
+  NiObjectNET.cpp
+  NiPick.cpp
+  NiPoint2.cpp
+  NiPoint3.cpp
+  NiQuaternion.cpp
+  NiRefObject.cpp
+  NiSkinInstance.cpp
+  NiStringsExtraData.cpp
+  NiSystem.cpp
+  NiTCollection.cpp
+  NiTexture.cpp
+  NiTimeController.cpp
+  NiTransform.cpp
+  Object.cpp
+  ObjectTypeInfo.cpp
+  ObjectiveState.cpp
+  PackUnpack.cpp
+  PackedInstructionStream.cpp
+  PlayerCamera.cpp
+  PlayerCameraTransitionState.cpp
+  PlayerCharacter.cpp
+  PlayerControls.cpp
+  PriorityChildSelector.cpp
+  PlayerInputHandler.cpp
+  ProcessLists.cpp
+  Projectile.cpp
+  QuestStatus.cpp
+  RaceSexMenu.cpp
+  RandomValueChildSelector.cpp
+  ReferenceEffectController.cpp
+  RemoveCallbackVisitor.cpp
+  Renderer.cpp
+  Rumble.cpp
+  ScrapHeap.cpp
+  Script.cpp
+  ScriptEventSourceHolder.cpp
+  SendHUDMessage.cpp
+  SendUIMessage.cpp
+  Setting.cpp
+  ShadowSceneNode.cpp
+  ShoutAttack.cpp
+  SkillIncrease.cpp
+  Sky.cpp
+  SkyrimVM.cpp
+  SoulsTrapped.cpp
+  SourceActionMap.cpp
+  SpellsLearned.cpp
+  Stack.cpp
+  StackFrame.cpp
+  Stream.cpp
+  StreamBase.cpp
+  Skyrim.cpp
+  TES.cpp
+  TESAIForm.cpp
+  TESActorBase.cpp
+  TESAmmo.cpp
+  TESCamera.cpp
+  TESCameraState.cpp
+  TESClimate.cpp
+  TESCondition.cpp
+  TESContainer.cpp
+  TESDataHandler.cpp
+  TESDescription.cpp
+  TESFaction.cpp
+  TESFile.cpp
+  TESForm.cpp
+  TESHavokUtilities.cpp
+  TESLeveledList.cpp
+  TESHitEvent.cpp
+  TESObjectARMA.cpp
+  TESNPC.cpp
+  TESObjectARMO.cpp
+  TESObjectBOOK.cpp
+  TESObjectCELL.cpp
+  TESObjectREFR.cpp
+  TESObjectSTAT.cpp
+  TESObjectWEAP.cpp
+  TESQuest.cpp
+  TESRace.cpp
+  TESSpellList.cpp
+  TESTopic.cpp
+  TESTopicInfo.cpp
+  TESValueForm.cpp
+  TESWaterReflections.cpp
+  TESWaterSystem.cpp
+  TESWorldSpace.cpp
+  TaskQueueInterface.cpp
+  ThirdPersonState.cpp
+  ThumbstickEvent.cpp
+  TutorialMenu.cpp
+  TweenMenuCameraState.cpp
+  TypeInfo.cpp
+  UI.cpp
+  UI3DSceneManager.cpp
+  UIBlurManager.cpp
+  UIMessageQueue.cpp
+  UnlinkedTypes.cpp
+  UserEvents.cpp
+  VATSCameraState.cpp
+  ValueChildSelector.cpp
+  Variable.cpp
+  VirtualMachine.cpp
+  WeightedRandomChildSelector.cpp
+  WorldSpaceMenu.cpp
+  ZeroFunctionArguments.cpp
+  IDDB.cpp
+  Module.cpp
+  Offset2ID.cpp
+  Relocation.cpp
+  Verify.cpp
+  Version.cpp
+  REX.cpp
+  W32.cpp
+  API.cpp
+  IAT.cpp
+  PCH.cpp
+  InputMap.cpp
+  Interfaces.cpp
+  Logger.cpp
+  RegistrationSet.cpp
+  RegistrationSetUnique.cpp
+  Trampoline.cpp
+  Translation.cpp
+  Compiling...
+  cmake_pch.cxx
+  AIProcess.cpp
+  AIFormulas.cpp
+  AITimer.cpp
+  ActiveEffect.cpp
+  ActiveEffectFactory.cpp
+  Actor.cpp
+  ActorEquipManager.cpp
+  ActorKill.cpp
+  ActorValueList.cpp
+  ActorValueOwner.cpp
+  AddCallbackVisitor.cpp
+  AnimationClipDataSingleton.cpp
+  AnimationSystemUtils.cpp
+  ArmorRatingVisitor.cpp
+  ArmorRatingVisitorBase.cpp
+  Array.cpp
+  AutoVanityState.cpp
+  BGSAcousticSpace.cpp
+  BGSAttackData.cpp
+  BGSBaseAlias.cpp
+  BGSBipedObjectForm.cpp
+  BGSColorForm.cpp
+  BGSConstructibleObject.cpp
+  BGSCreatedObjectManager.cpp
+  BGSDebris.cpp
+  BGSDecalNode.cpp
+  BGSDefaultObjectManager.cpp
+  BGSEntryPointFunctionDataActivateChoice.cpp
+  BGSEntryPointPerkEntry.cpp
+  BGSFootstepManager.cpp
+  BGSHeadPart.cpp
+  BGSIdleCollection.cpp
+  BGSKeyword.cpp
+  BGSKeywordForm.cpp
+  BGSListForm.cpp
+  BGSLocation.cpp
+  BGSOpenCloseForm.cpp
+  BGSPerkEntry.cpp
+  BGSPerkRankArray.cpp
+  BGSRefAlias.cpp
+  BGSSaveLoadManager.cpp
+  BGSSkillPerkTreeNode.cpp
+  BGSSoundCategory.cpp
+  BGSStoryTeller.cpp
+  BSAtomic.cpp
+  BSAudioManager.cpp
+  BSCompoundFrustum.cpp
+  BSCubeMapCamera.cpp
+  BSCullingProcess.cpp
+  BSDirectInputManager.cpp
+  BSEffectShaderData.cpp
+  BSExtraData.cpp
+  BSFaceGenAnimationData.cpp
+  BSFaceGenKeyframeMultiple.cpp
+  BSFaceGenNiNode.cpp
+  BSFadeNode.cpp
+  BSFixedString.cpp
+  BSGameSound.cpp
+  BSGamepadDevice.cpp
+  BSGeometry.cpp
+  BSHandleRefObject.cpp
+  BSIStream.cpp
+  BSInputDevice.cpp
+  BSInputDeviceFactory.cpp
+  BSInputDeviceManager.cpp
+  BSInputEventQueue.cpp
+  BSInstanceTriShape.cpp
+  BSInvMarker.cpp
+  BSKeyboardDevice.cpp
+  BSLeafAnimNode.cpp
+  BSLightingShaderMaterialBase.cpp
+  BSLightingShaderProperty.cpp
+  BSModelDB.cpp
+  BSMouseDevice.cpp
+  BSMultiBoundNode.cpp
+  BSOcclusionPlane.cpp
+  BSOpenVR.cpp
+  BSPCGamepadDeviceDelegate.cpp
+  BSPCGamepadDeviceHandler.cpp
+  BSPCOrbisGamepadDevice.cpp
+  BSParticleSystemManager.cpp
+  BSPathingLocation.cpp
+  BSPathingRequest.cpp
+  BSPointerHandle.cpp
+  BSPortalGraph.cpp
+  BSPortalGraphEntry.cpp
+  BSProceduralLightningController.cpp
+  BSProceduralLightningTasklet.cpp
+  BSResourceNiBinaryStream.cpp
+  BSResponse.cpp
+  BSScaleformManager.cpp
+  BSScaleformTranslator.cpp
+  BSScriptObjectBindPolicy.cpp
+  BSShaderProperty.cpp
+  BSShaderTextureSet.cpp
+  BSSoundHandle.cpp
+  BSStringPool.cpp
+  BSSystemFileStorage.cpp
+  BSTArray.cpp
+  BSTCreateFactoryManager.cpp
+  BSTempNodeManager.cpp
+  BSTreeNode.cpp
+  BSUIMessageData.cpp
+  BSVirtualKeyboardDevice.cpp
+  BSVisit.cpp
+  BSWin32GamepadDevice.cpp
+  BSWin32KeyboardDevice.cpp
+  BSWin32MouseDevice.cpp
+  BSWin32SaveDataSystemUtility.cpp
+  BSWin32VirtualKeyboardDevice.cpp
+  BSWindModifier.cpp
+  BSXAudio2GameSound.cpp
+  BSXFlags.cpp
+  BarterMenu.cpp
+  BeamProjectile.cpp
+  BipedAnim.cpp
+  BleedoutCameraState.cpp
+  BookMenu.cpp
+  BooksRead.cpp
+  bhkCharProxyController.cpp
+  bhkRigidBody.cpp
+  CFilter.cpp
+  Calendar.cpp
+  ChainExplosion.cpp
+  ChestsLooted.cpp
+  ChildSelectorBase.cpp
+  CollisionLayers.cpp
+  Color.cpp
+  ColorUtil.cpp
+  CombatAcquireItem.cpp
+  CombatAimController.cpp
+  CombatAnimation.cpp
+  CombatBehavior.cpp
+  CombatBehaviorAccessors.cpp
+  CombatBehaviorAcquireItem.cpp
+  CombatBehaviorAcquireResource.cpp
+  CombatBehaviorAdvance.cpp
+  CombatBehaviorBackoff.cpp
+  CombatBehaviorBlock.cpp
+  CombatBehaviorBlockAttack.cpp
+  CombatBehaviorChildSelector.cpp
+  CombatBehaviorCircle.cpp
+  CombatBehaviorCircleDistant.cpp
+  CombatBehaviorContext.cpp
+  CombatBehaviorContextAcquireWeapon.cpp
+  CombatBehaviorContextBlock.cpp
+  CombatBehaviorContextCloseMovement.cpp
+  CombatBehaviorContextDodgeThreat.cpp
+  CombatBehaviorContextFlankingMovement.cpp
+  CombatBehaviorContextFlee.cpp
+  CombatBehaviorContextMagic.cpp
+  CombatBehaviorContextMelee.cpp
+  CombatBehaviorContextRangedMovement.cpp
+  CombatBehaviorContextSearch.cpp
+  CombatBehaviorContextShout.cpp
+  CombatBehaviorController.cpp
+  CombatBehaviorDodgeThreat.cpp
+  CombatBehaviorDynamicConditionalNode.cpp
+  CombatBehaviorEquipContext.cpp
+  CombatBehaviorFallback.cpp
+  CombatBehaviorFallbackSelector.cpp
+  CombatBehaviorFallbackToRanged.cpp
+  CombatBehaviorFindWeapon.cpp
+  CombatBehaviorIdle.cpp
+  CombatBehaviorParallel.cpp
+  CombatBehaviorPause.cpp
+  CombatBehaviorRepeat.cpp
+  CombatBehaviorReposition.cpp
+  CombatBehaviorResource.cpp
+  CombatBehaviorSequence.cpp
+  CombatBehaviorSpawnParallel.cpp
+  CombatBehaviorStack.cpp
+  CombatBehaviorSurround.cpp
+  CombatBehaviorThread.cpp
+  CombatBehaviorTree.cpp
+  CombatBehaviorTreeLinkNode.cpp
+  CombatBehaviorTreeManager.cpp
+  CombatBehaviorTreeNode.cpp
+  CombatBehaviorTreeNodeEvaluateFunction.cpp
+  CombatBehaviorTreeNodeObject.cpp
+  CombatBehaviorTreeRootNode.cpp
+  CombatBehaviorTreeUtils.cpp
+  CombatBehaviorTrees.cpp
+  CombatBlackboard.cpp
+  CombatBlackboardFlag.cpp
+  CombatBlackboardManager.cpp
+  CombatController.cpp
+  CombatGroup.cpp
+  CombatInventory.cpp
+  CombatPath.cpp
+  CombatState.cpp
+  CombatTargetLocation.cpp
+  CombatTargetLocationSearch.cpp
+  CombatTargetLocationSearchResult.cpp
+  CombatThreat.cpp
+  CommandTable.cpp
+  ConditionalChildSelector.cpp
+  ConeProjectile.cpp
+  Console.cpp
+  ConsoleLog.cpp
+  ContainerItemExtra.cpp
+  ContainerMenu.cpp
+  ControlMap.cpp
+  CriticalHit.cpp
+  DisarmedEvent.cpp
+  DragonCameraState.cpp
+  DragonSoulsGained.cpp
+  Effect.cpp
+  EffectSetting.cpp
+  EnchantConstructMenu.cpp
+  Explosion.cpp
+  ExtraAliasInstanceArray.cpp
+  ExtraAshPileRef.cpp
+  ExtraCanTalkToPlayer.cpp
+  ExtraCannotWear.cpp
+  ExtraCharge.cpp
+  ExtraContainerChanges.cpp
+  ExtraCount.cpp
+  ExtraDataList.cpp
+  ExtraEnchantment.cpp
+  ExtraEncounterZone.cpp
+  ExtraForcedTarget.cpp
+  ExtraHealth.cpp
+  ExtraHotkey.cpp
+  ExtraLevCreaModifier.cpp
+  ExtraLightData.cpp
+  ExtraLinkedRef.cpp
+  ExtraLock.cpp
+  ExtraMissingLinkedRefIDs.cpp
+  ExtraNorthRotation.cpp
+  ExtraOwnership.cpp
+  ExtraPoison.cpp
+  ExtraRank.cpp
+  ExtraReferenceHandle.cpp
+  ExtraSoul.cpp
+  ExtraTextDisplayData.cpp
+  ExtraUniqueID.cpp
+  FindMaxMagnitudeVisitor.cpp
+  FirstPersonState.cpp
+  FormTypes.cpp
+  FurnitureCameraState.cpp
+  FxDelegate.cpp
+  FxDelegateArgs.cpp
+  GAtomic.cpp
+  GFxLoader.cpp
+  GFxLog.cpp
+  GFxMovie.cpp
+  GFxMovieDataDef.cpp
+  GFxMovieDef.cpp
+  GFxMovieView.cpp
+  GFxRenderConfig.cpp
+  GFxResource.cpp
+  GFxResourceID.cpp
+  GFxResourceKey.cpp
+  GFxState.cpp
+  GFxStateBag.cpp
+  GFxTranslator.cpp
+  GFxValue.cpp
+  GFxWStringBuffer.cpp
+  GFxWWHelper.cpp
+  GMemory.cpp
+  GMemoryHeap.cpp
+  GRefCountImpl.cpp
+  GRefCountNTSImpl.cpp
+  GRenderer.cpp
+  GStd.cpp
+  GString.cpp
+  GViewport.cpp
+  GameSettingCollection.cpp
+  GetWornMaskVisitor.cpp
+  GiftMenu.cpp
+  HUDMeter.cpp
+  HUDObject.cpp
+  Hazard.cpp
+  HeapBlock.cpp
+  HeldStateHandler.cpp
+  HorseCameraState.cpp
+  hkBaseTypes.cpp
+  hkReferencedObject.cpp
+  hkStringPtr.cpp
+  hkVector4.cpp
+  hkbBehaviorGraph.cpp
+  hkbBehaviorGraphData.cpp
+  hkbVariableValueSet.cpp
+  hkpAabbPhantom.cpp
+  hkpBroadPhase.cpp
+  hkpCdBody.cpp
+  hkpCharacterProxyListener.cpp
+  hkpCharacterRigidBody.cpp
+  hkpMaterial.cpp
+  hkpProperty.cpp
+  hkpRigidBody.cpp
+  hkpShapePhantom.cpp
+  hkpWorldObject.cpp
+  IAnimationGraphManagerHolder.cpp
+  IFormFactory.cpp
+  IFunction.cpp
+  IHandlerFunctor.cpp
+  IMemoryStore.cpp
+  IMenu.cpp
+  IMovementState.cpp
+  INIPrefSettingCollection.cpp
+  INISettingCollection.cpp
+  IObjectHandlePolicy.cpp
+  IStackCallbackFunctor.cpp
+  IVirtualMachine.cpp
+  IngredientItem.cpp
+  InputEvent.cpp
+  InterfaceStrings.cpp
+  Inventory.cpp
+  Inventory3DManager.cpp
+  InventoryChanges.cpp
+  InventoryEntryData.cpp
+  ItemCrafted.cpp
+  ItemHarvested.cpp
+  ItemList.cpp
+  ItemsPickpocketed.cpp
+  LevelIncrease.cpp
+  LocalMapCamera.cpp
+  Location.cpp
+  LocationCleared.cpp
+  LocationDiscovery.cpp
+  LockpickingMenu.cpp
+  LooseFileStream.cpp
+  MagicCaster.cpp
+  MagicFavorites.cpp
+  MagicFormulas.cpp
+  MagicItem.cpp
+  MagicItemDataCollector.cpp
+  MagicItemList.cpp
+  MagicSystem.cpp
+  MagicTarget.cpp
+  MagicUtilities.cpp
+  Main.cpp
+  MaterialIDs.cpp
+  MemoryPage.cpp
+  MenuControls.cpp
+  MenuCursor.cpp
+  MenuEventHandler.cpp
+  MessageBoxMenu.cpp
+  Misc.cpp
+  MissileProjectile.cpp
+  NativeFunctionBase.cpp
+  NextChildSelector.cpp
+  NiAVObject.cpp
+  NiAlphaProperty.cpp
+  NiAnimationKey.cpp
+  NiBinaryStream.cpp
+  NiBooleanExtraData.cpp
+  NiCamera.cpp
+  NiColor.cpp
+  NiColorData.cpp
+  NiColorKey.cpp
+  NiControllerManager.cpp
+  NiControllerSequence.cpp
+  NiCullingProcess.cpp
+  NiExtraData.cpp
+  NiFloatData.cpp
+  NiFloatExtraData.cpp
+  NiFloatKey.cpp
+  NiFloatsExtraData.cpp
+  NiGeometry.cpp
+  NiIntegerExtraData.cpp
+  NiIntegersExtraData.cpp
+  NiInterpolator.cpp
+  NiMath.cpp
+  NiMatrix3.cpp
+  NiMemManager.cpp
+  NiNode.cpp
+  NiObject.cpp
+  NiObjectNET.cpp
+  NiPick.cpp
+  NiPoint2.cpp
+  NiPoint3.cpp
+  NiQuaternion.cpp
+  NiRefObject.cpp
+  NiSkinInstance.cpp
+  NiStringsExtraData.cpp
+  NiSystem.cpp
+  NiTCollection.cpp
+  NiTexture.cpp
+  NiTimeController.cpp
+  NiTransform.cpp
+  Object.cpp
+  ObjectTypeInfo.cpp
+  ObjectiveState.cpp
+  PackUnpack.cpp
+  PackedInstructionStream.cpp
+  PlayerCamera.cpp
+  PlayerCameraTransitionState.cpp
+  PlayerCharacter.cpp
+  PlayerControls.cpp
+  PlayerInputHandler.cpp
+  PriorityChildSelector.cpp
+  ProcessLists.cpp
+  Projectile.cpp
+  QuestStatus.cpp
+  RaceSexMenu.cpp
+  RandomValueChildSelector.cpp
+  ReferenceEffectController.cpp
+  RemoveCallbackVisitor.cpp
+  Renderer.cpp
+  Rumble.cpp
+  ScrapHeap.cpp
+  Script.cpp
+  ScriptEventSourceHolder.cpp
+  SendHUDMessage.cpp
+  SendUIMessage.cpp
+  ShadowSceneNode.cpp
+  Setting.cpp
+  ShoutAttack.cpp
+  SkillIncrease.cpp
+  Sky.cpp
+  SkyrimVM.cpp
+  SoulsTrapped.cpp
+  SourceActionMap.cpp
+  SpellsLearned.cpp
+  Stack.cpp
+  StackFrame.cpp
+  Stream.cpp
+  StreamBase.cpp
+  Skyrim.cpp
+  TES.cpp
+  TESAIForm.cpp
+  TESActorBase.cpp
+  TESAmmo.cpp
+  TESCamera.cpp
+  TESCameraState.cpp
+  TESClimate.cpp
+  TESCondition.cpp
+  TESContainer.cpp
+  TESDataHandler.cpp
+  TESDescription.cpp
+  TESFaction.cpp
+  TESFile.cpp
+  TESForm.cpp
+  TESHavokUtilities.cpp
+  TESHitEvent.cpp
+  TESLeveledList.cpp
+  TESNPC.cpp
+  TESObjectARMA.cpp
+  TESObjectARMO.cpp
+  TESObjectBOOK.cpp
+  TESObjectCELL.cpp
+  TESObjectREFR.cpp
+  TESObjectSTAT.cpp
+  TESObjectWEAP.cpp
+  TESQuest.cpp
+  TESRace.cpp
+  TESSpellList.cpp
+  TESTopic.cpp
+  TESTopicInfo.cpp
+  TESValueForm.cpp
+  TESWaterReflections.cpp
+  TESWaterSystem.cpp
+  TESWorldSpace.cpp
+  TaskQueueInterface.cpp
+  ThirdPersonState.cpp
+  ThumbstickEvent.cpp
+  TutorialMenu.cpp
+  TweenMenuCameraState.cpp
+  TypeInfo.cpp
+  UI.cpp
+  UI3DSceneManager.cpp
+  UIBlurManager.cpp
+  UIMessageQueue.cpp
+  UnlinkedTypes.cpp
+  UserEvents.cpp
+  VATSCameraState.cpp
+  ValueChildSelector.cpp
+  Variable.cpp
+  VirtualMachine.cpp
+  WeightedRandomChildSelector.cpp
+  WorldSpaceMenu.cpp
+  ZeroFunctionArguments.cpp
+  IDDB.cpp
+  Module.cpp
+  Offset2ID.cpp
+  Relocation.cpp
+  Verify.cpp
+  Version.cpp
+  REX.cpp
+  W32.cpp
+  API.cpp
+  IAT.cpp
+  PCH.cpp
+  InputMap.cpp
+  Interfaces.cpp
+  Logger.cpp
+  RegistrationSet.cpp
+  RegistrationSetUnique.cpp
+  Trampoline.cpp
+  Translation.cpp
+  hde64.c
+[REDACTED_LOCAL_PATH]'c' used [[REDACTED_LOCAL_PATH]]
+  CommonLibSSE.vcxproj -> [REDACTED_LOCAL_PATH]
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  cmake_pch.cxx
+  EditorDevBenchBridge.cpp
+  EditorService.cpp
+  FeatureDevBenchBridge.cpp
+  FeatureService.cpp
+  ProfilerApiDevBenchBridge.cpp
+  ProfilerService.cpp
+  RuntimeThreadAffinity.cpp
+  RuntimeThreadBinding.cpp
+  ScreenshotService.cpp
+  ServiceFoundation.cpp
+  ServiceRegistry.cpp
+  ServiceRegistryProvider.cpp
+  ShaderCompatibilityRegistry.cpp
+  ShaderCompatibilityService.cpp
+  ShaderDevBenchBridge.cpp
+  ShaderService.cpp
+  ShaderServicePolicy.cpp
+  UpscalingContract.cpp
+  UpscalingDevBenchBridge.cpp
+  UpscalingService.cpp
+  UpscalingServicePolicy.cpp
+  WeatherDevBenchBridge.cpp
+  WeatherService.cpp
+  WeatherServicePolicy.cpp
+  BuildProvenance.cpp
+  EditorWindow.cpp
+  InteriorOnlyPanel.cpp
+  LightEditor.cpp
+  LightPicker.cpp
+  PaletteWindow.cpp
+  CellLightingWidget.cpp
+  ImageSpaceWidget.cpp
+  LensFlareWidget.cpp
+  LightingTemplateWidget.cpp
+  PrecipitationWidget.cpp
+  ReferenceEffectWidget.cpp
+  VolumetricLightingWidget.cpp
+  WeatherWidget.cpp
+  WeatherUtils.cpp
+  Widget.cpp
+  Deferred.cpp
+  D3DTextureLifetimeTracker.cpp
+  VRPipelineDiagnostics.cpp
+  EngineFix.cpp
+  EffectShaderNoDecalsFix.cpp
+  ShadowmapCascadeCullingFix.cpp
+  ShadowmapCascadeRasterizerFix.cpp
+  Feature.cpp
+  FeatureBuffer.cpp
+  FeatureConstraints.cpp
+  FeatureIssues.cpp
+  AdaptiveBrightness.cpp
+  Bloom.cpp
+  CSEditor.cpp
+  CSUtility.cpp
+  CSUtilityDOF.cpp
+  CloudShadows.cpp
+  DynamicCubemaps.cpp
+  ExtendedMaterials.cpp
+  ExtendedTranslucency.cpp
+  FoliageLighting.cpp
+  GrassCollision.cpp
+  GrassLighting.cpp
+  HairSpecular.cpp
+  HorizonFix.cpp
+  IBL.cpp
+  InteriorSun.cpp
+  InverseSquareLighting.cpp
+  LODBlending.cpp
+  LightLimitFix.cpp
+  ParticleLights.cpp
+  LinearLighting.cpp
+  PerformanceOverlay.cpp
+  ABTestAggregator.cpp
+  ABTesting.cpp
+  RenderDoc.cpp
+  ScreenSpaceGI.cpp
+  ScreenSpaceShadows.cpp
+  ScreenshotApi.cpp
+  ScreenshotFeature.cpp
+  SkySync.cpp
+  Skylighting.cpp
+  SubsurfaceScattering.cpp
+  TerrainBlending.cpp
+  TerrainHelper.cpp
+  TerrainShadows.cpp
+  TerrainVariation.cpp
+  UnderwaterDepthOfField.cpp
+  UnifiedWater.cpp
+  Flowmap.cpp
+  WaterCache.cpp
+  Upscaling.cpp
+  DX12SwapChain.cpp
+  FSRTemporalTuningDevBenchBridge.cpp
+  FidelityFX.cpp
+  LumaSharpen.cpp
+  MotionAdaptiveSharpening.cpp
+  PerfMode.cpp
+  RCAS.cpp
+  Streamline.cpp
+  VRRenderScaleDevBenchBridge.cpp
+  VR.cpp
+  InSceneOverlay.cpp
+  Input.cpp
+  OpenVRDetection.cpp
+  OverlayDrag.cpp
+  SettingsUI.cpp
+  StereoBlend.cpp
+  WandPointing.cpp
+  VRDepthCullingTemporal.cpp
+  VolumetricLighting.cpp
+  VolumetricShadows.cpp
+  WaterAppearance.cpp
+  WaterEffects.cpp
+  WeatherPicker.cpp
+  WetnessEffects.cpp
+  Wetterness.cpp
+  PuddleMask.cpp
+  FrameAnnotations.cpp
+  Globals.cpp
+  GpuPass.cpp
+  Hooks.cpp
+  LocationContext.cpp
+  Menu.cpp
+  AdvancedSettingsRenderer.cpp
+  BackgroundBlur.cpp
+  FeatureListRenderer.cpp
+  Fonts.cpp
+  HomePageRenderer.cpp
+  IconLoader.cpp
+  MenuHeaderRenderer.cpp
+  OverlayRenderer.cpp
+  PerformanceTuningRenderer.cpp
+  ProfilingRenderer.cpp
+  SettingsTabRenderer.cpp
+  ThemeManager.cpp
+  MenuDevBenchBridge.cpp
+  PCH.cpp
+  PerformanceTuningDevBenchBridge.cpp
+  Profiler.cpp
+  ProfilerDevBenchBridge.cpp
+  SceneSettingsManager.cpp
+  ScreenshotDevBenchBridge.cpp
+  SettingsMigrations.cpp
+  SettingsOverrideManager.cpp
+  SettingsSerialization.cpp
+  ShaderCache.cpp
+  ShaderCacheSmartClear.cpp
+  BSShaderHooks.cpp
+  ShaderCompiler.cpp
+  State.cpp
+  TruePBR.cpp
+  BSLightingShaderMaterialPBR.cpp
+  BSLightingShaderMaterialPBRLandscape.cpp
+  ActorUtils.cpp
+  CryptoHash.cpp
+  D3D.cpp
+  D3DContextProtection.cpp
+  ExternalEmittance.cpp
+  FileSystem.cpp
+  Form.cpp
+  Format.cpp
+  Game.cpp
+  GameSetting.cpp
+  OpenCompositeInterop.cpp
+  Serialize.cpp
+  ShaderCachePack.cpp
+  SphericalHarmonics.cpp
+  Subrect.cpp
+  Subrect_PreviewBlend.cpp
+  UI.cpp
+  VRLoadingMenuClear.cpp
+  VRUtils.cpp
+  VanityCamera.cpp
+  WinApi.cpp
+  CSinterface001.cpp
+  CSpluginapi.cpp
+  WeatherManager.cpp
+  XSEPlugin.cpp
+  DevBenchAPI.cpp
+     Creating library [REDACTED_LOCAL_PATH]
+  Generating code
+  Finished generating code
+  CommunityShaders.vcxproj -> [REDACTED_LOCAL_PATH]
+    Binding CSX build manifest to linked DLL
+  3ee063d9ed332a61653e91a9d56ff2a3fdb15d7e182f0a43bad7fab96935b636

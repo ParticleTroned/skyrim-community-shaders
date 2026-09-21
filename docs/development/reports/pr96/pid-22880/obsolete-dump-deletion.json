@@ -1,0 +1,28 @@
+{
+    "authorization": "[REDACTED_IDENTIFYING_METADATA]",
+    "preparedUtc": "2026-09-12T11:51:03.1427253Z",
+    "targets": [
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "bytes": 27091167008,
+            "lastWriteTimeUtc": "2026-09-12T09:51:40.5866562Z"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "bytes": 27454712331,
+            "lastWriteTimeUtc": "2026-09-12T05:54:38.1547806Z"
+        }
+    ],
+    "state": "deleted",
+    "confirmedAbsent": [
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "absent": true
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "absent": true
+        }
+    ],
+    "freeGiBAfter": 71.38
+}

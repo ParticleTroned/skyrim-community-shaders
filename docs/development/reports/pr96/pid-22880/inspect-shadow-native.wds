@@ -1,0 +1,14 @@
+.sympath [REDACTED_LOCAL_PATH]
+.reload /f CommunityShaders.dll
+x CommunityShaders!*ShadowLifetime*g_render*
+x CommunityShaders!*ShadowLifetime*g_destroy*
+x CommunityShaders!*ShadowLifetime*g_release*
+~0s
+.frame /r 10
+dv /t /v
+?? submitPacket
+?? screenshotTextureLifetime
+dq 1b676144300 L4
+dq 1b676144478 L12
+dd 1ba3e904710 L10
+q

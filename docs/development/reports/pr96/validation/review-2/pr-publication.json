@@ -1,0 +1,44 @@
+{
+    "pr": 96,
+    "url": "[REDACTED_ENDPOINT]",
+    "head": "fba3348ba2e06bdeb2d7db3b20a9e8a207db5fb9",
+    "branch": "codex/native-shadow-render-lifetime",
+    "base": "main-VR",
+    "draft": true,
+    "files": 7,
+    "bodyVerified": true,
+    "workflows": {
+        "workflow_runs": [
+            {
+                "id": 34730081686,
+                "name": "PR: WIP",
+                "status": "completed",
+                "conclusion": "success",
+                "run_number": 463,
+                "jobs_url": "[REDACTED_ENDPOINT]",
+                "logs_url": "[REDACTED_ENDPOINT]",
+                "workflow_id": 271707388
+            },
+            {
+                "id": 34730054740,
+                "name": "PR: Checks",
+                "status": "in_progress",
+                "conclusion": null,
+                "run_number": 278,
+                "jobs_url": "[REDACTED_ENDPOINT]",
+                "logs_url": "[REDACTED_ENDPOINT]",
+                "workflow_id": 266435758
+            },
+            {
+                "id": 34730054698,
+                "name": "PR: WIP",
+                "status": "completed",
+                "conclusion": "success",
+                "run_number": 462,
+                "jobs_url": "[REDACTED_ENDPOINT]",
+                "logs_url": "[REDACTED_ENDPOINT]",
+                "workflow_id": 271707388
+            }
+        ]
+    }
+}

@@ -1,0 +1,7 @@
+.exr -1
+.ecxr
+r
+kv
+.reload /f CommunityShaders.dll
+~* kv
+q

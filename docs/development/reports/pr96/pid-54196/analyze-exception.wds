@@ -1,0 +1,28 @@
+.echo === ORIGINAL EXCEPTION ===
+.lastevent
+.exr -1
+.ecxr
+r
+kv 25
+.echo === FAULT INSTRUCTION FROM CAPTURED MEMORY ===
+u @rip-20 @rip+20
+.echo === BAD NODE AND SELECTED BATCH ===
+dq @rax-20 L10
+dps @rbp-40 L30
+!vprot @rax
+!vprot @rbp
+.echo === CLEANUP CALLER ===
+.frame /r 1
+r
+.echo === RENDER BATCH CALLER ===
+.frame /r 2
+r
+.echo === CSX ARGUMENTS ===
+.frame /r 3
+r
+dv /t /v
+.echo === MODULE IDENTITY ===
+lmvm SkyrimVR
+lmvm CommunityShaders
+.echo === COMPLETE ===
+q

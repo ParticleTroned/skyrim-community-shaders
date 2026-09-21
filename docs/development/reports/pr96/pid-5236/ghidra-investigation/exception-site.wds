@@ -1,0 +1,11 @@
+.sympath+ [REDACTED_LOCAL_PATH]
+.reload /f CommunityShaders.dll
+ln 7ff886a84410
+u 7ff886a843d0 L35
+x CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before
+uf CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before
+.echo ==== LIGHT_28_MEMORY ====
+dq 18632c11600 L30
+.echo ==== LIGHT_37_MEMORY ====
+dq 188f1d13800 L08
+q

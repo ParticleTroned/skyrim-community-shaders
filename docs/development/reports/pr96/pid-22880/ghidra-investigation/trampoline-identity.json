@@ -1,0 +1,7 @@
+{
+    "address": "0x7ff7103b0000",
+    "file": "[REDACTED_LOCAL_PATH]",
+    "bytes": 4096,
+    "sha256": "d00de8d26d6c77aecfca0aff343b11554937c5ab9441f54588ff353d662a6f12",
+    "provenance": "unchanged captured detour trampolines; no native code restored or patched"
+}

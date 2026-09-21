@@ -1,0 +1,320 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.031 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+*** wait with pending attach
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+Symbol search path is: srv*
+Executable search path is:
+WARNING: Process 5236 is not attached as a debuggee
+         The process can be examined but debug events will not be received
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+(1474.b96c): Wake debugger - code 80000007 (first chance)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .echo ==== SAVED_EXCEPTION_STACK_MEMORY ====
+==== SAVED_EXCEPTION_STACK_MEMORY ====
+0:000> dps 1a174fe838 L80
+0000001a`174fe838  00000000`00000000
+0000001a`174fe840  00000000`00000000
+0000001a`174fe848  00000000`00000000
+0000001a`174fe850  00000000`00000000
+0000001a`174fe858  00000000`00000000
+0000001a`174fe860  00000000`00000000
+0000001a`174fe868  00000000`00000000
+0000001a`174fe870  00000000`00000000
+0000001a`174fe878  00000001`00000000
+0000001a`174fe880  00000000`00000000
+0000001a`174fe888  00000000`00000000
+0000001a`174fe890  00000000`00000000
+0000001a`174fe898  00000000`00000000
+0000001a`174fe8a0  00000000`00000000
+0000001a`174fe8a8  00000000`00000000
+0000001a`174fe8b0  00000000`00000000
+0000001a`174fe8b8  00000000`00000000
+0000001a`174fe8c0  00000000`00000000
+0000001a`174fe8c8  00000000`00000000
+0000001a`174fe8d0  00000000`00000000
+0000001a`174fe8d8  00000000`00000000
+0000001a`174fe8e0  00000000`00000000
+0000001a`174fe8e8  00000000`00000000
+0000001a`174fe8f0  00000000`00000000
+0000001a`174fe8f8  00000000`00000000
+0000001a`174fe900  00000000`00000000
+0000001a`174fe908  00000000`00000000
+0000001a`174fe910  00000000`00000000
+0000001a`174fe918  00000000`00000000
+0000001a`174fe920  00000000`00000000
+0000001a`174fe928  00000000`00000000
+0000001a`174fe930  00000000`00000000
+0000001a`174fe938  00000001`00000000
+0000001a`174fe940  00000000`00000000
+0000001a`174fe948  00000000`00000000
+0000001a`174fe950  00000000`00000000
+0000001a`174fe958  00000000`00000000
+0000001a`174fe960  00000000`00000000
+0000001a`174fe968  00000000`00000000
+0000001a`174fe970  00000000`00000000
+0000001a`174fe978  00000000`00000000
+0000001a`174fe980  00000000`00000000
+0000001a`174fe988  00000000`00000000
+0000001a`174fe990  00000000`00000000
+0000001a`174fe998  00000000`00000000
+0000001a`174fe9a0  00000000`00000000
+0000001a`174fe9a8  00000000`00000000
+0000001a`174fe9b0  00000000`00000000
+0000001a`174fe9b8  00000000`00000000
+0000001a`174fe9c0  00000000`00000000
+0000001a`174fe9c8  00000000`00000000
+0000001a`174fe9d0  00000000`00000000
+0000001a`174fe9d8  00000000`00000000
+0000001a`174fe9e0  00000000`00000000
+0000001a`174fe9e8  00000000`00000000
+0000001a`174fe9f0  00000000`00000000
+0000001a`174fe9f8  00000001`00000000
+0000001a`174fea00  00000000`00000000
+0000001a`174fea08  00000000`00000000
+0000001a`174fea10  00000000`00000000
+0000001a`174fea18  00000000`00000000
+0000001a`174fea20  00000000`00000000
+0000001a`174fea28  00000000`00000000
+0000001a`174fea30  00000000`00000000
+0000001a`174fea38  00000000`00000000
+0000001a`174fea40  00000000`00000000
+0000001a`174fea48  00000000`00000000
+0000001a`174fea50  00000000`00000000
+0000001a`174fea58  00000000`00000000
+0000001a`174fea60  00000000`00000000
+0000001a`174fea68  00000000`00000000
+0000001a`174fea70  00000000`00000000
+0000001a`174fea78  00000000`00000000
+0000001a`174fea80  00000000`00000000
+0000001a`174fea88  00000000`00000000
+0000001a`174fea90  00000000`00000000
+0000001a`174fea98  00000000`00000000
+0000001a`174feaa0  00000000`00000000
+0000001a`174feaa8  00000000`00000000
+0000001a`174feab0  00000000`00000000
+0000001a`174feab8  00000001`00000000
+0000001a`174feac0  00000000`00000000
+0000001a`174feac8  00000000`00000000
+0000001a`174fead0  00000000`00000000
+0000001a`174fead8  00000000`00000000
+0000001a`174feae0  00000000`00000000
+0000001a`174feae8  00000000`00000000
+0000001a`174feaf0  00000000`00000000
+0000001a`174feaf8  00000000`00000000
+0000001a`174feb00  00000000`00000000
+0000001a`174feb08  00000000`00000000
+0000001a`174feb10  00000000`00000000
+0000001a`174feb18  00000000`00000000
+0000001a`174feb20  00000000`00000000
+0000001a`174feb28  00000000`00000000
+0000001a`174feb30  00000000`00000000
+0000001a`174feb38  00000000`00000000
+0000001a`174feb40  00000000`00000000
+0000001a`174feb48  00000000`00000000
+0000001a`174feb50  00000000`00000000
+0000001a`174feb58  00000000`00000000
+0000001a`174feb60  00000000`00000000
+0000001a`174feb68  00000000`00000000
+0000001a`174feb70  00000000`00000000
+0000001a`174feb78  00000001`00000000
+0000001a`174feb80  00000000`00000000
+0000001a`174feb88  00000000`00000000
+0000001a`174feb90  00000000`00000000
+0000001a`174feb98  00000000`00000000
+0000001a`174feba0  00000000`00000000
+0000001a`174feba8  00000000`00000000
+0000001a`174febb0  00000000`00000000
+0000001a`174febb8  00000000`00000000
+0000001a`174febc0  00000000`00000000
+0000001a`174febc8  00000000`00000000
+0000001a`174febd0  00000000`00000000
+0000001a`174febd8  00000000`00000000
+0000001a`174febe0  00000000`00000000
+0000001a`174febe8  00000000`00000000
+0000001a`174febf0  00000000`00000000
+0000001a`174febf8  00000000`00000000
+0000001a`174fec00  00000000`00000000
+0000001a`174fec08  00000000`00000000
+0000001a`174fec10  00000000`00000000
+0000001a`174fec18  00000000`00000000
+0000001a`174fec20  00000000`00000000
+0000001a`174fec28  00000000`00000000
+0000001a`174fec30  00000000`00000000
+0:000> .echo ==== DESCRIPTOR_FROM_FIRST_EXCEPTION_RAX ====
+==== DESCRIPTOR_FROM_FIRST_EXCEPTION_RAX ====
+0:000> dq 18632c10f00 L24
+00000186`32c10f00  00000000`00000000 00000000`b3509950
+00000186`32c10f10  a709aded`3f800000 00000000`33509950
+00000186`32c10f20  b33bbd2e`b33bbd2e 00000000`3f8e38e4
+00000186`32c10f30  c3bfd46b`c500d399 3f800000`c280c6fc
+00000186`32c10f40  00000186`f76ec680 00000000`00000000
+00000186`32c10f50  00000186`32bff900 00000000`00000000
+00000186`32c10f60  ffffffff`ffffffff ffffffff`ffffffff
+00000186`32c10f70  00000000`00000000 00000000`00000000
+00000186`32c10f80  00000000`00000000 00000000`00000000
+00000186`32c10f90  00000000`00000000 00000000`00000000
+00000186`32c10fa0  00000000`00000000 00000000`00000000
+00000186`32c10fb0  00000000`00000000 00000000`00000000
+00000186`32c10fc0  00000000`00000000 00000000`00000000
+00000186`32c10fd0  0000003f`00000000 00000000`0000003f
+00000186`32c10fe0  3f800000`00000000 00001000`00000000
+00000186`32c10ff0  00000800`00001000 00000186`f9014fc0
+00000186`32c11000  00000000`00000101 3f800000`00000000
+00000186`32c11010  00000000`b3509950 2709aded`3f800000
+0:000> .echo ==== NATIVE_SELECTED_LIGHT_DISPATCH ====
+==== NATIVE_SELECTED_LIGHT_DISPATCH ====
+0:000> u SkyrimVR+13231b0 L28
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+SkyrimVR+0x13231b0:
+00007ff6`277d31b0 7c24            jl      SkyrimVR+0x13231d6 (00007ff6`277d31d6)
+00007ff6`277d31b2 28c6            sub     dh,al
+00007ff6`277d31b4 054ee5e501      add     eax,1E5E54Eh
+00007ff6`277d31b9 00488b          add     byte ptr [rax-75h],cl
+00007ff6`277d31bc 35bffe0f02      xor     eax,20FFEBFh
+00007ff6`277d31c1 e8cab5faff      call    SkyrimVR+0x12ce790 (00007ff6`2777e790)
+00007ff6`277d31c6 84c0            test    al,al
+00007ff6`277d31c8 7469            je      SkyrimVR+0x1323233 (00007ff6`277d3233)
+00007ff6`277d31ca 8b0d88fd3c02    mov     ecx,dword ptr [SkyrimVR+0x36f2f58 (00007ff6`29ba2f58)]
+00007ff6`277d31d0 65488b042558000000 mov   rax,qword ptr gs:[58h]
+00007ff6`277d31d9 ba68070000      mov     edx,768h
+00007ff6`277d31de 4c8b34c8        mov     r14,qword ptr [rax+rcx*8]
+00007ff6`277d31e2 4c03f2          add     r14,rdx
+00007ff6`277d31e5 418b1e          mov     ebx,dword ptr [r14]
+00007ff6`277d31e8 895c2468        mov     dword ptr [rsp+68h],ebx
+00007ff6`277d31ec 41c7061d000000  mov     dword ptr [r14],1Dh
+00007ff6`277d31f3 c744246000000000 mov     dword ptr [rsp+60h],0
+00007ff6`277d31fb 33d2            xor     edx,edx
+00007ff6`277d31fd 488bce          mov     rcx,rsi
+00007ff6`277d3200 e84b70fdff      call    SkyrimVR+0x12fa250 (00007ff6`277aa250)
+00007ff6`277d3205 4885c0          test    rax,rax
+00007ff6`277d3208 7426            je      SkyrimVR+0x1323230 (00007ff6`277d3230)
+00007ff6`277d320a 660f1f440000    nop     word ptr [rax+rax]
+00007ff6`277d3210 4c8b00          mov     r8,qword ptr [rax]
+00007ff6`277d3213 488d542460      lea     rdx,[rsp+60h]
+00007ff6`277d3218 488bc8          mov     rcx,rax
+00007ff6`277d321b 41ff5050        call    qword ptr [r8+50h]
+00007ff6`277d321f 8b542460        mov     edx,dword ptr [rsp+60h]
+00007ff6`277d3223 488bce          mov     rcx,rsi
+00007ff6`277d3226 e82570fdff      call    SkyrimVR+0x12fa250 (00007ff6`277aa250)
+00007ff6`277d322b 4885c0          test    rax,rax
+00007ff6`277d322e 75e0            jne     SkyrimVR+0x1323210 (00007ff6`277d3210)
+00007ff6`277d3230 41891e          mov     dword ptr [r14],ebx
+00007ff6`277d3233 40883dcee4e501  mov     byte ptr [SkyrimVR+0x3181708 (00007ff6`29631708)],dil
+00007ff6`277d323a 488b5c2470      mov     rbx,qword ptr [rsp+70h]
+00007ff6`277d323f 4883c440        add     rsp,40h
+00007ff6`277d3243 415e            pop     r14
+00007ff6`277d3245 5f              pop     rdi
+00007ff6`277d3246 5e              pop     rsi
+00007ff6`277d3247 c3              ret
+0:000> .echo ==== CAPTURE_NATIVE_CODE ====
+==== CAPTURE_NATIVE_CODE ====
+0:000> .writemem [REDACTED_LOCAL_PATH]
+Writing 90000 bytes................................................................................................................................................................................................................................................................................................
+0:000> .writemem [REDACTED_LOCAL_PATH]
+Writing 10000 bytes................................
+0:000> .echo ==== VALIDATE_NATIVE_HOOK_TRAMPOLINES ====
+==== VALIDATE_NATIVE_HOOK_TRAMPOLINES ====
+0:000> u 7ff5e6d80fc0 L10
+00007ff5`e6d80fc0 4057            push    rdi
+00007ff5`e6d80fc2 4883ec30        sub     rsp,30h
+00007ff5`e6d80fc6 ff253c000000    jmp     qword ptr [00007ff5`e6d81008]
+00007ff5`e6d80fcc cc              int     3
+00007ff5`e6d80fcd cc              int     3
+00007ff5`e6d80fce cc              int     3
+00007ff5`e6d80fcf cc              int     3
+00007ff5`e6d80fd0 cc              int     3
+00007ff5`e6d80fd1 cc              int     3
+00007ff5`e6d80fd2 cc              int     3
+00007ff5`e6d80fd3 cc              int     3
+00007ff5`e6d80fd4 cc              int     3
+00007ff5`e6d80fd5 cc              int     3
+00007ff5`e6d80fd6 cc              int     3
+00007ff5`e6d80fd7 cc              int     3
+00007ff5`e6d80fd8 cc              int     3
+0:000> u 7ff5e6d80e40 L10
+00007ff5`e6d80e40 4156            push    r14
+00007ff5`e6d80e42 4883ec30        sub     rsp,30h
+00007ff5`e6d80e46 ff253c000000    jmp     qword ptr [00007ff5`e6d80e88]
+00007ff5`e6d80e4c cc              int     3
+00007ff5`e6d80e4d cc              int     3
+00007ff5`e6d80e4e cc              int     3
+00007ff5`e6d80e4f cc              int     3
+00007ff5`e6d80e50 cc              int     3
+00007ff5`e6d80e51 cc              int     3
+00007ff5`e6d80e52 cc              int     3
+00007ff5`e6d80e53 cc              int     3
+00007ff5`e6d80e54 cc              int     3
+00007ff5`e6d80e55 cc              int     3
+00007ff5`e6d80e56 cc              int     3
+00007ff5`e6d80e57 cc              int     3
+00007ff5`e6d80e58 cc              int     3
+0:000> qd
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

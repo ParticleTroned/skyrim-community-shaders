@@ -1,0 +1,14 @@
+FUNCTION 7ff750dda250 completed=true
+
+
+undefined8 FUN_7ff750dda250(longlong param_1,uint param_2)
+
+{
+  return *(undefined8 *)(*(longlong *)(param_1 + 600) + (ulonglong)param_2 * 8);
+}
+
+
+7ff750dda250 MOV RAX,qword ptr [RCX + 0x258]
+7ff750dda257 MOV EDX,EDX
+7ff750dda259 MOV RAX,qword ptr [RAX + RDX*0x8]
+7ff750dda25d RET

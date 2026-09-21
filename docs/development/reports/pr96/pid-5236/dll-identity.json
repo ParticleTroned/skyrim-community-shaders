@@ -1,0 +1,143 @@
+{
+    "producerBuildId": "d1b5a347cf75b29973f8e5a8d22477ce3e4a112b057566f329a7c218da4a7e6d",
+    "sourceCommit": "befd358515eb201aa5a278292b93204f24c44d9e",
+    "buildReceiptPath": "[REDACTED_LOCAL_PATH]",
+    "modlist": "[REDACTED_LOCAL_PATH]",
+    "enabledProviders": [
+        {
+            "mod": "CSX_AIO-3.19-VR-shadow-lifetime-d1b5a347cf75-DevBench-no-cache-no-fomod",
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 28750848,
+            "sha256": "4d284dd70f64344d475a1f124bcedabbc4cd83a4a02fd820d051958e69ccafd9",
+            "manifestPath": "[REDACTED_LOCAL_PATH]",
+            "manifest": {
+                "artifact": {
+                    "fileName": "CommunityShaders.dll",
+                    "sha256": "4d284dd70f64344d475a1f124bcedabbc4cd83a4a02fd820d051958e69ccafd9",
+                    "sizeBytes": 28750848
+                },
+                "buildId": "d1b5a347cf75b29973f8e5a8d22477ce3e4a112b057566f329a7c218da4a7e6d",
+                "buildIdAlgorithm": "sha256-canonical-json-v1",
+                "environment": {
+                    "compilerPath": "[REDACTED_LOCAL_PATH]",
+                    "toolchainFile": "[REDACTED_LOCAL_PATH]"
+                },
+                "identity": {
+                    "build": {
+                        "configuration": "Release",
+                        "options": {
+                            "DEVBENCH_BRIDGE": "ON",
+                            "ENABLE_SKYRIM_AE": "ON",
+                            "ENABLE_SKYRIM_SE": "ON",
+                            "ENABLE_SKYRIM_VR": "ON",
+                            "MSVC_RUNTIME": "MultiThreadedDLL",
+                            "TRACY_SUPPORT": "OFF"
+                        },
+                        "pluginVersion": "CSX 3.19-VR",
+                        "runtime": "VR"
+                    },
+                    "dependencies": {
+                        "submodules": [
+                            {
+                                "checkedOutCommit": "3d81614617910e7f34b33d8750881811b5e36445",
+                                "dirty": false,
+                                "dirtyDigest": null,
+                                "matchesPinned": true,
+                                "path": "extern/CommonLibSSE-NG",
+                                "pinnedCommit": "3d81614617910e7f34b33d8750881811b5e36445"
+                            },
+                            {
+                                "checkedOutCommit": "e65b2530631f2afb9a9ac753884926e49e20d608",
+                                "dirty": false,
+                                "dirtyDigest": null,
+                                "matchesPinned": true,
+                                "path": "extern/FidelityFX-SDK",
+                                "pinnedCommit": "e65b2530631f2afb9a9ac753884926e49e20d608"
+                            },
+                            {
+                                "checkedOutCommit": "9b181ea572f680327fe01a14a0f1f41c78034104",
+                                "dirty": false,
+                                "dirtyDigest": null,
+                                "matchesPinned": true,
+                                "path": "extern/nvapi",
+                                "pinnedCommit": "9b181ea572f680327fe01a14a0f1f41c78034104"
+                            },
+                            {
+                                "checkedOutCommit": "e8aaa6eaac968711fb62473d4ae8256dde20919b",
+                                "dirty": false,
+                                "dirtyDigest": null,
+                                "matchesPinned": true,
+                                "path": "extern/Streamline-DX12",
+                                "pinnedCommit": "e8aaa6eaac968711fb62473d4ae8256dde20919b"
+                            }
+                        ],
+                        "vcpkg": {
+                            "builtinBaseline": "dddca6fa87f177e0678e2545c4b4636a44aa05bd",
+                            "manifestSha256": "51debf1b429d7701c89570a3d2a5a9156e23488b1f040dc2c44575453345a058",
+                            "overlayTreeSha256": "9ec90146d3113621b8b838a1e04fb3df3aa7ebc9513b84f8dd2f15b48470a261"
+                        }
+                    },
+                    "shaderCache": {
+                        "abiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+                        "contract": {
+                            "contentDigest": "xxh3-128-crlf-normalized",
+                            "contractFiles": [
+                                {
+                                    "path": "config/shader-cache-abi.json",
+                                    "sha256": "0bc3dc193d0d5b0a3a089bdcc4a4ed831f4e5afd0cab1452db6fd4956b687ab2"
+                                },
+                                {
+                                    "path": "config/shader-compatibility-variants.json",
+                                    "sha256": "c0ae8cbaa63b201f71946b1db4b4af14b49f493aa828b95772f31cb879489ad5"
+                                }
+                            ],
+                            "contractTreeSha256": "a890e0d321ea94e9133a0f80f886b573ff2b02b29eb4b7d97e71e84d48e0b113",
+                            "managedCompiler": "D3DCompileFromFile",
+                            "manifestSchemaVersion": 1,
+                            "schemaVersion": 2,
+                            "shaderModels": ["vs_5_0", "ps_5_0", "cs_5_0"]
+                        }
+                    },
+                    "source": {
+                        "commit": "befd358515eb201aa5a278292b93204f24c44d9e",
+                        "dirty": true,
+                        "dirtyDigest": "660b72e6705d8ca4c70f66ca717a6b75e8455bc2555e93ff083812680c2f49c1"
+                    },
+                    "toolchain": {
+                        "cmakeVersion": "4.4.1",
+                        "compilerId": "MSVC",
+                        "compilerSha256": "c94cdac6a780142920110e5cb8b7339817029eead696e0e97700b45e03216a00",
+                        "compilerVersion": "19.51.36252.0",
+                        "generator": "Visual Studio 18 2026",
+                        "generatorPlatform": "x64",
+                        "generatorToolset": null,
+                        "targetTriplet": "x64-windows-static-md",
+                        "toolchainFileSha256": "bc04170bf7f164b6ef27fadbab1947d2a67cded96e2551c0d3000c6130c41468",
+                        "windowsSdkVersion": "10.0.28000.0"
+                    }
+                },
+                "schema": "community-shaders.build-provenance",
+                "schemaVersion": 1,
+                "sourceDisplay": {
+                    "describe": "v3.19.0-pr28-296-gbefd35851-dirty",
+                    "remote": "[REDACTED_EMAIL]:ParticleTroned/skyrim-community-shaders.git"
+                }
+            }
+        }
+    ],
+    "otherProviders": [
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "exists": false
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "exists": false
+        }
+    ],
+    "expectedDll": {
+        "sha256": "4d284dd70f64344d475a1f124bcedabbc4cd83a4a02fd820d051958e69ccafd9",
+        "sizeBytes": 28750848
+    },
+    "checkedUtc": "2026-09-12T05:47:34.9459097Z"
+}

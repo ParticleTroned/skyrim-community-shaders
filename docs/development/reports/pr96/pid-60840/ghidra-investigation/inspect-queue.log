@@ -1,0 +1,190 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.031 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+Symbol search path is: srv*
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 11:49:42.000 2026 (UTC + 2:00)
+System Uptime: 2 days 14:36:19.307
+Process Uptime: 0 days 0:14:36.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(eda8.908c): Wake debugger - code 80000007 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .sympath+ [REDACTED_LOCAL_PATH]
+Symbol search path is: srv*;[REDACTED_LOCAL_PATH]
+Expanded Symbol search path is: cache*;SRV*[REDACTED_ENDPOINT]]
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+OK                                             [REDACTED_LOCAL_PATH]
+0:000> ~~[de3c]s
+nvwgf2umx!NVENCODEAPI_Thunk+0xb888d:
+00007ff8`5300c8ed 8b4604          mov     eax,dword ptr [rsi+4] ds:000002a4`09ae19dc=00000000
+0:143> .frame /r 1
+01 000000ac`3b76f7c0 00007ff8`532b8350     nvwgf2umx!SetDependencyInfo+0x69a0f
+rax=0000029e63e1cc40 rbx=0000029e65a1a810 rcx=0000000000000000
+rdx=000002a2449369c0 rsi=000000ac3b76f810 rdi=000002a409ae19d8
+rip=00007ff8532b83ef rsp=000000ac3b76f7c0 rbp=0000029e65a1b600
+ r8=00007ff85300c840  r9=0000000000000000 r10=0000000000000001
+r11=0000029e65a29428 r12=0000000000000000 r13=0000000000000000
+r14=0000029e65a1abc0 r15=0000000000000000
+iopl=0         nv up ei ng nz ac po cy
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000293
+nvwgf2umx!SetDependencyInfo+0x69a0f:
+00007ff8`532b83ef 493b3e          cmp     rdi,qword ptr [r14] ds:0000029e`65a1abc0=000002a409ae7ec0
+0:143> dd 2a409ae1990 L40
+000002a4`09ae1990  00000000 00000000 0004008c 0000c900
+000002a4`09ae19a0  64f319d0 0000029e 0008008d 00000001
+000002a4`09ae19b0  65eca4c0 0000029e 3add4880 000002a2
+000002a4`09ae19c0  00000000 00000000 0004008c 00005900
+000002a4`09ae19d0  d16869c0 0000029e 00000000 00000000
+000002a4`09ae19e0  00000000 00010005 0004001e 00010012
+000002a4`09ae19f0  00000000 00000000 0006000a 00000039
+000002a4`09ae1a00  00000000 00010012 63de8150 000002a3
+000002a4`09ae1a10  0006000b 00010000 63de3830 000002a3
+000002a4`09ae1a20  0000001c 00000000 00040001 00000030
+000002a4`09ae1a30  00000000 00000000 0004008c 0000ca00
+000002a4`09ae1a40  64f319d0 0000029e 0004008c 00000100
+000002a4`09ae1a50  65eca4c0 0000029e 0004008c 00005a00
+000002a4`09ae1a60  d16869c0 0000029e 0008002d 00000000
+000002a4`09ae1a70  d149c600 00000000 00000000 00002400
+000002a4`09ae1a80  84a4e7a0 000002a1 0006002a 01000000
+0:143> dq 29e65a1abc0 L4
+0000029e`65a1abc0  000002a4`09ae7ec0 00000000`00000001
+0000029e`65a1abd0  000b95c0`0001af5f 00000001`00000000
+0:143> dq 29e65a1ad38 L4
+0000029e`65a1ad38  00007ff8`56847a78 00000000`000017d4
+0000029e`65a1ad48  00000000`0000de3c 00000000`00000000
+0:143> !address 2a409ae19d8
+
+Usage:                  Heap
+Base Address:           000002a4`09a9a000
+End Address:            000002a4`09b69000
+Region Size:            00000000`000cf000 ( 828.000 kB)
+State:                  00001000          MEM_COMMIT
+Protect:                00000004          PAGE_READWRITE
+Type:                   00020000          MEM_PRIVATE
+Allocation Base:        000002a4`097c0000
+Allocation Protect:     00000004          PAGE_READWRITE
+More info:              heap owning the address: !heap -s -h 0x29e2fad0000
+More info:              heap segment
+More info:              heap entry containing the address: !heap -x 0x2a409ae19d8
+
+
+Content source: 1 (target), length: 87628
+0:143> ~0s
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .frame /r 10
+*** WARNING: Unable to verify checksum for CommunityShaders.dll
+10 000000ac`336faf80 00007ff8`600c6ca2     CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f
+rax=0000000000000004 rbx=000000ac336fb220 rcx=00000000000017cc
+rdx=0000000000000000 rsi=0000000000000000 rdi=000000ac336fb360
+rip=00007ff8600c556f rsp=000000ac336faf80 rbp=000000ac336fb080
+ r8=000000ac336fa6f8  r9=0000000000000000 r10=00000000000017cc
+r11=00000000000017cc r12=000000ac336fb6c8 r13=0000000000000000
+r14=0000000000000000 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f:
+00007ff8`600c556f 8bf0            mov     esi,eax
+0:000> ?? submitPacket.texture
+struct vr::Texture_t
+   +0x000 handle           : 0x000002a4`e7023ce0 Void
+   +0x008 eType            : 0 ( TextureType_DirectX )
+   +0x00c eColorSpace      : 1 ( ColorSpace_Gamma )
+0:000> ?? submitPacket.colorLifetime
+struct winrt::com_ptr<ID3D11Texture2D>
+   +0x000 m_ptr            : 0x000002a4`e7023ce0 ID3D11Texture2D
+0:000> ?? submitPacket.deviceLifetime
+struct winrt::com_ptr<ID3D11Device>
+   +0x000 m_ptr            : 0x0000029e`655168b0 ID3D11Device
+0:000> ?? submitPacket.bounds
+struct vr::VRTextureBounds_t
+   +0x000 uMin             : 0.5
+   +0x004 vMin             : 0
+   +0x008 uMax             : 1
+   +0x00c vMax             : 1
+0:000> ?? submitPacket.publicationLease
+struct OpenVRSubmitLeasePolicy::PublicationLease
+   +0x000 generation       : 0x12
+   +0x008 deviceIdentity   : 0x0000029e`655168b0
+   +0x010 colorTextureRetained : 1
+   +0x011 depthTextureRequired : 0
+   +0x012 depthTextureRetained : 1
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

@@ -1,0 +1,190 @@
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.031 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+Symbol search path is: srv*
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 13:55:18.000 2026 (UTC + 2:00)
+System Uptime: 0 days 0:24:30.432
+Process Uptime: 0 days 0:18:15.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(5960.2014): Wake debugger - code 80000007 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtWaitForSingleObject+0x14:
+00007ffe`204a0e44 c3              ret
+0:000> .sympath [REDACTED_LOCAL_PATH]
+Symbol search path is: [REDACTED_LOCAL_PATH]
+Expanded Symbol search path is: [REDACTED_LOCAL_PATH]
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+0:000> .reload /f CommunityShaders.dll
+*** WARNING: Unable to verify checksum for CommunityShaders.dll
+0:000> x CommunityShaders!*ShadowLifetime*g_render*
+00007ffc`ea6be088 CommunityShaders!Diagnostics::ShadowLifetime::g_renderDescriptor = 0x00007ff7`50e2c370
+00007ffc`ea6be0a8 CommunityShaders!Diagnostics::ShadowLifetime::g_render = 0x00007ff7`103b0f00
+0:000> x CommunityShaders!*ShadowLifetime*g_destroy*
+00007ffc`ea6be0a0 CommunityShaders!Diagnostics::ShadowLifetime::g_destroyLight = 0x00007ff7`103b0e40
+00007ffc`ea6be098 CommunityShaders!Diagnostics::ShadowLifetime::g_destroyAccumulator = 0x00007ff7`103b0ea0
+00007ffc`ea6be0b0 CommunityShaders!Diagnostics::ShadowLifetime::g_destroyDescriptor = 0x00007ff7`103b0fc0
+0:000> x CommunityShaders!*ShadowLifetime*g_release*
+00007ffc`ea6be090 CommunityShaders!Diagnostics::ShadowLifetime::g_release = 0x00007ff7`103b0f60
+0:000> ~0s
+ntdll!NtWaitForSingleObject+0x14:
+00007ffe`204a0e44 c3              ret
+0:000> .frame /r 10
+10 0000007b`4d19af70 00007ffc`e92d73a2     CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f
+rax=0000000000000004 rbx=0000007b4d19b210 rcx=00000000000017cc
+rdx=0000000000000000 rsi=0000000000000000 rdi=0000007b4d19b350
+rip=00007ffce92d5c6f rsp=0000007b4d19af70 rbp=0000007b4d19b070
+ r8=0000007b4d19a6e8  r9=0000000000000000 r10=00000000000017cc
+r11=00000000000017cc r12=0000007b4d19b6b8 r13=0000000000000000
+r14=0000000000000000 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f:
+00007ffc`e92d5c6f 8bf0            mov     esi,eax
+0:000> dv /t /v
+@r12              class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_4> * this = 0x0000007b`4d19b6b8
+0000007b`4d19b458 char * a_path = 0x00007ffc`e95c9000 "original"
+0000007b`4d19b460 struct vr::Texture_t * a_texture = 0x00000000`00000000
+0000007b`4d19b468 struct vr::VRTextureBounds_t * a_bounds = 0x00000000`00000000
+0000007b`4d19b470 vr::EVRSubmitFlags a_submitFlags = Submit_Default (0n0)
+0000007b`4d19b478 unsigned int64 a_postLoadReleaseToken = 0
+0000007b`4d19b480 unsigned int64 a_postLoadKeepaliveToken = 0
+0000007b`4d19b488 struct Upscaling::VRRenderScalePresentationObservation * a_probeObservation = 0x00000000`00000000
+0000007b`4d19b490 Upscaling::VRPostLoadCompositorKeepaliveDisposition * a_keepaliveDisposition = 0x00000000`00000000
+0000007b`4d19b498 bool a_allowPostLoadScopeRebase = false
+<unavailable>     bool a_allowScreenshotCapture = <value unavailable>
+0000007b`4d19b4a8 bool a_auditBlackKeepalive = false
+0000007b`4d19b4b0 struct vr::Texture_t * a_screenshotTexture = 0x00000000`00000000
+0000007b`4d19b4b8 struct vr::VRTextureBounds_t * a_screenshotBounds = 0x00000000`00000000
+@rbx              struct vr::Texture_t * retainedTexture = 0x0000007b`4d19b210
+@rdi              struct vr::VRTextureBounds_t * retainedBounds = 0x0000007b`4d19b350
+0000007b`4d19b1c9 bool observeScreenshot = true
+<unavailable>     bool canPublishSubmitResult = <value unavailable>
+<unavailable>     unsigned int64 completionScopeEpoch = <value unavailable>
+<unavailable>     vr::EVRCompositorError completionResult = <value unavailable>
+0000007b`4d19b3f8 struct vr::VRTextureBounds_t retainedScreenshotBounds = struct vr::VRTextureBounds_t
+0000007b`4d19b1d0 struct OpenVRSubmitLeasePolicy::PublicationLease screenshotLease = struct OpenVRSubmitLeasePolicy::PublicationLease
+0000007b`4d19b1f0 struct `anonymous-namespace'::RetainedOpenVRSubmitPacket submitPacket = struct `anonymous-namespace'::RetainedOpenVRSubmitPacket
+0000007b`4d19afc0 bool hasScreenshotBounds = false
+0000007b`4d19afe8 vr::EColorSpace screenshotColorSpace = ColorSpace_Auto (0n0)
+<unavailable>     Upscaling::VRPostLoadCompositorKeepaliveDisposition keepaliveDisposition = <value unavailable>
+0000007b`4d19afc8 struct winrt::com_ptr<ID3D11Texture2D> screenshotTextureLifetime = struct winrt::com_ptr<ID3D11Texture2D>
+<unavailable>     bool submitPacketCurrentAfterSubmit = <value unavailable>
+<unavailable>     vr::EVRCompositorError result = <value unavailable>
+@r14              unsigned int64 probeSequence = 0
+<unavailable>     class std::shared_lock<std::shared_mutex> renderTargetReadLock = <value unavailable>
+0:000> ?? submitPacket
+struct `anonymous-namespace'::RetainedOpenVRSubmitPacket
+   +0x000 payloadKind      : 0 ( Texture )
+   +0x008 publicationLease : OpenVRSubmitLeasePolicy::PublicationLease
+   +0x020 texture          : vr::Texture_t
+   +0x030 textureWithPose  : vr::VRTextureWithPose_t
+   +0x070 textureWithDepth : vr::VRTextureWithDepth_t
+   +0x0d0 textureWithPoseAndDepth : vr::VRTextureWithPoseAndDepth_t
+   +0x160 bounds           : vr::VRTextureBounds_t
+   +0x170 eye              : 1 ( Eye_Right )
+   +0x174 flags            : 0 ( Submit_Default )
+   +0x178 colorLifetime    : winrt::com_ptr<ID3D11Texture2D>
+   +0x180 depthLifetime    : winrt::com_ptr<ID3D11Texture2D>
+   +0x188 deviceLifetime   : winrt::com_ptr<ID3D11Device>
+   +0x190 captureError     : 66 ( VRCompositorError_InvalidTexture )
+   +0x194 hasTexture       : 1
+   +0x195 hasBounds        : 1
+   +0x196 directX          : 1
+   +0x197 valid            : 1
+0:000> ?? screenshotTextureLifetime
+struct winrt::com_ptr<ID3D11Texture2D>
+   +0x000 m_ptr            : (null)
+0:000> dq 1b676144300 L4
+000001b6`76144300  000001ba`3e905fd0 00000000`00000001
+000001b6`76144310  000994fd`00013e26 00000001`00000000
+0:000> dq 1b676144478 L12
+000001b6`76144478  00007ffc`d6097a78 00000000`000017d4
+000001b6`76144488  00000000`00008b34 00000000`00000000
+000001b6`76144498  000001b6`76143f50 00000000`000017cc
+000001b6`761444a8  00000000`000017d0 00000000`00000000
+000001b6`761444b8  00000002`00000338 00000000`00000000
+000001b6`761444c8  000003e8`0000000a 00000000`00000000
+000001b6`761444d8  00000000`00000000 00000000`00000000
+000001b6`761444e8  00000000`76f88b00 00000000`00000000
+000001b6`761444f8  00000000`00000000 00000000`00000000
+0:000> dd 1ba3e904710 L10
+000001ba`3e904710  00000000 000001bb 0006000a 00000039
+000001ba`3e904720  00000000 00000030 4edb98d0 000001bb
+000001ba`3e904730  0006000b 00010000 4edb9180 000001bb
+000001ba`3e904740  00000020 00000000 00040001 0000005d
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

@@ -1,0 +1,64 @@
+{
+    "schema": "csx-native-shadow-render-pr-validation-v1",
+    "sourceCommit": "cddabac0c7563ed7886246470bd250de92e72030",
+    "buildId": "d8c33e2807eacc0101b746a8b37e161e4f2da89720f3dd9aa867ebdc6f3229c0",
+    "manifest": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 4228,
+        "sha256": "fc24907de9fd2bd500f57ee557cf2adc7594f594190012a200d9dd65f218fceb"
+    },
+    "dll": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 28757504,
+        "sha256": "3ee063d9ed332a61653e91a9d56ff2a3fdb15d7e182f0a43bad7fab96935b636"
+    },
+    "checks": {
+        "configure": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 2539,
+                "sha256": "71276ad087ac96ea4cc9828e09c07651d1c8ea87ae39650a211d5b979fc059a5"
+            }
+        },
+        "focused-build": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 1679,
+                "sha256": "01e9dadaf277c5966795f898f0b67606c4ac1db714be51c7a02cbb1aa885e1ba"
+            }
+        },
+        "focused-tests": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 1599,
+                "sha256": "a09c64307765b96b791d2f5ce5033cfb8eb646c94de16d94446ab8764a9dd7ac"
+            }
+        },
+        "dll-build": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 70287,
+                "sha256": "704693324a6f63d7f28cc56903e02daf47238dd8a6c805f3e65856748cc33a6d"
+            }
+        }
+    },
+    "focusedTestsPassed": ["SceneLightSnapshot", "VRSceneGuards"],
+    "allocationFailureCases": 13,
+    "nativeGuardAssertions": 477,
+    "compiledRuntimes": ["SE", "AE", "VR"],
+    "devbenchBridge": true,
+    "diagnosticRecorderIncluded": false,
+    "deployed": false,
+    "runtimeValidation": "Not run for this native-loop change; PR93 COC results are not applicable",
+    "performanceNeutrality": "Unverified; no comparable in-game performance measurements",
+    "scope": "Seven-file native shadow-render light-lifetime correction; main-VR includes merged PR93",
+    "review": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 2044,
+        "sha256": "1e2608fea0553bb7acb1b107986dbeeb50cd82725a5b8c575e6e4a9c19131630"
+    }
+}

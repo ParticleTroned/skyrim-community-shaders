@@ -1,0 +1,37 @@
+UpdateCTestConfiguration  from :[REDACTED_LOCAL_PATH]
+Test project [REDACTED_LOCAL_PATH]
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 8
+    Start  8: SceneLightSnapshot
+
+8: Test command: [REDACTED_LOCAL_PATH]
+8: Working Directory: [REDACTED_LOCAL_PATH]
+8: Test timeout computed to be: 30
+8: 9 injected allocation failures passed
+8: 6 native render allocation failures passed
+8: Scene light NiPointer ownership, native capture integration and allocation failures passed
+1/2 Test  #8: SceneLightSnapshot ...............   Passed    0.01 sec
+test 10
+    Start 10: VRSceneGuards
+
+10: Test command: [REDACTED_LOCAL_PATH]
+10: Working Directory: [REDACTED_LOCAL_PATH]
+10: Test timeout computed to be: 30
+10: VR scene guard installation: 477 assertions passed
+2/2 Test #10: VRSceneGuards ....................   Passed    0.08 sec
+
+The following tests passed:
+	SceneLightSnapshot
+	VRSceneGuards
+
+100% tests passed out of 2
+
+Label Time Summary:
+ControllerTests    =   0.09 sec*proc (2 tests)
+
+Total Test time (real) =   0.10 sec

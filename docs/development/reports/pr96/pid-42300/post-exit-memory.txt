@@ -1,0 +1,140 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.016 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+Symbol search path is: [REDACTED_LOCAL_PATH]
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Fri Sep 11 22:53:59.000 2026 (UTC + 2:00)
+System Uptime: 2 days 1:40:31.004
+Process Uptime: 0 days 0:24:38.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+wininet!DllMainCRTStartup+0x24:
+00007ff9`6fd1d4d4 8bd3            mov     edx,ebx
+0:000> .echo POST-EXIT MEMORY -- NOT FAULT-TIME HEAP
+POST-EXIT MEMORY -- NOT FAULT-TIME HEAP
+0:000> .echo BATCH STORAGE
+BATCH STORAGE
+0:000> dq 00000255fdb87200 L30
+00000255`fdb87200  00000000`00000000 00000000`00000000
+00000255`fdb87210  00000000`00000000 00000000`00000000
+00000255`fdb87220  00000000`00000000 00000000`00000000
+00000255`fdb87230  00000000`00000000 00000000`00000000
+00000255`fdb87240  00010000`00000000 00000000`00000000
+00000255`fdb87250  00000255`fdb86e90 00000000`426922fc
+00000255`fdb87260  00000000`00000000 00000000`00000000
+00000255`fdb87270  5c006075`00000001 00000000`00000000
+00000255`fdb87280  00007ff6`727923c8 00000000`00000001
+00000255`fdb87290  00000256`04cd3580 00000000`00000081
+00000255`fdb872a0  00000255`fdba48c0 00000000`00000000
+00000255`fdb872b0  00007ff6`72792d88 00000000`00000001
+00000255`fdb872c0  00000255`fdba4900 00000000`00000000
+00000255`fdb872d0  00000000`00000000 00000000`00000000
+00000255`fdb872e0  00007ff6`727923c8 00000000`00000001
+00000255`fdb872f0  00000256`04cd3700 00000000`00000081
+00000255`fdb87300  00000255`fdba4940 00000000`00000000
+00000255`fdb87310  00007ff6`72792d88 00000000`00000001
+00000255`fdb87320  00000255`fdba4980 00000000`00000000
+00000255`fdb87330  00000000`00000000 00000000`00000000
+00000255`fdb87340  00007ff6`727923c8 00000000`00000001
+00000255`fdb87350  00000256`04cd3880 00000000`00000081
+00000255`fdb87360  00000255`fdba49c0 00000000`00000000
+00000255`fdb87370  00007ff6`72792d88 00000000`00000001
+0:000> .echo BAD LIST POINTER TARGET
+BAD LIST POINTER TARGET
+0:000> dq SkyrimVR+15e23b0 L12
+00007ff6`727923b0  00007ff6`71fb84c0 00007ff6`71fba1b0
+00007ff6`727923c0  00007ff6`72ade700 00007ff6`714603c0
+00007ff6`727923d0  00007ff6`71e56fe0 00007ff6`71461690
+00007ff6`727923e0  00007ff6`7137a160 00007ff6`71326110
+00007ff6`727923f0  00007ff6`71326060 00007ff6`71326090
+00007ff6`72792400  00007ff6`71326070 00007ff6`71326130
+00007ff6`72792410  00007ff6`71326120 00007ff6`713260f0
+00007ff6`72792420  00007ff6`71326100 00007ff6`71326050
+00007ff6`72792430  00007ff6`713260a0 00007ff6`713260b0
+0:000> .echo LIVE IMAGE RTTI
+LIVE IMAGE RTTI
+0:000> dd poi(SkyrimVR+15e23c0) L6
+00007ff6`72ade700  00000001 00000000 00000000 01ee10c8
+00007ff6`72ade710  0192e728 0192e700
+0:000> da SkyrimVR+dwo(poi(SkyrimVR+15e23c0)+c)+10
+00007ff6`730910d8  ".?AVbhkCollisionObject@@"
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

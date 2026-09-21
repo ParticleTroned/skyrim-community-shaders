@@ -1,0 +1,26 @@
+ordinal,source,destination,status,strictElapsedMs,strictElapsedFrames,timingDefinition,missingReason
+1,WindhelmExterior01,WhiterunDragonsreach,strict_complete,5167.5335,25,server COC dispatch to strict-completion observation,
+2,WhiterunDragonsreach,WindhelmExterior01,crashed_after_dispatch,,,server COC dispatch to strict-completion observation,original render-batch access violation; no terminal receipt
+3,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+4,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+5,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+6,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+7,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+8,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+9,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+10,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+11,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+12,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+13,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+14,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+15,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+16,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+17,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+18,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+19,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+20,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+21,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+22,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+23,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+24,WhiterunDragonsreach,WindhelmExterior01,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2
+25,WindhelmExterior01,WhiterunDragonsreach,not_issued,,,server COC dispatch to strict-completion observation,run terminated at transition 2

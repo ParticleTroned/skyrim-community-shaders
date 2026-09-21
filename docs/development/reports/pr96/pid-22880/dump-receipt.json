@@ -1,0 +1,10 @@
+{
+    "pid": 22880,
+    "processStartUtc": "2026-09-12T11:37:03.5839187Z",
+    "path": "[REDACTED_LOCAL_PATH]",
+    "bytes": 26156111707,
+    "sha256": "D2DEFF52C287054B3D282A44722F554660C70821949E547C4EBEBDBACD3334AC",
+    "dumpWrittenUtc": "2026-09-12T11:56:06.0050488Z",
+    "capture": "CDB -pvr noninvasive nonsuspending full /ma dump; successful write and qd detach",
+    "cdbExitCode": 0
+}

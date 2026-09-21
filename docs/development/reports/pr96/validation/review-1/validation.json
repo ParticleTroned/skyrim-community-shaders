@@ -1,0 +1,75 @@
+{
+    "schema": "csx-native-shadow-render-pr-validation-v1",
+    "pr": 96,
+    "sourceCommit": "90d545008c1dda2b0d9e9d91b82021281698bbcd",
+    "buildId": "cd983f022fb67aa4ff83b251aa5b63adaa499b6d44ea568089f1f4d83719e4fe",
+    "manifest": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 4228,
+        "sha256": "60e487d42610aa28b6f3a21e643b2f517f31479f86c280be6dea520156d0469a"
+    },
+    "dll": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 28760064,
+        "sha256": "f24eb30a25d204d94666288f6550e9f687b61bbc40267bb14f649be66129e298"
+    },
+    "checks": {
+        "focused-build": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 1566,
+                "sha256": "94fe2e63c2ccfd5496d5533c31491f41d6156962685d1f2fd3e6b251afee3942"
+            }
+        },
+        "focused-tests": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 1641,
+                "sha256": "0de5ebf392578de7d530565a1eaa39b57ff2bded82d74c453231a7a900d381c6"
+            }
+        },
+        "pre-commit": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 486,
+                "sha256": "d07aa863f52b5bfb24d225049c120bff0c7dcd5fb00206b695cf35abf754b9f8"
+            }
+        },
+        "dll-build": {
+            "exitCode": 0,
+            "log": {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sizeBytes": 5898,
+                "sha256": "274a822723467908e95b22e7ba0ae7fb7f0433d2e5e18002ff07022d2ab6eef3"
+            }
+        }
+    },
+    "focusedTestsPassed": ["SceneLightSnapshot", "VRSceneGuards"],
+    "allocationFailureCases": 13,
+    "nativeGuardAssertions": 743,
+    "nativeInstructionBytesVerified": 184,
+    "compiledRuntimes": ["SE", "AE", "VR"],
+    "devbenchBridge": true,
+    "diagnosticRecorderIncluded": false,
+    "deployed": false,
+    "runtimeValidation": "Not run for this native-loop change; PR93 COC results are not applicable",
+    "performanceNeutrality": "Unverified; no comparable in-game performance measurements",
+    "review": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 3607,
+        "sha256": "4e750b5030152fcbe3f795fd434ade1d6aef93311fdf80df5e949d7a1e3f74b6"
+    },
+    "nativeFixtures": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 553,
+        "sha256": "721a92e1c2e271cf10c31ab8009afea6c2eacc8c80b85a166cb566994d7ba50f"
+    },
+    "rootPreservation": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 1198,
+        "sha256": "4bf2e54cdbdafe4abaf98508ed303f8db93e5cfbe2d38fade12195e948ea0a43"
+    }
+}

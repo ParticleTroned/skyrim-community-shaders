@@ -1,0 +1,82 @@
+{
+    "status": "verified",
+    "runtimeProducer": {
+        "artifactSha256": "",
+        "buildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+        "buildIdShort": "fb0785141535",
+        "component": "CommunityShaders",
+        "configuration": "Release",
+        "manifestError": "runtime artifact verification delegated to deployment harness",
+        "manifestVerified": false,
+        "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+        "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.26100.9444",
+        "sourceCommit": "5655a7102d02d6ab40b14888a52596c4c9e9f450",
+        "sourceDescribe": "v3.19.0-pr28-287-g5655a7102",
+        "sourceDirty": false
+    },
+    "physicalDll": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sha256": "9668633726a8d1c50ae63d0e621723da9b025160626f9b0c60cc2f64b07cdb72",
+        "sizeBytes": 28638720
+    },
+    "manifest": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sha256": "3a0b9fe2949f6390277fe4f71c5e15cbe98e4376f345343f00163932336d2f42",
+        "sizeBytes": 4228
+    },
+    "aioReceipt": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sha256": "a000e84393e29cf5e8300dea8891ed0bef9a47a562e7e09210d8990863ae1846",
+        "sizeBytes": 7272
+    },
+    "compileIdentity": {
+        "cmakeVersion": "4.4.1",
+        "compilerId": "MSVC",
+        "compilerSha256": "c94cdac6a780142920110e5cb8b7339817029eead696e0e97700b45e03216a00",
+        "compilerVersion": "19.51.36252.0",
+        "generator": "Visual Studio 18 2026",
+        "generatorPlatform": "x64",
+        "generatorToolset": null,
+        "targetTriplet": "x64-windows-static-md",
+        "toolchainFileSha256": "bc04170bf7f164b6ef27fadbab1947d2a67cded96e2551c0d3000c6130c41468",
+        "windowsSdkVersion": "10.0.28000.0"
+    },
+    "modlist": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sha256": "7c04b7ee8b7119935977f4fe918d806e3f809512ade2312bc5015378e744ffc4",
+        "sizeBytes": 53679
+    },
+    "providers": {
+        "CommunityShaders.dll": [
+            {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sha256": "9668633726a8d1c50ae63d0e621723da9b025160626f9b0c60cc2f64b07cdb72",
+                "sizeBytes": 28638720
+            }
+        ],
+        "EngineFixes.dll": [
+            {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sha256": "7bbc6f1a9b31ed260fec007274741cc347d92001a04242a0918cadf83fd055a9",
+                "sizeBytes": 2535424
+            }
+        ],
+        "version-1-4-15-0.csv": [
+            {
+                "path": "[REDACTED_LOCAL_PATH]",
+                "sha256": "680b3cbe21f90468eaca4a0efef00e7ea745230e1961c7ccf51a028a5d9fba1c",
+                "sizeBytes": 226436
+            }
+        ]
+    },
+    "addressMappings": {
+        "100843": "1347fe0",
+        "100851": "1349200",
+        "100852": "1349270",
+        "100853": "13495f0",
+        "235520": "15e23c8"
+    },
+    "limitations": [
+        "Physical deployment identity correlated with retained runtime producer; not an in-memory hash."
+    ]
+}

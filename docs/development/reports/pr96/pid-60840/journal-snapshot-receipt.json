@@ -1,0 +1,14 @@
+{
+    "source": "[REDACTED_LOCAL_PATH]",
+    "snapshot": "[REDACTED_LOCAL_PATH]",
+    "classification": "stable live snapshot after operator-confirmed freeze",
+    "activeAtSnapshot": true,
+    "flushConfirmed": false,
+    "headerStableDuringCopy": true,
+    "writersAtSnapshot": 0,
+    "eventsAttempted": 251586,
+    "firstExceptionSequence": 0,
+    "bytes": 268439552,
+    "sha256": "027a944ad8f06a947219aaa5e6d683e57b63b99ec145471551da12ae2f17c6b8",
+    "capturedUtc": "2026-09-12T09:50:30.212555+00:00"
+}

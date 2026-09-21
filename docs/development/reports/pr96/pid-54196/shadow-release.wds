@@ -1,0 +1,12 @@
+.echo === SHADOW LIST SELECTOR ===
+u SkyrimVR+12fa250 SkyrimVR+12fa2b0
+.echo === ACCUMULATED SHADOW POINTERS ===
+dps 269105a4770 La
+.echo === PARABOLIC SHADOW LIGHT DELETE ===
+uf SkyrimVR+13714b0
+.echo === PARABOLIC RETURN SHADOWMAPS ===
+uf SkyrimVR+1371440
+.echo === PARABOLIC RTTI ===
+dd poi(SkyrimVR+190c1f0-8) L6
+.echo === COMPLETE ===
+q

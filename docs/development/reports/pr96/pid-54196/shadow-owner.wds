@@ -1,0 +1,20 @@
+.ecxr
+kn 18
+.echo === SHADOW HELPER FRAME ===
+.frame /r 9
+.fnent @rip
+.echo === SHADOW LIGHT CALLER ===
+.frame /r a
+.fnent @rip
+.echo === LIGHT LIST CALLER ===
+.frame /r b
+.fnent @rip
+.echo === NATIVE ACCUMULATOR DISPATCH ===
+u SkyrimVR+12fefa0 SkyrimVR+12ff0d0
+u SkyrimVR+130af40 SkyrimVR+130afd0
+.echo === SHADOW HELPER CALL SITE ===
+u SkyrimVR+134c570 SkyrimVR+134c610
+.echo === SHADOW LIGHT CALL SITE ===
+u SkyrimVR+1371370 SkyrimVR+1371430
+.echo === COMPLETE ===
+q

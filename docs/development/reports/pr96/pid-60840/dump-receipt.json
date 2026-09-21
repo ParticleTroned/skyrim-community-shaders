@@ -1,0 +1,9 @@
+{
+    "pid": 60840,
+    "processStartUtc": "2026-09-12T09:35:06.7669333Z",
+    "path": "[REDACTED_LOCAL_PATH]",
+    "bytes": 27091167008,
+    "sha256": "16165ce6cf3640cc380a93eb88f07ea0a46603384ffe7e6cd0b597c8ce14832d",
+    "dumpWrittenUtc": "2026-09-12T09:51:40.5866562Z",
+    "capture": "CDB noninvasive full /ma dump; successful write and qd detach"
+}

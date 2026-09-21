@@ -1,0 +1,17 @@
+[
+    {
+        "call": "0x12f785c",
+        "target": "0x12f70e0",
+        "function": "0x12f77e0"
+    },
+    {
+        "call": "0x12f792a",
+        "target": "0x12f7660",
+        "function": "0x12f77e0"
+    },
+    {
+        "call": "0x12f7ead",
+        "target": "0x12f7660",
+        "function": "0x12f7e10"
+    }
+]

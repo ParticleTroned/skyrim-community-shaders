@@ -1,0 +1,1244 @@
+{
+    "action": "run",
+    "async": true,
+    "continueOnError": false,
+    "steps": [
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 1
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.profiler_api",
+            "args": {
+                "action": "start_capture",
+                "contractMajor": 1,
+                "frameCount": 300,
+                "clearHistory": true,
+                "clientId": "[REDACTED_IDENTIFYING_METADATA]",
+                "commandId": "capture-transition-1",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 1,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": true
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 1,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 2
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 2,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 2,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 3
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 3,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 3,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 4
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 4,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 4,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 5
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 5,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 5,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 6
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 6,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 6,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 7
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 7,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 7,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 8
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 8,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 8,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 9
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 9,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 9,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 10
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 10,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 10,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 11
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 11,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 11,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 12
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 12,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 12,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 13
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 13,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 13,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 14
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 14,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 14,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 15
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 15,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 15,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 16
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 16,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 16,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 17
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 17,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 17,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 18
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 18,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 18,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 19
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 19,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 19,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 20
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 20,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 20,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 21
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 21,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 21,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 22
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 22,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 22,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 23
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 23,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 23,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 24
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 24,
+                "cocCellEditorId": "WindhelmExterior01",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 24,
+                "expectedCellEditorId": "WindhelmExterior01",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_begin",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 25
+            }
+        },
+        {
+            "wait": 5000
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_dispatch",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 25,
+                "cocCellEditorId": "WhiterunDragonsreach",
+                "startPerformanceTelemetry": false
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "qualification_wait",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+                "ownerId": "coc25-crashlogger-pid54196-20260911T2227Z",
+                "transitionId": 25,
+                "expectedCellEditorId": "WhiterunDragonsreach",
+                "foveation": {
+                    "foveatedCenterArea": 0.3,
+                    "foveatedVendorDispatch": true,
+                    "peripheryTAACenterArea": 0.3,
+                    "peripheryTAAEnable": true,
+                    "peripheryTAAOuterScale": 0.7
+                },
+                "milestone": "strict",
+                "timeoutMs": 30000
+            }
+        },
+        {
+            "tool": "communityshaders.renderscale",
+            "args": {
+                "action": "status",
+                "expectedBuildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a"
+            }
+        }
+    ]
+}

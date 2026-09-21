@@ -1,0 +1,299 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.016 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+*** wait with pending attach
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+Symbol search path is: srv*
+Executable search path is:
+WARNING: Process 60840 is not attached as a debuggee
+         The process can be examined but debug events will not be received
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+(eda8.908c): Wake debugger - code 80000007 (first chance)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .sympath+ [REDACTED_LOCAL_PATH]
+Symbol search path is: srv*;[REDACTED_LOCAL_PATH]
+Expanded Symbol search path is: cache*;SRV*[REDACTED_ENDPOINT]]
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+OK                                             [REDACTED_LOCAL_PATH]
+0:000> ~~[de3c]s
+nvwgf2umx+0x116483:
+00007ff8`52e36483 750a            jne     nvwgf2umx+0x11648f (00007ff8`52e3648f) [br=1]
+0:143> r
+rax=0000029e4c8c9900 rbx=0000000000000000 rcx=0000029e63e1cc20
+rdx=0000029e63e1cc40 rsi=0000029e63e1cc20 rdi=0000029e63e1cc40
+rip=00007ff852e36483 rsp=000000ac3b76f450 rbp=0000000000000000
+ r8=0000000000000000  r9=fffffe0ddc63bed0 r10=0000029e5f133450
+r11=000000ac3b76f490 r12=0000000000000000 r13=0000029e5f312800
+r14=0000000000000001 r15=00007ff8554016ac
+iopl=0         nv up ei pl nz na po nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000202
+nvwgf2umx+0x116483:
+00007ff8`52e36483 750a            jne     nvwgf2umx+0x11648f (00007ff8`52e3648f) [br=1]
+0:143> kv 15
+Child-SP          RetAddr               : Args to Child                                                           : Call Site
+000000ac`3b76f450 00007ff8`52e3b248     : 0000029e`5f133450 00000000`00000000 000000ac`3b76f5b0 0000029e`65a29428 : nvwgf2umx+0x116483
+000000ac`3b76f4b0 00007ff8`52e37a1e     : 00000000`00000000 0000029e`63e1cc20 00000000`00000012 000002a4`09ae19d8 : nvwgf2umx+0x11b248
+000000ac`3b76f700 00007ff8`5300c8d1     : 0000029e`65a1abc0 00000000`00000000 00000000`00000000 000002a4`09ae19d8 : nvwgf2umx+0x117a1e
+000000ac`3b76f780 00007ff8`532b83ef     : 0000029e`65a1a810 0000029e`65a1b600 000000ac`3b76f810 0000029e`d16869c0 : nvwgf2umx!NVENCODEAPI_Thunk+0xb8871
+000000ac`3b76f7c0 00007ff8`532b8350     : 00000000`00000001 00000000`00000000 00000000`000007d0 0000029e`65a1a810 : nvwgf2umx!SetDependencyInfo+0x69a0f
+000000ac`3b76f7f0 00007ff8`532acb4d     : 0000029e`65a1ad38 00000000`00000000 00000000`00000000 00000000`00000000 : nvwgf2umx!SetDependencyInfo+0x69970
+000000ac`3b76f870 00007ff8`537c24da     : 00000000`00000000 0000029e`65494330 00000000`00000000 00000000`00000000 : nvwgf2umx!SetDependencyInfo+0x5e16d
+000000ac`3b76f8a0 00007ff8`53bda2aa     : 0000029e`5f0da940 00000000`00000000 00000000`00000000 00000000`00000000 : nvwgf2umx!NVDEV_Thunk+0x15ed5a
+000000ac`3b76f8d0 00007ff9`891ccd87     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : nvwgf2umx!NVDEV_Thunk+0x576b2a
+000000ac`3b76f900 00007ff9`8a04caec     : 00000000`00000000 00000000`00000000 000004f0`fffffb30 000004d0`fffffb30 : KERNEL32!BaseThreadInitThunk+0x17
+000000ac`3b76f930 00000000`00000000     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : ntdll!RtlUserThreadStart+0x2c
+0:143> u 7ff85300c840 7ff85300c94a
+nvwgf2umx!NVENCODEAPI_Thunk+0xb87e0:
+00007ff8`5300c840 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ff8`5300c845 48896c2410      mov     qword ptr [rsp+10h],rbp
+00007ff8`5300c84a 4889742418      mov     qword ptr [rsp+18h],rsi
+00007ff8`5300c84f 57              push    rdi
+00007ff8`5300c850 4883ec30        sub     rsp,30h
+00007ff8`5300c854 83b9d8c6000000  cmp     dword ptr [rcx+0C6D8h],0
+00007ff8`5300c85b 488bf2          mov     rsi,rdx
+00007ff8`5300c85e 488bd9          mov     rbx,rcx
+00007ff8`5300c861 7508            jne     nvwgf2umx!NVENCODEAPI_Thunk+0xb880b (00007ff8`5300c86b)
+00007ff8`5300c863 ff81e0c60000    inc     dword ptr [rcx+0C6E0h]
+00007ff8`5300c869 eb32            jmp     nvwgf2umx!NVENCODEAPI_Thunk+0xb883d (00007ff8`5300c89d)
+00007ff8`5300c86b 488b81a0000000  mov     rax,qword ptr [rcx+0A0h]
+00007ff8`5300c872 488b28          mov     rbp,qword ptr [rax]
+00007ff8`5300c875 488b01          mov     rax,qword ptr [rcx]
+00007ff8`5300c878 ff9048090000    call    qword ptr [rax+948h]
+00007ff8`5300c87e 8bf8            mov     edi,eax
+00007ff8`5300c880 85c0            test    eax,eax
+00007ff8`5300c882 0f8893000000    js      nvwgf2umx!NVENCODEAPI_Thunk+0xb88bb (00007ff8`5300c91b)
+00007ff8`5300c888 488b83a0000000  mov     rax,qword ptr [rbx+0A0h]
+00007ff8`5300c88f 4c8b00          mov     r8,qword ptr [rax]
+00007ff8`5300c892 4c3bc5          cmp     r8,rbp
+00007ff8`5300c895 7579            jne     nvwgf2umx!NVENCODEAPI_Thunk+0xb88b0 (00007ff8`5300c910)
+00007ff8`5300c897 ff83e0c60000    inc     dword ptr [rbx+0C6E0h]
+00007ff8`5300c89d 488bbbf8eb0000  mov     rdi,qword ptr [rbx+0EBF8h]
+00007ff8`5300c8a4 488b9720030000  mov     rdx,qword ptr [rdi+320h]
+00007ff8`5300c8ab 488b02          mov     rax,qword ptr [rdx]
+00007ff8`5300c8ae 4883c028        add     rax,28h
+00007ff8`5300c8b2 483b4208        cmp     rax,qword ptr [rdx+8]
+00007ff8`5300c8b6 7628            jbe     nvwgf2umx!NVENCODEAPI_Thunk+0xb8880 (00007ff8`5300c8e0)
+00007ff8`5300c8b8 4533c9          xor     r9d,r9d
+00007ff8`5300c8bb c644242800      mov     byte ptr [rsp+28h],0
+00007ff8`5300c8c0 488bcf          mov     rcx,rdi
+00007ff8`5300c8c3 c644242001      mov     byte ptr [rsp+20h],1
+00007ff8`5300c8c8 458d410a        lea     r8d,[r9+0Ah]
+00007ff8`5300c8cc e84faee2ff      call    nvwgf2umx+0x117720 (00007ff8`52e37720)
+00007ff8`5300c8d1 8be8            mov     ebp,eax
+00007ff8`5300c8d3 85c0            test    eax,eax
+00007ff8`5300c8d5 7909            jns     nvwgf2umx!NVENCODEAPI_Thunk+0xb8880 (00007ff8`5300c8e0)
+00007ff8`5300c8d7 e8449ce3ff      call    nvwgf2umx!NVAPI_DirectMethods+0x6600 (00007ff8`52e46520)
+00007ff8`5300c8dc 8bd5            mov     edx,ebp
+00007ff8`5300c8de eb42            jmp     nvwgf2umx!NVENCODEAPI_Thunk+0xb88c2 (00007ff8`5300c922)
+00007ff8`5300c8e0 488b8720030000  mov     rax,qword ptr [rdi+320h]
+00007ff8`5300c8e7 8b4e08          mov     ecx,dword ptr [rsi+8]
+00007ff8`5300c8ea 488b10          mov     rdx,qword ptr [rax]
+00007ff8`5300c8ed 8b4604          mov     eax,dword ptr [rsi+4]
+00007ff8`5300c8f0 894204          mov     dword ptr [rdx+4],eax
+00007ff8`5300c8f3 488d420c        lea     rax,[rdx+0Ch]
+00007ff8`5300c8f7 c702020e02a0    mov     dword ptr [rdx],0A0020E02h
+00007ff8`5300c8fd 894a08          mov     dword ptr [rdx+8],ecx
+00007ff8`5300c900 488b8f20030000  mov     rcx,qword ptr [rdi+320h]
+00007ff8`5300c907 488901          mov     qword ptr [rcx],rax
+00007ff8`5300c90a c6412f00        mov     byte ptr [rcx+2Fh],0
+00007ff8`5300c90e eb25            jmp     nvwgf2umx!NVENCODEAPI_Thunk+0xb88d5 (00007ff8`5300c935)
+00007ff8`5300c910 488bd6          mov     rdx,rsi
+00007ff8`5300c913 488bcb          mov     rcx,rbx
+00007ff8`5300c916 41ffd0          call    r8
+00007ff8`5300c919 eb1a            jmp     nvwgf2umx!NVENCODEAPI_Thunk+0xb88d5 (00007ff8`5300c935)
+00007ff8`5300c91b e8009ce3ff      call    nvwgf2umx!NVAPI_DirectMethods+0x6600 (00007ff8`52e46520)
+00007ff8`5300c920 8bd7            mov     edx,edi
+00007ff8`5300c922 4c8b13          mov     r10,qword ptr [rbx]
+00007ff8`5300c925 4c8bc8          mov     r9,rax
+00007ff8`5300c928 41b801000000    mov     r8d,1
+00007ff8`5300c92e 488bcb          mov     rcx,rbx
+00007ff8`5300c931 41ff5238        call    qword ptr [r10+38h]
+00007ff8`5300c935 488b5c2440      mov     rbx,qword ptr [rsp+40h]
+00007ff8`5300c93a 488b6c2448      mov     rbp,qword ptr [rsp+48h]
+00007ff8`5300c93f 488b742450      mov     rsi,qword ptr [rsp+50h]
+00007ff8`5300c944 4883c430        add     rsp,30h
+00007ff8`5300c948 5f              pop     rdi
+00007ff8`5300c949 c3              ret
+00007ff8`5300c94a cc              int     3
+0:143> dd 2a409ae19d8 L8
+000002a4`09ae19d8  00000000 00000000 00000000 00010005
+000002a4`09ae19e8  0004001e 00010012 00000000 00000000
+0:143> dq 29e63e1cc20 Lc
+0000029e`63e1cc20  00000001`00000fff 00000000`00000000
+0000029e`63e1cc30  00000003`00000001 0000029e`65a28a78
+0000029e`63e1cc40  00000000`00000000 00000000`00000000
+0000029e`63e1cc50  00000000`00000000 000002a2`36c28390
+0000029e`63e1cc60  00000000`00000000 00000018`72980000
+0000029e`63e1cc70  0000029e`a76e0000 0000010e`000001a0
+0:143> ~0s
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .frame /r 2
+02 000000ac`336fa770 00007ff8`532b8aa1     nvwgf2umx!SetDependencyInfo+0x69e79
+rax=0000000000000004 rbx=0000029e65a1a810 rcx=00000000000017cc
+rdx=0000000000000000 rsi=000000000000029b rdi=0000000000000000
+rip=00007ff8532b8859 rsp=000000ac336fa770 rbp=0000000000000083
+ r8=000000ac336fa6f8  r9=0000000000000000 r10=00000000000017cc
+r11=00000000000017cc r12=0000000000000001 r13=0000000000000000
+r14=000000ac336fb220 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+nvwgf2umx!SetDependencyInfo+0x69e79:
+00007ff8`532b8859 488b8bc8060000  mov     rcx,qword ptr [rbx+6C8h] ds:0000029e`65a1aed8=0000029e65694c80
+0:000> r
+rax=0000000000000004 rbx=00000000000017cc rcx=00000000000017cc
+rdx=0000000000000000 rsi=00000000000003e8 rdi=0000000000000000
+rip=00007ff98a100e44 rsp=000000ac336fa6c8 rbp=0000000000000083
+ r8=000000ac336fa6f8  r9=0000000000000000 r10=00000000000017cc
+r11=00000000000017cc r12=0000000000000001 r13=0000000000000000
+r14=000000ac336fa6f8 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .frame /r 10
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+10 000000ac`336faf80 00007ff8`600c6ca2     CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f
+rax=0000000000000004 rbx=000000ac336fb220 rcx=00000000000017cc
+rdx=0000000000000000 rsi=0000000000000000 rdi=000000ac336fb360
+rip=00007ff8600c556f rsp=000000ac336faf80 rbp=000000ac336fb080
+ r8=000000ac336fa6f8  r9=0000000000000000 r10=00000000000017cc
+r11=00000000000017cc r12=000000ac336fb6c8 r13=0000000000000000
+r14=0000000000000000 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f:
+00007ff8`600c556f 8bf0            mov     esi,eax
+0:000> ?? submitPacket
+struct `anonymous-namespace'::RetainedOpenVRSubmitPacket
+   +0x000 payloadKind      : 0 ( Texture )
+   +0x008 publicationLease : OpenVRSubmitLeasePolicy::PublicationLease
+   +0x020 texture          : vr::Texture_t
+   +0x030 textureWithPose  : vr::VRTextureWithPose_t
+   +0x070 textureWithDepth : vr::VRTextureWithDepth_t
+   +0x0d0 textureWithPoseAndDepth : vr::VRTextureWithPoseAndDepth_t
+   +0x160 bounds           : vr::VRTextureBounds_t
+   +0x170 eye              : 1 ( Eye_Right )
+   +0x174 flags            : 0 ( Submit_Default )
+   +0x178 colorLifetime    : winrt::com_ptr<ID3D11Texture2D>
+   +0x180 depthLifetime    : winrt::com_ptr<ID3D11Texture2D>
+   +0x188 deviceLifetime   : winrt::com_ptr<ID3D11Device>
+   +0x190 captureError     : 66 ( VRCompositorError_InvalidTexture )
+   +0x194 hasTexture       : 1
+   +0x195 hasBounds        : 1
+   +0x196 directX          : 1
+   +0x197 valid            : 1
+0:000> ?? screenshotTextureLifetime
+struct winrt::com_ptr<ID3D11Texture2D>
+   +0x000 m_ptr            : (null)
+0:000> kv 22
+Child-SP          RetAddr               : Args to Child                                                           : Call Site
+000000ac`336fa6c8 00007ff9`8753be9f     : 3f7fffff`00000000 00000000`3effffff 3f800000`00000000 00000000`3f000000 : ntdll!NtWaitForSingleObject+0x14
+000000ac`336fa6d0 00007ff8`532b8859     : 0000029e`65a1a810 0000029e`c763b1b0 00000000`00000000 00000000`000017cc : KERNELBASE!WaitForSingleObjectEx+0xaf
+000000ac`336fa770 00007ff8`532b8aa1     : 00000000`00000000 00000000`00000000 0000029e`65a1a810 00000000`00000000 : nvwgf2umx!SetDependencyInfo+0x69e79
+000000ac`336faa50 00007ff8`532b9300     : 0000029e`65a1a810 000000ac`336fae20 00000000`00000083 000000ac`336fb220 : nvwgf2umx!SetDependencyInfo+0x6a0c1
+000000ac`336faa80 00007ff8`532b938a     : 0000029e`65a1a810 00000000`00000000 00000000`3f800000 0000029e`65a1a810 : nvwgf2umx!SetDependencyInfo+0x6a920
+000000ac`336faab0 00007ff8`532b9e5b     : 0000029e`65a1a810 0000029e`65a1a810 73756c46`205d746e 0000029e`65a1a810 : nvwgf2umx!SetDependencyInfo+0x6a9aa
+000000ac`336faae0 00007ff8`5334854c     : 00000000`00000000 00000000`3f800000 0000029e`65a1a810 00000000`00000001 : nvwgf2umx!SetDependencyInfo+0x6b47b
+000000ac`336fab10 00007ff9`820a95d2     : 0000029e`65516078 00000000`00000000 00000000`00000000 00000000`00000000 : nvwgf2umx!OpenAdapter10+0x24c
+000000ac`336fab40 00007ff9`820a9351     : 0000029e`65a10900 00000000`00000000 00000000`00000000 3fdd70a3`00000000 : d3d11!NDXGI::CDevice::Flush+0x82
+000000ac`336fab70 00007ff9`821d4b50     : 0000029e`65a10900 0000029e`65a10900 00000000`00000000 3fdd70a3`00000000 : d3d11!NDXGI::CDevice::FlushAndEnqueueSetEvent+0x55
+000000ac`336fac80 00007ff8`5852d998     : 00007ff8`58874c70 00007ff8`58874c70 000000ac`336fb220 00000000`00000110 : d3d11!CContext::TID3D11DeviceContext_Flush_AppEntered+0x70
+000000ac`336facf0 00007ff8`58524b06     : 0000029e`65a109d8 00007ff8`58874c70 00000000`00000000 00007ff8`58874bd8 : vrclient_x64!HmdSystemFactory+0xe7b8
+000000ac`336fad20 00007ff8`58522de3     : 00000000`00000000 000000ac`336fb220 00000000`3f000000 00000000`ffffffff : vrclient_x64!HmdSystemFactory+0x5926
+000000ac`336faf20 00007ff8`600c556f     : 00007ff8`613cd0b0 00007ff8`603b7ec0 000000ac`00000001 000000ac`336fb220 : vrclient_x64!HmdSystemFactory+0x3c03
+(Inline Function) --------`--------     : --------`-------- --------`-------- --------`-------- --------`-------- : CommunityShaders!REL::invoke+0x1c (Inline Function @ 00007ff8`600c556f)
+(Inline Function) --------`--------     : --------`-------- --------`-------- --------`-------- --------`-------- : CommunityShaders!REL::Relocation<enum vr::EVRCompositorError __cdecl(vr::IVRCompositor *,enum vr::EVREye,vr::Texture_t const *,vr::VRTextureBounds_t const *,enum vr::EVRSubmitFlags)>::operator()+0x28 (Inline Function @ 00007ff8`600c556f)
+000000ac`336faf80 00007ff8`600c6ca2     : 0000020c`5ebb2600 00007ff8`603b7ec0 00000000`00000000 00000000`00000000 : CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+000000ac`336fb460 00007ff6`271039d3     : 0000029e`013b42a0 00000000`00000001 000000ac`336ff220 000000ac`336ff210 : CommunityShaders!`anonymous namespace'::IVRCompositor_Submit::thunk+0xd62
+000000ac`336ff1e0 00007ff8`600c8bc0     : 00000000`00001210 00000000`00006f2c 0000029e`65a18c14 00000000`00000072 : SkyrimVR+0xc539d3
+(Inline Function) --------`--------     : --------`-------- --------`-------- --------`-------- --------`-------- : CommunityShaders!REL::invoke+0x13 (Inline Function @ 00007ff8`600c8bc0)
+(Inline Function) --------`--------     : --------`-------- --------`-------- --------`-------- --------`-------- : CommunityShaders!REL::Relocation<enum vr::EVRCompositorError __cdecl(RE::BSOpenVR *,vr::Texture_t const *,vr::VRTextureBounds_t const *,enum vr::EVRSubmitFlags)>::operator()+0x13 (Inline Function @ 00007ff8`600c8bc0)
+000000ac`336ff360 00007ff6`277d3f00     : 0000029e`3bddeb00 ffffffff`fffffffe 00000000`00000700 00000000`00000072 : CommunityShaders!`anonymous namespace'::BSOpenVR_Submit::thunk+0x290
+000000ac`336ff470 00007ff6`26a69bce     : 000002a1`0000001a 00000000`00000006 000000ac`336ff519 0000029e`4e64b880 : SkyrimVR+0x1323f00
+000000ac`336ff4a0 00007ff6`26a692fc     : 00000000`00000002 00000000`00000072 0000029e`2fad8f50 0000029e`00000000 : SkyrimVR+0x5b9bce
+000000ac`336ff580 00007ff6`26a68ca3     : 00000000`00000000 0000029e`4e64bd80 00000000`00000002 00000000`00000000 : SkyrimVR+0x5b92fc
+000000ac`336ff5e0 00007ff6`26a6b18d     : 00000000`00000001 00000000`00000001 0000029e`14163040 0000029e`141a7100 : SkyrimVR+0x5b8ca3
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+000000ac`336ff770 00007ff8`77c2b5c5     : 0000029e`4e64bd80 00007ff9`89d91789 00000000`00000000 00000000`00000000 : SkyrimVR+0x5bb18d
+*** WARNING: Unable to verify checksum for [REDACTED_LOCAL_PATH]
+000000ac`336ff7c0 00007ff8`809c395e     : 0000029e`4e64bd80 00000000`00000000 00000000`00000000 00000000`0083184a : PlayerRotationGPSupport!SKSEPlugin_Load+0x55ac5
+000000ac`336ff860 00007ff6`26a66e94     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`0000000a : hdtsmp64+0x4395e
+000000ac`336ff8a0 00007ff6`26a642c5     : 00000000`0000000a 00000000`00000000 00000000`0000000a 00007ff6`00000002 : SkyrimVR+0x5b6e94
+000000ac`336ff930 00007ff6`2783af0a     : 00000000`0000000a 00000000`00000000 00000000`00000000 00000000`00000000 : SkyrimVR+0x5b42c5
+000000ac`336ff960 00007ff9`891ccd87     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : SkyrimVR+0x138af0a
+000000ac`336ff9a0 00007ff9`8a04caec     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : KERNEL32!BaseThreadInitThunk+0x17
+000000ac`336ff9d0 00000000`00000000     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : ntdll!RtlUserThreadStart+0x2c
+0:000> qd
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

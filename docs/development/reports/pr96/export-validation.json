@@ -1,0 +1,35 @@
+{
+    "schema": "pr96-report-export-validation-v1",
+    "date": "2026-09-21",
+    "result": "PASS",
+    "counts": {
+        "unchangedNonStringValues": 229299,
+        "modifiedStrings": 227,
+        "jsonFilesCompared": 71,
+        "journalRecordsCompared": 745449,
+        "privacyScannedFiles": 164,
+        "localLinksChecked": 31
+    },
+    "checks": [
+        "Original input hashes match the manifest",
+        "Every selected structured JSON observation retains its type and numeric/boolean/null value",
+        "All original JSON objects and arrays retain every entry, with identifying strings/keys redacted",
+        "Every decoded journal record equals its original source record field for field",
+        "Independent privacy scan passes on every text file and decompressed journal",
+        "No process dump, binary memory capture, DLL, PDB, or hidden archive included",
+        "Portable Markdown links resolve; omitted original links are explicitly labeled"
+    ],
+    "privacyScanCategories": [
+        "absolute_local_path",
+        "original_local_tree",
+        "private_name",
+        "user_sid",
+        "uuid",
+        "email",
+        "credential",
+        "machine_label",
+        "private_endpoint"
+    ],
+    "scope": "New report export only. No rewrite of existing repository history or unrelated files.",
+    "runtimeValidation": "Not run; this is publication of historical forensic evidence."
+}

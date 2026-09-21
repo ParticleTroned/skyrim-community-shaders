@@ -1,0 +1,210 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+OK                                             [REDACTED_LOCAL_PATH]
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.015 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+OK                                             [REDACTED_LOCAL_PATH]
+Symbol search path is: [REDACTED_LOCAL_PATH];[REDACTED_LOCAL_PATH]
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 00:34:07.000 2026 (UTC + 2:00)
+System Uptime: 2 days 3:23:31.656
+Process Uptime: 0 days 0:08:37.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+..................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(d3b4.7848): Access violation - code c0000005 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtGetContextThread+0x14:
+00007ff9`8a102d14 c3              ret
+0:000> .echo === ACCUMULATOR VTABLE AND REFERENCE COUNT ===
+=== ACCUMULATOR VTABLE AND REFERENCE COUNT ===
+0:000> dq 26ee72809c0 L8
+0000026e`e72809c0  0000026e`e7282080 0000026d`00000000
+0000026e`e72809d0  0000026d`8f806980 00000000`00000000
+0000026e`e72809e0  00000000`00000000 0000026e`00000000
+0000026e`e72809f0  00000000`00000000 00000000`00000000
+0:000> ln poi(26ee72809c0)
+0:000> .echo === BATCH TYPES IN RUNTIME IMAGE ===
+=== BATCH TYPES IN RUNTIME IMAGE ===
+0:000> s -a SkyrimVR L?2200000 ".?AVBSBatchRenderer@@"
+00007ff6`731307d8  2e 3f 41 56 42 53 42 61-74 63 68 52 65 6e 64 65  .?AVBSBatchRende
+0:000> s -a SkyrimVR L?2200000 ".?AVBSShaderAccumulator@@"
+00007ff6`7312faf8  2e 3f 41 56 42 53 53 68-61 64 65 72 41 63 63 75  .?AVBSShaderAccu
+0:000> .echo === TASK DISPATCH CODE ===
+=== TASK DISPATCH CODE ===
+0:000> uf CommunityShaders!SKSE::GetTaskInterface
+*** WARNING: Unable to verify checksum for CommunityShaders.dll
+CommunityShaders!SKSE::GetTaskInterface:
+00007ff8`81c55680 4883ec28        sub     rsp,28h
+00007ff8`81c55684 e8a7090000      call    CommunityShaders!SKSE::detail::APIStorage::get (00007ff8`81c56030)
+00007ff8`81c55689 488b4048        mov     rax,qword ptr [rax+48h]
+00007ff8`81c5568d 4883c428        add     rsp,28h
+00007ff8`81c55691 c3              ret
+0:000> uf CommunityShaders!RE::Console::ExecuteCommand
+CommunityShaders!RE::Console::ExecuteCommand:
+00007ff8`81c5eee0 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ff8`81c5eee5 4889742418      mov     qword ptr [rsp+18h],rsi
+00007ff8`81c5eeea 57              push    rdi
+00007ff8`81c5eeeb 4881ecc0000000  sub     rsp,0C0h
+00007ff8`81c5eef2 488bf9          mov     rdi,rcx
+00007ff8`81c5eef5 e856f0ffff      call    CommunityShaders!RE::UI::GetSingleton (00007ff8`81c5df50)
+00007ff8`81c5eefa 488bd8          mov     rbx,rax
+00007ff8`81c5eefd 4885c0          test    rax,rax
+00007ff8`81c5ef00 0f84da000000    je      CommunityShaders!RE::Console::ExecuteCommand+0x100 (00007ff8`81c5efe0)
+
+CommunityShaders!RE::Console::ExecuteCommand+0x26:
+00007ff8`81c5ef06 83b82001000000  cmp     dword ptr [rax+120h],0
+00007ff8`81c5ef0d 0f84cd000000    je      CommunityShaders!RE::Console::ExecuteCommand+0x100 (00007ff8`81c5efe0)
+
+CommunityShaders!RE::Console::ExecuteCommand+0x33:
+00007ff8`81c5ef13 488d35568c0000  lea     rsi,[CommunityShaders!RE::GFxValue::~GFxValue (00007ff8`81c67b70)]
+00007ff8`81c5ef1a 4889742420      mov     qword ptr [rsp+20h],rsi
+00007ff8`81c5ef1f 4c8d0d2a8c0000  lea     r9,[CommunityShaders!RE::GFxValue::GFxValue (00007ff8`81c67b50)]
+00007ff8`81c5ef26 ba18000000      mov     edx,18h
+00007ff8`81c5ef2b 41b801000000    mov     r8d,1
+00007ff8`81c5ef31 488d4c2450      lea     rcx,[rsp+50h]
+00007ff8`81c5ef36 e815890d00      call    CommunityShaders!`eh vector constructor iterator' (00007ff8`81d37850)
+00007ff8`81c5ef3b 90              nop
+00007ff8`81c5ef3c 488bd7          mov     rdx,rdi
+00007ff8`81c5ef3f 488d4c2450      lea     rcx,[rsp+50h]
+00007ff8`81c5ef44 e8b78d0000      call    CommunityShaders!RE::GFxValue::SetString (00007ff8`81c67d00)
+00007ff8`81c5ef49 488b8310010000  mov     rax,qword ptr [rbx+110h]
+00007ff8`81c5ef50 488b18          mov     rbx,qword ptr [rax]
+00007ff8`81c5ef53 33d2            xor     edx,edx
+00007ff8`81c5ef55 488d4c2468      lea     rcx,[rsp+68h]
+00007ff8`81c5ef5a e8918b0000      call    CommunityShaders!RE::GFxValue::GFxValue (00007ff8`81c67af0)
+00007ff8`81c5ef5f 488bd0          mov     rdx,rax
+00007ff8`81c5ef62 c744242801000000 mov     dword ptr [rsp+28h],1
+00007ff8`81c5ef6a 488d442450      lea     rax,[rsp+50h]
+00007ff8`81c5ef6f 4889442420      mov     qword ptr [rsp+20h],rax
+00007ff8`81c5ef74 4533c9          xor     r9d,r9d
+00007ff8`81c5ef77 4c8bc3          mov     r8,rbx
+00007ff8`81c5ef7a 488d8c2480000000 lea     rcx,[rsp+80h]
+00007ff8`81c5ef82 e8c98d0000      call    CommunityShaders!RE::FxDelegateArgs::FxDelegateArgs (00007ff8`81c67d50)
+00007ff8`81c5ef87 90              nop
+00007ff8`81c5ef88 8b0d8ee98b01    mov     ecx,dword ptr [CommunityShaders!_tls_index (00007ff8`8351d91c)]
+00007ff8`81c5ef8e 65488b042558000000 mov   rax,qword ptr gs:[58h]
+00007ff8`81c5ef97 ba38000000      mov     edx,38h
+00007ff8`81c5ef9c 488b04c8        mov     rax,qword ptr [rax+rcx*8]
+00007ff8`81c5efa0 8b0402          mov     eax,dword ptr [rdx+rax]
+00007ff8`81c5efa3 39052fe08b01    cmp     dword ptr [CommunityShaders!REL::IDDB::_instance+0xb8 (00007ff8`8351cfd8)],eax
+00007ff8`81c5efa9 7f4a            jg      CommunityShaders!RE::Console::ExecuteCommand+0x115 (00007ff8`81c5eff5)
+
+CommunityShaders!RE::Console::ExecuteCommand+0xcb:
+00007ff8`81c5efab 488d8c2480000000 lea     rcx,[rsp+80h]
+00007ff8`81c5efb3 ff1517e08b01    call    qword ptr [CommunityShaders!REL::IDDB::_instance+0xb0 (00007ff8`8351cfd0)]
+00007ff8`81c5efb9 90              nop
+00007ff8`81c5efba 488d8c2480000000 lea     rcx,[rsp+80h]
+00007ff8`81c5efc2 e8a98b0000      call    CommunityShaders!RE::GFxValue::~GFxValue (00007ff8`81c67b70)
+00007ff8`81c5efc7 90              nop
+00007ff8`81c5efc8 4c8bce          mov     r9,rsi
+00007ff8`81c5efcb ba18000000      mov     edx,18h
+00007ff8`81c5efd0 41b801000000    mov     r8d,1
+00007ff8`81c5efd6 488d4c2450      lea     rcx,[rsp+50h]
+00007ff8`81c5efdb e8a0800d00      call    CommunityShaders!`eh vector destructor iterator' (00007ff8`81d37080)
+
+CommunityShaders!RE::Console::ExecuteCommand+0x100:
+00007ff8`81c5efe0 4c8d9c24c0000000 lea     r11,[rsp+0C0h]
+00007ff8`81c5efe8 498b5b10        mov     rbx,qword ptr [r11+10h]
+00007ff8`81c5efec 498b7320        mov     rsi,qword ptr [r11+20h]
+00007ff8`81c5eff0 498be3          mov     rsp,r11
+00007ff8`81c5eff3 5f              pop     rdi
+00007ff8`81c5eff4 c3              ret
+
+CommunityShaders!RE::Console::ExecuteCommand+0x115:
+00007ff8`81c5eff5 488d0ddcdf8b01  lea     rcx,[CommunityShaders!REL::IDDB::_instance+0xb8 (00007ff8`8351cfd8)]
+00007ff8`81c5effc e8ef850d00      call    CommunityShaders!_Init_thread_header (00007ff8`81d375f0)
+00007ff8`81c5f001 833dd0df8b01ff  cmp     dword ptr [CommunityShaders!REL::IDDB::_instance+0xb8 (00007ff8`8351cfd8)],0FFFFFFFFh
+00007ff8`81c5f008 75a1            jne     CommunityShaders!RE::Console::ExecuteCommand+0xcb (00007ff8`81c5efab)
+
+CommunityShaders!RE::Console::ExecuteCommand+0x12a:
+00007ff8`81c5f00a 48c7442430edc30000 mov   qword ptr [rsp+30h],0C3EDh
+00007ff8`81c5f013 48c74424388cc70000 mov   qword ptr [rsp+38h],0C78Ch
+00007ff8`81c5f01c 48c7442440edc30000 mov   qword ptr [rsp+40h],0C3EDh
+00007ff8`81c5f025 488d4c2430      lea     rcx,[rsp+30h]
+00007ff8`81c5f02a e82104e4ff      call    CommunityShaders!REL::RelocationID::address (00007ff8`81a9f450)
+00007ff8`81c5f02f 4889059adf8b01  mov     qword ptr [CommunityShaders!REL::IDDB::_instance+0xb0 (00007ff8`8351cfd0)],rax
+00007ff8`81c5f036 488d0d9bdf8b01  lea     rcx,[CommunityShaders!REL::IDDB::_instance+0xb8 (00007ff8`8351cfd8)]
+00007ff8`81c5f03d e83e850d00      call    CommunityShaders!_Init_thread_footer (00007ff8`81d37580)
+00007ff8`81c5f042 e964ffffff      jmp     CommunityShaders!RE::Console::ExecuteCommand+0xcb (00007ff8`81c5efab)
+0:000> .echo === COMPLETE ===
+=== COMPLETE ===
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

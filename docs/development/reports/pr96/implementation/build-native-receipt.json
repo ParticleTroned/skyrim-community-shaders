@@ -1,0 +1,78 @@
+{
+    "exitCode": 0,
+    "completedUtc": "2026-09-12T13:01:43.354384+00:00",
+    "commands": [
+        {
+            "command": [
+                "[REDACTED_LOCAL_PATH]",
+                "[REDACTED_LOCAL_PATH]",
+                "/p:Configuration=Release",
+                "/p:Platform=x64",
+                "/p:PostBuildEventUseInBuild=false",
+                "/m:4",
+                "/v:minimal",
+                "/nodeReuse:false"
+            ],
+            "exitCode": 0
+        },
+        {
+            "command": [
+                "[REDACTED_LOCAL_PATH]",
+                "[REDACTED_LOCAL_PATH]",
+                "/p:Configuration=Release",
+                "/p:Platform=x64",
+                "/p:PostBuildEventUseInBuild=false",
+                "/m:4",
+                "/v:minimal",
+                "/nodeReuse:false"
+            ],
+            "exitCode": 0
+        },
+        {
+            "command": [
+                "[REDACTED_LOCAL_PATH]",
+                "[REDACTED_LOCAL_PATH]",
+                "/p:Configuration=Release",
+                "/p:Platform=x64",
+                "/p:PostBuildEventUseInBuild=false",
+                "/m:4",
+                "/v:minimal",
+                "/nodeReuse:false"
+            ],
+            "exitCode": 0
+        },
+        {
+            "command": [
+                "[REDACTED_LOCAL_PATH]",
+                "[REDACTED_LOCAL_PATH]",
+                "finalize",
+                "--base-manifest",
+                "[REDACTED_LOCAL_PATH]",
+                "--artifact",
+                "[REDACTED_LOCAL_PATH]",
+                "--output-manifest",
+                "[REDACTED_LOCAL_PATH]"
+            ],
+            "exitCode": 0,
+            "output": "1f8bc9da4750101f7b0e19fe2480305d75f2014cbc90f8b04d8674b880062ba9\n"
+        },
+        {
+            "command": [
+                "[REDACTED_LOCAL_PATH]",
+                "--test-dir",
+                "[REDACTED_LOCAL_PATH]",
+                "-C",
+                "Release",
+                "-R",
+                "^(SceneLightSnapshot|VRSceneGuards)$",
+                "--output-on-failure",
+                "-V"
+            ],
+            "exitCode": 0
+        }
+    ],
+    "method": "Direct native MSBuild following PowerShell RPC stall; standard manifest finalizer and exact AIO copies completed separately.",
+    "postBuildEventUseInBuild": false,
+    "distCleanupPerformed": false,
+    "appLocalDependencyCopy": "Not run by PowerShell; dependency verification is recorded with the handoff."
+}

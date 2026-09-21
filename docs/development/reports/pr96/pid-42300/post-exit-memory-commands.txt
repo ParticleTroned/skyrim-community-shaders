@@ -1,0 +1,9 @@
+.echo POST-EXIT MEMORY -- NOT FAULT-TIME HEAP
+.echo BATCH STORAGE
+dq 00000255fdb87200 L30
+.echo BAD LIST POINTER TARGET
+dq SkyrimVR+15e23b0 L12
+.echo LIVE IMAGE RTTI
+dd poi(SkyrimVR+15e23c0) L6
+da SkyrimVR+dwo(poi(SkyrimVR+15e23c0)+c)+10
+q

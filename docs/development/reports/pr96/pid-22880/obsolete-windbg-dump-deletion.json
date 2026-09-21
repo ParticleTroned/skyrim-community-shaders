@@ -1,0 +1,9 @@
+{
+    "authorization": "[REDACTED_IDENTIFYING_METADATA]",
+    "path": "[REDACTED_LOCAL_PATH]",
+    "bytes": 26355063895,
+    "lastWriteTimeUtc": "2026-09-11T20:56:33.4936215Z",
+    "state": "deleted",
+    "confirmedAbsent": true,
+    "freeGiBAfter": 95.93
+}

@@ -1,0 +1,8 @@
+{
+    "source": "[REDACTED_LOCAL_PATH]",
+    "archive": "[REDACTED_LOCAL_PATH]",
+    "sizeBytes": 27373316616,
+    "sha256": "83AC19156505A1A48DFA7181B12E030A326235B7CC6990F57B32E776F1E8EC98",
+    "method": "Same-volume move preserves one full dump without a redundant copy",
+    "stage": "archived-and-verified"
+}

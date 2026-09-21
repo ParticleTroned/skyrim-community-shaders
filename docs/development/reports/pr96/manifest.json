@@ -1,0 +1,1322 @@
+{
+    "schema": "pr96-private-report-export-v1",
+    "exportDate": "2026-09-21",
+    "pr96MergeCommit": "2e6d87cf763633917dbee54805476c7da0d2c995",
+    "files": [
+        {
+            "path": "pid-42300/diagnosis.md",
+            "sourceSha256": "a28c33c2a689e10ff32ef0981185170e0f75f4789d90ddb73c73f55d81945077",
+            "sourceBytes": 6592,
+            "exportSha256": "7e56112a1a7a6c79f98caf79ee4ba82d4efe451eaf432f17883ad7fba69d14bd",
+            "exportBytes": 6849,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/summary.json",
+            "sourceSha256": "b2181cad459843f4e29893097a7c2be0feebc2e141c4e0765ee5e6fcb7a90c7e",
+            "sourceBytes": 6214,
+            "exportSha256": "47f357209401661eb17bcb3e065c2eb67278b5e5ee7faccfe8464b04f55b3f34",
+            "exportBytes": 6553,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/crash-stacks.txt",
+            "sourceSha256": "d28ccc83f7e07160e808d060281e6525b77be1bed24fe7f92b4e3081d3c94ef8",
+            "sourceBytes": 454527,
+            "exportSha256": "d9308996c038562bed4bceba1aa48c3223f3b77eb809321b6d97875105b103b6",
+            "exportBytes": 448278,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/post-exit-memory.txt",
+            "sourceSha256": "46ae4782ed0f73995db6362d0b7b1fb2775e491b628531de59aac736264f6c89",
+            "sourceBytes": 9320,
+            "exportSha256": "d7192513aab834a44d9674ca120f22a14f86148b60d612fb2da8dddbf92c4778",
+            "exportBytes": 6787,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/post-exit-memory-map.json",
+            "sourceSha256": "0beead7bde983da185ee2d95ad599255b4c917536820f298168d8e23d8aa3198",
+            "sourceBytes": 432,
+            "exportSha256": "470db94bf02b2bbab6a4a677efea0a80d2aed9a9928df305a451aae32c0d91e7",
+            "exportBytes": 476,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/runtime-dll-verification.json",
+            "sourceSha256": "a48d38d451205375d5e3c2d2cf29e77f69f4e6bcdc9c2eb705ac718c4f17a6de",
+            "sourceBytes": 3460,
+            "exportSha256": "084124e64b6de0005a79415edf3e5fea6c6440c8b1e4292cd7fdbc452bdc2c27",
+            "exportBytes": 3093,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/dump-header.json",
+            "sourceSha256": "31d06a46cce651e9dd7f68f888e13d8db0fafe62cf14f59bcff4d959c6bcfa52",
+            "sourceBytes": 1543,
+            "exportSha256": "60540f264bcfa708e07c30e7cb8040112e2ae33788e614db2cc9b168ac072a12",
+            "exportBytes": 1845,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/dump-identity.json",
+            "sourceSha256": "17697c7375ca8bb33546aa5a0ea310917ca57c7e028e02f611c4c9ab45cf0b89",
+            "sourceBytes": 288,
+            "exportSha256": "3054f93935e4c9f4ffa9ab8cca887989919cffc97781ef7339623dd4816c8290",
+            "exportBytes": 204,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/measured-scenario-request.json",
+            "sourceSha256": "d36d95052d1e9b0528893126167d65ba5cda5ec04eac2619a2a79b14447ef8c7",
+            "sourceBytes": 40995,
+            "exportSha256": "4be549e555d6036715f16b92455cbdd77b57f002251524090a1fa68674840497",
+            "exportBytes": 49473,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/measured-scenario-admission.json",
+            "sourceSha256": "4933a1aea8ab22a5d520054e8115f0f7b7179ebd443d3c06b4e4654ace88554c",
+            "sourceBytes": 154,
+            "exportSha256": "db1f1de8df29aa2f74c4423a813dca763652281e06529b8f8f92ba3219844b48",
+            "exportBytes": 182,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/crash-stacks-commands.txt",
+            "sourceSha256": "3ae477baae58fa22278974163855da3bbddb73c4d702d092fb18ae903af776bc",
+            "sourceBytes": 60,
+            "exportSha256": "6b237294e372f15683f813256d9e3d07643fa9656893fcfbc80d4eff17794d9e",
+            "exportBytes": 59,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-42300/post-exit-memory-commands.txt",
+            "sourceSha256": "63d06a3d804dc3439f194bcc29c06c7d07d1a3afe49f604d7b2bf76702525f08",
+            "sourceBytes": 241,
+            "exportSha256": "b7082022f4b5da9f912375b816ea009ee3cdf711f999e506dbec2127c3310ce2",
+            "exportBytes": 240,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/diagnosis.md",
+            "sourceSha256": "d264d6d407e4b052a73de25b734658c78585e57442c965d8173c2a935c3b9982",
+            "sourceBytes": 5652,
+            "exportSha256": "e13a7450de6a1b824d7e5ccd81f84a097c531389794974bf27569ebd24c2bcc9",
+            "exportBytes": 5778,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-lifetime-findings.md",
+            "sourceSha256": "17ce54693b0c9e519f01409ae3f542d28944d72759a764250f433656512fa4cd",
+            "sourceBytes": 7323,
+            "exportSha256": "cf9f757a4829f4d0a386493f30be96fe4b79a564e76de9c158064e6f244f4aa5",
+            "exportBytes": 8714,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/pr65-onward-audit.md",
+            "sourceSha256": "721e7395e6616d5ddc5033868879928eb8e73f61c66345d68ad6f3c3d8e821b6",
+            "sourceBytes": 7511,
+            "exportSha256": "84d6c5c2aa483f48b40a94d3420cdb3af420bdb8895db6cb46b4c24708350606",
+            "exportBytes": 9599,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/summary.json",
+            "sourceSha256": "0f3812ca2be4a545ecf483020bcf6faeb7fafe4e16ce1b8b398dd76be5a02d9c",
+            "sourceBytes": 734836,
+            "exportSha256": "c0c7072d11d36f7aa229ae8e947d6826bb0467c4a0ab11a3294f46ef66974fb9",
+            "exportBytes": 1035184,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/recovered-scenario.json",
+            "sourceSha256": "0f4124083cb85987cc15a716386be19d10a8917287e98a14c4187fb666ed825a",
+            "sourceBytes": 693155,
+            "exportSha256": "115d1ee8b11b2d3836e3a6009b7b021bef1f0aa195df1279261755a964032538",
+            "exportBytes": 958975,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/transition-timings.csv",
+            "sourceSha256": "641c02c4a942b23b738d30c5437f532c607d1e01e480ae5ea75b2706ea723e1d",
+            "sourceBytes": 3645,
+            "exportSha256": "48abe2b2e28a31bc90be442a2ac82fe15671172b3702adcef88859f534bfae22",
+            "exportBytes": 3619,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/runtime-dll-verification.json",
+            "sourceSha256": "a48d38d451205375d5e3c2d2cf29e77f69f4e6bcdc9c2eb705ac718c4f17a6de",
+            "sourceBytes": 3460,
+            "exportSha256": "084124e64b6de0005a79415edf3e5fea6c6440c8b1e4292cd7fdbc452bdc2c27",
+            "exportBytes": 3093,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/dump-preservation.json",
+            "sourceSha256": "b6cf334f30e9f3cbfbb69ef2dc9534b280a3d26e1ed22ba6f2cb74a7c9f1520f",
+            "sourceBytes": 498,
+            "exportSha256": "b60cfa68ba8a4736a11df11f2f57727752567a0d097eb496643923990b931b8b",
+            "exportBytes": 315,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/dump-structure.json",
+            "sourceSha256": "0555533d3e5ba1db75e444707d50140c29c39aff20680040c67dcceba81ceafc",
+            "sourceBytes": 2395,
+            "exportSha256": "7d8394f716b245bb4a79409cea68219a7f62ad92d50b80d764e2dc7ef010df3c",
+            "exportBytes": 2731,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/exception-analysis.txt",
+            "sourceSha256": "91a89e2fe033fefbe30f17c256526f94e390f9e89371be83635ec62a01ee7822",
+            "sourceBytes": 24845,
+            "exportSha256": "9b7dbdc67ad5f4b543f04a49751af98cd777db3607a5909d60859afa731f2782",
+            "exportBytes": 21590,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/owner-analysis.txt",
+            "sourceSha256": "f94b8b94e4f0ba6e2a6ce773036268c9d8134ec7558315a0f8a84d6ad5d65a4e",
+            "sourceBytes": 17971,
+            "exportSha256": "4c8ca6ffa4e11412edd01129de783ccdf6dd42beb0e3d3a0a17e693766134e5a",
+            "exportBytes": 15031,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/all-threads.txt",
+            "sourceSha256": "e727a43647cb14681edfe52bfa52a1523585cd2dd730b06059c648b4e7a5be96",
+            "sourceBytes": 328901,
+            "exportSha256": "95b95298c6d891807ced661531a6c99c9df9800cca73873ec7109c083e667bf5",
+            "exportBytes": 321728,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-owner.txt",
+            "sourceSha256": "090cf64f961664ac4ae3ec76f07a1674077b09d81f61e91c405ee97098a2cd1e",
+            "sourceBytes": 29071,
+            "exportSha256": "cbad6a1ab63ced25ebc94dd4a550037ad38ce5c2ed5c44dc903b5d26d8431236",
+            "exportBytes": 25977,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-descriptor.txt",
+            "sourceSha256": "132c2305c4e96f5e81c512524b1ec92a8cded088a41b19ea20ff62df5977eb94",
+            "sourceBytes": 18903,
+            "exportSha256": "769d8cf64a3833a45b9af3622d179f5b0c6f679cd580b490a89f8b81886a1c71",
+            "exportBytes": 15944,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-list.txt",
+            "sourceSha256": "9ee919f5ad581a36a9f9172abd6a365c50392b351aa478cb5c29d17ef60cf64d",
+            "sourceBytes": 16640,
+            "exportSha256": "d0cf30506a825a2f7d76f2c38409d0ece4bb116b61f8c0ff450627b1d7623789",
+            "exportBytes": 13743,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-release.txt",
+            "sourceSha256": "e1007e41f2afde76fb43be952d8ee168b915a0fda2ee62c7c0b5cf16f7a14149",
+            "sourceBytes": 14097,
+            "exportSha256": "191dff1e4d77ae93b0fde77b87ee850526bace0cc5c94da4f23e18ee1fbc4c3b",
+            "exportBytes": 11228,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-destruction.txt",
+            "sourceSha256": "05b87b6f63f16f737faee75745e5bd529ae81795c3ae39eb26a7132d179c0f88",
+            "sourceBytes": 21826,
+            "exportSha256": "762c67e81db17b5ca570611fef696ffd656ef20af76a0e77f65979feb0cf9dfa",
+            "exportBytes": 18797,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/descriptor-lifetime.txt",
+            "sourceSha256": "d8d82cf73fe69bbdd78b150a5fb714d3bdde68501380f5fe9caf99298b4e2e23",
+            "sourceBytes": 16787,
+            "exportSha256": "faaaa1f79b1bcd61d7a9c14e7097aaa0806bd00ccbcc34e21eba74a7b455f066",
+            "exportBytes": 13852,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/base-constructors.txt",
+            "sourceSha256": "5d3d74bc313eb2a48163c8bde92c83f565273b35f213f1d3820de1110430bf11",
+            "sourceBytes": 12020,
+            "exportSha256": "d0e2f6f848ccf96d261a493be5a50b0f91f6a3e2ef0c39478da04baa896971a1",
+            "exportBytes": 9560,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/lifetime-constructors.txt",
+            "sourceSha256": "8ae6518c73bbaebe1b2a28d626a70ff45cfcc7ff715201bd969544b4c2321a12",
+            "sourceBytes": 36214,
+            "exportSha256": "c077fe719bdbe2e163b77c6aeb2c89b02abe43a57d9f3d80bf86a8c8c163e969",
+            "exportBytes": 33290,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/lifetime-hook-targets.txt",
+            "sourceSha256": "5b7ab1536f64670d5d11ff90c6f3b8779c7152c9a3ee421d8975001b8ac163b6",
+            "sourceBytes": 12712,
+            "exportSha256": "e556a1e6b7d1925d000ffd738b585723bbc6a9ac6b06240c9ce22b9f6f7c14d9",
+            "exportBytes": 10202,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/runtime-layout.txt",
+            "sourceSha256": "1eed8df14d8657ac20d5c88a0599ffe5b8343e017c6e6ffad0aa2e7e55dbd767",
+            "sourceBytes": 14729,
+            "exportSha256": "242c96f56ba3573b8fe81a65f370ae0bd0a37b15b5bcbfb7b171c83849400a4b",
+            "exportBytes": 11889,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-lifetime-manifest.json",
+            "sourceSha256": "c85aba9bafc084981deed89aed6d3e2ac672796d75229b65f1db95eb0b85d2b3",
+            "sourceBytes": 2895,
+            "exportSha256": "7029ca56e27103169845dc8314e5efd2064ffb6f89ea9b2282f4561fe6300eb5",
+            "exportBytes": 3102,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/measured-scenario-request.json",
+            "sourceSha256": "2f8564179e0028827042c45077a3b4440a6603ae664410aed009ff9c0db00e68",
+            "sourceBytes": 40691,
+            "exportSha256": "99c503c4518d765ac88cd33614b6e69b084558755983079c9b26503c22a35df7",
+            "exportBytes": 49173,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/measured-scenario-admission.json",
+            "sourceSha256": "1c82deed86e7c675ee839e4b928e17087f4c531ed6d8f73cfd1d60e999d690a6",
+            "sourceBytes": 154,
+            "exportSha256": "1a2447665b79e6c4db0c14885c5e42c8f8392acbf3975a82aa33a6e95e4cbebe",
+            "exportBytes": 182,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/analyze-exception.wds",
+            "sourceSha256": "e4a298305d603de7e2b81737c31cc03794c12bbf930a6d952fdcbea827ba18e2",
+            "sourceBytes": 467,
+            "exportSha256": "e4a298305d603de7e2b81737c31cc03794c12bbf930a6d952fdcbea827ba18e2",
+            "exportBytes": 467,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/analyze-owner.wds",
+            "sourceSha256": "028358da1e6efcce669fcbf46bd831b389a75d1e6d8a2d2cfa85793857b245e0",
+            "sourceBytes": 452,
+            "exportSha256": "028358da1e6efcce669fcbf46bd831b389a75d1e6d8a2d2cfa85793857b245e0",
+            "exportBytes": 452,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-owner.wds",
+            "sourceSha256": "9bad088986f258b22371e55a8e4ace32bdf6ee3f7d57221276f9f3c0e183dc57",
+            "sourceBytes": 470,
+            "exportSha256": "9bad088986f258b22371e55a8e4ace32bdf6ee3f7d57221276f9f3c0e183dc57",
+            "exportBytes": 470,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-descriptor.wds",
+            "sourceSha256": "174bc9e7089069a93fe04d6a168547999fc360d93002d46997a653d11feb3f3f",
+            "sourceBytes": 393,
+            "exportSha256": "174bc9e7089069a93fe04d6a168547999fc360d93002d46997a653d11feb3f3f",
+            "exportBytes": 393,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-list.wds",
+            "sourceSha256": "997be4b3f757112a7002a94db10edefe29ee325e07000c41be6d19a4fecd88e7",
+            "sourceBytes": 442,
+            "exportSha256": "997be4b3f757112a7002a94db10edefe29ee325e07000c41be6d19a4fecd88e7",
+            "exportBytes": 442,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-release.wds",
+            "sourceSha256": "5127b68b7909f14f1c6dbe212d1cebe874bd56e78e7df8aa21804fa12f98a5bc",
+            "sourceBytes": 342,
+            "exportSha256": "5127b68b7909f14f1c6dbe212d1cebe874bd56e78e7df8aa21804fa12f98a5bc",
+            "exportBytes": 342,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/shadow-destruction.wds",
+            "sourceSha256": "f8d95503991081287ab82d25ad636285dabf37a4cf9231ae44c409a1fa43bdf0",
+            "sourceBytes": 153,
+            "exportSha256": "f8d95503991081287ab82d25ad636285dabf37a4cf9231ae44c409a1fa43bdf0",
+            "exportBytes": 153,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-54196/descriptor-lifetime.wds",
+            "sourceSha256": "4b063121b01415b216ea9a21040bb6108d88edc6b2ad283475eb6d185c319349",
+            "sourceBytes": 204,
+            "exportSha256": "92c34c92d2b44120d23703742f3090db83aa69d83f473effaf2e1b47f40f1adc",
+            "exportBytes": 203,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/summary.md",
+            "sourceSha256": "d40ee65f410b58d7ecf15b26d29fbff4e05ac8347b07d2cfd1ba74c57dac2a2a",
+            "sourceBytes": 2648,
+            "exportSha256": "2442bad6545ebd2f73d7a6715ce1b789bff77fb25422f15480fb0ca2f26e7b9e",
+            "exportBytes": 3228,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/summary.json",
+            "sourceSha256": "48bada14e446480400f305affbd7404a4805539bb66b8fb2091dd57f46189b5f",
+            "sourceBytes": 12892,
+            "exportSha256": "67aadf4a3418cc4a70cff5d8ef9dae2eb4a52cd7616a773e86f04f521604671c",
+            "exportBytes": 19359,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/events.summary.json",
+            "sourceSha256": "97a4a58758c633356de20b4acf9fffbc70382a0f49e821dd99711829b1e0dd82",
+            "sourceBytes": 527718,
+            "exportSha256": "ebc6b8d713170314ea4b9bbc570c65ee02cbb81f2b9359741d6ed7f861327783",
+            "exportBytes": 527804,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/events.jsonl.gz",
+            "sourceSha256": "1e568e1129f7dae47b2e82e2bd1a415356cbf9d23ec84b52e3710ed93b198699",
+            "sourceBytes": 64355040,
+            "exportSha256": "af252f0726ae9f780c9b76db4aed5e04ced19028738bb8b8387fa957f68eeb8d",
+            "exportBytes": 2341299,
+            "transformation": "complete JSON records, unchanged values, deterministic gzip",
+            "records": 219225,
+            "decodedSha256": "57434f07633cacdb08e568ab40f5a1689b3e733c2269b29befc8ba56c9ed861f",
+            "decodedBytes": 64135815
+        },
+        {
+            "path": "pid-5236/dll-identity.json",
+            "sourceSha256": "c7ddb8f465d2b10fd2571a8a1a8e81300288ced28b63c3b6f0eb9fe11cf3cc68",
+            "sourceBytes": 6552,
+            "exportSha256": "daff9d85d2718d0776a7cd3a5f76e1e08f6af0d0ba6163f55b7f52f610973740",
+            "exportBytes": 7260,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/dump-inspect.json",
+            "sourceSha256": "b5e88a34df195bc2a91efe3d172f7280674e0119ecb159c7a6e8051d451b7085",
+            "sourceBytes": 1201,
+            "exportSha256": "6f7d2638f5acc1387fdf3c0b4039869a7d9a4d43f83701b359e3ad62c8645c16",
+            "exportBytes": 993,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/dump-receipt.json",
+            "sourceSha256": "8463a8bbdf7b96b83e6183aced381a8e7b47fab29e6459243bd07ce59ae25896",
+            "sourceBytes": 528,
+            "exportSha256": "0c0aa83175e436502939664dcf5b7ad7ad624b98c9ee715a69f03143701bcfd8",
+            "exportBytes": 427,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/journal-snapshot-receipt.json",
+            "sourceSha256": "9d838a8e049c512d15eeef81995ca3782c49654f9d63a60d179298ed2e10ca23",
+            "sourceBytes": 527,
+            "exportSha256": "e3760d51a9c1c0250158b20919688164ca53abc7a4805c421cc59f28905b77f7",
+            "exportBytes": 370,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/scenario-transcript.json",
+            "sourceSha256": "99a7449ded4e7b9e42b779a97bb39401a6887cf87e1941aa4dc98db71a575f94",
+            "sourceBytes": 1615090,
+            "exportSha256": "7d17b47d133c132a33f8386c2f1c125d8d6f3b92eb1788e2c1836624ec98bb7b",
+            "exportBytes": 1614947,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/transitions.json",
+            "sourceSha256": "7fb3c46778c689461bdb37d63846bc78fe2bd7e6d3f1b7eeda6c34c2828231da",
+            "sourceBytes": 9982,
+            "exportSha256": "4eb0eed9a6c8e0eec954a0183bb8d87fb56074f3a3dd2c248d6196820d789ea0",
+            "exportBytes": 13954,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/producer/CSX.BuildManifest.json",
+            "sourceSha256": "55d38a26a1229429cea7ce56630e5b880cca25d3fed1a15644e4d183ec11cf5d",
+            "sourceBytes": 4295,
+            "exportSha256": "2f15480ceb7ef71645e08a93207ca4ba5ec7be6ce2ac0ae61ae4e9c6201d2576",
+            "exportBytes": 4863,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/findings.md",
+            "sourceSha256": "864d2f0aec1f24dc6b3f95a11f0977c50765f7302a5b102e8ed6f2431d313c20",
+            "sourceBytes": 6011,
+            "exportSha256": "c7344dcd4a1d049e5ecba4b6cadf8c18edd89b490f57ecbc763f9b663cbacc9d",
+            "exportBytes": 6594,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/lifetime-correlation.json",
+            "sourceSha256": "cfc1c43477df34830a96e3d07ac9289d12cad3de8ab426897d61870d32e57948",
+            "sourceBytes": 216903,
+            "exportSha256": "091c4fdc2e519862a34cb172eae684d920db0d3ea9cfcc3730e9aafcd8ddf186",
+            "exportBytes": 216821,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/destroyed-light-memory.json",
+            "sourceSha256": "fdee77c708db7c8df635102898c4408d8b70a3559bc6f9551b0546962c10310a",
+            "sourceBytes": 2283,
+            "exportSha256": "875464b4c5003189ecfbfda6ccae882194e8d6135c6d394d45c651bdf90505ab",
+            "exportBytes": 2329,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/ghidra-input-identity.json",
+            "sourceSha256": "65fb8103171dca62bc44f1b7e758426e353f8837b07627d1b9d2ba8187cd43b5",
+            "sourceBytes": 727,
+            "exportSha256": "3b6f9729bcfc5e00a882e264711ca47aa1d1a9495275495ed0718b00ce5ebecf",
+            "exportBytes": 739,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/llf-code-identity.json",
+            "sourceSha256": "9eb191e94dcaca46cc2ba69c58892b67fbda683829f2af4d2ad842c3e0ae3761",
+            "sourceBytes": 378,
+            "exportSha256": "c151b7ce11744f0fc7f46fb609133cd524af2473bb7c6282d8e73cb5b1fb41b5",
+            "exportBytes": 385,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/native-caller-functions.json",
+            "sourceSha256": "128a07717b8b497e2f9e1bdae17dd7d8392385c3e576fe60da6b8da37bbc74f1",
+            "sourceBytes": 814,
+            "exportSha256": "04148db034619fafdfeec77da1dd54876d0eef918afb529f5805d053e4950cee",
+            "exportBytes": 912,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/light-list-callers.json",
+            "sourceSha256": "7b02eb526608bfcadefe74ac37fc2825a5fecd7905731e8998b1529936838d72",
+            "sourceBytes": 285,
+            "exportSha256": "a97c92856833bcd41051c944aa7a55899314585e852027f611eeb39b090129c6",
+            "exportBytes": 318,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/ghidra-llf-analysis.txt",
+            "sourceSha256": "5ad0d2f3879910b2a898cd21b6f8fbe600e6320334ce1db571f4be02acb3bcb8",
+            "sourceBytes": 16904,
+            "exportSha256": "acfb49c9e71d5cf4ebff1e8b90aa08b7902d1784ccd7270245796333b80e13b4",
+            "exportBytes": 16418,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/ghidra-shadow-analysis.txt",
+            "sourceSha256": "1d39123d72ac067270e42561a14a3e397328d7abe2be1eddf450dc475ed6ea66",
+            "sourceBytes": 5303,
+            "exportSha256": "c825f0a393273f881483f8c52c1ab32704b469b03fa2681865b03d1bc9dc59c5",
+            "exportBytes": 5106,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/ghidra-release-callers.txt",
+            "sourceSha256": "821dc658bc28d48605a507e9711bd654fc9eb507b2b058011a3a8b803090851c",
+            "sourceBytes": 50013,
+            "exportSha256": "152cad54c563a6bcb3eb8a1ab78f3ce8ddf55048c3d0645865ab33410e72098f",
+            "exportBytes": 48479,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/ghidra-light-owners.txt",
+            "sourceSha256": "8abff3211cd39c9af47622c737e21e51f4fa7c831b54492b628092c17533e637",
+            "sourceBytes": 13912,
+            "exportSha256": "8194e65a40fb70b0a20403aabae2e44563141fbc4c6f90b1a1ce4fd2e67cd326",
+            "exportBytes": 13462,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/ghidra-immediate-light-removal.txt",
+            "sourceSha256": "43baf18da388232c78ab455c4e3026a131bf6cb508234ae638f40fc9cde13189",
+            "sourceBytes": 12275,
+            "exportSha256": "26007fc534847bc0162cd861e12cc6f0bb35af31a0685a6acb292d776f15652d",
+            "exportBytes": 11887,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/exception-site.log",
+            "sourceSha256": "e18ebdb26603bfe970c19c5daff96a9b6535285cb7ee633ec9b9236f372bfcfc",
+            "sourceBytes": 18841,
+            "exportSha256": "c84d1b7a8ca00f8ed7e1d18a24c529bf63053dad3e8683ce0faac1de30a89a69",
+            "exportBytes": 15958,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/live-inspect.log",
+            "sourceSha256": "144d1409cc44ceee0747bfd40780486b51d048423db90d5b7a06c5dc5787cfdf",
+            "sourceBytes": 13806,
+            "exportSha256": "8bc9f4d40a4f90f00febbc91b5eb8f7a86b23f430ffe92ac9a33fe34b9560fa1",
+            "exportBytes": 10628,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/capture-native.log",
+            "sourceSha256": "6c204c6657af45d3faf90913475ce960fc246a2d954f80fcf1c1cbeaa8c54163",
+            "sourceBytes": 17605,
+            "exportSha256": "6028adebd14724ee23c4e2181d10bcfe20cc9303ccecbc4b9769a0d8111467d3",
+            "exportBytes": 14799,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/exception-site.wds",
+            "sourceSha256": "d7b110ea3e679c765a338dd3e6571c38fdbf49aa9ed0bfb97a0e6d26dc852b0d",
+            "sourceBytes": 421,
+            "exportSha256": "61f7cda540e6bce2f49e9b902e23da815e4face366fdee5c50e719cd344a746c",
+            "exportBytes": 348,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/live-inspect.wds",
+            "sourceSha256": "e5c272af942a4106f4d71770ac5d8a3da0e2101caf38d7478043ab0d417399d2",
+            "sourceBytes": 557,
+            "exportSha256": "3db201ec2de919234be21071170993fdd0766ca37fcfa536f407c18fa51f003b",
+            "exportBytes": 484,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/capture-native.wds",
+            "sourceSha256": "4d4555d4bc6362c480723c3903764e4db83755cc1da5a464ca3c876e3384d40b",
+            "sourceBytes": 654,
+            "exportSha256": "439785be4fa12942d009d0b5f72c80f13cf784821d2ffe2c1c3570004b6e6421",
+            "exportBytes": 395,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-5236/ghidra-investigation/fix-candidate-receipt.json",
+            "sourceSha256": "00ad8f879d9bbd592d2c7a488305559be54c10ee53f041f5e5f9b49b51093f73",
+            "sourceBytes": 3069,
+            "exportSha256": "8cb51bedb1e0b948e21ed96db604cf979707259681466abbbb37ef3a4e846885",
+            "exportBytes": 2592,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/summary.md",
+            "sourceSha256": "dfabdb711425df0b11b9742ffc56f39852ec4a6ee2cf912997be1e7a5b9267bb",
+            "sourceBytes": 4468,
+            "exportSha256": "49d789848186aa9230022790efa76a881107d3c63e498609e722abffe760b6ef",
+            "exportBytes": 4922,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/summary.json",
+            "sourceSha256": "dd42ef5e2f742a72c9673ba23e74793f1adaf4d66f2c5216be0660f04008f081",
+            "sourceBytes": 5346939,
+            "exportSha256": "7aa37af9dd81d531b0f5d516254f7e19ffef2e459451fbcb61c82ee7b64a901f",
+            "exportBytes": 7621626,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/events.summary.json",
+            "sourceSha256": "b3e82f36d353ca5b5fcfc4654d169b58eefe8ac5e34b0e37cc9a9a61819e7d32",
+            "sourceBytes": 1612,
+            "exportSha256": "3c639b8eef4a449b4bad77b9569b58394896cd7a346ae675be92d80e9627466e",
+            "exportBytes": 1694,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/events.jsonl.gz",
+            "sourceSha256": "063c22a5f565a05ec27eca1acf57c2a04a5a13be7639fd2c4bec32378bad3c0c",
+            "sourceBytes": 73971643,
+            "exportSha256": "862618421261e86e72108f9121b8736f311339eb83a2cbc31609ea17885b253b",
+            "exportBytes": 2696412,
+            "transformation": "complete JSON records, unchanged values, deterministic gzip",
+            "records": 251586,
+            "decodedSha256": "40fb4904b6f46234848792c069ecbb02875abe4925f5512202b2fcf4095333f4",
+            "decodedBytes": 73720057
+        },
+        {
+            "path": "pid-60840/dll-identity.json",
+            "sourceSha256": "1c0a9ca0f99a685577cca2efed4d8af0bd52a8f761d9fc10c81546f168dcd24b",
+            "sourceBytes": 5710,
+            "exportSha256": "c7890ccd96c0ce008ef9f1068ac1ba945a382f04f52f396ab13af9becc866569",
+            "exportBytes": 6070,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/dump-receipt.json",
+            "sourceSha256": "5e0a8650b700af07f08758d68eac85cbf2a08a2fd3d707477d59bbdef6895ac8",
+            "sourceBytes": 460,
+            "exportSha256": "ff6cf01128aa9fa44a4851a79d8cc233bd2d05036e28c17f134418c4daf8f466",
+            "exportBytes": 355,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/journal-snapshot-receipt.json",
+            "sourceSha256": "61c4b42a25ff430d0d8a5f798132964a4da8f484d1ced1bfbc1e9fe7503b2860",
+            "sourceBytes": 708,
+            "exportSha256": "bcf46e70e87faddd19704d16a8b336c1ee8f4f1ee4ccf8fcf223e2c77e367ce8",
+            "exportBytes": 509,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/journal-transition-destruction-timeline.json",
+            "sourceSha256": "62513fd42744230405c15d33cb0025ae55809fb73b7fcacaf6a5f6fc986f18b2",
+            "sourceBytes": 24180,
+            "exportSha256": "97bc1ca8dcbb4a3957f1938fa53de7fbe0dca36087ca8169f1404d7ed70cd552",
+            "exportBytes": 23444,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/scenario-transcript.json",
+            "sourceSha256": "c72228a3c17d6c152de7276e1183da544fd8d4c37773218a314cc99186a00915",
+            "sourceBytes": 5579938,
+            "exportSha256": "3a0c995fe740f22b1ca12ce8989655a1797a1b2c93a91bbc7e9b56ed7c877a3b",
+            "exportBytes": 5579425,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/producer/CSX.BuildManifest.json",
+            "sourceSha256": "105d3673679180b883700188b6c2fc4e14eb900591eb4b0580b8c973b96b6657",
+            "sourceBytes": 4295,
+            "exportSha256": "76b277532779c3e256bc2a8dc3a2d453a8f14a6bab1d7dc52cd071200813cbb6",
+            "exportBytes": 4863,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/nvidia-worker-ghidra.txt",
+            "sourceSha256": "200aea76e12d273828b8d4f45d6a602bd1f69ea961fef54a400cf280609c2bf1",
+            "sourceBytes": 28545,
+            "exportSha256": "e6be81835426cd0fa86007122fcf208fe2e1e92f7ae258c931ab733eee472f1c",
+            "exportBytes": 27724,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/nvidia-wait-ghidra.txt",
+            "sourceSha256": "3642d618f37b3178a0d52c7d81e4f9ad48322924ad98cda0ec0e807e6575d95c",
+            "sourceBytes": 20665,
+            "exportSha256": "d522eda12c4d5b26c5b3af7417e35af41404e2ebd0dc6440c994fcce871e050e",
+            "exportBytes": 20009,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/nvidia-preceding-handlers-ghidra.txt",
+            "sourceSha256": "e528447f1d205c6a2aa9f976f2ae9eaf195feb54f3a70fac2c010ae4a79711cd",
+            "sourceBytes": 30019,
+            "exportSha256": "fa77e90521bb5b2d591a22ceb3680b7cec9b112d8244371ad26d255cfb736198",
+            "exportBytes": 29205,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/steamvr-submit-ghidra.txt",
+            "sourceSha256": "bb1c81ddd84ca39616ea63d16482aea20c23fe8561298190e3e96b4396999faa",
+            "sourceBytes": 5067,
+            "exportSha256": "930b66d50e182574f5e5479e832fdf9fddc0e5619d10ce25fdf04788962607bb",
+            "exportBytes": 4911,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/driver-command-queue.json",
+            "sourceSha256": "7d1444df63dd0c2448178a95acf3417055962e9c006b51271b071b690539593b",
+            "sourceBytes": 53087,
+            "exportSha256": "6709c922ee0778b74fcc4e8b8524d1c33c8e5a6df6f0913d049f7a9346916bae",
+            "exportBytes": 65055,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/previous-driver-command-queue.json",
+            "sourceSha256": "9f1fce73f535c0a18a92ebf414a059ed154d4957350552131a45e48191e6465b",
+            "sourceBytes": 579,
+            "exportSha256": "8e1bdf8c646994333083dadef48de2424068544b779f3c1ee29b6e565c61c9b3",
+            "exportBytes": 651,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/ghidra-input-identity.json",
+            "sourceSha256": "d503a4d3c94dd4ff5c259046825b05889f8274df54776e2166079c4883a4543e",
+            "sourceBytes": 3711,
+            "exportSha256": "246f7af274e9237eb1a1b893979ce7f9c1f2a162e363280f3ea464cea6ba25af",
+            "exportBytes": 3220,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/worker-input-identity.json",
+            "sourceSha256": "469abcde863b8794b19262b2b632d77917615a82b0619052ad64e73fb313d526",
+            "sourceBytes": 1081,
+            "exportSha256": "52b48760150309245a519da41ff4a8107933091927ef73c8878218e844430f0d",
+            "exportBytes": 966,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/handler-input-identity.json",
+            "sourceSha256": "f700f649a9eecf8d827f2211e0d456b08fde422a36d4fff01ed1acb2141b0a65",
+            "sourceBytes": 1936,
+            "exportSha256": "e4a27b7d271ff7a29cd3df5af609f63546f64236eb3240929354b30a55ed9df4",
+            "exportBytes": 1791,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/verify-old-worker.log",
+            "sourceSha256": "04f5664dbbddf2acbbb11bfc3d733a858d5a0a065b8f979b52359fa47d295cd7",
+            "sourceBytes": 7692,
+            "exportSha256": "f1d9191bfedb52d4c32cdbc6c1b6b2485484bb9f96e5cbb06ff28690fc304523",
+            "exportBytes": 5266,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/inspect-worker-live.log",
+            "sourceSha256": "9d172d44fbba40f5a122e2f30ec07a7939ae19228f13e3a377371ec8a3c6ebea",
+            "sourceBytes": 24298,
+            "exportSha256": "6bf7b55e915e488441472e16e785105fa97d03d613140b25f0c2c6ef838b1e91",
+            "exportBytes": 21177,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/inspect-wait.log",
+            "sourceSha256": "4f62410c9726663d1fee4a7b685e16ad8c0db44b1399dc28008660b30833795c",
+            "sourceBytes": 24634,
+            "exportSha256": "e6cf56a7446b84c216e687cf5c62bbe9ccd3b3bba346772a4cdf0ad39c6cabfb",
+            "exportBytes": 20987,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/inspect-event.log",
+            "sourceSha256": "c6df70c02214612a9181fffd72193ab1a8ff3b143be1f285e56a44b49f67ba86",
+            "sourceBytes": 22347,
+            "exportSha256": "aeae41795284d969d340f9252eb446728dd09d013bd1351cd3485e406ab572c8",
+            "exportBytes": 19385,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/inspect-queue.log",
+            "sourceSha256": "6dbb80e91c4348c358817f3334c3845618084d61ec017e3ecf8a7ee77653d686",
+            "sourceBytes": 12123,
+            "exportSha256": "3433d43b4dc6cd2c07d3c051e9a1b67cad572bfd86b24b8a38de19f52a705405",
+            "exportBytes": 9271,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/inspect-worker-live.wds",
+            "sourceSha256": "60910852c2945f69ba92a03391ca8b5dc275455c8e2b5d7ecad3053ddc50ee74",
+            "sourceBytes": 273,
+            "exportSha256": "fc13aea66e310dd5de21dae90210a0351a76cc41288436e7e743a66cef7c43c7",
+            "exportBytes": 199,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-60840/ghidra-investigation/verify-old-worker.wds",
+            "sourceSha256": "c24b84921a1f3d9eaa07506584b3878c1052edee4f0e983e980179acd66a9999",
+            "sourceBytes": 60,
+            "exportSha256": "c24b84921a1f3d9eaa07506584b3878c1052edee4f0e983e980179acd66a9999",
+            "exportBytes": 60,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/analysis.md",
+            "sourceSha256": "f8e9f2ce71a7d4154b0a7760b25d3cb5f41a81de352673899ba99cf96dbed161",
+            "sourceBytes": 9022,
+            "exportSha256": "39396ea8ef80baf83b01041710d186ad074b9f9c33e218e933e988e56101577d",
+            "exportBytes": 10056,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/analysis-summary.json",
+            "sourceSha256": "28a85c4a12c130cf4c25fe0281c71fcaf396e9980d83b1bb372e64ea4b37ce41",
+            "sourceBytes": 1663772,
+            "exportSha256": "a38c3ba049ea3a1ff7a7bf300c50e5be981ad8f8f746d9b169a97276ebbc6123",
+            "exportBytes": 2429698,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/events.summary.json",
+            "sourceSha256": "16e6fef3315d33495fde0721d158b05ac3829b39666c8314145329aae281caa8",
+            "sourceBytes": 3224,
+            "exportSha256": "b2a7d6ef2922f8edaaad0c0a2ea939d925dd6224528e27bf352c4c29a299e485",
+            "exportBytes": 3290,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/events.jsonl.gz",
+            "sourceSha256": "d3a81c3e789a3ec1ba001f927d13c4666f2fc618b69754807b9ac54c5159caae",
+            "sourceBytes": 79580434,
+            "exportSha256": "8213230d3ef5ebd64889ecd4bae26ddadadbc3ee012a5152dedb3d06cb787512",
+            "exportBytes": 2900282,
+            "transformation": "complete JSON records, unchanged values, deterministic gzip",
+            "records": 274638,
+            "decodedSha256": "cc31ca864e6d30bd7e176eac0fb0a67bce0d71973ced9614461101fc225530d3",
+            "decodedBytes": 79305796
+        },
+        {
+            "path": "pid-22880/shadow-overlap-timeline.json",
+            "sourceSha256": "88d23a1bfdcba6cb770706788ef7bc90025b18418a014d5ae8912ae476c1df3d",
+            "sourceBytes": 60117,
+            "exportSha256": "08ca82e58c82099bf80503703a132470a7f54b2d477a96a603bd14a3759e3b59",
+            "exportBytes": 58265,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/overlap-events.json",
+            "sourceSha256": "841b67e0c8db57d85f4375ae8db2aaad27acc3576eb7ddad90fd0591ac84beea",
+            "sourceBytes": 50413,
+            "exportSha256": "f1d37f47cde15f88c0beb8f723a3d0651ebf0e2a6dc729786f762fe8c9c1ce3d",
+            "exportBytes": 47753,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/scenario-result.json",
+            "sourceSha256": "6fc123f82ca013fa8dc5ccaabf8797b3bc98a405d91d21ee0187a3d45d0c3190",
+            "sourceBytes": 1480724,
+            "exportSha256": "a0a4aa0d7a7051997b3b2aad7c69a83eae052888c5147b5b0ce16d7d19654eed",
+            "exportBytes": 2100698,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/transition-results.json",
+            "sourceSha256": "3154ddcf8df6b65d0c1445f7f91135aeef9237fb27ebeccc9470badd52cf90f5",
+            "sourceBytes": 1491529,
+            "exportSha256": "2e6d091a783a9328c84002da9553e3e832051d94f23ee4709a4de01d653eff16",
+            "exportBytes": 2112528,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/scenario-request.json",
+            "sourceSha256": "89ac700e4d6c2db2e5c3fa806d5364cd3d53ad5bda7561b395cae2410fb765f1",
+            "sourceBytes": 23497,
+            "exportSha256": "48450996f5f18ddd912beac42d6850ecd0c8856d545a64d7d09c7edfa72ca457",
+            "exportBytes": 28067,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/dump-receipt.json",
+            "sourceSha256": "28a5ab9a60e1d94ca48af3853bedd94868dc56baa74d438166c3e286e4e2e787",
+            "sourceBytes": 497,
+            "exportSha256": "8b7f614b8c12d55ef7c8d9c495f7d27254e5100e39615fc55da491ee51460917",
+            "exportBytes": 396,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/journal-snapshot-receipt.json",
+            "sourceSha256": "2576dcc2b2eff68cb63a4a0e8307a2bd1144a9a4871943e450cccb6ca832b7e2",
+            "sourceBytes": 709,
+            "exportSha256": "bba12122b3a88b637e92896f9a5cbada0b6541493c05a38444604e041b9d8af8",
+            "exportBytes": 520,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/producer-manifest.json",
+            "sourceSha256": "98a33981c5ca7c14010d801ee3f72e97c303d0de869b6d218c8f6bf10c0fcbfe",
+            "sourceBytes": 4297,
+            "exportSha256": "ad8c4201f39d1b3bdd6e941cff034f3a91438a9caa3e3a9071a5588ffbfc0511",
+            "exportBytes": 4863,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/producer-copy-receipt.json",
+            "sourceSha256": "7250dc6db04c25f4fd8b4d7cb647e46b99c41ebced2e6e0c4579a8b7d90c708e",
+            "sourceBytes": 319,
+            "exportSha256": "5a9304b7e80ca581274f9a900c201a3e6bac29205e0b28d14cb66d13d1060cb6",
+            "exportBytes": 245,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/obsolete-dump-deletion.json",
+            "sourceSha256": "be66d3f55ec79025201199e3e021e9ba058cd2f043537819265772f7f78948b1",
+            "sourceBytes": 1124,
+            "exportSha256": "a9f0debd3d4028f8ee248d4eeda7f4dc77839f8c1e3351770205ab3dc799131f",
+            "exportBytes": 727,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/obsolete-windbg-dump-deletion.json",
+            "sourceSha256": "5596a62f9e80d01f55d734b750ee7f3ef05f7794c7113f114707ebf93a1f18a1",
+            "sourceBytes": 352,
+            "exportSha256": "678c4727db9348794e8bd0dbcc61b1b516f09a770fc9dbc558301f053a4abaed",
+            "exportBytes": 258,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/inspect-frozen.log",
+            "sourceSha256": "c7cbbb8bacc3845768360740bd1e97cc8558370b9ab32effc89e260e4bed6d22",
+            "sourceBytes": 26116,
+            "exportSha256": "474a3b5075eee61f57befbbcb2ca7d83888f6bd1f19713f41befbf7a07b6d63e",
+            "exportBytes": 22497,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/inspect-shadow-native.log",
+            "sourceSha256": "ac189d00db0fe8ee222324f7c61d9731856e5040692277d6ba657742cbef4dbf",
+            "sourceBytes": 13538,
+            "exportSha256": "6a4862ad014bc6cb6fb63dfeffea4e1932cadf41dc6ed0b3c49b601f84c4dae8",
+            "exportBytes": 10765,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/confirm-live-hang.log",
+            "sourceSha256": "e1ff15897a1f29435edd3a4c0e6365f32a0d3b5782ae4c45ca3b885f3ae80959",
+            "sourceBytes": 29389,
+            "exportSha256": "b53cf7dc0bfd0eb590409ec2189e91b1e1ff0e4bcf50efa07478fd9d10504fb3",
+            "exportBytes": 26138,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/inspect-frozen.wds",
+            "sourceSha256": "e0cc00219578cb053beab67d640bc601d810283315407949e99f0f3ff467f3e8",
+            "sourceBytes": 307,
+            "exportSha256": "e817c71c9a6a20dd2dea177afbac3fc952750d88bec898cb67a4443c7680c332",
+            "exportBytes": 236,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/inspect-shadow-native.wds",
+            "sourceSha256": "fa75ff587edf83e9af4827c9df0a5c53a1c80a4e6f874fad25ce012a54e6e9bc",
+            "sourceBytes": 400,
+            "exportSha256": "44373163da45c6e77e7863afa37795dbfd9dbba735aeb72be2de707d48dc3810",
+            "exportBytes": 329,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/confirm-live-hang.wds",
+            "sourceSha256": "fc10bf6fb72a90cf697dba12efc3508134bc5f6c72f5d2f37c4ef138a93f0c28",
+            "sourceBytes": 268,
+            "exportSha256": "f8d5dea4653328d37118d4089005f8a4413a0d021455b5072a519048cb117f25",
+            "exportBytes": 197,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/nvidia-frozen-ghidra.txt",
+            "sourceSha256": "5a6e717626117452538b6573d00636193385abf6761cb4e5be60835962f77acf",
+            "sourceBytes": 237213,
+            "exportSha256": "a32e68228ec1c6432295814137d2b0377e9d27141dcae46943ee24c86722f792",
+            "exportBytes": 230830,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/native-original-ghidra.txt",
+            "sourceSha256": "455a445a07cc22358bbf96fade3180613cc45793403f91d40b8cf5092217a245",
+            "sourceBytes": 74298,
+            "exportSha256": "23dbc91ca596c8982c85d5136d21edfb8187a558fd2dee4853459f4460282c55",
+            "exportBytes": 71972,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/shadow-native-ghidra.txt",
+            "sourceSha256": "dbfd071c798ac40981ac17384d32a2188e02fc90b88400a235d3dc4a49a07153",
+            "sourceBytes": 52859,
+            "exportSha256": "41900cd099876b0dbdba286d21d1ba31c09fb88dd68d11aa098cb0f1c44b6d7d",
+            "exportBytes": 51204,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/steamvr-submit-ghidra.txt",
+            "sourceSha256": "43d5e3f9afb2bb44b9bab222f1132226f3ca84121f39fe438e77482b258480bf",
+            "sourceBytes": 18590,
+            "exportSha256": "eb0d83b921a5895bfaa6adb539e8c8c830ace692158563e3be8ab9cfc5bdd42f",
+            "exportBytes": 18089,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/driver-command-queue.json",
+            "sourceSha256": "f20da0bb7edceb196b9d7fa2a49aa0ef5cf4b62aabb63cb78aa5d41c0d70cebe",
+            "sourceBytes": 218188,
+            "exportSha256": "09eae2f9a2fd9c9d58ce29584ded499b91b60f6f28aea8a0d47cad27a9159a21",
+            "exportBytes": 269716,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/previous-driver-code-comparison.json",
+            "sourceSha256": "452009d6baab2c7e86b93ae023c7c3feda3fafc8dd89e1e7d10036c0421efb64",
+            "sourceBytes": 596,
+            "exportSha256": "b7b31e890db2fc5daee49bd5ac404720f6e192c37d0f615f7766ae44315ec20c",
+            "exportBytes": 636,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/native-prologue-reconstruction.json",
+            "sourceSha256": "0742edaaa710b37cd68e3e345f73c7facafbf07297985146aefc8dbd5a914127",
+            "sourceBytes": 1695,
+            "exportSha256": "6e46f53706b8b9567e0f13a58d641ebce35e97a4c62b7825e147d32f8f947a12",
+            "exportBytes": 1603,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/ghidra-input-identity.json",
+            "sourceSha256": "d3e95d3a8efc0d8511c94d0e16363c15041df613e54de4ca2a55d093af17468a",
+            "sourceBytes": 6592,
+            "exportSha256": "6b11a727d4b0ccc770c84c22817cd4030248f52aad6e3154b35ff8425ad7b676",
+            "exportBytes": 6112,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "pid-22880/ghidra-investigation/trampoline-identity.json",
+            "sourceSha256": "40946418ac4dac10865caf8bca99128004cb1dc007dca21a7b6e5cb13b7f3bcb",
+            "sourceBytes": 350,
+            "exportSha256": "d7422193030aea50ad7378412e5de69760fac21b9dbbf76c79a42090895c927f",
+            "exportBytes": 269,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "implementation/native-render-caller-ghidra.txt",
+            "sourceSha256": "90cf507f4bf947cdaa164243e72186882b1808a1f9184e5ba04c7e2f377c968d",
+            "sourceBytes": 2774,
+            "exportSha256": "180ee94b53e0dc96b30b420b6493fa1b096bb6b548bc813a1d7b909ed1626386",
+            "exportBytes": 2680,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "implementation/native-render-selection-ghidra.txt",
+            "sourceSha256": "a9d6b987176d316bab339e718c88ab0a76d2aaad0a2f5b9c4c476529e0d27022",
+            "sourceBytes": 334,
+            "exportSha256": "94fa1b2abfb2d1c01c71529c790a70c5c664d5ff318cf149fb2715fa5e56fe92",
+            "exportBytes": 320,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "implementation/build-native-receipt.json",
+            "sourceSha256": "10eb27ba44f651ad4bf6f423e48f19048d415373f4271e1dd6b9a88b9b0954b4",
+            "sourceBytes": 2971,
+            "exportSha256": "db8003977f134428385973c418b8011eace27950543c348c047364d812ddf536",
+            "exportBytes": 2497,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "implementation/tests-final.log",
+            "sourceSha256": "a69c90b43076daccfe67db539beff0bb74f1c85abc29e692b49e0c5b1c177681",
+            "sourceBytes": 1562,
+            "exportSha256": "3589e5ee20cc989c084f4c04e472e4fe5c8c938ed4c17d3d96720df4b83a4a74",
+            "exportBytes": 1186,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "implementation/handoff.json",
+            "sourceSha256": "d1df18e4fd8238471a971f9ee442056c510df78f66ce8054209ea417e4253e86",
+            "sourceBytes": 6137,
+            "exportSha256": "2c8504c9cd818419a8be2893fb5308decab136bc4be1041287972fa752beb886",
+            "exportBytes": 5595,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/REVIEW.md",
+            "sourceSha256": "1e2608fea0553bb7acb1b107986dbeeb50cd82725a5b8c575e6e4a9c19131630",
+            "sourceBytes": 2044,
+            "exportSha256": "416f18dc1b2d25eeba956168d87054cd610dcbf2972cb707d13406320f89da7c",
+            "exportBytes": 2268,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/PR-BODY.md",
+            "sourceSha256": "71084b08827be679d68e6a8a79b0fb7cb315229794d82921f10ef3e7a1f5dd50",
+            "sourceBytes": 4261,
+            "exportSha256": "23990fc7fb763383fb825a775c0a13849b52857868f046980afafe0e6b42a11a",
+            "exportBytes": 4347,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/validation.json",
+            "sourceSha256": "4cda4e3e9db53972a67b0bee3ce52ae16fcdce2de09b8b2a83e76c6758aacfcc",
+            "sourceBytes": 2779,
+            "exportSha256": "dd67a6ab536e4bbcb3f9777e60ffd05753b2d7f98e577fa679a207b82cdf41ac",
+            "exportBytes": 2430,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/focused-build.log",
+            "sourceSha256": "01e9dadaf277c5966795f898f0b67606c4ac1db714be51c7a02cbb1aa885e1ba",
+            "sourceBytes": 1679,
+            "exportSha256": "90322d228300cb4a9848ae3f9ad1920d3a95347fdfa6e03dfa694ab39fb7f878",
+            "exportBytes": 1275,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/focused-tests.log",
+            "sourceSha256": "a09c64307765b96b791d2f5ce5033cfb8eb646c94de16d94446ab8764a9dd7ac",
+            "sourceBytes": 1599,
+            "exportSha256": "3eff2c3ea289331a3e671c39eedf3a8bc17e9cf57cb45bc47f0e424ecbe4e9fb",
+            "exportBytes": 1193,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/pr-publication.json",
+            "sourceSha256": "3b62335ce6b1de6ff469616bbee69b2bacd4b8d5977d75532da1111df0493284",
+            "sourceBytes": 5831,
+            "exportSha256": "c7e19716eb888e95e8212ed4b195ec1a1f00137abfbc2d16ad1de84b3b0eee38",
+            "exportBytes": 5718,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/dll-build.log",
+            "sourceSha256": "704693324a6f63d7f28cc56903e02daf47238dd8a6c805f3e65856748cc33a6d",
+            "sourceBytes": 70287,
+            "exportSha256": "1a08bb7297286f20504caf80c0aeff54bd7b347699702fd8f00326561e3640f6",
+            "exportBytes": 66705,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/initial/manifest-verification.log",
+            "sourceSha256": "4de8c472ded2e2fb66a1e518bd3badf183f8f43e85da8f83657f4280de1052ad",
+            "sourceBytes": 99,
+            "exportSha256": "bd7d2e05cd981feebdd93e215a4a94928822d3c1c241b1ad19ecbdf8e9bbc959",
+            "exportBytes": 98,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/REVIEW.md",
+            "sourceSha256": "4e750b5030152fcbe3f795fd434ade1d6aef93311fdf80df5e949d7a1e3f74b6",
+            "sourceBytes": 3607,
+            "exportSha256": "dc41af0f391a0481c39d4a0657dfc2639f02146460de2b1653b56edb34c63f80",
+            "exportBytes": 3873,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/PR-BODY.md",
+            "sourceSha256": "c45c6f9adf99a4c4edcb2cf970b1552ed87300f2b3da1de454391b09de18f6ba",
+            "sourceBytes": 5146,
+            "exportSha256": "34f93af6489976922c165f9a9529d3da95c87401e879fc8a36df4e2dd1dd2c3e",
+            "exportBytes": 5126,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/validation.json",
+            "sourceSha256": "0e40f5e508606efd3d4ddb4c602aa33ea1c36aa63dd80e423c71cefe60368705",
+            "sourceBytes": 3255,
+            "exportSha256": "d1cd64827ec3219d29b94e4eeb8d6bf18391bed17fcb514be1dd61fd96ecce6a",
+            "exportBytes": 2751,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/focused-build.log",
+            "sourceSha256": "94fe2e63c2ccfd5496d5533c31491f41d6156962685d1f2fd3e6b251afee3942",
+            "sourceBytes": 1566,
+            "exportSha256": "1a1df8774a675dda7f8d0a9197c41ddca478445a89a5f91982746ccffeb8a2f1",
+            "exportBytes": 1273,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/focused-tests.log",
+            "sourceSha256": "0de5ebf392578de7d530565a1eaa39b57ff2bded82d74c453231a7a900d381c6",
+            "sourceBytes": 1641,
+            "exportSha256": "4da26c1efec57f7e645d9261c9c88d638a2a9586e9beca58f101751e3a19d78f",
+            "exportBytes": 1234,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/pre-commit.log",
+            "sourceSha256": "d07aa863f52b5bfb24d225049c120bff0c7dcd5fb00206b695cf35abf754b9f8",
+            "sourceBytes": 486,
+            "exportSha256": "c0802d9bb9562ee17fedfca731d436e87af643fccf7571b49bf2895b4c4c63e6",
+            "exportBytes": 480,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/pr-publication.json",
+            "sourceSha256": "6b670ec0927a215e2957bf2c8714de46b08ff8e147c50becdba734476853b6e0",
+            "sourceBytes": 2020,
+            "exportSha256": "f8766f6b098713d44fd0d8db103f85760d0a92e1a71a82ecfaab769d9759d966",
+            "exportBytes": 1929,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/dll-build.log",
+            "sourceSha256": "274a822723467908e95b22e7ba0ae7fb7f0433d2e5e18002ff07022d2ab6eef3",
+            "sourceBytes": 5898,
+            "exportSha256": "37b31fdc6fa4b62660040e9fb810f78a66a33b8bfdf76062a97064aa0090d4b9",
+            "exportBytes": 4824,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/native-fixture-verification.json",
+            "sourceSha256": "721a92e1c2e271cf10c31ab8009afea6c2eacc8c80b85a166cb566994d7ba50f",
+            "sourceBytes": 553,
+            "exportSha256": "66d0d6d9633a0c1d33d2cf7a07cb30ca8e43f691d53a5d87bc34844969619265",
+            "exportBytes": 502,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-1/manifest-verification.log",
+            "sourceSha256": "d05794c9f89b2474d3c0005ce3c259820d45d241d20f5f3e22c474c5e23c4ea4",
+            "sourceBytes": 99,
+            "exportSha256": "edd8d487aa04e659b9259b81e7295b8278935a8add703175c02c642b1ceadb0c",
+            "exportBytes": 98,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-2/REVIEW.md",
+            "sourceSha256": "714802566df0746f617e55262740de1e9de5b129b8a0d25fa8827e44272de3bb",
+            "sourceBytes": 2829,
+            "exportSha256": "a68099bd8c866482d13282b2c7ec96c4aea58bdfe3f67c4d284be3df1a431727",
+            "exportBytes": 3083,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-2/PR-BODY.md",
+            "sourceSha256": "f516de4c712cdb796984abcd3870aba48ec7054022a38698f549eb73b32aa0c2",
+            "sourceBytes": 5838,
+            "exportSha256": "8ddd089989e23cb7b4343d76dfc98115a84bf08fd9b50fbb32b9a16a03e65b63",
+            "exportBytes": 5889,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-2/validation.json",
+            "sourceSha256": "9989e72b39675606d1690043cc0815e7b337a459011ee1e79a0b082164646514",
+            "sourceBytes": 2279,
+            "exportSha256": "f79fd8fb4bb775fe4fe1dfa9715753a2553bfa559806acafb80e6c4d945e6fd8",
+            "exportBytes": 1927,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-2/focused-build.log",
+            "sourceSha256": "96bc8c4c711d68234073881f03dbac04a29fe4df4434019c8956df0968fb1759",
+            "sourceBytes": 1066,
+            "exportSha256": "c480422efcd820d4acd9fc3ff2a03793c2d8413ca92e49fa40b5d758dadd1d9a",
+            "exportBytes": 783,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-2/focused-tests.log",
+            "sourceSha256": "f120c6b44f4a655bb16c78008b187726e1e3410116da7041f6a7ad4a3c32785d",
+            "sourceBytes": 1641,
+            "exportSha256": "9c3f3d637cf0474ac7f41d940339a5b533178be17bdac68f1d77a6de374b6585",
+            "exportBytes": 1234,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-2/pre-commit.log",
+            "sourceSha256": "d07aa863f52b5bfb24d225049c120bff0c7dcd5fb00206b695cf35abf754b9f8",
+            "sourceBytes": 486,
+            "exportSha256": "c0802d9bb9562ee17fedfca731d436e87af643fccf7571b49bf2895b4c4c63e6",
+            "exportBytes": 480,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        },
+        {
+            "path": "validation/review-2/pr-publication.json",
+            "sourceSha256": "0b602cdda5cadc869204baa79631d5805f8f51accf159ebeb13c17afa0a8d0d2",
+            "sourceBytes": 1642,
+            "exportSha256": "7463a092f99d185e238c7460b7eb44f13f845f93bd866a1bb6def50b85a79be3",
+            "exportBytes": 1377,
+            "transformation": "privacy redaction, UTF-8/LF normalization, repository formatting; Markdown links adapted where omitted"
+        }
+    ],
+    "redactions": {
+        "[REDACTED_IDENTIFYING_METADATA]": 160,
+        "[REDACTED_LOCAL_PATH]": 1042,
+        "[REDACTED_LOCAL_REGISTRY]": 0,
+        "[REDACTED_ENDPOINT]": 23,
+        "[REDACTED_EMAIL]": 7,
+        "[REDACTED_SESSION_ID]": 12,
+        "[REDACTED_USER_ID]": 0,
+        "[REDACTED_LOCAL_NAME]": 0,
+        "private_json_fields": 21
+    },
+    "excluded": [
+        "All process dumps and raw binary memory/code/journal captures",
+        "DLLs, PDBs, Ghidra databases, machine settings and caches",
+        "Full game/CrashLogger/SKSE logs, mod lists and Windows WER reports",
+        "Local runner scripts, session-control receipts and duplicate stdout captures"
+    ],
+    "privacy": "Only portable case names identify sources; no source machine paths are recorded. Original hashes refer to the unpublished originals. Export hashes refer to redacted copies."
+}

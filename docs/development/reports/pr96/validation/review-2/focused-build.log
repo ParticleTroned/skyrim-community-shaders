@@ -1,0 +1,20 @@
+Initialized the MSVC environment with [REDACTED_LOCAL_PATH]
+Using vcpkg at [REDACTED_LOCAL_PATH]
+MSBuild version 18.8.2+ce25c0108 for .NET Framework
+
+  Checking File Globs
+  Scanning sources for module dependencies...
+  scene_light_snapshot_test.vcxproj -> [REDACTED_LOCAL_PATH]
+MSBuild version 18.8.2+ce25c0108 for .NET Framework
+
+  Checking File Globs
+  Scanning sources for module dependencies...
+  vr_scene_guards_test.cpp
+  Compiling...
+  vr_scene_guards_test.cpp
+  Generating code
+  18 of 2158 functions ( 0.8%) were compiled, the rest were copied from previous compilation.
+    4 functions were new in current compilation
+    44 functions had inline decision re-evaluated but remain unchanged
+  Finished generating code
+  vr_scene_guards_test.vcxproj -> [REDACTED_LOCAL_PATH]

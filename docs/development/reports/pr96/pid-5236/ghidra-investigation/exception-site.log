@@ -1,0 +1,263 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.031 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+Symbol search path is: srv*
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 07:52:03.000 2026 (UTC + 2:00)
+System Uptime: 2 days 10:38:35.536
+Process Uptime: 0 days 0:34:41.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(1474.b96c): Wake debugger - code 80000007 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .sympath+ [REDACTED_LOCAL_PATH]
+Symbol search path is: srv*;[REDACTED_LOCAL_PATH]
+Expanded Symbol search path is: cache*;SRV*[REDACTED_ENDPOINT]]
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+OK                                             [REDACTED_LOCAL_PATH]
+0:000> .reload /f CommunityShaders.dll
+*** WARNING: Unable to verify checksum for CommunityShaders.dll
+0:000> ln 7ff886a84410
+(00007ff8`86a84030)   CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x3e0   |  (00007ff8`86a844c0)   CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before
+0:000> u 7ff886a843d0 L35
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x3a0:
+00007ff8`86a843d0 0000            add     byte ptr [rax],al
+00007ff8`86a843d2 448bb42438010000 mov     r14d,dword ptr [rsp+138h]
+00007ff8`86a843da 448b7c2434      mov     r15d,dword ptr [rsp+34h]
+00007ff8`86a843df 44897c2438      mov     dword ptr [rsp+38h],r15d
+00007ff8`86a843e4 e93afdffff      jmp     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0xf3 (00007ff8`86a84123)
+00007ff8`86a843e9 4489a680000000  mov     dword ptr [rsi+80h],r12d
+00007ff8`86a843f0 895c243c        mov     dword ptr [rsp+3Ch],ebx
+00007ff8`86a843f4 3b5c2430        cmp     ebx,dword ptr [rsp+30h]
+00007ff8`86a843f8 736b            jae     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x435 (00007ff8`86a84465)
+00007ff8`86a843fa 8d7b01          lea     edi,[rbx+1]
+00007ff8`86a843fd 498b4538        mov     rax,qword ptr [r13+38h]
+00007ff8`86a84401 488b1cf8        mov     rbx,qword ptr [rax+rdi*8]
+00007ff8`86a84405 4885db          test    rbx,rbx
+00007ff8`86a84408 7457            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x431 (00007ff8`86a84461)
+00007ff8`86a8440a 488b03          mov     rax,qword ptr [rbx]
+00007ff8`86a8440d 488bcb          mov     rcx,rbx
+00007ff8`86a84410 ff5018          call    qword ptr [rax+18h]
+00007ff8`86a84413 84c0            test    al,al
+00007ff8`86a84415 744a            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x431 (00007ff8`86a84461)
+00007ff8`86a84417 e884bebbff      call    CommunityShaders!REL::Module::GetRuntime (00007ff8`866402a0)
+00007ff8`86a8441c ba48010000      mov     edx,148h
+00007ff8`86a84421 8bca            mov     ecx,edx
+00007ff8`86a84423 448bc2          mov     r8d,edx
+00007ff8`86a84426 3c04            cmp     al,4
+00007ff8`86a84428 740e            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x408 (00007ff8`86a84438)
+00007ff8`86a8442a e811b3beff      call    CommunityShaders!REL::Relocate<__int64> (00007ff8`8666f740)
+00007ff8`86a8442f 488d88d8030000  lea     rcx,[rax+3D8h]
+00007ff8`86a84436 eb0c            jmp     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x414 (00007ff8`86a84444)
+00007ff8`86a84438 e803b3beff      call    CommunityShaders!REL::Relocate<__int64> (00007ff8`8666f740)
+00007ff8`86a8443d 488d8838040000  lea     rcx,[rax+438h]
+00007ff8`86a84444 4803cb          add     rcx,rbx
+00007ff8`86a84447 8b09            mov     ecx,dword ptr [rcx]
+00007ff8`86a84449 83f920          cmp     ecx,20h
+00007ff8`86a8444c 730f            jae     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x42d (00007ff8`86a8445d)
+00007ff8`86a8444e 8b8688000000    mov     eax,dword ptr [rsi+88h]
+00007ff8`86a84454 0fabc8          bts     eax,ecx
+00007ff8`86a84457 898688000000    mov     dword ptr [rsi+88h],eax
+00007ff8`86a8445d 8bdf            mov     ebx,edi
+00007ff8`86a8445f eb8f            jmp     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x3c0 (00007ff8`86a843f0)
+00007ff8`86a84461 8bdf            mov     ebx,edi
+00007ff8`86a84463 eb8b            jmp     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x3c0 (00007ff8`86a843f0)
+00007ff8`86a84465 eb2c            jmp     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x463 (00007ff8`86a84493)
+00007ff8`86a84467 488b842420010000 mov     rax,qword ptr [rsp+120h]
+00007ff8`86a8446f c7808000000000000000 mov dword ptr [rax+80h],0
+00007ff8`86a84479 c7808800000000000000 mov dword ptr [rax+88h],0
+00007ff8`86a84483 eb0e            jmp     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights+0x463 (00007ff8`86a84493)
+00007ff8`86a84485 33db            xor     ebx,ebx
+00007ff8`86a84487 899988000000    mov     dword ptr [rcx+88h],ebx
+00007ff8`86a8448d 899980000000    mov     dword ptr [rcx+80h],ebx
+00007ff8`86a84493 0f28b424d0000000 movaps  xmm6,xmmword ptr [rsp+0D0h]
+00007ff8`86a8449b 4881c4e0000000  add     rsp,0E0h
+00007ff8`86a844a2 415f            pop     r15
+00007ff8`86a844a4 415e            pop     r14
+0:000> x CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before
+00007ff8`86a844c0 CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before (class RE::BSRenderPass *)
+0:000> uf CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before:
+00007ff8`86a844c0 4053            push    rbx
+00007ff8`86a844c2 4883ec20        sub     rsp,20h
+00007ff8`86a844c6 488b0583a07801  mov     rax,qword ptr [CommunityShaders!globals::shaderCache (00007ff8`8820e550)]
+00007ff8`86a844cd 488bd9          mov     rbx,rcx
+00007ff8`86a844d0 440fb680980b0000 movzx   r8d,byte ptr [rax+0B98h]
+00007ff8`86a844d8 4584c0          test    r8b,r8b
+00007ff8`86a844db 0f848a000000    je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab (00007ff8`86a8456b)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x21:
+00007ff8`86a844e1 33c0            xor     eax,eax
+00007ff8`86a844e3 c78184000000ffffffff mov dword ptr [rcx+84h],0FFFFFFFFh
+00007ff8`86a844ed 898180000000    mov     dword ptr [rcx+80h],eax
+00007ff8`86a844f3 898188000000    mov     dword ptr [rcx+88h],eax
+00007ff8`86a844f9 4885d2          test    rdx,rdx
+00007ff8`86a844fc 746d            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab (00007ff8`86a8456b)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x3e:
+00007ff8`86a844fe 488b4a10        mov     rcx,qword ptr [rdx+10h]
+00007ff8`86a84502 4885c9          test    rcx,rcx
+00007ff8`86a84505 7464            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab (00007ff8`86a8456b)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x47:
+00007ff8`86a84507 483983c0090000  cmp     qword ptr [rbx+9C0h],rax
+00007ff8`86a8450e 745b            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab (00007ff8`86a8456b)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x50:
+00007ff8`86a84510 e86b000000      call    CommunityShaders!GetParentRoomNode (00007ff8`86a84580)
+00007ff8`86a84515 4c8bc0          mov     r8,rax
+00007ff8`86a84518 4885c0          test    rax,rax
+00007ff8`86a8451b 744e            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab (00007ff8`86a8456b)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x5d:
+00007ff8`86a8451d 8b8bb8090000    mov     ecx,dword ptr [rbx+9B8h]
+00007ff8`86a84523 33d2            xor     edx,edx
+00007ff8`86a84525 4c8b8bb0090000  mov     r9,qword ptr [rbx+9B0h]
+00007ff8`86a8452c 48f7f1          div     rax,rcx
+00007ff8`86a8452f 8bca            mov     ecx,edx
+00007ff8`86a84531 498b0cc9        mov     rcx,qword ptr [r9+rcx*8]
+00007ff8`86a84535 4885c9          test    rcx,rcx
+00007ff8`86a84538 7431            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab (00007ff8`86a8456b)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x7a:
+00007ff8`86a8453a 660f1f440000    nop     word ptr [rax+rax]
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x80:
+00007ff8`86a84540 4c3b01          cmp     r8,qword ptr [rcx]
+00007ff8`86a84543 740f            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x94 (00007ff8`86a84554)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x85:
+00007ff8`86a84545 488b4910        mov     rcx,qword ptr [rcx+10h]
+00007ff8`86a84549 4885c9          test    rcx,rcx
+00007ff8`86a8454c 75f2            jne     CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x80 (00007ff8`86a84540)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x8e:
+00007ff8`86a8454e 4883c420        add     rsp,20h
+00007ff8`86a84552 5b              pop     rbx
+00007ff8`86a84553 c3              ret
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0x94:
+00007ff8`86a84554 488b83b8090000  mov     rax,qword ptr [rbx+9B8h]
+00007ff8`86a8455b 493b0cc1        cmp     rcx,qword ptr [r9+rax*8]
+00007ff8`86a8455f 740a            je      CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab (00007ff8`86a8456b)
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xa1:
+00007ff8`86a84561 0fb64108        movzx   eax,byte ptr [rcx+8]
+00007ff8`86a84565 898384000000    mov     dword ptr [rbx+84h],eax
+
+CommunityShaders!LightLimitFix::BSLightingShader_SetupGeometry_Before+0xab:
+00007ff8`86a8456b 4883c420        add     rsp,20h
+00007ff8`86a8456f 5b              pop     rbx
+00007ff8`86a84570 c3              ret
+0:000> .echo ==== LIGHT_28_MEMORY ====
+==== LIGHT_28_MEMORY ====
+0:000> dq 18632c11600 L30
+00000186`32c11600  00000186`32c10f00 00000000`00000000
+00000186`32c11610  3f800000`00000000 00000000`00000000
+00000186`32c11620  00000000`00000000 00000000`00000000
+00000186`32c11630  00000185`a7700080 00000000`00000000
+00000186`32c11640  01010001`00000000 00000000`00000000
+00000186`32c11650  00000000`00000000 00000000`00000000
+00000186`32c11660  00000000`00010100 00000000`00000000
+00000186`32c11670  00000000`00000000 00000000`00000000
+00000186`32c11680  00000000`00000000 00000000`00000000
+00000186`32c11690  00000000`00000000 00000000`00000000
+00000186`32c116a0  00000000`00000000 00000000`00000000
+00000186`32c116b0  00000000`00000000 00000000`00000000
+00000186`32c116c0  00000000`00000000 00000000`00000000
+00000186`32c116d0  00000000`00000000 00000000`00000000
+00000186`32c116e0  00000000`00000000 00000000`00000000
+00000186`32c116f0  00000000`00000000 00000000`00000000
+00000186`32c11700  00000000`00000000 00000000`00000000
+00000186`32c11710  00000000`00000000 00000000`00000000
+00000186`32c11720  00000186`f6a97f20 00000186`f9014fc0
+00000186`32c11730  00000000`00000000 00000000`00000000
+00000186`32c11740  00000000`00000002 00000000`00000000
+00000186`32c11750  00000000`00000000 00000000`00000000
+00000186`32c11760  00000000`00000000 00000000`00000000
+00000186`32c11770  00000000`00000000 00000000`00000000
+0:000> .echo ==== LIGHT_37_MEMORY ====
+==== LIGHT_37_MEMORY ====
+0:000> dq 188f1d13800 L08
+00000188`f1d13800  00000185`afc99000 00000185`afc98ee0
+00000188`f1d13810  0004ffec`0000003c 00000182`99d47c40
+00000188`f1d13820  0000018a`7fa055d0 0000018a`7fa05670
+00000188`f1d13830  0000018a`7fa05710 00000000`00000000
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

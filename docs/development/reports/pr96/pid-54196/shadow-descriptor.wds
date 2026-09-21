@@ -1,0 +1,17 @@
+.ecxr
+.frame /r 9
+.echo === SHADOW LIGHT ===
+dps 26e605edd00 Lc
+dps 26e605edd00+120 Lc
+.echo === DESCRIPTOR ===
+dps 26e605ec800 L21
+.echo === SHADOW SCENE NODE ===
+dps 26969fa6e80 L6
+.echo === HELPER ENTRY RUNTIME BYTES ===
+u SkyrimVR+134c370 SkyrimVR+134c440
+.echo === CALLER UNWIND ENTRIES ===
+.fnent SkyrimVR+134c5f1
+.fnent SkyrimVR+13713f8
+.fnent SkyrimVR+132321f
+.echo === COMPLETE ===
+q

@@ -1,0 +1,132 @@
+{
+    "path": "[REDACTED_LOCAL_PATH]",
+    "sizeBytes": 27373316616,
+    "flags": "0x221026",
+    "fullMemoryRequested": true,
+    "streams": [
+        {
+            "type": 3,
+            "size": 16900,
+            "rva": 1836
+        },
+        {
+            "type": 17,
+            "size": 22540,
+            "rva": 18736
+        },
+        {
+            "type": 4,
+            "size": 36508,
+            "rva": 41276
+        },
+        {
+            "type": 14,
+            "size": 132,
+            "rva": 77784
+        },
+        {
+            "type": 13,
+            "size": 20892,
+            "rva": 77916
+        },
+        {
+            "type": 9,
+            "size": 235616,
+            "rva": 1884584
+        },
+        {
+            "type": 6,
+            "size": 168,
+            "rva": 1668
+        },
+        {
+            "type": 7,
+            "size": 56,
+            "rva": 248
+        },
+        {
+            "type": 15,
+            "size": 1364,
+            "rva": 304
+        },
+        {
+            "type": 12,
+            "size": 290736,
+            "rva": 1593848
+        },
+        {
+            "type": 21,
+            "size": 524,
+            "rva": 98808
+        },
+        {
+            "type": 22,
+            "size": 152,
+            "rva": 99332
+        },
+        {
+            "type": 24,
+            "size": 16,
+            "rva": 99484
+        },
+        {
+            "type": 0,
+            "size": 0,
+            "rva": 0
+        },
+        {
+            "type": 0,
+            "size": 0,
+            "rva": 0
+        },
+        {
+            "type": 0,
+            "size": 0,
+            "rva": 0
+        },
+        {
+            "type": 0,
+            "size": 0,
+            "rva": 0
+        },
+        {
+            "type": 0,
+            "size": 0,
+            "rva": 0
+        }
+    ],
+    "hasExceptionStream": true,
+    "hasMemory64Stream": true,
+    "exception": {
+        "threadId": 30792,
+        "code": "0xc0000005",
+        "address": "0x7ff6724f80c8",
+        "parameters": ["0x1", "0x7ff6727923d0"],
+        "contextBytes": 1232
+    },
+    "registers": {
+        "rax": "0x7ff6727923c8",
+        "rcx": "0x26e605cf098",
+        "rdx": "0x0",
+        "rbx": "0x20",
+        "rsp": "0x87f35ceb60",
+        "rbp": "0x26e605cf070",
+        "rsi": "0x7ff671e56fe0",
+        "rdi": "0x0",
+        "r8": "0x0",
+        "r9": "0x0",
+        "r10": "0x0",
+        "r11": "0x87f35cebd8",
+        "r12": "0x2695dd29688",
+        "r13": "0x0",
+        "r14": "0x7ff6724fa230",
+        "r15": "0x0",
+        "rip": "0x7ff6724f80c8"
+    },
+    "memory64": {
+        "rangeCount": 14725,
+        "baseRva": 2120200,
+        "totalBytes": 27371196416,
+        "dataWithinFile": true
+    }
+}

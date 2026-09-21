@@ -1,0 +1,158 @@
+{
+    "pid": 22880,
+    "dump": "[REDACTED_LOCAL_PATH]",
+    "buildId": "e2fe386c8a467b1350165159286f746549f9f6883a51d5c23a2a37f8660ee75b",
+    "modules": {
+        "nvidia": {
+            "moduleBase": "0x7ffcd2570000",
+            "captureBase": "0x7ffcd2670000",
+            "captureBytes": 5242880,
+            "file": "[REDACTED_LOCAL_PATH]",
+            "sha256": "5a2d524f1ef564d9e6609df8086b0d37b3e4e1b7ae77c207889279501cacccfd",
+            "functions": [
+                {
+                    "ip": "0x7ffcd2b083ef",
+                    "rva": "0x5983ef",
+                    "bounds": ["0x7ffcd2b08370", "0x7ffcd2b08706", "0x7ffcd60c4aa4"]
+                },
+                {
+                    "ip": "0x7ffcd285c8d1",
+                    "rva": "0x2ec8d1",
+                    "bounds": ["0x7ffcd285c840", "0x7ffcd285c94a", "0x7ffcd60cce30"]
+                },
+                {
+                    "ip": "0x7ffcd26e9866",
+                    "rva": "0x179866",
+                    "bounds": ["0x7ffcd26e979d", "0x7ffcd26ea096", "0x7ffcd60cb94c"]
+                },
+                {
+                    "ip": "0x7ffcd26fe414",
+                    "rva": "0x18e414",
+                    "bounds": ["0x7ffcd26fe3e0", "0x7ffcd26fe419", "0x7ffcd60c3e38"]
+                },
+                {
+                    "ip": "0x7ffcd26fdfa3",
+                    "rva": "0x18dfa3",
+                    "bounds": ["0x7ffcd26fd820", "0x7ffcd26fe025", "0x7ffcd60cc904"]
+                },
+                {
+                    "ip": "0x7ffcd26faacb",
+                    "rva": "0x18aacb",
+                    "bounds": ["0x7ffcd26fa971", "0x7ffcd26fad09", "0x7ffcd60cc56c"]
+                },
+                {
+                    "ip": "0x7ffcd26fa03e",
+                    "rva": "0x18a03e",
+                    "bounds": ["0x7ffcd26f9c5c", "0x7ffcd26fa13b", "0x7ffcd60cc4d0"]
+                },
+                {
+                    "ip": "0x7ffcd26864fd",
+                    "rva": "0x1164fd",
+                    "bounds": ["0x7ffcd26863e0", "0x7ffcd26867c0", "0x7ffcd60c6284"]
+                },
+                {
+                    "ip": "0x7ffcd268b248",
+                    "rva": "0x11b248",
+                    "bounds": ["0x7ffcd2689b40", "0x7ffcd268b4d1", "0x7ffcd60c6578"]
+                },
+                {
+                    "ip": "0x7ffcd2687a1e",
+                    "rva": "0x117a1e",
+                    "bounds": ["0x7ffcd2687844", "0x7ffcd2687a80", "0x7ffcd60c63dc"]
+                },
+                {
+                    "ip": "0x7ffcd2b08859",
+                    "rva": "0x598859",
+                    "bounds": ["0x7ffcd2b08710", "0x7ffcd2b088b0", "0x7ffcd60eee58"]
+                }
+            ]
+        },
+        "steamvr": {
+            "moduleBase": "0x7ffcda7e0000",
+            "captureBase": "0x7ffcda920000",
+            "captureBytes": 131072,
+            "file": "[REDACTED_LOCAL_PATH]",
+            "sha256": "ea022a854546205ee9a0182664efe736198d6815c9f825d033b5d9272076f07f",
+            "functions": [
+                {
+                    "ip": "0x7ffcda92d998",
+                    "rva": "0x14d998",
+                    "bounds": ["0x7ffcda92d8f0", "0x7ffcda92da38", "0x7ffcdac087b8"]
+                },
+                {
+                    "ip": "0x7ffcda924b06",
+                    "rva": "0x144b06",
+                    "bounds": ["0x7ffcda924886", "0x7ffcda924bd3", "0x7ffcdac17578"]
+                },
+                {
+                    "ip": "0x7ffcda922de3",
+                    "rva": "0x142de3",
+                    "bounds": ["0x7ffcda922db0", "0x7ffcda922de8", "0x7ffcdac087c0"]
+                }
+            ]
+        },
+        "skyrim-shadow": {
+            "moduleBase": "0x7ff74fae0000",
+            "captureBase": "0x7ff750dd0000",
+            "captureBytes": 589824,
+            "file": "[REDACTED_LOCAL_PATH]",
+            "sha256": "4859ce0f79962f3574e830c48d23d75f3798234e87e0aeea5ec825b5db9322e4",
+            "functions": [
+                {
+                    "ip": "0x7ff750e514e8",
+                    "rva": "0x13714e8",
+                    "bounds": ["0x7ff750e514b0", "0x7ff750e51509", "0x7ff75193cf24"]
+                },
+                {
+                    "ip": "0x7ff750dd7c3e",
+                    "rva": "0x12f7c3e",
+                    "bounds": ["0x7ff750dd77e0", "0x7ff750dd7e09", "0x7ff7519262d0"]
+                },
+                {
+                    "ip": "0x7ff750ddbf15",
+                    "rva": "0x12fbf15",
+                    "bounds": ["0x7ff750ddb9e0", "0x7ff750ddbf40", "0x7ff751926d9c"]
+                },
+                {
+                    "ip": "0x7ff750e51330",
+                    "rva": "0x1371330",
+                    "bounds": ["0x7ff750e51330", "0x7ff750e5135c", "0x7ff75193cee4"]
+                },
+                {
+                    "ip": "0x7ff750e2b410",
+                    "rva": "0x134b410",
+                    "bounds": ["0x7ff750e2b410", "0x7ff750e2b4f7", "0x7ff751936220"]
+                },
+                {
+                    "ip": "0x7ff750e2b640",
+                    "rva": "0x134b640",
+                    "bounds": ["0x7ff750e2b640", "0x7ff750e2b680", "0x7ff7519362d4"]
+                },
+                {
+                    "ip": "0x7ff750e2cc70",
+                    "rva": "0x134cc70",
+                    "bounds": ["0x7ff750e2cc70", "0x7ff750e2cd03", "0x7ff75193654c"]
+                }
+            ]
+        }
+    },
+    "nvidiaContext": {
+        "address": "0x1b676143f50",
+        "fields": {
+            "0x3b0": "0x1ba3e905fd0",
+            "0x530": "0x17d4",
+            "0x538": "0x8b34",
+            "0x540": "0x0",
+            "0x548": "0x1b676143f50",
+            "0x550": "0x17cc",
+            "0x558": "0x17d0",
+            "0x6c8": "0x1b6748a4180"
+        }
+    },
+    "nvidiaCurrentCommand": {
+        "address": "0x1ba3e904710",
+        "headerHex": "00000000bb0100000a000600390000000000000030000000d098db4ebb0100000b000600000001008091db4ebb0100002000000000000000010004005d000000",
+        "opcode": 0,
+        "lengthDwords": 0
+    }
+}

@@ -1,0 +1,15 @@
+.sympath+ [REDACTED_LOCAL_PATH]
+~~[de3c]s
+r
+kv 15
+u 7ff85300c840 7ff85300c94a
+dd 2a409ae19d8 L8
+dq 29e63e1cc20 Lc
+~0s
+.frame /r 2
+r
+.frame /r 10
+?? submitPacket
+?? screenshotTextureLifetime
+kv 22
+qd

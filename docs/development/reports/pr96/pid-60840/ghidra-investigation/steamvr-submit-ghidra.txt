@@ -1,0 +1,154 @@
+FUNCTION 7ff85852d8f0 completed=true
+
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+void FUN_7ff85852d8f0(longlong param_1)
+
+{
+  longlong *plVar1;
+  int iVar2;
+  longlong *aplStackX_8 [2];
+  longlong *aplStackX_18 [2];
+
+  if (*(longlong *)(param_1 + 0xbf8) != 0) {
+    func_0x7ff858721ca0(0x7ff858793438,0);
+    (*_DAT_7ff858766828)();
+    (**(code **)(**(longlong **)(param_1 + 0xbf0) + 0x140))
+              (*(longlong **)(param_1 + 0xbf0),aplStackX_8);
+    (**(code **)(*aplStackX_8[0] + 0x378))();
+    (**(code **)(*aplStackX_8[0] + 0x10))();
+    func_0x7ff858721ca0(0x7ff858793460,0);
+    return;
+  }
+  if (*(int *)(param_1 + 0x48) == 2) {
+    func_0x7ff858721ca0(0x7ff858793488,0);
+    plVar1 = *(longlong **)(param_1 + 0x40);
+    (**(code **)(*plVar1 + 0x230))(plVar1);
+    iVar2 = (**(code **)*plVar1)(plVar1,0x7ff858792740,aplStackX_18);
+    if (-1 < iVar2) {
+      (**(code **)(*aplStackX_18[0] + 0x140))(aplStackX_18[0],aplStackX_8);
+      (**(code **)(*aplStackX_8[0] + 0x378))();
+      (**(code **)(*aplStackX_8[0] + 0x10))();
+      (**(code **)(*aplStackX_18[0] + 0x10))();
+    }
+    func_0x7ff858721ca0(0x7ff8587934b8,0);
+  }
+  else if (*(int *)(param_1 + 0x48) == 3) {
+    func_0x7ff858721ca0(0x7ff8587934e0,0);
+    (**(code **)(**(longlong **)(param_1 + 0x40) + 0x140))
+              (*(longlong **)(param_1 + 0x40),aplStackX_8);
+    (**(code **)(*aplStackX_8[0] + 0x378))();
+    (**(code **)(*aplStackX_8[0] + 0x10))();
+    func_0x7ff858721ca0(0x7ff858793510,0);
+    return;
+  }
+  return;
+}
+
+
+7ff85852d8f0 PUSH RBX
+7ff85852d8f2 SUB RSP,0x20
+7ff85852d8f6 CMP qword ptr [RCX + 0xbf8],0x0
+7ff85852d8fe MOV RBX,RCX
+7ff85852d901 JZ 0x7ff85852d959
+7ff85852d903 XOR EDX,EDX
+7ff85852d905 LEA RCX,[0x7ff858793438]
+7ff85852d90c CALL 0x7ff858721ca0
+7ff85852d911 CALL qword ptr [0x7ff858766828]
+7ff85852d917 MOV RCX,qword ptr [RBX + 0xbf0]
+7ff85852d91e LEA RDX,[RSP + 0x30]
+7ff85852d923 MOV RAX,qword ptr [RCX]
+7ff85852d926 CALL qword ptr [RAX + 0x140]
+7ff85852d92c MOV RCX,qword ptr [RSP + 0x30]
+7ff85852d931 MOV RAX,qword ptr [RCX]
+7ff85852d934 CALL qword ptr [RAX + 0x378]
+7ff85852d93a MOV RCX,qword ptr [RSP + 0x30]
+7ff85852d93f MOV RAX,qword ptr [RCX]
+7ff85852d942 CALL qword ptr [RAX + 0x10]
+7ff85852d945 LEA RCX,[0x7ff858793460]
+7ff85852d94c XOR EDX,EDX
+7ff85852d94e CALL 0x7ff858721ca0
+7ff85852d953 ADD RSP,0x20
+7ff85852d957 POP RBX
+7ff85852d958 RET
+7ff85852d959 MOV ECX,dword ptr [RCX + 0x48]
+7ff85852d95c SUB ECX,0x2
+7ff85852d95f JZ 0x7ff85852d9b7
+7ff85852d961 CMP ECX,0x1
+7ff85852d964 JNZ 0x7ff85852da32
+7ff85852d96a XOR EDX,EDX
+7ff85852d96c LEA RCX,[0x7ff8587934e0]
+7ff85852d973 CALL 0x7ff858721ca0
+7ff85852d978 MOV RCX,qword ptr [RBX + 0x40]
+7ff85852d97c LEA RDX,[RSP + 0x30]
+7ff85852d981 MOV RAX,qword ptr [RCX]
+7ff85852d984 CALL qword ptr [RAX + 0x140]
+7ff85852d98a MOV RCX,qword ptr [RSP + 0x30]
+7ff85852d98f MOV RAX,qword ptr [RCX]
+7ff85852d992 CALL qword ptr [RAX + 0x378]
+7ff85852d998 MOV RCX,qword ptr [RSP + 0x30]
+7ff85852d99d MOV RAX,qword ptr [RCX]
+7ff85852d9a0 CALL qword ptr [RAX + 0x10]
+7ff85852d9a3 LEA RCX,[0x7ff858793510]
+7ff85852d9aa XOR EDX,EDX
+7ff85852d9ac CALL 0x7ff858721ca0
+7ff85852d9b1 ADD RSP,0x20
+7ff85852d9b5 POP RBX
+7ff85852d9b6 RET
+7ff85852d9b7 XOR EDX,EDX
+7ff85852d9b9 LEA RCX,[0x7ff858793488]
+7ff85852d9c0 CALL 0x7ff858721ca0
+7ff85852d9c5 MOV RBX,qword ptr [RBX + 0x40]
+7ff85852d9c9 MOV RCX,RBX
+7ff85852d9cc MOV RAX,qword ptr [RBX]
+7ff85852d9cf CALL qword ptr [RAX + 0x230]
+7ff85852d9d5 MOV RAX,qword ptr [RBX]
+7ff85852d9d8 LEA R8,[RSP + 0x40]
+7ff85852d9dd LEA RDX,[0x7ff858792740]
+7ff85852d9e4 MOV RCX,RBX
+7ff85852d9e7 CALL qword ptr [RAX]
+7ff85852d9e9 TEST EAX,EAX
+7ff85852d9eb JS 0x7ff85852da24
+7ff85852d9ed MOV RCX,qword ptr [RSP + 0x40]
+7ff85852d9f2 LEA RDX,[RSP + 0x30]
+7ff85852d9f7 MOV RAX,qword ptr [RCX]
+7ff85852d9fa CALL qword ptr [RAX + 0x140]
+7ff85852da00 MOV RCX,qword ptr [RSP + 0x30]
+7ff85852da05 MOV RAX,qword ptr [RCX]
+7ff85852da08 CALL qword ptr [RAX + 0x378]
+7ff85852da0e MOV RCX,qword ptr [RSP + 0x30]
+7ff85852da13 MOV RAX,qword ptr [RCX]
+7ff85852da16 CALL qword ptr [RAX + 0x10]
+7ff85852da19 MOV RCX,qword ptr [RSP + 0x40]
+7ff85852da1e MOV RAX,qword ptr [RCX]
+7ff85852da21 CALL qword ptr [RAX + 0x10]
+7ff85852da24 LEA RCX,[0x7ff8587934b8]
+7ff85852da2b XOR EDX,EDX
+7ff85852da2d CALL 0x7ff858721ca0
+7ff85852da32 ADD RSP,0x20
+7ff85852da36 POP RBX
+7ff85852da37 RET
+FUNCTION 7ff858522db0 completed=true
+
+
+void FUN_7ff858522db0(void)
+
+{
+  func_0x7ff8585242d0();
+  return;
+}
+
+
+7ff858522db0 SUB RSP,0x58
+7ff858522db4 XOR EAX,EAX
+7ff858522db6 MOV qword ptr [RSP + 0x40],RAX
+7ff858522dbb MOV dword ptr [RSP + 0x38],0xffffffff
+7ff858522dc3 MOV qword ptr [RSP + 0x30],RAX
+7ff858522dc8 MOV EAX,dword ptr [RSP + 0x80]
+7ff858522dcf MOV dword ptr [RSP + 0x28],EAX
+7ff858522dd3 MOV qword ptr [RSP + 0x20],R9
+7ff858522dd8 MOV R9D,0xffffffff
+7ff858522dde CALL 0x7ff8585242d0
+7ff858522de3 ADD RSP,0x58
+7ff858522de7 RET

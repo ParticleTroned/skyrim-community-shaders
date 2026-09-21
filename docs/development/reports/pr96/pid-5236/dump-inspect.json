@@ -1,0 +1,7 @@
+{
+    "chunk_id": "a8a519",
+    "wall_time_seconds": 1.2577225,
+    "exit_code": 1,
+    "original_token_count": 240,
+    "output": "{\"schema\":\"csx-coc-evidence-control-v1\",\"ok\":false,\"command\":\"inspect\",\"timestampUtc\":\"2026-09-12T05:49:03.7691551Z\",\"state\":\"configuration-required\",\"checks\":[{\"name\":\"procdump\",\"ok\":false,\"value\":null,\"code\":null,\"error\":null},{\"name\":\"cdb\",\"ok\":false,\"value\":null,\"code\":null,\"error\":null},{\"name\":\"dump-space\",\"ok\":false,\"value\":{\"root\":\"[REDACTED_LOCAL_PATH]\",\"drive\":\"[REDACTED_LOCAL_PATH]\",\"freeGiB\":84.01,\"requiredGiB\":100},\"code\":null,\"error\":null},{\"name\":\"dump-write\",\"ok\":true,\"value\":{\"root\":\"[REDACTED_LOCAL_PATH]\"},\"code\":null,\"error\":null}],\"errors\":[\"Readiness check failed: procdump\",\"Readiness check failed: cdb\",\"Readiness check failed: dump-space\"],\"data\":{\"tools\":{\"procDump\":null,\"cdb\":null},\"dumpRoot\":\"[REDACTED_LOCAL_PATH]\"}}\n"
+}

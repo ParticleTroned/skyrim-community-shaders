@@ -1,0 +1,163 @@
+{
+    "completedUtc": "2026-09-12T13:01:53.667847+00:00",
+    "handoffDirectory": "[REDACTED_LOCAL_PATH]",
+    "buildId": "2ae8b3bce2ebdf708fb622ec91842634c32caf33eaea526b3a84e0f21d6d477c",
+    "source": {
+        "commit": "bbb7247b9dd898f5a0c1be832736d9bc0cabb82c",
+        "dirty": true,
+        "dirtyDigest": "0cf5786fe620cc2478ccc5a7117b627e4004a953eb952402be3581cd6eb2e9a4"
+    },
+    "files": [
+        {
+            "name": "CommunityShaders.dll",
+            "bytes": 28770816,
+            "sha256": "1f8bc9da4750101f7b0e19fe2480305d75f2014cbc90f8b04d8674b880062ba9"
+        },
+        {
+            "name": "CommunityShaders.pdb",
+            "bytes": 129839104,
+            "sha256": "6445af3ed6c5e86840326b2764cbb3c91911664979e45e9eba6f806006e3dd25"
+        },
+        {
+            "name": "CSX.BuildManifest.json",
+            "bytes": 4295,
+            "sha256": "47ff08f72a964052d9a2f52353f157defe35dd5d15f0a1e6f3085d6986df5ad8"
+        }
+    ],
+    "build": {
+        "exitCode": 0,
+        "completedUtc": "2026-09-12T13:01:43.354384+00:00",
+        "commands": [
+            {
+                "command": [
+                    "[REDACTED_LOCAL_PATH]",
+                    "[REDACTED_LOCAL_PATH]",
+                    "/p:Configuration=Release",
+                    "/p:Platform=x64",
+                    "/p:PostBuildEventUseInBuild=false",
+                    "/m:4",
+                    "/v:minimal",
+                    "/nodeReuse:false"
+                ],
+                "exitCode": 0
+            },
+            {
+                "command": [
+                    "[REDACTED_LOCAL_PATH]",
+                    "[REDACTED_LOCAL_PATH]",
+                    "/p:Configuration=Release",
+                    "/p:Platform=x64",
+                    "/p:PostBuildEventUseInBuild=false",
+                    "/m:4",
+                    "/v:minimal",
+                    "/nodeReuse:false"
+                ],
+                "exitCode": 0
+            },
+            {
+                "command": [
+                    "[REDACTED_LOCAL_PATH]",
+                    "[REDACTED_LOCAL_PATH]",
+                    "/p:Configuration=Release",
+                    "/p:Platform=x64",
+                    "/p:PostBuildEventUseInBuild=false",
+                    "/m:4",
+                    "/v:minimal",
+                    "/nodeReuse:false"
+                ],
+                "exitCode": 0
+            },
+            {
+                "command": [
+                    "[REDACTED_LOCAL_PATH]",
+                    "[REDACTED_LOCAL_PATH]",
+                    "finalize",
+                    "--base-manifest",
+                    "[REDACTED_LOCAL_PATH]",
+                    "--artifact",
+                    "[REDACTED_LOCAL_PATH]",
+                    "--output-manifest",
+                    "[REDACTED_LOCAL_PATH]"
+                ],
+                "exitCode": 0,
+                "output": "1f8bc9da4750101f7b0e19fe2480305d75f2014cbc90f8b04d8674b880062ba9\n"
+            },
+            {
+                "command": [
+                    "[REDACTED_LOCAL_PATH]",
+                    "--test-dir",
+                    "[REDACTED_LOCAL_PATH]",
+                    "-C",
+                    "Release",
+                    "-R",
+                    "^(SceneLightSnapshot|VRSceneGuards)$",
+                    "--output-on-failure",
+                    "-V"
+                ],
+                "exitCode": 0
+            }
+        ],
+        "method": "Direct native MSBuild following PowerShell RPC stall; standard manifest finalizer and exact AIO copies completed separately.",
+        "postBuildEventUseInBuild": false,
+        "distCleanupPerformed": false,
+        "appLocalDependencyCopy": "Not run by PowerShell; dependency verification is recorded with the handoff."
+    },
+    "appLocal": {
+        "command": [
+            "[REDACTED_LOCAL_PATH]",
+            "-NoProfile",
+            "-File",
+            "[REDACTED_LOCAL_PATH]",
+            "-targetBinary",
+            "[REDACTED_LOCAL_PATH]",
+            "-installedDir",
+            "[REDACTED_LOCAL_PATH]",
+            "-copiedFilesLog",
+            "[REDACTED_LOCAL_PATH]",
+            "-Verbose"
+        ],
+        "exitCode": 0
+    },
+    "dependencies": [
+        "D3DCOMPILER_47.dll",
+        "GDI32.dll",
+        "IMM32.dll",
+        "KERNEL32.dll",
+        "MSVCP140.dll",
+        "MSVCP140_ATOMIC_WAIT.dll",
+        "SHELL32.dll",
+        "USER32.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "VERSION.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-multibyte-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-time-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll",
+        "bcrypt.dll",
+        "d3d11.dll",
+        "d3d12.dll",
+        "ole32.dll"
+    ],
+    "dependenciesUnchanged": true,
+    "validation": {
+        "focusedTests": "SceneLightSnapshot and VRSceneGuards passed",
+        "allocationFailureCases": 15,
+        "sceneGuardAssertions": 477,
+        "scopedPreCommit": "passed",
+        "scopedGitDiffCheck": "passed",
+        "embeddedBuildIdMatches": true,
+        "nativeGuardMarkerPresent": true,
+        "runtime": "Not run; user takes over"
+    },
+    "existingShadowLoggingIncluded": true,
+    "deployed": false,
+    "gameRestarted": false
+}

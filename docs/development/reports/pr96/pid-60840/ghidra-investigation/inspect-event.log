@@ -1,0 +1,304 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.031 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+Symbol search path is: srv*
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 11:49:42.000 2026 (UTC + 2:00)
+System Uptime: 2 days 14:36:19.307
+Process Uptime: 0 days 0:14:36.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+.................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(eda8.908c): Wake debugger - code 80000007 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .sympath+ [REDACTED_LOCAL_PATH]
+Symbol search path is: srv*;[REDACTED_LOCAL_PATH]
+Expanded Symbol search path is: cache*;SRV*[REDACTED_ENDPOINT]]
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*
+OK                                             [REDACTED_LOCAL_PATH]
+0:000> .reload /f CommunityShaders.dll
+*** WARNING: Unable to verify checksum for CommunityShaders.dll
+0:000> .reload /f ntdll.dll
+0:000> .reload /f d3d11.dll
+0:000> !handle 17cc f
+Handle 00000000000017cc
+  Type         	Semaphore
+  Attributes   	0
+  GrantedAccess	0x1f0003:
+         Delete,ReadControl,WriteDac,WriteOwner,Synch
+         QueryState,ModifyState
+  HandleCount  	2
+  PointerCount 	41372
+  Name         	<none>
+  Object specific information
+    Semaphore Count 0
+    Semaphore Limit 2147483647
+0:000> !handle 17d0 f
+Handle 00000000000017d0
+  Type         	Semaphore
+  Attributes   	0
+  GrantedAccess	0x1f0003:
+         Delete,ReadControl,WriteDac,WriteOwner,Synch
+         QueryState,ModifyState
+  HandleCount  	2
+  PointerCount 	40576
+  Name         	<none>
+  Object specific information
+    Semaphore Count 0
+    Semaphore Limit 2147483647
+0:000> !handle 17d4 f
+Handle 00000000000017d4
+  Type         	Thread
+  Attributes   	0
+  GrantedAccess	0x1fffff:
+         Delete,ReadControl,WriteDac,WriteOwner,Synch
+         Terminate,Suspend,Alert,GetContext,SetContext,SetInfo,QueryInfo,SetToken,Impersonate,DirectImpersonate
+  HandleCount  	4
+  PointerCount 	160950
+  Name         	<none>
+  Object specific information
+    Thread Id   eda8.de3c
+    Priority    15
+    Base Priority 1
+0:000> ~0s
+ntdll!NtWaitForSingleObject+0x14:
+00007ff9`8a100e44 c3              ret
+0:000> .frame /r 10
+10 000000ac`336faf80 00007ff8`600c6ca2     CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f
+rax=0000000000000004 rbx=000000ac336fb220 rcx=00000000000017cc
+rdx=0000000000000000 rsi=0000000000000000 rdi=000000ac336fb360
+rip=00007ff8600c556f rsp=000000ac336faf80 rbp=000000ac336fb080
+ r8=000000ac336fa6f8  r9=0000000000000000 r10=00000000000017cc
+r11=00000000000017cc r12=000000ac336fb6c8 r13=0000000000000000
+r14=0000000000000000 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+CommunityShaders!``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_4>::operator()+0x92f:
+00007ff8`600c556f 8bf0            mov     esi,eax
+0:000> dv /t /v
+@r12              class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_4> * this = 0x000000ac`336fb6c8
+000000ac`336fb468 char * a_path = 0x00007ff8`603b7ec0 "original"
+000000ac`336fb470 struct vr::Texture_t * a_texture = 0x00000000`00000000
+000000ac`336fb478 struct vr::VRTextureBounds_t * a_bounds = 0x00000000`00000000
+000000ac`336fb480 vr::EVRSubmitFlags a_submitFlags = Submit_Default (0n0)
+000000ac`336fb488 unsigned int64 a_postLoadReleaseToken = 0
+000000ac`336fb490 unsigned int64 a_postLoadKeepaliveToken = 0
+000000ac`336fb498 struct Upscaling::VRRenderScalePresentationObservation * a_probeObservation = 0x00000000`00000000
+000000ac`336fb4a0 Upscaling::VRPostLoadCompositorKeepaliveDisposition * a_keepaliveDisposition = 0x00000000`00000000
+000000ac`336fb4a8 bool a_allowPostLoadScopeRebase = false
+<unavailable>     bool a_allowScreenshotCapture = <value unavailable>
+000000ac`336fb4b8 bool a_auditBlackKeepalive = false
+000000ac`336fb4c0 struct vr::Texture_t * a_screenshotTexture = 0x00000000`00000000
+000000ac`336fb4c8 struct vr::VRTextureBounds_t * a_screenshotBounds = 0x00000000`00000000
+@rbx              struct vr::Texture_t * retainedTexture = 0x000000ac`336fb220
+@rdi              struct vr::VRTextureBounds_t * retainedBounds = 0x000000ac`336fb360
+000000ac`336fb1d9 bool observeScreenshot = true
+<unavailable>     bool canPublishSubmitResult = <value unavailable>
+<unavailable>     unsigned int64 completionScopeEpoch = <value unavailable>
+<unavailable>     vr::EVRCompositorError completionResult = <value unavailable>
+000000ac`336fb408 struct vr::VRTextureBounds_t retainedScreenshotBounds = struct vr::VRTextureBounds_t
+000000ac`336fb1e0 struct OpenVRSubmitLeasePolicy::PublicationLease screenshotLease = struct OpenVRSubmitLeasePolicy::PublicationLease
+000000ac`336fb200 struct `anonymous-namespace'::RetainedOpenVRSubmitPacket submitPacket = struct `anonymous-namespace'::RetainedOpenVRSubmitPacket
+000000ac`336fafd0 bool hasScreenshotBounds = false
+000000ac`336faff8 vr::EColorSpace screenshotColorSpace = ColorSpace_Auto (0n0)
+<unavailable>     Upscaling::VRPostLoadCompositorKeepaliveDisposition keepaliveDisposition = <value unavailable>
+000000ac`336fafd8 struct winrt::com_ptr<ID3D11Texture2D> screenshotTextureLifetime = struct winrt::com_ptr<ID3D11Texture2D>
+<unavailable>     bool submitPacketCurrentAfterSubmit = <value unavailable>
+<unavailable>     vr::EVRCompositorError result = <value unavailable>
+@r14              unsigned int64 probeSequence = 0
+<unavailable>     class std::shared_lock<std::shared_mutex> renderTargetReadLock = <value unavailable>
+0:000> .frame /r 11
+*** WARNING: Unable to verify checksum for SkyrimVR.exe
+11 000000ac`336fb460 00007ff6`271039d3     CommunityShaders!`anonymous namespace'::IVRCompositor_Submit::thunk+0xd62
+rax=0000000000000004 rbx=0000000000000000 rcx=00000000000017cc
+rdx=0000000000000000 rsi=000000000000de01 rdi=00007ff982236de0
+rip=00007ff8600c6ca2 rsp=000000ac336fb460 rbp=000000ac336fb560
+ r8=000000ac336fa6f8  r9=0000000000000000 r10=00000000000017cc
+r11=00000000000017cc r12=00007ff8613cd0b0 r13=0000000000000000
+r14=0000000000000001 r15=000000000000908c
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+CommunityShaders!`anonymous namespace'::IVRCompositor_Submit::thunk+0xd62:
+00007ff8`600c6ca2 8bf8            mov     edi,eax
+0:000> dv /t /v
+000000ac`336ff1e0 class vr::IVRCompositor * _this = 0x0000029e`013b42a0*** WARNING: Unable to verify checksum for skyrimvrtools.dll
+
+000000ac`336ff1e8 vr::EVREye eEye = Eye_Right (0n1)
+000000ac`336ff1f0 struct vr::Texture_t * pTexture = 0x000000ac`336ff220
+000000ac`336ff1f8 struct vr::VRTextureBounds_t * pBounds = 0x000000ac`336ff210
+000000ac`336ff200 vr::EVRSubmitFlags nSubmitFlags = Submit_Default (0n0)
+000000ac`336fb708 class std::unique_lock<std::mutex> postLoadSubmitLock = unlocked - unowned
+000000ac`336fb4d0 bool nativeRestoreGuardActive = false
+000000ac`336fb830 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_7> refreshOriginalSubmitDecision = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_7>
+000000ac`336fb660 struct Upscaling::VRPostLoadCompositorKeepaliveSubmission postLoadKeepalive = struct Upscaling::VRPostLoadCompositorKeepaliveSubmission
+000000ac`336fb8b0 class SKSE::stl::scope_exit<``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_2> > endPostLoadSubmitScope = class SKSE::stl::scope_exit<``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_2> >
+000000ac`336fbe20 struct Upscaling::VRRenderScaleStereoPresentationPacket renderScalePresentationPacket = struct Upscaling::VRRenderScaleStereoPresentationPacket
+000000ac`336fb530 struct Upscaling::VRRenderScaleStereoPresentationPacket * renderScalePresentationPacketPtr = 0x00000000`00000000
+000000ac`336fb8a8 class std::scoped_lock<std::recursive_mutex> presentationWorkLock = (locked)
+000000ac`336fb720 struct VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity submitBoundaryIdentity = struct VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity
+000000ac`336fb510 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_5> isCurrentSubmitSuccess = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_5>
+000000ac`336fb4d1 bool nativeRestoreContinuityCandidate = false
+000000ac`336fc1e0 struct Upscaling::VRRenderScaleTransitionSnapshot nativeRestoreTransition = struct Upscaling::VRRenderScaleTransitionSnapshot
+<unavailable>     unsigned int64 completedPairToken = <value unavailable>
+000000ac`336fb890 class SKSE::stl::scope_exit<``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_1> > recordEyeCompletion = class SKSE::stl::scope_exit<``anonymous namespace'::IVRCompositor_Submit::thunk'::`2'::<lambda_1> >
+000000ac`336fb4e0 unsigned int64 compositorCycleToken = 0x6f38
+<unavailable>     bool acceptedNativeRestoreCycleAtHookEntry = <value unavailable>
+000000ac`336fb4d2 bool nativeRestoreCandidate = false
+000000ac`336fb528 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_8> rejectNativeRestoreCycle = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_8>
+000000ac`336fb500 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_9> commitAcceptedNativeRestoreCycle = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_9>
+000000ac`336fb738 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_10> recordStrictNativeRestoreObservationIfCurrent = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_10>
+000000ac`336fb508 unsigned int64 postLoadReleaseToken = 0
+<unavailable>     bool currentSubmitSuccess = <value unavailable>
+000000ac`336fb6f8 struct Upscaling::VRRenderScaleOriginalSubmitDecision originalSubmitDecision = struct Upscaling::VRRenderScaleOriginalSubmitDecision
+000000ac`336fb4f8 unsigned int64 nativeRestoreGuardEpoch = 0
+@ebx              unsigned int nativeRestoreContractGeneration = 0
+000000ac`336fb518 struct Upscaling::VRRenderScalePresentationObservation * probePresentationObservation = 0x00000000`00000000
+000000ac`336fb8d0 struct `anonymous-namespace'::RetainedOpenVRSubmitPacket lastSubmitPacket = struct `anonymous-namespace'::RetainedOpenVRSubmitPacket
+000000ac`336fb5e8 unsigned int64 postLoadSubmitScopeEpoch = 0
+000000ac`336fb760 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_12> submitNativeRestoreKeepalive = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_12>
+000000ac`336fb6c8 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_4> submit = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_4>
+<unavailable>     vr::EVRCompositorError result = <value unavailable>
+000000ac`336fb6a0 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_3> rejectQuarantinedSubmit = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_3>
+000000ac`336fb600 struct Upscaling::VRRenderScalePresentationObservation presentationObservation = struct Upscaling::VRRenderScalePresentationObservation
+<unavailable>     bool quarantinedAtHookEntry = <value unavailable>
+000000ac`336fb7d0 class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_11> submitLatchedNativeRestoreCycle = class `anonymous-namespace'::IVRCompositor_Submit::thunk::__l2::<lambda_11>
+000000ac`336fb6c0 struct winrt::com_ptr<ID3D11Texture2D> currentTexture = struct winrt::com_ptr<ID3D11Texture2D>
+<unavailable>     bool recordStrictObservation = <value unavailable>
+<unavailable>     bool admitInSceneOverlaySubmit = <value unavailable>
+000000ac`336fb5c0 struct vr::VRTextureBounds_t upscaledBounds = struct vr::VRTextureBounds_t
+000000ac`336fb5d8 struct vr::Texture_t upscaledTexture = struct vr::Texture_t
+<unavailable>     VRInSceneOverlaySubmitPolicy::SuppressionReason overlaySuppressionReasons = <value unavailable>
+<unavailable>     bool stablePresentationProven = <value unavailable>
+<unavailable>     bool menuSessionOpen = <value unavailable>
+<unavailable>     bool inSceneOverlayComposited = <value unavailable>
+000000ac`336fb540 struct vr::Texture_t inSceneTexture = struct vr::Texture_t
+<unavailable>     vr::EVRCompositorError result = <value unavailable>
+<unavailable>     struct vr::Texture_t * presentedTexture = <value unavailable>
+<unavailable>     vr::EVRCompositorError suppressionResult = <value unavailable>
+000000ac`336fb540 struct vr::Texture_t overlayTexture = struct vr::Texture_t
+<unavailable>     vr::EVRCompositorError result = <value unavailable>
+<unavailable>     struct `anonymous-namespace'::VRNativeRestoreCyclePresentationState g_vrNativeRestoreCyclePresentationState = <value unavailable>
+00007ff8`615ad587 struct std::atomic<bool> `IVRCompositor_Submit::thunk'::`82'::loggedDeviceLostFallback = false
+00007ff8`615ad586 struct std::atomic<bool> `IVRCompositor_Submit::thunk'::`91'::loggedRenderScaleCurrentFallback = false
+0:000> ~~[de3c]s
+nvwgf2umx!NVENCODEAPI_Thunk+0xb888d:
+00007ff8`5300c8ed 8b4604          mov     eax,dword ptr [rsi+4] ds:000002a4`09ae19dc=00000000
+0:143> r
+rax=0000029e63e1cc40 rbx=0000029e65a1b600 rcx=0000000000000000
+rdx=000002a2449369c0 rsi=000002a409ae19d8 rdi=0000029e63e1cc20
+rip=00007ff85300c8ed rsp=000000ac3b76f780 rbp=0000029e65a1b600
+ r8=00007ff85300c840  r9=0000000000000000 r10=0000000000000001
+r11=0000029e65a29428 r12=0000000000000000 r13=0000000000000000
+r14=0000029e65a1abc0 r15=0000000000000000
+iopl=0         nv up ei ng nz ac po cy
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000293
+nvwgf2umx!NVENCODEAPI_Thunk+0xb888d:
+00007ff8`5300c8ed 8b4604          mov     eax,dword ptr [rsi+4] ds:000002a4`09ae19dc=00000000
+0:143> kv 45
+Child-SP          RetAddr               : Args to Child                                                           : Call Site
+000000ac`3b76f780 00007ff8`532b83ef     : 0000029e`65a1a810 0000029e`65a1b600 000000ac`3b76f810 0000029e`d16869c0 : nvwgf2umx!NVENCODEAPI_Thunk+0xb888d
+000000ac`3b76f7c0 00007ff8`532b8350     : 00000000`00000001 00000000`00000000 00000000`000007d0 0000029e`65a1a810 : nvwgf2umx!SetDependencyInfo+0x69a0f
+000000ac`3b76f7f0 00007ff8`532acb4d     : 0000029e`65a1ad38 00000000`00000000 00000000`00000000 00000000`00000000 : nvwgf2umx!SetDependencyInfo+0x69970
+000000ac`3b76f870 00007ff8`537c24da     : 00000000`00000000 0000029e`65494330 00000000`00000000 00000000`00000000 : nvwgf2umx!SetDependencyInfo+0x5e16d
+000000ac`3b76f8a0 00007ff8`53bda2aa     : 0000029e`5f0da940 00000000`00000000 00000000`00000000 00000000`00000000 : nvwgf2umx!NVDEV_Thunk+0x15ed5a
+000000ac`3b76f8d0 00007ff9`891ccd87     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : nvwgf2umx!NVDEV_Thunk+0x576b2a
+000000ac`3b76f900 00007ff9`8a04caec     : 00000000`00000000 00000000`00000000 000004f0`fffffb30 000004d0`fffffb30 : kernel32!BaseThreadInitThunk+0x17
+000000ac`3b76f930 00000000`00000000     : 00000000`00000000 00000000`00000000 00000000`00000000 00000000`00000000 : ntdll!RtlUserThreadStart+0x2c
+0:143> !locks
+
+CritSec +65516030 at 0000029e65516030
+WaiterWoken        No
+LockCount          0
+RecursionCount     1
+OwningThread       908c
+EntryCount         0
+ContentionCount    14
+*** Locked
+
+CritSec SkyrimVR+3184600 at 00007ff629634600
+WaiterWoken        No
+LockCount          0
+RecursionCount     1
+OwningThread       908c
+EntryCount         0
+ContentionCount    f
+*** Locked
+
+Scanned 78 critical sections
+0:143> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

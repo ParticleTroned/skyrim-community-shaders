@@ -1,0 +1,326 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+OK                                             [REDACTED_LOCAL_PATH]
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.015 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             [REDACTED_LOCAL_PATH]
+OK                                             [REDACTED_LOCAL_PATH]
+Symbol search path is: [REDACTED_LOCAL_PATH];[REDACTED_LOCAL_PATH]
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 00:34:07.000 2026 (UTC + 2:00)
+System Uptime: 2 days 3:23:31.656
+Process Uptime: 0 days 0:08:37.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+..................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(d3b4.7848): Access violation - code c0000005 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtGetContextThread+0x14:
+00007ff9`8a102d14 c3              ret
+0:000> .ecxr
+*** WARNING: Unable to verify checksum for SkyrimVR.exe
+rax=00007ff6727923c8 rbx=0000000000000020 rcx=0000026e605cf098
+rdx=0000000000000000 rsi=00007ff671e56fe0 rdi=0000000000000000
+rip=00007ff6724f80c8 rsp=00000087f35ceb60 rbp=0000026e605cf070
+ r8=0000000000000000  r9=0000000000000000 r10=0000000000000000
+r11=00000087f35cebd8 r12=000002695dd29688 r13=0000000000000000
+r14=00007ff6724fa230 r15=0000000000000000
+iopl=0         nv up ei pl nz na po nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00010202
+SkyrimVR+0x13480c8:
+00007ff6`724f80c8 4c896808        mov     qword ptr [rax+8],r13 ds:00007ff6`727923d0=00007ff671e56fe0
+0:000> .frame /r 9
+*** WARNING: Unable to verify checksum for CommunityShaders.dll
+09 00000087`f35cf0a0 00007ff6`725213f8     SkyrimVR+0x134c5f1
+rax=00007ff6727923c8 rbx=0000026e605ec800 rcx=0000026e605cf098
+rdx=0000000000000000 rsi=00007ff674335600 rdi=00007ff674331700
+rip=00007ff6724fc5f1 rsp=00000087f35cf0a0 rbp=00000087f35cf1a0
+ r8=0000000000000000  r9=0000000000000000 r10=0000000000000000
+r11=00000087f35cebd8 r12=0000000000000000 r13=0000000000000000
+r14=0000026e605edd00 r15=0000000000000400
+iopl=0         nv up ei pl nz na po nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00010202
+SkyrimVR+0x134c5f1:
+00007ff6`724fc5f1 488bcf          mov     rcx,rdi
+0:000> .echo === SHADOW LIGHT ===
+=== SHADOW LIGHT ===
+0:000> dps 26e605edd00 Lc
+0000026e`605edd00  0000026e`605ec800
+0000026e`605edd08  0000026d`00000000
+0000026e`605edd10  3f800000`00000000
+0000026e`605edd18  00000000`00000000
+0000026e`605edd20  00000000`00000000
+0000026e`605edd28  0000026d`00000000
+0000026e`605edd30  0000026e`605ca740
+0000026e`605edd38  0000026d`e18fa080
+0000026e`605edd40  01010001`e18fa500
+0000026e`605edd48  00000000`00000000
+0000026e`605edd50  00000000`00000000
+0000026e`605edd58  00000000`00000000
+0:000> dps 26e605edd00+120 Lc
+0000026e`605ede20  0000026e`e753fe40
+0000026e`605ede28  0000026e`02510100
+0000026e`605ede30  00000000`00000000
+0000026e`605ede38  00000000`00000000
+0000026e`605ede40  0000026d`00000002
+0000026e`605ede48  00000000`00000000
+0000026e`605ede50  0000026d`00000000
+0000026e`605ede58  0000026d`00000000
+0000026e`605ede60  0000026d`e1944100
+0000026e`605ede68  0000026d`e1945180
+0000026e`605ede70  0000026d`e1945d80
+0000026e`605ede78  0000026d`e1946380
+0:000> .echo === DESCRIPTOR ===
+=== DESCRIPTOR ===
+0:000> dps 26e605ec800 L21
+0000026e`605ec800  00000000`00000000
+0000026e`605ec808  00000000`b3509950
+0000026e`605ec810  a709aded`3f800000
+0000026e`605ec818  00000000`33509950
+0000026e`605ec820  b33bbd2e`b33bbd2e
+0000026e`605ec828  00000000`3f8e38e4
+0000026e`605ec830  c3bf6242`c500d202
+0000026e`605ec838  3f800000`c282506b
+0000026e`605ec840  00000000`00000000
+0000026e`605ec848  00000000`00000000
+0000026e`605ec850  00000000`00000000
+0000026e`605ec858  00000000`00000000
+0000026e`605ec860  ffffffff`ffffffff
+0000026e`605ec868  ffffffff`ffffffff
+0000026e`605ec870  00000000`00000000
+0000026e`605ec878  00000000`00000000
+0000026e`605ec880  00000000`00000000
+0000026e`605ec888  00000000`00000000
+0000026e`605ec890  00000000`00000000
+0000026e`605ec898  00000000`00000000
+0000026e`605ec8a0  00000000`00000000
+0000026e`605ec8a8  00000000`00000000
+0000026e`605ec8b0  00000000`00000000
+0000026e`605ec8b8  00000000`00000000
+0000026e`605ec8c0  00000000`00000000
+0000026e`605ec8c8  00000000`00000000
+0000026e`605ec8d0  0000003f`00000000
+0000026e`605ec8d8  00000000`0000003f
+0000026e`605ec8e0  3f800000`00000000
+0000026e`605ec8e8  00001000`00000000
+0000026e`605ec8f0  00000800`00001000
+0000026e`605ec8f8  0000026e`02510100
+0000026e`605ec900  00000000`00000101
+0:000> .echo === SHADOW SCENE NODE ===
+=== SHADOW SCENE NODE ===
+0:000> dps 26969fa6e80 L6
+00000269`69fa6e80  00007ff6`72aac380 SkyrimVR+0x18fc380
+00000269`69fa6e88  00000000`00000001
+00000269`69fa6e90  00000269`1059b7d8
+00000269`69fa6e98  00000000`00000000
+00000269`69fa6ea0  00000000`00000000
+00000269`69fa6ea8  00000000`00000000
+0:000> .echo === HELPER ENTRY RUNTIME BYTES ===
+=== HELPER ENTRY RUNTIME BYTES ===
+0:000> u SkyrimVR+134c370 SkyrimVR+134c440
+SkyrimVR+0x134c370:
+00007ff6`724fc370 ff25784dc9fe    jmp     qword ptr [00007ff6`711910ee]
+00007ff6`724fc376 4155            push    r13
+00007ff6`724fc378 4156            push    r14
+00007ff6`724fc37a 4157            push    r15
+00007ff6`724fc37c 488da8e8feffff  lea     rbp,[rax-118h]
+00007ff6`724fc383 4881ecf0010000  sub     rsp,1F0h
+00007ff6`724fc38a 48c74530feffffff mov     qword ptr [rbp+30h],0FFFFFFFFFFFFFFFEh
+00007ff6`724fc392 48895810        mov     qword ptr [rax+10h],rbx
+00007ff6`724fc396 48897018        mov     qword ptr [rax+18h],rsi
+00007ff6`724fc39a 48897820        mov     qword ptr [rax+20h],rdi
+00007ff6`724fc39e 0f2970c8        movaps  xmmword ptr [rax-38h],xmm6
+00007ff6`724fc3a2 0f2978b8        movaps  xmmword ptr [rax-48h],xmm7
+00007ff6`724fc3a6 440f2940a8      movaps  xmmword ptr [rax-58h],xmm8
+00007ff6`724fc3ab 440f294898      movaps  xmmword ptr [rax-68h],xmm9
+00007ff6`724fc3b0 440f295088      movaps  xmmword ptr [rax-78h],xmm10
+00007ff6`724fc3b5 440f299878ffffff movaps  xmmword ptr [rax-88h],xmm11
+00007ff6`724fc3bd 440f29a068ffffff movaps  xmmword ptr [rax-98h],xmm12
+00007ff6`724fc3c5 458bf9          mov     r15d,r9d
+00007ff6`724fc3c8 4d8be8          mov     r13,r8
+00007ff6`724fc3cb 488bda          mov     rbx,rdx
+00007ff6`724fc3ce 4c8bf1          mov     r14,rcx
+00007ff6`724fc3d1 488b01          mov     rax,qword ptr [rcx]
+00007ff6`724fc3d4 ff5030          call    qword ptr [rax+30h]
+00007ff6`724fc3d7 84c0            test    al,al
+00007ff6`724fc3d9 7411            je      SkyrimVR+0x134c3ec (00007ff6`724fc3ec)
+00007ff6`724fc3db 837b68ff        cmp     dword ptr [rbx+68h],0FFFFFFFFh
+00007ff6`724fc3df 740b            je      SkyrimVR+0x134c3ec (00007ff6`724fc3ec)
+00007ff6`724fc3e1 837b6cff        cmp     dword ptr [rbx+6Ch],0FFFFFFFFh
+00007ff6`724fc3e5 7405            je      SkyrimVR+0x134c3ec (00007ff6`724fc3ec)
+00007ff6`724fc3e7 41b401          mov     r12b,1
+00007ff6`724fc3ea eb03            jmp     SkyrimVR+0x134c3ef (00007ff6`724fc3ef)
+00007ff6`724fc3ec 4532e4          xor     r12b,r12b
+00007ff6`724fc3ef 498bbe88050000  mov     rdi,qword ptr [r14+588h]
+00007ff6`724fc3f6 4885ff          test    rdi,rdi
+00007ff6`724fc3f9 743e            je      SkyrimVR+0x134c439 (00007ff6`724fc439)
+00007ff6`724fc3fb 418b8698050000  mov     eax,dword ptr [r14+598h]
+00007ff6`724fc402 85c0            test    eax,eax
+00007ff6`724fc404 7428            je      SkyrimVR+0x134c42e (00007ff6`724fc42e)
+00007ff6`724fc406 8bf0            mov     esi,eax
+00007ff6`724fc408 488b0f          mov     rcx,qword ptr [rdi]
+00007ff6`724fc40b 4885c9          test    rcx,rcx
+00007ff6`724fc40e 7414            je      SkyrimVR+0x134c424 (00007ff6`724fc424)
+00007ff6`724fc410 83c8ff          or      eax,0FFFFFFFFh
+00007ff6`724fc413 f00fc14108      lock xadd dword ptr [rcx+8],eax
+00007ff6`724fc418 83f801          cmp     eax,1
+00007ff6`724fc41b 7507            jne     SkyrimVR+0x134c424 (00007ff6`724fc424)
+00007ff6`724fc41d 488b01          mov     rax,qword ptr [rcx]
+00007ff6`724fc420 ff5008          call    qword ptr [rax+8]
+00007ff6`724fc423 90              nop
+00007ff6`724fc424 4883c708        add     rdi,8
+00007ff6`724fc428 4883ee01        sub     rsi,1
+00007ff6`724fc42c 75da            jne     SkyrimVR+0x134c408 (00007ff6`724fc408)
+00007ff6`724fc42e 41c7869805000000000000 mov dword ptr [r14+598h],0
+00007ff6`724fc439 41ff4500        inc     dword ptr [r13]
+00007ff6`724fc43d 4533ed          xor     r13d,r13d
+00007ff6`724fc440 837b64ff        cmp     dword ptr [rbx+64h],0FFFFFFFFh
+0:000> .echo === CALLER UNWIND ENTRIES ===
+=== CALLER UNWIND ENTRIES ===
+0:000> .fnent SkyrimVR+134c5f1
+Debugger function entry 00000148`a14c3130 for:
+
+BeginAddress      = 00000000`0134c370
+EndAddress        = 00000000`0134c9e2
+UnwindInfoAddress = 00000000`01e564d0
+
+Unwind info at 00007ff6`730064d0, 44 bytes
+  version 1, flags 2, prolog 55, codes 1b
+  handler routine: SkyrimVR+0x138bab4 (00007ff6`7253bab4), data 1906fa0
+  00: offs 55, unwind op 8, op info c	UWOP_SAVE_XMM128 FrameOffset: 180 reg: xmm12.
+  02: offs 4d, unwind op 8, op info b	UWOP_SAVE_XMM128 FrameOffset: 190 reg: xmm11.
+  04: offs 45, unwind op 8, op info a	UWOP_SAVE_XMM128 FrameOffset: 1a0 reg: xmm10.
+  06: offs 40, unwind op 8, op info 9	UWOP_SAVE_XMM128 FrameOffset: 1b0 reg: xmm9.
+  08: offs 3b, unwind op 8, op info 8	UWOP_SAVE_XMM128 FrameOffset: 1c0 reg: xmm8.
+  0a: offs 36, unwind op 8, op info 7	UWOP_SAVE_XMM128 FrameOffset: 1d0 reg: xmm7.
+  0c: offs 32, unwind op 8, op info 6	UWOP_SAVE_XMM128 FrameOffset: 1e0 reg: xmm6.
+  0e: offs 2e, unwind op 4, op info 7	UWOP_SAVE_NONVOL FrameOffset: 238 reg: rdi.
+  10: offs 2a, unwind op 4, op info 6	UWOP_SAVE_NONVOL FrameOffset: 230 reg: rsi.
+  12: offs 26, unwind op 4, op info 3	UWOP_SAVE_NONVOL FrameOffset: 228 reg: rbx.
+  14: offs 1a, unwind op 1, op info 0	UWOP_ALLOC_LARGE FrameOffset: 1f0.
+  16: offs c, unwind op 0, op info f	UWOP_PUSH_NONVOL reg: r15.
+  17: offs a, unwind op 0, op info e	UWOP_PUSH_NONVOL reg: r14.
+  18: offs 8, unwind op 0, op info d	UWOP_PUSH_NONVOL reg: r13.
+  19: offs 6, unwind op 0, op info c	UWOP_PUSH_NONVOL reg: r12.
+  1a: offs 4, unwind op 0, op info 5	UWOP_PUSH_NONVOL reg: rbp.
+0:000> .fnent SkyrimVR+13713f8
+Debugger function entry 00000148`a14c3130 for:
+
+BeginAddress      = 00000000`0137135c
+EndAddress        = 00000000`0137142d
+UnwindInfoAddress = 00000000`01e5cef0
+
+Unwind info at 00007ff6`7300cef0, 24 bytes
+  version 1, flags 4, prolog 25, codes a
+  00: offs 25, unwind op 8, op info 7	UWOP_SAVE_XMM128 FrameOffset: 20 reg: xmm7.
+  02: offs 18, unwind op 8, op info 6	UWOP_SAVE_XMM128 FrameOffset: 30 reg: xmm6.
+  04: offs f, unwind op 4, op info f	UWOP_SAVE_NONVOL FrameOffset: 70 reg: r15.
+  06: offs a, unwind op 4, op info e	UWOP_SAVE_NONVOL FrameOffset: 68 reg: r14.
+  08: offs 5, unwind op 4, op info 6	UWOP_SAVE_NONVOL FrameOffset: 60 reg: rsi.
+
+Chained info:
+BeginAddress      = 00000000`01371330
+EndAddress        = 00000000`0137135c
+UnwindInfoAddress = 00000000`01e5cee4
+
+Unwind info at 00007ff6`7300cee4, c bytes
+  version 1, flags 0, prolog 8, codes 4
+  00: offs 8, unwind op 2, op info 7	UWOP_ALLOC_SMALL.
+  01: offs 4, unwind op 0, op info 7	UWOP_PUSH_NONVOL reg: rdi.
+  02: offs 3, unwind op 0, op info 5	UWOP_PUSH_NONVOL reg: rbp.
+  03: offs 2, unwind op 0, op info 3	UWOP_PUSH_NONVOL reg: rbx.
+0:000> .fnent SkyrimVR+132321f
+Debugger function entry 00000148`a14c3130 for:
+
+BeginAddress      = 00000000`01323190
+EndAddress        = 00000000`01323248
+UnwindInfoAddress = 00000000`01e4daac
+
+Unwind info at 00007ff6`72ffdaac, 18 bytes
+  version 1, flags 2, prolog 17, codes 6
+  handler routine: SkyrimVR+0x138bab4 (00007ff6`7253bab4), data 1900ad8
+  00: offs 17, unwind op 4, op info 3	UWOP_SAVE_NONVOL FrameOffset: 70 reg: rbx.
+  02: offs 9, unwind op 2, op info 7	UWOP_ALLOC_SMALL.
+  03: offs 5, unwind op 0, op info e	UWOP_PUSH_NONVOL reg: r14.
+  04: offs 3, unwind op 0, op info 7	UWOP_PUSH_NONVOL reg: rdi.
+  05: offs 2, unwind op 0, op info 6	UWOP_PUSH_NONVOL reg: rsi.
+0:000> .echo === COMPLETE ===
+=== COMPLETE ===
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

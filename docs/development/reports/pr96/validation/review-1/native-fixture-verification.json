@@ -1,0 +1,21 @@
+{
+    "capture": "[REDACTED_LOCAL_PATH]",
+    "sha256": "4859ce0f79962f3574e830c48d23d75f3798234e87e0aeea5ec825b5db9322e4",
+    "checks": [
+        {
+            "rva": "0x1323190",
+            "bytes": 107,
+            "matchesCapturedCode": true
+        },
+        {
+            "rva": "0x13231FB",
+            "bytes": 53,
+            "matchesCapturedCode": true
+        },
+        {
+            "rva": "0x1323230",
+            "bytes": 24,
+            "matchesCapturedCode": true
+        }
+    ]
+}

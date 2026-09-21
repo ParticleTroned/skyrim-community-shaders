@@ -1,0 +1,19 @@
+.sympath+ [REDACTED_LOCAL_PATH]
+.reload /f CommunityShaders.dll
+.echo ==== LIVE_MAIN_THREAD ====
+~0s
+k 40
+r
+.echo ==== EXCEPTION_ADDRESS ====
+!address 33509950
+.echo ==== SHADOW_HOOK_TARGETS ====
+x CommunityShaders!*ShadowLifetime*g_construct*
+x CommunityShaders!*ShadowLifetime*g_destroy*
+x CommunityShaders!*ShadowLifetime*g_release*
+x CommunityShaders!*ShadowLifetime*g_render*
+.echo ==== LOADED_MODULES ====
+lm m SkyrimVR
+lm m CommunityShaders
+lm m nvwgf2umx
+lm m vrclient_x64
+qd

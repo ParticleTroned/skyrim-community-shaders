@@ -1,0 +1,47 @@
+{
+    "content": [
+        {
+            "type": "text",
+            "text": "Action completed."
+        }
+    ],
+    "structuredContent": {
+        "url": "[REDACTED_ENDPOINT]",
+        "number": 96,
+        "state": "open",
+        "merged": false,
+        "mergeable": true,
+        "draft": true,
+        "body": "## Why\n\nSkyrim VR's native shadow loop uses raw light pointers while loading\nworkers can release their scene owners. A retained capture showed a\nlight's destruction completing before its native render call returned.\nThe existing LLF frame snapshot protects LLF consumers; this native loop\nneeds ownership that lasts through its own render calls.\n\nThis addresses the observed lifetime hazard. It does not establish the\ncomplete cause of the separately observed driver-command hang.\n\n## What changed\n\n- Retain active and pending scene-light owners and copy accumulated render\n  order under the scene's light queue lock. Keep local references through\n  the entire native loop, independently of LLF frame/load resets.\n- Reuse the existing snapshot helper for the same five owning lists.\n  Native capture omits unused active enumeration and copies render order\n  in one range assignment to avoid repeated vector growth.\n- Replace the native selection loop with bounded, ownership-checked\n  virtual dispatch while preserving the native index and return frame.\n- Extend the production-function ownership harness and native-hook tests,\n  and document evidence, behavior and validation limits.\n\nSeven files only. No shadow journal, driver recorder, decoder, exception\nobserver or diagnostic DevBench/CMake additions are included. The branch\nstarts from current main-VR, which already contains PR #93.\n\n## Runtime and failure behavior\n\nThe executable patch applies only to Skyrim VR 1.4.15. All 53 original\nloop bytes must match before either write; an unsupported runtime or\nchanged site leaves the loop untouched and reports the refusal.\n\nUnknown owners, non-shadow objects or non-advancing indices end the pass.\nCapture allocation failure skips the pass. Virtual rendering and final\nreference releases occur outside the queue lock; rendering exceptions\npropagate with local ownership unwinding. Existing render virtual hooks\nremain in the call path. SE and AE receive no new executable patch.\n\nThe snapshot pins light lifetime; it does not synchronize arbitrary light\nfield or other engine-object mutations. Snapshot allocation and reference\ncounting have a cost. Performance neutrality remains unverified.\n\n## Validation\n\nClean source: `cddabac0c7563ed7886246470bd250de92e72030`.\nBuild ID:\n`d8c33e2807eacc0101b746a8b37e161e4f2da89720f3dd9aa867ebdc6f3229c0`.\n\nPassed:\n\n- Universal Release DLL build with SE, AE, VR and DevBench enabled,\n  automatic deployment and packaging disabled; exit 0.\n- SceneLightSnapshot and VRSceneGuards: both passed in 0.12 seconds.\n  Coverage includes concurrent teardown during rendering, pending owners,\n  raw-array clearing, stale/non-shadow entries, index bounds/progress,\n  exception release, 13 allocation-failure cases and 477 hook assertions.\n- Seven-file scoped pre-commit checks and staged diff whitespace checks.\n- Linked DLL manifest verification: 28,757,504 bytes, SHA-256\n  `3ee063d9ed332a61653e91a9d56ff2a3fdb15d7e182f0a43bad7fab96935b636`.\n  The native guard marker is present; `driver_command_start` and\n  `shadow_lifetime_start` are absent.\n\nBuild and test invocations:\n\n```powershell\npwsh [REDACTED_LOCAL_PATH]\npwsh [REDACTED_LOCAL_PATH]\n& '[REDACTED_LOCAL_PATH]' --test-dir [REDACTED_LOCAL_PATH]'^(SceneLightSnapshot|VRSceneGuards)$' --output-on-failure -V\n```\n\nThe build script invokes the isolated checkout's `tools/cmake.ps1` with\n`--build`, the build directory above, `--config Release`, the requested\ntargets, and `--parallel 4 -- /p:CL_MPCount=2`. Exact configure/build\nscripts, logs, hashes and review evidence are preserved locally under\n`[REDACTED_LOCAL_PATH]`; the final receipt is\n`validation.json`.\n\nExisting dependency warnings remain: FidelityFX's deprecated CMP0116\npolicy and HDE64 C4701. Neither failed the build.\n\nNot run: in-game testing of this native-loop correction, matched\nperformance measurements, SE/AE runtime checks or shader assertions\n(no HLSL changed). PR #93's 70 COCs used a DLL without this correction\nand are not qualification for this PR. Keep this PR as a draft pending\nits own runtime and performance evidence.\n",
+        "title": "fix(vr): retain lights during native shadow rendering (#96)",
+        "base": "main-VR",
+        "base_sha": "5adb39d62981f855fd57af77c45bd57cf9b8a233",
+        "head": "codex/native-shadow-render-lifetime",
+        "head_sha": "cddabac0c7563ed7886246470bd250de92e72030",
+        "head_repo_id": 1111695532,
+        "head_repo_full_name": "ParticleTroned/skyrim-community-shaders",
+        "merge_commit_sha": "62eb6bc9ca714912502a30ea7ac175f56f2f59b0",
+        "user": {
+            "login": "ParticleTroned",
+            "name": "ParticleTroned",
+            "email": null,
+            "avatar_url": "[REDACTED_ENDPOINT]",
+            "id": 248299730
+        },
+        "requested_reviewers": null,
+        "requested_team_reviewers": null,
+        "diff": null,
+        "comments": null,
+        "created_at": "2026-09-13T00:52:44Z",
+        "updated_at": "2026-09-13T00:52:49Z",
+        "closed_at": null,
+        "merged_at": null,
+        "commits": 1,
+        "changed_files": 7,
+        "additions": 355,
+        "deletions": 14,
+        "display_url": "[REDACTED_ENDPOINT]",
+        "display_title": "fix(vr): retain lights during native shadow rendering (#96)"
+    },
+    "isError": false
+}

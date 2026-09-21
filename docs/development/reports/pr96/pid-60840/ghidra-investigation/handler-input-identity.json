@@ -1,0 +1,57 @@
+{
+    "base": "0x7ff852e00000",
+    "bytes": 5767168,
+    "sha256": "c1a8db911b9d737f00d122e9199154a3424805fbc1fe173c25c676acd2e3fdde",
+    "functions": [
+        {
+            "opcode": 0,
+            "entry": "0x7ff85300c840",
+            "bounds": ["0x7ff85300c840", "0x7ff85300c94a", "0x7ff85687ce30"]
+        },
+        {
+            "opcode": 1,
+            "entry": "0x7ff85300c950",
+            "bounds": ["0x7ff85300c950", "0x7ff85300ca6a", "0x7ff85687ce30"]
+        },
+        {
+            "opcode": 5,
+            "entry": "0x7ff85300d320",
+            "bounds": ["0x7ff85300d320", "0x7ff85300d37d", "0x7ff85688aa28"]
+        },
+        {
+            "opcode": 10,
+            "entry": "0x7ff85300f8a0",
+            "bounds": ["0x7ff85300f8a0", "0x7ff85300f8ab", "0x7ff85688abe0"]
+        },
+        {
+            "opcode": 11,
+            "entry": "0x7ff85300ff20",
+            "bounds": ["0x7ff85300ff20", "0x7ff853010f8c", "0x7ff85688ac24"]
+        },
+        {
+            "opcode": 30,
+            "entry": "0x7ff853020b10",
+            "bounds": ["0x7ff853020b10", "0x7ff853022558", "0x7ff85688ac74"]
+        },
+        {
+            "opcode": 42,
+            "entry": "0x7ff853024880",
+            "bounds": ["0x7ff853024880", "0x7ff8530260ad", "0x7ff85688aee8"]
+        },
+        {
+            "opcode": 45,
+            "entry": "0x7ff853026b30",
+            "bounds": ["0x7ff853026b30", "0x7ff853027675", "0x7ff85688af8c"]
+        },
+        {
+            "opcode": 140,
+            "entry": "0x7ff853032d30",
+            "bounds": ["0x7ff853032d30", "0x7ff853033446", "0x7ff85688b50c"]
+        },
+        {
+            "opcode": 141,
+            "entry": "0x7ff853297230",
+            "bounds": ["0x7ff853297230", "0x7ff85329728a", "0x7ff856874c7c"]
+        }
+    ]
+}

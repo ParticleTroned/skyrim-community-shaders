@@ -1,0 +1,143 @@
+{
+    "schema": "coc25-windbg-interrupted-v2",
+    "generatedUtc": "2026-09-11T21:09:56.133Z",
+    "pid": 42300,
+    "producer": {
+        "artifactSha256": "",
+        "buildId": "fb078514153553f30d89552b2d469ebc41a372a82407cbe817abf15ef3ac664a",
+        "buildIdShort": "fb0785141535",
+        "component": "CommunityShaders",
+        "configuration": "Release",
+        "manifestError": "runtime artifact verification delegated to deployment harness",
+        "manifestVerified": false,
+        "shaderCacheAbiId": "c375dd96d5566516401cc2091195701f8d4656a209b80169267f1700e297cc54",
+        "shaderCompilerIdentity": "d3dcompiler_47.dll:10.0.26100.9444",
+        "sourceCommit": "5655a7102d02d6ab40b14888a52596c4c9e9f450",
+        "sourceDescribe": "v3.19.0-pr28-287-g5655a7102",
+        "sourceDirty": false
+    },
+    "ownerId": "coc25-windbg-fb0785141535-20260911T204721520Z",
+    "request": {
+        "measuredTransitions": 25,
+        "pacingWaitMs": 5000,
+        "initialPositioningCell": "WindhelmExterior01",
+        "initialWaitMs": 10000
+    },
+    "execution": {
+        "classification": "INTERRUPTED_CTD",
+        "positioningCompleted": true,
+        "scenarioId": 2,
+        "scenarioSteps": 126,
+        "scenarioSubmitted": true,
+        "submittedUtc": "2026-09-11T20:51:58.843Z",
+        "firstMeasuredDestinationObserved": true,
+        "firstMeasuredDestination": "WhiterunDragonsreach",
+        "measuredDispatchReceiptsRetained": 0,
+        "strictWaiterReceiptsRetained": 0,
+        "postWaitStatusReceiptsRetained": 0,
+        "completedMeasuredTransitions": null,
+        "completionCountReason": "Scenario transcript unavailable after control-plane failure; destination and internal stability observations do not substitute for strict waiter receipts.",
+        "laterLoadingMenuOpenedLocal": "2026-09-11T22:52:17.276+02:00"
+    },
+    "correction": {
+        "earlierUserCtdReportRetracted": true,
+        "continuationAuthorized": "[REDACTED_IDENTIFYING_METADATA]",
+        "setupReused": true,
+        "resetOrPositioningRepeated": false
+    },
+    "failure": {
+        "exceptionCode": "0xc0000005",
+        "faultModule": "SkyrimVR.exe",
+        "faultRva": "0x13480c8",
+        "faultAddress": "0x00007ff6724f80c8",
+        "faultThreadId": 19368,
+        "instruction": "mov qword ptr [rax+8],r13",
+        "operation": "write",
+        "targetAddress": "0x00007ff6727923d0",
+        "rax": "0x00007ff6727923c8",
+        "rbp": "0x00000255fdb87220",
+        "r13": "0x0",
+        "sourcePointerSlot": "0x00000255fdb87280",
+        "rttiType": "bhkCollisionObject",
+        "windowsEventId": 1000,
+        "windowsEventLocal": "2026-09-11T22:52:18.5765638+02:00",
+        "windowsReportId": "[REDACTED_IDENTIFYING_METADATA]",
+        "sameFaultRvaAndPointerTargetAsEarlierCrash": true
+    },
+    "mechanism": {
+        "established": "BSBatchRenderer activePassIndexList traversal read a vtable address as its next-node pointer, then attempted to clear that node's next field in the game's read-only image.",
+        "writerEstablished": false,
+        "componentAttributionEstablished": false,
+        "lifetimeDiagnosis": "Corruption or reused object storage; exact allocator, stale owner, or writer not identified.",
+        "postExitHeapEvidence": "The +0x60 slot still contains the exact fault-time RAX value, amid repeated collision-object-like allocations. This is later heap evidence and is not asserted to be a complete fault-time heap."
+    },
+    "capture": {
+        "liveDebuggerLastEvent": "Exit process 0:a53c, code c0000005",
+        "liveDebuggerEventLocal": "2026-09-11T22:52:28.735+02:00",
+        "avFilterVerifiedInSavedLog": true,
+        "firstChanceAvNotificationPresentInSavedLog": false,
+        "reasonFirstChanceWasMissed": "unresolved",
+        "manualDump": {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 26355063895,
+            "sha256": "4BF09D2E22F15287C20ACE4D56EC4C620CC89EE370E7D0FE41E8F77C1A49DE15",
+            "fullMemory": true,
+            "exceptionStream": false,
+            "threadCount": 1,
+            "stage": "process exit"
+        },
+        "faultTimeDump": {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "source": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 268137732,
+            "sha256": "AFFD0400EAE78C85DD193DF29EF8509514A679CCC148E02170A4D0D87361AC5F",
+            "exceptionContext": true,
+            "fullMemory": false,
+            "threadStackBlocksExtracted": 345
+        }
+    },
+    "telemetry": {
+        "strictTimingFrames": null,
+        "strictTimingMs": null,
+        "retries": null,
+        "missingReason": "Measured scenario results were not recoverable through the failed live transport.",
+        "internalStabilityDiagnostic": {
+            "epoch": 3,
+            "frames": 13,
+            "localTime": "22:52:11.519",
+            "notStrictWaiterTiming": true
+        },
+        "postLoadRecovery": {
+            "epoch": 4,
+            "completedLocal": "22:52:12.032",
+            "durationFrames": 8,
+            "trimCompleted": true,
+            "trimSucceeded": true,
+            "peakPressure": "Normal",
+            "releasedEngineTargetReferences": 429
+        }
+    },
+    "cleanup": {
+        "liveCallsAfterTransportFailure": 0,
+        "gameRestarted": false,
+        "gameResumedByAgent": false,
+        "liveDebuggerModifiedByAgent": false,
+        "telemetryCleanup": "Process exit prevents normal capture finalization; no fabricated stop receipts.",
+        "offlineReaderAnomaly": "The first offline CDB reader stalled in !address, was stopped by exact PID 40928 after path/command-line verification, and all thread stacks were then extracted successfully without that extension."
+    },
+    "validation": {
+        "dllManifestCanonicalVerifier": true,
+        "dllManifestAioRuntimeIdentityMatch": true,
+        "enabledProviderCount": 1,
+        "evidenceArchiveHashesVerified": true,
+        "gitDiffCheckPassed": true,
+        "sourceChanges": false,
+        "staticGhidraUsed": false
+    },
+    "nextRequiredEvidence": [
+        "Trace the batch-renderer allocation, destruction and writes to the live +0x60 list-pointer slot before the failure.",
+        "Resolve why live WinDbg received exit but not the access violation despite sxe av.",
+        "Use the exact fresh-session pointer and matching build; do not reuse PID 42300 heap addresses."
+    ],
+    "solutionStatus": "Immediate fault confirmed; corrupting writer and validated code fix remain unresolved."
+}

@@ -1,0 +1,10 @@
+{
+    "source": "[REDACTED_LOCAL_PATH]",
+    "snapshot": "[REDACTED_LOCAL_PATH]",
+    "activeAtSnapshot": true,
+    "flushConfirmed": false,
+    "classification": "live snapshot after operator-confirmed freeze",
+    "bytes": 268439552,
+    "sha256": "781f7f061eb08c14513b8d02dd55a62cd681a09b267c87ce8f4a54522c3b643a",
+    "capturedUtc": "2026-09-12T05:50:33.3073538Z"
+}

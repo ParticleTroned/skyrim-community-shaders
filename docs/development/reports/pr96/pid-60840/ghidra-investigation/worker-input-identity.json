@@ -1,0 +1,31 @@
+{
+    "base": "0x7ff853000000",
+    "bytes": 2949120,
+    "sha256": "c11489b7cda93e65d8eaa5c5ca0a476f57bd9804a3fd4a2fc9b2b82aa9b1f2f2",
+    "functions": [
+        {
+            "ip": "0x7ff85300c8ed",
+            "bounds": ["0x7ff85300c840", "0x7ff85300c94a", "0x7ff85687ce30"]
+        },
+        {
+            "ip": "0x7ff8532b83ef",
+            "bounds": ["0x7ff8532b8370", "0x7ff8532b8706", "0x7ff856874aa4"]
+        },
+        {
+            "ip": "0x7ff8532b8350",
+            "bounds": ["0x7ff8532b8020", "0x7ff8532b8355", "0x7ff856888ff8"]
+        },
+        {
+            "ip": "0x7ff8532acb4d",
+            "bounds": ["0x7ff8532acb40", "0x7ff8532acb4e", "0x7ff856873790"]
+        },
+        {
+            "ip": "0x7ff8537c24da",
+            "bounds": ["0x7ff8537c24c0", "0x7ff8537c24e9", "0x7ff856873738"]
+        },
+        {
+            "ip": "0x7ff853bda2aa",
+            "bounds": ["0x7ff853bda250", "0x7ff853bda2c0", "0x7ff8568fce18"]
+        }
+    ]
+}

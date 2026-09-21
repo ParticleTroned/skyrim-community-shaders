@@ -1,0 +1,6 @@
+.echo === BASE SHADOW LIGHT DESTRUCTION ===
+uf SkyrimVR+134b410
+.echo === PARABOLIC TYPE NAME ===
+dd poi(SkyrimVR+190c1f0-8) L6
+.echo === COMPLETE ===
+q

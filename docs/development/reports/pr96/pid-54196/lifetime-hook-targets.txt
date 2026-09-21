@@ -1,0 +1,221 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.016 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+Symbol search path is: srv*
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 00:34:07.000 2026 (UTC + 2:00)
+System Uptime: 2 days 3:23:31.656
+Process Uptime: 0 days 0:08:37.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+..................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(d3b4.7848): Access violation - code c0000005 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtGetContextThread+0x14:
+00007ff9`8a102d14 c3              ret
+0:000> uf SkyrimVR+130c560
+*** WARNING: Unable to verify checksum for SkyrimVR.exe
+SkyrimVR+0x130c560:
+00007ff6`724bc560 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ff6`724bc565 57              push    rdi
+00007ff6`724bc566 4883ec20        sub     rsp,20h
+00007ff6`724bc56a 8bda            mov     ebx,edx
+00007ff6`724bc56c 488bf9          mov     rdi,rcx
+00007ff6`724bc56f e82cbeffff      call    SkyrimVR+0x13083a0 (00007ff6`724b83a0)
+00007ff6`724bc574 f6c301          test    bl,1
+00007ff6`724bc577 740d            je      SkyrimVR+0x130c586 (00007ff6`724bc586)
+
+SkyrimVR+0x130c579:
+00007ff6`724bc579 bab0010000      mov     edx,1B0h
+00007ff6`724bc57e 488bcf          mov     rcx,rdi
+00007ff6`724bc581 e826dc0700      call    SkyrimVR+0x138a1ac (00007ff6`7253a1ac)
+
+SkyrimVR+0x130c586:
+00007ff6`724bc586 488bc7          mov     rax,rdi
+00007ff6`724bc589 488b5c2430      mov     rbx,qword ptr [rsp+30h]
+00007ff6`724bc58e 4883c420        add     rsp,20h
+00007ff6`724bc592 5f              pop     rdi
+00007ff6`724bc593 c3              ret
+0:000> uf SkyrimVR+ca6fe0
+Flow analysis was incomplete, some code may be missing
+SkyrimVR+0xca6fe0:
+00007ff6`71e56fe0 4885c9          test    rcx,rcx
+00007ff6`71e56fe3 740b            je      SkyrimVR+0xca6ff0 (00007ff6`71e56ff0)
+
+SkyrimVR+0xca6fe5:
+00007ff6`71e56fe5 488b01          mov     rax,qword ptr [rcx]
+00007ff6`71e56fe8 ba01000000      mov     edx,1
+00007ff6`71e56fed 48ff20          jmp     qword ptr [rax]
+
+SkyrimVR+0xca6ff0:
+00007ff6`71e56ff0 c3              ret
+0:000> .fnent SkyrimVR+13080a9
+Debugger function entry 000001d9`9a522130 for:
+
+BeginAddress      = 00000000`01308080
+EndAddress        = 00000000`01308395
+UnwindInfoAddress = 00000000`01e48fd8
+
+Unwind info at 00007ff6`72ff8fd8, 1c bytes
+  version 1, flags 2, prolog 1e, codes 8
+  handler routine: SkyrimVR+0x138bab4 (00007ff6`7253bab4), data 18fd550
+  00: offs 1e, unwind op 4, op info 3	UWOP_SAVE_NONVOL FrameOffset: 68 reg: rbx.
+  02: offs 10, unwind op 2, op info 5	UWOP_ALLOC_SMALL.
+  03: offs c, unwind op 0, op info f	UWOP_PUSH_NONVOL reg: r15.
+  04: offs a, unwind op 0, op info e	UWOP_PUSH_NONVOL reg: r14.
+  05: offs 8, unwind op 0, op info 7	UWOP_PUSH_NONVOL reg: rdi.
+  06: offs 7, unwind op 0, op info 6	UWOP_PUSH_NONVOL reg: rsi.
+  07: offs 6, unwind op 0, op info 5	UWOP_PUSH_NONVOL reg: rbp.
+0:000> .fnent SkyrimVR+13083c3
+Debugger function entry 000001d9`9a522130 for:
+
+BeginAddress      = 00000000`013083a0
+EndAddress        = 00000000`01308555
+UnwindInfoAddress = 00000000`01e4909c
+
+Unwind info at 00007ff6`72ff909c, 20 bytes
+  version 1, flags 3, prolog 20, codes a
+  handler routine: SkyrimVR+0x138bab4 (00007ff6`7253bab4), data 18fd578
+  00: offs 20, unwind op 4, op info 5	UWOP_SAVE_NONVOL FrameOffset: 70 reg: rbp.
+  02: offs 1b, unwind op 4, op info 3	UWOP_SAVE_NONVOL FrameOffset: 68 reg: rbx.
+  04: offs d, unwind op 2, op info 5	UWOP_ALLOC_SMALL.
+  05: offs 9, unwind op 0, op info f	UWOP_PUSH_NONVOL reg: r15.
+  06: offs 7, unwind op 0, op info e	UWOP_PUSH_NONVOL reg: r14.
+  07: offs 5, unwind op 0, op info c	UWOP_PUSH_NONVOL reg: r12.
+  08: offs 3, unwind op 0, op info 7	UWOP_PUSH_NONVOL reg: rdi.
+  09: offs 2, unwind op 0, op info 6	UWOP_PUSH_NONVOL reg: rsi.
+0:000> uf SkyrimVR+134ceb0
+SkyrimVR+0x134ceb0:
+00007ff6`724fceb0 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ff6`724fceb5 57              push    rdi
+00007ff6`724fceb6 4883ec20        sub     rsp,20h
+00007ff6`724fceba 8bda            mov     ebx,edx
+00007ff6`724fcebc 488bf9          mov     rdi,rcx
+00007ff6`724fcebf e84ce5ffff      call    SkyrimVR+0x134b410 (00007ff6`724fb410)
+00007ff6`724fcec4 f6c301          test    bl,1
+00007ff6`724fcec7 740d            je      SkyrimVR+0x134ced6 (00007ff6`724fced6)
+
+SkyrimVR+0x134cec9:
+00007ff6`724fcec9 bac0050000      mov     edx,5C0h
+00007ff6`724fcece 488bcf          mov     rcx,rdi
+00007ff6`724fced1 e8d6d20300      call    SkyrimVR+0x138a1ac (00007ff6`7253a1ac)
+
+SkyrimVR+0x134ced6:
+00007ff6`724fced6 488bc7          mov     rax,rdi
+00007ff6`724fced9 488b5c2430      mov     rbx,qword ptr [rsp+30h]
+00007ff6`724fcede 4883c420        add     rsp,20h
+00007ff6`724fcee2 5f              pop     rdi
+00007ff6`724fcee3 c3              ret
+0:000> uf SkyrimVR+ca6fe0
+Flow analysis was incomplete, some code may be missing
+SkyrimVR+0xca6fe0:
+00007ff6`71e56fe0 4885c9          test    rcx,rcx
+00007ff6`71e56fe3 740b            je      SkyrimVR+0xca6ff0 (00007ff6`71e56ff0)
+
+SkyrimVR+0xca6fe5:
+00007ff6`71e56fe5 488b01          mov     rax,qword ptr [rcx]
+00007ff6`71e56fe8 ba01000000      mov     edx,1
+00007ff6`71e56fed 48ff20          jmp     qword ptr [rax]
+
+SkyrimVR+0xca6ff0:
+00007ff6`71e56ff0 c3              ret
+0:000> .fnent SkyrimVR+134b351
+Debugger function entry 000001d9`9a522130 for:
+
+BeginAddress      = 00000000`0134b330
+EndAddress        = 00000000`0134b408
+UnwindInfoAddress = 00000000`01e5619c
+
+Unwind info at 00007ff6`7300619c, 14 bytes
+  version 1, flags 2, prolog 18, codes 4
+  handler routine: SkyrimVR+0x138bab4 (00007ff6`7253bab4), data 1906eb0
+  00: offs 18, unwind op 4, op info 3	UWOP_SAVE_NONVOL FrameOffset: 60 reg: rbx.
+  02: offs a, unwind op 2, op info 7	UWOP_ALLOC_SMALL.
+  03: offs 6, unwind op 0, op info 7	UWOP_PUSH_NONVOL reg: rdi.
+0:000> .fnent SkyrimVR+134b431
+Debugger function entry 000001d9`9a522130 for:
+
+BeginAddress      = 00000000`0134b410
+EndAddress        = 00000000`0134b4f7
+UnwindInfoAddress = 00000000`01e56220
+
+Unwind info at 00007ff6`73006220, 1c bytes
+  version 1, flags 3, prolog 1e, codes 8
+  handler routine: SkyrimVR+0x138bab4 (00007ff6`7253bab4), data 1906ed8
+  00: offs 1e, unwind op 4, op info 7	UWOP_SAVE_NONVOL FrameOffset: 50 reg: rdi.
+  02: offs 19, unwind op 4, op info 6	UWOP_SAVE_NONVOL FrameOffset: 48 reg: rsi.
+  04: offs 14, unwind op 4, op info 3	UWOP_SAVE_NONVOL FrameOffset: 40 reg: rbx.
+  06: offs 6, unwind op 2, op info 5	UWOP_ALLOC_SMALL.
+  07: offs 2, unwind op 0, op info e	UWOP_PUSH_NONVOL reg: r14.
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

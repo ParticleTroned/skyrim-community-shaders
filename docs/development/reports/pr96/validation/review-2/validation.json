@@ -1,0 +1,52 @@
+{
+    "pr": 96,
+    "head": "fba3348ba2e06bdeb2d7db3b20a9e8a207db5fb9",
+    "reviewedHead": "90d545008c1dda2b0d9e9d91b82021281698bbcd",
+    "changedFiles": [
+        "docs/development/vr-shadow-light-lifetime-fix.md",
+        "tests/vr_scene_guards_test.cpp"
+    ],
+    "productionSourcesUnchanged": true,
+    "worktreeClean": true,
+    "dllRebuilt": false,
+    "dllSourceCommit": "90d545008c1dda2b0d9e9d91b82021281698bbcd",
+    "dllBuildId": "cd983f022fb67aa4ff83b251aa5b63adaa499b6d44ea568089f1f4d83719e4fe",
+    "dll": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 28760064,
+        "sha256": "f24eb30a25d204d94666288f6550e9f687b61bbc40267bb14f649be66129e298"
+    },
+    "manifest": {
+        "path": "[REDACTED_LOCAL_PATH]",
+        "sizeBytes": 4228,
+        "sha256": "60e487d42610aa28b6f3a21e643b2f517f31479f86c280be6dea520156d0469a"
+    },
+    "tests": ["SceneLightSnapshot", "VRSceneGuards"],
+    "testResult": "passed",
+    "nativeHookAssertions": 744,
+    "allocationFailureCases": 13,
+    "runtimeTested": false,
+    "performanceNeutrality": "unverified",
+    "evidence": {
+        "REVIEW.md": {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sha256": "714802566df0746f617e55262740de1e9de5b129b8a0d25fa8827e44272de3bb",
+            "sizeBytes": 2829
+        },
+        "focused-build.log": {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sha256": "96bc8c4c711d68234073881f03dbac04a29fe4df4434019c8956df0968fb1759",
+            "sizeBytes": 1066
+        },
+        "focused-tests.log": {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sha256": "f120c6b44f4a655bb16c78008b187726e1e3410116da7041f6a7ad4a3c32785d",
+            "sizeBytes": 1641
+        },
+        "pre-commit.log": {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sha256": "d07aa863f52b5bfb24d225049c120bff0c7dcd5fb00206b695cf35abf754b9f8",
+            "sizeBytes": 486
+        }
+    }
+}

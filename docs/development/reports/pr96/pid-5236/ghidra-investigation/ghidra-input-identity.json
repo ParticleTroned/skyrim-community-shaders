@@ -1,0 +1,14 @@
+{
+    "pid": 5236,
+    "skyrimBase": "0x7ff6264b0000",
+    "nativeBase": "0x7ff6277a0000",
+    "nativeBytes": 589824,
+    "nativeLiveMatchesEarlierFullDump": true,
+    "nativeSha256": "45e9483832f66cfb5ff7c0be126ac6da4b0135d2295c89d2b7b2ec74bd5bcbd0",
+    "trampolineBase": "0x7ff5e6d80000",
+    "trampolineBytes": 65536,
+    "trampolineSha256": "080452aa4f13dbc8d8c89ad2f88c85670b049ebf029a9e8cd42497833bc66df8",
+    "dumpMemoryWithinFile": true,
+    "firstExceptionDescriptor": "0x18632c10f00",
+    "descriptorBytesAtDump": "0000000000000000509950b3000000000000803fedad09a750995033000000002ebd3bb32ebd3bb3e4388e3f0000000099d300c56bd4bfc3fcc680c20000803f80c66ef786010000000000000000000000f9bf32860100000000000000000000ffffffffffffffff"
+}

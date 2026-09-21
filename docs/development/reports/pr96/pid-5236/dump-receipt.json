@@ -1,0 +1,11 @@
+{
+    "classification": "operator-confirmed-hang",
+    "captureMethod": "WinDbg CDB noninvasive attach -pv",
+    "pid": 5236,
+    "targetStartTimeUtc": "2026-09-12T05:17:22.8630494Z",
+    "dumpPath": "[REDACTED_LOCAL_PATH]",
+    "sizeBytes": 27454712331,
+    "sha256": "73b45e0a0589e0a445912c84a75dffe04393df55cdc19263f51a8e7525099964",
+    "debuggerReportedSuccess": true,
+    "finalizedUtc": "2026-09-12T05:55:45.5372855Z"
+}

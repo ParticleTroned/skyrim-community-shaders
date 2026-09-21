@@ -1,0 +1,175 @@
+ExtensionGallery settings after reading 'SOFTWARE\Microsoft\Debug Engine' registry:
+ExtensionGallery ExtensionRepository: Implicit
+Opened log file '[REDACTED_LOCAL_PATH]'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.015 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.016 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29617.1000 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [[REDACTED_LOCAL_PATH]]
+User Mini Dump File with Full Memory : Only application data is available
+
+Symbol search path is: srv*
+Executable search path is:
+Windows 10 Version 26200 MP (24 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sat Sep 12 00:34:07.000 2026 (UTC + 2:00)
+System Uptime: 2 days 3:23:31.656
+Process Uptime: 0 days 0:08:37.000
+.NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+NatVis script successfully loaded from '[REDACTED_LOCAL_PATH]'
+...............................................................
+................................................................
+................................................................
+................................................................
+................................................................
+..................
+Loading unloaded module list
+.....
+This dump file has an exception of interest stored in it.
+The stored exception information can be accessed via .ecxr
+(d3b4.7848): Access violation - code c0000005 (first/second chance not available)
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtGetContextThread+0x14:
+00007ff9`8a102d14 c3              ret
+0:000> uf SkyrimVR+1362090
+*** WARNING: Unable to verify checksum for SkyrimVR.exe
+SkyrimVR+0x1362090:
+00007ff6`72512090 48894c2408      mov     qword ptr [rsp+8],rcx
+00007ff6`72512095 57              push    rdi
+00007ff6`72512096 4883ec30        sub     rsp,30h
+00007ff6`7251209a 48c7442420feffffff mov   qword ptr [rsp+20h],0FFFFFFFFFFFFFFFEh
+00007ff6`725120a3 48895c2450      mov     qword ptr [rsp+50h],rbx
+00007ff6`725120a8 4889742458      mov     qword ptr [rsp+58h],rsi
+00007ff6`725120ad 488bf9          mov     rdi,rcx
+00007ff6`725120b0 488d05f97a2500  lea     rax,[SkyrimVR+0x15b9bb0 (00007ff6`72769bb0)]
+00007ff6`725120b7 488901          mov     qword ptr [rcx],rax
+00007ff6`725120ba 33f6            xor     esi,esi
+00007ff6`725120bc 897108          mov     dword ptr [rcx+8],esi
+00007ff6`725120bf f0ff055a8ce001  lock inc dword ptr [SkyrimVR+0x316ad20 (00007ff6`7431ad20)]
+00007ff6`725120c6 488d052b815a00  lea     rax,[SkyrimVR+0x190a1f8 (00007ff6`72aba1f8)]
+00007ff6`725120cd 488901          mov     qword ptr [rcx],rax
+00007ff6`725120d0 48897110        mov     qword ptr [rcx+10h],rsi
+00007ff6`725120d4 4883c118        add     rcx,18h
+00007ff6`725120d8 488d15d9f93802  lea     rdx,[SkyrimVR+0x36f1ab8 (00007ff6`748a1ab8)]
+00007ff6`725120df e8ac290000      call    SkyrimVR+0x1364a90 (00007ff6`72514a90)
+00007ff6`725120e4 90              nop
+00007ff6`725120e5 897744          mov     dword ptr [rdi+44h],esi
+00007ff6`725120e8 48897748        mov     qword ptr [rdi+48h],rsi
+00007ff6`725120ec f30f1005fc89e001 movss   xmm0,dword ptr [SkyrimVR+0x316aaf0 (00007ff6`7431aaf0)]
+00007ff6`725120f4 f30f114750      movss   dword ptr [rdi+50h],xmm0
+00007ff6`725120f9 f30f100df389e001 movss   xmm1,dword ptr [SkyrimVR+0x316aaf4 (00007ff6`7431aaf4)]
+00007ff6`72512101 f30f114f54      movss   dword ptr [rdi+54h],xmm1
+00007ff6`72512106 f30f1005ea89e001 movss   xmm0,dword ptr [SkyrimVR+0x316aaf8 (00007ff6`7431aaf8)]
+00007ff6`7251210e f30f114758      movss   dword ptr [rdi+58h],xmm0
+00007ff6`72512113 89775c          mov     dword ptr [rdi+5Ch],esi
+00007ff6`72512116 66c747600001    mov     word ptr [rdi+60h],100h
+00007ff6`7251211c c6476301        mov     byte ptr [rdi+63h],1
+00007ff6`72512120 48897768        mov     qword ptr [rdi+68h],rsi
+00007ff6`72512124 4088b7d0000000  mov     byte ptr [rdi+0D0h],sil
+00007ff6`7251212b 488d9fd8000000  lea     rbx,[rdi+0D8h]
+00007ff6`72512132 48895c2448      mov     qword ptr [rsp+48h],rbx
+00007ff6`72512137 488bcb          mov     rcx,rbx
+00007ff6`7251213a e8e1d98dff      call    SkyrimVR+0xc3fb20 (00007ff6`71defb20)
+00007ff6`7251213f 90              nop
+00007ff6`72512140 488d4b10        lea     rcx,[rbx+10h]
+00007ff6`72512144 e8a7d68dff      call    SkyrimVR+0xc3f7f0 (00007ff6`71def7f0)
+00007ff6`72512149 90              nop
+00007ff6`7251214a 488d9ff0000000  lea     rbx,[rdi+0F0h]
+00007ff6`72512151 48895c2448      mov     qword ptr [rsp+48h],rbx
+00007ff6`72512156 488bcb          mov     rcx,rbx
+00007ff6`72512159 e8c2d98dff      call    SkyrimVR+0xc3fb20 (00007ff6`71defb20)
+00007ff6`7251215e 90              nop
+00007ff6`7251215f 488d4b10        lea     rcx,[rbx+10h]
+00007ff6`72512163 e888d68dff      call    SkyrimVR+0xc3f7f0 (00007ff6`71def7f0)
+00007ff6`72512168 90              nop
+00007ff6`72512169 488d9f08010000  lea     rbx,[rdi+108h]
+00007ff6`72512170 48895c2448      mov     qword ptr [rsp+48h],rbx
+00007ff6`72512175 488bcb          mov     rcx,rbx
+00007ff6`72512178 e8a3d98dff      call    SkyrimVR+0xc3fb20 (00007ff6`71defb20)
+00007ff6`7251217d 90              nop
+00007ff6`7251217e 488d4b10        lea     rcx,[rbx+10h]
+00007ff6`72512182 e869d68dff      call    SkyrimVR+0xc3f7f0 (00007ff6`71def7f0)
+00007ff6`72512187 90              nop
+00007ff6`72512188 4889b720010000  mov     qword ptr [rdi+120h],rsi
+00007ff6`7251218f 4889b728010000  mov     qword ptr [rdi+128h],rsi
+00007ff6`72512196 4889b730010000  mov     qword ptr [rdi+130h],rsi
+00007ff6`7251219d 4889b738010000  mov     qword ptr [rdi+138h],rsi
+00007ff6`725121a4 488d4f70        lea     rcx,[rdi+70h]
+00007ff6`725121a8 33d2            xor     edx,edx
+00007ff6`725121aa 448d4660        lea     r8d,[rsi+60h]
+00007ff6`725121ae e825990200      call    SkyrimVR+0x138bad8 (00007ff6`7253bad8)
+00007ff6`725121b3 90              nop
+00007ff6`725121b4 488bc7          mov     rax,rdi
+00007ff6`725121b7 488b5c2450      mov     rbx,qword ptr [rsp+50h]
+00007ff6`725121bc 488b742458      mov     rsi,qword ptr [rsp+58h]
+00007ff6`725121c1 4883c430        add     rsp,30h
+00007ff6`725121c5 5f              pop     rdi
+00007ff6`725121c6 c3              ret
+0:000> uf SkyrimVR+cca060
+SkyrimVR+0xcca060:
+00007ff6`71e7a060 4053            push    rbx
+00007ff6`71e7a062 4883ec20        sub     rsp,20h
+00007ff6`71e7a066 488bd9          mov     rbx,rcx
+00007ff6`71e7a069 e832d50000      call    SkyrimVR+0xcd75a0 (00007ff6`71e875a0)
+00007ff6`71e7a06e 488d0543acb200  lea     rax,[SkyrimVR+0x17f4cb8 (00007ff6`729a4cb8)]
+00007ff6`71e7a075 66c743500100    mov     word ptr [rbx+50h],1
+00007ff6`71e7a07b 488903          mov     qword ptr [rbx],rax
+00007ff6`71e7a07e 488bc3          mov     rax,rbx
+00007ff6`71e7a081 c6435200        mov     byte ptr [rbx+52h],0
+00007ff6`71e7a085 4883c420        add     rsp,20h
+00007ff6`71e7a089 5b              pop     rbx
+00007ff6`71e7a08a c3              ret
+0:000> q
+quit:
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'
+NatVis script unloaded from '[REDACTED_LOCAL_PATH]'

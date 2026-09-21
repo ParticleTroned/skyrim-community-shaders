@@ -1,0 +1,20 @@
+[
+    {
+        "target": "0x255FDB87280",
+        "base": "0x255FD820000",
+        "regionSize": 4194304,
+        "allocationBase": "0x255FD820000",
+        "state": "0x1000",
+        "protect": "0x4",
+        "type": "0x20000"
+    },
+    {
+        "target": "0x7FF6727923D0",
+        "base": "0x7FF67272F000",
+        "regionSize": 9363456,
+        "allocationBase": "0x7FF6711B0000",
+        "state": "0x1000",
+        "protect": "0x2",
+        "type": "0x1000000"
+    }
+]

@@ -1,0 +1,31 @@
+Initialized the MSVC environment with [REDACTED_LOCAL_PATH]
+Using vcpkg at [REDACTED_LOCAL_PATH]
+MSBuild version 18.8.2+ce25c0108 for .NET Framework
+
+  Checking File Globs
+  1>Checking Build System
+  1>Generating generated/scene-light-snapshot/scene_light_snapshot_under_test.h
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  Scanning sources for module dependencies...
+  scene_light_snapshot_test.cpp
+  Compiling...
+  scene_light_snapshot_test.cpp
+  Generating code
+  Previous IPDB not found, fall back to full compilation.
+  All 987 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  scene_light_snapshot_test.vcxproj -> [REDACTED_LOCAL_PATH]
+MSBuild version 18.8.2+ce25c0108 for .NET Framework
+
+  Checking File Globs
+  1>Generating generated/vr-scene-guards/vr_scene_guards_under_test.h
+  Building Custom Rule [REDACTED_LOCAL_PATH]
+  Scanning sources for module dependencies...
+  vr_scene_guards_test.cpp
+  Compiling...
+  vr_scene_guards_test.cpp
+  Generating code
+  Previous IPDB not found, fall back to full compilation.
+  All 2131 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  vr_scene_guards_test.vcxproj -> [REDACTED_LOCAL_PATH]

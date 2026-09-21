@@ -1,0 +1,201 @@
+Ghidra 12.1.2
+Source: decrypted Skyrim PID 5236 code and same-process dump trampoline bytes.
+
+FUNCTION 7ff6277aa250
+DECOMPILE completed=true error=
+
+undefined8 FUN_7ff6277aa250(longlong param_1,uint param_2)
+
+{
+  return *(undefined8 *)(*(longlong *)(param_1 + 600) + (ulonglong)param_2 * 8);
+}
+
+
+7ff6277aa250 MOV RAX,qword ptr [RCX + 0x258]
+7ff6277aa257 MOV EDX,EDX
+7ff6277aa259 MOV RAX,qword ptr [RAX + RDX*0x8]
+7ff6277aa25d RET
+
+FUNCTION 7ff6277d3190
+DECOMPILE completed=true error=
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+void FUN_7ff6277d3190(void)
+
+{
+  undefined4 uVar1;
+  undefined1 uVar2;
+  undefined8 uVar3;
+  char cVar4;
+  longlong *plVar5;
+  undefined8 in_R9;
+  undefined4 *puVar6;
+  longlong unaff_GS_OFFSET;
+  undefined4 auStackX_8 [2];
+  undefined4 uStackX_10;
+  undefined8 uVar7;
+  undefined1 uVar8;
+
+  uVar3 = _DAT_7ff6298d3080;
+  uVar2 = DAT_7ff629631708;
+  uVar7 = 0xfffffffffffffffe;
+  DAT_7ff629631708 = 0;
+  uVar8 = uVar2;
+  cVar4 = func_0x7ff62777e790();
+  if (cVar4 != '\0') {
+    puVar6 = (undefined4 *)
+             (*(longlong *)
+               (*(longlong *)(unaff_GS_OFFSET + 0x58) + (ulonglong)_DAT_7ff629ba2f58 * 8) + 0x768);
+    uVar1 = *puVar6;
+    *puVar6 = 0x1d;
+    auStackX_8[0] = 0;
+    uStackX_10 = uVar1;
+    plVar5 = (longlong *)FUN_7ff6277aa250(uVar3,0);
+    while (plVar5 != (longlong *)0x0) {
+      (**(code **)(*plVar5 + 0x50))(plVar5,auStackX_8,*plVar5,in_R9,uVar7,uVar8);
+      plVar5 = (longlong *)FUN_7ff6277aa250(uVar3,auStackX_8[0]);
+    }
+    *puVar6 = uVar1;
+  }
+  DAT_7ff629631708 = uVar2;
+  return;
+}
+
+
+7ff6277d3190 PUSH RSI
+7ff6277d3192 PUSH RDI
+7ff6277d3193 PUSH R14
+7ff6277d3195 SUB RSP,0x40
+7ff6277d3199 MOV qword ptr [RSP + 0x20],-0x2
+7ff6277d31a2 MOV qword ptr [RSP + 0x70],RBX
+7ff6277d31a7 MOVZX EDI,byte ptr [0x7ff629631708]
+7ff6277d31ae MOV byte ptr [RSP + 0x28],DIL
+7ff6277d31b3 MOV byte ptr [0x7ff629631708],0x0
+7ff6277d31ba MOV RSI,qword ptr [0x7ff6298d3080]
+7ff6277d31c1 CALL 0x7ff62777e790
+7ff6277d31c6 TEST AL,AL
+7ff6277d31c8 JZ 0x7ff6277d3233
+7ff6277d31ca MOV ECX,dword ptr [0x7ff629ba2f58]
+7ff6277d31d0 MOV RAX,qword ptr GS:[0x58]
+7ff6277d31d9 MOV EDX,0x768
+7ff6277d31de MOV R14,qword ptr [RAX + RCX*0x8]
+7ff6277d31e2 ADD R14,RDX
+7ff6277d31e5 MOV EBX,dword ptr [R14]
+7ff6277d31e8 MOV dword ptr [RSP + 0x68],EBX
+7ff6277d31ec MOV dword ptr [R14],0x1d
+7ff6277d31f3 MOV dword ptr [RSP + 0x60],0x0
+7ff6277d31fb XOR EDX,EDX
+7ff6277d31fd MOV RCX,RSI
+7ff6277d3200 CALL 0x7ff6277aa250
+7ff6277d3205 TEST RAX,RAX
+7ff6277d3208 JZ 0x7ff6277d3230
+7ff6277d320a NOP word ptr [RAX + RAX*0x1]
+7ff6277d3210 MOV R8,qword ptr [RAX]
+7ff6277d3213 LEA RDX,[RSP + 0x60]
+7ff6277d3218 MOV RCX,RAX
+7ff6277d321b CALL qword ptr [R8 + 0x50]
+7ff6277d321f MOV EDX,dword ptr [RSP + 0x60]
+7ff6277d3223 MOV RCX,RSI
+7ff6277d3226 CALL 0x7ff6277aa250
+7ff6277d322b TEST RAX,RAX
+7ff6277d322e JNZ 0x7ff6277d3210
+7ff6277d3230 MOV dword ptr [R14],EBX
+7ff6277d3233 MOV byte ptr [0x7ff629631708],DIL
+7ff6277d323a MOV RBX,qword ptr [RSP + 0x70]
+7ff6277d323f ADD RSP,0x40
+7ff6277d3243 POP R14
+7ff6277d3245 POP RDI
+7ff6277d3246 POP RSI
+7ff6277d3247 RET
+
+FUNCTION 7ff6278214b0
+DECOMPILE completed=true error=
+
+undefined8 * FUN_7ff6278214b0(undefined8 *param_1,ulonglong param_2)
+
+{
+  *param_1 = 0x7ff627dbc1f0;
+  if (*(int *)(param_1 + 0x28) == 2) {
+    *(undefined4 *)(param_1[0x29] + 0x16c) = 0xffffffff;
+  }
+  func_0x7ff6277fb410();
+  if ((param_2 & 1) != 0) {
+    func_0x7ff62783a1ac(param_1,0x5c0);
+  }
+  return param_1;
+}
+
+
+7ff6278214b0 MOV qword ptr [RSP + 0x8],RBX
+7ff6278214b5 PUSH RDI
+7ff6278214b6 SUB RSP,0x20
+7ff6278214ba CMP dword ptr [RCX + 0x140],0x2
+7ff6278214c1 LEA RAX,[0x7ff627dbc1f0]
+7ff6278214c8 MOV qword ptr [RCX],RAX
+7ff6278214cb MOV EDI,EDX
+7ff6278214cd MOV RBX,RCX
+7ff6278214d0 JNZ 0x7ff6278214e3
+7ff6278214d2 MOV RAX,qword ptr [RCX + 0x148]
+7ff6278214d9 MOV dword ptr [RAX + 0x16c],0xffffffff
+7ff6278214e3 CALL 0x7ff6277fb410
+7ff6278214e8 TEST DIL,0x1
+7ff6278214ec JZ 0x7ff6278214fb
+7ff6278214ee MOV EDX,0x5c0
+7ff6278214f3 MOV RCX,RBX
+7ff6278214f6 CALL 0x7ff62783a1ac
+7ff6278214fb MOV RAX,RBX
+7ff6278214fe MOV RBX,qword ptr [RSP + 0x30]
+7ff627821503 ADD RSP,0x20
+7ff627821507 POP RDI
+7ff627821508 RET
+
+FUNCTION 7ff5e6d80e40
+DECOMPILE completed=true error=
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+void FUN_7ff5e6d80e40(void)
+
+{
+  (*_DAT_7ff5e6d80e88)();
+  return;
+}
+
+
+7ff5e6d80e40 PUSH R14
+7ff5e6d80e42 SUB RSP,0x30
+7ff5e6d80e46 JMP qword ptr [0x7ff5e6d80e88]
+
+FUNCTION 7ff5e6d80f60
+DECOMPILE completed=true error=
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+void FUN_7ff5e6d80f60(void)
+
+{
+  (*_DAT_7ff5e6d80fa8)();
+  return;
+}
+
+
+7ff5e6d80f60 MOV qword ptr [RSP + 0x20],RBX
+7ff5e6d80f65 JMP qword ptr [0x7ff5e6d80fa8]
+
+FUNCTION 7ff5e6d80fc0
+DECOMPILE completed=true error=
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+void FUN_7ff5e6d80fc0(void)
+
+{
+  (*_DAT_7ff5e6d81008)();
+  return;
+}
+
+
+7ff5e6d80fc0 PUSH RDI
+7ff5e6d80fc2 SUB RSP,0x30
+7ff5e6d80fc6 JMP qword ptr [0x7ff5e6d81008]

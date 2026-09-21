@@ -1,0 +1,8 @@
+.echo === PER DESCRIPTOR RELEASE ===
+uf SkyrimVR+134b640
+.echo === DESCRIPTOR DESTRUCTION ===
+uf SkyrimVR+134cc70
+.echo === RUNTIME PARABOLIC TYPE ===
+da SkyrimVR+1f80ec0+10 L60
+.echo === COMPLETE ===
+q

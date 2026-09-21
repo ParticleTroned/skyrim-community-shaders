@@ -1,0 +1,14 @@
+.sympath [REDACTED_LOCAL_PATH]
+.reload /f CommunityShaders.dll
+.time
+~~[2014]s
+kv 24
+.frame /r 2
+~~[8b34]s
+kv 24
+.frame /r c
+dq 1b676143f50+530 L6
+dw 1ba3e904710 L10
+dq 7b5533f9a0 L3
+!runaway 1
+qd

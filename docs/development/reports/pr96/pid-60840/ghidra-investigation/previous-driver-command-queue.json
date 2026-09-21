@@ -1,0 +1,24 @@
+{
+    "pid": 5236,
+    "context": "0x18214dc0f50",
+    "workerThreadId": 50696,
+    "completionSemaphore": "0x17a4",
+    "batch": {
+        "start": "0x18882c943f0",
+        "end": "0x18882c955c8",
+        "flags": 2,
+        "bytes": 4568,
+        "sha256": "63da7ac7c5eed717fc752ae55321c9d9c2e7864f89e7f5db48a6132869147e96",
+        "parsedCommands": 1,
+        "stop": "0x18882c943f0",
+        "packets": [
+            {
+                "address": "0x18882c943f0",
+                "opcode": 0,
+                "dwords": 0,
+                "prefix": "00000000820100008c00040000720000"
+            }
+        ]
+    },
+    "codeMatchesCurrent": true
+}

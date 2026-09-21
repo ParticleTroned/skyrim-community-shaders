@@ -1,0 +1,42 @@
+{
+    "purpose": "offline Ghidra analysis view only; entry bytes restored exclusively from matching captured Detours trampolines",
+    "sourceFile": "[REDACTED_LOCAL_PATH]",
+    "sourceSha256": "4859ce0f79962f3574e830c48d23d75f3798234e87e0aeea5ec825b5db9322e4",
+    "output": "[REDACTED_LOCAL_PATH]",
+    "sha256": "41e03325170bc9839f321cfd66b976aaae1eae5209d2de7a2484c68d1c4b1046",
+    "patches": [
+        {
+            "nativeEntry": "0x7ff750e51330",
+            "capturedTrampoline": "0x7ff7103b0f00",
+            "continuation": "0x7ff750e51338",
+            "bytes": 8,
+            "instrumentedBytes": "e923fc55bfcccccc",
+            "restoredCapturedBytes": "405355574883ec40"
+        },
+        {
+            "nativeEntry": "0x7ff750e2b410",
+            "capturedTrampoline": "0x7ff7103b0e40",
+            "continuation": "0x7ff750e2b416",
+            "bytes": 6,
+            "instrumentedBytes": "e9835a58bfcc",
+            "restoredCapturedBytes": "41564883ec30"
+        },
+        {
+            "nativeEntry": "0x7ff750e2b640",
+            "capturedTrampoline": "0x7ff7103b0f60",
+            "continuation": "0x7ff750e2b645",
+            "bytes": 5,
+            "instrumentedBytes": "e9735958bf",
+            "restoredCapturedBytes": "48895c2420"
+        },
+        {
+            "nativeEntry": "0x7ff750e2cc70",
+            "capturedTrampoline": "0x7ff7103b0fc0",
+            "continuation": "0x7ff750e2cc76",
+            "bytes": 6,
+            "instrumentedBytes": "e9a34358bfcc",
+            "restoredCapturedBytes": "40574883ec30"
+        }
+    ],
+    "targetProcessModified": false
+}

@@ -1,5 +1,10 @@
 # VR light ownership during COC
 
+The [portable PR96 evidence bundle](reports/pr96/README.md) includes the
+detailed historical analyses, redacted supporting records, complete decoded
+journals, and review evidence. It excludes process dumps and local machine
+identifiers and can be read and verified on another computer.
+
 ## Observed failure
 
 The 2026-09-12 diagnostic run in SkyrimVR PID 5236 completed its first

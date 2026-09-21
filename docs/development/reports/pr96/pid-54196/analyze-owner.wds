@@ -1,0 +1,17 @@
+.ecxr
+.echo === ACCUMULATOR RUNTIME DATA ===
+dps 0000026ee72809c0+150 L12
+.echo === ROOT BATCH ===
+dps poi(0000026ee72809c0+158) L24
+.echo === GROUP AND BAD BATCH ===
+dps 0000026e605cf040 L6
+dps 0000026e605cf070 L22
+.echo === CLEANUP WRITES BEFORE THE FAULT ===
+u SkyrimVR+1347fe0 SkyrimVR+13480d0
+.echo === WRAPPER ARGUMENTS ===
+.frame /r 5
+dv /t /v
+.echo === RTTI FOR THE INVALID NODE VALUE ===
+dd poi(SkyrimVR+15e23c8-8) L6
+.echo === COMPLETE ===
+q

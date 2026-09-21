@@ -1,0 +1,15 @@
+{
+    "source": "[REDACTED_LOCAL_PATH]",
+    "snapshot": "[REDACTED_LOCAL_PATH]",
+    "pid": 22880,
+    "classification": "live snapshot after operator-confirmed freeze",
+    "activeAtSnapshot": true,
+    "flushConfirmed": false,
+    "headerStableDuringCopy": true,
+    "writersAtSnapshot": 0,
+    "eventsAttempted": 274638,
+    "firstExceptionSequence": 0,
+    "bytes": 268439552,
+    "sha256": "baea66053d0212823d4e619154fa359ecc3e40869b9e061e5d7a26ed246edd73",
+    "capturedUtc": "2026-09-12T11:56:13.994254+00:00"
+}

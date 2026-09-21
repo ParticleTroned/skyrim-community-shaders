@@ -1,0 +1,69 @@
+{
+    "schema": "csx-shadow-light-fix-candidate-v1",
+    "createdUtc": "2026-09-12T08:40:01.782669+00:00",
+    "buildId": "2e98f8f9cf442af4126744504be68631f02621fdaf67516487d9b99f82f9fedd",
+    "source": {
+        "commit": "feb1bee1f5a30a2c5fc0df114b5f9130cfe2cbe6",
+        "dirty": true,
+        "dirtyDigest": "99ebafacab9f544b3ca6621e68f0e5b6fc06c40fad9d53e8dbeab777bb9c2cd7"
+    },
+    "files": [
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 28758016,
+            "sha256": "8114da4c95f53600425f7df71d579b162e8fce4844c74c69a500393976f0bb10"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 129544192,
+            "sha256": "9418b4db23d70d4553147b47070368dd3f98181ef844623835fc4c8c4b492bbb"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 4295,
+            "sha256": "105d3673679180b883700188b6c2fc4e14eb900591eb4b0580b8c973b96b6657"
+        }
+    ],
+    "sourceFiles": [
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 103039,
+            "sha256": "0d7bcf490e97639cd0b4ecbb3f943f1378b29e29961b3f0096935cf56ee16c1c"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 135662,
+            "sha256": "6dade3688fe8110fbfc419e8422ac2fbe152a8245457a3ecbeab65ab9f62816c"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 20501,
+            "sha256": "5f74e1b23918c66c3d8526e6d2af48b80f90e2f61f47b0facbb82bfb4975fd49"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 1282,
+            "sha256": "6b06a2e8275d55574cb48cc94e1ee04d277fc9bd997e029e80f5fa6e23c89a12"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 2528,
+            "sha256": "29e949405d7bdeb0580e475ffeacd0abfe8326344eb2829fb2ee5adb8a9b2943"
+        },
+        {
+            "path": "[REDACTED_LOCAL_PATH]",
+            "sizeBytes": 5375,
+            "sha256": "ac89ca5e24c350702e61f1258fd1b149b57efc652a0d837d102218984b4029d8"
+        }
+    ],
+    "validation": {
+        "universalReleaseBuild": "passed",
+        "focusedTestsPassed": 4,
+        "cppFormatting": "passed",
+        "markdownFormatting": "passed",
+        "cmakeWholeFileFormatting": "skipped to preserve existing unrelated formatting",
+        "liveRuntime": "not run: default verified-save fixture is not configured",
+        "deployed": false
+    },
+    "scope": "VR LLF frame light ownership; presentation hang causality remains unproven"
+}

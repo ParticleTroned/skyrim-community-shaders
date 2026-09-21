@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 struct WaterAppearance
 {
 	struct Profile
@@ -7,6 +9,9 @@ struct WaterAppearance
 		static constexpr float kIdentityScale = 1.0f;
 		static constexpr float kIdentityFresnelMin = 0.0f;
 		static constexpr float kIdentityFresnelMax = 1.0f;
+		static constexpr int kDefaultParallaxQuality = 16;
+		static constexpr int kMinParallaxQuality = 4;
+		static constexpr int kMaxParallaxQuality = 64;
 
 		float WaterBrightness = kIdentityScale;
 		float GlobalReflectionAmount = kIdentityScale;
@@ -16,6 +21,12 @@ struct WaterAppearance
 		float FresnelMin = kIdentityFresnelMin;
 		float FresnelMax = kIdentityFresnelMax;
 		float Muddiness = kIdentityScale;
+		float CausticsStrength = kIdentityScale;
+		float CausticsTiling = kIdentityScale;
+		float CausticsSpeed = kIdentityScale;
+		float CausticsDispersion = kIdentityScale;
+		float ParallaxStrength = kIdentityScale;
+		int ParallaxQuality = kDefaultParallaxQuality;
 	};
 
 	struct alignas(16) Settings
@@ -31,10 +42,18 @@ struct WaterAppearance
 		float FresnelMax = Profile::kIdentityFresnelMax;
 
 		float Muddiness = Profile::kIdentityScale;
-		float3 pad{};
+		float CausticsStrength = Profile::kIdentityScale;
+		float CausticsTiling = Profile::kIdentityScale;
+		float CausticsSpeed = Profile::kIdentityScale;
+		float CausticsDispersion = Profile::kIdentityScale;
+		float ParallaxStrength = Profile::kIdentityScale;
+		uint ParallaxQuality = Profile::kDefaultParallaxQuality;
+		float pad{};
 	};
 	static_assert(alignof(Settings) == 16);
-	static_assert(sizeof(Settings) == 48);
+	static_assert(sizeof(Settings) == 64);
+	static_assert(offsetof(Settings, CausticsStrength) == 36);
+	static_assert(offsetof(Settings, ParallaxQuality) == 56);
 
 	static void DrawProfileControls(Profile& a_profile);
 	static void DrawAdvancedProfileSettings(Profile& a_profile);
@@ -52,4 +71,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	WaveAmplitude,
 	FresnelMin,
 	FresnelMax,
-	Muddiness)
+	Muddiness,
+	CausticsStrength,
+	CausticsTiling,
+	CausticsSpeed,
+	CausticsDispersion,
+	ParallaxStrength,
+	ParallaxQuality)

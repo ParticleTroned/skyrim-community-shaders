@@ -17,6 +17,9 @@ namespace
 	constexpr float kWaterSunSpecularMax = 5.0f;
 	constexpr float kWaterFresnelMin = 0.0f;
 	constexpr float kWaterFresnelMax = 1.0f;
+	constexpr float kCausticsTilingMin = 0.25f;
+	constexpr float kCausticsTilingMax = 4.0f;
+	constexpr float kCausticsSpeedMax = 3.0f;
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
@@ -55,7 +58,13 @@ namespace
 		       a_profile.WaveAmplitude == WaterAppearance::Profile::kIdentityScale &&
 		       a_profile.FresnelMin == WaterAppearance::Profile::kIdentityFresnelMin &&
 		       a_profile.FresnelMax == WaterAppearance::Profile::kIdentityFresnelMax &&
-		       a_profile.Muddiness == WaterAppearance::Profile::kIdentityScale;
+		       a_profile.Muddiness == WaterAppearance::Profile::kIdentityScale &&
+		       a_profile.CausticsStrength == WaterAppearance::Profile::kIdentityScale &&
+		       a_profile.CausticsTiling == WaterAppearance::Profile::kIdentityScale &&
+		       a_profile.CausticsSpeed == WaterAppearance::Profile::kIdentityScale &&
+		       a_profile.CausticsDispersion == WaterAppearance::Profile::kIdentityScale &&
+		       a_profile.ParallaxStrength == WaterAppearance::Profile::kIdentityScale &&
+		       a_profile.ParallaxQuality == WaterAppearance::Profile::kDefaultParallaxQuality;
 	}
 }
 
@@ -125,6 +134,22 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 		kWaterAmountMax,
 		T(TKEY("muddiness_tooltip"), "Scales the tinted water composition over the refracted scene without changing shallow-fallback detection."));
 
+	ImGui::SeparatorText("Caustics");
+	DrawWaterSlider("Caustics Strength", a_profile.CausticsStrength, kWaterAmountMin, kWaterAmountMax,
+		"Scales underwater light-pattern contrast. One preserves the current appearance; zero disables caustics.");
+	DrawWaterSlider("Caustics Tiling", a_profile.CausticsTiling, kCausticsTilingMin, kCausticsTilingMax,
+		"Higher values make the caustics pattern smaller and repeat more often.");
+	DrawWaterSlider("Caustics Speed", a_profile.CausticsSpeed, kWaterAmountMin, kCausticsSpeedMax,
+		"Scales caustics animation speed. Zero freezes the pattern.");
+	DrawWaterSlider("Caustics Color Dispersion", a_profile.CausticsDispersion, kWaterAmountMin, kWaterAmountMax,
+		"Scales the color separation in caustics. Zero removes color separation.");
+
+	ImGui::SeparatorText("Parallax");
+	DrawWaterSlider("Parallax Strength", a_profile.ParallaxStrength, kWaterAmountMin, kWaterAmountMax,
+		"Scales the apparent depth of water waves, including flowmaps. Zero disables water parallax.");
+	ImGui::SliderInt("Parallax Quality", &a_profile.ParallaxQuality, Profile::kMinParallaxQuality, Profile::kMaxParallaxQuality, "%d", ImGuiSliderFlags_AlwaysClamp);
+	DrawTooltip("16 preserves the current quality. Higher values increase sampling cost.");
+
 	SanitizeProfile(a_profile);
 }
 
@@ -142,7 +167,13 @@ WaterAppearance::Settings WaterAppearance::GetCommonBufferData(const Profile& a_
 		profile.WaveAmplitude,
 		profile.FresnelMin,
 		profile.FresnelMax,
-		profile.Muddiness
+		profile.Muddiness,
+		profile.CausticsStrength,
+		profile.CausticsTiling,
+		profile.CausticsSpeed,
+		profile.CausticsDispersion,
+		profile.ParallaxStrength,
+		static_cast<uint>(profile.ParallaxQuality)
 	};
 }
 
@@ -166,7 +197,13 @@ WaterAppearance::Profile WaterAppearance::LerpProfiles(const Profile& a_a, const
 		lerp(from.WaveAmplitude, to.WaveAmplitude),
 		lerp(from.FresnelMin, to.FresnelMin),
 		lerp(from.FresnelMax, to.FresnelMax),
-		lerp(from.Muddiness, to.Muddiness)
+		lerp(from.Muddiness, to.Muddiness),
+		lerp(from.CausticsStrength, to.CausticsStrength),
+		lerp(from.CausticsTiling, to.CausticsTiling),
+		lerp(from.CausticsSpeed, to.CausticsSpeed),
+		lerp(from.CausticsDispersion, to.CausticsDispersion),
+		lerp(from.ParallaxStrength, to.ParallaxStrength),
+		static_cast<int>(std::lround(lerp(static_cast<float>(from.ParallaxQuality), static_cast<float>(to.ParallaxQuality))))
 	};
 	SanitizeProfile(result);
 	return result;
@@ -216,6 +253,12 @@ void WaterAppearance::SanitizeProfile(Profile& a_profile)
 		kWaterAmountMin,
 		kWaterAmountMax,
 		defaults.Muddiness);
+	a_profile.CausticsStrength = ClampFiniteOrDefault(a_profile.CausticsStrength, kWaterAmountMin, kWaterAmountMax, defaults.CausticsStrength);
+	a_profile.CausticsTiling = ClampFiniteOrDefault(a_profile.CausticsTiling, kCausticsTilingMin, kCausticsTilingMax, defaults.CausticsTiling);
+	a_profile.CausticsSpeed = ClampFiniteOrDefault(a_profile.CausticsSpeed, kWaterAmountMin, kCausticsSpeedMax, defaults.CausticsSpeed);
+	a_profile.CausticsDispersion = ClampFiniteOrDefault(a_profile.CausticsDispersion, kWaterAmountMin, kWaterAmountMax, defaults.CausticsDispersion);
+	a_profile.ParallaxStrength = ClampFiniteOrDefault(a_profile.ParallaxStrength, kWaterAmountMin, kWaterAmountMax, defaults.ParallaxStrength);
+	a_profile.ParallaxQuality = std::clamp(a_profile.ParallaxQuality, Profile::kMinParallaxQuality, Profile::kMaxParallaxQuality);
 }
 
 #undef I18N_KEY_PREFIX

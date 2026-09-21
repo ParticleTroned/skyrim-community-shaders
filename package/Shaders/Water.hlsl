@@ -653,10 +653,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	float2 flowmapParallaxOffset = float2(0, 0);
 #				if defined(WATER_PARALLAX) && !defined(LOD)
 	float parallaxAmount = WaterEffects::GetFlowmapParallaxAmount(input, flowmapDimensions, viewDirection);
-	float2 parallaxDir = viewDirection.xy / -viewDirection.z;
-	parallaxDir.y = -parallaxDir.y;
-	float viewDotUp = -viewDirection.z;
-	parallaxDir *= 0.008 * saturate(viewDotUp * 2.0);
+	float2 parallaxDir = WaterEffects::GetFlowmapParallaxDirection(viewDirection);
 	flowmapInput.TexCoord3.xy = input.TexCoord3.xy + parallaxAmount * parallaxDir;
 	flowmapParallaxOffset = WaterEffects::GetFlowmapParallaxOffset(input, flowmapDimensions, viewDirection, normalScalesRcp);
 #				endif
@@ -1924,8 +1921,8 @@ PS_OUTPUT main(PS_INPUT input)
 		(1.0 - nativeSurfaceWeight) * saturate(shallowSurfaceLayerWeight);
 	combinedSurfaceWeight = nativeSurfaceWeight + fallbackSurfaceWeight;
 	float fallbackSurfaceShare = combinedSurfaceWeight > 1e-5 ?
-		fallbackSurfaceWeight / combinedSurfaceWeight :
-		0.0;
+	                                 fallbackSurfaceWeight / combinedSurfaceWeight :
+	                                 0.0;
 	surfaceFresnel = lerp(
 		fresnel,
 		GetUnifiedWaterShallowSurfaceFresnel(fresnel),

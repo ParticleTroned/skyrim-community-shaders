@@ -134,7 +134,8 @@ namespace
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
-	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 32);
+	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 48);
+	static_assert(offsetof(AdaptiveBalanceSettingsCB, skySaturation) == 32);
 	static_assert(sizeof(LinearLightingSettingsCB) == 128);
 	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBrightnessColorAdjustments) == 108);
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
@@ -162,7 +163,7 @@ namespace
 	static_assert(offsetof(UnifiedWaterSettingsCB, DeepContextTransitionUnits) == 44);
 	static_assert(offsetof(UnifiedWaterSettingsCB, ShallowSurfaceReflectionFloor) == 48);
 	static_assert(offsetof(UnifiedWaterSettingsCB, _pad) == 52);
-	static_assert(sizeof(WaterAppearanceSettingsCB) == 48);
+	static_assert(sizeof(WaterAppearanceSettingsCB) == 64);
 	static_assert(offsetof(WaterAppearanceSettingsCB, Enabled) == 0);
 	static_assert(offsetof(WaterAppearanceSettingsCB, WaterBrightness) == 4);
 	static_assert(offsetof(WaterAppearanceSettingsCB, GlobalReflectionAmount) == 8);
@@ -172,6 +173,8 @@ namespace
 	static_assert(offsetof(WaterAppearanceSettingsCB, FresnelMin) == 24);
 	static_assert(offsetof(WaterAppearanceSettingsCB, FresnelMax) == 28);
 	static_assert(offsetof(WaterAppearanceSettingsCB, Muddiness) == 32);
+	static_assert(offsetof(WaterAppearanceSettingsCB, CausticsStrength) == 36);
+	static_assert(offsetof(WaterAppearanceSettingsCB, ParallaxQuality) == 56);
 	static_assert(sizeof(BloomSettingsCB) == 48);
 	static_assert(offsetof(BloomSettingsCB, Enabled) == 0);
 	static_assert(offsetof(BloomSettingsCB, BloomTint) == 20);

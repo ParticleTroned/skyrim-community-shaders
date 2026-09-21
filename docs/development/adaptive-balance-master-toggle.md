@@ -1,5 +1,8 @@
 # Adaptive Balance master toggle
 
+See [sky and water controls](adaptive-balance-visual-controls.md) for
+their profile composition and rendering behavior.
+
 The `Enable` checkbox sits in the shared feature header, before the
 settings body, in both Essentials and Advanced views. It uses the same
 header path as Foliage Lighting. It controls every adjustment owned by

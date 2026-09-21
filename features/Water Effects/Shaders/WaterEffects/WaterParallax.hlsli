@@ -7,6 +7,18 @@ namespace WaterEffects
 	// http://www.diva-portal.org/smash/get/diva2:831762/FULLTEXT01.pdf
 	// https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
 
+	static const int fullParallaxSteps = 16;
+
+	/** Returns the configured sample count for water parallax. */
+	int GetFullWaterParallaxSteps()
+	{
+		return SharedData::waterAppearanceSettings.Enabled ? (int)clamp(SharedData::waterAppearanceSettings.ParallaxQuality, 4u, 64u) : fullParallaxSteps;
+	}
+
+	float GetWaterParallaxStrength()
+	{
+		return SharedData::waterAppearanceSettings.Enabled ? SharedData::waterAppearanceSettings.ParallaxStrength : 1.0;
+	}
 	float GetMipLevel(float2 coords, Texture2D<float4> tex, float screenNoise)
 	{
 		// Compute the current gradients:
@@ -54,11 +66,14 @@ namespace WaterEffects
 
 	float2 GetParallaxOffset(PS_INPUT input, float3 normalScalesRcp)
 	{
+		if (GetWaterParallaxStrength() == 0.0)
+			return 0.0.xx;
+
 		float3 viewDirection = normalize(input.WPosition.xyz);
 		float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
 
 		// Parallax scale is also multiplied by normalScalesRcp
-		parallaxOffsetTS *= 20.0;
+		parallaxOffsetTS *= 20.0 * GetWaterParallaxStrength();
 
 		float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
 
@@ -67,7 +82,8 @@ namespace WaterEffects
 		mipLevels.y = GetMipLevel(input.TexCoord1.zw, Normals02Tex, screenNoise);
 		mipLevels.z = GetMipLevel(input.TexCoord2.xy, Normals03Tex, screenNoise);
 
-		float stepSize = rcp(16.0);
+		int parallaxSteps = GetFullWaterParallaxSteps();
+		float stepSize = rcp((float)parallaxSteps);
 		float currBound = 0.0;
 		float currHeight = 1.0;
 		float prevHeight = 1.0;
@@ -111,22 +127,35 @@ namespace WaterEffects
 		return blendedHeight;
 	}
 
-	float GetFlowmapParallaxAmount(PS_INPUT input, float2 flowmapDims, float3 viewDirection)
+	/** Keeps grazing and disabled flowmap parallax finite for both marching and UV displacement. */
+	float2 GetFlowmapParallaxDirection(float3 viewDirection)
 	{
 		float viewDotUp = -viewDirection.z;
+		float strength = GetWaterParallaxStrength();
+		if (!all(isfinite(viewDirection)) || viewDotUp < 0.05 || strength == 0.0)
+			return 0.0.xx;
 
-		if (viewDotUp < 0.05)
+		float2 parallaxDir = viewDirection.xy / viewDotUp;
+		parallaxDir.y = -parallaxDir.y;
+		return parallaxDir * (0.008 * saturate(viewDotUp * 2.0) * strength);
+	}
+
+	float GetFlowmapParallaxAmount(PS_INPUT input, float2 flowmapDims, float3 viewDirection)
+	{
+		if (GetWaterParallaxStrength() == 0.0)
 			return 0.0;
 
-		float2 parallaxDir = viewDirection.xy / -viewDirection.z;
-		parallaxDir.y = -parallaxDir.y;
+		float viewDotUp = -viewDirection.z;
 
-		float parallaxScale = 0.008 * saturate(viewDotUp * 2.0);
-		parallaxDir *= parallaxScale;
+		if (!all(isfinite(viewDirection)) || viewDotUp < 0.05)
+			return 0.0;
+
+		float2 parallaxDir = GetFlowmapParallaxDirection(viewDirection);
 
 		float2 uvShiftPx = 1 / (128 * flowmapDims);
 
-		int numSteps = (int)lerp(32.0, 8.0, viewDotUp);
+		float quality = (float)GetFullWaterParallaxSteps();
+		int numSteps = (int)lerp(quality * 2.0, quality * 0.5, viewDotUp);
 		float stepSize = rcp((float)numSteps);
 
 		float currBound = 0.0;
@@ -163,13 +192,17 @@ namespace WaterEffects
 
 	float2 GetFlowmapParallaxUVOffset(PS_INPUT input, float3 viewDirection, float3 normalScalesRcp)
 	{
+		if (GetWaterParallaxStrength() == 0.0)
+			return 0.0.xx;
+
 		float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
-		parallaxOffsetTS *= 80.0;
+		parallaxOffsetTS *= 80.0 * GetWaterParallaxStrength();
 
 		float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
 		float mipLevel = GetMipLevel(input.TexCoord1.xy, Normals01Tex, screenNoise);
 
-		float stepSize = rcp(16.0);
+		int parallaxSteps = GetFullWaterParallaxSteps();
+		float stepSize = rcp((float)parallaxSteps);
 		float currBound = 0.0;
 		float currHeight = 1.0;
 		float prevHeight = 1.0;

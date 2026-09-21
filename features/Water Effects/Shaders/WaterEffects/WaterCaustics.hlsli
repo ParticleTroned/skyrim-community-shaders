@@ -4,7 +4,7 @@ namespace WaterEffects
 {
 	float2 PanCausticsUV(float2 uv, float speed, float tiling)
 	{
-		return frac((float2(1, 0) * SharedData::Timer * speed) + (uv * tiling));
+		return frac((float2(1, 0) * SharedData::Timer * speed * (SharedData::waterAppearanceSettings.Enabled ? SharedData::waterAppearanceSettings.CausticsSpeed : 1.0)) + (uv * tiling));
 	}
 
 	float SampleCaustics(float2 uv)
@@ -29,20 +29,21 @@ namespace WaterEffects
 		float causticsDistToWater = waterData.w - worldPosition.z;
 		float shoreFactorCaustics = saturate(causticsDistToWater / 64.0);
 
-		if (shoreFactorCaustics > 0.0) {
+		float strength = SharedData::waterAppearanceSettings.Enabled ? SharedData::waterAppearanceSettings.CausticsStrength : 1.0;
+		if (shoreFactorCaustics > 0.0 && strength > 0.0) {
 			float causticsFade = 1.0 - saturate(causticsDistToWater / 1024.0);
 			causticsFade *= causticsFade;
 
-			float2 causticsUV = (worldPosition.xy + FrameBuffer::CameraPosAdjust.xy) * 0.005;
-			float2 dispersionOffset = float2(0.6, 0.8) * (0.025 * shoreFactorCaustics * saturate(causticsDistToWater / 256.0));
+			float tiling = SharedData::waterAppearanceSettings.Enabled ? SharedData::waterAppearanceSettings.CausticsTiling : 1.0;
+			float dispersion = SharedData::waterAppearanceSettings.Enabled ? SharedData::waterAppearanceSettings.CausticsDispersion : 1.0;
+			float2 causticsUV = (worldPosition.xy + FrameBuffer::CameraPosAdjust.xy) * (0.005 * tiling);
+			float2 dispersionOffset = float2(0.6, 0.8) * (0.025 * shoreFactorCaustics * saturate(causticsDistToWater / 256.0) * dispersion);
 
 			float2 causticsUV1 = PanCausticsUV(causticsUV, 0.5 * 0.2, 1.0);
 			float2 causticsUV2 = PanCausticsUV(causticsUV, 1.0 * 0.2, -0.5);
 
 			const float3 causticsHigh =
-				(causticsFade > 0.0)
-					? (min(SampleCausticsDispersion(causticsUV1, dispersionOffset), SampleCausticsDispersion(causticsUV2, dispersionOffset)) * 4.0)
-					: 1.0.xxx;
+				(causticsFade > 0.0) ? (min(SampleCausticsDispersion(causticsUV1, dispersionOffset), SampleCausticsDispersion(causticsUV2, dispersionOffset)) * 4.0) : 1.0.xxx;
 
 			causticsUV *= 0.5;
 			dispersionOffset *= 0.5;
@@ -51,12 +52,10 @@ namespace WaterEffects
 			causticsUV2 = PanCausticsUV(causticsUV, 1.0 * 0.1, -0.5);
 
 			const float3 causticsLow =
-				(causticsFade < 1.0)
-					? (min(SampleCausticsDispersion(causticsUV1, dispersionOffset), SampleCausticsDispersion(causticsUV2, dispersionOffset)) * 4.0)
-					: 1.0.xxx;
+				(causticsFade < 1.0) ? (min(SampleCausticsDispersion(causticsUV1, dispersionOffset), SampleCausticsDispersion(causticsUV2, dispersionOffset)) * 4.0) : 1.0.xxx;
 
 			const float3 caustics = lerp(causticsLow, causticsHigh, causticsFade);
-			result = lerp(1.0.xxx, caustics, shoreFactorCaustics);
+			result = max(0.0, lerp(1.0.xxx, caustics, shoreFactorCaustics * strength));
 		}
 
 		return result;

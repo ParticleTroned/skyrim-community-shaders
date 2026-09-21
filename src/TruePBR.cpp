@@ -1509,7 +1509,7 @@ struct BSTempEffectSimpleDecal_SetupGeometry
 		auto unknownProperty = geometry->GetGeometryRuntimeData().shaderProperty.get();
 		if (auto shaderProperty = unknownProperty->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(unknownProperty) : nullptr;
 			shaderProperty != nullptr && singleton->IsPBRTextureSet(textureSet)) {
-			BSLightingShaderMaterialPBR probeMaterial;
+			BSLightingShaderMaterialPBR probeMaterial{};
 			if (!ProbePBRTextureSet(textureSet, probeMaterial)) {
 				WarnInvalidPBRDecalTextureSetOnce(textureSet);
 				return;
@@ -1547,7 +1547,7 @@ struct BSTempEffectGeometryDecal_Initialize
 
 		if (decal->decal != nullptr && singleton->IsPBRTextureSet(decal->texSet)) {
 			// Probe before allocating so a mislinked set never allocates a decal property.
-			BSLightingShaderMaterialPBR probeMaterial;
+			BSLightingShaderMaterialPBR probeMaterial{};
 			if (!ProbePBRTextureSet(decal->texSet, probeMaterial)) {
 				WarnInvalidPBRDecalTextureSetOnce(decal->texSet);
 				return;

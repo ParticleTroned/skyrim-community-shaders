@@ -111,4 +111,18 @@ TEST_CASE("Production shader permutations compile with feature includes", "[shad
 				{ "CLOUD_SHADOWS" },
 			});
 	}
+
+	SECTION("Water pixel shader with flowmap parallax")
+	{
+		CompilePermutation(
+			L"Water.hlsl",
+			"ps_5_0",
+			{
+				{ "PSHADER" },
+				{ "SPECULAR" },
+				{ "FLOWMAP" },
+				{ "WATER_EFFECTS" },
+				{ "NUM_SPECULAR_LIGHTS", "0" },
+			});
+	}
 }

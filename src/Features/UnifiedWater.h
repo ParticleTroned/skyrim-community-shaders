@@ -131,6 +131,8 @@ struct UnifiedWater : OverlayFeature
 	virtual bool IsOverlayVisible() const override;
 
 	virtual void DataLoaded() override;
+	/// Native water remains active until all replacement resources are published.
+	bool RequiresVanillaWaterShaders() const;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -156,6 +158,7 @@ private:
 
 	std::atomic_bool exteriorWorldspaceActive{ false };
 	std::atomic_bool mapMenuOpen{ false };
+	std::atomic_bool waterDataReady{ false };
 
 	void SetFlowmapTex() const;
 	// Readiness covers safely constructed hook resources. WaterCache publishes

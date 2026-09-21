@@ -118,12 +118,40 @@ set_tests_properties(
     PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;UnifiedWater"
 )
 
+add_executable(
+    virtual_function_hook_test
+    ${CMAKE_SOURCE_DIR}/tests/virtual_function_hook_test.cpp
+)
+target_compile_features(virtual_function_hook_test PRIVATE cxx_std_23)
+target_include_directories(
+    virtual_function_hook_test
+    PRIVATE ${CMAKE_SOURCE_DIR}/src ${DETOURS_INCLUDE_DIRS}
+)
+target_compile_definitions(
+    virtual_function_hook_test
+    PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(virtual_function_hook_test PRIVATE ${DETOURS_LIBRARY})
+if(MSVC)
+    target_compile_options(virtual_function_hook_test PRIVATE /W4 /WX /permissive-)
+endif()
+add_test(NAME VirtualFunctionHook COMMAND virtual_function_hook_test)
+set_tests_properties(
+    VirtualFunctionHook
+    PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;Hooks"
+)
+
 add_custom_target(
     run_host_tests
     COMMAND $<TARGET_FILE:performance_tuning_tests> --reporter compact
     COMMAND $<TARGET_FILE:scene_depth_test>
     COMMAND $<TARGET_FILE:unified_water_flowmap_test>
-    DEPENDS performance_tuning_tests scene_depth_test unified_water_flowmap_test
+    COMMAND $<TARGET_FILE:virtual_function_hook_test>
+    DEPENDS
+        performance_tuning_tests
+        scene_depth_test
+        unified_water_flowmap_test
+        virtual_function_hook_test
     WORKING_DIRECTORY $<TARGET_FILE_DIR:performance_tuning_tests>
     COMMENT "Running host-side C++ unit tests..."
     VERBATIM

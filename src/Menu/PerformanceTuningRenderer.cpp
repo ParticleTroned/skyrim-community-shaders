@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -17,7 +18,9 @@
 
 #include <imgui.h>
 
+#include "CSEditor/EditorWindow.h"
 #include "Feature.h"
+#include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -28,10 +31,12 @@
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
+#include "Utils/VanityCamera.h"
 
 #define I18N_KEY_PREFIX "menu.performance_tuning."
 
@@ -45,29 +50,16 @@ namespace
 	constexpr double kTuningHighlightSeconds = 4.0;
 	constexpr double kFeatureCostMeasurementSeconds =
 		PerformanceTuning::kMeasurementDurationMs / 1000.0;
-	constexpr double kFeatureCostTransitionTimeoutSeconds = 8.25;
+	constexpr double kFeatureCostTransitionTimeoutSeconds = 15.0;
 	constexpr double kFeatureCostSampleProgressTimeoutSeconds = 3.0;
 	constexpr double kFeatureCostProfilerDrainTimeoutSeconds = 1.25;
-	constexpr double kFeatureCostOverallTimeoutSeconds = 45.0;
-	constexpr double kFeatureCostMeasurementMaximumSeconds = 3.0;
+	constexpr double kFeatureCostOverallTimeoutSeconds = PerformanceTuning::kMaximumRunSeconds;
+	constexpr double kFeatureCostMeasurementMaximumSeconds = kFeatureCostMeasurementSeconds + 1.0;
 	constexpr uint64_t kFeatureCostPipelineDrainPresentCount = Profiler::kFrameLatency + 2;
-	constexpr double kFeatureCostBaselineSliceMs = 500.0;
-	constexpr double kFeatureCostBaselineLowFpsSliceMs = 1000.0;
-	constexpr double kFeatureCostBaselineTimeoutSeconds = 2.25;
-	constexpr uint32_t kFeatureCostBaselineMinimumFrames = 12;
-	constexpr uint32_t kFeatureCostBaselineLowFpsMinimumFrames = 8;
-	constexpr uint32_t kFeatureCostBaselineMaximumSlices = 4;
 	constexpr double kFeatureCostCameraPositionThreshold = 32.0;
 	constexpr double kFeatureCostCameraBasisThreshold = 0.05;
 	constexpr double kFeatureCostCameraProjectionThreshold = 0.01;
 	constexpr double kFeatureCostWeatherTransitionThreshold = 0.10;
-	static_assert(
-		3.0 * (kFeatureCostTransitionTimeoutSeconds +
-				   kFeatureCostBaselineTimeoutSeconds +
-				   kFeatureCostMeasurementMaximumSeconds +
-				   kFeatureCostProfilerDrainTimeoutSeconds) <
-		kFeatureCostOverallTimeoutSeconds,
-		"The bounded ON/OFF/ON protocol must finish within 45 seconds");
 	static_assert(
 		PerformanceTuning::kMaximumPresentIntervalMs ==
 			Profiler::kMaxPresentIntervalMs,
@@ -84,44 +76,6 @@ namespace
 		std::array<float, 4> cameraProjection{};
 		uint32_t outputWidth = 0;
 		uint32_t outputHeight = 0;
-	};
-
-	struct BaselineSlice
-	{
-		double elapsedMs = 0.0;
-		double presentSumMs = 0.0;
-		double gpuSumMs = 0.0;
-		double cpuSumMs = 0.0;
-		uint32_t presentCount = 0;
-		uint32_t gpuCount = 0;
-		uint32_t cpuCount = 0;
-		uint64_t startPresentSampleId = 0;
-		uint64_t lastPresentSampleId = 0;
-		uint64_t lastWholeFrameSampleId = 0;
-
-		double PresentMean() const
-		{
-			return presentCount > 0 ? presentSumMs / presentCount : 0.0;
-		}
-
-		double GpuMean() const
-		{
-			return gpuCount > 0 ? gpuSumMs / gpuCount : 0.0;
-		}
-
-		double CpuMean() const
-		{
-			return cpuCount > 0 ? cpuSumMs / cpuCount : 0.0;
-		}
-	};
-
-	struct BaselineGate
-	{
-		BaselineSlice previous;
-		BaselineSlice current;
-		double startTime = 0.0;
-		uint32_t completedSlices = 0;
-		bool hasPrevious = false;
 	};
 
 	struct FeatureHighlightDirection
@@ -149,17 +103,17 @@ namespace
 	enum class FeatureCostMeasurementLeg
 	{
 		CurrentBefore,
-		Comparison,
-		CurrentAfter
+		Comparison
 	};
 
 	enum class FeatureCostMeasurementStage
 	{
 		Idle,
+		AwaitingMenuClose,
 		Settling,
-		Baseline,
 		Measuring,
 		Draining,
+		Restoring,
 		Complete,
 		Failed
 	};
@@ -208,17 +162,16 @@ namespace
 		PerformanceTuning::TransitionGateState transitionGate;
 		FeatureCostTransitionWait transitionWait =
 			FeatureCostTransitionWait::FeatureReady;
-		BaselineGate baselineGate;
-		bool noisyBaseline = false;
-		uint8_t instrumentationRetryCount = 0;
 		PerformanceTuning::SampleWindow currentBefore;
 		PerformanceTuning::SampleWindow comparison;
-		PerformanceTuning::SampleWindow currentAfter;
 		PerformanceTuning::CostResult result;
 		std::string failureReason;
 	};
 
 	static std::unordered_map<std::string, FeatureCostMeasurementState> g_costMeasurementStates;
+	static bool g_closedMenuMeasurement = false;
+	static double g_restartAllowedTime = 0.0;
+	static Util::VanityCameraSuppressionLease g_vanityCameraSuppression;
 	static bool g_profilerStateCaptured = false;
 	static bool g_profilerWasUserEnabled = false;
 	static bool g_profilerCaptureLimitOwned = false;
@@ -308,8 +261,8 @@ namespace
 			}
 		}
 		for (size_t index = 0;
-			 index < baseline.cameraProjection.size();
-			 ++index) {
+			index < baseline.cameraProjection.size();
+			++index) {
 			if (std::abs(
 					static_cast<double>(current.cameraProjection[index]) -
 					static_cast<double>(baseline.cameraProjection[index])) >
@@ -324,12 +277,16 @@ namespace
 	{
 		if (!globals::state || !globals::state->inWorld)
 			return false;
+		// A second configuration owner or disabled CS would invalidate both captures.
+		if (!globals::shaderCache || !globals::shaderCache->IsEnabled() ||
+			ABTestingManager::GetSingleton()->IsEnabled())
+			return false;
 		auto* ui = globals::game::ui;
 		if (ui && (ui->GameIsPaused() ||
-				ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
-				ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
-				ui->IsMenuOpen(RE::MapMenu::MENU_NAME) ||
-				ui->IsMenuOpen(RE::Console::MENU_NAME))) {
+					  ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
+					  ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
+					  ui->IsMenuOpen(RE::MapMenu::MENU_NAME) ||
+					  ui->IsMenuOpen(RE::Console::MENU_NAME))) {
 			return false;
 		}
 
@@ -367,10 +324,11 @@ namespace
 
 	bool IsFeatureCostMeasurementRunning(const FeatureCostMeasurementState& state)
 	{
-		return state.stage == FeatureCostMeasurementStage::Settling ||
-		       state.stage == FeatureCostMeasurementStage::Baseline ||
+		return state.stage == FeatureCostMeasurementStage::AwaitingMenuClose ||
+		       state.stage == FeatureCostMeasurementStage::Settling ||
 		       state.stage == FeatureCostMeasurementStage::Measuring ||
-		       state.stage == FeatureCostMeasurementStage::Draining;
+		       state.stage == FeatureCostMeasurementStage::Draining ||
+		       state.stage == FeatureCostMeasurementStage::Restoring;
 	}
 
 	bool IsAnyFeatureCostMeasurementRunning()
@@ -430,9 +388,8 @@ namespace
 			return state.currentBefore;
 		case FeatureCostMeasurementLeg::Comparison:
 			return state.comparison;
-		case FeatureCostMeasurementLeg::CurrentAfter:
 		default:
-			return state.currentAfter;
+			return state.currentBefore;
 		}
 	}
 
@@ -444,9 +401,8 @@ namespace
 			return state.currentBefore;
 		case FeatureCostMeasurementLeg::Comparison:
 			return state.comparison;
-		case FeatureCostMeasurementLeg::CurrentAfter:
 		default:
-			return state.currentAfter;
+			return state.currentBefore;
 		}
 	}
 
@@ -454,12 +410,11 @@ namespace
 	{
 		switch (state.leg) {
 		case FeatureCostMeasurementLeg::CurrentBefore:
-			return T(TKEY("status.current_before"), "current (1/2)");
+			return T(TKEY("status.current_before"), "current");
 		case FeatureCostMeasurementLeg::Comparison:
 			return T(TKEY("status.comparison"), "comparison");
-		case FeatureCostMeasurementLeg::CurrentAfter:
 		default:
-			return T(TKEY("status.current_after"), "restored current (2/2)");
+			return T(TKEY("status.current_before"), "current");
 		}
 	}
 
@@ -1215,41 +1170,6 @@ namespace
 		       !state.restorePending;
 	}
 
-	bool ApplyFeatureCostCurrentMeasurementState(
-		Feature* feature,
-		FeatureCostMeasurementState& state)
-	{
-		if (!feature)
-			return false;
-
-		state.featureStateRestorePending = true;
-		state.restorePending = true;
-		try {
-			feature->RestorePerformanceCostMeasurementState(
-				state.measurementCurrentState);
-			if (!PerformanceTuning::AreJsonValuesEquivalent(
-					feature->CapturePerformanceCostMeasurementState(),
-					state.measurementCurrentState)) {
-				throw std::runtime_error(
-					"measurement current state did not match its snapshot");
-			}
-			state.featureStateRestorePending = false;
-			state.restorePending =
-				state.frameGenerationOverrideApplied;
-			return true;
-		} catch (const std::exception& e) {
-			logger::warn(
-				"Failed to apply the sanitized current state for {}: {}",
-				feature->GetDisplayName(),
-				e.what());
-		} catch (...) {
-			logger::warn(
-				"Failed to apply the sanitized current state for {}",
-				feature->GetDisplayName());
-		}
-		return false;
-	}
-
 	bool IsFeatureCostExpectedEnabledState(
 		Feature* feature,
 		const FeatureCostMeasurementState& state)
@@ -1300,6 +1220,8 @@ namespace
 	{
 		const bool restored = TryRestoreFeatureCostOriginalState(feature, state);
 		state.stage = FeatureCostMeasurementStage::Failed;
+		g_restartAllowedTime = ImGui::GetTime() + PerformanceTuning::kRestartCooldownSeconds;
+		g_vanityCameraSuppression.Release();
 		state.failureReason = std::move(reason);
 		if (!restored) {
 			if (!state.failureReason.empty())
@@ -1349,157 +1271,6 @@ namespace
 		state.lastObservedPresentSampleId = summary.presentIntervalSampleId;
 		state.transitionGate = {};
 		state.transitionWait = FeatureCostTransitionWait::FeatureReady;
-	}
-
-	void BeginFeatureCostBaseline(
-		FeatureCostMeasurementState& state,
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		double currentTime)
-	{
-		state.stage = FeatureCostMeasurementStage::Baseline;
-		state.stageStartTime = currentTime;
-		state.lastProgressTime = currentTime;
-		state.baselineGate = {};
-		state.baselineGate.startTime = currentTime;
-		state.baselineGate.current.lastPresentSampleId =
-			summary.presentIntervalSampleId;
-		state.baselineGate.current.startPresentSampleId =
-			summary.presentIntervalSampleId;
-		state.baselineGate.current.lastWholeFrameSampleId =
-			summary.wholeFrameSampleId;
-	}
-
-	bool IsBaselineSliceComplete(const BaselineSlice& slice)
-	{
-		return (slice.elapsedMs >= kFeatureCostBaselineSliceMs &&
-				slice.presentCount >= kFeatureCostBaselineMinimumFrames) ||
-		       (slice.elapsedMs >= kFeatureCostBaselineLowFpsSliceMs &&
-				slice.presentCount >=
-					kFeatureCostBaselineLowFpsMinimumFrames);
-	}
-
-	bool AreBaselineMeansClose(
-		double first,
-		double second,
-		double absoluteToleranceMs,
-		double relativeTolerance)
-	{
-		if (!std::isfinite(first) || !std::isfinite(second) ||
-			first <= 0.0 || second <= 0.0) {
-			return false;
-		}
-		const double reference = (first + second) * 0.5;
-		const double tolerance = std::max(
-			absoluteToleranceMs,
-			reference * relativeTolerance);
-		return std::abs(first - second) <= tolerance;
-	}
-
-	bool AreBaselineSlicesStable(
-		const BaselineSlice& first,
-		const BaselineSlice& second)
-	{
-		if (!AreBaselineMeansClose(
-				first.PresentMean(),
-				second.PresentMean(),
-				0.5,
-				0.05)) {
-			return false;
-		}
-
-		const bool compareGpu = first.gpuCount >= 8 && second.gpuCount >= 8;
-		if (compareGpu &&
-			!AreBaselineMeansClose(
-				first.GpuMean(),
-				second.GpuMean(),
-				0.3,
-				0.07)) {
-			return false;
-		}
-		const bool compareCpu = first.cpuCount >= 8 && second.cpuCount >= 8;
-		return !compareCpu || AreBaselineMeansClose(
-			first.CpuMean(),
-			second.CpuMean(),
-			0.4,
-			0.10);
-	}
-
-	void AddBaselineTimingSample(
-		BaselineSlice& slice,
-		const ProfilingRenderer::PerformanceTimingSummary& summary)
-	{
-		if (summary.hasPresentIntervalSample &&
-			summary.presentIntervalSampleId > slice.lastPresentSampleId &&
-			std::isfinite(summary.presentIntervalSampleMs) &&
-			summary.presentIntervalSampleMs > 0.0f &&
-			summary.presentIntervalSampleMs <=
-				PerformanceTuning::kMaximumPresentIntervalMs) {
-			slice.lastPresentSampleId = summary.presentIntervalSampleId;
-			slice.elapsedMs += summary.presentIntervalSampleMs;
-			slice.presentSumMs += summary.presentIntervalSampleMs;
-			++slice.presentCount;
-		}
-
-		if (summary.wholeFrameSampleId <= slice.lastWholeFrameSampleId)
-			return;
-		slice.lastWholeFrameSampleId = summary.wholeFrameSampleId;
-		if (summary.wholeFramePresentIntervalSampleId <=
-				slice.startPresentSampleId ||
-			summary.wholeFramePresentIntervalSampleId >
-				slice.lastPresentSampleId) {
-			return;
-		}
-		if (summary.hasWholeFrameGpuSample &&
-			std::isfinite(summary.wholeFrameGpuSampleMs) &&
-			summary.wholeFrameGpuSampleMs > 0.0f) {
-			slice.gpuSumMs += summary.wholeFrameGpuSampleMs;
-			++slice.gpuCount;
-		}
-		if (summary.hasWholeFrameCpuSample &&
-			std::isfinite(summary.wholeFrameCpuSampleMs) &&
-			summary.wholeFrameCpuSampleMs > 0.0f) {
-			slice.cpuSumMs += summary.wholeFrameCpuSampleMs;
-			++slice.cpuCount;
-		}
-	}
-
-	enum class BaselineUpdateResult
-	{
-		Waiting,
-		Stable,
-		NoisyTimeout
-	};
-
-	BaselineUpdateResult UpdateFeatureCostBaseline(
-		FeatureCostMeasurementState& state,
-		const ProfilingRenderer::PerformanceTimingSummary& summary,
-		double currentTime)
-	{
-		auto& gate = state.baselineGate;
-		AddBaselineTimingSample(gate.current, summary);
-		if (IsBaselineSliceComplete(gate.current)) {
-			++gate.completedSlices;
-			if (gate.hasPrevious &&
-				AreBaselineSlicesStable(gate.previous, gate.current)) {
-				return BaselineUpdateResult::Stable;
-			}
-			gate.previous = gate.current;
-			gate.hasPrevious = true;
-			gate.current = {};
-			gate.current.startPresentSampleId =
-				summary.presentIntervalSampleId;
-			gate.current.lastPresentSampleId =
-				summary.presentIntervalSampleId;
-			gate.current.lastWholeFrameSampleId =
-				summary.wholeFrameSampleId;
-		}
-
-		if (gate.completedSlices >= kFeatureCostBaselineMaximumSlices ||
-			currentTime - gate.startTime >=
-				kFeatureCostBaselineTimeoutSeconds) {
-			return BaselineUpdateResult::NoisyTimeout;
-		}
-		return BaselineUpdateResult::Waiting;
 	}
 
 	void UpdateFeatureCostTransitionWait(
@@ -1597,7 +1368,11 @@ namespace
 			!feature->IsPerformanceCostMeasurementEnabled() ||
 			!feature->IsPerformanceTuningApplicable() ||
 			IsFeatureControlledBySceneSettings(feature) ||
-			!IsFeatureCostEnvironmentEligible()) {
+			!IsFeatureCostEnvironmentEligible() ||
+			!globals::menu || !globals::menu->IsEnabled ||
+			EditorWindow::GetSingleton()->open ||
+			IsAnyFeatureCostMeasurementLocked() ||
+			currentTime < g_restartAllowedTime) {
 			return;
 		}
 
@@ -1666,6 +1441,11 @@ namespace
 			return;
 		}
 
+		if (!g_vanityCameraSuppression.Acquire()) {
+			FailFeatureCostMeasurement(feature, state,
+				T(TKEY("error.idle_camera"), "Could not suppress the automatic idle camera."));
+			return;
+		}
 		state.runScene = CaptureSceneFingerprint();
 		state.overallStartTime = currentTime;
 		state.timingDiscontinuityEpoch =
@@ -1675,6 +1455,9 @@ namespace
 			FeatureCostMeasurementLeg::CurrentBefore,
 			summary,
 			currentTime);
+		state.stage = FeatureCostMeasurementStage::AwaitingMenuClose;
+		g_closedMenuMeasurement = true;
+		globals::menu->IsEnabled = false;
 	}
 
 	PerformanceTuning::AddSampleResult AddWholeFrameTimingSample(
@@ -1744,28 +1527,6 @@ namespace
 			return true;
 		}
 
-		if (state.leg == FeatureCostMeasurementLeg::Comparison) {
-			if (!ApplyFeatureCostCurrentMeasurementState(feature, state)) {
-				FailFeatureCostMeasurement(
-					feature,
-					state,
-					T(
-						TKEY("error.restore_failed"),
-						"Stopped because the original feature state could not be restored."));
-				return false;
-			}
-			BeginFeatureCostSettling(
-				state,
-				FeatureCostMeasurementLeg::CurrentAfter,
-				summary,
-				currentTime);
-			return true;
-		}
-
-		state.result = PerformanceTuning::CalculateCostResult(
-			state.currentBefore,
-			state.comparison,
-			state.currentAfter);
 		if (!TryRestoreFeatureCostOriginalState(feature, state)) {
 			FailFeatureCostMeasurement(
 				feature,
@@ -1775,6 +1536,14 @@ namespace
 					"Stopped because the original feature state could not be restored."));
 			return false;
 		}
+		state.stage = FeatureCostMeasurementStage::Restoring;
+		state.stageStartTime = currentTime;
+		return true;
+	}
+
+	void FinishFeatureCostMeasurement(Feature* feature, FeatureCostMeasurementState& state, double currentTime)
+	{
+		state.result = PerformanceTuning::CalculateCostResult(state.currentBefore, state.comparison);
 		try {
 			state.resultSettingsState = CapturePerformanceUiState(feature);
 			if (!PerformanceTuning::AreJsonValuesEquivalent(
@@ -1786,7 +1555,7 @@ namespace
 					T(
 						TKEY("error.settings_changed"),
 						"Stopped because performance settings changed during measurement."));
-				return false;
+				return;
 			}
 		} catch (...) {
 			FailFeatureCostMeasurement(
@@ -1795,16 +1564,13 @@ namespace
 				T(
 					TKEY("error.result_snapshot"),
 					"Stopped because the result settings snapshot could not be captured."));
-			return false;
+			return;
 		}
 		state.resultScene = CaptureSceneFingerprint();
-		state.noisyBaseline |=
-			std::abs(
-				state.resultScene.weatherTransition -
-				state.runScene.weatherTransition) > 0.05f;
 		state.hasResultScene = true;
 		state.stage = FeatureCostMeasurementStage::Complete;
-		return true;
+		g_restartAllowedTime = currentTime + PerformanceTuning::kRestartCooldownSeconds;
+		g_vanityCameraSuppression.Release();
 	}
 
 	void UpdateFeatureCostMeasurement(
@@ -1830,9 +1596,22 @@ namespace
 				state,
 				T(
 					TKEY("error.environment_changed"),
-					"Stopped because the game was paused, loading, or lost focus."));
+					"Stopped because the game was paused, loading, lost focus, CS was disabled, or A/B testing was enabled."));
 			return;
 		}
+		if (state.stage == FeatureCostMeasurementStage::Restoring) {
+			if (HasMaterialSceneChange(state.runScene, CaptureSceneFingerprint())) {
+				FailFeatureCostMeasurement(feature, state,
+					T(TKEY("error.scene_changed"), "Stopped because the scene changed."));
+				return;
+			}
+			if (currentTime - state.stageStartTime >= PerformanceTuning::kRestoreWaitSeconds &&
+				feature->IsPerformanceCostMeasurementReady())
+				FinishFeatureCostMeasurement(feature, state, currentTime);
+			return;
+		}
+		if (state.stage == FeatureCostMeasurementStage::AwaitingMenuClose)
+			return;
 		if (summary.presentDiscontinuityEpoch !=
 			state.timingDiscontinuityEpoch) {
 			FailFeatureCostMeasurement(
@@ -1980,8 +1759,11 @@ namespace
 						"Stopped because the frame timing source was reset."));
 				return;
 			}
-			if (transitionResult !=
-				PerformanceTuning::TransitionGateResult::Ready) {
+			const double minimumWait = state.leg == FeatureCostMeasurementLeg::CurrentBefore ?
+			                               PerformanceTuning::kInitialWaitSeconds :
+			                               std::max(PerformanceTuning::kComparisonWaitSeconds, settleSeconds);
+			if (transitionResult != PerformanceTuning::TransitionGateResult::Ready ||
+				currentTime - state.stageStartTime < minimumWait) {
 				if (currentTime - state.stageStartTime >
 					kFeatureCostTransitionTimeoutSeconds) {
 					FailFeatureCostMeasurement(
@@ -1991,30 +1773,6 @@ namespace
 				}
 				return;
 			}
-
-			BeginFeatureCostBaseline(state, summary, currentTime);
-			return;
-		}
-
-		if (state.stage == FeatureCostMeasurementStage::Baseline) {
-			if (!feature->IsPerformanceCostMeasurementReady() ||
-				!globals::features::upscaling
-					.IsFrameGenerationQuiescentForPerformanceMeasurement()) {
-				FailFeatureCostMeasurement(
-					feature,
-					state,
-					T(
-						TKEY("error.feature_unready_baseline"),
-						"Stopped because the feature stopped reporting ready during baseline capture."));
-				return;
-			}
-
-			const auto baselineResult =
-				UpdateFeatureCostBaseline(state, summary, currentTime);
-			if (baselineResult == BaselineUpdateResult::Waiting)
-				return;
-			state.noisyBaseline |=
-				baselineResult == BaselineUpdateResult::NoisyTimeout;
 
 			auto& window = GetFeatureCostSampleWindow(state);
 			PerformanceTuning::BeginSampleWindow(
@@ -2064,7 +1822,7 @@ namespace
 					state,
 					T(
 						TKEY("error.insufficient_frames"),
-						"Stopped because too few valid game frames were produced within three seconds."));
+						"Stopped because too few valid game frames were produced within six seconds."));
 				return;
 			}
 
@@ -2076,7 +1834,7 @@ namespace
 						state,
 						T(
 							TKEY("error.insufficient_frames"),
-							"Stopped because too few valid game frames were produced within three seconds."));
+							"Stopped because too few valid game frames were produced within six seconds."));
 				}
 				return;
 			}
@@ -2122,13 +1880,13 @@ namespace
 				state.stage = FeatureCostMeasurementStage::Draining;
 				state.stageStartTime = currentTime;
 			} else if (currentTime - state.stageStartTime >=
-				kFeatureCostMeasurementMaximumSeconds) {
+					   kFeatureCostMeasurementMaximumSeconds) {
 				FailFeatureCostMeasurement(
 					feature,
 					state,
 					T(
 						TKEY("error.insufficient_frames"),
-						"Stopped because too few valid game frames were produced within three seconds."));
+						"Stopped because too few valid game frames were produced within six seconds."));
 			}
 			return;
 		}
@@ -2170,15 +1928,6 @@ namespace
 			skippedCaptureCount == 0 &&
 			HasRequiredWholeFrameCoverage(window);
 		if (!instrumentationComplete) {
-			if (state.instrumentationRetryCount == 0) {
-				++state.instrumentationRetryCount;
-				BeginFeatureCostSettling(
-					state,
-					state.leg,
-					summary,
-					currentTime);
-				return;
-			}
 			state.instrumentationLimited = true;
 			if (!profilerDrained || skippedCaptureCount > 0) {
 				// Never accept an apparently high percentage when the missing data
@@ -2455,15 +2204,13 @@ namespace
 				metric.repeatability.agreeingBlockCount,
 				PerformanceTuning::kMeasurementBlockCount);
 		}
-		if (metric.currentBeforeMeanMs && metric.comparisonMeanMs &&
-			metric.currentAfterMeanMs) {
+		if (metric.currentBeforeMeanMs && metric.comparisonMeanMs) {
 			ImGui::TextDisabled(
 				T(
 					TKEY("result.window_means_ms"),
-					"Captured means: %.3f ms current 1 | %.3f ms comparison | %.3f ms current 2"),
+					"Captured means: %.3f ms current | %.3f ms comparison"),
 				*metric.currentBeforeMeanMs,
-				*metric.comparisonMeanMs,
-				*metric.currentAfterMeanMs);
+				*metric.comparisonMeanMs);
 		}
 		if (metric.currentDriftMs && metric.practicalFloorMs) {
 			ImGui::TextDisabled(
@@ -2530,13 +2277,6 @@ namespace
 					"%s",
 					feature->GetPerformanceCostMeasurementWaitText());
 			}
-		} else if (state.stage == FeatureCostMeasurementStage::Baseline) {
-			ImGui::TextDisabled(
-				T(
-					TKEY("status.baseline"),
-					"Checking adjacent averages for %s (bounded to %.0f s)"),
-				GetFeatureCostLegStatusLabel(state),
-				kFeatureCostBaselineTimeoutSeconds);
 		} else if (state.stage == FeatureCostMeasurementStage::Measuring) {
 			const auto& sample = GetFeatureCostSampleWindow(state);
 			ImGui::TextDisabled(
@@ -2621,25 +2361,35 @@ namespace
 			applicable &&
 			!sceneControlled &&
 			environmentEligible &&
-			!anyMeasurementLocked;
+			!anyMeasurementLocked &&
+			ImGui::GetTime() >= g_restartAllowedTime;
 
 		ImGui::BeginDisabled(!canStart);
 		const bool startClicked = ImGui::Button(
 			T(TKEY("cost.start"), "Measure actual feature cost"));
 		ImGui::EndDisabled();
+		if (!environmentEligible) {
+			ImGui::TextWrapped("%s", T(TKEY("cost.environment_required"),
+										 "Keep the game active and unpaused, enable Community Shaders, and disable A/B testing before measuring."));
+		}
+		if (ImGui::GetTime() < g_restartAllowedTime) {
+			ImGui::SameLine();
+			ImGui::TextDisabled(T(TKEY("status.cooldown"), "Ready again in %.0f seconds"),
+				std::ceil(g_restartAllowedTime - ImGui::GetTime()));
+		}
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			const auto config = feature->GetPerformanceTuningConfig();
 			ImGui::TextWrapped(
 				T(
 					TKEY("cost.tooltip"),
-					"Measures two current-state windows around a comparison window. Each capture targets %.0f seconds in four time blocks; delayed GPU/CPU samples are matched back to the same produced frames. The complete run has a 45-second hard deadline."),
+					"Closes the menu, waits 10 seconds, captures the current state for %.0f seconds, waits 10 seconds after switching to the comparison, captures for the same duration, then restores for at least 1 second. The complete run has a 45-second hard deadline."),
 				kFeatureCostMeasurementSeconds);
 			ImGui::TextWrapped(
 				"%s",
 				T(
 					TKEY("cost.tooltip_stability"),
-					"Before each capture, two adjacent half-second averages are compared. Ordinary scene noise never waits indefinitely: at the 2.25-second timeout capture proceeds and the result is marked noisy."));
+					"Each capture contains five one-second blocks. Readiness and fresh-frame checks can extend a wait; delayed GPU/CPU timings remain matched to the captured frames."));
 			ImGui::TextWrapped(
 				T(TKEY("cost.comparison"), "Comparison: %s - %s"),
 				config.comparisonLabel.data(),
@@ -2685,14 +2435,14 @@ namespace
 		ImGui::TextDisabled(
 			T(
 				TKEY("result.heading"),
-				"Difference: time-interpolated current state - %s"),
+				"Difference: current state - %s"),
 			config.comparisonLabel.data());
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped(
 				"%s",
 				T(
 					TKEY("result.tooltip"),
-					"The two current-state captures are interpolated to the comparison capture's actual time, which removes linear scene drift even when state waits differ. The primary value is the full-window arithmetic mean. The observed four-block range and direction agreement show repeatability; this is not a laboratory confidence interval. Negative frame time means the current state is faster. FPS is a secondary produced-frame cadence metric."));
+					"The primary value is the difference between the two full-window arithmetic means. Five matched time blocks show repeatability, not a confidence interval. There is no third capture or drift correction: keep the scene still. Negative frame time means the current state is faster. FPS is secondary."));
 		}
 		const bool cadenceLimited =
 			state.result.presentSynced || state.result.framePaced;
@@ -2741,42 +2491,29 @@ namespace
 					*state.result.fps.repeatability.maximum);
 			}
 			if (state.result.fps.currentBefore &&
-				state.result.fps.comparison &&
-				state.result.fps.currentAfter) {
+				state.result.fps.comparison) {
 				ImGui::TextDisabled(
 					T(
 						TKEY("result.window_means_fps"),
-						"Captured throughput: %.1f FPS current 1 | %.1f FPS comparison | %.1f FPS current 2"),
+						"Captured throughput: %.1f FPS current | %.1f FPS comparison"),
 					*state.result.fps.currentBefore,
-					*state.result.fps.comparison,
-					*state.result.fps.currentAfter);
+					*state.result.fps.comparison);
 			}
 		}
 
 		ImGui::Spacing();
 		RenderCostWindowDiagnostics(
-			T(TKEY("status.current_before"), "current (1/2)"),
+			T(TKEY("status.current_before"), "current"),
 			state.result.currentBeforeDiagnostics);
 		RenderCostWindowDiagnostics(
 			T(TKEY("status.comparison"), "comparison"),
 			state.result.comparisonDiagnostics);
-		RenderCostWindowDiagnostics(
-			T(TKEY("status.current_after"), "restored current (2/2)"),
-			state.result.currentAfterDiagnostics);
-
-		if (state.noisyBaseline) {
-			ImGui::Spacing();
-			Util::Text::WrappedWarning(
-				T(
-					TKEY("result.baseline_noise_warning"),
-					"Adjacent pre-capture averages remained noisy, so capture began at the bounded timeout. Classification still comes from the measured full-window effect, practical floor, drift, and four-block agreement."));
-		}
 		if (HasUnreliableFeatureCostValue(state.result)) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
 				T(
 					TKEY("result.repeatability_warning"),
-					"The effect was below the practical floor, drift dominated it, or block directions were mixed. The averages remain valid for the captured scene, but no reliable direction is claimed."));
+					"The effect was below the practical floor or block directions were mixed. The averages remain valid for the captured scene, but no reliable direction is claimed."));
 		}
 		if (state.frameGenerationTemporarilyDisabled) {
 			ImGui::Spacing();
@@ -2790,7 +2527,7 @@ namespace
 			Util::Text::WrappedWarning(
 				T(
 					TKEY("result.instrumentation_limited"),
-					"Some GPU or CPU profiler samples could not be matched after the single bounded retry. Total frame time remains available; affected metrics are unavailable or marked as having insufficient block coverage."));
+					"Some GPU or CPU profiler samples could not be matched. Total frame time remains available; affected metrics are unavailable or marked as having insufficient block coverage."));
 		}
 
 		if (state.result.presentSynced) {
@@ -2942,7 +2679,7 @@ namespace
 			current.hasPresentInterval) {
 			state.frameDirection = GetDirectionFromFrameTimeDelta(
 				current.presentIntervalMs -
-				state.baseline.presentIntervalMs,
+					state.baseline.presentIntervalMs,
 				state.baseline.presentIntervalMs);
 			state.fpsDirection = state.frameDirection;
 		}
@@ -2960,13 +2697,13 @@ namespace
 			if (baselineTotals.hasGpu && currentTotals.hasGpu) {
 				direction.gpu = GetDirectionFromFrameTimeDelta(
 					currentTotals.gpuAvgMs -
-					baselineTotals.gpuAvgMs,
+						baselineTotals.gpuAvgMs,
 					baselineTotals.gpuAvgMs);
 			}
 			if (baselineTotals.hasCpu && currentTotals.hasCpu) {
 				direction.cpu = GetDirectionFromFrameTimeDelta(
 					currentTotals.cpuAvgMs -
-					baselineTotals.cpuAvgMs,
+						baselineTotals.cpuAvgMs,
 					baselineTotals.cpuAvgMs);
 			}
 			if (direction.gpu != 0 || direction.cpu != 0)
@@ -3107,6 +2844,107 @@ namespace
 	}
 }
 
+void PerformanceTuningRenderer::NotifyMenuClosed()
+{
+	if (!g_closedMenuMeasurement) {
+		CancelActiveMeasurements();
+		return;
+	}
+	const double currentTime = ImGui::GetTime();
+	for (auto& [_, state] : g_costMeasurementStates) {
+		if (state.stage != FeatureCostMeasurementStage::AwaitingMenuClose)
+			continue;
+		state.overallStartTime = currentTime;
+		BeginFeatureCostSettling(state, FeatureCostMeasurementLeg::CurrentBefore, g_lastTimingSummary, currentTime);
+	}
+}
+
+void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
+{
+	if (!g_closedMenuMeasurement)
+		return;
+
+	if (!globals::menu || globals::menu->IsEnabled)
+		CancelActiveMeasurements(CancelMode::RunningOnly);
+
+	SyncProfilerCaptureModeLimit();
+	if (IsAnyFeatureCostMeasurementRunning()) {
+		const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(
+			{}, Profiler::CaptureMode::WholeFrameOnly);
+		const double currentTime = ImGui::GetTime();
+		for (auto& [shortName, state] : g_costMeasurementStates) {
+			if (!IsFeatureCostMeasurementRunning(state))
+				continue;
+			auto* feature = FindFeatureByShortName(shortName);
+			if (!feature || !feature->loaded) {
+				FailFeatureCostMeasurement(feature, state,
+					T(TKEY("error.feature_unavailable"), "Stopped because the measured feature became unavailable."));
+				continue;
+			}
+			UpdateFeatureCostMeasurement(feature, state, timing, currentTime);
+		}
+	}
+	SyncProfilerCaptureModeLimit();
+	if (!IsAnyFeatureCostMeasurementRunning()) {
+		g_closedMenuMeasurement = false;
+		g_vanityCameraSuppression.Release();
+		if (globals::menu) {
+			globals::menu->IsEnabled = true;
+			ImGui::GetIO().ClearInputKeys();
+		}
+	}
+}
+
+void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
+{
+	if (!g_closedMenuMeasurement)
+		return;
+	for (const auto& [shortName, state] : g_costMeasurementStates) {
+		if (!IsFeatureCostMeasurementRunning(state))
+			continue;
+		auto* feature = FindFeatureByShortName(shortName);
+		const bool comparison = state.leg == FeatureCostMeasurementLeg::Comparison;
+		const double comparisonWait = std::max(PerformanceTuning::kComparisonWaitSeconds,
+			feature ? feature->GetPerformanceCostMeasurementSettleSeconds(false) : 0.0);
+		auto phase = comparison ? PerformanceTuning::RunPhase::WaitingComparison : PerformanceTuning::RunPhase::WaitingCurrent;
+		if (state.stage == FeatureCostMeasurementStage::Measuring || state.stage == FeatureCostMeasurementStage::Draining)
+			phase = comparison ? PerformanceTuning::RunPhase::MeasuringComparison : PerformanceTuning::RunPhase::MeasuringCurrent;
+		else if (state.stage == FeatureCostMeasurementStage::Restoring)
+			phase = PerformanceTuning::RunPhase::Restoring;
+		const double remaining = PerformanceTuning::GetRemainingSeconds(phase,
+			std::max(0.0, ImGui::GetTime() - state.stageStartTime),
+			GetFeatureCostSampleWindow(state).sampledDurationMs, comparisonWait);
+		const float progress = static_cast<float>(std::clamp(
+			1.0 - remaining / PerformanceTuning::GetExpectedRunSeconds(comparisonWait), 0.0, 0.99));
+
+		const auto* viewport = ImGui::GetMainViewport();
+		if (!viewport)
+			return;
+		const float scale = Util::GetUIScale();
+		const float horizontalPadding = 24.0f * scale;
+		const float overlayWidth = std::min(360.0f * scale,
+			std::max(220.0f * scale, viewport->WorkSize.x - horizontalPadding * 2.0f));
+		ImGui::SetNextWindowPos(
+			ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + 32.0f * scale),
+			ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+		ImGui::SetNextWindowSize(ImVec2(overlayWidth, 0.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowBgAlpha(0.92f);
+		constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+		                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs;
+		if (ImGui::Begin("ActualFeatureCostProgress", nullptr, flags)) {
+			ImGui::Text(T(TKEY("progress.measuring"), "Measuring %s"),
+				feature ? feature->GetDisplayName().c_str() : shortName.c_str());
+			ImGui::TextColored(Util::Colors::GetWarning(), "%s",
+				T(TKEY("progress.keep_still"), "Keep still until measurement completes."));
+			const std::string progressText = fmt::format(
+				fmt::runtime(T(TKEY("progress.remaining"), "{:.0f} seconds remaining")), std::ceil(remaining));
+			ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0.0f), progressText.c_str());
+		}
+		ImGui::End();
+		return;
+	}
+}
+
 void PerformanceTuningRenderer::Render()
 {
 	CaptureProfilerStateForPerformanceTuning();
@@ -3136,24 +2974,6 @@ void PerformanceTuningRenderer::Render()
 		captureMode);
 	const double currentTime = ImGui::GetTime();
 
-	for (auto& [shortName, state] : g_costMeasurementStates) {
-		if (!IsFeatureCostMeasurementRunning(state))
-			continue;
-
-		auto* feature = FindFeatureByShortName(shortName);
-		if (!feature || !feature->loaded) {
-			FailFeatureCostMeasurement(
-				feature,
-				state,
-				T(
-					TKEY("error.feature_unavailable"),
-					"Stopped because the measured feature became unavailable."));
-			continue;
-		}
-		UpdateFeatureCostMeasurement(feature, state, timing, currentTime);
-	}
-	SyncProfilerCaptureModeLimit();
-
 	if (!measurementWasRunning &&
 		!IsAnyFeatureCostMeasurementRunning()) {
 		UpdateHighlightState(
@@ -3176,7 +2996,7 @@ void PerformanceTuningRenderer::Render()
 	RenderTopPerformanceCounters(timing, g_highlightState);
 	ImGui::Spacing();
 
-	// Keep UI work constant and minimal for all A-B-A states. In particular,
+	// Keep UI work constant and minimal for both captures. In particular,
 	// do not draw settings, serialize feature JSON, or request detailed pass
 	// scopes while a measurement frame is being consumed.
 	if (measurementWasRunning) {
@@ -3365,7 +3185,7 @@ void PerformanceTuningRenderer::Render()
 			}
 			if (startMeasurement && !settingsRestored) {
 				// The post-edit preview is informational and uses a separate rolling
-				// comparison. A/B/A owns its own transition gates and raw sample
+				// comparison. The cost test owns its own transition gates and raw sample
 				// windows, so discard any stale preview instead of making it a
 				// prerequisite for starting an actual cost measurement.
 				g_highlightState = {};
@@ -3416,6 +3236,7 @@ void PerformanceTuningRenderer::CancelActiveMeasurements(CancelMode mode)
 	}
 
 	if (mode == CancelMode::ClearSession) {
+		g_closedMenuMeasurement = false;
 		std::erase_if(
 			g_costMeasurementStates,
 			[](const auto& entry) {
@@ -3427,13 +3248,14 @@ void PerformanceTuningRenderer::CancelActiveMeasurements(CancelMode mode)
 		g_highlightState = {};
 		g_lastTimingSummary = {};
 	}
+	g_vanityCameraSuppression.Release();
 	SyncProfilerCaptureModeLimit();
 	RestoreProfilerStateAfterPerformanceTuning();
 }
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()
 {
-	return IsAnyFeatureCostMeasurementLocked();
+	return g_closedMenuMeasurement || IsAnyFeatureCostMeasurementLocked();
 }
 
 bool PerformanceTuningRenderer::PrepareForSceneUpdate()

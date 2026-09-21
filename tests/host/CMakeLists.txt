@@ -9,6 +9,7 @@ add_executable(
     main.cpp
     light_limit_fix_shadow_policy_tests.cpp
     performance_tuning_measurement_tests.cpp
+    vanity_camera_tests.cpp
     performance_tuning_json_tests.cpp
     shader_compilation_scheduling_policy_tests.cpp
     ${CMAKE_SOURCE_DIR}/src/Menu/PerformanceTuningJson.cpp

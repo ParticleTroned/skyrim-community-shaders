@@ -883,7 +883,7 @@ void Menu::DrawSettings()
 		pendingFontReload = true;
 	}
 	if (!IsEnabled) {
-		PerformanceTuningRenderer::CancelActiveMeasurements();
+		PerformanceTuningRenderer::NotifyMenuClosed();
 	}
 }
 

@@ -9,8 +9,8 @@
 
 namespace PerformanceTuning
 {
-	inline constexpr std::size_t kMeasurementBlockCount = 4;
-	inline constexpr double kMeasurementBlockDurationMs = 500.0;
+	inline constexpr std::size_t kMeasurementBlockCount = 5;
+	inline constexpr double kMeasurementBlockDurationMs = 1000.0;
 	inline constexpr double kMeasurementDurationMs =
 		kMeasurementBlockCount * kMeasurementBlockDurationMs;
 	inline constexpr uint32_t kMinimumPresentSampleCount = 24;
@@ -21,6 +21,27 @@ namespace PerformanceTuning
 	inline constexpr double kPracticalFloorRelative = 0.01;
 	inline constexpr uint32_t kRequiredAgreeingBlockCount = 3;
 	inline constexpr double kDriftDominanceRatio = 2.0;
+	inline constexpr double kInitialWaitSeconds = 10.0;
+	inline constexpr double kComparisonWaitSeconds = 10.0;
+	inline constexpr double kRestoreWaitSeconds = 1.0;
+	inline constexpr double kRestartCooldownSeconds = 10.0;
+	inline constexpr double kMaximumRunSeconds = 45.0;
+
+	enum class RunPhase
+	{
+		WaitingCurrent,
+		MeasuringCurrent,
+		WaitingComparison,
+		MeasuringComparison,
+		Restoring,
+		Complete
+	};
+
+	/** Nominal duration; feature readiness and delayed samples may extend it. */
+	double GetExpectedRunSeconds(double comparisonWaitSeconds = kComparisonWaitSeconds);
+	/** Phase-aware countdown, held above zero until restoration completes. */
+	double GetRemainingSeconds(RunPhase phase, double phaseElapsedSeconds,
+		double sampledDurationMs, double comparisonWaitSeconds = kComparisonWaitSeconds);
 
 	struct Moments
 	{
@@ -267,5 +288,10 @@ namespace PerformanceTuning
 		const SampleWindow& currentBefore,
 		const SampleWindow& comparison,
 		const SampleWindow& currentAfter,
+		double minimumMetricCoverage = kDefaultMinimumMetricCoverage);
+	/** Compare two captures without inventing a third capture or drift estimate. */
+	CostResult CalculateCostResult(
+		const SampleWindow& current,
+		const SampleWindow& comparison,
 		double minimumMetricCoverage = kDefaultMinimumMetricCoverage);
 }

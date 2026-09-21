@@ -2721,6 +2721,7 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+    include(tests/menu_frame_stability.cmake)
     add_controller_test(
         shader_cache_disable_policy_test
         ShaderCacheDisablePolicy

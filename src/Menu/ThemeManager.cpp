@@ -221,6 +221,12 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	styleCopy.DockingSeparatorSize = scaleSize(themeSettings.Style.DockingSeparatorSize);
 
 	styleCopy.MouseCursorScale = 1.f;
+	if (!REL::Module::IsVR()) {
+		// Desktop font state belongs to ImGui, not saved theme geometry.
+		styleCopy.FontSizeBase = style.FontSizeBase;
+		styleCopy.FontScaleDpi = style.FontScaleDpi;
+		styleCopy._NextFrameFontSizeBase = style._NextFrameFontSizeBase;
+	}
 	style = styleCopy;
 	style.HoverDelayNormal = themeSettings.TooltipHoverDelay;
 	style.FontScaleMain = exp2(globalScale);

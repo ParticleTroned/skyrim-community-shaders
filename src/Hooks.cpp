@@ -913,6 +913,10 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// Flat-screen status probes must not draw or advance frame accounting.
+		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0)
+			return func(This, SyncInterval, Flags);
+
 		auto state = globals::state;
 		const bool armStartupMenuBlurSource =
 			!state->startupMenuBlurSourceReady &&

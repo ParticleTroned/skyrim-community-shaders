@@ -16,8 +16,9 @@ namespace Util
 	// Naming is observed here without linking the game's resource implementation.
 	void SetResourceName(ID3D11DeviceChild* resource, const char* format, ...)
 	{
-		if (!resource || !std::string_view(format).starts_with("Profiler::Detail"))
-			throw std::runtime_error("detail query missing shared resource naming");
+		if (!resource || (!std::string_view(format).starts_with("Profiler::Detail") &&
+							 !std::string_view(format).starts_with("Profiler::WholeFrame")))
+			throw std::runtime_error("profiler query missing shared resource naming");
 		if (std::exchange(failNextQueryName, false))
 			throw std::bad_alloc();
 	}
@@ -267,6 +268,26 @@ namespace
 		Check(profiler.GetBoundedCaptureProgress().state == Profiler::CaptureSessionState::Completed &&
 				  Util::ReadPassTiming(shortCapture).gpuState == PassTimingState::Ready,
 			"fresh one-frame capture cannot drain before ring warmup");
+		profiler.Release();
+
+		profiler.Initialize(device.get(), context.get(), true);
+		const auto flatDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		bool flatResolved = false;
+		for (uint32_t frame = 0; !flatResolved && std::chrono::steady_clock::now() < flatDeadline; ++frame) {
+			profiler.RequestCapture();
+			Work();
+			profiler.BeginFlatPresent(frame, 0);
+			context->Flush();
+			profiler.CompleteFlatPresent(S_OK);
+			for (const auto& sample : profiler.GetFlatTiming()->samples) {
+				if (!sample.hasGpu || !sample.hasCpu)
+					continue;
+				Check(sample.presentId == sample.frame + 1 && sample.cpuMs > 0 && sample.gpuMs > 0,
+					"WARP whole-frame timing lost CPU/GPU source identity");
+				flatResolved = true;
+			}
+		}
+		Check(flatResolved, "whole-frame D3D11 queries did not resolve on WARP");
 		profiler.Release();
 	}
 }

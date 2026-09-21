@@ -11,6 +11,8 @@ using HRESULT = long;
 inline constexpr HRESULT S_OK = 0;
 inline constexpr HRESULT S_FALSE = 1;
 inline constexpr HRESULT E_FAIL = -1;
+inline constexpr HRESULT DXGI_STATUS_OCCLUDED = 0x087A0001;
+inline constexpr UINT DXGI_PRESENT_TEST = 1;
 inline bool FAILED(HRESULT value) { return value < 0; }
 inline constexpr UINT D3D11_ASYNC_GETDATA_DONOTFLUSH = 1;
 enum D3D11_QUERY
@@ -77,11 +79,14 @@ struct ID3D11DeviceContext
 	UINT64 clock = 0;
 	UINT writes = 0;
 	UINT reads = 0;
+	UINT activeDisjointQueries = 0;
 	void Begin(ID3D11Query* query)
 	{
 		if (!query)
 			throw std::runtime_error("Begin received a missing query");
 		++writes;
+		if (query->type == D3D11_QUERY_TIMESTAMP_DISJOINT && ++activeDisjointQueries != 1)
+			throw std::runtime_error("overlapping disjoint queries");
 	}
 	void End(ID3D11Query* query)
 	{
@@ -89,6 +94,8 @@ struct ID3D11DeviceContext
 			throw std::runtime_error("End received a missing query");
 		++writes;
 		query->timestamp = ++clock;
+		if (query->type == D3D11_QUERY_TIMESTAMP_DISJOINT)
+			--activeDisjointQueries;
 	}
 	HRESULT GetData(ID3D11Query* query, void* output, UINT, UINT)
 	{

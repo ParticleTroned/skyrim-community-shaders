@@ -83,6 +83,8 @@ void Profiler::ResetFrameState(FrameQueries& frame)
 	frame.cpuTimers.clear();
 	frame.captureSessionId = 0;
 	frame.capturedCpu = false;
+	frame.flatPresentId = 0;
+	frame.wholeFrameStarted = false;
 }
 
 bool Profiler::HasPendingFrameData(const FrameQueries& frame)
@@ -100,9 +102,13 @@ void Profiler::ResetPendingFrames()
 	}
 }
 
-void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
+void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context, bool a_flatRuntime)
 {
 	Release();
+	if (a_flatRuntime) {
+		flatTiming = std::make_unique<FlatTiming>();
+		flatTiming->history.epoch = ++flatSourceEpoch;
+	}
 
 	context = a_context;
 
@@ -114,6 +120,15 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 		D3D11_QUERY_DESC disjointDesc{};
 		disjointDesc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
 		device->CreateQuery(&disjointDesc, frame.disjoint.put());
+		if (flatTiming) {
+			D3D11_QUERY_DESC desc{ D3D11_QUERY_TIMESTAMP, 0 };
+			device->CreateQuery(&desc, frame.wholeFrameBegin.put());
+			device->CreateQuery(&desc, frame.wholeFrameEnd.put());
+			if (frame.wholeFrameBegin)
+				Util::SetResourceName(frame.wholeFrameBegin.get(), "Profiler::WholeFrame Begin");
+			if (frame.wholeFrameEnd)
+				Util::SetResourceName(frame.wholeFrameEnd.get(), "Profiler::WholeFrame End");
+		}
 
 		frame.timers.resize(kMaxTimers);
 		frame.activeTimerStack.reserve(kMaxTimers);
@@ -155,9 +170,13 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 
 void Profiler::Release()
 {
+	if (flatTiming && frameActive && context)
+		context->End(frames[writeFrame].disjoint.get());
 	for (auto& frame : frames) {
 		CancelFrameCaptures(frame, "device_released");
 		frame.disjoint = nullptr;
+		frame.wholeFrameBegin = nullptr;
+		frame.wholeFrameEnd = nullptr;
 		frame.timers.clear();
 		frame.detailTimers.clear();
 		frame.activeTimerStack.clear();
@@ -198,12 +217,20 @@ void Profiler::Release()
 	gpuAcquisitionBlocked = false;
 	ClearImmediateCpuResults();
 	cpuSlotRefusals = 0;
+	if (flatTiming)
+		flatSourceEpoch = flatTiming->history.epoch + 1;
+	flatTiming.reset();
 }
 
 void Profiler::SetUserEnabled(bool a_enabled)
 {
 	userEnabled.store(a_enabled, std::memory_order_release);
 	if (!a_enabled) {
+		if (flatTiming) {
+			flatTiming->history.Reset();
+			flatTiming->cpuBeginMs = 0.0;
+			frames[writeFrame].wholeFrameStarted = false;
+		}
 		for (auto& frame : frames)
 			CancelFrameCaptures(frame, "profiler_disabled");
 		captureRequested.store(false, std::memory_order_release);
@@ -283,6 +310,11 @@ const std::vector<Profiler::TimerResult>* Profiler::GetBoundedCaptureResults(uin
 
 void Profiler::ClearTimers()
 {
+	if (flatTiming) {
+		flatTiming->history.Reset();
+		flatTiming->cpuBeginMs = 0.0;
+		frames[writeFrame].wholeFrameStarted = false;
+	}
 	ClearImmediateCpuResults();
 	results.clear();
 	knownTimers.clear();
@@ -825,6 +857,67 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 	LatchCaptureRequest();
 }
 
+double Profiler::ReadFlatClockMs() const
+{
+	LARGE_INTEGER counter{};
+	return QueryPerformanceCounter(&counter) && counter.QuadPart > 0 ?
+	           static_cast<double>(counter.QuadPart) * cpuTicksToMs :
+	           0.0;
+}
+
+bool Profiler::BeginFlatPresent(uint32_t a_frameCount, UINT a_flags, bool a_supported)
+{
+	if (!flatTiming || !initialized || !context || flatTiming->presentPending || (a_flags & DXGI_PRESENT_TEST) != 0)
+		return false;
+
+	auto& timing = *flatTiming;
+	timing.supported = a_supported;
+	timing.presentPending = true;
+	timing.presentStartMs = IsUserEnabled() ? ReadFlatClockMs() : 0.0;
+	timing.pending = {};
+	timing.pending.frame = a_frameCount;
+	const double cpuMs = timing.presentStartMs - timing.cpuBeginMs;
+	timing.pending.hasCpu = IsUserEnabled() && timing.cpuBeginMs > 0.0 && Util::FlatFrameTiming::IsValid(cpuMs);
+	timing.pending.cpuMs = timing.pending.hasCpu ? static_cast<float>(cpuMs) : 0.0f;
+	timing.pendingSlot = writeFrame;
+	timing.pendingEpoch = timing.history.epoch;
+	auto& frame = frames[writeFrame];
+	timing.hasQuerySlot = frameActive && frame.wholeFrameStarted;
+	timing.pending.resolved = !timing.hasQuerySlot;
+	if (timing.hasQuerySlot)
+		context->End(frame.wholeFrameEnd.get());
+	EndFrame(a_frameCount);
+	return true;
+}
+
+void Profiler::CompleteFlatPresent(HRESULT a_result)
+{
+	if (!flatTiming || !flatTiming->presentPending)
+		return;
+
+	auto& timing = *flatTiming;
+	const bool accepted = timing.supported && IsUserEnabled() && a_result == S_OK &&
+	                      timing.pendingEpoch == timing.history.epoch;
+	const auto id = timing.history.Complete(timing.pending, timing.presentStartMs, accepted);
+	if (timing.hasQuerySlot)
+		frames[timing.pendingSlot].flatPresentId = id;
+	timing.presentPending = false;
+	timing.cpuBeginMs = 0.0;
+	if (!IsEnabled() || !timing.supported)
+		return;
+
+	BeginFrame();
+	if (frameActive) {
+		auto& frame = frames[writeFrame];
+		if (frame.wholeFrameBegin && frame.wholeFrameEnd) {
+			// Whole-frame timestamps share the pass profiler's disjoint interval.
+			context->End(frame.wholeFrameBegin.get());
+			frame.wholeFrameStarted = true;
+		}
+	}
+	timing.cpuBeginMs = ReadFlatClockMs();
+}
+
 void Profiler::PublishImmediateCpuResults(uint32_t a_frameCount)
 {
 	std::unordered_map<std::string, ActiveTimerData> samples;
@@ -921,6 +1014,7 @@ bool Profiler::CollectResults()
 	float activeTotalMs = 0.0f;
 	float activeCpuTotalMs = 0.0f;
 	bool gpuFrameResolved = false;
+	float flatGpuMs = 0.0f;
 	const bool hadCpuTimers = !frame.cpuTimers.empty();
 
 	if (frame.inFlight) {
@@ -942,6 +1036,16 @@ bool Profiler::CollectResults()
 			return false;
 		if (hr == S_OK && !disjointData.Disjoint && disjointData.Frequency > 0) {
 			const double ticksToMs = 1000.0 / static_cast<double>(disjointData.Frequency);
+			if (flatTiming && frame.flatPresentId != 0 && frame.wholeFrameStarted) {
+				UINT64 begin = 0;
+				UINT64 end = 0;
+				const HRESULT beginResult = context->GetData(frame.wholeFrameBegin.get(), &begin, sizeof(begin), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+				const HRESULT endResult = context->GetData(frame.wholeFrameEnd.get(), &end, sizeof(end), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+				if (beginResult == S_FALSE || endResult == S_FALSE)
+					return false;
+				if (beginResult == S_OK && endResult == S_OK && end >= begin)
+					flatGpuMs = static_cast<float>(static_cast<double>(end - begin) * ticksToMs);
+			}
 			const auto readTimers = [&](const auto& timers, auto& timings, auto& reasons) {
 				for (size_t i = 0; i < timings.size(); ++i) {
 					const auto& timer = timers[i];
@@ -1061,6 +1165,10 @@ bool Profiler::CollectResults()
 	if (cpuCycleResolved || gpuFrameResolved)
 		RetireStaleTimers();
 
+	if (flatTiming && frame.flatPresentId != 0) {
+		flatTiming->history.Resolve(frame.flatPresentId, flatGpuMs);
+		frame.flatPresentId = 0;
+	}
 	frame.cpuTimers.clear();
 	CancelFrameCaptures(frame, "capture_reset");
 	frame.activeCount = 0;

@@ -944,7 +944,12 @@ struct IDXGISwapChain_Present
 		globals::features::screenshotFeature.DrawPostCaptureIndicator();
 
 		const uint64_t beforePresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
+		const bool flatPresent = !globals::game::isVR &&
+		                         globals::profiler->BeginFlatPresent(state->frameCount - 1, Flags,
+									 !globals::features::upscaling.IsFrameGenerationDx12PathActive());
 		HRESULT retval = func(This, SyncInterval, Flags);
+		if (flatPresent)
+			globals::profiler->CompleteFlatPresent(retval);
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
 			state->startupMenuBlurSourceReady = true;

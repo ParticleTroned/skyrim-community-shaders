@@ -16,6 +16,12 @@ namespace
 	IDXGISwapChain* forwardedChain = nullptr;
 	HRESULT presentResult = S_OK;
 	bool diagnostics = false;
+	bool frameGeneration = false;
+	bool flatBoundaryOwned = true;
+	bool timingSupported = true;
+	unsigned flatBegins = 0, flatCompletions = 0, timingCapabilityQueries = 0;
+	uint32_t timingFrame = 0;
+	HRESULT timingResult = S_OK;
 	std::string renderOrder;
 }
 namespace globals
@@ -43,6 +49,24 @@ namespace globals
 		}
 	} menuValue;
 	Menu* menu = &menuValue;
+	struct Profiler
+	{
+		bool BeginFlatPresent(uint32_t frame, UINT, bool supported)
+		{
+			++flatBegins;
+			timingFrame = frame;
+			timingSupported = supported;
+			renderOrder += "timing-end;";
+			return flatBoundaryOwned;
+		}
+		void CompleteFlatPresent(HRESULT result)
+		{
+			++flatCompletions;
+			timingResult = result;
+			renderOrder += "timing-begin;";
+		}
+	} profilerValue;
+	Profiler* profiler = &profilerValue;
 	namespace game
 	{
 		bool isVR = false;
@@ -55,6 +79,11 @@ namespace globals
 	{
 		struct
 		{
+			bool IsFrameGenerationDx12PathActive()
+			{
+				++timingCapabilityQueries;
+				return frameGeneration;
+			}
 			void PresentVRMenuDesktopMirror(IDXGISwapChain*)
 			{
 				++effects;
@@ -142,6 +171,7 @@ int main()
 					for (bool initialized : { false, true }) {
 						for (bool blurReady : { false, true }) {
 							effects = presentCalls = 0;
+							flatBegins = flatCompletions = timingCapabilityQueries = 0;
 							renderOrder.clear();
 							globals::stateValue.frameCount = 0;
 							globals::stateValue.startupMenuInitializationComplete = initialized;
@@ -152,9 +182,11 @@ int main()
 							const bool test = !vr && (flags & DXGI_PRESENT_TEST) != 0;
 							const char* expectedOrder = test ? "present;" :
 							                                   (vr ? "mirror;reset;accepted;overlay;capture;indicator;present;collect;" :
-																	 "mirror;reset;overlay;capture;indicator;present;collect;");
+																	 "mirror;reset;overlay;capture;indicator;timing-end;present;timing-begin;collect;");
 							const bool expectedBlurReady = blurReady || (!test && initialized && SUCCEEDED(result));
 							if (actual != result || presentCalls != 1 || forwardedChain != chain || forwardedFlags != flags || forwardedInterval != 2 ||
+								flatBegins != unsigned(!vr && !test) || flatCompletions != flatBegins || timingCapabilityQueries != flatBegins ||
+								(!vr && !test && (timingFrame != 0 || timingResult != result || !timingSupported)) ||
 								renderOrder != expectedOrder || globals::stateValue.startupMenuBlurSourceReady != expectedBlurReady ||
 								(test && (effects != 0 || globals::stateValue.frameCount != 0)) ||
 								(!test && (effects == 0 || globals::stateValue.frameCount != 1))) {
@@ -167,10 +199,21 @@ int main()
 			}
 		}
 	}
+	// Only the boundary owner may complete; DX12 support is forwarded before acquisition.
+	globals::game::isVR = false;
+	frameGeneration = true;
+	for (bool owned : { false, true }) {
+		flatBoundaryOwned = owned;
+		flatBegins = flatCompletions = timingCapabilityQueries = 0;
+		IDXGISwapChain_Present::thunk(nullptr, 0, 0);
+		passed = passed && flatBegins == 1 && flatCompletions == unsigned(owned) &&
+		         timingCapabilityQueries == 1 && !timingSupported;
+	}
 	// A flat status probe must be safe before rendering state is available.
 	globals::game::isVR = false;
 	globals::state = nullptr;
 	globals::menu = nullptr;
+	globals::profiler = nullptr;
 	effects = presentCalls = 0;
 	renderOrder.clear();
 	presentResult = S_OK;

@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Utils/FlatFrameTiming.h"
 #include "Utils/PassTimingCapture.h"
 
 #include <atomic>
 #include <cstdint>
 #include <d3d11.h>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -133,7 +135,8 @@ public:
 		uint32_t resolvedFrames = 0;
 	};
 
-	void Initialize(ID3D11Device* device, ID3D11DeviceContext* context);
+	/** @brief Flat timing is opt-in; VR retains the original pass capture lifecycle. */
+	void Initialize(ID3D11Device* device, ID3D11DeviceContext* context, bool flatRuntime = false);
 	void Release();
 	void SetUserEnabled(bool a_enabled);
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
@@ -161,6 +164,12 @@ public:
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
 	void EndFrame(uint32_t a_frameCount);
+	/** @brief Closes flat timing before Present; true grants ownership of the matching completion. */
+	bool BeginFlatPresent(uint32_t frameCount, UINT flags, bool supported = true);
+	/** @brief Accepts or rejects that Present, then starts the next flat frame. */
+	void CompleteFlatPresent(HRESULT result);
+	/** @brief Null on VR; flat history retains source IDs while GPU queries are pending. */
+	const Util::FlatFrameTiming::History* GetFlatTiming() const { return flatTiming ? &flatTiming->history : nullptr; }
 
 	const std::vector<TimerResult>& GetResults() const { return results; }
 	/** @brief Returns the namespace used to group and aggregate a timer name. */
@@ -236,6 +245,10 @@ private:
 	struct FrameQueries
 	{
 		winrt::com_ptr<ID3D11Query> disjoint;
+		winrt::com_ptr<ID3D11Query> wholeFrameBegin;
+		winrt::com_ptr<ID3D11Query> wholeFrameEnd;
+		uint64_t flatPresentId = 0;
+		bool wholeFrameStarted = false;
 		struct TimerPair
 		{
 			winrt::com_ptr<ID3D11Query> begin;
@@ -269,6 +282,21 @@ private:
 	ID3D11DeviceContext* context = nullptr;
 
 	FrameQueries frames[kFrameLatency];
+	struct FlatTiming
+	{
+		Util::FlatFrameTiming::History history;
+		Util::FlatFrameTiming::Sample pending;
+		double cpuBeginMs = 0.0;
+		double presentStartMs = 0.0;
+		uint32_t pendingSlot = 0;
+		uint64_t pendingEpoch = 0;
+		bool presentPending = false;
+		bool hasQuerySlot = false;
+		bool supported = true;
+	};
+	std::unique_ptr<FlatTiming> flatTiming;
+	uint64_t flatSourceEpoch = 0;
+	double ReadFlatClockMs() const;
 	uint32_t writeFrame = 0;
 	uint32_t readFrame = 0;
 	bool initialized = false;

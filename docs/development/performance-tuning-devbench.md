@@ -59,3 +59,26 @@ initial cooldown, None wait, measurement, inter-case cooldown, and restoration.
 
 Use an action of cancel to stop a DevBench-owned sweep and restore the original
 state.
+
+### Flat CPU/GPU timing
+
+SE and AE use QPC CPU elapsed time and D3D11 whole-frame GPU timestamps,
+excluding the blocking Present call. GPU timestamps share the existing
+profiler query ring and disjoint interval; reads never wait for the GPU.
+VR continues to use its existing OpenVR timing path and profiler lifecycle.
+
+Only the CPU/GPU source differs. Game/FPS timing, measurement phases, five
+one-second sample blocks, statistics, missing-sample tolerance, restoration,
+and cooldowns remain shared. Delayed flat results retain the original sample
+block weights and are drained during the existing waits, without extending
+any phase. Flat trace entries and latestTiming additionally identify the
+CPU/GPU source through gpuCpuFrameCount and gpuCpuPresentId; frameCount still
+identifies the current Game sample.
+
+Test Presents do not advance timing. Failed or occluded Presents invalidate
+the flat history; missing, disjoint, or invalid GPU queries leave GPU timing
+unavailable without discarding valid CPU timing. D3D12 frame generation leaves
+both flat CPU/GPU metrics unavailable because D3D11 timestamps cannot account
+for that presentation path. Its samples are invalidated at acquisition, so
+they cannot reappear after returning to D3D11. No frame-generation setting
+is changed.

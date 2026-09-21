@@ -205,6 +205,38 @@ set_tests_properties(
     PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;Skylighting"
 )
 
+set(_actor_bounds_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/actor-shape-bounds")
+set(_actor_bounds_test_header "${_actor_bounds_test_dir}/actor_shape_bounds_under_test.h")
+add_custom_command(
+    OUTPUT "${_actor_bounds_test_header}"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_SOURCE_DIR}"
+        "-DOUTPUT_FILE=${_actor_bounds_test_header}" -P
+        "${CMAKE_SOURCE_DIR}/tests/extract_actor_shape_bounds.cmake"
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/src/Utils/ActorUtils.cpp
+        ${CMAKE_SOURCE_DIR}/tests/extract_actor_shape_bounds.cmake
+    VERBATIM
+)
+add_executable(
+    actor_shape_bounds_test
+    ${CMAKE_SOURCE_DIR}/tests/actor_shape_bounds_test.cpp
+    "${_actor_bounds_test_header}"
+)
+target_compile_features(actor_shape_bounds_test PRIVATE cxx_std_23)
+target_include_directories(actor_shape_bounds_test PRIVATE "${_actor_bounds_test_dir}")
+if(MSVC)
+    target_compile_options(
+        actor_shape_bounds_test
+        PRIVATE /W4 /WX /permissive- "$<$<CONFIG:Release>:/fp:fast>"
+    )
+endif()
+add_test(NAME ActorShapeBounds COMMAND actor_shape_bounds_test)
+set_tests_properties(
+    ActorShapeBounds
+    PROPERTIES TIMEOUT 30 LABELS "Host;Graphics;Grass"
+)
+
 add_custom_target(
     run_host_tests
     COMMAND $<TARGET_FILE:performance_tuning_tests> --reporter compact
@@ -213,6 +245,7 @@ add_custom_target(
     COMMAND $<TARGET_FILE:virtual_function_hook_test>
     COMMAND $<TARGET_FILE:volumetric_lighting_blur_test>
     COMMAND $<TARGET_FILE:skylighting_settings_test>
+    COMMAND $<TARGET_FILE:actor_shape_bounds_test>
     DEPENDS
         performance_tuning_tests
         scene_depth_test
@@ -220,6 +253,7 @@ add_custom_target(
         virtual_function_hook_test
         volumetric_lighting_blur_test
         skylighting_settings_test
+        actor_shape_bounds_test
     WORKING_DIRECTORY $<TARGET_FILE_DIR:performance_tuning_tests>
     COMMENT "Running host-side C++ unit tests..."
     VERBATIM

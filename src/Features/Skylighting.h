@@ -94,7 +94,7 @@ public:
 		uint ShadowDataAvailable;
 		uint ProbeDataReady;
 		uint Enabled;
-		uint3 _pad2;
+		uint _pad2[3];
 		uint ArrayDims[3];
 		uint _pad3;
 		uint SliceStart;

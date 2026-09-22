@@ -565,6 +565,7 @@ void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 am
 	float3 ambientColorAmb = GetEffectAmbientLighting(skylightingDiffuse);
 	float3 dirLightColorDir = ShadowSampling::GetDirectionalLighting();
 	ShadowSampling::DecomposeLighting(inputColor, ambientColorAmb, dirLightColorDir, dirColor, ambientColor);
+	ambientColor = Color::ApplyAmbientBalance(ambientColor);
 }
 
 #	if defined(LIGHTING)

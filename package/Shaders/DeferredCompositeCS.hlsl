@@ -152,22 +152,17 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #		else
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS) * albedo;
 #		endif
-
-		directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
-		directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
-		directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
-		directionalAmbientColor = max(0, directionalAmbientColor);
 	} else
 #	endif
 	{
 		directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 		directionalAmbientColor *= albedo;
-
-		directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
-		directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
-		directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
-		directionalAmbientColor = max(0, directionalAmbientColor);
 	}
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
+	directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
+	directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
+	directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
+	directionalAmbientColor = max(0, directionalAmbientColor);
 
 	{
 		float maxScale = 1.0;
@@ -271,6 +266,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 			finalIrradiance = Color::IrradianceToLinear(specularIrradiance);
 #	endif
 		}
+
+		finalIrradiance = Color::ApplyAmbientBalanceLinear(finalIrradiance);
 
 #	if defined(SSGI)
 		float3 ssgiIlSpecular;

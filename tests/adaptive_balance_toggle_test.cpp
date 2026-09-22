@@ -228,6 +228,7 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 	const auto lights = balance.GetCommonBufferData();
 	assert(lights.skyBrightness == 1.0f && lights.directionalLightMult == 1.0f);
 	assert(lights.skySaturation == 1.0f);
+	assert(lights.ambientMult == 1.0f);
 	assert(lights.pointLightMult == 1.0f && lights.linearPointLightMult == 1.0f);
 	assert(lights.spotlightMult == 1.0f && lights.linearSpotlightMult == 1.0f);
 	assert(lights.omnidirectionalBulbMult == 1.0f && lights.linearOmnidirectionalBulbMult == 1.0f);
@@ -255,8 +256,62 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 	assert(balance.profileResolutions == profileResolutions);
 }
 
+void CheckAmbientComposition()
+{
+	AdaptiveBrightness balance;
+	auto& global = balance.settings.globalProfile;
+	global.advanced = true;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.advanced = night.advanced = true;
+	day.ambientMult = 0.5f;
+	night.ambientMult = 1.5f;
+	balance.testProfileBlend = { &day, &night, 0.5f };
+	LinearLighting::Settings linear;
+	linear.ambientMult = 0.65f;
+	linear.ambientGamma = 1.8f;
+	for (const float ambient : { 0.0f, 0.5f, 1.0f, 2.0f, 5.0f }) {
+		global.ambientMult = ambient;
+		assert(Close(balance.GetCommonBufferData().ambientMult, ambient));
+		for (bool enabled : { false, true }) {
+			const auto effective = balance.GetEffectiveLinearLightingSettings(linear, enabled);
+			assert(Close(effective.settings.ambientMult, enabled ? 0.65f : 1.0f));
+			assert(Close(effective.settings.ambientGamma, enabled ? 1.8f : 1.0f));
+			assert(!effective.hasColorAdjustments);
+		}
+	}
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.ambientMult = 0.5f;
+	balance.testLocationLayers = { &location };
+	global.ambientMult = 2.0f;
+	balance.testProfileBlend.factor = 0.0f;
+	for (bool layered : { false, true }) {
+		location.layered = layered;
+		assert(Close(balance.GetCommonBufferData().ambientMult, layered ? 0.5f : 1.0f));
+		global.ambientMult = 0.0f;
+		assert(balance.GetCommonBufferData().ambientMult == 0.0f);
+		global.ambientMult = 2.0f;
+	}
+	balance.testLocationLayers.clear();
+	global.ambientMult = day.ambientMult = 5.0f;
+	balance.testProfileBlend = { &day, &day, 0.0f };
+	assert(balance.GetCommonBufferData().ambientMult == 10.0f);
+	balance.testProfileBlend = {};
+	global.advanced = false;
+	assert(balance.GetCommonBufferData().ambientMult == 1.0f);
+	global.brightness = 0.5f;
+	assert(Close(balance.GetCommonBufferData().ambientMult, 0.525f));
+	balance.SetEnabled(false);
+	assert(balance.GetCommonBufferData().ambientMult == 1.0f);
+	global.advanced = true;
+	global.ambientMult = std::numeric_limits<float>::quiet_NaN();
+	ClampProfileSettings(global);
+	assert(global.ambientMult == 1.0f);
+}
+
 int main()
 {
+	CheckAmbientComposition();
 	CheckVisualControls();
 	// Keep zero-identity guards exercised at runtime under Release optimization.
 	for (const auto& [identity, expected] : std::array<std::array<float, 2>, 6>{ { { 0.0f, 2.5f }, { -0.0f, 2.5f }, { 0.0001f, 2.5f },
@@ -271,6 +326,7 @@ int main()
 	global.skyBrightnessMult = 1.3f;
 	global.advanced = true;
 	global.skySaturation = 0.8f;
+	global.ambientMult = 0.5f;
 	global.water.CausticsStrength = 1.5f;
 	global.water.CausticsTiling = 2.0f;
 	global.water.CausticsSpeed = 0.0f;
@@ -323,6 +379,7 @@ int main()
 		assert(after.CausticsSpeed == before.CausticsSpeed && after.CausticsDispersion == before.CausticsDispersion);
 		assert(after.ParallaxStrength == before.ParallaxStrength && after.ParallaxQuality == before.ParallaxQuality);
 		assert(balance.GetCommonBufferData().skySaturation == beforeLight.skySaturation);
+		assert(balance.GetCommonBufferData().ambientMult == beforeLight.ambientMult);
 		assert(Close(balance.GetEffectiveSharedLightingSettings().directionalLightMult, beforeLight.directionalLightMult));
 	}
 	balance.testProfileBlend = {};

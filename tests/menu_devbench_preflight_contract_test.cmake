@@ -264,3 +264,11 @@ if(_culling_validate EQUAL -1 OR _culling_dispatch EQUAL -1 OR _culling_apply EQ
     message(FATAL_ERROR "Depth-culling mutation must follow complete validation and main-thread dispatch")
 endif()
 message(STATUS "Independent depth-culling DevBench settings contract is coherent")
+
+string(JSON _ambient_schema GET "${_descriptor}" inputSchema properties visuals properties ambient)
+string(JSON _ambient_type GET "${_ambient_schema}" type)
+string(JSON _ambient_min GET "${_ambient_schema}" minimum)
+string(JSON _ambient_max GET "${_ambient_schema}" maximum)
+if(NOT _ambient_type STREQUAL "number" OR NOT _ambient_min EQUAL 0 OR NOT _ambient_max EQUAL 5)
+    message(FATAL_ERROR "Adaptive Balance Ambient schema must match its 0-5 slider")
+endif()

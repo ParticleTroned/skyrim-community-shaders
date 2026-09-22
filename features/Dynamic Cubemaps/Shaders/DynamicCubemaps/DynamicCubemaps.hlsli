@@ -77,7 +77,7 @@ namespace DynamicCubemaps
 			result = Color::IrradianceToLinear(specularIrradiance);
 #	endif
 		}
-		return result;
+		return Color::ApplyAmbientBalanceLinear(result);
 	}
 
 #	if defined(SKYLIGHTING)

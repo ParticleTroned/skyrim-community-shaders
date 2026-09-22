@@ -591,6 +591,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	}
 #		endif
 
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
 	diffuseColor += directionalAmbientColor;
 
 	float3 albedo = ApplyGrassWetDarkening(baseColor.xyz) * vertexColor;
@@ -864,6 +865,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
 	diffuseColor += directionalAmbientColor;
 	diffuseColor += subsurfaceColor * albedo;
 	diffuseColor *= albedo;

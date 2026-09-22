@@ -442,8 +442,8 @@ public:
 		float RefractionScale;          // matches HLSL SharedData::RefractionScale
 		float PBRMetalReflectionScale;  // matches HLSL SharedData::PBRMetalReflectionScale
 		float PBRMetalHighlightScale;   // matches HLSL SharedData::PBRMetalHighlightScale
-		uint HasDirectionalShadows;     // Uses the existing scalar padding slot before the float2 below
-		float PBRMetalReflectionScalePad0;
+		uint HasDirectionalShadows;     // Exterior or interior sun directional shadow availability
+		float VolumetricLightingSaturation;
 		float PBRMetalReflectionScalePad1;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
@@ -461,19 +461,22 @@ public:
 		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
+
+		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
 	};
 #ifdef _MSC_VER
 #	pragma warning(pop)
 #endif
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
 	static_assert(offsetof(SharedDataCB, RefractionScale) % 16 == 0);
-	static_assert(offsetof(SharedDataCB, PBRMetalReflectionScalePad0) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VolumetricLightingSaturation) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VolumetricShadowsEnabled) == offsetof(SharedDataCB, SSSHumanFemaleBaseSaturation) + sizeof(float));
 	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
 	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationData0) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationModes) % 16 == 0);
 	static_assert(offsetof(SharedDataCB, VRFoveationCenterOffsets) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VolumetricLightingCustomColor) == offsetof(SharedDataCB, VRFoveationCenterOffsets) + sizeof(float4));
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 

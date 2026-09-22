@@ -5539,6 +5539,16 @@ namespace
 		       FoveatedCommon::IsActiveCoverage(GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile).centerScale);
 	}
 
+	bool ResolveFoveatedVendorDispatch(const Upscaling::Settings& settings, Upscaling::UpscaleMethod a_upscaleMethod, bool a_neuralRenderingEnabled)
+	{
+		if (a_neuralRenderingEnabled && a_upscaleMethod == Upscaling::UpscaleMethod::kDLSS &&
+			NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode) == NeuralRendering::RenderingMode::ReducedResolution &&
+			!settings.neuralRenderingRenderscaleFov)
+			return globals::game::isVR;
+		const bool usePeripheryTAAProfile = settings.periphery_taa_enable && !settings.neuralRenderingEnabled;
+		return IsFoveatedMaskConfigured(settings, a_upscaleMethod, usePeripheryTAAProfile);
+	}
+
 	bool ShouldUseReducedResolutionForUpscaling(Upscaling::UpscaleMethod a_upscaleMethod, const float2& a_resolutionScale)
 	{
 		return IsVendorUpscalingMethod(a_upscaleMethod) &&
@@ -41703,12 +41713,7 @@ eastl::unique_ptr<Texture2D> Upscaling::CreateTextureFromSource(ID3D11Resource* 
 
 bool Upscaling::IsFoveatedVendorDispatchEnabled(UpscaleMethod a_upscaleMethod) const
 {
-	if (IsNeuralRenderingRequested() && a_upscaleMethod == UpscaleMethod::kDLSS &&
-		GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution &&
-		!settings.neuralRenderingRenderscaleFov)
-		return globals::game::isVR;
-	const bool usePeripheryTAAProfile = settings.periphery_taa_enable && !settings.neuralRenderingEnabled;
-	return IsFoveatedMaskConfigured(settings, a_upscaleMethod, usePeripheryTAAProfile);
+	return ResolveFoveatedVendorDispatch(settings, a_upscaleMethod, IsNeuralRenderingRequested());
 }
 
 bool Upscaling::IsFSRRuntimePathActive(UpscaleMethod a_upscaleMethod) const
@@ -62410,8 +62415,11 @@ Upscaling::VRRenderScaleResourceKey Upscaling::BuildVRRenderScaleResourceKey(con
 	key.renderEyeWidth = a_profile.renderEyeWidth;
 	key.renderEyeHeight = a_profile.renderEyeHeight;
 	key.contextCount = globals::game::isVR ? 2u : 1u;
-	key.foveatedVendorDispatch = a_profile.active && IsFoveatedVendorDispatchEnabled(a_profile.method);
-	key.peripheryTAA = key.foveatedVendorDispatch && IsPeripheryTAAEnabled(a_profile.method);
+	// Resource planning can hold the request lock and precede physical latching.
+	// Derive layout from this profile without querying live request/execution state.
+	key.foveatedVendorDispatch = a_profile.active && ResolveFoveatedVendorDispatch(
+														 settings, a_profile.method, neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled);
+	key.peripheryTAA = key.foveatedVendorDispatch && !settings.neuralRenderingEnabled && settings.periphery_taa_enable;
 
 	if (!a_profile.active) {
 		key.backend = VRRenderScaleBackendKind::None;

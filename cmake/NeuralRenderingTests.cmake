@@ -1,6 +1,22 @@
 include(NeuralRenderingCaptureTests)
 csx_add_neural_rendering_capture_tests("${PROJECT_SOURCE_DIR}" add_controller_test)
 
+set(_neural_resource_key_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_resource_key_test")
+add_custom_command(
+    OUTPUT "${_neural_resource_key_test_dir}/neural_resource_key_under_test.h"
+        "${_neural_resource_key_test_dir}/neural_resource_key_types.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_resource_key_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_resource_key.cmake"
+    DEPENDS src/Features/Upscaling.cpp src/Features/Upscaling.h tests/extract_neural_resource_key.cmake
+    VERBATIM
+)
+add_controller_test(neural_resource_key_test NeuralResourceKey tests/neural_resource_key_test.cpp)
+target_sources(neural_resource_key_test PRIVATE
+    "${_neural_resource_key_test_dir}/neural_resource_key_under_test.h"
+    "${_neural_resource_key_test_dir}/neural_resource_key_types.h")
+target_include_directories(neural_resource_key_test PRIVATE "${_neural_resource_key_test_dir}")
+
 foreach(_policy IN ITEMS
     neural_rendering_pipeline character_region character_actor
     character_mask_work world_load_transition)

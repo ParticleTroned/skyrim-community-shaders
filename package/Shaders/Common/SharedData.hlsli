@@ -28,7 +28,8 @@ namespace SharedData
 		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections (1.0 = default)
 		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights (1.0 = default)
 		uint HasDirectionalShadows;     // Exterior or Interior Sun directional shadow availability
-		float2 PBRMetalReflectionScalePad0;
+		float VolumetricLightingSaturation;
+		float PBRMetalReflectionScalePad1;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;
@@ -45,6 +46,8 @@ namespace SharedData
 		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
+
+		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
 	};
 
 	struct GrassLightingSettings

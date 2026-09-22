@@ -826,6 +826,12 @@ temporal lighting without changing the weather-authored density. Higher quality
 and larger volume dimensions cost more; avoid pushing intensity or opacity too
 high because it can make weather lighting look washed out.
 
+Saturation adjusts the weather godray color at final composition: 0 is grayscale,
+1 preserves the authored color, and higher values increase saturation, including
+HDR colors. Custom Color Contribution blends the selected RGB color over that
+result; 0 preserves the weather color and 1 fully replaces it. These controls
+apply to both VR and flat Skyrim and require ImageSpace shader replacement.
+
 ### Performance Optimization
 
 The biggest VR performance saver is usually **FOV**, because the shared FOV mask can reduce the expensive center work for upscaling and can also be reused by later shader/detail FOV features. Set it up first in **VR > Foveation** with **Foveated Upscaling (FOV)** and **FOV Mask Visualization**. The mask setup is key: if the center mask or Peripheral TAA range is too large, later FOV savings become smaller; if it is too small, shimmer or visible transitions can appear.

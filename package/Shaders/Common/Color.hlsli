@@ -409,9 +409,26 @@ namespace Color
 		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? color * SharedData::linearLightingSettings.glowmapMult : color;
 	}
 
+	/// Engine ambient adjustments before selecting vanilla or image-based lighting.
 	float3 Ambient(float3 color)
 	{
 		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
+	}
+
+	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
+	float AmbientBalanceMultiplier()
+	{
+#	if defined(PSHADER) && defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
+		if ((Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) == 0)
+			return 1.0;
+#	endif
+		return SharedData::adaptiveBalanceSettings.ambientMult;
+	}
+
+	/// Apply once after ambient sources are combined, in the renderer's lighting space.
+	float3 ApplyAmbientBalance(float3 color)
+	{
+		return color * AmbientBalanceMultiplier();
 	}
 
 	float3 Fog(float3 color)
@@ -500,6 +517,12 @@ namespace Color
 	float3 IrradianceToGamma(float3 color)
 	{
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSkyrimGamma(color);
+	}
+
+	/// Match the ambient brightness adjustment for contributions already in linear space.
+	float3 ApplyAmbientBalanceLinear(float3 color)
+	{
+		return color * IrradianceToLinear(AmbientBalanceMultiplier());
 	}
 
 	float VanillaNormalization()

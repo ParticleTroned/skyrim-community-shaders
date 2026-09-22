@@ -1,3 +1,5 @@
+#define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
+
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -509,6 +511,7 @@ void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 am
 
 	dirColor = dirLightColorAmb;
 	ambientColor = ambientColorAmb;
+	ambientColor = Color::ApplyAmbientBalance(ambientColor);
 }
 
 #	if defined(LIGHTING)

@@ -147,11 +147,13 @@ struct AdaptiveBrightness : Feature
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
 		float skySaturation;
-		float3 pad{};
+		float ambientMult;
+		float pad[2]{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 	static_assert(sizeof(PerFrameData) == 48);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
+	static_assert(offsetof(PerFrameData, ambientMult) == 36);
 
 	struct alignas(16) VanillaPointLightData
 	{

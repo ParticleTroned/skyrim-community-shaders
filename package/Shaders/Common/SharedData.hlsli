@@ -237,7 +237,8 @@ namespace SharedData
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
 		float skySaturation;
-		float3 pad;
+		float ambientMult;
+		float2 pad;
 	};
 
 	struct LinearLightingSettings

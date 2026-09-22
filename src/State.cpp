@@ -1231,8 +1231,17 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.RefractionScale = refractionScale;
 		const auto& volumetricShadows = globals::features::volumetricShadows;
 		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
-		data.VolumetricLightingOpacity =
-			a_inWorld ? globals::features::volumetricLighting.GetRuntimeGodrayOpacity() : 1.0f;
+		const auto godrayProfile = a_inWorld ?
+		                               globals::features::volumetricLighting.GetRuntimeGodrayProfile() :
+		                               VolumetricLighting::GodrayProfile{};
+		data.VolumetricLightingOpacity = godrayProfile.Opacity;
+		data.VolumetricLightingSaturation = godrayProfile.Saturation;
+		data.VolumetricLightingCustomColor = {
+			godrayProfile.CustomColorRed,
+			godrayProfile.CustomColorGreen,
+			godrayProfile.CustomColorBlue,
+			godrayProfile.CustomColorContribution
+		};
 
 		if (auto sky = globals::game::sky) {
 			// Process sun

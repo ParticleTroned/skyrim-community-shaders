@@ -125,4 +125,27 @@ TEST_CASE("Production shader permutations compile with feature includes", "[shad
 				{ "NUM_SPECULAR_LIGHTS", "0" },
 			});
 	}
+
+	SECTION("Volumetric-lighting composite")
+	{
+		CompilePermutation(
+			L"ISCompositeLensFlareVolumetricLighting.hlsl",
+			"ps_5_0",
+			{
+				{ "PSHADER" },
+				{ "VOLUMETRIC_LIGHTING" },
+			});
+	}
+
+	SECTION("Volumetric-lighting and lens-flare composite")
+	{
+		CompilePermutation(
+			L"ISCompositeLensFlareVolumetricLighting.hlsl",
+			"ps_5_0",
+			{
+				{ "PSHADER" },
+				{ "VOLUMETRIC_LIGHTING" },
+				{ "LENS_FLARE" },
+			});
+	}
 }

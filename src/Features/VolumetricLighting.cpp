@@ -4,7 +4,6 @@
 #include <memory>
 
 #include "LocationContext.h"
-#include "RE/N/NiDirectionalLight.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
@@ -60,76 +59,6 @@ namespace
 		return settings.DisableWeatherInteractionDuringRain &&
 		       !inInterior &&
 		       IsRainTransitionActive();
-	}
-
-	VolumetricLightingTuning::Color ToTuningColor(const RE::NiColor& color)
-	{
-		return { color.red, color.green, color.blue };
-	}
-
-	RE::NiColor ToNiColor(const VolumetricLightingTuning::Color& color)
-	{
-		return { color.red, color.green, color.blue };
-	}
-
-	bool TryGetCurrentSunColor(VolumetricLightingTuning::Color& color)
-	{
-		auto* sky = globals::game::sky;
-		if (!sky || !sky->sun || !sky->sun->light)
-			return false;
-
-		color = ToTuningColor(sky->sun->light->GetLightRuntimeData().diffuse);
-		if (!VolumetricLightingTuning::IsFinite(color))
-			return false;
-
-		color = VolumetricLightingTuning::SanitizeColor(color);
-		return true;
-	}
-
-	void ApplyGodrayColorTuning(
-		RE::BSVolumetricLightingRenderData& descriptor,
-		const VolumetricLighting::GodrayProfile& profile)
-	{
-		const VolumetricLightingTuning::ColorBlend authoredColor{
-			ToTuningColor(descriptor.color),
-			descriptor.customColor.contribution
-		};
-		const VolumetricLightingTuning::Color userColor{
-			profile.CustomColorRed,
-			profile.CustomColorGreen,
-			profile.CustomColorBlue
-		};
-		const auto applyComposedUserColor = [&]() {
-			const auto composedColor = VolumetricLightingTuning::ComposeUserColor(
-				authoredColor,
-				userColor,
-				profile.CustomColorContribution);
-			descriptor.color = ToNiColor(composedColor.color);
-			descriptor.customColor.contribution = composedColor.contribution;
-		};
-
-		if (VolumetricLightingTuning::IsNear(profile.Saturation, 1.0f)) {
-			applyComposedUserColor();
-			return;
-		}
-
-		VolumetricLightingTuning::Color sunColor{};
-		if (!TryGetCurrentSunColor(sunColor)) {
-			if (!VolumetricLightingTuning::IsNear(profile.CustomColorContribution, 0.0f))
-				applyComposedUserColor();
-			return;
-		}
-
-		const auto baselineColor = VolumetricLightingTuning::ResolveEffectiveColor(authoredColor, std::addressof(sunColor));
-		const auto saturatedColor = VolumetricLightingTuning::SaturateColor(baselineColor, profile.Saturation);
-		const auto finalColor = VolumetricLightingTuning::LerpColor(
-			saturatedColor,
-			VolumetricLightingTuning::ClampColor01(userColor),
-			profile.CustomColorContribution);
-
-		// A local descriptor can force the already-resolved result without losing authored state.
-		descriptor.customColor.contribution = 1.0f;
-		descriptor.color = ToNiColor(VolumetricLightingTuning::SanitizeColor(finalColor));
 	}
 
 }
@@ -219,7 +148,7 @@ void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProf
 
 	drawSlider("Godray Intensity", profile.ShaftIntensity, 0.0f, VolumetricLightingTuning::kShaftIntensityMax, "Linearly scales volumetric godray brightness.");
 	drawSlider("Godray Opacity", profile.Opacity, 0.0f, VolumetricLightingTuning::kOpacityMax, "Shapes shaft visibility after temporal blending without changing weather density. 1.0 is default.");
-	drawSlider("Godray Saturation", profile.Saturation, 0.0f, VolumetricLightingTuning::kSaturationMax, "Adjusts the authored godray color with gamut-preserving saturation. 1.0 is default.");
+	drawSlider("Godray Saturation", profile.Saturation, 0.0f, VolumetricLightingTuning::kSaturationMax, "Adjusts weather godray saturation while preserving brightness. 1.0 is default.");
 
 	drawSlider("Custom Color Contribution", profile.CustomColorContribution, 0.0f, 1.0f, "Blends your custom color into the authored weather godray color.");
 	const bool customColorDisabled = profile.CustomColorContribution <= VolumetricLightingTuning::kFloatEpsilon;
@@ -434,13 +363,12 @@ bool VolumetricLighting::TryGetActiveGodrayProfile(GodrayProfile& profile) const
 	return true;
 }
 
-float VolumetricLighting::GetRuntimeGodrayOpacity() const
+VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() const
 {
-	if (!loaded || !IsImageSpaceReplacementEnabled())
-		return 1.0f;
-
 	GodrayProfile profile{};
-	return TryGetActiveGodrayProfile(profile) ? profile.Opacity : 1.0f;
+	if (loaded && IsImageSpaceReplacementEnabled())
+		TryGetActiveGodrayProfile(profile);
+	return profile;
 }
 
 bool VolumetricLighting::IsPerformanceTuningApplicable() const
@@ -654,23 +582,15 @@ VolumetricLighting::VolumetricLightingDescriptor* VolumetricLighting::ApplyVolum
 		return descriptor;
 	}
 
-	GodrayProfile profile{};
-	const bool hasActiveProfile = feature.TryGetActiveGodrayProfile(profile);
+	const auto profile = feature.GetRuntimeGodrayProfile();
 	const float skySyncIntensity = globals::features::skySync.GetVolumetricLightingIntensityFactor();
-	const float intensityScale = skySyncIntensity * (hasActiveProfile ? profile.ShaftIntensity : 1.0f);
-	const bool needsColorTuning =
-		hasActiveProfile &&
-		(!VolumetricLightingTuning::IsNear(profile.Saturation, 1.0f) ||
-			!VolumetricLightingTuning::IsNear(profile.CustomColorContribution, 0.0f));
-	if (VolumetricLightingTuning::IsNear(intensityScale, 1.0f) && !needsColorTuning)
+	const float intensityScale = skySyncIntensity * profile.ShaftIntensity;
+	if (VolumetricLightingTuning::IsNear(intensityScale, 1.0f))
 		return descriptor;
 
 	feature.runtimeDescriptor = *descriptor;
 	auto& runtimeDescriptor = feature.runtimeDescriptor;
-	if (!VolumetricLightingTuning::IsNear(intensityScale, 1.0f))
-		runtimeDescriptor.intensity *= intensityScale;
-	if (needsColorTuning)
-		ApplyGodrayColorTuning(runtimeDescriptor, profile);
+	runtimeDescriptor.intensity *= intensityScale;
 
 	return std::addressof(runtimeDescriptor);
 }

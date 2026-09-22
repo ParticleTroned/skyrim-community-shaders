@@ -123,8 +123,8 @@ public:
 	}
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
-	/** @return The active context's finite-safe shader opacity, or neutral when tuning is unavailable. */
-	float GetRuntimeGodrayOpacity() const;
+	/** @return The active context's sanitized tuning, or a neutral profile when unavailable. */
+	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;

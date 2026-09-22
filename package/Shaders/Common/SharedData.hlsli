@@ -37,6 +37,9 @@ namespace SharedData
 		float4 AmbientSHG;
 		float4 AmbientSHB;
 		float4 HDRData;
+		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
+		float VolumetricLightingSaturation;
+		float3 VolumetricLightingPad;
 	};
 
 	struct GrassLightingSettings

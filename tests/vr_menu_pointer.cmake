@@ -26,20 +26,18 @@ add_controller_test(
 target_sources(vr_menu_pointer_test PRIVATE ${_pointer_test_headers})
 target_include_directories(vr_menu_pointer_test PRIVATE "${_pointer_test_dir}")
 
-add_controller_test(
+add_d3d_shader_test(
     vr_menu_pointer_capture_test
     VRMenuPointerCapture
     tests/vr_menu_pointer_capture_test.cpp
 )
 target_sources(
     vr_menu_pointer_capture_test
-    PRIVATE
-        src/Features/Upscaling/VRMenuPointerOverlay.cpp
-        "${_skylighting_slice_naming_header}"
+    PRIVATE src/Features/Upscaling/VRMenuPointerOverlay.cpp
 )
 target_include_directories(
     vr_menu_pointer_capture_test
-    PRIVATE "${_pointer_test_dir}" "${_skylighting_slice_test_dir}"
+    PRIVATE "${_pointer_test_dir}"
 )
 target_compile_definitions(
     vr_menu_pointer_capture_test
@@ -47,6 +45,6 @@ target_compile_definitions(
 )
 target_link_libraries(
     vr_menu_pointer_capture_test
-    PRIVATE d3d11.lib d3dcompiler.lib runtimeobject.lib
+    PRIVATE runtimeobject.lib
 )
 set_tests_properties(VRMenuPointerCapture PROPERTIES TIMEOUT 30)

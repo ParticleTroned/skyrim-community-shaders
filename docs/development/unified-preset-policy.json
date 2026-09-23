@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.08.30.2",
+    "packageVersion": "d2026.09.23.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,7 +15,7 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "1AF5E2A3F435BAB7D31BB920FA93029C891033438079B0585537249817467651"
+        "sha256": "5933611B40123E371A8D9E11C2C98148568A8B230CD8EE1626629B1B943AAD05"
     },
     "runtimeSettingsContract": {
         "revision": 5,
@@ -223,8 +223,8 @@
         },
         {
             "path": ["Image Based Lighting", "EnableIBL"],
-            "value": 1,
-            "reason": "shared measured ambient-replacement baseline"
+            "value": 0,
+            "reason": "disable IBL in every unified tier"
         },
         {
             "path": ["Volumetric Shadows", "Enabled"],
@@ -241,6 +241,27 @@
             "value": 2,
             "reason": "current normalized interior policy pending a fresh profiler comparison"
         },
+        { "path": ["Volumetric Lighting", "DisableWeatherInteractionDuringRain"], "value": false },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Opacity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Saturation"], "value": 1.0 },
+        {
+            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorBlue"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "Opacity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "Saturation"], "value": 1.0 },
+        {
+            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorBlue"], "value": 1.0 },
         {
             "path": ["Hair Specular", "Enabled"],
             "value": 1,
@@ -264,6 +285,52 @@
         { "path": ["Hair Specular", "SelfShadowStrength"], "value": 1.0 },
         { "path": ["Hair Specular", "SelfShadowExponent"], "value": 0.1 },
         { "path": ["Hair Specular", "SelfShadowScale"], "value": 2.5 },
+        {
+            "path": ["Subsurface Scattering", "EnableSubsurfaceScattering"],
+            "value": true,
+            "reason": "shared Burley skin appearance baseline across all tiers"
+        },
+        { "path": ["Subsurface Scattering", "EnableCharacterLighting"], "value": 0 },
+        { "path": ["Subsurface Scattering", "SSMode"], "value": 1 },
+        { "path": ["Subsurface Scattering", "BurleySamples"], "value": 16 },
+        {
+            "path": ["Subsurface Scattering", "MeanFreePathBase"],
+            "value": [
+                0.5600000023841858, 0.5600000023841858, 0.5600000023841858, 2.6700000762939453
+            ]
+        },
+        {
+            "path": ["Subsurface Scattering", "MeanFreePathHuman"],
+            "value": [1.0, 0.3700000047683716, 0.30000001192092896, 2.6700000762939453]
+        },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSIntensity"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBaseSaturation"], "value": 1.05 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSIntensity"], "value": 1.1 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBaseSaturation"], "value": 1.05 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "EnhancementIntensity"],
+            "value": 0.5,
+            "reason": "use the built-in Fantasy bloom shaping with reduced global strength"
+        },
+        { "path": ["Adaptive Balance", "globalProfile", "bloom", "HaloRadius"], "value": 5.0 },
+        { "path": ["Adaptive Balance", "globalProfile", "bloom", "HaloSpread"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "globalProfile", "bloom", "BloomSaturation"], "value": 1.3 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "BloomTint"],
+            "value": [1.0, 0.9800000190734863, 0.9399999976158142]
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "CompressionThreshold"],
+            "value": 0.0
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "CompressionCeiling"],
+            "value": 0.67
+        },
         {
             "path": ["Adaptive Balance", "globalProfile", "water", "WaterBrightness"],
             "value": 1.0,
@@ -476,9 +543,29 @@
         { "path": ["Menu", "UI Mode"], "value": 0 },
         { "path": ["VR", "EnableWandPointing"], "value": true },
         { "path": ["Weather Picker", "Enabled"], "value": true },
-        { "path": ["Image Based Lighting", "EnableIBL"], "value": 1 },
+        { "path": ["Image Based Lighting", "EnableIBL"], "value": 0 },
         { "path": ["Volumetric Shadows", "Enabled"], "value": true },
+        {
+            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
+        {
+            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
         { "path": ["Hair Specular", "Enabled"], "value": 1 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "EnhancementIntensity"],
+            "value": 0.5
+        },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSIntensity"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBaseSaturation"], "value": 1.05 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSIntensity"], "value": 1.1 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBaseSaturation"], "value": 1.05 },
         { "path": ["Hair Specular", "HairMode"], "value": 1 },
         { "path": ["Hair Specular", "HairGlossiness"], "value": 70.0 },
         { "path": ["Hair Specular", "SpecularMult"], "value": 1.38 },

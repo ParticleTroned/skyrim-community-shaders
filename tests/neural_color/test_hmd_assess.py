@@ -71,7 +71,7 @@ def plane(eye):
 
 def expected(kind="raw", apply_edit=True):
     profile = {"domain": "unknown", "transform": "identity", "exposureSource": "manual", "exposureMultiplier": 1}
-    mode = {"nr_off": "legacy_raw", "raw": "legacy_raw", "managed_identity": "managed", "preserve_source": "preserve_source"}[kind]
+    mode = HMD.MODE[kind]
     return {"configurationFingerprint": "test-fingerprint", "configuration": {
                 "upscaling": {"FOV": 0.95, "neuralRenderingEnabled": kind != "nr_off", "neuralRenderingInsertionPoint": 0},
                 "color": {"settings": {"enabled": True, "mode": mode}, "experiments": {
@@ -82,7 +82,7 @@ def expected(kind="raw", apply_edit=True):
 
 def make_pair(root, ordinal=1, kind="raw", apply_edit=True, value=100, frame=100):
     enabled = kind != "nr_off"
-    mode = {"nr_off": "legacy_raw", "raw": "legacy_raw", "managed_identity": "managed", "preserve_source": "preserve_source"}[kind]
+    mode = HMD.MODE[kind]
     record = {"frame": frame, "sourceWorldFrame": frame - 1, "colorRevision": 4, "inputEpoch": 2,
               "effectiveMode": mode, "applyModelEdit": apply_edit, "nrEnabled": enabled,
               "inferenceAttempted": enabled, "inferenceSucceeded": enabled,
@@ -107,6 +107,26 @@ def make_pair(root, ordinal=1, kind="raw", apply_edit=True, value=100, frame=100
 
 
 class LightingEvidenceTests(unittest.TestCase):
+    def test_neural_lighting_uses_effective_zero_without_rewriting_saved_value(self):
+        target = expected("neural_lighting")
+        target["configuration"]["color"]["settings"].update(appearanceMix=0.75, lightingPreservation=1.0)
+        candidate = {"condition": "neural_lighting", "applyModelEdit": True,
+                     "settings": {"settings": {"mode": "neural_lighting", "appearanceMix": 0.75,
+                                                "lightingPreservation": 1.0}}}
+        record = {"frame": 100, "sourceWorldFrame": 99, "colorRevision": 4, "inputEpoch": 2,
+                  "effectiveMode": "neural_lighting", "applyModelEdit": True, "nrEnabled": True,
+                  "inferenceAttempted": True, "inferenceSucceeded": True, "outputCommitted": True,
+                  "disposition": "applied", "exposure": {},
+                  "physicalRegions": [{"lightingPreservation": 0.0}]}
+        evidence = {"schemaVersion": 1, "available": True, "transactionId": "fixture",
+                    "configurationFingerprint": target["configurationFingerprint"],
+                    "configuration": target["configuration"], "insertionPoint": 0,
+                    "left": copy.deepcopy(record), "right": copy.deepcopy(record)}
+        HMD.check_nr(evidence, target, candidate, {"engineFrame": 100})
+        evidence["right"]["physicalRegions"][0]["lightingPreservation"] = 1.0
+        with self.assertRaisesRegex(HMD.EvidenceError, "lighting preservation"):
+            HMD.check_nr(evidence, target, candidate, {"engineFrame": 100})
+
     def test_new_setting_requires_exact_region_and_companion_values(self):
         target = expected("preserve_source")
         target["configuration"]["color"]["settings"]["lightingPreservation"] = 0.5
@@ -165,6 +185,18 @@ class PlanTests(unittest.TestCase):
         spec = specification()
         spec["candidates"].append({"condition": "conversion", "settings": {"settings": {"mode": "managed"}}})
         with self.assertRaisesRegex(HMD.EvidenceError, "producer"):
+            HMD.make_plan(spec, region_policy(), 5)
+
+    def test_neural_lighting_is_optional_and_unique(self):
+        spec = specification()
+        candidate = {"condition": "neural_lighting",
+                     "settings": {"settings": {"mode": "neural_lighting"}}}
+        spec["candidates"].append(candidate)
+        plan = HMD.make_plan(spec, region_policy(), 5)
+        self.assertEqual(sum(value["condition"] == "neural_lighting"
+                             for value in plan["candidateMapping"].values()), 1)
+        spec["candidates"].append(copy.deepcopy(candidate))
+        with self.assertRaisesRegex(HMD.EvidenceError, "at most one Neural Lighting"):
             HMD.make_plan(spec, region_policy(), 5)
 
     def test_cadence_is_frozen_within_controller_bounds(self):

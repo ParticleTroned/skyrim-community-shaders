@@ -19,8 +19,7 @@ import hmd_assess as hmd
 NR_TOOL = "communityshaders.renderscale"
 TERMINAL = {"completed", "completed_with_warnings", "stopped", "cancelled", "cancelled_partial",
             "failed", "failed_partial", "rejected"}
-MODE = {"nr_off": "legacy_raw", "raw": "legacy_raw", "managed_identity": "managed",
-        "conversion": "managed", "preserve_source": "preserve_source"}
+MODE = hmd.MODE
 
 
 def colour_editable(value: dict) -> dict:

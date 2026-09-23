@@ -14,6 +14,7 @@ namespace NeuralRendering::Color
 		LegacyRaw,
 		Managed,
 		PreserveSource,
+		NeuralLighting,
 		Count
 	};
 	enum class Domain : std::uint32_t
@@ -106,6 +107,19 @@ namespace NeuralRendering::Color
 		       Finite(value.appearanceMix) && value.appearanceMix >= 0.0f && value.appearanceMix <= 1.0f &&
 		       Finite(value.maximumDetailStops) && value.maximumDetailStops >= 0.0f && value.maximumDetailStops <= 2.0f &&
 		       Finite(value.lightingPreservation) && value.lightingPreservation >= 0.0f && value.lightingPreservation <= 1.0f;
+	}
+
+	/** Resolve a user-facing mode into the shared reconstruction controls. */
+	[[nodiscard]] inline Settings ResolveReconstructionSettings(Settings value) noexcept
+	{
+		if (!value.enabled) {
+			value.mode = Mode::LegacyRaw;
+		} else if (value.mode == Mode::NeuralLighting) {
+			value.mode = Mode::PreserveSource;
+			value.appearanceMix = 0.0f;
+			value.lightingPreservation = 0.0f;
+		}
+		return value;
 	}
 
 	[[nodiscard]] inline bool Valid(const Profile& value) noexcept
@@ -249,16 +263,17 @@ namespace NeuralRendering::Color
 	{
 		if (!Finite(logResidual) || !Finite(lowFrequencyResidual) || !Finite(edgeWeight) || !Valid(settings))
 			return 1.0f;
+		const auto resolved = ResolveReconstructionSettings(settings);
 		float acceptedResidual;
-		if (settings.lightingPreservation == 1.0f)
+		if (resolved.lightingPreservation == 1.0f)
 			acceptedResidual = logResidual - lowFrequencyResidual;
-		else if (settings.lightingPreservation == 0.0f)
+		else if (resolved.lightingPreservation == 0.0f)
 			acceptedResidual = logResidual;
 		else
-			acceptedResidual = logResidual - settings.lightingPreservation * lowFrequencyResidual;
-		const auto stops = std::clamp(acceptedResidual * settings.detailStrength *
+			acceptedResidual = logResidual - resolved.lightingPreservation * lowFrequencyResidual;
+		const auto stops = std::clamp(acceptedResidual * resolved.detailStrength *
 										  std::clamp(edgeWeight, 0.0f, 1.0f),
-			-settings.maximumDetailStops, settings.maximumDetailStops);
+			-resolved.maximumDetailStops, resolved.maximumDetailStops);
 		return std::exp2(stops);
 	}
 }

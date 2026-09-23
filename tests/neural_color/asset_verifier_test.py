@@ -18,8 +18,11 @@ class AssetTests(unittest.TestCase):
         self.shaders = self.root / assets.FEATURE / assets.SHADERS
         self.shaders.mkdir(parents=True)
         (self.root / assets.FEATURE / "CORE").touch()
+        registry = self.root / "include/FeatureVersions.h"
+        registry.parent.mkdir(parents=True)
+        registry.write_text('"NeuralRendering"sv, {1,5,0}\n')
         manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralRendering.ini"
-        manifest.parent.mkdir(parents=True); manifest.write_text("[Info]\nVersion = 1-3-0\n")
+        manifest.parent.mkdir(parents=True); manifest.write_text("[Info]\nVersion = 1-5-0\n")
         for name in assets.NAMES:
             (self.shaders / name).write_text('#include "Upscaling/NeuralRendering/ColorCommon.hlsli"\n' if name.endswith(".hlsl") else "// fixture\n")
         self.producers = self.root / "src/Features/Upscaling/NeuralRendering"
@@ -66,6 +69,23 @@ class AssetTests(unittest.TestCase):
     def test_missing_core_marker(self):
         (self.root / assets.FEATURE / "CORE").unlink()
         self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_manifest_requires_one_valid_version(self):
+        manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralRendering.ini"
+        for text in ("[Info]\n", "[Info]\nVersion = 1.5.0\n",
+                     "[Info]\nVersion = 1-5-0\nVersion = 1-5-1\n"):
+            with self.subTest(text=text):
+                manifest.write_text(text)
+                result = assets.verify(self.root)
+                self.assertFalse(result["ok"])
+                self.assertTrue(any("exactly one valid version" in error for error in result["errors"]))
+
+    def test_manifest_must_match_feature_registry(self):
+        manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralRendering.ini"
+        manifest.write_text("[Info]\nVersion = 1-4-0\n")
+        result = assets.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("differs from registry 1-5-0" in error for error in result["errors"]))
 
     def test_missing_runtime_reference(self):
         (self.producers / "ExposureCapture.cpp").write_text("// missing compile call\n")

@@ -69,6 +69,18 @@ def editable(status: dict) -> dict:
     return result
 
 
+def effective_reconstruction_settings(settings: dict) -> dict:
+    """Resolve derived colour controls without rewriting persisted settings."""
+    if not isinstance(settings, dict):
+        raise AssessmentError("malformed colour settings")
+    effective = settings.copy()
+    if effective.get("enabled", True) and effective.get("mode") == "neural_lighting":
+        if "appearanceMix" not in effective or "lightingPreservation" not in effective:
+            raise AssessmentError("Neural Lighting evidence lacks derived reconstruction controls")
+        effective.update(appearanceMix=0.0, lightingPreservation=0.0)
+    return effective
+
+
 def lighting_evidence(settings: dict, observations: list[dict]) -> dict:
     """Never infer the new control from old evidence or current menu state."""
     if not isinstance(settings, dict) or not isinstance(observations, list) or any(
@@ -147,7 +159,7 @@ def fresh_groups(status: dict, revision: int, insertion: int, after_frame: int,
                 or not frame_advanced(source.get("sourceWorldFrame"), after_frame, warmup)):
             continue
         try:
-            lighting_evidence(status.get("settings", {}), [source])
+            lighting_evidence(effective_reconstruction_settings(status.get("settings", {})), [source])
         except AssessmentError:
             continue
         if len(values) != 24 or not all(number(x) for x in values):

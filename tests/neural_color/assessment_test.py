@@ -46,6 +46,19 @@ class AssessmentTests(unittest.TestCase):
         status = {"apiVersion": 3, "settings": {"lightingPreservation": 0.0}, "measurementBatches": [batch]}
         self.assertEqual(len(assess.fresh_groups(status, 7, 0, 90)), 1)
 
+    def test_neural_lighting_resolves_effective_evidence_without_mutation(self):
+        saved = {"enabled": True, "mode": "neural_lighting", "appearanceMix": 0.75,
+                 "lightingPreservation": 1.0}
+        effective = assess.effective_reconstruction_settings(saved)
+        self.assertEqual(effective["appearanceMix"], 0.0)
+        self.assertEqual(effective["lightingPreservation"], 0.0)
+        self.assertEqual((saved["appearanceMix"], saved["lightingPreservation"]), (0.75, 1.0))
+        self.assertEqual(assess.lighting_evidence(effective, [{"lightingPreservation": 0.0}])["value"], 0.0)
+        disabled = assess.effective_reconstruction_settings({**saved, "enabled": False})
+        self.assertEqual(disabled["lightingPreservation"], 1.0)
+        with self.assertRaisesRegex(assess.AssessmentError, "lacks derived reconstruction controls"):
+            assess.effective_reconstruction_settings({"enabled": True, "mode": "neural_lighting"})
+
     def test_lighting_preservation_requires_sampled_value_in_every_region(self):
         batch = self.batch(1, 100, (0, 1, 4, 5))
         status = {"apiVersion": 3, "settings": {"lightingPreservation": 0.5}, "measurementBatches": [batch]}

@@ -21,7 +21,8 @@ namespace
 {
 	using namespace NeuralRendering::Color;
 	using Json = nlohmann::json;
-	constexpr std::array<const char*, 3> modes{ "legacy_raw", "managed", "preserve_source" };
+	constexpr std::array<const char*, 4> modes{ "legacy_raw", "managed", "preserve_source", "neural_lighting" };
+	static_assert(modes.size() == static_cast<std::size_t>(Mode::Count));
 	constexpr std::array<const char*, 3> domains{ "unknown", "linear", "srgb" };
 	constexpr std::array<const char*, 3> transforms{ "identity", "linear_to_srgb", "reversible_proxy" };
 	constexpr std::array<const char*, 3> exposureSources{ "manual", "captured_hdr", "captured_hdr_previous" };
@@ -454,11 +455,12 @@ namespace
           },
           "mode": {
             "type": "string",
-            "description": "managed is experimental colour/exposure reconstruction, not a calibrated production preset. Its menu entry requires Developer Mode; API and saved enum values remain supported. Preservation sliders affect preserve_source only.",
+            "description": "managed is experimental colour/exposure reconstruction, not a calibrated production preset. Its menu entry requires Developer Mode; API and saved enum values remain supported. preserve_source suppresses broad lighting according to lightingPreservation; neural_lighting retains source colour while admitting the full bounded neural brightness field.",
             "enum": [
               "legacy_raw",
               "managed",
-              "preserve_source"
+              "preserve_source",
+              "neural_lighting"
             ]
           },
           "detailStrength": {
@@ -683,12 +685,14 @@ void NeuralRenderingFeature::DrawSettings()
 	changed |= ImGui::Checkbox("Enable colour processing", &config.settings.enabled);
 	if (auto tooltip = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Applies the selected colour mode and preservation settings. Off uses Original model output while NR stays on; your colour settings are retained.");
-	static constexpr std::array colourModes{ "Original", "Managed (experimental)", "Preserve source" };
+	static constexpr std::array colourModes{ "Original", "Managed (experimental)", "Preserve source", "Neural lighting" };
 	static constexpr std::array colourModeHelp{
 		"Uses the model output directly, without source-colour preservation. NR remains active.",
 		"Uses experimental colour and exposure reconstruction with session-only calibration. Preservation sliders do not apply.",
-		"Keeps the game's colour and adds neural brightness detail. The preservation sliders control how much lighting and model appearance may change."
+		"Keeps the game's colour and adds neural brightness detail. The preservation sliders control how much lighting and model appearance may change.",
+		"Keeps the game's source colour and alpha while applying the full bounded neural brightness field. Model chroma is not applied."
 	};
+	static_assert(colourModes.size() == static_cast<std::size_t>(Mode::Count) && colourModeHelp.size() == colourModes.size());
 	const bool colourModeOpen = ImGui::BeginCombo("Colour mode", colourModes[static_cast<std::size_t>(config.settings.mode)]);
 	if (!colourModeOpen) {
 		if (auto tooltip = Util::HoverTooltipWrapper())
@@ -711,13 +715,15 @@ void NeuralRenderingFeature::DrawSettings()
 		}
 		ImGui::EndCombo();
 	}
-	ImGui::TextWrapped("Original uses the model output directly. Preserve source retains the game's colour and adds selected neural detail. Turning colour processing off uses Original while NR stays enabled.");
+	ImGui::TextWrapped("Original uses the model output directly. Preserve source retains selected neural detail. Neural lighting keeps source colour while applying neural brightness. Turning colour processing off uses Original while NR stays enabled.");
 	if (config.settings.mode == Mode::Managed) {
 		ImGui::TextWrapped("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.");
 		ImGui::TextWrapped(showDiagnostics ?
 							   "Adjust its session-only calibration under Colour experiments and diagnostics. Identity calibration can look like Original." :
 							   "Your saved mode is retained. Choose Original or Preserve source, or set Log Level to Debug to inspect its calibration.");
 	}
+	const bool usesSourceColourReconstruction =
+		config.settings.mode == Mode::PreserveSource || config.settings.mode == Mode::NeuralLighting;
 	{
 		const bool preservationActive = config.EffectiveMode() == Mode::PreserveSource && config.settings.appearanceMix < 1.0f &&
 		                                config.settings.detailStrength > 0.0f && config.settings.maximumDetailStops > 0.0f;
@@ -728,9 +734,11 @@ void NeuralRenderingFeature::DrawSettings()
 			changed = true;
 		}
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("100% suppresses broad neural brightness changes; 0% allows them. Fine detail can remain at either end. Applies to Preserve source; Neural appearance mix can add model lighting back.");
+			ImGui::TextUnformatted("100% suppresses broad neural brightness changes; 0% allows them. Fine detail can remain at either end. Applies to Preserve source; Neural lighting always uses 0% without changing this saved value.");
 	}
-	if (config.settings.mode != Mode::PreserveSource)
+	if (config.settings.mode == Mode::NeuralLighting)
+		ImGui::TextWrapped("Neural lighting admits the full bounded neural brightness field. Lighting preservation and Neural appearance mix do not apply.");
+	else if (config.settings.mode != Mode::PreserveSource)
 		ImGui::TextWrapped("Choose Preserve source to adjust lighting preservation.");
 	else if (!config.settings.enabled)
 		ImGui::TextWrapped("Enable colour processing to apply lighting preservation. Your settings are retained.");
@@ -738,16 +746,20 @@ void NeuralRenderingFeature::DrawSettings()
 		ImGui::TextWrapped("Lower Neural appearance mix below 1 to use lighting preservation.");
 	else if (config.settings.detailStrength == 0.0f || config.settings.maximumDetailStops == 0.0f)
 		ImGui::TextWrapped("Raise Detail contribution and Maximum detail gain above zero to use lighting preservation.");
-	if (config.settings.mode == Mode::PreserveSource) {
+	if (usesSourceColourReconstruction) {
 		changed |= ImGui::SliderFloat("Detail contribution", &config.settings.detailStrength, 0, 2);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Sets the strength of neural brightness detail added to source colour. 0 removes this detail contribution; 1 uses its normal strength; 2 doubles it before the gain limit.");
+			ImGui::TextUnformatted("Sets the strength of neural brightness applied to source colour. 0 removes it; 1 uses its normal strength; 2 doubles it before the gain limit. Shared by Preserve source and Neural lighting.");
+	}
+	if (config.settings.mode == Mode::PreserveSource) {
 		changed |= ImGui::SliderFloat("Neural appearance mix", &config.settings.appearanceMix, 0, 1);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("0 uses source colour with the selected neural detail; 1 uses the reconstructed model appearance. Higher values admit more model colour and lighting and bypass more preservation.");
+	}
+	if (usesSourceColourReconstruction) {
 		changed |= ImGui::SliderFloat("Maximum detail gain (stops)", &config.settings.maximumDetailStops, 0, 2);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Caps brightening and darkening from preserved neural detail: 1 stop allows up to twice or half the source brightness. Neural appearance mix is outside this limit.");
+			ImGui::TextUnformatted("Caps neural brightening and darkening: 1 stop allows up to twice or half the source brightness. Shared by Preserve source and Neural lighting; Preserve source appearance mix is outside this limit.");
 	}
 	const bool outputOverrideActive = config.experiments.transportBypass || !config.experiments.applyModelEdit ||
 	                                  (config.EffectiveMode() != Mode::LegacyRaw &&

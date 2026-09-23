@@ -588,9 +588,12 @@ int main()
 	require(ImGui::colourPreview == "Managed (experimental)" && !ImGui::Seen("Managed (experimental)") &&
 				registry.configuration.settings == savedManaged.settings && registry.configuration.revision == savedManaged.revision,
 		"A saved Managed mode must remain visible without passive migration or a normal-menu selection");
-	for (const auto* choice : { "Preserve source", "Original" }) {
+	for (const auto* choice : { "Preserve source", "Neural lighting", "Original" }) {
 		draw(choice);
-		require(registry.configuration.settings.mode == (std::string_view(choice) == "Original" ? Mode::LegacyRaw : Mode::PreserveSource),
+		const auto expectedMode = std::string_view(choice) == "Original"        ? Mode::LegacyRaw :
+		                          std::string_view(choice) == "Neural lighting" ? Mode::NeuralLighting :
+		                                                                          Mode::PreserveSource;
+		require(registry.configuration.settings.mode == expectedMode,
 			"Users must be able to leave a saved Managed mode without enabling developer mode");
 	}
 	const auto normalMode = registry.Snapshot();
@@ -598,9 +601,10 @@ int main()
 	require(registry.configuration.settings == normalMode.settings && registry.configuration.revision == normalMode.revision,
 		"Normal UI must not accept an experimental Managed selection");
 	state.level = spdlog::level::debug;
-	for (const auto* choice : { "Preserve source", "Managed (experimental)", "Original", "Preserve source" }) {
+	for (const auto* choice : { "Preserve source", "Neural lighting", "Managed (experimental)", "Original", "Preserve source" }) {
 		const auto mode = std::string_view(choice) == "Original"        ? Mode::LegacyRaw :
 		                  std::string_view(choice) == "Preserve source" ? Mode::PreserveSource :
+		                  std::string_view(choice) == "Neural lighting" ? Mode::NeuralLighting :
 		                                                                  Mode::Managed;
 		const auto prior = registry.Snapshot();
 		draw(choice);
@@ -610,6 +614,14 @@ int main()
 			"Actual colour-mode selections must preserve nondefault lighting preferences");
 		require(ImGui::Disabled("Lighting preservation") == (mode != Mode::PreserveSource),
 			"Changing colour mode must update slider availability in the same draw");
+		if (mode == Mode::NeuralLighting) {
+			require(ImGui::Seen("Neural lighting admits the full bounded neural brightness field. Lighting preservation and Neural appearance mix do not apply."),
+				"Neural Lighting must explain its fixed full-tone reconstruction");
+			require(ImGui::Seen("Detail contribution") && ImGui::Seen("Maximum detail gain (stops)"),
+				"Neural Lighting must expose its shared bounded detail controls");
+			require(!ImGui::Seen("Neural appearance mix"),
+				"Neural Lighting must not expose an inapplicable appearance control");
+		}
 	}
 	state.level = spdlog::level::info;
 	registry.configuration.settings.lightingPreservation = 0.3737f;

@@ -12,7 +12,7 @@ function(extract start_marker end_marker output)
     string(SUBSTRING "${source}" ${start} ${length} result)
     set(${output} "${result}" PARENT_SCOPE)
 endfunction()
-extract("\tconstexpr std::array<const char*, 3> modes" "\tJson ProfileJson(" helpers)
+extract("\tconstexpr std::array<const char*," "\tJson ProfileJson(" helpers)
 extract("void NeuralRenderingFeature::LoadSettings(" "void NeuralRenderingFeature::EarlyPrepass(" methods)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_feature_settings_under_test.h"

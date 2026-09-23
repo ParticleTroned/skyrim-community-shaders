@@ -1168,7 +1168,7 @@ namespace NeuralRendering
 			observation.profile = Color::EffectiveProfile(capture.configuration, capture.insertion);
 			observation.bypass = capture.configuration.experiments.transportBypass;
 			observation.modelEditShown = capture.configuration.experiments.applyModelEdit;
-			observation.lightingPreservation = capture.configuration.settings.lightingPreservation;
+			observation.lightingPreservation = Color::ResolveReconstructionSettings(capture.configuration.settings).lightingPreservation;
 			observation.rect = a_resources.outputSubrect;
 			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.resourceKey.colorFormat);
 			observation.outputFormat = static_cast<std::uint32_t>(a_resources.resourceKey.outputFormat);

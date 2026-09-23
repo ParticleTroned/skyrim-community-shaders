@@ -16,9 +16,9 @@ once downstream; neither the capture nor colour shaders author a character mask.
 Existing raw-depth, guide, cluster-history, stereo fallback and final-LDR guards
 remain intact. Colour-enabled sequential stereo retains the atomic batch path.
 
-Modes remain `legacy_raw` (compatibility default), `managed`, and
-`preserve_source`. Managed transfers the model residual relative to the actual
-quantized prepared input, not an independently recomputed proxy:
+Modes are `legacy_raw` (compatibility default), `managed`, `preserve_source`,
+and `neural_lighting`. Managed transfers the model residual relative to the
+actual quantized prepared input, not an independently recomputed proxy:
 
 `candidate = baseline + inverse(neural) - inverse(prepared)`
 
@@ -30,6 +30,13 @@ estimate and its spatial scale are unchanged. Appearance mix accepts more of the
 including tone and chroma, not merely hue. This is an image-space mitigation,
 not physical decomposition of reflections/shadows. Source alpha is retained.
 The unknown/native-domain brightness metric is not calibrated luminance.
+
+Neural Lighting is a named use of that same reconstruction path. It admits the
+full bounded luminance residual and fixes appearance mix to zero, so the source
+RGB ratios and alpha remain authoritative while the model supplies brightness.
+Detail strength and maximum gain remain shared controls. Selecting the mode does
+not rewrite the saved Preserve Source lighting-preservation or appearance values.
+It adds no second shader, colour transport, exposure path or temporal history.
 
 The detail filter uses adjacent, ROI-clamped 3-by-3 samples. Spacing those
 samples two pixels apart cancels alternating fine detail before the strength
@@ -92,7 +99,8 @@ The Advanced colour section provides:
 
 -   **Enable colour processing**: retain the chosen mode/sliders while bypassing
     their application. The NR master switch is in the same feature panel.
--   Normal colour-mode choices are **Original** and **Preserve source**.
+-   Normal colour-mode choices are **Original**, **Preserve source**, and
+    **Neural lighting**.
     Colour processing Off selects Original/raw NR without disabling NR.
     **Managed (experimental)** is offered only in Developer Mode
     (Debug/Trace). Existing saved Managed selections remain visibly labelled
@@ -108,11 +116,16 @@ The Advanced colour section provides:
 -   Preserve-source detail contribution, neural appearance mix and maximum
     detail gain. Unavailable FOV prerequisites disable dependent NR controls
     with a setup notice; mode selection remains available for recovery.
+-   Neural Lighting keeps source colour and alpha while applying the complete
+    bounded neural brightness field. Detail contribution and maximum detail
+    gain use the same controls; lighting preservation and appearance mix remain
+    saved for Preserve Source and are not applied in this mode.
 
 Managed uses the session-only colour/exposure calibration under **Colour
 experiments and diagnostics**; it is not a validated production preset.
 Default Identity conversion and unit exposure can look like Original.
-The preservation sliders affect Preserve source only.
+Lighting preservation and appearance mix affect Preserve Source only. Detail
+contribution and maximum detail gain also bound Neural Lighting.
 
 **Debug/Trace** additionally exposes A/B comparison, engine HDR exposure
 capture, separate early/late domain and exposure experiments, transport
@@ -127,7 +140,7 @@ DevBench call the same compare-and-set registry; neither polls a configuration
 file or performs GPU work from a DevBench worker thread.
 
 `Shaders/Features/NeuralRendering.ini` is ONLY a feature/version manifest, now
-**1-3-0**. It is installed by the build; users do not edit it to assess colours.
+**1-5-0**. It is installed by the build; users do not edit it to assess colours.
 The separate older `work/face-of-gogh-colour-20260914` experiment used an editable
 `NRColor.ini`; that is not this branch's control interface.
 
@@ -401,7 +414,7 @@ All required shaders are in the colour feature package: ColorPrepareCS,
 ColorReconstructCS, ColorMeasureCS, ColorExposureCS, plus ColorCommon.hlsli.
 Normal recursive source/feature discovery and shader-copy paths include them.
 Install the rebuilt plugin AND feature/shader files. The current manifest is
-1-3-0; the shared colour constant buffer is now 64 bytes. Deploy the DLL and
+1-5-0; the shared colour constant buffer is 64 bytes. Deploy the DLL and
 all colour shader assets together and invalidate the old feature shader cache.
 
 ```powershell

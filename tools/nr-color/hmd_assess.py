@@ -24,13 +24,16 @@ import shutil
 import sys
 from typing import Any
 
-from assess import AssessmentError, lighting_evidence
+from assess import AssessmentError, effective_reconstruction_settings, lighting_evidence
 from transaction_evidence import TransactionEvidenceError, join_execution_evidence
 
 VERSION = "csx-nr-hmd-assessment-v1"
 EYES = ("left", "right")
 CLASSES = {"skin", "material", "shadow", "highlight", "background"}
 OBJECTIVES = ("colourFidelity", "usefulNeuralDetail", "temporalStability", "stereoConsistency")
+MODE = {"nr_off": "legacy_raw", "raw": "legacy_raw", "managed_identity": "managed",
+        "conversion": "managed", "preserve_source": "preserve_source",
+        "neural_lighting": "neural_lighting"}
 HERE = Path(__file__).resolve().parent
 SAMPLING_LIMITATION = (
     "Temporal conclusions cover the sampled acquisition cadence only. Sparse or irregular captures can alias or miss "
@@ -131,7 +134,7 @@ def check_regions(policy: dict) -> None:
 
 def check_candidate(candidate: dict) -> None:
     kind = candidate["condition"]
-    require(kind in {"nr_off", "raw", "managed_identity", "conversion", "preserve_source"}, "unknown condition")
+    require(kind in MODE, "unknown condition")
     require(isinstance(candidate.get("settings"), dict) and candidate["settings"], "candidate settings required")
     if kind == "conversion":
         require(candidate.get("rationale") and candidate.get("domainHypothesis")
@@ -150,6 +153,7 @@ def make_plan(spec: dict, policy: dict, seed: int) -> dict:
     kinds = [candidate["condition"] for candidate in candidates]
     require(all(kinds.count(kind) == 1 for kind in ("nr_off", "raw", "managed_identity", "preserve_source")),
             "retain one distinct NR-off, Raw, Managed identity and Preserve Source condition")
+    require(kinds.count("neural_lighting") <= 1, "retain at most one Neural Lighting condition")
     generator = random.Random(seed)
     identities = generator.sample(range(0x100000, 0xFFFFFF), len(candidates) * 2)
     mapping = {}
@@ -303,8 +307,6 @@ def check_nr(evidence: dict, expected: dict, candidate: dict, acquisition: dict,
             and evidence.get("configurationFingerprint") == expected["configurationFingerprint"], "configuration fingerprint mismatch")
     require(evidence.get("configuration") == expected.get("configuration") and bool(expected.get("configuration")),
             "applied configuration differs from frozen capture state")
-    expected_mode = {"nr_off": "legacy_raw", "raw": "legacy_raw", "managed_identity": "managed",
-                     "conversion": "managed", "preserve_source": "preserve_source"}
     kind = candidate.get("sourceCondition", candidate["condition"])
     nr_enabled = kind != "nr_off"
     configuration = evidence["configuration"]
@@ -317,12 +319,12 @@ def check_nr(evidence: dict, expected: dict, candidate: dict, acquisition: dict,
         except AssessmentError as error:
             raise EvidenceError("lighting preservation differs from declared candidate or is absent") from error
     observations = [region for eye in EYES for region in evidence[eye].get("physicalRegions", [])]
-    if nr_enabled and kind in ("preserve_source", "managed_identity", "conversion") and "lightingPreservation" in colour["settings"]:
+    if nr_enabled and kind in ("preserve_source", "neural_lighting", "managed_identity", "conversion") and "lightingPreservation" in colour["settings"]:
         require(all(evidence[eye].get("physicalRegions") for eye in EYES), "lighting preservation observations missing for an eye")
     observations.extend(item["source"] for batch in (capture_diagnostics or {}).get("measurementBatches", [])
                         for item in batch.get("measurements", []))
     try:
-        lighting_evidence(colour["settings"], observations)
+        lighting_evidence(effective_reconstruction_settings(colour["settings"]), observations)
     except AssessmentError as error:
         raise EvidenceError(str(error)) from error
     experiments = colour["experiments"]
@@ -355,7 +357,7 @@ def check_nr(evidence: dict, expected: dict, candidate: dict, acquisition: dict,
                 "applied frame is older than the explicitly permitted capture age")
         require(record["colorRevision"] == expected["colorRevision"] and record["inputEpoch"] == expected["inputEpoch"],
                 "stale applied colour revision/input epoch")
-        require(record.get("effectiveMode") == expected_mode[kind], "effective colour mode mismatch")
+        require(record.get("effectiveMode") == MODE[kind], "effective colour mode mismatch")
         require(record.get("nrEnabled") is nr_enabled, "NR enablement mismatch")
         require(record.get("applyModelEdit") is candidate["applyModelEdit"], "display-only state mismatch")
         for name in ("inferenceAttempted", "inferenceSucceeded"):
@@ -474,7 +476,7 @@ def check_pair(child: dict, base: Path, expected: dict, candidate: dict, policy:
     return {"requestId": child["requestId"], "ordinal": child["ordinal"], "acquisition": acquisition,
             "images": outputs, "captureDiagnostics": companions,
             "lightingPreservationEvidence": lighting_evidence(
-                acquisition["nrEvidence"]["configuration"]["color"]["settings"],
+                effective_reconstruction_settings(acquisition["nrEvidence"]["configuration"]["color"]["settings"]),
                 [region for eye in EYES for region in acquisition["nrEvidence"][eye].get("physicalRegions", [])])}
 
 

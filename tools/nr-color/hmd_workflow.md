@@ -75,7 +75,8 @@ The specification JSON contains `sceneFingerprint`, `fixedScene`,
     `fixedScene.gameHour` and `fixedScene.gameHourTolerance` pin the time
     window. The runtime runner checks the preserved recorder evidence.
 -   `candidates` contains one each of `nr_off`, `raw`, `managed_identity` and
-    `preserve_source`, plus any justified `conversion` entries. Each candidate
+    `preserve_source`, plus optional `neural_lighting` and any justified
+    `conversion` entries. Each candidate
     has `condition` and a nonempty `settings` patch for the existing
     `nr_color.configure` settings/experiments structure. Names are optional
     private labels and never enter the visual-review prompt.

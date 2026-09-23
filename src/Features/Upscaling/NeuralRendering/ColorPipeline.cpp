@@ -45,6 +45,7 @@ namespace NeuralRendering::Color
 		Constants MakeConstants(const Work& work)
 		{
 			const auto& config = work.configuration;
+			const auto settings = ResolveReconstructionSettings(config.settings);
 			const auto& roi = work.observation.rect;
 			const auto& profile = work.observation.profile;
 			const std::uint32_t flags = (config.experiments.transportBypass ? 1u : 0u) |
@@ -52,10 +53,10 @@ namespace NeuralRendering::Color
 			                            (profile.exposureSource != ExposureSource::Manual ? 4u : 0u) |
 			                            (NeedsExposureCapture(config) ? 8u : 0u) | static_cast<std::uint32_t>(OutputStorage(work.format));
 			return { roi.baseX, roi.baseY, roi.width, roi.height,
-				static_cast<std::uint32_t>(config.EffectiveMode()), static_cast<std::uint32_t>(profile.domain),
+				static_cast<std::uint32_t>(settings.mode), static_cast<std::uint32_t>(profile.domain),
 				static_cast<std::uint32_t>(profile.transform), flags, profile.exposureMultiplier,
-				config.settings.detailStrength, config.settings.appearanceMix, config.settings.maximumDetailStops,
-				config.settings.lightingPreservation, {} };
+				settings.detailStrength, settings.appearanceMix, settings.maximumDetailStops,
+				settings.lightingPreservation, {} };
 		}
 		bool CreateTexture(ID3D11Device* device, Texture& texture,
 			std::uint32_t width, std::uint32_t height, DXGI_FORMAT format, bool output)
@@ -371,7 +372,7 @@ namespace NeuralRendering::Color
 		o.revision = config.revision;
 		o.bypass = config.experiments.transportBypass;
 		o.modelEditShown = config.experiments.applyModelEdit;
-		o.lightingPreservation = work.configuration.settings.lightingPreservation;
+		o.lightingPreservation = ResolveReconstructionSettings(work.configuration.settings).lightingPreservation;
 		o.processed = false;
 		std::uint64_t pixelBytes = 4;
 		if (work.format == DXGI_FORMAT_R16G16B16A16_FLOAT || work.format == DXGI_FORMAT_R16G16B16A16_UNORM)

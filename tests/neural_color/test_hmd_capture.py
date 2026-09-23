@@ -124,7 +124,8 @@ class CaptureTests(unittest.TestCase):
 
     def test_modes_and_display_only_are_distinct(self):
         for kind, enabled, mode in (("nr_off", False, "legacy_raw"), ("raw", False, "legacy_raw"),
-                                    ("managed_identity", True, "managed"), ("preserve_source", True, "preserve_source")):
+                                    ("managed_identity", True, "managed"), ("preserve_source", True, "preserve_source"),
+                                    ("neural_lighting", True, "neural_lighting")):
             result = capture.candidate_colour(colour(), candidate(kind))
             self.assertEqual((result["settings"]["enabled"], result["settings"]["mode"]), (enabled, mode))
             self.assertTrue(result["experiments"]["captureFrameEvidence"])

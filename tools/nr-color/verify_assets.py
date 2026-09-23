@@ -11,6 +11,8 @@ FEATURE = Path("features/Neural Rendering")
 SHADERS = Path("Shaders/Upscaling/NeuralRendering")
 NAMES = ("ColorCommon.hlsli", "ColorPrepareCS.hlsl", "ColorReconstructCS.hlsl",
          "ColorMeasureCS.hlsl", "ColorExposureCS.hlsl")
+MANIFEST_VERSION = re.compile(r"^\s*Version\s*=\s*(\d+)-(\d+)-(\d+)\s*$", re.MULTILINE)
+REGISTRY_VERSION = re.compile(r'"NeuralRendering"sv,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}')
 
 
 def verify(root: Path, deployed_data: Path | None = None) -> dict:
@@ -18,6 +20,15 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
     mappings += [(FEATURE / SHADERS / name, SHADERS / name) for name in NAMES]
     errors: list[str] = []
     rows: list[dict] = []
+    registry = root / "include/FeatureVersions.h"
+    try:
+        registry_versions = REGISTRY_VERSION.findall(registry.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError) as error:
+        registry_versions = []
+        errors.append(f"Unreadable Neural Rendering feature registry: {error}")
+    if len(registry_versions) != 1:
+        errors.append("Feature registry must declare exactly one Neural Rendering version")
+    expected_version = "-".join(registry_versions[0]) if len(registry_versions) == 1 else None
     packaged = {(root / source).resolve() for source, _ in mappings}
     if not (root / FEATURE / "CORE").is_file():
         errors.append("Missing colour CORE marker")
@@ -46,8 +57,12 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
                         # not a complete shader package. Every mapped include is
                         # itself scanned and hash-checked, closing dependencies.
                         errors.append(f"Shader include is not packaged: {include} from {source}")
-            if path.suffix == ".ini" and "Version = 1-3-0" not in text:
-                errors.append("Neural Rendering manifest version is not 1-3-0")
+            if path.suffix == ".ini":
+                manifest_versions = MANIFEST_VERSION.findall(text)
+                if len(manifest_versions) != 1:
+                    errors.append("Neural Rendering manifest must declare exactly one valid version")
+                elif expected_version is not None and "-".join(manifest_versions[0]) != expected_version:
+                    errors.append(f"Neural Rendering manifest version differs from registry {expected_version}")
             if deployed_data is not None:
                 deployed = deployed_data / target
                 row["deployedPresent"] = deployed.is_file()

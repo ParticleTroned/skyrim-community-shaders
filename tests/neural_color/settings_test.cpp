@@ -82,6 +82,15 @@ static Json Call(Json request)
 int main()
 {
 	NeuralRenderingFeature feature;
+	Settings neuralLightingSettings{};
+	ReadSettings({ { "mode", "neural_lighting" }, { "appearanceMix", 0.75 }, { "lightingPreservation", 1.0 } }, neuralLightingSettings);
+	Require(neuralLightingSettings.mode == Mode::NeuralLighting && SettingsJson(neuralLightingSettings)["mode"] == "neural_lighting",
+		"Neural Lighting settings parse and serialize without rewriting Preserve Source controls");
+	const auto neuralLightingEffective = ResolveReconstructionSettings(neuralLightingSettings);
+	Require(neuralLightingEffective.mode == Mode::PreserveSource && neuralLightingEffective.appearanceMix == 0 &&
+				neuralLightingEffective.lightingPreservation == 0 && neuralLightingSettings.appearanceMix == 0.75f &&
+				neuralLightingSettings.lightingPreservation == 1,
+		"Neural Lighting derives the shared full-tone reconstruction without mutating saved controls");
 	auto old = Json{ { "mode", "preserve_source" }, { "detailStrength", 0.75 } };
 	feature.LoadSettings(old);
 	auto original = Registry::Instance().Snapshot();

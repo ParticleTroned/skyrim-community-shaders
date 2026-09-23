@@ -55,6 +55,17 @@ int main()
 	Require(DetailGain(2.0f, 0.0f, 1.0f, s) == 1.0f);
 	s.detailStrength = 2.0f;
 	Require(DetailGain(8.0f, 0.0f, 1.0f, s) <= 2.0f);
+	s = {};
+	s.mode = Mode::NeuralLighting;
+	s.appearanceMix = 0.75f;
+	s.lightingPreservation = 1.0f;
+	const auto neuralLighting = ResolveReconstructionSettings(s);
+	Require(neuralLighting.mode == Mode::PreserveSource);
+	Require(neuralLighting.appearanceMix == 0.0f && neuralLighting.lightingPreservation == 0.0f);
+	Require(neuralLighting.detailStrength == s.detailStrength && neuralLighting.maximumDetailStops == s.maximumDetailStops);
+	Require(DetailGain(0.5f, 0.5f, 1.0f, s) == std::exp2(0.5f));
+	s.enabled = false;
+	Require(ResolveReconstructionSettings(s).mode == Mode::LegacyRaw);
 	Configuration a{}, b{};
 	b.experiments.captureFrameEvidence = true;
 	Require(!b.Enabled());

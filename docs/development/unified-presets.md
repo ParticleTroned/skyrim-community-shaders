@@ -8,6 +8,20 @@ The three `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
 | Balanced    | Quality           | Off                  | Low         | On         | On              |
 | Quality     | Ultra Quality     | AO-only, provisional | Medium      | On         | On              |
 
+Image Based Lighting (IBL) is disabled in all three tiers through the shared
+`Image Based Lighting/EnableIBL=0` policy and generation guard.
+
+Exterior and interior Volumetric Lighting share godray intensity, opacity,
+saturation, custom colour contribution, and RGB values of `1.0` across all
+tiers. Disabling weather-driven Volumetric Lighting during rain is unchecked.
+
+Adaptive Balance uses the built-in Fantasy preset for global Bloom shaping,
+with the global Bloom strength reduced to `0.50` in every tier.
+
+Subsurface Scattering uses Burley with 16 samples and character lighting off
+in every tier. Male/female SSS intensity is `1.00`/`1.10`; both use SSS
+saturation `1.00`, skin brightness `0.75`, and skin saturation `1.05`.
+
 The capability boundary is the existing pair of upscaling settings. Together
 they describe one preference, not a staged DLSS-to-FSR transition:
 

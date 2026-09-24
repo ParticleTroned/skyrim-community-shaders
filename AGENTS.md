@@ -79,6 +79,7 @@ contradict this policy.
 ### Commit hygiene
 
 -   Commit only files required by the requested change. Leave unrelated tracked changes and untracked user files untouched.
+-   Keep implementation-related documentation, investigation notes, and validation records in the same commit as the change they explain. Fold later documentation updates into that commit instead of publishing separate documentation-only follow-ups. Preserve the exact measured source commits and Build IDs when folding evidence. Standalone documentation work may have its own `docs` commit; rewriting a shared branch still requires explicit user authorization.
 -   Every commit created or rewritten by an agent must use this structure, even when the change is small:
 
     ```text
@@ -145,9 +146,11 @@ contradict this policy.
     the numbered ledgers indexed by `docs/development/vr-render-scale-ledger.md`,
     `docs/development/vr-render-scale-iteration.md`, and the relevant compact
     tuning or failure summary. If runtime evidence follows an implementation
-    commit, make an immediate documentation commit before starting the next
-    render-scale change. Do not version raw per-run evidence trees merely to
-    preserve a measurement.
+    commit, fold its documentation into that implementation commit before
+    starting the next render-scale change, preserving the original measured
+    source identity and following the shared-branch rewrite authorization
+    rules. Do not version raw per-run evidence trees merely to preserve a
+    measurement.
 -   Create a new immutable numbered ledger for every finalized measurement
     and whenever publishing measurements for a different PR. Use
     `docs/development/vr-render-scale-ledger-NNNN-prNUMBER.csv`, increasing

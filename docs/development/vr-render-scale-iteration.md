@@ -2037,3 +2037,27 @@ establish the original hang's cause or certify a performance improvement.
 The exact corrected build still needs COC, capture, flowmap and matched
 performance evidence. No new runtime measurements or ledger cells are
 published by this implementation review.
+
+## September 24: production CPU fast-path integration
+
+The [production CPU integration](vr-cpu-fastpaths-20260924.md) combines lazy
+provider/adapter selection, active shadow-bucket bookkeeping and immediate
+material-admission reuse on main-VR `8ade30b8e`. Ordinary VR draws bypass
+provider normalization when no physical change is pending; startup capability
+callbacks and pending-transition normalization remain. Diagnostic scene
+logging is excluded; the available FidelityFX pin is now main-VR's own pin.
+
+Adversarial review of `fecd92a75` added tests of the actual particle/terrain
+routing and strengthened the particle callback boundary while removing
+redundant eligibility checks. Ten focused Release tests passed, including
+unchanged provider selection and late-capability behavior. No game timing,
+render-scale qualification or new measurement ledger is claimed. Existing
+measurement ledgers remain unchanged; the implementation and validation
+limits are recorded in the linked integration report.
+
+The clean implementation `40d1dd047` subsequently passed a universal
+Production Release DLL build and all ten tests through the full project.
+Three ownership/routing tests also passed under AddressSanitizer. The
+producer Build ID and DLL hash are recorded in the integration report.
+This compile and controller evidence does not qualify real render-scale
+transitions, gameplay stability or frame-time improvement.

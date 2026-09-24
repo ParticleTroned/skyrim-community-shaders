@@ -105,38 +105,16 @@ namespace
 	}
 #endif
 
-	std::optional<UINT> GetActiveAdapterVendorID()
-	{
-		if (!globals::d3d::device)
-			return std::nullopt;
-
-		winrt::com_ptr<IDXGIDevice> dxgiDevice;
-		if (FAILED(globals::d3d::device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()))))
-			return std::nullopt;
-
-		winrt::com_ptr<IDXGIAdapter> adapter;
-		if (FAILED(dxgiDevice->GetAdapter(adapter.put())))
-			return std::nullopt;
-
-		DXGI_ADAPTER_DESC description{};
-		if (FAILED(adapter->GetDesc(&description)))
-			return std::nullopt;
-
-		return description.VendorId;
-	}
-
 	UpscalingProviderSelectionPolicy::Selection GetProviderSelection(
 		Upscaling::UpscaleMethod a_primaryMethod)
 	{
-		const auto vendorID = GetActiveAdapterVendorID();
-		return UpscalingProviderSelectionPolicy::Select({
-			.primaryRequestsDLSS =
-				a_primaryMethod == Upscaling::UpscaleMethod::kDLSS,
-			.adapterKnown = vendorID.has_value(),
-			.adapterVendorID = vendorID.value_or(0),
-			.providerCheckComplete = Upscaling::streamline.featureCheckComplete,
-			.dlssAvailable = Upscaling::streamline.featureDLSS,
-		});
+		return UpscalingProviderSelectionPolicy::SelectWithAdapterQuery(
+			{
+				.primaryRequestsDLSS = a_primaryMethod == Upscaling::UpscaleMethod::kDLSS,
+				.providerCheckComplete = Upscaling::streamline.featureCheckComplete,
+				.dlssAvailable = Upscaling::streamline.featureDLSS,
+			},
+			[] { return Upscaling::fidelityFX.GetCurrentAdapterVendorID(); });
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -25055,9 +25033,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 {
 	if (!globals::game::isVR)
 		return true;
-	// Adapter discovery can complete after the startup profile was bound. Resolve
-	// that zero-ID portable profile before it can enter physical application.
-	ResolvePendingVRUpscalingProviderSelection();
 	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
 		if (vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0) {
 			const std::scoped_lock queueLock(perfModeRenderTargetRecreateQueueMutex);
@@ -25066,6 +25041,8 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 		}
 		return true;
 	}
+	// Late adapter discovery must normalize the boot profile before mutation.
+	ResolvePendingVRUpscalingProviderSelection();
 	if (RequiresVRRenderScaleRelatchFrameBoundary()) {
 		if (!g_vrRelatchFrameBoundaryActive) {
 			globals::features::vr.InstallSubmitHook();

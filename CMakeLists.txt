@@ -1911,12 +1911,15 @@ if(BUILD_CONTROLLER_TESTS)
             "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
             "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
             "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/render_pass_admission_routing_under_test.h"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_native_lighting_material_guard_test_dir}" -P
             "${PROJECT_SOURCE_DIR}/tests/extract_native_lighting_material_guard.cmake"
         DEPENDS
             src/Hooks.cpp
+            src/Features/LightLimitFix.cpp
+            src/Features/TerrainBlending.cpp
             src/TruePBR.cpp
             src/TruePBR.h
             src/ShaderCache.h
@@ -1944,6 +1947,22 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${_native_lighting_material_guard_test_dir}"
     )
     set_tests_properties(NativeLightingMaterialGuard PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
+        render_pass_admission_routing_test
+        RenderPassAdmissionRouting
+        tests/render_pass_admission_routing_test.cpp
+    )
+    target_sources(
+        render_pass_admission_routing_test
+        PRIVATE
+            "${_native_lighting_material_guard_test_dir}/render_pass_admission_routing_under_test.h"
+    )
+    target_include_directories(
+        render_pass_admission_routing_test
+        PRIVATE "${_native_lighting_material_guard_test_dir}"
+    )
+    set_tests_properties(RenderPassAdmissionRouting PROPERTIES TIMEOUT 30)
 
     set(_ordinary_save_state_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-state"

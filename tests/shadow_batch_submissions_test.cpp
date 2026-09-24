@@ -1,6 +1,7 @@
 #include "EngineFixes/ShadowBatchSubmissions.h"
 #include "EngineFixes/VRShadowBatchPolicy.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -82,6 +83,36 @@ namespace
 		Check(store.Active() == 0, "reset must retire all memberships");
 	}
 
+	void SparseBucketsAndDuplicateGrowth()
+	{
+		Store store;
+		std::size_t probes{};
+		for (std::uint64_t bucket = 0; bucket < 1024; ++bucket) {
+			store.RefreshBucket(bucket, [&] { ++probes; return true; });
+			Add(store, bucket, 1);
+			store.Clear(bucket);
+		}
+		Check(probes == 0, "empty retained buckets must skip native probes");
+		for (auto bucket : { 2ULL, 511ULL, 1000ULL })
+			Add(store, bucket, 1);
+		store.Prune([&](std::uint64_t bucket) { ++probes; return bucket == 511; });
+		Check(probes == 3 && store.Active() == 2, "sparse pruning must preserve head and tail after removing the middle");
+		store.Clear(1000);
+		Add(store, 511, 1);
+		store.RefreshBucket(2, [&] { ++probes; return true; });
+		Check(store.Active() == 1 && Add(store, 2, 1).inserted, "native drain must allow a fresh generation");
+		store.RefreshBucket(511, [] { return false; });
+		Check(!Add(store, 511, 1).inserted, "nonempty native bucket must retain duplicate membership");
+		store.Clear();
+		Check(store.Active() == 0, "reset must drain the active list after sparse reuse");
+		for (std::uint64_t key = 0; key < 8; ++key)
+			Add(store, 2048, key);
+		const auto before = allocations.load();
+		Check(!Add(store, 2048, 0).inserted, "full bucket must reject duplicates");
+		Check(allocations.load() == before, "duplicate at capacity must not grow the membership table");
+		store.Clear();
+	}
+
 	void LifetimeAndReentrancy()
 	{
 		Store store;
@@ -103,6 +134,68 @@ namespace
 		}
 		Check(weak.expired(), "retired owner must release after the final reader");
 		Check(store.Active() == 1, "retired generation must not clear its replacement");
+		store.Clear();
+	}
+
+	void MixedBucketLifetimes()
+	{
+		Store store;
+		std::array<std::array<Store::Record*, 8>, 64> expected{};
+		std::uint32_t seed = 0x6131c953;
+		auto random = [&] {
+			seed ^= seed << 13;
+			seed ^= seed >> 17;
+			seed ^= seed << 5;
+			return seed;
+		};
+		for (unsigned step = 0; step < 25000; ++step) {
+			const auto bucket = random() % expected.size();
+			const auto key = random() % expected[bucket].size();
+			switch (random() % 8) {
+			case 0:
+				store.Clear(bucket);
+				expected[bucket].fill(nullptr);
+				break;
+			case 1:
+				{
+					std::size_t occupied{}, probes{};
+					for (const auto& entries : expected) {
+						for (const auto* entry : entries) {
+							if (entry) {
+								++occupied;
+								break;
+							}
+						}
+					}
+					store.Prune([&](std::uint64_t current) {
+						++probes;
+						if ((current & 3) != (bucket & 3))
+							return false;
+						expected[current].fill(nullptr);
+						return true;
+					});
+					Check(probes == occupied, "mixed pruning must visit every occupied bucket exactly once");
+					break;
+				}
+			case 2:
+				store.Clear();
+				for (auto& entries : expected) entries.fill(nullptr);
+				break;
+			default:
+				{
+					const auto admission = Add(store, bucket, key);
+					Check(admission.inserted == !expected[bucket][key], "mixed generations changed duplicate admission");
+					if (expected[bucket][key])
+						Check(admission.record == expected[bucket][key], "live record identity changed");
+					expected[bucket][key] = admission.record;
+					break;
+				}
+			}
+			std::size_t active{};
+			for (const auto& entries : expected)
+				for (const auto* entry : entries) active += entry != nullptr;
+			Check(store.Active() == active, "mixed pruning lost or retained a submission");
+		}
 		store.Clear();
 	}
 
@@ -221,7 +314,9 @@ int main(int argc, char** argv)
 {
 	try {
 		DuplicateAndOverlap();
+		SparseBucketsAndDuplicateGrowth();
 		LifetimeAndReentrancy();
+		MixedBucketLifetimes();
 		FailureAndReuse();
 		ReentrantOwnerRelease();
 		SerializedProducers();

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -218,6 +219,8 @@ public:
 	void ResetFSRIdleFence();
 	LifecycleResult ResetRuntimeUpscalerResources(bool a_invalidateProviderCache = false);
 
+	/** Returns the device-cached vendor identity; unavailable queries remain retryable. */
+	[[nodiscard]] std::optional<uint32_t> GetCurrentAdapterVendorID() const;
 	bool IsAmdAdapterDetected() const;
 	bool IsNvidiaAdapterDetected() const;
 	bool IsRuntimeUpscalerPresent() const;

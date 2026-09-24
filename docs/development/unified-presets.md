@@ -33,6 +33,14 @@ directly to FSR without publishing DLSS as the runtime target. On NVIDIA, CSX
 waits for Streamline's capability result before publishing either DLSS or the
 fallback. An unknown adapter remains unresolved rather than guessing.
 
+Provider selection reuses the device-owned adapter-description cache and
+does not query it when the configured method or completed DLSS capability
+already determines the route. Failed adapter queries remain retryable and a
+different graphics device requires a fresh identity. Ordinary VR draws with
+no pending render-target change return before provider normalization; startup
+capability callbacks and pending physical changes still normalize portable
+boot profiles before resource application.
+
 Provider-specific tuning remains in the same generated JSON. DLSS reads its
 preset and sharpener values; FSR reads its own sharpness and runtime-provider
 settings. The graphics-quality policy is otherwise shared.

@@ -1,0 +1,422 @@
+{
+    "good20": {
+        "seq": [237, 256],
+        "start": "2026-09-23 02:16:52.657",
+        "end": "2026-09-23 02:17:11.942",
+        "durationMs": 20291.8,
+        "frames": 900,
+        "csMenuStates": [true],
+        "intervalAvgMs": 22.546444444444443,
+        "world_ms": 2.9892000000000003,
+        "shadows_ms": 1.5272999999999999,
+        "depthRender_ms": 0.007,
+        "depthReadback_ms": 0.0063999999999999994,
+        "recovery_ms": 0.0009999999999999998,
+        "present_ms": 0.1062,
+        "lightSnapshot_ms": 0.02025,
+        "submissions_perFrame": 2573.8077777777776,
+        "lighting_perFrame": 567.1766666666666,
+        "objectLOD_perFrame": 382.1044444444444,
+        "terrainLOD_perFrame": 49.666666666666664,
+        "pbrMaterials_perFrame": 98.32111111111111,
+        "pbrLODMaterials_perFrame": 0.0,
+        "recoveryAttempts": 0,
+        "inspected": 0,
+        "promoted": 0,
+        "recoveryCpuMs": 0.0,
+        "envelopeMisses": 0,
+        "eligible": 0,
+        "cullerSamples": 56,
+        "sampledObjects": 124263,
+        "sampledVisibleBeforeRecovery": 9919,
+        "invalidCuller": 0,
+        "nativeVisiblePercent": 7.982263425154712,
+        "objectsPerCullerSample": 2218.9821428571427,
+        "privateMiB": {
+            "min": 20259,
+            "median": 20266.0,
+            "max": 20272
+        },
+        "workingMiB": {
+            "min": 16290,
+            "median": 16294.0,
+            "max": 16302
+        },
+        "usedMiB": {
+            "min": 7292,
+            "median": 7292.0,
+            "max": 7292
+        },
+        "budgetMiB": {
+            "min": 8658,
+            "median": 8684.5,
+            "max": 8686
+        },
+        "priorLoggingMs": {
+            "min": 0.159,
+            "median": 0.169,
+            "max": 0.264
+        },
+        "runtimeCpuMs": {
+            "min": 5.884,
+            "median": 21.938000000000002,
+            "max": 43.547
+        },
+        "runtimeGpuMs": {
+            "min": 15.556,
+            "median": 15.556,
+            "max": 15.556
+        },
+        "cameraMedian": [7371.9895, -40069.095499999996, 3724.683]
+    },
+    "bad20": {
+        "seq": [277, 296],
+        "start": "2026-09-23 02:17:33.220",
+        "end": "2026-09-23 02:17:52.429",
+        "durationMs": 20224.4,
+        "frames": 627,
+        "csMenuStates": [true],
+        "intervalAvgMs": 32.25582137161085,
+        "world_ms": 7.417288676236045,
+        "shadows_ms": 4.159866028708134,
+        "depthRender_ms": 0.00510207336523126,
+        "depthReadback_ms": 0.007649122807017544,
+        "recovery_ms": 0.001,
+        "present_ms": 0.10525677830940988,
+        "lightSnapshot_ms": 0.01765390749601276,
+        "submissions_perFrame": 7325.205741626794,
+        "lighting_perFrame": 1979.2408293460926,
+        "objectLOD_perFrame": 477.67464114832535,
+        "terrainLOD_perFrame": 63.68102073365231,
+        "pbrMaterials_perFrame": 1324.3859649122808,
+        "pbrLODMaterials_perFrame": 0.0,
+        "recoveryAttempts": 0,
+        "inspected": 0,
+        "promoted": 0,
+        "recoveryCpuMs": 0.0,
+        "envelopeMisses": 0,
+        "eligible": 0,
+        "cullerSamples": 40,
+        "sampledObjects": 163840,
+        "sampledVisibleBeforeRecovery": 54674,
+        "invalidCuller": 0,
+        "nativeVisiblePercent": 33.370361328125,
+        "objectsPerCullerSample": 4096.0,
+        "privateMiB": {
+            "min": 20271,
+            "median": 20279.0,
+            "max": 20284
+        },
+        "workingMiB": {
+            "min": 16304,
+            "median": 16313.0,
+            "max": 16315
+        },
+        "usedMiB": {
+            "min": 7028,
+            "median": 7028.0,
+            "max": 7031
+        },
+        "budgetMiB": {
+            "min": 9283,
+            "median": 9283.0,
+            "max": 9283
+        },
+        "priorLoggingMs": {
+            "min": 0.159,
+            "median": 0.1805,
+            "max": 0.235
+        },
+        "runtimeCpuMs": {
+            "min": 11.92,
+            "median": 11.952,
+            "max": 11.989
+        },
+        "runtimeGpuMs": {
+            "min": 15.556,
+            "median": 15.556,
+            "max": 15.556
+        },
+        "cameraMedian": [7608.538500000001, -40298.5275, 3661.2974999999997]
+    },
+    "goodMenuClosed": {
+        "seq": [202, 210],
+        "start": "2026-09-23 02:16:17.243",
+        "end": "2026-09-23 02:16:25.353",
+        "durationMs": 9132.1,
+        "frames": 403,
+        "csMenuStates": [false],
+        "intervalAvgMs": 22.66029776674938,
+        "world_ms": 3.5538213399503724,
+        "shadows_ms": 2.0297692307692308,
+        "depthRender_ms": 0.008215880893300248,
+        "depthReadback_ms": 0.00898759305210918,
+        "recovery_ms": 0.003791563275434243,
+        "present_ms": 0.13286600496277917,
+        "lightSnapshot_ms": 0.025538461538461538,
+        "submissions_perFrame": 2659.7220843672458,
+        "lighting_perFrame": 570.1563275434244,
+        "objectLOD_perFrame": 382.30272952853596,
+        "terrainLOD_perFrame": 49.69975186104218,
+        "pbrMaterials_perFrame": 101.9925558312655,
+        "pbrLODMaterials_perFrame": 0.0,
+        "recoveryAttempts": 8,
+        "inspected": 17749,
+        "promoted": 512,
+        "recoveryCpuMs": 1.124,
+        "envelopeMisses": 8,
+        "eligible": 15655,
+        "cullerSamples": 25,
+        "sampledObjects": 55203,
+        "sampledVisibleBeforeRecovery": 4446,
+        "invalidCuller": 0,
+        "nativeVisiblePercent": 8.053910113580784,
+        "objectsPerCullerSample": 2208.12,
+        "privateMiB": {
+            "min": 20401,
+            "median": 20408,
+            "max": 20480
+        },
+        "workingMiB": {
+            "min": 16376,
+            "median": 16385,
+            "max": 16447
+        },
+        "usedMiB": {
+            "min": 7337,
+            "median": 7338,
+            "max": 7353
+        },
+        "budgetMiB": {
+            "min": 8700,
+            "median": 8714,
+            "max": 8714
+        },
+        "priorLoggingMs": {
+            "min": 0.109,
+            "median": 0.128,
+            "max": 0.22
+        },
+        "runtimeCpuMs": {
+            "min": 91.666,
+            "median": 111.26,
+            "max": 143.201
+        },
+        "runtimeGpuMs": {
+            "min": 13.222,
+            "median": 13.741,
+            "max": 14.259
+        },
+        "cameraMedian": [7368.39, -40064.543, 3723.485]
+    },
+    "badMenuClosed": {
+        "seq": [318, 323],
+        "start": "2026-09-23 02:18:14.739",
+        "end": "2026-09-23 02:18:19.809",
+        "durationMs": 6085.1,
+        "frames": 192,
+        "csMenuStates": [false],
+        "intervalAvgMs": 31.69322916666667,
+        "world_ms": 7.377265625,
+        "shadows_ms": 4.26753125,
+        "depthRender_ms": 0.005166666666666667,
+        "depthReadback_ms": 0.007994791666666666,
+        "recovery_ms": 0.013833333333333331,
+        "present_ms": 0.10783333333333334,
+        "lightSnapshot_ms": 0.019,
+        "submissions_perFrame": 7364.614583333333,
+        "lighting_perFrame": 1963.296875,
+        "objectLOD_perFrame": 476.28125,
+        "terrainLOD_perFrame": 63.979166666666664,
+        "pbrMaterials_perFrame": 1309.6822916666667,
+        "pbrLODMaterials_perFrame": 0.0,
+        "recoveryAttempts": 17,
+        "inspected": 69632,
+        "promoted": 1088,
+        "recoveryCpuMs": 2.496,
+        "envelopeMisses": 17,
+        "eligible": 46791,
+        "cullerSamples": 12,
+        "sampledObjects": 49152,
+        "sampledVisibleBeforeRecovery": 14807,
+        "invalidCuller": 0,
+        "nativeVisiblePercent": 30.124918619791668,
+        "objectsPerCullerSample": 4096.0,
+        "privateMiB": {
+            "min": 20291,
+            "median": 20291.0,
+            "max": 20291
+        },
+        "workingMiB": {
+            "min": 16322,
+            "median": 16323.0,
+            "max": 16323
+        },
+        "usedMiB": {
+            "min": 7031,
+            "median": 7031.0,
+            "max": 7031
+        },
+        "budgetMiB": {
+            "min": 9283,
+            "median": 9283.0,
+            "max": 9283
+        },
+        "priorLoggingMs": {
+            "min": 0.169,
+            "median": 0.185,
+            "max": 0.253
+        },
+        "runtimeCpuMs": {
+            "min": 11.927,
+            "median": 12.007000000000001,
+            "max": 12.068
+        },
+        "runtimeGpuMs": {
+            "min": 15.167,
+            "median": 15.491,
+            "max": 15.556
+        },
+        "cameraMedian": [7550.3165, -40380.673500000004, 3684.325]
+    },
+    "goodAll": {
+        "seq": [202, 256],
+        "start": "2026-09-23 02:16:17.243",
+        "end": "2026-09-23 02:17:11.942",
+        "durationMs": 55721.7,
+        "frames": 2475,
+        "csMenuStates": [false, true],
+        "intervalAvgMs": 22.51381818181818,
+        "world_ms": 3.1611503030303028,
+        "shadows_ms": 1.7089523232323234,
+        "depthRender_ms": 0.007288080808080809,
+        "depthReadback_ms": 0.007794343434343434,
+        "recovery_ms": 0.0014545454545454545,
+        "present_ms": 0.1120969696969697,
+        "lightSnapshot_ms": 0.021685656565656568,
+        "submissions_perFrame": 2630.8630303030304,
+        "lighting_perFrame": 568.2145454545455,
+        "objectLOD_perFrame": 381.9361616161616,
+        "terrainLOD_perFrame": 49.56040404040404,
+        "pbrMaterials_perFrame": 99.79636363636364,
+        "pbrLODMaterials_perFrame": 0.0,
+        "recoveryAttempts": 8,
+        "inspected": 17749,
+        "promoted": 512,
+        "recoveryCpuMs": 1.124,
+        "envelopeMisses": 8,
+        "eligible": 15655,
+        "cullerSamples": 154,
+        "sampledObjects": 341642,
+        "sampledVisibleBeforeRecovery": 27286,
+        "invalidCuller": 0,
+        "nativeVisiblePercent": 7.98672294390034,
+        "objectsPerCullerSample": 2218.4545454545455,
+        "privateMiB": {
+            "min": 20259,
+            "median": 20268,
+            "max": 20480
+        },
+        "workingMiB": {
+            "min": 16290,
+            "median": 16302,
+            "max": 16447
+        },
+        "usedMiB": {
+            "min": 7285,
+            "median": 7292,
+            "max": 7353
+        },
+        "budgetMiB": {
+            "min": 8658,
+            "median": 8714,
+            "max": 8714
+        },
+        "priorLoggingMs": {
+            "min": 0.106,
+            "median": 0.166,
+            "max": 0.264
+        },
+        "runtimeCpuMs": {
+            "min": 5.884,
+            "median": 51.094,
+            "max": 143.201
+        },
+        "runtimeGpuMs": {
+            "min": 13.222,
+            "median": 15.556,
+            "max": 15.556
+        },
+        "cameraMedian": [7371.285, -40068.004, 3724.732]
+    },
+    "badAll": {
+        "seq": [273, 323],
+        "start": "2026-09-23 02:17:29.188",
+        "end": "2026-09-23 02:18:19.809",
+        "durationMs": 51629.0,
+        "frames": 1601,
+        "csMenuStates": [false, true],
+        "intervalAvgMs": 32.247970018738286,
+        "world_ms": 7.383890068707058,
+        "shadows_ms": 4.119071830106184,
+        "depthRender_ms": 0.005059962523422861,
+        "depthReadback_ms": 0.007627108057464085,
+        "recovery_ms": 0.002539038101186758,
+        "present_ms": 0.10504809494066208,
+        "lightSnapshot_ms": 0.017788257339163022,
+        "submissions_perFrame": 7296.803247970019,
+        "lighting_perFrame": 1969.5059337913804,
+        "objectLOD_perFrame": 478.156777014366,
+        "terrainLOD_perFrame": 63.663335415365395,
+        "pbrMaterials_perFrame": 1316.3104309806372,
+        "pbrLODMaterials_perFrame": 0.0,
+        "recoveryAttempts": 17,
+        "inspected": 69632,
+        "promoted": 1088,
+        "recoveryCpuMs": 2.496,
+        "envelopeMisses": 17,
+        "eligible": 46791,
+        "cullerSamples": 100,
+        "sampledObjects": 409600,
+        "sampledVisibleBeforeRecovery": 133755,
+        "invalidCuller": 0,
+        "nativeVisiblePercent": 32.655029296875,
+        "objectsPerCullerSample": 4096.0,
+        "privateMiB": {
+            "min": 20271,
+            "median": 20284,
+            "max": 20291
+        },
+        "workingMiB": {
+            "min": 16304,
+            "median": 16316,
+            "max": 16323
+        },
+        "usedMiB": {
+            "min": 7028,
+            "median": 7031,
+            "max": 7031
+        },
+        "budgetMiB": {
+            "min": 9283,
+            "median": 9283,
+            "max": 9283
+        },
+        "priorLoggingMs": {
+            "min": 0.159,
+            "median": 0.176,
+            "max": 0.253
+        },
+        "runtimeCpuMs": {
+            "min": 11.841,
+            "median": 11.952,
+            "max": 12.068
+        },
+        "runtimeGpuMs": {
+            "min": 15.167,
+            "median": 15.556,
+            "max": 15.556
+        },
+        "cameraMedian": [7608.373, -40298.578, 3661.255]
+    }
+}

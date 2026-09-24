@@ -98,3 +98,18 @@ file(
     WRITE "${OUTPUT_DIRECTORY}/native_lighting_material_utilities_under_test.h"
     "${_pointer}\n${_count}\n${_index}"
 )
+
+file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix.cpp" _particle)
+file(READ "${PROJECT_ROOT}/src/Features/TerrainBlending.cpp" _terrain)
+extract_between(
+    "${_particle}" "bool LightLimitFix::CheckParticleLights("
+    "bool LightLimitFix::AddParticleLight(" _particle_routing
+)
+extract_between(
+    "${_terrain}" "TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmediately("
+    "void TerrainBlending::Hooks::BSUtilityShader_SetupGeometry::thunk(" _terrain_routing
+)
+file(
+    WRITE "${OUTPUT_DIRECTORY}/render_pass_admission_routing_under_test.h"
+    "${_particle_routing}\n${_terrain_routing}"
+)

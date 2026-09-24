@@ -585,6 +585,33 @@ namespace
 		Check(replacement.geometry.refs == 0 && replacement.property.refs == 1);
 	}
 
+	void NegativeCacheCreationAndUnwind()
+	{
+		using namespace VRShadowBatch;
+		Renderer renderer;
+		Fixture fixture;
+		Check(!FindState(&renderer));
+		Check(!FindState(&renderer));
+		std::thread producer([&] { RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6); });
+		producer.join();
+		Check(FindState(&renderer) && fixture.geometry.refs == 1);
+		duringDraw = [&](Renderer* current) {
+			Clear<clearPasses>(current);
+			Check(fixture.geometry.refs == 1);
+			throw std::runtime_error("native unwind");
+		};
+		bool propagated{};
+		try {
+			RenderActiveRange(&renderer, 0xC0C6, 0xC0C6, 0);
+		} catch (const std::runtime_error&) {
+			propagated = true;
+		}
+		duringDraw = {};
+		Check(propagated && fixture.geometry.refs == 0 && FindState(&renderer)->submissions.Active() == 0);
+		Destroy(&renderer);
+		Check(!FindState(&renderer) && registry.empty());
+	}
+
 	void UnlockedNativeAndOwnerCallbacks()
 	{
 		using namespace VRShadowBatch;
@@ -621,6 +648,38 @@ namespace
 		duringDraw = {};
 		Check(ownerCalled && fixture.geometry.refs == 0);
 		Destroy(&renderer);
+	}
+
+	void InterleavedRendererCaches()
+	{
+		using namespace VRShadowBatch;
+		std::array<Renderer, 32> renderers;
+		std::array<std::shared_ptr<BatchState>, 32> states;
+		Fixture fixture;
+		for (std::size_t i = 0; i < renderers.size(); ++i) {
+			if (i % 2)
+				RegisterUnsorted(&renderers[i], &fixture.pass, 0xC0C6);
+			states[i] = FindState(&renderers[i]);
+		}
+		for (unsigned round = 0; round < 64; ++round) {
+			for (std::size_t i = 0; i < renderers.size(); ++i)
+				Check(FindState(&renderers[i]) == states[i]);
+		}
+		std::thread replace([&] {
+			for (auto& renderer : renderers) {
+				Destroy(&renderer);
+				RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6);
+			}
+		});
+		replace.join();
+		for (std::size_t i = 0; i < renderers.size(); ++i) {
+			const auto replacement = FindState(&renderers[i]);
+			Check(replacement && replacement != states[i] && replacement->submissions.Active() == 1);
+			Check(!states[i] || states[i]->submissions.Active() == 0);
+			Destroy(&renderers[i]);
+			Check(!FindState(&renderers[i]));
+		}
+		Check(registry.empty() && fixture.geometry.refs == 0);
 	}
 
 	void Benchmark()
@@ -690,7 +749,9 @@ int main(int argc, char** argv)
 		PopulatedAllocationFailures();
 		PopulatedAllocationFailures(true);
 		RegistryCacheLifetimes();
+		NegativeCacheCreationAndUnwind();
 		UnlockedNativeAndOwnerCallbacks();
+		InterleavedRendererCaches();
 		if (argc == 2 && std::string_view(argv[1]) == "--benchmark")
 			Benchmark();
 		std::cout << "production shadow registration/drain/reset/destruction hook tests passed\n";

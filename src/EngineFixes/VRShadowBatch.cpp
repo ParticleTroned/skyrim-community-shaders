@@ -13,7 +13,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
-#include <tuple>
+#include <string_view>
 #include <unordered_map>
 
 namespace VRShadowBatch
@@ -22,8 +22,16 @@ namespace VRShadowBatch
 	{
 		using Renderer = RE::BSBatchRenderer;
 		using Pass = RE::BSRenderPass;
-		using Key = std::tuple<std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t,
-			std::uint32_t, std::uint32_t, std::uint32_t, std::uint64_t, std::uintptr_t, bool>;
+		// Initialized contiguous words retain the complete draw identity without a hash staging buffer.
+		using Key = std::array<std::uint64_t, 8>;
+		struct KeyHash
+		{
+			using is_avalanching = void;
+			std::uint64_t operator()(const Key& a_key) const noexcept
+			{
+				return ankerl::unordered_dense::hash<std::string_view>{}({ reinterpret_cast<const char*>(a_key.data()), a_key.size() * sizeof(a_key[0]) });
+			}
+		};
 
 		struct Payload
 		{
@@ -31,7 +39,7 @@ namespace VRShadowBatch
 			RE::NiPointer<RE::BSGeometry> geometry;
 			RE::NiPointer<RE::BSShaderProperty> property;
 		};
-		using Store = ShadowBatch::Submissions<Key, Payload, ankerl::unordered_dense::hash<Key>, false>;
+		using Store = ShadowBatch::Submissions<Key, Payload, KeyHash, false>;
 		struct BatchState
 		{
 			std::recursive_mutex mutex;
@@ -161,8 +169,9 @@ namespace VRShadowBatch
 			                   (static_cast<std::uint32_t>(a_pass->unk21) << 24);
 			return { reinterpret_cast<std::uintptr_t>(a_pass), reinterpret_cast<std::uintptr_t>(a_pass->shader),
 				reinterpret_cast<std::uintptr_t>(a_pass->shaderProperty), reinterpret_cast<std::uintptr_t>(a_pass->geometry),
-				a_pass->passEnum, bytes, a_pass->unk24, a_pass->shaderProperty->flags.underlying(),
-				reinterpret_cast<std::uintptr_t>(a_pass->shaderProperty->material), a_sorted };
+				static_cast<std::uint64_t>(a_pass->passEnum) | (static_cast<std::uint64_t>(bytes) << 32),
+				static_cast<std::uint64_t>(a_pass->unk24) | (static_cast<std::uint64_t>(a_sorted) << 32),
+				a_pass->shaderProperty->flags.underlying(), reinterpret_cast<std::uintptr_t>(a_pass->shaderProperty->material) };
 		}
 
 		void ReportDuplicate(Renderer* a_renderer, Pass* a_pass, std::uint64_t a_bucket, std::uintptr_t a_firstCaller, std::uintptr_t a_caller)
@@ -211,16 +220,14 @@ namespace VRShadowBatch
 			std::unique_lock lock{ state->mutex };
 			Store::Admission admission{};
 			try {
-				state->submissions.RefreshBucket(bucket, [&] { return BucketEmpty(a_renderer, bucket); });
-				reclaim.pending = state->submissions.HasRetired();
 				admission = state->submissions.Admit(bucket, MakeKey(a_pass, a_sorted), a_caller, [&](Payload& payload) {
 					payload.geometry.reset(a_pass->geometry);
 					payload.property.reset(a_pass->shaderProperty);
 					payload.pass = *a_pass;
 					payload.pass.next = nullptr;
 					payload.pass.passGroupNext = nullptr;
-					payload.pass.sceneLights = nullptr;
-				});
+					payload.pass.sceneLights = nullptr; }, [&] { return BucketEmpty(a_renderer, bucket); });
+				reclaim.pending = state->submissions.HasRetired();
 			} catch (const std::bad_alloc&) {
 				reclaim.pending = true;
 				lock.unlock();

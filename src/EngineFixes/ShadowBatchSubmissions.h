@@ -51,7 +51,16 @@ namespace ShadowBatch
 		template <class Prepare>
 		Admission Admit(std::uint64_t a_bucket, const Key& a_key, std::uintptr_t a_caller, Prepare&& a_prepare)
 		{
+			return Admit(a_bucket, a_key, a_caller, std::forward<Prepare>(a_prepare), [] { return false; });
+		}
+
+		/** Refresh native lifetime and admit under one lookup; neither callback may reenter the store. */
+		template <class Prepare, class IsEmpty>
+		Admission Admit(std::uint64_t a_bucket, const Key& a_key, std::uintptr_t a_caller, Prepare&& a_prepare, IsEmpty&& a_isEmpty)
+		{
 			auto& bucket = GetBucket(a_bucket);
+			if (bucket.head && a_isEmpty())
+				ClearBucket(bucket);
 			if (bucket.entries && bucket.entries->size() >= bucket.capacity) {
 				if (const auto found = bucket.entries->find(a_key); found != bucket.entries->end())
 					return { found->second, false };
@@ -96,17 +105,6 @@ namespace ShadowBatch
 			bucket.head = record;
 			++active;
 			return { record, true };
-		}
-
-		/** Only a bucket with retained native links needs a native emptiness probe. */
-		template <class IsEmpty>
-		void RefreshBucket(std::uint64_t a_bucket, IsEmpty&& a_isEmpty)
-		{
-			auto& bucket = GetBucket(a_bucket);
-			if (!bucket.head)
-				return;
-			if (a_isEmpty())
-				ClearBucket(bucket);
 		}
 
 		/** Release only after native code has removed all links into this bucket. */

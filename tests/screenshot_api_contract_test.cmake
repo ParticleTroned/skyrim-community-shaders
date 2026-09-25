@@ -132,7 +132,7 @@ if(_ui_adapter_position EQUAL -1 OR _ui_v1_position EQUAL -1 OR _control_dispatc
 endif()
 foreach(_settings_migration_text IN ITEMS
     "const bool hasCanonicalFrameCaptureEye"
-    "if (!hasCanonicalFrameCaptureEye)"
+    "if (!hasCanonicalFrameCaptureEye && hasLegacyFrameCaptureEye)"
     "frameCaptureEye == CaptureEye::Both"
     "output[\"dominantEye\"] = vrFramedDominantEye"
 )
@@ -191,6 +191,13 @@ string(FIND "${_plugin_lifecycle}" "if (!RegisterCommunityShadersAPIMessageListe
 string(FIND "${_plugin_lifecycle}" "ScreenshotDevBenchBridge::Install();" _early_install_position)
 if(_postload_position EQUAL -1 OR _api_listener_position LESS _postload_position)
 	message(FATAL_ERROR "The wildcard CSX API listener must be registered during PostLoad after every plugin is loaded")
+endif()
+string(FIND "${_plugin_lifecycle}" "bool Load()" _load_start)
+string(SUBSTRING "${_plugin_lifecycle}" ${_load_start} -1 _load_body)
+string(FIND "${_load_body}" "if (!RegisterCommunityShadersAPIMessageListener())" _load_api_listener)
+string(FIND "${_load_body}" "RegisterListener(\"SKSE\", MessageHandler)" _load_skse_listener)
+if(_load_api_listener EQUAL -1 OR _load_skse_listener EQUAL -1 OR _load_api_listener GREATER _load_skse_listener)
+    message(FATAL_ERROR "Early API discovery must remain available before registering lifecycle callbacks")
 endif()
 if(_early_install_position LESS _postload_position)
     message(FATAL_ERROR "Screenshot DevBench discovery must be attempted during PostLoad")

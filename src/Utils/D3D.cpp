@@ -1,9 +1,11 @@
 #include "D3D.h"
 
+#include "Deferred.h"
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/Format.h"
+#include "Utils/RendererContextAccess.h"
 #include "Utils/ShaderInclude.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
@@ -74,6 +76,13 @@ namespace Util
 
 	ID3D11ShaderResourceView* GetCurrentSceneDepthSRV(bool prefer16bit)
 	{
+		auto renderer = globals::game::renderer;
+		if (!renderer)
+			return nullptr;
+		auto& depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
+		if (globals::deferred && globals::deferred->IsSceneDepthFinal())
+			return depthCopy.depthSRV;
+
 		auto& tb = globals::features::terrainBlending;
 		if (tb.loaded && tb.settings.Enabled) {
 			auto* srv = prefer16bit ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
@@ -81,10 +90,7 @@ namespace Util
 				return srv;
 		}
 
-		auto renderer = globals::game::renderer;
-		if (renderer)
-			return renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-		return nullptr;
+		return depthCopy.depthSRV;
 	}
 
 	void BindFrameBufferConstantBuffersForCS(ID3D11DeviceContext* a_context)
@@ -607,8 +613,13 @@ namespace Util
 		namespace fs = std::filesystem;
 
 		DirectX::ScratchImage cpuImage;
-		if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
-			return hr;
+		{
+			const RendererOwnership ownership(GetRendererContextLock(globals::game::renderer, context), true);
+			if (!ownership)
+				return E_POINTER;
+			if (const auto hr = CaptureTexture(device, context, tex, cpuImage); FAILED(hr))
+				return hr;
+		}
 
 		const auto parent = path.parent_path();
 		std::error_code ec;

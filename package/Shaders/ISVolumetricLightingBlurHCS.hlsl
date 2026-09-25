@@ -46,7 +46,7 @@ groupshared float depth[TG_DIM];
 	x = eyeStart + eyeGroup * (TG_DIM - WINDOW * 2) + base;
 	int2 pix = int2(clamp(x, eyeStart, eyeEnd - 1), clamp(y, 0, screenSizeMin1.y));
 #else
-	int2 pix = min(int2(x, y), screenSizeMin1.xy);
+	int2 pix = clamp(int2(x, y), 0, screenSizeMin1.xy);
 #endif
 	float vlValue = InVLTexture[pix];
 	vl[idx] = vlValue;
@@ -56,9 +56,9 @@ groupshared float depth[TG_DIM];
 	GroupMemoryBarrierWithGroupSync();
 
 #if defined(VR)
-	if (base >= 0 && base < TG_DIM - WINDOW * 2 && x < eyeEnd) {
+	if (base >= 0 && base < TG_DIM - WINDOW * 2 && x < eyeEnd && y <= screenSizeMin1.y) {
 #else
-	if (base >= 0 && base < TG_DIM - WINDOW * 2) {
+	if (base >= 0 && base < TG_DIM - WINDOW * 2 && all(int2(x, y) <= screenSizeMin1.xy)) {
 #endif
 		int min12 = idx - 12;
 		int min6 = idx - 6;

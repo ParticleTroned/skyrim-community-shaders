@@ -1,7 +1,7 @@
-set(STREAMLINE_RUNTIME_VERSION "2.12.0")
+set(STREAMLINE_RUNTIME_VERSION "2.14.1")
 set(
     STREAMLINE_RUNTIME_ARCHIVE_SHA256
-    "F5C0A3D870707DDDC3570FB4BCD3655CF48A8A68C3A9D342910CFA21B77DCF48"
+    "92C4D954631A1710DA86CA3FA8D5034F2B9503838C95FC4AE977AE149319781B"
 )
 set(
     STREAMLINE_RUNTIME_ARCHIVE_URL
@@ -64,57 +64,19 @@ if(_streamline_extract_required)
     )
 endif()
 
-file(
-    GLOB_RECURSE _streamline_archive_files
-    LIST_DIRECTORIES FALSE
-    "${STREAMLINE_RUNTIME_EXTRACT_ROOT}/*"
-)
-
-function(stage_streamline_runtime _filename)
-    set(_production_matches "")
-    foreach(_candidate IN LISTS _streamline_archive_files)
-        get_filename_component(_candidate_name "${_candidate}" NAME)
-        if(NOT _candidate_name STREQUAL _filename)
-            continue()
-        endif()
-
-        get_filename_component(_candidate_directory "${_candidate}" DIRECTORY)
-        get_filename_component(
-            _candidate_directory_name
-            "${_candidate_directory}"
-            NAME
-        )
-        get_filename_component(
-            _candidate_parent
-            "${_candidate_directory}"
-            DIRECTORY
-        )
-        get_filename_component(
-            _candidate_parent_name
-            "${_candidate_parent}"
-            NAME
-        )
-        if(
-            _candidate_directory_name STREQUAL "x64"
-            AND _candidate_parent_name STREQUAL "bin"
-        )
-            list(APPEND _production_matches "${_candidate}")
-        endif()
-    endforeach()
-
-    list(LENGTH _production_matches _production_match_count)
-    if(NOT _production_match_count EQUAL 1)
+function(stage_streamline_runtime _relative_path)
+    set(_source "${STREAMLINE_RUNTIME_EXTRACT_ROOT}/${_relative_path}")
+    if(NOT EXISTS "${_source}" OR IS_DIRECTORY "${_source}")
         message(
             FATAL_ERROR
-            "Expected one production ${_filename} in Streamline ${STREAMLINE_RUNTIME_VERSION}, found ${_production_match_count}"
+            "Missing required ${_relative_path} in Streamline ${STREAMLINE_RUNTIME_VERSION}"
         )
     endif()
 
-    list(GET _production_matches 0 _source)
+    get_filename_component(_filename "${_source}" NAME)
     set(_destination "${STREAMLINE_RUNTIME_DIRECTORY}/${_filename}")
     file(COPY_FILE "${_source}" "${_destination}" ONLY_IF_DIFFERENT)
-    set(
-        STREAMLINE_RUNTIME_FILES
+    set(STREAMLINE_RUNTIME_FILES
         ${STREAMLINE_RUNTIME_FILES}
         "${_destination}"
         PARENT_SCOPE
@@ -122,9 +84,37 @@ function(stage_streamline_runtime _filename)
 endfunction()
 
 set(STREAMLINE_RUNTIME_FILES "")
-stage_streamline_runtime(nvngx_dlss.dll)
-stage_streamline_runtime(sl.common.dll)
-stage_streamline_runtime(sl.dlss.dll)
-stage_streamline_runtime(sl.interposer.dll)
-stage_streamline_runtime(sl.pcl.dll)
-stage_streamline_runtime(sl.reflex.dll)
+# Use production binaries and their original notices from the same pinned SDK.
+foreach(
+    _relative_path
+    IN
+    ITEMS
+        bin/x64/nvngx_dlss.dll
+        bin/x64/sl.common.dll
+        bin/x64/sl.dlss.dll
+        bin/x64/sl.interposer.dll
+        bin/x64/sl.pcl.dll
+        bin/x64/sl.reflex.dll
+        license.txt
+        bin/x64/nvngx_dlss.license.txt
+        bin/x64/reflex.license.txt
+        "3rd-party-licenses.md"
+        "NVIDIA Nsight Graphics SDK License (Apache 2.0).txt"
+)
+    stage_streamline_runtime("${_relative_path}")
+endforeach()
+
+if(BUILD_CONTROLLER_TESTS)
+    add_test(
+        NAME StreamlineRuntimePackaging
+        COMMAND
+            "${CMAKE_COMMAND}" "-DBUILD_ROOT=${PROJECT_BINARY_DIR}"
+            "-DSDK_ROOT=${STREAMLINE_RUNTIME_EXTRACT_ROOT}"
+            "-DTEST_CONFIG=$<CONFIG>" -P
+            "${PROJECT_SOURCE_DIR}/tests/streamline_runtime_packaging_test.cmake"
+    )
+    set_tests_properties(
+        StreamlineRuntimePackaging
+        PROPERTIES LABELS "PackagingTests" RUN_SERIAL TRUE
+    )
+endif()

@@ -9,13 +9,14 @@ same PR. Earlier snapshots stay unchanged. See the
 
 ## Retained snapshots
 
-| Version | File                                                       |                          Size | Contents                                                                                     |
-| ------- | ---------------------------------------------------------- | ----------------------------: | -------------------------------------------------------------------------------------------- |
-| 0001    | [History 1](vr-render-scale-ledger-0001-history.csv)       | 83,486,866 bytes / 79.619 MiB | Oldest retained runs plus intermediate runs selected to balance the archives; 22 run columns |
-| 0002    | [History 2](vr-render-scale-ledger-0002-history.csv)       | 83,607,079 bytes / 79.734 MiB | Remaining intermediate PR66/PR73 runs; 4 run columns                                         |
-| 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv) | 72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns           |
+| Version | File                                                                         |                                                                    Size | Contents                                                                                                                             |
+| ------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 0001    | [History 1](vr-render-scale-ledger-0001-history.csv)                         |                                           83,486,866 bytes / 79.619 MiB | Oldest retained runs plus intermediate runs selected to balance the archives; 22 run columns                                         |
+| 0002    | [History 2](vr-render-scale-ledger-0002-history.csv)                         |                                           83,607,079 bytes / 79.734 MiB | Remaining intermediate PR66/PR73 runs; 4 run columns                                                                                 |
+| 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv)                   |                                           72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns                                                   |
+| 0004    | [Depth-culling investigation](vr-render-scale-ledger-0004-investigation.csv) | See [coverage receipt](depth-culling-comparison-20260916/coverage.json) | Eight same-build gameft-sw runs; 48 saves; complete summaries, producer final records, settings, provenance and derived WPR analysis |
 
-The archives differ by 120,213 bytes. All three are plain CSV files below
+The archives differ by 120,213 bytes. The original three are plain CSV files below
 100 MiB. Their column headers retain exact run and compiled-source
 identities; each has all 1,228 metric rows. Historical files are balanced
 by complete run columns, so intermediate dates can occur in either file.
@@ -25,10 +26,25 @@ Snapshot `0003` pins PR65 sources `348803c18` and `7c8e3e656`, PR66 source
 `renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z`. The older PR73
 comparison source `269bded15` is retained in `0002`.
 
-The next finalized measurement uses `0004-pr<PR number>`. If one PR's
+The next finalized measurement uses `0005-pr<PR number>`. If one PR's
 complete evidence exceeds the file limit, use consecutive numbers with
 that PR identity and list its parts together here. Baselines may recur
 in later snapshots, but their copied cells must remain exact.
+
+Snapshot `0004` belongs to `perf/cpu-dlss-regression-20260916`, which has no
+assigned PR. Its `investigation` suffix records that fact without inventing
+a PR identity. It uses eight run columns, scalar timing rows and complete
+JSON detail rows; it is a gameft-sw diagnostic snapshot, not a replay of the
+older render-scale tuning assay. The [handover](depth-culling-comparison-20260916/README.md)
+defines its internal Balanced 1 reference separately from the historical
+cross-build baseline. Decode detail cells with JSON; increase the CSV
+reader field limit to the ledger byte length. The
+[coverage receipt](depth-culling-comparison-20260916/coverage.json) maps
+every source object and verifies exact reconstruction. Raw traces remain
+local. Historical snapshots `0001`–`0003` are unchanged.
+The tuning comparison wrapper discovers `prNUMBER` and `history`
+snapshots; it does not interpret this investigation schema as a tuning
+assay. Use the committed `verify.py` for its coverage audit.
 
 ## Migration verification
 
@@ -58,3 +74,11 @@ python tools/compare-render-scale-ledger.py --ledger docs/development/vr-render-
 This reads the selected files without changing them. Select disjoint run
 partitions when using multiple inputs; do not supply repeated baseline
 columns from different snapshots to the same audit.
+
+## September 15 graphics ownership implementation
+
+The [ownership review](graphics-context-ownership-review-20260915.md) records
+an offline correction and its validation limits. No new finalized runtime
+measurement is added by that correction; existing numbered snapshots remain
+immutable. Exact-build COC and performance results must receive a new
+numbered snapshot when measured and finalized.

@@ -25,6 +25,7 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		constexpr std::size_t kMaxTrackedLiveTextures = 16384;
 		constexpr std::size_t kMaxCollectedNiSourceTextureOwners = 32768;
 		constexpr std::size_t kMaxNiTextureTraversal = 1'000'000;
+		constexpr std::uintptr_t kMinimumRendererTextureAddress = 0x10000;
 
 		// Private-data GUID used only by this diagnostic build. D3D11 owns one
 		// reference to the attached sentinel for exactly the texture lifetime.
@@ -123,6 +124,9 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		{
 			NiSourceTextureOwners owners;
 			uint64_t droppedOwnerCount{};
+			uint64_t invalidRendererTextureCount{};
+			uint64_t firstInvalidOwner{};
+			uint64_t firstInvalidRendererTexture{};
 			bool traversalLimitReached{};
 		};
 
@@ -367,6 +371,39 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			return bytes * std::max(a_desc.ArraySize, 1u) * std::max(a_desc.SampleDesc.Count, 1u);
 		}
 
+		// Skyrim publishes a source texture before its renderer pointer is ready.
+		// The texture-list lock does not protect that pointer's later writes.
+		bool TryReadRendererResource(const RE::BSGraphics::Texture* a_rendererTexture, uint64_t& a_resource) noexcept
+		{
+			__try {
+				a_resource = reinterpret_cast<uint64_t>(a_rendererTexture->texture);
+				return true;
+			} __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+				return false;
+			}
+		}
+
+		uint64_t ReadRendererResource(const RE::NiSourceTexture* a_sourceTexture, uint64_t& a_invalidRendererTexture) noexcept
+		{
+			a_invalidRendererTexture = 0;
+			const auto* rendererTexture = a_sourceTexture->rendererTexture;
+			if (!rendererTexture)
+				return 0;
+
+			const auto address = reinterpret_cast<uintptr_t>(rendererTexture);
+			if (address < kMinimumRendererTextureAddress || (address & (alignof(void*) - 1)) != 0) {
+				a_invalidRendererTexture = address;
+				return 0;
+			}
+
+			uint64_t resource = 0;
+			if (!TryReadRendererResource(rendererTexture, resource)) {
+				a_invalidRendererTexture = address;
+				return 0;
+			}
+			return resource;
+		}
+
 		NiSourceTextureOwnerSnapshot CollectNiSourceTextureOwners()
 		{
 			// Skyrim maintains all live NiTexture instances in this locked intrusive
@@ -385,9 +422,17 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 				const auto vtable = *reinterpret_cast<const std::uintptr_t*>(texture);
 				if (vtable == niSourceTextureVtable.address()) {
 					auto* sourceTexture = static_cast<RE::NiSourceTexture*>(texture);
-					if (sourceTexture->rendererTexture && sourceTexture->rendererTexture->texture) {
+					uint64_t invalidRendererTexture = 0;
+					const auto resource = ReadRendererResource(sourceTexture, invalidRendererTexture);
+					if (invalidRendererTexture) {
+						++snapshot.invalidRendererTextureCount;
+						if (!snapshot.firstInvalidOwner) {
+							snapshot.firstInvalidOwner = reinterpret_cast<uint64_t>(sourceTexture);
+							snapshot.firstInvalidRendererTexture = invalidRendererTexture;
+						}
+					}
+					if (resource) {
 						if (capturedOwnerCount < kMaxCollectedNiSourceTextureOwners) {
-							const auto resource = reinterpret_cast<uint64_t>(sourceTexture->rendererTexture->texture);
 							snapshot.owners[resource].push_back({
 								reinterpret_cast<uint64_t>(sourceTexture),
 								sourceTexture->GetRefCount(),
@@ -678,10 +723,14 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 
 			sessionID = state.sessionID.load(std::memory_order_acquire);
 			const uint32_t cohort = state.cohort.load(std::memory_order_acquire);
-			if (!a_texture->rendererTexture || !a_texture->rendererTexture->texture)
+			uint64_t invalidRendererTexture = 0;
+			const auto d3dTexture = ReadRendererResource(a_texture, invalidRendererTexture);
+			if (!d3dTexture) {
+				if (invalidRendererTexture)
+					state.faceGenAssignmentFailures.fetch_add(1, std::memory_order_relaxed);
 				return;
+			}
 
-			const auto d3dTexture = reinterpret_cast<uint64_t>(a_texture->rendererTexture->texture);
 			FaceGenTintAssignment assignment{
 				reinterpret_cast<uint64_t>(a_texture),
 				reinterpret_cast<uint64_t>(a_tintTextureSlot) - kFaceGenTintTextureOffset,
@@ -723,13 +772,26 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			};
 		}
 
-		// Take Skyrim's texture-list lock before the tracker mutex. A texture
-		// destructor can release its D3D sentinel while removing itself from that
-		// list; this ordering avoids inverting those two locks.
-		const auto niSourceTextureOwnerSnapshot = CollectNiSourceTextureOwners();
-		const auto& niSourceTextureOwners = niSourceTextureOwnerSnapshot.owners;
 		auto& state = GetState();
-		std::scoped_lock lock(state.mutex);
+		std::unique_lock lock(state.mutex);
+		const bool hasTrackedTextures = !state.liveTextures.empty();
+		// Release the tracker lock before taking Skyrim's texture-list lock.
+		// Texture destruction can release a D3D sentinel while holding that lock.
+		if (hasTrackedTextures)
+			lock.unlock();
+		const auto niSourceTextureOwnerSnapshot = hasTrackedTextures ?
+		                                              CollectNiSourceTextureOwners() :
+		                                              NiSourceTextureOwnerSnapshot{};
+		const auto& niSourceTextureOwners = niSourceTextureOwnerSnapshot.owners;
+		json firstInvalidRendererTexture = nullptr;
+		if (niSourceTextureOwnerSnapshot.firstInvalidOwner) {
+			firstInvalidRendererTexture = {
+				{ "owner", niSourceTextureOwnerSnapshot.firstInvalidOwner },
+				{ "rendererTexture", niSourceTextureOwnerSnapshot.firstInvalidRendererTexture },
+			};
+		}
+		if (hasTrackedTextures)
+			lock.lock();
 		std::unordered_map<DescriptorKey, uint64_t, DescriptorHash> niSourceMatchesByGroup;
 		std::unordered_map<DescriptorKey, uint64_t, DescriptorHash> niSourceMatchBytesByGroup;
 		json nonCurrentNiSourceMatches = json::array();
@@ -850,7 +912,10 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 			{ "liveTextureRecordCount", state.liveTextures.size() },
 			{ "faceGenTintAssignmentCount", state.faceGenTintAssignments.size() },
 			{ "niSourceTextureResourceCount", niSourceTextureOwners.size() },
+			{ "niSourceTextureOwnerScanSkipped", !hasTrackedTextures },
 			{ "niSourceTextureOwnerRecordsDropped", niSourceTextureOwnerSnapshot.droppedOwnerCount },
+			{ "niSourceTextureInvalidRendererTextureCount", niSourceTextureOwnerSnapshot.invalidRendererTextureCount },
+			{ "niSourceTextureFirstInvalidRendererTexture", std::move(firstInvalidRendererTexture) },
 			{ "niSourceTextureTraversalLimitReached", niSourceTextureOwnerSnapshot.traversalLimitReached },
 			{ "niSourceTextureMatchedCount", niSourceMatchedCount },
 			{ "niSourceTextureMatchedEstimatedBytes", niSourceMatchedEstimatedBytes },

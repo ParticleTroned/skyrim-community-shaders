@@ -109,6 +109,10 @@ may use the ordinary HUD; no second recording overlay is drawn.
 
 ### Native discovery
 
+Discover CSXR during or after `PostPostLoad` for ordinary screenshot use.
+CSX retains early `PostLoad` discovery and refreshes the listener to include
+plugins loaded later; see [API service registry](api-service-registry.md).
+
 Native SKSE consumers request the `CSXR` registry described by
 `include/VRAPI/CSserviceapi.h`, then query `csx.screenshot` major 1 with the
 inspection, runtime-mutation, asynchronous-operation, and event-stream
@@ -493,7 +497,10 @@ format, source, destination, and clipboard settings. A sequence request
 expands the distinct frame-capture eye, format, source, destination, frame
 count, and cadence settings. The acceptance receipt always contains the fully
 expanded effective descriptor. UI settings changed afterward affect only later
-requests.
+requests. Sequence destination validation uses the frame-capture folder even
+when the still-image folder is unavailable. A partial settings load that omits
+both `FrameCaptureEye` and legacy `SeparateEyes` preserves the selected eye.
+The legacy key migrates only when supplied; a canonical eye always wins.
 
 ## Still-capture lifecycle
 

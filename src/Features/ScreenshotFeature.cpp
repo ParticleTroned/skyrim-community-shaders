@@ -12,8 +12,10 @@
 #include "Menu.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/D3DContextProtection.h"
 #include "Utils/FileSystem.h"
 #include "Utils/NormalizedCoordinates.h"
+#include "Utils/RendererContextAccess.h"
 #include "Utils/WinApi.h"
 #include <DirectXTex.h>
 #include <PCH.h>
@@ -179,54 +181,29 @@ namespace
 		}
 		std::memset(destPixels, 0, image.GetPixelsSize());
 
-		D3D11_MAPPED_SUBRESOURCE mapped{};
 		HRESULT mapResult = E_FAIL;
 		const auto mapDeadline = std::chrono::steady_clock::now() + kReadbackMapTimeout;
 		do {
-			mapResult = context->Map(
-				stagingTexture,
-				0,
-				D3D11_MAP_READ,
-				D3D11_MAP_FLAG_DO_NOT_WAIT,
-				&mapped);
+			mapResult = Util::TryReadbackWithRendererOwnership(context, stagingTexture,
+				Util::GetRendererContextLock(globals::game::renderer, context), [&](const D3D11_MAPPED_SUBRESOURCE& mapped) -> HRESULT {
+					if (!mapped.pData || mapped.RowPitch == 0)
+						return E_FAIL;
+					// Bound row copies by the driver's mapped extent and both row pitches.
+					const size_t bytesPerRow = std::min<size_t>(destImage->rowPitch, mapped.RowPitch);
+					const size_t mappedDepth = mapped.DepthPitch != 0 ? mapped.DepthPitch : mapped.RowPitch * destImage->height;
+					const size_t rowsToCopy = std::min<size_t>(destImage->height, mappedDepth / mapped.RowPitch);
+					const auto* srcPixels = static_cast<const uint8_t*>(mapped.pData);
+					for (size_t row = 0; row < rowsToCopy; ++row)
+						memcpy(destPixels + row * destImage->rowPitch, srcPixels + row * mapped.RowPitch, bytesPerRow);
+					return S_OK;
+				});
 			if (mapResult != DXGI_ERROR_WAS_STILL_DRAWING) {
 				break;
 			}
 			std::this_thread::sleep_for(kReadbackMapRetryDelay);
 		} while (std::chrono::steady_clock::now() < mapDeadline);
 
-		if (FAILED(mapResult)) {
-			return false;
-		}
-
-		const auto unmap = [&]() { context->Unmap(stagingTexture, 0); };
-		if (!mapped.pData || mapped.RowPitch == 0) {
-			unmap();
-			return false;
-		}
-
-		// Driver-mapped region can be smaller than height * mapped.RowPitch
-		// (alignment quirks, partial mappings). Cap by mapped.DepthPitch and
-		// clamp each row's copy to whichever of source/dest pitches is smaller -
-		// stepping past either side hits unmapped memory and the worker crashes
-		// inside rep movsb (see crash 2026-05-19).
-		const size_t bytesPerRow = std::min<size_t>(destImage->rowPitch, mapped.RowPitch);
-		const size_t mappedDepth = mapped.DepthPitch != 0 ? mapped.DepthPitch :
-		                                                    mapped.RowPitch * destImage->height;
-		const size_t maxRowsBySize = mapped.RowPitch > 0 ? (mappedDepth / mapped.RowPitch) : 0;
-		const size_t rowsToCopy = std::min<size_t>(destImage->height, maxRowsBySize);
-
-		const auto* srcPixels = static_cast<const uint8_t*>(mapped.pData);
-
-		for (size_t row = 0; row < rowsToCopy; ++row) {
-			memcpy(
-				destPixels + row * destImage->rowPitch,
-				srcPixels + row * mapped.RowPitch,
-				bytesPerRow);
-		}
-
-		unmap();
-		return true;
+		return SUCCEEDED(mapResult);
 	}
 
 	void StripAlphaForBmp(DirectX::ScratchImage& image)
@@ -1759,7 +1736,6 @@ ScreenshotFeature::~ScreenshotFeature()
 	StopWorkerThread();
 	if (screenshotApi && !screenshotApi->DrainForShutdown(std::chrono::seconds(2)))
 		logger::error("Screenshot manifest work did not drain within the shutdown bound.");
-	RestoreReadbackContextProtectionIfIdle();
 }
 
 bool ScreenshotFeature::IsInMenu() const
@@ -1825,6 +1801,7 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		copyToClipboard = a_json["CopyToClipboard"];
 	screenshotEye = ParseCaptureEye(a_json, "ScreenshotEye", screenshotEye);
 	const bool hasCanonicalFrameCaptureEye = a_json.contains("FrameCaptureEye");
+	bool hasLegacyFrameCaptureEye = false;
 	frameCaptureEye = ParseCaptureEye(a_json, "FrameCaptureEye", frameCaptureEye);
 	vr::EVREye legacyFramedEye = vr::Eye_Left;
 	if (a_json.contains("VRCaptureSource") && a_json["VRCaptureSource"].is_string()) {
@@ -1880,8 +1857,10 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sequenceDefaults.frameCount = std::clamp(sequence->value("FrameCount", sequenceDefaults.frameCount), 1u, 10000u);
 		if (sequence->contains("Schedule") && (*sequence)["Schedule"].is_object())
 			sequenceDefaults.intervalFrames = std::max(1u, (*sequence)["Schedule"].value("IntervalFrames", sequenceDefaults.intervalFrames));
-		if (sequence->contains("Outputs") && (*sequence)["Outputs"].is_object())
+		if (sequence->contains("Outputs") && (*sequence)["Outputs"].is_object()) {
+			hasLegacyFrameCaptureEye = (*sequence)["Outputs"].contains("SeparateEyes");
 			sequenceDefaults.saveSeparateEyes = (*sequence)["Outputs"].value("SeparateEyes", sequenceDefaults.saveSeparateEyes);
+		}
 		if (sequence->contains("Packaging") && (*sequence)["Packaging"].is_object()) {
 			const auto& packaging = (*sequence)["Packaging"];
 			if (packaging.contains("PreviewVideo") && packaging["PreviewVideo"].is_object()) {
@@ -1894,10 +1873,11 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 		sequenceDefaults.frameCount = std::clamp(a_json.value("SequenceFrameCount", sequenceDefaults.frameCount), 1u, 10000u);
 		sequenceDefaults.intervalFrames = std::max(1u, a_json.value("SequenceFrameInterval", sequenceDefaults.intervalFrames));
 		sequenceDefaults.previewFramesPerSecond = std::clamp(a_json.value("SequencePreviewFramesPerSecond", sequenceDefaults.previewFramesPerSecond), 1u, 240u);
+		hasLegacyFrameCaptureEye = a_json.contains("SequenceSaveSeparateEyes");
 		sequenceDefaults.saveSeparateEyes = a_json.value("SequenceSaveSeparateEyes", sequenceDefaults.saveSeparateEyes);
 		sequenceDefaults.writePreviewVideo = a_json.value("SequenceWritePreviewVideo", sequenceDefaults.writePreviewVideo);
 	}
-	if (!hasCanonicalFrameCaptureEye)
+	if (!hasCanonicalFrameCaptureEye && hasLegacyFrameCaptureEye)
 		frameCaptureEye = sequenceDefaults.saveSeparateEyes ? CaptureEye::Both : CaptureEye::Left;
 	sequenceDefaults.saveSeparateEyes = frameCaptureEye == CaptureEye::Both;
 
@@ -2750,66 +2730,9 @@ nlohmann::json ScreenshotFeature::BuildAcquisitionRecord(
 	};
 }
 
-bool ScreenshotFeature::EnsureReadbackContextProtection(ID3D11DeviceContext* a_context)
+bool ScreenshotFeature::ValidateReadbackContext(ID3D11DeviceContext* a_context)
 {
-	winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
-	if (!a_context || FAILED(a_context->QueryInterface(multithread.put()))) {
-		return false;
-	}
-
-	std::lock_guard queueLock(screenshotWorkerState->mutex);
-	const auto existing = std::find_if(
-		screenshotWorkerState->readbackProtections.begin(),
-		screenshotWorkerState->readbackProtections.end(),
-		[a_context](const ReadbackContextProtection& protection) {
-			return protection.context.get() == a_context;
-		});
-	if (existing != screenshotWorkerState->readbackProtections.end()) {
-		multithread->SetMultithreadProtected(TRUE);
-		return true;
-	}
-
-	try {
-		ReadbackContextProtection protection;
-		protection.context.copy_from(a_context);
-		screenshotWorkerState->readbackProtections.push_back(std::move(protection));
-	} catch (const std::exception& e) {
-		logger::error("Failed to track screenshot readback protection: {}", e.what());
-		return false;
-	} catch (...) {
-		logger::error("Failed to track screenshot readback protection.");
-		return false;
-	}
-
-	const BOOL wasProtected = multithread->SetMultithreadProtected(TRUE);
-	screenshotWorkerState->readbackProtections.back().restoreToUnprotected = wasProtected == FALSE;
-	screenshotWorkerState->restoreReadbackProtection = true;
-	return true;
-}
-
-void ScreenshotFeature::RestoreReadbackContextProtectionIfIdle()
-{
-	RestoreReadbackContextProtectionIfIdle(screenshotWorkerState);
-}
-
-void ScreenshotFeature::RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state)
-{
-	std::lock_guard queueLock(a_state->mutex);
-	if (!a_state->restoreReadbackProtection || a_state->outstandingCount != 0) {
-		return;
-	}
-
-	for (const auto& protection : a_state->readbackProtections) {
-		if (!protection.restoreToUnprotected || !protection.context) {
-			continue;
-		}
-		winrt::com_ptr<REX::W32::ID3D11Multithread> multithread;
-		if (SUCCEEDED(protection.context->QueryInterface(multithread.put()))) {
-			multithread->SetMultithreadProtected(FALSE);
-		}
-	}
-	a_state->readbackProtections.clear();
-	a_state->restoreReadbackProtection = false;
+	return SUCCEEDED(Util::ValidateImmediateContext(a_context));
 }
 
 bool ScreenshotFeature::QueueScreenshot(PendingScreenshot&& screenshot)
@@ -3390,7 +3313,6 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 			reportFailure("Screenshot worker failed with an unknown exception.");
 		}
 	}
-	RestoreReadbackContextProtectionIfIdle(a_state);
 	if (uninitializeCom)
 		CoUninitialize();
 	{
@@ -3435,8 +3357,9 @@ bool ScreenshotFeature::StageTexturePlane(
 	if (!sourceDevice || !sourceContext) {
 		return false;
 	}
-	if (!EnsureReadbackContextProtection(sourceContext.get())) {
-		logger::error("Screenshot readback requires ID3D11Multithread protection.");
+	const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, sourceContext.get()));
+	if (!ownership || !ValidateReadbackContext(sourceContext.get())) {
+		logger::error("Screenshot staging requires ownership of the current renderer context.");
 		return false;
 	}
 
@@ -3856,7 +3779,6 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 
 void ScreenshotFeature::OnBeforePresent(IDXGISwapChain* a_swapChain)
 {
-	RestoreReadbackContextProtectionIfIdle();
 	EnsureScreenshotApi();
 	screenshotApi->Tick(*this, globals::state ? globals::state->frameCount : 0u);
 	if (!HasPendingCapture()) {

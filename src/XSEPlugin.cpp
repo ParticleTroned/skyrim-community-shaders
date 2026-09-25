@@ -1,3 +1,4 @@
+#include "Api/AcceptedDrawService.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
@@ -17,6 +18,7 @@
 #include "Features/HorizonFix.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
@@ -75,12 +77,13 @@ namespace
 			return false;
 		}
 
-		logger::info("Registered legacy CSAP and versioned CSXR API message listener at PostLoad");
+		logger::info("Registered legacy CSAP and versioned CSXR API listener for currently loaded plugins");
 		return true;
 	}
 
 	void ResetRuntimeStateAfterGameLoad()
 	{
+		globals::features::skylighting.QueueResetSkylighting();
 		if (globals::state) {
 			globals::state->pendingPostLoadRuntimeReset = true;
 		}
@@ -156,8 +159,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	switch (message->type) {
 	case SKSE::MessagingInterface::kPostLoad:
 		{
-			// A wildcard listener registered during DLL load only covers plugins
-			// already loaded at that instant. PostLoad includes every SKSE plugin.
+			// Keep early consumers reachable; refresh the wildcard registration
+			// for plugins loaded after CSX before their PostLoad callbacks.
 			if (!RegisterCommunityShadersAPIMessageListener())
 				break;
 
@@ -195,6 +198,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ShaderDevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
+				CSX::Api::RegisterAcceptedDrawService();
 				EngineFix::InstallOnPostPostLoadFixes();
 				FrameAnnotations::OnPostPostLoad();
 
@@ -323,8 +327,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kSaveGame:
 		{
 			if (errors.empty() && globals::state) {
-				const uint32_t frame = globals::state->frameCount;
-				globals::state->ExtendSaveLoadSafeMode(frame, State::kSaveLoadSafeModeGraceFrames);
+				const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_acquire);
+				globals::state->NotifyOrdinarySave(frame);
 				globals::state->ExtendPersistentMutationBlock(frame, State::kSaveMutationBlockGraceFrames);
 			}
 
@@ -380,6 +384,8 @@ bool Load()
 		return false;
 	}
 	CSX::Api::InitializeServiceRegistryProvider();
+	if (!RegisterCommunityShadersAPIMessageListener())
+		return false;
 
 	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
 		logger::error("Failed to register SKSE message listener");

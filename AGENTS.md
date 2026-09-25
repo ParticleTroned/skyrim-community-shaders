@@ -232,9 +232,16 @@ contradict this policy.
 
 ## Repository tooling
 
+-   When the user invokes `gameft-sw`, follow
+    `docs/development/gameft-sw.md`: ask its exact save-number question and
+    use its wrapper around the unchanged saved `game-ft` runner. Stack/wait
+    tracing is explicit and DevBench-only. Present timing and health before
+    provenance or stack analysis; never silently change the base protocol.
+
 -   Run `pwsh ./tools/setup-dev.ps1` after cloning or when the developer-tool environment changes.
 -   In Codex on Windows, invoke repository Git through `pwsh ./tools/git.ps1 <git arguments>` so linked-worktree ownership is scoped without changing global `safe.directory`.
 -   Invoke CMake through `pwsh ./tools/cmake.ps1 <cmake arguments>` and pre-commit through `pwsh ./tools/pre-commit.ps1 run <arguments>`.
+-   Use `pwsh ./tools/validate-local.ps1` for the complete local DLL, controller, shader, and preset validation record. It builds both test groups and saves inventory, results, provenance, and full failure output under `build/validation/`.
 -   Run `pwsh ./tools/dev-doctor.ps1 -Network` when Git, hooks, authentication, caches, or the Windows sandbox behave unexpectedly.
 -   Do not set user-level `TEMP` or `TMP`, and do not inject them with Codex `shell_environment_policy`; the launchers set writable paths only after the sandbox starts.
 -   Use explicit SSH URLs for authenticated GitHub remotes and HTTPS for public dependencies. Do not globally rewrite all `https://github.com/` URLs to SSH. Use `pwsh ./tools/setup-git-user.ps1` for push-only SSH routing.

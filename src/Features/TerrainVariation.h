@@ -1,5 +1,10 @@
 #pragma once
 
+#include <shared_mutex>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+
 /** @brief Reduces terrain texture tiling artifacts by adding stochastic variation to texture sampling. */
 struct TerrainVariation : Feature
 {
@@ -30,7 +35,7 @@ public:
 		return {
 			"Terrain Variation reduces the repeating pattern effect on terrain textures.\n"
 			"This technique creates more natural-looking terrain by adding variation to texture sampling.",
-			{ "Reduces terrain texture tiling",
+			{ "Reduces terrain and landscape-textured mesh tiling",
 				"Stochastic texture sampling",
 				"Improved terrain visual quality",
 				"Compatible with Extended Materials parallax" }
@@ -40,10 +45,12 @@ public:
 	struct alignas(16) Settings
 	{
 		uint32_t enableLODTerrainTilingFix = 1;
-		uint32_t pad[3]{};
+		uint32_t enableMeshSupport = 1;
+		uint32_t pad[2]{};
 	};
 
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+	static_assert(sizeof(Settings) == 16);
 
 	Settings settings;
 
@@ -57,6 +64,27 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
+	/** @brief Collects the diffuse paths in landscape texture records and their seasonal swaps. */
+	virtual void DataLoaded() override;
+	/** @brief Updates mesh eligibility for this draw, clearing stale eligibility on every call. */
+	void UpdateMeshPermutation(RE::BSRenderPass* a_pass);
+	/** @brief Sets the runtime mesh option; saving settings persists it. */
+	void SetMeshSupportEnabled(bool a_enabled);
+	/** @brief Reports whether installed mesh variation is enabled. */
+	bool IsMeshSupportEnabled() const { return loaded && settings.enableMeshSupport != 0; }
+
 	/** @brief Initializes the feature and applies shader settings after plugin load. */
 	virtual void PostPostLoad() override;
+
+private:
+	struct CachedTexture
+	{
+		RE::BSFixedString name;  // Retains the interned key so its address cannot be recycled.
+		bool landscape = false;
+	};
+	std::shared_mutex meshTextureMutex;
+	std::unordered_set<std::string> landscapeDiffusePaths;
+	std::unordered_map<const char*, CachedTexture> meshTextureCache;
+
+	bool IsLandscapeDiffuseTexture(const RE::BSFixedString& a_name);
 };

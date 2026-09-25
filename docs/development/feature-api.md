@@ -20,3 +20,9 @@ boot state.
 
 Native live calls are main-thread-affine. DevBench exposes the same contract as
 `communityshaders.feature_api`; registry metadata itself is off-thread safe.
+
+DevBench minor 1 / schema revision 2 adds the read-only
+`preset_compatibility` action. It reports the last `SettingsUser.json`
+compatibility decision, target range, loaded CSX version, and rejection reason.
+This is additive; the native feature-service ABI remains at v1.0 because preset
+validation belongs to the settings loader rather than the feature catalog.

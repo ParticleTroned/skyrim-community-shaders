@@ -15,6 +15,9 @@
 #	include "Globals.h"
 #	include "ShaderCache.h"
 #	include "State.h"
+#	include "Utils/D3DContextProtection.h"
+#	include "Utils/RendererContextAccess.h"
+#	include "Utils/VRLoadingMenuClear.h"
 #	include "Utils/Form.h"
 #	include "VRAPI/CSserviceapi.h"
 #	include "VRAPI/CSupscalingapi.h"
@@ -51,7 +54,7 @@ namespace
 	static_assert(kDLSSDevBenchTraceDefaultReadLimit <= Streamline::kDLSSDevBenchTraceCapacity);
 	constexpr uint64_t kQualificationMaximumTimeoutMs = 120'000;
 	constexpr double kQualificationFoveationFloatTolerance = 0.0001;
-	constexpr unsigned int kDevBenchToolExtensionRevision = 10;
+	constexpr unsigned int kDevBenchToolExtensionRevision = 12;
 	std::atomic_bool g_registered{ false };
 	std::atomic_uint64_t g_nextDiagnosticTrimEpoch{ 1ull << 63 };
 	using SubmitBoundaryRejection = VRSubmitInputFreshnessPolicy::OuterBoundaryRejection;
@@ -1022,6 +1025,26 @@ namespace
 			{ "loadingPresentationActive", a_gate.loadingPresentationActive },
 			{ "raceSexPresentationActive", a_gate.raceSexPresentationActive },
 			{ "saveLoadProtectionActive", a_gate.saveLoadProtectionActive },
+			{ "ordinarySaveRecovery", {
+										  { "saveToken", a_gate.ordinarySaveToken },
+										  { "presentationReady", a_gate.ordinarySavePresentationReady },
+										  { "persistenceBlocked", a_gate.ordinarySavePersistenceBlocked },
+										  { "proofSaveToken", a_gate.ordinarySaveProof.identity.saveToken },
+										  { "contractGeneration", a_gate.ordinarySaveProof.identity.generation },
+										  { "resourceKey", a_gate.ordinarySaveProof.identity.resourceKey },
+										  { "method", a_gate.ordinarySaveProof.identity.method },
+										  { "commonResourceGeneration", a_gate.ordinarySaveProof.identity.commonResourceGeneration },
+										  { "intermediateGeneration", a_gate.ordinarySaveProof.identity.intermediateGeneration },
+										  { "firstFrame", a_gate.ordinarySaveProof.firstFrame },
+										  { "lastCompleteFrame", a_gate.ordinarySaveProof.lastCompleteFrame },
+										  { "stableFrames", a_gate.ordinarySaveProof.stableFrames },
+										  { "requiredStereoFrames", VROrdinarySaveRecovery::kRequiredStereoFrames },
+										  { "producerScope", a_gate.ordinarySaveProof.boundary.scopeToken },
+										  { "submitFlags", a_gate.ordinarySaveProof.boundary.submitFlags },
+										  { "qualifiedFrame", a_gate.ordinarySaveProof.qualifiedFrame },
+										  { "qualifiedCycle", a_gate.ordinarySaveProof.qualifiedCycle },
+										  { "lastObservedCycle", a_gate.ordinarySaveProof.cycle },
+									  } },
 			{ "completedWorldFrame", a_gate.completedWorldFrame },
 			{ "recoveryPending", a_gate.recoveryPending },
 			{ "relatchPending", a_gate.relatchPending },
@@ -1402,8 +1425,9 @@ namespace
 		}
 
 		LARGE_INTEGER driverVersion{};
+		// DXGI reports driver versions through IDXGIDevice; D3D11 interfaces are unsupported here.
 		const bool driverVersionAvailable =
-			SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(ID3D11Device), &driverVersion));
+			SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driverVersion));
 		const auto high = static_cast<uint32_t>(driverVersion.HighPart);
 		const auto low = static_cast<uint32_t>(driverVersion.LowPart);
 		const std::string driverVersionText = driverVersionAvailable ?
@@ -1421,6 +1445,37 @@ namespace
 			{ "driverVersionAvailable", driverVersionAvailable },
 			{ "driverVersion", driverVersionText },
 			{ "driverVersionRaw", static_cast<uint64_t>(driverVersion.QuadPart) },
+		};
+	}
+
+	json BuildGraphicsContextStatus()
+	{
+		const auto observation = Util::InspectImmediateContextProtection(globals::d3d::context);
+		const auto loadingClear = Util::VRLoadingMenuClear::GetStatus();
+		const bool apiReady = SUCCEEDED(observation.status);
+		const bool rendererOwnershipAvailable = Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context) != nullptr;
+		return {
+			{ "policy", "renderer_ownership" },
+			{ "contextAvailable", observation.contextAvailable },
+			{ "immediateContext", observation.immediateContext },
+			{ "deviceFlags", observation.deviceFlags },
+			{ "singleThreadedDevice", (observation.deviceFlags & D3D11_CREATE_DEVICE_SINGLETHREADED) != 0 },
+			{ "multithreadAvailable", observation.multithreadAvailable },
+			{ "multithreadProtected", observation.multithreadProtected },
+			{ "apiReady", apiReady },
+			{ "rendererOwnershipAvailable", rendererOwnershipAvailable },
+			{ "ready", apiReady && rendererOwnershipAvailable && loadingClear.ready },
+			{ "hresult", static_cast<int32_t>(observation.status) },
+			{ "loadingMenuClear", {
+									  { "state", loadingClear.state },
+									  { "installed", loadingClear.installed },
+									  { "applicable", loadingClear.applicable },
+									  { "ready", loadingClear.ready },
+									  { "attempted", loadingClear.attempted },
+									  { "executed", loadingClear.executed },
+									  { "deferred", loadingClear.deferred },
+									  { "missingRenderer", loadingClear.missingRenderer },
+								  } },
 		};
 	}
 
@@ -1534,6 +1589,7 @@ namespace
 									  { "lastContextCreateResult", static_cast<int32_t>(a_upscaling.fidelityFX.GetLastFSRContextCreateResult()) },
 								  } },
 			{ "vendorWorkGate", VendorWorkGateJson(vendorWorkGate) },
+			{ "graphicsContext", BuildGraphicsContextStatus() },
 			{ "renderScaleSelectionPolicy", {
 												{ "linkedToUpscaling", a_upscaling.settings.renderScaleLinkedToUpscaling },
 												{ "rememberedPreference", a_upscaling.GetVRRenderScaleModePreference() },
@@ -4928,7 +4984,8 @@ namespace
 			"texture_lifetime_status",
 			"texture_lifetime_checkpoint",
 			"texture_lifetime_stop",
-			"texture_lifetime_reset" });
+			"texture_lifetime_reset",
+			"graphics_context_status" });
 	}
 
 	void RunHandler(
@@ -6550,6 +6607,12 @@ namespace
 			});
 		}
 
+		if (action == "graphics_context_status") {
+			return RunOnMainThread([action]() {
+				return json{ { "action", action }, { "graphicsContext", BuildGraphicsContextStatus() } };
+			});
+		}
+
 		if (action == "texture_lifetime_start") {
 			return RunOnMainThread([]() {
 				if (!globals::game::isVR)
@@ -6726,6 +6789,8 @@ namespace
 			{ "actions", RenderScaleActions() },
 		};
 		result["usage"] =
+			"status includes vendorWorkGate.ordinarySaveRecovery with save identity, "
+			"stereo recovery progress, presentation readiness and independent persistence protection. "
 			"qualification_dispatch accepts optional cocCellEditorId to execute "
 			"exactly one validated COC on its main-thread operation. When present, "
 			"the QPC timer is read immediately before that command and "
@@ -7507,6 +7572,17 @@ namespace VRRenderScaleDevBenchBridge
 			                            "is saved through the normal CS settings save operation.";
 			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("set_render_scale_link");
 			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("fsr_shared_guides");
+			descriptor["inputSchema"]["properties"]["action"]["enum"].push_back("graphics_context_status");
+			descriptor["description"] = descriptor["description"].get<std::string>() +
+			                            " graphics_context_status reads the current immediate context on the main thread without changing protection. "
+			                            "graphicsContext reports device flags, interface availability, multithreadProtected, HRESULT and ready. "
+			                            "The renderer_ownership policy validates SE, AE and VR contexts without changing their API protection flag. "
+			                            "apiReady requires a compatible multi-thread-capable immediate context; rendererOwnershipAvailable reports its native renderer lock. "
+			                            "ready additionally requires that owner and the applicable loading-menu guard to be installed. These are implementation readiness checks, "
+			                            "not runtime stability or whole-pass isolation certification. loadingMenuClear separately reports the "
+			                            "VR loading-message renderer guard installation and attempted, executed, deferred and missingRenderer counters. "
+			                            "Contended loading-message clears remain pending for the native render-side clear. Counters are independently sampled. "
+			                            "status includes the same graphicsContext object.";
 			descriptor["inputSchema"]["properties"]["enabled"]["description"] =
 				"Action-specific enabled state. For fsr_shared_guides, omit to inspect; supplied values "
 				"update the live preference while GPU capture is inactive. Save Settings persists the choice.";
@@ -7580,10 +7656,31 @@ namespace VRRenderScaleDevBenchBridge
 				"blockingCleanupReadyQpc observes when guard eligibility verifies "
 				"blocking ownership obligations, not cleanup-only fence completion. Missing "
 				"timestamps/identities are null; opaque identities are decimal strings.";
+			const std::string ordinarySaveDescription =
+				" status.vendorWorkGate.ordinarySaveRecovery reports the ordinary save "
+				"token, unchanged resource identity, consecutive stereo frame proof, "
+				"presentation readiness and the independent persistence guard. "
+				"Six successfully prepared stereo world frames from matching outer "
+				"submit scopes permit reuse in the following compositor "
+				"cycle; loads, unknown engine state and resource changes revoke proof.";
+			const std::string textureLifetimeDescription =
+				" Texture-lifetime status skips NiSourceTexture owner correlation "
+				"when no D3D textures are tracked; "
+				"capture.niSourceTextureOwnerScanSkipped reports this. Unsafe "
+				"renderer pointers are skipped during correlation. "
+				"capture.niSourceTextureInvalidRendererTextureCount counts skipped "
+				"owners; capture.niSourceTextureFirstInvalidRendererTexture "
+				"reports the first owner and raw renderer pointer, or null.";
+			const std::string stressAcceptanceDescription =
+				" The record and stop actions retain the raw two-frame presentation "
+				"stretch result as a diagnostic_only gate; it does not reject the "
+				"stress capture. allowedPresentationStretch adds diagnosticThresholdFrames "
+				"while retaining maximumAcceptedFrames for older readers. Other "
+				"failed gates still reject the capture.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

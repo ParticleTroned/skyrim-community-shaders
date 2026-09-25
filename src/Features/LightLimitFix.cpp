@@ -3,6 +3,7 @@
 #include "Globals.h"
 #include "GpuPass.h"
 #include "InverseSquareLighting.h"
+#include "LightLimitFix/VRHookPolicy.h"
 #include "LinearLighting.h"
 #include "LocationContext.h"
 
@@ -12,6 +13,7 @@
 #include "Util.h"
 #include "Utils/D3D.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/Finite.h"
 #include "Utils/StringUtils.h"
 
 #include "RE/B/BSMultiBoundRoom.h"
@@ -23,6 +25,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <new>
 #include <optional>
 #include <utility>
 
@@ -170,6 +173,19 @@ namespace
 		logger::error("[LLF] Instruction check at SkyrimVR.exe+{:X}, byte +{:X}: expected {:02X}, observed {:02X}",
 			rva, mismatch.first - std::begin(a_expected), *mismatch.first, *mismatch.second);
 		return false;
+	}
+
+	template <std::size_t N>
+	bool MatchesInstructionsQuietly(std::uintptr_t a_address, const std::uint8_t (&a_expected)[N]) noexcept
+	{
+		const auto* actual = reinterpret_cast<const std::uint8_t*>(a_address);
+		return IsReadableRange(actual, N) &&
+		       std::equal(std::begin(a_expected), std::end(a_expected), actual);
+	}
+
+	bool IsEngineFixesLoaded() noexcept
+	{
+		return GetModuleHandleW(L"EngineFixes.dll") != nullptr;
 	}
 
 	class VRValidatedObjectGuard : public Xbyak::CodeGenerator
@@ -395,6 +411,19 @@ namespace
 			// all saved registers and exits this stale shadow descriptor cleanly.
 			add(rsp, 8);
 			mov(rax, a_epilogue);
+			jmp(rax);
+		}
+	};
+
+	class VRShadowLightRenderLoop : public Xbyak::CodeGenerator
+	{
+	public:
+		explicit VRShadowLightRenderLoop(std::uintptr_t a_render)
+		{
+			// Tail entry preserves the native return address and its unwind metadata.
+			mov(rcx, rsi);
+			lea(rdx, ptr[rsp + 0x68]);
+			mov(rax, a_render);
 			jmp(rax);
 		}
 	};
@@ -662,14 +691,6 @@ namespace
 #endif
 	}
 
-	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
-	{
-		if (!std::isfinite(a_value)) {
-			return a_default;
-		}
-		return std::clamp(a_value, a_min, a_max);
-	}
-
 	void SanitizeSettings(LightLimitFix::Settings& a_settings)
 	{
 		a_settings.LightsVisualisationMode = std::min(a_settings.LightsVisualisationMode, kLightsVisualisationModeMax);
@@ -678,22 +699,22 @@ namespace
 		a_settings.ParticleContactShadowBudget = std::min(a_settings.ParticleContactShadowBudget, kParticleContactShadowBudgetMax);
 		a_settings.StrictContactShadowBudget = std::min(a_settings.StrictContactShadowBudget, kStrictContactShadowBudgetMax);
 		a_settings.ParticleLightsSaturation =
-			ClampFiniteOrDefault(a_settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, 1.0f);
+			Util::ClampFinite(a_settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, 1.0f);
 		a_settings.ParticleBrightness =
-			ClampFiniteOrDefault(a_settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, 1.0f);
+			Util::ClampFinite(a_settings.ParticleBrightness, kParticleBrightnessMin, kParticleBrightnessMax, 1.0f);
 		a_settings.ParticleRadius =
-			ClampFiniteOrDefault(a_settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, 1.0f);
+			Util::ClampFinite(a_settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, 1.0f);
 		a_settings.BillboardBrightness =
-			ClampFiniteOrDefault(a_settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, 1.0f);
+			Util::ClampFinite(a_settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, 1.0f);
 		a_settings.BillboardRadius =
-			ClampFiniteOrDefault(a_settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, 1.0f);
+			Util::ClampFinite(a_settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, 1.0f);
 		a_settings.ParticleClusterThreshold =
-			ClampFiniteOrDefault(a_settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, 32.0f);
+			Util::ClampFinite(a_settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, 32.0f);
 		a_settings.MaxParticlesPerEmitter = std::clamp(a_settings.MaxParticlesPerEmitter, kMaxParticlesPerEmitterMin, kMaxParticlesPerEmitterMax);
 		a_settings.MaxParticleDistance =
-			ClampFiniteOrDefault(a_settings.MaxParticleDistance, kMaxParticleDistanceMin, kMaxParticleDistanceMax, 6000.0f);
+			Util::ClampFinite(a_settings.MaxParticleDistance, kMaxParticleDistanceMin, kMaxParticleDistanceMax, 6000.0f);
 		a_settings.JsonPlacedLightIntensity =
-			ClampFiniteOrDefault(a_settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, 1.0f);
+			Util::ClampFinite(a_settings.JsonPlacedLightIntensity, kJsonPlacedLightIntensityMin, kJsonPlacedLightIntensityMax, 1.0f);
 	}
 
 	uint PackContactShadowFlags(const LightLimitFix::Settings& a_settings)
@@ -787,7 +808,7 @@ namespace
 
 	float ResolveParticleSaturation(float a_globalSaturation, float a_configSaturation)
 	{
-		const float configSaturation = ClampFiniteOrDefault(
+		const float configSaturation = Util::ClampFinite(
 			a_configSaturation,
 			kParticleConfigSaturationMin,
 			kParticleConfigSaturationMax,
@@ -1499,6 +1520,9 @@ void LightLimitFix::SetupRenderTargetResources()
 void LightLimitFix::Reset()
 {
 	effectLightValidationCache.clear();
+	// Frame and load resets release retained lights outside the engine's queue lock.
+	sceneLightSnapshots.clear();
+	sceneLightSnapshotFailed = false;
 
 	{
 		std::lock_guard<std::mutex> currentLock{ currentParticleLightsMutex };
@@ -1603,6 +1627,62 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 	}
 }
 
+const LightLimitFix::SceneLightSnapshot* LightLimitFix::GetSceneLightSnapshot(RE::ShadowSceneNode* a_node)
+{
+	if (!a_node || sceneLightSnapshotFailed)
+		return nullptr;
+	if (const auto it = sceneLightSnapshots.find(a_node); it != sceneLightSnapshots.end())
+		return &it->second;
+
+	try {
+		SceneLightSnapshot snapshot;
+		{
+			auto& runtime = a_node->GetRuntimeData();
+			// VR's queue drain drops active and queued references under this lock.
+			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+			snapshot.RetainScene(runtime);
+		}
+		// Publish only complete captures; failed captures release references after unlocking.
+		return &sceneLightSnapshots.try_emplace(a_node, std::move(snapshot)).first->second;
+	} catch (const std::bad_alloc&) {
+		sceneLightSnapshotFailed = true;
+		logger::error("Light Limit Fix: scene light capture allocation failed; skipping engine lights until reset");
+		return nullptr;
+	}
+}
+
+void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index)
+{
+	if (!a_node)
+		return;
+	std::optional<SceneLightSnapshot> snapshot;
+	std::vector<RE::BSShadowLight*> renderOrder;
+	try {
+		auto& runtime = a_node->GetRuntimeData();
+		const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+		if (a_index >= runtime.shadowLightsAccum.size() || !runtime.shadowLightsAccum[a_index])
+			return;
+		snapshot.emplace();
+		// Native dispatch uses accumulated order and needs no clustered-light enumeration.
+		snapshot->RetainScene(runtime, false);
+		renderOrder.assign(runtime.shadowLightsAccum.begin(), runtime.shadowLightsAccum.end());
+	} catch (const std::bad_alloc&) {
+		logger::error("Light Limit Fix: native shadow capture allocation failed; skipping shadow maps");
+		return;
+	}
+
+	while (a_index < renderOrder.size()) {
+		// Raw accumulated entries are keys; only owning-list references authorize a virtual call.
+		auto* light = snapshot->Find(renderOrder[a_index]);
+		if (!light || !light->IsShadowLight())
+			break;
+		const auto previousIndex = a_index;
+		static_cast<RE::BSShadowLight*>(light)->Render(a_index);
+		if (a_index <= previousIndex)
+			break;
+	}
+}
+
 void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->sceneLights) {
@@ -1624,7 +1704,14 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		return;
 	}
 
-	bool inWorld = accumulator->GetRuntimeData().activeShadowSceneNode == smState->shadowSceneNode[0];
+	auto* activeNode = accumulator->GetRuntimeData().activeShadowSceneNode;
+	bool inWorld = activeNode == smState->shadowSceneNode[0];
+	const bool retainSceneLights = globals::game::isVR;
+	const auto* snapshot = retainSceneLights ? GetSceneLightSnapshot(activeNode) : nullptr;
+	if (retainSceneLights && !snapshot) {
+		ClearStrictLightData(strictLightDataTemp, false);
+		return;
+	}
 	const bool isInterior = LocationContext::Get().inInterior;
 
 	constexpr uint32_t kStrictLightCapacity = 15;
@@ -1643,6 +1730,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 	{
 		for (uint32_t i = 0; i < strictLightCount; i++) {
 			auto bsLight = a_pass->sceneLights[i + 1];
+			if (retainSceneLights)
+				bsLight = snapshot->Find(bsLight);
 			if (!bsLight) {
 				continue;
 			}
@@ -1687,6 +1776,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 
 		for (uint32_t i = 0; i < shadowLightCount; i++) {
 			auto bsLight = a_pass->sceneLights[i + 1];
+			if (retainSceneLights)
+				bsLight = snapshot->Find(bsLight);
 			if (!bsLight || !bsLight->IsShadowLight()) {
 				continue;
 			}
@@ -2370,6 +2461,9 @@ void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
 	// This entry guard owns only the prologue; interior OnVisible hooks remain independent.
 	// Verify the displaced instruction and incoming-object contract against the live image.
 	constexpr std::uintptr_t helperEntryRVA = 0xCBFC60;
+	constexpr std::uintptr_t virtualCallContextRVA = 0xCBFD15;
+	constexpr std::uintptr_t helperEpilogueRVA = 0xCBFD52;
+	constexpr std::uintptr_t helperTailContextRVA = 0xCBFDB2;
 	constexpr std::size_t patchedInstructionSize = 5;
 	constexpr std::uint8_t expectedHelperEntry[] = {
 		0x48, 0x89, 0x5C, 0x24, 0x10,
@@ -2379,11 +2473,59 @@ void LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard()
 		0x48, 0x8B, 0xFA,
 		0x48, 0x8B, 0xD9
 	};
+	constexpr std::uint8_t expectedVirtualCallContext[] = {
+		0x41, 0x83, 0xF9, 0x06,
+		0x75, 0x24,
+		0x48, 0x8B, 0x07,
+		0x48, 0x8B, 0xD3,
+		0x48, 0x8B, 0xCF,
+		0xFF, 0x90, 0xA8, 0x01, 0x00, 0x00
+	};
+	constexpr std::uint8_t expectedHelperEpilogue[] = {
+		0x89, 0xB3, 0x9C, 0x00, 0x00, 0x00,
+		0x48, 0x8B, 0x74, 0x24, 0x30,
+		0x48, 0x8B, 0x5C, 0x24, 0x38,
+		0x48, 0x83, 0xC4, 0x20,
+		0x5F,
+		0xC3
+	};
+	constexpr std::uint8_t expectedHelperTailContext[] = {
+		0x83, 0xB9, 0x9C, 0x00, 0x00, 0x00, 0x00,
+		0x74, 0xDC,
+		0x41, 0x83, 0xC8, 0xFF,
+		0xE9, 0x9C, 0xFE, 0xFF, 0xFF
+	};
+	constexpr std::uint8_t expectedVirtualCallPrefix[] = {
+		0x41, 0x83, 0xF9, 0x06,
+		0x75, 0x24,
+		0x48, 0x8B, 0x07,
+		0x48, 0x8B, 0xD3,
+		0x48, 0x8B, 0xCF
+	};
 
 	const auto moduleBase = REL::Module::get().base();
 	const auto helperEntry = moduleBase + helperEntryRVA;
-	if (!MatchesInstructions(helperEntry, expectedHelperEntry)) {
+	const auto virtualCallContext = moduleBase + virtualCallContextRVA;
+	const auto helperEpilogue = moduleBase + helperEpilogueRVA;
+	const auto helperTailContext = moduleBase + helperTailContextRVA;
+	const auto helperSignaturesMatch =
+		MatchesInstructions(helperEntry, expectedHelperEntry) &&
+		MatchesInstructions(helperEpilogue, expectedHelperEpilogue) &&
+		MatchesInstructions(helperTailContext, expectedHelperTailContext);
+	const auto guardDecision = LightLimitFixVRHookPolicy::DecideSceneGraphGuard(
+		helperSignaturesMatch,
+		MatchesInstructionsQuietly(virtualCallContext, expectedVirtualCallContext),
+		IsEngineFixesLoaded(),
+		MatchesInstructionsQuietly(virtualCallContext, expectedVirtualCallPrefix),
+		LightLimitFixVRHookPolicy::HasExternalBranchPrefix(
+			reinterpret_cast<const std::uint8_t*>(virtualCallContext + std::size(expectedVirtualCallPrefix)),
+			2));
+	if (guardDecision == LightLimitFixVRHookPolicy::SceneGraphGuardDecision::kRejectUnknownSite) {
 		logger::error("[LLF] VR scene-graph culling-object guard not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+	if (guardDecision == LightLimitFixVRHookPolicy::SceneGraphGuardDecision::kSkipCompatibleExternalGuard) {
+		logger::info("[LLF] Engine Fixes VR culling freed-object guard detected; skipping duplicate scene-graph guard");
 		return;
 	}
 
@@ -2469,7 +2611,8 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 	if (!MatchesInstructions(helperEntry, expectedHelperEntry) ||
 		!MatchesInstructions(cameraUseContext, expectedCameraUseContext) ||
 		!MatchesInstructions(cameraLateFrustumLoad, expectedLateFrustumLoad) ||
-		!MatchesInstructions(helperEpilogue, expectedHelperEpilogue)) {
+		!MatchesInstructions(helperEpilogue, expectedHelperEpilogue) ||
+		!LightLimitFixVRHookPolicy::HasExpectedShadowMapXmmRestorePrefixes(expectedHelperEpilogue, std::size(expectedHelperEpilogue))) {
 		logger::error("[LLF] VR shadow-map camera guard not installed: unexpected SkyrimVR.exe instructions");
 		return;
 	}
@@ -2512,6 +2655,56 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 	REL::safe_fill(cameraLateFrustumLoad + 5, REL::NOP, lateFrustumLoadInstructionSize - 5);
 
 	logger::info("[LLF] Installed VR shadow-map camera guard");
+}
+
+void LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard()
+{
+	if (!REL::Module::IsVR())
+		return;
+	if (REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15) {
+		logger::error("[LLF] VR shadow light lifetime guard not installed: unsupported Skyrim VR runtime {}", REL::Module::get().version().string());
+		return;
+	}
+
+	constexpr std::uintptr_t loopRVA = 0x13231FB;
+	// The adapter depends on RSI, the caller's stack layout and the continuation's restores.
+	constexpr std::uint8_t expectedSetup[] = {
+		0x40, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x40,
+		0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF,
+		0x48, 0x89, 0x5C, 0x24, 0x70, 0x0F, 0xB6, 0x3D, 0x5A, 0xE5, 0xE5, 0x01,
+		0x40, 0x88, 0x7C, 0x24, 0x28, 0xC6, 0x05, 0x4E, 0xE5, 0xE5, 0x01, 0x00,
+		0x48, 0x8B, 0x35, 0xBF, 0xFE, 0x0F, 0x02, 0xE8, 0xCA, 0xB5, 0xFA, 0xFF,
+		0x84, 0xC0, 0x74, 0x69, 0x8B, 0x0D, 0x88, 0xFD, 0x3C, 0x02,
+		0x65, 0x48, 0x8B, 0x04, 0x25, 0x58, 0x00, 0x00, 0x00, 0xBA, 0x68, 0x07, 0x00, 0x00,
+		0x4C, 0x8B, 0x34, 0xC8, 0x4C, 0x03, 0xF2, 0x41, 0x8B, 0x1E, 0x89, 0x5C, 0x24, 0x68,
+		0x41, 0xC7, 0x06, 0x1D, 0x00, 0x00, 0x00, 0xC7, 0x44, 0x24, 0x60, 0x00, 0x00, 0x00, 0x00
+	};
+	constexpr std::uint8_t expectedLoop[] = {
+		0x33, 0xD2, 0x48, 0x8B, 0xCE, 0xE8, 0x4B, 0x70, 0xFD, 0xFF,
+		0x48, 0x85, 0xC0, 0x74, 0x26, 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00,
+		0x4C, 0x8B, 0x00, 0x48, 0x8D, 0x54, 0x24, 0x60, 0x48, 0x8B, 0xC8,
+		0x41, 0xFF, 0x50, 0x50, 0x8B, 0x54, 0x24, 0x60, 0x48, 0x8B, 0xCE,
+		0xE8, 0x25, 0x70, 0xFD, 0xFF, 0x48, 0x85, 0xC0, 0x75, 0xE0
+	};
+	constexpr std::uint8_t expectedContinuation[] = {
+		0x41, 0x89, 0x1E, 0x40, 0x88, 0x3D, 0xCE, 0xE4, 0xE5, 0x01,
+		0x48, 0x8B, 0x5C, 0x24, 0x70, 0x48, 0x83, 0xC4, 0x40, 0x41, 0x5E, 0x5F, 0x5E, 0xC3
+	};
+	const auto loop = REL::Module::get().base() + loopRVA;
+	if (!MatchesInstructions(loop - sizeof(expectedSetup), expectedSetup) ||
+		!MatchesInstructions(loop, expectedLoop) ||
+		!MatchesInstructions(loop + sizeof(expectedLoop), expectedContinuation)) {
+		logger::error("[LLF] VR shadow light lifetime guard not installed: unexpected SkyrimVR.exe instructions");
+		return;
+	}
+
+	VRShadowLightRenderLoop code{ reinterpret_cast<std::uintptr_t>(&LightLimitFix::RenderVRShadowLights) };
+	code.ready();
+	auto& trampoline = SKSE::GetTrampoline();
+	const auto guard = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
+	trampoline.write_branch<5>(loop + 5, loop + sizeof(expectedLoop));
+	trampoline.write_call<5>(loop, guard);
+	logger::info("[LLF] Installed VR shadow light lifetime guard");
 }
 
 void LightLimitFix::Hooks::InstallVRRoomLightCullingProcessGuards()
@@ -3015,6 +3208,11 @@ void LightLimitFix::UpdateLights()
 		clearAndUpdate();
 		return;
 	}
+	const auto* snapshot = globals::game::isVR ? GetSceneLightSnapshot(shadowSceneNode) : nullptr;
+	if (globals::game::isVR && !snapshot) {
+		clearAndUpdate();
+		return;
+	}
 
 	// Cache data since cameraData can become invalid in first-person
 
@@ -3051,8 +3249,8 @@ void LightLimitFix::UpdateLights()
 		light.roomFlags.SetBit(roomIndex, 1);
 	};
 
-	auto addLight = [&](const RE::NiPointer<RE::BSLight>& e) {
-		if (auto bsLight = e.get()) {
+	auto addLight = [&](RE::BSLight* bsLight) {
+		if (bsLight) {
 			if (auto niLight = bsLight->light.get()) {
 				if (IsValidLight(bsLight)) {
 					auto& runtimeData = niLight->GetLightRuntimeData();
@@ -3113,11 +3311,16 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::SceneLightsCPU");
-		for (auto& e : shadowSceneNode->GetRuntimeData().activeLights) {
-			addLight(e);
-		}
-		for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
-			addLight(e);
+		if (globals::game::isVR) {
+			for (auto* light : snapshot->ActiveLights())
+				addLight(light);
+		} else {
+			for (auto& light : shadowSceneNode->GetRuntimeData().activeLights)
+				addLight(light.get());
+			for (auto& light : shadowSceneNode->GetRuntimeData().activeShadowLights) {
+				const RE::NiPointer<RE::BSLight> owner = light;
+				addLight(owner.get());
+			}
 		}
 	}
 

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -308,7 +309,10 @@ int main(int argc, char** argv)
 	if (argc == 5) {
 		std::string error;
 		Store external(argv[1], argv[2], Lane::Optimized, ParsePackSetId(argv[4]));
-		assert(external.Open(&error));
+		const bool opened = external.Open(&error);
+		if (!opened)
+			std::cerr << "External pack admission failed: " << error << '\n';
+		assert(opened);
 		const auto record = external.Find(argv[3], &error);
 		assert(record && !record->bytecode.empty());
 		return 0;
@@ -450,7 +454,10 @@ int main(int argc, char** argv)
 		assert(!readOnly.Open(&layoutError));
 		assert(std::filesystem::file_size(first) == 0);
 		assert(std::filesystem::file_size(second) == 0);
-		assert(readOnly.InitializeEmptyFilesAndOpen(&layoutError));
+		const bool initialized = readOnly.InitializeEmptyFilesAndOpen(&layoutError);
+		if (!initialized)
+			std::cerr << "Empty pack initialization failed: " << layoutError << '\n';
+		assert(initialized);
 	}
 	{
 		const auto invalidLayoutRoot = root / "invalid-layout";

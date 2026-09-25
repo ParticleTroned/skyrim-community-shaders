@@ -88,6 +88,7 @@ struct AdaptiveBrightness : Feature
 		bool waterAdvanced = false;
 
 		float skyBrightnessMult = 1.0f;
+		float skySaturation = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
 		float linearPointLightMult = 1.0f;
@@ -163,9 +164,12 @@ struct AdaptiveBrightness : Feature
 		float linearSpotlightMult;
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
+		float skySaturation;
+		float3 pad{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 32);
+	static_assert(sizeof(PerFrameData) == 48);
+	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 
 	struct alignas(16) VanillaPointLightData
 	{
@@ -256,7 +260,7 @@ struct AdaptiveBrightness : Feature
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return performanceCostMeasurementEnabled && IsRuntimeAvailable(); }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return IsRuntimeEnabled(); }
 	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual bool IsPerformanceCostMeasurementReady() const override { return IsRuntimeAvailable(); }
@@ -269,7 +273,8 @@ struct AdaptiveBrightness : Feature
 	virtual void PostPostLoad() override;
 
 	bool IsRuntimeAvailable() const;
-	bool IsAdjustmentRuntimeActive() const;
+	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.
+	void SetEnabled(bool a_enabled);
 	bool IsRuntimeEnabled() const;
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;

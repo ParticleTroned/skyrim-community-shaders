@@ -1,4 +1,5 @@
 #include "Upscaling.h"
+#include "Api/AcceptedDrawService.h"
 
 #include "BuildProvenance.h"
 #include "Deferred.h"
@@ -34,6 +35,7 @@
 #include "Upscaling/VRRenderScaleModePolicy.h"
 #include "Upscaling/VRVendorRelatchPolicy.h"
 #include "Utils/D3D.h"
+#include "Utils/D3DContextProtection.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/NormalizedCoordinates.h"
@@ -136,6 +138,7 @@ namespace
 		});
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	uint64_t QueryVRRenderScalePresentationQpc() noexcept
 	{
 		LARGE_INTEGER value{};
@@ -155,7 +158,6 @@ namespace
 		return frequency;
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	uint64_t VRRenderScaleQpcElapsed(
 		uint64_t a_begin,
 		uint64_t a_end) noexcept
@@ -269,6 +271,7 @@ namespace
 	}
 #endif
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	VRPresentationStretchTelemetryPolicy::ObservationKind
 	GetVRRenderScalePresentationStretchObservationKind(
 		Upscaling::VRRenderScalePresentationPath a_path) noexcept
@@ -322,6 +325,7 @@ namespace
 			(static_cast<long double>(a_qpcTicks) * 1000.0L) /
 			static_cast<long double>(a_qpcFrequency));
 	}
+#endif
 }
 
 namespace FSRTemporalTuningPolicy
@@ -787,8 +791,10 @@ namespace
 		uint64_t limitBytes = 0;
 		uint64_t headroomBytes = 0;
 		double ratio = 0.0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		bool processPrivateUsageValid = false;
 		uint64_t processPrivateUsageBytes = 0;
+#endif
 	};
 
 	VRRenderScaleSystemCommitSample QueryVRRenderScaleSystemCommit() noexcept
@@ -804,6 +810,7 @@ namespace
 			sample.ratio = static_cast<double>(sample.usageBytes) / static_cast<double>(sample.limitBytes);
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		PROCESS_MEMORY_COUNTERS_EX processMemory{};
 		processMemory.cb = static_cast<DWORD>(sizeof(processMemory));
 		if (::GetProcessMemoryInfo(
@@ -813,6 +820,7 @@ namespace
 			sample.processPrivateUsageValid = true;
 			sample.processPrivateUsageBytes = processMemory.PrivateUsage;
 		}
+#endif
 		return sample;
 	}
 
@@ -4461,13 +4469,22 @@ namespace
 		const MotionSharpening::Settings motionSettings{ a_upscaling.settings.motionAdaptiveRCAS,
 			a_upscaling.settings.motionSharpnessAdjustment, a_upscaling.settings.motionSharpnessThreshold,
 			a_upscaling.settings.motionSharpnessCap };
+		const bool motionResourcesRequired = motionSettings.enabled && a_motionVectors && !a_regions.empty();
+		const auto canDispatch = [&](const auto& a_sharpener) {
+			return !a_upscaling.ShouldReuseOrdinarySaveResources() ||
+			       a_sharpener.CanApplyWithoutResourceCreation(motionResourcesRequired);
+		};
 		switch (a_upscaling.GetDLSSSharpenerMode()) {
 		case Upscaling::DLSSSharpenerMode::RCAS:
+			if (!canDispatch(Upscaling::rcas))
+				return false;
 			return Upscaling::rcas.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
 				GetDLSSRCASSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
 				motionSettings,
 				a_motionVectors, a_regions);
 		case Upscaling::DLSSSharpenerMode::LumaUnsharp:
+			if (!canDispatch(Upscaling::lumaSharpen))
+				return false;
 			return Upscaling::lumaSharpen.ApplyMotionAdaptiveSharpen(a_inputSRV, a_outputUAV,
 				GetDLSSLumaSharpness(a_upscaling.settings.sharpnessDLSS), a_upscaling.settings.sharpnessDLSS,
 				motionSettings, a_motionVectors, a_regions);
@@ -4530,7 +4547,7 @@ namespace
 		if (!changed)
 			return;
 
-		logger::info(
+		logger::debug(
 			"[MipBiasTrace] source=OpenCompositeUnleashedSharedState renderScale={:.3f} mipBias={:.3f} method={} flags=0x{:X}",
 			a_state.renderScale,
 			a_state.mipBias,
@@ -5876,7 +5893,8 @@ namespace
 
 	bool IsVRTransitionMaskRepairSafetyContextActive(const State* a_state)
 	{
-		return IsSaveLoadTransitionContextActive(a_state);
+		return IsSaveLoadTransitionContextActive(a_state) &&
+		       !globals::features::upscaling.CanResumeOrdinarySavePresentation();
 	}
 
 	bool IsVRRenderScalePhysicalMaskHandoffActive(const Upscaling& a_upscaling)
@@ -5933,9 +5951,8 @@ namespace
 
 	bool ShouldDeferVRTransitionMaskRepair(const Upscaling& a_upscaling, const State* a_state)
 	{
-		// RC141's save/load predicate remains authoritative for ordinary door,
-		// fast-travel, and map-travel relatches. The broader physical-handoff
-		// deferral is required only while protecting the initial process load.
+		// Loads retain their full grace; only proven ordinary saves can reuse masks.
+		// Initial process loading additionally protects the physical handoff.
 		return IsVRTransitionMaskRepairSafetyContextActive(a_state) ||
 		       (a_upscaling.IsVRInitialLoadPresentationProtectionActive() &&
 				   IsVRRenderScalePhysicalMaskHandoffActive(a_upscaling));
@@ -5945,10 +5962,8 @@ namespace
 		const Upscaling& a_upscaling,
 		const State* a_state)
 	{
-		// The ordinary mask-repair path retains the full save-load grace. A
-		// compositor-protected loading release needs only concrete engine/reset
-		// activity plus an active physical render-scale handoff; otherwise the
-		// grace would still indirectly impose a fixed black-screen delay.
+		// Protected loading release uses concrete engine/reset and physical handoff
+		// activity so the mutation grace cannot hold an already safe compositor frame.
 		const bool engineOrResetActivity =
 			a_state &&
 			(a_state->IsEngineSaveLoadActivityActive() ||
@@ -5965,7 +5980,8 @@ namespace
 
 	bool ShouldBypassVRFoveatedVendorDispatchForTransition(const Upscaling& a_upscaling, const State* a_state)
 	{
-		return IsSaveLoadTransitionContextActive(a_state) ||
+		return (IsSaveLoadTransitionContextActive(a_state) &&
+				   !a_upscaling.CanResumeOrdinarySavePresentation()) ||
 		       IsVRLoadingSubmitProtectionContextActive(a_upscaling, a_state);
 	}
 
@@ -7801,6 +7817,7 @@ namespace
 
 	bool IsVRMenuPresentationTraceActive()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (!kEnableVRMenuPresentationTraceDiagnostics ||
 			!globals::game::isVR ||
 			!g_vrMenuPresentationTraceDiagnosticsEnabled.load(std::memory_order_relaxed)) {
@@ -7809,6 +7826,9 @@ namespace
 
 		return g_vrMenuPresentationTraceSession.load(std::memory_order_acquire) != 0 &&
 		       g_vrMenuPresentationTraceMenuMask.load(std::memory_order_acquire) != 0;
+#else
+		return false;
+#endif
 	}
 
 	bool IsVRMenuPresentationTraceMapActive()
@@ -11853,9 +11873,15 @@ namespace
 	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawIndexed
 	{
+		static void Replay(ID3D11DeviceContext* a_context, const CSXAcceptedDrawAPI::Arguments& a_args)
+		{
+			func(a_context, a_args.indexCount, a_args.startIndex, a_args.baseVertex);
+		}
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_startIndexLocation, INT a_baseVertexLocation)
 		{
 			func(a_context, a_indexCount, a_startIndexLocation, a_baseVertexLocation);
+			CSX::Api::PublishAcceptedDraw(a_context,
+				{ CSXAcceptedDrawAPI::Indexed, a_indexCount, 1, a_startIndexLocation, a_baseVertexLocation, 0 }, &Replay);
 			TraceVRMenuPresentationD3DDraw(
 				a_context,
 				"DrawIndexed",
@@ -11881,6 +11907,10 @@ namespace
 	template <std::size_t Bank>
 	struct VRMenuTraceD3D11DrawIndexedInstanced
 	{
+		static void Replay(ID3D11DeviceContext* a_context, const CSXAcceptedDrawAPI::Arguments& a_args)
+		{
+			func(a_context, a_args.indexCount, a_args.instanceCount, a_args.startIndex, a_args.baseVertex, a_args.startInstance);
+		}
 		static void thunk(
 			ID3D11DeviceContext* a_context,
 			UINT a_indexCountPerInstance,
@@ -11896,6 +11926,10 @@ namespace
 				a_startIndexLocation,
 				a_baseVertexLocation,
 				a_startInstanceLocation);
+			CSX::Api::PublishAcceptedDraw(a_context,
+				{ CSXAcceptedDrawAPI::IndexedInstanced, a_indexCountPerInstance, a_instanceCount,
+					a_startIndexLocation, a_baseVertexLocation, a_startInstanceLocation },
+				&Replay);
 			TraceVRMenuPresentationD3DDraw(
 				a_context,
 				"DrawIndexedInstanced",
@@ -12439,7 +12473,9 @@ namespace
 			const HRESULT result = func(a_device, a_contextFlags, a_deferredContext);
 			if (SUCCEEDED(result) && a_deferredContext && *a_deferredContext) {
 				try {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					Upscaling::InstallVRMenuPresentationTraceD3DHooks(*a_deferredContext);
+#endif
 				} catch (const std::exception& e) {
 					ReportVRMenuPresentationTraceFault("while covering a created deferred context", e.what());
 				} catch (...) {
@@ -12548,8 +12584,15 @@ namespace
 	template <std::size_t Bank>
 	LONG QueueVRMenuPresentationTraceD3DHookBank(
 		ID3D11DeviceContext* a_context,
-		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending,
+		bool a_indexedOnly)
 	{
+		if (a_indexedOnly) {
+			return QueueVRMenuPresentationTraceD3DHooks<
+				VRMenuPresentationTraceD3DHookRegistration<12, VRMenuPresentationTraceD3DHookMethod::DrawIndexed, VRMenuTraceD3D11DrawIndexed<Bank>>,
+				VRMenuPresentationTraceD3DHookRegistration<20, VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstanced, VRMenuTraceD3D11DrawIndexedInstanced<Bank>>>(a_context, a_pending);
+		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		return QueueVRMenuPresentationTraceD3DHooks<
 			VRMenuPresentationTraceD3DHookRegistration<8, VRMenuPresentationTraceD3DHookMethod::PSSetShaderResources, VRMenuTraceD3D11PSSetShaderResources<Bank>>,
 			VRMenuPresentationTraceD3DHookRegistration<12, VRMenuPresentationTraceD3DHookMethod::DrawIndexed, VRMenuTraceD3D11DrawIndexed<Bank>>,
@@ -12575,36 +12618,80 @@ namespace
 			VRMenuPresentationTraceD3DHookRegistration<114, VRMenuPresentationTraceD3DHookMethod::FinishCommandList, VRMenuTraceD3D11FinishCommandList<Bank>>>(
 			a_context,
 			a_pending);
+#else
+		return ERROR_NOT_SUPPORTED;
+#endif
 	}
 
 	LONG QueueVRMenuPresentationTraceD3DHookBank(
 		std::size_t a_bank,
 		ID3D11DeviceContext* a_context,
-		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+		VRMenuPresentationTraceD3DHookPendingRegistration& a_pending,
+		bool a_indexedOnly = false)
 	{
 		switch (a_bank) {
 		case 0:
-			return QueueVRMenuPresentationTraceD3DHookBank<0>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<0>(a_context, a_pending, a_indexedOnly);
 		case 1:
-			return QueueVRMenuPresentationTraceD3DHookBank<1>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<1>(a_context, a_pending, a_indexedOnly);
 		case 2:
-			return QueueVRMenuPresentationTraceD3DHookBank<2>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<2>(a_context, a_pending, a_indexedOnly);
 		case 3:
-			return QueueVRMenuPresentationTraceD3DHookBank<3>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<3>(a_context, a_pending, a_indexedOnly);
 		case 4:
-			return QueueVRMenuPresentationTraceD3DHookBank<4>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<4>(a_context, a_pending, a_indexedOnly);
 		case 5:
-			return QueueVRMenuPresentationTraceD3DHookBank<5>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<5>(a_context, a_pending, a_indexedOnly);
 		case 6:
-			return QueueVRMenuPresentationTraceD3DHookBank<6>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<6>(a_context, a_pending, a_indexedOnly);
 		case 7:
-			return QueueVRMenuPresentationTraceD3DHookBank<7>(a_context, a_pending);
+			return QueueVRMenuPresentationTraceD3DHookBank<7>(a_context, a_pending, a_indexedOnly);
 		default:
 			return ERROR_NOT_ENOUGH_MEMORY;
 		}
 	}
+
+	std::size_t RecordVRMenuPresentationTraceD3DHookBank(const VRMenuPresentationTraceD3DHookPendingRegistration& a_pending)
+	{
+		for (std::size_t method = 0; method < a_pending.queued.size(); ++method) {
+			if (!a_pending.queued[method])
+				continue;
+			auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
+			g_vrMenuPresentationTraceD3DHookTargets[method][count++] = a_pending.targets[method];
+		}
+		return g_vrMenuPresentationTraceD3DHookBanksUsed++;
+	}
 }
 
+bool Upscaling::InstallAcceptedDrawD3DHooks(ID3D11DeviceContext* a_context)
+{
+	if (!globals::game::isVR || !a_context || a_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+		return false;
+	std::scoped_lock lock(g_vrMenuPresentationTraceD3DHookInstallMutex);
+	const auto* vtable = *reinterpret_cast<std::uintptr_t**>(a_context);
+	if (IsVRMenuPresentationTraceD3DHookTargetCovered(VRMenuPresentationTraceD3DHookMethod::DrawIndexed, vtable[12]) &&
+		IsVRMenuPresentationTraceD3DHookTargetCovered(VRMenuPresentationTraceD3DHookMethod::DrawIndexedInstanced, vtable[20]))
+		return true;
+	if (g_vrMenuPresentationTraceD3DHookBanksUsed >= kVRMenuPresentationTraceD3DHookBankCount)
+		return false;
+	VRMenuPresentationTraceD3DHookPendingRegistration pending{};
+	LONG result = DetourTransactionBegin();
+	if (result != NO_ERROR)
+		return false;
+	result = DetourUpdateThread(GetCurrentThread());
+	if (result == NO_ERROR)
+		result = QueueVRMenuPresentationTraceD3DHookBank(g_vrMenuPresentationTraceD3DHookBanksUsed, a_context, pending, true);
+	if (result != NO_ERROR) {
+		DetourTransactionAbort();
+		return false;
+	}
+	if (DetourTransactionCommit() != NO_ERROR)
+		return false;
+	RecordVRMenuPresentationTraceD3DHookBank(pending);
+	return true;
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
 void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context)
 {
 	if (!kEnableVRMenuPresentationTraceDiagnostics || !globals::game::isVR ||
@@ -12688,17 +12775,11 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 		return;
 	}
 
-	for (std::size_t method = 0; method < pending.queued.size(); ++method) {
-		if (!pending.queued[method])
-			continue;
-		auto& count = g_vrMenuPresentationTraceD3DHookTargetCounts[method];
-		g_vrMenuPresentationTraceD3DHookTargets[method][count++] = pending.targets[method];
-	}
+	const std::size_t bank = RecordVRMenuPresentationTraceD3DHookBank(pending);
 	if (queueCreateDeferredContextHook) {
 		g_vrMenuPresentationTraceCreateDeferredContextTarget = createDeferredContextTarget;
 		g_vrMenuPresentationTraceCreateDeferredContextHookInstalled.store(true, std::memory_order_release);
 	}
-	const std::size_t bank = g_vrMenuPresentationTraceD3DHookBanksUsed++;
 	const bool drawCoverageComplete =
 		IsVRMenuPresentationTraceD3DContextDrawCoverageCompleteUnlocked(a_context);
 	g_vrMenuPresentationTraceD3DHooksInstalled.store(true, std::memory_order_release);
@@ -12719,6 +12800,7 @@ void Upscaling::InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_co
 		kVRMenuPresentationTraceD3DHookBankCount);
 	armCurrentMenu();
 }
+#endif
 
 void Upscaling::DisableVRMenuPresentationTraceDiagnostics() noexcept
 {
@@ -14608,6 +14690,7 @@ bool Upscaling::TryCaptureAndSuppressVRMenuBridgeDraw(
 	uint32_t a_callerRva,
 	const char** a_decisionReason)
 {
+	const CSX::Api::SuppressAcceptedDraw suppressAcceptedDraw;
 	bool requiredBridgeOperation = false;
 	auto decide = [&](const char* a_reason, bool a_result) {
 		if (a_decisionReason)
@@ -15607,6 +15690,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext)
 {
+	Flags = Util::ThreadSafeDeviceFlags(Flags);
 	auto& upscaling = globals::features::upscaling;
 	if (IsRenderDocUpscalingBlocked(true)) {
 		if (!g_renderDocUpscalingD3DHookBypassLogged.exchange(true, std::memory_order_acq_rel)) {
@@ -15614,7 +15698,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				"[Upscaling] Bypassing D3D11 upscaling device hook because {}.",
 				GetRenderDocUpscalingBlockReason());
 		}
-		return ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
+		const auto result = ptrD3D11CreateDeviceAndSwapChainUpscaling(pAdapter,
 			DriverType,
 			Software,
 			Flags,
@@ -15626,6 +15710,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 			ppDevice,
 			pFeatureLevel,
 			ppImmediateContext);
+		return Util::ValidateDeviceCreation(result, ppDevice, ppImmediateContext, ppSwapChain);
 	}
 
 	try {
@@ -15695,6 +15780,8 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 			if (SUCCEEDED(proxyDeviceResult) && candidateDevice && candidateContext) {
 				try {
+					if (FAILED(Util::ValidateImmediateContext(candidateContext.get())))
+						throw std::runtime_error("proxy immediate-context validation failed");
 					DXGI_SWAP_CHAIN_DESC proxyDesc = *pSwapChainDesc;
 					proxyDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 					proxyDesc.BufferCount = std::max(proxyDesc.BufferCount, 2u);
@@ -15766,6 +15853,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		ppDevice,
 		pFeatureLevel,
 		ppImmediateContext);
+	ret = Util::ValidateDeviceCreation(ret, ppDevice, ppImmediateContext, ppSwapChain);
 
 	if (FAILED(ret) || !ppDevice || !*ppDevice) {
 		return ret;
@@ -16166,6 +16254,7 @@ void Upscaling::DrawSettings()
 		if (!openCompositeBlocksUpscaling && !renderScaleMethodEligible)
 			ImGui::TextDisabled("VR Render Scale Mode is available only with DLSS/FSR in VR.");
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::state && globals::state->IsDeveloperMode()) {
 			ImGui::SeparatorText("Render Scale Stress Capture");
 			const auto stressSession = GetVRRenderScaleStressSessionSnapshot();
@@ -16190,6 +16279,7 @@ void Upscaling::DrawSettings()
 				ImGui::TextUnformatted("The capture uses a fixed-capacity event ring and does not change render-scale settings automatically.");
 			}
 		}
+#endif
 
 		ImGui::TreePop();
 	};
@@ -17136,6 +17226,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
+		ImGui::TextUnformatted("Also works at full coverage. Temporarily pauses during loading and game menus.");
 		ImGui::TextUnformatted("Green = upscaling center mask.");
 		if (settings.periphery_taa_enable)
 			ImGui::TextUnformatted("Gold = TAA ring, blue = outer lightweight ring.");
@@ -18215,9 +18306,6 @@ void Upscaling::LoadSettings(json& o_json)
 		o_json.value("vrSubmitStageLogDiagnostics", false)) {
 		settings.pipelineDiagnostics = true;
 	}
-	// Force mask visualization OFF on load for all existing profiles.
-	settings.foveatedPeripheryMaskVisualization = false;
-
 	if (settings.upscaleMethod > static_cast<uint>(UpscaleMethod::kDLSS)) {
 		logger::warn("[Upscaling] Loaded upscaleMethod {} out of range, clamping to {}", settings.upscaleMethod, static_cast<uint>(UpscaleMethod::kDLSS));
 	}
@@ -19272,6 +19360,13 @@ Upscaling::VRVendorWorkGateSnapshot Upscaling::GetVRVendorWorkGateSnapshot(
 		IsRaceSexMenuContextActive(ui) ||
 		IsVRRaceSexMenuEventContextActive(state);
 	snapshot.saveLoadProtectionActive = IsSaveLoadTransitionContextActive(state);
+	snapshot.ordinarySaveToken = state ? state->GetOrdinarySaveRenderRecoveryToken() : 0;
+	snapshot.ordinarySavePersistenceBlocked = state && state->IsPersistentMutationBlocked();
+	snapshot.ordinarySavePresentationReady = CanResumeOrdinarySavePresentation();
+	{
+		std::lock_guard lock(ordinarySaveRecoveryMutex);
+		snapshot.ordinarySaveProof = ordinarySaveRecovery;
+	}
 	snapshot.completedWorldFrame = HasCompletedVRWorldFrameAfterLatestLoad(state);
 	snapshot.recoveryPending = snapshot.postLoadResetPending;
 	snapshot.gameEntryReleaseReady =
@@ -19329,7 +19424,7 @@ void Upscaling::ReleaseVRGameEntryVendorWorkGatesIfConverged()
 		snapshot.state,
 		"stable destination convergence");
 	if (released && globals::state) {
-		logger::info(
+		logger::debug(
 			"[VRRenderScale] Vendor work gate released after stable game entry at frame {}.",
 			globals::state->frameCount);
 	}
@@ -19500,7 +19595,7 @@ void Upscaling::Load()
 		ArmVRVendorWorkGate(
 			VRVendorWorkGateSource::ProcessStartup,
 			"VR process startup");
-		logger::info("[VRRenderScale] Vendor work gated before initial game entry.");
+		logger::debug("[VRRenderScale] Vendor work gated before initial game entry.");
 		(void)GetVRFpsStabilizerSessionConfig();
 	}
 
@@ -19713,7 +19808,9 @@ struct VRMenuBridgeDirectDrawHook
 		if (presentationTrace) {
 			const bool coverageAtEntry =
 				IsVRMenuPresentationTraceD3DContextDrawCoverageComplete(a_context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
+#endif
 			const bool coverageAfterInstall =
 				IsVRMenuPresentationTraceD3DContextDrawCoverageComplete(a_context);
 			RecordVRMenuPresentationTraceAccumulatorDirectBridgeDraw(
@@ -20067,7 +20164,7 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 			if (!vrStartupRenderScaleBootSizingRecognized.exchange(
 					true,
 					std::memory_order_acq_rel)) {
-				logger::info(
+				logger::debug(
 					"[Upscaling] Recognized the startup Render Scale boot sizing contract; retaining vendor suppression while one planned physical relatch publishes the matching scene targets.");
 			}
 		};
@@ -20093,7 +20190,7 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 				vrStartupRenderScaleBootSizingRecognized.store(
 					false,
 					std::memory_order_release);
-				logger::info(
+				logger::debug(
 					"[Upscaling] Observed the initial physical Render Scale contract; completed startup direct handoff while the compositor hold continues through coherent stereo presentation.");
 			}
 			break;
@@ -20106,7 +20203,7 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 					std::memory_order_release);
 				InvalidateFrameScopedUpscalingState();
 				RequestHistoryReset();
-				logger::info(
+				logger::debug(
 					"[Upscaling] Cancelled the startup Render Scale direct handoff because the requested profile is no longer physically active.");
 			}
 			break;
@@ -20134,10 +20231,10 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 		InvalidateFrameScopedUpscalingState();
 		RequestHistoryReset();
 		if (directRenderScaleHandoff) {
-			logger::info(
+			logger::debug(
 				"[Upscaling] Released the startup MainMenu render state after the first completed world frame; native presentation remains authoritative until the requested physical Render Scale contract commits.");
 		} else {
-			logger::info(
+			logger::debug(
 				"[Upscaling] Released the startup MainMenu render state after the first completed world frame; configured upscaling may now activate.");
 		}
 		return;
@@ -20177,7 +20274,7 @@ void Upscaling::UpdateVRStartupMainMenuRenderState()
 	vrStartupMainMenuRenderStateActive.store(true, std::memory_order_release);
 	InvalidateFrameScopedUpscalingState();
 	RequestHistoryReset();
-	logger::info(
+	logger::debug(
 		"[Upscaling] Defined the post-compilation startup MainMenu render state: method=None, Render Scale=off.");
 }
 
@@ -28365,7 +28462,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				currentMetrics.pressureDeferrals == 0;
 			if (firstPressureDeferral) {
 				logger::warn(
-					"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB postTrimRelaxed={} headroom={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB systemHeadroom={} MiB processPrivate={} MiB pendingRetirement={} criticalGrowth={} projectedResidency={} doorHardReserveOnly={} systemCommit={}",
+					"[VRRenderScale][Memory] Deferred epoch={} pressure={} estimatedAdditional={} MiB projectedAdditional={} MiB projectedUsage={} MiB admissionLimit={} MiB postTrimAdmissionLimit={} MiB postTrimRelaxed={} headroom={} MiB projectedSystemAdditional={} MiB projectedSystemCommit={} MiB systemAdmissionLimit={} MiB systemHeadroom={} MiB pendingRetirement={} criticalGrowth={} projectedResidency={} doorHardReserveOnly={} systemCommit={}",
 					relatchEpoch,
 					GetVRRenderScaleMemoryPressureName(memoryAtAdmission.pressure),
 					relatchPlan.estimatedAdditionalBytes / kVRRenderScaleMiB,
@@ -28379,7 +28476,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					relatchPlan.projectedSystemCommitBytes / kVRRenderScaleMiB,
 					relatchPlan.systemCommitAdmissionLimitBytes / kVRRenderScaleMiB,
 					memoryAtAdmission.systemCommitHeadroomBytes / kVRRenderScaleMiB,
-					memoryAtAdmission.processPrivateUsageBytes / kVRRenderScaleMiB,
 					BoolText(severePressureRetirementWait),
 					BoolText(criticalGrowthDeferred),
 					BoolText(relatchPlan.projectedResidencyDeferred),
@@ -29588,7 +29684,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrStartupRenderScaleBootSizingRecognized.store(
 				false,
 				std::memory_order_release);
-			logger::info(
+			logger::debug(
 				"[Upscaling] Published the initial physical Render Scale contract; released startup vendor suppression while the compositor hold continues through coherent stereo presentation.");
 		}
 	}
@@ -30966,8 +31062,9 @@ void Upscaling::RecordVRRenderScaleCommonTargetResidencyDrain(
 				}
 				return true;
 			};
-		bool recorded = recordMetricsDrain(
+		[[maybe_unused]] bool recorded = recordMetricsDrain(
 			vrRenderScaleTransitionController.metrics.current);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (!recorded) {
 			for (auto& archived :
 				vrRenderScaleTransitionController.metrics.recent) {
@@ -30975,6 +31072,7 @@ void Upscaling::RecordVRRenderScaleCommonTargetResidencyDrain(
 					break;
 			}
 		}
+#endif
 		++vrRenderScaleTransitionController.revision;
 	}
 
@@ -31112,13 +31210,15 @@ bool Upscaling::ServiceVRRenderScaleMemoryTrim(const char* a_reason)
 				return true;
 			};
 
-			bool recorded = recordMetricsTrim(vrRenderScaleTransitionController.metrics.current);
+			[[maybe_unused]] bool recorded = recordMetricsTrim(vrRenderScaleTransitionController.metrics.current);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			if (!recorded) {
 				for (auto& archived : vrRenderScaleTransitionController.metrics.recent) {
 					if (recordMetricsTrim(archived))
 						break;
 				}
 			}
+#endif
 		}
 
 		auto& recovery = vrRenderScaleTransitionController.postLoadRecovery;
@@ -31182,8 +31282,10 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		a_snapshot.systemCommitLimitBytes = systemCommit.limitBytes;
 		a_snapshot.systemCommitHeadroomBytes = systemCommit.headroomBytes;
 		a_snapshot.systemCommitRatio = systemCommit.ratio;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		a_snapshot.processPrivateUsageValid = systemCommit.processPrivateUsageValid;
 		a_snapshot.processPrivateUsageBytes = systemCommit.processPrivateUsageBytes;
+#endif
 	};
 	const auto publishInvalidSample = [&]() {
 		VRRenderScaleMemorySnapshot snapshot{};
@@ -31198,7 +31300,9 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		if (metrics.valid) {
 			metrics.peakUsageBytes = std::max(metrics.peakUsageBytes, snapshot.currentUsageBytes);
 			metrics.peakSystemCommitBytes = std::max(metrics.peakSystemCommitBytes, snapshot.systemCommitBytes);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			metrics.peakProcessPrivateUsageBytes = std::max(metrics.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
+#endif
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(metrics.peakPressure))
 				metrics.peakPressure = snapshot.pressure;
 		}
@@ -31207,7 +31311,9 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 			recovery.lastSampleFrame = currentFrame;
 			recovery.peakUsageBytes = std::max(recovery.peakUsageBytes, snapshot.currentUsageBytes);
 			recovery.peakSystemCommitBytes = std::max(recovery.peakSystemCommitBytes, snapshot.systemCommitBytes);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			recovery.peakProcessPrivateUsageBytes = std::max(recovery.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
+#endif
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(recovery.peakPressure))
 				recovery.peakPressure = snapshot.pressure;
 		}
@@ -31309,7 +31415,9 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		if (metrics.valid) {
 			metrics.peakUsageBytes = std::max(metrics.peakUsageBytes, snapshot.currentUsageBytes);
 			metrics.peakSystemCommitBytes = std::max(metrics.peakSystemCommitBytes, snapshot.systemCommitBytes);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			metrics.peakProcessPrivateUsageBytes = std::max(metrics.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
+#endif
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(metrics.peakPressure))
 				metrics.peakPressure = snapshot.pressure;
 		}
@@ -31318,7 +31426,9 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 			recovery.lastSampleFrame = currentFrame;
 			recovery.peakUsageBytes = std::max(recovery.peakUsageBytes, snapshot.currentUsageBytes);
 			recovery.peakSystemCommitBytes = std::max(recovery.peakSystemCommitBytes, snapshot.systemCommitBytes);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			recovery.peakProcessPrivateUsageBytes = std::max(recovery.peakProcessPrivateUsageBytes, snapshot.processPrivateUsageBytes);
+#endif
 			if (static_cast<uint32_t>(snapshot.pressure) > static_cast<uint32_t>(recovery.peakPressure))
 				recovery.peakPressure = snapshot.pressure;
 		}
@@ -31348,7 +31458,7 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 
 	if (a_force && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][Memory] epoch={} frame={} usage={}MiB budget={}MiB headroom={}MiB reservation={}MiB availableReservation={}MiB ratio={:.3f} systemCommit={}MiB systemLimit={}MiB systemHeadroom={}MiB systemRatio={:.3f} processPrivate={}MiB observed={} pressure={} recoverySamples={}{}{}",
+			"[VRRenderScale][Memory] epoch={} frame={} usage={}MiB budget={}MiB headroom={}MiB reservation={}MiB availableReservation={}MiB ratio={:.3f} systemCommit={}MiB systemLimit={}MiB systemHeadroom={}MiB systemRatio={:.3f} observed={} pressure={} recoverySamples={}{}{}",
 			snapshot.transitionEpoch,
 			snapshot.sampleFrame,
 			snapshot.currentUsageBytes / kVRRenderScaleMiB,
@@ -31361,7 +31471,6 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 			snapshot.systemCommitLimitBytes / kVRRenderScaleMiB,
 			snapshot.systemCommitHeadroomBytes / kVRRenderScaleMiB,
 			snapshot.systemCommitRatio,
-			snapshot.processPrivateUsageBytes / kVRRenderScaleMiB,
 			GetVRRenderScaleMemoryPressureName(snapshot.observedPressure),
 			GetVRRenderScaleMemoryPressureName(snapshot.pressure),
 			snapshot.recoverySamples,
@@ -31432,8 +31541,10 @@ uint64_t Upscaling::BeginVRRenderScalePostLoadRecoveryLocked(
 	recovery.peakUsageBytes = memory.currentUsageBytes;
 	recovery.baselineSystemCommitBytes = memory.systemCommitBytes;
 	recovery.peakSystemCommitBytes = memory.systemCommitBytes;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	recovery.baselineProcessPrivateUsageBytes = memory.processPrivateUsageBytes;
 	recovery.peakProcessPrivateUsageBytes = memory.processPrivateUsageBytes;
+#endif
 	recovery.peakPressure = memory.pressure;
 	++vrRenderScaleTransitionController.revision;
 	return recoveryEpoch;
@@ -31709,7 +31820,7 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(
 
 	if (!admitted && ShouldEmitUpscalingDiagLogs()) {
 		logger::debug(
-			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} trimArmed={} trimCompleted={} trimSucceeded={} pressure={} systemCommit={}MiB systemHeadroom={}MiB processPrivate={}MiB settledSamples={}/{} waitAge={} firstSettledAge={} timeoutUsed={} peak={}MiB peakSystemCommit={}MiB peakProcessPrivate={}MiB",
+			"[VRRenderScale][PostLoad] Waiting recoveryEpoch={} transitionEpoch={} cleanupArmed={} cleanupDrained={} trimArmed={} trimCompleted={} trimSucceeded={} pressure={} systemCommit={}MiB systemHeadroom={}MiB settledSamples={}/{} waitAge={} firstSettledAge={} timeoutUsed={} peak={}MiB peakSystemCommit={}MiB",
 			a_recoveryEpoch,
 			a_transitionEpoch,
 			BoolText(recoverySnapshot.cleanupArmed),
@@ -31720,15 +31831,13 @@ bool Upscaling::CanAdmitVRRenderScalePostLoadRecoveryRelatch(
 			GetVRRenderScaleMemoryPressureName(memorySnapshot.pressure),
 			memorySnapshot.systemCommitBytes / kVRRenderScaleMiB,
 			memorySnapshot.systemCommitHeadroomBytes / kVRRenderScaleMiB,
-			memorySnapshot.processPrivateUsageBytes / kVRRenderScaleMiB,
 			recoverySnapshot.settledSamples,
 			requiredSettledSamples,
 			recoverySnapshot.admissionWaitStartFrame != 0 ? frame - recoverySnapshot.admissionWaitStartFrame : 0u,
 			recoverySnapshot.firstSettledFrame != 0 ? frame - recoverySnapshot.firstSettledFrame : 0u,
 			BoolText(recoverySnapshot.settleTimeoutUsed),
 			recoverySnapshot.peakUsageBytes / kVRRenderScaleMiB,
-			recoverySnapshot.peakSystemCommitBytes / kVRRenderScaleMiB,
-			recoverySnapshot.peakProcessPrivateUsageBytes / kVRRenderScaleMiB);
+			recoverySnapshot.peakSystemCommitBytes / kVRRenderScaleMiB);
 	}
 	if (!admitted) {
 		RecordVRRenderScaleTransitionRetry(
@@ -32021,7 +32130,7 @@ void Upscaling::CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, 
 	uint64_t expectedEpoch = a_recoveryEpoch;
 	pendingPostLoadRuntimeResetEpoch.compare_exchange_strong(expectedEpoch, 0, std::memory_order_acq_rel);
 	logger::debug(
-		"[VRRenderScale][PostLoad] Completed recoveryEpoch={} transitionEpoch={} duration={} frame(s) baseline={}MiB peak={}MiB baselineSystemCommit={}MiB peakSystemCommit={}MiB baselineProcessPrivate={}MiB peakProcessPrivate={}MiB peakPressure={} trimCompleted={} trimSucceeded={}",
+		"[VRRenderScale][PostLoad] Completed recoveryEpoch={} transitionEpoch={} duration={} frame(s) baseline={}MiB peak={}MiB baselineSystemCommit={}MiB peakSystemCommit={}MiB peakPressure={} trimCompleted={} trimSucceeded={}",
 		completed.recoveryEpoch,
 		completed.transitionEpoch,
 		globals::state ? ElapsedFrames(completed.startFrame, std::max(globals::state->frameCount, 1u)) : 0u,
@@ -32029,8 +32138,6 @@ void Upscaling::CompleteVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch, 
 		completed.peakUsageBytes / kVRRenderScaleMiB,
 		completed.baselineSystemCommitBytes / kVRRenderScaleMiB,
 		completed.peakSystemCommitBytes / kVRRenderScaleMiB,
-		completed.baselineProcessPrivateUsageBytes / kVRRenderScaleMiB,
-		completed.peakProcessPrivateUsageBytes / kVRRenderScaleMiB,
 		GetVRRenderScaleMemoryPressureName(completed.peakPressure),
 		BoolText(completed.trimCompleted),
 		BoolText(completed.trimSucceeded));
@@ -33615,36 +33722,48 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 		pathChanged = !previous.valid || previous.path != eye.path;
 
 		if (!duplicate) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			const auto increment = [](uint64_t& a_counter) {
 				if (a_counter != std::numeric_limits<uint64_t>::max())
 					++a_counter;
 			};
+#endif
 			switch (eye.path) {
 			case VRRenderScalePresentationPath::VendorEvaluated:
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				increment(presentation.vendorEvaluatedEyeObservations);
+#endif
 				break;
 			case VRRenderScalePresentationPath::NativeOriginal:
 				presentation.consecutiveBothEyesVendorFrames = 0;
 				break;
 			case VRRenderScalePresentationPath::ValidatedPresentationHold:
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				increment(presentation.validatedPresentationHoldEyeObservations);
+#endif
 				presentation.consecutiveBothEyesVendorFrames = 0;
 				break;
 			case VRRenderScalePresentationPath::PresentationStretch:
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				increment(presentation.presentationStretchEyeObservations);
 				presentation.maximumConsecutivePresentationStretchFrames = std::max(
 					presentation.maximumConsecutivePresentationStretchFrames,
 					eye.consecutiveFrames);
+#endif
 				presentation.lastFallbackFrame = frame;
 				presentation.consecutiveBothEyesVendorFrames = 0;
 				break;
 			case VRRenderScalePresentationPath::VendorFailureStretch:
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				increment(presentation.vendorFailureStretchEyeObservations);
+#endif
 				presentation.lastFallbackFrame = frame;
 				presentation.consecutiveBothEyesVendorFrames = 0;
 				break;
 			case VRRenderScalePresentationPath::BoundsMismatchOriginalFallback:
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				increment(presentation.boundsMismatchOriginalFallbackEyeObservations);
+#endif
 				presentation.lastFallbackFrame = frame;
 				presentation.consecutiveBothEyesVendorFrames = 0;
 				break;
@@ -33652,6 +33771,7 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 				break;
 			}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			const uint64_t presentationQpc =
 				QueryVRRenderScalePresentationQpc();
 			const VRPresentationStretchTelemetryPolicy::Observation
@@ -33664,6 +33784,8 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 					.compositorCycleToken =
 						a_observation.compositorCycleToken,
 					.qpc = presentationQpc,
+					.transitionEpoch = a_observation.transitionEpoch,
+					.stretchReason = a_observation.stretchReason,
 				};
 			VRPresentationStretchTelemetryPolicy::Observe(
 				vrRenderScalePresentationStretchLifetimeTelemetry,
@@ -33680,6 +33802,7 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 					vrRenderScalePresentationStretchLifetimeTelemetry,
 					presentationQpc),
 				GetVRRenderScalePresentationQpcFrequency());
+#endif
 		}
 
 		const auto& left = presentation.eyes[0];
@@ -37874,7 +37997,7 @@ void Upscaling::CompleteVRRenderScaleInfoTransition(
 	const uint32_t renderWidth = ClampPositiveDimension(a_renderSize.x);
 	const uint32_t renderHeight = ClampPositiveDimension(a_renderSize.y);
 
-	logger::info(
+	logger::debug(
 		"[VRRenderScale] Stable after {} frame(s): state={} method={} render={}x{} display={}x{} quality={} phase={}",
 		elapsedFrames,
 		a_active ? "on" : "off",
@@ -38553,6 +38676,63 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	return true;
 }
 
+bool Upscaling::ShouldReuseOrdinarySaveResources() const
+{
+	return globals::game::isVR && globals::state && IsVRRenderScaleModeLatched() &&
+	       globals::state->GetOrdinarySaveRenderRecoveryToken() != 0;
+}
+
+std::optional<VROrdinarySaveRecovery::Identity> Upscaling::GetOrdinarySavePresentationIdentity() const
+{
+	auto* state = globals::state;
+	if (!ShouldReuseOrdinarySaveResources() || state->pendingPostLoadRuntimeReset ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		ShouldDeferVRVendorLifecycleMutation() || HasPendingVRUpscalingTransition() ||
+		IsNonLoadingVRMenuPresentationContextActive() || IsLoadingMenuContextActive() ||
+		IsVRLoadingSubmitProtectionContextActive(*this, state)) {
+		return std::nullopt;
+	}
+	const auto method = GetRuntimeUpscaleMethod();
+	if (HasPendingVRVendorRuntimeReset(*this, method) || IsSubmitStageDeviceLost() ||
+		!IsVendorRuntimeReadyForActiveContract(method) || !IsCommonVendorResourceContractCurrent(method) ||
+		!IsVRRenderScalePhysicalContractConverged(method, GetRuntimeQualityMode())) {
+		return std::nullopt;
+	}
+	const auto token = state->GetOrdinarySaveRenderRecoveryToken();
+	const auto generation = GetActiveVRRenderScaleContractGeneration();
+	return VROrdinarySaveRecovery::Identity{
+		token, BuildResourceCheckStableKey(*this, method), generation, static_cast<uint32_t>(method),
+		commonVendorResourceGeneration, vrIntermediateTextureGeneration
+	};
+}
+
+bool Upscaling::CanResumeOrdinarySavePresentation() const
+{
+	const auto identity = GetOrdinarySavePresentationIdentity();
+	if (!identity)
+		return false;
+	const auto cycle = submitTemporalCompositorCycle.load(std::memory_order_acquire);
+	std::lock_guard lock(ordinarySaveRecoveryMutex);
+	return ordinarySaveRecovery.CanResume(*identity, globals::state->lastCompletedWorldRenderFrame, cycle);
+}
+
+void Upscaling::ObserveOrdinarySavePresentation(uint32_t a_frame, uint64_t a_cycle, uint32_t a_eye,
+	const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_boundary,
+	const VROrdinarySaveRecovery::Identity& a_identity, bool a_inputsReady)
+{
+	auto* state = globals::state;
+	const auto currentIdentity = a_inputsReady ? GetOrdinarySavePresentationIdentity() : std::nullopt;
+	const bool ready = currentIdentity && *currentIdentity == a_identity &&
+	                   state->lastWorldRenderFrame == a_frame && state->lastCompletedWorldRenderFrame == a_frame;
+	std::lock_guard lock(ordinarySaveRecoveryMutex);
+	const auto previousQualifiedFrame = ordinarySaveRecovery.qualifiedFrame;
+	ordinarySaveRecovery.Observe(a_identity, a_frame, a_cycle, a_eye, a_boundary, ready);
+	if (!previousQualifiedFrame && ordinarySaveRecovery.qualifiedFrame) {
+		logger::debug("[Upscaling] Ordinary save {} qualified stereo recovery at frame {}; persistence remains guarded.",
+			a_identity.saveToken, a_frame);
+	}
+}
+
 bool Upscaling::ShouldDeferVRVendorLifecycleMutation() const
 {
 	if (!globals::game::isVR)
@@ -38697,7 +38877,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static uint32_t previousDLSSPreset = GetRuntimeDLSSPreset();
 	static uint32_t previousRenderScaleMode = getTrackedRenderScaleMode();
 	static uint32_t previousPerfMode = getTrackedPerfMode();
-	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable && !settings.foveatedPeripheryMaskVisualization);
+	static FoveatedLayoutKey previousFoveatedLayout = makeFoveatedLayoutKey(settings.periphery_taa_enable, settings.periphery_taa_enable);
 
 	bool frameGenModeCurrent = (settings.frameGenerationMode && d3d12SwapChainActive);
 	bool frameGenModeChanged = frameGenModeCurrent != previousFrameGenMode;
@@ -39274,6 +39454,12 @@ bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 	if (ShouldDeferVRVendorLifecycleMutation()) {
 		return false;
 	}
+	if (ShouldReuseOrdinarySaveResources()) {
+		return !HasPendingVRVendorRuntimeReset(*this, a_upscalemethod) &&
+		       !HasPendingVRUpscalingTransition() &&
+		       IsVendorRuntimeReadyForActiveContract(a_upscalemethod) &&
+		       IsCommonVendorResourceContractCurrent(a_upscalemethod);
+	}
 
 	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
 	const uint64_t currentGateState = GetVRVendorEffectiveWorkGateState();
@@ -39364,6 +39550,8 @@ ID3D11PixelShader* Upscaling::GetUnderwaterMaskUpscalePS(UnderwaterMaskUpscaleVa
 	auto& shader = a_variant == UnderwaterMaskUpscaleVariant::RawDepthNoStencil     ? underwaterMaskUpscaleRawDepthNoStencilPS :
 	               a_variant == UnderwaterMaskUpscaleVariant::DynamicDepthNoStencil ? underwaterMaskUpscaleDynamicDepthNoStencilPS :
 	                                                                                  underwaterMaskUpscalePS;
+	if (ShouldReuseOrdinarySaveResources() && !shader)
+		return nullptr;
 	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
 	if (globals::game::isVR) {
 		defines.push_back({ "VR", "" });
@@ -39393,6 +39581,8 @@ ID3D11PixelShader* Upscaling::GetCameraMotionVectorsPS()
 
 ID3D11VertexShader* Upscaling::GetUpscaleVS()
 {
+	if (ShouldReuseOrdinarySaveResources() && !upscaleVS)
+		return nullptr;
 	return upscaleVS.Get(
 		L"Data/Shaders/Upscaling/UpscaleVS.hlsl", { { "VSHADER", "" } },
 		"vs_5_0", "main", "Upscaling::FullscreenVS");
@@ -39428,6 +39618,8 @@ ID3D11ComputeShader* Upscaling::GetPeripheryTAACS()
 
 ID3D11ComputeShader* Upscaling::GetSubmitStageStretchCS()
 {
+	if (ShouldReuseOrdinarySaveResources())
+		return submitStageStretchCS.get();
 	return submitStageStretchCS.Get(
 		L"Data/Shaders/Upscaling/SubmitStageStretchCS.hlsl", {}, "cs_5_0",
 		"main", "Upscaling::SubmitStageStretchCS");
@@ -39524,7 +39716,8 @@ bool Upscaling::IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const
 
 bool Upscaling::IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const
 {
-	return IsPeripheryTAAEnabled(a_upscaleMethod) && !settings.foveatedPeripheryMaskVisualization;
+	// Preview bypasses temporal dispatch without changing the resource layout.
+	return IsPeripheryTAAEnabled(a_upscaleMethod);
 }
 
 bool Upscaling::UseActiveFoveatedPeripheryTAAProfile() const
@@ -39802,7 +39995,7 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	if (!TryGetTexture2DDesc(source, sourceDesc))
 		return false;
 
-	bool recreate = !texture;
+	bool recreate = !texture || !texture->resource;
 	if (!recreate) {
 		recreate = texture->desc.Width != width ||
 		           texture->desc.Height != height ||
@@ -39816,6 +40009,8 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 	}
 
 	if (recreate) {
+		if (ShouldReuseOrdinarySaveResources())
+			return false;
 		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		static bool loggedTextureCreateFailure = false;
 		const auto createFailureMessage = [&]() {
@@ -39890,6 +40085,12 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 
 bool Upscaling::EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction)
 {
+	if (ShouldReuseOrdinarySaveResources()) {
+		return ((!usePeripheryTAA && !visualizeMask) || (foveatedPeripheryCS && foveatedPeripheryCB)) &&
+		       (!usePeripheryTAA || (peripheryTAACS && peripheryTAACB)) &&
+		       (!usePeripheryTAA || (foveatedCenterBlendCS && foveatedCenterBlendCB)) &&
+		       ((usePeripheryTAA || visualizeMask) || (foveatedSpatialCompositeCS && foveatedSpatialCompositeCB));
+	}
 	const char* contextText = context ? context : "";
 	const char* fallbackText = fallbackAction ? fallbackAction : "skipping foveated vendor dispatch";
 	static bool loggedFoveatedShaderFailure = false;
@@ -39934,6 +40135,31 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	const auto& regionPlan = foveatedRectCache.plan;
 	if (!regionPlan.IsValid() || regionPlan.outputWidthPerEye != outputWidthPerEye || regionPlan.outputHeight != outputHeight)
 		return false;
+	if (ShouldReuseOrdinarySaveResources()) {
+		const auto matchesTexture = [](const auto& texture, uint32_t width, uint32_t height, DXGI_FORMAT format) {
+			return texture && texture->resource && texture->srv && texture->uav &&
+			       texture->desc.Width == width && texture->desc.Height == height &&
+			       texture->desc.Format == format;
+		};
+		// Check both eyes before any history ownership can change during the save grace.
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const auto& required = regionPlan.eyes[eye].peripheryTAAHistoryOutput;
+			const auto& active = peripheryTAAHistoryRects[eye];
+			if (!required.IsValid() || required.maxX > outputWidthPerEye || required.maxY > outputHeight ||
+				active.minX != required.minX || active.minY != required.minY ||
+				active.maxX != required.maxX || active.maxY != required.maxY) {
+				return false;
+			}
+			for (uint32_t slot = 0; slot < 2; ++slot) {
+				if (!matchesTexture(peripheryTAAHistoryColor[eye][slot], required.Width(), required.Height(), colorDesc.Format) ||
+					!matchesTexture(peripheryTAAVelocityHistory[eye][slot], required.Width(), required.Height(), DXGI_FORMAT_R16G16_FLOAT) ||
+					!matchesTexture(peripheryTAALockHistory[eye][slot], required.Width(), required.Height(), DXGI_FORMAT_R16_FLOAT)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
 
 	bool recreatedResources = false;
 	static bool loggedPeripheryTAAResourceFailure = false;
@@ -40058,6 +40284,8 @@ bool Upscaling::EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCap
 	auto& tileCapacityCurrent = peripheryTAATileCapacity[eyeIndex];
 	if (tileBuffer && tileCapacityCurrent >= tileCapacity && tileBuffer->srv)
 		return true;
+	if (ShouldReuseOrdinarySaveResources())
+		return false;
 
 	D3D11_BUFFER_DESC sbDesc{};
 	sbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -40249,24 +40477,70 @@ void Upscaling::DestroyPeripheryTAAResources()
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 }
 
-void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY)
+bool Upscaling::IsFoveatedMaskVisualizationEnabled(UpscaleMethod a_upscaleMethod) const
+{
+	return globals::game::isVR && IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod) &&
+	       settings.foveatedPeripheryMaskVisualization && globals::state &&
+	       !globals::state->pendingPostLoadRuntimeReset &&
+	       !IsMainMenuContextActive() && !IsLoadingMenuContextActive() &&
+	       !IsVRLoadingSubmitProtectionContextActive(*this, globals::state) &&
+	       !IsVRMenuPresentationContextActive() &&
+	       !runtimeResolutionPlan.knownMenuContextActive &&
+	       !runtimeResolutionPlan.menuContextActive && !runtimeResolutionPlan.loadingMenuActive;
+}
+
+bool Upscaling::DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex)
+{
+	if (!globals::game::isVR || a_eyeIndex >= std::size(vrIntermediateColorOut) ||
+		!settings.foveatedPeripheryMaskVisualization || IsSubmitStageDeviceLost())
+		return false;
+	const auto& output = vrIntermediateColorOut[a_eyeIndex];
+	if (!output || !output->resource || !output->uav || !output->desc.Width || !output->desc.Height)
+		return false;
+	// A preview can reuse resources during a save or relatch, but cannot create them.
+	if (ShouldDeferVRVendorLifecycleMutation() && (!foveatedPeripheryCS || !foveatedPeripheryCB))
+		return false;
+	if (!EnsureFoveatedDispatchShaders(false, true, "Mask preview ", "keeping normal presentation"))
+		return false;
+
+	CS_GPU_PASS("Upscaling::FoveatedMaskVisualization");
+	const auto unbind = ScopeExit([&]() { UnbindUpscalingResources(); });
+	static bool loggedMaskPreviewFailure = false;
+	try {
+		const auto profile = GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable);
+		const auto offset = GetResolvedFoveatedMaskCenterOffsets(settings.periphery_taa_enable)[a_eyeIndex];
+		return DispatchFoveatedPeripheryPass(nullptr, output->uav.get(), 0, 0,
+				   output->desc.Width, output->desc.Height, 0, 0, output->desc.Width, output->desc.Height,
+				   profile.centerScale, profile.centerHorizontalScale, false, 1.0f, 1.0f, 0.0f, 0.0f, offset.x, offset.y, true) &&
+		       !MarkSubmitStageDeviceLostIfDeviceRemoved("FOV mask visualization");
+	} catch (const std::exception& e) {
+		LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping normal presentation", e);
+		MarkSubmitStageDeviceLostIfNeeded(e, "FOV mask visualization");
+	} catch (...) {
+		LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping normal presentation");
+		MarkSubmitStageDeviceLostIfDeviceRemoved("FOV mask visualization");
+	}
+	return false;
+}
+
+bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY, bool visualizeMask)
 {
 	auto* peripheryCS = GetFoveatedPeripheryCS();
-	if (!peripheryCS || !sourceSRV || !outputUAV || !foveatedPeripheryCB)
-		return;
+	if (!peripheryCS || (!visualizeMask && !sourceSRV) || !outputUAV || !foveatedPeripheryCB)
+		return false;
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
 	if (!context || !deferred || !deferred->linearSampler)
-		return;
+		return false;
 	if (outputOffsetX >= outputWidth || outputOffsetY >= outputHeight)
-		return;
+		return false;
 	dispatchWidth = std::min(dispatchWidth, outputWidth - outputOffsetX);
 	dispatchHeight = std::min(dispatchHeight, outputHeight - outputOffsetY);
 	if (!dispatchWidth || !dispatchHeight)
-		return;
+		return false;
 
 	FoveatedPeripheryCB cbData{};
 	cbData.outputDim = { static_cast<float>(outputWidth), static_cast<float>(outputHeight) };
@@ -40283,10 +40557,9 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	cbData.sourceOffset = sourceRegion.offset;
 	cbData.dispatchDim = { static_cast<float>(dispatchWidth), static_cast<float>(dispatchHeight) };
 	cbData.outputOffset = { static_cast<float>(outputOffsetX), static_cast<float>(outputOffsetY) };
-	cbData.jitter = GetJitterForDispatch();
+	cbData.jitter = visualizeMask ? float2{} : GetJitterForDispatch();
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
-	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
 	const bool showThreeZoneMask = visualizeMask && settings.periphery_taa_enable;
 	const float centerFeather = showThreeZoneMask ? ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather) : FoveatedCommon::kCenterFeather;
 	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, centerScale);
@@ -40339,6 +40612,7 @@ void Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 		context->CSSetConstantBuffers(0, 1, nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
+	return true;
 }
 
 void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
@@ -41212,7 +41486,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		if (!bindPeripheryBindings())
 			return false;
 
-		DispatchFoveatedPeripheryPass(
+		return DispatchFoveatedPeripheryPass(
 			params.peripherySourceSRV,
 			outputColorUAV,
 			params.peripherySourceWidth,
@@ -41231,8 +41505,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 			params.peripherySourceOffsetX,
 			params.peripherySourceOffsetY,
 			centerOffset.x,
-			centerOffset.y);
-		return true;
+			centerOffset.y,
+			params.visualizeMask);
 	};
 
 	auto dispatchPeripheryTAA = [&](ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight) -> bool {
@@ -41407,8 +41681,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	if (!GetRuntimeFoveatedRegionDimensions(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight))
 		return FidelityFX::UpscaleResult::Failed;
 
-	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
-	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
+	const bool visualizeMask = false;
+	const bool usePeripheryTAA = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
 	const float centerScale = foveatedProfile.centerScale;
@@ -41548,8 +41822,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 	if (!outputResource || !outputUAV)
 		return FidelityFX::UpscaleResult::Failed;
 
-	const bool visualizeMask = settings.foveatedPeripheryMaskVisualization;
-	const bool usePeripheryTAA = IsPeripheryTAAPathActive(a_upscaleMethod);
+	const bool visualizeMask = false;
+	const bool usePeripheryTAA = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const bool usePeripheryTAAProfile = IsPeripheryTAAEnabled(a_upscaleMethod);
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, usePeripheryTAAProfile);
 	const float centerScale = foveatedProfile.centerScale;
@@ -41964,7 +42238,7 @@ void Upscaling::EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 }
 
 bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-	ID3D11Resource* colorSrc)
+	ID3D11Resource* colorSrc, bool allowResourceCreation)
 {
 	if (!colorSrc || !inWidth || !inHeight || !outWidth || !outHeight)
 		return false;
@@ -42005,6 +42279,8 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 
 	if (!needsRecreate)
 		return true;
+	if (!allowResourceCreation || ShouldReuseOrdinarySaveResources())
+		return false;
 
 	logger::debug("[VRRenderScale] (Re)creating presentation textures: per-eye in {}x{}, out {}x{}",
 		inWidth, inHeight, outWidth, outHeight);
@@ -42104,6 +42380,8 @@ bool Upscaling::EnsureSubmitStageDLSSSharpenerTexture(uint32_t eyeIndex, const T
 	};
 	if (matchesOutput())
 		return true;
+	if (ShouldReuseOrdinarySaveResources())
+		return false;
 
 	InvalidateVRRenderScaleStereoPresentationPacket(true);
 	const std::string suffix = eyeIndex == 0 ? "Left" : "Right";
@@ -43375,6 +43653,8 @@ bool Upscaling::StretchSubmitStageEyeOutput(uint32_t eyeIndex, uint32_t inputWid
 			return false;
 	}
 	if (!stretchCS) {
+		if (ShouldReuseOrdinarySaveResources())
+			return false;
 		float clearColor[4] = {};
 		context->ClearUnorderedAccessViewFloat(vrIntermediateColorOut[eyeIndex]->uav.get(), clearColor);
 
@@ -43507,6 +43787,8 @@ bool Upscaling::EnsureHMDMaskClearResources()
 	auto* device = globals::d3d::device;
 	if (!device)
 		return false;
+	if (ShouldReuseOrdinarySaveResources())
+		return vrClearHMDMaskCS && vrClearHMDMaskCB;
 
 	static bool loggedHMDMaskClearFailure = false;
 	try {
@@ -44255,8 +44537,10 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 				std::memory_order_acquire) != 0 ||
 			vrRenderScaleMemoryReliefEndFrame.load(
 				std::memory_order_acquire) != 0 ||
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			vrRenderScaleStressSessionActive.load(
 				std::memory_order_acquire) ||
+#endif
 			emitUpscalingDiagLogs;
 		if (memoryTelemetryRequired) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -44670,8 +44954,10 @@ void Upscaling::SetupResources()
 	dynamicResolutionStretchCB = new ConstantBuffer(ConstantBufferDesc<DynamicResolutionStretchCB>(), "Upscaling::DynamicResolutionStretchCB");
 	delete vrMenuLayerCompositeCB;
 	vrMenuLayerCompositeCB = new ConstantBuffer(ConstantBufferDesc<VRMenuLayerCompositeCB>(), "Upscaling::VRMenuLayerCompositeCB");
-	delete foveatedPeripheryCB;
-	foveatedPeripheryCB = new ConstantBuffer(ConstantBufferDesc<FoveatedPeripheryCB>());
+	foveatedPeripheryCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<FoveatedPeripheryCB>(), "Upscaling::FoveatedPeripheryCB");
+	// Warm the preview before save protection can prohibit shader creation.
+	if (globals::game::isVR)
+		EnsureFoveatedDispatchShaders(false, true, "Mask preview ", "keeping normal presentation");
 	delete foveatedCenterBlendCB;
 	foveatedCenterBlendCB = new ConstantBuffer(ConstantBufferDesc<FoveatedCenterBlendCB>());
 	delete foveatedSpatialCompositeCB;
@@ -49206,7 +49492,7 @@ void Upscaling::ServiceDeferredVRRenderScaleRequestAfterPhysicalRecovery()
 		return;
 	}
 	InvalidateFrameScopedUpscalingState();
-	logger::info(
+	logger::debug(
 		"[VRRenderScale] Replayed deferred request id={} epoch={} origin={} after coherent recovery and provider retirement.",
 		replay->requestID,
 		replay->transitionEpoch,
@@ -49533,9 +49819,121 @@ bool Upscaling::MarkSubmitStageDeviceLostIfDeviceRemoved(const char* a_context)
 	return true;
 }
 
+bool Upscaling::UpdateVRSubmitDesktopMirror(uint32_t eyeIndex, uint32_t currentFrame, uint64_t a_compositorCycleToken,
+	ID3D11Texture2D* sourceTexture, const D3D11_TEXTURE2D_DESC& sourceDesc, uint32_t eyeWidthOut, uint32_t eyeHeightOut)
+{
+	auto* context = globals::d3d::context;
+	if (!context || !sourceTexture || eyeIndex >= 2 || !eyeWidthOut || !eyeHeightOut)
+		return false;
+	const bool mirrorRequested =
+		globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
+		globals::features::screenshotFeature.HasPendingDesktopMirrorCapture();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleGPUPerformanceCounter(
+		mirrorRequested ?
+			VRRenderScaleGPUPerformanceCounter::MirrorConsumerRequests :
+			VRRenderScaleGPUPerformanceCounter::MirrorConsumerSkips);
+#endif
+	if (!mirrorRequested) {
+		vrDesktopMirrorBlitRTV = nullptr;
+		vrDesktopMirrorBlitTarget = nullptr;
+		submitStageMirrorEyeReady = {};
+	} else {
+		const bool canMirrorToSource =
+			sourceDesc.ArraySize == 1 &&
+			sourceDesc.Width >= eyeWidthOut * 2 &&
+			sourceDesc.Height >= eyeHeightOut &&
+			vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
+			vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
+			vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
+			vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
+			vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
+			vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
+			vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
+			vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
+		const auto consumeReadyMirrorPair = [&]() {
+			if (!VRSubmitTemporalSnapshot::MatchesProducer(submitStageMirrorFrame, submitStageMirrorCycle, currentFrame, a_compositorCycleToken) || submitStageMirrorSourceTexture != sourceTexture) {
+				submitStageMirrorFrame = currentFrame;
+				submitStageMirrorCycle = a_compositorCycleToken;
+				submitStageMirrorSourceTexture = sourceTexture;
+				submitStageMirrorEyeReady = {};
+			}
+
+			submitStageMirrorEyeReady[eyeIndex] = true;
+			if (!submitStageMirrorEyeReady[0] || !submitStageMirrorEyeReady[1])
+				return false;
+
+			submitStageMirrorEyeReady = {};
+			return true;
+		};
+		if (canMirrorToSource) {
+			vrDesktopMirrorBlitRTV = nullptr;
+			vrDesktopMirrorBlitTarget = nullptr;
+
+			if (consumeReadyMirrorPair()) {
+				D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
+				context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
+				context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				RecordVRRenderScaleGPUPerformanceCounter(
+					VRRenderScaleGPUPerformanceCounter::MirrorCopyPairs);
+#endif
+				if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
+					return false;
+			}
+		} else {
+			if (consumeReadyMirrorPair()) {
+				// Preview may run before vendor recovery; keep its mirror allocation-free too.
+				if ((ShouldReuseOrdinarySaveResources() || ShouldDeferVRVendorLifecycleMutation()) &&
+					(vrDesktopMirrorBlitTarget != sourceTexture || !vrDesktopMirrorBlitRTV ||
+						!vrDesktopMirrorBlitPS || !upscaleVS))
+					return true;
+				static bool loggedSubmitStageMirrorFallbackFailure = false;
+				const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (mirrorUpdated) {
+					RecordVRRenderScaleGPUPerformanceCounter(
+						VRRenderScaleGPUPerformanceCounter::MirrorBlitPairs);
+				}
+#endif
+				if (!mirrorUpdated && IsSubmitStageDeviceLost())
+					return false;
+				if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
+					logger::warn(
+						"[Upscaling] Desktop mirror fallback could not update incompatible render-scale submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
+						sourceDesc.Width,
+						sourceDesc.Height,
+						sourceDesc.ArraySize,
+						static_cast<uint32_t>(sourceDesc.Format),
+						vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Width : 0,
+						vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Height : 0,
+						vrIntermediateColorOut[0] ? static_cast<uint32_t>(vrIntermediateColorOut[0]->desc.Format) : 0,
+						vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Width : 0,
+						vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Height : 0,
+						vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
+					loggedSubmitStageMirrorFallbackFailure = true;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
 bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCycleToken, const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_submitBoundaryIdentity, bool a_vendorResumeCooldownAtCycleStart, const vr::Texture_t* a_inputTexture, const vr::VRTextureBounds_t* a_inputBounds,
 	vr::Texture_t& a_outputTexture, vr::VRTextureBounds_t& a_outputBounds, VRRenderScalePresentationObservation& a_presentationObservation)
 {
+	bool ordinarySaveOutputReady = false;
+	bool ordinarySaveInputsReady = false;
+	uint32_t ordinarySaveProducerFrame = 0;
+	VROrdinarySaveRecovery::Identity ordinarySaveIdentity{};
+	const auto finishOrdinarySave = ScopeExit([&]() {
+		if (globals::state && globals::state->IsSaveLoadSafeModeActive()) {
+			ObserveOrdinarySavePresentation(ordinarySaveProducerFrame, a_compositorCycleToken,
+				static_cast<uint32_t>(a_eye), a_submitBoundaryIdentity, ordinarySaveIdentity,
+				ordinarySaveInputsReady && ordinarySaveOutputReady);
+		}
+	});
 	a_presentationObservation = {};
 	if (!a_inputTexture || !a_inputTexture->handle || a_inputTexture->eType != vr::TextureType_DirectX) {
 		return false;
@@ -49688,6 +50086,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		directMenuPresentationContext ||
 		presentationRenderTarget;
 	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
+	const bool foveatedMaskVisualizationPreview =
+		IsFoveatedMaskVisualizationEnabled(upscaleMethod) && !submitPresentationContext;
 	const bool sceneFeatureMenuPauseContext =
 		globals::game::isVR &&
 		(currentMenuPresentationContext || communityShadersMenuOpen);
@@ -50140,6 +50540,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		presentationOnly = true;
 		RequestHistoryReset();
 	}
+	if (foveatedMaskVisualizationPreview) {
+		presentationOnly = true;
+		RequestHistoryReset();
+	}
 	if (a_compositorCycleToken != 0) {
 		const uint32_t methodValue = static_cast<uint32_t>(upscaleMethod);
 		if (submitStageVendorAdmissionCycle != a_compositorCycleToken) {
@@ -50190,6 +50594,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 	} else {
 		submitStageVendorAdmissionFrame = currentFrame;
+	}
+	// Revoked save proof must downgrade cached admission for the remaining eye and retries.
+	if (ShouldReuseOrdinarySaveResources() && !CanResumeOrdinarySavePresentation()) {
+		presentationOnly = true;
+		if (a_compositorCycleToken != 0)
+			submitStageVendorAdmissionPresentationOnly = true;
 	}
 	if (vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0) {
 		presentationOnly = true;
@@ -50363,6 +50773,34 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageForceFullEyeVendorFallback = false;
 	}
 
+	if (state->IsSaveLoadSafeModeActive()) {
+		const VRSubmitTemporalSnapshot::Key key{
+			.frame = currentFrame,
+			.generation = activeContractGeneration,
+			.method = static_cast<uint32_t>(upscaleMethod),
+			.inputWidth = eyeWidthIn,
+			.inputHeight = eyeHeightIn,
+			.outputWidth = eyeWidthOut,
+			.outputHeight = eyeHeightOut,
+			.compositorCycle = a_compositorCycleToken
+		};
+		bool temporalReady = false;
+		uint32_t producerFrame = 0;
+		{
+			std::lock_guard lock(submitTemporalInputsMutex);
+			temporalReady = submitTemporalInputs.snapshot.MatchesForDispatch(key) &&
+			                submitTemporalInputs.depth.get() == depth.texture &&
+			                submitTemporalInputs.motion.get() == motionVector.texture;
+			producerFrame = submitTemporalInputs.snapshot.key.frame;
+		}
+		const auto identity = GetOrdinarySavePresentationIdentity();
+		ordinarySaveIdentity = identity.value_or(VROrdinarySaveRecovery::Identity{});
+		ordinarySaveProducerFrame = producerFrame;
+		ordinarySaveInputsReady = identity && identity->generation == activeContractGeneration &&
+		                          identity->method == static_cast<uint32_t>(upscaleMethod) &&
+		                          temporalReady && sourceRegion.matchesExpectedSize && !presentationRenderTarget &&
+		                          (peerInputFreshnessProven || currentEyeInputIdentity.IsValid());
+	}
 	const bool dlssRapidTransitionBypass =
 		upscaleMethod == UpscaleMethod::kDLSS &&
 		ShouldBypassVRDLSSFoveatedForRapidTransition();
@@ -50442,7 +50880,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			state->ExtendSaveLoadSafeMode(
 				currentFrame,
 				State::kSaveLoadSafeModeGraceFrames);
-			logger::info(
+			logger::debug(
 				"[VRRenderScale] Armed the normal save/load completion grace from exact serialized destination convergence. epoch={} frame={}.",
 				serializationEpoch,
 				currentFrame);
@@ -50468,7 +50906,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 			!HasPendingVRVendorRuntimeReset(*this, upscaleMethod) &&
 			physicalContractConverged &&
-			(!transitionProtectionActive || protectedPresentationHandoffReady) &&
+			(!transitionProtectionActive || CanResumeOrdinarySavePresentation() || protectedPresentationHandoffReady) &&
 			(!maskRepairSafetyContextActive || protectedPresentationHandoffReady) &&
 			(!transitionFoveatedBypass || protectedPresentationHandoffReady) &&
 			motionVector.texture &&
@@ -50511,17 +50949,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		}
 	}
 
-	const bool foveatedMaskVisualizationPreview =
-		settings.foveatedPeripheryMaskVisualization &&
-		communityShadersMenuOpen &&
-		!currentMenuPresentationContext &&
-		!submitPresentationContext &&
-		!resolutionPlan.knownMenuContextActive &&
-		!resolutionPlan.menuContextActive;
 	const bool foveatedRequested =
 		!presentationOnly &&
 		!vendorLifecycleMutationDeferred &&
-		(!sceneFeatureMenuPauseContext || foveatedMaskVisualizationPreview) &&
+		!sceneFeatureMenuPauseContext &&
 		IsFoveatedVendorDispatchEnabled(upscaleMethod) &&
 		!foveatedTransitionBypass &&
 		!foveatedFailureBackoffActive;
@@ -50917,6 +51348,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_outputBounds = { 0.0f, 0.0f, 1.0f, 1.0f };
 		menuPresentationSucceeded = menuPresentationAttempt;
 		setVendorPresentationObservation(cachedEyeState);
+		ordinarySaveOutputReady = true;
 		return true;
 	}
 
@@ -50981,7 +51413,13 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	const auto presentStretchOutput = [&](uint32_t inputWidth, uint32_t inputHeight, VRRenderScalePresentationPath a_path) {
-		if (!StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut) ||
+		if (foveatedMaskVisualizationPreview) {
+			submitStageVendorEyeState = {};
+			submitStageRuntimeFSRStereoState = {};
+			submitStageFoveatedCenterState = {};
+		}
+		const bool maskDrawn = foveatedMaskVisualizationPreview && DispatchFoveatedMaskVisualization(eyeIndex);
+		if ((!maskDrawn && !StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut)) ||
 			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
 			return false;
 		}
@@ -51015,6 +51453,20 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			eyeHeightIn,
 			submitPresentationContext || currentMenuPresentationContext || resolutionPlan.knownMenuContextActive || resolutionPlan.menuContextActive,
 			transitionPresentationCooldown);
+		if (a_path == VRRenderScalePresentationPath::PresentationStretch) {
+			a_presentationObservation.stretchReason =
+				(a_vendorResumeCooldownAtCycleStart || vendorResumeFrame != 0) ?
+					VRPresentationStretchTelemetryPolicy::StretchReason::VendorCooldown :
+				deferredDispatchAction == VRVendorRelatchPolicy::DeferredDispatchAction::PresentationStretch ?
+					VRPresentationStretchTelemetryPolicy::StretchReason::DeferredRetry :
+				a_presentationObservation.loadingOrMenuContext ?
+					VRPresentationStretchTelemetryPolicy::StretchReason::LoadingOrMenu :
+					VRPresentationStretchTelemetryPolicy::StretchReason::Unattributed;
+		}
+		if (maskDrawn && vrRenderScaleMode &&
+			!UpdateVRSubmitDesktopMirror(eyeIndex, currentFrame, a_compositorCycleToken, sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut))
+			return false;
+		ordinarySaveOutputReady = !foveatedMaskVisualizationPreview;
 		return true;
 	};
 
@@ -51701,92 +52153,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		true,
 		submitStageFSRBatch);
 	if (vrRenderScaleMode) {
-		const bool mirrorRequested =
-			globals::features::vr.settings.StabilizeRenderScaleDesktopMirror ||
-			globals::features::screenshotFeature.HasPendingDesktopMirrorCapture();
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		RecordVRRenderScaleGPUPerformanceCounter(
-			mirrorRequested ?
-				VRRenderScaleGPUPerformanceCounter::MirrorConsumerRequests :
-				VRRenderScaleGPUPerformanceCounter::MirrorConsumerSkips);
-#endif
-		if (!mirrorRequested) {
-			vrDesktopMirrorBlitRTV = nullptr;
-			vrDesktopMirrorBlitTarget = nullptr;
-			submitStageMirrorEyeReady = {};
-		} else {
-			const bool canMirrorToSource =
-				sourceDesc.ArraySize == 1 &&
-				sourceDesc.Width >= eyeWidthOut * 2 &&
-				sourceDesc.Height >= eyeHeightOut &&
-				vrIntermediateColorOut[0] && vrIntermediateColorOut[1] &&
-				vrIntermediateColorOut[0]->resource && vrIntermediateColorOut[1]->resource &&
-				vrIntermediateColorOut[0]->desc.Width >= eyeWidthOut &&
-				vrIntermediateColorOut[0]->desc.Height >= eyeHeightOut &&
-				vrIntermediateColorOut[1]->desc.Width >= eyeWidthOut &&
-				vrIntermediateColorOut[1]->desc.Height >= eyeHeightOut &&
-				vrIntermediateColorOut[0]->desc.Format == sourceDesc.Format &&
-				vrIntermediateColorOut[1]->desc.Format == sourceDesc.Format;
-			const auto consumeReadyMirrorPair = [&]() {
-				if (!VRSubmitTemporalSnapshot::MatchesProducer(submitStageMirrorFrame, submitStageMirrorCycle, currentFrame, a_compositorCycleToken) || submitStageMirrorSourceTexture != sourceTexture) {
-					submitStageMirrorFrame = currentFrame;
-					submitStageMirrorCycle = a_compositorCycleToken;
-					submitStageMirrorSourceTexture = sourceTexture;
-					submitStageMirrorEyeReady = {};
-				}
-
-				submitStageMirrorEyeReady[eyeIndex] = true;
-				if (!submitStageMirrorEyeReady[0] || !submitStageMirrorEyeReady[1])
-					return false;
-
-				submitStageMirrorEyeReady = {};
-				return true;
-			};
-			if (canMirrorToSource) {
-				vrDesktopMirrorBlitRTV = nullptr;
-				vrDesktopMirrorBlitTarget = nullptr;
-
-				if (consumeReadyMirrorPair()) {
-					D3D11_BOX mirrorBox{ 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
-					context->CopySubresourceRegion(sourceTexture, 0, 0, 0, 0, vrIntermediateColorOut[0]->resource.get(), 0, &mirrorBox);
-					context->CopySubresourceRegion(sourceTexture, 0, eyeWidthOut, 0, 0, vrIntermediateColorOut[1]->resource.get(), 0, &mirrorBox);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					RecordVRRenderScaleGPUPerformanceCounter(
-						VRRenderScaleGPUPerformanceCounter::MirrorCopyPairs);
-#endif
-					if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage mirror writeback"))
-						return false;
-				}
-			} else {
-				if (consumeReadyMirrorPair()) {
-					static bool loggedSubmitStageMirrorFallbackFailure = false;
-					const bool mirrorUpdated = BlitVRRenderScaleDesktopMirror(sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-					if (mirrorUpdated) {
-						RecordVRRenderScaleGPUPerformanceCounter(
-							VRRenderScaleGPUPerformanceCounter::MirrorBlitPairs);
-					}
-#endif
-					if (!mirrorUpdated && IsSubmitStageDeviceLost())
-						return false;
-					if (!mirrorUpdated && !loggedSubmitStageMirrorFallbackFailure) {
-						logger::warn(
-							"[Upscaling] Desktop mirror fallback could not update incompatible render-scale submit texture. source={}x{} array={} format={} outputL={}x{} format={} outputR={}x{} format={}",
-							sourceDesc.Width,
-							sourceDesc.Height,
-							sourceDesc.ArraySize,
-							static_cast<uint32_t>(sourceDesc.Format),
-							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Width : 0,
-							vrIntermediateColorOut[0] ? vrIntermediateColorOut[0]->desc.Height : 0,
-							vrIntermediateColorOut[0] ? static_cast<uint32_t>(vrIntermediateColorOut[0]->desc.Format) : 0,
-							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Width : 0,
-							vrIntermediateColorOut[1] ? vrIntermediateColorOut[1]->desc.Height : 0,
-							vrIntermediateColorOut[1] ? static_cast<uint32_t>(vrIntermediateColorOut[1]->desc.Format) : 0);
-						loggedSubmitStageMirrorFallbackFailure = true;
-					}
-				}
-			}
-		}
+		if (!UpdateVRSubmitDesktopMirror(eyeIndex, currentFrame, a_compositorCycleToken, sourceTexture, sourceDesc, eyeWidthOut, eyeHeightOut))
+			return false;
 
 		a_outputTexture = *a_inputTexture;
 		a_outputTexture.handle = vrIntermediateColorOut[eyeIndex]->resource.get();
@@ -51795,6 +52163,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		menuPresentationSucceeded = menuPresentationAttempt;
 		setVendorPresentationObservation(
 			submitStageVendorEyeState[eyeIndex]);
+		ordinarySaveOutputReady = true;
 		return true;
 	}
 
@@ -51841,6 +52210,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	a_outputBounds = a_inputBounds ? *a_inputBounds : vr::VRTextureBounds_t{ 0.0f, 0.0f, 1.0f, 1.0f };
 	setVendorPresentationObservation(
 		submitStageVendorEyeState[eyeIndex]);
+	ordinarySaveOutputReady = true;
 	return true;
 }
 
@@ -52238,7 +52608,7 @@ bool Upscaling::ResolvePendingVRUpscalingProviderSelection()
 		metrics.resources = vrRenderScaleTransitionController.requested.resources;
 	}
 	++vrRenderScaleTransitionController.revision;
-	logger::info(
+	logger::debug(
 		"[VRRenderScale] Resolved the portable DLSS preference to {} before physical application.",
 		magic_enum::enum_name(fallbackMethod));
 	return true;
@@ -52489,7 +52859,9 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 	}
 
 	if (result.disposition == VRRenderScaleRequestQueueDisposition::Coalesced) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		RecordVRRenderScaleCoalescedDuplicate();
+#endif
 		if (ShouldEmitUpscalingDiagLogs()) {
 			logger::debug(
 				"[VRRenderScale][Diag] Coalesced duplicate buffered request id={} epoch={} loadingSerial={} method={} renderScaleMode={} quality={} dlssPreset={} fsr4={}",
@@ -52527,7 +52899,7 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 		vrStartupRenderScaleNativeFallbackRestartRequired.exchange(
 			false,
 			std::memory_order_acq_rel)) {
-		logger::info(
+		logger::debug(
 			"[VRRenderScale] Accepted explicit CS-menu {} from the coherent startup native fallback. request={} epoch={}.",
 			startupFallbackControlAction ==
 					VRVendorRelatchPolicy::StartupNativeFallbackControlAction::ResolveRetry ?
@@ -52760,16 +53132,21 @@ Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransition
 	VRRenderScaleTransitionSnapshot snapshot{};
 	{
 		std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		const uint64_t presentationQpc = QueryVRRenderScalePresentationQpc();
+#endif
 		snapshot = vrRenderScaleTransitionController;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		PublishVRRenderScalePresentationStretchTelemetry(
 			snapshot.presentation,
 			VRPresentationStretchTelemetryPolicy::Inspect(
 				vrRenderScalePresentationStretchLifetimeTelemetry,
 				presentationQpc),
 			GetVRRenderScalePresentationQpcFrequency());
+#endif
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto* desired = snapshot.requested.valid ?
 	                          std::addressof(snapshot.requested) :
 	                      snapshot.applying.valid ?
@@ -52870,6 +53247,7 @@ Upscaling::VRRenderScaleTransitionSnapshot Upscaling::GetVRRenderScaleTransition
 	} else if (snapshot.state == VRRenderScaleTransitionState::Active) {
 		snapshot.presentationPhase = VRRenderScalePresentationPhase::Released;
 	}
+#endif
 	return snapshot;
 }
 
@@ -53492,6 +53870,7 @@ void Upscaling::RecordVRRenderScalePreparationCreatorEntered(
 }
 #endif
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 Upscaling::VRRenderScaleStressSessionSnapshot Upscaling::GetVRRenderScaleStressSessionSnapshot() const
 {
 	std::scoped_lock lock(
@@ -53527,6 +53906,9 @@ void Upscaling::StartVRRenderScaleStressSession()
 		vrRenderScaleStressSessionActive.store(false, std::memory_order_release);
 		VRPresentationStretchTelemetryPolicy::Reset(
 			vrRenderScalePresentationStretchSessionTelemetry);
+		vrRenderScalePresentationStretchSessionTelemetry.captureEpisodeTrace = true;
+		vrRenderScalePresentationStretchSessionTelemetry.completedEpisodeTrace.reserve(
+			VRPresentationStretchTelemetryPolicy::kMaximumEpisodeTraceEntries);
 
 		auto& presentation =
 			vrRenderScaleTransitionController.presentation;
@@ -53593,7 +53975,7 @@ void Upscaling::StartVRRenderScaleStressSession()
 #endif
 	vrRenderScaleStressSessionActive.store(true, std::memory_order_release);
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::SessionStarted);
-	logger::info("[VRRenderScale][Stress] Started deterministic CSX-menu capture session {} at frame {}.", sessionID, frame);
+	logger::debug("[VRRenderScale][Stress] Started deterministic CSX-menu capture session {} at frame {}.", sessionID, frame);
 }
 
 void Upscaling::StopVRRenderScaleStressSession()
@@ -53633,6 +54015,10 @@ void Upscaling::StopVRRenderScaleStressSession()
 			stoppedTelemetry.incompleteStereoCycleAtStop;
 		vrRenderScaleStressSession.presentationStretchIncompleteStereoEyeMaskAtStop =
 			stoppedTelemetry.incompleteStereoEyeMaskAtStop;
+		vrRenderScaleStressSession.presentationStretchEpisodeTrace =
+			vrRenderScalePresentationStretchSessionTelemetry.completedEpisodeTrace;
+		vrRenderScaleStressSession.presentationStretchEpisodeTraceOverflow =
+			vrRenderScalePresentationStretchSessionTelemetry.episodeTraceOverflow;
 		PublishVRRenderScalePresentationStretchTelemetry(
 			vrRenderScaleTransitionController.presentation,
 			VRPresentationStretchTelemetryPolicy::Inspect(
@@ -53652,8 +54038,8 @@ void Upscaling::StopVRRenderScaleStressSession()
 		CloseVRRenderScaleViewportWaitsLocked("capture_stopped");
 		vrRenderScaleRetryTelemetry.active = false;
 	}
-#endif
-	logger::info(
+#	endif
+	logger::debug(
 		"[VRRenderScale][Stress] Stopped capture session {} with {} retained event(s) and {} overwritten event(s).",
 		sessionID,
 		count,
@@ -53682,7 +54068,7 @@ void Upscaling::ResetVRRenderScaleStressSession()
 
 json Upscaling::BuildVRRenderScaleIterationRecord() const
 {
-	constexpr uint32_t kSchemaVersion = 13u;
+	constexpr uint32_t kSchemaVersion = 14u;
 	constexpr uint32_t kMinimumRequests = 2u;
 	constexpr uint32_t kMaximumRetriesPerTransition = 32u;
 	constexpr uint32_t kMaximumStableLatencyFrames = 120u;
@@ -54397,6 +54783,33 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	const uint64_t maximumObservedPresentationStretchFrames = std::max({ session.maximumPresentationStretchFrames,
 		session.presentationStretchActiveFrames,
 		session.presentationStretchActiveFramesAtStop });
+	json presentationStretchEpisodeTrace = json::array();
+	uint64_t tracedPresentationStretchFrames = 0;
+	uint64_t unattributedPresentationStretchFrames = 0;
+	bool presentationStretchEpochsCoherent = true;
+	for (const auto& episode : session.presentationStretchEpisodeTrace) {
+		tracedPresentationStretchFrames = VRPresentationStretchTelemetryPolicy::SaturatingAdd(
+			tracedPresentationStretchFrames, episode.frames);
+		unattributedPresentationStretchFrames = VRPresentationStretchTelemetryPolicy::SaturatingAdd(
+			unattributedPresentationStretchFrames, episode.unattributedFrames);
+		presentationStretchEpochsCoherent = presentationStretchEpochsCoherent && episode.epochCoherent;
+		presentationStretchEpisodeTrace.push_back({
+			{ "startFrame", episode.startFrame },
+			{ "endFrame", episode.endFrame },
+			{ "frames", episode.frames },
+			{ "transitionEpoch", episode.transitionEpoch },
+			{ "startQpc", episode.startQpc },
+			{ "endQpc", episode.endQpc },
+			{ "unattributedFrames", episode.unattributedFrames },
+			{ "reasonMask", episode.reasonMask },
+			{ "epochCoherent", episode.epochCoherent },
+		});
+	}
+	const bool presentationStretchTraceComplete =
+		session.presentationStretchEpisodeTraceOverflow == 0 &&
+		session.presentationStretchEpisodeTrace.size() == session.presentationStretchCompletedEpisodes &&
+		tracedPresentationStretchFrames == session.presentationStretchCompletedFrames &&
+		presentationStretchEpochsCoherent;
 	json presentationStretchCompletedMilliseconds = nullptr;
 	json presentationStretchMeanFrames = nullptr;
 	json presentationStretchMeanMilliseconds = nullptr;
@@ -54472,7 +54885,13 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 											{ "meanCompletedFrames", presentationStretchMeanFrames },
 											{ "maximumCompletedFrames", session.maximumPresentationStretchFrames },
 											{ "maximumObservedFrames", maximumObservedPresentationStretchFrames },
-											{ "maximumAcceptedFrames", VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames },
+											{ "maximumAcceptedFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold },
+											{ "diagnosticThresholdFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold },
+											{ "episodeTrace", presentationStretchEpisodeTrace },
+											{ "episodeTraceOverflow", session.presentationStretchEpisodeTraceOverflow },
+											{ "tracedFrames", tracedPresentationStretchFrames },
+											{ "unattributedFrames", unattributedPresentationStretchFrames },
+											{ "traceComplete", presentationStretchTraceComplete },
 											{ "episodeActive", session.presentationStretchEpisodeActive },
 											{ "activeFrames", session.presentationStretchActiveFrames },
 											{ "activeAtStop", session.presentationStretchEpisodeActiveAtStop },
@@ -54632,12 +55051,22 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	json gates = json::array();
 	json failureReasons = json::array();
 	bool accepted = true;
-	auto addGate = [&](const char* a_name, bool a_passed, const json& a_observed, const json& a_limit) {
-		gates.push_back({ { "name", a_name },
+	enum class GateClassification
+	{
+		Health,
+		DiagnosticOnly
+	};
+	auto addGate = [&](const char* a_name, bool a_passed, const json& a_observed,
+					   const json& a_limit,
+					   GateClassification a_classification = GateClassification::Health) {
+		json gate = { { "name", a_name },
 			{ "passed", a_passed },
 			{ "observed", a_observed },
-			{ "limit", a_limit } });
-		if (!a_passed) {
+			{ "limit", a_limit } };
+		if (a_classification == GateClassification::DiagnosticOnly)
+			gate["classification"] = "diagnostic_only";
+		gates.push_back(std::move(gate));
+		if (!a_passed && a_classification == GateClassification::Health) {
 			accepted = false;
 			failureReasons.push_back(a_name);
 		}
@@ -54682,6 +55111,17 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 			{ "activeAtStop", session.presentationStretchEpisodeActiveAtStop } },
 		"every allowed episode completed or explicitly active while capture is running");
 	addGate(
+		"presentation_stretch_attribution",
+		presentationStretchTraceComplete && unattributedPresentationStretchFrames == 0,
+		{ { "completedEpisodes", session.presentationStretchCompletedEpisodes },
+			{ "traceEntries", session.presentationStretchEpisodeTrace.size() },
+			{ "completedFrames", session.presentationStretchCompletedFrames },
+			{ "tracedFrames", tracedPresentationStretchFrames },
+			{ "unattributedFrames", unattributedPresentationStretchFrames },
+			{ "traceOverflow", session.presentationStretchEpisodeTraceOverflow },
+			{ "epochCoherent", presentationStretchEpochsCoherent } },
+		{ { "traceComplete", true }, { "unattributedFrames", 0 } });
+	addGate(
 		"presentation_stretch_complete_stereo_at_stop",
 		!session.presentationStretchIncompleteStereoCycleAtStop,
 		{ { "incompleteStereoCycleAtStop", session.presentationStretchIncompleteStereoCycleAtStop },
@@ -54698,12 +55138,13 @@ json Upscaling::BuildVRRenderScaleIterationRecord() const
 	addGate(
 		"presentation_stretch_frame_bound",
 		maximumObservedPresentationStretchFrames <=
-			VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames,
+			VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold,
 		{ { "maximumCompletedFrames", session.maximumPresentationStretchFrames },
 			{ "activeFrames", session.presentationStretchActiveFrames },
 			{ "activeFramesAtStop", session.presentationStretchActiveFramesAtStop },
 			{ "maximumObservedFrames", maximumObservedPresentationStretchFrames } },
-		{ { "maximumFrames", VRPresentationStretchTelemetryPolicy::kMaximumAcceptedPresentationStretchFrames } });
+		{ { "maximumFrames", VRPresentationStretchTelemetryPolicy::kPresentationStretchDiagnosticFrameThreshold } },
+		GateClassification::DiagnosticOnly);
 	addGate(
 		"presentation_stretch_timing",
 		presentationStretchTimingAcceptable,
@@ -54864,13 +55305,14 @@ bool Upscaling::WriteVRRenderScaleIterationRecord() const
 				renameError.message());
 			return false;
 		}
-		logger::info("[VRRenderScale][Iteration] Wrote machine-readable iteration record to {}.", path.string());
+		logger::debug("[VRRenderScale][Iteration] Wrote machine-readable iteration record to {}.", path.string());
 		return true;
 	} catch (const std::exception& e) {
 		logger::error("[VRRenderScale][Iteration] Failed to write iteration record: {}", e.what());
 		return false;
 	}
 }
+#endif
 
 const char* Upscaling::GetVRRenderScaleTransitionStateName(VRRenderScaleTransitionState a_state)
 {
@@ -55316,7 +55758,9 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 		metrics.peakPressure = vrRenderScaleTransitionController.memory.pressure;
 		metrics.peakUsageBytes = vrRenderScaleTransitionController.memory.currentUsageBytes;
 		metrics.peakSystemCommitBytes = vrRenderScaleTransitionController.memory.systemCommitBytes;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		metrics.peakProcessPrivateUsageBytes = vrRenderScaleTransitionController.memory.processPrivateUsageBytes;
+#endif
 		metrics.peakRetiredSets = vrRenderScaleTransitionController.retirement.pendingSets;
 		revision = ++vrRenderScaleTransitionController.revision;
 	}
@@ -55337,8 +55781,8 @@ bool Upscaling::RecordVRRenderScaleTransitionRequested(
 			BoolText(profile.active),
 			frame);
 	}
-	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Request);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Request);
 	RecordVRRenderScalePreparationRequestQueued(a_request);
 #endif
 	return true;
@@ -55406,7 +55850,9 @@ void Upscaling::BindVRRenderScaleRelatchEpoch(
 			metrics.peakPressure = vrRenderScaleTransitionController.memory.pressure;
 			metrics.peakUsageBytes = vrRenderScaleTransitionController.memory.currentUsageBytes;
 			metrics.peakSystemCommitBytes = vrRenderScaleTransitionController.memory.systemCommitBytes;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			metrics.peakProcessPrivateUsageBytes = vrRenderScaleTransitionController.memory.processPrivateUsageBytes;
+#endif
 			metrics.peakRetiredSets = vrRenderScaleTransitionController.retirement.pendingSets;
 		}
 	}
@@ -55799,9 +56245,11 @@ bool Upscaling::PublishVRRenderScaleTransitionApplied(
 	}
 	if (a_origin != VRUpscalingTransitionOrigin::PostLoadSync)
 		SampleVRRenderScaleMemory(true, "contract applied");
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Applied);
 	if (completedSynchronously)
 		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Stable);
+#endif
 	return true;
 }
 
@@ -55868,7 +56316,9 @@ bool Upscaling::PublishVRRenderScaleTransitionStable(
 			stableProfile.contractGeneration,
 			frame);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Stable);
+#endif
 	if (nextState == VRRenderScaleTransitionState::Active) {
 		if (a_compositorHoldLockOwned) {
 			const std::scoped_lock physicalLock(
@@ -56154,12 +56604,13 @@ void Upscaling::RecordVRVendorRuntimeLifecycle(UpscaleMethod a_upscaleMethod, VR
 		RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::Backend);
 }
 
-void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame)
+void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked([[maybe_unused]] bool a_completed, [[maybe_unused]] bool a_superseded, [[maybe_unused]] uint32_t a_frame)
 {
 	auto& metrics = vrRenderScaleTransitionController.metrics;
 	if (!metrics.current.valid)
 		return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	metrics.current.completed = a_completed;
 	metrics.current.superseded = a_superseded;
 	const uint32_t startFrame = metrics.current.requestedFrame;
@@ -56167,6 +56618,7 @@ void Upscaling::ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bo
 	metrics.recent[metrics.nextIndex] = metrics.current;
 	metrics.nextIndex = (metrics.nextIndex + 1u) % static_cast<uint32_t>(metrics.recent.size());
 	metrics.count = std::min<uint32_t>(metrics.count + 1u, static_cast<uint32_t>(metrics.recent.size()));
+#endif
 	metrics.current = {};
 }
 
@@ -56210,12 +56662,11 @@ void Upscaling::RecordVRRenderScaleTransitionRetry(VRRenderScaleRetryKind a_kind
 		++vrRenderScaleTransitionController.revision;
 		recorded = true;
 	}
-	if (recorded)
-		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Retry, a_kind
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			, VRRenderScaleFailureKind::None, a_reason, a_source
+	if (recorded)
+		RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Retry, a_kind,
+			VRRenderScaleFailureKind::None, a_reason, a_source);
 #endif
-		);
 }
 
 void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind)
@@ -56244,9 +56695,12 @@ void Upscaling::RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_
 			++vrRenderScaleTransitionController.revision;
 		}
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType::Failure, VRRenderScaleRetryKind::Other, a_kind);
+#endif
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 void Upscaling::RecordVRRenderScaleCoalescedDuplicate()
 {
 	std::scoped_lock lock(vrRenderScaleStressSessionMutex);
@@ -56258,17 +56712,12 @@ void Upscaling::RecordVRRenderScaleCoalescedDuplicate()
 	}
 }
 
-void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind, VRRenderScaleFailureKind a_failureKind
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	, const char* a_reason, std::source_location a_source
-#endif
-)
+void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind, VRRenderScaleFailureKind a_failureKind,
+	const char* a_reason, std::source_location a_source)
 {
 	uint64_t activeSessionID = 0;
 	{
-		// Normal gameplay records transition metrics even when DevBench is not
-		// capturing. Avoid the additional controller/backend snapshots unless a
-		// real stress session currently owns them.
+		// Avoid controller/backend snapshots unless an active capture owns them.
 		std::scoped_lock lock(vrRenderScaleStressSessionMutex);
 		if (!vrRenderScaleStressSession.active)
 			return;
@@ -56401,6 +56850,7 @@ void Upscaling::RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_ty
 		++vrRenderScaleStressSession.overwrittenEvents;
 	}
 }
+#endif
 
 void Upscaling::MarkVRUpscalingTransitionQueued(VRUpscalingTransitionOrigin a_origin)
 {
@@ -58059,6 +58509,7 @@ void Upscaling::Upscale()
 	// Continue evaluating RC173's existing physical contract while a replacement
 	// waits; only fall back when no proven provider can service this frame.
 	if (vendorLifecycleMutationDeferred &&
+		!IsFoveatedMaskVisualizationEnabled(upscaleMethod) &&
 		!CanDispatchExistingVRVendorEvaluation(upscaleMethod)) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		recordMainPassStage(VRMainPassDispatchStage::LifecycleDeferred);
@@ -58083,6 +58534,26 @@ void Upscaling::Upscale()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		recordMainPassStage(VRMainPassDispatchStage::SubmitStageOwned);
 #endif
+		return;
+	}
+
+	if (IsFoveatedMaskVisualizationEnabled(upscaleMethod)) {
+		RequestHistoryReset();
+		uint32_t inputWidth = 0, inputHeight = 0, outputWidth = 0, outputHeight = 0;
+		if (!GetRuntimeFoveatedRegionDimensions(inputWidth, inputHeight, outputWidth, outputHeight))
+			return;
+		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+		try {
+			if (!EnsureVRPresentationTextures(inputWidth, inputHeight, outputWidth, outputHeight, main.texture, !vendorLifecycleMutationDeferred))
+				return;
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			if (DispatchFoveatedMaskVisualization(0) && DispatchFoveatedMaskVisualization(1))
+				FinalizePerEyeOutputs(main.texture);
+		} catch (const std::exception& e) {
+			static bool loggedMaskPreviewFailure = false;
+			LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping the original frame", e);
+			MarkSubmitStageDeviceLostIfNeeded(e, "main-pass FOV mask preview");
+		}
 		return;
 	}
 

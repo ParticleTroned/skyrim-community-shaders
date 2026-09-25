@@ -531,7 +531,7 @@ struct DisplayTimingStats
 
 enum class DisplayTimingContribution
 {
-	FullScope,
+	Self,
 	Outermost
 };
 
@@ -539,7 +539,7 @@ static uint32_t CollectDisplayTimingSamples(
 	const Profiler::TimerResult& result,
 	bool cpuMode,
 	std::array<float, kDisplayedRollingFrameCount>& samples,
-	DisplayTimingContribution contribution = DisplayTimingContribution::FullScope)
+	DisplayTimingContribution contribution = DisplayTimingContribution::Self)
 {
 	samples.fill(0.0f);
 
@@ -936,7 +936,7 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 		ImGui::TableNextColumn();
 		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Total");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Sum of outermost scopes in each matching timer namespace per frame. Nested rows are not counted again.");
+			ImGui::TextWrapped("Inclusive cost of each matching timer namespace. Individual rows show self time with profiled descendants excluded.");
 		}
 		ImGui::TableNextColumn();
 		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
@@ -1053,6 +1053,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	if (showModeToggle) {
 		RenderTimingModeToggle();
 		cpuMode = (timingMode == TimingMode::CPU);
+		ImGui::TextDisabled("Self time (profiled descendants excluded)");
 		ImGui::Separator();
 	}
 
@@ -1306,7 +1307,8 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 			const uint32_t sampleCount =
 				CollectDisplayTimingSamples(result, false, samples, DisplayTimingContribution::Outermost);
 			bucket.gpuSamples.Add(samples, sampleCount);
-			gpuTotalSamples.Add(samples, sampleCount);
+			const auto selfCount = CollectDisplayTimingSamples(result, false, samples);
+			gpuTotalSamples.Add(samples, selfCount);
 		}
 
 		if (HasLiveTimingMode(result, true)) {
@@ -1314,7 +1316,8 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 			const uint32_t sampleCount =
 				CollectDisplayTimingSamples(result, true, samples, DisplayTimingContribution::Outermost);
 			bucket.cpuSamples.Add(samples, sampleCount);
-			cpuTotalSamples.Add(samples, sampleCount);
+			const auto selfCount = CollectDisplayTimingSamples(result, true, samples);
+			cpuTotalSamples.Add(samples, selfCount);
 		}
 	}
 

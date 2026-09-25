@@ -3,13 +3,37 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace VRPresentationStretchTelemetryPolicy
 {
 	inline constexpr std::uint64_t kCompositorCycleTokenMaximum =
 		std::numeric_limits<std::uint64_t>::max() >> 1u;
-	inline constexpr std::uint64_t kMaximumAcceptedPresentationStretchFrames = 2;
+	// Keep the legacy comparison for diagnostics without gating capture health.
+	inline constexpr std::uint64_t kPresentationStretchDiagnosticFrameThreshold = 2;
 	inline constexpr std::uint8_t kCompleteStereoEyeMask = 0x3;
+	inline constexpr std::size_t kMaximumEpisodeTraceEntries = 128;
+
+	enum class StretchReason : std::uint8_t
+	{
+		Unattributed,
+		VendorCooldown,
+		DeferredRetry,
+		LoadingOrMenu
+	};
+
+	struct EpisodeTrace
+	{
+		std::uint32_t startFrame = 0;
+		std::uint32_t endFrame = 0;
+		std::uint64_t frames = 0;
+		std::uint64_t transitionEpoch = 0;
+		std::uint64_t startQpc = 0;
+		std::uint64_t endQpc = 0;
+		std::uint64_t unattributedFrames = 0;
+		std::uint32_t reasonMask = 0;
+		bool epochCoherent = true;
+	};
 
 	enum class ObservationKind : std::uint8_t
 	{
@@ -27,6 +51,8 @@ namespace VRPresentationStretchTelemetryPolicy
 		std::uint64_t compositorCycleToken = 0;
 		// QueryPerformanceCounter ticks. Zero means timing was unavailable.
 		std::uint64_t qpc = 0;
+		std::uint64_t transitionEpoch = 0;
+		StretchReason stretchReason = StretchReason::Unattributed;
 	};
 
 	struct EpisodeMetrics
@@ -46,6 +72,11 @@ namespace VRPresentationStretchTelemetryPolicy
 		bool activeQpcTimingValid = false;
 		std::uint64_t activeLastCycleToken = 0;
 		std::uint32_t activeLastFrame = 0;
+		std::uint32_t activeStartFrame = 0;
+		std::uint64_t activeTransitionEpoch = 0;
+		std::uint64_t activeUnattributedFrames = 0;
+		std::uint32_t activeReasonMask = 0;
+		bool activeEpochCoherent = true;
 	};
 
 	struct PendingCycle
@@ -58,6 +89,9 @@ namespace VRPresentationStretchTelemetryPolicy
 		std::uint64_t firstQpc = 0;
 		std::uint64_t lastObservedQpc = 0;
 		bool qpcTimingValid = false;
+		std::uint64_t transitionEpoch = 0;
+		StretchReason stretchReason = StretchReason::Unattributed;
+		bool metadataCoherent = true;
 	};
 
 	struct State
@@ -66,6 +100,9 @@ namespace VRPresentationStretchTelemetryPolicy
 		PendingCycle pending{};
 		std::uint64_t lastObservedQpc = 0;
 		std::uint64_t lastFinalizedQpc = 0;
+		bool captureEpisodeTrace = false;
+		std::uint64_t episodeTraceOverflow = 0;
+		std::vector<EpisodeTrace> completedEpisodeTrace{};
 	};
 
 	struct Snapshot
@@ -174,6 +211,34 @@ namespace VRPresentationStretchTelemetryPolicy
 		a_metrics.activeQpcTimingValid = false;
 		a_metrics.activeLastCycleToken = 0;
 		a_metrics.activeLastFrame = 0;
+		a_metrics.activeStartFrame = 0;
+		a_metrics.activeTransitionEpoch = 0;
+		a_metrics.activeUnattributedFrames = 0;
+		a_metrics.activeReasonMask = 0;
+		a_metrics.activeEpochCoherent = true;
+	}
+
+	constexpr void CompleteAndRecordEpisode(State& a_state, std::uint64_t a_endQpc) noexcept
+	{
+		const auto& metrics = a_state.metrics;
+		if (metrics.active && a_state.captureEpisodeTrace) {
+			if (a_state.completedEpisodeTrace.size() < kMaximumEpisodeTraceEntries) {
+				a_state.completedEpisodeTrace.push_back({
+					.startFrame = metrics.activeStartFrame,
+					.endFrame = metrics.activeLastFrame,
+					.frames = metrics.activeFrames,
+					.transitionEpoch = metrics.activeTransitionEpoch,
+					.startQpc = metrics.activeStartQpc,
+					.endQpc = a_endQpc,
+					.unattributedFrames = metrics.activeUnattributedFrames,
+					.reasonMask = metrics.activeReasonMask,
+					.epochCoherent = metrics.activeEpochCoherent,
+				});
+			} else {
+				SaturatingIncrement(a_state.episodeTraceOverflow);
+			}
+		}
+		CompleteActiveEpisode(a_state.metrics, a_endQpc);
 	}
 
 	constexpr void StartActiveEpisode(
@@ -189,6 +254,16 @@ namespace VRPresentationStretchTelemetryPolicy
 		a_metrics.activeQpcTimingValid = a_qpcTimingValid;
 		a_metrics.activeLastCycleToken = a_cycle.compositorCycleToken;
 		a_metrics.activeLastFrame = a_cycle.frame;
+		a_metrics.activeStartFrame = a_cycle.frame;
+		a_metrics.activeTransitionEpoch = a_cycle.transitionEpoch;
+		a_metrics.activeUnattributedFrames =
+			a_cycle.stretchReason == StretchReason::Unattributed ||
+					!a_cycle.metadataCoherent ?
+				1u :
+				0u;
+		a_metrics.activeReasonMask =
+			1u << static_cast<std::uint8_t>(a_cycle.stretchReason);
+		a_metrics.activeEpochCoherent = a_cycle.metadataCoherent;
 	}
 
 	constexpr void FinalizePendingCycle(
@@ -211,7 +286,7 @@ namespace VRPresentationStretchTelemetryPolicy
 			cycle.lastObservedQpc != 0 &&
 			cycle.firstQpc >= a_state.lastFinalizedQpc;
 		if (!allowedCycle) {
-			CompleteActiveEpisode(metrics, cycle.firstQpc);
+			CompleteAndRecordEpisode(a_state, cycle.firstQpc);
 			if (cycleQpcTimingValid)
 				a_state.lastFinalizedQpc = cycle.lastObservedQpc;
 			a_state.pending = {};
@@ -228,7 +303,7 @@ namespace VRPresentationStretchTelemetryPolicy
 		if (!continuesActiveEpisode) {
 			// A cycle gap ends at the last accepted observation so missing wall
 			// time is never attributed to the preceding episode.
-			CompleteActiveEpisode(metrics, metrics.activeLastAcceptedQpc);
+			CompleteAndRecordEpisode(a_state, metrics.activeLastAcceptedQpc);
 			StartActiveEpisode(metrics, cycle, cycleQpcTimingValid);
 		} else {
 			metrics.activeFrames = SaturatingAdd(metrics.activeFrames, 1u);
@@ -239,6 +314,14 @@ namespace VRPresentationStretchTelemetryPolicy
 				std::max(metrics.activeLastAcceptedQpc, cycle.lastObservedQpc);
 			metrics.activeLastCycleToken = cycle.compositorCycleToken;
 			metrics.activeLastFrame = cycle.frame;
+			metrics.activeReasonMask |=
+				1u << static_cast<std::uint8_t>(cycle.stretchReason);
+			metrics.activeEpochCoherent =
+				metrics.activeEpochCoherent && cycle.metadataCoherent &&
+				metrics.activeTransitionEpoch == cycle.transitionEpoch;
+			if (cycle.stretchReason == StretchReason::Unattributed ||
+				!cycle.metadataCoherent)
+				SaturatingIncrement(metrics.activeUnattributedFrames);
 		}
 		if (cycleQpcTimingValid)
 			a_state.lastFinalizedQpc = cycle.lastObservedQpc;
@@ -265,7 +348,13 @@ namespace VRPresentationStretchTelemetryPolicy
 			a_state.pending.firstQpc = a_observation.qpc;
 			a_state.pending.lastObservedQpc = a_observation.qpc;
 			a_state.pending.qpcTimingValid = qpcTimingValid;
+			a_state.pending.transitionEpoch = a_observation.transitionEpoch;
+			a_state.pending.stretchReason = a_observation.stretchReason;
 		} else {
+			a_state.pending.metadataCoherent =
+				a_state.pending.metadataCoherent &&
+				a_state.pending.transitionEpoch == a_observation.transitionEpoch &&
+				a_state.pending.stretchReason == a_observation.stretchReason;
 			a_state.pending.qpcTimingValid =
 				a_state.pending.qpcTimingValid && qpcTimingValid &&
 				a_observation.qpc >= a_state.pending.lastObservedQpc;
@@ -283,7 +372,11 @@ namespace VRPresentationStretchTelemetryPolicy
 		const State& a_state,
 		std::uint64_t a_nowQpc) noexcept
 	{
-		State projected = a_state;
+		State projected{};
+		projected.metrics = a_state.metrics;
+		projected.pending = a_state.pending;
+		projected.lastObservedQpc = a_state.lastObservedQpc;
+		projected.lastFinalizedQpc = a_state.lastFinalizedQpc;
 		FinalizePendingCycle(projected);
 		const auto& metrics = projected.metrics;
 		Snapshot snapshot{
@@ -331,7 +424,7 @@ namespace VRPresentationStretchTelemetryPolicy
 			.incompleteStereoCycleAtStop = incompleteStereoCycle,
 			.incompleteStereoEyeMaskAtStop = incompleteStereoEyeMask,
 		};
-		CompleteActiveEpisode(a_state.metrics, a_nowQpc);
+		CompleteAndRecordEpisode(a_state, a_nowQpc);
 		// The incomplete cycle remains evidence only; it never contributes a frame.
 		a_state.pending = {};
 		result.snapshot = Inspect(a_state, a_nowQpc);

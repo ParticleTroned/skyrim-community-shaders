@@ -43,10 +43,12 @@ bool RCAS::ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputSRV, ID3D11
 		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness); });
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 const char* RCAS::GetMotionAdaptiveStatus() const noexcept
 {
 	return motionAdaptive.GetStatus();
 }
+#endif
 
 void RCAS::CreateComputeShader()
 {

@@ -255,11 +255,9 @@ void SettingsTabRenderer::RenderShadersTab()
 		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"When enabled, each shader is recompiled from source only if its .hlsl file "
-				"is newer than the cached .bin on disk. "
-				"Shaders whose source has not changed are loaded directly from the disk cache, "
-				"avoiding the full startup compilation cost. "
-				"Useful for iterative testing: change a shader file and only that shader is rebuilt. "
+				"Reuses disk entries whose shader source, includes, compiler defines, and "
+				"compatibility contracts match. Missing or outdated entries are compiled from source. "
+				"When disabled, disk reads are skipped and compiled shaders still update the cache. "
 				"Requires 'Enable Disk Cache' to be active.");
 		}
 

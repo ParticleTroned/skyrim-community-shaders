@@ -389,6 +389,23 @@ private:
 	uint64_t runtimeUpscalerProviderMatchedVersionId = 0;
 	std::string runtimeUpscalerProviderMatchedVersionName;
 
+	// Retaining the device prevents pointer reuse from validating a replacement adapter.
+	mutable std::mutex adapterDescMutex;
+	mutable winrt::com_ptr<ID3D11Device> adapterDescDevice;
+	mutable DXGI_ADAPTER_DESC cachedAdapterDesc{};
+	mutable Fsr4AdapterSupport cachedAdapterFsr4Support = Fsr4AdapterSupport::Unsupported;
+	mutable bool cachedAdapterDescValid = false;
+
+	struct RuntimeRegionDescriptions
+	{
+		D3D11_TEXTURE2D_DESC color{};
+		D3D11_TEXTURE2D_DESC depth{};
+		D3D11_TEXTURE2D_DESC motion{};
+		D3D11_TEXTURE2D_DESC reactive{};
+		D3D11_TEXTURE2D_DESC transparency{};
+		D3D11_TEXTURE2D_DESC output{};
+	};
+
 	struct RuntimeDispatchPlan
 	{
 		bool valid = false;
@@ -397,6 +414,7 @@ private:
 		bool runtimeFsr4Requested = false;
 		bool runtimeRequested = false;
 		bool vendorLifecycleMutationDeferred = false;
+		bool contextsCompatible = false;
 		bool selected = false;
 		uint32_t requestedVersion = 0;
 		uint32_t contextCount = 0;
@@ -406,6 +424,7 @@ private:
 		uint32_t fullDisplayHeight = 0;
 	};
 
+	bool TryGetCurrentAdapterDesc(DXGI_ADAPTER_DESC& a_outDesc, Fsr4AdapterSupport* a_outFsr4Support = nullptr) const;
 	bool CanUseRuntimeUpscalerPath();
 	RuntimeDispatchPlan ResolveRuntimeDispatchPlan();
 	void ArmRuntimeHostFallback(uint32_t a_contextCount);
@@ -422,8 +441,9 @@ private:
 	uint64_t devBenchSuccessfulDispatchSerial = 0;
 #endif
 	LifecycleResult EnsureRuntimeUpscalerInterop();
+	bool IsRuntimeUpscalerInteropReady() const;
 	LifecycleResult EnsureRuntimeCommandContexts();
-	LifecycleResult AcquireRuntimeCommandContext(RuntimeCommandContext*& a_commandContext, uint32_t a_requiredFreeContexts = 1);
+	LifecycleResult AcquireRuntimeCommandContext(RuntimeCommandContext*& a_commandContext, uint32_t a_requiredFreeContexts = 1, bool a_commandContextsReady = false);
 	void ResetRuntimeCommandContexts();
 	void ReleaseIdleRuntimeUpscalerInterop();
 	bool HasRuntimeUpscalerResources() const;

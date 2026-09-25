@@ -175,7 +175,7 @@ public:
 		uint WetnessDistanceFadeRangePacked = 0;
 		float RainContactWetnessScale = 1.75f;
 		float GrassWetnessPhase = 0.0f;
-		float GrassWetRoughness = 0.4f;
+		float GrassControlPadding = 0.0f;
 		float GrassWetDarkeningStrength = 0.0f;
 		uint PuddleMaskMode = 0;
 	};

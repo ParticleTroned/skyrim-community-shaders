@@ -1,8 +1,13 @@
 ﻿#pragma once
 
+#include <filesystem>
+#include <vector>
+
 class Flowmap
 {
 public:
+	/// A usable map owns a texture, shader view, and positive cell dimensions.
+	bool IsValid() const;
 	bool TryGetFlowmap(RE::NiPointer<RE::NiSourceTexture>& outFlowmapTex) const;
 	int32_t GetWidth() const { return width; }
 	int32_t GetHeight() const { return height; }
@@ -10,9 +15,9 @@ public:
 	float GetInverseHeight() const { return invHeight; }
 	int32_t GetOffsetX() const { return offsetX; }
 	int32_t GetOffsetY() const { return offsetY; }
-	void Reset();
-
+	/// Failed loads retain the previously validated map and its dimensions.
 	bool LoadOrGenerateFlowmap(bool useMips = true);
+	/// Load the exact generated file before replacing the active map.
 	bool RegenerateAndLoadFlowmap(bool useMips = true);
 
 private:
@@ -25,5 +30,7 @@ private:
 	int32_t offsetY = 0;
 
 	bool LoadFlowmap();
-	static bool GenerateFlowmap(bool useMips);
+	bool LoadFlowmap(const std::filesystem::path& path);
+	static bool FindFlowmaps(std::vector<std::filesystem::path>& paths);
+	static bool GenerateFlowmap(bool useMips, std::filesystem::path& generatedPath);
 };

@@ -33,7 +33,7 @@ def write_loose_cache(root: Path, entries: dict[str, tuple[str, bytes]]) -> None
         destination.write_bytes(bytecode)
         manifest_entries[relative] = contract
     (root / "Manifest.json").write_text(
-        json.dumps({"schemaVersion": 1, "entries": manifest_entries}),
+        json.dumps({"schemaVersion": 2, "entries": manifest_entries}),
         encoding="utf-8",
     )
 

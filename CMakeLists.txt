@@ -1409,12 +1409,22 @@ add_custom_command(
     OUTPUT ${CORE_PACKAGE}
     # The install step consumes the built DLL. Depend on the target itself so
     # a newly registered feature cannot be packaged with a stale core binary.
-    DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
+    DEPENDS
+        ${PROJECT_NAME}
+        ${CORE_SOURCES}
+        ${FFX_RUNTIME_FILES}
+        ${STREAMLINE_RUNTIME_FILES}
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE
     COMMAND
         ${CMAKE_COMMAND} -E copy_directory ${CORE_FEATURE_PATHS} ${FEATURE_PATH}
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
+        --component FidelityFXRuntime
+    COMMAND
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
+        --component StreamlineRuntime
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
@@ -1572,6 +1582,11 @@ endif()
 
 if(BUILD_CONTROLLER_TESTS)
     enable_testing()
+    get_property(
+        _targets_before_controller_tests
+        DIRECTORY
+        PROPERTY BUILDSYSTEM_TARGETS
+    )
 
     add_test(
         NAME ScreenshotApiContract
@@ -1586,6 +1601,13 @@ if(BUILD_CONTROLLER_TESTS)
             "${CMAKE_COMMAND}"
             "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
+    )
+    add_test(
+        NAME FeaturePresetCompatibilityContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/feature_preset_compatibility_contract_test.cmake"
     )
     add_test(
         NAME PerformanceTuningDevBenchContract
@@ -1604,7 +1626,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         MenuDevBenchPreflightContract PerformanceTuningDevBenchContract
-        VRMenuUiContract
+        VRMenuUiContract FeaturePresetCompatibilityContract
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
@@ -1630,6 +1652,14 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_test(
+        NAME BuildProvenance
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/build_provenance_test.py"
+    )
+    set_tests_properties(BuildProvenance PROPERTIES LABELS "ControllerTests")
+
     function(add_controller_test TARGET_NAME TEST_NAME SOURCE_FILE)
         add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${SOURCE_FILE})
         target_compile_features(${TARGET_NAME} PRIVATE cxx_std_23)
@@ -1640,6 +1670,149 @@ if(BUILD_CONTROLLER_TESTS)
         add_test(NAME ${TEST_NAME} COMMAND ${TARGET_NAME})
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
+
+    include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
+
+    set(_adaptive_balance_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-toggle"
+    )
+    set(_adaptive_balance_test_headers
+        "${_adaptive_balance_test_dir}/linear_lighting_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_adaptive_balance_test_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_adaptive_balance_toggle.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_adaptive_balance_test_dir}"
+        DEPENDS
+            src/Features/AdaptiveBrightness.cpp
+            src/Features/AdaptiveBrightness.h
+            src/Features/LinearLighting.h
+            src/Features/Bloom.cpp
+            src/Features/WaterAppearance.cpp
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        adaptive_balance_toggle_test
+        AdaptiveBalanceToggle
+        tests/adaptive_balance_toggle_test.cpp
+    )
+    target_sources(
+        adaptive_balance_toggle_test
+        PRIVATE ${_adaptive_balance_test_headers}
+    )
+    target_include_directories(
+        adaptive_balance_toggle_test
+        PRIVATE "${_adaptive_balance_test_dir}"
+    )
+    if(MSVC)
+        # Extracted adjustment arithmetic must use the DLL's Release FP model.
+        target_compile_options(
+            adaptive_balance_toggle_test
+            PRIVATE "$<$<CONFIG:Release>:/fp:fast>"
+        )
+    endif()
+
+    add_controller_test(
+        d3d_context_protection_test
+        D3DContextProtection
+        tests/d3d_context_protection_test.cpp
+    )
+    target_sources(
+        d3d_context_protection_test
+        PRIVATE src/Utils/D3DContextProtection.cpp
+    )
+    target_link_libraries(d3d_context_protection_test PRIVATE d3d11 dxgi user32)
+    set_tests_properties(D3DContextProtection PROPERTIES TIMEOUT 60)
+
+    include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_blur.cmake")
+
+    add_controller_test(
+        vr_loading_menu_clear_test
+        VRLoadingMenuClear
+        tests/vr_loading_menu_clear_test.cpp
+    )
+    set_tests_properties(VRLoadingMenuClear PROPERTIES TIMEOUT 30)
+
+    set(_scene_depth_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/scene-depth"
+    )
+    add_custom_command(
+        OUTPUT "${_scene_depth_test_dir}/scene_depth_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_scene_depth_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_scene_depth.cmake"
+        DEPENDS
+            src/Deferred.cpp
+            src/Utils/D3D.cpp
+            tests/extract_scene_depth.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        scene_depth_test_sources
+        DEPENDS "${_scene_depth_test_dir}/scene_depth_under_test.h"
+    )
+    foreach(_scene_depth_variant IN ITEMS plain devbench)
+        add_controller_test(
+            scene_depth_${_scene_depth_variant}_test
+            SceneDepth_${_scene_depth_variant}
+            tests/scene_depth_test.cpp
+        )
+        add_dependencies(
+            scene_depth_${_scene_depth_variant}_test
+            scene_depth_test_sources
+        )
+        target_include_directories(
+            scene_depth_${_scene_depth_variant}_test
+            PRIVATE "${_scene_depth_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        scene_depth_devbench_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+
+    add_controller_test(
+        scene_light_snapshot_test
+        SceneLightSnapshot
+        tests/scene_light_snapshot_test.cpp
+    )
+    set(_scene_light_snapshot_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/scene-light-snapshot"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_scene_light_snapshot_test_dir}/scene_light_snapshot_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_scene_light_snapshot_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_scene_light_snapshot.cmake"
+        DEPENDS
+            src/Features/LightLimitFix.cpp
+            tests/extract_scene_light_snapshot.cmake
+        VERBATIM
+    )
+    target_sources(
+        scene_light_snapshot_test
+        PRIVATE
+            "${_scene_light_snapshot_test_dir}/scene_light_snapshot_under_test.h"
+    )
+    target_include_directories(
+        scene_light_snapshot_test
+        PRIVATE
+            "${_scene_light_snapshot_test_dir}"
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/include"
+    )
+    set_tests_properties(SceneLightSnapshot PROPERTIES TIMEOUT 30)
 
     set(_vr_scene_guards_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-scene-guards"
@@ -1667,6 +1840,206 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
     set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
 
+    set(_native_lighting_material_guard_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/native-lighting-material-guard"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_guard_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_native_lighting_material_guard_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_native_lighting_material_guard.cmake"
+        DEPENDS
+            src/Hooks.cpp
+            src/TruePBR.cpp
+            src/TruePBR.h
+            src/ShaderCache.h
+            src/Utils/Game.h
+            src/Utils/D3D.h
+            extern/CommonLibSSE-NG/include/RE/B/BSLightingShader.h
+            tests/extract_native_lighting_material_guard.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        native_lighting_material_guard_test
+        NativeLightingMaterialGuard
+        tests/native_lighting_material_guard_test.cpp
+    )
+    target_sources(
+        native_lighting_material_guard_test
+        PRIVATE
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_guard_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+    )
+    target_include_directories(
+        native_lighting_material_guard_test
+        PRIVATE "${_native_lighting_material_guard_test_dir}"
+    )
+    set_tests_properties(NativeLightingMaterialGuard PROPERTIES TIMEOUT 30)
+
+    set(_ordinary_save_state_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-state"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_ordinary_save_state_test_dir}/ordinary_save_state_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ordinary_save_state_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ordinary_save_state.cmake"
+        DEPENDS
+            src/State.h
+            src/State.cpp
+            tests/extract_ordinary_save_state.cmake
+        VERBATIM
+    )
+    add_controller_test(ordinary_save_state_test OrdinarySaveState tests/ordinary_save_state_test.cpp)
+    target_sources(
+        ordinary_save_state_test
+        PRIVATE
+            "${_ordinary_save_state_test_dir}/ordinary_save_state_under_test.h"
+    )
+    target_include_directories(
+        ordinary_save_state_test
+        PRIVATE "${_ordinary_save_state_test_dir}"
+    )
+    add_controller_test(vr_ordinary_save_recovery_test VROrdinarySaveRecovery tests/vr_ordinary_save_recovery_test.cpp)
+
+    set(_ordinary_save_presentation_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-presentation"
+    )
+    set(_ordinary_save_presentation_headers
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_presentation_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_finish_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_submit_admission_under_test.h"
+        "${_ordinary_save_presentation_test_dir}/ordinary_save_preview_output_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_ordinary_save_presentation_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ordinary_save_presentation_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ordinary_save_presentation.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_ordinary_save_presentation.cmake
+        VERBATIM
+    )
+    add_controller_test(ordinary_save_presentation_test OrdinarySavePresentation tests/ordinary_save_presentation_test.cpp)
+    target_sources(
+        ordinary_save_presentation_test
+        PRIVATE ${_ordinary_save_presentation_headers}
+    )
+    target_include_directories(
+        ordinary_save_presentation_test
+        PRIVATE "${_ordinary_save_presentation_test_dir}"
+    )
+    set_tests_properties(
+        OrdinarySaveState
+        OrdinarySavePresentation
+        PROPERTIES TIMEOUT 30
+    )
+
+    set(_foveated_mask_visualization_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/foveated-mask-visualization-test"
+    )
+    set(_foveated_mask_visualization_header
+        "${_foveated_mask_visualization_test_dir}/foveated_mask_visualization_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_foveated_mask_visualization_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_foveated_mask_visualization_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_foveated_mask_visualization.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_foveated_mask_visualization.cmake
+        VERBATIM
+    )
+    foreach(_preview_variant IN ITEMS off on)
+        add_controller_test(foveated_mask_visualization_${_preview_variant}_test FoveatedMaskVisualization_${_preview_variant} tests/foveated_mask_visualization_test.cpp)
+        target_sources(
+            foveated_mask_visualization_${_preview_variant}_test
+            PRIVATE "${_foveated_mask_visualization_header}"
+        )
+        target_include_directories(
+            foveated_mask_visualization_${_preview_variant}_test
+            PRIVATE "${_foveated_mask_visualization_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        foveated_mask_visualization_on_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+
+    add_test(
+        NAME FoveatedMaskVisualizationIntegration
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/foveated_mask_visualization_source_test.py"
+    )
+    set_tests_properties(
+        FoveatedMaskVisualizationIntegration
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    set(_foveated_save_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/foveated-save-reuse-test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_foveated_save_reuse_test_dir}/foveated_save_reuse_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_foveated_save_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_foveated_save_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_foveated_save_reuse.cmake
+        VERBATIM
+    )
+    add_controller_test(foveated_save_reuse_test FoveatedSaveReuse tests/foveated_save_reuse_test.cpp)
+    target_sources(
+        foveated_save_reuse_test
+        PRIVATE
+            "${_foveated_save_reuse_test_dir}/foveated_save_reuse_under_test.h"
+    )
+    target_include_directories(
+        foveated_save_reuse_test
+        PRIVATE "${_foveated_save_reuse_test_dir}"
+    )
+
+    set(_fsr_save_reuse_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-save-reuse-test"
+    )
+    add_custom_command(
+        OUTPUT "${_fsr_save_reuse_test_dir}/fsr_save_reuse_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_fsr_save_reuse_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_fsr_save_reuse.cmake"
+        DEPENDS
+            src/Features/Upscaling/FidelityFX.cpp
+            tests/extract_fsr_save_reuse.cmake
+        VERBATIM
+    )
+    add_controller_test(fsr_save_reuse_test FSRSaveReuse tests/fsr_save_reuse_test.cpp)
+    target_sources(
+        fsr_save_reuse_test
+        PRIVATE "${_fsr_save_reuse_test_dir}/fsr_save_reuse_under_test.h"
+    )
+    target_include_directories(
+        fsr_save_reuse_test
+        PRIVATE "${_fsr_save_reuse_test_dir}"
+    )
+
     add_controller_test(
         pbr_material_registry_test
         PBRMaterialRegistry
@@ -1689,6 +2062,66 @@ if(BUILD_CONTROLLER_TESTS)
         tests/sharpener_bindings_test.cpp
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
+    set(_skylighting_slice_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/skylighting-slice"
+    )
+    set(_skylighting_slice_naming_header
+        "${_skylighting_slice_test_dir}/d3d_resource_naming.h"
+    )
+    add_custom_command(
+        OUTPUT "${_skylighting_slice_naming_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_skylighting_slice_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_d3d_resource_naming.cmake"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/Utils/D3D.cpp"
+            tests/extract_d3d_resource_naming.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        skylighting_probe_slice_test
+        SkylightingProbeSlice
+        tests/skylighting_probe_slice_test.cpp
+    )
+    target_sources(
+        skylighting_probe_slice_test
+        PRIVATE "${_skylighting_slice_naming_header}"
+    )
+    target_include_directories(
+        skylighting_probe_slice_test
+        PRIVATE "${_skylighting_slice_test_dir}"
+    )
+    target_link_libraries(
+        skylighting_probe_slice_test
+        PRIVATE d3d11.lib d3dcompiler.lib
+    )
+    set_tests_properties(
+        SkylightingProbeSlice
+        PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" TIMEOUT 30
+    )
+    set(_settings_test_launcher)
+    if(MSVC)
+        find_program(CSX_PWSH NAMES pwsh REQUIRED)
+        set(_settings_test_launcher
+            "${CSX_PWSH}"
+            -NoProfile
+            -File
+            "${PROJECT_SOURCE_DIR}/tools/run-msvc-command.ps1"
+        )
+    endif()
+    add_test(
+        NAME SkylightingSettings
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/skylighting_settings_test.py"
+    )
+    set_tests_properties(
+        SkylightingSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
     add_controller_test(
         motion_sharpening_runtime_compile_test
         MotionSharpeningRuntimeCompile
@@ -1861,7 +2294,9 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_include_directories(
         vr_relatch_native_boundary_test
-        PRIVATE "${_vr_relatch_native_test_dir}"
+        PRIVATE
+            "${_vr_relatch_native_test_dir}"
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
     )
     set_tests_properties(VRRelatchNativeBoundary PROPERTIES TIMEOUT 15)
     add_controller_test(
@@ -2003,6 +2438,11 @@ if(BUILD_CONTROLLER_TESTS)
         reflex_policy_test
         ReflexPolicy
         tests/reflex_policy_test.cpp
+    )
+    add_controller_test(
+        light_limit_fix_vr_hook_policy_test
+        LightLimitFixVRHookPolicy
+        tests/light_limit_fix_vr_hook_policy_test.cpp
     )
     add_controller_test(
         fsr_host_lifecycle_policy_test
@@ -2147,6 +2587,57 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
     )
     add_controller_test(
+        ocu_effect_foveation_policy_test
+        OCUEffectFoveationPolicy
+        tests/ocu_effect_foveation_policy_test.cpp
+    )
+    target_include_directories(
+        ocu_effect_foveation_policy_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    add_controller_test(
+        ocu_effect_foveation_client_test
+        OCUEffectFoveationClient
+        tests/ocu_effect_foveation_client_test.cpp
+    )
+    target_include_directories(
+        ocu_effect_foveation_client_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    set(_ocu_effect_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/ocu-effect")
+    set(_ocu_effect_test_headers
+        "${_ocu_effect_test_dir}/ocu_shader_batch_under_test.h"
+        "${_ocu_effect_test_dir}/ocu_setting_under_test.h"
+        "${_ocu_effect_test_dir}/ocu_devbench_under_test.h"
+        "${_ocu_effect_test_dir}/accepted_draw_publish_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_ocu_effect_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_ocu_effect_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_ocu_effect_integration.cmake"
+        DEPENDS
+            src/Features/ScreenSpaceGI.cpp
+            src/ProfilerDevBenchBridge.cpp
+            src/Api/AcceptedDrawService.cpp
+            tests/extract_ocu_effect_integration.cmake
+        VERBATIM
+    )
+    add_controller_test(ocu_effect_integration_test OCUEffectIntegration tests/ocu_effect_integration_test.cpp)
+    target_sources(
+        ocu_effect_integration_test
+        PRIVATE ${_ocu_effect_test_headers}
+    )
+    target_include_directories(
+        ocu_effect_integration_test
+        PRIVATE "${_ocu_effect_test_dir}"
+    )
+    target_link_libraries(
+        ocu_effect_integration_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
         overlay_policy_test
         OverlayPolicy
         tests/overlay_policy_test.cpp
@@ -2165,6 +2656,15 @@ if(BUILD_CONTROLLER_TESTS)
         shader_cache_provenance_test
         ShaderCacheProvenance
         tests/shader_cache_provenance_test.cpp
+    )
+    add_controller_test(
+        shader_compile_identity_test
+        ShaderCompileIdentity
+        tests/shader_compile_identity_test.cpp
+    )
+    target_link_libraries(
+        shader_compile_identity_test
+        PRIVATE xxHash::xxhash nlohmann_json::nlohmann_json d3dcompiler.lib
     )
     add_controller_test(
         shader_source_provenance_test
@@ -2210,6 +2710,10 @@ if(BUILD_CONTROLLER_TESTS)
         VRDepthCullingTelemetryPolicy
         tests/vr_depth_culling_telemetry_policy_test.cpp
     )
+    target_compile_definitions(
+        vr_depth_culling_telemetry_policy_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
     add_controller_test(
         vr_depth_culling_temporal_policy_test
         VRDepthCullingTemporalPolicy
@@ -2240,6 +2744,81 @@ if(BUILD_CONTROLLER_TESTS)
         water_appearance_migration_test
         PRIVATE nlohmann_json::nlohmann_json
     )
+
+    set(_flowmap_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/unified-water-flowmap"
+    )
+    set(_flowmap_test_header
+        "${_flowmap_test_dir}/unified_water_flowmap_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_flowmap_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_flowmap_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_unified_water_flowmap.cmake"
+        DEPENDS
+            src/Features/UnifiedWater/Flowmap.cpp
+            src/Features/UnifiedWater.cpp
+            src/Hooks.cpp
+            tests/extract_unified_water_flowmap.cmake
+        VERBATIM
+    )
+    add_controller_test(unified_water_flowmap_test UnifiedWaterFlowmap tests/unified_water_flowmap_test.cpp)
+    target_sources(unified_water_flowmap_test PRIVATE "${_flowmap_test_header}")
+    target_include_directories(
+        unified_water_flowmap_test
+        PRIVATE "${_flowmap_test_dir}"
+    )
+    add_executable(
+        accepted_draw_registry_test
+        EXCLUDE_FROM_ALL
+        tests/accepted_draw_registry_test.cpp
+        src/Api/AcceptedDrawRegistry.cpp
+    )
+    target_compile_features(accepted_draw_registry_test PRIVATE cxx_std_23)
+    target_include_directories(
+        accepted_draw_registry_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/include"
+    )
+    add_test(NAME AcceptedDrawRegistry COMMAND accepted_draw_registry_test)
+    set_tests_properties(
+        AcceptedDrawRegistry
+        PROPERTIES LABELS "ControllerTests" TIMEOUT 30
+    )
+    add_controller_test(
+        accepted_draw_service_test
+        AcceptedDrawService
+        tests/accepted_draw_service_test.cpp
+    )
+    target_sources(
+        accepted_draw_service_test
+        PRIVATE src/Api/AcceptedDrawRegistry.cpp ${_ocu_effect_test_headers}
+    )
+    target_include_directories(
+        accepted_draw_service_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${_ocu_effect_test_dir}"
+    )
+    set_tests_properties(AcceptedDrawService PROPERTIES TIMEOUT 30)
+    add_executable(
+        preset_compatibility_test
+        EXCLUDE_FROM_ALL
+        tests/preset_compatibility_test.cpp
+        src/PresetCompatibility.cpp
+    )
+    target_compile_features(preset_compatibility_test PRIVATE cxx_std_23)
+    target_include_directories(
+        preset_compatibility_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(preset_compatibility_test PRIVATE nlohmann_json::nlohmann_json)
+    if(MSVC)
+        target_compile_options(preset_compatibility_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(preset_compatibility_test PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME PresetCompatibility COMMAND preset_compatibility_test "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(PresetCompatibility PROPERTIES LABELS "ControllerTests")
 
     add_executable(
         api_runtime_thread_affinity_test
@@ -2393,6 +2972,8 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    include(tests/screenshot_settings.cmake)
+
     set(_screenshot_dispatch_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-dispatch"
     )
@@ -2427,6 +3008,39 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_test(NAME ScreenshotDispatch COMMAND screenshot_dispatch_test)
     set_tests_properties(ScreenshotDispatch PROPERTIES LABELS "ControllerTests")
+
+    set(_skylighting_lifecycle_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/skylighting-lifecycle"
+    )
+    set(_skylighting_lifecycle_headers
+        "${_skylighting_lifecycle_test_dir}/skylighting_buffer_under_test.h"
+        "${_skylighting_lifecycle_test_dir}/skylighting_lifecycle_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_skylighting_lifecycle_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_skylighting_lifecycle_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_skylighting_lifecycle.cmake"
+        DEPENDS
+            src/Features/Skylighting.cpp
+            src/Features/Skylighting.h
+            tests/extract_skylighting_lifecycle.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        skylighting_lifecycle_test
+        SkylightingLifecycle
+        tests/skylighting_lifecycle_test.cpp
+    )
+    target_sources(
+        skylighting_lifecycle_test
+        PRIVATE ${_skylighting_lifecycle_headers}
+    )
+    target_include_directories(
+        skylighting_lifecycle_test
+        PRIVATE "${_skylighting_lifecycle_test_dir}"
+    )
 
     add_executable(
         api_upscaling_contract_test
@@ -2516,6 +3130,7 @@ if(BUILD_CONTROLLER_TESTS)
         CACHE_TEST_TARGET
         api_shader_compatibility_registry_test shader_cache_pack_test
         shader_source_provenance_test
+        shader_compile_identity_test
     )
         if(MSVC)
             target_compile_options(${CACHE_TEST_TARGET} PRIVATE /UNDEBUG)
@@ -2571,6 +3186,30 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_controller_test(
+        profiler_timing_test
+        ProfilerTiming
+        tests/profiler_timing_test.cpp
+    )
+    target_sources(profiler_timing_test PRIVATE src/Profiler.cpp)
+    target_compile_definitions(
+        profiler_timing_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(profiler_timing_test PRIVATE d3d11.lib runtimeobject.lib)
+
+    include(tests/profiler_capture.cmake)
+
+    add_controller_test(
+        ab_test_aggregator_test
+        ABTestAggregator
+        tests/ab_test_aggregator_test.cpp
+    )
+    target_sources(
+        ab_test_aggregator_test
+        PRIVATE src/Features/PerformanceOverlay/ABTesting/ABTestAggregator.cpp
+    )
+
     add_executable(
         api_editor_contract_test
         EXCLUDE_FROM_ALL
@@ -2587,85 +3226,26 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(NAME ApiFeatureContract COMMAND api_feature_contract_test)
     set_tests_properties(ApiFeatureContract PROPERTIES LABELS "ControllerTests")
 
-    add_custom_target(
-        controller_tests
-        DEPENDS
-            vr_scene_guards_test
-            pbr_material_registry_test
-            perf_mode_restart_state_test
-            motion_sharpening_policy_test
-            sharpener_bindings_test
-            motion_sharpening_settings_test
-            vr_vendor_relatch_policy_test
-            vr_relatch_drain_policy_test
-            vr_relatch_drain_controller_test
-            vr_relatch_release_policy_test
-            vr_relatch_promotion_on_test
-            vr_relatch_promotion_off_test
-            vr_relatch_native_boundary_test
-            vr_render_scale_frame_boundary_policy_test
-            vr_render_scale_authority_policy_test
-            vr_render_scale_mode_policy_test
-            upscaling_measurement_restore_test
-            upscaling_provider_selection_policy_test
-            vr_render_scale_qualification_policy_test
-            vr_render_scale_replacement_telemetry_policy_test
-            streamline_frame_token_publication_test
-            vr_submit_temporal_snapshot_test
-            vr_submit_color_contract_test
-            vr_submit_stereo_batch_test
-            main_thread_dispatch_policy_test
-            vr_render_scale_preparation_policy_test
-            vr_presentation_stretch_telemetry_policy_test
-            reflex_policy_test
-            fsr_host_lifecycle_policy_test
-            fsr_runtime_lifecycle_policy_test
-            fsr_shared_guides_policy_test
-            fsr_shared_guide_interop_test
-            fsr_temporal_tuning_policy_test
-            fsr_temporal_tuning_serialization_test
-            fsr_temporal_tuning_provider_test
-            fsr_eye_dispatch_test
-            vr_submit_input_freshness_policy_test
-            vr_submit_input_freshness_composition_test
-            overlay_policy_test
-            performance_tuning_statistics_test
-            shader_cache_disable_policy_test
-            shader_cache_enable_policy_test
-            shader_cache_provenance_test
-            shader_source_provenance_test
-            cache_invalidation_test
-            shader_compilation_scheduling_policy_test
-            volumetric_lighting_tuning_policy_test
-            vr_depth_culling_cache_refresh_policy_test
-            vr_depth_culling_enable_policy_test
-            vr_depth_culling_telemetry_policy_test
-            vr_depth_culling_temporal_policy_test
-            vr_wand_interaction_policy_test
-            vr_wand_surface_geometry_test
-            vr_menu_positioning_policy_test
-            menu_devbench_preflight_policy_test
-            water_appearance_migration_test
-            generation_claim_test
-            api_runtime_thread_affinity_test
-            api_service_foundation_test
-            api_service_registry_test
-			api_screenshot_contract_test
-			main_thread_dispatch_state_test
-            devbench_main_thread_dispatch_test
-			screenshot_api_policy_test
-            screenshot_manifest_snapshot_test
-            screenshot_capture_present_test
-            screenshot_dispatch_test
-            api_upscaling_contract_test
-            api_upscaling_service_policy_test
-            api_shader_service_policy_test
-            api_shader_compatibility_registry_test
-            shader_cache_pack_test
-            api_weather_service_policy_test
-            api_profiler_contract_test
-            api_editor_contract_test
-            api_feature_contract_test
+    # Derive the aggregate from this block so new test executables cannot be omitted.
+    get_property(_controller_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    list(REMOVE_ITEM _controller_targets ${_targets_before_controller_tests})
+    add_custom_target(controller_tests)
+    foreach(_target IN LISTS _controller_targets)
+        get_target_property(_type ${_target} TYPE)
+        if(_type STREQUAL "EXECUTABLE")
+            add_dependencies(controller_tests ${_target})
+        endif()
+    endforeach()
+
+    # Tests own their scratch files; inherited user temp paths may be inaccessible.
+    set(_controller_temp "${CMAKE_BINARY_DIR}/test-temp")
+    file(MAKE_DIRECTORY "${_controller_temp}")
+    get_property(_controller_tests DIRECTORY PROPERTY TESTS)
+    set_tests_properties(
+        ${_controller_tests}
+        PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "TEMP=set:${_controller_temp};TMP=set:${_controller_temp};TMPDIR=set:${_controller_temp}"
     )
 endif()
 

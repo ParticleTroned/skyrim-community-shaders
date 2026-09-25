@@ -1,20 +1,22 @@
 #include "VRDepthCullingTemporal.h"
 
-#include "VRDepthCullingTelemetryPolicy.h"
 #include "VRDepthCullingTemporalPolicy.h"
 
 #include "RE/N/NiCamera.h"
 #include "RE/N/NiPoint3.h"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <array>
+#	include <chrono>
+#endif
 
 namespace VRDepthCullingTemporal
 {
@@ -47,6 +49,7 @@ namespace VRDepthCullingTemporal
 		std::atomic_uint64_t g_producerPoseEpoch{ 0 };
 		std::atomic<Mode> g_mode{ Mode::Balanced };
 		std::atomic_uint64_t g_policyEpoch{ 2 };
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		VRDepthCullingTelemetryPolicy::WriterGate g_telemetryGate;
 		std::atomic_uint64_t g_envelopeMisses{ 0 };
 		std::atomic_uint64_t g_recoveryAttempts{ 0 };
@@ -122,6 +125,7 @@ namespace VRDepthCullingTemporal
 			std::uint64_t eligible = 0;
 			std::uint64_t promoted = 0;
 		};
+#endif
 
 		bool IsBalancedRecoveryActive(std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch)
 		{
@@ -211,17 +215,23 @@ namespace VRDepthCullingTemporal
 				motion.translationSquared);
 			if (viewCoherent)
 				return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			RecoveryTelemetryScope telemetry;
 			if (telemetry.active)
 				ClearLastRecoveryStatus();
+#endif
 			MotionEnvelope envelope{};
 			if (!TryBuildMotionEnvelope(motion.rotationCosine, motion.translationSquared, envelope)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				if (telemetry.active)
 					++telemetry.invalidMotionEnvelopes;
+#endif
 				return;
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			if (telemetry.active)
 				telemetry.recoveryAttempts = 1;
+#endif
 
 			auto* bytes = static_cast<std::byte*>(a_culler);
 			const auto objectCount = ReadCullerField<std::uint32_t>(bytes, kObjectCountOffset);
@@ -235,17 +245,23 @@ namespace VRDepthCullingTemporal
 				return;
 
 			CandidateSet<kBalancedPromotionBudget> candidates;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			std::uint32_t eligibleCount = 0;
+#endif
 			for (std::uint32_t index = 0; index < objectCount; ++index) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				if (telemetry.active)
 					++telemetry.objectsInspected;
+#endif
 				if (results[index] != 0)
 					continue;
 
 				BoundingSphere sphere{};
 				if (!TryBuildBoundingSphere(transforms[index], sphere)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					if (telemetry.active)
 						++telemetry.invalidTransforms;
+#endif
 					continue;
 				}
 				const RE::NiPoint3 center{ sphere.center[0], sphere.center[1], sphere.center[2] };
@@ -256,34 +272,46 @@ namespace VRDepthCullingTemporal
 						distanceSquared,
 						envelope,
 						motionExpansion)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					if (telemetry.active)
 						++telemetry.invalidMotionEnvelopes;
+#endif
 					continue;
 				}
 				const float expandedRadius = sphere.radius + motionExpansion;
 				if (!std::isfinite(expandedRadius) || expandedRadius < sphere.radius) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					if (telemetry.active)
 						++telemetry.invalidMotionEnvelopes;
+#endif
 					continue;
 				}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				if (telemetry.active)
 					++telemetry.frustumTests;
+#endif
 				const bool directlyVisible = camera->PointInFrustum(center, sphere.radius);
 				if (!directlyVisible) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 					if (telemetry.active)
 						++telemetry.frustumTests;
+#endif
 					if (!camera->PointInFrustum(center, expandedRadius))
 						continue;
 				}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				++eligibleCount;
+#endif
 				candidates.Add({ index, CalculateRiskScore(sphere.radius, distanceSquared), directlyVisible });
 			}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			// Candidate discovery is measured even if a policy change cancels promotion.
 			if (telemetry.active)
 				telemetry.eligible = eligibleCount;
+#endif
 			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch)) {
 				return;
 			}
@@ -291,6 +319,7 @@ namespace VRDepthCullingTemporal
 			for (std::size_t index = 0; index < candidates.Size(); ++index)
 				results[candidates[index].index] = 1;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			const auto promotedCount = static_cast<std::uint32_t>(candidates.Size());
 			if (telemetry.active) {
 				telemetry.promoted = promotedCount;
@@ -300,6 +329,7 @@ namespace VRDepthCullingTemporal
 			}
 			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch))
 				ClearLastRecoveryStatus();
+#endif
 		}
 
 		struct DepthCullingReadback
@@ -369,8 +399,10 @@ namespace VRDepthCullingTemporal
 		// The main-thread writer leaves an odd epoch while publishing a new policy.
 		g_policyEpoch.fetch_add(1, std::memory_order_acq_rel);
 		const auto previous = g_mode.exchange(a_mode, std::memory_order_acq_rel);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_mode != Mode::Balanced)
 			ClearLastRecoveryStatus();
+#endif
 		if (previous == Mode::Legacy || a_mode == Mode::Legacy) {
 			// Legacy does not keep a producer pose warm. Require a new pose whenever
 			// crossing that boundary so Balanced cannot consume an arbitrarily old one.
@@ -388,8 +420,10 @@ namespace VRDepthCullingTemporal
 
 		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
 		g_cullingEnabled.store(a_enabled, std::memory_order_release);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (!a_enabled)
 			ClearLastRecoveryStatus();
+#endif
 	}
 
 	Mode GetMode()
@@ -397,6 +431,7 @@ namespace VRDepthCullingTemporal
 		return g_mode.load(std::memory_order_acquire);
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	Status GetStatus()
 	{
 		const auto mode = GetMode();
@@ -454,4 +489,5 @@ namespace VRDepthCullingTemporal
 		g_telemetryGate.UnlockAfterReset();
 		return true;
 	}
+#endif
 }

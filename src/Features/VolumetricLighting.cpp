@@ -1,6 +1,7 @@
 #include "VolumetricLighting.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
 #include "LocationContext.h"
@@ -615,27 +616,50 @@ void VolumetricLighting::SetupResources()
 	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>(), "VolumetricLighting::Dimensions");
 }
 
-void VolumetricLighting::EarlyPrepass()
+void VolumetricLighting::UpdateBlurDimensions()
 {
-	auto renderSize = Util::ConvertToDynamic(globals::state->screenSize);
+	blurDimensionsValid = false;
+	if (!globals::state || !globals::game::graphicsState || !vlDataCB)
+		return;
 
-	int32_t width = static_cast<int32_t>(renderSize.x);
-	int32_t height = static_cast<int32_t>(renderSize.y);
+	const auto fullSize = globals::state->screenSize;
+	const auto renderSize = Util::ConvertToDynamic(fullSize);
+	const float minimumWidth = globals::game::isVR ? 2.0f : 1.0f;
+	const auto validDimension = [](float size, float minimum, float maximum) {
+		return std::isfinite(size) && size >= minimum && size <= maximum;
+	};
+	if (!validDimension(fullSize.x, minimumWidth, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+		!validDimension(fullSize.y, 1.0f, D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+		!validDimension(renderSize.x, minimumWidth, fullSize.x) ||
+		!validDimension(renderSize.y, 1.0f, fullSize.y)) {
+		return;
+	}
 
-	if (width != vlData.screenX || height != vlData.screenY) {
+	const auto fullWidth = static_cast<int32_t>(fullSize.x);
+	const auto fullHeight = static_cast<int32_t>(fullSize.y);
+	// Dynamic bounds live in the constant buffer, not the cached shader wrapper.
+	if (fullWidth != fullScreenX || fullHeight != fullScreenY) {
 		blurHCS = nullptr;
 		blurVCS = nullptr;
 	}
+	fullScreenX = fullWidth;
+	fullScreenY = fullHeight;
 
-	vlData.screenX = width;
-	vlData.screenY = height;
-	vlData.screenXMin1 = width - 1;
-	vlData.screenYMin1 = height - 1;
-	vlData.eyeWidth = globals::game::isVR ? width / 2 : width;
-	const int32_t maximumEyeWidth = globals::game::isVR ? width - vlData.eyeWidth : width;
+	vlData.screenX = static_cast<int32_t>(renderSize.x);
+	vlData.screenY = static_cast<int32_t>(renderSize.y);
+	vlData.screenXMin1 = vlData.screenX - 1;
+	vlData.screenYMin1 = vlData.screenY - 1;
+	vlData.eyeWidth = globals::game::isVR ? vlData.screenX / 2 : vlData.screenX;
+	const int32_t maximumEyeWidth = globals::game::isVR ? vlData.screenX - vlData.eyeWidth : vlData.screenX;
 	vlData.horizontalGroupsPerEye =
 		(maximumEyeWidth + BlurThreadGroupSizeX - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeX - BlurWindow * 2u);
 	vlDataCB->Update(vlData);
+	blurDimensionsValid = true;
+}
+
+void VolumetricLighting::EarlyPrepass()
+{
+	UpdateBlurDimensions();
 
 	const bool currentlyInInterior = LocationContext::HasInteriorCell();
 	const bool nextInteriorWithSun = LocationContext::IsInteriorWithSun();
@@ -829,13 +853,15 @@ void VolumetricLighting::SetDimensionsCB() const
 	globals::d3d::context->CSSetConstantBuffers(1, 1, &cb);
 }
 
-void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX) const
+void VolumetricLighting::SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const
 {
 	threadGroupCountX = vlData.horizontalGroupsPerEye * (globals::game::isVR ? 2u : 1u);
+	threadGroupCountY = static_cast<uint32_t>(vlData.screenY);
 }
 
-void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountY) const
+void VolumetricLighting::SetGroupCountsVCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const
 {
+	threadGroupCountX = static_cast<uint32_t>(vlData.screenX);
 	threadGroupCountY = (vlData.screenY + BlurThreadGroupSizeY - BlurWindow * 2u - 1u) / (BlurThreadGroupSizeY - BlurWindow * 2u);
 }
 

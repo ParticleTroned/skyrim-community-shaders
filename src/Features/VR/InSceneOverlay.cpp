@@ -680,21 +680,30 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
 	struct BSOpenVR_Submit
 	{
-		static vr::EVRCompositorError thunk(
-			RE::BSOpenVR* _this,
-			const vr::Texture_t* pTexture,
-			const vr::VRTextureBounds_t* pBounds,
-			vr::EVRSubmitFlags nSubmitFlags)
+		static void thunk(RE::BSOpenVR* _this, ID3D11Texture2D* a_texture)
 		{
 			// Keep the full native stereo call and its relatch boundary serialized
 			// with nested eye work and compositor-cycle publication.
 			const std::scoped_lock presentationWorkLock(
 				g_vrRenderScalePresentationWorkMutex);
+			// A suppressed nested call has no boundary, but still owns its scope.
+			static thread_local bool nativeSubmitActive = false;
+			const bool nestedSubmit = std::exchange(nativeSubmitActive, true);
 			const auto previousBoundary = g_vrSubmitPairBoundaryState;
 			const auto previousCompletion = g_vrRelatchPairCompletion;
+			const SKSE::stl::scope_exit restoreBoundary([&]() noexcept {
+				g_vrSubmitPairBoundaryState = previousBoundary;
+				g_vrRelatchPairCompletion = previousCompletion;
+				nativeSubmitActive = nestedSubmit;
+			});
 			g_vrSubmitPairBoundaryState = {};
 			g_vrRelatchPairCompletion = {};
-			if (!previousBoundary.active && pTexture) {
+			// The engine wraps its raw texture in a DirectX/Gamma descriptor and
+			// submits both halves with default flags; bounds/flags are not arguments.
+			const vr::Texture_t expectedTexture{
+				a_texture, vr::TextureType_DirectX, vr::ColorSpace_Gamma
+			};
+			if (!nestedSubmit && a_texture) {
 				uint64_t token =
 					g_vrSubmitPairBoundarySequence.fetch_add(
 						1, std::memory_order_acq_rel) +
@@ -712,10 +721,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						1u,
 					.frame = globals::state ? globals::state->frameCount : 0u,
 					.thread = GetCurrentThreadId(),
-					.flags = static_cast<uint32_t>(nSubmitFlags),
+					.flags = vr::Submit_Default,
 					.source =
 						VRSubmitInputFreshnessPolicy::CaptureSubmitTextureIdentity(
-							pTexture),
+							&expectedTexture),
 					.active = true,
 				};
 				g_vrRelatchPairCompletion.identity = {
@@ -725,12 +734,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					.thread = g_vrSubmitPairBoundaryState.thread,
 				};
 			}
-			const SKSE::stl::scope_exit restoreBoundary([&]() noexcept {
-				g_vrSubmitPairBoundaryState = previousBoundary;
-				g_vrRelatchPairCompletion = previousCompletion;
-			});
-
-			const auto result = func(_this, pTexture, pBounds, nSubmitFlags);
+			func(_this, a_texture);
 			const VRRenderScaleFrameBoundaryPolicy::PairIdentity completedIdentity{
 				.token = g_vrSubmitPairBoundaryState.token,
 				.compositorCycle =
@@ -738,14 +742,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				.frame = globals::state ? globals::state->frameCount : 0u,
 				.thread = GetCurrentThreadId(),
 			};
-			if (!previousBoundary.active &&
+			if (!nestedSubmit &&
 				VRRenderScaleFrameBoundaryPolicy::CanServiceCompletedPair(
 					g_vrRelatchPairCompletion, completedIdentity)) {
 				g_vrSubmitPairBoundaryState = {};
 				g_vrRelatchPairCompletion = {};
 				globals::features::upscaling.ServiceVRRenderScaleRelatchAtFrameBoundary();
 			}
-			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

@@ -1,10 +1,12 @@
 #pragma once
 
-#include "VRDepthCullingTelemetryPolicy.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "VRDepthCullingTelemetryPolicy.h"
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
+#	include <array>
+#	include <cstddef>
+#	include <cstdint>
+#endif
 
 namespace VRDepthCullingTemporal
 {
@@ -37,6 +39,7 @@ namespace VRDepthCullingTemporal
 		return "unknown";
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct Status
 	{
 		static constexpr std::size_t DurationBinCount = VRDepthCullingTelemetryPolicy::DurationBinCount;
@@ -60,6 +63,7 @@ namespace VRDepthCullingTemporal
 		std::uint32_t lastEligibleCount = 0;
 		std::uint32_t lastPromotedCount = 0;
 	};
+#endif
 
 	/** Install the Skyrim VR 1.4.15 producer and readback hooks. */
 	void Install();
@@ -69,10 +73,12 @@ namespace VRDepthCullingTemporal
 	void SetMode(Mode a_mode);
 	/** Return the mode currently observed by the render thread. */
 	[[nodiscard]] Mode GetMode();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Return thread-safe diagnostics for DevBench inspection. */
 	[[nodiscard]] Status GetStatus();
 	/** Enable or disable recovery-path telemetry without changing culling behavior. */
 	void SetTelemetryEnabled(bool a_enabled);
 	/** Reset recovery telemetry when no render-depth writer is active. */
 	[[nodiscard]] bool TryResetStatus();
+#endif
 }

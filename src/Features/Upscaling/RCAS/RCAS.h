@@ -27,6 +27,13 @@ public:
 	void Initialize(bool enableMotionAdaptive = false);
 	void ClearShaderCache();
 
+	/** Checks cached resources for the requested pass and its fixed-strength fallback. */
+	bool CanApplyWithoutResourceCreation(bool a_motionAdaptive = false) const noexcept
+	{
+		return rcasComputeShader && rcasConfigCB && rcasConfigCB->CB() &&
+		       (!a_motionAdaptive || motionAdaptive.CanApplyWithoutResourceCreation());
+	}
+
 	/**
 	 * @brief Applies RCAS sharpening to the input texture.
 	 *
@@ -43,7 +50,9 @@ public:
 		ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions);
 
 	/** Reports the last attempted RCAS dispatch; applicability is determined by the active upscaler. */
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* GetMotionAdaptiveStatus() const noexcept;
+#endif
 
 private:
 	UpscalingSharpener::MotionAdaptiveSharpening motionAdaptive{ UpscalingSharpener::Pass::RCAS };

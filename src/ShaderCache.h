@@ -146,29 +146,6 @@ namespace ShaderConstants
 		const int32_t PreviousWorldMat = -1;
 	};
 
-	struct GrassPS
-	{
-		static const GrassPS& Get()
-		{
-			static GrassPS instance = REL::Module::IsVR() ? GetVR() : GetFlat();
-			return instance;
-		}
-
-		static GrassPS GetFlat()
-		{
-			return GrassPS{};
-		}
-
-		static GrassPS GetVR()
-		{
-			return GrassPS{};
-		}
-
-		const int32_t PBRFlags = 0;
-		const int32_t PBRParams1 = 1;
-		const int32_t PBRParams2 = 2;
-	};
-
 	struct EffectPS
 	{
 		static const EffectPS& Get()
@@ -571,6 +548,7 @@ namespace SIE
 		/** @brief Publishes a result unless its task is stale or an eviction consumes it.
 		 *  @return True when a_blob remains usable by the caller. */
 		bool AddCompletedShader(
+			const std::string& key,
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
 			uint32_t descriptor,
@@ -799,7 +777,6 @@ namespace SIE
 		enum class GrassShaderTechniques
 		{
 			RenderDepth = 8,
-			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags
@@ -1061,7 +1038,7 @@ namespace SIE
 		mutable std::mutex compileFailuresMutex;
 		std::deque<CompileFailure> recentCompileFailures;
 		std::vector<std::string> heldMismatchDefines;
-		bool isSkipUnchangedShaders = true;  ///< when true, recompile a disk-cached shader only if its source is newer
+		std::atomic<bool> isSkipUnchangedShaders = true;  ///< Permit verified disk hits; false compiles from source while retaining disk writes.
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;

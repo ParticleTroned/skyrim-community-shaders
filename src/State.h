@@ -184,7 +184,11 @@ public:
 	// Current engine-owned save/load work only. Unlike IsSaveLoadSafeModeActive,
 	// this excludes the fixed post-event grace used for mutation/persistence safety.
 	bool IsEngineSaveLoadActivityActive() const;
+	/** Returns a distinct save token only after known ordinary-save work is idle. */
+	uint64_t GetOrdinarySaveRenderRecoveryToken() const;
 	bool IsPersistentMutationBlocked() const;
+	/** Preserves mutation grace while identifying a save without load/reset work. */
+	void NotifyOrdinarySave(uint32_t a_currentFrame);
 	void BeginSaveLoadSafeMode(uint32_t a_currentFrame);
 	void ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveLoadSafeModeGraceFrames);
 	void BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_frameCount = kSaveMutationBlockGraceFrames);
@@ -344,7 +348,8 @@ public:
 		THLand4HasDisplacement = 1 << 4,
 		THLand5HasDisplacement = 1 << 5,
 		ETMaterialModel = 0b111 << 6,
-		THLandHasDisplacement = 1 << 9
+		THLandHasDisplacement = 1 << 9,
+		TVMeshVariation = 1 << 10
 	};
 
 	bool inWorld = false;
@@ -545,6 +550,21 @@ public:
 	}
 
 private:
+	// Keep event deadlines, render provenance and persistence publication indivisible.
+	mutable std::mutex saveLoadSafeModeMutex;
+	enum class SaveLoadRenderRecoverySource : uint64_t
+	{
+		None,
+		OrdinarySave,
+		Other
+	};
+	static constexpr uint64_t kSaveLoadRenderRecoverySourceMask = 3;
+	void RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource a_source);
+	void ExtendSaveLoadSafeModeImpl(uint32_t a_currentFrame, uint32_t a_frameCount);
+	uint64_t saveLoadRenderRecoveryState = 0;
+	bool engineSaveLoadActivityKnown = false;
+	bool engineSavingWasActive = false;
+
 	uint64_t BeginRenderTargetResourcePublication() noexcept;
 	void CompleteRenderTargetResourcePublication(
 		uint64_t a_generation,

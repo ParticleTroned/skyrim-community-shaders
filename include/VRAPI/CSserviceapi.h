@@ -103,7 +103,7 @@ namespace CSX::ServiceAPI
 
 	/**
 	 * Dispatch this structure to ProviderName with RegistryMessageType during or
-	 * after SKSE kMessage_PostPostLoad. CSX fills status and registry; no legacy CSAP
+	 * after SKSE kMessage_PostLoad. CSX fills status and registry; no legacy CSAP
 	 * structures or entry points are changed.
 	 */
 	struct RegistryMessage001

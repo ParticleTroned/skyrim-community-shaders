@@ -1,5 +1,8 @@
 # VR render-scale iteration records
 
+The separate physical-HMD [PR qualification](render-scale-pr-qualification.md)
+currently uses `csx-render-scale-pr-v1` revision 6.
+
 The optional runtime FSR shared-guide path and its persistent in-game
 toggle are documented in [Runtime FSR shared guide inputs](fsr-shared-guides.md).
 The DevBench A/B action updates the same preference; Save Settings
@@ -9,6 +12,77 @@ existing interop fences, copied fallback and quarantined ownership. This
 implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
+
+## September 16: eight-run depth-culling comparison
+
+The [complete culling handover](depth-culling-comparison-20260916/README.md)
+preserves eight same-build `gameft-sw` runs, 48 save holds, full CPU/GPU
+tables and deltas, WPR execution/wait/context findings, settings and exact
+503fbfc build provenance in immutable ledger `0004-investigation`.
+All 48 final lifecycle results succeeded; earlier producer gates and the
+uncertain Balanced 2 Save 13 interaction remain visible. This is diagnostic
+performance evidence, not physical-HMD visual qualification.
+
+Disabling culling raised GPU time and lowered recorded FPS in all six
+saves against the preceding Legacy run. Keep depth culling enabled;
+Balanced remains the practical default without a proven overall speed
+winner among the enabled policies. Native frustum work persists with depth
+culling off. Broader CPU noise and the separate DLSS GPU residual remain
+targets. Save 13 is one diagnostic case, not the sole optimization target.
+No runtime code or protocol changes accompany this publication.
+
+## September 16: native submit boundary correction
+
+The [native submit ABI investigation](vr-submit-native-boundary.md) traces
+an incorrect raw-texture hook signature from PR65 through the measured
+`b46f8f34` head. The hook now models the descriptor created by the engine
+and reuses the existing freshness admission checks. A separate call guard
+prevents nested or null-boundary calls from creating deeper stereo owners;
+scope restoration preserves partially completed outer pairs on exceptions.
+Focused regressions and production translation-unit compilation validate
+the source correction. Exact-build runtime qualification and matched
+CPU/GPU recovery measurements remain pending. This source/test review adds
+no runtime measurement or numbered ledger snapshot.
+
+## September 15: Tasks 1–5 source-to-test audit
+
+The [Tasks 1–5 audit](vr-render-scale-tasks-1-5-audit.md) maps production
+owners, service paths, policy tests and telemetry. A failing regression
+demonstrated that Streamline lifecycle reset could reopen an older frame;
+reset now invalidates the token while preserving frame ordering. The
+existing ownership, milestones and Native-AA mechanisms remain in place.
+Exact-build runtime evidence remains pending. This source/test audit adds
+no performance measurement or numbered ledger snapshot.
+
+## September 13: FOV mask preview admission
+
+FOV mask visualization now draws through presentation independently of
+cropped vendor dispatch, including full coverage. Saved VR profiles retain
+the setting. Existing save/lifecycle resource guards remain authoritative;
+mask outputs cannot qualify ordinary-save recovery or stand in for vendor
+output. Both VR rendering modes share mask drawing and preserve desktop
+mirror presentation. See [FOV mask visualization](fov-mask-visualization.md)
+for the contract and focused regression coverage. No runtime measurement
+or visual qualification accompanies this implementation, so it creates
+no numbered ledger snapshot.
+
+## September 13: ordinary-save presentation recovery
+
+Ordinary saves can resume presentation after six consecutive, successfully
+prepared stereo frames while the original 120-frame mutation grace remains
+active. Loading, initialization, missing provenance and resource changes
+retain their protection. Save notifications and guard expiry are serialized
+so an overlapping event cannot lose its mutation block.
+
+The early path reuses existing resources, including valid cropped FSR
+contexts, and verifies the shared producer scope for each eye pair. Its
+admission and completion policies have focused source-extracted tests.
+Revoked save proof also downgrades cached admission for the rest of the
+compositor cycle, including when the mutation grace expires between eyes.
+See [ordinary-save recovery](ordinary-save-render-recovery.md) for the
+contract and DevBench status fields. No save timing, visual qualification
+or performance measurement has been made for this implementation; it adds
+no measurement rows or numbered ledger snapshot.
 
 ## September 11: all PR73 tables compare against PR66
 
@@ -461,7 +535,7 @@ The VR render-scale controller can capture a bounded CSX-menu stress session and
 
 ## Capture workflow
 
-1. Enable CSX developer mode.
+1. Use a build configured with `DEVBENCH_BRIDGE=ON` and enable CSX developer mode. Production builds exclude stress capture and hot-path reporting; see [the diagnostics boundary](upscaling-diagnostics-boundary.md).
 2. Open **Upscaling > Render Pipeline > Render Scale Stress Capture**.
 3. Select **Start Capture**.
 4. Exercise the same fixed scenario for every candidate build. At minimum, perform two render-scale changes. Include repeated preset changes and a fast-travel cycle when evaluating memory recovery.
@@ -544,7 +618,7 @@ The registered tool is `communityshaders.renderscale`:
     pressure, retirement queue, post-load recovery, backend generations,
     current metrics, both-eye fidelity, and compositor-accepted per-eye
     presentation paths;
--   `record` returns the complete schema-v13 record without changing capture
+-   `record` returns the complete schema-v14 record without changing capture
     state;
 -   `start` begins a new fixed-memory stress capture;
 -   `apply` uses the same latest-wins transition entrypoint as a CSX-menu change.
@@ -906,7 +980,7 @@ targets. Prefer a second late-use guard when the entry guard is installed but th
 faulting native instruction reloads a different live pointer later in the helper.
 
 Performance builds keep `kEnableVRMenuPresentationTraceDiagnostics` false.
-Changing it to true creates a dedicated forensic build with high-frequency D3D
+Changing it to true in a `DEVBENCH_BRIDGE=ON` build creates a dedicated forensic build with high-frequency D3D
 menu detours and must not be compared against normal optimization captures.
 
 The load-presentation probe is compiled only with `DEVBENCH_BRIDGE=ON`, requires
@@ -1446,7 +1520,9 @@ live paths under `controller.presentation`, session deltas under
 ## MCP contract
 
 Records use schema `community-shaders.vr-render-scale.iteration` and
-`schemaVersion: 13`. Schema v13 adds presentation-stretch episode duration,
+`schemaVersion: 14`. Schema v14 adds bounded episode attribution with frame,
+QPC, epoch, and reason evidence; missing attribution is a health failure.
+Schema v13 added presentation-stretch episode duration,
 active-at-stop evidence, and incomplete-stereo-cycle evidence at capture stop.
 An active tail or partial two-eye cycle is a hard failure. Schema v12 adds exact
 build provenance. Schema v11 adds Debug-only liveness-cue compile/success
@@ -1456,8 +1532,8 @@ thresholds and units are unchanged. Schema v10 added
 complete pending target are counted there without creating another request
 event or transition metric. An automation client should:
 
-1. Reject unknown schema versions.
-2. Check `acceptance.accepted` before comparing performance.
+1. Reject unknown schema versions; schema v13 is supported only under its explicit legacy comparison policy, not for revision-6 qualification.
+2. Preserve raw `acceptance.accepted` and apply the [documented comparison policy](vr-render-scale-comparison-reporting.md#separate-results-from-assessment) before assessing performance. Only the supported legacy two-frame diagnostic may normalize a raw rejection; other failed health gates remain failures.
 3. Require `memoryTrend.evaluated` for a memory comparison; a short diagnostic pass is not memory acceptance.
 4. Use `acceptance.gates` to classify a failed run instead of inferring failure from log text.
 5. Compare transition records by `transitionEpoch`, never by array position alone.
@@ -1934,3 +2010,15 @@ commands and limitations in
 [the correction report](pr73-owned-release-proof-20260911.md#final-clean-build-evidence).
 No new runtime measurements or visual qualification are claimed, and no
 runtime ledger cells were changed by this offline validation.
+
+## September 15: graphics ownership correction under validation
+
+The [graphics ownership review](graphics-context-ownership-review-20260915.md)
+retains the VR loading-menu guard while replacing permanent D3D11 API
+protection with native renderer ownership for screenshot and flowmap work.
+It preserves render-scale scheduling, thresholds, backend selection and
+stereo qualification requirements. Source/controller validation does not
+establish the original hang's cause or certify a performance improvement.
+The exact corrected build still needs COC, capture, flowmap and matched
+performance evidence. No new runtime measurements or ledger cells are
+published by this implementation review.

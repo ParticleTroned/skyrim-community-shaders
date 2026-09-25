@@ -432,7 +432,7 @@ foreach(_required_behavior IN ITEMS
     "QualificationMonotonicRegressionsJson"
     "BuildAdapterIdentity"
     "{ \"adapter\", BuildAdapterIdentity() }"
-    "CheckInterfaceSupport(__uuidof(ID3D11Device)"
+    "CheckInterfaceSupport(__uuidof(IDXGIDevice)"
     "QueryPerformanceCounter"
     "expectedCellEditorId"
     "kElapsedMillisecondsReceiptField"

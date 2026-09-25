@@ -197,19 +197,45 @@ In Launch Application Menu, use the following settings:
 
 [GPL-3.0-or-later](COPYING) WITH [Modding Exception AND GPL-3.0 Linking Exception (with Corresponding Source)](EXCEPTIONS.md).  
 Specifically, the “Modded Code” includes:
-- The Elder Scrolls V: Skyrim (and its variants)
-- Third-party components used to enable optional upscaling / frame generation features, which are distributed under their own licenses, for example:
-  - NVIDIA DLSS (proprietary SDK/runtime; e.g., nvngx_dlss.dll) — https://developer.nvidia.com/rtx/dlss/get-started
-  - AMD FidelityFX FSR 3 (MIT-licensed, via GPUOpen) — https://gpuopen.com/fidelityfx-super-resolution-3/
 
-NVIDIA DLSS / Streamline Notice
-If this distribution includes NVIDIA components (e.g., nvngx_dlss.dll and/or sl.*.dll), those binaries are NOT covered by the GPL license of this project and are redistributed (if at all) under the applicable NVIDIA RTX SDK / Streamline license terms provided alongside the binaries. This project does not grant any rights to NVIDIA components beyond what NVIDIA’s own licenses permit.
-The GPL applies only to this project’s source code (and any other components explicitly licensed under GPL-compatible terms).
+-   The Elder Scrolls V: Skyrim (and its variants)
+-   Third-party components used to enable optional upscaling / frame generation features, which are distributed under their own licenses, for example:
+    -   NVIDIA DLSS (proprietary SDK/runtime; e.g., nvngx_dlss.dll) — https://developer.nvidia.com/rtx/dlss/get-started
+    -   AMD FidelityFX FSR 3 (MIT-licensed, via GPUOpen) — https://gpuopen.com/fidelityfx-super-resolution-3/
 
 The Modding Libraries include:
 
 -   [SKSE](https://skse.silverlock.org/)
 -   Commonlib (and variants).
+
+#### NVIDIA DLSS / Streamline
+
+NVIDIA components retain their own licenses; this project's GPL and linking
+exceptions do not change NVIDIA's terms or grant additional rights to its SDKs.
+Streamline's source license and the separate DLSS/NGX and Reflex SDK terms are
+included with the packaged runtime.
+
+The build downloads the production x64 DLLs directly from
+[NVIDIA's Streamline 2.14.1 SDK release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
+and verifies the archive's pinned SHA-256 in
+[Streamline-Runtime.cmake](cmake/Streamline-Runtime.cmake). These runtime DLLs are
+not checked into this repository. The same archive supplies all five license
+and notice files, copied without modification beside the DLLs under
+`Shaders/Upscaling/Streamline/` in both Core and AIO packages:
+
+-   `license.txt` — Streamline source license.
+-   `nvngx_dlss.license.txt` — NVIDIA RTX SDK terms for DLSS/NGX.
+-   `reflex.license.txt` — NVIDIA Reflex SDK terms.
+-   `3rd-party-licenses.md` — Streamline third-party notices.
+-   `NVIDIA Nsight Graphics SDK License (Apache 2.0).txt` — Nsight Graphics SDK terms.
+
+The `StreamlineRuntime` CMake install component includes these notices with its
+DLLs. Source builds obtain the Streamline source license and third-party notices
+through the pinned [Streamline submodule](extern/Streamline-DX12).
+
+The public 2.14.1 SDK archive does not contain `sl.dlss_nr.dll`,
+`nvngx_dlssnr.dll`, or their implementation sources. This update does not package
+DLSS Neural Rendering or add support for it.
 
 ### Shaders
 

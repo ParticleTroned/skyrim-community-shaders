@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VROrdinarySaveRecovery.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRRelatchReleasePolicy.h"
 #include "Upscaling/VRRenderScaleAuthorityPolicy.h"
@@ -891,8 +892,10 @@ public:
 		uint64_t systemCommitLimitBytes = 0;
 		uint64_t systemCommitHeadroomBytes = 0;
 		double systemCommitRatio = 0.0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		bool processPrivateUsageValid = false;
 		uint64_t processPrivateUsageBytes = 0;
+#endif
 		VRRenderScaleMemoryPressure observedPressure = VRRenderScaleMemoryPressure::Unknown;
 		VRRenderScaleMemoryPressure pressure = VRRenderScaleMemoryPressure::Unknown;
 		uint32_t pressureSinceFrame = 0;
@@ -966,8 +969,10 @@ public:
 		uint64_t peakUsageBytes = 0;
 		uint64_t baselineSystemCommitBytes = 0;
 		uint64_t peakSystemCommitBytes = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint64_t baselineProcessPrivateUsageBytes = 0;
 		uint64_t peakProcessPrivateUsageBytes = 0;
+#endif
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		bool cleanupArmed = false;
 		bool cleanupDrained = false;
@@ -1083,7 +1088,9 @@ public:
 		VRRenderScaleMemoryPressure peakPressure = VRRenderScaleMemoryPressure::Unknown;
 		uint64_t peakUsageBytes = 0;
 		uint64_t peakSystemCommitBytes = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint64_t peakProcessPrivateUsageBytes = 0;
+#endif
 		uint32_t peakRetiredSets = 0;
 		uint32_t memoryTrimCount = 0;
 		uint32_t memoryTrimFailures = 0;
@@ -1098,9 +1105,11 @@ public:
 	struct VRRenderScaleMetricsSnapshot
 	{
 		VRRenderScaleTransitionMetrics current{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::array<VRRenderScaleTransitionMetrics, kVRRenderScaleTransitionMetricRetentionCapacity> recent{};
 		uint32_t nextIndex = 0;
 		uint32_t count = 0;
+#endif
 	};
 
 	enum class VRRenderScaleFidelityMismatch : uint32_t
@@ -1188,6 +1197,8 @@ public:
 		bool vendorRuntimeFallback = false;
 		bool loadingOrMenuContext = false;
 		bool transitionCooldown = false;
+		VRPresentationStretchTelemetryPolicy::StretchReason stretchReason =
+			VRPresentationStretchTelemetryPolicy::StretchReason::Unattributed;
 	};
 
 	struct VRRenderScalePresentationEyeSnapshot
@@ -1229,6 +1240,7 @@ public:
 		uint64_t lastBothEyesVendorCycle = 0;
 		uint32_t consecutiveBothEyesVendorFrames = 0;
 		uint32_t lastFallbackFrame = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint32_t maximumConsecutivePresentationStretchFrames = 0;
 		uint64_t vendorEvaluatedEyeObservations = 0;
 		uint64_t validatedPresentationHoldEyeObservations = 0;
@@ -1250,6 +1262,7 @@ public:
 		uint64_t maximumPresentationStretchQpcTicks = 0;
 		// QPC ticks per second. Zero means millisecond conversion is unavailable.
 		uint64_t presentationStretchQpcFrequency = 0;
+#endif
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1527,7 +1540,9 @@ public:
 		VRRenderScaleFailureKind failureKind = VRRenderScaleFailureKind::None;
 		uint64_t usageBytes = 0;
 		uint64_t systemCommitBytes = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		uint64_t processPrivateUsageBytes = 0;
+#endif
 		uint32_t retries = 0;
 		uint32_t failures = 0;
 		uint32_t fidelityMismatches = 0;
@@ -1577,6 +1592,8 @@ public:
 		uint64_t maximumPresentationStretchFrames = 0;
 		uint64_t maximumPresentationStretchQpcTicks = 0;
 		uint64_t presentationStretchQpcFrequency = 0;
+		std::vector<VRPresentationStretchTelemetryPolicy::EpisodeTrace> presentationStretchEpisodeTrace{};
+		uint64_t presentationStretchEpisodeTraceOverflow = 0;
 		// Stop closes an in-progress episode into the completed totals while
 		// retaining this tail evidence from immediately before closure.
 		bool presentationStretchEpisodeActiveAtStop = false;
@@ -1646,6 +1663,7 @@ public:
 		VRRenderScaleMetricsSnapshot metrics{};
 		VRRenderScaleFidelitySnapshot fidelity{};
 		VRRenderScalePresentationSnapshot presentation{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		VRRenderScaleOwnerKey desiredOwner{};
 		VRRenderScaleOwnerKey physicalOwner{};
 		VRRenderScaleOwnerKey presentationOwner{};
@@ -1653,6 +1671,7 @@ public:
 			VRRenderScalePhysicalPhase::None;
 		VRRenderScalePresentationPhase presentationPhase =
 			VRRenderScalePresentationPhase::Idle;
+#endif
 	};
 
 	/** @brief Compact controller state consumed by the per-eye presentation path. */
@@ -1872,13 +1891,13 @@ public:
 	bool IsLatestVRRenderScaleRequest(uint64_t a_requestID) const;
 	/** @brief Returns one lock-consistent copy of requested, applying, applied, and stable state. */
 	VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	VRRenderScaleStressSessionSnapshot GetVRRenderScaleStressSessionSnapshot() const;
 	void StartVRRenderScaleStressSession();
 	void StopVRRenderScaleStressSession();
 	void ResetVRRenderScaleStressSession();
 	json BuildVRRenderScaleIterationRecord() const;
 	bool WriteVRRenderScaleIterationRecord() const;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	/** @brief Resolves live render-scale owners for diagnostics without scheduling work. */
 	VRRenderScaleAuthorityDiagnosticSnapshot
 	GetVRRenderScaleAuthorityDiagnosticSnapshot() const;
@@ -2145,7 +2164,7 @@ public:
 	ConstantBuffer* cameraMotionVectorsCB = nullptr;
 	ConstantBuffer* dynamicResolutionStretchCB = nullptr;
 	ConstantBuffer* vrMenuLayerCompositeCB = nullptr;
-	ConstantBuffer* foveatedPeripheryCB = nullptr;
+	eastl::unique_ptr<ConstantBuffer> foveatedPeripheryCB;
 	ConstantBuffer* foveatedCenterBlendCB = nullptr;
 	ConstantBuffer* foveatedSpatialCompositeCB = nullptr;
 	ConstantBuffer* peripheryTAACB = nullptr;
@@ -2530,7 +2549,7 @@ public:
 	void EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
 	bool EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc);
+		ID3D11Resource* colorSrc, bool allowResourceCreation = true);
 	struct VRExistingVendorProviderSnapshot
 	{
 		bool valid = false;
@@ -2582,6 +2601,9 @@ public:
 		ID3D11Resource* a_transparencySource,
 		uint32_t a_contractGeneration) const;
 	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
+	/// Publish a completed eye pair to the existing desktop mirror consumer.
+	bool UpdateVRSubmitDesktopMirror(uint32_t eyeIndex, uint32_t currentFrame, uint64_t compositorCycleToken,
+		ID3D11Texture2D* sourceTexture, const D3D11_TEXTURE2D_DESC& sourceDesc, uint32_t eyeWidthOut, uint32_t eyeHeightOut);
 	bool BlitVRRenderScaleDesktopMirror(ID3D11Texture2D* a_targetTexture, const D3D11_TEXTURE2D_DESC& a_targetDesc,
 		uint32_t a_eyeWidth, uint32_t a_eyeHeight, Texture2D* const* a_eyeSources = nullptr,
 		bool a_compositeCommittedMenuLayer = false);
@@ -2768,7 +2790,11 @@ public:
 	static void TraceVRMenuPresentationOpenVRSubmit(const char* a_path, vr::EVREye a_eye,
 		const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds, vr::EVRSubmitFlags a_flags,
 		vr::EVRCompositorError a_result) noexcept;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	static void InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context);
+#endif
+	/** Install only indexed scene submission hooks, without enabling developer tracing. */
+	static bool InstallAcceptedDrawD3DHooks(ID3D11DeviceContext* a_context);
 	static void DisableVRMenuPresentationTraceDiagnostics() noexcept;
 	bool IsVRMenuParallelBridgeDrawInProgress() const noexcept;
 	enum class DynamicResolutionUpsampleStage : uint8_t
@@ -2804,6 +2830,10 @@ public:
 		bool loadingPresentationActive = false;
 		bool raceSexPresentationActive = false;
 		bool saveLoadProtectionActive = false;
+		bool ordinarySavePresentationReady = false;
+		bool ordinarySavePersistenceBlocked = false;
+		uint64_t ordinarySaveToken = 0;
+		VROrdinarySaveRecovery::Proof ordinarySaveProof;
 		bool completedWorldFrame = false;
 		bool recoveryPending = false;
 		bool relatchPending = false;
@@ -2843,6 +2873,18 @@ public:
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
 	[[nodiscard]] bool ShouldDeferVRVendorLifecycleMutation() const;
+	/** Ordinary-save recovery may only reuse resources while persistence remains guarded. */
+	[[nodiscard]] bool ShouldReuseOrdinarySaveResources() const;
+	/** True after an ordinary save has retained one exact, coherent stereo contract. */
+	[[nodiscard]] bool CanResumeOrdinarySavePresentation() const;
+	/** Validate the ordinary-save contract on the render thread before reading live resources. */
+	[[nodiscard]] std::optional<VROrdinarySaveRecovery::Identity> GetOrdinarySavePresentationIdentity() const;
+	/** Observe both submitted eyes against their immutable world-render producer. */
+	void ObserveOrdinarySavePresentation(uint32_t a_frame, uint64_t a_cycle, uint32_t a_eye,
+		const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_boundary,
+		const VROrdinarySaveRecovery::Identity& a_identity, bool a_inputsReady);
+	mutable std::mutex ordinarySaveRecoveryMutex;
+	VROrdinarySaveRecovery::Proof ordinarySaveRecovery;
 	[[nodiscard]] bool IsVRVendorLifecycleGateRelevant() const;
 	[[nodiscard]] VRExistingVendorProviderSnapshot GetExistingVRVendorProviderSnapshot() const;
 	[[nodiscard]] bool CanDispatchExistingVRVendorEvaluation(UpscaleMethod a_upscaleMethod) const;
@@ -3004,16 +3046,20 @@ public:
 	std::atomic<uint64_t> nextVRRenderScaleTransitionEpoch{ 1 };
 	mutable std::mutex vrRenderScaleTransitionControllerMutex;
 	VRRenderScaleTransitionSnapshot vrRenderScaleTransitionController{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	VRPresentationStretchTelemetryPolicy::State
 		vrRenderScalePresentationStretchLifetimeTelemetry{};
 	VRPresentationStretchTelemetryPolicy::State
 		vrRenderScalePresentationStretchSessionTelemetry{};
+#endif
 	// Hot-path atomic mirror; mutate with StoreVRRenderScaleTransitionStateLocked.
 	std::atomic<VRRenderScaleTransitionState> vrRenderScaleTransitionState{ VRRenderScaleTransitionState::Idle };
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	mutable std::mutex vrRenderScaleStressSessionMutex;
 	VRRenderScaleStressSessionSnapshot vrRenderScaleStressSession{};
 	std::atomic_bool vrRenderScaleStressSessionActive{ false };
 	std::atomic<uint64_t> nextVRRenderScaleStressSessionID{ 1 };
+#endif
 	std::atomic<uint32_t> pendingVRFpsStabilizerSyncFrame{ 0 };
 	std::atomic<uint32_t> vrFpsStabilizerSyncResolvedFrame{ 0 };
 	mutable std::mutex vrFpsStabilizerAPIProfileAdmissionMutex;
@@ -3516,13 +3562,12 @@ public:
 		uint64_t a_expectedEpoch = 0);
 	void RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind a_kind);
 	void ArchiveVRRenderScaleTransitionMetricsLocked(bool a_completed, bool a_superseded, uint32_t a_frame);
-	void RecordVRRenderScaleCoalescedDuplicate();
-	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		, const char* a_reason = "unspecified",
-		std::source_location a_source = std::source_location::current()
+	void RecordVRRenderScaleCoalescedDuplicate();
+	void RecordVRRenderScaleStressEvent(VRRenderScaleStressEventType a_type, VRRenderScaleRetryKind a_retryKind = VRRenderScaleRetryKind::Other, VRRenderScaleFailureKind a_failureKind = VRRenderScaleFailureKind::None,
+		const char* a_reason = "unspecified",
+		std::source_location a_source = std::source_location::current());
 #endif
-	);
 	bool HasVRRenderScaleMemoryReliefCleanupPending() const;
 	void ClearVRRenderScaleMemoryRelief();
 	bool ApplyVRRenderScaleMemoryReliefTransitionCleanup(const char* a_reason = nullptr, bool a_preserveVRIntermediateTextures = false);
@@ -3640,7 +3685,11 @@ public:
 	[[nodiscard]] FidelityFX::UpscaleResult DispatchFoveatedVendorEyeComposite(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, const FoveatedEyeDispatchParams& params);
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */
 	[[nodiscard]] FidelityFX::UpscaleResult DispatchSingleFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* depthIn, ID3D11Resource* motionVectorsIn, ID3D11Resource* reactiveMaskIn, ID3D11Resource* transparencyMaskIn, uint32_t outputWidthPerEye, uint32_t outputHeight, uint32_t inputWidthPerEye, uint32_t inputHeight, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t colorInputBaseOffsetX = 0, uint32_t depthInputBaseOffsetX = 0, uint32_t auxInputBaseOffsetX = 0, ID3D11UnorderedAccessView* outputUAV = nullptr, Streamline::DLSSViewportRole dlssViewportRole = Streamline::DLSSViewportRole::FoveatedCenter, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, bool compositeCenter = true);
-	void DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f);
+	/// Whether the selected VR mask can be previewed outside native menus/loading.
+	bool IsFoveatedMaskVisualizationEnabled(UpscaleMethod a_upscaleMethod) const;
+	/// Draw the configured mask into an existing eye output without vendor inputs.
+	bool DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex);
+	bool DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f, bool visualizeMask = false);
 	void DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 		ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,
 		ID3D11ShaderResourceView* historyVelocitySRV, ID3D11ShaderResourceView* historyLockSRV, ID3D11UnorderedAccessView* outputColorUAV, ID3D11UnorderedAccessView* outputHistoryColorUAV,

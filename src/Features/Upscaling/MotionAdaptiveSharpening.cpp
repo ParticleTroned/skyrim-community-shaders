@@ -62,8 +62,10 @@ namespace UpscalingSharpener
 		ID3D11ShaderResourceView* motionVectors, std::span<const MotionSharpening::Region> regions,
 		const std::function<bool()>& fallback)
 	{
-		const auto fixedFallback = [&](MotionStatus reason = MotionStatus::InvalidGeometry) {
+		const auto fixedFallback = [&]([[maybe_unused]] MotionStatus reason = MotionStatus::InvalidGeometry) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			motionStatus.store(reason, std::memory_order_relaxed);
+#endif
 			return fallback();
 		};
 		const auto sanitized = MotionSharpening::Sanitize(settings);
@@ -162,7 +164,9 @@ namespace UpscalingSharpener
 						inputSRV, outputUAV, pass, motionVectors, region.output.width, region.output.height))
 					return fixedFallback(MotionStatus::DispatchFailed);
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			motionStatus.store(MotionStatus::Applied, std::memory_order_relaxed);
+#endif
 			return true;
 		} catch (const std::exception& error) {
 			logger::warn("[Upscaling] Motion-adaptive dispatch failed; retaining fixed sharpening: {}", error.what());
@@ -170,6 +174,7 @@ namespace UpscalingSharpener
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* MotionAdaptiveSharpening::GetStatus() const noexcept
 	{
 		switch (motionStatus.load(std::memory_order_relaxed)) {
@@ -191,5 +196,5 @@ namespace UpscalingSharpener
 			return "unknown";
 		}
 	}
-
+#endif
 }

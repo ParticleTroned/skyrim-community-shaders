@@ -22,9 +22,11 @@
 namespace
 {
 	using json = nlohmann::json;
+	using CSX::ProfilerAPI::CaptureMode;
 	using CSX::ProfilerAPI::CaptureProgress001;
 	using CSX::ProfilerAPI::CaptureRequest001;
 	using CSX::ProfilerAPI::CaptureState;
+	using CSX::ProfilerAPI::CpuSnapshot001;
 	using CSX::ProfilerAPI::Snapshot001;
 	using CSX::ProfilerAPI::Status;
 	using CSX::ProfilerAPI::TimerDescriptor001;
@@ -35,7 +37,8 @@ namespace
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
-		static CSX::Api::ServiceFoundation foundation({ CSX::ProfilerAPI::ServiceName, 1, 0, 1 });
+		static CSX::Api::ServiceFoundation foundation({ CSX::ProfilerAPI::ServiceName,
+			CSX::ProfilerAPI::ServiceMajor, CSX::ProfilerAPI::SourceServiceMinor, CSX::ProfilerAPI::SourceSchemaRevision });
 		static std::once_flag metadataInitialized;
 		std::call_once(metadataInitialized, [&] {
 			foundation.SetServerMetadataProvider([] {
@@ -114,6 +117,23 @@ namespace
 		};
 	}
 
+	json ReadCpuSnapshot(const CSX::ProfilerAPI::Interface002& a_api)
+	{
+		CpuSnapshot001 snapshot;
+		const auto status = a_api.GetCpuSnapshot(a_api.paired.context, &snapshot);
+		if (status != Status::kSuccess && status != Status::kUnavailable)
+			return ApiFailure(status);
+		return {
+			{ "status", StatusName(status) }, { "view", "independent_cpu" },
+			{ "available", snapshot.available != 0 }, { "enabled", snapshot.enabled != 0 },
+			{ "capturing", snapshot.capturing != 0 }, { "timerCount", snapshot.timerCount },
+			{ "capturedFrameCount", snapshot.capturedFrameCount }, { "publicationCount", snapshot.publicationCount },
+			{ "historyCapacity", snapshot.historyCapacity }, { "maximumTimersPerFrame", snapshot.maximumTimersPerFrame },
+			{ "slotRefusals", snapshot.slotRefusals }, { "resolvedTotalMs", snapshot.resolvedTotalMs },
+			{ "buildId", snapshot.buildId ? snapshot.buildId : "" }
+		};
+	}
+
 	json ReadProgress(const CSX::ProfilerAPI::Interface001& a_api, std::uint64_t a_captureId)
 	{
 		CaptureProgress001 progress;
@@ -134,9 +154,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const auto action = a_args.value("action", std::string{});
+		const bool cpuView = action == "cpu_snapshot" || action == "cpu_timers" || action == "cpu_history";
 		const bool known = action == "registry" || action == "snapshot" || action == "timers" || action == "history" ||
-			action == "set_enabled" || action == "clear_history" || action == "start_capture" ||
-			action == "capture_status" || action == "cancel_capture" || action == "events" || action == "acknowledge_events";
+		                   action == "set_enabled" || action == "clear_history" || action == "start_capture" ||
+		                   action == "capture_status" || action == "cancel_capture" || action == "events" || action == "acknowledge_events" ||
+		                   cpuView || action == "request_capture";
 		if (!known)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 
@@ -145,13 +167,14 @@ namespace
 			response["result"] = {
 				{ "service", CSX::ProfilerAPI::ServiceName },
 				{ "major", CSX::ProfilerAPI::ServiceMajor },
-				{ "minor", CSX::ProfilerAPI::ServiceMinor },
-				{ "schemaRevision", CSX::ProfilerAPI::SchemaRevision },
-				{ "capabilities", CSX::ProfilerAPI::ServiceCapabilities },
+				{ "minor", CSX::ProfilerAPI::SourceServiceMinor },
+				{ "schemaRevision", CSX::ProfilerAPI::SourceSchemaRevision },
+				{ "timingSemantics", "gpu_cpu_self_time" },
+				{ "capabilities", CSX::ProfilerAPI::ServiceCapabilities | CSX::ProfilerAPI::kCapabilityIndependentCpu },
 				{ "mainThreadAffine", true },
 				{ "registryMainThreadAffine", false },
 				{ "capture", { { "minimumFrames", 1 }, { "maximumFrames", 300 }, { "singleActiveSession", true }, { "requiresEnabled", true } } },
-				{ "actions", json::array({ "registry", "snapshot", "timers", "history", "set_enabled", "clear_history", "start_capture", "capture_status", "cancel_capture", "events", "acknowledge_events" }) },
+				{ "actions", json::array({ "registry", "snapshot", "timers", "history", "set_enabled", "clear_history", "start_capture", "capture_status", "cancel_capture", "events", "acknowledge_events", "request_capture", "cpu_snapshot", "cpu_timers", "cpu_history" }) },
 			};
 			return response;
 		}
@@ -173,21 +196,40 @@ namespace
 			return Foundation().MakeError(a_args, "invalid_field", "frameCount must be an unsigned integer", "validation", false, "frameCount");
 		if ((action == "capture_status" || action == "cancel_capture") && (!a_args.contains("captureId") || !a_args["captureId"].is_number_unsigned()))
 			return Foundation().MakeError(a_args, "invalid_field", "captureId must be an unsigned integer", "validation", false, "captureId");
-		if (action == "history") {
+		if (cpuView && a_args.contains("captureId"))
+			return Foundation().MakeError(a_args, "invalid_field", "independent CPU views do not accept captureId", "validation", false, "captureId");
+		if (action == "request_capture") {
+			const auto mode = a_args.value("mode", std::string("both"));
+			if (mode != "cpu" && mode != "gpu" && mode != "both")
+				return Foundation().MakeError(a_args, "invalid_field", "mode must be cpu, gpu or both", "validation", false, "mode");
+		}
+		if (action == "history" || action == "cpu_history") {
 			if (!a_args.contains("timerIndex") || !a_args["timerIndex"].is_number_unsigned())
 				return Foundation().MakeError(a_args, "invalid_field", "timerIndex must be an unsigned integer", "validation", false, "timerIndex");
-			const auto domain = a_args.value("domain", std::string("gpu"));
-			if (domain != "gpu" && domain != "cpu")
+			const auto domain = a_args.value("domain", std::string(cpuView ? "cpu" : "gpu"));
+			if ((domain != "gpu" && domain != "cpu") || (cpuView && domain != "cpu"))
 				return Foundation().MakeError(a_args, "invalid_field", "domain must be gpu or cpu", "validation", false, "domain");
 		}
 
-		auto result = RunOnMainThread([action, a_args] {
+		auto result = RunOnMainThread([action, a_args, cpuView] {
 			const auto* api = CSX::Api::GetProfilerService001();
 			if (!api)
 				return json{ { "_dispatchError", "profiler API unavailable" } };
+			const auto* sourceApi = CSX::Api::GetProfilerService002();
+			if ((cpuView || action == "request_capture") && !sourceApi)
+				return ApiFailure(Status::kUnavailable);
+			if (action == "cpu_snapshot")
+				return ReadCpuSnapshot(*sourceApi);
+			if (action == "request_capture") {
+				const auto mode = a_args.value("mode", std::string("both"));
+				const auto sources = mode == "cpu" ? CaptureMode::kCpu : mode == "gpu" ? CaptureMode::kGpu :
+				                                                                         CaptureMode::kBoth;
+				const auto status = sourceApi->RequestCapture(sourceApi->paired.context, sources);
+				return status == Status::kSuccess ? json{ { "requested", true }, { "mode", mode } } : ApiFailure(status);
+			}
 			if (action == "snapshot")
 				return ReadSnapshot(*api);
-			if (action == "timers") {
+			if (action == "timers" || action == "cpu_timers") {
 				const auto prefix = a_args.value("prefix", std::string{});
 				const auto captureId = a_args.value("captureId", 0ull);
 				if (captureId != 0) {
@@ -197,12 +239,13 @@ namespace
 						return ApiFailure(captureStatus);
 				}
 				json timers = json::array();
-				const auto count = captureId != 0 ? api->GetCaptureTimerCount(api->context, captureId) : api->GetTimerCount(api->context);
+				const auto count = cpuView        ? sourceApi->GetCpuTimerCount(api->context) :
+				                   captureId != 0 ? api->GetCaptureTimerCount(api->context, captureId) :
+				                                    api->GetTimerCount(api->context);
 				for (std::uint32_t index = 0; index < count; ++index) {
 					TimerDescriptor001 timer;
-					const auto timerStatus = captureId != 0 ?
-						api->GetCaptureTimerDescriptor(api->context, captureId, index, &timer) :
-						api->GetTimerDescriptor(api->context, index, &timer);
+					const auto timerStatus = cpuView ? sourceApi->GetCpuTimerDescriptor(api->context, index, &timer) : captureId != 0 ? api->GetCaptureTimerDescriptor(api->context, captureId, index, &timer) :
+					                                                                                                                    api->GetTimerDescriptor(api->context, index, &timer);
 					if (timerStatus != Status::kSuccess)
 						continue;
 					const std::string name = timer.name ? timer.name : "";
@@ -213,17 +256,19 @@ namespace
 						{ "gpu", { { "ms", timer.gpuMs }, { "topLevelMs", timer.gpuTopLevelMs }, { "averageMs", timer.gpuAverageMs }, { "p95Ms", timer.gpuP95Ms }, { "p99Ms", timer.gpuP99Ms }, { "historyCount", timer.gpuHistoryCount } } },
 						{ "cpu", { { "ms", timer.cpuMs }, { "averageMs", timer.cpuAverageMs }, { "p95Ms", timer.cpuP95Ms }, { "p99Ms", timer.cpuP99Ms }, { "historyCount", timer.cpuHistoryCount } } } });
 				}
-				return json{ { "captureId", captureId == 0 ? json(nullptr) : json(captureId) }, { "catalogCount", count }, { "returnedCount", timers.size() }, { "prefix", prefix }, { "timers", std::move(timers) } };
+				json response{ { "captureId", captureId == 0 ? json(nullptr) : json(captureId) }, { "catalogCount", count }, { "returnedCount", timers.size() }, { "prefix", prefix }, { "timers", std::move(timers) } };
+				if (cpuView)
+					response["snapshot"] = ReadCpuSnapshot(*sourceApi);
+				return response;
 			}
-			if (action == "history") {
+			if (action == "history" || action == "cpu_history") {
 				const auto timerIndex = a_args.value("timerIndex", std::numeric_limits<std::uint32_t>::max());
-				const auto domainName = a_args.value("domain", std::string("gpu"));
+				const auto domainName = a_args.value("domain", std::string(cpuView ? "cpu" : "gpu"));
 				const auto domain = domainName == "cpu" ? TimingDomain::kCpu : TimingDomain::kGpu;
 				const auto captureId = a_args.value("captureId", 0ull);
 				TimerDescriptor001 timer;
-				const auto timerStatus = captureId != 0 ?
-					api->GetCaptureTimerDescriptor(api->context, captureId, timerIndex, &timer) :
-					api->GetTimerDescriptor(api->context, timerIndex, &timer);
+				const auto timerStatus = cpuView ? sourceApi->GetCpuTimerDescriptor(api->context, timerIndex, &timer) : captureId != 0 ? api->GetCaptureTimerDescriptor(api->context, captureId, timerIndex, &timer) :
+				                                                                                                                         api->GetTimerDescriptor(api->context, timerIndex, &timer);
 				if (timerStatus != Status::kSuccess)
 					return ApiFailure(timerStatus);
 				const auto count = domain == TimingDomain::kCpu ? timer.cpuHistoryCount : timer.gpuHistoryCount;
@@ -232,13 +277,15 @@ namespace
 				json samples = json::array();
 				for (std::uint32_t sample = offset; sample < count && samples.size() < limit; ++sample) {
 					float value = 0.0f;
-					const auto sampleStatus = captureId != 0 ?
-						api->GetCaptureHistorySample(api->context, captureId, timerIndex, domain, sample, &value) :
-						api->GetHistorySample(api->context, timerIndex, domain, sample, &value);
+					const auto sampleStatus = cpuView ? sourceApi->GetCpuHistorySample(api->context, timerIndex, sample, &value) : captureId != 0 ? api->GetCaptureHistorySample(api->context, captureId, timerIndex, domain, sample, &value) :
+					                                                                                                                                api->GetHistorySample(api->context, timerIndex, domain, sample, &value);
 					if (sampleStatus == Status::kSuccess)
 						samples.push_back(value);
 				}
-				return json{ { "captureId", captureId == 0 ? json(nullptr) : json(captureId) }, { "timerIndex", timerIndex }, { "name", timer.name ? timer.name : "" }, { "domain", domainName }, { "historyCount", count }, { "offset", offset }, { "samplesMs", std::move(samples) } };
+				json response{ { "captureId", captureId == 0 ? json(nullptr) : json(captureId) }, { "timerIndex", timerIndex }, { "name", timer.name ? timer.name : "" }, { "domain", domainName }, { "historyCount", count }, { "offset", offset }, { "samplesMs", std::move(samples) } };
+				if (cpuView)
+					response["snapshot"] = ReadCpuSnapshot(*sourceApi);
+				return response;
 			}
 			if (action == "set_enabled") {
 				if (!a_args.contains("enabled") || !a_args["enabled"].is_boolean())
@@ -320,12 +367,13 @@ namespace CSX::Api::ProfilerApiDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX profiler API with non-mutating inspection, timer histories, and bounded capture sessions. The legacy communityshaders.profiler tool remains available.",
+			"description":"Versioned CSX profiler API with paired snapshots and bounded captures, plus an independent CPU view. All timer values and histories are self time. snapshot/timers/history preserve their paired-frame semantics. cpu_snapshot/cpu_timers/cpu_history publish at each CPU capture frame boundary without waiting for GPU queries; use their own capturedFrameCount and publicationCount, and separate catalog indices. CPU views retain the last publication while idle and do not accept captureId. request_capture queues one next-frame request for mode cpu, gpu or both; requests combine, so another consumer or a bounded capture can require both sources. CPU-only requests issue no GPU timestamps unless another consumer requests GPU work. All inspection is non-mutating. Bounded captures and the legacy communityshaders.profiler tool remain unchanged.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
-				"action":{"type":"string","enum":["registry","snapshot","timers","history","set_enabled","clear_history","start_capture","capture_status","cancel_capture","events","acknowledge_events"]},
-				"prefix":{"type":"string"},"timerIndex":{"type":"integer","minimum":0},"domain":{"type":"string","enum":["gpu","cpu"]},
+				"action":{"type":"string","enum":["registry","snapshot","timers","history","set_enabled","clear_history","start_capture","capture_status","cancel_capture","events","acknowledge_events","request_capture","cpu_snapshot","cpu_timers","cpu_history"]},
+				"mode":{"type":"string","enum":["cpu","gpu","both"],"default":"both","description":"Sources requested by request_capture for one next frame; concurrent requests combine."},
+				"prefix":{"type":"string"},"timerIndex":{"type":"integer","minimum":0},"domain":{"type":"string","enum":["gpu","cpu"],"description":"Timing domain for self-time history samples."},
 				"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":300},"enabled":{"type":"boolean"},
 				"frameCount":{"type":"integer","minimum":1,"maximum":300},"clearHistory":{"type":"boolean"},"captureId":{"type":"integer","minimum":1},
 				"afterEventId":{"type":"integer","minimum":0},"throughEventId":{"type":"integer","minimum":0}

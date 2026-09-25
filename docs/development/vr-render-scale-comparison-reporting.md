@@ -1,5 +1,8 @@
 # Upscaling and render-scale comparison reporting
 
+The separate physical-HMD [PR qualification](render-scale-pr-qualification.md)
+currently uses `csx-render-scale-pr-v1` revision 6.
+
 Every update to the existing
 [numbered ledger record](vr-render-scale-ledger.md) includes the
 detailed comparison below automatically. Do this after measurements and
@@ -62,7 +65,26 @@ vendor fallback, lifecycle failures, or retries within the measured window.
 Do not use the fixed two-frame stretch cutoff as a health or improvement
 gate when settling imposes the stretch. Preserve the producer's raw gate,
 label it `DIAGNOSTIC_ONLY`, and compare the measured episode count, total
-frames and duration instead. Likewise, a scaled-presentation gate that
+frames and duration instead. The updated producer marks this gate
+`diagnostic_only` and excludes it from capture acceptance. An older schema-v13
+receipt is interpreted as diagnostic only when the named two-frame gate has
+no classification, `diagnosticThresholdFrames` is absent, and legacy
+`maximumAcceptedFrames` is two; its raw failed result and raw rejection remain
+visible. Unknown classifications or schema versions fail closed. The producer
+retains `maximumAcceptedFrames` for old readers and adds
+`diagnosticThresholdFrames` with the same value.
+Historical comparison also accepts schema-v13 records with those explicit
+diagnostic fields. Neither v13 form qualifies for revision-6 PR qualification,
+which requires v14 for every assay and its baseline.
+Schema v14 additionally records each completed episode's frame range, QPC
+range, transition epoch, and submit-path reason mask. Its
+`presentation_stretch_attribution` health gate rejects missing or incoherent
+trace coverage and unattributed frames. Keep that gate distinct from the raw
+two-frame diagnostic in comparisons.
+Only the named two-frame gate may use `diagnostic_only`; that classification
+on any other gate is rejected. Unclassified other gates remain health gates.
+Likewise, a
+scaled-presentation gate that
 rejects `NativeOriginal` after a **proven** native-AA target is a labeled
 `CONTRACT_MISMATCH`; retain its observed values and native both-eye proof.
 Do not apply that exception without the exact native terminal evidence.

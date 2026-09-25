@@ -27,7 +27,9 @@ set(_prepare_tuning_found FALSE)
 set(_set_layout_unlocked_found FALSE)
 set(_depth_culling_telemetry_enabled_found FALSE)
 set(_depth_culling_telemetry_reset_found FALSE)
+set(_adaptive_balance_enabled_found FALSE)
 set(_foliage_lighting_enabled_found FALSE)
+set(_terrain_variation_mesh_found FALSE)
 set(_truepbr_verbose_found FALSE)
 set(_dynamic_cubemap_resolution_found FALSE)
 math(EXPR _action_last "${_action_count} - 1")
@@ -43,8 +45,12 @@ foreach(_index RANGE 0 ${_action_last})
         set(_depth_culling_telemetry_enabled_found TRUE)
     elseif(_action STREQUAL "reset_depth_culling_telemetry")
         set(_depth_culling_telemetry_reset_found TRUE)
+    elseif(_action STREQUAL "set_adaptive_balance_enabled")
+        set(_adaptive_balance_enabled_found TRUE)
     elseif(_action STREQUAL "set_foliage_lighting_enabled")
         set(_foliage_lighting_enabled_found TRUE)
+    elseif(_action STREQUAL "set_terrain_variation_mesh_enabled")
+        set(_terrain_variation_mesh_found TRUE)
     elseif(_action STREQUAL "set_truepbr_verbose_json_logging")
         set(_truepbr_verbose_found TRUE)
     elseif(_action STREQUAL "set_dynamic_cubemap_resolution")
@@ -73,10 +79,16 @@ if(NOT _depth_culling_telemetry_reset_found)
         "Menu DevBench schema is missing reset_depth_culling_telemetry"
     )
 endif()
+if(NOT _adaptive_balance_enabled_found)
+    message(FATAL_ERROR "Menu DevBench schema is missing set_adaptive_balance_enabled")
+endif()
 if(NOT _foliage_lighting_enabled_found)
     message(FATAL_ERROR
         "Menu DevBench schema is missing set_foliage_lighting_enabled"
     )
+endif()
+if(NOT _terrain_variation_mesh_found)
+    message(FATAL_ERROR "Menu DevBench schema is missing set_terrain_variation_mesh_enabled")
 endif()
 if(NOT _truepbr_verbose_found)
     message(FATAL_ERROR
@@ -123,6 +135,9 @@ foreach(_required_behavior IN ITEMS
     "kPeripheryTAAOuterScale"
     "{ \"foliageLightingEnabled\", globals::features::foliageLighting.IsEnabled() }"
     "{ \"foliageLightingActive\", globals::features::foliageLighting.IsRuntimeEnabled() }"
+    "globals::features::adaptiveBrightness.SetEnabled(enabled)"
+    "{ \"adaptiveBalanceEnabled\", globals::features::adaptiveBrightness.settings.enabled }"
+    "{ \"adaptiveBalanceActive\", globals::features::adaptiveBrightness.IsRuntimeEnabled() }"
     "globals::features::foliageLighting.SetEnabled(enabled)"
     "{ \"truePbrVerboseJsonLogging\", globals::features::truePBR.enableVerboseJsonLogging }"
     "globals::features::truePBR.enableVerboseJsonLogging = enabled"

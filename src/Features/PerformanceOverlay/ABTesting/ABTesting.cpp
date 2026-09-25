@@ -19,12 +19,14 @@ ABTestingManager* ABTestingManager::GetSingleton()
 
 void ABTestingManager::SetTestInterval(uint32_t interval)
 {
-	testInterval = interval;
+	testInterval = std::min(interval, kMaxTestInterval);
+	if (testInterval == 0)
+		Disable();
 }
 
 void ABTestingManager::Enable()
 {
-	if (!abTestingEnabled) {
+	if (!abTestingEnabled && testInterval > 0) {
 		auto* state = globals::state;
 		auto& performanceOverlay = globals::features::performanceOverlay;
 
@@ -59,6 +61,10 @@ void ABTestingManager::Enable()
 		// Restore overlay enabled state after config operations
 		performanceOverlay.settings.ShowInOverlay = overlayWasEnabled;
 
+		aggregator.Clear();
+		performanceOverlay.ClearABTestSettingsDiff();
+		aggregator.OnABSwitch(ABVariant::B);
+
 		logger::info("A/B Testing enabled - starting with Variant B (TEST). Both variants cached in memory for unbiased swapping.");
 	}
 }
@@ -66,6 +72,7 @@ void ABTestingManager::Enable()
 void ABTestingManager::Disable()
 {
 	if (abTestingEnabled) {
+		aggregator.OnTestEnd();
 		auto* state = globals::state;
 		auto& performanceOverlay = globals::features::performanceOverlay;
 
@@ -77,6 +84,7 @@ void ABTestingManager::Disable()
 		// Restore TEST config from memory snapshot (no disk read)
 		if (hasTestSnapshot) {
 			state->LoadFromJson(testConfigSnapshot);
+			usingTestConfig = true;
 		} else {
 			logger::warn("No TEST snapshot available, staying with current config.");
 		}
@@ -145,7 +153,7 @@ void ABTestingManager::DrawSettingsUI()
 
 	if (abTestingEnabled) {
 		ImGui::Text("%s : %.1fs left",
-			usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)",
+			GetVariantLabel(),
 			GetRemainingSeconds());
 
 		auto differences = GetConfigDifferencesForDisplay();
@@ -161,12 +169,10 @@ void ABTestingManager::DrawSettingsUI()
 	const float minSliderWidth = std::min(160.0f, availableWidth);
 	ImGui::SetNextItemWidth(std::clamp(availableWidth * 0.55f, minSliderWidth, availableWidth));
 	int interval = static_cast<int>(testInterval);
-	if (ImGui::SliderInt("A/B Test Interval", &interval, 0, 10)) {
+	if (ImGui::SliderInt("A/B Test Interval", &interval, 0, static_cast<int>(kMaxTestInterval))) {
 		bool overlayWasEnabled = performanceOverlay.settings.ShowInOverlay;
-		testInterval = static_cast<uint32_t>(std::clamp(interval, 0, 10));
-		if (testInterval == 0) {
-			Disable();
-		} else if (!abTestingEnabled) {
+		SetTestInterval(static_cast<uint32_t>(std::max(interval, 0)));
+		if (testInterval > 0 && !abTestingEnabled) {
 			Enable();
 		} else {
 			logger::info("Setting new A/B test interval {}.", testInterval);
@@ -180,9 +186,16 @@ void ABTestingManager::DrawSettingsUI()
 			"Workflow: Configure your test settings, then enable A/B testing.\n"
 			"- Variant B (TEST) = Your current settings when you enable testing\n"
 			"- Variant A (USER) = Your previously saved user configuration\n"
-			"Testing starts with Variant B, then swaps every N seconds.\n"
+			"The initial Variant B interval is an unmeasured warm-up, then testing begins with Variant A.\n"
 			"Set to 0 to disable and restore TEST settings.");
 	}
+}
+
+const char* ABTestingManager::GetVariantLabel() const
+{
+	if (aggregator.IsWarmingUp())
+		return "Variant B (TEST) warm-up";
+	return usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)";
 }
 
 float ABTestingManager::GetRemainingSeconds() const
@@ -246,14 +259,14 @@ std::vector<SettingsDiffEntry> ABTestingManager::GetConfigDiffEntries(float epsi
 
 void ABTestingManager::ClearCachedSnapshots()
 {
-	try {
-		testConfigSnapshot.clear();
-		userConfigSnapshot.clear();
-		hasTestSnapshot = false;
-		hasUserSnapshot = false;
-	} catch (...) {
-		// No-op if clear fails
+	if (abTestingEnabled) {
+		logger::warn("Cannot clear A/B configuration snapshots while a test is active.");
+		return;
 	}
+	testConfigSnapshot.clear();
+	userConfigSnapshot.clear();
+	hasTestSnapshot = false;
+	hasUserSnapshot = false;
 }
 
 std::vector<std::string> ABTestingManager::GetConfigDifferences() const
@@ -280,7 +293,7 @@ void ABTestingManager::DrawOverlayUI()
 
 	// Show current variant and time
 	ImGui::Text(fmt::format("{} : {:.1f}s left",
-		usingTestConfig ? "Variant B (TEST)" : "Variant A (USER)", GetRemainingSeconds())
+		GetVariantLabel(), GetRemainingSeconds())
 			.c_str());
 
 	// Show what changed (for both variants)

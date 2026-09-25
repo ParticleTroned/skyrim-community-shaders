@@ -54,14 +54,44 @@ See `CMakePresets.json` for all available presets.
 
 ### Complete Local Validation
 
-The main DLL target does not build every test executable. A clean pull-request validation must build both test groups explicitly before running CTest:
+Use CMake 4.3.5 or newer for the validated Windows toolchain. CMake 4.3.0 and
+4.3.1 have a regular-expression regression that removes semicolons from
+generated test declarations. Check `pwsh ./tools/cmake.ps1 --version` after
+updating. The launcher preserves the CMake selected on `PATH`, including
+command wrappers, before initializing Visual Studio. Validation uses the
+CTest executable recorded by that CMake configuration.
+
+Run the complete sequence and save its evidence with:
+
+```powershell
+pwsh ./tools/validate-local.ps1
+```
+
+The command records source and submodule identity, tool versions, the DLL
+manifest, discovered tests, full command output, exit codes and durations
+under `build/validation/`. It rejects missing, disabled, unbuilt or skipped
+tests and any source change during validation. Existing edits are preserved
+and identified by the manifest's dirty digest. Preset checks run sequentially
+because they share a publication lock.
+
+The main DLL target does not build every test executable. Both test groups
+must be built explicitly. The equivalent manual sequence is:
 
 ```powershell
 pwsh ./tools/cmake.ps1 --preset ALL -DBUILD_CONTROLLER_TESTS=ON -DBUILD_SHADER_TESTS=ON
 pwsh ./tools/cmake.ps1 --build --preset CSmain -- /m:1
 pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target controller_tests shader_tests -- /m:1
+ctest --test-dir build/ALL -C Release -N
 ctest --test-dir build/ALL -C Release --output-on-failure --no-tests=error --timeout 300
+pwsh ./tests/unified_preset_generator_test.ps1
+pwsh ./tools/generate-unified-presets.ps1 -Check
 ```
+
+The controller aggregate includes every executable declared in its CMake
+block. Controller tests use build-local temporary files; the Skylighting
+settings test initializes MSVC when launched from an ordinary CTest shell.
+An MSVC update at the same executable path is reflected in build provenance
+without manually deleting CMake's compiler cache.
 
 Changes to the VR master custom-shader switch also require a headset runtime check before merge. With render scaling both active and inactive, disable custom shaders from the CSX menu and verify that native eye targets are restored before the switch completes, the scene has no stale overlay or deferred attachment, and re-enabling works. Repeat in the main menu and in-world when the submit path changes.
 

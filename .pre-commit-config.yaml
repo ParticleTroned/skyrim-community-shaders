@@ -6,7 +6,6 @@ repos:
       hooks:
           - id: trailing-whitespace
             args: [--markdown-linebreak-ext=md]
-            exclude: ^features/Upscaling/Shaders/Upscaling/Streamline/reflex\.license\.txt$
           - id: mixed-line-ending
             args: [--fix=lf]
           - id: check-yaml

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 
 namespace
@@ -26,19 +27,15 @@ namespace
 
 	void SanitizeProfileWithDefaults(Bloom::Profile& a_profile, const Bloom::Profile& a_defaults)
 	{
-		const auto clampFiniteOrDefault = [](float a_value, float a_min, float a_max, float a_defaultValue) {
-			return std::isfinite(a_value) ? std::clamp(a_value, a_min, a_max) : a_defaultValue;
-		};
-
-		a_profile.EnhancementIntensity = clampFiniteOrDefault(a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, a_defaults.EnhancementIntensity);
-		a_profile.HaloRadius = clampFiniteOrDefault(a_profile.HaloRadius, 0.0f, kHaloRadiusMax, a_defaults.HaloRadius);
-		a_profile.HaloSpread = clampFiniteOrDefault(a_profile.HaloSpread, 0.0f, 1.0f, a_defaults.HaloSpread);
-		a_profile.BloomSaturation = clampFiniteOrDefault(a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, a_defaults.BloomSaturation);
-		a_profile.BloomTint.x = clampFiniteOrDefault(a_profile.BloomTint.x, 0.0f, 1.0f, a_defaults.BloomTint.x);
-		a_profile.BloomTint.y = clampFiniteOrDefault(a_profile.BloomTint.y, 0.0f, 1.0f, a_defaults.BloomTint.y);
-		a_profile.BloomTint.z = clampFiniteOrDefault(a_profile.BloomTint.z, 0.0f, 1.0f, a_defaults.BloomTint.z);
-		a_profile.CompressionCeiling = clampFiniteOrDefault(a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, a_defaults.CompressionCeiling);
-		a_profile.CompressionThreshold = clampFiniteOrDefault(
+		a_profile.EnhancementIntensity = Util::ClampFinite(a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, a_defaults.EnhancementIntensity);
+		a_profile.HaloRadius = Util::ClampFinite(a_profile.HaloRadius, 0.0f, kHaloRadiusMax, a_defaults.HaloRadius);
+		a_profile.HaloSpread = Util::ClampFinite(a_profile.HaloSpread, 0.0f, 1.0f, a_defaults.HaloSpread);
+		a_profile.BloomSaturation = Util::ClampFinite(a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, a_defaults.BloomSaturation);
+		a_profile.BloomTint.x = Util::ClampFinite(a_profile.BloomTint.x, 0.0f, 1.0f, a_defaults.BloomTint.x);
+		a_profile.BloomTint.y = Util::ClampFinite(a_profile.BloomTint.y, 0.0f, 1.0f, a_defaults.BloomTint.y);
+		a_profile.BloomTint.z = Util::ClampFinite(a_profile.BloomTint.z, 0.0f, 1.0f, a_defaults.BloomTint.z);
+		a_profile.CompressionCeiling = Util::ClampFinite(a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, a_defaults.CompressionCeiling);
+		a_profile.CompressionThreshold = Util::ClampFinite(
 			a_profile.CompressionThreshold,
 			0.0f,
 			a_profile.CompressionCeiling,

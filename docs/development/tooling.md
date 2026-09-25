@@ -52,6 +52,9 @@ pwsh ./tools/pre-commit.ps1 run --from-ref origin/main-VR --to-ref HEAD
 pwsh ./tools/cmake.ps1 --preset ALL
 pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target controller_tests
 
+# Record the complete DLL, controller, shader and preset validation
+pwsh ./tools/validate-local.ps1
+
 # Diagnose the complete local toolchain and remote connectivity
 pwsh ./tools/dev-doctor.ps1 -Network
 ```

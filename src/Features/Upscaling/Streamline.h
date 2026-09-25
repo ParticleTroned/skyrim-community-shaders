@@ -208,10 +208,11 @@ public:
 		bool croppedViewport = false;
 		float pinholeOffsetX = 0.0f;
 		float pinholeOffsetY = 0.0f;
+		bool submitStageVRDLSS = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		float jitterX = 0.0f;
 		float jitterY = 0.0f;
 		bool colorBuffersHDR = false;
-		bool submitStageVRDLSS = false;
 		bool presentationUpscalingActive = false;
 		bool renderScaleActive = false;
 		bool foveatedDispatchEnabled = false;
@@ -232,6 +233,7 @@ public:
 		ID3D11Resource* motionVectors = nullptr;
 		ID3D11Resource* reactiveMask = nullptr;
 		ID3D11Resource* transparencyMask = nullptr;
+#endif
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED

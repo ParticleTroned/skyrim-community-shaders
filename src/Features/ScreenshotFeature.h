@@ -57,7 +57,9 @@ struct ScreenshotFeature : public Feature
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override { DrawSettings(); }
+	/** Load a settings layer, migrating a supplied legacy eye only when canonical selection is absent. */
 	virtual void LoadSettings(json& a_json) override;
+	/** Persist canonical capture choices and their backward-compatible sequence mirror. */
 	virtual void SaveSettings(json& a_json) override;
 	virtual void PostPostLoad() override;
 
@@ -120,6 +122,7 @@ struct ScreenshotFeature : public Feature
 
 private:
 	friend class ScreenshotApi;
+	/** Expand one eye/format selection into outputs without adding other views. */
 	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard) const;
 	std::string uiSequenceRequestId;
 	std::chrono::steady_clock::time_point nextUiSequencePoll{};
@@ -235,25 +238,17 @@ private:
 		InvalidDescriptor
 	};
 
-	struct ReadbackContextProtection
-	{
-		winrt::com_ptr<ID3D11DeviceContext> context;
-		bool restoreToUnprotected = false;
-	};
-
 	struct ScreenshotWorkerState
 	{
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::queue<PendingScreenshot> queue;
-		std::vector<ReadbackContextProtection> readbackProtections;
 		std::shared_ptr<ScreenshotApi> api;
 		std::size_t outstandingCount = 0;
 		std::atomic_bool notifyAllowed{ true };
 		bool accepting = true;
 		bool stopRequested = false;
 		bool exited = false;
-		bool restoreReadbackProtection = false;
 	};
 
 	std::shared_ptr<ScreenshotWorkerState> screenshotWorkerState;
@@ -278,8 +273,7 @@ private:
 	winrt::com_ptr<ID3D11ShaderResourceView> previewCacheSRV;
 
 	bool QueueScreenshot(PendingScreenshot&& screenshot);
-	bool EnsureReadbackContextProtection(ID3D11DeviceContext* a_context);
-	void RestoreReadbackContextProtectionIfIdle();
+	bool ValidateReadbackContext(ID3D11DeviceContext* a_context);
 	bool TryReserveScreenshotSlot();
 	void ReleaseScreenshotSlot();
 	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);
@@ -316,6 +310,5 @@ private:
 		uint32_t a_sequenceOrdinal = 0);
 	bool CancelApiCapture(std::string_view a_requestId);
 	void EnsureScreenshotApi();
-	static void RestoreReadbackContextProtectionIfIdle(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	static void ShowInGameNotification(std::string message);
 };

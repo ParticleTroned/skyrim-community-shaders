@@ -12,9 +12,11 @@
 
 namespace
 {
+	using CSX::ProfilerAPI::CaptureMode;
 	using CSX::ProfilerAPI::CaptureProgress001;
 	using CSX::ProfilerAPI::CaptureRequest001;
 	using CSX::ProfilerAPI::CaptureState;
+	using CSX::ProfilerAPI::CpuSnapshot001;
 	using CSX::ProfilerAPI::Snapshot001;
 	using CSX::ProfilerAPI::Status;
 	using CSX::ProfilerAPI::TimerDescriptor001;
@@ -49,6 +51,69 @@ namespace
 	class ProfilerService
 	{
 	public:
+		Status RequestCapture(CaptureMode a_mode) const
+		{
+			if (!IsOwnerThread())
+				return Status::kWrongThread;
+			if (a_mode != CaptureMode::kGpu && a_mode != CaptureMode::kCpu && a_mode != CaptureMode::kBoth)
+				return Status::kInvalidArgument;
+			if (!globals::profiler || !globals::profiler->IsInitialized())
+				return Status::kUnavailable;
+			if (!globals::profiler->IsUserEnabled())
+				return Status::kDisabled;
+			globals::profiler->RequestCapture(static_cast<Profiler::CaptureMode>(a_mode));
+			return Status::kSuccess;
+		}
+
+		Status GetCpuSnapshot(CpuSnapshot001& a_output) const
+		{
+			if (!IsOwnerThread())
+				return Status::kWrongThread;
+			const auto* profiler = globals::profiler;
+			if (!profiler)
+				return Status::kUnavailable;
+			a_output = {
+				.structSize = sizeof(CpuSnapshot001),
+				.available = profiler->IsInitialized() ? 1u : 0u,
+				.enabled = profiler->IsUserEnabled() ? 1u : 0u,
+				.capturing = profiler->IsCpuCaptureActive() ? 1u : 0u,
+				.timerCount = static_cast<std::uint32_t>(profiler->GetImmediateCpuResults().size()),
+				.capturedFrameCount = profiler->GetCapturedCpuFrameCount(),
+				.publicationCount = profiler->GetCpuPublicationCount(),
+				.historyCapacity = Profiler::kHistorySize,
+				.maximumTimersPerFrame = Profiler::kMaxTimers * 2,
+				.slotRefusals = profiler->GetCpuSlotRefusals(),
+				.resolvedTotalMs = profiler->GetImmediateCpuTotalTimeMs(),
+				.buildId = BuildProvenance::GetBuildId().data(),
+			};
+			return a_output.available ? Status::kSuccess : Status::kUnavailable;
+		}
+
+		std::uint32_t GetCpuTimerCount() const
+		{
+			return IsOwnerThread() && globals::profiler ?
+			           static_cast<std::uint32_t>(globals::profiler->GetImmediateCpuResults().size()) :
+			           0u;
+		}
+
+		Status GetCpuTimer(std::uint32_t a_index, TimerDescriptor001& a_output) const
+		{
+			if (!IsOwnerThread())
+				return Status::kWrongThread;
+			if (!globals::profiler)
+				return Status::kUnavailable;
+			return FillTimer(globals::profiler->GetImmediateCpuResults(), a_index, a_output);
+		}
+
+		Status GetCpuHistory(std::uint32_t a_index, std::uint32_t a_sampleIndex, float& a_output) const
+		{
+			if (!IsOwnerThread())
+				return Status::kWrongThread;
+			if (!globals::profiler)
+				return Status::kUnavailable;
+			return ReadHistory(globals::profiler->GetImmediateCpuResults(), a_index, TimingDomain::kCpu, a_sampleIndex, a_output);
+		}
+
 		Status GetSnapshot(Snapshot001& a_output) const
 		{
 			if (!IsOwnerThread())
@@ -257,6 +322,41 @@ namespace
 		return const_cast<ProfilerService*>(static_cast<const ProfilerService*>(a_context));
 	}
 
+	Status RequestCapture(const void* a_context, CaptureMode a_mode)
+	{
+		return a_context ? ServiceFrom(a_context)->RequestCapture(a_mode) : Status::kInvalidArgument;
+	}
+
+	Status GetCpuSnapshot(const void* a_context, CpuSnapshot001* a_output)
+	{
+		if (!a_context || !a_output)
+			return Status::kInvalidArgument;
+		if (a_output->structSize < sizeof(CpuSnapshot001))
+			return Status::kStructureTooSmall;
+		return ServiceFrom(a_context)->GetCpuSnapshot(*a_output);
+	}
+
+	std::uint32_t GetCpuTimerCount(const void* a_context)
+	{
+		return a_context ? ServiceFrom(a_context)->GetCpuTimerCount() : 0u;
+	}
+
+	Status GetCpuTimerDescriptor(const void* a_context, std::uint32_t a_index, TimerDescriptor001* a_output)
+	{
+		if (!a_context || !a_output)
+			return Status::kInvalidArgument;
+		if (a_output->structSize < sizeof(TimerDescriptor001))
+			return Status::kStructureTooSmall;
+		return ServiceFrom(a_context)->GetCpuTimer(a_index, *a_output);
+	}
+
+	Status GetCpuHistorySample(const void* a_context, std::uint32_t a_index, std::uint32_t a_sampleIndex, float* a_output)
+	{
+		if (!a_context || !a_output)
+			return Status::kInvalidArgument;
+		return ServiceFrom(a_context)->GetCpuHistory(a_index, a_sampleIndex, *a_output);
+	}
+
 	Status GetSnapshot(const void* a_context, Snapshot001* a_output)
 	{
 		if (!a_context || !a_output)
@@ -383,6 +483,31 @@ namespace CSX::Api
 			});
 			if (status != ServiceAPI::Status::kSuccess && status != ServiceAPI::Status::kAlreadyRegistered)
 				logger::error("Failed to register profiler API service ({})", static_cast<std::uint32_t>(status));
+
+			static const ProfilerAPI::Interface002 sourceInterface = [] {
+				ProfilerAPI::Interface002 result;
+				result.paired = serviceInterface;
+				result.paired.structSize = sizeof(ProfilerAPI::Interface002);
+				result.paired.minor = ProfilerAPI::SourceServiceMinor;
+				result.paired.schemaRevision = ProfilerAPI::SourceSchemaRevision;
+				result.paired.capabilities |= ProfilerAPI::kCapabilityIndependentCpu;
+				result.RequestCapture = ::RequestCapture;
+				result.GetCpuSnapshot = ::GetCpuSnapshot;
+				result.GetCpuTimerCount = ::GetCpuTimerCount;
+				result.GetCpuTimerDescriptor = ::GetCpuTimerDescriptor;
+				result.GetCpuHistorySample = ::GetCpuHistorySample;
+				return result;
+			}();
+			const auto sourceStatus = GetProcessServiceRegistry().Register({
+				ProfilerAPI::ServiceName,
+				ProfilerAPI::ServiceMajor,
+				ProfilerAPI::SourceServiceMinor,
+				ProfilerAPI::SourceSchemaRevision,
+				ServiceAPI::kCapabilityInspection | ServiceAPI::kCapabilityRuntimeMutation | ServiceAPI::kCapabilityAsynchronousOperations,
+				&sourceInterface,
+			});
+			if (sourceStatus != ServiceAPI::Status::kSuccess && sourceStatus != ServiceAPI::Status::kAlreadyRegistered)
+				logger::error("Failed to register independent CPU profiler API ({})", static_cast<std::uint32_t>(sourceStatus));
 		});
 	}
 
@@ -398,5 +523,19 @@ namespace CSX::Api
 		if (GetProcessServiceRegistry().Query(query, result, nullptr) != ServiceAPI::Status::kSuccess)
 			return nullptr;
 		return static_cast<const ProfilerAPI::Interface001*>(result);
+	}
+
+	const ProfilerAPI::Interface002* GetProfilerService002()
+	{
+		InitializeProfilerService();
+		ServiceAPI::ServiceQuery001 query;
+		query.name = ProfilerAPI::ServiceName;
+		query.major = ProfilerAPI::ServiceMajor;
+		query.minimumMinor = ProfilerAPI::SourceServiceMinor;
+		query.maximumMinor = ProfilerAPI::SourceServiceMinor;
+		const void* result = nullptr;
+		if (GetProcessServiceRegistry().Query(query, result, nullptr) != ServiceAPI::Status::kSuccess)
+			return nullptr;
+		return static_cast<const ProfilerAPI::Interface002*>(result);
 	}
 }

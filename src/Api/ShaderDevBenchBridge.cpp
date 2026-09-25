@@ -428,7 +428,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait while compilation continues on the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes.",
+			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait while compilation continues on the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -445,7 +445,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 						"properties":{
 							"action":{"type":"string","enum":["set_custom_shaders","set_disk_cache","set_async_compilation","set_skip_unchanged","set_feature_disabled_at_boot","clear_memory_cache","clear_disk_cache","clear_all_caches","restore_previous_disk_cache","accept_cache_rebuild","stop_compilation","capture_active_shaders"]},
 							"expectedStateRevision":{"type":"integer","minimum":0},
-							"value":{"type":"boolean"},
+							"value":{"type":"boolean","description":"For set_skip_unchanged, true permits verified disk reuse; false forces source compilation for disk requests while retaining disk writes."},
 							"featureName":{"type":"string"},
 							"persist":{"type":"boolean"},
 							"allowDisruptive":{"type":"boolean"},

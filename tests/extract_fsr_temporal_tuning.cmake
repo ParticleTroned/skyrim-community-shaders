@@ -25,5 +25,5 @@ endfunction()
 
 extract_between("${_upscaling}" "void from_json(const json& a_json, Settings& a_settings)" "\n}\n\nNLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT" "temporal_settings_load_under_test.h")
 extract_between("${_fidelity}" "ffxReturnCode_t ConfigureFidelityFXProtected(" "ffxReturnCode_t DispatchFrameGenerationProtected(" "temporal_provider_calls_under_test.h")
-extract_between("${_fidelity}" "FidelityFX::LifecycleResult FidelityFX::RecordRuntimeProviderResult(" "FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(" "temporal_provider_result_under_test.h")
+extract_between("${_fidelity}" "FidelityFX::LifecycleResult FidelityFX::RecordRuntimeProviderResult(" "bool FidelityFX::IsRuntimeUpscalerInteropReady(" "temporal_provider_result_under_test.h")
 extract_between("${_fidelity_header}" "struct TemporalTuningSnapshot" "/** Queues validated settings;" "temporal_snapshot_under_test.h")

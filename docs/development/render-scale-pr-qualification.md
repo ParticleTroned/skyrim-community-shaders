@@ -1,9 +1,11 @@
 # Render-scale PR qualification
 
-Render-scale changes use revision 4 of the versioned
+Render-scale changes use revision 6 of the versioned
 `csx-render-scale-pr-v1` DevBench protocol. The canonical runner lives in the
 Skyrim VR automation repository at
 `tools/render-scale-qualification/Start-CSXRenderScaleQualification.ps1`.
+Its producer stress record is `community-shaders.vr-render-scale.iteration`
+schema v14.
 Copy the generated `pr-summary.md` into every PR that changes render-scale
 behavior and retain the complete evidence directory with the candidate build.
 
@@ -21,8 +23,9 @@ package. The wrapper discovers the exact running Build ID, artifact identity,
 and GPU matrix instead of accepting a caller-supplied candidate identity:
 
 ```powershell
-$env:CSX_DEVBENCH_RUNTIME_PATH = 'C:\Path\To\devbench\runtime.json'
-$env:CSX_RENDER_SCALE_FIXTURE_PATH = 'C:\Evidence\render-scale-fixture.json'
+$qualificationRoot = Join-Path $env:LOCALAPPDATA 'CSX/RenderScaleQualification'
+$env:CSX_DEVBENCH_RUNTIME_PATH = Join-Path $qualificationRoot 'devbench/runtime.json'
+$env:CSX_RENDER_SCALE_FIXTURE_PATH = Join-Path $qualificationRoot 'fixture.json'
 pwsh .\tools\render-scale-qualification\Start-CSXRenderScaleQualification.ps1
 ```
 
@@ -41,7 +44,7 @@ candidate PR result:
 ```powershell
 pwsh .\tools\render-scale-qualification\Start-CSXRenderScaleQualification.ps1 `
     -PrMode `
-    -BaselinePath C:\Evidence\render-scale-baseline `
+    -BaselinePath (Join-Path $qualificationRoot 'baseline') `
     -ExpectedBaselineBuildId '<64-character baseline CSX build ID>'
 ```
 
@@ -118,7 +121,7 @@ Each transition is a fail-fast sequence of checked top-level MCP calls:
 
 `qualification_wait` accepts the optional `milestone` value `strict`,
 `presentation`, or `cleanup`. Omitting it is exactly equivalent to selecting
-`strict`; the revision-4 runner therefore retains its existing combined
+`strict`; the revision-6 runner therefore retains its existing combined
 qualification semantics. Strict success requires presentation stability and
 drained cleanup at the same observation. Neither named milestone can turn a
 strict failure into a protocol pass.
@@ -232,10 +235,21 @@ Wilson 95-percent confidence interval. No samples are discarded as outliers.
 Assay 1 passes only when all 20 transitions reach the exact destination and
 profile, no transition overlaps or times out, settings do not drift, no device,
 OOM, backend, terminal, lifecycle, fidelity, or fallback failure occurs, the
-retirement/trim work drains, and both eyes recover. The default bound for an
-allowed presentation-stretch episode is two frames. The report includes episode
-count, completed and active frames, mean/max frames, and mean/max milliseconds;
-an active episode or incomplete two-eye compositor cycle at assay end fails.
+retirement/trim work drains, and both eyes recover. The producer retains the
+raw two-frame `presentation_stretch_frame_bound` comparison as
+`diagnostic_only`. It is shown in the report but does not determine acceptance.
+The hard stretch check uses schema-v14 episode evidence: every completed
+compositor cycle must have a coherent transition epoch and a recorded
+cooldown, deferred-retry, or loading/menu reason. Missing, inconsistent, or
+overflowed episode evidence fails closed. The six-frame vendor-resume guard is
+a minimum settling period, not a maximum stretch duration. Report episode
+count, completed and active frames, mean/max frames and milliseconds, and the
+attribution trace. An active episode or incomplete two-eye compositor cycle
+at assay end fails. The physical-HMD visual assay remains required.
+The trace reason mask uses value 1 for an unattributed cycle, 2 for the
+active vendor-resume guard, 4 for deferred vendor retry, and 8 for
+loading/menu presentation. A mixed-eye reason or an epoch change within one
+episode invalidates attribution.
 
 CPU telemetry ownership is session-based. Successful
 `cpu_performance_start`, `cpu_performance_status`, and

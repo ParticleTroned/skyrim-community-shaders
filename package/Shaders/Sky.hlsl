@@ -267,6 +267,11 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
 
+#	if !defined(OCCLUSION) && !defined(MOONMASK)
+	if (SharedData::adaptiveBalanceSettings.skySaturation != 1.0)
+		psout.Color.xyz = Color::Saturation(psout.Color.xyz, SharedData::adaptiveBalanceSettings.skySaturation);
+#	endif
+
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
 
 	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w);

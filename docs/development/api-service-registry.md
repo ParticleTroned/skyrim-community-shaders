@@ -6,26 +6,34 @@ change, and new services must not add virtual methods to the legacy interface.
 
 ## Compatibility policy
 
-- CSAP message type `CSAP` and `ICSInterface001` revisions 1–4 remain available.
-- The service registry uses the separate SKSE message type `CSXR`.
-- A service major version is an ABI break. Minor versions are additive.
-- Clients request an explicit major and an inclusive minor-version range. The
-  registry returns the highest registered compatible minor version.
-- Service interface objects and registrations live for the CSX process
-  lifetime. A temporarily unavailable service reports that state through its
-  own interface rather than disappearing from the registry.
-- Native interfaces use fixed-width values, caller-sized structures, function
-  tables, and opaque pointers. STL containers, exceptions, RTTI objects, and
-  renderer/game pointers must not cross the DLL boundary.
+-   CSAP message type `CSAP` and `ICSInterface001` revisions 1–4 remain available.
+-   The service registry uses the separate SKSE message type `CSXR`.
+-   A service major version is an ABI break. Minor versions are additive.
+-   Clients request an explicit major and an inclusive minor-version range. The
+    registry returns the highest registered compatible minor version.
+-   Service interface objects and registrations live for the CSX process
+    lifetime. A temporarily unavailable service reports that state through its
+    own interface rather than disappearing from the registry.
+-   Native interfaces use fixed-width values, caller-sized structures, function
+    tables, and opaque pointers. STL containers, exceptions, RTTI objects, and
+    renderer/game pointers must not cross the DLL boundary.
 
 The public registry contract is in `include/VRAPI/CSserviceapi.h`.
 
 ## Discovery
 
-After SKSE `kMessage_PostLoad`, a consumer dispatches
+During or after SKSE `kMessage_PostLoad`, a consumer dispatches
 `CSX::ServiceAPI::RegistryMessage001` to `CommunityShaders` with message type
 `RegistryMessageType`. A successful response contains a provider-owned
 `Registry001` function table.
+
+CSX registers the wildcard listener during DLL load for earlier consumers,
+then refreshes it at `PostLoad` to include later-loaded plugins. SKSE dispatches
+lifecycle callbacks in registration order, so consumers that register their
+SKSE listener during DLL load can discover CSXR from `PostLoad` on either
+side of CSX in the load order. Ordinary capture clients may instead discover
+at `PostPostLoad`; shader-compatibility providers must register at `PostLoad`
+before CSX freezes cache requirements.
 
 Clients should then:
 
@@ -64,13 +72,13 @@ inside its own versioned interface.
 
 The first domain service should establish the complete pattern:
 
-- immutable snapshot structures;
-- explicit configured/requested/effective/persisted state;
-- structured result and block-reason codes;
-- state revisions for optimistic concurrency;
-- preflight for mutations;
-- operation handles and events for asynchronous work;
-- internal main/render-thread scheduling.
+-   immutable snapshot structures;
+-   explicit configured/requested/effective/persisted state;
+-   structured result and block-reason codes;
+-   state revisions for optimistic concurrency;
+-   preflight for mutations;
+-   operation handles and events for asynchronous work;
+-   internal main/render-thread scheduling.
 
 Legacy CSAP methods may later delegate to the same domain controllers, provided
 their existing observable behaviour and ABI remain compatible.

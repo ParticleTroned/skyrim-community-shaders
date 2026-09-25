@@ -106,7 +106,7 @@ void FoliageLighting::DrawGrassScatteringSetting()
 	Util::UIntCheckbox("Grass Scattering", settings.EnableGrassScattering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(
-			"Adds wrapped, view-dependent transmission to non-PBR grass. "
+			"Adds wrapped, view-dependent transmission to grass. "
 			"Works in both the enhanced and fallback grass lighting paths.");
 	}
 }

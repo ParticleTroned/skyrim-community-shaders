@@ -46,10 +46,12 @@ bool LumaSharpen::ApplyMotionAdaptiveSharpen(ID3D11ShaderResourceView* inputSRV,
 		[&]() { return ApplySharpen(inputSRV, outputUAV, sharpness); });
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 const char* LumaSharpen::GetMotionAdaptiveStatus() const noexcept
 {
 	return motionAdaptive.GetStatus();
 }
+#endif
 
 void LumaSharpen::CreateComputeShader()
 {

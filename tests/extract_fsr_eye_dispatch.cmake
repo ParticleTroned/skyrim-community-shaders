@@ -23,7 +23,7 @@ function(extract_between source start end output)
 endfunction()
 
 extract_between("${_fidelity_header}" "enum class LifecycleResult" "#ifdef DEVBENCH_BRIDGE_ENABLED" _types)
-extract_between("${_fidelity_header}" "struct RuntimeDispatchPlan" "bool CanUseRuntimeUpscalerPath(" _plan)
+extract_between("${_fidelity_header}" "struct RuntimeDispatchPlan" "bool TryGetCurrentAdapterDesc(" _plan)
 file(WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_types_under_test.h" "${_types}\n${_plan}")
 
 extract_between("${_upscaling_header}" "struct VendorEyeDispatchParams" "\n\t};" _params)
@@ -31,6 +31,13 @@ file(WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_params_under_test.h" "${_params
 
 extract_between("${_fidelity_source}" "bool HasSupportedSubmitColorContract()" "bool ShouldEmitFidelityFXDiagLogs()" _submit_contract)
 extract_between("${_fidelity_source}" "void FidelityFX::ArmRuntimeHostFallback(" "FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan(" _arm)
+extract_between("${_fidelity_source}" "FidelityFX::RuntimeDispatchPlan FidelityFX::ResolveRuntimeDispatchPlan()" "FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()" _resolve_plan)
+string(
+    REPLACE "FidelityFX::ResolveRuntimeDispatchPlan()"
+    "FidelityFX::ResolveRuntimeDispatchPlanUnderTest()"
+    _resolve_plan
+    "${_resolve_plan}"
+)
 extract_between("${_fidelity_source}" "bool FidelityFX::HasFSRResources()" "bool FidelityFX::IsRuntimeUpscalerDispatchProofUsable(" _resources)
 extract_between("${_fidelity_source}" "bool FidelityFX::AreFSRResourcesCompatible(" "bool FidelityFX::IsHostFSR3Supported()" _compatibility)
 extract_between("${_fidelity_source}" "bool FidelityFX::CanDispatchHostFallbackForRegions(" "FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(" _fallback)
@@ -39,7 +46,7 @@ extract_between("${_fidelity_source}" "FidelityFX::StereoUpscaleResult FidelityF
 extract_between("${_upscaling_source}" "FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(" "FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(" _vendor)
 file(
     WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_under_test.h"
-    "${_submit_contract}\n${_arm}\n${_resources}\n${_compatibility}\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}"
+    "${_submit_contract}\n${_arm}\n${_resolve_plan}\n${_resources}\n${_compatibility}\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}"
 )
 
 extract_between("${_fidelity_source}" "const bool runtimeDeferredByGate =" "static bool loggedRuntimeDeferredForShaderCompilation =" _gate)

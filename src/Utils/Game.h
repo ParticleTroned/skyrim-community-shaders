@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 namespace Util::detail
 {
 	template <class T>
@@ -45,6 +48,16 @@ namespace Util::detail
 
 namespace Util
 {
+	/** @brief Rejects implausible addresses; this does not establish pointee lifetime or readability. */
+	[[nodiscard]] inline bool IsLikelyValidPointer(const void* pointer, std::size_t alignment = alignof(void*))
+	{
+		const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+		constexpr std::uintptr_t MinUserModeAddress = 0x10000;
+		constexpr std::uintptr_t MaxUserModeAddress = 0x00007FFFFFFFFFFFULL;
+		return alignment != 0 && (alignment & (alignment - 1)) == 0 &&
+		       address >= MinUserModeAddress && address <= MaxUserModeAddress && (address & (alignment - 1)) == 0;
+	}
+
 	inline constexpr float DirectionalLightDiscontinuityThreshold = RE::NI_PI / 180.0f;
 
 	[[nodiscard]] inline bool HasDirectionalLightDiscontinuity(const RE::NiPoint3& a_currentDirection, const RE::NiPoint3& a_previousDirection) noexcept

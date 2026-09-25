@@ -50,12 +50,17 @@ from build_provenance import (
 )
 
 
+from shader_cache_manifest import (
+    SCHEMA_VERSION as MANIFEST_SCHEMA_VERSION,
+    STAGE_EXTENSIONS,
+    prepare_fxc_defines,
+)
+
 REPO = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = "ShaderCache"
-CACHE_EXTENSIONS = frozenset({".pso", ".vso", ".cso"})
+CACHE_EXTENSIONS = frozenset(STAGE_EXTENSIONS.values())
 INFO_FILE_NAME = "Info.ini"
 MANIFEST_FILE_NAME = "Manifest.json"
-MANIFEST_SCHEMA_VERSION = 1
 PACK_MANIFEST_FILE_NAME = "PackManifest.json"
 PACK_LANES = {
     "Optimized.A.csxpack": 1,
@@ -837,9 +842,14 @@ class PackagedCompatibilityInventory:
             changed = False
             for relative, contents in artifacts.items():
                 shared = contents.keys() & default[relative].keys()
-                if not shared:
+                source = f"{relative.split('/', 1)[0]}.hlsl"
+                changes_defines = bool(self.variants[name].get("shaderDefinesBySource", {}).get(source))
+                if not changes_defines and not shared:
                     raise SystemExit(f"packaged cache compatibility records disagree on content coverage: {name}/{relative}")
-                changed |= any(contents[content] != default[relative][content] for content in shared)
+                if changes_defines:
+                    changed |= set(contents.values()) != set(default[relative].values())
+                else:
+                    changed |= any(contents[content] != default[relative][content] for content in shared)
             if name != "default" and not changed:
                 raise SystemExit(f"packaged cache compatibility variant has no changed shader bytecode: {name}")
 
@@ -1684,6 +1694,7 @@ def filter_profile_defines(
         additional_file_defines=additional_file_defines,
         add_cross_modlist_variants=add_cross_modlist_variants,
     )
+    prepare_fxc_defines(config)
     out_path.write_text(
         yaml.safe_dump(config, sort_keys=False),
         encoding="utf-8",
@@ -1750,8 +1761,9 @@ def write_shader_cache_manifest(
     imagespace_remap: dict[str, str],
     write_manifest: Callable[..., int],
     shader_cache_abi: str,
+    compile_tasks: list[tuple[str, str, str, list[str]]],
 ) -> int:
-    """Hash source/include content for every compiled blob."""
+    """Hash source/include content and the resolved macros for every blob."""
     global_defines_state = ("VR;" if runtime == "VR" else "") + (
         f"ShaderCacheABI={shader_cache_abi};"
     )
@@ -1779,6 +1791,7 @@ def write_shader_cache_manifest(
         global_defines_state,
         cache_dir / MANIFEST_FILE_NAME,
         resolve_source_name=lambda name: imagespace_remap.get(name, name),
+        compile_tasks=compile_tasks,
     )
     print(
         f"{runtime}: wrote {count} content digests -> "
@@ -2172,7 +2185,8 @@ def require_compile_tools() -> tuple[tuple[str, ...], Any, Callable[..., int]]:
     try:
         import yaml
         from hlslkit import compile_shaders
-        from hlslkit.shader_digest import SCHEMA_VERSION, write_manifest
+        from hlslkit.shader_digest import SCHEMA_VERSION as SOURCE_DIGEST_SCHEMA
+        from shader_cache_manifest import write_manifest
     except (ImportError, ModuleNotFoundError) as exc:
         raise SystemExit(
             "PyYAML and the pinned hlslkit revision are required; see "
@@ -2180,17 +2194,17 @@ def require_compile_tools() -> tuple[tuple[str, ...], Any, Callable[..., int]]:
             "docs/development/prebuilt-shader-cache.md"
         ) from exc
 
-    if SCHEMA_VERSION != MANIFEST_SCHEMA_VERSION:
+    if SOURCE_DIGEST_SCHEMA != 1:
         raise SystemExit(
-            "hlslkit shader manifest schema does not match this builder: "
-            f"{SCHEMA_VERSION} != {MANIFEST_SCHEMA_VERSION}"
+            "shader digest schemas do not match this builder: "
+            f"source={SOURCE_DIGEST_SCHEMA}, expected=1"
         )
 
-    # Running the module through this interpreter guarantees the compiler and
+    # Running the adapter through this interpreter guarantees the compiler and
     # manifest writer come from the same hlslkit installation. A PATH command
     # can otherwise point at a different version and silently break the digest
     # contract with the runtime.
-    return (sys.executable, "-m", compile_shaders.__name__), yaml, write_manifest
+    return (sys.executable, str(TOOLS_DIRECTORY / "shader_cache_compile.py")), yaml, write_manifest
 
 
 def is_replaceable_runtime_output(path: Path) -> bool:
@@ -2728,6 +2742,11 @@ def build_runtime(
             additional_file_defines=additional_file_defines,
             add_cross_modlist_variants=add_cross_modlist,
         )
+        from hlslkit.compile_shaders import parse_shader_configs
+        from shader_cache_manifest import compile_task_defines
+
+        compile_tasks = parse_shader_configs(str(filtered_config))
+        compile_task_defines(compile_tasks)
         command = [
             *compiler,
             "--shader-dir",
@@ -2776,6 +2795,7 @@ def build_runtime(
             imagespace_remap,
             write_manifest,
             shader_cache_abi,
+            compile_tasks,
         )
         blob_count = validate_cache(
             cache_dir,

@@ -57,6 +57,15 @@ native visibility results unchanged.
 
 ## DevBench
 
+Recovery timing, counters, histogram storage and status/reset controls are
+compiled only with `DEVBENCH_BRIDGE_ENABLED`. Production builds retain the
+same pose validation, recovery selection and promotion budget without this
+diagnostic work. DevBench builds retain the telemetry toggle for controlled
+measurements; switching it does not change culling behavior. Telemetry remains
+enabled by default in DevBench builds. A DevBench-enabled benchmark AIO therefore
+still collects it unless `set_depth_culling_telemetry_enabled` is called with
+`enabled: false`.
+
 `communityshaders.menu` exposes the current policy and recovery counters in its
 status response. Use `set_depth_culling_performance_mode` or
 `set_depth_culling_legacy_mode` with a boolean `enabled` argument to switch

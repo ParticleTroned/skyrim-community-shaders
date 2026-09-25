@@ -42,9 +42,9 @@ class ShaderCachePackagingTests(unittest.TestCase):
             lighting.write_bytes(f"DXBC{runtime}-lighting".encode("utf-8"))
             (variant / BUILDER.MANIFEST_FILE_NAME).write_text(
                 json.dumps({
-                    "schemaVersion": 1,
+                    "schemaVersion": BUILDER.MANIFEST_SCHEMA_VERSION,
                     "entries": {
-                        "Water/1.pso": "1" * 32,
+                        "Water/1.pso": str(index + 1) * 32,
                         "Lighting/2.pso": "3" * 32,
                     },
                 }),
@@ -413,7 +413,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 info.read(cache_dir / BUILDER.INFO_FILE_NAME, encoding="utf-8-sig")
                 self.assertFalse(info.has_option("HorizonFix", "ShaderCacheABI"))
                 BUILDER.write_shader_cache_manifest(
-                    cache_dir, root / "stage", "VR", {}, record_manifest, "test-shader-abi"
+                    cache_dir, root / "stage", "VR", {}, record_manifest, "test-shader-abi", []
                 )
 
         self.assertEqual(len(compile_states), 2)
@@ -646,6 +646,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     {},
                     record_manifest,
                     "a" * 64,
+                    [],
                 )
 
         self.assertEqual(

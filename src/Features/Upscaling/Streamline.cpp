@@ -405,6 +405,7 @@ namespace
 		return hash;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	std::string FormatExtent(const sl::Extent& a_extent)
 	{
 		return std::format("top={} left={} width={} height={}", a_extent.top, a_extent.left, a_extent.width, a_extent.height);
@@ -439,6 +440,7 @@ namespace
 	{
 		return globals::state && globals::state->IsDeveloperMode();
 	}
+#endif
 
 	std::string FormatDLSSDiagnosticResult(int32_t a_resultCode, std::string_view a_resultLabel)
 	{
@@ -926,6 +928,7 @@ namespace
 		return emit;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	void LogDLSSDispatchDiagnostics(
 		DLSSDiagnosticStage a_stage,
 		int32_t a_resultCode,
@@ -1029,6 +1032,7 @@ namespace
 			a_result ? std::string_view(a_result) : std::string_view(),
 			a_diagnostics);
 	}
+#endif
 
 	D3D11IdleFenceResult BeginOrPollD3D11IdleFence(ID3D11DeviceContext* a_context, ID3D11Query*& a_query, const char* a_reason)
 	{
@@ -1768,7 +1772,9 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		return false;
 
 	if (!frameToken) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "unavailable", diagnostics);
+#endif
 		return false;
 	}
 
@@ -1782,7 +1788,9 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	if (temporalSnapshot &&
 		(!temporalSnapshot->valid || eyeIndex >= temporalSnapshot->eyes.size() ||
 			temporalSnapshot->key.frame != static_cast<uint32_t>(*frameToken))) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "temporal-snapshot-mismatch", diagnostics);
+#endif
 		return false;
 	}
 	bool applyCroppedConstantsCorrection = false;
@@ -2051,7 +2059,9 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		} else {
 			logger::error("[Streamline] Could not set constants for eye {}", eyeIndex);
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetConstants, res, diagnostics);
+#endif
 		return false;
 	}
 
@@ -2091,7 +2101,7 @@ bool Streamline::IsRTXAndBelow40Series(const DXGI_ADAPTER_DESC& a_adapterDesc) c
 	return false;
 }
 
-bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, const DLSSDispatchDiagnostics* diagnostics)
+bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandle p_viewport, uint32_t eyeIndex, uint32_t width, uint32_t height, bool colorBuffersHDR, uint32_t qualityMode, uint32_t dlssPreset, [[maybe_unused]] const DLSSDispatchDiagnostics* diagnostics)
 {
 	if (!slDLSSSetOptions)
 		return false;
@@ -2181,7 +2191,9 @@ bool Streamline::SetDLSSOptions(DLSSViewportRole viewportRole, sl::ViewportHandl
 			static_cast<uint32_t>(p_viewport),
 			eyeIndex,
 			magic_enum::enum_name(result));
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::SetOptions, result, diagnostics);
+#endif
 		cache.valid = false;
 		return false;
 	}
@@ -2820,7 +2832,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		return false;
 	const bool vendorLifecycleMutationDeferred =
 		globals::game::isVR &&
-		upscaling.ShouldDeferVRVendorLifecycleMutation();
+		(upscaling.ShouldDeferVRVendorLifecycleMutation() || upscaling.ShouldReuseOrdinarySaveResources());
 	const bool existingProviderOnly =
 		vendorLifecycleMutationDeferred || useAuthoritativeProfile;
 	const auto existingProvider =
@@ -2868,8 +2880,6 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics() || IsDLSSDevBenchTraceActive();
-#else
-	const bool collectDLSSDiagnostics = ShouldLogDLSSDiagnostics();
 #endif
 	DLSSDispatchDiagnostics diagnostics{};
 	DLSSDispatchDiagnostics* diagnosticsPtr = &diagnostics;
@@ -2891,6 +2901,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	diagnostics.pinholeOffsetX = pinholeOffsetX;
 	diagnostics.pinholeOffsetY = pinholeOffsetY;
 	diagnostics.submitStageVRDLSS = submitStageVRDLSS;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	diagnostics.colorIn = colorIn;
 	diagnostics.colorOut = colorOut;
 	diagnostics.depth = depth;
@@ -2922,6 +2933,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		diagnostics.optionsCacheHDR = optionsCache.isHDR;
 		diagnostics.optionsCacheLegacyProfile = optionsCache.useLegacyProfile;
 	};
+#endif
 
 	if (existingProviderOnly) {
 		if (!TryResolveExistingVRDLSSViewport(
@@ -2933,28 +2945,36 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 				extentOut.height,
 				colorIn,
 				vp)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::ResolveViewport, "lifecycle-gated", diagnosticsPtr);
+#endif
 			return false;
 		}
 	} else if (!ResolveDLSSViewport(viewportRole, vp, eyeIndex, qualityMode, dlssPreset, vp)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::ResolveViewport, "unavailable", diagnosticsPtr);
+#endif
 		return false;
 	}
 	diagnostics.resolvedViewport = vp;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	updateOptionsCacheDiagnostics();
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	DLSSDevBenchTraceSignature devBenchFrameConstantsSignature{};
 	auto* devBenchFrameConstantsSignaturePtr = IsDLSSDevBenchTraceActive() ? &devBenchFrameConstantsSignature : nullptr;
 #endif
 	const auto frameTokenSnapshot = AcquireFrameToken(diagnostics.frame, "dlss");
 	if (!frameTokenSnapshot) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::FrameToken, "unavailable", diagnosticsPtr);
+#endif
 		return false;
 	}
 	auto* const frameToken = frameTokenSnapshot->token;
 	diagnostics.frame = frameTokenSnapshot->frame;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	diagnostics.frameToken = frameToken;
+#endif
 	if (!CheckFrameConstants(
 			vp,
 			frameToken,
@@ -2973,7 +2993,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (!existingProviderOnly &&
 		!SetDLSSOptions(viewportRole, vp, eyeIndex, outputWidth, extentOut.height, colorBuffersHDR, qualityMode, dlssPreset, diagnosticsPtr))
 		return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	updateOptionsCacheDiagnostics();
+#endif
 
 	// These markers currently surround only a DLSS evaluation, not Skyrim's
 	// complete render submission. Keep marker-driven scheduling disabled on every
@@ -3052,7 +3074,9 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		state->EndPerfEvent();
 
 	if (evalResult != sl::Result::eOk) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::Evaluate, evalResult, diagnosticsPtr);
+#endif
 		static sl::ViewportHandle lastLoggedEvalErrorViewport[2] = {};
 		static sl::Result lastLoggedEvalErrorResult[2] = {};
 		uint32_t logIdx = globals::game::isVR ? std::min(eyeIndex, 1u) : 0;
@@ -3166,7 +3190,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 				upscaling.GetActiveVRRenderScaleContractGeneration() :
 				0u;
 		const bool vendorLifecycleMutationDeferred =
-			upscaling.ShouldDeferVRVendorLifecycleMutation();
+			upscaling.ShouldDeferVRVendorLifecycleMutation() || upscaling.ShouldReuseOrdinarySaveResources();
 		const auto existingProvider =
 			vendorLifecycleMutationDeferred ?
 				upscaling.GetExistingVRVendorProviderSnapshot() :

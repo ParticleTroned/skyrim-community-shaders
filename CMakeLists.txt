@@ -2761,6 +2761,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     add_controller_test(
         vr_depth_culling_enable_policy_test
         VRDepthCullingEnablePolicy

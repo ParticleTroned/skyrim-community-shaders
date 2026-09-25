@@ -177,7 +177,7 @@ Every response, including errors, uses one envelope:
 
 `sessionId` changes at each Skyrim/CSX process start. `commandId` is generated
 by the client and supplies idempotency. Within one server session, repeating
-the same `clientId + commandId` returns the original command result or current
+the same `(clientId, commandId)` tuple returns the original command result or current
 operation receipt and must not create a second capture. Reusing the pair with
 different arguments is `idempotency_conflict`.
 
@@ -443,6 +443,12 @@ source/view combination is rejected during validation.
 fallback reason must appear in the receipt. Framed views default to `reject`;
 silently converting a requested framed HMD view into a desktop image would be
 misleading evidence.
+
+Source capabilities are runtime-specific. Flat Skyrim advertises only
+`desktop_mirror`; VR also advertises `hmd_submission`. An unavailable explicit
+HMD request fails with `source_unavailable` unless the request opts into
+`desktop_mirror`, in which case the effective descriptor, receipt, and event
+journal preserve the requested source, resolved source, and fallback reason.
 
 ### Outputs
 

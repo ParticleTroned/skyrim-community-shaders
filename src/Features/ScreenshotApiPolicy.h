@@ -15,6 +15,38 @@ namespace CSX::ScreenshotPolicy
 		Manual,
 		Sequence
 	};
+
+	struct SourceResolution
+	{
+		std::string_view resolved;
+		bool fallbackUsed = false;
+
+		explicit operator bool() const noexcept { return !resolved.empty(); }
+	};
+
+	inline SourceResolution ResolveCaptureSource(
+		std::string_view a_requested,
+		std::string_view a_fallback,
+		bool a_vrRuntime)
+	{
+		if (a_requested == "desktop_mirror")
+			return { "desktop_mirror", false };
+		if (a_requested != "hmd_submission")
+			return {};
+		if (a_vrRuntime)
+			return { "hmd_submission", false };
+		if (a_fallback == "desktop_mirror")
+			return { "desktop_mirror", true };
+		return {};
+	}
+
+	inline const std::filesystem::path& SelectConfiguredCaptureDirectory(
+		const std::filesystem::path& a_stillDirectory,
+		const std::filesystem::path& a_sequenceDirectory,
+		bool a_sequence)
+	{
+		return a_sequence ? a_sequenceDirectory : a_stillDirectory;
+	}
 	inline constexpr std::uint32_t MaximumPendingOperations = 64;
 	inline constexpr std::uint32_t MaximumOutputsPerFrame = 4;
 	inline constexpr std::uint32_t MaximumSequenceDurationMs = 3'600'000;

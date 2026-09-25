@@ -77,7 +77,7 @@ namespace CSX::Api
 		if (commandId.empty() || commandId.size() > 128)
 			return MakeError(a_request, "invalid_field", "commandId must contain 1 to 128 characters", "validation", false, "commandId");
 
-		const std::string key = clientId + '\n' + commandId;
+		const CommandKey key{ clientId, commandId };
 		const std::string canonical = Canonicalize(a_request);
 		std::optional<CommandRecord> replay;
 		bool conflict = false;
@@ -150,13 +150,16 @@ namespace CSX::Api
 		json response = {
 			{ "ok", a_ok },
 			{ "contract", {
-				{ "name", contract.name }, { "major", contract.major }, { "minor", contract.minor }, { "schemaRevision", contract.schemaRevision },
-			} },
+							  { "name", contract.name },
+							  { "major", contract.major },
+							  { "minor", contract.minor },
+							  { "schemaRevision", contract.schemaRevision },
+						  } },
 			{ "command", {
-				{ "action", StringValueOrEmpty(a_request, "action") },
-				{ "clientId", StringValueOrEmpty(a_request, "clientId") },
-				{ "commandId", StringValueOrEmpty(a_request, "commandId") },
-			} },
+							 { "action", StringValueOrEmpty(a_request, "action") },
+							 { "clientId", StringValueOrEmpty(a_request, "clientId") },
+							 { "commandId", StringValueOrEmpty(a_request, "commandId") },
+						 } },
 			{ "timestampUtc", TimestampUtc() },
 		};
 		response["server"] = provider ? provider() : json::object({ { "sessionId", sessionId } });
@@ -176,7 +179,10 @@ namespace CSX::Api
 	{
 		auto response = MakeEnvelope(a_request, false);
 		response["error"] = {
-			{ "code", a_code }, { "message", a_message }, { "phase", a_phase }, { "retryable", a_retryable },
+			{ "code", a_code },
+			{ "message", a_message },
+			{ "phase", a_phase },
+			{ "retryable", a_retryable },
 			{ "field", a_field.empty() ? json(nullptr) : json(a_field) },
 			{ "requestId", a_requestId.empty() ? json(nullptr) : json(a_requestId) },
 			{ "details", json::object() },
@@ -189,8 +195,12 @@ namespace CSX::Api
 		std::lock_guard lock(mutex);
 		const uint64_t eventId = nextEventId++;
 		events.push_back({
-			{ "eventId", eventId }, { "eventIndex", a_eventIndex }, { "requestId", a_requestId },
-			{ "type", a_type }, { "timestampUtc", TimestampUtc() }, { "payload", std::move(a_payload) },
+			{ "eventId", eventId },
+			{ "eventIndex", a_eventIndex },
+			{ "requestId", a_requestId },
+			{ "type", a_type },
+			{ "timestampUtc", TimestampUtc() },
+			{ "payload", std::move(a_payload) },
 		});
 		TrimLocked(std::chrono::steady_clock::now());
 		return eventId;
@@ -216,8 +226,12 @@ namespace CSX::Api
 		}
 		const uint64_t next = selected.empty() ? a_afterEventId : selected.back().value("eventId", a_afterEventId);
 		return {
-			{ "events", std::move(selected) }, { "oldestRetainedEventId", oldest }, { "latestEventId", nextEventId - 1 },
-			{ "cursorExpired", a_afterEventId != 0 && a_afterEventId + 1 < oldest }, { "nextEventId", next }, { "moreAvailable", moreAvailable },
+			{ "events", std::move(selected) },
+			{ "oldestRetainedEventId", oldest },
+			{ "latestEventId", nextEventId - 1 },
+			{ "cursorExpired", a_afterEventId != 0 && a_afterEventId + 1 < oldest },
+			{ "nextEventId", next },
+			{ "moreAvailable", moreAvailable },
 		};
 	}
 
@@ -234,8 +248,10 @@ namespace CSX::Api
 		std::lock_guard lock(mutex);
 		return {
 			{ "oldestRetainedEventId", events.empty() ? nextEventId : events.front().value("eventId", nextEventId) },
-			{ "latestEventId", nextEventId - 1 }, { "retainedEvents", events.size() },
-			{ "acknowledgedThroughEventId", acknowledgedEventId }, { "retainedCommands", commands.size() },
+			{ "latestEventId", nextEventId - 1 },
+			{ "retainedEvents", events.size() },
+			{ "acknowledgedThroughEventId", acknowledgedEventId },
+			{ "retainedCommands", commands.size() },
 		};
 	}
 

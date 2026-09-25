@@ -27,6 +27,17 @@ namespace
 {
 	using json = nlohmann::json;
 
+	class CaptureDescriptorError final : public std::runtime_error
+	{
+	public:
+		CaptureDescriptorError(std::string a_code, std::string a_field, std::string a_message) :
+			std::runtime_error(std::move(a_message)), code(std::move(a_code)), field(std::move(a_field))
+		{}
+
+		std::string code;
+		std::string field;
+	};
+
 	std::string PathUtf8(const std::filesystem::path& a_path)
 	{
 		const auto value = a_path.u8string();
@@ -434,9 +445,11 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 		json descriptor;
 		try {
 			descriptor = NormalizeCaptureDescriptor(a_feature, a_request);
+		} catch (const CaptureDescriptorError& e) {
+			return MakeError(a_request, e.code, e.what(), "validation", false, e.field);
 		} catch (const std::exception& e) {
 			const std::string message = e.what();
-			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos;
+			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos || message.find("folder") != std::string::npos;
 			return MakeError(a_request, pathError ? "unsafe_path" : "invalid_capture_descriptor", message);
 		}
 		std::string requestId;
@@ -475,11 +488,11 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 		json descriptor;
 		try {
 			descriptor = NormalizeCaptureDescriptor(a_feature, descriptorRequest, true);
-			descriptor["destination"]["resolvedDirectory"] =
-				PathUtf8(ResolveDestinationDirectory(a_feature, descriptor, true));
+		} catch (const CaptureDescriptorError& e) {
+			return MakeError(a_request, e.code, e.what(), "validation", false, e.field);
 		} catch (const std::exception& e) {
 			const std::string message = e.what();
-			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos;
+			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos || message.find("folder") != std::string::npos;
 			return MakeError(a_request, pathError ? "unsafe_path" : "invalid_capture_descriptor", message);
 		}
 		SequenceRecord sequence;
@@ -538,7 +551,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			sequence.requestId = requestId;
 			sequence.nextEngineFrame = (globals::state ? globals::state->frameCount : 0u) + sequence.startDelayFrames;
 			sequence.nextWallClock = std::chrono::steady_clock::now() + std::chrono::milliseconds(startDelayMs);
-			sequence.directory = ResolveDestinationDirectory(a_feature, descriptor, true) /
+			sequence.directory = std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()) /
 			                     ("CS_sequence_" + ShortId(requestId));
 			sequence.partialManifestPath = sequence.directory / "sequence.json.partial";
 			sequence.finalManifestPath = sequence.directory / "sequence.json";
@@ -675,16 +688,21 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 	}
 
 	json source = capture.value("source", json::object());
-	std::string sourceKind = source.value("kind", useSettings ? SourceName(a_feature.vrCaptureSource) : std::string{});
-	if (sourceKind == "settings_default")
-		sourceKind = SourceName(a_feature.vrCaptureSource);
-	if (!globals::game::isVR && sourceKind == "hmd_submission")
-		sourceKind = "desktop_mirror";
-	if (sourceKind != "desktop_mirror" && sourceKind != "hmd_submission")
+	std::string requestedSourceKind = source.value("kind", useSettings ? SourceName(a_feature.vrCaptureSource) : std::string{});
+	if (requestedSourceKind == "settings_default")
+		requestedSourceKind = SourceName(a_feature.vrCaptureSource);
+	if (requestedSourceKind != "desktop_mirror" && requestedSourceKind != "hmd_submission")
 		throw std::runtime_error("capture.source.kind must be desktop_mirror or hmd_submission");
 	const auto fallback = source.value("fallback", "reject");
 	if (fallback != "reject" && fallback != "desktop_mirror")
 		throw std::runtime_error("capture.source.fallback must be reject or desktop_mirror");
+	const auto sourceResolution = CSX::ScreenshotPolicy::ResolveCaptureSource(
+		requestedSourceKind, fallback, globals::game::isVR);
+	if (!sourceResolution)
+		throw CaptureDescriptorError(
+			"source_unavailable", "capture.source.kind",
+			"hmd_submission is unavailable on this runtime and desktop fallback was not requested");
+	const std::string sourceKind(sourceResolution.resolved);
 
 	json outputs = capture.value("outputs", json::array());
 	if (!outputs.is_array())
@@ -770,7 +788,15 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		throw std::runtime_error("capture.clipboard must be none or file_reference");
 
 	json normalized = {
-		{ "source", { { "kind", sourceKind }, { "fallback", fallback } } },
+		{ "source", {
+						{ "kind", sourceKind },
+						{ "requestedKind", requestedSourceKind },
+						{ "fallback", fallback },
+						{ "fallbackApplied", sourceResolution.fallbackUsed },
+						{ "fallbackReason", sourceResolution.fallbackUsed ?
+												json("hmd_submission is unavailable on this runtime") :
+												json(nullptr) },
+					} },
 		{ "outputs", outputs },
 		{ "destination", {
 							 { "policy", policy },
@@ -781,7 +807,8 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		{ "clipboard", clipboard },
 		{ "tags", std::move(tags) },
 	};
-	normalized["destination"]["resolvedDirectory"] = PathUtf8(ResolveDestinationDirectory(a_feature, normalized));
+	normalized["destination"]["resolvedDirectory"] = PathUtf8(
+		ResolveDestinationDirectory(a_feature, normalized, a_sequenceSettings));
 	return normalized;
 }
 
@@ -1002,9 +1029,12 @@ void ScreenshotApi::ApplySettingsPatch(ScreenshotFeature& a_feature, const json&
 
 ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) const
 {
+	json sources = { "desktop_mirror" };
+	if (globals::game::isVR)
+		sources.push_back("hmd_submission");
 	return {
 		{ "schema", "urn:csx:devbench:screenshot:1" },
-		{ "sources", { "desktop_mirror", "hmd_submission" } },
+		{ "sources", std::move(sources) },
 		{ "views", { "source_native", "left_eye", "right_eye", "side_by_side", "framed_left", "framed_right", "framed_combined" } },
 		{ "formats", { "png", "bmp" } },
 		{ "colourContracts", { "sdr_srgb" } },
@@ -1109,6 +1139,21 @@ ScreenshotApi::RequestRecord& ScreenshotApi::CreateRequestLocked(std::string a_k
 	record.acceptedUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 	record.requested = a_request;
 	record.effective = std::move(a_effective);
+	if (const auto source = record.effective.find("source"); source != record.effective.end() &&
+															 source->is_object() && source->value("fallbackApplied", false)) {
+		const auto requested = source->value("requestedKind", std::string{});
+		const auto resolved = source->value("kind", std::string{});
+		const auto reason = source->value("fallbackReason", std::string("source fallback was applied"));
+		record.warnings.push_back({ { "code", "source_fallback" }, { "message", reason } });
+		record.actual["fallbacks"].push_back({ { "reason", reason } });
+		record.actual["source"] = {
+			{ "requested", requested },
+			{ "resolved", resolved },
+			{ "kind", resolved },
+			{ "fallbackApplied", true },
+			{ "fallbackReason", reason },
+		};
+	}
 	if (record.kind != "sequence" && record.effective.contains("outputs") && record.effective["outputs"].is_array())
 		record.expectedArtifacts = std::max(1u, static_cast<uint32_t>(record.effective["outputs"].size()));
 	const auto id = record.requestId;
@@ -1117,6 +1162,8 @@ ScreenshotApi::RequestRecord& ScreenshotApi::CreateRequestLocked(std::string a_k
 		throw std::runtime_error("duplicate screenshot request identity");
 	requestOrder.push_back(id);
 	AppendEventLocked(it->second, "request.accepted");
+	if (it->second.actual.value("source", json::object()).value("fallbackApplied", false))
+		AppendEventLocked(it->second, "source.fallback", it->second.actual["source"]);
 	TrimLocked();
 	return it->second;
 }
@@ -2020,7 +2067,8 @@ std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
 
 	std::filesystem::path requested;
 	if (policy == "settings_default") {
-		requested = a_sequence ? a_feature.frameCapturePath : a_feature.screenshotPath;
+		requested = CSX::ScreenshotPolicy::SelectConfiguredCaptureDirectory(
+			a_feature.screenshotPath, a_feature.frameCapturePath, a_sequence);
 		return ResolveConfiguredCaptureDirectory(requested, a_sequence);
 	}
 

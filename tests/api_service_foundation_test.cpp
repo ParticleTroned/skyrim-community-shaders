@@ -19,8 +19,10 @@ namespace
 	json Request(std::string a_action, std::string a_commandId)
 	{
 		return {
-			{ "contractMajor", 1 }, { "action", std::move(a_action) },
-			{ "clientId", "foundation-test" }, { "commandId", std::move(a_commandId) },
+			{ "contractMajor", 1 },
+			{ "action", std::move(a_action) },
+			{ "clientId", "foundation-test" },
+			{ "commandId", std::move(a_commandId) },
 		};
 	}
 }
@@ -72,6 +74,25 @@ int RunTest()
 	const auto conflict = service.Dispatch(conflictRequest, [](const json&) { return json::object(); });
 	Check(!conflict["ok"].get<bool>(), "idempotency conflict was accepted");
 	Check(conflict["error"]["code"] == "idempotency_conflict", "wrong idempotency error code");
+
+	auto firstTuple = Request("tuple", "gamma");
+	firstTuple["clientId"] = "alpha\nbeta";
+	const auto firstTupleResponse = service.Dispatch(firstTuple, [&](const json& command) {
+		auto response = service.MakeEnvelope(command, true);
+		response["result"] = { { "tuple", 1 } };
+		return response;
+	});
+	auto secondTuple = Request("tuple", "beta\ngamma");
+	secondTuple["clientId"] = "alpha";
+	const auto secondTupleResponse = service.Dispatch(secondTuple, [&](const json& command) {
+		auto response = service.MakeEnvelope(command, true);
+		response["result"] = { { "tuple", 2 } };
+		return response;
+	});
+	Check(firstTupleResponse["ok"].get<bool>() && secondTupleResponse["ok"].get<bool>(),
+		"distinct client and command tuples collided");
+	Check(firstTupleResponse["result"]["tuple"] == 1 && secondTupleResponse["result"]["tuple"] == 2,
+		"structured idempotency identity returned the wrong command");
 
 	service.AppendEvent("request-1", 1, "request.accepted");
 	service.AppendEvent("request-1", 2, "request.running");

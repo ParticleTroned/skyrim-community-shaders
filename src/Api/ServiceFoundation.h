@@ -78,6 +78,24 @@ namespace CSX::Api
 		static std::string Canonicalize(const json& a_value);
 
 	private:
+		struct CommandKey
+		{
+			std::string clientId;
+			std::string commandId;
+
+			bool operator==(const CommandKey&) const = default;
+		};
+
+		struct CommandKeyHash
+		{
+			std::size_t operator()(const CommandKey& a_key) const noexcept
+			{
+				const auto clientHash = std::hash<std::string>{}(a_key.clientId);
+				const auto commandHash = std::hash<std::string>{}(a_key.commandId);
+				return clientHash ^ (commandHash + 0x9e3779b9u + (clientHash << 6u) + (clientHash >> 2u));
+			}
+		};
+
 		struct CommandRecord
 		{
 			std::string canonicalRequest;
@@ -93,8 +111,8 @@ namespace CSX::Api
 		std::string sessionId;
 		mutable std::mutex mutex;
 		ServerMetadataProvider serverMetadataProvider;
-		std::unordered_map<std::string, CommandRecord> commands;
-		std::deque<std::string> commandOrder;
+		std::unordered_map<CommandKey, CommandRecord, CommandKeyHash> commands;
+		std::deque<CommandKey> commandOrder;
 		std::deque<json> events;
 		uint64_t nextEventId = 1;
 		uint64_t acknowledgedEventId = 0;

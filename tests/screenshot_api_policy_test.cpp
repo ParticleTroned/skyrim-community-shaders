@@ -96,6 +96,14 @@ int main()
 		IsContainedPath(captureRoot, captureRoot.parent_path() / "Other") ||
 		IsContainedPath(captureRoot, captureRoot / ".." / "Other"))
 		throw std::runtime_error("settings-default containment policy is invalid");
+	const auto relativeArtifact = RelativeContainedArtifactPath(
+		captureRoot, captureRoot / "CS_sequence_fixture" / "left" / "frame.bmp");
+	if (!relativeArtifact ||
+		*relativeArtifact != std::filesystem::path("CS_sequence_fixture/left/frame.bmp") ||
+		RelativeContainedArtifactPath(captureRoot, captureRoot) ||
+		RelativeContainedArtifactPath(captureRoot, captureRoot.parent_path() / "outside.bmp")) {
+		throw std::runtime_error("sequence artifact publication containment is invalid");
+	}
 	if (!IsWallClockScheduleWithinLimit(0, 1000, 3601) ||
 		IsWallClockScheduleWithinLimit(1, 1000, 3601))
 		throw std::runtime_error("wall-clock sequence limit is invalid");

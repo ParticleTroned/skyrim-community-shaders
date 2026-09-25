@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -159,6 +160,20 @@ namespace CSX::ScreenshotPolicy
 		const auto relative = a_canonicalCandidate.lexically_relative(a_canonicalRoot);
 		return !relative.empty() && !relative.is_absolute() &&
 		       *relative.begin() != "..";
+	}
+
+	inline std::optional<std::filesystem::path> RelativeContainedArtifactPath(
+		const std::filesystem::path& a_canonicalRoot,
+		const std::filesystem::path& a_canonicalCandidate)
+	{
+		if (!IsContainedPath(a_canonicalRoot, a_canonicalCandidate) ||
+			a_canonicalCandidate == a_canonicalRoot) {
+			return std::nullopt;
+		}
+		const auto relative = a_canonicalCandidate.lexically_relative(a_canonicalRoot);
+		if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+			return std::nullopt;
+		return relative;
 	}
 
 	inline std::string_view ResolveActualOutputView(

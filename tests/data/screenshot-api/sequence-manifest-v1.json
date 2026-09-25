@@ -39,10 +39,10 @@
             },
             "artifacts": [
                 {
-                    "path": "C:/captures/frame_000001.png",
+                    "path": "left/frame_000001.png",
                     "bytes": 1234,
                     "committed": true,
-                    "sha256": "0123456789abcdef",
+                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     "actual": {
                         "view": "source_native",
                         "width": 1920,

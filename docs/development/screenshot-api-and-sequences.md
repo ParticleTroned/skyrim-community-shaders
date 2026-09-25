@@ -453,6 +453,10 @@ Source capabilities are runtime-specific. Flat Skyrim advertises only
 HMD request fails with `source_unavailable` unless the request opts into
 `desktop_mirror`, in which case the effective descriptor, receipt, and event
 journal preserve the requested source, resolved source, and fallback reason.
+For `sequence_start`, the parent receipt contains the fully expanded sequence
+descriptor and nests the resolved capture descriptor under `effective.capture`.
+Fallback provenance is projected onto the parent receipt and journal as well as
+the individual child receipts.
 
 ### Outputs
 
@@ -670,8 +674,8 @@ The final manifest includes:
 -   start/end times and frame counters;
 -   scheduled, acquired, written, dropped, failed, and cancelled counts;
 -   one child record per scheduled ordinal;
--   source/fallback, dimensions, format, colour contract, path, byte size, and
-    optional SHA-256 for every artifact;
+-   source/fallback, dimensions, format, colour contract, sequence-relative
+    path, byte size, and SHA-256 custody for every artifact;
 -   backpressure, failure, cancellation, and warning details;
 -   preview packaging request and outcome.
 
@@ -685,6 +689,11 @@ in-memory warning only. The schema requires child warning/error arrays and the
 actual view, dimensions, format, and colour contract for every committed frame
 artifact. A missing required final manifest is `failed` or `failed_partial`; it
 is never reported as completion with a warning.
+
+Frame artifact paths are strict descendants of the sequence directory and are
+published relative to that directory. Consumers must reject rooted paths,
+traversal, reparse-point escapes, request-identity mismatches, and artifacts
+whose current size or SHA-256 differs from the final manifest.
 
 ### Optional video packaging
 

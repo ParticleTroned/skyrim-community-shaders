@@ -86,9 +86,10 @@ endforeach()
 foreach(_required_contract_text IN ITEMS
     runtime_session persistent_user settings_default file_reference
     maximumOutputsPerFrame retentionSeconds manifest_failed
-	DescribeCommittedArtifact BuildProvenance::GetProducer artifact_hash_failed
+	DescribeCommittedArtifact BuildProvenance::GetProducer
 	terminalOutcome completedUtc fallbacksPresent cancelled manifestChildren
 	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
+	effectiveSequence RelativeContainedArtifactPath relativeSequencePath
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)

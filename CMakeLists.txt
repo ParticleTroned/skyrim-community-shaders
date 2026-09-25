@@ -1787,6 +1787,7 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(D3DContextProtection PROPERTIES TIMEOUT 60)
 
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/engine_overflow_guards.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/fov_settings.cmake")
@@ -2777,6 +2778,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     add_controller_test(
         vr_depth_culling_enable_policy_test
         VRDepthCullingEnablePolicy

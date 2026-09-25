@@ -13,6 +13,7 @@
 
 #include <directx/d3dx12.h>
 
+#include <array>
 #include <atomic>
 #include <memory>
 
@@ -192,6 +193,7 @@ private:
 	HRESULT RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept;
 	HRESULT RestoreFrameGenerationAfterFailedResize() noexcept;
 	static DXGI_FORMAT ResolveBackendFormat(DXGI_FORMAT publicFormat) noexcept;
+	std::array<UINT64, 2> allocatorFenceValues{};
 	CSX::NvidiaPipelinePolicy::ProxyLifecycleGate lifecycle;
 	bool runtimeQuarantined = false;
 };

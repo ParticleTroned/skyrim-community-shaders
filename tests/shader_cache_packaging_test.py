@@ -8,12 +8,15 @@ import copy
 import importlib.util
 import json
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 from unittest import mock
+
+from dxbc_fixtures import make_container, make_dxbc
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -26,6 +29,89 @@ sys.modules[SPEC.name] = BUILDER
 SPEC.loader.exec_module(BUILDER)
 
 
+class ShaderBytecodeTests(unittest.TestCase):
+    def test_accepts_supported_stages_and_program_chunks(self) -> None:
+        for stage, extension in ((0, ".pso"), (1, ".vso"), (5, ".cso")):
+            for kind in (b"SHDR", b"SHEX"):
+                with self.subTest(stage=stage, kind=kind):
+                    BUILDER.validate_dxbc(make_dxbc(stage, b"auxiliary data", kind), extension)
+
+    def test_rejects_wrong_stages_and_unsupported_extensions(self) -> None:
+        for stage in (0, 1, 2, 3, 4, 5, 0xFFFF):
+            for expected, extension in ((0, ".pso"), (1, ".vso"), (5, ".cso")):
+                if stage != expected:
+                    with self.subTest(stage=stage, extension=extension), self.assertRaisesRegex(ValueError, "stage"):
+                        BUILDER.validate_dxbc(make_dxbc(stage), extension)
+        with self.assertRaisesRegex(ValueError, "extension"):
+            BUILDER.validate_dxbc(make_dxbc(), ".unknown")
+
+    def test_rejects_malformed_headers_chunks_and_programs(self) -> None:
+        valid = make_dxbc(marker=b"padding")
+
+        def word(offset: int, value: int) -> bytes:
+            changed = bytearray(valid)
+            struct.pack_into("<I", changed, offset, value)
+            return bytes(changed)
+
+        program = struct.pack("<II", 0x50, 2)
+        cases = {
+            "signature": b"BAD!" + valid[4:],
+            "header-version": word(20, 2),
+            "size-small": word(24, len(valid) - 1),
+            "size-large": word(24, len(valid) + 1),
+            "no-chunks": word(28, 0),
+            "chunk-count-overflow": word(28, 0xFFFFFFFF),
+            "chunk-inside-table": word(32, 36),
+            "chunk-header-truncated": word(32, len(valid) - 4),
+            "chunk-offset-overflow": word(32, 0xFFFFFFFF),
+            "chunk-length-overflow": word(44, 0xFFFFFFFF),
+            "program-short": word(44, 4),
+            "program-length": word(52, 0xFFFFFFFF),
+            "no-program": make_container([(b"PRIV", b"content")]),
+            "partial-program-word": make_container([(b"SHEX", program + b"x")]),
+            "duplicate-program": make_container([(b"SHDR", program), (b"SHEX", program)]),
+        }
+        overlap = bytearray(make_container([(b"PRIV", b""), (b"SHEX", program)]))
+        struct.pack_into("<I", overlap, 44, 4)
+        cases["overlapping-chunks"] = bytes(overlap)
+        duplicate = bytearray(make_container([(b"SHEX", program), (b"PRIV", b""), (b"PRIV", b"")]))
+        struct.pack_into("<I", duplicate, 40, struct.unpack_from("<I", duplicate, 36)[0])
+        cases["duplicate-chunk-offset"] = bytes(duplicate)
+        for name, data in cases.items():
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                BUILDER.validate_dxbc(data, ".pso")
+        for size in range(len(valid)):
+            with self.subTest(truncated_size=size), self.assertRaises(ValueError):
+                BUILDER.validate_dxbc(valid[:size], ".pso")
+
+    def test_accepts_unordered_chunk_table(self) -> None:
+        data = bytearray(make_dxbc())
+        first, second = struct.unpack_from("<II", data, 32)
+        struct.pack_into("<II", data, 32, second, first)
+        BUILDER.validate_dxbc(bytes(data), ".pso")
+
+    def test_loose_cache_rejects_bytecode_despite_matching_inventory(self) -> None:
+        for stage, extension in ((0, ".pso"), (1, ".vso"), (5, ".cso")):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                cache = Path(temporary)
+                relative = "Lighting/1" + extension
+                path = cache / relative
+                path.parent.mkdir()
+                (cache / "Info.ini").write_text(
+                    "[Cache]\nPluginVersion=test\nShaderCacheABI=abi\n", encoding="utf-8"
+                )
+                (cache / "Manifest.json").write_text(json.dumps({
+                    "schemaVersion": 2, "entries": {relative: "a" * 32},
+                }), encoding="utf-8")
+                valid = make_dxbc(stage)
+                path.write_bytes(valid)
+                self.assertEqual(BUILDER.validate_cache(cache, "VR", "test", "abi"), 1)
+                for data in (valid[:-1], make_dxbc((stage + 1) % 6), b"DXBC"):
+                    path.write_bytes(data)
+                    with self.assertRaisesRegex(SystemExit, "DXBC"):
+                        BUILDER.validate_cache(cache, "VR", "test", "abi")
+
+
 class ShaderCachePackagingTests(unittest.TestCase):
     @staticmethod
     def _managed_cache(root: Path, runtime: str, *, horizon: bool = True) -> Path:
@@ -36,10 +122,10 @@ class ShaderCachePackagingTests(unittest.TestCase):
         for index, variant in enumerate(variants):
             water = variant / "Water" / "1.pso"
             water.parent.mkdir(parents=True)
-            water.write_bytes(f"DXBC{runtime}-water-{index}".encode("utf-8"))
+            water.write_bytes(make_dxbc(marker=f"{runtime}-water-{index}".encode("utf-8")))
             lighting = variant / "Lighting" / "2.pso"
             lighting.parent.mkdir()
-            lighting.write_bytes(f"DXBC{runtime}-lighting".encode("utf-8"))
+            lighting.write_bytes(make_dxbc(marker=f"{runtime}-lighting".encode("utf-8")))
             (variant / BUILDER.MANIFEST_FILE_NAME).write_text(
                 json.dumps({
                     "schemaVersion": BUILDER.MANIFEST_SCHEMA_VERSION,
@@ -155,6 +241,33 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 BUILDER.validate_cache_archive(
                     self._archive_cache(root), shutil.which("cmake"), "VR", "CSX 3.18-VR"
                 )
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_archive_rejects_malformed_bytecode_with_valid_pack_hashes(self) -> None:
+        for runtime in ("SE", "VR"):
+            for bytecode in (make_dxbc(stage=1), make_dxbc()[:-1]):
+                with self.subTest(runtime=runtime, bytecode=bytecode), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary) / "runtime"
+                    cache = self._managed_cache(root, runtime, horizon=False)
+                    pack_manifest = json.loads((cache / BUILDER.PACK_MANIFEST_FILE_NAME).read_text(encoding="utf-8"))
+                    registrations = BUILDER.compatibility_variant_manifest(REPO)["default"]["registrations"]
+                    records = [
+                        {
+                            **BUILDER.shader_pack_record_identity(path, contract, registrations),
+                            "bytecode": contents,
+                        }
+                        for path, contract, contents in (
+                            ("Water/1.pso", "1" * 32, bytecode),
+                            ("Lighting/2.pso", "3" * 32, make_dxbc()),
+                        )
+                    ]
+                    BUILDER.write_shader_pack(
+                        cache / "Optimized.A.csxpack", 1, 1, records, pack_manifest["packSetId"]
+                    )
+                    with self.assertRaisesRegex(SystemExit, "invalid packaged shader bytecode"):
+                        BUILDER.validate_cache_archive(
+                            self._archive_cache(root), shutil.which("cmake"), runtime, "CSX 3.18-VR"
+                        )
 
     @staticmethod
     def _sample_shader_config() -> dict[str, object]:

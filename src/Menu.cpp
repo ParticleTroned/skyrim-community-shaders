@@ -616,7 +616,7 @@ void Menu::Load(json& o_json)
 	}
 
 	if (settings.BackgroundShaderCompilationOnBoot)
-		globals::shaderCache->backgroundCompilation = true;
+		globals::shaderCache->SetBackgroundCompilation(true);
 }
 
 void Menu::Save(json& o_json)
@@ -1527,7 +1527,7 @@ void Menu::ProcessInputEventQueue()
 							 }
 						 }
 					 } },
-					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
+					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->SetBackgroundCompilation(true); } },
 					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnableRequested()); } },
 					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
 					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },

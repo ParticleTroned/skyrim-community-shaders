@@ -55,6 +55,7 @@ from shader_cache_manifest import (
     STAGE_EXTENSIONS,
     prepare_fxc_defines,
 )
+from shader_bytecode import validate_dxbc
 
 REPO = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = "ShaderCache"
@@ -782,17 +783,23 @@ class PackagedCompatibilityInventory:
         ):
             raise SystemExit("packaged cache declares an unknown compatibility variant")
         self.variants = {name: variants[name] for name in declared_variants}
-        self.records: dict[str, dict[str, tuple[str, str, bytes, bytes]]] = {}
+        self.records: dict[str, dict[str, tuple[str, str, str | None, bytes]]] = {}
 
     def inspector(self, file_name: str) -> Callable[[str, str, str, bytes], None]:
         records = self.records.setdefault(file_name, {})
 
         def inspect(logical: str, exact: str, metadata_text: str, bytecode: bytes) -> None:
-            records[exact] = (logical, metadata_text, bytecode[:4], hashlib.sha256(bytecode).digest())
+            error = None
+            try:
+                validate_dxbc(bytecode, Path(logical.split("|", 1)[0]).suffix)
+            except ValueError as exc:
+                error = str(exc)
+            # Only visible records participate in admission; obsolete generations can be ignored.
+            records[exact] = (logical, metadata_text, error, hashlib.sha256(bytecode).digest())
 
         return inspect
 
-    def identify(self, logical: str, exact: str, metadata_text: str, signature: bytes) -> tuple[set[str], tuple[str, str]]:
+    def identify(self, logical: str, exact: str, metadata_text: str, bytecode_error: str | None) -> tuple[set[str], tuple[str, str]]:
         relative = logical.split("|", 1)[0]
         if not re.fullmatch(r"[A-Za-z0-9_-]+/[0-9A-F]{1,8}(?:_[0-9A-F]{8})?\.(?:pso|vso|cso)", relative):
             raise SystemExit(f"packaged shader record has an invalid cache path: {relative!r}")
@@ -803,8 +810,8 @@ class PackagedCompatibilityInventory:
         content = metadata.get("contentContract") if isinstance(metadata, dict) else None
         if not isinstance(content, str) or not re.fullmatch(r"[0-9a-f]{32}", content):
             raise SystemExit(f"packaged shader record has invalid content identity: {relative}")
-        if signature != b"DXBC":
-            raise SystemExit(f"packaged shader record is not a DXBC container: {relative}")
+        if bytecode_error is not None:
+            raise SystemExit(f"invalid packaged shader bytecode {relative}: {bytecode_error}")
         matching = set()
         for name, variant in self.variants.items():
             expected = shader_pack_record_identity(relative, content, variant["registrations"])
@@ -824,8 +831,8 @@ class PackagedCompatibilityInventory:
                 visible.update(self.records.get(name, {}))
         coverage: dict[str, dict[str, dict[str, bytes]]] = {name: {} for name in self.variants}
         exclusive = set()
-        for exact, (logical, metadata, signature, digest) in visible.items():
-            matching, (relative, content) = self.identify(logical, exact, metadata, signature)
+        for exact, (logical, metadata, bytecode_error, digest) in visible.items():
+            matching, (relative, content) = self.identify(logical, exact, metadata, bytecode_error)
             for name in matching:
                 coverage[name].setdefault(relative, {})[content] = digest
             if len(matching) == 1:
@@ -2085,12 +2092,9 @@ def validate_cache(
             invalid_entries.append(relative_path)
 
         try:
-            with blob_path.open("rb") as stream:
-                signature = stream.read(4)
-            if signature != b"DXBC":
-                invalid_blobs.append(relative_path)
-        except OSError:
-            invalid_blobs.append(relative_path)
+            validate_dxbc(blob_path.read_bytes(), blob_path.suffix)
+        except (OSError, ValueError) as exc:
+            invalid_blobs.append(f"{relative_path}: {exc}")
 
     if missing_entries:
         raise SystemExit(

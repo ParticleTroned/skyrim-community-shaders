@@ -8,7 +8,10 @@
 
 #include "RE/L/LoadingMenu.h"
 #include "RE/M/MapMenu.h"
+#include "RE/N/NiRefObject.h"
 #include "RE/P/PlayerCharacter.h"
+#include "RE/T/TESWaterNormals.h"
+#include "RE/T/TESWaterReflections.h"
 
 #include <algorithm>
 #include <cmath>
@@ -61,6 +64,30 @@ namespace
 	constexpr char kUnifiedWaterDataRevision[] = "UnifiedWaterDataRevision=1";
 
 	bool PersistLoadOrderHash(uint64_t a_hash);
+
+	/** @brief Uses the engine's deferred-release path before dropping the array's last reference. */
+	void QueueDeferredRelease(RE::NiPointer<RE::NiRefObject>& object)
+	{
+		static REL::Relocation<void(RE::NiPointer<RE::NiRefObject>*)> func{ REL::VariantID(69180, 70544, 0xCA7290) };
+		func(&object);
+	}
+
+	/** @brief Removes an array-only water entry while the water-system lock is held. */
+	template <class Entry>
+	void RemoveOrphanedEntry(RE::BSTArray<RE::NiPointer<Entry>>& entries, const Entry* entry)
+	{
+		if (!entry)
+			return;
+
+		const auto it = std::ranges::find_if(entries, [&](const auto& candidate) { return candidate.get() == entry; });
+		// The removed water object may have been the sole owner of an entry absent from this array.
+		if (it == entries.end() || (*it)->GetRefCount() != 1)
+			return;
+
+		RE::NiPointer<RE::NiRefObject> released{ it->get() };
+		QueueDeferredRelease(released);
+		entries.erase(it);
+	}
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
 	{
@@ -1483,7 +1510,21 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	}
 
 	for (auto& [shape, instruction] : built) {
-		waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
+		{
+			// Shared reflection and normal entries must not outlive their tile's raw material pointer.
+			RE::BSSpinLockGuard guard(waterSystem->lock);
+			const auto waterObjectCount = waterSystem->waterObjects.size();
+			waterSystem->AddWater(shape, instruction->form.ptr, instruction->waterHeight, nullptr, true, false);
+
+			if (waterSystem->waterObjects.size() > waterObjectCount && waterSystem->waterObjects.back() &&
+				waterSystem->waterObjects.back()->shape.get() == shape) {
+				const auto reflections = waterSystem->waterObjects.back()->reflections.get();
+				const auto normals = waterSystem->waterObjects.back()->normals.get();
+				waterSystem->waterObjects.pop_back();
+				RemoveOrphanedEntry(waterSystem->waterReflections, reflections);
+				RemoveOrphanedEntry(waterSystem->waterNormals, normals);
+			}
+		}
 
 		if (const auto prop = shape->GetGeometryRuntimeData().shaderProperty.get(); prop && prop->GetRTTI() == globals::rtti::BSWaterShaderPropertyRTTI.get()) {
 			const auto waterShaderProp = static_cast<RE::BSWaterShaderProperty*>(prop);
@@ -1495,14 +1536,6 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 			if (instruction->form.ptr->flags.any(RE::TESWaterForm::Flag::kBlendNormals))
 				waterFlags |= RE::BSWaterShaderProperty::WaterFlag::kBlendNormals;
 			waterShaderProp->waterFlags = waterFlags;
-		}
-
-		// Remove from WaterSystem, will manage it ourselves. Lock: our only direct edit to the shared list.
-		{
-			RE::BSSpinLockGuard guard(waterSystem->lock);
-			if (!waterSystem->waterObjects.empty()) {
-				waterSystem->waterObjects.pop_back();
-			}
 		}
 	}
 

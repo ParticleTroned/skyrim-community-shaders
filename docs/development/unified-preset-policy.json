@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.09.23.1",
+    "packageVersion": "d2026.09.25.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "AED1B6798E33EEBB8D6C53D9F2ABC588B0387AFABAFE32D9B8C836A18506D889"
+        "sha256": "FADB1B345D903E04BEA15A99563C02AE03B17111D80E64991FA3CBD9C102AE9B"
     },
     "runtimeSettingsContract": {
         "revision": 8,
-        "sourceTreeSha256": "4F46400D79E9C00E82D42936A8DE60365FEF447C52687B5A25689DE652DD43E9",
+        "sourceTreeSha256": "70837C042F123036BD16A034A76B87142078636A9FEEE4F777778FE39FA95055",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -285,12 +285,12 @@
             "reason": "use the requested Marschner hair model"
         },
         { "path": ["Hair Specular", "HairGlossiness"], "value": 70.0 },
-        { "path": ["Hair Specular", "SpecularMult"], "value": 1.38 },
-        { "path": ["Hair Specular", "DiffuseMult"], "value": 1.02 },
-        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 3.0 },
-        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 0.7 },
-        { "path": ["Hair Specular", "BaseColorMult"], "value": 0.81 },
-        { "path": ["Hair Specular", "HairSaturation"], "value": 0.8 },
+        { "path": ["Hair Specular", "SpecularMult"], "value": 1.7 },
+        { "path": ["Hair Specular", "DiffuseMult"], "value": 0.75 },
+        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "BaseColorMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "HairSaturation"], "value": 1.0 },
         { "path": ["Hair Specular", "Transmission"], "value": 1.0 },
         { "path": ["Hair Specular", "EnableTangentShift"], "value": 1 },
         { "path": ["Hair Specular", "EnableSelfShadow"], "value": 1 },
@@ -580,12 +580,12 @@
         { "path": ["Subsurface Scattering", "HumanFemaleSSSBaseSaturation"], "value": 1.05 },
         { "path": ["Hair Specular", "HairMode"], "value": 1 },
         { "path": ["Hair Specular", "HairGlossiness"], "value": 70.0 },
-        { "path": ["Hair Specular", "SpecularMult"], "value": 1.38 },
-        { "path": ["Hair Specular", "DiffuseMult"], "value": 1.02 },
-        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 3.0 },
-        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 0.7 },
-        { "path": ["Hair Specular", "BaseColorMult"], "value": 0.81 },
-        { "path": ["Hair Specular", "HairSaturation"], "value": 0.8 },
+        { "path": ["Hair Specular", "SpecularMult"], "value": 1.7 },
+        { "path": ["Hair Specular", "DiffuseMult"], "value": 0.75 },
+        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "BaseColorMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "HairSaturation"], "value": 1.0 },
         { "path": ["Hair Specular", "Transmission"], "value": 1.0 },
         { "path": ["Hair Specular", "EnableTangentShift"], "value": 1 },
         { "path": ["Hair Specular", "EnableSelfShadow"], "value": 1 },

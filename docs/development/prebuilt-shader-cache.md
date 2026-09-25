@@ -94,6 +94,7 @@ the supplied cache.
 | Runtime macro serialization                     | `src/Utils/ShaderDefines.h`                         |
 | Offline compiler adapter                        | `tools/shader_cache_compile.py`                     |
 | Offline compile-input manifest                  | `tools/shader_cache_manifest.py`                    |
+| DXBC container and shader-stage validation      | `tools/shader_bytecode.py`                          |
 | Runtime manifest schema and atomic persistence  | `src/Utils/ShaderCacheManifest.h`                   |
 | Managed A/B pack format and runtime store       | `src/Utils/ShaderCachePack.*`                       |
 | External compatibility ABI                      | `include/VRAPI/CSshadercompatibilityapi.h`          |
@@ -479,7 +480,10 @@ Successful builder completion already proves:
     variants;
 -   every requested single-cache named profile contains at least one compiled
     blob;
--   every `.pso`, `.vso`, and `.cso` starts with `DXBC`;
+-   every `.pso`, `.vso`, and `.cso` has a bounded DXBC container with a
+    matching declared size, non-overlapping chunks, one shader program,
+    consistent program length, and the corresponding pixel, vertex or
+    compute stage;
 -   the temporary loose-cache manifest uses the supported schema and is removed
     after its content contracts are embedded in pack records;
 -   every blob has exactly one valid 32-character lowercase digest;
@@ -505,6 +509,16 @@ different bytecode. Additional contents may
 coexist; each visible optimized record must still match a declared variant's
 canonical identity. Record metadata is compared byte for byte, as on an exact
 runtime hit.
+
+`tools/shader_bytecode.py` supplies the same structural and stage checks for
+loose compiler output and visible optimized archive/FOMOD records. Replaced
+records and obsolete generations retain the managed store's existing
+visibility rules. Chunk bounds and stage tokens follow Microsoft's
+[container declarations](https://github.com/microsoft/DirectXShaderCompiler/blob/main/include/dxc/DxilContainer/DxilContainer.h)
+and [tokenized program format](https://github.com/microsoft/DirectXShaderCompiler/blob/main/include/dxc/Support/d3d12TokenizedProgramFormat.hpp).
+These checks do not validate individual instructions, the DXBC checksum or
+GPU execution. Pack SHA-256 validation remains separate. Python tests use
+synthetic structural fixtures and do not compile or execute shaders.
 
 Optional operator checks:
 

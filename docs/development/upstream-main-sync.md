@@ -200,7 +200,7 @@ change that ordering. Umbrella merge #2749 adds no changes over those
 four commits; the release commit changes only the upstream version.
 
 #2747 changes only upstream NativeMenu callback ownership and is excluded
-under the existing UI rule. #2733 and #2730 remain to be decided.
+under the existing UI rule. #2730 remains to be decided.
 
 ## #2734: null textures before vanilla material setup
 
@@ -230,3 +230,56 @@ Validation:
     user instruction. Runtime checks must cover missing diffuse/normal
     textures, diffuse render targets, custom PBR fallback and valid
     Terrain Helper materials. No compiled or runtime pass is claimed.
+
+## #2733: orphaned water reflection and normal entries
+
+Approved adapted port of upstream commit
+`a9bc5f733d1422bbc14cad3ec7239b7ee4e363a9` by Skrubby Skrub In A Shrub.
+
+Keep the water-system lock across `AddWater`, removal of its temporary
+water object and cleanup of newly orphaned reflection and normal entries.
+These entries retain raw material pointers that must not remain available
+for reuse after their Unified Water tile unloads. Queue array-only entries
+through the engine's deferred-release path before erasing them.
+
+Only remove a newly appended, non-null water object with the expected
+shape. Find an entry in its owning array before reading its reference
+count: the removed water object may have been the sole owner of an entry
+absent from that array. Preserve entries with other owners. Retain the
+fork's flowmap readiness checks, cache lifetime, reserve behavior,
+duplicate cleanup, node ownership and child-worldspace culling.
+
+The shared code serves SE, AE and VR. Keep upstream's SE/AE relocation IDs
+69180/70544 and use the verified VR RVA `0xCA7290` through `REL::VariantID`.
+No new resources, settings or DevBench actions are introduced.
+
+Validation:
+
+-   Reviewed the ownership sequence, append/shape guards, array membership
+    check and continuous lock scope against the pinned upstream source
+    and local CommonLib `NiPointer`, `BSTArray` and `BSSpinLock` behavior.
+-   Disassembled the preserved live Skyrim VR 1.4.15 image with existing
+    Capstone 5.0.7. Snapshot: `20260822T111246Z`, PID 39940, image base
+    `0x7FF6F2B30000`, size 60,133,376 bytes, SHA-256
+    `1a6fbb7e726491929ea6eaa1dbfd866c48404edaefd63bd712f41fb13ffa2ce8`.
+    Local source:
+    `build/validation/simple-coc-25x5s-20260925T091018479Z/live-snapshot/live-ghidra-snapshots/20260822T111246Z/SkyrimVR-live-pid-39940-base-00007FF6F2B30000.bin`.
+-   Native `RemoveWater` calls RVA `0xCA7290` at `0x4D791C` and
+    `0x4D79D2`, passing the address of a temporary `NiPointer` in RCX.
+    The callee accepts at most two references; its queue insertion at
+    `0xCA7B4A` retains the object. This matches the port's array-plus-local
+    ownership before queueing. Reflection/normal array and member offsets
+    match the local CommonLib declarations.
+-   Native `AddWater` locks the water system at `0x4D6AF3`. The lock at
+    `0x143380` increments its recursion count at `0x1433A3` when called
+    again by its owning thread, confirming the outer RAII lock is valid.
+    The public VR address database at commit
+    `87d83ca18ff5ec07ef74cdf8a7920b9172bd6745` independently maps ID 69180
+    to the same VR address.
+-   `pwsh ./tools/pre-commit.ps1 run --files src/Features/UnifiedWater.cpp docs/development/upstream-main-sync.md`: passed.
+-   `pwsh ./tools/git.ps1 diff --check`: passed.
+-   Compilation, compiled tests and runtime checks remain deferred by
+    user instruction. The snapshot analysis verifies the engine ABI and
+    ownership behavior; it does not exercise the patched DLL. Remaining
+    runtime checks include repeated terrain-water attach/detach, cell and
+    child-worldspace transitions, and vanilla water at matching heights.

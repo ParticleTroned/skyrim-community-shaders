@@ -253,3 +253,155 @@ improvement or reproduced CSX crash is claimed.
 
 User-owned archives, logs, investigations, build outputs and shader caches
 remain outside these changes.
+
+## Review after #719
+
+The adapted #719 port is local commit
+`d9165db24379f53aa89466f8ddd0c41b42aa2572`. Its first commit attempt hit a
+transient index-lock conflict during the hook's unstaged-change handling.
+The user log remained intact, the lock disappeared, and the retry passed
+the scoped hooks and restored the unstaged changes. The repository doctor
+reported zero failures and the existing public-HTTPS remote warning.
+
+-   #722, `c6b83fa8b163e3b45beb472f25cc4ffa60770b3c`: excluded as a
+    follow-up to the previously rejected outdated-plugin block. It extracts
+    one optional-version comparison into a template and adds tests; the
+    corresponding gate/table does not exist in current CSX.
+-   #718, `4583e09900a1a4df430a8a46e8a41538cb5b6263`: excluded SLF split
+    cache counters and their DevBench serialization. No independent local
+    cache behavior is changed.
+-   #721, `9600a5280656ac0373a838281cd660521f9a2b85`: excluded upstream
+    agent and release-review documentation. Retain CSX's canonical policy.
+-   #726, `6150e8d39ea9b096d35c221d9f1aa19f80608844`: changes only shared
+    constant-buffer cleanup in the excluded Wind feature and deferred GO.
+    Neither implementation exists in the current local feature sources.
+-   v2.14.0 release metadata remains excluded.
+
+## #727: JSON mesh filtering rules, rejected
+
+[Open Shaders #727](https://github.com/alandtse/open-shaders/pull/727),
+`b434d8d5432478be56351cd62cc0fbd4696fbc5a`, adds startup JSON include/exclude
+rules for Terrain Variation mesh diffuse textures. It matches filenames,
+paths and directories, combines valid files, gives exclusions precedence,
+and caches results. It filters texture eligibility, not individual NIFs.
+The default file admits mountain and dirt-cliff directories (including PBR
+copies) and excludes `dirtcliffsroots01.dds` and the tree directory.
+
+Current CSX has no configurable rule loader, so this is not fully covered.
+However, `TerrainVariationPolicy::IsLandscapeDiffusePath` already requires
+loaded landscape-record membership after initialization, including
+seasonal swaps, and preserves explicit material/tree exclusions. Importing
+the OS automatic directory matching and default includes would broaden
+that established policy. It would then need texture-name exclusions to
+handle cases currently rejected automatically.
+
+Recommend **r for now**: no current failure requiring these manual
+exceptions has been identified. The independently useful addition would
+be optional mod-author overrides, with the existing automatic policy and
+material safeguards retained and no shipped directory/name exceptions.
+That would be a new configuration capability, not a correction to the
+previously reviewed eligibility issue. The user rejected this item. No
+#727 code has been implemented.
+
+## #724: Effects11 preset include handling
+
+Excluded after inspecting
+`a996a271790ffa9f944d2d7e8a05e6fbd73a85d3`. Its resolver implements
+Effects11 preset-root and parent-directory lookup, accepts missing legacy
+includes as empty source, and is wired only into Effects11 compilation.
+The shared native reader is used but not modified. That reader was already
+adapted in #715. Current CSX has no Effects11 caller needing the additional
+resolver; accepting missing engine shader includes would change the local
+failure contract.
+
+## #728: release shader cache validation
+
+[Open Shaders #728](https://github.com/alandtse/open-shaders/pull/728),
+`2455ffce0ae2fd044ea0a6ce95ac7f667a2988f3`, strengthens release cache
+validation, records inputs for separately finalized compiler artifacts,
+checks live loose-cache reuse and gates OS publication on validation.
+It is authored by Dlizzio
+`<77717521+Dlizzio@users.noreply.github.com>`.
+
+CSX already has a different managed A/B cache contract. The builder uses a
+fresh private workspace, resolves actual compiler macro tasks, checks
+complete permutation-to-blob coverage, includes explicit shader/feature
+ABI identities in content contracts, and validates managed records,
+compatibility variants and archive coverage. Release assembly already
+depends on the shader-cache job succeeding. Preserve these implementations
+and the existing runtime verification procedure; the OS loose-cache
+manifest formula, feature-profile injection, separate-finalization path,
+REST inspection client and publishing workflows are not suitable imports.
+
+Before this port, `validate_cache` in `tools/build-shader-cache.py` checked
+only the first four `DXBC` bytes. `PackagedCompatibilityInventory` likewise
+checked a four-byte signature while validating record identities and
+coverage. Pack hashes prove byte
+integrity, but do not prove that those bytes form a shader container or
+that the encoded shader stage matches its pixel/vertex/compute identity.
+No shared Python container/stage validator existed in the previous tooling.
+
+The user approved the partial port. `tools/shader_bytecode.py` now checks
+the container size/version, bounded chunk table and payloads, exactly one
+shader program, its declared word count, and the pixel/vertex/compute
+stage. It also rejects overlapping chunks while accepting an unordered
+chunk table and auxiliary chunks. Loose compiler output and visible
+optimized archive/FOMOD records use this validator. The inspector retains
+only the validation result and digest, preserving its bounded per-record
+storage and existing generation/replacement rules. A malformed record that
+is replaced or belongs to an obsolete generation still cannot cause an
+admission failure. The managed format, runtime code, compatibility and
+profile/digest contracts are unchanged.
+
+Existing packaging fixtures now use synthetic containers with the correct
+structure instead of signature-only byte strings. Regression cases cover
+all supported stages, SHDR/SHEX chunks, malformed headers/tables/payloads,
+missing/duplicate programs, length mismatches, overlapping chunks,
+truncation, and wrong-stage payloads. Archive and FOMOD cases rebuild valid
+pack hashes around bad bytecode, proving that the new checks add coverage
+beyond record integrity. This is build/packaging hardening, not a runtime
+performance change or evidence that a shipped cache is corrupt.
+
+## Validation for #728
+
+-   `& .git/csx-tools/venv/Scripts/python.exe tests/shader_cache_packaging_test.py`:
+    passed, 33 tests, including direct parser, loose-cache and SE/VR archive
+    checks. Archive operations use CMake `-E tar`; no compilation runs.
+-   `& .git/csx-tools/venv/Scripts/python.exe tests/fomod_package_test.py`:
+    passed, 31 tests, including malformed and wrong-stage bytecode through
+    SE/AE and VR package validation.
+-   `& .git/csx-tools/venv/Scripts/python.exe tests/shader_cache_pack_builder_test.py`:
+    passed, including visible/fallback/replaced/obsolete record cases and
+    the shared 29-case manifest corpus (6 accepted, 23 rejected). Invoked
+    without the optional compiled C++ consumer.
+-   The structural fixture checks do not prove executable instructions,
+    DXBC checksum correctness or GPU behavior. The format references are
+    linked in the [cache runbook](prebuilt-shader-cache.md).
+-   Scoped pre-commit and `git diff --check`: passed after formatting the
+    added cache-runbook table row. No unrelated files are included.
+-   Not run, per user instruction: shader/C++ compilation, CMake build
+    configuration, compiled controller tests, cache regeneration,
+    deployment, or runtime validation.
+
+## #729: vanilla-settings dangling references
+
+Excluded after inspecting
+`10be2124c31352f491aaba080644c7e8989237d7`. All changes are in the OS
+`NativeMenu/Vendor/VanillaSettingsEngine.cpp` callback hooks: retain
+function pointers instead of owning callback-handler references across
+JournalMenu destruction, and update entries in place. That component and
+the corresponding callback storage do not exist in current CSX. No
+independent local use was found.
+
+## Review completion
+
+All 26 first-parent entries after the last confirmed #688 port through the
+pinned Open Shaders `main` endpoint, v2.15.0
+`0db03643c036de42077f8e9fa985e197c9604bb6`, now have a disposition. The
+v2.15.0 release metadata is excluded. Approved independent parts of #715,
+#719 and #728 were adapted locally. #678 Procedural Sun remains postponed;
+the user's other exclusions, earlier rejections and deferred GO work
+remain in force. This completes the selective review, not the deferred
+compilation/runtime validation phase, and claims no upstream merge ancestry.
+The completion-time `git ls-remote` check on 2026-09-25 confirmed that
+upstream `refs/heads/main` still points to the pinned endpoint above.

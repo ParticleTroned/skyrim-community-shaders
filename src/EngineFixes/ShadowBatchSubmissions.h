@@ -51,7 +51,20 @@ namespace ShadowBatch
 		template <class Prepare>
 		Admission Admit(std::uint64_t a_bucket, const Key& a_key, std::uintptr_t a_caller, Prepare&& a_prepare)
 		{
+			return Admit(a_bucket, a_key, a_caller, std::forward<Prepare>(a_prepare), [] { return false; });
+		}
+
+		/** Refresh native lifetime and admit under one lookup; neither callback may reenter the store. */
+		template <class Prepare, class IsEmpty>
+		Admission Admit(std::uint64_t a_bucket, const Key& a_key, std::uintptr_t a_caller, Prepare&& a_prepare, IsEmpty&& a_isEmpty)
+		{
 			auto& bucket = GetBucket(a_bucket);
+			if (bucket.head && a_isEmpty())
+				ClearBucket(bucket);
+			if (bucket.entries && bucket.entries->size() >= bucket.capacity) {
+				if (const auto found = bucket.entries->find(a_key); found != bucket.entries->end())
+					return { found->second, false };
+			}
 			auto& entries = bucket.ReserveForInsert();
 			const auto [entry, inserted] = entries.try_emplace(a_key, nullptr);
 			if (!inserted)
@@ -82,6 +95,12 @@ namespace ShadowBatch
 				throw;
 			}
 			record->caller = a_caller;
+			if (!bucket.head) {
+				bucket.activeNext = activeBuckets;
+				if (activeBuckets)
+					activeBuckets->activePrevious = &bucket;
+				activeBuckets = &bucket;
+			}
 			record->next = bucket.head;
 			bucket.head = record;
 			++active;
@@ -99,8 +118,8 @@ namespace ShadowBatch
 		void Clear()
 		{
 			const ReadScope deferReleases{ *this };
-			for (auto& [key, bucket] : buckets)
-				ClearBucket(*bucket);
+			while (activeBuckets)
+				ClearBucket(*activeBuckets);
 		}
 
 		/** Retire only buckets proven empty, including skipped ranges and partial drains. */
@@ -108,9 +127,11 @@ namespace ShadowBatch
 		void Prune(IsEmpty&& a_isEmpty)
 		{
 			const ReadScope deferReleases{ *this };
-			for (auto& [key, bucket] : buckets) {
-				if (bucket->head && a_isEmpty(key))
+			for (auto* bucket = activeBuckets; bucket;) {
+				auto* next = bucket->activeNext;
+				if (a_isEmpty(bucket->key))
 					ClearBucket(*bucket);
+				bucket = next;
 			}
 		}
 
@@ -138,6 +159,9 @@ namespace ShadowBatch
 			std::unique_ptr<Entries> entries;
 			Record* head{};
 			std::size_t capacity{};
+			std::uint64_t key{};
+			Bucket* activePrevious{};
+			Bucket* activeNext{};
 
 			Entries& ReserveForInsert()
 			{
@@ -170,6 +194,7 @@ namespace ShadowBatch
 				return *lastBucket;
 			}
 			auto bucket = std::make_unique<Bucket>();
+			bucket->key = a_key;
 			auto* result = bucket.get();
 			buckets.emplace(a_key, std::move(bucket));
 			lastBucketKey = a_key;
@@ -179,6 +204,15 @@ namespace ShadowBatch
 
 		void ClearBucket(Bucket& a_bucket)
 		{
+			if (!a_bucket.head)
+				return;
+			if (a_bucket.activePrevious)
+				a_bucket.activePrevious->activeNext = a_bucket.activeNext;
+			else
+				activeBuckets = a_bucket.activeNext;
+			if (a_bucket.activeNext)
+				a_bucket.activeNext->activePrevious = a_bucket.activePrevious;
+			a_bucket.activePrevious = a_bucket.activeNext = nullptr;
 			auto* record = std::exchange(a_bucket.head, nullptr);
 			if (a_bucket.entries)
 				a_bucket.entries->clear();
@@ -205,6 +239,7 @@ namespace ShadowBatch
 		}
 
 		std::unordered_map<std::uint64_t, std::unique_ptr<Bucket>> buckets;
+		Bucket* activeBuckets{};
 		Bucket* lastBucket{};
 		std::uint64_t lastBucketKey{};
 		std::deque<Record> records;

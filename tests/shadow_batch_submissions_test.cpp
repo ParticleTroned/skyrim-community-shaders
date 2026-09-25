@@ -1,6 +1,7 @@
 #include "EngineFixes/ShadowBatchSubmissions.h"
 #include "EngineFixes/VRShadowBatchPolicy.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -82,6 +83,111 @@ namespace
 		Check(store.Active() == 0, "reset must retire all memberships");
 	}
 
+	void SparseBucketsAndDuplicateGrowth()
+	{
+		Store store;
+		std::size_t probes{};
+		const auto admit = [&](std::uint64_t bucket, bool empty) {
+			return store.Admit(bucket, 1, 123, [](Payload& payload) { payload.pass.draw = 1; }, [&] { ++probes; return empty; });
+		};
+		for (std::uint64_t bucket = 0; bucket < 1024; ++bucket) {
+			Check(admit(bucket, true).inserted, "empty bucket must admit without probing native state");
+			store.Clear(bucket);
+		}
+		Check(probes == 0, "empty retained buckets must skip native probes");
+		for (auto bucket : { 2ULL, 511ULL, 1000ULL })
+			Add(store, bucket, 1);
+		store.Prune([&](std::uint64_t bucket) { ++probes; return bucket == 511; });
+		Check(probes == 3 && store.Active() == 2, "sparse pruning must preserve head and tail after removing the middle");
+		store.Clear(1000);
+		Add(store, 511, 1);
+		Check(admit(2, true).inserted && store.Active() == 2, "native drain must allow a fresh generation");
+		Check(!admit(511, false).inserted, "nonempty native bucket must retain duplicate membership");
+		store.Clear();
+		Check(store.Active() == 0, "reset must drain the active list after sparse reuse");
+		for (std::uint64_t key = 0; key < 8; ++key)
+			Add(store, 2048, key);
+		const auto before = allocations.load();
+		Check(!Add(store, 2048, 0).inserted, "full bucket must reject duplicates");
+		Check(allocations.load() == before, "duplicate at capacity must not grow the membership table");
+		store.Clear();
+	}
+
+	void RefreshedAdmission()
+	{
+		Store store;
+		std::size_t probes{}, preparations{};
+		bool nativeEmpty = true;
+		auto owner = std::make_shared<int>(42);
+		std::weak_ptr<int> weak = owner;
+		const auto admit = [&] {
+			return store.Admit(1, 10, 1, [&](Payload& payload) {
+				++preparations;
+				payload.owner = owner; }, [&] { ++probes; return nativeEmpty; });
+		};
+		auto first = admit();
+		Check(first.inserted && probes == 0, "first admission must not probe an unowned bucket");
+		nativeEmpty = false;
+		Check(!admit().inserted && preparations == 1 && probes == 1, "live native membership must suppress duplicates before preparation");
+		{
+			Store::ReadScope reading{ store };
+			owner.reset();
+			nativeEmpty = true;
+			auto replacement = admit();
+			Check(replacement.inserted && replacement.record != first.record, "native drain must replace membership without recycling a reader's node");
+			Check(store.Active() == 1 && probes == 2 && !weak.expired(), "refresh must retain the retired owner's reader lifetime");
+		}
+		Check(weak.expired() && preparations == 2, "retired owner must release after the reader finishes");
+		store.Clear();
+	}
+
+	template <bool AutoRelease>
+	void RefreshedAdmissionFailure()
+	{
+		using FailureStore = ShadowBatch::Submissions<std::uint64_t, Payload, ankerl::unordered_dense::hash<std::uint64_t>, AutoRelease>;
+		FailureStore store;
+		auto owner = std::make_shared<int>(42);
+		std::weak_ptr<int> previous = owner;
+		store.Admit(1, 10, 1, [&](Payload& payload) { payload.owner = owner; });
+		owner.reset();
+		bool prepared{};
+		bool probeFailed{};
+		try {
+			store.Admit(1, 10, 2, [&](Payload&) { prepared = true; }, []() -> bool { throw std::runtime_error("native probe failure"); });
+		} catch (const std::runtime_error&) {
+			probeFailed = true;
+		}
+		Check(probeFailed && !prepared && store.Active() == 1 && !previous.expired(), "failed probe must preserve native ownership and membership");
+		auto partialOwner = std::make_shared<int>(7);
+		std::weak_ptr<int> partial = partialOwner;
+		{
+			typename FailureStore::ReadScope reading{ store };
+			try {
+				store.Admit(1, 10, 2, [&](Payload& payload) {
+					payload.owner = partialOwner;
+					throw std::bad_alloc{}; }, [] { return true; });
+				Check(false, "partial preparation failure must propagate");
+			} catch (const std::bad_alloc&) {
+				Check(store.Active() == 0, "failed replacement must leave no duplicate membership");
+			}
+			partialOwner.reset();
+			Check(!previous.expired() && store.TakeRetired() == nullptr, "failed admission must retain a reader's native node");
+		}
+		if constexpr (!AutoRelease) {
+			Check(!previous.expired() && !partial.expired(), "deferred mode must retain old and partial owners for unlocked release");
+			auto* head = store.TakeRetired();
+			Check(head != nullptr, "failed admission must expose retired ownership");
+			auto* tail = head;
+			for (auto* record = head; record; record = record->next) {
+				record->payload = {};
+				tail = record;
+			}
+			store.Recycle(head, tail);
+		}
+		Check(previous.expired() && partial.expired(), "failed replacement must release all retired owners");
+		Check(store.Admit(1, 10, 3, [](Payload&) {}).inserted, "failed replacement must allow retry");
+	}
+
 	void LifetimeAndReentrancy()
 	{
 		Store store;
@@ -103,6 +209,68 @@ namespace
 		}
 		Check(weak.expired(), "retired owner must release after the final reader");
 		Check(store.Active() == 1, "retired generation must not clear its replacement");
+		store.Clear();
+	}
+
+	void MixedBucketLifetimes()
+	{
+		Store store;
+		std::array<std::array<Store::Record*, 8>, 64> expected{};
+		std::uint32_t seed = 0x6131c953;
+		auto random = [&] {
+			seed ^= seed << 13;
+			seed ^= seed >> 17;
+			seed ^= seed << 5;
+			return seed;
+		};
+		for (unsigned step = 0; step < 25000; ++step) {
+			const auto bucket = random() % expected.size();
+			const auto key = random() % expected[bucket].size();
+			switch (random() % 8) {
+			case 0:
+				store.Clear(bucket);
+				expected[bucket].fill(nullptr);
+				break;
+			case 1:
+				{
+					std::size_t occupied{}, probes{};
+					for (const auto& entries : expected) {
+						for (const auto* entry : entries) {
+							if (entry) {
+								++occupied;
+								break;
+							}
+						}
+					}
+					store.Prune([&](std::uint64_t current) {
+						++probes;
+						if ((current & 3) != (bucket & 3))
+							return false;
+						expected[current].fill(nullptr);
+						return true;
+					});
+					Check(probes == occupied, "mixed pruning must visit every occupied bucket exactly once");
+					break;
+				}
+			case 2:
+				store.Clear();
+				for (auto& entries : expected) entries.fill(nullptr);
+				break;
+			default:
+				{
+					const auto admission = Add(store, bucket, key);
+					Check(admission.inserted == !expected[bucket][key], "mixed generations changed duplicate admission");
+					if (expected[bucket][key])
+						Check(admission.record == expected[bucket][key], "live record identity changed");
+					expected[bucket][key] = admission.record;
+					break;
+				}
+			}
+			std::size_t active{};
+			for (const auto& entries : expected)
+				for (const auto* entry : entries) active += entry != nullptr;
+			Check(store.Active() == active, "mixed pruning lost or retained a submission");
+		}
 		store.Clear();
 	}
 
@@ -221,7 +389,12 @@ int main(int argc, char** argv)
 {
 	try {
 		DuplicateAndOverlap();
+		SparseBucketsAndDuplicateGrowth();
+		RefreshedAdmission();
+		RefreshedAdmissionFailure<true>();
+		RefreshedAdmissionFailure<false>();
 		LifetimeAndReentrancy();
+		MixedBucketLifetimes();
 		FailureAndReuse();
 		ReentrantOwnerRelease();
 		SerializedProducers();

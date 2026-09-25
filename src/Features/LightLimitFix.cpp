@@ -2104,24 +2104,9 @@ void ResolveBillboardTint(
 	}
 }
 
-LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass)
+LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass, RE::BSEffectShaderProperty* shaderProperty)
 {
-	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty) {
-		return {};
-	}
-
-	if (!settings.EnableParticleLights) {
-		return {};
-	}
-
 	auto& particleLights = globals::features::llf::particleLights;
-	auto shaderProperty = a_pass->shaderProperty->GetRTTI() == globals::rtti::BSEffectShaderPropertyRTTI.get() ?
-	                          static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty) :
-	                          nullptr;
-	if (!shaderProperty || shaderProperty->lightData) {
-		return {};
-	}
-
 	auto material = shaderProperty->GetMaterial();
 	if (!material) {
 		return {};
@@ -2242,18 +2227,29 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 	return cacheReference(reference);
 }
 
-bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
+bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t, bool* a_admissionInvalidated)
 {
+	if (a_admissionInvalidated)
+		*a_admissionInvalidated = false;
 	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty) {
 		return true;
 	}
 
 	auto shaderCache = globals::shaderCache;
 
-	if (!shaderCache->IsEnabled())
+	if (!shaderCache->IsEnabled() || !settings.EnableParticleLights)
 		return true;
 
-	auto reference = GetParticleLightConfigs(a_pass);
+	auto* shaderProperty = a_pass->shaderProperty->GetRTTI() == globals::rtti::BSEffectShaderPropertyRTTI.get() ?
+	                           static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty) :
+	                           nullptr;
+	if (!shaderProperty || shaderProperty->lightData)
+		return true;
+
+	// Only identity/flag reads precede this boundary; effect work may invoke callbacks.
+	if (a_admissionInvalidated)
+		*a_admissionInvalidated = true;
+	auto reference = GetParticleLightConfigs(a_pass, shaderProperty);
 	if (reference.valid) {
 		if (AddParticleLight(a_pass, reference)) {
 			return !(settings.EnableParticleLightsCulling && reference.config.cull);

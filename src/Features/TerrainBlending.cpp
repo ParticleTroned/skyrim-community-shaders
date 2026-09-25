@@ -1141,8 +1141,10 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	}
 }
 
-TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags, bool* a_admissionInvalidated)
 {
+	if (a_admissionInvalidated)
+		*a_admissionInvalidated = false;
 	auto shaderCache = globals::shaderCache;
 
 	if (shaderCache->IsEnabled() && settings.Enabled) {
@@ -1160,8 +1162,11 @@ TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmedi
 			}
 
 			if (renderTerrainDepth != inTerrain) {
-				if (!inTerrain)
+				if (!inTerrain) {
+					if (a_admissionInvalidated)
+						*a_admissionInvalidated = true;
 					ResetTerrainDepth();
+				}
 				renderTerrainDepth = inTerrain;
 			}
 

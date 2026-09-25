@@ -23,6 +23,7 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace
@@ -124,12 +125,18 @@ namespace RE
 	};
 	struct BSRenderPass
 	{
+		struct LODMode
+		{
+			std::uint8_t index: 7;
+			bool singleLevel: 1;
+		};
+		static_assert(sizeof(LODMode) == 1);
 		BSShader* shader{};
 		BSShaderProperty* shaderProperty{};
 		BSGeometry* geometry{};
 		std::uint32_t passEnum{ 0xC0C6 };
 		std::uint8_t accumulationHint{}, extraParam{};
-		std::uint8_t LODMode{};
+		LODMode LODMode{};
 		std::uint8_t numLights{}, numShadowLights{}, unk21{};
 		std::uint32_t unk24{};
 		BSRenderPass* next{};
@@ -437,6 +444,137 @@ namespace
 		Check(FindState(&first)->submissions.Active() == 1);
 		Destroy(&first);
 	}
+	void ChangedSubmissionState()
+	{
+		using namespace VRShadowBatch;
+		Fixture fixture, other;
+		Renderer renderer;
+		calls = 0;
+		const auto submit = [&](Pass& pass, bool sorted = false) {
+			const auto before = calls;
+			const auto registration = sorted ? RegisterSorted : RegisterUnsorted;
+			registration(&renderer, &pass, 0xC0C6);
+			Check(calls == before + 1);
+			registration(&renderer, &pass, 0xC0C6);
+			Check(calls == before + 1);
+		};
+		submit(fixture.pass);
+		const auto changeBits = [&]<class T>(T& value) {
+			const auto saved = value;
+			for (unsigned bit = 0; bit < sizeof(T) * 8; ++bit) {
+				auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(T)>>(saved);
+				bytes[bit / 8] ^= static_cast<std::uint8_t>(1U << (bit % 8));
+				value = std::bit_cast<T>(bytes);
+				submit(fixture.pass);
+				value = saved;
+			}
+		};
+		changeBits(fixture.pass.passEnum);
+		changeBits(fixture.pass.accumulationHint);
+		changeBits(fixture.pass.extraParam);
+		changeBits(fixture.pass.LODMode);
+		changeBits(fixture.pass.unk21);
+		changeBits(fixture.pass.unk24);
+		changeBits(fixture.property.flags.value);
+		submit(fixture.pass, true);
+		fixture.pass.shader = &other.shader;
+		submit(fixture.pass);
+		fixture.pass.shader = &fixture.shader;
+		fixture.pass.shaderProperty = &other.property;
+		submit(fixture.pass);
+		fixture.pass.shaderProperty = &fixture.property;
+		fixture.pass.geometry = &other.geometry;
+		submit(fixture.pass);
+		fixture.pass.geometry = &fixture.geometry;
+		fixture.property.material = &other.property;
+		submit(fixture.pass);
+		fixture.property.material = nullptr;
+		auto otherPass = fixture.pass;
+		submit(otherPass);
+		const auto admitted = calls;
+		RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6);
+		Check(calls == admitted);
+		draws.clear();
+		RenderActiveRange(&renderer, 0xC0C6, 0xC0C6, 0);
+		Check(draws.size() == static_cast<std::size_t>(admitted));
+		Check(fixture.geometry.refs == 0 && fixture.property.refs == 1);
+		Check(other.geometry.refs == 0 && other.property.refs == 1);
+		Destroy(&renderer);
+	}
+
+	void NativeDrainAdmissionFailure()
+	{
+		using namespace VRShadowBatch;
+		std::size_t rejected{};
+		for (std::size_t populated = 1; populated <= 64; ++populated) {
+			std::vector<Fixture> fixtures(populated);
+			Renderer renderer;
+			const std::unique_ptr<Renderer, decltype(&Destroy)> cleanup(&renderer, Destroy);
+			calls = 0;
+			for (auto& fixture : fixtures)
+				RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6);
+			NativeClear(&renderer);
+			const auto before = calls;
+			// Vary pool occupancy to reach allocation boundaries independently of deque block size.
+			failAfter = 0;
+			RegisterUnsorted(&renderer, &fixtures.front().pass, 0xC0C6);
+			failAfter = -1;
+			const auto state = FindState(&renderer);
+			Check(calls == before || calls == before + 1);
+			const bool accepted = calls != before;
+			Check(state->submissions.Active() == (accepted ? 1U : 0U) && !state->submissions.HasRetired());
+			for (std::size_t index = 0; index < fixtures.size(); ++index) {
+				const auto retained = accepted && index == 0 ? 1 : 0;
+				Check(fixtures[index].geometry.refs == retained && fixtures[index].property.refs == retained + 1);
+			}
+			if (!accepted)
+				++rejected;
+			RegisterUnsorted(&renderer, &fixtures.front().pass, 0xC0C6);
+			Check(calls == before + 1 && state->submissions.Active() == 1);
+			Check(fixtures.front().geometry.refs == 1 && fixtures.front().property.refs == 2);
+			Clear<clearPasses>(&renderer);
+			Check(fixtures.front().geometry.refs == 0 && fixtures.front().property.refs == 1);
+		}
+		Check(rejected != 0 && registry.empty());
+	}
+
+	void NativeDrainOwnerLifetime()
+	{
+		using namespace VRShadowBatch;
+		Fixture fixture;
+		Renderer renderer;
+		bool released{};
+		const std::unique_ptr<Renderer, decltype(&Destroy)> cleanup(&renderer, Destroy);
+		calls = 0;
+		RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6);
+		fixture.geometry.onZero = [&] { released = true; };
+		NativeClear(&renderer);
+		RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6);
+		Check(calls == 2 && !released && fixture.geometry.refs == 1 && fixture.property.refs == 2);
+		Clear<clearPasses>(&renderer);
+		Check(released && fixture.geometry.refs == 0 && fixture.property.refs == 1);
+	}
+
+	void CollidingSubmissionKeys()
+	{
+		using namespace VRShadowBatch;
+		struct ConstantHash
+		{
+			std::uint64_t operator()(const Key&) const noexcept { return 0; }
+		};
+		Fixture fixture;
+		const auto firstKey = MakeKey(&fixture.pass, false);
+		fixture.property.material = &fixture;
+		const auto secondKey = MakeKey(&fixture.pass, false);
+		ShadowBatch::Submissions<Key, Payload, ConstantHash> store;
+		const auto first = store.Admit(1, firstKey, 1, [](Payload&) {});
+		const auto second = store.Admit(1, secondKey, 2, [](Payload&) {});
+		Check(first.inserted && second.inserted && first.record != second.record);
+		Check(store.Admit(1, firstKey, 3, [](Payload&) {}).record == first.record);
+		Check(store.Admit(1, secondKey, 4, [](Payload&) {}).record == second.record);
+		Check(store.Active() == 2);
+	}
+
 	void ReentrantAndNativePaths()
 	{
 		using namespace VRShadowBatch;
@@ -585,6 +723,33 @@ namespace
 		Check(replacement.geometry.refs == 0 && replacement.property.refs == 1);
 	}
 
+	void NegativeCacheCreationAndUnwind()
+	{
+		using namespace VRShadowBatch;
+		Renderer renderer;
+		Fixture fixture;
+		Check(!FindState(&renderer));
+		Check(!FindState(&renderer));
+		std::thread producer([&] { RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6); });
+		producer.join();
+		Check(FindState(&renderer) && fixture.geometry.refs == 1);
+		duringDraw = [&](Renderer* current) {
+			Clear<clearPasses>(current);
+			Check(fixture.geometry.refs == 1);
+			throw std::runtime_error("native unwind");
+		};
+		bool propagated{};
+		try {
+			RenderActiveRange(&renderer, 0xC0C6, 0xC0C6, 0);
+		} catch (const std::runtime_error&) {
+			propagated = true;
+		}
+		duringDraw = {};
+		Check(propagated && fixture.geometry.refs == 0 && FindState(&renderer)->submissions.Active() == 0);
+		Destroy(&renderer);
+		Check(!FindState(&renderer) && registry.empty());
+	}
+
 	void UnlockedNativeAndOwnerCallbacks()
 	{
 		using namespace VRShadowBatch;
@@ -623,27 +788,65 @@ namespace
 		Destroy(&renderer);
 	}
 
+	void InterleavedRendererCaches()
+	{
+		using namespace VRShadowBatch;
+		std::array<Renderer, 32> renderers;
+		std::array<std::shared_ptr<BatchState>, 32> states;
+		Fixture fixture;
+		for (std::size_t i = 0; i < renderers.size(); ++i) {
+			if (i % 2)
+				RegisterUnsorted(&renderers[i], &fixture.pass, 0xC0C6);
+			states[i] = FindState(&renderers[i]);
+		}
+		for (unsigned round = 0; round < 64; ++round) {
+			for (std::size_t i = 0; i < renderers.size(); ++i)
+				Check(FindState(&renderers[i]) == states[i]);
+		}
+		std::thread replace([&] {
+			for (auto& renderer : renderers) {
+				Destroy(&renderer);
+				RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6);
+			}
+		});
+		replace.join();
+		for (std::size_t i = 0; i < renderers.size(); ++i) {
+			const auto replacement = FindState(&renderers[i]);
+			Check(replacement && replacement != states[i] && replacement->submissions.Active() == 1);
+			Check(!states[i] || states[i]->submissions.Active() == 0);
+			Destroy(&renderers[i]);
+			Check(!FindState(&renderers[i]));
+		}
+		Check(registry.empty() && fixture.geometry.refs == 0);
+	}
+
 	void Benchmark()
 	{
 		using namespace VRShadowBatch;
-		std::cout << "passes,native_us,protected_us,delta_us,protected_warm_allocations\n";
-		for (const std::size_t count : { 64, 512, 4096 }) {
+		std::cout << "passes,groups,native_us,protected_us,delta_us,protected_warm_allocations\n";
+		constexpr std::array<std::pair<std::size_t, std::size_t>, 6> workloads{
+			{ { 64, 1 }, { 512, 1 }, { 4096, 1 }, { 64, 16 }, { 512, 16 }, { 4096, 16 } }
+		};
+		for (const auto& [count, groups] : workloads) {
 			std::vector<Fixture> fixtures(count);
 			Renderer renderer;
+			const auto lastTechnique = 0xC0C6U + (static_cast<std::uint32_t>(groups - 1) << 16);
 			auto run = [&](bool protectedPath) {
 				const auto begin = std::chrono::steady_clock::now();
 				for (int repeat = 0; repeat < 30; ++repeat) {
-					for (auto& fixture : fixtures) {
+					for (std::size_t index = 0; index < fixtures.size(); ++index) {
+						auto& fixture = fixtures[index];
+						const auto technique = 0xC0C6U + (static_cast<std::uint32_t>(index % groups) << 16);
 						if (protectedPath)
-							RegisterUnsorted(&renderer, &fixture.pass, 0xC0C6);
+							RegisterUnsorted(&renderer, &fixture.pass, technique);
 						else
-							NativeRegister(&renderer, &fixture.pass, 0xC0C6);
+							NativeRegister(&renderer, &fixture.pass, technique);
 					}
 					draws.clear();
 					if (protectedPath)
-						RenderActiveRange(&renderer, 0xC0C6, 0xC0C6, 0);
+						RenderActiveRange(&renderer, 0xC0C6, lastTechnique, 0);
 					else
-						NativeRange(&renderer, 0xC0C6, 0xC0C6, 0);
+						NativeRange(&renderer, 0xC0C6, lastTechnique, 0);
 				}
 				return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count() / 30;
 			};
@@ -664,7 +867,7 @@ namespace
 			Check(allocated == 0);
 			std::sort(native.begin(), native.end());
 			std::sort(candidate.begin(), candidate.end());
-			std::cout << count << ',' << native[4] << ',' << candidate[4] << ',' << candidate[4] - native[4] << ',' << allocated << '\n';
+			std::cout << count << ',' << groups << ',' << native[4] << ',' << candidate[4] << ',' << candidate[4] - native[4] << ',' << allocated << '\n';
 			Destroy(&renderer);
 		}
 	}
@@ -685,12 +888,18 @@ int main(int argc, char** argv)
 		NativeOwnershipRegression();
 		Exercise(false);
 		Exercise(true);
+		ChangedSubmissionState();
+		NativeDrainAdmissionFailure();
+		NativeDrainOwnerLifetime();
+		CollidingSubmissionKeys();
 		ReentrantAndNativePaths();
 		AllocationFailures();
 		PopulatedAllocationFailures();
 		PopulatedAllocationFailures(true);
 		RegistryCacheLifetimes();
+		NegativeCacheCreationAndUnwind();
 		UnlockedNativeAndOwnerCallbacks();
+		InterleavedRendererCaches();
 		if (argc == 2 && std::string_view(argv[1]) == "--benchmark")
 			Benchmark();
 		std::cout << "production shadow registration/drain/reset/destruction hook tests passed\n";

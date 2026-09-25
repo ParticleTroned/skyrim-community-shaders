@@ -427,9 +427,9 @@ public:
 
 	Settings settings;
 
-	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass);
 	bool AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLightReference& a_reference);
-	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique);
+	/** Reports whether effect processing requires fresh material admission before drawing. */
+	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique, bool* a_admissionInvalidated = nullptr);
 	void PruneParticleLightCache(std::uint32_t a_frame);
 
 	void BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pass);
@@ -529,6 +529,10 @@ public:
 
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; }
+
+private:
+	/** Resolves an eligible effect pass after its caller invalidates material admission. */
+	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass, RE::BSEffectShaderProperty* a_shaderProperty);
 };
 
 template <>

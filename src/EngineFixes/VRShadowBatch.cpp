@@ -13,7 +13,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
-#include <tuple>
+#include <string_view>
 #include <unordered_map>
 
 namespace VRShadowBatch
@@ -22,8 +22,16 @@ namespace VRShadowBatch
 	{
 		using Renderer = RE::BSBatchRenderer;
 		using Pass = RE::BSRenderPass;
-		using Key = std::tuple<std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t,
-			std::uint32_t, std::uint32_t, std::uint32_t, std::uint64_t, std::uintptr_t, bool>;
+		// Initialized contiguous words retain the complete draw identity without a hash staging buffer.
+		using Key = std::array<std::uint64_t, 8>;
+		struct KeyHash
+		{
+			using is_avalanching = void;
+			std::uint64_t operator()(const Key& a_key) const noexcept
+			{
+				return ankerl::unordered_dense::hash<std::string_view>{}({ reinterpret_cast<const char*>(a_key.data()), a_key.size() * sizeof(a_key[0]) });
+			}
+		};
 
 		struct Payload
 		{
@@ -31,7 +39,7 @@ namespace VRShadowBatch
 			RE::NiPointer<RE::BSGeometry> geometry;
 			RE::NiPointer<RE::BSShaderProperty> property;
 		};
-		using Store = ShadowBatch::Submissions<Key, Payload, ankerl::unordered_dense::hash<Key>, false>;
+		using Store = ShadowBatch::Submissions<Key, Payload, KeyHash, false>;
 		struct BatchState
 		{
 			std::recursive_mutex mutex;
@@ -42,6 +50,19 @@ namespace VRShadowBatch
 		std::atomic_uint64_t registryRevision{};
 		std::atomic_flag conflictReported{};
 		std::atomic_flag allocationFailureReported{};
+
+		void ReleaseRecords(BatchState& state, Store::Record* retired)
+		{
+			if (!retired)
+				return;
+			auto* tail = retired;
+			for (auto* record = retired; record; record = record->next) {
+				record->payload = {};
+				tail = record;
+			}
+			const std::lock_guard lock{ state.mutex };
+			state.submissions.Recycle(retired, tail);
+		}
 
 		struct ReclaimOnExit
 		{
@@ -56,31 +77,34 @@ namespace VRShadowBatch
 					const std::lock_guard lock{ state.mutex };
 					retired = state.submissions.TakeRetired();
 				}
-				if (!retired)
-					return;
-				auto* tail = retired;
-				for (auto* record = retired; record; record = record->next) {
-					record->payload = {};
-					tail = record;
-				}
-				const std::lock_guard lock{ state.mutex };
-				state.submissions.Recycle(retired, tail);
+				ReleaseRecords(state, retired);
 			}
 		};
+
+		void Prune(Renderer* a_renderer, BatchState& a_state);
 
 		struct NativeRead
 		{
 			BatchState& state;
+			Renderer* renderer;
+			bool completed{};
 			std::optional<Store::ReadScope> reader;
-			explicit NativeRead(BatchState& a_state) : state(a_state)
+			NativeRead(BatchState& a_state, Renderer* a_renderer) : state(a_state), renderer(a_renderer)
 			{
 				const std::lock_guard lock{ state.mutex };
 				reader.emplace(state.submissions);
 			}
 			~NativeRead()
 			{
-				const std::lock_guard lock{ state.mutex };
-				reader.reset();
+				Store::Record* retired;
+				{
+					const std::lock_guard lock{ state.mutex };
+					if (completed)
+						Prune(renderer, state);
+					reader.reset();
+					retired = state.submissions.TakeRetired();
+				}
+				ReleaseRecords(state, retired);
 			}
 		};
 
@@ -96,11 +120,16 @@ namespace VRShadowBatch
 			{
 				Renderer* renderer{};
 				std::uint64_t revision{};
+				bool valid{}, missing{};
 				std::weak_ptr<BatchState> state;
 			};
-			thread_local Cache cache;
+			thread_local std::array<Cache, 8> caches;
+			const auto address = reinterpret_cast<std::uintptr_t>(a_renderer);
+			auto& cache = caches[((address >> 4) ^ (address >> 12)) & (caches.size() - 1)];
 			// A weak cache cannot retain retired pools; the revision rejects reused renderer addresses.
-			if (cache.renderer == a_renderer && cache.revision == registryRevision.load(std::memory_order_acquire)) {
+			if (cache.valid && cache.renderer == a_renderer && cache.revision == registryRevision.load(std::memory_order_acquire)) {
+				if (cache.missing && !a_create)
+					return {};
 				if (auto state = cache.state.lock())
 					return state;
 			}
@@ -108,14 +137,16 @@ namespace VRShadowBatch
 			std::shared_ptr<BatchState> state;
 			if (const auto found = registry.find(a_renderer); found != registry.end()) {
 				state = found->second;
-			} else {
-				if (!a_create)
-					return {};
+			} else if (a_create) {
 				state = std::make_shared<BatchState>();
 				registry.emplace(a_renderer, state);
+				// Creation must invalidate negative entries held by every observing thread.
+				registryRevision.fetch_add(1, std::memory_order_release);
 			}
 			cache.renderer = a_renderer;
 			cache.revision = registryRevision.load(std::memory_order_relaxed);
+			cache.valid = true;
+			cache.missing = !state;
 			cache.state = state;
 			return state;
 		}
@@ -138,8 +169,9 @@ namespace VRShadowBatch
 			                   (static_cast<std::uint32_t>(a_pass->unk21) << 24);
 			return { reinterpret_cast<std::uintptr_t>(a_pass), reinterpret_cast<std::uintptr_t>(a_pass->shader),
 				reinterpret_cast<std::uintptr_t>(a_pass->shaderProperty), reinterpret_cast<std::uintptr_t>(a_pass->geometry),
-				a_pass->passEnum, bytes, a_pass->unk24, a_pass->shaderProperty->flags.underlying(),
-				reinterpret_cast<std::uintptr_t>(a_pass->shaderProperty->material), a_sorted };
+				static_cast<std::uint64_t>(a_pass->passEnum) | (static_cast<std::uint64_t>(bytes) << 32),
+				static_cast<std::uint64_t>(a_pass->unk24) | (static_cast<std::uint64_t>(a_sorted) << 32),
+				a_pass->shaderProperty->flags.underlying(), reinterpret_cast<std::uintptr_t>(a_pass->shaderProperty->material) };
 		}
 
 		void ReportDuplicate(Renderer* a_renderer, Pass* a_pass, std::uint64_t a_bucket, std::uintptr_t a_firstCaller, std::uintptr_t a_caller)
@@ -186,10 +218,6 @@ namespace VRShadowBatch
 			}
 			ReclaimOnExit reclaim{ *state, false };
 			std::unique_lock lock{ state->mutex };
-			if (BucketEmpty(a_renderer, bucket)) {
-				state->submissions.Clear(bucket);
-				reclaim.pending = state->submissions.HasRetired();
-			}
 			Store::Admission admission{};
 			try {
 				admission = state->submissions.Admit(bucket, MakeKey(a_pass, a_sorted), a_caller, [&](Payload& payload) {
@@ -198,8 +226,8 @@ namespace VRShadowBatch
 					payload.pass = *a_pass;
 					payload.pass.next = nullptr;
 					payload.pass.passGroupNext = nullptr;
-					payload.pass.sceneLights = nullptr;
-				});
+					payload.pass.sceneLights = nullptr; }, [&] { return BucketEmpty(a_renderer, bucket); });
+				reclaim.pending = state->submissions.HasRetired();
 			} catch (const std::bad_alloc&) {
 				reclaim.pending = true;
 				lock.unlock();
@@ -256,11 +284,9 @@ namespace VRShadowBatch
 		void RenderActiveRange(Renderer* a_renderer, std::uint32_t a_first, std::uint32_t a_last, std::uint32_t a_flags)
 		{
 			if (auto state = FindState(a_renderer)) {
-				const ReclaimOnExit reclaim{ *state };
-				const NativeRead reader{ *state };
+				NativeRead reader{ *state, a_renderer };
 				renderRange(a_renderer, a_first, a_last, a_flags);
-				const std::lock_guard lock{ state->mutex };
-				Prune(a_renderer, *state);
+				reader.completed = true;
 			} else {
 				renderRange(a_renderer, a_first, a_last, a_flags);
 			}
@@ -269,11 +295,9 @@ namespace VRShadowBatch
 		bool RenderBatch(Renderer* a_renderer, std::uint32_t* a_pass, std::uint32_t* a_bucket, void* a_list, std::uint32_t a_flags)
 		{
 			if (auto state = FindState(a_renderer)) {
-				const ReclaimOnExit reclaim{ *state };
-				const NativeRead reader{ *state };
+				NativeRead reader{ *state, a_renderer };
 				const auto result = renderStep(a_renderer, a_pass, a_bucket, a_list, a_flags);
-				const std::lock_guard lock{ state->mutex };
-				Prune(a_renderer, *state);
+				reader.completed = true;
 				return result;
 			}
 			return renderStep(a_renderer, a_pass, a_bucket, a_list, a_flags);

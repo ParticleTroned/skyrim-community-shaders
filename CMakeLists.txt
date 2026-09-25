@@ -1903,6 +1903,31 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
     set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
 
+    set(_vr_grass_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-grass-lifetime"
+    )
+    add_custom_command(
+        OUTPUT "${_vr_grass_test_dir}/vr_grass_lifetime_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_grass_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_grass_lifetime.cmake"
+        DEPENDS
+            src/EngineFixes/VRGrassLifetimeFix.cpp
+            tests/extract_vr_grass_lifetime.cmake
+        VERBATIM
+    )
+    add_controller_test(vr_grass_lifetime_test VRGrassLifetime tests/vr_grass_lifetime_test.cpp)
+    target_sources(
+        vr_grass_lifetime_test
+        PRIVATE "${_vr_grass_test_dir}/vr_grass_lifetime_under_test.h"
+    )
+    target_include_directories(
+        vr_grass_lifetime_test
+        PRIVATE "${_vr_grass_test_dir}"
+    )
+    set_tests_properties(VRGrassLifetime PROPERTIES TIMEOUT 30)
+
     set(_native_lighting_material_guard_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/native-lighting-material-guard"
     )

@@ -4,6 +4,7 @@
 #include "EngineFixes/EffectShaderNoDecalsFix.h"
 #include "EngineFixes/ShadowmapCascadeCullingFix.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
+#include "EngineFixes/VRGrassLifetimeFix.h"
 
 const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 {
@@ -11,12 +12,14 @@ const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 	static EffectShaderNoDecalsFix effectShaderNoDecalsFix;
 	static ShadowmapCascadeCullingFix shadowmapCascadeCullingFix;
 	static ShadowmapRasterizerFix shadowmapRasterizerFix;
+	static VRGrassLifetimeFix vrGrassLifetimeFix;
 
 	static std::vector<EngineFix*> fixes = {
 		&cullPoolExhaustionFix,
 		&effectShaderNoDecalsFix,
 		&shadowmapCascadeCullingFix,
-		&shadowmapRasterizerFix
+		&shadowmapRasterizerFix,
+		&vrGrassLifetimeFix
 	};
 
 	return fixes;

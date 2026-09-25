@@ -143,6 +143,7 @@ void DX12SwapChain::ResetResources() noexcept
 	publicSwapChainDesc = {};
 	frameIndex = 0;
 	fenceSequence.Reset();
+	allocatorFenceValues.fill(0);
 	runtimeQuarantined = false;
 }
 
@@ -481,7 +482,12 @@ HRESULT DX12SwapChain::PresentInternal(
 		if (auto result = check(commandQueue->Wait(d3d12Fence.get(), *producerFenceValue), "D3D12 queue wait"))
 			return *result;
 
-		// New frame, reset
+		// Queue waits do not protect CPU allocator reuse; block until its
+		// previous submission has completed before resetting it.
+		if (allocatorFenceValues[frameIndex] != 0) {
+			if (auto result = check(d3d12Fence->SetEventOnCompletion(allocatorFenceValues[frameIndex], nullptr), "command allocator fence wait"))
+				return *result;
+		}
 		if (auto result = check(commandAllocators[frameIndex]->Reset(), "command allocator reset"))
 			return *result;
 		if (auto result = check(commandLists[frameIndex]->Reset(commandAllocators[frameIndex].get(), nullptr), "command list reset"))
@@ -533,6 +539,7 @@ HRESULT DX12SwapChain::PresentInternal(
 			return fail(E_FAIL, "D3D interop fence exhaustion");
 		if (auto result = check(commandQueue->Signal(d3d12Fence.get(), *consumerFenceValue), "D3D12 fence signal"))
 			return *result;
+		allocatorFenceValues[frameIndex] = *consumerFenceValue;
 		if (auto result = check(d3d11Context->Wait(d3d11Fence.get(), *consumerFenceValue), "D3D11 fence wait"))
 			return *result;
 		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Retryable)

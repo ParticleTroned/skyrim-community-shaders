@@ -19,10 +19,8 @@ namespace
 	json Request(std::string a_action, std::string a_commandId)
 	{
 		return {
-			{ "contractMajor", 1 },
-			{ "action", std::move(a_action) },
-			{ "clientId", "foundation-test" },
-			{ "commandId", std::move(a_commandId) },
+			{ "contractMajor", 1 }, { "action", std::move(a_action) },
+			{ "clientId", "foundation-test" }, { "commandId", std::move(a_commandId) },
 		};
 	}
 }

@@ -1,4 +1,5 @@
 #include "LightLimitFix.h"
+#include "EngineFix.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
 #include "GpuPass.h"
@@ -2379,6 +2380,11 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLig
 
 void LightLimitFix::Hooks::InstallAlphaGeometryGroupGuard()
 {
+	if (EngineFix::IsInstalledByEngineFixes("BatchRendererAlphaGeometryGroupOverflow")) {
+		logger::info("[LLF] Skipped alpha GeometryGroup guard (already installed by Engine Fixes)");
+		return;
+	}
+
 	// Decode the counter from ClearAlphaGeometryGroups so the guard stays portable across runtimes.
 	constexpr std::uint8_t kMovDwordImmediateOpcode = 0xC7;
 	constexpr std::uint8_t kRipRelativeModRM = 0x05;

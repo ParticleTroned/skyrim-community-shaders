@@ -93,15 +93,6 @@
             "inherits": "skyrim"
         },
         {
-            "name": "ALL-Prebuilt",
-            "description": "Release-only local build using the verified shared CommonLibSSE-NG bundle.",
-            "inherits": "ALL",
-            "cacheVariables": {
-                "COMMONLIB_PREBUILT_DIR": "$env{CSX_COMMONLIB_PREBUILT_DIR}",
-                "COMMONLIB_PREBUILT_MULTICONFIG": "ON"
-            }
-        },
-        {
             "name": "PRE-AE",
             "cacheVariables": {
                 "ENABLE_SKYRIM_AE": "OFF",
@@ -164,27 +155,6 @@
             "configurePreset": "ALL",
             "configuration": "Release",
             "targets": ["CommunityShaders"]
-        },
-        {
-            "name": "CSmain-Prebuilt",
-            "description": "Build CommunityShaders with the shared CommonLibSSE-NG bundle.",
-            "configurePreset": "ALL-Prebuilt",
-            "configuration": "Release",
-            "targets": ["CommunityShaders"]
-        },
-        {
-            "name": "Dev-Prebuilt",
-            "description": "Build CommunityShaders and AIO with the shared CommonLibSSE-NG bundle.",
-            "configurePreset": "ALL-Prebuilt",
-            "configuration": "Release",
-            "targets": ["CommunityShaders", "AIO"]
-        },
-        {
-            "name": "Package-Prebuilt",
-            "description": "Build the package with the shared CommonLibSSE-NG bundle.",
-            "configurePreset": "ALL-Prebuilt",
-            "configuration": "Release",
-            "targets": ["CommunityShaders", "Package-AIO-Manual"]
         },
         {
             "name": "ALL",

@@ -6,6 +6,10 @@ upstream-specific UI, and Skyrim 1.7.99 support. Inspect mixed PRs for
 independent useful changes. Defer compilation and build-based tests until
 the selected ports are complete, as requested by the user.
 
+Skip presenting changes already implemented or better implemented in the
+fork, and skip upstream repository housekeeping. Keep postponed work
+separate from approved work to implement immediately.
+
 Pinned upstream range: v1.8.4 (`02646c3008dd7cae91fc790c67c0f342a29aa938`)
 through main (`5db085e77951b84bd6c191ff5b06d56893f08286`). The review starts
 from `main-VR` commit `b6c7b431d79dc213a213d6632c589389eeba555d`.
@@ -35,3 +39,52 @@ Validation:
 ## #2674: Skyrim 1.7.99 support
 
 Excluded by explicit user instruction. No part of this PR was ported.
+
+## Review decisions before #2719
+
+| PR    | Decision                          | Code-level basis                                                                                 |
+| ----- | --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| #2693 | Rejected                          | Map fog is covered; radial-blur replacements are disabled on all supported runtimes.             |
+| #2698 | Excluded                          | EHF-only correction.                                                                             |
+| #2688 | Postponed                         | Grass batching, culling and LOD require a dedicated VR port.                                     |
+| #2648 | Rejected; covered                 | Existing virtual-function hooks provide stronger fallback and ownership handling.                |
+| #2705 | Rejected; covered                 | Existing grass pixel paths already omit the shadow clamp.                                        |
+| #2700 | Covered                           | Probe addressing uses signed modulo with runtime dimensions, including non-power-of-two tiers.   |
+| #2707 | Rejected                          | Upstream repository housekeeping.                                                                |
+| #2706 | Deferred with #2688               | UAV fixes belong to the postponed grass optimization implementation.                             |
+| #2696 | Excluded                          | Translation fallback and translation CI.                                                         |
+| #2711 | Excluded                          | Scissor adapter depends on the excluded Skyrim 1.7.99 compatibility contract.                    |
+| #2709 | Approved, postponed               | PBR grass needs an independent stereo-aware port; retain unclamped shadows from #2716.           |
+| #2712 | Covered                           | Capture precedes Present; staging has exception handling and encoder-slot cleanup.               |
+| #2703 | Covered                           | Mesh terrain variation, parallax and material sampling already exist with stricter eligibility.  |
+| #2701 | Excluded                          | Upstream HDR menu-blur path is absent from this fork.                                            |
+| #2702 | Excluded; independent fix covered | Native menu injection is excluded; quality modes already use the fork's bounds.                  |
+| #2714 | Covered                           | Blur bounds and both dispatch axes use the active area, with separate VR eye bounds.             |
+| #2716 | Rejected                          | Blanket SexLab DLL version block lacks runtime-specific qualification.                           |
+| #2717 | Covered or inapplicable           | Mesh eligibility uses landscape records and excludes trees; upstream HDR menu path is absent.    |
+| #2721 | Excluded                          | Native menu lifecycle and audio fixes.                                                           |
+| #2723 | Covered or inapplicable           | HDRDisplay is absent; DX12 presentation already retains the scene and clears only the UI buffer. |
+
+## #2719: shader enablement indexing
+
+Approved selective port of upstream commit
+`fef3b94771d3dcb49298f36e21b7e5757c3e381a` by Kuzey Gök.
+
+`State::ShaderEnabled` read `type + 1`, although configuration and UI
+storage use `type - 1`. The native ImageSpace compute replacement also
+read the Lighting toggle. Reject `None`, `Total` and out-of-range types,
+then use the matching class index. Route vertex, pixel and native compute
+replacement through that helper on SE, AE and VR.
+
+Retain the native-water exceptions in both graphics hooks, shader-cache
+fallback behavior, and VR volumetric dispatch and constant-buffer
+restoration. Existing setting keys and array layout are unchanged.
+
+Validation:
+
+-   Source review checked the enum-to-setting mapping, invalid-type guard,
+    both native-water exceptions and the unchanged compute dispatch body.
+-   `pwsh ./tools/git.ps1 diff --check -- src/State.cpp src/Hooks.cpp docs/development/upstream-main-sync.md`: passed.
+-   `pwsh ./tools/pre-commit.ps1 run --files src/State.cpp src/Hooks.cpp docs/development/upstream-main-sync.md`: passed after Markdown table formatting.
+-   Compilation, compiled tests and runtime toggle checks remain deferred
+    by user instruction. No compiled or runtime pass is claimed.

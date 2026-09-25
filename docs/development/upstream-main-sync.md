@@ -131,3 +131,63 @@ Validation:
 -   Compilation, compiled tests, runtime dispatcher wakeup checks and
     filesystem-failure injection remain deferred by user instruction.
     No compiled or runtime pass is claimed.
+
+## #2729: terrain-shadow penumbra stability
+
+Approved adapted port of upstream commit
+`44826d2805ae93be0e223708dee1349f3abd4eb5` by Skrubby Skrub In A Shrub,
+co-authored by Jiaye.
+
+Propagate upper and lower shadow heights independently with componentwise
+maxima. Use signed pixel coordinates for dispatch validity and ray-wrap
+checks, sample terrain at the output texel, clamp interpolation taps and
+avoid reading prior texture contents during a full refresh. Preserve the
+existing signed-modulo helper, unique pixel ownership and scan barriers.
+
+Align receiver samples to heightmap texel centres and soften transitions
+by the light's descent over one heightmap step. Return full visibility
+outside the heightmap and handle zero-width transitions without division.
+Normalize the major pixel direction exactly, handle vertical sunlight
+and clamp both penumbra angles before computing world-space descent.
+
+Retain the fork's 1024-unit self-shadow bias, four-degree softening radius,
+immediate light-discontinuity refresh, lazy-shader failure handling,
+resource naming and profiling. The world-space receiver and its existing
+eye-aware callers continue to serve SE, AE and VR. No new settings or
+DevBench actions are introduced.
+
+Add matching `ZBlur` and padding fields to the C++ and HLSL terrain data.
+Update the fork's feature-buffer size assertion from 32 to 48 bytes and
+assert offsets 32 and 36 for the new fields. Subsequent fields retain the
+existing size-derived offsets. The shader cache already includes source
+and include contents in its identity; no cache deletion is needed.
+
+Validation:
+
+-   Compared compute-shader source against the pinned upstream commit,
+    accounting for the unchanged signed-wrap helper, comments and zero
+    literals. Compared receiver source with the retained bias and include
+    guard: passed. The first strict comparison identified the preserved
+    helper difference; explicit comparison with the previous local source
+    confirmed that helper remains unchanged.
+-   Compared C++ and HLSL field order and scalar widths: matched, totaling
+    48 bytes with `ZBlur` at 32 and padding at 36. This is a source check,
+    not compiled layout or shader-reflection validation.
+-   `pwsh ./tools/git.ps1 diff --check`: passed.
+-   Scoped pre-commit checks passed for the six other changed files.
+    `SharedData.hlsli` has an unrelated existing comment-alignment
+    difference. Restored that formatter change and checked its edited
+    lines with clang-format 22.1.4:
+    `--style=file --lines=92:93 --dry-run --Werror package/Shaders/Common/SharedData.hlsli`.
+    This passed; other applicable hooks passed with only `clang-format`
+    skipped for that file. The commit hook uses the same skip after the
+    scoped formatting checks.
+-   Compilation, compiled tests and runtime checks remain deferred by
+    user instruction. Remaining runtime coverage includes both VR eyes,
+    map edges, dawn/dusk and vertical sunlight, full refreshes and partial
+    final dispatches. No compiled or runtime pass is claimed.
+
+The pinned main queue is fully reviewed through #2729. Grass optimizations
+(#2688 and dependent #2706) and the approved PBR-grass port (#2709) remain
+postponed. This range ends at main's v1.9.0 snapshot; v1.9.1 hotfix changes
+outside that main history are not part of this review.

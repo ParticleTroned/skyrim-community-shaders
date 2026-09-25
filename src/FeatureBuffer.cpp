@@ -111,7 +111,9 @@ namespace
 	static_assert(sizeof(DynamicCubemapsSettingsCB) == 32);
 	static_assert(offsetof(DynamicCubemapsSettingsCB, MaxMipLevel) == 4);
 	static_assert(offsetof(DynamicCubemapsSettingsCB, CubemapColor) == 16);
-	static_assert(sizeof(TerrainShadowsSettingsCB) == 32);
+	static_assert(sizeof(TerrainShadowsSettingsCB) == 48);
+	static_assert(offsetof(TerrainShadowsSettingsCB, ZBlur) == 32);
+	static_assert(offsetof(TerrainShadowsSettingsCB, pad0) == 36);
 	static_assert(sizeof(LightLimitFixSettingsCB) == 32);
 	static_assert(sizeof(WetnessEffectsSettingsCB) == 192);
 	static_assert(sizeof(WetternessSettingsCB) == 272);

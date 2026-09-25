@@ -1634,6 +1634,11 @@ namespace Hooks
 				return;
 			}
 
+			// Vanilla setup dereferences these textures unless a render target supplies diffuse.
+			if ((material->diffuseRenderTargetSourceIndex == -1 && !material->diffuseTexture) || !material->normalTexture) {
+				return;
+			}
+
 			// vanilla
 			func(shader, material);
 

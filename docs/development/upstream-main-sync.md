@@ -189,5 +189,44 @@ Validation:
 
 The pinned main queue is fully reviewed through #2729. Grass optimizations
 (#2688 and dependent #2706) and the approved PBR-grass port (#2709) remain
-postponed. This range ends at main's v1.9.0 snapshot; v1.9.1 hotfix changes
-outside that main history are not part of this review.
+postponed. The user extended the review to v1.9.1, as recorded below.
+
+## v1.9.1 hotfix extension
+
+Pinned release: `265c28f53767e94dac1c0c3b211a0aa37d8ec396`, based on the
+reviewed v1.9.0 main snapshot. The hotfix contains #2734, #2733, #2730 and
+#2747 in that ancestry order. Their equal committer timestamps do not
+change that ordering. Umbrella merge #2749 adds no changes over those
+four commits; the release commit changes only the upstream version.
+
+#2747 changes only upstream NativeMenu callback ownership and is excluded
+under the existing UI rule. #2733 and #2730 remain to be decided.
+
+## #2734: null textures before vanilla material setup
+
+Approved adapted port of upstream commit
+`351118bf51c3af639b9eb144688f048fd4bf7161` by Skrubby Skrub In A Shrub.
+
+The fork centralizes material setup in `src/Hooks.cpp`. Preserve its
+initial null-material check and allow custom PBR setup, including neutral
+texture fallback, to complete first. Before calling vanilla setup,
+require a normal texture and, when no diffuse render target is selected,
+a diffuse texture. Materials missing these inputs return before the
+engine dereferences them. Valid vanilla materials retain the subsequent
+Terrain Helper setup.
+
+This shared vtable hook applies to SE, AE and VR. Existing VR material
+admission and render-target checks remain intact. No new settings,
+resources or DevBench actions are introduced.
+
+Validation:
+
+-   Source comparison confirmed the guard matches the pinned upstream
+    predicate and runs after custom PBR handling, before vanilla and
+    Terrain Helper setup.
+-   `pwsh ./tools/git.ps1 diff --check`: passed.
+-   `pwsh ./tools/pre-commit.ps1 run --files src/Hooks.cpp docs/development/upstream-main-sync.md`: passed.
+-   Compilation, compiled tests and runtime checks remain deferred by
+    user instruction. Runtime checks must cover missing diffuse/normal
+    textures, diffuse render targets, custom PBR fallback and valid
+    Terrain Helper materials. No compiled or runtime pass is claimed.

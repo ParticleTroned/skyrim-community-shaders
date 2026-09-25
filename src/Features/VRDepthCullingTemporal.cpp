@@ -1,6 +1,8 @@
 #include "VRDepthCullingTemporal.h"
 
 #include "VRDepthCullingTemporalPolicy.h"
+#include "VRHybridCulling.h"
+#include "VRHybridCullingLifecycle.h"
 
 #include "RE/N/NiCamera.h"
 #include "RE/N/NiPoint3.h"
@@ -44,11 +46,16 @@ namespace VRDepthCullingTemporal
 		// Both hooks execute in order on the render-depth thread.
 		ProducerPose g_producerPose{};
 		std::atomic_bool g_installed{ false };
+		std::atomic_bool g_hybridInstalled{ false };
 		std::atomic_bool g_cullingEnabled{ false };
 		std::atomic_uint64_t g_cullingEpoch{ 1 };
 		std::atomic_uint64_t g_producerPoseEpoch{ 0 };
 		std::atomic<Mode> g_mode{ Mode::Balanced };
 		std::atomic_uint64_t g_policyEpoch{ 2 };
+		RE::BSSceneGraph* g_downscaleScene = nullptr;
+		bool g_suppressedDownscale = false;
+		bool g_replayNativeDownscale = false;
+		bool g_insideOwnedDownscale = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		VRDepthCullingTelemetryPolicy::WriterGate g_telemetryGate;
 		std::atomic_uint64_t g_envelopeMisses{ 0 };
@@ -73,19 +80,11 @@ namespace VRDepthCullingTemporal
 			g_lastPromotedCount.store(0, std::memory_order_relaxed);
 		}
 
-		void UpdateMaximum(std::atomic_uint64_t& a_target, std::uint64_t a_value)
-		{
-			auto current = a_target.load(std::memory_order_relaxed);
-			while (current < a_value &&
-				   !a_target.compare_exchange_weak(
-					   current, a_value, std::memory_order_relaxed, std::memory_order_relaxed)) {}
-		}
-
 		struct RecoveryTelemetryScope
 		{
-			RecoveryTelemetryScope()
+			RecoveryTelemetryScope() : writer(g_telemetryGate)
 			{
-				if (!g_telemetryGate.TryEnter())
+				if (!writer)
 					return;
 				active = true;
 				started = std::chrono::steady_clock::now();
@@ -109,11 +108,11 @@ namespace VRDepthCullingTemporal
 				g_totalEligible.fetch_add(eligible, std::memory_order_relaxed);
 				g_totalPromoted.fetch_add(promoted, std::memory_order_relaxed);
 				g_totalDurationNanoseconds.fetch_add(elapsed, std::memory_order_relaxed);
-				UpdateMaximum(g_maximumDurationNanoseconds, elapsed);
+				VRDepthCullingTelemetryPolicy::UpdateMaximum(g_maximumDurationNanoseconds, elapsed);
 				g_durationHistogram[VRDepthCullingTelemetryPolicy::DurationBin(elapsed)].fetch_add(1, std::memory_order_relaxed);
-				g_telemetryGate.Leave();
 			}
 
+			VRDepthCullingTelemetryPolicy::WriterScope writer;
 			bool active = false;
 			std::chrono::steady_clock::time_point started{};
 			std::uint64_t coherenceMisses = 1;
@@ -131,7 +130,7 @@ namespace VRDepthCullingTemporal
 		{
 			return (a_policyEpoch & 1u) == 0 &&
 			       g_cullingEnabled.load(std::memory_order_acquire) &&
-			       g_mode.load(std::memory_order_acquire) == Mode::Balanced &&
+			       g_mode.load(std::memory_order_acquire) != Mode::Legacy &&
 			       g_cullingEpoch.load(std::memory_order_acquire) == a_cullingEpoch &&
 			       g_policyEpoch.load(std::memory_order_acquire) == a_policyEpoch;
 		}
@@ -191,7 +190,7 @@ namespace VRDepthCullingTemporal
 		void RecoverHighRiskObjects(void* a_culler)
 		{
 			if (!g_cullingEnabled.load(std::memory_order_acquire) ||
-				g_mode.load(std::memory_order_acquire) != Mode::Balanced) {
+				g_mode.load(std::memory_order_acquire) == Mode::Legacy) {
 				return;
 			}
 			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
@@ -336,7 +335,40 @@ namespace VRDepthCullingTemporal
 			static void thunk(void* a_culler)
 			{
 				func(a_culler);
-				RecoverHighRiskObjects(a_culler);
+				const bool hybridSelected = g_cullingEnabled.load(std::memory_order_acquire) &&
+				                            g_mode.load(std::memory_order_acquire) == Mode::Hybrid;
+				if (!VRHybridCulling::CompleteReadback(a_culler, g_cullingEpoch.load(std::memory_order_acquire), hybridSelected))
+					RecoverHighRiskObjects(a_culler);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct DepthCullingDownscale
+		{
+			static void thunk(RE::BSSceneGraph* a_scene)
+			{
+				g_downscaleScene = a_scene;
+				g_suppressedDownscale = false;
+				g_insideOwnedDownscale = true;
+				const SKSE::stl::scope_exit restore([]() noexcept { g_insideOwnedDownscale = false; });
+				func(a_scene);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct DepthCullingDownscaleDraw
+		{
+			static void thunk(RE::ImageSpaceManager* a_manager, std::uint32_t a_effect,
+				RE::RENDER_TARGET a_source, RE::RENDER_TARGET a_destination, RE::ImageSpaceEffectParam* a_parameters, bool a_depthSource)
+			{
+				if (g_insideOwnedDownscale && !g_replayNativeDownscale && a_effect == 100 && static_cast<std::uint32_t>(a_source) == 7 && a_depthSource &&
+					g_cullingEnabled.load(std::memory_order_acquire) && g_mode.load(std::memory_order_acquire) == Mode::Hybrid &&
+					(g_policyEpoch.load(std::memory_order_acquire) & 1u) == 0 &&
+					VRHybridCulling::Prepare(g_cullingEpoch.load(std::memory_order_acquire))) {
+					g_suppressedDownscale = true;
+					return;
+				}
+				func(a_manager, a_effect, a_source, a_destination, a_parameters, a_depthSource);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -345,8 +377,13 @@ namespace VRDepthCullingTemporal
 		{
 			static void thunk(RE::BSImagespaceShader* a_shader, std::uint32_t a_param)
 			{
-				func(a_shader, a_param);
-				CaptureProducerPose();
+				VRHybridCullingLifecycle::RunProducer(g_suppressedDownscale, [&] { return g_cullingEnabled.load(std::memory_order_acquire) && g_mode.load(std::memory_order_acquire) == Mode::Hybrid &&
+					                                                                      VRHybridCulling::Dispatch(a_shader, g_cullingEpoch.load(std::memory_order_acquire)); }, [] {
+						g_replayNativeDownscale = true;
+						const SKSE::stl::scope_exit restore([]() noexcept { g_replayNativeDownscale = false; });
+						DepthCullingDownscale::func(g_downscaleScene); }, [] { VRHybridCulling::CancelPreparation(g_mode.load(std::memory_order_acquire) == Mode::Hybrid &&
+																																																																																					g_cullingEnabled.load(std::memory_order_acquire),
+																																																																												 g_cullingEpoch.load(std::memory_order_acquire)); }, [&] { func(a_shader, a_param); }, [] { CaptureProducerPose(); });
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -373,6 +410,8 @@ namespace VRDepthCullingTemporal
 		const auto readbackCallsite = REL::Offset(0x132208B).address();
 		const auto renderCallsite =
 			REL::RelocationID(100421, 107139).address() + REL::Relocate(0x3B1, 0);
+		const auto downscaleCallsite = REL::RelocationID(100421, 107139).address() + REL::Relocate(0x37F, 0);
+		const auto downscaleDrawCallsite = REL::Offset(0x1322EC2).address();
 		if (!IsCallInstruction(readbackCallsite) || !IsCallInstruction(renderCallsite)) {
 			logger::error("VR: temporal depth-culling recovery not installed because a hook callsite was not recognized");
 			return;
@@ -381,6 +420,13 @@ namespace VRDepthCullingTemporal
 		stl::write_thunk_call<DepthCullingReadback>(readbackCallsite);
 		// Frame annotations may already wrap this call; preserve that current target in the thunk chain.
 		stl::write_thunk_call<DepthCullingRender>(renderCallsite);
+		if (IsCallInstruction(downscaleCallsite) && IsCallInstruction(downscaleDrawCallsite)) {
+			stl::write_thunk_call<DepthCullingDownscale>(downscaleCallsite);
+			stl::write_thunk_call<DepthCullingDownscaleDraw>(downscaleDrawCallsite);
+			g_hybridInstalled.store(true, std::memory_order_release);
+		} else {
+			logger::warn("VR: Hybrid Hi-Z hooks unavailable; retaining native testing with Advanced recovery");
+		}
 		g_installed.store(true, std::memory_order_release);
 		logger::info(
 			"VR: installed temporal depth-culling recovery (default balanced budget {})",
@@ -395,18 +441,16 @@ namespace VRDepthCullingTemporal
 			return;
 		// The main-thread writer leaves an odd epoch while publishing a new policy.
 		g_policyEpoch.fetch_add(1, std::memory_order_acq_rel);
-		const auto previous = g_mode.exchange(a_mode, std::memory_order_acq_rel);
+		g_mode.store(a_mode, std::memory_order_release);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_mode != Mode::Balanced)
 			ClearLastRecoveryStatus();
 #endif
-		if (previous == Mode::Legacy || a_mode == Mode::Legacy) {
-			// Legacy does not keep a producer pose warm. Require a new pose whenever
-			// crossing that boundary so Balanced cannot consume an arbitrarily old one.
-			g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
-			g_producerPoseEpoch.store(0, std::memory_order_release);
-		}
+		// A different backend or policy cannot inherit an earlier producer's validity.
+		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
+		g_producerPoseEpoch.store(0, std::memory_order_release);
 		g_policyEpoch.fetch_add(1, std::memory_order_release);
+		logger::info("VR: depth-culling method changed from {} to {}", GetModeName(current), GetModeName(a_mode));
 	}
 
 	void SetCullingEnabled(bool a_enabled)
@@ -433,12 +477,14 @@ namespace VRDepthCullingTemporal
 	{
 		const auto mode = GetMode();
 		const bool cullingEnabled = g_cullingEnabled.load(std::memory_order_acquire);
-		const bool recoveryActive = cullingEnabled && mode == Mode::Balanced;
+		const bool recoveryActive = cullingEnabled && mode != Mode::Legacy;
 		return {
 			.installed = g_installed.load(std::memory_order_acquire),
+			.hybridInstalled = g_hybridInstalled.load(std::memory_order_acquire),
 			.cullingEnabled = cullingEnabled,
 			.telemetryEnabled = g_telemetryGate.IsEnabled(),
 			.mode = mode,
+			.cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire),
 			.envelopeMisses = g_envelopeMisses.load(std::memory_order_relaxed),
 			.recoveryAttempts = g_recoveryAttempts.load(std::memory_order_relaxed),
 			.objectsInspected = g_objectsInspected.load(std::memory_order_relaxed),
@@ -461,6 +507,11 @@ namespace VRDepthCullingTemporal
 		};
 	}
 
+	VRDepthCullingTelemetryPolicy::WriterGate& GetTelemetryGate() noexcept
+	{
+		return g_telemetryGate;
+	}
+
 	void SetTelemetryEnabled(bool a_enabled)
 	{
 		g_telemetryGate.SetEnabled(a_enabled);
@@ -468,23 +519,22 @@ namespace VRDepthCullingTemporal
 
 	bool TryResetStatus()
 	{
-		if (!g_telemetryGate.TryLockForReset())
-			return false;
-		g_envelopeMisses.store(0, std::memory_order_relaxed);
-		g_recoveryAttempts.store(0, std::memory_order_relaxed);
-		g_objectsInspected.store(0, std::memory_order_relaxed);
-		g_invalidTransforms.store(0, std::memory_order_relaxed);
-		g_invalidMotionEnvelopes.store(0, std::memory_order_relaxed);
-		g_frustumTests.store(0, std::memory_order_relaxed);
-		g_totalEligible.store(0, std::memory_order_relaxed);
-		g_totalPromoted.store(0, std::memory_order_relaxed);
-		g_totalDurationNanoseconds.store(0, std::memory_order_relaxed);
-		g_maximumDurationNanoseconds.store(0, std::memory_order_relaxed);
-		for (auto& bin : g_durationHistogram)
-			bin.store(0, std::memory_order_relaxed);
-		ClearLastRecoveryStatus();
-		g_telemetryGate.UnlockAfterReset();
-		return true;
+		return VRDepthCullingTelemetryPolicy::TryReset(g_telemetryGate, []() noexcept {
+			g_envelopeMisses.store(0, std::memory_order_relaxed);
+			g_recoveryAttempts.store(0, std::memory_order_relaxed);
+			g_objectsInspected.store(0, std::memory_order_relaxed);
+			g_invalidTransforms.store(0, std::memory_order_relaxed);
+			g_invalidMotionEnvelopes.store(0, std::memory_order_relaxed);
+			g_frustumTests.store(0, std::memory_order_relaxed);
+			g_totalEligible.store(0, std::memory_order_relaxed);
+			g_totalPromoted.store(0, std::memory_order_relaxed);
+			g_totalDurationNanoseconds.store(0, std::memory_order_relaxed);
+			g_maximumDurationNanoseconds.store(0, std::memory_order_relaxed);
+			for (auto& bin : g_durationHistogram)
+				bin.store(0, std::memory_order_relaxed);
+			ClearLastRecoveryStatus();
+			VRHybridCulling::ResetTelemetryUnderLock();
+		});
 	}
 #endif
 }

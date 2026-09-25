@@ -3090,6 +3090,26 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_depth_culling_temporal_policy_test.cpp
     )
     add_controller_test(
+        vr_hybrid_culling_policy_test
+        VRHybridCullingPolicy
+        tests/vr_hybrid_culling_policy_test.cpp
+    )
+    add_controller_test(
+        vr_hybrid_culling_history_test
+        VRHybridCullingHistory
+        tests/vr_hybrid_culling_history_test.cpp
+    )
+    add_d3d_shader_test(
+        vr_hybrid_culling_shader_test
+        VRHybridCullingShader
+        tests/vr_hybrid_culling_shader_test.cpp
+    )
+    target_compile_definitions(
+        vr_hybrid_culling_shader_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_link_libraries(vr_hybrid_culling_shader_test PRIVATE dxguid.lib)
+    add_controller_test(
         vr_wand_interaction_policy_test
         VRWandInteractionPolicy
         tests/vr_wand_interaction_policy_test.cpp

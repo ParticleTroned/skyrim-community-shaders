@@ -1,0 +1,443 @@
+#include "Features/VRHybridCullingPolicy.h"
+#include "d3d11_shader_test.h"
+
+#include <d3dcompiler.h>
+
+#include <array>
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <span>
+#include <vector>
+
+namespace
+{
+	using namespace VRHybridCullingPolicy;
+	using D3D11ShaderTest::Check;
+	template <class T>
+	using ComPtr = Microsoft::WRL::ComPtr<T>;
+
+	void Require(bool condition, const char* message)
+	{
+		if (!condition)
+			throw std::runtime_error(message);
+	}
+
+	struct Kernel
+	{
+		ComPtr<ID3D11ComputeShader> shader;
+		ComPtr<ID3D11ShaderReflection> reflection;
+		std::unique_ptr<D3D11ShaderTest::ConstantBuffer> constants;
+
+		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName)
+		{
+			ComPtr<ID3DBlob> code, errors;
+			const auto result = D3DCompileFromFile(path, nullptr, nullptr, "main", "cs_5_0",
+				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+				0, code.GetAddressOf(), errors.GetAddressOf());
+			if (FAILED(result) && errors)
+				throw std::runtime_error(static_cast<const char*>(errors->GetBufferPointer()));
+			Check(result);
+			Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
+			Util::SetResourceName(shader.Get(), "HybridCullingTest::%s", constantsName);
+			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+			constants = std::make_unique<D3D11ShaderTest::ConstantBuffer>(device, reflection.Get(), constantsName);
+		}
+
+		template <class T>
+		void Bind(ID3D11DeviceContext* context, const T& values)
+		{
+			Require(constants->bytes.size() == sizeof(T), "CPU and reflected shader constant sizes differ");
+			std::memcpy(constants->bytes.data(), &values, sizeof(T));
+			constants->Bind(context);
+			context->CSSetShader(shader.Get(), nullptr, 0);
+		}
+	};
+
+	struct StructuredBuffer
+	{
+		ComPtr<ID3D11Buffer> buffer, staging;
+		ComPtr<ID3D11ShaderResourceView> srv;
+		ComPtr<ID3D11UnorderedAccessView> uav;
+
+		StructuredBuffer(ID3D11Device* device, UINT stride, UINT count, UINT flags, const void* data = nullptr)
+		{
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = stride * count;
+			desc.StructureByteStride = stride;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.BindFlags = flags;
+			D3D11_SUBRESOURCE_DATA initial{ data, 0, 0 };
+			Check(device->CreateBuffer(&desc, data ? &initial : nullptr, buffer.GetAddressOf()));
+			Util::SetResourceName(buffer.Get(), "HybridCullingTest::StructuredBuffer");
+			if (flags & D3D11_BIND_SHADER_RESOURCE) {
+				Check(device->CreateShaderResourceView(buffer.Get(), nullptr, srv.GetAddressOf()));
+				Util::SetResourceName(srv.Get(), "HybridCullingTest::StructuredBuffer SRV");
+			}
+			if (flags & D3D11_BIND_UNORDERED_ACCESS) {
+				Check(device->CreateUnorderedAccessView(buffer.Get(), nullptr, uav.GetAddressOf()));
+				Util::SetResourceName(uav.Get(), "HybridCullingTest::StructuredBuffer UAV");
+				desc.BindFlags = 0;
+				desc.MiscFlags = 0;
+				desc.StructureByteStride = 0;
+				desc.Usage = D3D11_USAGE_STAGING;
+				desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+				Check(device->CreateBuffer(&desc, nullptr, staging.GetAddressOf()));
+				Util::SetResourceName(staging.Get(), "HybridCullingTest::ReadbackBuffer");
+			}
+		}
+	};
+
+	struct Fixture
+	{
+		ID3D11Device* device;
+		ID3D11DeviceContext* context;
+		UINT sourceWidth, sourceHeight;
+		BuildConstants buildConstants{};
+		TestConstants testConstants{};
+		Kernel build, reduce, test;
+		ComPtr<ID3D11Texture2D> source, pyramid, staging;
+		ComPtr<ID3D11ShaderResourceView> sourceView, pyramidView;
+		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
+		std::vector<ComPtr<ID3D11UnorderedAccessView>> mipOutputs;
+
+		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, UINT eyeWidth = 32, UINT eyeHeight = 32, UINT reduction = 4) :
+			device(device), context(context), sourceWidth(2 * eyeWidth), sourceHeight(eyeHeight),
+			build(device, L"package/Shaders/VRHybridCulling/BuildDepthCS.hlsl", "BuildConstants"),
+			reduce(device, L"package/Shaders/VRHybridCulling/ReduceDepthCS.hlsl", "ReduceConstants"),
+			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants")
+		{
+			testConstants.eyes = { EyeRect{ 0, 0, eyeWidth, eyeHeight }, EyeRect{ eyeWidth, 0, eyeWidth, eyeHeight } };
+			Require(TryMakeBuildConstants(testConstants.eyes, sourceWidth, sourceHeight, reduction,
+						buildConstants, testConstants.pyramid),
+				"Invalid fixture dimensions");
+			for (auto& matrix : testConstants.viewProjection)
+				for (UINT row = 0; row < 4; ++row)
+					matrix[row][row] = 1.0f;
+			Require(test.constants->Offset("CameraAdjust") == offsetof(TestConstants, cameraAdjust) &&
+						test.constants->Offset("EyeRect") == offsetof(TestConstants, eyes) &&
+						test.constants->Offset("PyramidSize") == offsetof(TestConstants, pyramid) &&
+						test.constants->Offset("ObjectCount") == offsetof(TestConstants, objectCount) &&
+						test.constants->Offset("PixelGuardBand") == offsetof(TestConstants, pixelGuardBand),
+				"Reflected shader ABI differs from CPU constants");
+
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = sourceWidth;
+			desc.Height = sourceHeight;
+			desc.ArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
+			desc.Format = DXGI_FORMAT_R32_FLOAT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			Check(device->CreateTexture2D(&desc, nullptr, source.GetAddressOf()));
+			Util::SetResourceName(source.Get(), "HybridCullingTest::SourceDepth");
+			Check(device->CreateShaderResourceView(source.Get(), nullptr, sourceView.GetAddressOf()));
+			Util::SetResourceName(sourceView.Get(), "HybridCullingTest::SourceDepth SRV");
+			desc.Width = testConstants.pyramid.width;
+			desc.Height = testConstants.pyramid.height;
+			desc.ArraySize = 2;
+			desc.MipLevels = testConstants.pyramid.mipCount;
+			desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+			Check(device->CreateTexture2D(&desc, nullptr, pyramid.GetAddressOf()));
+			Util::SetResourceName(pyramid.Get(), "HybridCullingTest::DepthPyramid");
+			Check(device->CreateShaderResourceView(pyramid.Get(), nullptr, pyramidView.GetAddressOf()));
+			Util::SetResourceName(pyramidView.Get(), "HybridCullingTest::DepthPyramid SRV");
+			for (UINT mip = 0; mip < desc.MipLevels; ++mip) {
+				D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+				srvDesc.Format = desc.Format;
+				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+				srvDesc.Texture2DArray.MostDetailedMip = mip;
+				srvDesc.Texture2DArray.MipLevels = 1;
+				srvDesc.Texture2DArray.ArraySize = 2;
+				mipViews.emplace_back();
+				Check(device->CreateShaderResourceView(pyramid.Get(), &srvDesc, mipViews.back().GetAddressOf()));
+				Util::SetResourceName(mipViews.back().Get(), "HybridCullingTest::DepthMip%u SRV", mip);
+				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+				uavDesc.Format = desc.Format;
+				uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+				uavDesc.Texture2DArray.MipSlice = mip;
+				uavDesc.Texture2DArray.ArraySize = 2;
+				mipOutputs.emplace_back();
+				Check(device->CreateUnorderedAccessView(pyramid.Get(), &uavDesc, mipOutputs.back().GetAddressOf()));
+				Util::SetResourceName(mipOutputs.back().Get(), "HybridCullingTest::DepthMip%u UAV", mip);
+			}
+			desc.BindFlags = 0;
+			desc.Usage = D3D11_USAGE_STAGING;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			Check(device->CreateTexture2D(&desc, nullptr, staging.GetAddressOf()));
+			Util::SetResourceName(staging.Get(), "HybridCullingTest::DepthReadback");
+		}
+
+		void Unbind()
+		{
+			ID3D11ShaderResourceView* views[2]{};
+			ID3D11UnorderedAccessView* output = nullptr;
+			context->CSSetShaderResources(0, 2, views);
+			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		}
+
+		void Build(std::span<const float> pixels)
+		{
+			Require(pixels.size() == sourceWidth * sourceHeight, "Unexpected source pixel count");
+			context->UpdateSubresource(source.Get(), 0, nullptr, pixels.data(), sourceWidth * sizeof(float), 0);
+			build.Bind(context, buildConstants);
+			auto* sourceSRV = sourceView.Get();
+			auto* outputUAV = mipOutputs[0].Get();
+			context->CSSetShaderResources(0, 1, &sourceSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &outputUAV, nullptr);
+			context->Dispatch((buildConstants.outputWidth + 7) / 8, (buildConstants.outputHeight + 7) / 8, 2);
+			Unbind();
+			for (UINT mip = 1; mip < testConstants.pyramid.mipCount; ++mip) {
+				ReduceConstants constants{ std::max(testConstants.pyramid.width >> mip, 1u),
+					std::max(testConstants.pyramid.height >> mip, 1u), {} };
+				reduce.Bind(context, constants);
+				sourceSRV = mipViews[mip - 1].Get();
+				outputUAV = mipOutputs[mip].Get();
+				context->CSSetShaderResources(0, 1, &sourceSRV);
+				context->CSSetUnorderedAccessViews(0, 1, &outputUAV, nullptr);
+				context->Dispatch((constants.outputWidth + 7) / 8, (constants.outputHeight + 7) / 8, 2);
+				Unbind();
+			}
+		}
+
+		std::vector<float> ReadMip(UINT eye, UINT mip)
+		{
+			context->CopyResource(staging.Get(), pyramid.Get());
+			const auto subresource = D3D11CalcSubresource(mip, eye, testConstants.pyramid.mipCount);
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			Check(context->Map(staging.Get(), subresource, D3D11_MAP_READ, 0, &mapped));
+			const auto width = std::max(testConstants.pyramid.width >> mip, 1u);
+			const auto height = std::max(testConstants.pyramid.height >> mip, 1u);
+			std::vector<float> pixels(width * height);
+			for (UINT row = 0; row < height; ++row)
+				std::memcpy(pixels.data() + row * width, static_cast<const std::byte*>(mapped.pData) + row * mapped.RowPitch, width * sizeof(float));
+			context->Unmap(staging.Get(), subresource);
+			return pixels;
+		}
+
+		std::vector<std::uint32_t> Test(std::span<const OBBTransform> objects)
+		{
+			StructuredBuffer bounds(device, sizeof(OBBTransform), static_cast<UINT>(objects.size()), D3D11_BIND_SHADER_RESOURCE, objects.data());
+			StructuredBuffer results(device, sizeof(std::uint32_t), static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
+			testConstants.objectCount = static_cast<UINT>(objects.size());
+			test.Bind(context, testConstants);
+			ID3D11ShaderResourceView* views[]{ bounds.srv.Get(), pyramidView.Get() };
+			auto* output = results.uav.Get();
+			context->CSSetShaderResources(0, 2, views);
+			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+			context->Dispatch((testConstants.objectCount + 63) / 64, 1, 1);
+			Unbind();
+			context->CopyResource(results.staging.Get(), results.buffer.Get());
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			Check(context->Map(results.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+			std::vector<std::uint32_t> values(objects.size());
+			std::memcpy(values.data(), mapped.pData, values.size() * sizeof(std::uint32_t));
+			context->Unmap(results.staging.Get(), 0);
+			return values;
+		}
+	};
+
+	OBBTransform Box(float x = 0.0f, float y = 0.0f, float z = 0.75f, float extent = 0.05f)
+	{
+		OBBTransform result{};
+		result.entry[0][0] = result.entry[1][1] = result.entry[2][2] = extent;
+		result.entry[0][3] = x;
+		result.entry[1][3] = y;
+		result.entry[2][3] = z;
+		result.entry[3][3] = 1.0f;
+		return result;
+	}
+
+	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth)
+	{
+		Fixture fixture(device, context, eyeWidth, eyeHeight);
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight);
+		for (UINT y = 0; y < fixture.sourceHeight; ++y)
+			for (UINT x = 0; x < fixture.sourceWidth; ++x)
+				pixels[y * fixture.sourceWidth + x] = (1 + ((x * 17 + y * 31) % 97)) / 100.0f;
+		if (includeInvalidDepth) {
+			pixels[5 * fixture.sourceWidth + 3] = 0.0f;
+			pixels[7 * fixture.sourceWidth + eyeWidth + 3] = std::numeric_limits<float>::quiet_NaN();
+		}
+		fixture.Build(pixels);
+		const auto paddedPixelWidth = fixture.testConstants.pyramid.width * fixture.testConstants.pyramid.sourceReduction;
+		const auto paddedPixelHeight = fixture.testConstants.pyramid.height * fixture.testConstants.pyramid.sourceReduction;
+		for (UINT eye = 0; eye < 2; ++eye) {
+			for (UINT mip = 0; mip < fixture.testConstants.pyramid.mipCount; ++mip) {
+				const auto actual = fixture.ReadMip(eye, mip);
+				const auto width = std::max(fixture.testConstants.pyramid.width >> mip, 1u);
+				const auto height = std::max(fixture.testConstants.pyramid.height >> mip, 1u);
+				const auto coverage = fixture.testConstants.pyramid.sourceReduction << mip;
+				for (UINT y = 0; y < height; ++y) {
+					for (UINT x = 0; x < width; ++x) {
+						float expected = 0.0f;
+						// A one-texel mip axis repeats existing coverage, without inventing padding.
+						for (UINT sy = y * coverage; sy < std::min((y + 1) * coverage, paddedPixelHeight); ++sy) {
+							for (UINT sx = x * coverage; sx < std::min((x + 1) * coverage, paddedPixelWidth); ++sx) {
+								float sample = 1.0f;
+								if (sx < eyeWidth && sy < eyeHeight) {
+									sample = pixels[sy * fixture.sourceWidth + eye * eyeWidth + sx];
+									if (!std::isfinite(sample) || sample <= 0.0f || sample > 1.0f)
+										sample = 1.0f;
+								}
+								expected = std::max(expected, sample);
+							}
+						}
+						Require(actual[y * width + x] == expected, "Mip lost a source pixel, mixed eyes, or mishandled padding/masks");
+					}
+				}
+			}
+		}
+	}
+
+	void CoversVisibilityAndFailures(Fixture& fixture)
+	{
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		std::array objects{ Box(), Box(0, 0, 0.2f), Box(0, 0, 0.45f), Box(0, 0, 0.02f),
+			Box(0, 0, 0.98f), Box(2.0f, 0), Box(), Box(0.94f, 0), Box(0, 0.94f), Box() };
+		objects[6].entry[0][0] = std::numeric_limits<float>::quiet_NaN();
+		objects[9].entry[3][0] = 0.25f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+			"Depth direction, equality, clipping, uncovered guard margins or invalid bounds failed");
+
+		for (UINT y = 0; y < fixture.sourceHeight; ++y)
+			for (UINT x = fixture.sourceWidth / 2; x < fixture.sourceWidth; ++x)
+				pixels[y * fixture.sourceWidth + x] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(std::span(objects).first(1))[0] == 1, "One visible eye must retain the object");
+		for (const float invalid : { 0.0f, 1.0f, -1.0f, 2.0f, std::numeric_limits<float>::infinity() }) {
+			std::fill(pixels.begin(), pixels.end(), invalid);
+			fixture.Build(pixels);
+			Require(fixture.Test(std::span(objects).first(1))[0] == 1, "Clear, masked or invalid depth rejected an object");
+		}
+	}
+
+	void CoversMixedStereoVisibility(Fixture& fixture)
+	{
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		pixels[16 * fixture.sourceWidth + 8] = 1.0f;
+		pixels[16 * fixture.sourceWidth + 32 + 16] = 1.0f;
+		const std::array objects{ Box(-0.5f, 0), Box(), Box(0.5f, 0) };
+		fixture.Build(pixels);
+		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 1, 1, 0 },
+			"Mixed first-eye, second-eye and occluded objects lost independent stereo results");
+	}
+
+	void CoversEveryOverlappingCell(Fixture& fixture)
+	{
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		auto object = Box();
+		object.entry[0][0] = 0.4f;
+		object.entry[1][1] = 0.4f;
+		const std::array objects{ object };
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "Solid occluder did not reject a covered box");
+		// A clear pixel anywhere inside the box defeats an occlusion proof.
+		for (UINT eye = 0; eye < 2; ++eye) {
+			for (UINT y = 10; y <= 22; y += 3) {
+				for (UINT x = 10; x <= 22; x += 3) {
+					const auto offset = y * fixture.sourceWidth + eye * 32 + x;
+					pixels[offset] = 1.0f;
+					fixture.Build(pixels);
+					Require(fixture.Test(objects)[0] == 1, "An overlapping Hi-Z cell was omitted");
+					pixels[offset] = 0.4f;
+				}
+			}
+		}
+	}
+
+	void CoversShearedCornerExtents(Fixture& fixture)
+	{
+		auto object = Box();
+		object.entry[0][0] = 0.25f;
+		object.entry[0][1] = 0.30f;
+		object.entry[0][2] = 0.05f;
+		object.entry[1][0] = 0.15f;
+		object.entry[1][1] = 0.30f;
+		object.entry[1][2] = -0.05f;
+		object.entry[2][0] = 0.03f;
+		object.entry[2][1] = -0.02f;
+		object.entry[2][2] = 0.04f;
+		const std::array objects{ object };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "A valid sheared OBB was not tested against a solid occluder");
+		// This pixel lies near a projected corner, beyond the diagonal-only bound.
+		pixels[9 * fixture.sourceWidth + 24] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 1, "Off-diagonal OBB axes lost visibility near an extremal corner");
+	}
+
+	void CoversPerspectiveAndCameraAdjustment(Fixture& fixture)
+	{
+		const auto original = fixture.testConstants;
+		for (UINT eye = 0; eye < 2; ++eye) {
+			auto& matrix = fixture.testConstants.viewProjection[eye];
+			for (auto& row : matrix)
+				for (auto& value : row)
+					value = 0.0f;
+			matrix[0][0] = matrix[1][1] = 1.0f;
+			matrix[2][2] = 100.0f / 99.9f;
+			matrix[2][3] = -10.0f / 99.9f;
+			matrix[3][2] = 1.0f;
+			fixture.testConstants.cameraAdjust[eye][0] = 10.0f;
+			fixture.testConstants.cameraAdjust[eye][1] = 20.0f;
+			fixture.testConstants.cameraAdjust[eye][2] = 30.0f;
+		}
+		fixture.testConstants.viewProjection[1][0][2] = 1.0f;
+		fixture.testConstants.cameraAdjust[1][0] = 11.0f;
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		const std::array objects{ Box(10, 20, 32), Box(10, 20, 30.02f) };
+		fixture.Build(pixels);
+		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 0, 1 }, "Perspective depth or eye-plane clipping failed");
+		for (UINT y = 15; y <= 17; ++y)
+			for (UINT x = 23; x <= 25; ++x)
+				pixels[y * fixture.sourceWidth + 32 + x] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 1, "The second eye camera adjustment or asymmetric projection was ignored");
+		fixture.testConstants = original;
+	}
+
+	void PreservesSmallBoundsAtLargeWorldCoordinates(Fixture& fixture)
+	{
+		const auto original = fixture.testConstants;
+		for (auto& adjustment : fixture.testConstants.cameraAdjust)
+			adjustment[0] = 100000000.0f;
+		auto object = Box(100000000.0f);
+		object.entry[0][0] = 0.25f;
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		pixels[16 * fixture.sourceWidth + 20] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(std::array{ object })[0] == 1,
+			"World-coordinate cancellation shrank a projected box past a visible pixel");
+		fixture.testConstants = original;
+	}
+}
+
+int main()
+{
+	try {
+		ComPtr<ID3D11Device> device;
+		ComPtr<ID3D11DeviceContext> context;
+		const D3D_FEATURE_LEVEL requested = D3D_FEATURE_LEVEL_11_0;
+		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, &requested, 1,
+			D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
+		CoversAllReductionPixels(device.Get(), context.Get(), 17, 13, true);
+		CoversAllReductionPixels(device.Get(), context.Get(), 32, 16, false);
+		CoversAllReductionPixels(device.Get(), context.Get(), 16, 32, false);
+		CoversAllReductionPixels(device.Get(), context.Get(), 4, 4, false);
+		CoversAllReductionPixels(device.Get(), context.Get(), 8, 4, false);
+		Fixture fixture(device.Get(), context.Get());
+		CoversVisibilityAndFailures(fixture);
+		CoversMixedStereoVisibility(fixture);
+		CoversEveryOverlappingCell(fixture);
+		CoversShearedCornerExtents(fixture);
+		CoversPerspectiveAndCameraAdjustment(fixture);
+		PreservesSmallBoundsAtLargeWorldCoordinates(fixture);
+		std::cout << "Hi-Z WARP tests passed: complete mip coverage, stereo visibility, bounds, perspective and failure fallback\n";
+		return 0;
+	} catch (const std::exception& error) {
+		std::cerr << error.what() << '\n';
+		return 1;
+	}
+}

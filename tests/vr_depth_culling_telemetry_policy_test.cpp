@@ -7,9 +7,64 @@
 #include <stdexcept>
 #include <thread>
 
+namespace
+{
+	void CheckCombinedReset()
+	{
+		using namespace VRDepthCullingTelemetryPolicy;
+		WriterGate gate;
+		std::atomic_uint64_t advanced{ 7 }, hybrid{ 11 };
+		bool resetCalled = false;
+		bool resetAdmittedWriter = false;
+		const auto resetBoth = [&]() noexcept {
+			resetCalled = true;
+			WriterScope writer(gate);
+			resetAdmittedWriter = static_cast<bool>(writer);
+			advanced.store(0);
+			hybrid.store(0);
+		};
+		{
+			WriterScope hybridSample(gate);
+			if (!hybridSample)
+				throw std::runtime_error("Hybrid sample was not admitted");
+			if (TryReset(gate, resetBoth) || resetCalled || advanced.load() != 7 || hybrid.load() != 11)
+				throw std::runtime_error("busy Hybrid sample allowed a partial combined reset");
+			gate.SetEnabled(false);
+			{
+				WriterScope blockedAdvanced(gate), blockedHybrid(gate);
+				if (blockedAdvanced || blockedHybrid)
+					throw std::runtime_error("disabled telemetry admitted a method sample");
+			}
+			// Disabling new samples cannot discard an already admitted observation.
+			hybrid.fetch_add(1);
+			if (TryReset(gate, resetBoth) || resetCalled)
+				throw std::runtime_error("disable released an admitted Hybrid sample");
+		}
+		if (advanced.load() != 7 || hybrid.load() != 12)
+			throw std::runtime_error("disabled Hybrid sample did not finish its publication");
+		if (!TryReset(gate, resetBoth) || !resetCalled || resetAdmittedWriter ||
+			advanced.load() != 0 || hybrid.load() != 0 || gate.IsEnabled())
+			throw std::runtime_error("combined reset failed to clear both methods while remaining disabled");
+
+		gate.SetEnabled(true);
+		resetCalled = false;
+		{
+			WriterScope advancedSample(gate);
+			if (!advancedSample)
+				throw std::runtime_error("Advanced sample was not admitted after re-enabling telemetry");
+			advanced.fetch_add(1);
+			if (TryReset(gate, resetBoth) || resetCalled || advanced.load() != 1 || hybrid.load() != 0)
+				throw std::runtime_error("busy Advanced sample allowed a partial combined reset");
+		}
+		if (!TryReset(gate, resetBoth) || !gate.IsEnabled() || advanced.load() != 0 || hybrid.load() != 0)
+			throw std::runtime_error("writer scope leaked admission or changed telemetry enablement");
+	}
+}
+
 int main()
 {
 	using namespace VRDepthCullingTelemetryPolicy;
+	CheckCombinedReset();
 	static_assert(VRDepthCullingTemporal::Status::DurationBinCount == DurationBinCount);
 	if (DurationBin(0) != 0 || DurationBin(std::numeric_limits<std::uint64_t>::max()) != DurationBinCount - 1) {
 		throw std::runtime_error("duration histogram boundary is incorrect");
@@ -75,13 +130,12 @@ int main()
 	auto raceWriter = [&] {
 		for (std::size_t iteration = 0; iteration < 10'000; ++iteration) {
 			start.arrive_and_wait();
-			if (gate.TryEnter()) {
+			if (WriterScope writerScope{ gate }; writerScope) {
 				activeWriters.fetch_add(1);
 				if (activeReset.load())
 					overlap.store(true);
 				std::this_thread::yield();
 				activeWriters.fetch_sub(1);
-				gate.Leave();
 			}
 		}
 	};
@@ -89,14 +143,13 @@ int main()
 	std::thread secondWriter(raceWriter);
 	for (std::size_t iteration = 0; iteration < 10'000; ++iteration) {
 		start.arrive_and_wait();
-		if (gate.TryLockForReset()) {
+		(void)TryReset(gate, [&]() noexcept {
 			activeReset.store(true);
 			if (activeWriters.load() != 0)
 				overlap.store(true);
 			std::this_thread::yield();
 			activeReset.store(false);
-			gate.UnlockAfterReset();
-		}
+		});
 	}
 	firstWriter.join();
 	secondWriter.join();

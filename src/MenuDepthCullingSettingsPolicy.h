@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Features/VRDepthCullingEnablePolicy.h"
+#	include "Features/VRDepthCullingTemporal.h"
 
 #	include <nlohmann/json.hpp>
 
@@ -12,6 +13,24 @@
 
 namespace MenuDepthCullingSettingsPolicy
 {
+	/** Accept only stable method identifiers without changing the destination on failure. */
+	inline bool TryParseMethod(const nlohmann::json& a_value, VRDepthCullingTemporal::Mode& a_method, std::string& a_error)
+	{
+		using VRDepthCullingTemporal::Mode;
+		if (a_value == "balanced")
+			a_method = Mode::Balanced;
+		else if (a_value == "legacy")
+			a_method = Mode::Legacy;
+		else if (a_value == "hybrid")
+			a_method = Mode::Hybrid;
+		else {
+			a_error = "set_depth_culling_method requires method balanced, legacy, or hybrid";
+			return false;
+		}
+		a_error.clear();
+		return true;
+	}
+
 	struct Update
 	{
 		std::optional<bool> exteriorEnabled;

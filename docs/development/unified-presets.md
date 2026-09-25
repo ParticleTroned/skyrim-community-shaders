@@ -17,6 +17,20 @@ tiers. Disabling weather-driven Volumetric Lighting during rain is unchecked.
 
 Adaptive Balance uses the built-in Fantasy preset for global Bloom shaping,
 with the global Bloom strength reduced to `0.50` in every tier.
+Its Interior profile enables advanced controls with Emissive `2.0` and
+Ambient `0.75` in the shared base for all three tiers.
+Exterior Night also enables advanced controls, with Scene Brightness `0.85`,
+Directional Light `2.50`, Point Lights and Omnidirectional Bulbs `1.25`,
+Ambient `0.90`, and Emissive `1.50`. Its Sky and Volumetric Lighting gamma
+offsets are `0.45` and `0.30`, respectively.
+Exterior Day enables advanced controls with Directional Light `1.15` and
+Volumetric Lighting gamma offset `0.75`.
+
+Hair Specular uses Marschner with glossiness `70`, specular multiplier `1.70`,
+and diffuse multiplier `0.75`. Indirect specular, indirect diffuse, base
+colour, saturation, and transmission are `1.0` in every tier. Tangent shift
+and screen-space self shadow are enabled; self-shadow strength, exponent,
+and scale remain `1.0`, `0.1`, and `2.5`.
 
 Subsurface Scattering uses Burley with 16 samples and character lighting off
 in every tier. Male/female SSS intensity is `1.00`/`1.10`; both use SSS

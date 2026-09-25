@@ -71,7 +71,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.09.23.1",
+    "presetVersion": "d2026.09.25.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.19",
@@ -79,7 +79,7 @@
     },
     "settingsContract": {
       "revision": 5,
-      "sourceTreeSha256": "FC6FFBA1FBBDC8106AD10888A567741EAEC5C5E25578A6DEF5DD5870AF24887A"
+      "sourceTreeSha256": "93DAC2304B0C8C0AF14EEFCF8A1CBFF1002828A3B78E3E612F7ADE3C91B33A05"
     }
   },
   "Upscaling": {
@@ -371,22 +371,22 @@
     "ShowInOverlay": false
   },
   "Hair Specular": {
-    "BaseColorMult": 0.81,
-    "DiffuseIndirectMult": 0.7,
-    "DiffuseMult": 1.02,
+    "BaseColorMult": 1.0,
+    "DiffuseIndirectMult": 1.0,
+    "DiffuseMult": 0.75,
     "EnableSelfShadow": 1,
     "EnableTangentShift": 1,
     "Enabled": 1,
     "HairGlossiness": 70.0,
     "HairMode": 1,
-    "HairSaturation": 0.8,
+    "HairSaturation": 1.0,
     "PrimaryTangentShift": 0.5,
     "SecondaryTangentShift": -0.25,
     "SelfShadowExponent": 0.1,
     "SelfShadowScale": 2.5,
     "SelfShadowStrength": 1.0,
-    "SpecularIndirectMult": 3.0,
-    "SpecularMult": 1.38,
+    "SpecularIndirectMult": 1.0,
+    "SpecularMult": 1.7,
     "Transmission": 1.0
   },
   "Subsurface Scattering": {
@@ -524,7 +524,7 @@
     "nightStartHour": 21.0,
     "profiles": [
       {
-        "advanced": false,
+        "advanced": true,
         "ambientMult": 1.0,
         "bloom": {
           "BloomSaturation": 0.8999999761581421,
@@ -541,7 +541,7 @@
         },
         "bloomAdvanced": false,
         "brightness": 1.0,
-        "directionalLightMult": 1.0,
+        "directionalLightMult": 1.15,
         "effectLightingMult": 1.0,
         "emitColorMult": 1.0,
         "fogAlphaGammaOffset": 0.0,
@@ -556,7 +556,7 @@
         "skyGammaOffset": 0.0,
         "skySaturation": 1.0,
         "spotlightMult": 1.0,
-        "vlGammaOffset": 0.0,
+        "vlGammaOffset": 0.75,
         "water": {
           "CausticsDispersion": 1.0,
           "CausticsSpeed": 1.0,
@@ -583,8 +583,8 @@
         }
       },
       {
-        "advanced": false,
-        "ambientMult": 1.0,
+        "advanced": true,
+        "ambientMult": 0.9,
         "bloom": {
           "BloomSaturation": 0.8999999761581421,
           "BloomTint": [
@@ -599,23 +599,23 @@
           "HaloSpread": 0.8500000238418579
         },
         "bloomAdvanced": false,
-        "brightness": 1.0,
-        "directionalLightMult": 1.0,
+        "brightness": 0.85,
+        "directionalLightMult": 2.5,
         "effectLightingMult": 1.0,
-        "emitColorMult": 1.0,
+        "emitColorMult": 1.5,
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,
         "linearOmnidirectionalBulbMult": 1.0,
         "linearPointLightMult": 1.0,
         "linearSpotlightMult": 1.0,
-        "omnidirectionalBulbMult": 1.0,
-        "pointLightMult": 1.0,
+        "omnidirectionalBulbMult": 1.25,
+        "pointLightMult": 1.25,
         "skyBrightnessMult": 1.0,
-        "skyGammaOffset": 0.0,
+        "skyGammaOffset": 0.45,
         "skySaturation": 1.0,
         "spotlightMult": 1.0,
-        "vlGammaOffset": 0.0,
+        "vlGammaOffset": 0.3,
         "water": {
           "CausticsDispersion": 1.0,
           "CausticsSpeed": 1.0,
@@ -642,8 +642,8 @@
         }
       },
       {
-        "advanced": false,
-        "ambientMult": 1.0,
+        "advanced": true,
+        "ambientMult": 0.75,
         "bloom": {
           "BloomSaturation": 0.8999999761581421,
           "BloomTint": [
@@ -661,7 +661,7 @@
         "brightness": 1.0,
         "directionalLightMult": 1.0,
         "effectLightingMult": 1.0,
-        "emitColorMult": 1.0,
+        "emitColorMult": 2.0,
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,

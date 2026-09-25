@@ -537,6 +537,32 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 								  { "state", preview.value("requested", false) ? "unsupported" : "not_requested" },
 							  } },
 		};
+		json effectiveSchedule = { { "basis", sequence.scheduleBasis } };
+		if (sequence.scheduleBasis == "game_frames") {
+			effectiveSchedule["intervalFrames"] = sequence.intervalFrames;
+			effectiveSchedule["startDelayFrames"] = sequence.startDelayFrames;
+		} else {
+			effectiveSchedule["intervalMs"] = sequence.intervalMs;
+			effectiveSchedule["startDelayMs"] = startDelayMs;
+		}
+		const json effectiveSequence = {
+			{ "frameCount", sequence.frameCount },
+			{ "useSettings", sequenceUsesSettings },
+			{ "schedule", std::move(effectiveSchedule) },
+			{ "backpressure", {
+								  { "policy", sequence.backpressurePolicy },
+								  { "maximumConsecutiveSkips", sequence.maximumConsecutiveSkips },
+							  } },
+			{ "failurePolicy", sequence.failurePolicy },
+			{ "capture", sequence.capture },
+			{ "packaging", {
+							   { "frameManifest", sequence.frameManifest },
+							   { "previewVideo", {
+													 { "requested", preview.value("requested", false) },
+													 { "required", false },
+												 } },
+						   } },
+		};
 
 		std::string requestId;
 		{
@@ -545,7 +571,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 				return MakeError(a_request, "service_stopping", "screenshot admission is closed", "admission", true);
 			if (!CSX::ScreenshotPolicy::CanAdmitPendingOperations(CountPendingOperationsLocked()))
 				return MakeError(a_request, "operation_capacity", "the screenshot pending-operation limit is full", "admission", true);
-			auto& record = CreateRequestLocked("sequence", a_request, requestedSequence);
+			auto& record = CreateRequestLocked("sequence", a_request, effectiveSequence);
 			record.expectedArtifacts = CSX::ScreenshotPolicy::ExpectedSequenceArtifacts(sequence.frameManifest);
 			requestId = record.requestId;
 			sequence.requestId = requestId;
@@ -1138,11 +1164,21 @@ ScreenshotApi::RequestRecord& ScreenshotApi::CreateRequestLocked(std::string a_k
 	record.acceptedUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 	record.requested = a_request;
 	record.effective = std::move(a_effective);
-	if (const auto source = record.effective.find("source"); source != record.effective.end() &&
-															 source->is_object() && source->value("fallbackApplied", false)) {
-		const auto requested = source->value("requestedKind", std::string{});
-		const auto resolved = source->value("kind", std::string{});
-		const auto reason = source->value("fallbackReason", std::string("source fallback was applied"));
+	const json* effectiveSource = nullptr;
+	if (const auto source = record.effective.find("source");
+		source != record.effective.end() && source->is_object()) {
+		effectiveSource = &*source;
+	} else if (const auto capture = record.effective.find("capture");
+		capture != record.effective.end() && capture->is_object()) {
+		if (const auto source = capture->find("source");
+			source != capture->end() && source->is_object()) {
+			effectiveSource = &*source;
+		}
+	}
+	if (effectiveSource && effectiveSource->value("fallbackApplied", false)) {
+		const auto requested = effectiveSource->value("requestedKind", std::string{});
+		const auto resolved = effectiveSource->value("kind", std::string{});
+		const auto reason = effectiveSource->value("fallbackReason", std::string("source fallback was applied"));
 		record.warnings.push_back({ { "code", "source_fallback" }, { "message", reason } });
 		record.actual["fallbacks"].push_back({ { "reason", reason } });
 		record.actual["source"] = {
@@ -1387,6 +1423,8 @@ void ScreenshotApi::OnArtifactTerminal(
 	if (a_requestId.empty())
 		return;
 	const auto artifact = a_success ? DescribeCommittedArtifact(a_path) : json(nullptr);
+	bool artifactSucceeded = a_success;
+	std::string artifactError(a_error);
 	std::lock_guard lock(mutex);
 	const auto found = requests.find(std::string(a_requestId));
 	if (found == requests.end() || IsTerminal(found->second.state))
@@ -1394,21 +1432,44 @@ void ScreenshotApi::OnArtifactTerminal(
 	auto& record = found->second;
 	if (record.terminalArtifacts >= record.expectedArtifacts)
 		return;
-	if (a_success) {
+	if (artifactSucceeded && artifact.contains("integrityError")) {
+		artifactSucceeded = false;
+		artifactError = "the committed artifact could not be hashed: " +
+		                artifact["integrityError"].get<std::string>();
+	}
+	std::optional<std::filesystem::path> relativeSequencePath;
+	if (artifactSucceeded && record.kind == "sequence_frame") {
+		const auto sequence = sequences.find(record.parentRequestId);
+		std::error_code rootError;
+		std::error_code artifactPathError;
+		if (sequence != sequences.end()) {
+			const auto canonicalRoot = std::filesystem::weakly_canonical(sequence->second.directory, rootError);
+			const auto canonicalArtifact = std::filesystem::weakly_canonical(a_path, artifactPathError);
+			if (!rootError && !artifactPathError) {
+				relativeSequencePath = CSX::ScreenshotPolicy::RelativeContainedArtifactPath(
+					canonicalRoot, canonicalArtifact);
+			}
+		}
+		if (!relativeSequencePath) {
+			artifactSucceeded = false;
+			artifactError = "the committed sequence artifact escaped its sequence directory";
+		}
+	}
+	if (artifactSucceeded) {
 		auto committedArtifact = artifact;
+		if (relativeSequencePath)
+			committedArtifact["path"] = PathUtf8(*relativeSequencePath);
 		if (!a_actual.empty())
 			committedArtifact["actual"] = a_actual;
 		record.artifacts.push_back(committedArtifact);
 		if (!a_actual.empty())
 			record.actual["artifacts"].push_back(a_actual);
-		if (artifact.contains("integrityError"))
-			record.warnings.push_back({ { "code", "artifact_hash_failed" }, { "message", artifact["integrityError"] } });
 		++record.successfulArtifacts;
 		++completedArtifacts;
 		AppendEventLocked(record, "artifact.written", committedArtifact);
 	} else {
 		++failedArtifacts;
-		const json error = { { "code", "artifact_failed" }, { "message", a_error.empty() ? "screenshot artifact failed" : std::string(a_error) }, { "phase", "encoding" }, { "path", a_path.empty() ? json(nullptr) : json(PathUtf8(a_path)) } };
+		const json error = { { "code", "artifact_failed" }, { "message", artifactError.empty() ? "screenshot artifact failed" : artifactError }, { "phase", "encoding" }, { "path", a_path.empty() ? json(nullptr) : json(PathUtf8(a_path)) } };
 		record.errors.push_back(error);
 		if (record.error.is_null())
 			record.error = error;

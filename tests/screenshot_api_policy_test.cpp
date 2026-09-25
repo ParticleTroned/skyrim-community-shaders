@@ -5,6 +5,18 @@
 int main()
 {
 	using namespace CSX::ScreenshotPolicy;
+	const auto hmd = ResolveCaptureSource("hmd_submission", "reject", true);
+	const auto desktopFallback = ResolveCaptureSource("hmd_submission", "desktop_mirror", false);
+	if (!hmd || hmd.resolved != "hmd_submission" || hmd.fallbackUsed ||
+		!desktopFallback || desktopFallback.resolved != "desktop_mirror" || !desktopFallback.fallbackUsed ||
+		ResolveCaptureSource("hmd_submission", "reject", false) ||
+		ResolveCaptureSource("unknown", "reject", true))
+		throw std::runtime_error("capture source availability or fallback policy is invalid");
+	const std::filesystem::path stillDirectory = "still-invalid";
+	const std::filesystem::path sequenceDirectory = "frame-valid";
+	if (SelectConfiguredCaptureDirectory(stillDirectory, sequenceDirectory, false) != stillDirectory ||
+		SelectConfiguredCaptureDirectory(stillDirectory, sequenceDirectory, true) != sequenceDirectory)
+		throw std::runtime_error("still and sequence destination domains are not independent");
 	for (const auto* unsafe : { "", ".", "..", "CON", "con.txt", "NUL.png", "COM1", "LPT9.log",
 			 "trailing.", "trailing ", "stream:name", "star*", "slash/", "back\\slash", "caf\xC3\xA9" }) {
 		if (IsSafeWindowsFilenameSegment(unsafe))

@@ -270,6 +270,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		std::atomic<int64_t> lastResetQpc{ 0 };
@@ -687,6 +689,8 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
+		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
+		bool SetBackgroundCompilation(bool value);
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
 		// Set only after DataLoaded and the initial compilation batch have both

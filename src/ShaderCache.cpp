@@ -2565,8 +2565,9 @@ namespace SIE
 				}
 			}
 
+			std::error_code diskCacheProbeError;
 			if (Util::ShaderCachePack::ShouldReadLooseBlob(readDiskCache, ManagedShaderPackLayoutPresent()) &&
-				std::filesystem::exists(diskPath)) {
+				std::filesystem::exists(diskPath, diskCacheProbeError)) {
 				// Timestamps cannot validate C++ macro changes or an unknown contract.
 				bool diskCacheOutdated = true;
 				if (!IsSaveLoadSafeModeActive() && dependencyTracker) {
@@ -2611,6 +2612,11 @@ namespace SIE
 					}
 					return shaderBlob;
 				}
+			}
+
+			if (diskCacheProbeError) {
+				logger::debug("Failed to probe shader cache {}: {}; compiling from source",
+					Util::WStringToString(diskPath), diskCacheProbeError.message());
 			}
 
 			const std::wstring path = shaderSourcePath;
@@ -4063,6 +4069,18 @@ namespace SIE
 		isSkipUnchangedShaders.store(value, std::memory_order_relaxed);
 	}
 
+	bool ShaderCache::SetBackgroundCompilation(bool value)
+	{
+		bool previousValue;
+		{
+			// Serialize mode changes with the predicate check and transition into wait.
+			std::scoped_lock lock{ compilationSet.compilationMutex };
+			previousValue = backgroundCompilation.exchange(value, std::memory_order_relaxed);
+		}
+		compilationSet.conditionVariable.notify_one();
+		return previousValue;
+	}
+
 	static const std::filesystem::path& DiskCachePath()
 	{
 		static const std::filesystem::path path{ L"Data/ShaderCache" };
@@ -4975,7 +4993,7 @@ namespace SIE
 	ShaderCache::ShaderCache()
 	{
 		if (IsEnvVarTruthy("OPENSHADERS_BACKGROUND_COMPILE")) {
-			backgroundCompilation = true;
+			SetBackgroundCompilation(true);
 			logger::info("OPENSHADERS_BACKGROUND_COMPILE set; starting shaders in background compilation mode");
 		}
 

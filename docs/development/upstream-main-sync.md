@@ -88,3 +88,46 @@ Validation:
 -   `pwsh ./tools/pre-commit.ps1 run --files src/State.cpp src/Hooks.cpp docs/development/upstream-main-sync.md`: passed after Markdown table formatting.
 -   Compilation, compiled tests and runtime toggle checks remain deferred
     by user instruction. No compiled or runtime pass is claimed.
+
+## #2722: background compilation wakeups and cache probes
+
+Approved partial port of upstream commit
+`c321154fa4d0b53e904dd756fd31c29cafc1679b` by 世界的山田.
+
+Background-mode changes now exchange the atomic flag while holding the
+dispatcher predicate mutex, then notify the dispatcher after releasing
+the lock. Menu settings, the skip-compilation hotkey, the environment
+override and the DevBench action use the same setter. Its previous-value
+return preserves DevBench's atomic `changed` receipt. The registered tool
+description and action schema describe the wakeup behavior.
+
+A loose shader-cache existence probe uses the nonthrowing filesystem
+overload. Probe errors are logged at debug level and treated as cache
+misses, allowing the existing source-compilation path to run. Source-file
+errors still use existing compilation-failure handling.
+
+Retain the fork's content and include dependency validation, managed-pack
+selection, in-flight dispatch counter and scope-based slot release. The
+SSS keyword and geometry guards already cover the upstream corrections.
+These shared changes apply to SE, AE and VR.
+
+Validation:
+
+-   Source review confirmed every background-mode writer uses the setter,
+    which exchanges under the wait predicate's mutex and notifies after
+    unlocking. DevBench still derives `changed` from the previous mode.
+-   Parsed the registered tool descriptor with PowerShell `ConvertFrom-Json`;
+    contract major 1 and the existing action list, including
+    `backgroundCompile`, remain intact.
+-   `pwsh ./tools/git.ps1 diff --check`: passed.
+-   `pwsh ./tools/pre-commit.ps1 run --files src/ShaderCache.cpp src/ShaderCache.h src/Menu.cpp docs/development/upstream-main-sync.md`: passed.
+-   `ShaderDevBenchBridge.cpp` has unrelated existing formatting drift.
+    Restored the whole-file formatter changes and checked only the edited
+    lines with cached clang-format 22.1.4:
+    `--style=file --lines=237:237 --lines=431:431 --lines=440:440 --dry-run --Werror src/Api/ShaderDevBenchBridge.cpp`.
+    This passed. Other applicable hooks passed for that file with only
+    `clang-format` skipped. The commit hook uses the same skip after the
+    scoped formatting checks above.
+-   Compilation, compiled tests, runtime dispatcher wakeup checks and
+    filesystem-failure injection remain deferred by user instruction.
+    No compiled or runtime pass is claimed.

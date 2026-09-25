@@ -904,7 +904,13 @@ namespace
 		bool loadCompletionObserved = false;
 	};
 	VRLoadingMenuReconcileCandidate g_vrLoadingMenuReconcileCandidate{};
-	std::atomic_bool g_vrMapMenuOpenFromEvent{ false };
+	enum class VRMapMenuEventState : uint8_t
+	{
+		Unknown,
+		Closed,
+		Open
+	};
+	std::atomic<VRMapMenuEventState> g_vrMapMenuStateFromEvent{ VRMapMenuEventState::Unknown };
 	std::atomic_bool g_vrStatsMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrDialogueMenuOpenFromEvent{ false };
 	std::atomic_bool g_vrRaceSexMenuOpenFromEvent{ false };
@@ -5642,16 +5648,23 @@ namespace
 		return physicallyOpen;
 	}
 
+	bool IsMapMenuContextActive()
+	{
+		const auto eventState = g_vrMapMenuStateFromEvent.load(std::memory_order_acquire);
+		// A delivered VR close overrides the previous frame's cached open state.
+		auto* state = globals::state;
+		return eventState == VRMapMenuEventState::Open ||
+		       ((eventState != VRMapMenuEventState::Closed || !globals::game::isVR) &&
+				   state && state->isMapMenuOpen);
+	}
+
 	bool IsNonLoadingVRGameMenuPresentationContextActive()
 	{
-		auto* state = globals::state;
 		auto* ui = globals::game::ui;
-		return g_vrMapMenuOpenFromEvent.load(std::memory_order_acquire) ||
+		return IsMapMenuContextActive() ||
 		       g_vrStatsMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       g_vrDialogueMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire) ||
-		       (state && state->isMapMenuOpen) ||
-		       (ui && ui->IsMenuOpen(RE::MapMenu::MENU_NAME)) ||
 		       IsMainMenuContextActive() ||
 		       IsSkyrimMenuPresentationContextActive(ui);
 	}
@@ -7392,7 +7405,7 @@ namespace
 	void ResetVRMenuPresentationTrackingState()
 	{
 		g_vrMenuPresentationTailEndFrame.store(0, std::memory_order_release);
-		g_vrMapMenuOpenFromEvent.store(false, std::memory_order_release);
+		g_vrMapMenuStateFromEvent.store(VRMapMenuEventState::Unknown, std::memory_order_release);
 		g_vrStatsMenuOpenFromEvent.store(false, std::memory_order_release);
 		g_vrDialogueMenuOpenFromEvent.store(false, std::memory_order_release);
 		g_vrRaceSexMenuOpenFromEvent.store(false, std::memory_order_release);
@@ -7425,10 +7438,8 @@ namespace
 
 	bool IsKnownGameMenuContextActive()
 	{
-		auto state = globals::state;
 		auto ui = globals::game::ui;
-		return g_vrMapMenuOpenFromEvent.load(std::memory_order_acquire) ||
-		       (state && state->isMapMenuOpen) ||
+		return IsMapMenuContextActive() ||
 		       g_vrStatsMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       g_vrDialogueMenuOpenFromEvent.load(std::memory_order_acquire) ||
 		       g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire) ||
@@ -8363,8 +8374,7 @@ namespace
 		}
 
 		const auto* state = globals::state;
-		if ((state && state->isMapMenuOpen) ||
-			g_vrMapMenuOpenFromEvent.load(std::memory_order_acquire)) {
+		if (IsMapMenuContextActive()) {
 			mask |= kVRMenuPresentationTraceMapBit;
 		}
 		if (state && state->isMainMenuOpen)
@@ -9062,8 +9072,7 @@ namespace
 			state && state->isMainMenuOpen,
 			(state && state->isLoadingMenuOpen) ||
 				g_vrLoadingMenuOpenFromEvent.load(std::memory_order_acquire),
-			(state && state->isMapMenuOpen) ||
-				g_vrMapMenuOpenFromEvent.load(std::memory_order_relaxed),
+			IsMapMenuContextActive(),
 			g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_relaxed),
 			globals::features::upscaling.IsVRRenderScaleModeActive(),
 			globals::features::upscaling.IsPresentationUpscalingActive());
@@ -13484,13 +13493,7 @@ bool Upscaling::IsVRMenuSemanticAdapterEligible() const
 
 bool Upscaling::IsVRMapMenuPresentationActive() const
 {
-	if (!globals::game::isVR)
-		return false;
-	auto* state = globals::state;
-	auto* ui = globals::game::ui;
-	return g_vrMapMenuOpenFromEvent.load(std::memory_order_acquire) ||
-	       (state && state->isMapMenuOpen) ||
-	       (ui && ui->IsMenuOpen(RE::MapMenu::MENU_NAME));
+	return globals::game::isVR && IsMapMenuContextActive();
 }
 
 bool Upscaling::EnsureVRMapMenuUISupersampling()
@@ -14420,8 +14423,6 @@ void Upscaling::TraceVRMenuPresentationOpenVRSubmit(
 void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 {
 	ConsumeVRMenuPresentationContextChange(a_frame);
-	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
-	const bool menuPresentationContextActive = IsVRMenuPresentationContextActive();
 	const bool committedPlanChanged =
 		vrMenuCommittedLayerValid &&
 		vrMenuCommittedLayerPlanGeneration != GetActiveVRRenderScaleContractGeneration();
@@ -14438,21 +14439,29 @@ void Upscaling::BeginVRMenuFinalCompositeFrame(uint32_t a_frame)
 		// Asynchronous context changes remain published for the next render frame.
 		return;
 	}
-	if (vrMenuCommittedLayerValid &&
-		(!menuPresentationContextActive || communityShadersMenuOpen)) {
-		InvalidateVRMenuCommittedLayer(
-			communityShadersMenuOpen ? "community-shaders-menu-open" :
-									   "menu-context-ended");
-	}
-	if (!menuPresentationContextActive &&
-		vrMenuFrameTransaction.frame == a_frame &&
-		!vrMenuFrameTransaction.sealed &&
-		(vrMenuFrameTransaction.recognizedOperations != 0 ||
-			vrMenuFrameTransaction.capturedOperations != 0 ||
-			vrMenuFrameTransaction.suppressedOperations != 0 ||
-			vrMenuFrameTransaction.mapDisplayEpochs != 0 ||
-			vrMenuFrameTransaction.presentationStarted)) {
-		PoisonVRMenuFrameTransaction("menu-context-ended-during-transaction");
+	const bool communityShadersMenuOpen = IsCommunityShadersMenuOpen();
+	const auto hasUnsealedMenuWork = [&]() {
+		return vrMenuFrameTransaction.frame == a_frame &&
+		       !vrMenuFrameTransaction.sealed &&
+		       (vrMenuFrameTransaction.recognizedOperations != 0 ||
+				   vrMenuFrameTransaction.capturedOperations != 0 ||
+				   vrMenuFrameTransaction.suppressedOperations != 0 ||
+				   vrMenuFrameTransaction.mapDisplayEpochs != 0 ||
+				   vrMenuFrameTransaction.presentationStarted);
+	};
+	if (vrMenuCommittedLayerValid || hasUnsealedMenuWork()) {
+		const bool explicitMenuPresentationContextActive = IsExplicitVRMenuPresentationContextActive();
+		// A presentation tail protects routing, not ownership of retained pixels.
+		if (vrMenuCommittedLayerValid &&
+			(!explicitMenuPresentationContextActive || communityShadersMenuOpen)) {
+			InvalidateVRMenuCommittedLayer(
+				communityShadersMenuOpen ? "community-shaders-menu-open" :
+										   "menu-context-ended");
+		}
+		if (!explicitMenuPresentationContextActive && hasUnsealedMenuWork() &&
+			!(globals::game::isVR && IsVRMenuPresentationTailActive(globals::state))) {
+			PoisonVRMenuFrameTransaction("menu-context-ended-during-transaction");
+		}
 	}
 	if (communityShadersMenuOpen && vrMenuFrameTransaction.frame == a_frame) {
 		const bool transactionOwnsMenuWork =
@@ -20399,7 +20408,9 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	}
 
 	if (a_event && a_event->menuName == RE::MapMenu::MENU_NAME) {
-		g_vrMapMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
+		g_vrMapMenuStateFromEvent.store(
+			a_event->opening ? VRMapMenuEventState::Open : VRMapMenuEventState::Closed,
+			std::memory_order_release);
 	}
 	if (a_event && a_event->menuName == "StatsMenu")
 		g_vrStatsMenuOpenFromEvent.store(a_event->opening, std::memory_order_release);
@@ -20576,7 +20587,13 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 			loadingMenuOpen,
 			std::memory_order_release);
 	}
-	g_vrMapMenuOpenFromEvent.store(ui->IsMenuOpen(RE::MapMenu::MENU_NAME), std::memory_order_release);
+	const auto initialMapState = ui->IsMenuOpen(RE::MapMenu::MENU_NAME) ?
+	                                 VRMapMenuEventState::Open :
+	                                 VRMapMenuEventState::Closed;
+	// Registration must not overwrite an event delivered while sampling the UI.
+	auto unknownMapState = VRMapMenuEventState::Unknown;
+	g_vrMapMenuStateFromEvent.compare_exchange_strong(
+		unknownMapState, initialMapState, std::memory_order_acq_rel);
 	g_vrStatsMenuOpenFromEvent.store(ui->IsMenuOpen("StatsMenu"), std::memory_order_release);
 	g_vrDialogueMenuOpenFromEvent.store(ui->IsMenuOpen("Dialogue Menu"), std::memory_order_release);
 	g_vrRaceSexMenuOpenFromEvent.store(raceSexMenuOpen, std::memory_order_release);

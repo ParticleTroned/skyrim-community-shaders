@@ -2934,6 +2934,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(AcceptedDrawService PROPERTIES TIMEOUT 30)
     include(tests/vr_menu_pointer.cmake)
+    include(tests/vr_menu_layer_lifetime.cmake)
     add_executable(
         preset_compatibility_test
         EXCLUDE_FROM_ALL

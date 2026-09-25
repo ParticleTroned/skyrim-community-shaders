@@ -39,14 +39,35 @@ namespace Util::ShaderCachePack
 		Complete
 	};
 
-	constexpr LayoutState ClassifyLayoutMembers(const std::array<bool, 5>& a_present)
+	inline constexpr std::size_t kManagedLayoutMemberCount = 6;
+	using LayoutMembers = std::array<bool, kManagedLayoutMemberCount>;
+
+	constexpr LayoutState ClassifyLayoutMembers(const LayoutMembers& a_present)
 	{
-		const auto presentCount = std::ranges::count(a_present, true);
-		if (presentCount == 0)
+		// Info.ini is shared with legacy caches. Only a pack-specific member
+		// identifies managed presence, after which all six members are required.
+		bool managedMemberPresent = false;
+		for (std::size_t index = 1; index < a_present.size(); ++index)
+			managedMemberPresent = managedMemberPresent || a_present[index];
+		if (!managedMemberPresent)
 			return LayoutState::Absent;
+
+		const auto presentCount = std::ranges::count(a_present, true);
 		if (static_cast<std::size_t>(presentCount) == a_present.size())
 			return LayoutState::Complete;
 		return LayoutState::PartialOrInvalid;
+	}
+
+	constexpr bool ShouldUseLoosePersistence(bool a_enabled, bool a_managedLayoutPresent)
+	{
+		return a_enabled && !a_managedLayoutPresent;
+	}
+
+	constexpr bool HasRequiredInfoMetadata(
+		std::string_view a_pluginVersion,
+		std::string_view a_shaderCacheAbi)
+	{
+		return !a_pluginVersion.empty() && !a_shaderCacheAbi.empty();
 	}
 
 	constexpr LayoutState ClassifyValidatedLayout(

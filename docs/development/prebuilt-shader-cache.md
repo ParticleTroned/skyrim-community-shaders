@@ -293,9 +293,15 @@ non-link cache layout and a readable `[Cache] PluginVersion` ownership field.
 The tool refuses to replace arbitrary directories. When both runtimes are
 requested, it validates every runtime and archive destination before replacing
 any of them. It also preserves the old runtime directory if publishing its
-replacement fails. The output root may live under the repository (the default
-is `dist/shader-cache`), but it must not be inside any shader source tree that
-the staging pass copies.
+replacement fails. If both publication and restoration fail, the validated
+candidate remains in `.<runtime>.publishing` and the old cache remains in
+`.<runtime>.previous/<runtime>`, both beneath the durable output root. Resolve
+or recover those paths before rerunning; the builder will not overwrite them.
+Staging directories and archive files are acquired exclusively before copying;
+a competing invocation cannot overwrite or clean up another invocation's work.
+The output root may live under the repository (the default is
+`dist/shader-cache`), but it must not be inside any shader source tree that the
+staging pass copies.
 
 Expected output:
 
@@ -757,12 +763,12 @@ validation.
 
 ## Runtime behavior and user expectations
 
-When all four managed files are present, runtime lookup uses an exact record
-identity: logical shader path, recursive source/compile-state contract, and the
-SHA-256 canonical requirement set supplied by applicable external providers.
-An identity miss compiles and appends only that shader. Standard optimized and
-developer/debug records use separate lanes, so diagnostic compilation neither
-evicts nor masks release bytecode.
+When all six managed members are present, runtime lookup considers every record
+with the same logical shader and compatibility domain, newest first. It accepts
+the newest record whose source/compile-state contract and external compatibility
+requirements overlap the request. Only a lookup miss compiles and appends that
+shader. Standard optimized and developer/debug records use separate lanes, so
+diagnostic compilation neither evicts nor masks release bytecode.
 
 Each lane has fixed A and B files supplied by the cache mod. Runtime never
 creates, renames, copies, or deletes them. Records become visible only after a
@@ -795,12 +801,14 @@ are strictly increasing within each file and valid only from 1 through
 `UINT64_MAX-1`; zero and `UINT64_MAX` are reserved.
 The Python archive/FOMOD validator and C++ runtime enforce the same rules.
 
-If any managed member is installed but the layout is incomplete or invalid,
-CSX compiles from source without reading, writing, or deleting legacy cache
-files. Loose caching, including `Manifest.json`, applies only when no managed
-members are installed. An explicit clear resets admitted pack files in place;
-it preserves partial or invalid managed layouts for installation repair.
-normal source, feature, and external-contract changes never rotate or blanket
+If `PackManifest.json` or any pack file identifies a managed installation but
+the six-member layout is incomplete or invalid, CSX compiles from source
+without reading, writing, or deleting legacy cache files. `Info.ini` alone does
+not identify managed presence because legacy caches use the same filename.
+Loose caching, including `Manifest.json`, applies only when no pack-specific
+managed member is installed. An explicit clear resets admitted pack files in
+place; it preserves partial or invalid managed layouts for installation repair.
+Normal source, feature, and external-contract changes never rotate or blanket
 delete the managed cache.
 
 A reset barrier becomes authoritative before superseded-file cleanup. If the

@@ -1,6 +1,7 @@
 [submodule "extern/CommonLibSSE-NG"]
 	path = extern/CommonLibSSE-NG
-	url = https://github.com/alandtse/CommonLibSSE-NG.git
+	url = https://github.com/ParticleTroned/CommonLibSSE-NG.git
+	branch = 6.7.1-vr
 [submodule "extern/Streamline-DX12"]
 	path = extern/Streamline-DX12
 	url = https://github.com/NVIDIA-RTX/Streamline.git

@@ -6,7 +6,7 @@ class HomePageRenderer
 public:
 	// Social links
 	static constexpr const char* DISCORD_URL = "https://discord.gg/utSWStYTx2";
-	static constexpr const char* GITHUB_URL = "https://github.com/ParticleTroned/skyrim-community-shaders";
+	static constexpr const char* GITHUB_URL = "https://github.com/ParticleTroned/skyrim-community-shaders/tree/main-VR";
 
 	// Font scales
 	static constexpr float TITLE_FONT_SCALE = 2.0f;

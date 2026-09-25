@@ -432,6 +432,12 @@ float FeatureListRenderer::GetRestoreDefaultsButtonReserveHeight()
 	return GetRestoreDefaultsFrameSize().y + style.WindowPadding.y + style.ItemSpacing.y;
 }
 
+void FeatureListRenderer::ShowAdvancedSettings(Feature* a_feature)
+{
+	if (a_feature)
+		GetFeatureUiModeValue(a_feature) = 1;
+}
+
 void FeatureListRenderer::RenderFeatureList(
 	float footerHeight,
 	size_t& selectedMenu,
@@ -442,6 +448,16 @@ void FeatureListRenderer::RenderFeatureList(
 	const std::function<void()>& drawAdvancedSettings)
 {
 	ImGui::BeginChild("Menus Table", ImVec2(0, -footerHeight));
+
+	if (!pendingFeatureSelection.empty()) {
+		featureSearch.clear();
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->GetShortName() == pendingFeatureSelection) {
+				categoryExpansionStates[std::string(feature->GetCategory())] = true;
+				break;
+			}
+		}
+	}
 
 	static std::string selectedMenuEntryId;
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);

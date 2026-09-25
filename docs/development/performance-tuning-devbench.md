@@ -35,9 +35,10 @@ corresponding render scale. A latched or unsupported FSR provider fails closed
 instead of reporting its FSR3 fallback as FSR4. Every case is independently
 compared with None.
 
-Each case uses a five-second cooldown after CS closes, five one-second target
-windows, a nine-second wait after switching to None, five one-second None
-windows, and exact case restoration. A ten-second cooldown separates cases.
+Each case uses a ten-second cooldown after CS closes, five one-second target
+windows, a ten-second wait after switching to None, five one-second None
+windows, one second of exact case restoration, and a ten-second cooldown
+before the next case.
 The original Upscaling state is restored after completion, cancellation, or
 failure. CS reopens only when it was open before the sweep.
 
@@ -58,3 +59,26 @@ initial cooldown, None wait, measurement, inter-case cooldown, and restoration.
 
 Use an action of cancel to stop a DevBench-owned sweep and restore the original
 state.
+
+### Flat CPU/GPU timing
+
+SE and AE use QPC CPU elapsed time and D3D11 whole-frame GPU timestamps,
+excluding the blocking Present call. GPU timestamps share the existing
+profiler query ring and disjoint interval; reads never wait for the GPU.
+VR continues to use its existing OpenVR timing path and profiler lifecycle.
+
+Only the CPU/GPU source differs. Game/FPS timing, measurement phases, five
+one-second sample blocks, statistics, missing-sample tolerance, restoration,
+and cooldowns remain shared. Delayed flat results retain the original sample
+block weights and are drained during the existing waits, without extending
+any phase. Flat trace entries and latestTiming additionally identify the
+CPU/GPU source through gpuCpuFrameCount and gpuCpuPresentId; frameCount still
+identifies the current Game sample.
+
+Test Presents do not advance timing. Failed or occluded Presents invalidate
+the flat history; missing, disjoint, or invalid GPU queries leave GPU timing
+unavailable without discarding valid CPU timing. D3D12 frame generation leaves
+both flat CPU/GPU metrics unavailable because D3D11 timestamps cannot account
+for that presentation path. Its samples are invalidated at acquisition, so
+they cannot reappear after returning to D3D11. No frame-generation setting
+is changed.

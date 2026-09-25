@@ -21,8 +21,8 @@ namespace TerrainVariationPolicy
 		return canonical;
 	}
 
-	/** @brief Matches landscape maps while keeping tree textures and ambiguous paths unchanged. */
-	inline bool IsLandscapeDiffusePath(const std::string& a_canonical, const std::unordered_set<std::string>& a_landscapePaths)
+	/** @brief Matches loaded landscape records, using directory fallback only when records are unavailable. */
+	inline bool IsLandscapeDiffusePath(const std::string& a_canonical, const std::unordered_set<std::string>& a_landscapePaths, bool a_pathsAvailable)
 	{
 		if (a_canonical.empty() || a_canonical.ends_with('/') || a_canonical.starts_with('/') || a_canonical.find(':') != std::string::npos ||
 			a_canonical.find("//") != std::string::npos || a_canonical.starts_with("./") ||
@@ -30,6 +30,6 @@ namespace TerrainVariationPolicy
 			a_canonical.find("/../") != std::string::npos || a_canonical.ends_with("/.") || a_canonical.ends_with("/..") ||
 			a_canonical.starts_with("landscape/trees/"))
 			return false;
-		return a_canonical.starts_with("landscape/") || a_landscapePaths.contains(a_canonical);
+		return a_pathsAvailable ? a_landscapePaths.contains(a_canonical) : a_canonical.starts_with("landscape/");
 	}
 }

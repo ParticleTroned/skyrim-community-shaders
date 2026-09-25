@@ -12,17 +12,20 @@ namespace VRDepthCullingTemporal
 {
 	enum class Mode
 	{
-		Balanced,
-		Performance,
-		Legacy
+		Balanced = 0,
+		Legacy = 2
 	};
 
-	/** Resolve persisted toggles to one policy; malformed conflicts fall back to Balanced. */
-	constexpr Mode SelectMode(bool a_performanceMode, bool a_legacyMode)
+	/** Resolve the persisted legacy preference independently of logging mode. */
+	constexpr Mode SelectMode(bool a_legacyMode)
 	{
-		if (a_performanceMode == a_legacyMode)
-			return Mode::Balanced;
-		return a_performanceMode ? Mode::Performance : Mode::Legacy;
+		return a_legacyMode ? Mode::Legacy : Mode::Balanced;
+	}
+
+	/** Preserve supported mode identities; retired or unknown values use the default. */
+	constexpr Mode NormalizeMode(Mode a_mode)
+	{
+		return SelectMode(a_mode == Mode::Legacy);
 	}
 
 	/** Return the stable DevBench name for an effective temporal policy. */
@@ -31,8 +34,6 @@ namespace VRDepthCullingTemporal
 		switch (a_mode) {
 		case Mode::Balanced:
 			return "balanced";
-		case Mode::Performance:
-			return "performance";
 		case Mode::Legacy:
 			return "legacy";
 		}

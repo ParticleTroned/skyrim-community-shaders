@@ -247,8 +247,16 @@ int main(int argc, char** argv)
 	static_assert(!ShouldReadLooseBlob(false, true));
 	static_assert(ShouldReadLooseBlob(true, false));
 	static_assert(!ShouldReadLooseBlob(true, true));
-	static_assert(ClassifyLayoutMembers({ false, false, false, false, false }) == LayoutState::Absent);
-	static_assert(ClassifyLayoutMembers({ true, true, true, true, true }) == LayoutState::Complete);
+	static_assert(!ShouldUseLoosePersistence(false, false));
+	static_assert(!ShouldUseLoosePersistence(false, true));
+	static_assert(ShouldUseLoosePersistence(true, false));
+	static_assert(!ShouldUseLoosePersistence(true, true));
+	static_assert(HasRequiredInfoMetadata("CSX 3.18-VR", "shader-abi"));
+	static_assert(!HasRequiredInfoMetadata("", "shader-abi"));
+	static_assert(!HasRequiredInfoMetadata("CSX 3.18-VR", ""));
+	static_assert(ClassifyLayoutMembers({ false, false, false, false, false, false }) == LayoutState::Absent);
+	static_assert(ClassifyLayoutMembers({ true, false, false, false, false, false }) == LayoutState::Absent);
+	static_assert(ClassifyLayoutMembers({ true, true, true, true, true, true }) == LayoutState::Complete);
 	static_assert(ClassifyValidatedLayout(LayoutState::Complete, true, true) == LayoutState::Complete);
 	static_assert(ClassifyValidatedLayout(LayoutState::Complete, false, true) == LayoutState::PartialOrInvalid);
 	static_assert(ClassifyValidatedLayout(LayoutState::Complete, true, false) == LayoutState::PartialOrInvalid);
@@ -260,14 +268,14 @@ int main(int argc, char** argv)
 		assert(!identityError.empty());
 	}
 
-	for (std::uint32_t mask = 0; mask < 32; ++mask) {
-		std::array<bool, 5> present{};
+	for (std::uint32_t mask = 0; mask < (1u << kManagedLayoutMemberCount); ++mask) {
+		LayoutMembers present{};
 		for (std::size_t index = 0; index < present.size(); ++index)
 			present[index] = (mask & (1u << index)) != 0;
 		const auto expected =
-			mask == 0  ? LayoutState::Absent :
-			mask == 31 ? LayoutState::Complete :
-						 LayoutState::PartialOrInvalid;
+			(mask == 0 || mask == 1)                      ? LayoutState::Absent :
+			mask == (1u << kManagedLayoutMemberCount) - 1 ? LayoutState::Complete :
+															LayoutState::PartialOrInvalid;
 		assert(ClassifyLayoutMembers(present) == expected);
 	}
 
@@ -1160,11 +1168,13 @@ int main(int argc, char** argv)
 		assert(old && current);
 		assert(old->bytecode.front() == std::byte{ 0x11 });
 		assert(current->bytecode.front() == std::byte{ 0x22 });
-		auto compatible = store.FindCompatible(
+		// Runtime lookup must consider all compatible records together. An older
+		// exact identity must not mask a newer compatible identity.
+		auto newestCompatible = store.FindCompatible(
 			"water|provider=1",
 			[](std::string_view a_metadata) { return a_metadata == "{\"schema\":1}"; },
 			&error);
-		assert(compatible && compatible->bytecode.front() == std::byte{ 0x22 });
+		assert(newestCompatible && newestCompatible->exactKey == "water|source=new|provider=1");
 		assert(!store.FindCompatible("water|provider=1", [](std::string_view) { return false; }, &error));
 		const auto before = store.GetStats();
 		assert(before.recordCount == 3 && before.liveRecordCount == 2 && before.supersededBytes > 0);

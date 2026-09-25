@@ -44,7 +44,7 @@ public:
 		uint SampleCount = 1;
 		float VRBaseSamplesAtReference = 44.0f;
 		float VRCullDistance = 0.0f;  // 0 = disabled
-		uint EnableFoveated = globals::game::isVR ? 1u : 0u;
+		uint EnableFoveated = REL::Module::IsVR() ? 1u : 0u;
 	};
 
 	BendSettings bendSettings;
@@ -139,6 +139,8 @@ public:
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	/** Reports whether the feature is loaded and its current effect switch is on. */
+	bool IsRuntimeEnabled() const;
 	void DrawFoveationSettings();
 
 	virtual void ClearShaderCache() override;

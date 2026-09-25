@@ -1673,6 +1673,67 @@ if(BUILD_CONTROLLER_TESTS)
 
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
 
+    add_controller_test(
+        shadow_batch_submissions_test
+        ShadowBatchSubmissions
+        tests/shadow_batch_submissions_test.cpp
+    )
+    target_link_libraries(
+        shadow_batch_submissions_test
+        PRIVATE unordered_dense::unordered_dense
+    )
+    set_tests_properties(ShadowBatchSubmissions PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
+        shadow_batch_hooks_test
+        ShadowBatchHooks
+        tests/shadow_batch_hooks_test.cpp
+    )
+    set(_shadow_batch_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/shadow-batch"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_shadow_batch_test_dir}/shadow_batch_hooks.h"
+            "${_shadow_batch_test_dir}/shadow_batch_install.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_shadow_batch_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_shadow_batch.cmake"
+        DEPENDS
+            src/EngineFixes/VRShadowBatch.cpp
+            tests/extract_shadow_batch.cmake
+        VERBATIM
+    )
+    target_sources(
+        shadow_batch_hooks_test
+        PRIVATE "${_shadow_batch_test_dir}/shadow_batch_hooks.h"
+    )
+    target_include_directories(
+        shadow_batch_hooks_test
+        PRIVATE "${_shadow_batch_test_dir}"
+    )
+    target_link_libraries(
+        shadow_batch_hooks_test
+        PRIVATE unordered_dense::unordered_dense
+    )
+    set_tests_properties(ShadowBatchHooks PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
+        shadow_batch_install_test
+        ShadowBatchInstall
+        tests/shadow_batch_install_test.cpp
+    )
+    target_sources(
+        shadow_batch_install_test
+        PRIVATE "${_shadow_batch_test_dir}/shadow_batch_install.h"
+    )
+    target_include_directories(
+        shadow_batch_install_test
+        PRIVATE "${_shadow_batch_test_dir}"
+    )
+    set_tests_properties(ShadowBatchInstall PROPERTIES TIMEOUT 30)
+
     set(_adaptive_balance_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/adaptive-balance-toggle"
     )
@@ -1733,6 +1794,7 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/fov_settings.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_blur.cmake")
 
     add_controller_test(
@@ -1849,12 +1911,15 @@ if(BUILD_CONTROLLER_TESTS)
             "${_native_lighting_material_guard_test_dir}/native_lighting_material_utilities_under_test.h"
             "${_native_lighting_material_guard_test_dir}/native_lighting_material_types_under_test.h"
             "${_native_lighting_material_guard_test_dir}/native_lighting_material_pbr_under_test.h"
+            "${_native_lighting_material_guard_test_dir}/render_pass_admission_routing_under_test.h"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_native_lighting_material_guard_test_dir}" -P
             "${PROJECT_SOURCE_DIR}/tests/extract_native_lighting_material_guard.cmake"
         DEPENDS
             src/Hooks.cpp
+            src/Features/LightLimitFix.cpp
+            src/Features/TerrainBlending.cpp
             src/TruePBR.cpp
             src/TruePBR.h
             src/ShaderCache.h
@@ -1882,6 +1947,22 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${_native_lighting_material_guard_test_dir}"
     )
     set_tests_properties(NativeLightingMaterialGuard PROPERTIES TIMEOUT 30)
+
+    add_controller_test(
+        render_pass_admission_routing_test
+        RenderPassAdmissionRouting
+        tests/render_pass_admission_routing_test.cpp
+    )
+    target_sources(
+        render_pass_admission_routing_test
+        PRIVATE
+            "${_native_lighting_material_guard_test_dir}/render_pass_admission_routing_under_test.h"
+    )
+    target_include_directories(
+        render_pass_admission_routing_test
+        PRIVATE "${_native_lighting_material_guard_test_dir}"
+    )
+    set_tests_properties(RenderPassAdmissionRouting PROPERTIES TIMEOUT 30)
 
     set(_ordinary_save_state_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/ordinary-save-state"
@@ -2062,39 +2143,16 @@ if(BUILD_CONTROLLER_TESTS)
         tests/sharpener_bindings_test.cpp
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
-    set(_skylighting_slice_test_dir
-        "${CMAKE_CURRENT_BINARY_DIR}/generated/skylighting-slice"
+    include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_d3d_shader_test(
+        ambient_balance_shader_test
+        AmbientBalanceShader
+        tests/ambient_balance_shader_test.cpp
     )
-    set(_skylighting_slice_naming_header
-        "${_skylighting_slice_test_dir}/d3d_resource_naming.h"
-    )
-    add_custom_command(
-        OUTPUT "${_skylighting_slice_naming_header}"
-        COMMAND
-            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            "-DOUTPUT_DIRECTORY=${_skylighting_slice_test_dir}" -P
-            "${PROJECT_SOURCE_DIR}/tests/extract_d3d_resource_naming.cmake"
-        DEPENDS
-            "${PROJECT_SOURCE_DIR}/src/Utils/D3D.cpp"
-            tests/extract_d3d_resource_naming.cmake
-        VERBATIM
-    )
-    add_controller_test(
+    add_d3d_shader_test(
         skylighting_probe_slice_test
         SkylightingProbeSlice
         tests/skylighting_probe_slice_test.cpp
-    )
-    target_sources(
-        skylighting_probe_slice_test
-        PRIVATE "${_skylighting_slice_naming_header}"
-    )
-    target_include_directories(
-        skylighting_probe_slice_test
-        PRIVATE "${_skylighting_slice_test_dir}"
-    )
-    target_link_libraries(
-        skylighting_probe_slice_test
-        PRIVATE d3d11.lib d3dcompiler.lib
     )
     set_tests_properties(
         SkylightingProbeSlice
@@ -2621,6 +2679,7 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/ScreenSpaceGI.cpp
             src/ProfilerDevBenchBridge.cpp
             src/Api/AcceptedDrawService.cpp
+            tests/extract_source_region.cmake
             tests/extract_ocu_effect_integration.cmake
         VERBATIM
     )
@@ -2642,6 +2701,7 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+    include(tests/menu_frame_stability.cmake)
     add_controller_test(
         shader_cache_disable_policy_test
         ShaderCacheDisablePolicy
@@ -2700,6 +2760,7 @@ if(BUILD_CONTROLLER_TESTS)
         volumetric_lighting_tuning_policy_test
         PRIVATE nlohmann_json::nlohmann_json
     )
+    include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     add_controller_test(
         vr_depth_culling_enable_policy_test
         VRDepthCullingEnablePolicy
@@ -2713,6 +2774,60 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_definitions(
         vr_depth_culling_telemetry_policy_test
         PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    set(_depth_culling_ui_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/depth-culling-ui"
+    )
+    set(_depth_culling_ui_test_headers
+        "${_depth_culling_ui_test_dir}/vr_depth_culling_settings_members.h"
+        "${_depth_culling_ui_test_dir}/vr_depth_culling_settings_ui_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_depth_culling_ui_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_depth_culling_ui_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_depth_culling_settings.cmake"
+        DEPENDS
+            src/Features/VR.cpp
+            src/Features/VR.h
+            tests/extract_vr_depth_culling_settings.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_depth_culling_settings_ui_test
+        VRDepthCullingSettingsUI
+        tests/vr_depth_culling_settings_ui_test.cpp
+    )
+    target_sources(
+        vr_depth_culling_settings_ui_test
+        PRIVATE ${_depth_culling_ui_test_headers}
+    )
+    target_include_directories(
+        vr_depth_culling_settings_ui_test
+        PRIVATE "${_depth_culling_ui_test_dir}"
+    )
+    add_controller_test(
+        vr_depth_culling_settings_test
+        VRDepthCullingSettings
+        tests/vr_depth_culling_settings_test.cpp
+    )
+    target_link_libraries(
+        vr_depth_culling_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
+        menu_depth_culling_settings_policy_test
+        MenuDepthCullingSettingsPolicy
+        tests/menu_depth_culling_settings_policy_test.cpp
+    )
+    target_compile_definitions(
+        menu_depth_culling_settings_policy_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    target_link_libraries(
+        menu_depth_culling_settings_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(
         vr_depth_culling_temporal_policy_test
@@ -2800,6 +2915,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${PROJECT_SOURCE_DIR}/include" "${_ocu_effect_test_dir}"
     )
     set_tests_properties(AcceptedDrawService PROPERTIES TIMEOUT 30)
+    include(tests/vr_menu_pointer.cmake)
     add_executable(
         preset_compatibility_test
         EXCLUDE_FROM_ALL

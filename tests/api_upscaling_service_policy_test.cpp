@@ -18,6 +18,33 @@ namespace
 int main()
 {
 	try {
+		Capabilities001 fsrCapabilities;
+		fsrCapabilities.availableMethodMask =
+			1ull << static_cast<std::uint32_t>(Method::kFSR);
+		fsrCapabilities.fsrRuntimeUnavailableConditions[static_cast<std::uint32_t>(FSRRuntime::kFSR4)] =
+			kConditionProviderCheckPending | kConditionRestartRequired;
+		Profile001 fsr4Target;
+		fsr4Target.method = Method::kFSR;
+		fsr4Target.fsrRuntime = FSRRuntime::kFSR4;
+		Check(
+			CSX::Api::ResolveFSRRuntimeFallbackConditions(
+				fsr4Target,
+				fsrCapabilities) == kConditionProviderCheckPending,
+			"FSR4 fallback did not retain only its non-blocking provider condition");
+		fsr4Target.fsrRuntime = FSRRuntime::kFSR3;
+		Check(
+			CSX::Api::ResolveFSRRuntimeFallbackConditions(
+				fsr4Target,
+				fsrCapabilities) == kConditionNone,
+			"FSR3 admission inherited the FSR4 provider condition");
+		fsr4Target.fsrRuntime = FSRRuntime::kFSR4;
+		fsrCapabilities.availableMethodMask = 0;
+		Check(
+			CSX::Api::ResolveFSRRuntimeFallbackConditions(
+				fsr4Target,
+				fsrCapabilities) == kConditionNone,
+			"FSR4 fallback bypassed base-method unavailability");
+
 		const auto directLoading = CSX::Api::ResolveUpscalingAdmission(
 			kConditionLoadingTransition | kConditionTransitionPending,
 			RequestPurpose::kDirect,
@@ -49,6 +76,38 @@ int main()
 			false);
 		Check((providerPending.blockingConditions & kConditionProviderCheckPending) != 0, "loading handoff bypassed provider readiness");
 
+		const auto fsrFallbackPending = CSX::Api::ResolveUpscalingAdmission(
+			kConditionLoadingTransition,
+			RequestPurpose::kEnvironmentProfileTransition,
+			PersistencePolicy::kRuntimeOnly,
+			false,
+			kConditionProviderCheckPending);
+		Check((fsrFallbackPending.observedConditions & kConditionProviderCheckPending) != 0,
+			"FSR fallback admission dropped the pending-provider observation");
+		Check(fsrFallbackPending.blockingConditions == 0,
+			"FSR fallback admission retained a non-blocking pending-provider condition");
+		Check(fsrFallbackPending.route == AdmissionRoute::kLoadingDoorHandoff,
+			"FSR fallback admission did not retain the loading-door route");
+
+		const auto fsrFallbackUnavailable = CSX::Api::ResolveUpscalingAdmission(
+			kConditionNone,
+			RequestPurpose::kDirect,
+			PersistencePolicy::kRuntimeOnly,
+			false,
+			kConditionProviderUnavailable);
+		Check((fsrFallbackUnavailable.observedConditions & kConditionProviderUnavailable) != 0,
+			"FSR fallback admission dropped the unavailable-provider observation");
+		Check(fsrFallbackUnavailable.blockingConditions == 0,
+			"FSR fallback admission retained a non-blocking unavailable-provider condition");
+
+		const auto preexistingProviderFailure = CSX::Api::ResolveUpscalingAdmission(
+			kConditionProviderUnavailable,
+			RequestPurpose::kDirect,
+			PersistencePolicy::kRuntimeOnly,
+			false,
+			kConditionProviderUnavailable);
+		Check((preexistingProviderFailure.blockingConditions & kConditionProviderUnavailable) != 0,
+			"fallback telemetry suppressed a pre-existing provider failure");
 		const auto persistenceUnavailable = CSX::Api::ResolveUpscalingAdmission(
 			kConditionLoadingTransition,
 			RequestPurpose::kEnvironmentProfileTransition,

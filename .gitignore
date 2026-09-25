@@ -29,3 +29,7 @@ features/Upscaling/Shaders/Upscaling/Streamline/sl.reflex.dll
 /.csx-unified-presets.lock
 /.csx-unified-presets.transaction.json
 /.csx-unified-presets.transaction.json.tmp
+
+# Historical gameft copies stay local while automation owns the toolchain.
+/tools/gameft-sw/
+/tests/gameft_stack_wait_test.ps1

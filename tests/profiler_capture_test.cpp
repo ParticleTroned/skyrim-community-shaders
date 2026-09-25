@@ -1,9 +1,19 @@
 #include "Profiler.h"
+#include "Utils/ResourceName.h"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+
+namespace Util
+{
+	void SetResourceName(ID3D11DeviceChild* resource, const char* format, ...)
+	{
+		if (!resource || !std::string_view(format).starts_with("Profiler::WholeFrame"))
+			throw std::runtime_error("profiler query missing shared resource naming");
+	}
+}
 
 namespace
 {
@@ -33,8 +43,9 @@ namespace
 		ID3D11Device device;
 		ID3D11DeviceContext context;
 		Profiler profiler;
-		Fixture()
+		explicit Fixture(int failedQueryIndex = -1)
 		{
+			device.failedQueryIndex = failedQueryIndex;
 			profiler.Initialize(&device, &context);
 			profiler.SetUserEnabled(true);
 		}
@@ -49,6 +60,55 @@ namespace
 				profiler.EndFrame(frame);
 		}
 	};
+
+	void QueryAllocationFailure()
+	{
+		for (const auto mode : { Mode::CPU, Mode::GPU, Mode::Both }) {
+			// Allocation order is frame query, then begin/end for each scope.
+			for (int failedQuery = 0; failedQuery < 5; ++failedQuery) {
+				Fixture f(failedQuery);
+				f.Arm(mode);
+				const auto clock = profilerTestClock;
+				const bool nested = failedQuery >= 3;
+				if (nested)
+					Check(f.profiler.BeginPass("Parent::Healthy", false), "healthy parent refused");
+				const bool acquired = f.profiler.BeginPass("Child::MissingQuery", false);
+				Check(acquired == (mode != Mode::GPU), "query failure ignored capture mode");
+				if (acquired)
+					f.profiler.EndPass(false);
+				if (nested)
+					f.profiler.EndPass(false);
+				f.profiler.EndFrame(1);
+				if (mode == Mode::GPU) {
+					Check(profilerTestClock == clock, "GPU-only query failure sampled CPU clock");
+					Check(f.profiler.GetCpuPublicationCount() == 0, "GPU-only failure published CPU timing");
+				} else {
+					Check(f.profiler.GetCapturedCpuFrameCount() == 1 && f.profiler.GetCpuPublicationCount() == 1, "query failure delayed CPU publication");
+					Near(Find(f.profiler.GetImmediateCpuResults(), "Child::MissingQuery").cpuTimeMs, 1, "query failure lost CPU fallback");
+					Near(f.profiler.GetImmediateCpuTotalTimeMs(), nested ? 3.0f : 1.0f, "query failure corrupted CPU nesting");
+				}
+				if (mode == Mode::CPU || failedQuery == 0)
+					Check(f.context.writes == 0, "unavailable GPU frame issued query writes");
+				f.Drain(2);
+				for (const auto& timer : f.profiler.GetResults()) {
+					if (timer.name == "Child::MissingQuery")
+						Check(!timer.hasGpu && !timer.activeGpu && timer.historyCount == 0, "missing query fabricated a GPU sample");
+				}
+				if (nested && mode != Mode::CPU)
+					Check(Find(f.profiler.GetResults(), "Parent::Healthy").hasGpu, "failed child discarded healthy parent GPU timing");
+
+				f.device.failedQueryIndex = -1;
+				f.device.queryCreations = 0;
+				f.profiler.Initialize(&f.device, &f.context);
+				f.Arm(Mode::Both);
+				Pass(f.profiler, "Recovered::Pass");
+				f.profiler.EndFrame(1);
+				f.Drain(2);
+				const auto& recovered = Find(f.profiler.GetResults(), "Recovered::Pass");
+				Check(recovered.hasCpu && recovered.hasGpu, "device reinitialization did not recover timing");
+			}
+		}
+	}
 
 	void CpuOnlyAndModeSwitch()
 	{
@@ -267,6 +327,7 @@ namespace
 int main()
 {
 	try {
+		QueryAllocationFailure();
 		CpuOnlyAndModeSwitch();
 		PendingGpuDoesNotBlockCpu();
 		CapacityAndMixedNesting();

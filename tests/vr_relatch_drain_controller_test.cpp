@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -48,6 +49,25 @@ struct ScopeExit
 {
 	Callback callback;
 	~ScopeExit() { callback(); }
+};
+
+struct CountingRecursiveMutex
+{
+	std::recursive_mutex mutex;
+	uint32_t acquisitions = 0;
+	uint32_t depth = 0;
+
+	void lock()
+	{
+		mutex.lock();
+		++acquisitions;
+		++depth;
+	}
+	void unlock()
+	{
+		--depth;
+		mutex.unlock();
+	}
 };
 
 struct Identity
@@ -220,8 +240,13 @@ struct Upscaling
 		} metrics;
 	} transition;
 	using VRRenderScaleTransitionMetrics = decltype(transition.metrics.current);
-	Transition GetVRRenderScaleTransitionSnapshot() const { return transition; }
-	mutable std::recursive_mutex perfModeRenderTargetRecreateQueueMutex;
+	mutable uint32_t transitionSnapshotLockDepth = 0;
+	Transition GetVRRenderScaleTransitionSnapshot() const
+	{
+		transitionSnapshotLockDepth = perfModeRenderTargetRecreateQueueMutex.depth;
+		return transition;
+	}
+	mutable CountingRecursiveMutex perfModeRenderTargetRecreateQueueMutex;
 	std::atomic<bool> pendingPerfModeRenderTargetRecreate{ true };
 	std::atomic<uint64_t> pendingPerfModeRenderTargetRecreateRecoveryEpoch{ 0 };
 	std::atomic<bool> pendingPerfModeRenderTargetRecreateForcePhysical{ false };
@@ -260,6 +285,7 @@ struct Upscaling
 	void RecordVRRenderScaleRetryEvent(VRRenderScaleRetryTelemetry::Event a_event) { events.push_back(a_event); }
 	void RecordVRRenderScaleRelatchDrainEvent(VRRenderScaleRetryTelemetry::EventType, const char*);
 	bool RequiresVRRenderScaleRelatchFrameBoundary() const;
+	bool RequiresVRRenderScaleRelatchFrameBoundaryLocked() const;
 	void ClearVRRenderScaleRelatchDrain();
 	VRVendorResourceResetResult PollVRRenderScaleRelatchDrain();
 	void ServiceVRRenderScaleRelatchAtFrameBoundary();
@@ -317,8 +343,10 @@ namespace
 
 	void Require(bool a_condition, const char* a_message)
 	{
-		if (!a_condition)
+		if (!a_condition) {
+			std::fprintf(stderr, "%s\n", a_message);
 			throw std::runtime_error(a_message);
+		}
 	}
 
 	Upscaling& Reset()
@@ -341,6 +369,34 @@ namespace
 	bool HasReason(const Upscaling& a_controller, std::string_view a_reason)
 	{
 		return std::ranges::any_of(a_controller.events, [&](const auto& a_event) { return a_event.reason == a_reason; });
+	}
+
+	void BoundaryChecksKeepQueueOwnership()
+	{
+		{
+			auto& controller = Reset();
+			Require(controller.RequiresVRRenderScaleRelatchFrameBoundary(), "Standalone boundary check rejected its owner");
+			Require(controller.perfModeRenderTargetRecreateQueueMutex.acquisitions == 1 &&
+						controller.perfModeRenderTargetRecreateQueueMutex.depth == 0 && controller.transitionSnapshotLockDepth == 1,
+				"Standalone boundary check did not inspect ownership under one queue lock");
+		}
+		for (const bool pending : { false, true }) {
+			auto& controller = Reset();
+			controller.pendingPerfModeRenderTargetRecreate = pending;
+			controller.ServiceVRRenderScaleRelatchAtFrameBoundary();
+			Require(controller.perfModeRenderTargetRecreateQueueMutex.acquisitions == 1 &&
+						controller.perfModeRenderTargetRecreateQueueMutex.depth == 0,
+				"Boundary service reacquired or leaked its queue lock");
+			if (pending) {
+				Require(controller.transitionSnapshotLockDepth == 1 && controller.fidelityFX.polls == 1 && controller.applyCalls == 0,
+					"Pending boundary lost queue ownership or changed provider polling");
+			} else {
+				Require(controller.vrRenderScaleRelatchDrain.epoch == 0 && controller.vrRenderScaleRelatchDrainEpoch == 0 &&
+							controller.fidelityFX.fsrRelatchDrainHostFence.resets > 0 && controller.streamline.dlssRelatchDrainFence.resets > 0 &&
+							controller.fidelityFX.polls == 0 && controller.applyCalls == 0,
+					"Idle boundary skipped stale provider-drain cleanup");
+			}
+		}
 	}
 
 	void RequiresExactOrdinaryOwner()
@@ -634,11 +690,13 @@ namespace
 		Require(caught && controller.applyCalls == 1 && controller.applyBoundaryActive &&
 					!g_vrRelatchFrameBoundaryActive && g_vrRelatchDrainCommitEpoch == 0,
 			"Downstream failure leaked native boundary admission");
+		Require(controller.perfModeRenderTargetRecreateQueueMutex.depth == 0, "Downstream failure leaked queue ownership");
 	}
 }
 
 int main()
 {
+	BoundaryChecksKeepQueueOwnership();
 	RequiresExactOrdinaryOwner();
 	PendingBudgetPreservesConservativeRetry();
 	ReadyRequiresMatchingQueuedRetry();

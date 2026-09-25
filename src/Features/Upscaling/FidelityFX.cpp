@@ -2905,6 +2905,14 @@ bool FidelityFX::TryGetCurrentAdapterDesc(
 	return true;
 }
 
+std::optional<uint32_t> FidelityFX::GetCurrentAdapterVendorID() const
+{
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (TryGetCurrentAdapterDesc(adapterDesc))
+		return adapterDesc.VendorId;
+	return std::nullopt;
+}
+
 bool FidelityFX::IsAmdAdapterDetected() const
 {
 	DXGI_ADAPTER_DESC adapterDesc{};

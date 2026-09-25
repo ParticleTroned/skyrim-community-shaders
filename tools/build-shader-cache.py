@@ -847,6 +847,10 @@ class PackagedCompatibilityInventory:
                 if not changes_defines and not shared:
                     raise SystemExit(f"packaged cache compatibility records disagree on content coverage: {name}/{relative}")
                 if changes_defines:
+                    if shared:
+                        raise SystemExit(
+                            f"packaged cache compatibility record does not reflect its shader defines: {name}/{relative}"
+                        )
                     changed |= set(contents.values()) != set(default[relative].values())
                 else:
                     changed |= any(contents[content] != default[relative][content] for content in shared)
@@ -2319,13 +2323,19 @@ def copy_publication_candidate(source: Path, staging: Path, label: str) -> None:
             f"refusing to replace unexpected publication staging path: {staging}"
         )
 
+    staging_owned = False
     try:
         if source.is_dir():
-            shutil.copytree(source, staging)
+            staging.mkdir()
+            staging_owned = True
+            shutil.copytree(source, staging, dirs_exist_ok=True)
         else:
+            with staging.open("xb"):
+                staging_owned = True
             shutil.copy2(source, staging)
     except OSError as exc:
-        discard_publication_staging(staging)
+        if staging_owned:
+            discard_publication_staging(staging)
         raise SystemExit(f"failed to stage {label} for publication: {staging}") from exc
 
 
@@ -2333,6 +2343,12 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
     """Publish a fully validated cache while preserving the previous cache on failure."""
     destination = runtime_output_destination(out_root, runtime)
     staging = out_root / f".{runtime}.publishing"
+    recovery_root = out_root / f".{runtime}.previous"
+    if path_entry_exists(recovery_root):
+        raise SystemExit(
+            f"refusing to publish while a previous {runtime} cache recovery "
+            f"path exists: {recovery_root}"
+        )
     copy_publication_candidate(candidate_root, staging, f"{runtime} cache")
 
     if not path_entry_exists(destination):
@@ -2345,15 +2361,20 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
             ) from exc
         return destination
 
-    backup = candidate_root.parent / f"{runtime}.previous"
-    if backup.exists():
+    try:
+        recovery_root.mkdir()
+    except OSError as exc:
         discard_publication_staging(staging)
-        raise RuntimeError(f"unexpected temporary backup already exists: {backup}")
+        raise SystemExit(
+            f"could not reserve the {runtime} cache recovery path: {recovery_root}"
+        ) from exc
+    backup = recovery_root / runtime
 
     try:
         destination.replace(backup)
     except OSError as exc:
         discard_publication_staging(staging)
+        discard_publication_staging(recovery_root)
         raise SystemExit(
             f"could not move the existing {runtime} cache aside: {destination}"
         ) from exc
@@ -2366,16 +2387,21 @@ def publish_runtime_cache(candidate_root: Path, out_root: Path, runtime: str) ->
             raise SystemExit(
                 f"failed to publish {runtime} cache and could not restore "
                 f"the previous output: {destination}; validated staging "
-                f"retained at {staging}"
+                f"retained at {staging}; previous cache retained at {backup}"
             ) from restore_error
+        discard_publication_staging(recovery_root)
         raise SystemExit(
             f"failed to publish {runtime} cache: {destination}; "
             f"validated staging retained at {staging} ({exc})"
         ) from exc
 
-    # The old cache remains inside the isolated temporary workspace until it
-    # is cleaned up after this invocation. It is never recursively deleted
-    # from the user-selected output root.
+    try:
+        remove_publication_staging(recovery_root)
+    except OSError as exc:
+        print(
+            f"warning: published {runtime} cache but could not remove previous "
+            f"cache recovery path {recovery_root}: {exc}"
+        )
     return destination
 
 

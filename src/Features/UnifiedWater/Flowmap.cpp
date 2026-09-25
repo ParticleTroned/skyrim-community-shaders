@@ -1,4 +1,4 @@
-﻿#include "Flowmap.h"
+#include "Flowmap.h"
 
 #include "Utils/D3DContextProtection.h"
 #include "Utils/RendererContextAccess.h"

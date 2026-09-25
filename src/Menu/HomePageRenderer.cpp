@@ -510,6 +510,8 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	drawList->PopClipRect();
 
 	// Set absolute font size for better readability in this welcome dialog
+	// ImGui retains the window scale, so remove it before measuring the base font.
+	ImGui::SetWindowFontScale(1.0f);
 	float targetFontSize = 27.0f * uiScale;
 	float currentFontSize = std::max(ImGui::GetFontSize(), 1.0f);
 	float fontScale = targetFontSize / currentFontSize;

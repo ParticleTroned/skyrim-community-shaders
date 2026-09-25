@@ -111,8 +111,9 @@ foreach(_forbidden_startup_mutation IN ITEMS
 endforeach()
 
 foreach(_renderer_contract IN ITEMS
-    "constexpr double kFeatureCostInitialWaitSeconds = 5.0"
-    "constexpr double kFeatureCostComparisonWaitSeconds = 9.0"
+    "constexpr double kFeatureCostInitialWaitSeconds = 10.0"
+    "constexpr double kFeatureCostComparisonWaitSeconds = 10.0"
+    "constexpr double kFeatureCostRestoreWaitSeconds = 1.0"
     "constexpr double kFeatureCostRestartCooldownSeconds = 10.0"
     "constexpr double kFeatureCostTraceIntervalSeconds = 0.1"
     "kFeatureCostMeasurementBlockCount == 5"

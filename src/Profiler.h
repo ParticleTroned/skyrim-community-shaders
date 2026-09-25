@@ -1,9 +1,12 @@
 #pragma once
 
+#include "Utils/FlatFrameTiming.h"
+
 #include <atomic>
 #include <cstdint>
 #include <d3d11.h>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -127,7 +130,8 @@ public:
 		uint32_t resolvedFrames = 0;
 	};
 
-	void Initialize(ID3D11Device* device, ID3D11DeviceContext* context);
+	/** @brief Flat timing is opt-in; VR retains the original pass capture lifecycle. */
+	void Initialize(ID3D11Device* device, ID3D11DeviceContext* context, bool flatRuntime = false);
 	void Release();
 	void SetUserEnabled(bool a_enabled);
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
@@ -152,6 +156,12 @@ public:
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
 	void EndFrame(uint32_t a_frameCount);
+	/** @brief Closes flat timing before Present; true grants ownership of the matching completion. */
+	bool BeginFlatPresent(uint32_t frameCount, UINT flags, bool supported = true);
+	/** @brief Accepts or rejects that Present, then starts the next flat frame. */
+	void CompleteFlatPresent(HRESULT result);
+	/** @brief Null on VR; flat history retains source IDs while GPU queries are pending. */
+	const Util::FlatFrameTiming::History* GetFlatTiming() const { return flatTiming ? &flatTiming->history : nullptr; }
 
 	const std::vector<TimerResult>& GetResults() const { return results; }
 	/** @brief Returns the namespace used to group and aggregate a timer name. */
@@ -371,6 +381,30 @@ private:
 	void ResetFrameState(FrameQueries& frame);
 	void ResetPendingFrames();
 	static bool HasPendingFrameData(const FrameQueries& frame);
+
+	struct FlatTiming
+	{
+		struct Queries
+		{
+			winrt::com_ptr<ID3D11Query> begin, end;
+			uint64_t presentId = 0;
+			bool started = false;
+		};
+		Queries queries[kFrameLatency];
+		Util::FlatFrameTiming::History history;
+		Util::FlatFrameTiming::Sample pending;
+		double cpuBeginMs = 0.0;
+		double presentStartMs = 0.0;
+		uint32_t pendingSlot = 0;
+		uint64_t pendingEpoch = 0;
+		bool presentPending = false;
+		bool hasQuerySlot = false;
+		bool supported = true;
+		void Reset();
+	};
+	std::unique_ptr<FlatTiming> flatTiming;
+	uint64_t flatSourceEpoch = 0;
+	double ReadFlatClockMs() const;
 };
 
 #define CS_PROFILE_SCOPE_CONCAT_INNER(a, b) a##b

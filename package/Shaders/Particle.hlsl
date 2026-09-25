@@ -314,7 +314,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	float3 dirLightRaw = SharedData::DirLightColor.xyz * dirWorldShadow * dirSoftShadow * dirDetailedShadow;
 	float3 dirLightColor = Color::DirectionalLight(dirLightRaw / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
-	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 1))));
+	float3 ambientColor = Color::ApplyAmbientBalance(Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 1)))));
 
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;

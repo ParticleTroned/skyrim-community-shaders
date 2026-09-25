@@ -195,3 +195,78 @@ foreach(_forbidden_behavior IN ITEMS
 endforeach()
 
 message(STATUS "Menu DevBench COC preflight contract is coherent")
+
+foreach(_removed_surface IN ITEMS
+    "set_depth_culling_performance_mode"
+    "DepthCullingPerformanceMode"
+)
+    string(FIND "${_bridge}" "${_removed_surface}" _removed_position)
+    if(NOT _removed_position EQUAL -1)
+        message(FATAL_ERROR "Removed depth-culling mode remains exposed: ${_removed_surface}")
+    endif()
+endforeach()
+
+foreach(_required_action IN ITEMS set_depth_culling_settings set_depth_culling_legacy_mode)
+    set(_found FALSE)
+    foreach(_index RANGE 0 ${_action_last})
+        string(JSON _action GET "${_descriptor}" inputSchema properties action enum ${_index})
+        if(_action STREQUAL _required_action)
+            set(_found TRUE)
+        endif()
+    endforeach()
+    if(NOT _found)
+        message(FATAL_ERROR "Depth-culling action missing from schema: ${_required_action}")
+    endif()
+endforeach()
+
+string(JSON _culling_schema GET "${_descriptor}" inputSchema properties depthCulling)
+string(JSON _minimum_fields GET "${_culling_schema}" minProperties)
+string(JSON _additional_fields GET "${_culling_schema}" additionalProperties)
+string(JSON _field_count LENGTH "${_culling_schema}" properties)
+if(NOT _minimum_fields EQUAL 1 OR _additional_fields OR NOT _field_count EQUAL 4)
+    message(FATAL_ERROR "Depth-culling update must be nonempty and reject unknown fields")
+endif()
+foreach(_enable_field IN ITEMS exteriorEnabled interiorEnabled)
+    string(JSON _field_type GET "${_culling_schema}" properties ${_enable_field} type)
+    if(NOT _field_type STREQUAL "boolean")
+        message(FATAL_ERROR "Depth-culling enable must be boolean: ${_enable_field}")
+    endif()
+endforeach()
+foreach(_extent_field IN ITEMS exteriorMinExtent interiorMinExtent)
+    string(JSON _field_type GET "${_culling_schema}" properties ${_extent_field} type)
+    string(JSON _minimum GET "${_culling_schema}" properties ${_extent_field} minimum)
+    string(JSON _maximum GET "${_culling_schema}" properties ${_extent_field} maximum)
+    if(NOT _field_type STREQUAL "number" OR NOT _minimum EQUAL 0 OR NOT _maximum EQUAL 1000)
+        message(FATAL_ERROR "Depth-culling extent schema does not match slider bounds: ${_extent_field}")
+    endif()
+endforeach()
+foreach(_status_field IN ITEMS
+    "depthCullingExteriorEnabled"
+    "depthCullingInteriorEnabled"
+    "depthCullingExteriorMinExtent"
+    "depthCullingInteriorMinExtent"
+    "depthCullingLegacyMode"
+    "depthCullingConfiguredPolicy"
+)
+    string(FIND "${_bridge}" "${_status_field}" _status_position)
+    if(_status_position EQUAL -1)
+        message(FATAL_ERROR "Depth-culling status is incomplete: ${_status_field}")
+    endif()
+endforeach()
+
+string(FIND "${_bridge}" "MenuDepthCullingSettingsPolicy::TryParse(" _culling_validate)
+string(FIND "${_bridge}" "return RunOnMainThread([action," _culling_dispatch)
+string(FIND "${_bridge}" "MenuDepthCullingSettingsPolicy::Apply(" _culling_apply)
+if(_culling_validate EQUAL -1 OR _culling_dispatch EQUAL -1 OR _culling_apply EQUAL -1 OR
+    _culling_validate GREATER _culling_dispatch OR _culling_dispatch GREATER _culling_apply)
+    message(FATAL_ERROR "Depth-culling mutation must follow complete validation and main-thread dispatch")
+endif()
+message(STATUS "Independent depth-culling DevBench settings contract is coherent")
+
+string(JSON _ambient_schema GET "${_descriptor}" inputSchema properties visuals properties ambient)
+string(JSON _ambient_type GET "${_ambient_schema}" type)
+string(JSON _ambient_min GET "${_ambient_schema}" minimum)
+string(JSON _ambient_max GET "${_ambient_schema}" maximum)
+if(NOT _ambient_type STREQUAL "number" OR NOT _ambient_min EQUAL 0 OR NOT _ambient_max EQUAL 5)
+    message(FATAL_ERROR "Adaptive Balance Ambient schema must match its 0-5 slider")
+endif()

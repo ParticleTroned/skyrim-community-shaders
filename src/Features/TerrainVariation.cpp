@@ -81,7 +81,9 @@ void TerrainVariation::SetMeshSupportEnabled(bool a_enabled)
 void TerrainVariation::DataLoaded()
 {
 	std::unordered_set<std::string> paths;
+	bool pathsAvailable = false;
 	if (auto* dataHandler = RE::TESDataHandler::GetSingleton()) {
+		pathsAvailable = true;
 		auto addTextureSet = [&paths](RE::BGSTextureSet* textureSet) {
 			if (!textureSet)
 				return;
@@ -100,6 +102,7 @@ void TerrainVariation::DataLoaded()
 	}
 	const std::unique_lock lock(meshTextureMutex);
 	landscapeDiffusePaths.swap(paths);
+	landscapeDiffusePathsAvailable = pathsAvailable;
 	meshTextureCache.clear();
 	logger::info("TerrainVariation: collected {} landscape diffuse paths", landscapeDiffusePaths.size());
 }
@@ -118,7 +121,7 @@ bool TerrainVariation::IsLandscapeDiffuseTexture(const RE::BSFixedString& a_name
 	if (const auto it = meshTextureCache.find(key); it != meshTextureCache.end())
 		return it->second.landscape;
 	const auto canonical = TerrainVariationPolicy::CanonicaliseTexturePath(key);
-	const bool landscape = TerrainVariationPolicy::IsLandscapeDiffusePath(canonical, landscapeDiffusePaths);
+	const bool landscape = TerrainVariationPolicy::IsLandscapeDiffusePath(canonical, landscapeDiffusePaths, landscapeDiffusePathsAvailable);
 	meshTextureCache.emplace(key, CachedTexture{ a_name, landscape });
 	return landscape;
 }

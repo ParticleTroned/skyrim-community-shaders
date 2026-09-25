@@ -1,5 +1,11 @@
 # VR light ownership during COC
 
+The native dispatch implementation was revised on 2026-09-21 to retain
+only the current light and reselect live work after each render call.
+See [the PR96 dispatch review](vr-shadow-dispatch-review.md) for the
+regression, current validation and the unresolved circular-pass freeze.
+Historical build and runtime results below do not qualify this revision.
+
 ## Observed failure
 
 The 2026-09-12 diagnostic run in SkyrimVR PID 5236 completed its first
@@ -86,29 +92,43 @@ the descriptor-render call. No exception was recorded in this run. The
 zero-length NVIDIA command observed in the hang remains a separate finding;
 the capture does not establish which code wrote that command.
 
-The VR native shadow loop now takes its own local owning snapshot. It copies
-the active and pending owning lists and the accumulated render order under
-`lightQueueLock`, then releases the lock before virtual dispatch. The owning
-references survive the entire loop, independently of LLF frame/load resets.
-Rendering and final reference releases occur outside the engine lock.
-The shared `SceneLightSnapshot::RetainScene` method supplies the same list
-coverage to both native rendering and existing LLF consumers. Native capture
-omits the unused active-light enumeration and copies render order in one
-range assignment to avoid repeated vector growth under the queue lock.
-An empty, exhausted or initially null-terminated pass returns under the
-same lock before constructing the snapshot. It performs no allocation or
-light-reference acquisition.
+The VR native shadow loop selects from the live accumulated array under
+`lightQueueLock` before each dispatch. It copies only the selected light's
+reference from the active or pending owning lists, then releases the lock
+before virtual dispatch. That reference survives the complete render call,
+independently of LLF frame/load resets, and is released before selecting
+the next light. Rendering and lease releases occur outside the engine lock.
+`SceneLightSnapshot::OwnerIndex` stores non-owning list/slot hints, built
+once with reserved capacity on the first ordinary-light dispatch. Every
+hint is checked against the live owning list before acquiring a reference;
+moved or newly added owners use a live fallback lookup. Both this index
+and the existing frame snapshot share one owning-list traversal policy;
+clustered-light enumeration is unchanged. Empty and sun-only passes
+allocate nothing. An empty, exhausted or initially null-terminated pass
+acquires neither light nor scene references.
 
 The hook replaces the raw selection/dispatch loop at SkyrimVR+`0x13231FB`
 through `0x1323230`. Ghidra analysis of the retained PID 22880 image verifies
 the native selector at `0x12FA250`: it indexes the raw array at node+`0x258`.
-The replacement checks keys against retained owners before reading a light
-or its virtual table. It preserves the original render order, the native
-index passed by reference, and null-terminated traversal, and additionally
-bounds traversal by the captured array size. An unknown owner, a non-shadow
-object, or a non-advancing index ends the pass. Allocation failure skips the
-pass after releasing the lock and any acquired references. Rendering
-exceptions propagate normally while local references unwind.
+The replacement acquires a current owner before reading a light or its
+virtual table. Ordinary lights require an owning-list reference; the exact
+`sunShadowDirLight` requires ownership of the scene that directly deletes
+it. The scene remains retained until the dispatch loop exits. No intrusive
+reference is added to the sun. The loop preserves the live render order,
+native index passed by reference and null termination, with an additional
+current-array bounds check. Cleared, shortened or null-terminated work is
+not replayed from a saved order. An unknown owner, a non-shadow object or a
+non-advancing index ends the pass. Rendering exceptions propagate normally
+while local references unwind. Index allocation failure releases the lock,
+logs once and skips the remainder of this pass; a subsequent call may retry.
+
+PR96 originally retained all lights and copied the work order for the whole
+loop. Its tests explicitly continued to render that copy after a worker
+cleared the live array. This differed from native selection and is no
+longer the contract. Lifetime retention alone does not keep withdrawn
+render work valid. The new regression fails against the original copied
+order and passes against live selection; it does not establish that this
+specific divergence created the later circular render-pass list.
 
 Installation is restricted to Skyrim VR 1.4.15 and requires all 184 bytes of
 the native function to match before either write. This covers the setup of
@@ -121,6 +141,68 @@ jump to the original loop continuation. Existing native render virtual hooks
 remain in the call path. This fix has no dependency on the shadow-lifetime
 observer or driver-command recorder. SE and AE receive no new executable
 patch or render-path change.
+
+### Historical scene-owned sun regression and correction
+
+The 2026-09-19 visual bisect isolated the player-following dark circle to
+PR96. The user reported its parent `5adb39d62981f855fd57af77c45bd57cf9b8a233`
+as good and `2e6d87cf763633917dbee54805476c7da0d2c995` as bad. Their AIOs
+have 351 byte-identical payload files, including every shader and vendor
+runtime DLL; only the CSX DLL, PDB and build manifest differ.
+
+-   Good Build ID: `19f694edc6364157dc69db8e5b10ce6efb9d49b8ccd373ce7c9ae523ab6e8fcc`.
+-   Bad Build ID: `3805f77bf2a16fd88c6b28889e1262b254a7c25fa76be213eedcc06b81392de2`.
+
+Read-only live-memory inspection of SkyrimVR PID 8724 establishes a
+different ownership contract for the sun's shadow light. The scene
+constructor stores it at node+`0x238` (`0x12F62F7`), and the scene destructor
+directly deletes it (`0x12F6551` through `0x12F6565`). It is not an owner
+from the queued-light lists. Its captured reference count was zero; its
+`IsShadowLight` virtual target (`0x134D130`) returns true. The native
+selector (`0x12FA250`) simply indexes the accumulated raw array.
+These observations came from live process bytes, not the packed executable.
+
+The previous owner lookup rejected this legitimate light and terminated
+the native shadow pass. The correction retains the scene node for a
+nonempty pass and recognizes only its exact captured `sunShadowDirLight`
+pointer. It never adds a reference to the directly owned sun: doing so
+could delete it when that artificial reference is released. Ordinary
+lights still require the existing owning-list snapshot. Unknown raw
+pointers, wrong types, stalled indices and capture failures retain their
+existing rejection behavior. The render order and index semantics are
+unchanged. Scene and light references are released outside the queue lock,
+including on exceptions; empty passes still acquire no references.
+
+The production-function regression test failed before this correction when
+the sun appeared between queued lights. With the correction it covers
+multi-cascade index advancement, queued-light teardown, zero sun reference
+traffic, retention of the scene through rendering and exceptions, capture
+failure/retry with only the sun present, and rejection of unrelated raw
+pointers. `SceneLightSnapshot` and
+`VRSceneGuards` pass; the latter reports 743 assertions.
+
+On 2026-09-19 the user confirmed "cricle gone" after receiving the corrected
+main-VR-NR AIO built from `e7be5cd29e965fa8445e32ca7582d1f287abf881`.
+Its verified producer Build ID is
+`47ea3a454e3f769f4aedc442b4d39d79504a00325f08d6a10f7aff74f59ca679`,
+and its DLL SHA-256 is
+`ae0475924f326de35cf6dc9327829872578be99b699dad82ade863453fc049b5`.
+This closes the reported dark-circle symptom for that delivered build.
+The confirmation is a user visual observation; runtime identity was not
+queried again. COC stability qualification remains pending, and later branch
+revisions are not qualified by this observation. The identical correction
+is committed on main-VR as `012e5139e0d3b96109c9a077137ba073ced35218`.
+
+Local bisect receipts, hashed live snapshots and test output are retained
+under `build/dark-circle-bisect/`. No new runtime hook, setting or diagnostic
+instrumentation is introduced by the correction.
+
+Adversarial review checked the narrow pointer-identity exception, destruction
+order, empty-pass behavior, and failure unwinding. The review added the
+sun-only capture allocation failure/retry case and explicit scene-reference
+balance assertions to the existing empty-pass, capture-failure and render
+exception tests. The shared capture helper and executable hook remain
+unchanged; both branches carry the same correction and tests.
 
 Focused validation after the second PR #96 adversarial review:
 

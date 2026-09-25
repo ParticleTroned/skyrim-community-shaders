@@ -84,6 +84,7 @@ private:
 	};
 	std::shared_mutex meshTextureMutex;
 	std::unordered_set<std::string> landscapeDiffusePaths;
+	bool landscapeDiffusePathsAvailable = false;
 	std::unordered_map<const char*, CachedTexture> meshTextureCache;
 
 	bool IsLandscapeDiffuseTexture(const RE::BSFixedString& a_name);

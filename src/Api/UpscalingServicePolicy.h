@@ -13,11 +13,17 @@ namespace CSX::Api
 		UpscalingAPI::AdmissionRoute route = UpscalingAPI::AdmissionRoute::kNone;
 	};
 
+	/** Reports optional FSR4 provider state when the base FSR method can fall back. */
+	std::uint64_t ResolveFSRRuntimeFallbackConditions(
+		const UpscalingAPI::Profile001& a_target,
+		const UpscalingAPI::Capabilities001& a_capabilities) noexcept;
+
 	UpscalingAdmissionDecision ResolveUpscalingAdmission(
 		std::uint64_t a_observedConditions,
 		UpscalingAPI::RequestPurpose a_purpose,
 		UpscalingAPI::PersistencePolicy a_persistence,
-		bool a_persistenceSupported) noexcept;
+		bool a_persistenceSupported,
+		std::uint64_t a_nonBlockingObservedConditions = UpscalingAPI::kConditionNone) noexcept;
 
 	bool IsUpscalingRuntimeNoChange(
 		bool a_transitionActive,

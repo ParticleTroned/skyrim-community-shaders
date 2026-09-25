@@ -133,7 +133,8 @@ public:
 	void OnUtilitySetupGeometry(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags, uint32_t a_callerRva = 0);
 	void OnShaderPropertySetupGeometry(RE::BSShaderProperty* a_shaderProperty, RE::BSGeometry* a_geometry, bool a_result, uint32_t a_callerRva = 0);
 	void OnSetDirtyStates(bool a_isCompute, uint32_t a_callerRva = 0);
-	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
+	/** Invalidates material admission when routing crosses a graphics callback boundary. */
+	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags, bool* a_admissionInvalidated = nullptr);
 
 	struct Hooks
 	{

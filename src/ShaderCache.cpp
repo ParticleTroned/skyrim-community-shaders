@@ -452,6 +452,8 @@ namespace SIE
 			return key;
 		}
 
+		bool ManagedShaderPackLayoutPresent();
+
 		Util::ShaderCacheManifest::Manifest& GetShaderCacheManifest()
 		{
 			static Util::ShaderCacheManifest::Manifest manifest;
@@ -534,18 +536,24 @@ namespace SIE
 
 		void DiscardShaderCacheManifestLocked()
 		{
+			if (ManagedShaderPackLayoutPresent())
+				return;
 			GetShaderCacheManifest().Clear();
 			g_manifestWriteCount.store(0, std::memory_order_relaxed);
 		}
 
 		void ReloadShaderCacheManifestLocked()
 		{
+			if (ManagedShaderPackLayoutPresent())
+				return;
 			GetShaderCacheManifest().Load(L"Data/ShaderCache/Manifest.json");
 			g_manifestWriteCount.store(0, std::memory_order_relaxed);
 		}
 
 		void FlushShaderCacheManifestLocked()
 		{
+			if (ManagedShaderPackLayoutPresent())
+				return;
 			if (!GetShaderCacheManifest().Save())
 				logger::warn("Failed to flush Data/ShaderCache/Manifest.json");
 		}
@@ -561,6 +569,8 @@ namespace SIE
 			const Util::ContentHash::Hash128& a_sourceDigest,
 			const Util::ContentHash::Hash128& a_compileStateDigest)
 		{
+			if (ManagedShaderPackLayoutPresent())
+				return;
 			auto& manifest = GetShaderCacheManifest();
 			const auto manifestKey = GetManifestKey(a_diskPath);
 			const auto combined = Util::ContentHash::CombineHashes(
@@ -700,8 +710,17 @@ namespace SIE
 					L"Data/ShaderCache/Developer.A.csxpack",
 					L"Data/ShaderCache/Developer.B.csxpack"
 				};
+				constexpr auto infoPath = L"Data/ShaderCache/Info.ini";
 				constexpr auto manifestPath = L"Data/ShaderCache/PackManifest.json";
-				std::array<bool, 5> present{};
+				constexpr std::array<const wchar_t*, Util::ShaderCachePack::kManagedLayoutMemberCount> managedPaths{
+					infoPath,
+					manifestPath,
+					packPaths[0],
+					packPaths[1],
+					packPaths[2],
+					packPaths[3]
+				};
+				Util::ShaderCachePack::LayoutMembers present{};
 				bool inspectionFailed = false;
 				auto memberPresent = [&](const wchar_t* a_path) {
 					std::error_code error;
@@ -712,13 +731,13 @@ namespace SIE
 					}
 					return exists || static_cast<bool>(error);
 				};
-				present[0] = memberPresent(manifestPath);
-				for (std::size_t index = 0; index < packPaths.size(); ++index) {
-					present[index + 1] = memberPresent(packPaths[index]);
-				}
+				for (std::size_t index = 0; index < managedPaths.size(); ++index)
+					present[index] = memberPresent(managedPaths[index]);
 				const auto presentCount = std::ranges::count(present, true);
-				const auto memberState = inspectionFailed ? Util::ShaderCachePack::LayoutState::PartialOrInvalid :
-				                                            Util::ShaderCachePack::ClassifyLayoutMembers(present);
+				const auto classifiedState = Util::ShaderCachePack::ClassifyLayoutMembers(present);
+				const auto memberState = inspectionFailed && classifiedState != Util::ShaderCachePack::LayoutState::Absent ?
+				                             Util::ShaderCachePack::LayoutState::PartialOrInvalid :
+				                             classifiedState;
 				if (memberState == Util::ShaderCachePack::LayoutState::Absent)
 					return;
 				packs.layoutState = Util::ShaderCachePack::LayoutState::PartialOrInvalid;
@@ -731,6 +750,16 @@ namespace SIE
 				}
 
 				try {
+					CSimpleIniA info;
+					info.SetUnicode();
+					const bool infoLoaded = info.LoadFile(infoPath) >= 0;
+					const auto* pluginVersion = infoLoaded ? info.GetValue("Cache", "PluginVersion") : nullptr;
+					const auto* shaderCacheAbi = infoLoaded ? info.GetValue("Cache", "ShaderCacheABI") : nullptr;
+					if (!pluginVersion || !shaderCacheAbi ||
+						!Util::ShaderCachePack::HasRequiredInfoMetadata(pluginVersion, shaderCacheAbi)) {
+						logger::error("Managed shader pack layout is installed but Info.ini is unreadable or incomplete");
+						return;
+					}
 					std::ifstream manifestStream(manifestPath);
 					if (!manifestStream) {
 						logger::error("Managed shader pack layout is installed but PackManifest.json is missing or unreadable");
@@ -900,21 +929,18 @@ namespace SIE
 				if (!identity)
 					return nullptr;
 				std::string error;
-				auto entry = a_store.Find(identity->exactKey, &error);
-				const bool exactMatch = entry.has_value();
-				if (!entry && error.empty()) {
-					entry = a_store.FindCompatible(
-						identity->logicalKey,
-						[&](std::string_view a_metadata) {
-							return IsCompatibleShaderPackMetadata(a_metadata, *identity);
-						},
-						&error);
-				}
+				auto entry = a_store.FindCompatible(
+					identity->logicalKey,
+					[&](std::string_view a_metadata) {
+						return IsCompatibleShaderPackMetadata(a_metadata, *identity);
+					},
+					&error);
 				if (!entry) {
 					if (!error.empty())
 						QuarantineShaderPackLane(a_developerMode, error);
 					return nullptr;
 				}
+				const bool exactMatch = entry->exactKey == identity->exactKey;
 				if (exactMatch && entry->metadata != identity->metadata) {
 					QuarantineShaderPackLane(a_developerMode, "managed shader pack metadata disagrees with the requested canonical identity");
 					return nullptr;
@@ -3041,6 +3067,17 @@ namespace SIE
 		}
 	}
 
+	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor)
+	{
+		const auto typeIndex = static_cast<size_t>(shader.shaderType.underlying());
+		if (typeIndex >= vertexShaders.size())
+			return nullptr;
+		std::lock_guard lockGuard(vertexShadersMutex);
+		const auto& typeCache = vertexShaders[typeIndex];
+		const auto it = typeCache.find(descriptor);
+		return it != typeCache.end() ? it->second.get() : nullptr;
+	}
+
 	RE::BSGraphics::VertexShader* ShaderCache::GetVertexShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{
@@ -3074,14 +3111,8 @@ namespace SIE
 			}
 		}
 
-		{
-			std::lock_guard lockGuard(vertexShadersMutex);
-			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.underlying())];
-			auto it = typeCache.find(descriptor);
-			if (it != typeCache.end()) {
-				return it->second.get();
-			}
-		}
+		if (auto* cached = GetVertexShaderIfCached(shader, descriptor))
+			return cached;
 		if (IsSaveLoadSafeModeActive()) {
 			return nullptr;
 		}
@@ -3355,6 +3386,12 @@ namespace SIE
 			return;
 
 		AdvanceDiskCacheGeneration();
+		if (!Util::ShaderCachePack::ShouldUseLoosePersistence(
+				isDiskCache.load(std::memory_order_relaxed),
+				ManagedShaderPackLayoutPresent())) {
+			logger::debug("Preserved legacy shader-cache entries because managed persistence is present");
+			return;
+		}
 		auto& manifest = GetShaderCacheManifest();
 		bool manifestChanged = false;
 		for (const auto& diskPath : a_diskPaths) {
@@ -3410,28 +3447,31 @@ namespace SIE
 					g_diskCacheMutationMutex
 				};
 				AdvanceDiskCacheGeneration();
+				if (Util::ShaderCachePack::ShouldUseLoosePersistence(
+						isDiskCache.load(std::memory_order_relaxed),
+						ManagedShaderPackLayoutPresent())) {
+					auto& manifest = GetShaderCacheManifest();
+					bool manifestChanged = false;
+					for (const auto& entry : immediateEvictions) {
+						const auto& filePath = entry.diskPath;
+						const auto filePathString = Util::WStringToString(filePath);
+						std::error_code error;
+						const bool removed = std::filesystem::remove(filePath, error);
+						if (error) {
+							logger::warn(
+								"Error while trying to delete {}: {}",
+								filePathString,
+								error.message());
+						} else if (removed) {
+							logger::debug("Deleted {}", filePathString);
+						}
 
-				auto& manifest = GetShaderCacheManifest();
-				bool manifestChanged = false;
-				for (const auto& entry : immediateEvictions) {
-					const auto& filePath = entry.diskPath;
-					const auto filePathString = Util::WStringToString(filePath);
-					std::error_code error;
-					const bool removed = std::filesystem::remove(filePath, error);
-					if (error) {
-						logger::warn(
-							"Error while trying to delete {}: {}",
-							filePathString,
-							error.message());
-					} else if (removed) {
-						logger::debug("Deleted {}", filePathString);
+						if (manifest.Erase(GetManifestKey(filePath)))
+							manifestChanged = true;
 					}
-
-					if (manifest.Erase(GetManifestKey(filePath)))
-						manifestChanged = true;
+					if (manifestChanged)
+						FlushShaderCacheManifestLocked();
 				}
-				if (manifestChanged)
-					FlushShaderCacheManifestLocked();
 			}
 
 			logger::debug("Marked {} entries for recompile due to change to {}", entries.size(), a_path);

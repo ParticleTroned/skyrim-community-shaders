@@ -2419,7 +2419,8 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 	uint32_t qualityMode,
 	uint32_t dlssPreset
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	, VRRenderScaleRetryTelemetry::ViewportObservation* a_observation
+	,
+	VRRenderScaleRetryTelemetry::ViewportObservation* a_observation
 #endif
 )
 {
@@ -2471,9 +2472,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 				if (a_observation) {
 					a_observation->reason = "cache_hit_superseded_recycle";
 					a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
-						VRRenderScaleRetryTelemetry::FenceResult::Pending :
-						idleFenceResult == D3D11IdleFenceResult::Ready ?
-						VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Pending :
+					                             idleFenceResult == D3D11IdleFenceResult::Ready ?
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Ready :
+					                                 VRRenderScaleRetryTelemetry::FenceResult::Failed;
 				}
 #endif
 				if (idleFenceResult == D3D11IdleFenceResult::Failed)
@@ -2520,9 +2522,10 @@ Streamline::DLSSViewportPreparationResult Streamline::PrepareVRDLSSViewport(
 			if (a_observation) {
 				a_observation->reason = "viewport_recycle_fence";
 				a_observation->fenceResult = idleFenceResult == D3D11IdleFenceResult::Pending ?
-					VRRenderScaleRetryTelemetry::FenceResult::Pending :
-					idleFenceResult == D3D11IdleFenceResult::Ready ?
-					VRRenderScaleRetryTelemetry::FenceResult::Ready : VRRenderScaleRetryTelemetry::FenceResult::Failed;
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Pending :
+				                             idleFenceResult == D3D11IdleFenceResult::Ready ?
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Ready :
+				                                 VRRenderScaleRetryTelemetry::FenceResult::Failed;
 			}
 #endif
 			if (idleFenceResult == D3D11IdleFenceResult::Pending) {

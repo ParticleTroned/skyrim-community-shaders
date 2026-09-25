@@ -79,6 +79,7 @@ contradict this policy.
 ### Commit hygiene
 
 -   Commit only files required by the requested change. Leave unrelated tracked changes and untracked user files untouched.
+-   Keep implementation-related documentation, investigation notes, and validation records in the same commit as the change they explain. Fold later documentation updates into that commit instead of publishing separate documentation-only follow-ups. Preserve the exact measured source commits and Build IDs when folding evidence. Standalone documentation work may have its own `docs` commit; rewriting a shared branch still requires explicit user authorization.
 -   Every commit created or rewritten by an agent must use this structure, even when the change is small:
 
     ```text
@@ -145,9 +146,11 @@ contradict this policy.
     the numbered ledgers indexed by `docs/development/vr-render-scale-ledger.md`,
     `docs/development/vr-render-scale-iteration.md`, and the relevant compact
     tuning or failure summary. If runtime evidence follows an implementation
-    commit, make an immediate documentation commit before starting the next
-    render-scale change. Do not version raw per-run evidence trees merely to
-    preserve a measurement.
+    commit, fold its documentation into that implementation commit before
+    starting the next render-scale change, preserving the original measured
+    source identity and following the shared-branch rewrite authorization
+    rules. Do not version raw per-run evidence trees merely to preserve a
+    measurement.
 -   Create a new immutable numbered ledger for every finalized measurement
     and whenever publishing measurements for a different PR. Use
     `docs/development/vr-render-scale-ledger-NNNN-prNUMBER.csv`, increasing
@@ -234,9 +237,10 @@ contradict this policy.
 
 -   When the user invokes `gameft-sw`, follow
     `docs/development/gameft-sw.md`: ask its exact save-number question and
-    use its wrapper around the unchanged saved `game-ft` runner. Stack/wait
-    tracing is explicit and DevBench-only. Present timing and health before
-    provenance or stack analysis; never silently change the base protocol.
+    use the maintained `skyrim-vr-automation/tools/gameft-sw` wrapper and
+    versioned `game-ft` runner. Local ignored legacy copies remain historical.
+    Stack/wait tracing is explicit and DevBench-only. Present timing and health
+    before provenance or stack analysis; never silently change the base protocol.
 
 -   Run `pwsh ./tools/setup-dev.ps1` after cloning or when the developer-tool environment changes.
 -   In Codex on Windows, invoke repository Git through `pwsh ./tools/git.ps1 <git arguments>` so linked-worktree ownership is scoped without changing global `safe.directory`.

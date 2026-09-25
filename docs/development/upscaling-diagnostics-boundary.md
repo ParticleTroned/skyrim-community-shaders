@@ -100,3 +100,29 @@ are retained under `build/validation/upscaling-telemetry-audit-20260916/`.
 Existing deprecation warnings for Streamline sharpness and Windows string
 conversion remain; they were not suppressed. No in-game assay or measured
 performance improvement is claimed by this cleanup.
+
+## Submit trace compiler boundary, 2026-09-19
+
+The OpenVR submit trace declaration, implementation and all four external
+call sites are compiled only with `DEVBENCH_BRIDGE_ENABLED`. The production
+submit path does not depend on link-time elimination of a trace helper
+whose tracing-active predicate is constant false. Release enables LTCG;
+pre-link references alone do not prove an overhead in the shipped DLL.
+This is explicit diagnostic exclusion, not a measured performance fix.
+
+Submit results, packet retention, quarantine and recovery decisions remain
+unchanged. Accumulator semantic epochs and accepted-draw processing remain
+available in production even where their helper names contain `Trace`.
+These helpers carry operational state and cannot be gated as diagnostics.
+
+The targeted object-symbol assertion failed before the correction because
+both the definition and the caller reference existed with DevBench off.
+Local source, compile logs and symbol checks are preserved under
+`build/validation/release-upscaling-audit-20260919/`.
+
+After the correction, both affected translation units compiled with
+DevBench off and on, and all 61 selected symbol assertions passed.
+Twenty focused current-source controller tests passed, including native
+boundary, relatch, stereo and freshness coverage. These are separate
+translation-unit checks and a controller subset, not a new full DLL build
+or physical-HMD performance result.

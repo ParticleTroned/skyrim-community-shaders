@@ -1,5 +1,6 @@
 #include "Hooks.h"
 #include "Api/AcceptedDrawService.h"
+#include "EngineFixes/VRShadowBatch.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
@@ -905,6 +906,10 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// Flat-screen status probes must not draw or advance frame accounting.
+		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0)
+			return func(This, SyncInterval, Flags);
+
 		auto state = globals::state;
 		const bool armStartupMenuBlurSource =
 			!state->startupMenuBlurSourceReady &&
@@ -932,7 +937,12 @@ struct IDXGISwapChain_Present
 		globals::features::screenshotFeature.DrawPostCaptureIndicator();
 
 		const uint64_t beforePresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
+		const bool flatPresent = !globals::game::isVR &&
+		                         globals::profiler->BeginFlatPresent(state->frameCount - 1, Flags,
+									 !globals::features::upscaling.IsFrameGenerationDx12PathActive());
 		HRESULT retval = func(This, SyncInterval, Flags);
+		if (flatPresent)
+			globals::profiler->CompleteFlatPresent(retval);
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
 			state->startupMenuBlurSourceReady = true;
@@ -1657,40 +1667,30 @@ namespace Hooks
 		bool indexRead = false;
 	};
 
-	VRLightingMaterialRejection ProbeVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique, VRLightingMaterialSnapshot& a_snapshot)
+	__forceinline VRLightingMaterialRejection ProbeVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique, VRLightingMaterialSnapshot& a_snapshot)
 	{
-#if defined(_MSC_VER)
-		__try
-#endif
-		{
-			if (!Util::IsLikelyValidPointer(a_pass))
-				return VRLightingMaterialRejection::InvalidPass;
-			if (!Util::IsLikelyValidPointer(a_pass->shader))
-				return VRLightingMaterialRejection::InvalidShader;
-			if (a_pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
-				return VRLightingMaterialRejection::None;
-			if (!Util::IsLikelyValidPointer(a_pass->shaderProperty))
-				return VRLightingMaterialRejection::InvalidProperty;
+		if (!Util::IsLikelyValidPointer(a_pass))
+			return VRLightingMaterialRejection::InvalidPass;
+		if (!Util::IsLikelyValidPointer(a_pass->shader))
+			return VRLightingMaterialRejection::InvalidShader;
+		if (a_pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
+			return VRLightingMaterialRejection::None;
+		if (!Util::IsLikelyValidPointer(a_pass->shaderProperty))
+			return VRLightingMaterialRejection::InvalidProperty;
 
-			a_snapshot.material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
-			if (!Util::IsLikelyValidPointer(a_snapshot.material))
-				return VRLightingMaterialRejection::InvalidMaterial;
-			a_snapshot.renderTargetIndex = a_snapshot.material->diffuseRenderTargetSourceIndex;
-			a_snapshot.indexRead = true;
-			if (a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex))
-				return VRLightingMaterialRejection::None;
+		a_snapshot.material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+		if (!Util::IsLikelyValidPointer(a_snapshot.material))
+			return VRLightingMaterialRejection::InvalidMaterial;
+		a_snapshot.renderTargetIndex = a_snapshot.material->diffuseRenderTargetSourceIndex;
+		a_snapshot.indexRead = true;
+		if (a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex))
+			return VRLightingMaterialRejection::None;
 
-			// The shader's current technique can still belong to the previous draw at admission.
-			if (a_technique >= RE::BSLightingShader::kTechniqueIDBase &&
-				globals::features::truePBR.UsesCustomMaterialSetup(a_technique - RE::BSLightingShader::kTechniqueIDBase))
-				return VRLightingMaterialRejection::None;
-			return VRLightingMaterialRejection::InvalidRenderTarget;
-		}
-#if defined(_MSC_VER)
-		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-			return VRLightingMaterialRejection::Unreadable;
-		}
-#endif
+		// The shader's current technique can still belong to the previous draw at admission.
+		if (a_technique >= RE::BSLightingShader::kTechniqueIDBase &&
+			globals::features::truePBR.UsesCustomMaterialSetup(a_technique - RE::BSLightingShader::kTechniqueIDBase))
+			return VRLightingMaterialRejection::None;
+		return VRLightingMaterialRejection::InvalidRenderTarget;
 	}
 
 	__declspec(noinline) void LogRejectedVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique,
@@ -1712,7 +1712,18 @@ namespace Hooks
 			return false;
 
 		VRLightingMaterialSnapshot snapshot;
-		const auto rejection = ProbeVRLightingMaterial(a_pass, a_technique, snapshot);
+		VRLightingMaterialRejection rejection;
+#if defined(_MSC_VER)
+		__try
+#endif
+		{
+			rejection = ProbeVRLightingMaterial(a_pass, a_technique, snapshot);
+		}
+#if defined(_MSC_VER)
+		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+			rejection = VRLightingMaterialRejection::Unreadable;
+		}
+#endif
 		if (rejection == VRLightingMaterialRejection::None)
 			return false;
 
@@ -1721,18 +1732,22 @@ namespace Hooks
 		return true;
 	}
 
-	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique, bool* a_admissionInvalidated = nullptr)
 	{
+		if (a_admissionInvalidated)
+			*a_admissionInvalidated = false;
 #if defined(_MSC_VER)
 		__try
 #endif
 		{
 			return globals::features::lightLimitFix.loaded &&
-			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
+			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique, a_admissionInvalidated);
 		}
 #if defined(_MSC_VER)
 		__except (1) {
 			// Fail open on transient invalid render-pass data to avoid crashing render-thread hooks.
+			if (a_admissionInvalidated)
+				*a_admissionInvalidated = true;
 			return false;
 		}
 #endif
@@ -1754,6 +1769,8 @@ namespace Hooks
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
+	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
+
 	struct BSBatchRenderer_RenderPassImmediately2  // This is from 1.4.0 but absent in 1.4.6
 	{
 		static void thunk(RE::BSRenderPass* a_pass,
@@ -1761,22 +1778,33 @@ namespace Hooks
 			bool a_alphaTest,
 			uint32_t a_renderFlags)
 		{
+			bool particleInvalidated = true;
 			if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
-				ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				ShouldSkipRenderPassForParticleLights(a_pass, a_technique, &particleInvalidated)) {
 				return;
 			}
 
+			bool terrainInvalidated = false;
+			auto action = TerrainBlending::RenderPassImmediatelyAction::Draw;
 			if (globals::features::terrainBlending.loaded) {
-				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				terrainInvalidated = true;
+				action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags, &terrainInvalidated);
 				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
 					return;
 				}
-				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
-					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-				}
 			}
 
-			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			if (particleInvalidated || terrainInvalidated) {
+				if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+					return;
+			}
+			DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+
+			if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
+				// Native setup can replace material state, even within the same terrain pair.
+				if (!ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+					DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			}
 		}
 
 		// This is from 1.4.0 but absent in 1.4.6
@@ -1802,17 +1830,20 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
 	};
 
-	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
-		// Revalidate stored terrain passes at replay, before native setup can publish partial material state.
-		if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
-			return;
-
 		if (globals::features::interiorSun.loaded) {
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}
 
 		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	}
+
+	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	{
+		// Stored passes must be admitted afresh after any intervening engine work.
+		if (!ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+			DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
 #ifdef TRACY_ENABLE
@@ -2012,6 +2043,7 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		VRShadowBatch::Install();
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();

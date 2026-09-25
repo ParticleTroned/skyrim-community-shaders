@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VRMenuPointerOverlay.h"
 #include "Upscaling/VROrdinarySaveRecovery.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRRelatchReleasePolicy.h"
@@ -2187,6 +2188,8 @@ public:
 	bool IsUpscalingActive() const;
 
 	// Feature interface overrides
+	/** Show compact DLSS guidance and VR FOV status beneath the feature description. */
+	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
@@ -2210,6 +2213,8 @@ public:
 	void DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod);
 	/** Apply the shared menu/API link policy without bypassing transition admission. */
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
+	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */
+	bool SetFoveatedUpscalingEnabled(bool a_enabled);
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
@@ -2353,6 +2358,8 @@ public:
 	};
 	static const char* GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode);
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
+	/** Reports whether loaded VR upscaling provides a shared mask below full coverage. */
+	bool IsSharedFoveatedMaskActive() const;
 	float GetActiveFoveatedSharedVisibleScale() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;
@@ -2780,6 +2787,9 @@ public:
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		const char** a_decisionReason = nullptr);
 	static bool ShouldTraceVRMenuBridgeDrawOperation(const char** a_decisionReason = nullptr);
+	/** Capture the native VR UI pointer without suppressing its scene draw. */
+	static bool TryCaptureVRMenuPointerDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, bool a_instanced);
 	static bool TraceVRMenuBridgeDrawOperation(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva,
 		const char** a_decisionReason = nullptr);
@@ -2787,10 +2797,10 @@ public:
 		uint32_t a_renderFlags, int a_groupIndex);
 	static void EndVRMenuAccumulatorTrace(void* a_accumulator, uint32_t a_firstPass, uint32_t a_lastPass,
 		uint32_t a_renderFlags, int a_groupIndex);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	static void TraceVRMenuPresentationOpenVRSubmit(const char* a_path, vr::EVREye a_eye,
 		const vr::Texture_t* a_texture, const vr::VRTextureBounds_t* a_bounds, vr::EVRSubmitFlags a_flags,
 		vr::EVRCompositorError a_result) noexcept;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	static void InstallVRMenuPresentationTraceD3DHooks(ID3D11DeviceContext* a_context);
 #endif
 	/** Install only indexed scene submission hooks, without enabling developer tracing. */
@@ -3242,6 +3252,9 @@ public:
 	};
 
 private:
+	/** Requires ownership of perfModeRenderTargetRecreateQueueMutex. */
+	bool RequiresVRRenderScaleRelatchFrameBoundaryLocked() const;
+
 	mutable std::mutex submitTemporalInputsMutex;
 	SubmitTemporalInputs submitTemporalInputs;
 	std::atomic_uint64_t submitTemporalCompositorCycle{ 0 };
@@ -4198,6 +4211,16 @@ private:
 	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
 	eastl::unique_ptr<Texture2D> vrMenuFinalCompositeLayer;
 	eastl::unique_ptr<Texture2D> vrMenuCommittedCompositeLayer;
+	VRMenuPointerOverlay vrMenuPointerOverlay;
+	Util::LazyShader<ID3D11PixelShader> vrMenuPointerOverlayPS;
+	Util::LazyShader<ID3D11PixelShader> vrMenuPointerCompositePS;
+	const void* vrMenuPointerGeometry = nullptr;
+	uint32_t vrMenuPointerPresentationFrame = std::numeric_limits<uint32_t>::max();
+	bool vrMenuPointerPresentationVisible = false;
+	bool vrMenuPointerCaptureFailed = false;
+	bool CaptureVRMenuPointerOverlay(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndex, INT a_baseVertex, UINT a_startInstance, bool a_instanced);
+	ID3D11ShaderResourceView* GetCurrentVRMenuPointerOverlay(uint32_t a_frame);
 	winrt::com_ptr<ID3D11Texture2D> vrMenuFullResolutionDepth;
 	winrt::com_ptr<ID3D11DepthStencilView> vrMenuFullResolutionDSV;
 	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMenuFullResolutionDepthViews{};

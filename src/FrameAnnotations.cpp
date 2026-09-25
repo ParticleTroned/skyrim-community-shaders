@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <limits>
-#include <limits>
 
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
@@ -118,7 +117,7 @@ namespace FrameAnnotations
 				globals::state->BeginPerfEvent("{} Draw", BuildEventName(EffectType));
 
 			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
-			              EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade) {
+						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade) {
 				// Image-space setup may replace PS constant buffers. Refresh the active
 				// profile and rebind b5/b6 immediately before the consuming draw.
 				globals::state->UpdateFeatureData(true);

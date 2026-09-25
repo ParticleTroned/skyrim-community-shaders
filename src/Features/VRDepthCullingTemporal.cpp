@@ -172,7 +172,6 @@ namespace VRDepthCullingTemporal
 			}
 			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
 
-			// Keep the pose warm so switching from Performance to Balanced is valid immediately.
 			const auto* camera = RE::Main::WorldRootCamera();
 			if (!camera) {
 				g_producerPose.valid = false;
@@ -390,9 +389,7 @@ namespace VRDepthCullingTemporal
 
 	void SetMode(Mode a_mode)
 	{
-		a_mode = SelectMode(
-			a_mode == Mode::Performance,
-			a_mode == Mode::Legacy);
+		a_mode = NormalizeMode(a_mode);
 		const auto current = g_mode.load(std::memory_order_acquire);
 		if (current == a_mode)
 			return;

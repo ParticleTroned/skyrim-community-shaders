@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -20,8 +21,18 @@ namespace
 	int terrainCalls = 0;
 	int interiorCalls = 0;
 	std::atomic<int> warnings = 0;
+	std::atomic<int> materialProbeReads = 0;
+	struct WarningSnapshot
+	{
+		std::uintptr_t material = 0;
+		int32_t index = -1;
+		bool indexRead = false;
+	};
+	std::array<WarningSnapshot, 6> warningSnapshots;
 	int failures = 0;
+	DWORD injectedRuntimeException = 0;
 	DWORD injectedShaderException = 0;
+	DWORD injectedWarningException = 0;
 	DWORD injectedNativeException = 0;
 	bool particleAccepted = true;
 	bool invalidateAfterNativeDraw = false;
@@ -42,6 +53,7 @@ namespace
 	void ResetCalls()
 	{
 		nativeCalls = particleCalls = terrainCalls = interiorCalls = 0;
+		materialProbeReads = 0;
 		argumentsPreserved = true;
 	}
 }
@@ -50,7 +62,12 @@ namespace REL
 {
 	struct Module
 	{
-		static bool IsVR() { return vrRuntime; }
+		static bool IsVR()
+		{
+			if (injectedRuntimeException)
+				RaiseException(injectedRuntimeException, 0, 0, nullptr);
+			return vrRuntime;
+		}
 	};
 	template <class Signature>
 	struct Relocation
@@ -95,6 +112,7 @@ namespace RE
 			Type value = Type::Lighting;
 			Type get() const
 			{
+				++materialProbeReads;
 				if (injectedShaderException)
 					RaiseException(injectedShaderException, 0, 0, nullptr);
 				return value;
@@ -137,10 +155,13 @@ namespace Util
 
 namespace logger
 {
-	template <class... Args>
-	void warn(const char*, Args&&...)
+	void warn(const char*, uint32_t reason, std::uintptr_t, std::uintptr_t material, uint32_t,
+		int32_t index, bool indexRead, int)
 	{
+		warningSnapshots.at(std::countr_zero(reason)) = { material, index, indexRead };
 		++warnings;
+		if (injectedWarningException)
+			RaiseException(injectedWarningException, 0, 0, nullptr);
 	}
 }
 
@@ -155,9 +176,11 @@ struct TerrainBlending
 	bool loaded = true;
 	RenderPassImmediatelyAction action = RenderPassImmediatelyAction::Draw;
 	void (*onRenderPass)(RE::BSRenderPass*) = nullptr;
-	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* pass, uint32_t, bool, uint32_t)
+	RenderPassImmediatelyAction OnRenderPassImmediately(RE::BSRenderPass* pass, uint32_t, bool, uint32_t, bool* admissionInvalidated = nullptr)
 	{
 		++terrainCalls;
+		if (admissionInvalidated)
+			*admissionInvalidated = onRenderPass != nullptr;
 		if (onRenderPass)
 			onRenderPass(pass);
 		return action;
@@ -171,9 +194,11 @@ namespace globals::features
 	{
 		bool loaded = true;
 		void (*onCheck)(RE::BSRenderPass*) = nullptr;
-		bool CheckParticleLights(RE::BSRenderPass* pass, uint32_t)
+		bool CheckParticleLights(RE::BSRenderPass* pass, uint32_t, bool* admissionInvalidated = nullptr)
 		{
 			++particleCalls;
+			if (admissionInvalidated)
+				*admissionInvalidated = onCheck != nullptr;
 			if (onCheck)
 				onCheck(pass);
 			return particleAccepted;
@@ -229,10 +254,10 @@ bool ProbeExceptionReachesCaller(RE::BSRenderPass* pass, DWORD exceptionCode)
 	return false;
 }
 
-bool NativeExceptionReachesCaller(RE::BSRenderPass* pass, DWORD exceptionCode)
+bool DrawExceptionReachesCaller(decltype(Hooks::DrawRenderPassImmediately)* entry, RE::BSRenderPass* pass, DWORD exceptionCode)
 {
 	__try {
-		Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(pass, technique, true, renderFlags);
+		entry(pass, technique, true, renderFlags);
 	} __except (GetExceptionCode() == exceptionCode ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
 		return true;
 	}
@@ -255,6 +280,9 @@ int main()
 	RE::BSShaderProperty property;
 	property.material = &material;
 	RE::BSRenderPass pass{ &shader, &property };
+	injectedRuntimeException = EXCEPTION_ACCESS_VIOLATION;
+	Check(ProbeExceptionReachesCaller(&pass, injectedRuntimeException), "Runtime selection faults must propagate outside the protected material reads");
+	injectedRuntimeException = 0;
 
 	auto run = [&](RE::BSRenderPass* currentPass, bool allowed, uint32_t drawTechnique = technique) {
 		expectedTechnique = drawTechnique;
@@ -267,6 +295,8 @@ int main()
 			Check(terrainCalls == (allowed && entry == 1 ? 1 : 0), "Material rejection must precede terrain routing");
 			Check(interiorCalls == (allowed && (entry == 1 || entry == 3) ? 1 : 0), "Material rejection must precede raster-state mutation");
 			Check(argumentsPreserved, "Accepted draws must preserve all native call arguments");
+			if (allowed && vrRuntime)
+				Check(materialProbeReads == 1, "Ordinary VR admission must probe material validity exactly once per entry");
 		}
 	};
 	auto runIndex = [&](int32_t index, bool allowed, uint32_t drawTechnique = technique) {
@@ -298,7 +328,18 @@ int main()
 		}
 		Check(admittedInvalidPasses == 0, "Concurrent malformed draws must remain rejected");
 		Check(warnings == 1, "Concurrent rejections must emit only one warning for their reason");
+		const auto& invalidPassWarning = warningSnapshots[0];
+		Check(invalidPassWarning.material == 0 && invalidPassWarning.index == -1 && !invalidPassWarning.indexRead,
+			"A rejected pass must log initialized diagnostics without reading a material");
 	}
+	material.diffuseRenderTargetSourceIndex = 1861746551;
+	injectedWarningException = EXCEPTION_ACCESS_VIOLATION;
+	Check(ProbeExceptionReachesCaller(&pass, injectedWarningException), "Warning faults must propagate outside the protected material reads");
+	injectedWarningException = 0;
+	const auto& invalidIndexWarning = warningSnapshots[4];
+	Check(invalidIndexWarning.material == reinterpret_cast<std::uintptr_t>(&material) &&
+			  invalidIndexWarning.index == 1861746551 && invalidIndexWarning.indexRead,
+		"Index rejection must log the material and index from the protected snapshot");
 	for (const auto index : { -2, 125, 1861746551, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max() }) {
 		runIndex(index, false);
 		runIndex(index, false);
@@ -341,6 +382,10 @@ int main()
 	if (inaccessible) {
 		property.material = static_cast<RE::BSShaderMaterial*>(inaccessible);
 		run(&pass, false);
+		const auto& unreadableWarning = warningSnapshots[5];
+		Check(unreadableWarning.material == reinterpret_cast<std::uintptr_t>(inaccessible) &&
+				  unreadableWarning.index == -1 && !unreadableWarning.indexRead,
+			"A faulting index read must preserve the observed pointer without logging an unread index");
 		property.material = &material;
 		pass.shaderProperty = static_cast<RE::BSShaderProperty*>(inaccessible);
 		run(&pass, false);
@@ -360,6 +405,8 @@ int main()
 	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
 	Check(nativeCalls == 2 && interiorCalls == 2 && terrainCalls == 1 && particleCalls == 1,
 		"Valid terrain double draws must retain both native submissions");
+	Check(materialProbeReads == 2,
+		"A terrain pair must reuse the first admission and validate again after native work");
 	invalidateAfterNativeDraw = true;
 	ResetCalls();
 	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
@@ -377,6 +424,8 @@ int main()
 	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
 	Check(nativeCalls == 0 && interiorCalls == 0 && particleCalls == 1,
 		"Material changes in a particle callback must not inherit earlier admission");
+	Check(materialProbeReads == 2,
+		"Particle mutation must consume a fresh boundary check");
 	globals::features::lightLimitFix.onCheck = nullptr;
 	material.diffuseRenderTargetSourceIndex = -1;
 	globals::features::terrainBlending.onRenderPass = invalidateMaterial;
@@ -384,6 +433,8 @@ int main()
 	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
 	Check(nativeCalls == 0 && interiorCalls == 0 && terrainCalls == 1,
 		"Material changes in a terrain callback must not inherit earlier admission");
+	Check(materialProbeReads == 2,
+		"Terrain mutation must consume a fresh boundary check");
 	globals::features::terrainBlending.onRenderPass = nullptr;
 	material.diffuseRenderTargetSourceIndex = -1;
 	globals::features::terrainBlending.action = TerrainBlending::RenderPassImmediatelyAction::Skip;
@@ -446,6 +497,8 @@ int main()
 	ResetCalls();
 	Hooks::DrawRenderPassImmediately(&pass, technique, true, renderFlags);
 	Check(nativeCalls == 0 && interiorCalls == 0, "Terrain replay must revalidate a material that changed while queued");
+	Check(materialProbeReads == 1,
+		"Replay must report a fresh check without reusing queued admission");
 	material.diffuseRenderTargetSourceIndex = -1;
 	ResetCalls();
 	Hooks::DrawRenderPassImmediately(&pass, technique, true, renderFlags);
@@ -472,8 +525,44 @@ int main()
 	Check(ProbeExceptionReachesCaller(&pass, injectedShaderException), "Non-AV snapshot exceptions must propagate");
 	injectedShaderException = 0;
 	injectedNativeException = EXCEPTION_ACCESS_VIOLATION;
-	Check(NativeExceptionReachesCaller(&pass, injectedNativeException), "Native AVs must propagate outside narrow guard");
+	for (auto entry : entries)
+		Check(DrawExceptionReachesCaller(entry, &pass, injectedNativeException), "Native AVs must propagate outside the guard at every draw entry");
 	injectedNativeException = 0;
+	globals::features::terrainBlending.onRenderPass = +[](RE::BSRenderPass*) {
+		RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+	};
+	Check(DrawExceptionReachesCaller(Hooks::BSBatchRenderer_RenderPassImmediately2::thunk, &pass, EXCEPTION_ACCESS_VIOLATION),
+		"Terrain callback faults must propagate outside the protected material reads");
+	globals::features::terrainBlending.onRenderPass = nullptr;
+
+	globals::features::lightLimitFix.onCheck = +[](RE::BSRenderPass* currentPass) {
+		static_cast<RE::BSLightingShaderMaterialBase*>(currentPass->shaderProperty->material)->diffuseRenderTargetSourceIndex = 1861746551;
+		RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+	};
+	ResetCalls();
+	Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
+	Check(nativeCalls == 0 && materialProbeReads == 2,
+		"Fail-open particle exceptions must invalidate the earlier material admission");
+	globals::features::lightLimitFix.onCheck = nullptr;
+	material.diffuseRenderTargetSourceIndex = -1;
+	expectedTechnique = technique;
+	for (const bool loaded : { false, true }) {
+		globals::features::lightLimitFix.loaded = globals::features::terrainBlending.loaded = loaded;
+		ResetCalls();
+		Hooks::BSBatchRenderer_RenderPassImmediately2::thunk(&pass, technique, true, renderFlags);
+		Check(nativeCalls == 1 && materialProbeReads == 1,
+			"Unloaded features and read-only routing must both retain one validated draw");
+	}
+	vrRuntime = false;
+	material.diffuseRenderTargetSourceIndex = 1861746551;
+	for (auto entry : entries) {
+		ResetCalls();
+		entry(&pass, technique, true, renderFlags);
+		Check(nativeCalls == 1 && materialProbeReads == 0 && argumentsPreserved,
+			"SE and AE dispatch must preserve native behavior without VR material checks");
+	}
+	vrRuntime = true;
+	material.diffuseRenderTargetSourceIndex = -1;
 
 	SYSTEM_INFO info{};
 	GetSystemInfo(&info);

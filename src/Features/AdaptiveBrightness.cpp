@@ -823,12 +823,20 @@ namespace
 		a_profile["bloomAdvanced"] = a_advanced;
 	}
 
-	std::optional<WaterAppearance::Profile> TryGetWaterAppearanceProfile(const json& a_value)
+	std::optional<WaterAppearance::Profile> TryGetWaterAppearanceProfile(json a_value)
 	{
 		if (!a_value.is_object())
 			return std::nullopt;
 
 		try {
+			// Bound quality before the JSON serializer narrows it to an integer.
+			if (auto qualityIt = a_value.find("ParallaxQuality"); qualityIt != a_value.end() && qualityIt->is_number()) {
+				*qualityIt = static_cast<int>(Util::ClampFinite(
+					qualityIt->get<double>(),
+					static_cast<double>(WaterAppearance::Profile::kMinParallaxQuality),
+					static_cast<double>(WaterAppearance::Profile::kMaxParallaxQuality),
+					static_cast<double>(WaterAppearance::Profile::kDefaultParallaxQuality)));
+			}
 			auto profile = a_value.get<WaterAppearance::Profile>();
 			WaterAppearance::SanitizeProfile(profile);
 			return profile;
@@ -870,16 +878,15 @@ namespace
 		const bool hasExplicitWater = waterIt != a_profile.end() && waterIt->is_object() &&
 		                              GetOptionalBool(*waterIt, SettingsMigrations::kLegacyWaterProfileExplicitKey.data(), false);
 		if ((!a_forceGlobal || hasExplicitWater) && waterIt != a_profile.end() && waterIt->is_object()) {
-			// A profile-native value wins field-by-field. Missing fields inherit the
-			// migrated global value so a formerly global Unified Water configuration
-			// remains global across every Adaptive Balance profile and override.
+			// Preserve every supported profile field; missing or malformed values
+			// inherit the legacy global value or the current default.
 			json mergedWater = a_hasLegacyGlobal ? json(a_globalProfile) : json(WaterAppearance::Profile{});
-			for (const auto fieldName : SettingsMigrations::kLegacyUnifiedWaterAppearanceKeys) {
-				if (const auto fieldIt = waterIt->find(fieldName.data()); fieldIt != waterIt->end() && fieldIt->is_number())
-					mergedWater[std::string(fieldName)] = *fieldIt;
+			for (auto& [fieldName, value] : mergedWater.items()) {
+				if (const auto fieldIt = waterIt->find(fieldName); fieldIt != waterIt->end() && SettingsMigrations::MatchesJsonSchema(*fieldIt, value))
+					value = *fieldIt;
 			}
 
-			if (const auto nativeWater = TryGetWaterAppearanceProfile(mergedWater))
+			if (const auto nativeWater = TryGetWaterAppearanceProfile(std::move(mergedWater)))
 				SetProfileWaterAppearance(a_profile, *nativeWater);
 			else
 				SetProfileWaterAppearance(a_profile, WaterAppearance::Profile{});

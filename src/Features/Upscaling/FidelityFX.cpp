@@ -1448,6 +1448,7 @@ bool FidelityFX::SetupFrameGeneration()
 
 bool FidelityFX::ResetFrameGenerationRenderContext() noexcept
 {
+	globals::features::upscaling.InvalidateFrameGenerationInputs();
 	bool resetComplete = true;
 	bool crashed = false;
 	if (frameGenContextIndeterminate) {

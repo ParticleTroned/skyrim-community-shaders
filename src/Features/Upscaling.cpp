@@ -45320,24 +45320,39 @@ void Upscaling::ClearShaderCache()
 	lumaSharpen.ClearShaderCache();
 }
 
-void Upscaling::CopySharedD3D12Resources()
+void Upscaling::PrepareFrameGenerationInputs()
+{
+	InvalidateFrameGenerationInputs();
+	if (ShouldPrepareFrameGeneration())
+		frameGenerationPrepared.store(CopySharedD3D12Resources(), std::memory_order_release);
+}
+
+bool Upscaling::CopySharedD3D12Resources()
 {
 	CS_GPU_PASS("Upscaling::CopySharedD3D12Resources");
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	if (!renderer || !context || !globals::state ||
+		!dx12SwapChain.motionVectorBufferShared12 || !dx12SwapChain.depthBufferShared12 ||
+		!dx12SwapChain.motionVectorBufferShared12->resource11 || !dx12SwapChain.depthBufferShared12->rtv ||
+		!upscaleRasterizerState || !upscaleBlendState)
+		return false;
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
-
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	if (!motionVector.texture || !depth.depthSRV)
+		return false;
+
 	auto* vertexShader = GetUpscaleVS();
 	auto* pixelShader = copyDepthToSharedBufferPS.Get(
 		L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl",
 		{ { "PSHADER", "" } }, "ps_5_0", "main",
 		"Upscaling::CopyDepthToSharedBufferPS");
 	if (!vertexShader || !pixelShader)
-		return;
+		return false;
+
+	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
 
 	{
 		// Set up viewport for fullscreen rendering
@@ -45388,6 +45403,7 @@ void Upscaling::CopySharedD3D12Resources()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	context->PSSetShader(nullptr, nullptr, 0);
 	context->VSSetShader(nullptr, nullptr, 0);
+	return true;
 }
 
 void UpdateCameraData()
@@ -45570,7 +45586,7 @@ bool Upscaling::IsFrameGenerationDx12PathActive() const
 	return d3d12SwapChainActive && !globals::game::isVR;
 }
 
-bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+bool Upscaling::ShouldPrepareFrameGeneration() const
 {
 	auto* ui = globals::game::ui;
 	auto* state = globals::state;
@@ -45583,6 +45599,21 @@ bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 	       fidelityFX.IsFrameGenerationRuntimeReady() &&
 	       !streamline.IsFrameGenerationQuarantinedByReflex() &&
 	       (settings.frameGenerationAllowInMenus || !menuOpen);
+}
+
+bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+{
+	// Menu transitions must not enable generation without this frame's inputs.
+	return frameGenerationPrepared.load(std::memory_order_acquire) &&
+	       IsFrameGenerationDx12PathActive() &&
+	       settings.frameGenerationMode &&
+	       fidelityFX.IsFrameGenerationRuntimeReady() &&
+	       !streamline.IsFrameGenerationQuarantinedByReflex();
+}
+
+void Upscaling::InvalidateFrameGenerationInputs() noexcept
+{
+	frameGenerationPrepared.store(false, std::memory_order_release);
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -59711,6 +59742,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
+	upscaling.InvalidateFrameGenerationInputs();
 	if (globals::game::isVR)
 		upscaling.ReleaseVRGameEntryVendorWorkGatesIfConverged();
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
@@ -59757,8 +59789,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			return;
 		}
 
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
+		upscaling.PrepareFrameGenerationInputs();
 
 		upscaling.PerformUpscaling();
 
@@ -59796,8 +59827,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		if (vrRenderScaleVisuallyActive || upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
 
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
+		upscaling.PrepareFrameGenerationInputs();
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
@@ -59813,8 +59843,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (presentationUpscalingActive) {
 		globals::features::vr.InstallSubmitHook();
 
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
+		upscaling.PrepareFrameGenerationInputs();
 
 		upscaling.UpdateHistoryResetState(upscaleMethod);
 		upscaling.LatchHistoryResetForCurrentFrame();
@@ -59847,8 +59876,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (upscaling.ShouldUseFrameGenerationThisFrame())
-		upscaling.CopySharedD3D12Resources();
+	upscaling.PrepareFrameGenerationInputs();
 
 	// Preserve the normal full color-upscaling path in VR even when submit-stage
 	// presentation is inactive. A former depth-only early return here skipped

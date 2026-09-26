@@ -670,27 +670,27 @@ neither modifies an independent Adaptive Balance or vanilla fog path.
 All other changes are EHF settings/UI and translations. Excluded under the
 EHF rule after inspecting the nontranslation diff.
 
-### #755: frame-generation input readiness, recommendation awaiting decision
+### #755: frame-generation input readiness, accepted SE/AE port
 
 [Open Shaders #755](https://github.com/alandtse/open-shaders/pull/755),
 `6cd47558880cc94247e77c61c4b2fa0a4cdead42`, is titled
 `fix(framegen): prevent loading transition flash`.
 
-Recommend **i, adapted to the local SE/AE FidelityFX path**. The upstream
+User decision: **i, adapted to the local SE/AE FidelityFX path**. The upstream
 description identifies previous-scene LOD models flashing as loading ends.
 The fix separates permission to prepare frame-generation inputs from a
 latched successful-preparation result, retains that result through
 presentation, and clears it when the frame's wrapped buffers are cleared.
 Both required shaders must be available before any input copy begins.
 
-The local `ShouldUseFrameGenerationThisFrame` recomputes settings, pause
+Before this port, local `ShouldUseFrameGenerationThisFrame` recomputed settings, pause
 and main/loading-menu state at both post-processing and presentation.
 It also has stronger local runtime-ready and Reflex-quarantine gates.
 Those gates do not establish that the current frame's depth and motion
 inputs were prepared: a menu closing between the two calls can change
 the decision from false to true without a new copy.
 
-Local `CopySharedD3D12Resources` already checks both shaders, but returns
+Local `CopySharedD3D12Resources` already checked both shaders, but returned
 `void` and copies motion vectors before that check. Missing shaders can
 therefore leave stale depth without preventing the later FidelityFX
 prepare dispatch. No prepared-input latch or equivalent freshness check
@@ -698,25 +698,110 @@ was found in the copy, caller, swap-chain or FidelityFX presentation path.
 The local provider's failure containment handles API errors, not this
 missing current-frame input contract.
 
-Port the copy-success result and preparation/presentation separation,
-preserving local runtime readiness, menu settings, quarantine and normal
-base-frame/UI presentation. Adapt invalidation to the local post-processing,
-Present/Present1, resize and teardown lifecycle: there is no local
-`ClearWrappedBuffers` method. Keep readiness available to the frame limiter,
-and preserve existing test-present and retryable-present behavior.
-Focused regression coverage should exercise skipped/failed preparation,
-a menu change before Present, and readiness consumption/invalidation.
+The port separates `ShouldPrepareFrameGeneration` from the latched
+`ShouldUseFrameGenerationThisFrame`. `PrepareFrameGenerationInputs` first
+invalidates the old result and publishes success only after both copies.
+The copy checks required resources and both shaders before moving either
+input. Presentation keeps the prepared frame's menu decision while still
+checking the local runtime, enabled setting, provider readiness and Reflex
+quarantine. Normal base-frame and UI presentation remain unchanged.
 
-Do not port the Streamline Reflex change: it supports upstream's DLSS-G
+All four post-processing preparation sites use that helper; the hook also
+invalidates readiness before its earliest possible return. Present and
+Present1 share a scope-exit invalidation guard, so successful, failed and
+exceptional exits cannot leave consumed inputs ready. Test presents and
+retryable presents retain the pending inputs and existing UI contents.
+The guard runs after the frame limiter, retaining its current-frame rate
+decision. Resource reset/recreation and the shared FidelityFX context-reset
+boundary invalidate readiness before mutation; the latter covers both
+resize entry points and provider teardown. There is no local
+`ClearWrappedBuffers` method to copy from upstream.
+
+The Streamline Reflex change was not ported: it supports upstream's DLSS-G
 path, whereas local FidelityFX frame generation deliberately disables
 Reflex and quarantines generation if disabling fails. Preserve that policy.
 `IsFrameGenerationDx12PathActive` explicitly excludes VR, so this port
 benefits SE/AE on the main-VR codebase without enabling VR frame generation
 or changing the VR render-scale and compositor paths.
 
-Verified the full four-file diff, GitHub description, local copy and all
-call sites, frame limiter, UI routing, Present/Present1, provider dispatch
-and Reflex policy. No code was implemented, compiled or runtime-tested.
+Added `FrameGenerationInputs`, which extracts the actual production copy,
+preparation and decision methods, readiness member, and both Present
+entry points with their shared implementation. Simulated engine, D3D and
+provider boundaries cover loading/pause transitions, allow-in-menu settings,
+missing shaders/resources, all live safety gates including VR, input
+consumption, test/retryable presents, frame-limiter ordering, provider and
+present failures, exceptions, and Reflex-disable failure. These are
+controller fixtures, not a real GPU or in-game visual test.
+
+The settings-owner source fingerprint and three generated preset markers
+are refreshed; compatible revision 5 and all graphics settings are retained.
+
+Validation:
+
+-   `python tests/extract_frame_generation_inputs.py --source-dir . --output-dir ../../analysis/open-shaders-dev-review-20260926/pr755-extracted`
+    passed without compiling. A separate source audit confirmed all four
+    preparation sites, invalidation before the early post-processing return,
+    resource reset/recreation, and both resize paths' shared context reset.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all tiers.
+    JSON comparison with the parent confirmed that the only preset change
+    is `Preset Compatibility/settingsContract/sourceTreeSha256`; revision 5
+    and every graphics setting are unchanged.
+-   Scoped pre-commit and `git diff --check` passed. Root CMake Gersemi is
+    skipped for the previously documented unrelated baseline formatting;
+    the added test block passes separately with its enclosing indentation,
+    with the expected warning for the custom `add_controller_test` command.
+-   `FrameGenerationInputs` execution, DLL builds and SE/AE/VR runtime
+    validation remain deferred by user instruction. No claim is made that
+    the loading flash has been reproduced or visually verified locally.
+
+### #752: GO projection and buffer limits, deferred
+
+[Open Shaders #752](https://github.com/alandtse/open-shaders/pull/752),
+`01b4a5bd5d65c58a113c25feae1c94dc6ca90f4b`, is titled
+`fix(go): correct projection and buffer limits`.
+
+Separates nominal-pixel Hi-Z projection from render-pixel LOD thresholds,
+corrects flat GO vertex projection, and bounds GO bucket allocations using
+their largest per-eye record. The shared `RunGrass.hlsl` hunk is inside
+`GRASS_OPTIMIZATIONS`; it does not change the ordinary grass path. All other
+changes are GO code, buffer layout and feature version. Deferred under
+the GO rule, with no independent non-GO hunk to port.
+
+### #750: forced-weather sky refresh, recommendation awaiting decision
+
+[Open Shaders #750](https://github.com/alandtse/open-shaders/pull/750),
+`3e56f31abe16cc3e62cf17e94f5e8aca5a6b7654`, is titled
+`fix(weather): refresh sky when forcing weather`.
+
+Recommend **i, adapted to local weather controls and hooks**. Its shared
+renderer correction clears cached cloud render passes after `ForceWeather`
+resets blending, and releases the outgoing attached or pending aurora/sky
+model so the newly selected weather can load its own. It is useful outside
+upstream UI and Scene Manager: local WeatherPicker, weather API preview,
+editor refresh and lock enforcement all force weather.
+
+The local paths call the engine or its lock-hook trampoline directly.
+No matching cloud-pass invalidation or model-handle release exists in those
+paths or `Utils/Game.cpp`. The existing lock guards, batched editor refresh
+and weather-service owner-thread checks solve different problems and should
+be preserved. In particular, `ReapplyWeatherLock` deliberately calls the
+stored trampoline when installed; copying the upstream wrapper call there
+would re-enter the local detour. Adapt the visual refresh around the local
+native-call boundary rather than replacing the lock implementation.
+
+This has a dependency consequence: upstream raises the VR Address Library
+minimum to **0.269.0** for its model-handle reset relocation; the local
+minimum is **0.207.0**. The primary checkout's CommonLib exposes the
+`auroraRoot`, `auroraModel` and cloud fields, but its model-handle type has
+no public releasing reset method. A complete port must retain correct
+SE/AE/VR release paths and declare the new VR address requirement. Do not
+substitute a plain handle assignment that leaks the model request.
+The cloud-pass correction is independent if the model-release portion is
+subsequently deferred by the user.
+
+No Scene Manager, upstream layout or translation changes are proposed.
+Verified the complete code diff and PR description against local weather
+callers, detours and CommonLib declarations. No #750 code was implemented.
 Await the user's `i` or `r`.
 
 ## Verification

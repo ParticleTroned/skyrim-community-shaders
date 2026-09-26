@@ -121,6 +121,7 @@ bool DX12SwapChain::ResetUnpublished() noexcept
 
 void DX12SwapChain::ResetResources() noexcept
 {
+	globals::features::upscaling.InvalidateFrameGenerationInputs();
 	swapChain = nullptr;
 	swapChainOwner = nullptr;
 	swapChainBufferWrapped.reset();
@@ -442,9 +443,17 @@ HRESULT DX12SwapChain::PresentInternal(
 	UINT flags,
 	const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept
 {
+	auto& upscaling = globals::features::upscaling;
+	bool retainPreparedInputs = false;
+	const SKSE::stl::scope_exit invalidateInputs([&]() noexcept {
+		if (!retainPreparedInputs)
+			upscaling.InvalidateFrameGenerationInputs();
+	});
+
 	if (!swapChain)
 		return DXGI_ERROR_INVALID_CALL;
 	if ((flags & DXGI_PRESENT_TEST) != 0) {
+		retainPreparedInputs = true;
 		return presentParameters ?
 		           swapChain->Present1(syncInterval, flags, presentParameters) :
 		           swapChain->Present(syncInterval, flags);
@@ -470,8 +479,6 @@ HRESULT DX12SwapChain::PresentInternal(
 	};
 
 	try {
-		auto& upscaling = globals::features::upscaling;
-
 		// Advance before signaling so the first wait cannot observe the fence's
 		// already-complete creation value.
 		const auto producerFenceValue = fenceSequence.Next();
@@ -542,8 +549,10 @@ HRESULT DX12SwapChain::PresentInternal(
 		allocatorFenceValues[frameIndex] = *consumerFenceValue;
 		if (auto result = check(d3d11Context->Wait(d3d11Fence.get(), *consumerFenceValue), "D3D11 fence wait"))
 			return *result;
-		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Retryable)
+		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Retryable) {
+			retainPreparedInputs = true;
 			return presentResult;
+		}
 		if (presentDisposition == CSX::NvidiaPipelinePolicy::PresentResultDisposition::Fatal)
 			return fail(presentResult, "swap-chain present");
 
@@ -1018,6 +1027,7 @@ void DX12SwapChain::SetUIBuffer()
 
 void DX12SwapChain::CreateSharedResources()
 {
+	globals::features::upscaling.InvalidateFrameGenerationInputs();
 	auto renderer = globals::game::renderer;
 
 	// Create depth buffer

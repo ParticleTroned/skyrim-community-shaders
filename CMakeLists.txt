@@ -2504,6 +2504,41 @@ if(BUILD_CONTROLLER_TESTS)
         StreamlineFrameTokenPublication
         tests/streamline_frame_token_publication_test.cpp
     )
+    set(_frame_generation_inputs_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/frame-generation-inputs"
+    )
+    set(_frame_generation_inputs_test_headers
+        "${_frame_generation_inputs_test_dir}/frame_generation_members.h"
+        "${_frame_generation_inputs_test_dir}/frame_generation_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_frame_generation_inputs_test_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_frame_generation_inputs.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_frame_generation_inputs_test_dir}"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling.h
+            src/Features/Upscaling/DX12SwapChain.cpp
+            tests/extract_frame_generation_inputs.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        frame_generation_inputs_test
+        FrameGenerationInputs
+        tests/frame_generation_inputs_test.cpp
+    )
+    target_sources(
+        frame_generation_inputs_test
+        PRIVATE ${_frame_generation_inputs_test_headers}
+    )
+    target_include_directories(
+        frame_generation_inputs_test
+        PRIVATE "${_frame_generation_inputs_test_dir}"
+    )
     add_controller_test(
         vr_submit_temporal_snapshot_test
         VRSubmitTemporalSnapshot

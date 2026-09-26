@@ -2182,7 +2182,12 @@ public:
 
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationDx12PathActive() const;
+	/** Returns whether current settings, menus and provider health permit preparing inputs. */
+	bool ShouldPrepareFrameGeneration() const;
+	/** Uses the prepared frame's menu decision while retaining live provider safety gates. */
 	bool ShouldUseFrameGenerationThisFrame() const;
+	/** Invalidates copied inputs after presentation or before replacing their resources. */
+	void InvalidateFrameGenerationInputs() noexcept;
 	bool IsFrameGenerationActive() const;
 	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
@@ -3478,7 +3483,10 @@ public:
 	uint64_t submitStageFoveatedPeripheryTAACycle = 0;
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
-	void CopySharedD3D12Resources();
+	/** Publishes readiness only after both motion and depth inputs have been copied. */
+	void PrepareFrameGenerationInputs();
+	/** Returns false without copying when required shaders or resources are unavailable. */
+	bool CopySharedD3D12Resources();
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
@@ -3771,6 +3779,7 @@ public:
 
 private:
 	std::once_flag upscalingSDKLoadOnce;
+	std::atomic_bool frameGenerationPrepared{ false };
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic<VRMainPassDispatchStage> vrMainPassDispatchLastStage{ VRMainPassDispatchStage::None };
 	std::atomic_uint32_t vrMainPassDispatchLastFrame{ 0 };

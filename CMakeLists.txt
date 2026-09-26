@@ -2570,6 +2570,12 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE "${_forced_weather_test_dir}"
     )
     add_controller_test(
+        camera_reprojection_test
+        CameraReprojection
+        tests/camera_reprojection_test.cpp
+    )
+    target_link_libraries(camera_reprojection_test PRIVATE Microsoft::DirectXTK)
+    add_controller_test(
         vr_submit_temporal_snapshot_test
         VRSubmitTemporalSnapshot
         tests/vr_submit_temporal_snapshot_test.cpp

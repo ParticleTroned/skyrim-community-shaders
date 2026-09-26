@@ -850,39 +850,143 @@ This exactly reverses #754 across its 14 files, as verified during the
 #754 review. The user rejected that feature and it was never ported;
 there is no corresponding local implementation to remove. No code change.
 
-### #756: DLSS camera transforms, recommendation awaiting decision
+### #756: DLSS camera transforms, accepted SE/AE/VR port
 
 [Open Shaders #756](https://github.com/alandtse/open-shaders/pull/756),
 `7f4672b9e1e4b2b86a0dda50ac611480d27583a7`, is titled
 `fix(upscaling): correct DLSS camera transforms`.
 
-Recommend **i, adapted to the local frozen stereo camera history**. The
+User decision: **i, adapted to the local frozen stereo camera history**. The
 upstream change derives projection from the inverse view and engine view
 projection, then derives reprojection from the current and previous engine
 matrices with the camera-relative origin shift. It replaces shared mutable
 camera history so DLSS and frame generation cannot consume each other's
 same-frame updates. Its math is also relevant to ordinary DLSS.
 
-Local `Streamline::CheckFrameConstants` still takes the projection directly
-from `GetCameraProjUnjittered` or its captured equivalent. The SE/AE path
-uses `recalculateCameraMatrices`. VR already consumes captured current and
-previous view projections, but multiplies inverse-current by previous
-without translating between their camera-relative origins. The snapshot
-captures both positions; its history repair and cut detection do not bake
-that translation into the matrices. No equivalent reprojection helper was
-found in the codebase.
+Before this port, local `Streamline::CheckFrameConstants` took projection
+directly from `GetCameraProjUnjittered` or its captured equivalent. The
+SE/AE path used `recalculateCameraMatrices`. VR already consumed captured
+current and previous view projections, but multiplied inverse-current by
+previous without translating between their camera-relative origins. The
+snapshot captures both positions; its history repair and cut detection do
+not bake that translation into the matrices. No equivalent reprojection
+helper was found in the codebase.
 
 The local immutable per-eye snapshot, frame identity checks, history reset
 handling and foveated viewport corrections are stronger ownership and crop
-contracts than the upstream patch alone. Preserve them: compute the new
-projection/reprojection from the same frozen snapshot, then retain the
-existing crop conjugation, FOV/pinhole corrections and cache behavior.
-Do not add upstream DLSS-G. Carry focused matrix tests with the adaptation.
+contracts than the upstream patch alone. The port preserves them: all five
+inputs (inverse view, current/previous view projection and current/previous
+position) select the same frozen per-eye snapshot when present, with the
+existing cached-engine fallback. `UpscalingCamera::BuildReprojection`
+contains the upstream row-vector arithmetic without mutable history.
+Streamline copies the four results through `std::bit_cast`, then applies
+the existing VR crop corrections. No upstream DLSS-G is added.
 
-Compared the complete upstream diff and PR description with Streamline's
-constant setup, the frame-buffer accessors, snapshot capture/publication
-and history repair. No #756 code was implemented. Runtime benefit remains
-unverified; await the user's `i` or `r`.
+Both crop blocks are unchanged, including projection scaling, FOV/pinhole
+adjustment and clip-space conjugation. The snapshot/frame-token guards,
+jitter, reset, motion-vector scaling, cache signature and subsequent
+dispatch code are unchanged. Snapshot history repair continues to supply
+matching previous matrices and origins on reset or retained-history frames.
+No new resource, setting, schema, shader or preset change is introduced.
+
+Added the `CameraReprojection` controller target using the project's
+existing DirectXTK dependency. It exercises the production helper with the
+upstream captured AE matrices, rotating/translating cameras and asymmetric
+projection changes. Additional cases use the actual snapshot publication
+and history-repair policy to cover independent eye origins, repeated
+producer visits, reset seeding and retained adjacent history. The captured
+AE fixture is upstream evidence, not a new local capture.
+
+Validation:
+
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr756.py`
+    passed. It compares helper arithmetic with the pinned upstream commit,
+    verifies that all five inputs select the same per-eye snapshot, and
+    checks exact preservation of both crop blocks, frame guards and all
+    code from jitter selection through the remaining dispatch/cache paths.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all tiers;
+    this port does not alter settings-owner sources or their fingerprint.
+-   Scoped pre-commit and `git diff --check` passed. Root CMake Gersemi is
+    skipped for the previously documented unrelated baseline formatting;
+    the isolated added test block passes with its enclosing indentation
+    and the expected custom-command warning.
+-   `CameraReprojection` compilation/execution, DLL builds and SE/AE/VR
+    runtime validation remain deferred by user instruction. The required
+    VR render-scale qualification also remains pending for the final
+    validation stage. No visual, performance or qualification pass is claimed,
+    and there are no new measurements to enter into a numbered ledger.
+
+### #759: per-hunk upstream-sync policy, excluded
+
+[Open Shaders #759](https://github.com/alandtse/open-shaders/pull/759),
+`2fc5aab776b497228ff49a1ed248c68bdf787e57`, is titled
+`docs(sync): resolve sync conflicts per-hunk`.
+
+Changes `.gitattributes` and Open Shaders' upstream-sync documentation,
+including conflict capture and per-hunk fork-preservation rules. There is
+no renderer, shader or runtime change. Excluded as upstream repository
+housekeeping; local AGENTS policy and the user's selective-sync instructions
+remain authoritative.
+
+### #760: grass flutter and ambient wind tuning, excluded
+
+[Open Shaders #760](https://github.com/alandtse/open-shaders/pull/760),
+`f58cc4f61dbfa3a5e1663c56d0a17320a47c62db`, is titled
+`feat(wind): grass flutter and ambient tuning`.
+
+Changes Kevdev's wind response, spring bending, flutter, tuning and UI.
+The shared State/permutation edits only carry `EnableGrassWindSpringBend`;
+the `RunGrass.hlsl` edit consumes that flag and the new wind displacement.
+No independent ordinary-grass correction exists in those shared hunks.
+Excluded under the shared wind and translation/UI rules.
+
+### #751: post-processing pipeline, partial recommendation awaiting decision
+
+[Open Shaders #751](https://github.com/alandtse/open-shaders/pull/751),
+`224ec11a466264851143c969af1d3be2c2f2b205`, is titled
+`feat(post-processing): update pipeline`.
+
+Adds a linked Cinematic Camera, converts several post-processing stages to
+fullscreen raster passes, updates FFT glare/lens flare, corrects ACEScg
+white-point and grading/HDR handling, and expands standalone asynchronous
+shader compilation to vertex/pixel stages with generation-aware lifetimes.
+This is not E11-only; the shared changes were inspected independently.
+
+Recommend **i only for the early stale shader-job rejection**, adapted to
+the existing `IsTaskStale` helper. Local `ProcessCompilationSet` checks its
+stop token before naming the task and preparing compilation, but does not
+check its generation there. `CompileShader` eventually rejects an obsolete
+generation through `ClaimCompilation`, after descriptor resolution, macro
+capture, path/key construction and compatibility lookup. The upstream
+entry guard avoids that preparatory work when a queued job is already
+obsolete. Retain the local generation-aware claim/publication, counter and
+disk-write protections and the scope-exit dispatch-slot release. This is
+an earlier exit, not evidence of a current cache-corruption defect or a
+measured performance gain.
+
+Recommend rejecting the rest of this PR for the current selective sync:
+
+-   Local code has no upstream PostProcessing, HDRDisplay, CinematicCamera,
+    ACEScg/OpenDRT or FFT glare pipeline. Adaptive Balance's color, bloom
+    and tonemap paths are different implementations; their existence does
+    not mean the upstream camera/FFT features are already implemented.
+    Importing that subsystem would be a separate renderer feature project.
+-   The ISHDR gamut/tint and explicit-luminance changes correct the ACEScg
+    path. Local luminance already uses fixed sRGB coefficients and has no
+    AP1 conversion. In the local working gamut, the upstream tint helper
+    reduces to the multiplication already present. Preserve our stereo
+    bloom boundaries, bloom blending, guarded Reinhard division and
+    Adaptive Balance color composition.
+-   The shared camera helpers and disable callback serve the new physical
+    camera. The enlarged `FullscreenPassScope` and standalone async queue
+    are absent locally; their fixes do not repair our synchronous
+    `Util::CompileShader`/`LazyShader` path. Local shader compilation status
+    already counts failed work as terminal through `IsCompiling`, also
+    used by the shader API. Do not add unused parallel infrastructure.
+-   Upstream UI and translations remain excluded.
+
+No #751 code was implemented. Await the user's `i` or `r` for the proposed
+limited adaptation.
 
 ## Verification
 

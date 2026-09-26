@@ -20,6 +20,7 @@
 #include "../../State.h"
 #include "../../Util.h"
 #include "../Upscaling.h"
+#include "CameraReprojection.h"
 #include "DX12SwapChain.h"
 #include "NvidiaBoundedLog.h"
 #include "NvidiaPipelinePolicy.h"
@@ -1822,16 +1823,24 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraFar = temporalSnapshot ? temporalSnapshot->scalars.cameraFar : *globals::game::cameraFar;
 
 	auto viewMatrix = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex)).Transpose();
-	auto cameraViewToClip = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].projectionUnjittered : globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex)).Transpose();
+	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	const auto& previousCameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousPosition : globals::game::frameBufferCached.GetCameraPreviousPosAdjust(eyeIndex);
+	const auto cameraMatrices = UpscalingCamera::BuildReprojection(
+		viewMatrix,
+		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose(),
+		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose(),
+		float3(cameraPosition.x - previousCameraPosition.x, cameraPosition.y - previousCameraPosition.y, cameraPosition.z - previousCameraPosition.z));
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
 	slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
 	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
-	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
+	slConstants.cameraViewToClip = std::bit_cast<sl::float4x4>(cameraMatrices.cameraViewToClip);
+	slConstants.clipToCameraView = std::bit_cast<sl::float4x4>(cameraMatrices.clipToCameraView);
+	slConstants.clipToPrevClip = std::bit_cast<sl::float4x4>(cameraMatrices.clipToPrevClip);
+	slConstants.prevClipToClip = std::bit_cast<sl::float4x4>(cameraMatrices.prevClipToClip);
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
 	if (globals::game::isVR) {
@@ -1860,19 +1869,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 			};
 		}
 
-		// VR: compute clipToCameraView / clipToPrevClip / prevClipToClip from Skyrim's per-eye matrices.
-		// recalculateCameraMatrices() uses a single static prev-frame slot -- unusable for two viewports.
 		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
-
-		auto currViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose();
-		auto prevViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose();
-
-		sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
-		sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
-
-		sl::float4x4 invCurrViewProj;
-		sl::matrixFullInvert(invCurrViewProj, currViewProjSL);
-		sl::matrixMul(slConstants.clipToPrevClip, invCurrViewProj, prevViewProjSL);
 
 		if (applyCroppedConstantsCorrection) {
 			const float invScaleX = 1.0f / clampedViewportScaleX;
@@ -1891,8 +1888,6 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		}
 
 		sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
-	} else {
-		recalculateCameraMatrices(slConstants);
 	}
 
 	const auto jitter = upscaling.GetJitterForDispatch();

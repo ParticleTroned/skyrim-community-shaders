@@ -1553,13 +1553,13 @@ same implementation is present in current `main-VR`; local foveation does
 not use this controller. No missing independent rendering or crop-state
 fix was identified, and no #774 code was changed.
 
-### #776: skip runtime downloads, recommendation awaiting decision
+### #776: skip runtime downloads, accepted local adaptation
 
 [Open Shaders #776](https://github.com/alandtse/open-shaders/pull/776),
 `0677f487a8e39ca38173a2751bfe5e02807cdebc`, is titled
 `build(cmake): add SKIP_RUNTIME_DOWNLOADS option`.
 
-Recommend **i: adapt the opt-in DLL-only build workflow to local download,
+User decision: **i: adapt the opt-in DLL-only build workflow to local download,
 packaging and deployment contracts**. Reviewed all seven changed files,
 the local runtime modules, verified downloader, CMake staging/install paths
 and both cleanup scripts. This is developer tooling with no direct shader,
@@ -1592,15 +1592,102 @@ paths must fail clearly when required payloads are absent.
 The local deployment manifest restricts stale deletion to previously owned,
 unmodified content, which must be preserved. That alone does not protect an
 owned runtime DLL omitted from a new skipped payload: it could still be
-classified as stale. If accepted, add narrowly scoped runtime preservation
-while retaining the existing ownership and content checks. Do not replace
-this with upstream's global destination-mirroring deletion behavior.
+classified as stale. The adaptation therefore needs runtime preservation
+while retaining the existing ownership and content checks, without
+upstream's global destination-mirroring deletion behavior.
 
-No #776 implementation has been made.
+Implemented `SKIP_RUNTIME_DOWNLOADS`, OFF by default. Normal mode delegates
+to the existing verified downloader. Skip mode only reads cached assets:
+FidelityFX DLL hashes must match, and Streamline requires a verified archive
+plus the matching extraction stamp before staging existing SDK files.
+No download, archive extraction or invalid-cache removal occurs in skip
+mode. The six Streamline DLLs and five original notices remain mandatory
+expected payloads. Missing or unverified entries are omitted only from
+staging inputs and build dependencies, never from required install paths.
 
-Await the user's `i` or `r`. This checkpoint changes only the review
-ledger; scoped documentation hooks and `git diff --check` passed. No
-build, compiled test, shader compilation or runtime validation ran.
+Both automatic zip modes reject incomplete payloads at configure time.
+An install guard runs for every component before dependency installs or
+the existing AIO reset. It rejects missing runtime components and full
+installs, while allowing SKSE-only installation. The guard also changes
+when skip mode changes and is a dependency of staging, deployment and
+runtime-bearing package outputs. Reconfiguration therefore refreshes the
+relevant rules even when the available file lists stay empty.
+
+Both AIO and shader staging cleanup retain the two runtime directories in
+skip mode. Manifest-based deployment leaves their destination contents
+untouched, including when source runtime files exist but differ. It keeps
+ownership only for previously owned files whose hashes still match; user
+modifications retain the existing preservation/release behavior. Disabling
+skip mode restores ordinary copy and stale-file cleanup. No other shader
+deployment ownership rules or runtime pins changed.
+
+Added the developer guide and `RuntimeDownloadPolicy` controller-test
+registration. Its script-only fixtures cover valid cache reuse, invalid
+cache preservation, missing payloads, ordinary verified local-file download,
+stale Streamline extraction/payload rejection, package-policy failures,
+install ordering and SKSE-only installation, both cleanup modes, runtime
+overwrite prevention and ownership across skip-to-normal transitions.
+
+Validation:
+
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -D TEST_ROOT=../../analysis/open-shaders-dev-review-20260926/pr776-policy -P tests/runtime_download_policy_test.cmake`
+    passed after the final code changes. Evidence fixtures are under
+    `pr776-policy/fa893923ac31`. The missing-payload warning is expected.
+    Only script execution and a language-free install fixture ran: no
+    project/DLL target, dependency download or game deployment was invoked.
+-   `python ../../analysis/open-shaders-dev-review-20260926/format-pr776.py C:/src/skyrim-community-shaders/.git/pre-commit-cache/repou5304rxj/py_env-python3/Scripts/gersemi.exe --check`
+    passed for changed ranges in existing CMake files and all new CMake
+    files. Whole-file gersemi is skipped in scoped hooks to preserve the
+    known unrelated baseline formatting; changed ranges are checked directly.
+-   Scoped whitespace, line-ending and documentation hooks and
+    `git diff --check` passed.
+-   Full project configuration, DLL builds, compiled tests, real package
+    validation, shader compilation and SE/AE/VR runtime checks remain
+    deferred until the end by user instruction.
+
+### #769: typed per-eye foveated depth, recommendation awaiting decision
+
+[Open Shaders #769](https://github.com/alandtse/open-shaders/pull/769),
+`aeba846179bad44a7560a583a8f019f1e2cf0c42`, is titled
+`fix(upscaling): typed per-eye foveated depth`.
+
+Recommend **i: adapt the missing DLSS depth conversion; retain the existing
+FSR conversion and local stereo/lifecycle contracts**. Reviewed the complete
+seven-file diff, PR metadata and both local main/submit depth producers,
+their foveated consumers, resource formats and the encode shader. The
+relevant local depth code is also present in current `main-VR`.
+
+Upstream replaces boxed copies from engine depth-stencil into per-eye and
+foveated crop textures with a compute pass. It reads the typed depth SRV,
+writes an R32_FLOAT UAV with explicit X/Y source offsets, checks bounds
+and resources, and returns failure when conversion cannot run. It also
+passes one resolved depth SRV through preparation and HMD-mask clearing.
+
+Local FSR already writes native depth values to per-eye R32_FLOAT textures
+through `EncodeTexturesCS` with `DEPTH_OUTPUT`. Main and submit encoding
+support X/Y offsets and foveated regions. The separate upstream foveated
+module does not exist locally, and duplicating its FSR conversion is not
+needed. Local DLSS, however, still takes depth from `vrIntermediateDepth`:
+`PreparePerEyeInputs` and `EncodeSubmitStageVRInputs` fill it using boxed
+`CopySubresourceRegion` calls from the engine's main depth texture. The
+foveated center then crops that intermediate into its own depth input.
+
+Those DLSS intermediates correctly use the R24G8 format family instead of
+upstream's R32 allocation, but format compatibility does not settle the
+source-copy restriction. Microsoft's
+[CopySubresourceRegion contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-copysubresourceregion)
+requires a whole-subresource copy for depth-stencil buffers, with zero
+destination offsets and a null source box. The reviewed producers pass
+eye/region boxes instead. This is an API-contract concern in local code,
+not a runtime measurement or proof of a particular visible artifact.
+
+Adapt depth production to typed-SRV conversion for the affected DLSS path,
+reusing the existing encoder where practical. Preserve current eye offsets,
+crop ownership, retained input proofs, resource retirement, periphery TAA,
+error fallback and SE/AE behavior. Format/readiness checks and consumers
+must agree with the resulting resources. The later #779 review overlaps
+the standard depth-copy problem and must account for any shared fix made
+here. No #769 code has been changed; await the user's `i` or `r`.
 
 ## Verification
 

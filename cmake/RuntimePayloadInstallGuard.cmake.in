@@ -1,0 +1,30 @@
+# Keep the configured policy in the dependency graph when skip mode changes.
+# SKIP_RUNTIME_DOWNLOADS=@SKIP_RUNTIME_DOWNLOADS@
+set(_csx_ffx_missing "@FFX_RUNTIME_PAYLOAD_MISSING@")
+set(_csx_streamline_missing "@STREAMLINE_RUNTIME_PAYLOAD_MISSING@")
+if(
+    (
+        NOT CMAKE_INSTALL_COMPONENT
+        OR CMAKE_INSTALL_COMPONENT STREQUAL "FidelityFXRuntime"
+    )
+    AND _csx_ffx_missing
+)
+    message(
+        FATAL_ERROR
+        "FidelityFX runtime payload is missing or unverified. Reconfigure with "
+        "SKIP_RUNTIME_DOWNLOADS=OFF before installing or packaging."
+    )
+endif()
+if(
+    (
+        NOT CMAKE_INSTALL_COMPONENT
+        OR CMAKE_INSTALL_COMPONENT STREQUAL "StreamlineRuntime"
+    )
+    AND _csx_streamline_missing
+)
+    message(
+        FATAL_ERROR
+        "Streamline runtime payload is missing or unverified. Reconfigure with "
+        "SKIP_RUNTIME_DOWNLOADS=OFF before installing or packaging."
+    )
+endif()

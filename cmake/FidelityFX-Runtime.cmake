@@ -1,5 +1,5 @@
 set(FFX_RUNTIME_SDK_COMMIT "60f4ea81909200d8542eca14dccb2628b763a9a3")
-include("${CMAKE_CURRENT_LIST_DIR}/CsxDownload.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/RuntimePayload.cmake")
 set(
     FFX_RUNTIME_BASE_URL
     "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/${FFX_RUNTIME_SDK_COMMIT}/Kits/FidelityFX/signedbin"
@@ -14,15 +14,34 @@ file(MAKE_DIRECTORY "${FFX_RUNTIME_DIRECTORY}")
 
 function(download_ffx_runtime _filename _sha256)
     set(_destination "${FFX_RUNTIME_DIRECTORY}/${_filename}")
-    csx_download_verified_asset(
+    csx_prepare_runtime_asset(
         "${FFX_RUNTIME_BASE_URL}/${_filename}"
         "${_destination}"
-        "${_sha256}"
+        "${_sha256}" _available
     )
-    set(FFX_RUNTIME_FILES ${FFX_RUNTIME_FILES} "${_destination}" PARENT_SCOPE)
+    set(FFX_RUNTIME_PAYLOAD_FILES
+        ${FFX_RUNTIME_PAYLOAD_FILES}
+        "${_destination}"
+        PARENT_SCOPE
+    )
+    if(_available)
+        set(FFX_RUNTIME_FILES
+            ${FFX_RUNTIME_FILES}
+            "${_destination}"
+            PARENT_SCOPE
+        )
+    else()
+        set(FFX_RUNTIME_PAYLOAD_MISSING
+            ${FFX_RUNTIME_PAYLOAD_MISSING}
+            "${_destination}"
+            PARENT_SCOPE
+        )
+    endif()
 endfunction()
 
 set(FFX_RUNTIME_FILES "")
+set(FFX_RUNTIME_PAYLOAD_FILES "")
+set(FFX_RUNTIME_PAYLOAD_MISSING "")
 download_ffx_runtime(
     amd_fidelityfx_framegeneration_dx12.dll
     02297BEEDD285E822D3A64F314CF00FAF378DCEC0EDC47FF0C4DD71B3A8C2F18

@@ -2539,6 +2539,36 @@ if(BUILD_CONTROLLER_TESTS)
         frame_generation_inputs_test
         PRIVATE "${_frame_generation_inputs_test_dir}"
     )
+    set(_forced_weather_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/forced-weather"
+    )
+    set(_forced_weather_test_headers
+        "${_forced_weather_test_dir}/forced_weather_hooks.h"
+        "${_forced_weather_test_dir}/forced_weather_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_forced_weather_test_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_forced_weather.py" --source-dir
+            "${PROJECT_SOURCE_DIR}" --output-dir "${_forced_weather_test_dir}"
+        DEPENDS
+            src/Utils/Game.cpp
+            src/CSEditor/EditorWindow.cpp
+            tests/extract_forced_weather.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        forced_weather_test
+        ForcedWeather
+        tests/forced_weather_test.cpp
+    )
+    target_sources(forced_weather_test PRIVATE ${_forced_weather_test_headers})
+    target_include_directories(
+        forced_weather_test
+        PRIVATE "${_forced_weather_test_dir}"
+    )
     add_controller_test(
         vr_submit_temporal_snapshot_test
         VRSubmitTemporalSnapshot

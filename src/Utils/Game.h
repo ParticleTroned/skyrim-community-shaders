@@ -48,6 +48,9 @@ namespace Util::detail
 
 namespace Util
 {
+	/** Refreshes cloud passes and releases the old sky model after a native ForceWeather call. */
+	void RefreshForcedWeatherSky(RE::Sky* a_sky);
+
 	/** @brief Rejects implausible addresses; this does not establish pointee lifetime or readability. */
 	[[nodiscard]] inline bool IsLikelyValidPointer(const void* pointer, std::size_t alignment = alignof(void*))
 	{

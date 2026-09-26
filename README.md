@@ -44,7 +44,7 @@ Install them manually only if you want them in everywhere.
 -   [Address Library for SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
     -   Needed for SSE/AE
 -   [VR Address Library for SKSEVR](https://www.nexusmods.com/skyrimspecialedition/mods/58101)
-    -   Needed for VR
+    -   Version 0.269.0 or later is required for VR, including forced-weather sky model cleanup.
 
 ## Build Instructions
 

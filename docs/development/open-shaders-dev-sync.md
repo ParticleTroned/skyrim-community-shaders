@@ -767,42 +767,122 @@ their largest per-eye record. The shared `RunGrass.hlsl` hunk is inside
 changes are GO code, buffer layout and feature version. Deferred under
 the GO rule, with no independent non-GO hunk to port.
 
-### #750: forced-weather sky refresh, recommendation awaiting decision
+### #750: forced-weather sky refresh, accepted SE/AE/VR port
 
 [Open Shaders #750](https://github.com/alandtse/open-shaders/pull/750),
 `3e56f31abe16cc3e62cf17e94f5e8aca5a6b7654`, is titled
 `fix(weather): refresh sky when forcing weather`.
 
-Recommend **i, adapted to local weather controls and hooks**. Its shared
+User decision: **i, adapted to local weather controls and hooks**. Its shared
 renderer correction clears cached cloud render passes after `ForceWeather`
 resets blending, and releases the outgoing attached or pending aurora/sky
 model so the newly selected weather can load its own. It is useful outside
 upstream UI and Scene Manager: local WeatherPicker, weather API preview,
 editor refresh and lock enforcement all force weather.
 
-The local paths call the engine or its lock-hook trampoline directly.
-No matching cloud-pass invalidation or model-handle release exists in those
-paths or `Utils/Game.cpp`. The existing lock guards, batched editor refresh
-and weather-service owner-thread checks solve different problems and should
-be preserved. In particular, `ReapplyWeatherLock` deliberately calls the
-stored trampoline when installed; copying the upstream wrapper call there
-would re-enter the local detour. Adapt the visual refresh around the local
-native-call boundary rather than replacing the lock implementation.
+The local paths previously called the engine or its lock-hook trampoline
+directly. No matching cloud-pass invalidation or model-handle release
+existed in those paths or `Utils/Game.cpp`. The existing lock guards,
+batched editor refresh and weather-service owner-thread checks solve
+different problems and remain intact.
 
-This has a dependency consequence: upstream raises the VR Address Library
-minimum to **0.269.0** for its model-handle reset relocation; the local
-minimum is **0.207.0**. The primary checkout's CommonLib exposes the
-`auroraRoot`, `auroraModel` and cloud fields, but its model-handle type has
-no public releasing reset method. A complete port must retain correct
-SE/AE/VR release paths and declare the new VR address requirement. Do not
-substitute a plain handle assignment that leaks the model request.
-The cloud-pass correction is independent if the model-release portion is
-subsequently deferred by the user.
+`EditorWindow::ForceWeather` now centralizes the native call and refresh.
+It preserves the active lock and uses the saved entry/trampoline when
+available, avoiding re-entry through the detour and duplicate cleanup.
+WeatherPicker instant selection, API preview, editor refresh, lock repair
+and the external ForceWeather hook use that boundary. Ordinary blended
+`SetWeather` transitions retain their previous behavior.
 
-No Scene Manager, upstream layout or translation changes are proposed.
-Verified the complete code diff and PR description against local weather
-callers, detours and CommonLib declarations. No #750 code was implemented.
-Await the user's `i` or `r`.
+`Util::RefreshForcedWeatherSky` detaches the outgoing aurora root, releases
+its attached or pending model request, and invalidates each cloud's sky
+shader render passes. Null sky, root, cloud and shader-property cases are
+guarded. AE clears the handle and releases its entry through ID 15443;
+SE/VR use the engine's resetting release through ID 25746. The local
+CommonLib handle has no public releasing reset method.
+
+The loader and user requirements now require **VR Address Library 0.269.0**,
+up from 0.207.0. The published
+[0.269.0 release](https://github.com/alandtse/skyrim_vr_address_library/releases/tag/v0.269.0)
+includes the reset mapping from
+[address-library #226](https://github.com/alandtse/skyrim_vr_address_library/pull/226).
+Its database change maps ID 25746 from SE `0x1403b8d30` to VR `0x1403c8b50`,
+with matching handle replacement/release logic in the published analysis.
+This verifies the dependency and mapping, not local binary execution.
+
+The existing DevBench weather action and its preview schema description
+now document the refresh; field names, enums and ABI remain unchanged.
+No Scene Manager, upstream layout or translation changes were ported.
+The settings-owner fingerprint and three generated preset markers are
+refreshed while retaining compatible revision 5 and every graphics setting.
+
+Added `ForcedWeather`, extracting the production model-release, refresh,
+force-routing and lock-hook methods. Simulated engine boundaries cover
+SE/AE/VR release selection, attached/pending/absent models, first and last
+cloud layers, null and unrelated properties, pre-install and failed-install
+fallbacks, installed hooks, direct and console calls, active locks, drift
+repair and unchanged normal weather transitions. These fixtures do not
+validate real engine ABI, GPU rendering or in-game visual behavior.
+
+Validation:
+
+-   `python tests/extract_forced_weather.py --source-dir . --output-dir ../../analysis/open-shaders-dev-review-20260926/pr750-extracted`
+    passed without compiling. Source inspection confirmed that all three
+    direct callers use the common force boundary.
+-   The DevBench descriptor parses as JSON. Comparing it with the parent
+    after removing description fields confirms no structural schema change.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all tiers.
+    JSON comparison with the parent confirms the sole preset difference is
+    `Preset Compatibility/settingsContract/sourceTreeSha256`.
+-   Scoped pre-commit and `git diff --check` passed. Root CMake Gersemi is
+    skipped for the previously documented unrelated baseline formatting;
+    the new test block passes an isolated Gersemi check with its enclosing
+    indentation and the expected custom-command warning.
+-   `ForcedWeather` compilation/execution, DLL builds, shader compilation
+    and SE/AE/VR runtime validation remain deferred by user instruction.
+
+### #757: revert improved grass transparency, no local action
+
+[Open Shaders #757](https://github.com/alandtse/open-shaders/pull/757),
+`f74c58d42d4ff283409a847f3a780b99e870c3f0`, is titled
+`revert: "feat(grass): add improved transparency"`.
+
+This exactly reverses #754 across its 14 files, as verified during the
+#754 review. The user rejected that feature and it was never ported;
+there is no corresponding local implementation to remove. No code change.
+
+### #756: DLSS camera transforms, recommendation awaiting decision
+
+[Open Shaders #756](https://github.com/alandtse/open-shaders/pull/756),
+`7f4672b9e1e4b2b86a0dda50ac611480d27583a7`, is titled
+`fix(upscaling): correct DLSS camera transforms`.
+
+Recommend **i, adapted to the local frozen stereo camera history**. The
+upstream change derives projection from the inverse view and engine view
+projection, then derives reprojection from the current and previous engine
+matrices with the camera-relative origin shift. It replaces shared mutable
+camera history so DLSS and frame generation cannot consume each other's
+same-frame updates. Its math is also relevant to ordinary DLSS.
+
+Local `Streamline::CheckFrameConstants` still takes the projection directly
+from `GetCameraProjUnjittered` or its captured equivalent. The SE/AE path
+uses `recalculateCameraMatrices`. VR already consumes captured current and
+previous view projections, but multiplies inverse-current by previous
+without translating between their camera-relative origins. The snapshot
+captures both positions; its history repair and cut detection do not bake
+that translation into the matrices. No equivalent reprojection helper was
+found in the codebase.
+
+The local immutable per-eye snapshot, frame identity checks, history reset
+handling and foveated viewport corrections are stronger ownership and crop
+contracts than the upstream patch alone. Preserve them: compute the new
+projection/reprojection from the same frozen snapshot, then retain the
+existing crop conjugation, FOV/pinhole corrections and cache behavior.
+Do not add upstream DLSS-G. Carry focused matrix tests with the adaptation.
+
+Compared the complete upstream diff and PR description with Streamline's
+constant setup, the frame-buffer accessors, snapshot capture/publication
+and history repair. No #756 code was implemented. Runtime benefit remains
+unverified; await the user's `i` or `r`.
 
 ## Verification
 

@@ -29,6 +29,8 @@ def extract(root, output):
     linear = read("LinearLighting.h")
     bloom = read("Bloom.cpp")
     water = read("WaterAppearance.cpp")
+    menu = (root / "src/MenuDevBenchBridge.cpp").read_text(encoding="utf-8-sig")
+    migrations = (root / "src/SettingsMigrations.cpp").read_text(encoding="utf-8-sig")
     output.mkdir(parents=True, exist_ok=True)
     (output / "linear_lighting_members.h").write_text(
         between(linear, "\tstruct Settings", "\tstruct alignas(16) PerFrameData"), encoding="utf-8")
@@ -46,6 +48,10 @@ def extract(root, output):
         between(source, "\tfloat SafeFinite(", "\tfloat WrapHour("),
         between(source, "\tvoid SanitizeWaterWindSettings(AdaptiveBrightness::WaterWindSettings& a_settings)\n", "\tvoid NormalizeBaseSettings("),
         function(source, "\tvoid ClampProfileSettings("),
+        function(migrations, "bool SettingsMigrations::MigrateCloudProfileSettings("),
+        function(migrations, "bool SettingsMigrations::MigrateCloudSettingsLayer("),
+        function(source, "\tvoid MigrateLegacyProfileLighting("),
+        function(menu, "\tstd::string ValidateAdaptiveBalanceVisuals("),
         function(source, "bool AdaptiveBrightness::IsRuntimeAvailable()"),
         function(source, "void AdaptiveBrightness::SetEnabled("),
         function(source, "void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled("),

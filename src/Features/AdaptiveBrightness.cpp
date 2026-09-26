@@ -52,6 +52,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	waterAdvanced,
 	skyBrightnessMult,
 	skySaturation,
+	cloudBrightnessMult,
+	cloudSaturation,
+	fogIntensity,
+	sunGlareIntensity,
+	skyStaticBrightness,
+	skyStaticTransparency,
 	directionalLightMult,
 	pointLightMult,
 	linearPointLightMult,
@@ -64,6 +70,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	glowmapMult,
 	effectLightingMult,
 	skyGammaOffset,
+	cloudGammaOffset,
 	fogGammaOffset,
 	fogAlphaGammaOffset,
 	waterGammaOffset,
@@ -330,6 +337,12 @@ namespace
 
 		a_settings.skyBrightness = clamp(a_settings.skyBrightness, kGlobalSkyBrightnessMax, defaults.skyBrightness);
 		a_settings.skySaturation = clamp(a_settings.skySaturation, kSkySaturationMax, defaults.skySaturation);
+		a_settings.cloudBrightness = clamp(a_settings.cloudBrightness, kGlobalSkyBrightnessMax, defaults.cloudBrightness);
+		a_settings.cloudSaturation = clamp(a_settings.cloudSaturation, kSkySaturationMax, defaults.cloudSaturation);
+		a_settings.fogIntensity = clamp(a_settings.fogIntensity, kGlobalLightingMultiplierMax, defaults.fogIntensity);
+		a_settings.sunGlareIntensity = clamp(a_settings.sunGlareIntensity, kGlobalLightingMultiplierMax, defaults.sunGlareIntensity);
+		a_settings.skyStaticBrightness = clamp(a_settings.skyStaticBrightness, kGlobalSkyBrightnessMax, defaults.skyStaticBrightness);
+		a_settings.skyStaticTransparency = clamp(a_settings.skyStaticTransparency, 1.0f, defaults.skyStaticTransparency);
 		a_settings.contrast = Util::ClampFinite(a_settings.contrast, kContrastMin, kContrastMax, defaults.contrast);
 		a_settings.saturation = clamp(a_settings.saturation, kSaturationMax, defaults.saturation);
 		a_settings.ambientMult = ClampMultiplier(a_settings.ambientMult);
@@ -638,6 +651,12 @@ namespace
 		a_profile.saturation = Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f);
 		a_profile.skyBrightnessMult = ClampMultiplier(a_profile.skyBrightnessMult);
 		a_profile.skySaturation = Util::ClampFinite(a_profile.skySaturation, 0.0f, kSkySaturationMax, 1.0f);
+		a_profile.cloudBrightnessMult = ClampMultiplier(a_profile.cloudBrightnessMult);
+		a_profile.cloudSaturation = Util::ClampFinite(a_profile.cloudSaturation, 0.0f, kSkySaturationMax, 1.0f);
+		a_profile.fogIntensity = Util::ClampFinite(a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.sunGlareIntensity = Util::ClampFinite(a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.skyStaticBrightness = Util::ClampFinite(a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+		a_profile.skyStaticTransparency = Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
 		a_profile.pointLightMult = ClampMultiplier(a_profile.pointLightMult);
 		a_profile.linearPointLightMult = ClampMultiplier(a_profile.linearPointLightMult);
@@ -650,6 +669,7 @@ namespace
 		a_profile.glowmapMult = ClampMultiplier(a_profile.glowmapMult);
 		a_profile.effectLightingMult = ClampMultiplier(a_profile.effectLightingMult);
 		a_profile.skyGammaOffset = ClampGammaOffset(a_profile.skyGammaOffset);
+		a_profile.cloudGammaOffset = ClampGammaOffset(a_profile.cloudGammaOffset);
 		a_profile.fogGammaOffset = ClampGammaOffset(a_profile.fogGammaOffset);
 		a_profile.fogAlphaGammaOffset = ClampGammaOffset(a_profile.fogAlphaGammaOffset);
 		a_profile.waterGammaOffset = ClampGammaOffset(a_profile.waterGammaOffset);
@@ -857,6 +877,7 @@ namespace
 	{
 		if (!a_profile.is_object())
 			return;
+		SettingsMigrations::MigrateCloudProfileSettings(a_profile);
 
 		if (const auto linearPointIt = a_profile.find("linearPointLightMult");
 			linearPointIt != a_profile.end() && linearPointIt->is_number())
@@ -1132,6 +1153,7 @@ namespace
 		}
 		if (removedGlobalLayerWasDisabled)
 			globalProfile = AdaptiveBrightness::ProfileSettings::GlobalDefaults();
+		SettingsMigrations::MigrateCloudProfileSettings(globalProfile);
 		migrated["globalProfile"] = std::move(globalProfile);
 
 		const auto legacyBloomIt = migrated.find("bloomEnhancement");
@@ -2042,11 +2064,24 @@ void AdaptiveBrightness::DrawLightingSettings(
 		return;
 
 	ImGui::Indent();
-	ImGui::SeparatorText("Direct Lighting");
+	ImGui::SeparatorText("Sky and Atmosphere");
 	ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales sky color saturation for this layer. One preserves the current colors; zero makes them monochrome.");
+		ImGui::Text("Scales sky color saturation independently of clouds. One preserves the current colors; zero makes them monochrome.");
+	ImGui::SliderFloat("Cloud Brightness", &a_profile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Cloud Saturation", &a_profile.cloudSaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent.");
+	ImGui::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them.");
+	ImGui::SliderFloat("Sun Glare Intensity", &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales glare already drawn by the engine. Zero removes it; one preserves its brightness. Does not restore missing glare or weather lens flares.");
+	ImGui::SeparatorText("Direct Lighting");
 	ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
@@ -2069,6 +2104,7 @@ void AdaptiveBrightness::DrawLightingSettings(
 
 	ImGui::SeparatorText("Atmosphere Gamma Offsets");
 	ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Clouds", &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -3298,6 +3334,7 @@ LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings() 
 	neutral.effectGamma = 1.0f;
 	neutral.effectAlphaGamma = 1.0f;
 	neutral.skyGamma = 1.0f;
+	neutral.cloudGamma = 1.0f;
 	neutral.waterGamma = 1.0f;
 	neutral.vlGamma = 1.0f;
 	neutral.glowmapMult = 1.0f;
@@ -3328,6 +3365,7 @@ LinearLighting::Settings AdaptiveBrightness::ApplyProfile(const LinearLighting::
 	out.effectLightingMult = ClampMultiplier(out.effectLightingMult * masterScale(0.55f) * advancedMult(a_profile.effectLightingMult));
 
 	out.skyGamma = ClampGamma(out.skyGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.skyGammaOffset));
+	out.cloudGamma = ClampGamma(out.cloudGamma + masterGammaOffset * 0.90f + advancedOffset(a_profile.cloudGammaOffset));
 	out.fogGamma = ClampGamma(out.fogGamma + masterGammaOffset * 0.75f + advancedOffset(a_profile.fogGammaOffset));
 	out.fogAlphaGamma = ClampGamma(out.fogAlphaGamma + masterGammaOffset * 0.50f + advancedOffset(a_profile.fogAlphaGammaOffset));
 	out.waterGamma = ClampGamma(out.waterGamma + masterGammaOffset * 0.75f + ClampGammaOffset(a_profile.waterGammaOffset));
@@ -3349,6 +3387,7 @@ namespace
 		       a_effective.glowmapMult != a_base.glowmapMult ||
 		       a_effective.effectLightingMult != a_base.effectLightingMult ||
 		       a_effective.skyGamma != a_base.skyGamma ||
+		       a_effective.cloudGamma != a_base.cloudGamma ||
 		       a_effective.fogGamma != a_base.fogGamma ||
 		       a_effective.fogAlphaGamma != a_base.fogAlphaGamma ||
 		       a_effective.waterGamma != a_base.waterGamma ||
@@ -3371,6 +3410,13 @@ SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSett
 
 	out.skyBrightness = ClampMultiplier(out.skyBrightness * advancedMult(a_profile.skyBrightnessMult));
 	out.skySaturation = Util::ClampFinite(out.skySaturation * advancedMult(a_profile.skySaturation), 0.0f, kSkySaturationMax, 1.0f);
+	out.cloudBrightness = ClampMultiplier(out.cloudBrightness * advancedMult(a_profile.cloudBrightnessMult));
+	out.cloudSaturation = Util::ClampFinite(out.cloudSaturation * advancedMult(a_profile.cloudSaturation), 0.0f, kSkySaturationMax, 1.0f);
+	out.fogIntensity = Util::ClampFinite(out.fogIntensity * advancedMult(a_profile.fogIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.sunGlareIntensity = Util::ClampFinite(out.sunGlareIntensity * advancedMult(a_profile.sunGlareIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.skyStaticBrightness = Util::ClampFinite(out.skyStaticBrightness * advancedMult(a_profile.skyStaticBrightness), 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+	const float transparency = a_profile.advanced ? Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f) : 0.0f;
+	out.skyStaticTransparency = 1.0f - (1.0f - out.skyStaticTransparency) * (1.0f - transparency);
 	out.contrast = Util::ClampFinite(out.contrast * Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f), kContrastMin, kContrastMax, 1.0f);
 	out.saturation = Util::ClampFinite(out.saturation * Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f), 0.0f, kSaturationMax, 1.0f);
 	out.ambientMult = ClampMultiplier(out.ambientMult * masterScale(0.95f) * advancedMult(a_profile.ambientMult));
@@ -3481,6 +3527,7 @@ LinearLighting::Settings AdaptiveBrightness::LerpSettings(const LinearLighting::
 	out.effectGamma = lerp(a_a.effectGamma, a_b.effectGamma);
 	out.effectAlphaGamma = lerp(a_a.effectAlphaGamma, a_b.effectAlphaGamma);
 	out.skyGamma = lerp(a_a.skyGamma, a_b.skyGamma);
+	out.cloudGamma = lerp(a_a.cloudGamma, a_b.cloudGamma);
 	out.waterGamma = lerp(a_a.waterGamma, a_b.waterGamma);
 	out.vlGamma = lerp(a_a.vlGamma, a_b.vlGamma);
 	out.vanillaDiffuseColorMult = lerp(a_a.vanillaDiffuseColorMult, a_b.vanillaDiffuseColorMult);
@@ -3507,6 +3554,12 @@ SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSett
 
 	out.skyBrightness = lerp(a_a.skyBrightness, a_b.skyBrightness);
 	out.skySaturation = lerp(a_a.skySaturation, a_b.skySaturation);
+	out.cloudBrightness = lerp(a_a.cloudBrightness, a_b.cloudBrightness);
+	out.cloudSaturation = lerp(a_a.cloudSaturation, a_b.cloudSaturation);
+	out.fogIntensity = lerp(a_a.fogIntensity, a_b.fogIntensity);
+	out.sunGlareIntensity = lerp(a_a.sunGlareIntensity, a_b.sunGlareIntensity);
+	out.skyStaticBrightness = lerp(a_a.skyStaticBrightness, a_b.skyStaticBrightness);
+	out.skyStaticTransparency = lerp(a_a.skyStaticTransparency, a_b.skyStaticTransparency);
 	out.contrast = lerp(a_a.contrast, a_b.contrast);
 	out.saturation = lerp(a_a.saturation, a_b.saturation);
 	out.ambientMult = lerp(a_a.ambientMult, a_b.ambientMult);
@@ -3525,7 +3578,8 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 	const LinearLighting::Settings& a_linearLightingSettings,
 	bool a_linearLightingEnabled) const
 {
-	const auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	auto baseSettings = a_linearLightingEnabled ? a_linearLightingSettings : GetNeutralLinearLightingSettings();
+	baseSettings.cloudGamma = baseSettings.skyGamma;
 	const bool runtimeAvailable = IsRuntimeEnabled();
 	auto layeredBase = baseSettings;
 	if (runtimeAvailable)
@@ -3700,6 +3754,12 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	PerFrameData data{};
 	data.skyBrightness = effectiveSettings.skyBrightness;
 	data.skySaturation = effectiveSettings.skySaturation;
+	data.cloudBrightness = effectiveSettings.cloudBrightness;
+	data.cloudSaturation = effectiveSettings.cloudSaturation;
+	data.fogIntensity = effectiveSettings.fogIntensity;
+	data.sunGlareIntensity = effectiveSettings.sunGlareIntensity;
+	data.skyStaticBrightness = effectiveSettings.skyStaticBrightness;
+	data.skyStaticTransparency = effectiveSettings.skyStaticTransparency;
 	data.contrast = effectiveSettings.contrast;
 	data.saturation = effectiveSettings.saturation;
 	data.ambientMult = effectiveSettings.ambientMult;

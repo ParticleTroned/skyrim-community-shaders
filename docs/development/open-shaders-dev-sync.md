@@ -29,6 +29,12 @@ to `codex/pr730-open-shaders-dev-sync`, based on that commit, in
 `build/worktrees/pr730-open-shaders-dev-sync`. Subsequent review and ports
 continue there. Unrelated primary-worktree changes were retained.
 
+The user then specified that these ports will land atop
+`feat/adaptive-balance-color`. Merge `a5e5ff76e` integrates its head
+`f3bfe1f24f11a570ce6b74b9f25354a15f0ebe17` into the sync branch, retaining
+both histories. The primary checkout remains at `202777f6f`; the Color
+branch and its separate worktree are unchanged.
+
 The user decides `i` or `r` for each presented candidate before a port.
 Compare actual diffs with current local code, including equivalent or
 better implementations, and preserve SE/AE and VR behavior. Inspect mixed
@@ -326,7 +332,7 @@ The next entry is #635, `405b59488fb8cfdb52a489047cb6fc2afe42f646`,
     and their declarations, plus translated labels; no rendering/backend
     implementation changes.
 
-### #742: S3D rock texture exclusions, recommendation awaiting decision
+### #742: S3D rock texture exclusions, rejected
 
 [Open Shaders #742](https://github.com/alandtse/open-shaders/pull/742),
 `90650df7b73e45b0bd21a1a9ee65ae3a0ef2893f`, is titled
@@ -348,9 +354,140 @@ directory fallback can still admit an S3D path. No local failure requiring
 that named exception has been demonstrated, so retain the existing #727
 decision instead of adding mod-specific rules preemptively.
 
-No #742 changes have been implemented. Await the user's decision. The next
-entry afterward is #740, `ff75ed184`,
-`chore(scene-manager): update feature availability`.
+User decision: **r**. No #742 code has been implemented.
+
+### #740: Scene Manager feature availability, excluded
+
+`ff75ed18411c3a97fce5bad0efe4203d070e87c4`,
+`chore(scene-manager): update feature availability`, only changes Scene
+Manager availability rules, nested feature UI disabling, and associated
+tests. No independent renderer correction is present. Retain Adaptive
+Balance and exclude this PR under the user's Scene Manager/UI rules.
+
+### #741: atmosphere controls, accepted adapted port
+
+[Open Shaders #741](https://github.com/alandtse/open-shaders/pull/741),
+`47f5e45630f5b5ea62cead6865bbc5ccdeddf720`, is titled
+`feat(utility): expand atmosphere controls`.
+
+User decision: **i, adapted partial port into Adaptive Balance**.
+The shader changes add cloud-specific brightness, saturation and gamma;
+vanilla fog opacity scaling; sky-static effect brightness/transparency;
+and a sun-glare intensity multiplier. These have independent uses in
+current SE/AE and VR shaders without EHF or Scene Manager.
+
+Code-level comparison at working-branch HEAD `35743a486`:
+
+-   `Sky.hlsl` and `Color::Sky` currently apply the same sky brightness,
+    saturation and gamma to clouds and other sky passes. The existing
+    cloud permutations already expose `CLOUDS`; separate cloud controls
+    are missing. Keep #738's authored composition and the VR/non-VR
+    dither behavior while separating the adjustments.
+-   `Color::FogAlpha` currently exposes a gamma curve through LL/Adaptive
+    Balance, but has no opacity multiplier. Gamma reshaping is not an
+    equivalent independent strength control, especially at full opacity.
+    Its callers cover opaque composite fog, effects, lighting and water.
+-   `Effect.hlsl` has no dedicated sky-static brightness/transparency
+    controls. The upstream effect-permutation/GrayscaleToAlpha predicate
+    can be adapted without importing its shadow-relighting call. Preserve
+    local effect multipliers, alpha testing, motion-vector outputs and
+    additive/multiplicative blend behavior.
+-   The sun-glare technique is already identified as `DITHER` plus `TEX`
+    in `ShaderCache.cpp`. A multiplier can be applied to both local sky
+    branches, including the separate VR path. It only scales glare that
+    is already drawn; it cannot restore missing glare, fix weather lens
+    flare visibility or change the rejected #733 outcome.
+-   Local Volumetric Lighting already offers `ShaftIntensity`, `Opacity`,
+    saturation and custom colour through its runtime godray profile.
+    `ShaftIntensity` scales a copied engine descriptor before rendering;
+    upstream `vlIntensity` instead scales the final gamma-adjusted shader
+    result. These are not mathematically identical under nonlinear gamma,
+    but no missing brightness-control capability justifies a second
+    competing control. Retain the existing local implementation.
+
+Implemented port scope: cloud brightness/saturation/gamma, vanilla fog
+intensity, sky-static brightness/transparency and sun-glare intensity,
+integrated into the existing Adaptive Balance global/profile/location
+composition and DevBench interface. Do not import upstream CS Utility
+ownership, page/override UI, translations, the EHF fog-gamma exception,
+Scene Manager composition or the additional VL multiplier. Local CS Utility
+remains responsible for DOF utilities. Existing saved sky/cloud appearance
+is preserved when new cloud fields are absent, and disabling Adaptive
+Balance restores neutral outputs. Settings boundaries and the DevBench
+schema cover every new control. C++/HLSL layouts are synchronized: Color
+keeps offsets 40/44; six appended atmosphere values extend Adaptive Balance
+to 80 bytes. Cloud gamma uses Linear Lighting padding at offset 104.
+
+The upstream PR description was verified through GitHub CLI and its full
+non-translation code diff was compared with the local sources. The port
+preserves Color grading and composition from `feat/adaptive-balance-color`,
+#738's sky composition, VR's separate sky path, SE/AE dithering, preview
+exclusion, and the local effect alpha/gamma and blend rules. Transparency
+composes through remaining opacity so neutral layers do not erase a fade.
+
+Cloud migration runs before root and feature-scoped settings merges and
+on direct profile imports. It copies only absent cloud fields from numeric
+sky values; explicitly saved cloud values win. The feature shader version
+advances to 1-11-0 for the changed shared buffer contract. Unified preset
+compatibility metadata is refreshed without retuning the three presets.
+
+Regression coverage is added to the extracted production Adaptive Balance
+test for atmosphere composition, migration and DevBench validation. Existing
+Color and ambient reflection tests are updated for the expanded layout.
+No build, compiled test, shader compilation, deployment or runtime validation
+has run for this port. Glare visibility remains unverified in SE/AE/VR.
+
+Source validation for #741:
+
+-   `python tests/extract_adaptive_balance_toggle.py --source-dir . --output-dir ../../analysis/open-shaders-dev-review-20260926/pr741-extracted`
+    passed; generated the production-code test inputs without compiling them.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` verified all three tiers.
+    A JSON comparison with the parent commit confirmed that only their
+    `Preset Compatibility` metadata changed.
+-   Python parsing of the registered DevBench descriptor confirmed all 17
+    numeric bounds match the production validator, with the separate boolean
+    lighting gate and complete setter coverage.
+-   Scoped pre-commit source checks and `git diff --check` passed. Root CMake Gersemi is skipped for the previously documented
+    unrelated baseline formatting; its edited test block passed Gersemi separately, with the expected warning
+    for the custom `add_controller_test` command.
+-   Builds and compiled/runtime validation remain deferred, including the
+    new regression cases and production SE/AE/VR shader permutations.
+
+### #745: Light Limit Fix UI, excluded
+
+`76e0b2c348f301103b35aebb3f92fc1055381622`,
+`refactor(llf): reorganize feature UI`, reorganizes LLF/SLF settings into
+tabs, adjusts shadow tables and budget bars, and scales overlay dimensions.
+The `ShadowRenderer.cpp` changes are confined to `DrawOverlay`: window
+placement, resizing constraints, and the collapsed-window Begin/End path.
+No shadow rendering or independent lighting correction is included.
+Excluded under the upstream-specific UI, SLF and translation rules.
+
+### #743: RTTI exception recovery, recommendation awaiting decision
+
+[Open Shaders #743](https://github.com/alandtse/open-shaders/pull/743),
+`568888306be0c15f8b6db8df821014e19612e1d9`, is titled
+`fix(llf): allow RTTI exception recovery`.
+
+Recommend **i**. Its complete diff removes `noexcept` from three shared
+point-light classification helpers in `src/Utils/PointLightFlags.h`.
+All three declarations still have `noexcept` locally. The underlying
+CommonLib `skyrim_cast` calls engine RTTI and is not declared `noexcept`.
+An escaping C++ exception must not be converted into termination before
+reaching the existing caller recovery boundary.
+
+The local strict-light loop calls `SetEngineLightFlags`, which delegates
+to `SetPointLightTypeFlags`, inside the existing MSVC `__try`/`__except`
+boundary; recovery clears strict-light data. Its retained-light snapshot
+reduces lifetime hazards but does not replace the exception contract.
+Adaptive Balance also uses `GetVanillaPointLightFlags` when LLF is not
+providing classification. This is shared SE/AE/VR code, independent of SLF,
+E11 and UI. Preserve the nonthrowing bit-mask helpers and existing recovery
+behavior; remove only the three incorrect exception specifications.
+
+Verified the PR body through GitHub CLI and compared the complete header
+diff and both local consumers. No #743 changes are implemented. Await the
+user's `i` or `r`.
 
 ## Verification
 

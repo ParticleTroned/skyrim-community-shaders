@@ -578,6 +578,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 				logger::info("Routed legacy Unified Water appearance settings in {} to Adaptive Balance", filePath.string());
 			}
 		} else if (overrideInfo->featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+			SettingsMigrations::MigrateCloudSettingsLayer(overrideInfo->overrideData);
 			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(overrideInfo->overrideData);
 		}
 
@@ -1144,6 +1145,7 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 		if (!SettingsMigrations::ExtractAdaptiveBalanceFeaturePatch(userJson).empty())
 			retainLegacyRendererSource(originalLegacyCSUtilityUser, userJson);
 	} else if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		SettingsMigrations::MigrateCloudSettingsLayer(userJson);
 		SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(userJson);
 	}
 

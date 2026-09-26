@@ -1,8 +1,8 @@
-# Adaptive Balance color, ambient, sky and water controls
+# Adaptive Balance color, atmosphere, ambient and water controls
 
 Adaptive Balance exposes these controls in Global, time/interior profiles,
 and location layers. Sky Saturation is beside Sky Brightness in Lighting's
-detailed controls. Caustics and Parallax are in Water's detailed controls.
+detailed controls. Clouds now have independent controls. Caustics and Parallax are in Water's detailed controls.
 The Water detail checkbox controls visibility; Lighting's detailed-control
 checkbox also enables its detailed adjustments, including Sky Saturation.
 
@@ -11,6 +11,13 @@ checkbox also enables its detailed adjustments, including Sky Saturation.
 | Contrast                  | 1       | 0.5–2         |
 | Saturation                | 1       | 0–2           |
 | Sky Saturation            | 1       | 0–2           |
+| Cloud Brightness          | 1       | 0–2           |
+| Cloud Saturation          | 1       | 0–2           |
+| Cloud Gamma Offset        | 0       | −1–1          |
+| Vanilla Fog Intensity     | 1       | 0–5           |
+| Sun Glare Intensity       | 1       | 0–5           |
+| Sky Static Brightness     | 1       | 0–2           |
+| Sky Static Transparency   | 0       | 0–1           |
 | Ambient                   | 1       | 0–5           |
 | Caustics Strength         | 1       | 0–2           |
 | Caustics Tiling           | 1       | 0.25–4        |
@@ -19,7 +26,8 @@ checkbox also enables its detailed adjustments, including Sky Saturation.
 | Parallax Strength         | 1       | 0–2           |
 | Parallax Quality          | 16      | 4–64, integer |
 
-Zero saturation produces a grayscale sky. Zero caustics strength disables
+Zero Sky Saturation produces a grayscale sky; Cloud Saturation controls
+clouds separately. Zero caustics strength disables
 caustics, zero speed freezes their animation, and zero dispersion removes
 their color separation. Zero parallax strength disables water parallax.
 Higher parallax quality increases sampling cost. VR retains its existing
@@ -32,7 +40,8 @@ profile value of 32 gives 32; Global 32 with that profile gives 64. Location
 replacement retains Global and replaces the time/interior profile; additive
 locations retain both. Transitions interpolate the composed outputs and
 round quality to the nearest integer. Values are bounded after composition.
-Missing saved fields take neutral defaults. Disabling Adaptive Balance
+Missing saved fields take neutral defaults, except cloud controls inherit
+legacy sky adjustments as described below. Disabling Adaptive Balance
 restores neutral outputs without discarding the saved adjustments.
 
 ## Color
@@ -70,11 +79,54 @@ fades and UI can still contribute their own colors.
 Exactly neutral values bypass grading, including the gamma round trip.
 The master/runtime gates emit neutral values. Config loading and every
 composed layer bound the controls and replace non-finite inputs with one;
-DevBench rejects invalid updates before mutation. The implementation fills
-two existing padding slots at offsets 40 and 44 in the 48-byte Adaptive
-Balance buffer. It adds no resources, sampling, or render passes and uses
+DevBench rejects invalid updates before mutation. Contrast and Saturation remain at offsets 40 and 44 in the Adaptive
+Balance buffer. Atmosphere fields append data after them, extending the
+buffer to 80 bytes. It adds no resources, sampling, or render passes and uses
 the same per-pixel math for SE, AE, and both VR eyes. Runtime cost has not
 been measured.
+
+## Atmosphere
+
+The seven atmosphere controls belong to Lighting's detailed controls in
+Global, time/interior profiles, and location layers. They share that
+layer's detailed-lighting gate. Color's Contrast and Saturation remain
+independent of this gate. All new controls have neutral defaults.
+
+Cloud Brightness and Saturation replace the formerly shared sky controls
+for `CLOUDS` permutations. Cloud Gamma Offset applies to the active Linear
+Lighting sky-gamma baseline, or one when Linear Lighting is off, with the
+same Scene Brightness response as sky gamma. Sky and cloud offsets then
+compose independently. Effective gamma remains bounded by the existing
+gamma limits. The runtime cloud gamma occupies offset 104 in Linear
+Lighting's unchanged 112-byte buffer; its base is not a separate saved
+Linear Lighting setting.
+
+Older saved Global/profile/location values seed absent cloud brightness,
+saturation, and gamma fields from their corresponding sky fields before
+source layers merge. Explicit cloud values, including zero, win. Imported
+profile and base presets use the same migration. Cloud brightness retains
+the legacy sky multiplier's wider saved-value/composition bounds so old
+presets keep their appearance; the UI and DevBench range is zero to two.
+
+Vanilla Fog Intensity scales distance-fog opacity after its existing gamma
+curve. One preserves the original result exactly; other values are clamped
+to valid opacity. This is independent of fog gamma and Volumetric Lighting's
+existing Shaft Intensity and Opacity controls. Inventory previews retain
+their existing fog.
+
+Sky Static Brightness and Transparency apply to the upstream sky-static
+effect permutation and material predicate, including mountain-mist meshes.
+Brightness scales their effect color. Transparency fades ordinary alpha,
+additive, and multiplicative outputs toward each blend mode's neutral value;
+one discards the effect. Layered transparency composes as
+`1 - (1 - inherited) * (1 - layer)`, so a neutral layer preserves the
+inherited fade. Existing alpha testing and effect gamma remain in place.
+
+Sun Glare Intensity scales the engine's existing `DITHER` + `TEX` sky pass
+in SE/AE and VR. It cannot restore missing glare or weather lens flares.
+Glare visibility remains runtime-unverified; the rejected #733 masking
+change was already unnecessary for this branch's shader path. The existing
+VR path and SE/AE centered dithering remain intact.
 
 ## Ambient
 
@@ -129,6 +181,8 @@ not their saved values or composition behavior.
         "saturation": 0.9,
         "ambient": 0.5,
         "skySaturation": 0.8,
+        "cloudSaturation": 1.0,
+        "fogIntensity": 0.8,
         "lightingAdvanced": true,
         "causticsStrength": 1.2,
         "parallaxQuality": 24
@@ -137,7 +191,9 @@ not their saved values or composition behavior.
 ```
 
 `visuals` must be a nonempty object containing only `contrast`, `saturation`,
-`ambient`, `skySaturation`,
+`ambient`, `skySaturation`, `cloudBrightness`, `cloudSaturation`,
+`cloudGammaOffset`, `fogIntensity`, `sunGlareIntensity`,
+`skyStaticBrightness`, `skyStaticTransparency`,
 `lightingAdvanced`, `causticsStrength`, `causticsTiling`, `causticsSpeed`,
 `causticsDispersion`, `parallaxStrength`, or `parallaxQuality`.
 Numeric bounds match the table; quality must be an integer and
@@ -149,9 +205,16 @@ Lighting switch, so it also governs the other detailed Lighting adjustments.
 
 Status exposes configured Global and composed effective values under
 `adaptiveBalanceVisuals`. Effective values include active profile layers
-and the master/runtime gate; they do not imply that Water Effects is loaded.
+and the master/runtime gate; they do not imply that Water Effects is loaded
+or that glare is visible. Effective `cloudGamma` reports the composed gamma,
+including the active Linear Lighting baseline; configured `cloudGammaOffset`
+reports only the saved Global offset.
 
 ## Regression coverage
+
+The following executed Color results belong to the unchanged Color base
+`f3bfe1f24f11a570ce6b74b9f25354a15f0ebe17`, before the atmosphere extension.
+They are historical evidence, not validation of the extended buffer or shaders.
 
 The color extension adds executed `AdaptiveBalanceToggle` cases for neutral
 defaults, finite bounds, day/night interpolation, layered and replacement
@@ -204,3 +267,13 @@ reflection helper with IBL on/off and partial IBL fog blending. Fixtures
 must produce nonzero exterior lighting, and shader reflection verifies the
 CPU buffer layout. Direct-light and glowmap outputs and DALC matching inputs
 must remain independent of the Adaptive Balance ambient value.
+
+The atmosphere extension adds production-code regression cases for cloud
+migration before settings merges, explicit-value precedence, detailed and
+master gating, independent sky/cloud gamma, profile interpolation, location
+replacement/layering, transparency composition, finite bounds, and DevBench
+validation. Color and ambient shader reflection expectations now cover the
+80-byte buffer and the retained Color offsets; Color reflection also checks
+Linear Lighting's cloud gamma offset. These compiled tests and production
+shader permutations are deferred until the end of the selective upstream
+sync, by user instruction. No atmosphere runtime validation has run.

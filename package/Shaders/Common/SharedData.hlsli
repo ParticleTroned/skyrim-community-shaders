@@ -281,7 +281,7 @@ namespace SharedData
 	struct TerrainVariationSettings
 	{
 		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
-		uint enableMeshSupport;        ///< 1 = apply variation to eligible meshes.
+		uint enableMeshSupport;          ///< 1 = apply variation to eligible meshes.
 		uint2 pad;
 	};
 
@@ -323,6 +323,13 @@ namespace SharedData
 		float ambientMult;
 		float contrast;
 		float saturation;
+		float cloudBrightness;
+		float cloudSaturation;
+		float fogIntensity;
+		float sunGlareIntensity;
+		float skyStaticBrightness;
+		float skyStaticTransparency;
+		float2 pad;
 	};
 
 	struct LinearLightingSettings
@@ -353,7 +360,8 @@ namespace SharedData
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBrightnessColorAdjustments;
-		uint2 pad0;
+		float cloudGamma;
+		uint pad0;
 	};
 
 	struct TerrainBlendingSettings

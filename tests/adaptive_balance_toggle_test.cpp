@@ -2,6 +2,7 @@
 #	undef NDEBUG
 #endif
 
+#include "SettingsMigrations.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -12,13 +13,17 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 using uint = unsigned int;
+using json = nlohmann::json;
 struct float3
 {
 	float x, y, z;
 };
+#undef NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT
 #define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(...)
 #define STATIC_ASSERT_ALIGNAS_16(Type) static_assert(alignof(Type) == 16)
 #include "Features/Bloom.h"
@@ -356,8 +361,150 @@ void CheckAmbientComposition()
 	assert(global.ambientMult == 1.0f);
 }
 
+void CheckAtmosphereControls()
+{
+	AdaptiveBrightness balance;
+	auto& global = balance.settings.globalProfile;
+	LinearLighting::Settings linear;
+	linear.skyGamma = 1.65f;
+	global.cloudBrightnessMult = 1.4f;
+	global.cloudSaturation = 0.8f;
+	global.cloudGammaOffset = -0.2f;
+	global.fogIntensity = 0.5f;
+	global.sunGlareIntensity = 2.0f;
+	global.skyStaticBrightness = 1.5f;
+	global.skyStaticTransparency = 0.25f;
+	global.contrast = 1.2f;
+	global.saturation = 0.9f;
+
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.advanced = night.advanced = true;
+	day.cloudBrightnessMult = 0.5f;
+	night.cloudBrightnessMult = 1.0f;
+	day.cloudGammaOffset = 0.4f;
+	night.cloudGammaOffset = -0.4f;
+	day.skyStaticTransparency = 0.5f;
+	day.fogIntensity = night.fogIntensity = 0.5f;
+	balance.testProfileBlend = { &day, &night, 0.5f };
+	auto data = balance.GetCommonBufferData();
+	assert(Close(data.cloudBrightness, 1.05f) && data.skyBrightness == 1.0f);
+	assert(Close(data.cloudSaturation, 0.8f) && data.skySaturation == 1.0f);
+	assert(Close(data.fogIntensity, 0.25f) && data.sunGlareIntensity == 2.0f);
+	assert(Close(data.skyStaticTransparency, 0.4375f) && data.skyStaticBrightness == 1.5f);
+	assert(Close(data.contrast, 1.2f) && Close(data.saturation, 0.9f));
+	for (bool enabled : { false, true }) {
+		const auto gamma = balance.GetEffectiveLinearLightingSettings(linear, enabled);
+		assert(Close(gamma.settings.cloudGamma, (enabled ? 1.65f : 1.0f) - 0.2f));
+		assert(Close(gamma.settings.skyGamma, enabled ? 1.65f : 1.0f));
+		assert(gamma.hasColorAdjustments);
+	}
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.cloudBrightnessMult = 0.5f;
+	location.profile.skyStaticTransparency = 0.5f;
+	location.profile.fogIntensity = 0.5f;
+	balance.testLocationLayers = { &location };
+	balance.testProfileBlend.factor = 0.0f;
+	for (bool layered : { false, true }) {
+		location.layered = layered;
+		data = balance.GetCommonBufferData();
+		assert(Close(data.cloudBrightness, layered ? 0.35f : 0.7f));
+		assert(Close(data.skyStaticTransparency, layered ? 0.8125f : 0.625f));
+		assert(Close(data.fogIntensity, layered ? 0.125f : 0.25f));
+	}
+	balance.testLocationLayers.clear();
+	balance.testProfileBlend = {};
+	global.advanced = false;
+	data = balance.GetCommonBufferData();
+	assert(data.cloudBrightness == 1 && data.cloudSaturation == 1 && data.fogIntensity == 1);
+	assert(data.sunGlareIntensity == 1 && data.skyStaticBrightness == 1 && data.skyStaticTransparency == 0);
+	assert(Close(data.contrast, 1.2f) && Close(data.saturation, 0.9f));
+	assert(!balance.GetEffectiveLinearLightingSettings(linear, true).hasColorAdjustments);
+	global.advanced = true;
+	balance.SetEnabled(false);
+	data = balance.GetCommonBufferData();
+	assert(data.cloudBrightness == 1 && data.fogIntensity == 1 && data.sunGlareIntensity == 1);
+	assert(data.skyStaticTransparency == 0 && data.contrast == 1 && data.saturation == 1);
+	assert(Close(balance.GetEffectiveLinearLightingSettings(linear, true).settings.cloudGamma, linear.skyGamma));
+	balance.SetEnabled(true);
+	assert(Close(balance.GetCommonBufferData().cloudBrightness, 1.4f));
+	global.fogIntensity = global.sunGlareIntensity = std::numeric_limits<float>::infinity();
+	global.cloudBrightnessMult = global.cloudSaturation = std::numeric_limits<float>::quiet_NaN();
+	global.skyStaticBrightness = 10;
+	global.skyStaticTransparency = -1;
+	global.cloudGammaOffset = 10;
+	ClampProfileSettings(global);
+	assert(global.fogIntensity == 1 && global.sunGlareIntensity == 1);
+	assert(global.cloudBrightnessMult == 1 && global.cloudSaturation == 1);
+	assert(global.skyStaticBrightness == 2 && global.skyStaticTransparency == 0 && global.cloudGammaOffset == 1);
+	global.fogIntensity = global.sunGlareIntensity = day.fogIntensity = day.sunGlareIntensity = 5;
+	global.skyStaticBrightness = day.skyStaticBrightness = 2;
+	balance.testProfileBlend = { &day, &day, 0 };
+	data = balance.GetCommonBufferData();
+	assert(data.fogIntensity == 5 && data.sunGlareIntensity == 5 && data.skyStaticBrightness == 2);
+}
+
+void CheckAtmosphereMigrationAndValidation()
+{
+	json profile = { { "skyBrightnessMult", 1.4f }, { "skySaturation", 0.6f }, { "skyGammaOffset", -0.3f }, { "linearPointLightMult", 1.0f } };
+	MigrateLegacyProfileLighting(profile);
+	assert(profile["cloudBrightnessMult"] == profile["skyBrightnessMult"]);
+	assert(profile["cloudSaturation"] == profile["skySaturation"]);
+	assert(profile["cloudGammaOffset"] == profile["skyGammaOffset"]);
+	const auto migrated = profile;
+	profile["skyBrightnessMult"] = 2.0f;
+	profile["skyGammaOffset"] = 0.8f;
+	profile["cloudSaturation"] = 0.0f;
+	MigrateLegacyProfileLighting(profile);
+	assert(profile["cloudBrightnessMult"] == migrated["cloudBrightnessMult"]);
+	assert(profile["cloudGammaOffset"] == migrated["cloudGammaOffset"] && profile["cloudSaturation"] == 0.0f);
+	json empty = json::object();
+	SettingsMigrations::MigrateCloudProfileSettings(empty);
+	assert(empty.empty());
+	json invalid = json::array();
+	SettingsMigrations::MigrateCloudProfileSettings(invalid);
+	assert(invalid.is_array());
+	json legacyLayer = {
+		{ "globalProfile", { { "skyBrightnessMult", 0.4 }, { "skySaturation", 0.0 }, { "contrast", 1.2 } } },
+		{ "profiles", json::array({ { { "skyGammaOffset", -0.2 } } }) },
+		{ "locationOverrides", json::array({ { { "profile", { { "skyBrightnessMult", 0.5 }, { "cloudBrightnessMult", 0.0 } } } }, nullptr }) }
+	};
+	assert(SettingsMigrations::MigrateCloudSettingsLayer(legacyLayer));
+	assert(!SettingsMigrations::MigrateCloudSettingsLayer(legacyLayer));
+	json defaults = { { "globalProfile", { { "cloudBrightnessMult", 1.0 }, { "cloudSaturation", 1.0 }, { "saturation", 0.8 } } } };
+	defaults.merge_patch(legacyLayer);
+	assert(defaults["globalProfile"]["cloudBrightnessMult"] == 0.4);
+	assert(defaults["globalProfile"]["cloudSaturation"] == 0.0);
+	assert(defaults["globalProfile"]["contrast"] == 1.2 && defaults["globalProfile"]["saturation"] == 0.8);
+	assert(defaults["profiles"][0]["cloudGammaOffset"] == -0.2);
+	assert(defaults["locationOverrides"][0]["profile"]["cloudBrightnessMult"] == 0.0);
+	json legacyGlobal = { { "lighting", { { "skyBrightness", 1.7 } } } };
+	assert(SettingsMigrations::MigrateCloudSettingsLayer(legacyGlobal));
+	assert(legacyGlobal["globalProfile"]["cloudBrightnessMult"] == 1.7);
+	legacyGlobal["globalProfile"] = { { "skyBrightnessMult", 0.6 } };
+	assert(SettingsMigrations::MigrateCloudSettingsLayer(legacyGlobal));
+	assert(legacyGlobal["globalProfile"]["cloudBrightnessMult"] == 0.6);
+
+	const json valid = { { "cloudBrightness", 2 }, { "cloudSaturation", 0 }, { "cloudGammaOffset", -1 },
+		{ "fogIntensity", 5 }, { "sunGlareIntensity", 0 }, { "skyStaticBrightness", 2 }, { "skyStaticTransparency", 1 },
+		{ "lightingAdvanced", true }, { "contrast", 1.2 }, { "saturation", 0.8 } };
+	assert(ValidateAdaptiveBalanceVisuals(valid).empty());
+	for (const auto& [name, value] : valid.items()) {
+		if (name == "lightingAdvanced")
+			continue;
+		assert(!ValidateAdaptiveBalanceVisuals({ { name, 1000 } }).empty());
+		assert(!ValidateAdaptiveBalanceVisuals({ { name, -1000 } }).empty());
+		assert(!ValidateAdaptiveBalanceVisuals({ { name, true } }).empty());
+		assert(!ValidateAdaptiveBalanceVisuals({ { name, "1" } }).empty());
+		assert(!ValidateAdaptiveBalanceVisuals({ { name, std::numeric_limits<double>::infinity() } }).empty());
+	}
+	assert(!ValidateAdaptiveBalanceVisuals({ { "cloudBrightness", 1 }, { "unknown", 1 } }).empty());
+}
+
 int main()
 {
+	CheckAtmosphereControls();
+	CheckAtmosphereMigrationAndValidation();
 	CheckColorControls();
 	CheckAmbientComposition();
 	CheckVisualControls();

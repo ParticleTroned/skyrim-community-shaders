@@ -1778,6 +1778,8 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/LinearLighting.h
             src/Features/Bloom.cpp
             src/Features/WaterAppearance.cpp
+            src/MenuDevBenchBridge.cpp
+            src/SettingsMigrations.cpp
             tests/extract_adaptive_balance_toggle.py
         VERBATIM
     )
@@ -1793,6 +1795,10 @@ if(BUILD_CONTROLLER_TESTS)
     target_include_directories(
         adaptive_balance_toggle_test
         PRIVATE "${_adaptive_balance_test_dir}"
+    )
+    target_link_libraries(
+        adaptive_balance_toggle_test
+        PRIVATE nlohmann_json::nlohmann_json
     )
     if(MSVC)
         # Extracted adjustment arithmetic must use the DLL's Release FP model.

@@ -485,8 +485,10 @@ capability explicitly permits both.
 -   Relative traversal outside the selected root is rejected as `unsafe_path`.
 -   Existing files are never overwritten in version 1. `overwrite` must be
     `never`; name collisions receive a deterministic numeric suffix.
--   The worker writes a sibling temporary file, flushes and closes it, then
-    atomically renames it to the final name where the filesystem permits.
+-   The worker encodes into memory, creates a sibling temporary file
+    exclusively, and retains that handle while it writes, flushes, atomically
+    renames without replacement, and verifies the committed file's identity,
+    size, and SHA-256 custody.
 -   The receipt records both the requested destination policy and resolved path.
 -   The API never deletes artifacts.
 
@@ -646,7 +648,7 @@ the requested `skip` or `abort` policy applies at the missed slot.
 Each sequence owns a unique directory:
 
 ```text
-CS_sequence_2026-08-20_041530_2f8c91a0/
+CS_sequence_<complete-request-id>/
   sequence.json.partial
   frame_000001_combined.png
   frame_000001_left.png

@@ -13,11 +13,9 @@
 
 #include <algorithm>
 #include <array>
-#include <bcrypt.h>
 #include <cmath>
 #include <ctime>
 #include <format>
-#include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <sstream>
@@ -63,94 +61,66 @@ namespace
 		return resolved;
 	}
 
-	std::string FileSha256(const std::filesystem::path& a_path)
-	{
-		std::ifstream stream(a_path, std::ios::binary);
-		if (!stream)
-			throw std::runtime_error("could not open committed artifact for hashing");
-		BCRYPT_ALG_HANDLE algorithm = nullptr;
-		const auto openStatus = BCryptOpenAlgorithmProvider(
-			&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-		if (openStatus < 0)
-			throw std::runtime_error(std::format("BCryptOpenAlgorithmProvider failed ({:#x})", static_cast<std::uint32_t>(openStatus)));
-		DWORD objectBytes = 0;
-		DWORD copiedBytes = 0;
-		const auto propertyStatus = BCryptGetProperty(
-			algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes),
-			sizeof(objectBytes), &copiedBytes, 0);
-		if (propertyStatus < 0) {
-			BCryptCloseAlgorithmProvider(algorithm, 0);
-			throw std::runtime_error(std::format("BCryptGetProperty failed ({:#x})", static_cast<std::uint32_t>(propertyStatus)));
-		}
-		std::vector<UCHAR> hashObject(objectBytes);
-		BCRYPT_HASH_HANDLE hash = nullptr;
-		const auto createStatus = BCryptCreateHash(
-			algorithm, &hash, hashObject.data(), static_cast<ULONG>(hashObject.size()), nullptr, 0, 0);
-		if (createStatus < 0) {
-			BCryptCloseAlgorithmProvider(algorithm, 0);
-			throw std::runtime_error(std::format("BCryptCreateHash failed ({:#x})", static_cast<std::uint32_t>(createStatus)));
-		}
-		std::vector<UCHAR> buffer(1024 * 1024);
-		NTSTATUS hashStatus = 0;
-		while (stream && hashStatus >= 0) {
-			stream.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
-			const auto bytesRead = stream.gcount();
-			if (bytesRead > 0)
-				hashStatus = BCryptHashData(hash, buffer.data(), static_cast<ULONG>(bytesRead), 0);
-		}
-		if (!stream.eof() && hashStatus >= 0)
-			hashStatus = static_cast<NTSTATUS>(0xC0000185L);  // STATUS_IO_DEVICE_ERROR
-		std::array<UCHAR, 32> digest{};
-		const auto finishStatus = hashStatus < 0 ? hashStatus : BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
-		BCryptDestroyHash(hash);
-		BCryptCloseAlgorithmProvider(algorithm, 0);
-		if (finishStatus < 0)
-			throw std::runtime_error(std::format("SHA-256 hashing failed ({:#x})", static_cast<std::uint32_t>(finishStatus)));
-
-		std::ostringstream result;
-		result << std::hex << std::setfill('0');
-		for (const auto value : digest)
-			result << std::setw(2) << static_cast<unsigned int>(value);
-		return result.str();
-	}
-
 	json DescribeCommittedArtifact(const std::filesystem::path& a_path)
 	{
-		std::error_code ec;
-		const auto size = std::filesystem::file_size(a_path, ec);
-		json artifact = {
+		auto file = CSX::ScreenshotStorage::CommittedFile::Open(a_path);
+		const auto description = file.Describe();
+		return {
 			{ "path", PathUtf8(a_path) },
-			{ "bytes", ec ? json(nullptr) : json(size) },
+			{ "bytes", description.bytes },
 			{ "committed", true },
+			{ "sha256", description.sha256 },
 		};
-		try {
-			artifact["sha256"] = FileSha256(a_path);
-		} catch (const std::exception& error) {
-			artifact["sha256"] = nullptr;
-			artifact["integrityError"] = error.what();
-		}
-		return artifact;
 	}
 
 	void WriteJsonAtomically(
+		const CSX::ScreenshotStorage::DirectoryLease& a_directoryLease,
 		const std::filesystem::path& a_destination,
-		const json& a_document)
+		const json& a_document,
+		uint64_t a_generation,
+		bool a_replaceExisting)
 	{
-		std::filesystem::create_directories(a_destination.parent_path());
-		const auto temporary = a_destination.string() + ".tmp";
-		{
-			std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-			stream << a_document.dump(2);
-			stream.flush();
-			if (!stream)
-				throw std::runtime_error("manifest write failed");
+		a_directoryLease.VerifyDirectChild(a_destination);
+		const auto temporary = std::filesystem::path(
+			a_destination.native() + std::format(L".{}.tmp", a_generation));
+		a_directoryLease.VerifyDirectChild(temporary);
+		const auto document = a_document.dump(2);
+		const HANDLE file = CreateFileW(
+			temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+			FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (file == INVALID_HANDLE_VALUE)
+			throw std::runtime_error(std::format("manifest temporary file creation failed with Win32 error {}", GetLastError()));
+		bool complete = false;
+		try {
+			std::size_t offset = 0;
+			while (offset < document.size()) {
+				const auto remaining = std::min<std::size_t>(document.size() - offset, MAXDWORD);
+				DWORD written = 0;
+				if (!WriteFile(file, document.data() + offset, static_cast<DWORD>(remaining), &written, nullptr) || written == 0)
+					throw std::runtime_error(std::format("manifest write failed with Win32 error {}", GetLastError()));
+				offset += written;
+			}
+			if (!FlushFileBuffers(file))
+				throw std::runtime_error(std::format("manifest flush failed with Win32 error {}", GetLastError()));
+			complete = true;
+		} catch (...) {
+			CloseHandle(file);
+			DeleteFileW(temporary.c_str());
+			throw;
 		}
+		CloseHandle(file);
+		if (!complete)
+			throw std::runtime_error("manifest write did not complete");
+		a_directoryLease.VerifyDirectChild(a_destination);
+		const DWORD flags = MOVEFILE_WRITE_THROUGH |
+		                    (a_replaceExisting ? MOVEFILE_REPLACE_EXISTING : 0);
 		if (!MoveFileExW(
-				std::filesystem::path(temporary).c_str(),
-				a_destination.c_str(),
-				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-			throw std::runtime_error(std::format("manifest commit failed with Win32 error {}", GetLastError()));
+				temporary.c_str(), a_destination.c_str(), flags)) {
+			const auto error = GetLastError();
+			DeleteFileW(temporary.c_str());
+			throw std::runtime_error(std::format("manifest commit failed with Win32 error {}", error));
 		}
+		a_directoryLease.VerifyDirectChild(a_destination);
 	}
 
 	std::string SourceName(ScreenshotFeature::VRCaptureSource a_source)
@@ -212,18 +182,14 @@ namespace
 		       a_state == "dropped";
 	}
 
-	std::string ShortId(std::string_view a_id)
+	bool HasCompleteArtifactProvenance(const json& a_actual)
 	{
-		std::string result;
-		result.reserve(8);
-		for (char c : a_id) {
-			if (c == '-')
-				continue;
-			result.push_back(c);
-			if (result.size() == 8)
-				break;
-		}
-		return result;
+		return a_actual.is_object() &&
+		       a_actual.contains("view") && a_actual["view"].is_string() && !a_actual["view"].get_ref<const std::string&>().empty() &&
+		       a_actual.contains("width") && a_actual["width"].is_number_unsigned() && a_actual["width"].get<uint64_t>() > 0 &&
+		       a_actual.contains("height") && a_actual["height"].is_number_unsigned() && a_actual["height"].get<uint64_t>() > 0 &&
+		       a_actual.contains("format") && a_actual["format"].is_string() && !a_actual["format"].get_ref<const std::string&>().empty() &&
+		       a_actual.contains("colourContract") && a_actual["colourContract"].is_string() && !a_actual["colourContract"].get_ref<const std::string&>().empty();
 	}
 
 	std::string TimestampUtcAt(std::chrono::system_clock::time_point a_time)
@@ -338,10 +304,15 @@ void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_st
 			document["children"].get_ref<json::array_t&>().reserve(orderedChildren.size());
 			for (const auto& child : orderedChildren)
 				document["children"].push_back(child->child);
-			WriteJsonAtomically(job.destination, document);
+			if (!job.directoryLease)
+				throw std::runtime_error("sequence directory ownership expired before manifest write");
+			WriteJsonAtomically(
+				*job.directoryLease, job.destination, document, job.generation,
+				!job.final);
 			if (job.final) {
-				std::error_code ec;
-				std::filesystem::remove(job.partialPath, ec);
+				job.directoryLease->VerifyDirectChild(job.partialPath);
+				if (!DeleteFileW(job.partialPath.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND)
+					logger::warn("Screenshot partial manifest cleanup failed with Win32 error {}", GetLastError());
 				result.artifact = DescribeCommittedArtifact(job.destination);
 			}
 			result.success = true;
@@ -452,7 +423,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			const bool pathError = message.find("destination") != std::string::npos || message.find("directory") != std::string::npos || message.find("folder") != std::string::npos;
 			return MakeError(a_request, pathError ? "unsafe_path" : "invalid_capture_descriptor", message);
 		}
-		std::string requestId;
+		const std::string requestId = CSX::Api::ServiceFoundation::NewId();
 		{
 			std::lock_guard lock(mutex);
 			if (!acceptingRequests)
@@ -571,14 +542,22 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 				return MakeError(a_request, "service_stopping", "screenshot admission is closed", "admission", true);
 			if (!CSX::ScreenshotPolicy::CanAdmitPendingOperations(CountPendingOperationsLocked()))
 				return MakeError(a_request, "operation_capacity", "the screenshot pending-operation limit is full", "admission", true);
-			auto& record = CreateRequestLocked("sequence", a_request, effectiveSequence);
-			record.expectedArtifacts = CSX::ScreenshotPolicy::ExpectedSequenceArtifacts(sequence.frameManifest);
-			requestId = record.requestId;
 			sequence.requestId = requestId;
 			sequence.nextEngineFrame = (globals::state ? globals::state->frameCount : 0u) + sequence.startDelayFrames;
 			sequence.nextWallClock = std::chrono::steady_clock::now() + std::chrono::milliseconds(startDelayMs);
-			sequence.directory = std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()) /
-			                     ("CS_sequence_" + ShortId(requestId));
+			try {
+				sequence.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
+					std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()),
+					requestId);
+			} catch (const std::exception& error) {
+				return MakeError(
+					a_request, "destination_unavailable", error.what(), "admission", false,
+					"sequence.capture.destination", requestId);
+			}
+			auto& record = CreateRequestLocked(
+				"sequence", a_request, effectiveSequence, {}, 0, requestId);
+			record.expectedArtifacts = CSX::ScreenshotPolicy::ExpectedSequenceArtifacts(sequence.frameManifest);
+			sequence.directory = sequence.directoryLease->Path();
 			sequence.partialManifestPath = sequence.directory / "sequence.json.partial";
 			sequence.finalManifestPath = sequence.directory / "sequence.json";
 			sequences.emplace(requestId, std::move(sequence));
@@ -1422,9 +1401,34 @@ void ScreenshotApi::OnArtifactTerminal(
 {
 	if (a_requestId.empty())
 		return;
-	const auto artifact = a_success ? DescribeCommittedArtifact(a_path) : json(nullptr);
 	bool artifactSucceeded = a_success;
 	std::string artifactError(a_error);
+	json artifact = nullptr;
+	std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> sequenceDirectoryLease;
+	{
+		std::lock_guard lock(mutex);
+		const auto found = requests.find(std::string(a_requestId));
+		if (found == requests.end() || IsTerminal(found->second.state))
+			return;
+		if (found->second.kind == "sequence_frame") {
+			if (const auto sequence = sequences.find(found->second.parentRequestId); sequence != sequences.end())
+				sequenceDirectoryLease = sequence->second.directoryLease;
+		}
+	}
+	if (artifactSucceeded && !HasCompleteArtifactProvenance(a_actual)) {
+		artifactSucceeded = false;
+		artifactError = "the committed artifact is missing required actual output provenance";
+	}
+	if (artifactSucceeded) {
+		try {
+			if (sequenceDirectoryLease)
+				sequenceDirectoryLease->VerifyDirectChild(a_path);
+			artifact = DescribeCommittedArtifact(a_path);
+		} catch (const std::exception& error) {
+			artifactSucceeded = false;
+			artifactError = error.what();
+		}
+	}
 	std::lock_guard lock(mutex);
 	const auto found = requests.find(std::string(a_requestId));
 	if (found == requests.end() || IsTerminal(found->second.state))
@@ -1432,24 +1436,11 @@ void ScreenshotApi::OnArtifactTerminal(
 	auto& record = found->second;
 	if (record.terminalArtifacts >= record.expectedArtifacts)
 		return;
-	if (artifactSucceeded && artifact.contains("integrityError")) {
-		artifactSucceeded = false;
-		artifactError = "the committed artifact could not be hashed: " +
-		                artifact["integrityError"].get<std::string>();
-	}
 	std::optional<std::filesystem::path> relativeSequencePath;
 	if (artifactSucceeded && record.kind == "sequence_frame") {
-		const auto sequence = sequences.find(record.parentRequestId);
-		std::error_code rootError;
-		std::error_code artifactPathError;
-		if (sequence != sequences.end()) {
-			const auto canonicalRoot = std::filesystem::weakly_canonical(sequence->second.directory, rootError);
-			const auto canonicalArtifact = std::filesystem::weakly_canonical(a_path, artifactPathError);
-			if (!rootError && !artifactPathError) {
-				relativeSequencePath = CSX::ScreenshotPolicy::RelativeContainedArtifactPath(
-					canonicalRoot, canonicalArtifact);
-			}
-		}
+		if (sequenceDirectoryLease)
+			relativeSequencePath = CSX::ScreenshotPolicy::RelativeContainedArtifactPath(
+				sequenceDirectoryLease->Path(), std::filesystem::absolute(a_path).lexically_normal());
 		if (!relativeSequencePath) {
 			artifactSucceeded = false;
 			artifactError = "the committed sequence artifact escaped its sequence directory";
@@ -1459,11 +1450,9 @@ void ScreenshotApi::OnArtifactTerminal(
 		auto committedArtifact = artifact;
 		if (relativeSequencePath)
 			committedArtifact["path"] = PathUtf8(*relativeSequencePath);
-		if (!a_actual.empty())
-			committedArtifact["actual"] = a_actual;
+		committedArtifact["actual"] = a_actual;
 		record.artifacts.push_back(committedArtifact);
-		if (!a_actual.empty())
-			record.actual["artifacts"].push_back(a_actual);
+		record.actual["artifacts"].push_back(a_actual);
 		++record.successfulArtifacts;
 		++completedArtifacts;
 		AppendEventLocked(record, "artifact.written", committedArtifact);
@@ -1613,8 +1602,6 @@ void ScreenshotApi::FinalizeSequenceLocked(
 		if (manifestWritten) {
 			parent->second.artifacts.push_back(a_manifestResult->artifact);
 			parent->second.successfulArtifacts = 1;
-			if (a_manifestResult->artifact.contains("integrityError"))
-				parent->second.warnings.push_back({ { "code", "artifact_hash_failed" }, { "message", a_manifestResult->artifact["integrityError"] } });
 		} else {
 			parent->second.successfulArtifacts = 0;
 			parent->second.error = {
@@ -1640,6 +1627,7 @@ void ScreenshotApi::FinalizeSequenceLocked(
 	else
 		terminal = "completed";
 	TransitionLocked(parent->second, terminal, "request.terminal", { { "manifestPath", a_sequence.frameManifest && manifestWritten ? json(PathUtf8(a_sequence.finalManifestPath)) : json(nullptr) } });
+	a_sequence.directoryLease.reset();
 }
 
 void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final)
@@ -1676,6 +1664,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 			.final = a_final,
 			.destination = a_final ? a_sequence.finalManifestPath : a_sequence.partialManifestPath,
 			.partialPath = a_sequence.partialManifestPath,
+			.directoryLease = a_sequence.directoryLease,
 			.header = {
 				{ "contract", { { "name", "csx.screenshot" }, { "major", kContractMajor }, { "minor", kContractMinor }, { "schemaRevision", kSchemaRevision } } },
 				{ "producer", BuildProvenance::GetProducer() },

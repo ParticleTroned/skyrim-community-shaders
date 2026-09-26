@@ -2,6 +2,7 @@
 
 #include "Api/ServiceFoundation.h"
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
 
 #include <chrono>
@@ -134,6 +135,7 @@ private:
 		std::filesystem::path directory;
 		std::filesystem::path partialManifestPath;
 		std::filesystem::path finalManifestPath;
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		std::shared_ptr<const ManifestChildNode> manifestChildren;
 		std::size_t childCount = 0;
 		json packaging = json::object();
@@ -146,6 +148,7 @@ private:
 		bool final = false;
 		std::filesystem::path destination;
 		std::filesystem::path partialPath;
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		json header = json::object();
 		std::shared_ptr<const ManifestChildNode> children;
 	};

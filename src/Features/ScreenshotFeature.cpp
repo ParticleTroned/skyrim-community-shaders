@@ -7,6 +7,7 @@
 #include "Api/ScreenshotService.h"
 #include "Features/ScreenshotApi.h"
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotStorageSecurity.h"
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -1517,7 +1518,7 @@ namespace
 		}
 	}
 
-	bool SaveSdrScreenshot(
+	std::optional<CSX::ScreenshotStorage::CommittedArtifact> SaveSdrScreenshot(
 		DirectX::ScratchImage& image,
 		const std::filesystem::path& outputPath,
 		bool saveAsPng,
@@ -1532,7 +1533,7 @@ namespace
 			colorSpace,
 			tonemapSceneHdr);
 		if (!saveImage) {
-			return false;
+			return std::nullopt;
 		}
 
 		const GUID& codec = saveAsPng ?
@@ -1543,16 +1544,11 @@ namespace
 		                           (outputPath.stem().wstring() +
 									   std::format(L".writing-{}-{}", GetCurrentProcessId(), GetTickCount64()) +
 									   outputPath.extension().wstring());
-		std::error_code ec;
-		std::filesystem::remove(temporaryPath, ec);
-		if (FAILED(DirectX::SaveToWICFile(*saveImage, wicFlags, codec, temporaryPath.c_str())))
-			return false;
-		std::filesystem::rename(temporaryPath, outputPath, ec);
-		if (ec) {
-			std::filesystem::remove(temporaryPath, ec);
-			return false;
-		}
-		return true;
+		DirectX::Blob encoded;
+		if (FAILED(DirectX::SaveToWICMemory(*saveImage, wicFlags, codec, encoded)))
+			return std::nullopt;
+		return CSX::ScreenshotStorage::CommittedFile::WriteAtomically(
+			temporaryPath, outputPath, encoded.GetBufferPointer(), encoded.GetBufferSize(), false);
 	}
 
 	// Resolves the slot's underlying texture, falling back to QueryInterface on
@@ -3086,7 +3082,9 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 
 						Util::FileHelpers::EnsureDirectoryExists(output.outputPath.parent_path());
 						output.outputPath = MakeCollisionSafePath(std::move(output.outputPath));
-						if (!SaveSdrScreenshot(*imageToSave, output.outputPath, output.saveAsPng, colourSpace, tonemapSceneHdr))
+						const auto committed = SaveSdrScreenshot(
+							*imageToSave, output.outputPath, output.saveAsPng, colourSpace, tonemapSceneHdr);
+						if (!committed)
 							throw std::runtime_error("failed to save requested screenshot output");
 						CopySavedPathToClipboard(output.copyToClipboard, output.outputPath);
 						logger::info("Saved screenshot output to {}", output.outputPath.string());
@@ -3103,7 +3101,8 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 									{ "height", savedImage ? savedImage->height : 0 },
 									{ "format", output.saveAsPng ? "png" : "bmp" },
 									{ "colourContract", "sdr_srgb" },
-								});
+								},
+								committed);
 						}
 						++reportedArtifacts;
 					} catch (const std::exception& e) {
@@ -3268,14 +3267,14 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 
 			Util::FileHelpers::EnsureDirectoryExists(screenshot.outputPath.parent_path());
 			screenshot.outputPath = MakeCollisionSafePath(std::move(screenshot.outputPath));
-			const bool saveOk = SaveSdrScreenshot(
+			const auto committed = SaveSdrScreenshot(
 				*imageToSave,
 				screenshot.outputPath,
 				screenshot.saveAsPng,
 				combinedColorSpace,
 				combinedTonemapSceneHdr);
 
-			if (!saveOk) {
+			if (!committed) {
 				reportFailure("Failed to save screenshot.");
 				if (!screenshot.requestId.empty() && screenshotApi) {
 					screenshotApi->OnArtifactTerminal(screenshot.requestId, false, screenshot.outputPath, "failed to save screenshot");
@@ -3297,7 +3296,8 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 							{ "height", savedImage ? savedImage->height : 0 },
 							{ "format", screenshot.saveAsPng ? "png" : "bmp" },
 							{ "colourContract", "sdr_srgb" },
-						});
+						},
+						committed);
 					++reportedArtifacts;
 				}
 				if (a_state->notifyAllowed.load(std::memory_order_acquire)) {

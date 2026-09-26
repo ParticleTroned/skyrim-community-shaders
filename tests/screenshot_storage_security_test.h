@@ -51,6 +51,35 @@ inline void RunScreenshotStorageSecurityTests()
 			throw std::runtime_error("active sequence directory could be renamed before final manifest commit");
 
 		const auto artifactPath = directory->Path() / "frame_000001.bmp";
+		const auto atomicPath = directory->Path() / "atomic.bmp";
+		const auto atomicTemporary = directory->Path() / "atomic.bmp.tmp";
+		const std::string atomicBytes = "producer-owned";
+		const auto atomicDescription = CommittedFile::WriteAtomically(
+			atomicTemporary, atomicPath, atomicBytes.data(), atomicBytes.size(), false);
+		if (atomicDescription.bytes != atomicBytes.size() ||
+			atomicDescription.sha256 != "3d829da6e6186451accbb64d80461f66f178170700528ed530119316c840871e") {
+			throw std::runtime_error("producer-owned atomic commit returned incorrect integrity metadata");
+		}
+		if (std::filesystem::exists(atomicTemporary))
+			throw std::runtime_error("producer-owned atomic commit left its temporary path behind");
+		{
+			std::ofstream occupied(atomicTemporary, std::ios::binary);
+			occupied << "attacker";
+		}
+		ExpectFailure(
+			[&] { CommittedFile::WriteAtomically(
+					  atomicTemporary, directory->Path() / "blocked.bmp",
+					  atomicBytes.data(), atomicBytes.size(), false); },
+			"a pre-replaced producer temporary file was accepted");
+		std::filesystem::remove(atomicTemporary);
+		ExpectFailure(
+			[&] { CommittedFile::WriteAtomically(
+					  directory->Path() / "collision.tmp", atomicPath,
+					  atomicBytes.data(), atomicBytes.size(), false); },
+			"an existing final artifact was replaced without authority");
+		if (std::filesystem::exists(directory->Path() / "collision.tmp"))
+			throw std::runtime_error("failed no-replace commit left its temporary path behind");
+
 		{
 			{
 				std::ofstream artifact(artifactPath, std::ios::binary);

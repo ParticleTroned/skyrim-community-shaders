@@ -1,4 +1,4 @@
-# Adaptive Balance ambient, sky and water controls
+# Adaptive Balance color, ambient, sky and water controls
 
 Adaptive Balance exposes these controls in Global, time/interior profiles,
 and location layers. Sky Saturation is beside Sky Brightness in Lighting's
@@ -8,6 +8,8 @@ checkbox also enables its detailed adjustments, including Sky Saturation.
 
 | Control                   | Neutral | Range         |
 | ------------------------- | ------- | ------------- |
+| Contrast                  | 1       | 0.5–2         |
+| Saturation                | 1       | 0–2           |
 | Sky Saturation            | 1       | 0–2           |
 | Ambient                   | 1       | 0–5           |
 | Caustics Strength         | 1       | 0–2           |
@@ -32,6 +34,50 @@ locations retain both. Transitions interpolate the composed outputs and
 round quality to the nearest integer. Values are bounded after composition.
 Missing saved fields take neutral defaults. Disabling Adaptive Balance
 restores neutral outputs without discarding the saved adjustments.
+
+## Color
+
+The **Color** tab exposes Global Contrast and Saturation in Essential and
+Advanced views. Advanced view also exposes time/interior profiles and
+location layers. These controls work independently of the detailed Lighting
+switch and Linear Lighting. Existing settings and presets without these fields load neutral
+values. Contrast and Saturation multiply through the same bounded layer
+composition and day/night interpolation as the other float adjustments.
+
+The whole-scene controls complement the lighting and bloom controls already
+available in Adaptive Balance. The reference
+[IMAGINATOR](https://www.nexusmods.com/skyrim/mods/13049) offers general
+contrast and saturation through engine image-space adjustments. CSX applies
+its own grading in the existing HDR blend shader, using its composed scene
+and location-aware settings. No code or assets from IMAGINATOR are used.
+
+Grading runs after tone mapping, bloom and authored image-space color
+adjustments, before fades and final display encoding. It reuses
+`Color::RGBToLuminance`, `Color::Saturation`, and Linear Lighting's safe
+gamma conversions. With Linear Lighting off, only the active grading path
+converts to linear light and back. Existing lighting-input gamma controls
+remain independent because they operate before scene composition.
+
+Contrast scales RGB by a luminance power curve around linear middle gray
+(0.18). This preserves color ratios, keeps black at zero, and avoids the
+hard shadow cutoff of an affine contrast adjustment. Values below one
+soften contrast; values above one deepen shadows and raise highlights.
+Saturation zero makes the composed scene monochrome, including the sky
+and bloom. Saturation can clip negative channels when boosted, as in the
+shared color helper. Grading uses channel magnitudes to match the existing
+absolute-value display encoding and restores authored signs before fades.
+This avoids clipping dark image-space colors when a control leaves neutral.
+HDR values are not clamped to one. Subsequent engine fades and UI can still
+contribute their own colors.
+
+Exactly neutral values bypass grading, including the gamma round trip.
+The master/runtime gates emit neutral values. Config loading and every
+composed layer bound the controls and replace non-finite inputs with one;
+DevBench rejects invalid updates before mutation. The implementation fills
+two existing padding slots at offsets 40 and 44 in the 48-byte Adaptive
+Balance buffer. It adds no resources, sampling, or render passes and uses
+the same per-pixel math for SE, AE, and both VR eyes. Runtime cost has not
+been measured.
 
 ## Ambient
 
@@ -82,6 +128,8 @@ not their saved values or composition behavior.
     "action": "set_adaptive_balance_visuals",
     "expectedBuildId": "<loaded DLL Build ID>",
     "visuals": {
+        "contrast": 1.1,
+        "saturation": 0.9,
         "ambient": 0.5,
         "skySaturation": 0.8,
         "lightingAdvanced": true,
@@ -91,7 +139,8 @@ not their saved values or composition behavior.
 }
 ```
 
-`visuals` must be a nonempty object containing only `ambient`, `skySaturation`,
+`visuals` must be a nonempty object containing only `contrast`, `saturation`,
+`ambient`, `skySaturation`,
 `lightingAdvanced`, `causticsStrength`, `causticsTiling`, `causticsSpeed`,
 `causticsDispersion`, `parallaxStrength`, or `parallaxQuality`.
 Numeric bounds match the table; quality must be an integer and
@@ -106,6 +155,60 @@ Status exposes configured Global and composed effective values under
 and the master/runtime gate; they do not imply that Water Effects is loaded.
 
 ## Regression coverage
+
+The color extension adds executed `AdaptiveBalanceToggle` cases for neutral
+defaults, finite bounds, day/night interpolation, layered and replacement
+locations, independent detailed-lighting gating, and off/on restoration.
+`AdaptiveBalanceColorShader` executes 288 samples on D3D11 WARP across
+SE/AE and VR, Linear Lighting on/off, and the minimum, neutral and maximum
+settings. It checks exact neutral bypass, black/middle-gray preservation,
+contrast direction, hue ratios, monochrome output, finite near-black and
+HDR values, negative inputs, color-space agreement, and buffer offsets.
+It also executes 384 draws through eight production `ISHDR` blend
+permutations, with Adaptive Balance and fades independently on/off, both
+tone mappers, Linear Lighting on/off, and colored scene/bloom inputs.
+These verify neutral equivalence with the feature compiled out, continuity
+near neutral, whole-scene desaturation, unchanged full fades and matching
+stereo eyes. All passed with FXC warnings as errors.
+
+Adversarial review reproduced a shadow-clipping regression in the initial
+implementation: authored contrast can yield negative intermediate colors,
+so clamping them when Contrast moves from 1 to 1.000001 changes the output
+abruptly. The production-pass regression failed before the sign-preserving
+fix and passed afterward. The review also corrected the Essential-view
+documentation; profile and location controls require Advanced view.
+
+The maintained CMake targets `adaptive_balance_color_shader_test` and
+`adaptive_balance_toggle_test` were built in Release and both executables
+passed. Production packaging must build the DLL and both runtime cache
+packs from the final clean source commit; the shared shader-data change
+prevents substituting the unchanged 3.19.2 cache packs.
+
+Both changed production C++ translation units compiled with universal
+SE/AE/VR definitions and MSVC `/W4 /WX /fp:fast`, using the existing
+dependency tree. The standalone compile suppresses existing C4099 and
+CommonLib C4245 warnings. Compiler responses and logs are preserved under
+the worktree's `build/color-validation/`:
+
+```powershell
+pwsh ./tools/run-msvc-command.ps1 cl '@build/color-validation/AdaptiveBrightness.rsp'
+pwsh ./tools/run-msvc-command.ps1 cl '@build/color-validation/MenuDevBenchBridge.rsp'
+./build/color-validation/adaptive_balance_toggle_test.exe
+./build/color-validation/adaptive_balance_color_shader_test.exe
+./build/color-validation/visuals_validator_test.exe
+```
+
+The extracted production DevBench validator passed 20 valid/invalid update
+cases; the registered JSON schema's bounds match those checks. Unified
+preset compatibility metadata was refreshed for the additive settings
+contract; missing Color fields remain neutral in existing presets.
+`pwsh ./tests/unified_preset_generator_test.ps1` and
+`pwsh ./tools/generate-unified-presets.ps1 -Check` passed. The generated
+preset settings differ only in their compatibility metadata.
+
+Deployment, in-game DevBench/UI validation and headset visual assessment
+have not run. Build manifests and local validation receipts record the
+separate production DLL and package checks.
 
 `AdaptiveBalanceToggle` includes production-code cases for neutral defaults,
 finite bounds, profile/location composition, quality rounding and clamping,

@@ -77,7 +77,7 @@ namespace CSX::Api
 		if (commandId.empty() || commandId.size() > 128)
 			return MakeError(a_request, "invalid_field", "commandId must contain 1 to 128 characters", "validation", false, "commandId");
 
-		const std::string key = clientId + '\n' + commandId;
+		const CommandKey key{ clientId, commandId };
 		const std::string canonical = Canonicalize(a_request);
 		std::optional<CommandRecord> replay;
 		bool conflict = false;

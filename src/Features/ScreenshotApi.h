@@ -2,6 +2,7 @@
 
 #include "Api/ServiceFoundation.h"
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
 
 #include <chrono>
@@ -52,7 +53,8 @@ public:
 		bool a_success,
 		const std::filesystem::path& a_path,
 		std::string_view a_error = {},
-		json a_actual = json::object());
+		json a_actual = json::object(),
+		std::optional<CSX::ScreenshotStorage::CommittedArtifact> a_committedArtifact = std::nullopt);
 	void OnSourceTerminal(std::string_view a_requestId, std::string_view a_state, std::string_view a_error = {});
 	void OnFeatureDisabled(std::string_view a_reason);
 	void BeginShutdown(std::string_view a_reason);
@@ -134,6 +136,7 @@ private:
 		std::filesystem::path directory;
 		std::filesystem::path partialManifestPath;
 		std::filesystem::path finalManifestPath;
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		std::shared_ptr<const ManifestChildNode> manifestChildren;
 		std::size_t childCount = 0;
 		json packaging = json::object();
@@ -146,6 +149,7 @@ private:
 		bool final = false;
 		std::filesystem::path destination;
 		std::filesystem::path partialPath;
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		json header = json::object();
 		std::shared_ptr<const ManifestChildNode> children;
 	};

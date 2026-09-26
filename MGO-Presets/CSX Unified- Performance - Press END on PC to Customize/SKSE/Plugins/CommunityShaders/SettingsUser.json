@@ -78,7 +78,7 @@
       "maximumVersionExclusive": "3.20"
     },
     "settingsContract": {
-      "revision": 6,
+      "revision": 5,
       "sourceTreeSha256": "C6EDC88BDDBF5F38B2B34601B4285F85479676D0F6375045989160E31B48EFFF"
     }
   },

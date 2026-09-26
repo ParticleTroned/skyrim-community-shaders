@@ -24,6 +24,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -3794,21 +3795,35 @@ void AdaptiveBrightness::UpdateVanillaPointLightData(
 
 	VanillaPointLightData data{};
 	const uint32_t lightCount = std::min(a_lightCount, kMaxVanillaPointLights);
-	for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
-		const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
-		if (sceneLightIndex >= a_pass->numLights)
-			break;
+#if defined(_MSC_VER)
+	__try
+#endif
+	{
+		for (uint32_t lightIndex = 0; lightIndex < lightCount; ++lightIndex) {
+			const uint32_t sceneLightIndex = lightIndex + kFirstPointLightSceneIndex;
+			if (sceneLightIndex >= a_pass->numLights)
+				break;
 
-		auto* bsLight = a_pass->sceneLights[sceneLightIndex];
-		if (!bsLight)
-			continue;
+			auto* bsLight = a_pass->sceneLights[sceneLightIndex];
+			if (!bsLight)
+				continue;
 
-		auto* niLight = bsLight->light.get();
-		auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
-		if (!globals::features::inverseSquareLighting.IsEnabled())
-			pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
-		data.pointLightFlags[lightIndex] = pointLightFlags;
+			auto* niLight = bsLight->light.get();
+			auto pointLightFlags = PointLightFlags::GetVanillaPointLightFlags(bsLight, niLight);
+			if (!globals::features::inverseSquareLighting.IsEnabled())
+				pointLightFlags &= ~PointLightFlags::ToMask(PointLightFlags::Flags::Linear);
+			data.pointLightFlags[lightIndex] = pointLightFlags;
+		}
 	}
+#if defined(_MSC_VER)
+	__except (1) {
+		// A fault invalidates the batch, including its already-classified prefix.
+		data = {};
+		static std::atomic_bool loggedRecovery{ false };
+		if (!loggedRecovery.exchange(true, std::memory_order_relaxed))
+			logger::warn("[AdaptiveBalance] Invalid scene light; uploading neutral point-light classification (further warnings suppressed)");
+	}
+#endif
 
 	vanillaPointLightCB->Update(data);
 

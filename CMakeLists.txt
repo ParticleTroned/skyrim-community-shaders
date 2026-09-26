@@ -1764,6 +1764,8 @@ if(BUILD_CONTROLLER_TESTS)
         "${_adaptive_balance_test_dir}/linear_lighting_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_point_lights_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_point_light_members.h"
     )
     add_custom_command(
         OUTPUT ${_adaptive_balance_test_headers}
@@ -1788,10 +1790,11 @@ if(BUILD_CONTROLLER_TESTS)
         AdaptiveBalanceToggle
         tests/adaptive_balance_toggle_test.cpp
     )
-    target_sources(
-        adaptive_balance_toggle_test
-        PRIVATE ${_adaptive_balance_test_headers}
+    add_custom_target(
+        adaptive_balance_test_sources
+        DEPENDS ${_adaptive_balance_test_headers}
     )
+    add_dependencies(adaptive_balance_toggle_test adaptive_balance_test_sources)
     target_include_directories(
         adaptive_balance_toggle_test
         PRIVATE "${_adaptive_balance_test_dir}"
@@ -1801,6 +1804,19 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     if(MSVC)
+        add_controller_test(
+            adaptive_balance_point_lights_test
+            AdaptiveBalancePointLights
+            tests/adaptive_balance_point_lights_test.cpp
+        )
+        add_dependencies(
+            adaptive_balance_point_lights_test
+            adaptive_balance_test_sources
+        )
+        target_include_directories(
+            adaptive_balance_point_lights_test
+            PRIVATE "${_adaptive_balance_test_dir}"
+        )
         # Extracted adjustment arithmetic must use the DLL's Release FP model.
         target_compile_options(
             adaptive_balance_toggle_test

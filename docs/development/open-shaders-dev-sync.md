@@ -515,35 +515,100 @@ nonthrowing bit-mask helpers, light flags and both consumers are retained.
 Scoped pre-commit and `git diff --check` passed for this port. Builds, compiled tests and runtime validation remain deferred by the
 user. No exception-recovery runtime result is claimed.
 
-### #746: stale scene-light recovery, recommendation awaiting decision
+### #746: stale scene-light recovery, accepted Adaptive Balance port
 
 [Open Shaders #746](https://github.com/alandtse/open-shaders/pull/746),
 `d24e23ada4097cd1ec111ba387de5c9ec8244ad9`, is titled
 `fix(csutility): recover from stale scene lights`.
 
-Recommend **i, adapted into Adaptive Balance**. Its only code change guards
+User decision: **i, adapted into Adaptive Balance**. Its only upstream change guards
 the vanilla point-light classification loop with MSVC structured exception
 handling. Locally, the matching function is
-`AdaptiveBrightness::UpdateVanillaPointLightData`: it still dereferences
-raw scene-light entries and calls the RTTI helper without a recovery guard.
+`AdaptiveBrightness::UpdateVanillaPointLightData`: before the port it
+dereferenced raw scene-light entries and called the RTTI helper without
+a recovery guard.
 The Lighting hook calls it when LLF is unloaded; the Water hook also uses
 it. LLF's retained-light snapshot and strict-light recovery do not protect
 this separate loop. The change is applicable to shared SE/AE/VR code and
 is independent of E11, SLF, upstream UI and Scene Manager.
 
-Adapt the guard in that common callee so it covers both call sites,
-including the raw light dereference before RTTI. Stop on the first fault
-and upload neutral zero classification flags; preserve the existing local
+The guard now covers both call sites in that common callee, including
+the raw light dereference before RTTI. It stops on the first fault and
+uploads neutral zero classification flags, preserving the existing local
 Inverse Square Lighting enabled-state mask, count bounds, registers and
 buffer update/binding. Upstream retains successfully classified prefix
 entries because it initializes the buffer only before the loop; the local
-adaptation should clear the whole classification buffer on recovery, as
+adaptation clears the whole classification buffer on recovery, as
 local strict-light recovery already does for its own data. Zero is the
 existing shader fallback when classification data is unavailable.
 
-Verified the GitHub PR body and complete diff against both local call sites,
-the LLF snapshot scope, and `Color::GetVanillaPointLightFlags`. No #746
-code has been implemented. Await the user's `i` or `r`.
+Recovery logs one warning per process through an atomic gate, without
+flooding the render log on repeated faults. The first failed read aborts
+the loop; buffer upload and binding still run afterward. No scene-light
+ownership, API contract, shader, Color grading or render-scale code changes.
+The source fingerprint for generated presets is refreshed because the
+settings-owner inventory includes this implementation file; compatible
+revision 5 and every graphics setting remain unchanged.
+
+Added `AdaptiveBalancePointLights`, an MSVC controller test that extracts
+the actual production method, buffer layout and limits. Its fixture injects
+an access-violation exception during the light read and a C++ exception
+during classification after one successful entry. It checks full-batch
+clearing, stopping before later entries, upload/binding to both registers,
+next-call recovery, bounded warnings, ISL masking, count bounds and empty
+inputs. Engine classification and D3D upload are simulated; this is not an
+in-game RTTI or rendering test. Both Adaptive Balance test targets share a
+single extraction dependency to avoid concurrent generation of headers.
+
+Validation:
+
+-   `python tests/extract_adaptive_balance_toggle.py --source-dir . --output-dir ../../analysis/open-shaders-dev-review-20260926/pr746-extracted`
+    passed, producing both existing and new test headers without compiling.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all tiers.
+    A JSON comparison with the parent confirmed that only their settings-source
+    fingerprint changed, and every marker still matches runtime revision 5.
+-   Scoped pre-commit and `git diff --check` passed. Root CMake Gersemi remains
+    skipped for the previously documented unrelated baseline formatting;
+    the edited test block passed Gersemi separately, with the expected warning
+    for the custom `add_controller_test` command.
+-   The new `AdaptiveBalancePointLights` compiled fault-injection test, DLL
+    build and SE/AE/VR runtime validation remain deferred to the end of the
+    sync by user instruction. No recovery test execution is claimed.
+
+### #748: Effects11 location crash, excluded
+
+`8253d0a4cc7238185a1901f174a091dab5182019`,
+`fix(effects11): avoid null-cell location crash`, changes only
+`Effects11/ENBHelper.cpp`. It guards the E11 location cache's
+`GetCurrentLocation()` call with a parent-cell check and clears that cache
+when the cell is absent. No shared utility or independent non-E11 change
+is present. Excluded under the E11-only rule.
+
+### #747: DLSS-G buffer count, recommendation awaiting decision
+
+[Open Shaders #747](https://github.com/alandtse/open-shaders/pull/747),
+`bf52e305a62168f00ef54506ca51f28fac71c109`, is titled
+`fix(upscaling): scale DLSS-G buffers to multiplier`.
+
+Recommend **r**. It sizes the direct DLSS-G swap chain and allocator/fence
+arrays for multi-frame generation, then allows resizing that chain with
+its live buffer count. The local branch has no `CreateSwapChainDirect`,
+`useDLSSG`, cached DLSS-G frame multiplier or Streamline DLSS-G feature
+binding. Its DX12 swap chain is the FidelityFX provider's two-buffer path.
+The upstream FidelityFX path also retains two buffers, so widening local
+arrays or relaxing their count contract adds no applicable correction.
+
+The mixed resize changes were inspected separately: local
+`ResolveBackendBufferCount` already translates the public one-buffer
+contract (including zero/preserve requests) into two backend buffers.
+`ResizeBuffers` and `ResizeBuffers1` share that policy, restore buffers and
+frame-generation context on failure, and refresh them after success.
+Upstream's direct-DLSS-G count check would not preserve that local proxy
+contract. No independent resize fix from this PR is missing locally.
+
+Verified the full two-file diff, GitHub PR description, local creation and
+resize paths, and the absence of direct DLSS-G bindings. No #747 code has
+been implemented. Await the user's `i` or `r`.
 
 ## Verification
 

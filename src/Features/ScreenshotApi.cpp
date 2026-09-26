@@ -61,19 +61,19 @@ namespace
 		return resolved;
 	}
 
-	json DescribeCommittedArtifact(const std::filesystem::path& a_path)
+	json DescribeCommittedArtifact(
+		const std::filesystem::path& a_path,
+		const CSX::ScreenshotStorage::CommittedArtifact& a_description)
 	{
-		auto file = CSX::ScreenshotStorage::CommittedFile::Open(a_path);
-		const auto description = file.Describe();
 		return {
 			{ "path", PathUtf8(a_path) },
-			{ "bytes", description.bytes },
+			{ "bytes", a_description.bytes },
 			{ "committed", true },
-			{ "sha256", description.sha256 },
+			{ "sha256", a_description.sha256 },
 		};
 	}
 
-	void WriteJsonAtomically(
+	CSX::ScreenshotStorage::CommittedArtifact WriteJsonAtomically(
 		const CSX::ScreenshotStorage::DirectoryLease& a_directoryLease,
 		const std::filesystem::path& a_destination,
 		const json& a_document,
@@ -85,42 +85,10 @@ namespace
 			a_destination.native() + std::format(L".{}.tmp", a_generation));
 		a_directoryLease.VerifyDirectChild(temporary);
 		const auto document = a_document.dump(2);
-		const HANDLE file = CreateFileW(
-			temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-			FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-		if (file == INVALID_HANDLE_VALUE)
-			throw std::runtime_error(std::format("manifest temporary file creation failed with Win32 error {}", GetLastError()));
-		bool complete = false;
-		try {
-			std::size_t offset = 0;
-			while (offset < document.size()) {
-				const auto remaining = std::min<std::size_t>(document.size() - offset, MAXDWORD);
-				DWORD written = 0;
-				if (!WriteFile(file, document.data() + offset, static_cast<DWORD>(remaining), &written, nullptr) || written == 0)
-					throw std::runtime_error(std::format("manifest write failed with Win32 error {}", GetLastError()));
-				offset += written;
-			}
-			if (!FlushFileBuffers(file))
-				throw std::runtime_error(std::format("manifest flush failed with Win32 error {}", GetLastError()));
-			complete = true;
-		} catch (...) {
-			CloseHandle(file);
-			DeleteFileW(temporary.c_str());
-			throw;
-		}
-		CloseHandle(file);
-		if (!complete)
-			throw std::runtime_error("manifest write did not complete");
+		const auto committed = CSX::ScreenshotStorage::CommittedFile::WriteAtomically(
+			temporary, a_destination, document.data(), document.size(), a_replaceExisting);
 		a_directoryLease.VerifyDirectChild(a_destination);
-		const DWORD flags = MOVEFILE_WRITE_THROUGH |
-		                    (a_replaceExisting ? MOVEFILE_REPLACE_EXISTING : 0);
-		if (!MoveFileExW(
-				temporary.c_str(), a_destination.c_str(), flags)) {
-			const auto error = GetLastError();
-			DeleteFileW(temporary.c_str());
-			throw std::runtime_error(std::format("manifest commit failed with Win32 error {}", error));
-		}
-		a_directoryLease.VerifyDirectChild(a_destination);
+		return committed;
 	}
 
 	std::string SourceName(ScreenshotFeature::VRCaptureSource a_source)
@@ -306,14 +274,14 @@ void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_st
 				document["children"].push_back(child->child);
 			if (!job.directoryLease)
 				throw std::runtime_error("sequence directory ownership expired before manifest write");
-			WriteJsonAtomically(
+			const auto committed = WriteJsonAtomically(
 				*job.directoryLease, job.destination, document, job.generation,
 				!job.final);
 			if (job.final) {
 				job.directoryLease->VerifyDirectChild(job.partialPath);
 				if (!DeleteFileW(job.partialPath.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND)
 					logger::warn("Screenshot partial manifest cleanup failed with Win32 error {}", GetLastError());
-				result.artifact = DescribeCommittedArtifact(job.destination);
+				result.artifact = DescribeCommittedArtifact(job.destination, committed);
 			}
 			result.success = true;
 		} catch (const std::exception& error) {
@@ -430,8 +398,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 				return MakeError(a_request, "service_stopping", "screenshot admission is closed", "admission", true);
 			if (!CSX::ScreenshotPolicy::CanAdmitPendingOperations(CountPendingOperationsLocked()))
 				return MakeError(a_request, "operation_capacity", "the screenshot pending-operation limit is full", "admission", true);
-			auto& record = CreateRequestLocked("still", a_request, descriptor);
-			requestId = record.requestId;
+			CreateRequestLocked("still", a_request, descriptor, {}, 0, requestId);
 			manualDispatchQueue.push_back({
 				.requestId = requestId,
 				.capture = descriptor,
@@ -535,7 +502,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 						   } },
 		};
 
-		std::string requestId;
+		const std::string requestId = CSX::Api::ServiceFoundation::NewId();
 		{
 			std::lock_guard lock(mutex);
 			if (!acceptingRequests)
@@ -1397,7 +1364,8 @@ void ScreenshotApi::OnArtifactTerminal(
 	bool a_success,
 	const std::filesystem::path& a_path,
 	std::string_view a_error,
-	json a_actual)
+	json a_actual,
+	std::optional<CSX::ScreenshotStorage::CommittedArtifact> a_committedArtifact)
 {
 	if (a_requestId.empty())
 		return;
@@ -1423,7 +1391,9 @@ void ScreenshotApi::OnArtifactTerminal(
 		try {
 			if (sequenceDirectoryLease)
 				sequenceDirectoryLease->VerifyDirectChild(a_path);
-			artifact = DescribeCommittedArtifact(a_path);
+			if (!a_committedArtifact)
+				throw std::runtime_error("the screenshot producer did not transfer committed-file custody");
+			artifact = DescribeCommittedArtifact(a_path, *a_committedArtifact);
 		} catch (const std::exception& error) {
 			artifactSucceeded = false;
 			artifactError = error.what();

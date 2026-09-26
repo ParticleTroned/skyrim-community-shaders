@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -19,6 +20,12 @@ namespace CSX::ScreenshotStorage
 	{
 	public:
 		static CommittedFile Open(const std::filesystem::path& a_path);
+		static CommittedArtifact WriteAtomically(
+			const std::filesystem::path& a_temporaryPath,
+			const std::filesystem::path& a_destination,
+			const void* a_data,
+			std::size_t a_size,
+			bool a_replaceExisting);
 
 		CommittedFile(CommittedFile&& a_other) noexcept;
 		CommittedFile& operator=(CommittedFile&& a_other) noexcept;

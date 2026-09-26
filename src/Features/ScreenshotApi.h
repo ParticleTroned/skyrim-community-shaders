@@ -53,7 +53,8 @@ public:
 		bool a_success,
 		const std::filesystem::path& a_path,
 		std::string_view a_error = {},
-		json a_actual = json::object());
+		json a_actual = json::object(),
+		std::optional<CSX::ScreenshotStorage::CommittedArtifact> a_committedArtifact = std::nullopt);
 	void OnSourceTerminal(std::string_view a_requestId, std::string_view a_state, std::string_view a_error = {});
 	void OnFeatureDisabled(std::string_view a_reason);
 	void BeginShutdown(std::string_view a_reason);

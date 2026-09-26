@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstring>
 #include <cwctype>
 #include <format>
 #include <iomanip>
@@ -87,6 +88,35 @@ namespace CSX::ScreenshotStorage
 			const auto left = a_left.lexically_normal().native();
 			const auto right = a_right.lexically_normal().native();
 			return _wcsicmp(left.c_str(), right.c_str()) == 0;
+		}
+
+		void RenameHandle(
+			HANDLE a_handle,
+			const std::filesystem::path& a_destination,
+			bool a_replaceExisting)
+		{
+			const auto destination = std::filesystem::absolute(a_destination).lexically_normal().native();
+			const auto nameBytes = destination.size() * sizeof(wchar_t);
+			if (nameBytes > MAXDWORD)
+				throw std::runtime_error("committed artifact destination is too long");
+			std::vector<std::byte> storage(FIELD_OFFSET(FILE_RENAME_INFO, FileName) + nameBytes);
+			auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
+			rename->ReplaceIfExists = a_replaceExisting ? TRUE : FALSE;
+			rename->RootDirectory = nullptr;
+			rename->FileNameLength = static_cast<DWORD>(nameBytes);
+			std::memcpy(rename->FileName, destination.data(), nameBytes);
+			if (!SetFileInformationByHandle(
+					a_handle, FileRenameInfo, rename, static_cast<DWORD>(storage.size()))) {
+				throw std::runtime_error(std::format(
+					"committed artifact rename failed with Win32 error {}", GetLastError()));
+			}
+		}
+
+		void DeleteHandle(HANDLE a_handle) noexcept
+		{
+			FILE_DISPOSITION_INFO disposition{ .DeleteFile = TRUE };
+			SetFileInformationByHandle(
+				a_handle, FileDispositionInfo, &disposition, sizeof(disposition));
 		}
 
 		HANDLE OpenDirectory(const std::filesystem::path& a_path)
@@ -173,6 +203,60 @@ namespace CSX::ScreenshotStorage
 		if (canonicalError || !SamePath(FinalPath(file.Get()), expected))
 			throw std::runtime_error("committed artifact path changed while it was opened");
 		return CommittedFile(file.Release(), expected);
+	}
+
+	CommittedArtifact CommittedFile::WriteAtomically(
+		const std::filesystem::path& a_temporaryPath,
+		const std::filesystem::path& a_destination,
+		const void* a_data,
+		std::size_t a_size,
+		bool a_replaceExisting)
+	{
+		if (a_size != 0 && !a_data)
+			throw std::runtime_error("committed artifact data is unavailable");
+		const auto temporary = std::filesystem::absolute(a_temporaryPath).lexically_normal();
+		const auto destination = std::filesystem::absolute(a_destination).lexically_normal();
+		if (!SamePath(temporary.parent_path(), destination.parent_path()))
+			throw std::runtime_error("committed artifact temporary file is outside its destination directory");
+
+		ScopedHandle file(CreateFileW(
+			temporary.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE, FILE_SHARE_READ,
+			nullptr, CREATE_NEW,
+			FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH, nullptr));
+		if (file.Get() == INVALID_HANDLE_VALUE)
+			throw std::runtime_error(std::format(
+				"committed artifact temporary file creation failed with Win32 error {}", GetLastError()));
+
+		bool renamed = false;
+		try {
+			const auto identity = Identity(ReadIdentity(file.Get(), false));
+			const auto* bytes = static_cast<const std::byte*>(a_data);
+			std::size_t offset = 0;
+			while (offset < a_size) {
+				const auto remaining = std::min<std::size_t>(a_size - offset, MAXDWORD);
+				DWORD written = 0;
+				if (!WriteFile(file.Get(), bytes + offset, static_cast<DWORD>(remaining), &written, nullptr) || written == 0)
+					throw std::runtime_error(std::format(
+						"committed artifact write failed with Win32 error {}", GetLastError()));
+				offset += written;
+			}
+			if (!FlushFileBuffers(file.Get()))
+				throw std::runtime_error(std::format(
+					"committed artifact flush failed with Win32 error {}", GetLastError()));
+
+			RenameHandle(file.Get(), destination, a_replaceExisting);
+			renamed = true;
+			if (Identity(ReadIdentity(file.Get(), false)) != identity ||
+				!SamePath(FinalPath(file.Get()), destination)) {
+				throw std::runtime_error("committed artifact identity changed during publication");
+			}
+			CommittedFile committed(file.Release(), destination);
+			return committed.Describe();
+		} catch (...) {
+			if (!renamed)
+				DeleteHandle(file.Get());
+			throw;
+		}
 	}
 
 	CommittedFile::CommittedFile(CommittedFile&& a_other) noexcept :

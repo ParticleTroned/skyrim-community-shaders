@@ -98,12 +98,26 @@ foreach(_required_contract_text IN ITEMS
     endif()
 endforeach()
 
-string(FIND "${_implementation}" "result.artifact = DescribeCommittedArtifact(job.destination);" _manifest_describe_position)
+string(FIND "${_implementation}" "result.artifact = DescribeCommittedArtifact(job.destination, committed);" _manifest_describe_position)
 string(FIND "${_implementation}" "result.success = true;" _manifest_success_position)
 string(FIND "${_implementation}" "integrityError" _integrity_warning_position)
 if(_manifest_describe_position EQUAL -1 OR _manifest_success_position LESS _manifest_describe_position OR
    NOT _integrity_warning_position EQUAL -1)
     message(FATAL_ERROR "Manifest publication must fail closed when same-handle integrity metadata cannot be produced")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp" _feature_implementation)
+foreach(_required_custody_text IN ITEMS
+    SaveToWICMemory CommittedFile::WriteAtomically a_committedArtifact
+)
+    string(FIND "${_feature_implementation}${_implementation}" "${_required_custody_text}" _custody_position)
+    if(_custody_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot publication is missing producer-owned custody behavior: ${_required_custody_text}")
+    endif()
+endforeach()
+string(FIND "${_feature_implementation}" "SaveToWICFile" _path_reopen_position)
+if(NOT _path_reopen_position EQUAL -1)
+    message(FATAL_ERROR "Screenshot encoding must not close a path-written file before committed-file custody")
 endif()
 
 file(READ "${PROJECT_ROOT}/docs/development/schemas/screenshot-request-v1.schema.json" _request_schema)

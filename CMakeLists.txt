@@ -33,6 +33,18 @@ endif()
 set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
 set(CSX_RUNTIME "${CMAKE_MATCH_3}")
 set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
+set(CSX_RELEASE_VERSION
+    ""
+    CACHE STRING
+    "Stable version supplied by release automation."
+)
+if(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+    include("${CMAKE_CURRENT_LIST_DIR}/cmake/ReleaseVersion.cmake")
+    csx_resolve_release_version(
+        "${CSX_RELEASE_VERSION}" "${CSX_VERSION}"
+        _CSX_PROJECT_VERSION _CSX_RELEASE_LABEL
+    )
+endif()
 
 # Test distributions carry an independently allocated build identity. Keep the
 # plugin version and compatibility identity on CSX_VERSION: both are consumed
@@ -49,9 +61,17 @@ csx_parse_test_build(
     CSX_TEST_BUILD_DATE
 )
 if(NOT "${CSX_TEST_BUILD}" STREQUAL "")
+    if(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+        message(
+            FATAL_ERROR
+            "Release and test-build identities cannot be combined."
+        )
+    endif()
     set(CSX_BUILD_VERSION
         "${CSX_VERSION} ${CSX_TEST_BUILD_NUMBER} (${CSX_TEST_BUILD_DATE})"
     )
+elseif(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+    set(CSX_BUILD_VERSION "${_CSX_RELEASE_LABEL}")
 else()
     set(CSX_BUILD_VERSION "${CSX_VERSION}")
 endif()
@@ -222,6 +242,7 @@ add_custom_target(
         --toolchain-file "${CMAKE_TOOLCHAIN_FILE}"
         --overlay-dir "${VCPKG_OVERLAY_PORTS}"
         --build-option "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}"
+        --build-option "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}"
         --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
         --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}"
         --build-option "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}"
@@ -675,6 +696,8 @@ endif()
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 if(NOT "${CSX_TEST_BUILD}" STREQUAL "")
     set(CSX_PACKAGE_STAMP "${CSX_VERSION}-${CSX_TEST_BUILD}")
+elseif(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+    set(CSX_PACKAGE_STAMP "${_CSX_RELEASE_LABEL}")
 else()
     set(CSX_PACKAGE_STAMP "${UTC_NOW}")
 endif()

@@ -634,6 +634,41 @@ both runtimes; manual runs include both by default.
 
 ## CI and release workflow
 
+### Stable main-VR releases
+
+Dispatch `Release: Semantic Version` on `main-VR` with `release_type=stable`
+and `expected_version` set to the next CSX patch, for example `3.19.2`
+after `csx3.19.1`. The explicit expectation prevents accidentally releasing
+a different version. The pipeline requires a clean checkout, the exact
+current remote head, a reachable CSX baseline in the universal core's
+major/minor line, and an unused next patch tag. It never rewrites tags or
+force-pushes a branch. The existing dev/hotfix semantic-release path remains
+separate.
+
+The pipeline audits feature versions against the preceding CSX tag, applies
+required feature INI bumps unless disabled, and rejects unresolved audit
+items. Any metadata commit uses the release bot identity with Rationale and
+Implementation sections. It creates the immutable `csx<version>` tag, then
+a draft release, and explicitly dispatches the existing artifact workflow.
+If artifact dispatch fails after allocation, resume `release-build.yaml`
+on that existing tag; do not allocate or replace the tag again.
+
+The shared build passes the validated tag version as `CSX_RELEASE_VERSION`.
+For `csx3.19.2`, the DLL/file version is `3.19.2`, its display label is
+`CSX 3.19.2-VR`, and the AIO is `CSX_AIO-3.19.2-VR.7z`. The compatibility
+label remains `CSX 3.19-VR`, shared by the universal core and both shader
+caches. The release version is recorded in producer provenance and cannot
+be combined with a test-build identity. Ordinary builds retain their
+existing version behavior.
+
+Production explicitly disables DevBench and Tracy. The release build runs
+controller tests, shader validation and shader tests, builds both runtime
+caches with both Water compatibility variants, validates the FOMOD and
+attaches the archives to the draft. Publishing the draft remains a separate
+release action. Local allocation/version validation is
+`python tests/csx_release_test.py`; packaging coverage remains in
+`tests/release_fomod_workflow_test.py`.
+
 `Release: Prebuilt Shader Cache` runs on `windows-2025`, executes the builder
 and pinned requirements from the selected target ref, and creates fixed GitHub
 artifact names:

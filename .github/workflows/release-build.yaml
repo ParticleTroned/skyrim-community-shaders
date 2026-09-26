@@ -94,7 +94,7 @@ jobs:
 
     feature-audit:
         name: Feature Version Audit (Release)
-        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release') && github.event.action != 'published'
+        if: (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/csx') || github.event_name == 'release') && github.event.action != 'published'
         runs-on: ubuntu-latest
         continue-on-error: true
         steps:
@@ -110,8 +110,16 @@ jobs:
                   python-version: "3.11"
 
             - name: Run feature version audit
+              env:
+                  RELEASE_TAG: ${{ github.ref_name }}
+              shell: bash
               run: |
-                  python tools/feature_version_audit.py --output feature-version-audit-latest.md
+                  set -euo pipefail
+                  audit_args=()
+                  if [[ "$RELEASE_TAG" == csx* ]]; then
+                    audit_args+=(--base "$(python tools/csx_release.py audit-base --tag "$RELEASE_TAG")")
+                  fi
+                  python tools/feature_version_audit.py "${audit_args[@]}" --output feature-version-audit-latest.md
                   cat feature-version-audit-latest.md
 
             - name: Upload feature audit markdown
@@ -138,6 +146,7 @@ jobs:
             github.event.action != 'published' &&
             (github.event_name == 'workflow_dispatch' ||
              startsWith(github.ref, 'refs/tags/v') ||
+             startsWith(github.ref, 'refs/tags/csx') ||
              (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
         runs-on: windows-2025
         outputs:

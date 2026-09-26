@@ -1,4 +1,4 @@
-"""Extract native weather refresh and lock routing for controller tests."""
+"""Extract weather refresh, lock routing and clock edits for controller tests."""
 
 import argparse
 from pathlib import Path
@@ -19,6 +19,7 @@ def extract(root, output):
     for signature in ["\tvoid ReapplyWeatherLock(", "\tvoid SetWeatherHook::thunk(", "\tvoid ForceWeatherHook::thunk("]:
         bodies += function(editor, signature)
     bodies += "}\n"
+    bodies += function(editor, "bool EditorWindow::DrawGameHourSlider(")
     (output / "forced_weather_under_test.h").write_text(bodies, encoding="utf-8")
 
 

@@ -1,7 +1,9 @@
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
@@ -24,23 +26,30 @@ namespace RE
 	{
 		virtual ~Property() = default;
 	};
+	struct BSRenderPass
+	{
+		bool blendPass = true;
+	};
 	struct BSSkyShaderProperty : Property
 	{
 		float blend = 0.5f;
-		bool cachedBlendPass = true, dirty = false;
-		int clears = 0;
+		std::int32_t lastRenderPassState = 0;
+		std::shared_ptr<BSRenderPass> cachedPass = std::make_shared<BSRenderPass>();
+		int clears = 0, rebuilds = 0;
 		void DoClearRenderPasses()
 		{
-			dirty = true;
+			cachedPass.reset();
+			lastRenderPassState = (std::numeric_limits<std::int32_t>::max)();
 			++clears;
 		}
 		bool UsesBlendPass()
 		{
-			if (dirty) {
-				cachedBlendPass = blend > 0.0f;
-				dirty = false;
+			if (lastRenderPassState == (std::numeric_limits<std::int32_t>::max)()) {
+				cachedPass = std::make_shared<BSRenderPass>(blend > 0.0f);
+				lastRenderPassState = 0;
+				++rebuilds;
 			}
-			return cachedBlendPass;
+			return cachedPass->blendPass;
 		}
 	};
 	struct Geometry
@@ -78,16 +87,49 @@ namespace RE
 	};
 	struct Sky
 	{
+		static inline Sky* singleton = nullptr;
+		static Sky* GetSingleton() { return singleton; }
 		std::shared_ptr<NiNode> root = std::make_shared<NiNode>(), auroraRoot;
 		ModelDBHandle auroraModel;
 		Clouds* clouds = nullptr;
 		TESWeather* currentWeather = nullptr;
 		TESWeather* overrideWeather = nullptr;
 		TESWeather* defaultWeather = nullptr;
+		float lastWeatherUpdate = 0.0f;
 		int nativeForces = 0, entryCalls = 0, nativeSets = 0;
 		bool lastAccelerate = false;
 		void ForceWeather(TESWeather*, bool);
 	};
+	struct TESGlobal
+	{
+		float value = 0.0f;
+	};
+	struct Calendar
+	{
+		static inline Calendar* singleton = nullptr;
+		static Calendar* GetSingleton() { return singleton; }
+		TESGlobal* gameHour = nullptr;
+	};
+}
+
+namespace globals::game
+{
+	RE::Calendar* calendar = nullptr;
+	RE::Sky* sky = nullptr;
+}
+
+namespace ImGui
+{
+	bool changed = false;
+	float requestedHour = 0.0f;
+	int sliderCalls = 0;
+	bool SliderFloat(const char*, float* value, float, float, const char*)
+	{
+		++sliderCalls;
+		if (changed)
+			*value = requestedHour;
+		return changed;
+	}
 }
 
 template <class T, class U>
@@ -168,7 +210,9 @@ namespace REL
 class EditorWindow
 {
 public:
+	static constexpr float kGameHourMax = 23.99f;
 	static void ForceWeather(RE::Sky*, RE::TESWeather*, bool);
+	bool DrawGameHourSlider(const char* label = "Game Time", const char* format = "%.2f");
 };
 
 namespace Util
@@ -238,6 +282,7 @@ namespace
 		RE::TESWeather first, second;
 		RE::ModelDBHandle::U_Entry request;
 		std::weak_ptr<RE::NiNode> oldModel;
+		std::array<std::weak_ptr<RE::BSRenderPass>, 32> queuedPasses;
 
 		Fixture()
 		{
@@ -249,21 +294,30 @@ namespace
 			for (int index : { 0, 31 }) {
 				clouds.clouds[index] = std::make_shared<RE::Geometry>();
 				clouds.clouds[index]->data.shaderProperty = std::make_shared<RE::BSSkyShaderProperty>();
+				queuedPasses[index] = static_cast<RE::BSSkyShaderProperty*>(clouds.clouds[index]->data.shaderProperty.get())->cachedPass;
 			}
 			clouds.clouds[1] = std::make_shared<RE::Geometry>();
 			clouds.clouds[2] = std::make_shared<RE::Geometry>();
 			clouds.clouds[2]->data.shaderProperty = std::make_shared<RE::Property>();
 		}
 
-		void CheckRefreshed(int expectedClears = 1)
+		void CheckRefreshed(int expectedRebuilds = 1)
 		{
 			Check(oldModel.expired() && !sky.auroraRoot && sky.root->detaches == 1,
 				"outgoing model remained attached or was detached twice");
 			Check(!sky.auroraModel && request.references == 0, "model request was not released");
 			for (int index : { 0, 31 }) {
 				auto* property = static_cast<RE::BSSkyShaderProperty*>(clouds.clouds[index]->data.shaderProperty.get());
-				Check(property->clears == expectedClears && !property->UsesBlendPass(),
-					"clouds did not rebuild exactly once after native blending reset");
+				Check(property->clears == 0 && !queuedPasses[index].expired(),
+					"weather refresh freed a pass borrowed by the current draw queue");
+				Check(queuedPasses[index].lock()->blendPass == (expectedRebuilds == 1),
+					"queued pass changed before the next accumulation");
+				Check(!property->UsesBlendPass() && property->rebuilds == expectedRebuilds,
+					"clouds did not rebuild once at the next accumulation");
+				Check(queuedPasses[index].expired(), "old pass was retained after accumulation rebuilt it");
+				Check(!property->UsesBlendPass() && property->rebuilds == expectedRebuilds,
+					"unchanged cloud pass rebuilt again");
+				queuedPasses[index] = property->cachedPass;
 			}
 		}
 	};
@@ -352,6 +406,68 @@ namespace
 				"null inputs or empty handles invoked extra engine work");
 		}
 	}
+
+	void ClockEdits()
+	{
+		EditorWindow editor;
+		for (bool cachedAccessors : { false, true }) {
+			SetHookState(2);
+			RE::TESGlobal hour{ 12.0f };
+			RE::Calendar calendar{ &hour };
+			RE::Sky sky;
+			RE::TESWeather locked, other;
+			RE::Calendar::singleton = &calendar;
+			RE::Sky::singleton = &sky;
+			globals::game::calendar = cachedAccessors ? &calendar : nullptr;
+			globals::game::sky = cachedAccessors ? &sky : nullptr;
+			sky.currentWeather = sky.overrideWeather = g_lockedWeather = &locked;
+			g_weatherLockActive = true;
+			sky.lastWeatherUpdate = hour.value;
+			ImGui::changed = true;
+			for (float target : { 11.9f, 11.8f, 6.0f, 0.1f, 23.99f, 0.0f, 18.0f }) {
+				ImGui::requestedHour = target;
+				Check(editor.DrawGameHourSlider() && hour.value == target, "valid hour edit was lost");
+				float elapsed = hour.value - sky.lastWeatherUpdate;
+				if (elapsed < 0.0f)
+					elapsed += 24.0f;
+				if (elapsed > 1.0f)
+					sky.overrideWeather = nullptr;
+				Check(sky.overrideWeather == &locked, "clock edit expired the locked weather");
+				SetWeatherHook::thunk(&sky, &other, false, false);
+				Check(sky.nativeForces == 0, "clock edit forced a weather reload to repair the lock");
+			}
+
+			sky.lastWeatherUpdate = 3.0f;
+			ImGui::changed = false;
+			Check(editor.DrawGameHourSlider() && hour.value == 18.0f && sky.lastWeatherUpdate == 3.0f,
+				"drawing an idle slider changed game time or the weather timer");
+			ImGui::changed = true;
+			for (float invalid : { -1.0f, 24.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() }) {
+				ImGui::requestedHour = invalid;
+				Check(editor.DrawGameHourSlider() && hour.value == 18.0f && sky.lastWeatherUpdate == 3.0f,
+					"invalid clock input changed game time or the weather timer");
+			}
+			for (bool activeWithoutWeather : { false, true }) {
+				g_weatherLockActive = activeWithoutWeather;
+				g_lockedWeather = activeWithoutWeather ? nullptr : &locked;
+				ImGui::requestedHour = activeWithoutWeather ? 5.0f : 9.0f;
+				Check(editor.DrawGameHourSlider() && hour.value == ImGui::requestedHour && sky.lastWeatherUpdate == 3.0f,
+					"unlocked edit or missing lock target changed the weather timer");
+			}
+
+			g_weatherLockActive = true;
+			g_lockedWeather = &locked;
+			globals::game::sky = RE::Sky::singleton = nullptr;
+			ImGui::requestedHour = 7.0f;
+			Check(editor.DrawGameHourSlider() && hour.value == 7.0f, "missing sky blocked a valid clock edit");
+			const int calls = ImGui::sliderCalls;
+			calendar.gameHour = nullptr;
+			Check(!editor.DrawGameHourSlider() && ImGui::sliderCalls == calls, "missing hour reached the slider");
+			globals::game::calendar = RE::Calendar::singleton = nullptr;
+			Check(!editor.DrawGameHourSlider() && ImGui::sliderCalls == calls, "missing calendar reached the slider");
+		}
+		SetHookState(0);
+	}
 }
 
 int main()
@@ -360,6 +476,7 @@ int main()
 		DirectAndConsoleCalls();
 		LockEnforcement();
 		PendingAndAbsentModels();
+		ClockEdits();
 		std::cout << "Forced-weather refresh checks passed\n";
 		return 0;
 	} catch (const std::exception& error) {

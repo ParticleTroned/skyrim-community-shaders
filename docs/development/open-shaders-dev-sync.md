@@ -1151,22 +1151,22 @@ extend EHF's sky fog distance to meet Horizon Fix water, including
 reflections. The existing water rendering path receives no independent
 correction. Excluded under the EHF rule; no buffer or plugin ABI additions.
 
-### #766: weather/time scrubbing, recommendation awaiting decision
+### #766: weather/time scrubbing, accepted SE/AE/VR adaptation
 
 [Open Shaders #766](https://github.com/alandtse/open-shaders/pull/766),
 `9abc4063d463a1a098e84f0d43746e337038683b`, is titled
 `fix(weather): stabilize time scrubbing`.
 
-Recommend **i, adapt both runtime corrections to the local controls**:
+User decision: **i, adapt both runtime corrections to the local controls**:
 
--   The approved #750 port calls `DoClearRenderPasses()` from
+-   The approved #750 port called `DoClearRenderPasses()` from
     `Util::RefreshForcedWeatherSky`. Upstream replaces immediate cloud-pass
     clearing with `lastRenderPassState = INT32_MAX`, leaving existing passes
     available to the current render queue until normal accumulation rebuilds
     them. This is a safety correction to our pending #750 implementation,
     not an E11 or UI-only change. Retain the local native-call routing,
     weather-lock hooks and SE/AE/VR aurora-model release paths.
--   Our `EditorWindow::DrawGameHourSlider` writes the calendar hour directly
+-   Our `EditorWindow::DrawGameHourSlider` wrote the calendar hour directly
     without aligning `Sky::lastWeatherUpdate`. With a weather lock active,
     a backward edit can look like a midnight wrap and expire the override;
     `MaintainWeatherLock` then repairs it by forcing weather again. Adapt
@@ -1181,13 +1181,77 @@ the same render-pass-state sentinel in `BSShaderProperty`. No new address
 relocation, setting or resource is needed. These fixes apply to SE, AE and
 VR; the current source review does not establish a runtime crash or pass.
 
-If accepted, extend the existing extracted forced-weather controller
-fixture to cover retained queued-pass lifetime and locked/unlocked time
-edits, including backward and midnight changes. Compile and execute it at
-the final validation stage, as instructed. No #766 code has been changed.
+Implemented both corrections. The cloud helper now marks the existing
+property dirty without clearing its passes. The shared hour slider edits
+a temporary value, rejects non-finite or out-of-range input, and aligns
+the timer before publishing a valid change when both sky and an active
+weather lock exist. Missing sky still permits valid hour edits; missing
+calendar/hour retains the existing failure return. Idle sliders and
+unlocked edits do not alter the weather timer. UI labels, ranges, layout,
+pause state and weather-lock policy remain unchanged.
 
-This review checkpoint changes only the ledger. Scoped pre-commit and
-`git diff --check` passed; no build, shader compilation or runtime test ran.
+Extended the existing `ForcedWeather` controller fixture and extractor to
+use the actual edited clock function alongside native refresh/lock routing.
+Its cloud model now owns render-pass objects and models immediate clearing
+as releasing that ownership. Weak references represent passes borrowed by
+the draw queue, checking they survive refresh and retire only at the next
+accumulation, which rebuilds once. Existing SE/AE/VR native-route and model
+release cases remain. New clock cases model override expiry across backward,
+forward and midnight edits, verify no repair reload, and cover inactive
+locks, missing lock targets, idle sliders, invalid values, missing game
+objects and both cached/singleton access paths.
+
+Validation:
+
+-   `python tests/extract_forced_weather.py --source-dir . --output-dir ../../analysis/open-shaders-dev-review-20260926/pr766-forced-weather`
+    passed, generating the real production functions for the existing target.
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr766.py`
+    passed. It verifies the exact helper delta, preserves native routing,
+    locks, model release and all other editor code, checks timer-before-hour
+    ordering and input guards, and checks extraction and Python syntax.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all three
+    tiers. No preset or settings-owner fingerprint changed.
+-   Scoped pre-commit and `git diff --check` passed.
+-   Controller compilation/execution, DLL builds, shader compilation and
+    SE/AE/VR runtime validation remain deferred by user instruction. The
+    fixture's modeled behavior is not a runtime engine-validation result.
+
+### #781: PR compile-record workflow, excluded
+
+[Open Shaders #781](https://github.com/alandtse/open-shaders/pull/781),
+`e313d8748452fb811ee03d91f98188018499b7f6`, is titled
+`ci(shadercache): skip compile record on PRs`.
+
+The sole workflow hunk runs upstream's cache compile-record command only
+when cache artifacts or compiled shaders will be uploaded. Shader validation
+itself is unchanged. Excluded as upstream CI/publishing housekeeping; no
+independent runtime cache fix.
+
+### #775: nasal foveated presets, recommend reject
+
+[Open Shaders #775](https://github.com/alandtse/open-shaders/pull/775),
+`86edd27e4cd14c347a9bb33b20464b7de1fd0944`, is titled
+`feat(upscaling): nasal 60/70 foveated presets`.
+
+Recommend **r: upstream preset convenience, no missing renderer fix**.
+The entire diff adds two names and two preset entries to Open Shaders'
+`FoveatedRender` controller. They select square crops covering 60% or 70%
+of each eye's width/height, shifted toward the nose with explicit mirrored
+right-eye UVs. No shader math, resource handling, dispatch or default
+selection changes.
+
+Local foveation uses `FoveatedRegionPlan`, continuous center coverage from
+0.25 to 1.0, horizontal expansion and independent per-eye offset controls.
+Those settings already feed the runtime region plan and history checks.
+The local Subrect controller serves previews/crops and is not the upstream
+stereo foveated preset selector. Its preset type has no `rightUV` field.
+
+The exact named shortcuts are absent. Similar size/bias choices can use the
+existing local controls, but our mask/feathering and resolved eye offsets
+are different, so no pixel-identical result or performance advantage is
+claimed. Porting this diff would add upstream-specific preset UI/data,
+which is excluded; no independent part warrants changing our renderer.
+No #775 code was changed. Await the user's `i` or `r`.
 
 ## Verification
 

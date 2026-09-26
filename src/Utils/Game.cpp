@@ -2,6 +2,8 @@
 
 #include "State.h"
 
+#include <limits>
+
 namespace
 {
 	void ResetModelHandle(RE::ModelDBHandle& a_handle)
@@ -36,12 +38,12 @@ namespace Util
 		}
 		ResetModelHandle(a_sky->auroraModel);
 
-		// ForceWeather clears blending without invalidating the cached cloud technique.
+		// Defer cloud-pass rebuilding until accumulation; current queues may still borrow these passes.
 		if (a_sky->clouds) {
 			for (const auto& cloud : a_sky->clouds->clouds) {
 				if (cloud) {
 					if (auto* property = skyrim_cast<RE::BSSkyShaderProperty*>(cloud->GetGeometryRuntimeData().shaderProperty.get()))
-						property->DoClearRenderPasses();
+						property->lastRenderPassState = (std::numeric_limits<std::int32_t>::max)();
 				}
 			}
 		}

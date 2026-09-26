@@ -2234,7 +2234,15 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
 	if (!calendar || !calendar->gameHour)
 		return false;
-	ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
+	float hour = calendar->gameHour->value;
+	if (ImGui::SliderFloat(label, &hour, 0.0f, kGameHourMax, format) &&
+		std::isfinite(hour) && hour >= 0.0f && hour <= kGameHourMax) {
+		auto* sky = globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton();
+		// Backward clock edits otherwise resemble a midnight wrap and expire the weather override.
+		if (sky && GetActiveWeatherLock())
+			sky->lastWeatherUpdate = hour;
+		calendar->gameHour->value = hour;
+	}
 	return true;
 }
 

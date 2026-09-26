@@ -53,7 +53,7 @@ struct AdaptiveBrightness : Feature
 			{ "Separate exterior day and night balance profiles",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
-				"Unified global and per-profile Lighting, Bloom, Water, and wind adjustment layers" }
+				"Unified global and per-profile Lighting, Color, Bloom, Water, and wind adjustment layers" }
 		};
 	}
 
@@ -83,6 +83,8 @@ struct AdaptiveBrightness : Feature
 	struct ProfileSettings
 	{
 		float brightness = 1.0f;
+		float contrast = 1.0f;
+		float saturation = 1.0f;
 		bool advanced = false;
 		bool bloomAdvanced = false;
 		bool waterAdvanced = false;
@@ -166,12 +168,15 @@ struct AdaptiveBrightness : Feature
 		float linearOmnidirectionalBulbMult;
 		float skySaturation;
 		float ambientMult;
-		float pad[2]{};
+		float contrast;
+		float saturation;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 	static_assert(sizeof(PerFrameData) == 48);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);
+	static_assert(offsetof(PerFrameData, contrast) == 40);
+	static_assert(offsetof(PerFrameData, saturation) == 44);
 
 	struct alignas(16) VanillaPointLightData
 	{
@@ -349,6 +354,8 @@ struct AdaptiveBrightness : Feature
 		bool a_allowEdits);
 	void DrawGlobalSettings(bool a_showAdvancedControls);
 	void DrawLightingSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
+	/// Draws whole-scene grading controls independent of detailed lighting adjustments.
+	void DrawColorSettings(ProfileSettings& a_profile);
 	void DrawBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);

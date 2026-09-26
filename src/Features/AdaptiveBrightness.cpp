@@ -45,6 +45,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::ProfileSettings,
 	brightness,
+	contrast,
+	saturation,
 	advanced,
 	bloomAdvanced,
 	waterAdvanced,
@@ -116,6 +118,9 @@ namespace
 	constexpr float kGammaOffsetMax = 1.0f;
 	constexpr float kGlobalSkyBrightnessMax = 2.0f;
 	constexpr float kSkySaturationMax = 2.0f;
+	constexpr float kContrastMin = 0.5f;
+	constexpr float kContrastMax = 2.0f;
+	constexpr float kSaturationMax = 2.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
 	constexpr float kWaterWindMultiplierMin = 0.0f;
 	constexpr float kWaterWindMultiplierMax = 2.0f;
@@ -325,6 +330,8 @@ namespace
 
 		a_settings.skyBrightness = clamp(a_settings.skyBrightness, kGlobalSkyBrightnessMax, defaults.skyBrightness);
 		a_settings.skySaturation = clamp(a_settings.skySaturation, kSkySaturationMax, defaults.skySaturation);
+		a_settings.contrast = Util::ClampFinite(a_settings.contrast, kContrastMin, kContrastMax, defaults.contrast);
+		a_settings.saturation = clamp(a_settings.saturation, kSaturationMax, defaults.saturation);
 		a_settings.ambientMult = ClampMultiplier(a_settings.ambientMult);
 		a_settings.directionalLightMult = clamp(a_settings.directionalLightMult, kGlobalLightingMultiplierMax, defaults.directionalLightMult);
 		a_settings.pointLightMult = clamp(a_settings.pointLightMult, kGlobalLightingMultiplierMax, defaults.pointLightMult);
@@ -627,6 +634,8 @@ namespace
 	void ClampProfileSettings(AdaptiveBrightness::ProfileSettings& a_profile)
 	{
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
+		a_profile.contrast = Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f);
+		a_profile.saturation = Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f);
 		a_profile.skyBrightnessMult = ClampMultiplier(a_profile.skyBrightnessMult);
 		a_profile.skySaturation = Util::ClampFinite(a_profile.skySaturation, 0.0f, kSkySaturationMax, 1.0f);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
@@ -1531,7 +1540,7 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 		SetEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable all Adaptive Balance adjustments across Global, profile, and location layers.");
-		ImGui::Text("When off, its lighting, Bloom, water appearance, and wind response adjustments are bypassed.");
+		ImGui::Text("When off, its lighting, color, Bloom, water appearance, and wind response adjustments are bypassed.");
 		ImGui::Text("Engine wind and independent renderer features keep their own settings.");
 	}
 
@@ -1553,7 +1562,7 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem("Global")) {
-			ImGui::TextWrapped("Set the shared Lighting, Bloom, and Water adjustments applied before the active profile and location layers.");
+			ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments applied before the active profile and location layers.");
 			DrawGlobalPresetControls();
 			DrawGlobalSettings(true);
 			ImGui::EndTabItem();
@@ -1635,6 +1644,7 @@ void AdaptiveBrightness::DrawProfileControlTabs(
 			ImGui::EndTabItem();
 		};
 		drawTab("Lighting", [&] { DrawLightingSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
+		drawTab("Color", [&] { DrawColorSettings(a_profile); });
 		drawTab("Bloom", [&] { DrawBloomSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
 		drawTab("Water", [&] { DrawWaterSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
 
@@ -1656,7 +1666,7 @@ void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
 
 void AdaptiveBrightness::DrawEssentialSettings()
 {
-	ImGui::TextWrapped("Set the shared Lighting, Bloom, and Water adjustments.");
+	ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments.");
 	DrawGlobalPresetControls();
 	DrawGlobalSettings(false);
 }
@@ -1932,9 +1942,9 @@ void AdaptiveBrightness::DrawCurrentContextProfileTab(
 
 	if (!contextProfile) {
 		if (inheritedProfile) {
-			ImGui::TextWrapped("%s currently inherits the saved broader profile %s. Create an adjustment layer here to refine Lighting, Bloom, and Water.", target->name.c_str(), inheritedProfile->name.c_str());
+			ImGui::TextWrapped("%s currently inherits the saved broader profile %s. Create an adjustment layer here to refine Lighting, Color, Bloom, and Water.", target->name.c_str(), inheritedProfile->name.c_str());
 		} else {
-			ImGui::TextWrapped("%s currently inherits the %s base profile. Create an adjustment layer here to refine Lighting, Bloom, and Water.", target->name.c_str(), GetProfileName(target->defaultProfile));
+			ImGui::TextWrapped("%s currently inherits the %s base profile. Create an adjustment layer here to refine Lighting, Color, Bloom, and Water.", target->name.c_str(), GetProfileName(target->defaultProfile));
 		}
 		ImGui::BeginDisabled(!a_allowEdits);
 		const auto createLabel = std::format("Create {} Profile", GetContextScopeName(a_scope));
@@ -1965,7 +1975,7 @@ void AdaptiveBrightness::DrawContextProfilePresetControls(
 	bool a_allowEdits)
 {
 	ImGui::SeparatorText("Share Profile");
-	DrawHintText("Export stores this scope's Lighting, Bloom, Water, wind, and layer mode as a portable JSON profile. Import applies them to the current scope without changing other saved profiles.");
+	DrawHintText("Export stores this scope's Lighting, Color, Bloom, Water, wind, and layer mode as a portable JSON profile. Import applies them to the current scope without changing other saved profiles.");
 
 	const auto scopeIndex = ContextScopeIndex(a_scope);
 	auto& presetName = contextPresetNames[scopeIndex];
@@ -2007,6 +2017,17 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 	DrawProfileControlTabs(a_profile, "##ProfileControlSections", a_showAdvancedControls, false, a_allowEdits);
 	ImGui::Unindent();
 	ClampProfileSettings(a_profile);
+}
+
+void AdaptiveBrightness::DrawColorSettings(ProfileSettings& a_profile)
+{
+	ImGui::TextWrapped("Adjust the whole scene, including sky, lighting and bloom. One is neutral; Global and active profile adjustments multiply.");
+	ImGui::SliderFloat("Contrast", &a_profile.contrast, kContrastMin, kContrastMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Adjusts luminance around middle gray while preserving hue. Lower values soften contrast; higher values deepen shadows and brighten highlights.");
+	ImGui::SliderFloat("Saturation", &a_profile.saturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Zero makes the scene monochrome; one preserves its colors; higher values increase color intensity. Works with Linear Lighting on or off.");
 }
 
 void AdaptiveBrightness::DrawLightingSettings(
@@ -2152,7 +2173,7 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
-	DrawHintText("Global presets store the shared Lighting, Bloom, Water, and wind adjustment layer, the five profiles, and exterior timing.");
+	DrawHintText("Global presets store the shared Lighting, Color, Bloom, Water, and wind adjustment layer, the five profiles, and exterior timing.");
 	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
 	ImGui::PushID("GlobalPresetControls");
 
@@ -2178,7 +2199,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ExportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Export the global adjustment layer, exterior timing, and the five Lighting, Bloom, and Water profiles. Location overrides are not included.");
+		ImGui::Text("Export the global adjustment layer, exterior timing, and the five Lighting, Color, Bloom, and Water profiles. Location overrides are not included.");
 	}
 
 	if (keepControlsOnOneLine || keepButtonsOnOneLine)
@@ -2187,7 +2208,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 		ImportGlobalPreset();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Replace the global adjustment layer, exterior timing, and the five Lighting, Bloom, and Water profiles. Saved location overrides stay unchanged.");
+		ImGui::Text("Replace the global adjustment layer, exterior timing, and the five Lighting, Color, Bloom, and Water profiles. Saved location overrides stay unchanged.");
 	}
 
 	if (!globalPresetStatus.empty())
@@ -3357,6 +3378,8 @@ SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSett
 
 	out.skyBrightness = ClampMultiplier(out.skyBrightness * advancedMult(a_profile.skyBrightnessMult));
 	out.skySaturation = Util::ClampFinite(out.skySaturation * advancedMult(a_profile.skySaturation), 0.0f, kSkySaturationMax, 1.0f);
+	out.contrast = Util::ClampFinite(out.contrast * Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f), kContrastMin, kContrastMax, 1.0f);
+	out.saturation = Util::ClampFinite(out.saturation * Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f), 0.0f, kSaturationMax, 1.0f);
 	out.ambientMult = ClampMultiplier(out.ambientMult * masterScale(0.95f) * advancedMult(a_profile.ambientMult));
 	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
 
@@ -3491,6 +3514,8 @@ SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSett
 
 	out.skyBrightness = lerp(a_a.skyBrightness, a_b.skyBrightness);
 	out.skySaturation = lerp(a_a.skySaturation, a_b.skySaturation);
+	out.contrast = lerp(a_a.contrast, a_b.contrast);
+	out.saturation = lerp(a_a.saturation, a_b.saturation);
 	out.ambientMult = lerp(a_a.ambientMult, a_b.ambientMult);
 	out.directionalLightMult = lerp(a_a.directionalLightMult, a_b.directionalLightMult);
 	out.pointLightMult = lerp(a_a.pointLightMult, a_b.pointLightMult);
@@ -3682,6 +3707,8 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	PerFrameData data{};
 	data.skyBrightness = effectiveSettings.skyBrightness;
 	data.skySaturation = effectiveSettings.skySaturation;
+	data.contrast = effectiveSettings.contrast;
+	data.saturation = effectiveSettings.saturation;
 	data.ambientMult = effectiveSettings.ambientMult;
 	data.directionalLightMult = effectiveSettings.directionalLightMult;
 	data.pointLightMult = effectiveSettings.pointLightMult;

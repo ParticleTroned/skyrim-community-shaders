@@ -128,6 +128,52 @@ const std::vector<const AdaptiveBrightness::LocationOverride*>& AdaptiveBrightne
 
 bool Close(float a, float b) { return std::abs(a - b) < 0.00001f; }
 
+void CheckColorControls()
+{
+	AdaptiveBrightness balance;
+	auto& global = balance.settings.globalProfile;
+	assert(global.contrast == 1.0f && global.saturation == 1.0f);
+	global.advanced = false;
+	global.contrast = 1.2f;
+	global.saturation = 0.8f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.contrast = 0.5f;
+	night.contrast = 1.5f;
+	day.saturation = 0.5f;
+	night.saturation = 1.5f;
+	balance.testProfileBlend = { &day, &night, 0.25f };
+	auto color = balance.GetCommonBufferData();
+	assert(Close(color.contrast, 0.9f) && Close(color.saturation, 0.6f));
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.contrast = 1.25f;
+	location.profile.saturation = 0.5f;
+	balance.testLocationLayers = { &location };
+	color = balance.GetCommonBufferData();
+	assert(Close(color.contrast, 1.5f) && Close(color.saturation, 0.4f));
+	location.layered = true;
+	color = balance.GetCommonBufferData();
+	assert(Close(color.contrast, 1.0625f) && Close(color.saturation, 0.3f));
+	balance.SetEnabled(false);
+	color = balance.GetCommonBufferData();
+	assert(color.contrast == 1.0f && color.saturation == 1.0f);
+	balance.SetEnabled(true);
+	assert(Close(balance.GetCommonBufferData().contrast, 1.0625f));
+	balance.testProfileBlend = {};
+	balance.testLocationLayers.clear();
+	global.contrast = std::numeric_limits<float>::infinity();
+	global.saturation = std::numeric_limits<float>::quiet_NaN();
+	color = balance.GetCommonBufferData();
+	assert(color.contrast == 1.0f && color.saturation == 1.0f);
+	ClampProfileSettings(global);
+	assert(global.contrast == 1.0f && global.saturation == 1.0f);
+	global.contrast = -5.0f;
+	global.saturation = 10.0f;
+	ClampProfileSettings(global);
+	assert(global.contrast == 0.5f && global.saturation == 2.0f);
+	global.saturation = 0.0f;
+	assert(balance.GetCommonBufferData().saturation == 0.0f);
+}
+
 void CheckVisualControls()
 {
 	WaterAppearance::Profile invalid;
@@ -228,6 +274,7 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 	const auto lights = balance.GetCommonBufferData();
 	assert(lights.skyBrightness == 1.0f && lights.directionalLightMult == 1.0f);
 	assert(lights.skySaturation == 1.0f);
+	assert(lights.contrast == 1.0f && lights.saturation == 1.0f);
 	assert(lights.ambientMult == 1.0f);
 	assert(lights.pointLightMult == 1.0f && lights.linearPointLightMult == 1.0f);
 	assert(lights.spotlightMult == 1.0f && lights.linearSpotlightMult == 1.0f);
@@ -311,6 +358,7 @@ void CheckAmbientComposition()
 
 int main()
 {
+	CheckColorControls();
 	CheckAmbientComposition();
 	CheckVisualControls();
 	// Keep zero-identity guards exercised at runtime under Release optimization.

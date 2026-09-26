@@ -32,8 +32,14 @@ continue there. Unrelated primary-worktree changes were retained.
 The user then specified that these ports will land atop
 `feat/adaptive-balance-color`. Merge `a5e5ff76e` integrates its head
 `f3bfe1f24f11a570ce6b74b9f25354a15f0ebe17` into the sync branch, retaining
-both histories. The primary checkout remains at `202777f6f`; the Color
-branch and its separate worktree are unchanged.
+both histories. During the port, another operation amended Color to
+`41e91ef48a730e073480f5024b5ae11115125c99` and fast-forwarded `main-VR`
+to it. This sync did not modify or reset either shared branch. A further
+merge refreshes the sync branch to the amended Color head, preserving its
+sign-aware grading fix and expanded HDR tests alongside #741's controls
+and reflection checks. The primary checkout remains on `main-VR`.
+The earlier `202777f6f` pin records the user-selected sync starting point;
+the unrelated later fast-forward is retained.
 
 The user decides `i` or `r` for each presented candidate before a port.
 Compare actual diffs with current local code, including equivalent or
@@ -371,6 +377,8 @@ Balance and exclude this PR under the user's Scene Manager/UI rules.
 `feat(utility): expand atmosphere controls`.
 
 User decision: **i, adapted partial port into Adaptive Balance**.
+Implementation commit: `c0dce9cc4`; the subsequent Color-base merge retains
+the updated Color grading fix and tests.
 The shader changes add cloud-specific brightness, saturation and gamma;
 vanilla fog opacity scaling; sky-static effect brightness/transparency;
 and a sun-glare intensity multiplier. These have independent uses in

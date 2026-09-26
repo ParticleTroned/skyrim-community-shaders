@@ -135,9 +135,9 @@ namespace
 				if (contrast == 1 && saturation == 1)
 					Require(Close(result[i][c], samples[i][c]), "Neutral output changed");
 				else
-					Require(result[i][c] >= 0, "Negative graded color");
+					Require(samples[i][c] < 0 ? result[i][c] <= 0 : result[i][c] >= 0, "Grading changed an authored channel sign");
 				if (saturation == 0)
-					Require(Close(result[i][c], result[i][0]), "Zero saturation is not monochrome");
+					Require(Close(std::abs(result[i][c]), std::abs(result[i][0])), "Zero saturation is not monochrome after display encoding");
 			}
 		}
 		Require(result[0][0] == 0, "Contrast lifted black");
@@ -147,6 +147,155 @@ namespace
 		if (saturation == 1) {
 			Require(Close(result[4][0] / result[4][1], 2), "Contrast shifted hue");
 			Require(result[5][2] > 1, "HDR highlights clipped to SDR");
+		}
+	}
+
+	struct Texture
+	{
+		ComPtr<ID3D11Texture2D> resource;
+		ComPtr<ID3D11ShaderResourceView> srv;
+		ComPtr<ID3D11RenderTargetView> rtv;
+
+		Texture(ID3D11Device* device, const char* name, UINT flags)
+		{
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = 2;
+			desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+			desc.BindFlags = flags;
+			if (!flags) {
+				desc.Usage = D3D11_USAGE_STAGING;
+				desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			}
+			Check(device->CreateTexture2D(&desc, nullptr, resource.GetAddressOf()));
+			Util::SetResourceName(resource.Get(), "AdaptiveColorTest::%s", name);
+			if (flags & D3D11_BIND_SHADER_RESOURCE) {
+				Check(device->CreateShaderResourceView(resource.Get(), nullptr, srv.GetAddressOf()));
+				Util::SetResourceName(srv.Get(), "AdaptiveColorTest::%s SRV", name);
+			}
+			if (flags & D3D11_BIND_RENDER_TARGET) {
+				Check(device->CreateRenderTargetView(resource.Get(), nullptr, rtv.GetAddressOf()));
+				Util::SetResourceName(rtv.Get(), "AdaptiveColorTest::%s RTV", name);
+			}
+		}
+
+		void Set(ID3D11DeviceContext* context, Pixel color)
+		{
+			const std::array pixels{ color, color };
+			context->UpdateSubresource(resource.Get(), 0, nullptr, pixels.data(), UINT(sizeof(pixels)), 0);
+		}
+	};
+
+	struct BlendFixture
+	{
+		ID3D11DeviceContext* context;
+		ComPtr<ID3D11PixelShader> pixel;
+		ComPtr<ID3D11VertexShader> vertex;
+		ComPtr<ID3D11ShaderReflection> reflection;
+		ComPtr<ID3D11SamplerState> sampler;
+		std::unique_ptr<ConstantBuffer> geometry, frame, feature;
+		Texture output, staging, scene, bloom, average;
+
+		BlendFixture(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool adaptive, bool fade) :
+			context(context), output(device, "BlendOutput", D3D11_BIND_RENDER_TARGET),
+			staging(device, "BlendReadback", 0), scene(device, "Scene", D3D11_BIND_SHADER_RESOURCE),
+			bloom(device, "Bloom", D3D11_BIND_SHADER_RESOURCE), average(device, "Average", D3D11_BIND_SHADER_RESOURCE)
+		{
+			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "BLEND", "1" } };
+			if (vr)
+				defines.push_back({ "VR", "1" });
+			if (adaptive)
+				defines.push_back({ "ADAPTIVE_BALANCE", "1" });
+			if (fade)
+				defines.push_back({ "FADE", "1" });
+			auto code = Compile(L"package/Shaders/ISHDR.hlsl", defines, "ps_5_0");
+			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+			Check(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, pixel.GetAddressOf()));
+			Util::SetResourceName(pixel.Get(), "AdaptiveColorTest::BlendPS");
+			constexpr char vs[] = "struct V { float4 p:SV_POSITION; float2 uv:TEXCOORD0; }; V main(uint id:SV_VertexID) { V v; v.uv=float2((id<<1)&2,id&2); v.p=float4(v.uv*float2(2,-2)+float2(-1,1),0,1); return v; }";
+			ComPtr<ID3DBlob> vertexCode;
+			Check(D3DCompile(vs, sizeof(vs) - 1, nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, vertexCode.GetAddressOf(), nullptr));
+			Check(device->CreateVertexShader(vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), nullptr, vertex.GetAddressOf()));
+			Util::SetResourceName(vertex.Get(), "AdaptiveColorTest::FullscreenVS");
+			D3D11_SAMPLER_DESC desc{};
+			desc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+			desc.AddressU = desc.AddressV = desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			desc.MaxLOD = D3D11_FLOAT32_MAX;
+			Check(device->CreateSamplerState(&desc, sampler.GetAddressOf()));
+			Util::SetResourceName(sampler.Get(), "AdaptiveColorTest::Sampler");
+			feature = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::FeatureData");
+			geometry = std::make_unique<ConstantBuffer>(device, reflection.Get(), "PerGeometry");
+			frame = std::make_unique<ConstantBuffer>(device, reflection.Get(), "FrameBuffer::PerFrame");
+			frame->SetVariable("FrameBuffer::FrameParams", Pixel{ 1, 0, 0, 0 });
+			frame->SetVariable("FrameBuffer::DynamicResolutionParams1", Pixel{ 1, 1, 1, 1 });
+			frame->SetVariable("FrameBuffer::DynamicResolutionParams2", Pixel{ 1, 1, 1, 1 });
+		}
+
+		Pixel Draw(bool linear, float contrast, float saturation, float authoredContrast = 1, Pixel fade = {}, bool dark = false, bool alternateTonemap = false)
+		{
+			context->ClearState();
+			scene.Set(context, dark ? Pixel{ 0.05f, 0.04f, 0.03f, 1 } : Pixel{ 0.4f, 0.2f, 0.1f, 1 });
+			bloom.Set(context, dark ? Pixel{} : Pixel{ 0.1f, 0.2f, 0.3f, 1 });
+			average.Set(context, { 0.8f, 0.8f, 0, 0 });
+			feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+			feature->SetMember("SharedData::adaptiveBalanceSettings", "contrast", contrast);
+			feature->SetMember("SharedData::adaptiveBalanceSettings", "saturation", saturation);
+			feature->Bind(context, D3D11ShaderTest::Stage::Pixel);
+			geometry->SetVariable("Param", Pixel{ 1, 1, float(alternateTonemap), 0 });
+			geometry->SetVariable("Cinematic", Pixel{ 1, 0, authoredContrast, 1 });
+			geometry->SetVariable("Fade", fade);
+			geometry->Bind(context, D3D11ShaderTest::Stage::Pixel);
+			frame->Bind(context, D3D11ShaderTest::Stage::Pixel);
+			ID3D11ShaderResourceView* sources[]{ bloom.srv.Get(), scene.srv.Get(), average.srv.Get() };
+			context->PSSetShaderResources(0, 3, sources);
+			ID3D11SamplerState* samplers[]{ sampler.Get(), sampler.Get(), sampler.Get() };
+			context->PSSetSamplers(0, 3, samplers);
+			ID3D11RenderTargetView* target = output.rtv.Get();
+			context->OMSetRenderTargets(1, &target, nullptr);
+			D3D11_VIEWPORT viewport{ 0, 0, 2, 1, 0, 1 };
+			context->RSSetViewports(1, &viewport);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			context->VSSetShader(vertex.Get(), nullptr, 0);
+			context->PSSetShader(pixel.Get(), nullptr, 0);
+			context->Draw(3, 0);
+			context->ClearState();
+			context->CopyResource(staging.resource.Get(), output.resource.Get());
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			Check(context->Map(staging.resource.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+			std::array<Pixel, 2> result;
+			std::memcpy(result.data(), mapped.pData, sizeof(result));
+			context->Unmap(staging.resource.Get(), 0);
+			for (size_t c = 0; c < 4; ++c) {
+				Require(std::isfinite(result[0][c]), "Non-finite HDR blend output");
+				Require(Close(result[0][c], result[1][c]), "HDR blend eyes disagree");
+			}
+			return result[0];
+		}
+	};
+
+	void VerifyBlend(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool fade)
+	{
+		BlendFixture baseline(device, context, vr, false, fade);
+		BlendFixture graded(device, context, vr, true, fade);
+		for (bool linear : { false, true }) {
+			for (bool dark : { false, true }) {
+				for (bool alternateTonemap : { false, true }) {
+					for (const Pixel fading : { Pixel{}, Pixel{ 0.1f, 0.3f, 0.2f, 0.4f }, Pixel{ 0.1f, 0.3f, 0.2f, 1 } }) {
+						const auto original = baseline.Draw(linear, 1, 1, 2, fading, dark, alternateTonemap);
+						const auto neutral = graded.Draw(linear, 1, 1, 2, fading, dark, alternateTonemap);
+						const auto nearNeutral = graded.Draw(linear, 1.000001f, 1, 2, fading, dark, alternateTonemap);
+						const auto gray = graded.Draw(linear, 1, 0, 2, fading, dark, alternateTonemap);
+						for (size_t c = 0; c < 3; ++c) {
+							Require(Close(neutral[c], original[c]), "Neutral settings changed the HDR blend");
+							Require(Close(nearNeutral[c], original[c]), "Tiny contrast adjustment clipped authored shadows");
+							if (fade && fading[3] == 1)
+								Require(Close(gray[c], original[c]), "Scene saturation changed a full fade");
+							if (!fade || fading[3] == 0)
+								Require(Close(gray[c], gray[0]), "Composed scene and bloom did not become monochrome");
+						}
+					}
+				}
+			}
 		}
 	}
 }
@@ -173,20 +322,10 @@ int main()
 							Require(Close(linear[i][c], gamma[i][c]), "Linear Lighting paths disagree");
 				}
 			}
-			for (bool adaptive : { false, true }) {
-				for (bool fade : { false, true }) {
-					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "BLEND", "1" } };
-					if (vr)
-						defines.push_back({ "VR", "1" });
-					if (adaptive)
-						defines.push_back({ "ADAPTIVE_BALANCE", "1" });
-					if (fade)
-						defines.push_back({ "FADE", "1" });
-					Compile(L"package/Shaders/ISHDR.hlsl", defines, "ps_5_0");
-				}
-			}
+			for (bool fade : { false, true })
+				VerifyBlend(device.Get(), context.Get(), vr, fade);
 		}
-		std::cout << "288 WARP color samples and 8 ISHDR permutations passed (SE/AE and VR).\n";
+		std::cout << "288 color samples and 384 HDR blend draws passed on WARP (SE/AE and VR).\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

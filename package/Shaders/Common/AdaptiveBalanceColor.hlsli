@@ -11,7 +11,9 @@ namespace AdaptiveBalanceColor
 		// Neutral profiles must retain the original path without a gamma round trip.
 		[branch] if (contrast != 1.0 || saturation != 1.0)
 		{
-			float3 linearColor = max(color, 0.0);
+			// Display encoding uses absolute values; preserve signed intermediates for fades.
+			const float3 colorSign = color < 0.0 ? -1.0 : 1.0;
+			float3 linearColor = abs(color);
 			if (!linearLighting)
 				linearColor = Color::GammaToLinearSafe(linearColor);
 
@@ -25,7 +27,7 @@ namespace AdaptiveBalanceColor
 			if (saturation != 1.0)
 				linearColor = Color::Saturation(linearColor, saturation);
 
-			color = linearLighting ? linearColor : Color::LinearToGammaSafe(linearColor);
+			color = colorSign * (linearLighting ? linearColor : Color::LinearToGammaSafe(linearColor));
 		}
 		return color;
 	}

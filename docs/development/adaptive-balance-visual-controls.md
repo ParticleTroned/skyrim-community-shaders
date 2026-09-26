@@ -46,10 +46,10 @@ restores neutral outputs without discarding the saved adjustments.
 
 ## Color
 
-The **Color** tab exposes Contrast and Saturation in Essential and Advanced
-views for Global, time/interior profiles, and location layers. These
-controls work independently of the detailed Lighting switch and Linear
-Lighting. Existing settings and presets without these fields load neutral
+The **Color** tab exposes Global Contrast and Saturation in Essential and
+Advanced views. Advanced view also exposes time/interior profiles and
+location layers. These controls work independently of the detailed Lighting
+switch and Linear Lighting. Existing settings and presets without these fields load neutral
 values. Contrast and Saturation multiply through the same bounded layer
 composition and day/night interpolation as the other float adjustments.
 
@@ -73,8 +73,11 @@ hard shadow cutoff of an affine contrast adjustment. Values below one
 soften contrast; values above one deepen shadows and raise highlights.
 Saturation zero makes the composed scene monochrome, including the sky
 and bloom. Saturation can clip negative channels when boosted, as in the
-shared color helper. HDR values are not clamped to one. Subsequent engine
-fades and UI can still contribute their own colors.
+shared color helper. Grading uses channel magnitudes to match the existing
+absolute-value display encoding and restores authored signs before fades.
+This avoids clipping dark image-space colors when a control leaves neutral.
+HDR values are not clamped to one. Subsequent engine fades and UI can still
+contribute their own colors.
 
 Exactly neutral values bypass grading, including the gamma round trip.
 The master/runtime gates emit neutral values. Config loading and every
@@ -213,7 +216,7 @@ reports only the saved Global offset.
 ## Regression coverage
 
 The following executed Color results belong to the unchanged Color base
-`f3bfe1f24f11a570ce6b74b9f25354a15f0ebe17`, before the atmosphere extension.
+`41e91ef48a730e073480f5024b5ae11115125c99`, before the atmosphere extension.
 They are historical evidence, not validation of the extended buffer or shaders.
 
 The color extension adds executed `AdaptiveBalanceToggle` cases for neutral
@@ -224,9 +227,25 @@ SE/AE and VR, Linear Lighting on/off, and the minimum, neutral and maximum
 settings. It checks exact neutral bypass, black/middle-gray preservation,
 contrast direction, hue ratios, monochrome output, finite near-black and
 HDR values, negative inputs, color-space agreement, and buffer offsets.
-It also compiles eight production `ISHDR` blend permutations with Adaptive
-Balance and fades independently on/off. All passed with FXC warnings as
-errors.
+It also executes 384 draws through eight production `ISHDR` blend
+permutations, with Adaptive Balance and fades independently on/off, both
+tone mappers, Linear Lighting on/off, and colored scene/bloom inputs.
+These verify neutral equivalence with the feature compiled out, continuity
+near neutral, whole-scene desaturation, unchanged full fades and matching
+stereo eyes. All passed with FXC warnings as errors.
+
+Adversarial review reproduced a shadow-clipping regression in the initial
+implementation: authored contrast can yield negative intermediate colors,
+so clamping them when Contrast moves from 1 to 1.000001 changes the output
+abruptly. The production-pass regression failed before the sign-preserving
+fix and passed afterward. The review also corrected the Essential-view
+documentation; profile and location controls require Advanced view.
+
+The maintained CMake targets `adaptive_balance_color_shader_test` and
+`adaptive_balance_toggle_test` were built in Release and both executables
+passed. Production packaging must build the DLL and both runtime cache
+packs from the final clean source commit; the shared shader-data change
+prevents substituting the unchanged 3.19.2 cache packs.
 
 Both changed production C++ translation units compiled with universal
 SE/AE/VR definitions and MSVC `/W4 /WX /fp:fast`, using the existing
@@ -250,8 +269,9 @@ contract; missing Color fields remain neutral in existing presets.
 `pwsh ./tools/generate-unified-presets.ps1 -Check` passed. The generated
 preset settings differ only in their compatibility metadata.
 
-Full DLL linking, deployment, in-game DevBench/UI validation and visual
-assessment have not run.
+Deployment, in-game DevBench/UI validation and headset visual assessment
+have not run. Build manifests and local validation receipts record the
+separate production DLL and package checks.
 
 `AdaptiveBalanceToggle` includes production-code cases for neutral defaults,
 finite bounds, profile/location composition, quality rounding and clamping,

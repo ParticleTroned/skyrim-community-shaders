@@ -1104,13 +1104,13 @@ Validation:
     Final shader validation must include Hair Specular on/off with ordinary
     and True PBR hair, including VR, back-lighting and deferred permutations.
 
-### #764: unreadable disk-cache timestamp, recommend reject
+### #764: unreadable disk-cache timestamp, rejected
 
 [Open Shaders #764](https://github.com/alandtse/open-shaders/pull/764),
 `800af745ca6195ec830324ac865039501a06b010`, is titled
 `fix: treat unreadable disk-cache timestamp as miss`.
 
-Recommend **r: the affected timestamp acceptance path is absent locally**.
+User decision: **r: the affected timestamp acceptance path is absent locally**.
 The entire upstream source change sets `diskCacheOutdated = true` when
 reading the cached blob's timestamp fails, preventing reuse of a blob whose
 freshness could not be established.
@@ -1123,9 +1123,71 @@ Managed packs likewise require a source-derived identity and compatible
 content/compile-state metadata; missing identity or read errors produce a
 miss. This protects a wider validity contract than timestamps alone.
 
-No #764 change was made. Await the user's `i` or `r`; this recommendation
-comes from the complete pinned diff and local read-path inspection, not a
-new runtime cache-failure test.
+No #764 code change was made. The decision is based on the complete pinned
+diff and local read-path inspection, not a new runtime cache-failure test.
+
+### #762: E11 weather-cache type changes, excluded
+
+[Open Shaders #762](https://github.com/alandtse/open-shaders/pull/762),
+`a6291d6f5913cf531a8c11ce4929cc4f5e9fcb5a`, is titled
+`fix: reset weather cache on setting type change`.
+
+The entire change is in `Features/Effects11/SettingManager.cpp`. When a
+setting is re-registered with a different variant type, it resets that
+setting's live and saved weather-cache entries to the new default. There
+is no local E11 setting registry or equivalent variant cache to repair,
+and no independent shared weather hunk. Excluded under the E11 rule.
+
+### #768: Horizon Fix / EHF integration, excluded
+
+[Open Shaders #768](https://github.com/alandtse/open-shaders/pull/768),
+`35efe1ac168e79ba82add3d7758b8c7795f450b4`, is titled
+`feat(horizonfix): ehf integration`.
+
+Reviewed all six changed files, including shared shader data, feature
+buffer construction, sky and image-space shaders. The new plugin export,
+far-water-distance buffer value and expanded feature defines exclusively
+extend EHF's sky fog distance to meet Horizon Fix water, including
+reflections. The existing water rendering path receives no independent
+correction. Excluded under the EHF rule; no buffer or plugin ABI additions.
+
+### #766: weather/time scrubbing, recommendation awaiting decision
+
+[Open Shaders #766](https://github.com/alandtse/open-shaders/pull/766),
+`9abc4063d463a1a098e84f0d43746e337038683b`, is titled
+`fix(weather): stabilize time scrubbing`.
+
+Recommend **i, adapt both runtime corrections to the local controls**:
+
+-   The approved #750 port calls `DoClearRenderPasses()` from
+    `Util::RefreshForcedWeatherSky`. Upstream replaces immediate cloud-pass
+    clearing with `lastRenderPassState = INT32_MAX`, leaving existing passes
+    available to the current render queue until normal accumulation rebuilds
+    them. This is a safety correction to our pending #750 implementation,
+    not an E11 or UI-only change. Retain the local native-call routing,
+    weather-lock hooks and SE/AE/VR aurora-model release paths.
+-   Our `EditorWindow::DrawGameHourSlider` writes the calendar hour directly
+    without aligning `Sky::lastWeatherUpdate`. With a weather lock active,
+    a backward edit can look like a midnight wrap and expire the override;
+    `MaintainWeatherLock` then repairs it by forcing weather again. Adapt
+    upstream's timer alignment before publishing the edited hour, only
+    while a lock is active. Both the menu bar and Weather Picker use this
+    shared slider, so one local correction covers both existing controls.
+    Preserve unlocked edits and the current lock/pause semantics; do not
+    import upstream's environment-control UI or automatic scrub locks.
+
+CommonLib exposes both fields in shared runtime layouts and already uses
+the same render-pass-state sentinel in `BSShaderProperty`. No new address
+relocation, setting or resource is needed. These fixes apply to SE, AE and
+VR; the current source review does not establish a runtime crash or pass.
+
+If accepted, extend the existing extracted forced-weather controller
+fixture to cover retained queued-pass lifetime and locked/unlocked time
+edits, including backward and midnight changes. Compile and execute it at
+the final validation stage, as instructed. No #766 code has been changed.
+
+This review checkpoint changes only the ledger. Scoped pre-commit and
+`git diff --check` passed; no build, shader compilation or runtime test ran.
 
 ## Verification
 

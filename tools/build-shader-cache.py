@@ -130,6 +130,7 @@ DEBUG_PROFILE_DEFINES = {
     "D3DCOMPILE_DEBUG",
     "D3DCOMPILE_SKIP_OPTIMIZATION",
 }
+OBSOLETE_CAPTURE_DEFINES = frozenset({"VANILLA_FRESNEL", "HDR_OUTPUT"})
 NON_SHIPPED_PACKAGES = {
     feature["package"]
     for feature in NON_SHIPPED_FEATURES.values()
@@ -146,6 +147,7 @@ CROSS_MODLIST_SHADER_VARIANTS = {
             "Grass:Pixel:10006": ("DO_ALPHA_TEST",),
         },
         "VSHADER": {
+            "Grass:Vertex:0": (),
             "Grass:Vertex:5": (),
             "Grass:Vertex:7": (),
         },
@@ -1034,7 +1036,9 @@ def build_managed_shader_packs(
     return variant_counts
 
 
-BASE_EXCLUDED_DEFINES = frozenset(NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES)
+BASE_EXCLUDED_DEFINES = frozenset(
+    NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES | OBSOLETE_CAPTURE_DEFINES
+)
 SHIPPED_CACHE_PROFILE = CacheProfile(
     name="shipped",
     display_name="Shipped",
@@ -1372,15 +1376,15 @@ def derive_distribution_profile(source_root: Path) -> DistributionProfile:
         )
 
     return DistributionProfile(
-        excluded_short_names=frozenset(hidden_short_names),
+        excluded_short_names=frozenset(hidden_short_names | NON_SHIPPED_FEATURES.keys()),
         excluded_packages=frozenset(
             packages[short_name] for short_name in hidden_short_names
-        ),
+        ) | frozenset(NON_SHIPPED_PACKAGES),
         excluded_defines=frozenset(
             contract.shader_define
             for short_name, contract in contracts.items()
             if short_name in hidden_short_names and contract.shader_define
-        ),
+        ) | frozenset(NON_SHIPPED_DEFINES),
         horizon_fix_define=horizon_fix.shader_define,
     )
 
@@ -1541,15 +1545,24 @@ def apply_cache_profile_defines(
     profile: CacheProfile,
     *,
     additional_excluded_defines: frozenset[str] = frozenset(),
-    excluded_define_exceptions: frozenset[str] = frozenset(),
     additional_file_defines: dict[str, tuple[str, ...]] | None = None,
     add_cross_modlist_variants: bool = False,
 ) -> object:
+    profile_file_defines = dict(profile.file_defines)
+    for file_name, defines in (additional_file_defines or {}).items():
+        profile_file_defines[file_name] = (
+            *profile_file_defines.get(file_name, ()),
+            *defines,
+        )
+
+    # Captures may contain older global scopes; reapply only the selected files.
+    scoped_defines = {
+        define for defines in profile_file_defines.values() for define in defines
+    }
     excluded_defines = {
         normalized_define_name(define)
         for define in (
-            (profile.excluded_defines - excluded_define_exceptions)
-            | additional_excluded_defines
+            profile.excluded_defines | additional_excluded_defines | scoped_defines
         )
     }
 
@@ -1573,13 +1586,6 @@ def apply_cache_profile_defines(
 
     if add_cross_modlist_variants:
         append_cross_modlist_variants(config)
-
-    profile_file_defines = dict(profile.file_defines)
-    for file_name, defines in (additional_file_defines or {}).items():
-        profile_file_defines[file_name] = (
-            *profile_file_defines.get(file_name, ()),
-            *defines,
-        )
 
     common_defines = config.get("common_defines")
     if not isinstance(common_defines, list):
@@ -1688,7 +1694,6 @@ def filter_profile_defines(
     profile: CacheProfile,
     *,
     additional_excluded_defines: frozenset[str] = frozenset(),
-    excluded_define_exceptions: frozenset[str] = frozenset(),
     additional_file_defines: dict[str, tuple[str, ...]] | None = None,
     add_cross_modlist_variants: bool = False,
 ) -> Path:
@@ -1701,7 +1706,6 @@ def filter_profile_defines(
         config,
         profile,
         additional_excluded_defines=additional_excluded_defines,
-        excluded_define_exceptions=excluded_define_exceptions,
         additional_file_defines=additional_file_defines,
         add_cross_modlist_variants=add_cross_modlist_variants,
     )
@@ -2728,7 +2732,6 @@ def build_runtime(
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         additional_excluded_defines = frozenset()
-        excluded_define_exceptions = frozenset()
         additional_file_defines: dict[str, tuple[str, ...]] = {}
         excluded_features: frozenset[str] | None = None
         enabled_overrides: dict[str, bool] = {}
@@ -2742,7 +2745,6 @@ def build_runtime(
             )
             if runtime == "SE":
                 additional_excluded_defines |= distribution_profile.excluded_defines
-                excluded_define_exceptions = frozenset(NON_SHIPPED_DEFINES)
                 excluded_features = distribution_profile.excluded_short_names
                 add_cross_modlist = True
             if variant.horizon_fix_enabled:
@@ -2768,7 +2770,6 @@ def build_runtime(
             yaml,
             profile,
             additional_excluded_defines=additional_excluded_defines,
-            excluded_define_exceptions=excluded_define_exceptions,
             additional_file_defines=additional_file_defines,
             add_cross_modlist_variants=add_cross_modlist,
         )

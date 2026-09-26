@@ -32,11 +32,13 @@ The default `shipped` release profile:
 
 -   merges `package/Shaders` and feature `Shaders` trees;
 -   excludes every `Tests` directory;
--   mirrors the AIO hidden-feature contract for SE, including Wetness Effects
-    when it is part of the AIO, while retaining the existing VR exclusion of
-    the legacy `Wetness Effects` package and `WETNESS_EFFECTS` define;
+-   mirrors the AIO hidden-feature contract for SE and retains the mandatory
+    exclusion of legacy `Wetness Effects` sources, metadata and
+    `WETNESS_EFFECTS` in both runtimes;
 -   enables `UNIFIED_WATER` globally;
--   enables `WETTERNESS` for `Lighting.hlsl` and `Water.hlsl`;
+-   removes captured global occurrences of file-scoped defines before enabling
+    `WETTERNESS` only for `Lighting.hlsl` and `Water.hlsl`;
+-   removes obsolete captured `VANILLA_FRESNEL` and `HDR_OUTPUT` defines;
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
 
@@ -71,6 +73,15 @@ The SE release build then adds the small, reviewed
 `CROSS_MODLIST_SHADER_VARIANTS` overlay. It contains known SE-only RunGrass
 permutations which a single clean modlist may not exercise; it is never applied
 to VR or named profiles.
+
+The compiler-identity tests also compare generated SE macro tasks with
+preserved runtime requests and verify that non-shipped conditional includes
+cannot enter the source hash. Pack integrity and matching top-level metadata
+alone do not prove that the runtime can reuse individual records. See the
+[3.19.2 cache investigation](shader-cache-se-3192-20260926.md) for the failure
+and exact identity evidence behind these checks. Trace/debug logging selects
+the separate developer cache, so release-cache reuse must be tested at Info
+level or above.
 
 This cache does **not** cover feature-specific shaders compiled through
 independent `Util::CompileShader` or direct `D3DCompile*` paths. Those can

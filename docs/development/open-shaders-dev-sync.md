@@ -584,13 +584,13 @@ Validation:
 when the cell is absent. No shared utility or independent non-E11 change
 is present. Excluded under the E11-only rule.
 
-### #747: DLSS-G buffer count, recommendation awaiting decision
+### #747: DLSS-G buffer count, rejected
 
 [Open Shaders #747](https://github.com/alandtse/open-shaders/pull/747),
 `bf52e305a62168f00ef54506ca51f28fac71c109`, is titled
 `fix(upscaling): scale DLSS-G buffers to multiplier`.
 
-Recommend **r**. It sizes the direct DLSS-G swap chain and allocator/fence
+User decision: **r**. It sizes the direct DLSS-G swap chain and allocator/fence
 arrays for multi-frame generation, then allows resizing that chain with
 its live buffer count. The local branch has no `CreateSwapChainDirect`,
 `useDLSSG`, cached DLSS-G frame multiplier or Streamline DLSS-G feature
@@ -608,7 +608,53 @@ contract. No independent resize fix from this PR is missing locally.
 
 Verified the full two-file diff, GitHub PR description, local creation and
 resize paths, and the absence of direct DLSS-G bindings. No #747 code has
-been implemented. Await the user's `i` or `r`.
+been implemented.
+
+### #749: unsupported scene controls, excluded
+
+[Open Shaders #749](https://github.com/alandtse/open-shaders/pull/749),
+`91b07ad39f6c513a6b173d64274ede31d7c14418`, is titled
+`feat(scene): gray out unsupported controls`.
+
+The catalog generator identifies navigation checkboxes; scene-editing UI
+hooks distinguish those controls from settings and disable unsupported or
+ambiguous controls. The policy change permits the Wind Tree Meshes setting
+in Scene Manager. The remaining changes test that catalog and UI policy.
+Excluded under the Scene Manager, upstream-specific UI and wind rules.
+There is no independent renderer or Adaptive Balance correction to port.
+
+### #754: improved grass transparency, recommendation awaiting decision
+
+[Open Shaders #754](https://github.com/alandtse/open-shaders/pull/754),
+`faa83083e7d18be1808bd1af96b26d0a1683fa64`, is titled
+`feat(grass): add improved transparency`.
+
+Recommend **r**. It adds hashed alpha coverage to reduce blocky distant
+grass, with a default-enabled Grass Lighting option. The shader uses
+position derivatives and texture mip level to vary the alpha threshold
+consistently across depth and color passes. Its changes cover ordinary
+grass and VR as well as GO, so this is not a GO-only exclusion.
+
+Local Grass Lighting has no alpha-coverage setting, helper or position
+interpolator; the grass shader still uses hard alpha rejection. This
+feature is therefore absent, rather than already implemented or replaced
+by a demonstrated superior equivalent. A port would need to respect the
+different local settings layout and enabled-state contract.
+
+However, upstream explicitly reverted the feature in
+[Open Shaders #757](https://github.com/alandtse/open-shaders/pull/757),
+`f74c58d42d4ff283409a847f3a780b99e870c3f0`, later in the same pinned range.
+An exact comparison of added/deleted lines confirms that the revert
+reverses every changed line across all 14 files. The pinned `dev` endpoint
+contains neither `EnableAlphaCoverage` nor `GrassAlphaCoverage`. The
+intervening #752 GO projection change remains separate and is deferred
+under the GO rule; the whole grass file is not otherwise unchanged.
+
+The revert's description gives no reason beyond reverting #754, so no
+particular crash, visual defect or performance regression is inferred.
+Rejecting avoids reintroducing a feature removed from the upstream target;
+no independent fix outside the alpha-coverage feature was found in #754.
+No code was implemented or built. Await the user's `i` or `r`.
 
 ## Verification
 

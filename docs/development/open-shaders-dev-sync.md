@@ -1324,7 +1324,7 @@ Validation:
 -   Builds, controller execution, shader compilation, SEH fault injection
     and SE/AE/VR runtime validation remain deferred by user instruction.
 
-### #777: D3D12 interop setup, partial recommendation awaiting decision
+### #777: D3D12 interop setup, accepted naming-only adaptation
 
 [Open Shaders #777](https://github.com/alandtse/open-shaders/pull/777),
 `58426662760c4a4617e2586d48353371c23703d9`, is titled
@@ -1336,7 +1336,7 @@ fences, protects temporary COM objects and NT handles during construction,
 polls device removal during a CPU fence wait, and adds debug names to the
 command queue, both shared-fence pairs and wrapped D3D12 resources.
 
-Recommend **i, resource debug naming only**, adapted to our existing
+User decision: **i, resource debug naming only**, adapted to our existing
 ownership and lifecycle code:
 
 -   Local `WrappedResource` already creates textures and views in temporary
@@ -1361,9 +1361,81 @@ ownership and lifecycle code:
     and fault investigation easier across SE, AE and VR; no rendering,
     performance or stability improvement is claimed from naming alone.
 
-Do not import `SharedFence`, migrate fence counters or change waits,
-allocation, retirement or failure policy. No #777 implementation has been
-made; await the user's `i` or `r` for this limited naming adaptation.
+Implemented names for the command queue and both D3D11/D3D12 fence pairs.
+Both `WrappedResource` constructors now require a name. The owning path
+uses `Util::SetResourceName` for the D3D11 texture and its requested views,
+with the existing SRV/UAV/RTV suffixes; the import path names the D3D12
+alias without renaming the retained D3D11 source. All production callers
+provide names, including recreation paths, per-eye runtime staging/output
+and direct guide imports. Names are assigned during creation/import,
+after the existing reuse checks, rather than on every dispatch.
+
+Retained all COM/handle ownership, resource descriptors, publication order,
+fence counters, waits, pending/retirement decisions and SE/AE/VR routing.
+No `SharedFence` migration or new graphics allocation was introduced.
+Updated the two existing extracted fixtures only for the name parameters,
+required includes and naming-call mocks; their cases remain unchanged.
+
+Validation:
+
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr777.py`
+    passed. Removing only the explicit naming additions reproduces the
+    complete baseline `d78bb69d4` implementations, ownership header and
+    fixture bodies. The audit checks that imported D3D11 sources are not
+    renamed and that the generated headers contain the new signatures.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -D OUTPUT_DIRECTORY=../../analysis/open-shaders-dev-review-20260926/pr777-guide-interop -P tests/extract_fsr_shared_guide_interop.cmake`
+    passed; script-only generation of the existing interop fixture.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -D OUTPUT_DIRECTORY=../../analysis/open-shaders-dev-review-20260926/pr777-save-reuse -P tests/extract_fsr_save_reuse.cmake`
+    passed; script-only generation of the existing save-reuse fixture.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all three
+    tiers. No preset, setting or settings-owner fingerprint changed.
+-   Scoped pre-commit and `git diff --check` passed.
+-   DLL/controller builds, test execution, shader compilation and GPU or
+    SE/AE/VR runtime validation remain deferred by user instruction.
+
+### #770: DLSS VRAM-budget warning, recommendation awaiting decision
+
+[Open Shaders #770](https://github.com/alandtse/open-shaders/pull/770),
+`3a1976b37de7f54ecb86bd9955adf5697fd4ed01`, is titled
+`fix(upscaling): accept DLSS VRAM-budget warning`.
+
+Recommend **i, adapt successful-warning handling and throttled warning
+logs while retaining local diagnostics and stereo/lifecycle safeguards**.
+Reviewed the complete two-file diff, current `main-VR` and sync-branch
+`EvaluateDLSS`, its local callers and DevBench trace accounting.
+
+Streamline's `slEvaluateFeatureInternal` first evaluates the feature and
+restores state. Only when the result is already `eOk` can a zero remaining
+VRAM budget replace it with `eWarnOutOfVRAM`; a real error is retained.
+Verified this in the local SDK source (submodule pin
+`2122257e0fce486f91b385aa63b9a09b0a34b363`) and the
+[NVIDIA v2.14.1 implementation](https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/source/plugins/sl.common/commonInterface.cpp#L544),
+matching the runtime version selected by `Streamline-Runtime.cmake`.
+The warning therefore does not invalidate an otherwise successful output.
+
+Our `EvaluateDLSS` still logs every non-`eOk` result as an error and returns
+false. `DispatchVendorEyeRegion` maps that to `Failed`; the main foveated
+path can then reset history and dispatch full-frame DLSS. Full-eye VR
+callers can replace the valid output with stretch fallback. The same
+success check also affects SE/AE. These are concrete code paths, not a
+measured occurrence or a quantified performance claim.
+
+Accept exactly `eOk` and `eWarnOutOfVRAM` as completed evaluations, keeping
+actual errors as failures. Report the budget warning with bounded per-eye,
+per-instance logging. Local error logs already retain viewport, resource
+dimensions and result changes, so preserve those details instead of
+replacing them with upstream's shorter generic error message. Keep all
+existing admission, constants, options, relatch and stereo checks.
+
+The local DevBench trace also counts every nonzero evaluation result as
+an evaluation failure. Adapt that classification consistently while
+retaining the raw warning result in each trace record and documenting the
+counter meaning. This avoids a successful warning becoming a false health
+failure. Actual allocation errors or device loss must remain failures.
+No settings, shader or memory-budget policy change is needed.
+
+No #770 implementation has been made; await the user's `i` or `r`.
+Compiled tests and runtime validation remain deferred until the end.
 
 ## Verification
 

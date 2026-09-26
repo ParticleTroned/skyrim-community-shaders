@@ -16,15 +16,17 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <string>
 
 class DX12SwapChain;
 
 class WrappedResource
 {
 public:
-	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device);
-	/** Imports an existing NT-shared texture, retaining its D3D11 and D3D12 ownership. */
-	WrappedResource(ID3D11Texture2D* a_texture, ID3D12Device* a_d3d12Device, HANDLE a_sharedHandle = nullptr);
+	/** Creates a named shared texture and views, publishing ownership only after success. */
+	WrappedResource(D3D11_TEXTURE2D_DESC a_texDesc, ID3D11Device5* a_d3d11Device, ID3D12Device* a_d3d12Device, const std::string& a_name);
+	/** Retains an NT-shared texture and names its D3D12 alias, preserving the source name. */
+	WrappedResource(ID3D11Texture2D* a_texture, ID3D12Device* a_d3d12Device, const std::string& a_name, HANDLE a_sharedHandle = nullptr);
 	~WrappedResource() = default;
 	WrappedResource(const WrappedResource&) = delete;
 	WrappedResource& operator=(const WrappedResource&) = delete;

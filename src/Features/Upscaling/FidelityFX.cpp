@@ -22,6 +22,7 @@
 #include "../../ShaderCache.h"
 #include "../../State.h"
 #include "../../Utils/FileSystem.h"
+#include "../../Utils/ResourceName.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
 #include "NvidiaComIdentity.h"
@@ -3236,6 +3237,8 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 			DX::ThrowIfFailed(swapChain.d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&runtimeD3D12Fence)));
 			DX::ThrowIfFailed(swapChain.d3d12Device->CreateSharedHandle(runtimeD3D12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
 			DX::ThrowIfFailed(swapChain.d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(&runtimeD3D11Fence)));
+			runtimeD3D12Fence->SetName(L"FidelityFX::RuntimeFence");
+			Util::SetResourceName(runtimeD3D11Fence.get(), "FidelityFX::RuntimeFence");
 			runtimeFenceValue = 1;
 			for (auto& commandContext : runtimeCommandContexts)
 				commandContext.fenceValue = 0;
@@ -3728,12 +3731,12 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(uin
 	try {
 		InvalidateFSRRelatchDrain();
 		for (uint32_t i = 0; i < a_contextCount; ++i) {
-			newColorShared[i] = std::make_unique<WrappedResource>(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newDepthShared[i] = std::make_unique<WrappedResource>(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newMotionShared[i] = std::make_unique<WrappedResource>(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newReactiveShared[i] = std::make_unique<WrappedResource>(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newTransparencyShared[i] = std::make_unique<WrappedResource>(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newOutputShared[i] = std::make_unique<WrappedResource>(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newColorShared[i] = std::make_unique<WrappedResource>(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeColor[{}]", i));
+			newDepthShared[i] = std::make_unique<WrappedResource>(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeDepth[{}]", i));
+			newMotionShared[i] = std::make_unique<WrappedResource>(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeMotionVectors[{}]", i));
+			newReactiveShared[i] = std::make_unique<WrappedResource>(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeReactive[{}]", i));
+			newTransparencyShared[i] = std::make_unique<WrappedResource>(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeTransparency[{}]", i));
+			newOutputShared[i] = std::make_unique<WrappedResource>(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeOutput[{}]", i));
 		}
 	} catch (const std::exception& e) {
 		logger::error("[FidelityFX] Failed to create runtime shared resources: {}", e.what());
@@ -3842,18 +3845,23 @@ WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(uint32_t a_eye, FSRShared
 	auto& upscaling = globals::features::upscaling;
 	auto& swapChain = upscaling.dx12SwapChain;
 	Texture2D* expectedGuide = nullptr;
+	const char* guideName = "";
 	switch (a_guide) {
 	case Guide::Depth:
 		expectedGuide = upscaling.vrIntermediateLinearDepth[a_eye].get();
+		guideName = "Depth";
 		break;
 	case Guide::MotionVectors:
 		expectedGuide = upscaling.vrIntermediateMotionVectors[a_eye].get();
+		guideName = "MotionVectors";
 		break;
 	case Guide::Reactive:
 		expectedGuide = upscaling.vrIntermediateReactiveMask[a_eye].get();
+		guideName = "Reactive";
 		break;
 	case Guide::Transparency:
 		expectedGuide = upscaling.vrIntermediateTransparencyMask[a_eye].get();
+		guideName = "Transparency";
 		break;
 	default:
 		return nullptr;
@@ -3886,7 +3894,7 @@ WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(uint32_t a_eye, FSRShared
 			return nullptr;
 		winrt::com_ptr<ID3D11Texture2D> texture;
 		DX::ThrowIfFailed(cached.source->QueryInterface(IID_PPV_ARGS(texture.put())));
-		cached.imported = std::make_unique<WrappedResource>(texture.get(), swapChain.d3d12Device.get(), expectedGuide->GetOrCreateSharedHandle());
+		cached.imported = std::make_unique<WrappedResource>(texture.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::Runtime{}Import[{}]", guideName, a_eye), expectedGuide->GetOrCreateSharedHandle());
 		return cached.imported.get();
 	} catch (const winrt::hresult_error& e) {
 		logger::warn("[FidelityFX] Shared guide import failed for eye {} guide {}; retaining the copy path: 0x{:08X}",

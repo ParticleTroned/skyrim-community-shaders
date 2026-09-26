@@ -1484,13 +1484,13 @@ Validation:
     deferred until the end by user instruction. No measurement ledger was
     created because this port produced no runtime measurements.
 
-### #771: shared encoder selection, recommendation awaiting decision
+### #771: shared encoder selection, rejected
 
 [Open Shaders #771](https://github.com/alandtse/open-shaders/pull/771),
 `48b826dc77252c70f8ce0910aa0fed648208933c`, is titled
 `refactor(upscaling): share encode shader selection`.
 
-Recommend **r: the functional corrections are already covered locally**.
+User decision: **r: the functional corrections are already covered locally**.
 Reviewed all three changed files, both local encoder entry paths, cache
 accesses/reset and settings validation, including current `main-VR`.
 
@@ -1514,7 +1514,48 @@ the fifth method slot is unused capacity, not a missing permutation or an
 out-of-bounds access in the reviewed paths. No independently useful safety
 or rendering fix remains to port, including partial hunks.
 
-No #771 implementation has been made; await the user's `i` or `r`.
+No #771 code was changed.
+
+### #774: placeholder crop preset, recommendation awaiting decision
+
+[Open Shaders #774](https://github.com/alandtse/open-shaders/pull/774),
+`e58588d8b6be6fc20f527c87468a7f27a92e78b7`, is titled
+`fix(subrect): replace placeholder crop preset`.
+
+Recommend **r: local preset reconciliation already covers the stuck
+placeholder, with different crop-preservation semantics**. Reviewed both
+production files and all three added regression cases. Checked the shared
+utility and its actual local screenshot host rather than excluding this
+solely because upstream's caller is foveated UI.
+
+Upstream settings loading can create a synthetic `Full Frame` preset before
+the host seeds defaults. `MaterializeNewDefaults` previously left it at
+index zero ahead of the seeds. This change tracks placeholder provenance
+and a complete explicit crop quartet, then replaces the synthetic list
+with the seeds and selects the first seed when no explicit crop was loaded.
+Persisted preset lists and explicit crops retain their upstream behavior.
+
+Local `Controller` has no `MaterializeNewDefaults`. Its
+`SeedDefaultPresets` and `LoadSettings` both call `ReconcileSeededDefaults`,
+which handles an empty list or the sole legacy full-frame placeholder.
+`ScreenshotFeature::PostPostLoad` seeds Left Eye, Right Eye and Both Eyes
+(Side-by-Side) through that path. The full-frame placeholder is replaced
+by those real presets; a retained full-frame crop maps to the matching
+Both Eyes preset, while a custom crop remains custom. A never-loaded,
+empty controller selects the first seed. Existing non-placeholder lists
+are preserved, apart from the established legacy stereo-label migration.
+
+This is not identical to upstream's choice to select the first seed after
+an empty settings load: local reconciliation preserves the current crop
+instead. That difference is deliberate in the local screenshot controller
+and does not leave the placeholder stuck in front of the defaults. The
+same implementation is present in current `main-VR`; local foveation does
+not use this controller. No missing independent rendering or crop-state
+fix was identified, and no #774 code has been changed.
+
+Await the user's `i` or `r`. This checkpoint changes only the review
+ledger; scoped documentation hooks and `git diff --check` passed. No
+build, compiled test, shader compilation or runtime validation ran.
 
 ## Verification
 

@@ -792,7 +792,7 @@ namespace
 				}
 			} else if (a_stage == Streamline::DLSSDevBenchTraceStage::Evaluate) {
 				++state.evaluateCalls;
-				if (a_resultCode != static_cast<int32_t>(sl::Result::eOk)) {
+				if (!DLSSResultPolicy::IsEvaluationSuccessful(static_cast<sl::Result>(a_resultCode))) {
 					++state.evaluateFailures;
 					state.lastEvaluateFailureFound = true;
 					state.lastEvaluateFailure = record;
@@ -1412,6 +1412,7 @@ bool Streamline::LoadInterposer()
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
+	dlssBudgetWarningThrottle.Reset();
 	lifecycleState.store(LifecycleState::Initialized, std::memory_order_release);
 	logger::info("[Streamline] Successfully initialized Streamline");
 	return true;
@@ -3071,7 +3072,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
-	if (evalResult != sl::Result::eOk) {
+	const bool evaluationSucceeded = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
+	if (evalResult == sl::Result::eWarnOutOfVRAM) {
+		const uint32_t logEye = globals::game::isVR ? eyeIndex : 0u;
+		const uint32_t frame = state ? state->frameCount : 0u;
+		if (dlssBudgetWarningThrottle.ShouldLog(logEye, frame)) {
+			logger::warn("[Streamline] DLSS output valid but VRAM budget exceeded{} frame={} viewport={} result={} ({})",
+				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
+				frame, static_cast<uint32_t>(vp), static_cast<int>(evalResult), magic_enum::enum_name(evalResult));
+		}
+	}
+	if (!evaluationSucceeded) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::Evaluate, evalResult, diagnosticsPtr);
 #endif
@@ -3103,7 +3114,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
-	return evalResult == sl::Result::eOk;
+	return evaluationSucceeded;
 }
 
 bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,

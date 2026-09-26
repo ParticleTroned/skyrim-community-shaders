@@ -1393,13 +1393,13 @@ Validation:
 -   DLL/controller builds, test execution, shader compilation and GPU or
     SE/AE/VR runtime validation remain deferred by user instruction.
 
-### #770: DLSS VRAM-budget warning, recommendation awaiting decision
+### #770: DLSS VRAM-budget warning, accepted local adaptation
 
 [Open Shaders #770](https://github.com/alandtse/open-shaders/pull/770),
 `3a1976b37de7f54ecb86bd9955adf5697fd4ed01`, is titled
 `fix(upscaling): accept DLSS VRAM-budget warning`.
 
-Recommend **i, adapt successful-warning handling and throttled warning
+User decision: **i, adapt successful-warning handling and throttled warning
 logs while retaining local diagnostics and stereo/lifecycle safeguards**.
 Reviewed the complete two-file diff, current `main-VR` and sync-branch
 `EvaluateDLSS`, its local callers and DevBench trace accounting.
@@ -1434,8 +1434,87 @@ counter meaning. This avoids a successful warning becoming a false health
 failure. Actual allocation errors or device loss must remain failures.
 No settings, shader or memory-budget policy change is needed.
 
-No #770 implementation has been made; await the user's `i` or `r`.
-Compiled tests and runtime validation remain deferred until the end.
+Implemented one shared `DLSSResultPolicy::IsEvaluationSuccessful` classifier
+for dispatch completion and DevBench evaluation failure accounting. It
+accepts only `eOk` and `eWarnOutOfVRAM`. Raw trace codes, constants handling,
+prior pinned errors and all other trace processing remain intact. The
+existing detailed error logs and admission/dispatch/lifecycle paths are
+unchanged; the new warning branch avoids the error log and returns success.
+
+Budget warnings log immediately, then at most once per 300 frames for each
+eye and Streamline instance. Flat runtimes use eye slot zero. Successful
+interposer initialization resets this cadence. Optional frame values keep
+frame zero and `UINT32_MAX` valid, and unsigned subtraction preserves the
+interval across counter wrap. Logging includes frame, viewport, result and
+VR eye information, with a safe frame-zero fallback if state is missing.
+
+Updated the registered DevBench description, action schema description and
+qualification documentation to distinguish successful budget warnings from
+evaluation failures. Memory, timing, constants and other health criteria
+remain unchanged. No shader, setting, resource or memory-budget policy was
+changed, and no measured performance or stability result is claimed.
+
+Added `DLSSResultPolicy` to the existing controller-test group, using the
+real Streamline SDK result definitions. The fixture covers ordinary success,
+the budget warning, every current SDK error, unknown result values, first
+and repeated warnings, eye/instance isolation, bounded indices, reset and
+frame-counter wrap. Its compilation and execution are deferred.
+
+Validation:
+
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr770.py`
+    passed. Reversing only the classification, warning and reset additions
+    reproduces the complete `5197a2329` Streamline implementation. It also
+    verifies shared classifier use, raw-result retention, consistent tool
+    documentation and registration of the regression fixture.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -P tests/vr_render_scale_devbench_contract_test.cmake`
+    passed; script-only inspection reported a coherent DevBench contract.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all three
+    tiers; no preset or settings-owner fingerprint changed.
+-   Whitespace, line-ending and documentation hooks and `git diff --check`
+    passed. Clang-format passed for the changed implementation, bridge,
+    policy and test files. Initial formatting also changed unrelated
+    `Streamline.h` and `CMakeLists.txt` baseline sections; those changes
+    were restored. Their task additions matched the formatter output, but
+    whole-file clang-format for that header and gersemi for CMake were
+    skipped afterward to preserve the baseline. Gersemi also reported its
+    existing unknown-custom-command warnings.
+-   DLL/controller builds, compiled tests, shader compilation and SE/AE/VR
+    runtime validation, including render-scale qualification, remain
+    deferred until the end by user instruction. No measurement ledger was
+    created because this port produced no runtime measurements.
+
+### #771: shared encoder selection, recommendation awaiting decision
+
+[Open Shaders #771](https://github.com/alandtse/open-shaders/pull/771),
+`48b826dc77252c70f8ce0910aa0fed648208933c`, is titled
+`refactor(upscaling): share encode shader selection`.
+
+Recommend **r: the functional corrections are already covered locally**.
+Reviewed all three changed files, both local encoder entry paths, cache
+accesses/reset and settings validation, including current `main-VR`.
+
+Upstream removes a second encoder selector in its foveated Preprocess,
+centralizes the four input SRVs, separates method/output cache slots, and
+adds missing-input checks to its main encoding pass. It also replaces a
+literal method count in settings loading with the enum count.
+
+Local main and submit-stage encoding already call the same
+`GetEncodeTexturesCS`; there is no second foveated selector populating the
+same cache slot. FSR typed-depth encoding already has its own lazy shader
+slot, selected from the active runtime method and depth requirements, and
+`ClearShaderCache` resets it alongside all method slots. Both encoder entry
+paths reject missing TAA-mask, normal, motion-vector or depth views before
+binding/dispatch, with additional local resource and lifecycle checks.
+
+`SanitizeUpscalingSettings` already clamps method values to the actual enum
+limits, including the separate no-DLSS selection. The remaining two-axis
+cache conversion and common SRV collector would be organizational changes;
+the fifth method slot is unused capacity, not a missing permutation or an
+out-of-bounds access in the reviewed paths. No independently useful safety
+or rendering fix remains to port, including partial hunks.
+
+No #771 implementation has been made; await the user's `i` or `r`.
 
 ## Verification
 

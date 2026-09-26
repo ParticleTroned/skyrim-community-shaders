@@ -2504,6 +2504,12 @@ if(BUILD_CONTROLLER_TESTS)
         StreamlineFrameTokenPublication
         tests/streamline_frame_token_publication_test.cpp
     )
+    add_controller_test(
+        dlss_result_policy_test
+        DLSSResultPolicy
+        tests/dlss_result_policy_test.cpp
+    )
+    target_link_libraries(dlss_result_policy_test PRIVATE Streamline)
     set(_frame_generation_inputs_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/frame-generation-inputs"
     )

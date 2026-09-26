@@ -471,15 +471,15 @@ placement, resizing constraints, and the collapsed-window Begin/End path.
 No shadow rendering or independent lighting correction is included.
 Excluded under the upstream-specific UI, SLF and translation rules.
 
-### #743: RTTI exception recovery, recommendation awaiting decision
+### #743: RTTI exception recovery, accepted
 
 [Open Shaders #743](https://github.com/alandtse/open-shaders/pull/743),
 `568888306be0c15f8b6db8df821014e19612e1d9`, is titled
 `fix(llf): allow RTTI exception recovery`.
 
-Recommend **i**. Its complete diff removes `noexcept` from three shared
-point-light classification helpers in `src/Utils/PointLightFlags.h`.
-All three declarations still have `noexcept` locally. The underlying
+User decision: **i**. Removed `noexcept` from the three shared
+point-light classification helpers in `src/Utils/PointLightFlags.h`,
+matching the complete upstream code change. The underlying
 CommonLib `skyrim_cast` calls engine RTTI and is not declared `noexcept`.
 An escaping C++ exception must not be converted into termination before
 reaching the existing caller recovery boundary.
@@ -494,8 +494,40 @@ E11 and UI. Preserve the nonthrowing bit-mask helpers and existing recovery
 behavior; remove only the three incorrect exception specifications.
 
 Verified the PR body through GitHub CLI and compared the complete header
-diff and both local consumers. No #743 changes are implemented. Await the
-user's `i` or `r`.
+diff and both local consumers. Only the three declarations change;
+nonthrowing bit-mask helpers, light flags and both consumers are retained.
+Scoped pre-commit and `git diff --check` passed for this port. Builds, compiled tests and runtime validation remain deferred by the
+user. No exception-recovery runtime result is claimed.
+
+### #746: stale scene-light recovery, recommendation awaiting decision
+
+[Open Shaders #746](https://github.com/alandtse/open-shaders/pull/746),
+`d24e23ada4097cd1ec111ba387de5c9ec8244ad9`, is titled
+`fix(csutility): recover from stale scene lights`.
+
+Recommend **i, adapted into Adaptive Balance**. Its only code change guards
+the vanilla point-light classification loop with MSVC structured exception
+handling. Locally, the matching function is
+`AdaptiveBrightness::UpdateVanillaPointLightData`: it still dereferences
+raw scene-light entries and calls the RTTI helper without a recovery guard.
+The Lighting hook calls it when LLF is unloaded; the Water hook also uses
+it. LLF's retained-light snapshot and strict-light recovery do not protect
+this separate loop. The change is applicable to shared SE/AE/VR code and
+is independent of E11, SLF, upstream UI and Scene Manager.
+
+Adapt the guard in that common callee so it covers both call sites,
+including the raw light dereference before RTTI. Stop on the first fault
+and upload neutral zero classification flags; preserve the existing local
+Inverse Square Lighting enabled-state mask, count bounds, registers and
+buffer update/binding. Upstream retains successfully classified prefix
+entries because it initializes the buffer only before the loop; the local
+adaptation should clear the whole classification buffer on recovery, as
+local strict-light recovery already does for its own data. Zero is the
+existing shader fallback when classification data is unavailable.
+
+Verified the GitHub PR body and complete diff against both local call sites,
+the LLF snapshot scope, and `Color::GetVanillaPointLightFlags`. No #746
+code has been implemented. Await the user's `i` or `r`.
 
 ## Verification
 

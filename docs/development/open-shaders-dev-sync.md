@@ -1253,7 +1253,7 @@ claimed. Porting this diff would add upstream-specific preset UI/data,
 which is excluded; no independent part warrants changing our renderer.
 No #775 code was changed.
 
-### #772: guarded calls, partial recommendation awaiting decision
+### #772: guarded calls, accepted diagnostics-only adaptation
 
 [Open Shaders #772](https://github.com/alandtse/open-shaders/pull/772),
 `cb90974a3db3d5f0090d9ef9ea973e4b9a072313`, is titled
@@ -1265,7 +1265,7 @@ returns their codes. It adds those codes to runtime-upscaler and host FSR3
 fault logs, suppresses repeated host messages, and shares a vendor constant.
 Reviewed the entire five-file diff and both local dispatch paths.
 
-Recommend **i, only the exception-code diagnostics**, adapted to the
+User decision: **i, only the exception-code diagnostics**, adapted to the
 existing wrappers. Both `main-VR` and this sync branch already guard host
 FSR3 and runtime-FSR dispatch with `__try`/`__except`. Local code also guards
 provider creation, destruction, configuration, queries and frame-generation
@@ -1295,9 +1295,75 @@ upstream is not present locally. Update the existing extracted eye-dispatch
 test stub if the approved helper signature changes, and preserve its
 current fallback/quarantine cases. Compiled validation stays deferred.
 
-No #772 code has been changed. Await the user's `i` or `r` for this limited
-diagnostics adaptation. This checkpoint changes only the ledger; scoped
-pre-commit and `git diff --check` passed, with no build or runtime test.
+Implemented a 32-bit exception-code output in both existing wrappers. Each
+call initializes it to zero; the existing SEH handler captures
+`GetExceptionCode()`. The two existing fault logs include that value as
+eight hexadecimal digits alongside the failed eye. No exception code is
+used to select a dispatch, recovery or resource-retirement outcome.
+
+Updated only the existing eye-dispatch fixture's host-wrapper mock
+signature and output. Its fallback, quarantine and stereo cases remain
+unchanged; this is not a new SEH execution test.
+
+Validation:
+
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr772.py`
+    passed. Comparing against `b12b3d01d`, the full production file differs
+    only in the two diagnostic outputs, their call arguments and fault-log
+    text. The audit also checks the mock-only fixture delta and generated
+    host call. All other source, including return codes, module-entry
+    checks, SEH filters, quarantine, stereo batching and log-latch policy,
+    remains identical.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -D OUTPUT_DIRECTORY=../../analysis/open-shaders-dev-review-20260926/pr772-fsr-eye-dispatch -P tests/extract_fsr_eye_dispatch.cmake`
+    passed, generating five headers without compilation. Initial combined
+    `-DNAME=value` invocations passed truncated paths through PowerShell;
+    separating `-D` from its value corrected the invocation.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` passed for all three
+    tiers; no preset or settings-owner fingerprint changed.
+-   Scoped pre-commit and `git diff --check` passed.
+-   Builds, controller execution, shader compilation, SEH fault injection
+    and SE/AE/VR runtime validation remain deferred by user instruction.
+
+### #777: D3D12 interop setup, partial recommendation awaiting decision
+
+[Open Shaders #777](https://github.com/alandtse/open-shaders/pull/777),
+`58426662760c4a4617e2586d48353371c23703d9`, is titled
+`refactor(upscaling): harden D3D12 interop setup`.
+
+Reviewed all four changed files against the local swap-chain, shared
+resource and runtime-FSR lifecycle paths. Upstream centralizes shared
+fences, protects temporary COM objects and NT handles during construction,
+polls device removal during a CPU fence wait, and adds debug names to the
+command queue, both shared-fence pairs and wrapped D3D12 resources.
+
+Recommend **i, resource debug naming only**, adapted to our existing
+ownership and lifecycle code:
+
+-   Local `WrappedResource` already creates textures and views in temporary
+    `winrt::com_ptr` owners and publishes only after success. Its members
+    also retain COM ownership, and imported handles distinguish borrowed
+    handles from owned `winrt::handle` temporaries. Both shared-fence setup
+    paths already own their NT handles with `winrt::handle`. The upstream
+    constructor/handle leak corrections are already covered.
+-   Local runtime-FSR teardown and command-context acquisition return
+    explicit lifecycle results and poll completion without upstream's
+    five-second CPU wait. They detect `UINT64_MAX` fence completion as
+    device removal and preserve pending or indeterminate ownership. The
+    upstream helper's initial completed-value comparison does not handle
+    that sentinel separately. Keep the local device-loss classification,
+    retirement proof, fence counters and stereo submission order.
+-   The command queue, interop fences and wrapped resource creation paths
+    lack these names locally. Add stable names for the queue, both fence
+    pairs and D3D12 resource aliases. Carry descriptive resource/eye names
+    through the existing wrappers and use `Util::SetResourceName` for
+    their owned D3D11 textures/views and fences. Preserve existing source
+    texture names when importing borrowed textures. This makes GPU captures
+    and fault investigation easier across SE, AE and VR; no rendering,
+    performance or stability improvement is claimed from naming alone.
+
+Do not import `SharedFence`, migrate fence counters or change waits,
+allocation, retirement or failure policy. No #777 implementation has been
+made; await the user's `i` or `r` for this limited naming adaptation.
 
 ## Verification
 

@@ -578,14 +578,17 @@ namespace
 	ffxReturnCode_t DispatchRuntimeUpscalerProtected(
 		ffx::Context* a_context,
 		const ffxDispatchDescHeader* a_desc,
-		bool& a_crashed)
+		bool& a_crashed,
+		uint32_t& a_exceptionCode)
 	{
 		a_crashed = false;
+		a_exceptionCode = 0;
 		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
 		__try {
 			if (ffxModule.Dispatch)
 				result = ffxModule.Dispatch(a_context, a_desc);
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			a_exceptionCode = GetExceptionCode();
 			a_crashed = true;
 		}
 		return result;
@@ -708,14 +711,16 @@ namespace
 			resource.reset();
 	}
 
-	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters, bool& a_crashed)
+	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters, bool& a_crashed, uint32_t& a_exceptionCode)
 	{
 		a_crashed = false;
+		a_exceptionCode = 0;
 		bool dispatchOk = true;
 
 		__try {
 			dispatchOk = ffxFsr3ContextDispatchUpscale(&a_context, &a_dispatchParameters) == FFX_OK;
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			a_exceptionCode = GetExceptionCode();
 			a_crashed = true;
 			dispatchOk = false;
 		}
@@ -4174,18 +4179,20 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			dispatchParameters.flags = 0;
 
 			bool dispatchCrashed = false;
+			uint32_t dispatchExceptionCode = 0;
 			const auto dispatchResult = DispatchRuntimeUpscalerProtected(
 				&runtimeUpscalerContexts[contextIndex],
 				&dispatchParameters.header,
-				dispatchCrashed);
+				dispatchCrashed,
+				dispatchExceptionCode);
 			if (dispatchCrashed) {
 				runtimeUpscalerContextIndeterminate[contextIndex] = true;
 				QuarantineRuntimeUpscalerForSession("a runtime upscaler dispatch fault");
 				const auto failureResult = ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler dispatch fault");
 				runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failureResult);
 				logger::critical(
-					"[FidelityFX] Runtime upscaler dispatch faulted for eye {}; retaining its indeterminate context and resources for this session.",
-					contextIndex);
+					"[FidelityFX] Runtime upscaler dispatch faulted for eye {} (exception 0x{:08X}); retaining its indeterminate context and resources for this session.",
+					contextIndex, dispatchExceptionCode);
 			}
 			if (dispatchCrashed || dispatchResult != FFX_API_RETURN_OK) {
 				logger::error("[FidelityFX] Runtime upscaler dispatch failed for eye {}.", contextIndex);
@@ -4427,8 +4434,9 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	dispatchParameters.flags = 0;
 
 	bool hostDispatchCrashed = false;
+	uint32_t hostDispatchExceptionCode = 0;
 	InvalidateFSRRelatchDrain();
-	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed);
+	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed, hostDispatchExceptionCode);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (dispatchOK)
 		RecordDevBenchSuccessfulDispatch(fallbackFramePath);
@@ -4442,7 +4450,7 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 			a_contextIndex,
 			"an FSR3 host dispatch fault");
 		if (!fsrDispatchCrashLogged) {
-			logger::critical("[FidelityFX] Region FSR3 dispatch faulted for eye {}; its indeterminate context and shared scratch ownership have been quarantined for this session.", a_contextIndex);
+			logger::critical("[FidelityFX] Region FSR3 dispatch faulted for eye {} (exception 0x{:08X}); its indeterminate context and shared scratch ownership have been quarantined for this session.", a_contextIndex, hostDispatchExceptionCode);
 			fsrDispatchCrashLogged = true;
 		}
 	}

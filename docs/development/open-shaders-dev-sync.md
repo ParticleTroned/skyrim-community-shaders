@@ -21,6 +21,14 @@ oldest first, rather than sorting PR numbers. Inspect constituent changes
 inside upstream-sync merges, including #758, for independent local value.
 This is selective adaptation and does not establish merge ancestry.
 
+After #738 the user directed that further work use a working branch while
+the primary checkout remains on `main-VR` at `202777f6f9f79a99ba3fffa45f00cf02d0efac9b`.
+The approved #730 changes were still uncommitted, so no commits needed to
+be removed from `main-VR`. They were transferred with matching file hashes
+to `codex/pr730-open-shaders-dev-sync`, based on that commit, in
+`build/worktrees/pr730-open-shaders-dev-sync`. Subsequent review and ports
+continue there. Unrelated primary-worktree changes were retained.
+
 The user decides `i` or `r` for each presented candidate before a port.
 Compare actual diffs with current local code, including equivalent or
 better implementations, and preserve SE/AE and VR behavior. Inspect mixed
@@ -221,6 +229,128 @@ resume with #730, `fd6350ca7e82a52a8f578c8aaa62def53f051f72`,
 -   C++ builds, shader compilation, compiled tests and runtime visual checks
     are deferred until the end by user instruction. No DXBC equivalence,
     visual improvement or runtime pass is claimed.
+
+## #730: shared bytecode per variant, accepted partial port
+
+[Open Shaders #730](https://github.com/alandtse/open-shaders/pull/730),
+`fd6350ca7e82a52a8f578c8aaa62def53f051f72`, is titled
+`fix(cache): handle shared bytecode per variant`.
+
+User decision: **i, adapted partial port**. `GetShaderString(..., true)`
+intentionally excludes the descriptor, allowing variants with identical
+defines to share compiled bytecode. Runtime shader maps and task IDs retain
+the descriptor. Baseline `CompilationSet::Add` nonetheless refused a task
+when `GetCompletedShader(task)` finds shared bytecode. A runtime-map miss
+can therefore remain unresolved even though the existing worker path can
+reuse that bytecode to construct the missing descriptor's shader object.
+
+Baseline `capturedShaders` and `clearedThisCaptureCycle` also used the shared
+string key. Capturing multiple descriptors with that key retains only one
+descriptor and disk path, leaving other captured runtime variants out of
+the scoped clear. Preserve each full task identity, release each eligible
+runtime variant, and invalidate shared bytecode once per capture cycle.
+Adapt the pending-state check and invalidation atomically to avoid erasing
+a concurrent compilation claim.
+
+The upstream tracking-outside-developer-mode correction is already covered
+for vertex, pixel and compute shaders. Local tracking additionally keeps
+normal captures out of the persistent developer map. Retain that behavior,
+render-thread capture rebinding, per-task in-flight checks, generation and
+deferred-eviction protection, and synchronized managed/disk invalidation.
+These safeguards make a wholesale replacement of the cache files unsuitable.
+
+The source-level failure paths are present in the shared SE/AE/VR cache;
+no runtime reproduction or performance measurement has been performed.
+
+Implemented queue admission without the shared-bytecode veto, retaining
+queued/in-progress/processed task deduplication and generation assignment.
+Capture records are keyed by full task identity and initialized from each
+observed descriptor, including in developer mode where the persistent
+display record may describe a different variant. Normal gameplay still
+does not populate that persistent map.
+
+Scoped clearing releases each eligible captured runtime variant and
+forgets its task ID, while tracking shared-bytecode invalidation separately
+across both capture windows. A new cycle resets both sets. The pending
+check and bytecode erase share one map lock; active per-task workers and
+deferred hot-reload evictions are skipped. Runtime resource release is
+separate from shared bytecode removal, and the existing synchronized disk
+and managed-pack invalidation path remains unchanged. No settings or
+DevBench contract changes are introduced.
+
+Added `ShaderCacheVariants` controller coverage extracting the production
+task declarations/identity, queue admission, capture state/tracking and
+eviction methods. Engine/D3D resources, disk deletion and scheduler
+completion boundaries are stubbed. Cases cover shared-bytecode queue
+admission, task deduplication and generation, multiple captured descriptors
+in both developer modes, off-thread exclusion, both capture windows,
+per-cycle bytecode invalidation, pending/in-flight/deferred protection,
+shader stage/type identity, per-variant disk paths and feature clear scope.
+These tests do not establish actual D3D creation or concurrency safety.
+
+The next entry is #635, `405b59488fb8cfdb52a489047cb6fc2afe42f646`,
+`feat(fog): match vanilla weather visibility`.
+
+### Validation for #730
+
+-   Reviewed the shared SE/AE/VR queue, `ClaimCompilation` cache-hit path,
+    vertex/pixel/compute runtime insertion, scoped clearing and disk-cache
+    invalidation. No runtime-specific code or shader resources were added.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -D OUTPUT_DIRECTORY=../../analysis/open-shaders-dev-review-20260926/pr730-extracted -P tests/extract_shader_cache_variants.cmake`:
+    passed, producing all nine source headers; no configure or compilation. Two earlier
+    invocations using combined `-Dname=C:/...` arguments were rejected
+    because PowerShell split the drive-qualified values.
+-   `pwsh ./tools/git.ps1 diff --cached --check`: passed.
+-   Scoped pre-commit checks passed whitespace, line endings, clang-format
+    and Markdown checks. The first full invocation failed because Gersemi
+    reformatted existing unrelated root CMake code; those edits were
+    discarded, keeping only the one test-registration include. The rerun
+    used `SKIP=gersemi` for that baseline limitation. The two new CMake
+    scripts separately passed installed Gersemi `--check`, with warnings
+    that it does not recognize the repository's custom CMake functions.
+-   Builds, compiled controller tests, shader compilation and SE/AE/VR
+    runtime validation remain deferred until the end by user instruction.
+
+## Review after #730
+
+-   #635, `405b59488fb8cfdb52a489047cb6fc2afe42f646`,
+    `feat(fog): match vanilla weather visibility`: excluded EHF. Shared
+    shader changes add EHF weather parameters or adjust EHF-enabled
+    composition; the ordinary vanilla-fog branches remain unchanged.
+    Its generic control-discovery improvements belong to the upstream
+    Scene Manager settings-catalog generator, which this branch does not
+    use. No independent local port identified.
+-   #744, `175f2f5343e77c3cb754b24fd1ecd1e5d6246731`,
+    `refactor(ui): organize upscaling settings in tabs`: excluded upstream
+    UI/translation work. Changes are confined to settings drawing methods
+    and their declarations, plus translated labels; no rendering/backend
+    implementation changes.
+
+### #742: S3D rock texture exclusions, recommendation awaiting decision
+
+[Open Shaders #742](https://github.com/alandtse/open-shaders/pull/742),
+`90650df7b73e45b0bd21a1a9ee65ae3a0ef2893f`, is titled
+`fix(terrain): blacklist S3D rock textures`.
+
+Recommend **r**. Its only change adds `pbr/landscape/trees/`,
+`landscape/mountains/s3drocks/` and `pbr/landscape/mountains/s3drocks/`
+to the default JSON exclusions for the #727 mesh-texture rule loader.
+The user rejected that loader earlier, and this branch has neither it nor
+the JSON file. Importing the file alone would have no effect.
+
+Current `TerrainVariation::DataLoaded` gathers actual landscape diffuse
+textures and seasonal swaps; `IsLandscapeDiffusePath` requires membership
+when those records are available. `UpdateMeshPermutation` additionally
+rejects tree/foliage/material cases. This avoids upstream's broad automatic
+mountain-directory admission in normal operation. It is not the same as an
+explicit S3D blacklist: when landscape records are unavailable, local
+directory fallback can still admit an S3D path. No local failure requiring
+that named exception has been demonstrated, so retain the existing #727
+decision instead of adding mod-specific rules preemptively.
+
+No #742 changes have been implemented. Await the user's decision. The next
+entry afterward is #740, `ff75ed184`,
+`chore(scene-manager): update feature availability`.
 
 ## Verification
 

@@ -623,13 +623,13 @@ in Scene Manager. The remaining changes test that catalog and UI policy.
 Excluded under the Scene Manager, upstream-specific UI and wind rules.
 There is no independent renderer or Adaptive Balance correction to port.
 
-### #754: improved grass transparency, recommendation awaiting decision
+### #754: improved grass transparency, rejected
 
 [Open Shaders #754](https://github.com/alandtse/open-shaders/pull/754),
 `faa83083e7d18be1808bd1af96b26d0a1683fa64`, is titled
 `feat(grass): add improved transparency`.
 
-Recommend **r**. It adds hashed alpha coverage to reduce blocky distant
+User decision: **r**. It adds hashed alpha coverage to reduce blocky distant
 grass, with a default-enabled Grass Lighting option. The shader uses
 position derivatives and texture mip level to vary the alpha threshold
 consistently across depth and color passes. Its changes cover ordinary
@@ -654,7 +654,70 @@ The revert's description gives no reason beyond reverting #754, so no
 particular crash, visual defect or performance regression is inferred.
 Rejecting avoids reintroducing a feature removed from the upstream target;
 no independent fix outside the alpha-coverage feature was found in #754.
-No code was implemented or built. Await the user's `i` or `r`.
+No code was implemented or built.
+
+### #753: distance haze controls, excluded
+
+[Open Shaders #753](https://github.com/alandtse/open-shaders/pull/753),
+`2cedaa9783abcafe226b77a7ae45fc6cd1f8d366`, is titled
+`feat(fog): add distance haze controls`.
+
+Adds horizontal distance haze to EHF, including bounded opacity and
+distance settings, shader blending, weather-color handling and fog-history
+invalidation. The shared HLSL edit changes only the EHF settings layout.
+The CSUtility fog-intensity and IBL color changes are consumers inside EHF;
+neither modifies an independent Adaptive Balance or vanilla fog path.
+All other changes are EHF settings/UI and translations. Excluded under the
+EHF rule after inspecting the nontranslation diff.
+
+### #755: frame-generation input readiness, recommendation awaiting decision
+
+[Open Shaders #755](https://github.com/alandtse/open-shaders/pull/755),
+`6cd47558880cc94247e77c61c4b2fa0a4cdead42`, is titled
+`fix(framegen): prevent loading transition flash`.
+
+Recommend **i, adapted to the local SE/AE FidelityFX path**. The upstream
+description identifies previous-scene LOD models flashing as loading ends.
+The fix separates permission to prepare frame-generation inputs from a
+latched successful-preparation result, retains that result through
+presentation, and clears it when the frame's wrapped buffers are cleared.
+Both required shaders must be available before any input copy begins.
+
+The local `ShouldUseFrameGenerationThisFrame` recomputes settings, pause
+and main/loading-menu state at both post-processing and presentation.
+It also has stronger local runtime-ready and Reflex-quarantine gates.
+Those gates do not establish that the current frame's depth and motion
+inputs were prepared: a menu closing between the two calls can change
+the decision from false to true without a new copy.
+
+Local `CopySharedD3D12Resources` already checks both shaders, but returns
+`void` and copies motion vectors before that check. Missing shaders can
+therefore leave stale depth without preventing the later FidelityFX
+prepare dispatch. No prepared-input latch or equivalent freshness check
+was found in the copy, caller, swap-chain or FidelityFX presentation path.
+The local provider's failure containment handles API errors, not this
+missing current-frame input contract.
+
+Port the copy-success result and preparation/presentation separation,
+preserving local runtime readiness, menu settings, quarantine and normal
+base-frame/UI presentation. Adapt invalidation to the local post-processing,
+Present/Present1, resize and teardown lifecycle: there is no local
+`ClearWrappedBuffers` method. Keep readiness available to the frame limiter,
+and preserve existing test-present and retryable-present behavior.
+Focused regression coverage should exercise skipped/failed preparation,
+a menu change before Present, and readiness consumption/invalidation.
+
+Do not port the Streamline Reflex change: it supports upstream's DLSS-G
+path, whereas local FidelityFX frame generation deliberately disables
+Reflex and quarantines generation if disabling fails. Preserve that policy.
+`IsFrameGenerationDx12PathActive` explicitly excludes VR, so this port
+benefits SE/AE on the main-VR codebase without enabling VR frame generation
+or changing the VR render-scale and compositor paths.
+
+Verified the full four-file diff, GitHub description, local copy and all
+call sites, frame limiter, UI routing, Present/Present1, provider dispatch
+and Reflex policy. No code was implemented, compiled or runtime-tested.
+Await the user's `i` or `r`.
 
 ## Verification
 

@@ -1,0 +1,228 @@
+{
+    "schema": "csx-grass-coc-publication-coverage-v1",
+    "ledger": "vr-render-scale-ledger-0008-investigation.csv",
+    "ledgerSha256": "b0b24f3b5d9200c36e15bd1f3ece0c66a3f9a7f7c0feebc609baf420f5bf9736",
+    "ledgerBytes": 57070396,
+    "metricRows": 2253,
+    "runColumns": [
+        "main-VR | v3.19.0-pr39 +125 | a6ca42849 | column-1",
+        "RC166 baseline | RC166 +13 | 94165e2e7 | column-2",
+        "3baaf91b90416ad25d067cdb26c34ce293cf7a5e__run1_20x10s",
+        "3baaf91b90416ad25d067cdb26c34ce293cf7a5e__run2_25x5s",
+        "3baaf91b90416ad25d067cdb26c34ce293cf7a5e__run3_20x3s"
+    ],
+    "measuredTransitions": 65,
+    "sourceSummariesReconstructedExactly": true,
+    "scalarTransitionFieldsVerified": true,
+    "historicalCellsPreservedExactly": true,
+    "historicalLedgers": {
+        "vr-render-scale-ledger-0001-history.csv": "aaed3cfcf8332c26091f681545589398743f04f7c14d723c94ca10ea3cc40ff8",
+        "vr-render-scale-ledger-0002-history.csv": "d91538d67bd94ad5e4c0a7283a2b10fac124506b3f1137f2dd8203754451d89b",
+        "vr-render-scale-ledger-0003-pr73.csv": "952adfc9f40967923f562db4d23698517cb8426560d4b102dd934fca253f5bee",
+        "vr-render-scale-ledger-0004-investigation.csv": "de3350f2de3913e75156d1be9b84f45f4c6e991fffeff537d59daa5ffc68d52e"
+    },
+    "completeSummaries": [
+        {
+            "runColumn": "3baaf91b90416ad25d067cdb26c34ce293cf7a5e__run1_20x10s",
+            "metric": "detail.complete_summary",
+            "source": "run1-analysis.json",
+            "sourceSha256": "379a55d4fdc9d40a46e1a5f25525ef46980a49b59a2e5e4a797f1aa60da39959",
+            "canonicalJsonSha256": "1ac6f1225a6c5edac58418dacbadf3f7ffad88dbac69264d03d54094e6dfff75",
+            "decodedLeafCount": 747556,
+            "exactReconstruction": true
+        },
+        {
+            "runColumn": "3baaf91b90416ad25d067cdb26c34ce293cf7a5e__run2_25x5s",
+            "metric": "detail.complete_summary",
+            "source": "run2-analysis.json",
+            "sourceSha256": "c9ddc5724ba3557506e55e6e06de3bb49ce1509221e7d65cd7e6e2229bb963d5",
+            "canonicalJsonSha256": "a33120ca870faa874b658599f2f255f7f8067d6f39cbed10b0424a657d5b9119",
+            "decodedLeafCount": 772946,
+            "exactReconstruction": true
+        },
+        {
+            "runColumn": "3baaf91b90416ad25d067cdb26c34ce293cf7a5e__run3_20x3s",
+            "metric": "detail.complete_summary",
+            "source": "run3-analysis.json",
+            "sourceSha256": "e97f903d56fe7525acc9e177176767e5d41970d88facd7c12562382679213195",
+            "canonicalJsonSha256": "9eb377fa0251148536db22d000bc9ca12ce83809bb27a67f623fed972fd9bfe0",
+            "decodedLeafCount": 755331,
+            "exactReconstruction": true
+        }
+    ],
+    "rawAggregateAcceptancePreserved": [true, false, false],
+    "shutdown": {
+        "requestedUtc": "2026-09-26T16:35:33.5754487Z",
+        "verifiedUtc": "2026-09-26T16:35:38.1579425Z",
+        "method": "Skyrim console qqq via bound DevBench",
+        "targetPid": 34744,
+        "exited": true,
+        "exitCode": null,
+        "remainingGameProcesses": [],
+        "runtimeIdentityVerified": true,
+        "commandPayload": [
+            {
+                "capturing": false,
+                "command": "qqq",
+                "queued": true
+            }
+        ],
+        "commandErrors": null,
+        "sessionCleanup": {
+            "attempted": true,
+            "ok": true,
+            "state": "all_closed",
+            "sessions": [
+                {
+                    "attempted": true,
+                    "ok": true,
+                    "state": "closed",
+                    "sessionId": "95185d74-5a52-f458-dad5-a884431d61ec",
+                    "statusCode": 200,
+                    "error": null
+                }
+            ]
+        }
+    },
+    "sourceEvidenceManifest": [
+        {
+            "path": "report.md",
+            "bytes": 14073,
+            "sha256": "581373d96655c5121b28d58353d4e4d51b5248a58899dd40ce661364290b8b12"
+        },
+        {
+            "path": "comparison.csv",
+            "bytes": 3958713,
+            "sha256": "ad3a265c5546d3e53fe5e022ab096bc4776512beb707de201fb496a5e65cb0c2"
+        },
+        {
+            "path": "final-audit.json",
+            "bytes": 1184,
+            "sha256": "52734cbb6a843087934a05314ee80f6c1e9e8dca3378f5c00e8ab0206844b375"
+        },
+        {
+            "path": "receipt-audit.json",
+            "bytes": 2801,
+            "sha256": "a3128bf697c14cbacea02e86d36aaf2966bac0e9c0b77dc01dfce13b490f1933"
+        },
+        {
+            "path": "stage-timings.json",
+            "bytes": 10300,
+            "sha256": "30b7bab6545b008ee41d9a1941206afeb3986f61a5ea02efe7928805601fa259"
+        },
+        {
+            "path": "physical-dll-proof.json",
+            "bytes": 5800,
+            "sha256": "fb322e8bd9473f97fbcf827a9639841675be62b9d27810674481fb3967458f6c"
+        },
+        {
+            "path": "final-restored.json",
+            "bytes": 742346,
+            "sha256": "093c9e129c023897cca245ac7eb72b68643608c33e347de4a2ba16976d5049b0"
+        },
+        {
+            "path": "run1-request.json",
+            "bytes": 22048,
+            "sha256": "49aba091f81ce1445f3fe98ca1c6b4ddf14e27bc3142fb39cec4c94617cdc034"
+        },
+        {
+            "path": "run1-latest.json",
+            "bytes": 48166982,
+            "sha256": "c3ccf106bdecc3af16e4e59fedb83f2b070a21e886b202035a638ef57a313eae"
+        },
+        {
+            "path": "run1-analysis.json",
+            "bytes": 34911133,
+            "sha256": "379a55d4fdc9d40a46e1a5f25525ef46980a49b59a2e5e4a797f1aa60da39959"
+        },
+        {
+            "path": "run1-final.json",
+            "bytes": 43653777,
+            "sha256": "d45ebf123aeb5b90c0ed18b6426758820e4db9f82842f9a4afb8311bbf842f78"
+        },
+        {
+            "path": "run1-stop.json",
+            "bytes": 3531146,
+            "sha256": "e47359715d0b11ed1d40b611c6eaa47e17eba60186c58b8d3d0f382c60e1ba94"
+        },
+        {
+            "path": "run1-normalized.json",
+            "bytes": 406418,
+            "sha256": "31f22c6299e218726623b4027a0db00278ba1e35bef3f26a5de249f9c4abb0d4"
+        },
+        {
+            "path": "run2-request.json",
+            "bytes": 27450,
+            "sha256": "0fd7a31ddd371a720dd63417288f96681400e63e32866f79dde2da3629d27041"
+        },
+        {
+            "path": "run2-latest.json",
+            "bytes": 94202537,
+            "sha256": "433d4e3b6211d28d7e7f1fcdf81827e4f513298c59dd426824b46d909300a6b4"
+        },
+        {
+            "path": "run2-analysis.json",
+            "bytes": 35878769,
+            "sha256": "c9ddc5724ba3557506e55e6e06de3bb49ce1509221e7d65cd7e6e2229bb963d5"
+        },
+        {
+            "path": "run2-final.json",
+            "bytes": 44971997,
+            "sha256": "cf0a330960cb59cfee9493db4702fd8f75bf94e765c7b491664988322e5377ac"
+        },
+        {
+            "path": "run2-stop.json",
+            "bytes": 3773580,
+            "sha256": "f9004344ca966309785923054c9a1d94efa5790eee7105aba4e107b41b0fad1e"
+        },
+        {
+            "path": "run2-normalized.json",
+            "bytes": 508376,
+            "sha256": "e0818310d45430ad0880ea98fffcd0b3f4a07cb895fa2d9988420b74cfe7cafb"
+        },
+        {
+            "path": "run3-request.json",
+            "bytes": 22028,
+            "sha256": "1e9a5c85d961f99309ffbbd1a1bff668a065c9c2b33607356c838de94967a581"
+        },
+        {
+            "path": "run3-latest.json",
+            "bytes": 71271339,
+            "sha256": "a59dfb4cb906345e5cb9b589f3eab0f6426455deb6050423ddbe20620219d9c1"
+        },
+        {
+            "path": "run3-analysis.json",
+            "bytes": 35182759,
+            "sha256": "e97f903d56fe7525acc9e177176767e5d41970d88facd7c12562382679213195"
+        },
+        {
+            "path": "run3-final.json",
+            "bytes": 44374410,
+            "sha256": "d040c4dd0dbf48e833c8a879b27bf341bb038fdb1a1c9bc22553f58ca4c21e0d"
+        },
+        {
+            "path": "run3-stop.json",
+            "bytes": 3598566,
+            "sha256": "13098d818acb580bda84a610d814db31c06e066a68eba60c6e921d49bf52a3df"
+        },
+        {
+            "path": "run3-normalized.json",
+            "bytes": 406576,
+            "sha256": "c57be175f8a5eff2eee8b6e714f686228f589871762d105af2f0da2e3d6ca1a8"
+        },
+        {
+            "path": "controller-recovery\\Invoke-DevBenchControl.ps1",
+            "bytes": 83591,
+            "sha256": "e540ef096d6dfda583c28d8e9dc338b5d7f84b937b72ab26c2198fdafeb4d898"
+        },
+        {
+            "path": "controller-recovery\\guard-order.patch",
+            "bytes": 1200,
+            "sha256": "ca0876c8fad84ccad595f8f3ec96982f0f0e7861887a384b8f7c61b73edf5fb0"
+        }
+    ],
+    "transitionsCsvSha256": "c6c3fd0db1aecd49b3ee743fd8d3d49feed39063afd22986c4d3f4456c9d3840",
+    "rawEvidenceRoot": "C:\\src\\skyrim-community-shaders\\build\\validation\\simple-coc-sequence-20260926-3baaf91b9",
+    "generation": "Offline publication from preserved JSON; no measurements replayed.",
+    "comparisonToolApplicability": "Repository tuning wrapper expects fixed-matrix worker summaries; these are direct COC scenarios. Existing investigation ledger convention used, with exact JSON reconstruction and scalar timing audits."
+}

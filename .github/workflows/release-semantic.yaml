@@ -16,6 +16,11 @@ on:
                 type: boolean
                 required: false
                 default: false
+            expected_version:
+                description: "Required next patch version for main-VR, e.g. 3.19.2."
+                type: string
+                required: false
+                default: ""
 
 permissions:
     contents: write
@@ -25,6 +30,7 @@ permissions:
 
 jobs:
     release:
+        if: github.ref != 'refs/heads/main-VR'
         runs-on: ubuntu-latest
         steps:
             # TEMPORARY DEBUG: verify the release token can actually reach
@@ -107,3 +113,80 @@ jobs:
                   gh workflow run release-build.yaml \
                     --repo "${{ github.repository }}" \
                     --ref "${TAG}"
+
+    csx-release:
+        if: github.ref == 'refs/heads/main-VR'
+        runs-on: ubuntu-latest
+        concurrency:
+            group: csx-stable-release
+            cancel-in-progress: false
+        steps:
+            - name: Checkout exact main-VR dispatch
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 0
+                  persist-credentials: true
+                  token: ${{ github.token }}
+
+            - name: Validate release plan
+              id: plan
+              env:
+                  EXPECTED_VERSION: ${{ inputs.expected_version }}
+                  RELEASE_TYPE: ${{ inputs.release_type }}
+                  DISPATCH_SHA: ${{ github.sha }}
+              run: |
+                  set -euo pipefail
+                  test "$RELEASE_TYPE" = stable
+                  test "$(git ls-remote origin refs/heads/main-VR | cut -f1)" = "$DISPATCH_SHA"
+                  python tests/csx_release_test.py
+                  python tools/csx_release.py plan --expected-version "$EXPECTED_VERSION" \
+                    --github-output "$GITHUB_OUTPUT" --notes "$RUNNER_TEMP/csx-release-notes.md"
+
+            - name: Apply and verify feature versions
+              env:
+                  BASE_TAG: ${{ steps.plan.outputs.base }}
+                  SKIP_BUMPS: ${{ inputs.skip_feature_bumps }}
+              run: |
+                  set -euo pipefail
+                  if [ "$SKIP_BUMPS" != true ]; then
+                    python tools/feature_version_audit.py --base "$BASE_TAG" \
+                      --apply-bumps --output "$RUNNER_TEMP/feature-version-audit.md"
+                  fi
+                  python tools/feature_version_audit.py --base "$BASE_TAG" \
+                    --ci --output "$RUNNER_TEMP/feature-version-audit.md"
+
+            - name: Commit audited feature metadata
+              env:
+                  RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+                  DISPATCH_SHA: ${{ github.sha }}
+              run: |
+                  set -euo pipefail
+                  test "$(git ls-remote origin refs/heads/main-VR | cut -f1)" = "$DISPATCH_SHA"
+                  git config user.name 'github-actions[bot]'
+                  git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+                  git add -- 'features/*/Shaders/Features/*.ini'
+                  if ! git diff --cached --quiet; then
+                    git commit -m "build(release): prepare CSX $RELEASE_VERSION metadata" \
+                      -m $'Rationale:\nInvalidate affected shader features for the stable release.' \
+                      -m $'Implementation:\nApply audited feature versions before building the exact release ref.'
+                    git push origin HEAD:refs/heads/main-VR
+                  fi
+                  test -z "$(git status --porcelain)"
+
+            - name: Create draft and dispatch production build
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  RELEASE_TAG: ${{ steps.plan.outputs.tag }}
+                  RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+              run: |
+                  set -euo pipefail
+                  release_sha=$(git rev-parse HEAD)
+                  test "$(git ls-remote origin refs/heads/main-VR | cut -f1)" = "$release_sha"
+                  git tag -a "$RELEASE_TAG" "$release_sha" -m "CSX $RELEASE_VERSION"
+                  git push origin "refs/tags/$RELEASE_TAG"
+                  gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
+                    --verify-tag --draft --title "CSX $RELEASE_VERSION" \
+                    --notes-file "$RUNNER_TEMP/csx-release-notes.md"
+                  gh workflow run release-build.yaml --repo "${{ github.repository }}" \
+                    --ref "$RELEASE_TAG" -f build-cpp=true -f validate-shaders=true -f include-se-ae=true

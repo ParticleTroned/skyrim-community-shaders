@@ -10,6 +10,7 @@
 #include <io.h>
 #include <iostream>
 #include <limits>
+#include <share.h>
 #include <source_location>
 #include <spdlog/sinks/ostream_sink.h>
 #include <spdlog/spdlog.h>
@@ -89,9 +90,10 @@ namespace
 		{
 			if (lowLevel) {
 				for (;;) {
-					const int descriptor = _open("NUL", _O_RDONLY | _O_BINARY);
-					if (descriptor == -1) {
-						error = errno;
+					int descriptor = -1;
+					const auto result = _sopen_s(&descriptor, "NUL", _O_RDONLY | _O_BINARY, _SH_DENYNO, 0);
+					if (result != 0) {
+						error = result;
 						break;
 					}
 					descriptors.push_back(descriptor);

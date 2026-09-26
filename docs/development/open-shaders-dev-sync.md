@@ -1516,13 +1516,13 @@ or rendering fix remains to port, including partial hunks.
 
 No #771 code was changed.
 
-### #774: placeholder crop preset, recommendation awaiting decision
+### #774: placeholder crop preset, rejected
 
 [Open Shaders #774](https://github.com/alandtse/open-shaders/pull/774),
 `e58588d8b6be6fc20f527c87468a7f27a92e78b7`, is titled
 `fix(subrect): replace placeholder crop preset`.
 
-Recommend **r: local preset reconciliation already covers the stuck
+User decision: **r: local preset reconciliation already covers the stuck
 placeholder, with different crop-preservation semantics**. Reviewed both
 production files and all three added regression cases. Checked the shared
 utility and its actual local screenshot host rather than excluding this
@@ -1551,7 +1551,52 @@ instead. That difference is deliberate in the local screenshot controller
 and does not leave the placeholder stuck in front of the defaults. The
 same implementation is present in current `main-VR`; local foveation does
 not use this controller. No missing independent rendering or crop-state
-fix was identified, and no #774 code has been changed.
+fix was identified, and no #774 code was changed.
+
+### #776: skip runtime downloads, recommendation awaiting decision
+
+[Open Shaders #776](https://github.com/alandtse/open-shaders/pull/776),
+`0677f487a8e39ca38173a2751bfe5e02807cdebc`, is titled
+`build(cmake): add SKIP_RUNTIME_DOWNLOADS option`.
+
+Recommend **i: adapt the opt-in DLL-only build workflow to local download,
+packaging and deployment contracts**. Reviewed all seven changed files,
+the local runtime modules, verified downloader, CMake staging/install paths
+and both cleanup scripts. This is developer tooling with no direct shader,
+UI or SE/AE/VR rendering change.
+
+Upstream adds an OFF-by-default option that skips FidelityFX downloads and
+Streamline archive download/extraction. It separates expected runtime paths
+from files actually available, allowing configuration and DLL-only builds
+without those payloads. Missing payloads still block installation/package
+creation, with an early configure failure when AIO zip output is requested.
+Runtime-path preservation prevents skipped DLLs from being treated as stale
+files during staging or shader deployment. Other build dependencies must
+still be available; this is not a complete offline-dependency mode.
+
+Locally, `csx_download_verified_asset` already reuses an existing file when
+its SHA-256 matches. Streamline also avoids extraction when its stamp
+matches the pinned archive. These cover populated-cache offline use, but
+the runtime modules are included unconditionally and a missing payload
+still requires a successful download. No equivalent skip option exists;
+the same downloader/runtime-module implementations are in current
+`main-VR`. Thus the missing workflow has independent local value.
+
+Adaptation must retain hash verification, binary-tree runtime staging,
+the pinned Streamline version and its shipped notices/licenses. Local
+packaging uses explicit file lists, without upstream's `FeaturePackaging`
+registry or separate Streamline D3D12 directory, so a direct port does not
+fit. Normal builds must retain their current behavior, and package/install
+paths must fail clearly when required payloads are absent.
+
+The local deployment manifest restricts stale deletion to previously owned,
+unmodified content, which must be preserved. That alone does not protect an
+owned runtime DLL omitted from a new skipped payload: it could still be
+classified as stale. If accepted, add narrowly scoped runtime preservation
+while retaining the existing ownership and content checks. Do not replace
+this with upstream's global destination-mirroring deletion behavior.
+
+No #776 implementation has been made.
 
 Await the user's `i` or `r`. This checkpoint changes only the review
 ledger; scoped documentation hooks and `git diff --check` passed. No

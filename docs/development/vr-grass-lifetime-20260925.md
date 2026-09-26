@@ -83,8 +83,10 @@ performance requires a baseline built from the same head.
 
 1. `NiNode::OnVisible`, `+C9E0D0`: unrelated nodes immediately forward.
    For the current manager's grass node, acquire `grassShapeLock` at
-   manager `+40`, then the native group lock at `SkyrimVR+317C990`, before
-   entering the original traversal. Release both after it returns.
+   manager `+40`, then the native group lock at `SkyrimVR+317C990` for a
+   nonempty child traversal, before entering the original callback. An
+   empty traversal retains child ownership and skips group acquisition.
+   Release the acquired locks after the callback returns.
 2. Native `NiNode` bulk child clearing, `+C9D290`: clearing that same grass
    node acquires `grassShapeLock` around the original operation. Other nodes
    immediately forward.
@@ -93,6 +95,11 @@ The existing native locks supply exclusion against native writers. No new
 ownership registry, pointer-validity heuristic, shape-reference resurrection,
 per-group allocation, trace emission or replacement culling algorithm is
 introduced. The native 0/1 lock representation is unchanged.
+
+The [empty-traversal follow-up and performance evidence](vr-grass-performance-20260926.md)
+records the native count, ownership invariants, focused tests and live
+Whiterun comparison. The production implementation has no comparison
+controls or grass timing collector.
 
 The live-image audit establishes the following ordering:
 

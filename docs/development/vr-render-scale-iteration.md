@@ -2061,3 +2061,30 @@ Three ownership/routing tests also passed under AddressSanitizer. The
 producer Build ID and DLL hash are recorded in the integration report.
 This compile and controller evidence does not qualify real render-scale
 transitions, gameplay stability or frame-time improvement.
+
+## September 26: production grass COC stability assay
+
+The [COC report](grass-coc-20260926/README.md) and
+[snapshot 0005](vr-render-scale-ledger-0005-investigation.csv) preserve the
+same-process 20 × 10s, 25 × 5s and 20 × 3s campaigns on compiled main-VR
+source `3baaf91b90416ad25d067cdb26c34ce293cf7a5e`, Build ID
+`5c8dfa4c9f482d14faf6cf82e06455724d317eda840b3a59db1baba961660d25`.
+The stripped grass implementation was tested with DevBench enabled and
+Tracy disabled. Its physical DLL, enabled AIO, manifest and receipt matched.
+
+Execution was COMPLETE, with all 65 strict transitions satisfied and no
+crash or freeze. Raw aggregate acceptance was PASS / FAIL / FAIL; the two
+failures remain recorded as native-presentation `CONTRACT_MISMATCH` with
+the exact native same-frame both-eye evidence. Relatch retries numbered
+3/12/10, without failure counter deltas. Mean renderer stabilization was
+43.30/43.20/42.15 frames. Task 2 was not part of this COC protocol.
+
+The improvement-or-neutral assessment is INCONCLUSIVE: the external tracer
+remained active, run order was sequential, profiler scene mix differed, and
+the historical PrePR19/RC166-derived references used different resolution
+and instrumentation. Export recovery introduced inter-campaign pauses but
+no repeated fixture setup or game restart. CPU/GPU scope metrics, all
+transition timings and route comparisons, health gates, memory and evidence
+gaps are retained. All owned captures were stopped before normal `qqq`
+shutdown; no Skyrim or SKSE loader process remained. The implementation
+and tests are unchanged by this documentation amendment.

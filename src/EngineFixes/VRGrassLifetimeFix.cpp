@@ -56,19 +56,27 @@ namespace VRGrassLifetime
 			return manager && manager->grassNode.get() == a_node ? &manager->grassShapeLock : nullptr;
 		}
 
+		// Keep native ownership and guard stack state out of the shared node's forwarding path.
+		__declspec(noinline) void CullGrassProtected(RE::NiNode* a_node, RE::NiCullingProcess* a_process, std::int32_t a_alphaGroup, volatile std::uint32_t* a_childWord)
+		{
+			// Match native publication order; culling also writes each group's visibility flag.
+			NativeLock children{ *a_childWord };
+			const std::lock_guard childGuard{ children };
+			// Native traversal uses free_idx, which includes holes, rather than capacity or live size.
+			const auto childSlots = a_node->GetChildren().free_idx();
+			NativeLock groups{ *groupLockAddress };
+			std::unique_lock groupGuard{ groups, std::defer_lock };
+			if (childSlots != 0)
+				groupGuard.lock();
+			onVisible(a_node, a_process, a_alphaGroup);
+		}
+
 		void CullGrass(RE::NiNode* a_node, RE::NiCullingProcess* a_process, std::int32_t a_alphaGroup)
 		{
-			auto* childWord = ChildLockFor(a_node);
-			if (!childWord) {
+			if (auto* childWord = ChildLockFor(a_node))
+				CullGrassProtected(a_node, a_process, a_alphaGroup, childWord);
+			else
 				onVisible(a_node, a_process, a_alphaGroup);
-				return;
-			}
-			// Match native publication order; culling also writes each group's visibility flag.
-			NativeLock children{ *childWord };
-			const std::lock_guard childGuard{ children };
-			NativeLock groups{ *groupLockAddress };
-			const std::lock_guard groupGuard{ groups };
-			onVisible(a_node, a_process, a_alphaGroup);
 		}
 
 		void ClearGrassChildren(RE::NiNode* a_node)

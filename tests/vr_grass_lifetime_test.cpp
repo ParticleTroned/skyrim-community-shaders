@@ -21,7 +21,15 @@
 namespace RE
 {
 	class NiNode
-	{};
+	{
+	public:
+		struct Children
+		{
+			std::uint16_t slots = 1, capacity = 16, live = 1;
+			std::uint16_t free_idx() const { return slots; }
+		} children;
+		Children& GetChildren();
+	};
 	class NiCullingProcess
 	{};
 	struct BGSGrassManager
@@ -51,6 +59,7 @@ namespace
 	volatile std::uint32_t groupsWord = 0;
 	std::array<std::uint8_t, 16> cullCode{}, clearCode{}, lockCode{};
 	bool vr = true;
+	bool verifyChildOwnership = true;
 	int version = 1415;
 	std::function<void(RE::NiNode*)> cullAction, clearAction;
 	void NativeCull(RE::NiNode* a_node, RE::NiCullingProcess* a_process, std::int32_t a_alpha)
@@ -71,6 +80,12 @@ namespace
 	{
 		return InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(&a_word), 0, 0);
 	}
+}
+RE::NiNode::Children& RE::NiNode::GetChildren()
+{
+	if (verifyChildOwnership)
+		Require(this == &grassNode && Word(testManager.grassShapeLock) == 1);
+	return children;
 }
 namespace logger
 {
@@ -311,6 +326,51 @@ namespace
 		children.unlock();
 	}
 
+	void EmptyTraversal()
+	{
+		NativeLock groups{ groupsWord };
+		groups.lock();
+		grassNode.children.slots = 0;
+		grassNode.children.live = 0;
+		unsigned calls = 0;
+		cullAction = [&](RE::NiNode*) {
+			Require(Word(testManager.grassShapeLock) == 1 && Word(groupsWord) == 1);
+			++calls;
+		};
+		auto reader = std::async(std::launch::async, [&] { CullGrass(&grassNode, &process, -1); });
+		const bool bypassed = reader.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		groups.unlock();
+		reader.get();
+		Require(bypassed && calls == 1 && Word(testManager.grassShapeLock) == 0);
+
+		// A zero live count is not the native early-out when traversal slots still contain holes.
+		grassNode.children.slots = 3;
+		cullAction = [&](RE::NiNode*) { Require(Word(groupsWord) == 1); };
+		CullGrass(&grassNode, &process, -1);
+		grassNode.children = {};
+	}
+
+	void EmptyAfterChildAcquisition()
+	{
+		NativeLock children{ testManager.grassShapeLock }, groups{ groupsWord };
+		children.lock();
+		groups.lock();
+		std::binary_semaphore started{ 0 };
+		cullAction = [&](RE::NiNode*) { Require(grassNode.children.slots == 0); };
+		auto reader = std::async(std::launch::async, [&] {
+			started.release();
+			CullGrass(&grassNode, &process, -1);
+		});
+		started.acquire();
+		grassNode.children.slots = 0;
+		children.unlock();
+		const bool bypassed = reader.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		groups.unlock();
+		reader.get();
+		Require(bypassed);
+		grassNode.children = {};
+	}
+
 	__declspec(noinline) double TimeCalls(OnVisible a_function, RE::NiNode* a_node, std::uint64_t a_count)
 	{
 		const auto start = std::chrono::steady_clock::now();
@@ -321,22 +381,26 @@ namespace
 
 	void Benchmark()
 	{
+		verifyChildOwnership = false;
 		constexpr std::uint64_t count = 1000000;
 		std::uint64_t calls = 0;
 		cullAction = [&](RE::NiNode*) { ++calls; };
 		TimeCalls(&NativeCull, &grassNode, count / 10);
 		TimeCalls(&CullGrass, &otherNode, count / 10);
 		TimeCalls(&CullGrass, &grassNode, count / 10);
-		const std::array<OnVisible, 3> functions{ &NativeCull, &CullGrass, &CullGrass };
-		const std::array<RE::NiNode*, 3> nodes{ &grassNode, &otherNode, &grassNode };
+		const std::array<OnVisible, 4> functions{ &NativeCull, &CullGrass, &CullGrass, &CullGrass };
+		const std::array<RE::NiNode*, 4> nodes{ &grassNode, &otherNode, &grassNode, &grassNode };
 		std::cout << "round,lane,ns_per_call\n";
 		for (unsigned round = 0; round < 6; ++round) {
-			for (unsigned offset = 0; offset < 3; ++offset) {
-				const auto lane = (round + offset) % 3;
+			for (unsigned offset = 0; offset < 4; ++offset) {
+				const auto lane = (round + offset) % 4;
+				grassNode.children.slots = lane == 3 ? 0 : 1;
 				std::cout << round << ',' << lane << ',' << TimeCalls(functions[lane], nodes[lane], count) << '\n';
 			}
 		}
-		Require(calls == count * 18 + count * 3 / 10);
+		grassNode.children = {};
+		Require(calls == count * 24 + count * 3 / 10);
+		verifyChildOwnership = true;
 	}
 }
 
@@ -345,6 +409,10 @@ int main(int a_argc, char** a_argv)
 	try {
 		testManager.grassNode.value = &grassNode;
 		Installation();
+		if (a_argc == 2 && std::string_view(a_argv[1]) == "--benchmark-only") {
+			Benchmark();
+			return 0;
+		}
 		PassthroughAndUnwind();
 		Race(false, false);
 		Race(false, true);
@@ -352,6 +420,8 @@ int main(int a_argc, char** a_argv)
 		RemovalBeforeBorrow();
 		LockOrder();
 		ManagerLifetime();
+		EmptyTraversal();
+		EmptyAfterChildAcquisition();
 		std::cout << "VR grass lifetime: installation, removal, growth, clear, pre-borrow ownership, nested child clear, unwind and lock order passed\n";
 		if (a_argc == 2 && std::string_view(a_argv[1]) == "--benchmark")
 			Benchmark();

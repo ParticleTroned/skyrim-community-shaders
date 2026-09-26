@@ -1,6 +1,10 @@
 #ifndef LIGHTING_COMMON_HLSLI
 #define LIGHTING_COMMON_HLSLI
 
+#if defined(HAIR) && defined(CS_HAIR) && !defined(TRUE_PBR)
+#	define CS_HAIR_SHADING
+#endif
+
 struct DirectContext
 {
 	float3 worldNormal;
@@ -17,7 +21,7 @@ struct DirectContext
 	float3 coatLightDir;
 	float3 coatHalfVector;
 	float3 coatLightColor;
-#elif defined(HAIR) && defined(CS_HAIR)
+#elif defined(CS_HAIR_SHADING)
 	float hairShadow;
 #endif
 };

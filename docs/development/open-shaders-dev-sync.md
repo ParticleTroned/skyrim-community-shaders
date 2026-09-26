@@ -1017,7 +1017,7 @@ intent, cross-platform build policy and requiring real Linux ClangCL builds.
 Excluded as upstream housekeeping. They do not change the user's explicit
 instruction to defer builds until the end of this selective sync.
 
-### #758: upstream merge, partial recommendation awaiting decision
+### #758: upstream merge, accepted hair/True PBR correction
 
 [Open Shaders #758](https://github.com/alandtse/open-shaders/pull/758),
 `25b96de6becb67a5754a07a11debce45cad2d89e`, is titled
@@ -1027,23 +1027,23 @@ Reviewed all 44 files in the actual first-parent merge diff, plus the
 constituent upstream commits. Repeated commits in the secondary ancestry
 do not by themselves represent new changes in the resulting tree.
 
-Recommend **i, limited to the Hair Specular/True PBR permutation fix** from
+User decision: **i, limited to the Hair Specular/True PBR permutation fix** from
 [Community Shaders #2738](https://github.com/community-shaders/skyrim-community-shaders/pull/2738),
 `25161eb4f32deed80028d01cbbead75c4d9e4f07`, titled
 `fix(shaders): compile skin and hair under TRUE_PBR`.
 
 Local lighting defines can combine `HAIR`, `CS_HAIR` and `TRUE_PBR`.
-`Lighting.hlsl` includes Hair Specular and writes `material.Shininess`
-under the first two flags alone. However, `MaterialProperties` omits
-`Shininess` under True PBR, and `DirectContext` selects its PBR
+Before this port, `Lighting.hlsl` included Hair Specular and wrote
+`material.Shininess` under the first two flags alone. However,
+`MaterialProperties` omits `Shininess` under True PBR, and `DirectContext` selects its PBR
 fields instead of `hairShadow`, which the included hair functions use.
-This is an inconsistent shader permutation visible in the source; no new
+This was an inconsistent shader permutation visible in the source; no new
 local compilation or runtime failure was observed during this review.
 
-Port the upstream `CS_HAIR_SHADING` gate, requiring the two hair flags and
+Ported the upstream `CS_HAIR_SHADING` gate, requiring the two hair flags and
 excluding True PBR, consistently through `LightingCommon.hlsli`,
-`LightingEval.hlsli` and `Lighting.hlsl`. Preserve generic hair semantics,
-the existing True PBR Marschner hair path, VR lighting/foveated behavior
+`LightingEval.hlsli` and `Lighting.hlsl`. The port preserves generic hair
+semantics, the existing True PBR Marschner hair path, VR lighting/foveated behavior
 and Adaptive Balance. The upstream Skin subsystem is absent locally, so
 its new `CS_SKIN_SHADING` gate has no applicable local feature to fix.
 This limited shared shader correction applies to SE, AE and VR.
@@ -1076,8 +1076,56 @@ Other merge changes are already covered or outside the agreed scope:
     by fonts, themes and the shader DevBench export write boundary. Do not
     weaken that shared boundary to import an excluded font UI change.
 
-No #758 code was implemented. Await the user's `i` or `r` for the proposed
-limited hair adaptation.
+The source delta adds that shared gate and replaces 14 conditions: the
+context field, direct/indirect evaluations, feature include, tint/flow-map,
+tangent, material, normal, shadow, ambient and vertex-color branches.
+Every Hair Specular use is under the same condition. Generic `HAIR`
+branches stay intact, including the default vertex tint for PBR hair.
+No shader body, C++ code, resource, setting, preset or DevBench contract
+changes. No upstream Skin, UI or other excluded subsystem was added.
+
+Validation:
+
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr758.py`
+    passed. It verifies the gate against the pinned upstream source, the
+    exact 14 condition replacements, include order, balanced conditional
+    nesting and coverage of every Hair Specular reference. Its Boolean
+    check covers all 16 hair/feature/PBR/VR flag combinations. All shader
+    bodies, generic hair behavior and local stereo/Adaptive Balance code
+    are preserved by exact source comparison.
+-   `git diff --check` and scoped pre-commit passed with `clang-format`
+    skipped. The initial formatter pass requested only the pre-existing
+    continuation indentation of `applyMeshTV` in `Lighting.hlsl`; that
+    unrelated change was restored. The 14 changed conditions and added
+    gate needed no formatting corrections; both shared headers passed the
+    separate scoped clang-format check.
+-   This is a source audit, not compiled shader validation. Builds, shader
+    compilation and SE/AE/VR runtime checks remain deferred by request.
+    Final shader validation must include Hair Specular on/off with ordinary
+    and True PBR hair, including VR, back-lighting and deferred permutations.
+
+### #764: unreadable disk-cache timestamp, recommend reject
+
+[Open Shaders #764](https://github.com/alandtse/open-shaders/pull/764),
+`800af745ca6195ec830324ac865039501a06b010`, is titled
+`fix: treat unreadable disk-cache timestamp as miss`.
+
+Recommend **r: the affected timestamp acceptance path is absent locally**.
+The entire upstream source change sets `diskCacheOutdated = true` when
+reading the cached blob's timestamp fails, preventing reuse of a blob whose
+freshness could not be established.
+
+Both `main-VR` and this sync branch already initialize that variable to
+`true`. Loose-cache reuse requires a manifest digest matching the combined
+source-content and compile-state hashes; missing or unverifiable digests
+remain a miss. There is no disk-cache timestamp fallback to repair.
+Managed packs likewise require a source-derived identity and compatible
+content/compile-state metadata; missing identity or read errors produce a
+miss. This protects a wider validity contract than timestamps alone.
+
+No #764 change was made. Await the user's `i` or `r`; this recommendation
+comes from the complete pinned diff and local read-path inspection, not a
+new runtime cache-failure test.
 
 ## Verification
 

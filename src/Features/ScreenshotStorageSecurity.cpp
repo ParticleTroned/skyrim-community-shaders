@@ -161,7 +161,7 @@ namespace CSX::ScreenshotStorage
 
 	CommittedFile CommittedFile::Open(const std::filesystem::path& a_path)
 	{
-		const ScopedHandle file(CreateFileW(
+		ScopedHandle file(CreateFileW(
 			a_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
 			nullptr, OPEN_EXISTING,
 			FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
@@ -203,6 +203,10 @@ namespace CSX::ScreenshotStorage
 		LARGE_INTEGER size{};
 		if (!GetFileSizeEx(nativeHandle, &size) || size.QuadPart < 0)
 			throw std::runtime_error(std::format("committed artifact size query failed with Win32 error {}", GetLastError()));
+		const auto identitySize =
+			(static_cast<std::uint64_t>(before.nFileSizeHigh) << 32) | before.nFileSizeLow;
+		if (identitySize != static_cast<std::uint64_t>(size.QuadPart))
+			throw std::runtime_error("committed artifact size metadata disagrees on the locked handle");
 		const auto digest = HashHandle(nativeHandle);
 		const auto after = ReadIdentity(nativeHandle, false);
 		if (Identity(before) != Identity(after) ||

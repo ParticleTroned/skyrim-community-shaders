@@ -1227,13 +1227,13 @@ when cache artifacts or compiled shaders will be uploaded. Shader validation
 itself is unchanged. Excluded as upstream CI/publishing housekeeping; no
 independent runtime cache fix.
 
-### #775: nasal foveated presets, recommend reject
+### #775: nasal foveated presets, rejected
 
 [Open Shaders #775](https://github.com/alandtse/open-shaders/pull/775),
 `86edd27e4cd14c347a9bb33b20464b7de1fd0944`, is titled
 `feat(upscaling): nasal 60/70 foveated presets`.
 
-Recommend **r: upstream preset convenience, no missing renderer fix**.
+User decision: **r: upstream preset convenience, no missing renderer fix**.
 The entire diff adds two names and two preset entries to Open Shaders'
 `FoveatedRender` controller. They select square crops covering 60% or 70%
 of each eye's width/height, shifted toward the nose with explicit mirrored
@@ -1251,7 +1251,53 @@ existing local controls, but our mask/feathering and resolved eye offsets
 are different, so no pixel-identical result or performance advantage is
 claimed. Porting this diff would add upstream-specific preset UI/data,
 which is excluded; no independent part warrants changing our renderer.
-No #775 code was changed. Await the user's `i` or `r`.
+No #775 code was changed.
+
+### #772: guarded calls, partial recommendation awaiting decision
+
+[Open Shaders #772](https://github.com/alandtse/open-shaders/pull/772),
+`cb90974a3db3d5f0090d9ef9ea973e4b9a072313`, is titled
+`refactor(utils): add SEH-guarded call helper`.
+
+The upstream change replaces two FidelityFX dispatch wrappers with a
+shared callable helper that catches Windows structured exceptions and
+returns their codes. It adds those codes to runtime-upscaler and host FSR3
+fault logs, suppresses repeated host messages, and shares a vendor constant.
+Reviewed the entire five-file diff and both local dispatch paths.
+
+Recommend **i, only the exception-code diagnostics**, adapted to the
+existing wrappers. Both `main-VR` and this sync branch already guard host
+FSR3 and runtime-FSR dispatch with `__try`/`__except`. Local code also guards
+provider creation, destruction, configuration, queries and frame-generation
+dispatch. A missing crash guard is not the issue.
+
+Local fault handling retains indeterminate runtime contexts/resources and
+quarantines host contexts together with shared scratch ownership. It has
+explicit lifecycle failure handling, stereo dispatch rules and an existing
+`fsrDispatchCrashLogged` latch. Preserve those contracts, the current SEH
+filter, module-entry checks, result codes and log-latch reset policy.
+The local recovery implementation covers more ownership cases than the
+upstream refactor; a generic helper alone would not improve that behavior.
+
+The independently useful missing part is the Windows exception code.
+Current logs name the failed eye and quarantine action but omit that code.
+Capture it in `DispatchRuntimeUpscalerProtected` and
+`DispatchHostFsr3UpscaleProtected`, initialize the output on every call and
+include it in their existing fault messages. This gives SE/AE/VR failure
+reports a concrete exception identifier without changing dispatch success,
+fallback or retirement decisions. It does not make a failing provider
+recoverable or establish a new runtime stability result.
+
+Do not import the generic `SehGuard` files, replace unrelated guards, or
+copy upstream's separate `call_once` logging mechanism. Vendor-constant
+deduplication is incidental cleanup; the named Streamline constant used
+upstream is not present locally. Update the existing extracted eye-dispatch
+test stub if the approved helper signature changes, and preserve its
+current fallback/quarantine cases. Compiled validation stays deferred.
+
+No #772 code has been changed. Await the user's `i` or `r` for this limited
+diagnostics adaptation. This checkpoint changes only the ledger; scoped
+pre-commit and `git diff --check` passed, with no build or runtime test.
 
 ## Verification
 

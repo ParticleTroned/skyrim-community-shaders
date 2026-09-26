@@ -110,6 +110,10 @@ at `16`. These appearance defaults are shared across tiers and GPU vendors.
 Wind-driven waves remain opt-in; their existing settings are explicit in
 every profile.
 
+Extended Materials includes the independent mesh and terrain Parallax Strength
+at its neutral value of `1.0` in every tier. Legacy settings without the key
+also retain neutral depth; this additive default retains contract revision 5.
+
 ## CSX compatibility contract
 
 The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`

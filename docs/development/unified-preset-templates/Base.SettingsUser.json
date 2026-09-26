@@ -1005,7 +1005,8 @@
     "EnableParallaxWarpingFix": 1,
     "EnableShadows": 1,
     "EnableTerrain": 0,
-    "ExtendShadows": 1
+    "ExtendShadows": 1,
+    "ParallaxStrength": 1.0
   },
   "Extended Translucency": {
     "AlphaMode": 3,

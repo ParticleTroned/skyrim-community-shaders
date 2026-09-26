@@ -71,7 +71,8 @@ namespace SharedData
 		bool EnableHeightBlending;
 		bool EnableShadows;
 		bool EnableParallaxWarpingFix;
-		uint2 pad0;
+		float ParallaxStrength;
+		uint pad0;
 	};
 
 	struct CubemapCreatorSettings

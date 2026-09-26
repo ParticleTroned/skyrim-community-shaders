@@ -22,6 +22,7 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 #endif
 {
 	pixelOffset = 0.0;
+	const float strength = SharedData::extendedMaterialSettings.ParallaxStrength;
 #if defined(LANDSCAPE)
 	maxTexDim = maxTexDim;
 #endif
@@ -50,27 +51,29 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 	float scale = params.HeightScale;
 	float maxHeight = 0.1 * scale;
 #endif
+	// Scale ray travel independently of the heights used to blend terrain layers.
+	maxHeight *= strength;
 	float minHeight = maxHeight * 0.5;
 
 	float2 resultCoords = coords;
 
 #if defined(LANDSCAPE)
-	if (nearBlendToFar < 1.0) {
+	if (strength > 0.0 && nearBlendToFar < 1.0) {
 #else
 #	if defined(TRUE_PBR)
-	if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0 || nearBlendToFar < 1.0)
+	if (strength > 0.0 && ((PBRFlags & PBR::Flags::InterlayerParallax) != 0 || nearBlendToFar < 1.0))
 #	else
-	if (nearBlendToFar < 1.0)
+	if (strength > 0.0 && nearBlendToFar < 1.0)
 #	endif
 	{
 #endif
 #if defined(LANDSCAPE)
-		uint numSteps = uint((max(6, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
-		numSteps = clamp((numSteps + 3) & ~0x03, 4, max(8, scale * 8));
+		uint numSteps = (uint)((max(6, scale * 8) * (1.0 - nearBlendToFar)) + 0.5);
+		numSteps = (uint)clamp((numSteps + 3u) & ~0x03u, 4, max(8, scale * 8));
 #else
 		const float maxSteps = 16;
-		uint numSteps = uint((maxSteps * (1.0 - nearBlendToFar)) + 0.5);
-		numSteps = clamp((numSteps + 3) & ~0x03, 4, max(6, scale * maxSteps));
+		uint numSteps = (uint)((maxSteps * (1.0 - nearBlendToFar)) + 0.5);
+		numSteps = (uint)clamp((numSteps + 3u) & ~0x03u, 4, max(6, scale * maxSteps));
 #endif
 
 		float stepSize = rcp(numSteps);
@@ -200,11 +203,12 @@ float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 v
 // https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
 float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality, float noise, DisplacementParams params, bool applyMeshTV, StochasticOffsets meshOffset)
 {
-	[branch] if (quality > 0.0)
+	float result = 1.0;
+	[branch] if (quality > 0.0 && SharedData::extendedMaterialSettings.ParallaxStrength > 0.0)
 	{
 		uint tapCount = ParallaxShadowTapCount(quality);
 		float shadowStrength = ShadowIntensity * (4.0 / tapCount);
-		float2 rayDir = L.xy * 0.1 * params.HeightScale;
+		float2 rayDir = L.xy * 0.1 * params.HeightScale * SharedData::extendedMaterialSettings.ParallaxStrength;
 		float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
 		float4 sh = sh0.xxxx;
 		sh.x = AdjustDisplacementNormalized(SampleMeshParallaxHeight(tex, texSampler, coords + rayDir * multipliers.x, mipLevel, channel, applyMeshTV, meshOffset), params);
@@ -214,9 +218,9 @@ float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, f
 			sh.z = AdjustDisplacementNormalized(SampleMeshParallaxHeight(tex, texSampler, coords + rayDir * multipliers.z, mipLevel, channel, applyMeshTV, meshOffset), params);
 		if (quality > 0.75)
 			sh.w = AdjustDisplacementNormalized(SampleMeshParallaxHeight(tex, texSampler, coords + rayDir * multipliers.w, mipLevel, channel, applyMeshTV, meshOffset), params);
-		return 1.0 - saturate(dot(max(0, sh - sh0), shadowStrength));
+		result = 1.0 - saturate(dot(max(0, sh - sh0), shadowStrength));
 	}
-	return 1.0;
+	return result;
 }
 
 #endif

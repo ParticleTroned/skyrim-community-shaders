@@ -309,37 +309,39 @@ inline uint TerrainDirectionalShadowTapCount(float quality)
 bool ComputeTerrainParallaxShadowBaseHeight(PS_INPUT input, float2 coords, float mipLevels[6], float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, out float sh0)
 {
 	sh0 = 0.0;
-	if (!TerrainHasAnyDisplacement())
-		return false;
-
-	float weights[6] = { 0, 0, 0, 0, 0, 0 };
-	sh0 = TERRAIN_HEIGHT_AT(coords, mipLevels, quality, weights);
-	return true;
+	bool hasShadow = TerrainHasAnyDisplacement() && SharedData::extendedMaterialSettings.ParallaxStrength > 0.0;
+	if (hasShadow) {
+		float weights[6] = { 0, 0, 0, 0, 0, 0 };
+		sh0 = TERRAIN_HEIGHT_AT(coords, mipLevels, quality, weights);
+	}
+	return hasShadow;
 }
 
 // Soft shadow along light L. Strength matches the 4/tapCount object-shadow scale.
 float GetParallaxSoftShadowMultiplierTerrain(PS_INPUT input, float2 coords, float mipLevel[6], float3 L, float sh0, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset)
 {
-	if (quality > 0.0) {
+	float result = 1.0;
+	if (quality > 0.0 && SharedData::extendedMaterialSettings.ParallaxStrength > 0.0) {
 		float shadowStrength = ShadowIntensity * 4.0;
 		float heights[6] = { 0, 0, 0, 0, 0, 0 };
-		float2 rayDir = L.xy * 0.1;
+		float2 rayDir = L.xy * 0.1 * SharedData::extendedMaterialSettings.ParallaxStrength;
 		float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp(1.0 + noise), mipLevel, quality, heights);
-		return 1.0 - saturate(max(0, shi - sh0) * shadowStrength);
+		result = 1.0 - saturate(max(0, shi - sh0) * shadowStrength);
 	}
-	return 1.0;
+	return result;
 }
 
 float EvaluateTerrainDirectionalParallaxShadowMultiplier(PS_INPUT input, float2 coords, float mipLevels[6], float3 lightDirection, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, float sh0)
 {
-	if (TerrainDirectionalShadowTapCount(quality) == 0)
-		return 1.0;
-	float shadowStrength = ShadowIntensity * 2.0;
-
-	float heights[6] = { 0, 0, 0, 0, 0, 0 };
-	float2 rayDir = lightDirection.xy * 0.1;
-	float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp(1.0 + noise), mipLevels, quality, heights);
-	return 1.0 - saturate(max(0, shi - sh0) * shadowStrength);
+	float result = 1.0;
+	if (TerrainDirectionalShadowTapCount(quality) > 0 && SharedData::extendedMaterialSettings.ParallaxStrength > 0.0) {
+		float shadowStrength = ShadowIntensity * 2.0;
+		float heights[6] = { 0, 0, 0, 0, 0, 0 };
+		float2 rayDir = lightDirection.xy * 0.1 * SharedData::extendedMaterialSettings.ParallaxStrength;
+		float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp(1.0 + noise), mipLevels, quality, heights);
+		result = 1.0 - saturate(max(0, shi - sh0) * shadowStrength);
+	}
+	return result;
 }
 
 #undef TERRAIN_HEIGHT_AT

@@ -2223,6 +2223,19 @@ if(BUILD_CONTROLLER_TESTS)
             ${_settings_test_launcher} "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/skylighting_settings_test.py"
     )
+    add_test(
+        NAME ExtendedMaterialsSettings
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extended_materials_settings_test.py"
+    )
+    set_tests_properties(
+        ExtendedMaterialsSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
     set_tests_properties(
         SkylightingSettings
         PROPERTIES

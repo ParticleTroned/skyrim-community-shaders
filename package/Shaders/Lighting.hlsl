@@ -2194,8 +2194,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(EMAT)
+	const bool parallaxDepthEnabled = SharedData::extendedMaterialSettings.ParallaxStrength > 0.0;
 	float parallaxShadowQualityBase = viewPosition.z < ExtendedMaterials::ParallaxCheapDistance ? ExtendedMaterials::ParallaxNearShadowQuality : ExtendedMaterials::ParallaxFarShadowQuality;
-	float parallaxShadowQuality = GetVRLightingAuxiliaryQuality(parallaxShadowQualityBase, vrAuxDetailWeight);
+	float parallaxShadowQuality = parallaxDepthEnabled ? GetVRLightingAuxiliaryQuality(parallaxShadowQualityBase, vrAuxDetailWeight) : 0.0;
 	float terrainDirectionalShadowQuality = parallaxShadowQuality;
 #		define COMPUTE_TERRAIN_SHADOW_BASE(OUT_SH0) ExtendedMaterials::ComputeTerrainParallaxShadowBaseHeight(input, uv, terrainShadowMipLevels, terrainDirectionalShadowQuality, screenNoise, displacementParams, sharedOffset, OUT_SH0)
 #		define EVAL_TERRAIN_DIR_SHADOW(BASE_SH0, DIR_TS) ExtendedMaterials::EvaluateTerrainDirectionalParallaxShadowMultiplier(input, uv, terrainShadowMipLevels, DIR_TS, terrainDirectionalShadowQuality, screenNoise, displacementParams, sharedOffset, BASE_SH0)
@@ -2296,7 +2297,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(EMAT)
 #		if defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
-	if (SharedData::extendedMaterialSettings.EnableParallax) {
+	if (SharedData::extendedMaterialSettings.EnableParallax && parallaxDepthEnabled) {
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0)
@@ -2335,7 +2336,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskAlpha > kMaskEpsilon && envMaskAlpha < (1.0 - kMaskEpsilon)) {
+			if (parallaxDepthEnabled && envMaskAlpha > kMaskEpsilon && envMaskAlpha < (1.0 - kMaskEpsilon)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, applyMeshTV, meshOffset, pixelOffset);
@@ -2362,7 +2363,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if !defined(FACEGEN)
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
-		PBRParallax = true;
+		PBRParallax = parallaxDepthEnabled;
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
 			displacementParams.HeightScale *= PBRParams1.y;
@@ -2389,10 +2390,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		{
 			displacementParams.HeightScale *= PBRParams1.y;
 		}
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
-		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
-		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0)
-			sh0 = ExtendedMaterials::SampleMeshParallaxHeight(TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0, applyMeshTV, meshOffset);
+		if (parallaxDepthEnabled) {
+			mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
+			uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
+			if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0)
+				sh0 = ExtendedMaterials::SampleMeshParallaxHeight(TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0, applyMeshTV, meshOffset);
+		}
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR
@@ -2464,7 +2467,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float weights[6];
 		weights[0] = weights[1] = weights[2] = weights[3] = weights[4] = weights[5] = 0.0;
 
-		const bool doTerrainPom = ExtendedMaterials::TerrainHasAnyDisplacement() &&
+		const bool doTerrainPom = parallaxDepthEnabled &&
+		                          ExtendedMaterials::TerrainHasAnyDisplacement() &&
 		                          ExtendedMaterials::TerrainMaxWeightedHeightScale(input, displacementParams) > 0.01;
 		[branch] if (doTerrainPom)
 		{
@@ -2485,6 +2489,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.y = weights[5];
 		}
 		hasTerrainParallaxShadow =
+			parallaxDepthEnabled &&
 			viewPosition.z < ExtendedMaterials::ParallaxCheapDistance &&
 			ExtendedMaterials::TerrainHasAnyDisplacement() &&
 			ExtendedMaterials::TerrainMaxWeightedHeightScale(input, displacementParams) > 0.01;

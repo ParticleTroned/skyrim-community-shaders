@@ -41,6 +41,18 @@ and reflection checks. The primary checkout remains on `main-VR`.
 The earlier `202777f6f` pin records the user-selected sync starting point;
 the unrelated later fast-forward is retained.
 
+Color follow-up `16891e61ccff08631cfafd8cd2e4944c663159ba` corrects the
+preset contract marker to revision 5, which the runtime accepts. It is
+merged into the sync branch as well. The atmosphere extension is additive:
+retain revision 5 while preserving its updated source fingerprint and
+regenerating the three compatibility markers. Source hashes identify
+settings code changes; they do not require a contract revision bump.
+`generate-unified-presets.ps1 -Check` verified all tiers. A JSON comparison
+confirmed that only the revision marker changed, all three markers match
+`PresetCompatibility::kSettingsContractRevision`, and the atmosphere
+fingerprint is retained. Scoped pre-commit and diff checks passed; no
+build or compiled/runtime test ran for the merge.
+
 The user decides `i` or `r` for each presented candidate before a port.
 Compare actual diffs with current local code, including equivalent or
 better implementations, and preserve SE/AE and VR behavior. Inspect mixed
@@ -438,6 +450,8 @@ on direct profile imports. It copies only absent cloud fields from numeric
 sky values; explicitly saved cloud values win. The feature shader version
 advances to 1-11-0 for the changed shared buffer contract. Unified preset
 compatibility metadata is refreshed without retuning the three presets.
+The Color follow-up retains runtime-compatible contract revision 5 for
+these additive settings; the atmosphere source fingerprint remains updated.
 
 Regression coverage is added to the extracted production Adaptive Balance
 test for atmosphere composition, migration and DevBench validation. Existing
@@ -472,6 +486,8 @@ No shadow rendering or independent lighting correction is included.
 Excluded under the upstream-specific UI, SLF and translation rules.
 
 ### #743: RTTI exception recovery, accepted
+
+Implementation commit: `7f20a64d7`.
 
 [Open Shaders #743](https://github.com/alandtse/open-shaders/pull/743),
 `568888306be0c15f8b6db8df821014e19612e1d9`, is titled

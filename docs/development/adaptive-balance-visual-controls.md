@@ -241,6 +241,13 @@ abruptly. The production-pass regression failed before the sign-preserving
 fix and passed afterward. The review also corrected the Essential-view
 documentation; profile and location controls require Advanced view.
 
+The complete production validation exposed an unnecessary preset contract
+revision bump: generated presets advertised revision 6 while the runtime
+accepts revision 5. These optional, neutral-default fields do not break the
+existing settings contract. Keeping revision 5 preserves compatibility with
+existing marked presets; the source fingerprint still tracks the new code.
+The shipped-preset compatibility test covers all three generated tiers.
+
 The maintained CMake targets `adaptive_balance_color_shader_test` and
 `adaptive_balance_toggle_test` were built in Release and both executables
 passed. Production packaging must build the DLL and both runtime cache

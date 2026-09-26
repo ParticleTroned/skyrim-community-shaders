@@ -15,6 +15,8 @@ struct SharedLightingSettings
 	float linearOmnidirectionalBulbMult = 1.0f;
 	float skySaturation = 1.0f;
 	float ambientMult = 1.0f;
+	float contrast = 1.0f;
+	float saturation = 1.0f;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -28,4 +30,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	omnidirectionalBulbMult,
 	linearOmnidirectionalBulbMult,
 	skySaturation,
-	ambientMult)
+	ambientMult,
+	contrast,
+	saturation)

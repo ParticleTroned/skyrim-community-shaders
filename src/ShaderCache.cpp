@@ -5878,7 +5878,7 @@ namespace SIE
 	{
 		const SKSE::stl::scope_exit releaseSlot([this]() noexcept { compilationSet.ReleaseDispatchSlot(); });
 
-		if (stoken.stop_requested()) {
+		if (stoken.stop_requested() || IsTaskStale(task.GetGeneration())) {
 			return;
 		}
 

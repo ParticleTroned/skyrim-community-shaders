@@ -940,7 +940,7 @@ the `RunGrass.hlsl` edit consumes that flag and the new wind displacement.
 No independent ordinary-grass correction exists in those shared hunks.
 Excluded under the shared wind and translation/UI rules.
 
-### #751: post-processing pipeline, partial recommendation awaiting decision
+### #751: post-processing pipeline, accepted early stale-job rejection
 
 [Open Shaders #751](https://github.com/alandtse/open-shaders/pull/751),
 `224ec11a466264851143c969af1d3be2c2f2b205`, is titled
@@ -952,10 +952,11 @@ white-point and grading/HDR handling, and expands standalone asynchronous
 shader compilation to vertex/pixel stages with generation-aware lifetimes.
 This is not E11-only; the shared changes were inspected independently.
 
-Recommend **i only for the early stale shader-job rejection**, adapted to
-the existing `IsTaskStale` helper. Local `ProcessCompilationSet` checks its
-stop token before naming the task and preparing compilation, but does not
-check its generation there. `CompileShader` eventually rejects an obsolete
+User decision: **i only for the early stale shader-job rejection**, adapted
+to the existing `IsTaskStale` helper. Before this port,
+`ProcessCompilationSet` checked its stop token before naming the task and
+preparing compilation, but did not check its generation there.
+`CompileShader` eventually rejects an obsolete
 generation through `ClaimCompilation`, after descriptor resolution, macro
 capture, path/key construction and compatibility lookup. The upstream
 entry guard avoids that preparatory work when a queued job is already
@@ -964,7 +965,7 @@ disk-write protections and the scope-exit dispatch-slot release. This is
 an earlier exit, not evidence of a current cache-corruption defect or a
 measured performance gain.
 
-Recommend rejecting the rest of this PR for the current selective sync:
+The rest of this PR is omitted from the approved limited port:
 
 -   Local code has no upstream PostProcessing, HDRDisplay, CinematicCamera,
     ACEScg/OpenDRT or FFT glare pipeline. Adaptive Balance's color, bloom
@@ -985,8 +986,98 @@ Recommend rejecting the rest of this PR for the current selective sync:
     used by the shader API. Do not add unused parallel infrastructure.
 -   Upstream UI and translations remain excluded.
 
-No #751 code was implemented. Await the user's `i` or `r` for the proposed
-limited adaptation.
+The sole source change adds `IsTaskStale(task.GetGeneration())` to the
+worker's entry guard. The existing dispatch-slot scope guard is established
+first, so this exit still releases the slot. The helper uses an acquire
+load of the generation; existing later guards continue to handle a reset
+that races with this check. The shared path applies to SE, AE and VR.
+No shader, resource, setting, preset or DevBench contract changes.
+
+Validation:
+
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr751.py`
+    passed. It verifies the exact one-line source delta, dispatch-slot
+    cleanup before the guard, task naming after it, and reuse of the
+    existing generation helper with all later protections unchanged.
+-   Scoped pre-commit and `git diff --check` passed.
+-   Builds, shader compilation, compiled tests and runtime validation
+    remain deferred by user instruction. No performance gain is claimed.
+
+### #761 and #763: upstream-sync documentation, excluded
+
+[Open Shaders #761](https://github.com/alandtse/open-shaders/pull/761),
+`9e1672d32a3945aca46f049f90c369767c967ec6`, is titled
+`docs(sync): add trace-intent, build-config rules`.
+[Open Shaders #763](https://github.com/alandtse/open-shaders/pull/763),
+`4f4bf9df3fca2605cdc839ae7d33c8836f071da5`, is titled
+`docs(sync): require builds`.
+
+Both change only upstream's sync workflow document. They cover historical
+intent, cross-platform build policy and requiring real Linux ClangCL builds.
+Excluded as upstream housekeeping. They do not change the user's explicit
+instruction to defer builds until the end of this selective sync.
+
+### #758: upstream merge, partial recommendation awaiting decision
+
+[Open Shaders #758](https://github.com/alandtse/open-shaders/pull/758),
+`25b96de6becb67a5754a07a11debce45cad2d89e`, is titled
+`chore(sync): merge upstream/dev as of b4e7b08ec4`.
+
+Reviewed all 44 files in the actual first-parent merge diff, plus the
+constituent upstream commits. Repeated commits in the secondary ancestry
+do not by themselves represent new changes in the resulting tree.
+
+Recommend **i, limited to the Hair Specular/True PBR permutation fix** from
+[Community Shaders #2738](https://github.com/community-shaders/skyrim-community-shaders/pull/2738),
+`25161eb4f32deed80028d01cbbead75c4d9e4f07`, titled
+`fix(shaders): compile skin and hair under TRUE_PBR`.
+
+Local lighting defines can combine `HAIR`, `CS_HAIR` and `TRUE_PBR`.
+`Lighting.hlsl` includes Hair Specular and writes `material.Shininess`
+under the first two flags alone. However, `MaterialProperties` omits
+`Shininess` under True PBR, and `DirectContext` selects its PBR
+fields instead of `hairShadow`, which the included hair functions use.
+This is an inconsistent shader permutation visible in the source; no new
+local compilation or runtime failure was observed during this review.
+
+Port the upstream `CS_HAIR_SHADING` gate, requiring the two hair flags and
+excluding True PBR, consistently through `LightingCommon.hlsli`,
+`LightingEval.hlsli` and `Lighting.hlsl`. Preserve generic hair semantics,
+the existing True PBR Marschner hair path, VR lighting/foveated behavior
+and Adaptive Balance. The upstream Skin subsystem is absent locally, so
+its new `CS_SKIN_SHADING` gate has no applicable local feature to fix.
+This limited shared shader correction applies to SE, AE and VR.
+
+Other merge changes are already covered or outside the agreed scope:
+
+-   Terrain Shadows already has Z blur, half-texel sampling, finite step
+    math, clamped integer height interpolation, independent height bounds,
+    guarded history reads, lit out-of-map samples and a zero-width guard.
+    Preserve local bias/softening choices; no visual superiority is claimed.
+-   Shader enable indexing already uses a bounded `ShaderEnabled` helper.
+    SSS already validates its keyword lookup and object chain. Shader-cache
+    wakeups already lock, exchange and notify; disk checks handle errors.
+    Cache ABI validation avoids the upstream null version-string compare.
+-   Weather texture lookup already uses game resources with validated
+    paths. The missing-texture vanilla material guard already exists in
+    `Hooks.cpp`; True PBR has deterministic fallback bindings.
+-   Unified Water already defers release with an explicit VR relocation
+    and checks collection membership before dereferencing orphan pointers.
+    Skylighting already rejects small occluders before later pass work.
+-   Frame-generation input invalidation is already covered by the local
+    lifecycle and #755. FidelityFX output directories are already isolated
+    per build/configuration. The upstream SDK pin change adds cross-compile
+    and optional-effect build support, not new FSR image math; retain the
+    local SDK fork and its dispatch-size/FSR ports.
+-   E11 setting/IBL changes, upstream UI, translations and upload metadata
+    remain excluded. HDRDisplay's enable guard has no local subsystem.
+-   The font-path change replaces physical containment with lexical
+    containment for upstream UI compatibility. Local containment is shared
+    by fonts, themes and the shader DevBench export write boundary. Do not
+    weaken that shared boundary to import an excluded font UI change.
+
+No #758 code was implemented. Await the user's `i` or `r` for the proposed
+limited hair adaptation.
 
 ## Verification
 

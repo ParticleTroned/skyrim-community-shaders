@@ -129,7 +129,7 @@
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "required": ["path", "bytes", "committed", "sha256"],
+                            "required": ["path", "bytes", "committed", "sha256", "actual"],
                             "properties": {
                                 "path": {
                                     "type": "string",
@@ -150,8 +150,8 @@
                                     ],
                                     "properties": {
                                         "view": { "type": "string", "minLength": 1 },
-                                        "width": { "type": "integer", "minimum": 0 },
-                                        "height": { "type": "integer", "minimum": 0 },
+                                        "width": { "type": "integer", "minimum": 1 },
+                                        "height": { "type": "integer", "minimum": 1 },
                                         "format": { "type": "string", "minLength": 1 },
                                         "colourContract": { "type": "string", "minLength": 1 }
                                     },

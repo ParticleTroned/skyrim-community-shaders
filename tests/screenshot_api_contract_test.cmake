@@ -90,12 +90,21 @@ foreach(_required_contract_text IN ITEMS
 	terminalOutcome completedUtc fallbacksPresent cancelled manifestChildren
 	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
 	effectiveSequence RelativeContainedArtifactPath relativeSequencePath
+	DirectoryLease::CreateExclusive directoryLease VerifyDirectChild
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
         message(FATAL_ERROR "Screenshot API implementation is missing contract behavior: ${_required_contract_text}")
     endif()
 endforeach()
+
+string(FIND "${_implementation}" "result.artifact = DescribeCommittedArtifact(job.destination);" _manifest_describe_position)
+string(FIND "${_implementation}" "result.success = true;" _manifest_success_position)
+string(FIND "${_implementation}" "integrityError" _integrity_warning_position)
+if(_manifest_describe_position EQUAL -1 OR _manifest_success_position LESS _manifest_describe_position OR
+   NOT _integrity_warning_position EQUAL -1)
+    message(FATAL_ERROR "Manifest publication must fail closed when same-handle integrity metadata cannot be produced")
+endif()
 
 file(READ "${PROJECT_ROOT}/docs/development/schemas/screenshot-request-v1.schema.json" _request_schema)
 foreach(_required_schema_text IN ITEMS runtime_session persistent_user settings_apply frameManifest previewVideo)

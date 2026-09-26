@@ -1,9 +1,14 @@
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotStorageSecurity.cpp"
+#include "screenshot_storage_security_test.h"
 
 #include <stdexcept>
 
+#pragma comment(lib, "bcrypt.lib")
+
 int main()
 {
+	RunScreenshotStorageSecurityTests();
 	using namespace CSX::ScreenshotPolicy;
 	const auto hmd = ResolveCaptureSource("hmd_submission", "reject", true);
 	const auto desktopFallback = ResolveCaptureSource("hmd_submission", "desktop_mirror", false);

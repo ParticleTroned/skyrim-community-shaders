@@ -6,6 +6,11 @@ All user decisions are complete. Validation runs in the separate
 `codex/pr730-open-shaders-dev-sync` worktree; no deployment, game launch,
 merge or push is part of this build record.
 
+The subsequent [adversarial review](open-shaders-dev-adversarial-review.md)
+records two separate corrections and a passing universal DevBench-enabled
+build with all 160 registered tests. Its exact producer is separate from
+the historical runs below.
+
 ## Initial full build
 
 Command, from the sync worktree:

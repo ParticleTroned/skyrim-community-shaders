@@ -1,7 +1,6 @@
 #pragma once
 
-#include <algorithm>
-#include <cmath>
+#include "../../Utils/Finite.h"
 
 namespace FoveatedBlendPolicy
 {
@@ -12,7 +11,7 @@ namespace FoveatedBlendPolicy
 	/** Keep saved and shader values finite without changing the mask geometry. */
 	inline float ClampFalloff(float value)
 	{
-		return std::isfinite(value) ? std::clamp(value, MinFalloff, MaxFalloff) : NeutralFalloff;
+		return Util::ClampFinite(value, MinFalloff, MaxFalloff, NeutralFalloff);
 	}
 
 	/** Disabling the curve preserves its saved value and restores legacy feathering. */

@@ -13,7 +13,7 @@ if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
 endif()
 
-set(_CSX_VERSION_DEFAULT "3.19-VR")
+set(_CSX_VERSION_DEFAULT "3.20-VR")
 if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
     set(_CSX_VERSION_DEFAULT "3.15-SE")
 elseif(DEFINED ENABLE_SKYRIM_VR AND NOT ENABLE_SKYRIM_VR)
@@ -32,7 +32,6 @@ if(NOT CSX_VERSION MATCHES [[^([0-9]+)\.([0-9]+)-(SE|VR)$]])
 endif()
 set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
 set(CSX_RUNTIME "${CMAKE_MATCH_3}")
-set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
 set(CSX_RELEASE_VERSION
     ""
     CACHE STRING
@@ -46,9 +45,8 @@ if(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
     )
 endif()
 
-# Test distributions carry an independently allocated build identity. Keep the
-# plugin version and compatibility identity on CSX_VERSION: both are consumed
-# by the existing settings and shader-cache compatibility paths.
+# Test distributions carry an independently allocated build identity. Persist
+# the numeric plugin version without the test identifier in settings and caches.
 set(CSX_TEST_BUILD
     ""
     CACHE STRING
@@ -73,8 +71,9 @@ if(NOT "${CSX_TEST_BUILD}" STREQUAL "")
 elseif(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
     set(CSX_BUILD_VERSION "${_CSX_RELEASE_LABEL}")
 else()
-    set(CSX_BUILD_VERSION "${CSX_VERSION}")
+    set(CSX_BUILD_VERSION "${_CSX_PROJECT_VERSION}-${CSX_RUNTIME}")
 endif()
+set(CSX_PLUGIN_VERSION "CSX ${_CSX_PROJECT_VERSION}-${CSX_RUNTIME}")
 set(CSX_BUILD_LABEL "CSX ${CSX_BUILD_VERSION}")
 
 project(
@@ -2300,6 +2299,19 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         WaterAppearanceSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    add_test(
+        NAME TruePBRSettings
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/true_pbr_settings_test.py"
+    )
+    set_tests_properties(
+        TruePBRSettings
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT

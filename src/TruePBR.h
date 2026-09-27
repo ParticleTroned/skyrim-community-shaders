@@ -21,7 +21,6 @@ public:
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsInMenu() const override { return true; }
 	virtual bool DrawFailLoadMessage() const override { return false; }
-	virtual bool HasFeatureSettings() const override { return false; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -52,6 +51,7 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
+	virtual void RestoreDefaultSettingsForLoad() override { settings = {}; }
 
 	struct alignas(16) Settings
 	{

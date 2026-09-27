@@ -106,6 +106,33 @@ generated release audit includes one Performance Tuning feature row and
 reports its new `1-0-0` version. No production DLL rebuild or in-game test
 was needed for this metadata registration.
 
+## 3.20.0 version labels
+
+The main-VR defaults use the `3.20-VR` series. Production labels, the
+numeric plugin version, DLL resources, settings metadata and shader-cache
+producer labels include the patch component: `3.20.0-VR`. Stable builds
+continue to use `CSX_RELEASE_VERSION`; release automation accepts the next
+patch or the first version of the next minor line and retains the previous
+reachable stable tag as its changelog baseline. Existing tags are never
+replaced.
+
+The production AIO includes the matching `CommunityShaders.pdb`, the
+universal DLL and both complete shader-cache FOMOD choices. A label-only
+rebuild can reuse existing shader packs after verifying identical shader
+sources, feature state and cache ABI. Only the copied cache's producer
+label is updated; the original cache and compiled bytecode are preserved.
+
+The bundled revision-5 unified presets from the 3.19 line remain accepted
+by 3.20. New generated presets target 3.20 and retain the same graphics
+settings. Historical release records and test-build allocation seeds keep
+their original identities.
+
+Validation passed six release tests, 33 shader-cache packaging tests, 32
+FOMOD tests, eight distribution tests, the compiled preset-compatibility regression, and the
+complete preset-generator regression and generated-output check. Scoped
+hooks passed with the existing whole-file CMake formatter excluded to avoid
+unrelated formatting changes. No in-game validation is claimed.
+
 ## Validation
 
 Run the focused release suites:

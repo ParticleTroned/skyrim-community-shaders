@@ -82,10 +82,10 @@ def previous_tag(version: tuple[int, int, int]) -> str:
     for tag in tags:
         if VERSION.fullmatch(tag.removeprefix("csx")):
             parsed = parse_version(tag[3:])
-            if parsed[:2] == version[:2] and parsed < version:
+            if parsed < version:
                 previous.append((parsed, tag))
     if not previous:
-        raise ValueError("No reachable stable CSX release in the requested line")
+        raise ValueError("No reachable stable CSX release before the requested version")
     return max(previous)[1]
 
 
@@ -97,8 +97,10 @@ def plan(expected: str) -> dict[str, str]:
         raise ValueError("Release preparation requires a clean checkout")
     base = previous_tag(version)
     base_version = parse_version(base[3:])
-    if version != (*base_version[:2], base_version[2] + 1):
-        raise ValueError("Only the next patch after the reachable CSX baseline is allowed")
+    next_patch = (*base_version[:2], base_version[2] + 1)
+    next_minor = (base_version[0], base_version[1] + 1, 0)
+    if version not in (next_patch, next_minor):
+        raise ValueError("Only the next patch or next minor after the reachable CSX baseline is allowed")
     tags = git("tag", "--list", "csx*").splitlines()
     for tag in tags:
         if VERSION.fullmatch(tag.removeprefix("csx")):

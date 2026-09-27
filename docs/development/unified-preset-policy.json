@@ -2,24 +2,24 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.09.25.1",
+    "packageVersion": "d2026.09.27.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
         "target": {
             "runtime": "VR",
-            "minimumVersion": "3.19",
-            "maximumVersionExclusive": "3.20"
+            "minimumVersion": "3.20",
+            "maximumVersionExclusive": "3.21"
         }
     },
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "36F051C91951DAA6120BFFBE43C6BDAB208FE20A9A91BC86CEBEA3B867042948"
+        "sha256": "CED7DE5F900534A9C3FE8CF2434F20E5E508506079B4F2F9ACD8BAE7826B027E"
     },
     "runtimeSettingsContract": {
         "revision": 8,
-        "sourceTreeSha256": "74C565585693619F539570C55DBFDE47C4B83113C35FE55D90B611BA9ECC7740",
+        "sourceTreeSha256": "42C2AE7D880128318FDEDF328F2ED3BF8EC8CB3B3E9E32892794E603E11FC393",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",

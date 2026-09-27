@@ -44,7 +44,7 @@ int main(int argc, char** argv)
 		std::ifstream input(path);
 		assert(input.is_open());
 		const auto preset = nlohmann::json::parse(input);
-		const auto result = PresetCompatibility::Evaluate(preset, "CSX 3.19-VR");
+		const auto result = PresetCompatibility::Evaluate(preset, "CSX 3.20.0-VR");
 		assert(result.disposition == Disposition::kCompatible);
 		assert(result.ShouldApply());
 	}
@@ -62,8 +62,30 @@ int main(int argc, char** argv)
 	assert(older.disposition == Disposition::kRejected);
 	assert(!older.ShouldApply());
 
-	const auto newer = PresetCompatibility::Evaluate(CompatiblePreset(), "CSX 3.20-VR");
+	const auto legacy = PresetCompatibility::Evaluate(CompatiblePreset(), "CSX 3.20.0-VR");
+	assert(legacy.disposition == Disposition::kCompatible);
+	assert(legacy.currentVersion == "CSX 3.20.0-VR");
+	for (const auto presetId : { "csx-unified-performance", "csx-unified-balanced", "csx-unified-quality" }) {
+		auto nrLegacy = CompatiblePreset();
+		nrLegacy["Preset Compatibility"]["presetId"] = presetId;
+		assert(PresetCompatibility::Evaluate(nrLegacy, "CSX 3.20.0-VR").ShouldApply());
+	}
+	for (const auto revision : { 5u, 7u, 9u }) {
+		auto incompatibleContract = CompatiblePreset();
+		incompatibleContract["Preset Compatibility"]["settingsContract"]["revision"] = revision;
+		assert(!PresetCompatibility::Evaluate(incompatibleContract, "CSX 3.20.0-VR").ShouldApply());
+	}
+	const auto newer = PresetCompatibility::Evaluate(CompatiblePreset(), "CSX 3.21.0-VR");
 	assert(newer.disposition == Disposition::kRejected);
+	auto thirdParty = CompatiblePreset();
+	thirdParty["Preset Compatibility"]["presetId"] = "another-preset";
+	assert(!PresetCompatibility::Evaluate(thirdParty, "CSX 3.20.0-VR").ShouldApply());
+	for (const auto label : { "CSX 3.20.x-VR", "CSX 3.20.0.1-VR", "CSX 3.20.-VR", "CSX 3.20.4294967296-VR" }) {
+		assert(!PresetCompatibility::Evaluate(CompatiblePreset(), label).ShouldApply());
+	}
+	auto invalidRange = CompatiblePreset();
+	invalidRange["Preset Compatibility"]["target"]["minimumVersion"] = "3.19.0";
+	assert(!PresetCompatibility::Evaluate(invalidRange, "CSX 3.20.0-VR").ShouldApply());
 
 	const auto wrongRuntime = PresetCompatibility::Evaluate(CompatiblePreset(), "CSX 3.19-SE");
 	assert(wrongRuntime.disposition == Disposition::kRejected);

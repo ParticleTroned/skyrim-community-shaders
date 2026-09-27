@@ -1910,13 +1910,13 @@ preset values. No build, shader compilation, deployment, compiled test or
 runtime test ran. SE/AE/VR relocation availability, update timing, disabling
 and weather transitions still require validation at the end of the sync.
 
-### #779: typed right-eye DLSS depth, recommendation awaiting decision
+### #779: typed right-eye DLSS depth, rejected
 
 [Open Shaders #779](https://github.com/alandtse/open-shaders/pull/779),
 `72518c269d9b0d52b4cbe62ca5ddab7043b7f84c`, is titled
 `fix(upscaling): typed right-eye DLSS depth`.
 
-Recommend **r: already covered on the sync branch by the accepted #769
+The user selected **r: already covered on the sync branch by the accepted #769
 port**, `658087a45`. Reviewed the complete three-file diff, PR description,
 local encoder selection/allocation/bindings, preparation, standard DLSS
 evaluation and submit-stage encoding. This is not an exclusion: it is a
@@ -1952,7 +1952,59 @@ The sync branch already has the complete relevant behavior:
 This coverage belongs to the working branch; it does not claim #769 has
 landed on primary `main-VR`. The upstream PR's integration tests are not
 local evidence. Local compilation and runtime qualification remain pending.
-No #779 code has been imported. Await the user's `i` or `r`.
+No #779 code was imported.
+
+### #780: normalize RCAS by scene exposure, recommendation awaiting decision
+
+[Open Shaders #780](https://github.com/alandtse/open-shaders/pull/780),
+`9b56e59dbbadd30140e9b9f832e1c82bc465babd`, is titled
+`fix(upscaling): normalize RCAS by scene exposure`.
+
+Recommend **i, partial: take only the independent RCAS buffer debug name**.
+Reviewed the complete three-file diff, PR metadata, the #773 exposure
+formula, local fixed/motion-adaptive RCAS, shared dispatch/bindings,
+constant-buffer wrapper and vendor exposure setup. The reviewed RCAS,
+motion-dispatch, binding, buffer-wrapper and feature-interface files are
+identical between the sync branch and current `main-VR`.
+
+The main upstream change multiplies all five RCAS samples by the published
+scene exposure before computing contrast, then divides the output RGB by
+that exposure. This addresses brightness-dependent sharpening in raw HDR
+before tonemapping. Its new constant-buffer fields and t1 adaptation SRV
+carry the #773 producer's luminance range, compensation and adapted value.
+With no producer, the exposure factor stays one.
+
+The visual correction is not implemented locally, but its required input
+is absent. Neither branch supplies `Feature::FindSceneExposure`, an adapted
+luminance buffer, `HistogramAutoExposure` or the Post Processing producer.
+Adaptive Balance changes separate lighting components and cannot supply
+this single scene-wide exposure. DLSS uses vendor auto exposure with
+pre-exposure 1; FSR also enables vendor auto exposure and supplies no
+external exposure resource. Those settings do not publish the required
+adaptation buffer to our standalone RCAS pass. Importing an always-neutral
+interface would not enable this correction.
+
+There are additional local integration differences: motion-adaptive RCAS
+already binds its motion texture at t1, and its constant buffer extends the
+existing 16-byte fixed configuration. Upstream's t1 binding and 32-byte
+configuration cannot simply replace those contracts. A future exposure
+implementation would need a real producer plus coordinated fixed/motion
+paths, resource slots and state restoration. The current code is not
+claimed to provide equivalent exposure normalization.
+
+One hunk is useful without that feature: pass `"Upscaling::RCASConfig"`
+to the existing `ConstantBuffer` constructor. The fixed RCAS buffer is
+currently unnamed in both branches; the wrapper only calls the established
+`Util::SetResourceName` path when given a name. The motion-adaptive buffer
+already has its own distinct name. Taking this hunk identifies the fixed
+and fallback configuration in graphics captures for SE, AE and VR, without
+changing sharpening, resources, shader layout or settings. This would be
+a diagnostic-only port, with no visual or performance improvement claimed.
+
+The remaining hunks all belong to the unavailable exposure path. No #780
+code has been imported. Source review only; no build, shader compilation,
+compiled test, deployment or runtime validation ran. Await the user's
+`i` or `r` for the proposed buffer-name-only scope.
 
 ## Verification
 

@@ -1752,13 +1752,13 @@ The later #779 review overlaps standard per-eye depth handling and must
 account for this shared conversion. Direct use of the whole native depth
 resource by the existing left-eye DLSS path was not changed here.
 
-### #773: publish scene exposure to features, recommendation awaiting decision
+### #773: publish scene exposure to features, rejected
 
 [Open Shaders #773](https://github.com/alandtse/open-shaders/pull/773),
 `495642ba406a87f0ce49082a54ecfebe03ad04cc`, is titled
 `refactor: publish scene exposure to features`.
 
-Recommend **r: no local exposure producer or consumer for this contract**.
+The user selected **r: no local exposure producer or consumer for this contract**.
 Reviewed the complete ten-file diff, PR metadata, local feature lookup,
 Adaptive Balance and the upscaler exposure setup. This is not Scene Manager
 UI and is not E11-only; the decision is based on the code dependency.
@@ -1785,7 +1785,50 @@ no runtime benefit. The remaining generic `FindLoadedFeature` refactor only
 replaces a working early-exit lookup, with no independent correction.
 Reassess useful independent #780 normalization changes when its turn
 arrives; do not create a synthetic exposure from Adaptive Balance here.
-No #773 changes have been made; await the user's `i` or `r`.
+No #773 code was imported.
+
+### #782: stale VR menu backdrop with FSR, recommendation awaiting decision
+
+[Open Shaders #782](https://github.com/alandtse/open-shaders/pull/782),
+`c9ffae711ae06ff933ba4d317475b4ed8c7040cb`, is titled
+`fix(upscaling): stale VR menu backdrop with FSR`.
+
+Recommend **r: the upstream copy path is absent and local routing already
+guards DLSS output**. Reviewed the complete one-line diff, PR metadata,
+upstream menu-blit caller, and local main/foveated/submit sharpening and
+copy-back paths. This is a rendering correction, not an upstream UI-only
+exclusion.
+
+Upstream `PerfMode::MaybeBlitMenuBG` calls `Upscale`, then copies
+`refraTempTex` into `testTexture` when the DLSS sharpening redirect predicate
+is true. That predicate previously checked resources and saved sharpening
+settings without requiring the active method to be DLSS. With FSR active,
+the copy could replace fresh FSR output with an unwritten or stale DLSS
+intermediate. The patch adds `GetUpscaleMethod() == UpscaleMethod::kDLSS`.
+
+Local code has no `IsPerfModeSharpenRedirectActive`, `MaybeBlitMenuBG`,
+`refraTempTex` or `testTexture` path. Its `PerfModeState` manages the render
+scale boot contract rather than that upstream menu bridge. The analogous
+local routing is already guarded:
+
+-   `RefreshRuntimeResolutionPlan` selects the sharpener target only for
+    `plan.upscaleMethod == kDLSS`; main foveated routing likewise requires
+    DLSS before choosing `sharpenerTexture`.
+-   Submit-stage sharpening requires `upscaleMethod == kDLSS` as well as
+    its existing lifecycle and settings checks.
+-   `Upscale` clears `dlssUpscaleOutputInSharpenerTexture` on entry.
+    Streamline or the successful DLSS foveated path publishes it only when
+    coherent output is in that texture. `ApplySharpening` returns before
+    any copy or dispatch unless that producer flag is set. A saved DLSS
+    sharpening setting alone therefore cannot authorize the FSR copy-back
+    described in this PR.
+
+An exact source comparison confirmed that all six reviewed routing and
+producer-guard regions match the current primary `main-VR` checkout.
+There is no additional hunk to adapt for VR or SE/AE. This source review
+does not claim that every menu symptom is solved or reuse upstream runtime
+results as local evidence. No build, shader compilation or runtime test
+ran; no #782 code has changed. Await the user's `i` or `r`.
 
 ## Verification
 

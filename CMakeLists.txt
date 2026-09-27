@@ -2267,6 +2267,18 @@ if(BUILD_CONTROLLER_TESTS)
         )
     endif()
     add_test(
+        NAME FeatureIssueScanner
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/feature_issue_scanner_test.py"
+    )
+    set_tests_properties(
+        FeatureIssueScanner
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
         NAME SkylightingSettings
         COMMAND
             ${_settings_test_launcher} "${Python3_EXECUTABLE}"

@@ -7,7 +7,9 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -38,17 +40,29 @@ namespace
 		HRESULT Close(LPCVOID data) override { return package.Close(data); }
 	};
 
-	ComPtr<ID3DBlob> Compile(const wchar_t* path, bool vr)
+	ComPtr<ID3DBlob> Compile(const wchar_t* path, bool vr, bool allowCooperativeCacheWarnings = false)
 	{
 		ShaderIncludes includes;
 		const D3D_SHADER_MACRO defines[] = { { "VR", "1" }, { nullptr, nullptr } };
 		ComPtr<ID3DBlob> code, errors;
 		const auto result = D3DCompileFromFile(path, vr ? defines : defines + 1, &includes, "main", "cs_5_0",
-			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3 | (allowCooperativeCacheWarnings ? 0 : D3DCOMPILE_WARNINGS_ARE_ERRORS),
 			0, code.GetAddressOf(), errors.GetAddressOf());
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
 		Check(result);
+		if (errors && allowCooperativeCacheWarnings) {
+			// Periphery cache reads follow cooperative writes and a group barrier.
+			std::istringstream diagnostics(static_cast<const char*>(errors->GetBufferPointer()));
+			for (std::string line; std::getline(diagnostics, line);) {
+				if (line.empty() || line == "\r")
+					continue;
+				const bool knownCacheWarning =
+					line.find("warning X4000: use of potentially uninitialized variable (LoadCachedDepthClamped)") != std::string::npos ||
+					line.find("warning X4000: use of potentially uninitialized variable (LoadCachedCurrentColorClamped)") != std::string::npos;
+				Require(knownCacheWarning, "Unexpected periphery shader diagnostic");
+			}
+		}
 		return code;
 	}
 
@@ -65,7 +79,7 @@ namespace
 				 Layout{ L"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", "FoveatedCenterBlendCB", "BlendFalloff", 64, 60 },
 				 Layout{ L"features/Upscaling/Shaders/Upscaling/FoveatedSpatialCompositeCS.hlsl", "FoveatedSpatialCompositeCB", "Tuning", 96, 80 },
 				 Layout{ L"features/Upscaling/Shaders/Upscaling/PeripheryTAACS.hlsl", "PeripheryTAACB", "BlendTuning", 336, 320 } }) {
-			auto code = Compile(layout.path, vr);
+			auto code = Compile(layout.path, vr, std::string_view(layout.buffer) == "PeripheryTAACB");
 			ComPtr<ID3D11ShaderReflection> reflection;
 			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 			ConstantBuffer buffer(device, reflection.Get(), layout.buffer);

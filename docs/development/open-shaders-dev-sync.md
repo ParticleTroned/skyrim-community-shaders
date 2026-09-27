@@ -1890,8 +1890,8 @@ Implemented scope:
     shader cache entries.
 -   Extended `set_adaptive_balance_visuals`, its description/schema and
     configured/effective status with `effectBrightness`.
-    `adaptiveBalanceWeatherColorsAvailable` and feature diagnostics expose
-    hook installation. Documented next-update timing and the distinction
+    `adaptiveBalanceWeatherColorsAvailable` exposes hook installation
+    through `communityshaders.menu`. Documented next-update timing and the distinction
     between requested values and an applied weather update.
 -   Added production-hook/helper regression cases for repeated updates,
     weather and external edits, zero/neutral recovery, runtime gates,
@@ -2258,11 +2258,12 @@ No candidate remains awaiting a decision. Accepted ports are on
 Balance base and the optional FOV curve. The primary checkout remains
 on `main-VR`; this review does not merge or publish the working branch.
 
-The user's deferred end-of-sync build and compiled validation can now
-proceed. Earlier per-port validation notes describe the checks available
+The user's deferred end-of-sync build and compiled validation are recorded
+in [the final validation report](open-shaders-dev-validation.md).
+Earlier per-port validation notes describe the checks available
 when those decisions were made; they are not final runtime qualification.
 
-## Verification
+## Initial review verification
 
 -   Refreshed only Open Shaders `dev` and `main` with `--no-tags`; pinned
     the resulting review range and compared #733's complete shader diff.
@@ -2271,4 +2272,6 @@ when those decisions were made; they are not final runtime qualification.
 -   `pwsh ./tools/dev-doctor.ps1 -Network`: zero failures after running
     outside the restricted sandbox; one existing public-HTTPS remote warning.
     Remote configuration was retained.
--   No build, shader compilation, deployment or runtime validation ran.
+-   No build, shader compilation, deployment or runtime validation ran
+    during that initial review. End-of-sync compiled results are recorded
+    in the [final validation report](open-shaders-dev-validation.md).

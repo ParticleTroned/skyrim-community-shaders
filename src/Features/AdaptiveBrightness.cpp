@@ -3956,8 +3956,3 @@ void AdaptiveBrightness::PostPostLoad()
 {
 	Hooks::Install();
 }
-
-json AdaptiveBrightness::GetDiagnostics()
-{
-	return { { "weatherColorHookInstalled", weatherColorHookInstalled } };
-}

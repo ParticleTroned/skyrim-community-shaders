@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "Features/Upscaling/CameraReprojection.h"
 #include "Features/Upscaling/VRSubmitTemporalSnapshot.h"
 

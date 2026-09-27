@@ -74,8 +74,10 @@ consumers and reflects their buffer layouts, then samples the production
 helper for neutral equality, zero/full ownership, finite bounds, falloff
 direction and mirrored eye offsets in flat and VR permutations.
 
-Those compiled tests, DLL/shader builds, deployment and SE/AE/VR runtime
-checks are **deferred until the selective sync ends**, at the user's
-request. Physical-HMD `csx-render-scale-pr-v1` qualification and comparable
-performance evidence are pending. No runtime result or ledger measurement
-is claimed.
+The deferred end-of-sync universal DLL build and both compiled fixtures
+passed as part of all 160 registered tests; exact source, Build ID and
+the known periphery-cache shader warning handling are preserved in the
+[validation report](open-shaders-dev-validation.md). Deployment and
+SE/AE/VR in-game checks have not run. Physical-HMD
+`csx-render-scale-pr-v1` qualification and comparable performance evidence
+remain pending. No in-game result or ledger measurement is claimed.

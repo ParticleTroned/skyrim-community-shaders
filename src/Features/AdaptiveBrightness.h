@@ -297,8 +297,6 @@ struct AdaptiveBrightness : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
-	/** Reports whether live weather-colour adjustment is available. */
-	virtual json GetDiagnostics() override;
 
 	bool IsRuntimeAvailable() const;
 	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.

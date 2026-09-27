@@ -237,8 +237,7 @@ reports only the saved Global offset.
 `adaptiveBalanceWeatherColorsAvailable` reports successful installation of
 the weather-color hook. Configured/effective brightness values describe
 the requested adjustment; availability does not establish that a weather
-update has applied it. Feature diagnostics also expose
-`weatherColorHookInstalled`.
+update has applied it. This status is exposed through `communityshaders.menu`.
 
 ## Regression coverage
 

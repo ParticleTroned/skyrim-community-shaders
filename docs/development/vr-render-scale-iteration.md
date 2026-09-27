@@ -23,11 +23,12 @@ TAA, preserving mask geometry, region sizes, tile ownership and other
 features' FOV weights. Effective changes reset history, and submit-eye
 output reuse checks the exponent.
 
-This is implementation evidence only. Source checks and extraction are
-recorded in the selective-sync review. Controller and WARP fixtures have
-been added but not compiled or run. Builds, shader compilation, deployment
-and SE/AE/VR runtime checks remain deferred until the sync ends by user
-instruction. Physical-HMD qualification and matched performance evidence
+Source checks and extraction are recorded in the selective-sync review.
+The end-of-sync universal DLL build and controller/WARP fixtures passed
+within all 160 registered tests; producer source, Build ID and shader
+diagnostic limitations are preserved in the
+[validation report](open-shaders-dev-validation.md). Deployment, SE/AE/VR
+in-game checks, physical-HMD qualification and matched performance evidence
 remain pending. No measurements or numbered ledger snapshot are created.
 
 ## September 27: typed per-eye depth implementation
@@ -41,12 +42,13 @@ subresources. Source identity, bounds and destination readiness are
 checked before dispatch. Input preparation cannot replace resources after
 their guides have been encoded.
 
-This is implementation evidence only. Source extraction and existing
-script contracts passed; the new D3D11 WARP fixture has not been compiled
-or run. Builds, shader compilation and SE/AE/VR runtime checks are deferred
-until the selective sync ends, as requested by the user. Physical-HMD
-qualification and matched performance evidence remain pending. No new
-measurements or numbered ledger snapshot are claimed or created.
+Source extraction and script contracts passed. The end-of-sync universal
+DLL build and new D3D11 WARP fixture also passed within all 160 registered
+tests; exact compiled source and Build ID are preserved in the
+[validation report](open-shaders-dev-validation.md). SE/AE/VR in-game
+checks, physical-HMD qualification and matched performance evidence
+remain pending. No new measurements or numbered ledger snapshot are
+claimed or created.
 
 ## September 20: native menu pointer overlay
 

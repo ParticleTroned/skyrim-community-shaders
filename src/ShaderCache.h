@@ -951,6 +951,11 @@ namespace SIE
 		}
 
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
+		/** @brief Releases one runtime variant; callers own bytecode, disk and task eviction. */
+		void EvictShaderResources(
+			RE::BSShader::Type a_type,
+			uint32_t a_descriptor,
+			ShaderClass a_shaderClass);
 		void EvictShader(
 			const std::string& a_key,
 			RE::BSShader::Type a_type,
@@ -963,8 +968,9 @@ namespace SIE
 		std::chrono::steady_clock::time_point activeShaderCaptureDeadline;
 		bool activeShaderCaptureMenuWasVisible = false;
 		std::atomic<std::thread::id> activeShaderCaptureThread{};
-		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> capturedShaders;
-		std::unordered_set<std::string> clearedThisCaptureCycle;
+		ankerl::unordered_dense::map<size_t, ActiveShaderInfo> capturedShaders;
+		std::unordered_set<size_t> clearedThisCaptureCycle;
+		std::unordered_set<std::string> clearedBytecodeThisCaptureCycle;
 		size_t lastScopedClearCount = 0;
 		double lastScopedClearMs = 0.0;
 

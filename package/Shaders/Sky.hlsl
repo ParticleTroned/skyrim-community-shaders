@@ -227,7 +227,11 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 
+#		if defined(CLOUDS)
+	float skyBrightnessMultiplier = SharedData::adaptiveBalanceSettings.cloudBrightness;
+#		else
 	float skyBrightnessMultiplier = SharedData::adaptiveBalanceSettings.skyBrightness;
+#		endif
 
 #		if defined(DITHER)
 #			if defined(VR)
@@ -284,9 +288,18 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
 
+#	if defined(DITHER) && defined(TEX) && !defined(OCCLUSION)
+	psout.Color.xyz *= SharedData::adaptiveBalanceSettings.sunGlareIntensity;
+#	endif
+
 #	if !defined(OCCLUSION) && !defined(MOONMASK)
-	if (SharedData::adaptiveBalanceSettings.skySaturation != 1.0)
-		psout.Color.xyz = Color::Saturation(psout.Color.xyz, SharedData::adaptiveBalanceSettings.skySaturation);
+#		if defined(CLOUDS)
+	float saturation = SharedData::adaptiveBalanceSettings.cloudSaturation;
+#		else
+	float saturation = SharedData::adaptiveBalanceSettings.skySaturation;
+#		endif
+	if (saturation != 1.0)
+		psout.Color.xyz = Color::Saturation(psout.Color.xyz, saturation);
 #	endif
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);

@@ -83,7 +83,12 @@ public static class UnifiedPresetPathIdentity
 
     public static string ResolveExisting(string path)
     {
-        using (var handle = CreateFileW(path, FileReadAttributes, ShareAll, IntPtr.Zero,
+        var nativePath = System.IO.Path.GetFullPath(path);
+        if (!nativePath.StartsWith(@"\\?\", StringComparison.Ordinal))
+            nativePath = nativePath.StartsWith(@"\\", StringComparison.Ordinal)
+                ? @"\\?\UNC\" + nativePath.Substring(2)
+                : @"\\?\" + nativePath;
+        using (var handle = CreateFileW(nativePath, FileReadAttributes, ShareAll, IntPtr.Zero,
             OpenExisting, BackupSemantics, IntPtr.Zero))
         {
             if (handle.IsInvalid)

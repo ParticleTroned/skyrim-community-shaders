@@ -370,7 +370,7 @@ bool Load()
 	}
 
 	if (REL::Module::IsVR()) {
-		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.207.0", true);
+		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.269.0", true);
 	}
 
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");

@@ -26,7 +26,7 @@ void RCAS::Initialize(bool enableMotionAdaptive)
 	if (!rcasComputeShader)
 		CreateComputeShader();
 	if (!rcasConfigCB)
-		rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<RCASConfig>());
+		rcasConfigCB = new ConstantBuffer(ConstantBufferDesc<RCASConfig>(), "Upscaling::RCASConfig");
 }
 
 void RCAS::ClearShaderCache()

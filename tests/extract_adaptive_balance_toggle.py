@@ -29,6 +29,8 @@ def extract(root, output):
     linear = read("LinearLighting.h")
     bloom = read("Bloom.cpp")
     water = read("WaterAppearance.cpp")
+    menu = (root / "src/MenuDevBenchBridge.cpp").read_text(encoding="utf-8-sig")
+    migrations = (root / "src/SettingsMigrations.cpp").read_text(encoding="utf-8-sig")
     output.mkdir(parents=True, exist_ok=True)
     (output / "linear_lighting_members.h").write_text(
         between(linear, "\tstruct Settings", "\tstruct alignas(16) PerFrameData"), encoding="utf-8")
@@ -39,6 +41,9 @@ def extract(root, output):
         + between(header, "\tmutable float smoothedWaterWindSpeed", "\n\tvirtual void DrawSettings()")
         + between(header, "\tvirtual bool SupportsPerformanceCostMeasurement()", "\n\tvirtual void LoadSettings").replace(" override", "")
         + between(header, "\tstruct ActiveProfileBlend", "\tProfile GetInteriorProfile()"), encoding="utf-8")
+    weather_hook = source[source.index("\tstruct Sky_UpdateColors\n"):]
+    (output / "adaptive_balance_weather_hook_under_test.h").write_text(
+        function(weather_hook, "\t\tstatic void thunk("), encoding="utf-8")
     bodies = [
         between(source, "AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::AdjustmentDefaults()", "namespace"),
         between(source, "\tconstexpr float kBrightnessMin", "\tconstexpr std::size_t kMaxOverrideHierarchyDepth"),
@@ -46,6 +51,10 @@ def extract(root, output):
         between(source, "\tfloat SafeFinite(", "\tfloat WrapHour("),
         between(source, "\tvoid SanitizeWaterWindSettings(AdaptiveBrightness::WaterWindSettings& a_settings)\n", "\tvoid NormalizeBaseSettings("),
         function(source, "\tvoid ClampProfileSettings("),
+        function(migrations, "bool SettingsMigrations::MigrateCloudProfileSettings("),
+        function(migrations, "bool SettingsMigrations::MigrateCloudSettingsLayer("),
+        function(source, "\tvoid MigrateLegacyProfileLighting("),
+        function(menu, "\tstd::string ValidateAdaptiveBalanceVisuals("),
         function(source, "bool AdaptiveBrightness::IsRuntimeAvailable()"),
         function(source, "void AdaptiveBrightness::SetEnabled("),
         function(source, "void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled("),
@@ -61,6 +70,11 @@ def extract(root, output):
         water[water.index("WaterAppearance::Settings WaterAppearance::GetCommonBufferData("):],
     ]
     (output / "adaptive_balance_under_test.h").write_text("\n".join(bodies), encoding="utf-8")
+    (output / "adaptive_balance_point_lights_under_test.h").write_text(
+        between(source, "\tconstexpr uint32_t kMaxVanillaPointLights", "\tconstexpr float kBrightnessMin")
+        + function(source, "void AdaptiveBrightness::UpdateVanillaPointLightData("), encoding="utf-8")
+    (output / "adaptive_balance_point_light_members.h").write_text(
+        between(header, "\tstruct alignas(16) VanillaPointLightData", "\tstruct EffectiveLinearLightingSettings"), encoding="utf-8")
 
 
 if __name__ == "__main__":

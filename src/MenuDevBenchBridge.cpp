@@ -1,4 +1,5 @@
 #include "MenuDevBenchBridge.h"
+#include "Features/Upscaling/FoveatedBlendPolicy.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
@@ -8,6 +9,7 @@
 #	include "Features/DynamicCubemaps.h"
 #	include "Features/ExtendedMaterials.h"
 #	include "Features/FoliageLighting.h"
+#	include "Features/LinearLighting.h"
 #	include "Features/ScreenSpaceGI.h"
 #	include "Features/ScreenSpaceShadows.h"
 #	include "Features/ScreenshotFeature.h"
@@ -332,7 +334,15 @@ namespace
 			double minimum;
 			double maximum;
 		};
-		static constexpr std::array<Field, 10> fields{ { { "skySaturation", 0.0, 2.0 },
+		static constexpr std::array<Field, 18> fields{ { { "skySaturation", 0.0, 2.0 },
+			{ "cloudBrightness", 0.0, 2.0 },
+			{ "cloudSaturation", 0.0, 2.0 },
+			{ "cloudGammaOffset", -1.0, 1.0 },
+			{ "fogIntensity", 0.0, 5.0 },
+			{ "sunGlareIntensity", 0.0, 5.0 },
+			{ "effectBrightness", 0.0, 2.0 },
+			{ "skyStaticBrightness", 0.0, 2.0 },
+			{ "skyStaticTransparency", 0.0, 1.0 },
 			{ "contrast", 0.5, 2.0 },
 			{ "saturation", 0.0, 2.0 },
 			{ "ambient", 0.0, 5.0 },
@@ -375,6 +385,14 @@ namespace
 		};
 		auto configured = waterFields(profile.water);
 		configured["skySaturation"] = profile.skySaturation;
+		configured["cloudBrightness"] = profile.cloudBrightnessMult;
+		configured["cloudSaturation"] = profile.cloudSaturation;
+		configured["cloudGammaOffset"] = profile.cloudGammaOffset;
+		configured["fogIntensity"] = profile.fogIntensity;
+		configured["sunGlareIntensity"] = profile.sunGlareIntensity;
+		configured["effectBrightness"] = profile.effectBrightness;
+		configured["skyStaticBrightness"] = profile.skyStaticBrightness;
+		configured["skyStaticTransparency"] = profile.skyStaticTransparency;
 		configured["contrast"] = profile.contrast;
 		configured["saturation"] = profile.saturation;
 		configured["ambient"] = profile.ambientMult;
@@ -382,10 +400,34 @@ namespace
 		auto effective = waterFields(balance.GetEffectiveWaterAppearanceSettings());
 		const auto lighting = balance.GetEffectiveSharedLightingSettings();
 		effective["skySaturation"] = lighting.skySaturation;
+		effective["cloudBrightness"] = lighting.cloudBrightness;
+		effective["cloudSaturation"] = lighting.cloudSaturation;
+		const auto& linear = globals::features::linearLighting;
+		effective["cloudGamma"] = balance.GetEffectiveLinearLightingSettings(linear.settings, linear.IsRuntimeEnabled()).settings.cloudGamma;
+		effective["fogIntensity"] = lighting.fogIntensity;
+		effective["sunGlareIntensity"] = lighting.sunGlareIntensity;
+		effective["effectBrightness"] = lighting.effectBrightness;
+		effective["skyStaticBrightness"] = lighting.skyStaticBrightness;
+		effective["skyStaticTransparency"] = lighting.skyStaticTransparency;
 		effective["contrast"] = lighting.contrast;
 		effective["saturation"] = lighting.saturation;
 		effective["ambient"] = lighting.ambientMult;
 		return { { "global", std::move(configured) }, { "effective", std::move(effective) } };
+	}
+
+	std::string ValidateFovBlendCurve(const json& a_args)
+	{
+		if (!a_args.contains("enabled") || !a_args.at("enabled").is_boolean())
+			return "set_fov_blend_curve requires boolean enabled";
+		if (a_args.contains("falloff")) {
+			const auto& value = a_args.at("falloff");
+			if (!value.is_number())
+				return "falloff must be a finite number in [0.5,2]";
+			const double falloff = value.get<double>();
+			if (!std::isfinite(falloff) || falloff < FoveatedBlendPolicy::MinFalloff || falloff > FoveatedBlendPolicy::MaxFalloff)
+				return "falloff must be a finite number in [0.5,2]";
+		}
+		return {};
 	}
 
 	json FovSettingsStatus()
@@ -397,6 +439,12 @@ namespace
 		return {
 			{ "enabled", upscaling.settings.foveatedVendorDispatch },
 			{ "maskActive", maskActive },
+			{ "blendCurve", {
+								{ "enabled", upscaling.settings.foveatedBlendCurveEnabled },
+								{ "falloff", upscaling.settings.foveatedBlendFalloff },
+								{ "effectiveFalloff", upscaling.GetFoveatedBlendFalloff() },
+								{ "applicable", maskActive },
+							} },
 			{ "ssgiSelected", ssgi.settings.EnableFoveated },
 			{ "ssgiAvailable", maskActive && ssgi.IsRuntimeEnabled() && !ssgi.settings.ExperimentalOCUEffectFoveation },
 			{ "screenSpaceShadowsSelected", shadows.bendSettings.EnableFoveated != 0 },
@@ -487,6 +535,7 @@ namespace
 			{ "depthCullingLegacyMode", vr.settings.DepthCullingLegacyMode },
 			{ "adaptiveBalanceEnabled", globals::features::adaptiveBrightness.settings.enabled },
 			{ "adaptiveBalanceActive", globals::features::adaptiveBrightness.IsRuntimeEnabled() },
+			{ "adaptiveBalanceWeatherColorsAvailable", globals::features::adaptiveBrightness.weatherColorHookInstalled },
 			{ "adaptiveBalanceVisuals", AdaptiveBalanceVisualsStatus() },
 			{ "foliageLightingEnabled", globals::features::foliageLighting.IsEnabled() },
 			{ "motionAdaptiveSharpening", MotionSharpeningStatus() },
@@ -527,11 +576,11 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
-		if (action != "status" && action != "open" && action != "open_vr_fov" && action != "set_fov_enabled" && action != "close" && action != "screenshot" && action != "set_path" && action != "set_layout_unlocked" && action != "texture_stats" && action != "set_depth_culling_settings" && action != "set_depth_culling_legacy_mode" && action != "set_depth_culling_telemetry_enabled" && action != "reset_depth_culling_telemetry" && action != "set_adaptive_balance_enabled" && action != "set_adaptive_balance_visuals" && action != "set_foliage_lighting_enabled" && action != "set_terrain_variation_mesh_enabled" && action != "set_truepbr_verbose_json_logging" && action != "set_dynamic_cubemap_resolution" && action != "prepare_coc" && action != "prepare_tuning" && action != "set_motion_adaptive_sharpening" && action != "set_parallax_strength") {
+		if (action != "status" && action != "open" && action != "open_vr_fov" && action != "set_fov_enabled" && action != "set_fov_blend_curve" && action != "close" && action != "screenshot" && action != "set_path" && action != "set_layout_unlocked" && action != "texture_stats" && action != "set_depth_culling_settings" && action != "set_depth_culling_legacy_mode" && action != "set_depth_culling_telemetry_enabled" && action != "reset_depth_culling_telemetry" && action != "set_adaptive_balance_enabled" && action != "set_adaptive_balance_visuals" && action != "set_foliage_lighting_enabled" && action != "set_terrain_variation_mesh_enabled" && action != "set_truepbr_verbose_json_logging" && action != "set_dynamic_cubemap_resolution" && action != "prepare_coc" && action != "prepare_tuning" && action != "set_motion_adaptive_sharpening" && action != "set_parallax_strength") {
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "open", "open_vr_fov", "set_fov_enabled", "close", "screenshot", "set_path", "set_layout_unlocked", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength" }) },
+				{ "supported", json::array({ "status", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -591,6 +640,13 @@ namespace
 				return { { "error", "adjustment must be [-1,1], thresholdPixels [0,64], and strengthCap [0,1]; all must be finite" }, { "action", action } };
 			}
 		}
+		if (action == "set_fov_blend_curve") {
+			const auto error = ValidateFovBlendCurve(a_args);
+			if (!error.empty())
+				return { { "error", error }, { "action", action } };
+		}
+		const bool hasFalloff = action == "set_fov_blend_curve" && a_args.contains("falloff");
+		const float falloff = hasFalloff ? a_args.at("falloff").get<float>() : FoveatedBlendPolicy::NeutralFalloff;
 		const bool enabled = a_args.value("enabled", false);
 		const uint32_t resolution = a_args.value("resolution", 0u);
 		if (action == "set_dynamic_cubemap_resolution" &&
@@ -603,7 +659,7 @@ namespace
 			};
 		}
 
-		return RunOnMainThread([action, path, enabled, resolution, motionSharpening, visuals, depthCulling, parallaxStrength]() -> json {
+		return RunOnMainThread([action, path, enabled, resolution, motionSharpening, visuals, depthCulling, hasFalloff, falloff, parallaxStrength]() -> json {
 			if ((action == "set_depth_culling_settings" || action == "set_depth_culling_legacy_mode") && !globals::game::isVR)
 				return { { "error", "Depth-culling settings require Skyrim VR" }, { "errorCode", "skyrim_vr_required" }, { "action", action } };
 			if (action == "prepare_coc")
@@ -630,6 +686,12 @@ namespace
 			if (action == "set_fov_enabled") {
 				if (!globals::features::upscaling.SetFoveatedUpscalingEnabled(enabled))
 					return { { "error", "FOV requires loaded VR Upscaling; enabling also requires DLSS or FSR" }, { "errorCode", "vr_fov_unavailable" }, { "action", action } };
+				return { { "action", action }, { "persisted", false }, { "fov", FovSettingsStatus() } };
+			}
+			if (action == "set_fov_blend_curve") {
+				auto& upscaling = globals::features::upscaling;
+				if (!upscaling.SetFoveatedBlendCurve(enabled, hasFalloff ? falloff : upscaling.settings.foveatedBlendFalloff))
+					return { { "error", "FOV blend curve requires loaded VR Upscaling" }, { "errorCode", "vr_fov_unavailable" }, { "action", action } };
 				return { { "action", action }, { "persisted", false }, { "fov", FovSettingsStatus() } };
 			}
 			if (action == "set_motion_adaptive_sharpening") {
@@ -701,6 +763,14 @@ namespace
 					return { { "error", "Adaptive Balance is not loaded" }, { "action", action } };
 				auto profile = balance.settings.globalProfile;
 				profile.skySaturation = visuals.value("skySaturation", profile.skySaturation);
+				profile.cloudBrightnessMult = visuals.value("cloudBrightness", profile.cloudBrightnessMult);
+				profile.cloudSaturation = visuals.value("cloudSaturation", profile.cloudSaturation);
+				profile.cloudGammaOffset = visuals.value("cloudGammaOffset", profile.cloudGammaOffset);
+				profile.fogIntensity = visuals.value("fogIntensity", profile.fogIntensity);
+				profile.sunGlareIntensity = visuals.value("sunGlareIntensity", profile.sunGlareIntensity);
+				profile.effectBrightness = visuals.value("effectBrightness", profile.effectBrightness);
+				profile.skyStaticBrightness = visuals.value("skyStaticBrightness", profile.skyStaticBrightness);
+				profile.skyStaticTransparency = visuals.value("skyStaticTransparency", profile.skyStaticTransparency);
 				profile.contrast = visuals.value("contrast", profile.contrast);
 				profile.saturation = visuals.value("saturation", profile.saturation);
 				profile.ambientMult = visuals.value("ambient", profile.ambientMult);
@@ -786,7 +856,7 @@ namespace MenuDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, independent exterior/interior depth-culling settings, Advanced/Legacy policy and recovery telemetry, Adaptive Balance and Foliage Lighting runtime state, TruePBR verbose JSON logging, dynamic cubemap resolution, and optional DLSS/DLAA RCAS and Luma Unsharp motion-adaptive sharpening. set_parallax_strength requires finite numeric strength in [0,2] and loaded Extended Materials. It stages live mesh and terrain parallax depth and self-shadow sampling, including TruePBR; 1 preserves authored depth, 0 disables depth and self-shadows while retaining terrain height blending. Water is independent. It does not enable material features or save settings. status reports parallaxStrength and extendedMaterialsLoaded. set_terrain_variation_mesh_enabled requires boolean enabled and stages mesh anti-tiling until settings are saved; enabling requires Terrain Variation to be loaded. status reports terrainVariationMeshEnabled and terrainVariationMeshActive. This control supports SE, AE and VR. set_adaptive_balance_enabled requires boolean enabled and stages the Adaptive Balance master toggle until settings are saved. Off bypasses all its Global, profile, and location lighting, color, Bloom, water, and wind response adjustments while preserving engine wind and independent renderer features. status reports adaptiveBalanceEnabled and adaptiveBalanceActive. set_motion_adaptive_sharpening applies signed strength adjustment above a threshold in output pixels per frame, capped on the 0-1 sharpness scale; it requires all four settings and stages them until settings are saved. The selected fixed sharpener is used without valid current motion; status reports the selected sharpener, last dispatch result and current applicability. FSR sharpening is unchanged. The screenshot action is obsolete and retained temporarily for migration; use communityshaders.screenshot contractMajor 1 instead. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. set_depth_culling_settings requires a nonempty depthCulling object with exteriorEnabled, interiorEnabled, exteriorMinExtent and/or interiorMinExtent; extents must be finite numbers in [0,1000]. Unknown fields reject the whole update. Exterior and interior controls are independent. set_depth_culling_legacy_mode selects Legacy when enabled and Advanced when disabled; this choice persists after leaving Debug mode when settings are saved. status.depthCullingConfiguredPolicy and depthCullingTemporal.policy retain the historical machine value balanced for Advanced. Both setters require Skyrim VR and stage changes until settings are saved. Depth-culling telemetry controls affect measurements only, never culling policy. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. prepare_tuning applies the same runtime-only fixture in-game without requiring VR FPS Stabilizer profile sync. Neither preparation action changes cells. open_vr_fov opens the menu and queues navigation to the VR FOV tab, reveals that feature's Advanced settings, clears the feature search and expands its category without changing graphics settings. It requires loaded, enabled Skyrim VR settings. set_fov_enabled requires boolean enabled and uses the same VR FOV switch as the menu. Turning FOV on selects SSGI FOV and Screen Space Shadows FOV without enabling their parent effects; repeated enabled=true preserves individual choices. Turning FOV off keeps the child selections. Requires loaded VR Upscaling and DLSS/FSR when enabling. Does not save settings. status.fov and the setter response report selections and control availability. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build. set_adaptive_balance_visuals stages a partial update to the Global Adaptive Balance profile using a nonempty visuals object; values must be finite and within schema bounds, and unknown fields reject the whole update. It does not enable Adaptive Balance or save settings. ambient and skySaturation are under Lighting and require that layer's detailed lighting controls; ambient scales the final vanilla or IBL ambient contribution once, independently of DALC matching; optional lightingAdvanced controls that existing switch. contrast and saturation belong to Color, are independent of lightingAdvanced and Linear Lighting, and grade the composed scene including bloom before fades. Both default to 1; contrast uses a hue-preserving luminance curve around middle gray, and saturation 0 makes the scene monochrome. The six caustics/parallax fields belong to Water. status.adaptiveBalanceVisuals reports configured Global values and effective composed values. Water Effects and water-parallax shader features must be loaded for their respective controls to affect rendering.","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","open_vr_fov","set_fov_enabled","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_settings","set_depth_culling_legacy_mode","set_depth_culling_telemetry_enabled","reset_depth_culling_telemetry","set_adaptive_balance_enabled","set_adaptive_balance_visuals","set_foliage_lighting_enabled","set_terrain_variation_mesh_enabled","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc","prepare_tuning","set_motion_adaptive_sharpening","set_parallax_strength"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"adjustment":{"type":"number","minimum":-1,"maximum":1,"description":"Signed RCAS or Luma Unsharp sharpness adjustment in motion."},"thresholdPixels":{"type":"number","minimum":0,"maximum":64,"description":"Motion threshold in output pixels per frame."},"strength":{"type":"number","minimum":0,"maximum":2,"description":"Global Extended Materials parallax depth; 1 is neutral, 0 disables depth and self-shadows. Water is separate."},"strengthCap":{"type":"number","minimum":0,"maximum":1,"description":"Maximum adjusted strength on the DLSS sharpness slider scale."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."},"depthCulling":{"type":"object","minProperties":1,"additionalProperties":false,"properties":{"exteriorEnabled":{"type":"boolean"},"interiorEnabled":{"type":"boolean"},"exteriorMinExtent":{"type":"number","minimum":0,"maximum":1000},"interiorMinExtent":{"type":"number","minimum":0,"maximum":1000}}},"visuals":{"type":"object","minProperties":1,"additionalProperties":false,"properties":{"lightingAdvanced":{"type":"boolean"},"skySaturation":{"type":"number","minimum":0,"maximum":2},"contrast":{"type":"number","minimum":0.5,"maximum":2},"saturation":{"type":"number","minimum":0,"maximum":2},"ambient":{"type":"number","minimum":0,"maximum":5},"causticsStrength":{"type":"number","minimum":0,"maximum":2},"causticsTiling":{"type":"number","minimum":0.25,"maximum":4},"causticsSpeed":{"type":"number","minimum":0,"maximum":3},"causticsDispersion":{"type":"number","minimum":0,"maximum":2},"parallaxStrength":{"type":"number","minimum":0,"maximum":2},"parallaxQuality":{"type":"integer","minimum":4,"maximum":64}}}}}})";
+			R"({"description":"Inspect and control the CSX VR menu, desktop/headset layout lock, independent exterior/interior depth-culling settings, Advanced/Legacy policy and recovery telemetry, Adaptive Balance and Foliage Lighting runtime state, TruePBR verbose JSON logging, dynamic cubemap resolution, and optional DLSS/DLAA RCAS and Luma Unsharp motion-adaptive sharpening. set_parallax_strength requires finite numeric strength in [0,2] and loaded Extended Materials. It stages live mesh and terrain parallax depth and self-shadow sampling, including TruePBR; 1 preserves authored depth, 0 disables depth and self-shadows while retaining terrain height blending. Water is independent. It does not enable material features or save settings. status reports parallaxStrength and extendedMaterialsLoaded. set_terrain_variation_mesh_enabled requires boolean enabled and stages mesh anti-tiling until settings are saved; enabling requires Terrain Variation to be loaded. status reports terrainVariationMeshEnabled and terrainVariationMeshActive. This control supports SE, AE and VR. set_adaptive_balance_enabled requires boolean enabled and stages the Adaptive Balance master toggle until settings are saved. Off bypasses all its Global, profile, and location lighting, color, Bloom, water, and wind response adjustments while preserving engine wind and independent renderer features. status reports adaptiveBalanceEnabled and adaptiveBalanceActive. set_motion_adaptive_sharpening applies signed strength adjustment above a threshold in output pixels per frame, capped on the 0-1 sharpness scale; it requires all four settings and stages them until settings are saved. The selected fixed sharpener is used without valid current motion; status reports the selected sharpener, last dispatch result and current applicability. FSR sharpening is unchanged. The screenshot action is obsolete and retained temporarily for migration; use communityshaders.screenshot contractMajor 1 instead. set_layout_unlocked enables desktop move, resize, and docking plus headset custom placement and grip dragging. Resolution changes are staged in memory; save settings and restart to apply them. set_depth_culling_settings requires a nonempty depthCulling object with exteriorEnabled, interiorEnabled, exteriorMinExtent and/or interiorMinExtent; extents must be finite numbers in [0,1000]. Unknown fields reject the whole update. Exterior and interior controls are independent. set_depth_culling_legacy_mode selects Legacy when enabled and Advanced when disabled; this choice persists after leaving Debug mode when settings are saved. status.depthCullingConfiguredPolicy and depthCullingTemporal.policy retain the historical machine value balanced for Advanced. Both setters require Skyrim VR and stage changes until settings are saved. Depth-culling telemetry controls affect measurements only, never culling policy. prepare_coc is a one-shot pre-assay gate: it requires in-game Skyrim VR and startup-active VR FPS Stabilizer profile sync, then enables runtime-only developer mode and the fixed FOV plus TAA 0.3/0.7 fixture without saving settings. prepare_tuning applies the same runtime-only fixture in-game without requiring VR FPS Stabilizer profile sync. Neither preparation action changes cells. open_vr_fov opens the menu and queues navigation to the VR FOV tab, reveals that feature's Advanced settings, clears the feature search and expands its category without changing graphics settings. It requires loaded, enabled Skyrim VR settings. set_fov_enabled requires boolean enabled and uses the same VR FOV switch as the menu. Turning FOV on selects SSGI FOV and Screen Space Shadows FOV without enabling their parent effects; repeated enabled=true preserves individual choices. Turning FOV off keeps the child selections. Requires loaded VR Upscaling and DLSS/FSR when enabling. Does not save settings. status.fov and the setter response report selections and control availability. Every response identifies the exact producing DLL. expectedBuildId makes requests fail closed when the loaded binary is not the intended build. set_adaptive_balance_visuals stages a partial update to the Global Adaptive Balance profile using a nonempty visuals object; values must be finite and within schema bounds, and unknown fields reject the whole update. It does not enable Adaptive Balance or save settings. ambient and skySaturation are under Lighting and require that layer's detailed lighting controls; ambient scales the final vanilla or IBL ambient contribution once, independently of DALC matching; optional lightingAdvanced controls that existing switch. contrast and saturation belong to Color, are independent of lightingAdvanced and Linear Lighting, and grade the composed scene including bloom before fades. Both default to 1; contrast uses a hue-preserving luminance curve around middle gray, and saturation 0 makes the scene monochrome. The six caustics/parallax fields belong to Water. status.adaptiveBalanceVisuals reports configured Global values and effective composed values. Water Effects and water-parallax shader features must be loaded for their respective controls to affect rendering. Cloud brightness, saturation and gamma are independent of sky controls. fogIntensity scales vanilla distance-fog opacity, effectBrightness and skyStaticBrightness scale the current weather's Effect Lighting and Sky Statics colors once after engine color updates; 1 preserves weather/editor colors, and the existing Effects lighting multiplier is independent. skyStaticTransparency fades sky-static effect meshes, and sunGlareIntensity scales glare already drawn; it does not restore missing glare or weather lens flares. These eight atmosphere fields require lightingAdvanced for the Global layer, support SE/AE/VR and default to neutral except migrated cloud values inherit saved sky adjustments. status.adaptiveBalanceWeatherColorsAvailable reports whether the weather-color hook installed; on failure those two weather brightness controls leave native colors unchanged. status.adaptiveBalanceVisuals.effective.cloudGamma reports the composed gamma, including the active Linear Lighting baseline and profile layers. set_fov_blend_curve requires boolean enabled and optional finite falloff in [0.5,2]. It stages the VR FOV Blend Curve checkbox and remembered exponent without enabling FOV or saving settings; omitted falloff preserves the saved value. Off or exponent 1 restores legacy feathering. Applies to both FOV-only and FOV + TAA, retaining mask geometry and transition width. Changes reset affected history. Requires loaded VR Upscaling; status.fov.blendCurve reports enabled, saved falloff, effectiveFalloff and applicability.","inputSchema":{"type":"object","properties":{"action":{"type":"string","description":"screenshot is obsolete; use communityshaders.screenshot contractMajor 1 action capture","enum":["status","open","open_vr_fov","set_fov_enabled","set_fov_blend_curve","close","screenshot","set_path","set_layout_unlocked","texture_stats","set_depth_culling_settings","set_depth_culling_legacy_mode","set_depth_culling_telemetry_enabled","reset_depth_culling_telemetry","set_adaptive_balance_enabled","set_adaptive_balance_visuals","set_foliage_lighting_enabled","set_terrain_variation_mesh_enabled","set_truepbr_verbose_json_logging","set_dynamic_cubemap_resolution","prepare_coc","prepare_tuning","set_motion_adaptive_sharpening","set_parallax_strength"],"default":"status"},"path":{"type":"string","enum":["auto","overlay","in_scene"]},"enabled":{"type":"boolean","description":"Boolean state required by a setter action."},"adjustment":{"type":"number","minimum":-1,"maximum":1,"description":"Signed RCAS or Luma Unsharp sharpness adjustment in motion."},"thresholdPixels":{"type":"number","minimum":0,"maximum":64,"description":"Motion threshold in output pixels per frame."},"strengthCap":{"type":"number","minimum":0,"maximum":1,"description":"Maximum adjusted strength on the DLSS sharpness slider scale."},"resolution":{"type":"integer","enum":[128,256],"description":"Dynamic cubemap resolution staged for the next game restart."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."},"depthCulling":{"type":"object","minProperties":1,"additionalProperties":false,"properties":{"exteriorEnabled":{"type":"boolean"},"interiorEnabled":{"type":"boolean"},"exteriorMinExtent":{"type":"number","minimum":0,"maximum":1000},"interiorMinExtent":{"type":"number","minimum":0,"maximum":1000}}},"visuals":{"type":"object","minProperties":1,"additionalProperties":false,"properties":{"lightingAdvanced":{"type":"boolean"},"skySaturation":{"type":"number","minimum":0,"maximum":2},"contrast":{"type":"number","minimum":0.5,"maximum":2},"saturation":{"type":"number","minimum":0,"maximum":2},"ambient":{"type":"number","minimum":0,"maximum":5},"causticsStrength":{"type":"number","minimum":0,"maximum":2},"causticsTiling":{"type":"number","minimum":0.25,"maximum":4},"causticsSpeed":{"type":"number","minimum":0,"maximum":3},"causticsDispersion":{"type":"number","minimum":0,"maximum":2},"parallaxStrength":{"type":"number","minimum":0,"maximum":2},"parallaxQuality":{"type":"integer","minimum":4,"maximum":64},"cloudBrightness":{"type":"number","minimum":0,"maximum":2},"cloudSaturation":{"type":"number","minimum":0,"maximum":2},"cloudGammaOffset":{"type":"number","minimum":-1,"maximum":1},"fogIntensity":{"type":"number","minimum":0,"maximum":5},"sunGlareIntensity":{"type":"number","minimum":0,"maximum":5},"effectBrightness":{"type":"number","minimum":0,"maximum":2},"skyStaticBrightness":{"type":"number","minimum":0,"maximum":2},"skyStaticTransparency":{"type":"number","minimum":0,"maximum":1}}},"falloff":{"type":"number","minimum":0.5,"maximum":2,"description":"Optional FOV blend exponent; 1 is neutral. Omission preserves the saved value."},"strength":{"type":"number","minimum":0,"maximum":2,"description":"Global Extended Materials parallax depth; 1 is neutral, 0 disables depth and self-shadows. Water is separate."}}}})";
 		devBench->RegisterTool("communityshaders.menu", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("MenuDevBenchBridge: registered communityshaders.menu with devbench build {}", devBench->GetBuildNumber());

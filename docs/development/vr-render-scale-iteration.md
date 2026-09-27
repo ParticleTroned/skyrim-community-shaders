@@ -13,6 +13,43 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 27: optional FOV blend curve implementation
+
+The selective [Open Shaders #778 port](fov-blend-curve.md) adds an in-game
+FOV checkbox, off by default, and a remembered 0.5-2 falloff exponent.
+Neutral or disabled retains existing feathering. The curve affects the
+center/periphery transition in main and submit compositors and periphery
+TAA, preserving mask geometry, region sizes, tile ownership and other
+features' FOV weights. Effective changes reset history, and submit-eye
+output reuse checks the exponent.
+
+Source checks and extraction are recorded in the selective-sync review.
+The end-of-sync universal DLL build and controller/WARP fixtures passed
+within all 160 registered tests; producer source, Build ID and shader
+diagnostic limitations are preserved in the
+[validation report](open-shaders-dev-validation.md). Deployment, SE/AE/VR
+in-game checks, physical-HMD qualification and matched performance evidence
+remain pending. No measurements or numbered ledger snapshot are created.
+
+## September 27: typed per-eye depth implementation
+
+The selective [Open Shaders #769 port](open-shaders-dev-sync.md#769-typed-per-eye-foveated-depth-accepted)
+reuses the guide encoder to write native depth values into R32_FLOAT
+per-eye textures for VR DLSS. FSR retains its existing typed output;
+periphery TAA copies that output when needed. Foveated crops consequently
+copy typed colour-format resources rather than boxed depth-stencil
+subresources. Source identity, bounds and destination readiness are
+checked before dispatch. Input preparation cannot replace resources after
+their guides have been encoded.
+
+Source extraction and script contracts passed. The end-of-sync universal
+DLL build and new D3D11 WARP fixture also passed within all 160 registered
+tests; exact compiled source and Build ID are preserved in the
+[validation report](open-shaders-dev-validation.md). SE/AE/VR in-game
+checks, physical-HMD qualification and matched performance evidence
+remain pending. No new measurements or numbered ledger snapshot are
+claimed or created.
+
 ## September 20: native menu pointer overlay
 
 The [native pointer correction](vr-menu-pointer-overlay.md) captures only

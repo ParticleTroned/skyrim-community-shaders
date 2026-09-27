@@ -382,6 +382,14 @@ only the exact trace session ID returned to this runner. A lost start response
 is an infrastructure failure; cleanup does not adopt or stop whichever global
 trace happens to be active.
 
+For evaluation records, `eOk` and `eWarnOutOfVRAM` are successful results.
+Streamline emits the latter only after successful evaluation when the VRAM
+budget is exhausted. The raw warning code remains visible, but it does not
+increment `evaluateFailures` or replace the pinned evaluation failure. Report
+the budget warning separately; it does not establish healthy memory usage or
+waive any memory, timing or other health gate. Constants-stage success still
+requires `eOk`, and other evaluation errors remain failures.
+
 Assay 2 reports the same descriptive statistics as assay 1, overall and by
 method and render-scale state.
 

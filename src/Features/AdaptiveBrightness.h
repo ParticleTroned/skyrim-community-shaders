@@ -91,6 +91,13 @@ struct AdaptiveBrightness : Feature
 
 		float skyBrightnessMult = 1.0f;
 		float skySaturation = 1.0f;
+		float cloudBrightnessMult = 1.0f;
+		float cloudSaturation = 1.0f;
+		float fogIntensity = 1.0f;
+		float sunGlareIntensity = 1.0f;
+		float effectBrightness = 1.0f;
+		float skyStaticBrightness = 1.0f;
+		float skyStaticTransparency = 0.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
 		float linearPointLightMult = 1.0f;
@@ -104,6 +111,7 @@ struct AdaptiveBrightness : Feature
 		float effectLightingMult = 1.0f;
 
 		float skyGammaOffset = 0.0f;
+		float cloudGammaOffset = 0.0f;
 		float fogGammaOffset = 0.0f;
 		float fogAlphaGammaOffset = 0.0f;
 		float waterGammaOffset = 0.0f;
@@ -170,13 +178,23 @@ struct AdaptiveBrightness : Feature
 		float ambientMult;
 		float contrast;
 		float saturation;
+		float cloudBrightness;
+		float cloudSaturation;
+		float fogIntensity;
+		float sunGlareIntensity;
+		float weatherColorPadding = 0.0f;
+		float skyStaticTransparency;
+		float pad[2]{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 48);
+	static_assert(sizeof(PerFrameData) == 80);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);
 	static_assert(offsetof(PerFrameData, contrast) == 40);
 	static_assert(offsetof(PerFrameData, saturation) == 44);
+	static_assert(offsetof(PerFrameData, cloudBrightness) == 48);
+	static_assert(offsetof(PerFrameData, fogIntensity) == 56);
+	static_assert(offsetof(PerFrameData, skyStaticTransparency) == 68);
 
 	struct alignas(16) VanillaPointLightData
 	{
@@ -259,6 +277,7 @@ struct AdaptiveBrightness : Feature
 	mutable uint32_t smoothedWaterWindFrame = 0;
 	mutable bool waterWindSmoothingInitialized = false;
 	bool performanceCostMeasurementEnabled = true;
+	bool weatherColorHookInstalled = false;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }

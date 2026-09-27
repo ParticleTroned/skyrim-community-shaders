@@ -40,7 +40,7 @@ namespace
 		                          editor->GetLockedWeather() :
 		                          nullptr;
 
-		sky->ForceWeather(weather, true);
+		EditorWindow::ForceWeather(sky, weather, true);
 		sky->ReleaseWeatherOverride();
 
 		if (lockedWeather)

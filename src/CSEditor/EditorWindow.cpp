@@ -6,6 +6,7 @@
 #include "PaletteWindow.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Game.h"
 #include "Utils/Subrect.h"
 #include "Utils/UI.h"
 #include "Weather/LightingTemplateWidget.h"
@@ -1951,12 +1952,7 @@ namespace
 		if (!sky || !weather)
 			return;
 
-		// Once the entry point is detoured, call the trampoline instead of re-entering
-		// ForceWeatherHook::thunk. Before installation, the normal method is the fallback.
-		if (ForceWeatherHook::func.address() != 0)
-			ForceWeatherHook::func(sky, weather, true);
-		else
-			sky->ForceWeather(weather, true);
+		EditorWindow::ForceWeather(sky, weather, true);
 	}
 
 	void SetWeatherHook::thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride, bool accelerate)
@@ -1980,12 +1976,26 @@ namespace
 
 	void ForceWeatherHook::thunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride)
 	{
-		if (auto* locked = GetActiveWeatherLock())
-			func(sky, locked, true);
-		else
-			func(sky, weather, isOverride);
+		EditorWindow::ForceWeather(sky, weather, isOverride);
 	}
 }  // namespace
+
+void EditorWindow::ForceWeather(RE::Sky* a_sky, RE::TESWeather* a_weather, bool a_override)
+{
+	if (!a_sky)
+		return;
+	if (auto* locked = GetActiveWeatherLock()) {
+		a_weather = locked;
+		a_override = true;
+	}
+
+	// The saved native entry/trampoline avoids re-entering the installed detour.
+	if (ForceWeatherHook::func.address() != 0)
+		ForceWeatherHook::func(a_sky, a_weather, a_override);
+	else
+		a_sky->ForceWeather(a_weather, a_override);
+	Util::RefreshForcedWeatherSky(a_sky);
+}
 
 void EditorWindow::InstallWeatherLockHooks()
 {
@@ -2224,7 +2234,15 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
 	if (!calendar || !calendar->gameHour)
 		return false;
-	ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
+	float hour = calendar->gameHour->value;
+	if (ImGui::SliderFloat(label, &hour, 0.0f, kGameHourMax, format) &&
+		std::isfinite(hour) && hour >= 0.0f && hour <= kGameHourMax) {
+		auto* sky = globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton();
+		// Backward clock edits otherwise resemble a midnight wrap and expire the weather override.
+		if (sky && GetActiveWeatherLock())
+			sky->lastWeatherUpdate = hour;
+		calendar->gameHour->value = hour;
+	}
 	return true;
 }
 

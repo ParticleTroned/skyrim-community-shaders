@@ -72,12 +72,21 @@ namespace
 			auto* balance = feature->reflection->GetVariableByName("SharedData::adaptiveBalanceSettings");
 			D3D11_SHADER_VARIABLE_DESC desc{};
 			Check(balance->GetDesc(&desc));
-			Require(desc.Size == 48, "Adaptive Balance buffer size changed");
-			for (auto [name, offset] : { std::pair{ "contrast", 40u }, std::pair{ "saturation", 44u } }) {
+			Require(desc.Size == 80, "Adaptive Balance buffer size changed");
+			for (auto [name, offset] : { std::pair{ "contrast", 40u }, std::pair{ "saturation", 44u },
+					 std::pair{ "cloudBrightness", 48u }, std::pair{ "cloudSaturation", 52u },
+					 std::pair{ "fogIntensity", 56u }, std::pair{ "sunGlareIntensity", 60u },
+					 std::pair{ "weatherColorPadding", 64u }, std::pair{ "skyStaticTransparency", 68u } }) {
 				D3D11_SHADER_TYPE_DESC member{};
 				Check(balance->GetType()->GetMemberTypeByName(name)->GetDesc(&member));
-				Require(member.Offset == offset, "Color buffer layout differs from C++");
+				Require(member.Offset == offset, "Adaptive Balance buffer layout differs from C++");
 			}
+			auto* linear = feature->reflection->GetVariableByName("SharedData::linearLightingSettings");
+			Check(linear->GetDesc(&desc));
+			Require(desc.Size == 112, "Linear Lighting buffer size changed");
+			D3D11_SHADER_TYPE_DESC gamma{};
+			Check(linear->GetType()->GetMemberTypeByName("cloudGamma")->GetDesc(&gamma));
+			Require(gamma.Offset == 104, "Cloud gamma buffer layout differs from C++");
 			D3D11_TEXTURE2D_DESC texture{};
 			texture.Width = 8;
 			texture.Height = texture.MipLevels = texture.ArraySize = texture.SampleDesc.Count = 1;

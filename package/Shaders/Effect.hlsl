@@ -548,9 +548,9 @@ float3 GetEffectAmbientLighting(float skylightingDiffuse)
 #	endif
 
 #	if defined(SKYLIGHTING)
-	ambientColor = Color::IrradianceToLinear(ambientColor);
-	ambientColor *= skylightingDiffuse;
-	ambientColor = Color::IrradianceToGamma(ambientColor);
+		ambientColor = Color::IrradianceToLinear(ambientColor);
+		ambientColor *= skylightingDiffuse;
+		ambientColor = Color::IrradianceToGamma(ambientColor);
 #	endif
 
 #	if defined(IBL)
@@ -821,6 +821,17 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
 
+#	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
+	const bool isSkyStatic = Color::IsSceneColorDraw() && (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && lightingInfluence == 1.0;
+#	else
+	const bool isSkyStatic = false;
+#	endif
+	const float skyStaticTransparency = isSkyStatic ? SharedData::adaptiveBalanceSettings.skyStaticTransparency : 0.0;
+	if (isSkyStatic) {
+		if (skyStaticTransparency == 1.0)
+			discard;
+	}
+
 #	if !defined(MOTIONVECTORS_NORMALS)
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
 		discard;
@@ -849,12 +860,21 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 	alpha = Color::EffectAlpha(alpha);
+#	if !defined(ADDBLEND) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+	alpha *= 1.0 - skyStaticTransparency;
+#	endif
 
 	float4 finalColor = float4(Color::EffectMult(blendedColor), alpha);
 #	if defined(MULTBLEND_DECAL)
 	finalColor.xyz *= alpha;
 #	else
 	finalColor *= fogMul;
+#	endif
+#	if defined(ADDBLEND)
+	finalColor.xyz *= 1.0 - skyStaticTransparency;
+#	elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
+	if (skyStaticTransparency != 0.0)
+		finalColor.xyz = lerp(finalColor.xyz, 1.0.xxx, skyStaticTransparency);
 #	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)

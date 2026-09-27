@@ -333,6 +333,8 @@ public:
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.3f;
 		float foveatedCenterHorizontalScale = 1.0f;
+		bool foveatedBlendCurveEnabled = false;
+		float foveatedBlendFalloff = 1.0f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f;
 		float foveatedLeftEyeMaskOffsetY = 0.0f;
 		float foveatedRightEyeMaskOffsetX = 0.0f;
@@ -2037,7 +2039,7 @@ public:
 		float2 sourceOffset;
 		float2 invSourceDim;
 		float centerHorizontalScale;
-		float centerHorizontalScalePadding;
+		float blendFalloff;
 	};
 
 	struct FoveatedSpatialCompositeCB
@@ -2052,7 +2054,7 @@ public:
 		float2 centerRectDim;
 		float2 invCenterSourceDim;
 		float2 centerOffset;
-		float4 tuning;  // x=centerScale, y=centerFeather, z=centerHorizontalScale
+		float4 tuning;  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=blendFalloff
 	};
 
 	struct PeripheryTAACB
@@ -2076,6 +2078,7 @@ public:
 		float4x4 previousViewProj;
 		float4 currentCameraPosAdjust;
 		float4 previousCameraPosAdjust;
+		float4 blendTuning;  // x=blendFalloff
 	};
 
 	struct CameraMotionVectorsCB
@@ -2093,7 +2096,10 @@ public:
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedSpatialCompositeCB) == 96, "FoveatedSpatialCompositeCB layout changed; update HLSL cbuffer.");
-	static_assert(sizeof(PeripheryTAACB) == 320, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(PeripheryTAACB) == 336, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(offsetof(FoveatedCenterBlendCB, blendFalloff) == 60, "Center blend falloff must match HLSL.");
+	static_assert(offsetof(FoveatedSpatialCompositeCB, tuning) == 80, "Spatial blend tuning must match HLSL.");
+	static_assert(offsetof(PeripheryTAACB, blendTuning) == 320, "Periphery blend tuning must match HLSL.");
 	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
 	struct FoveatedDispatchRect
@@ -2182,7 +2188,12 @@ public:
 
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationDx12PathActive() const;
+	/** Returns whether current settings, menus and provider health permit preparing inputs. */
+	bool ShouldPrepareFrameGeneration() const;
+	/** Uses the prepared frame's menu decision while retaining live provider safety gates. */
 	bool ShouldUseFrameGenerationThisFrame() const;
+	/** Invalidates copied inputs after presentation or before replacing their resources. */
+	void InvalidateFrameGenerationInputs() noexcept;
 	bool IsFrameGenerationActive() const;
 	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
@@ -2215,6 +2226,12 @@ public:
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
 	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */
 	bool SetFoveatedUpscalingEnabled(bool a_enabled);
+	/** Return the effective curve, neutral when disabled or outside VR. */
+	float GetFoveatedBlendFalloff() const;
+	/** Set the saved VR curve and invalidate affected temporal/frame state. */
+	bool SetFoveatedBlendCurve(bool a_enabled, float a_falloff);
+	/** Draw the shared FOV-only and FOV + TAA blend controls. */
+	void DrawFoveatedBlendSettings();
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
@@ -2455,7 +2472,7 @@ public:
 	// Owned here so both Streamline (DLSS) and FidelityFX (FSR) can use them.
 	eastl::unique_ptr<Texture2D> vrIntermediateColorIn[2];            // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateColorOut[2];           // per-eye output resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye render resolution (R24G8_TYPELESS, shared depth copy)
+	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye native depth values (R32_FLOAT, DLSS/periphery input)
 	eastl::unique_ptr<Texture2D> vrIntermediateLinearDepth[2];        // per-eye render resolution (R32_FLOAT, FSR input)
 	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];       // per-eye render resolution
@@ -2578,6 +2595,7 @@ public:
 		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false);
 
 	// Shared Pipeline Steps
+	/** Prepares color and optional guides after encoding; DLSS depth is already encoded. */
 	bool PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
@@ -2998,6 +3016,7 @@ public:
 	bool previousHistoryFoveatedDispatch = false;
 	float previousHistoryFoveatedCenterScale = 1.0f;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
+	float previousHistoryFoveatedBlendFalloff = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
 	bool previousHistoryPeripheryTAA = false;
 	bool previousHistoryPeripheryTAAPathActive = false;
@@ -3312,6 +3331,7 @@ public:
 		VRSubmitInputFreshnessPolicy::ProducerProof inputProof{};
 		VRSubmitInputReusePolicy::CurrentEyeIdentity currentEyeIdentity{};
 		bool usedFoveatedVendorPath = false;
+		float foveatedBlendFalloff = 1.0f;
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;
 		uint64_t menuLayerGeneration = 0;
@@ -3478,7 +3498,10 @@ public:
 	uint64_t submitStageFoveatedPeripheryTAACycle = 0;
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
-	void CopySharedD3D12Resources();
+	/** Publishes readiness only after both motion and depth inputs have been copied. */
+	void PrepareFrameGenerationInputs();
+	/** Returns false without copying when required shaders or resources are unavailable. */
+	bool CopySharedD3D12Resources();
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
@@ -3771,6 +3794,7 @@ public:
 
 private:
 	std::once_flag upscalingSDKLoadOnce;
+	std::atomic_bool frameGenerationPrepared{ false };
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic<VRMainPassDispatchStage> vrMainPassDispatchLastStage{ VRMainPassDispatchStage::None };
 	std::atomic_uint32_t vrMainPassDispatchLastFrame{ 0 };

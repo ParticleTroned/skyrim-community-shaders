@@ -12,6 +12,17 @@ Community Shaders Expanded (CSX) restores (and extends) Particle Lights function
 
 This fork inherits the original GPL-3.0-or-later license with the Modding Exception and Linking Exception (see below).
 
+## Installing a CSX release
+
+Download the single `CSX_AIO-*.7z` asset from the
+[CSX releases page](https://github.com/ParticleTroned/skyrim-community-shaders/releases).
+All shipped features are bundled, including Adaptive Balance, Performance
+Tuning, Wetterness, Unified Water, Hair Specular and the terrain features.
+The FOMOD offers VR, SE/AE, or no prebuilt shader cache; each runtime cache
+includes both standard and Horizon Fix Water variants. Optional integrations
+still require their companion plugins. GitHub's source archives are for
+development, not installation.
+
 ## Requirements
 
 -   Any terminal of your choice (e.g., PowerShell)
@@ -97,7 +108,10 @@ cmake -E copy_directory ./build/ALL/aio $MOD_FOLDER
 #### Build a zip package
 
 You can build zip packages for optional cmake targets.
-Currently support `AIO_ZIP_PACKAGE`, `Package-AIO-Manual`, `Package-Core`, and `Package-<Feature>`:
+Developer packaging supports `AIO_ZIP_PACKAGE`, `Package-AIO-Manual`,
+`Package-Core`, and `Package-<Feature>`. Core-only and individual feature
+packages are internal build outputs; public CSX releases use the
+[complete AIO with its cache FOMOD](docs/development/csx-release-distribution.md):
 
 ```pwsh
 # Create a AIO package in ./dist/

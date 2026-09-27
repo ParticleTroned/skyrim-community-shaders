@@ -563,8 +563,9 @@ contract and rerun the supported builder.
 
 ## Install and ship
 
-The standalone SE and VR archives are validated release inputs and optional
-manual-install artifacts. Each contains one top-level managed `ShaderCache`
+The standalone SE and VR archives are validated internal workflow artifacts,
+available to maintainers for manual installation. Public CSX releases attach
+only the complete AIO. Each internal cache archive contains a managed `ShaderCache`
 directory. Its optimized pack contains both the standard and Horizon-compatible
 Water records; runtime compatibility registration selects the exact record.
 
@@ -714,7 +715,10 @@ downloads both artifacts into `dist`, and extracts them beside the plain AIO.
 writes the one-page manual FOMOD, and replaces the plain AIO archive only after
 the replacement is nonempty and contains every required payload. Artifact
 attestation and draft-release publication happen after that replacement. The
-standalone runtime archives remain attached for operators and manual installs.
+standalone runtime archives remain internal workflow artifacts. Only the final
+`CSX_AIO-*.7z` is attested and attached to the public release; core-only and
+individual feature packages also stay internal. See the
+[CSX distribution contract](csx-release-distribution.md).
 No separate manual cache run is required for that path.
 
 The final AIO archive contains:

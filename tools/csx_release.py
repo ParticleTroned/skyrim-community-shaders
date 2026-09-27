@@ -10,6 +10,47 @@ import subprocess
 
 
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+AUDIT_START = "<!-- CSX-FEATURE-AUDIT:START -->"
+AUDIT_END = "<!-- CSX-FEATURE-AUDIT:END -->"
+
+
+def strip_feature_audit(body: str) -> str:
+    """Remove the generated feature section while preserving surrounding notes."""
+    body = body.replace("\r\n", "\n")
+    if AUDIT_START in body or AUDIT_END in body:
+        if body.count(AUDIT_START) != 1 or body.count(AUDIT_END) != 1 or body.index(AUDIT_END) < body.index(AUDIT_START):
+            raise ValueError("Malformed CSX feature section markers; refusing to replace release notes")
+        start = body.index(AUDIT_START)
+        end = body.index(AUDIT_END) + len(AUDIT_END)
+    else:
+        heading = re.search(
+            r"^(#{1,2}) (?:Feature Version Audit|CSX Feature Audit|CSX bundled-feature audit:[^\n]*)[ \t]*$",
+            body, re.MULTILINE,
+        )
+        if not heading:
+            return body.strip()
+        start = heading.start()
+        following = re.search(r"^#{1," + str(len(heading.group(1))) + r"} ", body[heading.end():], re.MULTILINE)
+        end = heading.end() + following.start() if following else len(body)
+    before, after = body[:start].rstrip(), body[end:].lstrip()
+    if before.endswith("\n---") or before == "---":
+        before = before[:-3].rstrip()
+    if after.startswith("---\n"):
+        after = after[4:].lstrip()
+    return "\n\n".join(part for part in (before, after) if part).strip()
+
+
+def merge_feature_audit(body: str, audit: str) -> str:
+    """Keep one visible feature section before the detailed commit history."""
+    body = strip_feature_audit(body)
+    if not audit.strip():
+        raise ValueError("The generated CSX feature audit is empty")
+    if AUDIT_START in audit or AUDIT_END in audit:
+        raise ValueError("The generated audit must not contain section markers")
+    history = re.search(r"^## (?:Complete changes|Changes) since\b", body, re.MULTILINE)
+    position = history.start() if history else len(body)
+    section = f"{AUDIT_START}\n{audit.strip()}\n{AUDIT_END}"
+    return "\n\n".join(part.strip() for part in (body[:position], section, body[position:]) if part.strip()) + "\n"
 
 
 def git(*arguments: str) -> str:
@@ -80,6 +121,11 @@ def main() -> None:
     build.add_argument("--github-output", type=Path, required=True)
     audit = sub.add_parser("audit-base")
     audit.add_argument("--tag", required=True)
+    strip_audit = sub.add_parser("strip-audit")
+    strip_audit.add_argument("--notes", type=Path, required=True)
+    merge_audit = sub.add_parser("merge-audit")
+    merge_audit.add_argument("--notes", type=Path, required=True)
+    merge_audit.add_argument("--audit", type=Path, required=True)
     args = parser.parse_args()
     if args.action == "plan":
         result = plan(args.expected_version)
@@ -87,7 +133,11 @@ def main() -> None:
             commits = git("log", "--no-merges", "--format=- %s (%h)", f"{result['base']}..HEAD")
             args.notes.write_text(
                 f"## Changes since {result['base']}\n\n{commits}\n\n"
-                "## Package\n\nProduction universal SE/AE/VR core, DevBench and Tracy disabled.\n"
+                "## CSX AIO\n\nInstall the single `CSX_AIO-*.7z` download. All shipped CSX\n"
+                "features are bundled, including Adaptive Balance, Performance Tuning,\n"
+                "Wetterness, Unified Water, Hair Specular and the terrain features.\n"
+                "Separate feature or shader-cache downloads are not required.\n\n"
+                "Production universal SE/AE/VR core, DevBench and Tracy disabled.\n"
                 "The FOMOD offers VR, SE/AE, or no prebuilt cache. Both runtime\n"
                 "caches include standard and Horizon Fix Water variants.\n",
                 encoding="utf-8",
@@ -99,6 +149,13 @@ def main() -> None:
             if parse_version(value)[:2] != core_line():
                 raise ValueError("Tag and universal core release lines disagree")
         result = {"release_version": value}
+    elif args.action == "strip-audit":
+        args.notes.write_text(strip_feature_audit(args.notes.read_text(encoding="utf-8")) + "\n", encoding="utf-8")
+        return
+    elif args.action == "merge-audit":
+        combined = merge_feature_audit(args.notes.read_text(encoding="utf-8"), args.audit.read_text(encoding="utf-8"))
+        args.notes.write_text(combined, encoding="utf-8")
+        return
     else:
         print(previous_tag(parse_version(args.tag.removeprefix("csx"))))
         return

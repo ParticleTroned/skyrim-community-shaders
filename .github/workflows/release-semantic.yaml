@@ -140,6 +140,7 @@ jobs:
                   test "$RELEASE_TYPE" = stable
                   test "$(git ls-remote origin refs/heads/main-VR | cut -f1)" = "$DISPATCH_SHA"
                   python tests/csx_release_test.py
+                  python tests/csx_distribution_test.py
                   python tools/csx_release.py plan --expected-version "$EXPECTED_VERSION" \
                     --github-output "$GITHUB_OUTPUT" --notes "$RUNNER_TEMP/csx-release-notes.md"
 

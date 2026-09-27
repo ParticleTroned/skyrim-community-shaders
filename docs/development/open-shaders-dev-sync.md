@@ -1843,75 +1843,116 @@ release path. There are no shared renderer, map-menu or non-EHF changes
 to extract. Local source has no Exponential Height Fog feature. No code
 was imported.
 
-### #787: effect brightness control, recommendation awaiting decision
+### #787: effect brightness control, adapted
 
 [Open Shaders #787](https://github.com/alandtse/open-shaders/pull/787),
 `5f00b928359780c2e32607712a5fb1f99ecf38b2`, is titled
 `feat(utility): add effect brightness control`.
 
-Recommend **i: adapt the weather-colour controls into Adaptive Balance**.
-Reviewed the non-translation code diff, complete changed-file list, PR
-metadata, upstream weather-update callback, local effect shader, Adaptive
-Balance composition and the local DevBench visual-controls interface.
-The useful renderer changes are independent of the excluded OS Utility
-UI, translations, E11 and Scene Manager.
+The user selected **i: adapt the weather-colour controls into Adaptive
+Balance**. The non-translation code changes are independent of OS Utility
+UI, E11 and Scene Manager. The existing Effects multiplier scales
+directional and point-light contributions; it does not replace weather
+Effect Lighting colour. The earlier #741 shader-side sky-static multiplier
+also acted at a different stage and on a narrower material predicate.
 
-Upstream adds `effectBrightness`, default 1 and range 0-2. After the engine
-updates weather colours, it scales `Sky::skyColor[kEffectLighting]` and
-`Sky::skyColor[kSkyStatics]` by their separate settings. This preserves
-the current weather's authored or editor-adjusted colours at 1. It also
-removes the sky-static brightness multiplication from `Effect.hlsl` and
-replaces its shared-buffer field with padding, avoiding a second scale.
-Settings serialization, sanitization, defaults and the upstream DevBench
-descriptor cover the new control.
+Implemented scope:
 
-Local findings:
+-   Added Weather Effect Brightness, default 1 and range 0-2, to Global,
+    time/interior profiles and replacement/layered locations. Persistence,
+    sanitization, neutral defaults and profile interpolation include it.
+    Each layer's detailed Lighting gate applies; the existing Effects
+    lighting control remains independent.
+-   Adaptive Balance owns a post-colour-update detour using upstream's
+    `REL::RelocationID(25686, 26233)`. The established universal relocation
+    maps SE/VR to the first ID and AE to the second. CommonLib exposes the
+    same live `Sky::skyColor` layout and colour indices. The hook scales
+    Effect Lighting and Sky Statics after the original engine update,
+    without weather-record mutation or a separate render pass. It does
+    not import upstream's broader Linear Lighting/weather callback rewrite.
+-   A focused helper restores our previous output before the engine update
+    only when the live sky identity and colour still match. It retains
+    later external edits, does not dereference saved owners, and avoids
+    accumulating scales when an update leaves the colour unchanged.
+    Neutral/disabled, unavailable and measurement-bypassed states restore
+    native colours on the next update. Non-finite factors use neutral;
+    finite factors are bounded and non-finite colour results are skipped.
+    Profile-resolution exceptions retain the fresh native result and log
+    a bounded warning. Failed detour attachment is logged and reported as
+    unavailable; the other Adaptive Balance controls remain usable.
+-   Sky Static Brightness now scales its weather colour. Removed its final
+    `Effect.hlsl` multiplication and replaced the old C++/HLSL float with
+    zeroed padding, retaining the 80-byte buffer and transparency offset.
+    Transparency, material classification, blend handling and VR rules
+    remain unchanged. Non-neutral brightness can look different because
+    its scope and order relative to colour conversion have changed.
+    Bumped the Adaptive Brightness feature version to invalidate affected
+    shader cache entries.
+-   Extended `set_adaptive_balance_visuals`, its description/schema and
+    configured/effective status with `effectBrightness`.
+    `adaptiveBalanceWeatherColorsAvailable` and feature diagnostics expose
+    hook installation. Documented next-update timing and the distinction
+    between requested values and an applied weather update.
+-   Added production-hook/helper regression cases for repeated updates,
+    weather and external edits, zero/neutral recovery, runtime gates,
+    missing weather, failure recovery, ownership and finite bounds.
+    Composition tests cover defaults, interpolation and location layers;
+    DevBench validation includes the new field and shader reflection
+    expects the retained padding slot. These C++ tests are not executed.
 
--   Neither current `main-VR` nor this sync branch supplies
-    `effectBrightness` or `OnWeatherColorsUpdated`. Local Linear Lighting
-    does not cache the upstream weather-colour buffers. Merely copying
-    the callback override would therefore leave the control disconnected.
--   Adaptive Balance's existing `effectLightingMult` feeds
-    `Color::EffectLightingMult`, which scales directional and point-light
-    contributions in `Effect.hlsl`. It is not the same operation as scaling
-    the current weather's Effect Lighting colour. Per-effect-type output
-    multipliers in Linear Lighting also have a different scope.
--   The #741 port already added sky-static brightness and transparency on
-    this branch. Brightness currently multiplies final `lightColor` for a
-    selected effect permutation with `GrayscaleToAlpha` and full lighting
-    influence. It does not target the engine's Sky Statics weather colour.
-    The new placement therefore changes the control's scope and its order
-    relative to local colour conversion; these are not identical paths.
--   Local `SkySync::Sky_Update` handles sky/climate and sun/moon state, but
-    it does not supply the upstream post-colour-update notification.
-    Upstream connects that notification at `Sky_UpdateColors` using
-    `REL::RelocationID(25686, 26233)`. A port needs the appropriate shared
-    SE/AE/VR update boundary, without importing its E11 ambient hooks or
-    broader Linear Lighting rewrite.
+Validation is limited to source extraction, descriptor/range/persistence
+and buffer-layout audits, changed-line formatting, scoped pre-commit,
+unified-preset generation/check and `git diff --check`. The initial preset
+check correctly detected the changed source fingerprint; after reviewing
+the additive neutral-default field, refreshed the fingerprint and all
+three generated markers while retaining contract revision 5 and existing
+preset values. No build, shader compilation, deployment, compiled test or
+runtime test ran. SE/AE/VR relocation availability, update timing, disabling
+and weather transitions still require validation at the end of the sync.
 
-Proposed adapted scope:
+### #779: typed right-eye DLSS depth, recommendation awaiting decision
 
--   Add weather-effect brightness to Adaptive Balance's global,
-    time/profile and location composition, persistence, sanitization,
-    defaults and local controls. Preserve the existing independent Effects
-    slider. Disabled or neutral Adaptive Balance must leave colours intact.
--   Apply the composed effect and sky-static factors once to freshly
-    updated live weather colours, retaining weather transitions and
-    editor edits without modifying weather records or accumulating scales.
-    Retarget the existing sky-static brightness control and remove its
-    shader multiplication; retain sky-static transparency and local
-    alpha/blend/VR rules. Non-neutral sky-static appearance may differ
-    because the control now targets the weather colour rather than final
-    classified shader output.
--   Extend the existing Adaptive Balance DevBench action, description and
-    schema. Preserve the shared-buffer layout or update its C++/HLSL
-    consumers together. Add focused composition/update coverage and defer
-    compilation and SE/AE/VR runtime validation until the sync ends.
+[Open Shaders #779](https://github.com/alandtse/open-shaders/pull/779),
+`72518c269d9b0d52b4cbe62ca5ddab7043b7f84c`, is titled
+`fix(upscaling): typed right-eye DLSS depth`.
 
-No #787 implementation has been made. Its update timing, disable/reset
-behaviour and runtime relocation must be checked during the approved port;
-this recommendation is source analysis, not a claim of runtime success.
-Await the user's `i` or `r`.
+Recommend **r: already covered on the sync branch by the accepted #769
+port**, `658087a45`. Reviewed the complete three-file diff, PR description,
+local encoder selection/allocation/bindings, preparation, standard DLSS
+evaluation and submit-stage encoding. This is not an exclusion: it is a
+useful correction already included in an earlier approved port.
+
+Upstream removes the boxed copy from the engine's depth-stencil into the
+right-eye DLSS intermediate. It enables the existing typed-depth encoder
+for VR DLSS, writes native non-linear depth to R32_FLOAT, and tags that
+texture for eye 1. The standard direct left eye keeps the native combined
+depth resource. Its helper centralizes the upstream shader-selection and
+UAV-binding policy; allocation, readiness and naming changes support that
+same replacement.
+
+The sync branch already has the complete relevant behavior:
+
+-   `GetEncodeTexturesCS` selects `DEPTH_OUTPUT` for VR DLSS. Both main
+    and submit-stage encoders bind the validated R32_FLOAT
+    `vrIntermediateDepth[eye]` UAV at u3. SE/AE DLSS keeps its existing
+    permutation, and FSR keeps its own typed output.
+-   `PreparePerEyeInputs` consumes the already-encoded DLSS depth. Its
+    remaining depth copy is typed R32_FLOAT FSR output to typed R32_FLOAT
+    periphery input, not a boxed copy from the native depth-stencil.
+-   Standard Streamline right-eye evaluation already receives
+    `vrIntermediateDepth[1]`; isolated-eye fallback and foveated paths use
+    the same per-eye native-depth values. The standard direct left-eye
+    path keeps the engine resource, matching #779's intended behavior.
+-   Local code deliberately retains separate typed DLSS/periphery and
+    FSR resources for its larger lifecycle and foveated contracts.
+    Importing upstream's single-resource deletion/rename would not add a
+    missing correction. The local port also validates source/target
+    identity, format and bounds and retains its failure/fallback gates.
+
+This coverage belongs to the working branch; it does not claim #769 has
+landed on primary `main-VR`. The upstream PR's integration tests are not
+local evidence. Local compilation and runtime qualification remain pending.
+No #779 code has been imported. Await the user's `i` or `r`.
 
 ## Verification
 

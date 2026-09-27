@@ -828,7 +828,6 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	const float skyStaticTransparency = isSkyStatic ? SharedData::adaptiveBalanceSettings.skyStaticTransparency : 0.0;
 	if (isSkyStatic) {
-		lightColor *= SharedData::adaptiveBalanceSettings.skyStaticBrightness;
 		if (skyStaticTransparency == 1.0)
 			discard;
 	}

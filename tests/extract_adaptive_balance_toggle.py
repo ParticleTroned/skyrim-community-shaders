@@ -41,6 +41,9 @@ def extract(root, output):
         + between(header, "\tmutable float smoothedWaterWindSpeed", "\n\tvirtual void DrawSettings()")
         + between(header, "\tvirtual bool SupportsPerformanceCostMeasurement()", "\n\tvirtual void LoadSettings").replace(" override", "")
         + between(header, "\tstruct ActiveProfileBlend", "\tProfile GetInteriorProfile()"), encoding="utf-8")
+    weather_hook = source[source.index("\tstruct Sky_UpdateColors\n"):]
+    (output / "adaptive_balance_weather_hook_under_test.h").write_text(
+        function(weather_hook, "\t\tstatic void thunk("), encoding="utf-8")
     bodies = [
         between(source, "AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::AdjustmentDefaults()", "namespace"),
         between(source, "\tconstexpr float kBrightnessMin", "\tconstexpr std::size_t kMaxOverrideHierarchyDepth"),

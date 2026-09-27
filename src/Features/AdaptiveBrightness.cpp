@@ -12,6 +12,7 @@
 #include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/UI.h"
+#include "WeatherColorAdjustment.h"
 
 #include "RE/B/BGSLocation.h"
 #include "RE/P/PlayerCharacter.h"
@@ -27,6 +28,7 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -57,6 +59,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	cloudSaturation,
 	fogIntensity,
 	sunGlareIntensity,
+	effectBrightness,
 	skyStaticBrightness,
 	skyStaticTransparency,
 	directionalLightMult,
@@ -342,6 +345,7 @@ namespace
 		a_settings.cloudSaturation = clamp(a_settings.cloudSaturation, kSkySaturationMax, defaults.cloudSaturation);
 		a_settings.fogIntensity = clamp(a_settings.fogIntensity, kGlobalLightingMultiplierMax, defaults.fogIntensity);
 		a_settings.sunGlareIntensity = clamp(a_settings.sunGlareIntensity, kGlobalLightingMultiplierMax, defaults.sunGlareIntensity);
+		a_settings.effectBrightness = clamp(a_settings.effectBrightness, kGlobalSkyBrightnessMax, defaults.effectBrightness);
 		a_settings.skyStaticBrightness = clamp(a_settings.skyStaticBrightness, kGlobalSkyBrightnessMax, defaults.skyStaticBrightness);
 		a_settings.skyStaticTransparency = clamp(a_settings.skyStaticTransparency, 1.0f, defaults.skyStaticTransparency);
 		a_settings.contrast = Util::ClampFinite(a_settings.contrast, kContrastMin, kContrastMax, defaults.contrast);
@@ -657,6 +661,7 @@ namespace
 		a_profile.fogIntensity = Util::ClampFinite(a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
 		a_profile.sunGlareIntensity = Util::ClampFinite(a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
 		a_profile.skyStaticBrightness = Util::ClampFinite(a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, 1.0f);
+		a_profile.effectBrightness = Util::ClampFinite(a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, 1.0f);
 		a_profile.skyStaticTransparency = Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
 		a_profile.pointLightMult = ClampMultiplier(a_profile.pointLightMult);
@@ -2075,7 +2080,12 @@ void AdaptiveBrightness::DrawLightingSettings(
 	ImGui::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent.");
+	ImGui::SliderFloat("Weather Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales the current weather's Effect Lighting color. One preserves weather and editor colors; the Effects lighting multiplier remains independent.");
 	ImGui::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Scales the current weather's Sky Statics color. One preserves weather and editor colors.");
 	ImGui::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them.");
@@ -3415,6 +3425,7 @@ SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSett
 	out.cloudSaturation = Util::ClampFinite(out.cloudSaturation * advancedMult(a_profile.cloudSaturation), 0.0f, kSkySaturationMax, 1.0f);
 	out.fogIntensity = Util::ClampFinite(out.fogIntensity * advancedMult(a_profile.fogIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
 	out.sunGlareIntensity = Util::ClampFinite(out.sunGlareIntensity * advancedMult(a_profile.sunGlareIntensity), 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.effectBrightness = Util::ClampFinite(out.effectBrightness * advancedMult(a_profile.effectBrightness), 0.0f, kGlobalSkyBrightnessMax, 1.0f);
 	out.skyStaticBrightness = Util::ClampFinite(out.skyStaticBrightness * advancedMult(a_profile.skyStaticBrightness), 0.0f, kGlobalSkyBrightnessMax, 1.0f);
 	const float transparency = a_profile.advanced ? Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f) : 0.0f;
 	out.skyStaticTransparency = 1.0f - (1.0f - out.skyStaticTransparency) * (1.0f - transparency);
@@ -3559,6 +3570,7 @@ SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSett
 	out.cloudSaturation = lerp(a_a.cloudSaturation, a_b.cloudSaturation);
 	out.fogIntensity = lerp(a_a.fogIntensity, a_b.fogIntensity);
 	out.sunGlareIntensity = lerp(a_a.sunGlareIntensity, a_b.sunGlareIntensity);
+	out.effectBrightness = lerp(a_a.effectBrightness, a_b.effectBrightness);
 	out.skyStaticBrightness = lerp(a_a.skyStaticBrightness, a_b.skyStaticBrightness);
 	out.skyStaticTransparency = lerp(a_a.skyStaticTransparency, a_b.skyStaticTransparency);
 	out.contrast = lerp(a_a.contrast, a_b.contrast);
@@ -3759,7 +3771,6 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	data.cloudSaturation = effectiveSettings.cloudSaturation;
 	data.fogIntensity = effectiveSettings.fogIntensity;
 	data.sunGlareIntensity = effectiveSettings.sunGlareIntensity;
-	data.skyStaticBrightness = effectiveSettings.skyStaticBrightness;
 	data.skyStaticTransparency = effectiveSettings.skyStaticTransparency;
 	data.contrast = effectiveSettings.contrast;
 	data.saturation = effectiveSettings.saturation;
@@ -3874,6 +3885,38 @@ std::string AdaptiveBrightness::GetContextLabel() const
 
 struct AdaptiveBrightness::Hooks
 {
+	struct Sky_UpdateColors
+	{
+		static void thunk(RE::Sky* a_sky, float a_delta)
+		{
+			if (a_sky) {
+				effect.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting]);
+				statics.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics]);
+			} else {
+				effect = {};
+				statics = {};
+			}
+			func(a_sky, a_delta);
+			if (!a_sky || !a_sky->currentWeather)
+				return;
+
+			try {
+				const auto lighting = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings();
+				effect.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting], lighting.effectBrightness);
+				statics.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics], lighting.skyStaticBrightness);
+				loggedFailure = false;
+			} catch (const std::exception& error) {
+				if (!loggedFailure)
+					logger::warn("[AdaptiveBalance] Weather color adjustment skipped: {}", error.what());
+				loggedFailure = true;
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+		static inline WeatherColorAdjustment<RE::NiColor> effect;
+		static inline WeatherColorAdjustment<RE::NiColor> statics;
+		static inline bool loggedFailure = false;
+	};
+
 	struct BSWaterShader_SetupGeometry
 	{
 		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
@@ -3900,10 +3943,21 @@ struct AdaptiveBrightness::Hooks
 	{
 		stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 		logger::info("[AdaptiveBalance] Installed shared-light water hook");
+		const auto error = stl::detour_thunk<Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		globals::features::adaptiveBrightness.weatherColorHookInstalled = error == NO_ERROR;
+		if (error == NO_ERROR)
+			logger::info("[AdaptiveBalance] Installed weather color hook");
+		else
+			logger::error("[AdaptiveBalance] Weather color hook failed ({}); weather brightness controls are unavailable", error);
 	}
 };
 
 void AdaptiveBrightness::PostPostLoad()
 {
 	Hooks::Install();
+}
+
+json AdaptiveBrightness::GetDiagnostics()
+{
+	return { { "weatherColorHookInstalled", weatherColorHookInstalled } };
 }

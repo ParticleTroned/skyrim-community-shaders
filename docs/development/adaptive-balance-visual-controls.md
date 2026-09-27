@@ -16,6 +16,7 @@ checkbox also enables its detailed adjustments, including Sky Saturation.
 | Cloud Gamma Offset        | 0       | −1–1          |
 | Vanilla Fog Intensity     | 1       | 0–5           |
 | Sun Glare Intensity       | 1       | 0–5           |
+| Weather Effect Brightness | 1       | 0–2           |
 | Sky Static Brightness     | 1       | 0–2           |
 | Sky Static Transparency   | 0       | 0–1           |
 | Ambient                   | 1       | 0–5           |
@@ -90,7 +91,7 @@ been measured.
 
 ## Atmosphere
 
-The seven atmosphere controls belong to Lighting's detailed controls in
+The eight atmosphere controls belong to Lighting's detailed controls in
 Global, time/interior profiles, and location layers. They share that
 layer's detailed-lighting gate. Color's Contrast and Saturation remain
 independent of this gate. All new controls have neutral defaults.
@@ -117,9 +118,29 @@ to valid opacity. This is independent of fog gamma and Volumetric Lighting's
 existing Shaft Intensity and Opacity controls. Inventory previews retain
 their existing fog.
 
-Sky Static Brightness and Transparency apply to the upstream sky-static
-effect permutation and material predicate, including mountain-mist meshes.
-Brightness scales their effect color. Transparency fades ordinary alpha,
+Weather Effect Brightness and Sky Static Brightness scale the current
+weather's Effect Lighting and Sky Statics colors after the engine updates
+them. One preserves the authored weather colors. The existing Effects
+lighting multiplier independently scales directional and point lighting.
+Neither control edits weather records. Profile composition, transitions
+and location layers use the same bounded multipliers as other controls.
+
+Changes, including disabling Adaptive Balance, take effect on the next
+weather-color update. Before that update, the previous adjustment is
+restored only if the same live sky still contains our output; later
+external color edits are retained. Repeated updates do not accumulate
+our scale. Main/loading menus, unloaded Adaptive Balance and performance
+measurement bypasses use neutral values. A failed detour installation is
+logged and reported as unavailable; other balance controls remain usable.
+The SE/AE/VR relocation and update timing still require runtime validation.
+
+Sky Static Brightness now acts on weather color instead of multiplying
+the final classified effect-shader output. Existing non-neutral settings
+can therefore look different. Its former shader-buffer slot is padding;
+the 80-byte layout and all following offsets are retained.
+
+Sky Static Transparency retains the sky-static effect permutation and
+material predicate, including mountain-mist meshes. It fades ordinary alpha,
 additive, and multiplicative outputs toward each blend mode's neutral value;
 one discards the effect. Layered transparency composes as
 `1 - (1 - inherited) * (1 - layer)`, so a neutral layer preserves the
@@ -195,7 +216,7 @@ not their saved values or composition behavior.
 
 `visuals` must be a nonempty object containing only `contrast`, `saturation`,
 `ambient`, `skySaturation`, `cloudBrightness`, `cloudSaturation`,
-`cloudGammaOffset`, `fogIntensity`, `sunGlareIntensity`,
+`cloudGammaOffset`, `fogIntensity`, `sunGlareIntensity`, `effectBrightness`,
 `skyStaticBrightness`, `skyStaticTransparency`,
 `lightingAdvanced`, `causticsStrength`, `causticsTiling`, `causticsSpeed`,
 `causticsDispersion`, `parallaxStrength`, or `parallaxQuality`.
@@ -212,6 +233,12 @@ and the master/runtime gate; they do not imply that Water Effects is loaded
 or that glare is visible. Effective `cloudGamma` reports the composed gamma,
 including the active Linear Lighting baseline; configured `cloudGammaOffset`
 reports only the saved Global offset.
+
+`adaptiveBalanceWeatherColorsAvailable` reports successful installation of
+the weather-color hook. Configured/effective brightness values describe
+the requested adjustment; availability does not establish that a weather
+update has applied it. Feature diagnostics also expose
+`weatherColorHookInstalled`.
 
 ## Regression coverage
 
@@ -304,3 +331,12 @@ validation. Color and ambient shader reflection expectations now cover the
 Linear Lighting's cloud gamma offset. These compiled tests and production
 shader permutations are deferred until the end of the selective upstream
 sync, by user instruction. No atmosphere runtime validation has run.
+
+Weather-color cases extract the production hook and use the production
+adjustment helper. They cover repeated updates, fresh weather colors,
+external edits, zero-to-neutral recovery, master/detail/runtime gates,
+missing weather, failed profile resolution, finite bounds and owner changes.
+Composition cases cover day/night and replacement/layered locations;
+DevBench validation includes the new field. These additions have not been
+compiled or executed. Builds, shader compilation and SE/AE/VR runtime
+checks remain deferred until the selective sync ends.

@@ -12,6 +12,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,6 +30,7 @@ struct float3
 #include "Features/Bloom.h"
 #include "Features/SharedLighting.h"
 #include "Features/WaterAppearance.h"
+#include "Features/WeatherColorAdjustment.h"
 #include "Utils/Finite.h"
 
 struct LinearLighting
@@ -40,6 +42,21 @@ struct LinearLighting
 
 namespace RE
 {
+	struct NiColor
+	{
+		std::array<float, 3> values{};
+		bool operator==(const NiColor&) const = default;
+		float operator[](std::size_t i) const { return values[i]; }
+		NiColor operator*(float scale) const { return { { values[0] * scale, values[1] * scale, values[2] * scale } }; }
+	};
+	struct TESWeather
+	{
+		enum ColorTypes
+		{
+			kEffectLighting = 9,
+			kSkyStatics = 13
+		};
+	};
 	struct PlayerCharacter
 	{
 		bool hasCell = true;
@@ -58,6 +75,7 @@ namespace RE
 	};
 	struct Sky
 	{
+		NiColor skyColor[17]{};
 		float windSpeed = 0.8f;
 		Weather* currentWeather = nullptr;
 		static Sky* GetSingleton()
@@ -107,6 +125,7 @@ struct AdaptiveBrightness
 	ActiveProfileBlend testProfileBlend;
 	std::vector<const LocationOverride*> testLocationLayers;
 	mutable unsigned profileResolutions = 0;
+	bool throwProfileResolution = false;
 
 	bool IsRuntimeAvailable() const;
 	bool IsRuntimeEnabled() const;
@@ -120,6 +139,8 @@ struct AdaptiveBrightness
 };
 AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend() const
 {
+	if (throwProfileResolution)
+		throw std::runtime_error("injected profile resolution failure");
 	++profileResolutions;
 	return testProfileBlend;
 }
@@ -131,7 +152,165 @@ const std::vector<const AdaptiveBrightness::LocationOverride*>& AdaptiveBrightne
 
 #include "adaptive_balance_under_test.h"
 
+namespace globals::features
+{
+	AdaptiveBrightness adaptiveBrightness;
+}
+namespace logger
+{
+	unsigned weatherWarnings = 0;
+	template <class... Args>
+	void warn(const char*, Args&&...)
+	{
+		++weatherWarnings;
+	}
+}
+struct WeatherUpdateHook
+{
+#include "adaptive_balance_weather_hook_under_test.h"
+	static inline void (*func)(RE::Sky*, float) = [](RE::Sky*, float) {};
+	static inline WeatherColorAdjustment<RE::NiColor> effect;
+	static inline WeatherColorAdjustment<RE::NiColor> statics;
+	static inline bool loggedFailure = false;
+};
+
 bool Close(float a, float b) { return std::abs(a - b) < 0.00001f; }
+
+void CheckWeatherColors()
+{
+	const RE::NiColor effectSource{ { 0.2f, 0.4f, 0.6f } };
+	const RE::NiColor staticSource{ { 0.3f, 0.5f, 0.7f } };
+	RE::Weather weather;
+	RE::Sky sky;
+	sky.currentWeather = &weather;
+	auto& effect = sky.skyColor[RE::TESWeather::kEffectLighting];
+	auto& statics = sky.skyColor[RE::TESWeather::kSkyStatics];
+	effect = effectSource;
+	statics = staticSource;
+	sky.skyColor[0] = staticSource;
+	auto& balance = globals::features::adaptiveBrightness;
+	balance.settings.globalProfile.advanced = true;
+	auto& profile = balance.settings.globalProfile;
+	profile.effectBrightness = 0.5f;
+	profile.skyStaticBrightness = 2.0f;
+	for (int i = 0; i < 3; ++i) {
+		WeatherUpdateHook::thunk(&sky, 0.0f);
+		assert(effect == effectSource * 0.5f && statics == staticSource * 2.0f);
+		assert(sky.skyColor[0] == staticSource);
+	}
+	profile.effectBrightness = 0.0f;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == RE::NiColor{});
+	profile.effectBrightness = 1.5f;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == effectSource * 1.5f);
+	balance.SetEnabled(false);
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == effectSource && statics == staticSource);
+	balance.SetEnabled(true);
+	profile.advanced = false;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == effectSource && statics == staticSource);
+	profile.advanced = true;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::func = [](RE::Sky* live, float delta) {
+		assert(delta == 0.25f);
+		assert((live->skyColor[RE::TESWeather::kEffectLighting] == RE::NiColor{ { 0.2f, 0.4f, 0.6f } }));
+		live->skyColor[RE::TESWeather::kEffectLighting] = { { 0.4f, 0.2f, 0.8f } };
+	};
+	WeatherUpdateHook::thunk(&sky, 0.25f);
+	const RE::NiColor newWeather{ { 0.4f, 0.2f, 0.8f } };
+	assert(effect == newWeather * 1.5f);
+	WeatherUpdateHook::func = [](RE::Sky*, float) {};
+	effect = staticSource;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == staticSource * 1.5f);
+	balance.throwProfileResolution = true;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == staticSource && statics == staticSource && logger::weatherWarnings == 1);
+	balance.throwProfileResolution = false;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == staticSource * 1.5f && !WeatherUpdateHook::loggedFailure);
+	for (bool* gate : { &balance.loaded, &balance.performanceCostMeasurementEnabled }) {
+		*gate = false;
+		WeatherUpdateHook::thunk(&sky, 0.0f);
+		assert(effect == staticSource && statics == staticSource);
+		*gate = true;
+		WeatherUpdateHook::thunk(&sky, 0.0f);
+	}
+	globals::state->menuOpen = true;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == staticSource && statics == staticSource);
+	globals::state->menuOpen = false;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	sky.currentWeather = nullptr;
+	WeatherUpdateHook::thunk(&sky, 0.0f);
+	assert(effect == staticSource && statics == staticSource);
+	WeatherUpdateHook::thunk(nullptr, 0.0f);
+
+	WeatherColorAdjustment<RE::NiColor> adjustment;
+	RE::Sky otherSky;
+	adjustment.Apply(&sky, effect, 2.0f);
+	otherSky.skyColor[0] = effect;
+	const auto otherColor = otherSky.skyColor[0];
+	adjustment.Restore(&otherSky, otherSky.skyColor[0]);
+	assert(otherSky.skyColor[0] == otherColor);
+	effect = effectSource;
+	adjustment.Apply(&sky, effect, -1.0f);
+	assert(effect == RE::NiColor{});
+	adjustment.Apply(&sky, effect, std::numeric_limits<float>::quiet_NaN());
+	assert(effect == effectSource);
+	adjustment.Apply(&sky, effect, 20.0f);
+	assert(effect == effectSource * 2.0f);
+	adjustment.Apply(&sky, effect, std::numeric_limits<float>::infinity());
+	assert(effect == effectSource);
+	effect = { { std::numeric_limits<float>::max(), 0.0f, 1.0f } };
+	const auto largeColor = effect;
+	adjustment.Apply(&sky, effect, 2.0f);
+	assert(effect == largeColor);
+	balance = {};
+}
+
+void CheckWeatherBrightnessComposition()
+{
+	AdaptiveBrightness balance;
+	auto& global = balance.settings.globalProfile;
+	assert(global.effectBrightness == 1.0f);
+	assert(SharedLightingSettings{}.effectBrightness == 1.0f);
+	assert(AdaptiveBrightness::ProfileSettings::AdjustmentDefaults().effectBrightness == 1.0f);
+	global.advanced = true;
+	global.effectBrightness = 1.5f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.advanced = night.advanced = true;
+	day.effectBrightness = 0.5f;
+	night.effectBrightness = 1.5f;
+	balance.testProfileBlend = { &day, &night, 0.25f };
+	assert(Close(balance.GetEffectiveSharedLightingSettings().effectBrightness, 1.0625f));
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.effectBrightness = 0.5f;
+	balance.testLocationLayers = { &location };
+	assert(Close(balance.GetEffectiveSharedLightingSettings().effectBrightness, 0.75f));
+	location.layered = true;
+	assert(Close(balance.GetEffectiveSharedLightingSettings().effectBrightness, 0.53125f));
+	balance.testLocationLayers.clear();
+	balance.testProfileBlend = {};
+	assert(balance.GetCommonBufferData().weatherColorPadding == 0.0f);
+	for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+		global.effectBrightness = invalid;
+		ClampProfileSettings(global);
+		assert(global.effectBrightness == 1.0f);
+	}
+	global.effectBrightness = 20.0f;
+	ClampProfileSettings(global);
+	assert(global.effectBrightness == 2.0f);
+	global.effectBrightness = -1.0f;
+	ClampProfileSettings(global);
+	assert(global.effectBrightness == 0.0f);
+	balance.SetEnabled(false);
+	assert(balance.GetEffectiveSharedLightingSettings().effectBrightness == 1.0f);
+}
 
 void CheckColorControls()
 {
@@ -390,7 +569,7 @@ void CheckAtmosphereControls()
 	assert(Close(data.cloudBrightness, 1.05f) && data.skyBrightness == 1.0f);
 	assert(Close(data.cloudSaturation, 0.8f) && data.skySaturation == 1.0f);
 	assert(Close(data.fogIntensity, 0.25f) && data.sunGlareIntensity == 2.0f);
-	assert(Close(data.skyStaticTransparency, 0.4375f) && data.skyStaticBrightness == 1.5f);
+	assert(Close(data.skyStaticTransparency, 0.4375f) && balance.GetEffectiveSharedLightingSettings().skyStaticBrightness == 1.5f);
 	assert(Close(data.contrast, 1.2f) && Close(data.saturation, 0.9f));
 	for (bool enabled : { false, true }) {
 		const auto gamma = balance.GetEffectiveLinearLightingSettings(linear, enabled);
@@ -417,7 +596,7 @@ void CheckAtmosphereControls()
 	global.advanced = false;
 	data = balance.GetCommonBufferData();
 	assert(data.cloudBrightness == 1 && data.cloudSaturation == 1 && data.fogIntensity == 1);
-	assert(data.sunGlareIntensity == 1 && data.skyStaticBrightness == 1 && data.skyStaticTransparency == 0);
+	assert(data.sunGlareIntensity == 1 && balance.GetEffectiveSharedLightingSettings().skyStaticBrightness == 1 && data.skyStaticTransparency == 0);
 	assert(Close(data.contrast, 1.2f) && Close(data.saturation, 0.9f));
 	assert(!balance.GetEffectiveLinearLightingSettings(linear, true).hasColorAdjustments);
 	global.advanced = true;
@@ -441,7 +620,7 @@ void CheckAtmosphereControls()
 	global.skyStaticBrightness = day.skyStaticBrightness = 2;
 	balance.testProfileBlend = { &day, &day, 0 };
 	data = balance.GetCommonBufferData();
-	assert(data.fogIntensity == 5 && data.sunGlareIntensity == 5 && data.skyStaticBrightness == 2);
+	assert(data.fogIntensity == 5 && data.sunGlareIntensity == 5 && balance.GetEffectiveSharedLightingSettings().skyStaticBrightness == 2);
 }
 
 void CheckAtmosphereMigrationAndValidation()
@@ -486,7 +665,7 @@ void CheckAtmosphereMigrationAndValidation()
 	assert(legacyGlobal["globalProfile"]["cloudBrightnessMult"] == 0.6);
 
 	const json valid = { { "cloudBrightness", 2 }, { "cloudSaturation", 0 }, { "cloudGammaOffset", -1 },
-		{ "fogIntensity", 5 }, { "sunGlareIntensity", 0 }, { "skyStaticBrightness", 2 }, { "skyStaticTransparency", 1 },
+		{ "fogIntensity", 5 }, { "sunGlareIntensity", 0 }, { "effectBrightness", 2 }, { "skyStaticBrightness", 2 }, { "skyStaticTransparency", 1 },
 		{ "lightingAdvanced", true }, { "contrast", 1.2 }, { "saturation", 0.8 } };
 	assert(ValidateAdaptiveBalanceVisuals(valid).empty());
 	for (const auto& [name, value] : valid.items()) {
@@ -503,6 +682,8 @@ void CheckAtmosphereMigrationAndValidation()
 
 int main()
 {
+	CheckWeatherColors();
+	CheckWeatherBrightnessComposition();
 	CheckAtmosphereControls();
 	CheckAtmosphereMigrationAndValidation();
 	CheckColorControls();

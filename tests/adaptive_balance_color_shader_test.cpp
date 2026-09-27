@@ -76,7 +76,7 @@ namespace
 			for (auto [name, offset] : { std::pair{ "contrast", 40u }, std::pair{ "saturation", 44u },
 					 std::pair{ "cloudBrightness", 48u }, std::pair{ "cloudSaturation", 52u },
 					 std::pair{ "fogIntensity", 56u }, std::pair{ "sunGlareIntensity", 60u },
-					 std::pair{ "skyStaticBrightness", 64u }, std::pair{ "skyStaticTransparency", 68u } }) {
+					 std::pair{ "weatherColorPadding", 64u }, std::pair{ "skyStaticTransparency", 68u } }) {
 				D3D11_SHADER_TYPE_DESC member{};
 				Check(balance->GetType()->GetMemberTypeByName(name)->GetDesc(&member));
 				Require(member.Offset == offset, "Adaptive Balance buffer layout differs from C++");

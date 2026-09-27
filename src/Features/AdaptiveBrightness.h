@@ -95,6 +95,7 @@ struct AdaptiveBrightness : Feature
 		float cloudSaturation = 1.0f;
 		float fogIntensity = 1.0f;
 		float sunGlareIntensity = 1.0f;
+		float effectBrightness = 1.0f;
 		float skyStaticBrightness = 1.0f;
 		float skyStaticTransparency = 0.0f;
 		float directionalLightMult = 1.0f;
@@ -181,7 +182,7 @@ struct AdaptiveBrightness : Feature
 		float cloudSaturation;
 		float fogIntensity;
 		float sunGlareIntensity;
-		float skyStaticBrightness;
+		float weatherColorPadding = 0.0f;
 		float skyStaticTransparency;
 		float pad[2]{};
 	};
@@ -276,6 +277,7 @@ struct AdaptiveBrightness : Feature
 	mutable uint32_t smoothedWaterWindFrame = 0;
 	mutable bool waterWindSmoothingInitialized = false;
 	bool performanceCostMeasurementEnabled = true;
+	bool weatherColorHookInstalled = false;
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -295,6 +297,8 @@ struct AdaptiveBrightness : Feature
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void PostPostLoad() override;
+	/** Reports whether live weather-colour adjustment is available. */
+	virtual json GetDiagnostics() override;
 
 	bool IsRuntimeAvailable() const;
 	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.

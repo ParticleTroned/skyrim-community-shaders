@@ -327,7 +327,7 @@ namespace SharedData
 		float cloudSaturation;
 		float fogIntensity;
 		float sunGlareIntensity;
-		float skyStaticBrightness;
+		float weatherColorPadding;
 		float skyStaticTransparency;
 		float2 pad;
 	};

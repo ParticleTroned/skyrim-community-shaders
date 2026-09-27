@@ -1797,6 +1797,7 @@ if(BUILD_CONTROLLER_TESTS)
         "${_adaptive_balance_test_dir}/adaptive_balance_under_test.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_point_lights_under_test.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_point_light_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_weather_hook_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_adaptive_balance_test_headers}

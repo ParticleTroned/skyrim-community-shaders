@@ -525,7 +525,11 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	const bool essentialsMode = globals::menu && globals::menu->IsEssentialsUiMode();
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
-		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() { PerformanceTuningRenderer::Render(); } }
+		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() {
+						DrawFeatureHeader(PERFORMANCE_TUNING_MENU_NAME,
+							"Adjust graphics settings and measure their impact on game performance.");
+						PerformanceTuningRenderer::Render();
+					} }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.

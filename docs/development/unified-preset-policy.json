@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "FADB1B345D903E04BEA15A99563C02AE03B17111D80E64991FA3CBD9C102AE9B"
+        "sha256": "36F051C91951DAA6120BFFBE43C6BDAB208FE20A9A91BC86CEBEA3B867042948"
     },
     "runtimeSettingsContract": {
         "revision": 8,
-        "sourceTreeSha256": "70837C042F123036BD16A034A76B87142078636A9FEEE4F777778FE39FA95055",
+        "sourceTreeSha256": "74C565585693619F539570C55DBFDE47C4B83113C35FE55D90B611BA9ECC7740",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -657,6 +657,7 @@
             { "path": ["Neural Rendering", "rendering", "neuralRenderingEnabled"], "value": false },
             { "path": ["Neural Rendering", "colour", "schemaVersion"], "value": 1 },
             { "path": ["Neural Rendering", "colour", "lightingPreservation"], "value": 1.0 },
+            { "path": ["Extended Materials", "ParallaxStrength"], "value": 1.0 },
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
             { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },

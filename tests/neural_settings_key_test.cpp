@@ -1,3 +1,4 @@
+#include "Features/Upscaling/FoveatedBlendPolicy.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
 #include <cmath>
@@ -39,6 +40,17 @@ int main()
 	}
 	foveated.neuralRenderingBlendFeather = 0.1f;
 	require(BuildNeuralRenderingSettingsKey(foveated) != foveatedKey);
+	auto curved = foveated;
+	curved.foveatedBlendFalloff = 1.5f;
+	require(BuildNeuralRenderingSettingsKey(curved) == BuildNeuralRenderingSettingsKey(foveated));
+	curved.foveatedBlendCurveEnabled = true;
+	require(BuildNeuralRenderingSettingsKey(curved) != BuildNeuralRenderingSettingsKey(foveated));
+	curved.foveatedBlendFalloff = 1.0f;
+	require(BuildNeuralRenderingSettingsKey(curved) == BuildNeuralRenderingSettingsKey(foveated));
+	curved.foveatedBlendFalloff = 1.5f;
+	globals::game::isVR = false;
+	require(BuildNeuralRenderingSettingsKey(curved) == BuildNeuralRenderingSettingsKey(foveated));
+	globals::game::isVR = true;
 	for (const auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::ReducedResolution }) {
 		Upscaling::Settings baseline{};
 		baseline.neuralRenderingEnabled = true;

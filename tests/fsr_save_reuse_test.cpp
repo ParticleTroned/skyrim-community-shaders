@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <format>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace
@@ -67,6 +69,7 @@ struct GraphicsObject
 	}
 	void GetDevice(GraphicsObject** a_result);
 	int Close() { return 0; }
+	int SetName(const wchar_t*) { return 0; }
 	int Create(GraphicsObject** a_result)
 	{
 		++effects.graphicsCreates;
@@ -140,13 +143,17 @@ namespace CSX::NvidiaComIdentity
 {
 	bool IsSame(const GraphicsObject* a_left, const GraphicsObject* a_right) { return a_left == a_right; }
 }
+namespace Util
+{
+	void SetResourceName(GraphicsObject*, const char*) {}
+}
 
 struct WrappedResource
 {
 	GraphicsObject storage11, storage12;
 	winrt::com_ptr<GraphicsObject> resource11{ &storage11 }, resource{ &storage12 };
-	WrappedResource(const D3D11_TEXTURE2D_DESC&, GraphicsObject*, GraphicsObject*) { ++effects.wrappedCreates; }
-	WrappedResource(GraphicsObject*, GraphicsObject*, void*) { ++effects.wrappedCreates; }
+	WrappedResource(const D3D11_TEXTURE2D_DESC&, GraphicsObject*, GraphicsObject*, const std::string&) { ++effects.wrappedCreates; }
+	WrappedResource(GraphicsObject*, GraphicsObject*, const std::string&, void*) { ++effects.wrappedCreates; }
 	~WrappedResource() { ++effects.wrappedDestroys; }
 };
 struct Texture2D

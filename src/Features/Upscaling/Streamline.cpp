@@ -21,6 +21,7 @@
 #include "../../State.h"
 #include "../../Util.h"
 #include "../Upscaling.h"
+#include "CameraReprojection.h"
 #include "DX12SwapChain.h"
 #include "NvidiaBoundedLog.h"
 #include "NvidiaPipelinePolicy.h"
@@ -824,7 +825,7 @@ namespace
 				}
 			} else if (a_stage == Streamline::DLSSDevBenchTraceStage::Evaluate) {
 				++state.evaluateCalls;
-				if (a_resultCode != static_cast<int32_t>(sl::Result::eOk)) {
+				if (!DLSSResultPolicy::IsEvaluationSuccessful(static_cast<sl::Result>(a_resultCode))) {
 					++state.evaluateFailures;
 					state.lastEvaluateFailureFound = true;
 					state.lastEvaluateFailure = record;
@@ -1472,6 +1473,7 @@ bool Streamline::LoadInterposer()
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
+	dlssBudgetWarningThrottle.Reset();
 	lifecycleState.store(LifecycleState::Initialized, std::memory_order_release);
 	logger::info("[Streamline] Successfully initialized Streamline");
 	return true;
@@ -1876,8 +1878,14 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraFar = temporalSnapshot ? temporalSnapshot->scalars.cameraFar : *globals::game::cameraFar;
 
 	auto viewMatrix = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex)).Transpose();
-	auto fullCameraViewToClip = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].projectionUnjittered : globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex)).Transpose();
-	sl::float4x4 fullCameraViewToClipSL = *(sl::float4x4*)&fullCameraViewToClip;
+	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	const auto& previousCameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousPosition : globals::game::frameBufferCached.GetCameraPreviousPosAdjust(eyeIndex);
+	const auto cameraMatrices = UpscalingCamera::BuildReprojection(
+		viewMatrix,
+		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose(),
+		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose(),
+		float3(cameraPosition.x - previousCameraPosition.x, cameraPosition.y - previousCameraPosition.y, cameraPosition.z - previousCameraPosition.z));
+	const auto fullCameraViewToClipSL = std::bit_cast<sl::float4x4>(cameraMatrices.cameraViewToClip);
 	const auto currentCropMatrix = ToStreamlineMatrix(currentCropAffine.fullClipToCrop);
 	sl::matrixMul(
 		slConstants.cameraViewToClip,
@@ -1892,43 +1900,18 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
 	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
 	slConstants.depthInverted = sl::Boolean::eFalse;
+	sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
 
-	if (globals::game::isVR) {
-		// Streamline's shared helper keeps one previous matrix, so VR owns one
-		// exact temporal transform per eye and per cropped viewport.
-		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
-
-		auto currViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose();
-		auto prevViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose();
-
-		sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
-		sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
-
-		sl::float4x4 invCurrViewProj;
-		sl::matrixFullInvert(invCurrViewProj, currViewProjSL);
-		sl::float4x4 fullClipToPrevClip{};
-		sl::matrixMul(fullClipToPrevClip, invCurrViewProj, prevViewProjSL);
-		const auto currentCropInverse =
-			ToStreamlineMatrix(currentCropAffine.cropClipToFull);
-		const auto previousCropMatrix =
-			ToStreamlineMatrix(previousCropAffine.fullClipToCrop);
-		sl::float4x4 currentCropToPreviousFull{};
-		sl::matrixMul(
-			currentCropToPreviousFull,
-			currentCropInverse,
-			fullClipToPrevClip);
-		sl::matrixMul(
-			slConstants.clipToPrevClip,
-			currentCropToPreviousFull,
-			previousCropMatrix);
-
-		sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
-	} else {
-		recalculateCameraMatrices(slConstants);
-	}
+	// Preserve each viewport's crop basis around camera-relative reprojection.
+	const auto fullClipToPrevClip = std::bit_cast<sl::float4x4>(cameraMatrices.clipToPrevClip);
+	const auto currentCropInverse = ToStreamlineMatrix(currentCropAffine.cropClipToFull);
+	const auto previousCropMatrix = ToStreamlineMatrix(previousCropAffine.fullClipToCrop);
+	sl::float4x4 currentCropToPreviousFull{};
+	sl::matrixMul(currentCropToPreviousFull, currentCropInverse, fullClipToPrevClip);
+	sl::matrixMul(slConstants.clipToPrevClip, currentCropToPreviousFull, previousCropMatrix);
+	sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
 
 	// The matrices are authoritative. Keep scalar FOV consistent with an
 	// off-axis crop without also encoding that offset as a pinhole shift.
@@ -3302,7 +3285,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		UpscalingTelemetry::SaturatingIncrement(attempts);
 	}
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
-	if (evalResult == sl::Result::eOk) {
+	const bool evaluationSucceeded = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
+	if (evaluationSucceeded) {
 		*cropHistory = UpscalingDLSS::MakeSuccessfulCropHistory(
 			diagnostics.frame,
 			cropGeneration,
@@ -3333,7 +3317,16 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
-	if (evalResult != sl::Result::eOk) {
+	if (evalResult == sl::Result::eWarnOutOfVRAM) {
+		const uint32_t logEye = globals::game::isVR ? eyeIndex : 0u;
+		const uint32_t frame = state ? state->frameCount : 0u;
+		if (dlssBudgetWarningThrottle.ShouldLog(logEye, frame)) {
+			logger::warn("[Streamline] DLSS output valid but VRAM budget exceeded{} frame={} viewport={} result={} ({})",
+				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
+				frame, static_cast<uint32_t>(vp), static_cast<int>(evalResult), magic_enum::enum_name(evalResult));
+		}
+	}
+	if (!evaluationSucceeded) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::Evaluate, evalResult, diagnosticsPtr);
 #endif
@@ -3365,7 +3358,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
-	return evalResult == sl::Result::eOk;
+	return evaluationSucceeded;
 }
 
 Streamline::DLSSPassTelemetrySnapshot Streamline::GetDLSSPassTelemetrySnapshot(

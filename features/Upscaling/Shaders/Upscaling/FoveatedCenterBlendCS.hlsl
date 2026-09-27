@@ -1,4 +1,4 @@
-#include "Common/FoveatedMask.hlsli"
+#include "Upscaling/FoveatedBlend.hlsli"
 
 cbuffer FoveatedCenterBlendCB : register(b0)
 {
@@ -15,7 +15,7 @@ cbuffer FoveatedCenterBlendCB : register(b0)
 	uint CharacterSelectionMode;
 	uint FinalLdrColorMode;
 	uint FullImage;
-	uint Padding;
+	float BlendFalloff;
 	float4 CharacterMaskBounds;
 };
 
@@ -44,7 +44,7 @@ float4 PrepareFinalLdrModelColor(float4 modelColor, float4 originalColor)
 	uint2 outputPos = localPos + uint2(OutputOffset + 0.5);
 	uint2 targetPos = outputPos + uint2(TargetOffsetX, 0);
 	float2 outputUV = (float2(outputPos) + 0.5) * InvOutputDim;
-	float blendWeight = FullImage != 0 ? 1.0 : FoveatedComputeCenterBlendWeight(outputUV, CenterScale, CenterFeather, CenterHorizontalScale, CenterOffset);
+	float blendWeight = FullImage != 0 ? 1.0 : FoveatedComputeCurvedBlendWeight(outputUV, CenterScale, CenterFeather, CenterHorizontalScale, CenterOffset, BlendFalloff);
 	if (blendWeight <= 0.0)
 		return;
 

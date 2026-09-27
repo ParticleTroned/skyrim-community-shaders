@@ -11436,10 +11436,14 @@ namespace VRRenderScaleDevBenchBridge
 				"stress capture. allowedPresentationStretch adds diagnosticThresholdFrames "
 				"while retaining maximumAcceptedFrames for older readers. Other "
 				"failed gates still reject the capture.";
+			const std::string dlssResultDescription =
+				" DLSS trace evaluateFailures and pinned evaluation failures exclude "
+				"eWarnOutOfVRAM because evaluation completed successfully; raw records "
+				"retain that warning result code. Constants failures remain unchanged.";
 			descriptor["description"] =
-				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription;
+				descriptor["description"].get<std::string>() + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription + dlssResultDescription;
 			descriptor["inputSchema"]["properties"]["action"]["description"] =
-				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription;
+				"Select a diagnostic or control action." + submitFreshnessDescription + readinessRetryDescription + ownedDrainDescription + ordinarySaveDescription + textureLifetimeDescription + stressAcceptanceDescription + dlssResultDescription;
 			descriptor["inputSchema"]["properties"]["milestone"] = {
 				{ "type", "string" },
 				{ "enum", json::array({ "strict", "presentation", "cleanup" }) },

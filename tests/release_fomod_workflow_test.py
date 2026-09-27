@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import os
+import fnmatch
+import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -66,6 +69,89 @@ class ReleaseFomodWorkflowTests(unittest.TestCase):
                 self.assertEqual(self._evaluate(runtime, event_name, requested), "both" if expected else "VR")
                 self.assertIs(self._evaluate(download["if"], event_name, requested), expected)
                 self.assertIs(self._evaluate(assembly, event_name, requested), expected)
+
+    def test_only_complete_aio_is_published_and_attested(self) -> None:
+        publish = next(step for step in self.steps if step["name"] == "Create or Update Release")
+        attest = next(step for step in self.steps if step["name"] == "Generate artifact attestations")
+        self.assertEqual(attest["with"]["subject-path"], "dist/CSX_AIO-*.7z")
+        self.assertEqual(publish["with"]["artifacts"], "${{ github.workspace }}/dist/CSX_AIO-*.7z")
+        assets = ["CSX_AIO-3.19.2-VR.7z", "CSX-3.19.2-VR.7z", "Wetterness-3.19.2-VR.7z",
+                  "ShaderCache-VR-csx3.19.2.7z", "ShaderCache-SE-csx3.19.2.7z"]
+        selected = [name for name in assets if fnmatch.fnmatchcase("dist/" + name, attest["with"]["subject-path"])]
+        self.assertEqual(selected, [assets[0]])
+        self.assertIn("release_name", publish["with"]["name"])
+
+    def test_release_requires_generated_csx_feature_notes(self) -> None:
+        audit = self.workflow["jobs"]["feature-audit"]
+        self.assertFalse(audit.get("continue-on-error", False))
+        self.assertIn("needs.feature-audit.result == 'success'", self.workflow["jobs"]["release"]["if"])
+        download = next(step for step in self.steps if step["name"] == "Download feature audit artifact")
+        self.assertFalse(download.get("continue-on-error", False))
+        notes = next(step for step in self.steps if step["name"] == "Generate combined release notes")
+        self.assertIn("python tools/csx_release.py merge-audit", notes["run"])
+        self.assertNotIn("if [ -f feature-version-audit-latest.md ]", notes["run"])
+
+    def test_nexus_plan_rejects_missing_or_ambiguous_aio(self) -> None:
+        nexus = yaml.safe_load((REPO / ".github/workflows/nexus-upload.yaml").read_text(encoding="utf-8"))
+        events = nexus.get("on", nexus.get(True))
+        for trigger in ("workflow_dispatch", "workflow_call"):
+            inputs = events[trigger]["inputs"]
+            self.assertEqual(inputs["artifact_pattern"]["default"], "CSX_AIO-*.7z")
+            self.assertEqual(inputs["nexus_mod_id"]["default"], "")
+            self.assertEqual(inputs["nexus_file_group_id"]["default"], "")
+        generate = next(step for step in nexus["jobs"]["prepare-nexus-matrix"]["steps"] if step.get("id") == "generate")
+        program = re.search(r'python -c "\n(.*?)\n"', generate["run"], re.DOTALL).group(1)
+        env = {**os.environ, "PYTHONPATH": str(REPO / "tools")}
+        for assets, valid in (([], False), (["Wetterness-3.19.2-VR.7z"], False),
+                              (["CSX_AIO-one.7z", "CSX_AIO-two.7z"], False),
+                              (["CSX_AIO-3.19.2-VR.7z", "CSX-3.19.2-VR.7z"], True)):
+            for configured in (False, True):
+                with self.subTest(assets=assets, configured=configured), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root / "release.json").write_text(json.dumps({
+                        "body": "Release notes.\n\n---\n\n# CSX Feature Audit\nTable.",
+                        "assets": [{"name": name} for name in assets],
+                    }))
+                    (root / "nexus-matrix-raw.json").write_text(json.dumps([{
+                        "name": "core", "artifact_pattern": "CSX_AIO-*.7z", "auto_upload": configured,
+                    }]))
+                    result = subprocess.run([sys.executable, "-c", program], cwd=root,
+                                            env=env, text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
+                    if valid:
+                        matrix = json.loads((root / "nexus-matrix.json").read_text())
+                        self.assertEqual(matrix["include"][0]["changelog"], "Release notes.")
+                        state = json.loads((root / "nexus-upload-state.json").read_text())
+                        self.assertIs(state["has_uploads"], configured)
+
+    def test_nexus_workflow_requires_explicit_csx_target(self) -> None:
+        nexus = yaml.safe_load((REPO / ".github/workflows/nexus-upload.yaml").read_text(encoding="utf-8"))
+        generate = next(step for step in nexus["jobs"]["prepare-nexus-matrix"]["steps"] if step.get("id") == "generate")
+        bash = str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe") if os.name == "nt" else "bash"
+        for dry_run, mod_id, group, valid in (("true", "", "", True),
+                                              ("false", "", "", False),
+                                              ("false", "123456", "", False),
+                                              ("false", "86492", "654321", False),
+                                              ("false", "123456", "654321", True)):
+            with self.subTest(dry_run=dry_run, mod_id=mod_id, group=group), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "tools").mkdir()
+                for name in ("feature_version_audit.py", "csx_release.py"):
+                    shutil.copyfile(REPO / "tools" / name, root / "tools" / name)
+                (root / "release.json").write_text(json.dumps({
+                    "body": "CSX release.", "assets": [{"name": "CSX_AIO-3.19.2-VR.7z"}],
+                }))
+                script = root / "generate.sh"
+                script.write_text(generate["run"], encoding="utf-8", newline="\n")
+                env = {**os.environ, "DRY_RUN": dry_run, "INPUT_NEXUS_MOD_ID": mod_id,
+                       "INPUT_NEXUS_FILE_GROUP_ID": group, "INPUT_MOD_FILENAME": "CSX",
+                       "INPUT_ARTIFACT_PATTERN": "CSX_AIO-*.7z", "RELEASE_TAG": "csx3.19.2",
+                       "GITHUB_OUTPUT": (root / "output.txt").as_posix(),
+                       "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]}
+                result = subprocess.run([bash, str(script)], cwd=root, env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
+                if valid:
+                    self.assertIn("has_uploads=" + str(bool(mod_id)).lower(), (root / "output.txt").read_text())
 
     def test_embedded_powershell_syntax(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

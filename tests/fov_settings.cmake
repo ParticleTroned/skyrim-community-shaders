@@ -11,6 +11,7 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}" --output-dir "${_fov_test_dir}"
     DEPENDS
         "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.cpp"
+        "${PROJECT_SOURCE_DIR}/src/Features/Upscaling.h"
         "${PROJECT_SOURCE_DIR}/src/Features/ScreenSpaceGI.cpp"
         "${PROJECT_SOURCE_DIR}/src/Features/ScreenSpaceGI.h"
         "${PROJECT_SOURCE_DIR}/src/Features/ScreenSpaceShadows.cpp"

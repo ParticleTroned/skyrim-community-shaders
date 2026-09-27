@@ -2,6 +2,9 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
+#if defined(ADAPTIVE_BALANCE)
+#	include "Common/AdaptiveBalanceColor.hlsli"
+#endif
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -229,6 +232,11 @@ PS_OUTPUT main(PS_INPUT input)
 	contrastedColor = lerp(contrastedColorModified, contrastedColor, saturate(contrastedColorModified / 0.1f));  // blend in modified contrast for shadows
 
 	outputColor = contrastedColor;
+
+#		if defined(ADAPTIVE_BALANCE)
+	outputColor = AdaptiveBalanceColor::Apply(outputColor,
+		SharedData::adaptiveBalanceSettings.contrast, SharedData::adaptiveBalanceSettings.saturation, ENABLE_LL);
+#		endif
 
 #		if defined(FADE)
 	outputColor = lerp(outputColor, Fade.xyz, Fade.w);

@@ -3354,19 +3354,11 @@ namespace SIE
 		}
 	}
 
-	void ShaderCache::EvictShader(
-		const std::string& a_key,
+	void ShaderCache::EvictShaderResources(
 		RE::BSShader::Type a_type,
 		uint32_t a_descriptor,
 		ShaderClass a_shaderClass)
 	{
-		// Never hold mapMutex while acquiring compilationMutex: CompilationSet::Add
-		// takes those locks in the opposite order when it checks GetCompletedShader().
-		{
-			std::unique_lock lockM{ mapMutex };
-			shaderMap.erase(a_key);
-		}
-
 		switch (a_shaderClass) {
 		case ShaderClass::Vertex:
 			ReleaseShader(vertexShaders, vertexShadersMutex, a_type, a_descriptor);
@@ -3381,6 +3373,19 @@ namespace SIE
 			logger::warn("Unexpected shader class: {}", static_cast<int>(a_shaderClass));
 			break;
 		}
+	}
+
+	void ShaderCache::EvictShader(
+		const std::string& a_key,
+		RE::BSShader::Type a_type,
+		uint32_t a_descriptor,
+		ShaderClass a_shaderClass)
+	{
+		{
+			std::unique_lock lockM{ mapMutex };
+			shaderMap.erase(a_key);
+		}
+		EvictShaderResources(a_type, a_descriptor, a_shaderClass);
 
 		logger::debug("Marking recompile for shader: {}", a_key);
 	}
@@ -5641,13 +5646,12 @@ namespace SIE
 				info.drawCalls++;
 				info.lastUsed = std::chrono::steady_clock::now();
 			}
+		}
 
-			if (capturing)
-				capturedShaders.try_emplace(key, info);
-		} else if (capturing) {
-			// Normal gameplay captures must not populate the persistent developer map:
-			// ResetFrameShaderTracking intentionally does nothing outside developer mode.
-			auto [it, inserted] = capturedShaders.try_emplace(key);
+		if (capturing) {
+			// Shared bytecode can back several runtime descriptors and disk paths.
+			const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
+			auto [it, inserted] = capturedShaders.try_emplace(taskId);
 			if (inserted)
 				initializeInfo(it->second);
 		}
@@ -5874,7 +5878,7 @@ namespace SIE
 	{
 		const SKSE::stl::scope_exit releaseSlot([this]() noexcept { compilationSet.ReleaseDispatchSlot(); });
 
-		if (stoken.stop_requested()) {
+		if (stoken.stop_requested() || IsTaskStale(task.GetGeneration())) {
 			return;
 		}
 
@@ -6163,7 +6167,8 @@ namespace SIE
 		std::unique_lock lock(compilationMutex);
 		auto inProgressIt = tasksInProgress.find(task);
 		auto processedIt = processedTasks.find(task);
-		if (inProgressIt == tasksInProgress.end() && processedIt == processedTasks.end() && !globals::shaderCache->GetCompletedShader(task)) {
+		// Shared bytecode still needs a runtime shader object for each descriptor.
+		if (inProgressIt == tasksInProgress.end() && processedIt == processedTasks.end()) {
 			LARGE_INTEGER now;
 			QueryPerformanceCounter(&now);
 			auto queuedTask = task;

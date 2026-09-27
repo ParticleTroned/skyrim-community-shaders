@@ -12,12 +12,17 @@
 class PackageIncludes : public ID3DInclude
 {
 public:
-	explicit PackageIncludes(std::filesystem::path root) : root_(std::move(root)) {}
+	explicit PackageIncludes(std::filesystem::path root, std::filesystem::path featureRoot = {}) :
+		root_(std::move(root)), featureRoot_(std::move(featureRoot)) {}
 	HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR name, LPCVOID,
 		LPCVOID* data, UINT* bytes) override
 	{
 		try {
 			std::ifstream file(root_ / name, std::ios::binary | std::ios::ate);
+			if (!file && !featureRoot_.empty()) {
+				file.clear();
+				file.open(featureRoot_ / name, std::ios::binary | std::ios::ate);
+			}
 			if (!file)
 				return E_FAIL;
 			const auto length = file.tellg();
@@ -43,4 +48,5 @@ public:
 
 private:
 	std::filesystem::path root_;
+	std::filesystem::path featureRoot_;
 };

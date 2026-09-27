@@ -27,6 +27,7 @@
 #include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
 #include "Upscaling/FSRTemporalTuningSerialization.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedBlendPolicy.h"
 #include "Upscaling/MotionSharpeningSettings.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/CharacterSettingsJson.h"
@@ -372,6 +373,8 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingBlendFeather)        \
 	OP(foveatedCenterArea)                 \
 	OP(foveatedCenterHorizontalScale)      \
+	OP(foveatedBlendCurveEnabled)          \
+	OP(foveatedBlendFalloff)               \
 	OP(foveatedLeftEyeMaskOffsetX)         \
 	OP(foveatedLeftEyeMaskOffsetY)         \
 	OP(foveatedRightEyeMaskOffsetX)        \
@@ -5084,6 +5087,7 @@ namespace
 		// Feature 18 on its known-working automatic-mask invocation.
 		settings.neuralRenderingAutoMask = true;
 		settings.neuralRenderingUICorrection = false;
+		settings.foveatedBlendFalloff = FoveatedBlendPolicy::ClampFalloff(settings.foveatedBlendFalloff);
 		settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
 		settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 		settings.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
@@ -5427,6 +5431,8 @@ namespace
 			NeuralRendering::CharacterMaskTestMode::Authored);
 		settings.foveatedCenterArea = 0.3f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
+		settings.foveatedBlendCurveEnabled = false;
+		settings.foveatedBlendFalloff = FoveatedBlendPolicy::NeutralFalloff;
 		settings.foveatedLeftEyeMaskOffsetX = 0.0f;
 		settings.foveatedLeftEyeMaskOffsetY = 0.0f;
 		settings.foveatedRightEyeMaskOffsetX = 0.0f;
@@ -5486,6 +5492,8 @@ namespace
 		o_json.erase("neuralCharacterMaskTestMode");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
+		o_json.erase("foveatedBlendCurveEnabled");
+		o_json.erase("foveatedBlendFalloff");
 		o_json.erase("foveatedLeftEyeMaskOffsetX");
 		o_json.erase("foveatedLeftEyeMaskOffsetY");
 		o_json.erase("foveatedRightEyeMaskOffsetX");
@@ -6659,6 +6667,8 @@ namespace
 		if (!foveatedRequested && !NeuralRendering::RequiresFoveatedMask(mode, a_settings.neuralRenderingFovOnly, globals::game::isVR, a_settings.neuralRenderingRenderscaleFov))
 			return hash;
 
+		addFloat(FoveatedBlendPolicy::EffectiveFalloff(
+			globals::game::isVR && a_settings.foveatedBlendCurveEnabled, a_settings.foveatedBlendFalloff));
 		const bool visualizeMask =
 			a_settings.foveatedPeripheryMaskVisualization;
 		add(visualizeMask);
@@ -7550,6 +7560,36 @@ namespace
 		a_view->GetResource(viewResource.put());
 		return GetCOMIdentityAddress(viewResource.get()) ==
 		       GetCOMIdentityAddress(a_expectedResource);
+	}
+
+	bool IsVRDepthEncodeSourceValid(ID3D11ShaderResourceView* a_view, ID3D11Resource* a_source,
+		uint32_t a_width, uint32_t a_height)
+	{
+		if (!a_width || !a_height || !ViewReferencesResource(a_view, a_source))
+			return false;
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		if (!TryGetTexture2DDesc(a_source, textureDesc) ||
+			textureDesc.ArraySize != 1 || textureDesc.MipLevels != 1 || textureDesc.SampleDesc.Count != 1 ||
+			a_width > textureDesc.Width || a_height > textureDesc.Height) {
+			return false;
+		}
+		D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+		a_view->GetDesc(&viewDesc);
+		return viewDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D &&
+		       viewDesc.Texture2D.MostDetailedMip == 0 &&
+		       (viewDesc.Texture2D.MipLevels == 1 || viewDesc.Texture2D.MipLevels == std::numeric_limits<UINT>::max()) &&
+		       (viewDesc.Format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ||
+				   viewDesc.Format == DXGI_FORMAT_R32_FLOAT ||
+				   viewDesc.Format == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS ||
+				   viewDesc.Format == DXGI_FORMAT_R16_UNORM);
+	}
+
+	bool IsVRDepthEncodeTargetValid(const Texture2D* a_texture, uint32_t a_width, uint32_t a_height)
+	{
+		return a_width && a_height && a_texture && a_texture->resource && a_texture->srv && a_texture->uav &&
+		       a_texture->desc.Format == DXGI_FORMAT_R32_FLOAT &&
+		       a_texture->desc.Width >= a_width && a_texture->desc.Height >= a_height &&
+		       a_texture->desc.MipLevels == 1 && a_texture->desc.ArraySize == 1 && a_texture->desc.SampleDesc.Count == 1;
 	}
 
 	bool HasCompatibleCommonVendorViews(
@@ -18840,6 +18880,52 @@ bool Upscaling::SetFoveatedUpscalingEnabled(bool a_enabled)
 	return true;
 }
 
+float Upscaling::GetFoveatedBlendFalloff() const
+{
+	return FoveatedBlendPolicy::EffectiveFalloff(globals::game::isVR && settings.foveatedBlendCurveEnabled, settings.foveatedBlendFalloff);
+}
+
+bool Upscaling::SetFoveatedBlendCurve(bool a_enabled, float a_falloff)
+{
+	if (!globals::game::isVR || !loaded || !globals::state)
+		return false;
+	const float falloff = FoveatedBlendPolicy::ClampFalloff(a_falloff);
+	if (settings.foveatedBlendCurveEnabled == a_enabled && settings.foveatedBlendFalloff == falloff)
+		return true;
+
+	const float previousFalloff = GetFoveatedBlendFalloff();
+	settings.foveatedBlendCurveEnabled = a_enabled;
+	settings.foveatedBlendFalloff = falloff;
+	if (previousFalloff != GetFoveatedBlendFalloff()) {
+		RequestHistoryReset();
+		InvalidateFrameScopedUpscalingState();
+	}
+	if (globals::menu)
+		globals::menu->RequestSettingsDirtyCheck();
+	return true;
+}
+
+void Upscaling::DrawFoveatedBlendSettings()
+{
+	bool enabled = settings.foveatedBlendCurveEnabled;
+	float falloff = settings.foveatedBlendFalloff;
+	bool changed = ImGui::Checkbox("FOV Blend Curve", &enabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Reshapes the center/periphery fade for FOV-only and FOV + TAA.");
+		ImGui::TextUnformatted("Off restores current feathering and remembers the curve value.");
+	}
+	{
+		auto guard = Util::DisableGuard(!enabled);
+		changed |= ImGui::SliderFloat("FOV Blend Falloff", &falloff, FoveatedBlendPolicy::MinFalloff, FoveatedBlendPolicy::MaxFalloff, "%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("1.00 keeps current feathering; lower favors the center, higher favors the periphery.");
+			ImGui::TextUnformatted("Mask shape and transition width stay the same.");
+		}
+	}
+	if (changed)
+		SetFoveatedBlendCurve(enabled, falloff);
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -19010,6 +19096,8 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	settings.foveatedRightEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetX);
 	settings.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetY);
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
+	ImGui::Separator();
+	DrawFoveatedBlendSettings();
 	ImGui::Separator();
 	ImGui::TextUnformatted("Upscaling FOV + TAA Settings");
 	DrawPeripheryTAAControl();
@@ -41542,6 +41630,8 @@ ID3D11ComputeShader* Upscaling::GetEncodeTexturesCS()
 	switch (upscaleMethod) {
 	case UpscaleMethod::kDLSS:
 		defines.push_back({ "DLSS", "" });
+		if (globals::game::isVR)
+			defines.push_back({ "DEPTH_OUTPUT", "" });
 		break;
 	case UpscaleMethod::kFSR:
 		defines.push_back({ "FSR", "" });
@@ -43157,6 +43247,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	cbData.previousViewProj = previousViewProj;
 	cbData.currentCameraPosAdjust = currentCameraPosAdjust;
 	cbData.previousCameraPosAdjust = previousCameraPosAdjust;
+	cbData.blendTuning = { GetFoveatedBlendFalloff(), 0.0f, 0.0f, 0.0f };
 	peripheryTAACB->Update(cbData);
 
 	ID3D11Buffer* cb = peripheryTAACB->CB();
@@ -43275,6 +43366,7 @@ bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 			(support.baseY + support.height) * cbData.invSourceDim.y
 		};
 	}
+	cbData.blendFalloff = GetFoveatedBlendFalloff();
 	foveatedCenterBlendCB->Update(cbData);
 
 	ID3D11Buffer* cb = foveatedCenterBlendCB->CB();
@@ -43376,7 +43468,7 @@ bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* perip
 		ClampPeripheryTAACenterBlendFeather(
 			std::isfinite(centerFeather) ? centerFeather : FoveatedCommon::kCenterFeather),
 		ClampFoveatedCenterHorizontalScale(centerHorizontalScale),
-		0.0f
+		GetFoveatedBlendFalloff()
 	};
 	foveatedSpatialCompositeCB->Update(cbData);
 
@@ -47083,8 +47175,8 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 				CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, true, ("Upscale_ColorOut_" + suffix).c_str(), requiresColorOutRTV) :
 				CreateNamedTexture2D(outWidth, outHeight, colorOutFormat, true, true, requiresColorOutRTV, ("Upscale_ColorOut_" + suffix).c_str());
 
-		// Shader extraction preserves numeric raw depth while permitting legal
-		// per-eye/crop writes from the game's depth/stencil source.
+		// Typed depth can be cropped per eye without depth-stencil copy restrictions.
+		// The encoder preserves the native depth values sampled through the engine SRV.
 		{
 			D3D11_TEXTURE2D_DESC depthDesc = {};
 			depthDesc.Width = allocationInWidth;
@@ -47095,15 +47187,14 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			depthDesc.SampleDesc.Count = 1;
 			depthDesc.Usage = D3D11_USAGE_DEFAULT;
 			depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-			replacement.depth[i] = eastl::make_unique<Texture2D>(depthDesc);
-
-			Util::SetResourceName(replacement.depth[i]->resource.get(), ("Upscale_Depth_" + suffix).c_str());
+			replacement.depth[i] = eastl::make_unique<Texture2D>(depthDesc, ("Upscaling::Depth_" + suffix).c_str());
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 			srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
 			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 			srvDesc.Texture2D.MipLevels = 1;
 			replacement.depth[i]->CreateSRV(srvDesc);
+
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
 			uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
@@ -47153,7 +47244,7 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			(requiresColorOutRTV && !replacement.colorOut[eye]->rtv) ||
 			!replacement.depth[eye] ||
 			!replacement.depth[eye]->resource ||
-			!replacement.depth[eye]->srv ||
+			!replacement.depth[eye]->srv || !replacement.depth[eye]->uav ||
 			!replacement.linearDepth[eye] ||
 			!replacement.linearDepth[eye]->resource ||
 			!replacement.linearDepth[eye]->srv ||
@@ -47556,8 +47647,8 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 	const auto runtimeMethod = GetRuntimeUpscaleMethod();
 	const uint32_t contractGeneration =
 		GetVRVendorEvaluationContractGeneration(runtimeMethod);
-	if (ShouldDeferVRVendorLifecycleMutation() &&
-		!AreActiveVRIntermediateTexturesCompatible(
+	// Encoded guides belong to this resource set; replacing it would discard their contents.
+	if (!AreActiveVRIntermediateTexturesCompatible(
 			runtimeMethod,
 			eyeWidthIn,
 			eyeHeightIn,
@@ -47571,23 +47662,16 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		return false;
 	}
 
-	try {
-		EnsureVRIntermediateTextures(eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut, colorSrc, mvecSrc, reactiveSrc, transparencySrc, contractGeneration);
-	} catch (const std::exception& e) {
-		logger::warn("[Upscaling] Failed to prepare VR per-eye inputs: {}", e.what());
-		return false;
-	} catch (...) {
-		logger::warn("[Upscaling] Failed to prepare VR per-eye inputs.");
-		return false;
-	}
-
 	if (HasQuarantinedVRGuideInputs())
 		return false;
 
+	const bool copyEncodedFSRDepth = copyDepthInput && runtimeMethod == UpscaleMethod::kFSR;
 	if (!vrIntermediateColorIn[0] || !vrIntermediateColorIn[0]->resource || !vrIntermediateColorIn[0]->uav ||
 		!vrIntermediateColorIn[1] || !vrIntermediateColorIn[1]->resource || !vrIntermediateColorIn[1]->uav ||
-		(copyDepthInput && (!vrIntermediateDepth[0] || !vrIntermediateDepth[0]->resource ||
-							   !vrIntermediateDepth[1] || !vrIntermediateDepth[1]->resource)) ||
+		(copyDepthInput && (!IsVRDepthEncodeTargetValid(vrIntermediateDepth[0].get(), eyeWidthIn, eyeHeightIn) ||
+							   !IsVRDepthEncodeTargetValid(vrIntermediateDepth[1].get(), eyeWidthIn, eyeHeightIn))) ||
+		(copyEncodedFSRDepth && (!IsVRDepthEncodeTargetValid(vrIntermediateLinearDepth[0].get(), eyeWidthIn, eyeHeightIn) ||
+									!IsVRDepthEncodeTargetValid(vrIntermediateLinearDepth[1].get(), eyeWidthIn, eyeHeightIn))) ||
 		(copyAuxiliaryInputs &&
 			(!vrIntermediateMotionVectors[0] || !vrIntermediateMotionVectors[0]->resource ||
 				!vrIntermediateMotionVectors[1] || !vrIntermediateMotionVectors[1]->resource ||
@@ -47605,8 +47689,12 @@ bool Upscaling::PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* de
 		D3D11_BOX srcBox = { offsetXIn, 0, 0, offsetXIn + eyeWidthIn, eyeHeightIn, 1 };
 
 		context->CopySubresourceRegion(vrIntermediateColorIn[i]->resource.get(), 0, 0, 0, 0, colorSrc, 0, &srcBox);
-		if (copyDepthInput && !CopyRawDepthRegion(depthSrc, *vrIntermediateDepth[i], srcBox))
-			return false;
+		// DLSS depth is already encoded; FSR periphery shares the encoded native values.
+		if (copyEncodedFSRDepth) {
+			D3D11_BOX depthBox{ 0, 0, 0, eyeWidthIn, eyeHeightIn, 1 };
+			context->CopySubresourceRegion(vrIntermediateDepth[i]->resource.get(), 0, 0, 0, 0,
+				vrIntermediateLinearDepth[i]->resource.get(), 0, &depthBox);
+		}
 		if (copyAuxiliaryInputs) {
 			context->CopySubresourceRegion(vrIntermediateMotionVectors[i]->resource.get(), 0, 0, 0, 0, mvecSrc, 0, &srcBox);
 			context->CopySubresourceRegion(vrIntermediateTransparencyMask[i]->resource.get(), 0, 0, 0, 0, transparencySrc, 0, &srcBox);
@@ -47781,7 +47869,7 @@ bool Upscaling::AreActiveVRIntermediateTexturesCompatible(
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if (!coversInput(vrIntermediateColorIn[eye], colorDesc.Format, true) ||
 			!matchesOutput(vrIntermediateColorOut[eye]) ||
-			!coversInput(vrIntermediateDepth[eye], DXGI_FORMAT_R24G8_TYPELESS, false) ||
+			!coversInput(vrIntermediateDepth[eye], DXGI_FORMAT_R32_FLOAT, true) ||
 			!coversInput(vrIntermediateLinearDepth[eye], DXGI_FORMAT_R32_FLOAT, true) ||
 			!coversInput(vrIntermediateMotionVectors[eye], motionDesc.Format, true) ||
 			!coversInput(vrIntermediateReactiveMask[eye], reactiveDesc.Format, true) ||
@@ -48490,6 +48578,9 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	auto& sourceMotionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
+	if (!IsVRDepthEncodeSourceValid(depth.depthSRV, depthSource, inputStereoLayout.width, inputStereoLayout.height))
+		return false;
+
 	const auto upscaleMethod = GetRuntimeUpscaleMethod();
 	ID3D11ComputeShader* encodeShader = nullptr;
 	static bool loggedEncodeShaderFailure = false;
@@ -48545,8 +48636,9 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 	for (uint32_t eye = 0; eye < 2; ++eye) {
 		if ((eyeMask & (1u << eye)) == 0)
 			continue;
-		if ((copyDepthInput && (!vrIntermediateDepth[eye] || !vrIntermediateDepth[eye]->resource)) ||
-			(upscaleMethod == UpscaleMethod::kFSR && (!vrIntermediateLinearDepth[eye] || !vrIntermediateLinearDepth[eye]->resource || !vrIntermediateLinearDepth[eye]->uav)) ||
+		if (((copyDepthInput || upscaleMethod == UpscaleMethod::kDLSS) &&
+				!IsVRDepthEncodeTargetValid(vrIntermediateDepth[eye].get(), inputWidthPerEye, inputHeight)) ||
+			(upscaleMethod == UpscaleMethod::kFSR && !IsVRDepthEncodeTargetValid(vrIntermediateLinearDepth[eye].get(), inputWidthPerEye, inputHeight)) ||
 			!vrIntermediateMotionVectors[eye] || !vrIntermediateMotionVectors[eye]->uav ||
 			!vrIntermediateReactiveMask[eye] || !vrIntermediateReactiveMask[eye]->uav ||
 			!vrIntermediateTransparencyMask[eye] || !vrIntermediateTransparencyMask[eye]->uav) {
@@ -48604,7 +48696,9 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 				vrIntermediateReactiveMask[eye]->uav.get(),
 				vrIntermediateTransparencyMask[eye]->uav.get(),
 				vrIntermediateMotionVectors[eye]->uav.get(),
-				upscaleMethod == UpscaleMethod::kFSR ? vrIntermediateLinearDepth[eye]->uav.get() : nullptr
+				upscaleMethod == UpscaleMethod::kFSR  ? vrIntermediateLinearDepth[eye]->uav.get() :
+				upscaleMethod == UpscaleMethod::kDLSS ? vrIntermediateDepth[eye]->uav.get() :
+														nullptr
 			};
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			context->Dispatch((dispatchWidth + 7u) >> 3, (dispatchHeight + 7u) >> 3, 1);
@@ -48614,17 +48708,13 @@ bool Upscaling::EncodeSubmitStageVRInputs(ID3D11Resource* colorSource, ID3D11Res
 				static_cast<uint32_t>(upscaleMethod));
 #endif
 
-			if (copyDepthInput) {
-				D3D11_BOX srcBox{
-					sourceEyeRegion.minX + inputMinX,
-					sourceEyeRegion.minY + inputMinY,
-					0,
-					sourceEyeRegion.minX + inputMaxX,
-					sourceEyeRegion.minY + inputMaxY,
-					1
-				};
-				if (!CopyRawDepthRegion(depthSource, *vrIntermediateDepth[eye], srcBox, inputMinX, inputMinY))
-					return false;
+			if (copyDepthInput && upscaleMethod == UpscaleMethod::kFSR) {
+				// The source is a typed UAV output, so release its write binding before copying.
+				ID3D11UnorderedAccessView* nullDepthUAV = nullptr;
+				context->CSSetUnorderedAccessViews(3, 1, &nullDepthUAV, nullptr);
+				D3D11_BOX depthBox{ inputMinX, inputMinY, 0, inputMaxX, inputMaxY, 1 };
+				context->CopySubresourceRegion(vrIntermediateDepth[eye]->resource.get(), 0, inputMinX, inputMinY, 0,
+					vrIntermediateLinearDepth[eye]->resource.get(), 0, &depthBox);
 			}
 			return true;
 		};
@@ -50234,24 +50324,39 @@ void Upscaling::ClearShaderCache()
 	NeuralRendering::CharacterRendering::Instance().ResetShaderCache();
 }
 
-void Upscaling::CopySharedD3D12Resources()
+void Upscaling::PrepareFrameGenerationInputs()
+{
+	InvalidateFrameGenerationInputs();
+	if (ShouldPrepareFrameGeneration())
+		frameGenerationPrepared.store(CopySharedD3D12Resources(), std::memory_order_release);
+}
+
+bool Upscaling::CopySharedD3D12Resources()
 {
 	CS_GPU_PASS("Upscaling::CopySharedD3D12Resources");
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	if (!renderer || !context || !globals::state ||
+		!dx12SwapChain.motionVectorBufferShared12 || !dx12SwapChain.depthBufferShared12 ||
+		!dx12SwapChain.motionVectorBufferShared12->resource11 || !dx12SwapChain.depthBufferShared12->rtv ||
+		!upscaleRasterizerState || !upscaleBlendState)
+		return false;
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
-
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	if (!motionVector.texture || !depth.depthSRV)
+		return false;
+
 	auto* vertexShader = GetUpscaleVS();
 	auto* pixelShader = copyDepthToSharedBufferPS.Get(
 		L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl",
 		{ { "PSHADER", "" } }, "ps_5_0", "main",
 		"Upscaling::CopyDepthToSharedBufferPS");
 	if (!vertexShader || !pixelShader)
-		return;
+		return false;
+
+	context->CopyResource(dx12SwapChain.motionVectorBufferShared12->resource11.get(), motionVector.texture);
 
 	{
 		// Set up viewport for fullscreen rendering
@@ -50302,6 +50407,7 @@ void Upscaling::CopySharedD3D12Resources()
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	context->PSSetShader(nullptr, nullptr, 0);
 	context->VSSetShader(nullptr, nullptr, 0);
+	return true;
 }
 
 void UpdateCameraData()
@@ -50484,7 +50590,7 @@ bool Upscaling::IsFrameGenerationDx12PathActive() const
 	return d3d12SwapChainActive && !globals::game::isVR;
 }
 
-bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+bool Upscaling::ShouldPrepareFrameGeneration() const
 {
 	auto* ui = globals::game::ui;
 	auto* state = globals::state;
@@ -50497,6 +50603,21 @@ bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 	       fidelityFX.IsFrameGenerationRuntimeReady() &&
 	       !streamline.IsFrameGenerationQuarantinedByReflex() &&
 	       (settings.frameGenerationAllowInMenus || !menuOpen);
+}
+
+bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+{
+	// Menu transitions must not enable generation without this frame's inputs.
+	return frameGenerationPrepared.load(std::memory_order_acquire) &&
+	       IsFrameGenerationDx12PathActive() &&
+	       settings.frameGenerationMode &&
+	       fidelityFX.IsFrameGenerationRuntimeReady() &&
+	       !streamline.IsFrameGenerationQuarantinedByReflex();
+}
+
+void Upscaling::InvalidateFrameGenerationInputs() noexcept
+{
+	frameGenerationPrepared.store(false, std::memory_order_release);
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -57006,6 +57127,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		cachedEyeState.generation == activeContractGeneration &&
 		cachedEyeState.colorContract == sourceColorContract &&
 		cachedEyeState.usedFoveatedVendorPath == expectedFoveatedVendorPath &&
+		(!expectedFoveatedVendorPath || cachedEyeState.foveatedBlendFalloff == GetFoveatedBlendFalloff()) &&
 		cachedEyeState.usedDLSSSharpening == submitDLSSSharpening &&
 		cachedEyeState.usedMenuFinalComposite == submitStageMenuFinalCompositeRequested &&
 		cachedEyeState.menuLayerGeneration == submitStageMenuLayerGeneration &&
@@ -58592,6 +58714,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	submitStageVendorEyeState[eyeIndex].currentEyeIdentity =
 		peerInputFreshnessProven ? VRSubmitInputReusePolicy::CurrentEyeIdentity{} : currentEyeInputIdentity;
 	submitStageVendorEyeState[eyeIndex].usedFoveatedVendorPath = shouldUseFoveatedVendorThisEye && !submitStageForceFullEyeVendorFallback;
+	submitStageVendorEyeState[eyeIndex].foveatedBlendFalloff = GetFoveatedBlendFalloff();
 	submitStageVendorEyeState[eyeIndex].usedDLSSSharpening = submitDLSSSharpening;
 	submitStageVendorEyeState[eyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
 	submitStageVendorEyeState[eyeIndex].menuLayerGeneration = submitStageMenuLayerGeneration;
@@ -65047,6 +65170,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const bool finalLdrNeuralLayout =
 		foveatedDispatchEnabled && a_upscaleMethod == UpscaleMethod::kDLSS &&
 		UsesFinalLdrNeuralBlend(settings);
+	const float foveatedBlendFalloff = GetFoveatedBlendFalloff();
 	const float peripheryTAACenterBlendFeather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	const float peripheryTAAOuterScale = ClampPeripheryTAAOuterScaleForCenter(
 		settings.periphery_taa_outer_scale,
@@ -65127,6 +65251,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 			foveatedBlendFeatherChanged ||
 			finalLdrNeuralLayoutChanged ||
 			(compareFoveatedScale && std::abs(foveatedCenterHorizontalScale - previousHistoryFoveatedCenterHorizontalScale) > 1e-4f) ||
+			(compareFoveatedScale && foveatedBlendFalloff != previousHistoryFoveatedBlendFalloff) ||
 			foveatedOffsetsChanged;
 		const bool longFrameGap = globals::game::deltaTime &&
 		                          std::isfinite(*globals::game::deltaTime) &&
@@ -65185,6 +65310,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	previousHistoryFinalLdrNeuralLayout = finalLdrNeuralLayout;
 	previousHistoryFoveatedMaskVisualization = foveatedMaskVisualization;
 	previousHistoryFoveatedCenterHorizontalScale = foveatedCenterHorizontalScale;
+	previousHistoryFoveatedBlendFalloff = foveatedBlendFalloff;
 	previousHistoryFoveatedCenterOffsets = foveatedCenterOffsets;
 	previousHistoryPeripheryTAA = peripheryTAAEnabled;
 	previousHistoryPeripheryTAAPathActive = peripheryTAAPathActive;
@@ -65615,6 +65741,12 @@ void Upscaling::Upscale()
 #endif
 				return false;
 			}
+			if (!IsVRDepthEncodeSourceValid(depth.depthSRV, depth.texture, inputStereoLayout.width, inputStereoLayout.height)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				recordMainPassStage(VRMainPassDispatchStage::EncodePrerequisitesMissing);
+#endif
+				return false;
+			}
 			const uint32_t contractGeneration =
 				GetVRVendorEvaluationContractGeneration(upscaleMethod);
 			if (vendorLifecycleMutationDeferred &&
@@ -65659,7 +65791,8 @@ void Upscaling::Upscale()
 				if (!vrIntermediateMotionVectors[eye] || !vrIntermediateMotionVectors[eye]->uav ||
 					!vrIntermediateReactiveMask[eye] || !vrIntermediateReactiveMask[eye]->uav ||
 					!vrIntermediateTransparencyMask[eye] || !vrIntermediateTransparencyMask[eye]->uav ||
-					(upscaleMethod == UpscaleMethod::kFSR && (!vrIntermediateLinearDepth[eye] || !vrIntermediateLinearDepth[eye]->uav))) {
+					(upscaleMethod == UpscaleMethod::kFSR && !IsVRDepthEncodeTargetValid(vrIntermediateLinearDepth[eye].get(), eyeWidthIn, eyeHeightIn)) ||
+					(upscaleMethod == UpscaleMethod::kDLSS && !IsVRDepthEncodeTargetValid(vrIntermediateDepth[eye].get(), eyeWidthIn, eyeHeightIn))) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 					recordMainPassStage(VRMainPassDispatchStage::EncodeIntermediateResourcesMissing);
 #endif
@@ -65698,7 +65831,9 @@ void Upscaling::Upscale()
 					vrIntermediateReactiveMask[eye]->uav.get(),
 					vrIntermediateTransparencyMask[eye]->uav.get(),
 					vrIntermediateMotionVectors[eye]->uav.get(),
-					(upscaleMethod == UpscaleMethod::kFSR) ? vrIntermediateLinearDepth[eye]->uav.get() : nullptr
+					upscaleMethod == UpscaleMethod::kFSR  ? vrIntermediateLinearDepth[eye]->uav.get() :
+					upscaleMethod == UpscaleMethod::kDLSS ? vrIntermediateDepth[eye]->uav.get() :
+															nullptr
 				};
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 				context->Dispatch((dispatchWidth + 7u) >> 3, (dispatchHeight + 7u) >> 3, 1);
@@ -66422,6 +66557,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
+	upscaling.InvalidateFrameGenerationInputs();
 	if (globals::game::isVR)
 		upscaling.ReleaseVRGameEntryVendorWorkGatesIfConverged();
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
@@ -66468,8 +66604,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			return;
 		}
 
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
+		upscaling.PrepareFrameGenerationInputs();
 
 		upscaling.PerformUpscaling();
 
@@ -66507,8 +66642,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		if (vrRenderScaleVisuallyActive || upscaling.IsPerfModeActive())
 			globals::features::vr.InstallSubmitHook();
 
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
+		upscaling.PrepareFrameGenerationInputs();
 
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
@@ -66524,8 +66658,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	if (presentationUpscalingActive) {
 		globals::features::vr.InstallSubmitHook();
 
-		if (upscaling.ShouldUseFrameGenerationThisFrame())
-			upscaling.CopySharedD3D12Resources();
+		upscaling.PrepareFrameGenerationInputs();
 
 		upscaling.UpdateHistoryResetState(upscaleMethod);
 		upscaling.LatchHistoryResetForCurrentFrame();
@@ -66558,8 +66691,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		return;
 	}
 
-	if (upscaling.ShouldUseFrameGenerationThisFrame())
-		upscaling.CopySharedD3D12Resources();
+	upscaling.PrepareFrameGenerationInputs();
 
 	// Preserve the normal full color-upscaling path in VR even when submit-stage
 	// presentation is inactive. A former depth-only early return here skipped

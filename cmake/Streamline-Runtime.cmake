@@ -8,7 +8,7 @@ set(
     "https://github.com/NVIDIA-RTX/Streamline/releases/download/v${STREAMLINE_RUNTIME_VERSION}/streamline-sdk-v${STREAMLINE_RUNTIME_VERSION}.zip"
 )
 
-include("${CMAKE_CURRENT_LIST_DIR}/CsxDownload.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/RuntimePayload.cmake")
 
 set(STREAMLINE_RUNTIME_WORK_ROOT "${CMAKE_CURRENT_BINARY_DIR}/streamline-runtime")
 set(
@@ -35,10 +35,10 @@ set(
 file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_WORK_ROOT}")
 file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_DIRECTORY}")
 
-csx_download_verified_asset(
+csx_prepare_runtime_asset(
     "${STREAMLINE_RUNTIME_ARCHIVE_URL}"
     "${STREAMLINE_RUNTIME_ARCHIVE}"
-    "${STREAMLINE_RUNTIME_ARCHIVE_SHA256}"
+    "${STREAMLINE_RUNTIME_ARCHIVE_SHA256}" _streamline_archive_available
 )
 
 set(_streamline_extract_required ON)
@@ -50,7 +50,7 @@ if(EXISTS "${STREAMLINE_RUNTIME_EXTRACT_STAMP}")
     endif()
 endif()
 
-if(_streamline_extract_required)
+if(_streamline_extract_required AND NOT SKIP_RUNTIME_DOWNLOADS)
     file(REMOVE_RECURSE "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
     file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
     file(
@@ -62,10 +62,34 @@ if(_streamline_extract_required)
         WRITE "${STREAMLINE_RUNTIME_EXTRACT_STAMP}"
         "${STREAMLINE_RUNTIME_ARCHIVE_SHA256}\n"
     )
+    set(_streamline_extract_required OFF)
 endif()
 
 function(stage_streamline_runtime _relative_path)
     set(_source "${STREAMLINE_RUNTIME_EXTRACT_ROOT}/${_relative_path}")
+    get_filename_component(_filename "${_source}" NAME)
+    set(_destination "${STREAMLINE_RUNTIME_DIRECTORY}/${_filename}")
+    set(STREAMLINE_RUNTIME_PAYLOAD_FILES
+        ${STREAMLINE_RUNTIME_PAYLOAD_FILES}
+        "${_destination}"
+        PARENT_SCOPE
+    )
+    if(
+        SKIP_RUNTIME_DOWNLOADS
+        AND (
+            NOT _streamline_archive_available
+            OR _streamline_extract_required
+            OR NOT EXISTS "${_source}"
+            OR IS_DIRECTORY "${_source}"
+        )
+    )
+        set(STREAMLINE_RUNTIME_PAYLOAD_MISSING
+            ${STREAMLINE_RUNTIME_PAYLOAD_MISSING}
+            "${_destination}"
+            PARENT_SCOPE
+        )
+        return()
+    endif()
     if(NOT EXISTS "${_source}" OR IS_DIRECTORY "${_source}")
         message(
             FATAL_ERROR
@@ -73,8 +97,6 @@ function(stage_streamline_runtime _relative_path)
         )
     endif()
 
-    get_filename_component(_filename "${_source}" NAME)
-    set(_destination "${STREAMLINE_RUNTIME_DIRECTORY}/${_filename}")
     file(COPY_FILE "${_source}" "${_destination}" ONLY_IF_DIFFERENT)
     set(STREAMLINE_RUNTIME_FILES
         ${STREAMLINE_RUNTIME_FILES}
@@ -84,6 +106,8 @@ function(stage_streamline_runtime _relative_path)
 endfunction()
 
 set(STREAMLINE_RUNTIME_FILES "")
+set(STREAMLINE_RUNTIME_PAYLOAD_FILES "")
+set(STREAMLINE_RUNTIME_PAYLOAD_MISSING "")
 # Use production binaries and their original notices from the same pinned SDK.
 foreach(
     _relative_path

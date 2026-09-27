@@ -31,8 +31,14 @@ class RuntimeStaging(unittest.TestCase):
                 'foreach(name nvngx_dlss.dll sl.interposer.dll)\n'
                 'file(WRITE "${CMAKE_BINARY_DIR}/runtime/${name}" "normal ${name}")\n'
                 'list(APPEND STREAMLINE_RUNTIME_FILES "${CMAKE_BINARY_DIR}/runtime/${name}")\n'
+                'list(APPEND STREAMLINE_RUNTIME_PAYLOAD_FILES "${CMAKE_BINARY_DIR}/runtime/${name}")\n'
                 'endforeach()\n'
-                f'include("{ROOT.as_posix()}/cmake/NeuralRenderingRuntime.cmake")\n',
+                f'include("{ROOT.as_posix()}/cmake/NeuralRenderingRuntime.cmake")\n'
+                f'include("{ROOT.as_posix()}/cmake/RuntimePayload.cmake")\n'
+                'set(CSX_RUNTIME_INSTALL_GUARD "${CMAKE_BINARY_DIR}/runtime_payload_install_guard.cmake")\n'
+                'csx_configure_runtime_payload()\n'
+                'install(SCRIPT "${CSX_RUNTIME_INSTALL_GUARD}" ALL_COMPONENTS)\n'
+                'install(FILES ${STREAMLINE_RUNTIME_PAYLOAD_FILES} DESTINATION runtime)\n',
                 encoding="utf-8",
             )
 
@@ -59,6 +65,16 @@ class RuntimeStaging(unittest.TestCase):
                              {"nvngx_dlss.dll", "sl.interposer.dll", "nvngx_dlssnr.dll"})
             self.assertEqual((staged / "nvngx_dlss.dll").read_bytes(), b"normal nvngx_dlss.dll")
             self.assertEqual((staged / "nvngx_dlssnr.dll").read_bytes(), provider.read_bytes())
+
+            destination = fixture / "installed"
+            installed = cmake("--install", build, "--prefix", destination)
+            self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+            self.assertEqual((destination / "runtime/nvngx_dlssnr.dll").read_bytes(), provider.read_bytes())
+            (staged / "nvngx_dlssnr.dll").write_bytes(b"changed staged NR provider")
+            rejected_install = cmake("--install", build, "--prefix", destination)
+            self.assertNotEqual(rejected_install.returncode, 0)
+            self.assertEqual((destination / "runtime/nvngx_dlssnr.dll").read_bytes(), provider.read_bytes())
+            (staged / "nvngx_dlssnr.dll").write_bytes(provider.read_bytes())
 
             provider.write_bytes(b"changed after configuration")
             rejected = cmake("-P", verify)

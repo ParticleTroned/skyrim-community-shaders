@@ -277,6 +277,8 @@ class ShaderCachePackagingTests(unittest.TestCase):
             "CS_HAIR",
             "D3DCOMPILE_DEBUG",
             "D3DCOMPILE_SKIP_OPTIMIZATION",
+            "VANILLA_FRESNEL",
+            "HDR_OUTPUT",
             "EXTENDED_TRANSLUCENCY",
             "GRASS_COLLISION",
             "HORIZON_FIX",
@@ -612,6 +614,9 @@ class ShaderCachePackagingTests(unittest.TestCase):
         self.assertNotIn("WETNESS_EFFECTS", names)
         self.assertNotIn("D3DCOMPILE_DEBUG", names)
         self.assertNotIn("D3DCOMPILE_SKIP_OPTIMIZATION", names)
+        self.assertNotIn("VANILLA_FRESNEL", names)
+        self.assertNotIn("HDR_OUTPUT", names)
+        self.assertNotIn("WETTERNESS", config["common_defines"])
 
         for shader in config["shaders"]:
             self.assertIn(
@@ -624,17 +629,15 @@ class ShaderCachePackagingTests(unittest.TestCase):
             copy.deepcopy(self._sample_shader_config()),
             BUILDER.SHIPPED_CACHE_PROFILE,
             additional_excluded_defines=frozenset({"HORIZON_FIX"}),
-            excluded_define_exceptions=frozenset({"WETNESS_EFFECTS"}),
         )
         standard_names = self._all_define_names(standard_config)
-        self.assertIn("WETNESS_EFFECTS", standard_names)
+        self.assertNotIn("WETNESS_EFFECTS", standard_names)
         self.assertNotIn("HORIZON_FIX", standard_names)
 
         horizon_config = BUILDER.apply_cache_profile_defines(
             copy.deepcopy(self._sample_shader_config()),
             BUILDER.SHIPPED_CACHE_PROFILE,
             additional_excluded_defines=frozenset({"HORIZON_FIX"}),
-            excluded_define_exceptions=frozenset({"WETNESS_EFFECTS"}),
             additional_file_defines={"Water.hlsl": ("HORIZON_FIX",)},
         )
         shaders = {
@@ -697,6 +700,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 for entry in stages["VSHADER"]["entries"]
             },
             {
+                "Grass:Vertex:0": (),
                 "Grass:Vertex:5": (),
                 "Grass:Vertex:7": (),
             },
@@ -776,6 +780,9 @@ class ShaderCachePackagingTests(unittest.TestCase):
         profile = BUILDER.derive_distribution_profile(REPO)
         self.assertEqual(profile.horizon_fix_define, "HORIZON_FIX")
         self.assertNotIn("HorizonFix", profile.excluded_short_names)
+        self.assertIn("WetnessEffects", profile.excluded_short_names)
+        self.assertIn("Wetness Effects", profile.excluded_packages)
+        self.assertIn("WETNESS_EFFECTS", profile.excluded_defines)
 
     def test_patka_profile_removes_disabled_feature_defines(self) -> None:
         self.assertEqual(

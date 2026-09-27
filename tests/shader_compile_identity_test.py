@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 from shader_cache_manifest import compile_task_defines, prepare_fxc_defines, write_manifest
 from hlslkit.compile_shaders import parse_shader_configs
-from hlslkit.shader_digest import combine_hashes, hash_string, to_hex
+from hlslkit.shader_digest import combine_hashes, compute_shader_content_digest, hash_string, to_hex
 import yaml
 
 spec = importlib.util.spec_from_file_location("cache_builder", REPO / "tools/build-shader-cache.py")
@@ -26,6 +27,62 @@ RUNTIME_TEST = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.
 
 
 class ShaderCompileIdentityTests(unittest.TestCase):
+    def test_se_release_macros_match_preserved_runtime_requests(self) -> None:
+        fixture = json.loads((REPO / "tests/data/shader_cache_se_runtime_trace.json").read_text(encoding="utf-8"))
+        distribution = BUILDER.derive_distribution_profile(REPO)
+        stages = {"Pixel": "PSHADER", "Vertex": "VSHADER", "Compute": "CSHADER"}
+        pattern = re.compile(r"Compiling Data/Shaders/(\S+) (\S+):(Pixel|Vertex|Compute):([0-9A-F]+) to (.*)")
+        with tempfile.TemporaryDirectory() as temporary:
+            config = BUILDER.filter_profile_defines(
+                REPO / ".github/configs/shader-validation.yaml",
+                Path(temporary) / "SE.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                additional_excluded_defines=distribution.excluded_defines | {distribution.horizon_fix_define},
+                add_cross_modlist_variants=True,
+            )
+            generated = compile_task_defines(parse_shader_configs(str(config)))
+            for line in fixture["compileLines"]:
+                match = pattern.search(line)
+                self.assertIsNotNone(match, line)
+                source, family, stage, descriptor, macros = match.groups()
+                # Runtime diagnostic bare names are empty D3D macros, not FXC's 1.
+                defines = [
+                    token if "=" in token else token + "="
+                    for token in macros.split()
+                    if token not in {"D3DCOMPILE_DEBUG", "D3DCOMPILE_SKIP_OPTIMIZATION"}
+                ]
+                captured = compile_task_defines([(source, stages[stage], f"{family}:{stage}:{descriptor}", defines)])
+                for key, expected in captured.items():
+                    with self.subTest(source=source, stage=stage, descriptor=descriptor):
+                        self.assertIn(key, generated)
+                        self.assertEqual(generated[key], expected)
+
+    def test_se_stage_excludes_non_shipped_includes_from_source_identity(self) -> None:
+        distribution = BUILDER.derive_distribution_profile(REPO)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage = root / "SE"
+            BUILDER.stage_merged_shaders(REPO, stage, distribution.excluded_packages)
+            self.assertFalse((stage / "Features/WetnessEffects.ini").exists())
+            self.assertFalse((stage / "WetnessEffects").exists())
+            cache = root / "cache"
+            cache.mkdir()
+            BUILDER.write_info_ini(
+                cache, stage, REPO, "CSX 3.19-VR", "SE",
+                BUILDER.SHIPPED_CACHE_PROFILE, "test-abi",
+                excluded_features=distribution.excluded_short_names,
+            )
+            self.assertNotIn("WetnessEffects", BUILDER.read_feature_states(cache))
+
+            for name in ("Lighting.hlsl", "Water.hlsl"):
+                before = compute_shader_content_digest(stage / name, stage, {})
+                self.assertIsNotNone(before)
+                # The legacy conditional include participates even when its macro is off.
+                legacy = stage / "WetnessEffects/WetnessEffects.hlsli"
+                legacy.parent.mkdir(exist_ok=True)
+                legacy.write_text("// unshipped include\n", encoding="utf-8")
+                self.assertNotEqual(before, compute_shader_content_digest(stage / name, stage, {}))
+                legacy.unlink()
+
     def test_shipped_inventories_resolve_unique_macro_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             for runtime, name in (("SE", "shader-validation.yaml"), ("VR", "shader-validation-vr.yaml")):

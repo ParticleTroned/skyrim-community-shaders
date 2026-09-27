@@ -179,6 +179,17 @@ try {
     $afterCheckSnapshot = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
     Assert-True ($baselineSnapshot -ceq $afterCheckSnapshot) '-Check mutated the generated package set.'
 
+    $longOutputRoot = Join-Path $fixtureRoot ('long-path-' + ('a' * 100))
+    $longOutputRoot = Join-Path $longOutputRoot ('b' * 100)
+    $longReportPath = Join-Path $longOutputRoot 'report.json'
+    Assert-True ($longReportPath.Length -gt 260) 'The long-path fixture must exceed MAX_PATH.'
+    & $isolatedGenerator -OutputRoot $longOutputRoot -ReportPath $longReportPath | Out-Null
+    Assert-True $? 'Long-path unified preset generation failed.'
+    $longSnapshot = Get-PublicationSnapshot -OutputRoot $longOutputRoot -ReportPath $longReportPath
+    & $isolatedGenerator -OutputRoot $longOutputRoot -ReportPath $longReportPath -Check | Out-Null
+    Assert-True $? 'Long-path unified presets did not pass -Check.'
+    Assert-True ($longSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $longOutputRoot -ReportPath $longReportPath)) 'Long-path -Check mutated the generated package set.'
+
     $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
     $invalidPolicy.tierOrder = @('Performance', 'Balanced')
     Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy

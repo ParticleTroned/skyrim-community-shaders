@@ -87,7 +87,7 @@ namespace
 		std::uint32_t characterSelectionMode = 1;
 		std::uint32_t finalLdrColorMode = 0;
 		std::uint32_t fullImage = 0;
-		std::uint32_t padding = 0;
+		float blendFalloff = 1.0f;
 		float characterMaskBounds[4]{};
 	};
 	static_assert(sizeof(BlendConstants) == 96);
@@ -149,7 +149,8 @@ namespace
 			Check(device_->CreateComputeShader(captureBlob->GetBufferPointer(),
 					  captureBlob->GetBufferSize(), nullptr, &captureShader_),
 				"Create capture shader");
-			PackageIncludes includes(shaderDirectory);
+			PackageIncludes includes(shaderDirectory,
+				shaderDirectory.parent_path().parent_path() / "features/Upscaling/Shaders");
 			const auto blendPath = shaderDirectory.parent_path().parent_path() /
 			                       "features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl";
 			auto blendBlob = Compile(blendPath, &includes);
@@ -169,6 +170,9 @@ namespace
 			D3D11_SHADER_VARIABLE_DESC fullImageDesc{};
 			Check(blendBuffer->GetVariableByName("FullImage")->GetDesc(&fullImageDesc), "Reflect full-image route");
 			Require(fullImageDesc.StartOffset == offsetof(BlendConstants, fullImage), "BlendConstants full-image offset differs");
+			D3D11_SHADER_VARIABLE_DESC falloffDesc{};
+			Check(blendBuffer->GetVariableByName("BlendFalloff")->GetDesc(&falloffDesc), "Reflect blend falloff");
+			Require(falloffDesc.StartOffset == offsetof(BlendConstants, blendFalloff), "BlendConstants falloff offset differs");
 			D3D11_SHADER_VARIABLE_DESC boundsDesc{};
 			Check(blendBuffer->GetVariableByName("CharacterMaskBounds")->GetDesc(&boundsDesc),
 				"Reflect character mask bounds");

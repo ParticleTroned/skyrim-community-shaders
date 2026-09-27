@@ -283,7 +283,7 @@ struct FidelityFX
 	};
 	Sharpening ResolveFSRSharpeningSettings(float a_sharpness) { return { a_sharpness > 0, a_sharpness }; }
 	void LogFSRSharpeningDispatch(Sharpening, const char*) {}
-	bool DispatchHostFsr3UpscaleProtected(uint32_t a_eye, const FfxFsr3DispatchUpscaleDescription& a_params, bool& a_crashed)
+	bool DispatchHostFsr3UpscaleProtected(uint32_t a_eye, const FfxFsr3DispatchUpscaleDescription& a_params, bool& a_crashed, uint32_t& a_exceptionCode)
 	{
 		lastHostDrainInvalidations = relatchDrainInvalidations;
 		++hostCalls;
@@ -291,6 +291,7 @@ struct FidelityFX
 		lastHostReset = a_params.reset;
 		lastHostParameters = a_params;
 		a_crashed = hostDispatchFault;
+		a_exceptionCode = hostDispatchFault ? 0xC0000005u : 0u;
 		return hostDispatchReady && !hostDispatchFault;
 	}
 	void ArmRuntimeHostFallback(uint32_t);

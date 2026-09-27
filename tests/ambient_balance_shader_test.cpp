@@ -107,7 +107,7 @@ namespace
 			D3D11_SHADER_TYPE_DESC ambientDesc{};
 			Check(balance->GetDesc(&balanceDesc));
 			Check(balance->GetType()->GetMemberTypeByName("ambientMult")->GetDesc(&ambientDesc));
-			if (balanceDesc.Size != 48 || ambientDesc.Offset != 36)
+			if (balanceDesc.Size != 80 || ambientDesc.Offset != 36)
 				throw std::runtime_error("Adaptive Balance shader layout differs from the CPU buffer");
 			shared = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::SharedData");
 			permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");

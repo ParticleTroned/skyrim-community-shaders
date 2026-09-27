@@ -29,12 +29,27 @@ target_include_directories(
 target_link_libraries(shader_include_test PRIVATE d3dcompiler.lib)
 set_tests_properties(ShaderInclude PROPERTIES TIMEOUT 120)
 
+add_d3d_shader_test(
+    adaptive_balance_color_shader_test
+    AdaptiveBalanceColorShader
+    tests/adaptive_balance_color_shader_test.cpp
+)
+
+add_d3d_shader_test(
+    foveated_blend_curve_shader_test
+    FoveatedBlendCurveShader
+    tests/foveated_blend_curve_shader_test.cpp
+)
+
 foreach(
     _target
     IN
     ITEMS
         shader_include_test
+        adaptive_balance_color_shader_test
+        foveated_blend_curve_shader_test
         ambient_balance_shader_test
+        vr_depth_encode_shader_test
         skylighting_probe_slice_test
         motion_sharpening_runtime_compile_test
         volumetric_lighting_composite_test

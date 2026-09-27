@@ -1401,7 +1401,8 @@ string(REGEX REPLACE
     "${_menu_frame_section}"
 )
 foreach(_combined_menu_guard_contract IN ITEMS
-    [[vrMenuCommittedLayerValid && (!menuPresentationContextActive || communityShadersMenuOpen)]]
+    [[const bool explicitMenuPresentationContextActive = IsExplicitVRMenuPresentationContextActive();]]
+    [[vrMenuCommittedLayerValid && (!explicitMenuPresentationContextActive || communityShadersMenuOpen)]]
     [[communityShadersMenuOpen ? "community-shaders-menu-open" :]]
     [[if (communityShadersMenuOpen && vrMenuFrameTransaction.frame == a_frame)]]
     [[PoisonVRMenuFrameTransaction("community-shaders-menu-open-during-transaction")]]

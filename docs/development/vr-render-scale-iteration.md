@@ -13,6 +13,24 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 27: typed per-eye depth implementation
+
+The selective [Open Shaders #769 port](open-shaders-dev-sync.md#769-typed-per-eye-foveated-depth-accepted)
+reuses the guide encoder to write native depth values into R32_FLOAT
+per-eye textures for VR DLSS. FSR retains its existing typed output;
+periphery TAA copies that output when needed. Foveated crops consequently
+copy typed colour-format resources rather than boxed depth-stencil
+subresources. Source identity, bounds and destination readiness are
+checked before dispatch. Input preparation cannot replace resources after
+their guides have been encoded.
+
+This is implementation evidence only. Source extraction and existing
+script contracts passed; the new D3D11 WARP fixture has not been compiled
+or run. Builds, shader compilation and SE/AE/VR runtime checks are deferred
+until the selective sync ends, as requested by the user. Physical-HMD
+qualification and matched performance evidence remain pending. No new
+measurements or numbered ledger snapshot are claimed or created.
+
 ## September 20: native menu pointer overlay
 
 The [native pointer correction](vr-menu-pointer-overlay.md) captures only

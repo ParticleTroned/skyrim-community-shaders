@@ -1645,14 +1645,14 @@ Validation:
     validation, shader compilation and SE/AE/VR runtime checks remain
     deferred until the end by user instruction.
 
-### #769: typed per-eye foveated depth, recommendation awaiting decision
+### #769: typed per-eye foveated depth, accepted
 
 [Open Shaders #769](https://github.com/alandtse/open-shaders/pull/769),
 `aeba846179bad44a7560a583a8f019f1e2cf0c42`, is titled
 `fix(upscaling): typed per-eye foveated depth`.
 
-Recommend **i: adapt the missing DLSS depth conversion; retain the existing
-FSR conversion and local stereo/lifecycle contracts**. Reviewed the complete
+The user selected **i: adapt the missing DLSS depth conversion; retain the
+existing FSR conversion and local stereo/lifecycle contracts**. Reviewed the complete
 seven-file diff, PR metadata and both local main/submit depth producers,
 their foveated consumers, resource formats and the encode shader. The
 relevant local depth code is also present in current `main-VR`.
@@ -1663,16 +1663,16 @@ writes an R32_FLOAT UAV with explicit X/Y source offsets, checks bounds
 and resources, and returns failure when conversion cannot run. It also
 passes one resolved depth SRV through preparation and HMD-mask clearing.
 
-Local FSR already writes native depth values to per-eye R32_FLOAT textures
+Before this port, local FSR already wrote native depth values to per-eye R32_FLOAT textures
 through `EncodeTexturesCS` with `DEPTH_OUTPUT`. Main and submit encoding
 support X/Y offsets and foveated regions. The separate upstream foveated
 module does not exist locally, and duplicating its FSR conversion is not
-needed. Local DLSS, however, still takes depth from `vrIntermediateDepth`:
-`PreparePerEyeInputs` and `EncodeSubmitStageVRInputs` fill it using boxed
+needed. Local DLSS, however, took depth from `vrIntermediateDepth`:
+`PreparePerEyeInputs` and `EncodeSubmitStageVRInputs` filled it using boxed
 `CopySubresourceRegion` calls from the engine's main depth texture. The
 foveated center then crops that intermediate into its own depth input.
 
-Those DLSS intermediates correctly use the R24G8 format family instead of
+Those DLSS intermediates used the R24G8 format family instead of
 upstream's R32 allocation, but format compatibility does not settle the
 source-copy restriction. Microsoft's
 [CopySubresourceRegion contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-copysubresourceregion)
@@ -1681,13 +1681,111 @@ destination offsets and a null source box. The reviewed producers pass
 eye/region boxes instead. This is an API-contract concern in local code,
 not a runtime measurement or proof of a particular visible artifact.
 
-Adapt depth production to typed-SRV conversion for the affected DLSS path,
-reusing the existing encoder where practical. Preserve current eye offsets,
-crop ownership, retained input proofs, resource retirement, periphery TAA,
-error fallback and SE/AE behavior. Format/readiness checks and consumers
-must agree with the resulting resources. The later #779 review overlaps
-the standard depth-copy problem and must account for any shared fix made
-here. No #769 code has been changed; await the user's `i` or `r`.
+Implemented the missing conversion through the existing guide encoder:
+
+-   VR DLSS adds `DEPTH_OUTPUT` to its existing cached shader permutation.
+    Both main-pass and submit-stage encoding bind the per-eye R32_FLOAT
+    depth UAV at `u3`. No extra shader, constant buffer or dispatch is
+    introduced. The existing X/Y source and output offsets cover each eye
+    and foveated region. Depth remains in the engine's native range; it is
+    neither linearized nor inverted.
+-   `vrIntermediateDepth` now has named R32_FLOAT SRV/UAV storage. Resource
+    compatibility and readiness checks require the new format and views.
+    Existing foveated center resources inherit the typed format, making
+    their region copies R32_FLOAT-to-R32_FLOAT.
+-   FSR retains its existing `vrIntermediateLinearDepth` encoder output.
+    When periphery TAA also needs the shared depth input, copy the encoded
+    typed region. Submit encoding unbinds its depth UAV before that copy.
+    DLSS no longer performs either boxed copy from engine depth-stencil.
+-   Both VR producers validate the depth SRV's resource identity, readable
+    format, single-mip/array/sample shape and stereo source extent. Typed
+    destinations must cover the dispatch and provide resource/SRV/UAV.
+    Invalid inputs return through the existing failure/fallback paths.
+-   `PreparePerEyeInputs` consumes the already encoded resource set and
+    returns failure if it is incompatible. Allocation remains before
+    encoding, so preparation cannot discard freshly encoded depth or other
+    guides. Reviewed all three consumers: main foveated dispatch,
+    Streamline full-eye dispatch and FidelityFX split-eye dispatch.
+-   Existing source ownership, input freshness proofs, eye masks, crop
+    bounds, resource retirement, fallback re-encoding and cleanup remain.
+    Flat SE/AE DLSS keeps its original permutation; flat FSR's typed-depth
+    selection is unchanged. No settings or DevBench action changes.
+
+Added `VRDepthEncodeShader`, a D3D11 WARP test using the production encoder
+and extracted production validation helpers. It covers native D24-to-float
+values, both eyes, nonzero X/Y regions, compact output offsets, untouched
+pixels outside dispatch, source/target rejection and `u3` reflection. Its
+18 GPU cases span VR DLSS, VR FSR and flat FSR; a separate reflection check
+requires flat DLSS to omit the depth output. This fixture is registered
+but has **not been compiled or run**. Both runtime shader matrices also
+include the new DLSS depth-output permutation.
+
+Validation:
+
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -D OUTPUT_DIRECTORY=../../analysis/open-shaders-dev-review-20260926/pr769-depth-encode -P tests/extract_vr_depth_encode.cmake`
+    passed; this only extracted source headers.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -P tests/vr_submit_input_freshness_contract_test.cmake`
+    and `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=. -P tests/vr_render_scale_devbench_contract_test.cmake`
+    passed as script-only source contracts.
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr769.py`
+    passed. It checks both bindings and typed-only region copies, resource
+    preparation, unchanged submit freshness/cleanup and flat/fallback code,
+    extracted-header ordering and unchanged preset values/revision.
+-   `generate-unified-presets.ps1 -Check` initially failed because the source
+    fingerprint hashes the edited Upscaling files. After reviewing the
+    unchanged settings schema, refreshed the policy fingerprint and ran
+    the generator and `-Check`: all three tiers passed. Only their source
+    markers and derived report hashes changed; revision 5 is retained.
+-   Changed-range clang-format 22.1.4 and gersemi checks, full formatting of
+    new files, scoped whitespace/YAML/documentation hooks and
+    `git diff --check` passed. Whole-file clang-format and gersemi hooks
+    are skipped to preserve unrelated baseline formatting; the relevant
+    formatting is checked directly with `format-pr769.py --check` in the
+    local audit folder.
+-   Builds, shader compilation, the new GPU fixture, existing compiled
+    tests and runtime checks remain deferred by user instruction. This is
+    an API-contract correction, with no claimed visual or performance
+    result. Physical-HMD qualification remains pending; the iteration
+    record reflects implementation only, with no new measurement ledger.
+
+The later #779 review overlaps standard per-eye depth handling and must
+account for this shared conversion. Direct use of the whole native depth
+resource by the existing left-eye DLSS path was not changed here.
+
+### #773: publish scene exposure to features, recommendation awaiting decision
+
+[Open Shaders #773](https://github.com/alandtse/open-shaders/pull/773),
+`495642ba406a87f0ce49082a54ecfebe03ad04cc`, is titled
+`refactor: publish scene exposure to features`.
+
+Recommend **r: no local exposure producer or consumer for this contract**.
+Reviewed the complete ten-file diff, PR metadata, local feature lookup,
+Adaptive Balance and the upscaler exposure setup. This is not Scene Manager
+UI and is not E11-only; the decision is based on the code dependency.
+
+Upstream publishes Post Processing's active histogram adaptation buffer,
+luminance clamp range and exposure compensation through `Feature`.
+Composite and the published CPU/HLSL helpers share the same exposure
+formula. Publication stops when that pipeline is unavailable, bypassed or
+does not own tonemapping. This prepares the later #780 RCAS exposure work;
+#773 itself does not change the rendered composite.
+
+CSX has no `PostProcessing`, `HistogramAutoExposure`, adaptation SRV or
+consumer of `Feature::SceneExposure`. Adaptive Balance is implemented in
+`AdaptiveBrightness`: `ApplyProfile` adjusts separate lighting multipliers
+and gamma offsets, while `GetCommonBufferData` publishes those controls.
+These spatially different lighting adjustments cannot be represented as
+the single scene-wide exposure expected by this interface. They are not
+an existing equivalent histogram implementation.
+
+Local DLSS enables vendor auto exposure with pre-exposure 1; FSR likewise
+enables vendor auto exposure and passes no external exposure resource.
+Adding a default-false feature API and unused shared formula would provide
+no runtime benefit. The remaining generic `FindLoadedFeature` refactor only
+replaces a working early-exit lookup, with no independent correction.
+Reassess useful independent #780 normalization changes when its turn
+arrives; do not create a synthetic exposure from Adaptive Balance here.
+No #773 changes have been made; await the user's `i` or `r`.
 
 ## Verification
 

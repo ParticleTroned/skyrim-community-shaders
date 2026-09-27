@@ -2460,7 +2460,7 @@ public:
 	// Owned here so both Streamline (DLSS) and FidelityFX (FSR) can use them.
 	eastl::unique_ptr<Texture2D> vrIntermediateColorIn[2];            // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateColorOut[2];           // per-eye output resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye render resolution (R24G8_TYPELESS, shared depth copy)
+	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye native depth values (R32_FLOAT, DLSS/periphery input)
 	eastl::unique_ptr<Texture2D> vrIntermediateLinearDepth[2];        // per-eye render resolution (R32_FLOAT, FSR input)
 	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];       // per-eye render resolution
@@ -2583,6 +2583,7 @@ public:
 		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false);
 
 	// Shared Pipeline Steps
+	/** Prepares color and optional guides after encoding; DLSS depth is already encoded. */
 	bool PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;

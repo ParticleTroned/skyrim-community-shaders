@@ -41,6 +41,16 @@ function(csx_configure_runtime_payload)
             "with SKIP_RUNTIME_DOWNLOADS=OFF. Other build dependencies are still required."
         )
     endif()
+    foreach(_provider IN ITEMS FFX STREAMLINE)
+        set(${_provider}_RUNTIME_PAYLOAD_HASHES "")
+        foreach(_file IN LISTS ${_provider}_RUNTIME_PAYLOAD_FILES)
+            set(_hash "missing")
+            if(EXISTS "${_file}" AND NOT IS_DIRECTORY "${_file}")
+                file(SHA256 "${_file}" _hash)
+            endif()
+            list(APPEND ${_provider}_RUNTIME_PAYLOAD_HASHES "${_hash}")
+        endforeach()
+    endforeach()
     configure_file(
         "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuntimePayloadInstallGuard.cmake.in"
         "${CMAKE_CURRENT_BINARY_DIR}/runtime_payload_install_guard.cmake"

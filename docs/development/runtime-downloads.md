@@ -34,8 +34,10 @@ configuration. Full installation and runtime-component installation fail
 before modifying the destination, including before AIO staging is cleared.
 Installing the SKSE-only component remains available. Reconfigure with
 `SKIP_RUNTIME_DOWNLOADS=OFF` to restore normal downloads and packaging.
-Expected payload paths remain mandatory install inputs, so removing a file
-after configuration cannot silently omit it from a package.
+Installation rechecks every selected runtime payload against its configured
+SHA-256 before staging changes. Removing or modifying a cached input after
+configuration therefore fails before the AIO reset, while SKSE-only
+installation remains independent of runtime payloads.
 
 If auto-deployment is enabled separately, skip mode leaves deployed
 `Shaders/Upscaling/FidelityFX` and `Shaders/Upscaling/Streamline` contents

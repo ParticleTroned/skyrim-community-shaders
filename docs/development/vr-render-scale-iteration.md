@@ -13,6 +13,27 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 27: periphery TAA camera motion correction
+
+The [periphery TAA correction](periphery-taa-reprojection.md) removes the
+duplicate camera displacement from history lookup while preserving
+camera-inclusive object motion, typed depth and existing history rejection.
+It applies to DLSS/FSR FOV + TAA in both dispatch routes and curve states,
+without adding samples, resources or passes. Upscaling metadata is 2.6.1.
+
+The adversarial review strengthened the source regression to evaluate the
+motion producer's sign/scale as well as the history lookup. Eleven tests
+pass; the old shader fails 42 assertions and six further negative controls
+are detected. The review changes only tests and documentation.
+The requested production AIO DLL build and archive validation passed;
+the linked report preserves the exact source commit and Build ID.
+Standalone shader compilation and runtime checks were not run.
+The reported 3.19.2 regression's trigger remains unconfirmed on the tester's
+GPU. Static work is unchanged apart from removing one float2 addition,
+but corrected history acceptance can change executed sampling work.
+Image quality, physical-HMD qualification and measured performance
+neutrality remain pending; no runtime measurement or ledger is claimed.
+
 ## September 27: optional FOV blend curve implementation
 
 The selective [Open Shaders #778 port](fov-blend-curve.md) adds an in-game

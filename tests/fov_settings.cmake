@@ -29,3 +29,11 @@ target_link_libraries(
     fov_settings_test
     PRIVATE imgui::imgui nlohmann_json::nlohmann_json
 )
+
+add_test(
+    NAME PeripheryTAAMotion
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/periphery_taa_motion_test.py"
+)
+set_tests_properties(PeripheryTAAMotion PROPERTIES LABELS "ControllerTests")

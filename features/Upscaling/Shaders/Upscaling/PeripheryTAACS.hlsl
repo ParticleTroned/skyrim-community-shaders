@@ -500,7 +500,8 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 	float2 currentVelocity = neighborhood.velocity;
 	float2 hmdHistoryDeltaLookup = 0.0.xx;
 	hmdHistoryDeltaLookup = ComputeHmdHistoryDelta(neighborhood.uv, currentDepth);
-	float2 historyVelocity = currentVelocity + hmdHistoryDeltaLookup;
+	// Per-eye motion vectors already include camera motion as well as object motion.
+	float2 historyVelocity = currentVelocity;
 	float2 rejectionVelocity = currentVelocity;
 	float velocityPixels = length(rejectionVelocity * OutputDim);
 	float2 historyUV = outputUV + historyVelocity;

@@ -2009,13 +2009,13 @@ Scoped pre-commit and `git diff --check` passed. No new test is needed for
 this debug label; no build, shader compilation, compiled test, deployment
 or runtime validation ran, as instructed.
 
-### #783: frozen VR menu with foveated DLSS, recommendation awaiting decision
+### #783: frozen VR menu with foveated DLSS, rejected
 
 [Open Shaders #783](https://github.com/alandtse/open-shaders/pull/783),
 `fa8af0c3cd0212feae886a44477f949448a5e673`, is titled
 `fix(upscaling): frozen VR menu with foveated DLSS`.
 
-Recommend **r: the route-selection correction is already covered locally**.
+The user selected **r: the route-selection correction is already covered locally**.
 Reviewed the complete two-file diff and PR metadata, then traced local
 main-pass producers, menu/fallback routing, sharpening finalization and
 the separate submit-stage path. This is a renderer correction, not an
@@ -2056,8 +2056,75 @@ and `Streamline::Upscale` match current primary `main-VR`. Both primary and
 sync have the same two common-finalizer call sites. No additional hunk
 provides a missing SE/AE or VR correction. This source conclusion does
 not establish that all menu-freeze symptoms are solved or reuse upstream
-runtime tests as local evidence. No #783 code has been imported; builds
-and runtime checks remain deferred. Await the user's `i` or `r`.
+runtime tests as local evidence. No #783 code was imported; builds
+and runtime checks remain deferred.
+
+### #778: oval foveated edge mask, recommendation awaiting decision
+
+[Open Shaders #778](https://github.com/alandtse/open-shaders/pull/778),
+`13999735d5e574b02ca2a3ace8651ec73605242c`, is titled
+`feat(upscaling): oval foveated edge mask`.
+
+Recommend **i, partial: adapt the falloff curve to our existing FOV blend**.
+Reviewed the complete five-file diff and PR description, separating its
+shader/settings changes from the excluded translations and upstream UI.
+Compared the local mask, CPU region/tile planning, centre compositors,
+periphery TAA, mask visualization and shared shader-detail consumers.
+
+Upstream adds an optional ellipse to its rectangular subrect composite and
+a falloff exponent from 0.5 to 2, default 1. It estimates pixel distance
+from the ellipse edge, leaves the background untouched outside it, and
+applies the exponent before feather smoothstep or dither blending. Vendor
+input/output regions remain rectangular. This adds no render pass or
+resource; its constant-buffer fields reuse upstream padding.
+
+Local code already rounds the FOV boundary using the power-4 superellipse
+in `Common/FoveatedMask.hlsli`, with horizontal expansion, per-eye offsets
+and smooth feathering. `FoveatedCenterBlendCS` already leaves zero-weight
+pixels untouched, and `FoveatedSpatialCompositeCS` selects periphery there.
+There is no corresponding local dither-leak correction to import.
+
+This is not identical to upstream's power-2 ellipse or pixel-distance
+feathering. Our normalized-distance feather has different semantics, and
+the current rounded shape is not claimed to be universally better. It is
+already integrated with the local FOV contract: CPU tile distances and
+the inscribed centre rectangle use the same power 4, periphery dispatch
+skips that centre rectangle, and TAA/history and shader-detail consumers
+share the mask. A shader-only ellipse replacement would make those
+ownership and coverage assumptions disagree. An ellipse option would
+require coordinated changes beyond upstream's standalone compositor.
+
+The independent falloff control is missing. Our current blend is a fixed
+smoothstep; the existing Center Blend/TAA Transition setting changes band
+width, not the distribution of centre/periphery weight inside that band.
+The useful partial scope is:
+
+-   Add an optional 0.5-2 falloff curve, neutral 1, to the existing local
+    upscaling FOV controls, persistence, finite-value sanitization and
+    DevBench action/schema/status. Preserve the exact current calculation
+    at 1 and retain old-config defaults.
+-   Reshape only the upscaler's centre/periphery blend inside its current
+    transition band. Keep the power-4 shape, eye offsets, width settings,
+    zero/full-weight boundaries and CPU dispatch/underlay geometry.
+    Keep unrelated shader-detail feature controls on their current curve.
+-   Carry the setting consistently through main and submit-stage centre
+    blending, spatial composition and matching periphery-TAA weights.
+    Include it in applicable settings snapshots/history invalidation so
+    cached or reused output cannot silently retain the old curve.
+    Reuse existing passes; keep C++/HLSL buffer contracts synchronized.
+-   Leave the ellipse shape, rectangle selector, upstream dither mode,
+    translations and upstream UI out. The change would tune the visible
+    seam, with no claimed vendor workload reduction or measured speedup.
+
+The shared mask, CPU planning header and all four reviewed upscaler
+shaders match current `main-VR` exactly. The CPU mask/tile-distance and
+feather-sanitization regions also match. Neither branch has a configurable
+falloff exponent. Foveated vendor composition remains VR-only, with SE/AE
+behavior retained. If accepted, add focused neutral/bounds/stereo and
+temporal coverage, and record pending render-scale qualification. Builds,
+shader compilation and runtime validation remain deferred until the sync
+ends. No #778 implementation has been made; await `i` or `r` for this
+falloff-only adaptation.
 
 ## Verification
 

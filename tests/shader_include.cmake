@@ -35,12 +35,19 @@ add_d3d_shader_test(
     tests/adaptive_balance_color_shader_test.cpp
 )
 
+add_d3d_shader_test(
+    foveated_blend_curve_shader_test
+    FoveatedBlendCurveShader
+    tests/foveated_blend_curve_shader_test.cpp
+)
+
 foreach(
     _target
     IN
     ITEMS
         shader_include_test
         adaptive_balance_color_shader_test
+        foveated_blend_curve_shader_test
         ambient_balance_shader_test
         vr_depth_encode_shader_test
         skylighting_probe_slice_test

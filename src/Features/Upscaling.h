@@ -333,6 +333,8 @@ public:
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.3f;
 		float foveatedCenterHorizontalScale = 1.0f;
+		bool foveatedBlendCurveEnabled = false;
+		float foveatedBlendFalloff = 1.0f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f;
 		float foveatedLeftEyeMaskOffsetY = 0.0f;
 		float foveatedRightEyeMaskOffsetX = 0.0f;
@@ -2037,7 +2039,7 @@ public:
 		float2 sourceOffset;
 		float2 invSourceDim;
 		float centerHorizontalScale;
-		float centerHorizontalScalePadding;
+		float blendFalloff;
 	};
 
 	struct FoveatedSpatialCompositeCB
@@ -2052,7 +2054,7 @@ public:
 		float2 centerRectDim;
 		float2 invCenterSourceDim;
 		float2 centerOffset;
-		float4 tuning;  // x=centerScale, y=centerFeather, z=centerHorizontalScale
+		float4 tuning;  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=blendFalloff
 	};
 
 	struct PeripheryTAACB
@@ -2076,6 +2078,7 @@ public:
 		float4x4 previousViewProj;
 		float4 currentCameraPosAdjust;
 		float4 previousCameraPosAdjust;
+		float4 blendTuning;  // x=blendFalloff
 	};
 
 	struct CameraMotionVectorsCB
@@ -2093,7 +2096,10 @@ public:
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedSpatialCompositeCB) == 96, "FoveatedSpatialCompositeCB layout changed; update HLSL cbuffer.");
-	static_assert(sizeof(PeripheryTAACB) == 320, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(PeripheryTAACB) == 336, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(offsetof(FoveatedCenterBlendCB, blendFalloff) == 60, "Center blend falloff must match HLSL.");
+	static_assert(offsetof(FoveatedSpatialCompositeCB, tuning) == 80, "Spatial blend tuning must match HLSL.");
+	static_assert(offsetof(PeripheryTAACB, blendTuning) == 320, "Periphery blend tuning must match HLSL.");
 	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
 	struct FoveatedDispatchRect
@@ -2220,6 +2226,12 @@ public:
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
 	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */
 	bool SetFoveatedUpscalingEnabled(bool a_enabled);
+	/** Return the effective curve, neutral when disabled or outside VR. */
+	float GetFoveatedBlendFalloff() const;
+	/** Set the saved VR curve and invalidate affected temporal/frame state. */
+	bool SetFoveatedBlendCurve(bool a_enabled, float a_falloff);
+	/** Draw the shared FOV-only and FOV + TAA blend controls. */
+	void DrawFoveatedBlendSettings();
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
@@ -3004,6 +3016,7 @@ public:
 	bool previousHistoryFoveatedDispatch = false;
 	float previousHistoryFoveatedCenterScale = 1.0f;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
+	float previousHistoryFoveatedBlendFalloff = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
 	bool previousHistoryPeripheryTAA = false;
 	bool previousHistoryPeripheryTAAPathActive = false;
@@ -3318,6 +3331,7 @@ public:
 		VRSubmitInputFreshnessPolicy::ProducerProof inputProof{};
 		VRSubmitInputReusePolicy::CurrentEyeIdentity currentEyeIdentity{};
 		bool usedFoveatedVendorPath = false;
+		float foveatedBlendFalloff = 1.0f;
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;
 		uint64_t menuLayerGeneration = 0;

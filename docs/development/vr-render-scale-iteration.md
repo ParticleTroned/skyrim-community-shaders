@@ -13,6 +13,23 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 27: optional FOV blend curve implementation
+
+The selective [Open Shaders #778 port](fov-blend-curve.md) adds an in-game
+FOV checkbox, off by default, and a remembered 0.5-2 falloff exponent.
+Neutral or disabled retains existing feathering. The curve affects the
+center/periphery transition in main and submit compositors and periphery
+TAA, preserving mask geometry, region sizes, tile ownership and other
+features' FOV weights. Effective changes reset history, and submit-eye
+output reuse checks the exponent.
+
+This is implementation evidence only. Source checks and extraction are
+recorded in the selective-sync review. Controller and WARP fixtures have
+been added but not compiled or run. Builds, shader compilation, deployment
+and SE/AE/VR runtime checks remain deferred until the sync ends by user
+instruction. Physical-HMD qualification and matched performance evidence
+remain pending. No measurements or numbered ledger snapshot are created.
+
 ## September 27: typed per-eye depth implementation
 
 The selective [Open Shaders #769 port](open-shaders-dev-sync.md#769-typed-per-eye-foveated-depth-accepted)

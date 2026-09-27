@@ -2059,7 +2059,7 @@ not establish that all menu-freeze symptoms are solved or reuse upstream
 runtime tests as local evidence. No #783 code was imported; builds
 and runtime checks remain deferred.
 
-### #778: oval foveated edge mask, recommendation awaiting decision
+### #778: optional FOV blend curve, accepted partial port
 
 [Open Shaders #778](https://github.com/alandtse/open-shaders/pull/778),
 `13999735d5e574b02ca2a3ace8651ec73605242c`, is titled
@@ -2116,15 +2116,87 @@ The useful partial scope is:
     translations and upstream UI out. The change would tune the visible
     seam, with no claimed vendor workload reduction or measured speedup.
 
-The shared mask, CPU planning header and all four reviewed upscaler
-shaders match current `main-VR` exactly. The CPU mask/tile-distance and
+At review time the shared mask, CPU planning header and all four reviewed
+upscaler shaders matched current `main-VR` exactly. The CPU mask/tile-distance and
 feather-sanitization regions also match. Neither branch has a configurable
 falloff exponent. Foveated vendor composition remains VR-only, with SE/AE
 behavior retained. If accepted, add focused neutral/bounds/stereo and
 temporal coverage, and record pending render-scale qualification. Builds,
 shader compilation and runtime validation remain deferred until the sync
-ends. No #778 implementation has been made; await `i` or `r` for this
-falloff-only adaptation.
+ends.
+
+The user accepted the partial port as an **in-game FOV checkbox** for A/B
+testing. [FOV blend curve](fov-blend-curve.md) documents the implemented
+controls, saved defaults, DevBench contract and deferred runtime checks.
+Checkbox off retains the saved exponent and passes neutral 1 to the
+shader. Center blend/spatial buffers reuse padding; periphery TAA appends
+one float4 with matching size/offset assertions. All five upscaler blend
+weight call sites use the focused helper, while shared shader-detail
+consumers retain their existing code. Effective changes reset history and
+invalidate frame state; finalized submit-eye reuse compares the exponent.
+The curve does not enter the FSR allocation/lifecycle key.
+
+The existing `FovSettings` test now extracts the production setter, UI,
+getter and DevBench validator. `FoveatedBlendCurveShader` adds production
+shader compilation/reflection and WARP checks of neutral, bounded,
+directional and mirrored-eye weights. These fixtures are added, not run.
+Source checks passed; runtime qualification remains explicitly pending in
+the VR render-scale iteration record. Upscaling's feature version is
+2-6-0. The three unified presets retain contract revision 5 and update only
+their source fingerprint; old settings still default to the disabled curve.
+
+Validation without builds:
+
+-   `python tests/extract_fov_settings.py --source-dir . --output-dir ../../analysis/open-shaders-dev-review-20260926/pr778-fov-settings`
+-   `python ../../analysis/open-shaders-dev-review-20260926/audit-pr778.py`
+-   Changed-line clang-format 22.1.4 and gersemi checks via
+    `format-pr778.py --check`; scoped remaining pre-commit hooks.
+-   `pwsh ./tools/generate-unified-presets.ps1 -Check` and
+    `pwsh ./tools/git.ps1 diff --check`.
+-   No build, shader compilation, compiled test, deployment or runtime
+    validation ran. No measured performance claim is made.
+
+### #784: sharpen foveated DLSS in PerfMode, recommendation awaiting decision
+
+[Open Shaders #784](https://github.com/alandtse/open-shaders/pull/784),
+`779efdc1a0ce5b631491d0cd206cc4574006234a`,
+`fix(upscaling): sharpen foveated DLSS in PerfMode`.
+
+Recommendation: **r**, already covered by the local output-routing design.
+Read the complete two-file diff and PR description, then followed local
+main and submit outputs through sharpening and failure finalization.
+
+Open Shaders' foveated PerfMode route wrote the presented `testTexture`,
+while its separate foveated sharpener operated on `kMAIN`. The fix redirects
+all foveated output writes to `refraTempTex` when sharpening is active and
+uses `ApplySharpening` to resolve into `testTexture`. The non-PerfMode route
+retains its other finalizer. The bug concerns the image being sharpened,
+not the sharpening filter itself; there is no independent shader hunk.
+
+Local code has neither that PerfMode texture pair nor its split
+`FoveatedRenderImpl::Postprocess` finalizer:
+
+-   Main foveated DLSS chooses `sharpenerTexture` before dispatch when
+    sharpening is requested and publishes the actual-output flag only on
+    success. Both postprocess sites use `ApplySharpening`, which consumes
+    that exact intermediate and writes the main output. Disabled or failed
+    sharpening retains the ready vendor output through the existing copy.
+-   Submit-stage DLSS chooses its per-eye sharpening intermediate before
+    foveated dispatch/composition. `finalizeSubmitStageEyeOutput` sharpens
+    that selected output into the submitted `vrIntermediateColorOut`, with
+    a copy fallback if the optional sharpener fails. With sharpening off,
+    the output already targets the final eye texture.
+-   FSR does not enter the DLSS sharpener. The existing reset and
+    actual-producer flag keep skipped/fallback routes from sharpening stale
+    output, as reviewed for #783.
+
+Source comparisons against primary `main-VR` confirm these routing and
+finalization regions are already present there. #778 changes curve
+composition/reuse, not the sharpening ownership. Importing #784's
+upstream-specific dispatch selector or texture redirect would not add a
+missing local behavior. Its reported upstream runtime results are not
+local validation. No #784 code is imported; await the user's `i` or `r`.
+After #784 the pinned sequence continues to #789.
 
 ## Verification
 

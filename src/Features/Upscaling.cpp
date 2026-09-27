@@ -26,6 +26,7 @@
 #include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
 #include "Upscaling/FSRTemporalTuningSerialization.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedBlendPolicy.h"
 #include "Upscaling/MotionSharpeningSettings.h"
 #include "Upscaling/NvidiaComIdentity.h"
 #include "Upscaling/ReflexPolicy.h"
@@ -348,6 +349,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
+	foveatedBlendCurveEnabled,
+	foveatedBlendFalloff,
 	foveatedLeftEyeMaskOffsetX,
 	foveatedLeftEyeMaskOffsetY,
 	foveatedRightEyeMaskOffsetX,
@@ -4940,6 +4943,7 @@ namespace
 
 	void SanitizeFoveatedSettings(Upscaling::Settings& settings)
 	{
+		settings.foveatedBlendFalloff = FoveatedBlendPolicy::ClampFalloff(settings.foveatedBlendFalloff);
 		settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
 		settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 		settings.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
@@ -5042,6 +5046,8 @@ namespace
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.3f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
+		settings.foveatedBlendCurveEnabled = false;
+		settings.foveatedBlendFalloff = FoveatedBlendPolicy::NeutralFalloff;
 		settings.foveatedLeftEyeMaskOffsetX = 0.0f;
 		settings.foveatedLeftEyeMaskOffsetY = 0.0f;
 		settings.foveatedRightEyeMaskOffsetX = 0.0f;
@@ -5065,6 +5071,8 @@ namespace
 		o_json.erase("foveatedVendorDispatch");
 		o_json.erase("foveatedCenterArea");
 		o_json.erase("foveatedCenterHorizontalScale");
+		o_json.erase("foveatedBlendCurveEnabled");
+		o_json.erase("foveatedBlendFalloff");
 		o_json.erase("foveatedLeftEyeMaskOffsetX");
 		o_json.erase("foveatedLeftEyeMaskOffsetY");
 		o_json.erase("foveatedRightEyeMaskOffsetX");
@@ -17372,6 +17380,52 @@ bool Upscaling::SetFoveatedUpscalingEnabled(bool a_enabled)
 	return true;
 }
 
+float Upscaling::GetFoveatedBlendFalloff() const
+{
+	return FoveatedBlendPolicy::EffectiveFalloff(globals::game::isVR && settings.foveatedBlendCurveEnabled, settings.foveatedBlendFalloff);
+}
+
+bool Upscaling::SetFoveatedBlendCurve(bool a_enabled, float a_falloff)
+{
+	if (!globals::game::isVR || !loaded || !globals::state)
+		return false;
+	const float falloff = FoveatedBlendPolicy::ClampFalloff(a_falloff);
+	if (settings.foveatedBlendCurveEnabled == a_enabled && settings.foveatedBlendFalloff == falloff)
+		return true;
+
+	const float previousFalloff = GetFoveatedBlendFalloff();
+	settings.foveatedBlendCurveEnabled = a_enabled;
+	settings.foveatedBlendFalloff = falloff;
+	if (previousFalloff != GetFoveatedBlendFalloff()) {
+		RequestHistoryReset();
+		InvalidateFrameScopedUpscalingState();
+	}
+	if (globals::menu)
+		globals::menu->RequestSettingsDirtyCheck();
+	return true;
+}
+
+void Upscaling::DrawFoveatedBlendSettings()
+{
+	bool enabled = settings.foveatedBlendCurveEnabled;
+	float falloff = settings.foveatedBlendFalloff;
+	bool changed = ImGui::Checkbox("FOV Blend Curve", &enabled);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Reshapes the center/periphery fade for FOV-only and FOV + TAA.");
+		ImGui::TextUnformatted("Off restores current feathering and remembers the curve value.");
+	}
+	{
+		auto guard = Util::DisableGuard(!enabled);
+		changed |= ImGui::SliderFloat("FOV Blend Falloff", &falloff, FoveatedBlendPolicy::MinFalloff, FoveatedBlendPolicy::MaxFalloff, "%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("1.00 keeps current feathering; lower favors the center, higher favors the periphery.");
+			ImGui::TextUnformatted("Mask shape and transition width stay the same.");
+		}
+	}
+	if (changed)
+		SetFoveatedBlendCurve(enabled, falloff);
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -17542,6 +17596,8 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	settings.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedRightEyeMaskOffsetY);
 
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
+	ImGui::Separator();
+	DrawFoveatedBlendSettings();
 	ImGui::Separator();
 	ImGui::TextUnformatted("Upscaling FOV + TAA Settings");
 	ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
@@ -41019,6 +41075,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	cbData.previousViewProj = previousViewProj;
 	cbData.currentCameraPosAdjust = currentCameraPosAdjust;
 	cbData.previousCameraPosAdjust = previousCameraPosAdjust;
+	cbData.blendTuning = { GetFoveatedBlendFalloff(), 0.0f, 0.0f, 0.0f };
 	peripheryTAACB->Update(cbData);
 
 	ID3D11Buffer* cb = peripheryTAACB->CB();
@@ -41130,7 +41187,7 @@ void Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 		rect.outputHeight > 0 ? 1.0f / static_cast<float>(rect.outputHeight) : 0.0f
 	};
 	cbData.centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
-	cbData.centerHorizontalScalePadding = 0.0f;
+	cbData.blendFalloff = GetFoveatedBlendFalloff();
 	foveatedCenterBlendCB->Update(cbData);
 
 	ID3D11Buffer* cb = foveatedCenterBlendCB->CB();
@@ -41190,7 +41247,7 @@ bool Upscaling::DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* perip
 		ClampPeripheryTAACenterBlendFeather(
 			std::isfinite(centerFeather) ? centerFeather : FoveatedCommon::kCenterFeather),
 		ClampFoveatedCenterHorizontalScale(centerHorizontalScale),
-		0.0f
+		GetFoveatedBlendFalloff()
 	};
 	foveatedSpatialCompositeCB->Update(cbData);
 
@@ -51641,6 +51698,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		cachedEyeState.generation == activeContractGeneration &&
 		cachedEyeState.colorContract == sourceColorContract &&
 		cachedEyeState.usedFoveatedVendorPath == expectedFoveatedVendorPath &&
+		(!expectedFoveatedVendorPath || cachedEyeState.foveatedBlendFalloff == GetFoveatedBlendFalloff()) &&
 		cachedEyeState.usedDLSSSharpening == submitDLSSSharpening &&
 		cachedEyeState.usedMenuFinalComposite == submitStageMenuFinalCompositeRequested &&
 		cachedEyeState.menuLayerGeneration == submitStageMenuLayerGeneration &&
@@ -52443,6 +52501,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	submitStageVendorEyeState[eyeIndex].currentEyeIdentity =
 		peerInputFreshnessProven ? VRSubmitInputReusePolicy::CurrentEyeIdentity{} : currentEyeInputIdentity;
 	submitStageVendorEyeState[eyeIndex].usedFoveatedVendorPath = shouldUseFoveatedVendorThisEye && !submitStageForceFullEyeVendorFallback;
+	submitStageVendorEyeState[eyeIndex].foveatedBlendFalloff = GetFoveatedBlendFalloff();
 	submitStageVendorEyeState[eyeIndex].usedDLSSSharpening = submitDLSSSharpening;
 	submitStageVendorEyeState[eyeIndex].usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
 	submitStageVendorEyeState[eyeIndex].menuLayerGeneration = submitStageMenuLayerGeneration;
@@ -58453,6 +58512,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	const auto foveatedProfile = GetFoveatedMaskProfileParams(settings, peripheryTAAEnabled);
 	const float foveatedCenterScale = foveatedProfile.centerScale;
 	const float foveatedCenterHorizontalScale = foveatedProfile.centerHorizontalScale;
+	const float foveatedBlendFalloff = GetFoveatedBlendFalloff();
 	const float peripheryTAACenterBlendFeather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	const float peripheryTAAOuterScale = ClampPeripheryTAAOuterScaleForCenter(
 		settings.periphery_taa_outer_scale,
@@ -58515,6 +58575,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 			foveatedDispatchEnabled != previousHistoryFoveatedDispatch ||
 			(compareFoveatedScale && std::abs(foveatedCenterScale - previousHistoryFoveatedCenterScale) > 1e-4f) ||
 			(compareFoveatedScale && std::abs(foveatedCenterHorizontalScale - previousHistoryFoveatedCenterHorizontalScale) > 1e-4f) ||
+			(compareFoveatedScale && foveatedBlendFalloff != previousHistoryFoveatedBlendFalloff) ||
 			foveatedOffsetsChanged;
 		const bool longFrameGap = globals::game::deltaTime &&
 		                          std::isfinite(*globals::game::deltaTime) &&
@@ -58569,6 +58630,7 @@ void Upscaling::UpdateHistoryResetState(UpscaleMethod a_upscaleMethod)
 	previousHistoryFoveatedDispatch = foveatedDispatchEnabled;
 	previousHistoryFoveatedCenterScale = foveatedCenterScale;
 	previousHistoryFoveatedCenterHorizontalScale = foveatedCenterHorizontalScale;
+	previousHistoryFoveatedBlendFalloff = foveatedBlendFalloff;
 	previousHistoryFoveatedCenterOffsets = foveatedCenterOffsets;
 	previousHistoryPeripheryTAA = peripheryTAAEnabled;
 	previousHistoryPeripheryTAAPathActive = peripheryTAAPathActive;

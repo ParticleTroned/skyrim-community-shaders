@@ -19,7 +19,10 @@ def extract(root, output):
     for name, signatures in {
         "Features/Upscaling.cpp": [
             "bool Upscaling::IsSharedFoveatedMaskActive()",
-            "bool Upscaling::SetFoveatedUpscalingEnabled("],
+            "bool Upscaling::SetFoveatedUpscalingEnabled(",
+            "float Upscaling::GetFoveatedBlendFalloff()",
+            "bool Upscaling::SetFoveatedBlendCurve(",
+            "void Upscaling::DrawFoveatedBlendSettings()"],
         "Features/ScreenSpaceGI.cpp": [
             "\tbool IsRuntimeFoveatedActive(",
             "\tfloat GetUpscalingActiveSharedMaskScale()",
@@ -33,7 +36,7 @@ def extract(root, output):
         "Features/ScreenSpaceShadows.cpp": [
             "bool ScreenSpaceShadows::IsRuntimeEnabled()",
             "void ScreenSpaceShadows::DrawFoveationSettings()"],
-        "MenuDevBenchBridge.cpp": ["\tjson FovSettingsStatus()"],
+        "MenuDevBenchBridge.cpp": ["\tstd::string ValidateFovBlendCurve(", "\tjson FovSettingsStatus()"],
     }.items():
         bodies.extend(function(sources[name], sig) for sig in signatures)
     vr = sources["Features/VR.cpp"]
@@ -51,6 +54,10 @@ def extract(root, output):
         source = (root / "src/Features" / (feature + ".h")).read_text(encoding="utf-8-sig")
         expression = re.search(r"\bEnableFoveated\s*=\s*([^;]+);", source).group(1)
         defaults.append(f"{result_type} {feature}FovDefault() {{ return {expression}; }}")
+    upscaling = (root / "src/Features/Upscaling.h").read_text(encoding="utf-8-sig")
+    for field, result_type in [("foveatedBlendCurveEnabled", "bool"), ("foveatedBlendFalloff", "float")]:
+        expression = re.search(r"\b" + field + r"\s*=\s*([^;]+);", upscaling).group(1)
+        defaults.append(f"{result_type} {field}Default() {{ return {expression}; }}")
     (output / "fov_defaults.h").write_text("\n".join(defaults), encoding="utf-8")
 
 

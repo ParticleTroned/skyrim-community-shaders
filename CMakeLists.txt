@@ -2310,6 +2310,19 @@ if(BUILD_CONTROLLER_TESTS)
             ENVIRONMENT
                 "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
     )
+    add_test(
+        NAME TruePBRSettings
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/true_pbr_settings_test.py"
+    )
+    set_tests_properties(
+        TruePBRSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
     add_controller_test(
         motion_sharpening_runtime_compile_test
         MotionSharpeningRuntimeCompile

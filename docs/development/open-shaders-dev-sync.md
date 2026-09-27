@@ -2156,13 +2156,13 @@ Validation without builds:
 -   No build, shader compilation, compiled test, deployment or runtime
     validation ran. No measured performance claim is made.
 
-### #784: sharpen foveated DLSS in PerfMode, recommendation awaiting decision
+### #784: sharpen foveated DLSS in PerfMode, rejected
 
 [Open Shaders #784](https://github.com/alandtse/open-shaders/pull/784),
 `779efdc1a0ce5b631491d0cd206cc4574006234a`,
 `fix(upscaling): sharpen foveated DLSS in PerfMode`.
 
-Recommendation: **r**, already covered by the local output-routing design.
+The user selected **r**, already covered by the local output-routing design.
 Read the complete two-file diff and PR description, then followed local
 main and submit outputs through sharpening and failure finalization.
 
@@ -2195,8 +2195,57 @@ finalization regions are already present there. #778 changes curve
 composition/reuse, not the sharpening ownership. Importing #784's
 upstream-specific dispatch selector or texture redirect would not add a
 missing local behavior. Its reported upstream runtime results are not
-local validation. No #784 code is imported; await the user's `i` or `r`.
-After #784 the pinned sequence continues to #789.
+local validation. No #784 code is imported.
+
+### #789: prevent highlight outlines, recommendation awaiting decision
+
+[Open Shaders #789](https://github.com/alandtse/open-shaders/pull/789),
+`af8134814a17073971628f59c132b196939889ce`,
+`fix(post-processing): prevent highlight outlines`.
+
+Recommendation: **r**, the affected highlight-grading controls and pass
+are absent locally. This is not a claim that the upstream fix is already
+implemented, or that local rendering cannot produce outlines for other
+reasons.
+
+Read the complete three-file diff and PR description. Upstream changes
+`ShadowsMidtonesHighlights` in its Post Processing color-grading shader,
+adds a focused `Highlights::Apply` helper and adds seven shader tests.
+Previously, a strong reduction in highlight gain or a negative highlight
+offset could make brighter input become darker across the midtone-to-
+highlight transition. The PR uses the integrated smoothstep mask for
+reduced gain and limits negative offsets by available gained brightness.
+Neutral and boosted controls retain their existing calculation; tests
+cover brightness ordering, HDR headroom/slope, narrow ranges and offsets.
+Its reported symptom is a dark outline around procedural sun and cloud
+silver lining. The correction is shared grading math, so it was evaluated
+independently of the postponed Procedural Sun feature.
+
+Searched local runtime and shader sources for the affected function,
+gain/offset fields, transition thresholds and helper, then inspected
+Adaptive Balance, Linear Lighting, `ISHDR.hlsl` and `DisplayMapping.hlsli`.
+Neither the sync branch nor current primary `main-VR`
+(`041e5dc0a573da84727fdf059607fc0e8ce287b1`) has that Post Processing pass or
+its shadow/midtone/highlight gain and offset controls.
+
+Adaptive Balance's existing `AdaptiveBalanceColor::Apply` uses a
+luminance-based power curve for contrast, constrained to [0.5,2], plus
+saturation. Its color helper matches primary `main-VR` exactly. The local
+HDR/display path applies its own tonemapping, bloom, cinematic settings
+and Adaptive Balance, without the upstream three-zone interpolation.
+The sync branch's cloud/weather brightness controls also do not interpolate
+highlight gain or subtract a luminance-dependent highlight offset.
+
+There is therefore no corresponding calculation to replace, including
+partially inside Adaptive Balance. Importing the helper alone would add
+unused code; adding three-zone grading would be a separate feature rather
+than applying this correction. No #789 code is imported; await `i` or `r`.
+This is the final entry in the pinned 56-entry dev review range, not a
+claim that the live upstream branch has no newer work.
+
+Validation: read-only source comparison, PR metadata and complete diff
+review; scoped documentation hooks and `git diff --check`. No build,
+shader compilation, compiled test, deployment or runtime validation ran.
 
 ## Verification
 

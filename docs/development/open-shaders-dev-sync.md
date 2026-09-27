@@ -1954,18 +1954,18 @@ landed on primary `main-VR`. The upstream PR's integration tests are not
 local evidence. Local compilation and runtime qualification remain pending.
 No #779 code was imported.
 
-### #780: normalize RCAS by scene exposure, recommendation awaiting decision
+### #780: normalize RCAS by scene exposure, partially adapted
 
 [Open Shaders #780](https://github.com/alandtse/open-shaders/pull/780),
 `9b56e59dbbadd30140e9b9f832e1c82bc465babd`, is titled
 `fix(upscaling): normalize RCAS by scene exposure`.
 
-Recommend **i, partial: take only the independent RCAS buffer debug name**.
+The user selected **i, partial: take only the independent RCAS buffer debug name**.
 Reviewed the complete three-file diff, PR metadata, the #773 exposure
 formula, local fixed/motion-adaptive RCAS, shared dispatch/bindings,
-constant-buffer wrapper and vendor exposure setup. The reviewed RCAS,
-motion-dispatch, binding, buffer-wrapper and feature-interface files are
-identical between the sync branch and current `main-VR`.
+constant-buffer wrapper and vendor exposure setup. Before this port, the
+reviewed RCAS, motion-dispatch, binding, buffer-wrapper and feature-interface
+files were identical between the sync branch and current `main-VR`.
 
 The main upstream change multiplies all five RCAS samples by the published
 scene exposure before computing contrast, then divides the output RGB by
@@ -1992,19 +1992,72 @@ implementation would need a real producer plus coordinated fixed/motion
 paths, resource slots and state restoration. The current code is not
 claimed to provide equivalent exposure normalization.
 
-One hunk is useful without that feature: pass `"Upscaling::RCASConfig"`
-to the existing `ConstantBuffer` constructor. The fixed RCAS buffer is
-currently unnamed in both branches; the wrapper only calls the established
+Implemented the independent hunk: pass `"Upscaling::RCASConfig"`
+to the existing `ConstantBuffer` constructor. The fixed RCAS buffer was
+unnamed in both branches; the wrapper only calls the established
 `Util::SetResourceName` path when given a name. The motion-adaptive buffer
-already has its own distinct name. Taking this hunk identifies the fixed
+already has its own distinct name. This identifies the fixed
 and fallback configuration in graphics captures for SE, AE and VR, without
-changing sharpening, resources, shader layout or settings. This would be
+changing sharpening, resources, shader layout or settings. This is
 a diagnostic-only port, with no visual or performance improvement claimed.
 
-The remaining hunks all belong to the unavailable exposure path. No #780
-code has been imported. Source review only; no build, shader compilation,
-compiled test, deployment or runtime validation ran. Await the user's
-`i` or `r` for the proposed buffer-name-only scope.
+The remaining hunks all belong to the unavailable exposure path and were
+not imported. The complete production diff is one constructor argument.
+Verified the existing wrapper reaches `Util::SetResourceName` and
+`ID3D11DeviceChild::SetPrivateData`, with no resource descriptor change.
+Scoped pre-commit and `git diff --check` passed. No new test is needed for
+this debug label; no build, shader compilation, compiled test, deployment
+or runtime validation ran, as instructed.
+
+### #783: frozen VR menu with foveated DLSS, recommendation awaiting decision
+
+[Open Shaders #783](https://github.com/alandtse/open-shaders/pull/783),
+`fa8af0c3cd0212feae886a44477f949448a5e673`, is titled
+`fix(upscaling): frozen VR menu with foveated DLSS`.
+
+Recommend **r: the route-selection correction is already covered locally**.
+Reviewed the complete two-file diff and PR metadata, then traced local
+main-pass producers, menu/fallback routing, sharpening finalization and
+the separate submit-stage path. This is a renderer correction, not an
+upstream UI-only exclusion.
+
+Upstream chose its separate foveated sharpening path using
+`Bridge::IsRouteActive()`, which describes configuration. When a menu
+skipped foveated evaluation, standard DLSS wrote its sharpening intermediate
+but the foveated finalizer ran instead. The presented backdrop could retain
+the previous gameplay frame. The patch records the route's actual result
+in `routeHandledThisFrame`, resets it on each upscale, and uses it to select
+the matching finalizer. Both DLSS and FSR publish their route result.
+
+Local code has no such foveated/standard finalizer switch or upstream
+`refraTempTex`/`testTexture` presentation pair:
+
+-   `PerformUpscaling` calls `Upscale`, which clears
+    `dlssUpscaleOutputInSharpenerTexture` before its early-return checks.
+    Successful foveated DLSS publishes this flag only when its output
+    actually targets `sharpenerTexture`. Failure falls through to the
+    standard vendor route, with full-eye re-encoding when necessary.
+-   Standard Streamline DLSS publishes the same output flag only after
+    successful evaluation or a successfully presented stretch fallback.
+    FSR cannot leave a previous DLSS flag active after `Upscale` resets it.
+-   Both DLSS postprocessing call sites use the same `ApplySharpening`.
+    It requires the producer flag before using the intermediate, then
+    sharpens into the current main target or copies the coherent output
+    there when sharpening is disabled or unavailable. A saved foveation
+    setting cannot select a different, mismatched finalizer.
+-   Submit-stage presentation takes its own return path before main-pass
+    sharpening. Its per-eye finalizer uses the selected current output
+    and copies that output if the optional sharpener fails. It does not
+    invoke the absent upstream finalizer switch.
+
+Exact source comparisons confirmed that sharpener routing, output reset,
+foveated result/fallback handling, `PerformUpscaling`, `ApplySharpening`
+and `Streamline::Upscale` match current primary `main-VR`. Both primary and
+sync have the same two common-finalizer call sites. No additional hunk
+provides a missing SE/AE or VR correction. This source conclusion does
+not establish that all menu-freeze symptoms are solved or reuse upstream
+runtime tests as local evidence. No #783 code has been imported; builds
+and runtime checks remain deferred. Await the user's `i` or `r`.
 
 ## Verification
 

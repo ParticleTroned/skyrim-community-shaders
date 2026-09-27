@@ -17,7 +17,7 @@ on:
                 required: false
                 default: false
             expected_version:
-                description: "Required next patch version for main-VR, e.g. 3.19.2."
+                description: "Required next patch or minor version for main-VR, e.g. 3.20.0."
                 type: string
                 required: false
                 default: ""

@@ -116,10 +116,10 @@ also retain neutral depth; this additive default retains contract revision 5.
 
 ## CSX compatibility contract
 
-The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`
+The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
-package version, VR runtime, inclusive minimum `3.19`, exclusive maximum
-`3.20`, and the settings-contract fingerprint used to generate it.
+package version, VR runtime, inclusive minimum `3.20`, exclusive maximum
+`3.21`, and the settings-contract fingerprint used to generate it.
 The generator and runtime loader both use settings-contract revision 5.
 The Release compatibility regression loads every generated tier to verify
 that the shipping loader accepts its metadata.
@@ -138,12 +138,19 @@ quality and tier choices are unaffected.
 
 CSX validates marked settings before canonicalization, migration, or merge.
 Malformed metadata, an unsupported compatibility-contract version, the wrong
-runtime, or a CSX version outside the declared range rejects the complete user
+runtime, or an unsupported CSX version rejects the complete user
 layer without rewriting it. Defaults remain active, saving is blocked to
 protect the rejected file, and the decision is recorded in the log and exposed
 through the Feature DevBench API's `preset_compatibility` action. Unmarked
 legacy and user-authored settings remain accepted because strict metadata
 cannot be added retroactively.
+
+CSX 3.20 also accepts the three bundled revision-5 unified presets that
+declare the previous `3.19` to `3.20` range. Their settings schema remains
+supported, so this version update preserves installed user settings. This
+exception does not apply to other preset IDs, other contract revisions,
+SE/AE, or CSX 3.21 and later. Product labels include the patch component;
+preset compatibility bounds continue to describe major/minor lines.
 
 The three generated presets never hard-disable a feature: every `Disable at
 Boot` value is false. Tier exclusions use feature-owned live/soft settings.

@@ -78,7 +78,7 @@ PUBLICATION_REPLACE_ATTEMPTS = 20
 PUBLICATION_REPLACE_RETRY_SECONDS = 0.5
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
 CSX_PLUGIN_VERSION_PATTERN = re.compile(
-    r"^CSX (?P<version>[0-9]+\.[0-9]+)-(?P<runtime>SE|VR)$"
+    r"^CSX (?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)-(?P<runtime>SE|VR)$"
 )
 HORIZON_FIX_SHORT_NAME = "HorizonFix"
 HORIZON_FIX_CACHE_DIRECTORY = f"{CACHE_DIRECTORY}-HorizonFix"
@@ -1965,7 +1965,18 @@ def default_plugin_version(source_root: Path, runtime: str) -> str:
         cache_variables = preset.get("cacheVariables", {})
         version = cache_variables.get("CSX_VERSION")
         if isinstance(version, str) and version:
-            return f"CSX {version}"
+            match = re.fullmatch(r"([0-9]+)\.([0-9]+)-(SE|VR)", version)
+            if not match:
+                raise SystemExit(f"invalid CSX_VERSION in preset {preset_name}: {version!r}")
+            major, minor, suffix = match.groups()
+            release = cache_variables.get("CSX_RELEASE_VERSION", "")
+            if release:
+                if not isinstance(release, str) or not re.fullmatch(
+                    rf"{major}\.{minor}\.(0|[1-9][0-9]*)", release
+                ):
+                    raise SystemExit(f"invalid CSX_RELEASE_VERSION in preset {preset_name}")
+                return f"CSX {release}-{suffix}"
+            return f"CSX {major}.{minor}.0-{suffix}"
 
     raise SystemExit(
         f"cannot derive {runtime} plugin version from CMakePresets.json; pass --plugin-version"

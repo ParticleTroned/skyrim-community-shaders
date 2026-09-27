@@ -67,19 +67,19 @@
     "Utility": true,
     "Water": true
   },
-  "Version": "CSX 3.19-VR",
+  "Version": "CSX 3.20.0-VR",
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.09.25.1",
+    "presetVersion": "d2026.09.27.1",
     "target": {
       "runtime": "VR",
-      "minimumVersion": "3.19",
-      "maximumVersionExclusive": "3.20"
+      "minimumVersion": "3.20",
+      "maximumVersionExclusive": "3.21"
     },
     "settingsContract": {
       "revision": 5,
-      "sourceTreeSha256": "0DBD39A52EAEAE59A8382ADA8C824554D8B8E07808917C9D171CC3B3DDE900E7"
+      "sourceTreeSha256": "2B3CCEC9499A013D5E7DB98DD8F855562D57B79EE2484CE36E00B17DEF59AFAF"
     }
   },
   "Upscaling": {

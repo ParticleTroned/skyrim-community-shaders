@@ -305,6 +305,25 @@ class FomodPackageTests(unittest.TestCase):
                 BUILDER.stage_package(core, None, vr_cache, output, "v3.18.0", include_se_ae=False)
             self.assertFalse(output.exists())
 
+    def test_patch_version_cache_labels(self) -> None:
+        for label, valid in (("CSX 3.20.0-VR", True), ("CSX 3.20-VR", True),
+                             ("CSX 3.20.x-VR", False), ("CSX 3.20.0.1-VR", False),
+                             ("CSX 3.20.0-unknown", False)):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                for cache in (se_cache, vr_cache):
+                    info = cache / BUILDER.CACHE_DIRECTORY / BUILDER.CACHE_INFO_FILE
+                    info.write_text(info.read_text(encoding="utf-8").replace("CSX 3.18-VR", label), encoding="utf-8")
+                output = root / "staged"
+                if valid:
+                    BUILDER.stage_package(core, se_cache, vr_cache, output, "3.20.0")
+                    BUILDER.validate_staged_package(output, "3.20.0")
+                else:
+                    with self.assertRaisesRegex(SystemExit, "invalid shader cache PluginVersion"):
+                        BUILDER.stage_package(core, se_cache, vr_cache, output, "3.20.0")
+                    self.assertFalse(output.exists())
+
     def test_stages_one_page_two_managed_cache_fomod(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

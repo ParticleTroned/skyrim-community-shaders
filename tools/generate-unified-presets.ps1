@@ -516,9 +516,9 @@ function Assert-TierContract {
     }
     if ($policy.presetCompatibility.contractVersion -ne 1 -or
         $policy.presetCompatibility.target.runtime -cne 'VR' -or
-        $policy.presetCompatibility.target.minimumVersion -cne '3.19' -or
-        $policy.presetCompatibility.target.maximumVersionExclusive -cne '3.20') {
-        throw 'Preset compatibility must target CSX VR >= 3.19 and < 3.20 with contract version 1.'
+        $policy.presetCompatibility.target.minimumVersion -cne '3.20' -or
+        $policy.presetCompatibility.target.maximumVersionExclusive -cne '3.21') {
+        throw 'Preset compatibility must target CSX VR >= 3.20 and < 3.21 with contract version 1.'
     }
 
     $ownedPaths = @($policy.tierOwnedPaths | ForEach-Object { ConvertTo-CanonicalPath $_ })
@@ -666,7 +666,7 @@ installationFile=CSX-Unified-$slug-Provisional.7z
 repository=Nexus
 ignoredVersion=
 comments=WABBAJACK_ALWAYS_ENABLE
-notes=PROVISIONAL unified $Tier preset generated from policy schema v4 for CSX 3.19-VR; qualification=$qualificationSummary
+notes=PROVISIONAL unified $Tier preset generated from policy schema v4 for CSX 3.20.0-VR; qualification=$qualificationSummary
 nexusDescription=
 url=
 hasCustomURL=false

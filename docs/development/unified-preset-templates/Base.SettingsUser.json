@@ -67,7 +67,7 @@
     "Utility": true,
     "Water": true
   },
-  "Version": "CSX 3.19-VR",
+  "Version": "CSX 3.20.0-VR",
   "Upscaling": {
     "dlssPreset": 1,
     "dlssSharpener": 1,

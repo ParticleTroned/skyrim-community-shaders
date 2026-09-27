@@ -946,12 +946,20 @@ class ShaderCachePackagingTests(unittest.TestCase):
             )
             self.assertEqual(
                 BUILDER.default_plugin_version(source_root, "SE"),
-                "CSX 12.345-VR",
+                "CSX 12.345.0-VR",
             )
             self.assertEqual(
                 BUILDER.default_plugin_version(source_root, "VR"),
-                "CSX 12.345-VR",
+                "CSX 12.345.0-VR",
             )
+            variables = presets["configurePresets"][0]["cacheVariables"]
+            variables["CSX_RELEASE_VERSION"] = "12.345.7"
+            (source_root / "CMakePresets.json").write_text(json.dumps(presets), encoding="utf-8")
+            self.assertEqual(BUILDER.default_plugin_version(source_root, "SE"), "CSX 12.345.7-VR")
+            variables["CSX_RELEASE_VERSION"] = "12.346.0"
+            (source_root / "CMakePresets.json").write_text(json.dumps(presets), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                BUILDER.default_plugin_version(source_root, "VR")
 
     def test_runtime_remains_in_each_record_compile_state(self) -> None:
         states: list[str] = []

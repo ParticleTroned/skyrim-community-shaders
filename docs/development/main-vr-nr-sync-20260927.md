@@ -95,6 +95,10 @@ maintained runner's stage function. This continuation passes and is saved
 under `verification-final/`. Neither failed full-run summary is rewritten
 as a pass. The bounds fixture's timing sensitivity remains a limitation.
 
+The subsequent [adversarial review](main-vr-nr-adversarial-review-20260927.md)
+corrects this fixture setup dependency and records ten consecutive passes.
+The original validation results and compiled producer below are unchanged.
+
 Added checks exercise asymmetric current/previous stereo crop reprojection,
 curve-dependent NR history keys, NR composite layout, and successful NR
 provider installation followed by rejection of changed staged DLL bytes.

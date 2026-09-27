@@ -14,7 +14,9 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -31,6 +33,7 @@ namespace
 	using Bounds = std::array<std::uint32_t, 4>;
 	using Clock = std::chrono::steady_clock;
 	using NeuralRendering::CharacterMaskReadbackStatus;
+	constexpr auto kFixtureReadinessBudget = std::chrono::seconds(2);
 	static_assert(sizeof(Bounds) == 16);
 
 	void Require(bool condition, const std::string& message)
@@ -298,8 +301,9 @@ namespace
 					context_->CopyResource(sample.staging.Get(), sample.output.Get());
 					context_->End(sample.query.Get());
 					context_->Flush();
+					WaitForFixtureCopies({ &sample });
 					std::vector<Bounds> actual(expected.size());
-					Require(Read(sample, actual, Clock::now() + std::chrono::seconds(2)).Ready(), "Early category readback");
+					Require(Read(sample, actual, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget).Ready(), "Early category readback");
 					Require(actual == expected, "Early category bounds must honor mono and stereo eye strides, category toggles, exclusions and capture validity");
 					Require(NeuralRendering::PollCharacterMaskBounds(context_.Get(), sample.query.Get(), sample.staging.Get(),
 								std::as_writable_bytes(std::span(actual)))
@@ -564,6 +568,7 @@ namespace
 					eyes[eye].expected = Reference(outputWidth, outputHeight, expectedMask);
 				}
 				context_->Flush();
+				WaitForFixtureCopies({ &eyes[0], &eyes[1] });
 				const auto deadline = Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget;
 				for (unsigned eye = 0; eye < 2; ++eye) {
 					std::vector<Bounds> actual(eyes[eye].expected.size());
@@ -605,6 +610,7 @@ namespace
 			const auto dispatchAndRead = [&]() {
 				Queue(sample);
 				context_->Flush();
+				WaitForFixtureCopies({ &sample });
 				std::vector<Bounds> actual(sample.expected.size());
 				const auto result = Read(sample, actual, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget);
 				Require(result.Ready(), name + ": production readback failed: " + result.Reason());
@@ -661,6 +667,7 @@ namespace
 					"Create stereo readback completion fence");
 				Queue(left);
 				context_->Flush();
+				WaitForFixtureCopies({ &left });
 				std::vector<Bounds> actualLeft(left.expected.size()), actualRight(right.expected.size());
 				Require(Read(left, actualLeft, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget).Ready(),
 					"Left copy must finish before the delayed right copy is queued");
@@ -685,6 +692,7 @@ namespace
 							actualLeft == sentinel,
 					"A ready left query must not admit a staging Map while the stereo fence is pending");
 				Check(gate.cpuFence->Signal(1), "Release delayed right-eye copy");
+				WaitForFixtureCopies({ &left, &right }, completion);
 				const auto deadline = Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget;
 				Require(Read(left, actualLeft, deadline, completion).Ready() &&
 							Read(right, actualRight, deadline, completion).Ready(),
@@ -716,6 +724,7 @@ namespace
 								actualLeft == sentinel,
 						"The previous completed signal must not admit a newer copy");
 					Check(nextGate.cpuFence->Signal(1), "Release next stereo copy epoch");
+					WaitForFixtureCopies({ &left, &right }, next);
 					Require(Read(left, actualLeft, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget, next).Ready() &&
 								actualLeft == std::vector<Bounds>(left.expected.size()),
 						"Only the fresh fenced copy may prove an empty mask");
@@ -741,21 +750,7 @@ namespace
 					"Closed GPU gate must preserve both destinations at one shared deadline: left=" +
 						std::string(pendingLeft.Reason()) + " right=" + pendingRight.Reason());
 				Check(gate.cpuFence->Signal(1), "Release queued GPU work");
-				// Readiness setup has its own generous bound; it does not consume
-				// coverage or change the production reader's 50 ms budget.
-				const auto fixtureDeadline = Clock::now() + std::chrono::seconds(2);
-				bool copiesReady = false;
-				while (!copiesReady && Clock::now() < fixtureDeadline) {
-					BOOL leftReady = FALSE, rightReady = FALSE;
-					const auto leftQuery = context_->GetData(left.query.Get(), &leftReady, sizeof(leftReady), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-					const auto rightQuery = context_->GetData(right.query.Get(), &rightReady, sizeof(rightReady), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-					Check(leftQuery, "Probe queued left copy");
-					Check(rightQuery, "Probe queued right copy");
-					copiesReady = leftQuery == S_OK && leftReady && rightQuery == S_OK && rightReady;
-					if (!copiesReady)
-						std::this_thread::yield();
-				}
-				Require(copiesReady, "Queued-eye fixture did not complete within two seconds");
+				WaitForFixtureCopies({ &left, &right });
 				const auto deadline = Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget;
 				const auto leftResult = Read(left, actualLeft, deadline);
 				const auto rightResult = Read(right, actualRight, deadline);
@@ -800,20 +795,13 @@ namespace
 				Check(gate.cpuFence->Signal(1), "Release timed-out old copy");
 				// The owner retires the old marker WITHOUT consuming its data as
 				// current coverage, then queues this frame's changed (empty) mask.
-				const auto retireDeadline = Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget;
-				BOOL complete = FALSE;
-				while (!complete && Clock::now() < retireDeadline) {
-					Check(context_->GetData(left.query.Get(), &complete, sizeof(complete),
-							  D3D11_ASYNC_GETDATA_DONOTFLUSH),
-						"Retire old copy marker");
-					if (!complete)
-						std::this_thread::yield();
-				}
-				Require(complete && actual == sentinel, "Retirement must not publish stale bounds");
+				WaitForFixtureCopies({ &left });
+				Require(actual == sentinel, "Retirement must not publish stale bounds");
 				const std::vector<std::uint8_t> empty(leftPixels.size());
 				context_->UpdateSubresource(left.mask.Get(), 0, nullptr, empty.data(), 65, 0);
 				Queue(left);
 				context_->Flush();
+				WaitForFixtureCopies({ &left });
 				Require(Read(left, actual, Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget).Ready() &&
 							actual == std::vector<Bounds>(left.expected.size()),
 					"Only the new copy supplies current empty bounds");
@@ -832,6 +820,33 @@ namespace
 		std::uint32_t Cases() const { return cases_; }
 
 	private:
+		void WaitForFixtureCopies(std::initializer_list<const Sample*> samples,
+			NeuralRendering::CharacterMaskReadbackCompletion completion = {})
+		{
+			// Establish readiness independently of WARP scheduling before testing
+			// the production deadline. Never consume the staging buffer here.
+			Check(completion.result, "Signal fixture completion");
+			const auto deadline = Clock::now() + kFixtureReadinessBudget;
+			for (;;) {
+				bool ready = true;
+				if (completion.fence) {
+					const auto completed = completion.fence->GetCompletedValue();
+					Require(completed != std::numeric_limits<std::uint64_t>::max(), "Fixture completion device was removed");
+					ready = completed >= completion.value;
+				}
+				for (const auto* sample : samples) {
+					BOOL copied = FALSE;
+					const auto result = context_->GetData(sample->query.Get(), &copied, sizeof(copied), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					Check(result, "Probe fixture copy");
+					ready &= result == S_OK && copied;
+				}
+				if (ready)
+					return;
+				Require(Clock::now() < deadline, "Fixture copies did not complete within two seconds");
+				std::this_thread::yield();
+			}
+		}
+
 		template <class Pixel>
 		Texture MakeTexture(UINT width, UINT height, DXGI_FORMAT format, const std::vector<Pixel>& pixels)
 		{

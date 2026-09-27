@@ -123,3 +123,29 @@ the later merge commit is not substituted into the build manifest.
 The validation runner confirms identical source/submodule snapshots before
 and after the build and test run. Only this report is added after that
 validated snapshot for the initial synchronization commit.
+
+## Materials version follow-up
+
+While validation was running, main-VR advanced to
+`1a4262a7d12dc8e11cb5f12b48965744786beaaf`. Merge that descendant above
+the completed NR synchronization `ff0e9916e0b8b59a9152dd2496b2ce6839eeb122`
+as well. The total imported main-VR history is now 50 previously missing
+commits, including this additional same-day correction.
+
+The follow-up changes only Extended Materials from 1.3.0 to 1.4.0 in its
+feature INI and compiled version registry. NR's version entry and every
+other existing entry remain intact. This aligns shader-cache versioning
+with the imported parallax-strength change.
+
+```powershell
+python ./tools/feature_version_audit.py --base csx3.19.2 --output ../../analysis/main-vr-nr-sync-20260927/materials-version-audit.md --fail-on-actionable
+```
+
+The audit exits 0 with no version-bump or metadata issues. Its report also
+lists Neural Rendering and Performance Tuning as new features relative to
+the release baseline; those informational suggestions are retained.
+The staged diff and scoped hooks pass. No runtime or shader algorithm is
+changed by this follow-up, and no additional build is run for it. The DLL
+and complete test evidence above describe the initial integration's
+compiled producer, before this version-metadata update; they must not be
+relabeled as a build of the final branch tip.

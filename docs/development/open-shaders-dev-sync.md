@@ -1787,13 +1787,13 @@ Reassess useful independent #780 normalization changes when its turn
 arrives; do not create a synthetic exposure from Adaptive Balance here.
 No #773 code was imported.
 
-### #782: stale VR menu backdrop with FSR, recommendation awaiting decision
+### #782: stale VR menu backdrop with FSR, rejected
 
 [Open Shaders #782](https://github.com/alandtse/open-shaders/pull/782),
 `c9ffae711ae06ff933ba4d317475b4ed8c7040cb`, is titled
 `fix(upscaling): stale VR menu backdrop with FSR`.
 
-Recommend **r: the upstream copy path is absent and local routing already
+The user selected **r: the upstream copy path is absent and local routing already
 guards DLSS output**. Reviewed the complete one-line diff, PR metadata,
 upstream menu-blit caller, and local main/foveated/submit sharpening and
 copy-back paths. This is a rendering correction, not an upstream UI-only
@@ -1828,7 +1828,90 @@ producer-guard regions match the current primary `main-VR` checkout.
 There is no additional hunk to adapt for VR or SE/AE. This source review
 does not claim that every menu symptom is solved or reuse upstream runtime
 results as local evidence. No build, shader compilation or runtime test
-ran; no #782 code has changed. Await the user's `i` or `r`.
+ran; no #782 code was imported.
+
+### #788: disable height fog in the world map, excluded
+
+[Open Shaders #788](https://github.com/alandtse/open-shaders/pull/788),
+`2ee662790a4a69b361e437505903d4722d26990e`, is titled
+`fix(fog): disable height fog in the world map`.
+
+Excluded under the standing EHF rule. The complete diff changes only
+`ExponentialHeightFog.cpp`: its common-buffer enable flag is cleared while
+the map is open, and its volumetric prepass takes the existing resource
+release path. There are no shared renderer, map-menu or non-EHF changes
+to extract. Local source has no Exponential Height Fog feature. No code
+was imported.
+
+### #787: effect brightness control, recommendation awaiting decision
+
+[Open Shaders #787](https://github.com/alandtse/open-shaders/pull/787),
+`5f00b928359780c2e32607712a5fb1f99ecf38b2`, is titled
+`feat(utility): add effect brightness control`.
+
+Recommend **i: adapt the weather-colour controls into Adaptive Balance**.
+Reviewed the non-translation code diff, complete changed-file list, PR
+metadata, upstream weather-update callback, local effect shader, Adaptive
+Balance composition and the local DevBench visual-controls interface.
+The useful renderer changes are independent of the excluded OS Utility
+UI, translations, E11 and Scene Manager.
+
+Upstream adds `effectBrightness`, default 1 and range 0-2. After the engine
+updates weather colours, it scales `Sky::skyColor[kEffectLighting]` and
+`Sky::skyColor[kSkyStatics]` by their separate settings. This preserves
+the current weather's authored or editor-adjusted colours at 1. It also
+removes the sky-static brightness multiplication from `Effect.hlsl` and
+replaces its shared-buffer field with padding, avoiding a second scale.
+Settings serialization, sanitization, defaults and the upstream DevBench
+descriptor cover the new control.
+
+Local findings:
+
+-   Neither current `main-VR` nor this sync branch supplies
+    `effectBrightness` or `OnWeatherColorsUpdated`. Local Linear Lighting
+    does not cache the upstream weather-colour buffers. Merely copying
+    the callback override would therefore leave the control disconnected.
+-   Adaptive Balance's existing `effectLightingMult` feeds
+    `Color::EffectLightingMult`, which scales directional and point-light
+    contributions in `Effect.hlsl`. It is not the same operation as scaling
+    the current weather's Effect Lighting colour. Per-effect-type output
+    multipliers in Linear Lighting also have a different scope.
+-   The #741 port already added sky-static brightness and transparency on
+    this branch. Brightness currently multiplies final `lightColor` for a
+    selected effect permutation with `GrayscaleToAlpha` and full lighting
+    influence. It does not target the engine's Sky Statics weather colour.
+    The new placement therefore changes the control's scope and its order
+    relative to local colour conversion; these are not identical paths.
+-   Local `SkySync::Sky_Update` handles sky/climate and sun/moon state, but
+    it does not supply the upstream post-colour-update notification.
+    Upstream connects that notification at `Sky_UpdateColors` using
+    `REL::RelocationID(25686, 26233)`. A port needs the appropriate shared
+    SE/AE/VR update boundary, without importing its E11 ambient hooks or
+    broader Linear Lighting rewrite.
+
+Proposed adapted scope:
+
+-   Add weather-effect brightness to Adaptive Balance's global,
+    time/profile and location composition, persistence, sanitization,
+    defaults and local controls. Preserve the existing independent Effects
+    slider. Disabled or neutral Adaptive Balance must leave colours intact.
+-   Apply the composed effect and sky-static factors once to freshly
+    updated live weather colours, retaining weather transitions and
+    editor edits without modifying weather records or accumulating scales.
+    Retarget the existing sky-static brightness control and remove its
+    shader multiplication; retain sky-static transparency and local
+    alpha/blend/VR rules. Non-neutral sky-static appearance may differ
+    because the control now targets the weather colour rather than final
+    classified shader output.
+-   Extend the existing Adaptive Balance DevBench action, description and
+    schema. Preserve the shared-buffer layout or update its C++/HLSL
+    consumers together. Add focused composition/update coverage and defer
+    compilation and SE/AE/VR runtime validation until the sync ends.
+
+No #787 implementation has been made. Its update timing, disable/reset
+behaviour and runtime relocation must be checked during the approved port;
+this recommendation is source analysis, not a claim of runtime success.
+Await the user's `i` or `r`.
 
 ## Verification
 

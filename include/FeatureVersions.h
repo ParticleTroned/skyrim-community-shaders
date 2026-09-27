@@ -16,7 +16,7 @@ namespace FeatureVersions
         {"CSUtility"sv,            {1,6,0}},
         {"CloudShadows"sv,         {1,2,1}},
         {"DynamicCubemaps"sv,      {2,3,1}},
-        {"ExtendedMaterials"sv,    {1,3,0}},
+        {"ExtendedMaterials"sv,    {1,4,0}},
         {"ExtendedTranslucency"sv, {1,0,0}},
         {"FoliageLighting"sv,      {1,0,0}},
         {"GrassCollision"sv,       {3,0,5}},

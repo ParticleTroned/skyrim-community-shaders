@@ -2197,13 +2197,13 @@ upstream-specific dispatch selector or texture redirect would not add a
 missing local behavior. Its reported upstream runtime results are not
 local validation. No #784 code is imported.
 
-### #789: prevent highlight outlines, recommendation awaiting decision
+### #789: prevent highlight outlines, rejected
 
 [Open Shaders #789](https://github.com/alandtse/open-shaders/pull/789),
 `af8134814a17073971628f59c132b196939889ce`,
 `fix(post-processing): prevent highlight outlines`.
 
-Recommendation: **r**, the affected highlight-grading controls and pass
+The user selected **r**, the affected highlight-grading controls and pass
 are absent locally. This is not a claim that the upstream fix is already
 implemented, or that local rendering cannot produce outlines for other
 reasons.
@@ -2239,13 +2239,28 @@ highlight gain or subtract a luminance-dependent highlight offset.
 There is therefore no corresponding calculation to replace, including
 partially inside Adaptive Balance. Importing the helper alone would add
 unused code; adding three-zone grading would be a separate feature rather
-than applying this correction. No #789 code is imported; await `i` or `r`.
+than applying this correction. No #789 code is imported.
 This is the final entry in the pinned 56-entry dev review range, not a
 claim that the live upstream branch has no newer work.
 
 Validation: read-only source comparison, PR metadata and complete diff
 review; scoped documentation hooks and `git diff --check`. No build,
 shader compilation, compiled test, deployment or runtime validation ran.
+
+## Pinned review complete
+
+The user rejected #789, completing decisions for all 56 first-parent
+entries from v2.15.0 through the pinned dev endpoint
+`af8134814a17073971628f59c132b196939889ce`. The entry without a PR number in
+its commit subject, `25b96de6b`, is covered by the #758 merge review.
+No candidate remains awaiting a decision. Accepted ports are on
+`codex/pr730-open-shaders-dev-sync`, including the requested Adaptive
+Balance base and the optional FOV curve. The primary checkout remains
+on `main-VR`; this review does not merge or publish the working branch.
+
+The user's deferred end-of-sync build and compiled validation can now
+proceed. Earlier per-port validation notes describe the checks available
+when those decisions were made; they are not final runtime qualification.
 
 ## Verification
 

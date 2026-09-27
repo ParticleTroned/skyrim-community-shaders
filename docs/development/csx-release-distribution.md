@@ -98,6 +98,11 @@ The existing DevBench measurement API is unchanged. The published 3.19.2
 AIO predates this registration and still has 39 versioned modules; future
 packages include the new Performance Tuning INI as the fortieth module.
 
+The orphaned-INI scanner also checks the version registry, so built-in
+menus with metadata but no runtime `Feature` object are recognized.
+Obsolete-feature warnings take precedence, and unknown INIs and failed
+runtime features retain their existing diagnostics on SE, AE and VR.
+
 Registration validation passed all eight inventory/policy checks and 33
 shader-cache packaging tests. The inventory suite executes the production
 CMake version-discovery block against the packaged INI and CORE marker,

@@ -14,6 +14,12 @@ the corrupt bytes. A later Papyrus victim contains another 48-byte transform.
 The immediate engine writer is established, but the component that poisoned
 the binding remains unknown.
 
+An offline audit of all 126 entries in the captured player graph found 122
+non-null bindings whose parent chains reached `graph->rootNode`, three null
+entries, and exactly one binding outside the graph: entry 42, the shader
+property victim. No legitimate captured binding violated the scene-membership
+invariant used by this guard.
+
 ## Guard
 
 On Skyrim VR 1.4.15, CSX verifies and hooks the call at RVA `0xAEC1AD` to the

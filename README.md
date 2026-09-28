@@ -251,6 +251,12 @@ The public 2.14.1 SDK archive does not contain `sl.dlss_nr.dll`,
 `nvngx_dlssnr.dll`, or their implementation sources. This update does not package
 DLSS Neural Rendering or add support for it.
 
+### SKSE Plugin API
+
+[LGPL-3.0-or-later](COPYING.LESSER): `include/VRAPI/CSinterface001.h` and
+`src/VRAPI/CSinterface001.cpp` only (see [API.md](API.md)). Everything else
+under `VRAPI/` remains [Default](#default).
+
 ### Shaders
 
 See LICENSE within each directory; if none, it's [Default](#default)

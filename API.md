@@ -33,12 +33,36 @@ Use the interface contract only:
 -   `include/VRAPI/CSinterface001.h`
 -   Optionally `src/VRAPI/CSinterface001.cpp` (convenience helper that fetches and caches the interface)
 
-Both files are LGPL-3.0-or-later, not this project's default GPL-3.0-or-later
-(see the SPDX header in each file and `COPYING.LESSER`). Vendor them into a mod
-of any license with no obligation on your own code; only modifications to
-these two files themselves need to be shared back under the same terms.
-
 You do **not** need provider internals like `CSpluginapi.*`.
+
+### Consumer licensing
+
+CSinterface001.h and CSinterface001.cpp are available under
+LGPL-3.0-or-later. A consumer's independently written application
+code does not have to be released under the LGPL.
+
+Compiling CSinterface001.cpp into a distributed consumer DLL
+incorporates the LGPL helper into that binary. Consumers using
+this approach must comply with LGPLv3's combined-work requirements,
+including the required notices and licence copies, availability
+of the corresponding LGPL source, and a usable method for
+recombining the application with a modified helper.
+
+The application-side materials may be supplied as suitable object
+code rather than application source code. Necessary relinking
+materials and permissions must also be provided.
+
+These requirements apply even when the helper is unchanged.
+Publishing only the final consumer DLL is not sufficient for
+this embedded-helper compliance route.
+
+Required materials must be provided using an applicable GPLv3
+section 6 distribution method. For ordinary download releases,
+provide equivalent access to matching source and relinking
+materials alongside the binary download.
+
+There is no requirement to submit changes upstream to CSX.
+This summary does not replace the licence terms.
 
 ## Handshake Details
 

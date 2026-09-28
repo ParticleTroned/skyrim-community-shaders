@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// Unlike the rest of this project (GPL-3.0-or-later), this file and its
-// companion CSinterface001.h are LGPL so any mod can vendor them freely;
-// only changes to this file itself must be shared under the same license.
-// Full text: COPYING.LESSER.
+// This consumer API file is available under LGPL-3.0-or-later.
+// See API.md, "Consumer licensing", for distribution requirements,
+// including those applicable when compiling the helper into a consumer DLL.
+// Licence texts: COPYING and COPYING.LESSER.
 
 #include "VRAPI/CSinterface001.h"
 

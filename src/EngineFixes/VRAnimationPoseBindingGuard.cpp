@@ -19,7 +19,9 @@ namespace
 	enum class BindingFailure
 	{
 		kAbsentFromScene,
-		kFlattenedTypeMismatch
+		kFlattenedTypeMismatch,
+		kFlattenedIndexOutOfRange,
+		kFlattenedStorageUnreadable
 	};
 
 	struct SceneScratch
@@ -127,6 +129,15 @@ namespace
 		return std::binary_search(a_objects.begin(), a_objects.end(), reinterpret_cast<std::uintptr_t>(a_object));
 	}
 
+	bool IsReadableFlattenedEntry(const RE::BSFlattenedBoneTree::RUNTIME_DATA& a_runtimeData, std::uint32_t a_index)
+	{
+		const auto base = reinterpret_cast<std::uintptr_t>(a_runtimeData.boneEntries);
+		constexpr auto entrySize = sizeof(RE::BSFlattenedBoneTree::BoneEntry);
+		if (!base || a_index > ((std::numeric_limits<std::uintptr_t>::max)() - base) / entrySize)
+			return false;
+		return IsReadableRange(reinterpret_cast<const void*>(base + static_cast<std::uintptr_t>(a_index) * entrySize), entrySize);
+	}
+
 	const char* FailureName(BindingFailure a_failure)
 	{
 		switch (a_failure) {
@@ -134,6 +145,10 @@ namespace
 			return "absent-from-scene";
 		case BindingFailure::kFlattenedTypeMismatch:
 			return "flattened-type-mismatch";
+		case BindingFailure::kFlattenedIndexOutOfRange:
+			return "flattened-index-out-of-range";
+		case BindingFailure::kFlattenedStorageUnreadable:
+			return "flattened-storage-unreadable";
 		default:
 			return "unknown";
 		}
@@ -276,9 +291,22 @@ void VRAnimationPoseBindingGuard::ApplyPoseGuarded(
 			const auto flattenedOffset = std::bit_cast<std::int32_t>(entry.unk08);
 			if (!valid) {
 				failure = BindingFailure::kAbsentFromScene;
-			} else if (flattenedOffset >= 0 && !netimmerse_cast<RE::BSFlattenedBoneTree*>(entry.node)) {
-				valid = false;
-				failure = BindingFailure::kFlattenedTypeMismatch;
+			} else if (flattenedOffset >= 0) {
+				auto* flattenedTree = netimmerse_cast<RE::BSFlattenedBoneTree*>(entry.node);
+				if (!flattenedTree) {
+					valid = false;
+					failure = BindingFailure::kFlattenedTypeMismatch;
+				} else {
+					const auto flattenedIndex = static_cast<std::uint32_t>(flattenedOffset);
+					const auto& runtimeData = flattenedTree->GetRuntimeData();
+					if (flattenedIndex >= runtimeData.numBones) {
+						valid = false;
+						failure = BindingFailure::kFlattenedIndexOutOfRange;
+					} else if (!IsReadableFlattenedEntry(runtimeData, flattenedIndex)) {
+						valid = false;
+						failure = BindingFailure::kFlattenedStorageUnreadable;
+					}
+				}
 			}
 
 			if (!valid)

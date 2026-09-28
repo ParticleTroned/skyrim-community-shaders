@@ -20,13 +20,18 @@ entries, and exactly one binding outside the graph: entry 42, the shader
 property victim. No legitimate captured binding violated the scene-membership
 invariant used by this guard.
 
+The captured flattened tree reports 535 bones and legitimately uses offsets
+through 534. Some offsets exceed `numPopulatedBones`, so the guard deliberately
+uses the native storage bound rather than imposing that narrower count.
+
 ## Guard
 
 On Skyrim VR 1.4.15, CSX verifies and hooks the call at RVA `0xAEC1AD` to the
 native helper at RVA `0xB3C260`. For each invocation it derives the owning
 animation graph, walks the graph's current scene tree and validates every
 direct binding against that live object set. Entries with a non-negative
-flattened-tree offset must also identify a `BSFlattenedBoneTree`.
+flattened-tree offset must also identify a `BSFlattenedBoneTree`, remain below
+its `numBones` bound and resolve to readable `BoneEntry` storage.
 
 If every entry is valid, the original helper receives the original arguments.
 If an entry is invalid, the guard logs bounded graph, binding, pose and stack

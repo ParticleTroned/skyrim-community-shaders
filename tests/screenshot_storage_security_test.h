@@ -30,6 +30,12 @@ inline void RunScreenshotStorageSecurityTests()
 {
 	using CSX::ScreenshotStorage::CommittedFile;
 	using CSX::ScreenshotStorage::DirectoryLease;
+	using CSX::ScreenshotStorage::NormalizeFinalPath;
+	if (NormalizeFinalPath(LR"(\\?\UNC\server\share\folder)") !=
+			std::filesystem::path(LR"(\\server\share\folder)") ||
+		NormalizeFinalPath(LR"(\\?\C:\folder)") !=
+			std::filesystem::path(LR"(C:\folder)"))
+		throw std::runtime_error("extended Windows paths were not normalized");
 
 	const auto root = std::filesystem::temp_directory_path() /
 	                  std::format("csx-screenshot-storage-{}-{}", GetCurrentProcessId(), GetTickCount64());

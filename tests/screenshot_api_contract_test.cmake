@@ -41,8 +41,13 @@ endforeach()
 string(JSON _fixture_cancelled GET "${_manifest_fixture}" counts cancelled)
 string(JSON _fixture_fallback GET "${_manifest_fixture}" actual fallbacksPresent)
 string(JSON _fixture_view GET "${_manifest_fixture}" children 0 artifacts 0 actual view)
-if(NOT _fixture_cancelled EQUAL 0 OR NOT _fixture_fallback OR NOT _fixture_view STREQUAL "source_native")
-    message(FATAL_ERROR "Sequence manifest fixture does not preserve counters, fallback, and artifact provenance")
+string(JSON _fixture_effective_frames GET "${_manifest_fixture}" effective frameCount)
+string(JSON _fixture_effective_source GET "${_manifest_fixture}" effective capture source kind)
+if(NOT _fixture_cancelled EQUAL 0 OR NOT _fixture_fallback OR
+   NOT _fixture_view STREQUAL "source_native" OR
+   NOT _fixture_effective_frames EQUAL 1 OR
+   NOT _fixture_effective_source STREQUAL "hmd_submission")
+    message(FATAL_ERROR "Sequence manifest fixture does not preserve effective settings, counters, fallback, and artifact provenance")
 endif()
 
 file(READ "${PROJECT_ROOT}/docs/development/unified-preset-policy.json" _policy)
@@ -91,6 +96,7 @@ foreach(_required_contract_text IN ITEMS
 	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
 	effectiveSequence RelativeContainedArtifactPath relativeSequencePath
 	DirectoryLease::CreateExclusive directoryLease VerifyDirectChild
+	SelectSettingsCaptureSource sequence.effective a_sequence.effective
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)

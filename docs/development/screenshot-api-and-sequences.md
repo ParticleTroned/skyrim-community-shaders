@@ -435,7 +435,8 @@ Version 1 separates them:
 -   `source.kind = hmd_submission` observes coherent accepted OpenVR eye
     submissions before compositor distortion.
 -   `source.kind = settings_default` resolves either source from the immutable
-    settings snapshot.
+    settings snapshot. On flat Skyrim it resolves to `desktop_mirror` even if
+    the persisted VR-only preference is `hmd_submission`.
 -   `outputs[].view` selects native, individual-eye, side-by-side, or framed
     composition from the acquired planes.
 
@@ -691,6 +692,11 @@ in-memory warning only. The schema requires child warning/error arrays and the
 actual view, dimensions, format, and colour contract for every committed frame
 artifact. A missing required final manifest is `failed` or `failed_partial`; it
 is never reported as completion with a warning.
+
+The parent receipt and every partial or final manifest carry the same frozen,
+fully expanded sequence object in `effective`. Capture settings remain nested
+under `effective.capture`; they are not substituted for the sequence object in
+manifest output.
 
 Frame artifact paths are strict descendants of the sequence directory and are
 published relative to that directory. Consumers must reject rooted paths,

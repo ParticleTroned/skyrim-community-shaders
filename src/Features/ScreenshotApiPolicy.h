@@ -25,6 +25,13 @@ namespace CSX::ScreenshotPolicy
 		explicit operator bool() const noexcept { return !resolved.empty(); }
 	};
 
+	inline std::string SelectSettingsCaptureSource(
+		std::string_view a_configuredSource,
+		bool a_vrRuntime)
+	{
+		return a_vrRuntime ? std::string(a_configuredSource) : "desktop_mirror";
+	}
+
 	inline SourceResolution ResolveCaptureSource(
 		std::string_view a_requested,
 		std::string_view a_fallback,

@@ -80,6 +80,11 @@ The AIO was neither rebuilt nor replaced:
 These automation changes apply to subsequent releases. Do not move the
 published tag to include them.
 
+The versioned [3.19.2 release notes and attribution audit](../release-notes/csx3.19.2-attribution-audit.md)
+retain the Nexus text, the complete 536-commit inventory and the supporting
+commit map for all 66 entries, including the final cache and water-profile
+corrections in the published tag.
+
 ## Performance Tuning version registration
 
 After 3.19.2, Performance Tuning has its own initial version, `1-0-0`, in

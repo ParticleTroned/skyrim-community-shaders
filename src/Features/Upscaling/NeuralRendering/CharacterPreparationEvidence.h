@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace Util
 {
@@ -108,6 +109,7 @@ namespace NeuralRendering
 		std::shared_ptr<CharacterMaskSupportCapture> support;
 		ComputeSubrect computeSubrect{}, dirtyDispatchRect{};
 		CharacterComputeRegionPlan computeRegions{};
+		std::optional<RoiDescriptor> roi;
 		bool requiresEvaluation = true, reused = false, prepared = false;
 		const char* outcome = "unavailable";
 		bool roiPlanningCpuAvailable = false, boundsPollCpuAvailable = false;

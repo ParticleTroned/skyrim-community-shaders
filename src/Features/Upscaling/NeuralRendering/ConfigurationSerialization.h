@@ -43,6 +43,9 @@ namespace NeuralRendering
 		for (const auto* key : { "neuralCharacterMultiRoiEnabled", "neuralCharacterMultiRoiSavingsGateEnabled",
 				 "neuralCharacterDebugView", "neuralCharacterMaskTestMode" })
 			rendering.erase(key);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		rendering.erase("neuralCharacterCurrentContextEnabled");
+#endif
 		return rendering;
 	}
 
@@ -67,5 +70,8 @@ namespace NeuralRendering
 		destination = merged.template get<Settings>();
 		destination.neuralCharacterDebugView = source.neuralCharacterDebugView;
 		destination.neuralCharacterMaskTestMode = source.neuralCharacterMaskTestMode;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		destination.neuralCharacterCurrentContextEnabled = source.neuralCharacterCurrentContextEnabled;
+#endif
 	}
 }

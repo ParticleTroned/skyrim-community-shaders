@@ -1,5 +1,121 @@
 # main-vr-nr progress and continuation record
 
+## Task 3 implementation closeout (2026-09-28)
+
+The [closeout record](nr-task3-completion-20260928.md) completes Task 3A–3D
+as groundwork and preserves qualification separately. Fresh user-started
+PID 18008 ran the verified Task 3C DLL without the lifetime tracer:
+61,026 successful native evaluations, zero NR faults, debug-view exclusion
+verified, and original settings restored. Four bounded profiler captures
+retained 512 resolved frames. Five sequences retained 120 native stereo
+PNGs and 60 valid ROI transactions, including one both-empty NoWork pair.
+
+The user's central problem remains unresolved: smaller NR regions have not
+established proportionate cost savings. Large reference-timing drift and
+camera changes prevent performance or image-quality qualification. Task 3
+is not a performance fix. Current context remains a default-off DevBench
+experiment; production promotion and independent hang isolation remain
+open. The existing Task 2 native replay cost matrix is the next direct
+measurement of the scaling problem. Task 4 may build on the completed
+contracts without assuming any measured nonempty-ROI gain. The closeout
+also defines the later Task 8 read-halo/write-ownership qualification;
+overlap remains disabled. No build, install, restart, commit or push was
+performed during this closeout.
+
+## Task 3A: ROI roles (2026-09-27)
+
+The [ROI contract record](main-vr-nr-roi-contract.md) continues from verified
+local/remote `b80f0b2ca` in the primary `main-vr-nr` checkout. Five distinct
+roles now pass through current character preparation, renderer admission,
+evaluation, allocation and private-output commitment, with frozen evidence
+and immutable delayed joins. Provider rectangles, shared envelopes, native
+capacity, overlap restrictions and settings remain unchanged. Revision 8
+is retained with refreshed preset source metadata.
+
+Following the user's explicit AIO request, Task 3A compiled on current
+`7c4effa27` plus the uncommitted implementation, and all 206 local tests
+passed. A local shadowing warning was corrected before the successful
+build. The verified internal test AIO has DevBench ON, includes the NR
+runtime, and has Build ID
+`ee833efd718c902575a8a0ccc13c3424ceb01b71f1df522b6e3cfcd5c0ceec76`.
+The ROI contract record retains the exact compiled source/digest, archive,
+validation evidence and warnings. The
+[September 28 live record](nr-task3a-live-20260928.md) preserves passing
+sampled ROI contracts in A/B/C and the C NoWork case, but the C-to-B return
+caused a device-hang/quarantine observation. Full runtime qualification
+remains incomplete. The requested transition fix retires native ownership
+when crossing the pre/post-DLSS input boundary and requires a fresh-instance
+replay before claiming that the driver hang is resolved. The fix compiled
+as DevBench Build ID `3f647eeab4cb` and passed all 206 local tests; the new
+test AIO and exact producer identity are recorded in the live report.
+The user-installed fix was then tested in Dragonsreach, PID `21648`.
+B-to-C and C-to-B retirement succeeded and NR resumed, but a later A
+evaluation still produced device removal and quarantine. A subsequent
+A-to-C request was rejected; disabling NR succeeded while unsafe native
+ownership remained retained. The fix is insufficient. The live report
+preserves chronology, passed ROI samples, failure counters and remaining
+runtime settings; further NR testing requires a fresh process.
+
+The [native lifetime isolation record](nr-lifetime-isolation-20260928.md)
+describes the bounded diagnostic history and independent A/B single-ROI
+and multi-ROI controls. The new recorder is bridge-only and capture-gated.
+It changes no GPU synchronization or resource-retirement policy. Captured
+and uncaptured runs must remain separate; a DevBench-only defect must not
+introduce production overhead. The universal DevBench DLL compiled as
+Build ID `490462394cae` and passed 208/208 local tests. Its verified AIO
+contains 385 files. The user manually installed it and requested a live
+check in fresh PID `27212`. The bounded A1 full-resolution/single-ROI
+capture-off/on/off check passed: 23,198 successful eye evaluations, no
+NR failures, device removals or quarantines. The recorder retained its
+64-entry history and stopped recording when capture was disabled. Three
+sampled ROI transactions passed structural auditing. Starting NR, FOV,
+colour and upscaling settings were restored and verified while healthy.
+The isolation record retains exact provenance, counters and limitations.
+The hang's cause is unresolved; A2/B1/B2 fresh-process lanes, transitions,
+visual fidelity and performance qualification remain pending. Installation
+and game restarts require the user's explicit instruction.
+
+The [Bannered Mare continuation](nr-task3a-bannered-mare-20260928.md)
+then passed the current-session VR A/B/C functional matrix: all six
+directed mode transitions, two regions per eye in every mode, forced-empty
+NoWork and authored recovery, and the optional A/C FOV choices. There were
+67,281 additional successful native region evaluations with zero NR faults.
+The audit passed 21 current ROI samples and 9 NoWork samples; 9 boundary
+samples remain inconclusive. Settings were restored and the game remained
+healthy. This same-process pass does not establish a driver-hang fix or
+replace fresh-process isolation, matched output/cost evidence or live
+SE/AE qualification. Task 3A implementation/local validation is complete;
+full runtime qualification remains open.
+
+Task 3B's existing jitter, feather, shared-envelope and source-reuse
+behavior is preserved. The
+[Task 3C current-context experiment](nr-task3c-current-context-20260928.md)
+is now implemented in source as a default-off, session-only DevBench
+control for C's single-region character path. It retains spatial padding,
+the historical envelope and allocation capacity while optionally reducing
+the evaluated context to current proven support. Unknown bounds keep the
+baseline. Bridge-disabled preprocessing matches the pre-3C source; source
+contracts pass. The subsequently requested DevBench AIO compiled as Build
+ID `40689ffbf63b`, passed 211/211 local tests and verified all 385 archived
+files against staging. The subsequent user-installed
+[Task 3C VR evaluation](nr-task3c-live-20260928.md) passed sampled context,
+reset, exclusion and empty/recovery contracts: 45,069 successful native
+region evaluations, zero NR faults, and verified restoration. One sample
+evaluated 65.33% less area than its retained envelope with unchanged
+capacity; this is not a performance measurement. Native quality/cost
+qualification remains pending. Follow-up fixed the direct guard's missing
+not-applicable case: fresh registration evidence proves the standalone
+probe absent. The active lifetime tracer separately reports distorted
+timing, so this session still cannot establish performance neutrality.
+Task 3 implementation/local validation and the sampled VR
+functional checks are complete, while full runtime qualification and
+independent hang isolation remain open. The user controls installation and
+restarts. Task 3D retains
+separate ownership fields with overlapping providers still prohibited.
+Capacity/transport work remains separate. No controlled native cost
+comparison, deployment, commit or push was made. Existing unrelated
+local changes, earlier archives and prior AIO staging were preserved.
+
 ## September 19 main-VR integration
 
 [Integration record](main-vr-nr-sync-20260919.md): merge local `main-VR`

@@ -504,6 +504,10 @@ public:
 		// Experimental: separate persistent Feature 18 instances for two regions.
 		bool neuralCharacterMultiRoiEnabled = false;
 		bool neuralCharacterMultiRoiSavingsGateEnabled = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Session-only C context experiment; excluded from persisted settings. */
+		bool neuralCharacterCurrentContextEnabled = false;
+#endif
 		uint neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float neuralCharacterRoiMargin =

@@ -22,6 +22,9 @@ namespace
 		// Capture fingerprints include transient controls even though saves omit them.
 		values["neuralCharacterDebugView"] = settings.neuralCharacterDebugView;
 		values["neuralCharacterMaskTestMode"] = settings.neuralCharacterMaskTestMode;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		values["neuralCharacterCurrentContextEnabled"] = settings.neuralCharacterCurrentContextEnabled;
+#endif
 		return { { "upscaling", std::move(values) }, { "color", NeuralRendering::Color::ConfigurationEvidenceJson(color) } };
 	}
 	Json Unavailable(std::string_view reason)

@@ -10,6 +10,7 @@
 #	include "BuildProvenance.h"
 #	include "ExecutionEvidenceJson.h"
 #	include "ReplayCapture.h"
+#	include <exception>
 #endif
 
 #include <DirectXTex.h>
@@ -637,6 +638,9 @@ namespace NeuralRendering
 
 		struct Slot
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::uint64_t resourceSerial = 0;
+#endif
 			SharedTexture color;
 			SharedTexture depth;
 			SharedTexture motionVectors;
@@ -662,7 +666,7 @@ namespace NeuralRendering
 			TextureInfo output;
 			std::uintptr_t controlMaskIdentity = 0;
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
-			ComputeSubrect outputSubrect{};
+			RoiDescriptor roi{};
 			ComputeSubrect colorSubrect{};
 			ComputeSubrect guideSubrect{};
 			ComputeSubrect controlMaskSubrect{};
@@ -777,8 +781,47 @@ namespace NeuralRendering
 			}
 		}
 		mutable std::mutex mutex_;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LifetimeDiagnostics lifetimeDiagnostics_;
+		LifetimeRecord* activeLifetime_ = nullptr;
+		std::uint64_t backendSerial_ = 0, resourceSerial_ = 0;
+
+		struct LifetimeGuard
+		{
+			State& owner;
+			std::optional<LifetimeRecord> record;
+			LifetimeRecord* parent = nullptr;
+			bool enabled = false;
+			int exceptions = 0;
+			LifetimeGuard(State& state, LifetimeOperation operation) :
+				owner(state)
+			{
+				if (!Color::Registry::Instance().CaptureEvidenceEnabled() || state.lifetimeDiagnostics_.Frozen())
+					return;
+				record.emplace();
+				enabled = state.BeginLifetimeLocked(*record, operation);
+				if (enabled) {
+					exceptions = std::uncaught_exceptions();
+					parent = state.activeLifetime_;
+					owner.activeLifetime_ = &*record;
+				}
+			}
+			~LifetimeGuard() noexcept
+			{
+				if (enabled) {
+					owner.FinishLifetimeLocked(*record, std::uncaught_exceptions() > exceptions);
+					owner.activeLifetime_ = parent;
+				}
+			}
+		};
+#endif
 
 	private:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool BeginLifetimeLocked(LifetimeRecord& record, LifetimeOperation operation) noexcept;
+		void FinishLifetimeLocked(LifetimeRecord& record, bool unwinding) noexcept;
+		void CaptureLifetimeResourcesLocked(LifetimeRegion& region, const Slot& slot) const noexcept;
+#endif
 		ValidationFailure ValidateLocked(
 			const RendererApplyArgs& a_args,
 			ValidatedResources& a_resources);
@@ -853,6 +896,55 @@ namespace NeuralRendering
 		std::uint32_t activeFeatureSlot_ = Runtime::kFeatureSlotCount;
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool Renderer::State::BeginLifetimeLocked(LifetimeRecord& record, LifetimeOperation operation) noexcept
+	{
+		try {
+			record.operation = operation;
+			record.backendSerial = backendSerial_;
+			record.requestFrame = snapshot_.frameId;
+			record.sourceFrame = snapshot_.sourceWorldFrame;
+			record.generation = snapshot_.generation;
+			record.insertion = static_cast<std::uint32_t>(snapshot_.insertionPoint);
+			record.before = interop_.GetLifetimeSnapshot();
+			return true;
+		} catch (...) {
+			lifetimeDiagnostics_.DiagnosticFailure();
+			return false;
+		}
+	}
+
+	void Renderer::State::FinishLifetimeLocked(LifetimeRecord& record, bool unwinding) noexcept
+	{
+		try {
+			if (!record.failureObserved) {
+				record.stage = static_cast<std::uint32_t>(activeStage_);
+				record.after = interop_.GetLifetimeSnapshot();
+			}
+		} catch (...) {
+			lifetimeDiagnostics_.DiagnosticFailure();
+		}
+		if (unwinding && !record.failureObserved) {
+			record.failureObserved = true;
+			record.result = E_UNEXPECTED;
+			record.succeeded = false;
+		}
+		lifetimeDiagnostics_.Record(record);
+	}
+
+	void Renderer::State::CaptureLifetimeResourcesLocked(LifetimeRegion& region, const Slot& slot) const noexcept
+	{
+		region.resourceSerial = slot.resourceSerial;
+		region.resourcesRebuilt = region.previousResourceSerial != region.resourceSerial;
+		const std::array<const SharedTexture*, 5> resources{ &slot.color, &slot.depth, &slot.motionVectors, &slot.output, &slot.controlMask };
+		for (std::size_t index = 0; index < resources.size(); ++index) {
+			region.resources11[index] = reinterpret_cast<std::uintptr_t>(resources[index]->resource11.Get());
+			region.resources12[index] = reinterpret_cast<std::uintptr_t>(resources[index]->resource12.Get());
+		}
+	}
+
+#endif
+
 	Renderer::State::ValidationFailure Renderer::State::ValidateLocked(
 		const RendererApplyArgs& a_args,
 		ValidatedResources& a_resources)
@@ -916,19 +1008,23 @@ namespace NeuralRendering
 			a_args.computeSubrect.width || a_args.computeSubrect.height;
 		if (hasExplicitSubrectValue && !a_args.computeSubrect.IsValid())
 			return fail("the explicit Feature 18 compute rectangle is incomplete");
-		a_resources.outputSubrect = ResolveComputeSubrect(a_args);
-		if (!a_resources.outputSubrect.Fits(
-				a_args.outputWidth, a_args.outputHeight)) {
-			return fail("the Feature 18 compute rectangle exceeds the output extent");
-		}
+		const auto provider = ResolveComputeSubrect(a_args);
+		a_resources.roi = a_args.roi.value_or(BuildRoiDescriptor(
+			std::nullopt, provider, { a_args.outputWidth, a_args.outputHeight }, false));
+		if (a_args.characterVisualIsolation && (!a_args.roi || !a_args.roi->samplingSupport))
+			return fail("character evaluation requires prepared ROI roles and current sampling support");
+		if (auto violation = GetRoiDescriptorViolation(a_resources.roi, provider,
+				{ a_args.outputWidth, a_args.outputHeight });
+			!violation.empty())
+			return fail(std::string(violation));
 		a_resources.colorSubrect = MapComputeSubrect(
-			a_resources.outputSubrect,
+			a_resources.roi.inferenceContext,
 			a_args.outputWidth,
 			a_args.outputHeight,
 			a_args.colorWidth,
 			a_args.colorHeight);
 		a_resources.guideSubrect = MapComputeSubrect(
-			a_resources.outputSubrect,
+			a_resources.roi.inferenceContext,
 			a_args.outputWidth,
 			a_args.outputHeight,
 			a_args.guideWidth,
@@ -955,7 +1051,7 @@ namespace NeuralRendering
 		}
 		if (hasControlMask) {
 			a_resources.controlMaskSubrect = MapComputeSubrect(
-				a_resources.outputSubrect,
+				a_resources.roi.inferenceContext,
 				a_args.outputWidth,
 				a_args.outputHeight,
 				a_args.controlMaskWidth,
@@ -1121,8 +1217,8 @@ namespace NeuralRendering
 			.colorHeight = a_args.colorHeight,
 			.guideWidth = a_args.guideWidth,
 			.guideHeight = a_args.guideHeight,
-			.outputWidth = a_args.outputWidth,
-			.outputHeight = a_args.outputHeight,
+			.outputWidth = a_resources.roi.allocationCapacity.width,
+			.outputHeight = a_resources.roi.allocationCapacity.height,
 			.controlMaskWidth = hasControlMask ? a_args.controlMaskWidth : 0,
 			.controlMaskHeight = hasControlMask ? a_args.controlMaskHeight : 0,
 			.colorFormat = a_resources.color.desc.Format,
@@ -1147,7 +1243,7 @@ namespace NeuralRendering
 			.skinStructureStrength = std::bit_cast<std::uint32_t>(a_args.tuning.skinStructureStrength),
 			.style = a_args.tuning.style,
 			.controlMaskIdentity = a_resources.controlMaskIdentity,
-			.computeSubrect = a_resources.outputSubrect,
+			.computeSubrect = a_resources.roi.inferenceContext,
 			.colorInputEpoch = colorConfiguration_.inputEpoch[static_cast<std::size_t>(a_args.insertionPoint)],
 			.useAutoMask = a_args.tuning.useAutoMask,
 			.uiCorrection = a_args.tuning.uiCorrection,
@@ -1169,7 +1265,7 @@ namespace NeuralRendering
 			observation.bypass = capture.configuration.experiments.transportBypass;
 			observation.modelEditShown = capture.configuration.experiments.applyModelEdit;
 			observation.lightingPreservation = Color::ResolveReconstructionSettings(capture.configuration.settings).lightingPreservation;
-			observation.rect = a_resources.outputSubrect;
+			observation.rect = a_resources.roi.ownedOutput;
 			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.resourceKey.colorFormat);
 			observation.outputFormat = static_cast<std::uint32_t>(a_resources.resourceKey.outputFormat);
 			capture.slotMask |= 1u << a_args.featureSlot;
@@ -1365,6 +1461,18 @@ namespace NeuralRendering
 
 		const HRESULT removalReason = GetDeviceRemovalReasonLocked(a_result);
 		const bool deviceRemoved = FAILED(removalReason);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (activeLifetime_) {
+			activeLifetime_->failureObserved = true;
+			activeLifetime_->stage = static_cast<std::uint32_t>(a_stage);
+			activeLifetime_->result = deviceRemoved ? removalReason : a_result;
+			try {
+				activeLifetime_->after = interop_.GetLifetimeSnapshot();
+			} catch (...) {
+				lifetimeDiagnostics_.DiagnosticFailure();
+			}
+		}
+#endif
 		if (deviceRemoved) {
 			if (!quarantined_)
 				Increment(snapshot_.counters.deviceRemovals);
@@ -1448,6 +1556,14 @@ namespace NeuralRendering
 		bool a_destruction,
 		bool a_countApplyFailure, const std::shared_ptr<ExecutionEvidence>& a_evidence)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LifetimeGuard lifetime(*this, LifetimeOperation::BackendRetirement);
+		if (lifetime.enabled) {
+			for (std::size_t index = 0; index < slots_.size(); ++index)
+				if (slots_[index].resourcesValid)
+					lifetime.record->slotMask |= 1u << index;
+		}
+#endif
 		Increment(snapshot_.counters.resetAttempts);
 		if (quarantined_) {
 			Increment(snapshot_.counters.resetFailures);
@@ -1555,6 +1671,10 @@ namespace NeuralRendering
 		snapshot_.outputCommitted = false;
 		snapshot_.detail.clear();
 		RefreshRuntimeTelemetryLocked();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (lifetime.enabled)
+			lifetime.record->succeeded = true;
+#endif
 		return true;
 	}
 
@@ -1728,6 +1848,9 @@ namespace NeuralRendering
 				rollbackUnsafe);
 		}
 		runtimeReady_ = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		++backendSerial_;
+#endif
 		Increment(snapshot_.counters.runtimeInitializations);
 		snapshot_.lastCompletedStage = RendererStage::RuntimeInitialization;
 		RefreshRuntimeTelemetryLocked();
@@ -1750,6 +1873,16 @@ namespace NeuralRendering
 			return true;
 
 		if (slot.resourcesValid) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			LifetimeGuard lifetime(*this, LifetimeOperation::SlotRetirement);
+			if (lifetime.enabled) {
+				lifetime.record->slotMask = 1u << a_slot;
+				lifetime.record->regionCount = 1;
+				lifetime.record->regions[0].slot = a_slot;
+				lifetime.record->regions[0].previousResourceSerial = slot.resourceSerial;
+				CaptureLifetimeResourcesLocked(lifetime.record->regions[0], slot);
+			}
+#endif
 			ExecutionCpuTimer retirementTimer(a_evidence, &ExecutionSnapshot::resourceRetirementCpuMicroseconds);
 			activeStage_ = RendererStage::ResourceRetirement;
 			const bool idle = interop_.WaitForIdle(a_evidence);
@@ -1772,6 +1905,10 @@ namespace NeuralRendering
 					true);
 			}
 			slot = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (lifetime.enabled)
+				lifetime.record->succeeded = true;
+#endif
 			snapshot_.lastCompletedStage = RendererStage::ResourceRetirement;
 		}
 
@@ -1847,6 +1984,9 @@ namespace NeuralRendering
 				true);
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		replacement.resourceSerial = ++resourceSerial_;
+#endif
 		replacement.resourceKey = a_resources.resourceKey;
 		replacement.resourcesValid = true;
 		slot = std::move(replacement);
@@ -2126,6 +2266,7 @@ namespace NeuralRendering
 					Increment(snapshot_.counters.attempts);
 				if (plan.count != 0u) {
 					physical.computeSubrect = plan.regions[region];
+					physical.roi = plan.roi[region];
 					regionIdentities[expandedCount] = plan.historyKeys[region];
 					clusterIdentities[expandedCount] = plan.clusterIdentities[region];
 				}
@@ -2165,6 +2306,33 @@ namespace NeuralRendering
 		}
 		snapshot_.lastCompletedStage = RendererStage::Validation;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LifetimeGuard lifetime(*this, LifetimeOperation::Batch);
+		if (lifetime.enabled) {
+			lifetime.record->sourceTransactionId = a_args.front().executionContext.sourceTransactionId;
+			if (a_args.front().executionContext.renderingMode)
+				lifetime.record->mode = static_cast<std::uint32_t>(*a_args.front().executionContext.renderingMode);
+			lifetime.record->regionCount = static_cast<std::uint32_t>(a_args.size());
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				const auto& args = a_args[index];
+				const auto& slot = slots_[args.featureSlot];
+				auto& region = lifetime.record->regions[index];
+				region.slot = args.featureSlot;
+				lifetime.record->slotMask |= 1u << args.featureSlot;
+				region.previousResourceSerial = slot.resourceSerial;
+				region.previousFrame = slot.lastSuccessfulFrame;
+				region.previousSourceFrame = slot.lastSuccessfulSourceWorldFrame;
+				region.previousHistoryValid = slot.historyValid;
+				region.previousContext = slot.historyKey.computeSubrect;
+				region.previousRegionIdentity = slot.historyKey.regionIdentity;
+				region.regionIdentity = resources[index].historyKey.regionIdentity;
+				region.context = resources[index].roi.inferenceContext;
+				region.colorSize = { args.colorWidth, args.colorHeight };
+				region.guideSize = { args.guideWidth, args.guideHeight };
+				region.outputSize = { args.outputWidth, args.outputHeight };
+			}
+		}
+#endif
 		std::shared_ptr<ExecutionEvidence> execution;
 		auto& capture = captureInputs_[captureRoute_];
 		if (capture.valid) {
@@ -2195,10 +2363,11 @@ namespace NeuralRendering
 					region.clusterIdentity = clusterIdentities[index];
 					region.context = args.executionContext;
 					region.characterEvidence = args.characterEvidence;
+					region.roi = resource.roi;
 					region.color = DescribeExecutionTexture(args.colorWidth, args.colorHeight, resource.resourceKey.colorFormat, resource.colorSubrect);
 					region.depth = DescribeExecutionTexture(args.guideWidth, args.guideHeight, DXGI_FORMAT_R32_FLOAT, resource.guideSubrect);
 					region.motion = DescribeExecutionTexture(args.guideWidth, args.guideHeight, resource.resourceKey.motionFormat, resource.guideSubrect);
-					region.output = DescribeExecutionTexture(args.outputWidth, args.outputHeight, resource.resourceKey.outputFormat, resource.outputSubrect);
+					region.output = DescribeExecutionTexture(args.outputWidth, args.outputHeight, resource.resourceKey.outputFormat, resource.roi.inferenceContext);
 					if (args.controlMask)
 						region.controlMask = DescribeExecutionTexture(args.controlMaskWidth, args.controlMaskHeight, resource.resourceKey.controlMaskFormat, resource.controlMaskSubrect);
 					region.viewportCrop = args.viewportCrop;
@@ -2240,6 +2409,10 @@ namespace NeuralRendering
 		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		if (!EnsureBackendLocked(a_args.front(), execution))
 			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (lifetime.enabled)
+			lifetime.record->backendSerial = backendSerial_;
+#endif
 		for (auto& slot : slots_)
 			colorPipeline_.Poll(a_args.front().context, slot.colorWork);
 		activeStage_ = RendererStage::ResourceCreation;
@@ -2249,6 +2422,10 @@ namespace NeuralRendering
 			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index], execution, index))
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (lifetime.enabled)
+				CaptureLifetimeResourcesLocked(lifetime.record->regions[index], *slots[index]);
+#endif
 			if (execution)
 				execution->Update([&](auto& evidence) { evidence.regions[index].resourcesReady = true; });
 		}
@@ -2267,7 +2444,7 @@ namespace NeuralRendering
 						"NR encoding/proxy experiment requires floating-point processing resources", a_args[index].featureSlot, false);
 				const auto oldBaseline = slots[index]->colorWork.baseline.resource.Get();
 				const bool colorReady = colorPipeline_.Ensure(a_args[index].device, slots[index]->colorWork,
-					resources[index].outputSubrect, resources[index].resourceKey.outputFormat,
+					resources[index].roi.inferenceContext, resources[index].resourceKey.outputFormat,
 					colorConfiguration_.experiments.diagnostics);
 				if (execution)
 					execution->Update([&](auto& evidence) {
@@ -2305,7 +2482,7 @@ namespace NeuralRendering
 				observation.slot = a_args[index].featureSlot;
 				observation.insertion = static_cast<std::uint32_t>(a_args[index].insertionPoint);
 				observation.generation = a_args[index].generation;
-				observation.rect = resources[index].outputSubrect;
+				observation.rect = resources[index].roi.ownedOutput;
 				observation.sourceFormat = static_cast<std::uint32_t>(resources[index].resourceKey.colorFormat);
 				observation.outputFormat = static_cast<std::uint32_t>(resources[index].resourceKey.outputFormat);
 				observation.atomicStereo = logicalEyeCount == 2u;
@@ -2467,7 +2644,7 @@ namespace NeuralRendering
 				                    D3D12_RESOURCE_STATE_COPY_DEST :
 				                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 			};
-			Add(pixelCount, resources[index].outputSubrect.Area());
+			Add(pixelCount, resources[index].roi.inferenceContext.Area());
 			featureSlotMask |= 1u << a_args[index].featureSlot;
 		}
 		const auto resourceSpan =
@@ -2554,7 +2731,7 @@ namespace NeuralRendering
 			auto& slot = *slots[index];
 			const auto& args = a_args[index];
 			if (colorConfiguration_.experiments.transportBypass) {
-				const auto& roi = resources[index].outputSubrect;
+				const auto& roi = resources[index].roi.inferenceContext;
 				D3D12_TEXTURE_COPY_LOCATION destination{};
 				destination.pResource = slot.output.resource12.Get();
 				destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -2574,6 +2751,10 @@ namespace NeuralRendering
 			const bool forcedReset = forcedHistoryReset[index];
 			const bool discontinuousReset = discontinuousHistoryReset[index];
 			const bool effectiveReset = args.reset || forcedReset;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (lifetime.enabled)
+				lifetime.record->regions[index].effectiveReset = effectiveReset;
+#endif
 			if (args.reset)
 				Increment(snapshot_.counters.callerHistoryResets);
 			if (forcedReset)
@@ -2584,6 +2765,15 @@ namespace NeuralRendering
 			RuntimeExecutionEvidence runtimeEvidence{};
 			// Runtime diagnostics can throw after evaluation; preserve the actual call outcome.
 			const SKSE::stl::scope_exit retainRuntimeEvidence([&]() noexcept {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (lifetime.enabled) {
+					auto& region = lifetime.record->regions[index];
+					region.createAttempted = runtimeEvidence.createAttempted;
+					region.createSucceeded = runtimeEvidence.createSucceeded;
+					region.evaluateAttempted = runtimeEvidence.evaluateAttempted;
+					region.evaluateSucceeded = runtimeEvidence.evaluateSucceeded;
+				}
+#endif
 				if (execution)
 					execution->Update([&](auto& evidence) {
 						evidence.regions[index].runtime = runtimeEvidence;
@@ -2611,14 +2801,18 @@ namespace NeuralRendering
 				args.outputHeight,
 				args.controlMaskWidth,
 				args.controlMaskHeight,
-				resources[index].outputSubrect,
+				resources[index].roi.inferenceContext,
 				motionVectorScale.x,
 				motionVectorScale.y,
 				args.featureUpscaling,
 				args.tuning,
 				effectiveReset,
 				&evaluationAttempted,
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				execution || lifetime.enabled ? &runtimeEvidence : nullptr,
+#else
 				execution ? &runtimeEvidence : nullptr,
+#endif
 				execution ? &interop_ : nullptr,
 				static_cast<std::uint32_t>(index));
 			if (evaluationAttempted) {
@@ -2737,7 +2931,7 @@ namespace NeuralRendering
 					a_args.front().context,
 					resources[index].output.texture.Get(),
 					slots[index]->output.resource11.Get(),
-					resources[index].outputSubrect);
+					resources[index].roi.ownedOutput);
 			}
 			if (execution) {
 				RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].output.workLogicalBytes);
@@ -2783,6 +2977,10 @@ namespace NeuralRendering
 		}
 		RefreshInteropTelemetryLocked();
 		executionCompletion.succeeded = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (lifetime.enabled)
+			lifetime.record->succeeded = true;
+#endif
 		return true;
 	}
 
@@ -2844,7 +3042,7 @@ namespace NeuralRendering
 		                                     nlohmann::json(nullptr);
 		for (size_t index = 0; index < args.size(); ++index) {
 			const auto& value = args[index];
-			const auto& rect = resources[index].outputSubrect;
+			const auto& rect = resources[index].roi.inferenceContext;
 			const auto& guideRect = resources[index].guideSubrect;
 			const auto& colorRect = resources[index].colorSubrect;
 			batch.supported &= value.featureSlot < 4 && !value.controlMask && value.tuning.useAutoMask &&
@@ -3080,6 +3278,13 @@ namespace NeuralRendering
 		return state_->SnapshotLocked();
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	LifetimeSnapshot Renderer::GetLifetimeDiagnostics() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->lifetimeDiagnostics_.Snapshot();
+	}
+#endif
 	bool Renderer::IsFailureLatched() const
 	{
 		std::scoped_lock lock(state_->mutex_);

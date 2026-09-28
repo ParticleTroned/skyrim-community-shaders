@@ -63,6 +63,11 @@ namespace
 		if (result.computeRegions.count == 2 &&
 			CharacterComputeRegionsOverlap(result.computeRegions.regions[0], result.computeRegions.regions[1]))
 			return false;
+		for (std::uint32_t index = 0; index < result.computeRegions.count; ++index) {
+			if (!GetRoiDescriptorViolation(result.computeRegions.roi[index], result.computeRegions.regions[index], { width, height }).empty() ||
+				!result.computeRegions.roi[index].samplingSupport)
+				return false;
+		}
 		for (const auto& tile : tiles) {
 			if (tile == CharacterMaskRoiTileBounds{})
 				continue;
@@ -73,6 +78,10 @@ namespace
 			if (result.computeRegions.count == 2 &&
 				!ContainsComputeSubrect(result.computeRegions.regions[0], required) &&
 				!ContainsComputeSubrect(result.computeRegions.regions[1], required))
+				return false;
+			if (result.computeRegions.count == 2 &&
+				!ContainsComputeSubrect(*result.computeRegions.roi[0].samplingSupport, required) &&
+				!ContainsComputeSubrect(*result.computeRegions.roi[1].samplingSupport, required))
 				return false;
 		}
 		return true;

@@ -279,6 +279,7 @@ def join_execution_evidence(acquisition: dict, diagnostics: dict | None = None) 
                 for region in execution["regions"]:
                     current = delayed_regions.get(region["physicalSlot"])
                     exact(region, current, REGION_DESCRIPTOR, "delayed physical descriptor")
+                    optional_exact(region, current, ("roi",), "delayed ROI roles")
                     optional_exact(region, current, ("depthSourceFormat", "depthViewFormat"), "delayed depth formats")
                     exact_timing_handles(region.get("timing"), current.get("timing"), "delayed physical region")
             for field in ("sourceStages", "characters"):
@@ -291,6 +292,7 @@ def join_execution_evidence(acquisition: dict, diagnostics: dict | None = None) 
                     exact_timing_handles(original, current, "delayed " + field)
                     if field == "characters" and original.get("available") is True:
                         exact(original, current, ("key", "outcome", "prepared", "requiresEvaluation", "reused", "computeSubrect", "regions"), "delayed character contents")
+                        optional_exact(original, current, ("roi",), "delayed character ROI roles")
                         optional_exact(original.get("maskSupport", {}), current.get("maskSupport", {}),
                                        ("producer",), "delayed character support")
             selected, companion_state = delayed, "joined"

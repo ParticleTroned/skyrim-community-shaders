@@ -1,4 +1,7 @@
 #include "CharacterRendering.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "CurrentContextExperiment.h"
+#endif
 
 #include "CharacterActorPolicy.h"
 #include "CharacterCategoryFormat.h"
@@ -166,6 +169,9 @@ namespace NeuralRendering
 			add(a_settings.adaptiveRoiSelection);
 			add(a_settings.multiRoi);
 			add(a_settings.multiRoiSavingsGate);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			add(a_settings.experimentalCurrentContext);
+#endif
 			add(a_settings.minimumFacePixelSize);
 			addFloat(a_settings.roiMargin);
 			add(a_settings.roiHoldFrames);
@@ -478,6 +484,7 @@ namespace NeuralRendering
 			bool requiresEvaluation = true;
 			ComputeSubrect computeSubrect{};
 			CharacterComputeRegionPlan computeRegions{};
+			std::optional<RoiDescriptor> roi;
 			StableCharacterMultiRoi stableMultiRoi{};
 			StableCharacterMaskRoi stableMaskRoi{};
 			bool maskRoiCurrentFrame = false;
@@ -3077,6 +3084,17 @@ namespace NeuralRendering
 						a_args.outputWidth, a_args.outputHeight)) {
 					return fail("character compute ROI is invalid");
 				}
+				slot.roi.reset();
+				if (!cpuProvenEmpty && slot.computeRegions.count == 0) {
+					slot.roi = BuildRoiDescriptor(
+						usedEarlyBounds ? slot.maskRoiRequiredSubrect : requiredComputeSubrect,
+						slot.computeSubrect, { a_args.outputWidth, a_args.outputHeight }, !fullOutputMask);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (ApplyCurrentContextExperiment(*slot.roi, a_args.settings, a_args.outputIsJittered,
+							usedEarlyBounds || !plan.fullEyeEligibilityFallback))
+						slot.computeSubrect = slot.roi->inferenceContext;
+#endif
+				}
 				slot.contentSerial = state_->AllocatePreparedContentSerial();
 				if (evidence) {
 					evidence->key.contentSerial = slot.contentSerial;
@@ -3232,6 +3250,7 @@ namespace NeuralRendering
 			a_result.requiresEvaluation = slot.requiresEvaluation;
 			a_result.computeSubrect = slot.computeSubrect;
 			a_result.computeRegions = slot.computeRegions;
+			a_result.roi = slot.roi;
 			if (evidence) {
 				evidence->key.contentSerial = slot.contentSerial;
 				evidence->support = slot.supportEvidence;
@@ -3239,6 +3258,7 @@ namespace NeuralRendering
 					evidence->support.reset();
 				evidence->computeSubrect = slot.computeSubrect;
 				evidence->computeRegions = slot.computeRegions;
+				evidence->roi = slot.roi;
 				evidence->requiresEvaluation = slot.requiresEvaluation;
 				evidence->prepared = true;
 				evidence->outcome = slot.requiresEvaluation ? "success" : "no_work";
@@ -3376,7 +3396,7 @@ namespace NeuralRendering
 				state_->RecordPreparedFrame(args.frameId, args.sourceWorldFrame, args.generation,
 					args.featureSlot, slot.contentSerial, args.outputWidth, args.outputHeight,
 					slot.requiresEvaluation, slot.computeRegions.count);
-				a_results[index] = { true, slot.requiresEvaluation, slot.computeSubrect, slot.computeRegions, a_results[index].evidence };
+				a_results[index] = { true, slot.requiresEvaluation, slot.computeSubrect, slot.computeRegions, a_results[index].evidence, slot.roi };
 			}
 			state_->snapshot_.status = "ready";
 			state_->snapshot_.detail = std::format(

@@ -3,6 +3,9 @@
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
 #include "CharacterMultiRoi.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "LifetimeDiagnostics.h"
+#endif
 #include "PipelinePolicy.h"
 #include "Runtime.h"
 
@@ -11,6 +14,7 @@
 #include <cstdint>
 #include <d3d11.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <wrl/client.h>
 
@@ -208,6 +212,8 @@ namespace NeuralRendering
 		// Default-off character experiment: independent persistent feature per region.
 		// count == 0 retains computeSubrect and the legacy single-evaluation path.
 		CharacterComputeRegionPlan computeRegions{};
+		/** Prepared single-region roles, bound to this call's source, crop and execution context. */
+		std::optional<RoiDescriptor> roi;
 		// Caller guarantees exact outer CSX mask compositing; not the private NGX mask ABI.
 		bool characterVisualIsolation = false;
 		bool featureUpscaling = false;
@@ -270,6 +276,10 @@ namespace NeuralRendering
 		void ResetShaderCache();
 
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Retains the bounded opt-in native lifetime history, including its first failure. */
+		[[nodiscard]] LifetimeSnapshot GetLifetimeDiagnostics() const;
+#endif
 		[[nodiscard]] bool IsFailureLatched() const;
 		[[nodiscard]] bool IsQuarantined() const;
 

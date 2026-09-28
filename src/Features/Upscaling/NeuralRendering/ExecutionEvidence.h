@@ -3,6 +3,7 @@
 #include "../DLSSViewportCrop.h"
 #include "ComputeSubrect.h"
 #include "PipelinePolicy.h"
+#include "RoiDescriptor.h"
 #include "Utils/PassTimingCapture.h"
 
 #include <array>
@@ -105,6 +106,7 @@ namespace NeuralRendering
 		ExecutionContext context{};
 		std::shared_ptr<const CharacterPreparationEvidence> characterEvidence;
 		ExecutionTexture color{}, depth{}, motion{}, output{}, controlMask{};
+		RoiDescriptor roi{};
 		UpscalingDLSS::ViewportCrop viewportCrop{};
 		float motionVectorScaleX = 0, motionVectorScaleY = 0;
 		std::uint32_t depthSourceFormat = 0, depthViewFormat = 0;

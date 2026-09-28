@@ -57,6 +57,10 @@ int main()
 	preparation->computeSubrect = { 3, 5, 113, 71 };
 	preparation->computeRegions.count = 2;
 	preparation->computeRegions.regions = { ComputeSubrect{ 3, 5, 30, 71 }, ComputeSubrect{ 80, 5, 36, 71 } };
+	for (std::uint32_t index = 0; index < preparation->computeRegions.count; ++index) {
+		const auto& rect = preparation->computeRegions.regions[index];
+		preparation->computeRegions.roi[index] = BuildRoiDescriptor(rect, rect, { 1400, 1200 }, true);
+	}
 	preparation->boundsReady = true;
 	preparation->boundsUsed = false;
 	preparation->boundsStatus = "early_bounds_empty";
@@ -70,6 +74,9 @@ int main()
 	preparation->support = std::make_shared<CharacterMaskSupportCapture>(preparation->key);
 	const auto pending = CharacterPreparationJson(captured);
 	Require(pending["regions"].size() == 2 && pending["key"]["contentSerial"] == 19, "later slot reuse changed frozen ROI membership");
+	Require(pending["roi"].size() == 2 && pending["roi"][0]["coordinateDomain"] == "output_crop_local" &&
+				pending["roi"][0]["samplingSupportKind"] == "conservative_guarded_enclosure",
+		"ROI support was reported as exact occupancy");
 	Require(pending["bounds"]["ready"] == true && pending["bounds"]["used"] == false, "ready bounds must not imply consumption");
 	Require(pending["maskSupport"]["state"] == "pending" && pending["maskSupport"]["pixels"].is_null(), "pending coverage became a zero");
 	captured->support->Complete(37);
@@ -79,6 +86,7 @@ int main()
 		"delayed coverage lost exact original contents or accepted a duplicate completion");
 	Require(CharacterPreparationJson(preparation)["maskSupport"]["pixels"].is_null(), "old coverage crossed into replacement contents");
 	Require(pending["maskSupport"]["state"] == "pending", "serialized acquisition changed after finalization");
+	Require(pending["roi"] == complete["roi"], "completed exact coverage replaced conservative ROI roles");
 	preparation->support->Pending();
 	preparation->support->Fail("coverage_resources_retired");
 	preparation->support->Complete(88);

@@ -27,10 +27,19 @@ foreach(_policy IN ITEMS
 endforeach()
 
 foreach(_test IN ITEMS character_settings character_multi_roi character_mask_roi
-    compute_subrect frame_telemetry_ring dlss_viewport_crop foveated_region_plan)
+    compute_subrect roi_descriptor frame_telemetry_ring dlss_viewport_crop foveated_region_plan)
     add_controller_test(${_test}_test ${_test} tests/${_test}_test.cpp)
 endforeach()
 target_link_libraries(character_settings_test PRIVATE nlohmann_json::nlohmann_json)
+
+add_controller_test(neural_current_context_test NeuralCurrentContext tests/neural_current_context_test.cpp)
+target_compile_definitions(neural_current_context_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_test(NAME NeuralCurrentContextBridgeGate COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_current_context_bridge_gate_test.py" --compiler "${CMAKE_CXX_COMPILER}")
+set_tests_properties(NeuralCurrentContextBridgeGate PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
+add_test(NAME NeuralCurrentContextContract COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_current_context_contract_test.py")
+set_tests_properties(NeuralCurrentContextContract PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 
 set(_neural_compute_guard_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_compute_guard_test")
 add_custom_command(
@@ -167,6 +176,12 @@ target_link_libraries(neural_color_route_latch_test PRIVATE nlohmann_json::nlohm
 target_compile_definitions(neural_color_route_latch_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 add_controller_test(neural_execution_evidence_test NeuralExecutionEvidence tests/neural_execution_evidence_test.cpp)
+add_controller_test(neural_lifetime_diagnostics_test NeuralLifetimeDiagnostics tests/neural_lifetime_diagnostics_test.cpp)
+target_link_libraries(neural_lifetime_diagnostics_test PRIVATE nlohmann_json::nlohmann_json)
+target_compile_definitions(neural_lifetime_diagnostics_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_test(NAME NeuralLifetimeBridgeGate COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_lifetime_bridge_gate_test.py" --compiler "${CMAKE_CXX_COMPILER}")
+set_tests_properties(NeuralLifetimeBridgeGate PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 set(_neural_execution_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_execution_test")
 add_custom_command(
     OUTPUT "${_neural_execution_test_dir}/neural_execution_wait_scope.h"

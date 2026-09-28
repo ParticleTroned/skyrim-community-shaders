@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CharacterComputeSubrect.h"
+#include "RoiDescriptor.h"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,8 @@ namespace NeuralRendering
 		/** Owners-only identity shared by both eyes, independent of visibility epoch. */
 		std::array<std::uint64_t, 2> clusterIdentities{};
 		std::uint32_t count = 0;
+		/** Same source and ordering as regions; count == 0 still selects the legacy single. */
+		std::array<RoiDescriptor, 2> roi{};
 
 		bool operator==(const CharacterComputeRegionPlan&) const = default;
 	};
@@ -452,6 +455,17 @@ namespace NeuralRendering
 		if (result.historyKeys[0] == result.historyKeys[1] ||
 			result.clusterIdentities[0] == result.clusterIdentities[1])
 			return fallback(CharacterMultiRoiReason::InvalidInput);
+		std::array<ComputeSubrect, 2> support{};
+		for (const auto& rect : a_eligibility) {
+			const auto eligibilitySupport = Required(rect, a_width, a_height);
+			const auto index = ContainsComputeSubrect(result.regions[0], eligibilitySupport) ? 0u : 1u;
+			support[index] = UnionCharacterComputeSubrect(support[index], eligibilitySupport);
+		}
+		for (std::uint32_t index = 0; index < 2; ++index) {
+			// Eligibility can extend beyond the actor cluster while remaining in its provider.
+			support[index] = UnionCharacterComputeSubrect(support[index], Required(selected.bounds[index], a_width, a_height));
+			result.roi[index] = BuildRoiDescriptor(support[index], result.regions[index], { a_width, a_height }, true);
+		}
 		result.count = 2;
 		a_state.clusters = std::move(next);
 		a_state.cachedReason = a_reason = CharacterMultiRoiReason::Split;

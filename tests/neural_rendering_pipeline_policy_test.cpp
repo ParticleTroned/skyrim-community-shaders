@@ -179,13 +179,15 @@ int main()
 	static_assert(
 		NeuralRendering::kDefaultInsertionPoint == InsertionPoint::UpscaledCenter);
 	static_assert(NeuralRendering::kInsertionPointCount == 2u);
-	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, true, false));
-	static_assert(NeuralRendering::RequiresBackendRetirement(false, false, true, true));
-	static_assert(NeuralRendering::RequiresBackendRetirement(true, false, false, false));
-	static_assert(NeuralRendering::RequiresBackendRetirement(false, true, false, false));
-	static_assert(NeuralRendering::RequiresBackendRetirement(true, true, true, false));
-	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, false, false));
-	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, false, true));
+	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, true, false, false));
+	static_assert(NeuralRendering::RequiresBackendRetirement(false, false, true, false, true));
+	static_assert(NeuralRendering::RequiresBackendRetirement(false, false, true, true, false));
+	static_assert(NeuralRendering::RequiresBackendRetirement(false, false, true, true, true));
+	static_assert(NeuralRendering::RequiresBackendRetirement(true, false, false, false, false));
+	static_assert(NeuralRendering::RequiresBackendRetirement(false, true, false, false, false));
+	static_assert(NeuralRendering::RequiresBackendRetirement(true, true, true, false, false));
+	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, false, false, false));
+	static_assert(!NeuralRendering::RequiresBackendRetirement(false, false, false, false, true));
 	static_assert(static_cast<std::uint32_t>(InsertionPoint::UpscaledCenter) == 0u);
 	static_assert(static_cast<std::uint32_t>(InsertionPoint::FinalLdrPreUi) == 1u);
 	static_assert(NeuralRendering::IsValidInsertionPoint(InsertionPoint::UpscaledCenter));
@@ -281,6 +283,8 @@ int main()
 		plan.historyKeys = { 101u, 202u };
 		plan.clusterIdentities = { 11u, 22u };
 		plan.count = 2u;
+		for (std::uint32_t index = 0; index < plan.count; ++index)
+			plan.roi[index] = NeuralRendering::BuildRoiDescriptor(plan.regions[index], plan.regions[index], { 256u, 128u }, true);
 		const auto valid = [&](const auto& candidate) {
 			return GetCharacterRegionSubmissionViolation(0u, candidate, support, 256u, 128u, true).empty();
 		};
@@ -294,9 +298,11 @@ int main()
 			return false;
 		invalid = plan;
 		invalid.regions[1].baseX = 47u;  // One-pixel overlap.
+		invalid.roi[1] = NeuralRendering::BuildRoiDescriptor(invalid.regions[1], invalid.regions[1], { 256u, 128u }, true);
 		if (valid(invalid))
 			return false;
 		invalid.regions[1].baseX = 48u;  // Touching exclusive bounds is valid.
+		invalid.roi[1] = NeuralRendering::BuildRoiDescriptor(invalid.regions[1], invalid.regions[1], { 256u, 128u }, true);
 		if (!valid(invalid))
 			return false;
 		invalid = plan;
@@ -331,6 +337,14 @@ int main()
 			return false;
 		plan.count = 1u;
 		if (!valid(plan))
+			return false;
+		invalid = plan;
+		invalid.roi[0].inferenceContext.width += 1u;
+		if (valid(invalid))
+			return false;
+		invalid = plan;
+		invalid.roi[0].ownedOutput.width -= 1u;
+		if (valid(invalid))
 			return false;
 		// An absent plan keeps the legacy validator/path in charge, without new restrictions.
 		return GetCharacterRegionSubmissionViolation(0u, {}, {}, 0u, 0u, false).empty();

@@ -123,6 +123,10 @@ namespace NeuralRendering
 		bool multiRoi = false;
 		/** Session-only split cost heuristic; coverage and disjointness remain mandatory. */
 		bool multiRoiSavingsGate = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Use current spatial context only in the single-region pre-DLSS experiment. */
+		bool experimentalCurrentContext = false;
+#endif
 		std::uint32_t minimumFacePixelSize =
 			CharacterPolicy::kDefaultMinimumFacePixelSize;
 		float roiMargin = CharacterPolicy::kDefaultRoiMargin;

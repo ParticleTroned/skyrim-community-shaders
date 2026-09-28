@@ -382,7 +382,7 @@ foreach(_dynamic_compute_roi_contract IN ITEMS
     [[parameters->Set("DLSSNR.ColorSubrectBaseX", colorSubrect.baseX);]]
     [[parameters->Set("DLSSNR.OutputSubrectWidth", outputSubrect.width);]]
     [[CopyTextureSubrect(]]
-    [[Add(pixelCount, resources[index].outputSubrect.Area());]]
+    [[Add(pixelCount, resources[index].roi.inferenceContext.Area());]]
     [[RestrictVisibleOutputToComputeSubrect(]]
     [[const uint32_t evaluationEyeMask =]]
 )
@@ -438,7 +438,7 @@ endforeach()
 
 foreach(_roi_history_identity_contract IN ITEMS
     [[ComputeSubrect computeSubrect{};]]
-    [[.computeSubrect = a_resources.outputSubrect,]]
+    [[.computeSubrect = a_resources.roi.inferenceContext,]]
     [[.insertionPoint = a_args.insertionPoint,]]
     [[.colorInputEpoch = colorConfiguration_.inputEpoch[static_cast<std::size_t>(a_args.insertionPoint)],]]
     [[slot.historyKey != resources[index].historyKey]]
@@ -991,7 +991,9 @@ foreach(_status_contract IN ITEMS
     [[{ "currentFrame", temporalAdmission.currentFrame }]]
     [[{ "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame }]]
     [[{ "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame }]]
-    [[nr_status returns the API-v9 NR runtime]]
+    [[nr_status returns the API-v10 NR runtime]]
+    [[nr_status exposes lifetimeDiagnostics: a bounded 64-record CPU history]]
+    [[NeuralRendering::LifetimeDiagnosticsJson(NeuralRendering::Renderer::Instance().GetLifetimeDiagnostics()]]
     [[{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) }]]
     [[{ "characterRendering", CharacterRenderingStatusJson(a_upscaling) }]]
     [[{ "visualMasking", {]]

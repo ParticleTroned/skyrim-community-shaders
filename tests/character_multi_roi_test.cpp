@@ -37,10 +37,18 @@ namespace
 			!plan.regions[0].Fits(width, height) || !plan.regions[1].Fits(width, height) ||
 			CharacterComputeRegionsOverlap(plan.regions[0], plan.regions[1]))
 			return false;
+		for (std::uint32_t index = 0; index < plan.count; ++index) {
+			if (!GetRoiDescriptorViolation(plan.roi[index], plan.regions[index], { width, height }).empty() ||
+				!plan.roi[index].samplingSupport || !plan.roi[index].temporalEnvelope)
+				return false;
+		}
 		for (const auto& actor : actors) {
 			const auto required = BuildCharacterComputeSubrect(std::span(&actor.rect, 1), width, height);
 			if (!ContainsComputeSubrect(plan.regions[0], required) &&
 				!ContainsComputeSubrect(plan.regions[1], required))
+				return false;
+			if (!ContainsComputeSubrect(*plan.roi[0].samplingSupport, required) &&
+				!ContainsComputeSubrect(*plan.roi[1].samplingSupport, required))
 				return false;
 		}
 		return true;

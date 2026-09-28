@@ -351,6 +351,14 @@ both axes for compatibility. Invalid preset, style, and tuning ranges are
 rejected rather than silently clamped so automated comparisons retain their
 requested identity.
 
+On `main-vr-nr`, the DevBench-only `experimentalCurrentContext` control
+defaults to false and is never saved in user settings. It tests current
+required spatial context inside the retained envelope for C's single-region
+character path. Unknown bounds, A/B and multi-ROI retain baseline behavior.
+Captured ROI `contextPolicy` records whether the experiment actually
+applied. The [Task 3C record](nr-task3c-current-context-20260928.md) specifies
+the constraints, passing local build/tests and pending native validation.
+
 The shared FOV mask uses the same image-centred manual eye offsets and
 outward horizontal expansion as `main-VR`. The same saved geometry therefore
 positions ordinary DLSS/FSR, FOV + TAA and NR; NR does not select another

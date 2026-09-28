@@ -30,6 +30,23 @@ namespace NeuralRendering::Evidence
 		return { { "fullInput", ExtentJson(value.fullInput) }, { "input", RectJson(value.input) },
 			{ "fullOutput", ExtentJson(value.fullOutput) }, { "output", RectJson(value.output) } };
 	}
+	/** Rectangular support is a conservative enclosure; exact occupancy has its own producer. */
+	inline Json RoiJson(const RoiDescriptor& value)
+	{
+		return { { "coordinateDomain", "output_crop_local" },
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			{ "contextPolicy", value.currentContextApplied ? "experimental_current_required" : "retained_envelope" },
+#endif
+			{ "samplingSupport", value.samplingSupport ? SubrectJson(*value.samplingSupport) : Json(nullptr) },
+			{ "samplingSupportKind", value.samplingSupport ? "conservative_guarded_enclosure" : "unavailable" },
+			{ "samplingSupportEnclosurePixels", value.samplingSupport ? Json(value.samplingSupport->Area()) : Json(nullptr) },
+			{ "ownedOutput", SubrectJson(value.ownedOutput) }, { "ownedOutputPixels", value.ownedOutput.Area() },
+			{ "inferenceContext", SubrectJson(value.inferenceContext) }, { "inferencePixels", value.inferenceContext.Area() },
+			{ "temporalEnvelope", value.temporalEnvelope ? SubrectJson(*value.temporalEnvelope) : Json(nullptr) },
+			{ "temporalEnvelopePixels", value.temporalEnvelope ? Json(value.temporalEnvelope->Area()) : Json(nullptr) },
+			{ "allocationCapacity", ExtentJson(value.allocationCapacity) },
+			{ "capacityPixels", static_cast<std::uint64_t>(value.allocationCapacity.width) * value.allocationCapacity.height } };
+	}
 	inline Json ContextJson(const ExecutionContext& value)
 	{
 		return { { "sourceTransactionId", value.sourceTransactionId },
@@ -107,6 +124,7 @@ namespace NeuralRendering::Evidence
 			regions.push_back({ { "physicalSlot", r.physicalSlot }, { "logicalSlot", r.logicalSlot }, { "eye", r.eye },
 				{ "region", r.region }, { "regionIdentity", r.regionIdentity }, { "clusterIdentity", r.clusterIdentity },
 				{ "source", ContextJson(r.context) }, { "nrInput", TextureJson(r.color) }, { "nrOutput", TextureJson(r.output) },
+				{ "roi", RoiJson(r.roi) },
 				{ "nrDepthGuide", TextureJson(r.depth) }, { "nrMotionGuide", TextureJson(r.motion) }, { "controlMask", TextureJson(r.controlMask) },
 				{ "depthSourceFormat", r.depthSourceFormat }, { "depthViewFormat", r.depthViewFormat },
 				{ "nrViewport", ViewportJson(r.viewportCrop) }, { "motionVectorScale", { r.motionVectorScaleX, r.motionVectorScaleY } },

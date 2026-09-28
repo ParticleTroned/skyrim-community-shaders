@@ -73,6 +73,45 @@ def character_fixture(envelope, eye=0, *, support=False, reused=False):
 
 
 class TransactionEvidenceTests(unittest.TestCase):
+    def test_roi_roles_stay_with_the_frozen_execution(self):
+        frozen, delayed = fixture("reduced_resolution")
+        roles = {"coordinateDomain": "output_crop_local",
+                 "samplingSupport": {"x": 1, "y": 2, "width": 3, "height": 4},
+                 "samplingSupportKind": "conservative_guarded_enclosure",
+                 "samplingSupportEnclosurePixels": 12,
+                 "ownedOutput": texture()["work"], "ownedOutputPixels": 64,
+                 "inferenceContext": texture()["work"], "inferencePixels": 64,
+                 "temporalEnvelope": texture()["work"], "temporalEnvelopePixels": 64,
+                 "allocationCapacity": texture()["capacityGrid"], "capacityPixels": 64}
+        for evidence in (frozen, delayed):
+            evidence["executionEvidence"]["executions"][0]["regions"][0]["roi"] = copy.deepcopy(roles)
+        tx.join_execution_evidence(frozen, delayed)
+        for field in roles:
+            with self.subTest(field=field):
+                changed = copy.deepcopy(delayed)
+                changed["executionEvidence"]["executions"][0]["regions"][0]["roi"][field] = None
+                with self.assertRaisesRegex(tx.TransactionEvidenceError, "ROI roles"):
+                    tx.join_execution_evidence(frozen, changed)
+        for strip_frozen in (False, True):
+            original, companion = copy.deepcopy(frozen), copy.deepcopy(delayed)
+            changed = original if strip_frozen else companion
+            del changed["executionEvidence"]["executions"][0]["regions"][0]["roi"]
+            with self.assertRaisesRegex(tx.TransactionEvidenceError, "ROI roles"):
+                tx.join_execution_evidence(original, companion)
+
+    def test_character_roi_roles_cannot_be_replaced_by_a_new_plan(self):
+        frozen, delayed = fixture()
+        for evidence in (frozen, delayed):
+            envelope = evidence["executionEvidence"]
+            character = character_fixture(envelope, support=True)
+            character["roi"] = [{"samplingSupport": None, "inferenceContext": texture()["work"]}]
+            envelope["characters"] = [character]
+        tx.join_execution_evidence(frozen, delayed)
+        changed = copy.deepcopy(delayed)
+        changed["executionEvidence"]["characters"][0]["roi"][0]["samplingSupport"] = texture()["work"]
+        with self.assertRaisesRegex(tx.TransactionEvidenceError, "character ROI roles"):
+            tx.join_execution_evidence(frozen, changed)
+
     def test_modes_routes_and_mono_stereo(self):
         for mode in ("full_resolution", "foveated", "reduced_resolution"):
             for eyes in (1, 2):

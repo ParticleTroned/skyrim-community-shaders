@@ -1,6 +1,9 @@
 #pragma once
 
 #include "ExecutionEvidence.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "LifetimeDiagnostics.h"
+#endif
 #include "PipelinePolicy.h"
 
 #include <array>
@@ -119,6 +122,10 @@ namespace NeuralRendering
 		[[nodiscard]] HRESULT LastError() const;
 		[[nodiscard]] std::string LastOperation() const;
 		[[nodiscard]] D3D12InteropTelemetry GetTelemetry();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Reads queue identities and completion without issuing commands, flushing or waiting. */
+		[[nodiscard]] LifetimeFenceSnapshot GetLifetimeSnapshot() const;
+#endif
 
 	private:
 		struct CommandContext

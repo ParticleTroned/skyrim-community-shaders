@@ -121,12 +121,12 @@ namespace NeuralRendering
 	inline constexpr std::size_t kInsertionPointCount =
 		static_cast<std::size_t>(InsertionPoint::Count);
 
-	/** History keys separate insertion domains; healthy backends can retain resources. */
+	/** Retire native ownership when changing the pre/post-DLSS input domain. */
 	[[nodiscard]] constexpr bool RequiresBackendRetirement(
 		bool a_enableStateChanged, bool a_multiRoiChanged,
-		bool a_insertionPointChanged, bool a_backendFailed) noexcept
+		bool a_insertionPointChanged, bool a_inputDomainChanged, bool a_backendFailed) noexcept
 	{
-		return a_enableStateChanged || a_multiRoiChanged ||
+		return a_enableStateChanged || a_multiRoiChanged || a_inputDomainChanged ||
 		       (a_insertionPointChanged && a_backendFailed);
 	}
 
@@ -551,6 +551,9 @@ namespace NeuralRendering
 				!ContainsComputeSubrect(a_support, a_plan.regions[region]) ||
 				a_plan.historyKeys[region] == 0u || a_plan.clusterIdentities[region] == 0u)
 				return "character region dimensions or persistent history identity are invalid";
+			if (auto violation = GetRoiDescriptorViolation(a_plan.roi[region], a_plan.regions[region], { a_width, a_height });
+				!violation.empty())
+				return violation;
 		}
 		if (a_plan.count == 2u &&
 			(CharacterComputeRegionsOverlap(a_plan.regions[0], a_plan.regions[1]) ||

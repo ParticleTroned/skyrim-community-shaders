@@ -1041,6 +1041,30 @@ namespace NeuralRendering
 		return lastOperation_;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	LifetimeFenceSnapshot D3D12Interop::GetLifetimeSnapshot() const
+	{
+		std::scoped_lock lock(mutex_);
+		LifetimeFenceSnapshot result;
+		result.device = reinterpret_cast<std::uintptr_t>(device12_.Get());
+		result.device11 = reinterpret_cast<std::uintptr_t>(device11_.Get());
+		result.context11 = reinterpret_cast<std::uintptr_t>(context11_.Get());
+		result.queue = reinterpret_cast<std::uintptr_t>(queue12_.Get());
+		result.fence = reinterpret_cast<std::uintptr_t>(fence12_.Get());
+		result.initialized = initialized_;
+		result.recording = recording_;
+		result.issued = fenceValue_;
+		if (fence12_) {
+			result.completed = fence12_->GetCompletedValue();
+			result.deviceRemoved = result.completed == UINT64_MAX;
+			result.completedKnown = !result.deviceRemoved;
+		}
+		for (std::size_t index = 0; index < commandContexts_.size(); ++index)
+			result.contexts[index] = commandContexts_[index].fenceValue;
+		return result;
+	}
+#endif
+
 	D3D12InteropTelemetry D3D12Interop::GetTelemetry()
 	{
 		std::scoped_lock lock(mutex_);

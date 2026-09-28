@@ -127,6 +127,41 @@ void Require(bool value, const char* reason)
 int main()
 {
 	auto& renderer = NeuralRendering::Renderer::Instance();
+	for (const bool isVR : { false, true }) {
+		globals::game::isVR = isVR;
+		for (const bool menuWithoutFrame : { false, true }) {
+			globals::State frame;
+			globals::state = menuWithoutFrame ? nullptr : &frame;
+			for (uint32_t previousMode = 0; previousMode < 3; ++previousMode) {
+				for (uint32_t nextMode = 0; nextMode < 3; ++nextMode) {
+					for (const bool retirementSucceeds : { false, true }) {
+						Upscaling upscaling;
+						upscaling.settings.neuralRenderingEnabled = true;
+						upscaling.settings.neuralRenderingMode = previousMode;
+						const auto previous = upscaling.settings;
+						upscaling.settings.neuralRenderingMode = nextMode;
+						renderer = {};
+						renderer.resetSucceeds = retirementSucceeds;
+						bool resetSucceeded = false;
+						const bool domainChanged = (previousMode == 2) != (nextMode == 2);
+						const bool accepted = upscaling.HandleNeuralRenderingSettingsTransition(previous, "mode transition", &resetSucceeded);
+						if (!accepted)
+							upscaling.settings = previous;
+						Require(renderer.resets == (domainChanged ? 1u : 0u), "Pre/post-DLSS mode switches must retire all native ownership, including a healthy backend");
+						Require(accepted == (!domainChanged || retirementSucceeds), "An enabled input-domain switch requires proven retirement");
+						Require(resetSucceeded == (domainChanged && retirementSucceeds), "The transition must expose the actual retirement result");
+						Require(renderer.resourcesRetained == !(domainChanged && retirementSucceeds), "Failed retirement must retain native resources; A/B switches may reuse them");
+						Require(upscaling.settings.neuralRenderingMode == (accepted ? nextMode : previousMode), "Failed retirement must preserve the prior mode");
+						if (previousMode != nextMode) {
+							Require(upscaling.historyResets == 1 && upscaling.invalidations == 1, "A mode transition must invalidate prepared frame state and history");
+							Require(upscaling.neuralInsertionPointTransitionFrame == (menuWithoutFrame ? std::numeric_limits<uint32_t>::max() : frame.frameCount), "No transition-frame evaluation may consume mixed input domains");
+						}
+					}
+				}
+			}
+		}
+	}
+	globals::game::isVR = true;
 	{
 		globals::State frame;
 		globals::state = &frame;

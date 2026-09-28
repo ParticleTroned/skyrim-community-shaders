@@ -13,6 +13,7 @@
 #include <d3d11.h>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -253,6 +254,8 @@ namespace NeuralRendering
 		ComputeSubrect computeSubrect{};
 		CharacterComputeRegionPlan computeRegions{};
 		std::shared_ptr<const CharacterPreparationEvidence> evidence;
+		/** Present only for the prepared legacy single evaluation; source identity belongs to the slot. */
+		std::optional<RoiDescriptor> roi;
 	};
 
 	/** Owns character observations, stable per-eye regions, and R8 selection masks. */

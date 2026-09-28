@@ -56,16 +56,22 @@ namespace NeuralRendering::Evidence
 				{ "source", "actual_mask_counter_gpu_readback" } };
 		}
 		Json regions = Json::array();
+		Json roi = Json::array();
 		if (e.prepared && e.requiresEvaluation) {
-			if (e.computeRegions.count == 0)
+			if (e.computeRegions.count == 0) {
 				regions.push_back(SubrectJson(e.computeSubrect));
-			else
-				for (std::uint32_t i = 0; i < std::min<std::uint32_t>(e.computeRegions.count, static_cast<uint32_t>(e.computeRegions.regions.size())); ++i)
+				roi.push_back(e.roi ? RoiJson(*e.roi) : Json(nullptr));
+			} else {
+				for (std::uint32_t i = 0; i < std::min<std::uint32_t>(e.computeRegions.count, static_cast<uint32_t>(e.computeRegions.regions.size())); ++i) {
 					regions.push_back(SubrectJson(e.computeRegions.regions[i]));
+					roi.push_back(RoiJson(e.computeRegions.roi[i]));
+				}
+			}
 		}
 		return { { "available", true }, { "key", CharacterPreparationKeyJson(e.key) }, { "outcome", e.outcome },
 			{ "prepared", e.prepared }, { "requiresEvaluation", e.requiresEvaluation }, { "reused", e.reused },
 			{ "sourceCapture", std::move(source) }, { "computeSubrect", SubrectJson(e.computeSubrect) }, { "regions", std::move(regions) },
+			{ "roi", std::move(roi) },
 			{ "maskSupport", std::move(support) }, { "dirtyDispatchRect", SubrectJson(e.dirtyDispatchRect) },
 			{ "dispatchedPixels", e.dispatchedPixels }, { "dispatchedThreads", e.dispatchedThreads }, { "clearedPixels", e.clearedPixels },
 			{ "logicalMaskBytes", e.logicalMaskBytes }, { "logicalDiagnosticBytes", e.logicalDiagnosticBytes }, { "copiedReadbackBytes", e.copiedReadbackBytes },

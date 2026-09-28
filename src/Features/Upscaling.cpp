@@ -5116,6 +5116,9 @@ namespace
 		std::uint32_t a_sourceFrame = std::numeric_limits<std::uint32_t>::max()) noexcept
 	{
 		auto policy = NeuralRendering::GetUpscalingCharacterSettings(a_settings);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		policy.experimentalCurrentContext = a_settings.neuralCharacterCurrentContextEnabled;
+#endif
 		NeuralRendering::SanitizeCharacterSettings(policy);
 		policy.enabled = policy.enabled && a_settings.neuralRenderingEnabled;
 		const auto frame = a_sourceFrame != std::numeric_limits<std::uint32_t>::max() ?
@@ -5212,6 +5215,7 @@ namespace
 		a_args.controlMaskHeight = 0;
 		a_args.computeSubrect = {};
 		a_args.computeRegions = {};
+		a_args.roi.reset();
 		a_args.characterVisualIsolation = false;
 		const auto characterSettings = BuildCharacterSettings(a_settings, a_sourceWorldFrame);
 		if (!characterSettings.enabled || !UsesCharacterVisualIsolation(a_settings)) {
@@ -5238,6 +5242,7 @@ namespace
 		a_args.characterEvidence = result.evidence;
 		a_args.computeSubrect = result.computeSubrect;
 		a_args.computeRegions = result.computeRegions;
+		a_args.roi = result.roi;
 		a_args.characterVisualIsolation = true;
 		if (a_requiresEvaluation && !a_args.computeSubrect.Fits(
 										a_args.outputWidth, a_args.outputHeight)) {
@@ -6648,6 +6653,9 @@ namespace
 			add(a_settings.neuralCharacterAdaptiveRoiSelectionEnabled);
 			add(a_settings.neuralCharacterMultiRoiEnabled);
 			add(a_settings.neuralCharacterMultiRoiSavingsGateEnabled);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			add(a_settings.neuralCharacterCurrentContextEnabled);
+#endif
 			add(a_settings.neuralCharacterMinimumFacePixelSize);
 			addFloat(a_settings.neuralCharacterRoiMargin);
 			add(a_settings.neuralCharacterRoiHoldFrames);
@@ -18080,6 +18088,9 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 			NeuralRendering::DefaultRenderscaleFov(IsVRRuntimeActive(), settings.foveatedVendorDispatch));
 		candidate.neuralCharacterDebugView = settings.neuralCharacterDebugView;
 		candidate.neuralCharacterMaskTestMode = settings.neuralCharacterMaskTestMode;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		candidate.neuralCharacterCurrentContextEnabled = settings.neuralCharacterCurrentContextEnabled;
+#endif
 		if (candidate.neuralRenderingMode > 2u || !candidate.neuralRenderingAutoMask || candidate.neuralRenderingUICorrection)
 			throw std::invalid_argument("Unsupported Neural Rendering mode or provider mask contract");
 		if (candidate.neuralRenderingEnabled && !NeuralRendering::IsRenderingConfigurationSupported(
@@ -18115,6 +18126,9 @@ bool Upscaling::ResetNeuralRenderingConfiguration()
 	if (applied) {
 		settings.neuralCharacterDebugView = static_cast<uint>(NeuralRendering::CharacterDebugView::Off);
 		settings.neuralCharacterMaskTestMode = static_cast<uint>(NeuralRendering::CharacterMaskTestMode::Authored);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		settings.neuralCharacterCurrentContextEnabled = false;
+#endif
 	} else {
 		logger::error("[NeuralRendering] Could not restore defaults: {}", error);
 	}
@@ -20270,6 +20284,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 	if (!NeuralRendering::RequiresBackendRetirement(
 			a_previousSettings.neuralRenderingEnabled != settings.neuralRenderingEnabled,
 			multiRoiChanged, insertionPointChanged,
+			previousInsertionPoint != currentInsertionPoint,
 			neuralRenderer.IsFailureLatched() || neuralRenderer.IsQuarantined())) {
 		return acceptTransition();
 	}
@@ -44559,6 +44574,7 @@ namespace
 			for (std::uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 				a_batchArgs[eye].computeSubrect = maskResults[eye].computeSubrect;
 				a_batchArgs[eye].computeRegions = maskResults[eye].computeRegions;
+				a_batchArgs[eye].roi = maskResults[eye].roi;
 				a_batchArgs[eye].characterEvidence = maskResults[eye].evidence;
 				a_results[eye].bypassed = !maskResults[eye].requiresEvaluation;
 			}

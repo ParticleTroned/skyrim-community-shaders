@@ -45,6 +45,8 @@ namespace
 				static_cast<uint64_t>(extent.width) * extent.height * 4, std::nullopt };
 			region.color.workLogicalBytes = region.color.work.Area() * 4;
 			region.output = region.color;
+			region.roi = BuildRoiDescriptor(characters ? std::optional{ ComputeSubrect{ 80, 144, 128, 96 } } : std::nullopt,
+				region.output.work, extent, characters);
 			region.depth = { extent, 41, region.color.work, std::nullopt, std::nullopt };
 			region.motion = { extent, 34, region.color.work, 0, 0 };
 			region.motionVectorScaleX = static_cast<float>(extent.width);
@@ -78,6 +80,13 @@ namespace
 						Check(region["characterSelection"] == characters && region["source"] == value["source"], "per-region context mismatch");
 						Check(region["nrInput"]["capacityGrid"]["width"] == (mode == 2 ? 756 : 1512), "NR capacity confused with DLSS output");
 						Check(region["nrInput"]["workPixels"] == descriptor.regions[i].color.work.Area(), "subrect work lost");
+						Check(region["roi"]["inferenceContext"] == region["nrOutput"]["work"] &&
+								  region["roi"]["ownedOutput"] == region["nrOutput"]["work"] &&
+								  region["roi"]["allocationCapacity"] == region["nrOutput"]["capacityGrid"],
+							"ROI roles diverged from executed work/capacity");
+						Check(region["roi"]["samplingSupportEnclosurePixels"] == (characters ? Json(128u * 96u) : Json(nullptr)),
+							"support enclosure became provider area or unknown became zero");
+						Check(region["roi"]["temporalEnvelope"].is_null() == !characters, "spatial envelope confused with C native resets");
 						Check(region["nrDepthGuide"]["capacityLogicalBytes"].is_null() && region["nrMotionGuide"]["capacityLogicalBytes"] == 0,
 							"unknown logical bytes collapsed to zero");
 						Check(region["timing"]["evaluationGpu"]["microseconds"].is_null() && region["timing"]["depthGuide"]["gpu"]["inclusiveMs"].is_null(),
@@ -99,6 +108,7 @@ namespace
 			auto evidence = std::make_shared<ExecutionEvidence>(descriptor);
 			descriptor.frame = 999;
 			descriptor.regions[0].color.work = {};
+			descriptor.regions[0].roi = {};
 			evidence->Update([&](auto& state) {
 				state.finished = true;
 				state.succeeded = attempted == 4;
@@ -130,6 +140,9 @@ namespace
 			completion.join();
 			const auto complete = ExecutionJson(*evidence);
 			Check(complete["source"] == pending["source"] && complete["regions"][0]["nrViewport"] == pending["regions"][0]["nrViewport"], "delayed timing replaced descriptor identity");
+			Check(complete["regions"][0]["roi"] == pending["regions"][0]["roi"] &&
+					  complete["regions"][0]["roi"]["inferencePixels"] == 256u * 192u,
+				"later plan replaced frozen ROI roles");
 			Check(complete["timing"]["wholeFeatureBatchGpuLegacy"]["microseconds"] == 1000 && pending["timing"]["wholeFeatureBatchGpuLegacy"]["microseconds"].is_null(),
 				"whole timer replaced with region sum or sealed snapshot mutated");
 			Check(!complete.contains("gpuTotal") && !complete.contains("presented") && !complete.contains("submitted"), "execution snapshot asserts unowned presentation or timing sum");
@@ -164,6 +177,7 @@ namespace
 		evidence->support->Pending();
 		const auto pending = CharacterPreparationJson(evidence);
 		Check(pending["regions"].empty() && pending["requiresEvaluation"] == false && pending["dispatchedPixels"] == 0, "empty preparation invented full-frame evaluation");
+		Check(pending["roi"].empty(), "NoWork invented ROI roles");
 		Check(pending["maskSupport"]["pixels"].is_null() && pending["maskSupport"]["state"] == "pending", "pending mask coverage treated as zero");
 		evidence->support->Complete(0);
 		evidence->support->Complete(999);

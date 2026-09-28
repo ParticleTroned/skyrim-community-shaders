@@ -30,6 +30,20 @@ namespace
 		std::vector<RE::NiAVObject*> pendingObjects;
 	};
 
+	// The verified helper reads only data at +0 and size at +0x10; this view
+	// avoids invoking the game's terminating array allocator on the guard path.
+	struct NativeBoneNodesView
+	{
+		RE::BShkbAnimationGraph::BoneNodeEntry* data;
+		std::uint32_t capacity;
+		std::uint32_t pad0C;
+		std::uint32_t size;
+		std::uint32_t pad14;
+	};
+	static_assert(offsetof(NativeBoneNodesView, data) == 0x0);
+	static_assert(offsetof(NativeBoneNodesView, size) == 0x10);
+	static_assert(sizeof(NativeBoneNodesView) == 0x18);
+
 	thread_local SceneScratch sceneScratch;
 
 	bool IsReadableProtection(DWORD a_protection)
@@ -323,12 +337,20 @@ void VRAnimationPoseBindingGuard::ApplyPoseGuarded(
 			ReportInvalidBinding(sequence, graph, index, (*a_boneNodes)[index], a_pose[index], failure, liveObjects.size());
 		}
 
-		BoneNodes safeBoneNodes(*a_boneNodes);
+		std::vector<RE::BShkbAnimationGraph::BoneNodeEntry> safeEntries(
+			a_boneNodes->begin(), a_boneNodes->end());
 		for (const auto& [index, failure] : invalidBindings) {
 			(void)failure;
-			safeBoneNodes[index].node = nullptr;
+			safeEntries[index].node = nullptr;
 		}
-		original(a_pose, std::addressof(safeBoneNodes), a_boneCount);
+		NativeBoneNodesView safeBoneNodes{
+			safeEntries.data(),
+			static_cast<std::uint32_t>(safeEntries.size()),
+			0,
+			static_cast<std::uint32_t>(safeEntries.size()),
+			0
+		};
+		original(a_pose, reinterpret_cast<BoneNodes*>(std::addressof(safeBoneNodes)), a_boneCount);
 	} catch (const std::bad_alloc&) {
 		logger::error(
 			"[VR pose binding guard] Could not allocate a sanitized binding view; skipped unsafe pose application");

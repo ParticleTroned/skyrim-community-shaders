@@ -35,10 +35,13 @@ its `numBones` bound and resolve to readable `BoneEntry` storage.
 
 If every entry is valid, the original helper receives the original arguments.
 If an entry is invalid, the guard logs bounded graph, binding, pose and stack
-evidence and calls the helper with a temporary copy in which only invalid
-entries are null. The graph's original table is not changed. If the scene tree
-cannot be validated or the temporary copy cannot be allocated, pose
-application is skipped rather than permitting an unvalidated write.
+evidence and calls the helper with a temporary native-layout array view backed
+by a standard vector in which only invalid entries are null. The view exposes
+the data pointer and size fields read by the disassembled helper; it does not
+claim ownership or invoke the game's terminating `BSTArray` allocator. The
+graph's original table is not changed. If the scene tree cannot be validated
+or the temporary storage cannot be allocated, pose application is skipped
+rather than permitting an unvalidated write.
 
 The hook refuses installation if the runtime or original call instruction is
 not an exact match. It also exposes the ownership name

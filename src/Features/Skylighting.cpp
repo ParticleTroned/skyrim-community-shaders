@@ -42,6 +42,7 @@ void Skylighting::LoadSettings(json& o_json)
 		ResetSkylighting();
 	settings.ProbeGridQuality = std::min(settings.ProbeGridQuality, 2u);
 	settings.ProbeArrayWorldSizeCells = Util::ClampFinite(settings.ProbeArrayWorldSizeCells, Settings::kMinProbeFieldSizeCells, Settings::kMaxProbeFieldSizeCells, Settings{}.ProbeArrayWorldSizeCells);
+	settings.MaxZenith = Util::ClampFinite(settings.MaxZenith, 0.0f, std::numbers::pi_v<float> / 2.0f, Settings{}.MaxZenith);
 }
 
 void Skylighting::SaveSettings(json& o_json)

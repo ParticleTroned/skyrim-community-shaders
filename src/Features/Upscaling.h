@@ -2966,7 +2966,7 @@ public:
 	uint32_t peripheryTAATileCapacity[2] = {};
 	std::array<PeripheryTAATileCacheState, 2> peripheryTAATileCache{};
 	uint32_t peripheryTAAHistoryReadIndex = 0;
-	bool peripheryTAAHistoryValid = false;
+	VRSubmitTemporalSnapshot::CommittedHistory peripheryTAAHistory;
 
 	virtual void ClearShaderCache() override;
 
@@ -3676,6 +3676,8 @@ public:
 	bool EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCapacity);
 	bool BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidth, uint32_t outputHeight, float centerScale, float taaOuterScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY, uint32_t coveragePadding, uint32_t& outTileCount);
 	void DestroyPeripheryTAAResources();
+	/** Returns the producer and resource contract used by both periphery history dispatch routes. */
+	[[nodiscard]] VRSubmitTemporalSnapshot::Key GetPeripheryTAAHistoryKey(UpscaleMethod a_upscaleMethod, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight) const;
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */
 	[[nodiscard]] FidelityFX::UpscaleResult DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr);
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */

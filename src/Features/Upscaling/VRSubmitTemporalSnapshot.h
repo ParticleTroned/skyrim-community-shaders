@@ -86,6 +86,23 @@ namespace VRSubmitTemporalSnapshot
 		return a_candidate.frame - a_previous.frame == 1;
 	}
 
+	/** Tracks history only after all consumers contributing to it have completed. */
+	class CommittedHistory
+	{
+	public:
+		[[nodiscard]] constexpr bool HasHistory() const noexcept { return IsValid(producer); }
+		[[nodiscard]] constexpr bool CanReuse(const Key& a_candidate) const noexcept
+		{
+			return IsImmediateCameraHistorySuccessor(producer, a_candidate);
+		}
+		/** Publish only after both eyes have successfully written their history. */
+		constexpr void Commit(const Key& a_producer) noexcept { producer = a_producer; }
+		constexpr void Reset() noexcept { producer = {}; }
+
+	private:
+		Key producer{};
+	};
+
 	/** A reset frame may seed unavailable history; an adjacent frame may use retained history. */
 	template <class EyeCamera>
 	[[nodiscard]] bool PrepareCameraHistoryForPublication(

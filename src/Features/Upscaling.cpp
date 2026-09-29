@@ -24253,7 +24253,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	}
 	vrIntermediateTextureGeneration = 0;
 	peripheryTAAHistoryReadIndex = 0;
-	peripheryTAAHistoryValid = false;
+	peripheryTAAHistory.Reset();
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedGeneration = 0;
@@ -38201,7 +38201,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	}
 	if (!a_destroySharedResources || a_preserveVRIntermediateTextures) {
 		peripheryTAAHistoryReadIndex = 0;
-		peripheryTAAHistoryValid = false;
+		peripheryTAAHistory.Reset();
 	}
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
@@ -40602,7 +40602,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	if (recreatedResources) {
 		// Any recreated history surface invalidates temporal continuity.
 		peripheryTAAHistoryReadIndex = 0;
-		peripheryTAAHistoryValid = false;
+		peripheryTAAHistory.Reset();
 		submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 		submitStageFoveatedPeripheryTAAEyeReady = {};
 	}
@@ -40809,7 +40809,7 @@ void Upscaling::DestroyPeripheryTAAResources()
 		peripheryTAAHistoryRects[eye] = {};
 	}
 	peripheryTAAHistoryReadIndex = 0;
-	peripheryTAAHistoryValid = false;
+	peripheryTAAHistory.Reset();
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 }
@@ -41048,7 +41048,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		taaOuterScale
 	};
 	cbData.tuning1 = {
-		peripheryTAAHistoryValid && !resetHistory ? 1.0f : 0.0f,
+		peripheryTAAHistory.HasHistory() && !resetHistory ? 1.0f : 0.0f,
 		centerHorizontalScale,
 		useTileList ? 1.0f : 0.0f,
 		static_cast<float>(dispatchGroupsX)
@@ -41998,6 +41998,22 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		params.submitSourceBoxValid ? &params.submitSourceBox : nullptr);
 }
 
+VRSubmitTemporalSnapshot::Key Upscaling::GetPeripheryTAAHistoryKey(UpscaleMethod a_upscaleMethod, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight) const
+{
+	if (const auto* snapshot = GetSubmitTemporalSnapshotForDispatch())
+		return snapshot->key;
+	return {
+		.frame = globals::state->frameCount,
+		.generation = GetVRVendorEvaluationContractGeneration(a_upscaleMethod),
+		.method = static_cast<uint32_t>(a_upscaleMethod),
+		.inputWidth = inputWidth,
+		.inputHeight = inputHeight,
+		.outputWidth = outputWidth,
+		.outputHeight = outputHeight,
+		.compositorCycle = 0,
+	};
+}
+
 FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput)
 {
 	if (!globals::game::isVR)
@@ -42051,7 +42067,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	if (usePeripheryTAA && !EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, colorTexture))
 		return FidelityFX::UpscaleResult::Failed;
 
-	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistoryValid);
+	const auto peripheryHistoryKey = usePeripheryTAA ?
+	                                     GetPeripheryTAAHistoryKey(a_upscaleMethod, inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight) :
+	                                     VRSubmitTemporalSnapshot::Key{};
+	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistory.CanReuse(peripheryHistoryKey));
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
 	bool anyEyeDispatched = false;
@@ -42124,7 +42143,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 
 	if (usePeripheryTAA) {
 		peripheryTAAHistoryReadIndex = peripheryTAAWriteIndex;
-		peripheryTAAHistoryValid = true;
+		peripheryTAAHistory.Commit(peripheryHistoryKey);
 	}
 
 	FinalizePerEyeOutputs(colorOutput ? colorOutput : colorTexture);
@@ -42199,7 +42218,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 			return FidelityFX::UpscaleResult::Failed;
 	}
 
-	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistoryValid);
+	const auto peripheryHistoryKey = usePeripheryTAA ?
+	                                     GetPeripheryTAAHistoryKey(a_upscaleMethod, inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight) :
+	                                     VRSubmitTemporalSnapshot::Key{};
+	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistory.CanReuse(peripheryHistoryKey));
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
 	const uint32_t currentFrame = state->frameCount;
@@ -42314,7 +42336,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 		submitStageFoveatedPeripheryTAAEyeReady[eyeIndex] = true;
 		if (submitStageFoveatedPeripheryTAAEyeReady[0] && submitStageFoveatedPeripheryTAAEyeReady[1]) {
 			peripheryTAAHistoryReadIndex = peripheryTAAWriteIndex;
-			peripheryTAAHistoryValid = true;
+			peripheryTAAHistory.Commit(peripheryHistoryKey);
 			submitStageFoveatedPeripheryTAAEyeReady = {};
 		}
 	}

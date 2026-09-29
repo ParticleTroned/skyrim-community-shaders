@@ -13,6 +13,23 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 29: periphery TAA history continuity
+
+The selective [Open Shaders #791 adaptation](periphery-taa-history-continuity.md)
+reseeds periphery TAA after gaps in successfully committed stereo history.
+It reuses the existing frame/cycle adjacency and resource-contract policy
+for both main-pass and submit-stage DLSS/FSR foveated rendering. The
+submit route retains its immutable producer identity across desktop
+Present; only a complete eye pair advances the history record.
+
+No shader, resource allocation, menu policy or sampling work is added.
+Reseeding can change rendered pixels and history acceptance, so runtime
+quality and performance neutrality are not established by source review.
+Controller regression cases are added; their compiled execution and the
+DLL build remain deferred by user instruction until the end of the sync.
+Physical-HMD qualification and matched runtime evidence remain pending.
+There is no new measurement, numbered ledger snapshot or Build ID.
+
 ## September 27: periphery TAA camera motion correction
 
 The [periphery TAA correction](periphery-taa-reprojection.md) removes the

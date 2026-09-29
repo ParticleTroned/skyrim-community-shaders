@@ -2382,6 +2382,68 @@ inside the shared helper. The following checks passed:
 
 Builds, shader compilation and runtime validation remain deferred.
 
-Next pending decision: #790,
+### #790: foveated rendering in pause menus, rejected
+
+[Open Shaders #790](https://github.com/alandtse/open-shaders/pull/790),
 `5a2421dcbfdafaf9639d6927bd13871c01d1349d`,
 `fix(upscaling): run foveated route in pause menus`.
+
+The user rejected this PR. Upstream replaces its blanket pause-menu
+restriction with a main/loading-menu restriction in the FoveatedRender
+route. CSX uses different menu presentation, input-freshness, transition
+and submit-ownership contracts. Substituting the upstream predicate
+would not preserve those contracts. This rejection does not claim that
+every paused-menu scenario has been runtime-verified locally.
+
+No implementation was imported. The recommendation rests on the
+upstream diff and the local foveated dispatch and menu-presentation gates
+reviewed during the 2.17 screening. No build or runtime test ran.
+
+### #791: periphery history continuity, accepted adaptation
+
+[Open Shaders #791](https://github.com/alandtse/open-shaders/pull/791),
+`061cda2d1a8f635d3bef1bed80f3eba376371bd9`,
+`fix(upscaling): reseed periphery history on resume`.
+
+The user accepted an adaptation to CSX's existing per-eye implementation.
+Replace the history-valid flag with a committed producer record, reusing
+the existing temporal snapshot adjacency and resource-contract checks.
+Main-pass history follows engine frames. Submit-stage history follows
+the immutable producer snapshot, preserving compositor-cycle identity
+when desktop Present advances the observed engine frame between eyes.
+
+Both dispatch routes reseed history after a skipped producer or a changed
+generation, method or input/output extent. Existing reset requests still
+force reseeding. Publish the record only where both eye histories already
+commit; failed or incomplete pairs leave the last complete producer
+unchanged. All four resource-reset paths clear the record. No shaders,
+GPU allocations, menu gates, settings or SE/AE dispatch paths change.
+
+The existing `VRSubmitTemporalSnapshot` test target now includes committed
+history cases for skipped and incomplete producers, contract changes,
+peer-eye checks across Present, repeated producers, cycle wrap, invalid
+keys and resource reset. Compiled execution is deferred with the build.
+The implementation and qualification limits are recorded in the
+[history continuity report](periphery-taa-history-continuity.md).
+
+Validation completed without a build:
+
+-   Scoped pre-commit whitespace, line-ending and Prettier hooks passed
+    for the eight changed files. Clang-format 22.1.4 passed separately on
+    changed lines in `Upscaling.cpp`/`.h` and on the complete policy and
+    two test files; the whole-file upscaling format hook was skipped to
+    preserve surrounding code. YAML/CMake hooks had no applicable files.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=C:/src/skyrim-community-shaders/build/worktrees/main-vr-feature-metadata -D OUTPUT_DIRECTORY=C:/src/skyrim-community-shaders/build/analysis/open-shaders-217-review-20260929/pr791-extraction -P tests/extract_foveated_save_reuse.cmake`
+    passed source-fixture extraction. Separate `-D` value arguments avoid
+    the joined-option parsing that truncated paths in earlier attempts.
+-   `pwsh ./tools/git.ps1 diff --check` passed. A full source/test search
+    found no remaining references to the replaced history-valid flag.
+
+The existing resource-reuse fixture now uses the production history
+record and checks both preservation and invalidation. Neither controller
+target was compiled or executed; runtime and physical-HMD qualification
+remain pending. No measured ledger or Build ID was created.
+
+Next pending decision: #785,
+`d628f69960c956fc30b6bdddb2d83f50c8f5315a`,
+`fix(compat): identify NMLFF conflict`.

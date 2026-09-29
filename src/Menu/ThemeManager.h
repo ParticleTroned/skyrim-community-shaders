@@ -135,8 +135,7 @@ public:
 		std::time_t lastModified = 0;
 	};
 
-	// Returns the effective font size to use. If the user setting is <= 0, a dynamic
-	// default based on current screen resolution is returned; otherwise the user value.
+	/** Resolves a fixed user size or the runtime's resolution-based automatic font size. */
 	static float ResolveFontSize(const class Menu& menu);
 
 	// Static UI helper methods
@@ -148,7 +147,7 @@ public:
 	{
 		// Font size constants
 		static constexpr float DEFAULT_SCREEN_HEIGHT = 1080.0f;  // Default screen resolution to use for subsequent calculations
-		static constexpr float DEFAULT_FONT_RATIO = 0.025f;      // Default 2.5% of screen height
+		static constexpr float DEFAULT_FONT_RATIO = 0.025f;      // VR automatic sizing and VR theme style baseline
 		static constexpr float MIN_FONT_SIZE = 16.0f;            // ~1.5% @ 1080px height
 		static constexpr float MAX_FONT_SIZE = 108.0f;           // 5.0% @ 2160px height
 		static constexpr float DEFAULT_FONT_SIZE = 27.0f;
@@ -198,6 +197,7 @@ public:
 		static constexpr float SCENE_VALUE_LABEL_OFFSET_RATIO = 0.5f;  // Value label right-alignment ratio
 
 		// Search input constants
+		static constexpr float FLAT_SEARCH_BASELINE_SCREEN_HEIGHT = 1440.0f;
 		static constexpr float SEARCH_ICON_SIZE = 20.0f;             // Default search icon size
 		static constexpr float SEARCH_ICON_ALPHA = 0.7f;             // Default search icon opacity
 		static constexpr float SEARCH_ICON_OFFSET_X = 8.0f;          // Search icon offset from input edge
@@ -223,6 +223,13 @@ public:
 		static constexpr float BUTTON_ACTIVE_BRIGHTEN = 0.3f;
 		static constexpr float BUTTON_STATUS_TEXT_HOVER_ALPHA = 0.8f;
 		static constexpr float BUTTON_STATUS_TEXT_ACTIVE_ALPHA = 1.0f;
+
+		static constexpr float FLAT_TOGGLE_ON_BLEND = 0.55f;
+		static constexpr float FLAT_TOGGLE_OFF_BLEND = 0.18f;
+		static constexpr float FLAT_TOGGLE_WIDTH_RATIO = 1.6f;
+		static constexpr float FLAT_TOGGLE_HEIGHT_RATIO = 0.8f;
+		static constexpr float FLAT_TOGGLE_KNOB_PADDING = 2.0f;
+		static constexpr float FLAT_TOGGLE_BORDER_SIZE = 1.5f;
 	};
 
 	static ThemeManager* GetSingleton()

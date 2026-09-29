@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 
 /** @brief Simulates realistic ambient lighting by calculating sky occlusion via a 3D probe array. */
@@ -64,6 +65,12 @@ public:
 		float MaxZenith = 3.1415926f / 2.f;  // 90 deg
 		float MinDiffuseVisibility = 0.1f;
 		float MinSpecularVisibility = 0.1f;
+		uint ProbeGridQuality = 2;
+		bool EnableIncrementalProbeUpdates = false;
+		uint StableSliceCount = 16;
+		bool EnableReducedUpdateFrequency = false;
+		uint OcclusionUpdateInterval = 1;
+		uint ProbeUpdateInterval = 1;
 	} settings;
 
 	struct SkylightingCB
@@ -81,6 +88,11 @@ public:
 		float MinSpecularVisibility;
 		uint ProbeDataReady;
 		uint Enabled;
+		uint ArrayDims[3];
+		uint _pad3;
+		uint SliceStart;
+		uint SliceCount;
+		uint _pad4[2];
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
@@ -163,11 +175,26 @@ public:
 	};
 
 private:
+	float3 GetProbeCellSize() const;
+	float3 GetProbeCell(float3 eyePosition) const;
 	bool HasProbeResources() const;
 	void ClearProbes();
 	bool probeDataReady = false;
 	float3 previousProbeCell = {};
 	float3 pendingProbeCell = {};
+	uint sliceCursor = 0;
+	uint sliceCaptureMask = 0;
+	uint forcedFullUpdateFrames = 4;
+	uint dispatchSliceStart = 0;
+	uint dispatchSliceCount = 0;
+	uint lastProbeUpdateCapture = static_cast<uint>(-1);
+	uint lastProbeUpdateFrame = static_cast<uint>(-1);
+	uint occlusionCaptureCorner = 0;
+	uint nextOcclusionCorner = 0;
+	static std::array<uint, 3> GetProbeArrayDims(uint quality);
+	void CreateProbeResources(const std::array<uint, 3>& dimensions);
+	void ApplyProbeGrid();
+	uint activeProbeGridQuality = 2;
 	uint32_t* GetRasterCullMode() const;
 	void BeginInteriorOcclusionGeometry();
 	void EndInteriorOcclusionGeometry();

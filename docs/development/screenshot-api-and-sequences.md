@@ -181,7 +181,7 @@ Every response, including errors, uses one envelope:
 
 `sessionId` changes at each Skyrim/CSX process start. `commandId` is generated
 by the client and supplies idempotency. Within one server session, repeating
-the same `clientId + commandId` returns the original command result or current
+the same `(clientId, commandId)` tuple returns the original command result or current
 operation receipt and must not create a second capture. Reusing the pair with
 different arguments is `idempotency_conflict`.
 
@@ -435,7 +435,8 @@ Version 1 separates them:
 -   `source.kind = hmd_submission` observes coherent accepted OpenVR eye
     submissions before compositor distortion.
 -   `source.kind = settings_default` resolves either source from the immutable
-    settings snapshot.
+    settings snapshot. On flat Skyrim it resolves to `desktop_mirror` even if
+    the persisted VR-only preference is `hmd_submission`.
 -   `outputs[].view` selects native, individual-eye, side-by-side, or framed
     composition from the acquired planes.
 
@@ -447,6 +448,16 @@ source/view combination is rejected during validation.
 fallback reason must appear in the receipt. Framed views default to `reject`;
 silently converting a requested framed HMD view into a desktop image would be
 misleading evidence.
+
+Source capabilities are runtime-specific. Flat Skyrim advertises only
+`desktop_mirror`; VR also advertises `hmd_submission`. An unavailable explicit
+HMD request fails with `source_unavailable` unless the request opts into
+`desktop_mirror`, in which case the effective descriptor, receipt, and event
+journal preserve the requested source, resolved source, and fallback reason.
+For `sequence_start`, the parent receipt contains the fully expanded sequence
+descriptor and nests the resolved capture descriptor under `effective.capture`.
+Fallback provenance is projected onto the parent receipt and journal as well as
+the individual child receipts.
 
 ### Outputs
 
@@ -475,8 +486,10 @@ capability explicitly permits both.
 -   Relative traversal outside the selected root is rejected as `unsafe_path`.
 -   Existing files are never overwritten in version 1. `overwrite` must be
     `never`; name collisions receive a deterministic numeric suffix.
--   The worker writes a sibling temporary file, flushes and closes it, then
-    atomically renames it to the final name where the filesystem permits.
+-   The worker encodes into memory, creates a sibling temporary file
+    exclusively, and retains that handle while it writes, flushes, atomically
+    renames without replacement, and verifies the committed file's identity,
+    size, and SHA-256 custody.
 -   The receipt records both the requested destination policy and resolved path.
 -   The API never deletes artifacts.
 
@@ -636,7 +649,7 @@ the requested `skip` or `abort` policy applies at the missed slot.
 Each sequence owns a unique directory:
 
 ```text
-CS_sequence_2026-08-20_041530_2f8c91a0/
+CS_sequence_<complete-request-id>/
   sequence.json.partial
   frame_000001_combined.png
   frame_000001_left.png
@@ -664,8 +677,8 @@ The final manifest includes:
 -   start/end times and frame counters;
 -   scheduled, acquired, written, dropped, failed, and cancelled counts;
 -   one child record per scheduled ordinal;
--   source/fallback, dimensions, format, colour contract, path, byte size, and
-    optional SHA-256 for every artifact;
+-   source/fallback, dimensions, format, colour contract, sequence-relative
+    path, byte size, and SHA-256 custody for every artifact;
 -   backpressure, failure, cancellation, and warning details;
 -   preview packaging request and outcome.
 
@@ -679,6 +692,16 @@ in-memory warning only. The schema requires child warning/error arrays and the
 actual view, dimensions, format, and colour contract for every committed frame
 artifact. A missing required final manifest is `failed` or `failed_partial`; it
 is never reported as completion with a warning.
+
+The parent receipt and every partial or final manifest carry the same frozen,
+fully expanded sequence object in `effective`. Capture settings remain nested
+under `effective.capture`; they are not substituted for the sequence object in
+manifest output.
+
+Frame artifact paths are strict descendants of the sequence directory and are
+published relative to that directory. Consumers must reject rooted paths,
+traversal, reparse-point escapes, request-identity mismatches, and artifacts
+whose current size or SHA-256 differs from the final manifest.
 
 ### Optional video packaging
 

@@ -2717,6 +2717,111 @@ This moves upstream feature-menu release-stage labels and colours into
 shared UI helpers. No renderer behavior changes. Excluded under the
 standing upstream UI rule.
 
-Next pending decision: #811,
+### #811: pre-upscale depth of field and motion blur, rejected
+
+[Open Shaders #811](https://github.com/alandtse/open-shaders/pull/811),
 `951220acc4c190dc478c9f10cbaa4c05fedba429`,
 `perf(post-processing): DoF and blur pre-upscale`.
+
+The user selected **r**. All six changed files belong to upstream's custom
+PostProcessing pipeline, including its DoF and MotionBlur components and
+input-provider ownership. These components are absent from main-VR. No
+independent correction applies to Adaptive Balance. No code imported.
+
+### #815: destroyed grass-shape captures, deferred
+
+[Open Shaders #815](https://github.com/alandtse/open-shaders/pull/815),
+`404024aea2c2376343febf2fcc1084d837d2f98b`,
+`fix(grass): drop captures of destroyed shapes`.
+
+The change removes pending captures of destroyed shapes in GrassBucketStore.
+Deferred under the standing Grass Optimizations rule.
+
+### #723: upstream neural rendering, excluded
+
+[Open Shaders #723](https://github.com/alandtse/open-shaders/pull/723),
+`386bb211f8969dafe2a4a7cf641c5c4570fd4bcd`,
+`feat(upscaling): add DLSS neural rendering`.
+
+Excluded under the user's kevdev NR rule; CSX maintains its own implementation
+on main-vr-nr. Shared colour, string, hashing, fence, swap-chain and upscaling
+hunks were inspected separately from the new feature. They provide NR
+integration, supporting utilities or behavior-preserving refactors; no
+independently justified local correction was selected.
+
+### #817: GO VR grass placement, deferred
+
+[Open Shaders #817](https://github.com/alandtse/open-shaders/pull/817),
+`8444f3c628feaa51e3de0415f83c29269ca08e04`,
+`fix(grass-optimizations): VR grass placement`.
+
+The RunGrass change corrects projection in GO's instanced vertex path.
+The local shader does not use this InstanceExtras/instanceID branch.
+Deferred under the standing Grass Optimizations rule.
+
+### #816: GO runtime enable setting, deferred
+
+[Open Shaders #816](https://github.com/alandtse/open-shaders/pull/816),
+`b0f16fd4c292704c4f09591241eeaf5d687f8c7f`,
+`feat(grass): add runtime Enabled setting`.
+
+Runtime enable/disable, hook and bucket lifecycle changes belong to
+GrassOptimizations, with accompanying translation updates. Deferred under
+the standing Grass Optimizations rule.
+
+### #821: conditional Scene Manager components, excluded
+
+[Open Shaders #821](https://github.com/alandtse/open-shaders/pull/821),
+`9f0bb80448dcd4e8ef4468b529f719451417cf1f`,
+`fix(scene): discover conditional components`.
+
+Only the scene-settings catalog generator and its tests change. This makes
+conditional upstream PostProcessing components discoverable by Scene Manager;
+it provides no independent Adaptive Balance correction. Excluded under the
+standing Scene Manager rule.
+
+### #819: celestial terrain-shadow direction, accepted partial port
+
+[Open Shaders #819](https://github.com/alandtse/open-shaders/pull/819),
+`ad261d852dd719c0f1c6a71b3c65cf7286b22366`,
+`feat(sky): occlude sunset lighting and glare`.
+
+The user accepted the terrain-shadow portion. Sky Sync now retains the
+active caster's apparent direction before shadow elevation limits, then
+exposes its normalized world-space direction. Capture follows time-jump
+correction and precedes lighting and the end-of-frame caster handoff, so
+terrain shadows follow the light actually used by the current fade phase.
+The local fade-out/fade-in model, lighting intensity and horizon locks
+remain intact; upstream's blended-direction transition is not imported.
+
+The direction is cleared by ShadowFader reset and when there is no caster.
+The accessor rejects unloaded/disabled Sky Sync, missing sky roots, zero
+length and nonfinite directions. Existing invalid-sky, disabled-feature,
+interior and worldspace lifecycle resets cover the retained direction.
+Terrain Shadows falls back to its existing engine-light direction and
+hemisphere correction whenever no valid celestial direction is available.
+Only the fallback retains that correction; a valid celestial direction
+keeps its actual horizon position.
+
+Direction validation, sudden-change detection and shadow updates all use
+the selected direction. This preserves immediate full refresh on caster
+handoffs or other large direction changes, including changes hidden by
+the engine light's elevation limit. The shared C++ path applies to SE, AE
+and VR without new runtime-specific branches, settings or GPU resources.
+
+The glare shader and vertex-stage depth binding are deliberately deferred.
+They modulate a glare draw already being produced and do not establish
+working glare in either VR or SE. The prior #733 decision remains intact.
+
+Validation: the source audit verified unchanged fade/caster/calendar
+calculations apart from direction capture and elevation-lock ordering,
+capture before the current-frame handoff, reset and validity gates, and
+the selected direction reaching both discontinuity detection and dispatch.
+Scoped pre-commit hooks and `git diff --check` passed. No DLL build,
+compiled tests or runtime rendering validation were run, per the user's
+end-of-sync build instruction. Sunrise/sunset, sun/moon handoffs and
+disable/re-enable behavior still require final runtime validation.
+
+Next pending decision: #820,
+`1bdf8aab35a7ca60b69e5051e8df93c9ea0464ee`,
+`fix(lighting): correct ACEScg skin tinting`.

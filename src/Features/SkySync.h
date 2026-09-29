@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "RE/M/Moon.h"
 
+#include <optional>
 #include <unordered_map>
 
 struct SkySync : Feature
@@ -51,6 +52,9 @@ public:
 	virtual bool IsCore() const override { return true; }
 	virtual bool SupportsVR() override { return true; }
 	float GetVolumetricLightingIntensityFactor() const;
+
+	/** @brief Returns the active caster's world-space direction before elevation limits, or nullopt when inactive or invalid. */
+	std::optional<RE::NiPoint3> GetCelestialLightDirection() const;
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
@@ -142,6 +146,7 @@ private:
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
+		std::optional<RE::NiPoint3> celestialDirection;
 
 		float Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime, float time);
 		void LockSunElevation(RE::NiPoint3 dirs[], float time);

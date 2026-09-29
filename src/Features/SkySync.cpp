@@ -125,6 +125,20 @@ float SkySync::GetVolumetricLightingIntensityFactor() const
 	return SkySync::NormalizeVolumetricLightingIntensity(volumetricLightingIntensityFactor);
 }
 
+std::optional<RE::NiPoint3> SkySync::GetCelestialLightDirection() const
+{
+	const auto sky = globals::game::sky;
+	if (!loaded || !settings.Enabled || !shadowFader.celestialDirection || !sky || !sky->root)
+		return std::nullopt;
+
+	auto direction = sky->root->world.rotate * *shadowFader.celestialDirection;
+	const float length = direction.Unitize();
+	if (!std::isfinite(length) || length <= FLT_EPSILON)
+		return std::nullopt;
+
+	return direction;
+}
+
 void SkySync::PostPostLoad()
 {
 	moonAndStarsLoaded = GetModuleHandle(L"po3_MoonMod.dll");
@@ -457,6 +471,7 @@ void SkySync::ShadowFader::Reset()
 	sunriseReleased = false;
 	frozenHeading = 0.0f;
 	sunsetHeadingLocked = false;
+	celestialDirection.reset();
 }
 
 float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], float intensities[3], const bool isDayTime, const float time)
@@ -471,8 +486,6 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 		desired = Caster::Masser;
 	else if (secundaIntensity > 0.0f)
 		desired = Caster::Secunda;
-
-	LockSunElevation(dirs, time);
 
 	if (desired != target) {
 		target = desired;
@@ -503,6 +516,12 @@ float SkySync::ShadowFader::Update(const RE::Sun* sun, RE::NiPoint3 dirs[3], flo
 	} else if (globals::game::deltaTime) {
 		fadeAdvance = *globals::game::deltaTime * 20.0f;
 	}
+
+	// Capture this frame's caster before elevation limits or the end-of-frame handoff.
+	celestialDirection.reset();
+	if (current != Caster::None)
+		celestialDirection = dirs[static_cast<int>(current)];
+	LockSunElevation(dirs, time);
 
 	if (current == Caster::None) {
 		fadePhase = Phase::None;

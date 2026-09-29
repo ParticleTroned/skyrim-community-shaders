@@ -296,7 +296,8 @@ void CheckWeatherBrightnessComposition()
 	assert(Close(balance.GetEffectiveSharedLightingSettings().effectBrightness, 0.53125f));
 	balance.testLocationLayers.clear();
 	balance.testProfileBlend = {};
-	assert(balance.GetCommonBufferData().weatherColorPadding == 0.0f);
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+	assert(balance.GetCommonBufferData().effectBrightness == global.effectBrightness);
 	for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
 		global.effectBrightness = invalid;
 		ClampProfileSettings(global);
@@ -540,6 +541,42 @@ void CheckAmbientComposition()
 	assert(global.ambientMult == 1.0f);
 }
 
+void CheckAmbientEffectLighting()
+{
+	AdaptiveBrightness balance;
+	assert(!balance.settings.useAmbientEffectLighting);
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+	balance.settings.useAmbientEffectLighting = true;
+	balance.settings.globalProfile.effectBrightness = 0.5f;
+	balance.settings.globalProfile.skyStaticBrightness = 1.5f;
+	auto data = balance.GetCommonBufferData();
+	assert(data.useAmbientEffectLighting == 1u);
+	assert(data.effectBrightness == 0.5f && data.skyStaticBrightness == 1.5f);
+	balance.settings.globalProfile.advanced = false;
+	data = balance.GetCommonBufferData();
+	assert(data.useAmbientEffectLighting == 1u);
+	assert(data.effectBrightness == 1.0f && data.skyStaticBrightness == 1.0f);
+	balance.SetEnabled(false);
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+	assert(balance.settings.useAmbientEffectLighting);
+	balance.SetEnabled(true);
+	balance.SetPerformanceCostMeasurementEnabled(false);
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+	balance.SetPerformanceCostMeasurementEnabled(true);
+	balance.loaded = false;
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+	balance.loaded = true;
+	globals::stateValue.menuOpen = true;
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+	globals::stateValue.menuOpen = false;
+	RE::PlayerCharacter::GetSingleton()->hasCell = false;
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+	RE::PlayerCharacter::GetSingleton()->hasCell = true;
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 1u);
+	balance.settings.useAmbientEffectLighting = false;
+	assert(balance.GetCommonBufferData().useAmbientEffectLighting == 0u);
+}
+
 void CheckAtmosphereControls()
 {
 	AdaptiveBrightness balance;
@@ -666,11 +703,15 @@ void CheckAtmosphereMigrationAndValidation()
 
 	const json valid = { { "cloudBrightness", 2 }, { "cloudSaturation", 0 }, { "cloudGammaOffset", -1 },
 		{ "fogIntensity", 5 }, { "sunGlareIntensity", 0 }, { "effectBrightness", 2 }, { "skyStaticBrightness", 2 }, { "skyStaticTransparency", 1 },
-		{ "lightingAdvanced", true }, { "contrast", 1.2 }, { "saturation", 0.8 } };
+		{ "lightingAdvanced", true }, { "useAmbientEffectLighting", true }, { "contrast", 1.2 }, { "saturation", 0.8 } };
 	assert(ValidateAdaptiveBalanceVisuals(valid).empty());
 	for (const auto& [name, value] : valid.items()) {
-		if (name == "lightingAdvanced")
+		if (name == "lightingAdvanced" || name == "useAmbientEffectLighting") {
+			assert(ValidateAdaptiveBalanceVisuals({ { name, false } }).empty());
+			assert(!ValidateAdaptiveBalanceVisuals({ { name, 1 } }).empty());
+			assert(!ValidateAdaptiveBalanceVisuals({ { name, "true" } }).empty());
 			continue;
+		}
 		assert(!ValidateAdaptiveBalanceVisuals({ { name, 1000 } }).empty());
 		assert(!ValidateAdaptiveBalanceVisuals({ { name, -1000 } }).empty());
 		assert(!ValidateAdaptiveBalanceVisuals({ { name, true } }).empty());
@@ -685,6 +726,7 @@ int main()
 	CheckWeatherColors();
 	CheckWeatherBrightnessComposition();
 	CheckAtmosphereControls();
+	CheckAmbientEffectLighting();
 	CheckAtmosphereMigrationAndValidation();
 	CheckColorControls();
 	CheckAmbientComposition();

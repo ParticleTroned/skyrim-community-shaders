@@ -4,10 +4,10 @@
   "policyStatus": "provisional-calibration-v2",
   "evidenceDate": "2026-08-30",
   "baseTemplate": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-  "baseSha256": "E66F06320F1AC94204FF11752BF8498E5BB8037C5FACB701B15FD17860DC87E4",
+  "baseSha256": "8DBF4BDE20852FE86D6C66B9C415D0ACCD65CD8485C02BAB56F54B37CE4D3BD4",
   "runtimeSettingsContract": {
     "revision": 5,
-    "sourceTreeSha256": "2B3CCEC9499A013D5E7DB98DD8F855562D57B79EE2484CE36E00B17DEF59AFAF"
+    "sourceTreeSha256": "F965862019DEB06EAE6CBB8413CD95A8604167F392776B97C0AED0214BF25444"
   },
   "presetCompatibility": {
     "contractVersion": 1,
@@ -21,7 +21,7 @@
     {
       "tier": "Performance",
       "outputDirectory": "CSX Unified- Performance - Press END on PC to Customize",
-      "settingsSha256": "11439B79A3FB8671F4C114F6A81761850D860E28EB1C8C757B4D33DEDA7F560B",
+      "settingsSha256": "6D610C2EE98CC985BA432A9261B7CD896656E7EA7F5A3E31967A34B1EC002BAB",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",
@@ -32,7 +32,7 @@
     {
       "tier": "Balanced",
       "outputDirectory": "CSX Unified- Balanced - Press END on PC to Customize",
-      "settingsSha256": "E3AC8D276AA8F95DC07BB96D8CFED414E46049B13D5AA33F5EEE2119BE376875",
+      "settingsSha256": "77C9BBB810F0F9844899630B68B70C4F06B441B19545CC3DC39AD66410B3B091",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",
@@ -43,7 +43,7 @@
     {
       "tier": "Quality",
       "outputDirectory": "CSX Unified- Quality - Press END on PC to Customize",
-      "settingsSha256": "4021D8F759B878EF0D31BFD8791ABC19FFF00F38183D9396DB6B172CD1F4EF8C",
+      "settingsSha256": "647862854372AE7F54E7C48FA4054D5BEE94499F0CA4B270696AE66E022A56D6",
       "qualificationRefs": [
         "vendor-capability-selection",
         "runtime-lane-comparison",

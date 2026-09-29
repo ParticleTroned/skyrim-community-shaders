@@ -328,9 +328,10 @@ namespace SharedData
 		float cloudSaturation;
 		float fogIntensity;
 		float sunGlareIntensity;
-		float weatherColorPadding;
+		uint useAmbientEffectLighting;
 		float skyStaticTransparency;
-		float2 pad;
+		float effectBrightness;
+		float skyStaticBrightness;
 	};
 
 	struct LinearLightingSettings

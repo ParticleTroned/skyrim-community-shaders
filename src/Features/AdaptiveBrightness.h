@@ -156,6 +156,7 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
+		bool useAmbientEffectLighting = false;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
 		float transitionHours = 1.0f;
@@ -182,9 +183,10 @@ struct AdaptiveBrightness : Feature
 		float cloudSaturation;
 		float fogIntensity;
 		float sunGlareIntensity;
-		float weatherColorPadding = 0.0f;
+		uint32_t useAmbientEffectLighting;
 		float skyStaticTransparency;
-		float pad[2]{};
+		float effectBrightness;
+		float skyStaticBrightness;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 	static_assert(sizeof(PerFrameData) == 80);
@@ -194,7 +196,10 @@ struct AdaptiveBrightness : Feature
 	static_assert(offsetof(PerFrameData, saturation) == 44);
 	static_assert(offsetof(PerFrameData, cloudBrightness) == 48);
 	static_assert(offsetof(PerFrameData, fogIntensity) == 56);
+	static_assert(offsetof(PerFrameData, useAmbientEffectLighting) == 64);
 	static_assert(offsetof(PerFrameData, skyStaticTransparency) == 68);
+	static_assert(offsetof(PerFrameData, effectBrightness) == 72);
+	static_assert(offsetof(PerFrameData, skyStaticBrightness) == 76);
 
 	struct alignas(16) VanillaPointLightData
 	{

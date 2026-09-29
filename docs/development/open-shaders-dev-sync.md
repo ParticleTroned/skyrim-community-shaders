@@ -2532,6 +2532,69 @@ build, shader compilation or SE/AE/VR runtime validation ran.
 The intervening upstream 2.16.0 release commit is bookkeeping only;
 CSX release automation continues to own the local project version.
 
-Next pending decision: #801,
+### #801: stale Streamline DX12 payloads, rejected
+
+[Open Shaders #801](https://github.com/alandtse/open-shaders/pull/801),
 `45a78d7aa364918a231d65bbc2df73646498e202`,
 `build(upscaling): drop stale Streamline DX12 DLLs`.
+
+The user rejected this PR. It removes six outdated tracked Streamline
+DX12 DLLs and changes upstream's `dlssg-repro` tool to consume downloaded
+runtime payloads. Those files and that tool are absent from `main-VR`,
+which already stages downloaded runtimes through its build workflow.
+No code, DLL or packaging change was imported.
+
+### #802: editor and overlay input isolation, excluded
+
+[Open Shaders #802](https://github.com/alandtse/open-shaders/pull/802),
+`46036999dbd534ade24c11e15a0199b7aa56557a`,
+`fix(ui): isolate editor and overlay input`.
+
+The complete diff changes upstream's editor/overlay input handling,
+including its preview-flying mode. It falls under the standing OS UI
+exclusion. No implementation was imported.
+
+These decisions use the complete diffs and source comparison from the
+pinned 2.17 screening. No build or runtime test ran.
+
+### #803: ambient effect lighting, accepted adapted port
+
+[Open Shaders #803](https://github.com/alandtse/open-shaders/pull/803),
+`4ec595f3f0310e05b242c0227f34eeabad093c7f`,
+`feat(utility): add ambient lighting toggle`.
+
+The user accepted the optional lighting mode in Adaptive Balance. Add a
+default-off global `useAmbientEffectLighting` switch under
+`Global > Lighting` and DevBench `set_adaptive_balance_visuals`. Saved settings,
+global/full presets, performance-state capture and configured/effective
+status include it. Existing master, loaded, menu, player-cell and performance
+measurement gates neutralize the shader switch while retaining its selection.
+
+In-world lit effects and classified or flagged sky statics can replace
+weather lighting with ambient/IBL plus half-strength directional light.
+Reuse local lighting-space, ambient balance, sky occlusion and shadow helpers;
+retain material colours, lighting influence, point lights, fog and transparency.
+The non-lit sky path keeps the upstream terrain/cloud shadow ray rather than
+adding a scene shadow-mask dependency. VR uses eye-relative positions and
+stable shadow noise. Existing bounded effect/sky-static brightness profile
+composition drives the new mode without consuming the adjusted weather colours.
+
+Reuse three padding slots in the existing 80-byte Adaptive Balance buffer;
+all prior live-field offsets remain unchanged. Add the engine's existing
+sky-object descriptor bit to the shader flags. No E11, EHF, upstream UI,
+Scene Manager, wind, GO or NR implementation is imported. Unified presets
+explicitly retain false and refresh their source fingerprints, preserving
+compatible settings-contract revision 5.
+
+Validation: production controller-fixture extraction, registered DevBench
+JSON/schema and source-layout checks, and the unified preset generator
+regression suite passed. Scoped pre-commit hooks and changed-line
+clang-format 22.1.4 checks passed. Added controller gate/brightness/boolean
+cases and updated shader-layout assertions; these compiled tests have not
+run. DLL builds, shader compilation and SE/AE/VR runtime qualification
+remain deferred to the final sync build by user instruction. Runtime
+appearance and cost have not been measured.
+
+Next pending decision: #804,
+`2eedd983b3d315ea95fa08a9d89d00634f521c50`,
+`fix(profiling): fix grass zone stack corruption`.

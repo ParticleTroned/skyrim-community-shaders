@@ -445,6 +445,7 @@
     "SubsurfaceScatteringAmount": 1.0
   },
   "Adaptive Balance": {
+    "useAmbientEffectLighting": false,
     "dayStartHour": 9.0,
     "enabled": true,
     "globalProfile": {

@@ -114,6 +114,10 @@ Extended Materials includes the independent mesh and terrain Parallax Strength
 at its neutral value of `1.0` in every tier. Legacy settings without the key
 also retain neutral depth; this additive default retains contract revision 5.
 
+Ambient Lighting for Effects and Sky Statics is explicitly off in all
+three tiers. Its additive default preserves existing settings-contract
+revision 5 and weather-based lighting until enabled in Adaptive Balance.
+
 ## CSX compatibility contract
 
 The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`

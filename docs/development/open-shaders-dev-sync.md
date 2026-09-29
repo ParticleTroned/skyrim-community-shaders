@@ -2444,6 +2444,38 @@ record and checks both preservation and invalidation. Neither controller
 target was compiled or executed; runtime and physical-HMD qualification
 remain pending. No measured ledger or Build ID was created.
 
-Next pending decision: #785,
+### #785: NMLFF compatibility conflict, accepted
+
+[Open Shaders #785](https://github.com/alandtse/open-shaders/pull/785),
 `d628f69960c956fc30b6bdddb2d83f50c8f5315a`,
 `fix(compat): identify NMLFF conflict`.
+
+The user accepted this port. Add `NativeMeshLightFlickerFix.dll` to the
+existing incompatible-plugin list with upstream's explanation that Light
+Limit Fix supersedes it and both replace the same lighting hooks. CSX's
+LLF already owns lighting setup, and the list lacked this conflict.
+
+Reuse the existing startup probe and diagnostic path for SE, AE and VR.
+A detected incompatible plugin prevents CSX hook/feature initialization;
+the conflict is not merely an informational notice. Do not add a second
+loader check, change detection semantics or alter LLF rendering.
+Source review confirmed that the existing consumer displays the supplied
+reason. Builds and runtime validation remain deferred.
+
+Validation: `pwsh ./tools/pre-commit.ps1 run --files src/Compatibility.h docs/development/open-shaders-dev-sync.md`
+passed whitespace, line-ending, clang-format and Prettier hooks; YAML and
+CMake hooks had no applicable files. `git diff --check` passed.
+
+### #796: Grass Optimizations release metadata, deferred
+
+[Open Shaders #796](https://github.com/alandtse/open-shaders/pull/796),
+`c4172f49a374f083b164b3753eff01201f0c937b`,
+`chore(grass): release Grass Optimizations`.
+
+The complete diff only removes `Beta = True` from the Grass Optimizations
+feature manifest. It falls under the standing GO deferral and contains
+no useful change outside GO. No code or metadata is imported.
+
+Next pending decision: #797,
+`e210f6c2d0c58b7a56bb8e17a8b461f5c741a7f1`,
+`chore(vr): disable dynamic near clip by default`.

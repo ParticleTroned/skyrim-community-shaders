@@ -96,7 +96,8 @@ public:
 		float ProbeArrayWorldSize;
 		uint SliceStart;
 		uint SliceCount;
-		uint _pad4[2];
+		uint ShadowDataAvailable;
+		uint _pad4;
 	};
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
@@ -199,12 +200,14 @@ private:
 	void CreateProbeResources(const std::array<uint, 3>& dimensions);
 	void ApplyProbeGrid();
 	uint activeProbeGridQuality = 2;
+	bool HasShadowData() const;
 	uint32_t* GetRasterCullMode() const;
 	void BeginInteriorOcclusionGeometry();
 	void EndInteriorOcclusionGeometry();
 
 	uint lastOcclusionRenderFrame = static_cast<uint>(-1);
 	std::optional<bool> previousInteriorState;
+	bool previousShadowDataAvailable = true;
 	bool forceInteriorOcclusionTwoSided = false;
 	uint32_t savedRasterCullMode = 0;
 	uint32_t rasterCullOverrideDepth = 0;

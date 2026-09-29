@@ -144,7 +144,7 @@ static const float3 noise3D[32] = {
 			shadowSample = lerp(1.0, shadowSample, fadeFactor);
 		}
 
-		uint bitmask = isValid ? outShadowBitmask[probeTexID] : 0;
+		uint bitmask = isValid ? outShadowBitmask[probeTexID] : 0xFFFFFFFFu;
 		bitmask = (bitmask << 1) | (shadowSample > 0.5 ? 1u : 0u);
 
 		outShadowBitmask[probeTexID] = bitmask;
@@ -152,7 +152,7 @@ static const float3 noise3D[32] = {
 		float shadow = float(countbits(bitmask)) / 32.0;
 		outShadowVisibility[probeTexID] = shadow;
 	} else if (!isValid) {
-		outShadowBitmask[probeTexID] = 0;
+		outShadowBitmask[probeTexID] = 0xFFFFFFFFu;
 		outShadowVisibility[probeTexID] = 1.0;
 	}
 #endif

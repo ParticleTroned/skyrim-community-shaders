@@ -126,32 +126,42 @@ void Skylighting::DrawSettings()
 		if (ImGui::Checkbox(T(TKEY("reduced_frequency"), "Reduced Update Frequency"), &settings.EnableReducedUpdateFrequency))
 			ResetSkylighting();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("reduced_frequency_tooltip"), "Reduces capture and probe update frequency while stationary. Movement and rebuilds bypass the delays."));
-		int captureInterval = static_cast<int>(settings.OcclusionUpdateInterval);
-		int probeInterval = static_cast<int>(settings.ProbeUpdateInterval);
-		bool cadenceChanged = ImGui::SliderInt(T(TKEY("capture_interval"), "Occlusion Capture Interval"), &captureInterval, 1, 32, "%d frames", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("capture_interval_tooltip"), "Higher intervals reduce capture work but refresh lighting more slowly. Requires Reduced Update Frequency."));
-		cadenceChanged |= ImGui::SliderInt(T(TKEY("probe_interval"), "Full-grid Probe Interval"), &probeInterval, captureInterval, 32, "%d frames", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("probe_interval_tooltip"), "Higher intervals reduce full-grid update work but refresh lighting more slowly. Used only with reduced frequency on and incremental updates off."));
-		if (cadenceChanged) {
-			settings.OcclusionUpdateInterval = static_cast<uint>(captureInterval);
-			settings.ProbeUpdateInterval = static_cast<uint>(std::max(captureInterval, probeInterval));
-			ResetSkylighting();
+			ImGui::Text("%s", T(TKEY("reduced_frequency_tooltip"), "Allows longer capture and probe intervals while stationary. Increase an interval above 1 for savings; movement and rebuilds bypass the delays."));
+		{
+			auto cadenceGuard = Util::DisableGuard(!settings.EnableReducedUpdateFrequency);
+			int captureInterval = static_cast<int>(settings.OcclusionUpdateInterval);
+			int probeInterval = static_cast<int>(settings.ProbeUpdateInterval);
+			bool cadenceChanged = ImGui::SliderInt(T(TKEY("capture_interval"), "Occlusion Capture Interval"), &captureInterval, 1, 32, "%d frames", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("capture_interval_tooltip"), "Minimum frames between captures while stationary. Higher values reduce work but slow lighting refresh. Requires Reduced Update Frequency."));
+			{
+				auto probeIntervalGuard = Util::DisableGuard(settings.EnableIncrementalProbeUpdates);
+				cadenceChanged |= ImGui::SliderInt(T(TKEY("probe_interval"), "Full-grid Probe Interval"), &probeInterval, captureInterval, 32, "%d frames", ImGuiSliderFlags_AlwaysClamp);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("probe_interval_tooltip"), "Minimum frames between full-grid updates; fresh captures can delay updates further. Requires Reduced Update Frequency with Incremental Probe Updates off."));
+			}
+			if (cadenceChanged) {
+				settings.OcclusionUpdateInterval = static_cast<uint>(captureInterval);
+				settings.ProbeUpdateInterval = static_cast<uint>(std::max(captureInterval, probeInterval));
+				ResetSkylighting();
+			}
 		}
 
 		if (ImGui::Checkbox(T(TKEY("incremental_updates"), "Incremental Probe Updates"), &settings.EnableIncrementalProbeUpdates))
 			ResetSkylighting();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("incremental_updates_tooltip"), "Updates part of the probe grid per capture while stationary. Movement and rebuilds update the full grid."));
-		int sliceCount = static_cast<int>(settings.StableSliceCount);
-		if (ImGui::SliderInt(T(TKEY("slice_count"), "Probe Slices per Update"), &sliceCount, 1, 128, "%d", ImGuiSliderFlags_AlwaysClamp)) {
-			settings.StableSliceCount = static_cast<uint>(sliceCount);
-			ResetSkylighting();
+		{
+			auto sliceGuard = Util::DisableGuard(!settings.EnableIncrementalProbeUpdates);
+			const auto maxSliceCount = GetProbeArrayDims(settings.ProbeGridQuality)[2];
+			int sliceCount = static_cast<int>(std::clamp(settings.StableSliceCount, 1u, maxSliceCount));
+			if (ImGui::SliderInt(T(TKEY("slice_count"), "Probe Slices per Update"), &sliceCount, 1, static_cast<int>(maxSliceCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+				settings.StableSliceCount = static_cast<uint>(sliceCount);
+				ResetSkylighting();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("incremental_tooltip"), "Lower counts reduce update work but slow field refresh. Capped at the selected grid depth; requires Incremental Probe Updates."));
 		}
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("incremental_tooltip"), "Lower slice counts reduce update work but take longer to refresh the whole field. Requires Incremental Probe Updates."));
 
 		const char* gridNames[] = {
 			T(TKEY("probe_grid_low"), "128 x 128 x 64"),

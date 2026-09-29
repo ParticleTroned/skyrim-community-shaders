@@ -59,3 +59,19 @@ and desktop Present between eyes.
 There are no new measurements to publish in the
 [numbered ledger](vr-render-scale-ledger.md). Historical measurements and
 producer identities remain unchanged.
+
+## Dispatch-result review correction
+
+Adversarial review of `4a5d6f0cd9f8244c3a2f51e34c3f9ed7b420ad2a`
+found that the low-level TAA dispatch could return without writing history
+while its adapter still reported success. It now returns false on all
+existing readiness/region guards and forwards that result through the
+composite's failure path. Success follows dispatch and compute unbinding,
+so the continuity record is not committed after an aborted history write.
+
+The normal dispatch math, resources, frame/cycle ownership and reset
+policy are unchanged. Source propagation checks and fixture extraction
+passed. Compiled fault-injection tests, runtime transitions and performance
+qualification remain pending under the user's no-build instruction.
+No new measurement ledger or runtime pass is claimed; see the
+[complete port review](open-shaders-217-adversarial-review.md).

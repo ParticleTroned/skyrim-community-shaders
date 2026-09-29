@@ -72,3 +72,57 @@ Validation without shader compilation:
     shader formatting is skipped to preserve unrelated legacy formatting.
 -   DXBC comparison, runtime A/B and GPU timing remain deferred. The change
     removes avoidable work by inspection; no measured speedup is claimed.
+
+## Periphery dispatch failure propagation
+
+Original commit: `4a5d6f0cd9f8244c3a2f51e34c3f9ed7b420ad2a` (#791).
+
+The committed-history policy relies on a successful eye composite meaning
+that the periphery history was written. Its existing low-level dispatch
+returned void on nine missing-resource or invalid-region guards, while the
+adapter always returned true. That leaves the new continuity record unable
+to distinguish an aborted dispatch from a history write.
+
+Return false from those guards and true only after issuing the dispatch
+and unbinding its compute resources. Forward that result through the
+existing tile-list and fallback-rectangle failure handling, which prevents
+the composite from reaching the history commit on failure. Mark the helper
+nodiscard. Preserve all guards, dimensions, stereo ownership and normal
+render scheduling; no new resources or passes are introduced.
+
+Validation without compilation: a source audit checked all nine failure
+returns before binding, the sole success return after dispatch/unbind,
+and propagation through both existing failure routes. It also verified
+that guard and dispatch calculations are otherwise identical. Production
+FoveatedSaveReuse and Adaptive Balance fixtures extracted successfully;
+this is not a compiled-test pass. Changed-line formatting and diff checks
+passed. Fault-injection, compiled controllers and runtime qualification
+remain pending; no performance measurement was made.
+
+## Coverage and remaining limits
+
+| Original port    | Scope and review result                                                                                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #792 `9b7818e97` | Existing utility binds the same b5/b6 buffers with null checks; no allocation or extra pass. No issue found.                                                                                   |
+| #791 `4a5d6f0cd` | Reviewed both dispatch routes, four reset sites, resource contracts, frame/cycle continuity and stereo commit ownership. Dispatch-result gap corrected above.                                  |
+| #785 `eedb801d0` | Startup conflict entry uses the established checker and explains LLF hook ownership. No steady-frame work or new runtime-specific hook. No issue found.                                        |
+| #794 `cf67b03b3` | All three grass motion-vector writes preserve XY and provide explicit Z/alpha in existing render targets. No extra texture samples or passes. No issue found.                                  |
+| #803 `c20bcd836` | Global persistence/presets, default-off runtime gates, DevBench schema, 80-byte CPU/HLSL layout, point lights and sky resource availability reviewed. Avoidable lighting work corrected above. |
+| #810 `724adb74c` | Four guards reuse the shared Interior Sun availability flag and existing masks. Extra interior shadow work is the requested correction; no duplicate pass. No issue found.                     |
+| #806 `e6fb4ff9d` | Pin/hash/protocol, core versus tool features, dependency scope and Release tool paths reviewed. Revision header integration corrected above.                                                   |
+| #819 `80193fb46` | Capture follows time-jump handling and precedes current-frame caster handoff. Reset/invalid state, world rotation, fallback and selected-direction refresh reviewed. No issue found.           |
+
+The Tracy client delta moves instrumented unlock bookkeeping before the
+native unlock and renames the corresponding C entry points. No local
+consumer of those lock-wrapper or renamed C APIs was found. Keep that
+upstream correctness change; the tool-header fix does not alter client
+instrumentation. Protocol 83 still needs matched rebuilt binaries.
+
+No excluded wind, GO, Scene Manager, E11/EHF/SLF, translation, upstream UI
+or upstream NR implementation was introduced. Existing shader/serialization
+and D3D helpers are reused, and no new graphics resource requires naming.
+The existing tests cover policy and layout portions, but rendering and
+performance are not qualified by source review. Shader compilation/DXBC,
+DLL/controller/tool builds, SE/AE/VR runtime checks and matched GPU/CPU
+measurements remain outstanding. The three follow-up changes are source
+review fixes, not evidence of a measured frame-time improvement.

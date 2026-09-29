@@ -2822,6 +2822,33 @@ compiled tests or runtime rendering validation were run, per the user's
 end-of-sync build instruction. Sunrise/sunset, sun/moon handoffs and
 disable/re-enable behavior still require final runtime validation.
 
-Next pending decision: #820,
+### #820: ACEScg skin tinting, rejected
+
+[Open Shaders #820](https://github.com/alandtse/open-shaders/pull/820),
 `1bdf8aab35a7ca60b69e5051e8df93c9ea0464ee`,
 `fix(lighting): correct ACEScg skin tinting`.
+
+The user selected **r** after correction of the initial recommendation.
+Upstream converts face colour from AP1 to linear sRGB for gamma-space
+face tinting, then restores its working gamut. Local Color::Diffuse only
+performs gamma conversion and diffuse scaling; it never transforms this
+base colour into AP1. Both local FACEGEN paths already use sRGB primaries.
+No ACEScg/AP1 working-gamut implementation or independent local correction
+was found. No code imported.
+
+### Pinned 2.17 review complete
+
+All 27 PR decisions are resolved: eight accepted ports, eight rejections
+and eleven standing exclusions or deferrals. Release-only bookkeeping
+ends the range at `74f95a4d7f52c5f61edf6267ebca813a94bbc71a` (2.17.0).
+This is the pinned endpoint, not a claim about subsequent live upstream
+changes. Accepted ports are on main-VR.
+
+The user interrupted the preliminary final build and requested an
+[adversarial review of all eight ports](open-shaders-217-adversarial-review.md)
+before any further build. Configure completed and compilation/linking
+began, but no successful final build or completed tests are claimed.
+Three separate follow-up corrections cover Tracy revision headers,
+zero-contribution ambient-effect work and periphery dispatch failure
+propagation. Each commit body identifies its original implementation;
+shader/DLL/tool builds and runtime/performance qualification remain pending.

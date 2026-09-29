@@ -593,6 +593,11 @@ float3 GetAmbientEffectLighting(float3 worldPosition, float2 screenPosition, uin
 #	endif
 	float3 ambientColor = Color::ApplyAmbientBalance(GetEffectAmbientLighting(skylightingDiffuse));
 	float3 dirColor = ShadowSampling::GetDirectionalLighting() * EffectDirectionalLightScale;
+	[branch] if (!any(dirColor != 0.0))
+	{
+		shadowVariance = 1.0;
+		return ambientColor;
+	}
 	float3 viewDirection = worldPosition / max(length(worldPosition), 1e-5);
 	float shadow = 1.0;
 #	if defined(LIGHTING)
@@ -637,13 +642,22 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
 
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
-	if (UseAmbientEffectLighting()) {
+	[branch] if (UseAmbientEffectLighting())
+	{
 		const bool isSkyObject = Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject;
 		float brightness = isSkyObject ? SharedData::adaptiveBalanceSettings.skyStaticBrightness : SharedData::adaptiveBalanceSettings.effectBrightness;
-		color = GetAmbientEffectLighting(worldPosition, screenPosition, eyeIndex, 0.0, shadowVariance) * brightness * Color::EffectLightingMult();
-	} else if (suppressExternalEmittance) {
+		color = 0.0;
+		[branch] if (LightingInfluence.x != 0.0 && brightness != 0.0 && Color::EffectLightingMult() != 0.0)
+		{
+			color = GetAmbientEffectLighting(worldPosition, screenPosition, eyeIndex, 0.0, shadowVariance) * brightness * Color::EffectLightingMult();
+		}
+	}
+	else if (suppressExternalEmittance)
+	{
 		color = ShadowSampling::GetSceneLightingColor();
-	} else if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows)) {
+	}
+	else if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows))
+	{
 		float3 dirLightColor;
 		float3 ambientColor;
 		ExtractEffectLighting(color, dirLightColor, ambientColor, GetEffectSkylightingDiffuse(worldPosition, eyeIndex));
@@ -655,7 +669,9 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		} else {
 			color = ambientColor + dirLightColor;
 		}
-	} else {
+	}
+	else
+	{
 #		if defined(SKYLIGHTING)
 		if (!SharedData::InInterior) {
 			float skylightingDiffuse = GetEffectSkylightingDiffuse(worldPosition, eyeIndex);
@@ -865,23 +881,27 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	const bool isSkyStatic = false;
 #	endif
-#	if !defined(LIGHTING) && !defined(MEMBRANE)
-	if (UseAmbientEffectLighting() && (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject))) {
-#		if defined(SOFT)
-		float maxShadowDistance = max(0.0, SharedData::GetScreenDepth(depth));
-#		else
-		float maxShadowDistance = 0.0;
-#		endif
-		float3 ambientLighting = GetAmbientEffectLighting(input.WorldPosition.xyz, input.Position.xy, eyeIndex, maxShadowDistance, shadowVariance);
-		lightColor = lerp(baseColor.xyz, baseColor.xyz * ambientLighting * SharedData::adaptiveBalanceSettings.skyStaticBrightness, lightingInfluence);
-	}
-#	endif
 	const float skyStaticTransparency = isSkyStatic ? SharedData::adaptiveBalanceSettings.skyStaticTransparency : 0.0;
 	if (isSkyStatic) {
 		if (skyStaticTransparency == 1.0)
 			discard;
 	}
-
+#	if !defined(LIGHTING) && !defined(MEMBRANE)
+	[branch] if (UseAmbientEffectLighting() && lightingInfluence != 0.0 && (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject)))
+	{
+#		if defined(SOFT)
+		float maxShadowDistance = max(0.0, SharedData::GetScreenDepth(depth));
+#		else
+		float maxShadowDistance = 0.0;
+#		endif
+		float3 ambientLighting = 0.0;
+		[branch] if (SharedData::adaptiveBalanceSettings.skyStaticBrightness != 0.0)
+		{
+			ambientLighting = GetAmbientEffectLighting(input.WorldPosition.xyz, input.Position.xy, eyeIndex, maxShadowDistance, shadowVariance);
+		}
+		lightColor = lerp(baseColor.xyz, baseColor.xyz * ambientLighting * SharedData::adaptiveBalanceSettings.skyStaticBrightness, lightingInfluence);
+	}
+#	endif
 #	if !defined(MOTIONVECTORS_NORMALS)
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
 		discard;

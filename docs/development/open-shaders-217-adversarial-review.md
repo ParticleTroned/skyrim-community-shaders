@@ -43,3 +43,32 @@ Validation without compilation:
 -   The same audit with the source-pin override passed for all seven tools,
     including repeated configuration, and checked every generated revision.
 -   Full tool builds and live protocol/capture validation remain unrun.
+
+## Ambient-effect work without a visible contribution
+
+Original commit: `c20bcd836558851971d43ba8d44b0ba4272ac833` (#803).
+
+The new lighting mode evaluated ambient/IBL and filtered shadows even
+when effect brightness, the Effects multiplier or lighting influence was
+zero. Sky statics likewise traced world shadows before their full-hide
+discard. Directional shadow work was also unnecessary when the directional
+light contribution was exactly zero.
+
+Keep uniform branches around the optional mode and its zero-contribution
+cases. Preserve the unlit fraction when lighting influence is partial and
+retain point-light accumulation. Discard fully hidden sky statics before
+their new lighting work; return ambient lighting directly when there is
+no directional contribution. Nonzero lighting calculations, shadow sample
+counts, shader layouts and settings remain unchanged.
+
+Validation without shader compilation:
+
+-   A source audit checked the branch guards and early-discard ordering.
+-   An algebra audit checked 1,296 scalar combinations of influence,
+    brightness, Effects multiplier, shadow, ambient, directional, base colour
+    and point light; original and guarded compositions agreed. This checks
+    the zero-case reasoning, not compiled GPU execution.
+-   Changed-line clang-format 22.1.4 and `git diff --check` passed. Full-file
+    shader formatting is skipped to preserve unrelated legacy formatting.
+-   DXBC comparison, runtime A/B and GPU timing remain deferred. The change
+    removes avoidable work by inspection; no measured speedup is claimed.

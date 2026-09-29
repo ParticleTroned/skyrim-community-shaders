@@ -2476,6 +2476,62 @@ The complete diff only removes `Beta = True` from the Grass Optimizations
 feature manifest. It falls under the standing GO deferral and contains
 no useful change outside GO. No code or metadata is imported.
 
-Next pending decision: #797,
+### #797: dynamic near-clip default, rejected
+
+[Open Shaders #797](https://github.com/alandtse/open-shaders/pull/797),
 `e210f6c2d0c58b7a56bb8e17a8b461f5c741a7f1`,
 `chore(vr): disable dynamic near clip by default`.
+
+The user rejected this PR. It changes upstream's `DynamicNearClip`
+default from enabled to disabled and updates the corresponding example.
+CSX `main-VR` has neither that near-clip controller nor its setting, so
+there is no applicable local default to change. No code was imported.
+
+### #767: tiered wind sampling API, excluded
+
+[Open Shaders #767](https://github.com/alandtse/open-shaders/pull/767),
+`3aa48d435daff1e28cf3892a03f5f1b46dd5a392`,
+`feat(wind): add tiered wind sampling API`.
+
+This falls under the standing exclusion of the new wind system. Its
+shared public API edits expose that wind sampling; the implementation
+and callers belong to the excluded system. The screening found no
+independent applicable fix outside it. No code was imported.
+
+Both decisions use the source comparison and upstream diffs from the
+pinned 2.17 screening. No build or runtime test ran.
+
+### #794: grass motion-vector alpha, accepted partial port
+
+[Open Shaders #794](https://github.com/alandtse/open-shaders/pull/794),
+`2ac27bd9906035e53f8f06dbf863763daa4db660`,
+`feat(wind): refine grass flutter and gusts`.
+
+The user accepted only the independent motion-vector alpha correction.
+Both `RunGrass.hlsl` non-depth output layouts now declare `MotionVectors`
+as `float4`, and both producers write the existing velocity in XY with
+Z = 0 and alpha = 1. This supplies an explicit source alpha to the
+deferred motion-vector blend state, which uses `SRC_ALPHA` and
+`INV_SRC_ALPHA` whenever blending is enabled.
+
+Cover both Grass Lighting and `RenderBasicGrass`, including the
+runtime-disabled Grass Lighting path. Preserve the current/previous
+position calculation, per-eye index, depth-only permutations and
+render-target assignments across SE, AE and VR. No wind sampling,
+flutter, gust, wind-history, GO or upstream UI changes are imported.
+
+Validation: `pwsh ./tools/pre-commit.ps1 run --files package/Shaders/RunGrass.hlsl docs/development/open-shaders-dev-sync.md`
+passed whitespace, line-ending, clang-format and Prettier hooks; YAML
+and CMake hooks had no applicable files. `git diff --check` passed.
+A source equality audit confirmed exactly two output declarations and
+two writes changed, with every other shader byte unchanged after newline
+normalization. Source review checked the shared basic-grass fallback,
+both runtime branches and the existing source-alpha blend state. No
+build, shader compilation or SE/AE/VR runtime validation ran.
+
+The intervening upstream 2.16.0 release commit is bookkeeping only;
+CSX release automation continues to own the local project version.
+
+Next pending decision: #801,
+`45a78d7aa364918a231d65bbc2df73646498e202`,
+`build(upscaling): drop stale Streamline DX12 DLLs`.

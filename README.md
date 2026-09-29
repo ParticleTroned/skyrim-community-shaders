@@ -143,8 +143,23 @@ If you want an example CMakeUserPreset to start off with you can copy the `CMake
 #### TRACY_SUPPORT
 
 -   This option is default `"OFF"`
--   This will enable tracy support, might need to delete build folder when this option is changed
--   The client is pinned to Tracy protocol v82 (`ef099b05`); use a protocol-v82 profiler because protocol-v81 tools cannot connect
+-   Enables Tracy instrumentation in the DLL. Reconfigure after changing it.
+-   The client is pinned to Tracy `0.14.2-a8db9bd8`, protocol **83**. Capture and viewer tools must use the same protocol.
+-   The `ALL-TRACY` configure preset also selects the `tracy-tools` manifest feature, building the CLI tools and viewer from the same pinned source. Custom presets can select `VCPKG_MANIFEST_FEATURES=tracy-tools` alongside `TRACY_SUPPORT=ON`.
+
+To build the matched profiling configuration:
+
+```powershell
+pwsh ./tools/cmake.ps1 --preset ALL-TRACY
+pwsh ./tools/cmake.ps1 --build build/ALL-TRACY --config Release --target CommunityShaders
+```
+
+With the default install layout, use `tracy-capture.exe`, `tracy-csvexport.exe`
+and `tracy-profiler.exe` under
+`build/ALL-TRACY/vcpkg_installed/x64-windows-static-md/tools/tracy`.
+The tools build in Release; production presets keep them optional and keep
+Tracy instrumentation disabled. Existing binaries remain at their original
+protocol until rebuilt, so retain their matched tools for older captures.
 
 When using custom preset you can call BuildRelease.bat with an parameter to specify which preset to configure eg:
 `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`

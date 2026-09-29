@@ -115,7 +115,8 @@
         {
             "name": "ALL-TRACY",
             "cacheVariables": {
-                "TRACY_SUPPORT": "ON"
+                "TRACY_SUPPORT": "ON",
+                "VCPKG_MANIFEST_FEATURES": "tracy-tools"
             },
             "inherits": "ALL"
         },

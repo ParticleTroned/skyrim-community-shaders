@@ -2668,6 +2668,55 @@ support upstream's editor/Scene Manager UI. No independent renderer fix
 was found in the shared UI helper changes. Excluded under the standing
 Scene Manager, upstream UI and translation rules.
 
-Next pending decision: #806,
+### #806: Tracy protocol 83, accepted adapted tooling port
+
+[Open Shaders #806](https://github.com/alandtse/open-shaders/pull/806),
 `ddeacbda6bc97cc3229f43d678e8200e824e4938`,
 `build(deps): bump tracy vcpkg pin for protocol v83`.
+
+The user accepted the dependency update with accurate version metadata and
+matched capture/viewer tooling. Pin the overlay to
+`a8db9bd8445343ee171439b9479c0a594183bf62` and its verified archive SHA-512;
+both version declarations use `0.14.2-a8db9bd8`. The pinned source reports
+version 0.14.2 and protocol 83, replacing protocol 82. The 21-commit range
+also changes two client source files, so this is not a server-only update.
+
+The existing overlay declared CLI/viewer features but neither applied its
+tools patch nor selected its build options. Connect those features and
+refresh the patch against the pinned source. A separate tools directory
+owns shared dependencies with statistics and optional GUI support before
+adding the individual applications. This prevents missing GUI targets,
+duplicate common targets and profiler-only compiler flags leaking into
+the client build. Copy the Release tools, including the capture daemon,
+to the standard vcpkg tools directory and clean their package-bin copies.
+Debug builds retain only the client.
+
+The opt-in `tracy-tools` manifest feature selects both CLI and viewer tools;
+the existing `ALL-TRACY` preset selects it alongside instrumentation.
+Production presets remain unchanged. README and architecture instructions
+describe the matched source, protocol and executable locations. Existing
+installed tools/DLLs have not been replaced or rebuilt during this sync.
+
+Validation: downloaded-source SHA-512 and patch application checks passed.
+Version/preset checks and a non-building CMake audit exercised the real
+port with vcpkg feature mapping for core-only, CLI-only, GUI-only and
+combined selections. All four selected the expected Release tools and
+disabled Debug tools. A vcpkg `install --dry-run` resolved the complete
+matched configuration to `0.14.2-a8db9bd8` without building packages.
+Scoped pre-commit hooks and `git diff --check` passed. DLL/tool builds,
+live protocol compatibility and capture validation remain deferred until
+the final build by user instruction.
+
+### #814: upstream release-stage UI helpers, excluded
+
+[Open Shaders #814](https://github.com/alandtse/open-shaders/pull/814),
+`bd821a447b9c69b1826c31f71a978017941345e5`,
+`feat(ui): add reusable release-stage tag helpers`.
+
+This moves upstream feature-menu release-stage labels and colours into
+shared UI helpers. No renderer behavior changes. Excluded under the
+standing upstream UI rule.
+
+Next pending decision: #811,
+`951220acc4c190dc478c9f10cbaa4c05fedba429`,
+`perf(post-processing): DoF and blur pre-upscale`.

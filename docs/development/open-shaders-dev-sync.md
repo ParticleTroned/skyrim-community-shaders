@@ -2317,3 +2317,71 @@ The DLL is 29,109,760 bytes, SHA-256
 This integration record is the only tracked change after that validation.
 No game deployment, SE/AE/VR runtime test, headset qualification or push
 was performed. The primary checkout remains on `main-VR`.
+
+## Review resumed through Open Shaders 2.17.0 (2026-09-29)
+
+Resume after #789 at `af8134814a17073971628f59c132b196939889ce`.
+The fetched Open Shaders `main` and `dev` both point to
+`74f95a4d7f52c5f61edf6267ebca813a94bbc71a`, release 2.17.0.
+This range contains 27 merged PRs and two release commits. Review PRs in
+first-parent integration order and retain the existing exclusions, adding
+upstream Neural Rendering because CSX maintains its own on `main-vr-nr`.
+Inspect mixed PRs for useful changes outside excluded features.
+
+The user directed that accepted ports go directly onto `main-VR`.
+Use its existing checkout at `build/worktrees/main-vr-feature-metadata`,
+starting at `d53ba287d69dec693a107fbd834e36df1ef95b72`.
+Keep builds deferred until the end and obtain each `i` or `r` decision
+before implementing that candidate.
+
+### #793: shared PerfMode output check, rejected
+
+[Open Shaders #793](https://github.com/alandtse/open-shaders/pull/793),
+`9810152c2a38f54c76a8a2184b70672b2c9f9657`,
+`refactor(upscaling): share PerfMode output check`.
+
+The user rejected this PR. It extracts the repeated upstream PerfMode
+hook-active and test-texture check into `IsPresentingTestTexture()`.
+CSX uses a different presentation pipeline and has no `GetTestTexture()`
+or `IsPresentingTestTexture()` call sites. The helper and its callers
+provide no independent local change. No runtime code was imported.
+
+Evidence: reviewed the complete upstream diff and searched the local
+source for both symbols. No build, shader compilation or runtime test
+ran for this decision.
+
+### #792: shared compute buffer binding, accepted partial port
+
+[Open Shaders #792](https://github.com/alandtse/open-shaders/pull/792),
+`6419c39b7d1fa728603ab406f06667937aec36e2`,
+`refactor: share SharedData compute CB binding`.
+
+The user accepted the proposed partial port. Replace the remaining
+manual shared-buffer binding in `DynamicCubemaps::UpdateCubemap()` with
+`Util::BindSharedDataConstantBuffersForCS(context)`. The helper already
+binds shared and feature data at compute slots b5 and b6, in that order,
+and handles missing context, state or buffers. Its header is already
+included. This preserves the normal binding behavior for SE, AE and VR
+without changing resource ownership, dispatches or shader permutations.
+
+Do not introduce upstream's parallel `State::BindSharedDataCS()` helper.
+Other applicable callers already use our centralized binding utilities;
+upstream EHF, wind and PostProcessing callers remain outside this port.
+
+Validation: source comparison confirmed the same buffer order, slots and
+count. A full source search leaves the direct compute-slot b5 binding only
+inside the shared helper. The following checks passed:
+
+-   `pwsh ./tools/pre-commit.ps1 run --files src/Features/DynamicCubemaps.cpp docs/development/open-shaders-dev-sync.md`
+    passed whitespace, line-ending, clang-format and Prettier hooks;
+    YAML and CMake hooks had no applicable files.
+-   `pwsh ./tools/git.ps1 diff --check` passed.
+-   `pwsh ./tools/dev-doctor.ps1 -Network` reported zero failures and
+    zero warnings. The initial sandboxed hook attempt could not write
+    its Git cache database; the approved retry passed.
+
+Builds, shader compilation and runtime validation remain deferred.
+
+Next pending decision: #790,
+`5a2421dcbfdafaf9639d6927bd13871c01d1349d`,
+`fix(upscaling): run foveated route in pause menus`.

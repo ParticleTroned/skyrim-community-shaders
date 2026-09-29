@@ -2595,6 +2595,79 @@ run. DLL builds, shader compilation and SE/AE/VR runtime qualification
 remain deferred to the final sync build by user instruction. Runtime
 appearance and cost have not been measured.
 
-Next pending decision: #804,
+### #804: grass profiler zone lifetime, rejected
+
+[Open Shaders #804](https://github.com/alandtse/open-shaders/pull/804),
 `2eedd983b3d315ea95fa08a9d89d00634f521c50`,
 `fix(profiling): fix grass zone stack corruption`.
+
+The user rejected this PR. Upstream's member-held grass profiler scope
+spans multiple calls and violates Tracy's CPU-zone nesting requirements.
+`main-VR` has neither `grassGpuPass` nor `UpdateGrassGpuPass`; its
+`ScopedGpuPass` instances use local scopes. The new upstream `Spanning`
+mode has no local consumer. No implementation was imported.
+
+### #807: upstream post-processing output and presets, rejected
+
+[Open Shaders #807](https://github.com/alandtse/open-shaders/pull/807),
+`416f70f6d90593a893eaf1e51e2710b3747f3cdd`,
+`fix(post-processing): retain VR output and presets`.
+
+The user rejected this PR. Its resource sizing, full-resolution output
+handoff and preset retention fixes belong to upstream's PostProcessing
+pipeline. The shared Feature/Upscaling interface changes connect that
+pipeline to upstream's provided-input PerfMode path. Neither that
+PostProcessing implementation nor those provider interfaces exists in
+`main-VR`; local render-scale/post-processing paths are separate. No
+independent Adaptive Balance fix was found, and no code was imported.
+
+### #810: grass directional-shadow availability, accepted partial port
+
+[Open Shaders #810](https://github.com/alandtse/open-shaders/pull/810),
+`c9e628dc5c96199c71d7a2a12fb7002ac69807a9`,
+`fix(grass): restore PBR directional shadows`.
+
+The user accepted the independent availability check for both local grass
+paths. Replace four blanket interior exclusions in `RunGrass.hlsl` with
+the existing `ShadowSampling::HasDirectionalShadows()` helper: shadow-mask
+selection and the directional-detail block in both `RenderBasicGrass`
+and Grass Lighting. Runtime-disabled Grass Lighting also uses the basic
+path. The CPU already publishes this flag for exteriors and active
+Interior Sun; ordinary interiors retain unshadowed directional light.
+
+Preserve local shadow-mask sampling, scattering predicates, per-eye
+positions and the existing world-shadow/caustics logic. No upstream
+PBR-specific directional-shadow replacement or GO branch is imported.
+No resources, settings or runtime-specific code paths are added.
+
+Validation: a source comparison against the parent revision confirmed
+exactly the four intended guard substitutions and no other shader edits.
+The existing CPU-to-shader availability contract and basic-path fallback
+were checked. Scoped pre-commit hooks and `git diff --check` passed.
+Shader compilation, DLL builds and SE/AE/VR visual validation remain
+deferred until the end of sync by user instruction.
+
+### #809: Scene Manager tonemapping catalog, excluded
+
+[Open Shaders #809](https://github.com/alandtse/open-shaders/pull/809),
+`69c87160dd514c663e1dfa868876c1866841be99`,
+`feat(scene-manager): expose tonemapping settings`.
+
+This only exposes existing settings through the Scene Manager catalog,
+policy and catalog tests. It adds no tonemapping math or independent
+Adaptive Balance control. Excluded under the standing Scene Manager rule.
+
+### #808: Scene Manager feature filter, excluded
+
+[Open Shaders #808](https://github.com/alandtse/open-shaders/pull/808),
+`b6f8ed809f37d8ea5d67339aff57acdf457330cf`,
+`feat(scene-manager): filter scenes by feature`.
+
+The scene filtering, translations and searchable-combo scroll restoration
+support upstream's editor/Scene Manager UI. No independent renderer fix
+was found in the shared UI helper changes. Excluded under the standing
+Scene Manager, upstream UI and translation rules.
+
+Next pending decision: #806,
+`ddeacbda6bc97cc3229f43d678e8200e824e4938`,
+`build(deps): bump tracy vcpkg pin for protocol v83`.

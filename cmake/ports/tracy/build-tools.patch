@@ -27,6 +27,22 @@ diff --git a/cmake/vendor.cmake b/cmake/vendor.cmake
  # Vendor Specific CMake
  # The Tracy project keeps most vendor source locally
 
+diff --git a/cmake/GitRef.cmake b/cmake/GitRef.cmake
+--- a/cmake/GitRef.cmake
++++ b/cmake/GitRef.cmake
+@@ -1,4 +1,12 @@
+ function(add_git_ref target)
++    if(DEFINED TRACY_GIT_REF)
++        file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/GitRef.hpp"
++            CONTENT "#pragma once\nnamespace tracy { static inline const char* GitRef = \"@TRACY_GIT_REF@\"; }\n"
++            @ONLY)
++        target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
++        return()
++    endif()
++
+     if(NOT DEFINED GIT_REV)
+         set(GIT_REV "HEAD")
+     endif()
 diff --git a/vcpkg-tools/CMakeLists.txt b/vcpkg-tools/CMakeLists.txt
 new file mode 100644
 --- /dev/null

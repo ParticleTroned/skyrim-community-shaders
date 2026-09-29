@@ -1,7 +1,8 @@
+set(TRACY_SOURCE_REF a8db9bd8445343ee171439b9479c0a594183bf62)
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO wolfpld/tracy
-    REF a8db9bd8445343ee171439b9479c0a594183bf62
+    REF ${TRACY_SOURCE_REF}
     SHA512 9b8697d8e5f1188975802b2f4d9ddd1fb85d744eddd1ca3a03842a4ecb98da8a898a8faa52a27140ba69268087a383906c9d0fe03e3a863107aef24030da1ffe
     HEAD_REF master
     PATCHES build-tools.patch
@@ -30,6 +31,7 @@ vcpkg_cmake_configure(
         -DDOWNLOAD_CAPSTONE=OFF
         -DLEGACY=ON
         -DTRACY_ENABLE=ON
+        -DTRACY_GIT_REF=${TRACY_SOURCE_REF}
         ${FEATURE_OPTIONS}
     OPTIONS_RELEASE
         ${TOOLS_OPTIONS}
@@ -39,6 +41,7 @@ vcpkg_cmake_configure(
     MAYBE_UNUSED_VARIABLES
         DOWNLOAD_CAPSTONE
         LEGACY
+        TRACY_GIT_REF
 )
 vcpkg_cmake_install()
 

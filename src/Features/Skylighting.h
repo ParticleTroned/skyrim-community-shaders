@@ -61,6 +61,9 @@ public:
 
 	struct Settings
 	{
+		static constexpr float kWorldCellSize = 4096.0f;
+		static constexpr float kMinProbeFieldSizeCells = 10000.0f / kWorldCellSize;
+		static constexpr float kMaxProbeFieldSizeCells = 8.0f;
 		bool EnableSkylighting = true;
 		float MaxZenith = 3.1415926f / 2.f;  // 90 deg
 		float MinDiffuseVisibility = 0.1f;
@@ -71,6 +74,7 @@ public:
 		bool EnableReducedUpdateFrequency = false;
 		uint OcclusionUpdateInterval = 1;
 		uint ProbeUpdateInterval = 1;
+		float ProbeArrayWorldSizeCells = kMinProbeFieldSizeCells;
 	} settings;
 
 	struct SkylightingCB
@@ -89,7 +93,7 @@ public:
 		uint ProbeDataReady;
 		uint Enabled;
 		uint ArrayDims[3];
-		uint _pad3;
+		float ProbeArrayWorldSize;
 		uint SliceStart;
 		uint SliceCount;
 		uint _pad4[2];

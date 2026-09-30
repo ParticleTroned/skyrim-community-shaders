@@ -30,7 +30,7 @@ Source review date: 2026-09-30.
 | Skylighting incremental updates / stable slices | On / 11                      | On / 11                      |
 | Skylighting reduced update frequency            | On                           | On                           |
 | Skylighting occlusion / probe intervals         | 6 / 13 frames                | 6 / 13 frames                |
-| Skylighting fast probe sampling                 | On                           | On                           |
+| Skylighting probe weighting                     | Normal-based                 | Normal-based                 |
 | Base and human skin blur radius                 | 1.0                          | 0.5                          |
 | Terrain blend strength                          | 1.0                          | 0.5                          |
 | FSR sharpening                                  | 0.0                          | 0.9                          |
@@ -47,8 +47,9 @@ shader, and its stored default now also explicitly resolves to zero.
 Skylighting is an explicit exception to the SE reference alignment. All
 runtimes use the existing Balanced defaults: a 192 x 192 x 96 grid,
 3.1666667-world-cell field width, 11-slice incremental updates, reduced update
-frequency and fast sampling. The configured occlusion/probe intervals
-are 6/13 frames; incremental probe updates follow fresh occlusion quadrants.
+frequency and normal-based probe weighting. The configured occlusion/probe
+intervals are 6/13 frames; incremental updates follow fresh occlusion
+quadrants.
 The shared distance clamp and UI range remain 2.5 to 8 cells. Named
 presets and their independent enable switch retain their existing behavior.
 

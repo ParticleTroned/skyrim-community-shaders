@@ -79,7 +79,7 @@
     },
     "settingsContract": {
       "revision": 5,
-      "sourceTreeSha256": "FB7677DE7335C335FE4AE14209559E515C86A18D25B8A8B5075D32F0786F7B92"
+      "sourceTreeSha256": "10885DC26AA3F673E489D05E04EA78A2BD0BF7143B299A3DE7C246726F45E090"
     }
   },
   "Upscaling": {
@@ -957,7 +957,6 @@
     "VRCullDistance": 20480.0
   },
   "Skylighting": {
-    "EnableFastProbeSampling": true,
     "EnableIncrementalProbeUpdates": true,
     "EnableReducedUpdateFrequency": true,
     "EnableSkylighting": false,

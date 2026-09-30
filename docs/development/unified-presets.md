@@ -11,6 +11,19 @@ The three `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
 Image Based Lighting (IBL) is disabled in all three tiers through the shared
 `Image Based Lighting/EnableIBL=0` policy and generation guard.
 
+Skylighting's `Sample` and `SampleWithShadow` functions always apply
+normal-based probe weighting on SE, AE and VR.
+The fast-sampling toggle is retired following the inconclusive whole-frame
+benefit reported in [Open Shaders PR 706](https://github.com/alandtse/open-shaders/pull/706#issuecomment-5888378723).
+Existing default and user settings may retain `EnableFastProbeSampling`;
+the loader ignores it regardless of value and preserves all supported
+settings. Saving a loaded Skylighting feature replaces its section with the
+current schema, omitting the retired key. Settings for features disabled at
+boot remain preserved until they are enabled and saved. No manual reset or
+settings-contract revision change is required; existing revision-5 unified
+presets remain accepted.
+Generated presets reject the retired key so new packages cannot reintroduce it.
+
 Exterior and interior Volumetric Lighting share godray intensity, opacity,
 saturation, custom colour contribution, and RGB values of `1.0` across all
 tiers. Disabling weather-driven Volumetric Lighting during rain is unchecked.

@@ -2306,7 +2306,8 @@ if(BUILD_CONTROLLER_TESTS)
         SkylightingSettings
         PROPERTIES
             LABELS "ControllerTests"
-            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
     )
     add_test(
         NAME WaterAppearanceSettings

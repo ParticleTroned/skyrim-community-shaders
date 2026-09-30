@@ -21,7 +21,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 uint32_t DynamicCubemaps::SanitizeCubemapResolution(uint32_t a_resolution)
 {
-	return a_resolution == kQualityCubemapResolution ? kQualityCubemapResolution : kPerformanceCubemapResolution;
+	return a_resolution == kQualityCubemapResolution || a_resolution == kPerformanceCubemapResolution ? a_resolution : Settings{}.CubemapResolution;
 }
 
 void DynamicCubemaps::RefreshActiveCubemapResolution()
@@ -309,7 +309,7 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 		logger::warn(
 			"Unsupported dynamic cubemap resolution {}; using {}",
 			settings.CubemapResolution,
-			kPerformanceCubemapResolution);
+			Settings{}.CubemapResolution);
 	}
 	RefreshActiveCubemapResolution();
 	if (REL::Module::IsVR()) {

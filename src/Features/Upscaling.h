@@ -317,10 +317,10 @@ public:
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
-		float sharpnessFSR = 0.9f;
+		float sharpnessFSR = REL::Module::IsVR() ? 0.9f : 0.0f;
 		bool fsrSharedGuideInputs = true;
 		FSRTemporalTuningPolicy::Settings fsrTemporalTuning{};
-		float sharpnessDLSS = 0.9f;
+		float sharpnessDLSS = REL::Module::IsVR() ? 0.9f : 0.5f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool motionAdaptiveRCAS = false;
 		float motionSharpnessAdjustment = -0.5f;

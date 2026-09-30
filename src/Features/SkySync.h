@@ -34,7 +34,7 @@ public:
 	struct Settings
 	{
 		bool Enabled = true;
-		bool UseAlternateSunPath = true;
+		bool UseAlternateSunPath = REL::Module::IsVR();
 		bool EnableSunLensFlare = true;
 		int32_t MoonLightSource = 0;
 		int32_t SunPath = 0;
@@ -43,7 +43,7 @@ public:
 		float SunriseEndOffset = 0.0f;
 		float SunsetBeginOffset = 0.0f;
 		float SunsetEndOffset = 0.0f;
-		float MinShadowElevation = 0.25f;
+		float MinShadowElevation = REL::Module::IsVR() ? 0.25f : 10.0f;
 		bool DimSunlightUnderHorizon = true;
 		float HorizonFadeHours = DefaultHorizonFadeHours;
 	};

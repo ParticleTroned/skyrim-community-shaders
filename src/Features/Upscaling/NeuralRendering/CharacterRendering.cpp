@@ -594,6 +594,54 @@ namespace NeuralRendering
 					entry.preparationEvidence[slot] = evidence;
 		}
 
+		/** Caller holds mutex_; evidence may only join the exact prepared content. */
+		[[nodiscard]] std::shared_ptr<const CharacterPreparationEvidence> FindPreparationEvidence(
+			std::uint32_t a_frame, std::uint32_t a_sourceWorldFrame,
+			std::uint64_t a_generation, std::uint32_t a_featureSlot, bool a_preparedOnly = false) const noexcept
+		{
+			if (a_featureSlot >= slots_.size())
+				return {};
+			const auto epoch = Color::Registry::Instance().CaptureEpoch();
+			const auto matches = [&](const std::shared_ptr<const CharacterPreparationEvidence>& evidence) {
+				if (!evidence || evidence->key.frame != a_frame || evidence->key.sourceWorldFrame != a_sourceWorldFrame ||
+					evidence->key.generation != a_generation || evidence->key.featureSlot != a_featureSlot ||
+					evidence->key.eye != (a_featureSlot & 1u) ||
+					evidence->key.captureEpoch != epoch || (a_preparedOnly && !evidence->prepared))
+					return false;
+				if (!evidence->prepared)
+					return true;
+				const auto& slot = slots_[a_featureSlot];
+				return slot.prepared && slot.contentSerial != 0 && slot.contentSerial == evidence->key.contentSerial &&
+				       slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame && slot.prepareKey.generation == a_generation &&
+				       slot.prepareKey.crop == evidence->key.crop && slot.prepareKey.settings == evidence->key.settingsKey &&
+				       slot.prepareKey.captureJitterX == evidence->key.jitterX && slot.prepareKey.captureJitterY == evidence->key.jitterY &&
+				       slot.prepareKey.outputIsJittered == evidence->key.outputIsJittered;
+			};
+			const auto& latest = latestPreparationEvidence_[a_featureSlot];
+			if (matches(latest))
+				return latest;
+			for (const auto& frame : snapshot_.preparedFrames) {
+				const auto& evidence = frame.preparationEvidence[a_featureSlot];
+				if (matches(evidence))
+					return evidence;
+			}
+			return {};
+		}
+
+		/** Caller holds mutex_ and has validated the complete prepared eye batch. */
+		[[nodiscard]] CharacterMaskPrepareResult BuildPreparedResult(
+			[[maybe_unused]] const CharacterMaskPrepareArgs& a_args, const Slot& a_slot) const noexcept
+		{
+			CharacterMaskPrepareResult result{ true, a_slot.requiresEvaluation,
+				a_slot.computeSubrect, a_slot.computeRegions, {}, a_slot.roi };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (Color::Registry::Instance().CaptureEvidenceEnabled())
+				result.evidence = FindPreparationEvidence(
+					a_args.frameId, a_args.sourceWorldFrame, a_args.generation, a_args.featureSlot, true);
+#endif
+			return result;
+		}
+
 		[[nodiscard]] bool BeginObservationFrame(std::uint32_t a_frame)
 		{
 			if (observationFrame_ == a_frame)
@@ -3396,7 +3444,7 @@ namespace NeuralRendering
 				state_->RecordPreparedFrame(args.frameId, args.sourceWorldFrame, args.generation,
 					args.featureSlot, slot.contentSerial, args.outputWidth, args.outputHeight,
 					slot.requiresEvaluation, slot.computeRegions.count);
-				a_results[index] = { true, slot.requiresEvaluation, slot.computeSubrect, slot.computeRegions, a_results[index].evidence, slot.roi };
+				a_results[index] = state_->BuildPreparedResult(args, slot);
 			}
 			state_->snapshot_.status = "ready";
 			state_->snapshot_.detail = std::format(
@@ -3612,29 +3660,7 @@ namespace NeuralRendering
 			return {};
 		try {
 			std::scoped_lock lock(state_->mutex_);
-			const auto epoch = Color::Registry::Instance().CaptureEpoch();
-			const auto matches = [&](const std::shared_ptr<const CharacterPreparationEvidence>& evidence) {
-				if (!evidence || evidence->key.frame != a_frame || evidence->key.sourceWorldFrame != a_sourceWorldFrame ||
-					evidence->key.generation != a_generation || evidence->key.featureSlot != a_featureSlot ||
-					evidence->key.captureEpoch != epoch)
-					return false;
-				if (!evidence->prepared)
-					return true;
-				const auto& slot = state_->slots_[a_featureSlot];
-				return slot.prepared && slot.contentSerial == evidence->key.contentSerial &&
-				       slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame && slot.prepareKey.generation == a_generation &&
-				       slot.prepareKey.crop == evidence->key.crop && slot.prepareKey.settings == evidence->key.settingsKey &&
-				       slot.prepareKey.captureJitterX == evidence->key.jitterX && slot.prepareKey.captureJitterY == evidence->key.jitterY &&
-				       slot.prepareKey.outputIsJittered == evidence->key.outputIsJittered;
-			};
-			const auto& latest = state_->latestPreparationEvidence_[a_featureSlot];
-			if (matches(latest))
-				return latest;
-			for (const auto& frame : state_->snapshot_.preparedFrames) {
-				const auto& evidence = frame.preparationEvidence[a_featureSlot];
-				if (matches(evidence))
-					return evidence;
-			}
+			return state_->FindPreparationEvidence(a_frame, a_sourceWorldFrame, a_generation, a_featureSlot);
 		} catch (...) {}
 		return {};
 	}
@@ -3655,7 +3681,7 @@ namespace NeuralRendering
 		}
 	}
 
-	ComPtr<ID3D11ShaderResourceView> CharacterRendering::GetPreparedMaskSrv(
+	CharacterPreparedSelection CharacterRendering::GetPreparedSelection(
 		std::uint32_t a_featureSlot,
 		std::uint32_t a_frameId,
 		std::uint32_t a_sourceWorldFrame,
@@ -3669,72 +3695,16 @@ namespace NeuralRendering
 			std::scoped_lock lock(state_->mutex_);
 			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
 				a_sourceWorldFrame, a_generation, a_width, a_height);
-			return slot ? slot->maskSrv : ComPtr<ID3D11ShaderResourceView>{};
-		} catch (...) {
-			return {};
-		}
-	}
-
-	ComputeSubrect CharacterRendering::GetMaskSupportRect(
-		ID3D11ShaderResourceView* a_mask,
-		std::uint32_t a_width, std::uint32_t a_height) const noexcept
-	{
-		const auto full = BuildFullComputeSubrect(a_width, a_height);
-		if (!state_ || !a_mask)
-			return full;
-		try {
-			std::scoped_lock lock(state_->mutex_);
-			for (const auto& slot : state_->slots_) {
-				if (slot.prepared && slot.maskSrv.Get() == a_mask &&
-					slot.width == a_width && slot.height == a_height) {
-					if (slot.maskUniform)
-						return slot.uniformMaskValue == 0.0f ? ComputeSubrect{} : full;
-					// Include the linear sampler footprint around the authored mask.
-					return slot.maskWorkSubrect.Fits(a_width, a_height) ?
-					           ExpandCharacterWorkRect(slot.maskWorkSubrect, a_width, a_height, 1) :
-					           full;
-				}
-			}
-		} catch (...) {
-		}
-		return full;
-	}
-
-	ComputeSubrect CharacterRendering::GetPreparedComputeSubrect(
-		std::uint32_t a_featureSlot,
-		std::uint32_t a_frameId,
-		std::uint32_t a_sourceWorldFrame,
-		std::uint64_t a_generation,
-		std::uint32_t a_width,
-		std::uint32_t a_height) const noexcept
-	{
-		if (!state_ || a_featureSlot >= state_->slots_.size())
-			return {};
-		try {
-			std::scoped_lock lock(state_->mutex_);
-			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
-				a_sourceWorldFrame, a_generation, a_width, a_height);
-			return slot ? slot->computeSubrect : ComputeSubrect{};
-		} catch (...) {
-			return {};
-		}
-	}
-
-	CharacterComputeRegionPlan CharacterRendering::GetPreparedComputeRegions(
-		std::uint32_t a_featureSlot,
-		std::uint32_t a_frameId,
-		std::uint32_t a_sourceWorldFrame,
-		std::uint64_t a_generation,
-		std::uint32_t a_width,
-		std::uint32_t a_height) const noexcept
-	{
-		if (!state_)
-			return {};
-		try {
-			std::scoped_lock lock(state_->mutex_);
-			const auto* slot = state_->FindPreparedSlot(a_featureSlot, a_frameId,
-				a_sourceWorldFrame, a_generation, a_width, a_height);
-			return slot ? slot->computeRegions : CharacterComputeRegionPlan{};
+			if (!slot)
+				return {};
+			const auto full = BuildFullComputeSubrect(a_width, a_height);
+			// Keep the sampler guard and the mask's zero/full state in the same snapshot.
+			const auto support = slot->maskUniform ?
+			                         (slot->uniformMaskValue == 0.0f ? ComputeSubrect{} : full) :
+			                         (slot->maskWorkSubrect.Fits(a_width, a_height) ?
+											 ExpandCharacterWorkRect(slot->maskWorkSubrect, a_width, a_height, 1) :
+											 full);
+			return { slot->maskSrv, support, slot->computeSubrect, slot->computeRegions };
 		} catch (...) {
 			return {};
 		}

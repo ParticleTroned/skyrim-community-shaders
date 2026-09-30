@@ -310,11 +310,11 @@ endforeach()
 foreach(_selection_support_contract IN ITEMS
     [[float4 characterMaskBounds;]]
     [[static_assert(sizeof(FoveatedCenterBlendCB) == 96]]
-    [[GetMaskSupportRect(characterMaskSRV, rect.outputWidth, rect.outputHeight)]]
+    [[const auto& support = *characterMaskSupport;]]
     [[support.baseX * cbData.invSourceDim.x]]
     [[(support.baseX + support.width) * cbData.invSourceDim.x]]
-    [[ExpandCharacterWorkRect(slot.maskWorkSubrect, a_width, a_height, 1)]]
-    [[slot.uniformMaskValue == 0.0f ? ComputeSubrect{} : full]]
+    [[ExpandCharacterWorkRect(slot->maskWorkSubrect, a_width, a_height, 1)]]
+    [[slot->uniformMaskValue == 0.0f ? ComputeSubrect{} : full]]
 )
     string(FIND "${_source_contract_text}" "${_selection_support_contract}"
         _selection_support_position)
@@ -749,7 +749,7 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[switch (targetUavDescs[0].Format)]]
     [[case DXGI_FORMAT_R8G8B8A8_UNORM:]]
     [[finalLdrColorMode = 2u]]
-    [[characterMaskOwners[eye].Get(), finalLdrColorMode, sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale))]]
+    [[characterSelections[eye].mask.Get(), finalLdrColorMode, sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale), characterSelections[eye].mask ? &characterSelections[eye].maskSupport : nullptr)]]
 )
     string(FIND
         "${_final_ldr_section}"
@@ -3415,8 +3415,8 @@ foreach(_prepared_lookup_contract IN ITEMS
 endforeach()
 string(REGEX MATCHALL [[state_->FindPreparedSlot\(]] _prepared_lookup_calls "${_character_source}")
 list(LENGTH _prepared_lookup_calls _prepared_lookup_count)
-if(NOT _prepared_lookup_count EQUAL 4)
-    message(FATAL_ERROR "Mask, single rectangle, region-plan accessors and queued finalization must all use shared prepared-resource validation")
+if(NOT _prepared_lookup_count EQUAL 2)
+    message(FATAL_ERROR "The combined prepared-selection accessor and queued finalization must both use shared prepared-resource validation")
 endif()
 
 string(FIND "${_renderer_source}" [[bool Renderer::State::ApplyBatchLocked(]] _region_batch_begin)

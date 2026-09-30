@@ -5136,7 +5136,7 @@ namespace
 		       a_settings.neuralCharacterVisualIsolationEnabled;
 	}
 
-	Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> GetPreparedCharacterMask(
+	NeuralRendering::CharacterPreparedSelection GetPreparedCharacterSelection(
 		const Upscaling::Settings& a_settings,
 		std::uint32_t a_featureSlot,
 		std::uint32_t a_frameId,
@@ -5147,10 +5147,10 @@ namespace
 	{
 		return UsesCharacterVisualIsolation(a_settings) ?
 		           NeuralRendering::CharacterRendering::Instance()
-		               .GetPreparedMaskSrv(
+		               .GetPreparedSelection(
 						   a_featureSlot, a_frameId, a_sourceWorldFrame,
 						   a_generation, a_width, a_height) :
-		           Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>{};
+		           NeuralRendering::CharacterPreparedSelection{};
 	}
 
 	template <class CenterRect>
@@ -43321,11 +43321,12 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
-bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX, ID3D11ShaderResourceView* baselineCenterSRV, ID3D11ShaderResourceView* characterMaskSRV, uint32_t finalLdrColorMode, bool forceFullImage)
+bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX, ID3D11ShaderResourceView* baselineCenterSRV, ID3D11ShaderResourceView* characterMaskSRV, uint32_t finalLdrColorMode, bool forceFullImage, const NeuralRendering::ComputeSubrect* characterMaskSupport)
 {
 	if (!centerSRV || !outputUAV || rect.outputWidth == 0 || rect.outputHeight == 0 || !foveatedCenterBlendCB)
 		return false;
-	if ((baselineCenterSRV == nullptr) != (characterMaskSRV == nullptr))
+	if ((baselineCenterSRV == nullptr) != (characterMaskSRV == nullptr) ||
+		(characterMaskSRV == nullptr) != (characterMaskSupport == nullptr))
 		return false;
 	if (!visibleOutput.IsValid())
 		return false;
@@ -43372,8 +43373,7 @@ bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, I
 	cbData.finalLdrColorMode = finalLdrColorMode;
 	cbData.fullImage = forceFullImage || (IsNeuralRenderingRequested() && !NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov)) ? 1u : 0u;
 	if (characterMaskSRV) {
-		const auto support = NeuralRendering::CharacterRendering::Instance()
-		                         .GetMaskSupportRect(characterMaskSRV, rect.outputWidth, rect.outputHeight);
+		const auto& support = *characterMaskSupport;
 		cbData.characterMaskBounds = {
 			support.baseX * cbData.invSourceDim.x,
 			support.baseY * cbData.invSourceDim.y,
@@ -44164,22 +44164,16 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 													 Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 												 2u :
 												 0u);
-			const auto preparedSubrect = characterVisualIsolation ?
-			                                 NeuralRendering::CharacterRendering::Instance()
-			                                     .GetPreparedComputeSubrect(
-													 featureSlot, currentFrame, neuralSourceFrame,
-													 neuralGeneration,
-													 rect.outputWidth, rect.outputHeight) :
-			                                 NeuralRendering::BuildCenteredComputeSubrect(
-												 rect.outputWidth, rect.outputHeight,
-												 settings.neuralRenderingSingleSubrectScale);
+			const auto selection = characterVisualIsolation ?
+			                           NeuralRendering::CharacterRendering::Instance().GetPreparedSelection(featureSlot, currentFrame,
+										   neuralSourceFrame, neuralGeneration, rect.outputWidth, rect.outputHeight) :
+			                           NeuralRendering::CharacterPreparedSelection{};
+			const auto preparedSubrect = characterVisualIsolation ? selection.computeSubrect :
+			                                                        NeuralRendering::BuildCenteredComputeSubrect(rect.outputWidth, rect.outputHeight,
+																		settings.neuralRenderingSingleSubrectScale);
 			if (!preparedSubrect.Fits(rect.outputWidth, rect.outputHeight))
 				return false;
-			const auto preparedRegions = characterVisualIsolation ?
-			                                 NeuralRendering::CharacterRendering::Instance().GetPreparedComputeRegions(
-												 featureSlot, currentFrame, neuralSourceFrame, neuralGeneration,
-												 rect.outputWidth, rect.outputHeight) :
-			                                 NeuralRendering::CharacterComputeRegionPlan{};
+			const auto& preparedRegions = selection.computeRegions;
 			if (useSubmitNeuralFloatBridge)
 				return CommitSubmitNeuralFloatOutput(
 					eyeIndex, directNeuralCommit, preparedSubrect, preparedRegions);
@@ -44396,7 +44390,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 			centerBlendFeather,
 			0,
 			characterComposite.baseline,
-			characterComposite.mask.Get());
+			characterComposite.mask.Get(), 0u, false,
+			characterComposite.mask ? &characterComposite.maskSupport : nullptr);
 	}();
 	if (blended) {
 		RecordNeuralStageWork(compositeTiming, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());
@@ -44430,9 +44425,10 @@ bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralR
 	}
 	if (regions.size() == 2 && NeuralRendering::CharacterComputeRegionsOverlap(regions[0], regions[1]))
 		return false;
-	auto mask = args.characterVisualIsolation ? GetPreparedCharacterMask(settings, args.featureSlot,
-													args.frameId, args.sourceWorldFrame, args.generation, args.outputWidth, args.outputHeight) :
-	                                            Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>{};
+	const auto selection = args.characterVisualIsolation ? GetPreparedCharacterSelection(settings, args.featureSlot,
+															   args.frameId, args.sourceWorldFrame, args.generation, args.outputWidth, args.outputHeight) :
+	                                                       NeuralRendering::CharacterPreparedSelection{};
+	const auto& mask = selection.mask;
 	if (args.characterVisualIsolation && !mask)
 		return false;
 	auto& selected = foveatedCenterNeuralSelected[eye];
@@ -44458,7 +44454,7 @@ bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralR
 		const FoveatedRegionPlan::Rect visible{ region.baseX, region.baseY, region.baseX + region.width, region.baseY + region.height };
 		if (!DispatchFoveatedBlendPass(foveatedCenterNeuralOut[eye]->srv.get(), selected->uav.get(),
 				args.outputWidth, args.outputHeight, rect, visible, 1.0f, 1.0f, float2{ 0.0f, 0.0f }, 0.0f, 0,
-				mask ? foveatedCenterColorIn[eye]->srv.get() : nullptr, mask.Get(), 0u, true))
+				mask ? foveatedCenterColorIn[eye]->srv.get() : nullptr, mask.Get(), 0u, true, mask ? &selection.maskSupport : nullptr))
 			return false;
 	}
 	RecordNeuralStageWork(capture, dispatchedPixels,
@@ -44490,10 +44486,12 @@ bool Upscaling::ResolveCharacterCompositeInputs(
 											 Streamline::DLSSViewportRole::SubmitStageFoveatedCenter ?
 										 2u :
 										 0u);
-	a_result.mask = NeuralRendering::CharacterRendering::Instance()
-	                    .GetPreparedMaskSrv(
-							featureSlot, a_frame, a_sourceWorldFrame,
-							a_generation, a_width, a_height);
+	auto selection = NeuralRendering::CharacterRendering::Instance()
+	                     .GetPreparedSelection(
+							 featureSlot, a_frame, a_sourceWorldFrame,
+							 a_generation, a_width, a_height);
+	a_result.mask = std::move(selection.mask);
+	a_result.maskSupport = selection.maskSupport;
 	if (!a_result.mask)
 		return false;
 
@@ -44519,9 +44517,11 @@ bool Upscaling::ResolveSubmitCharacterCompositeInputs(
 		!submitNeuralFloatColorOut[a_eyeIndex]->srv) {
 		return false;
 	}
-	a_result.mask = GetPreparedCharacterMask(
+	auto selection = GetPreparedCharacterSelection(
 		settings, a_eyeIndex + 2u, a_frame, a_sourceWorldFrame,
 		a_generation, a_width, a_height);
+	a_result.mask = std::move(selection.mask);
+	a_result.maskSupport = selection.maskSupport;
 	if (!a_result.mask)
 		return false;
 	a_result.center = submitNeuralFloatColorOut[a_eyeIndex]->srv.get();
@@ -45327,8 +45327,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		}
 		lateStage = LateStage::Blend;
 		std::array<ID3D11ShaderResourceView*, 2> baselineCenterSRVs{};
-		std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, 2>
-			characterMaskOwners{};
+		std::array<NeuralRendering::CharacterPreparedSelection, 2> characterSelections{};
 		if (isolateCharacterOutput) {
 			for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 				lateEye = eye;
@@ -45337,13 +45336,13 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				const auto& rect = foveatedRectCache.rects[eye];
 				const uint32_t featureSlot = eye +
 				                             (a_role == NeuralStereoRouteRole::Submit ? 2u : 0u);
-				characterMaskOwners[eye] = GetPreparedCharacterMask(
+				characterSelections[eye] = GetPreparedCharacterSelection(
 					settings, featureSlot, globals::state->frameCount,
 					a_neuralSourceFrame, a_generation,
 					rect.outputWidth, rect.outputHeight);
 				if (!neuralFinalLdrColorIn[eye] ||
 					!neuralFinalLdrColorIn[eye]->srv ||
-					!characterMaskOwners[eye]) {
+					!characterSelections[eye].mask) {
 					a_result.appliedEyeMask = 0;
 					RequestHistoryReset();
 					return false;
@@ -45395,9 +45394,10 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 						ClampFoveatedBlendFeather(settings.neuralRenderingBlendFeather),
 					a_targets[eye].baseOffsetX,
 					baselineCenterSRVs[eye],
-					characterMaskOwners[eye].Get(),
+					characterSelections[eye].mask.Get(),
 					finalLdrColorMode,
-					sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale));
+					sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale),
+					characterSelections[eye].mask ? &characterSelections[eye].maskSupport : nullptr);
 			}();
 			if (!blended) {
 				restoreCommittedCenters();
@@ -46537,7 +46537,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 				centerBlendFeather,
 				0,
 				characterComposite.baseline,
-				characterComposite.mask.Get());
+				characterComposite.mask.Get(), 0u, false,
+				characterComposite.mask ? &characterComposite.maskSupport : nullptr);
 		}();
 		if (blended) {
 			RecordNeuralStageWork(capture, static_cast<uint64_t>(blendVisibleOutput.Width()) * blendVisibleOutput.Height());

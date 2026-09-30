@@ -258,6 +258,15 @@ namespace NeuralRendering
 		std::optional<RoiDescriptor> roi;
 	};
 
+	/** One locked read of a prepared slot; GPU contents retain render-thread ownership. */
+	struct CharacterPreparedSelection
+	{
+		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mask;
+		ComputeSubrect maskSupport{};
+		ComputeSubrect computeSubrect{};
+		CharacterComputeRegionPlan computeRegions{};
+	};
+
 	/** Owns character observations, stable per-eye regions, and R8 selection masks. */
 	class CharacterRendering
 	{
@@ -336,35 +345,14 @@ namespace NeuralRendering
 		[[nodiscard]] Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
 		GetDebugMaskSrv(
 			std::uint32_t a_eyeIndex) const noexcept;
-		/** Returns a mask only for the exact evaluation/source/generation and size. */
-		[[nodiscard]] Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>
-		GetPreparedMaskSrv(
+		/** Freezes mask, support and plan for the exact evaluation/source/generation and size. */
+		[[nodiscard]] CharacterPreparedSelection GetPreparedSelection(
 			std::uint32_t a_featureSlot,
 			std::uint32_t a_frameId,
 			std::uint32_t a_sourceWorldFrame,
 			std::uint64_t a_generation,
 			std::uint32_t a_width,
 			std::uint32_t a_height) const noexcept;
-		/** Returns the matching output-local compute rectangle for a prepared mask. */
-		[[nodiscard]] ComputeSubrect GetPreparedComputeSubrect(
-			std::uint32_t a_featureSlot,
-			std::uint32_t a_frameId,
-			std::uint32_t a_sourceWorldFrame,
-			std::uint64_t a_generation,
-			std::uint32_t a_width,
-			std::uint32_t a_height) const noexcept;
-		/** Returns the exact split plan belonging to the validated prepared mask. */
-		[[nodiscard]] CharacterComputeRegionPlan GetPreparedComputeRegions(
-			std::uint32_t a_featureSlot,
-			std::uint32_t a_frameId,
-			std::uint32_t a_sourceWorldFrame,
-			std::uint64_t a_generation,
-			std::uint32_t a_width,
-			std::uint32_t a_height) const noexcept;
-		/** Current nonzero support for an already validated mask; unknown views fail open. */
-		[[nodiscard]] ComputeSubrect GetMaskSupportRect(
-			ID3D11ShaderResourceView* a_mask,
-			std::uint32_t a_width, std::uint32_t a_height) const noexcept;
 
 	private:
 		class State;

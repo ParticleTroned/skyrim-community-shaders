@@ -175,7 +175,7 @@ foreach(_prepare_contract IN ITEMS
     [[a_batchArgs[eye].roi = maskResults[eye].roi;]]
     [[a_result.roi = slot.roi;]]
     [[evidence->roi = slot.roi;]]
-    [[GetPreparedComputeRegions(]]
+    [[GetPreparedSelection(]]
     [[FindPreparedSlot(]]
     [[FinalizePreparedMasks(]]
 )
@@ -248,7 +248,7 @@ foreach(_copy_contract IN ITEMS
     [[bool CopyNeuralOutputRegions(]]
     [[a_regions.count > 2u]]
     [[ContainsComputeSubrect(a_enclosure, region)]]
-    [[GetPreparedComputeRegions(]]
+    [[GetPreparedSelection(]]
     [[computeSubrect, computeRegions);]]
     [[preparedSubrect, preparedRegions);]]
     [[computeSubrect, neuralArgs[eye].computeRegions))]]

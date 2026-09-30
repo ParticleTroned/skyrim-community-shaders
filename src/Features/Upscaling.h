@@ -4214,6 +4214,7 @@ public:
 		ID3D11ShaderResourceView* center = nullptr;
 		ID3D11ShaderResourceView* baseline = nullptr;
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mask;
+		NeuralRendering::ComputeSubrect maskSupport{};
 	};
 	/** Resolves immutable staged character-isolation inputs for one eye. */
 	/** Builds a complete low-resolution candidate before DLSS consumes either eye. */
@@ -4293,7 +4294,7 @@ public:
 	bool IsFoveatedMaskVisualizationEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex);
 	bool DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* peripherySRV, ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t peripherySourceWidth, uint32_t peripherySourceHeight, uint32_t outputWidth, uint32_t outputHeight, const FoveatedDispatchRect& centerRect, float peripherySourceScaleX, float peripherySourceScaleY, float peripherySourceOffsetX, float peripherySourceOffsetY, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather);
-	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX = 0, ID3D11ShaderResourceView* baselineCenterSRV = nullptr, ID3D11ShaderResourceView* characterMaskSRV = nullptr, uint32_t finalLdrColorMode = 0, bool forceFullImage = false);
+	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX = 0, ID3D11ShaderResourceView* baselineCenterSRV = nullptr, ID3D11ShaderResourceView* characterMaskSRV = nullptr, uint32_t finalLdrColorMode = 0, bool forceFullImage = false, const NeuralRendering::ComputeSubrect* characterMaskSupport = nullptr);
 
 	/**
 	 * @brief Resolves the DLSS output into the main render target after upscaling.

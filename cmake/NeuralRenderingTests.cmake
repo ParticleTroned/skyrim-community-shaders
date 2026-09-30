@@ -112,6 +112,8 @@ foreach(_test IN ITEMS character_mask character_mask_bounds)
     add_test(NAME ${_test}_shaders COMMAND ${_test}_gpu_test "${PROJECT_SOURCE_DIR}/package/Shaders")
     set_tests_properties(${_test}_shaders PROPERTIES LABELS "ControllerTests" TIMEOUT 60)
 endforeach()
+add_dependencies(character_mask_gpu_test d3d_shader_test_headers)
+target_include_directories(character_mask_gpu_test PRIVATE "${_d3d_shader_test_dir}")
 
 foreach(_contract IN ITEMS neural_rendering_devbench neural_rendering_submit_pair neural_multi_roi)
     add_test(NAME ${_contract}_contract COMMAND "${CMAKE_COMMAND}"
@@ -196,6 +198,34 @@ target_include_directories(neural_execution_evidence_test PRIVATE "${_neural_exe
 
 add_controller_test(neural_character_evidence_test NeuralCharacterEvidence tests/neural_character_evidence_test.cpp)
 target_link_libraries(neural_character_evidence_test PRIVATE nlohmann_json::nlohmann_json)
+
+set(_neural_selection_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_selection_test")
+set(_neural_selection_headers
+    "${_neural_selection_test_dir}/neural_prepared_slot_under_test.h"
+    "${_neural_selection_test_dir}/neural_preparation_evidence_under_test.h"
+    "${_neural_selection_test_dir}/neural_prepared_result_under_test.h"
+    "${_neural_selection_test_dir}/neural_prepared_selection_under_test.h")
+add_custom_command(
+    OUTPUT ${_neural_selection_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_selection_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_prepared_selection.cmake"
+    DEPENDS src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp
+        tests/extract_neural_prepared_selection.cmake
+    VERBATIM)
+add_custom_target(neural_prepared_selection_fixture DEPENDS ${_neural_selection_headers})
+add_controller_test(neural_prepared_selection_test NeuralPreparedSelection tests/neural_prepared_selection_test.cpp)
+add_controller_test(neural_prepared_selection_bridge_test NeuralPreparedSelectionBridge tests/neural_prepared_selection_test.cpp)
+foreach(_target IN ITEMS neural_prepared_selection_test neural_prepared_selection_bridge_test)
+    add_dependencies(${_target} neural_prepared_selection_fixture)
+    target_sources(${_target} PRIVATE ${_neural_selection_headers})
+    target_include_directories(${_target} PRIVATE "${_neural_selection_test_dir}")
+    target_compile_definitions(${_target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endforeach()
+target_compile_definitions(neural_prepared_selection_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_test(NAME NeuralPreparedSelectionContract COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_prepared_selection_contract_test.py" --compiler "${CMAKE_CXX_COMPILER}")
+set_tests_properties(NeuralPreparedSelectionContract PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 
 add_controller_test(neural_replay_capture_test NeuralReplayCapture tests/neural_replay_capture_test.cpp)
 target_sources(neural_replay_capture_test PRIVATE

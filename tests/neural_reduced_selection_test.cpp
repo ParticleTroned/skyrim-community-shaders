@@ -105,7 +105,18 @@ struct float2
 struct Settings
 {};
 Handle<ID3D11ShaderResourceView> currentMask;
-auto GetPreparedCharacterMask(const Settings&, unsigned, unsigned, unsigned, uint64_t, unsigned, unsigned) { return currentMask; }
+namespace NeuralRendering
+{
+	struct CharacterPreparedSelection
+	{
+		Handle<ID3D11ShaderResourceView> mask;
+		ComputeSubrect maskSupport{};
+	};
+}
+auto GetPreparedCharacterSelection(const Settings&, unsigned, unsigned, unsigned, uint64_t, unsigned width, unsigned height)
+{
+	return NeuralRendering::CharacterPreparedSelection{ currentMask, { 0, 0, width, height } };
+}
 #define CS_GPU_PASS_CAPTURE(name, capture) (void)(capture)
 struct Upscaling
 {
@@ -148,9 +159,11 @@ struct Upscaling
 	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* neural, ID3D11ShaderResourceView* output,
 		unsigned width, unsigned height, FoveatedDispatchRect, FoveatedRegionPlan::Rect visible,
 		float, float, float2, float, unsigned, ID3D11ShaderResourceView* baseline,
-		ID3D11ShaderResourceView* mask, unsigned colorMode, bool fullImage)
+		ID3D11ShaderResourceView* mask, unsigned colorMode, bool fullImage,
+		const NeuralRendering::ComputeSubrect* support)
 	{
-		Require(fullImage && colorMode == 0 && (!baseline == !mask));
+		Require(fullImage && colorMode == 0 && (!baseline == !mask) && (!mask == !support));
+		Require(!support || *support == NeuralRendering::ComputeSubrect{ 0, 0, width, height });
 		++dispatches;
 		if (!blendSucceeds)
 			return false;

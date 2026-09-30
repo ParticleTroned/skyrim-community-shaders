@@ -8,6 +8,8 @@
 #include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
 #include "Features/Upscaling/NeuralRendering/CharacterMaskWorkPolicy.h"
 #include "ShaderPackageIncludes.h"
+#include "d3d_resource_naming.h"
+#include "neural_color/ShaderConstants.h"
 
 #include <algorithm>
 #include <array>
@@ -181,6 +183,17 @@ namespace
 			Check(device_->CreateComputeShader(blendBlob->GetBufferPointer(),
 					  blendBlob->GetBufferSize(), nullptr, &blendShader_),
 				"Create blend shader");
+			const auto colorRoot = shaderDirectory.parent_path().parent_path() / "features/Neural Rendering/Shaders";
+			PackageIncludes colorIncludes(shaderDirectory, colorRoot);
+			for (const auto& [name, shader] : std::array{
+					 std::pair{ "ColorPrepareCS.hlsl", std::addressof(prepareShader_) },
+					 std::pair{ "ColorReconstructCS.hlsl", std::addressof(reconstructShader_) } }) {
+				auto blob = Compile(colorRoot / "Upscaling/NeuralRendering" / name, &colorIncludes);
+				Check(device_->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr,
+						  shader->ReleaseAndGetAddressOf()),
+					"Create color shader");
+				Util::SetResourceName(shader->Get(), "CharacterMaskTest::%s", name);
+			}
 		}
 
 		MaskResult Mask(const MaskConstants& constants, std::uint32_t packedWidth,
@@ -325,6 +338,38 @@ namespace
 			}
 		}
 
+		std::vector<Color> Reconstruct(const NeuralColorTest::Constants& constants,
+			unsigned width, unsigned height, Color baseline, float poison)
+		{
+			const std::vector<Color> unused(width * height, Color{ poison, poison, poison, poison });
+			auto base = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+				D3D11_BIND_SHADER_RESOURCE, std::vector<Color>(width * height, baseline), "ColorBaseline");
+			auto prepared = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, unused, "ColorPrepared");
+			auto cb = Constants(constants);
+			const auto dispatch = [&](ID3D11ComputeShader* shader, std::array<ID3D11ShaderResourceView*, 3> inputs,
+									  ID3D11UnorderedAccessView* output) {
+				context_->CSSetShader(shader, nullptr, 0);
+				context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
+				context_->CSSetShaderResources(0, 3, inputs.data());
+				context_->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+				context_->Dispatch((constants.width + 7) / 8, (constants.height + 7) / 8, 1);
+				context_->ClearState();
+			};
+			dispatch(prepareShader_.Get(), { base.srv.Get(), nullptr, nullptr }, prepared.uav.Get());
+			auto native = Read<Color>(prepared.resource.Get());
+			const auto edited = (constants.y + 9) * width + constants.x + 8;
+			for (unsigned channel = 0; channel < 3; ++channel)
+				native[edited][channel] *= 1.5f;
+			native[edited][3] = 0.99f;
+			auto neural = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+				D3D11_BIND_SHADER_RESOURCE, native, "ColorNeural");
+			auto result = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
+				D3D11_BIND_UNORDERED_ACCESS, unused, "ColorReconstructed");
+			dispatch(reconstructShader_.Get(), { base.srv.Get(), neural.srv.Get(), prepared.srv.Get() }, result.uav.Get());
+			return Read<Color>(result.resource.Get());
+		}
+
 		std::vector<Color> Blend(const BlendConstants& constants,
 			std::uint32_t width, std::uint32_t height,
 			const std::vector<Color>& neuralPixels, const std::vector<Color>& baselinePixels,
@@ -358,6 +403,7 @@ namespace
 			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 			ComPtr<ID3D11SamplerState> sampler;
 			Check(device_->CreateSamplerState(&samplerDesc, &sampler), "Create blend sampler");
+			Util::SetResourceName(sampler.Get(), "CharacterMaskTest::BlendSampler");
 			std::array<ID3D11ShaderResourceView*, 3> srvs{ nr.srv.Get(), base.srv.Get(), mask.srv.Get() };
 			context_->CSSetShader(blendShader_.Get(), nullptr, 0);
 			context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
@@ -516,7 +562,7 @@ namespace
 
 		template <typename T>
 		Texture MakeTexture(std::uint32_t width, std::uint32_t height,
-			DXGI_FORMAT format, std::uint32_t bindFlags, const std::vector<T>& values)
+			DXGI_FORMAT format, std::uint32_t bindFlags, const std::vector<T>& values, const char* name = "Texture")
 		{
 			Require(values.size() == width * height, "Texture initial data dimensions");
 			D3D11_TEXTURE2D_DESC desc{};
@@ -530,10 +576,15 @@ namespace
 			const D3D11_SUBRESOURCE_DATA initial{ values.data(), width * static_cast<UINT>(sizeof(T)), 0 };
 			Texture result;
 			Check(device_->CreateTexture2D(&desc, &initial, &result.resource), "Create texture");
-			if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
+			Util::SetResourceName(result.resource.Get(), "CharacterMaskTest::%s", name);
+			if (bindFlags & D3D11_BIND_SHADER_RESOURCE) {
 				Check(device_->CreateShaderResourceView(result.resource.Get(), nullptr, &result.srv), "Create SRV");
-			if (bindFlags & D3D11_BIND_UNORDERED_ACCESS)
+				Util::SetResourceName(result.srv.Get(), "CharacterMaskTest::%s SRV", name);
+			}
+			if (bindFlags & D3D11_BIND_UNORDERED_ACCESS) {
 				Check(device_->CreateUnorderedAccessView(result.resource.Get(), nullptr, &result.uav), "Create UAV");
+				Util::SetResourceName(result.uav.Get(), "CharacterMaskTest::%s UAV", name);
+			}
 			return result;
 		}
 
@@ -548,6 +599,7 @@ namespace
 			D3D11_SUBRESOURCE_DATA initial{ &constants, 0, 0 };
 			ComPtr<ID3D11Buffer> buffer;
 			Check(device_->CreateBuffer(&desc, &initial, &buffer), "Create constant buffer");
+			Util::SetResourceName(buffer.Get(), "CharacterMaskTest::Constants");
 			return buffer;
 		}
 
@@ -561,6 +613,7 @@ namespace
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 			ComPtr<ID3D11Texture2D> staging;
 			Check(device_->CreateTexture2D(&desc, nullptr, &staging), "Create texture staging");
+			Util::SetResourceName(staging.Get(), "CharacterMaskTest::Readback");
 			context_->CopyResource(staging.Get(), texture);
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			Check(context_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "Read texture");
@@ -575,7 +628,7 @@ namespace
 
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
-		ComPtr<ID3D11ComputeShader> maskShader_, captureShader_, blendShader_;
+		ComPtr<ID3D11ComputeShader> maskShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_;
 	};
 
 	void FullImageAndReducedSelection(Harness& gpu)
@@ -763,6 +816,65 @@ namespace
 	{
 		Require(std::abs(static_cast<int>(actual) - expected) <= 1,
 			std::string(message) + ": got " + std::to_string(actual) + ", expected " + std::to_string(expected));
+	}
+
+	void ReconstructionThenExactSelection(Harness& gpu)
+	{
+		constexpr unsigned width = 37, height = 29;
+		const Color baseline{ 0.25f, 0.125f, 0.0625f, 0.375f };
+		NeuralColorTest::Constants color;
+		color.mode = 2;
+		color.transform = 1;
+		color.exposure = 1.25f;
+		color.detail = 1.3f;
+		color.appearance = 0.2f;
+		for (const float lighting : { 0.0f, 0.35f, 1.0f }) {
+			color.lightingPreservation = lighting;
+			for (const float poison : { 12345.0f, std::numeric_limits<float>::quiet_NaN() }) {
+				const auto reconstructed = gpu.Reconstruct(color, width, height, baseline, poison);
+				Require(reconstructed[9 * width + 8][0] > baseline[0], "Fixture must retain a nonzero neural edit");
+				if (lighting > 0)
+					Require(reconstructed[9 * width + 9][0] < baseline[0],
+						"Unedited center must receive a neighborhood residual before final selection");
+				std::vector<Color> committed(width * height, Color{ poison, poison, poison, poison });
+				for (unsigned y = 0; y < color.height; ++y)
+					for (unsigned x = 0; x < color.width; ++x)
+						committed[(color.y + y) * width + color.x + x] = reconstructed[y * width + x];
+				for (unsigned eye = 0; eye < 2; ++eye) {
+					for (bool subjectPresent : { true, false, true }) {
+						std::vector<std::uint8_t> mask(width * height);
+						const auto selected = (color.y + 9) * width + color.x + 8;
+						mask[selected] = subjectPresent ? 255 : 0;
+						BlendConstants blend;
+						blend.fullImage = 1;
+						blend.invOutputDim[0] = blend.invSourceDim[0] = 1.0f / width;
+						blend.invOutputDim[1] = blend.invSourceDim[1] = 1.0f / height;
+						// Dispatch beyond the owned rectangle as the full character composite does.
+						blend.dispatchDim[0] = width;
+						blend.dispatchDim[1] = height;
+						blend.targetOffsetX = eye * width;
+						blend.characterMaskBounds[2] = blend.characterMaskBounds[3] = 1;
+						blend.finalLdrColorMode = 1;
+						const std::vector<Color> initial(width * height * 2, baseline);
+						const auto output = gpu.Blend(blend, width, height, committed,
+							std::vector<Color>(width * height, baseline), mask, initial);
+						for (unsigned y = 0; y < height; ++y)
+							for (unsigned x = 0; x < width * 2; ++x) {
+								const bool edited = subjectPresent && x == eye * width + color.x + 8 && y == color.y + 9;
+								const auto& actual = output[y * width * 2 + x];
+								Require(actual[3] == baseline[3], "Post-filter selection changed baseline alpha");
+								if (edited) {
+									for (unsigned channel = 0; channel < 3; ++channel)
+										Require(std::abs(actual[channel] - reconstructed[9 * width + 8][channel]) < 1e-6f,
+											"Post-filter selection lost the selected neural edit");
+								} else {
+									Require(actual == baseline, "Post-filter selection changed outside RGB/alpha or the other eye");
+								}
+							}
+					}
+				}
+			}
+		}
 	}
 
 	void SelectionAndCoverage(Harness& gpu)
@@ -1046,6 +1158,7 @@ int wmain(int argc, wchar_t** argv)
 			"Expected production shader directory and optional --final-ldr-only");
 		Harness gpu(argv[1]);
 		FullImageAndReducedSelection(gpu);
+		ReconstructionThenExactSelection(gpu);
 		if (argc == 3) {
 			FinalLdrColorModes(gpu);
 			return 0;

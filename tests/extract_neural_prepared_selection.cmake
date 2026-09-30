@@ -1,0 +1,28 @@
+if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
+    message(FATAL_ERROR "PROJECT_ROOT and OUTPUT_DIRECTORY are required")
+endif()
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" source)
+function(extract start_token end_token output)
+    string(FIND "${source}" "${start_token}" start)
+    if(start LESS 0)
+        message(FATAL_ERROR "Missing prepared-selection boundary: ${start_token}")
+    endif()
+    string(SUBSTRING "${source}" ${start} -1 tail)
+    string(FIND "${tail}" "${end_token}" end)
+    if(end LESS 0)
+        message(FATAL_ERROR "Missing prepared-selection boundary: ${end_token}")
+    endif()
+    string(LENGTH "${end_token}" end_length)
+    math(EXPR length "${end} + ${end_length}")
+    string(SUBSTRING "${tail}" 0 ${length} body)
+    file(WRITE "${OUTPUT_DIRECTORY}/${output}" "${body}\n")
+endfunction()
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+extract("\t\t[[nodiscard]] const Slot* FindPreparedSlot(" "\n\t\t}"
+    neural_prepared_slot_under_test.h)
+extract("\t\t[[nodiscard]] std::shared_ptr<const CharacterPreparationEvidence> FindPreparationEvidence(" "\n\t\t}"
+    neural_preparation_evidence_under_test.h)
+extract("\t\t[[nodiscard]] CharacterMaskPrepareResult BuildPreparedResult(" "\n\t\t}"
+    neural_prepared_result_under_test.h)
+extract("\tCharacterPreparedSelection CharacterRendering::GetPreparedSelection(" "\n\t}"
+    neural_prepared_selection_under_test.h)

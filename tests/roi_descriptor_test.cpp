@@ -50,6 +50,15 @@ int main()
 	static_assert(GetRoiDescriptorViolation(unknown, provider, capacity).empty());
 	static_assert(!unknown.samplingSupport && !unknown.temporalEnvelope);
 	static_assert(!GetRoiDescriptorViolation({}, {}, capacity).empty());
+	// Missing subject metadata retains the baseline contract; a full-frame
+	// fallback in one eye must not enlarge the other eye's evaluation.
+	constexpr auto held = BuildRoiDescriptor(std::nullopt, provider, capacity, true);
+	constexpr auto fullEye = BuildRoiDescriptor(std::nullopt, { 0, 0, 135, 99 }, capacity, true);
+	static_assert(GetRoiDescriptorViolation(held, provider, capacity).empty());
+	static_assert(held.ownedOutput == roi.ownedOutput && held.temporalEnvelope == roi.temporalEnvelope);
+	static_assert(fullEye.allocationCapacity == roi.allocationCapacity);
+	static_assert(fullEye.inferenceContext.Area() > roi.inferenceContext.Area());
+	static_assert(BuildRoiDescriptor(support, provider, capacity, true) == roi);
 
 	StableCharacterComputeSubrect stable{};
 	for (std::uint32_t frame = 0; frame < 150; ++frame) {

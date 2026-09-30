@@ -1,5 +1,30 @@
 # main-vr-nr progress and continuation record
 
+## September 30 Task 3 source follow-up
+
+The [updated-contract follow-up](nr-task3-followup-20260930.md) applies the
+September 30 consolidated plan to the existing `7982bcb34` implementation.
+Prepared mask, support bounds and region plan now come from one locked
+lookup; consumers carry those bounds into final selection. Stereo
+finalization recovers the matching immutable preparation evidence instead
+of preserving an empty caller result. That recovery is DevBench-only and
+capture-gated. Production shaders, defaults and evaluated rectangles are
+unchanged. Added regressions cover interleaved preparation metadata and
+reconstruction followed by exact final character selection.
+
+The adversarial review fixed a WRL address-proxy mistake in the shader
+fixture, strengthened evidence identity rejection and added bridge-on/off
+result-publication fixtures. All ten post-review source-check commands
+passed. Compiled and runtime validation remain separate outstanding gates.
+
+This is source implementation and source-check completion, not a new
+compiled or runtime qualification. Native tests, DLL/AIO builds and game
+testing await explicit authorization. The baseline transition contract is
+documented separately from optional adaptive feathering, stereo sizing
+and overlapping context. The next performance step remains Task 2's
+controlled native cost matrix; Task 4's GPU-empty propagation is subsequent
+implementation work.
+
 ## Task 3 implementation closeout (2026-09-28)
 
 The [closeout record](nr-task3-completion-20260928.md) completes Task 3A–3D

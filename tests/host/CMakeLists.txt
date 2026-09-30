@@ -7,6 +7,7 @@ endif()
 add_executable(
     performance_tuning_tests
     main.cpp
+    dlssg_resource_retention_tests.cpp
     frame_generation_eligibility_policy_tests.cpp
     light_limit_fix_shadow_policy_tests.cpp
     performance_tuning_measurement_tests.cpp

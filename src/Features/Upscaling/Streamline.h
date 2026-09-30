@@ -2,6 +2,7 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "DLSSGResourceRetention.h"
 
 #include <array>
 #include <atomic>
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <d3d11_4.h>
 #include <directx/d3d12.h>
+#include <functional>
 #include <mutex>
 #include <string_view>
 #include <vector>
@@ -145,6 +147,7 @@ public:
 	{
 		winrt::com_ptr<ID3D12Fence> inputsCompletionFence;
 		uint64_t inputsCompletionValue = 0;
+		bool stateAvailable = false;
 	};
 
 	enum class DLSSGTagResult
@@ -206,13 +209,19 @@ public:
 		sl::PCLMarker a_marker,
 		std::string_view a_name,
 		uint32_t a_frame);
-	/** @brief Applies DLSS-G options on the presenting thread. */
+	/** @brief Applies DLSS-G options on the presenting thread, retaining paused resources. */
 	[[nodiscard]] bool ConfigureDLSSG(
 		bool a_enabled,
 		uint32_t a_width,
 		uint32_t a_height,
 		uint32_t a_renderWidth,
 		uint32_t a_renderHeight);
+	/** @brief Attempts disabled-resource cleanup on the presenting thread; failures retain ownership. */
+	void ReleaseDLSSGResourcesAfterPresent(
+		const DLSSGPresentSync& a_sync,
+		bool a_presentCompleted,
+		bool a_synchronized,
+		const std::function<HRESULT()>& a_drain);
 	/** @brief Tags one validated frame's immutable D3D12 interpolation inputs. */
 	[[nodiscard]] DLSSGTagResult TagDLSSGResources(
 		ID3D12GraphicsCommandList* a_commandList,
@@ -259,7 +268,9 @@ private:
 	sl::RenderAPI renderAPI;
 	const wchar_t* pluginDir;
 	uint32_t pclMarkerFailureLogMask = 0;
+	DLSSGResourceRetention dlssgResources;
 	bool loggedDLSSGOptionsFailure = false;
+	bool loggedDLSSGResourceReleaseFailure = false;
 	bool loggedDLSSGResourceValidationFailure = false;
 	bool loggedDLSSGTagFailure = false;
 	bool loggedDLSSGNullTagFailure = false;

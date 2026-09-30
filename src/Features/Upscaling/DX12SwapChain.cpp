@@ -565,6 +565,8 @@ HRESULT DX12SwapChain::WaitForInteropIdle()
 	HRESULT result = d3d11Context->Signal(d3d11Fence.get(), d3d11CompleteValue);
 	if (FAILED(result))
 		return result;
+	// Submit the signal before the CPU waits on dependent D3D12 work.
+	d3d11Context->Flush();
 	result = commandQueue->Wait(d3d12Fence.get(), d3d11CompleteValue);
 	if (FAILED(result))
 		return result;
@@ -1334,6 +1336,14 @@ HRESULT DX12SwapChain::PresentInternal(
 				a_submittedAllocator,
 				dlssgSync.inputsCompletionFence.get(),
 				dlssgSync.inputsCompletionValue);
+			if (usesDLSSG) {
+				// Cleanup may defer without turning a successful Present into a failure.
+				upscaling.streamlineDX12.ReleaseDLSSGResourcesAfterPresent(
+					dlssgSync,
+					providerBoundaryCompleted,
+					SUCCEEDED(syncResult),
+					[this]() { return WaitForInteropIdle(); });
+			}
 			if (FAILED(syncResult) && usesDLSSG)
 				upscaling.streamlineDX12.RequestDLSSGDisable();
 			latchInteropFailure(syncResult);

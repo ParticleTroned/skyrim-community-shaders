@@ -416,6 +416,8 @@ bool Streamline::Shutdown()
 	initialized = false;
 	featureDLSS = false;
 	featureDLSSG = false;
+	dlssgResources.OnShutdownSucceeded();
+	loggedDLSSGResourceReleaseFailure = false;
 	featureReflex = false;
 	featurePCL = false;
 	ResetFrameTracking();
@@ -1393,6 +1395,7 @@ bool Streamline::ConfigureDLSSG(
 
 	sl::DLSSGOptions options{};
 	options.mode = a_enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
+	options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
 	options.numFramesToGenerate =
 		dlssgState.maximumFramesToGenerate == 0 ?
 			1u :
@@ -1417,6 +1420,7 @@ bool Streamline::ConfigureDLSSG(
 	}
 	loggedDLSSGOptionsFailure = false;
 
+	dlssgResources.OnOptionsSucceeded(a_enabled);
 	dlssgState.optionsEnabled = a_enabled;
 	dlssgState.optionsTransitionPending =
 		dlssgState.optionsApplied != a_enabled;
@@ -1425,6 +1429,51 @@ bool Streamline::ConfigureDLSSG(
 		dlssgState.active = false;
 	}
 	return !enableRequested || a_enabled;
+}
+
+void Streamline::ReleaseDLSSGResourcesAfterPresent(
+	const DLSSGPresentSync& a_sync,
+	bool a_presentCompleted,
+	bool a_synchronized,
+	const std::function<HRESULT()>& a_drain)
+{
+	const DLSSGResourceRetention::ReleaseConditions conditions{
+		.userEnabled = globals::features::upscaling.settings.frameGenerationMode != 0,
+		.providerAvailable = IsDLSSGInstance() && initialized && featureDLSSG && slFreeResources && a_drain,
+		.presentCompleted = a_presentCompleted,
+		.stateAvailable = a_sync.stateAvailable,
+		.synchronized = a_synchronized,
+		.requiresPresentBoundary = RequiresDLSSGPresentBoundary(),
+	};
+	HRESULT drainResult = S_OK;
+	sl::Result freeResult = sl::Result::eOk;
+	const auto result = dlssgResources.TryRelease(
+		conditions,
+		[&]() {
+			drainResult = a_drain();
+			return SUCCEEDED(drainResult);
+		},
+		[&]() {
+			freeResult = slFreeResources(sl::kFeatureDLSS_G, viewport);
+			return freeResult == sl::Result::eOk;
+		});
+	using ReleaseResult = DLSSGResourceRetention::ReleaseResult;
+	if (result == ReleaseResult::kDrainFailed || result == ReleaseResult::kReleaseFailed) {
+		if (!loggedDLSSGResourceReleaseFailure) {
+			loggedDLSSGResourceReleaseFailure = true;
+			if (result == ReleaseResult::kDrainFailed) {
+				logger::error(
+					"[Streamline DX12] DLSS-G cleanup drain failed: 0x{:08X}; retaining resources for retry.",
+					static_cast<unsigned>(drainResult));
+			} else {
+				logger::error(
+					"[Streamline DX12] Failed to free DLSS-G resources: {}; retaining resources for retry.",
+					magic_enum::enum_name(freeResult));
+			}
+		}
+	} else if (result == ReleaseResult::kReleased) {
+		loggedDLSSGResourceReleaseFailure = false;
+	}
 }
 
 Streamline::DLSSGTagResult Streamline::ClearDLSSGResourceTags(uint32_t a_frame)
@@ -1614,6 +1663,7 @@ Streamline::DLSSGPresentSync Streamline::UpdateDLSSGStateAfterPresent(
 		return sync;
 	}
 	loggedDLSSGStateFailure = false;
+	sync.stateAvailable = true;
 	if (state.inputsProcessingCompletionFence &&
 		state.lastPresentInputsProcessingCompletionFenceValue != 0) {
 		sync.inputsCompletionFence.copy_from(

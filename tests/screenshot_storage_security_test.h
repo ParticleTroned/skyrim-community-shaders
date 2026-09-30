@@ -68,6 +68,17 @@ inline void RunScreenshotStorageSecurityTests()
 		}
 		if (std::filesystem::exists(atomicTemporary))
 			throw std::runtime_error("producer-owned atomic commit left its temporary path behind");
+		for (int index = 0; index < 64; ++index) {
+			const auto repeatedPath = directory->Path() /
+			                          (std::wstring(index % 24, L'x') + std::format(L"-publication-{}-\u6c34.png", index));
+			const auto repeated = CommittedFile::WriteAtomically(
+				repeatedPath.native() + L".tmp", repeatedPath,
+				atomicBytes.data(), atomicBytes.size(), false);
+			const auto reopened = CommittedFile::Open(repeatedPath).Describe();
+			if (repeated.bytes != atomicDescription.bytes || repeated.sha256 != atomicDescription.sha256 ||
+				reopened.bytes != repeated.bytes || reopened.sha256 != repeated.sha256)
+				throw std::runtime_error("repeated Unicode publication did not preserve the requested destination and bytes");
+		}
 		{
 			std::ofstream occupied(atomicTemporary, std::ios::binary);
 			occupied << "attacker";
@@ -85,6 +96,14 @@ inline void RunScreenshotStorageSecurityTests()
 			"an existing final artifact was replaced without authority");
 		if (std::filesystem::exists(directory->Path() / "collision.tmp"))
 			throw std::runtime_error("failed no-replace commit left its temporary path behind");
+		const auto replaced = CommittedFile::WriteAtomically(
+			atomicTemporary, atomicPath, "abc", 3, true);
+		const auto reopenedReplacement = CommittedFile::Open(atomicPath).Describe();
+		if (replaced.bytes != 3 ||
+			replaced.sha256 != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" ||
+			reopenedReplacement.bytes != replaced.bytes || reopenedReplacement.sha256 != replaced.sha256 ||
+			std::filesystem::exists(atomicTemporary))
+			throw std::runtime_error("authorized atomic replacement did not preserve the new payload");
 
 		{
 			{

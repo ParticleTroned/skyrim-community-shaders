@@ -573,7 +573,7 @@ namespace
 				strings.message = "weather selection applied";
 				break;
 			case CSX::WeatherAPI::MutationAction::kPreviewWeather:
-				sky->ForceWeather(weather, false);
+				EditorWindow::ForceWeather(sky, weather, false);
 				changed = true;
 				liveApplied = true;
 				strings.message = "temporary weather preview applied";

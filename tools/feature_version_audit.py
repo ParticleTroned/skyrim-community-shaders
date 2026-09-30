@@ -7,6 +7,7 @@ from pathlib import Path
 import datetime
 import sys
 import argparse
+import importlib
 
 # =====================
 # Path Resolution for Project Root
@@ -17,7 +18,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 # =====================
 # Configuration Constants
 # =====================
-DEFAULT_PR_BASE_REF = "origin/dev"
+DEFAULT_PR_BASE_REF = "origin/main-VR"
 DEFAULT_FEATURES_DIR = PROJECT_ROOT / "features"
 DEFAULT_FEATURE_HEADERS_DIR = PROJECT_ROOT / "src/Features"
 DEFAULT_NEXUS_BASE_URL = "https://www.nexusmods.com/skyrimspecialedition/mods/"
@@ -31,6 +32,7 @@ RE_FEATURE_SUMMARY_DIRECT = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*(?:over
 RE_FEATURE_SUMMARY_MULTILINE = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*(?:override)?\s*\{\s*return \{\s*((?:"[^"]*"\s*)+),\s*\{([^}]*)\}', re.DOTALL)
 RE_FEATURE_SUMMARY_CPP = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*\{[^}]*?std::string description\s*=\s*"([^"]+)";\s*std::vector<std::string> keyFeatures\s*=\s*\{([^}]*)\}', re.DOTALL)
 RE_FEATURE_SUMMARY_CPP_MULTILINE = re.compile(r'GetFeatureSummary\s*\([^)]*\)\s*\{[^}]*?std::string description\s*=\s*((?:"[^"]*"\s*)+);\s*std::vector<std::string> keyFeatures\s*=\s*\{([^}]*)\}', re.DOTALL)
+RE_FEATURE_SUMMARY_PAIR = re.compile(r'GetFeatureSummary\s*\([^)]*\).*?return\s+std::make_pair\(\s*((?:"(?:\\.|[^"\\])*"\s*)+|\w+)\s*,\s*std::vector<std::string>\s*\{([^}]*)\}', re.DOTALL)
 RE_FEATURE_DESCRIPTION_DIRECT = re.compile(r'GetFeatureDescription\s*\([^)]*\)\s*\{\s*return\s*"([^"]+)";\s*\}')
 RE_IS_CORE = re.compile(r"IsCore\s*\(.*\)\s*const\s*override\s*\{\s*return true;\s*\}")
 RE_VERSION = re.compile(r"(?i)version\s*=\s*([0-9]+)-([0-9]+)-([0-9]+)")
@@ -59,7 +61,8 @@ def extract_regex(pattern, content, group=1):
     return m.group(group) if m else None
 
 def extract_multiline_strings(multiline):
-    return [d.replace("\n", " ").strip() for d in re.findall(r'"([^\"]*)"', multiline) if d.strip()]
+    return [d.replace(r'\n', ' ').replace(r'\t', ' ').replace(r'\"', '"').replace("\n", " ").strip()
+            for d in re.findall(r'"((?:\\.|[^"\\])*)"', multiline) if d.strip()]
 
 def normalize_feature_key(name):
     return ''.join(str(name or '').lower().replace('-', ' ').split())
@@ -430,19 +433,28 @@ def parse_feature_metadata_file(path, mod_id=None, is_core=False):
         m = RE_FEATURE_SUMMARY_DIRECT.search(content)
         if m:
             description = m.group(1).replace("\n", " ").strip()
-            key_features = [k.strip().strip('"') for k in m.group(2).split(',') if k.strip()]
+            key_features = extract_multiline_strings(m.group(2))
         m = RE_FEATURE_SUMMARY_MULTILINE.search(content)
         if m:
             description = " ".join(extract_multiline_strings(m.group(1)))
-            key_features = [k.strip().strip('"') for k in m.group(2).split(',') if k.strip()]
+            key_features = extract_multiline_strings(m.group(2))
         m = RE_FEATURE_SUMMARY_CPP.search(content)
         if m:
             description = m.group(1).replace("\n", " ").strip()
-            key_features = [k.strip().strip('"') for k in m.group(2).split(',') if k.strip()]
+            key_features = extract_multiline_strings(m.group(2))
         m = RE_FEATURE_SUMMARY_CPP_MULTILINE.search(content)
         if m:
             description = " ".join(extract_multiline_strings(m.group(1)))
-            key_features = [k.strip().strip('"') for k in m.group(2).split(',') if k.strip()]
+            key_features = extract_multiline_strings(m.group(2))
+        m = RE_FEATURE_SUMMARY_PAIR.search(content)
+        if m:
+            expression = m.group(1).strip()
+            if re.fullmatch(r'\w+', expression):
+                # Only the unconditional initializer is common to every runtime.
+                initializer = re.search(r'\bstd::string\s+' + re.escape(expression) + r'\s*=\s*((?:"(?:\\.|[^"\\])*"\s*)+);', m.group(0))
+                expression = initializer.group(1) if initializer else ''
+            description = description or " ".join(extract_multiline_strings(expression))
+            key_features = key_features or extract_multiline_strings(m.group(2))
         desc_direct = extract_regex(RE_FEATURE_DESCRIPTION_DIRECT, content)
         if desc_direct and not description:
             description = desc_direct.strip()
@@ -454,126 +466,62 @@ def parse_feature_metadata_file(path, mod_id=None, is_core=False):
     }
 
 def extract_feature_metadata(feature_headers_dir, nexus_metadata=None):
-    nexus_metadata = nexus_metadata or {}
-    feature_info = []
-    for header in sorted(feature_headers_dir.glob("*.h")):
-        name = header.stem
-        short_name = None
-        is_core = False
-        mod_id = None
-        # --- Extract from .h ---
-        with open(header, encoding="utf-8") as f:
-            content = f.read()
-            # IsCore
-            if RE_IS_CORE.search(content):
-                is_core = True
-            m = RE_MOD_ID.search(content)
-            if m:
-                mod_id = m.group(1)
-        h_meta = parse_feature_metadata_file(header, mod_id=mod_id, is_core=is_core)
-        # --- If missing, try .cpp ---
-        cpp_path = header.with_suffix('.cpp')
-        cpp_meta = {"mod_link": "", "description": "", "key_features": []}
-        if cpp_path.exists() and (not h_meta["mod_link"] or not h_meta["description"] or not h_meta["key_features"]):
-            cpp_meta = parse_feature_metadata_file(cpp_path, mod_id=h_meta["mod_id"], is_core=is_core)
-        # Merge, preferring .h values
-        mod_link = h_meta["mod_link"] or cpp_meta["mod_link"]
-        description = h_meta["description"] or cpp_meta["description"]
-        key_features = h_meta["key_features"] or cpp_meta["key_features"]
-        feature_dir = FEATURES_DIR / name
-        ini_meta = get_feature_ini_metadata(feature_dir) if feature_dir.exists() else {}
-        if not mod_id:
-            mod_id = ini_meta.get('mod_id')
-
-        if ini_meta.get('mod_link'):
-            mod_link = ini_meta['mod_link']
-        if ini_meta.get('description') and not description:
-            description = ini_meta['description']
-        if ini_meta.get('key_features') and not key_features:
-            key_features = ini_meta['key_features']
-        if ini_meta.get('short_name'):
-            short_name = ini_meta['short_name']
-        if ini_meta.get('artifact_pattern'):
-            artifact_pattern = ini_meta['artifact_pattern']
-        else:
-            artifact_pattern = None
-        if ini_meta.get('mod_filename'):
-            mod_filename = ini_meta['mod_filename']
-        else:
-            mod_filename = None
-
-        # Fallback: if exact match failed, try fuzzy matching
-        if not feature_dir.exists():
-            # Try to find directory by normalizing names (ScreenSpaceGI -> screen space gi)
-            normalized_name = normalize_feature_key(name)
-            for candidate_dir in FEATURES_DIR.iterdir():
-                if candidate_dir.is_dir() and normalize_feature_key(candidate_dir.name) == normalized_name:
-                    feature_dir = candidate_dir
-                    ini_meta = get_feature_ini_metadata(candidate_dir)
-                    break
-
-        # Update mod_id from INI if still missing
-        if not mod_id:
-            mod_id = ini_meta.get('mod_id')
-        if ini_meta.get('mod_link'):
-            mod_link = ini_meta['mod_link']
-        if ini_meta.get('description') and not description:
-            description = ini_meta['description']
-        if ini_meta.get('key_features') and not key_features:
-            key_features = ini_meta['key_features']
-        if ini_meta.get('short_name'):
-            short_name = ini_meta['short_name']
-        if ini_meta.get('artifact_pattern'):
-            artifact_pattern = ini_meta['artifact_pattern']
-        if ini_meta.get('mod_filename'):
-            mod_filename = ini_meta['mod_filename']
-
-        key = normalize_feature_key(name)
-        nexus_meta = nexus_metadata.get(key, {})
-        if nexus_meta:
-            mod_id = nexus_meta.get('mod_id') or mod_id
-            mod_filename = nexus_meta.get('mod_filename') or mod_filename
-            artifact_pattern = nexus_meta.get('artifact_pattern') or artifact_pattern
-            mod_link = nexus_meta.get('mod_link') or mod_link
-            description = nexus_meta.get('description') or description
-            if nexus_meta.get('key_features'):
-                key_features = nexus_meta.get('key_features')
-            if nexus_meta.get('short_name'):
-                short_name = nexus_meta.get('short_name')
-
-        if not mod_link and not is_core and mod_id:
-            mod_link = DEFAULT_NEXUS_BASE_URL + mod_id
-
-        if not mod_filename:
-            mod_filename = name
-
-        # Only include if a feature directory exists (or will be found by fuzzy match)
-        if feature_dir.exists() or ini_meta.get('mod_id'):
-            feature_info.append({
-                "name": name,
-                "short_name": short_name,
-                "is_core": is_core,
-                "mod_id": mod_id,
-                "mod_link": mod_link,
-                "description": description,
-                "key_features": key_features,
-                "artifact_pattern": artifact_pattern,
-                "mod_filename": mod_filename,
-            })
-    return feature_info
+    """Describe CSX's shipped AIO modules, independently of split-mod metadata."""
+    builder = importlib.import_module("build-shader-cache")
+    distribution = builder.derive_distribution_profile(PROJECT_ROOT)
+    packages = builder.packaged_feature_directories(PROJECT_ROOT)
+    headers = {}
+    for header in sorted(feature_headers_dir.glob("*.h")) + [PROJECT_ROOT / "src/TruePBR.h"]:
+        if header.is_file():
+            content = header.read_text(encoding="utf-8")
+            short_name = builder.feature_short_name_from_header(content)
+            if short_name:
+                headers[short_name] = header
+    result = []
+    for short_name, package in sorted(packages.items()):
+        if package in distribution.excluded_packages:
+            continue
+        header = headers.get(short_name)
+        # IBL's historical INI filename predates its runtime short name.
+        if header is None and short_name == "ImageBasedLighting":
+            header = headers.get("IBL")
+        metadata = {"description": "", "key_features": []}
+        display_name = package
+        if header:
+            content = header.read_text(encoding="utf-8")
+            display_name = (extract_regex(re.compile(r'GetName\s*\([^)]*\)[^{]*\{\s*return\s+"([^"\n]+)"'), content)
+                            or extract_regex(re.compile(r'kFeatureName\s*=\s*"([^"\n]+)"'), content)
+                            or package)
+            for source in (header, header.with_suffix(".cpp")):
+                if source.is_file():
+                    parsed = parse_feature_metadata_file(source, is_core=True)
+                    for key in ("description", "key_features"):
+                        metadata[key] = metadata[key] or parsed[key]
+        if short_name == "Screenshot" and not metadata["description"]:
+            metadata["description"] = "Desktop and headset image capture, with selectable eye views and image sequences."
+        ini_metadata = get_feature_ini_metadata(FEATURES_DIR / package)
+        for key in ("description", "key_features"):
+            metadata[key] = metadata[key] or ini_metadata.get(key, metadata[key])
+        result.append({
+            "name": package, "display_name": display_name, "short_name": short_name,
+            "is_core": True, "mod_id": None, "mod_link": "",
+            "description": metadata["description"], "key_features": metadata["key_features"],
+            "artifact_pattern": "CSX_AIO-*.7z", "mod_filename": "Community Shaders Expanded (CSX)",
+        })
+    return result
 
 def get_latest_release_tag(ref="HEAD"):
     try:
         output = subprocess.check_output(
-            ["git", "tag", "--merged", ref, "--list", "v*.*.*"],
+            ["git", "tag", "--merged", ref, "--list", "csx*", "CSX*"],
             stderr=subprocess.DEVNULL,
         ).decode("utf-8")
-        tags = [t.strip() for t in output.splitlines() if re.match(r"^v\d+\.\d+\.\d+$", t.strip())]
+        tags = [t.strip() for t in output.splitlines() if re.fullmatch(r"(?i:csx)\d+\.\d+(?:\.\d+)?", t.strip())]
         if not tags:
             return None
         # Sort tags by version
         def tag_key(tag):
-            return tuple(map(int, tag.lstrip('v').split('.')))
+            return tuple(map(int, tag[3:].split('.'))) + ((0,) if tag.count('.') == 1 else ())
         tags.sort(key=tag_key, reverse=True)
         return tags[0]
     except Exception:
@@ -656,8 +604,9 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
         # Fallback to directory name
         return ''.join(feature_dir.name.lower().split())
 
+    distribution = importlib.import_module("build-shader-cache").derive_distribution_profile(PROJECT_ROOT)
     for feature_dir in FEATURES_DIR.iterdir():
-        if not feature_dir.is_dir():
+        if not feature_dir.is_dir() or feature_dir.name in distribution.excluded_packages:
             continue
         feature_key = get_feature_key(feature_dir, feature_meta_map)
 
@@ -776,7 +725,7 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
         commit_link = ""
         if bump_commit:
             author_str = f" ({bump_author})" if bump_author else ""
-            commit_link = f"[link](https://github.com/doodlum/skyrim-community-shaders/commit/{bump_commit}){author_str}"
+            commit_link = f"[link](https://github.com/ParticleTroned/skyrim-community-shaders/commit/{bump_commit}){author_str}"
 
         def bold(val):
             return f"**{val}**" if is_attention and val != '' and val != '-' else val
@@ -839,7 +788,7 @@ def format_feature_table(feature_analysis):
     lines.append("|---------|-----------|--------------|------------|--------------|------|--------|")
     def bold(val, is_attention):
         return f"**{val}**" if is_attention and val != '' and val != '-' else val
-    for fa in feature_analysis:
+    for fa in sorted(feature_analysis, key=lambda item: item['name'].casefold()):
         lines.append(f"| {bold(fa['name'], fa['is_attention'])} | {bold(fa['prior_ver_str'], fa['is_attention'])} | {bold(fa['proposed_ver_str'], fa['is_attention'])} | {bold(str(fa['needs_bump']), fa['is_attention'])} | {bold(fa['change_types'], fa['is_attention'])} | {bold(fa['note'], fa['is_attention'])} | {fa['commit_link']} |")
     return lines
 
@@ -847,7 +796,7 @@ def format_new_features_table(new_features, feature_meta_map, get_commit_author,
     lines = []
     if new_features:
         lines.append(f"### New Features Added ({len(set((n[0], n[1], n[2]) for n in new_features))})\n")
-        lines.append("| Feature | INI Version | Nexus | Commit |")
+        lines.append("| Feature | INI Version | CSX distribution | Commit |")
         lines.append("|---------|-------------|-------|--------|")
         seen = set()
         for name, ver, commit in new_features:
@@ -856,16 +805,14 @@ def format_new_features_table(new_features, feature_meta_map, get_commit_author,
                 continue
             seen.add(key)
             meta = feature_meta_map.get(normalize_name(name))
-            missing = False
-            if not meta or (not meta['mod_link'] and not (meta and meta['is_core'])) or not meta['description'] or not meta['key_features']:
-                missing = True
+            missing = not meta
             def boldmeta(val, missing=missing):
                 return f"**{val}**" if missing and val != '' and val != '-' else val
-            nexus_link = f"[Nexus]({meta['mod_link']})" if meta and meta['mod_link'] else ("**Missing metadata**" if not meta else "")
+            distribution = "Core AIO" if meta else "**Missing package metadata**"
             author = get_commit_author(commit) if commit else None
             author_str = f" ({author})" if author else ""
-            commit_link = f"[link](https://github.com/doodlum/skyrim-community-shaders/commit/{commit}){author_str}" if commit else ""
-            lines.append(f"| {boldmeta(name)} | {boldmeta(ver)} | {nexus_link} | {commit_link} |")
+            commit_link = f"[link](https://github.com/ParticleTroned/skyrim-community-shaders/commit/{commit}){author_str}" if commit else ""
+            lines.append(f"| {boldmeta(name)} | {boldmeta(ver)} | {distribution} | {commit_link} |")
     return lines
 
 def format_new_code_table(new_code_features):
@@ -879,97 +826,48 @@ def format_new_code_table(new_code_features):
     return lines
 
 def format_metadata_summary(feature_metadata):
-    lines = []
-    lines.append("\n## Feature Metadata Summary\n")
-    lines.append("| Feature | Is Core | Mod Link | Description | Key Features |")
-    lines.append("|---------|---------|----------|-------------|--------------|")
-    metadata_issues = []
-    for info in feature_metadata:
-        missing = False
-        missing_fields = []
-        if not info['is_core'] and not info['mod_link']:
-            missing = True
-            missing_fields.append('mod link')
-        if not info['description']:
-            missing = True
-            missing_fields.append('description')
-        if not info['key_features']:
-            missing = True
-            missing_fields.append('key features')
-        def boldmeta(val, missing=missing):
-            return f"**{val}**" if missing else val
-        link = f"[Nexus]({info['mod_link']})" if info['mod_link'] else ""
-        desc = info['description'][:80] + ("..." if len(info['description']) > 80 else "")
-        keys = ", ".join(info['key_features'][:3]) + (", ..." if len(info['key_features']) > 3 else "") if info['key_features'] else ""
-        lines.append(f"| {boldmeta(info['name'])} | {info['is_core']} | {link} | {desc} | {keys} |")
-        if missing:
-            metadata_issues.append((info['name'], missing_fields))
-    return lines, metadata_issues
-
-
-def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core_artifact_pattern, base_ref=None):
-    rows = [
-        {
-            'name': 'core',
-            'artifact_pattern': core_artifact_pattern,
-            'artifact_name': 'nexus-upload-core',
-            'nexus_mod_id': core_mod_id,
-            'mod_filename': core_filename,
-            'changelog': '',  # filled by workflow from GitHub release body
-        }
+    lines = ["\n## CSX core features\n",
+             "All listed features and built-in systems are included in the CSX AIO, sorted alphabetically. Separate feature downloads are not required.\n",
+             "| CSX feature | Included in core AIO | Description | Key features |",
+             "| --- | --- | --- | --- |"]
+    def cell(value):
+        return str(value).replace(r'\n', ' ').replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    built_in_systems = [
+        {"name": "Shader-cache management",
+         "description": "Built-in compatibility-checked shader packs, background compilation and runtime-specific prebuilt caches.",
+         "key_features": ["Standard and Horizon Fix Water variants", "Uses the CSX core version"]},
     ]
-    def sanitize_name(name):
-        return re.sub(r'[^A-Za-z0-9_-]+', '_', name.strip())
+    for info in sorted([*feature_metadata, *built_in_systems],
+                       key=lambda item: item.get('display_name', item['name']).casefold()):
+        lines.append(f"| {cell(info.get('display_name', info['name']))} | Yes | "
+                     f"{cell(info['description'])} | {cell(', '.join(info['key_features']))} |")
+    lines.extend([
+        "\n### Built-in CSX systems\n",
+        "The module inventory also includes Adaptive Balance. Its Lighting, Bloom and Water profiles are core CSX features.",
+        "Performance Tuning is built into the menu: feature-cost controls, CPU/GPU comparisons and saving/restoring tuned defaults. It is separate from Performance Overlay and does not require DevBench.",
+        "Shader-cache management, rendering controls and integration APIs are also built in; they follow the CSX release version instead of a separate feature-module version.",
+        "Hardware/runtime support and optional companion-plugin dependencies still apply; bundled does not mean enabled by default.",
+    ])
+    return lines, []
 
-    for info in sorted(feature_metadata, key=lambda x: x['name']):
-        if info.get('is_core'):
-            continue
-        mod_id = info.get('mod_id')
-        if not mod_id:
-            continue
-        name = info['name']
 
-        # Read INI metadata first; mod_filename is needed to derive artifact_pattern.
-        ini_path = get_feature_ini(name)  # Pass name as string for fuzzy matching
-        ini_metadata = {}
-        mod_version = None
-        if ini_path:
-            ini_metadata = get_feature_ini_metadata(ini_path)
-            version_tuple = get_version_from_ini(ini_path)
-            if version_tuple:
-                mod_version = '.'.join(str(v) for v in version_tuple)
-
-        # Use mod_filename from INI if available, else from feature metadata, else use name
-        mod_filename = ini_metadata.get('mod_filename') or info.get('mod_filename') or name
-
-        # artifact_pattern: explicit INI value takes precedence; fallback derives the
-        # pattern from the display name using the cmake convention of replacing spaces
-        # with dots, for example "Cloud Shadows" -> "Cloud.Shadows-*.7z".
-        artifact_pattern = (ini_metadata.get('artifact_pattern')
-                            or info.get('artifact_pattern')
-                            or f"{mod_filename.replace(' ', '.')}-*.7z")
-
-        # Auto-upload is opt-in; missing metadata should not enable uploads.
-        auto_upload = ini_metadata.get('auto_upload', False)
-
-        row = {
-            'name': name,
-            'artifact_pattern': artifact_pattern,
-            'artifact_name': f'nexus-upload-{sanitize_name(name)}',
-            'nexus_mod_id': mod_id,
-            'mod_filename': mod_filename,
-            'auto_upload': auto_upload,
-        }
-        if mod_version:
-            row['mod_version'] = mod_version
-        if base_ref:
-            feature_dir = find_feature_dir(name) or FEATURES_DIR / name
-            changelog = get_feature_changelog(feature_dir, info, base_ref)
-            if changelog:
-                row['changelog'] = changelog
-
-        rows.append(row)
-    return rows
+def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core_artifact_pattern,
+                              base_ref=None, core_file_group_id=""):
+    """Plan one CSX AIO upload; never inherit destinations from feature INIs."""
+    if core_artifact_pattern != "CSX_AIO-*.7z":
+        raise ValueError("CSX releases must select the complete CSX_AIO-*.7z package")
+    for name, value in (("CSX Nexus mod ID", core_mod_id), ("CSX Nexus file group ID", core_file_group_id)):
+        if value and not re.fullmatch(r"[1-9][0-9]*", value):
+            raise ValueError(f"{name} must be a positive decimal identifier")
+    if core_mod_id == "86492":
+        raise ValueError("86492 is the upstream Community Shaders mod, not a CSX upload destination")
+    return [{
+        "name": "core", "artifact_pattern": core_artifact_pattern,
+        "artifact_name": "nexus-upload-core", "nexus_mod_id": core_mod_id,
+        "file_group_id": core_file_group_id, "mod_filename": core_filename,
+        "file_description": "Complete CSX AIO with all bundled features and the shader-cache FOMOD.",
+        "auto_upload": bool(core_mod_id), "changelog": "",
+    }]
 
 
 def build_feature_actions(bump_suggestions, metadata_issues, new_features, get_commit_author, normalize_name):
@@ -1072,17 +970,18 @@ def generate_audit_report(
     bump_suggestions
 ):
     lines = []
-    lines.append("# Feature Version Audit\n")
+    lines.append("# CSX Feature Audit\n")
     lines.append(f"_Compared to base:_ `{base_ref}`  ")
     if base_date_iso and base_date_human:
         lines.append(f"_Base commit date:_ `{base_date_iso}` ({base_date_human})  ")
     lines.append(f"_Generated:_ `{now}`\n")
+    metadata_lines, metadata_issues = format_metadata_summary(feature_metadata)
+    lines.extend(metadata_lines)
+    lines.append("\n## Component version audit\n")
     lines.extend(format_feature_table(feature_analysis))
     lines.append("\n## Critical Information Summary\n")
     lines.extend(format_new_features_table(new_features, feature_meta_map, get_commit_author, normalize_name))
     lines.extend(format_new_code_table(new_code_features))
-    metadata_lines, metadata_issues = format_metadata_summary(feature_metadata)
-    lines.extend(metadata_lines)
     feature_actions = build_feature_actions(bump_suggestions, metadata_issues, new_features, get_commit_author, normalize_name)
     author_stats = build_author_stats(feature_analysis, feature_actions)
     author_stats_lines = format_author_stats(author_stats)
@@ -1103,12 +1002,27 @@ def main():
     parser.add_argument('--apply-bumps', action='store_true', help='Automatically apply suggested version bumps')
     parser.add_argument('--export-nexus-matrix', action='store_true', help='Export a JSON Nexus upload matrix and exit')
     parser.add_argument('--matrix-output', type=str, default='nexus-matrix.json', help='Output filename for Nexus matrix JSON')
-    parser.add_argument('--nexus-metadata-file', type=str, help='Optional Nexus metadata JSON file exported from nexus_mods_api')
-    parser.add_argument('--all-features', action='store_true', help='Include all Nexus-capable features in export, not just version-changed ones')
-    parser.add_argument('--core-mod-id', type=str, default='86492', help='Core Nexus mod ID for the generated upload matrix')
+    parser.add_argument('--nexus-metadata-file', type=str, help='Legacy option; rejected because CSX does not publish split feature mods')
+    parser.add_argument('--all-features', action='store_true', help='Compatibility option; CSX always exports one complete AIO')
+    parser.add_argument('--core-mod-id', type=str, default='', help='Explicit CSX Nexus mod ID for the generated upload matrix')
     parser.add_argument('--core-filename', type=str, default='Community Shaders Expanded (CSX)', help='Core Nexus filename for the generated upload matrix')
-    parser.add_argument('--core-artifact-pattern', type=str, default='CSX-*.7z', help='Core artifact pattern for the generated upload matrix')
+    parser.add_argument('--core-artifact-pattern', type=str, default='CSX_AIO-*.7z', help='Core artifact pattern for the generated upload matrix')
+    parser.add_argument('--core-file-group-id', default='', help='Explicit CSX Nexus file group ID')
     args = parser.parse_args()
+
+    if args.nexus_metadata_file:
+        parser.error('CSX uses an explicit AIO destination, not per-feature Nexus metadata')
+    if args.export_nexus_matrix:
+        try:
+            matrix = build_nexus_upload_matrix(
+                [], args.core_mod_id, args.core_filename, args.core_artifact_pattern,
+                core_file_group_id=args.core_file_group_id,
+            )
+        except ValueError as error:
+            parser.error(str(error))
+        Path(args.matrix_output).write_text(json.dumps(matrix, indent=2), encoding='utf-8')
+        print(f'Wrote CSX AIO Nexus matrix to {args.matrix_output}')
+        return
 
     global HEAD_REF
     if args.head:
@@ -1151,36 +1065,9 @@ def main():
     if base_date_iso:
         print(f"Base commit date: {base_date_iso} ({base_date_human})", file=sys.stderr)
 
-    nexus_metadata = load_nexus_metadata_file(args.nexus_metadata_file) if args.nexus_metadata_file else None
-    feature_metadata = extract_feature_metadata(DEFAULT_FEATURE_HEADERS_DIR, nexus_metadata=nexus_metadata)
+    feature_metadata = extract_feature_metadata(DEFAULT_FEATURE_HEADERS_DIR)
     def normalize_name(name): return normalize_feature_key(name)
     feature_meta_map = {normalize_name(f['name']): f for f in feature_metadata}
-
-    def feature_changed_versions(metadata_item):
-        ini_path = get_feature_ini(metadata_item['name'])  # Use fuzzy matching
-        if not ini_path:
-            return False
-        prior_ver = get_prior_version(ini_path, base_ref)
-        new_ver = get_version_from_ini(ini_path)
-        return new_ver is not None and prior_ver != new_ver
-
-    if args.export_nexus_matrix:
-        export_features = feature_metadata
-        if not args.all_features:
-            export_features = [f for f in feature_metadata if f.get('is_core') or feature_changed_versions(f)]
-        matrix = build_nexus_upload_matrix(
-            export_features,
-            args.core_mod_id,
-            args.core_filename,
-            args.core_artifact_pattern,
-            base_ref=base_ref,
-        )
-        output_path = args.matrix_output
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(matrix, f, indent=2)
-        visibility = 'all features' if args.all_features else 'version-changed only'
-        print(f'Wrote Nexus matrix to {output_path} ({visibility})')
-        sys.exit(0)
 
     feature_analysis, bump_suggestions, new_features, new_code_features, actionable, feature_actions = analyze_features(
         FEATURES_DIR, feature_meta_map, base_ref, only_changed=args.pr_check, release_ref=release_ref)

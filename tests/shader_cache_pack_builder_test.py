@@ -9,6 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from dxbc_fixtures import make_dxbc
+
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "tools" / "build-shader-cache.py"
@@ -76,18 +78,18 @@ def main() -> int:
             "bytecode": bytecode,
         }
 
-    standard_water = packaged_record("Water/1.pso", "1" * 32, "default", b"DXBC-standard")
-    horizon_water = packaged_record("Water/1.pso", "2" * 32, "legacy-horizon-fix", b"DXBC-horizon")
+    standard_water = packaged_record("Water/1.pso", "1" * 32, "default", make_dxbc(marker=b"standard"))
+    horizon_water = packaged_record("Water/1.pso", "2" * 32, "legacy-horizon-fix", make_dxbc(marker=b"horizon"))
     pair = [standard_water, horizon_water]
     inventory_cases = (
         ("preserved-pair-after-append", 1, [
             *pair,
-            packaged_record("Water/1.pso", "3" * 32, "default", b"DXBC-updated"),
+            packaged_record("Water/1.pso", "3" * 32, "default", make_dxbc(marker=b"updated")),
         ], 0, [], True),
         ("unaffected-permutation", 1, [
             *pair,
-            packaged_record("Water/2.pso", "1" * 32, "default", b"DXBC-identical"),
-            packaged_record("Water/2.pso", "2" * 32, "legacy-horizon-fix", b"DXBC-identical"),
+            packaged_record("Water/2.pso", "1" * 32, "default", make_dxbc(marker=b"identical")),
+            packaged_record("Water/2.pso", "2" * 32, "legacy-horizon-fix", make_dxbc(marker=b"identical")),
         ], 0, [], True),
         ("last-exact-record-wins", 1, [
             *pair, {**horizon_water, "bytecode": standard_water["bytecode"]},
@@ -97,6 +99,18 @@ def main() -> int:
         ], True),
         ("obsolete-generation-ignored", 5, pair, 1, [
             {**horizon_water, "exactKey": "obsolete", "metadata": "invalid"},
+        ], True),
+        ("active-truncated-bytecode", 1, [
+            standard_water, {**horizon_water, "bytecode": horizon_water["bytecode"][:-1]},
+        ], 0, [], False),
+        ("fallback-wrong-stage", 2, [standard_water], 1, [
+            {**horizon_water, "bytecode": make_dxbc(stage=1)},
+        ], False),
+        ("replaced-malformed-bytecode", 1, [
+            {**horizon_water, "bytecode": b"DXBC-truncated"}, *pair,
+        ], 0, [], True),
+        ("inactive-malformed-bytecode", 5, pair, 1, [
+            {**horizon_water, "bytecode": b"DXBC-truncated"},
         ], True),
     )
     for name, active_generation, active_records, fallback_generation, fallback_records, expected in inventory_cases:

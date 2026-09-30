@@ -2,24 +2,24 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.09.23.1",
+    "packageVersion": "d2026.09.27.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
         "target": {
             "runtime": "VR",
-            "minimumVersion": "3.19",
-            "maximumVersionExclusive": "3.20"
+            "minimumVersion": "3.20",
+            "maximumVersionExclusive": "3.21"
         }
     },
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "5933611B40123E371A8D9E11C2C98148568A8B230CD8EE1626629B1B943AAD05"
+        "sha256": "E66F06320F1AC94204FF11752BF8498E5BB8037C5FACB701B15FD17860DC87E4"
     },
     "runtimeSettingsContract": {
         "revision": 5,
-        "sourceTreeSha256": "FC6FFBA1FBBDC8106AD10888A567741EAEC5C5E25578A6DEF5DD5870AF24887A",
+        "sourceTreeSha256": "434F099C45A4B4C19DB09A54733307789B0D774F48948E4C0AF1E19CC1507B28",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -273,12 +273,12 @@
             "reason": "use the requested Marschner hair model"
         },
         { "path": ["Hair Specular", "HairGlossiness"], "value": 70.0 },
-        { "path": ["Hair Specular", "SpecularMult"], "value": 1.38 },
-        { "path": ["Hair Specular", "DiffuseMult"], "value": 1.02 },
-        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 3.0 },
-        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 0.7 },
-        { "path": ["Hair Specular", "BaseColorMult"], "value": 0.81 },
-        { "path": ["Hair Specular", "HairSaturation"], "value": 0.8 },
+        { "path": ["Hair Specular", "SpecularMult"], "value": 1.7 },
+        { "path": ["Hair Specular", "DiffuseMult"], "value": 0.75 },
+        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "BaseColorMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "HairSaturation"], "value": 1.0 },
         { "path": ["Hair Specular", "Transmission"], "value": 1.0 },
         { "path": ["Hair Specular", "EnableTangentShift"], "value": 1 },
         { "path": ["Hair Specular", "EnableSelfShadow"], "value": 1 },
@@ -568,12 +568,12 @@
         { "path": ["Subsurface Scattering", "HumanFemaleSSSBaseSaturation"], "value": 1.05 },
         { "path": ["Hair Specular", "HairMode"], "value": 1 },
         { "path": ["Hair Specular", "HairGlossiness"], "value": 70.0 },
-        { "path": ["Hair Specular", "SpecularMult"], "value": 1.38 },
-        { "path": ["Hair Specular", "DiffuseMult"], "value": 1.02 },
-        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 3.0 },
-        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 0.7 },
-        { "path": ["Hair Specular", "BaseColorMult"], "value": 0.81 },
-        { "path": ["Hair Specular", "HairSaturation"], "value": 0.8 },
+        { "path": ["Hair Specular", "SpecularMult"], "value": 1.7 },
+        { "path": ["Hair Specular", "DiffuseMult"], "value": 0.75 },
+        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "BaseColorMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "HairSaturation"], "value": 1.0 },
         { "path": ["Hair Specular", "Transmission"], "value": 1.0 },
         { "path": ["Hair Specular", "EnableTangentShift"], "value": 1 },
         { "path": ["Hair Specular", "EnableSelfShadow"], "value": 1 },
@@ -638,6 +638,7 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            { "path": ["Extended Materials", "ParallaxStrength"], "value": 1.0 },
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
             { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },

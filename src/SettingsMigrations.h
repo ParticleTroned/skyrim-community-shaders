@@ -48,6 +48,12 @@ namespace SettingsMigrations
 	// former appearance-control values.
 	bool HasLegacyUnifiedWaterAppearanceValues(const nlohmann::json& a_value);
 
+	/** Seed absent cloud controls from a profile's formerly shared sky values. */
+	bool MigrateCloudProfileSettings(nlohmann::json& a_profile);
+
+	/** Migrate cloud controls within one Adaptive Balance source before merging. */
+	bool MigrateCloudSettingsLayer(nlohmann::json& a_settings);
+
 	// Migrates one root-settings source layer in place. The old Adaptive Brightness
 	// root is folded into Adaptive Balance, with explicit values under the new name
 	// taking precedence. Legacy CS Utility renderer fields and Unified Water's former

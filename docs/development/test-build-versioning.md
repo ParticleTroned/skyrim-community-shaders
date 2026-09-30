@@ -3,13 +3,15 @@
 CSX has two deliberately separate identities:
 
 -   `CSX_VERSION` is the release and compatibility version, such as
-    `3.19-VR`.
+    `3.20-VR`.
 -   `CSX_TEST_BUILD` is an optional test-distribution identity, such as
     `RC218-2026-09-07`.
 
-A stable build therefore remains `CSX 3.19-VR`. An allocated test build is
-displayed as `CSX 3.19-VR RC218 (2026-09-07)` and its AIO archive is named
-`CSX_AIO-3.19-VR-RC218-2026-09-07.7z`.
+A stable build displays `CSX 3.20.0-VR`, including the patch component.
+Allocated test builds retain the independent series and RC identity, for
+example `CSX 3.20-VR RC218 (2026-09-07)`, with archive name
+`CSX_AIO-3.20-VR-RC218-2026-09-07.7z`. Persisted plugin metadata contains
+the numeric version without the test identifier.
 
 ## Stored state
 

@@ -17,6 +17,20 @@ tiers. Disabling weather-driven Volumetric Lighting during rain is unchecked.
 
 Adaptive Balance uses the built-in Fantasy preset for global Bloom shaping,
 with the global Bloom strength reduced to `0.50` in every tier.
+Its Interior profile enables advanced controls with Emissive `2.0` and
+Ambient `0.75` in the shared base for all three tiers.
+Exterior Night also enables advanced controls, with Scene Brightness `0.85`,
+Directional Light `2.50`, Point Lights and Omnidirectional Bulbs `1.25`,
+Ambient `0.90`, and Emissive `1.50`. Its Sky and Volumetric Lighting gamma
+offsets are `0.45` and `0.30`, respectively.
+Exterior Day enables advanced controls with Directional Light `1.15` and
+Volumetric Lighting gamma offset `0.75`.
+
+Hair Specular uses Marschner with glossiness `70`, specular multiplier `1.70`,
+and diffuse multiplier `0.75`. Indirect specular, indirect diffuse, base
+colour, saturation, and transmission are `1.0` in every tier. Tangent shift
+and screen-space self shadow are enabled; self-shadow strength, exponent,
+and scale remain `1.0`, `0.1`, and `2.5`.
 
 Subsurface Scattering uses Burley with 16 samples and character lighting off
 in every tier. Male/female SSS intensity is `1.00`/`1.10`; both use SSS
@@ -96,12 +110,16 @@ at `16`. These appearance defaults are shared across tiers and GPU vendors.
 Wind-driven waves remain opt-in; their existing settings are explicit in
 every profile.
 
+Extended Materials includes the independent mesh and terrain Parallax Strength
+at its neutral value of `1.0` in every tier. Legacy settings without the key
+also retain neutral depth; this additive default retains contract revision 5.
+
 ## CSX compatibility contract
 
-The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`
+The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
-package version, VR runtime, inclusive minimum `3.19`, exclusive maximum
-`3.20`, and the settings-contract fingerprint used to generate it.
+package version, VR runtime, inclusive minimum `3.20`, exclusive maximum
+`3.21`, and the settings-contract fingerprint used to generate it.
 The generator and runtime loader both use settings-contract revision 5.
 The Release compatibility regression loads every generated tier to verify
 that the shipping loader accepts its metadata.
@@ -120,12 +138,19 @@ quality and tier choices are unaffected.
 
 CSX validates marked settings before canonicalization, migration, or merge.
 Malformed metadata, an unsupported compatibility-contract version, the wrong
-runtime, or a CSX version outside the declared range rejects the complete user
+runtime, or an unsupported CSX version rejects the complete user
 layer without rewriting it. Defaults remain active, saving is blocked to
 protect the rejected file, and the decision is recorded in the log and exposed
 through the Feature DevBench API's `preset_compatibility` action. Unmarked
 legacy and user-authored settings remain accepted because strict metadata
 cannot be added retroactively.
+
+CSX 3.20 also accepts the three bundled revision-5 unified presets that
+declare the previous `3.19` to `3.20` range. Their settings schema remains
+supported, so this version update preserves installed user settings. This
+exception does not apply to other preset IDs, other contract revisions,
+SE/AE, or CSX 3.21 and later. Product labels include the patch component;
+preset compatibility bounds continue to describe major/minor lines.
 
 The three generated presets never hard-disable a feature: every `Disable at
 Boot` value is false. Tier exclusions use feature-owned live/soft settings.

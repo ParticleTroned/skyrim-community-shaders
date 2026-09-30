@@ -2,8 +2,53 @@
 
 #include "State.h"
 
+#include <limits>
+
+namespace
+{
+	void ResetModelHandle(RE::ModelDBHandle& a_handle)
+	{
+		if (!a_handle)
+			return;
+
+		if (REL::Module::IsAE()) {
+			auto* entry = a_handle.get();
+			a_handle = {};
+			static REL::Relocation<void (*)(RE::ModelDBHandle::U_Entry*)> release{ REL::ID(15443) };
+			release(entry);
+		} else {
+			using Reset = RE::ModelDBHandle* (*)(RE::ModelDBHandle*, RE::ModelDBHandle::U_Entry*);
+			static REL::Relocation<Reset> reset{ REL::ID(25746) };
+			reset(&a_handle, nullptr);
+		}
+	}
+}
+
 namespace Util
 {
+	void RefreshForcedWeatherSky(RE::Sky* a_sky)
+	{
+		if (!a_sky)
+			return;
+
+		if (a_sky->auroraRoot) {
+			if (a_sky->root)
+				a_sky->root->DetachChild(a_sky->auroraRoot.get());
+			a_sky->auroraRoot.reset();
+		}
+		ResetModelHandle(a_sky->auroraModel);
+
+		// Defer cloud-pass rebuilding until accumulation; current queues may still borrow these passes.
+		if (a_sky->clouds) {
+			for (const auto& cloud : a_sky->clouds->clouds) {
+				if (cloud) {
+					if (auto* property = skyrim_cast<RE::BSSkyShaderProperty*>(cloud->GetGeometryRuntimeData().shaderProperty.get()))
+						property->lastRenderPassState = (std::numeric_limits<std::int32_t>::max)();
+				}
+			}
+		}
+	}
+
 	float4 TryGetWaterData(float offsetX, float offsetY)
 	{
 		if (globals::game::shadowState) {

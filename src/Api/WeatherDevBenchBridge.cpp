@@ -364,14 +364,14 @@ namespace CSX::Api::WeatherDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. Mutations require preflight then execute with identical arguments and the returned token.",
+			"description":"Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. Forced weather refreshes cached cloud passes and sky models. Mutations require preflight then execute with identical arguments and the returned token.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
 				"action":{"type":"string","enum":["registry","snapshot","weathers","features","variables","override","preflight","execute"]},
 				"featureName":{"type":"string"},"weatherKey":{"type":"string"},
 				"mutation":{"type":"object","required":["action","expectedStateRevision"],"properties":{
-					"action":{"type":"string","enum":["set_weather","preview_weather","reset_weather","lock_weather","unlock_weather","set_feature_paused","reload_overrides","set_feature_override","remove_feature_override"]},
+					"action":{"type":"string","description":"preview_weather forces an immediate weather change and refreshes cloud passes and sky models; it is blocked while weather is locked.","enum":["set_weather","preview_weather","reset_weather","lock_weather","unlock_weather","set_feature_paused","reload_overrides","set_feature_override","remove_feature_override"]},
 					"expectedStateRevision":{"type":"integer","minimum":0},"weatherKey":{"type":"string"},"featureName":{"type":"string"},
 					"value":{},"accelerate":{"type":"boolean"},"persist":{"type":"boolean"},"applyLive":{"type":"boolean"},
 					"allowDisruptive":{"type":"boolean"},"allowDestructive":{"type":"boolean"},"preflightToken":{"type":"string"}

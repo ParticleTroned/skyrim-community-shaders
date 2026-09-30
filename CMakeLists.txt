@@ -13,7 +13,7 @@ if(DEVBENCH_BRIDGE)
     list(APPEND VCPKG_MANIFEST_FEATURES "devbench-bridge")
 endif()
 
-set(_CSX_VERSION_DEFAULT "3.19-VR")
+set(_CSX_VERSION_DEFAULT "3.20-VR")
 if(CMAKE_BINARY_DIR MATCHES [[[/\\]build[/\\]AIO-Release$]])
     set(_CSX_VERSION_DEFAULT "3.15-SE")
 elseif(DEFINED ENABLE_SKYRIM_VR AND NOT ENABLE_SKYRIM_VR)
@@ -32,11 +32,21 @@ if(NOT CSX_VERSION MATCHES [[^([0-9]+)\.([0-9]+)-(SE|VR)$]])
 endif()
 set(_CSX_PROJECT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0")
 set(CSX_RUNTIME "${CMAKE_MATCH_3}")
-set(CSX_PLUGIN_VERSION "CSX ${CSX_VERSION}")
+set(CSX_RELEASE_VERSION
+    ""
+    CACHE STRING
+    "Stable version supplied by release automation."
+)
+if(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+    include("${CMAKE_CURRENT_LIST_DIR}/cmake/ReleaseVersion.cmake")
+    csx_resolve_release_version(
+        "${CSX_RELEASE_VERSION}" "${CSX_VERSION}"
+        _CSX_PROJECT_VERSION _CSX_RELEASE_LABEL
+    )
+endif()
 
-# Test distributions carry an independently allocated build identity. Keep the
-# plugin version and compatibility identity on CSX_VERSION: both are consumed
-# by the existing settings and shader-cache compatibility paths.
+# Test distributions carry an independently allocated build identity. Persist
+# the numeric plugin version without the test identifier in settings and caches.
 set(CSX_TEST_BUILD
     ""
     CACHE STRING
@@ -49,12 +59,21 @@ csx_parse_test_build(
     CSX_TEST_BUILD_DATE
 )
 if(NOT "${CSX_TEST_BUILD}" STREQUAL "")
+    if(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+        message(
+            FATAL_ERROR
+            "Release and test-build identities cannot be combined."
+        )
+    endif()
     set(CSX_BUILD_VERSION
         "${CSX_VERSION} ${CSX_TEST_BUILD_NUMBER} (${CSX_TEST_BUILD_DATE})"
     )
+elseif(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+    set(CSX_BUILD_VERSION "${_CSX_RELEASE_LABEL}")
 else()
-    set(CSX_BUILD_VERSION "${CSX_VERSION}")
+    set(CSX_BUILD_VERSION "${_CSX_PROJECT_VERSION}-${CSX_RUNTIME}")
 endif()
+set(CSX_PLUGIN_VERSION "CSX ${_CSX_PROJECT_VERSION}-${CSX_RUNTIME}")
 set(CSX_BUILD_LABEL "CSX ${CSX_BUILD_VERSION}")
 
 project(
@@ -74,6 +93,12 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
         PROPERTY VALUE "${CMAKE_CURRENT_BINARY_DIR}/aio"
     )
 endif()
+
+# Reject incomplete runtime payloads before any install action can alter staging.
+set(CSX_RUNTIME_INSTALL_GUARD
+    "${CMAKE_CURRENT_BINARY_DIR}/runtime_payload_install_guard.cmake"
+)
+install(SCRIPT "${CSX_RUNTIME_INSTALL_GUARD}" ALL_COMPONENTS)
 
 # Register the destructive reset before dependency subdirectories can emit install actions.
 set(AIO_DIR "${CMAKE_CURRENT_BINARY_DIR}/aio")
@@ -114,6 +139,11 @@ option(
     "Zip the base mod and addons to a AIO 7z file in dist."
     ON
 )
+option(
+    SKIP_RUNTIME_DOWNLOADS
+    "Skip upscaler runtime downloads/extraction for DLL-only development. Missing payloads prevent runtime installation and packaging."
+    OFF
+)
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 option(
     BUILD_SHADER_TESTS
@@ -149,6 +179,7 @@ set(AIO_NON_SHIPPED_FEATURE_PACKAGES "Wetness Effects")
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
+message("\tSkip runtime downloads: ${SKIP_RUNTIME_DOWNLOADS}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
 message("\tController tests: ${BUILD_CONTROLLER_TESTS}")
@@ -222,6 +253,7 @@ add_custom_target(
         --toolchain-file "${CMAKE_TOOLCHAIN_FILE}"
         --overlay-dir "${VCPKG_OVERLAY_PORTS}"
         --build-option "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}"
+        --build-option "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}"
         --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
         --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}"
         --build-option "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}"
@@ -275,6 +307,7 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+csx_configure_runtime_payload()
 
 string(
     REPLACE "."
@@ -675,6 +708,8 @@ endif()
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 if(NOT "${CSX_TEST_BUILD}" STREQUAL "")
     set(CSX_PACKAGE_STAMP "${CSX_VERSION}-${CSX_TEST_BUILD}")
+elseif(NOT "${CSX_RELEASE_VERSION}" STREQUAL "")
+    set(CSX_PACKAGE_STAMP "${_CSX_RELEASE_LABEL}")
 else()
     set(CSX_PACKAGE_STAMP "${UTC_NOW}")
 endif()
@@ -719,12 +754,12 @@ install(
     PATTERN "Tests" EXCLUDE
 )
 install(
-    FILES ${FFX_RUNTIME_FILES}
+    FILES ${FFX_RUNTIME_PAYLOAD_FILES}
     DESTINATION Shaders/Upscaling/FidelityFX
     COMPONENT FidelityFXRuntime
 )
 install(
-    FILES ${STREAMLINE_RUNTIME_FILES}
+    FILES ${STREAMLINE_RUNTIME_PAYLOAD_FILES}
     DESTINATION Shaders/Upscaling/Streamline
     COMPONENT StreamlineRuntime
 )
@@ -813,6 +848,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
         -DFEATURE_PATHS_FILE="${_feature_paths_list_file}"
+        -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -873,6 +909,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_AIO_PACKAGE_FILES}
             ${PROJECT_NAME}
             ${_feature_paths_list_file}
+            ${CSX_RUNTIME_INSTALL_GUARD}
+            ${CMAKE_SOURCE_DIR}/cmake/PreservedRuntimePaths.cmake
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
     )
 
@@ -974,6 +1012,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
         -DFEATURE_SHADER_PATHS_FILE="${_feature_shader_paths_list_file}"
+        -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -1009,6 +1048,8 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${FFX_RUNTIME_FILES}
             ${STREAMLINE_RUNTIME_FILES}
             ${_feature_shader_paths_list_file}
+            ${CSX_RUNTIME_INSTALL_GUARD}
+            ${CMAKE_SOURCE_DIR}/cmake/PreservedRuntimePaths.cmake
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
     )
@@ -1182,6 +1223,7 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${CMAKE_COMMAND} -DSRC_DIR="${AIO_DIR}/Shaders"
                     -DDST_DIR="${DEPLOY_TARGET}/Shaders"
                     -DMANIFEST_FILE="${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_shaders.manifest"
+                    -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
                     -P "${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
@@ -1197,6 +1239,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${STREAMLINE_RUNTIME_FILES}
                     ${_feature_shader_paths_list_file}
                     ${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake
+                    ${CSX_RUNTIME_INSTALL_GUARD}
+                    ${CMAKE_SOURCE_DIR}/cmake/PreservedRuntimePaths.cmake
                 COMMENT
                     "Content-based shader deploy to ${DEPLOY_TARGET}/Shaders"
                 VERBATIM
@@ -1403,6 +1447,7 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 endforeach()
 
 # Core package
+list(APPEND CORE_SOURCES "${CSX_RUNTIME_INSTALL_GUARD}")
 set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(
@@ -1470,6 +1515,7 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 --format=7zip -- .
             DEPENDS
                 ${FEATURE_SOURCES}
+                ${CSX_RUNTIME_INSTALL_GUARD}
                 ${FFX_RUNTIME_FILES}
                 ${STREAMLINE_RUNTIME_FILES}
             COMMENT "Creating ${FEATURE} zip package"
@@ -1582,6 +1628,13 @@ endif()
 
 if(BUILD_CONTROLLER_TESTS)
     enable_testing()
+    add_test(
+        NAME RuntimeDownloadPolicy
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing/RuntimeDownloadPolicy"
+            -P "${PROJECT_SOURCE_DIR}/tests/runtime_download_policy_test.cmake"
+    )
     get_property(
         _targets_before_controller_tests
         DIRECTORY
@@ -1741,6 +1794,9 @@ if(BUILD_CONTROLLER_TESTS)
         "${_adaptive_balance_test_dir}/linear_lighting_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_point_lights_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_point_light_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_weather_hook_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_adaptive_balance_test_headers}
@@ -1755,6 +1811,8 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/LinearLighting.h
             src/Features/Bloom.cpp
             src/Features/WaterAppearance.cpp
+            src/MenuDevBenchBridge.cpp
+            src/SettingsMigrations.cpp
             tests/extract_adaptive_balance_toggle.py
         VERBATIM
     )
@@ -1763,15 +1821,33 @@ if(BUILD_CONTROLLER_TESTS)
         AdaptiveBalanceToggle
         tests/adaptive_balance_toggle_test.cpp
     )
-    target_sources(
-        adaptive_balance_toggle_test
-        PRIVATE ${_adaptive_balance_test_headers}
+    add_custom_target(
+        adaptive_balance_test_sources
+        DEPENDS ${_adaptive_balance_test_headers}
     )
+    add_dependencies(adaptive_balance_toggle_test adaptive_balance_test_sources)
     target_include_directories(
         adaptive_balance_toggle_test
         PRIVATE "${_adaptive_balance_test_dir}"
     )
+    target_link_libraries(
+        adaptive_balance_toggle_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     if(MSVC)
+        add_controller_test(
+            adaptive_balance_point_lights_test
+            AdaptiveBalancePointLights
+            tests/adaptive_balance_point_lights_test.cpp
+        )
+        add_dependencies(
+            adaptive_balance_point_lights_test
+            adaptive_balance_test_sources
+        )
+        target_include_directories(
+            adaptive_balance_point_lights_test
+            PRIVATE "${_adaptive_balance_test_dir}"
+        )
         # Extracted adjustment arithmetic must use the DLL's Release FP model.
         target_compile_options(
             adaptive_balance_toggle_test
@@ -1792,6 +1868,7 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(D3DContextProtection PROPERTIES TIMEOUT 60)
 
     include("${PROJECT_SOURCE_DIR}/tests/virtual_function_hook.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/engine_overflow_guards.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/fov_settings.cmake")
@@ -1901,6 +1978,31 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(vr_scene_guards_test PRIVATE xbyak::xbyak)
     set_tests_properties(VRSceneGuards PROPERTIES TIMEOUT 30)
+
+    set(_vr_grass_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-grass-lifetime"
+    )
+    add_custom_command(
+        OUTPUT "${_vr_grass_test_dir}/vr_grass_lifetime_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_grass_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_grass_lifetime.cmake"
+        DEPENDS
+            src/EngineFixes/VRGrassLifetimeFix.cpp
+            tests/extract_vr_grass_lifetime.cmake
+        VERBATIM
+    )
+    add_controller_test(vr_grass_lifetime_test VRGrassLifetime tests/vr_grass_lifetime_test.cpp)
+    target_sources(
+        vr_grass_lifetime_test
+        PRIVATE "${_vr_grass_test_dir}/vr_grass_lifetime_under_test.h"
+    )
+    target_include_directories(
+        vr_grass_lifetime_test
+        PRIVATE "${_vr_grass_test_dir}"
+    )
+    set_tests_properties(VRGrassLifetime PROPERTIES TIMEOUT 30)
 
     set(_native_lighting_material_guard_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/native-lighting-material-guard"
@@ -2144,6 +2246,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
     add_d3d_shader_test(
         ambient_balance_shader_test
         AmbientBalanceShader
@@ -2174,11 +2277,50 @@ if(BUILD_CONTROLLER_TESTS)
             ${_settings_test_launcher} "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/skylighting_settings_test.py"
     )
+    add_test(
+        NAME ExtendedMaterialsSettings
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extended_materials_settings_test.py"
+    )
+    set_tests_properties(
+        ExtendedMaterialsSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
     set_tests_properties(
         SkylightingSettings
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME WaterAppearanceSettings
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/water_appearance_settings_test.py"
+    )
+    set_tests_properties(
+        WaterAppearanceSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    add_test(
+        NAME TruePBRSettings
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/true_pbr_settings_test.py"
+    )
+    set_tests_properties(
+        TruePBRSettings
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
     )
     add_controller_test(
         motion_sharpening_runtime_compile_test
@@ -2433,6 +2575,83 @@ if(BUILD_CONTROLLER_TESTS)
         StreamlineFrameTokenPublication
         tests/streamline_frame_token_publication_test.cpp
     )
+    add_controller_test(
+        dlss_result_policy_test
+        DLSSResultPolicy
+        tests/dlss_result_policy_test.cpp
+    )
+    target_link_libraries(dlss_result_policy_test PRIVATE Streamline)
+    set(_frame_generation_inputs_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/frame-generation-inputs"
+    )
+    set(_frame_generation_inputs_test_headers
+        "${_frame_generation_inputs_test_dir}/frame_generation_members.h"
+        "${_frame_generation_inputs_test_dir}/frame_generation_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_frame_generation_inputs_test_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_frame_generation_inputs.py"
+            --source-dir "${PROJECT_SOURCE_DIR}" --output-dir
+            "${_frame_generation_inputs_test_dir}"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling.h
+            src/Features/Upscaling/DX12SwapChain.cpp
+            tests/extract_frame_generation_inputs.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        frame_generation_inputs_test
+        FrameGenerationInputs
+        tests/frame_generation_inputs_test.cpp
+    )
+    target_sources(
+        frame_generation_inputs_test
+        PRIVATE ${_frame_generation_inputs_test_headers}
+    )
+    target_include_directories(
+        frame_generation_inputs_test
+        PRIVATE "${_frame_generation_inputs_test_dir}"
+    )
+    set(_forced_weather_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/forced-weather"
+    )
+    set(_forced_weather_test_headers
+        "${_forced_weather_test_dir}/forced_weather_hooks.h"
+        "${_forced_weather_test_dir}/forced_weather_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_forced_weather_test_headers}
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/extract_forced_weather.py" --source-dir
+            "${PROJECT_SOURCE_DIR}" --output-dir "${_forced_weather_test_dir}"
+        DEPENDS
+            src/Utils/Game.cpp
+            src/CSEditor/EditorWindow.cpp
+            tests/extract_forced_weather.py
+            tests/extract_adaptive_balance_toggle.py
+        VERBATIM
+    )
+    add_controller_test(
+        forced_weather_test
+        ForcedWeather
+        tests/forced_weather_test.cpp
+    )
+    target_sources(forced_weather_test PRIVATE ${_forced_weather_test_headers})
+    target_include_directories(
+        forced_weather_test
+        PRIVATE "${_forced_weather_test_dir}"
+    )
+    add_controller_test(
+        camera_reprojection_test
+        CameraReprojection
+        tests/camera_reprojection_test.cpp
+    )
+    target_link_libraries(camera_reprojection_test PRIVATE Microsoft::DirectXTK)
     add_controller_test(
         vr_submit_temporal_snapshot_test
         VRSubmitTemporalSnapshot
@@ -2717,6 +2936,7 @@ if(BUILD_CONTROLLER_TESTS)
         ShaderCacheProvenance
         tests/shader_cache_provenance_test.cpp
     )
+    include("${PROJECT_SOURCE_DIR}/tests/shader_cache_variants.cmake")
     add_controller_test(
         shader_compile_identity_test
         ShaderCompileIdentity
@@ -2761,6 +2981,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     add_controller_test(
         vr_depth_culling_enable_policy_test
         VRDepthCullingEnablePolicy
@@ -2916,6 +3137,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(AcceptedDrawService PROPERTIES TIMEOUT 30)
     include(tests/vr_menu_pointer.cmake)
+    include(tests/vr_menu_layer_lifetime.cmake)
     add_executable(
         preset_compatibility_test
         EXCLUDE_FROM_ALL

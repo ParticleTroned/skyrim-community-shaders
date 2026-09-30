@@ -39,6 +39,8 @@ struct LinearLighting : Feature
 		float effectGamma = 1.4f;
 		float effectAlphaGamma = 1.55f;
 		float skyGamma = 1.8f;
+		/// Runtime-only cloud gamma, seeded from skyGamma before Adaptive Balance composition.
+		float cloudGamma = 1.8f;
 		float waterGamma = 1.8f;
 		float vlGamma = 1.8f;
 
@@ -85,10 +87,12 @@ struct LinearLighting : Feature
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBrightnessColorAdjustments;
-		uint pad0[2];
+		float cloudGamma;
+		uint pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 	static_assert(sizeof(PerFrameData) == 112);
+	static_assert(offsetof(PerFrameData, cloudGamma) == 104);
 
 	struct alignas(16) PerGeometryData
 	{

@@ -80,6 +80,17 @@ namespace CSX::ScreenshotStorage
 			return information;
 		}
 
+		std::filesystem::path NormalizeFinalPath(std::wstring a_path)
+		{
+			static constexpr std::wstring_view uncPrefix = L"\\\\?\\UNC\\";
+			static constexpr std::wstring_view extendedPrefix = L"\\\\?\\";
+			if (a_path.starts_with(uncPrefix))
+				a_path.replace(0, uncPrefix.size(), L"\\\\");
+			else if (a_path.starts_with(extendedPrefix))
+				a_path.erase(0, extendedPrefix.size());
+			return std::filesystem::path(a_path).lexically_normal();
+		}
+
 		std::filesystem::path FinalPath(HANDLE a_handle)
 		{
 			const DWORD required = GetFinalPathNameByHandleW(a_handle, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -91,10 +102,7 @@ namespace CSX::ScreenshotStorage
 			if (written == 0 || written >= required)
 				throw std::runtime_error(std::format("final path query failed with Win32 error {}", GetLastError()));
 			buffer.resize(written);
-			static constexpr std::wstring_view extendedPrefix = L"\\\\?\\";
-			if (buffer.starts_with(extendedPrefix))
-				buffer.erase(0, extendedPrefix.size());
-			return std::filesystem::path(buffer).lexically_normal();
+			return NormalizeFinalPath(std::move(buffer));
 		}
 
 		bool SamePath(const std::filesystem::path& a_left, const std::filesystem::path& a_right)
@@ -257,11 +265,8 @@ namespace CSX::ScreenshotStorage
 		if (file.Get() == INVALID_HANDLE_VALUE)
 			throw std::runtime_error(std::format("could not lock committed artifact for verification (Win32 error {})", GetLastError()));
 		ReadIdentity(file.Get(), false);
-		std::error_code canonicalError;
-		const auto expected = std::filesystem::weakly_canonical(a_path, canonicalError);
-		if (canonicalError || !SamePath(FinalPath(file.Get()), expected))
-			throw std::runtime_error("committed artifact path changed while it was opened");
-		return CommittedFile(file.Release(), expected);
+		const auto openedPath = FinalPath(file.Get());
+		return CommittedFile(file.Release(), openedPath);
 	}
 
 	CommittedArtifact CommittedFile::WriteAtomically(
@@ -286,7 +291,6 @@ namespace CSX::ScreenshotStorage
 			throw std::runtime_error(std::format(
 				"committed artifact temporary file creation failed with Win32 error {}", GetLastError()));
 
-		bool renamed = false;
 		try {
 			const auto identity = Identity(ReadIdentity(file.Get(), false));
 			const auto* bytes = static_cast<const std::byte*>(a_data);
@@ -304,16 +308,21 @@ namespace CSX::ScreenshotStorage
 					"committed artifact flush failed with Win32 error {}", GetLastError()));
 
 			RenameHandle(file.Get(), destination, a_replaceExisting);
-			renamed = true;
-			if (Identity(ReadIdentity(file.Get(), false)) != identity ||
-				!SamePath(FinalPath(file.Get()), destination)) {
+			const auto publishedPath = FinalPath(file.Get());
+			ScopedHandle published(CreateFileW(
+				destination.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+				nullptr, OPEN_EXISTING,
+				FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+			if (published.Get() == INVALID_HANDLE_VALUE ||
+				Identity(ReadIdentity(file.Get(), false)) != identity ||
+				Identity(ReadIdentity(published.Get(), false)) != identity ||
+				!SamePath(FinalPath(published.Get()), publishedPath)) {
 				throw std::runtime_error("committed artifact identity changed during publication");
 			}
-			CommittedFile committed(file.Release(), destination);
+			CommittedFile committed(file.Release(), publishedPath);
 			return committed.Describe();
 		} catch (...) {
-			if (!renamed)
-				DeleteHandle(file.Get());
+			DeleteHandle(file.Get());
 			throw;
 		}
 	}
@@ -393,16 +402,15 @@ namespace CSX::ScreenshotStorage
 		}
 		std::filesystem::create_directories(a_destination);
 		std::error_code canonicalError;
-		const auto destination = std::filesystem::weakly_canonical(a_destination, canonicalError);
-		if (canonicalError || !destination.is_absolute())
+		const auto requestedDestination = std::filesystem::weakly_canonical(a_destination, canonicalError);
+		if (canonicalError || !requestedDestination.is_absolute())
 			throw std::runtime_error("sequence destination could not be resolved to an absolute directory");
 
-		ScopedHandle destinationHandle(OpenDirectory(destination));
+		ScopedHandle destinationHandle(OpenDirectory(requestedDestination));
 		if (destinationHandle.Get() == INVALID_HANDLE_VALUE)
 			throw std::runtime_error(std::format("sequence destination could not be locked (Win32 error {})", GetLastError()));
 		const auto destinationInformation = ReadIdentity(destinationHandle.Get(), true);
-		if (!SamePath(FinalPath(destinationHandle.Get()), destination))
-			throw std::runtime_error("sequence destination changed while it was opened");
+		const auto destination = FinalPath(destinationHandle.Get());
 
 		const auto leaf = L"CS_sequence_" + std::wstring(a_requestId.begin(), a_requestId.end());
 		const auto directory = destination / leaf;
@@ -413,10 +421,11 @@ namespace CSX::ScreenshotStorage
 				hook(directory);
 #endif
 			const auto directoryInformation = ReadIdentity(directoryHandle.Get(), true);
-			if (!SamePath(FinalPath(directoryHandle.Get()), directory))
-				throw std::runtime_error("sequence directory identity did not match its created path");
+			const auto openedDirectory = FinalPath(directoryHandle.Get());
+			if (!SamePath(openedDirectory, directory))
+				throw std::runtime_error("sequence directory changed between creation and ownership");
 			return std::shared_ptr<DirectoryLease>(new DirectoryLease(
-				destinationHandle.Release(), directoryHandle.Release(), destination, directory,
+				destinationHandle.Release(), directoryHandle.Release(), destination, openedDirectory,
 				Identity(destinationInformation), Identity(directoryInformation)));
 		} catch (...) {
 			DeleteHandle(directoryHandle.Get());

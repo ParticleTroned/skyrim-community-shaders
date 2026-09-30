@@ -253,6 +253,7 @@ contradict this policy.
 
 ## Git and release safety
 
+-   CSX public releases publish only the complete `CSX_AIO-*.7z` installer. Keep split core, feature and cache packages as internal workflow artifacts. Release notes must describe CSX's bundled features and built-in systems; never inherit upstream Nexus upload destinations. Follow [the CSX distribution contract](docs/development/csx-release-distribution.md).
 -   Never push directly to, force-push, or rebase shared branches such as `main`, `main-VR`, `dev`, or `hotfix/*` without explicit user direction. Use `--force-with-lease` only when rewriting an owned feature branch is necessary and authorized.
 -   Do not manually create `v*` release tags or hand-edit the CMake project version; release automation owns them.
 -   Synchronize upstream histories by merge rather than cherry-picking individual commits. Preserve VR-specific behavior during conflict resolution and verify upstream ancestry after the merge.

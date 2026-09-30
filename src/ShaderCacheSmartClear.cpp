@@ -93,6 +93,7 @@ namespace SIE
 
 		activeShaderCaptureMenuWasVisible = false;
 		clearedThisCaptureCycle.clear();
+		clearedBytecodeThisCaptureCycle.clear();
 		StartActiveShaderCaptureWindow(ActiveShaderCaptureStage::FirstWindow);
 	}
 
@@ -209,22 +210,31 @@ namespace SIE
 
 		size_t evictedCount = 0;
 		for (const auto& entry : entries) {
-			if (clearedThisCaptureCycle.contains(entry.key))
+			const size_t taskId = ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor);
+			if (clearedThisCaptureCycle.contains(taskId))
 				continue;
 
-			const size_t taskId = ShaderCompilationTask::MakeId(entry.shaderClass, entry.shaderType, entry.descriptor);
 			// AddCompletedShader publishes a completed blob before the worker installs
-			// the runtime shader and retires its task. Require both phases to finish so
-			// scoped eviction cannot race a late runtime insertion or lose bookkeeping.
-			if (GetShaderStatus(entry.key) == ShaderCompilationTask::Status::Pending ||
-				compilationSet.IsInProgress(taskId)) {
+			// the runtime shader. Keep its task bookkeeping until both phases finish.
+			if (compilationSet.IsInProgress(taskId))
 				continue;
+
+			{
+				// Check and erase under one lock so a fresh pending claim cannot be lost.
+				std::scoped_lock lockM{ mapMutex };
+				auto shader = shaderMap.find(entry.key);
+				if ((shader != shaderMap.end() && shader->second.status == ShaderCompilationTask::Status::Pending) ||
+					deferredEvictions.contains(entry.key)) {
+					continue;
+				}
+				if (clearedBytecodeThisCaptureCycle.insert(entry.key).second)
+					shaderMap.erase(entry.key);
 			}
 
-			EvictShader(entry.key, entry.shaderType, entry.descriptor, entry.shaderClass);
+			EvictShaderResources(entry.shaderType, entry.descriptor, entry.shaderClass);
 			taskIds.insert(taskId);
 			diskPaths.push_back(entry.diskPath);
-			clearedThisCaptureCycle.insert(entry.key);
+			clearedThisCaptureCycle.insert(taskId);
 			++evictedCount;
 		}
 

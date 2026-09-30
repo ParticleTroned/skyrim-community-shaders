@@ -108,10 +108,13 @@ namespace
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
 	static_assert(sizeof(ExtendedMaterialsSettingsCB) == 32);
+	static_assert(offsetof(ExtendedMaterialsSettingsCB, ParallaxStrength) == 24);
 	static_assert(sizeof(DynamicCubemapsSettingsCB) == 32);
 	static_assert(offsetof(DynamicCubemapsSettingsCB, MaxMipLevel) == 4);
 	static_assert(offsetof(DynamicCubemapsSettingsCB, CubemapColor) == 16);
-	static_assert(sizeof(TerrainShadowsSettingsCB) == 32);
+	static_assert(sizeof(TerrainShadowsSettingsCB) == 48);
+	static_assert(offsetof(TerrainShadowsSettingsCB, ZBlur) == 32);
+	static_assert(offsetof(TerrainShadowsSettingsCB, pad0) == 36);
 	static_assert(sizeof(LightLimitFixSettingsCB) == 32);
 	static_assert(sizeof(WetnessEffectsSettingsCB) == 192);
 	static_assert(sizeof(WetternessSettingsCB) == 272);
@@ -125,7 +128,7 @@ namespace
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
-	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 48);
+	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 80);
 	static_assert(offsetof(AdaptiveBalanceSettingsCB, skySaturation) == 32);
 	static_assert(offsetof(AdaptiveBalanceSettingsCB, ambientMult) == 36);
 	static_assert(sizeof(LinearLightingSettingsCB) == 112);

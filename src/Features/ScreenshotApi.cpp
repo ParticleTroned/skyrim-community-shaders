@@ -533,6 +533,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 												 } },
 						   } },
 		};
+		sequence.effective = effectiveSequence;
 
 		const std::string requestId = CSX::Api::ServiceFoundation::NewId();
 		{
@@ -690,9 +691,11 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 	}
 
 	json source = capture.value("source", json::object());
-	std::string requestedSourceKind = source.value("kind", useSettings ? SourceName(a_feature.vrCaptureSource) : std::string{});
+	const auto settingsSourceKind = CSX::ScreenshotPolicy::SelectSettingsCaptureSource(
+		SourceName(a_feature.vrCaptureSource), globals::game::isVR);
+	std::string requestedSourceKind = source.value("kind", useSettings ? settingsSourceKind : std::string{});
 	if (requestedSourceKind == "settings_default")
-		requestedSourceKind = SourceName(a_feature.vrCaptureSource);
+		requestedSourceKind = settingsSourceKind;
 	if (requestedSourceKind != "desktop_mirror" && requestedSourceKind != "hmd_submission")
 		throw std::runtime_error("capture.source.kind must be desktop_mirror or hmd_submission");
 	const auto fallback = source.value("fallback", "reject");
@@ -1683,7 +1686,7 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 				{ "acceptedUtc", parent != requests.end() ? json(parent->second.acceptedUtc) : json(nullptr) },
 				{ "completedUtc", a_final ? json(updatedUtc) : json(nullptr) },
 				{ "requested", a_sequence.requested },
-				{ "effective", a_sequence.capture },
+				{ "effective", a_sequence.effective },
 				{ "actual", { { "children", a_sequence.childCount }, { "fallbacksPresent", fallbacksPresent } } },
 				{ "counts", { { "requested", a_sequence.frameCount }, { "scheduled", a_sequence.scheduled }, { "acquired", a_sequence.acquired }, { "written", a_sequence.written }, { "dropped", a_sequence.dropped }, { "failed", a_sequence.failed }, { "cancelled", a_sequence.cancelled }, { "inFlight", a_sequence.inFlight } } },
 				{ "warnings", parent != requests.end() ? parent->second.warnings : json::array() },
@@ -1793,6 +1796,7 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 		record.directory = record.directoryLease->Path();
 		record.partialManifestPath = record.directory / "sequence.json.partial";
 		record.finalManifestPath = record.directory / "sequence.json";
+		record.effective["capture"] = record.capture;
 		parent->second.effective["capture"] = record.capture;
 		const json preparedPayload = {
 			{ "frameCount", record.frameCount },

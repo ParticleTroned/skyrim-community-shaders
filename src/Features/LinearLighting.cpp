@@ -210,6 +210,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.effectGamma = effectiveSettings.effectGamma;
 	data.effectAlphaGamma = effectiveSettings.effectAlphaGamma;
 	data.skyGamma = effectiveSettings.skyGamma;
+	data.cloudGamma = effectiveSettings.cloudGamma;
 	data.waterGamma = effectiveSettings.waterGamma;
 	data.vlGamma = effectiveSettings.vlGamma;
 	data.vanillaDiffuseColorMult = effectiveSettings.vanillaDiffuseColorMult;

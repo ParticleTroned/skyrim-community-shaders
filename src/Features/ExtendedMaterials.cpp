@@ -1,5 +1,7 @@
 #include "ExtendedMaterials.h"
 
+#include "Utils/Finite.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ExtendedMaterials::Settings,
 	EnableComplexMaterial,
@@ -7,7 +9,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableTerrain,
 	EnableHeightBlending,
 	EnableShadows,
-	EnableParallaxWarpingFix)
+	EnableParallaxWarpingFix,
+	ParallaxStrength)
 
 void ExtendedMaterials::SanitizeSettings(Settings& a_settings)
 {
@@ -17,6 +20,21 @@ void ExtendedMaterials::SanitizeSettings(Settings& a_settings)
 	a_settings.EnableHeightBlending = a_settings.EnableHeightBlending != 0;
 	a_settings.EnableShadows = a_settings.EnableShadows != 0;
 	a_settings.EnableParallaxWarpingFix = a_settings.EnableParallaxWarpingFix != 0;
+	a_settings.ParallaxStrength = Util::ClampFinite(a_settings.ParallaxStrength,
+		kMinParallaxStrength, kMaxParallaxStrength, Settings{}.ParallaxStrength);
+}
+
+void ExtendedMaterials::DrawParallaxStrength()
+{
+	if (ImGui::SliderFloat("Parallax Strength", &settings.ParallaxStrength,
+			kMinParallaxStrength, kMaxParallaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+		SanitizeSettings(settings);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			"Scales apparent depth on supported meshes and terrain, including TruePBR. "
+			"1 preserves material depth; 0 disables parallax depth and its shadows while keeping terrain height blending. "
+			"Higher values can increase stretching at shallow angles. Water has a separate control.");
+	}
 }
 
 void ExtendedMaterials::DataLoaded()
@@ -49,6 +67,7 @@ void ExtendedMaterials::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Parallax")) {
+		DrawParallaxStrength();
 		Util::UIntCheckbox("Enable Parallax", settings.EnableParallax);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables parallax on standard meshes made for parallax.");
@@ -96,6 +115,7 @@ void ExtendedMaterials::DrawEssentialSettings()
 	SanitizeSettings(settings);
 	Util::UIntCheckbox("Enable Complex Material", settings.EnableComplexMaterial);
 	Util::UIntCheckbox("Enable Parallax", settings.EnableParallax);
+	DrawParallaxStrength();
 }
 
 void ExtendedMaterials::DrawPerformanceSettings(bool)
@@ -110,6 +130,7 @@ void ExtendedMaterials::DrawPerformanceSettings(bool)
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Controls parallax occlusion mapping on supported meshes.");
 	}
+	DrawParallaxStrength();
 
 	if (Util::UIntCheckbox("Enable Legacy Terrain", settings.EnableTerrain)) {
 		if (settings.EnableTerrain)
@@ -150,7 +171,8 @@ json ExtendedMaterials::CapturePerformanceSettingsState() const
 		{ "EnableTerrain", settings.EnableTerrain != 0 },
 		{ "EnableHeightBlending", settings.EnableHeightBlending != 0 },
 		{ "EnableShadows", settings.EnableShadows != 0 },
-		{ "EnableParallaxWarpingFix", settings.EnableParallaxWarpingFix != 0 }
+		{ "EnableParallaxWarpingFix", settings.EnableParallaxWarpingFix != 0 },
+		{ "ParallaxStrength", settings.ParallaxStrength }
 	};
 }
 

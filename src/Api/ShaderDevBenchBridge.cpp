@@ -234,7 +234,7 @@ namespace
 			auto* cache = globals::shaderCache;
 			if (!cache)
 				return Foundation().MakeError(a_args, "service_unavailable", "shader cache is not initialized", "dispatch", true);
-			const bool wasEnabled = cache->backgroundCompilation.exchange(true, std::memory_order_relaxed);
+			const bool wasEnabled = cache->SetBackgroundCompilation(true);
 			auto response = Foundation().MakeEnvelope(a_args, true);
 			response["result"] = {
 				{ "action", "backgroundCompile" },
@@ -428,7 +428,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait while compilation continues on the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
+			"description":"Versioned CSX shader, feature, compilation, and cache lifecycle API. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -437,7 +437,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"]},
+					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"],"description":"backgroundCompile atomically enables background compilation and wakes the dispatcher; result.changed reports whether the mode changed."},
 					"path":{"type":"string","description":"exportTrace only: destination relative to the Community Shaders log directory; defaults to compile-trace.json."},
 					"mutation":{
 						"type":"object",

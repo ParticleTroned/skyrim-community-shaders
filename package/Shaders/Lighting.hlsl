@@ -977,7 +977,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/FoveatedShaderDetail.hlsli"
 #	endif
 
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 #		include "Hair/Hair.hlsli"
 #	endif
 
@@ -2194,8 +2194,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(EMAT)
+	const bool parallaxDepthEnabled = SharedData::extendedMaterialSettings.ParallaxStrength > 0.0;
 	float parallaxShadowQualityBase = viewPosition.z < ExtendedMaterials::ParallaxCheapDistance ? ExtendedMaterials::ParallaxNearShadowQuality : ExtendedMaterials::ParallaxFarShadowQuality;
-	float parallaxShadowQuality = GetVRLightingAuxiliaryQuality(parallaxShadowQualityBase, vrAuxDetailWeight);
+	float parallaxShadowQuality = parallaxDepthEnabled ? GetVRLightingAuxiliaryQuality(parallaxShadowQualityBase, vrAuxDetailWeight) : 0.0;
 	float terrainDirectionalShadowQuality = parallaxShadowQuality;
 #		define COMPUTE_TERRAIN_SHADOW_BASE(OUT_SH0) ExtendedMaterials::ComputeTerrainParallaxShadowBaseHeight(input, uv, terrainShadowMipLevels, terrainDirectionalShadowQuality, screenNoise, displacementParams, sharedOffset, OUT_SH0)
 #		define EVAL_TERRAIN_DIR_SHADOW(BASE_SH0, DIR_TS) ExtendedMaterials::EvaluateTerrainDirectionalParallaxShadowMultiplier(input, uv, terrainShadowMipLevels, DIR_TS, terrainDirectionalShadowQuality, screenNoise, displacementParams, sharedOffset, BASE_SH0)
@@ -2296,7 +2297,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(EMAT)
 #		if defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
-	if (SharedData::extendedMaterialSettings.EnableParallax) {
+	if (SharedData::extendedMaterialSettings.EnableParallax && parallaxDepthEnabled) {
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0)
@@ -2335,7 +2336,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskAlpha > kMaskEpsilon && envMaskAlpha < (1.0 - kMaskEpsilon)) {
+			if (parallaxDepthEnabled && envMaskAlpha > kMaskEpsilon && envMaskAlpha < (1.0 - kMaskEpsilon)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, applyMeshTV, meshOffset, pixelOffset);
@@ -2362,7 +2363,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if !defined(FACEGEN)
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
-		PBRParallax = true;
+		PBRParallax = parallaxDepthEnabled;
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
 			displacementParams.HeightScale *= PBRParams1.y;
@@ -2389,10 +2390,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		{
 			displacementParams.HeightScale *= PBRParams1.y;
 		}
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
-		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
-		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0)
-			sh0 = ExtendedMaterials::SampleMeshParallaxHeight(TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0, applyMeshTV, meshOffset);
+		if (parallaxDepthEnabled) {
+			mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
+			uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
+			if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0)
+				sh0 = ExtendedMaterials::SampleMeshParallaxHeight(TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0, applyMeshTV, meshOffset);
+		}
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR
@@ -2464,7 +2467,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float weights[6];
 		weights[0] = weights[1] = weights[2] = weights[3] = weights[4] = weights[5] = 0.0;
 
-		const bool doTerrainPom = ExtendedMaterials::TerrainHasAnyDisplacement() &&
+		const bool doTerrainPom = parallaxDepthEnabled &&
+		                          ExtendedMaterials::TerrainHasAnyDisplacement() &&
 		                          ExtendedMaterials::TerrainMaxWeightedHeightScale(input, displacementParams) > 0.01;
 		[branch] if (doTerrainPom)
 		{
@@ -2485,6 +2489,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.y = weights[5];
 		}
 		hasTerrainParallaxShadow =
+			parallaxDepthEnabled &&
 			viewPosition.z < ExtendedMaterials::ParallaxCheapDistance &&
 			ExtendedMaterials::TerrainHasAnyDisplacement() &&
 			ExtendedMaterials::TerrainMaxWeightedHeightScale(input, displacementParams) > 0.01;
@@ -2657,7 +2662,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif  // FACEGEN
 
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 	float3 hairTint = 0;
 
 	if (SharedData::hairSpecularSettings.Enabled) {
@@ -2718,7 +2723,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(BACK_LIGHTING)
 	float4 backLightColor;
 	MESH_TV_COLOR(backLightColor, TexBackLightSampler, SampBackLightSampler, uv);
-#		if defined(HAIR) && defined(CS_HAIR)
+#		if defined(CS_HAIR_SHADING)
 	if (useHairFlowMap) {
 		backLightColor = 0.0f;
 	}
@@ -2844,7 +2849,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 screenSpaceNormal = SafeNormalize3(FrameBuffer::WorldToView(worldNormal, false, eyeIndex), float3(0.0, 0.0, 1.0));
 
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 	float3 Bitangent = normalize(float3(input.TBN0.y, input.TBN1.y, input.TBN2.y));
 	float3 hairT = 0;
 #		if defined(BACK_LIGHTING)
@@ -2991,7 +2996,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	endif  // TRUE_PBR
 
-#	if defined(CS_HAIR) && defined(HAIR)
+#	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		material.Shininess = SharedData::hairSpecularSettings.HairGlossiness;
 		material.F0 = Hair::HairF0();
@@ -3388,7 +3393,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	dirLightColorMultiplier *= dirWorldShadow;
 
-#	if defined(CS_HAIR) && defined(HAIR)
+#	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		vertexNormal.xyz = worldNormal.xyz;
 		worldNormal.xyz = hairT;
@@ -3455,7 +3460,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedDirLightDirection, DirLightDirection, dirLightColor * dirLightColorMultiplier, dirDetailedShadow * parallaxShadow, dirSoftShadow);
 #	else
 	dirLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, DirLightDirection, dirLightColor * dirLightColorMultiplier, dirDetailedShadow * parallaxShadow, dirSoftShadow);
-#		if defined(HAIR) && defined(CS_HAIR)
+#		if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		dirLightContext.hairShadow = 1.0;
 		if (vrAuxDetailEnabled) {
@@ -3533,7 +3538,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 #			else
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, lightShadow, lightShadow);
-#				if defined(HAIR) && defined(CS_HAIR)
+#				if defined(CS_HAIR_SHADING)
 		if (SharedData::hairSpecularSettings.Enabled) {
 			pointLightContext.hairShadow = 1.0;
 			if (vrAuxDetailEnabled) {
@@ -3715,7 +3720,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
 #			else
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
-#				if defined(HAIR) && defined(CS_HAIR)
+#				if defined(CS_HAIR_SHADING)
 		if (SharedData::hairSpecularSettings.Enabled) {
 			pointLightContext.hairShadow = 1.0;
 			if (vrAuxDetailEnabled) {
@@ -3828,7 +3833,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			ambientNormal = -ambientNormal;
 	}
 #	endif
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		if (SharedData::hairSpecularSettings.HairMode == 1)
 			ambientNormal = normalize(viewDirection - hairT * dot(viewDirection, hairT));
@@ -3866,7 +3871,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(HAIR)
 	float3 vertexColor = lerp(1, Color::ColorToLinear(TintColor.xyz), Color::ColorToLinear(input.Color.y));
 	float vertexAO = 1;
-#		if defined(CS_HAIR)
+#		if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled)
 		vertexColor = 1;
 #		endif

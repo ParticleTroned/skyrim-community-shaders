@@ -16,6 +16,8 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
+from dxbc_fixtures import make_dxbc
+
 
 REPO = Path(__file__).resolve().parent.parent
 BUILDER_PATH = REPO / "tools/build-fomod-package.py"
@@ -39,7 +41,7 @@ class FomodPackageTests(unittest.TestCase):
                 **contract.shader_pack_record_identity(
                     "Water/1.pso", str(index + 1) * 32, variants[name]["registrations"]
                 ),
-                "bytecode": b"DXBC" + name.encode("utf-8"),
+                "bytecode": make_dxbc(marker=name.encode("utf-8")),
             }
             for index, name in enumerate(("default", "legacy-horizon-fix"))
         ]
@@ -303,6 +305,25 @@ class FomodPackageTests(unittest.TestCase):
                 BUILDER.stage_package(core, None, vr_cache, output, "v3.18.0", include_se_ae=False)
             self.assertFalse(output.exists())
 
+    def test_patch_version_cache_labels(self) -> None:
+        for label, valid in (("CSX 3.20.0-VR", True), ("CSX 3.20-VR", True),
+                             ("CSX 3.20.x-VR", False), ("CSX 3.20.0.1-VR", False),
+                             ("CSX 3.20.0-unknown", False)):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                core, se_cache, vr_cache = self._inputs(root)
+                for cache in (se_cache, vr_cache):
+                    info = cache / BUILDER.CACHE_DIRECTORY / BUILDER.CACHE_INFO_FILE
+                    info.write_text(info.read_text(encoding="utf-8").replace("CSX 3.18-VR", label), encoding="utf-8")
+                output = root / "staged"
+                if valid:
+                    BUILDER.stage_package(core, se_cache, vr_cache, output, "3.20.0")
+                    BUILDER.validate_staged_package(output, "3.20.0")
+                else:
+                    with self.assertRaisesRegex(SystemExit, "invalid shader cache PluginVersion"):
+                        BUILDER.stage_package(core, se_cache, vr_cache, output, "3.20.0")
+                    self.assertFalse(output.exists())
+
     def test_stages_one_page_two_managed_cache_fomod(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -426,7 +447,7 @@ class FomodPackageTests(unittest.TestCase):
         def record(relative: str, content: str, variant: str) -> dict:
             return {
                 **contract.shader_pack_record_identity(relative, content, variants[variant]["registrations"]),
-                "bytecode": b"DXBC-test",
+                "bytecode": make_dxbc(marker=b"test"),
             }
 
         invalid_entries = {
@@ -439,13 +460,15 @@ class FomodPackageTests(unittest.TestCase):
                 standard,
                 {
                     **record("Water/1.pso", "1" * 32, "legacy-horizon-fix"),
-                    "bytecode": b"DXBC-horizon",
+                    "bytecode": make_dxbc(marker=b"horizon"),
                 },
             ],
             "forged-key": [standard, {**horizon, "exactKey": horizon["exactKey"] + "-invalid"}],
             "forged-metadata": [standard, {**horizon, "metadata": standard["metadata"]}],
             "noncanonical-metadata": [standard, {**horizon, "metadata": json.dumps(json.loads(horizon["metadata"]), indent=2)}],
             "invalid-bytecode": [standard, {**horizon, "bytecode": b"not-bytecode"}],
+            "truncated-bytecode": [standard, {**horizon, "bytecode": horizon["bytecode"][:-1]}],
+            "wrong-shader-stage": [standard, {**horizon, "bytecode": make_dxbc(stage=1)}],
             "relabeled-bytecode": [standard, {**horizon, "bytecode": standard["bytecode"]}],
         }
         for runtime in (BUILDER.RUNTIME_SE_AE, BUILDER.RUNTIME_VR):

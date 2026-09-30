@@ -11,6 +11,10 @@ int main()
 {
 	RunScreenshotStorageSecurityTests();
 	using namespace CSX::ScreenshotPolicy;
+	if (SelectSettingsCaptureSource("hmd_submission", true) != "hmd_submission" ||
+		SelectSettingsCaptureSource("hmd_submission", false) != "desktop_mirror" ||
+		SelectSettingsCaptureSource("desktop_mirror", true) != "desktop_mirror")
+		throw std::runtime_error("settings capture source ignored the active runtime");
 	const auto hmd = ResolveCaptureSource("hmd_submission", "reject", true);
 	const auto desktopFallback = ResolveCaptureSource("hmd_submission", "desktop_mirror", false);
 	if (!hmd || hmd.resolved != "hmd_submission" || hmd.fallbackUsed ||

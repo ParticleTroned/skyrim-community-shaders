@@ -71,7 +71,8 @@ namespace SharedData
 		bool EnableHeightBlending;
 		bool EnableShadows;
 		bool EnableParallaxWarpingFix;
-		uint2 pad0;
+		float ParallaxStrength;
+		uint pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -89,6 +90,8 @@ namespace SharedData
 		float3 Scale;
 		float2 ZRange;
 		float2 Offset;
+		float ZBlur;
+		float3 pad0;
 	};
 
 	struct LightLimitFixSettings
@@ -279,7 +282,7 @@ namespace SharedData
 	struct TerrainVariationSettings
 	{
 		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
-		uint enableMeshSupport;        ///< 1 = apply variation to eligible meshes.
+		uint enableMeshSupport;          ///< 1 = apply variation to eligible meshes.
 		uint2 pad;
 	};
 
@@ -319,6 +322,14 @@ namespace SharedData
 		float linearOmnidirectionalBulbMult;
 		float skySaturation;
 		float ambientMult;
+		float contrast;
+		float saturation;
+		float cloudBrightness;
+		float cloudSaturation;
+		float fogIntensity;
+		float sunGlareIntensity;
+		float weatherColorPadding;
+		float skyStaticTransparency;
 		float2 pad;
 	};
 
@@ -350,7 +361,8 @@ namespace SharedData
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBrightnessColorAdjustments;
-		uint2 pad0;
+		float cloudGamma;
+		uint pad0;
 	};
 
 	struct TerrainBlendingSettings

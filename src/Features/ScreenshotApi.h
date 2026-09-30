@@ -106,6 +106,7 @@ private:
 		std::string requestId;
 		json requested = json::object();
 		json capture = json::object();
+		json effective = json::object();
 		uint32_t frameCount = 0;
 		uint32_t intervalFrames = 1;
 		uint32_t startDelayFrames = 0;

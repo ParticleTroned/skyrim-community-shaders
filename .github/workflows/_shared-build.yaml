@@ -96,11 +96,20 @@ jobs:
               shell: pwsh
               run: pwsh -NoProfile -File ./tests/tool_environment_test.ps1
 
+            - name: Resolve stable CSX build version
+              id: release_identity
+              shell: pwsh
+              env:
+                  RELEASE_TAG: ${{ github.ref_type == 'tag' && inputs.test-build-id == '' && github.ref_name || '' }}
+              run: |
+                  python tools/csx_release.py build-version --tag "$env:RELEASE_TAG" --github-output "$env:GITHUB_OUTPUT"
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
             - name: Build using run-cmake
               uses: lukka/run-cmake@v10
               with:
                   configurePreset: ${{ matrix.compiler.cmake-preset }}
-                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DCSX_TEST_BUILD=${{ inputs.test-build-id }}', '-DZIP_TO_DIST=${{ inputs.test-build-id != '' && 'OFF' || 'ON' }}', '-DDEVBENCH_BRIDGE=OFF']"
+                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DCSX_TEST_BUILD=${{ inputs.test-build-id }}', '-DCSX_RELEASE_VERSION=${{ steps.release_identity.outputs.release_version }}', '-DZIP_TO_DIST=${{ inputs.test-build-id != '' && 'OFF' || 'ON' }}', '-DDEVBENCH_BRIDGE=OFF', '-DTRACY_SUPPORT=OFF']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
 
             - name: Verify DLL provenance sidecar
@@ -139,7 +148,7 @@ jobs:
               shell: pwsh
               run: |
                   $tag = '${{ github.ref_name }}'
-                  $expected = ($tag -replace '^v([0-9]+\.[0-9]+\.[0-9]+).*', '$1')
+                  $expected = ($tag -replace '^(?:v|csx)([0-9]+\.[0-9]+\.[0-9]+).*', '$1')
                   $version = '${{ steps.get_version.outputs.version }}'
                   if (-not $version -or $version -eq "") {
                     Write-Error "Version extraction failed: no version found in previous step" -ErrorAction Stop

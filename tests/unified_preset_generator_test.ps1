@@ -139,8 +139,8 @@ try {
         Assert-True ($compatibility.presetId -ceq "csx-unified-$($tierProperty.Name.ToLowerInvariant())") "Wrong preset identity for $($tierProperty.Name)."
         Assert-True ($compatibility.presetVersion -ceq $policy.packageVersion) "Wrong preset version for $($tierProperty.Name)."
         Assert-True ($compatibility.target.runtime -ceq 'VR') "Wrong runtime target for $($tierProperty.Name)."
-        Assert-True ($compatibility.target.minimumVersion -ceq '3.19') "Wrong minimum CSX version for $($tierProperty.Name)."
-        Assert-True ($compatibility.target.maximumVersionExclusive -ceq '3.20') "Wrong maximum CSX version for $($tierProperty.Name)."
+        Assert-True ($compatibility.target.minimumVersion -ceq '3.20') "Wrong minimum CSX version for $($tierProperty.Name)."
+        Assert-True ($compatibility.target.maximumVersionExclusive -ceq '3.21') "Wrong maximum CSX version for $($tierProperty.Name)."
         Assert-True ($settings.'Weather Picker'.Enabled -eq $true) "Weather Picker was disabled for $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['CS Editor']) "CS Editor appeared in Disable at Boot for $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['Weather Picker']) "Weather Picker appeared in Disable at Boot for $($tierProperty.Name)."
@@ -172,6 +172,17 @@ try {
     & $isolatedGenerator -OutputRoot $outputRoot -ReportPath $reportPath -Check | Out-Null
     $afterCheckSnapshot = Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath
     Assert-True ($baselineSnapshot -ceq $afterCheckSnapshot) '-Check mutated the generated package set.'
+
+    $longOutputRoot = Join-Path $fixtureRoot ('long-path-' + ('a' * 100))
+    $longOutputRoot = Join-Path $longOutputRoot ('b' * 100)
+    $longReportPath = Join-Path $longOutputRoot 'report.json'
+    Assert-True ($longReportPath.Length -gt 260) 'The long-path fixture must exceed MAX_PATH.'
+    & $isolatedGenerator -OutputRoot $longOutputRoot -ReportPath $longReportPath | Out-Null
+    Assert-True $? 'Long-path unified preset generation failed.'
+    $longSnapshot = Get-PublicationSnapshot -OutputRoot $longOutputRoot -ReportPath $longReportPath
+    & $isolatedGenerator -OutputRoot $longOutputRoot -ReportPath $longReportPath -Check | Out-Null
+    Assert-True $? 'Long-path unified presets did not pass -Check.'
+    Assert-True ($longSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $longOutputRoot -ReportPath $longReportPath)) 'Long-path -Check mutated the generated package set.'
 
     $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
     $invalidPolicy.tierOrder = @('Performance', 'Balanced')

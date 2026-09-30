@@ -235,18 +235,24 @@ ScreenshotApi::~ScreenshotApi()
 void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state)
 {
 	while (true) {
+		DirectoryPreparationJob preparation;
 		ManifestJob job;
 		std::shared_ptr<const ManifestChildNode> retiredChildren;
 		{
 			std::unique_lock lock(a_state->mutex);
 			a_state->condition.wait(lock, [&] {
-				return a_state->stopRequested || !a_state->jobs.empty() || !a_state->retiredChildren.empty();
+				return a_state->stopRequested || !a_state->preparationJobs.empty() ||
+				       !a_state->jobs.empty() || !a_state->retiredChildren.empty();
 			});
-			if (a_state->jobs.empty() && a_state->retiredChildren.empty() && a_state->stopRequested)
+			if (a_state->preparationJobs.empty() && a_state->jobs.empty() &&
+				a_state->retiredChildren.empty() && a_state->stopRequested)
 				break;
 			if (!a_state->retiredChildren.empty()) {
 				retiredChildren = std::move(a_state->retiredChildren.front());
 				a_state->retiredChildren.pop_front();
+			} else if (!a_state->preparationJobs.empty()) {
+				preparation = std::move(a_state->preparationJobs.front());
+				a_state->preparationJobs.pop_front();
 			} else {
 				job = std::move(a_state->jobs.front());
 				a_state->jobs.pop_front();
@@ -254,6 +260,32 @@ void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_st
 		}
 		if (retiredChildren) {
 			CSX::Screenshot::ReleaseManifestChildren(retiredChildren);
+			continue;
+		}
+		if (!preparation.requestId.empty()) {
+			DirectoryPreparationResult result{
+				.requestId = preparation.requestId,
+				.capture = std::move(preparation.capture),
+			};
+			try {
+				const auto resolvedDirectory = ResolveDestinationDirectory(
+					result.capture, preparation.configuredDirectory, true);
+				result.capture["destination"]["resolvedDirectory"] = PathUtf8(resolvedDirectory);
+				result.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
+					resolvedDirectory, result.requestId);
+				result.success = true;
+			} catch (const std::exception& error) {
+				result.error = error.what();
+			} catch (...) {
+				result.error = "sequence destination preparation failed with an unknown exception";
+			}
+			{
+				std::lock_guard lock(a_state->mutex);
+				a_state->preparationResults.push_back(std::move(result));
+				if (a_state->outstanding > 0)
+					--a_state->outstanding;
+			}
+			a_state->condition.notify_all();
 			continue;
 		}
 		ManifestResult result{
@@ -312,7 +344,7 @@ ScreenshotApi::json ScreenshotApi::HandleRequest(ScreenshotFeature& a_feature, c
 		[this, &a_feature](const json& validatedRequest) {
 			{
 				std::lock_guard lock(mutex);
-				DrainManifestResultsLocked();
+				DrainWorkerResultsLocked();
 				if (persistedSettings.is_null())
 					persistedSettings = BuildSettings(a_feature);
 				TrimLocked();
@@ -512,26 +544,24 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			sequence.requestId = requestId;
 			sequence.nextEngineFrame = (globals::state ? globals::state->frameCount : 0u) + sequence.startDelayFrames;
 			sequence.nextWallClock = std::chrono::steady_clock::now() + std::chrono::milliseconds(startDelayMs);
-			try {
-				sequence.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
-					std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()),
-					requestId);
-			} catch (const std::exception& error) {
-				return MakeError(
-					a_request, "destination_unavailable", error.what(), "admission", false,
-					"sequence.capture.destination", requestId);
-			}
+			sequence.preparationPending = true;
 			auto& record = CreateRequestLocked(
 				"sequence", a_request, effectiveSequence, {}, 0, requestId);
 			record.expectedArtifacts = CSX::ScreenshotPolicy::ExpectedSequenceArtifacts(sequence.frameManifest);
-			sequence.directory = sequence.directoryLease->Path();
-			sequence.partialManifestPath = sequence.directory / "sequence.json.partial";
-			sequence.finalManifestPath = sequence.directory / "sequence.json";
 			sequences.emplace(requestId, std::move(sequence));
 			sequenceOrder.push_back(requestId);
-			auto& stored = sequences.at(requestId);
-			TransitionLocked(record, "running", "sequence.started", { { "frameCount", frameCount }, { "manifestPath", PathUtf8(stored.partialManifestPath) } });
-			QueueSequenceManifestLocked(stored, false);
+			TransitionLocked(record, "preparing", "sequence.preparing", { { "frameCount", frameCount } });
+			const auto state = manifestWorkerState;
+			{
+				std::lock_guard workerLock(state->mutex);
+				state->preparationJobs.push_back({
+					.requestId = requestId,
+					.capture = descriptor,
+					.configuredDirectory = a_feature.frameCapturePath,
+				});
+				++state->outstanding;
+			}
+			state->condition.notify_one();
 		}
 		auto response = MakeEnvelope(a_request, true);
 		{
@@ -779,7 +809,10 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		{ "clipboard", clipboard },
 		{ "tags", std::move(tags) },
 	};
-	normalized["destination"]["resolvedDirectory"] = PathUtf8(ResolveDestinationDirectory(a_feature, normalized, a_sequenceSettings));
+	if (!a_sequenceSettings) {
+		normalized["destination"]["resolvedDirectory"] = PathUtf8(ResolveDestinationDirectory(
+			normalized, a_feature.screenshotPath, false));
+	}
 	return normalized;
 }
 
@@ -1116,9 +1149,9 @@ ScreenshotApi::RequestRecord& ScreenshotApi::CreateRequestLocked(std::string a_k
 		effectiveSource = &*source;
 	} else if (const auto capture = record.effective.find("capture");
 		capture != record.effective.end() && capture->is_object()) {
-		if (const auto source = capture->find("source");
-			source != capture->end() && source->is_object()) {
-			effectiveSource = &*source;
+		if (const auto nestedSource = capture->find("source");
+			nestedSource != capture->end() && nestedSource->is_object()) {
+			effectiveSource = &*nestedSource;
 		}
 	}
 	if (effectiveSource && effectiveSource->value("fallbackApplied", false)) {
@@ -1209,7 +1242,9 @@ ScreenshotApi::json ScreenshotApi::MakeSequenceReceipt(const RequestRecord& a_re
 		{ "inFlight", a_sequence->inFlight },
 	};
 	receipt["manifest"] = {
-		{ "partialPath", a_sequence->frameManifest ? json(PathUtf8(a_sequence->partialManifestPath)) : json(nullptr) },
+		{ "partialPath", a_sequence->frameManifest && !a_sequence->partialManifestPath.empty() ?
+							 json(PathUtf8(a_sequence->partialManifestPath)) :
+							 json(nullptr) },
 		{ "finalPath", a_sequence->frameManifest &&
 							   a_sequence->packaging["frameManifest"].value("state", std::string{}) == "written" ?
 						   json(PathUtf8(a_sequence->finalManifestPath)) :
@@ -1541,6 +1576,8 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
 
 void ScreenshotApi::TryFinalizeSequenceLocked(SequenceRecord& a_sequence)
 {
+	if (a_sequence.preparationPending)
+		return;
 	const bool schedulingComplete = a_sequence.nextOrdinal > a_sequence.frameCount;
 	if (!(schedulingComplete || a_sequence.stopRequested || a_sequence.cancelRequested) || a_sequence.inFlight != 0)
 		return;
@@ -1720,12 +1757,53 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 	}
 }
 
-void ScreenshotApi::DrainManifestResultsLocked()
+void ScreenshotApi::DrainWorkerResultsLocked()
 {
+	std::deque<DirectoryPreparationResult> prepared;
 	std::deque<ManifestResult> completed;
 	{
 		std::lock_guard workerLock(manifestWorkerState->mutex);
+		prepared.swap(manifestWorkerState->preparationResults);
 		completed.swap(manifestWorkerState->results);
+	}
+	for (auto& result : prepared) {
+		const auto sequence = sequences.find(result.requestId);
+		if (sequence == sequences.end())
+			continue;
+		auto& record = sequence->second;
+		record.preparationPending = false;
+		auto parent = requests.find(result.requestId);
+		if (parent == requests.end() || IsTerminal(parent->second.state))
+			continue;
+		if (!result.success || !result.directoryLease) {
+			parent->second.error = {
+				{ "code", "destination_unavailable" },
+				{ "message", result.error.empty() ? "sequence destination preparation failed" : result.error },
+				{ "phase", "preparation" },
+				{ "field", "sequence.capture.destination" },
+			};
+			parent->second.errors.push_back(parent->second.error);
+			TransitionLocked(parent->second, "failed", "sequence.preparation_failed", {
+																						  { "error", parent->second.error },
+																					  });
+			continue;
+		}
+		record.capture = std::move(result.capture);
+		record.directoryLease = std::move(result.directoryLease);
+		record.directory = record.directoryLease->Path();
+		record.partialManifestPath = record.directory / "sequence.json.partial";
+		record.finalManifestPath = record.directory / "sequence.json";
+		parent->second.effective["capture"] = record.capture;
+		const json preparedPayload = {
+			{ "frameCount", record.frameCount },
+			{ "manifestPath", PathUtf8(record.partialManifestPath) },
+		};
+		if (record.stopRequested || record.cancelRequested)
+			AppendEventLocked(parent->second, "sequence.prepared", preparedPayload);
+		else
+			TransitionLocked(parent->second, "running", "sequence.started", preparedPayload);
+		QueueSequenceManifestLocked(record, false);
+		TryFinalizeSequenceLocked(record);
 	}
 	for (auto& result : completed) {
 		const auto sequence = sequences.find(result.requestId);
@@ -1771,7 +1849,9 @@ std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(uint
 		if (found == sequences.end())
 			continue;
 		auto& sequence = found->second;
-		if (sequence.finalizing || sequence.stopRequested || sequence.cancelRequested || sequence.inFlight != 0 || sequence.nextOrdinal > sequence.frameCount)
+		if (sequence.preparationPending || !sequence.directoryLease || sequence.finalizing ||
+			sequence.stopRequested || sequence.cancelRequested || sequence.inFlight != 0 ||
+			sequence.nextOrdinal > sequence.frameCount)
 			continue;
 		const bool due = sequence.scheduleBasis == "game_frames" ? a_engineFrame >= sequence.nextEngineFrame : now >= sequence.nextWallClock;
 		if (!due)
@@ -1894,7 +1974,7 @@ void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 	std::optional<DispatchEntry> dispatch;
 	{
 		std::lock_guard lock(mutex);
-		DrainManifestResultsLocked();
+		DrainWorkerResultsLocked();
 		if (!a_feature.IsRuntimeEnabled()) {
 			for (auto& [_, sequence] : sequences) {
 				if (!sequence.finalizing)
@@ -2038,7 +2118,7 @@ void ScreenshotApi::BeginShutdown(std::string_view a_reason)
 {
 	std::lock_guard lock(mutex);
 	acceptingRequests = false;
-	DrainManifestResultsLocked();
+	DrainWorkerResultsLocked();
 	for (auto& [_, sequence] : sequences) {
 		if (sequence.finalizing)
 			continue;
@@ -2066,14 +2146,14 @@ bool ScreenshotApi::DrainForShutdown(std::chrono::milliseconds a_timeout)
 	}
 	{
 		std::lock_guard lock(mutex);
-		DrainManifestResultsLocked();
+		DrainWorkerResultsLocked();
 	}
 	return drained;
 }
 
 std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
-	const ScreenshotFeature& a_feature,
 	const json& a_capture,
+	const std::filesystem::path& a_configuredDirectory,
 	bool a_sequence)
 {
 	const auto destination = a_capture.value("destination", json::object());
@@ -2086,8 +2166,7 @@ std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
 
 	std::filesystem::path requested;
 	if (policy == "settings_default") {
-		requested = CSX::ScreenshotPolicy::SelectConfiguredCaptureDirectory(
-			a_feature.screenshotPath, a_feature.frameCapturePath, a_sequence);
+		requested = a_configuredDirectory;
 		return ResolveConfiguredCaptureDirectory(requested, a_sequence);
 	}
 

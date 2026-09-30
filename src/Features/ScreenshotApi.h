@@ -127,6 +127,7 @@ private:
 		std::string failurePolicy = "continue";
 		bool stopRequested = false;
 		bool cancelRequested = false;
+		bool preparationPending = false;
 		bool finalizing = false;
 		bool frameManifest = true;
 		std::string activeChildRequestId;
@@ -140,6 +141,22 @@ private:
 		std::shared_ptr<const ManifestChildNode> manifestChildren;
 		std::size_t childCount = 0;
 		json packaging = json::object();
+	};
+
+	struct DirectoryPreparationJob
+	{
+		std::string requestId;
+		json capture = json::object();
+		std::filesystem::path configuredDirectory;
+	};
+
+	struct DirectoryPreparationResult
+	{
+		std::string requestId;
+		bool success = false;
+		json capture = json::object();
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
+		std::string error;
 	};
 
 	struct ManifestJob
@@ -169,8 +186,10 @@ private:
 	{
 		std::mutex mutex;
 		std::condition_variable condition;
+		std::deque<DirectoryPreparationJob> preparationJobs;
 		std::deque<ManifestJob> jobs;
 		std::deque<std::shared_ptr<const ManifestChildNode>> retiredChildren;
+		std::deque<DirectoryPreparationResult> preparationResults;
 		std::deque<ManifestResult> results;
 		std::size_t outstanding = 0;
 		bool stopRequested = false;
@@ -262,7 +281,7 @@ private:
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
-	void DrainManifestResultsLocked();
+	void DrainWorkerResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);
 	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame);
 	std::optional<DispatchEntry> PopDispatchLocked();
@@ -272,7 +291,7 @@ private:
 	void CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason);
 
 	static std::filesystem::path ResolveDestinationDirectory(
-		const ScreenshotFeature& a_feature,
 		const json& a_capture,
+		const std::filesystem::path& a_configuredDirectory,
 		bool a_sequence = false);
 };

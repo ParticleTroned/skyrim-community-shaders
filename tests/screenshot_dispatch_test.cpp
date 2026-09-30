@@ -49,7 +49,7 @@ struct ScreenshotApi
 		sequences["parent"] = {};
 	}
 	bool IsTerminal(std::string_view state) const { return state == "cancelled" || state == "completed"; }
-	void DrainManifestResultsLocked() {}
+	void DrainWorkerResultsLocked() {}
 	void TransitionLocked(RequestRecord& record, std::string state, std::string_view, json = json::object()) { record.state = std::move(state); }
 	void TryFinalizeSequenceLocked(SequenceRecord& sequence)
 	{

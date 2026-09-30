@@ -2,14 +2,26 @@
 
 #include <Windows.h>
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <future>
+#include <mutex>
 #include <stdexcept>
 
 namespace
 {
+	std::filesystem::path g_creationReplacement;
+	std::filesystem::path g_creationDisplaced;
+	std::atomic_bool g_creationHookCalled{ false };
+	std::mutex g_preparationMutex;
+	std::condition_variable g_preparationCondition;
+	bool g_preparationEntered = false;
+	bool g_preparationReleased = false;
+
 	bool IsLeaseConflict(DWORD a_error)
 	{
 		return a_error == ERROR_SHARING_VIOLATION || a_error == ERROR_ACCESS_DENIED;
@@ -24,6 +36,28 @@ namespace
 		}
 		throw std::runtime_error(a_message);
 	}
+
+	void AttemptCreationSubstitution(const std::filesystem::path& a_created)
+	{
+		g_creationHookCalled.store(true, std::memory_order_release);
+		if (MoveFileExW(a_created.c_str(), g_creationDisplaced.c_str(), 0) ||
+			!IsLeaseConflict(GetLastError())) {
+			throw std::runtime_error("atomically created sequence directory could be displaced before adoption");
+		}
+		if (MoveFileExW(
+				g_creationReplacement.c_str(), a_created.c_str(), MOVEFILE_REPLACE_EXISTING) ||
+			!IsLeaseConflict(GetLastError())) {
+			throw std::runtime_error("replacement directory could be installed before lease adoption");
+		}
+	}
+
+	void BlockStoragePreparation(const std::filesystem::path&)
+	{
+		std::unique_lock lock(g_preparationMutex);
+		g_preparationEntered = true;
+		g_preparationCondition.notify_all();
+		g_preparationCondition.wait(lock, [] { return g_preparationReleased; });
+	}
 }
 
 inline void RunScreenshotStorageSecurityTests()
@@ -31,6 +65,7 @@ inline void RunScreenshotStorageSecurityTests()
 	using CSX::ScreenshotStorage::CommittedFile;
 	using CSX::ScreenshotStorage::DirectoryLease;
 	using CSX::ScreenshotStorage::NormalizeFinalPath;
+	using CSX::ScreenshotStorage::SetDirectoryCreationTestHook;
 	if (NormalizeFinalPath(LR"(\\?\UNC\server\share\folder)") !=
 			std::filesystem::path(LR"(\\server\share\folder)") ||
 		NormalizeFinalPath(LR"(\\?\C:\folder)") !=
@@ -122,7 +157,58 @@ inline void RunScreenshotStorageSecurityTests()
 				"a directory was accepted as a committed regular artifact");
 		}
 		directory.reset();
-
+		g_creationReplacement = root / "attacker-replacement";
+		g_creationDisplaced = root / "attacker-displaced";
+		std::filesystem::create_directories(g_creationReplacement);
+		const auto replacementSentinel = g_creationReplacement / "sentinel.txt";
+		{
+			std::ofstream sentinel(replacementSentinel, std::ios::binary);
+			sentinel << "attacker-owned";
+		}
+		g_creationHookCalled.store(false, std::memory_order_release);
+		SetDirectoryCreationTestHook(&AttemptCreationSubstitution);
+		auto atomicDirectory = DirectoryLease::CreateExclusive(root, "atomic-creation");
+		SetDirectoryCreationTestHook(nullptr);
+		if (!g_creationHookCalled.load(std::memory_order_acquire) ||
+			!std::filesystem::exists(replacementSentinel) ||
+			std::filesystem::exists(atomicDirectory->Path() / "sentinel.txt") ||
+			std::filesystem::exists(g_creationDisplaced)) {
+			throw std::runtime_error("directory creation custody adopted or changed attacker-owned contents");
+		}
+		atomicDirectory.reset();
+		g_preparationEntered = false;
+		g_preparationReleased = false;
+		SetDirectoryCreationTestHook(&BlockStoragePreparation);
+		auto preparation = std::async(std::launch::async, [&] {
+			return DirectoryLease::CreateExclusive(root, "asynchronous-preparation");
+		});
+		{
+			std::unique_lock lock(g_preparationMutex);
+			if (!g_preparationCondition.wait_for(lock, std::chrono::seconds(2), [] {
+					return g_preparationEntered;
+				})) {
+				g_preparationReleased = true;
+				lock.unlock();
+				g_preparationCondition.notify_all();
+				preparation.wait();
+				throw std::runtime_error("storage preparation did not reach its controlled boundary");
+			}
+		}
+		std::atomic_uint32_t callerProgress{ 0 };
+		++callerProgress;
+		if (preparation.wait_for(std::chrono::milliseconds(0)) != std::future_status::timeout ||
+			callerProgress.load() != 1) {
+			throw std::runtime_error("a blocked storage boundary also blocked caller progress");
+		}
+		{
+			std::lock_guard lock(g_preparationMutex);
+			g_preparationReleased = true;
+		}
+		g_preparationCondition.notify_all();
+		auto asynchronouslyPrepared = preparation.get();
+		SetDirectoryCreationTestHook(nullptr);
+		asynchronouslyPrepared->Verify();
+		asynchronouslyPrepared.reset();
 		const auto junctionTarget = root / "junction-target";
 		const auto junctionPath = root / "CS_sequence_junction-request";
 		std::filesystem::create_directories(junctionTarget);
@@ -135,9 +221,14 @@ inline void RunScreenshotStorageSecurityTests()
 			[&] { DirectoryLease::CreateExclusive(root, "junction-request"); },
 			"a pre-created sequence junction was accepted");
 		RemoveDirectoryW(junctionPath.c_str());
-
 		std::filesystem::remove_all(root);
 	} catch (...) {
+		SetDirectoryCreationTestHook(nullptr);
+		{
+			std::lock_guard lock(g_preparationMutex);
+			g_preparationReleased = true;
+		}
+		g_preparationCondition.notify_all();
 		std::error_code ignored;
 		std::filesystem::remove_all(root, ignored);
 		throw;

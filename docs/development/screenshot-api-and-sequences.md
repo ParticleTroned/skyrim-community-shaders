@@ -484,6 +484,13 @@ capability explicitly permits both.
 -   `absolute` is accepted only when advertised and must be an absolute canonical
     path.
 -   Relative traversal outside the selected root is rejected as `unsafe_path`.
+-   Sequence acceptance freezes the descriptor and returns `preparing` before
+    any path resolution or directory I/O. The manifest worker resolves the
+    destination and creates the sequence directory; failure becomes a terminal
+    `destination_unavailable` receipt without blocking request or render work.
+-   The sequence directory is created relative to the already-open destination
+    handle by one native create-and-open operation. CSX never reopens the new
+    directory by pathname to acquire its lease.
 -   Existing files are never overwritten in version 1. `overwrite` must be
     `never`; name collisions receive a deterministic numeric suffix.
 -   The worker encodes into memory, creates a sibling temporary file
@@ -502,9 +509,12 @@ names are sanitized, length-limited, and cannot contain path separators.
 request-scoped patch. A still request expands the current CSX screenshot eye,
 format, source, destination, and clipboard settings. A sequence request
 expands the distinct frame-capture eye, format, source, destination, frame
-count, and cadence settings. The acceptance receipt always contains the fully
-expanded effective descriptor. UI settings changed afterward affect only later
-requests. Sequence destination validation uses the frame-capture folder even
+count, and cadence settings. The acceptance receipt contains the fully expanded
+non-I/O settings descriptor. UI settings changed afterward affect only later
+requests. A sequence's initial `preparing` receipt leaves its manifest path null
+and omits only `effective.capture.destination.resolvedDirectory`; both are
+published after preparation succeeds. Sequence destination validation uses the
+frame-capture folder even
 when the still-image folder is unavailable. A partial settings load that omits
 both `FrameCaptureEye` and legacy `SeparateEyes` preserves the selected eye.
 The legacy key migrates only when supplied; a canonical eye always wins.
@@ -544,13 +554,18 @@ descriptor.
 Parent states are:
 
 ```text
-submitted -> accepted -> running -> finalizing -> completed
-                              |                 -> completed_with_warnings
-                              |                 -> failed_partial
-                              +-> stop_requested -> stopped
-                              +-> cancel_requested -> cancelled
-                                                   -> cancelled_partial
+submitted -> accepted -> preparing -> running -> finalizing -> completed
+                          |   |        |                 -> completed_with_warnings
+                          |   |        |                 -> failed_partial
+                          |   +--------+-> stop_requested -> stopped
+                          |   +--------+-> cancel_requested -> cancelled
+                          |                                 -> cancelled_partial
+                          +-> failed (destination unavailable)
 ```
+
+A stop or cancellation accepted while destination preparation is in flight
+retains its requested state. Successful preparation emits `sequence.prepared`
+and proceeds directly to finalization without transiently reporting `running`.
 
 Every parent terminal state includes counts and a manifest outcome. A sequence
 cannot be terminal-success while any child frame remains in a mutable state.

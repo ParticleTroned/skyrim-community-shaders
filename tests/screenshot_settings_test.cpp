@@ -66,12 +66,12 @@ struct ScreenshotApi
 	json NormalizeCaptureDescriptor(const ScreenshotFeature&, const json&, bool = false) const;
 	json ValidateSettingsPatch(const json&) const;
 	void ApplySettingsPatch(ScreenshotFeature&, const json&) const;
-	static std::filesystem::path ResolveDestinationDirectory(const ScreenshotFeature& feature, const json&, bool sequence = false)
+	static std::filesystem::path ResolveDestinationDirectory(
+		const json&, const std::filesystem::path& configuredDirectory, bool = false)
 	{
-		const auto& path = sequence ? feature.frameCapturePath : feature.screenshotPath;
-		if (path == "unavailable")
+		if (configuredDirectory == "unavailable")
 			throw std::runtime_error("capture directory unavailable");
-		return path;
+		return configuredDirectory;
 	}
 };
 #include "screenshot_settings_under_test.h"
@@ -118,7 +118,7 @@ int main()
 		check(sequence["outputs"].size() == (eye == Eye::Both ? 2 : 1), "sequence added unwanted outputs");
 		check(sequence["outputs"][0]["view"] == (eye == Eye::Right ? "right_eye" : "left_eye"), "sequence eye not used");
 		check(sequence["outputs"][0]["encoding"]["format"] == "bmp" && sequence["clipboard"] == "none", "sequence inherited still encoding/clipboard");
-		check(sequence["destination"]["resolvedDirectory"] == "Videos", "sequence resolved the still destination");
+		check(!sequence["destination"].contains("resolvedDirectory"), "sequence performed destination I/O during admission");
 		check(sequence["source"]["fallback"] == "reject", "HMD capture allowed implicit desktop fallback");
 	}
 	feature.screenshotPath = "unavailable";

@@ -9,6 +9,11 @@
 
 namespace CSX::ScreenshotStorage
 {
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+	using DirectoryCreationTestHook = void (*)(const std::filesystem::path&);
+	void SetDirectoryCreationTestHook(DirectoryCreationTestHook a_hook) noexcept;
+#endif
+
 	struct CommittedArtifact
 	{
 		std::uint64_t bytes = 0;

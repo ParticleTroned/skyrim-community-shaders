@@ -2,6 +2,7 @@
 
 #include "Api/ServiceFoundation.h"
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotBurstPolicy.h"
 #include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
 
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -38,6 +40,8 @@ public:
 
 	/** Validate and dispatch a contract request while retaining its idempotent receipt. */
 	json HandleRequest(ScreenshotFeature& a_feature, const json& a_request);
+	/** Admit a DevBench reference PNG and report its terminal receipt outside service locks. */
+	json HandleReferenceRequest(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_completion);
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
 	void OnSourceWaiting(std::string_view a_requestId, std::string_view a_actualSourceKind);
@@ -88,6 +92,7 @@ private:
 		json warnings = json::array();
 		json errors = json::array();
 		json error = nullptr;
+		std::function<void(const json&)> referenceCompletion;
 		bool acknowledged = false;
 		bool cancelRequested = false;
 		uint32_t expectedArtifacts = 1;
@@ -114,6 +119,9 @@ private:
 		uint32_t maximumConsecutiveSkips = 10;
 		uint32_t nextOrdinal = 1;
 		uint32_t scheduled = 0;
+		ScreenshotBurst::Plan burst;
+		ScreenshotBurst::Continuity continuity;
+		json burstSource = nullptr;
 		uint32_t acquired = 0;
 		uint32_t written = 0;
 		uint32_t dropped = 0;
@@ -196,6 +204,14 @@ private:
 		std::chrono::steady_clock::time_point expiresAt{};
 	};
 
+	struct ReferenceNotification
+	{
+		std::function<void(const json&)> completion;
+		json receipt;
+	};
+	std::vector<ReferenceNotification> referenceNotifications;
+	json DispatchRequest(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_completion);
+	void DrainReferenceNotifications();
 	CSX::Api::ServiceFoundation service;
 	mutable std::mutex mutex;
 	std::unordered_map<std::string, RequestRecord> requests;
@@ -222,7 +238,7 @@ private:
 	static constexpr auto kRetention = std::chrono::hours(1);
 	static constexpr uint32_t kMaximumSequenceFrames = 10000;
 
-	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request);
+	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_completion);
 	/** Freeze and validate a still or sequence descriptor using its own settings. */
 	json NormalizeCaptureDescriptor(
 		const ScreenshotFeature& a_feature,

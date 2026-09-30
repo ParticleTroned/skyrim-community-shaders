@@ -3283,6 +3283,13 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_executable(screenshot_native_png_test EXCLUDE_FROM_ALL tests/screenshot_native_png_test.cpp)
+    target_compile_features(screenshot_native_png_test PRIVATE cxx_std_23)
+    target_include_directories(screenshot_native_png_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(screenshot_native_png_test PRIVATE Microsoft::DirectXTex ole32 windowscodecs)
+    add_test(NAME ScreenshotNativePng COMMAND screenshot_native_png_test)
+    set_tests_properties(ScreenshotNativePng PROPERTIES LABELS "ControllerTests")
+
     set(_screenshot_capture_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-capture"
     )

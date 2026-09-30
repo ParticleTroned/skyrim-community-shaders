@@ -1115,3 +1115,218 @@ The screenshot API and sequence feature are complete when:
 -   legacy sequence settings migrate and are no longer inert;
 -   contract schemas, tests, documentation, null-HMD qualification, and physical-
     HMD qualification agree with the shipped implementation.
+
+## Production build boundary
+
+`DEVBENCH_BRIDGE=OFF` excludes native burst plans, atlas staging, deferred
+encoding, continuity bookkeeping, golden-reference callbacks and their
+per-frame notification/encoder locks. It also excludes the
+`Screenshot::SequenceCapture` diagnostic pass. These paths are absent from
+production translation units, rather than disabled by a runtime setting.
+`TRACY_SUPPORT=ON` alone does not enable them.
+
+Normal screenshot and scheduled-sequence behavior remains available through
+the menu, hotkey and native API. Its PNG/BMP encoder, collision-safe file
+publication, UTF-8 path conversion and shared retry handling are functional
+production code. The shared retry fix applies only when an API command is
+dispatched; it does not poll or add a render-loop hook.
+
+Validation on 2026-10-01:
+
+-   Built the universal SE/AE/VR Release DLL with `TRACY_SUPPORT=OFF` and
+    `DEVBENCH_BRIDGE=OFF` using
+    `pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target CommunityShaders --parallel 2`.
+    The initial compile exposed an indirect `StringUtils.h` dependency;
+    adding the direct include resolved it. No packaging or deployment ran.
+-   Verified the production target has no Tracy definitions/client linkage or
+    DevBench definition. The DLL excludes 14 burst/reference markers and the
+    10 diagnostic markers from the preceding production-boundary check.
+    Its adjacent manifest matches its SHA-256 and 23,545,856-byte size.
+-   The preserved pre-commit build is based on `95e8d4c67` plus this source
+    patch, with Build ID
+    `def80f0b5d3a5315a9d67ccd6842bc63c3f61c634e04701b7fd8db295eb7bb57`
+    and DLL SHA-256
+    `4d77a34efa92280fa356f1f0917be3b8240480bcc02c5a5cfbce0900fd60e349`.
+-   MSVC `/Zs` passed for `ScreenshotApi.cpp`, `ScreenshotFeature.cpp` and
+    `ScreenshotDevBenchBridge.cpp` with `TRACY_SUPPORT`, `TRACY_ENABLE`,
+    `TRACY_ON_DEMAND` and `DEVBENCH_BRIDGE_ENABLED` defined. The bridge check
+    used the installed DevBench SDK include directory.
+-   All 10 tests selected by
+    `ctest --test-dir build/ALL -C Release -R 'Screenshot|ApiServiceFoundation' --output-on-failure --no-tests=error --parallel 2`
+    passed after building their nine executable targets. This includes both
+    production and DevBench capability/admission variants, flat and VR source
+    discovery, ordinary PNG/BMP capabilities, native pixel round trips, burst
+    policy, reference receipts and retry handling.
+-   No in-game capture or performance measurement was performed. Local build
+    and binary-check evidence is under
+    `build/validation/capture-boundary-20261001/`.
+
+## Consecutive native-region bursts
+
+For temporal quality, opt into `sequence.burst` in a CSX build configured with
+`DEVBENCH_BRIDGE=ON`. Require the `burst` capability before sending this
+descriptor. Production builds omit that capability and reject `sequence.burst`
+with a non-retryable `unsupported` error before allocating capture resources.
+Ordinary still PNG and streamed sequence behavior remain available in every
+build. The same burst descriptor is accepted by the comparison builds of CSX
+and Open Shaders:
+
+```json
+"burst": {
+    "maximumBytes": 536870912,
+    "regions": [
+        { "x": 564, "y": 712, "width": 384, "height": 256 },
+        { "x": 944, "y": 712, "width": 384, "height": 256 },
+        { "x": 1128, "y": 1040, "width": 384, "height": 256 }
+    ]
+}
+```
+
+Coordinates above only illustrate the descriptor for a sufficiently large
+eye image. Select center, mask-boundary and periphery rectangles from the
+full native reference for the actual projection; do not assume those
+example positions track the FOV mask on every machine. The coordinates are
+integer pixels relative to each oriented submission, applied identically
+to both eyes. All regions must have equal widths. Each eye's regions stack
+vertically in array order; VR places the left atlas before the right atlas.
+There is no scaling, filtering or padding. The example yields 768 x 768
+pixels containing six 384 x 256 tiles. Bounds, orientation, source
+dimensions and region definitions remain in the manifest.
+
+Use explicit `frameCount` (1–240), `useSettings: false`, `game_frames`,
+`intervalFrames: 1`, one `side_by_side` output in VR (`source_native` on
+SE/AE), SDR PNG or BMP, and `fallback: reject`. Keep the frame manifest
+enabled. Omit `failurePolicy` for a shared request: the burst always stops
+acquisition on failure regardless of the ordinary sequence default.
+Additional output cropping, resizing and clipboard export are unavailable
+in this mode. Bursts require exclusive ownership through finalization.
+
+Only cropped GPU copies are collected during acquisition. Readback and
+PNG/BMP encoding start after acquisition ends; saved images use the same
+existing encoders and verified publication paths as ordinary captures.
+Admission checks the entire raw payload before allocating any textures.
+Its ceiling is 512 MiB, with 128 MiB per frame and at most eight regions;
+native texture and region bounds are also checked at acquisition. These
+are resource bounds, not wall-clock deadlines. Driver allocation padding,
+metadata and bounded readback/encoder scratch space are additional memory.
+Acquisition does not wait for the disk or encoder to make room.
+
+The receipt and final manifest expose `continuity`: observed first/last
+engine frames, acquired/requested counts, `failure`, and `complete`.
+Every acquired frame must advance the engine counter and, in VR, the
+compositor cycle by exactly one. A missing or incompatible eye, source
+change, pause after capture begins, readback failure or failed publication
+prevents qualification. Early stop retains acquired images but cannot
+qualify an incomplete requested burst. Require final manifest publication,
+all requested images and `continuity.complete == true` together; image
+count or a successful start response alone is insufficient. Memory owned
+by each frame is released during drain; receipts retain metadata only.
+
+For a compact comparison, preserve one full stereo reference at each
+existing viewpoint, then initially capture two seconds: 0.5 seconds of
+stationary detail, a one-second repeatable pan, and 0.5 seconds of stationary
+recovery. At a measured 60 rendered FPS this is 30 + 60 + 30 = 120 frames.
+Three 384 x 256 regions per eye consume 283,115,520 raw bytes per viewpoint
+(270 MiB, about 1.70 GB over six viewpoints), before lossless compression.
+This is an initial evidence budget, not a claim that all temporal artifacts
+settle within two seconds. Extend only the affected phase if the saved
+samples show an unsettled trail, insufficient motion or an unresolved
+fluctuation; do not routinely repeat the entire viewpoint or capture at
+the 240-frame ceiling. Stabilize camera and history before acquisition.
+
+Both builds require an explicit burst frame count. Choose it from actual
+rendered cadence, not the nominal HMD refresh rate, and match motion speed
+and phase durations between builds. The selected frame count ends source
+acquisition; it is not an encoding, publication or command timeout. Keep
+requested raw bytes within the advertised bound; reduce region dimensions
+if the chosen cadence would exceed it. Retain acquisition timestamps and
+correlated DevBench camera actions for phase boundaries. Match the original
+settings, fixed HMD pose, viewpoint, game time and weather.
+
+Validate the first short burst's continuity, stereo orientation, crop
+locations and publication before proceeding to the other viewpoints. Reuse
+that valid burst. Do not repeatedly capture long full-frame sequences or
+include image collection in a performance benchmark. Consecutive counters
+do not prove negligible capture overhead or uniform wall-clock cadence;
+inspect timestamps before comparing shimmer, ghosting and stereo history.
+Runtime qualification on VR and one flat runtime remains necessary.
+
+DevBench already supports capture-provider registration through
+`RegisterToolExtension("capture", key, ...)`, with correlated `outputPath`,
+`requestId` and `capture.ready` completion. Its base `capture` accepts
+`golden`, `threshold` and normalized `regions`; replay accepts per-checkpoint
+`goldens`. Reuse those facilities and existing matching reference images
+instead of creating another golden-sample registry. Full-frame goldens
+and burst atlases have different layouts and must not be compared directly.
+
+CSX registers the native Screenshot provider as `kind: "communityshaders"`
+on DevBench build 10500 or newer. Discover it using
+`capture {"kind":"providers"}`. It captures a full same-cycle stereo PNG
+in VR or native desktop PNG on SE/AE through the existing screenshot queue.
+The host's exact absolute output path is retained; existing files are
+refused and publication never overwrites or silently chooses another name.
+Completion carries the host request ID, dimensions, size and SHA-256 from
+the committed-file receipt through `capture.ready`. Failure and cancellation
+cannot report a successful reference. The provider reports
+`uiExcluded: false`; hide the HUD/menu explicitly for matching references.
+Use the base capture tool's `golden`, `threshold` and `regions` arguments
+or replay checkpoint `goldens` for DevBench's existing scoring.
+
+### Burst and golden-provider validation (2026-09-30)
+
+The universal SE/AE/VR DLL built with Tracy and DevBench enabled from the
+implementation worktree based on `2467ba77cbfc1ed886a062cdea27b4f031b864ba`.
+The isolated build disabled automatic deployment and used cached dependencies.
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/c930b --config Release --target CommunityShaders screenshot_native_png_test screenshot_manifest_snapshot_test screenshot_settings_test screenshot_api_policy_test screenshot_capture_present_test --parallel 8
+ctest --test-dir build/c930b -C Release -R Screenshot --output-on-failure
+```
+
+All eight screenshot tests passed. Coverage includes native atlas pixel
+identity under all four orientations, bounds and memory budgets, frame/cycle
+gaps, terminal publication requirements, Unicode reference paths and
+failure/cancellation receipts. Existing atomic-storage and capture/dispatch
+checks passed. The settings extraction harness now includes the production
+capture-descriptor exception instead of depending on a missing declaration.
+The shared burst policy is byte-identical to the OS implementation.
+
+The adversarial/DRY pass checked source pairing, allocation limits, worker
+ownership, cancellation, exact host filenames, callback lock boundaries and
+normal PNG publication. The provider reuses the queue and committed-file
+receipt; neither the encoder nor the terminated Win32 rename buffer changed.
+Path conversion is shared through `Util::PathToUtf8`, including publication
+logging. An unchanged deferral state no longer wakes the encoder each frame.
+
+Scoped hooks, discovery JSON parsing and sequence-manifest schema validation
+passed. The request schema retains its existing layout to avoid unrelated
+whole-file formatting; its new burst definition was parsed and reviewed.
+No runtime images, golden scores, sustained-cadence measurements or capture
+overhead measurements were produced. VR and one flat runtime still need
+in-game qualification with these DLLs before temporal comparisons are valid.
+
+The follow-up adversarial pass made golden captures use the burst path's
+strict native-source checks: single-sample SDR8, valid submitted bounds,
+same-frame/cycle eyes, compatible dimensions and no desktop-source fallback
+or HDR tonemapping. Ordinary still captures retain their existing behavior.
+Comparison guidance starts with a two-second cropped burst after history
+stabilization, extending only an unresolved phase instead of recording at
+the maximum frame count. No publication deadline is derived from its length.
+
+Native bursts and golden outputs also retain display-encoded bytes when
+an sRGB texture tag reaches DirectXTex conversion. The production helper
+changes format metadata before the existing SDR writer; ordinary capture
+conversion is unchanged. `ScreenshotNativePng` verifies exact PNG and BMP
+pixel round trips across RGBA/BGRA and UNORM/sRGB sources (4,096 pixels),
+and rejects HDR input. The existing NUL-terminated atomic publisher remains
+unchanged. The focused CMake target addition keeps the surrounding legacy
+formatting intact; CMake regeneration and the new target build passed.
+
+### Retrying rejected commands
+
+A failed dispatch with `error.retryable: true`, including temporary capture
+`busy` responses, is not retained in the completed command cache. Retry
+with the same arguments, `clientId` and `commandId` after the temporary
+condition clears. Successful commands and non-retryable failures remain
+cached; retries of accepted captures return their receipt without starting
+another capture. Concurrent identical commands remain `command_in_progress`.

@@ -1,6 +1,11 @@
 #include "Features/ScreenshotApiPolicy.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/ScreenshotBurstPolicy.h"
+#endif
+#include "Utils/StringUtils.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -58,13 +63,24 @@ bool IsFramedCapture(ScreenshotFeature::VRCaptureSource value)
 }
 std::filesystem::path ResolveCapturePath(const std::filesystem::path& path, bool) { return path; }
 std::filesystem::path ResolveConfiguredCaptureDirectory(const std::filesystem::path& path, bool) { return path; }
-std::string PathUtf8(const std::filesystem::path& path) { return path.string(); }
 constexpr uint32_t kMaximumSequenceFrames = 10000;
 struct ScreenshotApi
 {
 	using json = nlohmann::json;
 	json NormalizeCaptureDescriptor(const ScreenshotFeature&, const json&, bool = false) const;
 	json ValidateSettingsPatch(const json&) const;
+	json BuildCapabilities(const ScreenshotFeature&) const;
+	json CheckSequenceBuildSupport(const json& a_request) const
+	{
+#include "screenshot_build_admission.h"
+		return { { "ok", true } };
+	}
+	json MakeError(const json&, std::string_view code, std::string_view, std::string_view, bool retryable, std::string_view field) const
+	{
+		return { { "ok", false }, { "error", { { "code", code }, { "retryable", retryable }, { "field", field } } } };
+	}
+
+#include "screenshot_build_limits.h"
 	void ApplySettingsPatch(ScreenshotFeature&, const json&) const;
 	static std::filesystem::path ResolveDestinationDirectory(const ScreenshotFeature& feature, const json&, bool sequence = false)
 	{
@@ -88,6 +104,25 @@ int main()
 	};
 	ScreenshotApi api;
 	ScreenshotFeature feature;
+	for (const bool vr : { false, true }) {
+		globals::game::isVR = vr;
+		const auto capabilities = api.BuildCapabilities(feature);
+		check(capabilities.at("sources").size() == (vr ? 2 : 1), "runtime capture sources changed");
+		check(capabilities.at("formats") == json({ "png", "bmp" }), "ordinary image formats disappeared");
+		check(api.CheckSequenceBuildSupport({ { "sequence", { { "frameCount", 2 } } } }).at("ok"), "ordinary sequences rejected");
+		for (const auto burst : { json(nullptr), json::object(), json{ { "regions", json::array() } } }) {
+			const auto admission = api.CheckSequenceBuildSupport({ { "sequence", { { "frameCount", 2 }, { "burst", burst } } } });
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			check(capabilities.contains("burst") && capabilities.at("burst").at("deferredEncoding"), "DevBench lost burst capability");
+			check(admission.at("ok"), "DevBench blocked burst before descriptor validation");
+#else
+			check(!capabilities.contains("burst"), "production advertised a diagnostic burst");
+			check(!admission.at("ok").get<bool>() && admission.at("error").at("code") == "unsupported" &&
+					  !admission.at("error").at("retryable").get<bool>() && admission.at("error").at("field") == "sequence.burst",
+				"production did not explicitly reject diagnostic bursts");
+#endif
+		}
+	}
 	feature.frameCaptureEye = Eye::Right;
 	json partial = { { "FrameCaptureUsePng", true } };
 	feature.LoadSettings(partial);

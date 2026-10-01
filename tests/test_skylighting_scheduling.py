@@ -49,6 +49,8 @@ struct Skylighting {
     uint lastOcclusionRenderFrame = ~0u, occlusionCaptureCorner = 0, nextOcclusionCorner = 0;
     bool probeDataReady = true, queuedResetSkylighting = false;
     void ResetSkylighting() { queuedResetSkylighting = true; }
+    void GameLoaded();
+    void OnSceneTransitionReset(bool);
     void LoadSettings(Settings&);
     void ClearProbes() { RESET }
     void Prepare(bool moved = false) { float3 cellIDDiff{moved ? 1.f : 0.f, 0, 0}; PREPARE }
@@ -58,7 +60,9 @@ using json = Skylighting::Settings;
 LOAD
 '''.replace("SETTINGS", braced(HEADER, "struct Settings") + " settings;").replace(
         "WARMUP", warmup).replace("RESET", reset).replace("PREPARE", prepare).replace(
-        "ADVANCE", advance).replace("LOAD", braced(CPP, "void Skylighting::LoadSettings("))
+        "ADVANCE", advance).replace("LOAD", "\n".join(braced(CPP, declaration) for declaration in (
+            "void Skylighting::LoadSettings(", "void Skylighting::GameLoaded(",
+            "void Skylighting::OnSceneTransitionReset(")))
 
 
 class SkylightingSchedulingTests(unittest.TestCase):
@@ -138,6 +142,49 @@ int main() {
     s.ClearProbes();
     check(!s.probeDataReady && s.forcedFullUpdateFrames == Skylighting::probeHistoryWarmupFrames,
           "Every travel reset must restart full recovery without movement");
+}
+''')
+
+    def test_interrupted_recovery_and_loading_callbacks(self):
+        self.compile_and_run(scheduling_fixture() + r'''
+int main() {
+    Skylighting s;
+    s.settings.EnableIncrementalProbeUpdates = true;
+    s.ClearProbes();
+    for (uint i = 0; i < 8; ++i) { s.Prepare(); s.Advance(i % 4); }
+    const uint remaining = s.forcedFullUpdateFrames;
+    check(remaining > 4 && remaining < Skylighting::probeHistoryWarmupFrames,
+          "The fixture must start inside an unfinished reset warmup");
+    for (bool enabled : {false, true}) {
+        auto selected = s.settings;
+        selected.EnableIncrementalProbeUpdates = enabled;
+        selected.StableSliceCount = 0;
+        s.LoadSettings(selected);
+        check(s.settings.StableSliceCount == 1 && !s.queuedResetSkylighting,
+              "Scheduling edits must validate bounds without clearing history");
+        for (uint i = 0; i < 20; ++i) s.Prepare(i == 0);
+        check(s.forcedFullUpdateFrames == remaining,
+              "Settings edits, movement and missed dispatches must preserve reset work");
+    }
+    for (uint i = 0; i < remaining; ++i) {
+        s.Prepare();
+        check(s.dispatchSliceStart == 0 && s.dispatchSliceCount == 128,
+              "Recovery must stay full-grid after mode changes");
+        s.Advance(i % 4);
+    }
+    s.Prepare();
+    check(s.forcedFullUpdateFrames == 0 && s.dispatchSliceCount == 1,
+          "Interrupted recovery must resume the newly selected schedule");
+    for (uint event = 0; event < 3; ++event) {
+        s.queuedResetSkylighting = false;
+        if (event == 0) s.GameLoaded();
+        else s.OnSceneTransitionReset(event == 1);
+        check(s.queuedResetSkylighting,
+              "Save load and both loading-menu transitions must request recovery");
+        s.ClearProbes();
+        check(!s.probeDataReady && s.forcedFullUpdateFrames == Skylighting::probeHistoryWarmupFrames,
+              "Each transition must restart complete stationary recovery");
+    }
 }
 ''')
 

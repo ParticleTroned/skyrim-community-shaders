@@ -18,6 +18,8 @@ function(extract start_token end_token output)
     file(WRITE "${OUTPUT_DIRECTORY}/${output}" "${body}\n")
 endfunction()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+extract("\t\tComputeSubrect BuildFullComputeSubrect(" "\n\t\t}"
+    neural_full_compute_subrect_under_test.h)
 extract("\t\t[[nodiscard]] const Slot* FindPreparedSlot(" "\n\t\t}"
     neural_prepared_slot_under_test.h)
 extract("\t\t[[nodiscard]] std::shared_ptr<const CharacterPreparationEvidence> FindPreparationEvidence(" "\n\t\t}"

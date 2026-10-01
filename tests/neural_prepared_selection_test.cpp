@@ -99,6 +99,8 @@ static Fixture* producer = nullptr;
 
 namespace NeuralRendering
 {
+#include "neural_full_compute_subrect_under_test.h"
+
 	class CharacterRendering::State : public Fixture
 	{};
 	CharacterRendering::CharacterRendering() : state_(std::make_unique<State>()) { producer = state_.get(); }

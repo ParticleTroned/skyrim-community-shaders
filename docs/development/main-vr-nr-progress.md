@@ -12,6 +12,17 @@ all preset values remain unchanged. The failed build is preserved under
 `build/validation/nr-aio-96cdb86c0-20261001/validation/`; corrected compiled
 and runtime qualification are pending at this source checkpoint.
 
+The corrected DLL builds. The prepared-selection fixture also needs the
+production `BuildFullComputeSubrect` helper, which is now extracted with
+its existing production methods and shared by both bridge variants.
+Both compiled variants and their source contract pass (3/3), and the
+character-mask WARP test passes, including reconstruction followed by
+exact final selection. The focused logs are
+`prepared-selection-build.log`, `prepared-selection-tests.log` and
+`character-mask-tests.log` in the same evidence root. This fixture-only
+correction changes no production rendering. Complete validation and the
+archive receipt follow under that root; in-game qualification remains open.
+
 ## October 1 main-VR synchronization
 
 Merged `main-VR` through `79a61dc18af73fff91c28ddc701c3b18f8cd1605`

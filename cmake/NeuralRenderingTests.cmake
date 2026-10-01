@@ -201,6 +201,7 @@ target_link_libraries(neural_character_evidence_test PRIVATE nlohmann_json::nloh
 
 set(_neural_selection_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_selection_test")
 set(_neural_selection_headers
+    "${_neural_selection_test_dir}/neural_full_compute_subrect_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_slot_under_test.h"
     "${_neural_selection_test_dir}/neural_preparation_evidence_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_result_under_test.h"

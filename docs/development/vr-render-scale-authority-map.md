@@ -23,6 +23,24 @@ introduced and hardened that gate; `d6d821404` removed it. The diagnostic
 resolver deliberately has no production caller and must not become a wake
 mask, cache, or early-return condition.
 
+## Terminal startup fallback authority
+
+Startup fallback activity and terminal Retry invalidation share
+`vrStartupRenderScaleNativeFallbackState`. Confirmed device loss re-arms
+fallback and invalidates Retry with one atomic `fetch_or`, before publishing
+the separate device-health diagnostic. Final resolution uses compare-exchange
+on that same state while queue, request and controller ownership still bind
+the exact committed request. If resolution wins first, device loss re-arms
+fallback; if device loss wins first, resolution rejects. An ordinary inactive
+publication cannot erase terminal invalidation.
+
+The policy regression checks one-use resolution, invalidation before
+resolution, preservation during inactive publication and 128 bounded
+two-thread resolution/invalidation races. The source contract also rejects
+restoring separate fallback activity and invalidation atomics. These checks
+complement the required runtime qualification; their source presence does not
+establish native execution, live recovery or a visual/performance result.
+
 ## Service classes
 
 | Service class                 | Production service path                                                                                                                      |

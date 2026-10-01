@@ -2311,8 +2311,9 @@ public:
 	static const char* GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status);
 	bool IsVRStartupNativeFallbackRestartRequired() const noexcept
 	{
-		return vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire);
+		return VRVendorRelatchPolicy::IsStartupNativeFallbackActive(
+			vrStartupRenderScaleNativeFallbackState.load(
+				std::memory_order_acquire));
 	}
 	bool IsVRStartupNativeFallbackSavedIntentActive() const;
 	bool CanRetryVRStartupNativeFallbackFromCSMenu(bool a_forceMemorySample = false);
@@ -3040,7 +3041,10 @@ public:
 	// process on the coherent startup None/native contract. Automatic replay and
 	// boot relatching remain blocked; only an explicit inactive profile or a new
 	// CS-menu request admitted after native/memory recovery may clear the latch.
-	std::atomic<bool> vrStartupRenderScaleNativeFallbackRestartRequired{ false };
+	std::atomic<VRVendorRelatchPolicy::StartupNativeFallbackAtomicState>
+		vrStartupRenderScaleNativeFallbackState{
+			VRVendorRelatchPolicy::kStartupNativeFallbackInactive
+		};
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };

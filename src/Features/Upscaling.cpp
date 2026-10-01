@@ -20367,8 +20367,7 @@ Upscaling::UpscaleMethod Upscaling::GetRuntimeUpscaleMethod() const
 		return requestedMethod;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return UpscaleMethod::kNONE;
-	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire)) {
+	if (IsVRStartupNativeFallbackRestartRequired()) {
 		return UpscaleMethod::kNONE;
 	}
 
@@ -21248,8 +21247,7 @@ bool Upscaling::GetVRRenderScaleModeRequested() const
 		return false;
 	if (IsVRStartupMainMenuRenderStateActive())
 		return false;
-	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire)) {
+	if (IsVRStartupNativeFallbackRestartRequired()) {
 		return false;
 	}
 
@@ -21641,8 +21639,7 @@ Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransit
 	const bool renderScalePreferenceTargetChanged = isVR &&
 	                                                currentDesiredProfile.renderScaleModePreference != targetRenderScalePreference;
 	const bool startupNativeFallbackActive =
-		vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire);
+		IsVRStartupNativeFallbackRestartRequired();
 	const bool startupFallbackControlRequested =
 		a_startupFallbackControl !=
 		VRVendorRelatchPolicy::StartupNativeFallbackControl::None;
@@ -21996,8 +21993,7 @@ uint32_t Upscaling::GetVRUpscalingApplyBlockReasonsForAPI() const
 		reasons |= kVRUpscalingApplyBlockOpenComposite;
 	}
 
-	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire)) {
+	if (IsVRStartupNativeFallbackRestartRequired()) {
 		reasons |= kVRUpscalingApplyBlockStartupNativeFallback;
 	}
 
@@ -22436,8 +22432,7 @@ bool Upscaling::TryGetPerfModeOpenVRRenderTargetSize(uint32_t& a_width, uint32_t
 		return false;
 	if (g_vrNativeRenderTargetRecreateOverrideActive)
 		return false;
-	if (vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire)) {
+	if (IsVRStartupNativeFallbackRestartRequired()) {
 		return false;
 	}
 
@@ -26923,10 +26918,10 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			vrStartupRenderScaleBootSizingRecognized.store(
 				false,
 				std::memory_order_release);
-			vrStartupRenderScaleNativeFallbackRestartRequired.store(
+			VRVendorRelatchPolicy::SetStartupNativeFallbackActive(
+				vrStartupRenderScaleNativeFallbackState,
 				fallbackRequestAction ==
-					VRVendorRelatchPolicy::PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart,
-				std::memory_order_release);
+					VRVendorRelatchPolicy::PostLoadStableFallbackRequestAction::HoldStartupNativeUntilRestart);
 		}
 		perfMode.UpdateRestartRequiredState(
 			settings,
@@ -50083,6 +50078,8 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	if (!deviceReportedLoss && !IsD3DDeviceRemovedResult(a_result))
 		return;
 
+	VRVendorRelatchPolicy::InvalidateStartupNativeFallbackRetry(
+		vrStartupRenderScaleNativeFallbackState);
 	const bool alreadyMarked = submitStageDeviceLost.exchange(true, std::memory_order_acq_rel);
 	RecordVRRenderScaleTransitionFailure(VRRenderScaleFailureKind::DeviceLost);
 	// Claim the current serialization owner under its mutex. Sampling the owner
@@ -53081,8 +53078,7 @@ Upscaling::VRRenderScaleRequestQueueResult Upscaling::QueueVRRenderScaleRequest(
 		IsRenderScaleQualityMode(qualityMode), a_renderScaleModeEnabled);
 	const bool renderScaleModeEnabled = renderScale.enabled;
 	const bool startupNativeFallbackActive =
-		vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire);
+		IsVRStartupNativeFallbackRestartRequired();
 	const bool directMenuEdit =
 		a_directMenuEdit &&
 		a_origin == VRUpscalingTransitionOrigin::CSMenu;
@@ -56222,20 +56218,16 @@ bool Upscaling::TryResolveVRStartupNativeFallbackLocked(
 				std::memory_order_acquire),
 			.retryRevalidated = retryRevalidated,
 		},
-		.fallbackActive = vrStartupRenderScaleNativeFallbackRestartRequired.load(std::memory_order_acquire),
+		.fallbackActive = IsVRStartupNativeFallbackRestartRequired(),
 	};
 	if (!VRVendorRelatchPolicy::TryResolveStartupNativeFallback(authority)) {
 		return false;
 	}
 
-	// Queue, request, and controller ownership remain held across the proof and
-	// one-use clear, so no invalidating publication can split this transaction.
-	bool fallbackActive = true;
-	return vrStartupRenderScaleNativeFallbackRestartRequired.compare_exchange_strong(
-		fallbackActive,
-		false,
-		std::memory_order_acq_rel,
-		std::memory_order_acquire);
+	// Queue, request, and controller ownership bind the request proof. The atomic
+	// authority word additionally orders device-loss invalidation with the clear.
+	return VRVendorRelatchPolicy::TryResolveStartupNativeFallbackAtomic(
+		vrStartupRenderScaleNativeFallbackState);
 }
 
 uint64_t Upscaling::AllocateVRRenderScaleTransitionEpoch()

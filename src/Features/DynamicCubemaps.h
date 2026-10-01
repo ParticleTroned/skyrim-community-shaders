@@ -174,6 +174,7 @@ public:
 	/** @brief Reports whether the configured resolution requires a restart. */
 	bool IsCubemapResolutionRestartRequired() const { return settings.CubemapResolution != activeCubemapResolution; }
 	bool enabledAtBoot = false;
+	bool gameSettingsInitialized = false;
 	bool IsSSRRuntimeActive() const;
 	void UpdateCubemap();
 

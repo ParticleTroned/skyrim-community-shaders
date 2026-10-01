@@ -174,6 +174,7 @@ public:
 	};
 
 private:
+	static constexpr uint probeHistoryWarmupFrames = 60;
 	float3 GetProbeCellSize() const;
 	float3 GetProbeCell(float3 eyePosition) const;
 	bool HasProbeResources() const;
@@ -183,7 +184,8 @@ private:
 	float3 pendingProbeCell = {};
 	uint sliceCursor = 0;
 	uint sliceCaptureMask = 0;
-	uint forcedFullUpdateFrames = 4;
+	uint activeSliceCount = 0;
+	uint forcedFullUpdateFrames = probeHistoryWarmupFrames;
 	uint dispatchSliceStart = 0;
 	uint dispatchSliceCount = 0;
 	uint lastProbeUpdateCapture = static_cast<uint>(-1);

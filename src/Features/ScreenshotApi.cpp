@@ -1119,9 +1119,9 @@ ScreenshotApi::RequestRecord& ScreenshotApi::CreateRequestLocked(std::string a_k
 		effectiveSource = &*source;
 	} else if (const auto capture = record.effective.find("capture");
 		capture != record.effective.end() && capture->is_object()) {
-		if (const auto source = capture->find("source");
-			source != capture->end() && source->is_object()) {
-			effectiveSource = &*source;
+		if (const auto captureSource = capture->find("source");
+			captureSource != capture->end() && captureSource->is_object()) {
+			effectiveSource = &*captureSource;
 		}
 	}
 	if (effectiveSource && effectiveSource->value("fallbackApplied", false)) {

@@ -19,6 +19,7 @@
 #include "ShaderCache.h"
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
+#include "VR/ImGuiVRHelperHost.h"
 #include "VR/MenuPositioningPolicy.h"
 #include "VRDepthCullingCacheRefreshPolicy.h"
 #include "VRDepthCullingEnablePolicy.h"
@@ -4299,6 +4300,7 @@ void VR::SubmitCaptureIndicator(bool a_visible)
 
 void VR::SubmitOverlayFrame()
 {
+	ImGuiVRHelperHost::Tick();
 	// Skip overlay operations if OpenVR is incompatible
 	if (!openVRInfo.isCompatible) {
 		ReleaseMenuDesktopWindowManagement();
@@ -4312,7 +4314,7 @@ void VR::SubmitOverlayFrame()
 
 	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
 	const bool presentationUpscalingActive = globals::features::upscaling.IsPresentationUpscalingActive();
-	if (shouldUseInSceneOverlay || presentationUpscalingActive) {
+	if (shouldUseInSceneOverlay || presentationUpscalingActive || ImGuiVRHelperHost::IsAvailable()) {
 		InstallSubmitHook();
 	}
 	const bool useInSceneOverlay =

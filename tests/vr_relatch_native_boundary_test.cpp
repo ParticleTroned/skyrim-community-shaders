@@ -69,6 +69,20 @@ namespace globals
 	}
 }
 
+namespace ImGuiVRHelperHost
+{
+	uint64_t activeToken = 0;
+	uint32_t beginCalls = 0;
+	void BeginPair(const VRRenderScaleFrameBoundaryPolicy::PairIdentity& a_pair, ID3D11Texture2D* a_texture)
+	{
+		if (!a_texture || nativeDepth != 0 || a_pair.token == 0 || a_pair.token != g_vrSubmitPairBoundaryState.token)
+			throw std::runtime_error("Helper ownership did not begin at the exact outer native boundary");
+		activeToken = a_pair.token;
+		++beginCalls;
+	}
+	void EndPair() noexcept { activeToken = 0; }
+}
+
 #include "vr_relatch_native_boundary_under_test.h"
 
 static_assert(std::is_same_v<decltype(BSOpenVR_Submit::thunk), void(RE::BSOpenVR*, ID3D11Texture2D*)>);
@@ -132,6 +146,7 @@ namespace
 			(scenario == Scenario::DeepNestedThenComplete && nativeDepth < 3)) {
 			const auto savedBoundary = g_vrSubmitPairBoundaryState;
 			const auto savedCompletion = g_vrRelatchPairCompletion;
+			const auto savedHelperToken = ImGuiVRHelperHost::activeToken;
 			bool caught = false;
 			try {
 				BSOpenVR_Submit::thunk(&nativeInstance, &texture);
@@ -144,7 +159,8 @@ namespace
 				g_vrSubmitPairBoundaryState.active != savedBoundary.active ||
 				g_vrSubmitPairBoundaryState.token != savedBoundary.token ||
 				g_vrRelatchPairCompletion.identity.token != savedCompletion.identity.token ||
-				g_vrRelatchPairCompletion.completedEyeMask != savedCompletion.completedEyeMask)
+				g_vrRelatchPairCompletion.completedEyeMask != savedCompletion.completedEyeMask ||
+				ImGuiVRHelperHost::activeToken != savedHelperToken)
 				throw std::runtime_error("Nested native call failed to preserve outer ownership");
 			if (globals::features::upscaling.calls != 0)
 				throw std::runtime_error("Nested submit independently serviced the outer relatch");
@@ -184,6 +200,7 @@ namespace
 			g_openVRSubmitCycleState = 20;
 			observedThread = 1;
 			returnedEyes = 0;
+			ImGuiVRHelperHost::beginCalls = 0;
 			BSOpenVR_Submit::thunk(&nativeInstance,
 				(sample == Scenario::NullTexture || sample == Scenario::NullOuterThenNested) ? nullptr : &texture);
 			const bool complete = sample == Scenario::Complete || sample == Scenario::NestedThenComplete ||
@@ -192,6 +209,9 @@ namespace
 				"Native callback service did not match the exact completed, unchanged outer stereo owner");
 			Require(!g_vrSubmitPairBoundaryState.active && g_vrRelatchPairCompletion.identity.token == 0 && nativeDepth == 0,
 				"Native submit failed to restore the previous boundary state");
+			const bool nullOuter = sample == Scenario::NullTexture || sample == Scenario::NullOuterThenNested;
+			Require(ImGuiVRHelperHost::activeToken == 0 && ImGuiVRHelperHost::beginCalls == (nullOuter ? 0u : 1u),
+				"Nested or null native calls acquired helper ownership, or outer ownership leaked");
 		}
 	}
 
@@ -208,6 +228,7 @@ namespace
 			caught = true;
 		}
 		Require(caught && nativeDepth == 0 && globals::features::upscaling.calls == 0 &&
+					ImGuiVRHelperHost::activeToken == 0 &&
 					!g_vrSubmitPairBoundaryState.active && g_vrSubmitPairBoundaryState.token == 0 &&
 					g_vrRelatchPairCompletion.identity.token == 0 && g_vrRelatchPairCompletion.completedEyeMask == 0,
 			"A throwing native call leaked its boundary ownership");

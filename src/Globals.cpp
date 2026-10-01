@@ -1,5 +1,7 @@
 #include "Globals.h"
 
+#include "Features/VR/ImGuiVRHelperSceneCapture.h"
+
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
@@ -264,6 +266,8 @@ namespace globals
 			frameBufferCached.nonVR = *frameBuffer;
 		}
 		mappedFrameBuffer = nullptr;
+		if (game::isVR)
+			ImGuiVRHelperSceneCapture::RecordFramebufferUpdate();
 	}
 
 	/**

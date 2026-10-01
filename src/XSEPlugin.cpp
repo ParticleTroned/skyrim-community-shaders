@@ -20,6 +20,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
+#include "Features/VR/ImGuiVRHelperHost.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -186,6 +187,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				ImGuiVRHelperHost::Initialize();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				// DevBench publishes its interface from its own PostLoad listener. If

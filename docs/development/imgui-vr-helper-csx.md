@@ -1,169 +1,230 @@
 # CSX-only ImGui VR Helper integration
 
-This working branch contains the private CSX metadata foundation for the
-optional helper integration. It is based on `main-VR` commit
-`dab1874a76fd39175dcefdc52110ba69d7284e12` and corresponds to the helper
-foundation at
-[`d849ce812e9750cb2892d50167bab7d20f2ccbb5`](https://github.com/ParticleTroned/imgui-vr-helper/commit/d849ce812e9750cb2892d50167bab7d20f2ccbb5).
-The existing checkout and its selected branch remain independent of this
-worktree.
+This branch implements optional CSX render hosting for ImGui VR Helper API
+`006`. Its CSX base is `main-VR` commit
+`dab1874a76fd39175dcefdc52110ba69d7284e12`. The API-only dependency is pinned
+to helper implementation
+[`ceb7991f499f3335318aedd3bdc0e8735d7b8380`](https://github.com/ParticleTroned/imgui-vr-helper/commit/ceb7991f499f3335318aedd3bdc0e8735d7b8380).
 
-## Compatibility boundary
+The producer, adapter and helper interface are implemented. CPU tests and
+universal DLL builds with and without DevBench passed. No game, HMD, runtime DevBench or
+performance qualification has run, and no binaries have been deployed.
 
-The helper change must be isolated to explicitly negotiated CSX hosting.
-Module presence, registration, or loading a newer helper must not change
-other users' rendering. Existing helper clients keep interfaces `001`
-through `005`; Open Shaders and standalone rendering retain their paths.
+## Compatibility and ownership
 
-Neither branch currently exposes or consumes a renderer-host API. CSX does
-not probe a guessed interface revision, register a helper client, change
-input ownership, install another hook, allocate a helper presentation copy,
-or call the new metadata code from a rendering path. There are no new
-settings, DevBench actions or per-frame graphics operations in this change.
-This is not a subtitle fix or a completed runtime adapter.
+CSX negotiates interface `006` after SKSE listeners are available, registers
+an explicit host token, and changes hosting ownership at an outer native
+stereo boundary. Helper module presence alone does not activate hosting.
+Missing helpers or helpers without `006` leave their existing rendering
+path and CSX submission behavior intact. Existing helper client interfaces
+`001` through `005`, client registration and input ownership remain intact.
+Other helper hosts and non-VR CSX runtimes do not use this adapter.
 
-## Implemented private contracts
+Content demand comes from the registered helper. An absent, disabled or
+empty host performs no depth-copy or presentation-copy graphics work.
+Activation is independent of the CSX menu's visibility.
 
-`ImGuiVRHelperScenePacket.h` validates explicit texture-view extents,
-positive active depth rectangles, normalized output bounds, depth decoding
-and tracking-space projections. Reversed output bounds produce a positive
-viewport plus independent orientation flags. No engine resolution ratio is
-inferred or applied a second time.
+The existing CSX OpenVR Submit path remains authoritative for the selected
+payload, retained resources, guard decisions and presentation accounting.
+Hosting substitutes a successfully prepared color texture at eligible
+final-output paths. Extended payloads, unsupported bounds and unsupported
+texture contracts retain their original path.
 
-The CPU projection oracle transforms the same tracking-space point into the
-depth camera and maps it into the supplied eye rectangle. Out-of-eye or
-invalid samples return no comparison value; they are not clamped to another
-object or replaced with zero depth. Matrix storage is row-major and uses
-row-vector multiplication. Depth comparison uses axial distance in metres.
-Native decoding follows the completed-depth camera convention; linear
-decoding is separately explicit and does not qualify a CSX vendor source.
+## Captured scene and depth
 
-`ImGuiVRHelperHostPolicy.h` builds a complete stereo packet by value or
-returns a rejection reason and eye. It requires:
+`Globals::CacheFramebuffer` records the engine's source camera when its
+per-frame constants are uploaded. While content is requested, the capture
+freezes both eyes, room origin/rotation/scale, near/far planes, dynamic
+active extent and temporal route. `Deferred::CopySceneDepth` then retains
+its completed opaque native depth in a named, separately owned texture.
+New world/opaque passes invalidate prior publication. A bounded surface
+pool never overwrites pixels retained by an outstanding snapshot.
 
--   VR, matching nonzero negotiated/active CSX host tokens and world content.
--   One current native or reconstructed route for both eyes; retained,
-    protected, loading, device-lost and unknown candidates are rejected.
--   Exact pair token, compositor cycle, scene frame and thread, using the
-    existing `VRRenderScaleFrameBoundaryPolicy::PairIdentity`.
--   Current device and completed resource-publication generation, using
-    `OpenVRSubmitLeasePolicy::CanPublish` for the retained Submit payload,
-    plus separate occlusion-depth retention with matching resource, device
-    and generation identities.
--   Explicitly completed opaque depth with full-eye coverage for both eyes.
--   Single-sample, single-slice, base-mip 2D views; checked dimensions,
-    source-unit conversion, camera transforms and axial depth direction.
--   A supported existing `VRSubmitColorContract`, proven RTV capability,
-    distinct color/depth resources and disjoint eye rectangles in shared
-    textures. Cross-eye color/depth aliasing is also rejected.
+The snapshot is acquired only for its exact frame, render thread, device
+and completed resource-publication generation. Texture dimensions, view
+kind, mip, sample count and source device are queried at the producer
+boundary. Full-eye active rectangles refer to the actual retained atlas;
+vendor guide textures and foveated ROI depth are not used as occlusion
+sources. In particular, `vrIntermediateLinearDepth` contains native device
+depth despite its name.
 
-One invalid eye rejects the entire world packet before the first eye can be
-drawn. Empty/inactive inputs return before metadata validation. No CSX menu
-visibility is required. All values are private C++ types, not a proposed
-DLL ABI. Numeric validation is protected from MSVC `/fp:fast` assumptions.
+Camera conversion uses double precision, row-major matrices and row-vector
+multiplication. Shader column-vector matrices are transposed at capture.
+Room origin is retained separately and subtracted before transforming
+world anchors. Skyrim units are converted through the captured room scale
+to tracking-space metres. The source engine camera already contains VRIK
+camera motion, so capture does not apply a second VRIK offset.
 
-The builder validates supplied metadata. It does not query D3D objects,
-retain COM references, authenticate a host token, preserve texture pixels,
-or establish freshness from an address. The eventual adapter must query
-actual view kinds, format/binding support, mip dimensions and devices;
-retain the referenced objects; and prove that their contents still match
-the scene. The Submit lease retains the original compositor payload; it
-cannot prove helper occlusion-depth ownership. That source requires its
-own retention evidence even when the OpenVR payload has a depth attachment.
-A color-only OpenVR payload remains valid with separately retained
-occlusion depth.
+Depth always uses the captured jittered source projection. Reconstructed
+and TAA output uses the captured unjittered projection; raw native output
+uses the source projection. The depth comparison uses positive axial
+metres, with native forward-Z coefficients derived from the same near/far
+planes and unit conversion. Invalid projections, singular transforms,
+out-of-eye coordinates and unsupported depth views fail closed.
 
-Camera values must come from the captured scene, with the precise world
-origin/room conversion applied before a later float upload. The adapter
-must qualify the double-to-shader representation and reject unsupported
-reprojection. Pair attribution must be established from completed producer
-evidence, not assigned to arbitrary retained resources at Submit time.
+## Stereo composition and failure behavior
 
-## Verified source boundaries on this main-VR base
+`ImGuiVRHelperHostPolicy` admits a complete current world pair or rejects
+it before either eye is written. It checks the pair token, compositor
+cycle, frame, thread, resource generation, device, color contract, camera
+geometry and both depth rectangles. Occlusion-depth retention is separate
+from the OpenVR payload lease; a color-only payload can have independently
+retained helper depth. Color/depth aliasing, inconsistent shared views and
+overlapping shared eye rectangles are rejected.
 
--   `Deferred::CopySceneDepth` copies physical main depth into
-    `kPOST_ZPREPASS_COPY` and stamps the completed frame.
-    `Util::GetCurrentSceneDepthSRV` selects it only when final. This provides
-    a candidate source, not a guarantee against subsequent GPU writes.
--   `VRSubmitSourceRegion` depth offsets/extents are expected guide
-    coordinates. Validate them against separately queried actual SRV
-    dimensions before building a packet.
--   `EncodeTexturesCS.hlsl` writes native depth unchanged. The FSR resource
-    named `vrIntermediateLinearDepth` is not linear metres, and foveated
-    encoding can update only an ROI. This builder initially admits completed
-    opaque full-eye depth rather than inferring vendor coverage.
--   `BSOpenVR_Submit` supplies the native pair boundary. Existing
-    `VRSubmitInputFreshnessPolicy::ProducerProof` can corroborate vendor
-    inputs, but native hosting must not acquire a motion-vector dependency.
--   `InSceneOverlaySubmitPolicy::ShouldAdmit` includes CSX menu exceptions.
-    Its success does not authorize current-world helper quads on retained or
-    protected images.
--   The existing central Submit lambda retains the complete OpenVR payload
-    and resources and performs presentation accounting. The later adapter
-    must preserve it. Current presentation copies are SRV/UAV-only and gated
-    on CSX content; safe helper composition needs RTV support and independent
-    content gating without changing inactive behavior.
+Native output must match the outer native submit source. Classic
+DLAA/DLSS/FSR output additionally requires the existing successful
+main-pass vendor frame and known final texture identity. Render-scale
+vendor output is composed only after both eyes have current completed
+vendor evidence. The peer is evaluated through the existing vendor cache
+before either scratch image is copied, with save/load, protected and
+unproven world routes excluded. Successful vendor-frame evidence is
+available without a DevBench build.
 
-## Remaining runtime work
+Both eyes are composed into private RTV-capable scratch textures before
+either texture is exposed to Submit. A failed eye discards the pair.
+Matched outer-boundary checks isolate nested submits, and submitting an
+undecorated eye prevents a later eye from starting composition. Resource
+generation, source identity and bounds are checked again before using a
+prepared eye. Helper rendering uses deterministic D3D11 state restoration.
 
-The helper must first implement its complete opt-in hosting interface,
-frozen client geometry/anchors and synchronized texture contents. CSX can
-then pin that accepted API-only commit and add lifecycle negotiation,
-producer capture, safe RTV/UAV presentation copies and final-eye callbacks.
-No ABI number or shape is reserved by this foundation.
+Missing scene evidence never restores standalone world rendering while
+CSX hosting is enabled. A UI-only fallback freezes the current OpenVR
+display camera for both eyes, sets `worldLayerEnabled = 0`, and supplies no
+depth source. It permits eligible HUD/panel composition without asserting
+world-depth provenance. If that camera or final target is unavailable,
+the original selected output is preserved. Existing load, keepalive,
+device-loss and submission guards remain authoritative.
 
-Keep native and vendor output eligible only after final selection, preserve
-extended OpenVR payloads, and exclude protected/retained/loading routes.
-Pair/attempt handling must prevent duplicate blending and discard scratch
-images after partial writes. Diagnostic actions and schemas belong with
-that runtime adapter.
+## DevBench session controls
 
-The reported subtitle scene, true intervening occlusion, both eyes, old
-helper/client compatibility, both hook orders, lifecycle recovery and
-performance still require qualification. Follow the existing render-scale
-qualification and evidence-ledger rules when runtime render-scale behavior
-is changed or measured. This branch has no such runtime change or run.
+The `communityshaders.imgui_vr_helper` tool is registered in DevBench
+builds. These controls are session-only; they do not add persistent user
+settings.
 
-## Validation
-
-The new tests are registered with `controller_tests` through
-`tests/imgui_vr_helper.cmake`. On an already configured full checkout:
-
-```powershell
-pwsh ./tools/cmake.ps1 --build <build-dir> --config Release --target imgui_vr_helper_scene_packet_test imgui_vr_helper_scene_packet_test_fast imgui_vr_helper_host_policy_test imgui_vr_helper_host_policy_test_fast
-ctest --test-dir <build-dir> -C Release -R '^ImGuiVRHelper_' --output-on-failure
+```json
+{ "action": "status" }
 ```
 
-Executed on 1 October 2026 with MSVC `19.51.36252.0`, Visual Studio 2026
-and Windows SDK `10.0.28000.0`. An isolated local CMake harness includes the
-same maintained test registration, with `/W4 /WX /EHsc`, C++23 and Release
-optimization. It avoids configuring unrelated plugin dependencies.
+Status includes connection/activation, requested controls, content layers,
+pair/frame/cycle/generation, composition/rejection counts, the latest
+reason/result and producer capture status.
+
+```json
+{ "action": "configure", "enabled": false }
+```
+
+`enabled` defaults to `true`. Changes take effect at the next stereo
+boundary. Setting it to `false` releases explicit hosting and restores
+the helper's ordinary standalone behavior.
+
+```json
+{ "action": "configure", "enabled": true, "depthComparison": false }
+```
+
+`depthComparison` defaults to `true`. Setting it to `false` disables world
+depth discard for diagnosis while retaining scene admission and stereo
+composition. Restore it to `true` after the comparison.
+
+## Validation evidence
+
+Executed on 1 October 2026 with MSVC, Visual Studio 2026 and Windows SDK
+`10.0.28000.0`. The isolated local harness includes the maintained
+`tests/imgui_vr_helper.cmake` registration and the existing scene-depth and
+native-boundary source-extraction fixtures. It uses C++23, `/W4 /WX /EHsc`
+and Release optimization.
 
 ```powershell
-pwsh ./tools/cmake.ps1 -S build/helper-host-tests-source -B build/helper-host-tests -G "Visual Studio 18 2026" -A x64
+pwsh ./tools/cmake.ps1 -S build/helper-host-tests-source -B build/helper-host-tests
 pwsh ./tools/cmake.ps1 --build build/helper-host-tests --config Release --parallel 4
 ctest --test-dir build/helper-host-tests -C Release --output-on-failure
 ```
 
-All four executables passed: scene geometry/depth and host admission, each
-with ordinary floating-point settings and `/fp:fast`. Fixtures cover atlas
-versus separate-eye layouts, asymmetric/rotated cameras, reversed bounds,
-off-ray versus true occlusion, NaN/Inf/overflow, stale identities, missing
-depth, cross-eye aliases, resource reuse and snapshots surviving later
-metadata mutation. The first host test run exposed acceptance of the
-reserved invalid-frame sentinel; it was corrected and both variants passed.
-Review also added regression coverage for dependent matrix rows and
-independent occlusion-depth retention. Matrix admission uses a relative
-roundoff threshold after row normalization so tiny and huge valid scales
-remain admissible while rounding residue from singular matrices is rejected.
+All nine tests passed:
 
-Scoped pre-commit checks passed for whitespace, line endings, clang-format
-and Prettier. The full-file gersemi hook initially changed unrelated
-existing CMake formatting; those changes were removed. Gersemi then passed
-for the added `CMakeLists.txt` line with `--line-ranges 2677-2677` and for
-the complete new `tests/imgui_vr_helper.cmake`. The other hooks were rerun
-with `SKIP=gersemi`; no legacy CMake formatting changes are included.
+| Test                                   | Result |
+| -------------------------------------- | ------ |
+| `ImGuiVRHelper_scene_packet`           | Passed |
+| `ImGuiVRHelper_scene_packet_FastMath`  | Passed |
+| `ImGuiVRHelper_host_policy`            | Passed |
+| `ImGuiVRHelper_host_policy_FastMath`   | Passed |
+| `ImGuiVRHelper_scene_capture`          | Passed |
+| `ImGuiVRHelper_scene_capture_FastMath` | Passed |
+| `SceneDepth_plain`                     | Passed |
+| `SceneDepth_devbench`                  | Passed |
+| `VRRelatchNativeBoundary`              | Passed |
 
-The full DLL, GPU/HMD rendering, DevBench runtime controls and performance
-were not exercised. No binaries were deployed. Passing these CPU contracts
-does not establish the screenshot's root cause or runtime compatibility.
+The same nine targets were also built through the full `build/ALL`
+configuration with `BUILD_CONTROLLER_TESTS=ON`. The maintained registration
+passed independently of the local harness:
+
+```powershell
+ctest --test-dir build/ALL -C Release -R '^(ImGuiVRHelper_|SceneDepth_|VRRelatchNativeBoundary)' --output-on-failure
+```
+
+The configure, build and result logs are retained under
+`build/validation/imgui-vr-helper/registered-tests-{configure,build,results}.log`.
+
+The capture fixture extracts the actual producer math and checks it
+against analytic stereo projections, asymmetric frusta, jitter, rotated
+rooms, room scales 0.5/1/2, large origins, axial metre depth and malformed
+producer metadata. Admission fixtures cover stale identities, invalid
+frame sentinels, aliases, independent depth retention, singular matrices
+and immutable packet values. Native-boundary tests check nested, null and
+throwing calls against outer helper ownership. The ordinary and
+`/fp:fast` variants both pass.
+
+Universal DLL builds passed with DevBench enabled and disabled:
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target CommunityShaders --parallel 8
+```
+
+Both used deployment and packaging disabled and runtime downloads skipped.
+The production build fetched the published API pin without a local source
+override, using `DEVBENCH_BRIDGE=OFF`. Its evidence is under
+`build/validation/imgui-vr-helper/production-{configure,build}.log` and
+`build/ALL/Release/CSX.BuildManifest.json`. The DevBench build's DLL,
+manifest and log are preserved under
+`build/validation/imgui-vr-helper/devbench/`; that build predates the final
+SRV mip-count normalization and compositor shader-resource binding flag.
+
+| Production linked artifact | Value                                                                   |
+| -------------------------- | ----------------------------------------------------------------------- |
+| Build ID                   | `ad2ccface062acb4ba263de1a61c89e4f6f6daab12454c852d0cdf79931c68a8`      |
+| DLL SHA-256                | `b65eb2fc83f90a2f351ca505c06f1b0d55a1186284720ccce04a672a35362ab0`      |
+| DLL size                   | 23,622,656 bytes                                                        |
+| Producer source commit     | `656e717adbb95745b022294b28f60ac93415cb1c` plus implementation worktree |
+| Producer dirty digest      | `3404fbf11a47c84fe620cd1ebc58de09f3c4e1cd617c980770fed745dee6ed7d`      |
+
+The production result includes the UI-only fallback, production vendor
+provenance and final resource-view hardening. A pre-existing MSVC C4456
+warning in `ScreenshotApi.cpp` prevented the first universal build; a
+nested lookup variable was renamed without changing behavior.
+
+Scoped whitespace, line-ending, clang-format, Prettier and `git diff
+--check` checks passed. Gersemi passed for the added dependency lines and
+changed test CMake files; its existing unknown-custom-command warnings are
+retained in the validation log. Unrelated legacy CMake formatting was
+preserved.
+
+## Runtime qualification still required
+
+No runtime behavior is established by the CPU tests or successful link.
+Qualification must cover the reported subtitle scene, intervening
+occluders, both eyes, movement/VRIK/world scale, jitter and active-depth
+alignment, native/TAA and current vendor routes, UI-only menus, old-helper
+compatibility, both hook orders, lifecycle recovery and disabled/empty
+host cost. The display-camera fallback also requires runtime validation.
+
+Follow [render-scale PR qualification](render-scale-pr-qualification.md)
+and the [render-scale ledger](vr-render-scale-ledger.md) requirements for
+this runtime integration and any resulting measurements. No qualification
+run, performance result or release-readiness claim is recorded here.
+
+The inspected MO2 profile belongs to a different task and has neither
+ImGui VR Helper nor FloatingSubtitles enabled. The automation configuration
+has no maintained source profile for creating an isolated workspace.
+Runtime deployment is therefore pending the test-profile selection and
+subtitle fixture; the existing profile, running MO2 and SteamVR session
+were left untouched.

@@ -3,6 +3,7 @@
 #include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Features/Upscaling/VRSubmitInputFreshnessBoundary.h"
 #include "Features/VR.h"
+#include "Features/VR/ImGuiVRHelperHost.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
@@ -52,6 +53,102 @@ namespace
 		g_vrSubmitPairBoundaryState{};
 	thread_local VRRenderScaleFrameBoundaryPolicy::PairCompletion
 		g_vrRelatchPairCompletion{};
+
+	constexpr std::array<vr::VRTextureBounds_t, 2> kHelperNativeBounds{
+		vr::VRTextureBounds_t{ 0.0f, 0.0f, 0.5f, 1.0f },
+		vr::VRTextureBounds_t{ 0.5f, 0.0f, 1.0f, 1.0f }
+	};
+
+	bool HasCanonicalHelperBounds(vr::EVREye a_eye, const vr::VRTextureBounds_t* a_bounds)
+	{
+		const auto index = static_cast<std::uint32_t>(a_eye);
+		if (index >= 2 || !a_bounds)
+			return false;
+		const auto& expected = kHelperNativeBounds[index];
+		return a_bounds->uMin == expected.uMin && a_bounds->vMin == expected.vMin &&
+		       a_bounds->uMax == expected.uMax && a_bounds->vMax == expected.vMax;
+	}
+
+	vr::Texture_t PrepareNativeHelperEye(vr::EVREye a_eye, const vr::Texture_t* a_texture,
+		const vr::VRTextureBounds_t* a_bounds, vr::EVRSubmitFlags a_flags,
+		const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_boundary)
+	{
+		vr::Texture_t result = a_texture ? *a_texture : vr::Texture_t{};
+		if (!ImGuiVRHelperHost::CanComposePair() || a_boundary.matchedToken == 0 || !a_texture || a_flags != vr::Submit_Default ||
+			!HasCanonicalHelperBounds(a_eye, a_bounds))
+			return result;
+		auto& upscaling = globals::features::upscaling;
+		const bool worldScene = ImGuiVRHelperHost::HasWorldScene();
+		const bool reconstructed = worldScene && upscaling.GetRuntimeResolutionPlan().vendorMethod;
+		if (upscaling.IsSubmitStageDeviceLost() || upscaling.IsVRProtectedFullSizeSubmitTexture(a_texture) ||
+			(worldScene && (upscaling.IsPresentationUpscalingActive() ||
+							   upscaling.ShouldSuppressVRInSceneOverlaySubmit() || upscaling.IsVRPostLoadCompositorHoldActive() ||
+							   upscaling.IsVRInitialLoadPresentationProtectionActive() || upscaling.ShouldReuseOrdinarySaveResources() ||
+							   (reconstructed && !upscaling.IsCurrentImGuiVRHelperMainPassOutput(a_texture))))) {
+			ImGuiVRHelperHost::SkipPair();
+			return result;
+		}
+		if (!ImGuiVRHelperHost::IsPairAttempted()) {
+			const std::shared_lock resourceLock(Hooks::GetRenderTargetRecreationMutex());
+			(void)ImGuiVRHelperHost::ComposePair({ *a_texture, *a_texture }, kHelperNativeBounds, reconstructed);
+		}
+		if (auto* prepared = ImGuiVRHelperHost::GetPreparedEye(static_cast<std::uint32_t>(a_eye), *a_texture, a_bounds))
+			result.handle = prepared;
+		return result;
+	}
+
+	vr::Texture_t PrepareVendorHelperEye(vr::EVREye a_eye, const vr::Texture_t* a_input,
+		const vr::VRTextureBounds_t* a_inputBounds, vr::EVRSubmitFlags a_flags,
+		const vr::Texture_t& a_output, const vr::VRTextureBounds_t& a_outputBounds,
+		const Upscaling::VRRenderScalePresentationObservation& a_observation,
+		const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_boundary, bool a_cooldown)
+	{
+		vr::Texture_t result = a_output;
+		if (!ImGuiVRHelperHost::CanComposePair() || a_flags != vr::Submit_Default ||
+			!HasCanonicalHelperBounds(a_eye, a_inputBounds) || a_boundary.matchedToken == 0)
+			return result;
+		auto& upscaling = globals::features::upscaling;
+		if (upscaling.GetRuntimeResolutionPlan().owner != Upscaling::ResolutionOwner::VRRenderScaleMode ||
+			upscaling.ShouldReuseOrdinarySaveResources() || upscaling.IsVRPostLoadCompositorHoldActive() ||
+			upscaling.IsVRInitialLoadPresentationProtectionActive()) {
+			ImGuiVRHelperHost::SkipPair();
+			return result;
+		}
+		const auto isCurrent = [](const Upscaling::VRRenderScalePresentationObservation& observation) {
+			return observation.valid && observation.path == Upscaling::VRRenderScalePresentationPath::VendorEvaluated &&
+			       observation.frame == g_vrSubmitPairBoundaryState.frame &&
+			       observation.vendorDispatchFrame == observation.frame &&
+			       observation.compositorCycleToken == g_vrSubmitPairBoundaryState.compositorCycle &&
+			       !observation.loadingOrMenuContext && !observation.transitionCooldown;
+		};
+		if (!isCurrent(a_observation)) {
+			ImGuiVRHelperHost::SkipPair();
+			return result;
+		}
+		if (!ImGuiVRHelperHost::IsPairAttempted()) {
+			const auto index = static_cast<std::uint32_t>(a_eye);
+			const auto peer = index ^ 1u;
+			std::array<vr::Texture_t, 2> sources{};
+			std::array<vr::VRTextureBounds_t, 2> bounds{};
+			sources[index] = a_output;
+			bounds[index] = a_outputBounds;
+			Upscaling::VRRenderScalePresentationObservation peerObservation;
+			// Pre-evaluate the peer through the existing cache so neither eye is decorated alone.
+			if (!upscaling.SubmitVRUpscaledFrame(static_cast<vr::EVREye>(peer), a_observation.compositorCycleToken,
+					a_boundary, a_cooldown, a_input, &kHelperNativeBounds[peer], sources[peer], bounds[peer], peerObservation) ||
+				!isCurrent(peerObservation) || peerObservation.contractGeneration != a_observation.contractGeneration ||
+				upscaling.IsSubmitStageDeviceLost() || upscaling.IsVRPostLoadCompositorHoldActive() ||
+				upscaling.ShouldQuarantineVRPostLoadCompositorCycle(a_observation.compositorCycleToken)) {
+				ImGuiVRHelperHost::SkipPair();
+				return result;
+			}
+			const std::shared_lock resourceLock(Hooks::GetRenderTargetRecreationMutex());
+			(void)ImGuiVRHelperHost::ComposePair(sources, bounds, true);
+		}
+		if (auto* prepared = ImGuiVRHelperHost::GetPreparedEye(static_cast<std::uint32_t>(a_eye), a_output, &a_outputBounds))
+			result.handle = prepared;
+		return result;
+	}
 
 	enum class VRNativeRestoreCyclePresentationPath : uint8_t
 	{
@@ -692,6 +789,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			const auto previousBoundary = g_vrSubmitPairBoundaryState;
 			const auto previousCompletion = g_vrRelatchPairCompletion;
 			const SKSE::stl::scope_exit restoreBoundary([&]() noexcept {
+				if (!nestedSubmit)
+					ImGuiVRHelperHost::EndPair();
 				g_vrSubmitPairBoundaryState = previousBoundary;
 				g_vrRelatchPairCompletion = previousCompletion;
 				nativeSubmitActive = nestedSubmit;
@@ -733,8 +832,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					.frame = g_vrSubmitPairBoundaryState.frame,
 					.thread = g_vrSubmitPairBoundaryState.thread,
 				};
+				ImGuiVRHelperHost::BeginPair(g_vrRelatchPairCompletion.identity, a_texture);
 			}
 			func(_this, a_texture);
+			if (!nestedSubmit)
+				ImGuiVRHelperHost::EndPair();
 			const VRRenderScaleFrameBoundaryPolicy::PairIdentity completedIdentity{
 				.token = g_vrSubmitPairBoundaryState.token,
 				.compositorCycle =
@@ -893,6 +995,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							  const vr::VRTextureBounds_t* a_screenshotBounds = nullptr) {
 				(void)a_probeObservation;
 				(void)a_auditBlackKeepalive;
+				if (submitBoundaryIdentity.matchedToken != 0)
+					ImGuiVRHelperHost::NoteSubmission();
 				const bool observeScreenshot =
 					a_allowScreenshotCapture &&
 					globals::features::screenshotFeature.HasPendingCapture();
@@ -1751,7 +1855,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				!upscaling.IsPresentationUpscalingActive() &&
 				!ShouldRenderInSceneContent(vr) &&
 				!nativeRestoreGuardActive) {
-				return submit("original", pTexture, pBounds, nSubmitFlags);
+				const auto helperTexture = PrepareNativeHelperEye(eEye, pTexture, pBounds, nSubmitFlags, submitBoundaryIdentity);
+				return submit("original", helperTexture.handle != (pTexture ? pTexture->handle : nullptr) ? &helperTexture : pTexture, pBounds, nSubmitFlags);
 			}
 
 			uint64_t postLoadReleaseToken = 0;
@@ -1763,6 +1868,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				vr::VRTextureBounds_t upscaledBounds{};
 				if (!presentationObservation.valid &&
 					upscaling.SubmitVRUpscaledFrame(eEye, compositorCycleToken, submitBoundaryIdentity, submitStageVendorResumeCooldownAtCycleStart, pTexture, pBounds, upscaledTexture, upscaledBounds, presentationObservation)) {
+					const auto helperTexture = PrepareVendorHelperEye(eEye, pTexture, pBounds, nSubmitFlags,
+						upscaledTexture, upscaledBounds, presentationObservation, submitBoundaryIdentity, submitStageVendorResumeCooldownAtCycleStart);
 					refreshOriginalSubmitDecision();
 					if (!nativeRestoreGuardActive) {
 						probePresentationObservation = &presentationObservation;
@@ -1785,14 +1892,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						if (!nativeRestoreGuardActive) {
 							bool inSceneOverlayComposited = false;
 							vr::Texture_t inSceneTexture{};
-							const vr::Texture_t* presentedTexture = &upscaledTexture;
+							const vr::Texture_t* presentedTexture = postLoadReleaseToken == 0 ? &helperTexture : &upscaledTexture;
 							if (postLoadReleaseToken == 0 &&
 								ShouldRenderInSceneContent(vr) &&
 								upscaledTexture.handle &&
 								upscaledTexture.eType == vr::TextureType_DirectX) {
 								if (vr.PrepareInSceneOverlaySubmitTexture(
 										eEye,
-										&upscaledTexture,
+										presentedTexture,
 										&upscaledBounds,
 										inSceneTexture)) {
 									presentedTexture = &inSceneTexture;
@@ -1990,8 +2097,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					!nativeRestoreGuardActive &&
 					!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
 					admitInSceneOverlaySubmit) {
+					const bool helperNativeEligible = !ImGuiVRHelperHost::HasWorldScene() ||
+					                                  (overlaySuppressionReasons == VRInSceneOverlaySubmitPolicy::SuppressionReason::None &&
+														  !upscaling.ShouldReuseOrdinarySaveResources() &&
+														  !presentationObservation.loadingOrMenuContext && !presentationObservation.transitionCooldown &&
+														  (!presentationObservation.valid || presentationObservation.path == Upscaling::VRRenderScalePresentationPath::NativeOriginal));
+					const auto helperTexture = helperNativeEligible ?
+					                               PrepareNativeHelperEye(eEye, pTexture, pBounds, nSubmitFlags, submitBoundaryIdentity) :
+					                               *pTexture;
+					const auto* nativePresentedTexture = helperTexture.handle != pTexture->handle ? &helperTexture : pTexture;
 					vr::Texture_t overlayTexture{};
-					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
+					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, nativePresentedTexture, pBounds, overlayTexture)) {
 						const auto result = submit(
 							"in-scene-overlay",
 							&overlayTexture,
@@ -2011,6 +2127,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 						}
 						return result;
 					}
+					if (nativePresentedTexture != pTexture)
+						return submit("original", nativePresentedTexture, pBounds, nSubmitFlags);
 				}
 			}
 			if (postLoadReleaseToken == 0 &&

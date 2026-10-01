@@ -2315,6 +2315,8 @@ public:
 	bool IsPerfModeActive() const;
 	bool IsPerfModePresentationActive() const;
 	bool IsPresentationUpscalingActive() const;
+	/** Proves a completed current stereo main-pass vendor output for hosted VR composition. */
+	[[nodiscard]] bool IsCurrentImGuiVRHelperMainPassOutput(const vr::Texture_t* a_texture) const;
 	bool GetPerfModeRequested() const;
 	void SetPerfModeRequested(bool a_enabled, const char* a_reason = nullptr, bool a_allowDefer = false, VRUpscalingTransitionOrigin a_origin = VRUpscalingTransitionOrigin::CSMenu);
 	UpscalingTransitionApplyResult ApplyCSMenuUpscalingTransition(
@@ -3351,9 +3353,9 @@ public:
 		uint32_t depthHeight = 0;
 		uint32_t depthOffsetX = 0;
 		uint32_t depthOffsetY = 0;
+		uint32_t vendorDispatchFrame = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		VRRenderScaleBackendKind vendorBackend = VRRenderScaleBackendKind::None;
-		uint32_t vendorDispatchFrame = 0;
 		uint64_t vendorDispatchSerial = 0;
 		bool vendorRuntimeFallback = false;
 #endif

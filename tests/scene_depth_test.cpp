@@ -151,6 +151,11 @@ namespace logger
 	{}
 }
 #define CS_GPU_PASS(...)
+namespace ImGuiVRHelperSceneCapture
+{
+	void CaptureCompletedOpaqueDepth(Texture*, ID3D11ShaderResourceView*) {}
+	void InvalidateOpaque() {}
+}
 #include "scene_depth_under_test.h"
 
 void Check(bool condition, const char* message)

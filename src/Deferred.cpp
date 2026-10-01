@@ -23,6 +23,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VR/ImGuiVRHelperSceneCapture.h"
 
 #include "Hooks.h"
 #include "Utils/D3D.h"
@@ -648,6 +649,7 @@ bool Deferred::CopySceneDepth()
 	// Water also consumes this copy, including pixels outside the active scaled area.
 	context->CopyResource(depthCopy.texture, depth.texture);
 	finalSceneDepthFrame = globals::state->frameCount;
+	ImGuiVRHelperSceneCapture::CaptureCompletedOpaqueDepth(depthCopy.texture, depthCopy.depthSRV);
 	return true;
 }
 
@@ -969,6 +971,7 @@ void Deferred::Hooks::Main_RenderShadowMaps::thunk()
 void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 {
 	auto* const state = globals::state;
+	ImGuiVRHelperSceneCapture::InvalidateOpaque();
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	state->inWorld = true;
 	state->lastWorldRenderFrame = state->frameCount;
@@ -982,6 +985,7 @@ void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, u
 {
 	// Each opaque pass invalidates the prior copy, even with deferred rendering disabled.
 	globals::deferred->finalSceneDepthFrame.reset();
+	ImGuiVRHelperSceneCapture::InvalidateOpaque();
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
 		// Here is where the first opaque objects start rendering
 		globals::deferred->StartDeferred();

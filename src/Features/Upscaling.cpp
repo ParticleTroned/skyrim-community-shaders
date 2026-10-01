@@ -44,6 +44,7 @@
 #include "Utils/OpenCompositeInterop.h"
 #include "Utils/UI.h"
 #include "VR.h"
+#include "VR/ImGuiVRHelperScenePacket.h"
 #include <Psapi.h>
 #include <Windows.h>
 #include <algorithm>
@@ -22449,6 +22450,43 @@ bool Upscaling::IsPerfModePresentationActive() const
 bool Upscaling::IsPresentationUpscalingActive() const
 {
 	return IsSubmitStageUpscalingActive();
+}
+
+bool Upscaling::IsCurrentImGuiVRHelperMainPassOutput(const vr::Texture_t* a_texture) const
+{
+	const auto* state = globals::state;
+	if (!globals::game::isVR || !state || !a_texture || !a_texture->handle || a_texture->eType != vr::TextureType_DirectX ||
+		IsPresentationUpscalingActive() || IsSubmitStageDeviceLost() || IsVRPostLoadCompositorHoldActive() ||
+		IsVRInitialLoadPresentationProtectionActive() || GetVRNativeRestorePresentationGuardActiveEpoch() != 0 ||
+		ShouldSuppressVRInSceneOverlaySubmit() || ShouldReuseOrdinarySaveResources() || state->IsSaveLoadSafeModeActive() ||
+		state->IsEngineSaveLoadActivityActive() || state->pendingPostLoadRuntimeReset ||
+		postLoadRuntimeResetPending.load(std::memory_order_acquire) || !IsVRFixedVendorRuntimeStableForPostLoad(*this))
+		return false;
+	const auto frame = state->frameCount;
+	if (!frame || frame == std::numeric_limits<uint32_t>::max() || state->lastWorldRenderFrame != frame ||
+		state->lastCompletedWorldRenderFrame != frame || vrMainPassVendorDispatchCompletedFrame.load(std::memory_order_acquire) != frame)
+		return false;
+	const auto& plan = GetRuntimeResolutionPlan();
+	if (!IsVRFixedVendorResolutionPlanOwnerExact(plan, GetRuntimeUpscaleMethod()) || plan.menuContextActive ||
+		plan.knownMenuContextActive || plan.loadingMenuActive || plan.perfModeRestartRequired ||
+		!ImGuiVRHelperScenePacket::IsValid(std::array<double, 2>{ plan.finalOutputSize.x, plan.finalOutputSize.y }))
+		return false;
+	const std::shared_lock resourceLock(Hooks::GetRenderTargetRecreationMutex());
+	if (pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		state->GetCompletedRenderTargetResourcePublicationGeneration() == 0 || IsVRProtectedFullSizeSubmitTexture(a_texture))
+		return false;
+	auto* texture = static_cast<ID3D11Texture2D*>(a_texture->handle);
+	if (!IsVRFixedVendorOutputSubmitTexture(*this, texture))
+		return false;
+	D3D11_TEXTURE2D_DESC desc{};
+	texture->GetDesc(&desc);
+	winrt::com_ptr<ID3D11Device> device;
+	texture->GetDevice(device.put());
+	return device.get() == globals::d3d::device && desc.MipLevels == 1 && desc.ArraySize == 1 && desc.SampleDesc.Count == 1 &&
+	       desc.Width >= 2 && desc.Width <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION && desc.Width % 2 == 0 &&
+	       desc.Height > 0 && desc.Height <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION &&
+	       plan.finalOutputSize.x == static_cast<float>(desc.Width) && plan.finalOutputSize.y == static_cast<float>(desc.Height);
 }
 
 void Upscaling::RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight)
@@ -50651,6 +50689,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		a_presentationObservation.transitionCooldown = a_transitionCooldown;
 	};
 	const SubmitStageRuntimeFSRStereoState* submitStageFSRBatch = nullptr;
+	const auto recordCompletedVendorFrame = [&](SubmitStageVendorEyeState& a_eyeState) {
+		const auto* temporalSnapshot = GetSubmitTemporalSnapshotForDispatch();
+		a_eyeState.vendorDispatchFrame = temporalSnapshot ? temporalSnapshot->key.frame : currentFrame;
+	};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const auto captureSubmitStageVendorDispatchEvidence =
 		[&](SubmitStageVendorEyeState& a_eyeState) {
@@ -50735,6 +50777,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 				eyeHeightIn,
 				false,
 				false);
+			a_presentationObservation.vendorDispatchFrame = a_eyeState.vendorDispatchFrame;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			applySubmitStageVendorDispatchEvidence(a_eyeState);
 #endif
@@ -52074,6 +52117,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		replayedEyeState.usedDLSSSharpening = replaySubmitDLSSSharpening;
 		replayedEyeState.usedMenuFinalComposite = submitStageMenuFinalCompositeRequested;
 		replayedEyeState.menuLayerGeneration = submitStageMenuLayerGeneration;
+		recordCompletedVendorFrame(replayedEyeState);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		captureSubmitStageVendorDispatchEvidence(
 			submitStageVendorEyeState[targetEyeIndex]);
@@ -52362,6 +52406,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 							submitStageMenuFinalCompositeRequested;
 						otherEyeState.menuLayerGeneration =
 							submitStageMenuLayerGeneration;
+						recordCompletedVendorFrame(otherEyeState);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 						captureSubmitStageVendorDispatchEvidence(otherEyeState);
 #endif
@@ -52543,6 +52588,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	submitStageVendorEyeState[eyeIndex].depthHeight = sourceRegion.depthHeight;
 	submitStageVendorEyeState[eyeIndex].depthOffsetX = sourceRegion.depthOffsetX;
 	submitStageVendorEyeState[eyeIndex].depthOffsetY = sourceRegion.depthOffsetY;
+	recordCompletedVendorFrame(submitStageVendorEyeState[eyeIndex]);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	captureSubmitStageVendorDispatchEvidence(
 		submitStageVendorEyeState[eyeIndex]);

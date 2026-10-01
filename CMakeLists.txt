@@ -285,6 +285,16 @@ find_package(magic_enum CONFIG REQUIRED)
 find_package(xbyak CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+
+include(FetchContent)
+FetchContent_Declare(
+    ImGuiVRHelper
+    GIT_REPOSITORY https://github.com/ParticleTroned/imgui-vr-helper.git
+    GIT_TAG ceb7991f499f3335318aedd3bdc0e8735d7b8380
+    GIT_SUBMODULES "" SOURCE_SUBDIR api
+)
+FetchContent_MakeAvailable(ImGuiVRHelper)
+target_link_libraries(${PROJECT_NAME} PRIVATE ImGuiVRHelper::api)
 find_package(EASTL CONFIG REQUIRED)
 find_package(directxtk CONFIG REQUIRED)
 find_package(directxtex CONFIG REQUIRED)

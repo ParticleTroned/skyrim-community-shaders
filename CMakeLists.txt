@@ -2674,6 +2674,7 @@ if(BUILD_CONTROLLER_TESTS)
         VRSubmitColorContract
         tests/vr_submit_color_contract_test.cpp
     )
+    include("${PROJECT_SOURCE_DIR}/tests/imgui_vr_helper.cmake")
     add_controller_test(
         vr_submit_stereo_batch_test
         VRSubmitStereoBatch

@@ -1,5 +1,9 @@
 #include "Globals.h"
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/D3DContextHooks.h"
+#endif
+
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
@@ -317,5 +321,8 @@ namespace globals
 		Upscaling::InstallVRMenuPresentationTraceD3DHooks(a_context);
 #endif
 		UnderwaterDepthOfField::InstallD3DHooks(a_context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		CSX::RenderMap::InstallD3DContextHooks(a_context);
+#endif
 	}
 }

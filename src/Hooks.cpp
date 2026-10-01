@@ -5,6 +5,7 @@
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/TracyVRFrameTiming.h"
 #include "Utils/VRLoadingMenuClear.h"
 
 #include "Feature.h"
@@ -42,6 +43,7 @@
 #include <d3d11_1.h>
 #include <intrin.h>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -1903,8 +1905,19 @@ namespace Hooks
 	{
 		static void thunk(RE::Main* a_this, float a2)
 		{
-			func(a_this, a2);
+			{
+				ZoneScopedN("Game::MainUpdateCpu");
+				static constexpr tracy::SourceLocationData gpuSource{
+					"Game::MainUpdateD3D11", __FUNCTION__, __FILE__, static_cast<std::uint32_t>(__LINE__), 0
+				};
+				std::optional<tracy::D3D11ZoneScope> gpuZone;
+				if (auto* state = globals::state; state && state->tracyCtx)
+					gpuZone.emplace(state->tracyCtx, &gpuSource, true);
+				func(a_this, a2);
+			}
 			FrameMark;
+			if (REL::Module::IsVR())
+				Util::TracyVRFrameTiming::Record(globals::state ? globals::state->frameCount : 0);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

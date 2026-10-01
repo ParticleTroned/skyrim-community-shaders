@@ -1720,6 +1720,7 @@ if(BUILD_CONTROLLER_TESTS)
     endfunction()
 
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/game_setting_persistence.cmake")
 
     add_controller_test(
         shadow_batch_submissions_test

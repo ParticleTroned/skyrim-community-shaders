@@ -312,7 +312,7 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 			Settings{}.CubemapResolution);
 	}
 	RefreshActiveCubemapResolution();
-	if (REL::Module::IsVR()) {
+	if (REL::Module::IsVR() && gameSettingsInitialized) {
 		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
 	recompileFlag = true;
@@ -354,6 +354,9 @@ void DynamicCubemaps::DataLoaded()
 		// enable cubemap settings in VR
 		Util::EnableBooleanSettings(iniVRCubeMapSettings, GetName());
 		Util::EnableBooleanSettings(hiddenVRCubeMapSettings, GetName());
+		// Apply saved choices after defaults so disabled reflections survive a restart.
+		gameSettingsInitialized = true;
+		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
 	MenuOpenCloseEventHandler::Register();
 }

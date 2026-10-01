@@ -1,5 +1,49 @@
 # main-vr-nr progress and continuation record
 
+## October 1 follow-up main-VR synchronization
+
+The user requested another synchronization after the native-layout review.
+Merged `main-VR` at `b4c97884f0945d55e293d4ee96f23281502f3671` into NR
+at `cfab8b8d18527921104e0e6e2e96eb9a9ba0242c`, preserving both histories.
+The refreshed `origin/main-VR` tip, `dab1874a76fd39175dcefdc52110ba69d7284e12`,
+is already an ancestor of local `main-VR`. Three commits since the previous
+common tip `79a61dc18` were missing from NR:
+
+-   `28c361bad`: startup GPU/driver identity logging.
+-   `4bddab568`: VR water-reflection INI persistence and startup ordering,
+    with production-source controller regression coverage.
+-   `b4c97884f`: Tracy main-update CPU/D3D11 zones and distinct OpenVR
+    compositor timing plots, with shared fault-tolerant access.
+
+The automatic merge had no conflicts. Its audit verified every incoming
+added/deleted line across all 15 files, retained NR exposure/category
+hooks and test registration, and unchanged NR renderer/layout/replay,
+colour tooling and regression sources. The local Open Shaders note remains
+untracked with its original SHA-256.
+
+The first preset check correctly rejected a stale source fingerprint.
+The only changed settings-contract inputs are `DynamicCubemaps.cpp` and
+`.h`; their changes affect native INI lifecycle rather than JSON settings.
+Refreshed the contract fingerprint and three generated preset/report
+hashes while retaining revision 8 and all preset setting values.
+
+Validation passed the existing three NR CMake integration contracts,
+46 Python cases, bridge-on/off preprocessing, persistence test extraction,
+and the corrected preset check. Twelve additional preprocessing checks
+covered Hooks, Tracy recording and the profiling menu with Tracy and VR
+independently enabled/disabled. These strip SDK includes and prove guards,
+not C++ compilation. Merge/whitespace audits and scoped formatting passed;
+the new test CMake files were checked separately to preserve the root
+CMake file's existing formatting. Gersemi returned zero with warnings for
+repository-defined commands; the production-source extraction passed.
+No compiled tests, DLL/shader/AIO builds,
+gameplay tests, installation or push were performed. Incoming commits'
+earlier validation records are not validation of the merged binary.
+
+Exact commands, initial preset failure, regeneration, final verification
+and merge/guard audits are under
+`build/validation/nr-main-vr-sync-20261001-b4c97884f/`.
+
 ## October 1 native layout contract implementation
 
 The user requested item 1 of the reconciled plan below. This source-only

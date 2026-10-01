@@ -7,6 +7,7 @@
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/TracyVRFrameTiming.h"
 #include "Utils/VRLoadingMenuClear.h"
 
 #include "Feature.h"
@@ -44,15 +45,66 @@
 #include <cstring>
 #include <d3d11_1.h>
 #include <intrin.h>
+#include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <winrt/base.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
 namespace
 {
 	std::shared_mutex g_renderTargetRecreationMutex;
+
+	void LogGraphicsAdapterInfoOnce(ID3D11Device* a_device)
+	{
+		if (!spdlog::should_log(spdlog::level::info))
+			return;
+
+		static std::once_flag logged;
+		std::call_once(logged, [a_device]() {
+			winrt::com_ptr<IDXGIDevice> dxgiDevice;
+			const auto deviceResult = a_device ? a_device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())) : E_POINTER;
+			if (FAILED(deviceResult)) {
+				logger::info("[GPU] Adapter information unavailable: DXGI device query failed (0x{:08X}).", static_cast<uint32_t>(deviceResult));
+				return;
+			}
+
+			winrt::com_ptr<IDXGIAdapter> adapter;
+			const auto adapterResult = dxgiDevice->GetAdapter(adapter.put());
+			if (FAILED(adapterResult)) {
+				logger::info("[GPU] Adapter information unavailable: adapter query failed (0x{:08X}).", static_cast<uint32_t>(adapterResult));
+				return;
+			}
+
+			DXGI_ADAPTER_DESC description{};
+			const auto descriptionResult = adapter->GetDesc(&description);
+			if (FAILED(descriptionResult)) {
+				logger::info("[GPU] Adapter information unavailable: description query failed (0x{:08X}).", static_cast<uint32_t>(descriptionResult));
+				return;
+			}
+
+			logger::info("[GPU] {} (vendor=0x{:04X}, device=0x{:04X}, dedicated VRAM={} MiB).",
+				stl::utf16_to_utf8(description.Description).value_or("<GPU name conversion failed>"),
+				description.VendorId,
+				description.DeviceId,
+				description.DedicatedVideoMemory / (1024u * 1024u));
+
+			LARGE_INTEGER driverVersion{};
+			// DXGI accepts IDXGIDevice for the Windows driver version, not D3D11 interfaces.
+			const auto driverResult = adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driverVersion);
+			if (SUCCEEDED(driverResult)) {
+				const auto high = static_cast<uint32_t>(driverVersion.HighPart);
+				const auto low = driverVersion.LowPart;
+				logger::info("[GPU] Windows driver version: {}.{}.{}.{}.",
+					HIWORD(high), LOWORD(high), HIWORD(low), LOWORD(low));
+			} else {
+				logger::info("[GPU] Windows driver version unavailable: DXGI query failed (0x{:08X}).", static_cast<uint32_t>(driverResult));
+			}
+		});
+	}
 
 	bool UseNativeWaterShaders(const RE::BSShader& shader)
 	{
@@ -1357,6 +1409,7 @@ namespace Hooks
 
 			logger::info("Accessing render device information");
 			globals::ReInit();
+			LogGraphicsAdapterInfoOnce(globals::d3d::device);
 			const auto validationResult = Util::ValidateImmediateContext(globals::d3d::context);
 			if (FAILED(validationResult)) {
 				logger::critical("Renderer immediate-context validation failed: 0x{:08X}", static_cast<uint32_t>(validationResult));
@@ -1867,8 +1920,19 @@ namespace Hooks
 	{
 		static void thunk(RE::Main* a_this, float a2)
 		{
-			func(a_this, a2);
+			{
+				ZoneScopedN("Game::MainUpdateCpu");
+				static constexpr tracy::SourceLocationData gpuSource{
+					"Game::MainUpdateD3D11", __FUNCTION__, __FILE__, static_cast<std::uint32_t>(__LINE__), 0
+				};
+				std::optional<tracy::D3D11ZoneScope> gpuZone;
+				if (auto* state = globals::state; state && state->tracyCtx)
+					gpuZone.emplace(state->tracyCtx, &gpuSource, true);
+				func(a_this, a2);
+			}
 			FrameMark;
+			if (REL::Module::IsVR())
+				Util::TracyVRFrameTiming::Record(globals::state ? globals::state->frameCount : 0);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

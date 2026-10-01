@@ -148,23 +148,13 @@ namespace Util
 		}
 	}
 
-	/**
-	 * @brief Saves the provided game settings to the INI file.
-	 *
-	 * This function iterates through the settings map and saves settings that are managed via
-	 * the INISettingCollection (i.e., those without an offset) by calling `WriteSetting`.
-	 *
-	 * @param settingsMap A map of game settings to be saved.
+	/** @brief Saves named scalar settings to SkyrimOverwrite.ini, preserving other entries.
+	 * @throws std::runtime_error if a setting or file cannot be persisted; offset settings are skipped.
 	 */
 	void SaveGameSettings(const std::map<std::string, GameSetting>& settingsMap);
 
-	/**
-	 * @brief Loads the provided game settings from the INI file.
-	 *
-	 * This function iterates through the settings map and loads settings that are managed via
-	 * the INISettingCollection (i.e., those without an offset) by calling `ReadSetting`.
-	 *
-	 * @param settingsMap A map of game settings to be loaded.
+	/** @brief Applies optional SkyrimOverwrite.ini scalar overrides without changing collection handles.
+	 * Missing overrides retain current values; unreadable files and invalid values produce warnings.
 	 */
 	void LoadGameSettings(const std::map<std::string, GameSetting>& settingsMap);
 }  // namespace Util

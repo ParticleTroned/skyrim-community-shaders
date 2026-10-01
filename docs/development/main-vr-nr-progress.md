@@ -1,5 +1,17 @@
 # main-vr-nr progress and continuation record
 
+## October 1 DevBench AIO build correction
+
+The first authorized build of `96cdb86c0` found one remaining reference to
+the retired periphery-history boolean in NR's unsafe-resource abandonment
+path (`Upscaling.cpp`, MSVC C2065). That path now calls the same
+`CommittedHistory::Reset()` used by normal teardown. Resource retention,
+rendering policy and steady-state work are unchanged. Preset fingerprints
+are refreshed because they cover the complete source file; revision 8 and
+all preset values remain unchanged. The failed build is preserved under
+`build/validation/nr-aio-96cdb86c0-20261001/validation/`; corrected compiled
+and runtime qualification are pending at this source checkpoint.
+
 ## October 1 main-VR synchronization
 
 Merged `main-VR` through `79a61dc18af73fff91c28ddc701c3b18f8cd1605`

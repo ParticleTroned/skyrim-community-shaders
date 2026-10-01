@@ -42928,7 +42928,7 @@ void Upscaling::AbandonFoveatedResourcesUnsafe()
 		peripheryTAATileCache[eye] = {};
 	}
 	peripheryTAAHistoryReadIndex = 0;
-	peripheryTAAHistoryValid = false;
+	peripheryTAAHistory.Reset();
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 	submitStageFoveatedCenterState = {};

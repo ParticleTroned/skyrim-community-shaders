@@ -41,7 +41,7 @@ namespace
 		std::array<ComPtr<ID3D11Texture2D>, 4> textures;
 		std::vector<std::byte> expected;
 		Batch batch;
-		Fixture()
+		Fixture(DXGI_FORMAT colorFormat = DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT motionFormat = DXGI_FORMAT_R32_FLOAT)
 		{
 			Require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
 				nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
@@ -55,9 +55,11 @@ namespace
 			desc.Format = DXGI_FORMAT_R32_FLOAT;
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			D3D11_SUBRESOURCE_DATA data{ expected.data(), 8 * 4, 0 };
-			for (auto& texture : textures) {
-				Require(SUCCEEDED(device->CreateTexture2D(&desc, &data, &texture)));
-				Util::SetResourceName(texture.Get(), "ReplayCaptureTest::Input");
+			for (std::size_t index = 0; index < textures.size(); ++index) {
+				desc.Format = index == 0 || index == 3 ? colorFormat : index == 2 ? motionFormat :
+				                                                                    DXGI_FORMAT_R32_FLOAT;
+				Require(SUCCEEDED(device->CreateTexture2D(&desc, &data, &textures[index])));
+				Util::SetResourceName(textures[index].Get(), "ReplayCaptureTest::Input");
 			}
 			batch.supported = true;
 			batch.runtime = { { "path", "fixture-only-not-a-runtime.dll" }, { "version", "test-only" }, { "sha256", std::string(64, '0') } };
@@ -92,6 +94,32 @@ namespace
 			return status;
 		}
 	};
+	void CheckPayloads(const Fixture& fixture, const Json& complete)
+	{
+		std::ifstream manifestFile(complete.at("manifest").get<std::string>());
+		const auto manifest = Json::parse(manifestFile);
+		Require(manifest.at("complete").get<bool>());
+		Require(manifest.at("frames").size() == 1);
+		Require(manifest.at("captureTimingIsPerformanceEvidence") == false);
+		const auto& frame = manifest.at("frames").at(0);
+		Require(frame.at("eyes").size() == fixture.batch.eyes.size());
+		for (const auto& eye : frame.at("eyes")) {
+			std::size_t index = 0;
+			for (const auto* role : { "color", "depth", "motion", "output" }) {
+				const auto& image = eye.at(role);
+				D3D11_TEXTURE2D_DESC description{};
+				fixture.textures[index++]->GetDesc(&description);
+				Require(image.at("format") == description.Format);
+				Require(image.at("rowBytes") == 32 && image.at("height") == 9);
+				Require(image.at("sha256") == Util::CryptoHash::ToHex(Util::CryptoHash::Sha256Bytes(fixture.expected)));
+				const auto path = std::filesystem::path(complete.at("directory").get<std::string>()) / image.at("file").get<std::string>();
+				std::ifstream payload(path, std::ios::binary);
+				std::vector<std::byte> bytes(fixture.expected.size());
+				payload.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+				Require(payload.good() && bytes == fixture.expected);
+			}
+		}
+	}
 	void WaitWriter()
 	{
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -121,22 +149,17 @@ int main()
 	fixture.Offer();
 	const auto complete = fixture.Complete();
 	Require(complete.at("state") == "complete" && !IsArmed());
-	std::ifstream manifestFile(complete.at("manifest").get<std::string>());
-	const auto manifest = Json::parse(manifestFile);
-	Require(manifest.at("complete").get<bool>());
-	Require(manifest.at("frames").size() == 1);
-	Require(manifest.at("captureTimingIsPerformanceEvidence") == false);
-	const auto& frame = manifest.at("frames").at(0);
-	for (const auto* role : { "color", "depth", "motion", "output" }) {
-		const auto& image = frame.at("eyes").at(0).at(role);
-		Require(image.at("rowBytes") == 32 && image.at("height") == 9);
-		Require(image.at("sha256") == Util::CryptoHash::ToHex(Util::CryptoHash::Sha256Bytes(fixture.expected)));
-		const auto path = std::filesystem::path(complete.at("directory").get<std::string>()) / image.at("file").get<std::string>();
-		std::ifstream payload(path, std::ios::binary);
-		std::vector<std::byte> bytes(fixture.expected.size());
-		payload.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-		Require(payload.good() && bytes == fixture.expected);
-	}
+	CheckPayloads(fixture, complete);
+
+	Fixture rgba8(DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT);
+	rgba8.batch.metadata["mode"] = 2;
+	rgba8.batch.eyes.push_back(rgba8.batch.eyes[0]);
+	rgba8.batch.eyes[1].slot = 1;
+	Require(Request().at("ok").get<bool>());
+	rgba8.Offer();
+	const auto rgba8Complete = rgba8.Complete();
+	Require(rgba8Complete.at("state") == "complete" && !IsArmed());
+	CheckPayloads(rgba8, rgba8Complete);
 
 	Require(Request(2).at("ok").get<bool>());
 	fixture.Offer();

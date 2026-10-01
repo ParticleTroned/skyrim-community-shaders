@@ -78,6 +78,25 @@ file(WRITE "${OUTPUT_DIRECTORY}/build_identity.h"
     "#pragma once\ninline constexpr char kRuntimeSourceHash[] = \"${_runtime_hash}\";\ninline constexpr char kInteropSourceHash[] = \"${_interop_hash}\";\ninline constexpr char kNgxHeaderHash[] = \"${_ngx_hash}\";\ninline constexpr char kSlHeaderHash[] = \"${_sl_hash}\";\ninline constexpr char kSlVersion[] = \"${_version_MAJOR}.${_version_MINOR}.${_version_PATCH}\";\n")
 file(APPEND "${OUTPUT_DIRECTORY}/build_identity.h"
     "inline constexpr char kReplaySourceIdentityJson[] = R\"nr_identity(${_replay_identity})nr_identity\";\n")
+file(READ "${REPOSITORY_ROOT}/src/Features/Upscaling/Streamline.cpp" _streamline_source)
+string(REGEX MATCH "pref.projectId = \"([^\"]+)\"" _project_match "${_streamline_source}")
+if(NOT _project_match)
+    message(FATAL_ERROR "NR replay cannot identify the production NGX project")
+endif()
+file(APPEND "${OUTPUT_DIRECTORY}/build_identity.h"
+    "inline constexpr char kNgxProjectId[] = \"${CMAKE_MATCH_1}\";\n")
+string(REGEX MATCH "pref.engineVersion = \"([^\"]+)\"" _engine_match "${_streamline_source}")
+if(NOT _engine_match)
+    message(FATAL_ERROR "NR replay cannot identify the production NGX engine version")
+endif()
+file(APPEND "${OUTPUT_DIRECTORY}/build_identity.h"
+    "inline constexpr char kNgxEngineVersion[] = \"${CMAKE_MATCH_1}\";\n")
+set(_ngx_library "${CSX_NR_DEPENDENCY_ROOT}/extern/Streamline-DX12/external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib")
+file(SHA256 "${_ngx_library}" _ngx_library_hash)
+file(APPEND "${OUTPUT_DIRECTORY}/build_identity.h"
+    "inline constexpr char kNgxLibraryHash[] = \"${_ngx_library_hash}\";\n")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${REPOSITORY_ROOT}/src/Features/Upscaling/Streamline.cpp" "${_ngx_library}")
 add_executable(csx_nr_replay main.cpp "${OUTPUT_DIRECTORY}/Runtime.cpp"
     "${OUTPUT_DIRECTORY}/D3D12Interop.cpp" "${OUTPUT_DIRECTORY}/runtime_utilities.cpp"
     "${REPOSITORY_ROOT}/src/Utils/CryptoHash.cpp")
@@ -89,4 +108,5 @@ target_include_directories(csx_nr_replay PRIVATE "${CMAKE_CURRENT_LIST_DIR}" "${
     "${CSX_NR_DEPENDENCY_ROOT}/extern/Streamline-DX12/external/ngx-sdk/include")
 target_compile_options(csx_nr_replay PRIVATE /W4 /EHsc /permissive- /FIreplay_platform.h)
 target_link_libraries(csx_nr_replay PRIVATE nlohmann_json::nlohmann_json spdlog::spdlog
-    d3d11 d3d12 dxgi dxguid bcrypt wintrust version psapi)
+    d3d11 d3d12 dxgi dxguid bcrypt wintrust version psapi
+    "${_ngx_library}")

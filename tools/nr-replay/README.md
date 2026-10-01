@@ -13,6 +13,16 @@ caller-path proxy, parameter-core selection and teardown are unchanged.
 Source and SDK header hashes accompany every result. The executable uses
 its own `Data/Shaders/Upscaling/Streamline` directory; `--runtime` may copy
 the exact captured provider there, but never replaces a different DLL.
+Before native admission, the standalone tool initializes the pinned NGX
+SDK on its D3D11 device using the production Streamline project identity.
+This loads the driver parameter core that Streamline supplies in game;
+the unchanged production runtime still validates its path, signature,
+version and hash. Bootstrap status and the SDK library hash are retained.
+The SDK is shut down after native GPU work and features have retired.
+Use normal local driver IPC access for GPU replay: the October 1 sandboxed
+SDK-only check stalled in NVIDIA telemetry shutdown, while the identical
+check and replay exited normally outside the sandbox. Preserve such cleanup
+diagnostics separately from completed GPU samples.
 
 Configure and build from the repository root. `CSX_NR_DEPENDENCY_ROOT` may
 point to another local checkout with the same populated external SDKs:
@@ -39,6 +49,9 @@ and guide origins/jitter evidence, runtime identity and driver identity.
 Every binary resource is hashed and tightly row-packed in its original
 DXGI format. The capture must show a nonzero native edit. No synthetic
 input is accepted as runtime performance evidence by the supplied workflow.
+Capture preserves `R8G8B8A8_UNORM` colour/output on the reduced-resolution
+route as well as the supported floating-point formats; it does not convert
+or reinterpret those pixels. This readback exists only in DevBench builds.
 
 Install the matching DevBench-enabled AIO, enable developer mode and the
 existing NR `captureFrameEvidence` experiment, then use the dynamically
@@ -82,6 +95,12 @@ and 2 GiB of logical replay textures. Native calls cannot be preempted;
 the deadline is checked between submissions, and readback/teardown use
 bounded waits. Private provider allocations are observed through DXGI
 process memory accounting, not included in the logical texture bound.
+Minimum-shape experiments require an explicit `--case minimum-shape-N`;
+the default matrix excludes them. On the recorded 310.8.0 provider and
+610.88 driver, the 31x31 A probe failed its GPU completion check and produced
+driver events after 23 other cases completed. That is a failed experiment,
+not evidence of a general supported minimum. Do not repeat it as routine
+measurement or mix it into a running game's GPU workload.
 
 Static throughput repeats one frozen frame and resets every evaluation.
 Cold creation releases features after a GPU-idle proof each iteration.

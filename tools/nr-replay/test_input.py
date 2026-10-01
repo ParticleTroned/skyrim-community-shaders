@@ -67,6 +67,8 @@ class ReplayInput(unittest.TestCase):
         identity = result["buildIdentity"]
         self.assertEqual(identity["executableSha256"], hashlib.sha256(EXECUTABLE.read_bytes()).hexdigest())
         repository = Path(__file__).resolve().parents[2]
+        ngx_library = repository / "extern/Streamline-DX12/external/ngx-sdk/lib/Windows_x86_64/nvsdk_ngx_d.lib"
+        self.assertEqual(identity["ngxLibrarySha256"], hashlib.sha256(ngx_library.read_bytes()).hexdigest())
         self.assertTrue({"src/Features/Upscaling/NeuralRendering/" + name + ".h" for name in
                          ("NativeEvaluationLayout", "Runtime", "D3D12Interop", "ExecutionEvidence",
                           "ComputeSubrect", "PipelinePolicy", "CharacterMultiRoi", "CharacterComputeSubrect",

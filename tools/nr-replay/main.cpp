@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <nvsdk_ngx.h>
 #include <thread>
 
 namespace
@@ -385,17 +386,35 @@ namespace
 		ComPtr<ID3D11DeviceContext> context;
 		D3D12Interop interop;
 		bool active = false;
+		bool ngxInitialized = false;
 		~Session()
 		{
+			if (!Close())
+				logger::error("Replay session shutdown failed");
+		}
+		bool Close()
+		{
 			if (!active)
-				return;
+				return true;
+			active = false;
 			if (interop.IsRecording())
 				(void)interop.AbortD3D12();
+			logger::info("Replay shutdown: waiting for native GPU idle and retiring runtime");
 			if (!interop.WaitForIdle() || !Runtime::Instance().Shutdown()) {
 				Runtime::Instance().AbandonUnsafe();
 				interop.AbandonUnsafe();
+				return false;
 			} else {
-				(void)interop.Shutdown();
+				bool closed = true;
+				if (ngxInitialized) {
+					logger::info("Replay shutdown: retiring NGX SDK bootstrap");
+					const auto status = NVSDK_NGX_D3D11_Shutdown1(nullptr);
+					closed = NVSDK_NGX_SUCCEED(status);
+					if (!closed)
+						logger::error("Replay NGX bootstrap shutdown failed: 0x{:08x}", static_cast<unsigned>(status));
+				}
+				logger::info("Replay shutdown: retiring interop resources");
+				return interop.Shutdown() && closed;
 			}
 		}
 		void Retire()
@@ -409,7 +428,8 @@ namespace
 			Require(Runtime::Instance().Shutdown(), "case runtime shutdown failed");
 			Require(interop.Shutdown(), "case resource retirement failed");
 			Require(interop.Initialize(adapter.Get(), device.Get(), context.Get()), interop.LastOperation());
-			Require(Runtime::Instance().Initialize(interop.Device()), Runtime::Instance().Detail());
+			if (!Runtime::Instance().Initialize(interop.Device()))
+				throw std::runtime_error(Runtime::Instance().Detail());
 		}
 		Json Memory()
 		{
@@ -733,11 +753,13 @@ int wmain(int argc, wchar_t** argv)
 		{ "status", "unavailable" }, { "scope", "native_provider_microbenchmark_not_end_to_end_route_cost" },
 		{ "featureRequirements", { { "queried", false }, { "reason", "NR_Streamline_plugin_not_loaded_by_direct_admitted_NGX_runtime" } } },
 		{ "fourEightRegions", "deferred_until_capacity_task" },
+		{ "minimumShapeProbes", "explicit_case_only_not_in_default_matrix" },
 		{ "maskOccupancy", "synthetic_binary_composite_only_proxy_no_provider_ControlMask_no_GPU_composite_timing" },
 		{ "gpuCapture", "not_requested_no_external_capture_tool_attached" } };
 	result["buildIdentity"] = { { "runtimeSourceSha256", kRuntimeSourceHash }, { "interopSourceSha256", kInteropSourceHash },
 		{ "ngxHeaderSha256", kNgxHeaderHash }, { "streamlineCoreHeaderSha256", kSlHeaderHash }, { "streamlineSdkVersion", kSlVersion } };
 	result["buildIdentity"]["replaySourceSha256"] = Json::parse(kReplaySourceIdentityJson);
+	result["buildIdentity"]["ngxLibrarySha256"] = kNgxLibraryHash;
 	std::filesystem::path manifestPath, outputRoot, runtimeSource;
 	unsigned samples = 8, warmup = 3, seconds = 180;
 	std::string onlyCase;
@@ -786,7 +808,8 @@ int wmain(int argc, wchar_t** argv)
 		if (inspectOnly) {
 			StageRuntime(runtimeSource, expectedRuntime);
 			auto& runtime = Runtime::Instance();
-			Require(runtime.Probe(), runtime.Detail());
+			if (!runtime.Probe())
+				throw std::runtime_error(runtime.Detail());
 			result["runtime"] = { { "path", runtime.Path().string() }, { "sha256", runtime.Hash() }, { "version", runtime.Version() },
 				{ "trust", ToString(runtime.Trust()) }, { "status", ToString(runtime.Status()) }, { "detail", runtime.Detail() } };
 			result["status"] = "inspection_complete_no_evaluation";
@@ -847,13 +870,23 @@ int wmain(int argc, wchar_t** argv)
 			"D3D11 hardware replay device");
 		Require(session.interop.Initialize(session.adapter.Get(), session.device.Get(), session.context.Get()), session.interop.LastOperation());
 		session.active = true;
+		// The game loads the driver core through NGX before direct NR admission.
+		const auto bootstrap = NVSDK_NGX_D3D11_Init_with_ProjectID(kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM,
+			kNgxEngineVersion, outputRoot.c_str(), session.device.Get());
+		result["ngxBootstrap"] = { { "api", "D3D11_Init_with_ProjectID" }, { "result", static_cast<unsigned>(bootstrap) },
+			{ "projectId", kNgxProjectId }, { "engineVersion", kNgxEngineVersion } };
+		session.ngxInitialized = NVSDK_NGX_SUCCEED(bootstrap);
+		Require(session.ngxInitialized, std::format("NGX driver bootstrap failed: 0x{:08x}", static_cast<unsigned>(bootstrap)));
 		auto& runtime = Runtime::Instance();
-		Require(runtime.Probe() && runtime.Initialize(session.interop.Device()), runtime.Detail());
+		if (!runtime.Probe() || !runtime.Initialize(session.interop.Device()))
+			throw std::runtime_error(runtime.Detail());
 		result["runtime"] = { { "path", runtime.Path().string() }, { "sha256", runtime.Hash() }, { "version", runtime.Version() },
 			{ "trust", ToString(runtime.Trust()) }, { "parameterCorePath", runtime.ParameterCorePath().string() },
 			{ "parameterCoreSha256", runtime.ParameterCoreHash() } };
 		result["status"] = "running";
 		for (const auto& variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1)) {
+			if (onlyCase.empty() && variant.axis == "minimum_shape")
+				continue;
 			if (!onlyCase.empty() && variant.id != onlyCase)
 				continue;
 			std::cout << variant.id << std::endl;
@@ -866,6 +899,8 @@ int wmain(int argc, wchar_t** argv)
 			Require(result["cases"].back()["status"] != "failed", "case failed; stopped further native calls and retained evidence");
 		}
 		Require(!result["cases"].empty(), "no matching cases");
+		result["sessionClosed"] = session.Close();
+		Require(result["sessionClosed"].get<bool>(), "replay session shutdown failed");
 		result["status"] = Clock::now() < deadline ? "complete" : "bounded_deadline";
 		WriteJson(outputRoot / "results.json", result);
 		return result["status"] == "complete" ? 0 : 2;

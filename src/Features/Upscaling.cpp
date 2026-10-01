@@ -25984,7 +25984,7 @@ void Upscaling::DestroyVRIntermediateTextures(bool a_clearRapidTransitionGuard)
 	}
 	vrIntermediateTextureGeneration = 0;
 	peripheryTAAHistoryReadIndex = 0;
-	peripheryTAAHistoryValid = false;
+	peripheryTAAHistory.Reset();
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
 	submitStagePreparedGeneration = 0;
@@ -39963,7 +39963,7 @@ Upscaling::VRVendorResourceResetResult Upscaling::ResetVRSubmitStageState(bool a
 	}
 	if (!a_destroySharedResources || a_preserveVRIntermediateTextures) {
 		peripheryTAAHistoryReadIndex = 0;
-		peripheryTAAHistoryValid = false;
+		peripheryTAAHistory.Reset();
 	}
 
 	submitStagePreparedFrame = std::numeric_limits<uint32_t>::max();
@@ -42727,7 +42727,7 @@ bool Upscaling::EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t
 	if (recreatedResources) {
 		// Any recreated history surface invalidates temporal continuity.
 		peripheryTAAHistoryReadIndex = 0;
-		peripheryTAAHistoryValid = false;
+		peripheryTAAHistory.Reset();
 		submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 		submitStageFoveatedPeripheryTAAEyeReady = {};
 	}
@@ -42993,7 +42993,7 @@ void Upscaling::DestroyPeripheryTAAResources()
 		peripheryTAAHistoryRects[eye] = {};
 	}
 	peripheryTAAHistoryReadIndex = 0;
-	peripheryTAAHistoryValid = false;
+	peripheryTAAHistory.Reset();
 	submitStageFoveatedPeripheryTAAFrame = std::numeric_limits<uint32_t>::max();
 	submitStageFoveatedPeripheryTAAEyeReady = {};
 }
@@ -43139,7 +43139,7 @@ bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	return true;
 }
 
-void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
+bool Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 	ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,
 	ID3D11ShaderResourceView* historyVelocitySRV, ID3D11ShaderResourceView* historyLockSRV, ID3D11UnorderedAccessView* outputColorUAV, ID3D11UnorderedAccessView* outputHistoryColorUAV,
 	ID3D11UnorderedAccessView* outputVelocityUAV, ID3D11UnorderedAccessView* outputLockUAV, ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount,
@@ -43155,24 +43155,24 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	// The implementation below is purpose-built for CSX VR periphery resolve and is not a verbatim copy.
 	auto* peripheryTAA = GetPeripheryTAACS();
 	if (!peripheryTAA || !peripheryTAACB)
-		return;
+		return false;
 	if (!currentColorSRV || !currentDepthSRV || !currentMotionVectorSRV || !currentReactiveSRV || !currentTransparencySRV)
-		return;
+		return false;
 	if (!historyColorSRV || !historyVelocitySRV || !historyLockSRV)
-		return;
+		return false;
 	if (!outputColorUAV || !outputHistoryColorUAV || !outputVelocityUAV || !outputLockUAV)
-		return;
+		return false;
 	if (!inputWidth || !inputHeight || !outputWidth || !outputHeight || !historyRect.IsValid() ||
 		historyRect.maxX > outputWidth || historyRect.maxY > outputHeight)
-		return;
+		return false;
 	const bool useTileList = tileListSRV && tileCount > 0;
 	if (!useTileList && (!dispatchWidth || !dispatchHeight))
-		return;
+		return false;
 
 	auto context = globals::d3d::context;
 	auto deferred = globals::deferred;
 	if (!context || !deferred || !deferred->linearSampler)
-		return;
+		return false;
 
 	uint32_t dispatchGroupsX = 0;
 	uint32_t dispatchGroupsY = 0;
@@ -43185,12 +43185,12 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		dispatchHeight = 1;
 	} else {
 		if (outputOffsetX >= outputWidth || outputOffsetY >= outputHeight)
-			return;
+			return false;
 
 		dispatchWidth = std::min(dispatchWidth, outputWidth - outputOffsetX);
 		dispatchHeight = std::min(dispatchHeight, outputHeight - outputOffsetY);
 		if (!dispatchWidth || !dispatchHeight)
-			return;
+			return false;
 
 		dispatchGroupsX = (dispatchWidth + 7u) >> 3;
 		dispatchGroupsY = (dispatchHeight + 7u) >> 3;
@@ -43235,7 +43235,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 		taaOuterScale
 	};
 	cbData.tuning1 = {
-		peripheryTAAHistoryValid && !resetHistory ? 1.0f : 0.0f,
+		peripheryTAAHistory.HasHistory() && !resetHistory ? 1.0f : 0.0f,
 		centerHorizontalScale,
 		useTileList ? 1.0f : 0.0f,
 		static_cast<float>(dispatchGroupsX)
@@ -43319,6 +43319,7 @@ void Upscaling::DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorS
 	context->CSSetSamplers(0, 1, nullSampler);
 	context->CSSetConstantBuffers(0, 1, nullCB);
 	context->CSSetShader(nullptr, nullptr, 0);
+	return true;
 }
 
 bool Upscaling::DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX, ID3D11ShaderResourceView* baselineCenterSRV, ID3D11ShaderResourceView* characterMaskSRV, uint32_t finalLdrColorMode, bool forceFullImage, const NeuralRendering::ComputeSubrect* characterMaskSupport)
@@ -46291,7 +46292,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 	};
 
 	auto dispatchPeripheryTAA = [&](ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight) -> bool {
-		DispatchPeripheryTAAPass(
+		return DispatchPeripheryTAAPass(
 			vrIntermediateColorIn[eyeIndex]->srv.get(),
 			vrIntermediateDepth[eyeIndex]->srv.get(),
 			vrIntermediateMotionVectors[eyeIndex]->srv.get(),
@@ -46328,7 +46329,6 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 			params.peripherySourceScaleY,
 			params.peripherySourceOffsetX,
 			params.peripherySourceOffsetY);
-		return true;
 	};
 
 	auto dispatchPeripheryTAABand = [&](uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight) -> bool {
@@ -46587,6 +46587,22 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 		params.neuralGeneration);
 }
 
+VRSubmitTemporalSnapshot::Key Upscaling::GetPeripheryTAAHistoryKey(UpscaleMethod a_upscaleMethod, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight) const
+{
+	if (const auto* snapshot = GetSubmitTemporalSnapshotForDispatch())
+		return snapshot->key;
+	return {
+		.frame = globals::state->frameCount,
+		.generation = GetVRVendorEvaluationContractGeneration(a_upscaleMethod),
+		.method = static_cast<uint32_t>(a_upscaleMethod),
+		.inputWidth = inputWidth,
+		.inputHeight = inputHeight,
+		.outputWidth = outputWidth,
+		.outputHeight = outputHeight,
+		.compositorCycle = 0,
+	};
+}
+
 FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput)
 {
 	if (!globals::game::isVR)
@@ -46658,7 +46674,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	if (usePeripheryTAA && !EnsurePeripheryTAAResources(outputWidthPerEye, outputHeight, colorTexture))
 		return FidelityFX::UpscaleResult::Failed;
 
-	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistoryValid);
+	const auto peripheryHistoryKey = usePeripheryTAA ?
+	                                     GetPeripheryTAAHistoryKey(a_upscaleMethod, inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight) :
+	                                     VRSubmitTemporalSnapshot::Key{};
+	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistory.CanReuse(peripheryHistoryKey));
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
 	const bool neuralDirectCommit =
@@ -46880,7 +46899,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 
 	if (usePeripheryTAA) {
 		peripheryTAAHistoryReadIndex = peripheryTAAWriteIndex;
-		peripheryTAAHistoryValid = true;
+		peripheryTAAHistory.Commit(peripheryHistoryKey);
 	}
 
 	FinalizePerEyeOutputs(colorOutput ? colorOutput : colorTexture);
@@ -46987,7 +47006,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 			return FidelityFX::UpscaleResult::Failed;
 	}
 
-	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistoryValid);
+	const auto peripheryHistoryKey = usePeripheryTAA ?
+	                                     GetPeripheryTAAHistoryKey(a_upscaleMethod, inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight) :
+	                                     VRSubmitTemporalSnapshot::Key{};
+	const bool resetPeripheryTAA = usePeripheryTAA && (ShouldResetHistoryThisFrame() || !peripheryTAAHistory.CanReuse(peripheryHistoryKey));
 	const uint32_t peripheryTAAReadIndex = peripheryTAAHistoryReadIndex;
 	const uint32_t peripheryTAAWriteIndex = 1u - peripheryTAAReadIndex;
 	const uint32_t currentFrame = state->frameCount;
@@ -47147,7 +47169,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSubmitStageFoveatedVendorEye(Upscal
 		submitStageFoveatedPeripheryTAAEyeReady[eyeIndex] = true;
 		if (submitStageFoveatedPeripheryTAAEyeReady[0] && submitStageFoveatedPeripheryTAAEyeReady[1]) {
 			peripheryTAAHistoryReadIndex = peripheryTAAWriteIndex;
-			peripheryTAAHistoryValid = true;
+			peripheryTAAHistory.Commit(peripheryHistoryKey);
 			submitStageFoveatedPeripheryTAAEyeReady = {};
 		}
 	}

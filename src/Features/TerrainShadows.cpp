@@ -4,6 +4,7 @@
 #include <pystring/pystring.h>
 
 #include "GpuPass.h"
+#include "SkySync.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/Game.h"
@@ -371,6 +372,11 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		return false;
 
 	auto currentLightDirection = sunLight->GetWorldDirection();
+	if (const auto celestialDirection = globals::features::skySync.GetCelestialLightDirection())
+		currentLightDirection = -*celestialDirection;
+	else if (currentLightDirection.z > 0)
+		currentLightDirection = -currentLightDirection;
+
 	const float currentLightDirectionLength = currentLightDirection.Unitize();
 	if (!std::isfinite(currentLightDirectionLength) || currentLightDirectionLength <= FLT_EPSILON) {
 		hasPreviousLightDirection = false;
@@ -396,8 +402,6 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		shadowUpdateIdx = 0;
 	if (shadowUpdateIdx == 0) {
 		float3 dirLightDir = currentSunDirection;
-		if (dirLightDir.z > 0)
-			dirLightDir = -dirLightDir;
 
 		// in UV
 		float3 invScale = cachedHeightmap->pos1 - cachedHeightmap->pos0;

@@ -1,11 +1,19 @@
 ﻿#pragma once
 #include "RE/M/Moon.h"
+#include "RE/N/NiColor.h"
+#include "RE/N/NiDirectionalLight.h"
+#include "RE/N/NiSmartPointer.h"
+#include "WeatherColorAdjustment.h"
 
+#include <optional>
 #include <unordered_map>
 
 struct SkySync : Feature
 {
 public:
+	static constexpr float DefaultHorizonFadeHours = 0.7f;
+	static constexpr float MaxHorizonFadeHours = 1.5f;
+
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kSky; }
@@ -26,7 +34,7 @@ public:
 	struct Settings
 	{
 		bool Enabled = true;
-		bool UseAlternateSunPath = true;
+		bool UseAlternateSunPath = REL::Module::IsVR();
 		bool EnableSunLensFlare = true;
 		int32_t MoonLightSource = 0;
 		int32_t SunPath = 0;
@@ -35,7 +43,9 @@ public:
 		float SunriseEndOffset = 0.0f;
 		float SunsetBeginOffset = 0.0f;
 		float SunsetEndOffset = 0.0f;
-		float MinShadowElevation = 0.25f;
+		float MinShadowElevation = REL::Module::IsVR() ? 0.25f : 10.0f;
+		bool DimSunlightUnderHorizon = true;
+		float HorizonFadeHours = DefaultHorizonFadeHours;
 	};
 
 	Settings settings;
@@ -51,17 +61,18 @@ public:
 	virtual bool IsCore() const override { return true; }
 	virtual bool SupportsVR() override { return true; }
 	float GetVolumetricLightingIntensityFactor() const;
+	/** Stages bounded sunlight dimming settings for the next sky update. */
+	bool SetSunlightDimming(bool enabled, float fadeHours);
+	/** Returns the direct-light brightness factor applied on the last sky update. */
+	float GetSunlightDimmingFactor() const { return sunlightDimmingFactor; }
+
+	/** @brief Returns the active caster's world-space direction before elevation limits, or nullopt when inactive or invalid. */
+	std::optional<RE::NiPoint3> GetCelestialLightDirection() const;
 
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 
 	struct Sky_Update
-	{
-		static void thunk(RE::Sky* sky);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct Sky_OnNewClimate
 	{
 		static void thunk(RE::Sky* sky);
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -109,18 +120,21 @@ private:
 
 	struct ClimateTimings
 	{
-		float sunriseFadeOutMoonStart;
 		float sunriseBegin;
-		float sunriseFadeOutMoonEnd;
 		float sunrise;
 		float sunriseEnd;
 		float sunsetBegin;
 		float sunset;
-		float sunsetFadeInMoonStart;
 		float sunsetEnd;
-		float sunsetFadeInMoonEnd;
+		float weatherSunriseBegin;
+		float weatherSunriseMiddle;
+		float weatherSunsetMiddle;
+		float weatherSunsetEnd;
 
-		void Update(const RE::TESClimate* climate);
+		bool Update(const RE::TESClimate* climate);
+		bool IsDayTime(float time) const;
+		float NightHorizonDistance(float time) const;
+		float SunlightDimming(float time, float fadeHours) const;
 	};
 
 	struct ShadowFader
@@ -142,6 +156,7 @@ private:
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
+		std::optional<RE::NiPoint3> celestialDirection;
 
 		float Update(const RE::Sun* sun, RE::NiPoint3 dirs[], float intensities[], bool isDayTime, float time);
 		void LockSunElevation(RE::NiPoint3 dirs[], float time);
@@ -171,6 +186,8 @@ private:
 	static constexpr float SunsetHeadingLockThreshold = 0.5f;
 	static constexpr float VLFadeStartAngle = 2.0f;
 	static constexpr float VLFadeEndAngle = 10.0f;
+	static constexpr float HoursPerDay = 24.0f;
+	static constexpr float MoonFadeHours = 0.5f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static float* gSunGlareSize = nullptr;
@@ -184,6 +201,9 @@ private:
 	float masserPhaseIntensityFactor = 0.0f;
 	float secundaPhaseIntensityFactor = 0.0f;
 	float volumetricLightingIntensityFactor = DefaultVolumetricLightingIntensityFactor;
+	float sunlightDimmingFactor = 1.0f;
+	WeatherColorAdjustment<RE::NiColor> sunlightAdjustment;
+	RE::NiPointer<RE::NiDirectionalLight> adjustedSunlight;
 
 	ClimateTimings timings = {};
 
@@ -195,6 +215,7 @@ private:
 
 	void DisableOnConflict(std::string_view conflictName);
 	void ResetRuntimeState();
+	void RestoreSunlight();
 	void ApplyWeatherLensFlareSetting(const RE::Sky* sky);
 	void RestoreWeatherLensFlares();
 	static float NormalizeVolumetricLightingIntensity(float intensity);

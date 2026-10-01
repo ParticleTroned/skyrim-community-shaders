@@ -494,6 +494,7 @@
     "SubsurfaceScatteringAmount": 1.0
   },
   "Adaptive Balance": {
+    "useAmbientEffectLighting": false,
     "dayStartHour": 9.0,
     "enabled": true,
     "globalProfile": {
@@ -991,7 +992,6 @@
     "VRCullDistance": 20480.0
   },
   "Skylighting": {
-    "EnableFastProbeSampling": true,
     "EnableIncrementalProbeUpdates": true,
     "EnableReducedUpdateFrequency": true,
     "EnableSkylighting": true,

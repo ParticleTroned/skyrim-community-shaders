@@ -42,7 +42,6 @@ namespace
 		float ProbeFieldSizeCells;
 		bool EnableReducedUpdateFrequency;
 		bool EnableIncrementalProbeUpdates;
-		bool EnableFastProbeSampling;
 	};
 
 	constexpr std::array<SkylightingPerformancePreset, 4> kSkylightingPerformancePresets = {
@@ -55,7 +54,6 @@ namespace
 			8,
 			2.5f,
 			true,
-			true,
 			true },
 		SkylightingPerformancePreset{
 			"Balanced",
@@ -65,7 +63,6 @@ namespace
 			13,
 			11,
 			Skylighting::Settings::kBalancedProbeFieldSizeCells,
-			true,
 			true,
 			true },
 		SkylightingPerformancePreset{
@@ -77,7 +74,6 @@ namespace
 			13,
 			3.8333333f,
 			true,
-			true,
 			true },
 		SkylightingPerformancePreset{
 			"Hoshipa",
@@ -87,7 +83,6 @@ namespace
 			6,
 			16,
 			4.5f,
-			true,
 			true,
 			true },
 	};
@@ -295,7 +290,6 @@ namespace
 		       ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval) == a_preset.ProbeUpdateInterval &&
 		       settings.EnableIncrementalProbeUpdates == a_preset.EnableIncrementalProbeUpdates &&
 		       ClampStableSliceCount(settings.StableSliceCount, probeDepth) == a_preset.StableSliceCount &&
-		       settings.EnableFastProbeSampling == a_preset.EnableFastProbeSampling &&
 		       std::abs(ClampProbeFieldSize(settings.ProbeFieldSize) - GetPresetProbeFieldSize(a_preset)) <= probeFieldSizeTolerance;
 	}
 
@@ -332,7 +326,6 @@ namespace
 		settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, a_preset.ProbeUpdateInterval);
 		settings.EnableIncrementalProbeUpdates = a_preset.EnableIncrementalProbeUpdates;
 		settings.StableSliceCount = ClampStableSliceCount(a_preset.StableSliceCount, GetProbeGridPreset(settings.ProbeGridQuality).Depth);
-		settings.EnableFastProbeSampling = a_preset.EnableFastProbeSampling;
 		settings.ProbeFieldSize = GetPresetProbeFieldSize(a_preset);
 		settings.EnableSkylighting = runtimeEnabled;
 
@@ -416,8 +409,6 @@ namespace
 		}
 		ImGui::EndDisabled();
 
-		ImGui::Checkbox("Enable Fast Probe Sampling", &settings.EnableFastProbeSampling);
-
 		float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
 		if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
 			settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
@@ -468,7 +459,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableReducedUpdateFrequency,
 	OcclusionUpdateInterval,
 	ProbeUpdateInterval,
-	EnableFastProbeSampling,
 	IncludeMarkedRoofOccluders)
 
 void Skylighting::LoadSettings(json& o_json)
@@ -486,7 +476,6 @@ void Skylighting::LoadSettings(json& o_json)
 	LoadIfPresent(o_json, "EnableReducedUpdateFrequency", settings.EnableReducedUpdateFrequency);
 	LoadIfPresent(o_json, "OcclusionUpdateInterval", settings.OcclusionUpdateInterval);
 	LoadIfPresent(o_json, "ProbeUpdateInterval", settings.ProbeUpdateInterval);
-	LoadIfPresent(o_json, "EnableFastProbeSampling", settings.EnableFastProbeSampling);
 	LoadIfPresent(o_json, "IncludeMarkedRoofOccluders", settings.IncludeMarkedRoofOccluders);
 
 	NormalizeSettingsForRuntime(settings);
@@ -748,10 +737,6 @@ void Skylighting::DrawSettings()
 	                                     GetProbeUpdateInterval(settings);
 	ImGui::Text("Stable probe field full refresh: ~%u frame(s)", stableRefreshFrames);
 
-	ImGui::Checkbox("Enable Fast Probe Sampling", &settings.EnableFastProbeSampling);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Uses a lighter sampling mode. Usually faster, with slightly softer lighting detail.");
-
 	float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
 	if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
 		settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
@@ -822,8 +807,7 @@ json Skylighting::CapturePerformanceSettingsState() const
 		{ "StableSliceCount", settings.StableSliceCount },
 		{ "EnableReducedUpdateFrequency", settings.EnableReducedUpdateFrequency },
 		{ "OcclusionUpdateInterval", settings.OcclusionUpdateInterval },
-		{ "ProbeUpdateInterval", settings.ProbeUpdateInterval },
-		{ "EnableFastProbeSampling", settings.EnableFastProbeSampling }
+		{ "ProbeUpdateInterval", settings.ProbeUpdateInterval }
 	};
 }
 
@@ -1118,7 +1102,6 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		.OcclusionViewProj = OcclusionTransform,
 		.OcclusionSHBasis4Pi = occlusionSHBasis4Pi,
 		.PosOffset = cellOrigin - eyePos,
-		.FastSamplingMode = settings.EnableFastProbeSampling ? 1u : 0u,
 		.ArrayOrigin = {
 			WrapIndex(static_cast<int>(cellID.x) - static_cast<int>(probeArrayDims[0] / 2), probeArrayDims[0]),
 			WrapIndex(static_cast<int>(cellID.y) - static_cast<int>(probeArrayDims[1] / 2), probeArrayDims[1]),

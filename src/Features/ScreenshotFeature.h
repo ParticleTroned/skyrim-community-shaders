@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Features/ScreenshotBurstPolicy.h"
+
 #include "Feature.h"
 #include "Utils/Subrect.h"
 #include <array>
@@ -9,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json_fwd.hpp>
@@ -67,6 +70,8 @@ struct ScreenshotFeature : public Feature
 	void RequestUiCapture();
 	/** Executes one versioned screenshot API command. Mutating calls must run on the game thread. */
 	nlohmann::json HandleApiRequest(const nlohmann::json& a_request);
+	/** Capture the host's native reference PNG using the normal screenshot service. */
+	nlohmann::json HandleReferenceCapture(const nlohmann::json& a_request, std::function<void(const nlohmann::json&)> a_completion);
 	/** Dispatches a settings-based capture through the public screenshot service and returns its receipt. */
 	nlohmann::json RequestApiCapture(std::string_view a_origin = "csx_menu");
 	/** Returns whether Community Shaders screenshot capture is enabled at runtime. */
@@ -141,6 +146,7 @@ private:
 		uint64_t publicationGeneration = 0;
 		std::uintptr_t deviceIdentity = 0;
 		std::array<float, 4> submittedBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
+		nlohmann::json burstRegions = nlohmann::json::array();
 		bool boundsApplied = false;
 		bool flipHorizontal = false;
 		bool flipVertical = false;
@@ -165,6 +171,7 @@ private:
 		Util::Subrect::UVRegion cropUV{};
 		bool applyCrop = false;
 		std::filesystem::path outputPath;
+		bool exactPath = false;
 		uint32_t width = 0;
 		uint32_t height = 0;
 		bool saveAsPng = true;
@@ -174,6 +181,8 @@ private:
 
 	struct CaptureOptions
 	{
+		ScreenshotBurst::Plan burst;
+		bool strictNative = false;
 		std::string screenshotPath;
 		Util::Subrect::UVRegion cropUV{};
 		bool applyCrop = true;
@@ -215,6 +224,7 @@ private:
 		uint32_t sequenceOrdinal = 0;
 		std::vector<OutputPlan> outputs;
 		bool desktopSource = false;
+		bool nativePixels = false;
 	};
 
 	struct ActiveCapture
@@ -223,6 +233,7 @@ private:
 		VRCaptureSource source = VRCaptureSource::HMDSubmission;
 		CaptureOptions options{};
 		uint64_t compositorCycleToken = 0;
+		uint64_t engineFrameToken = 0;
 		uint8_t eyeMask = 0;
 		std::array<StagedPlane, 2> eyes{};
 		uint32_t presentsWaited = 0;
@@ -248,6 +259,7 @@ private:
 		std::shared_ptr<ScreenshotApi> api;
 		std::size_t outstandingCount = 0;
 		std::atomic_bool notifyAllowed{ true };
+		bool deferEncoding = false;
 		bool accepting = true;
 		bool stopRequested = false;
 		bool exited = false;
@@ -276,7 +288,8 @@ private:
 
 	bool QueueScreenshot(PendingScreenshot&& screenshot);
 	bool ValidateReadbackContext(ID3D11DeviceContext* a_context);
-	bool TryReserveScreenshotSlot();
+	bool TryReserveScreenshotSlot(bool a_burst = false);
+	void SetBurstDeferral(bool a_defer);
 	void ReleaseScreenshotSlot();
 	static void ReleaseScreenshotSlot(const std::shared_ptr<ScreenshotWorkerState>& a_state);
 	static nlohmann::json BuildAcquisitionRecord(
@@ -298,7 +311,9 @@ private:
 		bool a_tonemapSceneHdr,
 		uint64_t a_publicationGeneration,
 		std::uintptr_t a_deviceIdentity,
-		StagedPlane& a_plane);
+		StagedPlane& a_plane,
+		const ScreenshotBurst::Plan* a_burst = nullptr,
+		bool a_strictNative = false);
 	bool QueueDesktopCapture(
 		IDXGISwapChain* a_swapChain,
 		const CaptureOptions& a_options,

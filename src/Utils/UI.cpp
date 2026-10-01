@@ -53,6 +53,14 @@ namespace Util
 	static int g_lastWindowWidth = 0;
 	static int g_lastWindowHeight = 0;
 
+	float GetSearchUIScale()
+	{
+		if (globals::game::isVR)
+			return GetUIScale();
+		constexpr float baselineFontSize = kBaselineFontSize * (ThemeManager::Constants::FLAT_SEARCH_BASELINE_SCREEN_HEIGHT / ThemeManager::Constants::DEFAULT_SCREEN_HEIGHT);
+		return GetUIScaleForBaseline(baselineFontSize);
+	}
+
 	bool UIntCheckbox(const char* a_label, unsigned int& a_value)
 	{
 		bool enabled = a_value != 0;
@@ -2244,19 +2252,24 @@ namespace Util
 		if (!enabled)
 			return false;
 
+		const bool isVR = globals::game::isVR;
 		const float textLineHeight = ImGui::GetTextLineHeight();
+		const float frameHeight = ImGui::GetFrameHeight();
 		ImVec2 toggleSize = size;
 		if (toggleSize.y <= 0) {
-			toggleSize.y = std::max(10.0f, std::round(textLineHeight * 0.80f));
+			toggleSize.y = isVR ? std::max(10.0f, std::round(textLineHeight * 0.80f)) :
+			                      frameHeight * ThemeManager::Constants::FLAT_TOGGLE_HEIGHT_RATIO;
 		}
 		if (toggleSize.x <= 0) {
-			toggleSize.x = std::round(toggleSize.y * 1.86f);
+			toggleSize.x = isVR ? std::round(toggleSize.y * 1.86f) :
+			                      frameHeight * ThemeManager::Constants::FLAT_TOGGLE_WIDTH_RATIO;
 		}
 
 		const ImVec2 hitSize(toggleSize.x, std::max(toggleSize.y, textLineHeight));
 
 		ImGui::PushID(label);
-		bool clicked = ImGui::InvisibleButton("##FeatureToggleHit", hitSize);
+		const ImGuiButtonFlags buttonFlags = isVR ? ImGuiButtonFlags_None : ImGuiButtonFlags_EnableNav;
+		bool clicked = ImGui::InvisibleButton("##FeatureToggleHit", hitSize, buttonFlags);
 		if (clicked) {
 			*enabled = !*enabled;
 		}
@@ -2269,8 +2282,14 @@ namespace Util
 		const ImVec4 trackBase = Color::Blend(theme.Palette.Background, theme.Palette.FrameBorder, active ? 0.34f : 0.28f, 1.0f);
 		const ImVec4 trackHovered = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.30f : 0.26f, 1.0f);
 		const ImVec4 trackActive = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.40f : 0.34f, 1.0f);
-		const ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
-		const ImVec4 borderColor = Color::Blend(theme.Palette.FrameBorder, theme.Palette.Background, active ? 0.02f : 0.06f, active ? 1.0f : 0.96f);
+		ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
+		ImVec4 borderColor = Color::Blend(theme.Palette.FrameBorder, theme.Palette.Background, active ? 0.02f : 0.06f, active ? 1.0f : 0.96f);
+		if (!isVR) {
+			const ImVec4 tint = active ? accent : theme.Palette.Text;
+			const float blend = active ? ThemeManager::Constants::FLAT_TOGGLE_ON_BLEND : ThemeManager::Constants::FLAT_TOGGLE_OFF_BLEND;
+			trackColor = Color::Blend(trackColor, tint, blend, trackColor.w);
+			borderColor = Color::Blend(borderColor, tint, blend, borderColor.w);
+		}
 		const ImVec4 knobColor = active ?
 		                             Color::Blend(theme.Palette.Text, trackColor, 0.08f, 0.96f) :
 		                             Color::Blend(theme.Palette.Text, trackColor, 0.18f, 0.88f);
@@ -2279,18 +2298,22 @@ namespace Util
 		const ImVec2 hitMin = ImGui::GetItemRectMin();
 		const ImVec2 trackMin(hitMin.x, hitMin.y + (hitSize.y - toggleSize.y) * 0.5f);
 		const ImVec2 trackMax(trackMin.x + toggleSize.x, trackMin.y + toggleSize.y);
-		const float rounding = std::min(toggleSize.y * 0.22f, 4.0f);
-		drawList->AddRectFilled(trackMin, trackMax, ImGui::ColorConvertFloat4ToU32(trackColor), rounding);
-		drawList->AddRect(trackMin, trackMax, ImGui::ColorConvertFloat4ToU32(borderColor), rounding, 0, 1.35f);
+		const float rounding = isVR ? std::min(toggleSize.y * 0.22f, 4.0f) : toggleSize.y * 0.5f;
+		const float borderSize = isVR ? 1.35f : ThemeManager::Constants::FLAT_TOGGLE_BORDER_SIZE;
+		const auto packColor = [isVR](const ImVec4& color) {
+			return isVR ? ImGui::ColorConvertFloat4ToU32(color) : ImGui::GetColorU32(color);
+		};
+		drawList->AddRectFilled(trackMin, trackMax, packColor(trackColor), rounding);
+		drawList->AddRect(trackMin, trackMax, packColor(borderColor), rounding, 0, borderSize);
 
-		const float knobPadding = std::max(1.5f, std::round(toggleSize.y * 0.11f));
+		const float knobPadding = isVR ? std::max(1.5f, std::round(toggleSize.y * 0.11f)) : ThemeManager::Constants::FLAT_TOGGLE_KNOB_PADDING;
 		const float knobRadius = std::max(3.0f, (toggleSize.y - knobPadding * 2.0f) * 0.5f);
 		const float knobTravel = toggleSize.x - (knobRadius * 2.0f) - (knobPadding * 2.0f);
 		const float knobX = active ?
 		                        trackMin.x + knobPadding + knobRadius + knobTravel :
 		                        trackMin.x + knobPadding + knobRadius;
 		const float knobY = trackMin.y + toggleSize.y * 0.5f;
-		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, ImGui::ColorConvertFloat4ToU32(knobColor));
+		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, packColor(knobColor));
 
 		ImGui::PopID();
 

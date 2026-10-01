@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// This consumer API file is available under LGPL-3.0-or-later.
+// See API.md, "Consumer licensing", for distribution requirements,
+// including those applicable when compiling the helper into a consumer DLL.
+// Licence texts: COPYING and COPYING.LESSER.
+
 #pragma once
 
 #include <RE/Skyrim.h>

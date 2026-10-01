@@ -323,6 +323,84 @@ namespace
 		return wrappedSnapshot.PreviousCamerasFor(wrapped) != nullptr;
 	}
 
+	bool CommittedHistoryRejectsSkippedOrIncompleteProducers()
+	{
+		Policy::CommittedHistory history;
+		auto producer = ValidKey();
+		if (history.HasHistory() || history.CanReuse(producer))
+			return false;
+		history.Commit(producer);
+		if (!history.HasHistory() || history.CanReuse(producer))
+			return false;
+
+		auto next = producer;
+		++next.frame;
+		if (!history.CanReuse(next))
+			return false;
+		// An interrupted stereo pair never commits; advancing past it must reseed.
+		++next.frame;
+		if (history.CanReuse(next))
+			return false;
+		history.Commit(next);
+		++next.frame;
+		if (!history.CanReuse(next))
+			return false;
+
+		constexpr std::array contractFields{
+			&Policy::Key::generation, &Policy::Key::method,
+			&Policy::Key::inputWidth, &Policy::Key::inputHeight,
+			&Policy::Key::outputWidth, &Policy::Key::outputHeight
+		};
+		for (auto field : contractFields) {
+			auto changed = next;
+			++(changed.*field);
+			if (history.CanReuse(changed))
+				return false;
+		}
+		history.Reset();
+		return !history.HasHistory() && !history.CanReuse(next);
+	}
+
+	bool CommittedHistoryUsesCompositorContinuity()
+	{
+		Policy::CommittedHistory history;
+		auto producer = ValidKey();
+		producer.compositorCycle = 70;
+		history.Commit(producer);
+		auto next = producer;
+		next.frame += 2;
+		++next.compositorCycle;
+		if (!history.CanReuse(next))
+			return false;
+		// Rechecking the peer eye before commit preserves the same reset decision.
+		++next.frame;
+		if (!history.CanReuse(next))
+			return false;
+		++next.compositorCycle;
+		if (history.CanReuse(next))
+			return false;
+		history.Commit(next);
+		if (history.CanReuse(next))
+			return false;
+		++next.compositorCycle;
+		if (!history.CanReuse(next))
+			return false;
+		next.compositorCycle = 0;
+		if (history.CanReuse(next))
+			return false;
+
+		producer.compositorCycle = Policy::MaxCompositorCycle;
+		history.Commit(producer);
+		next = producer;
+		++next.frame;
+		next.compositorCycle = 1;
+		if (!history.CanReuse(next))
+			return false;
+		history.Reset();
+		history.Commit({});
+		return !history.HasHistory() && !history.CanReuse(next);
+	}
+
 	bool CompositorCycleSurvivesDesktopPresent()
 	{
 		Snapshot snapshot;
@@ -518,6 +596,8 @@ int main()
 		RecoveryResetCanStrengthenCapturedDecision,
 		ResetBootstrapsOnlyMissingPreviousCameraHistory,
 		RetainedCameraHistoryRequiresAdjacentMatchingContract,
+		CommittedHistoryRejectsSkippedOrIncompleteProducers,
+		CommittedHistoryUsesCompositorContinuity,
 		CompositorCycleSurvivesDesktopPresent,
 		CycleWrapAndNewerFrameTokenRemainSafe,
 		NewCycleRequiresNewLogicalFrame,

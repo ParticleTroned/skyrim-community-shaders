@@ -1,5 +1,32 @@
 # main-vr-nr progress and continuation record
 
+## October 1 main-VR synchronization
+
+Merged `main-VR` through `79a61dc18af73fff91c28ddc701c3b18f8cd1605`
+onto the NR checkpoint `5b733df8c0f0856ab943aa35d09cc5a7c3539931`.
+The September 28–October 1 range adds 20 missing change commits and their
+merge history, including six local main-VR commits ahead of its fetched
+remote. Three older changes were already present as equivalent commits;
+the merge preserves their original ancestry without replaying them.
+
+Conflict resolution combines native screenshot bursts and hardened
+publication with NR's retained exposure/measurement evidence and DevBench
+schema. It preserves the NR dispatch arguments and adds the periphery
+history-continuity helper. Presets retain contract revision 8, add the
+disabled ambient-effect-lighting default, remove retired fast probe
+sampling, and regenerate fingerprints from the combined source. The
+dedicated Task 3 implementation, shaders and tests remain unchanged.
+
+The ten September 30 source-check commands passed again against the merge,
+as did the screenshot API contract, periphery-motion arithmetic, preset
+generation check and generator regressions. The screenshot sequence schema
+passed in its repository-managed pre-commit environment; the general
+Python interpreter lacks `jsonschema`. Exact commands and local receipts
+are retained under `build/merge-main-vr-20261001/`.
+No native test executable, shader, DLL or AIO was built, and no game,
+installation or runtime measurement was performed. These source checks do
+not qualify the combined binary or replace Task 2's pending measurements.
+
 ## September 30 Task 3 source follow-up
 
 The [updated-contract follow-up](nr-task3-followup-20260930.md) applies the

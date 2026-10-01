@@ -2301,7 +2301,8 @@ if(BUILD_CONTROLLER_TESTS)
         SkylightingSettings
         PROPERTIES
             LABELS "ControllerTests"
-            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
     )
     add_test(
         NAME WaterAppearanceSettings
@@ -3335,6 +3336,26 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         ScreenshotManifestSnapshot
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    add_executable(
+        screenshot_native_png_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_native_png_test.cpp
+    )
+    target_compile_features(screenshot_native_png_test PRIVATE cxx_std_23)
+    target_include_directories(
+        screenshot_native_png_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        screenshot_native_png_test
+        PRIVATE Microsoft::DirectXTex ole32 windowscodecs
+    )
+    add_test(NAME ScreenshotNativePng COMMAND screenshot_native_png_test)
+    set_tests_properties(
+        ScreenshotNativePng
         PROPERTIES LABELS "ControllerTests"
     )
 

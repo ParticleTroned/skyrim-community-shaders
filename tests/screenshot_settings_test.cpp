@@ -1,4 +1,5 @@
 #include "Features/ScreenshotApiPolicy.h"
+#include "Utils/StringUtils.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -58,7 +59,6 @@ bool IsFramedCapture(ScreenshotFeature::VRCaptureSource value)
 }
 std::filesystem::path ResolveCapturePath(const std::filesystem::path& path, bool) { return path; }
 std::filesystem::path ResolveConfiguredCaptureDirectory(const std::filesystem::path& path, bool) { return path; }
-std::string PathUtf8(const std::filesystem::path& path) { return path.string(); }
 constexpr uint32_t kMaximumSequenceFrames = 10000;
 struct ScreenshotApi
 {

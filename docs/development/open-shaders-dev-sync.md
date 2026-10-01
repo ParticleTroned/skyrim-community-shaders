@@ -2317,3 +2317,538 @@ The DLL is 29,109,760 bytes, SHA-256
 This integration record is the only tracked change after that validation.
 No game deployment, SE/AE/VR runtime test, headset qualification or push
 was performed. The primary checkout remains on `main-VR`.
+
+## Review resumed through Open Shaders 2.17.0 (2026-09-29)
+
+Resume after #789 at `af8134814a17073971628f59c132b196939889ce`.
+The fetched Open Shaders `main` and `dev` both point to
+`74f95a4d7f52c5f61edf6267ebca813a94bbc71a`, release 2.17.0.
+This range contains 27 merged PRs and two release commits. Review PRs in
+first-parent integration order and retain the existing exclusions, adding
+upstream Neural Rendering because CSX maintains its own on `main-vr-nr`.
+Inspect mixed PRs for useful changes outside excluded features.
+
+The user directed that accepted ports go directly onto `main-VR`.
+Use its existing checkout at `build/worktrees/main-vr-feature-metadata`,
+starting at `d53ba287d69dec693a107fbd834e36df1ef95b72`.
+Keep builds deferred until the end and obtain each `i` or `r` decision
+before implementing that candidate.
+
+### #793: shared PerfMode output check, rejected
+
+[Open Shaders #793](https://github.com/alandtse/open-shaders/pull/793),
+`9810152c2a38f54c76a8a2184b70672b2c9f9657`,
+`refactor(upscaling): share PerfMode output check`.
+
+The user rejected this PR. It extracts the repeated upstream PerfMode
+hook-active and test-texture check into `IsPresentingTestTexture()`.
+CSX uses a different presentation pipeline and has no `GetTestTexture()`
+or `IsPresentingTestTexture()` call sites. The helper and its callers
+provide no independent local change. No runtime code was imported.
+
+Evidence: reviewed the complete upstream diff and searched the local
+source for both symbols. No build, shader compilation or runtime test
+ran for this decision.
+
+### #792: shared compute buffer binding, accepted partial port
+
+[Open Shaders #792](https://github.com/alandtse/open-shaders/pull/792),
+`6419c39b7d1fa728603ab406f06667937aec36e2`,
+`refactor: share SharedData compute CB binding`.
+
+The user accepted the proposed partial port. Replace the remaining
+manual shared-buffer binding in `DynamicCubemaps::UpdateCubemap()` with
+`Util::BindSharedDataConstantBuffersForCS(context)`. The helper already
+binds shared and feature data at compute slots b5 and b6, in that order,
+and handles missing context, state or buffers. Its header is already
+included. This preserves the normal binding behavior for SE, AE and VR
+without changing resource ownership, dispatches or shader permutations.
+
+Do not introduce upstream's parallel `State::BindSharedDataCS()` helper.
+Other applicable callers already use our centralized binding utilities;
+upstream EHF, wind and PostProcessing callers remain outside this port.
+
+Validation: source comparison confirmed the same buffer order, slots and
+count. A full source search leaves the direct compute-slot b5 binding only
+inside the shared helper. The following checks passed:
+
+-   `pwsh ./tools/pre-commit.ps1 run --files src/Features/DynamicCubemaps.cpp docs/development/open-shaders-dev-sync.md`
+    passed whitespace, line-ending, clang-format and Prettier hooks;
+    YAML and CMake hooks had no applicable files.
+-   `pwsh ./tools/git.ps1 diff --check` passed.
+-   `pwsh ./tools/dev-doctor.ps1 -Network` reported zero failures and
+    zero warnings. The initial sandboxed hook attempt could not write
+    its Git cache database; the approved retry passed.
+
+Builds, shader compilation and runtime validation remain deferred.
+
+### #790: foveated rendering in pause menus, rejected
+
+[Open Shaders #790](https://github.com/alandtse/open-shaders/pull/790),
+`5a2421dcbfdafaf9639d6927bd13871c01d1349d`,
+`fix(upscaling): run foveated route in pause menus`.
+
+The user rejected this PR. Upstream replaces its blanket pause-menu
+restriction with a main/loading-menu restriction in the FoveatedRender
+route. CSX uses different menu presentation, input-freshness, transition
+and submit-ownership contracts. Substituting the upstream predicate
+would not preserve those contracts. This rejection does not claim that
+every paused-menu scenario has been runtime-verified locally.
+
+No implementation was imported. The recommendation rests on the
+upstream diff and the local foveated dispatch and menu-presentation gates
+reviewed during the 2.17 screening. No build or runtime test ran.
+
+### #791: periphery history continuity, accepted adaptation
+
+[Open Shaders #791](https://github.com/alandtse/open-shaders/pull/791),
+`061cda2d1a8f635d3bef1bed80f3eba376371bd9`,
+`fix(upscaling): reseed periphery history on resume`.
+
+The user accepted an adaptation to CSX's existing per-eye implementation.
+Replace the history-valid flag with a committed producer record, reusing
+the existing temporal snapshot adjacency and resource-contract checks.
+Main-pass history follows engine frames. Submit-stage history follows
+the immutable producer snapshot, preserving compositor-cycle identity
+when desktop Present advances the observed engine frame between eyes.
+
+Both dispatch routes reseed history after a skipped producer or a changed
+generation, method or input/output extent. Existing reset requests still
+force reseeding. Publish the record only where both eye histories already
+commit; failed or incomplete pairs leave the last complete producer
+unchanged. All four resource-reset paths clear the record. No shaders,
+GPU allocations, menu gates, settings or SE/AE dispatch paths change.
+
+The existing `VRSubmitTemporalSnapshot` test target now includes committed
+history cases for skipped and incomplete producers, contract changes,
+peer-eye checks across Present, repeated producers, cycle wrap, invalid
+keys and resource reset. Compiled execution is deferred with the build.
+The implementation and qualification limits are recorded in the
+[history continuity report](periphery-taa-history-continuity.md).
+
+Validation completed without a build:
+
+-   Scoped pre-commit whitespace, line-ending and Prettier hooks passed
+    for the eight changed files. Clang-format 22.1.4 passed separately on
+    changed lines in `Upscaling.cpp`/`.h` and on the complete policy and
+    two test files; the whole-file upscaling format hook was skipped to
+    preserve surrounding code. YAML/CMake hooks had no applicable files.
+-   `pwsh ./tools/cmake.ps1 -D PROJECT_ROOT=C:/src/skyrim-community-shaders/build/worktrees/main-vr-feature-metadata -D OUTPUT_DIRECTORY=C:/src/skyrim-community-shaders/build/analysis/open-shaders-217-review-20260929/pr791-extraction -P tests/extract_foveated_save_reuse.cmake`
+    passed source-fixture extraction. Separate `-D` value arguments avoid
+    the joined-option parsing that truncated paths in earlier attempts.
+-   `pwsh ./tools/git.ps1 diff --check` passed. A full source/test search
+    found no remaining references to the replaced history-valid flag.
+
+The existing resource-reuse fixture now uses the production history
+record and checks both preservation and invalidation. Neither controller
+target was compiled or executed; runtime and physical-HMD qualification
+remain pending. No measured ledger or Build ID was created.
+
+### #785: NMLFF compatibility conflict, accepted
+
+[Open Shaders #785](https://github.com/alandtse/open-shaders/pull/785),
+`d628f69960c956fc30b6bdddb2d83f50c8f5315a`,
+`fix(compat): identify NMLFF conflict`.
+
+The user accepted this port. Add `NativeMeshLightFlickerFix.dll` to the
+existing incompatible-plugin list with upstream's explanation that Light
+Limit Fix supersedes it and both replace the same lighting hooks. CSX's
+LLF already owns lighting setup, and the list lacked this conflict.
+
+Reuse the existing startup probe and diagnostic path for SE, AE and VR.
+A detected incompatible plugin prevents CSX hook/feature initialization;
+the conflict is not merely an informational notice. Do not add a second
+loader check, change detection semantics or alter LLF rendering.
+Source review confirmed that the existing consumer displays the supplied
+reason. Builds and runtime validation remain deferred.
+
+Validation: `pwsh ./tools/pre-commit.ps1 run --files src/Compatibility.h docs/development/open-shaders-dev-sync.md`
+passed whitespace, line-ending, clang-format and Prettier hooks; YAML and
+CMake hooks had no applicable files. `git diff --check` passed.
+
+### #796: Grass Optimizations release metadata, deferred
+
+[Open Shaders #796](https://github.com/alandtse/open-shaders/pull/796),
+`c4172f49a374f083b164b3753eff01201f0c937b`,
+`chore(grass): release Grass Optimizations`.
+
+The complete diff only removes `Beta = True` from the Grass Optimizations
+feature manifest. It falls under the standing GO deferral and contains
+no useful change outside GO. No code or metadata is imported.
+
+### #797: dynamic near-clip default, rejected
+
+[Open Shaders #797](https://github.com/alandtse/open-shaders/pull/797),
+`e210f6c2d0c58b7a56bb8e17a8b461f5c741a7f1`,
+`chore(vr): disable dynamic near clip by default`.
+
+The user rejected this PR. It changes upstream's `DynamicNearClip`
+default from enabled to disabled and updates the corresponding example.
+CSX `main-VR` has neither that near-clip controller nor its setting, so
+there is no applicable local default to change. No code was imported.
+
+### #767: tiered wind sampling API, excluded
+
+[Open Shaders #767](https://github.com/alandtse/open-shaders/pull/767),
+`3aa48d435daff1e28cf3892a03f5f1b46dd5a392`,
+`feat(wind): add tiered wind sampling API`.
+
+This falls under the standing exclusion of the new wind system. Its
+shared public API edits expose that wind sampling; the implementation
+and callers belong to the excluded system. The screening found no
+independent applicable fix outside it. No code was imported.
+
+Both decisions use the source comparison and upstream diffs from the
+pinned 2.17 screening. No build or runtime test ran.
+
+### #794: grass motion-vector alpha, accepted partial port
+
+[Open Shaders #794](https://github.com/alandtse/open-shaders/pull/794),
+`2ac27bd9906035e53f8f06dbf863763daa4db660`,
+`feat(wind): refine grass flutter and gusts`.
+
+The user accepted only the independent motion-vector alpha correction.
+Both `RunGrass.hlsl` non-depth output layouts now declare `MotionVectors`
+as `float4`, and both producers write the existing velocity in XY with
+Z = 0 and alpha = 1. This supplies an explicit source alpha to the
+deferred motion-vector blend state, which uses `SRC_ALPHA` and
+`INV_SRC_ALPHA` whenever blending is enabled.
+
+Cover both Grass Lighting and `RenderBasicGrass`, including the
+runtime-disabled Grass Lighting path. Preserve the current/previous
+position calculation, per-eye index, depth-only permutations and
+render-target assignments across SE, AE and VR. No wind sampling,
+flutter, gust, wind-history, GO or upstream UI changes are imported.
+
+Validation: `pwsh ./tools/pre-commit.ps1 run --files package/Shaders/RunGrass.hlsl docs/development/open-shaders-dev-sync.md`
+passed whitespace, line-ending, clang-format and Prettier hooks; YAML
+and CMake hooks had no applicable files. `git diff --check` passed.
+A source equality audit confirmed exactly two output declarations and
+two writes changed, with every other shader byte unchanged after newline
+normalization. Source review checked the shared basic-grass fallback,
+both runtime branches and the existing source-alpha blend state. No
+build, shader compilation or SE/AE/VR runtime validation ran.
+
+The intervening upstream 2.16.0 release commit is bookkeeping only;
+CSX release automation continues to own the local project version.
+
+### #801: stale Streamline DX12 payloads, rejected
+
+[Open Shaders #801](https://github.com/alandtse/open-shaders/pull/801),
+`45a78d7aa364918a231d65bbc2df73646498e202`,
+`build(upscaling): drop stale Streamline DX12 DLLs`.
+
+The user rejected this PR. It removes six outdated tracked Streamline
+DX12 DLLs and changes upstream's `dlssg-repro` tool to consume downloaded
+runtime payloads. Those files and that tool are absent from `main-VR`,
+which already stages downloaded runtimes through its build workflow.
+No code, DLL or packaging change was imported.
+
+### #802: editor and overlay input isolation, excluded
+
+[Open Shaders #802](https://github.com/alandtse/open-shaders/pull/802),
+`46036999dbd534ade24c11e15a0199b7aa56557a`,
+`fix(ui): isolate editor and overlay input`.
+
+The complete diff changes upstream's editor/overlay input handling,
+including its preview-flying mode. It falls under the standing OS UI
+exclusion. No implementation was imported.
+
+These decisions use the complete diffs and source comparison from the
+pinned 2.17 screening. No build or runtime test ran.
+
+### #803: ambient effect lighting, accepted adapted port
+
+[Open Shaders #803](https://github.com/alandtse/open-shaders/pull/803),
+`4ec595f3f0310e05b242c0227f34eeabad093c7f`,
+`feat(utility): add ambient lighting toggle`.
+
+The user accepted the optional lighting mode in Adaptive Balance. Add a
+default-off global `useAmbientEffectLighting` switch under
+`Global > Lighting` and DevBench `set_adaptive_balance_visuals`. Saved settings,
+global/full presets, performance-state capture and configured/effective
+status include it. Existing master, loaded, menu, player-cell and performance
+measurement gates neutralize the shader switch while retaining its selection.
+
+In-world lit effects and classified or flagged sky statics can replace
+weather lighting with ambient/IBL plus half-strength directional light.
+Reuse local lighting-space, ambient balance, sky occlusion and shadow helpers;
+retain material colours, lighting influence, point lights, fog and transparency.
+The non-lit sky path keeps the upstream terrain/cloud shadow ray rather than
+adding a scene shadow-mask dependency. VR uses eye-relative positions and
+stable shadow noise. Existing bounded effect/sky-static brightness profile
+composition drives the new mode without consuming the adjusted weather colours.
+
+Reuse three padding slots in the existing 80-byte Adaptive Balance buffer;
+all prior live-field offsets remain unchanged. Add the engine's existing
+sky-object descriptor bit to the shader flags. No E11, EHF, upstream UI,
+Scene Manager, wind, GO or NR implementation is imported. Unified presets
+explicitly retain false and refresh their source fingerprints, preserving
+compatible settings-contract revision 5.
+
+Validation: production controller-fixture extraction, registered DevBench
+JSON/schema and source-layout checks, and the unified preset generator
+regression suite passed. Scoped pre-commit hooks and changed-line
+clang-format 22.1.4 checks passed. Added controller gate/brightness/boolean
+cases and updated shader-layout assertions; these compiled tests have not
+run. DLL builds, shader compilation and SE/AE/VR runtime qualification
+remain deferred to the final sync build by user instruction. Runtime
+appearance and cost have not been measured.
+
+### #804: grass profiler zone lifetime, rejected
+
+[Open Shaders #804](https://github.com/alandtse/open-shaders/pull/804),
+`2eedd983b3d315ea95fa08a9d89d00634f521c50`,
+`fix(profiling): fix grass zone stack corruption`.
+
+The user rejected this PR. Upstream's member-held grass profiler scope
+spans multiple calls and violates Tracy's CPU-zone nesting requirements.
+`main-VR` has neither `grassGpuPass` nor `UpdateGrassGpuPass`; its
+`ScopedGpuPass` instances use local scopes. The new upstream `Spanning`
+mode has no local consumer. No implementation was imported.
+
+### #807: upstream post-processing output and presets, rejected
+
+[Open Shaders #807](https://github.com/alandtse/open-shaders/pull/807),
+`416f70f6d90593a893eaf1e51e2710b3747f3cdd`,
+`fix(post-processing): retain VR output and presets`.
+
+The user rejected this PR. Its resource sizing, full-resolution output
+handoff and preset retention fixes belong to upstream's PostProcessing
+pipeline. The shared Feature/Upscaling interface changes connect that
+pipeline to upstream's provided-input PerfMode path. Neither that
+PostProcessing implementation nor those provider interfaces exists in
+`main-VR`; local render-scale/post-processing paths are separate. No
+independent Adaptive Balance fix was found, and no code was imported.
+
+### #810: grass directional-shadow availability, accepted partial port
+
+[Open Shaders #810](https://github.com/alandtse/open-shaders/pull/810),
+`c9e628dc5c96199c71d7a2a12fb7002ac69807a9`,
+`fix(grass): restore PBR directional shadows`.
+
+The user accepted the independent availability check for both local grass
+paths. Replace four blanket interior exclusions in `RunGrass.hlsl` with
+the existing `ShadowSampling::HasDirectionalShadows()` helper: shadow-mask
+selection and the directional-detail block in both `RenderBasicGrass`
+and Grass Lighting. Runtime-disabled Grass Lighting also uses the basic
+path. The CPU already publishes this flag for exteriors and active
+Interior Sun; ordinary interiors retain unshadowed directional light.
+
+Preserve local shadow-mask sampling, scattering predicates, per-eye
+positions and the existing world-shadow/caustics logic. No upstream
+PBR-specific directional-shadow replacement or GO branch is imported.
+No resources, settings or runtime-specific code paths are added.
+
+Validation: a source comparison against the parent revision confirmed
+exactly the four intended guard substitutions and no other shader edits.
+The existing CPU-to-shader availability contract and basic-path fallback
+were checked. Scoped pre-commit hooks and `git diff --check` passed.
+Shader compilation, DLL builds and SE/AE/VR visual validation remain
+deferred until the end of sync by user instruction.
+
+### #809: Scene Manager tonemapping catalog, excluded
+
+[Open Shaders #809](https://github.com/alandtse/open-shaders/pull/809),
+`69c87160dd514c663e1dfa868876c1866841be99`,
+`feat(scene-manager): expose tonemapping settings`.
+
+This only exposes existing settings through the Scene Manager catalog,
+policy and catalog tests. It adds no tonemapping math or independent
+Adaptive Balance control. Excluded under the standing Scene Manager rule.
+
+### #808: Scene Manager feature filter, excluded
+
+[Open Shaders #808](https://github.com/alandtse/open-shaders/pull/808),
+`b6f8ed809f37d8ea5d67339aff57acdf457330cf`,
+`feat(scene-manager): filter scenes by feature`.
+
+The scene filtering, translations and searchable-combo scroll restoration
+support upstream's editor/Scene Manager UI. No independent renderer fix
+was found in the shared UI helper changes. Excluded under the standing
+Scene Manager, upstream UI and translation rules.
+
+### #806: Tracy protocol 83, accepted adapted tooling port
+
+[Open Shaders #806](https://github.com/alandtse/open-shaders/pull/806),
+`ddeacbda6bc97cc3229f43d678e8200e824e4938`,
+`build(deps): bump tracy vcpkg pin for protocol v83`.
+
+The user accepted the dependency update with accurate version metadata and
+matched capture/viewer tooling. Pin the overlay to
+`a8db9bd8445343ee171439b9479c0a594183bf62` and its verified archive SHA-512;
+both version declarations use `0.14.2-a8db9bd8`. The pinned source reports
+version 0.14.2 and protocol 83, replacing protocol 82. The 21-commit range
+also changes two client source files, so this is not a server-only update.
+
+The existing overlay declared CLI/viewer features but neither applied its
+tools patch nor selected its build options. Connect those features and
+refresh the patch against the pinned source. A separate tools directory
+owns shared dependencies with statistics and optional GUI support before
+adding the individual applications. This prevents missing GUI targets,
+duplicate common targets and profiler-only compiler flags leaking into
+the client build. Copy the Release tools, including the capture daemon,
+to the standard vcpkg tools directory and clean their package-bin copies.
+Debug builds retain only the client.
+
+The opt-in `tracy-tools` manifest feature selects both CLI and viewer tools;
+the existing `ALL-TRACY` preset selects it alongside instrumentation.
+Production presets remain unchanged. README and architecture instructions
+describe the matched source, protocol and executable locations. Existing
+installed tools/DLLs have not been replaced or rebuilt during this sync.
+
+Validation: downloaded-source SHA-512 and patch application checks passed.
+Version/preset checks and a non-building CMake audit exercised the real
+port with vcpkg feature mapping for core-only, CLI-only, GUI-only and
+combined selections. All four selected the expected Release tools and
+disabled Debug tools. A vcpkg `install --dry-run` resolved the complete
+matched configuration to `0.14.2-a8db9bd8` without building packages.
+Scoped pre-commit hooks and `git diff --check` passed. DLL/tool builds,
+live protocol compatibility and capture validation remain deferred until
+the final build by user instruction.
+
+### #814: upstream release-stage UI helpers, excluded
+
+[Open Shaders #814](https://github.com/alandtse/open-shaders/pull/814),
+`bd821a447b9c69b1826c31f71a978017941345e5`,
+`feat(ui): add reusable release-stage tag helpers`.
+
+This moves upstream feature-menu release-stage labels and colours into
+shared UI helpers. No renderer behavior changes. Excluded under the
+standing upstream UI rule.
+
+### #811: pre-upscale depth of field and motion blur, rejected
+
+[Open Shaders #811](https://github.com/alandtse/open-shaders/pull/811),
+`951220acc4c190dc478c9f10cbaa4c05fedba429`,
+`perf(post-processing): DoF and blur pre-upscale`.
+
+The user selected **r**. All six changed files belong to upstream's custom
+PostProcessing pipeline, including its DoF and MotionBlur components and
+input-provider ownership. These components are absent from main-VR. No
+independent correction applies to Adaptive Balance. No code imported.
+
+### #815: destroyed grass-shape captures, deferred
+
+[Open Shaders #815](https://github.com/alandtse/open-shaders/pull/815),
+`404024aea2c2376343febf2fcc1084d837d2f98b`,
+`fix(grass): drop captures of destroyed shapes`.
+
+The change removes pending captures of destroyed shapes in GrassBucketStore.
+Deferred under the standing Grass Optimizations rule.
+
+### #723: upstream neural rendering, excluded
+
+[Open Shaders #723](https://github.com/alandtse/open-shaders/pull/723),
+`386bb211f8969dafe2a4a7cf641c5c4570fd4bcd`,
+`feat(upscaling): add DLSS neural rendering`.
+
+Excluded under the user's kevdev NR rule; CSX maintains its own implementation
+on main-vr-nr. Shared colour, string, hashing, fence, swap-chain and upscaling
+hunks were inspected separately from the new feature. They provide NR
+integration, supporting utilities or behavior-preserving refactors; no
+independently justified local correction was selected.
+
+### #817: GO VR grass placement, deferred
+
+[Open Shaders #817](https://github.com/alandtse/open-shaders/pull/817),
+`8444f3c628feaa51e3de0415f83c29269ca08e04`,
+`fix(grass-optimizations): VR grass placement`.
+
+The RunGrass change corrects projection in GO's instanced vertex path.
+The local shader does not use this InstanceExtras/instanceID branch.
+Deferred under the standing Grass Optimizations rule.
+
+### #816: GO runtime enable setting, deferred
+
+[Open Shaders #816](https://github.com/alandtse/open-shaders/pull/816),
+`b0f16fd4c292704c4f09591241eeaf5d687f8c7f`,
+`feat(grass): add runtime Enabled setting`.
+
+Runtime enable/disable, hook and bucket lifecycle changes belong to
+GrassOptimizations, with accompanying translation updates. Deferred under
+the standing Grass Optimizations rule.
+
+### #821: conditional Scene Manager components, excluded
+
+[Open Shaders #821](https://github.com/alandtse/open-shaders/pull/821),
+`9f0bb80448dcd4e8ef4468b529f719451417cf1f`,
+`fix(scene): discover conditional components`.
+
+Only the scene-settings catalog generator and its tests change. This makes
+conditional upstream PostProcessing components discoverable by Scene Manager;
+it provides no independent Adaptive Balance correction. Excluded under the
+standing Scene Manager rule.
+
+### #819: celestial terrain-shadow direction, accepted partial port
+
+[Open Shaders #819](https://github.com/alandtse/open-shaders/pull/819),
+`ad261d852dd719c0f1c6a71b3c65cf7286b22366`,
+`feat(sky): occlude sunset lighting and glare`.
+
+The user accepted the terrain-shadow portion. Sky Sync now retains the
+active caster's apparent direction before shadow elevation limits, then
+exposes its normalized world-space direction. Capture follows time-jump
+correction and precedes lighting and the end-of-frame caster handoff, so
+terrain shadows follow the light actually used by the current fade phase.
+The local fade-out/fade-in model, lighting intensity and horizon locks
+remain intact; upstream's blended-direction transition is not imported.
+
+The direction is cleared by ShadowFader reset and when there is no caster.
+The accessor rejects unloaded/disabled Sky Sync, missing sky roots, zero
+length and nonfinite directions. Existing invalid-sky, disabled-feature,
+interior and worldspace lifecycle resets cover the retained direction.
+Terrain Shadows falls back to its existing engine-light direction and
+hemisphere correction whenever no valid celestial direction is available.
+Only the fallback retains that correction; a valid celestial direction
+keeps its actual horizon position.
+
+Direction validation, sudden-change detection and shadow updates all use
+the selected direction. This preserves immediate full refresh on caster
+handoffs or other large direction changes, including changes hidden by
+the engine light's elevation limit. The shared C++ path applies to SE, AE
+and VR without new runtime-specific branches, settings or GPU resources.
+
+The glare shader and vertex-stage depth binding are deliberately deferred.
+They modulate a glare draw already being produced and do not establish
+working glare in either VR or SE. The prior #733 decision remains intact.
+
+Validation: the source audit verified unchanged fade/caster/calendar
+calculations apart from direction capture and elevation-lock ordering,
+capture before the current-frame handoff, reset and validity gates, and
+the selected direction reaching both discontinuity detection and dispatch.
+Scoped pre-commit hooks and `git diff --check` passed. No DLL build,
+compiled tests or runtime rendering validation were run, per the user's
+end-of-sync build instruction. Sunrise/sunset, sun/moon handoffs and
+disable/re-enable behavior still require final runtime validation.
+
+### #820: ACEScg skin tinting, rejected
+
+[Open Shaders #820](https://github.com/alandtse/open-shaders/pull/820),
+`1bdf8aab35a7ca60b69e5051e8df93c9ea0464ee`,
+`fix(lighting): correct ACEScg skin tinting`.
+
+The user selected **r** after correction of the initial recommendation.
+Upstream converts face colour from AP1 to linear sRGB for gamma-space
+face tinting, then restores its working gamut. Local Color::Diffuse only
+performs gamma conversion and diffuse scaling; it never transforms this
+base colour into AP1. Both local FACEGEN paths already use sRGB primaries.
+No ACEScg/AP1 working-gamut implementation or independent local correction
+was found. No code imported.
+
+### Pinned 2.17 review complete
+
+All 27 PR decisions are resolved: eight accepted ports, eight rejections
+and eleven standing exclusions or deferrals. Release-only bookkeeping
+ends the range at `74f95a4d7f52c5f61edf6267ebca813a94bbc71a` (2.17.0).
+This is the pinned endpoint, not a claim about subsequent live upstream
+changes. Accepted ports are on main-VR.
+
+The user interrupted the preliminary final build and requested an
+[adversarial review of all eight ports](open-shaders-217-adversarial-review.md)
+before any further build. Configure completed and compilation/linking
+began, but no successful final build or completed tests are claimed.
+Three separate follow-up corrections cover Tracy revision headers,
+zero-contribution ambient-effect work and periphery dispatch failure
+propagation. Each commit body identifies its original implementation;
+shader/DLL/tool builds and runtime/performance qualification remain pending.

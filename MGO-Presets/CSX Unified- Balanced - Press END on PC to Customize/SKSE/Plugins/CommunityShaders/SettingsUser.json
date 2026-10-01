@@ -80,7 +80,7 @@
     },
     "settingsContract": {
       "revision": 8,
-      "sourceTreeSha256": "CAFADE36CC3E111F9BE48B60E1EF3312BAAA7928E0F3213AD0014941DB71586A"
+      "sourceTreeSha256": "6AB8B64B47A5D16A525CD56F71923EE2B62A3CCDCA154C207687EB86B5456227"
     }
   },
   "Upscaling": {
@@ -508,6 +508,7 @@
     "SubsurfaceScatteringAmount": 1.0
   },
   "Adaptive Balance": {
+    "useAmbientEffectLighting": false,
     "dayStartHour": 9.0,
     "enabled": true,
     "globalProfile": {
@@ -1005,7 +1006,6 @@
     "VRCullDistance": 20480.0
   },
   "Skylighting": {
-    "EnableFastProbeSampling": true,
     "EnableIncrementalProbeUpdates": true,
     "EnableReducedUpdateFrequency": true,
     "EnableSkylighting": true,

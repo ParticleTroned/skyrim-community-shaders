@@ -1,3 +1,5 @@
+#include "Features/Upscaling/VRSubmitTemporalSnapshot.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -240,7 +242,11 @@ public:
 		uint32_t x, y;
 	};
 	uint32_t peripheryTAAHistoryReadIndex = 1;
-	bool peripheryTAAHistoryValid = true;
+	VRSubmitTemporalSnapshot::CommittedHistory peripheryTAAHistory = [] {
+		VRSubmitTemporalSnapshot::CommittedHistory history;
+		history.Commit({ 50, 1, 3, 100, 80, 100, 80 });
+		return history;
+	}();
 	uint32_t submitStageFoveatedPeripheryTAAFrame = 50;
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady{ true, true };
 	bool foveatedPeripheryCS = true;
@@ -422,14 +428,15 @@ namespace
 			Require(upscaling.EnsurePeripheryTAAResources(100, 80, &source) == (fault == 0));
 			Require(Counters() == before);
 			Require(upscaling.peripheryTAALockHistory[0][0].get() == firstEye);
-			Require(upscaling.peripheryTAAHistoryReadIndex == 1 && upscaling.peripheryTAAHistoryValid);
+			Require(upscaling.peripheryTAAHistoryReadIndex == 1 && upscaling.peripheryTAAHistory.HasHistory());
+			Require(upscaling.peripheryTAAHistory.CanReuse({ 51, 1, 3, 100, 80, 100, 80 }));
 			Require(upscaling.submitStageFoveatedPeripheryTAAFrame == 50);
 			Require(upscaling.submitStageFoveatedPeripheryTAAEyeReady[0] && upscaling.submitStageFoveatedPeripheryTAAEyeReady[1]);
 		}
 		Upscaling upscaling;
 		upscaling.reuseOnly = false;
 		Require(upscaling.EnsurePeripheryTAAResources(100, 80, &source));
-		Require(upscaling.peripheryTAAHistoryReadIndex == 0 && !upscaling.peripheryTAAHistoryValid);
+		Require(upscaling.peripheryTAAHistoryReadIndex == 0 && !upscaling.peripheryTAAHistory.HasHistory());
 	}
 
 	void TestTileBuffers()

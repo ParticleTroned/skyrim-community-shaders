@@ -16,7 +16,7 @@ checkbox also enables its detailed adjustments, including Sky Saturation.
 | Cloud Gamma Offset        | 0       | −1–1          |
 | Vanilla Fog Intensity     | 1       | 0–5           |
 | Sun Glare Intensity       | 1       | 0–5           |
-| Weather Effect Brightness | 1       | 0–2           |
+| Effect Brightness         | 1       | 0–2           |
 | Sky Static Brightness     | 1       | 0–2           |
 | Sky Static Transparency   | 0       | 0–1           |
 | Ambient                   | 1       | 0–5           |
@@ -118,7 +118,7 @@ to valid opacity. This is independent of fog gamma and Volumetric Lighting's
 existing Shaft Intensity and Opacity controls. Inventory previews retain
 their existing fog.
 
-Weather Effect Brightness and Sky Static Brightness scale the current
+Effect Brightness and Sky Static Brightness normally scale the current
 weather's Effect Lighting and Sky Statics colors after the engine updates
 them. One preserves the authored weather colors. The existing Effects
 lighting multiplier independently scales directional and point lighting.
@@ -134,10 +134,35 @@ measurement bypasses use neutral values. A failed detour installation is
 logged and reported as unavailable; other balance controls remain usable.
 The SE/AE/VR relocation and update timing still require runtime validation.
 
-Sky Static Brightness now acts on weather color instead of multiplying
-the final classified effect-shader output. Existing non-neutral settings
-can therefore look different. Its former shader-buffer slot is padding;
-the 80-byte layout and all following offsets are retained.
+Ambient Lighting for Effects and Sky Statics is an optional global switch
+under Global > Lighting, independent of detailed lighting controls. It is
+off by default and saved as `Adaptive Balance.useAmbientEffectLighting`.
+Global and full presets include it; older presets default it to false.
+The master toggle, unloaded feature, main/loading menus, missing player
+cell and performance-measurement bypass all disable its effective value
+without changing the saved selection.
+
+When enabled, in-world lit effects and classified or explicitly flagged
+sky-static meshes use combined ambient/IBL and half-strength directional
+light in the renderer's existing lighting space. Lit effects retain
+Skylighting occlusion and sample scene shadows only when the scene reports
+directional shadows, including interior sunlight. Non-lit sky statics use
+eight terrain/cloud shadow samples along a bounded view ray, without a
+scene shadow-mask dependency; soft effects bound the ray by sampled depth.
+Both paths retain ambient balance and per-eye positions. Material colour,
+lighting influence, point
+lights, fog, transparency and effect multipliers keep their existing roles.
+Inventory previews keep their existing lighting. The weather hook remains
+available to other consumers; replaced shader lighting does not consume
+those weather colours, so brightness is not applied twice.
+
+Effect Brightness and Sky Static Brightness scale the replacement lighting
+with their composed global/profile/location values. Their detailed-lighting
+gates and bounds remain unchanged. Disabling the switch selects the existing
+weather-based paths. The 80-byte buffer reuses padding: a uint switch at
+64, transparency at 68, effect brightness at 72 and sky-static brightness
+at 76. No resources or render passes are added. Appearance, shader
+permutations and runtime cost still require the deferred final validation.
 
 Sky Static Transparency retains the sky-static effect permutation and
 material predicate, including mountain-mist meshes. It fades ordinary alpha,
@@ -339,3 +364,19 @@ Composition cases cover day/night and replacement/layered locations;
 DevBench validation includes the new field. These additions have not been
 compiled or executed. Builds, shader compilation and SE/AE/VR runtime
 checks remain deferred until the selective sync ends.
+
+### Ambient effect lighting validation
+
+DevBench `communityshaders.menu` action `set_adaptive_balance_visuals`
+accepts `visuals: {"useAmbientEffectLighting": true}` (or false). It stages
+the global setting without enabling Adaptive Balance or saving it.
+`status.adaptiveBalanceVisuals.global.useAmbientEffectLighting` reports the
+saved selection and `.effective.useAmbientEffectLighting` its runtime gate.
+Unknown fields and non-boolean toggle values reject the complete update.
+
+The controller fixture covers default-off, explicit enabling/disabling,
+master/load/menu/player/performance gates, brightness transport and strict
+DevBench boolean validation. The shader-layout fixture checks all three
+reused fields and the unchanged 80-byte size. These compiled tests and
+SE/AE/VR rendering checks are deferred to the final build, per the sync
+workflow; they have not run for this port.

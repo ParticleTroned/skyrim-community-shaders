@@ -117,7 +117,7 @@ public:
 
 	struct Settings
 	{
-		bool Enabled = false;
+		bool Enabled = !REL::Module::IsVR();
 		bool EnableGI = REL::Module::IsVR() ? false : true;  // AO only for VR by default
 		bool EnableExperimentalSpecularGI = false;
 		bool EnableVanillaSSAO = false;
@@ -127,10 +127,10 @@ public:
 		uint NumSlices = REL::Module::IsVR() ? 3u : 4u;
 		uint NumSteps = REL::Module::IsVR() ? 6u : 8u;  // AO preset for VR
 		bool EnableAdaptiveSampling = true;
-		int ResolutionMode = 0;  // Full Res default (VR and flat)
+		int ResolutionMode = REL::Module::IsVR() ? 0 : 1;  // Full Res for VR, Half Res for SE/AE
 		int ResourceProfile = REL::Module::IsVR() ? kResourceProfileAOOnly : kResourceProfileFullGI;
-		float VRCullDistance = 1500.0f;       // 0 disables VR distance culling
-		float CenterFullResMaskScale = 0.0f;  // runtime cache; SSGI FOV derives this from the shared VR foveation profile
+		float VRCullDistance = REL::Module::IsVR() ? 1500.0f : 0.0f;  // Distance culling is VR-only
+		float CenterFullResMaskScale = 0.0f;                          // runtime cache; SSGI FOV derives this from the shared VR foveation profile
 		bool EnableFoveated = REL::Module::IsVR() ? true : false;
 		bool ExperimentalOCUEffectFoveation = false;
 		bool EnableStereoSync = false;    // VR-only bilateral cross-eye stabilization pass
@@ -145,7 +145,7 @@ public:
 		float GISaturation = 0.8f;
 		float GIDistanceCompensation = 0.f;
 		// mix
-		float AOPower = 1.8f;
+		float AOPower = REL::Module::IsVR() ? 1.8f : 1.0f;
 		float GIStrength = 1.0f;
 		// denoise
 		bool EnableTemporalDenoiser = REL::Module::IsVR() ? false : true;

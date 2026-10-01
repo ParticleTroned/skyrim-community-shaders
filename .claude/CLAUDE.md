@@ -31,7 +31,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 -   `VR` - Skyrim VR only (compile-time targeting)
 -   `PRE-AE` - SE + VR (excludes AE)
 -   `FLATRIM` - SE + AE (excludes VR)
--   `ALL-TRACY` - Universal binary with Tracy profiler support enabled
+-   `ALL-TRACY` - Universal binary with Tracy support and capture/viewer tools from the same pinned source; see [the build instructions](../README.md#tracy_support)
 
 **User Preset Template**:
 

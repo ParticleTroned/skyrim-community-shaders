@@ -181,7 +181,7 @@ Every response, including errors, uses one envelope:
 
 `sessionId` changes at each Skyrim/CSX process start. `commandId` is generated
 by the client and supplies idempotency. Within one server session, repeating
-the same `clientId + commandId` returns the original command result or current
+the same `(clientId, commandId)` tuple returns the original command result or current
 operation receipt and must not create a second capture. Reusing the pair with
 different arguments is `idempotency_conflict`.
 
@@ -435,7 +435,8 @@ Version 1 separates them:
 -   `source.kind = hmd_submission` observes coherent accepted OpenVR eye
     submissions before compositor distortion.
 -   `source.kind = settings_default` resolves either source from the immutable
-    settings snapshot.
+    settings snapshot. On flat Skyrim it resolves to `desktop_mirror` even if
+    the persisted VR-only preference is `hmd_submission`.
 -   `outputs[].view` selects native, individual-eye, side-by-side, or framed
     composition from the acquired planes.
 
@@ -447,6 +448,16 @@ source/view combination is rejected during validation.
 fallback reason must appear in the receipt. Framed views default to `reject`;
 silently converting a requested framed HMD view into a desktop image would be
 misleading evidence.
+
+Source capabilities are runtime-specific. Flat Skyrim advertises only
+`desktop_mirror`; VR also advertises `hmd_submission`. An unavailable explicit
+HMD request fails with `source_unavailable` unless the request opts into
+`desktop_mirror`, in which case the effective descriptor, receipt, and event
+journal preserve the requested source, resolved source, and fallback reason.
+For `sequence_start`, the parent receipt contains the fully expanded sequence
+descriptor and nests the resolved capture descriptor under `effective.capture`.
+Fallback provenance is projected onto the parent receipt and journal as well as
+the individual child receipts.
 
 ### Outputs
 
@@ -475,8 +486,14 @@ capability explicitly permits both.
 -   Relative traversal outside the selected root is rejected as `unsafe_path`.
 -   Existing files are never overwritten in version 1. `overwrite` must be
     `never`; name collisions receive a deterministic numeric suffix.
--   The worker writes a sibling temporary file, flushes and closes it, then
-    atomically renames it to the final name where the filesystem permits.
+-   The worker encodes into memory, creates a sibling temporary file
+    exclusively, and retains that handle while it writes, flushes, atomically
+    renames without replacement, and verifies the committed file's identity,
+    size, and SHA-256 custody.
+-   The Win32 rename buffer includes a terminating wide NUL beyond its counted
+    filename. Sequence directory handles request directory-list access so
+    their no-delete sharing mode actually prevents rename during publication.
+    Publication errors distinguish destination-open, identity and path failures.
 -   The receipt records both the requested destination policy and resolved path.
 -   The API never deletes artifacts.
 
@@ -636,7 +653,7 @@ the requested `skip` or `abort` policy applies at the missed slot.
 Each sequence owns a unique directory:
 
 ```text
-CS_sequence_2026-08-20_041530_2f8c91a0/
+CS_sequence_<complete-request-id>/
   sequence.json.partial
   frame_000001_combined.png
   frame_000001_left.png
@@ -664,8 +681,8 @@ The final manifest includes:
 -   start/end times and frame counters;
 -   scheduled, acquired, written, dropped, failed, and cancelled counts;
 -   one child record per scheduled ordinal;
--   source/fallback, dimensions, format, colour contract, path, byte size, and
-    optional SHA-256 for every artifact;
+-   source/fallback, dimensions, format, colour contract, sequence-relative
+    path, byte size, and SHA-256 custody for every artifact;
 -   backpressure, failure, cancellation, and warning details;
 -   preview packaging request and outcome.
 
@@ -679,6 +696,16 @@ in-memory warning only. The schema requires child warning/error arrays and the
 actual view, dimensions, format, and colour contract for every committed frame
 artifact. A missing required final manifest is `failed` or `failed_partial`; it
 is never reported as completion with a warning.
+
+The parent receipt and every partial or final manifest carry the same frozen,
+fully expanded sequence object in `effective`. Capture settings remain nested
+under `effective.capture`; they are not substituted for the sequence object in
+manifest output.
+
+Frame artifact paths are strict descendants of the sequence directory and are
+published relative to that directory. Consumers must reject rooted paths,
+traversal, reparse-point escapes, request-identity mismatches, and artifacts
+whose current size or SHA-256 differs from the final manifest.
 
 ### Optional video packaging
 
@@ -1088,3 +1115,169 @@ The screenshot API and sequence feature are complete when:
 -   legacy sequence settings migrate and are no longer inert;
 -   contract schemas, tests, documentation, null-HMD qualification, and physical-
     HMD qualification agree with the shipped implementation.
+
+## Consecutive native-region bursts
+
+For temporal quality, opt into `sequence.burst`. Ordinary still PNG and
+streamed sequence behavior remain available. The same burst descriptor is
+accepted by CSX and Open Shaders:
+
+```json
+"burst": {
+    "maximumBytes": 536870912,
+    "regions": [
+        { "x": 564, "y": 712, "width": 384, "height": 256 },
+        { "x": 944, "y": 712, "width": 384, "height": 256 },
+        { "x": 1128, "y": 1040, "width": 384, "height": 256 }
+    ]
+}
+```
+
+Coordinates above only illustrate the descriptor for a sufficiently large
+eye image. Select center, mask-boundary and periphery rectangles from the
+full native reference for the actual projection; do not assume those
+example positions track the FOV mask on every machine. The coordinates are
+integer pixels relative to each oriented submission, applied identically
+to both eyes. All regions must have equal widths. Each eye's regions stack
+vertically in array order; VR places the left atlas before the right atlas.
+There is no scaling, filtering or padding. The example yields 768 x 768
+pixels containing six 384 x 256 tiles. Bounds, orientation, source
+dimensions and region definitions remain in the manifest.
+
+Use explicit `frameCount` (1–240), `useSettings: false`, `game_frames`,
+`intervalFrames: 1`, one `side_by_side` output in VR (`source_native` on
+SE/AE), SDR PNG or BMP, and `fallback: reject`. Keep the frame manifest
+enabled. Omit `failurePolicy` for a shared request: the burst always stops
+acquisition on failure regardless of the ordinary sequence default.
+Additional output cropping, resizing and clipboard export are unavailable
+in this mode. Bursts require exclusive ownership through finalization.
+
+Only cropped GPU copies are collected during acquisition. Readback and
+PNG/BMP encoding start after acquisition ends; saved images use the same
+existing encoders and verified publication paths as ordinary captures.
+Admission checks the entire raw payload before allocating any textures.
+Its ceiling is 512 MiB, with 128 MiB per frame and at most eight regions;
+native texture and region bounds are also checked at acquisition. These
+are resource bounds, not wall-clock deadlines. Driver allocation padding,
+metadata and bounded readback/encoder scratch space are additional memory.
+Acquisition does not wait for the disk or encoder to make room.
+
+The receipt and final manifest expose `continuity`: observed first/last
+engine frames, acquired/requested counts, `failure`, and `complete`.
+Every acquired frame must advance the engine counter and, in VR, the
+compositor cycle by exactly one. A missing or incompatible eye, source
+change, pause after capture begins, readback failure or failed publication
+prevents qualification. Early stop retains acquired images but cannot
+qualify an incomplete requested burst. Require final manifest publication,
+all requested images and `continuity.complete == true` together; image
+count or a successful start response alone is insufficient. Memory owned
+by each frame is released during drain; receipts retain metadata only.
+
+For a compact comparison, preserve one full stereo reference at each
+existing viewpoint, then initially capture two seconds: 0.5 seconds of
+stationary detail, a one-second repeatable pan, and 0.5 seconds of stationary
+recovery. At a measured 60 rendered FPS this is 30 + 60 + 30 = 120 frames.
+Three 384 x 256 regions per eye consume 283,115,520 raw bytes per viewpoint
+(270 MiB, about 1.70 GB over six viewpoints), before lossless compression.
+This is an initial evidence budget, not a claim that all temporal artifacts
+settle within two seconds. Extend only the affected phase if the saved
+samples show an unsettled trail, insufficient motion or an unresolved
+fluctuation; do not routinely repeat the entire viewpoint or capture at
+the 240-frame ceiling. Stabilize camera and history before acquisition.
+
+Both builds require an explicit burst frame count. Choose it from actual
+rendered cadence, not the nominal HMD refresh rate, and match motion speed
+and phase durations between builds. The selected frame count ends source
+acquisition; it is not an encoding, publication or command timeout. Keep
+requested raw bytes within the advertised bound; reduce region dimensions
+if the chosen cadence would exceed it. Retain acquisition timestamps and
+correlated DevBench camera actions for phase boundaries. Match the original
+settings, fixed HMD pose, viewpoint, game time and weather.
+
+Validate the first short burst's continuity, stereo orientation, crop
+locations and publication before proceeding to the other viewpoints. Reuse
+that valid burst. Do not repeatedly capture long full-frame sequences or
+include image collection in a performance benchmark. Consecutive counters
+do not prove negligible capture overhead or uniform wall-clock cadence;
+inspect timestamps before comparing shimmer, ghosting and stereo history.
+Runtime qualification on VR and one flat runtime remains necessary.
+
+DevBench already supports capture-provider registration through
+`RegisterToolExtension("capture", key, ...)`, with correlated `outputPath`,
+`requestId` and `capture.ready` completion. Its base `capture` accepts
+`golden`, `threshold` and normalized `regions`; replay accepts per-checkpoint
+`goldens`. Reuse those facilities and existing matching reference images
+instead of creating another golden-sample registry. Full-frame goldens
+and burst atlases have different layouts and must not be compared directly.
+
+CSX registers the native Screenshot provider as `kind: "communityshaders"`
+on DevBench build 10500 or newer. Discover it using
+`capture {"kind":"providers"}`. It captures a full same-cycle stereo PNG
+in VR or native desktop PNG on SE/AE through the existing screenshot queue.
+The host's exact absolute output path is retained; existing files are
+refused and publication never overwrites or silently chooses another name.
+Completion carries the host request ID, dimensions, size and SHA-256 from
+the committed-file receipt through `capture.ready`. Failure and cancellation
+cannot report a successful reference. The provider reports
+`uiExcluded: false`; hide the HUD/menu explicitly for matching references.
+Use the base capture tool's `golden`, `threshold` and `regions` arguments
+or replay checkpoint `goldens` for DevBench's existing scoring.
+
+### Burst and golden-provider validation (2026-09-30)
+
+The universal SE/AE/VR DLL built with Tracy and DevBench enabled from the
+implementation worktree based on `2467ba77cbfc1ed886a062cdea27b4f031b864ba`.
+The isolated build disabled automatic deployment and used cached dependencies.
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/c930b --config Release --target CommunityShaders screenshot_native_png_test screenshot_manifest_snapshot_test screenshot_settings_test screenshot_api_policy_test screenshot_capture_present_test --parallel 8
+ctest --test-dir build/c930b -C Release -R Screenshot --output-on-failure
+```
+
+All eight screenshot tests passed. Coverage includes native atlas pixel
+identity under all four orientations, bounds and memory budgets, frame/cycle
+gaps, terminal publication requirements, Unicode reference paths and
+failure/cancellation receipts. Existing atomic-storage and capture/dispatch
+checks passed. The settings extraction harness now includes the production
+capture-descriptor exception instead of depending on a missing declaration.
+The shared burst policy is byte-identical to the OS implementation.
+
+The adversarial/DRY pass checked source pairing, allocation limits, worker
+ownership, cancellation, exact host filenames, callback lock boundaries and
+normal PNG publication. The provider reuses the queue and committed-file
+receipt; neither the encoder nor the terminated Win32 rename buffer changed.
+Path conversion is shared through `Util::PathToUtf8`, including publication
+logging. An unchanged deferral state no longer wakes the encoder each frame.
+
+Scoped hooks, discovery JSON parsing and sequence-manifest schema validation
+passed. The request schema retains its existing layout to avoid unrelated
+whole-file formatting; its new burst definition was parsed and reviewed.
+No runtime images, golden scores, sustained-cadence measurements or capture
+overhead measurements were produced. VR and one flat runtime still need
+in-game qualification with these DLLs before temporal comparisons are valid.
+
+The follow-up adversarial pass made golden captures use the burst path's
+strict native-source checks: single-sample SDR8, valid submitted bounds,
+same-frame/cycle eyes, compatible dimensions and no desktop-source fallback
+or HDR tonemapping. Ordinary still captures retain their existing behavior.
+Comparison guidance starts with a two-second cropped burst after history
+stabilization, extending only an unresolved phase instead of recording at
+the maximum frame count. No publication deadline is derived from its length.
+
+Native bursts and golden outputs also retain display-encoded bytes when
+an sRGB texture tag reaches DirectXTex conversion. The production helper
+changes format metadata before the existing SDR writer; ordinary capture
+conversion is unchanged. `ScreenshotNativePng` verifies exact PNG and BMP
+pixel round trips across RGBA/BGRA and UNORM/sRGB sources (4,096 pixels),
+and rejects HDR input. The existing NUL-terminated atomic publisher remains
+unchanged. The focused CMake target addition keeps the surrounding legacy
+formatting intact; CMake regeneration and the new target build passed.
+
+### Retrying rejected commands
+
+A failed dispatch with `error.retryable: true`, including temporary capture
+`busy` responses, is not retained in the completed command cache. Retry
+with the same arguments, `clientId` and `commandId` after the temporary
+condition clears. Successful commands and non-retryable failures remain
+cached; retries of accepted captures return their receipt without starting
+another capture. Concurrent identical commands remain `command_in_progress`.

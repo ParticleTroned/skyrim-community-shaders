@@ -95,6 +95,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
 	enabled,
+	useAmbientEffectLighting,
 	dayStartHour,
 	nightStartHour,
 	transitionHours,
@@ -1239,6 +1240,7 @@ namespace
 	json MakeBasePresetJson(const AdaptiveBrightness::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
 	{
 		return {
+			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
 			{ "globalProfile", a_settings.globalProfile },
 			{ "dayStartHour", a_settings.dayStartHour },
 			{ "nightStartHour", a_settings.nightStartHour },
@@ -1370,6 +1372,7 @@ namespace
 			if (const auto it = migratedPreset.find("globalProfile"); it != migratedPreset.end() && it->is_object())
 				importedSettings.globalProfile = it->get<AdaptiveBrightness::ProfileSettings>();
 
+			importedSettings.useAmbientEffectLighting = GetOptionalBool(migratedPreset, "useAmbientEffectLighting", false);
 			importedSettings.dayStartHour = GetOptionalFloat(migratedPreset, "dayStartHour", importedSettings.dayStartHour);
 			importedSettings.nightStartHour = GetOptionalFloat(migratedPreset, "nightStartHour", importedSettings.nightStartHour);
 			importedSettings.transitionHours = GetOptionalFloat(migratedPreset, "transitionHours", importedSettings.transitionHours);
@@ -1709,6 +1712,7 @@ json AdaptiveBrightness::CapturePerformanceSettingsState() const
 {
 	return {
 		{ "enabled", settings.enabled },
+		{ "useAmbientEffectLighting", settings.useAmbientEffectLighting },
 		{ "globalProfile", settings.globalProfile }
 	};
 }
@@ -2067,6 +2071,12 @@ void AdaptiveBrightness::DrawLightingSettings(
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Master lighting adjustment for this %s layer.", a_globalLayer ? "global" : "profile");
 
+	if (a_globalLayer) {
+		ImGui::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped("Replaces weather lighting on effect meshes and sky statics with ambient light, including IBL when enabled, and shadowed directional light. Effect and Sky Static Brightness still apply. This global switch is independent of detailed lighting controls.");
+	}
+
 	if (!a_showAdvancedControls)
 		return;
 
@@ -2087,12 +2097,12 @@ void AdaptiveBrightness::DrawLightingSettings(
 	ImGui::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent.");
-	ImGui::SliderFloat("Weather Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat("Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales the current weather's Effect Lighting color. One preserves weather and editor colors; the Effects lighting multiplier remains independent.");
+		ImGui::Text("Scales weather or ambient/directional effect lighting. One preserves brightness; the Effects lighting multiplier remains independent.");
 	ImGui::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales the current weather's Sky Statics color. One preserves weather and editor colors.");
+		ImGui::Text("Scales weather or ambient/directional sky-static lighting. One preserves brightness.");
 	ImGui::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them.");
@@ -3778,7 +3788,10 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	data.cloudSaturation = effectiveSettings.cloudSaturation;
 	data.fogIntensity = effectiveSettings.fogIntensity;
 	data.sunGlareIntensity = effectiveSettings.sunGlareIntensity;
+	data.useAmbientEffectLighting = IsRuntimeEnabled() && settings.useAmbientEffectLighting;
 	data.skyStaticTransparency = effectiveSettings.skyStaticTransparency;
+	data.effectBrightness = effectiveSettings.effectBrightness;
+	data.skyStaticBrightness = effectiveSettings.skyStaticBrightness;
 	data.contrast = effectiveSettings.contrast;
 	data.saturation = effectiveSettings.saturation;
 	data.ambientMult = effectiveSettings.ambientMult;

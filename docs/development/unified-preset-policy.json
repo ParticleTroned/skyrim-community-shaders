@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "CED7DE5F900534A9C3FE8CF2434F20E5E508506079B4F2F9ACD8BAE7826B027E"
+        "sha256": "90D2684CC6FCFCEE5AD5738A6A9C455ECAFCCE793A780A4D6DA11466D4E573F0"
     },
     "runtimeSettingsContract": {
         "revision": 8,
-        "sourceTreeSha256": "CAFADE36CC3E111F9BE48B60E1EF3312BAAA7928E0F3213AD0014941DB71586A",
+        "sourceTreeSha256": "6AB8B64B47A5D16A525CD56F71923EE2B62A3CCDCA154C207687EB86B5456227",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -631,6 +631,7 @@
     ],
     "validation": {
         "stalePaths": [
+            ["Skylighting", "EnableFastProbeSampling"],
             ["Advanced", "Background Compiler Threads"],
             ["Advanced", "Compiler Threads"],
             ["VR", "EnableCurrentFrameDepthCulling"],

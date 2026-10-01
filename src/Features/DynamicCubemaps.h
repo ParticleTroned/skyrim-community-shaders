@@ -139,7 +139,7 @@ public:
 	{
 		uint EnabledCreator = false;
 		uint EnabledSSR = true;
-		uint CubemapResolution = kPerformanceCubemapResolution;
+		uint CubemapResolution = REL::Module::IsVR() ? kPerformanceCubemapResolution : kQualityCubemapResolution;
 		uint pad0;
 		float4 CubemapColor{ 1.0f, 1.0f, 1.0f, 0.0f };
 	};
@@ -257,7 +257,7 @@ private:
 	static uint32_t SanitizeCubemapResolution(uint32_t a_resolution);
 	void RefreshActiveCubemapResolution();
 
-	uint32_t activeCubemapResolution = kPerformanceCubemapResolution;
-	uint32_t activeCubemapMipLevels = std::bit_width(kPerformanceCubemapResolution);
+	uint32_t activeCubemapResolution = settings.CubemapResolution;
+	uint32_t activeCubemapMipLevels = std::bit_width(activeCubemapResolution);
 	bool cubemapResolutionLocked = false;
 };

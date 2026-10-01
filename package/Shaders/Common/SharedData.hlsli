@@ -222,7 +222,7 @@ namespace SharedData
 		float4 OcclusionSHBasis4Pi;
 
 		float3 PosOffset;  // cell origin in camera model space
-		uint FastSamplingMode;
+		uint PosOffsetPadding;
 		uint3 ArrayOrigin;  // xyz: array origin
 		uint Enabled;
 		int4 ValidMargin;
@@ -328,9 +328,10 @@ namespace SharedData
 		float cloudSaturation;
 		float fogIntensity;
 		float sunGlareIntensity;
-		float weatherColorPadding;
+		uint useAmbientEffectLighting;
 		float skyStaticTransparency;
-		float2 pad;
+		float effectBrightness;
+		float skyStaticBrightness;
 	};
 
 	struct LinearLightingSettings

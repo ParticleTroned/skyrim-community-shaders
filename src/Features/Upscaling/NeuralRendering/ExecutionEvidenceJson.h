@@ -30,6 +30,21 @@ namespace NeuralRendering::Evidence
 		return { { "fullInput", ExtentJson(value.fullInput) }, { "input", RectJson(value.input) },
 			{ "fullOutput", ExtentJson(value.fullOutput) }, { "output", RectJson(value.output) } };
 	}
+	/** Frozen layout facts do not claim knowledge of the provider's hidden read footprint. */
+	inline Json NativeLayoutJson(const NativeEvaluationLayout& value)
+	{
+		const auto image = [](const NativeImageRegion& region) {
+			return Json{ { "backingExtent", ExtentJson(region.backing) }, { "validRect", SubrectJson(region.valid) } };
+		};
+		return { { "coordinateDomain", "resource_local_texels" },
+			{ "creationInputExtent", ExtentJson(value.creation.input) }, { "creationOutputExtent", ExtentJson(value.creation.output) },
+			{ "color", image(value.color) }, { "depth", image(value.depth) }, { "motion", image(value.motion) }, { "output", image(value.output) },
+			{ "controlMask", value.controlMask.backing.IsValid() ? image(value.controlMask) : Json(nullptr) },
+			{ "inputInitializationContract", "valid_rectangles_before_evaluation" }, { "nativeReadableFootprint", nullptr },
+			{ "motionSourceUnits", "full_input_normalized" }, { "motionConsumerUnits", "native_guide_pixels" },
+			{ "motionConversion", "native_parameter_scale_once" }, { "motionVectorScale", value.motionVectorScale },
+			{ "featureUpscaling", value.featureUpscaling } };
+	}
 	/** Rectangular support is a conservative enclosure; exact occupancy has its own producer. */
 	inline Json RoiJson(const RoiDescriptor& value)
 	{
@@ -125,6 +140,7 @@ namespace NeuralRendering::Evidence
 				{ "region", r.region }, { "regionIdentity", r.regionIdentity }, { "clusterIdentity", r.clusterIdentity },
 				{ "source", ContextJson(r.context) }, { "nrInput", TextureJson(r.color) }, { "nrOutput", TextureJson(r.output) },
 				{ "roi", RoiJson(r.roi) },
+				{ "nativeLayout", r.nativeLayout ? NativeLayoutJson(*r.nativeLayout) : Json(nullptr) },
 				{ "nrDepthGuide", TextureJson(r.depth) }, { "nrMotionGuide", TextureJson(r.motion) }, { "controlMask", TextureJson(r.controlMask) },
 				{ "depthSourceFormat", r.depthSourceFormat }, { "depthViewFormat", r.depthViewFormat },
 				{ "nrViewport", ViewportJson(r.viewportCrop) }, { "motionVectorScale", { r.motionVectorScaleX, r.motionVectorScaleY } },

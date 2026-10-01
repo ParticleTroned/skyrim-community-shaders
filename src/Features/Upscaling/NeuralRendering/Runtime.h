@@ -2,7 +2,7 @@
 
 #include "ExecutionEvidence.h"
 
-#include "ComputeSubrect.h"
+#include "NativeEvaluationLayout.h"
 
 #include <array>
 #include <atomic>
@@ -114,7 +114,7 @@ namespace NeuralRendering
 
 		bool Probe(const std::filesystem::path& a_explicitPath = {});
 		bool Initialize(ID3D12Device* a_device, const std::filesystem::path& a_dataPath = {});
-		/** Records one Feature 18 evaluation with an optional output-resolution control mask.
+		/** Records one evaluation from explicit creation/valid/storage domains.
 		 *  The optional attempt flag distinguishes pre-evaluation failures. */
 		bool Execute(
 			ID3D12GraphicsCommandList* a_commandList,
@@ -124,18 +124,7 @@ namespace NeuralRendering
 			ID3D12Resource* a_motionVectors,
 			ID3D12Resource* a_output,
 			ID3D12Resource* a_controlMask,
-			std::uint32_t a_colorWidth,
-			std::uint32_t a_colorHeight,
-			std::uint32_t a_guideWidth,
-			std::uint32_t a_guideHeight,
-			std::uint32_t a_outputWidth,
-			std::uint32_t a_outputHeight,
-			std::uint32_t a_controlMaskWidth,
-			std::uint32_t a_controlMaskHeight,
-			const ComputeSubrect& a_outputSubrect,
-			float a_motionVectorScaleX,
-			float a_motionVectorScaleY,
-			bool a_featureUpscaling,
+			const NativeEvaluationLayout& a_layout,
 			const Tuning& a_tuning,
 			bool a_reset,
 			bool* a_evaluationAttempted = nullptr,
@@ -168,23 +157,12 @@ namespace NeuralRendering
 	private:
 		struct FeatureConfiguration
 		{
-			std::uint32_t colorWidth = 0;
-			std::uint32_t colorHeight = 0;
-			std::uint32_t guideWidth = 0;
-			std::uint32_t guideHeight = 0;
-			std::uint32_t outputWidth = 0;
-			std::uint32_t outputHeight = 0;
+			UpscalingDLSS::Extent colorBacking{};
+			NativeCreationExtents creation{};
 			bool featureUpscaling = false;
 			bool valid = false;
 
-			[[nodiscard]] bool Matches(
-				std::uint32_t a_colorWidth,
-				std::uint32_t a_colorHeight,
-				std::uint32_t a_guideWidth,
-				std::uint32_t a_guideHeight,
-				std::uint32_t a_outputWidth,
-				std::uint32_t a_outputHeight,
-				bool a_featureUpscaling) const;
+			[[nodiscard]] bool Matches(const NativeEvaluationLayout& a_layout) const;
 		};
 
 		struct RuntimeExports

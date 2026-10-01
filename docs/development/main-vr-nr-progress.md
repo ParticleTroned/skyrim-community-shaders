@@ -1,5 +1,299 @@
 # main-vr-nr progress and continuation record
 
+## October 1 native layout contract implementation
+
+The user requested item 1 of the reconciled plan below. This source-only
+addition starts from `9fa6ac58620ce6274dafcd3f44a066511de6ef6e`; it does
+not start Task 2 measurements or change the separately qualified context,
+capacity, stereo or temporal policies.
+
+[`NativeEvaluationLayout`](../../src/Features/Upscaling/NeuralRendering/NativeEvaluationLayout.h)
+separates native creation input/output extents from resource-local valid
+color, depth, motion, output and optional control-mask rectangles and their
+backing extents. It reuses `ComputeSubrect`, outward `MapComputeSubrect`,
+`ViewportCrop` motion conversion and existing feature-upscaling policy.
+Source, color and history identities remain with the existing transaction.
+
+Renderer validation builds the layout once from the admitted ROI. Resource
+keys use its backing extents; color/depth/motion copies use its valid
+rectangles; native execution consumes that same layout. Native creation
+uses its explicit creation extents, with the existing dimension-based
+handle-reuse key. Moving or shrinking valid work does not change that key.
+The existing full-coordinate adapter still requires creation dimensions
+to equal the corresponding backing capacity. This makes the distinction
+explicit without enabling a bucketed or compact production layout.
+
+Validation retains the existing physical resource, format, single-sample,
+device, tuning and crop checks. The shared native boundary rejects
+overflow/out-of-bounds rectangles, inconsistent depth/motion grids,
+outward-mapping phase drift, control-mask mismatch, nonfinite/nonpositive
+motion scales and unqualified creation layouts before a native call.
+Full-input-normalized motion keeps its full-eye guide-pixel scale, applied
+once through the native parameter. No new color/model motion consumer or
+unused conversion helper is introduced. Invalid temporal crop history
+still resets rather than being clamped into validity.
+
+Opt-in execution/replay evidence now freezes `nativeLayout` and labels
+motion units and the required input-initialization domain. Unknown native
+read footprints and absent layouts serialize as null. Offline validation
+checks a layout against its own physical descriptors and full-input motion
+domain. Delayed joins reject changed or missing layouts when either record
+carries them, while old records without the field remain supported. The
+existing DevBench schema description documents the addition. Replay uses
+the same layout adapter and includes its header dependencies in source
+provenance.
+
+Production HLSL, native parameter values, allocation sizes, evaluated
+rectangles, padding, context counts, history policy and saved defaults are
+unchanged. No GPU dispatch/copy, query/readback, synchronization, hot-path
+clock or diagnostic allocation was added. Existing bridge/capture guards
+still own serialization and retained evidence. Required layout data is
+rendering data, not production diagnostic instrumentation. Measured
+performance neutrality and native output equivalence remain unqualified.
+
+Registered regression additions cover:
+
+-   Native creation versus valid/backing dimensions; odd/nonzero outward
+    color/guide mapping; unchanged full-eye motion conversion; malformed
+    and overflowing rectangles, incompatible creation, bad scales and
+    control masks; crop movement/shrink and invalid history continuity.
+-   Frozen layout serialization, unknown footprints and delayed layout
+    replacement/removal, including compatibility with older evidence.
+-   Actual ColorPrepare/ColorReconstruct shaders with identical valid data
+    in three backing sizes, two origins, finite/NaN spare texels, boundary
+    edits and shrink/translation while retaining old texture contents.
+    Source padding is poisoned independently, and writes outside the new
+    valid output must preserve the previous contents. Existing exact
+    post-filter selection, alpha and Lighting-preservation fixtures remain.
+-   Actual depth-guide shader with nonzero valid origins, odd extents and
+    poisoned unused storage at two backing sizes. This is not a new typed
+    copy optimization or evidence about the native provider's read halo.
+
+The adversarial review found and corrected three validation/tooling gaps:
+
+-   The shrink fixture cleared retained textures before the smaller pass,
+    so it did not exercise stale-data isolation. It now leaves old prepared,
+    native and result texels intact and updates only the new native region.
+-   Equal but contradictory native layouts could pass the offline join.
+    Validation now checks creation/backing/valid geometry, motion units and
+    full-input scale against the same record. Tests cover both standalone
+    and matching delayed records, legacy absence and explicit control masks.
+-   Replay source identity omitted transitive project headers defining the
+    layout, policies and evidence structures. The existing hash/configure
+    dependency list now includes them; the input test requires the layout
+    header set. No parallel provenance mechanism was introduced.
+
+Review source checks passed **11/11 commands**: three CMake integration
+contracts, 46 Python cases, bridge-on/off preprocessing across the existing
+10 current-context and six lifetime units, preset verification and
+`git diff --check`. A source comparison confirmed all 53 ordered native
+parameter assignments retain their baseline expressions after mapping
+the explicit fields/aliases. Scoped whitespace, line-ending, clang-format
+and Markdown hooks passed; YAML, Gersemi and screenshot-schema hooks had
+no matching files. Initial formatting corrections are retained in the
+logs. The review also checked Python syntax and the complete project-local
+header dependency closure from the native layout/runtime/interop headers.
+Evidence and exact commands are under
+`build/validation/nr-layout-review-20261001/source-checks.json` with adjacent
+parameter-parity, dependency audit and pre-commit records. The original
+implementation checks remain under `nr-layout-20261001-source`.
+These checks do not compile C++.
+
+Unrelated adapter-logging/provenance edits were excluded from this review
+and commit scope. The user-owned Open Shaders note remains untracked and
+its SHA-256 is unchanged.
+
+No C++/WARP regression, DLL, shader, replay executable or AIO was built or
+run for this change. The earlier 215-test producer and archive remain the
+pre-change baseline, not validation or packaging of this implementation.
+The user's explicit-build restriction remains in force. Installation,
+native/HMD testing, performance measurement and pushes were not performed.
+The user subsequently authorized the adversarial fixes and scoped commit.
+The next build should run the registered layout, evidence, replay-input and
+character WARP tests with the complete local suite, followed by the
+authorized Task 2 campaign; no native capacity/quality claim follows from
+these source checks alone.
+
+## October 1 updated-plan reconciliation
+
+This is a documentation and source assessment requested after the DevBench
+AIO build. The supplied task boxes are proposed work, not an instruction to
+execute them in this turn. No implementation, build, benchmark, game
+control, installation, commit or push was performed for this assessment.
+
+The three October 1 inputs are
+`CSX_main-vr-nr_Codex_tasks_2026-10-01.txt`,
+`OpenNR_all_branches_CSX_review_2026-10-01.md`, and
+`CSX_main-vr-nr_all_tasks_consolidated_2026-10-01.md`, supplied from the
+user's Downloads directory. All fourteen task boxes in the text file match
+the consolidated document after whitespace normalization; they are one
+plan, not two sets of implementation requests. Their SHA-256 identities,
+in that order, are:
+
+```text
+1543d2d978609a1bd604c7dd1b1664f58d214495da20eba7811d7f9676785d2f
+366d9ac48942d08b3672573a5340c7d03dfb3c009d92cf118f26391faa36dd66
+e513a01b6c0826a1143be9ab1bfe234388f7998b4722dc4baf4dce648eee550b
+```
+
+### Actual continuation point
+
+The supplied plan scopes its CSX status to `b80f0b2ca`, before our Task 3
+implementation. Current `main-vr-nr` is
+`9fa6ac58620ce6274dafcd3f44a066511de6ef6e`: it includes Task 3 groundwork
+at `7982bcb34`, the coherent prepared-selection follow-up at `5b733df8c`,
+the main-VR merge at `96cdb86c0`, and both subsequent build corrections.
+Consequently, "Task 3 not implemented; start 3A" is historical status,
+not the current continuation instruction. The new requirements warrant
+a focused addition to the implemented contract and tests.
+
+Local `main-VR` through `79a61dc18` is an ancestor: `HEAD..main-VR` contains
+zero commits. The cached `origin/main-vr-nr` remains `b80f0b2ca` and local
+NR is 32 commits ahead, zero behind; no fresh remote inventory is claimed.
+The primary checkout remains on `main-vr-nr`. Existing worktrees and the
+user-owned untracked Open Shaders note are preserved.
+
+The latest AIO's completed validation supersedes the pending compiled
+gates in the earlier September 30 and October 1 entries below:
+
+-   Producer source: `9fa6ac58620ce6274dafcd3f44a066511de6ef6e`.
+-   Build ID: `700882c727d85e8312a947ec412e987a1b5d2b9d5a6b736d20c7fd7fd6d1f143`.
+-   Universal Release; DevBench bridge ON, Tracy OFF, deployment OFF.
+-   `tools/validate-local.ps1` passed **215/215**, zero failed, skipped,
+    disabled or missing tests, plus preset and DLL/manifest checks. This
+    includes both prepared-selection variants and the character WARP
+    reconstruction/final-selection regression.
+-   Evidence: `build/validation/nr-aio-96cdb86c0-20261001/validation-final/`.
+    These are the retained build results, not tests rerun in this review.
+-   Archive: `dist/CSX_AIO-main-vr-nr-9fa6ac586-DevBench-20261001-700882c727d8.7z`.
+    Its adjacent receipt records all 385 extracted files matching staging.
+    The manifest's dirty flag identifies the untracked Open Shaders note,
+    not uncommitted implementation; the note is not packaged.
+
+The archive has not been installed by this task. Installed/runtime identity
+and fresh-game acceptance of this producer remain unverified. Historical
+VR functional passes do not prove the independent device-hang issue fixed,
+new HMD fidelity, or performance neutrality of the latest producer.
+
+The committed [Task 2 report](main-vr-nr-native-replay.md) still has zero
+qualified A/B/C native cost samples. The normal local capture directory,
+`C:/Users/quartus/Documents/My Games/Skyrim VR/SKSE/NRReplay`, is absent.
+This bounded check does not prove that no transferred bundle exists
+elsewhere. The supplied documents contain no new CSX native inputs/results.
+Earlier live timings remain useful historical evidence, but their drift
+and changed views did not resolve the area-versus-cost question.
+
+### Findings checked against current source
+
+-   `RoiDescriptor`, preparation, renderer validation, allocation and commit
+    already carry and consume the five roles. Current production still
+    requires disjoint provider/ownership rectangles. Current-context C is
+    bridge-only and default-off; overlapping read halos and equal-size
+    stereo evaluation remain unqualified.
+-   `Runtime::Execute` creates native features from the supplied full
+    color/guide/output dimensions and evaluates mapped subrectangles.
+    Its creation dimensions are not yet a separately expressed contract
+    from backing capacity and current valid rectangles. Existing execution
+    evidence records texture extent, work rectangle and motion scale;
+    extend it with missing creation/valid-domain facts, not another
+    transaction or profiler system. Retain today's actual dimensions first.
+-   `ColorReconstructCS` already clamps its neighborhood to logical
+    `RegionSize` and applies `RegionOffset` for native/prepared loads.
+    Character final composition already uses exact integer loads and
+    avoids native reads when the character weight is zero. These paths
+    should be preserved. Existing poison/nonzero-origin tests do not by
+    themselves qualify all consumers across multiple backing capacities,
+    shrink-without-reallocation and unequal guide/color grids.
+-   `BuildMotionVectorPixelScale` already retains full-eye input dimensions
+    when a crop is taken; `dlss_viewport_crop_test.cpp` checks that rule.
+    OpenNR's motion corrections therefore do not establish the same bug
+    here. Audit each actual consumer and extend unequal-grid/origin tests
+    before changing conversions. Invalid temporal history must still be
+    rejected, not clamped into validity.
+-   `CopyDepthBatchLocked` currently uses a crop-bounded shader dispatch.
+    A semantically identical typed-depth copy is a Task 5 candidate, not
+    an already measured saving. Require encoding, SRV/storage format,
+    source, crop and sample-layout equivalence before adding a fast path.
+    Existing preparation/color passes already use subrectangles; do not
+    describe all CSX overhead as full-frame work without measurements.
+
+The supplied donor pins are OpenNR main
+`9b6340870f3910d81917f167245885b50216654f` and adaptive
+`b272d732bd22d3ae6e320e03a5f06957492b916d`, under
+`runtime/open-shaders/`. This assessment uses the supplied review for donor
+findings; attempted retrieval of three pinned primary files returned cache
+misses. It is not a new independent all-branch OpenNR audit. No donor
+speedup, native capacity limit or headset acceptance is inherited.
+
+### Revised order and completion criteria
+
+1. **Task 3A/3B addition, with only missing Task 1 evidence.** Make native
+   creation input/output extents, each valid color/depth/motion/output
+   rectangle and backing extents explicit at the existing adapter boundary.
+   Validate containment, overflow, format, phase and consumer motion units.
+   Preserve current creation/evaluation dimensions, defaults, history,
+   context count, padding, pixel density and output. Extend existing CPU
+   and shader fixtures with identical valid content in different storage
+   sizes, nonzero origins, odd ratios, finite/NaN spare storage and shrink
+   without reallocation. Change sampling only where a specific tested
+   mismatch is established. No new diagnostic clocks, readbacks, waits or
+   GPU passes; additional diagnostics stay bridge/capture-gated. Native
+   capacity invariance is a separate measurement, not a shader-test claim.
+
+2. **Task 2: explain the cost floor with controlled input.** The existing
+   AIO remains useful as the pre-change baseline when installation/testing
+   is authorized. Verify the actual producer and capture full initialized
+   native inputs through the existing replay service; partial character
+   crops and PNGs are not valid inputs for that workflow. At fixed source
+   content/density, vary evaluated area/shape, full versus compact creation
+   capacity, one/two calls, and reset/cold/continuous policy independently.
+   Check nonzero edits, unwritten/poisoned output and quality as well as
+   native timings. Compare native cost with in-game preparation, copies,
+   waits and composition using existing transaction telemetry. Repeated
+   baseline-variant-baseline brackets, including reversed order, address
+   drift; automatic cost adoption requires both adjacent valid baselines.
+   Keep typical/tail cost separate from attainable floor and isolated
+   replay separate from game throughput. No new benchmark framework.
+
+3. **Tasks 4-7: remove demonstrated avoidable work.** Extend truthful
+   current empty-proof propagation first, so proven-empty character work
+   avoids native init/create/evaluate where possible. Then target measured
+   sparse GPU work, safe copy reductions, readiness and bounded CPU work.
+   Reuse the prepared-selection coherence already implemented. Shared
+   transport needs independent histories, private outputs, both-API
+   retirement and bounded residency. Track memory pressure separately from
+   unsupported capacity and unsafe provider failure; prevent retry churn
+   without dropping admitted characters. Empty transactions do not prewarm.
+
+4. **Tasks 8-10: qualify count, layout and final-plan cost together.** Four
+   independent regions per eye remains the capacity goal, not a mandate
+   to split every view. Qualify duplicate geometry/handles, all consumers,
+   query limits and failure fallback; eight remains experimental. Compare
+   exact compact creation with retained/bucketed capacity at the same
+   density and cadence. If Task 2 identifies creation capacity as dominant,
+   prioritize a bounded Task 10 experiment with its Task 7 lifetime/pooling
+   prerequisites before broad count expansion. Adopt Task 9's cost policy
+   only from complete, stable measurements of final padded geometry and
+   total work. No donor 54-slot array proves our usable instance capacity.
+
+5. **Tasks 11-13 and optional quality policies.** Equipment categories
+   still need verified actor ownership. Vincent remains supported; audit
+   motion/source domains before aesthetic or temporal changes. Adaptive
+   feather, stereo dimension matching, overlapping context, retained C
+   history, lower density and any staggered reuse require separate quality
+   and cost decisions. Preserve late A/B input, mono A+C, VR A/B/C, exact
+   selection after filtering and current color/Lighting preservation.
+   Promote defaults only after relevant native/in-game/HMD qualification.
+
+Task 3's original groundwork remains implemented and locally tested. Its
+October 1 contract/test additions are pending; full runtime and performance
+qualification remain open. Tasks 1/2 tooling is reused, not rebuilt.
+Task 3C remains an experiment and 3D remains ownership/stereo groundwork.
+Tasks 4-13 retain their IDs and scope. The next requested implementation
+should be the focused addition in item 1; the next performance investigation
+is item 2. The central objective is lower total cost for the same selected
+content, density, quality and update cadence, not merely a smaller mask.
+
 ## October 1 DevBench AIO build correction
 
 The first authorized build of `96cdb86c0` found one remaining reference to

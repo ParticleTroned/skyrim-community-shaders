@@ -67,6 +67,11 @@ class ReplayInput(unittest.TestCase):
         identity = result["buildIdentity"]
         self.assertEqual(identity["executableSha256"], hashlib.sha256(EXECUTABLE.read_bytes()).hexdigest())
         repository = Path(__file__).resolve().parents[2]
+        self.assertTrue({"src/Features/Upscaling/NeuralRendering/" + name + ".h" for name in
+                         ("NativeEvaluationLayout", "Runtime", "D3D12Interop", "ExecutionEvidence",
+                          "ComputeSubrect", "PipelinePolicy", "CharacterMultiRoi", "CharacterComputeSubrect",
+                          "CharacterMaskWorkPolicy", "CharacterRegionPolicy", "RoiDescriptor")}
+                        <= identity["replaySourceSha256"].keys())
         for path, digest in identity["replaySourceSha256"].items():
             self.assertEqual(len(digest), 64)
             if not path.startswith("generated/"):

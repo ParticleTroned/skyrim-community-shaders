@@ -51,6 +51,8 @@ namespace
 			region.motion = { extent, 34, region.color.work, 0, 0 };
 			region.motionVectorScaleX = static_cast<float>(extent.width);
 			region.motionVectorScaleY = static_cast<float>(extent.height);
+			region.nativeLayout = BuildNativeEvaluationLayout(extent, extent, extent, {}, region.output.work,
+				UpscalingDLSS::BuildMotionVectorPixelScale(region.viewportCrop), false);
 			value.plannedPhysicalSlotMask |= 1u << region.physicalSlot;
 		}
 		return value;
@@ -87,6 +89,13 @@ namespace
 						Check(region["roi"]["samplingSupportEnclosurePixels"] == (characters ? Json(128u * 96u) : Json(nullptr)),
 							"support enclosure became provider area or unknown became zero");
 						Check(region["roi"]["temporalEnvelope"].is_null() == !characters, "spatial envelope confused with C native resets");
+						Check(region["nativeLayout"]["creationOutputExtent"] == region["nrOutput"]["capacityGrid"] &&
+								  region["nativeLayout"]["output"]["validRect"] == region["nrOutput"]["work"],
+							"native creation capacity confused with valid evaluation");
+						Check(region["nativeLayout"]["nativeReadableFootprint"].is_null() &&
+								  region["nativeLayout"]["motionVectorScale"] == region["motionVectorScale"] &&
+								  region["nativeLayout"]["controlMask"].is_null(),
+							"native layout invented unavailable facts");
 						Check(region["nrDepthGuide"]["capacityLogicalBytes"].is_null() && region["nrMotionGuide"]["capacityLogicalBytes"] == 0,
 							"unknown logical bytes collapsed to zero");
 						Check(region["timing"]["evaluationGpu"]["microseconds"].is_null() && region["timing"]["depthGuide"]["gpu"]["inclusiveMs"].is_null(),
@@ -109,6 +118,7 @@ namespace
 			descriptor.frame = 999;
 			descriptor.regions[0].color.work = {};
 			descriptor.regions[0].roi = {};
+			descriptor.regions[0].nativeLayout.reset();
 			evidence->Update([&](auto& state) {
 				state.finished = true;
 				state.succeeded = attempted == 4;
@@ -143,6 +153,9 @@ namespace
 			Check(complete["regions"][0]["roi"] == pending["regions"][0]["roi"] &&
 					  complete["regions"][0]["roi"]["inferencePixels"] == 256u * 192u,
 				"later plan replaced frozen ROI roles");
+			Check(complete["regions"][0]["nativeLayout"] == pending["regions"][0]["nativeLayout"] &&
+					  complete["regions"][0]["nativeLayout"]["output"]["validRect"]["width"] == 256,
+				"later capacity or rectangle replaced the frozen native layout");
 			Check(complete["timing"]["wholeFeatureBatchGpuLegacy"]["microseconds"] == 1000 && pending["timing"]["wholeFeatureBatchGpuLegacy"]["microseconds"].is_null(),
 				"whole timer replaced with region sum or sealed snapshot mutated");
 			Check(!complete.contains("gpuTotal") && !complete.contains("presented") && !complete.contains("submitted"), "execution snapshot asserts unowned presentation or timing sum");

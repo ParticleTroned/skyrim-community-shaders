@@ -35,6 +35,21 @@ foreach(_source IN ITEMS
     tools/nr-replay/replay_platform.h
     tools/nr-replay/CMakeLists.txt
     tools/nr-replay/extract_runtime_utilities.cmake
+    src/Features/Upscaling/NeuralRendering/NativeEvaluationLayout.h
+    src/Features/Upscaling/NeuralRendering/Runtime.h
+    src/Features/Upscaling/NeuralRendering/D3D12Interop.h
+    src/Features/Upscaling/NeuralRendering/ExecutionEvidence.h
+    src/Features/Upscaling/NeuralRendering/LifetimeDiagnostics.h
+    src/Features/Upscaling/NeuralRendering/ComputeSubrect.h
+    src/Features/Upscaling/NeuralRendering/PipelinePolicy.h
+    src/Features/Upscaling/NeuralRendering/CharacterMultiRoi.h
+    src/Features/Upscaling/NeuralRendering/CharacterComputeSubrect.h
+    src/Features/Upscaling/NeuralRendering/CharacterMaskWorkPolicy.h
+    src/Features/Upscaling/NeuralRendering/CharacterRegionPolicy.h
+    src/Features/Upscaling/NeuralRendering/RoiDescriptor.h
+    src/Features/Upscaling/DLSSViewportCrop.h
+    src/Utils/PassTimingCapture.h
+    src/Utils/ResourceName.h
     tests/extract_d3d_resource_naming.cmake
     src/Utils/CryptoHash.cpp
     src/Utils/CryptoHash.h)

@@ -112,6 +112,47 @@ def texture_area(texture: dict, required: bool) -> int:
     return area
 
 
+def validate_native_layout(region: dict) -> None:
+    """A frozen layout must agree with the physical descriptors in its own record."""
+    layout = region.get("nativeLayout")
+    if layout is None:
+        return
+    contract = {"coordinateDomain": "resource_local_texels",
+                "inputInitializationContract": "valid_rectangles_before_evaluation",
+                "nativeReadableFootprint": None, "motionSourceUnits": "full_input_normalized",
+                "motionConsumerUnits": "native_guide_pixels", "motionConversion": "native_parameter_scale_once"}
+    exact(contract, layout, tuple(contract), "native layout contract")
+    for role, name in (("color", "nrInput"), ("depth", "nrDepthGuide"), ("motion", "nrMotionGuide"),
+                       ("output", "nrOutput"), ("controlMask", "controlMask")):
+        texture = region.get(name)
+        if role == "controlMask":
+            texture_area(texture, False)
+            if texture["capacityPixels"] == 0:
+                require(role in layout and layout[role] is None, "native layout has an absent control mask")
+                continue
+        image = layout.get(role)
+        expected = {"backingExtent": texture["capacityGrid"], "validRect": texture["work"]}
+        exact(expected, image, tuple(expected), "native layout " + role)
+        require(all(uint(image["backingExtent"].get(k), 16384) for k in ("width", "height"))
+                and all(uint(image["validRect"].get(k), 16384) for k in ("x", "y", "width", "height")),
+                "native layout geometry must use integer texels")
+    expected = {"creationInputExtent": region["nrDepthGuide"]["capacityGrid"],
+                "creationOutputExtent": region["nrOutput"]["capacityGrid"],
+                "motionVectorScale": region.get("motionVectorScale"), "featureUpscaling": region.get("featureUpscaling")}
+    exact(expected, layout, tuple(expected), "native layout creation/motion")
+    require(all(uint(layout[field].get(k), 16384) for field in ("creationInputExtent", "creationOutputExtent")
+                for k in ("width", "height")), "native layout creation extents must use integer texels")
+    scale = layout["motionVectorScale"]
+    require(isinstance(scale, list) and len(scale) == 2 and all(finite(v) and v > 0 for v in scale)
+            and type(layout["featureUpscaling"]) is bool, "native layout motion or upscaling is invalid")
+    viewport = region.get("nrViewport")
+    require(isinstance(viewport, dict) and isinstance(viewport.get("fullInput"), dict),
+            "native layout has no full-input motion domain")
+    require(all(uint(viewport["fullInput"].get(k), 16384) for k in ("width", "height"))
+            and scale == [viewport["fullInput"][k] for k in ("width", "height")],
+            "native layout motion conversion differs from its full-input domain")
+
+
 def validate_characters(evidence: dict) -> None:
     characters = evidence.get("characters", [])
     require(isinstance(characters, list) and len(characters) <= 2, "invalid character evidence collection")
@@ -195,6 +236,7 @@ def validate_envelope(evidence: dict) -> dict[int, dict]:
             for name in ("nrInput", "nrDepthGuide", "nrMotionGuide"):
                 texture_area(region.get(name), attempted)
             area = texture_area(region.get("nrOutput"), attempted)
+            validate_native_layout(region)
             if attempted:
                 count += 1
                 pixels += area
@@ -280,6 +322,7 @@ def join_execution_evidence(acquisition: dict, diagnostics: dict | None = None) 
                     current = delayed_regions.get(region["physicalSlot"])
                     exact(region, current, REGION_DESCRIPTOR, "delayed physical descriptor")
                     optional_exact(region, current, ("roi",), "delayed ROI roles")
+                    optional_exact(region, current, ("nativeLayout",), "delayed native layout")
                     optional_exact(region, current, ("depthSourceFormat", "depthViewFormat"), "delayed depth formats")
                     exact_timing_handles(region.get("timing"), current.get("timing"), "delayed physical region")
             for field in ("sourceStages", "characters"):

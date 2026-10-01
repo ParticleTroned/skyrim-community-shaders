@@ -625,10 +625,12 @@ namespace
 						const auto& eye = frame.eyes[resource.eye];
 						RuntimeExecutionEvidence native;
 						bool attempted = false;
+						const auto nativeLayout = BuildNativeEvaluationLayout(
+							{ width, height }, { guideWidth, guideHeight }, { width, height }, {}, resource.rect,
+							{ true, eye.motionScale[0], eye.motionScale[1] }, eye.featureUpscaling);
 						const bool succeeded = Runtime::Instance().Execute(list, resource.slot,
 							resource.color.resource12.Get(), resource.depth.resource12.Get(), resource.motion.resource12.Get(), resource.output.resource12.Get(), nullptr,
-							width, height, guideWidth, guideHeight, width, height, 0, 0, resource.rect,
-							eye.motionScale[0], eye.motionScale[1], eye.featureUpscaling, tuning, reset, &attempted, &native, &session.interop, i);
+							nativeLayout, tuning, reset, &attempted, &native, &session.interop, i);
 						created += native.createSucceeded ? 1 : 0;
 						evaluated += native.evaluateSucceeded ? 1 : 0;
 						creationCpu += native.createCpuMicroseconds.value_or(0);

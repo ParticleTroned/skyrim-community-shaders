@@ -72,6 +72,22 @@ def character_fixture(envelope, eye=0, *, support=False, reused=False):
     return value
 
 
+def native_layout(region):
+    result = {"coordinateDomain": "resource_local_texels",
+              "inputInitializationContract": "valid_rectangles_before_evaluation",
+              "nativeReadableFootprint": None, "motionSourceUnits": "full_input_normalized",
+              "motionConsumerUnits": "native_guide_pixels", "motionConversion": "native_parameter_scale_once",
+              "creationInputExtent": region["nrDepthGuide"]["capacityGrid"],
+              "creationOutputExtent": region["nrOutput"]["capacityGrid"],
+              "motionVectorScale": region["motionVectorScale"], "featureUpscaling": region["featureUpscaling"]}
+    for role, name in (("color", "nrInput"), ("depth", "nrDepthGuide"), ("motion", "nrMotionGuide"),
+                       ("output", "nrOutput"), ("controlMask", "controlMask")):
+        result[role] = {"backingExtent": region[name]["capacityGrid"], "validRect": region[name]["work"]}
+    if region["controlMask"]["capacityPixels"] == 0:
+        result["controlMask"] = None
+    return copy.deepcopy(result)
+
+
 class TransactionEvidenceTests(unittest.TestCase):
     def test_roi_roles_stay_with_the_frozen_execution(self):
         frozen, delayed = fixture("reduced_resolution")
@@ -230,6 +246,58 @@ class TransactionEvidenceTests(unittest.TestCase):
             mutate(delayed["executionEvidence"]["executions"][0]["regions"][0])
             with self.assertRaisesRegex(tx.TransactionEvidenceError, "delayed physical descriptor"):
                 tx.join_execution_evidence(frozen, delayed)
+
+    def test_native_layout_is_frozen_and_legacy_absence_remains_supported(self):
+        frozen, delayed = fixture()
+        tx.join_execution_evidence(frozen, delayed)
+        for record in (frozen, delayed):
+            region = record["executionEvidence"]["executions"][0]["regions"][0]
+            region["nativeLayout"] = native_layout(region)
+        tx.join_execution_evidence(frozen, delayed)
+        for mutate in (lambda r: r["nativeLayout"]["creationOutputExtent"].update(width=16),
+                       lambda r: r["nativeLayout"]["output"]["validRect"].update(x=2),
+                       lambda r: r["nativeLayout"]["motionVectorScale"].__setitem__(0, 3),
+                       lambda r: r.update(nativeLayout=None), lambda r: r.pop("nativeLayout")):
+            for side in (0, 1):
+                pair = copy.deepcopy((frozen, delayed))
+                mutate(pair[side]["executionEvidence"]["executions"][0]["regions"][0])
+                with self.assertRaisesRegex(tx.TransactionEvidenceError, "native layout"):
+                    tx.join_execution_evidence(*pair)
+        for record in (frozen, delayed):
+            record["executionEvidence"]["executions"][0]["regions"][0]["nativeLayout"] = None
+        tx.join_execution_evidence(frozen, delayed)
+
+    def test_native_layout_cannot_contradict_its_own_physical_record(self):
+        for mutate in (lambda r: r["nativeLayout"]["creationOutputExtent"].update(width=16),
+                       lambda r: r["nativeLayout"]["depth"]["validRect"].update(x=1),
+                       lambda r: r["nativeLayout"]["motionVectorScale"].__setitem__(0, 3),
+                       lambda r: r["nativeLayout"].update(controlMask={}),
+                       lambda r: r["nativeLayout"].update(featureUpscaling=True),
+                       lambda r: r["nativeLayout"].update(motionConversion="already_scaled"),
+                       lambda r: r["nativeLayout"]["output"]["validRect"].update(x=False),
+                       lambda r: r["nativeLayout"]["creationOutputExtent"].update(width=8.0),
+                       lambda r: r["nativeLayout"].pop("nativeReadableFootprint"),
+                       lambda r: r.update(nativeLayout=[]),
+                       lambda r: r["nrViewport"]["fullInput"].update(width=16)):
+            frozen, delayed = fixture()
+            for record in (frozen, delayed):
+                region = record["executionEvidence"]["executions"][0]["regions"][0]
+                region["nativeLayout"] = native_layout(region)
+                mutate(region)
+            with self.assertRaisesRegex(tx.TransactionEvidenceError, "native layout"):
+                tx.join_execution_evidence(frozen, delayed)
+            with self.assertRaisesRegex(tx.TransactionEvidenceError, "native layout"):
+                tx.join_execution_evidence(frozen)
+
+    def test_native_layout_supports_control_mask_and_full_eye_motion_scale(self):
+        frozen, delayed = fixture()
+        for record in (frozen, delayed):
+            region = record["executionEvidence"]["executions"][0]["regions"][0]
+            region["controlMask"] = texture()
+            region["nrViewport"]["fullInput"] = {"width": 32, "height": 32}
+            region["motionVectorScale"] = [32, 32]
+            region["nativeLayout"] = native_layout(region)
+        tx.join_execution_evidence(frozen, delayed)
 
     def test_mixed_empty_eye_and_reordered_delayed_regions(self):
         frozen, _ = fixture()

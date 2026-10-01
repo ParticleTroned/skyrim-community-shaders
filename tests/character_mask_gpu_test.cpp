@@ -183,6 +183,11 @@ namespace
 			Check(device_->CreateComputeShader(blendBlob->GetBufferPointer(),
 					  blendBlob->GetBufferSize(), nullptr, &blendShader_),
 				"Create blend shader");
+			auto depthBlob = Compile(blendPath.parent_path() / "NeuralRendering/CopyDepthGuideCS.hlsl");
+			Check(device_->CreateComputeShader(depthBlob->GetBufferPointer(), depthBlob->GetBufferSize(), nullptr,
+					  &depthShader_),
+				"Create depth guide shader");
+			Util::SetResourceName(depthShader_.Get(), "CharacterMaskTest::CopyDepthGuide");
 			const auto colorRoot = shaderDirectory.parent_path().parent_path() / "features/Neural Rendering/Shaders";
 			PackageIncludes colorIncludes(shaderDirectory, colorRoot);
 			for (const auto& [name, shader] : std::array{
@@ -338,36 +343,102 @@ namespace
 			}
 		}
 
+		void DepthCapacityInvariance()
+		{
+			const std::array<std::uint32_t, 4> rect{ 3, 5, 13, 9 };
+			for (const auto extent : { std::array{ 19u, 17u }, std::array{ 37u, 29u } }) {
+				const auto width = extent[0], height = extent[1];
+				for (const float poison : { 12345.0f, std::numeric_limits<float>::quiet_NaN() }) {
+					std::vector<float> input(width * height, poison), unused(width * height, -1.0f);
+					for (unsigned y = 0; y < rect[3]; ++y)
+						for (unsigned x = 0; x < rect[2]; ++x)
+							input[(rect[1] + y) * width + rect[0] + x] = 0.125f + static_cast<float>(x + y) / 64.0f;
+					auto source = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
+						D3D11_BIND_SHADER_RESOURCE, input, "DepthValidSource");
+					auto output = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
+						D3D11_BIND_UNORDERED_ACCESS, unused, "DepthValidOutput");
+					auto cb = Constants(rect);
+					context_->CSSetShader(depthShader_.Get(), nullptr, 0);
+					context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
+					context_->CSSetShaderResources(0, 1, source.srv.GetAddressOf());
+					context_->CSSetUnorderedAccessViews(0, 1, output.uav.GetAddressOf(), nullptr);
+					context_->Dispatch((rect[2] + 7) / 8, (rect[3] + 7) / 8, 1);
+					context_->ClearState();
+					const auto actual = Read<float>(output.resource.Get());
+					for (unsigned y = 0; y < height; ++y)
+						for (unsigned x = 0; x < width; ++x) {
+							const bool valid = x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3];
+							Require(actual[y * width + x] == (valid ? input[y * width + x] : -1.0f),
+								"Depth copy depends on unused backing pixels or writes outside its valid domain");
+						}
+				}
+			}
+		}
+
 		std::vector<Color> Reconstruct(const NeuralColorTest::Constants& constants,
-			unsigned width, unsigned height, Color baseline, float poison)
+			unsigned width, unsigned height, Color baseline, float poison, bool shrink = false, bool editEdges = false)
 		{
 			const std::vector<Color> unused(width * height, Color{ poison, poison, poison, poison });
 			auto base = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
 				D3D11_BIND_SHADER_RESOURCE, std::vector<Color>(width * height, baseline), "ColorBaseline");
 			auto prepared = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
 				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, unused, "ColorPrepared");
-			auto cb = Constants(constants);
-			const auto dispatch = [&](ID3D11ComputeShader* shader, std::array<ID3D11ShaderResourceView*, 3> inputs,
-									  ID3D11UnorderedAccessView* output) {
-				context_->CSSetShader(shader, nullptr, 0);
-				context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
-				context_->CSSetShaderResources(0, 3, inputs.data());
-				context_->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
-				context_->Dispatch((constants.width + 7) / 8, (constants.height + 7) / 8, 1);
-				context_->ClearState();
-			};
-			dispatch(prepareShader_.Get(), { base.srv.Get(), nullptr, nullptr }, prepared.uav.Get());
-			auto native = Read<Color>(prepared.resource.Get());
-			const auto edited = (constants.y + 9) * width + constants.x + 8;
-			for (unsigned channel = 0; channel < 3; ++channel)
-				native[edited][channel] *= 1.5f;
-			native[edited][3] = 0.99f;
 			auto neural = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
-				D3D11_BIND_SHADER_RESOURCE, native, "ColorNeural");
+				D3D11_BIND_SHADER_RESOURCE, unused, "ColorNeural");
 			auto result = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
 				D3D11_BIND_UNORDERED_ACCESS, unused, "ColorReconstructed");
-			dispatch(reconstructShader_.Get(), { base.srv.Get(), neural.srv.Get(), prepared.srv.Get() }, result.uav.Get());
-			return Read<Color>(result.resource.Get());
+			auto cb = Constants(constants);
+			const auto run = [&](const NeuralColorTest::Constants& current) {
+				context_->UpdateSubresource(cb.Get(), 0, nullptr, &current, 0, 0);
+				const auto dispatch = [&](ID3D11ComputeShader* shader, std::array<ID3D11ShaderResourceView*, 3> inputs,
+										  ID3D11UnorderedAccessView* output) {
+					context_->CSSetShader(shader, nullptr, 0);
+					context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
+					context_->CSSetShaderResources(0, 3, inputs.data());
+					context_->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+					context_->Dispatch((current.width + 7) / 8, (current.height + 7) / 8, 1);
+					context_->ClearState();
+				};
+				dispatch(prepareShader_.Get(), { base.srv.Get(), nullptr, nullptr }, prepared.uav.Get());
+				auto native = Read<Color>(prepared.resource.Get());
+				for (unsigned y = 0; y < current.height; ++y)
+					for (unsigned x = 0; x < current.width; ++x) {
+						if ((x == 8 && y == 9) || (editEdges && (x == 0 || y == 0 || x + 1 == current.width || y + 1 == current.height))) {
+							auto& edited = native[(current.y + y) * width + current.x + x];
+							for (unsigned channel = 0; channel < 3; ++channel)
+								edited[channel] *= 1.5f;
+							edited[3] = 0.99f;
+						}
+					}
+				const D3D11_BOX valid{ current.x, current.y, 0, current.x + current.width, current.y + current.height, 1 };
+				context_->UpdateSubresource(neural.resource.Get(), 0, &valid, native.data() + current.y * width + current.x,
+					width * static_cast<UINT>(sizeof(Color)), 0);
+				dispatch(reconstructShader_.Get(), { base.srv.Get(), neural.srv.Get(), prepared.srv.Get() }, result.uav.Get());
+			};
+			if (shrink) {
+				auto previous = constants;
+				previous.x = previous.y = 0;
+				previous.width = width;
+				previous.height = height;
+				run(previous);
+			}
+			// Keep previous prepared/native/output texels while narrowing the source's valid domain.
+			auto source = unused;
+			for (unsigned y = 0; y < constants.height; ++y)
+				std::fill_n(source.begin() + y * width, constants.width, baseline);
+			context_->UpdateSubresource(base.resource.Get(), 0, nullptr, source.data(), width * static_cast<UINT>(sizeof(Color)), 0);
+			const auto before = Read<Color>(result.resource.Get());
+			run(constants);
+			auto actual = Read<Color>(result.resource.Get());
+			for (unsigned y = 0; y < height; ++y)
+				for (unsigned x = 0; x < width; ++x)
+					if (x >= constants.width || y >= constants.height)
+						for (unsigned channel = 0; channel < 4; ++channel) {
+							const auto expected = before[y * width + x][channel];
+							Require(std::isnan(expected) ? std::isnan(actual[y * width + x][channel]) : actual[y * width + x][channel] == expected,
+								"Reconstruction wrote outside the current valid rectangle");
+						}
+			return actual;
 		}
 
 		std::vector<Color> Blend(const BlendConstants& constants,
@@ -628,7 +699,7 @@ namespace
 
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
-		ComPtr<ID3D11ComputeShader> maskShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_;
+		ComPtr<ID3D11ComputeShader> maskShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_, depthShader_;
 	};
 
 	void FullImageAndReducedSelection(Harness& gpu)
@@ -816,6 +887,48 @@ namespace
 	{
 		Require(std::abs(static_cast<int>(actual) - expected) <= 1,
 			std::string(message) + ": got " + std::to_string(actual) + ", expected " + std::to_string(expected));
+	}
+
+	void ReconstructionCapacityInvariance(Harness& gpu)
+	{
+		const Color baseline{ 0.25f, 0.125f, 0.0625f, 0.375f };
+		NeuralColorTest::Constants color;
+		color.mode = 2;
+		color.transform = 1;
+		color.exposure = 1.25f;
+		color.detail = 1.3f;
+		color.appearance = 0.2f;
+		color.lightingPreservation = 0.35f;
+		std::vector<Color> reference;
+		for (const auto capacity : { std::array{ 25u, 29u }, std::array{ 47u, 43u }, std::array{ 73u, 57u } }) {
+			const auto width = capacity[0], height = capacity[1];
+			for (const auto origin : { std::array{ 1u, 1u }, std::array{ 5u, 7u } }) {
+				color.x = origin[0];
+				color.y = origin[1];
+				for (const float poison : { 12345.0f, std::numeric_limits<float>::quiet_NaN() }) {
+					for (bool shrink : { false, true }) {
+						const auto output = gpu.Reconstruct(color, width, height, baseline, poison, shrink, true);
+						std::vector<Color> valid;
+						for (unsigned y = 0; y < height; ++y)
+							for (unsigned x = 0; x < width; ++x) {
+								const auto& pixel = output[y * width + x];
+								if (x < color.width && y < color.height) {
+									for (float value : pixel)
+										Require(std::isfinite(value), "Backing padding contaminated reconstructed valid pixels");
+									Require(pixel[3] == baseline[3], "Backing capacity changed reconstructed alpha");
+									valid.push_back(pixel);
+								}
+							}
+						if (reference.empty()) {
+							reference = valid;
+							Require(reference[9 * color.width + 8][0] > baseline[0], "Capacity fixture must contain a neural edit");
+						} else {
+							Require(valid == reference, "Selected output depends on origin, spare storage or previous valid extent");
+						}
+					}
+				}
+			}
+		}
 	}
 
 	void ReconstructionThenExactSelection(Harness& gpu)
@@ -1158,6 +1271,8 @@ int wmain(int argc, wchar_t** argv)
 			"Expected production shader directory and optional --final-ldr-only");
 		Harness gpu(argv[1]);
 		FullImageAndReducedSelection(gpu);
+		gpu.DepthCapacityInvariance();
+		ReconstructionCapacityInvariance(gpu);
 		ReconstructionThenExactSelection(gpu);
 		if (argc == 3) {
 			FinalLdrColorModes(gpu);

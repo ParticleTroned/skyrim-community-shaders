@@ -27,7 +27,7 @@ foreach(_policy IN ITEMS
 endforeach()
 
 foreach(_test IN ITEMS character_settings character_multi_roi character_mask_roi
-    compute_subrect roi_descriptor frame_telemetry_ring dlss_viewport_crop foveated_region_plan)
+    compute_subrect roi_descriptor native_evaluation_layout frame_telemetry_ring dlss_viewport_crop foveated_region_plan)
     add_controller_test(${_test}_test ${_test} tests/${_test}_test.cpp)
 endforeach()
 target_link_libraries(character_settings_test PRIVATE nlohmann_json::nlohmann_json)

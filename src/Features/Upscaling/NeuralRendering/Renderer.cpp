@@ -667,9 +667,7 @@ namespace NeuralRendering
 			std::uintptr_t controlMaskIdentity = 0;
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
 			RoiDescriptor roi{};
-			ComputeSubrect colorSubrect{};
-			ComputeSubrect guideSubrect{};
-			ComputeSubrect controlMaskSubrect{};
+			NativeEvaluationLayout nativeLayout{};
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
 		};
@@ -1017,24 +1015,6 @@ namespace NeuralRendering
 				{ a_args.outputWidth, a_args.outputHeight });
 			!violation.empty())
 			return fail(std::string(violation));
-		a_resources.colorSubrect = MapComputeSubrect(
-			a_resources.roi.inferenceContext,
-			a_args.outputWidth,
-			a_args.outputHeight,
-			a_args.colorWidth,
-			a_args.colorHeight);
-		a_resources.guideSubrect = MapComputeSubrect(
-			a_resources.roi.inferenceContext,
-			a_args.outputWidth,
-			a_args.outputHeight,
-			a_args.guideWidth,
-			a_args.guideHeight);
-		if (!a_resources.colorSubrect.Fits(
-				a_args.colorWidth, a_args.colorHeight) ||
-			!a_resources.guideSubrect.Fits(
-				a_args.guideWidth, a_args.guideHeight)) {
-			return fail("the Feature 18 compute rectangle could not be mapped to its inputs");
-		}
 		const bool hasControlMask = a_args.controlMask != nullptr;
 		if (hasControlMask &&
 			(!validDimension(a_args.controlMaskWidth) ||
@@ -1048,18 +1028,6 @@ namespace NeuralRendering
 			(a_args.controlMaskWidth != a_args.outputWidth ||
 				a_args.controlMaskHeight != a_args.outputHeight)) {
 			return fail("the control mask must exactly match the Feature 18 output extent");
-		}
-		if (hasControlMask) {
-			a_resources.controlMaskSubrect = MapComputeSubrect(
-				a_resources.roi.inferenceContext,
-				a_args.outputWidth,
-				a_args.outputHeight,
-				a_args.controlMaskWidth,
-				a_args.controlMaskHeight);
-			if (!a_resources.controlMaskSubrect.Fits(
-					a_args.controlMaskWidth, a_args.controlMaskHeight)) {
-				return fail("the Feature 18 compute rectangle could not be mapped to the control mask");
-			}
 		}
 		if (!a_args.viewportCrop.MatchesEvaluationExtents(
 				a_args.guideWidth,
@@ -1076,6 +1044,13 @@ namespace NeuralRendering
 			UpscalingDLSS::BuildMotionVectorPixelScale(a_args.viewportCrop);
 		if (!motionVectorScale.valid)
 			return fail("Feature 18 motion-vector crop metadata is invalid");
+		a_resources.nativeLayout = BuildNativeEvaluationLayout(
+			{ a_args.colorWidth, a_args.colorHeight }, { a_args.guideWidth, a_args.guideHeight },
+			a_resources.roi.allocationCapacity, { a_args.controlMaskWidth, a_args.controlMaskHeight },
+			a_resources.roi.inferenceContext, motionVectorScale, a_args.featureUpscaling);
+		if (!a_resources.nativeLayout.color.valid.Fits(a_args.colorWidth, a_args.colorHeight) ||
+			!a_resources.nativeLayout.depth.valid.Fits(a_args.guideWidth, a_args.guideHeight))
+			return fail("the Feature 18 compute rectangle could not be mapped to its inputs");
 		if (!IsFiniteTuning(a_args.tuning))
 			return fail("Feature 18 tuning values are outside their validated ranges");
 		if (a_args.tuning.uiCorrection)
@@ -1213,14 +1188,14 @@ namespace NeuralRendering
 		}
 
 		a_resources.resourceKey = {
-			.colorWidth = a_args.colorWidth,
-			.colorHeight = a_args.colorHeight,
-			.guideWidth = a_args.guideWidth,
-			.guideHeight = a_args.guideHeight,
-			.outputWidth = a_resources.roi.allocationCapacity.width,
-			.outputHeight = a_resources.roi.allocationCapacity.height,
-			.controlMaskWidth = hasControlMask ? a_args.controlMaskWidth : 0,
-			.controlMaskHeight = hasControlMask ? a_args.controlMaskHeight : 0,
+			.colorWidth = a_resources.nativeLayout.color.backing.width,
+			.colorHeight = a_resources.nativeLayout.color.backing.height,
+			.guideWidth = a_resources.nativeLayout.depth.backing.width,
+			.guideHeight = a_resources.nativeLayout.depth.backing.height,
+			.outputWidth = a_resources.nativeLayout.output.backing.width,
+			.outputHeight = a_resources.nativeLayout.output.backing.height,
+			.controlMaskWidth = a_resources.nativeLayout.controlMask.backing.width,
+			.controlMaskHeight = a_resources.nativeLayout.controlMask.backing.height,
 			.colorFormat = a_resources.color.desc.Format,
 			.motionFormat = a_resources.motionVectors.desc.Format,
 			.outputFormat = a_resources.output.desc.Format,
@@ -2039,7 +2014,7 @@ namespace NeuralRendering
 		a_args.front().context->CSSetShader(shader, nullptr, 0);
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			const auto& roi = a_resources[index].guideSubrect;
+			const auto& roi = a_resources[index].nativeLayout.depth.valid;
 			const CopyDepthGuideConstants constants{
 				.offsetX = roi.baseX,
 				.offsetY = roi.baseY,
@@ -2364,16 +2339,16 @@ namespace NeuralRendering
 					region.context = args.executionContext;
 					region.characterEvidence = args.characterEvidence;
 					region.roi = resource.roi;
-					region.color = DescribeExecutionTexture(args.colorWidth, args.colorHeight, resource.resourceKey.colorFormat, resource.colorSubrect);
-					region.depth = DescribeExecutionTexture(args.guideWidth, args.guideHeight, DXGI_FORMAT_R32_FLOAT, resource.guideSubrect);
-					region.motion = DescribeExecutionTexture(args.guideWidth, args.guideHeight, resource.resourceKey.motionFormat, resource.guideSubrect);
+					region.color = DescribeExecutionTexture(args.colorWidth, args.colorHeight, resource.resourceKey.colorFormat, resource.nativeLayout.color.valid);
+					region.depth = DescribeExecutionTexture(args.guideWidth, args.guideHeight, DXGI_FORMAT_R32_FLOAT, resource.nativeLayout.depth.valid);
+					region.motion = DescribeExecutionTexture(args.guideWidth, args.guideHeight, resource.resourceKey.motionFormat, resource.nativeLayout.motion.valid);
 					region.output = DescribeExecutionTexture(args.outputWidth, args.outputHeight, resource.resourceKey.outputFormat, resource.roi.inferenceContext);
 					if (args.controlMask)
-						region.controlMask = DescribeExecutionTexture(args.controlMaskWidth, args.controlMaskHeight, resource.resourceKey.controlMaskFormat, resource.controlMaskSubrect);
+						region.controlMask = DescribeExecutionTexture(args.controlMaskWidth, args.controlMaskHeight, resource.resourceKey.controlMaskFormat, resource.nativeLayout.controlMask.valid);
 					region.viewportCrop = args.viewportCrop;
-					const auto scale = UpscalingDLSS::BuildMotionVectorPixelScale(args.viewportCrop);
-					region.motionVectorScaleX = scale.x;
-					region.motionVectorScaleY = scale.y;
+					region.nativeLayout = resource.nativeLayout;
+					region.motionVectorScaleX = resource.nativeLayout.motionVectorScale[0];
+					region.motionVectorScaleY = resource.nativeLayout.motionVectorScale[1];
 					region.depthSourceFormat = static_cast<std::uint32_t>(resource.depth.desc.Format);
 					region.depthViewFormat = static_cast<std::uint32_t>(resource.depthViewFormat);
 					region.characterVisualIsolation = args.characterVisualIsolation;
@@ -2506,7 +2481,7 @@ namespace NeuralRendering
 					a_args.front().context,
 					slots[index]->color.resource11.Get(),
 					resources[index].color.texture.Get(),
-					resources[index].colorSubrect);
+					resources[index].nativeLayout.color.valid);
 				if (execution)
 					RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].color.workLogicalBytes);
 			}
@@ -2553,7 +2528,7 @@ namespace NeuralRendering
 				a_args.front().context,
 				slots[index]->motionVectors.resource11.Get(),
 				resources[index].motionVectors.texture.Get(),
-				resources[index].guideSubrect);
+				resources[index].nativeLayout.motion.valid);
 			if (execution)
 				RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].motion.workLogicalBytes);
 		}
@@ -2579,7 +2554,7 @@ namespace NeuralRendering
 					a_args.front().context,
 					slots[index]->controlMask.resource11.Get(),
 					resources[index].controlMask.texture.Get(),
-					resources[index].controlMaskSubrect);
+					resources[index].nativeLayout.controlMask.valid);
 				Increment(snapshot_.counters.controlMaskCopies);
 				if (execution)
 					RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].controlMask.workLogicalBytes);
@@ -2745,8 +2720,6 @@ namespace NeuralRendering
 				// No NGX call, inference mask or inference timer is reported for a copy.
 				continue;
 			}
-			const auto motionVectorScale =
-				UpscalingDLSS::BuildMotionVectorPixelScale(args.viewportCrop);
 			SetActiveFeatureSlotLocked(args.featureSlot);
 			const bool forcedReset = forcedHistoryReset[index];
 			const bool discontinuousReset = discontinuousHistoryReset[index];
@@ -2793,18 +2766,7 @@ namespace NeuralRendering
 				slot.motionVectors.resource12.Get(),
 				slot.output.resource12.Get(),
 				args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
-				args.colorWidth,
-				args.colorHeight,
-				args.guideWidth,
-				args.guideHeight,
-				args.outputWidth,
-				args.outputHeight,
-				args.controlMaskWidth,
-				args.controlMaskHeight,
-				resources[index].roi.inferenceContext,
-				motionVectorScale.x,
-				motionVectorScale.y,
-				args.featureUpscaling,
+				resources[index].nativeLayout,
 				args.tuning,
 				effectiveReset,
 				&evaluationAttempted,
@@ -3043,16 +3005,16 @@ namespace NeuralRendering
 		for (size_t index = 0; index < args.size(); ++index) {
 			const auto& value = args[index];
 			const auto& rect = resources[index].roi.inferenceContext;
-			const auto& guideRect = resources[index].guideSubrect;
-			const auto& colorRect = resources[index].colorSubrect;
+			const auto& guideRect = resources[index].nativeLayout.depth.valid;
+			const auto& colorRect = resources[index].nativeLayout.color.valid;
 			batch.supported &= value.featureSlot < 4 && !value.controlMask && value.tuning.useAutoMask &&
 			                   value.colorWidth == value.outputWidth && value.colorHeight == value.outputHeight &&
 			                   guideRect.baseX == 0 && guideRect.baseY == 0 && guideRect.width == value.guideWidth && guideRect.height == value.guideHeight &&
 			                   colorRect.baseX == 0 && colorRect.baseY == 0 && colorRect.width == value.colorWidth && colorRect.height == value.colorHeight &&
 			                   rect.baseX == 0 && rect.baseY == 0 && rect.width == value.outputWidth && rect.height == value.outputHeight &&
 			                   value.executionContext.sourceTransactionId == context.sourceTransactionId;
-			const auto scale = UpscalingDLSS::BuildMotionVectorPixelScale(value.viewportCrop);
-			batch.eyes.push_back({ .slot = value.featureSlot, .outputSubrect = rect, .motionVectorScale = { scale.x, scale.y }, .featureUpscaling = value.featureUpscaling, .color = slots[index]->color.resource11.Get(), .depth = slots[index]->depth.resource11.Get(), .motion = slots[index]->motionVectors.resource11.Get(), .output = slots[index]->output.resource11.Get(), .metadata = { { "source", Evidence::ContextJson(value.executionContext) }, { "viewport", Evidence::ViewportJson(value.viewportCrop) }, { "callerReset", value.reset }, { "synchronizedHistoryReset", value.synchronizedHistoryReset } } });
+			const auto& nativeLayout = resources[index].nativeLayout;
+			batch.eyes.push_back({ .slot = value.featureSlot, .outputSubrect = rect, .motionVectorScale = nativeLayout.motionVectorScale, .featureUpscaling = value.featureUpscaling, .color = slots[index]->color.resource11.Get(), .depth = slots[index]->depth.resource11.Get(), .motion = slots[index]->motionVectors.resource11.Get(), .output = slots[index]->output.resource11.Get(), .metadata = { { "source", Evidence::ContextJson(value.executionContext) }, { "viewport", Evidence::ViewportJson(value.viewportCrop) }, { "nativeLayout", Evidence::NativeLayoutJson(nativeLayout) }, { "callerReset", value.reset }, { "synchronizedHistoryReset", value.synchronizedHistoryReset } } });
 		}
 		Replay::OfferBatch(first.device, first.context, batch);
 	} catch (...) {

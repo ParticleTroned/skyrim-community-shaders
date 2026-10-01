@@ -1021,16 +1021,10 @@ namespace NeuralRendering
 		}
 	}
 
-	bool Runtime::FeatureConfiguration::Matches(
-		std::uint32_t a_colorWidth, std::uint32_t a_colorHeight,
-		std::uint32_t a_guideWidth, std::uint32_t a_guideHeight,
-		std::uint32_t a_outputWidth, std::uint32_t a_outputHeight,
-		bool a_featureUpscaling) const
+	bool Runtime::FeatureConfiguration::Matches(const NativeEvaluationLayout& a_layout) const
 	{
-		return valid && colorWidth == a_colorWidth && colorHeight == a_colorHeight &&
-		       guideWidth == a_guideWidth && guideHeight == a_guideHeight &&
-		       outputWidth == a_outputWidth && outputHeight == a_outputHeight &&
-		       featureUpscaling == a_featureUpscaling;
+		return valid && colorBacking == a_layout.color.backing &&
+		       creation == a_layout.creation && featureUpscaling == a_layout.featureUpscaling;
 	}
 
 	Runtime& Runtime::Instance()
@@ -1473,13 +1467,7 @@ namespace NeuralRendering
 		ID3D12Resource* a_color, ID3D12Resource* a_depth,
 		ID3D12Resource* a_motionVectors, ID3D12Resource* a_output,
 		ID3D12Resource* a_controlMask,
-		std::uint32_t a_colorWidth, std::uint32_t a_colorHeight,
-		std::uint32_t a_guideWidth, std::uint32_t a_guideHeight,
-		std::uint32_t a_outputWidth, std::uint32_t a_outputHeight,
-		std::uint32_t a_controlMaskWidth, std::uint32_t a_controlMaskHeight,
-		const ComputeSubrect& a_outputSubrect,
-		float a_motionVectorScaleX, float a_motionVectorScaleY,
-		bool a_featureUpscaling, const Tuning& a_tuning, bool a_reset,
+		const NativeEvaluationLayout& a_layout, const Tuning& a_tuning, bool a_reset,
 		bool* a_evaluationAttempted,
 		RuntimeExecutionEvidence* a_evidence,
 		D3D12Interop* a_timingInterop,
@@ -1491,30 +1479,13 @@ namespace NeuralRendering
 			*a_evidence = {};
 		std::scoped_lock lock(mutex_);
 		const bool hasControlMask = a_controlMask != nullptr;
-		const bool controlMaskContractValid =
-			hasControlMask ?
-				(!a_tuning.useAutoMask &&
-					a_controlMaskWidth != 0 &&
-					a_controlMaskHeight != 0 &&
-					a_controlMaskWidth == a_outputWidth &&
-					a_controlMaskHeight == a_outputHeight) :
-				(a_tuning.useAutoMask &&
-					a_controlMaskWidth == 0 &&
-					a_controlMaskHeight == 0);
+		const bool controlMaskContractValid = hasControlMask != a_tuning.useAutoMask;
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
 			return false;
-		const auto resolvedOutputSubrect = a_outputSubrect.IsValid() ?
-		                                       a_outputSubrect :
-		                                       BuildCenteredComputeSubrect(
-												   a_outputWidth,
-												   a_outputHeight,
-												   a_tuning.singleSubrectScale);
+		const auto layoutViolation = GetNativeEvaluationLayoutViolation(a_layout, hasControlMask);
 		if (status_ != RuntimeStatus::Initialized || !a_commandList ||
 			a_slot >= kFeatureSlotCount || !a_color || !a_depth ||
-			!a_motionVectors || !a_output || !a_colorWidth || !a_colorHeight ||
-			!a_guideWidth || !a_guideHeight || !a_outputWidth || !a_outputHeight ||
-			!std::isfinite(a_motionVectorScaleX) || a_motionVectorScaleX <= 0.0f ||
-			!std::isfinite(a_motionVectorScaleY) || a_motionVectorScaleY <= 0.0f ||
+			!a_motionVectors || !a_output || !layoutViolation.empty() ||
 			!std::isfinite(a_tuning.intensity) ||
 			!std::isfinite(a_tuning.localToneStrength) ||
 			!std::isfinite(a_tuning.localStructureStrength) ||
@@ -1522,13 +1493,12 @@ namespace NeuralRendering
 			!std::isfinite(a_tuning.singleSubrectScale) ||
 			a_tuning.singleSubrectScale < 0.25f ||
 			a_tuning.singleSubrectScale > 1.0f ||
-			!resolvedOutputSubrect.Fits(a_outputWidth, a_outputHeight) ||
 			a_tuning.uiCorrection || !controlMaskContractValid) {
 			SetFailureLocked(
 				RuntimeStatus::FeatureEvaluateFailed,
 				RuntimeFailureStage::FeatureEvaluate,
 				controlMaskContractValid ?
-					"Feature 18 evaluation arguments are invalid" :
+					(layoutViolation.empty() ? "Feature 18 evaluation arguments are invalid" : std::string(layoutViolation)) :
 					"Feature 18 control-mask presence, dimensions, and automatic-mask mode are inconsistent",
 				static_cast<std::uint32_t>(E_INVALIDARG));
 			return false;
@@ -1557,9 +1527,7 @@ namespace NeuralRendering
 			return false;
 		}
 
-		const bool configurationChanged = !featureConfigurations_[a_slot].Matches(
-			a_colorWidth, a_colorHeight, a_guideWidth, a_guideHeight,
-			a_outputWidth, a_outputHeight, a_featureUpscaling);
+		const bool configurationChanged = !featureConfigurations_[a_slot].Matches(a_layout);
 		if (featureHandles_[a_slot] && configurationChanged) {
 			if (a_evidence)
 				a_evidence->createReason = "live_configuration_change_rejected";
@@ -1575,24 +1543,24 @@ namespace NeuralRendering
 
 		if (!featureHandles_[a_slot]) {
 			parameters->Reset();
-			parameters->Set("Width", a_outputWidth);
-			parameters->Set("Height", a_outputHeight);
-			parameters->Set("OutWidth", a_outputWidth);
-			parameters->Set("OutHeight", a_outputHeight);
-			parameters->Set("DLSSNR.Width", a_outputWidth);
-			parameters->Set("DLSSNR.Height", a_outputHeight);
-			parameters->Set("DLSSNR.InputWidth", a_guideWidth);
-			parameters->Set("DLSSNR.InputHeight", a_guideHeight);
-			parameters->Set("DLSSNR.OutputWidth", a_outputWidth);
-			parameters->Set("DLSSNR.OutputHeight", a_outputHeight);
-			parameters->Set("DLSSNR.Output.Width", a_outputWidth);
-			parameters->Set("DLSSNR.Output.Height", a_outputHeight);
+			parameters->Set("Width", a_layout.creation.output.width);
+			parameters->Set("Height", a_layout.creation.output.height);
+			parameters->Set("OutWidth", a_layout.creation.output.width);
+			parameters->Set("OutHeight", a_layout.creation.output.height);
+			parameters->Set("DLSSNR.Width", a_layout.creation.output.width);
+			parameters->Set("DLSSNR.Height", a_layout.creation.output.height);
+			parameters->Set("DLSSNR.InputWidth", a_layout.creation.input.width);
+			parameters->Set("DLSSNR.InputHeight", a_layout.creation.input.height);
+			parameters->Set("DLSSNR.OutputWidth", a_layout.creation.output.width);
+			parameters->Set("DLSSNR.OutputHeight", a_layout.creation.output.height);
+			parameters->Set("DLSSNR.Output.Width", a_layout.creation.output.width);
+			parameters->Set("DLSSNR.Output.Height", a_layout.creation.output.height);
 			parameters->Set(
-				"DLSSNR.Scale", static_cast<float>(a_outputWidth) / a_guideWidth);
-			parameters->Set("DLSSNR.Upscaling", a_featureUpscaling ? 1u : 0u);
+				"DLSSNR.Scale", static_cast<float>(a_layout.creation.output.width) / a_layout.creation.input.width);
+			parameters->Set("DLSSNR.Upscaling", a_layout.featureUpscaling ? 1u : 0u);
 			parameters->Set(
 				"DLSSNR.ScalingRatio",
-				static_cast<float>(a_outputWidth) / a_guideWidth);
+				static_cast<float>(a_layout.creation.output.width) / a_layout.creation.input.width);
 			parameters->Set("DLSSNR.Hint.Render.Preset", 0u);
 
 			NVSDK_NGX_Handle* handle = nullptr;
@@ -1629,19 +1597,15 @@ namespace NeuralRendering
 
 			featureHandles_[a_slot] = handle;
 			featureConfigurations_[a_slot] = {
-				.colorWidth = a_colorWidth,
-				.colorHeight = a_colorHeight,
-				.guideWidth = a_guideWidth,
-				.guideHeight = a_guideHeight,
-				.outputWidth = a_outputWidth,
-				.outputHeight = a_outputHeight,
-				.featureUpscaling = a_featureUpscaling,
+				.colorBacking = a_layout.color.backing,
+				.creation = a_layout.creation,
+				.featureUpscaling = a_layout.featureUpscaling,
 				.valid = true,
 			};
 			detail_ = std::format(
 				"Feature 18 created slot={} upscaling={} color={}x{} guides={}x{} output={}x{}",
-				a_slot, a_featureUpscaling, a_colorWidth, a_colorHeight,
-				a_guideWidth, a_guideHeight, a_outputWidth, a_outputHeight);
+				a_slot, a_layout.featureUpscaling, a_layout.color.backing.width, a_layout.color.backing.height,
+				a_layout.creation.input.width, a_layout.creation.input.height, a_layout.creation.output.width, a_layout.creation.output.height);
 			LogOnceLocked(featureCreateLogEmitted_, "create", true);
 			a_reset = true;
 		}
@@ -1651,21 +1615,11 @@ namespace NeuralRendering
 		parameters->Set("DLSSNR.Depth", a_depth);
 		parameters->Set("DLSSNR.MVec", a_motionVectors);
 		parameters->Set("DLSSNR.Output", a_output);
-		const auto colorSubrect = MapComputeSubrect(
-			resolvedOutputSubrect, a_outputWidth, a_outputHeight,
-			a_colorWidth, a_colorHeight);
-		const auto guideSubrect = MapComputeSubrect(
-			resolvedOutputSubrect, a_outputWidth, a_outputHeight,
-			a_guideWidth, a_guideHeight);
-		const auto outputSubrect = resolvedOutputSubrect;
-		const auto controlMaskSubrect = hasControlMask ?
-		                                    MapComputeSubrect(
-												resolvedOutputSubrect,
-												a_outputWidth,
-												a_outputHeight,
-												a_controlMaskWidth,
-												a_controlMaskHeight) :
-		                                    ComputeSubrect{};
+		const auto& colorSubrect = a_layout.color.valid;
+		const auto& guideSubrect = a_layout.depth.valid;
+		const auto& motionSubrect = a_layout.motion.valid;
+		const auto& outputSubrect = a_layout.output.valid;
+		const auto& controlMaskSubrect = a_layout.controlMask.valid;
 		if (hasControlMask) {
 			parameters->Set("DLSSNR.ControlMask", a_controlMask);
 			parameters->Set("DLSSNR.ControlMaskSubrectBaseX", controlMaskSubrect.baseX);
@@ -1681,16 +1635,16 @@ namespace NeuralRendering
 		parameters->Set("DLSSNR.DepthSubrectBaseY", guideSubrect.baseY);
 		parameters->Set("DLSSNR.DepthSubrectWidth", guideSubrect.width);
 		parameters->Set("DLSSNR.DepthSubrectHeight", guideSubrect.height);
-		parameters->Set("DLSSNR.MVecSubrectBaseX", guideSubrect.baseX);
-		parameters->Set("DLSSNR.MVecSubrectBaseY", guideSubrect.baseY);
-		parameters->Set("DLSSNR.MVecSubrectWidth", guideSubrect.width);
-		parameters->Set("DLSSNR.MVecSubrectHeight", guideSubrect.height);
+		parameters->Set("DLSSNR.MVecSubrectBaseX", motionSubrect.baseX);
+		parameters->Set("DLSSNR.MVecSubrectBaseY", motionSubrect.baseY);
+		parameters->Set("DLSSNR.MVecSubrectWidth", motionSubrect.width);
+		parameters->Set("DLSSNR.MVecSubrectHeight", motionSubrect.height);
 		parameters->Set("DLSSNR.OutputSubrectBaseX", outputSubrect.baseX);
 		parameters->Set("DLSSNR.OutputSubrectBaseY", outputSubrect.baseY);
 		parameters->Set("DLSSNR.OutputSubrectWidth", outputSubrect.width);
 		parameters->Set("DLSSNR.OutputSubrectHeight", outputSubrect.height);
-		parameters->Set("DLSSNR.MVecScaleX", a_motionVectorScaleX);
-		parameters->Set("DLSSNR.MVecScaleY", a_motionVectorScaleY);
+		parameters->Set("DLSSNR.MVecScaleX", a_layout.motionVectorScale[0]);
+		parameters->Set("DLSSNR.MVecScaleY", a_layout.motionVectorScale[1]);
 		parameters->Set("DLSSNR.DepthInverted", 0u);
 		parameters->Set("DLSSNR.Enabled", 1u);
 		parameters->Set("DLSSNR.Reset", a_reset ? 1u : 0u);
@@ -1741,9 +1695,9 @@ namespace NeuralRendering
 		failureStage_ = RuntimeFailureStage::None;
 		detail_ = std::format(
 			"Feature 18 evaluated slot={} upscaling={} color={}x{} guides={}x{} output={}x{} controlMask={}x{} subrect=({},{} {}x{}) proxyHits={}",
-			a_slot, a_featureUpscaling, a_colorWidth, a_colorHeight, a_guideWidth,
-			a_guideHeight, a_outputWidth, a_outputHeight, a_controlMaskWidth,
-			a_controlMaskHeight, outputSubrect.baseX, outputSubrect.baseY,
+			a_slot, a_layout.featureUpscaling, a_layout.color.backing.width, a_layout.color.backing.height, a_layout.creation.input.width,
+			a_layout.creation.input.height, a_layout.creation.output.width, a_layout.creation.output.height, a_layout.controlMask.backing.width,
+			a_layout.controlMask.backing.height, outputSubrect.baseX, outputSubrect.baseY,
 			outputSubrect.width, outputSubrect.height, lastPathProxyHits_);
 		LogOnceLocked(featureEvaluateLogEmitted_, "evaluate", true);
 		return true;

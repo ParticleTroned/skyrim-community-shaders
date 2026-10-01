@@ -36,6 +36,20 @@ Automation may pass `expectedBuildId` to those tools. The operation fails with
 requested producer. Captures and comparisons should preserve the returned
 `producer` object, not infer provenance from the checked-out branch.
 
+## GPU and driver identity
+
+At renderer initialization, `[GPU]` info entries record the active D3D11
+adapter's model, vendor/device IDs, dedicated VRAM in MiB, and Windows
+driver version. The version uses DXGI's four-part Windows driver format;
+it is not the NVIDIA release label or AMD Adrenalin package version.
+See Microsoft's [DXGI driver-version contract](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiadapter-checkinterfacesupport).
+
+The query runs once per process from the shared SE/AE/VR initialization
+hook and is skipped when info logging is disabled. It adds no per-frame
+work, GPU commands, or GPU synchronization.
+Unavailable information is logged with the failing HRESULT; it does not
+abort initialization or trigger retries.
+
 ## Shader caches
 
 Runtime-generated `Info.ini` files record `BuildId`, `ArtifactSHA256`,

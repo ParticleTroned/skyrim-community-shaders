@@ -25,11 +25,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void Skylighting::LoadSettings(json& o_json)
 {
-	const auto previous = settings;
 	settings = o_json;
 	settings.StableSliceCount = std::clamp(settings.StableSliceCount, 1u, 128u);
-	if (previous.EnableIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates || previous.StableSliceCount != settings.StableSliceCount)
-		ResetSkylighting();
 	settings.ProbeGridQuality = std::min(settings.ProbeGridQuality, 2u);
 }
 
@@ -78,7 +75,7 @@ void Skylighting::ClearProbes()
 	probeDataReady = false;
 	sliceCursor = 0;
 	sliceCaptureMask = 0;
-	forcedFullUpdateFrames = 4;
+	forcedFullUpdateFrames = probeHistoryWarmupFrames;
 	lastProbeUpdateCapture = static_cast<uint>(-1);
 	lastOcclusionRenderFrame = static_cast<uint>(-1);
 }
@@ -98,13 +95,10 @@ void Skylighting::DrawSettings()
 	if (ImGui::Combo(T(TKEY("probe_grid"), "Probe Grid"), &selectedGrid, gridNames, 3))
 		settings.ProbeGridQuality = static_cast<uint>(selectedGrid);
 
-	if (ImGui::Checkbox(T(TKEY("incremental_updates"), "Incremental Probe Updates"), &settings.EnableIncrementalProbeUpdates))
-		ResetSkylighting();
+	ImGui::Checkbox(T(TKEY("incremental_updates"), "Incremental Probe Updates"), &settings.EnableIncrementalProbeUpdates);
 	int sliceCount = static_cast<int>(settings.StableSliceCount);
-	if (ImGui::SliderInt(T(TKEY("slice_count"), "Probe Slices per Update"), &sliceCount, 1, 128, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+	if (ImGui::SliderInt(T(TKEY("slice_count"), "Probe Slices per Update"), &sliceCount, 1, 128, "%d", ImGuiSliderFlags_AlwaysClamp))
 		settings.StableSliceCount = static_cast<uint>(sliceCount);
-		ResetSkylighting();
-	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("incremental_tooltip"), "Updates a smaller depth range while stationary. Lower counts reduce update work but take longer to refresh the whole field. Movement and rebuilds update the full grid."));
 
@@ -304,8 +298,14 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	auto cellOrigin = cellID * cellSize;
 	float3 cellIDDiff = previousProbeCell - cellID;
 	pendingProbeCell = cellID;
+	const uint sliceCount = settings.EnableIncrementalProbeUpdates ? std::clamp(settings.StableSliceCount, 1u, probeArrayDims[2]) : 0u;
+	if (activeSliceCount != sliceCount) {
+		activeSliceCount = sliceCount;
+		sliceCursor = 0;
+		sliceCaptureMask = 0;
+	}
 	if (cellIDDiff.x != 0 || cellIDDiff.y != 0 || cellIDDiff.z != 0) {
-		forcedFullUpdateFrames = 4;
+		forcedFullUpdateFrames = std::max(forcedFullUpdateFrames, 4u);
 		sliceCursor = 0;
 		sliceCaptureMask = 0;
 	}
@@ -313,7 +313,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	dispatchSliceCount = probeArrayDims[2];
 	if (settings.EnableIncrementalProbeUpdates && forcedFullUpdateFrames == 0) {
 		dispatchSliceStart = sliceCursor;
-		dispatchSliceCount = std::min(std::clamp(settings.StableSliceCount, 1u, probeArrayDims[2]), probeArrayDims[2] - sliceCursor);
+		dispatchSliceCount = std::min(sliceCount, probeArrayDims[2] - sliceCursor);
 	}
 
 	return {
@@ -392,12 +392,13 @@ void Skylighting::Prepass()
 			context->CSSetShader(updateShader, nullptr, 0);
 			context->Dispatch((probeArrayDims[0] + 7u) >> 3, (probeArrayDims[1] + 7u) >> 3, dispatchSliceCount);
 			lastProbeUpdateCapture = frameCount;
-			if (forcedFullUpdateFrames > 0) {
-				--forcedFullUpdateFrames;
-			} else if (settings.EnableIncrementalProbeUpdates) {
+			if (forcedFullUpdateFrames > 0 || settings.EnableIncrementalProbeUpdates) {
 				sliceCaptureMask |= 1u << (frameCount % 4);
 				if (sliceCaptureMask == 0xFu) {
-					sliceCursor = (dispatchSliceStart + dispatchSliceCount) % probeArrayDims[2];
+					if (forcedFullUpdateFrames > 0)
+						forcedFullUpdateFrames -= std::min(forcedFullUpdateFrames, 4u);
+					else
+						sliceCursor = (dispatchSliceStart + dispatchSliceCount) % probeArrayDims[2];
 					sliceCaptureMask = 0;
 				}
 			}

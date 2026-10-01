@@ -171,6 +171,7 @@ public:
 	};
 
 private:
+	static constexpr uint probeHistoryWarmupFrames = 60;
 	bool HasProbeResources() const;
 	void ClearProbes();
 	bool probeDataReady = false;
@@ -178,7 +179,8 @@ private:
 	float3 pendingProbeCell = {};
 	uint sliceCursor = 0;
 	uint sliceCaptureMask = 0;
-	uint forcedFullUpdateFrames = 4;
+	uint activeSliceCount = 0;
+	uint forcedFullUpdateFrames = probeHistoryWarmupFrames;
 	uint dispatchSliceStart = 0;
 	uint dispatchSliceCount = 0;
 	uint lastProbeUpdateCapture = static_cast<uint>(-1);

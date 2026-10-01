@@ -23,6 +23,14 @@ file(READ
     _upscaling_source
 )
 file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRVendorRelatchPolicy.h"
+    _vendor_relatch_policy
+)
+file(READ
+    "${PROJECT_ROOT}/tests/vr_vendor_relatch_policy_test.cpp"
+    _vendor_relatch_test
+)
+file(READ
     "${PROJECT_ROOT}/src/State.cpp"
     _state_source
 )
@@ -109,6 +117,34 @@ string(FIND
 if(NOT _split_fallback_resolution_position EQUAL -1)
     message(FATAL_ERROR
         "Fallback proof and clear remain split from controller publication"
+    )
+endif()
+
+foreach(_atomic_fallback_contract IN ITEMS
+    "vrStartupRenderScaleNativeFallbackState"
+    "InvalidateStartupNativeFallbackRetry("
+    "TryResolveStartupNativeFallbackAtomic("
+    "CoversStartupNativeFallbackAtomicInvalidation()"
+)
+    string(FIND
+        "${_upscaling_header}\n${_upscaling_source}\n${_vendor_relatch_policy}\n${_vendor_relatch_test}"
+        "${_atomic_fallback_contract}"
+        _atomic_fallback_contract_position
+    )
+    if(_atomic_fallback_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Atomic fallback invalidation contract is missing: ${_atomic_fallback_contract}"
+        )
+    endif()
+endforeach()
+string(FIND
+    "${_upscaling_header}\n${_upscaling_source}"
+    "vrStartupRenderScaleNativeFallbackRestartRequired"
+    _split_fallback_atomic_position
+)
+if(NOT _split_fallback_atomic_position EQUAL -1)
+    message(FATAL_ERROR
+        "Fallback activation and invalidation remain split across atomics"
     )
 endif()
 

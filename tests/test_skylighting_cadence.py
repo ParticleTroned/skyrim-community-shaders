@@ -92,6 +92,47 @@ int main() {
             }
         }
     }
+    for (uint firstFrame : {0u, ~0u - 40u}) {
+        Skylighting s;
+        s.settings.EnableReducedUpdateFrequency = true;
+        s.settings.EnableIncrementalProbeUpdates = true;
+        s.settings.OcclusionUpdateInterval = s.settings.ProbeUpdateInterval = 32;
+        s.ClearProbes();
+        globals::state->frameCount = firstFrame;
+        for (uint i = 0; i < 2; ++i) {
+            ++globals::state->frameCount;
+            s.Prepare();
+            check(s.Capture() && s.Due(), "Recovery must begin without movement");
+            s.CommitUpdate();
+        }
+        const uint remaining = s.forcedFullUpdateFrames;
+        const uint consumedQuadrants = s.sliceCaptureMask;
+        const uint pendingQuadrant = s.nextOcclusionCorner;
+        for (uint i = 0; i < 7; ++i) {
+            ++globals::state->frameCount;
+            s.Prepare();
+            check(s.Capture() && !s.Due(false), "The fixture must interrupt probe consumption");
+            check(s.forcedFullUpdateFrames == remaining && s.sliceCaptureMask == consumedQuadrants &&
+                      s.occlusionCaptureCorner == pendingQuadrant,
+                  "Missed updates must preserve warmup and retry the pending quadrant");
+        }
+        for (uint i = 2; i < Skylighting::probeHistoryWarmupFrames; ++i) {
+            ++globals::state->frameCount;
+            s.Prepare();
+            check(s.Capture() && s.Due(), "Recovery must resume across frame-counter wrap");
+            s.CommitUpdate();
+        }
+        check(s.forcedFullUpdateFrames == 0, "Interrupted warmup must finish after consuming all quadrants");
+        ++globals::state->frameCount;
+        s.Prepare();
+        check(!s.Capture() && !s.Due(), "Capture throttling must resume immediately after recovery");
+        s.settings.EnableIncrementalProbeUpdates = false;
+        ++globals::state->frameCount;
+        check(s.Capture(true), "Movement must bypass capture throttling");
+        s.Prepare(true);
+        check(s.Due() && s.dispatchSliceStart == 0 && s.dispatchSliceCount == 128,
+              "Movement must bypass full-grid probe throttling without discarding history");
+    }
 }
 ''')
 

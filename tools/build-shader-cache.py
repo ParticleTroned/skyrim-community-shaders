@@ -776,7 +776,9 @@ def shader_pack_record_identity(
 class PackagedCompatibilityInventory:
     """Verify exported record identities and the coverage of declared variants."""
 
-    def __init__(self, source_root: Path, declared_variants: list[str]) -> None:
+    def __init__(
+        self, source_root: Path, declared_variants: list[str], *, standard_only: bool = False
+    ) -> None:
         variants = compatibility_variant_manifest(source_root)
         if (
             not isinstance(declared_variants, list)
@@ -785,6 +787,9 @@ class PackagedCompatibilityInventory:
         ):
             raise SystemExit("packaged cache declares an unknown compatibility variant")
         self.variants = {name: variants[name] for name in declared_variants}
+        self.standard_only = standard_only
+        if standard_only and set(self.variants) != {"default"}:
+            raise SystemExit("packaged cache contains excluded Horizon Fix compatibility variant")
         self.records: dict[str, dict[str, tuple[str, str, str | None, bytes]]] = {}
 
     def inspector(self, file_name: str) -> Callable[[str, str, str, bytes], None]:
@@ -796,6 +801,8 @@ class PackagedCompatibilityInventory:
                 validate_dxbc(bytecode, Path(logical.split("|", 1)[0]).suffix)
             except ValueError as exc:
                 error = str(exc)
+            if self.standard_only:
+                self.identify(logical, exact, metadata_text, error)
             # Only visible records participate in admission; obsolete generations can be ignored.
             records[exact] = (logical, metadata_text, error, hashlib.sha256(bytecode).digest())
 
@@ -824,6 +831,11 @@ class PackagedCompatibilityInventory:
         return matching, (relative, content)
 
     def validate(self, pack_stats: dict[str, dict[str, int | str]]) -> None:
+        if self.standard_only and any(
+            int(pack_stats[name]["recordCount"]) != 0
+            for name in ("Developer.A.csxpack", "Developer.B.csxpack")
+        ):
+            raise SystemExit("standard-only packaged cache contains developer shader records")
         names = ("Optimized.A.csxpack", "Optimized.B.csxpack")
         newest = max(int(pack_stats[name]["generation"]) for name in names)
         visible = {}
@@ -2429,9 +2441,11 @@ def cache_variants_for(profile: CacheProfile) -> tuple[CacheVariant, ...]:
     return (STANDARD_CACHE_VARIANT,)
 
 
-def compile_variants_for(profile: CacheProfile) -> tuple[CacheVariant, ...]:
+def compile_variants_for(
+    profile: CacheProfile, *, include_horizon_fix: bool = True
+) -> tuple[CacheVariant, ...]:
     """Return loose variants required as inputs to the managed pack."""
-    if profile.name == SHIPPED_CACHE_PROFILE.name:
+    if profile.name == SHIPPED_CACHE_PROFILE.name and include_horizon_fix:
         return CACHE_VARIANTS
     return (STANDARD_CACHE_VARIANT,)
 
@@ -2552,7 +2566,8 @@ def validate_cache_archive(
             raise SystemExit(f"packaged {runtime} cache pack manifest must be an object")
         pack_set_id = pack_manifest.get("packSetId")
         inventory = PackagedCompatibilityInventory(
-            source_root, pack_manifest.get("compatibilityVariants")
+            source_root, pack_manifest.get("compatibilityVariants"),
+            standard_only=horizon_variants is False,
         )
         pack_stats = {
             name: validate_shader_pack(
@@ -2590,10 +2605,13 @@ def prepare_cache_archive(
     *,
     profile: CacheProfile = SHIPPED_CACHE_PROFILE,
     source_root: Path = REPO,
+    include_horizon_fix: bool = True,
 ) -> Path:
     """Create a validated candidate archive without changing published output."""
     variants = cache_variants_for(profile)
-    horizon_variants = HORIZON_FIX_CACHE_VARIANT in compile_variants_for(profile)
+    horizon_variants = HORIZON_FIX_CACHE_VARIANT in compile_variants_for(
+        profile, include_horizon_fix=include_horizon_fix
+    )
     archive_name = f"ShaderCache-{runtime}-{safe_label(label)}.7z"
     temporary_archive = workspace / archive_name
     command = [
@@ -2725,13 +2743,15 @@ def build_runtime(
     write_manifest: Callable[..., int],
     profile: CacheProfile,
     distribution_profile: DistributionProfile | None = None,
+    *,
+    include_horizon_fix: bool = True,
 ) -> tuple[Path, dict[str, int], int]:
     runtime_root = workspace / runtime
     shader_contract = shader_contract_identity(
         source_root, DEFAULT_SHADER_CONTRACT_FILES
     )
     shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract))
-    variants = compile_variants_for(profile)
+    variants = compile_variants_for(profile, include_horizon_fix=include_horizon_fix)
     compatibility_variants = compatibility_variant_manifest(source_root)
     has_horizon_variant = HORIZON_FIX_CACHE_VARIANT in variants
     if has_horizon_variant and distribution_profile is None:
@@ -2899,6 +2919,12 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--include-horizon-fix",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include Horizon Fix Water compatibility in the shipped profile (default: included).",
+    )
+    parser.add_argument(
         "--source-root",
         help="Repo checkout to take shaders/configs/version from (default: this repo).",
     )
@@ -3054,6 +3080,7 @@ def main() -> int:
                 write_manifest=write_manifest,
                 profile=profile,
                 distribution_profile=distribution_profile,
+                include_horizon_fix=args.include_horizon_fix,
             )
             archive_candidate = None
             if args.package:
@@ -3067,6 +3094,7 @@ def main() -> int:
                     cmake,
                     profile=profile,
                     source_root=source_root,
+                    include_horizon_fix=args.include_horizon_fix,
                 )
             prepared.append(
                 (

@@ -49,8 +49,8 @@ require rebuilding both caches; desktop-only shader changes require rebuilding
 the SE/AE cache. The compatibility and recovery rules below apply to all three
 game runtimes.
 
-Every shipped SE/AE and VR build compiles standard and Horizon Fix inputs, then
-places both compatible Water variants in one managed `ShaderCache`. Runtime
+By default, shipped SE/AE and VR builds compile standard and Horizon Fix inputs,
+then place both compatible Water variants in one managed `ShaderCache`. Runtime
 registration selects the exact Water record; the installer no longer asks the
 user to choose a Horizon cache. The builder requires the loose inputs to have
 identical permutation inventories and rejects bytecode differences outside
@@ -637,6 +637,40 @@ To generate that cache alone, use `tools/build-shader-cache.py --runtime VR`.
 For the normal two-runtime FOMOD, omit the exclusion flag (or pass
 `--include-se-ae`) and supply both `--se-cache` and `--vr-cache`.
 `--no-include-se-ae` together with `--se-cache` is an argument error.
+
+### Generate a VR cache with standard Water only
+
+For an explicitly requested package without Horizon Fix Water bytecode, pass
+`--no-include-horizon-fix` to both maintained tools. Keep the `shipped` profile
+to retain the ordinary VR feature set; this option only omits the additional
+Horizon compatibility input. Run from the exact source checkout used for the
+Core DLL, with a fresh output directory and the matching Core plugin version:
+
+```powershell
+& $cachePython tools/build-shader-cache.py `
+    --source-root . --runtime VR --profile shipped `
+    --no-include-horizon-fix --jobs 8 --package `
+    --out dist/shader-cache-vr-standard
+
+& $cachePython tools/build-fomod-package.py `
+    --core build/ALL/aio `
+    --vr-cache dist/shader-cache-vr-standard/VR `
+    --no-include-se-ae --no-include-horizon-fix `
+    --output dist/fomod-vr-standard `
+    --version "VR-standard"
+```
+
+The cache manifest declares only `default`. Both archive and FOMOD validation
+reject Horizon compatibility records when this option is set, including
+inactive records and records whose variant was removed from the manifest.
+This standard-only package also requires both developer packs to be empty.
+The installer describes
+standard Water only. Default invocations still require both Water variants.
+The generic CSX compatibility code and feature metadata remain intact; this
+cache option does not remove files from Core. Verify that the selected Core
+contains no separately bundled Horizon Fix companion DLL if its omission was
+also requested. Keep the final Core build manifest, cache build log, source
+identity, and final AIO hashes together in the package receipt.
 
 In a manual **Release: Build Artifacts** workflow run, clear `include-se-ae`
 to build and package only the VR cache. This skips the SE/AE compilation job,

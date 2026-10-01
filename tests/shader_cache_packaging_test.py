@@ -215,6 +215,50 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 )
 
     @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_shipped_archive_explicitly_omits_horizon_compatibility(self) -> None:
+        for runtime in ("SE", "VR"):
+            for horizon in (False, True):
+                with self.subTest(runtime=runtime, horizon=horizon), tempfile.TemporaryDirectory() as temporary:
+                    workspace = Path(temporary)
+                    root = workspace / "runtime"
+                    self._managed_cache(root, runtime, horizon=horizon)
+                    if horizon:
+                        with self.assertRaisesRegex(SystemExit, "excluded Horizon Fix"):
+                            BUILDER.prepare_cache_archive(
+                                root, workspace, runtime, "standard-only", "CSX 3.18-VR",
+                                shutil.which("cmake"), include_horizon_fix=False,
+                            )
+                    else:
+                        archive = BUILDER.prepare_cache_archive(
+                            root, workspace, runtime, "standard-only", "CSX 3.18-VR",
+                            shutil.which("cmake"), include_horizon_fix=False,
+                        )
+                        self.assertTrue(archive.is_file())
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_standard_only_archive_rejects_inactive_and_developer_horizon_records(self) -> None:
+        for pack_name in ("Optimized.B.csxpack", "Developer.A.csxpack", "Developer.B.csxpack"):
+            with self.subTest(pack=pack_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "runtime"
+                cache = self._managed_cache(root, "VR", horizon=False)
+                manifest = json.loads((cache / BUILDER.PACK_MANIFEST_FILE_NAME).read_text(encoding="utf-8"))
+                registrations = BUILDER.compatibility_variant_manifest(REPO)["legacy-horizon-fix"]["registrations"]
+                BUILDER.write_shader_pack(
+                    cache / pack_name, BUILDER.PACK_LANES[pack_name],
+                    manifest["files"][pack_name]["generation"],
+                    [{
+                        **BUILDER.shader_pack_record_identity("Water/1.pso", "4" * 32, registrations),
+                        "bytecode": make_dxbc(marker=b"horizon"),
+                    }], manifest["packSetId"],
+                )
+                archive = self._archive_cache(root)
+                BUILDER.validate_cache_archive(archive, shutil.which("cmake"), "VR", "CSX 3.18-VR")
+                with self.assertRaisesRegex(SystemExit, "developer shader records|canonical compatibility identity"):
+                    BUILDER.validate_cache_archive(
+                        archive, shutil.which("cmake"), "VR", "CSX 3.18-VR", horizon_variants=False
+                    )
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
     def test_archive_rejects_horizon_declaration_without_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "runtime"
@@ -661,6 +705,15 @@ class ShaderCachePackagingTests(unittest.TestCase):
             BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE),
             BUILDER.CACHE_VARIANTS,
         )
+        self.assertEqual(
+            BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE, include_horizon_fix=False),
+            (BUILDER.STANDARD_CACHE_VARIANT,),
+        )
+        for include_horizon_fix in (False, True):
+            self.assertEqual(
+                BUILDER.compile_variants_for(BUILDER.PATKA_CACHE_PROFILE, include_horizon_fix=include_horizon_fix),
+                (BUILDER.STANDARD_CACHE_VARIANT,),
+            )
         self.assertEqual(
             BUILDER.CACHE_VARIANTS[0],
             BUILDER.STANDARD_CACHE_VARIANT,

@@ -12,10 +12,10 @@
 
 #include "Features/Upscaling.h"
 #include "Globals.h"
-#include "RE/B/BSOpenVR.h"
 #include "RE/M/Misc.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/OpenVRFrameTiming.h"
 #include "Utils/UI.h"
 
 static constexpr float kGraphHeadroomScale = 1.2f;
@@ -27,8 +27,10 @@ static constexpr float kTimingTablePercentColumnWidth = 45.0f;
 static constexpr float kStatsRefreshSeconds = 1.0f;
 static constexpr uint32_t kDisplayedRollingFrameCount = 60;
 static constexpr float kMaxDisplayTimingSampleMs = 1000.0f;
+#ifdef ENABLE_SKYRIM_VR
 static constexpr uint32_t kOpenVRTimingRetryFrames = 120;
 static constexpr uint32_t kOpenVRTimingMaxCacheAgeFrames = 120;
+#endif
 
 static bool IsPositiveFinite(float value)
 {
@@ -84,6 +86,7 @@ struct RollingTimingAverage
 	uint32_t count = 0;
 };
 
+#ifdef ENABLE_SKYRIM_VR
 struct OpenVRGameTimingCache
 {
 	RollingTimingAverage gpuMs;
@@ -93,6 +96,7 @@ struct OpenVRGameTimingCache
 	uint32_t nextRetryFrame = 0;
 	bool disabled = false;
 };
+#endif
 
 static float GetAverageGameFrameMs(float& sampleMs, bool& hasSample)
 {
@@ -147,44 +151,7 @@ static float GetAverageGameFrameMs(float& sampleMs, bool& hasSample)
 	return frameMsAverage.Get();
 }
 
-static bool TryGetOpenVRFrameTiming(vr::IVRCompositor* compositor, vr::Compositor_FrameTiming* timing, bool* faulted)
-{
-	if (faulted)
-		*faulted = false;
-	if (!compositor || !timing)
-		return false;
-
-	bool result = false;
-	__try {
-		result = compositor->GetFrameTiming(timing, 0);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		if (faulted)
-			*faulted = true;
-		result = false;
-	}
-	return result;
-}
-
-static vr::IVRCompositor* TryResolveOpenVRCompositor(bool* faulted)
-{
-	if (faulted)
-		*faulted = false;
-
-	vr::IVRCompositor* compositor = nullptr;
-	__try {
-		auto* openvr = RE::BSOpenVR::GetSingleton();
-		compositor = openvr ? RE::BSOpenVR::GetIVRCompositor() : nullptr;
-		if (!compositor && openvr)
-			compositor = openvr->vrContext.vrCompositor;
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		if (faulted)
-			*faulted = true;
-		compositor = nullptr;
-	}
-
-	return compositor;
-}
-
+#ifdef ENABLE_SKYRIM_VR
 static void ApplyOpenVRTimingCache(
 	const OpenVRGameTimingCache& cache,
 	uint32_t frameCount,
@@ -209,9 +176,11 @@ static void ApplyOpenVRTimingCache(
 		summary.hasGameCpu = true;
 	}
 }
+#endif
 
 static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary& summary)
 {
+#ifdef ENABLE_SKYRIM_VR
 	static OpenVRGameTimingCache cache;
 
 	const uint32_t frameCount = summary.frameCount;
@@ -226,7 +195,7 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 		cache.lastSampleFrame = frameCount;
 
 		bool resolveFaulted = false;
-		auto* compositor = TryResolveOpenVRCompositor(&resolveFaulted);
+		auto* compositor = Util::OpenVRFrameTiming::TryResolveCompositor(&resolveFaulted);
 
 		if (resolveFaulted) {
 			cache.disabled = true;
@@ -237,7 +206,7 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 			timing.m_nSize = static_cast<uint32_t>(sizeof(timing));
 
 			bool faulted = false;
-			if (TryGetOpenVRFrameTiming(compositor, &timing, &faulted)) {
+			if (Util::OpenVRFrameTiming::TryGetFrameTiming(compositor, &timing, &faulted)) {
 				const float gpuMs = timing.m_flPreSubmitGpuMs;
 				if (IsPositiveFinite(gpuMs)) {
 					cache.gpuMs.Push(gpuMs);
@@ -262,6 +231,9 @@ static void CaptureOpenVRGameTiming(ProfilingRenderer::PerformanceTimingSummary&
 	}
 
 	ApplyOpenVRTimingCache(cache, frameCount, summary);
+#else
+	(void)summary;
+#endif
 }
 
 static void CaptureFlatGameTiming(Profiler& profiler, ProfilingRenderer::PerformanceTimingSummary& summary)

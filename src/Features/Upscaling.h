@@ -328,8 +328,10 @@ public:
 		float motionSharpnessCap = 1.0f;
 		bool fsr4RuntimeEnable = true;
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		bool pipelineDiagnostics = false;
 		bool pipelineDiagnosticsStructured = false;
+#endif
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.3f;
 		float foveatedCenterHorizontalScale = 1.0f;

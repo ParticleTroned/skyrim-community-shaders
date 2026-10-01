@@ -326,10 +326,8 @@ target_compile_definitions(
         CSX_STREAMLINE_RUNTIME_VERSION_PATCH=${_streamline_runtime_version_patch}
 )
 
-target_compile_definitions(
-    ${PROJECT_NAME}
-    PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
-)
+include(TracySupport)
+csx_configure_tracy(${PROJECT_NAME})
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32)
 endif()
@@ -373,7 +371,6 @@ target_link_libraries(
         unordered_dense::unordered_dense
         efsw::efsw
         xxHash::xxhash
-        Tracy::TracyClient
         Streamline
         d3d12.lib
 		bcrypt.lib
@@ -1723,6 +1720,29 @@ if(BUILD_CONTROLLER_TESTS)
         add_test(NAME ${TEST_NAME} COMMAND ${TARGET_NAME})
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
+
+    function(add_tracy_boundary_test enabled)
+        set(_tracy_boundary_target tracy_boundary_${enabled}_test)
+        add_controller_test(
+            ${_tracy_boundary_target}
+            TracyBuildBoundary_${enabled}
+            tests/tracy_build_boundary_test.cpp
+        )
+        set(TRACY_SUPPORT ${enabled})
+        csx_configure_tracy(${_tracy_boundary_target})
+        target_compile_definitions(
+            ${_tracy_boundary_target}
+            PRIVATE EXPECT_TRACY=$<BOOL:${enabled}>
+        )
+    endfunction()
+    add_tracy_boundary_test(OFF)
+    add_tracy_boundary_test(ON)
+    target_sources(
+        tracy_boundary_OFF_test
+        PRIVATE
+            src/Diagnostics/D3DTextureLifetimeTracker.cpp
+            src/Diagnostics/VRPipelineDiagnostics.cpp
+    )
 
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/game_setting_persistence.cmake")

@@ -1779,6 +1779,7 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 		if (parent == requests.end() || IsTerminal(parent->second.state))
 			continue;
 		if (!result.success || !result.directoryLease) {
+			record.finalizing = true;
 			parent->second.error = {
 				{ "code", "destination_unavailable" },
 				{ "message", result.error.empty() ? "sequence destination preparation failed" : result.error },
@@ -1786,7 +1787,17 @@ void ScreenshotApi::DrainWorkerResultsLocked()
 				{ "field", "sequence.capture.destination" },
 			};
 			parent->second.errors.push_back(parent->second.error);
+			if (record.frameManifest) {
+				record.packaging["frameManifest"] = {
+					{ "requested", true },
+					{ "state", "failed" },
+					{ "path", nullptr },
+					{ "error", parent->second.error },
+				};
+				parent->second.terminalArtifacts = parent->second.expectedArtifacts;
+			}
 			TransitionLocked(parent->second, "failed", "sequence.preparation_failed", {
+																						  { "manifestPath", nullptr },
 																						  { "error", parent->second.error },
 																					  });
 			continue;

@@ -567,6 +567,12 @@ A stop or cancellation accepted while destination preparation is in flight
 retains its requested state. Successful preparation emits `sequence.prepared`
 and proceeds directly to finalization without transiently reporting `running`.
 
+Failed destination preparation retires the sequence immediately. Its terminal
+receipt has zero scheduled/written frames, a `destination_unavailable` error,
+and a failed manifest outcome with a null path when a manifest was requested.
+No manifest job is queued without a directory lease. Public active-sequence
+counts and the recording indicator exclude this failed sequence.
+
 Every parent terminal state includes counts and a manifest outcome. A sequence
 cannot be terminal-success while any child frame remains in a mutable state.
 

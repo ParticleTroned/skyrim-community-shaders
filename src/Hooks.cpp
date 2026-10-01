@@ -1325,7 +1325,7 @@ struct ID3D11Device_CreateVertexShader
 	{
 		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr) && ppVertexShader && *ppVertexShader)
 			RegisterShaderBytecode(*ppVertexShader, pShaderBytecode, BytecodeLength);
 
 		return hr;
@@ -1368,7 +1368,7 @@ struct ID3D11Device_CreatePixelShader
 	{
 		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr) && ppPixelShader && *ppPixelShader)
 			RegisterShaderBytecode(*ppPixelShader, pShaderBytecode, BytecodeLength);
 
 		return hr;

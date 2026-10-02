@@ -1,6 +1,13 @@
 include(NeuralRenderingCaptureTests)
 csx_add_neural_rendering_capture_tests("${PROJECT_SOURCE_DIR}" add_controller_test)
 
+foreach(_bridge IN ITEMS on off)
+    add_controller_test(neural_source_transport_${_bridge}_test NeuralSourceTransport_${_bridge} tests/neural_source_transport_test.cpp)
+    target_compile_definitions(neural_source_transport_${_bridge}_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(neural_source_transport_${_bridge}_test PRIVATE nlohmann_json::nlohmann_json)
+endforeach()
+target_compile_definitions(neural_source_transport_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+
 set(_neural_renderer_ownership_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_renderer_ownership")
 add_custom_command(
     OUTPUT "${_neural_renderer_ownership_dir}/neural_renderer_ownership_under_test.h"

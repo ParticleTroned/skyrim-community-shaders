@@ -194,5 +194,12 @@ int main()
 	Require(registry.CaptureEpoch() == beforeCapture + 1, "rejected restart must not consume epoch");
 	Require(registry.Configure(captureConfig.settings, captureConfig.experiments), "restart capture");
 	Require(registry.CaptureEpoch() == beforeCapture + 2, "same-frame restart cannot reuse identity");
+	const auto beforeSharing = registry.Snapshot();
+	Require(Call({ { "action", "configure" }, { "experiments", { { "sharedSourceTransport", true } } } })["ok"] == true, "transport toggle accepted");
+	const auto shared = registry.Snapshot();
+	Require(shared.experiments.SharedSourceTransportEnabled() && shared.inputEpoch == beforeSharing.inputEpoch,
+		"transport storage does not change input semantics");
+	Require(ConfigurationEvidenceJson(shared)["experiments"]["sharedSourceTransport"] == true, "captured transport setting");
+	Require(Call({ { "action", "reset_experiments" } })["ok"] == true && !registry.Snapshot().experiments.SharedSourceTransportEnabled(), "reset clears session experiment");
 	std::printf("Passed %u production settings/registry/evidence checks\n", checks);
 }

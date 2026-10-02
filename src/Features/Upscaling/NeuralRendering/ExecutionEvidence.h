@@ -143,6 +143,7 @@ namespace NeuralRendering
 		ExecutionTiming evaluationGpu{};
 		std::uint32_t resetReasons = ResetNone, rebuildReasons = RebuildNone;
 		bool effectiveReset = false, resourcesReady = false, outputCopyEnqueued = false, privateOutputCommitted = false;
+		std::optional<std::uint32_t> inputTransportOwnerSlot;
 		// Texture payloads only; excludes driver heaps, shaders, CBs and diagnostics.
 		std::uint64_t newlyAllocatedLogicalBytes = 0, copiedLogicalBytes = 0;
 		std::optional<std::uint64_t> colorRetainedLogicalBytes;

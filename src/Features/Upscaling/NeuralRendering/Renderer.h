@@ -5,6 +5,7 @@
 #include "CharacterMultiRoi.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "LifetimeDiagnostics.h"
+#	include <nlohmann/json_fwd.hpp>
 #endif
 #include "PipelinePolicy.h"
 #include "Runtime.h"
@@ -272,13 +273,15 @@ namespace NeuralRendering
 			RendererApplyOutcome* a_outcome = nullptr);
 
 		/** Performs a bounded idle wait before releasing runtime and interop ownership. */
-		bool Reset();
+		bool Reset(bool a_clearTransportRejections = false);
 		void ResetShaderCache();
 
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Retains the bounded opt-in native lifetime history, including its first failure. */
 		[[nodiscard]] LifetimeSnapshot GetLifetimeDiagnostics() const;
+		/** Read-only allocation/lease accounting; native provider byte sizes remain unknown. */
+		[[nodiscard]] nlohmann::json GetSourceTransportDiagnostics() const;
 #endif
 		[[nodiscard]] bool IsFailureLatched() const;
 		[[nodiscard]] bool IsQuarantined() const;

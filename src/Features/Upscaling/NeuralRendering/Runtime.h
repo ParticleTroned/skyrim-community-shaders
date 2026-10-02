@@ -153,6 +153,10 @@ namespace NeuralRendering
 		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
 		[[nodiscard]] std::uint32_t LastPathProxyHits() const;
 		[[nodiscard]] bool LastPathProxyInstalled() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Resident handles only; NVIDIA does not expose their allocation byte size. */
+		[[nodiscard]] std::uint32_t GetResidentFeatureMask() const;
+#endif
 
 	private:
 		struct FeatureConfiguration

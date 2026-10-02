@@ -154,6 +154,7 @@ namespace NeuralRendering::Evidence
 				{ "effectiveReset", o.effectiveReset }, { "resetReasonFlags", o.resetReasons }, { "rebuildReasonFlags", o.rebuildReasons },
 				{ "newlyAllocatedLogicalBytes", o.allocationBytesKnown ? Json(o.newlyAllocatedLogicalBytes) : Json(nullptr) },
 				{ "copiedLogicalBytes", o.copyBytesKnown ? Json(o.copiedLogicalBytes) : Json(nullptr) },
+				{ "inputTransportOwnerSlot", o.inputTransportOwnerSlot ? Json(*o.inputTransportOwnerSlot) : Json(nullptr) },
 				{ "timing", { { "createCpu", CpuTimingJson(o.runtime.createCpuMicroseconds) },
 								{ "sourceInputPreparation", PassTimingJson(r.context.inputPreparation) },
 								{ "evaluationCpu", CpuTimingJson(o.runtime.evaluateCpuMicroseconds) }, { "evaluationGpu", GpuTimingJson(o.evaluationGpu) },

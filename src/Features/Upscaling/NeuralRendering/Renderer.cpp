@@ -4,6 +4,7 @@
 #include "ColorPipeline.h"
 #include "D3D12Interop.h"
 #include "PipelinePolicy.h"
+#include "SourceTransport.h"
 #include "Utils/D3D.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -609,6 +610,7 @@ namespace NeuralRendering
 			DXGI_FORMAT controlMaskFormat = DXGI_FORMAT_UNKNOWN;
 			bool controlMaskPresent = false;
 			bool featureUpscaling = false;
+			bool sharedSourceTransport = false;
 
 			bool operator==(const ResourceKey&) const = default;
 		};
@@ -636,6 +638,18 @@ namespace NeuralRendering
 			bool operator==(const HistoryKey&) const = default;
 		};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		struct CapacityKey
+		{
+			ResourceKey resources{};
+			std::uintptr_t device = 0;
+			std::uint32_t slot = 0;
+			bool operator==(const CapacityKey&) const = default;
+		};
+		CapacityRejections<CapacityKey, Runtime::kFeatureSlotCount> capacityRejections_;
+		CapacityKey requestedCapacity_{};
+#endif
+
 		struct Slot
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -647,6 +661,7 @@ namespace NeuralRendering
 			SharedTexture controlMask;
 			SharedTexture output;
 			Color::Work colorWork;
+			std::uint32_t sourceTransportOwnerSlot = 0;
 			ResourceKey resourceKey{};
 			HistoryKey historyKey{};
 			std::uint32_t lastSuccessfulFrame =
@@ -830,7 +845,8 @@ namespace NeuralRendering
 		bool EnsureSlotLocked(
 			std::uint32_t a_slot,
 			const ValidatedResources& a_resources,
-			const std::shared_ptr<ExecutionEvidence>& a_evidence, std::size_t a_region);
+			const std::shared_ptr<ExecutionEvidence>& a_evidence, std::size_t a_region,
+			const Slot* a_sourceOwner);
 		bool CopyDepthBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
 			std::span<Slot* const> a_slots,
@@ -1204,6 +1220,7 @@ namespace NeuralRendering
 			                         DXGI_FORMAT_UNKNOWN,
 			.controlMaskPresent = hasControlMask,
 			.featureUpscaling = a_args.featureUpscaling,
+			.sharedSourceTransport = colorConfiguration_.experiments.SharedSourceTransportEnabled(),
 		};
 		a_resources.historyKey = {
 			.resources = a_resources.resourceKey,
@@ -1437,6 +1454,14 @@ namespace NeuralRendering
 		const HRESULT removalReason = GetDeviceRemovalReasonLocked(a_result);
 		const bool deviceRemoved = FAILED(removalReason);
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (colorConfiguration_.experiments.SharedSourceTransportEnabled() && a_latch &&
+			(a_stage == RendererStage::ResourceCreation || a_stage == RendererStage::DeviceCompatibility ||
+				a_stage == RendererStage::FeatureEvaluate || deviceRemoved || a_forceQuarantine)) {
+			const auto kind = !deviceRemoved && !a_forceQuarantine && a_result == E_OUTOFMEMORY ? CapacityRejectionKind::Pressure :
+			                  !deviceRemoved && !a_forceQuarantine && a_result == E_NOINTERFACE ? CapacityRejectionKind::Unsupported :
+			                                                                                      CapacityRejectionKind::UnsafeProvider;
+			capacityRejections_.Record({ requestedCapacity_, kind, a_result, Runtime::Instance().NgxResult() });
+		}
 		if (activeLifetime_) {
 			activeLifetime_->failureObserved = true;
 			activeLifetime_->stage = static_cast<std::uint32_t>(a_stage);
@@ -1835,16 +1860,28 @@ namespace NeuralRendering
 	bool Renderer::State::EnsureSlotLocked(
 		std::uint32_t a_slot,
 		const ValidatedResources& a_resources,
-		const std::shared_ptr<ExecutionEvidence>& a_evidence, std::size_t a_region)
+		const std::shared_ptr<ExecutionEvidence>& a_evidence, std::size_t a_region,
+		const Slot* a_sourceOwner)
 	{
 		auto& slot = slots_[a_slot];
+		const auto ownerSlot = a_sourceOwner ? a_sourceOwner->sourceTransportOwnerSlot : a_slot;
+		bool sameOwner = true;
+		if (a_resources.resourceKey.sharedSourceTransport) {
+			const auto identities = [](const Slot& source) {
+				return std::array{ source.color.resource12.Get(), source.depth.resource12.Get(),
+					source.motionVectors.resource12.Get(), source.controlMask.resource12.Get() };
+			};
+			const auto requested = a_sourceOwner ? identities(*a_sourceOwner) : identities(slot);
+			sameOwner = CanReuseSourceBinding(slot.sourceTransportOwnerSlot, ownerSlot,
+				identities(slot), a_sourceOwner ? &requested : nullptr);
+		}
 		if (a_evidence)
 			a_evidence->Update([&](auto& evidence) {
-				evidence.regions[a_region].rebuildReasons = !slot.resourcesValid                        ? RebuildUnallocated :
-				                                            slot.resourceKey != a_resources.resourceKey ? RebuildResourceContractChanged :
-				                                                                                          RebuildNone;
+				evidence.regions[a_region].rebuildReasons = !slot.resourcesValid                                      ? RebuildUnallocated :
+				                                            slot.resourceKey != a_resources.resourceKey || !sameOwner ? RebuildResourceContractChanged :
+				                                                                                                        RebuildNone;
 			});
-		if (slot.resourcesValid && slot.resourceKey == a_resources.resourceKey)
+		if (slot.resourcesValid && slot.resourceKey == a_resources.resourceKey && sameOwner)
 			return true;
 
 		if (slot.resourcesValid) {
@@ -1942,14 +1979,21 @@ namespace NeuralRendering
 				});
 			return created;
 		};
-		if (!create(colorDesc, replacement.color, (prefix + "Color").c_str()) ||
-			!create(depthDesc, replacement.depth, (prefix + "Depth").c_str()) ||
-			!create(motionDesc, replacement.motionVectors, (prefix + "MotionVectors").c_str()) ||
-			(a_resources.resourceKey.controlMaskPresent &&
-				!create(
-					controlMaskDesc,
-					replacement.controlMask,
-					(prefix + "ControlMask").c_str())) ||
+		// Only source transport is shared; output, baseline and native history stay private.
+		if (a_sourceOwner) {
+			replacement.color = a_sourceOwner->color;
+			replacement.depth = a_sourceOwner->depth;
+			replacement.motionVectors = a_sourceOwner->motionVectors;
+			replacement.controlMask = a_sourceOwner->controlMask;
+		}
+		if ((!a_sourceOwner && (!create(colorDesc, replacement.color, (prefix + "Color").c_str()) ||
+								   !create(depthDesc, replacement.depth, (prefix + "Depth").c_str()) ||
+								   !create(motionDesc, replacement.motionVectors, (prefix + "MotionVectors").c_str()) ||
+								   (a_resources.resourceKey.controlMaskPresent &&
+									   !create(
+										   controlMaskDesc,
+										   replacement.controlMask,
+										   (prefix + "ControlMask").c_str())))) ||
 			!create(outputDesc, replacement.output, (prefix + "Output").c_str())) {
 			return FailLocked(
 				RendererStage::ResourceCreation,
@@ -1963,6 +2007,7 @@ namespace NeuralRendering
 		replacement.resourceSerial = ++resourceSerial_;
 #endif
 		replacement.resourceKey = a_resources.resourceKey;
+		replacement.sourceTransportOwnerSlot = ownerSlot;
 		replacement.resourcesValid = true;
 		slot = std::move(replacement);
 		Increment(snapshot_.counters.resourceRebuilds);
@@ -2301,6 +2346,18 @@ namespace NeuralRendering
 		snapshot_.lastCompletedStage = RendererStage::Validation;
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (colorConfiguration_.experiments.SharedSourceTransportEnabled()) {
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot };
+				if (capacityRejections_.Rejects(requestedCapacity_))
+					return FailLocked(RendererStage::FailureLatched, E_FAIL,
+						"source transport capacity is rejected; explicit nr_reset after safe retirement is required", a_args[index].featureSlot, true);
+			}
+			requestedCapacity_ = { resources[0].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[0].device), a_args[0].featureSlot };
+		}
+#endif
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		LifetimeGuard lifetime(*this, LifetimeOperation::Batch);
 		if (lifetime.enabled) {
 			lifetime.record->sourceTransactionId = a_args.front().executionContext.sourceTransactionId;
@@ -2413,7 +2470,23 @@ namespace NeuralRendering
 		std::array<Slot*, kMaximumRegionEvaluations> slots{};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index], execution, index))
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (colorConfiguration_.experiments.SharedSourceTransportEnabled())
+				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot };
+#endif
+			const Slot* sourceOwner = nullptr;
+			if (resources[index].resourceKey.sharedSourceTransport) {
+				for (std::size_t prior = 0; prior < index; ++prior) {
+					if (SameSourceTransport(a_args[prior], a_args[index]) &&
+						resources[prior].resourceKey == resources[index].resourceKey &&
+						resources[prior].depthViewFormat == resources[index].depthViewFormat &&
+						resources[prior].depth.desc.Format == resources[index].depth.desc.Format) {
+						sourceOwner = slots[prior];
+						break;
+					}
+				}
+			}
+			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index], execution, index, sourceOwner))
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2421,13 +2494,22 @@ namespace NeuralRendering
 				CaptureLifetimeResourcesLocked(lifetime.record->regions[index], *slots[index]);
 #endif
 			if (execution)
-				execution->Update([&](auto& evidence) { evidence.regions[index].resourcesReady = true; });
+				execution->Update([&](auto& evidence) {
+					evidence.regions[index].resourcesReady = true;
+					evidence.regions[index].inputTransportOwnerSlot = sourceOwner ?
+					                                                      static_cast<std::uint32_t>(sourceOwner - slots_.data()) :
+					                                                      a_args[index].featureSlot;
+				});
 		}
 
 		// Allocate/compile for every physical region before changing any caller output.
 		// The legacy raw lane does not allocate or dispatch colour resources.
 		if (colorConfiguration_.Enabled()) {
 			for (std::size_t index = 0; index < a_args.size(); ++index) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (colorConfiguration_.experiments.SharedSourceTransportEnabled())
+					requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot };
+#endif
 				const auto profile = Color::EffectiveProfile(colorConfiguration_,
 					static_cast<std::uint32_t>(a_args[index].insertionPoint));
 				const auto format = resources[index].resourceKey.colorFormat;
@@ -2619,25 +2701,24 @@ namespace NeuralRendering
 		std::uint32_t featureSlotMask = 0;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			const auto addInput = [&](ID3D12Resource* a_resource) {
-				sharedResources[sharedResourceCount++] = {
-					.resource = a_resource,
-					.featureState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-				};
+			const auto add = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES state) {
+				if (!colorConfiguration_.experiments.SharedSourceTransportEnabled()) {
+					sharedResources[sharedResourceCount++] = { resource, state };
+					return true;
+				}
+				return AddSourceTransition(sharedResources, sharedResourceCount, FeatureResourceTransition{ resource, state });
 			};
-			addInput(slots[index]->color.resource12.Get());
-			if (colorConfiguration_.experiments.transportBypass)
-				sharedResources[sharedResourceCount - 1u].featureState = D3D12_RESOURCE_STATE_COPY_SOURCE;
-			addInput(slots[index]->depth.resource12.Get());
-			addInput(slots[index]->motionVectors.resource12.Get());
-			if (a_args[index].controlMask)
-				addInput(slots[index]->controlMask.resource12.Get());
-			sharedResources[sharedResourceCount++] = {
-				.resource = slots[index]->output.resource12.Get(),
-				.featureState = colorConfiguration_.experiments.transportBypass ?
-				                    D3D12_RESOURCE_STATE_COPY_DEST :
-				                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-			};
+			const auto inputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+			if (!add(slots[index]->color.resource12.Get(), colorConfiguration_.experiments.transportBypass ? D3D12_RESOURCE_STATE_COPY_SOURCE : inputState) ||
+				!add(slots[index]->depth.resource12.Get(), inputState) ||
+				!add(slots[index]->motionVectors.resource12.Get(), inputState) ||
+				(a_args[index].controlMask && !add(slots[index]->controlMask.resource12.Get(), inputState)) ||
+				!add(slots[index]->output.resource12.Get(), colorConfiguration_.experiments.transportBypass ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_UNORDERED_ACCESS)) {
+				const bool aborted = interop_.AbortD3D12();
+				recordingGuard.active = interop_.IsRecording();
+				return FailLocked(RendererStage::CommandBegin, E_INVALIDARG,
+					"shared resources require conflicting states or exceed the batch capacity", a_args[index].featureSlot, true, !aborted);
+			}
 			Add(pixelCount, resources[index].roi.inferenceContext.Area());
 			featureSlotMask |= 1u << a_args[index].featureSlot;
 		}
@@ -2754,6 +2835,10 @@ namespace NeuralRendering
 			if (discontinuousReset)
 				Increment(snapshot_.counters.discontinuousHistoryResets);
 			bool evaluationAttempted = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (colorConfiguration_.experiments.SharedSourceTransportEnabled())
+				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(args.device), args.featureSlot };
+#endif
 			RuntimeExecutionEvidence runtimeEvidence{};
 			// Runtime diagnostics can throw after evaluation; preserve the actual call outcome.
 			const SKSE::stl::scope_exit retainRuntimeEvidence([&]() noexcept {
@@ -3195,11 +3280,18 @@ namespace NeuralRendering
 		return state_->captureInputs_;
 	}
 
-	bool Renderer::Reset()
+	bool Renderer::Reset(bool a_clearTransportRejections)
 	{
 		std::scoped_lock lock(state_->mutex_);
 		try {
-			return state_->ResetLocked(false, false);
+			const bool reset = state_->ResetLocked(false, false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (reset && a_clearTransportRejections)
+				state_->capacityRejections_ = {};
+#else
+			(void)a_clearTransportRejections;
+#endif
+			return reset;
 		} catch (const std::exception& exception) {
 			state_->QuarantineAfterUnexpectedFailureLocked(
 				RendererStage::Quarantined,
@@ -3260,6 +3352,101 @@ namespace NeuralRendering
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	nlohmann::json Renderer::GetSourceTransportDiagnostics() const
+	{
+		using json = nlohmann::json;
+		std::scoped_lock lock(state_->mutex_);
+		json textures = json::array(), slots = json::array(), rejections = json::array();
+		std::uint64_t inputBytes = 0, outputBytes = 0, colorBytes = 0, retiredLeaseBytes = 0;
+		std::uint64_t activeBytes = 0, cachedBytes = 0, activeColorBytes = 0, cachedColorBytes = 0;
+		bool bytesKnown = !state_->quarantined_;
+		std::vector<ID3D12Resource*> unique;
+		const auto add = [&](const SharedTexture& texture, const char* role, std::uint64_t& total, std::uint32_t slotMask = 0) {
+			if (!texture.resource12)
+				return;
+			const auto found = std::ranges::find(unique, texture.resource12.Get());
+			if (found != unique.end()) {
+				auto& record = textures[static_cast<std::size_t>(found - unique.begin())];
+				record["slotMask"] = record["slotMask"].get<std::uint32_t>() | slotMask;
+				return;
+			}
+			unique.push_back(texture.resource12.Get());
+			const auto bytes = LogicalTextureBytes(texture.desc.Format, texture.desc.Width, texture.desc.Height);
+			bytesKnown &= bytes.has_value();
+			total += bytes.value_or(0);
+			textures.push_back({ { "identity", std::to_string(reinterpret_cast<std::uintptr_t>(texture.resource12.Get())) },
+				{ "role", role }, { "slotMask", slotMask }, { "logicalBytes", bytes ? json(*bytes) : json(nullptr) } });
+		};
+		const auto nativeMask = Runtime::Instance().GetResidentFeatureMask();
+		std::uint32_t activeMask = 0, cachedMask = 0;
+		for (std::size_t index = 0; index < state_->slots_.size(); ++index) {
+			const auto& slot = state_->slots_[index];
+			if (!slot.resourcesValid)
+				continue;
+			const bool active = slot.lastSuccessfulFrame == state_->snapshot_.frameId;
+			(active ? activeMask : cachedMask) |= 1u << index;
+			for (const auto* input : { &slot.color, &slot.depth, &slot.motionVectors, &slot.controlMask })
+				add(*input, "input", inputBytes, 1u << index);
+			add(slot.output, "private_output", outputBytes, 1u << index);
+			const auto color = slot.colorWork.baseline.resource ? LogicalTextureBytes(slot.colorWork.format,
+																	  slot.colorWork.capacityWidth, slot.colorWork.capacityHeight) :
+			                                                      std::optional<std::uint64_t>(0);
+			colorBytes += color.value_or(0) * 2u;
+			(active ? activeColorBytes : cachedColorBytes) += color.value_or(0) * 2u;
+			bytesKnown &= color.has_value();
+			slots.push_back({ { "slot", index }, { "activeInLastRequest", active },
+				{ "nativeResident", (nativeMask & (1u << index)) != 0 },
+				{ "inputIdentity", std::to_string(reinterpret_cast<std::uintptr_t>(slot.color.resource12.Get())) },
+				{ "privateOutputIdentity", std::to_string(reinterpret_cast<std::uintptr_t>(slot.output.resource12.Get())) },
+				{ "historyIdentity", slot.historyKey.regionIdentity }, { "historyValid", slot.historyValid },
+				{ "sourceTransportOwnerSlot", slot.sourceTransportOwnerSlot },
+				{ "guideCapacity", { slot.resourceKey.guideWidth, slot.resourceKey.guideHeight } },
+				{ "outputCapacity", { slot.resourceKey.outputWidth, slot.resourceKey.outputHeight } } });
+		}
+		const auto leases = state_->interop_.GetResourceLeases();
+		for (const auto& texture : leases)
+			add(texture, "lease_only_retained", retiredLeaseBytes);
+		for (auto& texture : textures) {
+			const auto mask = texture["slotMask"].get<std::uint32_t>();
+			texture["active"] = (mask & activeMask) != 0;
+			texture["cachedOnly"] = (mask & cachedMask) != 0 && (mask & activeMask) == 0;
+			const auto bytes = texture["logicalBytes"].is_null() ? 0 : texture["logicalBytes"].get<std::uint64_t>();
+			if (mask & activeMask)
+				activeBytes += bytes;
+			else if (mask & cachedMask)
+				cachedBytes += bytes;
+		}
+		for (std::size_t index = 0; index < state_->capacityRejections_.count; ++index) {
+			const auto& entry = state_->capacityRejections_.entries[index];
+			rejections.push_back({ { "slot", entry.key.slot }, { "device", std::to_string(entry.key.device) },
+				{ "class", entry.kind == CapacityRejectionKind::Pressure ? "transient_pressure" : entry.kind == CapacityRejectionKind::Unsupported ? "unsupported_envelope" :
+																																					 "unsafe_provider_failure" },
+				{ "result", entry.result }, { "nativeResult", entry.nativeResult },
+				{ "colorCapacity", { entry.key.resources.colorWidth, entry.key.resources.colorHeight } },
+				{ "guideCapacity", { entry.key.resources.guideWidth, entry.key.resources.guideHeight } },
+				{ "outputCapacity", { entry.key.resources.outputWidth, entry.key.resources.outputHeight } },
+				{ "controlMaskCapacity", { entry.key.resources.controlMaskWidth, entry.key.resources.controlMaskHeight } },
+				{ "formats", { entry.key.resources.colorFormat, entry.key.resources.motionFormat, entry.key.resources.outputFormat, entry.key.resources.controlMaskFormat } },
+				{ "controlMaskPresent", entry.key.resources.controlMaskPresent }, { "featureUpscaling", entry.key.resources.featureUpscaling },
+				{ "sharedSourceTransport", entry.key.resources.sharedSourceTransport } });
+		}
+		return { { "schemaVersion", 1 }, { "requested", state_->colorConfiguration_.experiments.SharedSourceTransportEnabled() },
+			{ "maximumPhysicalContexts", Runtime::kFeatureSlotCount }, { "allocationPolicy", "lazy_exact_capacity_no_speculative_prewarm" },
+			{ "activeSlotMask", activeMask }, { "cachedSlotMask", cachedMask }, { "nativeSlotMask", nativeMask },
+			{ "sharedInputLogicalBytes", inputBytes }, { "privateOutputLogicalBytes", outputBytes }, { "privateColorLogicalBytes", colorBytes },
+			{ "activeTransportLogicalBytes", activeBytes }, { "cachedOnlyTransportLogicalBytes", cachedBytes },
+			{ "activePrivateColorLogicalBytes", activeColorBytes }, { "cachedPrivateColorLogicalBytes", cachedColorBytes },
+			{ "leaseOnlyRetainedLogicalBytes", retiredLeaseBytes }, { "leaseCount", leases.size() }, { "logicalBytesKnown", bytesKnown },
+			{ "logicalByteScope", "unique_transport_and_private_baseline_result_textures_only_excludes_exposure_queries_buffers_and_native_allocations" },
+			{ "nativeAllocationBytes", nullptr }, { "nativeAllocationBytesReason", "provider_does_not_expose_residency_bytes" },
+			{ "quarantined", state_->quarantined_ }, { "physicalResidencyMeasured", false },
+			{ "nativeResidencyKnown", !state_->quarantined_ },
+			{ "abandonedOwnershipBytes", nullptr }, { "abandonedOwnershipPresent", state_->quarantined_ },
+			{ "rejections", rejections }, { "rejectionLedgerSaturated", state_->capacityRejections_.saturated },
+			{ "recovery", "explicit_nr_reset_after_successful_both_api_retirement_or_new_process" },
+			{ "resources", textures }, { "slots", slots } };
+	}
+
 	LifetimeSnapshot Renderer::GetLifetimeDiagnostics() const
 	{
 		std::scoped_lock lock(state_->mutex_);

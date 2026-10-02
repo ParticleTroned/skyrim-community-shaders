@@ -77,6 +77,18 @@ namespace NeuralRendering::Color
 		bool captureEngineExposure = false;
 		// CPU submission provenance; does not enable colour passes or reset inference.
 		bool captureFrameEvidence = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool sharedSourceTransport = false;
+#endif
+		/** Source sharing stays opt-in until native output and cost qualification. */
+		[[nodiscard]] bool SharedSourceTransportEnabled() const noexcept
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			return sharedSourceTransport;
+#else
+			return false;
+#endif
+		}
 		// Unlike transportBypass, this keeps real inference running. It is a
 		// display comparison only and must not change the input-history epoch.
 		bool applyModelEdit = true;

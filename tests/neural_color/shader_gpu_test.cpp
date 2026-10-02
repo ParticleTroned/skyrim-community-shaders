@@ -110,6 +110,8 @@ static std::vector<Pixel> Read(ID3D11Device* device, ID3D11DeviceContext* contex
 	context->Unmap(staging.Get(), 0);
 	return result;
 }
+#include "shared_transport_gpu_checks.h"
+
 static void CheckFineDetail(ID3D11Device* device, ID3D11DeviceContext* context,
 	ID3D11ComputeShader* prepare, ID3D11ComputeShader* reconstruct, ID3D11Buffer* cb, unsigned domain)
 {
@@ -497,6 +499,7 @@ int main(int argc, char** argv)
 				Require(v.a == b.a, "neural alpha must not replace baseline alpha");
 			}
 	}
+	CheckSharedPreparedInputs(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get());
 	for (unsigned domain = 0; domain < 3; ++domain)
 		CheckFineDetail(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get(), domain);
 	// Production optimization must preserve the same packed rounding and fallback contract.

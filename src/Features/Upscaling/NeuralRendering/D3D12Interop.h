@@ -125,6 +125,8 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Reads queue identities and completion without issuing commands, flushing or waiting. */
 		[[nodiscard]] LifetimeFenceSnapshot GetLifetimeSnapshot() const;
+		/** Copies lease identities for explicit accounting without changing ownership. */
+		[[nodiscard]] std::vector<SharedTexture> GetResourceLeases() const;
 #endif
 
 	private:

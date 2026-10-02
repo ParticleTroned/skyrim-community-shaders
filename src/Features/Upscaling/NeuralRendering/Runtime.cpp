@@ -1764,6 +1764,18 @@ namespace NeuralRendering
 		return true;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::uint32_t Runtime::GetResidentFeatureMask() const
+	{
+		std::scoped_lock lock(mutex_);
+		std::uint32_t mask = 0;
+		for (std::size_t index = 0; index < featureHandles_.size(); ++index)
+			if (featureHandles_[index])
+				mask |= 1u << index;
+		return mask;
+	}
+#endif
+
 	bool Runtime::ResetFeature(std::uint32_t a_slot)
 	{
 		std::scoped_lock lock(mutex_);

@@ -2,19 +2,25 @@
 
 ## Status and scope
 
-The standalone GPU mask-support toggle correction is **live-qualified**.
-Task 6's source snapshot, readiness, budget and scratch changes are
-implemented. **Task 6 remains open for live qualification of the new DLL
-and a matched improvement-or-neutral performance comparison.** The game
-in this session contained the earlier Task 4/5 producer, not these changes.
-No performance gain or final image-quality acceptance is claimed.
+The standalone GPU mask-support toggle and Task 6 source/readiness changes
+are now **live-qualified for the exercised functional scenarios** on
+producer `6646e62e56d3`. The [follow-up and Task 7 record](nr-task7-transport-20261002.md)
+contains 288 exact stereo transactions, 3,000 profiler frames, drift,
+empty/re-entry and policy/route changes without an NR failure. Skyrim and
+MO2 closed normally after restoration.
+
+**Task 6's matched improvement-or-neutral performance criterion remains
+open.** The follow-up had seven eligible actors versus five in the older
+baseline, with different evaluated rectangles. No cross-build performance
+gain or final image-quality acceptance is claimed. The sections below
+preserve the earlier implementation session and its Task 4/5 baseline.
 
 This implements the October 1 Task 6 specification. Tasks 2, 4 and 5 retain
 their recorded conclusions. Native transport sharing, larger ROI capacity,
 history scheduling, output ownership and provider aliasing remain later
 work. Sparse GPU dispatch remains a default-off DevBench experiment.
 
-## Exact live producer
+## Earlier baseline producer
 
 -   Branch base: `64a22a5f1184c02477bed909ba4ff3462e44d2bf`.
 -   Producer Build ID:
@@ -179,11 +185,11 @@ or game relaunch occurred.
 
 ## Remaining acceptance
 
-Install the newly prepared DevBench AIO manually and start a new game
-session. Repeat A/B/C with the same scene and settings, evidence-off and
-evidence-on timing windows, then multi-region drift, entry/exit and policy
-changes. Verify one poll per sampled source, stereo-coherent decisions,
-current coverage, unchanged native/interop safety and improvement-or-neutral
-total frame cost. Compare preparation, copies, synchronization, composition
-and native cost separately. SE/AE gameplay and final stereo image/temporal
-quality remain untested here. The new DLL has not been installed or launched.
+The new DLL's live functional checks are recorded in the
+[October 2 follow-up](nr-task7-transport-20261002.md). The remaining Task 6
+criterion is a controlled prior-build comparison of preparation and total
+frame cost with identical captured scene/geometry and settings. SE/AE
+gameplay and final stereo image/temporal quality remain untested here.
+Task 7 now has a separate default-off transport candidate awaiting its own
+new-DLL qualification. The previous archive's compiled identity above is
+preserved; it was installed by the user for that completed follow-up.

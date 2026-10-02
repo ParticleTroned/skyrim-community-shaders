@@ -210,7 +210,7 @@ namespace
 			{ "effectiveMode", Name(config.EffectiveMode(), modes) },
 			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
 								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
-								 { "transportBypass", config.experiments.transportBypass }, { "diagnostics", config.experiments.diagnostics },
+								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "diagnostics", config.experiments.diagnostics },
 								 { "captureEngineExposure", config.experiments.captureEngineExposure },
 								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } },
 			{ "captureEvidenceSchemaVersion", 1 },
@@ -298,11 +298,13 @@ namespace
 						ReadSettings(request.at("settings"), config.settings);
 					if (request.contains("experiments")) {
 						const auto& e = request.at("experiments");
-						Keys(e, { "upscaled_center", "final_ldr_pre_ui", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
+						Keys(e, { "upscaled_center", "final_ldr_pre_ui", "sharedSourceTransport", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
 						if (e.contains("upscaled_center"))
 							ReadProfile(e.at("upscaled_center"), config.experiments.profiles[0]);
 						if (e.contains("final_ldr_pre_ui"))
 							ReadProfile(e.at("final_ldr_pre_ui"), config.experiments.profiles[1]);
+						if (e.contains("sharedSourceTransport"))
+							config.experiments.sharedSourceTransport = e.at("sharedSourceTransport").get<bool>();
 						if (e.contains("transportBypass"))
 							config.experiments.transportBypass = e.at("transportBypass").get<bool>();
 						if (e.contains("diagnostics"))
@@ -340,7 +342,7 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: sharedSourceTransport is a default-off DevBench candidate for immutable same-eye ROI inputs with private histories and outputs. Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
@@ -560,6 +562,10 @@ namespace
               }
             }
           },
+          "sharedSourceTransport": {
+            "type": "boolean",
+            "description": "Session-only DevBench candidate, default false. Share compatible same-source, same-eye ROI input transport; private native histories and outputs remain separate. Changes retire affected slots at the next source transaction. No performance or native-memory benefit is implied."
+          },
           "transportBypass": {
             "type": "boolean"
           },
@@ -593,7 +599,7 @@ namespace NeuralRendering::Color
 		return { { "settings", SettingsJson(config.settings) },
 			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
 								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
-								 { "transportBypass", config.experiments.transportBypass }, { "diagnostics", config.experiments.diagnostics },
+								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "diagnostics", config.experiments.diagnostics },
 								 { "captureEngineExposure", config.experiments.captureEngineExposure },
 								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } } };
 	}

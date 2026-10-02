@@ -1042,6 +1042,22 @@ namespace NeuralRendering
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	std::vector<SharedTexture> D3D12Interop::GetResourceLeases() const
+	{
+		std::scoped_lock lock(mutex_);
+		std::vector<SharedTexture> result;
+		result.reserve(resourceLeases_.size());
+		for (const auto& lease : resourceLeases_) {
+			SharedTexture texture;
+			texture.resource12 = lease.resource12;
+			texture.resource11 = lease.resource11;
+			if (texture.resource11)
+				texture.resource11->GetDesc(&texture.desc);
+			result.push_back(std::move(texture));
+		}
+		return result;
+	}
+
 	LifetimeFenceSnapshot D3D12Interop::GetLifetimeSnapshot() const
 	{
 		std::scoped_lock lock(mutex_);

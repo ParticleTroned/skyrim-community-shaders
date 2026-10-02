@@ -1,5 +1,25 @@
 # main-vr-nr progress and continuation record
 
+## October 2 Task 6 live follow-up and Task 7 candidate
+
+The [follow-up record](nr-task7-transport-20261002.md) supersedes the Task 6
+live-pending checkpoint below. Producer `6646e62e56d3` passed the standalone
+toggle, source/stereo readiness, drift, range/category and B-to-C checks:
+288 exact stereo transactions, 3,000 profiler frames and 55,698 successful
+native evaluations with zero NR failures. Original settings, AI and camera
+were restored; Skyrim/MO2 closed cleanly and control leases were released.
+Task 6's matched performance criterion remains open because the prior and
+current scenes had five and seven eligible actors with different ROI areas.
+
+Task 7 adds default-off DevBench shared immutable input transport with
+private native histories/outputs, resource-state deduplication, retained
+allocation accounting and a persistent capacity-rejection ledger. Ordinary
+batching, context geometry and both-API retirement remain unchanged.
+The universal DevBench build and all 223 repository plus 21 colour tests
+passed. Producer `a1dc0b067333` is prepared for a same-session private/shared
+comparison. **Task 7 remains open for native output, memory, lifetime and
+total-cost qualification.** No installation or relaunch was performed.
+
 ## October 2 Task 6 implementation and live baseline
 
 The [Task 6 record](nr-task6-qualification-20261002.md) preserves the

@@ -32,7 +32,7 @@
     "Frame Annotations": false,
     "Log Level": 2,
     "PBR Metal Highlight Scale": 0.25,
-    "PBR Metal Reflection Scale": 1.0,
+    "PBR Metal Reflection Scale": 0.75,
     "PBR Verbose JSON Logging": false,
     "Partial Precision": false,
     "Refraction Scale": 0.25,
@@ -571,7 +571,7 @@
       },
       {
         "advanced": true,
-        "ambientMult": 0.9,
+        "ambientMult": 1.0,
         "bloom": {
           "BloomSaturation": 0.8999999761581421,
           "BloomTint": [
@@ -586,12 +586,12 @@
           "HaloSpread": 0.8500000238418579
         },
         "bloomAdvanced": false,
-        "brightness": 0.85,
+        "brightness": 0.9,
         "directionalLightMult": 2.5,
         "effectLightingMult": 1.0,
         "emitColorMult": 1.5,
         "fogAlphaGammaOffset": 0.0,
-        "fogGammaOffset": 0.0,
+        "fogGammaOffset": 0.25,
         "glowmapMult": 1.0,
         "linearOmnidirectionalBulbMult": 1.0,
         "linearPointLightMult": 1.0,
@@ -609,17 +609,17 @@
           "CausticsStrength": 1.0,
           "CausticsTiling": 1.0,
           "FresnelMax": 1.0,
-          "FresnelMin": 0.0,
-          "GlobalReflectionAmount": 1.0,
+          "FresnelMin": 0.25,
+          "GlobalReflectionAmount": 1.25,
           "Muddiness": 1.0,
           "ParallaxQuality": 16,
           "ParallaxStrength": 1.0,
           "RefractionAmount": 1.0,
           "SunSpecularMultiplier": 1.0,
-          "WaterBrightness": 1.0,
+          "WaterBrightness": 0.7,
           "WaveAmplitude": 1.0
         },
-        "waterAdvanced": false,
+        "waterAdvanced": true,
         "waterGammaOffset": 0.0,
         "waterWind": {
           "calmWaveMultiplier": 1.0,
@@ -688,8 +688,8 @@
         }
       },
       {
-        "advanced": false,
-        "ambientMult": 1.0,
+        "advanced": true,
+        "ambientMult": 0.75,
         "bloom": {
           "BloomSaturation": 0.8999999761581421,
           "BloomTint": [
@@ -714,7 +714,7 @@
         "linearOmnidirectionalBulbMult": 1.0,
         "linearPointLightMult": 1.0,
         "linearSpotlightMult": 1.0,
-        "omnidirectionalBulbMult": 1.0,
+        "omnidirectionalBulbMult": 1.25,
         "pointLightMult": 1.0,
         "skyBrightnessMult": 1.0,
         "skyGammaOffset": 0.0,
@@ -747,8 +747,8 @@
         }
       },
       {
-        "advanced": false,
-        "ambientMult": 1.0,
+        "advanced": true,
+        "ambientMult": 0.75,
         "bloom": {
           "BloomSaturation": 0.8999999761581421,
           "BloomTint": [
@@ -766,14 +766,14 @@
         "brightness": 1.0,
         "directionalLightMult": 1.0,
         "effectLightingMult": 1.0,
-        "emitColorMult": 1.0,
+        "emitColorMult": 1.25,
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.0,
         "glowmapMult": 1.0,
         "linearOmnidirectionalBulbMult": 1.0,
         "linearPointLightMult": 1.0,
         "linearSpotlightMult": 1.0,
-        "omnidirectionalBulbMult": 1.0,
+        "omnidirectionalBulbMult": 1.25,
         "pointLightMult": 1.0,
         "skyBrightnessMult": 1.0,
         "skyGammaOffset": 0.0,
@@ -1026,12 +1026,12 @@
     "Enabled": true,
     "MinShadowElevation": 0.25,
     "MoonLightSource": 0,
-    "SunPath": 0,
+    "SunPath": 2,
     "SunriseBeginOffset": 0.0,
     "SunriseEndOffset": 0.0,
     "SunsetBeginOffset": 0.0,
     "SunsetEndOffset": 0.0,
-    "UseAlternateSunPath": true
+    "UseAlternateSunPath": false
   },
   "LOD Blending": {
     "DisableTerrainVertexColors": 0,

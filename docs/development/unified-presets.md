@@ -28,16 +28,27 @@ Exterior and interior Volumetric Lighting share godray intensity, opacity,
 saturation, custom colour contribution, and RGB values of `1.0` across all
 tiers. Disabling weather-driven Volumetric Lighting during rain is unchecked.
 
+Sky Sync selects the Vanilla sun path with Use Alternate Sun Path disabled
+in all three tiers.
+
 Adaptive Balance uses the built-in Fantasy preset for global Bloom shaping,
 with the global Bloom strength reduced to `0.50` in every tier.
 Its Interior profile enables advanced controls with Emissive `2.0` and
 Ambient `0.75` in the shared base for all three tiers.
-Exterior Night also enables advanced controls, with Scene Brightness `0.85`,
+Its Dungeon profile enables advanced controls with Omnidirectional Bulbs
+`1.25` and Ambient `0.75` in all three tiers.
+Its Dwelling profile enables advanced controls with Omnidirectional Bulbs
+`1.25`, Ambient `0.75`, and Emissive `1.25` in all three tiers.
+Exterior Night also enables advanced controls, with Scene Brightness `0.90`,
 Directional Light `2.50`, Point Lights and Omnidirectional Bulbs `1.25`,
-Ambient `0.90`, and Emissive `1.50`. Its Sky and Volumetric Lighting gamma
-offsets are `0.45` and `0.30`, respectively.
+Ambient `1.0`, and Emissive `1.50`. Its Sky, Fog, and Volumetric Lighting
+gamma offsets are `0.45`, `0.25`, and `0.30`, respectively.
+Its detailed water controls are enabled with Water Brightness `0.70`,
+Fresnel Minimum `0.25`, and Global Reflection Amount `1.25`.
 Exterior Day enables advanced controls with Directional Light `1.15` and
 Volumetric Lighting gamma offset `0.75`.
+
+True PBR uses PBR Metal Reflection `0.75` in all three tiers.
 
 Hair Specular uses Marschner with glossiness `70`, specular multiplier `1.70`,
 and diffuse multiplier `0.75`. Indirect specular, indirect diffuse, base

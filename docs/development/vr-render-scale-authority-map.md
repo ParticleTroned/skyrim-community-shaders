@@ -268,6 +268,23 @@ the compound owner summary, inconsistencies, and whether the controller
 revision remained stable across the cross-domain sample. This status is
 observational. No production service path reads the result.
 
+## Deferred shader-disable authority
+
+`ShaderCache::SetEnabled` and deferred native-restoration disable service
+share `perfModeRenderTargetRecreateQueueMutex` in VR. The service's atomic
+pending flag is only a stable-frame fast gate. Its transaction re-reads
+pending/request state after acquiring authority and retains that authority
+through native-status resolution and disable publication. An enable request
+published before acquisition cancels old service work; one published after
+service completion restores enabled state normally. A fresh disable is
+evaluated against the current requested state.
+
+`ShaderCacheDisablePolicy::ApplyPendingDisable` owns this transaction. Its
+deterministic policy test inserts publications at acquisition after the old
+fast check, covers both enable/service orderings, repeated enable and renewed
+disable, and checks that stable frames avoid ownership and status resolution.
+The source contract also covers the production service and helper boundaries.
+
 ## Audit result and follow-up boundary
 
 The current audit found service points for every mapped authoritative owner.

@@ -444,6 +444,7 @@ namespace SIE
 		/** Restores the persisted startup state without scheduling runtime transitions. */
 		void RestoreEnabledSetting(bool value);
 		void SetEnabled(bool value);
+		/** @brief Commit deferred disable under render-scale request authority. */
 		void ServicePendingDisable();
 		bool IsAsync() const;
 		void SetAsync(bool value);

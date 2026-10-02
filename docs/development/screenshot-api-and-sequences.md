@@ -98,6 +98,10 @@ only after the lossless source for that frame has been staged. It therefore
 remains visible without entering the saved frame set. Stop/finalize messages
 may use the ordinary HUD; no second recording overlay is drawn.
 
+The dot requires completed destination preparation and the sequence's owned
+directory lease. It remains off while preparation is pending or fails, and
+after a stop, cancellation, finalization or the last frame is scheduled.
+
 ## Contract identity and versioning
 
 ### Tool identity

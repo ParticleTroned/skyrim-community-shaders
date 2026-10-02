@@ -178,6 +178,32 @@ struct ScreenshotApi
 
 int main()
 {
+	{
+		ScreenshotApi api;
+		auto& sequence = api.sequences.at("parent");
+		sequence.preparationPending = true;
+		if (api.IsSequenceRecording())
+			throw std::runtime_error("pending destination preparation reported recording");
+		sequence.directoryLease = std::make_shared<ScreenshotApi::SequenceRecord::Lease>();
+		if (api.IsSequenceRecording())
+			throw std::runtime_error("pending preparation reported recording with an early lease");
+		sequence.preparationPending = false;
+		sequence.directoryLease.reset();
+		if (api.IsSequenceRecording())
+			throw std::runtime_error("sequence without directory custody reported recording");
+		sequence.directoryLease = std::make_shared<ScreenshotApi::SequenceRecord::Lease>();
+		api.requests.at("parent").state = "running";
+		if (!api.IsSequenceRecording())
+			throw std::runtime_error("prepared running sequence did not report recording");
+		for (const unsigned terminalState : { 0u, 1u, 2u, 3u }) {
+			sequence.stopRequested = terminalState == 0;
+			sequence.cancelRequested = terminalState == 1;
+			sequence.finalizing = terminalState == 2;
+			sequence.nextOrdinal = terminalState == 3 ? sequence.frameCount + 1 : 1;
+			if (api.IsSequenceRecording())
+				throw std::runtime_error("stopped, cancelled, finalizing or exhausted sequence reported recording");
+		}
+	}
 	for (const bool requestedManifest : { false, true }) {
 		for (const bool missingLease : { false, true }) {
 			ScreenshotApi api;

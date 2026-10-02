@@ -1118,7 +1118,8 @@ bool ScreenshotApi::IsSequenceRecording() const
 	std::lock_guard lock(mutex);
 	return std::any_of(sequences.begin(), sequences.end(), [](const auto& entry) {
 		const auto& sequence = entry.second;
-		return !sequence.finalizing && !sequence.stopRequested && !sequence.cancelRequested &&
+		return !sequence.preparationPending && sequence.directoryLease &&
+		       !sequence.finalizing && !sequence.stopRequested && !sequence.cancelRequested &&
 		       sequence.nextOrdinal <= sequence.frameCount;
 	});
 }

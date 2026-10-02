@@ -58,3 +58,26 @@ foreach(_helper_contract scene_packet host_policy scene_capture)
         endif()
     endif()
 endforeach()
+
+set(_helper_lifecycle_header
+    "${_helper_capture_generated}/imgui_vr_helper_render_lifecycle_under_test.h"
+)
+add_custom_command(
+    OUTPUT "${_helper_lifecycle_header}"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${_helper_source_root}"
+        "-DOUTPUT_DIRECTORY=${_helper_capture_generated}" -P
+        "${_helper_source_root}/tests/extract_imgui_vr_helper_render_lifecycle.cmake"
+    DEPENDS
+        "${_helper_source_root}/src/Hooks.cpp"
+        "${_helper_source_root}/tests/extract_imgui_vr_helper_render_lifecycle.cmake"
+    VERBATIM
+)
+add_custom_target(imgui_vr_helper_lifecycle_extraction DEPENDS "${_helper_lifecycle_header}")
+add_controller_test(
+    imgui_vr_helper_render_lifecycle_test
+    ImGuiVRHelper_render_lifecycle
+    tests/imgui_vr_helper_render_lifecycle_test.cpp
+)
+add_dependencies(imgui_vr_helper_render_lifecycle_test imgui_vr_helper_lifecycle_extraction)
+target_include_directories(imgui_vr_helper_render_lifecycle_test PRIVATE "${_helper_capture_generated}")

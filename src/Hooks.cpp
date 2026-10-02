@@ -31,6 +31,7 @@
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VR/ImGuiVRHelperHost.h"
 #include "Features/VolumetricLighting.h"
 
 #include "ShaderTools/BSShaderHooks.h"
@@ -930,8 +931,13 @@ struct IDXGISwapChain_Present
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
 		state->Reset();
-		if (globals::game::isVR)
+		if (globals::game::isVR) {
 			CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);
+			// Hosted clients must advance even when all CSX menus and overlays are closed.
+			ImGuiVRHelperHost::Tick();
+			if (globals::d3d::context && ImGuiVRHelperHost::IsAvailable() && globals::features::vr.IsOpenVRCompatible())
+				globals::features::vr.InstallSubmitHook();
+		}
 		menu->DrawOverlay();
 		globals::features::screenshotFeature.OnBeforePresent(This);
 		globals::features::screenshotFeature.DrawPostCaptureIndicator();

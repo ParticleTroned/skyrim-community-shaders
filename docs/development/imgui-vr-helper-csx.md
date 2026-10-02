@@ -24,6 +24,17 @@ Content demand comes from the registered helper. An absent, disabled or
 empty host performs no depth-copy or presentation-copy graphics work.
 Activation is independent of the CSX menu's visibility.
 
+For Floating Subtitles, users co-install the paired CSX and ImGui VR Helper
+builds alongside Floating Subtitles and its normal dependencies. No helper
+menu, toggle, focus request, demo or setup step is required. The helper's
+own settings UI remains optional and retains its existing behavior.
+
+CSX refreshes hosted content demand and installs the required Submit hook
+from its unconditional VR Present lifecycle before drawing any menu.
+Skipping CSX overlay rendering therefore does not stop subtitle updates or
+depth-capture requests. External helper callbacks and world quads do not
+require the helper's own settings UI to be visible.
+
 The existing CSX OpenVR Submit path remains authoritative for the selected
 payload, retained resources, guard decisions and presentation accounting.
 Hosting substitutes a successfully prepared color texture at eligible
@@ -145,6 +156,21 @@ depth discard for diagnosis while retaining scene admission and stereo
 composition. Restore it to `true` after the comparison.
 
 ## Validation evidence
+
+### Automatic startup with menus closed, 2 October 2026
+
+The original adapter called its demand tick only from `SubmitOverlayFrame`,
+which is skipped when CSX has no UI to draw. That could prevent startup of
+scene capture and hook installation with menus closed. The tick and
+helper-required hook installation now run in the unconditional VR Present
+lifecycle, independently of menu drawing.
+
+`ImGuiVRHelper_render_lifecycle` extracts and executes the actual Present
+lifecycle with a closed-menu fixture. It verifies demand changes and hook
+installation before the skipped UI, reopening without duplicate lifecycle
+work, helper absence, missing D3D context and non-VR isolation. The ten
+focused tests pass. Production package receipts record the exact build
+and archive identity; headset verification remains outstanding.
 
 ### Subtitle camera regression, 2 October 2026
 

@@ -508,5 +508,22 @@ int main()
 	CHECK(ResolveCharacterMaskRoi(separatedTiles, kOwners, kWidth, kHeight, 1000, state, false, true).computeRegions.count == 2);
 	CHECK(ResolveCharacterMaskRoi(separatedTiles, kOwners, kWidth, kHeight, 1000, state, false, false).computeRegions.count == 0);
 	CHECK(ResolveCharacterMaskRoi(separatedTiles, kOwners, kWidth, kHeight, 1000, state, false, true).computeRegions.count == 2);
+	StableCharacterMaskRoi reusedState, freshScratchState;
+	CharacterMaskRoiScratch scratch;
+	for (unsigned frame = 1; frame <= 400; ++frame) {
+		const auto drift = frame % 200;
+		const bool merged = frame > 120 && frame < 160;
+		const auto moving = Tiles(std::array{ CharacterRect{ 100 + drift, 200, 200 + drift, 400 },
+			CharacterRect{ merged ? 210u + drift : 1000u + drift, 200, 1200 + drift, 400 } });
+		const auto owners = frame < 220 ? std::span<const std::uint64_t>(reversedOwners) : std::span<const std::uint64_t>(kOwners);
+		const auto reused = ResolveCharacterMaskRoi(moving, owners, kWidth, kHeight, frame, reusedState, false, true, nullptr, &scratch);
+		const auto reference = ResolveCharacterMaskRoi(moving, owners, kWidth, kHeight, frame, freshScratchState, false, true);
+		CHECK(reused == reference && Covered(reused, moving));
+		CHECK(ResolveCharacterMaskRoi(moving, owners, kWidth, kHeight, frame, reusedState, false, true, nullptr, &scratch) == reused);
+		if (frame == 100) {
+			reusedState = {};
+			freshScratchState = {};
+		}
+	}
 	return 0;
 }

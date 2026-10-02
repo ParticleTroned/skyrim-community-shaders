@@ -677,8 +677,14 @@ namespace
 				context_->Flush();
 				std::vector<Bounds> untouched(right.expected.size(), Bounds{ 81, 82, 83, 84 });
 				const auto beforePoll = untouched;
-				const auto pendingPoll = NeuralRendering::PollCharacterMaskBounds(context_.Get(), right.query.Get(), right.staging.Get(),
-					std::as_writable_bytes(std::span(untouched)));
+				NeuralRendering::CharacterMaskReadbackDecision decision;
+				unsigned polls = 0;
+				const auto poll = [&]() {
+					++polls;
+					return NeuralRendering::PollCharacterMaskBounds(context_.Get(), right.query.Get(), right.staging.Get(),
+						std::as_writable_bytes(std::span(untouched)), true);
+				};
+				const auto pendingPoll = decision.Resolve(poll);
 				Require(pendingPoll.status == CharacterMaskReadbackStatus::Pending && untouched == beforePoll,
 					"Nonblocking pending result must preserve destination while GPU is gated");
 				Require(pendingPoll.waitMs < 20.0, "Nonblocking poll must not consume the synchronous 50ms budget");
@@ -693,6 +699,22 @@ namespace
 					"A ready left query must not admit a staging Map while the stereo fence is pending");
 				Check(gate.cpuFence->Signal(1), "Release delayed right-eye copy");
 				WaitForFixtureCopies({ &left, &right }, completion);
+				Require(decision.Resolve(poll).status == CharacterMaskReadbackStatus::Pending && polls == 1 && untouched == beforePoll,
+					"Producer completion between eye reads must not revise the frozen fallback decision");
+				decision = {};
+				Require(decision.Resolve(poll).Ready() && polls == 2 && untouched == right.expected,
+					"A new transaction may consume the now-completed result");
+				Require(decision.Resolve(poll).Ready() && polls == 2,
+					"Completed stereo result must be mapped only once");
+				decision = {};
+				unsigned failures = 0;
+				const auto fail = [&]() {
+					++failures;
+					return NeuralRendering::CharacterMaskReadbackResult{ CharacterMaskReadbackStatus::QueryFailed, E_FAIL };
+				};
+				Require(!decision.Resolve(fail).Ready() && !decision.Resolve(poll).Ready() && failures == 1 && polls == 2,
+					"Failed source decision must remain failed for peer eyes and reprepare");
+				cases_ += 4;
 				const auto deadline = Clock::now() + NeuralRendering::kCharacterMaskReadbackBudget;
 				Require(Read(left, actualLeft, deadline, completion).Ready() &&
 							Read(right, actualRight, deadline, completion).Ready(),

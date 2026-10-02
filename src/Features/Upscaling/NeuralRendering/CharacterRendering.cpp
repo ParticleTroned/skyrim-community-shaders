@@ -374,6 +374,61 @@ namespace NeuralRendering
 			bool valid = false;
 		};
 
+		struct ProjectionEye
+		{
+			RE::NiPoint3 position{};
+			float4x4 unjittered{}, raster{};
+			Matrix inverse{};
+		};
+
+		struct SourceGeometry
+		{
+			std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+			std::uint32_t unboundedCategoryMask = 0;
+			std::array<ProjectionEye, 2> eyes{};
+			RE::NiPoint3 averageEye{};
+			float4 depthLinearization{};
+			std::vector<Observation> observations;
+			std::vector<std::pair<std::uint32_t, ActorAdmission>> admissions;
+		};
+
+		void CaptureSourceGeometry(std::uint32_t a_frame, std::uint32_t a_eyeCount)
+		{
+			capturedGeometry_.frame = a_frame;
+			capturedGeometry_.unboundedCategoryMask = unboundedCategoryMask_;
+			capturedGeometry_.depthLinearization = Util::GetCameraData();
+			capturedGeometry_.observations.assign(observations_.begin(), observations_.end());
+			auto& admissions = capturedGeometry_.admissions;
+			admissions.clear();
+			for (const auto& entry : actorAdmissions_)
+				if (entry.second.frame == a_frame)
+					admissions.push_back(entry);
+			std::ranges::sort(admissions, {}, [](const auto& entry) { return entry.first; });
+			for (std::uint32_t eye = 0; eye < a_eyeCount; ++eye) {
+				capturedGeometry_.eyes[eye] = {
+					GetProjectionEyePosition(eye),
+					globals::game::frameBufferCached.GetCameraViewProjUnjittered(eye).Transpose(),
+					globals::game::frameBufferCached.GetCameraViewProj(eye).Transpose(),
+					globals::game::frameBufferCached.GetCameraProjInverse(eye)
+				};
+			}
+			capturedGeometry_.averageEye = capturedGeometry_.eyes[0].position;
+			if (a_eyeCount == 2u) {
+				const auto& left = capturedGeometry_.eyes[0].position;
+				const auto& right = capturedGeometry_.eyes[1].position;
+				capturedGeometry_.averageEye = { (left.x + right.x) * 0.5f,
+					(left.y + right.y) * 0.5f, (left.z + right.z) * 0.5f };
+			}
+			InvalidateProjectionCache();
+		}
+
+		const ActorAdmission* FindCapturedAdmission(std::uint32_t a_actor) const noexcept
+		{
+			const auto& entries = capturedGeometry_.admissions;
+			const auto found = std::ranges::lower_bound(entries, a_actor, {}, [](const auto& entry) { return entry.first; });
+			return found != entries.end() && found->first == a_actor ? &found->second : nullptr;
+		}
+
 		struct ProjectedActor
 		{
 			std::uint32_t actorFormId = 0;
@@ -398,6 +453,7 @@ namespace NeuralRendering
 
 		struct EarlyMaskReadback
 		{
+			CharacterMaskReadbackDecision decision;
 			ComPtr<ID3D11Buffer> bounds, staging;
 			ComPtr<ID3D11UnorderedAccessView> uav;
 			ComPtr<ID3D11ShaderResourceView> srv;
@@ -446,6 +502,9 @@ namespace NeuralRendering
 
 		struct Slot
 		{
+			std::vector<CharacterMaskRoiTileBounds> mappedBoundsScratch;
+			std::vector<std::uint64_t> ownerScratch;
+			CharacterMaskRoiScratch maskRoiScratch;
 			std::shared_ptr<CharacterMaskSupportCapture> supportEvidence;
 			ComPtr<ID3D11Texture2D> mask;
 			ComPtr<ID3D11ShaderResourceView> maskSrv;
@@ -681,6 +740,7 @@ namespace NeuralRendering
 				return false;
 			}
 			observationFrame_ = a_frame;
+			actorRefinements_ = 0;
 			observations_.clear();
 			observationKeys_.clear();
 			std::erase_if(actorAdmissions_, [a_frame](const auto& a_entry) {
@@ -748,6 +808,9 @@ namespace NeuralRendering
 
 		void InvalidateCaptureMetadata() noexcept
 		{
+			capturedGeometry_.frame = std::numeric_limits<std::uint32_t>::max();
+			capturedGeometry_.observations.clear();
+			capturedGeometry_.admissions.clear();
 			sourceEvidence_.reset();
 			earlyMaskCaptureSerial_ = 0;
 			capturedFrame_ = std::numeric_limits<std::uint32_t>::max();
@@ -1513,22 +1576,15 @@ namespace NeuralRendering
 		void QueueEarlyMaskBounds(ID3D11Device* a_device, ID3D11DeviceContext* a_context, CharacterSourceEvidence* evidence = nullptr)
 		{
 			try {
-				EarlyMaskReadback* selected = nullptr;
-				for (auto& readback : earlyMaskReadbacks_) {
-					if (readback.pending) {
-						BOOL ready = FALSE;
-						const auto result = a_context->GetData(readback.query.Get(), &ready, sizeof(ready), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-						if (FAILED(result)) {
-							(void)FailEarlyMaskBounds("early_bounds_retire_query_failed", result);
-							continue;
-						}
-						if (result != S_OK || !ready)
-							continue;
-						readback.pending = false;
+				auto* selected = FindReusableCharacterMaskReadback(std::span<EarlyMaskReadback>(earlyMaskReadbacks_), [&](auto& readback) {
+					BOOL ready = FALSE;
+					const auto result = a_context->GetData(readback.query.Get(), &ready, sizeof(ready), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+					if (FAILED(result)) {
+						(void)FailEarlyMaskBounds("early_bounds_retire_query_failed", result);
+						return false;
 					}
-					selected = &readback;
-					break;
-				}
+					return result == S_OK && ready;
+				});
 				if (!selected) {
 					Increment(snapshot_.earlyMaskBounds.ringBusy);
 					return;
@@ -1567,6 +1623,7 @@ namespace NeuralRendering
 				a_context->End(selected->query.Get());
 				selected->pending = true;
 				selected->hasData = false;
+				selected->decision = {};
 				selected->captureSerial = earlyMaskCaptureSerial_;
 				selected->frame = capturedFrame_;
 				selected->categories = capturedEnabledCategoryMask_;
@@ -1604,20 +1661,24 @@ namespace NeuralRendering
 					return false;
 				}
 				if (!selected->hasData) {
-					Increment(snapshot_.earlyMaskBounds.polls);
-					const auto result = PollCharacterMaskBounds(a_args.context, selected->query.Get(), selected->staging.Get(),
-						std::as_writable_bytes(std::span(selected->tiles)));
-					snapshot_.earlyMaskBounds.lastPollCpuMs = result.waitMs;
-					if (activePreparationEvidence_) {
-						activePreparationEvidence_->boundsPollCpuAvailable = true;
-						activePreparationEvidence_->boundsPollCpuMs = result.waitMs;
-					}
+					const auto& result = selected->decision.Resolve([&]() {
+						Increment(snapshot_.earlyMaskBounds.polls);
+						const auto polled = PollCharacterMaskBounds(a_args.context, selected->query.Get(), selected->staging.Get(),
+							std::as_writable_bytes(std::span(selected->tiles)), activePreparationEvidence_ != nullptr);
+						snapshot_.earlyMaskBounds.lastPollCpuMs = polled.waitMs;
+						snapshot_.earlyMaskBounds.lastPollCpuAvailable = activePreparationEvidence_ != nullptr;
+						if (activePreparationEvidence_) {
+							activePreparationEvidence_->boundsPollCpuAvailable = true;
+							activePreparationEvidence_->boundsPollCpuMs = polled.waitMs;
+						}
+						if (polled.status == CharacterMaskReadbackStatus::Pending)
+							Increment(snapshot_.earlyMaskBounds.pending);
+						else if (!polled.Ready())
+							(void)FailEarlyMaskBounds(polled.Reason(), polled.result);
+						return polled;
+					});
 					if (!result.Ready()) {
 						a_slot.maskRoiStatus = result.status == CharacterMaskReadbackStatus::Pending ? "early_bounds_pending" : "early_bounds_failed";
-						if (result.status == CharacterMaskReadbackStatus::Pending)
-							Increment(snapshot_.earlyMaskBounds.pending);
-						else
-							(void)FailEarlyMaskBounds(result.Reason(), result.result);
 						return false;
 					}
 					selected->pending = false;
@@ -1627,7 +1688,7 @@ namespace NeuralRendering
 				if (activePreparationEvidence_)
 					activePreparationEvidence_->boundsReady = true;
 				const auto count = selected->tiles.size() / selected->eyeCount;
-				std::vector<CharacterMaskRoiTileBounds> mapped;
+				auto& mapped = a_slot.mappedBoundsScratch;
 				const auto& input = a_args.viewportCrop.input;
 				const auto samplingJitter = ResolveCharacterMaskSamplingJitter(a_args.outputIsJittered, capturedJitterX_, capturedJitterY_);
 				if (!MapEarlyCharacterMaskBounds(std::span(selected->tiles).subspan(a_args.eyeIndex * count, count),
@@ -1635,12 +1696,14 @@ namespace NeuralRendering
 						a_args.outputWidth, a_args.outputHeight, samplingJitter[0], samplingJitter[1],
 						a_args.settings.depthAwareFeather ? a_args.settings.featherRadius : 0u, mapped))
 					return FailEarlyMaskBounds("early_bounds_mapping_invalid", E_INVALIDARG);
-				std::vector<std::uint64_t> owners;
+				auto& owners = a_slot.ownerScratch;
+				owners.clear();
+				owners.reserve(a_plan.actorRegions.size());
 				for (const auto& actor : a_plan.actorRegions)
 					owners.push_back(actor.identity);
 				const auto tight = ResolveCharacterMaskRoi(mapped, owners, a_args.outputWidth, a_args.outputHeight,
 					a_args.sourceWorldFrame, a_slot.stableMaskRoi, a_args.settings.multiRoiSavingsGate, a_args.settings.multiRoi,
-					&a_slot.stableComputeSubrect);
+					&a_slot.stableComputeSubrect, &a_slot.maskRoiScratch);
 				if (!tight.valid)
 					return FailEarlyMaskBounds("early_bounds_plan_invalid", E_INVALIDARG);
 				if (tight.empty) {
@@ -1736,25 +1799,22 @@ namespace NeuralRendering
 			projectionKey_ = key;
 			projectionCacheValid_ = true;
 			projectedActors_.clear();
-			if (observationFrame_ != a_args.frameId)
+			if (capturedGeometry_.frame != a_args.sourceWorldFrame)
 				return;
 
-			std::unordered_map<std::uint32_t, ProjectedActor> actors;
-			actors.reserve(observations_.size());
-			const auto averageEye = GetProjectionAverageEyePosition();
+			projectedActors_.resize(capturedGeometry_.admissions.size());
+			for (std::size_t index = 0; index < projectedActors_.size(); ++index)
+				projectedActors_[index].actorFormId = capturedGeometry_.admissions[index].first;
+			const auto averageEye = capturedGeometry_.averageEye;
 			const auto eyeCount = globals::game::isVR ? 2u : 1u;
-			std::array<RE::NiPoint3, 2> eyePositions{};
-			std::array<float4x4, 2> eyeMatrices{}, rasterMatrices{};
-			for (std::uint32_t eye = 0; eye < eyeCount; ++eye) {
-				eyePositions[eye] = GetProjectionEyePosition(eye);
-				eyeMatrices[eye] = globals::game::frameBufferCached.GetCameraViewProjUnjittered(eye).Transpose();
-				rasterMatrices[eye] = globals::game::frameBufferCached.GetCameraViewProj(eye).Transpose();
-			}
-			for (const auto& observation : observations_) {
+			for (const auto& observation : capturedGeometry_.observations) {
 				if (!IsCharacterCategoryEnabled(observation.category, a_args.settings))
 					continue;
-				auto& actor = actors[observation.actorFormId];
-				actor.actorFormId = observation.actorFormId;
+				const auto& admissions = capturedGeometry_.admissions;
+				const auto found = std::ranges::lower_bound(admissions, observation.actorFormId, {}, [](const auto& entry) { return entry.first; });
+				if (found == admissions.end() || found->first != observation.actorFormId)
+					continue;
+				auto& actor = projectedActors_[static_cast<std::size_t>(found - admissions.begin())];
 				const float dx = observation.center.x - averageEye.x;
 				const float dy = observation.center.y - averageEye.y;
 				const float dz = observation.center.z - averageEye.z;
@@ -1765,8 +1825,9 @@ namespace NeuralRendering
 				for (std::uint32_t eye = 0; eye < eyeCount; ++eye) {
 					CharacterRect projected{};
 					CharacterProjectionReason reason{};
+					const auto& projectionEye = capturedGeometry_.eyes[eye];
 					const auto projection = ProjectSphere(
-						observation, eyePositions[eye], eyeMatrices[eye], rasterMatrices[eye],
+						observation, projectionEye.position, projectionEye.unjittered, projectionEye.raster,
 						key.width, key.height, projected, &reason);
 					if (projection == CharacterProjectionResult::Offscreen) {
 						continue;
@@ -1782,13 +1843,6 @@ namespace NeuralRendering
 						actor.selectedRects[eye], projected);
 				}
 			}
-			projectedActors_.reserve(actors.size());
-			for (auto& [actorFormId, actor] : actors) {
-				(void)actorFormId;
-				projectedActors_.push_back(std::move(actor));
-			}
-			std::ranges::sort(
-				projectedActors_, {}, &ProjectedActor::actorFormId);
 		}
 
 		ProjectedPlan BuildPlan(const CharacterMaskPrepareArgs& a_args)
@@ -1807,23 +1861,23 @@ namespace NeuralRendering
 					 CharacterCategory::Hair }) {
 				if (IsCharacterCategoryEnabled(category, a_args.settings)) {
 					result.projectionUncertain = result.projectionUncertain ||
-					                             (unboundedCategoryMask_ & CharacterPolicy::CategoryBit(category)) != 0;
+					                             (capturedGeometry_.unboundedCategoryMask & CharacterPolicy::CategoryBit(category)) != 0;
 				}
 			}
 			RefreshProjectedActors(a_args);
 			const auto& crop = a_args.viewportCrop.output;
-			std::vector<CharacterRegionCandidate> candidates;
+			auto& candidates = regionCandidateScratch_;
+			candidates.clear();
 			candidates.reserve(projectedActors_.size());
-			for (const auto& [actorId, admission] : actorAdmissions_) {
+			for (const auto& [actorId, admission] : capturedGeometry_.admissions) {
 				(void)actorId;
 				if (admission.frame == a_args.frameId && admission.history.sizeEligible &&
 					!admission.admitted && a_args.settings.adaptiveRoiSelection)
 					++result.adaptivelyCulledCharacters;
 			}
 			for (const auto& actor : projectedActors_) {
-				const auto admission = actorAdmissions_.find(actor.actorFormId);
-				if (admission == actorAdmissions_.end() ||
-					admission->second.frame != a_args.frameId || !admission->second.admitted)
+				const auto* admission = FindCapturedAdmission(actor.actorFormId);
+				if (!admission || admission->frame != a_args.frameId || !admission->admitted)
 					continue;
 				const auto& actorRect = actor.selectedRects[a_args.eyeIndex];
 				// Offscreen is a per-eye proof, not a reason to expand the other eye.
@@ -1874,19 +1928,19 @@ namespace NeuralRendering
 				if (!local.IsValid())
 					continue;
 				++result.visibleCharacters;
-				if (admission->second.hasFaceAnchor)
+				if (admission->hasFaceAnchor)
 					++result.visibleFaces;
 				candidates.push_back({
 					.rect = local,
-					.distanceMeters = admission->second.distanceMeters,
-					.facePixelSize = admission->second.facePixelSize,
+					.distanceMeters = admission->distanceMeters,
+					.facePixelSize = admission->facePixelSize,
 					.stableId = actor.actorFormId,
 				});
 				// Preserve lifetime ownership before eligibility compaction can join
 				// otherwise distant actors. Neither distance order nor geometry IDs
 				// identify a temporal inference history.
 				auto identity = HashCombine(
-					HashCombine(1469598103934665603ull, actor.actorFormId), admission->second.identity);
+					HashCombine(1469598103934665603ull, actor.actorFormId), admission->identity);
 				result.actorRegions.push_back({ identity ? identity : 1u, local });
 			}
 			// Only order here: actor admission was already applied to authored
@@ -2145,14 +2199,12 @@ namespace NeuralRendering
 				CharacterRegionPolicy::ResolveDistanceFadeWidth(
 					a_args.settings.maximumDistanceMeters) /
 				Util::Units::GAME_UNIT_TO_M;
-			const auto cameraData = Util::GetCameraData();
+			const auto& cameraData = capturedGeometry_.depthLinearization;
 			constants.depthLinearization[0] = cameraData.x;
 			constants.depthLinearization[1] = cameraData.y;
 			constants.depthLinearization[2] = cameraData.z;
 			constants.depthLinearization[3] = cameraData.w;
-			constants.cameraProjInverse =
-				globals::game::frameBufferCached.GetCameraProjInverse(
-					a_args.eyeIndex);
+			constants.cameraProjInverse = capturedGeometry_.eyes[a_args.eyeIndex].inverse;
 			const auto samplingJitter = ResolveCharacterMaskSamplingJitter(a_args.outputIsJittered, capturedJitterX_, capturedJitterY_);
 			constants.jitter[0] = samplingJitter[0];
 			constants.jitter[1] = samplingJitter[1];
@@ -2331,11 +2383,14 @@ namespace NeuralRendering
 			static_cast<std::size_t>(CharacterClassificationRejection::Count)>
 			classificationRejections_{};
 		std::vector<Observation> observations_;
+		SourceGeometry capturedGeometry_;
+		std::uint32_t actorRefinements_ = 0;
 		std::unordered_set<std::uintptr_t> observationKeys_;
 		std::uint32_t unboundedCategoryMask_ = 0;
 		std::uint32_t observationFrame_ = std::numeric_limits<std::uint32_t>::max();
 		ProjectionKey projectionKey_{};
 		std::vector<ProjectedActor> projectedActors_;
+		std::vector<CharacterRegionCandidate> regionCandidateScratch_;
 		bool projectionCacheValid_ = false;
 		std::array<std::optional<EarlySelectionPlan>, 2> earlySelectionPlans_{};
 		std::unordered_map<std::uint32_t, ActorAdmission> actorAdmissions_;
@@ -2438,9 +2493,9 @@ namespace NeuralRendering
 				return false;
 			if (!state_->actorAdmissions_.contains(a_actorFormId) &&
 				state_->actorAdmissions_.size() >= CharacterPolicy::kMaximumObservationsPerFrame) {
-				// Fail closed without growing an unbounded draw-time identity cache.
+				// Retain authored coverage without growing the bounded identity cache.
 				Increment(state_->snapshot_.observationCapacityDrops);
-				return false;
+				return true;
 			}
 			auto& admission = state_->actorAdmissions_[a_actorFormId];
 			if (admission.valid && admission.frame == a_frame && admission.identity == a_args.actorIdentity)
@@ -2458,6 +2513,13 @@ namespace NeuralRendering
 			admission.policyKey = policyKey;
 			admission.width = a_args.outputWidthPerEye;
 			admission.height = a_args.outputHeight;
+			if (!TryRefineCharacterActor(state_->actorRefinements_)) {
+				admission.distanceMeters = 0.0f;
+				admission.facePixelSize = 0;
+				admission.hasFaceAnchor = false;
+				admission.admitted = true;
+				return true;
+			}
 			const auto validBound = [](const CharacterActorBound& a_bound) {
 				return std::isfinite(a_bound.centerX) && std::isfinite(a_bound.centerY) &&
 				       std::isfinite(a_bound.centerZ) && std::isfinite(a_bound.radius) && a_bound.radius > 0.0f;
@@ -2541,6 +2603,11 @@ namespace NeuralRendering
 			if (!state_->BeginObservationFrame(a_frame))
 				return false;
 			const auto admission = state_->actorAdmissions_.find(a_actorFormId);
+			if (admission == state_->actorAdmissions_.end() &&
+				state_->actorAdmissions_.size() >= CharacterPolicy::kMaximumObservationsPerFrame) {
+				state_->unboundedCategoryMask_ |= CharacterPolicy::CategoryBit(a_category);
+				return true;
+			}
 			if (admission == state_->actorAdmissions_.end() ||
 				admission->second.frame != a_frame || !admission->second.admitted)
 				return false;
@@ -2680,6 +2747,7 @@ namespace NeuralRendering
 					});
 			const auto eyeCount = globals::game::isVR ? 2u : 1u;
 			if (!hasSelectedObservation) {
+				state_->CaptureSourceGeometry(a_frame, eyeCount);
 				// A logical empty capture bypasses Feature 18 without copying
 				// G-buffer data when no selected character was observed.
 				state_->capturedFrame_ = a_frame;
@@ -2758,6 +2826,7 @@ namespace NeuralRendering
 			}
 			if (!state_->EnsureCaptureShader(a_device, a_categorySource))
 				return fail("character snapshot shader/resources could not be created");
+			state_->CaptureSourceGeometry(a_frame, eyeCount);
 
 			// Capture only the current projected character area, not the much larger
 			// temporally retained provider ROI. Unknown projections still capture
@@ -2765,21 +2834,17 @@ namespace NeuralRendering
 			// validity rectangle; untouched texels are never stale-mask evidence.
 			std::array<ComputeSubrect, 2> sourceRects{};
 			for (std::uint32_t eye = 0; eye < eyeCount; ++eye) {
-				const auto eyePosition = GetProjectionEyePosition(eye);
-				const auto eyeMatrix = globals::game::frameBufferCached
-				                           .GetCameraViewProjUnjittered(eye)
-				                           .Transpose();
-				const auto rasterMatrix = globals::game::frameBufferCached.GetCameraViewProj(eye).Transpose();
-				if ((state_->unboundedCategoryMask_ & a_enabledCategoryMask) != 0) {
+				const auto& projectionEye = state_->capturedGeometry_.eyes[eye];
+				if ((state_->capturedGeometry_.unboundedCategoryMask & a_enabledCategoryMask) != 0) {
 					sourceRects[eye] = BuildFullComputeSubrect(a_sourceEyeWidth, a_sourceHeight);
 					continue;
 				}
-				for (const auto& observation : state_->observations_) {
+				for (const auto& observation : state_->capturedGeometry_.observations) {
 					if ((a_enabledCategoryMask & CharacterPolicy::CategoryBit(observation.category)) == 0)
 						continue;
 					CharacterRect rect{};
-					const auto projection = state_->ProjectSphere(observation, eyePosition,
-						eyeMatrix, rasterMatrix, a_sourceEyeWidth, a_sourceHeight, rect);
+					const auto projection = state_->ProjectSphere(observation, projectionEye.position,
+						projectionEye.unjittered, projectionEye.raster, a_sourceEyeWidth, a_sourceHeight, rect);
 					if (projection == CharacterProjectionResult::Offscreen)
 						continue;
 					if (!rect.IsValid()) {
@@ -2887,6 +2952,7 @@ namespace NeuralRendering
 		try {
 			std::scoped_lock lock(state_->mutex_);
 			if (!state_->earlyMaskCaptureSerial_ || state_->capturedFrame_ != a_args.sourceWorldFrame ||
+				state_->capturedGeometry_.frame != a_args.sourceWorldFrame ||
 				state_->capturedEyeWidth_ != a_args.viewportCrop.fullInput.width ||
 				state_->capturedHeight_ != a_args.viewportCrop.fullInput.height ||
 				state_->capturedEyeCount_ != (globals::game::isVR ? 2u : 1u) ||
@@ -2998,7 +3064,7 @@ namespace NeuralRendering
 				return fail("character category selection expanded beyond the captured source policy");
 			}
 			const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;
-			if (state_->capturedFrame_ != sourceWorldFrame ||
+			if (state_->capturedFrame_ != sourceWorldFrame || state_->capturedGeometry_.frame != sourceWorldFrame ||
 				state_->capturedEyeCount_ != (globals::game::isVR ? 2u : 1u) ||
 				state_->capturedEyeWidth_ != a_args.viewportCrop.fullInput.width ||
 				state_->capturedHeight_ != a_args.viewportCrop.fullInput.height ||
@@ -3238,7 +3304,7 @@ namespace NeuralRendering
 					slot.stableComputeSubrect = {};
 					slot.multiRoiPolicyKey = key.settings;
 				}
-				const auto planningStart = std::chrono::steady_clock::now();
+				const auto planningStart = evidence ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 				const auto requiredComputeSubrect = selectionEmpty ?
 				                                        ComputeSubrect{} :
 				                                    fullOutputMask ?
@@ -3303,9 +3369,7 @@ namespace NeuralRendering
 				}
 				if (slot.computeRegions.count == 0)
 					slot.stableMultiRoi = {};
-				slot.maskRoiPlanningCpuMs = std::chrono::duration<double, std::milli>(
-					std::chrono::steady_clock::now() - planningStart)
-				                                .count();
+				slot.maskRoiPlanningCpuMs = evidence ? ElapsedMilliseconds(planningStart) : 0.0;
 				if (evidence) {
 					evidence->roiPlanningCpuAvailable = true;
 					evidence->roiPlanningCpuMs = slot.maskRoiPlanningCpuMs;
@@ -3584,6 +3648,10 @@ namespace NeuralRendering
 			for (const auto& args : a_args) {
 				if (!args.device || !args.context || args.context != a_args.front().context ||
 					args.device != a_args.front().device || args.frameId != a_args.front().frameId ||
+					args.sourceWorldFrame != a_args.front().sourceWorldFrame || args.generation != a_args.front().generation ||
+					args.settings != a_args.front().settings || args.outputIsJittered != a_args.front().outputIsJittered ||
+					args.viewportCrop.fullInput != a_args.front().viewportCrop.fullInput ||
+					args.viewportCrop.fullOutput != a_args.front().viewportCrop.fullOutput ||
 					args.context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
 					args.featureSlot >= state_->slots_.size() || args.eyeIndex >= (globals::game::isVR ? 2u : 1u) ||
 					(args.featureSlot & 1u) != args.eyeIndex || (slotMask & (1u << args.featureSlot)) ||

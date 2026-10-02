@@ -226,8 +226,21 @@ namespace
 		const auto peer = policy.Resolve(100, expanded);
 		Require(GetEnabledCharacterCategoryMask(peer) == 2 && peer.faceStrength == 1.0f,
 			"Capture and both eyes must retain the same frame's selection and strength");
-		Require(peer.debugView == CharacterDebugView::RoiRectangles,
-			"A diagnostic-only edit must not wait for category policy advancement");
+		Require(peer == face,
+			"All mask and planning policy must remain immutable for a retained source");
+		expanded.maximumDistanceMeters = 30.0f;
+		expanded.multiRoi = true;
+		expanded.multiRoiSavingsGate = false;
+		expanded.depthAwareFeather = true;
+		expanded.featherRadius = 4;
+		expanded.visibilityDepthTest = false;
+		expanded.maskTestMode = CharacterMaskTestMode::ForceZero;
+		expanded.roiMargin = 0.5f;
+		expanded.roiHoldFrames = 12;
+		expanded.minimumFacePixelSize = 100;
+		expanded.adaptiveRoiSelection = true;
+		Require(policy.Resolve(100, expanded) == face,
+			"Producer policy edits between eyes must not change any prepared field");
 		Require(policy.Resolve(101, expanded) == expanded,
 			"Expanded categories must take effect on the next source frame");
 		Require(GetEnabledCharacterCategoryMask(policy.Resolve(100, expanded)) == 2,

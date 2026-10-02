@@ -1,5 +1,21 @@
 # main-vr-nr progress and continuation record
 
+## October 2 Task 6 implementation and live baseline
+
+The [Task 6 record](nr-task6-qualification-20261002.md) preserves the
+standalone toggle's successful live round trip on producer `8c0267be060e`,
+900 profiler frames and 240 exact attributed stereo transactions. Two
+regions per eye stayed stable through cumulative small camera moves;
+range/category changes and B-to-C completed without an NR fault. Skyrim
+and MO2 closed normally after restoration, and the access lease was released.
+
+The new implementation freezes complete source geometry/camera/policy,
+shares one nonblocking readiness decision, reuses planning storage and
+bounds actor refinement conservatively. Task 6 remains open for the new
+DLL's matched live correctness and performance-neutral qualification.
+The installed DLL's baseline is not evidence of the new implementation's
+runtime performance. Tasks 2, 4 and 5 retain their prior conclusions.
+
 ## October 2 Tasks 4 and 5 concluded
 
 The [final Task 4/5 record](nr-task4-5-conclusion-20261002.md) supersedes

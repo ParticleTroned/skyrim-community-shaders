@@ -96,6 +96,28 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertIn("a_batchArgs[eye].reset = a_batchArgs[eye].reset || maskResults[eye].resetHistory;", upscaling)
         self.assertIn("globals::game::isVR && !a_results[0].bypassed && !a_results[1].bypassed", upscaling)
 
+    def test_transaction_capture_and_budget_boundaries(self):
+        source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
+        capture = source[source.index("bool CharacterRendering::CaptureAuthoredCategories("):
+                         source.index("bool CharacterRendering::IsCurrentSelectionEmpty(")]
+        self.assertLess(capture.index("EnsureDepthCapture("), capture.rindex("CaptureSourceGeometry("))
+        projection = source[source.index("void RefreshProjectedActors("):source.index("ProjectedPlan BuildPlan(")]
+        self.assertNotIn("GetProjectionEyePosition(", projection)
+        self.assertNotIn("frameBufferCached", projection)
+        admission = source[source.index("bool CharacterRendering::ShouldAuthorActor("):
+                           source.index("bool CharacterRendering::ObserveGeometry(")]
+        self.assertLess(admission.index("TryRefineCharacterActor("), admission.index("const auto projectBound"))
+        budget_fallback = admission[admission.index("if (!TryRefineCharacterActor("):admission.index("const auto validBound")]
+        self.assertIn("admission.admitted = true;", budget_fallback)
+        self.assertIn("return true;", budget_fallback)
+        finalization = source[source.index("bool CharacterRendering::FinalizePreparedMasks("):
+                              source.index("void CharacterRendering::ResolveFeature18Disposition(")]
+        for field in ("sourceWorldFrame", "generation", "settings", "outputIsJittered", "viewportCrop.fullInput", "viewportCrop.fullOutput"):
+            self.assertIn(f"args.{field} != a_args.front().{field}", finalization)
+        self.assertIn("selected->decision.Resolve([&]()", source)
+        self.assertIn("selected->decision = {};", source)
+        self.assertIn("const auto planningStart = evidence ?", source)
+
     def test_full_resolution_empty_guides_are_not_consumed(self):
         upscaling = read("src/Features/Upscaling.cpp")
         start = upscaling.index("bool Upscaling::PrepareFullResolutionNeuralInputs(")

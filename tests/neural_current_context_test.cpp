@@ -20,6 +20,13 @@ int main()
 	const auto baseline = BuildRoiDescriptor(support, retained, capacity, true);
 	CharacterSettings policy;
 	policy.enabled = true;
+	CharacterCategoryFramePolicy framePolicy;
+	Check(framePolicy.Resolve(10, policy) == policy);
+	auto changedExperiments = policy;
+	changedExperiments.experimentalCurrentContext = true;
+	changedExperiments.experimentalGpuMaskSupport = true;
+	Check(framePolicy.Resolve(10, changedExperiments) == policy);
+	Check(framePolicy.Resolve(11, changedExperiments) == changedExperiments);
 	const auto unchanged = [&](const CharacterSettings& settings, bool jittered, bool proven) {
 		auto roi = baseline;
 		Check(!ApplyCurrentContextExperiment(roi, settings, jittered, proven));

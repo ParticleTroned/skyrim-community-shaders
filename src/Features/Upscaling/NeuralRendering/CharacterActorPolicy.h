@@ -8,6 +8,17 @@
 
 namespace NeuralRendering
 {
+	inline constexpr std::uint32_t kMaximumCharacterActorRefinementsPerFrame = 128;
+
+	/** Count failed and successful detail probes against the same frame budget. */
+	[[nodiscard]] inline bool TryRefineCharacterActor(std::uint32_t& a_attempts) noexcept
+	{
+		if (a_attempts >= kMaximumCharacterActorRefinementsPerFrame)
+			return false;
+		++a_attempts;
+		return true;
+	}
+
 	enum class CharacterProjectionResult
 	{
 		Visible,

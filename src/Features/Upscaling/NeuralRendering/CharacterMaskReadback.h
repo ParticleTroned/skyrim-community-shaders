@@ -61,6 +61,38 @@ namespace NeuralRendering
 		HRESULT result = S_OK;
 	};
 
+	/** Reuse only idle or proven-complete entries; probe each pending entry at most once. */
+	template <class Readback, class Completed>
+	[[nodiscard]] Readback* FindReusableCharacterMaskReadback(std::span<Readback> a_ring, Completed&& a_completed)
+	{
+		for (auto& readback : a_ring) {
+			if (readback.pending && !a_completed(readback))
+				continue;
+			readback.pending = false;
+			return &readback;
+		}
+		return nullptr;
+	}
+
+	/** One immutable decision for all consumers of an already identified source copy. */
+	class CharacterMaskReadbackDecision
+	{
+	public:
+		template <class Poll>
+		const CharacterMaskReadbackResult& Resolve(Poll&& a_poll)
+		{
+			if (!sampled_) {
+				result_ = a_poll();
+				sampled_ = true;
+			}
+			return result_;
+		}
+
+	private:
+		bool sampled_ = false;
+		CharacterMaskReadbackResult result_{};
+	};
+
 	/**
 	 * Consume one already submitted current-mask copy. Never flush, block in Map,
 	 * or read an older copy as current coverage. The owner must validate the copy's
@@ -73,14 +105,17 @@ namespace NeuralRendering
 		ID3D11DeviceContext* a_context, ID3D11Query* a_query,
 		ID3D11Buffer* a_staging, std::span<std::byte> a_destination,
 		std::chrono::steady_clock::time_point a_deadline,
-		CharacterMaskReadbackCompletion a_completion = {}) noexcept
+		CharacterMaskReadbackCompletion a_completion = {}, bool a_measureCpu = true) noexcept
 	{
 		using Clock = std::chrono::steady_clock;
-		const auto start = Clock::now();
+		const auto start = a_measureCpu ? Clock::now() : Clock::time_point{};
+		const auto expired = [&]() {
+			return a_deadline == Clock::time_point::min() || Clock::now() >= a_deadline;
+		};
 		const auto finish = [&](CharacterMaskReadbackStatus a_status, HRESULT a_result) {
 			return CharacterMaskReadbackResult{
 				a_status, a_result,
-				std::chrono::duration<double, std::milli>(Clock::now() - start).count()
+				a_measureCpu ? std::chrono::duration<double, std::milli>(Clock::now() - start).count() : 0.0
 			};
 		};
 		if (!a_context || !a_query || !a_staging || a_destination.empty() ||
@@ -124,9 +159,9 @@ namespace NeuralRendering
 					a_context->Unmap(a_staging, 0);
 					return finish(CharacterMaskReadbackStatus::Ready, S_OK);
 				}
-				if (result != DXGI_ERROR_WAS_STILL_DRAWING || Clock::now() >= a_deadline)
+				if (result != DXGI_ERROR_WAS_STILL_DRAWING || expired())
 					return finish(CharacterMaskReadbackStatus::MapUnavailable, result);
-			} else if (Clock::now() >= a_deadline) {
+			} else if (expired()) {
 				return finish(CharacterMaskReadbackStatus::Timeout, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
 			}
 			// Spin briefly for an immediately ready copy, then yield the CPU while
@@ -141,12 +176,12 @@ namespace NeuralRendering
 	/** One DONOTFLUSH query and at most one DO_NOT_WAIT map; no retry or queue drain. */
 	[[nodiscard]] inline CharacterMaskReadbackResult PollCharacterMaskBounds(
 		ID3D11DeviceContext* a_context, ID3D11Query* a_query,
-		ID3D11Buffer* a_staging, std::span<std::byte> a_destination) noexcept
+		ID3D11Buffer* a_staging, std::span<std::byte> a_destination, bool a_measureCpu = false) noexcept
 	{
 		// An already expired deadline makes every not-ready path return on its
 		// first probe, before the shared reader's retry/yield branch is reachable.
 		auto result = ReadCharacterMaskBounds(a_context, a_query, a_staging, a_destination,
-			std::chrono::steady_clock::time_point::min());
+			std::chrono::steady_clock::time_point::min(), {}, a_measureCpu);
 		if (result.status == CharacterMaskReadbackStatus::Timeout ||
 			(result.status == CharacterMaskReadbackStatus::MapUnavailable && result.result == DXGI_ERROR_WAS_STILL_DRAWING)) {
 			result.status = CharacterMaskReadbackStatus::Pending;

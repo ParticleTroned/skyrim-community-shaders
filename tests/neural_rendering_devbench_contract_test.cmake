@@ -1590,7 +1590,7 @@ foreach(_source_contract IN ITEMS
     [[(GetEnabledCharacterCategoryMask(a_args.settings) & ~state_->capturedEnabledCategoryMask_) != 0]]
     [[state_->unboundedCategoryMask_ |=]]
     [[(state_->unboundedCategoryMask_ & a_enabledCategoryMask) != 0 ||]]
-    [[(unboundedCategoryMask_ &]]
+    [[(capturedGeometry_.unboundedCategoryMask &]]
     [[plan.fullEyeEligibilityFallback = true;]]
     [[const bool forcedEmpty =]]
     [[(logicalEmptyCapture || plan.regions.empty());]]

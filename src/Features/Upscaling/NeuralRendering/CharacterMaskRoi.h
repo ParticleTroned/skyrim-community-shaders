@@ -41,6 +41,16 @@ namespace NeuralRendering
 		bool operator==(const CharacterMaskRoiResult&) const = default;
 	};
 
+	/** Caller-owned storage survives history resets without retaining coverage proof. */
+	struct CharacterMaskRoiScratch
+	{
+		std::vector<std::uint64_t> ownerInput;
+		std::vector<std::uint64_t> owners;
+		std::array<std::vector<CharacterRect>, 2> stripes;
+		std::vector<CharacterRect> occupied;
+		std::vector<CharacterRect> suffix;
+	};
+
 	struct StableCharacterMaskRoi
 	{
 		StableCharacterComputeSubrect single{};
@@ -102,7 +112,7 @@ namespace NeuralRendering
 		std::span<const std::uint64_t> a_actorLifetimeIds,
 		std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_sourceFrame,
 		StableCharacterMaskRoi& a_state, bool a_savingsGate = true, bool a_allowSplit = true,
-		StableCharacterComputeSubrect* a_sharedSingle = nullptr)
+		StableCharacterComputeSubrect* a_sharedSingle = nullptr, CharacterMaskRoiScratch* a_scratch = nullptr)
 	{
 		using namespace CharacterMaskRoiDetail;
 		const auto invalid = [&]() {
@@ -117,8 +127,14 @@ namespace NeuralRendering
 		const auto rows = (a_height + kCharacterMaskRoiTileSize - 1u) / kCharacterMaskRoiTileSize;
 		if (a_tiles.size() != static_cast<std::size_t>(columns) * rows)
 			return invalid();
-		std::vector<std::uint64_t> owners(a_actorLifetimeIds.begin(), a_actorLifetimeIds.end());
-		std::ranges::sort(owners);
+		CharacterMaskRoiScratch localScratch;
+		auto& scratch = a_scratch ? *a_scratch : localScratch;
+		auto& owners = scratch.owners;
+		if (!std::ranges::equal(scratch.ownerInput, a_actorLifetimeIds)) {
+			scratch.ownerInput.assign(a_actorLifetimeIds.begin(), a_actorLifetimeIds.end());
+			owners.assign(a_actorLifetimeIds.begin(), a_actorLifetimeIds.end());
+			std::ranges::sort(owners);
+		}
 		if ((!owners.empty() && !owners.front()) ||
 			std::adjacent_find(owners.begin(), owners.end()) != owners.end())
 			return invalid();
@@ -141,10 +157,11 @@ namespace NeuralRendering
 			a_state.multi = {};
 		}
 
-		std::array<std::vector<CharacterRect>, 2> stripes{
-			std::vector<CharacterRect>(columns), std::vector<CharacterRect>(rows)
-		};
-		std::vector<CharacterRect> occupied;
+		auto& stripes = scratch.stripes;
+		stripes[0].assign(columns, {});
+		stripes[1].assign(rows, {});
+		auto& occupied = scratch.occupied;
+		occupied.clear();
 		CharacterRect all{};
 		for (std::size_t index = 0; index < a_tiles.size(); ++index) {
 			const auto& tile = a_tiles[index];
@@ -187,7 +204,8 @@ namespace NeuralRendering
 				result.multiRoiReason = CharacterMultiRoiReason::NoDisjointSplit;
 				for (std::uint32_t axis = 0; axis < 2; ++axis) {
 					const auto& line = stripes[axis];
-					std::vector<CharacterRect> suffix(line.size());
+					auto& suffix = scratch.suffix;
+					suffix.resize(line.size());
 					for (std::size_t index = line.size(); index-- > 0;)
 						suffix[index] = CharacterRegionPolicy::Union(line[index],
 							index + 1u < line.size() ? suffix[index + 1u] : CharacterRect{});
@@ -269,7 +287,7 @@ namespace NeuralRendering
 		a_state.cachedTiles.assign(a_tiles.begin(), a_tiles.end());
 		a_state.cachedSavingsGate = a_savingsGate;
 		a_state.cachedAllowSplit = a_allowSplit;
-		a_state.cachedOwners = std::move(owners);
+		a_state.cachedOwners = owners;
 		a_state.cachedResult = result;
 		a_state.width = a_width;
 		a_state.height = a_height;

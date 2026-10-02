@@ -220,7 +220,7 @@ namespace NeuralRendering
 		return result;
 	}
 
-	/** Keeps category selection and strength coherent across one source frame. */
+	/** Freezes the complete character policy for every consumer of one source frame. */
 	class CharacterCategoryFramePolicy
 	{
 	public:
@@ -238,13 +238,7 @@ namespace NeuralRendering
 				selected = &entry;
 				next_ = (next_ + 1) % entries_.size();
 			}
-			a_requested.faces = selected->settings.faces;
-			a_requested.skin = selected->settings.skin;
-			a_requested.hair = selected->settings.hair;
-			a_requested.faceStrength = selected->settings.faceStrength;
-			a_requested.skinStrength = selected->settings.skinStrength;
-			a_requested.hairStrength = selected->settings.hairStrength;
-			return a_requested;
+			return selected->settings;
 		}
 
 	private:

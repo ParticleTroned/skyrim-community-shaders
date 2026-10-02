@@ -13,6 +13,10 @@ struct Fixture
 {
 	std::mutex mutex_;
 	unsigned earlyMaskCaptureSerial_ = 7, capturedFrame_ = 10;
+	struct
+	{
+		unsigned frame = 10;
+	} capturedGeometry_;
 	unsigned capturedEyeWidth_ = 100, capturedHeight_ = 80, capturedEyeCount_ = 2;
 	unsigned capturedEnabledCategoryMask_ = 14;
 	bool capturedCategoriesEmpty_ = false;
@@ -95,7 +99,7 @@ int main()
 		}
 	}
 	args.eyeIndex = 0;
-	for (unsigned invalid = 0; invalid < 9; ++invalid) {
+	for (unsigned invalid = 0; invalid < 10; ++invalid) {
 		auto value = args;
 		if (invalid == 0)
 			value.frameId++;
@@ -115,7 +119,10 @@ int main()
 			producer->earlyMaskCaptureSerial_ = 0;
 		if (invalid == 8)
 			producer->capturedEnabledCategoryMask_ = 0;
+		if (invalid == 9)
+			producer->capturedGeometry_.frame = 9;
 		Require(!rendering.IsCurrentSelectionEmpty(value));
+		producer->capturedGeometry_.frame = 10;
 		producer->earlyMaskCaptureSerial_ = 7;
 		producer->capturedEnabledCategoryMask_ = GetEnabledCharacterCategoryMask(args.settings);
 	}

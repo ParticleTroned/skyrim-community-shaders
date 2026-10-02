@@ -177,6 +177,7 @@ namespace NeuralRendering
 			std::uint64_t used = 0, geometryFallbacks = 0, failures = 0;
 			std::uint32_t lastQueuedFrame = 0, lastUsedSourceFrame = 0, readbackBytes = 0;
 			double lastPollCpuMs = 0.0;
+			bool lastPollCpuAvailable = false;
 			std::int32_t lastFailureResult = 0;
 			std::string lastFailure;
 		};

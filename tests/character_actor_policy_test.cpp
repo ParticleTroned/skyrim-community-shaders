@@ -210,6 +210,19 @@ namespace
 int main()
 {
 	using namespace NeuralRendering;
+	std::uint32_t attempts = 0;
+	for (std::uint32_t i = 0; i < kMaximumCharacterActorRefinementsPerFrame; ++i)
+		if (!TryRefineCharacterActor(attempts) || attempts != i + 1)
+			return 40;
+	for (unsigned i = 0; i < 1000; ++i)
+		if (TryRefineCharacterActor(attempts) || attempts != kMaximumCharacterActorRefinementsPerFrame)
+			return 41;
+	attempts = UINT32_MAX;
+	if (TryRefineCharacterActor(attempts) || attempts != UINT32_MAX)
+		return 42;
+	attempts = 0;
+	if (!TryRefineCharacterActor(attempts) || attempts != 1)
+		return 43;
 	struct Admission
 	{
 		std::uint32_t frame;

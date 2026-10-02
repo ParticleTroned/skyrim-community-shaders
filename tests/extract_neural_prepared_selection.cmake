@@ -20,6 +20,17 @@ endfunction()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 extract("\t\tbool UsesAuthoredMask(" "\n\t\t}"
     neural_authored_mode_under_test.h)
+extract("\t\tstruct ProjectionEye" "\n\t\tvoid CaptureSourceGeometry"
+    neural_source_types_under_test.h)
+file(READ "${OUTPUT_DIRECTORY}/neural_source_types_under_test.h" source_types)
+string(REPLACE "\n\t\tvoid CaptureSourceGeometry\n" "\n" source_types "${source_types}")
+file(WRITE "${OUTPUT_DIRECTORY}/neural_source_types_under_test.h" "${source_types}")
+extract("\t\tvoid CaptureSourceGeometry(" "\n\t\t}"
+    neural_source_capture_under_test.h)
+extract("\t\tconst ActorAdmission* FindCapturedAdmission(" "\n\t\t}"
+    neural_source_admission_under_test.h)
+extract("\t\tEarlyMaskReadback* FindCurrentSupport(" "\n\t\t}"
+    neural_source_support_under_test.h)
 extract("\tbool CharacterRendering::IsCurrentSelectionEmpty(" "\n\t}"
     neural_empty_preflight_under_test.h)
 extract("\t\tComputeSubrect BuildFullComputeSubrect(" "\n\t\t}"

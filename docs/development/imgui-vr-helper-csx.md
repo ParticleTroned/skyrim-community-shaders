@@ -62,6 +62,13 @@ metres, with native forward-Z coefficients derived from the same near/far
 planes and unit conversion. Invalid projections, singular transforms,
 out-of-eye coordinates and unsupported depth views fail closed.
 
+Projection validation derives the source projection from the frozen
+inverse-view and view-projection matrices, matching CSX's existing
+reprojection convention. The redundant raw `CameraProj` field does not
+determine admission; it can differ from the projection that produced the
+captured scene. View/inverse-view consistency and native depth coefficients
+remain validated.
+
 ## Stereo composition and failure behavior
 
 `ImGuiVRHelperHostPolicy` admits a complete current world pair or rejects
@@ -96,6 +103,17 @@ world-depth provenance. If that camera or final target is unavailable,
 the original selected output is preserved. Existing load, keepalive,
 device-loss and submission guards remain authoritative.
 
+Production builds record `[ImGuiVRHelperHost]` status samples in
+`CommunityShaders.log`. Samples include connection and ownership, content
+layers, pair identity, composition/rejection counts, capture status and
+the latest composition result. Changes are sampled at most once every
+five seconds, with a thirty-second heartbeat while content is requested.
+`awaiting_current_scene_or_display_camera` means no usable camera reached
+the host; `awaiting_composition` means a camera was acquired but the submit
+path did not complete composition. `composed_ui_only` does not mean world
+subtitles were drawn. Capture status is recorded alongside the pair's
+result so a later producer update does not change its interpretation.
+
 ## DevBench session controls
 
 The `communityshaders.imgui_vr_helper` tool is registered in DevBench
@@ -127,6 +145,34 @@ depth discard for diagnosis while retaining scene admission and stereo
 composition. Restore it to `true` after the comparison.
 
 ## Validation evidence
+
+### Subtitle camera regression, 2 October 2026
+
+A tester reported invisible floating subtitles with HUD fallback still
+visible when facing away from the speaker. No logs or captured matrices
+from that other system were available for this correction; the exact
+runtime trigger remains unconfirmed. The source review found a redundant
+raw-projection admission requirement inconsistent with CSX's established
+camera derivation. No helper-side change was indicated by the paired audit.
+
+The new regression first failed in both ordinary and `/fp:fast` builds
+with `Redundant projection rejected the rendered camera`. After deriving
+projection from inverse-view and view-projection, both pass. Another case
+uses the captured engine float-precision matrices already exercised by
+`CameraReprojection`; synthetic stereo, jitter, room-scale and malformed
+depth cases remain covered.
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/helper-host-tests --config Release --parallel 4
+ctest --test-dir build/helper-host-tests -C Release --output-on-failure
+```
+
+All nine tests passed. Logs are preserved under
+`build/validation/imgui-vr-helper-subtitle-fix/`. The revised production
+package's manifest and receipt record its DLL build and archive checks
+separately. No headset or game verification of this correction has run.
+
+### Original implementation
 
 Executed on 1 October 2026 with MSVC, Visual Studio 2026 and Windows SDK
 `10.0.28000.0`. The isolated local harness includes the maintained

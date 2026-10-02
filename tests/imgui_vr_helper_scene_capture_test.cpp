@@ -185,6 +185,71 @@ namespace
 		Near(clip[0] / clip[3], 2 * 12.0 / 300 + 0.126, "Large camera and room origins did not cancel");
 	}
 
+	void UsesRenderedProjectionInsteadOfRedundantProjection()
+	{
+		SetCamera(false, 1.0);
+		Snapshot expected;
+		Require(CaptureCamera(expected, { 2000, 800 }), "Reference camera rejected");
+		for (auto& projection : sourceCamera.buffer.CameraProj) {
+			projection.m[0][0] *= 0.8f;
+			projection.m[1][1] *= 1.1f;
+			projection.m[0][2] += 0.03f;
+		}
+		Snapshot actual;
+		Require(CaptureCamera(actual, { 2000, 800 }), "Redundant projection rejected the rendered camera");
+		for (std::size_t eye = 0; eye < 2; ++eye) {
+			Require(actual.eyes[eye].trackingToDepthClip == expected.eyes[eye].trackingToDepthClip,
+				"Redundant projection changed the opaque depth camera");
+			Require(actual.eyes[eye].trackingToReconstructedColorClip == expected.eyes[eye].trackingToReconstructedColorClip,
+				"Redundant projection changed the resolved color camera");
+			Require(actual.eyes[eye].trackingToDepthViewMetres == expected.eyes[eye].trackingToDepthViewMetres,
+				"Redundant projection changed axial depth");
+		}
+	}
+
+	void AcceptsCapturedEngineRotationPrecision()
+	{
+		SetCamera(false, 1.0);
+		sourceCamera.nearPlane = 15;
+		sourceCamera.farPlane = 350000;
+		// The captured AE matrices are shared with CameraReprojection; they exercise engine float rounding.
+		const Scene::Matrix4x4 inverseView{
+			-0.1959844083, 0.9806070924, 0.0, 0.0,
+			-0.1209190413, -0.0241669156, 0.9923682213, 0.0,
+			-0.9731232524, -0.1944886744, -0.1233103946, 0.0,
+			0.0, 0.0, 0.0, 1.0
+		};
+		const Scene::Matrix4x4 viewProjection{
+			-0.1795865744, -0.1969811171, -0.9731644392, -0.9731231332,
+			0.8985607624, -0.0393687002, -0.1944968998, -0.1944886446,
+			0.0, 1.6166006327, -0.1233156174, -0.1233103871,
+			0.0, 0.0, -15.0006361008, 0.0
+		};
+		Scene::Matrix4x4 view{};
+		for (std::size_t row = 0; row < 4; ++row)
+			for (std::size_t column = 0; column < 4; ++column)
+				view[row * 4 + column] = inverseView[column * 4 + row];
+		for (std::size_t eye = 0; eye < 2; ++eye) {
+			sourceCamera.buffer.CameraView[eye] = StoredMatrix(view);
+			sourceCamera.buffer.CameraViewInverse[eye] = StoredMatrix(inverseView);
+			sourceCamera.buffer.CameraViewProj[eye] = StoredMatrix(viewProjection);
+			sourceCamera.buffer.CameraViewProjUnjittered[eye] = StoredMatrix(viewProjection);
+		}
+		Snapshot snapshot;
+		Require(CaptureCamera(snapshot, { 2000, 800 }), "Captured engine matrix precision rejected");
+		const auto relative = Transform(inverseView, { 30, 20, 100 });
+		for (std::size_t eye = 0; eye < 2; ++eye) {
+			const auto& origin = sourceCamera.buffer.CameraPosAdjust[eye];
+			const auto tracking = Transform(snapshot.worldToTracking,
+				{ relative[0] + origin.x, relative[1] + origin.y, relative[2] + origin.z });
+			const auto clip = Transform(snapshot.eyes[eye].trackingToDepthClip, { tracking[0], tracking[1], tracking[2] });
+			Near(clip[0], 27.4899352, "Captured camera horizontal projection changed", 0.00002);
+			Near(clip[1], 32.5806642, "Captured camera vertical projection changed", 0.00002);
+			Near(clip[2], 85.00360775, "Captured camera native depth changed", 0.00002);
+			Near(clip[3], 100, "Captured camera homogeneous depth changed", 0.00002);
+		}
+	}
+
 	void RejectsMalformedProducerMetadata()
 	{
 		for (int invalid = 0; invalid < 14; ++invalid) {
@@ -218,7 +283,7 @@ namespace
 				sourceCamera.buffer.CameraViewProjUnjittered[0] = {};
 				break;
 			case 9:
-				sourceCamera.buffer.CameraProj[0].m[2][2] = 0;
+				sourceCamera.buffer.CameraViewProj[0].m[2][3] *= 1.5f;
 				break;
 			case 10:
 				sourceCamera.buffer.CameraViewInverse[0].m[0][0] = -1;
@@ -230,7 +295,7 @@ namespace
 				sourceCamera.activeSize[0] = 1;
 				break;
 			case 13:
-				sourceCamera.buffer.CameraViewProj[0].m[0][0] *= 1.5f;
+				sourceCamera.buffer.CameraViewProj[0].m[3][3] = 1;
 				break;
 			}
 			Snapshot snapshot;
@@ -246,6 +311,8 @@ int main()
 		CapturesIndependentEyesAndJitter(true, 2.0);
 		CapturesIndependentEyesAndJitter(true, 0.5);
 		PreservesLargeOrigins();
+		UsesRenderedProjectionInsteadOfRedundantProjection();
+		AcceptsCapturedEngineRotationPrecision();
 		RejectsMalformedProducerMetadata();
 		std::cout << "PASS ImGui VR Helper production scene-camera capture\n";
 		return 0;

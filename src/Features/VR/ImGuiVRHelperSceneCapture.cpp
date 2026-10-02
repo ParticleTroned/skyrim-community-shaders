@@ -154,10 +154,11 @@ namespace ImGuiVRHelperSceneCapture
 			std::array<Scene::Matrix4x4, 2> eyeToTracking;
 			for (std::size_t eye = 0; eye < a_snapshot.eyes.size(); ++eye) {
 				auto& output = a_snapshot.eyes[eye];
-				const auto projection = ShaderMatrix(camera.CameraProj[eye]);
 				const auto view = ShaderMatrix(camera.CameraView[eye]);
 				const auto inverseView = ShaderMatrix(camera.CameraViewInverse[eye]);
 				const auto viewProjection = ShaderMatrix(camera.CameraViewProj[eye]);
+				// Derive the rendered projection from the same frozen matrices used for scene positions.
+				const auto projection = Multiply(inverseView, viewProjection);
 				if (!IsNativeProjection(projection, nearPlane, farPlane) || !IsRotation(view) || !IsRotation(inverseView) ||
 					!MatchesMatrix(Multiply(view, inverseView), Identity()) || !MatchesMatrix(Multiply(view, projection), viewProjection))
 					return false;

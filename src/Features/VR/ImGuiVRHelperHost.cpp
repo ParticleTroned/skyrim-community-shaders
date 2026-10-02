@@ -16,7 +16,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <magic_enum/magic_enum.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -65,6 +67,7 @@ namespace ImGuiVRHelperHost
 		void PublishStatus(const char* a_reason, std::uint32_t a_result = 0)
 		{
 			const std::scoped_lock lock(g_statusMutex);
+			const auto captureStatus = Capture::GetStatus();
 			g_status = {
 				{ "connected", g_interface.load() != nullptr },
 				{ "active", g_active.load() },
@@ -78,7 +81,29 @@ namespace ImGuiVRHelperHost
 				{ "composedPairs", g_composedPairs },
 				{ "rejectedPairs", g_rejectedPairs },
 				{ "worldScene", g_pair.scene != nullptr },
+				{ "sceneCaptureStatus", static_cast<std::uint32_t>(captureStatus) },
+				{ "sceneCaptureStatusName", magic_enum::enum_name(captureStatus) },
 			};
+		}
+
+		void LogStatus()
+		{
+			const std::scoped_lock lock(g_statusMutex);
+			static nlohmann::json lastState;
+			static std::chrono::steady_clock::time_point lastLog{};
+			const auto now = std::chrono::steady_clock::now();
+			if (!lastState.is_null() && now - lastLog < std::chrono::seconds(5))
+				return;
+			const nlohmann::json state = {
+				g_status.value("reason", std::string()), g_status.value("result", 0u),
+				g_active.load(), g_layers.load(), g_status.value("worldScene", false),
+				g_status.value("sceneCaptureStatus", 0u)
+			};
+			if (state == lastState && (g_layers.load() == 0 || now - lastLog < std::chrono::seconds(30)))
+				return;
+			logger::info("[ImGuiVRHelperHost] {}", g_status.dump());
+			lastState = state;
+			lastLog = now;
 		}
 
 		bool Reject(const char* a_reason, std::uint32_t a_result = 0)
@@ -160,7 +185,6 @@ namespace ImGuiVRHelperHost
 				result["ok"] = true;
 				result["requestedEnabled"] = g_requestedEnabled.load();
 				result["requestedDepthComparison"] = g_requestedDepthComparison.load();
-				result["sceneCaptureStatus"] = static_cast<std::uint32_t>(Capture::GetStatus());
 				a_write(a_sink, result.dump().c_str());
 			} catch (const std::exception& error) {
 				try {
@@ -181,6 +205,7 @@ namespace ImGuiVRHelperHost
 			return;
 		g_interface.store(API::GetImGuiVRHelperInterface006());
 		PublishStatus(g_interface.load() ? "negotiated_inactive" : "helper_interface_006_unavailable");
+		LogStatus();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (auto* devBench = DevBenchAPI::GetDevBenchInterface001()) {
 			static constexpr auto descriptor = R"({"description":"CSX-only ImGui VR Helper hosting status and pair-boundary controls. configure.enabled activates or releases explicit hosting at the next stereo boundary. depthComparison=false is a session-only diagnostic that disables world-quad depth discard; restore true after diagnosis. Missing/older helpers remain on their existing rendering path.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","configure"]},"enabled":{"type":"boolean"},"depthComparison":{"type":"boolean"}},"additionalProperties":false}})";
@@ -206,10 +231,15 @@ namespace ImGuiVRHelperHost
 		auto* helper = g_interface.load();
 		if (!helper || !globals::d3d::context)
 			return;
+		// Sample the preceding pair's outcome, keeping production diagnostics off the per-eye path.
+		LogStatus();
 		if (g_token == 0) {
 			API::RenderHostCapabilities caps;
-			if (helper->QueryRenderHostCapabilities(&caps) != API::RenderHostResult::Success)
+			const auto capabilities = helper->QueryRenderHostCapabilities(&caps);
+			if (capabilities != API::RenderHostResult::Success) {
+				PublishStatus("capabilities_failed", static_cast<std::uint32_t>(capabilities));
 				return;
+			}
 			API::RenderHostRegistration registration;
 			const auto result = helper->RegisterRenderHost(&registration, &g_token);
 			if (result != API::RenderHostResult::Success) {
@@ -221,6 +251,10 @@ namespace ImGuiVRHelperHost
 		const auto result = helper->QueryRenderHostContent(g_token, &content);
 		g_layers.store(result == API::RenderHostResult::Success ? content.layers : 0);
 		Capture::SetRequested(g_requestedEnabled.load() && g_layers.load() != 0);
+		if (result != API::RenderHostResult::Success && result != API::RenderHostResult::NoContent)
+			PublishStatus("content_query_failed", static_cast<std::uint32_t>(result));
+		else if (g_layers.load() == 0)
+			PublishStatus("no_content");
 	}
 
 	void BeginPair(const PairIdentity& a_pair, ID3D11Texture2D* a_nativeSource)
@@ -270,8 +304,8 @@ namespace ImGuiVRHelperHost
 			}
 			PublishStatus(requested ? "hosted" : "disabled");
 		}
-		if (requested && g_layers.load() != 0 && !g_pair.scene && !g_pair.displayCamera)
-			PublishStatus("awaiting_current_scene_or_display_camera");
+		if (requested && g_layers.load() != 0)
+			PublishStatus(g_pair.scene || g_pair.displayCamera ? "awaiting_composition" : "awaiting_current_scene_or_display_camera");
 	}
 
 	void EndPair() noexcept { g_pair = {}; }

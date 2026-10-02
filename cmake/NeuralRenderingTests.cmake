@@ -216,6 +216,8 @@ target_link_libraries(neural_character_evidence_test PRIVATE nlohmann_json::nloh
 
 set(_neural_selection_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_selection_test")
 set(_neural_selection_headers
+    "${_neural_selection_test_dir}/neural_authored_mode_under_test.h"
+    "${_neural_selection_test_dir}/neural_empty_preflight_under_test.h"
     "${_neural_selection_test_dir}/neural_full_compute_subrect_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_slot_under_test.h"
     "${_neural_selection_test_dir}/neural_empty_proof_under_test.h"
@@ -238,7 +240,8 @@ add_custom_target(neural_prepared_selection_fixture DEPENDS ${_neural_selection_
 add_controller_test(neural_prepared_selection_test NeuralPreparedSelection tests/neural_prepared_selection_test.cpp)
 add_controller_test(neural_prepared_selection_bridge_test NeuralPreparedSelectionBridge tests/neural_prepared_selection_test.cpp)
 add_controller_test(neural_empty_dispatch_test NeuralEmptyDispatch tests/neural_empty_dispatch_test.cpp)
-foreach(_target IN ITEMS neural_prepared_selection_test neural_prepared_selection_bridge_test neural_empty_dispatch_test)
+add_controller_test(neural_empty_preflight_test NeuralEmptyPreflight tests/neural_empty_preflight_test.cpp)
+foreach(_target IN ITEMS neural_prepared_selection_test neural_prepared_selection_bridge_test neural_empty_dispatch_test neural_empty_preflight_test)
     add_dependencies(${_target} neural_prepared_selection_fixture)
     target_sources(${_target} PRIVATE ${_neural_selection_headers})
     target_include_directories(${_target} PRIVATE "${_neural_selection_test_dir}")

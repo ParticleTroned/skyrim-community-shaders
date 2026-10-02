@@ -45,6 +45,7 @@ namespace NeuralRendering
 			rendering.erase(key);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		rendering.erase("neuralCharacterCurrentContextEnabled");
+		rendering.erase("neuralCharacterGpuMaskSupportEnabled");
 #endif
 		return rendering;
 	}
@@ -72,6 +73,7 @@ namespace NeuralRendering
 		destination.neuralCharacterMaskTestMode = source.neuralCharacterMaskTestMode;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		destination.neuralCharacterCurrentContextEnabled = source.neuralCharacterCurrentContextEnabled;
+		destination.neuralCharacterGpuMaskSupportEnabled = source.neuralCharacterGpuMaskSupportEnabled;
 #endif
 	}
 }

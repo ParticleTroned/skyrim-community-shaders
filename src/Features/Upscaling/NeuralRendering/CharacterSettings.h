@@ -126,6 +126,8 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Use current spatial context only in the single-region pre-DLSS experiment. */
 		bool experimentalCurrentContext = false;
+		/** Select the reference mask dispatcher for same-process qualification. */
+		bool experimentalGpuMaskSupport = false;
 #endif
 		std::uint32_t minimumFacePixelSize =
 			CharacterPolicy::kDefaultMinimumFacePixelSize;

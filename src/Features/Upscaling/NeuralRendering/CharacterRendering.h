@@ -321,6 +321,8 @@ namespace NeuralRendering
 		bool PrepareMask(
 			const CharacterMaskPrepareArgs& a_args,
 			CharacterMaskPrepareResult& a_result) noexcept;
+		/** Proves current CPU selection empty before copying NR-only guides; uncertainty keeps work. */
+		[[nodiscard]] bool IsCurrentSelectionEmpty(const CharacterMaskPrepareArgs& a_args) noexcept;
 		/** Validates and publishes the complete prepared eye batch without GPU synchronization. */
 		bool FinalizePreparedMasks(
 			std::span<const CharacterMaskPrepareArgs> a_args,

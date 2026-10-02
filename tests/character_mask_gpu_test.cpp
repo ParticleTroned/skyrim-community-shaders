@@ -19,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -71,8 +72,9 @@ namespace
 		float eligibilityRectangles[16][4]{};
 		std::uint32_t dispatchRegion[4]{};
 		std::uint32_t authoredRegion[4]{};
+		std::uint32_t supportGrid[4]{};
 	};
-	static_assert(sizeof(MaskConstants) == 480);
+	static_assert(sizeof(MaskConstants) == 496);
 
 	struct alignas(16) BlendConstants
 	{
@@ -135,11 +137,11 @@ namespace
 	class Harness
 	{
 	public:
-		explicit Harness(const std::filesystem::path& shaderDirectory)
+		explicit Harness(const std::filesystem::path& shaderDirectory, bool benchmark = false) : benchmark_(benchmark)
 		{
 			D3D_FEATURE_LEVEL actual{};
 			constexpr D3D_FEATURE_LEVEL requested = D3D_FEATURE_LEVEL_11_0;
-			Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
+			Check(D3D11CreateDevice(nullptr, benchmark ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, nullptr, 0,
 					  &requested, 1, D3D11_SDK_VERSION, &device_, &actual, &context_),
 				"Create WARP device");
 			auto maskBlob = Compile(shaderDirectory / "DLSS5CharacterMaskCS.hlsl");
@@ -147,6 +149,15 @@ namespace
 			Check(device_->CreateComputeShader(maskBlob->GetBufferPointer(),
 					  maskBlob->GetBufferSize(), nullptr, &maskShader_),
 				"Create mask shader");
+			const D3D_SHADER_MACRO supportDefines[]{ { "GPU_CHARACTER_SUPPORT", "1" }, { nullptr, nullptr } };
+			auto supportBlob = Compile(shaderDirectory / "DLSS5CharacterMaskCS.hlsl", D3D_COMPILE_STANDARD_FILE_INCLUDE, supportDefines);
+			CheckMaskLayout(supportBlob.Get(), true);
+			Check(device_->CreateComputeShader(supportBlob->GetBufferPointer(), supportBlob->GetBufferSize(), nullptr, &supportShader_), "Create sparse mask shader");
+			Util::SetResourceName(supportShader_.Get(), "CharacterMaskTest::SparseMask");
+			const D3D_SHADER_MACRO boundsDefines[]{ { "EARLY_CATEGORY_BOUNDS", "1" }, { nullptr, nullptr } };
+			auto boundsBlob = Compile(shaderDirectory / "DLSS5CharacterMaskBoundsCS.hlsl", D3D_COMPILE_STANDARD_FILE_INCLUDE, boundsDefines);
+			Check(device_->CreateComputeShader(boundsBlob->GetBufferPointer(), boundsBlob->GetBufferSize(), nullptr, &boundsShader_), "Create support shader");
+			Util::SetResourceName(boundsShader_.Get(), "CharacterMaskTest::SupportBounds");
 			auto captureBlob = Compile(shaderDirectory / "DLSS5CharacterCaptureCS.hlsl");
 			Check(device_->CreateComputeShader(captureBlob->GetBufferPointer(),
 					  captureBlob->GetBufferSize(), nullptr, &captureShader_),
@@ -267,6 +278,7 @@ namespace
 			Check(context_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "Read counters");
 			std::memcpy(result.counters.data(), mapped.pData, sizeof(result.counters));
 			context_->Unmap(staging.Get(), 0);
+			CheckSparseMask(constants, packedWidth, tuples, category, authored, current, output, result);
 			return result;
 		}
 
@@ -365,6 +377,14 @@ namespace
 					context_->Dispatch((rect[2] + 7) / 8, (rect[3] + 7) / 8, 1);
 					context_->ClearState();
 					const auto actual = Read<float>(output.resource.Get());
+					auto direct = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
+						D3D11_BIND_UNORDERED_ACCESS, unused, "DepthTypedCopyOutput");
+					const D3D11_BOX box{ rect[0], rect[1], 0, rect[0] + rect[2], rect[1] + rect[3], 1 };
+					context_->CopySubresourceRegion(direct.resource.Get(), 0, rect[0], rect[1], 0,
+						source.resource.Get(), 0, &box);
+					const auto copied = Read<float>(direct.resource.Get());
+					Require(std::memcmp(copied.data(), actual.data(), actual.size() * sizeof(float)) == 0,
+						"Typed depth copy differs from identity shader or overwrites spare capacity");
 					for (unsigned y = 0; y < height; ++y)
 						for (unsigned x = 0; x < width; ++x) {
 							const bool valid = x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3];
@@ -594,11 +614,152 @@ namespace
 		}
 
 	private:
+		bool benchmark_ = false;
+		double TimeGpu(const std::function<void()>& run)
+		{
+			ComPtr<ID3D11Query> begin, end, disjoint;
+			D3D11_QUERY_DESC desc{ D3D11_QUERY_TIMESTAMP, 0 };
+			Check(device_->CreateQuery(&desc, &begin), "Create start timestamp");
+			Check(device_->CreateQuery(&desc, &end), "Create end timestamp");
+			desc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+			Check(device_->CreateQuery(&desc, &disjoint), "Create clock query");
+			Util::SetResourceName(begin.Get(), "CharacterMaskTest::Start");
+			Util::SetResourceName(end.Get(), "CharacterMaskTest::End");
+			Util::SetResourceName(disjoint.Get(), "CharacterMaskTest::Clock");
+			context_->Begin(disjoint.Get());
+			context_->End(begin.Get());
+			for (unsigned i = 0; i < 16; ++i)
+				run();
+			context_->End(end.Get());
+			context_->End(disjoint.Get());
+			context_->Flush();
+			const auto read = [&](ID3D11Query* query, void* value, UINT size) {
+				const auto deadline = GetTickCount64() + 5000;
+				HRESULT result;
+				while ((result = context_->GetData(query, value, size, D3D11_ASYNC_GETDATA_DONOTFLUSH)) == S_FALSE && GetTickCount64() < deadline)
+					SwitchToThread();
+				Require(result == S_OK, "GPU benchmark deadline or query failure");
+			};
+			UINT64 first{}, last{};
+			D3D11_QUERY_DATA_TIMESTAMP_DISJOINT clock{};
+			read(disjoint.Get(), &clock, sizeof(clock));
+			read(begin.Get(), &first, sizeof(first));
+			read(end.Get(), &last, sizeof(last));
+			Require(!clock.Disjoint && clock.Frequency && last > first, "Invalid GPU benchmark clock");
+			return static_cast<double>(last - first) * 1000.0 / static_cast<double>(clock.Frequency) / 16.0;
+		}
+
+		void CheckSparseMask(MaskConstants constants, std::uint32_t packedWidth,
+			const std::vector<Tuple>& tuples, const Texture& category, const Texture& authored,
+			const Texture& current, const Texture& output, const MaskResult& reference)
+		{
+			const auto width = constants.outputAndSourceSize[0], height = constants.outputAndSourceSize[1];
+			if (constants.dispatchRegion[0] || constants.dispatchRegion[1] ||
+				constants.dispatchRegion[2] != width || constants.dispatchRegion[3] != height ||
+				(constants.featherOptions[1] != 0.0f && constants.featherOptions[1] != 5.0f))
+				return;
+			const auto sourceWidth = constants.outputAndSourceSize[2], sourceHeight = constants.outputAndSourceSize[3];
+			const auto columns = (sourceWidth + 31u) / 32u, rows = (sourceHeight + 31u) / 32u;
+			const auto eyes = packedWidth / sourceWidth;
+			Require(eyes >= 1 && eyes <= 2 && packedWidth == eyes * sourceWidth, "Sparse source layout");
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = columns * rows * eyes * 16u;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.StructureByteStride = 16u;
+			ComPtr<ID3D11Buffer> bounds;
+			ComPtr<ID3D11ShaderResourceView> boundsSrv;
+			ComPtr<ID3D11UnorderedAccessView> boundsUav;
+			Check(device_->CreateBuffer(&desc, nullptr, &bounds), "Create sparse support buffer");
+			Check(device_->CreateShaderResourceView(bounds.Get(), nullptr, &boundsSrv), "Create sparse support SRV");
+			Check(device_->CreateUnorderedAccessView(bounds.Get(), nullptr, &boundsUav), "Create sparse support UAV");
+			Util::SetResourceName(bounds.Get(), "CharacterMaskTest::CurrentBounds");
+			Util::SetResourceName(boundsSrv.Get(), "CharacterMaskTest::CurrentBounds SRV");
+			Util::SetResourceName(boundsUav.Get(), "CharacterMaskTest::CurrentBounds UAV");
+			std::array<std::array<std::uint32_t, 4>, 3> boundsConstants{};
+			std::uint32_t categories = 0;
+			for (std::uint32_t c = 0; c < 3; ++c)
+				if (constants.categoryStrengths[c] > 0)
+					categories |= 1u << (c + 1u);
+			boundsConstants[0] = { sourceWidth, sourceHeight, columns, categories };
+			for (auto eye = 0u; eye < eyes; ++eye)
+				std::copy_n(constants.authoredRegion, 4, boundsConstants[eye + 1u].begin());
+			auto boundsCb = Constants(boundsConstants);
+			const auto tileWidth = (width + 7u) / 8u, tileHeight = (height + 7u) / 8u;
+			auto dirty = MakeTexture(tileWidth, tileHeight, DXGI_FORMAT_R32_UINT,
+				D3D11_BIND_UNORDERED_ACCESS, std::vector<std::uint32_t>(tileWidth * tileHeight, 1u), "DirtyTiles");
+			constants.featherOptions[2] = 0;
+			constants.supportGrid[0] = columns;
+			constants.supportGrid[1] = rows;
+			constants.supportGrid[2] = constants.sourceCrop[0] / sourceWidth * columns * rows;
+			constants.supportGrid[3] = 1;
+			auto cb = Constants(constants);
+			auto referenceConstants = constants;
+			referenceConstants.supportGrid[3] = 0;
+			auto referenceCb = Constants(referenceConstants);
+			const auto run = [&](bool support = true) {
+				context_->CSSetShader(boundsShader_.Get(), nullptr, 0);
+				context_->CSSetConstantBuffers(0, 1, boundsCb.GetAddressOf());
+				context_->CSSetShaderResources(0, 1, category.srv.GetAddressOf());
+				context_->CSSetUnorderedAccessViews(0, 1, boundsUav.GetAddressOf(), nullptr);
+				context_->Dispatch(columns, rows, eyes);
+				context_->ClearState();
+				const std::array<ID3D11ShaderResourceView*, 4> srvs{ category.srv.Get(), authored.srv.Get(), current.srv.Get(), boundsSrv.Get() };
+				const std::array<ID3D11UnorderedAccessView*, 3> uavs{ output.uav.Get(), nullptr, dirty.uav.Get() };
+				context_->CSSetShader(support ? supportShader_.Get() : maskShader_.Get(), nullptr, 0);
+				context_->CSSetConstantBuffers(0, 1, support ? cb.GetAddressOf() : referenceCb.GetAddressOf());
+				context_->CSSetShaderResources(0, 4, srvs.data());
+				context_->CSSetUnorderedAccessViews(0, 3, uavs.data(), nullptr);
+				context_->Dispatch(tileWidth, tileHeight, 1);
+				context_->ClearState();
+			};
+			const std::vector<std::uint8_t> poison(width * height, 231u);
+			context_->UpdateSubresource(output.resource.Get(), 0, nullptr, poison.data(), width, 0);
+			run();
+			Require(Read<std::uint8_t>(output.resource.Get()) == reference.pixels, "Sparse mask differs from reference");
+			if (!benchmark_) {
+				std::vector<Tuple> moved(tuples.size());
+				for (unsigned y = 0; y < sourceHeight; ++y)
+					for (unsigned x = 0; x < packedWidth; ++x)
+						if (x % sourceWidth >= 17u)
+							moved[y * packedWidth + x] = tuples[y * packedWidth + x - 17u];
+				context_->UpdateSubresource(category.resource.Get(), 0, nullptr, moved.data(), packedWidth * sizeof(Tuple), 0);
+				run(false);
+				const auto movedReference = Read<std::uint8_t>(output.resource.Get());
+				context_->UpdateSubresource(output.resource.Get(), 0, nullptr, reference.pixels.data(), width, 0);
+				run();
+				Require(Read<std::uint8_t>(output.resource.Get()) == movedReference, "Moving sparse support left stale pixels or lost new coverage");
+				context_->UpdateSubresource(category.resource.Get(), 0, nullptr, tuples.data(), packedWidth * sizeof(Tuple), 0);
+				run();
+				Require(Read<std::uint8_t>(output.resource.Get()) == reference.pixels, "Returning sparse support differs from reference");
+			}
+			if (benchmark_) {
+				for (unsigned repeat = 0; repeat < 12; ++repeat) {
+					const bool supportFirst = repeat % 2u != 0;
+					const double first = TimeGpu([&]() { run(supportFirst); });
+					const double second = TimeGpu([&]() { run(!supportFirst); });
+					std::cout << "mask_bounds_ms," << width << ',' << height << ',' << constants.options[2] << ',' << repeat
+							  << ',' << (supportFirst ? second : first) << ',' << (supportFirst ? first : second) << '\n';
+				}
+			}
+			const std::vector<Tuple> empty(tuples.size());
+			context_->UpdateSubresource(category.resource.Get(), 0, nullptr, empty.data(), packedWidth * sizeof(Tuple), 0);
+			run();
+			Require(Read<std::uint8_t>(output.resource.Get()) == std::vector<std::uint8_t>(width * height), "Departed sparse support was not cleared");
+			Require(Read<std::uint32_t>(dirty.resource.Get()) == std::vector<std::uint32_t>(tileWidth * tileHeight), "Empty sparse tiles remain dirty");
+			run();
+			Require(Read<std::uint8_t>(output.resource.Get()) == std::vector<std::uint8_t>(width * height), "Repeated empty support changed selection");
+			context_->UpdateSubresource(category.resource.Get(), 0, nullptr, tuples.data(), packedWidth * sizeof(Tuple), 0);
+			run();
+			Require(Read<std::uint8_t>(output.resource.Get()) == reference.pixels, "Sparse re-entry differs from reference");
+		}
+
 		ComPtr<ID3DBlob> Compile(const std::filesystem::path& path,
-			ID3DInclude* includes = D3D_COMPILE_STANDARD_FILE_INCLUDE)
+			ID3DInclude* includes = D3D_COMPILE_STANDARD_FILE_INCLUDE, const D3D_SHADER_MACRO* defines = nullptr)
 		{
 			ComPtr<ID3DBlob> shader, errors;
-			const auto result = D3DCompileFromFile(path.c_str(), nullptr,
+			const auto result = D3DCompileFromFile(path.c_str(), defines,
 				includes, "main", "cs_5_0",
 				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
 				0, &shader, &errors);
@@ -608,7 +769,7 @@ namespace
 			return shader;
 		}
 
-		void CheckMaskLayout(ID3DBlob* blob)
+		void CheckMaskLayout(ID3DBlob* blob, bool support = false)
 		{
 			ComPtr<ID3D11ShaderReflection> reflection;
 			Check(D3DReflect(blob->GetBufferPointer(), blob->GetBufferSize(),
@@ -617,7 +778,7 @@ namespace
 			auto* buffer = reflection->GetConstantBufferByName("CharacterMaskCB");
 			D3D11_SHADER_BUFFER_DESC description{};
 			Check(buffer->GetDesc(&description), "Reflect mask constants");
-			Require(description.Size == sizeof(MaskConstants), "MaskConstants shader ABI size changed");
+			Require(description.Size == (support ? sizeof(MaskConstants) : offsetof(MaskConstants, supportGrid)), "MaskConstants shader ABI size changed");
 			const std::array members{
 				std::pair{ "CameraProjInverse", offsetof(MaskConstants, cameraProjInverse) },
 				std::pair{ "CategoryStrengths", offsetof(MaskConstants, categoryStrengths) },
@@ -628,6 +789,11 @@ namespace
 				D3D11_SHADER_VARIABLE_DESC member{};
 				Check(buffer->GetVariableByName(name)->GetDesc(&member), "Reflect mask member");
 				Require(member.StartOffset == offset, std::string("MaskConstants offset differs: ") + name);
+			}
+			if (support) {
+				D3D11_SHADER_VARIABLE_DESC member{};
+				Check(buffer->GetVariableByName("SupportGrid")->GetDesc(&member), "Reflect support grid");
+				Require(member.StartOffset == offsetof(MaskConstants, supportGrid), "SupportGrid CPU/HLSL offset differs");
 			}
 		}
 
@@ -699,7 +865,7 @@ namespace
 
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
-		ComPtr<ID3D11ComputeShader> maskShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_, depthShader_;
+		ComPtr<ID3D11ComputeShader> supportShader_, maskShader_, boundsShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_, depthShader_;
 	};
 
 	void FullImageAndReducedSelection(Harness& gpu)
@@ -1264,12 +1430,68 @@ namespace
 	}
 }
 
+void GpuSupportCoverageCases(Harness& gpu, bool benchmark)
+{
+	const unsigned sourceWidth = benchmark ? 1008u : 257u, sourceHeight = benchmark ? 1120u : 137u;
+	unsigned cases = 0;
+	for (unsigned density = 0; density < 2; ++density) {
+		for (unsigned eyes = 1; eyes <= (benchmark ? 1u : 2u); ++eyes) {
+			const unsigned packedWidth = sourceWidth * eyes;
+			std::vector<Tuple> tuples(packedWidth * sourceHeight);
+			for (unsigned y = 0; y < sourceHeight; ++y)
+				for (unsigned x = 0; x < packedWidth; ++x) {
+					const unsigned local = x % sourceWidth;
+					const bool selected = density || local == 31u || local == 32u ||
+					                      (local > sourceWidth / 2 && local < sourceWidth / 2 + 20u && y > 10u && y < 70u);
+					if (selected && (local + y) % 7u != 0u)
+						tuples[y * packedWidth + x] = Tuple{ 37, static_cast<std::uint8_t>((1u + (local + y) % 3u) * 85u) };
+				}
+			for (unsigned radius : { 0u, 1u, 4u }) {
+				if (benchmark && radius == 1u)
+					continue;
+				for (unsigned eye = 0; eye < eyes; ++eye) {
+					for (float phase : { -0.49f, 0.0f, 0.49f }) {
+						if (benchmark && phase != 0.0f)
+							continue;
+						auto constants = Defaults(benchmark ? sourceWidth : 391u, benchmark ? sourceHeight : 211u);
+						constants.outputAndSourceSize[2] = sourceWidth;
+						constants.outputAndSourceSize[3] = sourceHeight;
+						constants.sourceCrop[0] = eye * sourceWidth;
+						constants.sourceCrop[1] = 3;
+						constants.sourceCrop[2] = 5;
+						constants.sourceCrop[3] = sourceWidth - 6u;
+						constants.options[0] = sourceHeight - 10u;
+						constants.options[2] = radius;
+						constants.options[3] = radius ? 1u : 0u;
+						constants.authoredRegion[2] = sourceWidth;
+						constants.authoredRegion[3] = sourceHeight;
+						constants.jitter[0] = phase;
+						constants.jitter[1] = -phase;
+						constants.categoryStrengths[1] = 0.0f;
+						constants.categoryStrengths[2] = 0.65f;
+						if (benchmark)
+							std::cout << "fixture," << density << ',' << radius << '\n';
+						(void)gpu.Mask(constants, packedWidth, tuples);
+						++cases;
+					}
+				}
+			}
+		}
+	}
+	std::cout << "Sparse/reference coverage, departure and re-entry cases: " << cases << '\n';
+}
+
 int wmain(int argc, wchar_t** argv)
 {
 	try {
-		Require(argc == 2 || (argc == 3 && std::wstring(argv[2]) == L"--final-ldr-only"),
-			"Expected production shader directory and optional --final-ldr-only");
-		Harness gpu(argv[1]);
+		const bool benchmark = argc == 3 && std::wstring(argv[2]) == L"--gpu-benchmark";
+		Require(argc == 2 || (argc == 3 && (benchmark || std::wstring(argv[2]) == L"--final-ldr-only")),
+			"Expected production shader directory and optional --final-ldr-only or --gpu-benchmark");
+		Harness gpu(argv[1], benchmark);
+		if (benchmark) {
+			GpuSupportCoverageCases(gpu, true);
+			return 0;
+		}
 		FullImageAndReducedSelection(gpu);
 		gpu.DepthCapacityInvariance();
 		ReconstructionCapacityInvariance(gpu);
@@ -1287,6 +1509,7 @@ int wmain(int argc, wchar_t** argv)
 		VisibilityAndDistance(gpu);
 		CurrentDepthAllowsLargerAllocation(gpu);
 		CropsDirtyRegionsAndStereo(gpu);
+		GpuSupportCoverageCases(gpu, false);
 		std::cout << "Production character capture/mask HLSL passed WARP synthetic tests\n";
 		return 0;
 	} catch (const std::exception& error) {

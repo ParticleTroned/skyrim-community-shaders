@@ -1980,7 +1980,16 @@ namespace NeuralRendering
 			a_args.size() != a_resources.size()) {
 			return false;
 		}
-		if (!copyDepthGuideCS_ && !copyDepthGuideCompileFailed_) {
+		// Validation fixes the source view to mip zero and the shader performs an
+		// identity Load. Only an already typed R32 source can use a raw ROI copy.
+		const auto canCopy = [&](std::size_t index) {
+			return a_resources[index].depth.desc.Format == DXGI_FORMAT_R32_FLOAT &&
+			       a_resources[index].depthViewFormat == DXGI_FORMAT_R32_FLOAT;
+		};
+		bool needsShader = false;
+		for (std::size_t index = 0; index < a_args.size(); ++index)
+			needsShader = needsShader || !canCopy(index);
+		if (needsShader && !copyDepthGuideCS_ && !copyDepthGuideCompileFailed_) {
 			copyDepthGuideCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
 				L"Data/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl",
 				{},
@@ -1991,9 +2000,9 @@ namespace NeuralRendering
 				Util::SetResourceName(copyDepthGuideCS_.Get(), "NeuralRendering::CopyDepthGuideCS");
 		}
 		auto* shader = copyDepthGuideCS_.Get();
-		if (!shader)
+		if (needsShader && !shader)
 			return false;
-		if (!copyDepthGuideCB_) {
+		if (needsShader && !copyDepthGuideCB_) {
 			const D3D11_BUFFER_DESC desc{
 				.ByteWidth = sizeof(CopyDepthGuideConstants),
 				.Usage = D3D11_USAGE_DEFAULT,
@@ -2015,6 +2024,16 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			const auto& roi = a_resources[index].nativeLayout.depth.valid;
+			if (canCopy(index)) {
+				ID3D11ShaderResourceView* nullSrv = nullptr;
+				ID3D11UnorderedAccessView* nullUav = nullptr;
+				a_args.front().context->CSSetShaderResources(0, 1, &nullSrv);
+				a_args.front().context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				CS_GPU_PASS_CAPTURE("Upscaling::DLSSNRDepthGuide", a_evidence ? a_evidence->Snapshot().regions[index].depthGuidePass : nullptr);
+				CopyTextureSubrect(a_args.front().context, a_slots[index]->depth.resource11.Get(),
+					a_resources[index].depth.texture.Get(), roi);
+				continue;
+			}
 			const CopyDepthGuideConstants constants{
 				.offsetX = roi.baseX,
 				.offsetY = roi.baseY,

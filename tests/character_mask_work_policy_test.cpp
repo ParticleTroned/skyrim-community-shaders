@@ -6,6 +6,12 @@ int main()
 {
 	using namespace NeuralRendering;
 	using enum CharacterDepthExtentPolicy;
+	static_assert(!UseGpuCharacterMaskSupport({}, 1024, 1024));
+	static_assert(!UseGpuCharacterMaskSupport({ 0, 0, 255, 256 }, 256, 256));
+	static_assert(UseGpuCharacterMaskSupport({ 0, 0, 256, 256 }, 256, 256));
+	static_assert(!UseGpuCharacterMaskSupport({ 100, 100, 256, 256 }, 1024, 1024));
+	static_assert(!UseGpuCharacterMaskSupport({ 1000, 1000, 256, 256 }, 1024, 1024));
+	static_assert(UseGpuCharacterMaskSupport({ 0, 0, UINT32_MAX, UINT32_MAX }, UINT32_MAX, UINT32_MAX));
 	static_assert(IsCharacterDepthExtentValid(1920, 1080, 1280, 720, ContainsActiveInput));
 	static_assert(IsCharacterDepthExtentValid(1280, 720, 1280, 720, ContainsActiveInput));
 	static_assert(!IsCharacterDepthExtentValid(1920, 1080, 1280, 720, ExactCapture));

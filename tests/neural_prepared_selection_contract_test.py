@@ -59,7 +59,7 @@ class PreparedSelectionContract(unittest.TestCase):
 
     def test_empty_proof_is_current_and_has_no_extra_readback(self):
         source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
-        early = source[source.index("bool TryApplyEarlyMaskBounds("):source.index("static void PublishMaskRoiSnapshot(")]
+        early = source[source.index("EarlyMaskReadback* FindCurrentSupport("):source.index("static void PublishMaskRoiSnapshot(")]
         self.assertEqual(early.count("PollCharacterMaskBounds("), 1)
         self.assertIn("readback.captureSerial == earlyMaskCaptureSerial_", early)
         self.assertIn("readback.frame == a_args.sourceWorldFrame", early)
@@ -82,6 +82,17 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertIn("a_args.reset = a_args.reset || result.resetHistory;", upscaling)
         self.assertIn("a_batchArgs[eye].reset = a_batchArgs[eye].reset || maskResults[eye].resetHistory;", upscaling)
         self.assertIn("globals::game::isVR && !a_results[0].bypassed && !a_results[1].bypassed", upscaling)
+
+    def test_full_resolution_empty_guides_are_not_consumed(self):
+        upscaling = read("src/Features/Upscaling.cpp")
+        start = upscaling.index("bool Upscaling::PrepareFullResolutionNeuralInputs(")
+        body = upscaling[start:upscaling.index("\n}\n", start)]
+        self.assertLess(body.index("IsCurrentSelectionEmpty("), body.index("CopyRawDepthRegion("))
+        self.assertIn("if (emptyEyeMask != (1u << eyeCount) - 1u && !copyGuides())", body)
+        self.assertIn("args.depthGuideSRV = skippedGuides ? nullptr", upscaling)
+        source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
+        self.assertIn('return fail("nonempty character selection requires current depth guides");', source)
+        self.assertIn("earlySelectionPlans_ = {};", source)
 
     def test_empty_proof_schema(self):
         import json

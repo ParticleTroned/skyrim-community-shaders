@@ -24,6 +24,7 @@ namespace
 		values["neuralCharacterMaskTestMode"] = settings.neuralCharacterMaskTestMode;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		values["neuralCharacterCurrentContextEnabled"] = settings.neuralCharacterCurrentContextEnabled;
+		values["neuralCharacterGpuMaskSupportEnabled"] = settings.neuralCharacterGpuMaskSupportEnabled;
 #endif
 		return { { "upscaling", std::move(values) }, { "color", NeuralRendering::Color::ConfigurationEvidenceJson(color) } };
 	}

@@ -18,6 +18,10 @@ function(extract start_token end_token output)
     file(WRITE "${OUTPUT_DIRECTORY}/${output}" "${body}\n")
 endfunction()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+extract("\t\tbool UsesAuthoredMask(" "\n\t\t}"
+    neural_authored_mode_under_test.h)
+extract("\tbool CharacterRendering::IsCurrentSelectionEmpty(" "\n\t}"
+    neural_empty_preflight_under_test.h)
 extract("\t\tComputeSubrect BuildFullComputeSubrect(" "\n\t\t}"
     neural_full_compute_subrect_under_test.h)
 extract("\t\t[[nodiscard]] const Slot* FindPreparedSlot(" "\n\t\t}"

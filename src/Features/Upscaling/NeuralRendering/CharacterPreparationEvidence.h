@@ -110,6 +110,8 @@ namespace NeuralRendering
 		std::shared_ptr<Util::PassTimingCapture> maskTiming;
 		std::shared_ptr<CharacterMaskSupportCapture> support;
 		ComputeSubrect computeSubrect{}, dirtyDispatchRect{};
+		bool gpuSupportUsed = false;
+		std::uint32_t supportGridColumns = 0, supportGridRows = 0;
 		CharacterComputeRegionPlan computeRegions{};
 		std::optional<RoiDescriptor> roi;
 		bool requiresEvaluation = true, reused = false, prepared = false;

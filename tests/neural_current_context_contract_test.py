@@ -55,6 +55,21 @@ class CurrentContextContract(unittest.TestCase):
         self.assertIn("add(a_settings.neuralCharacterCurrentContextEnabled);", source)
         self.assertIn("settings.neuralCharacterCurrentContextEnabled = false;", source)
 
+    def test_gpu_support_is_session_only_and_opt_in(self):
+        bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
+        schema = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1))
+        key = "experimentalGpuMaskSupport"
+        self.assertEqual(schema["inputSchema"]["properties"][key]["type"], "boolean")
+        settings = schema["outputSchema"]["properties"]["neuralRendering"]["properties"]["characterRendering"]["properties"]["settings"]["properties"]
+        self.assertEqual(settings[key]["type"], "boolean")
+        self.assertIn(f'!parseBoolean("{key}", a_request.{key})', bridge)
+        self.assertIn(f'requestedSettings.neuralCharacterGpuMaskSupportEnabled = *request.{key}', bridge)
+        self.assertIn('rendering.erase("neuralCharacterGpuMaskSupportEnabled");', read("src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"))
+        rendering = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
+        self.assertIn("bool supportEnabled = false;\n#ifdef DEVBENCH_BRIDGE_ENABLED", rendering)
+        self.assertIn("neuralCharacterGpuMaskSupportEnabled = false;", read("src/Features/Upscaling.h"))
+        self.assertIn("neuralCharacterGpuMaskSupportEnabled = false;", read("src/Features/Upscaling.cpp"))
+
 
 if __name__ == "__main__":
     unittest.main()

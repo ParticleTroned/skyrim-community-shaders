@@ -8,6 +8,15 @@
 
 namespace NeuralRendering
 {
+	/** A whole-grid support walk must replace substantial rectangle work. */
+	[[nodiscard]] constexpr bool UseGpuCharacterMaskSupport(
+		const ComputeSubrect& a_dirty, std::uint32_t a_width, std::uint32_t a_height) noexcept
+	{
+		constexpr std::uint64_t minimumPixels = 65536;
+		return a_dirty.Fits(a_width, a_height) && a_dirty.Area() >= minimumPixels &&
+		       a_dirty.Area() >= (static_cast<std::uint64_t>(a_width) * a_height + 1u) / 2u;
+	}
+
 	/** Before temporal upscaling, selection shares the source raster's jittered grid. */
 	[[nodiscard]] constexpr std::array<float, 2> ResolveCharacterMaskSamplingJitter(
 		bool a_outputIsJittered, float a_capturedX, float a_capturedY) noexcept

@@ -507,6 +507,7 @@ public:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Session-only C context experiment; excluded from persisted settings. */
 		bool neuralCharacterCurrentContextEnabled = false;
+		bool neuralCharacterGpuMaskSupportEnabled = false;
 #endif
 		uint neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
@@ -3895,6 +3896,14 @@ public:
 	} mainFinalLdrNeuralState{};
 	// A failed or consumed preparation cannot be retried after scene/UI mutations.
 	uint32_t mainFullResolutionNeuralPreparationFrame = std::numeric_limits<uint32_t>::max();
+	struct NeuralGuideEmptyPreparation
+	{
+		uint32_t frame = std::numeric_limits<uint32_t>::max();
+		uint32_t sourceWorldFrame = std::numeric_limits<uint32_t>::max();
+		uint64_t generation = 0;
+		uint32_t emptyEyeMask = 0;
+	};
+	std::array<NeuralGuideEmptyPreparation, 2> neuralGuideEmptyPreparations{};
 	struct MainFinalLdrPresentationState
 	{
 		bool hmdMaskRepairReady = false;

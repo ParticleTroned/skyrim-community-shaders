@@ -171,6 +171,7 @@ namespace NeuralRendering
 			add(a_settings.multiRoiSavingsGate);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			add(a_settings.experimentalCurrentContext);
+			add(a_settings.experimentalGpuMaskSupport);
 #endif
 			add(a_settings.minimumFacePixelSize);
 			addFloat(a_settings.roiMargin);
@@ -225,8 +226,8 @@ namespace NeuralRendering
 			~ComputeStateGuard() noexcept
 			{
 				if (captured_) {
-					std::array<ID3D11ShaderResourceView*, 3> nullSrvs{};
-					std::array<ID3D11UnorderedAccessView*, 2> nullUavs{};
+					std::array<ID3D11ShaderResourceView*, 4> nullSrvs{};
+					std::array<ID3D11UnorderedAccessView*, 3> nullUavs{};
 					context_->CSSetShaderResources(0, static_cast<UINT>(nullSrvs.size()), nullSrvs.data());
 					context_->CSSetUnorderedAccessViews(0, static_cast<UINT>(nullUavs.size()), nullUavs.data(), nullptr);
 					context_->CSSetShader(shader_, classInstances_.data(), classInstanceCount_);
@@ -260,8 +261,8 @@ namespace NeuralRendering
 			std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> classInstances_{};
 			UINT classInstanceCount_ = 0;
 			ID3D11Buffer* constantBuffer_ = nullptr;
-			std::array<ID3D11ShaderResourceView*, 3> shaderResources_{};
-			std::array<ID3D11UnorderedAccessView*, 2> unorderedAccess_{};
+			std::array<ID3D11ShaderResourceView*, 4> shaderResources_{};
+			std::array<ID3D11UnorderedAccessView*, 3> unorderedAccess_{};
 			bool captured_ = false;
 		};
 
@@ -399,6 +400,7 @@ namespace NeuralRendering
 		{
 			ComPtr<ID3D11Buffer> bounds, staging;
 			ComPtr<ID3D11UnorderedAccessView> uav;
+			ComPtr<ID3D11ShaderResourceView> srv;
 			ComPtr<ID3D11Query> query;
 			std::vector<CharacterMaskRoiTileBounds> tiles;
 			std::uint64_t captureSerial = 0;
@@ -448,6 +450,9 @@ namespace NeuralRendering
 			ComPtr<ID3D11Texture2D> mask;
 			ComPtr<ID3D11ShaderResourceView> maskSrv;
 			ComPtr<ID3D11UnorderedAccessView> maskUav;
+			ComPtr<ID3D11Texture2D> dirtyTiles;
+			ComPtr<ID3D11UnorderedAccessView> dirtyTilesUav;
+			bool dirtyTilesValid = false;
 			ComPtr<ID3D11Buffer> coverageCounter;
 			ComPtr<ID3D11UnorderedAccessView> coverageCounterUav;
 			std::array<Readback, kReadbackLatency> readbacks{};
@@ -523,6 +528,7 @@ namespace NeuralRendering
 				[CharacterPolicy::kMaximumEligibilityRegions][4]{};
 			std::uint32_t dispatchRegion[4]{};
 			std::uint32_t authoredRegion[4]{};
+			std::uint32_t supportGrid[4]{};
 		};
 		static_assert(sizeof(MaskConstants) % 16 == 0);
 		static_assert(offsetof(MaskConstants, cameraProjInverse) % 16 == 0);
@@ -544,6 +550,25 @@ namespace NeuralRendering
 			CharacterCategory projectionFallbackCategory = CharacterCategory::None;
 			CharacterProjectionReason projectionFallbackReason = CharacterProjectionReason::ProjectedBounds;
 		};
+
+		struct EarlySelectionPlan
+		{
+			PrepareKey key;
+			ProjectedPlan plan;
+		};
+
+		PrepareKey SelectionPlanKey(const CharacterMaskPrepareArgs& a_args) const
+		{
+			return {
+				.sourceWorldFrame = a_args.sourceWorldFrame,
+				.generation = a_args.generation,
+				.width = a_args.outputWidth,
+				.height = a_args.outputHeight,
+				.settings = BuildSettingsKey(a_args.settings),
+				.crop = a_args.viewportCrop,
+				.sourceCaptureSerial = earlyMaskCaptureSerial_,
+			};
+		}
 
 		State()
 		{
@@ -743,6 +768,7 @@ namespace NeuralRendering
 
 		void InvalidateProjectionCache() noexcept
 		{
+			earlySelectionPlans_ = {};
 			projectionKey_ = {};
 			projectedActors_.clear();
 			projectionCacheValid_ = false;
@@ -927,6 +953,7 @@ namespace NeuralRendering
 			}
 			a_slot.maskInitialized = true;
 			a_slot.maskUniform = true;
+			a_slot.dirtyTilesValid = false;
 			a_slot.uniformMaskValue = a_value;
 			a_slot.previousMaskWorkSubrect = a_value == 0.0f ? ComputeSubrect{} :
 			                                                   BuildFullComputeSubrect(a_width, a_height);
@@ -983,6 +1010,8 @@ namespace NeuralRendering
 				slots_ = {};
 				ResetEarlyMaskBounds();
 				shader_.Reset();
+				supportShader_.Reset();
+				supportShaderCompileFailed_ = false;
 				constants_.Reset();
 				capturedCategories_.Reset();
 				capturedCategoriesSrv_.Reset();
@@ -1262,6 +1291,49 @@ namespace NeuralRendering
 			return true;
 		}
 
+		bool EnsureGpuSupport(Slot& a_slot, EarlyMaskReadback& a_support, ID3D11Device* a_device)
+		{
+			if (!supportShader_ && !supportShaderCompileFailed_) {
+				supportShader_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+					L"Data/Shaders/DLSS5CharacterMaskCS.hlsl", { { "GPU_CHARACTER_SUPPORT", "1" } }, "cs_5_0")));
+				supportShaderCompileFailed_ = !supportShader_;
+				if (supportShader_)
+					Util::SetResourceName(supportShader_.Get(), "DLSS5CharacterRendering::GpuSupportCS");
+			}
+			if (!supportShader_)
+				return false;
+			if (!a_support.srv) {
+				D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+				srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+				srvDesc.Buffer.NumElements = static_cast<UINT>(a_support.tiles.size());
+				const auto result = a_device->CreateShaderResourceView(a_support.bounds.Get(), &srvDesc, &a_support.srv);
+				if (FAILED(result))
+					return FailEarlyMaskBounds("early_bounds_srv_failed", result);
+				Util::SetResourceName(a_support.srv.Get(), "DLSS5CharacterRendering::EarlyMaskBounds SRV");
+			}
+			if (a_slot.dirtyTilesUav)
+				return true;
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = (a_slot.width + 7u) / 8u;
+			desc.Height = (a_slot.height + 7u) / 8u;
+			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Format = DXGI_FORMAT_R32_UINT;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+			ComPtr<ID3D11Texture2D> texture;
+			ComPtr<ID3D11UnorderedAccessView> view;
+			if (FAILED(a_device->CreateTexture2D(&desc, nullptr, &texture)))
+				return false;
+			Util::SetResourceName(texture.Get(), "DLSS5CharacterRendering::DirtyTiles");
+			if (FAILED(a_device->CreateUnorderedAccessView(texture.Get(), nullptr, &view)))
+				return false;
+			Util::SetResourceName(view.Get(), "DLSS5CharacterRendering::DirtyTiles UAV");
+			a_slot.dirtyTiles = std::move(texture);
+			a_slot.dirtyTilesUav = std::move(view);
+			return true;
+		}
+
 		bool EnsureSlot(
 			Slot& a_slot,
 			ID3D11Device* a_device,
@@ -1400,6 +1472,9 @@ namespace NeuralRendering
 			desc.ByteWidth = static_cast<UINT>(created.tiles.size() * sizeof(CharacterMaskRoiTileBounds));
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+#endif
 			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 			desc.StructureByteStride = sizeof(CharacterMaskRoiTileBounds);
 			auto result = a_device->CreateBuffer(&desc, nullptr, &created.bounds);
@@ -1507,20 +1582,23 @@ namespace NeuralRendering
 			}
 		}
 
+		EarlyMaskReadback* FindCurrentSupport(const CharacterMaskPrepareArgs& a_args)
+		{
+			for (auto& readback : earlyMaskReadbacks_) {
+				if (earlyMaskCaptureSerial_ != 0 && readback.captureSerial == earlyMaskCaptureSerial_ &&
+					readback.frame == a_args.sourceWorldFrame && readback.frame == capturedFrame_ &&
+					readback.width == capturedEyeWidth_ && readback.height == capturedHeight_ &&
+					readback.eyeCount == capturedEyeCount_ && a_args.eyeIndex < readback.eyeCount &&
+					readback.categories == GetEnabledCharacterCategoryMask(a_args.settings))
+					return &readback;
+			}
+			return nullptr;
+		}
+
 		bool TryApplyEarlyMaskBounds(const CharacterMaskPrepareArgs& a_args, Slot& a_slot, const ProjectedPlan& a_plan)
 		{
 			try {
-				EarlyMaskReadback* selected = nullptr;
-				for (auto& readback : earlyMaskReadbacks_) {
-					if (earlyMaskCaptureSerial_ != 0 && readback.captureSerial == earlyMaskCaptureSerial_ &&
-						readback.frame == a_args.sourceWorldFrame && readback.frame == capturedFrame_ &&
-						readback.width == capturedEyeWidth_ && readback.height == capturedHeight_ &&
-						readback.eyeCount == capturedEyeCount_ && a_args.eyeIndex < readback.eyeCount &&
-						readback.categories == GetEnabledCharacterCategoryMask(a_args.settings)) {
-						selected = &readback;
-						break;
-					}
-				}
+				auto* selected = FindCurrentSupport(a_args);
 				if (!selected) {
 					a_slot.maskRoiStatus = "early_bounds_unavailable";
 					return false;
@@ -1579,6 +1657,7 @@ namespace NeuralRendering
 					a_slot.maskRoiStatus = tight.computeRegions.count == 2 ? "gpu_source_split" : "gpu_source_single";
 				a_slot.maskRoiCurrentFrame = true;
 				a_slot.maskRoiRequiredSubrect = tight.requiredSubrect;
+				a_slot.maskWorkSubrect = tight.requiredSubrect;
 				a_slot.maskRoiOccupiedTiles = tight.occupiedTiles;
 				Increment(snapshot_.earlyMaskBounds.used);
 				snapshot_.earlyMaskBounds.lastUsedSourceFrame = a_args.sourceWorldFrame;
@@ -1714,6 +1793,12 @@ namespace NeuralRendering
 
 		ProjectedPlan BuildPlan(const CharacterMaskPrepareArgs& a_args)
 		{
+			auto& early = earlySelectionPlans_[a_args.eyeIndex];
+			if (early && early->key == SelectionPlanKey(a_args)) {
+				auto result = std::move(early->plan);
+				early.reset();
+				return result;
+			}
 			CS_PROFILE_CPU_SCOPE("Upscaling::DLSS5CharacterRoiSetup");
 			ProjectedPlan result;
 			for (const auto category : {
@@ -2003,6 +2088,7 @@ namespace NeuralRendering
 					Increment(snapshot_.readbackDrops);
 			}
 			MaskConstants constants{};
+			const auto dirtyRegion = UnionCharacterWorkRects(a_slot.previousMaskWorkSubrect, a_slot.maskWorkSubrect);
 			constants.outputAndSourceSize[0] = a_args.outputWidth;
 			constants.outputAndSourceSize[1] = a_args.outputHeight;
 			constants.outputAndSourceSize[2] = a_sourceEyeWidth;
@@ -2025,6 +2111,23 @@ namespace NeuralRendering
 			const bool fullSurfaceDispatch =
 				measureCoverage ||
 				a_args.settings.debugView != CharacterDebugView::Off;
+			bool supportEnabled = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			supportEnabled = a_args.settings.experimentalGpuMaskSupport;
+#endif
+			auto* support = supportEnabled && !fullSurfaceDispatch && UsesAuthoredMask(a_args.settings.maskTestMode) ? FindCurrentSupport(a_args) : nullptr;
+			const bool gpuSupport =
+				support &&
+				UseGpuCharacterMaskSupport(dirtyRegion, a_args.outputWidth, a_args.outputHeight) &&
+				(!a_slot.maskRoiCurrentFrame || a_slot.maskRoiOccupiedTiles * 2u < support->tiles.size() / support->eyeCount);
+			if (gpuSupport) {
+				if (!EnsureGpuSupport(a_slot, *support, a_args.device))
+					return false;
+				constants.supportGrid[0] = (support->width + 31u) / 32u;
+				constants.supportGrid[1] = (support->height + 31u) / 32u;
+				constants.supportGrid[2] = a_args.eyeIndex * constants.supportGrid[0] * constants.supportGrid[1];
+				constants.supportGrid[3] = 1;
+			}
 			constants.featherOptions[2] = measureCoverage ? 1.0f : 0.0f;
 			constants.visibilityOptions[0] = kVisibilityDepthThreshold;
 			constants.visibilityOptions[1] =
@@ -2079,20 +2182,20 @@ namespace NeuralRendering
 				constants.eligibilityRectangles[index][3] =
 					static_cast<float>(rect.maxY);
 			}
-			const auto dirtyRegion = UnionCharacterWorkRects(
-				a_slot.previousMaskWorkSubrect, a_slot.maskWorkSubrect);
 			if (!dirtyRegion.Fits(a_args.outputWidth, a_args.outputHeight))
 				return false;
 			const auto dispatchOffsetX =
-				fullSurfaceDispatch ? 0u : dirtyRegion.baseX;
+				fullSurfaceDispatch || gpuSupport ? 0u : dirtyRegion.baseX;
 			const auto dispatchOffsetY =
-				fullSurfaceDispatch ? 0u : dirtyRegion.baseY;
+				fullSurfaceDispatch || gpuSupport ? 0u : dirtyRegion.baseY;
 			const auto dispatchWidth = fullSurfaceDispatch ?
 			                               std::max(a_args.outputWidth, a_args.viewportCrop.input.Width()) :
-			                               dirtyRegion.width;
+			                           gpuSupport ? a_args.outputWidth :
+			                                        dirtyRegion.width;
 			const auto dispatchHeight = fullSurfaceDispatch ?
 			                                std::max(a_args.outputHeight, a_args.viewportCrop.input.Height()) :
-			                                dirtyRegion.height;
+			                            gpuSupport ? a_args.outputHeight :
+			                                         dirtyRegion.height;
 			constants.dispatchRegion[0] = dispatchOffsetX;
 			constants.dispatchRegion[1] = dispatchOffsetY;
 			constants.dispatchRegion[2] = dispatchWidth;
@@ -2108,6 +2211,8 @@ namespace NeuralRendering
 				a_args.context->ClearUnorderedAccessViewFloat(
 					a_slot.maskUav.Get(), clearMask.data());
 				a_slot.maskInitialized = true;
+				a_slot.maskUniform = true;
+				a_slot.uniformMaskValue = 0.0f;
 				if (activePreparationEvidence_)
 					activePreparationEvidence_->clearedPixels += static_cast<std::uint64_t>(a_args.outputWidth) * a_args.outputHeight;
 			}
@@ -2116,33 +2221,40 @@ namespace NeuralRendering
 				a_args.context->ClearUnorderedAccessViewUint(
 					a_slot.coverageCounterUav.Get(), clear.data());
 			}
+			if (gpuSupport && !a_slot.dirtyTilesValid) {
+				const UINT dirty = a_slot.maskUniform && a_slot.uniformMaskValue == 0.0f ? 0u : 1u;
+				const std::array<UINT, 4> clear{ dirty, dirty, dirty, dirty };
+				a_args.context->ClearUnorderedAccessViewUint(a_slot.dirtyTilesUav.Get(), clear.data());
+			}
 			ID3D11Buffer* constantBuffer = constants_.Get();
-			std::array<ID3D11ShaderResourceView*, 3> srvs{
+			std::array<ID3D11ShaderResourceView*, 4> srvs{
 				a_authoredMaskSource,
 				a_authoredDepthSource,
 				a_args.depthGuide,
+				gpuSupport ? support->srv.Get() : nullptr,
 			};
-			std::array<ID3D11UnorderedAccessView*, 2> uavs{
+			std::array<ID3D11UnorderedAccessView*, 3> uavs{
 				a_slot.maskUav.Get(),
 				a_slot.coverageCounterUav.Get(),
+				gpuSupport ? a_slot.dirtyTilesUav.Get() : nullptr,
 			};
-			a_args.context->CSSetShader(shader_.Get(), nullptr, 0);
+			a_args.context->CSSetShader(gpuSupport ? supportShader_.Get() : shader_.Get(), nullptr, 0);
 			a_args.context->CSSetConstantBuffers(0, 1, &constantBuffer);
 			a_args.context->CSSetShaderResources(
 				0, static_cast<UINT>(srvs.size()), srvs.data());
 			a_args.context->CSSetUnorderedAccessViews(
 				0, static_cast<UINT>(uavs.size()), uavs.data(), nullptr);
 #ifndef NDEBUG
-			std::array<ID3D11ShaderResourceView*, 3> boundSrvs{};
-			std::array<ID3D11UnorderedAccessView*, 2> boundUavs{};
+			std::array<ID3D11ShaderResourceView*, 4> boundSrvs{};
+			std::array<ID3D11UnorderedAccessView*, 3> boundUavs{};
 			a_args.context->CSGetShaderResources(
 				0, static_cast<UINT>(boundSrvs.size()), boundSrvs.data());
 			a_args.context->CSGetUnorderedAccessViews(
 				0, static_cast<UINT>(boundUavs.size()), boundUavs.data());
 			const bool bindingsValid =
 				boundSrvs[0] == srvs[0] && boundSrvs[1] == srvs[1] &&
-				boundSrvs[2] == srvs[2] &&
-				boundUavs[0] == uavs[0] && boundUavs[1] == uavs[1];
+				boundSrvs[2] == srvs[2] && boundSrvs[3] == srvs[3] &&
+				boundUavs[0] == uavs[0] && boundUavs[1] == uavs[1] && boundUavs[2] == uavs[2];
 			for (auto* view : boundSrvs) {
 				if (view)
 					view->Release();
@@ -2162,11 +2274,15 @@ namespace NeuralRendering
 					1);
 			}
 			if (activePreparationEvidence_) {
+				activePreparationEvidence_->gpuSupportUsed = gpuSupport;
+				activePreparationEvidence_->supportGridColumns = constants.supportGrid[0];
+				activePreparationEvidence_->supportGridRows = constants.supportGrid[1];
 				activePreparationEvidence_->dirtyDispatchRect = { dispatchOffsetX, dispatchOffsetY, dispatchWidth, dispatchHeight };
 				activePreparationEvidence_->dispatchedPixels = static_cast<std::uint64_t>(dispatchWidth) * dispatchHeight;
 				activePreparationEvidence_->dispatchedThreads = static_cast<std::uint64_t>((dispatchWidth + 7u) / 8u) * ((dispatchHeight + 7u) / 8u) * 64u;
 			}
 			a_slot.maskUniform = false;
+			a_slot.dirtyTilesValid = gpuSupport;
 			a_slot.previousMaskWorkSubrect = a_slot.maskWorkSubrect;
 
 			std::array<ID3D11UnorderedAccessView*, 2> nullUavs{};
@@ -2221,6 +2337,7 @@ namespace NeuralRendering
 		ProjectionKey projectionKey_{};
 		std::vector<ProjectedActor> projectedActors_;
 		bool projectionCacheValid_ = false;
+		std::array<std::optional<EarlySelectionPlan>, 2> earlySelectionPlans_{};
 		std::unordered_map<std::uint32_t, ActorAdmission> actorAdmissions_;
 		std::array<Slot, 4> slots_{};
 		std::array<std::uint32_t, 2> lastSlotForEye_{ 4, 4 };
@@ -2237,7 +2354,8 @@ namespace NeuralRendering
 		ComPtr<ID3D11Buffer> earlyMaskConstants_;
 		std::uint64_t earlyMaskCaptureSerial_ = 0;
 		bool earlyMaskShaderFailed_ = false;
-		ComPtr<ID3D11ComputeShader> shader_;
+		ComPtr<ID3D11ComputeShader> shader_, supportShader_;
+		bool supportShaderCompileFailed_ = false;
 		ComPtr<ID3D11Buffer> constants_;
 		ComPtr<ID3D11Texture2D> capturedCategories_;
 		ComPtr<ID3D11ShaderResourceView> capturedCategoriesSrv_;
@@ -2433,6 +2551,7 @@ namespace NeuralRendering
 				Increment(state_->snapshot_.observationCapacityDrops);
 				state_->unboundedCategoryMask_ |=
 					CharacterPolicy::CategoryBit(a_category);
+				state_->InvalidateProjectionCache();
 				// Preserve the exact authored semantic ID. The missing projection is
 				// represented as uncertainty and forces a conservative full-eye ROI.
 				return true;
@@ -2757,6 +2876,39 @@ namespace NeuralRendering
 		}
 	}
 
+	bool CharacterRendering::IsCurrentSelectionEmpty(const CharacterMaskPrepareArgs& a_args) noexcept
+	{
+		if (!state_ || !a_args.settings.enabled || !IsValidCharacterSettings(a_args.settings) ||
+			a_args.eyeIndex >= (globals::game::isVR ? 2u : 1u) ||
+			a_args.frameId != a_args.sourceWorldFrame || !a_args.generation ||
+			!a_args.viewportCrop.MatchesEvaluationExtents(a_args.viewportCrop.input.Width(),
+				a_args.viewportCrop.input.Height(), a_args.outputWidth, a_args.outputHeight))
+			return false;
+		try {
+			std::scoped_lock lock(state_->mutex_);
+			if (!state_->earlyMaskCaptureSerial_ || state_->capturedFrame_ != a_args.sourceWorldFrame ||
+				state_->capturedEyeWidth_ != a_args.viewportCrop.fullInput.width ||
+				state_->capturedHeight_ != a_args.viewportCrop.fullInput.height ||
+				state_->capturedEyeCount_ != (globals::game::isVR ? 2u : 1u) ||
+				(GetEnabledCharacterCategoryMask(a_args.settings) & ~state_->capturedEnabledCategoryMask_) != 0)
+				return false;
+			if (a_args.settings.maskTestMode == CharacterMaskTestMode::ForceZero)
+				return true;
+			if (!UsesAuthoredMask(a_args.settings.maskTestMode))
+				return false;
+			if (state_->capturedCategoriesEmpty_)
+				return true;
+			auto plan = state_->BuildPlan(a_args);
+			const bool empty = !plan.projectionUncertain && plan.regions.empty();
+			state_->earlySelectionPlans_[a_args.eyeIndex] = State::EarlySelectionPlan{
+				state_->SelectionPlanKey(a_args), std::move(plan)
+			};
+			return empty;
+		} catch (...) {
+			return false;
+		}
+	}
+
 	bool CharacterRendering::PrepareMask(
 		const CharacterMaskPrepareArgs& a_args,
 		CharacterMaskPrepareResult& a_result) noexcept
@@ -2910,13 +3062,13 @@ namespace NeuralRendering
 				}
 				ComPtr<ID3D11Texture2D> currentDepthTexture;
 				std::string depthError;
-				if (!state_->ValidateDepthTexture(
-						a_args.depthGuide, a_args.device,
-						a_args.viewportCrop.input.Width(),
-						a_args.viewportCrop.input.Height(),
-						CharacterDepthExtentPolicy::ContainsActiveInput,
-						currentDepthTexture, currentDepthIdentity,
-						depthError)) {
+				if (a_args.depthGuide && !state_->ValidateDepthTexture(
+											 a_args.depthGuide, a_args.device,
+											 a_args.viewportCrop.input.Width(),
+											 a_args.viewportCrop.input.Height(),
+											 CharacterDepthExtentPolicy::ContainsActiveInput,
+											 currentDepthTexture, currentDepthIdentity,
+											 depthError)) {
 					return fail(std::move(depthError));
 				}
 			}
@@ -3212,6 +3364,8 @@ namespace NeuralRendering
 						a_args.featureSlot, a_args.outputWidth,
 						a_args.outputHeight, clearValue);
 				} else {
+					if (!a_args.depthGuide)
+						return fail("nonempty character selection requires current depth guides");
 					if (!state_->EnsureShader(a_args.device)) {
 						return fail(
 							"DLSS5 character-mask compute shader could not be created");
@@ -3621,6 +3775,8 @@ namespace NeuralRendering
 			state_->slots_ = {};
 			state_->ResetEarlyMaskBounds();
 			state_->shader_.Reset();
+			state_->supportShader_.Reset();
+			state_->supportShaderCompileFailed_ = false;
 			state_->constants_.Reset();
 			state_->shaderCompileFailed_ = false;
 			state_->capturedCategories_.Reset();
@@ -3671,6 +3827,8 @@ namespace NeuralRendering
 			std::scoped_lock lock(state_->mutex_);
 			state_->ResetEarlyMaskBounds();
 			state_->shader_.Reset();
+			state_->supportShader_.Reset();
+			state_->supportShaderCompileFailed_ = false;
 			state_->constants_.Reset();
 			state_->shaderCompileFailed_ = false;
 			state_->captureShader_.Reset();

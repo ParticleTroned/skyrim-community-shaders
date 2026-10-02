@@ -1,5 +1,13 @@
 # Task 4: current character-empty proof
 
+## Follow-up qualification
+
+The [subsequent Task 4/5 record](nr-task4-5-qualification-20261002.md)
+preserves the healthy C/mode-transition and asymmetric-eye results,
+clean shutdown, remaining live gaps, and the early-guide correction.
+The prior incident below remains historical evidence; its exact GPU
+cause is not inferred from the later successful run.
+
 Source implementation on `main-vr-nr`, based on `86af01ed7`. Compiled and
 in-game acceptance are separate gates; no timing improvement is claimed.
 

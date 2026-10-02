@@ -1,5 +1,23 @@
 # main-vr-nr progress and continuation record
 
+## October 2 Task 4 live results and Task 5 qualification candidate
+
+The [latest qualification record](nr-task4-5-qualification-20261002.md)
+contains the live A/B/C, empty/re-entry, full-scene and asymmetric-eye
+results on producer `60ed4a06ee15`. There was no new renderer/GPU failure
+through 49,826 native evaluations. Accepted B-to-C transitions used
+Console-assisted admission; unpaused ownership-busy rejections remain
+separate. Settings were restored and Skyrim/MO2 closed cleanly.
+
+The run exposed 0.034 ms of avoidable A-mode guide preparation on CPU
+empty frames. That work is now gated by an exact-source early proof with
+fail-closed late consumption. Task 5 adds validated typed-depth copies,
+ready-bound mask-work reduction, and a DevBench-only opt-in sparse mask
+candidate. Default reference mask DXBC is unchanged. Synthetic sparse
+cases improved, but dense cases regressed, so automatic enablement is
+rejected. **Tasks 4 and 5 remain open for the new AIO's live qualification**;
+Task 2 remains concluded. No installation or relaunch was performed.
+
 ## October 2 B-to-C watchdog correction under qualification
 
 The [watchdog investigation](nr-task4-watchdog-20261002.md) identifies an

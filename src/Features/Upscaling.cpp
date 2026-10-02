@@ -5118,6 +5118,7 @@ namespace
 		auto policy = NeuralRendering::GetUpscalingCharacterSettings(a_settings);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		policy.experimentalCurrentContext = a_settings.neuralCharacterCurrentContextEnabled;
+		policy.experimentalGpuMaskSupport = a_settings.neuralCharacterGpuMaskSupportEnabled;
 #endif
 		NeuralRendering::SanitizeCharacterSettings(policy);
 		policy.enabled = policy.enabled && a_settings.neuralRenderingEnabled;
@@ -5227,7 +5228,7 @@ namespace
 		// with its normal automatic mask and CSX applies this authored mask when
 		// compositing the successful provider output over normal DLSS.
 		a_args.tuning.useAutoMask = true;
-		if (!globals::game::renderer || !a_args.depthGuideSRV)
+		if (!globals::game::renderer)
 			return false;
 		NeuralRendering::CharacterMaskPrepareResult result{};
 		const auto prepareArgs = BuildCharacterMaskPrepareArgs(
@@ -6656,6 +6657,7 @@ namespace
 			add(a_settings.neuralCharacterMultiRoiSavingsGateEnabled);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			add(a_settings.neuralCharacterCurrentContextEnabled);
+			add(a_settings.neuralCharacterGpuMaskSupportEnabled);
 #endif
 			add(a_settings.neuralCharacterMinimumFacePixelSize);
 			addFloat(a_settings.neuralCharacterRoiMargin);
@@ -18091,6 +18093,7 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 		candidate.neuralCharacterMaskTestMode = settings.neuralCharacterMaskTestMode;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		candidate.neuralCharacterCurrentContextEnabled = settings.neuralCharacterCurrentContextEnabled;
+		candidate.neuralCharacterGpuMaskSupportEnabled = settings.neuralCharacterGpuMaskSupportEnabled;
 #endif
 		if (candidate.neuralRenderingMode > 2u || !candidate.neuralRenderingAutoMask || candidate.neuralRenderingUICorrection)
 			throw std::invalid_argument("Unsupported Neural Rendering mode or provider mask contract");
@@ -18129,6 +18132,7 @@ bool Upscaling::ResetNeuralRenderingConfiguration()
 		settings.neuralCharacterMaskTestMode = static_cast<uint>(NeuralRendering::CharacterMaskTestMode::Authored);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		settings.neuralCharacterCurrentContextEnabled = false;
+		settings.neuralCharacterGpuMaskSupportEnabled = false;
 #endif
 	} else {
 		logger::error("[NeuralRendering] Could not restore defaults: {}", error);
@@ -45196,7 +45200,12 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				NeuralRendering::InsertionPoint::FinalLdrPreUi;
 			args.colorInput = submitNeuralFloatColorIn[eye]->resource.get();
 			args.depthGuide = foveatedCenterDepth[eye]->resource.get();
-			args.depthGuideSRV = foveatedCenterDepth[eye]->srv.get();
+			const auto& emptyGuides = neuralGuideEmptyPreparations[a_role == NeuralStereoRouteRole::Submit ? 1u : 0u];
+			const bool skippedGuides = emptyGuides.frame <= args.frameId &&
+			                           emptyGuides.sourceWorldFrame == args.sourceWorldFrame &&
+			                           emptyGuides.generation == args.generation &&
+			                           (emptyGuides.emptyEyeMask & (1u << eye)) != 0;
+			args.depthGuideSRV = skippedGuides ? nullptr : foveatedCenterDepth[eye]->srv.get();
 			args.motionVectors = foveatedCenterMotionVectors[eye]->resource.get();
 			args.colorOutput = GetSubmitNeuralFloatEvaluationOutput(eye, directCommit);
 			args.colorWidth = rect.outputWidth;
@@ -45445,6 +45454,8 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uint32_t inputHeight,
 	uint32_t outputWidthPerEye, uint32_t outputHeight, NeuralStereoRouteRole role, uint32_t sourceWorldFrame, uint64_t generation)
 {
+	auto& emptyGuides = neuralGuideEmptyPreparations[role == NeuralStereoRouteRole::Submit ? 1u : 0u];
+	emptyGuides = {};
 	auto* renderer = globals::game::renderer;
 	auto* context = globals::d3d::context;
 	if (!IsNeuralRenderingRequested() || !renderer || !context || !foveatedCenterBlendCB)
@@ -45468,9 +45479,7 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 			settings.neuralRenderingFovOnly ? &sharedMaskProfile : nullptr))
 		return false;
 	NeuralRendering::Color::ComputeStateGuard<1> stateGuard(context);
-	const auto capture = CaptureNeuralStage(role, 2u, globals::state->frameCount,
-		sourceWorldFrame, generation, "full_resolution_guide_preparation");
-	CS_GPU_PASS_CAPTURE("NeuralRendering::PrepareFullResolutionGuides", capture);
+	uint32_t emptyEyeMask = 0;
 	for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 		const auto& rect = foveatedRectCache.rects[eye];
 		const std::string suffix = eye == 0 ? "Left" : "Right";
@@ -45479,13 +45488,44 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 			!EnsureFoveatedTexture(foveatedCenterMotionVectors[eye], motion, rect.inputWidth, rect.inputHeight,
 				false, true, false, false, ("NeuralRendering::MotionVectors_" + suffix).c_str()))
 			return false;
-		const D3D11_BOX sourceBox{ eye * inputWidthPerEye + rect.inputOffsetX, rect.inputOffsetY, 0,
-			eye * inputWidthPerEye + rect.inputOffsetX + rect.inputWidth, rect.inputOffsetY + rect.inputHeight, 1 };
-		if (!CopyRawDepthRegion(depth, *foveatedCenterDepth[eye], sourceBox))
-			return false;
-		context->CopySubresourceRegion(foveatedCenterMotionVectors[eye]->resource.get(), 0, 0, 0, 0,
-			motion, 0, &sourceBox);
+		if (UsesCharacterVisualIsolation(settings)) {
+			NeuralRendering::RendererApplyArgs planArgs{};
+			planArgs.frameId = globals::state->frameCount;
+			planArgs.sourceWorldFrame = sourceWorldFrame;
+			planArgs.generation = generation;
+			planArgs.outputWidth = rect.outputWidth;
+			planArgs.outputHeight = rect.outputHeight;
+			planArgs.viewportCrop = {
+				.fullInput = { inputWidthPerEye, inputHeight },
+				.input = { rect.inputOffsetX, rect.inputOffsetY, rect.inputOffsetX + rect.inputWidth, rect.inputOffsetY + rect.inputHeight },
+				.fullOutput = { outputWidthPerEye, outputHeight },
+				.output = { rect.outputOffsetX, rect.outputOffsetY, rect.outputOffsetX + rect.outputWidth, rect.outputOffsetY + rect.outputHeight },
+			};
+			if (NeuralRendering::CharacterRendering::Instance().IsCurrentSelectionEmpty(
+					BuildCharacterMaskPrepareArgs(settings, eye, sourceWorldFrame, planArgs)))
+				emptyEyeMask |= 1u << eye;
+		}
 	}
+	const auto copyGuides = [&]() {
+		const auto capture = CaptureNeuralStage(role, 2u, globals::state->frameCount,
+			sourceWorldFrame, generation, "full_resolution_guide_preparation");
+		CS_GPU_PASS_CAPTURE("NeuralRendering::PrepareFullResolutionGuides", capture);
+		for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+			if (emptyEyeMask & (1u << eye))
+				continue;
+			const auto& rect = foveatedRectCache.rects[eye];
+			const D3D11_BOX sourceBox{ eye * inputWidthPerEye + rect.inputOffsetX, rect.inputOffsetY, 0,
+				eye * inputWidthPerEye + rect.inputOffsetX + rect.inputWidth, rect.inputOffsetY + rect.inputHeight, 1 };
+			if (!CopyRawDepthRegion(depth, *foveatedCenterDepth[eye], sourceBox))
+				return false;
+			context->CopySubresourceRegion(foveatedCenterMotionVectors[eye]->resource.get(), 0, 0, 0, 0,
+				motion, 0, &sourceBox);
+		}
+		return true;
+	};
+	if (emptyEyeMask != (1u << eyeCount) - 1u && !copyGuides())
+		return false;
+	emptyGuides = { globals::state->frameCount, sourceWorldFrame, generation, emptyEyeMask };
 	return true;
 }
 

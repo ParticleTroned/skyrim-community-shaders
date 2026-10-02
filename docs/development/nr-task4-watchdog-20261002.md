@@ -1,5 +1,13 @@
 # Task 4 B-to-C watchdog investigation
 
+## Follow-up qualification
+
+The [subsequent Task 4/5 record](nr-task4-5-qualification-20261002.md)
+preserves the healthy C/mode-transition and asymmetric-eye results,
+clean shutdown, remaining live gaps, and the early-guide correction.
+The prior incident below remains historical evidence; its exact GPU
+cause is not inferred from the later successful run.
+
 The B-to-C watchdog remains an unqualified runtime failure. Source review
 found and corrected an unsafe DevBench transition path, but the preserved
 crash evidence cannot prove that this race caused the GPU timeout. A fresh

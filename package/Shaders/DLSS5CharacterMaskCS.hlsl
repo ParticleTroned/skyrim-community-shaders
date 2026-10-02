@@ -21,6 +21,10 @@ cbuffer CharacterMaskCB : register(b0)
 	float4 EligibilityRectangles[EligibilityRegionCapacity];  // eye-local output pixels, min.xy/max.xy
 	uint4 DispatchRegion;                                     // output-local offset.xy and dispatch extent.zw
 	uint4 AuthoredRegion;                                     // valid current-frame full-eye source offset.xy/extent.zw
+
+#ifdef GPU_CHARACTER_SUPPORT
+	uint4 SupportGrid;  // source tile columns/rows, eye tile base, GPU support enabled
+#endif
 };
 
 Texture2D<unorm float2> AuthoredTuple : register(t0);
@@ -29,6 +33,46 @@ Texture2D<float> CurrentDepth : register(t2);
 RWTexture2D<unorm float> CharacterSelectionMask : register(u0);
 RWByteAddressBuffer DiagnosticCounters : register(u1);
 groupshared uint GroupCounters[9];
+#ifdef GPU_CHARACTER_SUPPORT
+StructuredBuffer<uint4> CurrentSupport : register(t3);
+RWTexture2D<uint> DirtyTiles : register(u2);
+groupshared uint GroupSupport;
+groupshared uint GroupPreviousDirty;
+groupshared uint GroupCurrentDirty;
+
+int2 GetGlobalSourcePixel(int2 localSourcePixel);
+
+// Bounds include every clamped bilinear/feather tap. Later depth and distance
+// rejection can only remove coverage from this current-source category superset.
+bool GroupHasSupport(uint2 origin)
+{
+	if (!all(isfinite(Jitter.xy)))
+		return true;
+	const uint2 last = min(origin + 7u, OutputAndSourceSize.xy - 1u);
+	const float2 scale = float2(SourceCrop.w, Options.x) / float2(OutputAndSourceSize.xy);
+	const int radius = Options.w != 0u ? min(int(Options.z), 4) : 0;
+	const int2 lower = int2(floor((float2(origin) + 0.5) * scale - 0.5 - Jitter.xy)) - radius;
+	const int2 upper = int2(floor((float2(last) + 0.5) * scale - 0.5 - Jitter.xy)) + radius + 1;
+	const int2 minimum = GetGlobalSourcePixel(lower) - int2(SourceCrop.x, 0);
+	const int2 maximum = GetGlobalSourcePixel(upper) - int2(SourceCrop.x, 0) + 1;
+	const uint2 firstTile = uint2(minimum) / 32u;
+	const uint2 lastTile = uint2(maximum - 1) / 32u;
+	// Invalid metadata or an unusually large footprint keeps the reference work.
+	if (any(lastTile >= SupportGrid.xy) || any(lastTile - firstTile > 3u))
+		return true;
+	[loop] for (uint y = firstTile.y; y <= lastTile.y; ++y)
+	{
+		[loop] for (uint x = firstTile.x; x <= lastTile.x; ++x)
+		{
+			const uint4 bounds = CurrentSupport[SupportGrid.z + y * SupportGrid.x + x];
+			if (all(bounds.zw > bounds.xy) && all(int2(bounds.xy) < maximum) && all(int2(bounds.zw) > minimum))
+				return true;
+		}
+	}
+	return false;
+}
+
+#endif
 
 static const uint MaskPixels = 0u;
 static const uint AuthoredFacePixels = 1u;
@@ -214,10 +258,31 @@ void CountCategory(uint category, uint firstCounter)
 
 [numthreads(8, 8, 1)] void main(
 	uint3 dispatchThreadId : SV_DispatchThreadID,
+	uint3 groupId : SV_GroupID,
 	uint groupIndex : SV_GroupIndex) {
 	const bool measureCoverage = FeatherOptions.z > 0.5;
 	const bool insideDispatch = all(dispatchThreadId.xy < DispatchRegion.zw);
 	const uint2 outputPixelId = dispatchThreadId.xy + DispatchRegion.xy;
+
+#ifdef GPU_CHARACTER_SUPPORT
+	const bool useSupport = SupportGrid.w != 0u;
+	if (useSupport) {
+		if (groupIndex == 0u) {
+			GroupSupport = GroupHasSupport(groupId.xy * 8u) ? 1u : 0u;
+			GroupPreviousDirty = DirtyTiles[groupId.xy];
+			GroupCurrentDirty = 0u;
+		}
+		GroupMemoryBarrierWithGroupSync();
+		if (GroupSupport == 0u) {
+			if (GroupPreviousDirty != 0u && all(outputPixelId < OutputAndSourceSize.xy))
+				CharacterSelectionMask[outputPixelId] = 0.0;
+			if (groupIndex == 0u)
+				DirtyTiles[groupId.xy] = 0u;
+			return;
+		}
+	}
+
+#endif
 	if (measureCoverage) {
 		if (groupIndex < 9u)
 			GroupCounters[groupIndex] = 0u;
@@ -333,12 +398,28 @@ void CountCategory(uint category, uint firstCounter)
 			mask = 1.0 - mask;
 		mask = saturate(mask);
 		CharacterSelectionMask[outputPixelId] = mask;
+
+#ifdef GPU_CHARACTER_SUPPORT
+		if (useSupport && mask > (0.5 / 255.0)) {
+			uint ignored;
+			InterlockedOr(GroupCurrentDirty, 1u, ignored);
+		}
+
+#endif
 		if (measureCoverage && mask > (0.5 / 255.0)) {
 			uint ignored;
 			InterlockedAdd(GroupCounters[MaskPixels], 1u, ignored);
 		}
 	}
 
+#ifdef GPU_CHARACTER_SUPPORT
+	if (useSupport) {
+		GroupMemoryBarrierWithGroupSync();
+		if (groupIndex == 0u)
+			DirtyTiles[groupId.xy] = GroupCurrentDirty;
+	}
+
+#endif
 	if (measureCoverage) {
 		GroupMemoryBarrierWithGroupSync();
 		if (groupIndex < 9u && GroupCounters[groupIndex] != 0u) {

@@ -1,5 +1,99 @@
 # main-vr-nr progress and continuation record
 
+## Task 2 concluded — 2026-10-02
+
+**Task 2's bounded measurement campaign is complete. Automatic production
+cost-model adoption is rejected by the evidence.** This is the current
+status; open/pending statements below describe earlier checkpoints.
+
+The measurements explain the principal scaling problem: native invocation
+cost remains substantial at small areas, and extra calls can consume the
+area saving. Smaller allocation reduces memory without a corresponding
+native-time reduction and currently changes output. Required input context
+also extends beyond output ownership: 128 pixels passes the frozen A/B/C
+fixtures while 64 fails, without qualifying a universal production margin.
+Transaction-attributed live preparation/copy/composition timings are now
+available, with baseline drift and actual full-eye fallback kept explicit.
+
+The [final acceptance and handover record](main-vr-nr-native-replay.md#task-2-conclusion--2026-10-02)
+preserves all passes, failed/inconclusive experiments and source identities.
+Remaining production gates belong to Tasks 3C/3D (context/ownership),
+5/7 (GPU work/transport), 6 (readiness), 8 (capacity), 9 (qualified cost
+policy), 10 (compact correctness) and 12/13 (temporal/final qualification).
+They are not marked complete by closing Task 2. The reporter now rejects
+paired conclusions from partial or unmatched accepted sample sets; 25
+reporter tests pass, with the measured standalone's 12 input tests retained.
+
+Production rendering and defaults remain unchanged. No further game run,
+DLL build, installation or restart was needed to conclude this campaign.
+
+## October 2 fixed-output context and live stage follow-up
+
+The existing replay now varies the preserved colour/depth/motion context
+independently of its output rectangle and allocation. Sixty cleanly closed
+processes, 480 measured samples and 48 bracketed comparisons establish a
+useful **fixture-specific** result: a 64-pixel colour-space halo changes
+native output, while 128 pixels matches full-context output bitwise in
+all three captured A/B/C routes, for both zero and finite outside patterns.
+Changing only outside colour changes output; changing only outside depth
+or motion does not in the tested static-reset cases. This does not qualify
+a universal halo, omitted guide copies, compact capacity or moving scenes.
+
+The live follow-up on the same installed `9138db4b8` AIO retained nine
+AI-off 300-frame windows and 80 exact stereo transactions. All sampled
+character transactions used the pending-bounds full-eye fallback: two
+native calls and 2,257,920 pixels. Measured stereo copy/depth preparation
+is about 0.10–0.11 ms and final composition 0.12–0.13 ms; native evaluation
+is 9.50–10.46 ms across the short retained windows. Different GPU clocks
+and overlapping scopes are not additive. Quiet native-pass means also
+drift, so no automatic cost model or small-ROI gameplay saving is adopted.
+
+Settings were restored to the exact original fingerprint; profiling and
+frame evidence were disabled. At the user's explicit direction, Skyrim
+PID 36428 exited through normal `qqq`; exit was verified without a kill.
+Offline work checked game absence before every replay. No NR fault,
+quarantine, shader failure or in-window driver fault was observed.
+
+At this checkpoint the 128-pixel candidate, smaller live workload and
+stable cost qualification remained open. The conclusion above assigns
+those gates to the relevant implementation tasks. Full evidence, excluded
+runner captures, source identities and validation are in the
+[context follow-up](main-vr-nr-native-replay.md#october-2-fixed-output-context-and-live-stage-follow-up).
+Production code, DLL, AIO and defaults are unchanged.
+
+## October 2 Task 2 C and input-storage measurements
+
+The user-installed DevBench AIO compiled from `9138db4b8` now has a valid
+four-frame stereo C capture, nine 300-frame live windows, and isolated C
+replay/repeats (18 processes, 205 measured samples). The live view retained
+three eligible characters, AI off and a fixed camera. NR/FOV/colour settings
+were restored exactly; native capture and profiler were inactive before the
+user closed Skyrim. No NR failures, device removals, quarantines or stereo
+failures occurred. Offline work resumed only after the user confirmed the
+later game instance was closed.
+
+C reproduces the small-region cost floor: about 4.31 ms for two calls and
+8.63 ms for four calls over the same total area. Compact capacity reduces
+DXGI process local memory from about 967 to 683 MiB with unchanged native
+cost. A standalone extension retains output crops and verifies unchanged
+valid input bytes while varying outside-rectangle contents. Its A/B/C
+controls completed 42 processes and 336 measured samples. All three routes
+change output inside the requested rectangle when outside input content
+changes; compact capacity also changes output. Adjacent captured-input
+reference outputs and both repeat directions are bitwise stable.
+
+These results do not qualify compact resources or partial input copies.
+The subsequent context/stage follow-up addresses the next measurement
+questions. The observed floor is not a production cost-model fit; the final
+conclusion above rejects automatic adoption and assigns the remaining
+qualification to later tasks. Four/eight-region work remains with Task 8.
+Production code, defaults, game DLL and AIO are unchanged by the standalone
+extension.
+
+Exact producer/native/replay identities, raw-evidence locations, timing and
+output comparisons, limitations and 11 input/23 reporter test results are
+in [the native replay checkpoint](main-vr-nr-native-replay.md#october-2-c-and-input-storage-checkpoint).
+
 ## October 1 follow-up main-VR synchronization
 
 The user requested another synchronization after the native-layout review.

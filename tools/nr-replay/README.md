@@ -82,6 +82,9 @@ the standalone provider measurements.
   --manifest '<capture>/manifest.json' --output build/nr-replay-input-check-unique `
   --validate-input
 ./build/nr-replay/Release/csx_nr_replay.exe `
+  --manifest '<capture>/manifest.json' --output build/nr-replay-storage-check-unique `
+  --validate-storage
+./build/nr-replay/Release/csx_nr_replay.exe `
   --manifest '<capture>/manifest.json' --output build/nr-replay-results-unique `
   --runtime '<physical-provider>/nvngx_dlssnr.dll' `
   --warmup 3 --samples 8 --seconds 180
@@ -145,3 +148,58 @@ Run input-contract checks without loading the provider or claiming timings:
 ```powershell
 python tools/nr-replay/test_input.py build/nr-replay/Release/csx_nr_replay.exe
 ```
+
+The explicit `input-storage-captured`, `input-storage-zero` and
+`input-storage-finite_pattern` cases use the same full backing capacity,
+native rectangle and source/guide phase as `capacity-full`. They vary only
+pixels outside the requested native colour/depth/motion rectangles. The
+finite pattern uses ordinary finite values; it is not a NaN-input probe.
+These cases require `--case` and are excluded from the default matrix.
+Their purpose is to test whether the provider reads beyond the requested
+rectangles, not to assume that those pixels are unused. Uploads remain fully
+initialized. Per-input receipts retain full and valid-region hashes,
+formats, rectangles and changed-pixel counts; valid pixels must remain exact.
+`--validate-storage` checks these CPU transformations without loading NGX or
+submitting GPU work. Native colour must be at least 256 by 256 pixels.
+
+To vary preserved input context independently, select
+`input-context-RESOURCE-POLICY-HALO`, where `RESOURCE` is `all`, `color`,
+`depth` or `motion`, `POLICY` is `zero` or `finite_pattern`, and `HALO` is
+0, 16, 32, 64, 128, 256, 512, 1024 or 16384. For example:
+
+```powershell
+./build/nr-replay/Release/csx_nr_replay.exe `
+  --manifest '<capture>/manifest.json' --output build/nr-context-check-unique `
+  --validate-storage --case input-context-color-finite_pattern-128
+```
+
+The halo expands the fixed output rectangle in native colour pixels,
+clamps to backing capacity, then maps outward to each guide grid using the
+production rectangle helpers. Only the selected resources change outside
+that preserved context; all valid and preserved pixels must hash exactly.
+The output rectangle, requested evaluation dimensions, texture capacity,
+source phase and reset policy remain fixed. A 16384-pixel halo preserves
+the complete supported backing image and provides a no-change control.
+These cases also require explicit selection and are never in the default
+GPU matrix. Without `--case`, `--validate-storage` retains its original
+three-policy CPU check. Each receipt includes the selected resource, halo,
+preserved rectangle/hash and effective per-resource policy.
+
+Bracket context probes with captured-input references and reverse the probe
+order. Equal native output establishes invariance only for the tested
+input, rectangle, settings and history. It does not prove that the provider
+never reads outside the preserved context, qualify compact creation, or
+establish a universal halo for moving scenes. Compare timings separately:
+identical output does not guarantee identical native cost.
+
+Capacity and storage cases retain each requested native output crop as a
+hashed binary resource. The reporter rejects comparisons with different
+valid input content or an unplanned storage-policy change, and separately
+reports exact output-crop hash equality when both sides retained evidence.
+Different output is not a quality pass; bitwise equality covers the tested
+native crops only, not perceptual, temporal or final CSX colour quality.
+Paired timing and output-equality conclusions require complete matching
+accepted sample sets. Partial case statistics remain descriptive only.
+Earlier receipts without retained crops remain explicitly unavailable for
+this comparison. Input hashing and output readback/writes are outside native
+GPU timing; CPU elapsed time includes these diagnostics.

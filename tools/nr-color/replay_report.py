@@ -16,7 +16,7 @@ from transaction_evidence import TransactionEvidenceError, finite, require, uint
 
 SCHEMA = "csx-nr-replay-results-v1"
 HISTORIES = {"static_reset", "continuous", "cold_create"}
-AXES = {"width", "height", "offset", "aspect_ratio", "call_count", "capacity", "mask_occupancy", "history", "alignment", "minimum_shape"}
+AXES = {"width", "height", "offset", "aspect_ratio", "call_count", "capacity", "mask_occupancy", "history", "alignment", "minimum_shape", "input_storage"}
 FOOTPRINT_FIELDS = ("modifiedInsidePixels", "modifiedOutsidePixels", "unchangedInsidePixels", "nonfiniteInsidePixels")
 IDENTITY_FIELDS = ("sourceGuideAlignment", "colorConfiguration", "tuning", "sourceFrameIndices",
                    "featureUpscaling", "useAutoMask", "controlMaskPassed", "logicalEyeCount")
@@ -81,12 +81,105 @@ def rectangle(value: object, grids: list[list[int]], label: str) -> None:
                 and value["baseY"] + value["height"] <= height, label + " exceeds capacity")
 
 
+def storage_fingerprint(case: dict, sample: dict) -> list | None:
+    proofs = sample.get("inputStorage")
+    if proofs is None:
+        return None
+    require(isinstance(proofs, list) and len(proofs) == 3 * case["evaluationsPerSample"], "incomplete input storage proof")
+    fingerprint, identities = [], set()
+    for index, proof in enumerate(proofs):
+        require(isinstance(proof, dict) and uint(proof.get("slot"), 7), "invalid input storage slot")
+        role = proof.get("resource")
+        require(isinstance(role, str) and role in {"color", "depth", "motion"}, "invalid input storage resource")
+        identity = (proof["slot"], role)
+        require(identity not in identities, "duplicate input storage proof")
+        identities.add(identity)
+        region = index // 3
+        require(proof["slot"] == proofs[region * 3]["slot"], "input storage region slot changed")
+        require(role == ("color", "depth", "motion")[index % 3], "input storage proof order changed")
+        selected_resource = case.get("inputStorageResource", "all")
+        expected_policy = case.get("inputStoragePolicy", "captured") if selected_resource in ("all", role) else "captured"
+        require(proof.get("policy") == expected_policy, "input storage policy not observed")
+        require([proof.get("width"), proof.get("height")] == case["resourceExtents"][role], "input storage extent mismatch")
+        expected = case["evaluatedRects" if role == "color" else "evaluatedGuideRects"][region]
+        require(proof.get("validRect") == expected, "input storage valid rectangle mismatch")
+        require(all(sha256(proof.get(key)) for key in ("validSha256", "capturedSha256", "uploadedSha256")), "invalid input storage hashes")
+        formats = {"color": (2, 10, 26, 28), "depth": (41,), "motion": (34,)}
+        require(uint(proof.get("format")) and proof["format"] in formats[role]
+                and uint(proof.get("changedOutsidePixels")), "invalid input storage metadata")
+        preserved = expected
+        halo = case.get("inputStorageHaloPixels", 0)
+        if "preservedRect" in proof or halo:
+            color = case["evaluatedRects"][region]
+            cw, ch = case["resourceExtents"]["color"]
+            pw, ph = case["resourceExtents"][role]
+            x, y = max(0, color["baseX"] - halo), max(0, color["baseY"] - halo)
+            right, bottom = min(cw, color["baseX"] + color["width"] + halo), min(ch, color["baseY"] + color["height"] + halo)
+            left, top = x * pw // cw, y * ph // ch
+            preserved = dict(baseX=left, baseY=top, width=(right * pw + cw - 1) // cw - left, height=(bottom * ph + ch - 1) // ch - top)
+            require(proof.get("preservedRect") == preserved and sha256(proof.get("preservedSha256")), "invalid preserved input context")
+            if not halo:
+                require(proof["preservedSha256"] == proof["validSha256"], "zero-halo input context hash mismatch")
+            if preserved == dict(baseX=0, baseY=0, width=pw, height=ph):
+                require(proof["preservedSha256"] == proof["capturedSha256"], "full input context hash mismatch")
+        outside = proof["width"] * proof["height"] - preserved["width"] * preserved["height"]
+        require(proof["changedOutsidePixels"] <= outside, "input storage treatment exceeds outside domain")
+        require((proof["changedOutsidePixels"] == 0) == (proof["capturedSha256"] == proof["uploadedSha256"]), "input storage change/hash contradiction")
+        if proof["policy"] == "captured":
+            require(proof["changedOutsidePixels"] == 0 and proof["capturedSha256"] == proof["uploadedSha256"], "captured input storage changed")
+        fingerprint.append((proof["slot"], role, proof["format"], expected["width"], expected["height"], proof["validSha256"]))
+    require(len({slot for slot, _ in identities}) == case["evaluationsPerSample"], "input storage region slots incomplete")
+    return fingerprint
+
+
+def output_equality(left: dict, right: dict, accepted: list[int]) -> dict:
+    pairs = []
+    if len(left["samples"]) != len(right["samples"]):
+        return {"status": "unavailable", "reason": "unmatched_output_sample_counts"}
+    for a, b in zip(left["samples"], right["samples"]):
+        if a["iteration"] not in accepted:
+            continue
+        if a["iteration"] != b["iteration"]:
+            return {"status": "unavailable", "reason": "unmatched_output_iterations"}
+        aa, bb = a.get("outputFiles", []), b.get("outputFiles", [])
+        if not isinstance(aa, list) or not isinstance(bb, list) or len(aa) != left["evaluationsPerSample"] or len(bb) != len(aa):
+            return {"status": "unavailable", "reason": "evaluated_outputs_not_retained"}
+        slots = set()
+        for index, (x, y) in enumerate(zip(aa, bb)):
+            if not isinstance(x, dict) or not isinstance(y, dict):
+                return {"status": "unavailable", "reason": "invalid_output_crop_metadata"}
+            for case, value in ((left, x), (right, y)):
+                rect = case["evaluatedRects"][index]
+                format_ = value.get("format")
+                stride = {2: 16, 10: 8, 26: 4, 28: 4}.get(format_) if uint(format_) else None
+                if (not uint(value.get("slot"), 7) or not stride or value.get("width") != rect["width"]
+                        or value.get("height") != rect["height"] or value.get("rowBytes") != rect["width"] * stride):
+                    return {"status": "unavailable", "reason": "invalid_output_crop_metadata"}
+            if any(x.get(k) != y.get(k) for k in ("slot", "format", "width", "height", "rowBytes")) or any(
+                    v.get("scope") != "evaluated_rectangle" or not sha256(v.get("sha256")) for v in (x, y)):
+                return {"status": "unavailable", "reason": "unmatched_output_crop_contract"}
+            if x["slot"] in slots or any(s.get("inputStorage") is not None and s["inputStorage"][index * 3]["slot"] != v["slot"]
+                                         for s, v in ((a, x), (b, y))):
+                return {"status": "unavailable", "reason": "output_crop_slot_not_unique_or_unmatched_input"}
+            slots.add(x["slot"])
+            pairs.append({"iteration": a["iteration"], "slot": x["slot"], "equal": x["sha256"] == y["sha256"]})
+    return {"status": "bitwise_equal" if pairs and all(p["equal"] for p in pairs) else "different" if pairs else "unavailable",
+            "scope": "producer_hashes_of_raw_native_evaluated_crops_not_perceptual_or_temporal_quality", "pairs": pairs}
+
+
 def checked_case(case: dict) -> dict:
     require(isinstance(case, dict) and isinstance(case.get("id"), str) and bool(case["id"]), "case id missing")
     require(case.get("history") in HISTORIES, "invalid history mode: " + case["id"])
     require(case.get("route") in {"A", "B", "C"} and uint(case.get("mode"), 2)
             and case["route"] == "ABC"[case["mode"]], "captured route/mode mismatch")
     require(isinstance(case.get("axis"), str) and bool(case["axis"]), "experiment axis missing")
+    storage_policy = case.get("inputStoragePolicy", "captured")
+    require(isinstance(storage_policy, str) and storage_policy in {"captured", "zero", "finite_pattern"}, "invalid input storage policy")
+    storage_resource = case.get("inputStorageResource", "all")
+    require(isinstance(storage_resource, str) and storage_resource in {"all", "color", "depth", "motion"}, "invalid input storage resource selector")
+    require(uint(case.get("inputStorageHaloPixels", 0), 16384), "invalid input storage halo")
+    require(case["axis"] == "input_storage" or (storage_resource == "all" and case.get("inputStorageHaloPixels", 0) == 0),
+            "input context treatment outside storage axis")
     require(case.get("pairGroup") is None or isinstance(case["pairGroup"], str), "invalid paired experiment identity")
     require(case.get("status") in {"complete", "failed", "unavailable"}, "invalid case status")
     require(type(case.get("temporalSequence", False)) is bool, "invalid temporal sequence policy")
@@ -157,6 +250,9 @@ def checked_case(case: dict) -> dict:
             reasons.append("non_bypassed_model_edit_not_proven")
         if sample["evaluationCount"] != case["evaluationsPerSample"]:
             reasons.append("actual_evaluation_count_mismatch")
+        storage = storage_fingerprint(case, sample)
+        if case["axis"] == "input_storage" and storage is None:
+            reasons.append("input_storage_proof_missing")
         if case["history"] in {"static_reset", "cold_create"} and not sample["reset"]:
             reasons.append("reset_policy_not_observed")
         if case["history"] == "cold_create" and sample["createdFeatureCount"] != case["evaluationsPerSample"]:
@@ -258,8 +354,15 @@ def comparison(left: dict, right: dict, summaries: dict) -> dict:
         reasons.append("unmatched_history")
     if axis != "capacity" and (left["creationExtent"] != right["creationExtent"] or left["resourceExtents"] != right["resourceExtents"]):
         reasons.append("unmatched_creation_or_resource_capacity")
-    if axis in {"mask_occupancy", "history"} and left["evaluatedRects"] != right["evaluatedRects"]:
+    if axis in {"mask_occupancy", "history", "input_storage"} and left["evaluatedRects"] != right["evaluatedRects"]:
         reasons.append("unmatched_evaluated_shapes")
+    if axis != "input_storage" and left.get("inputStoragePolicy", "captured") != right.get("inputStoragePolicy", "captured"):
+        reasons.append("unmatched_input_storage_policy")
+    if axis == "input_storage" or (axis == "capacity" and any("inputStorage" in s for s in left["samples"] + right["samples"])):
+        aa = [(s["iteration"], storage_fingerprint(left, s)) for s in left["samples"]]
+        bb = [(s["iteration"], storage_fingerprint(right, s)) for s in right["samples"]]
+        if aa != bb or any(v is None for _, v in aa):
+            reasons.append("unmatched_valid_input_storage_content")
     if axis == "capacity":
         if left["evaluatedSourceRects"] != right["evaluatedSourceRects"]:
             reasons.append("unmatched_source_windows")
@@ -299,8 +402,14 @@ def comparison(left: dict, right: dict, summaries: dict) -> dict:
             reasons.append("equal_initialization_not_proven")
     if a["status"] != "measured" or b["status"] != "measured":
         reasons.append("one_or_both_cases_unmeasured")
+    if (len(a["acceptedIterations"]) != left["requestedSamples"]
+            or len(b["acceptedIterations"]) != right["requestedSamples"]
+            or a["acceptedIterations"] != b["acceptedIterations"]):
+        reasons.append("incomplete_or_unmatched_measurement_samples")
     return {"left": left["id"], "right": right["id"], "axis": axis, "comparable": not reasons,
             "reasons": reasons, "qualityAssessment": "requires_separate_output_sequence_assessment",
+            "evaluatedOutputEquality": output_equality(left, right, a["acceptedIterations"])
+            if not reasons and axis in {"capacity", "input_storage"} else {"status": "unavailable", "reason": "not_a_qualified_storage_pair"},
             "scope": "coupled_square_dimension_probe" if axis == "minimum_shape" else
                      "native_NR_cost_only_not_CSX_GPU_composite_cost" if axis == "mask_occupancy" else "native_NR_cost",
             "meanGpuDeltaMicroseconds": None if reasons else b["gpuMicroseconds"]["mean"] - a["gpuMicroseconds"]["mean"]}

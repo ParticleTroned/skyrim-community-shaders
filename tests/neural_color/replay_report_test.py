@@ -54,7 +54,139 @@ def paired(axis="capacity"):
     return result
 
 
+def add_storage_evidence(case, policy="captured"):
+    case["inputStoragePolicy"] = policy
+    for sample in case["samples"]:
+        sample["inputStorage"] = []
+        for role in ("color", "depth", "motion"):
+            width, height = case["resourceExtents"][role]
+            rect = case["evaluatedRects" if role == "color" else "evaluatedGuideRects"][0]
+            sample["inputStorage"].append({"slot": 0, "resource": role, "policy": policy,
+                "format": 28 if role == "color" else 41 if role == "depth" else 34,
+                "width": width, "height": height, "validRect": copy.deepcopy(rect),
+                "validSha256": "1" * 64, "capturedSha256": "2" * 64,
+                "uploadedSha256": ("2" if policy == "captured" else "3") * 64,
+                "changedOutsidePixels": 0 if policy == "captured" else width * height - rect["width"] * rect["height"]})
+        rect = case["evaluatedRects"][0]
+        sample["outputFiles"] = [{"slot": 0, "format": 28, "width": rect["width"], "height": rect["height"],
+                                  "rowBytes": rect["width"] * 4, "scope": "evaluated_rectangle", "sha256": "4" * 64}]
+
+
 class ReplayReportTest(unittest.TestCase):
+    def test_context_halo_and_resource_selector_preserve_the_fixed_output_contract(self):
+        source = paired("input_storage")
+        for case in source["cases"]:
+            add_storage_evidence(case)
+        right = source["cases"][1]
+        right.update(inputStoragePolicy="zero", inputStorageResource="color", inputStorageHaloPixels=2)
+        for sample in right["samples"]:
+            for proof in sample["inputStorage"]:
+                proof.update(preservedRect=dict(baseX=0, baseY=0, width=10, height=10), preservedSha256="6"*64)
+                if proof["resource"] == "color":
+                    proof.update(policy="zero", uploadedSha256="3"*64, changedOutsidePixels=156)
+        self.assertTrue(rr.report(source)["comparisons"][0]["comparable"])
+        for edit in (lambda c: c.update(inputStorageHaloPixels=-1),
+                     lambda c: c.update(inputStorageResource=[]),
+                     lambda c: c["samples"][1]["inputStorage"][0].update(changedOutsidePixels=157),
+                     lambda c: c["samples"][1]["inputStorage"][1].update(policy="zero"),
+                     lambda c: c["samples"][1]["inputStorage"][0]["preservedRect"].update(width=9),
+                     lambda c: c["samples"][1]["inputStorage"][0].pop("preservedSha256")):
+            changed = copy.deepcopy(source)
+            edit(changed["cases"][1])
+            with self.assertRaises(ValueError):
+                rr.report(changed)
+
+    def test_storage_pair_requires_valid_content_and_geometry_identity(self):
+        source = paired("input_storage")
+        add_storage_evidence(source["cases"][0])
+        add_storage_evidence(source["cases"][1], "finite_pattern")
+        comparison = rr.report(source)["comparisons"][0]
+        self.assertTrue(comparison["comparable"])
+        self.assertEqual(comparison["evaluatedOutputEquality"]["status"], "bitwise_equal")
+        self.assertEqual(len(comparison["evaluatedOutputEquality"]["pairs"]), 2)
+        changed = copy.deepcopy(source)
+        changed["cases"][1]["samples"][1]["inputStorage"][0]["validSha256"] = "9" * 64
+        self.assertIn("unmatched_valid_input_storage_content", rr.report(changed)["comparisons"][0]["reasons"])
+        changed = copy.deepcopy(source)
+        for sample in changed["cases"][1]["samples"]:
+            sample.pop("inputStorage")
+        self.assertEqual(rr.report(changed)["cases"][1]["status"], "unavailable")
+
+    def test_capacity_output_equality_does_not_invent_quality_or_ignore_missing_crops(self):
+        source = paired()
+        for case in source["cases"]:
+            add_storage_evidence(case)
+        self.assertEqual(rr.report(source)["comparisons"][0]["evaluatedOutputEquality"]["status"], "bitwise_equal")
+        source["cases"][1]["samples"][1]["outputFiles"][0]["sha256"] = "5" * 64
+        self.assertEqual(rr.report(source)["comparisons"][0]["evaluatedOutputEquality"]["status"], "different")
+        source["cases"][1]["samples"][1]["outputFiles"].clear()
+        self.assertEqual(rr.report(source)["comparisons"][0]["evaluatedOutputEquality"]["status"], "unavailable")
+        source["cases"][1]["samples"][1]["outputFiles"] = [None]
+        self.assertEqual(rr.report(source)["comparisons"][0]["evaluatedOutputEquality"]["status"], "unavailable")
+        for case in source["cases"]:
+            add_storage_evidence(case)
+            for sample in case["samples"]:
+                sample["outputFiles"][0].pop("format")
+        self.assertEqual(rr.report(source)["comparisons"][0]["evaluatedOutputEquality"]["status"], "unavailable")
+
+    def test_storage_comparison_rejects_partially_accepted_samples(self):
+        for failed_cases in ((1,), (0, 1)):
+            source = paired("input_storage")
+            for case in source["cases"]:
+                add_storage_evidence(case)
+            for index in failed_cases:
+                source["cases"][index]["samples"][1].update(success=False, reason="GPU completion failed")
+            result = rr.report(source)
+            self.assertEqual(result["measuredCaseCount"], 2)
+            comparison = result["comparisons"][0]
+            self.assertFalse(comparison["comparable"])
+            self.assertIn("incomplete_or_unmatched_measurement_samples", comparison["reasons"])
+            self.assertIsNone(comparison["meanGpuDeltaMicroseconds"])
+            self.assertEqual(comparison["evaluatedOutputEquality"]["status"], "unavailable")
+
+    def test_storage_proof_rejects_duplicate_roles_outside_counts_and_wrong_rectangles(self):
+        for edit in (lambda p: p[1].update(resource="color"),
+                     lambda p: p[1].update(resource=[]),
+                     lambda p: p[1].update(format=28),
+                     lambda p: p[0].update(format=[]),
+                     lambda p: p[0].update(changedOutsidePixels=257),
+                     lambda p: p[0]["validRect"].update(baseX=1),
+                     lambda p: p[0].update(uploadedSha256="9" * 64)):
+            source = paired("input_storage")
+            for case in source["cases"]:
+                add_storage_evidence(case)
+            edit(source["cases"][1]["samples"][1]["inputStorage"])
+            with self.assertRaises(ValueError):
+                rr.report(source)
+
+    def test_output_equality_requires_unique_slots_bound_to_inputs(self):
+        source = paired("input_storage")
+        for case in source["cases"]:
+            add_storage_evidence(case)
+        for case in source["cases"]:
+            case["samples"][1]["outputFiles"][0]["slot"] = 1
+        self.assertEqual(rr.report(source)["comparisons"][0]["evaluatedOutputEquality"]["status"], "unavailable")
+        for case in source["cases"]:
+            case["samples"][1]["outputFiles"][0]["format"] = []
+        self.assertEqual(rr.report(source)["comparisons"][0]["evaluatedOutputEquality"]["status"], "unavailable")
+        left, right = copy.deepcopy(source["cases"])
+        for case in (left, right):
+            case["evaluationsPerSample"] = 2
+            case["evaluatedRects"] *= 2
+            for sample in case["samples"]:
+                sample.pop("inputStorage")
+                sample["outputFiles"][0].update(slot=0, format=28)
+                sample["outputFiles"] *= 2
+        self.assertEqual(rr.output_equality(left, right, [1, 2])["status"], "unavailable")
+
+    def test_storage_policy_change_cannot_hide_inside_capacity_comparison(self):
+        source = paired()
+        source["cases"][1]["inputStoragePolicy"] = "zero"
+        self.assertIn("unmatched_input_storage_policy", rr.report(source)["comparisons"][0]["reasons"])
+        source["cases"][1]["inputStoragePolicy"] = []
+        with self.assertRaises(ValueError):
+            rr.report(source)
+
     def test_retains_all_raw_values_and_excludes_warmup(self):
         source = fixture()
         result = rr.report(source)

@@ -1,3 +1,5 @@
+#include "CharacterComputeSubrect.h"
+#include "CharacterMaskWorkPolicy.h"
 #include "D3D12Interop.h"
 #include "Runtime.h"
 #include "Utils/CryptoHash.h"
@@ -311,6 +313,80 @@ namespace
 	{
 		return { { "baseX", rect.baseX }, { "baseY", rect.baseY }, { "width", rect.width }, { "height", rect.height } };
 	}
+	void WriteFinitePattern(std::uint8_t* destination, unsigned format, bool alternate)
+	{
+		const float a = alternate ? 1.0f : 0.0f, b = 1.0f - a;
+		const std::uint16_t halfA = alternate ? 0x3c00 : 0, halfB = alternate ? 0 : 0x3c00;
+		switch (format) {
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+			{
+				const std::array<std::uint8_t, 4> pixel{ static_cast<std::uint8_t>(255 * a), static_cast<std::uint8_t>(255 * b), static_cast<std::uint8_t>(255 * a), 255 };
+				std::memcpy(destination, pixel.data(), sizeof(pixel));
+				break;
+			}
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:
+			{
+				const std::array<std::uint16_t, 4> pixel{ halfA, halfB, halfA, 0x3c00 };
+				std::memcpy(destination, pixel.data(), sizeof(pixel));
+				break;
+			}
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			{
+				const std::array<float, 4> pixel{ a, b, a, 1.0f };
+				std::memcpy(destination, pixel.data(), sizeof(pixel));
+				break;
+			}
+		case DXGI_FORMAT_R11G11B10_FLOAT:
+			{
+				const std::uint32_t pixel = alternate ? 0x3c0u | (0x1e0u << 22) : 0x3c0u << 11;
+				std::memcpy(destination, &pixel, sizeof(pixel));
+				break;
+			}
+		case DXGI_FORMAT_R32_FLOAT:
+			{
+				const float pixel = alternate ? 0.25f : 0.75f;
+				std::memcpy(destination, &pixel, sizeof(pixel));
+				break;
+			}
+		case DXGI_FORMAT_R16G16_FLOAT:
+			{
+				const std::array<std::uint16_t, 2> pixel{ alternate ? std::uint16_t(0x3c00) : std::uint16_t(0xbc00), alternate ? std::uint16_t(0xbc00) : std::uint16_t(0x3c00) };
+				std::memcpy(destination, pixel.data(), sizeof(pixel));
+				break;
+			}
+		default:
+			throw std::runtime_error("unsupported finite storage pattern format");
+		}
+	}
+	Json ApplyInputStorage(TextureData& data, const ComputeSubrect& valid, const ComputeSubrect& preserved, std::string_view policy)
+	{
+		Require(valid.Fits(data.width, data.height), "input storage rectangle outside resource");
+		Require(preserved.Fits(data.width, data.height) && ContainsComputeSubrect(preserved, valid), "input context must contain requested rectangle");
+		Require(policy == "captured" || policy == "zero" || policy == "finite_pattern", "unknown input storage policy");
+		const auto validHash = Hash(Crop(data, valid).bytes);
+		const auto preservedHash = Hash(Crop(data, preserved).bytes);
+		const auto capturedHash = Hash(data.bytes);
+		std::uint64_t changed = 0;
+		const auto stride = BytesPerPixel(data.format);
+		if (policy != "captured")
+			for (unsigned y = 0; y < data.height; ++y)
+				for (unsigned x = 0; x < data.width; ++x) {
+					if (x >= preserved.baseX && x - preserved.baseX < preserved.width && y >= preserved.baseY && y - preserved.baseY < preserved.height)
+						continue;
+					auto* destination = data.bytes.data() + std::uint64_t(y) * data.rowBytes + x * stride;
+					std::array<std::uint8_t, 16> pixel{};
+					if (policy == "finite_pattern")
+						WriteFinitePattern(pixel.data(), data.format, ((x ^ y) & 1u) != 0);
+					changed += std::memcmp(destination, pixel.data(), stride) != 0;
+					std::memcpy(destination, pixel.data(), stride);
+				}
+		Require(Hash(Crop(data, valid).bytes) == validHash, "input storage treatment changed requested input pixels");
+		Require(Hash(Crop(data, preserved).bytes) == preservedHash, "input storage treatment changed preserved context");
+		return { { "policy", policy }, { "format", data.format }, { "width", data.width }, { "height", data.height },
+			{ "validRect", RectJson(valid) }, { "validSha256", validHash }, { "capturedSha256", capturedHash },
+			{ "preservedRect", RectJson(preserved) }, { "preservedSha256", preservedHash },
+			{ "uploadedSha256", Hash(data.bytes) }, { "changedOutsidePixels", changed } };
+	}
 	struct Variant
 	{
 		std::string id, axis, pairGroup, history = "static_reset";
@@ -318,7 +394,19 @@ namespace
 		ComputeSubrect crop;
 		bool temporal = false;
 		double occupancy = -1;
+		std::string inputStorage = "captured";
+		std::string inputStorageResource = "all";
+		unsigned inputStorageHaloPixels = 0;
 	};
+	Json ApplyVariantInputStorage(TextureData& data, const ComputeSubrect& outputRect, unsigned width, unsigned height,
+		const Variant& variant, std::string_view resource)
+	{
+		const auto valid = MapComputeSubrect(outputRect, width, height, data.width, data.height);
+		const auto context = ExpandCharacterWorkRect(outputRect, width, height, variant.inputStorageHaloPixels);
+		const auto preserved = MapComputeSubrect(context, width, height, data.width, data.height);
+		const auto policy = variant.inputStorageResource == "all" || variant.inputStorageResource == resource ? variant.inputStorage : "captured";
+		return ApplyInputStorage(data, valid, preserved, policy);
+	}
 	std::vector<Variant> Variants(unsigned width, unsigned height, unsigned guideWidth, unsigned guideHeight, const Difference& control, bool temporal)
 	{
 		const auto at = [&](unsigned w, unsigned h) {
@@ -348,6 +436,12 @@ namespace
 			capacity.baseY = capacity.baseY / quantumY * quantumY;
 			values.push_back({ "capacity-full", "capacity", "capacity-identical-integer-crop", "static_reset", { capacity }, {} });
 			values.push_back({ "capacity-compact", "capacity", "capacity-identical-integer-crop", "static_reset", { { 0, 0, capacity.width, capacity.height } }, capacity });
+			for (const auto* policy : { "captured", "zero", "finite_pattern" })
+				values.push_back({ std::format("input-storage-{}", policy), "input_storage", "input-storage-identical-valid-rect", "static_reset", { capacity }, {}, false, -1, policy });
+			for (const auto* resource : { "all", "color", "depth", "motion" })
+				for (const auto* policy : { "zero", "finite_pattern" })
+					for (unsigned halo : { 0u, 16u, 32u, 64u, 128u, 256u, 512u, 1024u, 16384u })
+						values.push_back({ std::format("input-context-{}-{}-{}", resource, policy, halo), "input_storage", "input-storage-identical-valid-rect", "static_reset", { capacity }, {}, false, -1, policy, resource, halo });
 			for (auto offset : { std::array{ 0u, 0u }, std::array{ 1u, 1u }, std::array{ width - 128, height - 128 } })
 				values.push_back({ std::format("offset-{}-{}", offset[0], offset[1]), "offset", "offset-fixed-shape", "static_reset", { { offset[0], offset[1], 128, 128 } }, {} });
 		}
@@ -365,6 +459,31 @@ namespace
 				values.push_back({ std::format("minimum-shape-{}", side), "minimum_shape", "minimum-shape", "static_reset",
 					{ { minimumOrigin.baseX, minimumOrigin.baseY, side, side } }, {} });
 		return values;
+	}
+	Json ValidateInputStorage(const std::vector<Frame>& frames, const Difference& control, std::string_view onlyCase)
+	{
+		Json result = Json::array();
+		const auto& first = frames.front().eyes.front();
+		for (const auto& variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, false)) {
+			if (variant.axis != "input_storage")
+				continue;
+			if (onlyCase.empty() ? variant.id.starts_with("input-context-") : variant.id != onlyCase)
+				continue;
+			Json inputs = Json::array();
+			for (unsigned eyeIndex = 0; eyeIndex < frames.front().eyes.size(); ++eyeIndex) {
+				const auto& eye = frames.front().eyes[eyeIndex];
+				for (const auto& [name, source] : { std::pair{ "color", &eye.color }, { "depth", &eye.depth }, { "motion", &eye.motion } }) {
+					auto data = *source;
+					auto proof = ApplyVariantInputStorage(data, variant.rects.front(), first.color.width, first.color.height, variant, name);
+					proof["eye"] = eyeIndex;
+					proof["resource"] = name;
+					inputs.push_back(std::move(proof));
+				}
+			}
+			result.push_back({ { "id", variant.id }, { "inputs", std::move(inputs) } });
+		}
+		Require(!result.empty(), "input storage validation requires at least 256x256 native colour and a known storage case");
+		return result;
 	}
 	Tuning ReadTuning(const Json& json)
 	{
@@ -531,6 +650,8 @@ namespace
 			{ "characterSelection", first.metadata.value("characterSelection", false) },
 			{ "contextIds", Json::array() }, { "initializationFingerprint", "fresh-features-first-source-reset" },
 			{ "sourceGuideAlignment", "captured-native-grids-exact-integer-crop-no-resample" },
+			{ "inputStoragePolicy", variant.inputStorage }, { "inputStorageDomain", "outside_requested_native_rectangles_not_a_proven_read_footprint" },
+			{ "inputStorageResource", variant.inputStorageResource }, { "inputStorageHaloPixels", variant.inputStorageHaloPixels },
 			{ "temporalSequence", variant.temporal }, { "qualityAssessment", "not_performed" },
 			{ "status", "unavailable" }, { "reason", "not_started" } };
 		if (variant.occupancy >= 0) {
@@ -607,13 +728,21 @@ namespace
 					const auto memoryBefore = session.Memory();
 					for (auto& resource : resources) {
 						const auto& eye = frame.eyes[resource.eye];
-						const auto upload = [&](const TextureData& input, SharedTexture& texture, bool guide) {
-							const auto cropped = variant.crop.IsValid() ? Crop(input, guide ? guideCrop : variant.crop) : input;
+						const auto upload = [&](const TextureData& input, SharedTexture& texture, bool guide, const char* name) {
+							auto cropped = variant.crop.IsValid() ? Crop(input, guide ? guideCrop : variant.crop) : input;
+							if (variant.axis == "input_storage" || variant.axis == "capacity") {
+								auto proof = ApplyVariantInputStorage(cropped, resource.rect, width, height, variant, name);
+								proof["slot"] = resource.slot;
+								proof["resource"] = name;
+								if (!sample.contains("inputStorage"))
+									sample["inputStorage"] = Json::array();
+								sample["inputStorage"].push_back(std::move(proof));
+							}
 							session.context->UpdateSubresource(texture.resource11.Get(), 0, nullptr, cropped.bytes.data(), cropped.rowBytes, 0);
 						};
-						upload(eye.color, resource.color, false);
-						upload(eye.depth, resource.depth, true);
-						upload(eye.motion, resource.motion, true);
+						upload(eye.color, resource.color, false, "color");
+						upload(eye.depth, resource.depth, true, "depth");
+						upload(eye.motion, resource.motion, true, "motion");
 						resource.source = variant.crop.IsValid() ? Crop(eye.color, variant.crop) : eye.color;
 						resource.sentinel = Sentinel(resource.source);
 						session.context->UpdateSubresource(resource.output.resource11.Get(), 0, nullptr, resource.sentinel.bytes.data(), resource.sentinel.rowBytes, 0);
@@ -711,13 +840,15 @@ namespace
 							sample["maskComposites"].push_back({ { "maskSelectedPixels", selected }, { "maskTotalPixels", rect.Area() },
 								{ "sha256", Hash(composite.bytes) }, { "nativeInputsUnmodified", true }, { "excludedFromGpuTiming", true } });
 						}
-						if (variant.temporal) {
+						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage") {
+							const auto retained = variant.temporal ? pixels : Crop(pixels, resources[i].rect);
 							const auto name = std::format("{}-{:03}-slot{}.bin", variant.id, iteration, resources[i].slot);
 							std::ofstream stream(outputRoot / name, std::ios::binary);
-							stream.write(reinterpret_cast<const char*>(pixels.bytes.data()), static_cast<std::streamsize>(pixels.bytes.size()));
-							Require(bool(stream), "temporal output write failed");
-							sample["outputFiles"].push_back({ { "file", name }, { "sha256", Hash(pixels.bytes) }, { "format", pixels.format },
-								{ "width", pixels.width }, { "height", pixels.height }, { "rowBytes", pixels.rowBytes }, { "slot", resources[i].slot } });
+							stream.write(reinterpret_cast<const char*>(retained.bytes.data()), static_cast<std::streamsize>(retained.bytes.size()));
+							Require(bool(stream), "native output evidence write failed");
+							sample["outputFiles"].push_back({ { "file", name }, { "sha256", Hash(retained.bytes) }, { "format", retained.format },
+								{ "width", retained.width }, { "height", retained.height }, { "rowBytes", retained.rowBytes }, { "slot", resources[i].slot },
+								{ "scope", variant.temporal ? "full_output_resource" : "evaluated_rectangle" } });
 						}
 					}
 					sample["nonzeroEditPixels"] = edits;
@@ -754,6 +885,7 @@ int wmain(int argc, wchar_t** argv)
 		{ "featureRequirements", { { "queried", false }, { "reason", "NR_Streamline_plugin_not_loaded_by_direct_admitted_NGX_runtime" } } },
 		{ "fourEightRegions", "deferred_until_capacity_task" },
 		{ "minimumShapeProbes", "explicit_case_only_not_in_default_matrix" },
+		{ "inputStorageProbes", "explicit_case_only_finite_patterns_outside_requested_native_rectangles" },
 		{ "maskOccupancy", "synthetic_binary_composite_only_proxy_no_provider_ControlMask_no_GPU_composite_timing" },
 		{ "gpuCapture", "not_requested_no_external_capture_tool_attached" } };
 	result["buildIdentity"] = { { "runtimeSourceSha256", kRuntimeSourceHash }, { "interopSourceSha256", kInteropSourceHash },
@@ -763,13 +895,17 @@ int wmain(int argc, wchar_t** argv)
 	std::filesystem::path manifestPath, outputRoot, runtimeSource;
 	unsigned samples = 8, warmup = 3, seconds = 180;
 	std::string onlyCase;
-	bool validateOnly = false, inspectOnly = false;
+	bool validateOnly = false, validateStorage = false, inspectOnly = false;
 	bool ownsOutput = false;
 	try {
 		for (int i = 1; i < argc; ++i) {
 			const std::wstring option = argv[i];
 			if (option == L"--validate-input") {
 				validateOnly = true;
+				continue;
+			}
+			if (option == L"--validate-storage") {
+				validateStorage = true;
 				continue;
 			}
 			if (option == L"--inspect") {
@@ -795,7 +931,8 @@ int wmain(int argc, wchar_t** argv)
 			else
 				throw std::runtime_error("unknown option");
 		}
-		Require((!manifestPath.empty() || inspectOnly) && !outputRoot.empty(), "usage: csx_nr_replay --manifest input.json --output NEW_DIRECTORY [--runtime admitted.dll] [--samples 8] [--warmup 3] [--seconds 180] [--case ID] [--validate-input]; --inspect needs only --output/--runtime");
+		Require((!manifestPath.empty() || inspectOnly) && !outputRoot.empty(), "usage: csx_nr_replay --manifest input.json --output NEW_DIRECTORY [--runtime admitted.dll] [--samples 8] [--warmup 3] [--seconds 180] [--case ID] [--validate-input | --validate-storage]; --inspect needs only --output/--runtime");
+		Require(!inspectOnly || (!validateOnly && !validateStorage), "runtime inspection and input-only validation cannot be combined");
 		Require(samples >= 1 && samples <= 64 && warmup <= 32 && seconds >= 1 && seconds <= 600, "replay bounds: samples1..64 warmup0..32 seconds1..600");
 		Require(!std::filesystem::exists(outputRoot), "output directory already exists; preserve earlier evidence");
 		std::filesystem::create_directories(outputRoot);
@@ -831,7 +968,9 @@ int wmain(int argc, wchar_t** argv)
 		const auto control = Compare(first.color, first.output, { 0, 0, first.color.width, first.color.height });
 		Require(control.pixels && control.maximum > 0, "capture lacks known nonzero native NR edit control");
 		result["capturedControl"] = { { "nonzeroEditPixels", control.pixels }, { "maximumAbsEdit", control.maximum } };
-		if (validateOnly) {
+		if (validateOnly || validateStorage) {
+			if (validateStorage)
+				result["inputStorageValidation"] = ValidateInputStorage(frames, control, onlyCase);
 			result["status"] = "input_validated_no_runtime_measurement";
 			WriteJson(outputRoot / "results.json", result);
 			return 0;
@@ -885,7 +1024,7 @@ int wmain(int argc, wchar_t** argv)
 			{ "parameterCoreSha256", runtime.ParameterCoreHash() } };
 		result["status"] = "running";
 		for (const auto& variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1)) {
-			if (onlyCase.empty() && variant.axis == "minimum_shape")
+			if (onlyCase.empty() && (variant.axis == "minimum_shape" || variant.axis == "input_storage"))
 				continue;
 			if (!onlyCase.empty() && variant.id != onlyCase)
 				continue;

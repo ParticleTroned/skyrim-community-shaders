@@ -17,6 +17,19 @@ def read(name):
 
 
 class PreparedSelectionContract(unittest.TestCase):
+    def test_each_character_override_participates_in_change_detection(self):
+        import re
+
+        source = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
+        assigned = set(re.findall(r"requestedSettings\.(neuralCharacter\w+)\s*=", source))
+        start = source.index("const bool multiRoiChanged = previousSettings.neuralCharacterMultiRoiEnabled")
+        detection = source[start:source.index("if (!settingsChanged)", start)]
+        compared = set(re.findall(
+            r"previousSettings\.(neuralCharacter\w+)\s*!=\s*requestedSettings\.\1", detection))
+        self.assertGreater(len(assigned), 20)
+        self.assertEqual(assigned - compared, set(),
+                         "A standalone character override would be rejected as nr_configure_noop")
+
     def test_atomic_lookup_and_consumers(self):
         source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
         getter = source[source.index("CharacterPreparedSelection CharacterRendering::GetPreparedSelection("):]

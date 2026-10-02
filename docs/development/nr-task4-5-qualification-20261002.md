@@ -1,6 +1,16 @@
 # Task 4 live qualification and Task 5 candidate — 2026-10-02
 
-## Acceptance status
+## Subsequent conclusion
+
+The [final Task 4/5 record](nr-task4-5-conclusion-20261002.md) concludes
+the implemented scope after the `7aaec1186f23` live pass. It records
+empty-guide elimination, 91,496 fault-free native evaluations, the held
+reference/candidate comparisons, rejection of automatic sparse adoption,
+the standalone DevBench-toggle correction and remaining validation limits.
+The producer identities, results and open statements below describe the
+earlier checkpoint and are retained as historical evidence.
+
+## Acceptance status at this checkpoint
 
 Task 4 progressed through the previously missing C and asymmetric-eye
 checks without a new GPU fault. The run found avoidable full-resolution

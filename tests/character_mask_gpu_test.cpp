@@ -1481,6 +1481,23 @@ void GpuSupportCoverageCases(Harness& gpu, bool benchmark)
 	std::cout << "Sparse/reference coverage, departure and re-entry cases: " << cases << '\n';
 }
 
+void GpuSupportQuantizationCases(Harness& gpu)
+{
+	constexpr unsigned width = 64, height = 32;
+	const float halfStep = 0.5f / 255.0f;
+	for (float strength : { std::nextafter(halfStep, 0.0f), halfStep,
+			 std::nextafter(halfStep, 1.0f), 1.0f / 255.0f }) {
+		auto constants = Defaults(width, height);
+		constants.categoryStrengths[0] = strength;
+		std::vector<Tuple> tuples(width * height);
+		for (unsigned y = 4; y < 20; ++y)
+			for (unsigned x = 3; x < 16; ++x)
+				tuples[y * width + x] = Tuple{ 37, 85 };
+		(void)gpu.Mask(constants, width, tuples);
+	}
+	std::cout << "Sparse mask R8 half-step departure cases: 4\n";
+}
+
 int wmain(int argc, wchar_t** argv)
 {
 	try {
@@ -1510,6 +1527,7 @@ int wmain(int argc, wchar_t** argv)
 		CurrentDepthAllowsLargerAllocation(gpu);
 		CropsDirtyRegionsAndStereo(gpu);
 		GpuSupportCoverageCases(gpu, false);
+		GpuSupportQuantizationCases(gpu);
 		std::cout << "Production character capture/mask HLSL passed WARP synthetic tests\n";
 		return 0;
 	} catch (const std::exception& error) {

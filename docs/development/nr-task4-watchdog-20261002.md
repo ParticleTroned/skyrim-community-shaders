@@ -2,17 +2,18 @@
 
 ## Follow-up qualification
 
-The [subsequent Task 4/5 record](nr-task4-5-qualification-20261002.md)
-preserves the healthy C/mode-transition and asymmetric-eye results,
-clean shutdown, remaining live gaps, and the early-guide correction.
+The [final Task 4/5 record](nr-task4-5-conclusion-20261002.md)
+preserves two healthy corrected-producer sessions, repeated accepted
+B-to-C transitions and the Task 4 conclusion with explicit validation
+limits. The early-guide correction is now exercised live.
 The prior incident below remains historical evidence; its exact GPU
 cause is not inferred from the later successful run.
 
-The B-to-C watchdog remains an unqualified runtime failure. Source review
-found and corrected an unsafe DevBench transition path, but the preserved
-crash evidence cannot prove that this race caused the GPU timeout. A fresh
-game test of the corrected producer is required before closing the failure
-or Task 4.
+At the earlier checkpoint below, B-to-C was an unqualified runtime failure.
+Source review found and corrected an unsafe DevBench transition path, but
+the preserved crash evidence cannot prove that this race caused the GPU
+timeout. A fresh game test of the corrected producer was required before
+closing the failure or Task 4; the linked conclusion records those tests.
 
 ## Preserved failure
 

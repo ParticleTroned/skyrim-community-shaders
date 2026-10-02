@@ -2,17 +2,18 @@
 
 ## Follow-up qualification
 
-The [subsequent Task 4/5 record](nr-task4-5-qualification-20261002.md)
-preserves the healthy C/mode-transition and asymmetric-eye results,
-clean shutdown, remaining live gaps, and the early-guide correction.
+The [final Task 4/5 record](nr-task4-5-conclusion-20261002.md)
+concludes the implemented scope with healthy C/mode-transition and
+asymmetric-eye results, verified early-guide elimination, clean shutdown
+and explicit fixture-only/live validation boundaries.
 The prior incident below remains historical evidence; its exact GPU
 cause is not inferred from the later successful run.
 
 Source implementation on `main-vr-nr`, based on `86af01ed7`. Compiled and
 in-game acceptance are separate gates; no timing improvement is claimed.
 
-**Current status: implementation and offline validation complete; live
-acceptance remains open.** A/B empty-work checks passed, then a GPU
+**Status at this earlier checkpoint: implementation and offline validation
+complete; live acceptance remained open.** A/B empty-work checks passed, then a GPU
 watchdog incident ended Skyrim during B-to-C. Neither Task 4 closure nor
 a fix for that incident is claimed. The earlier checkpoints below retain
 their original producer identities.

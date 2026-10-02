@@ -1532,7 +1532,7 @@ namespace
       "characterVisualIsolationEnabled":{"type":"boolean"},
       "experimentalMultiRoi":{"type":"boolean"},
       "experimentalCurrentContext":{"type":"boolean","description":"Session-only, default-off C single-region current-context experiment; preserves spatial padding, allocation capacity, baseline historical envelope and conservative fallback. A/B and multi-ROI remain baseline. Actual applied policy is captured in roi.contextPolicy."},
-      "experimentalGpuMaskSupport":{"type":"boolean","description":"Session-only, default-off current GPU support mask dispatcher. True enables the unqualified sparse candidate; false selects the reference rectangle dispatcher for matched tests; native ROI, context and output ownership are unchanged."},
+      "experimentalGpuMaskSupport":{"type":"boolean","description":"Session-only, default-off current GPU support mask dispatcher. True enables the unqualified sparse candidate; false selects the reference rectangle dispatcher for matched tests; native ROI, context and output ownership are unchanged. Standalone toggles use normal character-settings admission."},
       "experimentalMultiRoiSavingsGate":{"type":"boolean","description":"Session-only area cost gate, default true. False admits any strictly smaller split; current coverage and disjoint bounds remain mandatory."},
       "characterFaces":{"type":"boolean"},
       "characterSkin":{"type":"boolean"},
@@ -8869,6 +8869,7 @@ namespace
 					multiRoiChanged ||
 					previousSettings.neuralCharacterMultiRoiSavingsGateEnabled != requestedSettings.neuralCharacterMultiRoiSavingsGateEnabled ||
 					previousSettings.neuralCharacterCurrentContextEnabled != requestedSettings.neuralCharacterCurrentContextEnabled ||
+					previousSettings.neuralCharacterGpuMaskSupportEnabled != requestedSettings.neuralCharacterGpuMaskSupportEnabled ||
 					previousSettings.neuralCharacterRenderingEnabled != requestedSettings.neuralCharacterRenderingEnabled ||
 					characterVisualIsolationChanged ||
 					previousSettings.neuralCharacterFacesEnabled != requestedSettings.neuralCharacterFacesEnabled ||

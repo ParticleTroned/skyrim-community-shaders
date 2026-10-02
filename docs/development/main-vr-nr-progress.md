@@ -1,5 +1,34 @@
 # main-vr-nr progress and continuation record
 
+## October 2 Tasks 4 and 5 concluded
+
+The [final Task 4/5 record](nr-task4-5-conclusion-20261002.md) supersedes
+the open checkpoints below. Producer `7aaec1186f23` completed 91,496
+native evaluations without a renderer failure, quarantine or device
+removal. Empty-guide elimination, asymmetric-eye delivery, entry/exit,
+range changes and repeated accepted B-to-C transitions passed. All 384
+exact captured frames joined current source/execution evidence; fourteen
+300-frame profiler windows completed. Settings and AI were restored, then
+Skyrim and MO2 closed normally and their control leases were released.
+
+Task 5's sparse candidate saved 0.546 ms with radius-four feathering in
+the held scene, but regressed 0.024 ms without feathering. Automatic
+production adoption is rejected; the session-only DevBench experiment
+stays off by default. Typed-depth copies and current-ready mask bounds
+remain in the qualified implementation. No general native/frame speedup
+is claimed. Compiled fixtures cover frozen/stale/GPU-empty and mono cases;
+SE/AE gameplay and live completed-GPU-empty were not observed.
+
+The remaining one-field DevBench-toggle admission defect is corrected and
+regression-tested. The follow-up universal build and 220/220 tests passed;
+the report preserves the full runner's unrelated archive/source-stability
+failure and exact reconstructed source proof. The new AIO is available for
+the narrow standalone-toggle check, without deployment or relaunch.
+Task 2 remains concluded; Task 6 is next. Subsequent production promotion
+and final temporal/image-quality qualification retain their own gates.
+
+## Earlier checkpoints
+
 ## October 2 Task 4 live results and Task 5 qualification candidate
 
 The [latest qualification record](nr-task4-5-qualification-20261002.md)

@@ -1,5 +1,19 @@
 # main-vr-nr progress and continuation record
 
+## October 2 B-to-C watchdog correction under qualification
+
+The [watchdog investigation](nr-task4-watchdog-20261002.md) identifies an
+unsafe DevBench transition path: SKSE tasks could publish NR settings and
+retire the shared graphics backend without owning the native renderer
+transaction. NR/FOV mutation commands now acquire that ownership or reject
+before mutation. The fix is compiled only with the DevBench bridge and
+adds no per-frame production work. Producer `60ed4a06ee15` passed the
+universal build and **219/219 tests**. Its new DevBench AIO passed archive
+integrity and all **385/385** extracted file/hash comparisons; installation
+is left to the user. Causation of the preserved watchdog and
+the corrected B-to-C behavior still require a fresh in-game test; **Task 4
+remains open**.
+
 ## October 2 Task 4 current empty-proof propagation
 
 The [Task 4 implementation record](nr-task4-empty-proof-20261002.md)

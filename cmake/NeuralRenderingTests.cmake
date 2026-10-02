@@ -1,6 +1,21 @@
 include(NeuralRenderingCaptureTests)
 csx_add_neural_rendering_capture_tests("${PROJECT_SOURCE_DIR}" add_controller_test)
 
+set(_neural_renderer_ownership_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_renderer_ownership")
+add_custom_command(
+    OUTPUT "${_neural_renderer_ownership_dir}/neural_renderer_ownership_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_renderer_ownership_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_renderer_ownership.cmake"
+    DEPENDS src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp tests/extract_neural_renderer_ownership.cmake
+    VERBATIM)
+add_controller_test(neural_renderer_ownership_test NeuralRendererOwnership tests/neural_renderer_ownership_test.cpp)
+target_sources(neural_renderer_ownership_test PRIVATE "${_neural_renderer_ownership_dir}/neural_renderer_ownership_under_test.h")
+target_include_directories(neural_renderer_ownership_test PRIVATE "${_neural_renderer_ownership_dir}")
+target_compile_definitions(neural_renderer_ownership_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(neural_renderer_ownership_test PRIVATE nlohmann_json::nlohmann_json)
+set_tests_properties(NeuralRendererOwnership PROPERTIES TIMEOUT 10)
+
 set(_neural_resource_key_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_resource_key_test")
 add_custom_command(
     OUTPUT "${_neural_resource_key_test_dir}/neural_resource_key_under_test.h"

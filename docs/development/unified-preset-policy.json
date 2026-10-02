@@ -15,7 +15,7 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "F47357733D4F1D0195803BE82561302C30816D12A25DEADA3D1305B01B337F1F"
+        "sha256": "CE85A2F5EB58E6DF0B9AB09E2193C387BEA917A0EA5DB20734A7CF72208BEA7B"
     },
     "runtimeSettingsContract": {
         "revision": 8,

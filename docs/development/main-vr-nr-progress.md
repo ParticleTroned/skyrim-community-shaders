@@ -1,5 +1,29 @@
 # main-vr-nr progress and continuation record
 
+## October 2 Task 4 current empty-proof propagation
+
+The [Task 4 implementation record](nr-task4-empty-proof-20261002.md)
+documents current CPU versus completed GPU category-superset empty proofs,
+capture-bound preparation/finalization, truthful NoWork receipts and history
+reset on re-entry without native resource retirement. Pending/stale/error
+bounds retain conservative fallback. Diagnostic forced-zero remains separate.
+The subsequently requested DevBench AIO passed the universal Release build
+and **218/218 local tests**, including the new compiled regressions and
+shader suite. Build ID `95c9d742f744` identifies the uncommitted Task 4
+implementation on `86af01ed7`; its archive and complete verification receipt
+are linked in the implementation record. The subsequent A/B live run proved
+cold/steady empty native bypass, ordinary DLSS delivery and re-entry without
+resource recreation. A GPU watchdog incident ended Skyrim during B-to-C;
+the cause is unresolved and **Task 4 acceptance remains open**. Normal
+MO2/RootBuilder cleanup completed after Skyrim had already exited.
+Adversarial review corrected the stale DevBench description and offline
+capture-validation gaps. Final offline producer `74daaafeeb67` passed
+**218/218 tests**; it was not installed. The record separates compiled
+coverage from outstanding C, frozen/GPU-empty, asymmetric-eye, full-scene
+and timing acceptance. No hang fix or clean game shutdown is claimed.
+Task 2 remains concluded; Task 3 groundwork is not reopened. Production
+speedup is unmeasured.
+
 ## Task 2 concluded — 2026-10-02
 
 **Task 2's bounded measurement campaign is complete. Automatic production

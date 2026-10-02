@@ -27,6 +27,7 @@ int main()
 	changedKey([](auto& k) { ++k.generation; });
 	changedKey([](auto& k) { ++k.contentSerial; });
 	changedKey([](auto& k) { ++k.captureEpoch; });
+	changedKey([](auto& k) { ++k.sourceCaptureSerial; });
 	changedKey([](auto& k) { ++k.settingsKey; });
 	changedKey([](auto& k) { k.eye = 0; });
 	changedKey([](auto& k) { k.featureSlot = 1; });
@@ -44,15 +45,18 @@ int main()
 	preparation->prepared = true;
 	preparation->requiresEvaluation = false;
 	preparation->outcome = "no_work";
+	preparation->emptyProof = CharacterEmptyProofKind::GpuCategorySuperset;
 	preparation->support = std::make_shared<CharacterMaskSupportCapture>(key);
 	preparation->support->Complete(0);
 	const auto empty = CharacterPreparationJson(preparation);
 	Require(empty["outcome"] == "no_work" && empty["regions"].empty(), "empty selection must not invent inference regions");
+	Require(empty["emptyProof"] == "gpu_category_superset", "GPU empty proof must retain its origin");
 	Require(empty["maskSupport"]["state"] == "unavailable" && empty["maskSupport"]["pixels"].is_null(), "CPU empty proof is not a GPU measurement");
 	Require(empty["timing"]["explicitWait"]["milliseconds"].is_null(), "no wait is not a measured zero");
 	Require(empty["timing"]["mask"]["gpu"]["inclusiveMs"].is_null(), "missing GPU timing must remain absent");
 
 	preparation->requiresEvaluation = true;
+	preparation->emptyProof = CharacterEmptyProofKind::None;
 	preparation->outcome = "success";
 	preparation->computeSubrect = { 3, 5, 113, 71 };
 	preparation->computeRegions.count = 2;

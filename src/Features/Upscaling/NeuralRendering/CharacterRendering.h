@@ -103,6 +103,8 @@ namespace NeuralRendering
 			CharacterFeature18Disposition::Unresolved;
 		bool feature18EvaluationSucceeded = false;
 		bool zeroCoverageCpuProven = false;
+		CharacterEmptyProofKind emptyProof = CharacterEmptyProofKind::None;
+		std::uint64_t sourceCaptureSerial = 0;
 		bool fullEyeEligibilityFallback = false;
 		std::uint32_t projectionUncertainActors = 0;
 		std::uint32_t projectionClippedGeometry = 0;
@@ -256,6 +258,8 @@ namespace NeuralRendering
 		std::shared_ptr<const CharacterPreparationEvidence> evidence;
 		/** Present only for the prepared legacy single evaluation; source identity belongs to the slot. */
 		std::optional<RoiDescriptor> roi;
+		/** A proven-empty episode invalidates model history without retiring resources. */
+		bool resetHistory = false;
 	};
 
 	/** One locked read of a prepared slot; GPU contents retain render-thread ownership. */
@@ -321,7 +325,7 @@ namespace NeuralRendering
 		bool FinalizePreparedMasks(
 			std::span<const CharacterMaskPrepareArgs> a_args,
 			std::span<CharacterMaskPrepareResult> a_results) noexcept;
-		/** Records the authoritative outcome for prepared Feature 18 slots. */
+		/** Records prepared-slot outcomes and consumes re-entry resets only after success. */
 		void ResolveFeature18Disposition(
 			std::uint32_t a_frameId,
 			std::uint32_t a_sourceWorldFrame,

@@ -22,9 +22,18 @@ extract("\t\tComputeSubrect BuildFullComputeSubrect(" "\n\t\t}"
     neural_full_compute_subrect_under_test.h)
 extract("\t\t[[nodiscard]] const Slot* FindPreparedSlot(" "\n\t\t}"
     neural_prepared_slot_under_test.h)
+extract("\t\t[[nodiscard]] bool HasCurrentEmptyProof(" "\n\t\t}"
+    neural_empty_proof_under_test.h)
+extract("\tvoid CharacterRendering::ResolveFeature18Disposition(" "\n\t}"
+    neural_disposition_under_test.h)
 extract("\t\t[[nodiscard]] std::shared_ptr<const CharacterPreparationEvidence> FindPreparationEvidence(" "\n\t\t}"
     neural_preparation_evidence_under_test.h)
 extract("\t\t[[nodiscard]] CharacterMaskPrepareResult BuildPreparedResult(" "\n\t\t}"
     neural_prepared_result_under_test.h)
 extract("\tCharacterPreparedSelection CharacterRendering::GetPreparedSelection(" "\n\t}"
     neural_prepared_selection_under_test.h)
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" source)
+extract("\tuint32_t BuildNeuralCenterEyeMask(" "\n\t}"
+    neural_eye_mask_under_test.h)
+extract("\tNeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(" "\n\t}"
+    neural_empty_dispatch_under_test.h)

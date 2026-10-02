@@ -57,12 +57,17 @@ struct Fixture
 		{
 			std::uint32_t sourceWorldFrame = 10;
 			std::uint64_t generation = 3, settings = 5;
+			std::uint64_t sourceCaptureSerial = 9;
 			UpscalingDLSS::ViewportCrop crop{};
 			float captureJitterX = 0, captureJitterY = 0;
 			bool outputIsJittered = false;
 		} prepareKey;
 		bool prepared = true, maskUniform = false;
 		bool requiresEvaluation = true;
+		bool maskInitialized = true, resetHistoryAfterEmpty = false;
+		bool zeroCoverageBypassResolved = false, zeroCoverageBypassed = false;
+		CharacterFeature18Disposition feature18Disposition = CharacterFeature18Disposition::Unresolved;
+		CharacterEmptyProofKind emptyProof = CharacterEmptyProofKind::None;
 		float uniformMaskValue = 0;
 		std::uint64_t contentSerial = 1;
 		std::uint32_t width = 99, height = 73;
@@ -73,10 +78,13 @@ struct Fixture
 		std::optional<RoiDescriptor> roi;
 	};
 	std::array<Slot, 4> slots_{};
+	std::uint64_t earlyMaskCaptureSerial_ = 9;
+	std::uint32_t capturedFrame_ = 10;
 	CharacterSnapshot snapshot_{};
 	std::array<std::shared_ptr<const CharacterPreparationEvidence>, 4> latestPreparationEvidence_{};
 	mutable std::mutex mutex_;
 
+#include "neural_empty_proof_under_test.h"
 #include "neural_preparation_evidence_under_test.h"
 #include "neural_prepared_result_under_test.h"
 #include "neural_prepared_slot_under_test.h"
@@ -99,6 +107,7 @@ static Fixture* producer = nullptr;
 
 namespace NeuralRendering
 {
+	static void Increment(std::uint64_t& value) { ++value; }
 #include "neural_full_compute_subrect_under_test.h"
 
 	class CharacterRendering::State : public Fixture
@@ -111,6 +120,7 @@ namespace NeuralRendering
 		return instance;
 	}
 
+#include "neural_disposition_under_test.h"
 #include "neural_prepared_selection_under_test.h"
 }
 
@@ -163,6 +173,7 @@ int main()
 		auto evidence = std::make_shared<CharacterPreparationEvidence>();
 		evidence->prepared = true;
 		evidence->key = { 12, 10, slotIndex & 1u, slotIndex, 3, slot.contentSerial, 5, 7 };
+		evidence->key.sourceCaptureSerial = 9;
 		producer->latestPreparationEvidence_[slotIndex] = evidence;
 		Require(producer->FindPreparationEvidence(12, 10, 3, slotIndex) == evidence);
 		for (const auto change : { 0, 1, 2, 3, 4, 5, 6 }) {
@@ -185,7 +196,7 @@ int main()
 			Require(!producer->FindPreparationEvidence(12, 10, 3, slotIndex));
 		}
 		producer->latestPreparationEvidence_[slotIndex] = evidence;
-		for (const auto change : { 0, 1, 2, 3, 4 }) {
+		for (const auto change : { 0, 1, 2, 3, 4, 5 }) {
 			const auto key = slot.prepareKey;
 			if (change == 0)
 				++slot.prepareKey.settings;
@@ -197,6 +208,8 @@ int main()
 				slot.prepareKey.captureJitterY = -0.25f;
 			if (change == 4)
 				slot.prepareKey.outputIsJittered = true;
+			if (change == 5)
+				++slot.prepareKey.sourceCaptureSerial;
 			Require(!producer->FindPreparationEvidence(12, 10, 3, slotIndex));
 			slot.prepareKey = key;
 		}
@@ -241,4 +254,76 @@ int main()
 	}
 	Require(!rendering.GetPreparedSelection(4, 12, 10, 3, 99, 73).mask);
 	Require(!producer->FindPreparationEvidence(12, 10, 3, 4));
+	// Exercise the production receipt path, including asymmetric eyes and
+	// repeated publication. Proofs belong to immutable contents, not a frame age.
+	for (const auto kind : { CharacterEmptyProofKind::CpuSelection,
+			 CharacterEmptyProofKind::GpuCategorySuperset, CharacterEmptyProofKind::DiagnosticZero }) {
+		producer->snapshot_ = {};
+		producer->slots_ = {};
+		auto& empty = producer->slots_[0];
+		empty.maskUniform = true;
+		empty.requiresEvaluation = false;
+		empty.emptyProof = kind;
+		empty.resetHistoryAfterEmpty = true;
+		producer->Publish(20, 0);
+		producer->Publish(20, 1);
+		Require(producer->HasCurrentEmptyProof(empty));
+		for (unsigned change = 0; change < 7; ++change) {
+			auto stale = empty;
+			switch (change) {
+			case 0:
+				++stale.prepareKey.sourceCaptureSerial;
+				break;
+			case 1:
+				++stale.prepareKey.sourceWorldFrame;
+				break;
+			case 2:
+				stale.contentSerial = 0;
+				break;
+			case 3:
+				stale.emptyProof = CharacterEmptyProofKind::None;
+				break;
+			case 4:
+				stale.prepared = false;
+				break;
+			case 5:
+				stale.maskInitialized = false;
+				break;
+			case 6:
+				stale.uniformMaskValue = 1;
+				break;
+			}
+			Require(!producer->HasCurrentEmptyProof(stale));
+		}
+		CharacterMaskPrepareArgs args;
+		Require(!producer->BuildPreparedResult(args, empty).resetHistory);
+		rendering.ResolveFeature18Disposition(20, 10, 3, 3, 2, 2, 1);
+		const auto& frame = producer->snapshot_.preparedFrames[0];
+		Require(frame.bypassedSlotMask == 1 && frame.evaluatedSlotMask == 2 && frame.successfulSlotMask == 2);
+		Require(empty.feature18Disposition == CharacterFeature18Disposition::EmptyBypass);
+		Require(empty.resetHistoryAfterEmpty);
+		const auto count = producer->snapshot_.provenEmptyFeatureBypasses;
+		Require(count == (kind == CharacterEmptyProofKind::DiagnosticZero ? 0u : 1u));
+		rendering.ResolveFeature18Disposition(20, 10, 3, 3, 2, 2, 1);
+		Require(producer->snapshot_.provenEmptyFeatureBypasses == count);
+		// Re-enter with the same frozen source: failure keeps the reset pending.
+		empty.requiresEvaluation = true;
+		empty.emptyProof = CharacterEmptyProofKind::None;
+		producer->Publish(21, 0);
+		Require(producer->BuildPreparedResult(args, empty).resetHistory);
+		rendering.ResolveFeature18Disposition(21, 10, 3, 1, 1, 0, 0);
+		Require(empty.resetHistoryAfterEmpty);
+		producer->Publish(22, 0);
+		rendering.ResolveFeature18Disposition(22, 10, 3, 1, 1, 1, 0);
+		Require(!empty.resetHistoryAfterEmpty);
+		// Stale proof cannot claim a bypass receipt even if a caller asks for one.
+		empty.requiresEvaluation = false;
+		empty.emptyProof = kind;
+		++empty.prepareKey.sourceCaptureSerial;
+		producer->Publish(23, 0);
+		Require(!producer->FindPreparedSlot(0, 23, 10, 3, 99, 73));
+		rendering.ResolveFeature18Disposition(23, 10, 3, 1, 0, 0, 1);
+		Require(empty.feature18Disposition == CharacterFeature18Disposition::Aborted);
+		Require(producer->snapshot_.preparedFrames[0].bypassedSlotMask == 0);
+	}
 }

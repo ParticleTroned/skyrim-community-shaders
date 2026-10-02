@@ -57,6 +57,55 @@ class PreparedSelectionContract(unittest.TestCase):
         blend = read("features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl")
         self.assertRegex(blend, r"if \(characterWeight > 0\.0\)\s*\{\s*float4 neuralColor = CenterColor.Load")
 
+    def test_empty_proof_is_current_and_has_no_extra_readback(self):
+        source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
+        early = source[source.index("bool TryApplyEarlyMaskBounds("):source.index("static void PublishMaskRoiSnapshot(")]
+        self.assertEqual(early.count("PollCharacterMaskBounds("), 1)
+        self.assertIn("readback.captureSerial == earlyMaskCaptureSerial_", early)
+        self.assertIn("readback.frame == a_args.sourceWorldFrame", early)
+        self.assertIn("readback.categories == GetEnabledCharacterCategoryMask(a_args.settings)", early)
+        self.assertLess(early.index("if (!result.Ready())"), early.index("CharacterEmptyProofKind::GpuCategorySuperset"))
+        self.assertLess(early.index("if (!tight.valid)"), early.index("CharacterEmptyProofKind::GpuCategorySuperset"))
+        self.assertIn("MapEarlyCharacterMaskBounds(", early)
+        finalization = source[source.index("bool CharacterRendering::FinalizePreparedMasks("):
+                              source.index("void CharacterRendering::ResolveFeature18Disposition(")]
+        self.assertIn("!slot.requiresEvaluation && !state_->HasCurrentEmptyProof(slot)", finalization)
+        self.assertIn("slot.prepareKey.settings != BuildSettingsKey(args.settings)", finalization)
+        self.assertIn("slot.prepareKey.crop != args.viewportCrop", finalization)
+        self.assertNotIn("PollCharacterMaskBounds(", finalization)
+        self.assertIn("if (!a_slot.maskUniform || a_slot.uniformMaskValue != a_value)", source)
+
+    def test_empty_episode_resets_only_evaluating_eyes(self):
+        source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
+        self.assertIn("result.resetHistory = a_slot.requiresEvaluation && a_slot.resetHistoryAfterEmpty;", source)
+        upscaling = read("src/Features/Upscaling.cpp")
+        self.assertIn("a_args.reset = a_args.reset || result.resetHistory;", upscaling)
+        self.assertIn("a_batchArgs[eye].reset = a_batchArgs[eye].reset || maskResults[eye].resetHistory;", upscaling)
+        self.assertIn("globals::game::isVR && !a_results[0].bypassed && !a_results[1].bypassed", upscaling)
+
+    def test_empty_proof_schema(self):
+        import json
+        import re
+        bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
+        schema = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1))
+        self.assertNotIn("GPU-proven empty bypass remains disabled", schema["description"])
+        self.assertIn("only a completed current-source category superset can authorize GPU-proven empty bypass",
+                      schema["description"])
+        definitions = []
+
+        def visit(value):
+            if isinstance(value, dict):
+                if "emptyProof" in value:
+                    definitions.append(value["emptyProof"])
+                for item in value.values():
+                    visit(item)
+            elif isinstance(value, list):
+                for item in value:
+                    visit(item)
+        visit(schema["outputSchema"])
+        self.assertEqual(len(definitions), 1)
+        self.assertEqual(definitions[0]["enum"], ["none", "cpu_selection", "gpu_category_superset", "diagnostic_zero"])
+
 
 if __name__ == "__main__":
     unittest.main(argv=[__file__, *remaining])

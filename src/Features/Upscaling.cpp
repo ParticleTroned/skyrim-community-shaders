@@ -5243,6 +5243,7 @@ namespace
 		a_args.computeSubrect = result.computeSubrect;
 		a_args.computeRegions = result.computeRegions;
 		a_args.roi = result.roi;
+		a_args.reset = a_args.reset || result.resetHistory;
 		a_args.characterVisualIsolation = true;
 		if (a_requiresEvaluation && !a_args.computeSubrect.Fits(
 										a_args.outputWidth, a_args.outputHeight)) {
@@ -44576,8 +44577,13 @@ namespace
 				a_batchArgs[eye].computeSubrect = maskResults[eye].computeSubrect;
 				a_batchArgs[eye].computeRegions = maskResults[eye].computeRegions;
 				a_batchArgs[eye].roi = maskResults[eye].roi;
+				a_batchArgs[eye].reset = a_batchArgs[eye].reset || maskResults[eye].resetHistory;
 				a_batchArgs[eye].characterEvidence = maskResults[eye].evidence;
 				a_results[eye].bypassed = !maskResults[eye].requiresEvaluation;
+			}
+			if (globals::game::isVR && !a_results[0].bypassed && !a_results[1].bypassed) {
+				const bool reset = a_batchArgs[0].reset || a_batchArgs[1].reset;
+				a_batchArgs[0].reset = a_batchArgs[1].reset = reset;
 			}
 		}
 		// Validate both eye plans before converting the regions inference will read.

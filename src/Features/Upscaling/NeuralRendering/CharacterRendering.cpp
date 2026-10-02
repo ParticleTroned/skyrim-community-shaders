@@ -437,6 +437,7 @@ namespace NeuralRendering
 			float captureJitterX = 0.0f;
 			float captureJitterY = 0.0f;
 			bool outputIsJittered = false;
+			std::uint64_t sourceCaptureSerial = 0;
 
 			bool operator==(const PrepareKey&) const = default;
 		};
@@ -481,6 +482,8 @@ namespace NeuralRendering
 			CharacterFeature18Disposition feature18Disposition =
 				CharacterFeature18Disposition::Unresolved;
 			bool zeroCoverageCpuProven = false;
+			CharacterEmptyProofKind emptyProof = CharacterEmptyProofKind::None;
+			bool resetHistoryAfterEmpty = false;
 			bool requiresEvaluation = true;
 			ComputeSubrect computeSubrect{};
 			CharacterComputeRegionPlan computeRegions{};
@@ -613,6 +616,7 @@ namespace NeuralRendering
 				const auto& slot = slots_[a_featureSlot];
 				return slot.prepared && slot.contentSerial != 0 && slot.contentSerial == evidence->key.contentSerial &&
 				       slot.prepareKey.sourceWorldFrame == a_sourceWorldFrame && slot.prepareKey.generation == a_generation &&
+				       slot.prepareKey.sourceCaptureSerial == evidence->key.sourceCaptureSerial &&
 				       slot.prepareKey.crop == evidence->key.crop && slot.prepareKey.settings == evidence->key.settingsKey &&
 				       slot.prepareKey.captureJitterX == evidence->key.jitterX && slot.prepareKey.captureJitterY == evidence->key.jitterY &&
 				       slot.prepareKey.outputIsJittered == evidence->key.outputIsJittered;
@@ -634,6 +638,7 @@ namespace NeuralRendering
 		{
 			CharacterMaskPrepareResult result{ true, a_slot.requiresEvaluation,
 				a_slot.computeSubrect, a_slot.computeRegions, {}, a_slot.roi };
+			result.resetHistory = a_slot.requiresEvaluation && a_slot.resetHistoryAfterEmpty;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (Color::Registry::Instance().CaptureEvidenceEnabled())
 				result.evidence = FindPreparationEvidence(
@@ -750,6 +755,7 @@ namespace NeuralRendering
 			snapshot_.eyes = {};
 			for (auto& slot : slots_) {
 				slot.prepared = false;
+				slot.emptyProof = CharacterEmptyProofKind::None;
 				slot.computeRegions = {};
 				if (!a_preserveMultiRoiHistory) {
 					slot.stableComputeSubrect = {};
@@ -826,6 +832,7 @@ namespace NeuralRendering
 				auto& slot = slots_[a_featureSlot];
 				slot.prepared = false;
 				slot.requiresEvaluation = true;
+				slot.emptyProof = CharacterEmptyProofKind::None;
 				slot.computeSubrect = {};
 				slot.computeRegions = {};
 				slot.stableMultiRoi = {};
@@ -865,6 +872,15 @@ namespace NeuralRendering
 			}
 		}
 
+		/** NoWork is valid only for the immutable capture and fully cleared prepared contents. */
+		[[nodiscard]] bool HasCurrentEmptyProof(const Slot& slot) const noexcept
+		{
+			return slot.prepared && slot.contentSerial != 0 && IsCharacterEmptyProof(slot.emptyProof) &&
+			       slot.prepareKey.sourceCaptureSerial != 0 && slot.prepareKey.sourceCaptureSerial == earlyMaskCaptureSerial_ &&
+			       slot.prepareKey.sourceWorldFrame == capturedFrame_ &&
+			       slot.maskInitialized && slot.maskUniform && slot.uniformMaskValue == 0.0f;
+		}
+
 		/** The caller holds mutex_; every prepared-resource accessor uses this contract. */
 		[[nodiscard]] const Slot* FindPreparedSlot(
 			std::uint32_t a_featureSlot, std::uint32_t a_frameId,
@@ -878,6 +894,7 @@ namespace NeuralRendering
 				[a_frameId](const auto& prepared) { return prepared.frame == a_frameId; });
 			const auto slotBit = 1u << a_featureSlot;
 			return slot.prepared && preparedFrame != snapshot_.preparedFrames.end() &&
+			               slot.prepareKey.sourceCaptureSerial != 0 && slot.prepareKey.sourceCaptureSerial == earlyMaskCaptureSerial_ &&
 			               (preparedFrame->preparedSlotMask & slotBit) != 0 &&
 			               preparedFrame->sourceWorldFrames[a_featureSlot] == a_sourceWorldFrame &&
 			               preparedFrame->generations[a_featureSlot] == a_generation &&
@@ -1550,13 +1567,16 @@ namespace NeuralRendering
 					return FailEarlyMaskBounds("early_bounds_plan_invalid", E_INVALIDARG);
 				if (tight.empty) {
 					a_slot.maskRoiStatus = "early_bounds_empty";
-					return false;
+					a_slot.emptyProof = CharacterEmptyProofKind::GpuCategorySuperset;
+					a_slot.stableComputeSubrect = {};
+					a_slot.stableMultiRoi = {};
 				}
 				a_slot.computeSubrect = tight.computeSubrect;
 				a_slot.computeRegions = tight.computeRegions;
 				a_slot.multiRoiReason = a_args.settings.multiRoi ? tight.multiRoiReason : CharacterMultiRoiReason::Disabled;
 				a_slot.multiRoiDiagnostics = tight.diagnostics;
-				a_slot.maskRoiStatus = tight.computeRegions.count == 2 ? "gpu_source_split" : "gpu_source_single";
+				if (!tight.empty)
+					a_slot.maskRoiStatus = tight.computeRegions.count == 2 ? "gpu_source_split" : "gpu_source_single";
 				a_slot.maskRoiCurrentFrame = true;
 				a_slot.maskRoiRequiredSubrect = tight.requiredSubrect;
 				a_slot.maskRoiOccupiedTiles = tight.occupiedTiles;
@@ -1574,6 +1594,9 @@ namespace NeuralRendering
 			a_eye.maskRoiStatus = a_slot.maskRoiStatus;
 			a_eye.maskRoiPlanningCpuMs = a_slot.maskRoiPlanningCpuMs;
 			a_eye.maskRoiCurrentFrame = a_slot.maskRoiCurrentFrame;
+			a_eye.emptyProof = a_slot.emptyProof;
+			a_eye.sourceCaptureSerial = a_slot.prepareKey.sourceCaptureSerial;
+			a_eye.maskRoiGpuProvenEmpty = a_slot.emptyProof == CharacterEmptyProofKind::GpuCategorySuperset;
 			a_eye.maskRoiOccupiedTiles = a_slot.maskRoiOccupiedTiles;
 			a_eye.maskRoiRequiredSubrect = a_slot.maskRoiRequiredSubrect;
 		}
@@ -1723,8 +1746,8 @@ namespace NeuralRendering
 					continue;
 				const auto selectedDistanceMeters = Util::Units::GameUnitsToMeters(
 					actor.nearestSelectedDistanceUnits);
-				if (!CharacterRegionPolicy::IsWithinMaximumDistance(
-						selectedDistanceMeters, a_args.settings.maximumDistanceMeters))
+				if (std::isfinite(selectedDistanceMeters) && !CharacterRegionPolicy::IsWithinMaximumDistance(
+																 selectedDistanceMeters, a_args.settings.maximumDistanceMeters))
 					continue;
 				result.projectionUncertain = result.projectionUncertain ||
 				                             actor.projectionUncertain[a_args.eyeIndex];
@@ -2542,6 +2565,7 @@ namespace NeuralRendering
 				// G-buffer data when no selected character was observed.
 				state_->capturedFrame_ = a_frame;
 				state_->capturedCategoriesEmpty_ = true;
+				state_->earlyMaskCaptureSerial_ = state_->AllocatePreparedContentSerial();
 				state_->capturedSourceRects_ = {};
 				state_->capturedEyeWidth_ = a_sourceEyeWidth;
 				state_->capturedEyeCount_ = eyeCount;
@@ -2559,6 +2583,7 @@ namespace NeuralRendering
 				Increment(state_->snapshot_.categoryCaptureEmptyBypasses);
 				if (evidence) {
 					evidence->empty = true;
+					evidence->captureSerial = state_->earlyMaskCaptureSerial_;
 					state_->CaptureLogicalBytes(*evidence);
 					evidence->captureCpuMs = ElapsedMilliseconds(evidenceStarted);
 				}
@@ -2759,6 +2784,7 @@ namespace NeuralRendering
 			State::PreparationEvidenceScope evidenceScope(*state_, evidence.get());
 			if (evidence) {
 				evidence->key.jitterX = state_->capturedJitterX_;
+				evidence->key.sourceCaptureSerial = state_->earlyMaskCaptureSerial_;
 				evidence->key.jitterY = state_->capturedJitterY_;
 				if (state_->sourceEvidence_ && state_->sourceEvidence_->sourceWorldFrame == a_args.sourceWorldFrame &&
 					state_->sourceEvidence_->captureEpoch == evidence->key.captureEpoch)
@@ -2909,6 +2935,7 @@ namespace NeuralRendering
 				.captureJitterX = state_->capturedJitterX_,
 				.captureJitterY = state_->capturedJitterY_,
 				.outputIsJittered = a_args.outputIsJittered,
+				.sourceCaptureSerial = state_->earlyMaskCaptureSerial_,
 			};
 			if (retainedSource) {
 				// Retained menu frames reuse the exact mask/ROI that was produced
@@ -3035,9 +3062,12 @@ namespace NeuralRendering
 				                               state_->BuildDiagnosticKey(
 												   sourceArgs, plan, sourceEyeWidth,
 												   sourceDesc.Height);
-				const bool cpuProvenEmpty = forcedEmpty ||
-				                            (authoredMode &&
-												(logicalEmptyCapture || plan.regions.empty()));
+				const bool cpuProvenEmpty = authoredMode &&
+				                            (logicalEmptyCapture || plan.regions.empty());
+				slot.emptyProof = forcedEmpty    ? CharacterEmptyProofKind::DiagnosticZero :
+				                  cpuProvenEmpty ? CharacterEmptyProofKind::CpuSelection :
+				                                   CharacterEmptyProofKind::None;
+				const bool selectionEmpty = IsCharacterEmptyProof(slot.emptyProof);
 				const bool computeSubrectContractChanged =
 					!slot.computeSubrectContractValid ||
 					slot.computeSubrectGeneration != a_args.generation ||
@@ -3057,7 +3087,7 @@ namespace NeuralRendering
 					slot.multiRoiPolicyKey = key.settings;
 				}
 				const auto planningStart = std::chrono::steady_clock::now();
-				const auto requiredComputeSubrect = cpuProvenEmpty ?
+				const auto requiredComputeSubrect = selectionEmpty ?
 				                                        ComputeSubrect{} :
 				                                    fullOutputMask ?
 				                                        BuildFullComputeSubrect(
@@ -3068,7 +3098,7 @@ namespace NeuralRendering
 															a_args.outputWidth,
 															a_args.outputHeight);
 				slot.maskWorkSubrect = requiredComputeSubrect;
-				if (cpuProvenEmpty || fullOutputMask) {
+				if (selectionEmpty || fullOutputMask) {
 					// Empty authored masks already break provider history. Do not
 					// retain a potentially large stale ROI for the next character.
 					// Diagnostic full-eye modes must not contaminate authored ROI state.
@@ -3083,12 +3113,15 @@ namespace NeuralRendering
 				slot.maskRoiOccupiedTiles = 0;
 				slot.maskRoiRequiredSubrect = {};
 				slot.maskRoiStatus = "disabled";
-				const bool canUseEarlyBounds = authoredMode && !cpuProvenEmpty &&
+				const bool canUseEarlyBounds = authoredMode && !selectionEmpty &&
 				                               a_args.settings.debugView == CharacterDebugView::Off;
 				const bool usedEarlyBounds = canUseEarlyBounds && state_->TryApplyEarlyMaskBounds(a_args, slot, plan);
+				const bool provenEmpty = IsCharacterEmptyProof(slot.emptyProof);
+				if (provenEmpty)
+					slot.maskWorkSubrect = {};
 				if (canUseEarlyBounds && !usedEarlyBounds)
 					Increment(state_->snapshot_.earlyMaskBounds.geometryFallbacks);
-				if (!usedEarlyBounds && !cpuProvenEmpty && !fullOutputMask) {
+				if (!usedEarlyBounds && !provenEmpty && !fullOutputMask) {
 					// Stabilize exactly the selected current support. Pending GPU
 					// bounds must not alternate independently retained envelopes.
 					slot.computeSubrect = ResolveStableCharacterComputeSubrect(
@@ -3098,7 +3131,7 @@ namespace NeuralRendering
 				if (!usedEarlyBounds && a_args.settings.multiRoi) {
 					if (!authoredMode || a_args.settings.debugView != CharacterDebugView::Off) {
 						slot.multiRoiReason = CharacterMultiRoiReason::DiagnosticMode;
-					} else if (cpuProvenEmpty) {
+					} else if (provenEmpty) {
 						slot.multiRoiReason = CharacterMultiRoiReason::TooFewActors;
 					} else if (plan.fullEyeEligibilityFallback) {
 						slot.multiRoiReason = CharacterMultiRoiReason::UncertainCoverage;
@@ -3127,13 +3160,13 @@ namespace NeuralRendering
 					evidence->boundsUsed = usedEarlyBounds;
 					evidence->boundsStatus = slot.maskRoiStatus;
 				}
-				if (!cpuProvenEmpty &&
+				if (!provenEmpty &&
 					!slot.computeSubrect.Fits(
 						a_args.outputWidth, a_args.outputHeight)) {
 					return fail("character compute ROI is invalid");
 				}
 				slot.roi.reset();
-				if (!cpuProvenEmpty && slot.computeRegions.count == 0) {
+				if (!provenEmpty && slot.computeRegions.count == 0) {
 					slot.roi = BuildRoiDescriptor(
 						usedEarlyBounds ? slot.maskRoiRequiredSubrect : requiredComputeSubrect,
 						slot.computeSubrect, { a_args.outputWidth, a_args.outputHeight }, !fullOutputMask);
@@ -3150,7 +3183,8 @@ namespace NeuralRendering
 				} else {
 					slot.supportEvidence.reset();
 				}
-				slot.requiresEvaluation = !cpuProvenEmpty;
+				slot.requiresEvaluation = !provenEmpty;
+				slot.resetHistoryAfterEmpty = slot.resetHistoryAfterEmpty || provenEmpty;
 				slot.zeroCoverageBypassResolved = false;
 				slot.zeroCoverageBypassed = false;
 				slot.feature18Disposition =
@@ -3158,7 +3192,9 @@ namespace NeuralRendering
 				slot.zeroCoverageCpuProven = false;
 				if (cpuProvenEmpty)
 					slot.maskRoiStatus = "cpu_proven_empty";
-				if (cpuProvenEmpty || logicalEmptyCapture) {
+				if (forcedEmpty)
+					slot.maskRoiStatus = "diagnostic_zero";
+				if (provenEmpty || logicalEmptyCapture) {
 					float clearValue = 0.0f;
 					switch (a_args.settings.maskTestMode) {
 					case CharacterMaskTestMode::ForceOne:
@@ -3189,11 +3225,11 @@ namespace NeuralRendering
 						return fail("DLSS5 character-mask dispatch failed");
 					}
 				}
-				// Current geometry covers every eligible mask pixel without waiting for
-				// GPU readback. Delayed diagnostic samples never narrow this frame.
+				// Only current CPU selection or a completed category superset admits NoWork.
+				// Delayed diagnostic coverage never narrows current production work.
 				slot.zeroCoverageBypassed = false;
 				slot.zeroCoverageCpuProven = cpuProvenEmpty;
-				if (!slot.requiresEvaluation)
+				if (!slot.requiresEvaluation && !forcedEmpty)
 					Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);
 				slot.prepareKey = key;
 				slot.prepared = true;
@@ -3294,11 +3330,14 @@ namespace NeuralRendering
 					slot.requiresEvaluation, slot.computeRegions.count);
 			}
 
+			if (!slot.requiresEvaluation && !state_->HasCurrentEmptyProof(slot))
+				return fail("character empty proof no longer matches the prepared source");
 			a_result.prepared = true;
 			a_result.requiresEvaluation = slot.requiresEvaluation;
 			a_result.computeSubrect = slot.computeSubrect;
 			a_result.computeRegions = slot.computeRegions;
 			a_result.roi = slot.roi;
+			a_result.resetHistory = slot.requiresEvaluation && slot.resetHistoryAfterEmpty;
 			if (evidence) {
 				evidence->key.contentSerial = slot.contentSerial;
 				evidence->support = slot.supportEvidence;
@@ -3308,6 +3347,7 @@ namespace NeuralRendering
 				evidence->computeRegions = slot.computeRegions;
 				evidence->roi = slot.roi;
 				evidence->requiresEvaluation = slot.requiresEvaluation;
+				evidence->emptyProof = slot.emptyProof;
 				evidence->prepared = true;
 				evidence->outcome = slot.requiresEvaluation ? "success" : "no_work";
 				evidence->logicalMaskBytes = slot.mask ? static_cast<std::uint64_t>(slot.width) * slot.height : 0;
@@ -3412,6 +3452,8 @@ namespace NeuralRendering
 					slot.prepareKey.settings != BuildSettingsKey(args.settings) ||
 					slot.prepareKey.outputIsJittered != args.outputIsJittered)
 					return false;
+				if (!slot.requiresEvaluation && !state_->HasCurrentEmptyProof(slot))
+					return false;
 				if (slot.prepareKey.currentDepthIdentity != 0) {
 					ComPtr<ID3D11Resource> depth;
 					if (args.depthGuide)
@@ -3510,7 +3552,7 @@ namespace NeuralRendering
 					continue;
 				}
 				const bool bypassRequested =
-					!slot.requiresEvaluation && slot.zeroCoverageCpuProven;
+					!slot.requiresEvaluation && state_->HasCurrentEmptyProof(slot);
 				const bool evaluated = (evaluatedMask & slotBit) != 0;
 				const bool successful = (successfulMask & slotBit) != 0;
 				const bool bypassed =
@@ -3528,6 +3570,7 @@ namespace NeuralRendering
 				preparedFrame->resolutionRecordedSlotMask |= slotBit;
 				switch (disposition) {
 				case CharacterFeature18Disposition::Evaluated:
+					slot.resetHistoryAfterEmpty = false;
 					preparedFrame->evaluatedSlotMask |= slotBit;
 					preparedFrame->successfulSlotMask |= slotBit;
 					break;
@@ -3543,10 +3586,8 @@ namespace NeuralRendering
 				case CharacterFeature18Disposition::Unresolved:
 					break;
 				}
-				if (bypassed) {
-					if (slot.zeroCoverageCpuProven)
-						Increment(state_->snapshot_.provenEmptyFeatureBypasses);
-				}
+				if (bypassed && slot.emptyProof != CharacterEmptyProofKind::DiagnosticZero)
+					Increment(state_->snapshot_.provenEmptyFeatureBypasses);
 
 				const auto eyeIndex = slotIndex & 1u;
 				auto& eye = state_->snapshot_.eyes[eyeIndex];
@@ -3558,7 +3599,7 @@ namespace NeuralRendering
 				}
 			}
 		} catch (...) {
-			// Diagnostics must never affect the render transaction.
+			// Failed publication retains a pending reset for conservative re-entry.
 		}
 	}
 

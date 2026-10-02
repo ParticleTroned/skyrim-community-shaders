@@ -1539,7 +1539,7 @@ foreach(_source_contract IN ITEMS
     [[character category capture arrived after a newer observation frame]]
     [[capturedFrame_ != sourceWorldFrame]]
     [[const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;]]
-    [[if (cpuProvenEmpty || logicalEmptyCapture) {]]
+    [[if (provenEmpty || logicalEmptyCapture) {]]
     [[state_->ClearMask(]]
     [[slot.requiresEvaluation =]]
     [[const bool cpuProvenEmpty =]]
@@ -1593,7 +1593,7 @@ foreach(_source_contract IN ITEMS
     [[(unboundedCategoryMask_ &]]
     [[plan.fullEyeEligibilityFallback = true;]]
     [[const bool forcedEmpty =]]
-    [[(logicalEmptyCapture || plan.regions.empty()));]]
+    [[(logicalEmptyCapture || plan.regions.empty());]]
     [[plan.projectionUncertain) {]]
     [[CharacterCategoryAuthoring::Update(pass);]]
     [[ClassifyCharacterMaterial(]]
@@ -1971,8 +1971,8 @@ foreach(_diagnostic_sampling_telemetry_contract IN ITEMS
 endforeach()
 foreach(_strict_zero_contract IN ITEMS
     [[const bool cpuProvenEmpty =]]
-    [[slot.requiresEvaluation = !cpuProvenEmpty;]]
-    [[!slot.requiresEvaluation && slot.zeroCoverageCpuProven]]
+    [[slot.requiresEvaluation = !provenEmpty;]]
+    [[!slot.requiresEvaluation && state_->HasCurrentEmptyProof(slot)]]
     [[slot.zeroCoverageBypassed = false;]]
     [[Increment(state_->snapshot_.provenEmptyFeatureBypassRequests);]]
 )
@@ -2184,12 +2184,12 @@ if(NOT _premature_proven_bypass EQUAL -1)
     )
 endif()
 string(FIND "${_prepare_mask}" "state_->Dispatch(" _prepare_mask_dispatch)
-string(FIND "${_prepare_mask}" "slot.requiresEvaluation = !cpuProvenEmpty;"
+string(FIND "${_prepare_mask}" "slot.requiresEvaluation = !provenEmpty;"
     _prepare_mask_requires_evaluation)
 if(_prepare_mask_dispatch EQUAL -1 OR
     _prepare_mask_requires_evaluation EQUAL -1)
     message(FATAL_ERROR
-        "Current-frame mask generation and CPU-proven empty policy are required"
+        "Current-frame mask generation and bound empty proofs are required"
     )
 endif()
 
@@ -3348,7 +3348,7 @@ foreach(_character_contract IN ITEMS
     [[{ "multiEvaluationMaximumRegionsPerEye", 2 }]]
     [[{ "multiEvaluationMechanism", "separate_persistent_feature18_instances" }]]
     [[{ "privateSingleSubrectValidation", "ghidra_dataflow_and_gpu_timing_validated" }]]
-    [[Feature 18 bypasses CPU-proven empty eyes; delayed GPU coverage samples are diagnostic and never suppress current-frame evaluation.]]
+    [[Feature 18 bypasses current CPU-selection or completed GPU-category-superset empty proofs bound to source, capture, policy and prepared contents; pending, stale or failed bounds never prove empty. Diagnostic forced-zero is identified separately. Delayed diagnostic coverage never suppresses current-frame evaluation. Empty transactions retain native resources without initialization or keepalive evaluation and reset history on successful re-entry.]]
     [[unions the current per-eye projected face, skin, and hair eligibility bounds into one private Feature 18 compute subrect]]
     [[Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle.]]
     [[const bool characterVisualIsolationChanged =]]

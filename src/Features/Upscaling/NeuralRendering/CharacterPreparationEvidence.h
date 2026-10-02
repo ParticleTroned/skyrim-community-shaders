@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../DLSSViewportCrop.h"
+#include "CharacterEmptyProof.h"
 #include "CharacterMultiRoi.h"
 #include "ComputeSubrect.h"
 #include <array>
@@ -25,6 +26,7 @@ namespace NeuralRendering
 		UpscalingDLSS::ViewportCrop crop{};
 		float jitterX = 0.0f, jitterY = 0.0f;
 		bool outputIsJittered = false;
+		std::uint64_t sourceCaptureSerial = 0;
 		bool operator==(const CharacterPreparationKey&) const = default;
 	};
 
@@ -111,6 +113,7 @@ namespace NeuralRendering
 		CharacterComputeRegionPlan computeRegions{};
 		std::optional<RoiDescriptor> roi;
 		bool requiresEvaluation = true, reused = false, prepared = false;
+		CharacterEmptyProofKind emptyProof = CharacterEmptyProofKind::None;
 		const char* outcome = "unavailable";
 		bool roiPlanningCpuAvailable = false, boundsPollCpuAvailable = false;
 		bool boundsReady = false, boundsUsed = false;

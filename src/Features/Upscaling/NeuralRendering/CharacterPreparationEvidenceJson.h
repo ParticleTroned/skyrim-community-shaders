@@ -10,6 +10,7 @@ namespace NeuralRendering::Evidence
 		return { { "frame", key.frame }, { "sourceWorldFrame", key.sourceWorldFrame }, { "eye", key.eye },
 			{ "logicalSlot", key.featureSlot }, { "generation", key.generation }, { "contentSerial", key.contentSerial },
 			{ "settingsKey", key.settingsKey }, { "captureEpoch", key.captureEpoch }, { "viewport", ViewportJson(key.crop) },
+			{ "sourceCaptureSerial", key.sourceCaptureSerial },
 			{ "capturedJitterPixels", { key.jitterX, key.jitterY } }, { "outputIsJittered", key.outputIsJittered } };
 	}
 
@@ -70,6 +71,7 @@ namespace NeuralRendering::Evidence
 		}
 		return { { "available", true }, { "key", CharacterPreparationKeyJson(e.key) }, { "outcome", e.outcome },
 			{ "prepared", e.prepared }, { "requiresEvaluation", e.requiresEvaluation }, { "reused", e.reused },
+			{ "emptyProof", GetCharacterEmptyProofName(e.emptyProof) },
 			{ "sourceCapture", std::move(source) }, { "computeSubrect", SubrectJson(e.computeSubrect) }, { "regions", std::move(regions) },
 			{ "roi", std::move(roi) },
 			{ "maskSupport", std::move(support) }, { "dirtyDispatchRect", SubrectJson(e.dirtyDispatchRect) },

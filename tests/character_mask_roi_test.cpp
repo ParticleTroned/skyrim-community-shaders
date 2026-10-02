@@ -491,6 +491,18 @@ int main()
 	badSource[0] = { 0, 0, 33, 1 };
 	CHECK(!MapEarlyCharacterMaskBounds(badSource, 67, 49, { 0, 0, 67, 49 }, 95, 73, 0, 0, 0, mapped));
 	CHECK(mapped.empty());
+	// A completed empty superset may skip work; a new pixel on the same source
+	// or at a cropped sampling edge must immediately revoke that conclusion.
+	const auto noPixels = Tiles(std::array<CharacterRect, 0>{}, 67, 49);
+	StableCharacterMaskRoi emptyState;
+	CHECK(MapEarlyCharacterMaskBounds(noPixels, 67, 49, { 9, 7, 43, 35 }, 95, 73, 0.45f, -0.45f, 4u, mapped));
+	CHECK(ResolveCharacterMaskRoi(mapped, {}, 95, 73, 30, emptyState).empty);
+	const auto edgePixel = Tiles(std::array{ CharacterRect{ 9, 7, 10, 8 } }, 67, 49);
+	CHECK(MapEarlyCharacterMaskBounds(edgePixel, 67, 49, { 9, 7, 43, 35 }, 95, 73, 0.45f, -0.45f, 4u, mapped));
+	const auto entered = ResolveCharacterMaskRoi(mapped, {}, 95, 73, 30, emptyState);
+	CHECK(entered.valid && !entered.empty && entered.computeSubrect.IsValid());
+	CHECK(MapEarlyCharacterMaskBounds(noPixels, 67, 49, { 9, 7, 43, 35 }, 95, 73, 0.45f, -0.45f, 4u, mapped));
+	CHECK(ResolveCharacterMaskRoi(mapped, {}, 95, 73, 31, emptyState).empty);
 	const auto separatedTiles = Tiles(std::array{ CharacterRect{ 100, 200, 200, 400 }, CharacterRect{ 1100, 200, 1200, 400 } });
 	state = {};
 	CHECK(ResolveCharacterMaskRoi(separatedTiles, kOwners, kWidth, kHeight, 1000, state, false, true).computeRegions.count == 2);

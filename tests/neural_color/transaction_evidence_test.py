@@ -432,6 +432,74 @@ class TransactionEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(tx.TransactionEvidenceError, "timing captureId mismatch"):
                     tx.join_execution_evidence(frozen, delayed)
 
+    def test_empty_proof_is_bound_and_immutable(self):
+        frozen, delayed = fixture(no_work=True)
+        for record in (frozen, delayed):
+            envelope = record["executionEvidence"]
+            character = character_fixture(envelope)
+            character.update(emptyProof="gpu_category_superset", requiresEvaluation=False, outcome="no_work")
+            character["key"]["sourceCaptureSerial"] = 17
+            envelope["characters"] = [character]
+        tx.join_execution_evidence(frozen, delayed)
+        for mutate in (lambda c: c.update(emptyProof="cpu_selection"),
+                       lambda c: c.pop("emptyProof"),
+                       lambda c: c["key"].update(sourceCaptureSerial=18)):
+            changed = copy.deepcopy(delayed)
+            mutate(changed["executionEvidence"]["characters"][0])
+            with self.assertRaises(tx.TransactionEvidenceError):
+                tx.join_execution_evidence(frozen, changed)
+        for mutate in (lambda c: c.update(requiresEvaluation=True),
+                       lambda c: c.update(emptyProof="none"),
+                       lambda c: c["key"].update(sourceCaptureSerial=0),
+                       lambda c: c["key"].pop("sourceCaptureSerial")):
+            changed = copy.deepcopy(frozen)
+            mutate(changed["executionEvidence"]["characters"][0])
+            with self.assertRaises(tx.TransactionEvidenceError):
+                tx.join_execution_evidence(changed)
+
+    def test_support_source_capture_cannot_cross_prepared_contents(self):
+        frozen, _ = fixture()
+        envelope = frozen["executionEvidence"]
+        character = character_fixture(envelope, support=True)
+        character["key"]["sourceCaptureSerial"] = 17
+        character["maskSupport"]["producer"]["sourceCaptureSerial"] = 17
+        envelope["characters"] = [character]
+        tx.join_execution_evidence(frozen)
+        character["maskSupport"]["producer"]["sourceCaptureSerial"] = 18
+        with self.assertRaisesRegex(tx.TransactionEvidenceError, "source capture"):
+            tx.join_execution_evidence(frozen)
+
+    def test_empty_proof_rejects_non_boolean_states(self):
+        for field in ("prepared", "requiresEvaluation"):
+            for value in (None, 0, 1, "false"):
+                frozen, _ = fixture(no_work=True)
+                character = character_fixture(frozen["executionEvidence"])
+                character.update(emptyProof="cpu_selection", requiresEvaluation=False, outcome="no_work")
+                character["key"]["sourceCaptureSerial"] = 17
+                character[field] = value
+                frozen["executionEvidence"]["characters"] = [character]
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                        tx.TransactionEvidenceError, "preparation/evaluation state"):
+                    tx.join_execution_evidence(frozen)
+
+    def test_source_capture_matches_prepared_proof(self):
+        frozen, _ = fixture(no_work=True)
+        character = character_fixture(frozen["executionEvidence"])
+        character.update(emptyProof="gpu_category_superset", requiresEvaluation=False, outcome="no_work")
+        character["key"]["sourceCaptureSerial"] = 17
+        source = {"available": True, "boundsCaptureSerial": 17,
+                  **{k: character["key"][k] for k in ("sourceWorldFrame", "captureEpoch")}}
+        character["sourceCapture"] = source
+        frozen["executionEvidence"]["characters"] = [character]
+        tx.join_execution_evidence(frozen)
+        for field in ("sourceWorldFrame", "captureEpoch", "boundsCaptureSerial"):
+            changed = copy.deepcopy(frozen)
+            changed["executionEvidence"]["characters"][0]["sourceCapture"][field] += 1
+            with self.subTest(field=field), self.assertRaisesRegex(tx.TransactionEvidenceError, "source capture"):
+                tx.join_execution_evidence(changed)
+        character["sourceCapture"] = {"available": False, "reason": "source_not_captured_in_epoch"}
+        tx.join_execution_evidence(frozen)
+
     def test_character_key_must_match_current_transaction_eye_and_route(self):
         for route in ("main", "submit"):
             for field in ("frame", "sourceWorldFrame", "generation", "captureEpoch", "eye", "logicalSlot"):

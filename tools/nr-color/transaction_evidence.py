@@ -168,11 +168,32 @@ def validate_characters(evidence: dict) -> None:
         require(key["eye"] == eye and key["logicalSlot"] == eye + (2 if evidence["route"] == "submit" else 0),
                 "character eye/route slot mismatch")
         require(type(character.get("reused")) is bool, "missing character reuse state")
+        if "sourceCaptureSerial" in key:
+            require(uint(key["sourceCaptureSerial"]), "invalid character source capture")
+            source = character.get("sourceCapture")
+            if isinstance(source, dict) and source.get("available") is True:
+                exact(key, source, ("sourceWorldFrame", "captureEpoch"), "character source capture")
+                require(uint(source.get("boundsCaptureSerial"))
+                        and source["boundsCaptureSerial"] == key["sourceCaptureSerial"],
+                        "character source capture serial mismatch")
+        if "emptyProof" in character:
+            require(type(character.get("prepared")) is bool and type(character.get("requiresEvaluation")) is bool,
+                    "invalid character preparation/evaluation state")
+            proof = character["emptyProof"]
+            require(proof in ("none", "cpu_selection", "gpu_category_superset", "diagnostic_zero"),
+                    "invalid character empty proof")
+            if character.get("prepared"):
+                require((proof == "none") == character.get("requiresEvaluation"),
+                        "character empty proof contradicts evaluation")
+                if proof != "none":
+                    require(uint(key.get("sourceCaptureSerial")) and key["sourceCaptureSerial"] > 0,
+                            "character empty proof has no source capture")
         support = character.get("maskSupport", {})
         require(isinstance(support, dict), "invalid character support evidence")
         if "producer" in support:
             producer = support["producer"]
             exact(key, producer, CHARACTER_CONTENT_IDENTITY, "character support producer")
+            optional_exact(key, producer, ("sourceCaptureSerial",), "character support source capture")
             require(uint(producer.get("frame")), "invalid character support producer frame")
             if character["reused"]:
                 require(key["sourceWorldFrame"] <= producer["frame"] <= key["frame"],
@@ -336,6 +357,7 @@ def join_execution_evidence(acquisition: dict, diagnostics: dict | None = None) 
                     if field == "characters" and original.get("available") is True:
                         exact(original, current, ("key", "outcome", "prepared", "requiresEvaluation", "reused", "computeSubrect", "regions"), "delayed character contents")
                         optional_exact(original, current, ("roi",), "delayed character ROI roles")
+                        optional_exact(original, current, ("emptyProof",), "delayed character empty proof")
                         optional_exact(original.get("maskSupport", {}), current.get("maskSupport", {}),
                                        ("producer",), "delayed character support")
             selected, companion_state = delayed, "joined"

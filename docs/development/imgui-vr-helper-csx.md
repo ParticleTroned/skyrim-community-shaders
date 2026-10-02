@@ -294,9 +294,31 @@ and the [render-scale ledger](vr-render-scale-ledger.md) requirements for
 this runtime integration and any resulting measurements. No qualification
 run, performance result or release-readiness claim is recorded here.
 
-The inspected MO2 profile belongs to a different task and has neither
-ImGui VR Helper nor FloatingSubtitles enabled. The automation configuration
-has no maintained source profile for creating an isolated workspace.
-Runtime deployment is therefore pending the test-profile selection and
-subtitle fixture; the existing profile, running MO2 and SteamVR session
-were left untouched.
+On 2 October 2026, an attended null-HMD session used CSX source
+`8350014001083abf31236f994a161de0693d56b1`, Build ID
+`2379480fccfa2cac3c224d13826dcf0c381c6641eab385b5d6d7b81bc558e3bc`,
+with Floating Subtitles VR and helper source
+`cfa60e7df6b3c5513ef11e71bb30fab336ae58ed`. Physical DLL hashes matched
+their package receipts, including the enabled AIO manifest. Helper hosting
+stalled at 10,390 composed pairs: content queries returned `WrongThread`
+after Skyrim moved Present from thread 65544 to 13536. The helper had
+retained its first observed thread permanently.
+
+Helper source `2c809c61026dd0b444aca349ff87acff73814802` follows the current
+game Present thread between frames, retaining the owner of an open stereo
+pair. Two new regression cases failed before the correction; all 18 helper
+cases and 160 assertions pass with it. Its optimized x64 DLL and matching
+PDB built successfully. All 20 extracted installer files matched staging.
+This correction is compatible with the existing CSX DevBench AIO; neither
+a CSX rebuild nor a shader-cache update is required. The archive remains
+VR-default-cache only, with Horizon Fix excluded. The helper UI can remain
+closed throughout subtitle testing.
+
+DevBench successfully activated Saadia and opened dialogue. The original
+state recording stopped cleanly with 1,464 samples. Screenshot acquisition
+finished with partial artifact-publication failures, so the capture does
+not establish correct subtitle visibility or occlusion. The replacement
+helper requires a fresh game session and both-eye validation before those
+checks can pass. Raw evidence is retained locally under
+`build/validation/imgui-vr-helper-live-20261002` and package verification
+under `build/tester-packages/imgui-vr-helper-20261002-thread-fix`.

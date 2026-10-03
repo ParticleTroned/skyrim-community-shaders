@@ -167,6 +167,11 @@ stereo and invalid-input regressions. No shader change or new test was run
 for this investigation; a fresh attributed build and repeated runtime
 comparison are required before any efficacy or performance claim.
 
+The later [refinement implementation](vr-hybrid-culling-refinement-2026-10-03.md)
+now passes those shader regressions and has its own verified developer
+AIO. The measurements in this report continue to describe the earlier
+shader; the new refinement has not been tested in game.
+
 The follow-up `depthCullingTemporal.nativeVisibility` diagnostic now counts
 native CPU results before and after recovery, including explicit empty and
 unreadable batches and excluding Hybrid-owned readbacks. It scans the

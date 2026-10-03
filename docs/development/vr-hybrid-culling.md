@@ -6,6 +6,9 @@ four-mode assay found Hybrid materially slower than Advanced and Legacy.
 Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
+The subsequent [bounded refinement](vr-hybrid-culling-refinement-2026-10-03.md)
+corrects a reproduced loss of rejection from coarse padded cells. Its
+shader regressions pass; its in-game rejection rate and cost are unmeasured.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -67,10 +70,16 @@ crossings, nonfinite data and non-affine bounds retain visibility.
 Projected rectangles include a pixel guard margin. If that margin leaves
 the eye viewport, visibility is retained. The shader selects a mip at
 which the complete rectangle overlaps at most four cells and reads every
-one of them. A box is hidden only when its nearest depth is strictly
+one of them. If this coarse proof is inconclusive, it recomputes complete
+finer rectangles from the original guarded base-cell bounds. The fixed
+64-load budget per eye includes the initial four loads and every finer
+grid. Budget exhaustion and invalid depth retain visibility. Finer grids
+can exclude unrelated padding or clear depth without removing any cell
+covering the guarded rectangle. A box is hidden only when its nearest depth is strictly
 behind the farthest covered depth, including a depth bias, in both eyes.
-Visibility in either eye retains the object. Coarse cells and far-valued
-padding can reduce rejection efficiency; they cannot justify discarding
+Visibility in either eye retains the object. Coarse cells, depth within
+the guarded footprint and the finite refinement budget can still reduce
+rejection efficiency; they cannot justify discarding
 a potentially visible object in the captured view. An explicit shader
 branch skips testing the second eye when the first already retains it.
 

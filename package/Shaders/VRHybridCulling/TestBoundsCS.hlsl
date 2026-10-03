@@ -66,8 +66,10 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 		return false;
 	uint2 minimumPixel = (uint2)floor(minimumPixelBound);
 	uint2 maximumPixel = (uint2)floor(maximumPixelBound);
-	uint2 minimumCell = minimumPixel / SourceReduction;
-	uint2 maximumCell = maximumPixel / SourceReduction;
+	const uint2 baseMinimumCell = minimumPixel / SourceReduction;
+	const uint2 baseMaximumCell = maximumPixel / SourceReduction;
+	uint2 minimumCell = baseMinimumCell;
+	uint2 maximumCell = baseMaximumCell;
 	if (any(maximumCell >= PyramidSize))
 		return false;
 
@@ -88,12 +90,45 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 		{
 			uint2 cell = min(minimumCell + uint2(x, y), maximumCell);
 			float depth = DepthPyramid.Load(int4(cell, eye, mip));
-			if (!isfinite(depth) || depth <= 0.0 || depth > 1.0)
+			// Reversed far zero permits refinement but can never establish occlusion.
+			if (!isfinite(depth) || depth < 0.0 || depth > 1.0 || (!DepthOrder::Reversed && depth == 0.0))
 				return false;
 			farthestDepth = DepthOrder::Farthest(farthestDepth, depth);
 		}
 	}
-	return DepthOrder::IsBehindWithBias(nearestDepth, farthestDepth, DepthBias);
+	if (DepthOrder::IsBehindWithBias(nearestDepth, farthestDepth, DepthBias))
+		return true;
+
+	// Finer grids exclude unrelated depth while retaining every guarded base cell.
+	const uint maximumDepthLoads = 64;
+	uint depthLoads = 4;
+	[loop] while (mip > 0)
+	{
+		--mip;
+		minimumCell = baseMinimumCell >> mip;
+		maximumCell = baseMaximumCell >> mip;
+		uint2 gridSize = maximumCell - minimumCell + 1;
+		uint gridLoads = gridSize.x * gridSize.y;
+		if (gridLoads > maximumDepthLoads - depthLoads)
+			return false;
+		depthLoads += gridLoads;
+
+		farthestDepth = DepthOrder::Near();
+		[loop] for (uint y = 0; y < gridSize.y; ++y)
+		{
+			[loop] for (uint x = 0; x < gridSize.x; ++x)
+			{
+				uint2 cell = minimumCell + uint2(x, y);
+				float depth = DepthPyramid.Load(int4(cell, eye, mip));
+				if (!isfinite(depth) || depth < 0.0 || depth > 1.0 || (!DepthOrder::Reversed && depth == 0.0))
+					return false;
+				farthestDepth = DepthOrder::Farthest(farthestDepth, depth);
+			}
+		}
+		if (DepthOrder::IsBehindWithBias(nearestDepth, farthestDepth, DepthBias))
+			return true;
+	}
+	return false;
 }
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {

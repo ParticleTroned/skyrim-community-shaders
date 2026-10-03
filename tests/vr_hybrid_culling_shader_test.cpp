@@ -265,6 +265,136 @@ namespace
 		return result;
 	}
 
+	OBBTransform BoxForGuardedPixels(const Fixture& fixture, std::array<float, 4> rectangle)
+	{
+		const auto& eye = fixture.testConstants.eyes[0];
+		const float guard = fixture.testConstants.pixelGuardBand;
+		const float left = rectangle[0] + guard;
+		const float top = rectangle[1] + guard;
+		const float right = rectangle[2] - guard;
+		const float bottom = rectangle[3] - guard;
+		Require(left < right && top < bottom, "Guarded rectangle has no interior");
+		auto object = Box();
+		object.entry[0][0] = (right - left) / eye.width;
+		object.entry[1][1] = (bottom - top) / eye.height;
+		object.entry[0][3] = (left + right) / eye.width - 1.0f;
+		object.entry[1][3] = 1.0f - (top + bottom) / eye.height;
+		return object;
+	}
+
+	bool SourceCellsProveOcclusion(const Fixture& fixture, std::span<const float> pixels,
+		std::array<UINT, 4> cells, float nearestDepth)
+	{
+		const auto reduction = fixture.testConstants.pyramid.sourceReduction;
+		for (const auto& eye : fixture.testConstants.eyes) {
+			for (UINT y = cells[1] * reduction; y < (cells[3] + 1) * reduction; ++y) {
+				for (UINT x = cells[0] * reduction; x < (cells[2] + 1) * reduction; ++x) {
+					if (x >= eye.width || y >= eye.height)
+						return false;
+					const float depth = pixels[(eye.y + y) * fixture.sourceWidth + eye.x + x];
+					if (!std::isfinite(depth) || depth <= 0.0f || depth > 1.0f ||
+						nearestDepth <= depth + fixture.testConstants.depthBias)
+						return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	void RefinesPastPaddedEyeCells(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		Fixture fixture(device, context, reversedDepth, 1344, 1492);
+		fixture.testConstants.pixelGuardBand = 2.0f;
+		const std::array objects{ BoxForGuardedPixels(fixture, { 1000.25f, 400.25f, 1323.75f, 723.75f }) };
+		fixture.Build(std::vector<float>(fixture.sourceWidth * fixture.sourceHeight, 0.4f));
+		// Each eye needs grids of 4, 6, 12 and 36 cells before padding is excluded.
+		Require(fixture.Test(objects)[0] == 0, "Padded coarse cells prevented an interior occlusion proof");
+	}
+
+	void PreservesRefinedFootprintAndStereo(Fixture& fixture)
+	{
+		const std::array objects{ BoxForGuardedPixels(fixture, { 8.25f, 8.25f, 19.75f, 19.75f }) };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		for (UINT eye = 0; eye < 2; ++eye)
+			pixels[12 * fixture.sourceWidth + fixture.testConstants.eyes[eye].x + 20] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "Refinement retained an unrelated clear cell outside the guarded footprint");
+		for (UINT eye = 0; eye < 2; ++eye) {
+			for (const float untrusted : { 0.0f, 1.0f, std::numeric_limits<float>::quiet_NaN() }) {
+				const auto offset = 12 * fixture.sourceWidth + fixture.testConstants.eyes[eye].x + 8;
+				pixels[offset] = untrusted;
+				fixture.Build(pixels);
+				Require(fixture.Test(objects)[0] == 1, "Refinement omitted a guarded clear, masked or invalid pixel in one eye");
+				pixels[offset] = 0.4f;
+			}
+		}
+		const std::array border{ BoxForGuardedPixels(fixture, { -0.25f, 8.25f, 7.75f, 19.75f }) };
+		fixture.Build(std::vector<float>(fixture.sourceWidth * fixture.sourceHeight, 0.4f));
+		Require(fixture.Test(border)[0] == 1, "Refinement bypassed an uncovered border guard");
+	}
+
+	void RefinesThinRectangles(Fixture& fixture)
+	{
+		const std::array objects{ BoxForGuardedPixels(fixture, { 4.25f, 12.25f, 27.75f, 15.75f }) };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		for (UINT eye = 0; eye < 2; ++eye)
+			pixels[4 * fixture.sourceWidth + fixture.testConstants.eyes[eye].x + 12] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "A thin rectangle included unrelated depth after refinement");
+		pixels[14 * fixture.sourceWidth + fixture.testConstants.eyes[1].x + 12] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 1, "Thin-rectangle refinement omitted the second eye's visible depth");
+	}
+
+	void IncludesCoarseLoadsInPerEyeBudget(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		Fixture fixture(device, context, reversedDepth, 32, 32, 1);
+		const std::array objects{ BoxForGuardedPixels(fixture, { 1.25f, 0.25f, 6.75f, 7.75f }) };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "Budget fixture failed its coarse solid-depth proof");
+		pixels[4 * fixture.sourceWidth + fixture.testConstants.eyes[1].x] = 1.0f;
+		Require(SourceCellsProveOcclusion(fixture, pixels, { 1, 0, 6, 7 },
+					objects[0].entry[2][3] - objects[0].entry[2][2]),
+			"Budget fixture accidentally includes the clear pixel in its guarded cells");
+		fixture.Build(pixels);
+		// The second eye needs 4 + 16 + 48 loads; omitting the coarse four would allow it.
+		Require(fixture.Test(objects)[0] == 1, "Refinement exceeded its 64-load per-eye budget");
+	}
+
+	void ChecksRefinedProofsAgainstSourcePixels(Fixture& fixture)
+	{
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		pixels[14 * fixture.sourceWidth + 21] = 1.0f;
+		pixels[22 * fixture.sourceWidth + fixture.testConstants.eyes[1].x + 9] = 0.0f;
+		std::vector<OBBTransform> objects;
+		std::vector<bool> proofs;
+		for (UINT top = 1; top <= 6; ++top) {
+			for (UINT bottom = top; bottom <= 6; ++bottom) {
+				for (UINT left = 1; left <= 6; ++left) {
+					for (UINT right = left; right <= 6; ++right) {
+						const auto reduction = fixture.testConstants.pyramid.sourceReduction;
+						const auto object = BoxForGuardedPixels(fixture,
+							{ left * reduction + 0.25f, top * reduction + 0.25f,
+								(right + 1) * reduction - 0.25f, (bottom + 1) * reduction - 0.25f });
+						objects.push_back(object);
+						proofs.push_back(SourceCellsProveOcclusion(fixture, pixels, { left, top, right, bottom },
+							object.entry[2][3] - object.entry[2][2]));
+					}
+				}
+			}
+		}
+		fixture.Build(pixels);
+		const auto visibility = fixture.Test(objects);
+		bool rejected = false, retained = false;
+		for (std::size_t index = 0; index < objects.size(); ++index) {
+			Require(visibility[index] != 0 || proofs[index], "Refinement rejected a rectangle without complete source-pixel evidence");
+			rejected |= visibility[index] == 0;
+			retained |= visibility[index] != 0;
+		}
+		Require(rejected && retained, "Source-pixel oracle fixture did not exercise both visibility outcomes");
+	}
+
 	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth)
 	{
 		Fixture fixture(device, context, reversedDepth, eyeWidth, eyeHeight);
@@ -465,8 +595,13 @@ int main()
 			CoversShearedCornerExtents(fixture);
 			CoversPerspectiveAndCameraAdjustment(fixture);
 			PreservesSmallBoundsAtLargeWorldCoordinates(fixture);
+			RefinesPastPaddedEyeCells(device.Get(), context.Get(), reversedDepth);
+			PreservesRefinedFootprintAndStereo(fixture);
+			RefinesThinRectangles(fixture);
+			IncludesCoarseLoadsInPerEyeBudget(device.Get(), context.Get(), reversedDepth);
+			ChecksRefinedProofsAgainstSourcePixels(fixture);
 			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
-					  << "): complete mip coverage, stereo visibility, bounds, bias, perspective and failure fallback\n";
+					  << "): complete mip coverage, bounded refinement, source-pixel oracle, stereo visibility, bounds, bias, perspective and failure fallback\n";
 		}
 		return 0;
 	} catch (const std::exception& error) {

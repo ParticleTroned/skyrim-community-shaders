@@ -120,8 +120,10 @@ history long enough for fail-visible readback rejection.
 The narrow `Common/DepthOrder.hlsli` helper centralizes near/far values,
 nearest/farthest reduction and conservative biased comparison. Runtime
 remains Standard Z; reversed arithmetic is exercised only by standalone
-shader tests. Standard Hybrid bytecode remains identical across all 12
-compared permutations. The inaccurate mask-shader Reverse-Z comment was
+shader tests. The initial depth-order extraction preserved Standard Hybrid
+bytecode across all 12 compared permutations. The subsequent finer-cell
+refinement intentionally changes bounds-test behavior and has separate
+WARP regression evidence. The inaccurate mask-shader Reverse-Z comment was
 corrected, with all four compared mask permutations also identical.
 
 The user additionally requires appropriate in-game DevBench diagnostics
@@ -634,9 +636,14 @@ as separate results.
 Keep PR 104 experimental. Native before/after-recovery counters now confirm
 the efficacy gap in all four modes. Complete the timing repeat after the
 other chat's full build sequence finishes, with menu, clock and process
-activity evidence. Investigate bounded finer-cell depth
-tests that can avoid artificial pyramid padding without weakening visibility
-or motion safeguards, then rebuild and repeat the attributed comparison.
+activity evidence. The [bounded finer-cell refinement](vr-hybrid-culling-refinement-2026-10-03.md)
+is implemented and passes its applied-source WARP tests. It excludes
+unrelated padded cells when a complete finer rectangle proves occlusion,
+with a fixed 64-load budget per eye and unchanged visibility/motion guards.
+The universal DevBench AIO built and passed all 369-file package checks
+as Build ID `72499d97324239126ac1799cf901b866f68e3d700d4d754caeb53fd1a961b75b`.
+It awaits the user's installation and a controlled runtime comparison;
+do not attribute any in-game efficacy or performance improvement yet.
 Extend temporal and lifecycle/fallback checks beyond the bounded motion
 review. Preserve both measured noon regressions and their build identities;
 do not infer efficacy from accepted history alone. The donor

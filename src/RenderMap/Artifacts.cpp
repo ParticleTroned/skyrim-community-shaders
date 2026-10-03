@@ -16,6 +16,18 @@
 
 namespace CSX::RenderMap
 {
+	nlohmann::json BuildSkyrimModuleIdentity(bool a_virtualReality, std::string_view a_version,
+		std::optional<bool> a_shaderVirtualReality)
+	{
+		if (a_shaderVirtualReality && *a_shaderVirtualReality != a_virtualReality)
+			throw std::invalid_argument("shader compile context contradicts the loaded Skyrim runtime");
+		return {
+			{ "name", a_virtualReality ? "SkyrimVR.exe" : "SkyrimSE.exe" },
+			{ "version", a_version.empty() ? nlohmann::json(nullptr) : nlohmann::json(a_version) },
+			{ "sha256", nullptr },
+		};
+	}
+
 	namespace
 	{
 		using json = nlohmann::json;
@@ -141,12 +153,6 @@ namespace CSX::RenderMap
 			};
 		}
 
-		std::uint64_t LostEventCount(const CaptureStatistics& a_statistics)
-		{
-			return a_statistics.droppedStopped +
-			       a_statistics.droppedEventLimit + a_statistics.droppedByteLimit;
-		}
-
 		json SerializeGapEvent(
 			const CompletedCapture& a_capture,
 			std::uint32_t a_processId,
@@ -221,7 +227,8 @@ namespace CSX::RenderMap
 				eventsJsonl.push_back('\n');
 			}
 
-			const auto lostEvents = LostEventCount(a_capture.snapshot.statistics);
+			const auto completeness = EvaluateCaptureCompleteness(a_capture.snapshot);
+			const auto lostEvents = completeness.lostEventCount;
 			if (lostEvents != 0) {
 				eventKinds.insert("gap");
 				eventsJsonl += SerializeGapEvent(
@@ -242,50 +249,16 @@ namespace CSX::RenderMap
 			const auto& snapshot = a_capture.snapshot;
 			const auto serializedEventCount = snapshot.events.size() + (lostEvents == 0 ? 0 : 1);
 			const bool truncated = lostEvents != 0;
-			const bool structurallyIncomplete = snapshot.statistics.scopeOverflow != 0 ||
-			                                    snapshot.statistics.scopeMismatch != 0 || snapshot.statistics.droppedShaderObservations != 0 ||
-			                                    snapshot.statistics.droppedStageShaderObservations != 0 ||
-			                                    snapshot.statistics.droppedResourceObservations != 0 ||
-			                                    snapshot.statistics.droppedTargetViewObservations != 0 ||
-			                                    snapshot.statistics.droppedTargetBindingObservations != 0 ||
-			                                    snapshot.statistics.droppedSceneObjectObservations != 0 ||
-			                                    snapshot.statistics.droppedGeometryObservations != 0 ||
-			                                    snapshot.statistics.droppedMaterialStateObservations != 0;
-			const bool terminalFailure = snapshot.stopReason == StopReason::kShutdown ||
-			                             snapshot.stopReason == StopReason::kFailure;
-			const bool incomplete = truncated || structurallyIncomplete || terminalFailure;
+			const bool incomplete = completeness.Incomplete();
 			bundle.eventsArtifact = DescribeArtifact(
 				"events-jsonl", eventsPath, "application/x-ndjson", !incomplete);
 
-			json completionErrors = json::array();
-			if (snapshot.statistics.scopeOverflow != 0)
-				completionErrors.push_back("scope depth overflowed during capture");
-			if (snapshot.statistics.scopeMismatch != 0)
-				completionErrors.push_back("scope nesting mismatch occurred during capture");
-			if (snapshot.statistics.droppedShaderObservations != 0)
-				completionErrors.push_back("shader observation capacity was exceeded during capture");
-			if (snapshot.statistics.droppedStageShaderObservations != 0)
-				completionErrors.push_back("stage shader observation capacity was exceeded during capture");
-			if (snapshot.statistics.droppedResourceObservations != 0)
-				completionErrors.push_back("resource observation capacity was exceeded during capture");
-			if (snapshot.statistics.droppedTargetViewObservations != 0)
-				completionErrors.push_back("target view observation capacity was exceeded during capture");
-			if (snapshot.statistics.droppedTargetBindingObservations != 0)
-				completionErrors.push_back("target binding observation capacity was exceeded during capture");
-			if (snapshot.statistics.droppedSceneObjectObservations != 0)
-				completionErrors.push_back("scene object observation capacity was exceeded during capture");
-			if (snapshot.statistics.droppedGeometryObservations != 0)
-				completionErrors.push_back("geometry observation capacity was exceeded during capture");
-			if (snapshot.statistics.droppedMaterialStateObservations != 0)
-				completionErrors.push_back("material state observation capacity was exceeded during capture");
-			if (terminalFailure)
-				completionErrors.push_back("capture ended during shutdown or failure handling");
-			const auto summary = SerializeCaptureSummary(a_capture);
 			json extensions = a_context.extensions.is_object() ?
 			                      a_context.extensions :
 			                      json::object();
 			extensions.update({
 				{ "csx.processId", a_processId },
+				{ "csx.captureIncompleteReasons", completeness.reasons },
 				{ "csx.sessionGeneration", snapshot.sessionGeneration },
 				{ "csx.acceptedEventCount", snapshot.events.size() },
 				{ "csx.filteredEventCount", snapshot.statistics.filtered },
@@ -361,7 +334,7 @@ namespace CSX::RenderMap
 									{ "droppedEventCount", lostEvents },
 									{ "truncated", truncated },
 									{ "collectorOverheadUs", nullptr },
-									{ "errors", completionErrors },
+									{ "errors", completeness.errors },
 								} },
 				{ "extensions", std::move(extensions) },
 			};

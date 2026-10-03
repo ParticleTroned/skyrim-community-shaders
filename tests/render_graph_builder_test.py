@@ -510,7 +510,7 @@ def main() -> int:
             "resourceObservationId": "obs-resource-30-g1", "format": 28, "viewDimension": 4,
             "subresources": {}, "flags": 0,
         }),
-        envelope(2, "scene-object-observed", {
+        envelope(2, "object-observed", {
             **object_material_events[0]["payload"],
             "sceneObjectObservationId": "obs-scene-object-32-g1",
         }),
@@ -593,6 +593,12 @@ def main() -> int:
         edge for edge in material_execution_graph["edges"]
         if edge["type"] == "same-observed-object" and edge["to"].startswith("node-draw-")
     ]
+    object_nodes = [
+        node for node in material_execution_graph["nodes"]
+        if node["kind"] == "scene-object"
+    ]
+    assert len(object_nodes) == 1
+    assert any(edge["from"] == object_nodes[0]["id"] for edge in prepared_projection_edges)
     assert all(
         edge["attributes"]["associationBasis"] == "same-thread-next-immediate-context-draw"
         for edge in prepared_projection_edges
@@ -863,6 +869,19 @@ def main() -> int:
     assert command_edges.count("finishes") == 1
     assert command_edges.count("materializes") == 1
     assert command_edges.count("executes") == 1
+
+    fixture_events = json.loads(
+        (repo / "tests" / "fixtures" / "render-map" / "deferred-command-events.json")
+        .read_text(encoding="utf-8")
+    )
+    fixture_graph = build_graph(tool, {**manifest, "captureId": fixture_events[0]["captureId"]}, fixture_events)
+    assert sum(node["kind"] == "command-execution" for node in fixture_graph["nodes"]) == 1
+    assert sum(edge["type"] == "executes" for edge in fixture_graph["edges"]) == 1
+    assert sum(edge["type"] == "materializes" for edge in fixture_graph["edges"]) == 1
+    assert not any(
+        gap["blocking"] and "execution context" in gap["description"].lower()
+        for gap in fixture_graph["gaps"]
+    ), fixture_graph["gaps"]
     assert any(
         "immediate-context state was deliberately not applied" in gap["description"]
         for gap in command_graph["gaps"]

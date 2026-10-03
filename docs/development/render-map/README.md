@@ -80,3 +80,32 @@ optional external control surface over this runtime. Shader dependency
 analysis, generated shader manifests, engine maps, Ghidra helpers, prior-art
 catalogues, and captured-analysis reports remain development tools; they do
 not enter the Community Shaders binary in either build mode.
+
+## Controller and DevBench composition
+
+The optional `communityshaders.render_map` adapter is included with this runtime
+and registered through the existing plugin lifecycle when DevBench is present.
+Its actions are `registry`, `status`, `start`, `stop`, and `capture_events`.
+Capture is off by default. Start retains runtime provenance and its response
+before activating hooks; failed preparation leaves no active capture. Stop
+requires the original capture-start provenance, publishes events and a manifest
+without overwriting existing evidence, and retains completed captures for paging.
+Ordinary builds exclude the Render Map translation units and use inline inert
+adapter entry points. Registry payload schemas match current serializer outputs.
+The adapter's `deferredContexts` and `commandLists` capabilities remain false
+until bounded live coverage is qualified. Prior stacked PRs are independent
+historical branches, not a runtime dependency of this composition.
+
+When execution is restricted to selected geometry, draw/dispatch selection also
+resolves paired geometry boundaries and their declarations. The requested mask
+retains the caller's selection. Immediate draws may consume a prepared identity
+after setup returns; deferred draws require the active selected geometry scope.
+
+Summary `completion.truncated` reports event or structural evidence loss,
+including catalogue and scope faults. Manifest `completion.truncated` reports
+lost events specifically, represented by a synthetic gap. Both use the same
+reason model, exposed by summary `completion.incompleteReasons` and manifest
+extension `csx.captureIncompleteReasons`. Shutdown/failure termination alone
+makes evidence incomplete without claiming truncation. Summary `state: complete`
+means the capture finished; `completion.incomplete` reports evidence loss or
+failure. Frame/time bounds and intentional filtering remain separate counters.

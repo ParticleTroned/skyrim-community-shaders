@@ -236,13 +236,11 @@ advertise `deferredContexts: true` and `commandLists: true`.
 
 ## Static qualification and next live gate
 
-The offline schema and graph contracts pass through the deterministic Python
-forwarding wrapper, and the scoped formatting and target-relative diff checks
-pass. The registered release build rejected this candidate before compilation
-because the target-relative change includes build-control files, so it produced
-no artifact or build receipt. The C++ runtime and controller tests have not been
-rebuilt or executed for this head. The registry intentionally continues to
-report `deferredContexts: false` and `commandLists: false`.
+Source-specific builds, tests, and review results belong in the PR validation
+evidence and retained receipts. Offline contracts establish schema and model
+behavior; they do not qualify deferred hook coverage in a running game. The
+registry continues to report `deferredContexts: false` and `commandLists: false`
+until the bounded live qualification below passes.
 
 The next qualification needs an MO2 lease and a loaded scene with Unified Water
 active. A bounded capture must prove that the deferred context's vtable routes

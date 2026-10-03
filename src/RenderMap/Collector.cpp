@@ -162,6 +162,11 @@ namespace CSX::RenderMap
 	{
 		a_config.requestedEventKindMask &= kAllEventKindsMask;
 		a_config.eventKindMask = ResolveEventKindDependencies(a_config.requestedEventKindMask);
+		const auto executionKinds = EventKindBit(EventKind::kDraw) | EventKindBit(EventKind::kDispatch);
+		if (a_config.executionWithinSelectedGeometry && (a_config.eventKindMask & executionKinds) != 0) {
+			a_config.eventKindMask = ResolveEventKindDependencies(
+				a_config.eventKindMask | EventKindBit(EventKind::kGeometrySetupBegin));
+		}
 	}
 
 	namespace

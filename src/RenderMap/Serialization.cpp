@@ -1543,12 +1543,12 @@ namespace CSX::RenderMap
 						{ "rowPitch", static_cast<std::uint32_t>(a_payload.words[7]) },
 						{ "depthPitch", static_cast<std::uint32_t>(a_payload.words[7] >> 32u) },
 						{ "visibilityBoundary", phase == ResourceCpuAccessPhase::kMap && succeeded && readable ?
-													"cpu-readable-after-map-return" :
-													nullptr },
+													json("cpu-readable-after-map-return") :
+													json(nullptr) },
 						{ "publicationBoundary", phase == ResourceCpuAccessPhase::kUnmap &&
 														 a_payload.words[1] != 0 && writable ?
-													 "gpu-visible-after-unmap-return" :
-													 nullptr },
+													 json("gpu-visible-after-unmap-return") :
+													 json(nullptr) },
 					};
 				}
 			case PayloadSchema::kResourceVersion:
@@ -1712,19 +1712,42 @@ namespace CSX::RenderMap
 		};
 	}
 
+	CaptureCompleteness EvaluateCaptureCompleteness(const CaptureSnapshot& a_snapshot)
+	{
+		CaptureCompleteness result;
+		const auto& statistics = a_snapshot.statistics;
+		result.lostEventCount = statistics.droppedStopped + statistics.droppedEventLimit + statistics.droppedByteLimit;
+		if (result.lostEventCount != 0)
+			result.reasons.push_back("event-loss");
+		const auto structuralReason = [&](std::uint64_t a_count, const char* a_reason, const char* a_error) {
+			if (a_count != 0) {
+				result.structurallyIncomplete = true;
+				result.reasons.push_back(a_reason);
+				result.errors.push_back(a_error);
+			}
+		};
+		structuralReason(statistics.scopeOverflow, "scope-overflow", "scope depth overflowed during capture");
+		structuralReason(statistics.scopeMismatch, "scope-mismatch", "scope nesting mismatch occurred during capture");
+		structuralReason(statistics.droppedShaderObservations, "shader-observation-loss", "shader observation capacity was exceeded during capture");
+		structuralReason(statistics.droppedStageShaderObservations, "stage-shader-observation-loss", "stage shader observation capacity was exceeded during capture");
+		structuralReason(statistics.droppedResourceObservations, "resource-observation-loss", "resource observation capacity was exceeded during capture");
+		structuralReason(statistics.droppedTargetViewObservations, "target-view-observation-loss", "target view observation capacity was exceeded during capture");
+		structuralReason(statistics.droppedTargetBindingObservations, "target-binding-observation-loss", "target binding observation capacity was exceeded during capture");
+		structuralReason(statistics.droppedSceneObjectObservations, "scene-object-observation-loss", "scene object observation capacity was exceeded during capture");
+		structuralReason(statistics.droppedGeometryObservations, "geometry-observation-loss", "geometry observation capacity was exceeded during capture");
+		structuralReason(statistics.droppedMaterialStateObservations, "material-state-observation-loss", "material state observation capacity was exceeded during capture");
+		result.terminalFailure = a_snapshot.stopReason == StopReason::kShutdown || a_snapshot.stopReason == StopReason::kFailure;
+		if (result.terminalFailure) {
+			result.reasons.push_back("lifecycle-failure");
+			result.errors.push_back("capture ended during shutdown or failure handling");
+		}
+		return result;
+	}
+
 	nlohmann::json SerializeCaptureSummary(const CompletedCapture& a_capture)
 	{
 		const auto& snapshot = a_capture.snapshot;
-		const auto dropped = snapshot.statistics.droppedStopped +
-		                     snapshot.statistics.droppedEventLimit + snapshot.statistics.droppedByteLimit;
-		const auto structurallyTruncated = snapshot.statistics.droppedShaderObservations != 0 ||
-		                                   snapshot.statistics.droppedStageShaderObservations != 0 ||
-		                                   snapshot.statistics.droppedResourceObservations != 0 ||
-		                                   snapshot.statistics.droppedTargetViewObservations != 0 ||
-		                                   snapshot.statistics.droppedTargetBindingObservations != 0 ||
-		                                   snapshot.statistics.droppedSceneObjectObservations != 0 ||
-		                                   snapshot.statistics.droppedGeometryObservations != 0 ||
-		                                   snapshot.statistics.droppedMaterialStateObservations != 0;
+		const auto completeness = EvaluateCaptureCompleteness(snapshot);
 		return {
 			{ "captureId", a_capture.descriptor.captureId },
 			{ "numericId", a_capture.descriptor.numericId },
@@ -1741,7 +1764,7 @@ namespace CSX::RenderMap
 								{ "eventCount", snapshot.events.size() },
 								{ "attemptedEventCount", snapshot.statistics.attempted },
 								{ "filteredEventCount", snapshot.statistics.filtered },
-								{ "droppedEventCount", dropped },
+								{ "droppedEventCount", completeness.lostEventCount },
 								{ "boundaryRejectionCount", snapshot.statistics.droppedFrameLimit + snapshot.statistics.droppedTimeLimit },
 								{ "stopRaceRejectionCount", snapshot.statistics.droppedStopped },
 								{ "scopeOverflowCount", snapshot.statistics.scopeOverflow },
@@ -1762,7 +1785,9 @@ namespace CSX::RenderMap
 								{ "droppedGeometryObservationCount", snapshot.statistics.droppedGeometryObservations },
 								{ "materialStateObservationCount", snapshot.materialStateObservations.size() },
 								{ "droppedMaterialStateObservationCount", snapshot.statistics.droppedMaterialStateObservations },
-								{ "truncated", dropped != 0 || structurallyTruncated },
+								{ "truncated", completeness.EvidenceTruncated() },
+								{ "incomplete", completeness.Incomplete() },
+								{ "incompleteReasons", completeness.reasons },
 							} },
 		};
 	}

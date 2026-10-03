@@ -9,6 +9,22 @@
 
 namespace CSX::RenderMap
 {
+	/** Shared loss and failure reasons; event truncation and evidence completeness are separate projections. */
+	struct CaptureCompleteness
+	{
+		std::uint64_t lostEventCount{ 0 };
+		bool structurallyIncomplete{ false };
+		bool terminalFailure{ false };
+		nlohmann::json reasons = nlohmann::json::array();
+		nlohmann::json errors = nlohmann::json::array();
+
+		bool EvidenceTruncated() const noexcept { return lostEventCount != 0 || structurallyIncomplete; }
+		bool Incomplete() const noexcept { return EvidenceTruncated() || terminalFailure; }
+	};
+
+	/** Evaluate retained event, catalogue, scope, and lifecycle evidence once for all outputs. */
+	CaptureCompleteness EvaluateCaptureCompleteness(const CaptureSnapshot& a_snapshot);
+
 	nlohmann::json SerializeBounds(const CollectorConfig& a_config);
 	nlohmann::json SerializeEventKindMask(EventKindMask a_mask);
 	nlohmann::json SerializeGeometryShaderTypeMask(std::uint64_t a_mask);

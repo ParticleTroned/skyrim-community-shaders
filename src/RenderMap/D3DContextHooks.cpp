@@ -329,7 +329,8 @@ namespace CSX::RenderMap
 				for (UINT index = 0; index < count; ++index)
 					views[index] = DescribeView(a_renderTargets[index]);
 			}
-			const auto depth = DescribeView(a_depthTarget);
+			const auto depth = DescribeChangedDepthTarget(a_depthTarget, a_keepTargets,
+				[](ID3D11DepthStencilView* a_view) { return DescribeView(a_view); });
 			GetRuntime().BindRenderTargetViews(
 				reinterpret_cast<std::uintptr_t>(a_context),
 				a_keepTargets ? 0u : a_renderTargetCount,

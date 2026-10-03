@@ -1,11 +1,12 @@
 #include "Api/ServiceRegistryProvider.h"
 
-#include "Api/ServiceRegistry.h"
-#include "Api/ShaderService.h"
 #include "Api/ScreenshotService.h"
+#include "Api/ServiceRegistry.h"
 #include "Api/ShaderCompatibilityService.h"
+#include "Api/ShaderService.h"
 #include "Api/UpscalingService.h"
 #include "BuildProvenance.h"
+#include "Features/VR/WorldOverlayRenderer.h"
 
 #include <nlohmann/json.hpp>
 
@@ -40,6 +41,7 @@ namespace CSX::Api
 			InitializeScreenshotService();
 			InitializeShaderCompatibilityService();
 			InitializeUpscalingService();
+			WorldOverlays::InitializeService();
 		});
 	}
 

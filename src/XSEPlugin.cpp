@@ -20,6 +20,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
+#include "Features/VR/WorldOverlayRenderer.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -178,6 +179,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			ScreenshotDevBenchBridge::Install();
 			CSX::Api::UpscalingDevBenchBridge::Install();
 			CSX::Api::WeatherDevBenchBridge::Install();
+			CSX::WorldOverlays::InstallDevBench();
 			CSX::Api::EditorDevBenchBridge::Install();
 			CSX::Api::FeatureDevBenchBridge::Install();
 			CSX::Api::ShaderDevBenchBridge::Install();
@@ -193,6 +195,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// all PostLoad listeners have completed.
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::WorldOverlays::InstallDevBench();
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
@@ -299,6 +302,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
+				CSX::WorldOverlays::InstallDevBench();
 				CSX::Api::ShaderDevBenchBridge::Install();
 				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
 			}
@@ -307,6 +311,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 		}
 	case SKSE::MessagingInterface::kPreLoadGame:
 		{
+			CSX::WorldOverlays::ResetWorld();
 			if (errors.empty()) {
 				const bool initialProcessSaveLoad =
 					!g_initialGameEntryConsumed.load(std::memory_order_acquire);
@@ -337,6 +342,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostLoadGame:
 	case SKSE::MessagingInterface::kNewGame:
 		{
+			CSX::WorldOverlays::ResetWorld();
 			if (errors.empty()) {
 				const bool newGame = message->type == SKSE::MessagingInterface::kNewGame;
 				const bool firstGameEntry =

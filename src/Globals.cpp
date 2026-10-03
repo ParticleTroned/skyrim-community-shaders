@@ -1,4 +1,5 @@
 #include "Globals.h"
+#include "Features/VR/WorldOverlayRenderer.h"
 
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
@@ -259,6 +260,7 @@ namespace globals
 		if (REL::Module::IsVR()) {
 			auto frameBufferVR = (FrameBufferVR*)mappedFrameBuffer->pData;
 			frameBufferCached.vr = *frameBufferVR;
+			CSX::WorldOverlays::CaptureCamera();
 		} else {
 			auto frameBuffer = (FrameBuffer*)mappedFrameBuffer->pData;
 			frameBufferCached.nonVR = *frameBuffer;

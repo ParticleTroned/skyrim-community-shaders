@@ -1,6 +1,7 @@
 #include "VR.h"
 #include "Diagnostics/VRPipelineDiagnostics.h"
 #include "DynamicCubemaps.h"
+#include "Features/VR/WorldOverlayRenderer.h"
 #include "FoveatedCommon.h"
 #include "GpuPass.h"
 #include "LocationContext.h"
@@ -4314,6 +4315,10 @@ void VR::SubmitOverlayFrame()
 		return;
 	}
 
+	if (CSX::WorldOverlays::HasContent()) {
+		InstallSubmitHook();
+		EnsureInSceneOverlaySubmitCopyResources();
+	}
 	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
 	const bool presentationUpscalingActive = globals::features::upscaling.IsPresentationUpscalingActive();
 	if (shouldUseInSceneOverlay || presentationUpscalingActive) {

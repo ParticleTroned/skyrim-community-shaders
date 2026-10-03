@@ -1,4 +1,5 @@
 #include "Deferred.h"
+#include "Features/VR/WorldOverlayRenderer.h"
 
 #include <algorithm>
 #include <type_traits>
@@ -176,6 +177,7 @@ void SetupRenderTarget(RE::RENDER_TARGET target, D3D11_TEXTURE2D_DESC texDesc, D
 
 void Deferred::ReleaseRenderTargets()
 {
+	CSX::WorldOverlays::ReleaseResources();
 	finalSceneDepthFrame.reset();
 	ReleaseRenderTargetSlot(ALBEDO);
 	ReleaseRenderTargetSlot(SPECULAR);
@@ -648,6 +650,7 @@ bool Deferred::CopySceneDepth()
 	// Water also consumes this copy, including pixels outside the active scaled area.
 	context->CopyResource(depthCopy.texture, depth.texture);
 	finalSceneDepthFrame = globals::state->frameCount;
+	CSX::WorldOverlays::CaptureDepth(depthCopy.texture, depthCopy.depthSRV);
 	return true;
 }
 
@@ -974,6 +977,7 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	state->lastWorldRenderFrame = state->frameCount;
 	func(a1);
 	state->lastCompletedWorldRenderFrame = state->frameCount;
+	CSX::WorldOverlays::CompleteScene();
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 };
@@ -982,6 +986,7 @@ void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, u
 {
 	// Each opaque pass invalidates the prior copy, even with deferred rendering disabled.
 	globals::deferred->finalSceneDepthFrame.reset();
+	CSX::WorldOverlays::InvalidateDepth();
 	if (globals::shaderCache->IsEnabled() && globals::state->inWorld) {
 		// Here is where the first opaque objects start rendering
 		globals::deferred->StartDeferred();

@@ -6,11 +6,14 @@
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
+#include "Features/VR/WorldOverlayRenderer.h"
 #include "Globals.h"
+#include "GpuPass.h"
 #include "Hooks.h"
 #include "Menu.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/ScopedDeviceContextState.h"
 #include "Utils/VRUtils.h"
 #include <DirectXMath.h>
 #include <SimpleMath.h>
@@ -138,7 +141,7 @@ namespace
 
 	bool ShouldRenderInSceneContent(const VR& vr)
 	{
-		return ShouldRenderInSceneMenu(vr) || vr.ShouldRenderCaptureIndicatorInScene();
+		return ShouldRenderInSceneMenu(vr) || vr.ShouldRenderCaptureIndicatorInScene() || CSX::WorldOverlays::HasContent();
 	}
 
 	bool MatchesSubmitCopyDesc(const D3D11_TEXTURE2D_DESC& lhs, const D3D11_TEXTURE2D_DESC& rhs)
@@ -202,42 +205,7 @@ namespace
 		return (support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) != 0;
 	}
 
-	class ScopedDeviceContextState
-	{
-	public:
-		ScopedDeviceContextState(ID3D11DeviceContext1* a_context, ID3DDeviceContextState* a_isolatedState) :
-			context(a_context)
-		{
-			if (!context || !a_isolatedState)
-				return;
-
-			context->SwapDeviceContextState(a_isolatedState, previousState.put());
-			active = true;
-		}
-
-		ScopedDeviceContextState(const ScopedDeviceContextState&) = delete;
-		ScopedDeviceContextState& operator=(const ScopedDeviceContextState&) = delete;
-
-		~ScopedDeviceContextState()
-		{
-			Restore();
-		}
-
-		explicit operator bool() const noexcept { return active; }
-
-		void Restore() noexcept
-		{
-			if (!active)
-				return;
-			active = false;
-			context->SwapDeviceContextState(previousState.get(), nullptr);
-		}
-
-	private:
-		ID3D11DeviceContext1* context = nullptr;
-		winrt::com_ptr<ID3DDeviceContextState> previousState;
-		bool active = false;
-	};
+	using Util::ScopedDeviceContextState;
 
 	bool EnsureMenuTextureSRV(
 		ID3D11Texture2D* texture,
@@ -665,6 +633,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 				upscaling.NotifyVRPostLoadCompositorCycleStarted(
 					compositorCycleToken,
 					result == vr::VRCompositorError_None);
+				CSX::WorldOverlays::BeginCycle(compositorCycleToken);
 				const bool cycleCooldownActive =
 					upscaling.submitStageVendorResumeFrame.load(
 						std::memory_order_acquire) != 0;
@@ -734,6 +703,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					.thread = g_vrSubmitPairBoundaryState.thread,
 				};
 			}
+			if (!nestedSubmit)
+				CSX::WorldOverlays::BeginPair(g_vrSubmitPairBoundaryState.compositorCycle);
+			const SKSE::stl::scope_exit releaseOverlayPair([&]() noexcept {
+				if (!nestedSubmit)
+					CSX::WorldOverlays::EndPair();
+			});
 			func(_this, a_texture);
 			const VRRenderScaleFrameBoundaryPolicy::PairIdentity completedIdentity{
 				.token = g_vrSubmitPairBoundaryState.token,
@@ -893,7 +868,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							  const vr::VRTextureBounds_t* a_screenshotBounds = nullptr) {
 				(void)a_probeObservation;
 				(void)a_auditBlackKeepalive;
+				const auto& worldCopy = vr.inSceneResources.submitCopies[static_cast<uint32_t>(eEye) < 2 ? static_cast<uint32_t>(eEye) : 0];
+				const bool worldDrawn = a_texture && a_texture->handle == worldCopy.texture.get() &&
+				                        CSX::WorldOverlays::EyeDrawn(static_cast<uint32_t>(eEye));
+				vr::Texture_t worldScreenshot = a_texture ? *a_texture : vr::Texture_t{};
+				if (worldDrawn && worldCopy.worldCaptureValid) {
+					worldScreenshot.handle = worldCopy.worldCapture.get();
+					a_screenshotTexture = &worldScreenshot;
+					a_screenshotBounds = a_bounds;
+				}
 				const bool observeScreenshot =
+					(!worldDrawn || worldCopy.worldCaptureValid) &&
 					a_allowScreenshotCapture &&
 					globals::features::screenshotFeature.HasPendingCapture();
 				winrt::com_ptr<ID3D11Texture2D> screenshotTextureLifetime;
@@ -1787,14 +1772,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							vr::Texture_t inSceneTexture{};
 							const vr::Texture_t* presentedTexture = &upscaledTexture;
 							if (postLoadReleaseToken == 0 &&
-								ShouldRenderInSceneContent(vr) &&
+								ShouldRenderInSceneContent(vr) && nSubmitFlags == vr::Submit_Default &&
 								upscaledTexture.handle &&
 								upscaledTexture.eType == vr::TextureType_DirectX) {
 								if (vr.PrepareInSceneOverlaySubmitTexture(
 										eEye,
 										&upscaledTexture,
 										&upscaledBounds,
-										inSceneTexture)) {
+										inSceneTexture,
+										presentationObservation.path == Upscaling::VRRenderScalePresentationPath::VendorEvaluated &&
+											!presentationObservation.loadingOrMenuContext && CSX::WorldOverlays::MatchesVendor(presentationObservation.sourceWorldFrame, presentationObservation.compositorCycleToken, presentationObservation.contractGeneration, static_cast<uint32_t>(eEye), presentationObservation.inputWidth, presentationObservation.inputHeight),
+										true)) {
 									presentedTexture = &inSceneTexture;
 									inSceneOverlayComposited = true;
 								}
@@ -1814,6 +1802,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 								&upscaledTexture,
 								&upscaledBounds);
 							if (isCurrentSubmitSuccess(result)) {
+								if (inSceneOverlayComposited)
+									CSX::WorldOverlays::AcceptEye(static_cast<uint32_t>(eEye));
 								upscaling.RecordVRRenderScalePresentationObservation(
 									presentationObservation,
 									false,
@@ -1988,10 +1978,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					});
 				if (postLoadReleaseToken == 0 &&
 					!nativeRestoreGuardActive &&
+					nSubmitFlags == vr::Submit_Default &&
 					!upscaling.IsVRProtectedFullSizeSubmitTexture(pTexture) &&
 					admitInSceneOverlaySubmit) {
 					vr::Texture_t overlayTexture{};
-					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture)) {
+					if (vr.PrepareInSceneOverlaySubmitTexture(eEye, pTexture, pBounds, overlayTexture, !upscaling.IsVRRenderScaleModeLatched())) {
 						const auto result = submit(
 							"in-scene-overlay",
 							&overlayTexture,
@@ -2007,6 +1998,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							pTexture,
 							pBounds);
 						if (isCurrentSubmitSuccess(result)) {
+							CSX::WorldOverlays::AcceptEye(static_cast<uint32_t>(eEye));
 							vr.MarkAutoHideOverlayPresented();
 						}
 						return result;
@@ -3185,6 +3177,20 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 
 	for (int eyeIdx = 0; eyeIdx < 2; ++eyeIdx) {
 		auto& submitCopy = inSceneResources.submitCopies[eyeIdx];
+		submitCopy.worldCaptureValid = false;
+		if (!globals::features::screenshotFeature.HasPendingCapture() || !CSX::WorldOverlays::HasContent()) {
+			submitCopy.worldCapture = nullptr;
+		} else if (submitCopy.texture && !submitCopy.worldCapture && !submitCopy.pendingCreate) {
+			auto captureDesc = submitCopy.sourceDesc;
+			captureDesc.Usage = D3D11_USAGE_DEFAULT;
+			captureDesc.BindFlags = 0;
+			captureDesc.CPUAccessFlags = 0;
+			captureDesc.MiscFlags = 0;
+			if (SUCCEEDED(device->CreateTexture2D(&captureDesc, nullptr, submitCopy.worldCapture.put())))
+				Util::SetResourceName(submitCopy.worldCapture.get(), "VR::WorldSubtitleCaptureEye%d", eyeIdx);
+			else
+				logger::warn("VR: World-subtitle screenshot surface unavailable for eye {}", eyeIdx);
+		}
 		if (!submitCopy.pendingCreate) {
 			continue;
 		}
@@ -3214,11 +3220,19 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 		D3D11_TEXTURE2D_DESC copyDesc = sourceDesc;
 		copyDesc.Usage = D3D11_USAGE_DEFAULT;
 		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		UINT formatSupport = 0;
+		if (SUCCEEDED(device->CheckFormatSupport(viewFormat, &formatSupport)) && (formatSupport & D3D11_FORMAT_SUPPORT_RENDER_TARGET))
+			copyDesc.BindFlags |= D3D11_BIND_RENDER_TARGET;
 		copyDesc.CPUAccessFlags = 0;
 		copyDesc.MiscFlags = 0;
 
 		winrt::com_ptr<ID3D11Texture2D> texture;
 		HRESULT hr = device->CreateTexture2D(&copyDesc, nullptr, texture.put());
+		if (FAILED(hr) && (copyDesc.BindFlags & D3D11_BIND_RENDER_TARGET)) {
+			copyDesc.BindFlags &= ~D3D11_BIND_RENDER_TARGET;
+			texture = nullptr;
+			hr = device->CreateTexture2D(&copyDesc, nullptr, texture.put());
+		}
 		if (FAILED(hr)) {
 			logger::error("VR: Failed to create in-scene menu submit copy texture (eye={}, {}x{}, Format: {}, ArraySize: {}, Samples: {}, HRESULT: 0x{:08X})",
 				eyeIdx,
@@ -3260,6 +3274,17 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 			continue;
 		}
 
+		winrt::com_ptr<ID3D11RenderTargetView> rtv;
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+		rtvDesc.Format = viewFormat;
+		rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+		if (copyDesc.BindFlags & D3D11_BIND_RENDER_TARGET) {
+			if (SUCCEEDED(device->CreateRenderTargetView(texture.get(), &rtvDesc, rtv.put())))
+				Util::SetResourceName(rtv.get(), eyeIdx == 0 ? "VR::InSceneOverlaySubmitCopyLeft RTV" : "VR::InSceneOverlaySubmitCopyRight RTV");
+			else
+				logger::warn("VR: World overlay RTV unavailable for eye {}; retaining menu composition", eyeIdx);
+		}
+		submitCopy.rtv = std::move(rtv);
 		submitCopy.texture = std::move(texture);
 		submitCopy.uav = std::move(uav);
 		submitCopy.sourceDesc = sourceDesc;
@@ -3278,7 +3303,7 @@ void VR::EnsureInSceneOverlaySubmitCopyResources()
 	}
 }
 
-bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture)
+bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture, bool allowWorld, bool reconstructed)
 {
 	if (!inputTexture || !inputTexture->handle || inputTexture->eType != vr::TextureType_DirectX || !ShouldRenderInSceneContent(*this)) {
 		return false;
@@ -3303,12 +3328,31 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 	if (!submitCopy.texture || !submitCopy.uav || !MatchesSubmitCopyDesc(submitCopy.sourceDesc, sourceDesc)) {
 		submitCopy.texture = nullptr;
 		submitCopy.uav = nullptr;
+		submitCopy.rtv = nullptr;
+		submitCopy.worldCapture = nullptr;
+		submitCopy.worldCaptureValid = false;
 		submitCopy.pendingSourceDesc = sourceDesc;
 		submitCopy.pendingCreate = true;
 		return false;
 	}
 
-	context->CopyResource(submitCopy.texture.get(), sourceTexture.get());
+	const bool worldEligible = allowWorld && submitCopy.rtv && CSX::WorldOverlays::CanDraw(static_cast<uint32_t>(eye));
+	if (!worldEligible && !ShouldRenderInSceneMenu(*this) && !ShouldRenderCaptureIndicatorInScene())
+		return false;
+	if (worldEligible) {
+		CS_GPU_PASS("VR::WorldOverlayCopy");
+		context->CopyResource(submitCopy.texture.get(), sourceTexture.get());
+		CSX::WorldOverlays::RecordCopy(false);
+	} else {
+		context->CopyResource(submitCopy.texture.get(), sourceTexture.get());
+	}
+	const bool worldComposited = worldEligible && CSX::WorldOverlays::Draw(static_cast<uint32_t>(eye), submitCopy.rtv.get(), sourceDesc, bounds, reconstructed);
+	if (worldComposited && submitCopy.worldCapture && globals::features::screenshotFeature.HasPendingCapture()) {
+		CS_GPU_PASS("VR::WorldOverlayCaptureCopy");
+		context->CopyResource(submitCopy.worldCapture.get(), submitCopy.texture.get());
+		CSX::WorldOverlays::RecordCopy(true);
+		submitCopy.worldCaptureValid = true;
+	}
 	bool menuComposited = false;
 	if (ShouldRenderInSceneMenu(*this)) {
 		CompositeInSceneOverlaySubmitTexture(
@@ -3325,7 +3369,7 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 		sourceDesc,
 		bounds,
 		&indicatorComposited);
-	if (!menuComposited && !indicatorComposited) {
+	if (!worldComposited && !menuComposited && !indicatorComposited) {
 		return false;
 	}
 

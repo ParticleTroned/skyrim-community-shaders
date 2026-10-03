@@ -13,6 +13,20 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## October 3: direct world-subtitle presentation
+
+The [direct world-subtitle service](direct-world-subtitles.md) composes a
+bounded external atlas on admitted native/vendor final eye copies. Vendor
+admission checks the completed world-frame proof, compositor cycle,
+contract generation and depth extent. Retained recovery and unproven
+fallback images omit the batch. Existing render-scale control is unchanged.
+
+Release compilation and a D3D11 WARP fixture provide offline evidence only.
+Live testing is deferred by user instruction; physical-HMD qualification,
+visibility and performance neutrality remain unestablished. No runtime
+measurement or numbered ledger snapshot is introduced. The linked report
+records the source bases, composition/capture copy costs and pending checks.
+
 ## September 29: periphery TAA history continuity
 
 The selective [Open Shaders #791 adaptation](periphery-taa-history-continuity.md)

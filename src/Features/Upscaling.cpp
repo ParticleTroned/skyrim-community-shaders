@@ -50740,7 +50740,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		};
 #endif
 	const auto setVendorPresentationObservation =
-		[&]([[maybe_unused]] const SubmitStageVendorEyeState& a_eyeState) {
+		[&](const SubmitStageVendorEyeState& a_eyeState) {
+			a_presentationObservation.sourceWorldFrame = a_eyeState.inputProof.IsValid() ?
+		                                                     a_eyeState.inputProof.sourceWorldFrame :
+		                                                     std::numeric_limits<uint32_t>::max();
 			setPresentationObservation(
 				VRRenderScalePresentationPath::VendorEvaluated,
 				eyeWidthIn,

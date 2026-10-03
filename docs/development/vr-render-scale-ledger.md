@@ -7,6 +7,10 @@ measurement advances the global sequence, including another run on the
 same PR. Earlier snapshots stay unchanged. See the
 [reporting contract](vr-render-scale-comparison-reporting.md).
 
+The [direct world-subtitle implementation](direct-world-subtitles.md)
+currently has offline build/GPU checks only. Live testing is deferred by
+user instruction, so it adds no measurement rows or numbered snapshot.
+
 ## Retained snapshots
 
 | Version | File                                                                         |                                                                    Size | Contents                                                                                                                             |

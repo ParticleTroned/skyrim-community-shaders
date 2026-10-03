@@ -1,4 +1,5 @@
 #include "State.h"
+#include "Features/VR/WorldOverlayRenderer.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #	define WIN32_LEAN_AND_MEAN
@@ -775,6 +776,7 @@ void State::Reset()
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 
+	const bool wasLoading = isLoadingMenuOpen;
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).
 	if (auto ui = globals::game::ui) {
@@ -786,6 +788,9 @@ void State::Reset()
 		isLoadingMenuOpen = false;
 		isMapMenuOpen = false;
 	}
+
+	if (globals::game::isVR && isLoadingMenuOpen && !wasLoading)
+		CSX::WorldOverlays::ResetWorld();
 
 	lastModifiedPixelDescriptor = 0;
 	lastModifiedVertexDescriptor = 0;

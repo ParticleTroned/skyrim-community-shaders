@@ -2267,6 +2267,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/world_overlays.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
     add_d3d_shader_test(
         ambient_balance_shader_test

@@ -751,6 +751,9 @@ public:
 			D3D11_TEXTURE2D_DESC pendingSourceDesc{};
 			winrt::com_ptr<ID3D11Texture2D> texture;
 			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+			winrt::com_ptr<ID3D11RenderTargetView> rtv;
+			winrt::com_ptr<ID3D11Texture2D> worldCapture;
+			bool worldCaptureValid = false;
 			bool pendingCreate = false;
 		};
 		CachedRTV cachedEyeRTVs[2];
@@ -821,7 +824,7 @@ public:
 		const D3D11_TEXTURE2D_DESC& targetDesc,
 		const vr::VRTextureBounds_t* bounds,
 		bool* indicatorComposited = nullptr);
-	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
+	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture, bool allowWorld = false, bool reconstructed = false);
 	bool InstallSubmitHook(bool a_enableProcessing = true);
 	bool GetGripPressed(bool isLeft, bool isRight) const;
 };

@@ -1183,6 +1183,7 @@ public:
 	struct VRRenderScalePresentationObservation
 	{
 		bool valid = false;
+		uint32_t sourceWorldFrame = std::numeric_limits<uint32_t>::max();
 		VRRenderScalePresentationPath path = VRRenderScalePresentationPath::Unknown;
 		uint32_t eyeIndex = 0;
 		uint32_t frame = 0;

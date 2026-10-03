@@ -2813,9 +2813,9 @@ namespace NeuralRendering
 				descriptor.context = a_args.front().executionContext;
 				descriptor.logicalEyeCount = logicalEyeCount;
 				descriptor.regionCount = static_cast<std::uint32_t>(a_args.size());
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				descriptor.requestedRegionCount = requestedRegionCount_;
 				descriptor.capacityFallback = requestedRegionCount_ != descriptor.regionCount;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 				if (measuredPlanEvaluating_) {
 					nlohmann::json decision;
 					for (const auto* field : { "frame", "sourceWorldFrame", "generation", "reason", "identity", "selected", "prediction", "search", "executionFallback" })
@@ -2826,6 +2826,8 @@ namespace NeuralRendering
 					decision["capacityFallback"] = forceFullCoordinates_ || descriptor.capacityFallback;
 					descriptor.measuredPlanDecision = decision.dump();
 				}
+#else
+				descriptor.requestedRegionCount = descriptor.regionCount;
 #endif
 				descriptor.colorProcessing = colorConfiguration_.Enabled();
 				descriptor.transportBypass = colorConfiguration_.experiments.transportBypass;

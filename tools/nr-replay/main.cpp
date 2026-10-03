@@ -266,7 +266,7 @@ namespace
 				source.bytes.data() + std::uint64_t(y + crop.baseY) * source.rowBytes + crop.baseX * BytesPerPixel(source.format), result.rowBytes);
 		return result;
 	}
-	TextureData Sentinel(const TextureData& source)
+	TextureData Sentinel(const TextureData& source, bool alternate)
 	{
 		auto result = source;
 		const auto stride = BytesPerPixel(source.format);
@@ -283,7 +283,8 @@ namespace
 				std::memcpy(destination, values.data(), stride);
 			} else {
 				Require(source.format == DXGI_FORMAT_R8G8B8A8_UNORM, "sentinel colour format");
-				const std::uint32_t value = 0xff000000u | (static_cast<std::uint32_t>(pixel * 2654435761u) & 0x00ffffffu);
+				const std::uint32_t pattern = static_cast<std::uint32_t>(pixel * 2654435761u) ^ (alternate ? 0x00ffffffu : 0u);
+				const std::uint32_t value = 0xff000000u | (pattern & 0x00ffffffu);
 				std::memcpy(destination, &value, 4);
 			}
 		}
@@ -664,7 +665,7 @@ namespace
 		return data;
 	}
 	Json RunCase(Session& session, const Variant& variant, const std::vector<Frame>& frames,
-		unsigned warmup, unsigned samples, Clock::time_point deadline, const std::filesystem::path& outputRoot)
+		unsigned warmup, unsigned samples, Clock::time_point deadline, const std::filesystem::path& outputRoot, bool alternateSentinel)
 	{
 		const auto& first = frames.front();
 		const auto width = variant.crop.IsValid() ? variant.crop.width : first.eyes.front().color.width;
@@ -793,7 +794,7 @@ namespace
 							upload(eye.motion, resource.motion, true, "motion");
 						}
 						resource.source = variant.crop.IsValid() ? Crop(eye.color, variant.crop) : eye.color;
-						resource.sentinel = Sentinel(resource.source);
+						resource.sentinel = Sentinel(resource.source, alternateSentinel);
 						session.context->UpdateSubresource(resource.output.resource11.Get(), 0, nullptr, resource.sentinel.bytes.data(), resource.sentinel.rowBytes, 0);
 					}
 					ID3D12GraphicsCommandList* list = nullptr;
@@ -861,7 +862,8 @@ namespace
 					for (unsigned i = 0; i < resources.size(); ++i) {
 						sample["evaluationGpuMicroseconds"].push_back(finished.regions[i].evaluationGpu.microseconds ? Json(*finished.regions[i].evaluationGpu.microseconds) : Json(nullptr));
 						const auto pixels = Download(session, resources[i].output, std::min(deadline, Clock::now() + std::chrono::seconds(2)));
-						const auto footprint = Footprint(resources[i].sentinel, pixels, resources[i].rect);
+						auto footprint = Footprint(resources[i].sentinel, pixels, resources[i].rect);
+						footprint["alternateBytePattern"] = alternateSentinel;
 						if (variant.sharedInputs && i % variant.rects.size() == 0) {
 							const auto prepared = Download(session, resources[i].color, std::min(deadline, Clock::now() + std::chrono::seconds(2)));
 							Require(prepared.bytes == resources[i].source.bytes, "native evaluation modified immutable prepared colour");
@@ -869,7 +871,8 @@ namespace
 						sample["providerFootprint"].push_back(footprint);
 						if (footprint.at("unchangedInsidePixels") != 0 || footprint.at("nonfiniteInsidePixels") != 0) {
 							sample["success"] = false;
-							sample["reason"] = "provider_left_unwritten_or_nonfinite_evaluated_pixels";
+							sample["reason"] = footprint.at("nonfiniteInsidePixels") != 0 ? "nonfinite_evaluated_pixels" :
+							                                                                "ambiguous_output_sentinel_match";
 						} else {
 							const auto difference = Compare(resources[i].source, pixels, resources[i].rect);
 							edits += difference.pixels;
@@ -952,6 +955,7 @@ int wmain(int argc, wchar_t** argv)
 	unsigned samples = 8, warmup = 3, seconds = 180;
 	unsigned capacitySize = 128;
 	bool capacityTemporal = false;
+	bool alternateSentinel = false;
 	std::string onlyCase;
 	bool validateOnly = false, validateStorage = false, inspectOnly = false;
 	bool ownsOutput = false;
@@ -972,6 +976,10 @@ int wmain(int argc, wchar_t** argv)
 			}
 			if (option == L"--capacity-temporal") {
 				capacityTemporal = true;
+				continue;
+			}
+			if (option == L"--alternate-output-sentinel") {
+				alternateSentinel = true;
 				continue;
 			}
 			Require(i + 1 < argc, "option requires value");
@@ -1091,6 +1099,7 @@ int wmain(int argc, wchar_t** argv)
 			{ "trust", ToString(runtime.Trust()) }, { "parameterCorePath", runtime.ParameterCorePath().string() },
 			{ "parameterCoreSha256", runtime.ParameterCoreHash() } };
 		result["status"] = "running";
+		result["alternateOutputSentinel"] = alternateSentinel;
 		for (auto variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1, capacitySize)) {
 			if (onlyCase.empty() && (variant.axis == "minimum_shape" || variant.axis == "input_storage" || variant.axis == "native_context_count" || variant.axis == "source_transport" || variant.rects.size() > kDefaultRegionsPerEye || variant.pairGroup == "capacity-calls-equal-area"))
 				continue;
@@ -1099,7 +1108,7 @@ int wmain(int argc, wchar_t** argv)
 			if (capacityTemporal)
 				variant.temporal = true;
 			std::cout << variant.id << std::endl;
-			auto value = RunCase(session, variant, frames, warmup, samples, deadline, outputRoot);
+			auto value = RunCase(session, variant, frames, warmup, samples, deadline, outputRoot, alternateSentinel);
 			value["sourceContentSha256"] = result["sourceContentSha256"];
 			value["sourceGuideAlignmentMethod"] = value["sourceGuideAlignment"];
 			value["sourceGuideAlignment"] = result["captureManifestSha256"];

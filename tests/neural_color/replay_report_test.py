@@ -380,7 +380,14 @@ class ReplayReportTest(unittest.TestCase):
         self.assertIn("creation capacity", row["evaluatedAreaMeaning"])
         for sample in source["cases"][0]["samples"]:
             sample["providerFootprint"][0].update(modifiedInsidePixels=63, unchangedInsidePixels=1)
-        self.assertEqual(rr.report(source)["measuredCaseCount"], 0)
+        rejected = rr.report(source)
+        self.assertEqual(rejected["measuredCaseCount"], 0)
+        self.assertIn("ambiguous_output_sentinel_match", str(rejected))
+        for sample in source["cases"][0]["samples"]:
+            sample["providerFootprint"][0].update(modifiedInsidePixels=64, unchangedInsidePixels=0, nonfiniteInsidePixels=1)
+        rejected = rr.report(source)
+        self.assertEqual(rejected["measuredCaseCount"], 0)
+        self.assertIn("nonfinite_evaluated_pixels", str(rejected))
         for sample in source["cases"][0]["samples"]:
             sample.pop("providerFootprint")
         self.assertEqual(rr.report(source)["measuredCaseCount"], 0)

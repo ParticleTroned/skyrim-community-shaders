@@ -181,9 +181,14 @@ namespace NeuralRendering::MeasuredPlan
 	/** Bounded lookahead includes the current split and every reached valid local merge. */
 	[[nodiscard]] inline std::vector<Partition> Candidates(const CharacterComputeRegionPlan& plan, std::uint32_t width, std::uint32_t height)
 	{
-		if (!plan.count || plan.count > kEnabledRegionsPerEye)
+		if (!width || !height || plan.count > kEnabledRegionsPerEye)
 			return {};
 		Partition initial{ plan };
+		// Zero explicit regions denotes the caller's validated single ROI, not NoWork.
+		if (!plan.count) {
+			initial.id = 1;
+			return { initial };
+		}
 		initial.histories = plan.historyKeys;
 		initial.identities = plan.clusterIdentities;
 		for (std::uint32_t i = 0; i < plan.count; ++i) {

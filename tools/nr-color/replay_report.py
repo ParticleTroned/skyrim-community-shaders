@@ -283,8 +283,10 @@ def checked_case(case: dict) -> dict:
                         and footprint["nonfiniteInsidePixels"] <= rectangle_pixels
                         and footprint["modifiedOutsidePixels"] <= resources["output"][0] * resources["output"][1] - rectangle_pixels,
                         "provider footprint exceeds declared resource or work")
-                if footprint["unchangedInsidePixels"] or footprint["nonfiniteInsidePixels"]:
-                    reasons.append("provider_left_unwritten_or_nonfinite_pixels")
+                if footprint["nonfiniteInsidePixels"]:
+                    reasons.append("nonfinite_evaluated_pixels")
+                if footprint["unchangedInsidePixels"]:
+                    reasons.append("ambiguous_output_sentinel_match")
         if case["history"] == "continuous" and any(reason != "warmup" for reason in reasons):
             case_reasons.append("continuous_history_interrupted")
         for field in ("createCpuMicroseconds", "evalCpuMicroseconds", "elapsedCpuMicroseconds"):

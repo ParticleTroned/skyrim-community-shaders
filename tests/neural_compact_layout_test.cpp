@@ -26,6 +26,12 @@ int main()
 		CHECK(compact->native.output.valid.Area() == compact->source.Area());
 		CHECK(GetNativeEvaluationLayoutViolation(compact->native, false).empty());
 		CHECK(compact->roi.compactSource == compact->source && !compact->roi.temporalEnvelope);
+		const auto retained = BuildCompactInputLayout(roi, baseline, 768);
+		CHECK(retained && retained->source.width == 768 && retained->source.height == 768);
+		CHECK(retained->roi.ownedOutput.Area() == rect.Area());
+		CHECK(ContainsComputeSubrect(retained->source, rect));
+		CHECK(!BuildCompactInputLayout(roi, baseline, 128));
+		CHECK(!BuildCompactInputLayout(roi, baseline, UINT32_MAX));
 		auto invalid = baseline;
 		invalid.depth.backing.width /= 2;
 		CHECK(!BuildCompactInputLayout(roi, invalid));

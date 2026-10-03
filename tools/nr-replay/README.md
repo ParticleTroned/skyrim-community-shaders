@@ -119,6 +119,15 @@ at least `warmup + samples` captured frames. A short sequence establishes
 only those frames' output equality, not general temporal quality. Do not
 overlap qualification with a game, compilation or another GPU campaign.
 
+`--alternate-output-sentinel` complements the deterministic RGBA8 output
+pattern. Use a separate identical-input replay to investigate a finite
+sentinel collision, comparing the retained raw outputs and both patterns.
+A matching byte pattern is ambiguous; it does not itself prove a missing
+provider write. Both ambiguous matches and nonfinite output remain rejected
+by the report. The switch does not add inference or silently waive a failed
+sample, and float formats retain their existing NaN sentinel. This probes
+output writes, not the backend's complete input-read footprint.
+
 Static throughput repeats one frozen frame and resets every evaluation.
 Cold creation releases features after a GPU-idle proof each iteration.
 Temporal pairs consume the same consecutive captured sequence with fresh

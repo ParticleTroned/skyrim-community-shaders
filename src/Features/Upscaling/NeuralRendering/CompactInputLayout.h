@@ -16,7 +16,7 @@ namespace NeuralRendering
 	};
 	/** Stateless, equal-grid crop: full buckets are initialized and evaluated at unchanged density. */
 	[[nodiscard]] inline std::optional<CompactInputLayout> BuildCompactInputLayout(
-		const RoiDescriptor& roi, const NativeEvaluationLayout& baseline) noexcept
+		const RoiDescriptor& roi, const NativeEvaluationLayout& baseline, std::uint32_t retainedSide = 0) noexcept
 	{
 		if (baseline.featureUpscaling || baseline.color.backing != baseline.output.backing ||
 			baseline.depth.backing != baseline.output.backing || baseline.motion.backing != baseline.output.backing ||
@@ -27,8 +27,10 @@ namespace NeuralRendering
 			return std::nullopt;
 		const auto full = baseline.output.backing;
 		constexpr std::array<std::uint32_t, 3> buckets{ 256, 512, 768 };
+		if (retainedSide && std::ranges::find(buckets, retainedSide) == buckets.end())
+			return std::nullopt;
 		for (const auto side : buckets) {
-			if (roi.inferenceContext.width > side || roi.inferenceContext.height > side || side > full.width || side > full.height ||
+			if (side < retainedSide || roi.inferenceContext.width > side || roi.inferenceContext.height > side || side > full.width || side > full.height ||
 				std::uint64_t(side) * side >= std::uint64_t(full.width) * full.height)
 				continue;
 			const auto centered = [&](std::uint32_t origin, std::uint32_t extent, std::uint32_t limit) {

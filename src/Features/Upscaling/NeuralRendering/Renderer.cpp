@@ -2264,11 +2264,15 @@ namespace NeuralRendering
 	{
 		if (colorConfiguration_.experiments.CompactInputsEnabled() && !forceFullCoordinates_ && !capacityFallback_.rejected &&
 			!colorConfiguration_.Enabled() && args.characterVisualIsolation && args.reset &&
-			args.executionContext.renderingMode == RenderingMode::ReducedResolution)
-			if (const auto compact = BuildCompactInputLayout(resources.roi, resources.nativeLayout)) {
+			args.executionContext.renderingMode == RenderingMode::ReducedResolution && args.featureSlot < slots_.size()) {
+			const auto& slot = slots_[args.featureSlot];
+			// Retain capacity through movement; only growth or explicit retirement changes it.
+			const auto retainedSide = slot.resourcesValid && slot.resourceKey.compact ? slot.resourceKey.outputWidth : 0u;
+			if (const auto compact = BuildCompactInputLayout(resources.roi, resources.nativeLayout, retainedSide)) {
 				resources.roi = compact->roi;
 				resources.nativeLayout = compact->native;
 			}
+		}
 	}
 
 	std::array<RendererApplyArgs, kEyeCount> Renderer::State::SelectMeasuredPlanLocked(std::span<const RendererApplyArgs> args)
@@ -2296,7 +2300,7 @@ namespace NeuralRendering
 		std::array<ValidatedResources, kEyeCount> inputResources;
 		for (std::size_t eye = 0; eye < args.size(); ++eye) {
 			const auto& value = args[eye];
-			if (!value.characterVisualIsolation || !value.computeRegions.count ||
+			if (!value.characterVisualIsolation ||
 				!GetCharacterRegionSubmissionViolation(value.featureSlot, value.computeRegions, value.computeSubrect,
 					value.outputWidth, value.outputHeight, true)
 					.empty()) {
@@ -2305,8 +2309,10 @@ namespace NeuralRendering
 			}
 			alternatives[eye] = MeasuredPlan::Candidates(value.computeRegions, value.outputWidth, value.outputHeight);
 			auto first = value;
-			first.computeSubrect = value.computeRegions.regions[0];
-			first.roi = value.computeRegions.roi[0];
+			if (value.computeRegions.count) {
+				first.computeSubrect = value.computeRegions.regions[0];
+				first.roi = value.computeRegions.roi[0];
+			}
 			if (ValidateLocked(first, inputResources[eye])) {
 				measuredPlanDiagnostics_["reason"] = "invalid_source_resources";
 				return original;
@@ -2330,21 +2336,25 @@ namespace NeuralRendering
 					partition = (partition ^ choice.id) * 1099511628211ull;
 					rejected |= capacityFallback_.rejected && logical.computeRegions.count > kDefaultRegionsPerEye;
 					valid &= QualifiedHigherRegionGeometry(logical.computeRegions);
-					for (std::uint32_t i = 0; i < logical.computeRegions.count && valid; ++i) {
+					for (std::uint32_t i = 0; i < std::max(1u, logical.computeRegions.count) && valid; ++i) {
 						const auto& regions = logical.computeRegions;
 						partition = (partition ^ regions.clusterIdentities[i]) * 1099511628211ull;
 						auto physical = logical;
-						physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, regions.regionSlots[i]);
-						physical.computeSubrect = regions.regions[i];
-						physical.roi = regions.roi[i];
+						if (regions.count) {
+							physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, regions.regionSlots[i]);
+							physical.computeSubrect = regions.regions[i];
+							physical.roi = regions.roi[i];
+						}
 						physical.computeRegions = {};
 						auto resources = inputResources[eye];
-						resources.roi = *physical.roi;
-						resources.nativeLayout = BuildNativeEvaluationLayout({ physical.colorWidth, physical.colorHeight },
-							{ physical.guideWidth, physical.guideHeight }, resources.roi.allocationCapacity,
-							{ physical.controlMaskWidth, physical.controlMaskHeight }, resources.roi.inferenceContext,
-							UpscalingDLSS::BuildMotionVectorPixelScale(physical.viewportCrop), physical.featureUpscaling);
-						ApplyCompactLayoutLocked(physical, resources);
+						if (regions.count) {
+							resources.roi = *physical.roi;
+							resources.nativeLayout = BuildNativeEvaluationLayout({ physical.colorWidth, physical.colorHeight },
+								{ physical.guideWidth, physical.guideHeight }, resources.roi.allocationCapacity,
+								{ physical.controlMaskWidth, physical.controlMaskHeight }, resources.roi.inferenceContext,
+								UpscalingDLSS::BuildMotionVectorPixelScale(physical.viewportCrop), physical.featureUpscaling);
+							ApplyCompactLayoutLocked(physical, resources);
+						}
 						const auto& tuning = physical.tuning;
 						key.push_back({ { "slot", physical.featureSlot }, { "layout", Evidence::NativeLayoutJson(resources.nativeLayout) },
 							{ "compactSource", resources.roi.compactSource ? Evidence::SubrectJson(*resources.roi.compactSource) : Json(nullptr) },
@@ -3554,9 +3564,14 @@ namespace NeuralRendering
 			state_->measuredPlanEnabled_ = request.at("enabled").get<bool>();
 			state_->measuredPlanState_ = {};
 		} else if (action == "load_profile") {
-			auto profile = MeasuredPlan::ReadProfile(request.at("profile"));
-			if (!state_->measuredPlanDiagnostics_.contains("identity") || profile.identity != state_->measuredPlanDiagnostics_["identity"].dump())
-				throw std::invalid_argument("profile identity does not match the current observed backend");
+			std::optional<MeasuredPlan::Profile> profile;
+			try {
+				profile = MeasuredPlan::ReadProfile(request.at("profile"));
+				if (!state_->measuredPlanDiagnostics_.contains("identity") || profile->identity != state_->measuredPlanDiagnostics_["identity"].dump())
+					throw std::invalid_argument("profile identity does not match the current observed backend");
+			} catch (const std::exception& error) {
+				return { { "ok", false }, { "errorCode", "measured_profile_rejected" }, { "error", error.what() }, { "mutationApplied", false } };
+			}
 			state_->measuredPlanProfile_ = std::move(profile);
 			state_->measuredPlanState_ = {};
 		} else if (action == "clear_profile") {

@@ -43,6 +43,9 @@ int main()
 	CHECK(!profile.Valid());
 
 	CharacterComputeRegionPlan plan;
+	const auto legacy = Candidates(plan, 2048, 2048);
+	CHECK(legacy.size() == 1 && legacy.front().plan == plan && legacy.front().id != 0);
+	CHECK(Candidates(plan, 0, 2048).empty());
 	plan.count = 4;
 	for (unsigned i = 0; i < 4; ++i) {
 		plan.regions[i] = { (i % 2) * 1024u, (i / 2) * 1024u, 256, 256 };

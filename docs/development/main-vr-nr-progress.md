@@ -1,5 +1,32 @@
 # main-vr-nr progress and continuation record
 
+## October 3 corrective Task 9/10 live qualification
+
+The [new live record](nr-task9-11-live-20261003.md) preserves 22,732
+successful native evaluations on producer `7abf7b871612`, three 300-frame
+profiler windows and exact HMD execution companions. Compact storage
+activated, but recorded bucket shrink/grow churn and NR stereo GPU self time
+of 53.98 ms against 33.43/33.53 ms baseline brackets. No GPU/device/quarantine
+failure occurred. Settings were restored and Skyrim/MO2 closed normally.
+
+Corrections retain compact capacity through smaller ROI changes and score
+the implicit single-region baseline without changing its execution.
+Invalid/stale profile rejection now explicitly reports no mutation. An
+alternate RGBA8 replay sentinel resolved the earlier 512-sequence ambiguity:
+all eight eye/frame outputs match the old bracket byte for byte, with no
+unchanged or nonfinite pixels. Original rejected samples remain preserved.
+
+Corrective producer `8b1973afbc4f` passed the universal DevBench build,
+all 227 controller/shader tests, preset checks and provenance validation.
+The new live record preserves its complete build/DLL/source identity and
+the original failed preset-fingerprint run. No rendering preset changed.
+
+**Tasks 9/10 remain open** for corrective-DLL live qualification and the
+previously recorded candidate-search/calibration/quality gates. Task 11's
+ownership and category-packing audit plus baseline capture are recorded;
+its equipment implementation is not complete. No production profile or
+compact default is adopted.
+
 ## October 3 Task 9/10 experiments and compiler-idle repeat
 
 The [qualification record](nr-task9-10-qualification-20261003.md) preserves

@@ -1,5 +1,27 @@
 # main-vr-nr progress and continuation record
 
+## October 3 retest device removal and current-context safeguard
+
+The [retest record](nr-task9-10-retest-20261003.md) preserves successful
+implicit-plan/rejection checks and a compact interval without resource
+churn on producer `8b1973afbc4f`. Three 300-frame captures completed, but
+the baseline drifted 19.60% and the scene was initially obstructed. A later
+device removal/quarantine fails session health; no performance or quality
+promotion follows. The final submitted context was 64x736 in both eyes.
+The next batch already observed removal at entry, before native evaluation.
+
+The DevBench-only current-context experiment now retains its original
+envelope for padded dimensions below 128, reusing the existing experimental
+geometry floor. This closes an admission gap, not the unresolved GPU root
+cause. Original controls were restored and Skyrim/MO2 closed cleanly.
+**Tasks 9/10 remain open** for a new-DLL live test and their recorded
+calibration/quality gates; Task 11 remains at its ownership/packing audit.
+
+Replacement producer `f0acc3926842` passed all 227 tests, preset and
+provenance checks. Its DevBench AIO passed archive integrity, extraction
+and all 386 payload hashes. The retest record preserves exact build/DLL/
+archive identities; no installation or restart was performed.
+
 ## October 3 corrective Task 9/10 live qualification
 
 The [new live record](nr-task9-11-live-20261003.md) preserves 22,732

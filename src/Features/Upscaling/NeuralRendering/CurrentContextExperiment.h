@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "CharacterSettings.h"
+#	include "RegionCapacity.h"
 #	include "RoiDescriptor.h"
 
 namespace NeuralRendering
@@ -23,7 +24,8 @@ namespace NeuralRendering
 		// Reuse established spatial padding; only historical motion headroom is optional.
 		const auto current = BuildCharacterProviderComputeSubrect(*a_roi.samplingSupport,
 			a_roi.allocationCapacity.width, a_roi.allocationCapacity.height);
-		if (!current.Fits(a_roi.allocationCapacity.width, a_roi.allocationCapacity.height) ||
+		if (!QualifiedExperimentalContextGeometry(current) ||
+			!current.Fits(a_roi.allocationCapacity.width, a_roi.allocationCapacity.height) ||
 			!ContainsComputeSubrect(*a_roi.temporalEnvelope, current))
 			return false;
 		a_roi.ownedOutput = current;

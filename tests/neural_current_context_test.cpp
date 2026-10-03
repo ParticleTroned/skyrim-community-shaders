@@ -86,10 +86,28 @@ int main()
 	Check(!ApplyCurrentContextExperiment(narrow, policy, true, true) && narrow == narrowBefore);
 	for (const ComputeSubrect edge : { ComputeSubrect{ 0, 0, 13, 19 }, ComputeSubrect{ 980, 1100, 29, 21 } }) {
 		auto roi = BuildRoiDescriptor(edge, retained, capacity, true);
-		Check(ApplyCurrentContextExperiment(roi, policy, true, true));
-		Check(roi.inferenceContext.Fits(capacity.width, capacity.height));
-		Check(ContainsComputeSubrect(roi.inferenceContext, edge));
+		const auto before = roi;
+		Check(!ApplyCurrentContextExperiment(roi, policy, true, true));
+		Check(roi == before);
 	}
+	// A clipped strip must retain its envelope, including at asymmetric eye edges.
+	for (const ComputeSubrect strip : { ComputeSubrect{ 0, 416, 1, 640 }, ComputeSubrect{ 977, 416, 32, 640 },
+			 ComputeSubrect{ 416, 0, 512, 1 }, ComputeSubrect{ 416, 1105, 512, 16 } }) {
+		auto roi = BuildRoiDescriptor(strip, retained, capacity, true);
+		const auto before = roi;
+		Check(!ApplyCurrentContextExperiment(roi, policy, true, true));
+		Check(roi == before);
+	}
+	static_assert(!QualifiedExperimentalContextGeometry(ComputeSubrect{ 0, 384, 64, 736 }));
+	static_assert(!QualifiedExperimentalContextGeometry(ComputeSubrect{ 0, 0, 127, 1024 }));
+	static_assert(!QualifiedExperimentalContextGeometry(ComputeSubrect{ 0, 0, 1024, 127 }));
+	static_assert(QualifiedExperimentalContextGeometry(ComputeSubrect{ 0, 0, 128, 128 }));
+	const UpscalingDLSS::Extent observedCapacity{ 1008, 1120 };
+	const ComputeSubrect clippedSupport{ 0, 480, 1, 544 };
+	Check(BuildCharacterProviderComputeSubrect(clippedSupport, 1008, 1120) == ComputeSubrect{ 0, 384, 64, 736 });
+	auto clipped = BuildRoiDescriptor(clippedSupport, { 0, 0, 1008, 1120 }, observedCapacity, true);
+	const auto clippedBefore = clipped;
+	Check(!ApplyCurrentContextExperiment(clipped, policy, true, true) && clipped == clippedBefore);
 
 	StableCharacterComputeSubrect history;
 	(void)ResolveStableCharacterComputeSubrect(retained, capacity.width, capacity.height, history);

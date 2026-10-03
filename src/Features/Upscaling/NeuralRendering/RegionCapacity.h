@@ -20,6 +20,17 @@ namespace NeuralRendering
 	inline constexpr std::size_t kMaximumRegionEvaluations = kEyeCount * kEnabledRegionsPerEye;
 	static_assert(kPhysicalFeatureSlotCount <= std::numeric_limits<std::uint32_t>::digits);
 
+	/** Experimental native contexts below this extent have no completion qualification. */
+	inline constexpr std::uint32_t kMinimumExperimentalContextExtent = 128;
+
+	/** Applies the same completion qualification floor to either rectangle axis. */
+	template <class Rectangle>
+	[[nodiscard]] constexpr bool QualifiedExperimentalContextGeometry(const Rectangle& rectangle) noexcept
+	{
+		return rectangle.width >= kMinimumExperimentalContextExtent &&
+		       rectangle.height >= kMinimumExperimentalContextExtent;
+	}
+
 	/** Higher-count qualification has not admitted smaller native rectangles. */
 	template <class Plan>
 	[[nodiscard]] constexpr bool QualifiedHigherRegionGeometry(const Plan& plan) noexcept
@@ -29,7 +40,7 @@ namespace NeuralRendering
 		if (plan.count > plan.regions.size())
 			return false;
 		for (std::uint32_t i = 0; i < plan.count; ++i)
-			if (plan.regions[i].width < 128 || plan.regions[i].height < 128)
+			if (!QualifiedExperimentalContextGeometry(plan.regions[i]))
 				return false;
 		return true;
 	}

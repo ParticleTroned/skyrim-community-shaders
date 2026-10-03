@@ -1,4 +1,10 @@
 #include "RenderMap/Runtime.h"
+#if defined(_WIN32)
+#	ifndef NOMINMAX
+#		define NOMINMAX
+#	endif
+#	include "Utils/D3DPrivateDataLifetime.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -308,6 +314,99 @@ namespace
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kTechniqueResolved; });
 		Check(resolved != snapshot->events.end() && resolved->payload.words[4] != 0 && resolved->payload.words[5] == 0,
 			"overflowed stage shader was silently joined to an existing observation");
+	}
+
+	void TestNativeShaderMetadataLifetime()
+	{
+#if defined(_WIN32)
+		struct PrivateDataOwner
+		{
+			IUnknown* retained{ nullptr };
+			bool reject{ false };
+			HRESULT SetPrivateDataInterface(REFGUID, IUnknown* a_value)
+			{
+				if (reject)
+					return E_FAIL;
+				retained = a_value;
+				retained->AddRef();
+				return S_OK;
+			}
+			~PrivateDataOwner()
+			{
+				if (retained)
+					retained->Release();
+			}
+		};
+		constexpr GUID lifetimeGuid{ 0x2748c12a, 0x197b, 0x4d6e, {} };
+		unsigned cleanups = 0;
+		{
+			PrivateDataOwner rejected{ .reject = true };
+			Check(FAILED(Util::AttachD3DPrivateDataLifetime(rejected, lifetimeGuid,
+					  [&cleanups]() noexcept { ++cleanups; })) &&
+					  cleanups == 0,
+				"failed private-data attachment ran unowned cleanup");
+		}
+		{
+			PrivateDataOwner owner;
+			Check(SUCCEEDED(Util::AttachD3DPrivateDataLifetime(owner, lifetimeGuid,
+					  [&cleanups]() noexcept { ++cleanups; })) &&
+					  cleanups == 0,
+				"retained native private data was retired early");
+			IUnknown* queried = nullptr;
+			Check(owner.retained->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void**>(&queried)) == S_OK,
+				"lifetime sentinel violated IUnknown identity");
+			queried->Release();
+			Check(cleanups == 0, "temporary sentinel reference retired native metadata");
+		}
+		Check(cleanups == 1, "native private-data release did not retire metadata exactly once");
+#endif
+
+		std::function<void()> lateCleanup;
+		{
+			Runtime runtime;
+			runtime.RegisterCreatedStageShader(ShaderStage::kVertex, 0xB100, 128, "old");
+			lateCleanup = runtime.MakeStageShaderRetirementCallback(ShaderStage::kVertex, 0xB100);
+			lateCleanup();
+			runtime.SetImmediateContext(0xB000);
+			runtime.BindStage(0xB000, ShaderStage::kVertex, 0xB100);
+			Check(runtime.StartCapture(Config()) == StartResult::kStarted, "retirement capture did not start");
+			runtime.RecordDraw(0xB000, DrawOperation::kDraw, 3);
+			const auto snapshot = runtime.StopCapture();
+			Check(snapshot && snapshot->stageShaderObservations.size() == 1 &&
+					  snapshot->stageShaderObservations[0].bytecodeSize == 0,
+				"retired creation identity survived into a later capture");
+		}
+		lateCleanup();
+	}
+
+	void TestPersistentShaderRetentionBounds()
+	{
+		Runtime runtime;
+		constexpr std::uintptr_t firstShader = 0x10000;
+		for (std::size_t index = 0; index < kMaximumPersistentStageShaders; ++index)
+			runtime.RegisterCreatedStageShader(ShaderStage::kVertex, firstShader + index, 128, "bounded");
+		const auto overflowShader = firstShader + kMaximumPersistentStageShaders;
+		runtime.RegisterCreatedStageShader(ShaderStage::kVertex, overflowShader, 256, "overflow");
+		runtime.SetImmediateContext(0xB000);
+		runtime.BindStage(0xB000, ShaderStage::kVertex, overflowShader);
+		Check(runtime.StartCapture(Config()) == StartResult::kStarted, "bounded identity capture did not start");
+		runtime.RecordDraw(0xB000, DrawOperation::kDraw, 3);
+		const auto first = runtime.StopCapture();
+		Check(first && first->stageShaderObservations.size() == 1 && first->stageShaderObservations[0].bytecodeSize == 0,
+			"persistent catalogue admitted an identity beyond its bound");
+		runtime.MakeStageShaderRetirementCallback(ShaderStage::kVertex, firstShader)();
+		runtime.RegisterCreatedStageShader(ShaderStage::kVertex, overflowShader, 256, "admitted");
+		for (std::uint32_t index = 0; index < kMaximumEngineShaderAliasesPerStage + 2; ++index)
+			runtime.RegisterEngineStageShader(ShaderStage::kVertex, overflowShader, "Lighting", index, "Lighting");
+		Check(runtime.StartCapture(Config()) == StartResult::kStarted, "reclaimed identity capture did not start");
+		runtime.RecordDraw(0xB000, DrawOperation::kDraw, 3);
+		const auto second = runtime.StopCapture();
+		Check(second && second->stageShaderObservations.size() == 1 && second->stageShaderObservations[0].bytecodeSize == 256,
+			"native retirement did not free persistent catalogue capacity");
+		const auto& admitted = second->stageShaderObservations[0];
+		Check(admitted.engineAliasCount == kMaximumEngineShaderAliasesPerStage && admitted.engineAliasesTruncated &&
+				  admitted.engineAliasTotalCount == kMaximumEngineShaderAliasesPerStage + 1,
+			"alias retention overflow did not preserve an explicit lower bound");
 	}
 
 	void TestImmediateContextDrawAndDispatchState()
@@ -2345,6 +2444,8 @@ int main()
 		TestShaderObservationBoundIsExplicit();
 		TestResolvedStageShaderIdentity();
 		TestStageShaderObservationBoundIsExplicit();
+		TestNativeShaderMetadataLifetime();
+		TestPersistentShaderRetentionBounds();
 		TestImmediateContextDrawAndDispatchState();
 		TestCaptureStartSeedsInheritedStageIdentity();
 		TestCreatedStagePointerReuseAdvancesIdentity();

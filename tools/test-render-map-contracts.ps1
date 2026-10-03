@@ -23,7 +23,14 @@ function Resolve-Python3 {
 
     $candidates = [System.Collections.Generic.List[string]]::new()
     if ($RequestedPath) {
-        $candidates.Add($RequestedPath)
+        if (-not (Test-Path -LiteralPath $RequestedPath -PathType Leaf)) {
+            throw "Requested Python executable does not exist: $RequestedPath"
+        }
+        & $RequestedPath -c 'import sys;raise SystemExit(sys.version_info.major!=3)' 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Requested Python executable failed its Python 3 probe: $RequestedPath"
+        }
+        return (Resolve-Path -LiteralPath $RequestedPath).Path
     }
     foreach ($variableName in @('CSX_PYTHON', 'CODEX_PYTHON')) {
         $value = [Environment]::GetEnvironmentVariable($variableName, 'Process')

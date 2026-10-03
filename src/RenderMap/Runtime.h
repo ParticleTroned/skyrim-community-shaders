@@ -4,6 +4,8 @@
 
 #include <bitset>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -15,6 +17,7 @@ namespace CSX::RenderMap
 {
 	inline constexpr std::size_t kMaximumTrackedDeferredContexts = 256;
 	inline constexpr std::size_t kMaximumTrackedCommandLists = 8192;
+	inline constexpr std::size_t kMaximumPersistentStageShaders = 65536;
 
 	enum class PayloadSchema : std::uint16_t
 	{
@@ -365,6 +368,9 @@ namespace CSX::RenderMap
 			std::uintptr_t a_d3dObject,
 			std::uint64_t a_bytecodeSize,
 			std::string_view a_bytecodeSha256) noexcept;
+		/** @brief Produce teardown-safe cleanup for an observed native shader's metadata. */
+		std::function<void()> MakeStageShaderRetirementCallback(
+			ShaderStage a_stage, std::uintptr_t a_d3dObject) const;
 		void RegisterEngineStageShader(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject,
@@ -412,6 +418,15 @@ namespace CSX::RenderMap
 			std::uint64_t bytecodeSize{ 0 };
 			std::array<char, kSha256HexLength + 1> bytecodeSha256{};
 			std::vector<EngineAlias> engineAliases;
+			bool engineAliasesOverflowed{ false };
+		};
+
+		struct PersistentStageShaderCatalogue
+		{
+			mutable std::shared_mutex mutex;
+			std::unordered_map<PersistentStageShaderKey, PersistentStageShaderIdentity,
+				PersistentStageShaderKeyHash>
+				records;
 		};
 
 		struct ActiveCpuMapKey
@@ -516,6 +531,7 @@ namespace CSX::RenderMap
 		std::optional<PersistentStageShaderIdentity> FindCreatedStageShader(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) const noexcept;
+		std::shared_ptr<PersistentStageShaderCatalogue> EnsurePersistentStageShaderCatalogue() const;
 		void PublishBoundStageObservation(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject,
@@ -575,10 +591,7 @@ namespace CSX::RenderMap
 		std::atomic_bool deferredPublicationPaused{ false };
 		std::atomic_bool resumeDeferredPublication{ false };
 #endif
-		mutable std::shared_mutex persistentStageShaderMutex;
-		std::unordered_map<PersistentStageShaderKey, PersistentStageShaderIdentity,
-			PersistentStageShaderKeyHash>
-			persistentStageShaders;
+		mutable std::atomic<std::shared_ptr<PersistentStageShaderCatalogue>> persistentStageShaderCatalogue;
 	};
 
 	Runtime& GetRuntime() noexcept;

@@ -1544,7 +1544,11 @@
                                     "additionalProperties": false
                                 }
                             },
-                            "engineAliasTotalCount": { "type": "integer", "minimum": 0 },
+                            "engineAliasTotalCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Observed alias count; a lower bound when persistent alias retention has overflowed."
+                            },
                             "identityDetailsAvailable": { "type": "boolean" }
                         },
                         "additionalProperties": true

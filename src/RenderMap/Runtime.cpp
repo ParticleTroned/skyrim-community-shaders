@@ -744,13 +744,30 @@ namespace CSX::RenderMap
 		identity.bytecodeSha256[copyLength] = '\0';
 
 		try {
-			std::unique_lock lock(persistentStageShaderMutex);
-			persistentStageShaders.insert_or_assign(
-				PersistentStageShaderKey{ a_stage, a_d3dObject }, identity);
+			const auto catalogue = EnsurePersistentStageShaderCatalogue();
+			std::unique_lock lock(catalogue->mutex);
+			const PersistentStageShaderKey key{ a_stage, a_d3dObject };
+			if (!catalogue->records.contains(key) &&
+				catalogue->records.size() >= kMaximumPersistentStageShaders)
+				return;
+			catalogue->records.insert_or_assign(
+				key, identity);
 		} catch (...) {
 			// Provenance is diagnostic. Shader creation must never fail because the
 			// process-lifetime identity catalogue could not grow.
 		}
+	}
+
+	std::function<void()> Runtime::MakeStageShaderRetirementCallback(
+		ShaderStage a_stage, std::uintptr_t a_d3dObject) const
+	{
+		const std::weak_ptr<PersistentStageShaderCatalogue> weakCatalogue = EnsurePersistentStageShaderCatalogue();
+		return [weakCatalogue, key = PersistentStageShaderKey{ a_stage, a_d3dObject }]() noexcept {
+			if (const auto catalogue = weakCatalogue.lock()) {
+				std::unique_lock lock(catalogue->mutex);
+				catalogue->records.erase(key);
+			}
+		};
 	}
 
 	void Runtime::RegisterEngineStageShader(
@@ -765,15 +782,25 @@ namespace CSX::RenderMap
 
 		try {
 			PersistentStageShaderIdentity::EngineAlias alias{
-				.loaderType = std::string(a_loaderType),
-				.compileSourceName = std::string(a_compileSourceName),
+				.loaderType = std::string(a_loaderType.substr(0, kMaximumShaderNameLength + 1)),
+				.compileSourceName = std::string(a_compileSourceName.substr(0, kMaximumShaderNameLength + 1)),
 				.descriptor = a_descriptor,
 			};
-			std::unique_lock lock(persistentStageShaderMutex);
-			auto& identity = persistentStageShaders[PersistentStageShaderKey{ a_stage, a_d3dObject }];
+			const auto catalogue = persistentStageShaderCatalogue.load(std::memory_order_acquire);
+			if (!catalogue)
+				return;
+			std::unique_lock lock(catalogue->mutex);
+			const auto found = catalogue->records.find({ a_stage, a_d3dObject });
+			if (found == catalogue->records.end())
+				return;
+			auto& identity = found->second;
 			if (std::find(identity.engineAliases.begin(), identity.engineAliases.end(), alias) ==
 				identity.engineAliases.end()) {
-				identity.engineAliases.push_back(std::move(alias));
+				if (identity.engineAliases.size() < kMaximumEngineShaderAliasesPerStage) {
+					identity.engineAliases.push_back(std::move(alias));
+				} else {
+					identity.engineAliasesOverflowed = true;
+				}
 			}
 		} catch (...) {
 			// Engine aliases are diagnostic provenance and must never affect loading.
@@ -802,7 +829,8 @@ namespace CSX::RenderMap
 				}
 				enriched.engineAliases = aliases.data();
 				enriched.engineAliasCount = static_cast<std::uint32_t>(count);
-				enriched.engineAliasTotalCount = static_cast<std::uint32_t>(persistent->engineAliases.size());
+				enriched.engineAliasTotalCount = static_cast<std::uint32_t>(persistent->engineAliases.size()) +
+				                                 (persistent->engineAliasesOverflowed ? 1u : 0u);
 			}
 		}
 
@@ -2112,13 +2140,28 @@ namespace CSX::RenderMap
 		std::uintptr_t a_d3dObject) const noexcept
 	{
 		try {
-			std::shared_lock lock(persistentStageShaderMutex);
-			const auto found = persistentStageShaders.find({ a_stage, a_d3dObject });
-			if (found != persistentStageShaders.end())
+			const auto catalogue = persistentStageShaderCatalogue.load(std::memory_order_acquire);
+			if (!catalogue)
+				return std::nullopt;
+			std::shared_lock lock(catalogue->mutex);
+			const auto found = catalogue->records.find({ a_stage, a_d3dObject });
+			if (found != catalogue->records.end())
 				return found->second;
 		} catch (...) {
 		}
 		return std::nullopt;
+	}
+
+	std::shared_ptr<Runtime::PersistentStageShaderCatalogue> Runtime::EnsurePersistentStageShaderCatalogue() const
+	{
+		auto catalogue = persistentStageShaderCatalogue.load(std::memory_order_acquire);
+		if (!catalogue) {
+			auto created = std::make_shared<PersistentStageShaderCatalogue>();
+			if (persistentStageShaderCatalogue.compare_exchange_strong(catalogue, created,
+					std::memory_order_acq_rel, std::memory_order_acquire))
+				catalogue = std::move(created);
+		}
+		return catalogue;
 	}
 
 	StageShaderObservationResult Runtime::ObserveBoundStage(

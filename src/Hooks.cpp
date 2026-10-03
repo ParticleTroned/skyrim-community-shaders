@@ -14,6 +14,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "RenderMap/D3DContextHooks.h"
 #	include "RenderMap/Runtime.h"
+#	include "Utils/D3DPrivateDataLifetime.h"
 #endif
 #include "ShaderCache.h"
 #include "State.h"
@@ -219,8 +220,24 @@ namespace
 		bool hashAvailable{ false };
 	};
 
-	std::unordered_map<void*, ShaderBytecodeRecord> g_shaderBytecodeMap;
-	std::shared_mutex g_shaderBytecodeMutex;
+	struct ShaderBytecodeStore
+	{
+		std::unordered_map<void*, ShaderBytecodeRecord> records;
+		std::shared_mutex mutex;
+		size_t retainedDumpBytes{ 0 };
+		bool warnedAboutRetention{ false };
+	};
+
+	std::shared_ptr<ShaderBytecodeStore> GetShaderBytecodeStore()
+	{
+		static auto store = std::make_shared<ShaderBytecodeStore>();
+		return store;
+	}
+
+	constexpr size_t kMaximumRetainedShaderDumpBytes = 64 * 1024 * 1024;
+	constexpr GUID kShaderMetadataLifetimeGuid{
+		0xd075a19e, 0x62e8, 0x4a50, { 0xab, 0x91, 0x34, 0xda, 0xf2, 0x65, 0x80, 0x11 }
+	};
 
 	std::string_view BoundedShaderString(const char* a_value) noexcept
 	{
@@ -364,14 +381,21 @@ namespace
 		std::uint64_t& a_size,
 		std::array<char, CSX::RenderMap::kSha256HexLength + 1>& a_sha256) noexcept
 	{
-		std::shared_lock lock(g_shaderBytecodeMutex);
-		const auto found = g_shaderBytecodeMap.find(a_shader);
-		if (found == g_shaderBytecodeMap.end())
+		try {
+			const auto store = GetShaderBytecodeStore();
+			std::shared_lock lock(store->mutex);
+			const auto found = store->records.find(a_shader);
+			if (found == store->records.end())
+				return false;
+			a_size = found->second.bytecodeSize;
+			a_sha256 = found->second.hashAvailable ? found->second.sha256 :
+			                                         std::array<char, CSX::RenderMap::kSha256HexLength + 1>{};
+			return true;
+		} catch (const std::exception&) {
+			a_size = 0;
+			a_sha256 = {};
 			return false;
-		a_size = found->second.bytecodeSize;
-		a_sha256 = found->second.hashAvailable ? found->second.sha256 :
-		                                         std::array<char, CSX::RenderMap::kSha256HexLength + 1>{};
-		return true;
+		}
 	}
 }
 #else
@@ -391,32 +415,72 @@ namespace
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void RegisterShaderBytecode(
 	CSX::RenderMap::ShaderStage a_stage,
-	void* Shader,
+	ID3D11DeviceChild* Shader,
 	const void* Bytecode,
 	size_t BytecodeLength)
 {
-	ShaderBytecodeRecord record;
-	record.bytecodeSize = BytecodeLength;
-	if (globals::shaderCache && globals::shaderCache->IsDump()) {
-		record.bytes.resize(BytecodeLength);
-		memcpy(record.bytes.data(), Bytecode, BytecodeLength);
+	try {
+		const auto store = GetShaderBytecodeStore();
+		auto retireIdentity = CSX::RenderMap::GetRuntime().MakeStageShaderRetirementCallback(
+			a_stage, reinterpret_cast<std::uintptr_t>(Shader));
+		const std::weak_ptr<ShaderBytecodeStore> weakStore = store;
+		const auto attached = Util::AttachD3DPrivateDataLifetime(
+			*Shader, kShaderMetadataLifetimeGuid,
+			[weakStore, Shader, retireIdentity = std::move(retireIdentity)]() noexcept {
+				if (const auto liveStore = weakStore.lock()) {
+					std::unique_lock lock(liveStore->mutex);
+					const auto found = liveStore->records.find(Shader);
+					if (found != liveStore->records.end()) {
+						liveStore->retainedDumpBytes -= found->second.bytes.size();
+						liveStore->records.erase(found);
+					}
+				}
+				retireIdentity();
+			});
+		if (FAILED(attached)) {
+			logger::warn("Shader metadata lifetime attachment failed: {:x}", static_cast<unsigned long>(attached));
+			return;
+		}
+
+		ShaderBytecodeRecord record;
+		record.bytecodeSize = BytecodeLength;
+		record.hashAvailable = ComputeSha256Hex(Bytecode, BytecodeLength, record.sha256);
+		CSX::RenderMap::GetRuntime().RegisterCreatedStageShader(
+			a_stage, reinterpret_cast<std::uintptr_t>(Shader), BytecodeLength,
+			record.hashAvailable ? std::string_view(record.sha256.data()) : std::string_view{});
+		std::unique_lock lock(store->mutex);
+		if (store->records.size() >= CSX::RenderMap::kMaximumPersistentStageShaders &&
+			!store->records.contains(Shader)) {
+			if (!std::exchange(store->warnedAboutRetention, true))
+				logger::warn("Shader bytecode retention capacity reached; further identities are unavailable");
+			return;
+		}
+		const auto old = store->records.find(Shader);
+		const auto oldBytes = old == store->records.end() ? 0 : old->second.bytes.size();
+		const auto remainingBytes = kMaximumRetainedShaderDumpBytes - (store->retainedDumpBytes - oldBytes);
+		if (globals::shaderCache && globals::shaderCache->IsDump()) {
+			if (BytecodeLength <= remainingBytes) {
+				record.bytes.resize(BytecodeLength);
+				memcpy(record.bytes.data(), Bytecode, BytecodeLength);
+			} else if (!std::exchange(store->warnedAboutRetention, true)) {
+				logger::warn("Shader dump retention capacity reached; further dumps are unavailable");
+			}
+		}
+		const auto newBytes = record.bytes.size();
+		store->records.insert_or_assign(Shader, std::move(record));
+		store->retainedDumpBytes = store->retainedDumpBytes - oldBytes + newBytes;
+	} catch (const std::exception& error) {
+		logger::warn("Shader diagnostic metadata unavailable: {}", error.what());
 	}
-	record.hashAvailable = ComputeSha256Hex(Bytecode, BytecodeLength, record.sha256);
-	CSX::RenderMap::GetRuntime().RegisterCreatedStageShader(
-		a_stage,
-		reinterpret_cast<std::uintptr_t>(Shader),
-		BytecodeLength,
-		record.hashAvailable ? std::string_view(record.sha256.data()) : std::string_view{});
-	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
-	std::unique_lock lock(g_shaderBytecodeMutex);
-	g_shaderBytecodeMap.insert_or_assign(Shader, std::move(record));
 }
 
 std::vector<std::uint8_t> GetShaderBytecode(void* Shader)
 {
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
-	std::shared_lock lock(g_shaderBytecodeMutex);
-	return g_shaderBytecodeMap.at(Shader).bytes;
+	const auto store = GetShaderBytecodeStore();
+	std::shared_lock lock(store->mutex);
+	const auto found = store->records.find(Shader);
+	return found == store->records.end() ? std::vector<std::uint8_t>{} : found->second.bytes;
 }
 #else
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
@@ -978,6 +1042,10 @@ void DumpShader(
 	static_assert(std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> || std::is_same_v<ShaderType, RE::BSGraphics::PixelShader>);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	if (bytecode.empty()) {
+		logger::warn("Shader dump skipped because bytecode retention is unavailable");
+		return;
+	}
 	uint8_t* dxbcData = new uint8_t[bytecode.size()];
 	size_t dxbcLen = bytecode.size();
 	memcpy(dxbcData, bytecode.data(), bytecode.size());

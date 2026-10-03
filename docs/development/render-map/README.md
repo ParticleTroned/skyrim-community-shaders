@@ -21,6 +21,26 @@ non-mapping hook paths.
 This runtime does not change depth-culling decisions or apply culling results.
 Depth-culling events are observations of the existing upstream behaviour.
 
+Shader creation metadata is retained outside captures so an inherited binding
+can have bytecode provenance. A private-data callback owns that metadata until
+D3D releases its reference; cache eviction alone does not retire a still-bound
+shader. Cleanup holds weak catalogue ownership and is safe after runtime
+teardown. Failed callback attachment leaves creation metadata unavailable.
+Each creation catalogue admits at most 65,536 live identities. Raw bytecode
+is retained only for dump mode, within a 64 MiB shared budget; unavailable dumps
+are skipped with a warning instead of producing empty files. Admission failure
+does not change the native shader-creation result.
+
+Only lifetime-tracked creation records accept engine aliases. Each retains
+eight aliases with bounded names; overflow sets `engineAliasesTruncated`.
+After this retention limit, `engineAliasTotalCount` is a lower bound of nine,
+not an exact count of every unretained alias. Shaders created before the hooks
+were installed cannot acquire lifetime-backed creation provenance later.
+
+The contract runner treats an explicit `-PythonExecutable` as authoritative.
+A missing or failing requested interpreter cannot silently use an ambient
+fallback. Automatic interpreter discovery applies when the argument is omitted.
+
 ## Included here
 
 -   `Collector`: bounded event and string storage with explicit gap accounting.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CharacterComputeSubrect.h"
+#include "RegionCapacity.h"
 #include "RoiDescriptor.h"
 
 #include <algorithm>
@@ -14,13 +15,22 @@ namespace NeuralRendering
 	/** Zero means use the established single-region path. No sparse provider ABI is implied. */
 	struct CharacterComputeRegionPlan
 	{
-		std::array<ComputeSubrect, 2> regions{};
-		std::array<std::uint64_t, 2> historyKeys{};
-		/** Owners-only identity shared by both eyes, independent of visibility epoch. */
-		std::array<std::uint64_t, 2> clusterIdentities{};
+		std::array<ComputeSubrect, kEnabledRegionsPerEye> regions{};
+		std::array<std::uint64_t, kEnabledRegionsPerEye> historyKeys{};
+		/** Actor lifetime or eye-local spatial identity; rank never establishes correspondence. */
+		std::array<std::uint64_t, kEnabledRegionsPerEye> clusterIdentities{};
+		/** Dense descriptors retain independent physical history banks through local removal. */
+		std::array<std::uint32_t, kEnabledRegionsPerEye> regionSlots = [] {
+			std::array<std::uint32_t, kEnabledRegionsPerEye> slots{};
+			for (std::uint32_t i = 0; i < slots.size(); ++i)
+				slots[i] = i;
+			return slots;
+		}();
 		std::uint32_t count = 0;
+		bool spatialTracks = false;
+		std::array<bool, kEnabledRegionsPerEye> identityConfident{};
 		/** Same source and ordering as regions; count == 0 still selects the legacy single. */
-		std::array<RoiDescriptor, 2> roi{};
+		std::array<RoiDescriptor, kEnabledRegionsPerEye> roi{};
 
 		bool operator==(const CharacterComputeRegionPlan&) const = default;
 	};
@@ -45,6 +55,7 @@ namespace NeuralRendering
 		bool valid = false;
 		bool positiveSavings = false;
 		bool meetsHeuristic = false;
+		std::uint64_t extraEvaluationPixelReserve = 0;
 		bool operator==(const CharacterMultiRoiCost&) const = default;
 	};
 
@@ -52,8 +63,9 @@ namespace NeuralRendering
 	struct CharacterMultiRoiDiagnostics
 	{
 		ComputeSubrect singleRegion{};
-		std::array<ComputeSubrect, 2> candidateRegions{};
+		std::array<ComputeSubrect, kEnabledRegionsPerEye> candidateRegions{};
 		CharacterMultiRoiCost cost{};
+		std::uint32_t candidateCount = 0;
 		std::uint32_t candidatesConsidered = 0;
 		std::uint32_t overlappingCandidates = 0;
 		std::uint32_t coverageRejectedCandidates = 0;
@@ -120,14 +132,15 @@ namespace NeuralRendering
 			StableCharacterComputeSubrect stable{};
 			std::uint64_t historyKey = 0;
 		};
-		std::array<Cluster, 2> clusters{};
+		std::array<Cluster, kEnabledRegionsPerEye> clusters{};
 		/** State before the cached source frame, for a same-frame policy reprepare. */
-		std::array<Cluster, 2> beforeFrame{};
+		std::array<Cluster, kEnabledRegionsPerEye> beforeFrame{};
 		std::vector<CharacterMultiRoiActor> cachedActors;
 		std::vector<CharacterRect> cachedEligibility;
 		CharacterComputeRegionPlan cachedPlan{};
 		ComputeSubrect cachedSingleRegion{};
 		bool cachedSavingsGate = true;
+		std::uint32_t cachedRegionLimit = kDefaultRegionsPerEye;
 		CharacterMultiRoiDiagnostics diagnostics{};
 		CharacterMultiRoiReason cachedReason = CharacterMultiRoiReason::TooFewActors;
 		std::uint32_t frame = 0;
@@ -175,15 +188,14 @@ namespace NeuralRendering
 		}
 
 		[[nodiscard]] inline bool CoversEligibility(
-			const std::array<ComputeSubrect, 2>& a_regions,
+			std::span<const ComputeSubrect> a_regions,
 			std::span<const CharacterRect> a_eligibility,
 			std::uint32_t a_width, std::uint32_t a_height) noexcept
 		{
 			for (const auto& rect : a_eligibility) {
 				const auto required = Required(rect, a_width, a_height);
 				if (!required.IsValid() ||
-					(!ContainsComputeSubrect(a_regions[0], required) &&
-						!ContainsComputeSubrect(a_regions[1], required)))
+					!std::ranges::any_of(a_regions, [&](const auto& region) { return ContainsComputeSubrect(region, required); }))
 					return false;
 			}
 			return true;
@@ -191,60 +203,186 @@ namespace NeuralRendering
 
 		/** Exact integer accounting; the reserve is a heuristic, not measured GPU cost. */
 		[[nodiscard]] inline CharacterMultiRoiCost CalculateSplitCost(
-			const std::array<ComputeSubrect, 2>& a_regions,
+			std::span<const ComputeSubrect> a_regions,
 			std::uint64_t a_singleArea, bool a_retaining) noexcept
 		{
 			CharacterMultiRoiCost cost{};
 			cost.singlePixels = a_singleArea;
 			const auto divisor = a_retaining ? 5u : 4u;
 			cost.requiredRelativePixels = a_singleArea / divisor + (a_singleArea % divisor != 0);
-			const auto firstArea = a_regions[0].Area();
-			const auto secondArea = a_regions[1].Area();
-			if (!a_singleArea || !firstArea || !secondArea || secondArea > UINT64_MAX - firstArea)
+			if (!a_singleArea || a_regions.size() < 2 || a_regions.size() > kEnabledRegionsPerEye)
 				return cost;
+			for (const auto& region : a_regions) {
+				const auto area = region.Area();
+				if (!area || area > UINT64_MAX - cost.splitPixels)
+					return cost;
+				cost.splitPixels += area;
+			}
 			cost.valid = true;
-			cost.splitPixels = firstArea + secondArea;
+			cost.extraEvaluationPixelReserve = kExtraEvaluationPixelReserve * (a_regions.size() - 1);
 			cost.positiveSavings = cost.splitPixels < a_singleArea;
 			cost.savedPixels = cost.positiveSavings ? a_singleArea - cost.splitPixels : 0;
 			cost.additionalPixels = cost.splitPixels > a_singleArea ? cost.splitPixels - a_singleArea : 0;
-			cost.meetsHeuristic = cost.savedPixels >= kExtraEvaluationPixelReserve &&
-			                      cost.savedPixels - kExtraEvaluationPixelReserve >= cost.requiredRelativePixels;
+			cost.meetsHeuristic = cost.savedPixels >= cost.extraEvaluationPixelReserve &&
+			                      cost.savedPixels - cost.extraEvaluationPixelReserve >= cost.requiredRelativePixels;
 			return cost;
 		}
 
 		/** Disabling the heuristic still requires a strictly smaller total pixel area. */
 		[[nodiscard]] inline bool WorthSplitting(
-			const std::array<ComputeSubrect, 2>& a_regions,
+			std::span<const ComputeSubrect> a_regions,
 			std::uint64_t a_singleArea, bool a_retaining, bool a_savingsGate = true) noexcept
 		{
 			const auto cost = CalculateSplitCost(a_regions, a_singleArea, a_retaining);
 			return cost.valid && cost.positiveSavings && (!a_savingsGate || cost.meetsHeuristic);
 		}
+		struct PartitionCandidate
+		{
+			std::vector<std::vector<std::size_t>> groups;
+			std::vector<CharacterRect> bounds;
+			std::vector<ComputeSubrect> providers;
+			std::uint64_t area = 0;
+		};
+		inline void PreparePartition(PartitionCandidate& candidate, std::span<const CharacterMultiRoiActor> actors, std::uint32_t a_width, std::uint32_t a_height)
+		{
+			for (auto& group : candidate.groups)
+				std::ranges::sort(group);
+			std::ranges::sort(candidate.groups);
+			candidate.bounds.assign(candidate.groups.size(), {});
+			candidate.providers.clear();
+			candidate.area = 0;
+			for (std::size_t i = 0; i < candidate.groups.size(); ++i) {
+				for (auto index : candidate.groups[i])
+					candidate.bounds[i] = CharacterRegionPolicy::Union(candidate.bounds[i], actors[index].rect);
+				const auto provider = BuildCharacterProviderComputeSubrect(Required(candidate.bounds[i], a_width, a_height), a_width, a_height);
+				candidate.providers.push_back(provider);
+				candidate.area = provider.Area() > UINT64_MAX - candidate.area ? UINT64_MAX : candidate.area + provider.Area();
+			}
+		}
+
+		template <class Record, class Admit>
+		[[nodiscard]] inline PartitionCandidate FindPartition(std::span<const CharacterMultiRoiActor> actors,
+			std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_regionLimit, Record recordCandidate, Admit admissible)
+		{
+			PartitionCandidate selected;
+			PartitionCandidate initial;
+			initial.groups.emplace_back();
+			for (std::size_t i = 0; i < actors.size(); ++i)
+				initial.groups.front().push_back(i);
+			std::vector<PartitionCandidate> beam{ std::move(initial) };
+			std::uint32_t considered = 0;
+			constexpr std::size_t beamWidth = 16;
+			constexpr std::uint32_t candidateBudget = 16384;
+			for (std::uint32_t count = 2; count <= a_regionLimit && !beam.empty() && considered < candidateBudget; ++count) {
+				std::vector<PartitionCandidate> next;
+				for (const auto& parent : beam)
+					for (std::size_t group = 0; group < parent.groups.size(); ++group)
+						for (std::uint32_t axis = 0; axis < 2; ++axis) {
+							auto ordered = parent.groups[group];
+							std::ranges::sort(ordered, [&](auto left, auto right) {
+								const auto center = [&](auto i) { const auto& r = actors[i].rect; return axis == 0 ? std::uint64_t(r.minX) + r.maxX : std::uint64_t(r.minY) + r.maxY; };
+								return center(left) != center(right) ? center(left) < center(right) : left < right;
+							});
+							for (std::size_t cut = 1; cut < ordered.size() && considered < candidateBudget; ++cut) {
+								++considered;
+								PartitionCandidate candidate;
+								candidate.groups = parent.groups;
+								candidate.groups[group].assign(ordered.begin(), ordered.begin() + cut);
+								candidate.groups.emplace_back(ordered.begin() + cut, ordered.end());
+								PreparePartition(candidate, actors, a_width, a_height);
+								recordCandidate(candidate.providers, false, false);
+								if ((selected.groups.empty() || candidate.area < selected.area) && admissible(candidate, false))
+									selected = candidate;
+								if (count == a_regionLimit)
+									continue;
+								// Keep intermediate cuts even when their savings/overlap need a later local split.
+								if (std::ranges::any_of(next, [&](const auto& old) { return old.groups == candidate.groups; }))
+									continue;
+								next.push_back(std::move(candidate));
+								std::ranges::stable_sort(next, {}, &PartitionCandidate::area);
+								if (next.size() > beamWidth)
+									next.pop_back();
+							}
+						}
+				beam = std::move(next);
+			}
+			return selected;
+		}
+
+		/** Repair colliding history envelopes while retaining unaffected banks. */
+		[[nodiscard]] inline bool RepairOverlappingHistories(CharacterComputeRegionPlan& result,
+			std::array<StableCharacterMultiRoi::Cluster, kEnabledRegionsPerEye>& next,
+			std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_sourceFrame)
+		{
+			bool mergedOverlap = false;
+			for (bool changed = true; changed && result.count > 1;) {
+				changed = false;
+				for (std::uint32_t i = 0; i < result.count && !changed; ++i)
+					for (std::uint32_t j = i + 1; j < result.count; ++j) {
+						if (!CharacterComputeRegionsOverlap(result.regions[i], result.regions[j]))
+							continue;
+						auto& retained = next[result.regionSlots[i]];
+						auto& removed = next[result.regionSlots[j]];
+						retained.owners.insert(retained.owners.end(), removed.owners.begin(), removed.owners.end());
+						std::ranges::sort(retained.owners);
+						retained.historyKey = HistoryKey(retained.owners, a_sourceFrame);
+						retained.stable = {};
+						retained.stable.width = a_width;
+						retained.stable.height = a_height;
+						retained.stable.provider = UnionCharacterComputeSubrect(result.regions[i], result.regions[j]);
+						result.regions[i] = retained.stable.provider;
+						result.historyKeys[i] = retained.historyKey;
+						result.clusterIdentities[i] = ClusterIdentity(retained.owners);
+						removed = {};
+						for (std::uint32_t k = j + 1; k < result.count; ++k) {
+							result.regions[k - 1] = result.regions[k];
+							result.regionSlots[k - 1] = result.regionSlots[k];
+							result.historyKeys[k - 1] = result.historyKeys[k];
+							result.clusterIdentities[k - 1] = result.clusterIdentities[k];
+						}
+						--result.count;
+						result.regions[result.count] = {};
+						result.historyKeys[result.count] = 0;
+						result.clusterIdentities[result.count] = 0;
+						changed = mergedOverlap = true;
+						break;
+					}
+			}
+			return mergedOverlap;
+		}
+
 	}
 
-	/**
-	 * Bounded two-cluster experiment. Every actor and every compacted eligibility
-	 * rectangle must remain covered. Disjoint padded/stabilized regions only;
-	 * failure falls back to the legacy enclosure without dropping characters.
-	 * Persistent ownership is preferred over a marginally better spatial split.
-	 * A new ownership episode gets a new key; repeated source frames are idempotent.
-	 * Supply the actual single-region fallback for cost accounting; an omitted
-	 * rectangle derives a fresh padded enclosure from current eligibility.
-	 */
+	/** Sum only explicit regions; zero retains the distinct legacy-single convention. */
+	[[nodiscard]] inline std::uint64_t CharacterRegionPixels(const CharacterComputeRegionPlan& plan) noexcept
+	{
+		std::uint64_t result = 0;
+		for (std::uint32_t i = 0; i < std::min(plan.count, kEnabledRegionsPerEye); ++i)
+			result = plan.regions[i].Area() > UINT64_MAX - result ? UINT64_MAX : result + plan.regions[i].Area();
+		return result;
+	}
+
+	[[nodiscard]] inline ComputeSubrect CharacterRegionEnclosure(const CharacterComputeRegionPlan& plan) noexcept
+	{
+		ComputeSubrect result{};
+		for (std::uint32_t i = 0; i < std::min(plan.count, kEnabledRegionsPerEye); ++i)
+			result = UnionCharacterComputeSubrect(result, plan.regions[i]);
+		return result;
+	}
+
+	/** Bounded cut search retains complete coverage and independent ownership episodes. */
 	[[nodiscard]] inline CharacterComputeRegionPlan ResolveCharacterMultiRoi(
 		std::span<const CharacterMultiRoiActor> a_actors,
 		std::span<const CharacterRect> a_eligibility,
 		std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_sourceFrame,
 		StableCharacterMultiRoi& a_state, CharacterMultiRoiReason& a_reason,
-		bool a_savingsGate = true, ComputeSubrect a_singleRegion = {})
+		bool a_savingsGate = true, ComputeSubrect a_singleRegion = {},
+		std::uint32_t a_regionLimit = kDefaultRegionsPerEye)
 	{
 		using namespace CharacterMultiRoiDetail;
-		// Capacity overflow retains ALL actors through the legacy enclosure. This
-		// bounds planner allocations/search work independently of material draws.
-		if (a_actors.size() > kMaximumActors) {
+		if (a_actors.size() > kMaximumActors || a_regionLimit < 1 || a_regionLimit > kEnabledRegionsPerEye) {
 			a_state = {};
-			a_state.diagnostics.savingsGateEnabled = a_savingsGate;
-			a_reason = CharacterMultiRoiReason::ActorCapacity;
+			a_reason = a_actors.size() > kMaximumActors ? CharacterMultiRoiReason::ActorCapacity : CharacterMultiRoiReason::InvalidInput;
 			return {};
 		}
 		std::vector<CharacterMultiRoiActor> actors(a_actors.begin(), a_actors.end());
@@ -253,7 +391,7 @@ namespace NeuralRendering
 			a_state = {};
 		if (a_state.cacheValid && a_state.frame == a_sourceFrame &&
 			a_state.cachedSingleRegion == a_singleRegion && a_state.cachedSavingsGate == a_savingsGate &&
-			a_state.cachedActors == actors &&
+			a_state.cachedRegionLimit == a_regionLimit && a_state.cachedActors == actors &&
 			std::ranges::equal(a_state.cachedEligibility, a_eligibility)) {
 			a_reason = a_state.cachedReason;
 			return a_state.cachedPlan;
@@ -268,15 +406,17 @@ namespace NeuralRendering
 		a_state.cachedActors = actors;
 		a_state.cachedSingleRegion = a_singleRegion;
 		a_state.cachedSavingsGate = a_savingsGate;
+		const bool sameLimit = a_state.cachedRegionLimit == a_regionLimit;
+		a_state.cachedRegionLimit = a_regionLimit;
 		a_state.diagnostics = {};
 		auto& diagnostics = a_state.diagnostics;
 		diagnostics.savingsGateEnabled = a_savingsGate;
 		a_state.cachedEligibility.assign(a_eligibility.begin(), a_eligibility.end());
 		a_state.cacheValid = true;
-		const auto fallback = [&](CharacterMultiRoiReason a_failure) {
+		const auto fallback = [&](CharacterMultiRoiReason failure) {
 			a_state.clusters = {};
 			a_state.cachedPlan = {};
-			a_state.cachedReason = a_reason = a_failure;
+			a_state.cachedReason = a_reason = failure;
 			return CharacterComputeRegionPlan{};
 		};
 		if (!a_width || !a_height)
@@ -290,7 +430,7 @@ namespace NeuralRendering
 			previousIdentity = actor.identity;
 			all = CharacterRegionPolicy::Union(all, actor.rect);
 		}
-		if (actors.size() < 2)
+		if (actors.size() < 2 || a_regionLimit < 2)
 			return fallback(CharacterMultiRoiReason::TooFewActors);
 		const auto required = BuildCharacterComputeSubrect(a_eligibility, a_width, a_height);
 		const auto single = a_singleRegion == ComputeSubrect{} ?
@@ -301,172 +441,142 @@ namespace NeuralRendering
 			return fallback(CharacterMultiRoiReason::InvalidInput);
 		diagnostics.singleRegion = single;
 		int bestDiagnosticRank = -1;
-		const auto recordCandidate = [&](const std::array<ComputeSubrect, 2>& regions,
-										 bool retaining, bool stabilized) {
-			const bool overlaps = CharacterComputeRegionsOverlap(regions[0], regions[1]);
+		const auto overlaps = [](std::span<const ComputeSubrect> regions) {
+			for (std::size_t i = 0; i < regions.size(); ++i)
+				for (std::size_t j = i + 1; j < regions.size(); ++j)
+					if (CharacterComputeRegionsOverlap(regions[i], regions[j]))
+						return true;
+			return false;
+		};
+		const auto recordCandidate = [&](std::span<const ComputeSubrect> regions, bool retaining, bool stabilized) {
+			const bool overlap = overlaps(regions);
 			const bool covers = CoversEligibility(regions, a_eligibility, a_width, a_height);
 			const auto cost = CalculateSplitCost(regions, single.Area(), retaining);
-			const auto rank = overlaps ? 0 : covers ? 2 :
-			                                          1;
+			const auto rank = overlap ? 0 : covers ? 2 :
+			                                         1;
 			++diagnostics.candidatesConsidered;
-			diagnostics.overlappingCandidates += overlaps;
-			diagnostics.coverageRejectedCandidates += !overlaps && !covers;
-			diagnostics.savingsRejectedCandidates += !overlaps && covers &&
-			                                         !WorthSplitting(regions, single.Area(), retaining, a_savingsGate);
+			diagnostics.overlappingCandidates += overlap;
+			diagnostics.coverageRejectedCandidates += !overlap && !covers;
+			diagnostics.savingsRejectedCandidates += !overlap && covers && !WorthSplitting(regions, single.Area(), retaining, a_savingsGate);
 			if (!stabilized && (rank < bestDiagnosticRank ||
-								   (rank == bestDiagnosticRank && diagnostics.cost.valid &&
-									   (!cost.valid || cost.splitPixels >= diagnostics.cost.splitPixels))))
+								   (rank == bestDiagnosticRank && diagnostics.cost.valid && (!cost.valid || cost.splitPixels >= diagnostics.cost.splitPixels))))
 				return;
 			bestDiagnosticRank = rank;
 			diagnostics.candidateAvailable = true;
-			diagnostics.candidateRegions = regions;
-			diagnostics.candidateOverlaps = overlaps;
+			diagnostics.candidateRegions = {};
+			std::ranges::copy(regions, diagnostics.candidateRegions.begin());
+			diagnostics.candidateCount = static_cast<std::uint32_t>(regions.size());
+			diagnostics.candidateOverlaps = overlap;
 			diagnostics.candidateCoversEligibility = covers;
 			diagnostics.stabilizedCandidate = stabilized;
 			diagnostics.retaining = retaining;
 			diagnostics.cost = cost;
 		};
-
-		struct Candidate
-		{
-			std::array<CharacterRect, 2> bounds{};
-			std::array<std::vector<std::uint64_t>, 2> owners{};
+		using Candidate = PartitionCandidate;
+		const auto prepare = [&](Candidate& candidate) { PreparePartition(candidate, actors, a_width, a_height); };
+		const auto admissible = [&](const Candidate& candidate, bool retaining) {
+			return !overlaps(candidate.providers) && CoversEligibility(candidate.providers, a_eligibility, a_width, a_height) &&
+			       WorthSplitting(candidate.providers, single.Area(), retaining, a_savingsGate);
 		};
 		Candidate selected;
-		bool retaining = false;
-		// Keep existing cluster membership while it is still valid and useful.
-		if (!a_state.clusters[0].owners.empty() && !a_state.clusters[1].owners.empty()) {
-			bool allOwned = true;
-			for (const auto& actor : actors) {
-				std::uint32_t group = 2;
-				for (std::uint32_t index = 0; index < 2; ++index) {
-					if (std::ranges::binary_search(a_state.clusters[index].owners, actor.identity))
-						group = index;
-				}
-				if (group == 2) {
-					allOwned = false;
-					break;
-				}
-				selected.bounds[group] = CharacterRegionPolicy::Union(selected.bounds[group], actor.rect);
-				selected.owners[group].push_back(actor.identity);
+		for (const auto& cluster : a_state.clusters) {
+			if (cluster.owners.empty())
+				continue;
+			std::vector<std::size_t> group;
+			for (std::size_t i = 0; i < actors.size(); ++i)
+				if (std::ranges::binary_search(cluster.owners, actors[i].identity))
+					group.push_back(i);
+			if (group.size() != cluster.owners.size()) {
+				selected = {};
+				break;
 			}
-			retaining = allOwned && selected.owners[0] == a_state.clusters[0].owners &&
-			            selected.owners[1] == a_state.clusters[1].owners;
-			if (retaining) {
-				const std::array padded{
-					BuildCharacterProviderComputeSubrect(Required(selected.bounds[0], a_width, a_height), a_width, a_height),
-					BuildCharacterProviderComputeSubrect(Required(selected.bounds[1], a_width, a_height), a_width, a_height),
-				};
-				recordCandidate(padded, true, false);
-				retaining = !CharacterComputeRegionsOverlap(padded[0], padded[1]) &&
-				            WorthSplitting(padded, single.Area(), true, a_savingsGate) &&
-				            CoversEligibility(padded, a_eligibility, a_width, a_height);
-			}
+			selected.groups.push_back(std::move(group));
+		}
+		std::size_t retainedActors = 0;
+		for (const auto& group : selected.groups)
+			retainedActors += group.size();
+		bool retaining = sameLimit && retainedActors == actors.size() && selected.groups.size() >= 2 && selected.groups.size() <= a_regionLimit;
+		if (retaining) {
+			prepare(selected);
+			recordCandidate(selected.providers, true, false);
+			retaining = admissible(selected, true);
 		}
 		if (!retaining) {
-			std::uint64_t bestArea = UINT64_MAX;
-			std::uint32_t bestAxis = 0;
-			std::size_t bestCut = 0;
-			const auto spatialOrder = [](std::uint32_t axis, const auto& left, const auto& right) {
-				const auto center = [axis](const auto& actor) {
-					return axis == 0 ? static_cast<std::uint64_t>(actor.rect.minX) + actor.rect.maxX :
-					                   static_cast<std::uint64_t>(actor.rect.minY) + actor.rect.maxY;
-				};
-				return center(left) != center(right) ? center(left) < center(right) : left.identity < right.identity;
-			};
-			for (std::uint32_t axis = 0; axis < 2; ++axis) {
-				auto ordered = actors;
-				std::ranges::sort(ordered, [&](const auto& left, const auto& right) {
-					return spatialOrder(axis, left, right);
-				});
-				std::vector<CharacterRect> suffix(ordered.size());
-				for (std::size_t index = ordered.size(); index-- > 0;)
-					suffix[index] = CharacterRegionPolicy::Union(ordered[index].rect,
-						index + 1 < ordered.size() ? suffix[index + 1] : CharacterRect{});
-				CharacterRect prefix{};
-				for (std::size_t cut = 1; cut < ordered.size(); ++cut) {
-					prefix = CharacterRegionPolicy::Union(prefix, ordered[cut - 1].rect);
-					const std::array padded{
-						BuildCharacterProviderComputeSubrect(Required(prefix, a_width, a_height), a_width, a_height),
-						BuildCharacterProviderComputeSubrect(Required(suffix[cut], a_width, a_height), a_width, a_height),
-					};
-					recordCandidate(padded, false, false);
-					if (CharacterComputeRegionsOverlap(padded[0], padded[1]))
-						continue;
-					if (!CoversEligibility(padded, a_eligibility, a_width, a_height) ||
-						!WorthSplitting(padded, single.Area(), false, a_savingsGate)) {
-						continue;
-					}
-					const auto area = padded[0].Area() + padded[1].Area();
-					if (area >= bestArea)
-						continue;
-					bestArea = area;
-					bestAxis = axis;
-					bestCut = cut;
-					selected = {};
-					selected.bounds = { prefix, suffix[cut] };
-				}
-			}
-			if (bestArea == UINT64_MAX)
+			selected = FindPartition(actors, a_width, a_height, a_regionLimit, recordCandidate, admissible);
+			if (selected.groups.empty())
 				return fallback(diagnostics.savingsRejectedCandidates  ? CharacterMultiRoiReason::InsufficientSavings :
 								diagnostics.coverageRejectedCandidates ? CharacterMultiRoiReason::EligibilityBridge :
 																		 CharacterMultiRoiReason::NoDisjointSplit);
-			auto ordered = actors;
-			std::ranges::sort(ordered, [&](const auto& left, const auto& right) {
-				return spatialOrder(bestAxis, left, right);
-			});
-			for (std::size_t index = 0; index < ordered.size(); ++index)
-				selected.owners[index < bestCut ? 0 : 1].push_back(ordered[index].identity);
-			for (auto& owners : selected.owners)
-				std::ranges::sort(owners);
-			// Match surviving ownership first; otherwise use a deterministic actor key.
-			const bool reversedMatch = selected.owners[1] == a_state.clusters[0].owners ||
-			                           selected.owners[0] == a_state.clusters[1].owners;
-			const bool directMatch = selected.owners[0] == a_state.clusters[0].owners ||
-			                         selected.owners[1] == a_state.clusters[1].owners;
-			if (reversedMatch || (!directMatch && selected.owners[1] < selected.owners[0])) {
-				std::swap(selected.owners[0], selected.owners[1]);
-				std::swap(selected.bounds[0], selected.bounds[1]);
-			}
 		}
-
-		auto next = a_state.clusters;
+		std::vector<std::vector<std::uint64_t>> owners(selected.groups.size());
+		for (std::size_t i = 0; i < selected.groups.size(); ++i)
+			for (auto actor : selected.groups[i])
+				owners[i].push_back(actors[actor].identity);
+		std::array<bool, kEnabledRegionsPerEye> used{};
+		std::vector<std::uint32_t> banks(owners.size(), kEnabledRegionsPerEye);
+		for (std::size_t i = 0; i < owners.size(); ++i)
+			for (std::uint32_t bank = 0; bank < kEnabledRegionsPerEye; ++bank)
+				if (owners[i] == a_state.clusters[bank].owners) {
+					banks[i] = bank;
+					used[bank] = true;
+					break;
+				}
+		for (auto& bank : banks)
+			if (bank == kEnabledRegionsPerEye)
+				for (std::uint32_t free = 0; free < kEnabledRegionsPerEye; ++free)
+					if (!used[free]) {
+						bank = free;
+						used[free] = true;
+						break;
+					}
+		std::array<StableCharacterMultiRoi::Cluster, kEnabledRegionsPerEye> next{};
 		CharacterComputeRegionPlan result;
-		for (std::uint32_t index = 0; index < 2; ++index) {
-			if (next[index].owners != selected.owners[index]) {
-				next[index] = {};
-				next[index].owners = selected.owners[index];
-				next[index].historyKey = HistoryKey(next[index].owners, a_sourceFrame);
+		for (std::uint32_t bank = 0; bank < kEnabledRegionsPerEye; ++bank) {
+			const auto match = std::ranges::find(banks, bank);
+			if (match == banks.end())
+				continue;
+			const auto i = static_cast<std::size_t>(match - banks.begin());
+			auto& cluster = next[bank];
+			if (a_state.clusters[bank].owners == owners[i])
+				cluster = a_state.clusters[bank];
+			else {
+				cluster.owners = owners[i];
+				cluster.historyKey = HistoryKey(cluster.owners, a_sourceFrame);
 			}
-			result.regions[index] = ResolveStableCharacterComputeSubrect(
-				Required(selected.bounds[index], a_width, a_height), a_width, a_height, next[index].stable);
-			result.historyKeys[index] = next[index].historyKey;
-			result.clusterIdentities[index] = ClusterIdentity(next[index].owners);
+			const auto index = result.count++;
+			result.regionSlots[index] = bank;
+			result.regions[index] = ResolveStableCharacterComputeSubrect(Required(selected.bounds[i], a_width, a_height), a_width, a_height, cluster.stable);
+			result.historyKeys[index] = cluster.historyKey;
+			result.clusterIdentities[index] = ClusterIdentity(cluster.owners);
 			if (!result.regions[index].Fits(a_width, a_height))
 				return fallback(CharacterMultiRoiReason::InvalidInput);
+			for (std::uint32_t earlier = 0; earlier < index; ++earlier)
+				if (result.historyKeys[earlier] == result.historyKeys[index] || result.clusterIdentities[earlier] == result.clusterIdentities[index])
+					return fallback(CharacterMultiRoiReason::InvalidInput);
 		}
-		recordCandidate(result.regions, retaining, true);
-		if (CharacterComputeRegionsOverlap(result.regions[0], result.regions[1]))
+		const bool mergedOverlap = RepairOverlappingHistories(result, next, a_width, a_height, a_sourceFrame);
+		if (mergedOverlap && result.count < 2)
 			return fallback(CharacterMultiRoiReason::StableRegionsOverlap);
-		if (!WorthSplitting(result.regions, single.Area(), retaining, a_savingsGate))
+		const auto regions = std::span(result.regions).first(result.count);
+		recordCandidate(regions, retaining, true);
+		if (overlaps(regions))
+			return fallback(CharacterMultiRoiReason::StableRegionsOverlap);
+		if (!WorthSplitting(regions, single.Area(), retaining, a_savingsGate))
 			return fallback(CharacterMultiRoiReason::InsufficientSavings);
-		if (!CoversEligibility(result.regions, a_eligibility, a_width, a_height))
+		if (!CoversEligibility(regions, a_eligibility, a_width, a_height))
 			return fallback(CharacterMultiRoiReason::EligibilityBridge);
-		if (result.historyKeys[0] == result.historyKeys[1] ||
-			result.clusterIdentities[0] == result.clusterIdentities[1])
-			return fallback(CharacterMultiRoiReason::InvalidInput);
-		std::array<ComputeSubrect, 2> support{};
-		for (const auto& rect : a_eligibility) {
-			const auto eligibilitySupport = Required(rect, a_width, a_height);
-			const auto index = ContainsComputeSubrect(result.regions[0], eligibilitySupport) ? 0u : 1u;
-			support[index] = UnionCharacterComputeSubrect(support[index], eligibilitySupport);
+		for (std::uint32_t i = 0; i < result.count; ++i) {
+			ComputeSubrect support{};
+			for (const auto& rect : a_eligibility) {
+				const auto requiredSupport = Required(rect, a_width, a_height);
+				if (ContainsComputeSubrect(result.regions[i], requiredSupport))
+					support = UnionCharacterComputeSubrect(support, requiredSupport);
+			}
+			for (const auto& actor : actors)
+				if (std::ranges::binary_search(next[result.regionSlots[i]].owners, actor.identity))
+					support = UnionCharacterComputeSubrect(support, Required(actor.rect, a_width, a_height));
+			result.roi[i] = BuildRoiDescriptor(support, result.regions[i], { a_width, a_height }, true);
 		}
-		for (std::uint32_t index = 0; index < 2; ++index) {
-			// Eligibility can extend beyond the actor cluster while remaining in its provider.
-			support[index] = UnionCharacterComputeSubrect(support[index], Required(selected.bounds[index], a_width, a_height));
-			result.roi[index] = BuildRoiDescriptor(support[index], result.regions[index], { a_width, a_height }, true);
-		}
-		result.count = 2;
 		a_state.clusters = std::move(next);
 		a_state.cachedReason = a_reason = CharacterMultiRoiReason::Split;
 		a_state.cachedPlan = result;

@@ -2055,6 +2055,18 @@ namespace NeuralRendering
 		return ngxResult_;
 	}
 
+	CapacityFailure Runtime::CreationCapacityFailure() const
+	{
+		std::scoped_lock lock(mutex_);
+		if (failureStage_ != RuntimeFailureStage::FeatureCreate || abandoned_ || abandonRequested_.load(std::memory_order_acquire))
+			return CapacityFailure::Unsafe;
+		if (ngxResult_ == NVSDK_NGX_Result_FAIL_OutOfGPUMemory)
+			return CapacityFailure::Pressure;
+		if (ngxResult_ == NVSDK_NGX_Result_FAIL_FeatureNotSupported || ngxResult_ == NVSDK_NGX_Result_FAIL_UnsupportedParameter)
+			return CapacityFailure::Unsupported;
+		return CapacityFailure::Unsafe;
+	}
+
 	std::uint64_t Runtime::SuccessfulFrames() const
 	{
 		std::scoped_lock lock(mutex_);

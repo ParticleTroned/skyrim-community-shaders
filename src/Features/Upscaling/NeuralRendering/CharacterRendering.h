@@ -154,8 +154,9 @@ namespace NeuralRendering
 		std::array<std::uint64_t, 4> contentSerials{};
 		std::array<std::uint32_t, 4> widths{};
 		std::array<std::uint32_t, 4> heights{};
-		/** Expected physical evaluations: zero for bypass, one legacy, two split. */
+		/** Expected physical evaluations and sparse banks; zero indicates bypass. */
 		std::array<std::uint32_t, 4> computeRegionCounts{};
+		std::array<std::uint32_t, 4> physicalRegionMasks{};
 		/** Optional immutable preparation records; delayed completions retain their own identity. */
 		std::array<std::shared_ptr<const CharacterPreparationEvidence>, 4> preparationEvidence{};
 	};
@@ -186,7 +187,7 @@ namespace NeuralRendering
 		std::string detail;
 		std::string visualMaskMechanism = "csx_output_composite_r8";
 		std::string computeRoiReason =
-			"Early current-source GPU category bounds with a nonblocking readback; geometry is only a coverage fallback when bounds are unavailable, and experimental multi-ROI uses up to two disjoint regions per eye";
+			"Early current-source GPU category bounds with a nonblocking readback; geometry is only a coverage fallback when bounds are unavailable, and experimental multi-ROI retains disjoint regions per eye with a default two-region limit and DevBench-only bounded four/eight-region qualification";
 		bool enabled = false;
 		bool visualMaskImplemented = true;
 		bool visualMaskProviderValidated = false;

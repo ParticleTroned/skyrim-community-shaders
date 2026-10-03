@@ -565,7 +565,7 @@ _extract_upscaling_section(
     _region_output_copy_section
 )
 foreach(_region_output_contract IN ITEMS
-    [[a_regions.count > 2u]]
+    [[a_regions.count > NeuralRendering::kEnabledRegionsPerEye]]
     [[!a_enclosure.Fits(a_width, a_height)]]
     [[std::span<const NeuralRendering::ComputeSubrect>(a_regions.regions.data(), a_regions.count)]]
     [[std::span<const NeuralRendering::ComputeSubrect>(&a_enclosure, 1)]]
@@ -1989,7 +1989,7 @@ foreach(_geometry_roi_contract IN ITEMS
     [[ResolveCharacterMultiRoi(]]
     [[plan.actorRegions, plan.regions, a_args.outputWidth, a_args.outputHeight,]]
     [[sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason,]]
-    [[a_args.settings.multiRoiSavingsGate, slot.computeSubrect);]]
+    [[a_args.settings.multiRoiSavingsGate, slot.computeSubrect, a_args.settings.RegionLimit());]]
     [[slot.multiRoiDiagnostics = slot.stableMultiRoi.diagnostics;]]
     [[a_eye.multiRoiDiagnostics = a_slot.multiRoiDiagnostics;]]
     [[slot.prepareKey.sourceWorldFrame != args.sourceWorldFrame]]
@@ -3431,7 +3431,7 @@ foreach(_region_contract IN ITEMS
     [[GetStereoPairContractViolation(stereoArgs)]]
     [[GetCharacterRegionSubmissionViolation(]]
     [[logical.outputWidth, logical.outputHeight, logical.characterVisualIsolation)]]
-    [[physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, region);]]
+    [[physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, plan.count ? plan.regionSlots[region] : 0u);]]
     [[physical.computeRegions = {};]]
     [[resources[index].historyKey.regionIdentity = regionIdentities[index];]]
     [[clusterIdentities[expandedCount] = plan.clusterIdentities[region];]]
@@ -3450,7 +3450,7 @@ endforeach()
 set(_previous_region_stage -1)
 foreach(_region_stage IN ITEMS
     [[GetStereoPairContractViolation(stereoArgs)]]
-    [[physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, region);]]
+    [[physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, plan.count ? plan.regionSlots[region] : 0u);]]
     [[EnsureBackendLocked(a_args.front(), execution)]]
     [[activeStage_ = RendererStage::ColorInputCopy;]]
     [[activeStage_ = RendererStage::ControlMaskCopy;]]
@@ -3465,7 +3465,7 @@ foreach(_region_stage IN ITEMS
     set(_previous_region_stage ${_region_stage_position})
 endforeach()
 foreach(_timing_contract IN ITEMS
-    [[a_timing.evaluationCount > 4u]]
+    [[a_timing.evaluationCount > kMaximumRegionEvaluations]]
     [[a_timing.logicalEyeCount == 0u || a_timing.logicalEyeCount > 2u]]
     [[commandContext.timing.logicalEyeCount == 2u]]
     [[telemetry_.lastFeatureLogicalEyeCount =]]

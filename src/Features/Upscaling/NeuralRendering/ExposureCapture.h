@@ -1,5 +1,7 @@
 #pragma once
+
 #include "ExposurePolicy.h"
+#include "RegionCapacity.h"
 #include "Utils/CaptureRetention.h"
 #include <array>
 #include <cstdint>
@@ -230,7 +232,7 @@ namespace NeuralRendering::Color
 		std::uint32_t lastGraphicsStateFlushFrame = 0;
 		std::array<std::uint64_t, static_cast<std::size_t>(ExposureDrawKind::Count)> drawCounts{};
 		std::string lastReason;
-		std::array<ExposureEvidence, 8> samples{};
+		std::array<ExposureEvidence, kPhysicalFeatureSlotCount> samples{};
 	};
 	struct ExposureBinding
 	{

@@ -35,6 +35,23 @@ class CurrentContextContract(unittest.TestCase):
         self.assertIn('!parseBoolean("experimentalCurrentContext", a_request.experimentalCurrentContext)', bridge)
         self.assertIn('requestedSettings.neuralCharacterCurrentContextEnabled = *request.experimentalCurrentContext', bridge)
 
+    def test_region_capacity_admission_and_nonpersistent_identity(self):
+        bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
+        schema = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1))
+        limit = schema["inputSchema"]["properties"]["experimentalRegionLimit"]
+        self.assertEqual((limit["minimum"], limit["maximum"]), (1, 8))
+        output = schema["outputSchema"]["properties"]["neuralRendering"]["properties"]["characterRendering"]["properties"]["settings"]["properties"]["experimentalRegionLimit"]
+        self.assertEqual((output["minimum"], output["maximum"]), (1, 8))
+        self.assertIn('!parseCharacterUint("experimentalRegionLimit", 1u, NeuralRendering::kMaximumRegionsPerEye, a_request.experimentalRegionLimit)', bridge)
+        self.assertIn('attributedPreparation->physicalRegionMasks[featureSlot]', bridge)
+        self.assertIn('rendering.erase("neuralCharacterRegionLimit");', read("src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"))
+        renderer = read("src/Features/Upscaling/NeuralRendering/Renderer.cpp")
+        self.assertIn('QualifiedHigherRegionGeometry(arg.computeRegions)', renderer)
+        self.assertIn('return TeardownBackendLocked(false, false, false);', renderer)
+        self.assertIn('value.computeRegions = {};', renderer)
+        self.assertNotIn('value.reset = true;', renderer)
+        self.assertIn('state_->capacityFallback_ = {};', renderer)
+
     def test_preparation_and_source_identity(self):
         rendering = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
         self.assertIn("add(a_settings.experimentalCurrentContext);", rendering)

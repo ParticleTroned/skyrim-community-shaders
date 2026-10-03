@@ -5119,6 +5119,7 @@ namespace
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		policy.experimentalCurrentContext = a_settings.neuralCharacterCurrentContextEnabled;
 		policy.experimentalGpuMaskSupport = a_settings.neuralCharacterGpuMaskSupportEnabled;
+		policy.experimentalRegionLimit = a_settings.neuralCharacterRegionLimit;
 #endif
 		NeuralRendering::SanitizeCharacterSettings(policy);
 		policy.enabled = policy.enabled && a_settings.neuralRenderingEnabled;
@@ -5262,7 +5263,7 @@ namespace
 		const NeuralRendering::ComputeSubrect& a_enclosure,
 		const NeuralRendering::CharacterComputeRegionPlan& a_regions) noexcept
 	{
-		if (!a_context || !a_destination || !a_source || a_regions.count > 2u ||
+		if (!a_context || !a_destination || !a_source || a_regions.count > NeuralRendering::kEnabledRegionsPerEye ||
 			!a_enclosure.Fits(a_width, a_height))
 			return false;
 		const auto regions = a_regions.count ?
@@ -6658,6 +6659,7 @@ namespace
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			add(a_settings.neuralCharacterCurrentContextEnabled);
 			add(a_settings.neuralCharacterGpuMaskSupportEnabled);
+			add(a_settings.neuralCharacterRegionLimit);
 #endif
 			add(a_settings.neuralCharacterMinimumFacePixelSize);
 			addFloat(a_settings.neuralCharacterRoiMargin);
@@ -18094,6 +18096,7 @@ bool Upscaling::ApplyNeuralRenderingConfiguration(const json& a_configuration, s
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		candidate.neuralCharacterCurrentContextEnabled = settings.neuralCharacterCurrentContextEnabled;
 		candidate.neuralCharacterGpuMaskSupportEnabled = settings.neuralCharacterGpuMaskSupportEnabled;
+		candidate.neuralCharacterRegionLimit = settings.neuralCharacterRegionLimit;
 #endif
 		if (candidate.neuralRenderingMode > 2u || !candidate.neuralRenderingAutoMask || candidate.neuralRenderingUICorrection)
 			throw std::invalid_argument("Unsupported Neural Rendering mode or provider mask contract");
@@ -18133,6 +18136,7 @@ bool Upscaling::ResetNeuralRenderingConfiguration()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		settings.neuralCharacterCurrentContextEnabled = false;
 		settings.neuralCharacterGpuMaskSupportEnabled = false;
+		settings.neuralCharacterRegionLimit = NeuralRendering::kDefaultRegionsPerEye;
 #endif
 	} else {
 		logger::error("[NeuralRendering] Could not restore defaults: {}", error);

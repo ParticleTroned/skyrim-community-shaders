@@ -172,6 +172,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			add(a_settings.experimentalCurrentContext);
 			add(a_settings.experimentalGpuMaskSupport);
+			add(a_settings.experimentalRegionLimit);
 #endif
 			add(a_settings.minimumFacePixelSize);
 			addFloat(a_settings.roiMargin);
@@ -869,7 +870,7 @@ namespace NeuralRendering
 			std::uint32_t a_width,
 			std::uint32_t a_height,
 			bool a_requiresEvaluation,
-			std::uint32_t a_computeRegionCount) noexcept
+			const CharacterComputeRegionPlan& a_computeRegions) noexcept
 		{
 			CharacterPreparedFrameSnapshot* entry = nullptr;
 			for (auto& candidate : snapshot_.preparedFrames) {
@@ -908,8 +909,13 @@ namespace NeuralRendering
 			entry->widths[a_featureSlot] = a_width;
 			entry->heights[a_featureSlot] = a_height;
 			entry->computeRegionCounts[a_featureSlot] = a_requiresEvaluation ?
-			                                                std::max(1u, a_computeRegionCount) :
+			                                                std::max(1u, a_computeRegions.count) :
 			                                                0u;
+			entry->physicalRegionMasks[a_featureSlot] = 0;
+			if (a_requiresEvaluation && a_computeRegions.count <= kEnabledRegionsPerEye)
+				for (std::uint32_t i = 0; i < std::max(1u, a_computeRegions.count); ++i)
+					entry->physicalRegionMasks[a_featureSlot] |= FeatureSlotBit(PhysicalRegionFeatureSlot(
+						a_featureSlot, a_computeRegions.count ? a_computeRegions.regionSlots[i] : 0u));
 		}
 
 		void InvalidatePreparedSlot(
@@ -955,6 +961,7 @@ namespace NeuralRendering
 				preparedFrame.widths[a_featureSlot] = 0;
 				preparedFrame.heights[a_featureSlot] = 0;
 				preparedFrame.computeRegionCounts[a_featureSlot] = 0;
+				preparedFrame.physicalRegionMasks[a_featureSlot] = 0;
 				if (preparedFrame.preparedSlotMask == 0u)
 					preparedFrame = {};
 				break;
@@ -1703,7 +1710,7 @@ namespace NeuralRendering
 					owners.push_back(actor.identity);
 				const auto tight = ResolveCharacterMaskRoi(mapped, owners, a_args.outputWidth, a_args.outputHeight,
 					a_args.sourceWorldFrame, a_slot.stableMaskRoi, a_args.settings.multiRoiSavingsGate, a_args.settings.multiRoi,
-					&a_slot.stableComputeSubrect, &a_slot.maskRoiScratch);
+					&a_slot.stableComputeSubrect, &a_slot.maskRoiScratch, a_args.settings.RegionLimit(), a_args.featureSlot + 1u);
 				if (!tight.valid)
 					return FailEarlyMaskBounds("early_bounds_plan_invalid", E_INVALIDARG);
 				if (tight.empty) {
@@ -1717,7 +1724,7 @@ namespace NeuralRendering
 				a_slot.multiRoiReason = a_args.settings.multiRoi ? tight.multiRoiReason : CharacterMultiRoiReason::Disabled;
 				a_slot.multiRoiDiagnostics = tight.diagnostics;
 				if (!tight.empty)
-					a_slot.maskRoiStatus = tight.computeRegions.count == 2 ? "gpu_source_split" : "gpu_source_single";
+					a_slot.maskRoiStatus = tight.computeRegions.count > 1 ? "gpu_source_split" : "gpu_source_single";
 				a_slot.maskRoiCurrentFrame = true;
 				a_slot.maskRoiRequiredSubrect = tight.requiredSubrect;
 				a_slot.maskWorkSubrect = tight.requiredSubrect;
@@ -3183,8 +3190,8 @@ namespace NeuralRendering
 				eye.computeSubrect = slot.computeSubrect;
 				eye.computeRegions = slot.computeRegions;
 				eye.multiRoiReason = slot.multiRoiReason;
-				eye.multiRoiPixels = slot.computeRegions.count == 2 ?
-				                         slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				eye.multiRoiPixels = slot.computeRegions.count > 1 ?
+				                         CharacterRegionPixels(slot.computeRegions) :
 				                         slot.computeSubrect.Area();
 				const auto evaluationPixels =
 					static_cast<std::uint64_t>(a_args.outputWidth) *
@@ -3224,7 +3231,7 @@ namespace NeuralRendering
 					a_args.frameId, sourceWorldFrame, a_args.generation,
 					a_args.featureSlot, slot.contentSerial,
 					a_args.outputWidth, a_args.outputHeight,
-					slot.requiresEvaluation, slot.computeRegions.count);
+					slot.requiresEvaluation, slot.computeRegions);
 			} else if (!state_->EnsureSlot(
 						   slot, a_args.device, a_args.featureSlot,
 						   a_args.outputWidth, a_args.outputHeight)) {
@@ -3357,13 +3364,12 @@ namespace NeuralRendering
 						slot.computeRegions = ResolveCharacterMultiRoi(
 							plan.actorRegions, plan.regions, a_args.outputWidth, a_args.outputHeight,
 							sourceWorldFrame, slot.stableMultiRoi, slot.multiRoiReason,
-							a_args.settings.multiRoiSavingsGate, slot.computeSubrect);
+							a_args.settings.multiRoiSavingsGate, slot.computeSubrect, a_args.settings.RegionLimit());
 						slot.multiRoiDiagnostics = slot.stableMultiRoi.diagnostics;
-						if (slot.computeRegions.count == 2) {
+						if (slot.computeRegions.count > 1) {
 							// Composition still receives the enclosure, but inference uses
 							// the separate rectangles. Never expose stale pixels in gaps.
-							slot.computeSubrect = UnionCharacterComputeSubrect(
-								slot.computeRegions.regions[0], slot.computeRegions.regions[1]);
+							slot.computeSubrect = CharacterRegionEnclosure(slot.computeRegions);
 						}
 					}
 				}
@@ -3477,8 +3483,8 @@ namespace NeuralRendering
 				eye.computeSubrect = slot.computeSubrect;
 				eye.computeRegions = slot.computeRegions;
 				eye.multiRoiReason = slot.multiRoiReason;
-				eye.multiRoiPixels = slot.computeRegions.count == 2 ?
-				                         slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				eye.multiRoiPixels = slot.computeRegions.count > 1 ?
+				                         CharacterRegionPixels(slot.computeRegions) :
 				                         slot.computeSubrect.Area();
 				eye.computeSubrectPixels = slot.computeSubrect.Area();
 				eye.computeSubrectCoveragePercent = evaluationPixels ?
@@ -3545,7 +3551,7 @@ namespace NeuralRendering
 					a_args.frameId, sourceWorldFrame, a_args.generation,
 					a_args.featureSlot, slot.contentSerial,
 					a_args.outputWidth, a_args.outputHeight,
-					slot.requiresEvaluation, slot.computeRegions.count);
+					slot.requiresEvaluation, slot.computeRegions);
 			}
 
 			if (!slot.requiresEvaluation && !state_->HasCurrentEmptyProof(slot))
@@ -3591,8 +3597,8 @@ namespace NeuralRendering
 				slot.computeSubrect.width,
 				slot.computeSubrect.height,
 				slot.requiresEvaluation ? std::max(1u, slot.computeRegions.count) : 0u,
-				slot.computeRegions.count == 2 ?
-					slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				slot.computeRegions.count > 1 ?
+					CharacterRegionPixels(slot.computeRegions) :
 					slot.computeSubrect.Area(),
 				GetCharacterMultiRoiReasonName(slot.multiRoiReason));
 			return true;
@@ -3692,8 +3698,8 @@ namespace NeuralRendering
 				eye.computeSubrect = slot.computeSubrect;
 				eye.computeRegions = slot.computeRegions;
 				eye.multiRoiReason = slot.multiRoiReason;
-				eye.multiRoiPixels = slot.computeRegions.count == 2 ?
-				                         slot.computeRegions.regions[0].Area() + slot.computeRegions.regions[1].Area() :
+				eye.multiRoiPixels = slot.computeRegions.count > 1 ?
+				                         CharacterRegionPixels(slot.computeRegions) :
 				                         slot.computeSubrect.Area();
 				if (slot.requiresEvaluation)
 					inferencePixels += eye.multiRoiPixels;
@@ -3707,7 +3713,7 @@ namespace NeuralRendering
 				State::PublishMaskRoiSnapshot(slot, eye);
 				state_->RecordPreparedFrame(args.frameId, args.sourceWorldFrame, args.generation,
 					args.featureSlot, slot.contentSerial, args.outputWidth, args.outputHeight,
-					slot.requiresEvaluation, slot.computeRegions.count);
+					slot.requiresEvaluation, slot.computeRegions);
 				a_results[index] = state_->BuildPreparedResult(args, slot);
 			}
 			state_->snapshot_.status = "ready";

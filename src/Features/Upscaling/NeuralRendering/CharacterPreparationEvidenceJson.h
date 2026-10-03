@@ -58,6 +58,7 @@ namespace NeuralRendering::Evidence
 		}
 		Json regions = Json::array();
 		Json roi = Json::array();
+		Json identities = Json::array();
 		if (e.prepared && e.requiresEvaluation) {
 			if (e.computeRegions.count == 0) {
 				regions.push_back(SubrectJson(e.computeSubrect));
@@ -66,6 +67,9 @@ namespace NeuralRendering::Evidence
 				for (std::uint32_t i = 0; i < std::min<std::uint32_t>(e.computeRegions.count, static_cast<uint32_t>(e.computeRegions.regions.size())); ++i) {
 					regions.push_back(SubrectJson(e.computeRegions.regions[i]));
 					roi.push_back(RoiJson(e.computeRegions.roi[i]));
+					identities.push_back({ { "bank", e.computeRegions.regionSlots[i] }, { "history", e.computeRegions.historyKeys[i] },
+						{ "cluster", e.computeRegions.clusterIdentities[i] }, { "kind", e.computeRegions.spatialTracks ? "eye_local_spatial_track" : "actor_lifetime" },
+						{ "confident", !e.computeRegions.spatialTracks || e.computeRegions.identityConfident[i] } });
 				}
 			}
 		}
@@ -73,7 +77,7 @@ namespace NeuralRendering::Evidence
 			{ "prepared", e.prepared }, { "requiresEvaluation", e.requiresEvaluation }, { "reused", e.reused },
 			{ "emptyProof", GetCharacterEmptyProofName(e.emptyProof) },
 			{ "sourceCapture", std::move(source) }, { "computeSubrect", SubrectJson(e.computeSubrect) }, { "regions", std::move(regions) },
-			{ "roi", std::move(roi) },
+			{ "roi", std::move(roi) }, { "regionIdentities", std::move(identities) },
 			{ "maskSupport", std::move(support) }, { "dirtyDispatchRect", SubrectJson(e.dirtyDispatchRect) },
 			{ "gpuMaskWork", { { "enabled", e.gpuSupportUsed }, { "source", e.gpuSupportUsed ? "current_category_superset" : "reference_rectangle" },
 								 { "columns", e.supportGridColumns }, { "rows", e.supportGridRows },

@@ -19,7 +19,7 @@
     },
     "runtimeSettingsContract": {
         "revision": 8,
-        "sourceTreeSha256": "875881290E663F69FD4447B2921AF60ADEC4342AEA22708C027D75D155AC93FD",
+        "sourceTreeSha256": "44E22A96143A1C159C926F6DB074E391A029E9965F2A24073ED5AE320A9AD29E",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -30,6 +30,7 @@
                 "src/Features/Upscaling/NeuralRendering/ColorPolicy.h",
                 "src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h",
                 "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
+                "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
                 "src/Features/VolumetricLightingTuning.h",
                 "src/Features/VolumetricLightingTuningMigration.h",
                 "src/Features/VR/MenuPositioningPolicy.h",
@@ -121,6 +122,7 @@
             "src/Features/Upscaling/NeuralRendering/ColorPolicy.h",
             "src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h",
             "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
+            "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
             "src/Features/VolumetricLighting.cpp",
             "src/Features/VolumetricLighting.h",
             "src/Features/VolumetricLightingTuning.h",

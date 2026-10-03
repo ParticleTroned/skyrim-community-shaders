@@ -223,7 +223,7 @@ def validate_envelope(evidence: dict) -> dict[int, dict]:
             require(uint(evidence[field]), "invalid evidence failure count: " + field)
             require(incomplete or evidence[field] == 0, "evidence failures are not marked unavailable")
     executions = evidence.get("executions")
-    require(isinstance(executions, list) and len(executions) <= 8, "invalid execution collection")
+    require(isinstance(executions, list) and len(executions) <= 32, "invalid execution collection")
     by_id, attempted_eyes, succeeded_eyes = {}, set(), set()
     route_index = 0 if evidence["route"] == "main" else 1
     for execution in executions:
@@ -238,7 +238,7 @@ def validate_envelope(evidence: dict) -> dict[int, dict]:
         require(type(execution.get("logicalEyeCount")) is int and 1 <= execution["logicalEyeCount"] <= evidence["logicalEyeCount"],
                 "execution eye count exceeds transaction")
         regions = execution.get("regions")
-        require(isinstance(regions, list) and len(regions) <= 4 and type(execution.get("plannedRegionCount")) is int
+        require(isinstance(regions, list) and len(regions) <= 16 and type(execution.get("plannedRegionCount")) is int
                 and execution.get("plannedRegionCount") == len(regions), "planned region membership mismatch")
         slots, count, pixels, attempted_mask, succeeded_mask, committed_mask = set(), 0, 0, 0, 0, 0
         for region in regions:
@@ -246,7 +246,7 @@ def validate_envelope(evidence: dict) -> dict[int, dict]:
             exact(evidence, region.get("source"), CONTEXT_IDENTITY, "physical region context")
             optional_exact(evidence, region.get("source"), OPTIONAL_CONTEXT_IDENTITY, "physical region context")
             slot, logical, eye = region.get("physicalSlot"), region.get("logicalSlot"), region.get("eye")
-            require(uint(slot, 7) and slot not in slots and uint(logical, 3) and logical == slot % 4
+            require(uint(slot, 31) and slot not in slots and uint(logical, 3) and logical == slot % 4
                     and logical // 2 == route_index and uint(eye, 1) and eye == logical % 2
                     and eye < evidence["logicalEyeCount"] and region.get("region") == slot // 4, "invalid physical eye/slot membership")
             slots.add(slot)

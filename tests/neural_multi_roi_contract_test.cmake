@@ -206,8 +206,8 @@ foreach(_blocking_roi_token IN ITEMS
 endforeach()
 
 foreach(_execution_contract IN ITEMS
-    [[static constexpr std::size_t kFeatureSlotCount = 8;]]
-    [[PhysicalRegionFeatureSlot(logical.featureSlot, region)]]
+    [[static constexpr std::size_t kFeatureSlotCount = kPhysicalFeatureSlotCount;]]
+    [[PhysicalRegionFeatureSlot(logical.featureSlot, plan.count ? plan.regionSlots[region] : 0u)]]
     [[physical.computeSubrect = plan.regions[region];]]
     [[physical.roi = plan.roi[region];]]
     [[GetRoiDescriptorViolation(a_resources.roi, provider,]]
@@ -250,7 +250,7 @@ endforeach()
 
 foreach(_copy_contract IN ITEMS
     [[bool CopyNeuralOutputRegions(]]
-    [[a_regions.count > 2u]]
+    [[a_regions.count > NeuralRendering::kEnabledRegionsPerEye]]
     [[ContainsComputeSubrect(a_enclosure, region)]]
     [[GetPreparedSelection(]]
     [[computeSubrect, computeRegions);]]

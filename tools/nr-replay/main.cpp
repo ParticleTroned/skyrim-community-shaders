@@ -2,6 +2,7 @@
 #include "CharacterMaskWorkPolicy.h"
 #include "D3D12Interop.h"
 #include "Runtime.h"
+#include "SourceTransport.h"
 #include "Utils/CryptoHash.h"
 #include "build_identity.h"
 
@@ -397,6 +398,7 @@ namespace
 		std::string inputStorage = "captured";
 		std::string inputStorageResource = "all";
 		unsigned inputStorageHaloPixels = 0;
+		bool sharedInputs = false;
 	};
 	Json ApplyVariantInputStorage(TextureData& data, const ComputeSubrect& outputRect, unsigned width, unsigned height,
 		const Variant& variant, std::string_view resource)
@@ -428,6 +430,36 @@ namespace
 			values.push_back({ "calls-one", "call_count", "calls-equal-area", "static_reset", { rectangle }, {} });
 			values.push_back({ "calls-two", "call_count", "calls-equal-area", "static_reset",
 				{ { rectangle.baseX, rectangle.baseY, 128, 128 }, { rectangle.baseX + 128, rectangle.baseY, 128, 128 } }, {} });
+			for (unsigned regions : { 1u, 2u, 4u, 8u }) {
+				const auto duplicate = at(128, 128);
+				for (bool shared : { false, true }) {
+					Variant value{ std::format("duplicate-{}-{}", regions, shared ? "shared" : "private"), "native_context_count", "duplicate-geometry", "static_reset", std::vector<ComputeSubrect>(regions, duplicate), {} };
+					value.sharedInputs = shared;
+					values.push_back(std::move(value));
+				}
+			}
+			for (unsigned regions : { 4u }) {
+				Variant value{ std::format("calls-{}", regions == 4 ? "four" : "eight"), "call_count", "calls-equal-area", "static_reset", {}, {} };
+				const unsigned columns = regions / 2;
+				for (unsigned i = 0; i < regions; ++i)
+					value.rects.push_back({ rectangle.baseX + (i % columns) * (256 / columns), rectangle.baseY + (i / columns) * 64, 256 / columns, 64 });
+				values.push_back(std::move(value));
+			}
+			for (unsigned count : { 1u, 2u, 4u, 8u }) {
+				const auto base = at(512, 256);
+				const unsigned columns = count <= 2 ? count : 4;
+				const unsigned rows = count / columns;
+				Variant value{ std::format("capacity-calls-{}", count), "call_count", "capacity-calls-equal-area", "static_reset", {}, {} };
+				for (unsigned i = 0; i < count; ++i)
+					value.rects.push_back({ base.baseX + (i % columns) * (512 / columns), base.baseY + (i / columns) * (256 / rows), 512 / columns, 256 / rows });
+				values.push_back(std::move(value));
+			}
+			for (bool shared : { false, true }) {
+				Variant value{ std::format("transport-{}", shared ? "shared" : "private"), "source_transport", "transport-identical-contexts", "static_reset",
+					{ { fixedOrigin.baseX, fixedOrigin.baseY, 128, 64 }, { fixedOrigin.baseX + 128, fixedOrigin.baseY + 128, 64, 128 } }, {} };
+				value.sharedInputs = shared;
+				values.push_back(std::move(value));
+			}
 			const unsigned quantumX = width / std::gcd(width, guideWidth);
 			const unsigned quantumY = height / std::gcd(height, guideHeight);
 			auto capacity = at(quantumX <= 128 ? 128 / quantumX * quantumX : 128,
@@ -583,19 +615,26 @@ namespace
 	}
 	void Transition(ID3D12GraphicsCommandList* list, const std::vector<Resources>& resources, bool begin)
 	{
-		std::vector<D3D12_RESOURCE_BARRIER> barriers;
+		struct SourceState
+		{
+			ID3D12Resource* resource;
+			D3D12_RESOURCE_STATES featureState;
+		};
+		std::array<SourceState, kMaximumRegionEvaluations * 4> states{};
+		std::size_t count = 0;
 		for (const auto& resource : resources)
-			for (const auto* texture : { &resource.color, &resource.depth, &resource.motion, &resource.output }) {
-				D3D12_RESOURCE_BARRIER barrier{};
-				barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-				barrier.Transition.pResource = texture->resource12.Get();
-				barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-				const auto target = texture == &resource.output ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-				barrier.Transition.StateBefore = begin ? D3D12_RESOURCE_STATE_COMMON : target;
-				barrier.Transition.StateAfter = begin ? target : D3D12_RESOURCE_STATE_COMMON;
-				barriers.push_back(barrier);
-			}
-		list->ResourceBarrier(static_cast<unsigned>(barriers.size()), barriers.data());
+			for (const auto* texture : { &resource.color, &resource.depth, &resource.motion, &resource.output })
+				Require(AddSourceTransition(states, count, SourceState{ texture->resource12.Get(), texture == &resource.output ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE }), "conflicting or oversized source transition batch");
+		std::array<D3D12_RESOURCE_BARRIER, states.size()> barriers{};
+		for (std::size_t index = 0; index < count; ++index) {
+			auto& barrier = barriers[index];
+			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+			barrier.Transition.pResource = states[index].resource;
+			barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+			barrier.Transition.StateBefore = begin ? D3D12_RESOURCE_STATE_COMMON : states[index].featureState;
+			barrier.Transition.StateAfter = begin ? states[index].featureState : D3D12_RESOURCE_STATE_COMMON;
+		}
+		list->ResourceBarrier(static_cast<unsigned>(count), barriers.data());
 	}
 	TextureData Download(Session& session, const SharedTexture& texture, Clock::time_point deadline)
 	{
@@ -637,7 +676,7 @@ namespace
 		const unsigned guideWidth = guideCrop.IsValid() ? guideCrop.width : firstEye.depth.width;
 		const unsigned guideHeight = guideCrop.IsValid() ? guideCrop.height : firstEye.depth.height;
 		const auto count = static_cast<unsigned>(variant.rects.size() * first.eyes.size());
-		Require(count <= 4, "initial replay supports at most two regions per eye");
+		Require(!variant.rects.empty() && variant.rects.size() <= kMaximumRegionsPerEye && count <= kMaximumRegionEvaluations, "replay exceeds bounded region capacity");
 		Json value{ { "id", variant.id }, { "axis", variant.axis }, { "pairGroup", variant.pairGroup },
 			{ "route", std::string(1, char('A' + first.metadata.at("mode").get<unsigned>())) }, { "mode", first.metadata.at("mode") },
 			{ "history", variant.history }, { "creationExtent", { width, height } },
@@ -646,7 +685,7 @@ namespace
 			{ "featureUpscaling", firstEye.featureUpscaling }, { "useAutoMask", true }, { "controlMaskPassed", false },
 			{ "warmupIterations", warmup }, { "requestedSamples", samples }, { "colorConfiguration", first.metadata.at("colorConfiguration") },
 			{ "tuning", first.metadata.at("tuning") }, { "sourceFrameIndices", Json::array() },
-			{ "transportBypass", false }, { "applyModelEdit", true }, { "samples", Json::array() },
+			{ "sharedInputs", variant.sharedInputs }, { "transportBypass", false }, { "applyModelEdit", true }, { "samples", Json::array() },
 			{ "characterSelection", first.metadata.value("characterSelection", false) },
 			{ "contextIds", Json::array() }, { "initializationFingerprint", "fresh-features-first-source-reset" },
 			{ "sourceGuideAlignment", "captured-native-grids-exact-integer-crop-no-resample" },
@@ -691,7 +730,8 @@ namespace
 			for (unsigned eye = 0; eye < first.eyes.size(); ++eye)
 				for (unsigned region = 0; region < variant.rects.size(); ++region) {
 					Resources resource;
-					resource.slot = eye + region * 4;
+					resource.slot = PhysicalRegionFeatureSlot(eye, region);
+					Require(resource.slot < Runtime::kFeatureSlotCount, "region capacity exceeds native slot envelope");
 					resource.eye = eye;
 					resource.rect = variant.rects[region];
 					const auto& source = first.eyes[eye];
@@ -701,9 +741,16 @@ namespace
 						Require(logicalBytes <= kResourceBudget, "logical GPU resource budget exceeded");
 						return CreateTexture(session, cropped, name);
 					};
-					resource.color = make(source.color, "NRReplay::Color", false);
-					resource.depth = make(source.depth, "NRReplay::Depth", true);
-					resource.motion = make(source.motion, "NRReplay::Motion", true);
+					if (variant.sharedInputs && region) {
+						const auto& owner = resources[eye * variant.rects.size()];
+						resource.color = owner.color;
+						resource.depth = owner.depth;
+						resource.motion = owner.motion;
+					} else {
+						resource.color = make(source.color, "NRReplay::Color", false);
+						resource.depth = make(source.depth, "NRReplay::Depth", true);
+						resource.motion = make(source.motion, "NRReplay::Motion", true);
+					}
 					resource.output = make(source.color, "NRReplay::PrivateOutput", false);
 					resources.push_back(std::move(resource));
 				}
@@ -740,9 +787,11 @@ namespace
 							}
 							session.context->UpdateSubresource(texture.resource11.Get(), 0, nullptr, cropped.bytes.data(), cropped.rowBytes, 0);
 						};
-						upload(eye.color, resource.color, false, "color");
-						upload(eye.depth, resource.depth, true, "depth");
-						upload(eye.motion, resource.motion, true, "motion");
+						if (!variant.sharedInputs || resource.slot < kLogicalFeatureSlotCount) {
+							upload(eye.color, resource.color, false, "color");
+							upload(eye.depth, resource.depth, true, "depth");
+							upload(eye.motion, resource.motion, true, "motion");
+						}
 						resource.source = variant.crop.IsValid() ? Crop(eye.color, variant.crop) : eye.color;
 						resource.sentinel = Sentinel(resource.source);
 						session.context->UpdateSubresource(resource.output.resource11.Get(), 0, nullptr, resource.sentinel.bytes.data(), resource.sentinel.rowBytes, 0);
@@ -813,6 +862,10 @@ namespace
 						sample["evaluationGpuMicroseconds"].push_back(finished.regions[i].evaluationGpu.microseconds ? Json(*finished.regions[i].evaluationGpu.microseconds) : Json(nullptr));
 						const auto pixels = Download(session, resources[i].output, std::min(deadline, Clock::now() + std::chrono::seconds(2)));
 						const auto footprint = Footprint(resources[i].sentinel, pixels, resources[i].rect);
+						if (variant.sharedInputs && i % variant.rects.size() == 0) {
+							const auto prepared = Download(session, resources[i].color, std::min(deadline, Clock::now() + std::chrono::seconds(2)));
+							Require(prepared.bytes == resources[i].source.bytes, "native evaluation modified immutable prepared colour");
+						}
 						sample["providerFootprint"].push_back(footprint);
 						if (footprint.at("unchangedInsidePixels") != 0 || footprint.at("nonfiniteInsidePixels") != 0) {
 							sample["success"] = false;
@@ -840,7 +893,7 @@ namespace
 							sample["maskComposites"].push_back({ { "maskSelectedPixels", selected }, { "maskTotalPixels", rect.Area() },
 								{ "sha256", Hash(composite.bytes) }, { "nativeInputsUnmodified", true }, { "excludedFromGpuTiming", true } });
 						}
-						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage") {
+						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage" || variant.axis == "source_transport" || variant.axis == "native_context_count" || variant.axis == "call_count") {
 							const auto retained = variant.temporal ? pixels : Crop(pixels, resources[i].rect);
 							const auto name = std::format("{}-{:03}-slot{}.bin", variant.id, iteration, resources[i].slot);
 							std::ofstream stream(outputRoot / name, std::ios::binary);
@@ -862,6 +915,8 @@ namespace
 				} catch (const std::exception& error) {
 					sample["success"] = false;
 					sample["reason"] = error.what();
+					sample["interopFailure"] = { { "operation", session.interop.LastOperation() }, { "result", static_cast<std::uint32_t>(session.interop.LastError()) },
+						{ "deviceRemovedReason", static_cast<std::uint32_t>(session.device->GetDeviceRemovedReason()) } };
 					value["samples"].push_back(std::move(sample));
 					throw;
 				}
@@ -883,7 +938,7 @@ int wmain(int argc, wchar_t** argv)
 	Json result{ { "schema", "csx-nr-replay-results-v1" }, { "cases", Json::array() },
 		{ "status", "unavailable" }, { "scope", "native_provider_microbenchmark_not_end_to_end_route_cost" },
 		{ "featureRequirements", { { "queried", false }, { "reason", "NR_Streamline_plugin_not_loaded_by_direct_admitted_NGX_runtime" } } },
-		{ "fourEightRegions", "deferred_until_capacity_task" },
+		{ "fourEightRegions", "explicit_bounded_qualification_only_64x64_eight_region_probe_rejected" },
 		{ "minimumShapeProbes", "explicit_case_only_not_in_default_matrix" },
 		{ "inputStorageProbes", "explicit_case_only_finite_patterns_outside_requested_native_rectangles" },
 		{ "maskOccupancy", "synthetic_binary_composite_only_proxy_no_provider_ControlMask_no_GPU_composite_timing" },
@@ -1024,7 +1079,7 @@ int wmain(int argc, wchar_t** argv)
 			{ "parameterCoreSha256", runtime.ParameterCoreHash() } };
 		result["status"] = "running";
 		for (const auto& variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1)) {
-			if (onlyCase.empty() && (variant.axis == "minimum_shape" || variant.axis == "input_storage"))
+			if (onlyCase.empty() && (variant.axis == "minimum_shape" || variant.axis == "input_storage" || variant.axis == "native_context_count" || variant.axis == "source_transport" || variant.rects.size() > kDefaultRegionsPerEye || variant.pairGroup == "capacity-calls-equal-area"))
 				continue;
 			if (!onlyCase.empty() && variant.id != onlyCase)
 				continue;

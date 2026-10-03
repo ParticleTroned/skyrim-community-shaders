@@ -148,7 +148,7 @@ def fresh_groups(status: dict, revision: int, insertion: int, after_frame: int,
         if not isinstance(source, dict) or not isinstance(values, list):
             continue
         slot = source.get("physicalSlot")
-        if not integer(slot, 7):
+        if not integer(slot, 31):
             continue
         if (source.get("revision") != revision or type(source.get("revision")) is not int
                 or source.get("insertionPoint") != insertion or type(source.get("insertionPoint")) is not int
@@ -180,7 +180,7 @@ def fresh_groups(status: dict, revision: int, insertion: int, after_frame: int,
         # Delayed samples must not lose a secondary just because the corresponding
         # current observation has already advanced a few frames.
         expected.update(o["physicalSlot"] for o in status.get("slots", [])
-                        if isinstance(o, dict) and integer(o.get("physicalSlot"), 7)
+                        if isinstance(o, dict) and integer(o.get("physicalSlot"), 31)
                         and o.get("revision") == revision and o.get("generation") == key[2]
                         and o.get("insertionPoint") == insertion
                         and o["physicalSlot"] % 4 // 2 == key[3])
@@ -206,13 +206,13 @@ def fresh_batch_groups(status: dict, revision: int, insertion: int, after_frame:
             continue
         batch_id, mask = batch.get("measurementBatchId"), batch.get("expectedMeasurementSlotMask")
         if (not integer(batch_id) or batch_id == 0 or ids.count(batch_id) != 1
-                or not integer(mask, 255) or not mask or batch.get("atomicColourBatch") is not True
+                or not integer(mask, 0xffffffff) or not mask or batch.get("atomicColourBatch") is not True
                 or any(not integer(batch.get(k)) for k in fields[:-1])):
             continue
-        route = 0 if mask & ~0x33 == 0 else 1 if mask & ~0xcc == 0 else None
-        if route is None or mask & (3 << (route * 2)) != 3 << (route * 2):
+        route = 0 if mask & ~0x33333333 == 0 else 1 if mask & ~0xcccccccc == 0 else None
+        if route is None or {slot % 4 for slot in range(32) if mask & (1 << slot)} != {route * 2, route * 2 + 1}:
             continue
-        expected = {slot for slot in range(8) if mask & (1 << slot)}
+        expected = {slot for slot in range(32) if mask & (1 << slot)}
         if expected_slots is not None and expected != {s for s in expected_slots if s % 4 // 2 == route}:
             continue
         items = batch.get("measurements")
@@ -776,7 +776,7 @@ def main() -> int:
     parser.add_argument("--workspace-manifest", type=Path)
     parser.add_argument("--expected-build-id")
     parser.add_argument("--expected-artifact-sha256")
-    parser.add_argument("--expected-physical-slots", type=int, nargs="+", choices=range(8),
+    parser.add_argument("--expected-physical-slots", type=int, nargs="+", choices=range(32),
                         help="Authoritative physical slots for a fixed multi-ROI fixture (optional)")
     parser.add_argument("--sample-frames", type=int, default=3)
     parser.add_argument("--warmup-frames", type=int, default=16)

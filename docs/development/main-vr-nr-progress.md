@@ -1,5 +1,35 @@
 # main-vr-nr progress and continuation record
 
+## October 3 Task 7 measurements and Task 8 test candidate
+
+The [qualification record](nr-task7-8-qualification-20261003.md) preserves
+3,000 live profiler frames and 304/304 exact stereo execution joins on
+Task 7 producer `a1dc0b067333`. Shared transport reduces retained logical
+transport textures by 37.5%, while private outputs and colour references
+remain separate. There is no consistent speedup; total-frame/native-memory
+and full temporal quality acceptance remain unqualified. Sharing stays
+off by default. The 6,814 RGBA8/nonidentity-profile validation rejections
+are retained separately from zero native/device/quarantine failures.
+Settings were restored and Skyrim/MO2 closed normally; leases are released.
+
+Task 8 now supports bounded adaptive 1–4 planning and an experimental
+eight-region ceiling through a session-only DevBench setting, default two.
+Stable sparse histories, both planners, masks/outcomes, colour samples,
+query capacity, schemas and replay reports are updated. Twenty-one final
+native replay processes passed, including actual mono and stereo counts,
+immutable input and private/shared output hashes. An earlier eight-by-64×64
+per-eye probe failed GPU completion; its evidence remains preserved and
+that higher-count envelope is excluded by a conservative merge guard.
+Recoverable capacity fallback retains coverage after both-API retirement;
+unsafe failures cannot retry automatically.
+
+The universal DevBench DLL and complete 224-test local validation passed,
+as did 21 standalone colour/WARP tests. **Task 8 remains open for the new
+DLL's in-game four-region qualification.** Install the new AIO manually;
+no deployment or relaunch was performed. Production defaults remain two
+regions and sharing off. Neither Task 6's unmatched performance gate nor
+Task 7's production-promotion criteria are silently closed.
+
 ## October 2 Task 6 live follow-up and Task 7 candidate
 
 The [follow-up record](nr-task7-transport-20261002.md) supersedes the Task 6

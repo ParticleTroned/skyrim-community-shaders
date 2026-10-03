@@ -53,7 +53,9 @@ int main()
 	Require(history.Record(Key(9, 3), 0, 900));
 	Require(history.EvictedIncomplete() == 2);
 	Require(!history.Record(Key(10, 0xff), 0, 1000));
-	Require(!history.Record(Key(11, 0x30), 4, 1104));
+	Require(history.Record(Key(11, 0x30), 4, 1104));
+	Require(history.Record(Key(11, 0x30), 5, 1105));
+	Require(history.Latest()[0].Complete());
 	Require(!history.Record(Key(12), 8, 1208));
 	auto submit = Key(13, 0xcc);
 	submit.frame = 0;

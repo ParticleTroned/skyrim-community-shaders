@@ -66,8 +66,10 @@ Poll with `{"action":"status"}`. Cancellation requires the returned
 they are outside MO2's virtual Data tree. The tool does not change NR
 settings. Capture full initialized auto-mask rectangles with real model
 edits; partial character rectangles are rejected. Capture each A/B/C route
-separately with matched settings. The replay then selects one/two native
-regions from that complete source, retaining each route's provenance.
+separately with matched settings. The replay selects bounded native regions from that complete source,
+retaining each route's provenance. Native input capture still accepts one
+full initialized context per actual eye; multi-region execution evidence is
+reported separately and is never relabeled as extra eyes.
 
 Capture reserves at most 512 MiB of logical staging plus CPU payload
 (twice the tightly packed bytes); driver allocation padding is excluded.
@@ -203,3 +205,27 @@ accepted sample sets. Partial case statistics remain descriptive only.
 Earlier receipts without retained crops remain explicitly unavailable for
 this comparison. Input hashing and output readback/writes are outside native
 GPU timing; CPU elapsed time includes these diagnostics.
+
+## Experimental region and transport qualification
+
+The standalone executable enables the DevBench capacity ceiling: four
+regions per eye is the target and eight is experimental. The game default
+remains two. Explicit cases `duplicate-{1,2,4,8}-{private,shared}` create
+separate native histories and outputs with identical 128x128 geometry.
+`transport-private` and `transport-shared` use different rectangles over
+one fixed source. Sharing retains one immutable colour/depth/motion input
+per eye, deduplicates barriers with the renderer helper, and checks that
+prepared colour is unchanged after native work.
+
+`capacity-calls-{1,2,4,8}` holds 131,072 evaluated pixels per eye constant
+while increasing calls; every rectangle is at least 128 pixels per side.
+These cases are explicit-only. The earlier `calls-eight` 64x64 experiment
+failed GPU completion and is unavailable. Do not substitute it or the
+previously failed minimum-shape-31 probe into a normal campaign.
+
+All count/transport cases preserve evaluated output crops with hashes and
+per-call timing. Verify file count, size and hashes; an empty output list
+cannot prove equality. Count both actual eyes and calls, preserve failures
+and unavailable GPU timing, and distinguish native cost from in-game total
+cost. This tool does not establish SE/AE gameplay, overlapping output
+ownership, temporal quality or a production cost model.

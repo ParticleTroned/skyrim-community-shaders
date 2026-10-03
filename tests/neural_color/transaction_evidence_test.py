@@ -89,6 +89,26 @@ def native_layout(region):
 
 
 class TransactionEvidenceTests(unittest.TestCase):
+    def test_sparse_and_sixteen_region_execution_membership(self):
+        for count in (1, 4, 8):
+            source, _ = fixture(route="submit")
+            execution = source["executionEvidence"]["executions"][0]
+            regions = execution["regions"]
+            expanded = []
+            for bank in (range(8) if count == 8 else range(8-count, 8)):
+                for original in regions:
+                    region = copy.deepcopy(original)
+                    region.update(physicalSlot=original["logicalSlot"]+4*bank, region=bank)
+                    expanded.append(region)
+            mask = sum(1 << r["physicalSlot"] for r in expanded)
+            execution.update(regions=expanded, plannedRegionCount=len(expanded), actualEvaluationCount=len(expanded),
+                             activeEvaluationPixels=64*len(expanded), plannedPhysicalSlotMask=mask,
+                             attemptedPhysicalSlotMask=mask, succeededPhysicalSlotMask=mask, privateCommittedPhysicalSlotMask=mask)
+            tx.join_execution_evidence(source)
+            execution["regions"][-1]["physicalSlot"] = 32
+            with self.assertRaises(tx.TransactionEvidenceError):
+                tx.join_execution_evidence(source)
+
     def test_roi_roles_stay_with_the_frozen_execution(self):
         frozen, delayed = fixture("reduced_resolution")
         roles = {"coordinateDomain": "output_crop_local",

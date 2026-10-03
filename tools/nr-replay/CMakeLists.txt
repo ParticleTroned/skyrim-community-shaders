@@ -36,6 +36,10 @@ foreach(_source IN ITEMS
     tools/nr-replay/CMakeLists.txt
     tools/nr-replay/extract_runtime_utilities.cmake
     src/Features/Upscaling/NeuralRendering/NativeEvaluationLayout.h
+    src/Features/Upscaling/NeuralRendering/RegionCapacity.h
+    src/Features/Upscaling/NeuralRendering/CapacityFallback.h
+    src/Features/Upscaling/NeuralRendering/SourceTransport.h
+    src/Features/Upscaling/NeuralRendering/SpatialRoiTracks.h
     src/Features/Upscaling/NeuralRendering/Runtime.h
     src/Features/Upscaling/NeuralRendering/D3D12Interop.h
     src/Features/Upscaling/NeuralRendering/ExecutionEvidence.h
@@ -101,7 +105,7 @@ add_executable(csx_nr_replay main.cpp "${OUTPUT_DIRECTORY}/Runtime.cpp"
     "${OUTPUT_DIRECTORY}/D3D12Interop.cpp" "${OUTPUT_DIRECTORY}/runtime_utilities.cpp"
     "${REPOSITORY_ROOT}/src/Utils/CryptoHash.cpp")
 target_compile_features(csx_nr_replay PRIVATE cxx_std_23)
-target_compile_definitions(csx_nr_replay PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_compile_definitions(csx_nr_replay PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DEVBENCH_BRIDGE_ENABLED)
 target_include_directories(csx_nr_replay PRIVATE "${CMAKE_CURRENT_LIST_DIR}" "${OUTPUT_DIRECTORY}"
     "${REPOSITORY_ROOT}/src" "${_nr_source}"
     "${CSX_NR_DEPENDENCY_ROOT}/extern/CommonLibSSE-NG/include"

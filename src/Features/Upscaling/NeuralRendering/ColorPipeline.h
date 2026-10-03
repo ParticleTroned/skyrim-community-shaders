@@ -46,8 +46,8 @@ namespace NeuralRendering::Color
 	};
 	struct Status
 	{
-		std::array<Observation, 8> slots{};
-		std::array<Measurement, 8> measurements{};
+		std::array<Observation, kPhysicalFeatureSlotCount> slots{};
+		std::array<Measurement, kPhysicalFeatureSlotCount> measurements{};
 		std::array<MeasurementBatch<Measurement>, 4> measurementBatches{};
 		std::uint64_t evictedIncompleteBatches = 0;
 		std::uint64_t prepared = 0, reconstructed = 0, failed = 0, bypassed = 0, samples = 0, dropped = 0;

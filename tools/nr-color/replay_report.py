@@ -88,7 +88,7 @@ def storage_fingerprint(case: dict, sample: dict) -> list | None:
     require(isinstance(proofs, list) and len(proofs) == 3 * case["evaluationsPerSample"], "incomplete input storage proof")
     fingerprint, identities = [], set()
     for index, proof in enumerate(proofs):
-        require(isinstance(proof, dict) and uint(proof.get("slot"), 7), "invalid input storage slot")
+        require(isinstance(proof, dict) and uint(proof.get("slot"), 31), "invalid input storage slot")
         role = proof.get("resource")
         require(isinstance(role, str) and role in {"color", "depth", "motion"}, "invalid input storage resource")
         identity = (proof["slot"], role)
@@ -152,7 +152,7 @@ def output_equality(left: dict, right: dict, accepted: list[int]) -> dict:
                 rect = case["evaluatedRects"][index]
                 format_ = value.get("format")
                 stride = {2: 16, 10: 8, 26: 4, 28: 4}.get(format_) if uint(format_) else None
-                if (not uint(value.get("slot"), 7) or not stride or value.get("width") != rect["width"]
+                if (not uint(value.get("slot"), 31) or not stride or value.get("width") != rect["width"]
                         or value.get("height") != rect["height"] or value.get("rowBytes") != rect["width"] * stride):
                     return {"status": "unavailable", "reason": "invalid_output_crop_metadata"}
             if any(x.get(k) != y.get(k) for k in ("slot", "format", "width", "height", "rowBytes")) or any(
@@ -194,8 +194,8 @@ def checked_case(case: dict) -> dict:
     for name in ("color", "depth", "motion", "output"):
         dimensions(resources.get(name), name + " resource extent")
     regions = case.get("evaluatedRects")
-    require(isinstance(regions, list) and 1 <= len(regions) <= 8, "invalid evaluated rectangle count")
-    require(uint(case.get("evaluationsPerSample"), 8) and case["evaluationsPerSample"] == len(regions),
+    require(isinstance(regions, list) and 1 <= len(regions) <= 16, "invalid evaluated rectangle count")
+    require(uint(case.get("evaluationsPerSample"), 16) and case["evaluationsPerSample"] == len(regions),
             "declared call count does not match evaluated rectangles")
     area = 0
     for region in regions:
@@ -235,7 +235,7 @@ def checked_case(case: dict) -> dict:
         first_sample = prior_iteration is None
         prior_iteration = sample["iteration"]
         require(all(type(sample.get(k)) is bool for k in ("warmup", "success", "reset")), "invalid sample flags")
-        require(uint(sample.get("evaluationCount"), 8) and uint(sample.get("createdFeatureCount"), 8),
+        require(uint(sample.get("evaluationCount"), 16) and uint(sample.get("createdFeatureCount"), 16),
                 "invalid observed call/create count")
         if sample["warmup"] and measured:
             case_reasons.append("warmup_observed_after_measurement")

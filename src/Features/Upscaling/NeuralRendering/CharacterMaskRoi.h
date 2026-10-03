@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CharacterMultiRoi.h"
+#include "SpatialRoiTracks.h"
 
 #include <algorithm>
 #include <array>
@@ -49,6 +50,8 @@ namespace NeuralRendering
 		std::array<std::vector<CharacterRect>, 2> stripes;
 		std::vector<CharacterRect> occupied;
 		std::vector<CharacterRect> suffix;
+		std::vector<std::uint32_t> componentParents;
+		std::vector<CharacterRect> componentBounds;
 	};
 
 	struct StableCharacterMaskRoi
@@ -64,26 +67,50 @@ namespace NeuralRendering
 		bool cacheValid = false;
 		bool cachedSavingsGate = true;
 		bool cachedAllowSplit = true;
+		std::uint32_t cachedRegionLimit = kDefaultRegionsPerEye;
+		std::uint32_t cachedEyeNamespace = 0;
+		std::vector<SpatialRoiTrack> tracks;
 	};
 
 	namespace CharacterMaskRoiDetail
 	{
-		[[nodiscard]] inline std::array<std::uint64_t, 2> SpatialIdentities(
-			std::span<const std::uint64_t> a_sortedOwners, std::uint32_t a_axis) noexcept
+
+		/** Tile connectivity bounds work by the admitted grid; overflow keeps the full enclosure. */
+		[[nodiscard]] inline std::vector<CharacterRect> MaskComponents(
+			std::span<const CharacterMaskRoiTileBounds> tiles, std::uint32_t columns, CharacterMaskRoiScratch& scratch)
 		{
-			// The mask has no actor ID. These identify spatial clusters of a stable
-			// selected-actor population, not an assertion of pixel-level ownership.
-			auto hash = CharacterMultiRoiDetail::ClusterIdentity(a_sortedOwners);
-			hash = (hash ^ (0x4D41534B524F4900ull + a_axis)) * 1099511628211ull;
-			std::array<std::uint64_t, 2> result{
-				(hash ^ 1u) * 1099511628211ull,
-				(hash ^ 2u) * 1099511628211ull,
+			auto& parents = scratch.componentParents;
+			parents.resize(tiles.size());
+			auto& bounds = scratch.componentBounds;
+			bounds.assign(tiles.size(), {});
+			const auto root = [&](std::uint32_t index) {
+				while (parents[index] != index) {
+					parents[index] = parents[parents[index]];
+					index = parents[index];
+				}
+				return index;
 			};
-			// Multiplication by an odd number is injective modulo 2^64.
-			// Replace the at-most-one zero with a third, distinct image.
-			for (auto& value : result)
-				if (!value)
-					value = (hash ^ 3u) * 1099511628211ull;
+			for (std::uint32_t i = 0; i < tiles.size(); ++i) {
+				parents[i] = i;
+				if (tiles[i] == CharacterMaskRoiTileBounds{})
+					continue;
+				if (i % columns && tiles[i - 1] != CharacterMaskRoiTileBounds{})
+					parents[root(i)] = root(i - 1);
+				if (i >= columns && tiles[i - columns] != CharacterMaskRoiTileBounds{})
+					parents[root(i)] = root(i - columns);
+			}
+			for (std::uint32_t i = 0; i < tiles.size(); ++i) {
+				const auto& t = tiles[i];
+				if (t != CharacterMaskRoiTileBounds{})
+					bounds[root(i)] = CharacterRegionPolicy::Union(bounds[root(i)], { t.minX, t.minY, t.maxX, t.maxY });
+			}
+			std::vector<CharacterRect> result;
+			for (const auto& rect : bounds)
+				if (rect.IsValid()) {
+					result.push_back(rect);
+					if (result.size() > CharacterMultiRoiDetail::kMaximumActors)
+						return {};
+				}
 			return result;
 		}
 
@@ -112,14 +139,15 @@ namespace NeuralRendering
 		std::span<const std::uint64_t> a_actorLifetimeIds,
 		std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_sourceFrame,
 		StableCharacterMaskRoi& a_state, bool a_savingsGate = true, bool a_allowSplit = true,
-		StableCharacterComputeSubrect* a_sharedSingle = nullptr, CharacterMaskRoiScratch* a_scratch = nullptr)
+		StableCharacterComputeSubrect* a_sharedSingle = nullptr, CharacterMaskRoiScratch* a_scratch = nullptr,
+		std::uint32_t a_regionLimit = kDefaultRegionsPerEye, std::uint32_t a_eyeNamespace = 0)
 	{
 		using namespace CharacterMaskRoiDetail;
 		const auto invalid = [&]() {
 			a_state = {};
 			return CharacterMaskRoiResult{};
 		};
-		if (!a_width || !a_height || a_width > kCharacterMaskRoiMaximumExtent ||
+		if (a_regionLimit < 1 || a_regionLimit > kEnabledRegionsPerEye || !a_width || !a_height || a_width > kCharacterMaskRoiMaximumExtent ||
 			a_height > kCharacterMaskRoiMaximumExtent ||
 			a_actorLifetimeIds.size() > CharacterMultiRoiDetail::kMaximumActors)
 			return invalid();
@@ -138,11 +166,12 @@ namespace NeuralRendering
 		if ((!owners.empty() && !owners.front()) ||
 			std::adjacent_find(owners.begin(), owners.end()) != owners.end())
 			return invalid();
-		if (a_state.width != a_width || a_state.height != a_height)
+		if (a_state.width != a_width || a_state.height != a_height || (a_state.cacheValid && a_state.cachedEyeNamespace != a_eyeNamespace))
 			a_state = {};
 		const bool sameSourceFrame = a_state.cacheValid && a_state.frame == a_sourceFrame;
 		const bool sameInputs = sameSourceFrame &&
 		                        a_state.cachedSavingsGate == a_savingsGate && a_state.cachedAllowSplit == a_allowSplit &&
+		                        a_state.cachedRegionLimit == a_regionLimit && a_state.cachedEyeNamespace == a_eyeNamespace &&
 		                        a_state.cachedOwners == owners && std::ranges::equal(a_state.cachedTiles, a_tiles);
 		if (sameInputs &&
 			(!a_sharedSingle || a_state.cachedResult.empty ||
@@ -150,11 +179,14 @@ namespace NeuralRendering
 					a_state.cachedResult.diagnostics.singleRegion == a_sharedSingle->provider)))
 			return a_state.cachedResult;
 		auto single = a_sharedSingle ? *a_sharedSingle : a_state.single;
+		if (a_state.cacheValid && a_state.cachedOwners != owners)
+			single = {};
 		// Changed ownership/policy starts a new episode; readback availability
 		// alone must retain the shared conservative envelope.
-		if (a_state.cacheValid && ((sameSourceFrame && !sameInputs) || a_state.cachedOwners != owners)) {
+		if (a_state.cacheValid && (sameSourceFrame && !sameInputs)) {
 			single = {};
 			a_state.multi = {};
+			a_state.tracks.clear();
 		}
 
 		auto& stripes = scratch.stripes;
@@ -190,6 +222,7 @@ namespace NeuralRendering
 		if (result.empty) {
 			single = {};
 			a_state.multi = {};
+			a_state.tracks.clear();
 		} else {
 			result.requiredSubrect = BuildCharacterComputeSubrect(std::span(&all, 1), a_width, a_height);
 			result.computeSubrect = ResolveStableCharacterComputeSubrect(
@@ -197,7 +230,38 @@ namespace NeuralRendering
 			if (!result.computeSubrect.Fits(a_width, a_height))
 				return invalid();
 			result.diagnostics.singleRegion = result.computeSubrect;
-			if (a_allowSplit && owners.size() >= 2) {
+			if (a_allowSplit && a_regionLimit > kDefaultRegionsPerEye) {
+				const auto components = MaskComponents(a_tiles, columns, scratch);
+				std::vector<CharacterMultiRoiActor> candidates;
+				for (std::size_t i = 0; i < components.size(); ++i)
+					candidates.push_back({ i + 1u, components[i] });
+				StableCharacterMultiRoi search;
+				const auto proposed = ResolveCharacterMultiRoi(candidates, occupied, a_width, a_height, a_sourceFrame,
+					search, result.multiRoiReason, a_savingsGate, result.computeSubrect, a_regionLimit);
+				result.diagnostics = search.diagnostics;
+				if (proposed.count) {
+					std::vector<CharacterRect> raw(proposed.count);
+					for (const auto& component : components)
+						for (std::uint32_t i = 0; i < proposed.count; ++i)
+							if (ContainsComputeSubrect(proposed.regions[i], CharacterMultiRoiDetail::Required(component, a_width, a_height))) {
+								raw[i] = CharacterRegionPolicy::Union(raw[i], component);
+								break;
+							}
+					const auto tracks = MatchSpatialRoiTracks(raw, a_state.tracks, a_sourceFrame, a_eyeNamespace);
+					candidates.clear();
+					for (const auto& track : tracks) candidates.push_back({ track.identity, track.bounds });
+					result.computeRegions = ResolveCharacterMultiRoi(candidates, occupied, a_width, a_height, a_sourceFrame,
+						a_state.multi, result.multiRoiReason, a_savingsGate, result.computeSubrect, a_regionLimit);
+					result.diagnostics = a_state.multi.diagnostics;
+					a_state.tracks = tracks;
+					if (result.computeRegions.count)
+						result.computeSubrect = CharacterRegionEnclosure(result.computeRegions);
+				} else {
+					a_state.multi = {};
+					if (components.empty())
+						result.multiRoiReason = CharacterMultiRoiReason::ActorCapacity;
+				}
+			} else if (a_allowSplit && a_regionLimit >= 2) {
 				const auto singleFallback = result.computeSubrect;
 				Candidate best;
 				Candidate retained;
@@ -240,7 +304,9 @@ namespace NeuralRendering
 						if (!diagnostics.candidateAvailable || (!overlaps && diagnostics.candidateOverlaps) ||
 							(overlaps == diagnostics.candidateOverlaps && cost.valid && cost.splitPixels < diagnostics.cost.splitPixels)) {
 							diagnostics.candidateAvailable = true;
-							diagnostics.candidateRegions = provider;
+							diagnostics.candidateRegions = {};
+							std::ranges::copy(provider, diagnostics.candidateRegions.begin());
+							diagnostics.candidateCount = 2;
 							diagnostics.candidateOverlaps = overlaps;
 							diagnostics.candidateCoversEligibility = true;
 							diagnostics.retaining = retaining;
@@ -262,7 +328,8 @@ namespace NeuralRendering
 				if (retained.area != UINT64_MAX)
 					best = retained;
 				if (best.area != UINT64_MAX) {
-					const auto identities = SpatialIdentities(owners, best.axis);
+					const auto tracks = MatchSpatialRoiTracks(best.bounds, a_state.tracks, a_sourceFrame, a_eyeNamespace);
+					const std::array identities{ tracks[0].identity, tracks[1].identity };
 					const std::array actors{
 						CharacterMultiRoiActor{ identities[0], best.bounds[0] },
 						CharacterMultiRoiActor{ identities[1], best.bounds[1] },
@@ -271,6 +338,7 @@ namespace NeuralRendering
 						a_width, a_height, a_sourceFrame, a_state.multi, result.multiRoiReason,
 						a_savingsGate, singleFallback);
 					result.diagnostics = a_state.multi.diagnostics;
+					a_state.tracks = tracks;
 					if (result.computeRegions.count == 2) {
 						result.computeSubrect = UnionCharacterComputeSubrect(
 							result.computeRegions.regions[0], result.computeRegions.regions[1]);
@@ -284,9 +352,20 @@ namespace NeuralRendering
 				a_state.multi = {};
 			}
 		}
+		result.computeRegions.spatialTracks = result.computeRegions.count != 0;
+		for (std::uint32_t i = 0; i < result.computeRegions.count; ++i) {
+			const auto& trackOwners = a_state.multi.clusters[result.computeRegions.regionSlots[i]].owners;
+			result.computeRegions.identityConfident[i] = std::ranges::all_of(trackOwners, [&](auto owner) {
+				return std::ranges::any_of(a_state.tracks, [&](const auto& track) { return track.identity == owner && track.confident; });
+			});
+		}
+		if (!result.computeRegions.count)
+			a_state.tracks.clear();
 		a_state.cachedTiles.assign(a_tiles.begin(), a_tiles.end());
 		a_state.cachedSavingsGate = a_savingsGate;
 		a_state.cachedAllowSplit = a_allowSplit;
+		a_state.cachedRegionLimit = a_regionLimit;
+		a_state.cachedEyeNamespace = a_eyeNamespace;
 		a_state.cachedOwners = owners;
 		a_state.cachedResult = result;
 		a_state.width = a_width;

@@ -168,7 +168,7 @@ namespace NeuralRendering::Evidence
 			{ "route", d.route == FeatureSlotRoute::Main ? "main" : d.route == FeatureSlotRoute::Submit ? "submit" :
 																										  "unexpected" },
 			{ "legacyInsertionPoint", GetInsertionPointName(d.insertion) }, { "logicalEyeCount", d.logicalEyeCount },
-			{ "plannedRegionCount", d.regionCount }, { "actualEvaluationCount", actualEvaluations }, { "activeEvaluationPixels", activePixels },
+			{ "plannedRegionCount", d.regionCount }, { "requestedRegionCount", d.requestedRegionCount }, { "capacityFallback", d.capacityFallback }, { "actualEvaluationCount", actualEvaluations }, { "activeEvaluationPixels", activePixels },
 			{ "plannedPhysicalSlotMask", d.plannedPhysicalSlotMask }, { "attemptedPhysicalSlotMask", s.attemptedPhysicalSlotMask },
 			{ "succeededPhysicalSlotMask", s.succeededPhysicalSlotMask }, { "privateCommittedPhysicalSlotMask", s.committedPhysicalSlotMask },
 			{ "finished", s.finished }, { "succeeded", s.succeeded }, { "failureStage", s.failureStage }, { "evidenceFailed", s.evidenceFailed },

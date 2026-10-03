@@ -242,7 +242,7 @@ int main()
 	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b00010001u) == FeatureSlotRoute::Main);
 	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b11001100u) == FeatureSlotRoute::Submit);
 	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0b01010001u) == FeatureSlotRoute::Unexpected);
-	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0x100u) == FeatureSlotRoute::Unexpected);
+	static_assert(NeuralRendering::ClassifyFeatureSlotMask(0x100u) == (NeuralRendering::kEnabledRegionsPerEye > 2 ? FeatureSlotRoute::Main : FeatureSlotRoute::Unexpected));
 	static_assert(NeuralRendering::LogicalFeatureSlot(4u) == 0u);
 	static_assert(NeuralRendering::LogicalFeatureSlot(7u) == 3u);
 	static_assert(NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 1u, 42u));
@@ -251,7 +251,7 @@ int main()
 	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 1u, 43u));
 	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 4u, 42u));
 	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(0u, 42u, 3u, 42u));
-	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(8u, 42u, 1u, 42u));
+	static_assert(!NeuralRendering::IsMatchingRegionStereoPair(32u, 42u, 1u, 42u));
 	constexpr std::array<std::uint32_t, 4> splitRequirements{ 0x11u, 0x22u, 0u, 0u };
 	static_assert(NeuralRendering::AggregateRegionEvaluationMask(0x1u, splitRequirements, false) == 0x1u);
 	static_assert(NeuralRendering::AggregateRegionEvaluationMask(0x1u, splitRequirements, true) == 0u);
@@ -261,17 +261,17 @@ int main()
 	static_assert([] {
 		std::uint32_t seen = 0;
 		for (std::uint32_t logical = 0; logical < 4u; ++logical) {
-			for (std::uint32_t region = 0; region < 2u; ++region) {
+			for (std::uint32_t region = 0; region < NeuralRendering::kEnabledRegionsPerEye; ++region) {
 				const auto physical = NeuralRendering::PhysicalRegionFeatureSlot(logical, region);
-				if (physical >= 8u || (seen & (1u << physical)) != 0u ||
+				if (physical >= NeuralRendering::kPhysicalFeatureSlotCount || (seen & (1u << physical)) != 0u ||
 					NeuralRendering::LogicalFeatureSlot(physical) != logical)
 					return false;
 				seen |= 1u << physical;
 			}
 		}
-		return seen == 0xFFu &&
-		       NeuralRendering::PhysicalRegionFeatureSlot(4u, 0u) == 8u &&
-		       NeuralRendering::PhysicalRegionFeatureSlot(0u, 2u) == 8u;
+		return seen == NeuralRendering::RegionRouteMask(15) &&
+		       NeuralRendering::PhysicalRegionFeatureSlot(4u, 0u) == NeuralRendering::kPhysicalFeatureSlotCount &&
+		       NeuralRendering::PhysicalRegionFeatureSlot(0u, NeuralRendering::kEnabledRegionsPerEye) == NeuralRendering::kPhysicalFeatureSlotCount;
 	}());
 	static_assert([] {
 		using NeuralRendering::CharacterComputeRegionPlan;

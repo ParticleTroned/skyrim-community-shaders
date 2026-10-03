@@ -615,10 +615,10 @@ namespace NeuralRendering
 		const bool insertionPointValid = IsValidInsertionPoint(a_timing.insertionPoint);
 		if (a_timing.frameId == std::numeric_limits<std::uint32_t>::max() ||
 			!a_timing.pixelCount || !a_timing.evaluationCount ||
-			a_timing.evaluationCount > 4u ||
+			a_timing.evaluationCount > kMaximumRegionEvaluations ||
 			a_timing.logicalEyeCount == 0u || a_timing.logicalEyeCount > 2u ||
 			static_cast<std::uint32_t>(std::popcount(
-				(a_timing.featureSlotMask | (a_timing.featureSlotMask >> 4u)) & 0xFu)) !=
+				LogicalRegionMask(a_timing.featureSlotMask))) !=
 				a_timing.logicalEyeCount ||
 			static_cast<std::uint32_t>(std::popcount(a_timing.featureSlotMask)) !=
 				a_timing.evaluationCount ||

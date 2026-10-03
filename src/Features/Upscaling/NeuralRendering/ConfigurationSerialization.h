@@ -46,6 +46,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		rendering.erase("neuralCharacterCurrentContextEnabled");
 		rendering.erase("neuralCharacterGpuMaskSupportEnabled");
+		rendering.erase("neuralCharacterRegionLimit");
 #endif
 		return rendering;
 	}
@@ -74,6 +75,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		destination.neuralCharacterCurrentContextEnabled = source.neuralCharacterCurrentContextEnabled;
 		destination.neuralCharacterGpuMaskSupportEnabled = source.neuralCharacterGpuMaskSupportEnabled;
+		destination.neuralCharacterRegionLimit = source.neuralCharacterRegionLimit;
 #endif
 	}
 }

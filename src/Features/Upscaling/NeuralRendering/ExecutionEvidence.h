@@ -20,7 +20,7 @@
 namespace NeuralRendering
 {
 	struct CharacterPreparationEvidence;
-	inline constexpr std::size_t kMaximumExecutionRegions = 4;
+	inline constexpr std::size_t kMaximumExecutionRegions = kMaximumRegionEvaluations;
 	inline constexpr std::uint32_t kExecutionTimestampQueriesPerContext = 2u + 2u * static_cast<std::uint32_t>(kMaximumExecutionRegions);
 	[[nodiscard]] constexpr std::uint32_t ExecutionEvaluationQuery(std::uint32_t context, std::uint32_t region) noexcept
 	{
@@ -124,6 +124,8 @@ namespace NeuralRendering
 		InsertionPoint insertion = kDefaultInsertionPoint;
 		ExecutionContext context{};
 		std::uint32_t logicalEyeCount = 0, regionCount = 0, plannedPhysicalSlotMask = 0;
+		std::uint32_t requestedRegionCount = 0;
+		bool capacityFallback = false;
 		bool colorProcessing = false, transportBypass = false;
 		std::array<ExecutionRegionDescriptor, kMaximumExecutionRegions> regions{};
 	};

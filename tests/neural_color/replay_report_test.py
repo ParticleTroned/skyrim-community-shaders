@@ -73,6 +73,21 @@ def add_storage_evidence(case, policy="captured"):
 
 
 class ReplayReportTest(unittest.TestCase):
+    def test_sixteen_native_calls_are_counted_and_bounded(self):
+        source = fixture()
+        case = source["cases"][0]
+        for key in ("evaluatedRects", "evaluatedGuideRects", "evaluatedSourceRects"):
+            case[key] = case[key] * 16
+        case.update(evaluationsPerSample=16, logicalEyeCount=2, contextIds=[f"context-{i}" for i in range(16)])
+        for sample in case["samples"]:
+            sample.update(evaluationCount=16, createdFeatureCount=16 if sample["warmup"] else 0)
+            sample["evaluationGpuMicroseconds"] *= 16
+            sample["providerFootprint"] *= 16
+        self.assertEqual(rr.report(source)["measuredCaseCount"], 1)
+        case["samples"][0]["evaluationCount"] = 17
+        with self.assertRaises(ValueError):
+            rr.report(source)
+
     def test_context_halo_and_resource_selector_preserve_the_fixed_output_contract(self):
         source = paired("input_storage")
         for case in source["cases"]:

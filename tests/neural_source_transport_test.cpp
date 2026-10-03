@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/CapacityFallback.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
 #include "Features/Upscaling/NeuralRendering/SourceTransport.h"
@@ -15,6 +16,12 @@ void Require(bool value, const char* reason)
 
 int main()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	static_assert(kEnabledRegionsPerEye == 8 && kPhysicalFeatureSlotCount == 32);
+#else
+	static_assert(kEnabledRegionsPerEye == 2 && kPhysicalFeatureSlotCount == 8);
+#endif
+	static_assert(CharacterComputeRegionPlan{}.regions.size() == kEnabledRegionsPerEye);
 	RendererApplyArgs first;
 	first.frameId = 12;
 	first.sourceWorldFrame = 11;
@@ -83,6 +90,27 @@ int main()
 	Color::Experiments experiment;
 	Require(!experiment.SharedSourceTransportEnabled(), "sharing defaults off");
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	for (auto reason : { CapacityFailure::Pressure, CapacityFailure::Unsupported, CapacityFailure::Unsafe }) {
+		CapacityFallback fallback;
+		std::string order;
+		const auto apply = [&] { order += 'a'; return false; };
+		const auto classify = [&] { order += 'c'; return reason; };
+		const auto retire = [&] { order += 'r'; return true; };
+		const auto merged = [&] { order += 'm'; return true; };
+		const bool safe = reason != CapacityFailure::Unsafe;
+		Require(fallback.ApplyBatch(true, apply, classify, retire, merged) == safe, "only recoverable failures retry");
+		Require(order == (safe ? "acrm" : "ac"), "unwind, classify and fence before fallback");
+		if (safe) {
+			order.clear();
+			Require(fallback.ApplyBatch(true, apply, classify, retire, merged) && order == "m", "rejected count cannot resurrect");
+		}
+	}
+	CapacityFallback failedRetirement;
+	unsigned retries = 0;
+	Require(!failedRetirement.ApplyBatch(true, [] { return false; }, [] { return CapacityFailure::Pressure; }, [] { return false; }, [&] { ++retries; return true; }) && !retries, "failed retirement never retries");
+	Require(failedRetirement.rejected && failedRetirement.recoveries == 0, "retain failed recovery evidence");
+	CapacityFallback ordinary;
+	Require(!ordinary.ApplyBatch(false, [] { return false; }, [] { return CapacityFailure::Pressure; }, [] { return true; }, [&] { ++retries; return true; }) && !retries && !ordinary.rejected, "default count keeps existing failure policy");
 	experiment.sharedSourceTransport = true;
 	Require(experiment.SharedSourceTransportEnabled(), "bridge may enable sharing");
 	CapacityRejections<unsigned, 2> ledger;

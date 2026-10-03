@@ -19,8 +19,8 @@ namespace NeuralRendering
 		std::optional<std::uint64_t> captureEpoch;
 		Color::Configuration configuration{};
 		std::uint32_t slotMask = 0, attemptedMask = 0, succeededMask = 0;
-		std::array<Color::Observation, 8> slots{};
-		std::array<std::shared_ptr<ExecutionEvidence>, 8> executions{};
+		std::array<Color::Observation, kPhysicalFeatureSlotCount> slots{};
+		std::array<std::shared_ptr<ExecutionEvidence>, kPhysicalFeatureSlotCount> executions{};
 		std::uint32_t executionCount = 0;
 		std::uint32_t executionEvidenceFailures = 0;
 

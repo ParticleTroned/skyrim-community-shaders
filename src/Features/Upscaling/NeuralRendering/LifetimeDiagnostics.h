@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RegionCapacity.h"
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "ComputeSubrect.h"
@@ -51,7 +53,7 @@ namespace NeuralRendering
 		std::int32_t result = 0;
 		bool succeeded = false, failureObserved = false;
 		LifetimeFenceSnapshot before{}, after{};
-		std::array<LifetimeRegion, 4> regions{};
+		std::array<LifetimeRegion, kMaximumRegionEvaluations> regions{};
 	};
 
 	struct LifetimeSnapshot

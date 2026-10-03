@@ -1,5 +1,8 @@
 #pragma once
 
+#include "CapacityFallback.h"
+#include "RegionCapacity.h"
+
 #include "ExecutionEvidence.h"
 
 #include "NativeEvaluationLayout.h"
@@ -100,8 +103,8 @@ namespace NeuralRendering
 	class Runtime
 	{
 	public:
-		// Two persistent region banks, each containing main L/R and submit L/R.
-		static constexpr std::size_t kFeatureSlotCount = 8;
+		// Lazy persistent region banks retain main L/R and submit L/R identities.
+		static constexpr std::size_t kFeatureSlotCount = kPhysicalFeatureSlotCount;
 		static constexpr std::string_view kPatchedRuntimeSha256 = "8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206";
 		static constexpr std::string_view kAlternatePatchedRuntimeSha256 = "CEB6432F6FBDF44D886014BCD47241932BF8B67439FEEF9BBDD0961436662650";
 		static constexpr std::string_view kSignedRuntimeSha256 = "E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E";
@@ -150,6 +153,8 @@ namespace NeuralRendering
 		[[nodiscard]] ParameterCoreSource CoreSource() const;
 		[[nodiscard]] std::string Detail() const;
 		[[nodiscard]] std::uint32_t NgxResult() const;
+		/** Only documented creation failures permit a safely retired smaller retry. */
+		[[nodiscard]] CapacityFailure CreationCapacityFailure() const;
 		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
 		[[nodiscard]] std::uint32_t LastPathProxyHits() const;
 		[[nodiscard]] bool LastPathProxyInstalled() const;

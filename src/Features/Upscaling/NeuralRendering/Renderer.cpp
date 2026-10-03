@@ -1,6 +1,7 @@
 #include "Renderer.h"
 #include "GpuPass.h"
 
+#include "CapacityFallback.h"
 #include "ColorPipeline.h"
 #include "D3D12Interop.h"
 #include "PipelinePolicy.h"
@@ -47,7 +48,6 @@ namespace NeuralRendering
 	{
 		constexpr std::uint32_t kMaximumTextureDimension =
 			D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
-		constexpr std::size_t kMaximumRegionEvaluations = 4;
 		constexpr std::size_t kMaximumTransitionResourceCount = kMaximumRegionEvaluations * 5;
 		static_assert(kMaximumRegionEvaluations == kMaximumExecutionRegions);
 
@@ -644,10 +644,13 @@ namespace NeuralRendering
 			ResourceKey resources{};
 			std::uintptr_t device = 0;
 			std::uint32_t slot = 0;
+			std::uint32_t evaluationCount = 0;
 			bool operator==(const CapacityKey&) const = default;
 		};
 		CapacityRejections<CapacityKey, Runtime::kFeatureSlotCount> capacityRejections_;
 		CapacityKey requestedCapacity_{};
+		CapacityFallback capacityFallback_{};
+		std::uint32_t requestedRegionCount_ = 0;
 #endif
 
 		struct Slot
@@ -713,6 +716,7 @@ namespace NeuralRendering
 		bool ApplyBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
 			RendererApplyOutcome& a_outcome);
+		bool ApplyRegionBatchLocked(std::span<const RendererApplyArgs> a_args, RendererApplyOutcome& a_outcome);
 		bool ResetLocked(bool a_resetShader, bool a_destruction);
 		void ShutdownForDestruction() noexcept;
 
@@ -1457,9 +1461,10 @@ namespace NeuralRendering
 		if (colorConfiguration_.experiments.SharedSourceTransportEnabled() && a_latch &&
 			(a_stage == RendererStage::ResourceCreation || a_stage == RendererStage::DeviceCompatibility ||
 				a_stage == RendererStage::FeatureEvaluate || deviceRemoved || a_forceQuarantine)) {
-			const auto kind = !deviceRemoved && !a_forceQuarantine && a_result == E_OUTOFMEMORY ? CapacityRejectionKind::Pressure :
-			                  !deviceRemoved && !a_forceQuarantine && a_result == E_NOINTERFACE ? CapacityRejectionKind::Unsupported :
-			                                                                                      CapacityRejectionKind::UnsafeProvider;
+			const auto native = a_stage == RendererStage::FeatureEvaluate ? Runtime::Instance().CreationCapacityFailure() : CapacityFailure::Unsafe;
+			const auto kind = !deviceRemoved && !a_forceQuarantine && (a_result == E_OUTOFMEMORY || native == CapacityFailure::Pressure)    ? CapacityRejectionKind::Pressure :
+			                  !deviceRemoved && !a_forceQuarantine && (a_result == E_NOINTERFACE || native == CapacityFailure::Unsupported) ? CapacityRejectionKind::Unsupported :
+			                                                                                                                                  CapacityRejectionKind::UnsafeProvider;
 			capacityRejections_.Record({ requestedCapacity_, kind, a_result, Runtime::Instance().NgxResult() });
 		}
 		if (activeLifetime_) {
@@ -2205,6 +2210,54 @@ namespace NeuralRendering
 	}
 
 	bool Renderer::State::ApplyBatchLocked(
+		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome)
+	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		requestedRegionCount_ = 0;
+		outcome = {};
+		bool higherCount = false;
+		for (const auto& arg : args) {
+			requestedRegionCount_ += std::max(1u, arg.computeRegions.count);
+			higherCount |= arg.computeRegions.count > kDefaultRegionsPerEye;
+			if (!GetCharacterRegionSubmissionViolation(arg.featureSlot, arg.computeRegions,
+					arg.computeSubrect, arg.outputWidth, arg.outputHeight, arg.characterVisualIsolation)
+					.empty())
+				return ApplyRegionBatchLocked(args, outcome);
+		}
+		if (args.empty() || args.size() > kEyeCount)
+			return ApplyRegionBatchLocked(args, outcome);
+		const auto fallback = [&] {
+			std::array<RendererApplyArgs, kEyeCount> merged{};
+			for (std::size_t index = 0; index < args.size(); ++index) {
+				auto& value = merged[index];
+				value = args[index];
+				if (value.computeRegions.count) {
+					// The validated enclosure initializes every backend-readable sample.
+					value.roi = BuildRoiDescriptor(value.computeSubrect, value.computeSubrect,
+						{ value.outputWidth, value.outputHeight }, true);
+					value.computeRegions = {};
+				}
+			}
+			const auto attempted = outcome.evaluationAttemptedFeatureSlotMask;
+			const bool success = ApplyRegionBatchLocked(std::span(merged).first(args.size()), outcome);
+			outcome.evaluationAttemptedFeatureSlotMask |= attempted;
+			return success;
+		};
+		if (std::ranges::any_of(args, [](const auto& arg) { return !QualifiedHigherRegionGeometry(arg.computeRegions); }))
+			return fallback();
+		return capacityFallback_.ApplyBatch(higherCount, [&] { return ApplyRegionBatchLocked(args, outcome); }, [&] {
+				if (quarantined_ || FAILED(GetDeviceRemovalReasonLocked(S_OK)))
+					return CapacityFailure::Unsafe;
+				if (snapshot_.failureStage == RendererStage::ResourceCreation && snapshot_.lastResult == E_OUTOFMEMORY)
+					return CapacityFailure::Pressure;
+				return snapshot_.failureStage == RendererStage::FeatureEvaluate ?
+					Runtime::Instance().CreationCapacityFailure() : CapacityFailure::Unsafe; }, [&] { return TeardownBackendLocked(false, false, false); }, fallback);
+#else
+		return ApplyRegionBatchLocked(args, outcome);
+#endif
+	}
+
+	bool Renderer::State::ApplyRegionBatchLocked(
 		std::span<const RendererApplyArgs> a_logicalArgs,
 		RendererApplyOutcome& a_logicalOutcome)
 	{
@@ -2299,7 +2352,7 @@ namespace NeuralRendering
 			for (std::uint32_t region = 0; region < count; ++region) {
 				auto& physical = expandedArgs[expandedCount];
 				physical = logical;
-				physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, region);
+				physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, plan.count ? plan.regionSlots[region] : 0u);
 				physical.computeRegions = {};
 				if (region != 0u)
 					Increment(snapshot_.counters.attempts);
@@ -2348,12 +2401,12 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (colorConfiguration_.experiments.SharedSourceTransportEnabled()) {
 			for (std::size_t index = 0; index < a_args.size(); ++index) {
-				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot };
+				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot, static_cast<std::uint32_t>(a_args.size()) };
 				if (capacityRejections_.Rejects(requestedCapacity_))
 					return FailLocked(RendererStage::FailureLatched, E_FAIL,
 						"source transport capacity is rejected; explicit nr_reset after safe retirement is required", a_args[index].featureSlot, true);
 			}
-			requestedCapacity_ = { resources[0].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[0].device), a_args[0].featureSlot };
+			requestedCapacity_ = { resources[0].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[0].device), a_args[0].featureSlot, static_cast<std::uint32_t>(a_args.size()) };
 		}
 #endif
 
@@ -2400,6 +2453,8 @@ namespace NeuralRendering
 				descriptor.context = a_args.front().executionContext;
 				descriptor.logicalEyeCount = logicalEyeCount;
 				descriptor.regionCount = static_cast<std::uint32_t>(a_args.size());
+				descriptor.requestedRegionCount = requestedRegionCount_;
+				descriptor.capacityFallback = requestedRegionCount_ != descriptor.regionCount;
 				descriptor.colorProcessing = colorConfiguration_.Enabled();
 				descriptor.transportBypass = colorConfiguration_.experiments.transportBypass;
 				for (std::size_t index = 0; index < a_args.size(); ++index) {
@@ -2472,7 +2527,7 @@ namespace NeuralRendering
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (colorConfiguration_.experiments.SharedSourceTransportEnabled())
-				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot };
+				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot, static_cast<std::uint32_t>(a_args.size()) };
 #endif
 			const Slot* sourceOwner = nullptr;
 			if (resources[index].resourceKey.sharedSourceTransport) {
@@ -2508,7 +2563,7 @@ namespace NeuralRendering
 			for (std::size_t index = 0; index < a_args.size(); ++index) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (colorConfiguration_.experiments.SharedSourceTransportEnabled())
-					requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot };
+					requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot, static_cast<std::uint32_t>(a_args.size()) };
 #endif
 				const auto profile = Color::EffectiveProfile(colorConfiguration_,
 					static_cast<std::uint32_t>(a_args[index].insertionPoint));
@@ -2837,7 +2892,7 @@ namespace NeuralRendering
 			bool evaluationAttempted = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (colorConfiguration_.experiments.SharedSourceTransportEnabled())
-				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(args.device), args.featureSlot };
+				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(args.device), args.featureSlot, static_cast<std::uint32_t>(a_args.size()) };
 #endif
 			RuntimeExecutionEvidence runtimeEvidence{};
 			// Runtime diagnostics can throw after evaluation; preserve the actual call outcome.
@@ -3286,8 +3341,10 @@ namespace NeuralRendering
 		try {
 			const bool reset = state_->ResetLocked(false, false);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			if (reset && a_clearTransportRejections)
+			if (reset && a_clearTransportRejections) {
 				state_->capacityRejections_ = {};
+				state_->capacityFallback_ = {};
+			}
 #else
 			(void)a_clearTransportRejections;
 #endif
@@ -3418,7 +3475,7 @@ namespace NeuralRendering
 		}
 		for (std::size_t index = 0; index < state_->capacityRejections_.count; ++index) {
 			const auto& entry = state_->capacityRejections_.entries[index];
-			rejections.push_back({ { "slot", entry.key.slot }, { "device", std::to_string(entry.key.device) },
+			rejections.push_back({ { "slot", entry.key.slot }, { "evaluationCount", entry.key.evaluationCount }, { "device", std::to_string(entry.key.device) },
 				{ "class", entry.kind == CapacityRejectionKind::Pressure ? "transient_pressure" : entry.kind == CapacityRejectionKind::Unsupported ? "unsupported_envelope" :
 																																					 "unsafe_provider_failure" },
 				{ "result", entry.result }, { "nativeResult", entry.nativeResult },
@@ -3431,6 +3488,10 @@ namespace NeuralRendering
 				{ "sharedSourceTransport", entry.key.resources.sharedSourceTransport } });
 		}
 		return { { "schemaVersion", 1 }, { "requested", state_->colorConfiguration_.experiments.SharedSourceTransportEnabled() },
+			{ "capacityFallback", { { "active", state_->capacityFallback_.rejected }, { "recoveries", state_->capacityFallback_.recoveries },
+									  { "reason", state_->capacityFallback_.reason == CapacityFailure::Pressure ? "pressure" : state_->capacityFallback_.reason == CapacityFailure::Unsupported ? "unsupported" :
+																																																  "none" },
+									  { "policy", "one_enclosing_context_per_eye_after_fenced_recoverable_failure_until_explicit_nr_reset" } } },
 			{ "maximumPhysicalContexts", Runtime::kFeatureSlotCount }, { "allocationPolicy", "lazy_exact_capacity_no_speculative_prewarm" },
 			{ "activeSlotMask", activeMask }, { "cachedSlotMask", cachedMask }, { "nativeSlotMask", nativeMask },
 			{ "sharedInputLogicalBytes", inputBytes }, { "privateOutputLogicalBytes", outputBytes }, { "privateColorLogicalBytes", colorBytes },

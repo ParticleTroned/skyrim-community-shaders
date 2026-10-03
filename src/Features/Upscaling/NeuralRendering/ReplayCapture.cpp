@@ -1,4 +1,5 @@
 #include "ReplayCapture.h"
+#include "RegionCapacity.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "ColorPolicy.h"
@@ -279,7 +280,7 @@ namespace NeuralRendering::Replay
 			std::uint32_t slotMask = 0;
 			for (std::size_t index = 0; index < batch.eyes.size(); ++index) {
 				const auto& eye = batch.eyes[index];
-				if (eye.slot >= 8 || (slotMask & (1u << eye.slot)) ||
+				if (eye.slot >= kPhysicalFeatureSlotCount || (slotMask & (1u << eye.slot)) ||
 					!Color::Finite(eye.motionVectorScale[0]) || !Color::Finite(eye.motionVectorScale[1]))
 					throw std::runtime_error("native replay requires unique slots and finite motion scales");
 				slotMask |= 1u << eye.slot;

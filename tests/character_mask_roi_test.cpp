@@ -221,8 +221,8 @@ int main()
 	CHECK(Covered(afterGap, tiles));
 	CHECK(afterGap.computeRegions.historyKeys == initialKey);
 
-	// Stereo disparity may move mask support; cluster identities remain
-	// selected-owner/axis/side based, independent of eye or first-ready frame.
+	// GPU masks have no cross-eye actor IDs: independent spatial tracks must
+	// not assert correspondence from ordering, axis, or selected population.
 	auto stereo = selected;
 	for (auto& rect : stereo) {
 		rect.minX += 19;
@@ -232,7 +232,7 @@ int main()
 	auto otherTiles = Tiles(stereo);
 	const auto other = ResolveCharacterMaskRoi(otherTiles, reversedOwners, kWidth, kHeight, 105, otherEye);
 	CHECK(other.computeRegions.count == 2 && Covered(other, otherTiles));
-	CHECK(other.computeRegions.clusterIdentities == first.computeRegions.clusterIdentities);
+	CHECK(other.computeRegions.clusterIdentities != first.computeRegions.clusterIdentities);
 	CHECK(other.computeRegions.historyKeys != first.computeRegions.historyKeys);
 
 	// Actual mask support bridging the characters must not be dropped simply
@@ -271,9 +271,9 @@ int main()
 	const auto returned = ResolveCharacterMaskRoi(tiles, kOwners, kWidth, kHeight, 254, state);
 	CHECK(returned.computeRegions.count == 2 && returned.computeRegions.historyKeys != initialKey);
 
-	// One actor still gets tight current-mask support, but no synthetic split.
+	// Disconnected current support can justify regions even for a single actor.
 	const std::array<std::uint64_t, 1> oneOwner{ 101 };
-	CHECK(ResolveCharacterMaskRoi(tiles, oneOwner, kWidth, kHeight, 255, state).computeRegions.count == 0);
+	CHECK(ResolveCharacterMaskRoi(tiles, oneOwner, kWidth, kHeight, 255, state).computeRegions.count == 2);
 	CHECK(ResolveCharacterMaskRoi(tiles, {}, kWidth, kHeight, 256, state).valid);
 
 	// Exact row-major ABI, including partial edge tiles, fails closed.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RegionCapacity.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -128,6 +130,7 @@ namespace NeuralRendering
 		bool experimentalCurrentContext = false;
 		/** Select the reference mask dispatcher for same-process qualification. */
 		bool experimentalGpuMaskSupport = false;
+		std::uint32_t experimentalRegionLimit = kDefaultRegionsPerEye;
 #endif
 		std::uint32_t minimumFacePixelSize =
 			CharacterPolicy::kDefaultMinimumFacePixelSize;
@@ -141,6 +144,14 @@ namespace NeuralRendering
 		CharacterDebugView debugView = CharacterDebugView::Off;
 		CharacterMaskTestMode maskTestMode = CharacterMaskTestMode::Authored;
 
+		[[nodiscard]] constexpr std::uint32_t RegionLimit() const noexcept
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			return experimentalRegionLimit;
+#else
+			return kDefaultRegionsPerEye;
+#endif
+		}
 		bool operator==(const CharacterSettings&) const = default;
 	};
 
@@ -166,6 +177,9 @@ namespace NeuralRendering
 		const auto finiteClamp = [](float value, float fallback, float minimum, float maximum) {
 			return std::clamp(std::isfinite(value) ? value : fallback, minimum, maximum);
 		};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		a_settings.experimentalRegionLimit = std::clamp(a_settings.experimentalRegionLimit, 1u, kMaximumRegionsPerEye);
+#endif
 		a_settings.faceStrength = finiteClamp(a_settings.faceStrength, CharacterPolicy::kDefaultFaceStrength,
 			CharacterPolicy::kMinimumStrength, CharacterPolicy::kMaximumStrength);
 		a_settings.skinStrength = finiteClamp(a_settings.skinStrength, CharacterPolicy::kDefaultSkinStrength,

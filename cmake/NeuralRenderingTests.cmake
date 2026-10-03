@@ -49,7 +49,7 @@ foreach(_policy IN ITEMS
 endforeach()
 
 foreach(_test IN ITEMS character_settings character_multi_roi character_mask_roi
-    compute_subrect roi_descriptor native_evaluation_layout frame_telemetry_ring dlss_viewport_crop foveated_region_plan)
+    neural_region_capacity compute_subrect roi_descriptor native_evaluation_layout frame_telemetry_ring dlss_viewport_crop foveated_region_plan)
     add_controller_test(${_test}_test ${_test} tests/${_test}_test.cpp)
 endforeach()
 target_link_libraries(character_settings_test PRIVATE nlohmann_json::nlohmann_json)
@@ -298,3 +298,5 @@ add_custom_command(
 add_controller_test(neural_rendering_controls_test NeuralRenderingControls tests/neural_rendering_controls_test.cpp)
 target_include_directories(neural_rendering_controls_test PRIVATE "${_neural_controls_test_dir}")
 target_sources(neural_rendering_controls_test PRIVATE "${_neural_controls_test_dir}/neural_rendering_controls_under_test.h")
+
+target_compile_definitions(neural_region_capacity_test PRIVATE DEVBENCH_BRIDGE_ENABLED)

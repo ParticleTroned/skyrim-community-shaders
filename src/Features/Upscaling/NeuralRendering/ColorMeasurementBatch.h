@@ -20,11 +20,11 @@ namespace NeuralRendering::Color
 		[[nodiscard]] bool Valid() const noexcept
 		{
 			const auto route = ClassifyFeatureSlotMask(expectedSlotMask);
-			const auto primary = expectedSlotMask & 0xFu;
+			const auto primary = LogicalRegionMask(expectedSlotMask);
 			return id != 0 && revision != 0 && insertion < 2 &&
 			       sourceWorldFrame != std::numeric_limits<std::uint32_t>::max() &&
 			       route != FeatureSlotRoute::Unexpected &&
-			       ((expectedSlotMask >> 4u) & ~primary) == 0 &&
+			       (expectedSlotMask & ~RegionRouteMask(primary)) == 0 &&
 			       atomicStereo == (primary == 3u || primary == 12u);
 		}
 	};
@@ -33,7 +33,7 @@ namespace NeuralRendering::Color
 	struct MeasurementBatch
 	{
 		MeasurementBatchKey key{};
-		std::array<Sample, 8> samples{};
+		std::array<Sample, kPhysicalFeatureSlotCount> samples{};
 		std::uint32_t receivedSlotMask = 0;
 		bool invalid = false;
 

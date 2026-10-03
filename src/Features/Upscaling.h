@@ -501,13 +501,14 @@ public:
 			NeuralRendering::CharacterPolicy::kDefaultMaximumDistanceMeters;
 		bool neuralCharacterAdaptiveRoiSelectionEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
-		// Experimental: separate persistent Feature 18 instances for two regions.
+		// Experimental: separate persistent Feature 18 instances for independent regions.
 		bool neuralCharacterMultiRoiEnabled = false;
 		bool neuralCharacterMultiRoiSavingsGateEnabled = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Session-only C context experiment; excluded from persisted settings. */
 		bool neuralCharacterCurrentContextEnabled = false;
 		bool neuralCharacterGpuMaskSupportEnabled = false;
+		uint neuralCharacterRegionLimit = NeuralRendering::kDefaultRegionsPerEye;
 #endif
 		uint neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;

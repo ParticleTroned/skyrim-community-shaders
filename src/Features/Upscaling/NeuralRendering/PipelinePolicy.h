@@ -504,8 +504,8 @@ namespace NeuralRendering
 	[[nodiscard]] constexpr FeatureSlotRoute ClassifyFeatureSlotMask(
 		std::uint32_t a_slotMask) noexcept
 	{
-		constexpr std::uint32_t mainMask = 0b00110011u;
-		constexpr std::uint32_t submitMask = 0b11001100u;
+		constexpr std::uint32_t mainMask = RegionRouteMask(3u);
+		constexpr std::uint32_t submitMask = RegionRouteMask(12u);
 		if (a_slotMask != 0 && (a_slotMask & ~mainMask) == 0)
 			return FeatureSlotRoute::Main;
 		if (a_slotMask != 0 && (a_slotMask & ~submitMask) == 0)
@@ -531,7 +531,9 @@ namespace NeuralRendering
 	[[nodiscard]] constexpr std::uint32_t PhysicalRegionFeatureSlot(
 		std::uint32_t a_logicalSlot, std::uint32_t a_region) noexcept
 	{
-		return a_logicalSlot < 4u && a_region < 2u ? a_logicalSlot + a_region * 4u : 8u;
+		return a_logicalSlot < kLogicalFeatureSlotCount && a_region < kEnabledRegionsPerEye ?
+		           a_logicalSlot + a_region * kLogicalFeatureSlotCount :
+		           kPhysicalFeatureSlotCount;
 	}
 
 	/** Pure admission contract used before any resource allocation or GPU recording. */
@@ -540,8 +542,8 @@ namespace NeuralRendering
 		const ComputeSubrect& a_support, std::uint32_t a_width, std::uint32_t a_height,
 		bool a_characterVisualIsolation) noexcept
 	{
-		if (a_logicalSlot >= 4u || a_plan.count > 2u)
-			return "character regions require a logical feature slot and at most two regions";
+		if (a_logicalSlot >= 4u || a_plan.count > kEnabledRegionsPerEye)
+			return "character regions require a logical feature slot and bounded regions";
 		if (a_plan.count == 0u)
 			return {};
 		if (!a_characterVisualIsolation || !a_support.Fits(a_width, a_height))
@@ -549,17 +551,19 @@ namespace NeuralRendering
 		for (std::uint32_t region = 0; region < a_plan.count; ++region) {
 			if (!a_plan.regions[region].Fits(a_width, a_height) ||
 				!ContainsComputeSubrect(a_support, a_plan.regions[region]) ||
-				a_plan.historyKeys[region] == 0u || a_plan.clusterIdentities[region] == 0u)
+				a_plan.historyKeys[region] == 0u || a_plan.clusterIdentities[region] == 0u ||
+				a_plan.regionSlots[region] >= kEnabledRegionsPerEye)
 				return "character region dimensions or persistent history identity are invalid";
 			if (auto violation = GetRoiDescriptorViolation(a_plan.roi[region], a_plan.regions[region], { a_width, a_height });
 				!violation.empty())
 				return violation;
 		}
-		if (a_plan.count == 2u &&
-			(CharacterComputeRegionsOverlap(a_plan.regions[0], a_plan.regions[1]) ||
-				a_plan.historyKeys[0] == a_plan.historyKeys[1] ||
-				a_plan.clusterIdentities[0] == a_plan.clusterIdentities[1]))
-			return "independent character regions must be disjoint with distinct histories";
+		for (std::uint32_t i = 0; i < a_plan.count; ++i)
+			for (std::uint32_t j = i + 1; j < a_plan.count; ++j)
+				if (CharacterComputeRegionsOverlap(a_plan.regions[i], a_plan.regions[j]) ||
+					a_plan.historyKeys[i] == a_plan.historyKeys[j] || a_plan.clusterIdentities[i] == a_plan.clusterIdentities[j] ||
+					a_plan.regionSlots[i] == a_plan.regionSlots[j])
+					return "independent character regions must be disjoint with distinct histories";
 		return {};
 	}
 
@@ -568,7 +572,7 @@ namespace NeuralRendering
 		std::uint32_t a_leftSlot, std::uint64_t a_leftIdentity,
 		std::uint32_t a_rightSlot, std::uint64_t a_rightIdentity) noexcept
 	{
-		return a_leftSlot < 8u && a_rightSlot < 8u &&
+		return a_leftSlot < kPhysicalFeatureSlotCount && a_rightSlot < kPhysicalFeatureSlotCount &&
 		       a_leftIdentity == a_rightIdentity &&
 		       IsOrderedStereoFeatureSlotPair(
 				   LogicalFeatureSlot(a_leftSlot), LogicalFeatureSlot(a_rightSlot));

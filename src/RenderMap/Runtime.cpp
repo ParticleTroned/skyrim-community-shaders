@@ -2407,6 +2407,10 @@ namespace CSX::RenderMap
 		if (captureGeneration == 0)
 			return;
 		const auto commandStreamSequence = NextCommandStreamSequence();
+		if (!collector.IsExecutionAllowedByGeometryScope()) {
+			collector.CountFiltered();
+			return;
+		}
 		const auto contextObservationId = EnsureImmediateContextObservation();
 		if (contextObservationId == 0 ||
 			immediateContextObservationGeneration.load(std::memory_order_acquire) != captureGeneration)

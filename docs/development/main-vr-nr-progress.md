@@ -1,5 +1,32 @@
 # main-vr-nr progress and continuation record
 
+## October 3 Task 9/10 experiments and compiler-idle repeat
+
+The [qualification record](nr-task9-10-qualification-20261003.md) preserves
+28,704 successful live native evaluations, three matched profiler windows
+and full A/C native captures on producer `587f560a843b`. The scene selected
+one region per eye even with limit two, so it did not qualify a new split.
+Settings were restored and Skyrim/MO2 closed normally.
+
+The new DevBench-only, default-off measured-plan and stateless compact
+experiments passed complete local validation (227 tests) and 21 standalone
+colour/WARP tests. No measured cost profile or production default is adopted.
+Compact buckets 256/512/768 preserve density, initialized read domains and
+owned output; unsupported modes keep full coordinates. 128 is excluded by
+native output differences.
+
+Compiler-idle repeats preserve both outcomes: the original short protocol
+has stable native baselines and bitwise equal larger-bucket static output;
+the longer 64-sample protocol is timing-unstable and remains rejected.
+Compact memory is lower but native speedup is small. The short 256/768
+sequences pass; 512 retains a write-coverage ambiguity despite raw output
+equality. This does not qualify general temporal or whole-pipeline behavior.
+
+Producer `7abf7b871612` is packaged for the next live comparison. **Tasks 9
+and 10 remain open** for the documented candidate-search/calibration and
+new-DLL runtime, quality, lifetime, CPU/pipeline and residency gates. No AIO
+installation or game restart was performed.
+
 ## October 3 Task 8 live results and Task 9 admission
 
 The [live qualification record](nr-task8-9-qualification-20261003.md)

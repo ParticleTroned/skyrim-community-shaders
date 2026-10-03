@@ -89,6 +89,7 @@ int main()
 	Require(!AddSourceTransition(transitions, count, Transition{}), "null resource rejected");
 	Color::Experiments experiment;
 	Require(!experiment.SharedSourceTransportEnabled(), "sharing defaults off");
+	Require(!experiment.CompactInputsEnabled(), "compact inputs default off in both builds");
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	for (auto reason : { CapacityFailure::Pressure, CapacityFailure::Unsupported, CapacityFailure::Unsafe }) {
 		CapacityFallback fallback;
@@ -112,6 +113,8 @@ int main()
 	CapacityFallback ordinary;
 	Require(!ordinary.ApplyBatch(false, [] { return false; }, [] { return CapacityFailure::Pressure; }, [] { return true; }, [&] { ++retries; return true; }) && !retries && !ordinary.rejected, "default count keeps existing failure policy");
 	experiment.sharedSourceTransport = true;
+	experiment.compactInputs = true;
+	Require(experiment.CompactInputsEnabled(), "bridge may enable stateless compact inputs");
 	Require(experiment.SharedSourceTransportEnabled(), "bridge may enable sharing");
 	CapacityRejections<unsigned, 2> ledger;
 	ledger.Record({ 10, CapacityRejectionKind::Pressure, -1, 2 });

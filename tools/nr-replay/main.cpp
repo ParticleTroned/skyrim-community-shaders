@@ -409,7 +409,7 @@ namespace
 		const auto policy = variant.inputStorageResource == "all" || variant.inputStorageResource == resource ? variant.inputStorage : "captured";
 		return ApplyInputStorage(data, valid, preserved, policy);
 	}
-	std::vector<Variant> Variants(unsigned width, unsigned height, unsigned guideWidth, unsigned guideHeight, const Difference& control, bool temporal)
+	std::vector<Variant> Variants(unsigned width, unsigned height, unsigned guideWidth, unsigned guideHeight, const Difference& control, bool temporal, unsigned capacitySize = 128)
 	{
 		const auto at = [&](unsigned w, unsigned h) {
 			w = std::min(w, width);
@@ -462,8 +462,8 @@ namespace
 			}
 			const unsigned quantumX = width / std::gcd(width, guideWidth);
 			const unsigned quantumY = height / std::gcd(height, guideHeight);
-			auto capacity = at(quantumX <= 128 ? 128 / quantumX * quantumX : 128,
-				quantumY <= 128 ? 128 / quantumY * quantumY : 128);
+			auto capacity = at(quantumX <= capacitySize ? capacitySize / quantumX * quantumX : capacitySize,
+				quantumY <= capacitySize ? capacitySize / quantumY * quantumY : capacitySize);
 			capacity.baseX = capacity.baseX / quantumX * quantumX;
 			capacity.baseY = capacity.baseY / quantumY * quantumY;
 			values.push_back({ "capacity-full", "capacity", "capacity-identical-integer-crop", "static_reset", { capacity }, {} });
@@ -894,14 +894,15 @@ namespace
 								{ "sha256", Hash(composite.bytes) }, { "nativeInputsUnmodified", true }, { "excludedFromGpuTiming", true } });
 						}
 						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage" || variant.axis == "source_transport" || variant.axis == "native_context_count" || variant.axis == "call_count") {
-							const auto retained = variant.temporal ? pixels : Crop(pixels, resources[i].rect);
+							const bool retainFullResource = variant.temporal && variant.axis != "capacity";
+							const auto retained = retainFullResource ? pixels : Crop(pixels, resources[i].rect);
 							const auto name = std::format("{}-{:03}-slot{}.bin", variant.id, iteration, resources[i].slot);
 							std::ofstream stream(outputRoot / name, std::ios::binary);
 							stream.write(reinterpret_cast<const char*>(retained.bytes.data()), static_cast<std::streamsize>(retained.bytes.size()));
 							Require(bool(stream), "native output evidence write failed");
 							sample["outputFiles"].push_back({ { "file", name }, { "sha256", Hash(retained.bytes) }, { "format", retained.format },
 								{ "width", retained.width }, { "height", retained.height }, { "rowBytes", retained.rowBytes }, { "slot", resources[i].slot },
-								{ "scope", variant.temporal ? "full_output_resource" : "evaluated_rectangle" } });
+								{ "scope", retainFullResource ? "full_output_resource" : "evaluated_rectangle" } });
 						}
 					}
 					sample["nonzeroEditPixels"] = edits;
@@ -949,6 +950,8 @@ int wmain(int argc, wchar_t** argv)
 	result["buildIdentity"]["ngxLibrarySha256"] = kNgxLibraryHash;
 	std::filesystem::path manifestPath, outputRoot, runtimeSource;
 	unsigned samples = 8, warmup = 3, seconds = 180;
+	unsigned capacitySize = 128;
+	bool capacityTemporal = false;
 	std::string onlyCase;
 	bool validateOnly = false, validateStorage = false, inspectOnly = false;
 	bool ownsOutput = false;
@@ -967,6 +970,10 @@ int wmain(int argc, wchar_t** argv)
 				inspectOnly = true;
 				continue;
 			}
+			if (option == L"--capacity-temporal") {
+				capacityTemporal = true;
+				continue;
+			}
 			Require(i + 1 < argc, "option requires value");
 			const std::filesystem::path argument = argv[++i];
 			if (option == L"--manifest")
@@ -983,11 +990,17 @@ int wmain(int argc, wchar_t** argv)
 				seconds = std::stoul(argument.string());
 			else if (option == L"--case")
 				onlyCase = argument.string();
-			else
+			else if (option == L"--capacity-size") {
+				const auto size = argument.string();
+				Require(size == "128" || size == "256" || size == "512" || size == "768", "capacity-size must be 128, 256, 512 or 768");
+				capacitySize = std::stoul(size);
+			} else
 				throw std::runtime_error("unknown option");
 		}
 		Require((!manifestPath.empty() || inspectOnly) && !outputRoot.empty(), "usage: csx_nr_replay --manifest input.json --output NEW_DIRECTORY [--runtime admitted.dll] [--samples 8] [--warmup 3] [--seconds 180] [--case ID] [--validate-input | --validate-storage]; --inspect needs only --output/--runtime");
 		Require(!inspectOnly || (!validateOnly && !validateStorage), "runtime inspection and input-only validation cannot be combined");
+		Require(capacitySize == 128 || (!inspectOnly && !validateStorage && (onlyCase == "capacity-full" || onlyCase == "capacity-compact")), "capacity-size requires an explicit capacity-full or capacity-compact case");
+		Require(!capacityTemporal || (!inspectOnly && !validateOnly && !validateStorage && (onlyCase == "capacity-full" || onlyCase == "capacity-compact")), "capacity-temporal requires an explicit native capacity case");
 		Require(samples >= 1 && samples <= 64 && warmup <= 32 && seconds >= 1 && seconds <= 600, "replay bounds: samples1..64 warmup0..32 seconds1..600");
 		Require(!std::filesystem::exists(outputRoot), "output directory already exists; preserve earlier evidence");
 		std::filesystem::create_directories(outputRoot);
@@ -1078,11 +1091,13 @@ int wmain(int argc, wchar_t** argv)
 			{ "trust", ToString(runtime.Trust()) }, { "parameterCorePath", runtime.ParameterCorePath().string() },
 			{ "parameterCoreSha256", runtime.ParameterCoreHash() } };
 		result["status"] = "running";
-		for (const auto& variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1)) {
+		for (auto variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1, capacitySize)) {
 			if (onlyCase.empty() && (variant.axis == "minimum_shape" || variant.axis == "input_storage" || variant.axis == "native_context_count" || variant.axis == "source_transport" || variant.rects.size() > kDefaultRegionsPerEye || variant.pairGroup == "capacity-calls-equal-area"))
 				continue;
 			if (!onlyCase.empty() && variant.id != onlyCase)
 				continue;
+			if (capacityTemporal)
+				variant.temporal = true;
 			std::cout << variant.id << std::endl;
 			auto value = RunCase(session, variant, frames, warmup, samples, deadline, outputRoot);
 			value["sourceContentSha256"] = result["sourceContentSha256"];

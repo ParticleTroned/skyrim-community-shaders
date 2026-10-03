@@ -107,6 +107,18 @@ driver events after 23 other cases completed. That is a failed experiment,
 not evidence of a general supported minimum. Do not repeat it as routine
 measurement or mix it into a running game's GPU workload.
 
+For an explicit `capacity-full` or `capacity-compact` case,
+`--capacity-size 128|256|512|768` selects the same crop dimensions in both
+storage layouts. The default is 128. These cases initialize and evaluate
+the entire selected crop without resampling; compare equal-sized cases
+in separate full/compact/full processes. A larger requested size is clipped
+to the captured grid by the existing geometry builder; inspect actual
+dimensions in the result. `--capacity-temporal` consumes consecutive captured
+frames with a reset on every evaluation, preserving stateless C. Supply
+at least `warmup + samples` captured frames. A short sequence establishes
+only those frames' output equality, not general temporal quality. Do not
+overlap qualification with a game, compilation or another GPU campaign.
+
 Static throughput repeats one frozen frame and resets every evaluation.
 Cold creation releases features after a GPU-idle proof each iteration.
 Temporal pairs consume the same consecutive captured sequence with fresh

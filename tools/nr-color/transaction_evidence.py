@@ -151,6 +151,40 @@ def validate_native_layout(region: dict) -> None:
     require(all(uint(viewport["fullInput"].get(k), 16384) for k in ("width", "height"))
             and scale == [viewport["fullInput"][k] for k in ("width", "height")],
             "native layout motion conversion differs from its full-input domain")
+    roi = region.get("roi", {})
+    require(isinstance(roi, dict), "invalid native layout ROI object")
+    if roi.get("compactSource") is not None or roi.get("coordinateDomain") == "compact_storage_local":
+        source = roi.get("compactSource")
+        require(isinstance(source, dict) and all(uint(source.get(k), 16384) for k in ("x", "y", "width", "height")),
+                "invalid compact source origin")
+        require(roi.get("coordinateDomain") == "compact_storage_local" and layout["controlMask"] is None
+                and layout["featureUpscaling"] is False and region.get("effectiveReset") is True
+                and region.get("source", {}).get("mode") == "reduced_resolution", "unsupported compact state")
+        extent = {k: source[k] for k in ("width", "height")}
+        full = {"x": 0, "y": 0, **extent}
+        require(extent["width"] > 0 and extent["height"] > 0, "empty compact bucket")
+        for role in ("color", "depth", "motion", "output"):
+            exact({"backingExtent": extent, "validRect": full}, layout[role], ("backingExtent", "validRect"),
+                  "compact full-bucket initialization")
+        exact({"allocationCapacity": extent, "inferenceContext": full, "temporalEnvelope": None}, roi,
+              ("allocationCapacity", "inferenceContext", "temporalEnvelope"), "compact ROI capacity")
+        output = viewport.get("output", {})
+        full_output = viewport.get("fullOutput", {})
+        require(isinstance(output, dict) and isinstance(full_output, dict)
+                and all(uint(full_output.get(k), 16384) for k in ("width", "height"))
+                and all(uint(output.get(k), 16384) for k in ("left", "top", "right", "bottom"))
+                and output["right"] <= full_output["width"] and output["bottom"] <= full_output["height"]
+                and source["x"] + source["width"] <= output["right"] - output["left"]
+                and source["y"] + source["height"] <= output["bottom"] - output["top"], "compact source exceeds original crop")
+        parent = full
+        for name in ("ownedOutput", "samplingSupport"):
+            rect = roi.get(name)
+            require(isinstance(rect, dict) and all(uint(rect.get(k), 16384) for k in full)
+                    and rect["width"] > 0 and rect["height"] > 0
+                    and rect["x"] >= parent["x"] and rect["y"] >= parent["y"]
+                    and rect["x"] + rect["width"] <= parent["x"] + parent["width"]
+                    and rect["y"] + rect["height"] <= parent["y"] + parent["height"], "invalid compact ownership/support")
+            parent = rect
 
 
 def validate_characters(evidence: dict) -> None:
@@ -335,6 +369,7 @@ def join_execution_evidence(acquisition: dict, diagnostics: dict | None = None) 
             for identity, execution in frozen_ids.items():
                 other = delayed_ids[identity]
                 exact(execution, other, EXECUTION_DESCRIPTOR, "delayed execution descriptor")
+                optional_exact(execution, other, ("measuredPlan",), "delayed measured plan")
                 optional_exact(execution, other, ("colourExposureConfiguration", "configurationFingerprint"),
                                "delayed colour configuration")
                 exact_timing_handles(execution.get("timing"), other.get("timing"), "delayed execution")

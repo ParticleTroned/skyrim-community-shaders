@@ -79,12 +79,22 @@ namespace NeuralRendering::Color
 		bool captureFrameEvidence = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool sharedSourceTransport = false;
+		bool compactInputs = false;
 #endif
 		/** Source sharing stays opt-in until native output and cost qualification. */
 		[[nodiscard]] bool SharedSourceTransportEnabled() const noexcept
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			return sharedSourceTransport;
+#else
+			return false;
+#endif
+		}
+		/** Compact storage is a default-off DevBench experiment with full-coordinate fallback. */
+		[[nodiscard]] bool CompactInputsEnabled() const noexcept
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			return compactInputs;
 #else
 			return false;
 #endif

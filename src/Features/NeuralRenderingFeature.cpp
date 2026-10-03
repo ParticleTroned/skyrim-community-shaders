@@ -15,6 +15,7 @@
 #include <string_view>
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include <DevBenchAPI.h>
+#	include "Upscaling/NeuralRendering/Renderer.h"
 #endif
 
 namespace
@@ -210,7 +211,7 @@ namespace
 			{ "effectiveMode", Name(config.EffectiveMode(), modes) },
 			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
 								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
-								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "diagnostics", config.experiments.diagnostics },
+								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "compactInputs", config.experiments.CompactInputsEnabled() }, { "diagnostics", config.experiments.diagnostics },
 								 { "captureEngineExposure", config.experiments.captureEngineExposure },
 								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } },
 			{ "captureEvidenceSchemaVersion", 1 },
@@ -243,6 +244,44 @@ namespace
 			{ "hashVerified", false }, { "note", "Presence only. Run tools/nr-color/verify_assets.py against staged/deployed Data for exact source hash parity." } };
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	void MeasuredPlanHandler(void*, const char* arguments, void* sink, DevBenchAPI::WriteFn write)
+	{
+		if (!write)
+			return;
+		Json response;
+		bool controlEntered = false;
+		try {
+			const auto request = Json::parse(arguments ? arguments : "{}");
+			const auto action = request.at("action").get<std::string>();
+			if (action == "configure")
+				Keys(request, { "action", "enabled" });
+			else if (action == "load_profile")
+				Keys(request, { "action", "profile" });
+			else
+				Keys(request, { "action" });
+			controlEntered = true;
+			response = NeuralRendering::Renderer::Instance().MeasuredPlanControl(request);
+		} catch (const std::exception& error) {
+			response = { { "ok", false }, { "errorCode", "measured_plan_request_failed" }, { "error", error.what() }, { "mutationApplied", controlEntered ? Json(nullptr) : Json(false) } };
+		} catch (...) {
+			response = { { "ok", false }, { "errorCode", "measured_plan_handler_failed" }, { "mutationApplied", controlEntered ? Json(nullptr) : Json(false) } };
+		}
+		try {
+			BuildProvenance::AttachProducer(response);
+			write(sink, response.dump().c_str());
+		} catch (...) {
+			write(sink, R"({"ok":false,"error":"measured plan serialization failed","mutationApplied":null})");
+		}
+	}
+	constexpr auto measuredPlanDescriptor = R"json({
+  "description":"Session-only measured NR final-plan experiment, disabled by default. configure enabled=true enumerates bounded validated local merges of the current partition and publishes exact final native layout keys. Without an explicit exact-identity experimental profile the existing area heuristic remains the unknown-cost fallback. load_profile requires schemaVersion=1, scope=experimental, the published identity, dwellFrames 1..600, residentBudgetBytes, unique SHA-256 baselineEvidence/heldOutEvidence arrays, and true qualification gates matchedBaselineBrackets, uniqueFinalizedSources, stableBaselines, controlledSceneContent, heldOutValidation, transitionCosts, cpuCriticalPath, nativeResidency and unchangedQualityAndCadence. Each observation has the published key array, samples>=30, gpuLowerMs/gpuUpperMs uncertainty interval, gpuTailMs, cpuCriticalUpperMs, transitionUpperMs and residentBytes. GPU/CPU clocks are never summed. Unknown keys, stale identities, pressure, CPU/tail regressions, overlapping uncertainty or dwell retain a safe existing plan. Qualification flags and evidence hashes are caller declarations, not independently verified proofs. Profiles are explicit session experiments, not automatically trained or production defaults. mutationApplied=null on an unexpected failure means callers must inspect status before retrying. Status telemetry and candidate enumeration add DevBench CPU work when enabled; disable for production cost baselines. renderer_busy rejects before mutation.",
+  "inputSchema":{"type":"object","additionalProperties":false,"required":["action"],"properties":{
+    "action":{"enum":["status","configure","load_profile","clear_profile"]},
+    "enabled":{"type":"boolean"},"profile":{"type":"object"}},
+    "allOf":[{"if":{"properties":{"action":{"const":"configure"}}},"then":{"required":["enabled"]}},
+      {"if":{"properties":{"action":{"const":"load_profile"}}},"then":{"required":["profile"]}}]}
+})json";
+
 	void Handler(void*, const char* arguments, void* sink, DevBenchAPI::WriteFn write)
 	{
 		if (!write)
@@ -298,13 +337,15 @@ namespace
 						ReadSettings(request.at("settings"), config.settings);
 					if (request.contains("experiments")) {
 						const auto& e = request.at("experiments");
-						Keys(e, { "upscaled_center", "final_ldr_pre_ui", "sharedSourceTransport", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
+						Keys(e, { "upscaled_center", "final_ldr_pre_ui", "sharedSourceTransport", "compactInputs", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
 						if (e.contains("upscaled_center"))
 							ReadProfile(e.at("upscaled_center"), config.experiments.profiles[0]);
 						if (e.contains("final_ldr_pre_ui"))
 							ReadProfile(e.at("final_ldr_pre_ui"), config.experiments.profiles[1]);
 						if (e.contains("sharedSourceTransport"))
 							config.experiments.sharedSourceTransport = e.at("sharedSourceTransport").get<bool>();
+						if (e.contains("compactInputs"))
+							config.experiments.compactInputs = e.at("compactInputs").get<bool>();
 						if (e.contains("transportBypass"))
 							config.experiments.transportBypass = e.at("transportBypass").get<bool>();
 						if (e.contains("diagnostics"))
@@ -342,7 +383,7 @@ namespace
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: sharedSourceTransport is a default-off DevBench candidate for immutable same-eye ROI inputs with private histories and outputs. Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: compactInputs is a default-off stateless equal-grid C compact-storage experiment; unsupported configurations preserve full-coordinate coverage. It requires live quality/cost qualification before promotion. sharedSourceTransport is a default-off DevBench candidate for immutable same-eye ROI inputs with private histories and outputs. Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
@@ -562,6 +603,10 @@ namespace
               }
             }
           },
+          "compactInputs": {
+            "type": "boolean",
+            "description": "Default-off session-only compact C adapter. Requires stateless equal-grid character NR with legacy raw colour and no control mask; unsupported cases keep full coordinates. Uses measured 256/512/768 square capacities, initializes and evaluates the entire bucket at unchanged density, preserves full-eye normalized motion scaling and commits only owned output. Histories and outputs remain private; creation pressure/unsupported failure retires safely and latches full-coordinate fallback until successful nr_reset. The 128 bucket failed captured-output equivalence and is excluded. No quality or net performance promotion."
+          },
           "sharedSourceTransport": {
             "type": "boolean",
             "description": "Session-only DevBench candidate, default false. Share compatible same-source, same-eye ROI input transport; private native histories and outputs remain separate. Changes retire affected slots at the next source transaction. No performance or native-memory benefit is implied."
@@ -599,7 +644,7 @@ namespace NeuralRendering::Color
 		return { { "settings", SettingsJson(config.settings) },
 			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
 								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
-								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "diagnostics", config.experiments.diagnostics },
+								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "compactInputs", config.experiments.CompactInputsEnabled() }, { "diagnostics", config.experiments.diagnostics },
 								 { "captureEngineExposure", config.experiments.captureEngineExposure },
 								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } } };
 	}
@@ -876,6 +921,7 @@ void NeuralRenderingFeature::DataLoaded()
 	if (auto* host = DevBenchAPI::GetDevBenchInterface001()) {
 		static const std::string descriptor = Descriptor().dump();
 		host->RegisterTool("communityshaders.nr_color", descriptor.c_str(), &Handler, nullptr);
+		host->RegisterTool("communityshaders.nr_cost", measuredPlanDescriptor, &MeasuredPlanHandler, nullptr);
 		logger::info("[NRColor] Registered communityshaders.nr_color v3");
 	}
 #endif

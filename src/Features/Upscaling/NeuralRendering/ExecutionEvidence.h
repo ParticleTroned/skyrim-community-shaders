@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -127,6 +128,9 @@ namespace NeuralRendering
 		std::uint32_t requestedRegionCount = 0;
 		bool capacityFallback = false;
 		bool colorProcessing = false, transportBypass = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::string measuredPlanDecision;
+#endif
 		std::array<ExecutionRegionDescriptor, kMaximumExecutionRegions> regions{};
 	};
 

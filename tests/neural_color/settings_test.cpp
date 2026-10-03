@@ -201,5 +201,12 @@ int main()
 		"transport storage does not change input semantics");
 	Require(ConfigurationEvidenceJson(shared)["experiments"]["sharedSourceTransport"] == true, "captured transport setting");
 	Require(Call({ { "action", "reset_experiments" } })["ok"] == true && !registry.Snapshot().experiments.SharedSourceTransportEnabled(), "reset clears session experiment");
+	const auto beforeCompact = registry.Snapshot();
+	Require(Call({ { "action", "configure" }, { "experiments", { { "compactInputs", true } } } })["ok"] == true, "compact toggle accepted");
+	const auto compact = registry.Snapshot();
+	Require(compact.experiments.CompactInputsEnabled() && compact.inputEpoch == beforeCompact.inputEpoch,
+		"stateless crop storage does not reset external input epochs");
+	Require(ConfigurationEvidenceJson(compact)["experiments"]["compactInputs"] == true, "captured compact setting");
+	Require(Call({ { "action", "reset_experiments" } })["ok"] == true && !registry.Snapshot().experiments.CompactInputsEnabled(), "reset clears compact experiment");
 	std::printf("Passed %u production settings/registry/evidence checks\n", checks);
 }

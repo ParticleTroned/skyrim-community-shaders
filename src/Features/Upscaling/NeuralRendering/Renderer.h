@@ -282,6 +282,8 @@ namespace NeuralRendering
 		[[nodiscard]] LifetimeSnapshot GetLifetimeDiagnostics() const;
 		/** Read-only allocation/lease accounting; native provider byte sizes remain unknown. */
 		[[nodiscard]] nlohmann::json GetSourceTransportDiagnostics() const;
+		/** Session-only measured-plan control; no file I/O, GPU work or production profile adoption. */
+		[[nodiscard]] nlohmann::json MeasuredPlanControl(const nlohmann::json& a_request);
 #endif
 		[[nodiscard]] bool IsFailureLatched() const;
 		[[nodiscard]] bool IsQuarantined() const;

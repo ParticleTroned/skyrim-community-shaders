@@ -11,6 +11,8 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "BuildProvenance.h"
 #	include "ExecutionEvidenceJson.h"
+#	include "MeasuredPlanJson.h"
+#	include "CompactInputLayout.h"
 #	include "ReplayCapture.h"
 #	include <exception>
 #endif
@@ -156,21 +158,20 @@ namespace NeuralRendering
 		}
 
 		void CopyTextureSubrect(
+			ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source,
+			const ComputeSubrect& sourceRect, std::uint32_t destinationX, std::uint32_t destinationY) noexcept
+		{
+			const auto box = MakeCopyBox(sourceRect);
+			context->CopySubresourceRegion(destination, 0, destinationX, destinationY, 0, source, 0, &box);
+		}
+
+		void CopyTextureSubrect(
 			ID3D11DeviceContext* a_context,
 			ID3D11Resource* a_destination,
 			ID3D11Resource* a_source,
 			const ComputeSubrect& a_subrect) noexcept
 		{
-			const auto box = MakeCopyBox(a_subrect);
-			a_context->CopySubresourceRegion(
-				a_destination,
-				0,
-				a_subrect.baseX,
-				a_subrect.baseY,
-				0,
-				a_source,
-				0,
-				&box);
+			CopyTextureSubrect(a_context, a_destination, a_source, a_subrect, a_subrect.baseX, a_subrect.baseY);
 		}
 
 		void Increment(std::uint64_t& a_counter) noexcept
@@ -611,6 +612,9 @@ namespace NeuralRendering
 			bool controlMaskPresent = false;
 			bool featureUpscaling = false;
 			bool sharedSourceTransport = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			bool compact = false;
+#endif
 
 			bool operator==(const ResourceKey&) const = default;
 		};
@@ -651,6 +655,15 @@ namespace NeuralRendering
 		CapacityKey requestedCapacity_{};
 		CapacityFallback capacityFallback_{};
 		std::uint32_t requestedRegionCount_ = 0;
+		bool measuredPlanEnabled_ = false;
+		bool forceFullCoordinates_ = false;
+		ComPtr<ID3D11ComputeShader> copyCompactDepthGuideCS_;
+		std::optional<MeasuredPlan::Profile> measuredPlanProfile_;
+		MeasuredPlan::State measuredPlanState_{};
+		nlohmann::json measuredPlanDiagnostics_;
+		std::array<RendererApplyArgs, kEyeCount> SelectMeasuredPlanLocked(std::span<const RendererApplyArgs> args);
+		struct ValidatedResources;
+		void ApplyCompactLayoutLocked(const RendererApplyArgs& args, ValidatedResources& resources) const;
 #endif
 
 		struct Slot
@@ -1207,6 +1220,9 @@ namespace NeuralRendering
 			return fail("R8_UNORM control masks are not shareable across D3D11 and D3D12");
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ApplyCompactLayoutLocked(a_args, a_resources);
+#endif
 		a_resources.resourceKey = {
 			.colorWidth = a_resources.nativeLayout.color.backing.width,
 			.colorHeight = a_resources.nativeLayout.color.backing.height,
@@ -1226,6 +1242,12 @@ namespace NeuralRendering
 			.featureUpscaling = a_args.featureUpscaling,
 			.sharedSourceTransport = colorConfiguration_.experiments.SharedSourceTransportEnabled(),
 		};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_resources.roi.compactSource) {
+			a_resources.resourceKey.compact = true;
+			a_resources.resourceKey.sharedSourceTransport = false;
+		}
+#endif
 		a_resources.historyKey = {
 			.resources = a_resources.resourceKey,
 			.generation = a_args.generation,
@@ -1659,6 +1681,9 @@ namespace NeuralRendering
 		context_.Reset();
 		if (a_resetShader) {
 			copyDepthGuideCS_.Reset();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			copyCompactDepthGuideCS_.Reset();
+#endif
 			copyDepthGuideCB_.Reset();
 			copyDepthGuideCompileFailed_ = false;
 		}
@@ -2039,6 +2064,18 @@ namespace NeuralRendering
 		bool needsShader = false;
 		for (std::size_t index = 0; index < a_args.size(); ++index)
 			needsShader = needsShader || !canCopy(index);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool needsCompactShader = std::ranges::any_of(a_resources, [](const auto& value) {
+			return value.roi.compactSource && (value.depth.desc.Format != DXGI_FORMAT_R32_FLOAT || value.depthViewFormat != DXGI_FORMAT_R32_FLOAT);
+		});
+		if (needsCompactShader && !copyCompactDepthGuideCS_) {
+			copyCompactDepthGuideCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+				L"Data/Shaders/Upscaling/NeuralRendering/CopyCompactDepthGuideCS.hlsl", {}, "cs_5_0", "main")));
+			if (!copyCompactDepthGuideCS_)
+				return false;
+			Util::SetResourceName(copyCompactDepthGuideCS_.Get(), "NeuralRendering::CopyCompactDepthGuideCS");
+		}
+#endif
 		if (needsShader && !copyDepthGuideCS_ && !copyDepthGuideCompileFailed_) {
 			copyDepthGuideCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
 				L"Data/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl",
@@ -2073,7 +2110,12 @@ namespace NeuralRendering
 		a_args.front().context->CSSetShader(shader, nullptr, 0);
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
-			const auto& roi = a_resources[index].nativeLayout.depth.valid;
+			auto roi = a_resources[index].nativeLayout.depth.valid;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const auto& compact = a_resources[index].roi.compactSource;
+			if (compact)
+				roi = *compact;
+#endif
 			if (canCopy(index)) {
 				ID3D11ShaderResourceView* nullSrv = nullptr;
 				ID3D11UnorderedAccessView* nullUav = nullptr;
@@ -2081,7 +2123,12 @@ namespace NeuralRendering
 				a_args.front().context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				CS_GPU_PASS_CAPTURE("Upscaling::DLSSNRDepthGuide", a_evidence ? a_evidence->Snapshot().regions[index].depthGuidePass : nullptr);
 				CopyTextureSubrect(a_args.front().context, a_slots[index]->depth.resource11.Get(),
-					a_resources[index].depth.texture.Get(), roi);
+					a_resources[index].depth.texture.Get(), roi,
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					compact ? 0u : roi.baseX, compact ? 0u : roi.baseY);
+#else
+					roi.baseX, roi.baseY);
+#endif
 				continue;
 			}
 			const CopyDepthGuideConstants constants{
@@ -2095,6 +2142,9 @@ namespace NeuralRendering
 			auto* constantBuffer = copyDepthGuideCB_.Get();
 			auto* source = a_args[index].depthGuideSRV;
 			auto* destination = a_slots[index]->depth.uav11.Get();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			a_args.front().context->CSSetShader(compact ? copyCompactDepthGuideCS_.Get() : shader, nullptr, 0);
+#endif
 			a_args.front().context->CSSetConstantBuffers(
 				0, 1, &constantBuffer);
 			a_args.front().context->CSSetShaderResources(0, 1, &source);
@@ -2209,13 +2259,138 @@ namespace NeuralRendering
 		return rightSucceeded;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void Renderer::State::ApplyCompactLayoutLocked(const RendererApplyArgs& args, ValidatedResources& resources) const
+	{
+		if (colorConfiguration_.experiments.CompactInputsEnabled() && !forceFullCoordinates_ && !capacityFallback_.rejected &&
+			!colorConfiguration_.Enabled() && args.characterVisualIsolation && args.reset &&
+			args.executionContext.renderingMode == RenderingMode::ReducedResolution)
+			if (const auto compact = BuildCompactInputLayout(resources.roi, resources.nativeLayout)) {
+				resources.roi = compact->roi;
+				resources.nativeLayout = compact->native;
+			}
+	}
+
+	std::array<RendererApplyArgs, kEyeCount> Renderer::State::SelectMeasuredPlanLocked(std::span<const RendererApplyArgs> args)
+	{
+		using Json = nlohmann::json;
+		std::array<RendererApplyArgs, kEyeCount> original{};
+		std::ranges::copy(args, original.begin());
+		measuredPlanDiagnostics_ = { { "reason", "unknown_cost_fallback" }, { "frame", args.front().frameId } };
+		ComPtr<IDXGIDevice> dxgi;
+		ComPtr<IDXGIAdapter> adapter;
+		DXGI_ADAPTER_DESC desc{};
+		LARGE_INTEGER driver{};
+		if (!args.front().device || FAILED(args.front().device->QueryInterface(IID_PPV_ARGS(&dxgi))) || FAILED(dxgi->GetAdapter(&adapter)) ||
+			FAILED(adapter->GetDesc(&desc)) || FAILED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driver)) || Runtime::Instance().Hash().empty()) {
+			measuredPlanDiagnostics_["reason"] = "backend_identity_unavailable";
+			return original;
+		}
+		const Json identity{ { "buildId", BuildProvenance::GetBuildId() }, { "runtimeHash", Runtime::Instance().Hash() },
+			{ "runtimeVersion", Runtime::Instance().Version() }, { "vendor", desc.VendorId }, { "device", desc.DeviceId },
+			{ "parameterCoreHash", Runtime::Instance().ParameterCoreHash() },
+			{ "subsystem", desc.SubSysId }, { "revision", desc.Revision }, { "driver", driver.QuadPart },
+			{ "color", Color::ConfigurationEvidenceJson(colorConfiguration_) } };
+		measuredPlanDiagnostics_["identity"] = identity;
+		std::array<std::vector<MeasuredPlan::Partition>, kEyeCount> alternatives;
+		std::array<ValidatedResources, kEyeCount> inputResources;
+		for (std::size_t eye = 0; eye < args.size(); ++eye) {
+			const auto& value = args[eye];
+			if (!value.characterVisualIsolation || !value.computeRegions.count ||
+				!GetCharacterRegionSubmissionViolation(value.featureSlot, value.computeRegions, value.computeSubrect,
+					value.outputWidth, value.outputHeight, true)
+					.empty()) {
+				measuredPlanDiagnostics_["reason"] = "no_valid_partition";
+				return original;
+			}
+			alternatives[eye] = MeasuredPlan::Candidates(value.computeRegions, value.outputWidth, value.outputHeight);
+			auto first = value;
+			first.computeSubrect = value.computeRegions.regions[0];
+			first.roi = value.computeRegions.roi[0];
+			if (ValidateLocked(first, inputResources[eye])) {
+				measuredPlanDiagnostics_["reason"] = "invalid_source_resources";
+				return original;
+			}
+			if (alternatives[eye].size() > 16)
+				alternatives[eye].resize(16);
+		}
+		std::vector<std::array<RendererApplyArgs, kEyeCount>> plans;
+		std::vector<MeasuredPlan::Candidate> candidates;
+		Json keys = Json::array();
+		for (std::size_t left = 0; left < alternatives[0].size(); ++left)
+			for (std::size_t right = 0; right < (args.size() == 2 ? alternatives[1].size() : 1); ++right) {
+				auto plan = original;
+				Json key = Json::array();
+				std::uint64_t partition = 1469598103934665603ull;
+				bool valid = true, rejected = false;
+				for (std::size_t eye = 0; eye < args.size(); ++eye) {
+					const auto& choice = alternatives[eye][eye ? right : left];
+					auto& logical = plan[eye];
+					logical.computeRegions = choice.plan;
+					partition = (partition ^ choice.id) * 1099511628211ull;
+					rejected |= capacityFallback_.rejected && logical.computeRegions.count > kDefaultRegionsPerEye;
+					valid &= QualifiedHigherRegionGeometry(logical.computeRegions);
+					for (std::uint32_t i = 0; i < logical.computeRegions.count && valid; ++i) {
+						const auto& regions = logical.computeRegions;
+						partition = (partition ^ regions.clusterIdentities[i]) * 1099511628211ull;
+						auto physical = logical;
+						physical.featureSlot = PhysicalRegionFeatureSlot(logical.featureSlot, regions.regionSlots[i]);
+						physical.computeSubrect = regions.regions[i];
+						physical.roi = regions.roi[i];
+						physical.computeRegions = {};
+						auto resources = inputResources[eye];
+						resources.roi = *physical.roi;
+						resources.nativeLayout = BuildNativeEvaluationLayout({ physical.colorWidth, physical.colorHeight },
+							{ physical.guideWidth, physical.guideHeight }, resources.roi.allocationCapacity,
+							{ physical.controlMaskWidth, physical.controlMaskHeight }, resources.roi.inferenceContext,
+							UpscalingDLSS::BuildMotionVectorPixelScale(physical.viewportCrop), physical.featureUpscaling);
+						ApplyCompactLayoutLocked(physical, resources);
+						const auto& tuning = physical.tuning;
+						key.push_back({ { "slot", physical.featureSlot }, { "layout", Evidence::NativeLayoutJson(resources.nativeLayout) },
+							{ "compactSource", resources.roi.compactSource ? Evidence::SubrectJson(*resources.roi.compactSource) : Json(nullptr) },
+							{ "mode", physical.executionContext.renderingMode ? Json(GetRenderingModeName(*physical.executionContext.renderingMode)) : Json(nullptr) },
+							{ "ownership", Evidence::SubrectJson(resources.roi.ownedOutput) }, { "viewport", Evidence::ViewportJson(physical.viewportCrop) },
+							{ "insertion", physical.insertionPoint }, { "callerReset", physical.reset },
+							{ "colorFormat", resources.color.desc.Format }, { "outputFormat", resources.output.desc.Format },
+							{ "outputHasUav", (resources.output.desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0 },
+							{ "depthSourceFormat", resources.depth.desc.Format }, { "depthViewFormat", resources.depthViewFormat },
+							{ "motionFormat", resources.motionVectors.desc.Format }, { "controlMask", resources.resourceKey.controlMaskPresent },
+							{ "sharedInputs", colorConfiguration_.experiments.SharedSourceTransportEnabled() && !resources.roi.compactSource },
+							{ "tuning", { tuning.intensity, tuning.localToneStrength, tuning.localStructureStrength, tuning.skinStructureStrength,
+											tuning.style, tuning.useAutoMask, tuning.uiCorrection } } });
+					}
+				}
+				plans.push_back(std::move(plan));
+				candidates.push_back({ key.dump(), partition, valid, rejected });
+				keys.push_back({ { "key", std::move(key) }, { "valid", valid }, { "capacityRejected", rejected } });
+			}
+		const auto selected = MeasuredPlan::Select(candidates, 0, identity.dump(), measuredPlanProfile_ ? &*measuredPlanProfile_ : nullptr,
+			args.front().sourceWorldFrame, measuredPlanState_);
+		measuredPlanDiagnostics_["reason"] = selected.reason;
+		measuredPlanDiagnostics_["selected"] = selected.index;
+		if (measuredPlanProfile_ && measuredPlanProfile_->identity == identity.dump() && selected.index < candidates.size())
+			if (const auto* cost = measuredPlanProfile_->Find(candidates[selected.index].key))
+				measuredPlanDiagnostics_["prediction"] = { { "gpuLowerMs", cost->gpuLowerMs }, { "gpuUpperMs", cost->gpuUpperMs },
+					{ "gpuTailMs", cost->gpuTailMs }, { "cpuCriticalUpperMs", cost->cpuCriticalUpperMs },
+					{ "transitionUpperMs", cost->transitionUpperMs }, { "residentBytes", cost->residentBytes } };
+		measuredPlanDiagnostics_["candidates"] = std::move(keys);
+		return plans.empty() ? original : plans[selected.index];
+	}
+#endif
+
 	bool Renderer::State::ApplyBatchLocked(
 		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		std::array<RendererApplyArgs, kEyeCount> selected;
+		if (measuredPlanEnabled_ && !args.empty() && args.size() <= kEyeCount) {
+			selected = SelectMeasuredPlanLocked(args);
+			args = std::span(selected).first(args.size());
+		}
 		requestedRegionCount_ = 0;
 		outcome = {};
 		bool higherCount = false;
+		higherCount = colorConfiguration_.experiments.CompactInputsEnabled();
 		for (const auto& arg : args) {
 			requestedRegionCount_ += std::max(1u, arg.computeRegions.count);
 			higherCount |= arg.computeRegions.count > kDefaultRegionsPerEye;
@@ -2227,6 +2402,9 @@ namespace NeuralRendering
 		if (args.empty() || args.size() > kEyeCount)
 			return ApplyRegionBatchLocked(args, outcome);
 		const auto fallback = [&] {
+			const auto previous = forceFullCoordinates_;
+			forceFullCoordinates_ = true;
+			const SKSE::stl::scope_exit restore([&] { forceFullCoordinates_ = previous; });
 			std::array<RendererApplyArgs, kEyeCount> merged{};
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				auto& value = merged[index];
@@ -2455,6 +2633,18 @@ namespace NeuralRendering
 				descriptor.regionCount = static_cast<std::uint32_t>(a_args.size());
 				descriptor.requestedRegionCount = requestedRegionCount_;
 				descriptor.capacityFallback = requestedRegionCount_ != descriptor.regionCount;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (measuredPlanEnabled_) {
+					nlohmann::json decision;
+					for (const auto* field : { "frame", "reason", "identity", "selected", "prediction" })
+						if (measuredPlanDiagnostics_.contains(field))
+							decision[field] = measuredPlanDiagnostics_[field];
+					if (measuredPlanDiagnostics_.contains("selected"))
+						decision["selectedKey"] = measuredPlanDiagnostics_["candidates"].at(measuredPlanDiagnostics_["selected"].get<std::size_t>())["key"];
+					decision["capacityFallback"] = forceFullCoordinates_ || descriptor.capacityFallback;
+					descriptor.measuredPlanDecision = decision.dump();
+				}
+#endif
 				descriptor.colorProcessing = colorConfiguration_.Enabled();
 				descriptor.transportBypass = colorConfiguration_.experiments.transportBypass;
 				for (std::size_t index = 0; index < a_args.size(); ++index) {
@@ -2470,10 +2660,10 @@ namespace NeuralRendering
 					region.context = args.executionContext;
 					region.characterEvidence = args.characterEvidence;
 					region.roi = resource.roi;
-					region.color = DescribeExecutionTexture(args.colorWidth, args.colorHeight, resource.resourceKey.colorFormat, resource.nativeLayout.color.valid);
-					region.depth = DescribeExecutionTexture(args.guideWidth, args.guideHeight, DXGI_FORMAT_R32_FLOAT, resource.nativeLayout.depth.valid);
-					region.motion = DescribeExecutionTexture(args.guideWidth, args.guideHeight, resource.resourceKey.motionFormat, resource.nativeLayout.motion.valid);
-					region.output = DescribeExecutionTexture(args.outputWidth, args.outputHeight, resource.resourceKey.outputFormat, resource.roi.inferenceContext);
+					region.color = DescribeExecutionTexture(resource.nativeLayout.color.backing.width, resource.nativeLayout.color.backing.height, resource.resourceKey.colorFormat, resource.nativeLayout.color.valid);
+					region.depth = DescribeExecutionTexture(resource.nativeLayout.depth.backing.width, resource.nativeLayout.depth.backing.height, DXGI_FORMAT_R32_FLOAT, resource.nativeLayout.depth.valid);
+					region.motion = DescribeExecutionTexture(resource.nativeLayout.motion.backing.width, resource.nativeLayout.motion.backing.height, resource.resourceKey.motionFormat, resource.nativeLayout.motion.valid);
+					region.output = DescribeExecutionTexture(resource.nativeLayout.output.backing.width, resource.nativeLayout.output.backing.height, resource.resourceKey.outputFormat, resource.nativeLayout.output.valid);
 					if (args.controlMask)
 						region.controlMask = DescribeExecutionTexture(args.controlMaskWidth, args.controlMaskHeight, resource.resourceKey.controlMaskFormat, resource.nativeLayout.controlMask.valid);
 					region.viewportCrop = args.viewportCrop;
@@ -2633,11 +2823,16 @@ namespace NeuralRendering
 				RecordExecutionCopy(execution, index, slots[index]->colorWork.observation.copiedLogicalBytes);
 			} else {
 				CS_GPU_DETAIL_PASS("Upscaling::NRColorInputCopy", execution ? execution->Snapshot().regions[index].colorCopyPass : nullptr);
-				CopyTextureSubrect(
-					a_args.front().context,
-					slots[index]->color.resource11.Get(),
-					resources[index].color.texture.Get(),
-					resources[index].nativeLayout.color.valid);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (resources[index].roi.compactSource)
+					CopyTextureSubrect(a_args.front().context, slots[index]->color.resource11.Get(), resources[index].color.texture.Get(), *resources[index].roi.compactSource, 0, 0);
+				else
+#endif
+					CopyTextureSubrect(
+						a_args.front().context,
+						slots[index]->color.resource11.Get(),
+						resources[index].color.texture.Get(),
+						resources[index].nativeLayout.color.valid);
 				if (execution)
 					RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].color.workLogicalBytes);
 			}
@@ -2680,11 +2875,16 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			CS_GPU_DETAIL_PASS("Upscaling::NRMotionVectorCopy", execution ? execution->Snapshot().regions[index].motionCopyPass : nullptr);
-			CopyTextureSubrect(
-				a_args.front().context,
-				slots[index]->motionVectors.resource11.Get(),
-				resources[index].motionVectors.texture.Get(),
-				resources[index].nativeLayout.motion.valid);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (resources[index].roi.compactSource)
+				CopyTextureSubrect(a_args.front().context, slots[index]->motionVectors.resource11.Get(), resources[index].motionVectors.texture.Get(), *resources[index].roi.compactSource, 0, 0);
+			else
+#endif
+				CopyTextureSubrect(
+					a_args.front().context,
+					slots[index]->motionVectors.resource11.Get(),
+					resources[index].motionVectors.texture.Get(),
+					resources[index].nativeLayout.motion.valid);
 			if (execution)
 				RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].motion.workLogicalBytes);
 		}
@@ -3048,14 +3248,20 @@ namespace NeuralRendering
 				colorPipeline_.Commit(a_args.front().context, slots[index]->colorWork,
 					resources[index].output.texture.Get());
 			} else {
-				CopyTextureSubrect(
-					a_args.front().context,
-					resources[index].output.texture.Get(),
-					slots[index]->output.resource11.Get(),
-					resources[index].roi.ownedOutput);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (const auto& compact = resources[index].roi.compactSource)
+					CopyTextureSubrect(a_args.front().context, resources[index].output.texture.Get(), slots[index]->output.resource11.Get(), resources[index].roi.ownedOutput,
+						compact->baseX + resources[index].roi.ownedOutput.baseX, compact->baseY + resources[index].roi.ownedOutput.baseY);
+				else
+#endif
+					CopyTextureSubrect(
+						a_args.front().context,
+						resources[index].output.texture.Get(),
+						slots[index]->output.resource11.Get(),
+						resources[index].roi.ownedOutput);
 			}
 			if (execution) {
-				RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].output.workLogicalBytes);
+				RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].resourceKey.outputFormat, resources[index].roi.ownedOutput.width, resources[index].roi.ownedOutput.height));
 				execution->Update([&](auto& evidence) {
 					evidence.regions[index].outputCopyEnqueued = true;
 				});
@@ -3334,6 +3540,35 @@ namespace NeuralRendering
 		(void)state_->interop_.GetTelemetry();
 		return state_->captureInputs_;
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	nlohmann::json Renderer::MeasuredPlanControl(const nlohmann::json& request)
+	{
+		std::unique_lock lock(state_->mutex_, std::try_to_lock);
+		if (!lock.owns_lock())
+			return { { "ok", false }, { "errorCode", "renderer_busy" }, { "mutationApplied", false } };
+		const auto action = request.at("action").get<std::string>();
+		if (action == "configure") {
+			if (!request.at("enabled").is_boolean())
+				throw std::invalid_argument("enabled must be boolean");
+			state_->measuredPlanEnabled_ = request.at("enabled").get<bool>();
+			state_->measuredPlanState_ = {};
+		} else if (action == "load_profile") {
+			auto profile = MeasuredPlan::ReadProfile(request.at("profile"));
+			if (!state_->measuredPlanDiagnostics_.contains("identity") || profile.identity != state_->measuredPlanDiagnostics_["identity"].dump())
+				throw std::invalid_argument("profile identity does not match the current observed backend");
+			state_->measuredPlanProfile_ = std::move(profile);
+			state_->measuredPlanState_ = {};
+		} else if (action == "clear_profile") {
+			state_->measuredPlanProfile_.reset();
+			state_->measuredPlanState_ = {};
+		} else if (action != "status")
+			throw std::invalid_argument("unknown measured-plan action");
+		return { { "ok", true }, { "action", action }, { "enabled", state_->measuredPlanEnabled_ },
+			{ "profileLoaded", state_->measuredPlanProfile_.has_value() }, { "productionProfileAdopted", false },
+			{ "diagnostics", state_->measuredPlanDiagnostics_ } };
+	}
+#endif
 
 	bool Renderer::Reset(bool a_clearTransportRejections)
 	{

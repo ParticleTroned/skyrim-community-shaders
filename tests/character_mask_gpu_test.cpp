@@ -199,6 +199,11 @@ namespace
 					  &depthShader_),
 				"Create depth guide shader");
 			Util::SetResourceName(depthShader_.Get(), "CharacterMaskTest::CopyDepthGuide");
+			auto compactDepthBlob = Compile(blendPath.parent_path() / "NeuralRendering/CopyCompactDepthGuideCS.hlsl");
+			Check(device_->CreateComputeShader(compactDepthBlob->GetBufferPointer(), compactDepthBlob->GetBufferSize(), nullptr,
+					  &compactDepthShader_),
+				"Create compact depth guide shader");
+			Util::SetResourceName(compactDepthShader_.Get(), "CharacterMaskTest::CopyCompactDepthGuide");
 			const auto colorRoot = shaderDirectory.parent_path().parent_path() / "features/Neural Rendering/Shaders";
 			PackageIncludes colorIncludes(shaderDirectory, colorRoot);
 			for (const auto& [name, shader] : std::array{
@@ -367,30 +372,37 @@ namespace
 							input[(rect[1] + y) * width + rect[0] + x] = 0.125f + static_cast<float>(x + y) / 64.0f;
 					auto source = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
 						D3D11_BIND_SHADER_RESOURCE, input, "DepthValidSource");
-					auto output = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
-						D3D11_BIND_UNORDERED_ACCESS, unused, "DepthValidOutput");
-					auto cb = Constants(rect);
-					context_->CSSetShader(depthShader_.Get(), nullptr, 0);
-					context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
-					context_->CSSetShaderResources(0, 1, source.srv.GetAddressOf());
-					context_->CSSetUnorderedAccessViews(0, 1, output.uav.GetAddressOf(), nullptr);
-					context_->Dispatch((rect[2] + 7) / 8, (rect[3] + 7) / 8, 1);
-					context_->ClearState();
-					const auto actual = Read<float>(output.resource.Get());
-					auto direct = MakeTexture(width, height, DXGI_FORMAT_R32_FLOAT,
-						D3D11_BIND_UNORDERED_ACCESS, unused, "DepthTypedCopyOutput");
-					const D3D11_BOX box{ rect[0], rect[1], 0, rect[0] + rect[2], rect[1] + rect[3], 1 };
-					context_->CopySubresourceRegion(direct.resource.Get(), 0, rect[0], rect[1], 0,
-						source.resource.Get(), 0, &box);
-					const auto copied = Read<float>(direct.resource.Get());
-					Require(std::memcmp(copied.data(), actual.data(), actual.size() * sizeof(float)) == 0,
-						"Typed depth copy differs from identity shader or overwrites spare capacity");
-					for (unsigned y = 0; y < height; ++y)
-						for (unsigned x = 0; x < width; ++x) {
-							const bool valid = x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3];
-							Require(actual[y * width + x] == (valid ? input[y * width + x] : -1.0f),
-								"Depth copy depends on unused backing pixels or writes outside its valid domain");
-						}
+					for (const bool compact : { false, true }) {
+						const auto outputWidth = compact ? rect[2] : width;
+						const auto outputHeight = compact ? rect[3] : height;
+						const auto destinationX = compact ? 0u : rect[0], destinationY = compact ? 0u : rect[1];
+						unused.assign(outputWidth * outputHeight, -1.0f);
+						auto output = MakeTexture(outputWidth, outputHeight, DXGI_FORMAT_R32_FLOAT,
+							D3D11_BIND_UNORDERED_ACCESS, unused, "DepthValidOutput");
+						auto cb = Constants(rect);
+						context_->CSSetShader(compact ? compactDepthShader_.Get() : depthShader_.Get(), nullptr, 0);
+						context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
+						context_->CSSetShaderResources(0, 1, source.srv.GetAddressOf());
+						context_->CSSetUnorderedAccessViews(0, 1, output.uav.GetAddressOf(), nullptr);
+						context_->Dispatch((rect[2] + 7) / 8, (rect[3] + 7) / 8, 1);
+						context_->ClearState();
+						const auto actual = Read<float>(output.resource.Get());
+						auto direct = MakeTexture(outputWidth, outputHeight, DXGI_FORMAT_R32_FLOAT,
+							D3D11_BIND_UNORDERED_ACCESS, unused, "DepthTypedCopyOutput");
+						const D3D11_BOX box{ rect[0], rect[1], 0, rect[0] + rect[2], rect[1] + rect[3], 1 };
+						context_->CopySubresourceRegion(direct.resource.Get(), 0, destinationX, destinationY, 0,
+							source.resource.Get(), 0, &box);
+						const auto copied = Read<float>(direct.resource.Get());
+						Require(std::memcmp(copied.data(), actual.data(), actual.size() * sizeof(float)) == 0,
+							"Typed depth copy differs from identity shader or overwrites spare capacity");
+						for (unsigned y = 0; y < outputHeight; ++y)
+							for (unsigned x = 0; x < outputWidth; ++x) {
+								const bool valid = x >= destinationX && x < destinationX + rect[2] && y >= destinationY && y < destinationY + rect[3];
+								const auto sourceX = compact ? x + rect[0] : x, sourceY = compact ? y + rect[1] : y;
+								Require(actual[y * outputWidth + x] == (valid ? input[sourceY * width + sourceX] : -1.0f),
+									"Depth copy depends on unused backing pixels or writes outside its valid domain");
+							}
+					}
 				}
 			}
 		}
@@ -865,7 +877,7 @@ namespace
 
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
-		ComPtr<ID3D11ComputeShader> supportShader_, maskShader_, boundsShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_, depthShader_;
+		ComPtr<ID3D11ComputeShader> supportShader_, maskShader_, boundsShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_, depthShader_, compactDepthShader_;
 	};
 
 	void FullImageAndReducedSelection(Harness& gpu)

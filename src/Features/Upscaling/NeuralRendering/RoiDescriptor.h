@@ -24,6 +24,8 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Current context may be smaller than its retained envelope in the C experiment. */
 		bool currentContextApplied = false;
+		/** Compact-storage origin and capacity in the original output-crop grid. */
+		std::optional<ComputeSubrect> compactSource;
 #endif
 
 		bool operator==(const RoiDescriptor&) const = default;

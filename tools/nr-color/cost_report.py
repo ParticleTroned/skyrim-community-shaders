@@ -49,7 +49,7 @@ def final_plan(execution: dict) -> dict:
             "copiedLogicalBytes", "inputTransportOwnerSlot")}
         # Semantic support can move inside an unchanged final provider footprint.
         descriptor["roi"] = {key: copy.deepcopy(region.get("roi", {}).get(key)) for key in (
-            "allocationCapacity", "inferenceContext", "ownedOutput", "temporalEnvelope", "contextPolicy", "coordinateDomain")}
+            "allocationCapacity", "inferenceContext", "ownedOutput", "temporalEnvelope", "contextPolicy", "coordinateDomain", "compactSource")}
         regions.append(descriptor)
     return {"route": execution["route"], "regions": regions,
             "calls": execution["actualEvaluationCount"], "capacityFallback": execution.get("capacityFallback"),

@@ -319,6 +319,49 @@ class TransactionEvidenceTests(unittest.TestCase):
             region["nativeLayout"] = native_layout(region)
         tx.join_execution_evidence(frozen, delayed)
 
+    def test_compact_origin_full_initialization_and_stateless_contract(self):
+        frozen, delayed = fixture(mode="reduced_resolution")
+        for record in (frozen, delayed):
+            region = record["executionEvidence"]["executions"][0]["regions"][0]
+            region["nrViewport"]["fullInput"] = {"width": 32, "height": 32}
+            region["nrViewport"]["output"].update(right=32, bottom=32)
+            region["nrViewport"]["fullOutput"] = {"width": 32, "height": 32}
+            region["motionVectorScale"] = [32, 32]
+            region["effectiveReset"] = True
+            region["nativeLayout"] = native_layout(region)
+            region["roi"] = {"coordinateDomain": "compact_storage_local",
+                             "compactSource": {"x": 4, "y": 3, "width": 8, "height": 8},
+                             "allocationCapacity": {"width": 8, "height": 8}, "temporalEnvelope": None,
+                             "inferenceContext": {"x": 0, "y": 0, "width": 8, "height": 8},
+                             "ownedOutput": {"x": 1, "y": 1, "width": 6, "height": 6},
+                             "samplingSupport": {"x": 2, "y": 2, "width": 4, "height": 4}}
+        tx.join_execution_evidence(frozen, delayed)
+        for mutate in (lambda r: r["roi"]["compactSource"].update(x=30),
+                       lambda r: r["roi"]["samplingSupport"].update(x=0),
+                       lambda r: r["roi"].update(temporalEnvelope={}),
+                       lambda r: r["nrViewport"]["fullOutput"].update(width=8),
+                       lambda r: r.update(effectiveReset=False),
+                       lambda r: r["roi"]["compactSource"].update(width=16)):
+            pair = copy.deepcopy((frozen, delayed))
+            for record in pair:
+                mutate(record["executionEvidence"]["executions"][0]["regions"][0])
+            with self.assertRaisesRegex(tx.TransactionEvidenceError, "compact"):
+                tx.join_execution_evidence(*pair)
+        for value in ([], None, 0):
+            pair = copy.deepcopy((frozen, delayed))
+            pair[0]["executionEvidence"]["executions"][0]["regions"][0]["roi"] = value
+            with self.assertRaisesRegex(tx.TransactionEvidenceError, "ROI object"):
+                tx.join_execution_evidence(*pair)
+
+    def test_measured_plan_decision_is_frozen(self):
+        frozen, delayed = fixture()
+        for record in (frozen, delayed):
+            record["executionEvidence"]["executions"][0]["measuredPlan"] = {"reason": "unknown_cost_fallback"}
+        tx.join_execution_evidence(frozen, delayed)
+        delayed["executionEvidence"]["executions"][0]["measuredPlan"]["reason"] = "measured_final_plan"
+        with self.assertRaisesRegex(tx.TransactionEvidenceError, "delayed measured plan"):
+            tx.join_execution_evidence(frozen, delayed)
+
     def test_mixed_empty_eye_and_reordered_delayed_regions(self):
         frozen, _ = fixture()
         envelope = frozen["executionEvidence"]

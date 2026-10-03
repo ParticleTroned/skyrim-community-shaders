@@ -48,7 +48,13 @@ namespace NeuralRendering::Evidence
 	/** Rectangular support is a conservative enclosure; exact occupancy has its own producer. */
 	inline Json RoiJson(const RoiDescriptor& value)
 	{
-		return { { "coordinateDomain", "output_crop_local" },
+		return {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			{ "coordinateDomain", value.compactSource ? "compact_storage_local" : "output_crop_local" },
+			{ "compactSource", value.compactSource ? SubrectJson(*value.compactSource) : Json(nullptr) },
+#else
+			{ "coordinateDomain", "output_crop_local" },
+#endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			{ "contextPolicy", value.currentContextApplied ? "experimental_current_required" : "retained_envelope" },
 #endif
@@ -60,7 +66,8 @@ namespace NeuralRendering::Evidence
 			{ "temporalEnvelope", value.temporalEnvelope ? SubrectJson(*value.temporalEnvelope) : Json(nullptr) },
 			{ "temporalEnvelopePixels", value.temporalEnvelope ? Json(value.temporalEnvelope->Area()) : Json(nullptr) },
 			{ "allocationCapacity", ExtentJson(value.allocationCapacity) },
-			{ "capacityPixels", static_cast<std::uint64_t>(value.allocationCapacity.width) * value.allocationCapacity.height } };
+			{ "capacityPixels", static_cast<std::uint64_t>(value.allocationCapacity.width) * value.allocationCapacity.height }
+		};
 	}
 	inline Json ContextJson(const ExecutionContext& value)
 	{
@@ -173,6 +180,9 @@ namespace NeuralRendering::Evidence
 			{ "succeededPhysicalSlotMask", s.succeededPhysicalSlotMask }, { "privateCommittedPhysicalSlotMask", s.committedPhysicalSlotMask },
 			{ "finished", s.finished }, { "succeeded", s.succeeded }, { "failureStage", s.failureStage }, { "evidenceFailed", s.evidenceFailed },
 			{ "transportBypass", d.transportBypass }, { "regions", std::move(regions) },
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			{ "measuredPlan", d.measuredPlanDecision.empty() ? Json(nullptr) : Json::parse(d.measuredPlanDecision) },
+#endif
 			{ "timing", { { "wholeNrLegacy", PassTimingJson(s.wholePass) }, { "wholeFeatureBatchGpuLegacy", GpuTimingJson(s.batchGpu) },
 							{ "aggregateEvaluationGpu", { { "state", actualEvaluations && aggregateComplete ? "complete" : "unavailable" },
 															{ "microseconds", actualEvaluations && aggregateComplete ? Json(aggregateGpuMicroseconds) : Json(nullptr) },

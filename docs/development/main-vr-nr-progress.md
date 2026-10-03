@@ -1,5 +1,26 @@
 # main-vr-nr progress and continuation record
 
+## October 3 Task 8 live results and Task 9 admission
+
+The [live qualification record](nr-task8-9-qualification-20261003.md)
+preserves 184,732 successful native evaluations with zero NR/device/quarantine
+failures on producer `587f560a843b`. Four independent regions per eye passed
+in A/B and all three colour modes. C selected one/two/three regions; four-region
+C and current-ready GPU-planner live coverage remain open. No production
+limit or transport default changed.
+
+The complete matched two/four/two bracket reduced evaluated area by 40%
+but increased inclusive NR cost from about 24.1 to 35.8 ms. The new offline
+cost reporter validates exact joins, final geometry and baseline brackets,
+preserves unavailable evidence and rejects production-profile adoption.
+Task 9's calibrated runtime selector and held-out/transition/residency
+qualification remain open. Task 8 is not globally closed by partial coverage.
+
+Original configuration, AI, camera and profiler state were restored.
+Skyrim/MO2 closed normally and leases were released. Only offline reporting,
+tests and documentation changed; the installed DLL remains usable and no
+replacement AIO was required.
+
 ## October 3 Task 7 measurements and Task 8 test candidate
 
 The [qualification record](nr-task7-8-qualification-20261003.md) preserves

@@ -273,6 +273,9 @@ set_tests_properties(NeuralReplayCapture PROPERTIES TIMEOUT 30)
 add_test(NAME NeuralReplayReport COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_color/replay_report_test.py")
 set_tests_properties(NeuralReplayReport PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
+add_test(NAME NeuralFinalPlanCostReport COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_color/cost_report_test.py")
+set_tests_properties(NeuralFinalPlanCostReport PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 
 set(_neural_replay_request_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_replay_request")
 add_custom_command(

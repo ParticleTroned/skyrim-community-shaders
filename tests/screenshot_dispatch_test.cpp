@@ -343,6 +343,16 @@ void PrepareParent(ScreenshotApi& api)
 void TestProductionWorkerIsolation()
 {
 	{
+		ScreenshotApi api;
+		PrepareParent(api);
+		QueuePreparation(api, "parent", "prepared");
+		AwaitResults(api.preparationWorkerState, 1, 0);
+		api.BeginShutdown("shutdown after preparation completed before result publication");
+		if (api.partialManifests != 0 || api.queuedManifests != 1 ||
+			!api.DrainForShutdown(std::chrono::milliseconds(100)))
+			throw std::runtime_error("shutdown published a redundant checkpoint from an undrained preparation result");
+	}
+	{
 		manifestIo.Reset();
 		ScreenshotApi api;
 		QueuePublication(api, "blocked-manifest");

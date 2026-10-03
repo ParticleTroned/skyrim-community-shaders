@@ -2214,7 +2214,6 @@ void ScreenshotApi::BeginShutdown(std::string_view a_reason)
 	std::lock_guard lock(mutex);
 	acceptingRequests = false;
 	preparationWorker->RequestStop();
-	DrainWorkerResultsLocked();
 	for (auto& [_, sequence] : sequences) {
 		if (sequence.finalizing)
 			continue;
@@ -2226,6 +2225,7 @@ void ScreenshotApi::BeginShutdown(std::string_view a_reason)
 		}
 	}
 	CancelQueuedDispatchesLocked("shutdown", a_reason);
+	DrainWorkerResultsLocked();
 	for (auto& [_, sequence] : sequences)
 		TryFinalizeSequenceLocked(sequence);
 }

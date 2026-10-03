@@ -694,6 +694,8 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		ImGui::End();
 		return;
 	}
+	// ImGui retains the window scale, so normalize it before laying out the dialog.
+	ImGui::SetWindowFontScale(1.0f);
 
 	// Fullscreen fade on the dialog's draw list — covers all windows beneath at the dialog's z-position
 	auto* drawList = ImGui::GetWindowDrawList();

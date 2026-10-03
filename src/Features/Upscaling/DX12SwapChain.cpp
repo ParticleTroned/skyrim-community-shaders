@@ -1137,6 +1137,13 @@ HRESULT DX12SwapChain::PresentInternal(
 	                nullptr;
 	const bool isHDR = hdr && hdr->IsHDROutputActive();
 	const auto frame = upscaling.ConsumeFrameGenerationInputsForPresent();
+	const bool frameGenerationWasActive =
+		upscaling.fidelityFX.isFrameGenActive ||
+		upscaling.streamlineDX12.dlssgState.active;
+	upscaling.RecordPerformanceCostFrameGenerationPresent(
+		frame.requested,
+		false,
+		frameGenerationWasActive);
 	bool uiPreparedForOutput = frame.uiPreparedForOutput;
 	bool providerPresentInvoked = false;
 	bool providerMayUseSeparatedUI = false;
@@ -1371,6 +1378,12 @@ HRESULT DX12SwapChain::PresentInternal(
 			UpdateOutputPresentationTiming();
 		else
 			ResetOutputPresentationTiming();
+		upscaling.RecordPerformanceCostFrameGenerationPresent(
+			frame.requested,
+			finalized.accepted && providerBoundaryCompleted &&
+				!asynchronousOutputStatusObserved,
+			upscaling.fidelityFX.isFrameGenActive ||
+				upscaling.streamlineDX12.dlssgState.active);
 		return finalized;
 	};
 	const auto presentAfterInteropFailure = [&](HRESULT a_failure) {

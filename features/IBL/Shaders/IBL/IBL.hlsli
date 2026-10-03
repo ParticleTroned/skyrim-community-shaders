@@ -213,6 +213,7 @@ namespace ImageBasedLighting
 		} else {
 			iblColor = GetEnvIBLColor(float3(0, 0, 0)) + GetSkyIBLColor(float3(0, 0, 0));
 		}
+		iblColor = Color::ApplyAmbientBalanceLinear(iblColor);
 		if (SharedData::iblSettings.PreserveFogLuminance) {
 			const float fogLuminance = Color::RGBToLuminance(fogColor);
 			const float iblLuminance = Color::RGBToLuminance(iblColor);

@@ -1,10 +1,13 @@
 #pragma once
 
 #include "RE/B/BSVolumetricLightingRenderData.h"
+#include "VolumetricLightingTuning.h"
 
 struct VolumetricLighting : Feature
 {
 public:
+	using GodrayProfile = VolumetricLightingTuning::Profile;
+
 	struct TextureSize
 	{
 		int32_t Width = 320;
@@ -16,17 +19,11 @@ public:
 	{
 		bool ExteriorEnabled = true;
 		bool DisableWeatherInteractionDuringRain = false;
-		float GodrayIntensity = 1.0f;
-		float GodrayShaftIntensity = 1.0f;
-		float GodrayOpacity = 1.0f;
-		float GodraySaturation = 1.0f;
-		float CustomColorContribution = 0.0f;
-		float CustomColorRed = 1.0f;
-		float CustomColorGreen = 1.0f;
-		float CustomColorBlue = 1.0f;
+		GodrayProfile ExteriorGodrays;
 		int32_t ExteriorQuality = 2;
 		TextureSize ExteriorCustomSize;
 		bool InteriorEnabled = true;
+		GodrayProfile InteriorGodrays;
 		int32_t InteriorQuality = 2;
 		TextureSize InteriorCustomSize;
 	};
@@ -68,22 +65,30 @@ public:
 			T("menu.performance_tuning.feature.volumetric_lighting.comparison_label", "Off"),
 			T("menu.performance_tuning.feature.volumetric_lighting.comparison_details", "Volumetric Lighting is switched off for the current interior/exterior context.") };
 	}
+	virtual bool IsPerformanceTuningApplicable() const override;
+	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual json GetPerformanceTuningUserSettingsMask() const override
 	{
 		return {
 			{ "ExteriorEnabled", true },
 			{ "DisableWeatherInteractionDuringRain", true },
-			{ "GodrayIntensity", true },
-			{ "GodrayShaftIntensity", true },
-			{ "GodrayOpacity", true },
-			{ "GodraySaturation", true },
-			{ "CustomColorContribution", true },
-			{ "CustomColorRed", true },
-			{ "CustomColorGreen", true },
-			{ "CustomColorBlue", true },
+			{ "ExteriorGodrays", { { "ShaftIntensity", true },
+									 { "Opacity", true },
+									 { "Saturation", true },
+									 { "CustomColorContribution", true },
+									 { "CustomColorRed", true },
+									 { "CustomColorGreen", true },
+									 { "CustomColorBlue", true } } },
 			{ "ExteriorQuality", true },
 			{ "ExteriorCustomSize", true },
 			{ "InteriorEnabled", true },
+			{ "InteriorGodrays", { { "ShaftIntensity", true },
+									 { "Opacity", true },
+									 { "Saturation", true },
+									 { "CustomColorContribution", true },
+									 { "CustomColorRed", true },
+									 { "CustomColorGreen", true },
+									 { "CustomColorBlue", true } } },
 			{ "InteriorQuality", true },
 			{ "InteriorCustomSize", true }
 		};
@@ -118,6 +123,8 @@ public:
 	}
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
+	/** @return The active context's sanitized tuning, or a neutral profile when unavailable. */
+	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
@@ -130,9 +137,14 @@ public:
 	RE::BSImagespaceShader* GetOrCreateRaymarchCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurHCS(RE::BSComputeShader* computeShader);
 	RE::BSImagespaceShader* GetOrCreateBlurVCS(RE::BSComputeShader* computeShader);
+	/** @brief Whether the current render area is safe for replacement blur dispatch. */
+	bool HasValidBlurDimensions() const { return blurDimensionsValid; }
+	/** @brief Bind active blur bounds at b1 after selecting a replacement shader. */
 	void SetDimensionsCB() const;
-	void SetGroupCountsHCS(uint32_t& threadGroupCountX) const;
-	void SetGroupCountsVCS(uint32_t& threadGroupCountY) const;
+	/** @brief Set both active-area dispatch axes for the horizontal blur. */
+	void SetGroupCountsHCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
+	/** @brief Set both active-area dispatch axes for the vertical blur. */
+	void SetGroupCountsVCS(uint32_t& threadGroupCountX, uint32_t& threadGroupCountY) const;
 
 private:
 	using VolumetricLightingDescriptor = RE::BSVolumetricLightingRenderData;
@@ -148,11 +160,13 @@ private:
 	static void SetVLQuality(VolumetricLightingDescriptor& descriptor, std::uint32_t quality);
 
 	void DrawGodrayTuningSettings();
+	void DrawGodrayProfileSettings(const char* label, GodrayProfile& profile);
 	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
-	static void SanitizeSettings(Settings& a_settings);
+	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
 	void SetupVL();
+	void UpdateBlurDimensions();
 	void ClearVolumetricLightingTargets();
 	static int32_t ClampQualityIndex(int32_t quality);
 	static TextureSize ClampTextureSize(const TextureSize& size);
@@ -180,6 +194,7 @@ private:
 	bool inInterior = false;
 	bool inInteriorWithSun = false;
 	bool rainOnlySuppressionActive = false;
+	VolumetricLightingDescriptor runtimeDescriptor{};
 
 	struct VLData
 	{
@@ -190,6 +205,9 @@ private:
 	};
 	VLData vlData = VLData();
 	ConstantBuffer* vlDataCB = nullptr;
+	bool blurDimensionsValid = false;
+	int32_t fullScreenX = 0;
+	int32_t fullScreenY = 0;
 
 	static constexpr int32_t BlurThreadGroupSizeX = 256;
 	static constexpr int32_t BlurThreadGroupSizeY = 256;

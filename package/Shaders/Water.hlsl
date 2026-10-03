@@ -314,6 +314,10 @@ struct PS_OUTPUT
 
 #	ifdef PSHADER
 
+#		if defined(REFRACTIONS)
+#			include "Common/WaterRefraction.hlsli"
+#		endif
+
 SamplerState ReflectionSampler : register(s0);
 SamplerState RefractionSampler : register(s1);
 SamplerState DisplacementSampler : register(s2);
@@ -649,10 +653,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	float2 flowmapParallaxOffset = float2(0, 0);
 #				if defined(WATER_PARALLAX) && !defined(LOD)
 	float parallaxAmount = WaterEffects::GetFlowmapParallaxAmount(input, flowmapDimensions, viewDirection);
-	float2 parallaxDir = viewDirection.xy / -viewDirection.z;
-	parallaxDir.y = -parallaxDir.y;
-	float viewDotUp = -viewDirection.z;
-	parallaxDir *= 0.008 * saturate(viewDotUp * 2.0);
+	float2 parallaxDir = WaterEffects::GetFlowmapParallaxDirection(viewDirection);
 	flowmapInput.TexCoord3.xy = input.TexCoord3.xy + parallaxAmount * parallaxDir;
 	flowmapParallaxOffset = WaterEffects::GetFlowmapParallaxOffset(input, flowmapDimensions, viewDirection, normalScalesRcp);
 #				endif
@@ -1277,6 +1278,23 @@ struct DiffuseOutput
 	float waterColumnDepthUnits;
 };
 
+/** Retains the ordinary water colour when a usable refraction footprint is unavailable. */
+DiffuseOutput GetWaterDiffuseColorWithoutRefraction(float3 normal, float3 viewDirection, float fresnel, float waterColumnDepthUnits)
+{
+	DiffuseOutput output;
+	float3 baseWaterColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel);
+#			if defined(UNIFIED_WATER)
+	baseWaterColor = ApplyUnifiedWaterBaseTint(baseWaterColor);
+#			endif
+	output.refractionColor = baseWaterColor * GetLdotN(normal);
+	output.refractionDiffuseColor = output.refractionColor;
+	output.depth = 1;
+	output.refractionMul = 1;
+	output.refractedViewDirection = viewDirection;
+	output.waterColumnDepthUnits = waterColumnDepthUnits;
+	return output;
+}
+
 DiffuseOutput GetWaterDiffuseColor(
 	PS_INPUT input,
 	float3 normal,
@@ -1308,6 +1326,18 @@ DiffuseOutput GetWaterDiffuseColor(
 			1));
 
 	float2 refractionUvRaw = float2(refractionNormal.x, refractionNormal.w - refractionNormal.y) / refractionNormal.ww;
+	uint2 refractionDimensions;
+	RefractionTex.GetDimensions(refractionDimensions.x, refractionDimensions.y);
+	float2 refractionMinUV;
+	float2 refractionMaxUV;
+	if (!WaterRefraction::TryGetUVBounds(
+			float2(refractionDimensions) * FrameBuffer::DynamicResolutionParams1.xy,
+			FrameBuffer::DynamicResolutionParams1.xy / VPOSOffset.xy,
+			refractionMinUV, refractionMaxUV))
+		return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel, waterColumnDepthUnits);
+
+	float2 fallbackRefractionUV = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
+	refractionUvRaw = WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
 
 	float2 refractionScreenPosition = FrameBuffer::DynamicResolutionParams1.xy * (refractionUvRaw / VPOSOffset.xy);
 	float4 refractionWorldPosition = float4(input.WPosition.xyz * depth / viewPosition.z, 0);
@@ -1337,7 +1367,7 @@ DiffuseOutput GetWaterDiffuseColor(
 		all(isfinite(unclampedRefractionDistanceMul));
 
 	if (!refractionDepthValid) {
-		refractionUvRaw = FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy * VPOSOffset.xy + VPOSOffset.zw;
+		refractionUvRaw = fallbackRefractionUV;
 	} else {
 		depth = refractionDepth;
 		distanceMul = saturate(unclampedRefractionDistanceMul);
@@ -1353,7 +1383,8 @@ DiffuseOutput GetWaterDiffuseColor(
 #					endif
 #				endif
 
-	float2 refractionUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(refractionUvRaw);
+	float2 refractionUV = FrameBuffer::DynamicResolutionParams1.xy *
+	                      WaterRefraction::ClampUV(refractionUvRaw, fallbackRefractionUV, refractionMinUV, refractionMaxUV);
 	float3 refractionColor = RefractionTex.Sample(RefractionSampler, refractionUV).xyz;
 	float3 refractionDiffuseColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), distanceMul.y);
 #				if defined(UNIFIED_WATER)
@@ -1376,18 +1407,7 @@ DiffuseOutput GetWaterDiffuseColor(
 	output.waterColumnDepthUnits = refractionWaterColumnDepthUnits;
 	return output;
 #			else
-	DiffuseOutput output;
-	float3 baseWaterColor = lerp(Color::Water(ShallowColor.xyz), Color::Water(DeepColor.xyz), fresnel);
-#				if defined(UNIFIED_WATER)
-	baseWaterColor = ApplyUnifiedWaterBaseTint(baseWaterColor);
-#				endif
-	output.refractionColor = baseWaterColor * GetLdotN(normal);
-	output.refractionDiffuseColor = output.refractionColor;
-	output.depth = 1;
-	output.refractionMul = 1;
-	output.refractedViewDirection = viewDirection;
-	output.waterColumnDepthUnits = waterColumnDepthUnits;
-	return output;
+	return GetWaterDiffuseColorWithoutRefraction(normal, viewDirection, fresnel, waterColumnDepthUnits);
 #			endif
 }
 
@@ -1901,8 +1921,8 @@ PS_OUTPUT main(PS_INPUT input)
 		(1.0 - nativeSurfaceWeight) * saturate(shallowSurfaceLayerWeight);
 	combinedSurfaceWeight = nativeSurfaceWeight + fallbackSurfaceWeight;
 	float fallbackSurfaceShare = combinedSurfaceWeight > 1e-5 ?
-		fallbackSurfaceWeight / combinedSurfaceWeight :
-		0.0;
+	                                 fallbackSurfaceWeight / combinedSurfaceWeight :
+	                                 0.0;
 	surfaceFresnel = lerp(
 		fresnel,
 		GetUnifiedWaterShallowSurfaceFresnel(fresnel),

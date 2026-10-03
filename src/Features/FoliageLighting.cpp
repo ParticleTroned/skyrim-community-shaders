@@ -1,7 +1,7 @@
 #include "FoliageLighting.h"
 
-#include "I18n/I18n.h"
 #include "Globals.h"
+#include "I18n/I18n.h"
 #include "TruePBR.h"
 #include "Util.h"
 
@@ -20,6 +20,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
+	bool IsTruePBRActive()
+	{
+		const auto& truePBR = globals::features::truePBR;
+		return truePBR.loaded && truePBR.settings.Enabled != 0;
+	}
+
 	void DrawTruePBRDependentTooltip(bool a_truePBRActive, const char* a_description)
 	{
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -60,33 +66,68 @@ void FoliageLighting::SanitizeSettings(Settings& a_settings)
 	}
 }
 
+void FoliageLighting::DrawSettingsHeaderControls()
+{
+	bool foliageLightingEnabled = IsEnabled();
+	if (ImGui::Checkbox("Enable", &foliageLightingEnabled))
+		SetEnabled(foliageLightingEnabled);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Controls all tree foliage and grass lighting additions while preserving their saved tuning.");
+}
+
+void FoliageLighting::DrawFoliageScatteringSetting()
+{
+	Util::UIntCheckbox(T(TKEY("foliage_scattering"), "Foliage Scattering"), settings.EnableFoliageScattering);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T(TKEY("foliage_scattering_tooltip"),
+				"Adds wrapped, view-dependent transmission to animated tree foliage. "
+				"PBR foliage also receives a diffuse transmission term independent of texture thickness."));
+	}
+}
+
+void FoliageLighting::DrawFoliageAmbientBoostSetting(bool a_truePBRActive)
+{
+	ImGui::BeginDisabled(!a_truePBRActive);
+	Util::UIntCheckbox(T(TKEY("ambient_boost"), "Ambient Boost"), settings.EnableFoliageAmbientBoost);
+	ImGui::EndDisabled();
+	DrawTruePBRDependentTooltip(
+		a_truePBRActive,
+		T(TKEY("ambient_boost_tooltip"), "Adds indirect ambient response to animated PBR foliage after ambient occlusion."));
+}
+
+void FoliageLighting::DrawFoliageAmbientFlipSetting()
+{
+	Util::UIntCheckbox(T(TKEY("ambient_backface_flip"), "Ambient Backface Flip"), settings.EnableFoliageAmbientFlip);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T(TKEY("ambient_backface_flip_tooltip"),
+				"Mirrors the ambient sampling normal for visible backside tree foliage cards."));
+	}
+}
+
+void FoliageLighting::DrawGrassScatteringSetting()
+{
+	Util::UIntCheckbox(T(TKEY("grass_scattering"), "Grass Scattering"), settings.EnableGrassScattering);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted(
+			T(TKEY("grass_scattering_tooltip"),
+				"Adds wrapped, view-dependent transmission to non-PBR grass. "
+				"Works in both the enhanced and fallback grass lighting paths."));
+	}
+}
+
 void FoliageLighting::DrawSettings()
 {
 	SanitizeSettings(settings);
-	const auto& truePBR = globals::features::truePBR;
-	const bool truePBRActive = truePBR.loaded && truePBR.settings.Enabled != 0;
+	const bool truePBRActive = IsTruePBRActive();
+	ImGui::BeginDisabled(!IsEnabled());
 
 	if (ImGui::TreeNodeEx(T(TKEY("tree_foliage"), "Tree Foliage"))) {
-		bool enableFoliageScattering = settings.EnableFoliageScattering != 0;
-		if (ImGui::Checkbox(T(TKEY("foliage_scattering"), "Foliage Scattering"), &enableFoliageScattering))
-			settings.EnableFoliageScattering = enableFoliageScattering ? 1u : 0u;
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(
-				T(TKEY("foliage_scattering_tooltip"),
-					"Adds wrapped, view-dependent transmission to animated tree foliage. "
-					"PBR foliage also receives a diffuse transmission term independent of texture thickness."));
-		}
+		DrawFoliageScatteringSetting();
+		DrawFoliageAmbientBoostSetting(truePBRActive);
 
-		bool enableFoliageAmbientBoost = settings.EnableFoliageAmbientBoost != 0;
-		ImGui::BeginDisabled(!truePBRActive);
-		if (ImGui::Checkbox(T(TKEY("ambient_boost"), "Ambient Boost"), &enableFoliageAmbientBoost))
-			settings.EnableFoliageAmbientBoost = enableFoliageAmbientBoost ? 1u : 0u;
-		ImGui::EndDisabled();
-		DrawTruePBRDependentTooltip(
-			truePBRActive,
-			T(TKEY("ambient_boost_tooltip"), "Adds indirect ambient response to animated PBR foliage after ambient occlusion."));
-
-		ImGui::BeginDisabled(!truePBRActive || !enableFoliageAmbientBoost);
+		ImGui::BeginDisabled(!truePBRActive || settings.EnableFoliageAmbientBoost == 0);
 		ImGui::SliderFloat(
 			T(TKEY("ambient_amount"), "Ambient Amount"),
 			&settings.FoliageAmbientAmount,
@@ -99,38 +140,54 @@ void FoliageLighting::DrawSettings()
 			truePBRActive,
 			T(TKEY("ambient_amount_tooltip"), "Strength of the additive indirect ambient response for animated PBR foliage."));
 
-		bool enableFoliageAmbientFlip = settings.EnableFoliageAmbientFlip != 0;
-		if (ImGui::Checkbox(T(TKEY("ambient_backface_flip"), "Ambient Backface Flip"), &enableFoliageAmbientFlip))
-			settings.EnableFoliageAmbientFlip = enableFoliageAmbientFlip ? 1u : 0u;
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(
-				T(TKEY("ambient_backface_flip_tooltip"),
-					"Mirrors the ambient sampling normal for visible backside tree foliage cards."));
-		}
+		DrawFoliageAmbientFlipSetting();
 
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("grass"), "Grass"))) {
-		bool enableGrassScattering = settings.EnableGrassScattering != 0;
-		if (ImGui::Checkbox(T(TKEY("grass_scattering"), "Grass Scattering"), &enableGrassScattering))
-			settings.EnableGrassScattering = enableGrassScattering ? 1u : 0u;
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(
-				T(TKEY("grass_scattering_tooltip"),
-					"Adds wrapped, view-dependent transmission to non-PBR grass. "
-					"Works in both the enhanced and fallback grass lighting paths."));
-		}
+		DrawGrassScatteringSetting();
 
 		ImGui::TreePop();
 	}
 
+	ImGui::EndDisabled();
 	SanitizeSettings(settings);
+}
+
+void FoliageLighting::DrawPerformanceSettings(bool)
+{
+	SanitizeSettings(settings);
+	DrawSettingsHeaderControls();
+	ImGui::BeginDisabled(!IsEnabled());
+	const bool truePBRActive = IsTruePBRActive();
+	DrawFoliageScatteringSetting();
+	DrawFoliageAmbientBoostSetting(truePBRActive);
+	DrawFoliageAmbientFlipSetting();
+	DrawGrassScatteringSetting();
+	ImGui::EndDisabled();
+}
+
+json FoliageLighting::CapturePerformanceSettingsState() const
+{
+	return {
+		{ "Enabled", IsEnabled() },
+		{ "EnableFoliageScattering", settings.EnableFoliageScattering != 0 },
+		{ "EnableFoliageAmbientBoost", settings.EnableFoliageAmbientBoost != 0 },
+		{ "EnableFoliageAmbientFlip", settings.EnableFoliageAmbientFlip != 0 },
+		{ "EnableGrassScattering", settings.EnableGrassScattering != 0 }
+	};
+}
+
+bool FoliageLighting::IsPerformanceCostMeasurementEnabled() const
+{
+	return IsRuntimeEnabled() && HasEnabledContribution();
 }
 
 void FoliageLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SetEnabled(o_json.value("Enabled", true));
 	SanitizeSettings(settings);
 }
 
@@ -138,19 +195,29 @@ void FoliageLighting::SaveSettings(json& o_json)
 {
 	SanitizeSettings(settings);
 	o_json = settings;
+	o_json["Enabled"] = IsEnabled();
 }
 
 void FoliageLighting::RestoreDefaultSettings()
 {
 	settings = {};
+	SetEnabled(true);
 }
 
 FoliageLighting::Settings FoliageLighting::GetCommonBufferData() const
 {
-	if (!loaded)
+	if (!IsRuntimeEnabled())
 		return GetDisabledSettings();
 
 	auto data = settings;
 	SanitizeSettings(data);
 	return data;
+}
+
+bool FoliageLighting::HasEnabledContribution() const
+{
+	return settings.EnableFoliageScattering != 0 ||
+	       (settings.EnableFoliageAmbientBoost != 0 && IsTruePBRActive()) ||
+	       settings.EnableFoliageAmbientFlip != 0 ||
+	       settings.EnableGrassScattering != 0;
 }

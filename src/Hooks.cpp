@@ -17,11 +17,13 @@
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainHelper.h"
+#include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 
+#include <d3d11_1.h>
 #include <intrin.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
@@ -123,6 +125,12 @@ namespace
 				postError,
 				GetLastError());
 		}
+	}
+
+	bool UseNativeWaterShaders(const RE::BSShader& a_shader)
+	{
+		return a_shader.shaderType.get() == RE::BSShader::Type::Water &&
+		       globals::features::unifiedWater.RequiresVanillaWaterShaders();
 	}
 
 	enum class InputHookSafeguardReason : uint32_t
@@ -457,7 +465,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 
-	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
+	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect && !UseNativeWaterShaders(*shader)) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
 		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
@@ -1139,7 +1147,7 @@ namespace Hooks
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
+						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
 							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 							if (vertexShader) {
 								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
@@ -1172,7 +1180,7 @@ namespace Hooks
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
 					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
+						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
 							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
 							if (pixelShader) {
 								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
@@ -1339,10 +1347,26 @@ namespace Hooks
 				auto state = globals::state;
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
+				bool blurBufferBound = false;
+				winrt::com_ptr<ID3D11Buffer> previousBlurBuffer;
+				winrt::com_ptr<ID3D11DeviceContext1> blurContext1;
+				UINT firstConstant = 0;
+				UINT numConstants = 0;
+				const SKSE::stl::scope_exit restoreBlurBuffer([&]() noexcept {
+					if (blurBufferBound) {
+						auto buffer = previousBlurBuffer.get();
+						if (blurContext1)
+							blurContext1->CSSetConstantBuffers1(1, 1, &buffer, &firstConstant, &numConstants);
+						else
+							globals::d3d::context->CSSetConstantBuffers(1, 1, &buffer);
+					}
+				});
 
 				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
+					bool horizontalBlur = false;
+					bool verticalBlur = false;
 					if (vl.loaded) {
 						if (CurrentlyDispatchedShader == nullptr) {
 							techniqueId = 0;
@@ -1353,19 +1377,31 @@ namespace Hooks
 							}
 						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurHCS"sv) {
 							techniqueId = 0;
-							isShader = vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
-							vl.SetDimensionsCB();
-							vl.SetGroupCountsHCS(threadGroupCountX);
+							horizontalBlur = true;
+							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader) : nullptr;
 						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurVCS"sv) {
 							techniqueId = 0;
-							isShader = vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
-							vl.SetDimensionsCB();
-							vl.SetGroupCountsVCS(threadGroupCountY);
+							verticalBlur = true;
+							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader) : nullptr;
 						}
 					}
 					if (isShader != nullptr) {
 						if (auto* computeShader = shaderCache->GetComputeShader(*isShader, techniqueId)) {
 							shader = computeShader;
+							// Native fallback keeps its original dispatch and constant-buffer layout.
+							if (horizontalBlur || verticalBlur) {
+								auto* context = globals::d3d::context;
+								if (SUCCEEDED(context->QueryInterface(__uuidof(ID3D11DeviceContext1), blurContext1.put_void())))
+									blurContext1->CSGetConstantBuffers1(1, 1, previousBlurBuffer.put(), &firstConstant, &numConstants);
+								else
+									context->CSGetConstantBuffers(1, 1, previousBlurBuffer.put());
+								blurBufferBound = true;
+								vl.SetDimensionsCB();
+								if (horizontalBlur)
+									vl.SetGroupCountsHCS(threadGroupCountX, threadGroupCountY);
+								else
+									vl.SetGroupCountsVCS(threadGroupCountX, threadGroupCountY);
+							}
 						}
 					}
 				}

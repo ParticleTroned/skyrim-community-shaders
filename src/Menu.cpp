@@ -882,9 +882,8 @@ void Menu::DrawSettings()
 	if (wantsFontPreviewAtlas != previewAtlasWasWanted) {
 		pendingFontReload = true;
 	}
-	if (!IsEnabled &&
-		!PerformanceTuningRenderer::HasActiveMeasurements()) {
-		PerformanceTuningRenderer::CancelActiveMeasurements();
+	if (!IsEnabled) {
+		PerformanceTuningRenderer::NotifyMenuClosed();
 	}
 }
 
@@ -1127,8 +1126,6 @@ void Menu::ProcessInputEventQueue()
 				KeyAction keyActions[] = {
 					{ settings.ToggleKey, [this]() {
 						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
-							 if (PerformanceTuningRenderer::HasActiveMeasurements())
-								 return;
 							 const bool wasEnabled = IsEnabled;
 							 IsEnabled = !IsEnabled;
 							 if (IsEnabled)
@@ -1267,9 +1264,7 @@ void Menu::ProcessInputEventQueue()
 						editorWindow->ExitPreviewMode();
 					} else if (editorWindow && editorWindow->open && editorWindow->ShouldHandleEscapeKey()) {
 						editorWindow->open = false;
-					} else if (IsEnabled &&
-							   (!editorWindow || !editorWindow->open) &&
-							   !PerformanceTuningRenderer::HasActiveMeasurements()) {
+					} else if (IsEnabled && (!editorWindow || !editorWindow->open)) {
 						IsEnabled = false;
 						PerformanceTuningRenderer::CancelActiveMeasurements();
 					}

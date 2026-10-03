@@ -108,6 +108,22 @@ struct LinearLighting : Feature
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
+	virtual bool HasPerformanceSettings() const override { return true; }
+	virtual void DrawPerformanceSettings(bool) override;
+	virtual json CapturePerformanceSettingsState() const override;
+	virtual PerformanceTuningConfig GetPerformanceTuningConfig() const override
+	{
+		return { 13,
+			T("menu.performance_tuning.feature.linear_lighting.comparison_label", "Off"),
+			T("menu.performance_tuning.feature.linear_lighting.comparison_details", "Linear Lighting color-space conversions and per-geometry updates are switched off.") };
+	}
+	virtual json GetPerformanceTuningUserSettingsMask() const override
+	{
+		return { { "enableLinearLighting", true } };
+	}
+	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override;
+	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.enableLinearLighting = a_enabled ? 1u : 0u; }
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -128,4 +144,7 @@ struct LinearLighting : Feature
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 
 	struct Hooks;
+
+private:
+	static void SanitizeSettings(Settings& a_settings);
 };

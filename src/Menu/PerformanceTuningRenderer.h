@@ -10,10 +10,12 @@ public:
 	};
 
 	static void Render();
-	/** @brief Advances a running cost measurement while the settings menu is closed. */
-	static void UpdateActiveMeasurements();
-	/** @brief Draws the compact, non-interactive progress widget for a running measurement. */
-	static void RenderMeasurementOverlay();
+	/** Advances the cost test once per frame while the settings menu is closed. */
+	static void UpdateClosedMenuMeasurement();
+	/** Draws the non-interactive, top-centre cost-test countdown. */
+	static void RenderClosedMenuMeasurementOverlay();
+	/** Starts an armed test after menu closure, or cancels an ordinary session. */
+	static void NotifyMenuClosed();
 	static void CancelActiveMeasurements(CancelMode mode = CancelMode::ClearSession);
 	static bool HasActiveMeasurements();
 	static bool PrepareForSceneUpdate();

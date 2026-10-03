@@ -261,7 +261,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float unusedDetailedShadow;
 	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
-	float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
+	float3 ambientColor = Color::ApplyAmbientBalance(max(0, SharedData::GetAmbient(float3(0, 0, 1))));
 
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;

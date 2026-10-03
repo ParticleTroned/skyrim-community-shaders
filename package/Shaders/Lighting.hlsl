@@ -1,4 +1,5 @@
 #define LIGHTING
+#define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
@@ -2237,7 +2238,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 
 #	if defined(SCREEN_SPACE_SHADOWS) && defined(DEFERRED)
-	if (!SharedData::InInterior && dirLightAngle >= 0.0)
+	bool applyScreenSpaceShadow = dirLightAngle >= 0.0;
+#		if defined(TREE_ANIM)
+	applyScreenSpaceShadow = applyScreenSpaceShadow || SharedData::foliageLightingSettings.EnableFoliageScattering != 0;
+#		endif
+	if (!SharedData::InInterior && applyScreenSpaceShadow)
 		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise);
 #	endif
 
@@ -2691,6 +2696,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 
 #	if defined(TRUE_PBR) && defined(LOD_LAND_BLEND) && !defined(DEFERRED)

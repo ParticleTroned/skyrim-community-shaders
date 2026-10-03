@@ -176,7 +176,7 @@ namespace ShadowSampling
 
 	float3 GetSceneLightingColor()
 	{
-		return GetAmbientLighting(LightingSampleNormal) + GetDirectionalLighting();
+		return Color::ApplyAmbientBalance(GetAmbientLighting(LightingSampleNormal)) + GetDirectionalLighting();
 	}
 
 #if defined(SKYLIGHTING) && !defined(INTERIOR)

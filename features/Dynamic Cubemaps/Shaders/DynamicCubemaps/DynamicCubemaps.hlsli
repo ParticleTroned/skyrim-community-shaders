@@ -129,7 +129,7 @@ namespace DynamicCubemaps
 #		endif
 		}
 
-		return finalIrradiance;
+		return Color::ApplyAmbientBalanceLinear(finalIrradiance);
 #	endif
 	}
 
@@ -157,7 +157,7 @@ namespace DynamicCubemaps
 #		if defined(IBL) && defined(LIGHTING)
 		if (ShouldUseStaticIBL()) {
 			float3 specularIrradiance = ImageBasedLighting::StaticSpecularIBLTexture.SampleLevel(SampColorSampler, R.xzy, roughness * 7.0).xyz;
-			return (F0 * specularBRDF.x + specularBRDF.y) * specularIrradiance;
+			return (F0 * specularBRDF.x + specularBRDF.y) * Color::ApplyAmbientBalanceLinear(specularIrradiance);
 		}
 #		endif
 
@@ -173,7 +173,7 @@ namespace DynamicCubemaps
 
 		finalIrradiance = ComputeSpecularIrradiance(R, level, directionalAmbientColorSpecular, skylightingSpecular, skylightingVisibility);
 
-		return (F0 * specularBRDF.x + specularBRDF.y) * finalIrradiance;
+		return (F0 * specularBRDF.x + specularBRDF.y) * Color::ApplyAmbientBalanceLinear(finalIrradiance);
 #	endif
 	}
 #endif  // !WATER

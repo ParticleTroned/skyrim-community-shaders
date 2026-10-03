@@ -7,6 +7,14 @@
 
 namespace
 {
+	void NormalizeSettingsForRuntime(Skylighting::Settings& a_settings)
+	{
+		constexpr float maxZenith = Skylighting::Settings{}.MaxZenith;
+		a_settings.MaxZenith = std::isfinite(a_settings.MaxZenith) ?
+		                           std::clamp(a_settings.MaxZenith, 0.0f, maxZenith) :
+		                           maxZenith;
+	}
+
 	bool IsTexture2DArraySRV(ID3D11ShaderResourceView* a_srv, uint32_t a_requiredSlices)
 	{
 		if (!a_srv)
@@ -70,6 +78,7 @@ void Skylighting::LoadSettings(json& o_json)
 {
 	const bool previousEnabled = settings.EnableSkylighting;
 	settings = o_json;
+	NormalizeSettingsForRuntime(settings);
 	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
 }
 
@@ -91,8 +100,24 @@ void Skylighting::ApplyPerformanceSettings()
 	ResetSkylighting();
 }
 
+void Skylighting::QueueResetSkylighting()
+{
+	queuedResetSkylighting.store(true, std::memory_order_release);
+}
+
+bool Skylighting::UpdateInteriorState()
+{
+	const bool interior = Util::IsInterior();
+	if (previousInteriorState && *previousInteriorState != interior)
+		QueueResetSkylighting();
+	previousInteriorState = interior;
+	return interior;
+}
+
 void Skylighting::ResetSkylighting()
 {
+	// Consume first so a load notification delivered during the clear survives.
+	queuedResetSkylighting.exchange(false, std::memory_order_acq_rel);
 	probeRefreshCounts.fill(0);
 	probeUpdateCaptureSerial = occlusionCaptureSerial;
 
@@ -102,7 +127,7 @@ void Skylighting::ResetSkylighting()
 		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
 		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
 		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
-		queuedResetSkylighting = true;
+		QueueResetSkylighting();
 		return;
 	}
 
@@ -125,7 +150,6 @@ void Skylighting::ResetSkylighting()
 
 	float clearVisibility[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clearVisibility);
-	queuedResetSkylighting = false;
 }
 
 void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
@@ -138,6 +162,53 @@ void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 {
 	return IsRuntimeActive();
+}
+
+bool Skylighting::IsPerformanceCostMeasurementReady() const
+{
+	if (!loaded || queuedResetSkylighting.load(std::memory_order_acquire) || inOcclusion)
+		return false;
+
+	// The disabled comparison is ready once its accumulation reset has been
+	// applied. The common transition gate then drains the rendering pipeline.
+	if (!settings.EnableSkylighting)
+		return true;
+
+	auto state = globals::state;
+	auto sky = globals::game::sky;
+	auto precip = sky ? sky->precip : nullptr;
+	if (!state || state->isMapMenuOpen ||
+		!sky || sky->mode.get() != RE::Sky::Mode::kFull ||
+		Util::IsInterior() ||
+		!precip || !precip->occlusionData.camera ||
+		!globals::shaderCache || !globals::shaderCache->IsEnabled() ||
+		!globals::d3d::context || !probeUpdateCompute.get() ||
+		!comparisonSampler.get() ||
+		!texOcclusion || !texOcclusion->srv.get() || !texOcclusion->dsv.get() ||
+		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
+		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
+		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
+		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
+		return false;
+	}
+
+	for (const auto refreshCount : probeRefreshCounts) {
+		if (refreshCount < kProbeConfidenceSampleCount)
+			return false;
+	}
+	return true;
+}
+
+const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
+{
+	return T(
+		"menu.performance_tuning.feature.skylighting.wait",
+		"Waiting for Skylighting probes to refresh");
+}
+
+double Skylighting::GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const
+{
+	return a_targetEnabled ? 5.0 : 1.0;
 }
 
 void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
@@ -182,7 +253,8 @@ void Skylighting::DrawSettingsPanel(bool a_showEmbeddedInfo)
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
 
-	ImGui::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90);
+	if (ImGui::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90))
+		NormalizeSettingsForRuntime(settings);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Smaller angles creates more focused top-down shadow.");
 }
@@ -344,7 +416,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!a_inWorld)
 		return data;
 
-	if (!IsRuntimeActive())
+	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire))
 		return data;
 
 	if (globals::state->isMapMenuOpen)
@@ -386,7 +458,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 void Skylighting::Prepass()
 {
 	auto context = globals::d3d::context;
-	if (!IsRuntimeActive()) {
+	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire)) {
 		if (context) {
 			ID3D11ShaderResourceView* srv = nullptr;
 			context->PSSetShaderResources(50, 1, &srv);
@@ -449,7 +521,7 @@ void Skylighting::Prepass()
 
 			// Count only a dispatch backed by a newly rendered occlusion mask.
 			// Multiple prepasses cannot advance refresh progress from stale data.
-			if (!queuedResetSkylighting &&
+			if (!queuedResetSkylighting.load(std::memory_order_acquire) &&
 				probeUpdateCompute.get() && comparisonSampler.get() &&
 				texOcclusion && texOcclusion->srv.get() && texOcclusion->dsv.get() &&
 				texProbeArray && texProbeArray->srv.get() && texProbeArray->uav.get() &&
@@ -725,7 +797,7 @@ void Skylighting::RenderOcclusion()
 		return;
 	}
 
-	if (Util::IsInterior())
+	if (UpdateInteriorState())
 		return;
 
 	{
@@ -753,35 +825,52 @@ void Skylighting::RenderOcclusion()
 		state->EndPerfEvent();
 	}
 
-	if (!precip->occlusionData.camera)
+	auto occlusionCamera = precip->occlusionData.camera;
+	if (!occlusionCamera)
+		return;
+	if (queuedResetSkylighting.load(std::memory_order_acquire))
+		ResetSkylighting();
+	if (queuedResetSkylighting.load(std::memory_order_acquire))
 		return;
 
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Skylighting Mask");
 		state->BeginPerfEvent("Skylighting Mask");
 
-		if (queuedResetSkylighting)
-			ResetSkylighting();
-
 		frameCount++;
 
 		auto& precipitation = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-		RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
+		const RE::BSGraphics::DepthStencilData precipitationCopy = precipitation;
+
+		static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
+		const float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
+
+		static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
+		const RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
+		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> _computeProjection{ REL::RelocationID(25643, 26185) };
+		const float originalLastCubeSize = precip->lastCubeSize;
+		const bool originalOcclusionState = inOcclusion;
+		bool projectionChanged = false;
+
+		const SKSE::stl::scope_exit restoreEngineState([&]() noexcept {
+			inOcclusion = originalOcclusionState;
+			PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
+			precip->lastCubeSize = originalLastCubeSize;
+			PrecipitationShaderDirection = originalParticleShaderDirection;
+			precipitation = precipitationCopy;
+			if (projectionChanged) {
+				ZoneScopedN("Skylighting - Restore Projection");
+				_computeProjection(precip, occlusionCamera);
+			}
+		});
 
 		precipitation.depthSRV = texOcclusion->srv.get();
 		precipitation.texture = texOcclusion->resource.get();
 		precipitation.views[0] = texOcclusion->dsv.get();
 
-		static float& PrecipitationShaderCubeSize = (*(float*)REL::RelocationID(515451, 401590).address());
-		float originalPrecipitationShaderCubeSize = PrecipitationShaderCubeSize;
-
-		static RE::NiPoint3& PrecipitationShaderDirection = (*(RE::NiPoint3*)REL::RelocationID(515509, 401648).address());
-		RE::NiPoint3 originalParticleShaderDirection = PrecipitationShaderDirection;
-
 		inOcclusion = true;
 		PrecipitationShaderCubeSize = occlusionDistance;
 
-		float originaLastCubeSize = precip->lastCubeSize;
 		precip->lastCubeSize = PrecipitationShaderCubeSize;
 
 		float2 vPoint;
@@ -808,15 +897,15 @@ void Skylighting::RenderOcclusion()
 			vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
 		}
 
-		float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(1 - vPoint.LengthSquared()) };
+		float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(std::max(0.0f, 1.0f - vPoint.LengthSquared())) };
 		PrecipitationShaderDirectionF.Normalize();
 
 		PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
 
-		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> _computeProjection{ REL::RelocationID(25643, 26185) };
 		{
 			ZoneScopedN("Skylighting - Setup Projection");
-			_computeProjection(precip, precip->occlusionData.camera);
+			projectionChanged = true;
+			_computeProjection(precip, occlusionCamera);
 			precip->SetupMask();
 		}
 
@@ -827,24 +916,10 @@ void Skylighting::RenderOcclusion()
 			precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
 			globals::profiler->EndPass();
 		}
-		inOcclusion = false;
-
 		OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
 		OcclusionTransform = ((RE::BSParticleShaderRainEmitter*)rain)->occlusionProjection;
 
 		delete rain;
-
-		PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
-		precip->lastCubeSize = originaLastCubeSize;
-
-		PrecipitationShaderDirection = originalParticleShaderDirection;
-
-		precipitation = precipitationCopy;
-
-		{
-			ZoneScopedN("Skylighting - Restore Projection");
-			_computeProjection(precip, precip->occlusionData.camera);
-		}
 
 		state->EndPerfEvent();
 
@@ -862,11 +937,8 @@ void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 
 RE::BSEventNotifyControl Skylighting::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
-	// When entering a new cell through a loadscreen, update every frame until completion
-	if (a_event->menuName == RE::LoadingMenu::MENU_NAME) {
-		if (!a_event->opening)
-			globals::features::skylighting.queuedResetSkylighting = true;
-	}
+	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening)
+		globals::features::skylighting.QueueResetSkylighting();
 
 	return RE::BSEventNotifyControl::kContinue;
 }

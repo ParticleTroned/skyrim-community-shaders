@@ -2,6 +2,7 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/VolumetricLighting.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
 
@@ -30,8 +31,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(VOLUMETRIC_LIGHTING)
 	float2 screenPosition = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(input.TexCoord);
-	float volumetricLightingPower = VLSourceTex.Sample(VLSourceSampler, screenPosition).x;
-	color += VolumetricLightingColor.xyz * Color::VolumetricLighting(volumetricLightingPower.xxx).x;
+	float volumetricLightingPower = VolumetricLighting::ApplyOpacity(
+		VLSourceTex.Sample(VLSourceSampler, screenPosition).x, SharedData::VolumetricLightingOpacity);
+	float3 godrayColor = VolumetricLighting::ApplyColor(
+		VolumetricLightingColor.xyz,
+		SharedData::VolumetricLightingSaturation,
+		SharedData::VolumetricLightingCustomColor);
+	color += godrayColor * Color::VolumetricLighting(volumetricLightingPower.xxx).x;
 #	endif
 
 #	if defined(LENS_FLARE)

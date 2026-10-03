@@ -21,6 +21,8 @@ void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, cons
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include "Utils/VirtualFunctionHook.h"
+
 #ifndef TRACY_SUPPORT
 	#undef TRACY_ENABLE
 #endif
@@ -80,17 +82,7 @@ namespace stl
 	long detour_thunk(REL::RelocationID a_relId)
 	{
 		T::func = a_relId.address();
-		if (const long rc = DetourTransactionBegin(); rc != NO_ERROR)
-			return rc;
-		if (const long rc = DetourUpdateThread(GetCurrentThread()); rc != NO_ERROR) {
-			DetourTransactionAbort();
-			return rc;
-		}
-		if (const long rc = DetourAttach(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk)); rc != NO_ERROR) {
-			DetourTransactionAbort();
-			return rc;
-		}
-		return DetourTransactionCommit();  // NO_ERROR (0) on success; callers may ignore
+		return Util::AttachDetour(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk)).error;
 	}
 
 	template <class T>
@@ -103,15 +95,18 @@ namespace stl
 		DetourTransactionCommit();
 	}
 
-	template <std::size_t idx, class T>
-	void detour_vfunc(void* target)
+	template <std::size_t idx, class T, class Interface>
+	void detour_vfunc(Interface* target)
 	{
-		auto vtable = *reinterpret_cast<uintptr_t**>(target);
-		T::func = vtable[idx];
-		DetourTransactionBegin();
-		DetourUpdateThread(GetCurrentThread());
-		DetourAttach(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
-		DetourTransactionCommit();
+		const auto result = Util::InstallVirtualFunctionHook(target, idx,
+			reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
+		if (result.error != NO_ERROR) {
+			SKSE::log::critical("[Hooks] Failed to install graphics slot {} (error {}, Detours {})", idx, result.error, result.detourError);
+			stl::report_and_fail("A required graphics hook could not be installed. See CommunityShaders.log.");
+		}
+		if (result.detourError != NO_ERROR)
+			SKSE::log::warn("[Hooks] Detours failed for graphics slot {} (error {}); using {}", idx, result.detourError,
+				result.method == Util::VirtualHookMethod::Clone ? "a retained vtable clone" : "an in-place vtable hook");
 	}
 }
 

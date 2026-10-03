@@ -53,6 +53,14 @@ namespace Util
 	static int g_lastWindowWidth = 0;
 	static int g_lastWindowHeight = 0;
 
+	bool UIntCheckbox(const char* a_label, unsigned int& a_value)
+	{
+		bool enabled = a_value != 0;
+		const bool changed = ImGui::Checkbox(a_label, &enabled);
+		a_value = enabled ? 1u : 0u;
+		return changed;
+	}
+
 	namespace
 	{
 		std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_buttonFlashTimers;
@@ -264,10 +272,10 @@ namespace Util
 	{
 		if (ResolveShaderCacheClearScope() == ShaderCacheClearScope::ActiveOnly) {
 			return "Clears only shaders drawing the current scene. They recompile as the scene redraws; "
-			       "everything else stays cached. Shift-click selects a full clear.";
+				   "everything else stays cached. Shift-click selects a full clear.";
 		}
 		return "Clears all compiled shaders from memory and disk cache (if enabled). They recompile when "
-		       "the game next encounters them. Shift-click selects a scene-only smart clear.";
+			   "the game next encounters them. Shift-click selects a scene-only smart clear.";
 	}
 
 	// Helper function to perform the actual cache clearing

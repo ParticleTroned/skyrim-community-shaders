@@ -7,6 +7,50 @@ namespace WaterEffects
 	// http://www.diva-portal.org/smash/get/diva2:831762/FULLTEXT01.pdf
 	// https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
 
+	static const int fullParallaxSteps = 16;
+
+	/** Returns the configured sample count for water parallax. */
+	int GetFullWaterParallaxSteps()
+	{
+		return SharedData::waterAppearanceSettings.Enabled ? (int)clamp(SharedData::waterAppearanceSettings.ParallaxQuality, 4u, 64u) : fullParallaxSteps;
+	}
+
+	float GetWaterParallaxStrength()
+	{
+		return SharedData::waterAppearanceSettings.Enabled ? SharedData::waterAppearanceSettings.ParallaxStrength : 1.0;
+	}
+
+	/** Projects a finite, non-grazing view vector onto the water surface. */
+	bool TryGetProjectedParallaxDirection(float3 viewDirection, out float2 projectedDirection, out float viewDotUp)
+	{
+		projectedDirection = 0.0.xx;
+		viewDotUp = -viewDirection.z;
+		float strength = GetWaterParallaxStrength();
+		if (!all(isfinite(viewDirection)) || !isfinite(strength) || viewDotUp < 0.05 || strength <= 0.0)
+			return false;
+
+		projectedDirection = viewDirection.xy / viewDotUp * strength;
+		if (!all(isfinite(projectedDirection))) {
+			projectedDirection = 0.0.xx;
+			return false;
+		}
+		return true;
+	}
+
+	/** Resolves the final parallax intersection without propagating degenerate divisions. */
+	float ResolveParallaxAmount(float currBound, float prevBound, float currHeight, float prevHeight)
+	{
+		float delta2 = prevBound - prevHeight;
+		float delta1 = currBound - currHeight;
+		float denominator = delta2 - delta1;
+		float numerator = currBound * delta2 - prevBound * delta1;
+		if (!isfinite(denominator) || !isfinite(numerator) || abs(denominator) <= 1e-6)
+			return currBound;
+
+		float amount = numerator / denominator;
+		return isfinite(amount) ? clamp(amount, prevBound, currBound) : currBound;
+	}
+
 	float GetMipLevel(float2 coords, Texture2D<float4> tex, float screenNoise)
 	{
 		// Compute the current gradients:
@@ -55,9 +99,12 @@ namespace WaterEffects
 	float2 GetParallaxOffset(PS_INPUT input, float3 normalScalesRcp)
 	{
 		float3 viewDirection = normalize(input.WPosition.xyz);
-		float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
+		float2 parallaxOffsetTS;
+		float viewDotUp;
+		if (!TryGetProjectedParallaxDirection(viewDirection, parallaxOffsetTS, viewDotUp))
+			return 0.0.xx;
 
-		// Parallax scale is also multiplied by normalScalesRcp
+		// Parallax scale is also multiplied by normalScalesRcp.
 		parallaxOffsetTS *= 20.0;
 
 		float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
@@ -67,7 +114,8 @@ namespace WaterEffects
 		mipLevels.y = GetMipLevel(input.TexCoord1.zw, Normals02Tex, screenNoise);
 		mipLevels.z = GetMipLevel(input.TexCoord2.xy, Normals03Tex, screenNoise);
 
-		float stepSize = rcp(16.0);
+		int parallaxSteps = GetFullWaterParallaxSteps();
+		float stepSize = rcp((float)parallaxSteps);
 		float currBound = 0.0;
 		float currHeight = 1.0;
 		float prevHeight = 1.0;
@@ -81,10 +129,7 @@ namespace WaterEffects
 
 		float prevBound = currBound - stepSize;
 
-		float delta2 = prevBound - prevHeight;
-		float delta1 = currBound - currHeight;
-		float denominator = delta2 - delta1;
-		float parallaxAmount = (currBound * delta2 - prevBound * delta1) / denominator;
+		float parallaxAmount = ResolveParallaxAmount(currBound, prevBound, currHeight, prevHeight);
 
 		return parallaxOffsetTS.xy * parallaxAmount;
 	}
@@ -111,22 +156,35 @@ namespace WaterEffects
 		return blendedHeight;
 	}
 
+	bool TryGetFlowmapParallaxDirection(float3 viewDirection, out float2 parallaxDirection, out float viewDotUp)
+	{
+		if (!TryGetProjectedParallaxDirection(viewDirection, parallaxDirection, viewDotUp))
+			return false;
+
+		parallaxDirection.y = -parallaxDirection.y;
+		parallaxDirection *= 0.008 * saturate(viewDotUp * 2.0);
+		return true;
+	}
+
+	/** Keeps grazing and disabled flowmap parallax finite for both marching and UV displacement. */
+	float2 GetFlowmapParallaxDirection(float3 viewDirection)
+	{
+		float2 parallaxDirection;
+		float viewDotUp;
+		return TryGetFlowmapParallaxDirection(viewDirection, parallaxDirection, viewDotUp) ? parallaxDirection : 0.0.xx;
+	}
+
 	float GetFlowmapParallaxAmount(PS_INPUT input, float2 flowmapDims, float3 viewDirection)
 	{
-		float viewDotUp = -viewDirection.z;
-
-		if (viewDotUp < 0.05)
+		float2 parallaxDir;
+		float viewDotUp;
+		if (!TryGetFlowmapParallaxDirection(viewDirection, parallaxDir, viewDotUp))
 			return 0.0;
-
-		float2 parallaxDir = viewDirection.xy / -viewDirection.z;
-		parallaxDir.y = -parallaxDir.y;
-
-		float parallaxScale = 0.008 * saturate(viewDotUp * 2.0);
-		parallaxDir *= parallaxScale;
 
 		float2 uvShiftPx = 1 / (128 * flowmapDims);
 
-		int numSteps = (int)lerp(32.0, 8.0, viewDotUp);
+		float quality = (float)GetFullWaterParallaxSteps();
+		int numSteps = (int)lerp(quality * 2.0, quality * 0.5, viewDotUp);
 		float stepSize = rcp((float)numSteps);
 
 		float currBound = 0.0;
@@ -146,11 +204,7 @@ namespace WaterEffects
 		}
 
 		float prevBound = currBound - stepSize;
-		float delta2 = prevBound - prevHeight;
-		float delta1 = currBound - currHeight;
-		float denominator = delta2 - delta1;
-
-		return denominator != 0.0 ? (currBound * delta2 - prevBound * delta1) / denominator : currBound;
+		return ResolveParallaxAmount(currBound, prevBound, currHeight, prevHeight);
 	}
 
 	float GetFlowmapParallaxHeight(PS_INPUT input, float2 currentOffset, float3 normalScalesRcp, float mipLevel)
@@ -163,13 +217,18 @@ namespace WaterEffects
 
 	float2 GetFlowmapParallaxUVOffset(PS_INPUT input, float3 viewDirection, float3 normalScalesRcp)
 	{
-		float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
+		float2 parallaxOffsetTS;
+		float viewDotUp;
+		if (!TryGetProjectedParallaxDirection(viewDirection, parallaxOffsetTS, viewDotUp))
+			return 0.0.xx;
+
 		parallaxOffsetTS *= 80.0;
 
 		float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
 		float mipLevel = GetMipLevel(input.TexCoord1.xy, Normals01Tex, screenNoise);
 
-		float stepSize = rcp(16.0);
+		int parallaxSteps = GetFullWaterParallaxSteps();
+		float stepSize = rcp((float)parallaxSteps);
 		float currBound = 0.0;
 		float currHeight = 1.0;
 		float prevHeight = 1.0;
@@ -182,10 +241,7 @@ namespace WaterEffects
 		}
 
 		float prevBound = currBound - stepSize;
-		float delta2 = prevBound - prevHeight;
-		float delta1 = currBound - currHeight;
-		float denominator = delta2 - delta1;
-		float parallaxAmount = (currBound * delta2 - prevBound * delta1) / denominator;
+		float parallaxAmount = ResolveParallaxAmount(currBound, prevBound, currHeight, prevHeight);
 
 		return parallaxOffsetTS.xy * parallaxAmount;
 	}

@@ -197,6 +197,41 @@ public:
 	/** @brief Returns whether the active backend is configured to limit game FPS. */
 	[[nodiscard]] bool IsFrameRateLimitConfigured() const;
 
+	/** @brief Inclusive frame-age limit for applied-path and Present evidence. */
+	static constexpr uint32_t kPerformanceMeasurementRecentEvidenceFrames = 8;
+
+	struct PerformanceMeasurementFrameGenerationSettings
+	{
+		uint32_t mode = 0;
+		uint32_t forceEnable = 0;
+		bool allowInMenus = false;
+	};
+
+	struct PerformanceMeasurementFrameGenerationStatus
+	{
+		bool configured = false;
+		bool dx12PathActive = false;
+		bool requestedNow = false;
+		bool activeNow = false;
+		bool hasRecentPresentEvidence = false;
+		bool lastPresentRequested = false;
+		bool lastPresentSuccessful = false;
+		bool lastPresentActive = false;
+	};
+
+	/** @brief Captures every setting changed by the measurement override. */
+	[[nodiscard]] PerformanceMeasurementFrameGenerationSettings CaptureFrameGenerationSettingsForPerformanceMeasurement() const;
+	/** @brief Disables generation while retaining recent Present evidence. */
+	void DisableFrameGenerationForPerformanceMeasurement();
+	/** @brief Restores the exact captured settings after the measurement. */
+	void RestoreFrameGenerationSettingsAfterPerformanceMeasurement(const PerformanceMeasurementFrameGenerationSettings& a_settings);
+	/** @brief Reports current and recent-Present generation state. */
+	[[nodiscard]] PerformanceMeasurementFrameGenerationStatus GetFrameGenerationStatusForPerformanceMeasurement(
+		uint32_t a_recentEvidenceFrames = kPerformanceMeasurementRecentEvidenceFrames) const;
+	/** @brief Requires a recent successful non-generating Present on the D3D12 path. */
+	[[nodiscard]] bool IsFrameGenerationQuiescentForPerformanceMeasurement(
+		uint32_t a_recentEvidenceFrames = kPerformanceMeasurementRecentEvidenceFrames) const;
+
 	// Feature interface overrides
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -245,6 +280,14 @@ public:
 		return configuredMethod != UpscaleMethod::kNONE ||
 		       (d3d12SwapChainActive && settings.frameGenerationMode != 0);
 	}
+	/** @brief Requires applied settings and a recently successful render path. */
+	virtual bool IsPerformanceCostMeasurementReady() const override;
+	virtual const char* GetPerformanceCostMeasurementWaitText() const override
+	{
+		return T("menu.performance_tuning.feature.upscaling.wait", "Waiting for upscaling and frame pacing to settle");
+	}
+	virtual uint64_t GetPerformanceCostMeasurementFreshPresentCount(bool) const override { return 12; }
+	virtual double GetPerformanceCostMeasurementPostFreshSoakSeconds(bool) const override { return 0.5; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {
@@ -364,6 +407,24 @@ public:
 	FrameGenerationFrameSnapshot frameGenerationFrame{};
 	bool frameGenerationFrameConsumed = true;
 	mutable std::mutex frameGenerationFrameMutex;
+	bool performanceCostAppliedStateValid = false;
+	UpscaleMethod performanceCostAppliedUpscaleMethod = UpscaleMethod::kNONE;
+	uint32_t performanceCostAppliedQualityMode = 0;
+	uint32_t performanceCostAppliedDLSSPreset = 0;
+	bool performanceCostAppliedFrameGenerationMode = false;
+	bool performanceCostAppliedFSRRuntimePathActive = false;
+	bool performanceCostAppliedFSRRuntimeFsr4Configured = false;
+	bool performanceCostAppliedFSRRuntimeFsr4Active = false;
+	float2 performanceCostAppliedResolutionScale = { 1.0f, 1.0f };
+	uint64_t performanceCostAppliedRevision = 0;
+	uint64_t performanceCostLastSuccessfulExecutedRevision = 0;
+	UpscaleMethod performanceCostLastSuccessfulExecutedMethod = UpscaleMethod::kNONE;
+	uint32_t performanceCostLastSuccessfulExecutedFrame = std::numeric_limits<uint32_t>::max();
+	bool performanceCostFrameGenerationPresentValid = false;
+	bool performanceCostFrameGenerationPresentRequested = false;
+	bool performanceCostFrameGenerationPresentSuccessful = false;
+	bool performanceCostFrameGenerationPresentActive = false;
+	uint32_t performanceCostFrameGenerationPresentFrame = std::numeric_limits<uint32_t>::max();
 	enum class BackendLifecycle : uint8_t
 	{
 		kRunning,
@@ -384,6 +445,11 @@ public:
 		bool a_successful,
 		uint32_t a_renderWidth,
 		uint32_t a_renderHeight);
+	void RecordPerformanceCostExecutedPath(UpscaleMethod a_method, bool a_successful);
+	void RecordPerformanceCostFrameGenerationPresent(
+		bool a_requested,
+		bool a_successful,
+		bool a_active);
 	void RequestHistoryReset();
 	bool ShouldResetHistoryThisFrame() const;
 	void UpdateHistoryResetState(UpscaleMethod a_upscaleMethod);

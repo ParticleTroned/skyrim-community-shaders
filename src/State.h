@@ -334,14 +334,20 @@ public:
 		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -NI_INFINITY when no water body found
 		float RefractionScale;    // matches HLSL SharedData::RefractionScale
 		uint VolumetricShadowsEnabled;
-		float pad0;
+		float VolumetricLightingOpacity;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
-		float4 HDRData;  // xyz + menu scene encoding in w — see HDRDisplay::GetSharedDataHDR
+		float4 HDRData;                        // xyz + menu scene encoding in w — see HDRDisplay::GetSharedDataHDR
+		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
+		float VolumetricLightingSaturation;
+		float3 VolumetricLightingPad{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
-
+	static_assert(offsetof(SharedDataCB, VolumetricLightingOpacity) == offsetof(SharedDataCB, VolumetricShadowsEnabled) + sizeof(uint));
+	static_assert(offsetof(SharedDataCB, AmbientSHR) % 16 == 0);
+	static_assert(offsetof(SharedDataCB, VolumetricLightingCustomColor) == offsetof(SharedDataCB, HDRData) + sizeof(float4));
+	static_assert(offsetof(SharedDataCB, VolumetricLightingSaturation) == offsetof(SharedDataCB, VolumetricLightingCustomColor) + sizeof(float4));
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
 

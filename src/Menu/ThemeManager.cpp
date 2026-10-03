@@ -217,6 +217,10 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	styleCopy.SeparatorTextBorderSize = scaleSize(themeSettings.Style.SeparatorTextBorderSize);
 	styleCopy.DockingSeparatorSize = scaleSize(themeSettings.Style.DockingSeparatorSize);
 	styleCopy.MouseCursorScale = ImMax(1.0f, themeSettings.Style.MouseCursorScale);
+	// Live font and DPI state belongs to ImGui, not persisted theme geometry.
+	styleCopy.FontSizeBase = style.FontSizeBase;
+	styleCopy.FontScaleDpi = style.FontScaleDpi;
+	styleCopy._NextFrameFontSizeBase = style._NextFrameFontSizeBase;
 
 	style = styleCopy;
 	style.HoverDelayNormal = themeSettings.TooltipHoverDelay;

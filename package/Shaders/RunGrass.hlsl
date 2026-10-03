@@ -498,6 +498,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	}
 #		endif
 
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
 	diffuseColor += directionalAmbientColor;
 
 	float3 albedo = baseColor.xyz * vertexColor;
@@ -705,7 +706,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		dirDetailedShadow *= shadowColor.x;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	if (!SharedData::InInterior && dirLightAngle >= 0.0)
+	if (!SharedData::InInterior && (dirLightAngle >= 0.0 || SharedData::foliageLightingSettings.EnableGrassScattering != 0))
 		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise);
 #			endif  // SCREEN_SPACE_SHADOWS
 
@@ -856,6 +857,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #				endif
 
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
 	diffuseColor += directionalAmbientColor;
 	diffuseColor += subsurfaceColor * albedo;
 	diffuseColor *= albedo;

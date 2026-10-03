@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/VanityCamera.h"
 
 #include "LightEditor.h"
 #include "Weather/CellLightingWidget.h"
@@ -103,7 +104,7 @@ public:
 	void AdjustFlySpeed(float scrollDelta);
 
 	// Vanity camera control
-	bool vanityCameraDisabled = false;
+	Util::VanityCameraSuppressionLease vanityCameraSuppression;
 
 	// Game HUD hiding (tm equivalent)
 	bool gameMenusHidden = false;

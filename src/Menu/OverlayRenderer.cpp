@@ -1,6 +1,7 @@
 #include "OverlayRenderer.h"
 #include "BackgroundBlur.h"
 #include "HomePageRenderer.h"
+#include "PerformanceTuningRenderer.h"
 #include "ThemeManager.h"
 
 #include <dxgi.h>
@@ -136,14 +137,14 @@ void OverlayRenderer::RenderOverlay(
 
 	// Process editor close transitions and delayed light-reference work even when no overlay needs drawing.
 	auto* editorWindow = EditorWindow::GetSingleton();
+	if (editorWindow->open && PerformanceTuningRenderer::HasActiveMeasurements())
+		PerformanceTuningRenderer::CancelActiveMeasurements(PerformanceTuningRenderer::CancelMode::RunningOnly);
 	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
 		editorWindow->open = false;
 		if (editorWindow->IsInPreviewMode())
 			editorWindow->ExitPreviewMode();
 	}
 	editorWindow->UpdateOpenState();
-	if (!menu.IsEnabled)
-		PerformanceTuningRenderer::UpdateActiveMeasurements();
 
 	if (ShouldSkipRendering()) {
 		auto& io = ImGui::GetIO();
@@ -155,6 +156,7 @@ void OverlayRenderer::RenderOverlay(
 
 	HandleFontReload(menu, cachedFontSize, currentFontSize);
 	InitializeImGuiFrame(menu);
+	PerformanceTuningRenderer::UpdateClosedMenuMeasurement();
 
 	RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
@@ -180,9 +182,9 @@ void OverlayRenderer::RenderOverlay(
 	} else {
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
-	PerformanceTuningRenderer::RenderMeasurementOverlay();
 
 	RenderFeatureOverlays();
+	PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay();
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
 	PatchOverlappingWindowBackgrounds();
@@ -198,6 +200,7 @@ bool OverlayRenderer::ShouldSkipRendering()
 	auto* renderDoc = RenderDoc::GetSingleton();
 
 	return !(shaderCache->IsCompiling() ||
+			 PerformanceTuningRenderer::HasActiveMeasurements() ||
 			 Menu::GetSingleton()->IsEnabled ||
 			 HomePageRenderer::ShouldShowFirstTimeSetup() ||
 			 EditorWindow::GetSingleton()->open ||

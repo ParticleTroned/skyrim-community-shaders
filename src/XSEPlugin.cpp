@@ -4,6 +4,7 @@
 #include "Diagnostics/FrameGenerationDevBenchBridge.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
@@ -28,6 +29,7 @@ bool Load();
 
 void ResetRuntimeStateAfterGameLoad()
 {
+	globals::features::skylighting.QueueResetSkylighting();
 	globals::game::quitGame.store(false, std::memory_order_release);
 	globals::OnDataLoaded();
 	globals::weatherManager->ClearCache();

@@ -78,6 +78,9 @@ namespace Util
 	/// Returns a scale factor for search controls authored against the 2K baseline.
 	inline float GetSearchUIScale() { return GetUIScaleForBaseline(ThemeManager::Constants::SEARCH_BASELINE_SCREEN_HEIGHT * ThemeManager::Constants::DEFAULT_FONT_RATIO); }
 
+	/** Draws a checkbox for an unsigned-integer boolean and normalizes the stored value. */
+	bool UIntCheckbox(const char* a_label, unsigned int& a_value);
+
 	/**
 	 * Usage:
 	 * if (auto _tt = Util::HoverTooltipWrapper()){

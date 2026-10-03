@@ -79,6 +79,8 @@ public:
 			T("menu.performance_tuning.feature.screen_space_shadows.comparison_label", "Off"),
 			T("menu.performance_tuning.feature.screen_space_shadows.comparison_details", "Screen Space Shadows are switched off.") };
 	}
+	virtual bool IsPerformanceTuningApplicable() const override;
+	virtual const char* GetPerformanceTuningApplicabilityReason() const override;
 	virtual json GetPerformanceTuningUserSettingsMask() const override
 	{
 		return {
@@ -91,6 +93,7 @@ public:
 	}
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return bendSettings.Enable != 0; }
+	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		if (a_enabled) {

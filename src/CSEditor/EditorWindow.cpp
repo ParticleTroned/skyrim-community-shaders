@@ -1475,17 +1475,14 @@ void EditorWindow::UpdateOpenState()
 	// started them. Keep their lightweight state machines moving without gathering scene lights.
 	lightEditor.TickDeferredWork();
 
-	if (open)
-		DisableVanityCamera();
-	else
-		RestoreVanityCamera();
-
 	if (open && !wasOpen) {
+		DisableVanityCamera();
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
 
 	} else if (!open && wasOpen) {
 		lightEditor.ResetOverrides();
+		RestoreVanityCamera();
 		ShowGameMenus();
 		BackgroundBlur::SetCSEditorActive(false);
 	}
@@ -2352,24 +2349,12 @@ bool EditorWindow::CanBeOpen()
 
 void EditorWindow::DisableVanityCamera()
 {
-	if (vanityCameraDisabled)
-		return;
-
-	if (Util::AcquireAutoVanityCameraSuppression()) {
-		vanityCameraDisabled = true;
-		logger::info("Vanity camera disabled");
-	}
+	vanityCameraSuppression.Acquire();
 }
 
 void EditorWindow::RestoreVanityCamera()
 {
-	if (!vanityCameraDisabled)
-		return;
-
-	if (Util::ReleaseAutoVanityCameraSuppression()) {
-		vanityCameraDisabled = false;
-		logger::info("Vanity camera restored");
-	}
+	vanityCameraSuppression.Release();
 }
 
 void EditorWindow::HideGameMenus()

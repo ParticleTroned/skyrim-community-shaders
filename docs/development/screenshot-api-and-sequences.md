@@ -98,6 +98,10 @@ only after the lossless source for that frame has been staged. It therefore
 remains visible without entering the saved frame set. Stop/finalize messages
 may use the ordinary HUD; no second recording overlay is drawn.
 
+The dot requires completed destination preparation and the sequence's owned
+directory lease. It remains off while preparation is pending or fails, and
+after a stop, cancellation, finalization or the last frame is scheduled.
+
 ## Contract identity and versioning
 
 ### Tool identity
@@ -484,6 +488,13 @@ capability explicitly permits both.
 -   `absolute` is accepted only when advertised and must be an absolute canonical
     path.
 -   Relative traversal outside the selected root is rejected as `unsafe_path`.
+-   Sequence acceptance freezes the descriptor and returns `preparing` before
+    any path resolution or directory I/O. The preparation worker resolves the
+    destination and creates the sequence directory; failure becomes a terminal
+    `destination_unavailable` receipt without blocking request or render work.
+-   The sequence directory is created relative to the already-open destination
+    handle by one native create-and-open operation. CSX never reopens the new
+    directory by pathname to acquire its lease.
 -   Existing files are never overwritten in version 1. `overwrite` must be
     `never`; name collisions receive a deterministic numeric suffix.
 -   The worker encodes into memory, creates a sibling temporary file
@@ -506,9 +517,12 @@ names are sanitized, length-limited, and cannot contain path separators.
 request-scoped patch. A still request expands the current CSX screenshot eye,
 format, source, destination, and clipboard settings. A sequence request
 expands the distinct frame-capture eye, format, source, destination, frame
-count, and cadence settings. The acceptance receipt always contains the fully
-expanded effective descriptor. UI settings changed afterward affect only later
-requests. Sequence destination validation uses the frame-capture folder even
+count, and cadence settings. The acceptance receipt contains the fully expanded
+non-I/O settings descriptor. UI settings changed afterward affect only later
+requests. A sequence's initial `preparing` receipt leaves its manifest path null
+and omits only `effective.capture.destination.resolvedDirectory`; both are
+published after preparation succeeds. Sequence destination validation uses the
+frame-capture folder even
 when the still-image folder is unavailable. A partial settings load that omits
 both `FrameCaptureEye` and legacy `SeparateEyes` preserves the selected eye.
 The legacy key migrates only when supplied; a canonical eye always wins.
@@ -548,13 +562,49 @@ descriptor.
 Parent states are:
 
 ```text
-submitted -> accepted -> running -> finalizing -> completed
-                              |                 -> completed_with_warnings
-                              |                 -> failed_partial
-                              +-> stop_requested -> stopped
-                              +-> cancel_requested -> cancelled
-                                                   -> cancelled_partial
+submitted -> accepted -> preparing -> running -> finalizing -> completed
+                          |   |        |                 -> completed_with_warnings
+                          |   |        |                 -> failed_partial
+                          |   +--------+-> stop_requested -> stopped
+                          |   +--------+-> cancel_requested -> cancelled
+                          |                                 -> cancelled_partial
+                          +-> failed (destination unavailable)
 ```
+
+A stop or cancellation accepted while destination preparation is in flight
+retains its requested state. Successful preparation emits `sequence.prepared`
+and proceeds directly to finalization without transiently reporting `running`.
+It queues only the final manifest, with no redundant partial checkpoint.
+Queued preparation can be cancelled before filesystem work starts; its receipt
+ends `cancelled` or `stopped`, with a cancelled manifest outcome and null path.
+An active synchronous filesystem call must return before its outcome can be
+reported. A cancellation or shutdown deadline does not cancel that OS call.
+
+Contract 1.1, schema revision 2, advertises independent destination preparation
+and manifest publication lanes. A stalled destination cannot block an existing
+sequence's manifest; a stalled manifest cannot block another destination's
+preparation. Each lane retains queued jobs, active jobs and undrained results
+within its advertised capacity: 64 preparations and 256 publications. Partial
+checkpoints stop at 192 outstanding publications, reserving 64 terminal slots.
+The public status reports these outstanding counts and admission closure.
+New sequence admission also closes at 256 retired manifest snapshots waiting
+for the publication worker. At most the 64 already pending operations can add
+their snapshots afterward. This bounds retained chains when publication stalls.
+
+Shutdown closes preparation admission, retires queued preparations without
+filesystem work and allows terminal manifests to drain. `DrainForShutdown`
+returns false at its caller deadline while unresolved I/O remains outstanding.
+Destruction gives both workers one shared two-second deadline. A worker still
+in synchronous I/O retains isolated shared state after that deadline and
+finishes when the OS call returns; the timeout is logged and is never a claim
+that the operation was cancelled. Worker state and immutable manifest snapshots
+do not refer back to the destroyed coordinator.
+
+Failed destination preparation retires the sequence immediately. Its terminal
+receipt has zero scheduled/written frames, a `destination_unavailable` error,
+and a failed manifest outcome with a null path when a manifest was requested.
+No manifest job is queued without a directory lease. Public active-sequence
+counts and the recording indicator exclude this failed sequence.
 
 Every parent terminal state includes counts and a manifest outcome. A sequence
 cannot be terminal-success while any child frame remains in a mutable state.

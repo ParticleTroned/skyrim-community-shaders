@@ -2,9 +2,11 @@
 
 #include <Windows.h>
 #include <bcrypt.h>
+#include <winternl.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <cstring>
@@ -18,6 +20,18 @@
 
 namespace CSX::ScreenshotStorage
 {
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+	namespace
+	{
+		std::atomic<DirectoryCreationTestHook> g_directoryCreationTestHook{ nullptr };
+	}
+
+	void SetDirectoryCreationTestHook(DirectoryCreationTestHook a_hook) noexcept
+	{
+		g_directoryCreationTestHook.store(a_hook, std::memory_order_release);
+	}
+#endif
+
 	namespace
 	{
 		class ScopedHandle final
@@ -83,12 +97,15 @@ namespace CSX::ScreenshotStorage
 			const DWORD required = GetFinalPathNameByHandleW(a_handle, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 			if (required == 0)
 				throw std::runtime_error(std::format("final path query failed with Win32 error {}", GetLastError()));
-			std::wstring buffer(required, L'\0');
+			std::wstring buffer(static_cast<std::size_t>(required) + 1, L'\0');
 			const DWORD written = GetFinalPathNameByHandleW(
-				a_handle, buffer.data(), required, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-			if (written == 0 || written >= required)
+				a_handle, buffer.data(), static_cast<DWORD>(buffer.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+			if (written == 0 || written >= buffer.size())
 				throw std::runtime_error(std::format("final path query failed with Win32 error {}", GetLastError()));
-			buffer.resize(written);
+			const auto terminator = std::ranges::find(buffer, L'\0');
+			if (terminator == buffer.end())
+				throw std::runtime_error("final path query returned an unterminated path");
+			buffer.resize(static_cast<std::size_t>(std::distance(buffer.begin(), terminator)));
 			return NormalizeFinalPath(std::move(buffer));
 		}
 
@@ -138,6 +155,51 @@ namespace CSX::ScreenshotStorage
 				FILE_SHARE_READ | FILE_SHARE_WRITE,
 				nullptr, OPEN_EXISTING,
 				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		}
+
+		HANDLE CreateDirectoryRelative(HANDLE a_parent, std::wstring_view a_name)
+		{
+			if (a_name.empty() || a_name.size() > USHRT_MAX / sizeof(wchar_t))
+				throw std::runtime_error("sequence directory name is too long");
+			using NtCreateFileFunction = NTSTATUS(NTAPI*)(
+				PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+				PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+			const auto module = GetModuleHandleW(L"ntdll.dll");
+			const auto createFile = module ? reinterpret_cast<NtCreateFileFunction>(
+												 GetProcAddress(module, "NtCreateFile")) :
+			                                 nullptr;
+			if (!createFile)
+				throw std::runtime_error("atomic sequence directory creation is unavailable");
+			UNICODE_STRING name{
+				.Length = static_cast<USHORT>(a_name.size() * sizeof(wchar_t)),
+				.MaximumLength = static_cast<USHORT>(a_name.size() * sizeof(wchar_t)),
+				.Buffer = const_cast<PWSTR>(a_name.data()),
+			};
+			OBJECT_ATTRIBUTES attributes{};
+			InitializeObjectAttributes(
+				&attributes, &name, OBJ_CASE_INSENSITIVE, a_parent, nullptr);
+			IO_STATUS_BLOCK statusBlock{};
+			HANDLE directory = INVALID_HANDLE_VALUE;
+			const auto status = createFile(
+				&directory,
+				FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE,
+				&attributes,
+				&statusBlock,
+				nullptr,
+				FILE_ATTRIBUTE_NORMAL,
+				FILE_SHARE_READ | FILE_SHARE_WRITE,
+				FILE_CREATE,
+				FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT | FILE_SYNCHRONOUS_IO_NONALERT,
+				nullptr,
+				0);
+			if (status < 0) {
+				if (static_cast<std::uint32_t>(status) == 0xC0000035u)
+					throw std::runtime_error("sequence directory already exists for this request identity");
+				throw std::runtime_error(std::format(
+					"atomic sequence directory creation failed with NTSTATUS {:#x}",
+					static_cast<std::uint32_t>(status)));
+			}
+			return directory;
 		}
 
 		std::string HashHandle(HANDLE a_handle)
@@ -254,6 +316,8 @@ namespace CSX::ScreenshotStorage
 
 			RenameHandle(file.Get(), destination, a_replaceExisting);
 			const auto publishedPath = FinalPath(file.Get());
+			if (!SamePath(publishedPath, destination))
+				throw std::runtime_error("committed artifact producer handle did not resolve to its destination path");
 			ScopedHandle published(CreateFileW(
 				destination.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
 				nullptr, OPEN_EXISTING,
@@ -359,31 +423,23 @@ namespace CSX::ScreenshotStorage
 		const auto destinationInformation = ReadIdentity(destinationHandle.Get(), true);
 		const auto destination = FinalPath(destinationHandle.Get());
 
-		const auto directory = destination / ("CS_sequence_" + std::string(a_requestId));
-		if (!CreateDirectoryW(directory.c_str(), nullptr)) {
-			const auto error = GetLastError();
-			if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS)
-				throw std::runtime_error("sequence directory already exists for this request identity");
-			throw std::runtime_error(std::format("sequence directory creation failed with Win32 error {}", error));
-		}
-
-		ScopedHandle directoryHandle(OpenDirectory(directory));
-		if (directoryHandle.Get() == INVALID_HANDLE_VALUE) {
-			const auto error = GetLastError();
-			RemoveDirectoryW(directory.c_str());
-			throw std::runtime_error(std::format("sequence directory could not be locked (Win32 error {})", error));
-		}
+		const auto leaf = L"CS_sequence_" + std::wstring(a_requestId.begin(), a_requestId.end());
+		const auto directory = destination / leaf;
+		ScopedHandle directoryHandle(CreateDirectoryRelative(destinationHandle.Get(), leaf));
 		try {
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+			if (const auto hook = g_directoryCreationTestHook.load(std::memory_order_acquire))
+				hook(directory);
+#endif
 			const auto directoryInformation = ReadIdentity(directoryHandle.Get(), true);
 			const auto openedDirectory = FinalPath(directoryHandle.Get());
 			if (!SamePath(openedDirectory, directory))
-				throw std::runtime_error("sequence directory changed between creation and ownership");
+				throw std::runtime_error("sequence directory identity did not match its created path");
 			return std::shared_ptr<DirectoryLease>(new DirectoryLease(
 				destinationHandle.Release(), directoryHandle.Release(), destination, openedDirectory,
 				Identity(destinationInformation), Identity(directoryInformation)));
 		} catch (...) {
-			CloseHandle(directoryHandle.Release());
-			RemoveDirectoryW(directory.c_str());
+			DeleteHandle(directoryHandle.Get());
 			throw;
 		}
 	}

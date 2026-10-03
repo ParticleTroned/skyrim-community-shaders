@@ -77,9 +77,10 @@ foreach(_action IN ITEMS
 endforeach()
 
 foreach(_event IN ITEMS
-    request.accepted source.waiting source.acquired source.timeout source.fallback artifact.queued
-    artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
-    sequence.frame_dropped sequence.stop_requested sequence.finalizing
+	request.accepted source.waiting source.acquired source.timeout source.fallback artifact.queued
+	artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
+	sequence.frame_dropped sequence.preparing sequence.prepared sequence.started
+	sequence.preparation_failed sequence.stop_requested sequence.finalizing
     packaging.queued packaging.completed packaging.failed request.terminal
 )
     string(FIND "${_implementation}" "\"${_event}\"" _event_position)
@@ -97,6 +98,7 @@ foreach(_required_contract_text IN ITEMS
 	effectiveSequence RelativeContainedArtifactPath relativeSequencePath
 	DirectoryLease::CreateExclusive directoryLease VerifyDirectChild
 	SelectSettingsCaptureSource sequence.effective a_sequence.effective
+	DirectoryPreparationJob preparationJobs preparationResults preparationPending
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
@@ -104,10 +106,29 @@ foreach(_required_contract_text IN ITEMS
     endif()
 endforeach()
 
+string(FIND "${_implementation}" "if (action == \"sequence_start\")" _sequence_start_position)
+string(FIND "${_implementation}" "if (action == \"sequence_stop\"" _sequence_stop_position)
+if(_sequence_start_position EQUAL -1 OR _sequence_stop_position LESS _sequence_start_position)
+    message(FATAL_ERROR "Sequence admission implementation could not be isolated")
+endif()
+math(EXPR _sequence_admission_length "${_sequence_stop_position} - ${_sequence_start_position}")
+string(SUBSTRING "${_implementation}" ${_sequence_start_position} ${_sequence_admission_length} _sequence_admission)
+foreach(_blocking_storage_call IN ITEMS ResolveDestinationDirectory DirectoryLease::CreateExclusive)
+    string(FIND "${_sequence_admission}" "${_blocking_storage_call}" _blocking_storage_position)
+    if(NOT _blocking_storage_position EQUAL -1)
+        message(FATAL_ERROR "Sequence admission performs blocking storage work: ${_blocking_storage_call}")
+    endif()
+endforeach()
+
 string(FIND "${_implementation}" "result.artifact = DescribeCommittedArtifact(job.destination, committed);" _manifest_describe_position)
-string(FIND "${_implementation}" "result.success = true;" _manifest_success_position)
 string(FIND "${_implementation}" "integrityError" _integrity_warning_position)
-if(_manifest_describe_position EQUAL -1 OR _manifest_success_position LESS _manifest_describe_position OR
+if(NOT _manifest_describe_position EQUAL -1)
+    string(SUBSTRING "${_implementation}" ${_manifest_describe_position} -1 _manifest_publication_tail)
+    string(FIND "${_manifest_publication_tail}" "result.success = true;" _manifest_success_position)
+else()
+    set(_manifest_success_position -1)
+endif()
+if(_manifest_describe_position EQUAL -1 OR _manifest_success_position EQUAL -1 OR
    NOT _integrity_warning_position EQUAL -1)
     message(FATAL_ERROR "Manifest publication must fail closed when same-handle integrity metadata cannot be produced")
 endif()

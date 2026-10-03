@@ -179,7 +179,9 @@ ScreenshotApi::ScreenshotApi() :
 		{ .maximumCommands = kMaximumCommands, .maximumEvents = kMaximumEvents, .commandRetention = kRetention })
 {
 	manifestWorkerState = std::make_shared<ManifestWorkerState>();
-	manifestWorker = std::thread(&ScreenshotApi::ManifestWorkerLoop, manifestWorkerState);
+	manifestWorker = std::make_unique<CSX::Screenshot::WorkerThread<ManifestWorkerState>>(manifestWorkerState, &ScreenshotApi::ManifestWorkerLoop);
+	preparationWorkerState = std::make_shared<PreparationWorkerState>();
+	preparationWorker = std::make_unique<CSX::Screenshot::WorkerThread<PreparationWorkerState>>(preparationWorkerState, &ScreenshotApi::PreparationWorkerLoop);
 	service.SetServerMetadataProvider([this] {
 		auto metadata = BuildProvenance::GetProducer();
 		metadata.update(json{
@@ -199,35 +201,74 @@ ScreenshotApi::ScreenshotApi() :
 	});
 }
 
+bool ScreenshotApi::CanAdmitPreparationLocked() const
+{
+	std::scoped_lock lock(preparationWorkerState->mutex, manifestWorkerState->mutex);
+	return !preparationWorkerState->stopRequested &&
+	       preparationWorkerState->outstanding < CSX::ScreenshotPolicy::MaximumPreparationJobs &&
+	       manifestWorkerState->retiredChildren.size() < CSX::ScreenshotPolicy::MaximumRetiredManifestSnapshots;
+}
+
 ScreenshotApi::~ScreenshotApi()
 {
-	const auto state = manifestWorkerState;
-	if (!state)
-		return;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 	{
-		std::lock_guard lock(state->mutex);
-		for (auto& [_, sequence] : sequences) {
-			if (sequence.manifestChildren)
-				state->retiredChildren.push_back(std::move(sequence.manifestChildren));
+		std::lock_guard lock(manifestWorkerState->mutex);
+		manifestWorkerState->retiredSequences = std::move(sequences);
+	}
+	manifestWorker->RequestStop();
+	preparationWorker->RequestStop();
+	const bool manifestExited = manifestWorker->ShutdownUntil(deadline);
+	const bool preparationExited = preparationWorker->ShutdownUntil(deadline);
+	if (!manifestExited || !preparationExited)
+		logger::error("Screenshot I/O workers exceeded the shared two-second shutdown deadline; active filesystem calls retain isolated state until they finish.");
+}
+
+void ScreenshotApi::PreparationWorkerLoop(std::shared_ptr<PreparationWorkerState> a_state)
+{
+	while (true) {
+		DirectoryPreparationJob preparation;
+		bool stopping;
+		{
+			std::unique_lock lock(a_state->mutex);
+			a_state->condition.wait(lock, [&] { return a_state->stopRequested || !a_state->preparationJobs.empty(); });
+			if (a_state->preparationJobs.empty() && a_state->stopRequested)
+				break;
+			preparation = std::move(a_state->preparationJobs.front());
+			a_state->preparationJobs.pop_front();
+			stopping = a_state->stopRequested;
 		}
-		state->stopRequested = true;
+		DirectoryPreparationResult result{
+			.requestId = preparation.requestId,
+			.capture = std::move(preparation.capture),
+		};
+		try {
+			if (stopping || preparation.cancelled) {
+				result.cancelled = true;
+			} else {
+				const auto resolvedDirectory = ResolveDestinationDirectory(
+					result.capture, preparation.configuredDirectory, true);
+				result.capture["destination"]["resolvedDirectory"] = Util::PathToUtf8(resolvedDirectory);
+				result.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
+					resolvedDirectory, result.requestId);
+				result.success = true;
+			}
+		} catch (const std::exception& error) {
+			result.error = error.what();
+		} catch (...) {
+			result.error = "sequence destination preparation failed with an unknown exception";
+		}
+		{
+			std::lock_guard lock(a_state->mutex);
+			a_state->preparationResults.push_back(std::move(result));
+		}
+		a_state->condition.notify_all();
 	}
-	state->condition.notify_all();
-	bool exited = false;
 	{
-		std::unique_lock lock(state->mutex);
-		exited = state->condition.wait_for(lock, std::chrono::seconds(2), [&] {
-			return state->exited;
-		});
+		std::lock_guard lock(a_state->mutex);
+		a_state->exited = true;
 	}
-	if (!manifestWorker.joinable())
-		return;
-	if (exited)
-		manifestWorker.join();
-	else {
-		logger::error("Screenshot manifest worker did not stop within two seconds; preserving its isolated state until it exits.");
-		manifestWorker.detach();
-	}
+	a_state->condition.notify_all();
 }
 
 void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state)
@@ -235,20 +276,30 @@ void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_st
 	while (true) {
 		ManifestJob job;
 		std::shared_ptr<const ManifestChildNode> retiredChildren;
+		std::unordered_map<std::string, SequenceRecord> retiredSequences;
 		{
 			std::unique_lock lock(a_state->mutex);
 			a_state->condition.wait(lock, [&] {
-				return a_state->stopRequested || !a_state->jobs.empty() || !a_state->retiredChildren.empty();
+				return a_state->stopRequested || !a_state->retiredSequences.empty() ||
+				       !a_state->jobs.empty() || !a_state->retiredChildren.empty();
 			});
-			if (a_state->jobs.empty() && a_state->retiredChildren.empty() && a_state->stopRequested)
+			if (a_state->retiredSequences.empty() && a_state->jobs.empty() &&
+				a_state->retiredChildren.empty() && a_state->stopRequested)
 				break;
 			if (!a_state->retiredChildren.empty()) {
 				retiredChildren = std::move(a_state->retiredChildren.front());
 				a_state->retiredChildren.pop_front();
+			} else if (!a_state->retiredSequences.empty()) {
+				retiredSequences.swap(a_state->retiredSequences);
 			} else {
 				job = std::move(a_state->jobs.front());
 				a_state->jobs.pop_front();
 			}
+		}
+		if (!retiredSequences.empty()) {
+			for (auto& [_, sequence] : retiredSequences)
+				CSX::Screenshot::ReleaseManifestChildren(sequence.manifestChildren);
+			continue;
 		}
 		if (retiredChildren) {
 			CSX::Screenshot::ReleaseManifestChildren(retiredChildren);
@@ -291,8 +342,6 @@ void ScreenshotApi::ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_st
 		{
 			std::lock_guard lock(a_state->mutex);
 			a_state->results.push_back(std::move(result));
-			if (a_state->outstanding > 0)
-				--a_state->outstanding;
 		}
 		a_state->condition.notify_all();
 	}
@@ -359,7 +408,7 @@ ScreenshotApi::json ScreenshotApi::DispatchRequest(ScreenshotFeature& a_feature,
 	](const json& validatedRequest) {
 			{
 				std::lock_guard lock(mutex);
-				DrainManifestResultsLocked();
+				DrainWorkerResultsLocked();
 				if (persistedSettings.is_null())
 					persistedSettings = BuildSettings(a_feature);
 				TrimLocked();
@@ -625,29 +674,43 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			if (sequence.burst && CountPendingOperationsLocked() != 0)
 				return MakeError(a_request, "busy", "burst requires an idle capture service", "dispatch", true);
 #endif
+			const auto state = preparationWorkerState;
+			if (!CanAdmitPreparationLocked())
+				return MakeError(a_request, "preparation_capacity", "the bounded preparation or snapshot-retirement lane is full or stopping", "admission", true);
+			std::unique_lock workerLock(state->mutex);
+			if (state->stopRequested || state->outstanding >= CSX::ScreenshotPolicy::MaximumPreparationJobs)
+				return MakeError(a_request, "preparation_capacity", "the bounded destination preparation lane is full or stopping", "admission", true);
 			sequence.requestId = requestId;
 			sequence.nextEngineFrame = (globals::state ? globals::state->frameCount : 0u) + sequence.startDelayFrames;
 			sequence.nextWallClock = std::chrono::steady_clock::now() + std::chrono::milliseconds(startDelayMs);
+			sequence.preparationPending = true;
+			bool queued = false;
 			try {
-				sequence.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
-					std::filesystem::u8path(descriptor["destination"]["resolvedDirectory"].get<std::string>()),
-					requestId);
-			} catch (const std::exception& error) {
-				return MakeError(
-					a_request, "destination_unavailable", error.what(), "admission", false,
-					"sequence.capture.destination", requestId);
+				state->preparationJobs.push_back({
+					.requestId = requestId,
+					.capture = descriptor,
+					.configuredDirectory = a_feature.frameCapturePath,
+				});
+				queued = true;
+				auto& record = CreateRequestLocked(
+					"sequence", a_request, effectiveSequence, {}, 0, requestId);
+				record.expectedArtifacts = CSX::ScreenshotPolicy::ExpectedSequenceArtifacts(sequence.frameManifest);
+				sequences.emplace(requestId, std::move(sequence));
+				sequenceOrder.push_back(requestId);
+				TransitionLocked(record, "preparing", "sequence.preparing", { { "frameCount", frameCount } });
+				++state->outstanding;
+			} catch (...) {
+				if (queued)
+					state->preparationJobs.pop_back();
+				sequences.erase(requestId);
+				requests.erase(requestId);
+				std::erase(sequenceOrder, requestId);
+				std::erase(requestOrder, requestId);
+				service.ForgetRequest(requestId);
+				throw;
 			}
-			auto& record = CreateRequestLocked(
-				"sequence", a_request, effectiveSequence, {}, 0, requestId);
-			record.expectedArtifacts = CSX::ScreenshotPolicy::ExpectedSequenceArtifacts(sequence.frameManifest);
-			sequence.directory = sequence.directoryLease->Path();
-			sequence.partialManifestPath = sequence.directory / "sequence.json.partial";
-			sequence.finalManifestPath = sequence.directory / "sequence.json";
-			sequences.emplace(requestId, std::move(sequence));
-			sequenceOrder.push_back(requestId);
-			auto& stored = sequences.at(requestId);
-			TransitionLocked(record, "running", "sequence.started", { { "frameCount", frameCount }, { "manifestPath", Util::PathToUtf8(stored.partialManifestPath) } });
-			QueueSequenceManifestLocked(stored, false);
+			workerLock.unlock();
+			state->condition.notify_one();
 		}
 		auto response = MakeEnvelope(a_request, true);
 		{
@@ -673,6 +736,7 @@ ScreenshotApi::json ScreenshotApi::HandleValidatedRequest(ScreenshotFeature& a_f
 			}
 			if (auto sequence = sequences.find(requestId); sequence != sequences.end()) {
 				if (action == "sequence_stop") {
+					CancelQueuedPreparationLocked(requestId);
 					sequence->second.stopRequested = true;
 					TransitionLocked(found->second, "stop_requested", "sequence.stop_requested");
 				} else {
@@ -897,7 +961,10 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		{ "clipboard", clipboard },
 		{ "tags", std::move(tags) },
 	};
-	normalized["destination"]["resolvedDirectory"] = Util::PathToUtf8(ResolveDestinationDirectory(a_feature, normalized, a_sequenceSettings));
+	if (!a_sequenceSettings) {
+		normalized["destination"]["resolvedDirectory"] = Util::PathToUtf8(ResolveDestinationDirectory(
+			normalized, a_feature.screenshotPath, false));
+	}
 	return normalized;
 }
 
@@ -1143,6 +1210,10 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 						{ "outstandingCaptureJobs", 2 },
 						{ "maximumOutputsPerCaptureJob", CSX::ScreenshotPolicy::MaximumOutputsPerFrame },
 						{ "pendingOperations", CSX::ScreenshotPolicy::MaximumPendingOperations },
+						{ "destinationPreparationJobs", CSX::ScreenshotPolicy::MaximumPreparationJobs },
+						{ "manifestPublicationJobs", CSX::ScreenshotPolicy::MaximumManifestJobs },
+						{ "partialManifestPublicationJobs", CSX::ScreenshotPolicy::MaximumPartialManifestJobs },
+						{ "retiredManifestSnapshotsBeforeAdmissionCloses", CSX::ScreenshotPolicy::MaximumRetiredManifestSnapshots },
 						{ "maximumOutputsPerFrame", 4 },
 						{ "maximumSequenceFrames", kMaximumSequenceFrames },
 						{ "maximumSequenceDurationMs", CSX::ScreenshotPolicy::MaximumSequenceDurationMs },
@@ -1178,6 +1249,18 @@ ScreenshotApi::json ScreenshotApi::BuildStatus(const ScreenshotFeature& a_featur
 		if (!sequence.finalizing)
 			++activeSequences;
 	journal["retainedRequests"] = requests.size();
+	json ioWorkers;
+	{
+		std::scoped_lock workerLock(preparationWorkerState->mutex, manifestWorkerState->mutex);
+		ioWorkers = {
+			{ "independentLanes", true },
+			{ "destinationPreparationOutstanding", preparationWorkerState->outstanding },
+			{ "manifestPublicationOutstanding", manifestWorkerState->outstanding },
+			{ "retiredManifestSnapshots", manifestWorkerState->retiredChildren.size() },
+			{ "destinationPreparationAdmissionClosed", preparationWorkerState->stopRequested },
+			{ "manifestPublicationAdmissionClosed", manifestWorkerState->stopRequested },
+		};
+	}
 	return {
 		{ "feature", { { "loaded", a_feature.loaded }, { "enabled", a_feature.IsRuntimeEnabled() }, { "settingsSchemaVersion", 2 } } },
 		{ "sourceReadiness", {
@@ -1195,6 +1278,7 @@ ScreenshotApi::json ScreenshotApi::BuildStatus(const ScreenshotFeature& a_featur
 						} },
 		{ "worker", { { "outstandingCaptureJobs", outstandingCaptureJobs }, { "captureJobCapacity", 2 }, { "completedArtifacts", completedArtifacts }, { "failedArtifacts", failedArtifacts } } },
 		{ "journal", std::move(journal) },
+		{ "ioWorkers", std::move(ioWorkers) },
 		{ "lastTerminalRequest", std::move(last) },
 	};
 }
@@ -1204,7 +1288,8 @@ bool ScreenshotApi::IsSequenceRecording() const
 	std::lock_guard lock(mutex);
 	return std::any_of(sequences.begin(), sequences.end(), [](const auto& entry) {
 		const auto& sequence = entry.second;
-		return !sequence.finalizing && !sequence.stopRequested && !sequence.cancelRequested &&
+		return !sequence.preparationPending && sequence.directoryLease &&
+		       !sequence.finalizing && !sequence.stopRequested && !sequence.cancelRequested &&
 		       sequence.nextOrdinal <= sequence.frameCount;
 	});
 }
@@ -1335,7 +1420,9 @@ ScreenshotApi::json ScreenshotApi::MakeSequenceReceipt(const RequestRecord& a_re
 		{ "inFlight", a_sequence->inFlight },
 	};
 	receipt["manifest"] = {
-		{ "partialPath", a_sequence->frameManifest ? json(Util::PathToUtf8(a_sequence->partialManifestPath)) : json(nullptr) },
+		{ "partialPath", a_sequence->frameManifest && !a_sequence->partialManifestPath.empty() ?
+							 json(Util::PathToUtf8(a_sequence->partialManifestPath)) :
+							 json(nullptr) },
 		{ "finalPath", a_sequence->frameManifest &&
 							   a_sequence->packaging["frameManifest"].value("state", std::string{}) == "written" ?
 						   json(Util::PathToUtf8(a_sequence->finalManifestPath)) :
@@ -1694,6 +1781,8 @@ void ScreenshotApi::FinishSequenceChildLocked(RequestRecord& a_child)
 
 void ScreenshotApi::TryFinalizeSequenceLocked(SequenceRecord& a_sequence)
 {
+	if (a_sequence.preparationPending)
+		return;
 	const bool schedulingComplete = a_sequence.nextOrdinal > a_sequence.frameCount;
 	if (!(schedulingComplete || a_sequence.stopRequested || a_sequence.cancelRequested) || a_sequence.inFlight != 0)
 		return;
@@ -1825,6 +1914,8 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 		const auto state = manifestWorkerState;
 		{
 			std::lock_guard workerLock(state->mutex);
+			if (state->stopRequested || !CSX::ScreenshotPolicy::CanAdmitManifestJob(state->outstanding, a_final))
+				throw std::runtime_error("bounded manifest publication lane is full or stopping");
 			state->jobs.push_back(std::move(job));
 			++state->outstanding;
 		}
@@ -1878,12 +1969,82 @@ void ScreenshotApi::QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool
 	}
 }
 
-void ScreenshotApi::DrainManifestResultsLocked()
+void ScreenshotApi::DrainWorkerResultsLocked()
 {
+	std::deque<DirectoryPreparationResult> prepared;
 	std::deque<ManifestResult> completed;
 	{
 		std::lock_guard workerLock(manifestWorkerState->mutex);
 		completed.swap(manifestWorkerState->results);
+		manifestWorkerState->outstanding -= completed.size();
+	}
+	{
+		std::lock_guard workerLock(preparationWorkerState->mutex);
+		prepared.swap(preparationWorkerState->preparationResults);
+		preparationWorkerState->outstanding -= prepared.size();
+	}
+	for (auto& result : prepared) {
+		const auto sequence = sequences.find(result.requestId);
+		if (sequence == sequences.end())
+			continue;
+		auto& record = sequence->second;
+		record.preparationPending = false;
+		auto parent = requests.find(result.requestId);
+		if (parent == requests.end() || IsTerminal(parent->second.state))
+			continue;
+		if (result.cancelled) {
+			record.finalizing = true;
+			if (record.frameManifest) {
+				record.packaging["frameManifest"] = {
+					{ "requested", true }, { "state", "cancelled" }, { "path", nullptr }
+				};
+				parent->second.terminalArtifacts = parent->second.expectedArtifacts;
+			}
+			TransitionLocked(parent->second, record.stopRequested ? "stopped" : "cancelled", "request.terminal", { { "manifestPath", nullptr } });
+			continue;
+		}
+		if (!result.success || !result.directoryLease) {
+			record.finalizing = true;
+			parent->second.error = {
+				{ "code", "destination_unavailable" },
+				{ "message", result.error.empty() ? "sequence destination preparation failed" : result.error },
+				{ "phase", "preparation" },
+				{ "field", "sequence.capture.destination" },
+			};
+			parent->second.errors.push_back(parent->second.error);
+			if (record.frameManifest) {
+				record.packaging["frameManifest"] = {
+					{ "requested", true },
+					{ "state", "failed" },
+					{ "path", nullptr },
+					{ "error", parent->second.error },
+				};
+				parent->second.terminalArtifacts = parent->second.expectedArtifacts;
+			}
+			TransitionLocked(parent->second, "failed", "sequence.preparation_failed", {
+																						  { "manifestPath", nullptr },
+																						  { "error", parent->second.error },
+																					  });
+			continue;
+		}
+		record.capture = std::move(result.capture);
+		record.effective["capture"] = record.capture;
+		record.directoryLease = std::move(result.directoryLease);
+		record.directory = record.directoryLease->Path();
+		record.partialManifestPath = record.directory / "sequence.json.partial";
+		record.finalManifestPath = record.directory / "sequence.json";
+		parent->second.effective["capture"] = record.capture;
+		const json preparedPayload = {
+			{ "frameCount", record.frameCount },
+			{ "manifestPath", Util::PathToUtf8(record.partialManifestPath) },
+		};
+		if (record.stopRequested || record.cancelRequested)
+			AppendEventLocked(parent->second, "sequence.prepared", preparedPayload);
+		else
+			TransitionLocked(parent->second, "running", "sequence.started", preparedPayload);
+		if (!record.stopRequested && !record.cancelRequested)
+			QueueSequenceManifestLocked(record, false);
+		TryFinalizeSequenceLocked(record);
 	}
 	for (auto& result : completed) {
 		const auto sequence = sequences.find(result.requestId);
@@ -1934,7 +2095,7 @@ std::optional<ScreenshotApi::DueFrame> ScreenshotApi::PrepareDueFrameLocked(uint
 			sequence.burst ? !sequence.activeChildRequestId.empty() :
 #endif
 							 sequence.inFlight != 0;
-		if (sequence.finalizing || sequence.stopRequested || sequence.cancelRequested || sourceBusy || sequence.nextOrdinal > sequence.frameCount)
+		if (sequence.preparationPending || !sequence.directoryLease || sequence.finalizing || sequence.stopRequested || sequence.cancelRequested || sourceBusy || sequence.nextOrdinal > sequence.frameCount)
 			continue;
 		const bool due = sequence.scheduleBasis == "game_frames" ? a_engineFrame >= sequence.nextEngineFrame : now >= sequence.nextWallClock;
 		if (!due)
@@ -2023,8 +2184,17 @@ bool ScreenshotApi::RemoveQueuedDispatchLocked(std::string_view a_requestId)
 void ScreenshotApi::MarkSequenceCancellationLocked(SequenceRecord& a_sequence)
 {
 	a_sequence.cancelRequested = true;
+	CancelQueuedPreparationLocked(a_sequence.requestId);
 	if (auto child = requests.find(a_sequence.activeChildRequestId); child != requests.end())
 		child->second.cancelRequested = true;
+}
+
+void ScreenshotApi::CancelQueuedPreparationLocked(std::string_view a_requestId)
+{
+	std::lock_guard lock(preparationWorkerState->mutex);
+	for (auto& job : preparationWorkerState->preparationJobs)
+		if (job.requestId == a_requestId)
+			job.cancelled = true;
 }
 
 void ScreenshotApi::CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason)
@@ -2063,7 +2233,7 @@ void ScreenshotApi::Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame)
 #endif
 	{
 		std::lock_guard lock(mutex);
-		DrainManifestResultsLocked();
+		DrainWorkerResultsLocked();
 		if (!a_feature.IsRuntimeEnabled()) {
 			for (auto& [_, sequence] : sequences) {
 				if (!sequence.finalizing)
@@ -2222,7 +2392,7 @@ void ScreenshotApi::BeginShutdown(std::string_view a_reason)
 {
 	std::lock_guard lock(mutex);
 	acceptingRequests = false;
-	DrainManifestResultsLocked();
+	preparationWorker->RequestStop();
 	for (auto& [_, sequence] : sequences) {
 		if (sequence.finalizing)
 			continue;
@@ -2234,30 +2404,37 @@ void ScreenshotApi::BeginShutdown(std::string_view a_reason)
 		}
 	}
 	CancelQueuedDispatchesLocked("shutdown", a_reason);
+	DrainWorkerResultsLocked();
 	for (auto& [_, sequence] : sequences)
 		TryFinalizeSequenceLocked(sequence);
 }
 
 bool ScreenshotApi::DrainForShutdown(std::chrono::milliseconds a_timeout)
 {
-	const auto deadline = std::chrono::steady_clock::now() + a_timeout;
-	bool drained = false;
-	{
+	const auto deadline = std::chrono::steady_clock::now() + std::max(a_timeout, std::chrono::milliseconds::zero());
+	while (true) {
+		{
+			std::lock_guard lock(mutex);
+			DrainWorkerResultsLocked();
+		}
+		{
+			std::scoped_lock lock(manifestWorkerState->mutex, preparationWorkerState->mutex);
+			if (manifestWorkerState->outstanding == 0 && preparationWorkerState->outstanding == 0)
+				return true;
+		}
+		const auto now = std::chrono::steady_clock::now();
+		if (now >= deadline)
+			return false;
 		std::unique_lock lock(manifestWorkerState->mutex);
-		drained = manifestWorkerState->condition.wait_until(lock, deadline, [this] {
-			return manifestWorkerState->outstanding == 0;
+		manifestWorkerState->condition.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(5)), [&] {
+			return !manifestWorkerState->results.empty();
 		});
 	}
-	{
-		std::lock_guard lock(mutex);
-		DrainManifestResultsLocked();
-	}
-	return drained;
 }
 
 std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
-	const ScreenshotFeature& a_feature,
 	const json& a_capture,
+	const std::filesystem::path& a_configuredDirectory,
 	bool a_sequence)
 {
 	const auto destination = a_capture.value("destination", json::object());
@@ -2270,8 +2447,7 @@ std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
 
 	std::filesystem::path requested;
 	if (policy == "settings_default") {
-		requested = CSX::ScreenshotPolicy::SelectConfiguredCaptureDirectory(
-			a_feature.screenshotPath, a_feature.frameCapturePath, a_sequence);
+		requested = a_configuredDirectory;
 		return ResolveConfiguredCaptureDirectory(requested, a_sequence);
 	}
 

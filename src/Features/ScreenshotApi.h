@@ -7,6 +7,7 @@
 #endif
 #include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
+#include "ScreenshotWorkerThread.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -66,6 +67,7 @@ public:
 	void OnSourceTerminal(std::string_view a_requestId, std::string_view a_state, std::string_view a_error = {});
 	void OnFeatureDisabled(std::string_view a_reason);
 	void BeginShutdown(std::string_view a_reason);
+	/** Drain both independent I/O lanes until the caller deadline; false does not cancel active filesystem calls. */
 	bool DrainForShutdown(std::chrono::milliseconds a_timeout);
 
 	json BuildStatus(const ScreenshotFeature& a_feature) const;
@@ -144,6 +146,7 @@ private:
 		std::string failurePolicy = "continue";
 		bool stopRequested = false;
 		bool cancelRequested = false;
+		bool preparationPending = false;
 		bool finalizing = false;
 		bool frameManifest = true;
 		std::string activeChildRequestId;
@@ -157,6 +160,24 @@ private:
 		std::shared_ptr<const ManifestChildNode> manifestChildren;
 		std::size_t childCount = 0;
 		json packaging = json::object();
+	};
+
+	struct DirectoryPreparationJob
+	{
+		std::string requestId;
+		json capture = json::object();
+		std::filesystem::path configuredDirectory;
+		bool cancelled = false;
+	};
+
+	struct DirectoryPreparationResult
+	{
+		std::string requestId;
+		bool success = false;
+		bool cancelled = false;
+		json capture = json::object();
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
+		std::string error;
 	};
 
 	struct ManifestJob
@@ -182,12 +203,24 @@ private:
 		std::string error;
 	};
 
+	struct PreparationWorkerState
+	{
+		std::mutex mutex;
+		std::condition_variable condition;
+		std::deque<DirectoryPreparationJob> preparationJobs;
+		std::deque<DirectoryPreparationResult> preparationResults;
+		std::size_t outstanding = 0;
+		bool stopRequested = false;
+		bool exited = false;
+	};
+
 	struct ManifestWorkerState
 	{
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::deque<ManifestJob> jobs;
 		std::deque<std::shared_ptr<const ManifestChildNode>> retiredChildren;
+		std::unordered_map<std::string, SequenceRecord> retiredSequences;
 		std::deque<ManifestResult> results;
 		std::size_t outstanding = 0;
 		bool stopRequested = false;
@@ -244,11 +277,13 @@ private:
 	uint64_t failedArtifacts = 0;
 	bool acceptingRequests = true;
 	std::shared_ptr<ManifestWorkerState> manifestWorkerState;
-	std::thread manifestWorker;
+	std::shared_ptr<PreparationWorkerState> preparationWorkerState;
+	std::unique_ptr<CSX::Screenshot::WorkerThread<ManifestWorkerState>> manifestWorker;
+	std::unique_ptr<CSX::Screenshot::WorkerThread<PreparationWorkerState>> preparationWorker;
 
 	static constexpr uint32_t kContractMajor = 1;
-	static constexpr uint32_t kContractMinor = 0;
-	static constexpr uint32_t kSchemaRevision = 1;
+	static constexpr uint32_t kContractMinor = 1;
+	static constexpr uint32_t kSchemaRevision = 2;
 	static constexpr std::size_t kMaximumRequests = 256;
 	static constexpr std::size_t kMaximumEvents = 4096;
 	static constexpr std::size_t kMaximumCommands = 1024;
@@ -301,17 +336,20 @@ private:
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
-	void DrainManifestResultsLocked();
+	void DrainWorkerResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);
+	static void PreparationWorkerLoop(std::shared_ptr<PreparationWorkerState> a_state);
+	bool CanAdmitPreparationLocked() const;
 	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame);
 	std::optional<DispatchEntry> PopDispatchLocked();
 	void RequeueDispatchLocked(DispatchEntry a_entry, bool a_manual);
 	bool RemoveQueuedDispatchLocked(std::string_view a_requestId);
 	void MarkSequenceCancellationLocked(SequenceRecord& a_sequence);
+	void CancelQueuedPreparationLocked(std::string_view a_requestId);
 	void CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason);
 
 	static std::filesystem::path ResolveDestinationDirectory(
-		const ScreenshotFeature& a_feature,
 		const json& a_capture,
+		const std::filesystem::path& a_configuredDirectory,
 		bool a_sequence = false);
 };

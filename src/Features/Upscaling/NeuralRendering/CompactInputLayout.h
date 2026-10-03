@@ -63,4 +63,26 @@ namespace NeuralRendering
 		}
 		return std::nullopt;
 	}
+
+	/** Retain an allocated envelope, including full coordinates, until safe reset. */
+	struct CompactInputRetention
+	{
+		std::uint32_t minimumSide = 0;
+		bool fullCoordinates = false;
+
+		[[nodiscard]] std::optional<CompactInputLayout> Select(
+			const RoiDescriptor& roi, const NativeEvaluationLayout& baseline) const noexcept
+		{
+			return fullCoordinates ? std::nullopt : BuildCompactInputLayout(roi, baseline, minimumSide);
+		}
+
+		/** Call only after the selected physical resources have been allocated. */
+		void Commit(const std::optional<ComputeSubrect>& compactSource) noexcept
+		{
+			if (compactSource)
+				minimumSide = std::max(minimumSide, compactSource->width);
+			else if (minimumSide != 0)
+				fullCoordinates = true;
+		}
+	};
 }

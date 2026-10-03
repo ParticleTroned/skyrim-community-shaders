@@ -159,6 +159,28 @@ namespace NeuralRendering
 		       static_cast<std::uint64_t>(a_right.baseY) < static_cast<std::uint64_t>(a_left.baseY) + a_left.height;
 	}
 
+	/** Zero rejects invalid output coverage before any copy or composition dispatch. */
+	[[nodiscard]] inline constexpr std::uint64_t CharacterRegionOutputPixels(
+		const CharacterComputeRegionPlan& plan, const ComputeSubrect& enclosure,
+		std::uint32_t width, std::uint32_t height) noexcept
+	{
+		if (plan.count > kEnabledRegionsPerEye || !enclosure.Fits(width, height))
+			return 0;
+		if (plan.count == 0)
+			return enclosure.Area();
+		std::uint64_t pixels = 0;
+		for (std::uint32_t i = 0; i < plan.count; ++i) {
+			const auto& region = plan.regions[i];
+			if (!region.Fits(width, height) || !ContainsComputeSubrect(enclosure, region))
+				return 0;
+			for (std::uint32_t j = 0; j < i; ++j)
+				if (CharacterComputeRegionsOverlap(region, plan.regions[j]))
+					return 0;
+			pixels += region.Area();
+		}
+		return pixels;
+	}
+
 	namespace CharacterMultiRoiDetail
 	{
 		inline constexpr std::uint64_t kExtraEvaluationPixelReserve = 65536;

@@ -657,6 +657,7 @@ namespace NeuralRendering
 		std::uint32_t requestedRegionCount_ = 0;
 		bool measuredPlanEnabled_ = false;
 		bool forceFullCoordinates_ = false;
+		std::array<CompactInputRetention, Runtime::kFeatureSlotCount> compactRetention_{};
 		ComPtr<ID3D11ComputeShader> copyCompactDepthGuideCS_;
 		std::optional<MeasuredPlan::Profile> measuredPlanProfile_;
 		MeasuredPlan::State measuredPlanState_{};
@@ -690,6 +691,9 @@ namespace NeuralRendering
 
 		struct ValidatedResources
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			bool compactAttempted = false;
+#endif
 			TextureInfo color;
 			TextureInfo depth;
 			TextureInfo motionVectors;
@@ -2265,10 +2269,8 @@ namespace NeuralRendering
 		if (colorConfiguration_.experiments.CompactInputsEnabled() && !forceFullCoordinates_ && !capacityFallback_.rejected &&
 			!colorConfiguration_.Enabled() && args.characterVisualIsolation && args.reset &&
 			args.executionContext.renderingMode == RenderingMode::ReducedResolution && args.featureSlot < slots_.size()) {
-			const auto& slot = slots_[args.featureSlot];
-			// Retain capacity through movement; only growth or explicit retirement changes it.
-			const auto retainedSide = slot.resourcesValid && slot.resourceKey.compact ? slot.resourceKey.outputWidth : 0u;
-			if (const auto compact = BuildCompactInputLayout(resources.roi, resources.nativeLayout, retainedSide)) {
+			resources.compactAttempted = true;
+			if (const auto compact = compactRetention_[args.featureSlot].Select(resources.roi, resources.nativeLayout)) {
 				resources.roi = compact->roi;
 				resources.nativeLayout = compact->native;
 			}
@@ -2745,6 +2747,8 @@ namespace NeuralRendering
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			if (resources[index].compactAttempted)
+				compactRetention_[a_args[index].featureSlot].Commit(resources[index].roi.compactSource);
 			if (lifetime.enabled)
 				CaptureLifetimeResourcesLocked(lifetime.record->regions[index], *slots[index]);
 #endif
@@ -3594,6 +3598,7 @@ namespace NeuralRendering
 			if (reset && a_clearTransportRejections) {
 				state_->capacityRejections_ = {};
 				state_->capacityFallback_ = {};
+				state_->compactRetention_ = {};
 			}
 #else
 			(void)a_clearTransportRejections;
@@ -3702,6 +3707,9 @@ namespace NeuralRendering
 			(active ? activeColorBytes : cachedColorBytes) += color.value_or(0) * 2u;
 			bytesKnown &= color.has_value();
 			slots.push_back({ { "slot", index }, { "activeInLastRequest", active },
+				{ "compactStorage", slot.resourceKey.compact },
+				{ "compactMinimumSide", state_->compactRetention_[index].minimumSide },
+				{ "compactFullCoordinateFallback", state_->compactRetention_[index].fullCoordinates },
 				{ "nativeResident", (nativeMask & (1u << index)) != 0 },
 				{ "inputIdentity", std::to_string(reinterpret_cast<std::uintptr_t>(slot.color.resource12.Get())) },
 				{ "privateOutputIdentity", std::to_string(reinterpret_cast<std::uintptr_t>(slot.output.resource12.Get())) },

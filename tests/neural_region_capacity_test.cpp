@@ -32,6 +32,28 @@ int main()
 	StableCharacterMultiRoi state;
 	const auto four = resolve(actors, 1, state, 4);
 	CHECK(four.count == 4);
+	const auto enclosure = CharacterRegionEnclosure(four);
+	std::uint64_t producedPixels = 0;
+	for (unsigned count = 1; count <= four.count; ++count) {
+		auto prefix = four;
+		prefix.count = count;
+		producedPixels += four.regions[count - 1].Area();
+		CHECK(CharacterRegionOutputPixels(prefix, enclosure, 2048, 2048) == producedPixels);
+	}
+	CHECK(producedPixels < enclosure.Area());
+	CHECK(CharacterRegionOutputPixels({}, enclosure, 2048, 2048) == enclosure.Area());
+	CHECK(CharacterRegionOutputPixels(four, {}, 2048, 2048) == 0);
+	CHECK(CharacterRegionOutputPixels(four, enclosure, 128, 128) == 0);
+	auto badOutput = four;
+	badOutput.count = kEnabledRegionsPerEye + 1;
+	CHECK(CharacterRegionOutputPixels(badOutput, enclosure, 2048, 2048) == 0);
+	badOutput = four;
+	badOutput.regions[3] = four.regions[2];
+	CHECK(CharacterRegionOutputPixels(badOutput, enclosure, 2048, 2048) == 0);
+	badOutput.regions[3] = { 2000, 2000, 128, 128 };
+	CHECK(CharacterRegionOutputPixels(badOutput, enclosure, 2048, 2048) == 0);
+	badOutput.regions[3] = { 0, 0, 32, 32 };
+	CHECK(CharacterRegionOutputPixels(badOutput, enclosure, 2048, 2048) == 0);
 	CHECK(QualifiedHigherRegionGeometry(four));
 	auto tooSmall = four;
 	tooSmall.regions[0].width = 64;
@@ -82,6 +104,7 @@ int main()
 	const std::array<std::uint64_t, 1> owner{ 77 };
 	const auto eight = ResolveCharacterMaskRoi(tiles, owner, 2048, 2048, 10, mask, false, true, nullptr, nullptr, 8, 1);
 	CHECK(eight.valid && eight.computeRegions.count == 8);
+	CHECK(CharacterRegionOutputPixels(eight.computeRegions, eight.computeSubrect, 2048, 2048) > 0);
 	CHECK(ResolveCharacterMaskRoi(tiles, owner, 2048, 2048, 10, mask, false, true, nullptr, nullptr, 8, 1) == eight);
 	CHECK(GetCharacterRegionSubmissionViolation(2, eight.computeRegions, eight.computeSubrect, 2048, 2048, true).empty());
 	for (const auto& piece : pieces) {

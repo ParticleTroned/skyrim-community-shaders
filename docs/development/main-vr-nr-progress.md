@@ -1,5 +1,29 @@
 # main-vr-nr progress and continuation record
 
+## October 3 stationary-scene composition and compact corrections
+
+The [stationary-scene record](nr-stationary-corrections-20261003.md) identifies
+two concrete defects: Mode C rejected more than two regions after successful
+native evaluation, and pending GPU bounds caused compact/full allocation
+churn. The corrections use bounded output coverage and per-slot retained
+allocation policy. Production keeps its two-region ceiling; compact retention
+is DevBench-only. Both require a replacement-DLL live test.
+
+The old producer completed 60,106 native evaluations without device removal
+or quarantine, but outer composition failures remain explicit. In-game timing
+is unqualified because of churn, suspension and baseline drift. Offline C
+compact/full crops at 256/512/768 match bitwise with essentially unchanged
+native cost. Settings were restored and Skyrim/MO2 closed cleanly. Tasks 9/10
+retain their recorded qualification gates; Task 11 is still an ownership audit.
+
+Replacement producer `22b28b37248b` passes all 227 tests,
+preset checks and provenance validation. Its DevBench AIO passes archive
+integrity and all 386 extracted payload hashes. The linked record preserves
+exact compiled source and artifact identities. Automation's local `dev`
+marketplace/cache update (`5c9ddfe`) passes 263 installed semantic checks;
+a full Codex restart is required to load it. The AIO is prepared for the next
+live test and has not been installed.
+
 ## October 3 retest device removal and current-context safeguard
 
 The [retest record](nr-task9-10-retest-20261003.md) preserves successful

@@ -44421,20 +44421,15 @@ bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralR
 	auto* context = globals::d3d::context;
 	if (!context || eye >= 2 || !foveatedCenterColorIn[eye] || !foveatedCenterColorIn[eye]->srv ||
 		!foveatedCenterNeuralOut[eye] || !foveatedCenterNeuralOut[eye]->srv ||
-		args.colorWidth != args.outputWidth || args.colorHeight != args.outputHeight ||
-		!args.computeSubrect.Fits(args.outputWidth, args.outputHeight) || args.computeRegions.count > 2u)
+		args.colorWidth != args.outputWidth || args.colorHeight != args.outputHeight)
+		return false;
+	const auto dispatchedPixels = NeuralRendering::CharacterRegionOutputPixels(
+		args.computeRegions, args.computeSubrect, args.outputWidth, args.outputHeight);
+	if (!dispatchedPixels)
 		return false;
 	const auto regions = args.computeRegions.count ?
 	                         std::span<const NeuralRendering::ComputeSubrect>(args.computeRegions.regions.data(), args.computeRegions.count) :
 	                         std::span<const NeuralRendering::ComputeSubrect>(&args.computeSubrect, 1);
-	uint64_t dispatchedPixels = 0;
-	for (const auto& region : regions) {
-		if (!region.Fits(args.outputWidth, args.outputHeight) || !NeuralRendering::ContainsComputeSubrect(args.computeSubrect, region))
-			return false;
-		dispatchedPixels += region.Area();
-	}
-	if (regions.size() == 2 && NeuralRendering::CharacterComputeRegionsOverlap(regions[0], regions[1]))
-		return false;
 	const auto selection = args.characterVisualIsolation ? GetPreparedCharacterSelection(settings, args.featureSlot,
 															   args.frameId, args.sourceWorldFrame, args.generation, args.outputWidth, args.outputHeight) :
 	                                                       NeuralRendering::CharacterPreparedSelection{};

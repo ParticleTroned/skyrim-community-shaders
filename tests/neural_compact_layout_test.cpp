@@ -44,5 +44,37 @@ int main()
 	const auto large = ComputeSubrect{ 0, 0, 800, 800 };
 	CHECK(!BuildCompactInputLayout(BuildRoiDescriptor(large, large, { 1008, 1120 }, true),
 		BuildNativeEvaluationLayout({ 1008, 1120 }, { 1008, 1120 }, { 1008, 1120 }, {}, large, { .valid = true, .x = 1008, .y = 1120 }, false)));
+	const auto choose = [](const CompactInputRetention& state, ComputeSubrect rect) {
+		return state.Select(BuildRoiDescriptor(rect, rect, { 1008, 1120 }, true),
+			BuildNativeEvaluationLayout({ 1008, 1120 }, { 1008, 1120 }, { 1008, 1120 }, {}, rect,
+				{ .valid = true, .x = 1008, .y = 1120 }, false));
+	};
+	CompactInputRetention retention;
+	const ComputeSubrect small{ 224, 512, 128, 128 };
+	const ComputeSubrect current{ 192, 448, 768, 512 };
+	const ComputeSubrect pending{ 64, 0, 896, 1120 };
+	for (unsigned frame = 0; frame < 100; ++frame) {
+		CHECK(!choose(retention, pending));
+		retention.Commit(std::nullopt);
+	}
+	CHECK(!retention.fullCoordinates && retention.minimumSide == 0);
+	const auto first = choose(retention, small);
+	CHECK(first && first->source.width == 256);
+	retention.Commit(first->source);
+	// Speculative candidates and failed allocations cannot change retention.
+	CHECK(!choose(retention, pending) && choose(retention, small));
+	const auto grown = choose(retention, current);
+	CHECK(grown && grown->source.width == 768);
+	retention.Commit(grown->source);
+	CHECK(choose(retention, small)->source.width == 768);
+	CHECK(!choose(retention, pending));
+	retention.Commit(std::nullopt);
+	for (unsigned frame = 0; frame < 100; ++frame)
+		CHECK(!choose(retention, frame % 2 ? current : pending));
+	CHECK(!choose(retention, small));
+	CompactInputRetention otherSlot;
+	CHECK(choose(otherSlot, small));
+	retention = {};
+	CHECK(choose(retention, small)->source.width == 256);
 	return 0;
 }

@@ -1436,65 +1436,74 @@ namespace
 		Check(calls == 1 && changed.view.d3dObject == 42, "changed depth target was not described");
 	}
 
-	void TestDrawOnlyGeometrySelectionDependencies()
+	void TestExecutionOnlyGeometrySelectionDependencies()
 	{
-		for (const bool gated : { false, true }) {
-			for (const bool deferred : { false, true }) {
-				Runtime runtime;
-				auto config = Config();
-				config.maxEvents = 256;
-				config.requestedEventKindMask = EventKindBit(EventKind::kDraw);
-				config.geometryShaderTypeMask = std::uint64_t{ 1 } << 7;
-				config.executionWithinSelectedGeometry = gated;
-				NormalizeEventKindSelection(config);
-				Check(config.requestedEventKindMask == EventKindBit(EventKind::kDraw),
-					"geometry dependencies changed the requested event mask");
-				Check(((config.eventKindMask & EventKindBit(EventKind::kGeometrySetupBegin)) != 0) == gated &&
-						  ((config.eventKindMask & EventKindBit(EventKind::kGeometrySetupEnd)) != 0) == gated,
-					"selected execution did not resolve paired geometry boundaries");
-				config.maxBytes = Collector::RequiredStorageBytes(config);
-				Check(runtime.StartCapture(config) == StartResult::kStarted, "draw-only geometry capture did not start");
-				runtime.SetImmediateContext(0x9000);
-				if (deferred)
-					runtime.RegisterDeferredContext(0xA000, 0);
-				const auto context = deferred ? 0xA000u : 0x9000u;
-				runtime.RecordDraw(context, DrawOperation::kDraw, 1);
-				{
-					auto rejected = runtime.EnterGeometry({ .geometry = 0x1000, .shaderType = 6 });
-					Check(!rejected.IsActive(), "unselected geometry entered the draw-only scope");
-					runtime.RecordDraw(context, DrawOperation::kDraw, 2);
-				}
-				{
-					auto selected = runtime.EnterGeometry({ .geometry = 0x2000, .shaderType = 7 });
-					Check(selected.IsActive() == gated, "draw-only selected geometry has the wrong scope admission");
-					runtime.RecordDraw(context, DrawOperation::kDraw, 3);
-				}
-				if (!deferred) {
+		for (const auto kind : { EventKind::kDraw, EventKind::kDispatch }) {
+			for (const bool gated : { false, true }) {
+				for (const bool deferred : { false, true }) {
+					Runtime runtime;
+					auto config = Config();
+					config.maxEvents = 256;
+					config.requestedEventKindMask = EventKindBit(kind);
+					config.geometryShaderTypeMask = std::uint64_t{ 1 } << 7;
+					config.executionWithinSelectedGeometry = gated;
+					NormalizeEventKindSelection(config);
+					Check(config.requestedEventKindMask == EventKindBit(kind),
+						"geometry dependencies changed the requested event mask");
+					Check(((config.eventKindMask & EventKindBit(EventKind::kGeometrySetupBegin)) != 0) == gated &&
+							  ((config.eventKindMask & EventKindBit(EventKind::kGeometrySetupEnd)) != 0) == gated,
+						"selected execution did not resolve paired geometry boundaries");
+					config.maxBytes = Collector::RequiredStorageBytes(config);
+					Check(runtime.StartCapture(config) == StartResult::kStarted, "execution-only geometry capture did not start");
+					runtime.SetImmediateContext(0x9000);
+					if (deferred)
+						runtime.RegisterDeferredContext(0xA000, 0);
+					const auto context = deferred ? 0xA000u : 0x9000u;
+					const auto recordExecution = [&](std::uint64_t argument) {
+						if (kind == EventKind::kDraw)
+							runtime.RecordDraw(context, DrawOperation::kDraw, argument);
+						else
+							runtime.RecordDispatch(context, DispatchOperation::kDispatch, argument);
+					};
+					recordExecution(1);
 					{
-						auto selected = runtime.EnterGeometry({ .geometry = 0x3000, .shaderType = 7 });
+						auto rejected = runtime.EnterGeometry({ .geometry = 0x1000, .shaderType = 6 });
+						Check(!rejected.IsActive(), "unselected geometry entered the execution-only scope");
+						recordExecution(2);
 					}
-					runtime.RecordDraw(context, DrawOperation::kDraw, 4);
-				}
-				const auto snapshot = runtime.StopCapture();
-				Check(snapshot.has_value(), "draw-only geometry capture did not stop");
-				const auto drawCount = std::count_if(snapshot->events.begin(), snapshot->events.end(),
-					[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
-				Check(drawCount == (gated ? (deferred ? 1 : 2) : (deferred ? 3 : 4)),
-					"draw-only selection retained the wrong eligible execution count: gated=" + std::to_string(gated) +
-						" deferred=" + std::to_string(deferred) + " draws=" + std::to_string(drawCount));
-				Check(snapshot->statistics.filtered == (gated ? 4u : (deferred ? 4u : 6u)),
-					"draw-only selection did not report exact filtered geometry/execution counts");
-				Check(snapshot->statistics.droppedEventLimit == 0 && snapshot->statistics.droppedByteLimit == 0 &&
-						  snapshot->statistics.scopeMismatch == 0,
-					"draw-only selection lost events or corrupted scope pairing");
-				for (const auto& event : snapshot->events) {
-					if (event.kind != EventKind::kDraw)
-						continue;
-					Check((event.scopes.commandList.observationId != 0) == deferred,
-						"draw-only selection lost its recording-domain identity");
-					if (gated)
-						Check(event.scopes.geometry.observationId != 0 || event.preparedGeometrySetupObservationId != 0,
-							"selected draw lost its geometry identity");
+					{
+						auto selected = runtime.EnterGeometry({ .geometry = 0x2000, .shaderType = 7 });
+						Check(selected.IsActive() == gated, "execution-only selected geometry has the wrong scope admission");
+						recordExecution(3);
+					}
+					if (!deferred && kind == EventKind::kDraw) {
+						{
+							auto selected = runtime.EnterGeometry({ .geometry = 0x3000, .shaderType = 7 });
+						}
+						recordExecution(4);
+					}
+					const auto snapshot = runtime.StopCapture();
+					Check(snapshot.has_value(), "execution-only geometry capture did not stop");
+					const bool preparedDraw = !deferred && kind == EventKind::kDraw;
+					const auto executionCount = std::count_if(snapshot->events.begin(), snapshot->events.end(),
+						[kind](const EventRecord& a_event) { return a_event.kind == kind; });
+					Check(executionCount == (gated ? (preparedDraw ? 2 : 1) : (preparedDraw ? 4 : 3)),
+						"execution-only selection retained the wrong eligible execution count: gated=" + std::to_string(gated) +
+							" deferred=" + std::to_string(deferred) + " kind=" + std::to_string(static_cast<unsigned>(kind)) + " executions=" + std::to_string(executionCount));
+					Check(snapshot->statistics.filtered == (gated ? 4u : (preparedDraw ? 6u : 4u)),
+						"execution-only selection did not report exact filtered geometry/execution counts");
+					Check(snapshot->statistics.droppedEventLimit == 0 && snapshot->statistics.droppedByteLimit == 0 &&
+							  snapshot->statistics.scopeMismatch == 0,
+						"execution-only selection lost events or corrupted scope pairing");
+					for (const auto& event : snapshot->events) {
+						if (event.kind != kind)
+							continue;
+						Check((event.scopes.commandList.observationId != 0) == deferred,
+							"execution-only selection lost its recording-domain identity");
+						if (gated)
+							Check(event.scopes.geometry.observationId != 0 || event.preparedGeometrySetupObservationId != 0,
+								"selected execution lost its geometry identity");
+					}
 				}
 			}
 		}
@@ -2543,7 +2552,7 @@ int main()
 		TestEventKindSelectionPreservesDependenciesAndCapacity();
 		TestSemanticIdentityCataloguesAreBoundedAndRevisioned();
 		TestGeometrySelectionFiltersBeforeSemanticWork();
-		TestDrawOnlyGeometrySelectionDependencies();
+		TestExecutionOnlyGeometrySelectionDependencies();
 		TestPreparedGeometryHandoffRejectsStaleCandidates();
 		TestGeometryBoundaryBindsExactSemanticObservations();
 		TestDeferredRecordingMaterializesAndExecutesCommandList();

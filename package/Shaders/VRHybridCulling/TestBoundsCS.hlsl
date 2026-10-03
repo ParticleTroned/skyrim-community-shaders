@@ -1,3 +1,5 @@
+#include "Common/DepthOrder.hlsli"
+
 struct OBBTransform
 {
 	row_major float4x4 transform;
@@ -30,7 +32,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 
 	float2 minimumUV = 3.402823466e+38;
 	float2 maximumUV = -3.402823466e+38;
-	float nearestDepth = 1.0;
+	float nearestDepth = DepthOrder::Far();
 	// Camera-relative translation preserves small extents at large world coordinates.
 	precise float4x4 relativeTransform = transform;
 	[unroll] for (uint axis = 0; axis < 3; ++axis)
@@ -50,7 +52,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 		float2 uv = ndc.xy * float2(0.5, -0.5) + 0.5;
 		minimumUV = min(minimumUV, uv);
 		maximumUV = max(maximumUV, uv);
-		nearestDepth = min(nearestDepth, ndc.z);
+		nearestDepth = DepthOrder::Nearest(nearestDepth, ndc.z);
 	}
 
 	// Native frustum culling owns off-screen rejection, including stereo margins.
@@ -79,7 +81,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 	if (any(maximumCell - minimumCell > 1))
 		return false;
 
-	float farthestDepth = 0.0;
+	float farthestDepth = DepthOrder::Near();
 	[unroll] for (uint y = 0; y < 2; ++y)
 	{
 		[unroll] for (uint x = 0; x < 2; ++x)
@@ -88,10 +90,10 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 			float depth = DepthPyramid.Load(int4(cell, eye, mip));
 			if (!isfinite(depth) || depth <= 0.0 || depth > 1.0)
 				return false;
-			farthestDepth = max(farthestDepth, depth);
+			farthestDepth = DepthOrder::Farthest(farthestDepth, depth);
 		}
 	}
-	return nearestDepth > farthestDepth + DepthBias;
+	return DepthOrder::IsBehindWithBias(nearestDepth, farthestDepth, DepthBias);
 }
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID) {

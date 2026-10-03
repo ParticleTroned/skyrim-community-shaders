@@ -13,14 +13,17 @@ namespace VRDepthCullingTelemetryPolicy
 	};
 	inline constexpr std::size_t DurationBinCount = DurationUpperBoundsNanoseconds.size() + 1;
 
-	constexpr std::size_t DurationBin(std::uint64_t a_nanoseconds)
+	template <std::size_t Count>
+	constexpr std::size_t DurationBin(std::uint64_t a_nanoseconds, const std::array<std::uint64_t, Count>& a_upperBounds)
 	{
-		for (std::size_t index = 0; index < DurationUpperBoundsNanoseconds.size(); ++index) {
-			if (a_nanoseconds <= DurationUpperBoundsNanoseconds[index])
+		for (std::size_t index = 0; index < a_upperBounds.size(); ++index) {
+			if (a_nanoseconds <= a_upperBounds[index])
 				return index;
 		}
-		return DurationUpperBoundsNanoseconds.size();
+		return a_upperBounds.size();
 	}
+
+	constexpr std::size_t DurationBin(std::uint64_t a_nanoseconds) { return DurationBin(a_nanoseconds, DurationUpperBoundsNanoseconds); }
 
 	/** Publish a maximum without losing a concurrent larger observation. */
 	inline void UpdateMaximum(std::atomic_uint64_t& a_target, std::uint64_t a_value) noexcept
@@ -74,6 +77,12 @@ namespace VRDepthCullingTelemetryPolicy
 		[[nodiscard]] bool IsEnabled() const noexcept
 		{
 			return (state.load(std::memory_order_acquire) & Disabled) == 0;
+		}
+
+		/** Disabled admission is stable only after all admitted writers finish. */
+		[[nodiscard]] bool IsFrozen() const noexcept
+		{
+			return state.load(std::memory_order_acquire) == Disabled;
 		}
 
 	private:

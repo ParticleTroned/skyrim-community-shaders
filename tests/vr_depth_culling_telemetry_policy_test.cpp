@@ -1,6 +1,8 @@
+#include "Features/VRDepthCullingTelemetry.h"
 #include "Features/VRDepthCullingTelemetryPolicy.h"
 #include "Features/VRDepthCullingTemporal.h"
 
+#include <array>
 #include <barrier>
 #include <latch>
 #include <limits>
@@ -9,6 +11,101 @@
 
 namespace
 {
+	void CheckStageTimingAdmissionAndDistribution()
+	{
+		using namespace VRDepthCullingTelemetry;
+		TimingCounters counters;
+		VRDepthCullingTelemetryPolicy::WriterGate gate;
+		std::uint64_t total = 0;
+		for (const auto bound : DurationUpperBoundsNanoseconds) {
+			VRDepthCullingTelemetryPolicy::WriterScope writer(gate);
+			counters.Add(bound);
+			total += bound;
+		}
+		counters.Add(DurationUpperBoundsNanoseconds.back() + 1);
+		total += DurationUpperBoundsNanoseconds.back() + 1;
+		const auto measured = counters.Read();
+		if (measured.samples != DurationBinCount || measured.totalNanoseconds != total ||
+			measured.maximumNanoseconds != DurationUpperBoundsNanoseconds.back() + 1)
+			throw std::runtime_error("stage timing aggregates lost a sample");
+		for (const auto count : measured.durationHistogram)
+			if (count != 1)
+				throw std::runtime_error("stage histogram does not distinguish microsecond and millisecond work");
+		{
+			const Scope sample(counters, gate);
+			if (!sample || VRDepthCullingTelemetryPolicy::TryReset(gate, [&]() noexcept { counters.Reset(); }))
+				throw std::runtime_error("stage timing did not retain reset exclusion through scope completion");
+		}
+		if (counters.Read().samples != measured.samples + 1)
+			throw std::runtime_error("admitted stage scope did not publish its sample");
+		gate.SetEnabled(false);
+		{
+			const Scope sample(counters, gate);
+			if (sample)
+				throw std::runtime_error("disabled telemetry admitted a stage timer");
+		}
+		if (counters.Read().samples != measured.samples + 1 ||
+			!VRDepthCullingTelemetryPolicy::TryReset(gate, [&]() noexcept { counters.Reset(); }))
+			throw std::runtime_error("disabled stage timing changed counters or prevented reset");
+		const auto cleared = counters.Read();
+		if (cleared.samples || cleared.totalNanoseconds || cleared.maximumNanoseconds)
+			throw std::runtime_error("stage timing reset left aggregate samples");
+		for (const auto count : cleared.durationHistogram)
+			if (count)
+				throw std::runtime_error("stage timing reset left histogram samples");
+	}
+
+	void CheckSnapshotPublicationCoherence()
+	{
+		struct Snapshot
+		{
+			std::uint64_t sequence = 0;
+			std::array<std::uint64_t, 128> values{};
+		};
+		VRDepthCullingTelemetry::SnapshotSlot<Snapshot> slot;
+		Snapshot observed{};
+		bool busy = false;
+		if (slot.Read(observed, &busy) || busy)
+			throw std::runtime_error("unpublished snapshot was available");
+		Snapshot sample{ 7 };
+		sample.values.fill(sample.sequence);
+		if (!slot.Publish(sample) || !slot.Read(observed) || observed.sequence != sample.sequence)
+			throw std::runtime_error("snapshot publication was lost without contention");
+		slot.Invalidate();
+		if (slot.Read(observed))
+			throw std::runtime_error("invalidated snapshot remained readable");
+		std::barrier start{ 2 };
+		std::atomic_bool done{ false }, torn{ false };
+		std::thread writer([&] {
+			start.arrive_and_wait();
+			for (std::uint64_t sequence = 1; sequence <= 10'000; ++sequence) {
+				Snapshot next{ sequence };
+				next.values.fill(sequence);
+				(void)slot.Publish(next);
+				if ((sequence & 7) == 0)
+					slot.Invalidate();
+			}
+			done.store(true, std::memory_order_release);
+		});
+		start.arrive_and_wait();
+		do {
+			if (slot.Read(observed))
+				for (const auto value : observed.values)
+					if (value != observed.sequence)
+						torn.store(true, std::memory_order_relaxed);
+		} while (!done.load(std::memory_order_acquire));
+		writer.join();
+		if (torn.load(std::memory_order_relaxed))
+			throw std::runtime_error("snapshot reader observed a mixed publication");
+		if (slot.Read(observed))
+			throw std::runtime_error("final concurrent invalidation left a snapshot readable");
+		if (!slot.Publish(sample) || !slot.Read(observed) || observed.sequence != sample.sequence)
+			throw std::runtime_error("snapshot slot did not recover after contention");
+		slot.Invalidate();
+		if (slot.Read(observed))
+			throw std::runtime_error("snapshot reset left stale metadata available");
+	}
+
 	void CheckCombinedReset()
 	{
 		using namespace VRDepthCullingTelemetryPolicy;
@@ -30,6 +127,8 @@ namespace
 			if (TryReset(gate, resetBoth) || resetCalled || advanced.load() != 7 || hybrid.load() != 11)
 				throw std::runtime_error("busy Hybrid sample allowed a partial combined reset");
 			gate.SetEnabled(false);
+			if (gate.IsFrozen())
+				throw std::runtime_error("an admitted writer was reported as frozen");
 			{
 				WriterScope blockedAdvanced(gate), blockedHybrid(gate);
 				if (blockedAdvanced || blockedHybrid)
@@ -42,11 +141,15 @@ namespace
 		}
 		if (advanced.load() != 7 || hybrid.load() != 12)
 			throw std::runtime_error("disabled Hybrid sample did not finish its publication");
+		if (!gate.IsFrozen())
+			throw std::runtime_error("drained disabled telemetry was not frozen");
 		if (!TryReset(gate, resetBoth) || !resetCalled || resetAdmittedWriter ||
 			advanced.load() != 0 || hybrid.load() != 0 || gate.IsEnabled())
 			throw std::runtime_error("combined reset failed to clear both methods while remaining disabled");
 
 		gate.SetEnabled(true);
+		if (gate.IsFrozen())
+			throw std::runtime_error("enabled telemetry was reported as frozen");
 		resetCalled = false;
 		{
 			WriterScope advancedSample(gate);
@@ -65,6 +168,8 @@ int main()
 {
 	using namespace VRDepthCullingTelemetryPolicy;
 	CheckCombinedReset();
+	CheckStageTimingAdmissionAndDistribution();
+	CheckSnapshotPublicationCoherence();
 	static_assert(VRDepthCullingTemporal::Status::DurationBinCount == DurationBinCount);
 	if (DurationBin(0) != 0 || DurationBin(std::numeric_limits<std::uint64_t>::max()) != DurationBinCount - 1) {
 		throw std::runtime_error("duration histogram boundary is incorrect");

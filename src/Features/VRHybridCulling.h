@@ -2,14 +2,42 @@
 
 #include <cstdint>
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "VRDepthCullingTelemetry.h"
+#	include "VRHybridCullingPolicy.h"
+#	include "VRHybridCullingSnapshot.h"
+#endif
+
 namespace VRHybridCulling
 {
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	struct StageTiming
+	using StageTiming = VRDepthCullingTelemetry::StageTiming;
+	inline constexpr std::array FallbackReasons{
+		"unsupported_frame", "resource_publication_unavailable", "pipeline_unavailable", "resource_setup_failed",
+		"not_prepared", "empty_or_invalid_batch", "preparation_expired", "native_buffers_invalid", "renderer_unavailable",
+		"resource_publication_changed", "pipeline_owner_changed", "prepared_source_changed", "replacement_not_prepared"
+	};
+	inline constexpr std::array HistoryRejectionReasons{
+		"unreadable_batch", "batch_mismatch", "pipeline_changed", "bounds_changed", "resource_publication_changed",
+		"frame_unavailable", "depth_changed", "view_changed"
+	};
+
+	struct SourceSnapshot
 	{
-		std::uint64_t samples = 0;
-		std::uint64_t totalNanoseconds = 0;
-		std::uint64_t maximumNanoseconds = 0;
+		bool available = false;
+		bool valid = false;
+		bool current = false;
+		bool busy = false;
+		const char* validity = "not_captured";
+		const char* stage = "none";
+		std::uint64_t cullingEpoch = 0;
+		VRHybridCullingSnapshot::Source source{};
+		std::array<VRHybridCullingPolicy::EyeRect, VRHybridCullingPolicy::kEyeCount> eyes{};
+		VRHybridCullingPolicy::PyramidLayout pyramid{};
+		std::uint64_t logicalPyramidBytes = 0;
+		std::array<std::array<std::array<float, 4>, 4>, VRHybridCullingPolicy::kEyeCount> viewProjection{};
+		std::array<std::array<std::array<float, 4>, 4>, VRHybridCullingPolicy::kEyeCount> unjitteredProjection{};
+		std::array<std::array<float, 4>, VRHybridCullingPolicy::kEyeCount> cameraAdjust{};
 	};
 
 	struct Status
@@ -24,6 +52,22 @@ namespace VRHybridCulling
 		std::uint64_t fallbackBatches = 0;
 		std::uint64_t promotedObjects = 0;
 		std::uint64_t unreadableBatches = 0;
+		std::uint64_t submittedObjects = 0;
+		std::uint64_t testedObjects = 0;
+		std::uint64_t acceptedOccludedObjects = 0;
+		std::uint64_t acceptedVisibleObjects = 0;
+		std::uint64_t pipelineBuildAttempts = 0;
+		std::uint64_t pipelineBuilds = 0;
+		std::uint64_t pipelineRecreations = 0;
+		std::uint64_t pyramidAllocations = 0;
+		std::uint64_t pyramidBuilds = 0;
+		std::uint64_t pyramidDispatches = 0;
+		std::uint64_t boundsDispatches = 0;
+		std::uint64_t logicalPyramidBytesHighWater = 0;
+		std::uint64_t droppedSourceSnapshots = 0;
+		std::array<std::uint64_t, FallbackReasons.size()> fallbackReasonCounts{};
+		std::array<std::uint64_t, HistoryRejectionReasons.size()> historyRejectionReasonCounts{};
+		SourceSnapshot snapshot{};
 		std::uint32_t lastObjectCount = 0;
 		StageTiming prepare, dispatch, readback;
 	};

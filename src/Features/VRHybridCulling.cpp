@@ -1,12 +1,12 @@
 #include "VRHybridCulling.h"
 
-#include "GpuPass.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/RendererContextAccess.h"
 #include "VRDepthCullingTemporal.h"
 #include "VRHybridCullingHistory.h"
 #include "VRHybridCullingPolicy.h"
+#include "VRHybridCullingSnapshot.h"
 
 #include <algorithm>
 #include <atomic>
@@ -14,7 +14,33 @@
 #include <d3d11_1.h>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-#	include <chrono>
+#	include "GpuPass.h"
+#	include <cassert>
+#	include <optional>
+
+#	define HYBRID_PREPARATION_FAILED(reason, epoch) PreparationFailed(reason, epoch, static_cast<bool>(telemetry))
+#	define HYBRID_OUTCOME(state, backend, epoch) PublishOutcome(state, backend, epoch)
+#	define HYBRID_REJECT_HISTORY(reason) \
+		do {                              \
+			rejected = true;              \
+			rejection = reason;           \
+		} while (false)
+#	ifdef TRACY_ENABLE
+#		define HYBRID_GPU_PASS(name, enabled)                                                                                                              \
+			static constexpr tracy::SourceLocationData CS_GPU_PASS_CONCAT(hybrid_source_, __LINE__){ name, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 }; \
+			std::optional<ScopedGpuPass> CS_GPU_PASS_CONCAT(hybrid_pass_, __LINE__);                                                                        \
+			if (enabled)                                                                                                                                    \
+			CS_GPU_PASS_CONCAT(hybrid_pass_, __LINE__).emplace(&CS_GPU_PASS_CONCAT(hybrid_source_, __LINE__), name)
+#	else
+#		define HYBRID_GPU_PASS(name, enabled)                                       \
+			std::optional<ScopedGpuPass> CS_GPU_PASS_CONCAT(hybrid_pass_, __LINE__); \
+			if (enabled)                                                             \
+			CS_GPU_PASS_CONCAT(hybrid_pass_, __LINE__).emplace(name)
+#	endif
+#else
+#	define HYBRID_PREPARATION_FAILED(reason, epoch) false
+#	define HYBRID_OUTCOME(state, backend, epoch) ((void)0)
+#	define HYBRID_REJECT_HISTORY(reason) rejected = true
 #endif
 
 namespace VRHybridCulling
@@ -53,15 +79,15 @@ namespace VRHybridCulling
 			TestConstants test{};
 			std::array<EyePose, kEyeCount> poses{};
 			RE::NiTransform worldCamera{};
-			std::uint32_t width = 0;
-			std::uint32_t height = 0;
-			std::uint32_t number = 0;
+			VRHybridCullingSnapshot::Source source{};
 			std::uint64_t epoch = 0;
 			winrt::com_ptr<ID3D11ShaderResourceView> depth;
 		};
 
 		struct Resources
 		{
+			winrt::com_ptr<ID3D11Device> device;
+			winrt::com_ptr<ID3D11DeviceContext> ownerContext;
 			winrt::com_ptr<ID3D11DeviceContext1> context;
 			winrt::com_ptr<ID3DDeviceContextState> isolatedState;
 			winrt::com_ptr<ID3D11ComputeShader> build;
@@ -74,6 +100,11 @@ namespace VRHybridCulling
 			std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> mipUAVs;
 			PyramidLayout layout{};
 			bool failed = false;
+
+			VRHybridCullingSnapshot::PipelineOwner Owner() const
+			{
+				return { reinterpret_cast<std::uintptr_t>(device.get()), reinterpret_cast<std::uintptr_t>(ownerContext.get()) };
+			}
 		};
 
 		struct History
@@ -82,6 +113,7 @@ namespace VRHybridCulling
 			Frame frame{};
 			std::array<OBBTransform, VRDepthCullingTemporalPolicy::kMaximumObjects> bounds{};
 			bool pending = false;
+			bool pipelineInvalidated = false;
 		};
 
 		Resources g_resources;
@@ -97,70 +129,80 @@ namespace VRHybridCulling
 		std::atomic_uint64_t g_submitted{ 0 }, g_accepted{ 0 }, g_invalidated{ 0 }, g_fallback{ 0 }, g_promoted{ 0 };
 		std::atomic_uint64_t g_unreadable{ 0 };
 		std::atomic_uint32_t g_lastCount{ 0 };
+		std::atomic_uint32_t g_fallbackReasonFrame{ 0 };
 
-		struct TimingCounters
-		{
-			std::atomic_uint64_t samples{ 0 }, total{ 0 }, maximum{ 0 };
-			StageTiming Read() const
-			{
-				return { samples.load(std::memory_order_relaxed), total.load(std::memory_order_relaxed), maximum.load(std::memory_order_relaxed) };
-			}
-			void Reset()
-			{
-				samples.store(0, std::memory_order_relaxed);
-				total.store(0, std::memory_order_relaxed);
-				maximum.store(0, std::memory_order_relaxed);
-			}
-		};
-		TimingCounters g_prepareTiming, g_dispatchTiming, g_readbackTiming;
+		using VRDepthCullingTelemetry::Scope;
+		VRDepthCullingTelemetry::TimingCounters g_prepareTiming, g_dispatchTiming, g_readbackTiming;
+		VRDepthCullingTelemetry::SnapshotSlot<SourceSnapshot> g_sourceSnapshot;
+		std::atomic_uint64_t g_submittedObjects{ 0 }, g_testedObjects{ 0 }, g_acceptedOccluded{ 0 }, g_acceptedVisible{ 0 };
+		std::atomic_uint64_t g_pipelineBuildAttempts{ 0 }, g_pipelineBuilds{ 0 }, g_pipelineRecreations{ 0 };
+		std::atomic_uint64_t g_pyramidAllocations{ 0 }, g_pyramidBuilds{ 0 }, g_pyramidDispatches{ 0 }, g_boundsDispatches{ 0 };
+		std::atomic_uint64_t g_logicalBytesHighWater{ 0 }, g_droppedSourceSnapshots{ 0 };
+		std::array<std::atomic_uint64_t, FallbackReasons.size()> g_fallbackReasons{};
+		std::array<std::atomic_uint64_t, HistoryRejectionReasons.size()> g_historyReasons{};
 
-		class TelemetryScope
+		template <std::size_t Count>
+		void RecordReason(const char* a_reason, const std::array<const char*, Count>& a_names, std::array<std::atomic_uint64_t, Count>& a_counts)
 		{
-		public:
-			explicit TelemetryScope(TimingCounters& a_counters) : writer(VRDepthCullingTemporal::GetTelemetryGate()), counters(a_counters)
-			{
-				if (writer)
-					started = std::chrono::steady_clock::now();
-			}
-			~TelemetryScope()
-			{
-				if (!writer)
+			for (std::size_t index = 0; index < Count; ++index) {
+				if (std::strcmp(a_reason, a_names[index]) == 0) {
+					a_counts[index].fetch_add(1, std::memory_order_relaxed);
 					return;
-				const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-					std::chrono::steady_clock::now() - started)
-						.count());
-				counters.samples.fetch_add(1, std::memory_order_relaxed);
-				counters.total.fetch_add(elapsed, std::memory_order_relaxed);
-				VRDepthCullingTelemetryPolicy::UpdateMaximum(counters.maximum, elapsed);
+				}
 			}
-			explicit operator bool() const noexcept { return static_cast<bool>(writer); }
+			assert(false && "Unregistered Hybrid telemetry reason");
+		}
 
-		private:
-			VRDepthCullingTelemetryPolicy::WriterScope writer;
-			TimingCounters& counters;
-			std::chrono::steady_clock::time_point started{};
-		};
-#endif
-
-		void PublishOutcome([[maybe_unused]] const char* a_state, [[maybe_unused]] const char* a_backend, [[maybe_unused]] std::uint64_t a_epoch)
+		std::uint64_t LogicalPyramidBytes(const PyramidLayout& a_layout)
 		{
-#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::uint64_t bytes = 0;
+			for (std::uint32_t mip = 0; mip < a_layout.mipCount; ++mip)
+				bytes += static_cast<std::uint64_t>(std::max(1u, a_layout.width >> mip)) * std::max(1u, a_layout.height >> mip) * kEyeCount * sizeof(float);
+			return bytes;
+		}
+
+		void PublishSource(const Frame& a_frame, const char* a_stage)
+		{
+			SourceSnapshot snapshot{
+				.available = true,
+				.stage = a_stage,
+				.cullingEpoch = a_frame.epoch,
+				.source = a_frame.source,
+				.eyes = a_frame.build.eyes,
+				.pyramid = a_frame.test.pyramid,
+				.logicalPyramidBytes = LogicalPyramidBytes(a_frame.test.pyramid),
+			};
+			static_assert(sizeof(snapshot.viewProjection) == sizeof(a_frame.test.viewProjection));
+			static_assert(sizeof(snapshot.cameraAdjust) == sizeof(a_frame.test.cameraAdjust));
+			std::memcpy(snapshot.viewProjection.data(), a_frame.test.viewProjection, sizeof(snapshot.viewProjection));
+			std::memcpy(snapshot.cameraAdjust.data(), a_frame.test.cameraAdjust, sizeof(snapshot.cameraAdjust));
+			for (std::size_t eye = 0; eye < kEyeCount; ++eye)
+				std::memcpy(snapshot.unjitteredProjection[eye].data(), a_frame.poses[eye].projection, sizeof(a_frame.poses[eye].projection));
+			VRDepthCullingTelemetryPolicy::UpdateMaximum(g_logicalBytesHighWater, snapshot.logicalPyramidBytes);
+			if (!g_sourceSnapshot.Publish(snapshot))
+				g_droppedSourceSnapshots.fetch_add(1, std::memory_order_relaxed);
+		}
+
+		void PublishOutcome(const char* a_state, const char* a_backend, std::uint64_t a_epoch)
+		{
 			g_status.store(a_state, std::memory_order_relaxed);
 			g_backend.store(a_backend, std::memory_order_relaxed);
 			g_statusEpoch.store(a_epoch, std::memory_order_release);
-#endif
 		}
 
-		bool PreparationFailed([[maybe_unused]] const char* a_reason, std::uint64_t a_epoch)
+		bool PreparationFailed(const char* a_reason, std::uint64_t a_epoch, bool a_telemetry)
 		{
-#ifdef DEVBENCH_BRIDGE_ENABLED
 			g_fallbackReason.store(a_reason, std::memory_order_relaxed);
-#endif
-			PublishOutcome("native_fallback", "native", a_epoch);
+			g_fallbackReasonFrame.store(globals::state ? globals::state->frameCount : 0, std::memory_order_relaxed);
+			if (a_telemetry) {
+				g_sourceSnapshot.Invalidate();
+			}
+			HYBRID_OUTCOME("native_fallback", "native", a_epoch);
 			return false;
 		}
+#endif
 
-		bool CaptureFrame(Frame& a_frame, std::uint64_t a_epoch)
+		bool CaptureFrame(Frame& a_frame, std::uint64_t a_epoch, VRHybridCullingSnapshot::Phase a_phase)
 		{
 			a_frame = {};
 			auto* renderer = globals::game::renderer;
@@ -168,6 +210,9 @@ namespace VRHybridCulling
 			auto* camera = RE::Main::WorldRootCamera();
 			if (!renderer || !graphics || !camera || !globals::state ||
 				globals::state->IsMainOrLoadingMenuOpen() || globals::state->IsSaveLoadSafeModeActive())
+				return false;
+			const auto publication = globals::state->GetCurrentMainRenderTargetResourcePublicationDiagnostics();
+			if (!publication.current)
 				return false;
 			const auto& dynamic = graphics->GetRuntimeData();
 			// Packed subrects require their own source contract; physical render-scale targets remain supported.
@@ -219,12 +264,21 @@ namespace VRHybridCulling
 			if (!IsValidTestConstants(a_frame.test, texture.Width, texture.Height))
 				return false;
 			a_frame.depth.copy_from(depth);
-			a_frame.width = texture.Width;
-			a_frame.height = texture.Height;
-			a_frame.number = globals::state->frameCount;
+			a_frame.source = {
+				.view = reinterpret_cast<std::uintptr_t>(depth),
+				.resourceGeneration = publication.publishedGeneration,
+				.frame = globals::state->frameCount,
+				.width = texture.Width,
+				.height = texture.Height,
+				.textureFormat = static_cast<std::uint32_t>(texture.Format),
+				.viewFormat = static_cast<std::uint32_t>(view.Format),
+				.sampleCount = texture.SampleDesc.Count,
+				.phase = a_phase,
+			};
 			a_frame.epoch = a_epoch;
 			a_frame.worldCamera = camera->world;
-			return true;
+			return VRHybridCullingSnapshot::HasCurrentPublication(a_frame.source,
+				globals::state->GetCompletedRenderTargetResourcePublicationGeneration(), true);
 		}
 
 		bool IsWorldCameraCoherent(const RE::NiTransform& a_previous, const RE::NiTransform& a_current)
@@ -294,10 +348,15 @@ namespace VRHybridCulling
 				return false;
 			if (resources.test)
 				return true;
-			auto* device = globals::d3d::device;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const VRDepthCullingTelemetryPolicy::WriterScope telemetry(VRDepthCullingTemporal::GetTelemetryGate());
+			if (telemetry)
+				g_pipelineBuildAttempts.fetch_add(1, std::memory_order_relaxed);
+#endif
+			auto* device = resources.device.get();
 			winrt::com_ptr<ID3D11Device1> device1;
 			DX::ThrowIfFailed(device->QueryInterface(__uuidof(ID3D11Device1), device1.put_void()));
-			DX::ThrowIfFailed(globals::d3d::context->QueryInterface(__uuidof(ID3D11DeviceContext1), resources.context.put_void()));
+			DX::ThrowIfFailed(resources.ownerContext->QueryInterface(__uuidof(ID3D11DeviceContext1), resources.context.put_void()));
 			const auto featureLevel = device->GetFeatureLevel();
 			DX::ThrowIfFailed(device1->CreateDeviceContextState(device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED,
 				&featureLevel, 1, D3D11_SDK_VERSION, __uuidof(ID3D11Device), nullptr, resources.isolatedState.put()));
@@ -310,12 +369,25 @@ namespace VRHybridCulling
 				logger::warn("VR: Hybrid Hi-Z shaders unavailable; using native depth culling");
 				return false;
 			}
+			for (auto* shader : { resources.build.get(), resources.reduce.get(), resources.test.get() }) {
+				winrt::com_ptr<ID3D11Device> shaderDevice;
+				shader->GetDevice(shaderDevice.put());
+				if (shaderDevice.get() != device) {
+					resources.failed = true;
+					logger::warn("VR: Hybrid Hi-Z shader device changed during setup; using native depth culling");
+					return false;
+				}
+			}
 			D3D11_BUFFER_DESC description{};
 			description.ByteWidth = sizeof(TestConstants);
 			description.Usage = D3D11_USAGE_DEFAULT;
 			description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			DX::ThrowIfFailed(device->CreateBuffer(&description, nullptr, resources.constants.put()));
 			Util::SetResourceName(resources.constants.get(), "VRHybridCulling::Constants");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (telemetry)
+				g_pipelineBuilds.fetch_add(1, std::memory_order_relaxed);
+#endif
 			return true;
 		}
 
@@ -324,7 +396,10 @@ namespace VRHybridCulling
 			auto& resources = g_resources;
 			if (resources.pyramid && resources.layout.width == a_layout.width && resources.layout.height == a_layout.height)
 				return;
-			auto* device = globals::d3d::device;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const VRDepthCullingTelemetryPolicy::WriterScope telemetry(VRDepthCullingTemporal::GetTelemetryGate());
+#endif
+			auto* device = resources.device.get();
 			winrt::com_ptr<ID3D11Texture2D> pyramid;
 			winrt::com_ptr<ID3D11ShaderResourceView> allMips;
 			std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> srvs(a_layout.mipCount);
@@ -364,6 +439,12 @@ namespace VRHybridCulling
 			resources.mipSRVs = std::move(srvs);
 			resources.mipUAVs = std::move(uavs);
 			resources.layout = a_layout;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (telemetry) {
+				g_pyramidAllocations.fetch_add(1, std::memory_order_relaxed);
+				VRDepthCullingTelemetryPolicy::UpdateMaximum(g_logicalBytesHighWater, LogicalPyramidBytes(a_layout));
+			}
+#endif
 		}
 
 		template <class T>
@@ -388,79 +469,129 @@ namespace VRHybridCulling
 
 		void BuildPyramid()
 		{
-			CS_GPU_PASS("VRHybridCulling::BuildHierarchy");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const VRDepthCullingTelemetryPolicy::WriterScope telemetry(VRDepthCullingTemporal::GetTelemetryGate());
+			HYBRID_GPU_PASS("VRHybridCulling::BuildHierarchy", telemetry);
+#endif
 			auto* context = g_resources.context.get();
-			UploadConstants(g_prepared.build);
-			auto* source = g_prepared.depth.get();
-			auto* destination = g_resources.mipUAVs[0].get();
-			context->CSSetShader(g_resources.build.get(), nullptr, 0);
-			context->CSSetShaderResources(0, 1, &source);
-			context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
-			context->Dispatch((g_prepared.build.outputWidth + 7) / 8, (g_prepared.build.outputHeight + 7) / 8, kEyeCount);
-			UnbindCompute();
+			{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				HYBRID_GPU_PASS("VRHybridCulling::BuildBase", telemetry);
+#endif
+				UploadConstants(g_prepared.build);
+				auto* source = g_prepared.depth.get();
+				auto* destination = g_resources.mipUAVs[0].get();
+				context->CSSetShader(g_resources.build.get(), nullptr, 0);
+				context->CSSetShaderResources(0, 1, &source);
+				context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
+				context->Dispatch((g_prepared.build.outputWidth + 7) / 8, (g_prepared.build.outputHeight + 7) / 8, kEyeCount);
+				UnbindCompute();
+			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			HYBRID_GPU_PASS("VRHybridCulling::ReduceMips", telemetry);
+#endif
 			context->CSSetShader(g_resources.reduce.get(), nullptr, 0);
 			for (std::uint32_t mip = 1; mip < g_resources.layout.mipCount; ++mip) {
 				const ReduceConstants constants{ std::max(1u, g_resources.layout.width >> mip), std::max(1u, g_resources.layout.height >> mip), {} };
 				UploadConstants(constants);
-				source = g_resources.mipSRVs[mip - 1].get();
-				destination = g_resources.mipUAVs[mip].get();
+				auto* source = g_resources.mipSRVs[mip - 1].get();
+				auto* destination = g_resources.mipUAVs[mip].get();
 				context->CSSetShaderResources(0, 1, &source);
 				context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
 				context->Dispatch((constants.outputWidth + 7) / 8, (constants.outputHeight + 7) / 8, kEyeCount);
 				UnbindCompute();
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (telemetry) {
+				g_pyramidBuilds.fetch_add(1, std::memory_order_relaxed);
+				g_pyramidDispatches.fetch_add(g_resources.layout.mipCount, std::memory_order_relaxed);
+			}
+#endif
 		}
 	}
 
 	bool Prepare(std::uint64_t a_epoch)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		const TelemetryScope telemetry(g_prepareTiming);
+		const Scope telemetry(g_prepareTiming, VRDepthCullingTemporal::GetTelemetryGate());
 		g_fallbackReason.store("none", std::memory_order_relaxed);
 #endif
 		g_ready = false;
 		g_prepared.depth = nullptr;
-		if (g_reloadRequested.exchange(false, std::memory_order_acq_rel))
+		if (!REL::Module::IsVR() || !globals::d3d::device || !globals::d3d::context)
+			return HYBRID_PREPARATION_FAILED("unsupported_frame", a_epoch);
+		if (!globals::state || globals::state->GetCompletedRenderTargetResourcePublicationGeneration() == 0)
+			return HYBRID_PREPARATION_FAILED("resource_publication_unavailable", a_epoch);
+		const VRHybridCullingSnapshot::PipelineOwner currentOwner{
+			reinterpret_cast<std::uintptr_t>(globals::d3d::device), reinterpret_cast<std::uintptr_t>(globals::d3d::context)
+		};
+		if (VRHybridCullingSnapshot::ShouldRecreatePipeline(g_resources.Owner(), currentOwner,
+				g_reloadRequested.exchange(false, std::memory_order_acq_rel))) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (telemetry && g_resources.device)
+				g_pipelineRecreations.fetch_add(1, std::memory_order_relaxed);
+#endif
+			g_history.pipelineInvalidated = g_history.pending;
 			g_resources = {};
+			g_resources.device.copy_from(globals::d3d::device);
+			g_resources.ownerContext.copy_from(globals::d3d::context);
+		}
 		if (g_resources.failed)
-			return PreparationFailed("pipeline_unavailable", a_epoch);
-		if (!REL::Module::IsVR() || !globals::d3d::device || !globals::d3d::context || !CaptureFrame(g_prepared, a_epoch))
-			return PreparationFailed("unsupported_frame", a_epoch);
+			return HYBRID_PREPARATION_FAILED("pipeline_unavailable", a_epoch);
+		if (!CaptureFrame(g_prepared, a_epoch, VRHybridCullingSnapshot::Phase::NativeDownscale))
+			return HYBRID_PREPARATION_FAILED("unsupported_frame", a_epoch);
 		try {
 			if (!EnsurePipeline())
-				return PreparationFailed("pipeline_unavailable", a_epoch);
+				return HYBRID_PREPARATION_FAILED("pipeline_unavailable", a_epoch);
 			EnsurePyramid(g_prepared.test.pyramid);
 			g_ready = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (telemetry)
+				PublishSource(g_prepared, "prepared");
+#endif
+			HYBRID_OUTCOME("hybrid_prepared", "pending", a_epoch);
 			return true;
 		} catch (const std::exception& error) {
 			g_resources.failed = true;
 			logger::warn("VR: Hybrid Hi-Z resource setup failed: {}", error.what());
-			return PreparationFailed("resource_setup_failed", a_epoch);
+			return HYBRID_PREPARATION_FAILED("resource_setup_failed", a_epoch);
 		}
 	}
 
 	bool Dispatch(void* a_culler, std::uint64_t a_epoch)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		const TelemetryScope telemetry(g_dispatchTiming);
+		const Scope telemetry(g_dispatchTiming, VRDepthCullingTemporal::GetTelemetryGate());
 #endif
 		Batch batch;
 		NativeBuffer* bounds = nullptr;
 		NativeBuffer* results = nullptr;
 		if (!g_ready)
-			return PreparationFailed("not_prepared", a_epoch);
+			return HYBRID_PREPARATION_FAILED("not_prepared", a_epoch);
 		if (!ReadBatch(a_culler, a_epoch, batch))
-			return PreparationFailed("empty_or_invalid_batch", a_epoch);
-		if (g_prepared.epoch != a_epoch || g_prepared.number != batch.frame)
-			return PreparationFailed("preparation_expired", a_epoch);
+			return HYBRID_PREPARATION_FAILED("empty_or_invalid_batch", a_epoch);
+		if (g_prepared.epoch != a_epoch || g_prepared.source.frame != batch.frame)
+			return HYBRID_PREPARATION_FAILED("preparation_expired", a_epoch);
 		if (!CheckNativeBuffers(a_culler, batch.count, bounds, results))
-			return PreparationFailed("native_buffers_invalid", a_epoch);
+			return HYBRID_PREPARATION_FAILED("native_buffers_invalid", a_epoch);
 		g_ready = false;
 		g_prepared.test.objectCount = batch.count;
 		const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context), true);
 		if (!ownership)
-			return PreparationFailed("renderer_unavailable", a_epoch);
-		CS_GPU_PASS("VRHybridCulling::Visibility");
+			return HYBRID_PREPARATION_FAILED("renderer_unavailable", a_epoch);
+		const auto publication = globals::state->GetCurrentMainRenderTargetResourcePublicationDiagnostics();
+		if (!VRHybridCullingSnapshot::HasCurrentPublication(g_prepared.source, publication.publishedGeneration, publication.current))
+			return HYBRID_PREPARATION_FAILED("resource_publication_changed", a_epoch);
+		if (!VRHybridCullingSnapshot::MatchesPipelineOwner(g_resources.Owner(),
+				{ reinterpret_cast<std::uintptr_t>(globals::d3d::device), reinterpret_cast<std::uintptr_t>(globals::d3d::context) }))
+			return HYBRID_PREPARATION_FAILED("pipeline_owner_changed", a_epoch);
+		const auto* depth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
+		if (!VRHybridCullingSnapshot::CanDispatch(g_prepared.source, publication.publishedGeneration, publication.current,
+				globals::state->frameCount, reinterpret_cast<std::uintptr_t>(depth)))
+			return HYBRID_PREPARATION_FAILED("prepared_source_changed", a_epoch);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		HYBRID_GPU_PASS("VRHybridCulling::Visibility", telemetry);
+#endif
 		auto* context = g_resources.context.get();
 		winrt::com_ptr<ID3DDeviceContextState> previous;
 		context->SwapDeviceContextState(g_resources.isolatedState.get(), previous.put());
@@ -469,28 +600,42 @@ namespace VRHybridCulling
 			context->SwapDeviceContextState(previous.get(), nullptr);
 		});
 		BuildPyramid();
-		UploadConstants(g_prepared.test);
-		ID3D11ShaderResourceView* srvs[]{ bounds->srv, g_resources.allMips.get() };
-		context->CSSetShaderResources(0, 2, srvs);
-		context->CSSetUnorderedAccessViews(0, 1, &results->uav, nullptr);
-		context->CSSetShader(g_resources.test.get(), nullptr, 0);
-		context->Dispatch((batch.count + 63) / 64, 1, 1);
-		UnbindCompute();
-		context->CopyResource(results->staging, results->buffer);
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			HYBRID_GPU_PASS("VRHybridCulling::TestBounds", telemetry);
+#endif
+			UploadConstants(g_prepared.test);
+			ID3D11ShaderResourceView* srvs[]{ bounds->srv, g_resources.allMips.get() };
+			context->CSSetShaderResources(0, 2, srvs);
+			context->CSSetUnorderedAccessViews(0, 1, &results->uav, nullptr);
+			context->CSSetShader(g_resources.test.get(), nullptr, 0);
+			context->Dispatch((batch.count + 63) / 64, 1, 1);
+			UnbindCompute();
+		}
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			HYBRID_GPU_PASS("VRHybridCulling::CopyResults", telemetry);
+#endif
+			context->CopyResource(results->staging, results->buffer);
+		}
 		g_history.batch = batch;
 		g_history.frame = g_prepared;
 		g_prepared.depth = nullptr;
 		std::memcpy(g_history.bounds.data(), reinterpret_cast<const void*>(batch.transforms), batch.count * sizeof(OBBTransform));
 		g_history.pending = true;
+		g_history.pipelineInvalidated = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (telemetry) {
 			g_lastCount.store(batch.count, std::memory_order_relaxed);
 			g_lastCountEpoch.store(a_epoch, std::memory_order_release);
 			g_submitted.fetch_add(1, std::memory_order_relaxed);
+			g_submittedObjects.fetch_add(batch.count, std::memory_order_relaxed);
+			g_boundsDispatches.fetch_add(1, std::memory_order_relaxed);
+			PublishSource(g_history.frame, "submitted");
 		}
 		g_fallbackReason.store("none", std::memory_order_relaxed);
 #endif
-		PublishOutcome("hybrid_submitted", "hybrid", a_epoch);
+		HYBRID_OUTCOME("hybrid_submitted", "hybrid", a_epoch);
 		return true;
 	}
 
@@ -499,7 +644,7 @@ namespace VRHybridCulling
 		if (!g_history.pending)
 			return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		const TelemetryScope telemetry(g_readbackTiming);
+		const Scope telemetry(g_readbackTiming, VRDepthCullingTemporal::GetTelemetryGate());
 #endif
 		Batch batch;
 		if (!ReadBatch(a_culler, a_epoch, batch)) {
@@ -508,39 +653,57 @@ namespace VRHybridCulling
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			g_historyRejection.store("unreadable_batch", std::memory_order_relaxed);
 			g_historyEpoch.store(a_epoch, std::memory_order_release);
-			if (telemetry)
+			if (telemetry) {
 				g_unreadable.fetch_add(1, std::memory_order_relaxed);
+				RecordReason("unreadable_batch", HistoryRejectionReasons, g_historyReasons);
+				g_sourceSnapshot.Invalidate();
+			}
 #endif
-			PublishOutcome("history_unreadable", "hybrid", g_history.batch.epoch);
+			HYBRID_OUTCOME("history_unreadable", "hybrid", g_history.batch.epoch);
 			return true;
 		}
 		Frame current;
-		const char* rejection = nullptr;
+		bool rejected = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const char* rejection = "none";
+#endif
 		if (!a_selected || !VRHybridCullingHistory::Matches(g_history.batch, batch))
-			rejection = "batch_mismatch";
+			HYBRID_REJECT_HISTORY("batch_mismatch");
+		else if (g_history.pipelineInvalidated || g_reloadRequested.load(std::memory_order_acquire))
+			HYBRID_REJECT_HISTORY("pipeline_changed");
 		else if (std::memcmp(g_history.bounds.data(), reinterpret_cast<const void*>(batch.transforms), batch.count * sizeof(OBBTransform)) != 0)
-			rejection = "bounds_changed";
-		else if (!CaptureFrame(current, a_epoch))
-			rejection = "frame_unavailable";
-		else if (current.depth.get() != g_history.frame.depth.get() ||
-				 current.width != g_history.frame.width || current.height != g_history.frame.height ||
+			HYBRID_REJECT_HISTORY("bounds_changed");
+		else if (!VRHybridCullingSnapshot::HasCurrentPublication(g_history.frame.source,
+					 globals::state->GetCompletedRenderTargetResourcePublicationGeneration(), true))
+			HYBRID_REJECT_HISTORY("resource_publication_changed");
+		else if (!CaptureFrame(current, a_epoch, VRHybridCullingSnapshot::Phase::NativeReadback))
+			HYBRID_REJECT_HISTORY("frame_unavailable");
+		else if (!VRHybridCullingSnapshot::MatchesReadback(g_history.frame.source, current.source) ||
 				 std::memcmp(current.build.eyes.data(), g_history.frame.build.eyes.data(), sizeof(current.build.eyes)) != 0)
-			rejection = "depth_changed";
+			HYBRID_REJECT_HISTORY("depth_changed");
 		else if (!IsWorldCameraCoherent(g_history.frame.worldCamera, current.worldCamera) ||
 				 !VRHybridCullingHistory::IsStereoCoherent(g_history.frame.poses, current.poses))
-			rejection = "view_changed";
+			HYBRID_REJECT_HISTORY("view_changed");
 		g_history.pending = false;
 		g_history.frame.depth = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		g_historyRejection.store(rejection ? rejection : "none", std::memory_order_relaxed);
+		g_historyRejection.store(rejection, std::memory_order_relaxed);
 		g_historyEpoch.store(a_epoch, std::memory_order_release);
+		if (telemetry)
+			g_testedObjects.fetch_add(batch.count, std::memory_order_relaxed);
 #endif
-		if (!rejection) {
+		if (!rejected) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			if (telemetry)
+			if (telemetry) {
 				g_accepted.fetch_add(1, std::memory_order_relaxed);
+				const auto* results = reinterpret_cast<const std::uint32_t*>(batch.results);
+				const auto occluded = std::count(results, results + batch.count, 0u);
+				g_acceptedOccluded.fetch_add(occluded, std::memory_order_relaxed);
+				g_acceptedVisible.fetch_add(batch.count - occluded, std::memory_order_relaxed);
+				PublishSource(current, "readback");
+			}
 #endif
-			PublishOutcome("history_accepted", "hybrid", g_history.batch.epoch);
+			HYBRID_OUTCOME("history_accepted", "hybrid", g_history.batch.epoch);
 			return true;
 		}
 		auto* results = reinterpret_cast<std::uint32_t*>(batch.results);
@@ -548,14 +711,19 @@ namespace VRHybridCulling
 		if (telemetry) {
 			g_invalidated.fetch_add(1, std::memory_order_relaxed);
 			g_promoted.fetch_add(std::count(results, results + batch.count, 0u), std::memory_order_relaxed);
+			RecordReason(rejection, HistoryRejectionReasons, g_historyReasons);
+			if (current.source.view != 0)
+				PublishSource(current, "readback_rejected");
+			else
+				g_sourceSnapshot.Invalidate();
 		}
 #endif
 		std::fill_n(results, batch.count, 1u);
-		PublishOutcome("history_invalid_visible", "hybrid", g_history.batch.epoch);
+		HYBRID_OUTCOME("history_invalid_visible", "hybrid", g_history.batch.epoch);
 		return true;
 	}
 
-	void CancelPreparation(bool a_hybridSelected, std::uint64_t a_epoch)
+	void CancelPreparation(bool a_hybridSelected, [[maybe_unused]] std::uint64_t a_epoch)
 	{
 		g_ready = false;
 		g_prepared.depth = nullptr;
@@ -564,13 +732,18 @@ namespace VRHybridCulling
 		if (a_hybridSelected) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			const VRDepthCullingTelemetryPolicy::WriterScope telemetry(VRDepthCullingTemporal::GetTelemetryGate());
-			if (telemetry)
-				g_fallback.fetch_add(1, std::memory_order_relaxed);
 			if (g_statusEpoch.load(std::memory_order_acquire) != a_epoch ||
-				std::strcmp(g_fallbackReason.load(std::memory_order_relaxed), "none") == 0)
+				!globals::state || g_fallbackReasonFrame.load(std::memory_order_relaxed) != globals::state->frameCount ||
+				std::strcmp(g_fallbackReason.load(std::memory_order_relaxed), "none") == 0) {
 				g_fallbackReason.store("replacement_not_prepared", std::memory_order_relaxed);
+			}
+			if (telemetry) {
+				g_fallback.fetch_add(1, std::memory_order_relaxed);
+				RecordReason(g_fallbackReason.load(std::memory_order_relaxed), FallbackReasons, g_fallbackReasons);
+				g_sourceSnapshot.Invalidate();
+			}
 #endif
-			PublishOutcome("native_fallback", "native", a_epoch);
+			HYBRID_OUTCOME("native_fallback", "native", a_epoch);
 		}
 	}
 
@@ -583,7 +756,7 @@ namespace VRHybridCulling
 	Status GetStatus(std::uint64_t a_epoch, bool a_selected, bool a_enabled, bool a_installed)
 	{
 		const bool current = a_selected && a_enabled && a_installed && g_statusEpoch.load(std::memory_order_acquire) == a_epoch;
-		return {
+		Status result{
 			.state = current ? g_status.load(std::memory_order_relaxed) : (a_selected && a_enabled ? (a_installed ? "pending" : "native_fallback") : "inactive"),
 			.effectiveBackend = !a_enabled ? "disabled" : (!a_selected || !a_installed ? "native" : (current ? g_backend.load(std::memory_order_relaxed) : "pending")),
 			.fallbackReason = a_selected && a_enabled && !a_installed ? "hooks_unavailable" : (current ? g_fallbackReason.load(std::memory_order_relaxed) : "none"),
@@ -594,11 +767,53 @@ namespace VRHybridCulling
 			.fallbackBatches = g_fallback.load(std::memory_order_relaxed),
 			.promotedObjects = g_promoted.load(std::memory_order_relaxed),
 			.unreadableBatches = g_unreadable.load(std::memory_order_relaxed),
+			.submittedObjects = g_submittedObjects.load(std::memory_order_relaxed),
+			.testedObjects = g_testedObjects.load(std::memory_order_relaxed),
+			.acceptedOccludedObjects = g_acceptedOccluded.load(std::memory_order_relaxed),
+			.acceptedVisibleObjects = g_acceptedVisible.load(std::memory_order_relaxed),
+			.pipelineBuildAttempts = g_pipelineBuildAttempts.load(std::memory_order_relaxed),
+			.pipelineBuilds = g_pipelineBuilds.load(std::memory_order_relaxed),
+			.pipelineRecreations = g_pipelineRecreations.load(std::memory_order_relaxed),
+			.pyramidAllocations = g_pyramidAllocations.load(std::memory_order_relaxed),
+			.pyramidBuilds = g_pyramidBuilds.load(std::memory_order_relaxed),
+			.pyramidDispatches = g_pyramidDispatches.load(std::memory_order_relaxed),
+			.boundsDispatches = g_boundsDispatches.load(std::memory_order_relaxed),
+			.logicalPyramidBytesHighWater = g_logicalBytesHighWater.load(std::memory_order_relaxed),
+			.droppedSourceSnapshots = g_droppedSourceSnapshots.load(std::memory_order_relaxed),
 			.lastObjectCount = current && g_lastCountEpoch.load(std::memory_order_acquire) == a_epoch ? g_lastCount.load(std::memory_order_relaxed) : 0,
 			.prepare = g_prepareTiming.Read(),
 			.dispatch = g_dispatchTiming.Read(),
 			.readback = g_readbackTiming.Read()
 		};
+		for (std::size_t index = 0; index < FallbackReasons.size(); ++index)
+			result.fallbackReasonCounts[index] = g_fallbackReasons[index].load(std::memory_order_relaxed);
+		for (std::size_t index = 0; index < HistoryRejectionReasons.size(); ++index)
+			result.historyRejectionReasonCounts[index] = g_historyReasons[index].load(std::memory_order_relaxed);
+		if (!VRDepthCullingTemporal::GetTelemetryGate().IsEnabled()) {
+			result.snapshot.validity = "telemetry_disabled";
+		} else {
+			bool busy = false;
+			if (!g_sourceSnapshot.Read(result.snapshot, &busy)) {
+				result.snapshot = {};
+				result.snapshot.busy = busy;
+				result.snapshot.validity = busy ? "snapshot_busy" : "snapshot_unavailable_or_superseded";
+			} else if (std::strcmp(result.snapshot.stage, "readback_rejected") == 0) {
+				result.snapshot.validity = "history_rejected";
+			} else if (!current || (std::strcmp(result.state, "hybrid_prepared") != 0 &&
+									   std::strcmp(result.state, "hybrid_submitted") != 0 && std::strcmp(result.state, "history_accepted") != 0)) {
+				result.snapshot.validity = "inactive_backend";
+			} else if (result.snapshot.cullingEpoch != a_epoch) {
+				result.snapshot.validity = "epoch_changed";
+			} else if (!globals::state || result.snapshot.source.frame != globals::state->frameCountAtomic.load(std::memory_order_relaxed)) {
+				result.snapshot.validity = "older_frame";
+			} else if (result.snapshot.source.resourceGeneration != globals::state->GetCompletedRenderTargetResourcePublicationGeneration()) {
+				result.snapshot.validity = "resource_publication_changed";
+			} else {
+				result.snapshot.valid = result.snapshot.current = true;
+				result.snapshot.validity = "current_observation";
+			}
+		}
+		return result;
 	}
 
 	void ResetTelemetryUnderLock() noexcept
@@ -609,6 +824,15 @@ namespace VRHybridCulling
 		g_fallback.store(0, std::memory_order_relaxed);
 		g_promoted.store(0, std::memory_order_relaxed);
 		g_unreadable.store(0, std::memory_order_relaxed);
+		for (auto* counter : { &g_submittedObjects, &g_testedObjects, &g_acceptedOccluded, &g_acceptedVisible,
+				 &g_pipelineBuildAttempts, &g_pipelineBuilds, &g_pipelineRecreations, &g_pyramidAllocations,
+				 &g_pyramidBuilds, &g_pyramidDispatches, &g_boundsDispatches, &g_logicalBytesHighWater, &g_droppedSourceSnapshots })
+			counter->store(0, std::memory_order_relaxed);
+		for (auto& count : g_fallbackReasons)
+			count.store(0, std::memory_order_relaxed);
+		for (auto& count : g_historyReasons)
+			count.store(0, std::memory_order_relaxed);
+		g_sourceSnapshot.Invalidate();
 		g_lastCount.store(0, std::memory_order_relaxed);
 		g_lastCountEpoch.store(0, std::memory_order_release);
 		g_prepareTiming.Reset();

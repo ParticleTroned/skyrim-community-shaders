@@ -1,4 +1,5 @@
 #include "Features/VRHybridCullingPolicy.h"
+#include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
 
 #include <d3dcompiler.h>
@@ -30,10 +31,12 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		std::unique_ptr<D3D11ShaderTest::ConstantBuffer> constants;
 
-		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName)
+		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth)
 		{
 			ComPtr<ID3DBlob> code, errors;
-			const auto result = D3DCompileFromFile(path, nullptr, nullptr, "main", "cs_5_0",
+			const D3D_SHADER_MACRO reverseDefine[]{ { "CSX_DEPTH_ORDER_TEST_REVERSED", "1" }, { nullptr, nullptr } };
+			Util::CustomInclude includes{ "package/Shaders" };
+			const auto result = D3DCompileFromFile(path, reversedDepth ? reverseDefine : nullptr, &includes, "main", "cs_5_0",
 				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
 				0, code.GetAddressOf(), errors.GetAddressOf());
 			if (FAILED(result) && errors)
@@ -93,6 +96,7 @@ namespace
 	{
 		ID3D11Device* device;
 		ID3D11DeviceContext* context;
+		bool reversedDepth;
 		UINT sourceWidth, sourceHeight;
 		BuildConstants buildConstants{};
 		TestConstants testConstants{};
@@ -102,11 +106,11 @@ namespace
 		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
 		std::vector<ComPtr<ID3D11UnorderedAccessView>> mipOutputs;
 
-		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, UINT eyeWidth = 32, UINT eyeHeight = 32, UINT reduction = 4) :
-			device(device), context(context), sourceWidth(2 * eyeWidth), sourceHeight(eyeHeight),
-			build(device, L"package/Shaders/VRHybridCulling/BuildDepthCS.hlsl", "BuildConstants"),
-			reduce(device, L"package/Shaders/VRHybridCulling/ReduceDepthCS.hlsl", "ReduceConstants"),
-			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants")
+		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth = 32, UINT eyeHeight = 32, UINT reduction = 4) :
+			device(device), context(context), reversedDepth(reversedDepth), sourceWidth(2 * eyeWidth), sourceHeight(eyeHeight),
+			build(device, L"package/Shaders/VRHybridCulling/BuildDepthCS.hlsl", "BuildConstants", reversedDepth),
+			reduce(device, L"package/Shaders/VRHybridCulling/ReduceDepthCS.hlsl", "ReduceConstants", reversedDepth),
+			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth)
 		{
 			testConstants.eyes = { EyeRect{ 0, 0, eyeWidth, eyeHeight }, EyeRect{ eyeWidth, 0, eyeWidth, eyeHeight } };
 			Require(TryMakeBuildConstants(testConstants.eyes, sourceWidth, sourceHeight, reduction,
@@ -175,10 +179,19 @@ namespace
 			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
 		}
 
+		float EncodeDepth(float depth) const
+		{
+			// Native mask zero remains invalid independently of the projection order.
+			return reversedDepth && std::isfinite(depth) && depth > 0.0f && depth <= 1.0f ? 1.0f - depth : depth;
+		}
+
 		void Build(std::span<const float> pixels)
 		{
 			Require(pixels.size() == sourceWidth * sourceHeight, "Unexpected source pixel count");
-			context->UpdateSubresource(source.Get(), 0, nullptr, pixels.data(), sourceWidth * sizeof(float), 0);
+			std::vector<float> encoded(pixels.begin(), pixels.end());
+			for (auto& depth : encoded)
+				depth = EncodeDepth(depth);
+			context->UpdateSubresource(source.Get(), 0, nullptr, encoded.data(), sourceWidth * sizeof(float), 0);
 			build.Bind(context, buildConstants);
 			auto* sourceSRV = sourceView.Get();
 			auto* outputUAV = mipOutputs[0].Get();
@@ -219,7 +232,12 @@ namespace
 			StructuredBuffer bounds(device, sizeof(OBBTransform), static_cast<UINT>(objects.size()), D3D11_BIND_SHADER_RESOURCE, objects.data());
 			StructuredBuffer results(device, sizeof(std::uint32_t), static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
 			testConstants.objectCount = static_cast<UINT>(objects.size());
-			test.Bind(context, testConstants);
+			auto constants = testConstants;
+			if (reversedDepth)
+				for (auto& matrix : constants.viewProjection)
+					for (UINT column = 0; column < 4; ++column)
+						matrix[2][column] = matrix[3][column] - matrix[2][column];
+			test.Bind(context, constants);
 			ID3D11ShaderResourceView* views[]{ bounds.srv.Get(), pyramidView.Get() };
 			auto* output = results.uav.Get();
 			context->CSSetShaderResources(0, 2, views);
@@ -247,9 +265,9 @@ namespace
 		return result;
 	}
 
-	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth)
+	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth)
 	{
-		Fixture fixture(device, context, eyeWidth, eyeHeight);
+		Fixture fixture(device, context, reversedDepth, eyeWidth, eyeHeight);
 		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight);
 		for (UINT y = 0; y < fixture.sourceHeight; ++y)
 			for (UINT x = 0; x < fixture.sourceWidth; ++x)
@@ -269,17 +287,17 @@ namespace
 				const auto coverage = fixture.testConstants.pyramid.sourceReduction << mip;
 				for (UINT y = 0; y < height; ++y) {
 					for (UINT x = 0; x < width; ++x) {
-						float expected = 0.0f;
+						float expected = reversedDepth ? 1.0f : 0.0f;
 						// A one-texel mip axis repeats existing coverage, without inventing padding.
 						for (UINT sy = y * coverage; sy < std::min((y + 1) * coverage, paddedPixelHeight); ++sy) {
 							for (UINT sx = x * coverage; sx < std::min((x + 1) * coverage, paddedPixelWidth); ++sx) {
-								float sample = 1.0f;
+								float sample = fixture.EncodeDepth(1.0f);
 								if (sx < eyeWidth && sy < eyeHeight) {
-									sample = pixels[sy * fixture.sourceWidth + eye * eyeWidth + sx];
+									sample = fixture.EncodeDepth(pixels[sy * fixture.sourceWidth + eye * eyeWidth + sx]);
 									if (!std::isfinite(sample) || sample <= 0.0f || sample > 1.0f)
-										sample = 1.0f;
+										sample = fixture.EncodeDepth(1.0f);
 								}
-								expected = std::max(expected, sample);
+								expected = reversedDepth ? std::min(expected, sample) : std::max(expected, sample);
 							}
 						}
 						Require(actual[y * width + x] == expected, "Mip lost a source pixel, mixed eyes, or mishandled padding/masks");
@@ -321,6 +339,17 @@ namespace
 		fixture.Build(pixels);
 		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 1, 1, 0 },
 			"Mixed first-eye, second-eye and occluded objects lost independent stereo results");
+	}
+
+	void BiasRetainsTouchingBounds(Fixture& fixture)
+	{
+		const auto original = fixture.testConstants.depthBias;
+		fixture.testConstants.depthBias = 0.125f;
+		const std::array objects{ Box(0, 0, 0.625f, 0.125f), Box(0, 0, 0.5f, 0.125f), Box(0, 0, 0.75f, 0.125f) };
+		fixture.Build(std::vector<float>(fixture.sourceWidth * fixture.sourceHeight, 0.375f));
+		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 1, 1, 0 },
+			"Bias must retain touching or nearer bounds and reject only strictly farther bounds");
+		fixture.testConstants.depthBias = original;
 	}
 
 	void CoversEveryOverlappingCell(Fixture& fixture)
@@ -422,19 +451,23 @@ int main()
 		const D3D_FEATURE_LEVEL requested = D3D_FEATURE_LEVEL_11_0;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, &requested, 1,
 			D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
-		CoversAllReductionPixels(device.Get(), context.Get(), 17, 13, true);
-		CoversAllReductionPixels(device.Get(), context.Get(), 32, 16, false);
-		CoversAllReductionPixels(device.Get(), context.Get(), 16, 32, false);
-		CoversAllReductionPixels(device.Get(), context.Get(), 4, 4, false);
-		CoversAllReductionPixels(device.Get(), context.Get(), 8, 4, false);
-		Fixture fixture(device.Get(), context.Get());
-		CoversVisibilityAndFailures(fixture);
-		CoversMixedStereoVisibility(fixture);
-		CoversEveryOverlappingCell(fixture);
-		CoversShearedCornerExtents(fixture);
-		CoversPerspectiveAndCameraAdjustment(fixture);
-		PreservesSmallBoundsAtLargeWorldCoordinates(fixture);
-		std::cout << "Hi-Z WARP tests passed: complete mip coverage, stereo visibility, bounds, perspective and failure fallback\n";
+		for (const bool reversedDepth : { false, true }) {
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 17, 13, true);
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 32, 16, false);
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 16, 32, false);
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 4, 4, false);
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 8, 4, false);
+			Fixture fixture(device.Get(), context.Get(), reversedDepth);
+			CoversVisibilityAndFailures(fixture);
+			CoversMixedStereoVisibility(fixture);
+			BiasRetainsTouchingBounds(fixture);
+			CoversEveryOverlappingCell(fixture);
+			CoversShearedCornerExtents(fixture);
+			CoversPerspectiveAndCameraAdjustment(fixture);
+			PreservesSmallBoundsAtLargeWorldCoordinates(fixture);
+			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
+					  << "): complete mip coverage, stereo visibility, bounds, bias, perspective and failure fallback\n";
+		}
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

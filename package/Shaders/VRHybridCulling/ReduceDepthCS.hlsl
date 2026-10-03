@@ -1,3 +1,5 @@
+#include "Common/DepthOrder.hlsli"
+
 Texture2DArray<float> SourceDepth : register(t0);
 RWTexture2DArray<float> OutputDepth : register(u0);
 
@@ -17,11 +19,11 @@ cbuffer ReduceConstants : register(b0)
 	if (outputLayers != 2 || sourceLayers != 2 || sourceLevels != 1 ||
 		any(OutputSize != uint2(outputWidth, outputHeight)) ||
 		any(OutputSize != max(uint2(sourceWidth, sourceHeight) / 2, 1))) {
-		OutputDepth[dispatchID] = 1.0;
+		OutputDepth[dispatchID] = DepthOrder::Far();
 		return;
 	}
 
-	float farthestDepth = 0.0;
+	float farthestDepth = DepthOrder::Near();
 	[unroll] for (uint y = 0; y < 2; ++y)
 	{
 		[unroll] for (uint x = 0; x < 2; ++x)
@@ -29,8 +31,8 @@ cbuffer ReduceConstants : register(b0)
 			uint2 pixel = min(dispatchID.xy * 2 + uint2(x, y), uint2(sourceWidth, sourceHeight) - 1);
 			float depth = SourceDepth.Load(int4(pixel, dispatchID.z, 0));
 			if (!isfinite(depth) || depth <= 0.0 || depth > 1.0)
-				depth = 1.0;
-			farthestDepth = max(farthestDepth, depth);
+				depth = DepthOrder::Far();
+			farthestDepth = DepthOrder::Farthest(farthestDepth, depth);
 		}
 	}
 	OutputDepth[dispatchID] = farthestDepth;

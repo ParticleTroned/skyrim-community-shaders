@@ -292,3 +292,512 @@ The DevBench conflict resolution preserves both Hybrid controls and the
 new FOV, parallax and Adaptive Balance controls. The evidence above
 describes the pre-rebase source; no compilation or tests were run for
 this rebase, as requested.
+
+## Current-main integration, 2026-10-03
+
+The [maintained Astra plan](csx-astra-master-plan.md) separates native Hi-Z,
+PBR grass, grass optimization and Reverse Z into reviewable PRs. The
+original experimental branch remains unchanged. Its single feature delta
+was integrated on `codex/astra-hiz-depth` from current `main-VR`
+`c3f028b5207a2d9a32d539127aad614d2eef640a` as commit
+`29ce68539c1fa489b241135d1a7629ccddf6a4e3`. The DevBench conflict resolution
+retains newer Sky Sync controls and the Hybrid controls together.
+
+Subsequent working changes implement completed-publication generation and
+source-SRV admission across preparation, dispatch and delayed readback.
+Incomplete, invalidated or replaced publications reject admission.
+Observation phases identify the native-downscale and readback boundaries;
+they do not prove when depth contents were written or that camera/depth
+contents are current. Existing camera, bounds, one-frame age and epoch
+checks remain separate. Readable invalid history remains fail-visible.
+
+The pipeline retains its D3D device/context COM owners even after creation
+failure. Actual owner replacement or explicit shader-cache clearing allows
+recreation and resets the failure latch. A same-owner resource publication
+change does not retry a failed shader pipeline. Dispatch rejects changed
+owners, and recreation preserves pending history for fail-visible rejection
+at readback rather than discarding the native batch's recovery obligation.
+
+`Common/DepthOrder.hlsli` centralizes near/far, nearest/farthest reduction
+and biased occlusion comparisons. Standard Z remains the only runtime
+convention. Standalone WARP tests additionally exercise reversed arithmetic,
+source depths and projection matrices; this does not activate or qualify a
+Reverse-Z renderer. The inaccurate Reverse-Z comment in `ClearHMDMaskCS`
+was corrected without changing its current mask behavior.
+
+The user requires DevBench diagnostics and performance measurements adequate
+for in-game evaluation. Additional snapshot/admission/pipeline diagnostics,
+reason counts and attributed measurement coverage are implemented.
+All new diagnostic/performance machinery must compile out when
+`DEVBENCH_BRIDGE_ENABLED` is absent; runtime disablement alone does not meet
+this requirement. The intermediate evidence below predates those final
+extensions. The final diagnostic validation below supersedes it for those changes.
+
+The source payload is a coherent bounded copy. Cumulative counters and
+stage bins are individually atomic live observations, not one indivisible
+aggregate snapshot. Capture the source payload before disabling telemetry;
+then wait for admitted writers to finish and sample final totals for a
+stable measurement window. Disabled telemetry hides the source payload.
+A pending readback can belong to a submission before reset, so reset-window
+accounting must not assume exact submitted/readback cohort conservation.
+
+### Intermediate validation and artifact
+
+Fresh universal `ALL` configuration succeeded with SE/AE/VR enabled,
+DevBench ON and Tracy OFF. The generated project used CMake 4.4.1, Visual
+Studio 18 2026, MSVC 19.51.36256.0 and Windows SDK 10.0.26100.0.
+
+All 10 focused CTests passed in 3.61 seconds: depth-culling cache-refresh,
+enable, telemetry, settings UI, settings and temporal policies; menu
+depth-culling settings; and Hybrid policy, history and production-shader
+WARP tests. WARP ran both Standard and reversed test directions. An initial
+focused link lacked the `ShaderInclude` implementation because generation
+predated the test target's linkage change; explicit reconfigure and rebuild
+resolved it. The passing record is the final focused build/CTest pair.
+
+The maintained shader verifier found all 12 Standard-Z Hybrid comparisons
+identical to `29ce68539`: BuildDepth, ReduceDepth and TestBounds under
+CSHADER, CSHADER+VR, CSHADER+HDR_OUTPUT and CSHADER+VR+HDR_OUTPUT. All four
+corresponding mask-shader comparisons were also identical. This is exact
+bytecode evidence for the Standard behavior, not a runtime performance
+result or a separate complete strict-FXC sweep.
+
+The initial universal Release DLL linked successfully before the new
+diagnostic extensions. Its manifest at
+`D:/Coding/GitHub/skyrim-community-shaders/build/ahiz/Release/CSX.BuildManifest.json`
+was inspected directly and records:
+
+| Field         | Intermediate artifact identity                                     |
+| ------------- | ------------------------------------------------------------------ |
+| Source commit | `29ce68539c1fa489b241135d1a7629ccddf6a4e3`                         |
+| Dirty source  | `true`                                                             |
+| Dirty digest  | `57615e2f31259e929117306f9e929afdec14d5f285e4e876ab99a32f23eda9a1` |
+| Build ID      | `58e67fc0be147f0983564e2458fd3591a0e212a2cc0b78ba5b19b9f92081968b` |
+| DLL SHA-256   | `790039f9d87e75715c505b90d61606395d76770a735df3f24246c8ef8b02466c` |
+| DLL bytes     | 29587456                                                           |
+
+Build ID and artifact hash are different fields. This intermediate artifact
+does not certify the ongoing diagnostic additions and was not deployed.
+The final diagnostic artifact is recorded below; this intermediate copy is preserved under `build/astra-validation/pre-diagnostics-artifact/`.
+
+### Commands and local evidence
+
+These commands ran from
+`D:/Coding/GitHub/skyrim-community-shaders/.tmp/worktrees/astra-hiz`.
+The HDE64 source override reuses an existing local dependency tree; it is
+not a portable prerequisite. Separate `-D` from `KEY=value` arguments to
+retain drive-colon paths correctly through the PowerShell wrapper.
+
+```powershell
+pwsh ./tools/cmake.ps1 --preset ALL -B D:/Coding/GitHub/skyrim-community-shaders/build/ahiz -D BUILD_CONTROLLER_TESTS=ON -D BUILD_SHADER_TESTS=OFF -D AUTO_PLUGIN_DEPLOYMENT=OFF -D ZIP_TO_DIST=OFF -D AIO_ZIP_TO_DIST=OFF -D SKIP_RUNTIME_DOWNLOADS=ON -D DEVBENCH_BRIDGE=ON -D TRACY_SUPPORT=OFF -D FETCHCONTENT_SOURCE_DIR_HDE64=D:/Coding/GitHub/skyrim-community-shaders/build/ALL/_deps/hde64-src
+pwsh ./tools/cmake.ps1 -S . -B D:/Coding/GitHub/skyrim-community-shaders/build/ahiz
+pwsh ./tools/cmake.ps1 --build D:/Coding/GitHub/skyrim-community-shaders/build/ahiz --config Release --target vr_depth_culling_telemetry_policy_test vr_depth_culling_settings_ui_test vr_depth_culling_settings_test menu_depth_culling_settings_policy_test vr_depth_culling_temporal_policy_test vr_hybrid_culling_policy_test vr_hybrid_culling_history_test vr_hybrid_culling_shader_test vr_depth_culling_cache_refresh_policy_test vr_depth_culling_enable_policy_test --parallel 4
+& 'D:\Coding\GitHub\_tools\CMake\4.4.1\bin\ctest.exe' --test-dir D:/Coding/GitHub/skyrim-community-shaders/build/ahiz -C Release -R '^(VRDepthCulling(TelemetryPolicy|SettingsUI|Settings|TemporalPolicy|CacheRefreshPolicy|EnablePolicy)|MenuDepthCullingSettingsPolicy|VRHybridCulling(Policy|History|Shader))$' --output-on-failure --no-tests=error --output-junit D:/Coding/GitHub/skyrim-community-shaders/.tmp/worktrees/astra-hiz/build/astra-validation/focused-results.xml
+pwsh ./tools/cmake.ps1 --build D:/Coding/GitHub/skyrim-community-shaders/build/ahiz --config Release --target CommunityShaders --parallel 4
+pwsh tools/verify-shader-refactor.ps1 'features/Upscaling/Shaders/Upscaling/ClearHMDMaskCS.hlsl' -BaseRef 29ce68539 -Fxc 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe' -Profile cs_5_0
+```
+
+Logs are in worktree `build/astra-validation/`: `configure.log`,
+`reconfigure.log`, `focused-build.log` (initial linkage failure),
+`focused-build-final.log`, `focused-ctest.log`, `focused-results.xml` and
+`dll-build.log`. Hybrid shader-equivalence logs and their summary are in
+`build/validation/depth-order-20261003T183356516Z/`.
+
+No deployment, native lifecycle/fallback execution, real-HMD fidelity or
+matched performance measurements have run. No render-scale owner/controller
+writes changed, and these checks do not claim render-scale qualification.
+Advanced remains default and Hybrid remains experimental. Native runtime
+qualification remains open; PBR grass follows as a separate feature PR.
+
+## Final diagnostic validation, 2026-10-03
+
+All 11 focused tests passed in 3.75 seconds after adding the diagnostics:
+menu serialization, concurrent telemetry admission/reset and coherent
+snapshots, native-routing and history policies, and Standard/reversed WARP.
+The final universal DLL linked with SE/AE/VR, DevBench ON and Tracy OFF.
+Its preserved DLL and manifest in
+`build/astra-validation/diagnostics-artifact/` passed provenance, hash and
+size verification:
+
+| Field         | Final diagnostic artifact                                          |
+| ------------- | ------------------------------------------------------------------ |
+| Source commit | `29ce68539c1fa489b241135d1a7629ccddf6a4e3`                         |
+| Dirty source  | `true`                                                             |
+| Dirty digest  | `78ce316f2ce046993c4ce6eb77b5cdb7ae4c0059c448c0ddf357195d18f01fb9` |
+| Build ID      | `8246ebf5ca62ab8ac0aefb6d620059f22b03f4dd2a3bb171e0ec2b578aea0169` |
+| DLL SHA-256   | `20c7063a0d7ca3c4418af0110d60cba6b9b9619f0991a3444a0be98f0570a1f4` |
+| DLL bytes     | 29623296                                                           |
+
+Hybrid, Temporal and Menu bridge each passed MSVC `/Zs` and `/P` with
+DevBench disabled. The audit reused actual generated Release flags,
+disabled PCH consumption with `/Y-`, retained the actual forced PCH
+header, and asserted afterward that `DEVBENCH_BRIDGE_ENABLED`,
+`TRACY_SUPPORT` and `TRACY_ENABLE` remained undefined. All 27 diagnostic
+namespace/counter/GPU-label markers were absent in each preprocessed file.
+Input source hashes remained unchanged. This is compiler/preprocessor
+isolation evidence, not a separately linked production DLL or runtime test.
+
+The schema check retained all existing `main-VR` actions and properties,
+including Sky Sync; only Hybrid method and targeted snapshot actions were
+added. Native and Hybrid GPU scopes share telemetry admission. During
+pipeline setup, all three shader devices must match the retained device;
+mismatches latch native fallback until owner replacement or cache clear.
+
+The final commands reuse the configure and DLL commands above and add
+`menu_depth_culling_diagnostics_test` to the focused build targets:
+
+```powershell
+& 'D:\Coding\GitHub\_tools\CMake\4.4.1\bin\ctest.exe' --test-dir D:/Coding/GitHub/skyrim-community-shaders/build/ahiz -C Release -R '^(VRDepthCulling(TelemetryPolicy|SettingsUI|Settings|TemporalPolicy|CacheRefreshPolicy|EnablePolicy)|MenuDepthCulling(SettingsPolicy|Diagnostics)|VRHybridCulling(Policy|History|Shader))$' --output-on-failure --no-tests=error --output-junit D:/Coding/GitHub/skyrim-community-shaders/.tmp/worktrees/astra-hiz/build/astra-validation/diagnostics-focused-results.xml
+python tools/build_provenance.py verify --manifest build/astra-validation/diagnostics-artifact/CSX.BuildManifest.json --artifact build/astra-validation/diagnostics-artifact/CommunityShaders.dll
+```
+
+Evidence is in worktree `build/astra-validation/`:
+`diagnostics-configure.log`, `diagnostics-focused-build.log`,
+`diagnostics-focused-ctest.log`, `diagnostics-focused-results.xml`,
+`diagnostics-dll-build.log` and `devbench-schema-check.txt`.
+Actual production commands, forced-header assertions, preprocessed files,
+source hashes and results are in
+`production-boundary/20261003T191209638Z/`; its parent contains `validate.ps1`.
+
+The requested complete developer AIO uses DevBench ON and verified upscaler
+runtime payloads. It is not a public production release or a completed
+in-game qualification. Its separate archive identity is recorded below.
+
+## DevBench AIO archive, 2026-10-03
+
+The complete developer AIO built successfully with DevBench ON, Tracy OFF
+and SE/AE/VR enabled. All 369 extracted files (374,705,554 bytes) match the
+staging tree by exact relative path, size and SHA-256. The 7-Zip integrity
+test passed. The DLL, PDB, manifest, three Hybrid shaders and DepthOrder
+helper match their producer files. Three pinned FidelityFX DLLs and their
+source license, plus six Streamline DLLs and five notices, were verified.
+No deployment or game launch occurred.
+
+| Field             | AIO identity                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| Delivered archive | `D:/Coding/GitHub/skyrim-community-shaders/dist/CSX_AIO-astra-hiz-DevBench-66b6efdee77b.7z` |
+| Archive bytes     | 90819500                                                                                    |
+| Archive SHA-256   | `27f144c67321f87d24f8d5d28f01044fc55a53593e1844fd11dafee08c9f4ac1`                          |
+| Source commit     | `29ce68539c1fa489b241135d1a7629ccddf6a4e3` plus reviewed working changes                    |
+| Dirty digest      | `635f3da88d720a30e98b3c1ce8569da3b193afdece582e226ea6d4596a42569f`                          |
+| Build ID          | `66b6efdee77bd3e03a565b8698cf395e332c44c4e62d0af479ad7a47ec152088`                          |
+| DLL SHA-256       | `fc4df6f883c5e9023ec27f90a1032751bd0e41020e9eaabf0aed573f81b8bfda`                          |
+| DLL bytes         | 29623296                                                                                    |
+| PDB SHA-256       | `cfeb501ed11b83367930c71f380e4873d8372439ff1b7f950359d7223794075a`                          |
+
+The original archive is worktree `dist/CSX_AIO-2026-10-03T19-17Z.7z`.
+Its verified copy and adjacent `.receipt.json` are in the primary checkout's
+`dist` above. Full inventories, extraction and logs remain under
+`D:/Coding/GitHub/skyrim-community-shaders/build/ahiz-aio-verification/20261003T192534997Z-f8dc0c/`.
+The first validator expectation incorrectly required three total
+FidelityFX files; correcting it to three DLLs plus the existing license
+resolved that validation-only failure without changing the archive.
+All 22 implementation/shader inventory hashes remained unchanged from
+the final diagnostic DLL validation through AIO packaging. The new Build
+ID preserves its own dirty-source identity; it does not replace the
+earlier measured compile identity.
+
+Pinned runtimes were copied from the existing `build/ALL` cache without
+modifying it. Normal configuration reverified all bytes and extracted the
+SDK into this task's build tree. Only owned staging paths were reset.
+Automatic deployment and automatic archives stayed disabled:
+
+```powershell
+pwsh ./tools/cmake.ps1 -S . -B D:/Coding/GitHub/skyrim-community-shaders/build/ahiz -D SKIP_RUNTIME_DOWNLOADS=OFF -D DEVBENCH_BRIDGE=ON -D ZIP_TO_DIST=OFF -D AIO_ZIP_TO_DIST=OFF -D AUTO_PLUGIN_DEPLOYMENT=OFF
+pwsh ./tools/cmake.ps1 --build D:/Coding/GitHub/skyrim-community-shaders/build/ahiz --config Release --target Package-AIO-Manual --parallel 4
+```
+
+Build logs are `build/astra-validation/aio-configure.log` and
+`aio-build.log`; the local validator is
+`build/astra-validation/aio/validate.ps1`. This is a developer package,
+with no release/RC allocation or prebuilt shader-cache generation.
+
+## DevBench in-game evaluation procedure
+
+This is a procedure for the final validated build, not a record of an
+executed runtime test. Follow the installed automation controls for session
+ownership, capture and deployment. Verify the exact enabled AIO DLL against
+its manifest/receipt and the running producer first. Replace every
+`<verified-build-id>` below with that final 64-character Build ID. The text
+placeholder is deliberately not a valid executable request value; never
+substitute the intermediate artifact merely because its ID is in this doc.
+Include `expectedBuildId` in every menu and profiler request and preserve
+each response's producer identity. A mismatch invalidates the window.
+
+All added culling diagnostic structures, clocks, counters, serialization
+and diagnostic profiling scopes belong behind `DEVBENCH_BRIDGE_ENABLED`
+and must be absent from production compiler output. An OFF build requires
+separate verification; disabling telemetry in an ON build is not that proof.
+In an ON build, depth-culling telemetry and the global profiler have
+separate controls. Keep telemetry enabled during attributed culling GPU
+captures, verify profiler availability, and inspect actual active sample
+flags. Missing samples are not zero-cost measurements.
+
+### Prepare one comparable window
+
+Record the original method, exterior/interior enable/minimum-extent
+settings, telemetry state and profiler state for restoration. Use the same
+binary, shader package/cache warmth, save, weather, grass population,
+material pack, render scale, upscaler/foveation mode and camera route for
+each comparison. GO stays absent/off for D1. Predeclare the sample window,
+repeat count and stopping conditions; a 300-frame profiler capture is one
+bounded window, not necessarily an entire motion/lifecycle route.
+
+Use `communityshaders.menu` to record settings and select a method:
+
+```json
+{ "action": "status", "expectedBuildId": "<verified-build-id>" }
+```
+
+```json
+{
+    "action": "set_depth_culling_method",
+    "method": "balanced",
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+Use `balanced` for Advanced, `legacy` for Legacy and `hybrid` for Hybrid.
+Retain identical enable/extent settings unless the row explicitly tests
+native-culling-disabled behavior. Setters stage settings and return
+`persisted=false`; the measurement need not save them. Switching invalidates
+history. Warm the selected path until shader/pipeline preparation and
+switch recovery finish; record that warmup separately from steady state.
+
+Then enable shared Advanced/Hybrid telemetry and request a joint reset:
+
+```json
+{
+    "action": "set_depth_culling_telemetry_enabled",
+    "enabled": true,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+```json
+{ "action": "reset_depth_culling_telemetry", "expectedBuildId": "<verified-build-id>" }
+```
+
+Require `reset=true`. `errorCode=depth_culling_telemetry_busy` with
+`retrySafe=true` means admitted writers prevented the reset; both methods'
+counters remain untouched. Retry this same reset at the next bounded
+sampling opportunity without assuming partial success. If the reset cannot
+complete within the predeclared deadline, preserve the failure and stop the
+window. A reset changes measurement counters, not culling policy/history or
+profiler history.
+
+Take the narrow snapshot to establish the window:
+
+```json
+{ "action": "depth_culling_snapshot", "expectedBuildId": "<verified-build-id>" }
+```
+
+This returns `frame` and `depthCullingTemporal` without enabling capture or
+building unrelated menu status. Preserve `installed`, `hybridInstalled`,
+`cullingEnabled`, `policy`, `cullingEpoch` and `measurementWindow`.
+`measurementWindow.current` must stay true, with the same nonzero window
+ID and `startEpoch` matching the tested culling epoch. After a method or
+enable change, warm again and reset explicitly. Do not pool mixed epochs
+into one A/B result. For a Hybrid row, verify `hybrid.effectiveBackend`
+and cumulative reasons; requested `hybrid` alone does not prove execution.
+
+### Capture bounded profiler samples
+
+Use the maintained `communityshaders.profiler_api` for paired CPU/GPU
+captures. It requires `contractMajor`, `clientId`, `commandId` and `action`.
+Use a unique `commandId` for each fresh observation; replaying a completed
+command can return its prior response. Retain the same ID only when retrying
+the same request after an uncertain transport outcome.
+
+The profiler is one global controller with one active bounded session.
+Record its original state, check the registry/snapshot and respect another
+owner's capture before enabling or clearing history. These examples own a
+new capture window and use unique IDs within that window:
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-registry",
+    "action": "registry",
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-snapshot-before",
+    "action": "snapshot",
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-enable",
+    "action": "set_enabled",
+    "enabled": true,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-start",
+    "action": "start_capture",
+    "frameCount": 300,
+    "clearHistory": true,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+The accepted capture ID is returned under `result.captureId`. Replace the
+illustrative numeric `1` below with that actual ID. Poll at a bounded cadence
+and deadline, changing the command ID on each fresh poll:
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-progress-1",
+    "action": "capture_status",
+    "captureId": 1,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+Only `state=completed` with the expected submitted/resolved frame counts
+establishes capture completion. A timeout, cancellation, busy response or
+missing resolved GPU samples is an evidence limitation. Never turn it into
+a zero or a pass. Preserve the final progress receipt, then read the saved
+timer catalog and histories for that ID:
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-timers",
+    "action": "timers",
+    "captureId": 1,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-history-gpu",
+    "action": "history",
+    "captureId": 1,
+    "timerIndex": 0,
+    "domain": "gpu",
+    "offset": 0,
+    "limit": 300,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+Replace timer index `0` with each catalog index being evaluated; repeat
+with domain `cpu` and distinct command IDs. Retain names, sample counts,
+`hasGpu`/`hasCpu`, `activeGpu`/`activeCpu`, slot refusals and raw histories.
+Use bounded `depth_culling_snapshot` observations at the beginning, during
+the route and before teardown, rather than per-frame status polling.
+Examples of relevant GPU labels are `VRHybridCulling::Visibility`,
+`BuildHierarchy`, `BuildBase`, `ReduceMips`, `TestBounds`, `CopyResults`, and
+`VRDepthCulling::NativeDownscale`, `ReplayDownscale`, `NativeProducer`.
+Retain actual catalog names/availability from the tested build.
+
+The legacy `communityshaders.profiler` supports `enable`, `disable` and
+`status`, also with `expectedBuildId`. Its `status` requests capture and
+returns rolling results; it is not a purely passive snapshot and has no
+`start_capture` action. Prefer the versioned bounded API for this protocol.
+Independent CPU views have their own publication/count/catalog identity
+and do not accept `captureId`; do not mix those indices with paired results.
+
+### Close the window without losing source evidence
+
+While telemetry is still enabled, take and save a final
+`depth_culling_snapshot`. This is the last source/camera/resource observation
+for the window. Then disable telemetry:
+
+```json
+{
+    "action": "set_depth_culling_telemetry_enabled",
+    "enabled": false,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+Poll the narrow snapshot with a bounded deadline until
+`telemetryEnabled=false` and `telemetryFrozen=true`. Already-admitted writers
+may finish after disable. Only the frozen response supplies stable final
+counter/histogram totals; preserve its measurement-window identity and frame.
+Source payloads are hidden when telemetry is disabled, which is why the
+source observation must be saved first. Counters/stage bins are individually
+atomic observations while live, not a single atomic aggregate snapshot.
+
+Do not reset again before saving the evidence. A submission just before
+reset can read back after reset, and a final submission can read back after
+disable. Exact submitted/readback cohort conservation across these
+boundaries is not guaranteed. Report observed numerator/denominator and
+boundary uncertainty rather than forcing counts to balance.
+
+Restore the profiler's original enabled state after owned captures finish;
+for an originally disabled profiler, use:
+
+```json
+{
+    "contractMajor": 1,
+    "clientId": "astra-hiz-eval",
+    "commandId": "w1-disable",
+    "action": "set_enabled",
+    "enabled": false,
+    "expectedBuildId": "<verified-build-id>"
+}
+```
+
+Restore the recorded method, settings and telemetry preference through the
+same guarded setters. Stop on unexpected producer/session changes rather
+than continue a mixed-identity campaign.
+
+### Interpret the evidence
+
+| Evidence                                             | Meaning and limitation                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CPU `cpuTimings` stages                              | Inclusive wall time in nanoseconds, including attempted/failed work; prepare/dispatch measure CPU work and submission, not completed GPU execution                                                                                                                                        |
+| `nativeReadback` versus Hybrid `cpuTimings.readback` | Native intercepted call includes its staging Map/copy/reset and any Map stall; Hybrid timing measures subsequent history validation only                                                                                                                                                  |
+| Outer/replay/native/Hybrid stage totals              | Nested CPU work can overlap these scopes; do not sum all inclusive totals to invent culling cost or double-count preparation inside outer downscale                                                                                                                                       |
+| New stage histograms                                 | 17 bins with inclusive upper bounds 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 microseconds, then 1, 2, 4, 8, 16, 64 milliseconds and an unbounded overflow bin (`null` upper bound); use returned bounds and counts                                                                           |
+| Existing Advanced recovery histogram                 | Separate eight-bin distribution ending at 64 microseconds plus overflow; it is not the new 17-bin stage histogram                                                                                                                                                                         |
+| Histogram percentiles                                | Bound the percentile to its occupied interval; overflow has no finite upper bound. Do not report exact p95/p99 values from coarse bins. A zero-sample mean is `null`                                                                                                                      |
+| Profiler timers/history                              | Millisecond self time with profiled descendants removed. Rolling statistics cover at most 300 retained samples; bounded capture IDs give attributed histories. Preserve sample counts and compute campaign statistics from actual samples                                                 |
+| Profiler `topLevelMs` / resolved GPU total           | Inclusive depth-zero contribution; do not add it again to descendant self-time totals. Profiled totals are coverage of instrumented work, not automatically whole-frame time                                                                                                              |
+| Accepted visibility                                  | `acceptedOccludedObjects` and `acceptedVisibleObjects` describe accepted Hybrid readback results. `submittedObjects` counts queued GPU candidates; `testedObjects` counts examined CPU records, including invalidated ones, not extra GPU tests. These are not unique scene-object counts |
+| Fallback/history/promotion counts                    | Preserve zero and nonzero reason counts, unreadable batches and promoted objects. Invalidated readable batches keep objects visible; native fallback does not populate Hybrid accepted-visibility totals                                                                                  |
+| Source snapshot                                      | Coherent bounded payload with `available/current/valid/busy/validity/stage`, epoch, source formats/dimensions/generation, eye rectangles, camera observations and mask policy. `contentFreshnessProven=false` remains explicit even for a current observation                             |
+| Missing or rejected source                           | Preserve `null` data, `snapshot_busy`, superseded/older-frame/inactive/rejected reasons and `droppedSourceSnapshots`; do not interpret a retained SRV or matrix as a depth-content-freshness proof                                                                                        |
+| Resource counts and bytes                            | Pipeline attempts/builds/recreations, pyramid allocations/builds/dispatches and bounds dispatches expose actual work. Logical R32-float texel bytes/high-water are uncompressed accounting, not driver VRAM/residency                                                                     |
+
+Run repeated matched Advanced/Hybrid windows and diagnostic Legacy/off
+references as appropriate, preferably alternating order to expose drift.
+Retain cold-start/switch/recovery costs separately from warmed steady state.
+Compare stationary dense exterior/interior views, head rotation/translation,
+thin occluders/door edges, moving occluders, near/far geometry and cell/load
+transitions. Record both eyes over time on the real HMD; null-driver captures
+cannot qualify stereo motion or asymmetric projections.
+
+Measure whole-frame CPU/GPU behavior and memory with the established
+external/runtime tools alongside the pass evidence. Use the actual refresh
+budget `1000 / refreshHz` milliseconds and repeated-baseline variance;
+11.11 ms applies only at 90 Hz. Report correctness, effective backend,
+completion/health and performance independently. A correct experimental
+path can still regress, and missing visible geometry never counts as a
+gain. Preserve the full source/build/settings/capture identities and missing
+evidence without claiming that this documented procedure has run.

@@ -1,5 +1,6 @@
 #include "Features/VRHybridCullingHistory.h"
 #include "Features/VRHybridCullingLifecycle.h"
+#include "Features/VRHybridCullingSnapshot.h"
 
 #include <array>
 #include <cmath>
@@ -15,6 +16,143 @@ namespace
 	constexpr Batch Submission()
 	{
 		return { 0x1000, 0x2000, 0x3000, 7, 120, 37, 1 };
+	}
+
+	constexpr VRHybridCullingSnapshot::Source DepthSource()
+	{
+		return {
+			.view = 0x4000,
+			.resourceGeneration = 11,
+			.frame = 120,
+			.width = 4034,
+			.height = 2031,
+			.textureFormat = 44,
+			.viewFormat = 46,
+			.sampleCount = 1,
+			.phase = VRHybridCullingSnapshot::Phase::NativeDownscale,
+		};
+	}
+
+	bool RejectsUnpublishedAndRecreatedDepthAtDispatch()
+	{
+		using namespace VRHybridCullingSnapshot;
+		const auto source = DepthSource();
+		if (!CanDispatch(source, source.resourceGeneration, true, source.frame, source.view))
+			return false;
+		// Invalidation retains the old publication and source until setup completes.
+		if (CanDispatch(source, source.resourceGeneration, false, source.frame, source.view) ||
+			CanDispatch(source, 0, false, source.frame, source.view) ||
+			CanDispatch(source, source.resourceGeneration + 1, true, source.frame, source.view))
+			return false;
+		if (CanDispatch(source, source.resourceGeneration, true, source.frame + 1, source.view) ||
+			CanDispatch(source, source.resourceGeneration, true, source.frame, source.view + 1))
+			return false;
+		auto invalid = source;
+		invalid.resourceGeneration = 0;
+		if (CanDispatch(invalid, 0, true, source.frame, source.view))
+			return false;
+		invalid = source;
+		invalid.view = 0;
+		if (CanDispatch(invalid, source.resourceGeneration, true, source.frame, 0))
+			return false;
+		for (const auto phase : { Phase::Unknown, Phase::NativeReadback }) {
+			invalid = source;
+			invalid.phase = phase;
+			if (CanDispatch(invalid, source.resourceGeneration, true, source.frame, source.view))
+				return false;
+		}
+		return true;
+	}
+
+	bool RejectsChangedDepthProvenanceAtReadback()
+	{
+		using namespace VRHybridCullingSnapshot;
+		const auto producer = DepthSource();
+		auto consumer = producer;
+		consumer.phase = Phase::NativeReadback;
+		++consumer.frame;
+		if (!MatchesReadback(producer, consumer))
+			return false;
+		auto rebuilt = consumer;
+		++rebuilt.resourceGeneration;
+		if (MatchesReadback(producer, rebuilt))
+			return false;
+		rebuilt = consumer;
+		++rebuilt.view;
+		if (MatchesReadback(producer, rebuilt))
+			return false;
+		for (const auto member : { &Source::width, &Source::height, &Source::textureFormat, &Source::viewFormat, &Source::sampleCount }) {
+			auto changed = consumer;
+			++(changed.*member);
+			if (MatchesReadback(producer, changed))
+				return false;
+		}
+		for (const auto member : { &Source::nearDepth, &Source::farDepth }) {
+			auto changed = consumer;
+			changed.*member = std::nextafter(changed.*member, 10.0f);
+			if (MatchesReadback(producer, changed))
+				return false;
+		}
+		for (const auto phase : { Phase::Unknown, Phase::NativeDownscale }) {
+			auto wrongPhase = consumer;
+			wrongPhase.phase = phase;
+			if (MatchesReadback(producer, wrongPhase))
+				return false;
+		}
+		for (const auto frame : { producer.frame, producer.frame - 1, producer.frame + 2 }) {
+			auto wrongFrame = consumer;
+			wrongFrame.frame = frame;
+			if (MatchesReadback(producer, wrongFrame))
+				return false;
+		}
+		auto wrapProducer = producer;
+		wrapProducer.frame = std::numeric_limits<std::uint32_t>::max();
+		consumer.frame = 0;
+		return MatchesReadback(wrapProducer, consumer);
+	}
+
+	bool RetriesPipelineOnlyAfterOwnerOrCacheChange()
+	{
+		using namespace VRHybridCullingSnapshot;
+		struct Preparation
+		{
+			PipelineOwner owner;
+			std::uint64_t publication;
+			bool cacheCleared;
+			bool creationSucceeds;
+			bool pipelineAvailable;
+		};
+		const std::array preparations{
+			Preparation{ { 0x1000, 0x2000 }, 1, false, false, false },
+			Preparation{ { 0x1000, 0x2000 }, 1, false, true, false },
+			Preparation{ { 0x1000, 0x2000 }, 2, false, true, false },
+			Preparation{ { 0x1000, 0x2000 }, 2, true, true, true },
+			Preparation{ { 0x1000, 0x2000 }, 3, false, false, true },
+			Preparation{ { 0x1000, 0x3000 }, 4, false, false, false },
+			Preparation{ { 0x1000, 0x3000 }, 5, false, true, false },
+			Preparation{ { 0x4000, 0x5000 }, 6, false, true, true },
+		};
+		PipelineOwner retained{};
+		auto preparedSource = DepthSource();
+		bool available = false;
+		unsigned attempts = 0;
+		for (const auto& preparation : preparations) {
+			if (ShouldRecreatePipeline(retained, preparation.owner, preparation.cacheCleared)) {
+				retained = preparation.owner;
+				available = preparation.creationSucceeds;
+				++attempts;
+			}
+			preparedSource.resourceGeneration = preparation.publication;
+			if (available != preparation.pipelineAvailable ||
+				!MatchesPipelineOwner(retained, preparation.owner) ||
+				!HasCurrentPublication(preparedSource, preparation.publication, true))
+				return false;
+		}
+		for (const auto missing : { PipelineOwner{}, PipelineOwner{ 0x4000, 0 }, PipelineOwner{ 0, 0x5000 } }) {
+			if (MatchesPipelineOwner(retained, missing) || ShouldRecreatePipeline(retained, missing, true))
+				return false;
+		}
+		return attempts == 4;
 	}
 
 	bool CoversSubmissionIdentityAndLatency()
@@ -299,6 +437,9 @@ namespace
 int main()
 {
 	const std::array cases{
+		std::pair{ "depth publication retirement before dispatch", RejectsUnpublishedAndRecreatedDepthAtDispatch },
+		std::pair{ "depth provenance across delayed readback", RejectsChangedDepthProvenanceAtReadback },
+		std::pair{ "pipeline owner replacement and latched failure retry", RetriesPipelineOnlyAfterOwnerOrCacheChange },
 		std::pair{ "submission identity and one-frame latency", CoversSubmissionIdentityAndLatency },
 		std::pair{ "malformed native submissions", CoversMalformedSubmissions },
 		std::pair{ "physical camera motion", CoversPhysicalCameraMotion },

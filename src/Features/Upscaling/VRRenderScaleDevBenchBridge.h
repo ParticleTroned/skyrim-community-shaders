@@ -12,6 +12,9 @@ namespace VRSubmitInputFreshnessPolicy
 namespace VRRenderScaleDevBenchBridge
 {
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Admits one pending command at a completed render frame under native ownership. */
+	void ProcessRendererCommands();
+
 	enum class SubmitFreshnessWork : std::uint8_t
 	{
 		FallbackPreparedHits,

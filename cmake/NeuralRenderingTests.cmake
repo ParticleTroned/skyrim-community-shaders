@@ -24,8 +24,9 @@ add_custom_command(
 add_controller_test(neural_renderer_ownership_test NeuralRendererOwnership tests/neural_renderer_ownership_test.cpp)
 target_sources(neural_renderer_ownership_test PRIVATE "${_neural_renderer_ownership_dir}/neural_renderer_ownership_under_test.h")
 target_include_directories(neural_renderer_ownership_test PRIVATE "${_neural_renderer_ownership_dir}")
+target_include_directories(neural_renderer_ownership_test SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/include")
 target_compile_definitions(neural_renderer_ownership_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(neural_renderer_ownership_test PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(neural_renderer_ownership_test PRIVATE nlohmann_json::nlohmann_json spdlog::spdlog)
 set_tests_properties(NeuralRendererOwnership PROPERTIES TIMEOUT 10)
 
 set(_neural_resource_key_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_resource_key_test")

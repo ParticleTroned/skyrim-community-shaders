@@ -1,4 +1,5 @@
-#include "Api/MainThreadDispatchPolicy.h"
+#include "Api/MainThreadDispatchState.h"
+#include "SKSE/Impl/PCH.h"
 #include "Utils/RendererContextAccess.h"
 
 #include <chrono>
@@ -10,7 +11,7 @@
 
 using json = nlohmann::json;
 using namespace std::chrono_literals;
-constexpr auto kMainThreadTimeout = 10ms;
+constexpr auto kMainThreadTimeout = 100ms;
 
 struct Renderer
 {
@@ -36,34 +37,31 @@ namespace globals
 		ID3D11DeviceContext* context = nullptr;
 	}
 }
-namespace CSX::Api
-{
-	void EnterRuntimeMainThreadTask() {}
-}
-namespace SKSE
-{
-	struct Queue
-	{
-		bool deferred = false;
-		std::function<void()> task;
-		void AddTask(std::function<void()> run)
-		{
-			if (deferred)
-				task = std::move(run);
-			else
-				run();
-		}
-	};
-	Queue queue;
-	Queue* GetTaskInterface() { return &queue; }
-}
-
 #include "neural_renderer_ownership_under_test.h"
 
 void Require(bool condition)
 {
 	if (!condition)
 		throw std::runtime_error("NR renderer ownership regression");
+}
+
+auto Queue(std::function<json()> run)
+{
+	auto result = std::async(std::launch::async, [run = std::move(run)] { return RunWithRendererOwnership(run); });
+	const auto deadline = std::chrono::steady_clock::now() + 2s;
+	while (!g_rendererCommandPending.load(std::memory_order_acquire)) {
+		Require(std::chrono::steady_clock::now() < deadline);
+		std::this_thread::yield();
+	}
+	return result;
+}
+
+json AtFrame(std::function<json()> run)
+{
+	auto result = Queue(std::move(run));
+	ProcessRendererCommand();
+	Require(result.wait_for(2s) == std::future_status::ready);
+	return result.get();
 }
 
 int main()
@@ -79,7 +77,7 @@ int main()
 	};
 	const auto rejected = [&](const char* reason) {
 		const auto before = mutations;
-		const auto result = RunWithRendererOwnership(mutate);
+		const auto result = AtFrame(mutate);
 		Require(!result.at("ok") && !result.at("mutationApplied"));
 		Require(result.at("errorCode") == reason && mutations == before);
 	};
@@ -91,12 +89,19 @@ int main()
 	rejected("renderer_unavailable");
 	renderer.data.context = context;
 	{
-		const Util::RendererOwnership frame(&renderer.lock, true);
-		// Another SKSE worker must reject before touching state or teardown.
-		std::jthread worker([&] { rejected("renderer_busy"); });
+		auto result = Queue(mutate);
+		{
+			const Util::RendererOwnership frame(&renderer.lock, true);
+			// A nonowner boundary leaves the same request pending, without mutation.
+			std::jthread worker([] { ProcessRendererCommand(); });
+			worker.join();
+			Require(mutations == 0 && result.wait_for(0ms) == std::future_status::timeout);
+			// The renderer's own frame boundary can claim recursive ownership.
+			ProcessRendererCommand();
+		}
+		Require(result.get().at("ok") && mutations == 1);
 	}
-	Require(mutations == 0);
-	const auto result = RunWithRendererOwnership([&]() -> json {
+	const auto result = AtFrame([&]() -> json {
 		bool acquired = false;
 		std::jthread rendering([&] {
 			const Util::RendererOwnership draw(&renderer.lock);
@@ -104,18 +109,40 @@ int main()
 		});
 		rendering.join();
 		Require(!acquired);
-		// Native ownership is recursive when SKSE already runs on its owner.
-		return RunWithRendererOwnership(mutate);
+		// Another command cannot replace an admitted command or deadlock recursively.
+		const auto nested = RunWithRendererOwnership(mutate);
+		Require(nested.at("errorCode") == "renderer_command_busy" && !nested.at("mutationApplied"));
+		return mutate();
 	});
-	Require(result.at("ok") && mutations == 1);
-	Require(RunWithRendererOwnership([]() -> json { throw std::runtime_error("failure"); }).contains("error"));
-	std::jthread afterException([&] { Require(RunWithRendererOwnership(mutate).at("ok")); });
-	afterException.join();
-	Require(mutations == 2);
-	SKSE::queue.deferred = true;
+	Require(result.at("ok") && mutations == 2);
+	const auto failure = AtFrame([]() -> json { throw std::runtime_error("failure"); });
+	Require(failure.at("errorCode") == "renderer_command_failed" && failure.at("mutationApplied").is_null());
+	Require(AtFrame(mutate).at("ok") && mutations == 3);
+	// Missing frames cancel the queued command, including a retained boundary reference.
 	const auto timeout = RunWithRendererOwnership(mutate);
-	Require(timeout.at("errorCode") == "main_thread_timeout");
-	SKSE::queue.task();
-	Require(mutations == 2);
-	SKSE::queue.task = {};
+	Require(timeout.at("errorCode") == "renderer_command_timeout" && !timeout.at("mutationApplied"));
+	ProcessRendererCommand();
+	Require(mutations == 3 && !g_rendererCommandPending.load());
+	{
+		auto pending = Queue(mutate);
+		std::shared_ptr<RendererCommand> late;
+		{
+			std::lock_guard lock(g_rendererCommandMutex);
+			late = g_rendererCommand;
+		}
+		Require(pending.get().at("errorCode") == "renderer_command_timeout");
+		Require(!late->completion.TryBegin() && mutations == 3);
+	}
+	{
+		auto pending = Queue(mutate);
+		Require(RunWithRendererOwnership(mutate).at("errorCode") == "renderer_command_busy");
+		ProcessRendererCommand();
+		Require(pending.get().at("ok") && mutations == 4);
+	}
+	// Admission wins the deadline: retain the exact result even if execution takes longer.
+	const auto slow = AtFrame([&]() -> json {
+		std::this_thread::sleep_for(2 * kMainThreadTimeout);
+		return mutate();
+	});
+	Require(slow.at("ok") && mutations == 5 && !g_rendererCommandPending.load());
 }

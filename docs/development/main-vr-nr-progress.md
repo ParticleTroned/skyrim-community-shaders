@@ -1,5 +1,18 @@
 # main-vr-nr progress and continuation record
 
+## October 3 renderer command admission
+
+The [command-admission record](nr-renderer-command-admission-20261003.md)
+preserves 16 unpaused, no-mutation lock rejections on the RegionCompact
+producer. No NR evaluation or GPU fault occurred. The current correction
+admits DevBench commands at the completed render-frame boundary, retains
+native ownership and cancels unclaimed requests before timeout returns.
+Producer `47675771439e` passes the universal build, all 227 tests, presets
+and provenance checks. Its DevBench AIO passes integrity and all 386 payload
+hashes. A replacement-DLL live test is still needed; no deployment occurred.
+Tasks 9/10 and Task 11's implementation remain open. Camera-read contract
+handling is separately committed to automation dev `d51f000` (295 checks).
+
 ## October 3 stationary-scene composition and compact corrections
 
 The [stationary-scene record](nr-stationary-corrections-20261003.md) identifies

@@ -21,6 +21,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
+#	include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
 #endif
 
 #include "Features/AdaptiveBrightness.h"
@@ -988,6 +989,9 @@ struct IDXGISwapChain_Present
 			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleDevBenchBridge::ProcessRendererCommands();
+#endif
 		state->Reset();
 		if (globals::game::isVR)
 			CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);

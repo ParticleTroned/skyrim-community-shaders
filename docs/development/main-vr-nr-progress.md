@@ -1,5 +1,34 @@
 # main-vr-nr progress and continuation record
 
+## October 3 final calibration-producer live result
+
+The [final live record](nr-task9-10-final-live-20261003.md) qualifies producer
+`0eff0e9ceac16` for bounded keep/merge/split execution, cancellation and
+rejection guards, one-shot inspection and capture-independent compact
+admission. The final merged run also has exact native stereo-image joins
+through outer composition. There are 2,700 AI-off profiler frames, 135
+verified histories, 128 native stereo pairs and 408,150 successful native
+evaluations, with no native/stereo/device/quarantine failures.
+
+Task 10's current adapter evaluation concludes negatively: stable compact
+512 costs 5.95044 ms against a 5.10925 ms full-coordinate bracket (+16.46%).
+It reduces logical transport storage by 76.78%, but native allocation bytes
+remain unavailable. Keep the full-coordinate production fallback.
+
+Task 9's code and tested runtime controls are qualified; production profile
+qualification is unsuccessful. No profile was loaded or adopted. Exact
+per-key timing joins, native residency, held-out prediction errors and
+full quality qualification are not supplied by these measurements. Do not
+mark the complete production cost-optimization goal achieved or replace
+the unknown-cost heuristic with guessed coefficients.
+
+AI was disabled for the starting scene and closer stationary comparison,
+then restored for motion checks. The owned free camera and original graphics
+settings were restored; captures were finalized and Skyrim exited cleanly.
+The separate host camera/console semantic fix is local automation dev
+`a2223b5` (450 source and 450 packaged checks). There is no new CSX DLL/AIO,
+installation or marketplace rotation. Task 11's audit is unchanged.
+
 ## October 3 AI-off count sweep and bounded calibration
 
 The [stationary qualification record](nr-task9-10-ai-off-qualification-20261003.md)

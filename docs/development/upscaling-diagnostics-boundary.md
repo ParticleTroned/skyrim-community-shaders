@@ -6,21 +6,22 @@ reporting; `DEVBENCH_BRIDGE=ON` retains the qualification evidence. A DevBench
 AIO still collects that evidence, so this separation is not a performance
 claim for diagnostic builds.
 
-| Surface                   | Production                                                         | DevBench build                                                                           |
-| ------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| Presentation observations | Exact eye, cycle, generation, backend and hold-release proof       | Also counts paths and times lifetime/session stretch episodes                            |
-| Controller snapshots      | Operational state under its existing mutex                         | Also derives diagnostic owners/phases and stretch reporting                              |
-| Transition metrics        | Current request, retry/failure and recovery state                  | Also retains the 50-entry completed/superseded history                                   |
-| Stress capture            | No capture state, mutex, event recording or menu controls          | Existing controls, bounded events, schema and health gates                               |
-| Memory queries            | System commit and DXGI budget/pressure/admission checks            | Also samples private-process memory and retains its peaks                                |
-| Motion sharpening         | Same validation, dispatch, resource ownership and fallback         | Also records the last dispatch status for the menu bridge                                |
-| DLSS dispatch             | Same frame-token/constants coherence and bounded failure reporting | Also collects verbose option/resource descriptions and trace payloads                    |
-| Menu tracing              | Semantic tracking and accepted indexed-draw hooks                  | Diagnostic D3D hook installation is available only here; its forensic switch remains off |
-| Startup environment       | Explicit Developer Mode diagnostics, with text at debug level      | Same startup facility plus bridge status access                                          |
+| Surface                   | Production                                                          | DevBench build                                                                           |
+| ------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Presentation observations | Exact eye, cycle, generation, backend and hold-release proof        | Also counts paths and times lifetime/session stretch episodes                            |
+| Controller snapshots      | Operational state under its existing mutex                          | Also derives diagnostic owners/phases and stretch reporting                              |
+| Transition metrics        | Current request, retry/failure and recovery state                   | Also retains the 50-entry completed/superseded history                                   |
+| Stress capture            | No capture state, mutex, event recording or menu controls           | Existing controls, bounded events, schema and health gates                               |
+| Memory queries            | System commit and DXGI budget/pressure/admission checks             | Also samples private-process memory and retains its peaks                                |
+| Motion sharpening         | Same validation, dispatch, resource ownership and fallback          | Also records the last dispatch status for the menu bridge                                |
+| DLSS dispatch             | Same frame-token/constants coherence and bounded failure reporting  | Also collects verbose option/resource descriptions and trace payloads                    |
+| Menu tracing              | Semantic tracking and accepted indexed-draw hooks                   | Diagnostic D3D hook installation is available only here; its forensic switch remains off |
+| Startup environment       | No structured pipeline capture state or diagnostic controls         | Explicit Developer Mode capture, text at debug level and bridge status access            |
+| Texture lifetime          | No tracking state, sentinels, owner scans or capture implementation | Opt-in bounded lifetime capture and bridge status access                                 |
 
 Useful production debug messages describe transitions and state changes
 from information already required by rendering. Optional structured startup
-diagnostics run only when Developer Mode and their setting are enabled.
+diagnostics require a DevBench build, Developer Mode and their setting.
 They do not collect per-frame samples. Diagnostic status messages must not
 be promoted to info level. Device loss, allocation failure and other real
 failures retain warning/error reporting.
@@ -126,3 +127,49 @@ Twenty focused current-source controller tests passed, including native
 boundary, relatch, stereo and freshness coverage. These are separate
 translation-unit checks and a controller subset, not a new full DLL build
 or physical-HMD performance result.
+
+## Production build boundary, 2026-10-01
+
+`TRACY_SUPPORT=OFF` now consumes only Tracy's disabled-macro headers, without
+linking `Tracy::TracyClient` or inheriting its enable definitions. The PCH
+already suppressed `TRACY_ENABLE` in this configuration; generated project
+definitions alone were not evidence that profiling hooks reached production.
+The dependency boundary now also applies without a PCH.
+
+Texture-lifetime tracking and structured VR pipeline logging are compiled
+only with `DEVBENCH_BRIDGE_ENABLED`, including their state and startup caller.
+Pipeline diagnostic settings and controls use the same gate. The production
+performance menu retains its single-frame OpenVR query; the bulk-history
+query is Tracy-only. Rendering, recovery and presentation policy are unchanged.
+
+Validation on MSVC 19.51.36252.0 and CMake 4.4.1:
+
+-   `pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target CommunityShaders --parallel 2 -- /p:CL_MPCount=2 /p:UseMultiToolTask=true /p:EnforceProcessCountAcrossBuilds=true`
+    passed with universal SE/AE/VR support and both diagnostic options off.
+    The local validation build allowed dirty provenance; it is not a release
+    package. Its Build ID is
+    `fbb18bc9091ed9d9df833fcc87f1f3ba2799abe27f593c1643d5ea245169fd0a`.
+-   The producer manifest matched the DLL's size and SHA-256
+    `a751a530d37228e7fc8c15751dcaba8e3124ada3688b4d0b6da48c811e337d9d`.
+    The production project has no Tracy client linkage or diagnostic enable
+    definitions. Ten selected Tracy/DevBench capture markers are absent from
+    the linked DLL.
+-   `controller_tests` built, and
+    `ctest --test-dir build/ALL -C Release -L ControllerTests --output-on-failure --no-tests=error --parallel 2`
+    passed all 163 tests. The Tracy on/off tests compile and link without a
+    PCH; the off test also compiles both excluded diagnostic sources.
+-   MSVC syntax checks passed for Hooks, State, GpuPass, ProfilingRenderer,
+    VR, Upscaling and both diagnostic sources with `TRACY_SUPPORT`,
+    `TRACY_ENABLE` and `DEVBENCH_BRIDGE_ENABLED` explicitly enabled. The
+    Tracy-enabled non-VR timing-header check also passed.
+-   Changed-line clang-format 22.1.4, the applicable scoped pre-commit hooks,
+    and diff whitespace checks passed. Whole-file C++/CMake reformatting was
+    excluded to preserve unrelated formatting.
+
+A deeper isolated build path failed in the external FidelityFX shader
+generator. The same shader succeeded with a shorter output path; the complete
+DLL build then passed in the existing build directory. Previous DLL outputs
+were backed up. Evidence is under
+`build/validation/production-diagnostics-20261001/` and
+`build/validation/diagnostic-syntax-20261001/`. No game deployment, in-game
+test or performance improvement is claimed.

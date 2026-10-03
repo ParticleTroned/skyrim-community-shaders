@@ -249,6 +249,17 @@ try {
     } -Pattern 'JSON path case mismatch.*Water Effects' -Message 'A case-variant stale path was treated as absent.'
 
     $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
+    $invalidBase.Skylighting | Add-Member -NotePropertyName EnableFastProbeSampling -NotePropertyValue $true
+    Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
+    $invalidPolicy = $baselinePolicyText | ConvertFrom-Json -Depth 100
+    $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash
+    Write-JsonFile -Path $isolatedPolicyPath -Value $invalidPolicy
+    $null = Invoke-ExpectedFailure -GeneratorPath $isolatedGenerator -Arguments @{
+        OutputRoot = $outputRoot; ReportPath = $reportPath
+    } -Pattern 'Stale settings path is present: Skylighting/EnableFastProbeSampling' -Message 'A retired Skylighting sampling toggle was published.'
+    Assert-True ($baselineSnapshot -ceq (Get-PublicationSnapshot -OutputRoot $outputRoot -ReportPath $reportPath)) 'A rejected Skylighting key mutated the published generation.'
+
+    $invalidBase = $baselineBaseText | ConvertFrom-Json -Depth 100
     $invalidBase.'Volumetric Lighting' = 1
     Write-JsonFile -Path $isolatedBasePath -Value $invalidBase
     $invalidPolicy.baseTemplate.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $isolatedBasePath).Hash

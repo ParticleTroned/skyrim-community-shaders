@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cstddef>
 #include <cstring>
 #include <cwctype>
 #include <format>
@@ -121,10 +122,12 @@ namespace CSX::ScreenshotStorage
 			bool a_replaceExisting)
 		{
 			const auto destination = std::filesystem::absolute(a_destination).lexically_normal().native();
-			const auto nameBytes = destination.size() * sizeof(wchar_t);
-			if (nameBytes > MAXDWORD - sizeof(FILE_RENAME_INFO))
+			constexpr auto headerBytes = offsetof(FILE_RENAME_INFO, FileName);
+			if (destination.size() > (MAXDWORD - headerBytes - sizeof(wchar_t)) / sizeof(wchar_t))
 				throw std::runtime_error("committed artifact destination is too long");
-			std::vector<std::byte> storage(sizeof(FILE_RENAME_INFO) + nameBytes);
+			const auto nameBytes = destination.size() * sizeof(wchar_t);
+			// Win32 path conversion requires a terminator beyond the counted name.
+			std::vector<std::byte> storage(std::max<std::size_t>(sizeof(FILE_RENAME_INFO), headerBytes + nameBytes + sizeof(wchar_t)));
 			auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
 			rename->ReplaceIfExists = a_replaceExisting ? TRUE : FALSE;
 			rename->RootDirectory = nullptr;
@@ -146,8 +149,9 @@ namespace CSX::ScreenshotStorage
 
 		HANDLE OpenDirectory(const std::filesystem::path& a_path)
 		{
+			// Attribute-only handles do not enforce the no-delete sharing lease.
 			return CreateFileW(
-				a_path.c_str(), FILE_READ_ATTRIBUTES,
+				a_path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
 				FILE_SHARE_READ | FILE_SHARE_WRITE,
 				nullptr, OPEN_EXISTING,
 				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
@@ -319,13 +323,12 @@ namespace CSX::ScreenshotStorage
 				nullptr, OPEN_EXISTING,
 				FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
 			if (published.Get() == INVALID_HANDLE_VALUE)
-				throw std::runtime_error(std::format(
-					"committed artifact path could not be reopened (Win32 error {})", GetLastError()));
-			if (Identity(ReadIdentity(file.Get(), false)) != identity)
-				throw std::runtime_error("committed artifact producer-handle identity changed during publication");
-			if (Identity(ReadIdentity(published.Get(), false)) != identity)
-				throw std::runtime_error("committed artifact path resolved to a different identity during publication");
-			if (!SamePath(FinalPath(published.Get()), publishedPath))
+				throw std::runtime_error(std::format("committed artifact publication verification open failed with Win32 error {}", GetLastError()));
+			if (Identity(ReadIdentity(file.Get(), false)) != identity ||
+				Identity(ReadIdentity(published.Get(), false)) != identity)
+				throw std::runtime_error("committed artifact file identity changed during publication");
+			const auto verifiedPath = FinalPath(published.Get());
+			if (!SamePath(verifiedPath, publishedPath))
 				throw std::runtime_error("committed artifact path changed during publication");
 			CommittedFile committed(file.Release(), publishedPath);
 			return committed.Describe();

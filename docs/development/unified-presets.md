@@ -11,20 +11,44 @@ The three `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
 Image Based Lighting (IBL) is disabled in all three tiers through the shared
 `Image Based Lighting/EnableIBL=0` policy and generation guard.
 
+Skylighting's `Sample` and `SampleWithShadow` functions always apply
+normal-based probe weighting on SE, AE and VR.
+The fast-sampling toggle is retired following the inconclusive whole-frame
+benefit reported in [Open Shaders PR 706](https://github.com/alandtse/open-shaders/pull/706#issuecomment-5888378723).
+Existing default and user settings may retain `EnableFastProbeSampling`;
+the loader ignores it regardless of value and preserves all supported
+settings. Saving a loaded Skylighting feature replaces its section with the
+current schema, omitting the retired key. Settings for features disabled at
+boot remain preserved until they are enabled and saved. No manual reset or
+settings-contract revision change is required; existing revision-5 unified
+presets remain accepted.
+Generated presets reject the retired key so new packages cannot reintroduce it.
+
 Exterior and interior Volumetric Lighting share godray intensity, opacity,
 saturation, custom colour contribution, and RGB values of `1.0` across all
 tiers. Disabling weather-driven Volumetric Lighting during rain is unchecked.
+
+Sky Sync selects the Vanilla sun path with Use Alternate Sun Path disabled
+in all three tiers.
 
 Adaptive Balance uses the built-in Fantasy preset for global Bloom shaping,
 with the global Bloom strength reduced to `0.50` in every tier.
 Its Interior profile enables advanced controls with Emissive `2.0` and
 Ambient `0.75` in the shared base for all three tiers.
-Exterior Night also enables advanced controls, with Scene Brightness `0.85`,
+Its Dungeon profile enables advanced controls with Omnidirectional Bulbs
+`1.25` and Ambient `0.75` in all three tiers.
+Its Dwelling profile enables advanced controls with Omnidirectional Bulbs
+`1.25`, Ambient `0.75`, and Emissive `1.25` in all three tiers.
+Exterior Night also enables advanced controls, with Scene Brightness `0.90`,
 Directional Light `2.50`, Point Lights and Omnidirectional Bulbs `1.25`,
-Ambient `0.90`, and Emissive `1.50`. Its Sky and Volumetric Lighting gamma
-offsets are `0.45` and `0.30`, respectively.
+Ambient `1.0`, and Emissive `1.50`. Its Sky, Fog, and Volumetric Lighting
+gamma offsets are `0.45`, `0.25`, and `0.30`, respectively.
+Its detailed water controls are enabled with Water Brightness `0.70`,
+Fresnel Minimum `0.25`, and Global Reflection Amount `1.25`.
 Exterior Day enables advanced controls with Directional Light `1.15` and
 Volumetric Lighting gamma offset `0.75`.
+
+True PBR uses PBR Metal Reflection `0.75` in all three tiers.
 
 Hair Specular uses Marschner with glossiness `70`, specular multiplier `1.70`,
 and diffuse multiplier `0.75`. Indirect specular, indirect diffuse, base

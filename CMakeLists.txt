@@ -326,10 +326,8 @@ target_compile_definitions(
         CSX_STREAMLINE_RUNTIME_VERSION_PATCH=${_streamline_runtime_version_patch}
 )
 
-target_compile_definitions(
-    ${PROJECT_NAME}
-    PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
-)
+include(TracySupport)
+csx_configure_tracy(${PROJECT_NAME})
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32)
 endif()
@@ -373,7 +371,6 @@ target_link_libraries(
         unordered_dense::unordered_dense
         efsw::efsw
         xxHash::xxhash
-        Tracy::TracyClient
         Streamline
         d3d12.lib
 		bcrypt.lib
@@ -1724,7 +1721,121 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    add_controller_test(
+        vr_fps_stabilizer_config_test
+        VRFpsStabilizerConfig
+        tests/vr_fps_stabilizer_config_test.cpp
+    )
+    add_controller_test(
+        vr_fps_stabilizer_integration_test
+        VRFpsStabilizerIntegration
+        tests/vr_fps_stabilizer_integration_test.cpp
+    )
+    add_controller_test(
+        vr_fps_stabilizer_profile_editor_test
+        VRFpsStabilizerProfileEditor
+        tests/vr_fps_stabilizer_profile_editor_test.cpp
+    )
+    add_controller_test(
+        vr_fps_stabilizer_api_test
+        VRFpsStabilizerAPI
+        tests/vr_fps_stabilizer_api_test.cpp
+    )
+    set(_stabilizer_api_test_header
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/stabilizer_api_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_stabilizer_api_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_FILE=${_stabilizer_api_test_header}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_stabilizer_api.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            include/VRAPI/CSpluginapi.h
+            tests/extract_stabilizer_api.cmake
+        VERBATIM
+    )
+    target_sources(vr_fps_stabilizer_api_test PRIVATE "${_stabilizer_api_test_header}")
+    target_include_directories(
+        vr_fps_stabilizer_api_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
+    set(_stabilizer_profile_editor_test_header
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/stabilizer_profile_editor_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_stabilizer_profile_editor_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_FILE=${_stabilizer_profile_editor_test_header}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_stabilizer_profile_editor.cmake"
+        DEPENDS
+            src/Features/VR.cpp
+            src/Features/Upscaling.cpp
+            tests/extract_stabilizer_profile_editor.cmake
+        VERBATIM
+    )
+    target_sources(
+        vr_fps_stabilizer_profile_editor_test
+        PRIVATE "${_stabilizer_profile_editor_test_header}"
+    )
+    target_include_directories(
+        vr_fps_stabilizer_profile_editor_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
+    set(_stabilizer_test_header
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/stabilizer_integration_under_test.h"
+    )
+    set(_stabilizer_intent_test_header
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/stabilizer_intent_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_stabilizer_test_header}" "${_stabilizer_intent_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_FILE=${_stabilizer_test_header}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_stabilizer_integration.cmake"
+        DEPENDS
+            src/Features/VR/StabilizerIntegration.cpp
+            src/Features/Upscaling.cpp
+            tests/extract_stabilizer_integration.cmake
+        VERBATIM
+    )
+    target_sources(
+        vr_fps_stabilizer_integration_test
+        PRIVATE "${_stabilizer_test_header}" "${_stabilizer_intent_test_header}"
+    )
+    target_include_directories(
+        vr_fps_stabilizer_integration_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
+
+    function(add_tracy_boundary_test enabled)
+        set(_tracy_boundary_target tracy_boundary_${enabled}_test)
+        add_controller_test(
+            ${_tracy_boundary_target}
+            TracyBuildBoundary_${enabled}
+            tests/tracy_build_boundary_test.cpp
+        )
+        set(TRACY_SUPPORT ${enabled})
+        csx_configure_tracy(${_tracy_boundary_target})
+        target_compile_definitions(
+            ${_tracy_boundary_target}
+            PRIVATE EXPECT_TRACY=$<BOOL:${enabled}>
+        )
+    endfunction()
+    add_tracy_boundary_test(OFF)
+    add_tracy_boundary_test(ON)
+    target_sources(
+        tracy_boundary_OFF_test
+        PRIVATE
+            src/Diagnostics/D3DTextureLifetimeTracker.cpp
+            src/Diagnostics/VRPipelineDiagnostics.cpp
+    )
+
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/game_setting_persistence.cmake")
 
     add_controller_test(
         shadow_batch_submissions_test
@@ -2306,7 +2417,8 @@ if(BUILD_CONTROLLER_TESTS)
         SkylightingSettings
         PROPERTIES
             LABELS "ControllerTests"
-            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
     )
     add_test(
         NAME WaterAppearanceSettings
@@ -3281,6 +3393,13 @@ if(BUILD_CONTROLLER_TESTS)
         ScreenshotManifestSnapshot
         PROPERTIES LABELS "ControllerTests"
     )
+
+    add_executable(screenshot_native_png_test EXCLUDE_FROM_ALL tests/screenshot_native_png_test.cpp)
+    target_compile_features(screenshot_native_png_test PRIVATE cxx_std_23)
+    target_include_directories(screenshot_native_png_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(screenshot_native_png_test PRIVATE Microsoft::DirectXTex ole32 windowscodecs)
+    add_test(NAME ScreenshotNativePng COMMAND screenshot_native_png_test)
+    set_tests_properties(ScreenshotNativePng PROPERTIES LABELS "ControllerTests")
 
     set(_screenshot_capture_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-capture"

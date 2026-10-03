@@ -1,19 +1,21 @@
-#include "Diagnostics/D3DTextureLifetimeTracker.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
 
-#include "RE/N/NiSourceTexture.h"
-#include "REL/Relocation.h"
+#	include "Diagnostics/D3DTextureLifetimeTracker.h"
 
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <cstdint>
-#include <memory>
-#include <mutex>
-#include <new>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
+#	include "RE/N/NiSourceTexture.h"
+#	include "REL/Relocation.h"
+
+#	include <algorithm>
+#	include <array>
+#	include <atomic>
+#	include <cstdint>
+#	include <memory>
+#	include <mutex>
+#	include <new>
+#	include <string>
+#	include <unordered_map>
+#	include <unordered_set>
+#	include <vector>
 
 namespace Diagnostics::D3DTextureLifetimeTracker
 {
@@ -925,3 +927,5 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 		};
 	}
 }
+
+#endif

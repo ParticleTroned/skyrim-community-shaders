@@ -1,12 +1,14 @@
-#include "Diagnostics/VRPipelineDiagnostics.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
 
-#include <Windows.h>
-#include <cstdint>
-#include <filesystem>
-#include <format>
-#include <fstream>
-#include <limits>
-#include <mutex>
+#	include "Diagnostics/VRPipelineDiagnostics.h"
+
+#	include <Windows.h>
+#	include <cstdint>
+#	include <filesystem>
+#	include <format>
+#	include <fstream>
+#	include <limits>
+#	include <mutex>
 
 namespace VRPipelineDiagnostics
 {
@@ -208,3 +210,5 @@ namespace VRPipelineDiagnostics
 		};
 	}
 }
+
+#endif

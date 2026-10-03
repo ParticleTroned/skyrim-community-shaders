@@ -1,4 +1,5 @@
 #include "Api/ServiceFoundation.h"
+#include "service_retry_test.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -19,8 +20,10 @@ namespace
 	json Request(std::string a_action, std::string a_commandId)
 	{
 		return {
-			{ "contractMajor", 1 }, { "action", std::move(a_action) },
-			{ "clientId", "foundation-test" }, { "commandId", std::move(a_commandId) },
+			{ "contractMajor", 1 },
+			{ "action", std::move(a_action) },
+			{ "clientId", "foundation-test" },
+			{ "commandId", std::move(a_commandId) },
 		};
 	}
 }
@@ -32,6 +35,7 @@ int RunTest()
 	limits.maximumEvents = 3;
 	ServiceFoundation service({ "csx.test", 1, 2, 3 }, limits);
 	service.SetServerMetadataProvider([] { return json{ { "testServer", true } }; });
+	CheckRetryableCommands(service, Check);
 
 	const auto invalid = service.Dispatch(json::object(), [](const json&) { return json::object(); });
 	Check(!invalid["ok"].get<bool>(), "missing contract major must be rejected");

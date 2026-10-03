@@ -1480,7 +1480,8 @@ namespace
 				const auto drawCount = std::count_if(snapshot->events.begin(), snapshot->events.end(),
 					[](const EventRecord& a_event) { return a_event.kind == EventKind::kDraw; });
 				Check(drawCount == (gated ? (deferred ? 1 : 2) : (deferred ? 3 : 4)),
-					"draw-only selection retained the wrong eligible execution count");
+					"draw-only selection retained the wrong eligible execution count: gated=" + std::to_string(gated) +
+						" deferred=" + std::to_string(deferred) + " draws=" + std::to_string(drawCount));
 				Check(snapshot->statistics.filtered == (gated ? 4u : (deferred ? 4u : 6u)),
 					"draw-only selection did not report exact filtered geometry/execution counts");
 				Check(snapshot->statistics.droppedEventLimit == 0 && snapshot->statistics.droppedByteLimit == 0 &&

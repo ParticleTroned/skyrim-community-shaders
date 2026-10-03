@@ -2,6 +2,7 @@ if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
     message(FATAL_ERROR "PROJECT_ROOT and OUTPUT_DIRECTORY are required")
 endif()
 file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.cpp" _api)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.h" _api_header)
 file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp" _feature)
 file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.h" _header)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
@@ -27,12 +28,17 @@ file(
 extract_settings_region("${_feature}" "ScreenshotFeature::CaptureEye ParseCaptureEye(" "std::filesystem::path ResolveCapturePath(" _parse)
 extract_settings_region("${_feature}" "json ScreenshotFeature::BuildCaptureDescriptor(" "ScreenshotFeature::ScreenshotFeature()" _descriptor)
 extract_settings_region("${_feature}" "void ScreenshotFeature::LoadSettings(" "void ScreenshotFeature::SaveSettings(" _load)
-extract_settings_region("${_api}" "class CaptureDescriptorError final" "std::string PathUtf8(" _descriptor_error)
+extract_settings_region("${_api}" "class CaptureDescriptorError final" "std::filesystem::path ResolveConfiguredCaptureDirectory(" _capture_error)
 extract_settings_region("${_api}" "std::string SourceName(" "std::string CaptureEyeName(" _source_view)
 extract_settings_region("${_api}" "ScreenshotFeature::CaptureEye CaptureEyeFromName(" "bool IsTerminal(" _eye)
 extract_settings_region("${_api}" "ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(" "ScreenshotApi::json ScreenshotApi::BuildSettings(" _normalize)
 extract_settings_region("${_api}" "ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(" "ScreenshotApi::json ScreenshotApi::BuildCapabilities(" _patch)
+extract_settings_region("${_api}" "ScreenshotApi::json ScreenshotApi::BuildCapabilities(" "ScreenshotApi::json ScreenshotApi::BuildStatus(" _capabilities)
+extract_settings_region("${_api_header}" "static constexpr uint32_t kContractMajor" "json HandleValidatedRequest(" _limits)
+extract_settings_region("${_api}" "const auto requestedSequence = a_request.value(\"sequence\", json::object());" "const uint32_t frameCount = requestedSequence.value(" _admission)
+file(WRITE "${OUTPUT_DIRECTORY}/screenshot_build_limits.h" "${_limits}")
+file(WRITE "${OUTPUT_DIRECTORY}/screenshot_build_admission.h" "${_admission}")
 file(
     WRITE "${OUTPUT_DIRECTORY}/screenshot_settings_under_test.h"
-    "${_descriptor_error}\n${_parse}\n${_source_view}\n${_eye}\n${_descriptor}\n${_load}\n${_normalize}\n${_patch}"
+    "${_capture_error}\n${_parse}\n${_source_view}\n${_eye}\n${_descriptor}\n${_load}\n${_normalize}\n${_patch}\n${_capabilities}"
 )

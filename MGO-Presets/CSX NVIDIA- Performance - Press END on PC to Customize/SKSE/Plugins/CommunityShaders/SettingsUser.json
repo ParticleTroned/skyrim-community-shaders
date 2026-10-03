@@ -649,7 +649,6 @@
         "VRCullDistance": 20480.0
     },
     "Skylighting": {
-        "EnableFastProbeSampling": true,
         "EnableIncrementalProbeUpdates": true,
         "EnableReducedUpdateFrequency": true,
         "EnableSkylighting": false,

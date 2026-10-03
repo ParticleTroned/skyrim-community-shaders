@@ -132,7 +132,8 @@ void LODBlending::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	Enabled = o_json.is_object() ? o_json.value("Enabled", true) : true;
-	EnableWaterReflectionStrength = o_json.is_object() ? o_json.value(kEnableWaterReflectionStrengthConfigKey, false) : false;
+	const bool defaultWaterReflectionStrength = GetDefaultWaterReflectionStrengthEnabled();
+	EnableWaterReflectionStrength = o_json.is_object() ? o_json.value(kEnableWaterReflectionStrengthConfigKey, defaultWaterReflectionStrength) : defaultWaterReflectionStrength;
 	if (!o_json.contains(kWaterReflectionStrengthConfigKey) && o_json.contains(kWaterReflectionStrengthSetting)) {
 		try {
 			settings.WaterReflectionStrength = o_json.at(kWaterReflectionStrengthSetting).get<float>();
@@ -204,5 +205,5 @@ void LODBlending::RestoreDefaultSettings()
 {
 	settings = {};
 	Enabled = true;
-	EnableWaterReflectionStrength = false;
+	EnableWaterReflectionStrength = GetDefaultWaterReflectionStrengthEnabled();
 }

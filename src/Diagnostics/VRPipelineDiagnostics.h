@@ -1,8 +1,10 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
-#include <string>
-#include <string_view>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+
+#	include <nlohmann/json.hpp>
+#	include <string>
+#	include <string_view>
 
 namespace VRPipelineDiagnostics
 {
@@ -22,3 +24,5 @@ namespace VRPipelineDiagnostics
 	bool Emit(const Event& event, bool writeStructured, std::string_view textPayload, bool writeText = true);
 	nlohmann::json GetStatusSnapshot();
 }
+
+#endif

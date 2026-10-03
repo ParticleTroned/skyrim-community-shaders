@@ -31,7 +31,7 @@ public:
 	{
 		uint32_t Enabled = true;
 		float TerrainCullDistance = 1024.0f;
-		float BlendStrength = 0.5f;
+		float BlendStrength = REL::Module::IsVR() ? 0.5f : 1.0f;
 		float pad0 = 0.0f;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);

@@ -59,6 +59,7 @@ bool VR::OverlayRenderContext::IsValid() const
 
 namespace
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	void EmitVRPipelineEnvironmentDiagnosticsOnce(const VR& a_vr)
 	{
 		static std::mutex startupDiagnosticsMutex;
@@ -122,6 +123,7 @@ namespace
 			logger::warn("[VRPIPE v1][CS][ERROR] startup diagnostics failed");
 		}
 	}
+#endif
 
 	bool IsWetternessActiveForDynamicCubemapVisibilityThrottle()
 	{
@@ -743,7 +745,9 @@ void VR::SetupResources()
 		logger::info("OpenVR DLL not available in current process");
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	EmitVRPipelineEnvironmentDiagnosticsOnce(*this);
+#endif
 }
 
 void VR::ClearShaderCache()

@@ -82,7 +82,6 @@ public:
 		bool EnableReducedUpdateFrequency = true;
 		uint OcclusionUpdateInterval = 6;
 		uint ProbeUpdateInterval = 13;
-		bool EnableFastProbeSampling = true;
 		bool IncludeMarkedRoofOccluders = true;
 	} settings;
 
@@ -92,7 +91,7 @@ public:
 		float4 OcclusionSHBasis4Pi;
 
 		float3 PosOffset;  // cell origin in camera model space
-		uint FastSamplingMode;
+		uint PosOffsetPadding;
 		uint ArrayOrigin[3];  // xyz: array origin
 		uint Enabled;
 		int ValidMargin[4];

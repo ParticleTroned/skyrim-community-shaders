@@ -827,7 +827,6 @@
     },
     "Skylighting": {
         "ProbeGridQuality": 2,
-        "EnableFastProbeSampling": true,
         "OcclusionUpdateInterval": 5,
         "MaxZenith": 1.570796251296997,
         "StableSliceCount": 13,

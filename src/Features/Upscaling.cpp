@@ -344,8 +344,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	motionSharpnessCap,
 	fsr4RuntimeEnable,
 	fsr4RuntimeSelectionSchemaVersion,
-	pipelineDiagnostics,
-	pipelineDiagnosticsStructured,
 	foveatedVendorDispatch,
 	foveatedCenterArea,
 	foveatedCenterHorizontalScale,
@@ -5008,8 +5006,10 @@ namespace
 		settings.periphery_taa_outer_scale = ClampPeripheryTAAOuterScaleForCenter(
 			settings.periphery_taa_outer_scale,
 			settings.periphery_taa_center_area);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (settings.pipelineDiagnosticsStructured)
 			settings.pipelineDiagnostics = true;
+#endif
 	}
 
 	void ApplyLegacyFsr4RuntimeSelectionMigration(
@@ -5041,8 +5041,10 @@ namespace
 		settings.renderScaleMode = 0;
 		settings.renderScaleLinkedToUpscaling = false;
 		settings.perfMode = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		settings.pipelineDiagnostics = false;
 		settings.pipelineDiagnosticsStructured = false;
+#endif
 		settings.foveatedVendorDispatch = false;
 		settings.foveatedCenterArea = 0.3f;
 		settings.foveatedCenterHorizontalScale = 1.0f;
@@ -16869,6 +16871,7 @@ void Upscaling::DrawSettings()
 			ImGui::Separator();
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (IsVRRuntimeActive()) {
 			if (ImGui::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics) &&
 				!settings.pipelineDiagnostics) {
@@ -16888,6 +16891,7 @@ void Upscaling::DrawSettings()
 			ImGui::TextUnformatted("Changing these options requires a restart to take effect.");
 			ImGui::Separator();
 		}
+#endif
 
 		// Streamline log level selection
 		const char* logLevels[] = { "Off", "Default", "Verbose" };
@@ -18467,6 +18471,10 @@ void Upscaling::SaveSettings(json& o_json)
 		SanitizeUpscalingSettings(settings);
 		o_json = settings;
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	o_json["pipelineDiagnostics"] = settings.pipelineDiagnostics || settings.pipelineDiagnosticsStructured;
+	o_json["pipelineDiagnosticsStructured"] = settings.pipelineDiagnosticsStructured;
+#endif
 	o_json["qualityModeSchemaVersion"] = 2;
 	if (IsVRRuntimeActive()) {
 		o_json.erase("perfMode");
@@ -18587,6 +18595,10 @@ void Upscaling::LoadSettings(json& o_json)
 	if (MotionSharpening::NormalizeLoadedSettings(o_json))
 		logger::warn("[Upscaling] Malformed optional motion sharpening settings were reset to defaults.");
 	settings = o_json;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	settings.pipelineDiagnostics = o_json.value("pipelineDiagnostics", false);
+	settings.pipelineDiagnosticsStructured = o_json.value("pipelineDiagnosticsStructured", false);
+#endif
 	if (!hasFsr4RuntimeSelectionSchemaVersion)
 		settings.fsr4RuntimeSelectionSchemaVersion = 0;
 	ApplyLegacyFsr4RuntimeSelectionMigration(settings, fidelityFX.GetFsr4AdapterSupport());
@@ -18607,12 +18619,14 @@ void Upscaling::LoadSettings(json& o_json)
 	if (!IsVRRuntimeActive()) {
 		ResetVRSpecificUpscalingSettings(settings);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	if (IsVRRuntimeActive() &&
 		o_json.is_object() &&
 		!o_json.contains("pipelineDiagnostics") &&
 		o_json.value("vrSubmitStageLogDiagnostics", false)) {
 		settings.pipelineDiagnostics = true;
 	}
+#endif
 	if (settings.upscaleMethod > static_cast<uint>(UpscaleMethod::kDLSS)) {
 		logger::warn("[Upscaling] Loaded upscaleMethod {} out of range, clamping to {}", settings.upscaleMethod, static_cast<uint>(UpscaleMethod::kDLSS));
 	}

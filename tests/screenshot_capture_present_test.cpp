@@ -101,6 +101,7 @@ struct ScreenshotFeature
 	bool IsRuntimeEnabled() const { return enabled; }
 	void RestoreReadbackContextProtectionIfIdle() {}
 	void EnsureScreenshotApi() {}
+	void SetBurstDeferral(bool) {}
 	void ShowInGameNotification(std::string_view) {}
 	void ClearActiveCapture(ActiveCapture& capture)
 	{

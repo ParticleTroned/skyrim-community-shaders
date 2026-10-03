@@ -108,7 +108,10 @@ struct ScreenshotFeature
 	std::string GetActiveCaptureRequestId() const { return {}; }
 	unsigned GetOutstandingCaptureJobCount() const { return 0; }
 };
-std::string PathUtf8(const std::filesystem::path& path) { return path.string(); }
+namespace Util
+{
+	std::string PathToUtf8(const std::filesystem::path& path) { return path.string(); }
+}
 constexpr auto kRetention = std::chrono::seconds(1);
 constexpr unsigned kMaximumRequests = 128;
 

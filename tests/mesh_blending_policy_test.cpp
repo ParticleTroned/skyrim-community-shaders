@@ -2,6 +2,7 @@
 #include "Utils/BoundedTextRead.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <sstream>
 #include <string>
@@ -44,12 +45,64 @@ namespace
 		using CSX::MeshBlendingPolicy::CachedClassification;
 		using CSX::MeshBlendingPolicy::CanReuseCacheHit;
 
-		return CanReuseCacheHit(CachedClassification::kRejected, true, false) &&
-		       CanReuseCacheHit(CachedClassification::kAllowedByRule, false, false) &&
-		       !CanReuseCacheHit(CachedClassification::kAllowedByRule, true, true) &&
-		       CanReuseCacheHit(CachedClassification::kAutomatic, false, true) &&
-		       !CanReuseCacheHit(CachedClassification::kAutomatic, false, false) &&
-		       !CanReuseCacheHit(CachedClassification::kAutomatic, true, true);
+		return CanReuseCacheHit(CachedClassification::kRejected, true, false, true) &&
+		       CanReuseCacheHit(CachedClassification::kAllowedByRule, false, false, true) &&
+		       !CanReuseCacheHit(CachedClassification::kAllowedByRule, true, true, true) &&
+		       CanReuseCacheHit(CachedClassification::kAutomatic, false, true, true) &&
+		       !CanReuseCacheHit(CachedClassification::kAutomatic, false, false, true) &&
+		       !CanReuseCacheHit(CachedClassification::kAutomatic, true, true, true);
+	}
+
+	bool TestCurrentRuleIdentity()
+	{
+		using namespace CSX::MeshBlendingPolicy;
+		const std::array<NodePathPart, 4> original{
+			NodePathPart{ "Root", 0u }, { "Branch", 1u }, { "Parent", 2u }, { "Source", 3u }
+		};
+		const RuleIdentity cached{ NormalizePath("Data\\Meshes\\Example.nif", true), BuildCanonicalNodePath(original) };
+		if (cached.nodePath != "root/branch[1]/parent[2]/source[3]")
+			return false;
+		const auto reusable = [&](CachedClassification classification, const RuleIdentity& current) {
+			return CanReuseCacheHit(classification, false, true,
+				!current.nodePath.empty() && cached == current);
+		};
+		if (!reusable(CachedClassification::kAllowedByRule, cached) ||
+			!reusable(CachedClassification::kAutomatic, cached))
+			return false;
+
+		// Mutations preserve the source, immediate-parent and root pointer identities.
+		for (const auto index : { 0u, 1u, 2u, 3u }) {
+			auto renamed = original;
+			renamed[index].name = "Denied";
+			const RuleIdentity current{ cached.model, BuildCanonicalNodePath(renamed) };
+			if (reusable(CachedClassification::kAllowedByRule, current) ||
+				reusable(CachedClassification::kAutomatic, current) ||
+				!reusable(CachedClassification::kRejected, current))
+				return false;
+		}
+		for (const auto index : { 1u, 2u, 3u }) {
+			auto reindexed = original;
+			++reindexed[index].parentIndex;
+			const RuleIdentity current{ cached.model, BuildCanonicalNodePath(reindexed) };
+			if (reusable(CachedClassification::kAllowedByRule, current) ||
+				reusable(CachedClassification::kAutomatic, current))
+				return false;
+		}
+		const std::array<NodePathPart, 5> reparented{
+			original[0], { "NewAncestor", 4u }, original[1], original[2], original[3]
+		};
+		const RuleIdentity currentAncestry{ cached.model, BuildCanonicalNodePath(reparented) };
+		const RuleIdentity currentModel{ "meshes/denied.nif", cached.nodePath };
+		const RuleIdentity unresolved{ cached.model, {} };
+		const RuleIdentity normalized{ NormalizePath("meshes/example.nif", true), cached.nodePath };
+		return !reusable(CachedClassification::kAllowedByRule, currentAncestry) &&
+		       !reusable(CachedClassification::kAutomatic, currentAncestry) &&
+		       !reusable(CachedClassification::kAllowedByRule, currentModel) &&
+		       !reusable(CachedClassification::kAutomatic, currentModel) &&
+		       !reusable(CachedClassification::kAllowedByRule, unresolved) &&
+		       !reusable(CachedClassification::kAutomatic, unresolved) &&
+		       reusable(CachedClassification::kAllowedByRule, normalized) &&
+		       reusable(CachedClassification::kRejected, unresolved);
 	}
 
 	bool TestLandscapeSelectorPolicy()
@@ -159,6 +212,7 @@ namespace
 int main()
 {
 	return TestCacheReusePolicy() &&
+	               TestCurrentRuleIdentity() &&
 	               TestLandscapeSelectorPolicy() &&
 	               TestCanonicalOverridePolicy() &&
 	               TestCanonicalLandscapePolicy() &&

@@ -1,6 +1,9 @@
 #pragma once
 
+#include <array>
+#include <charconv>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -79,6 +82,43 @@ namespace CSX::MeshBlendingPolicy
 		return a_value.find_first_of("*?") != std::string_view::npos;
 	}
 
+	struct RuleIdentity
+	{
+		std::string model;
+		std::string nodePath;
+
+		bool operator==(const RuleIdentity&) const = default;
+	};
+
+	struct NodePathPart
+	{
+		std::string_view name;
+		std::uint32_t parentIndex;
+	};
+
+	/** Canonicalize a verified root-to-geometry chain; the root has no child index. */
+	[[nodiscard]] inline std::string BuildCanonicalNodePath(std::span<const NodePathPart> a_path)
+	{
+		std::string result;
+		result.reserve(a_path.size() * 24u);
+		for (std::size_t index = 0u; index < a_path.size(); ++index) {
+			const auto& part = a_path[index];
+			if (index != 0u)
+				result.push_back('/');
+			result.append(part.name.empty() ? "#" : part.name);
+			if (index != 0u) {
+				result.push_back('[');
+				std::array<char, 16> number{};
+				const auto conversion = std::to_chars(number.data(), number.data() + number.size(), part.parentIndex);
+				if (conversion.ec != std::errc{})
+					return {};
+				result.append(number.data(), conversion.ptr);
+				result.push_back(']');
+			}
+		}
+		return NormalizePath(result, false);
+	}
+
 	enum class CachedClassification : std::uint8_t
 	{
 		kRejected,
@@ -89,11 +129,12 @@ namespace CSX::MeshBlendingPolicy
 	[[nodiscard]] constexpr bool CanReuseCacheHit(
 		CachedClassification a_classification,
 		bool a_rootHasAnimation,
-		bool a_automaticReceiverIsCurrentAndSafe) noexcept
+		bool a_automaticReceiverIsCurrentAndSafe,
+		bool a_ruleIdentityIsCurrent) noexcept
 	{
 		if (a_classification == CachedClassification::kRejected)
 			return true;
-		if (a_rootHasAnimation)
+		if (a_rootHasAnimation || !a_ruleIdentityIsCurrent)
 			return false;
 		return a_classification != CachedClassification::kAutomatic ||
 		       a_automaticReceiverIsCurrentAndSafe;

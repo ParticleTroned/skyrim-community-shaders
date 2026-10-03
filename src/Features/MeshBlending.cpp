@@ -1908,6 +1908,11 @@ void MeshBlending::CompleteOwnershipSignature(const SourceState& a_source, Signa
 	a_signature.model = reinterpret_cast<std::uintptr_t>(a_source.model);
 	a_signature.modelPath = reinterpret_cast<std::uintptr_t>(a_source.modelPath);
 	a_signature.ownerFormID = a_source.owner->GetFormID();
+	if (!compiledAllowList.empty() || !compiledDenyList.empty() ||
+		!compiledExactAllowRules.empty() || !compiledExactDenyRules.empty()) {
+		// Pointers and immediate-parent state do not prove current rule identity.
+		a_signature.ruleIdentity = { BuildModelPath(a_source), BuildNodePath(a_source) };
+	}
 }
 
 bool MeshBlending::TryGetCachedClassification(
@@ -2067,7 +2072,9 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 													a_source, hitTraversalLimit, currentReceiver, cachedReceiver);
 		}
 		if (!CSX::MeshBlendingPolicy::CanReuseCacheHit(
-				classification, a_source.root->HasAnimation(), automaticReceiverIsCurrentAndSafe)) {
+				classification, a_source.root->HasAnimation(), automaticReceiverIsCurrentAndSafe,
+				sourceStateCacheAllowed || (!signature.ruleIdentity.nodePath.empty() &&
+											   cachedSignature.ruleIdentity == signature.ruleIdentity))) {
 			InvalidateCachedClassification(cachedSignature);
 			cacheHit = false;
 		}
@@ -2115,26 +2122,14 @@ std::string MeshBlending::BuildNodePath(const SourceState& a_source) const
 		return {};
 	}
 
-	std::string result;
-	result.reserve(pathLength * 24u);
-	for (std::size_t index = pathLength; index > 0u; --index) {
-		const auto* object = path[index - 1u];
-		if (!result.empty()) {
-			result.push_back('/');
-		}
+	std::array<CSX::MeshBlendingPolicy::NodePathPart, kMaximumRootDepth> parts{};
+	for (std::size_t index = 0u; index < pathLength; ++index) {
+		const auto* object = path[pathLength - index - 1u];
 		const char* name = object->name.c_str();
-		result.append(name && *name ? name : "#");
-		if (object != a_source.root) {
-			result.push_back('[');
-			char number[16]{};
-			const auto conversion = std::to_chars(std::begin(number), std::end(number), object->parentIndex);
-			if (conversion.ec == std::errc{}) {
-				result.append(number, conversion.ptr);
-			}
-			result.push_back(']');
-		}
+		parts[index] = { name ? name : "", object->parentIndex };
 	}
-	return NormalizePath(result, false);
+	return CSX::MeshBlendingPolicy::BuildCanonicalNodePath(
+		std::span<const CSX::MeshBlendingPolicy::NodePathPart>(parts.data(), pathLength));
 }
 
 bool MeshBlending::MatchesRules(

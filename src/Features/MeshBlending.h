@@ -151,6 +151,7 @@ private:
 		std::uint32_t boundRadiusBits = 0u;
 		std::uint32_t policyGeneration = 0u;
 		std::uint16_t alphaFlags = 0u;
+		CSX::MeshBlendingPolicy::RuleIdentity ruleIdentity;
 
 		bool operator==(const Signature&) const = default;
 

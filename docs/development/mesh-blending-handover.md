@@ -861,7 +861,7 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 ### Robustness
 
 - Null pass, geometry, shader property, alpha property, parent, root, user data, or renderer data fails closed. A missing model path can match only an explicit node-only allow rule; Automatic mode fails closed.
-- Cache entries validate current live signatures before reuse.
+- Cache entries validate current live signatures before reuse. With manual rules present, signatures retain the full current canonical model and named/indexed node path. Source or ancestor name, index, and ancestry changes invalidate old policy decisions before reuse; reclassification retains deny-before-allow ordering.
 - Cache size remains bounded during cell traversal and fast travel.
 - Logging is rate limited.
 - No persistent scenegraph ownership is introduced.
@@ -870,9 +870,9 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 
 - No extra full-screen pass in the MVP.
 - No extra geometry pass in the MVP.
-- Rejected and policy-qualified NIF draws avoid traversal after cache warm-up. Positive automatic draws perform a bounded current-root search for the cached receiver identity before validating its live state; a changed receiver triggers normal reclassification.
+- Without manual rules, rejected NIF draws avoid traversal after cache warm-up. Rule-dependent lookup resolves current ownership and the bounded ancestor path; unchanged identity retains classification-cache reuse. Positive automatic draws perform a bounded current-root search for the cached receiver identity before validating its live state; a changed receiver triggers normal reclassification.
 - One depth read plus minimal ALU only for accepted source pixels.
-- No string allocation on cache hits; path strings are built only on bounded cache misses when policy or diagnostics require them.
+- The no-rule cache-hit path builds no policy strings. Rule-dependent lookups rederive full canonical model/node strings and can allocate; current policy authorization never relies on a compact hash alone. The added CPU cost has not been measured.
 - LAND capture is bounded to four quadrants, six identities, and at most eight material-parent checks per identity.
 - LAND draw lookup is a bounded four-way exact probe; active pixels add three unrolled six-layer ALU passes and no texture or depth read.
 - Disabling LAND/LTEX blending removes its per-draw registry lookup and per-pixel remap. One-time bounded stream classification remains resident so live activation does not require a cell reload.

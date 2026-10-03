@@ -247,6 +247,7 @@ namespace CSX::RenderMap
 			if (!WriteTextFileAtomicNoReplace(eventsPath, eventsJsonl, bundle.error))
 				return bundle;
 			const auto& snapshot = a_capture.snapshot;
+			const auto summary = SerializeCaptureSummary(a_capture);
 			const auto serializedEventCount = snapshot.events.size() + (lostEvents == 0 ? 0 : 1);
 			const bool truncated = lostEvents != 0;
 			const bool incomplete = completeness.Incomplete();

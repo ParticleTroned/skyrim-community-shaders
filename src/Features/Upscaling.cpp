@@ -8,6 +8,7 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/VR/StabilizerIntegration.h"
 #include "Features/VolumetricLighting.h"
 #include "FoveatedCommon.h"
 #include "GpuPass.h"
@@ -3521,7 +3522,6 @@ namespace
 
 	using VRFpsStabilizerProfile = Upscaling::VRFpsStabilizerProfile;
 	using VRFpsStabilizerProfiles = Upscaling::VRFpsStabilizerConfig;
-	constexpr uintmax_t kVRFpsStabilizerMaxIniBytes = 4u * 1024u * 1024u;
 	// Only this explicit marker is reversible; ordinary user comments remain untouched.
 	constexpr std::string_view kVRFpsStabilizerDisabledSettingPrefix = "# CS-VR-UI-DISABLED ";
 
@@ -3534,30 +3534,9 @@ namespace
 		bool renderScaleMode = false;
 	};
 
-	std::filesystem::path GetVRFpsStabilizerIniDefaultPath()
-	{
-		return Util::PathHelpers::GetDataPath() / "SKSE" / "Plugins" / "VRFpsStabilizer.ini";
-	}
-
 	std::filesystem::path FindVRFpsStabilizerIniPath()
 	{
-		std::vector<std::filesystem::path> candidatePaths;
-		AddUniquePath(candidatePaths, GetVRFpsStabilizerIniDefaultPath());
-		try {
-			const auto currentDirectory = std::filesystem::current_path();
-			AddUniquePath(candidatePaths, currentDirectory / "Data" / "SKSE" / "Plugins" / "VRFpsStabilizer.ini");
-			AddUniquePath(candidatePaths, currentDirectory / "SKSE" / "Plugins" / "VRFpsStabilizer.ini");
-		} catch (const std::exception& e) {
-			logger::warn("[Upscaling] VR FPS Stabilizer Sync could not inspect current directory: {}", e.what());
-		}
-
-		for (const auto& path : candidatePaths) {
-			std::error_code ec;
-			if (std::filesystem::exists(path, ec) && !ec)
-				return path;
-		}
-
-		return GetVRFpsStabilizerIniDefaultPath();
+		return VRFpsStabilizer::ConfigPath();
 	}
 
 	// Internal quality-mode index -> VRAPI UpscalePreset value.
@@ -3737,53 +3716,7 @@ namespace
 		std::string& outContents,
 		std::string& outError)
 	{
-		outContents.clear();
-		outError.clear();
-
-		std::error_code fileError;
-		const auto fileSize = std::filesystem::file_size(path, fileError);
-		if (fileError) {
-			outError = std::format("Could not inspect {}: {}.", path.string(), fileError.message());
-			return false;
-		}
-		if (fileSize > kVRFpsStabilizerMaxIniBytes) {
-			outError = std::format("Refusing to read {} because it is larger than 4 MiB.", path.string());
-			return false;
-		}
-		outContents.reserve(static_cast<size_t>(fileSize));
-
-		std::ifstream input(path, std::ios::binary);
-		if (!input.is_open()) {
-			outError = std::format("Could not open {} for reading.", path.string());
-			return false;
-		}
-
-		std::array<char, 4096> buffer{};
-		while (input) {
-			input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-			const auto bytesRead = input.gcount();
-			if (bytesRead <= 0)
-				continue;
-			if (outContents.size() > kVRFpsStabilizerMaxIniBytes - static_cast<size_t>(bytesRead)) {
-				outContents.clear();
-				outError = std::format("Refusing to read {} because it grew beyond 4 MiB.", path.string());
-				return false;
-			}
-			outContents.append(buffer.data(), static_cast<size_t>(bytesRead));
-		}
-		if (input.bad()) {
-			outContents.clear();
-			outError = std::format("Could not read {}.", path.string());
-			return false;
-		}
-		if (outContents.starts_with("\xFF\xFE") ||
-			outContents.starts_with("\xFE\xFF") ||
-			outContents.find('\0') != std::string::npos) {
-			outContents.clear();
-			outError = "UTF-16 or binary VRFpsStabilizer.ini files are not supported for safe editing.";
-			return false;
-		}
-		return true;
+		return VRFpsStabilizer::ReadIni(path, outContents, outError);
 	}
 
 	bool TryGetVRFpsStabilizerSetting(
@@ -4309,21 +4242,22 @@ namespace
 			(static_cast<uint64_t>(static_cast<uint32_t>(currentMethod) & 0xFFu) << 33) |
 			(static_cast<uint64_t>(qualityMode & 0xFFu) << 41);
 
-		static std::atomic_uint64_t cachedKey{ 0 };
-		static std::atomic_bool cachedRenderScaleIntent{ false };
-		if (cachedKey.load(std::memory_order_acquire) == cacheKey)
-			return cachedRenderScaleIntent.load(std::memory_order_acquire);
-
-		bool renderScaleIntent = false;
 		const auto& profiles = a_upscaling.GetVRFpsStabilizerSessionConfig();
+		static thread_local uint64_t cachedKey = 0;
+		static thread_local uint64_t cachedRevision = 0;
+		static thread_local bool cachedRenderScaleIntent = false;
+		if (cachedKey == cacheKey && cachedRevision == profiles.revision)
+			return cachedRenderScaleIntent;
+
 		const auto& profile = interior ? profiles.interior : profiles.exterior;
-		renderScaleIntent =
+		const bool renderScaleIntent =
 			profile.hasRenderScaleMode &&
 			profile.renderScaleMode &&
 			ResolveVRFpsStabilizerTransitionTarget(a_upscaling, profile).renderScaleMode;
 
-		cachedRenderScaleIntent.store(renderScaleIntent, std::memory_order_release);
-		cachedKey.store(cacheKey, std::memory_order_release);
+		cachedRenderScaleIntent = renderScaleIntent;
+		cachedRevision = profiles.revision;
+		cachedKey = cacheKey;
 		return renderScaleIntent;
 	}
 
@@ -11676,12 +11610,34 @@ bool Upscaling::LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::
 	return true;
 }
 
-const Upscaling::VRFpsStabilizerConfig& Upscaling::GetVRFpsStabilizerSessionConfig() const
+void Upscaling::InitializeVRFpsStabilizerSessionConfig() const
 {
 	std::call_once(vrFpsStabilizerSessionConfigOnce, [this]() {
 		TryLoadVRFpsStabilizerProfiles(vrFpsStabilizerSessionConfig);
 	});
+}
+
+Upscaling::VRFpsStabilizerConfig Upscaling::GetVRFpsStabilizerSessionConfig() const
+{
+	InitializeVRFpsStabilizerSessionConfig();
+	std::scoped_lock lock(vrFpsStabilizerSessionConfigMutex);
 	return vrFpsStabilizerSessionConfig;
+}
+
+bool Upscaling::RefreshVRFpsStabilizerSessionConfig(std::string& a_error)
+{
+	InitializeVRFpsStabilizerSessionConfig();
+	VRFpsStabilizerConfig refreshed;
+	TryLoadVRFpsStabilizerProfiles(refreshed, &a_error);
+	if (!refreshed.fileReadable) {
+		if (a_error.empty())
+			a_error = "VRFpsStabilizer.ini could not be read.";
+		return false;
+	}
+	std::scoped_lock lock(vrFpsStabilizerSessionConfigMutex);
+	refreshed.revision = vrFpsStabilizerSessionConfig.revision + 1;
+	vrFpsStabilizerSessionConfig = std::move(refreshed);
+	return true;
 }
 
 bool Upscaling::IsVRFpsStabilizerSyncActive() const
@@ -11691,13 +11647,15 @@ bool Upscaling::IsVRFpsStabilizerSyncActive() const
 		IsRenderDocUpscalingBlocked())
 		return false;
 
-	const auto& config = GetVRFpsStabilizerSessionConfig();
+	InitializeVRFpsStabilizerSessionConfig();
+	std::scoped_lock lock(vrFpsStabilizerSessionConfigMutex);
+	const auto& config = vrFpsStabilizerSessionConfig;
 	return config.fileReadable &&
 	       config.upscalingSwitchingEnabled &&
 	       config.HasAnyUpscalingProfile();
 }
 
-bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const
+bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string_view a_originalIni, std::string& a_error) const
 {
 	a_error.clear();
 	if (a_config.path.empty()) {
@@ -11861,41 +11819,8 @@ bool Upscaling::SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config,
 			output << newline;
 	}
 	const std::string outputContents = output.str();
-	if (outputContents.size() > kVRFpsStabilizerMaxIniBytes) {
-		a_error = "The updated VRFpsStabilizer.ini would exceed the 4 MiB safety limit.";
-		return false;
-	}
-
-	auto temporaryPath = a_config.path;
-	temporaryPath += std::format(L".community-shaders.{}.tmp", GetCurrentProcessId());
-	{
-		std::ofstream temporaryFile(temporaryPath, std::ios::binary | std::ios::trunc);
-		if (!temporaryFile.is_open()) {
-			a_error = std::format("Could not open {} for writing.", temporaryPath.string());
-			return false;
-		}
-		temporaryFile.write(outputContents.data(), static_cast<std::streamsize>(outputContents.size()));
-		temporaryFile.close();
-		if (!temporaryFile) {
-			std::error_code ec;
-			std::filesystem::remove(temporaryPath, ec);
-			a_error = std::format("Could not write {}.", temporaryPath.string());
-			return false;
-		}
-	}
-
-	if (!MoveFileExW(
-			temporaryPath.c_str(),
-			a_config.path.c_str(),
-			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-		const auto errorCode = GetLastError();
-		std::error_code ec;
-		std::filesystem::remove(temporaryPath, ec);
-		a_error = std::format("Could not replace {} (Windows error {}).", a_config.path.string(), errorCode);
-		return false;
-	}
-
-	return true;
+	VRFpsStabilizer::IniDocument document{ std::string(a_originalIni), outputContents };
+	return VRFpsStabilizer::Save(VRFpsStabilizer::ConfigFile::Main, document, a_error);
 }
 
 namespace

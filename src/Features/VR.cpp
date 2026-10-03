@@ -20,6 +20,7 @@
 #include "SubsurfaceScattering.h"
 #include "Upscaling.h"
 #include "VR/MenuPositioningPolicy.h"
+#include "VR/StabilizerIntegration.h"
 #include "VRDepthCullingCacheRefreshPolicy.h"
 #include "VRDepthCullingEnablePolicy.h"
 #include "VRDepthCullingSettings.h"
@@ -1114,6 +1115,7 @@ namespace
 	void DrawStereoBlendSettings();
 	void DrawFoveationSettings();
 	void DrawVRFpsStabilizerSettings();
+	bool vrFpsStabilizerProfilesDirty = false;
 	void DrawKeyBindings();
 	void DrawDebugSection();
 	bool pendingFovTabSelection = false;
@@ -1169,7 +1171,30 @@ void VR::DrawSettings()
 
 		if (BeginTabItemWithFont("VR Stabilizer", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRFpsStabilizerFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-				DrawVRFpsStabilizerSettings();
+				static int stabilizerPage = 0;
+				static bool blockedDraftNavigation = false;
+				constexpr std::array pages{ "Profiles", "Performance", "LOD & Grass", "Quality Levels", "Locations", "Commands" };
+				int requestedPage = stabilizerPage;
+				const bool pageHasDraft = stabilizerPage == 0 ? vrFpsStabilizerProfilesDirty :
+				                                                VRFpsStabilizer::HasUnsavedSettings(stabilizerPage == 4 ? VRFpsStabilizer::ConfigFile::Locations : VRFpsStabilizer::ConfigFile::Main);
+				if (!pageHasDraft)
+					blockedDraftNavigation = false;
+				if (ImGui::Combo("Settings page", &requestedPage, pages.data(), static_cast<int>(pages.size()))) {
+					const bool sameMainDraft = stabilizerPage != 0 && stabilizerPage != 4 && requestedPage != 0 && requestedPage != 4;
+					blockedDraftNavigation = pageHasDraft && !sameMainDraft;
+					if (!blockedDraftNavigation)
+						stabilizerPage = requestedPage;
+				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Profiles control CSX by interior/exterior. Performance controls automatic quality. LOD & Grass controls visibility. Levels and Locations edit quality rules. Commands contains advanced event and conditional scripts.");
+				if (blockedDraftNavigation)
+					Util::Text::WrappedWarning("Save or discard this draft before switching to another INI editor.");
+				VRFpsStabilizer::DrawStatus();
+				ImGui::Separator();
+				if (stabilizerPage == 0)
+					DrawVRFpsStabilizerSettings();
+				else
+					VRFpsStabilizer::DrawSettings(pages[stabilizerPage]);
 			}
 			ImGui::EndChild();
 			ImGui::EndTabItem();
@@ -1404,11 +1429,12 @@ namespace
 	{
 		bool initialized = false;
 		bool dirty = false;
-		bool restartRequired = false;
 		bool loadFailed = false;
 		bool messageIsError = false;
 		bool profilesDefinedInIni = false;
 		std::string message;
+		VRFpsStabilizer::IniDocument document;
+		uint64_t revision = 0;
 		Upscaling::VRFpsStabilizerConfig config;
 		Upscaling::VRFpsStabilizerConfig baselineConfig;
 	};
@@ -1448,12 +1474,15 @@ namespace
 	void RefreshVRFpsStabilizerUIStateDirty(VRFpsStabilizerUIState& state)
 	{
 		state.dirty = HasVRFpsStabilizerEditableChanges(state);
+		vrFpsStabilizerProfilesDirty = state.dirty;
 	}
 
 	void LoadVRFpsStabilizerUIState(VRFpsStabilizerUIState& state)
 	{
 		state.message.clear();
-		state.loadFailed = !globals::features::upscaling.LoadVRFpsStabilizerConfig(state.config, state.message);
+		state.loadFailed = !VRFpsStabilizer::Load(VRFpsStabilizer::ConfigFile::Main, state.document, state.message) ||
+		                   !globals::features::upscaling.LoadVRFpsStabilizerConfig(state.config, state.message);
+		state.revision = VRFpsStabilizer::Status().revision;
 		state.messageIsError = state.loadFailed;
 		state.profilesDefinedInIni = !state.loadFailed && HasVRFpsStabilizerProfileRows(state.config);
 		if (!state.profilesDefinedInIni) {
@@ -1752,7 +1781,7 @@ namespace
 	{
 		auto& upscaling = globals::features::upscaling;
 		static VRFpsStabilizerUIState uiState;
-		if (!uiState.initialized)
+		if (!uiState.initialized || (!uiState.dirty && uiState.revision != VRFpsStabilizer::Status().revision))
 			LoadVRFpsStabilizerUIState(uiState);
 
 		if (uiState.dirty) {
@@ -1775,7 +1804,7 @@ namespace
 			ImGui::Spacing();
 			if (uiState.config.upscalingSwitchingEnabled) {
 				Util::Text::WrappedWarning(
-					"No VR FPS Stabilizer Interior/Exterior profile settings are defined in this INI yet. Choose a Method for both profiles and configure the remaining settings, then use Save INI. The new profiles take effect after restarting Skyrim VR.");
+					"No VR FPS Stabilizer Interior/Exterior profile settings are defined in this INI yet. Choose a Method for both profiles and configure the remaining settings, then use Save INI. Save & Apply reloads the profiles when the live interface is available.");
 			} else {
 				Util::Text::WrappedWarning(
 					"No VR FPS Stabilizer Interior/Exterior profile settings are defined in this INI. Switching remains inactive and no profile values are being applied. Enable switching to begin configuring them.");
@@ -1831,17 +1860,17 @@ namespace
 				Util::Colors::GetSuccess(),
 				"VR FPS Stabilizer profile sync: Active for this session.");
 		} else if (!sessionConfig.fileExists) {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not found at startup.");
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not found when profiles were loaded.");
 		} else if (!sessionConfig.fileReadable) {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not readable at startup.");
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not readable when profiles were loaded.");
 		} else if (!sessionConfig.upscalingSwitchingEnabled) {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive because Interior/Exterior switching was off at startup.");
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive because Interior/Exterior switching is off in the loaded profiles.");
 		} else {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; no Interior or Exterior upscaling profile was configured at startup.");
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; no Interior or Exterior upscaling profile is configured in the loaded INI.");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Profile sync activates automatically when the INI contains an active Interior or Exterior upscaling profile.");
-			ImGui::TextUnformatted("The startup state is authoritative for this game session; saved or manual INI changes take effect after restarting Skyrim VR.");
+			ImGui::TextUnformatted("Save & Apply refreshes both Stabilizer and CSX. Older Stabilizer versions require restarting Skyrim VR.");
 		}
 
 		const bool completeConfig = uiState.config.HasCompleteSettings();
@@ -1892,6 +1921,8 @@ namespace
 		ImGui::Spacing();
 		if (ImGui::Button(uiState.dirty ? "Discard & Reload" : "Reload INI"))
 			LoadVRFpsStabilizerUIState(uiState);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Read the saved profiles into the editor, discarding this page's unsaved edits. This does not apply the INI to the game.");
 		ImGui::SameLine();
 		{
 			const bool newProfilesReady =
@@ -1901,26 +1932,32 @@ namespace
 				uiState.profilesDefinedInIni ?
 					(uiState.dirty || configNeedsNormalization) :
 					(uiState.dirty && newProfilesReady);
-			auto disabledGuard = Util::DisableGuard(!saveAvailable);
-			const bool saveRequested = uiState.dirty ? Util::WarningButton("Save INI") : ImGui::Button("Save INI");
+			const auto runtime = VRFpsStabilizer::Status();
+			auto disabledGuard = Util::DisableGuard(!saveAvailable || runtime.pending);
+			const char* saveLabel = runtime.available ? "Save & Apply" : "Save INI";
+			const bool saveRequested = uiState.dirty ? Util::WarningButton(saveLabel) : ImGui::Button(saveLabel);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Save the profiles and transition fade. With the new Stabilizer interface, request an in-game reload and refresh CSX's profile cache. Otherwise a restart is required.");
 			if (saveRequested) {
 				uiState.message.clear();
-				if (upscaling.SaveVRFpsStabilizerConfig(uiState.config, uiState.message)) {
-					uiState.config.MarkSettingsComplete();
-					uiState.profilesDefinedInIni = true;
-					uiState.baselineConfig = uiState.config;
-					RefreshVRFpsStabilizerUIStateDirty(uiState);
-					uiState.restartRequired = true;
-					uiState.messageIsError = false;
-					uiState.message = uiState.config.upscalingSwitchingEnabled ?
-					                      "VR FPS Stabilizer Interior/Exterior switching enabled in VRFpsStabilizer.ini." :
-					                      "VR FPS Stabilizer Interior/Exterior switching disabled in VRFpsStabilizer.ini.";
+				if (upscaling.SaveVRFpsStabilizerConfig(uiState.config, uiState.document.original, uiState.message)) {
+					LoadVRFpsStabilizerUIState(uiState);
 				} else {
 					uiState.loadFailed = false;
 					uiState.messageIsError = true;
 					RefreshVRFpsStabilizerUIStateDirty(uiState);
 				}
 			}
+		}
+
+		ImGui::SameLine();
+		{
+			const auto runtime = VRFpsStabilizer::Status();
+			auto disabledGuard = Util::DisableGuard(uiState.dirty || runtime.pending || !runtime.available);
+			if (ImGui::Button("Apply saved INI"))
+				uiState.messageIsError = !VRFpsStabilizer::RequestReload(VRFpsStabilizer::ConfigFile::Main, uiState.message);
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Reload the main INI in Stabilizer and CSX. Use this after editing the file outside the game; it does not replay startup commands.");
 		}
 
 		if (!uiState.message.empty()) {
@@ -1931,12 +1968,8 @@ namespace
 				ImGui::TextColored(Util::Colors::GetSuccess(), "%s", uiState.message.c_str());
 			}
 		}
-		if (uiState.restartRequired) {
-			ImGui::Spacing();
-			Util::Text::WrappedWarning("Restart Skyrim VR so VR FPS Stabilizer reloads the edited INI.");
-		}
 		Util::Text::WrappedDisabled(
-			"Only the managed Interior/Exterior profile group and the Render Scale transition fade are edited. Other VR FPS Stabilizer settings and conditional profiles are preserved.");
+			"This page saves Interior/Exterior profiles and the transition fade. Use the page selector for performance, LOD, level, location and command settings.");
 	}
 }
 

@@ -1,4 +1,5 @@
 #include "Common/DepthOrder.hlsli"
+#include "VRHybridCulling/ProjectedBounds.hlsli"
 
 struct OBBTransform
 {
@@ -33,6 +34,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 	float2 minimumUV = 3.402823466e+38;
 	float2 maximumUV = -3.402823466e+38;
 	float nearestDepth = DepthOrder::Far();
+	float3 projectedVertices[8];
 	// Camera-relative translation preserves small extents at large world coordinates.
 	precise float4x4 relativeTransform = transform;
 	[unroll] for (uint axis = 0; axis < 3; ++axis)
@@ -50,6 +52,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 		if (!all(isfinite(ndc)))
 			return false;
 		float2 uv = ndc.xy * float2(0.5, -0.5) + 0.5;
+		projectedVertices[vertex] = float3(uv * EyeRect[eye].zw, ndc.z);
 		minimumUV = min(minimumUV, uv);
 		maximumUV = max(maximumUV, uv);
 		nearestDepth = DepthOrder::Nearest(nearestDepth, ndc.z);
@@ -99,7 +102,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 	if (DepthOrder::IsBehindWithBias(nearestDepth, farthestDepth, DepthBias))
 		return true;
 
-	// Finer grids exclude unrelated depth while retaining every guarded base cell.
+	// Every finer grid covers the guarded bounds; faces tighten only inconclusive cells.
 	const uint maximumDepthLoads = 64;
 	uint depthLoads = 4;
 	[loop] while (mip > 0)
@@ -113,19 +116,28 @@ bool IsOccludedInEye(float4x4 transform, uint eye)
 			return false;
 		depthLoads += gridLoads;
 
-		farthestDepth = DepthOrder::Near();
-		[loop] for (uint y = 0; y < gridSize.y; ++y)
+		uint unprovenCells = 0;
+		[loop] for (uint y = 0; y < gridSize.y && unprovenCells == 0; ++y)
 		{
-			[loop] for (uint x = 0; x < gridSize.x; ++x)
+			[loop] for (uint x = 0; x < gridSize.x && unprovenCells == 0; ++x)
 			{
 				uint2 cell = minimumCell + uint2(x, y);
 				float depth = DepthPyramid.Load(int4(cell, eye, mip));
 				if (!isfinite(depth) || depth < 0.0 || depth > 1.0 || (!DepthOrder::Reversed && depth == 0.0))
 					return false;
-				farthestDepth = DepthOrder::Farthest(farthestDepth, depth);
+				[branch] if (!DepthOrder::IsBehindWithBias(nearestDepth, depth, DepthBias))
+				{
+					float cellSize = SourceReduction << mip;
+					// Expand for motion and subpixel clipping roundoff, including shared cell edges.
+					float margin = PixelGuardBand + 1.0 / 32.0;
+					float2 regionMinimum = float2(cell) * cellSize - margin;
+					float2 regionMaximum = (float2(cell) + 1.0) * cellSize + margin;
+					if (!ProjectedBounds::OccludedInRegion(projectedVertices, regionMinimum, regionMaximum, depth, DepthBias))
+						++unprovenCells;
+				}
 			}
 		}
-		if (DepthOrder::IsBehindWithBias(nearestDepth, farthestDepth, DepthBias))
+		if (unprovenCells == 0)
 			return true;
 	}
 	return false;

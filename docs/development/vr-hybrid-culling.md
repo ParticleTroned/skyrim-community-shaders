@@ -9,6 +9,9 @@ See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
 The subsequent [bounded refinement](vr-hybrid-culling-refinement-2026-10-03.md)
 corrects a reproduced loss of rejection from coarse padded cells. Its
 shader regressions pass; its in-game rejection rate and cost are unmeasured.
+The [projected-face refinement](vr-hybrid-culling-faces-2026-10-04.md)
+also tightens coverage and depth within inconclusive finer cells. Final
+performance and motion validation of the new shader remain pending.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -75,8 +78,11 @@ finer rectangles from the original guarded base-cell bounds. The fixed
 64-load budget per eye includes the initial four loads and every finer
 grid. Budget exhaustion and invalid depth retain visibility. Finer grids
 can exclude unrelated padding or clear depth without removing any cell
-covering the guarded rectangle. A box is hidden only when its nearest depth is strictly
-behind the farthest covered depth, including a depth bias, in both eyes.
+covering the guarded rectangle. Within an inconclusive finer cell, all
+projected box faces are clipped against the cell expanded by the pixel
+guard and a rounding margin. Empty regions can be excluded; intersecting
+faces use their clipped nearest depth and an additional interpolation
+bias. Every covered region must prove occlusion in both eyes.
 Visibility in either eye retains the object. Coarse cells, depth within
 the guarded footprint and the finite refinement budget can still reduce
 rejection efficiency; they cannot justify discarding

@@ -10,6 +10,8 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -395,6 +397,180 @@ namespace
 		Require(rejected && retained, "Source-pixel oracle fixture did not exercise both visibility outcomes");
 	}
 
+	void ExcludesEmptyProjectedCorners(Fixture& fixture)
+	{
+		auto diamond = Box();
+		diamond.entry[0][0] = diamond.entry[1][0] = diamond.entry[1][1] = 0.25f;
+		diamond.entry[0][1] = -0.25f;
+		const std::array objects{ diamond };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		for (const auto& eye : fixture.testConstants.eyes)
+			pixels[4 * fixture.sourceWidth + eye.x + 4] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "An empty projected rectangle corner blocked face occlusion");
+		for (const auto& eye : fixture.testConstants.eyes) {
+			for (float invalid : { 0.0f, 1.0f, std::numeric_limits<float>::quiet_NaN() }) {
+				const auto offset = 16 * fixture.sourceWidth + eye.x + 16;
+				pixels[offset] = invalid;
+				fixture.Build(pixels);
+				Require(fixture.Test(objects)[0] == 1, "Face coverage lost a visible or invalid pixel in one eye");
+				pixels[offset] = 0.4f;
+			}
+		}
+	}
+
+	void UsesLocalFaceDepth(Fixture& fixture)
+	{
+		auto sloped = BoxForGuardedPixels(fixture, { 8.25f, 8.25f, 19.75f, 19.75f });
+		sloped.entry[2][0] = 0.25f;
+		sloped.entry[2][3] = 0.65f;
+		const std::array objects{ sloped };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight);
+		for (const auto& eye : fixture.testConstants.eyes)
+			for (UINT y = 0; y < eye.height; ++y)
+				for (UINT x = 0; x < eye.width; ++x)
+					pixels[y * fixture.sourceWidth + eye.x + x] = 0.01f + 0.025f * x;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "One nearest-box depth prevented a valid sloped-face proof");
+		for (const auto& eye : fixture.testConstants.eyes) {
+			const auto offset = 14 * fixture.sourceWidth + eye.x + 17;
+			const float original = pixels[offset];
+			pixels[offset] = 0.9f;
+			fixture.Build(pixels);
+			Require(fixture.Test(objects)[0] == 1, "A locally visible sloped face was hidden in one eye");
+			pixels[offset] = original;
+		}
+	}
+
+	struct RayBoxOracle
+	{
+		double inverse[3][3]{};
+		double translation[3]{};
+
+		explicit RayBoxOracle(const OBBTransform& object)
+		{
+			double augmented[3][6]{};
+			for (UINT row = 0; row < 3; ++row) {
+				translation[row] = object.entry[row][3];
+				for (UINT column = 0; column < 3; ++column)
+					augmented[row][column] = object.entry[row][column];
+				augmented[row][row + 3] = 1.0;
+			}
+			for (UINT column = 0; column < 3; ++column) {
+				UINT pivot = column;
+				for (UINT row = column + 1; row < 3; ++row)
+					if (std::abs(augmented[row][column]) > std::abs(augmented[pivot][column]))
+						pivot = row;
+				Require(std::abs(augmented[pivot][column]) > 1e-12, "Singular oracle box");
+				for (UINT entry = 0; entry < 6; ++entry)
+					std::swap(augmented[pivot][entry], augmented[column][entry]);
+				const auto scale = augmented[column][column];
+				for (auto& entry : augmented[column])
+					entry /= scale;
+				for (UINT row = 0; row < 3; ++row) {
+					if (row == column)
+						continue;
+					const auto factor = augmented[row][column];
+					for (UINT entry = 0; entry < 6; ++entry)
+						augmented[row][entry] -= factor * augmented[column][entry];
+				}
+			}
+			for (UINT row = 0; row < 3; ++row)
+				for (UINT column = 0; column < 3; ++column)
+					inverse[row][column] = augmented[row][column + 3];
+		}
+
+		bool Hit(double ndcX, double ndcY, double perspective, double skew, double& depth) const
+		{
+			const double origin[]{ ndcX - translation[0], ndcY - translation[1], -translation[2] };
+			const double direction[]{ ndcX * perspective - skew, ndcY * perspective, 1.0 };
+			double entry = 0.0, exit = 100.0;
+			for (UINT axis = 0; axis < 3; ++axis) {
+				double o = 0.0, d = 0.0;
+				for (UINT column = 0; column < 3; ++column) {
+					o += inverse[axis][column] * origin[column];
+					d += inverse[axis][column] * direction[column];
+				}
+				if (std::abs(d) < 1e-12) {
+					if (std::abs(o) > 1.0)
+						return false;
+				} else {
+					const double first = (-1.0 - o) / d, second = (1.0 - o) / d;
+					entry = std::max(entry, std::min(first, second));
+					exit = std::min(exit, std::max(first, second));
+				}
+			}
+			depth = entry / (1.0 + perspective * entry);
+			return entry <= exit;
+		}
+	};
+
+	void ChecksFaceProofsAgainstRays(Fixture& fixture)
+	{
+		const auto original = fixture.testConstants;
+		std::vector<OBBTransform> objects;
+		for (UINT index = 0; index < 96; ++index) {
+			const float angle = index * 0.73f, c = std::cos(angle), s = std::sin(angle);
+			const float width = 0.08f + (index % 5) * 0.04f, height = 0.03f + (index % 7) * 0.04f;
+			auto object = Box((index % 8 - 3.5f) * 0.12f, (index / 8 - 5.5f) * 0.06f, 0.65f, 0.02f);
+			object.entry[0][0] = c * width;
+			object.entry[0][1] = -s * height;
+			object.entry[1][0] = s * width;
+			object.entry[1][1] = c * height;
+			object.entry[2][0] = (index % 3 - 1.0f) * 0.16f;
+			object.entry[2][1] = (index % 5 - 2.0f) * 0.04f;
+			objects.push_back(object);
+		}
+		bool rejected = false, retained = false;
+		for (float perspective : { 0.0f, 0.4f }) {
+			for (UINT eye = 0; eye < 2; ++eye) {
+				fixture.testConstants.viewProjection[eye][3][2] = perspective;
+				fixture.testConstants.viewProjection[eye][0][2] = eye == 0 ? -0.04f : 0.04f;
+			}
+			for (UINT pattern = 0; pattern < 4; ++pattern) {
+				std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.2f);
+				for (const auto& eye : fixture.testConstants.eyes)
+					for (UINT y = 0; y < eye.height; ++y)
+						for (UINT x = 0; x < eye.width; ++x) {
+							auto& depth = pixels[y * fixture.sourceWidth + eye.x + x];
+							if (pattern == 1)
+								depth = 0.1f + 0.65f * x / eye.width;
+							else if (pattern == 2 && (x + 3 * y + eye.x) % 23 == 0)
+								depth = 1.0f;
+							else if (pattern == 3 && (2 * x + y + eye.x) % 31 == 0)
+								depth = 0.0f;
+						}
+				fixture.Build(pixels);
+				const auto visibility = fixture.Test(objects);
+				for (std::size_t index = 0; index < objects.size(); ++index) {
+					retained |= visibility[index] != 0;
+					if (visibility[index] != 0)
+						continue;
+					rejected = true;
+					const RayBoxOracle oracle(objects[index]);
+					for (UINT eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
+						const auto& eye = fixture.testConstants.eyes[eyeIndex];
+						for (UINT y = 0; y < eye.height; ++y)
+							for (UINT x = 0; x < eye.width; ++x)
+								for (int dy = -1; dy <= 1; ++dy)
+									for (int dx = -1; dx <= 1; ++dx) {
+										const double nx = 2.0 * (x + 0.5 + dx * original.pixelGuardBand) / eye.width - 1.0;
+										const double ny = 1.0 - 2.0 * (y + 0.5 + dy * original.pixelGuardBand) / eye.height;
+										double objectDepth;
+										if (!oracle.Hit(nx, ny, perspective, fixture.testConstants.viewProjection[eyeIndex][0][2], objectDepth))
+											continue;
+										const float sceneDepth = pixels[y * fixture.sourceWidth + eye.x + x];
+										Require(sceneDepth > 0.0f && objectDepth > sceneDepth,
+											"A rejected face has a visible guarded ray in the independent 3D box oracle");
+									}
+					}
+				}
+			}
+		}
+		Require(rejected && retained, "Ray oracle did not exercise both visibility outcomes");
+		fixture.testConstants = original;
+	}
+
 	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth)
 	{
 		Fixture fixture(device, context, reversedDepth, eyeWidth, eyeHeight);
@@ -498,7 +674,9 @@ namespace
 					const auto offset = y * fixture.sourceWidth + eye * 32 + x;
 					pixels[offset] = 1.0f;
 					fixture.Build(pixels);
-					Require(fixture.Test(objects)[0] == 1, "An overlapping Hi-Z cell was omitted");
+					if (fixture.Test(objects)[0] != 1)
+						throw std::runtime_error("An overlapping Hi-Z cell was omitted: eye=" + std::to_string(eye) +
+												 " x=" + std::to_string(x) + " y=" + std::to_string(y));
 					pixels[offset] = 0.4f;
 				}
 			}
@@ -600,8 +778,11 @@ int main()
 			RefinesThinRectangles(fixture);
 			IncludesCoarseLoadsInPerEyeBudget(device.Get(), context.Get(), reversedDepth);
 			ChecksRefinedProofsAgainstSourcePixels(fixture);
+			ExcludesEmptyProjectedCorners(fixture);
+			UsesLocalFaceDepth(fixture);
+			ChecksFaceProofsAgainstRays(fixture);
 			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
-					  << "): complete mip coverage, bounded refinement, source-pixel oracle, stereo visibility, bounds, bias, perspective and failure fallback\n";
+					  << "): mip coverage, bounded face refinement, source-pixel and 3D ray oracles, stereo, bias, perspective and failure fallback\n";
 		}
 		return 0;
 	} catch (const std::exception& error) {

@@ -1,6 +1,6 @@
 # CSX Astra master implementation plan
 
-Updated 3 October 2026. This is the maintained execution plan for the
+Updated 4 October 2026. This is the maintained execution plan for the
 depth-culling, PBR-grass, grass-optimization and Reverse-Z work. The first
 integration is in progress on a worktree based on current `main-VR`.
 The universal DLL, 11 focused CPU/WARP tests and production diagnostic
@@ -20,12 +20,16 @@ The current user request is to cross-check the two supplied handovers,
 improve the plan and implementation where justified, and deliver separate
 PRs to `ParticleTroned/skyrim-community-shaders` in this order:
 
-1. Hi-Z and other depth-culling work.
+1. Hi-Z culling (PR104); independently usable with the current renderer.
 2. PBR grass.
 3. Grass optimization.
 4. Reverse Z.
 
 Additional focused PRs may separate shared grass Hi-Z and quality controls.
+PR104's title and motivation concern implementing Hi-Z culling only.
+Its description omits package hashes and superseded timing campaigns;
+only the final controlled performance comparison belongs there. Detailed
+provenance and historical evidence remain in the linked records.
 All PRs target `main-VR`. Establish each integration on the current
 integration history, preserve the original Hybrid candidate, and preserve
 unrelated user changes, builds and shader caches.
@@ -185,6 +189,11 @@ pending pre-reset submission can read back after reset. Do not require exact
 submitted/readback cohort conservation across that boundary.
 
 ## PR boundaries and original task mapping
+
+The [projected-face refinement](vr-hybrid-culling-faces-2026-10-04.md)
+addresses both rectangular over-coverage and the whole-box nearest-depth
+limitation. Its bounded shader checks do not replace the pending runtime
+comparison. Grass and renderer depth changes remain later PRs.
 
 PR labels below denote workstreams, not assigned GitHub numbers. Add the
 actual number/link after creation and follow the repository title/branch

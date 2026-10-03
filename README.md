@@ -144,6 +144,7 @@ If you want an example CMakeUserPreset to start off with you can copy the `CMake
 
 -   This option is default `"OFF"`
 -   Enables Tracy instrumentation in the DLL. Reconfigure after changing it.
+-   With this option off, the DLL uses only Tracy's disabled macros and does not link the Tracy client. DevBench capture controls are independently gated by `DEVBENCH_BRIDGE`.
 -   The client is pinned to Tracy `0.14.2-a8db9bd8`, protocol **83**. Capture and viewer tools must use the same protocol.
 -   The `ALL-TRACY` configure preset also selects the `tracy-tools` manifest feature, building the CLI tools and viewer from the same pinned source. Custom presets can select `VCPKG_MANIFEST_FEATURES=tracy-tools` alongside `TRACY_SUPPORT=ON`.
 

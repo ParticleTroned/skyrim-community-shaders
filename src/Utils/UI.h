@@ -66,8 +66,7 @@ namespace Util
 	// Text rendering constants
 	constexpr float DefaultHeaderTextScale = 1.5f;  // Larger scale for header text to improve readability
 
-	// Baseline font size for UI layout scaling (1080p dynamic font: DEFAULT_SCREEN_HEIGHT * DEFAULT_FONT_RATIO).
-	// Theme style values and pixel constants are designed for this size.
+	// Flat automatic font size at 1080p and the reference for common pixel-layout scaling.
 	constexpr float kBaselineFontSize = 21.0f;
 
 	inline float GetUIScaleForBaseline(float baselineFontSize) { return ImGui::GetFontSize() / baselineFontSize; }
@@ -76,8 +75,8 @@ namespace Util
 	/// Use to scale hardcoded pixel sizes so layouts adapt to any font size.
 	inline float GetUIScale() { return GetUIScaleForBaseline(kBaselineFontSize); }
 
-	/// Returns a scale factor for search controls using this branch's established menu baseline.
-	inline float GetSearchUIScale() { return GetUIScale(); }
+	/// Uses the flat 1440p search baseline or the VR layout baseline.
+	float GetSearchUIScale();
 
 	/** Draws a checkbox for an unsigned-integer boolean and normalizes the stored value. */
 	bool UIntCheckbox(const char* a_label, unsigned int& a_value);

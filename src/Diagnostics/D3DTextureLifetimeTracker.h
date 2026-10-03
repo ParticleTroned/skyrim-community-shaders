@@ -1,9 +1,11 @@
 #pragma once
 
-#include <d3d11.h>
-#include <nlohmann/json.hpp>
+#ifdef DEVBENCH_BRIDGE_ENABLED
 
-#include <cstdint>
+#	include <d3d11.h>
+#	include <nlohmann/json.hpp>
+
+#	include <cstdint>
 
 namespace RE
 {
@@ -40,3 +42,5 @@ namespace Diagnostics::D3DTextureLifetimeTracker
 
 	nlohmann::json BuildStatus();
 }
+
+#endif

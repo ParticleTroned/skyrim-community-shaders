@@ -109,6 +109,11 @@ contradict this policy.
 ## Code quality and architecture
 
 -   Prefer complete, focused changes with explicit error handling and graceful degradation.
+-   Compile developer-only tracing and capture machinery out of production:
+    use `TRACY_SUPPORT` for Tracy and `DEVBENCH_BRIDGE_ENABLED` for DevBench
+    diagnostics. Runtime inactivity is not a substitute for build isolation.
+    Preserve user-facing performance controls and timing readouts. Verify
+    compiler output and forced headers, not just project definitions.
 -   Use descriptive domain names rather than unexplained abbreviations. Keep each feature and helper responsible for one coherent technique or policy.
 -   Break functions approaching roughly 200 lines into focused helpers when doing so clarifies state ownership and control flow. Do not split merely to satisfy a number.
 -   Centralize durable constants and UI theme values instead of repeating magic numbers.

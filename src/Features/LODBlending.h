@@ -34,7 +34,7 @@ struct LODBlending : Feature
 
 	Settings settings;
 	bool Enabled = true;
-	bool EnableWaterReflectionStrength = false;
+	bool EnableWaterReflectionStrength = GetDefaultWaterReflectionStrengthEnabled();
 
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
@@ -50,4 +50,7 @@ struct LODBlending : Feature
 
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
+
+private:
+	static bool GetDefaultWaterReflectionStrengthEnabled() { return !REL::Module::IsVR(); }
 };

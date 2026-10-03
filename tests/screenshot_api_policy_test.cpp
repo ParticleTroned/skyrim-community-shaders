@@ -2,12 +2,13 @@
 #include "Features/ScreenshotStorageSecurity.cpp"
 #include "screenshot_storage_security_test.h"
 
+#include <iostream>
 #include <stdexcept>
 
 #pragma comment(lib, "bcrypt.lib")
 
 int main()
-{
+try {
 	RunScreenshotStorageSecurityTests();
 	using namespace CSX::ScreenshotPolicy;
 	if (SelectSettingsCaptureSource("hmd_submission", true) != "hmd_submission" ||
@@ -120,4 +121,7 @@ int main()
 		IsGameFrameScheduleWithinLimit(1, 60, 3601))
 		throw std::runtime_error("game-frame sequence limit is invalid");
 	return 0;
+} catch (const std::exception& error) {
+	std::cerr << error.what() << '\n';
+	return 1;
 }

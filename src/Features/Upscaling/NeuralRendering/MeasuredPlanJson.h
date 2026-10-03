@@ -6,6 +6,70 @@
 
 namespace NeuralRendering::MeasuredPlan
 {
+	/** Match geometry across warm-up; the recorded cost key retains actual reset/rebuild flags. */
+	inline std::string CalibrationKey(nlohmann::json key)
+	{
+		if (!key.is_array() || key.empty() || key.size() > kMaximumRegionEvaluations)
+			throw std::invalid_argument("expected bounded final-plan key");
+		for (auto& region : key) {
+			if (!region.is_object() || !region.contains("mode") || !region["mode"].is_string())
+				throw std::invalid_argument("calibration requires an attributed rendering mode");
+			region.erase("resourceRebuild");
+			region.erase("effectiveReset");
+		}
+		return key.dump();
+	}
+
+	/** Bounded explicit experiment; never supplies costs or relaxes profile qualification. */
+	struct Calibration
+	{
+		static constexpr std::uint32_t kMaximumFrames = 600;
+		static constexpr std::uint64_t kMaximumMilliseconds = 60000;
+		std::string identity, key;
+		std::uint32_t remaining = 0;
+		std::optional<std::uint32_t> lastFrame;
+		std::optional<std::uint64_t> generation;
+		std::uint64_t startedMilliseconds = 0;
+		const char* reason = "inactive";
+
+		[[nodiscard]] Decision Select(std::span<const Candidate> candidates, std::string_view currentIdentity,
+			std::uint32_t frame, std::uint64_t epoch, std::uint64_t milliseconds)
+		{
+			const auto stop = [&](const char* why) {
+				remaining = 0;
+				reason = why;
+				return Decision{ 0, why };
+			};
+			if (!remaining)
+				return { 0, reason };
+			if (milliseconds < startedMilliseconds || milliseconds - startedMilliseconds >= kMaximumMilliseconds)
+				return stop("calibration_expired");
+			if (currentIdentity != identity || (generation && *generation != epoch))
+				return stop("calibration_identity_changed");
+			if (lastFrame && frame <= *lastFrame)
+				return stop("calibration_source_not_unique");
+			lastFrame = frame;
+			generation = epoch;
+			for (std::size_t i = 0; i < candidates.size(); ++i) {
+				const auto& candidate = candidates[i];
+				if (!candidate.coverageValid || candidate.capacityRejected)
+					continue;
+				std::string currentKey;
+				try {
+					currentKey = CalibrationKey(nlohmann::json::parse(candidate.key));
+				} catch (const std::exception&) {
+					return stop("calibration_key_unavailable");
+				}
+				if (currentKey == key) {
+					--remaining;
+					reason = remaining ? "calibration_running" : "calibration_complete";
+					return { i, "calibration_candidate" };
+				}
+			}
+			return stop("calibration_candidate_unavailable");
+		}
+	};
+
 	/** Validate a manually supplied experiment; evidence declarations are not independent proof. */
 	inline Profile ReadProfile(const nlohmann::json& value)
 	{

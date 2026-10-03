@@ -109,6 +109,9 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	const UpscalingDLSS::ViewportCrop& dlssCrop, const std::array<uint32_t, 2>& colorOrigin,
 	const std::array<uint32_t, 2>& guideOrigin) noexcept
 try {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	args.renderingMode = GetNeuralRenderingMode();
+#endif
 	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return;
 	const auto role = NeuralRendering::ClassifyFeatureSlotMask(1u << args.featureSlot);

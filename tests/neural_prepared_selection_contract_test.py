@@ -66,7 +66,8 @@ class PreparedSelectionContract(unittest.TestCase):
         sources = [read(name) for name in (
             "src/Features/Upscaling.cpp",
             "src/Features/Upscaling/NeuralRendering/Renderer.cpp",
-            "src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")]
+            "src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp",
+            "src/Features/Upscaling/NeuralCapture.cpp")]
         # Preprocess the real conditional blocks without unrelated include trees.
         with tempfile.TemporaryDirectory(prefix="csx-nr-search-") as directory:
             unit = Path(directory) / "search.cpp"
@@ -77,7 +78,8 @@ class PreparedSelectionContract(unittest.TestCase):
                      "/DDEVBENCH_BRIDGE_ENABLED" if enabled else "/UDEVBENCH_BRIDGE_ENABLED", str(unit)],
                     capture_output=True, text=True, check=True)
                 for token in ("CaptureMeasuredInput(", "MeasuredPlan::Search(",
-                              "PublishMeasuredOutputPlan(", "measuredPlanInput", "completedOutputSerial"):
+                              "PublishMeasuredOutputPlan(", "measuredPlanInput", "completedOutputSerial",
+                              "measuredCalibration_", "args.renderingMode"):
                     self.assertEqual(token in result.stdout, enabled, token)
         renderer = sources[1]
         apply = renderer[renderer.index("bool Renderer::State::ApplyRegionBatchLocked("):
@@ -85,6 +87,17 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertLess(apply.index("executionCompletion.succeeded = true;"),
                         apply.index("a_logicalOutcome.outputPlans["))
         self.assertIn("ValidateLocked(first, inputResources[eye], false)", renderer)
+
+    def test_runtime_mode_is_independent_of_capture(self):
+        source = read("src/Features/Upscaling/NeuralCapture.cpp")
+        setter = source[source.index("void Upscaling::SetNeuralExecutionContext("):
+                        source.index("Util::PassTimingHandle Upscaling::CaptureNeuralStage(")]
+        self.assertLess(setter.index("args.renderingMode = GetNeuralRenderingMode();"),
+                        setter.index("CaptureEvidenceEnabled()"))
+        renderer = read("src/Features/Upscaling/NeuralRendering/Renderer.cpp")
+        policies = renderer[renderer.index("void Renderer::State::ApplyCompactLayoutLocked("):
+                            renderer.index("std::array<RendererApplyArgs, kEyeCount> Renderer::State::SelectMeasuredPlanLocked(")]
+        self.assertNotIn("executionContext.renderingMode", policies)
 
     def test_baseline_transition_policy_is_unchanged(self):
         shader = read("features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ColorReconstructCS.hlsl")

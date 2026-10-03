@@ -94,5 +94,62 @@ int main()
 	bad = value;
 	bad["observations"][0]["residentBytes"] = -1;
 	CHECK(rejects(bad));
+	const Json calibrationKey = Json::array({ { { "mode", "reduced_resolution" }, { "slot", 2 },
+		{ "callerReset", true }, { "resourceRebuild", true }, { "effectiveReset", true }, { "geometry", "fixture" } } });
+	const auto startCalibration = [&] {
+		Calibration value{ "backend", CalibrationKey(calibrationKey), 2 };
+		value.startedMilliseconds = 100;
+		value.generation = 7;
+		value.lastFrame = 0;
+		return value;
+	};
+	std::array calibrationCandidates{ Candidate{ calibrationKey.dump(), 1, true, false } };
+	auto calibration = startCalibration();
+	CHECK(calibration.Select(calibrationCandidates, "backend", 1, 7, 101).reason == std::string_view("calibration_candidate"));
+	auto warmKey = calibrationKey;
+	warmKey[0]["resourceRebuild"] = false;
+	warmKey[0]["effectiveReset"] = false;
+	calibrationCandidates[0].key = warmKey.dump();
+	CHECK(calibration.Select(calibrationCandidates, "backend", 2, 7, 102).reason == std::string_view("calibration_candidate"));
+	CHECK(calibration.remaining == 0 && calibration.reason == std::string_view("calibration_complete"));
+	CHECK(calibration.Select(calibrationCandidates, "backend", 3, 7, 103).reason == std::string_view("calibration_complete"));
+	for (const auto* field : { "mode", "slot", "callerReset", "geometry" }) {
+		calibration = startCalibration();
+		auto changed = warmKey;
+		changed[0][field] = "changed";
+		calibrationCandidates[0].key = changed.dump();
+		CHECK(calibration.Select(calibrationCandidates, "backend", 1, 7, 101).reason == std::string_view("calibration_candidate_unavailable"));
+		CHECK(calibration.remaining == 0);
+	}
+	calibrationCandidates[0].key = warmKey.dump();
+	calibration = startCalibration();
+	auto otherKey = warmKey;
+	otherKey[0]["geometry"] = "another current partition";
+	std::array alternatives{ Candidate{ otherKey.dump(), 2, true, false }, calibrationCandidates[0] };
+	CHECK(calibration.Select(alternatives, "backend", 1, 7, 101).index == 1);
+	calibration = startCalibration();
+	CHECK(calibration.Select(calibrationCandidates, "changed", 1, 7, 101).reason == std::string_view("calibration_identity_changed"));
+	calibration = startCalibration();
+	CHECK(calibration.Select(calibrationCandidates, "backend", 1, 8, 101).reason == std::string_view("calibration_identity_changed"));
+	calibration = startCalibration();
+	CHECK(calibration.Select(calibrationCandidates, "backend", 0, 7, 101).reason == std::string_view("calibration_source_not_unique"));
+	calibration = startCalibration();
+	(void)calibration.Select(calibrationCandidates, "backend", 1, 7, 101);
+	CHECK(calibration.Select(calibrationCandidates, "backend", 1, 7, 102).reason == std::string_view("calibration_source_not_unique"));
+	calibration = startCalibration();
+	(void)calibration.Select(calibrationCandidates, "backend", 1, 7, 101);
+	CHECK(calibration.Select(calibrationCandidates, "backend", 2, 8, 102).reason == std::string_view("calibration_identity_changed"));
+	calibration = startCalibration();
+	CHECK(calibration.Select(calibrationCandidates, "backend", 1, 7, 60100).reason == std::string_view("calibration_expired"));
+	calibration = startCalibration();
+	calibrationCandidates[0].capacityRejected = true;
+	CHECK(calibration.Select(calibrationCandidates, "backend", 1, 7, 101).reason == std::string_view("calibration_candidate_unavailable"));
+	calibration = startCalibration();
+	calibrationCandidates[0].capacityRejected = false;
+	calibrationCandidates[0].coverageValid = false;
+	CHECK(calibration.Select(calibrationCandidates, "backend", 1, 7, 101).reason == std::string_view("calibration_candidate_unavailable"));
+	calibration = startCalibration();
+	calibrationCandidates[0] = { "[]", 1, true, false };
+	CHECK(calibration.Select(calibrationCandidates, "backend", 1, 7, 101).reason == std::string_view("calibration_key_unavailable"));
 	return 0;
 }

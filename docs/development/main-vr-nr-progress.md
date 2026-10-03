@@ -1,5 +1,36 @@
 # main-vr-nr progress and continuation record
 
+## October 3 AI-off count sweep and bounded calibration
+
+The [stationary qualification record](nr-task9-10-ai-off-qualification-20261003.md)
+preserves 4,800 profiler frames, including 3,900 after verified global AI
+disable with the camera unchanged. Producer `23397d0f9a26` passes unpaused
+cost controls and enumerates 90 current-source joint candidates. Four
+regions per eye reduce evaluated area by 76% but increase NR GPU block
+time from an 8.23750 ms bracket to 19.19985 ms. The retained compact 768
+candidate also loses: 7.39151 ms against 5.14950 ms (+43.54%), despite
+47.76% lower logical transport storage. Reject its production promotion.
+Native allocation bytes remain unavailable; no profile was adopted.
+
+The replacement code removes compact admission's dependency on capture
+metadata, bounds unqualified search to one source per inspection, and adds
+explicit 1..600-frame / 60-second candidate calibration without fabricated
+profiles. Identity, geometry, unique-source, capacity and native-commit
+guards remain mandatory. Production preprocessing excludes these controls.
+Producer `0eff0e9ceac16` passes the universal build, all 228 tests, presets
+and provenance checks. It still needs the focused replacement-DLL live
+check described in the record; this is not claimed as completed testing.
+The verified `NR-Task9Calibration-DevBench-20261003-0eff0e9ceac1` AIO passes
+archive integrity and all 386 extracted payload hashes; it is uninstalled.
+
+Final native evaluations total 417,274 with zero native/stereo/device/
+quarantine failures. Original graphics settings were restored, captures
+were inactive, and Skyrim exited cleanly. The separate CSX menu-read
+controller correction is committed on automation dev as `4cb088f`, with
+322 source and 322 packaged checks passing. No plugin installation ran.
+Task 9's production calibration is unqualified; Task 10's tested candidate
+is rejected. Task 11's existing ownership/packing audit is unchanged.
+
 ## October 3 Task 9 candidate-search code and offline completion
 
 The [candidate-search record](nr-task9-candidate-search-20261003.md) closes

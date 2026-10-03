@@ -230,6 +230,8 @@ namespace NeuralRendering
 		bool synchronizedHistoryReset = false;
 		bool synchronizedHistoryDiscontinuity = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Runtime policy input independent of optional capture evidence. */
+		std::optional<RenderingMode> renderingMode;
 		std::shared_ptr<const MeasuredPlan::SearchInput> measuredPlanInput;
 #endif
 	};

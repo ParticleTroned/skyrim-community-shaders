@@ -658,12 +658,24 @@ namespace NeuralRendering
 		CapacityFallback capacityFallback_{};
 		std::uint32_t requestedRegionCount_ = 0;
 		std::atomic_bool measuredPlanEnabled_{ false };
+		std::atomic_bool measuredPlanContinuous_{ false }, measuredPlanInspectionRequested_{ false };
+		bool measuredPlanEvaluating_ = false;
 		bool forceFullCoordinates_ = false;
 		std::array<CompactInputRetention, Runtime::kFeatureSlotCount> compactRetention_{};
 		ComPtr<ID3D11ComputeShader> copyCompactDepthGuideCS_;
 		std::optional<MeasuredPlan::Profile> measuredPlanProfile_;
 		std::array<MeasuredPlan::State, kLogicalFeatureSlotCount> measuredPlanState_{};
 		nlohmann::json measuredPlanDiagnostics_;
+		MeasuredPlan::Calibration measuredCalibration_;
+		bool measuredCalibrationEvidenceFailed_ = false;
+		nlohmann::json measuredCalibrationRecords_ = nlohmann::json::array();
+		nlohmann::json measuredCalibrationKeys_ = nlohmann::json::array();
+		static std::uint64_t CalibrationMilliseconds()
+		{
+			return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now().time_since_epoch())
+					.count());
+		}
 		std::array<RendererApplyArgs, kEyeCount> SelectMeasuredPlanLocked(std::span<const RendererApplyArgs> args);
 		struct ValidatedResources;
 		void ApplyCompactLayoutLocked(const RendererApplyArgs& args, ValidatedResources& resources) const;
@@ -2212,7 +2224,7 @@ namespace NeuralRendering
 		// All regions of both eyes must use immutable inputs and one commit boundary.
 		if (colorConfiguration_.Enabled() ||
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			measuredPlanEnabled_.load(std::memory_order_relaxed) ||
+			(measuredPlanEnabled_ && (measuredPlanContinuous_ || measuredPlanInspectionRequested_)) ||
 #endif
 			a_args[0].computeRegions.count != 0u || a_args[1].computeRegions.count != 0u)
 			return ApplyBatchLocked(a_args, a_outcome);
@@ -2296,7 +2308,7 @@ namespace NeuralRendering
 	{
 		if (colorConfiguration_.experiments.CompactInputsEnabled() && !forceFullCoordinates_ && !capacityFallback_.rejected &&
 			!colorConfiguration_.Enabled() && args.characterVisualIsolation && args.reset &&
-			args.executionContext.renderingMode == RenderingMode::ReducedResolution && args.featureSlot < slots_.size()) {
+			args.renderingMode == RenderingMode::ReducedResolution && args.featureSlot < slots_.size()) {
 			resources.compactAttempted = true;
 			if (const auto compact = compactRetention_[args.featureSlot].Select(resources.roi, resources.nativeLayout)) {
 				resources.roi = compact->roi;
@@ -2335,7 +2347,7 @@ namespace NeuralRendering
 			const auto& tuning = value.tuning;
 			key.push_back({ { "slot", value.featureSlot }, { "layout", Evidence::NativeLayoutJson(resource.nativeLayout) },
 				{ "compactSource", resource.roi.compactSource ? Evidence::SubrectJson(*resource.roi.compactSource) : Json(nullptr) },
-				{ "mode", value.executionContext.renderingMode ? Json(GetRenderingModeName(*value.executionContext.renderingMode)) : Json(nullptr) },
+				{ "mode", value.renderingMode ? Json(GetRenderingModeName(*value.renderingMode)) : Json(nullptr) },
 				{ "ownership", Evidence::SubrectJson(resource.roi.ownedOutput) }, { "viewport", Evidence::ViewportJson(value.viewportCrop) },
 				{ "insertion", value.insertionPoint }, { "callerReset", value.reset },
 				{ "effectiveReset", value.reset || forced[index] }, { "resourceRebuild", rebuild },
@@ -2362,7 +2374,8 @@ namespace NeuralRendering
 		using Json = nlohmann::json;
 		std::array<RendererApplyArgs, kEyeCount> original{};
 		std::ranges::copy(args, original.begin());
-		measuredPlanDiagnostics_ = { { "reason", "unknown_cost_fallback" }, { "frame", args.front().frameId } };
+		measuredPlanDiagnostics_ = { { "reason", "unknown_cost_fallback" }, { "frame", args.front().frameId },
+			{ "sourceWorldFrame", args.front().sourceWorldFrame }, { "generation", args.front().generation } };
 		ComPtr<IDXGIDevice> dxgi;
 		ComPtr<IDXGIAdapter> adapter;
 		DXGI_ADAPTER_DESC desc{};
@@ -2467,11 +2480,13 @@ namespace NeuralRendering
 				candidates.push_back({ key.dump(), partition, valid, rejected });
 				keys.push_back({ { "key", std::move(key) }, { "valid", valid }, { "capacityRejected", rejected }, { "operations", std::move(operations) } });
 			}
-		const auto selected = MeasuredPlan::Select(candidates, 0, identity.dump(), measuredPlanProfile_ ? &*measuredPlanProfile_ : nullptr,
-			args.front().sourceWorldFrame, measuredPlanState_[args.front().featureSlot]);
+		const auto selected = measuredCalibration_.remaining ?
+		                          measuredCalibration_.Select(candidates, identity.dump(), args.front().sourceWorldFrame, args.front().generation, CalibrationMilliseconds()) :
+		                          MeasuredPlan::Select(candidates, 0, identity.dump(), measuredPlanProfile_ ? &*measuredPlanProfile_ : nullptr,
+									  args.front().sourceWorldFrame, measuredPlanState_[args.front().featureSlot]);
 		measuredPlanDiagnostics_["reason"] = selected.reason;
 		measuredPlanDiagnostics_["selected"] = selected.index;
-		if (measuredPlanProfile_ && measuredPlanProfile_->identity == identity.dump() && selected.index < candidates.size())
+		if (std::string_view(selected.reason) != "calibration_candidate" && measuredPlanProfile_ && measuredPlanProfile_->identity == identity.dump() && selected.index < candidates.size())
 			if (const auto* cost = measuredPlanProfile_->Find(candidates[selected.index].key))
 				measuredPlanDiagnostics_["prediction"] = { { "gpuLowerMs", cost->gpuLowerMs }, { "gpuUpperMs", cost->gpuUpperMs },
 					{ "gpuTailMs", cost->gpuTailMs }, { "cpuCriticalUpperMs", cost->cpuCriticalUpperMs },
@@ -2488,8 +2503,14 @@ namespace NeuralRendering
 		outcome = {};
 		std::array<RendererApplyArgs, kEyeCount> selected;
 		const auto route = args.empty() ? kLogicalFeatureSlotCount : args.front().featureSlot;
-		const bool measured = measuredPlanEnabled_ && !args.empty() && args.size() <= kEyeCount && route < kLogicalFeatureSlotCount;
+		const bool validRoute = !args.empty() && args.size() <= kEyeCount && route < kLogicalFeatureSlotCount;
+		const bool inspect = measuredPlanEnabled_ && validRoute && measuredPlanInspectionRequested_.exchange(false);
+		const bool measured = measuredPlanEnabled_ && validRoute && (measuredPlanContinuous_ || inspect);
+		const auto previousEvaluation = measuredPlanEvaluating_;
+		measuredPlanEvaluating_ = measured;
+		const SKSE::stl::scope_exit restoreEvaluation([&] { measuredPlanEvaluating_ = previousEvaluation; });
 		const auto previousState = measured ? measuredPlanState_[route] : MeasuredPlan::State{};
+		const bool calibrating = measured && measuredCalibration_.remaining != 0;
 		bool usedFallback = false;
 		const SKSE::stl::scope_exit completeSelection([&] {
 			if (!measured)
@@ -2498,6 +2519,47 @@ namespace NeuralRendering
 				measuredPlanState_[route] = {};
 			else if (!outcome.outputPlans[route])
 				measuredPlanState_[route] = previousState;
+			if (calibrating) {
+				try {
+					const bool committed = std::ranges::all_of(args, [&](const auto& value) {
+						return value.featureSlot < outcome.outputPlans.size() && outcome.outputPlans[value.featureSlot].has_value();
+					});
+					const bool selectedCandidate = measuredPlanDiagnostics_.value("reason", "") == "calibration_candidate";
+					nlohmann::json record{ { "frame", args.front().frameId }, { "sourceWorldFrame", args.front().sourceWorldFrame },
+						{ "generation", args.front().generation }, { "reason", measuredPlanDiagnostics_.value("reason", "unavailable") },
+						{ "nativeOutputCommitted", committed }, { "fallback", usedFallback }, { "keyIndex", nullptr } };
+					record["outputDomains"] = nlohmann::json::array();
+					for (const auto& value : args) {
+						if (value.featureSlot >= outcome.outputPlans.size())
+							continue;
+						const auto& output = outcome.outputPlans[value.featureSlot];
+						if (output)
+							for (std::uint32_t i = 0; i < std::max(1u, output->regions.count); ++i)
+								record["outputDomains"].push_back({ { "logicalSlot", value.featureSlot },
+									{ "rect", Evidence::SubrectJson(output->regions.count ? output->regions.regions[i] : output->enclosure) } });
+					}
+					if (selectedCandidate && measuredPlanDiagnostics_.contains("selected")) {
+						const auto& key = measuredPlanDiagnostics_["candidates"].at(measuredPlanDiagnostics_["selected"].get<std::size_t>())["key"];
+						auto found = std::find(measuredCalibrationKeys_.begin(), measuredCalibrationKeys_.end(), key);
+						const auto index = static_cast<std::size_t>(std::distance(measuredCalibrationKeys_.begin(), found));
+						if (found == measuredCalibrationKeys_.end())
+							measuredCalibrationKeys_.push_back(key);
+						record["keyIndex"] = index;
+					}
+					measuredCalibrationRecords_.push_back(std::move(record));
+					if (!selectedCandidate || usedFallback || !committed) {
+						if (measuredCalibration_.remaining || selectedCandidate)
+							measuredCalibration_.reason = "calibration_execution_rejected";
+						measuredCalibration_.remaining = 0;
+					}
+					measuredPlanState_[route] = {};
+				} catch (...) {
+					measuredCalibration_.remaining = 0;
+					measuredCalibration_.reason = "calibration_evidence_failure";
+					measuredCalibrationEvidenceFailed_ = true;
+				}
+				measuredPlanContinuous_ = measuredPlanProfile_.has_value() || measuredCalibration_.remaining != 0;
+			}
 		});
 		if (measured) {
 			selected = SelectMeasuredPlanLocked(args);
@@ -2754,9 +2816,9 @@ namespace NeuralRendering
 				descriptor.requestedRegionCount = requestedRegionCount_;
 				descriptor.capacityFallback = requestedRegionCount_ != descriptor.regionCount;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				if (measuredPlanEnabled_) {
+				if (measuredPlanEvaluating_) {
 					nlohmann::json decision;
-					for (const auto* field : { "frame", "reason", "identity", "selected", "prediction", "search", "executionFallback" })
+					for (const auto* field : { "frame", "sourceWorldFrame", "generation", "reason", "identity", "selected", "prediction", "search", "executionFallback" })
 						if (measuredPlanDiagnostics_.contains(field))
 							decision[field] = measuredPlanDiagnostics_[field];
 					if (measuredPlanDiagnostics_.contains("selected"))
@@ -3417,7 +3479,7 @@ namespace NeuralRendering
 		RefreshInteropTelemetryLocked();
 		executionCompletion.succeeded = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (measuredPlanEnabled_.load(std::memory_order_relaxed))
+		if (measuredPlanEvaluating_)
 			for (const auto& logical : a_logicalArgs)
 				a_logicalOutcome.outputPlans[logical.featureSlot] = CharacterOutputPlan{ logical.computeSubrect, logical.computeRegions };
 		if (lifetime.enabled)
@@ -3659,7 +3721,8 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	bool Renderer::MeasuredPlanSearchEnabled() const noexcept
 	{
-		return state_->measuredPlanEnabled_.load(std::memory_order_relaxed);
+		return state_->measuredPlanEnabled_.load(std::memory_order_relaxed) &&
+		       (state_->measuredPlanContinuous_.load(std::memory_order_relaxed) || state_->measuredPlanInspectionRequested_.load(std::memory_order_relaxed));
 	}
 
 	nlohmann::json Renderer::MeasuredPlanControl(const nlohmann::json& request)
@@ -3668,14 +3731,58 @@ namespace NeuralRendering
 		if (!lock.owns_lock())
 			return { { "ok", false }, { "errorCode", "renderer_busy" }, { "mutationApplied", false } };
 		const auto action = request.at("action").get<std::string>();
+		if (action == "status" && state_->measuredCalibration_.remaining && State::CalibrationMilliseconds() - state_->measuredCalibration_.startedMilliseconds >= MeasuredPlan::Calibration::kMaximumMilliseconds) {
+			state_->measuredCalibration_.remaining = 0;
+			state_->measuredCalibration_.reason = "calibration_expired";
+		}
+		state_->measuredPlanContinuous_ = state_->measuredPlanProfile_.has_value() || state_->measuredCalibration_.remaining != 0;
 		if (action == "configure") {
 			if (!request.at("enabled").is_boolean())
 				throw std::invalid_argument("enabled must be boolean");
 			state_->measuredPlanEnabled_ = request.at("enabled").get<bool>();
 			state_->measuredPlanState_ = {};
+			state_->measuredCalibration_.remaining = 0;
+			state_->measuredCalibration_.reason = "calibration_cancelled";
+			state_->measuredPlanInspectionRequested_ = state_->measuredPlanEnabled_.load();
+		} else if (action == "calibration_start") {
+			try {
+				const auto& count = request.at("frameCount");
+				if (!count.is_number_unsigned() || count.get<std::uint64_t>() < 1 || count.get<std::uint64_t>() > MeasuredPlan::Calibration::kMaximumFrames)
+					throw std::invalid_argument("frameCount must be 1..600");
+				if (!state_->measuredPlanEnabled_ || state_->measuredPlanProfile_ || state_->measuredCalibration_.remaining)
+					throw std::invalid_argument("enable search without a profile or active calibration before starting");
+				const auto& diagnostics = state_->measuredPlanDiagnostics_;
+				if (!request.at("identity").is_object() || request.at("identity") != diagnostics.at("identity"))
+					throw std::invalid_argument("calibration identity does not match the observed backend");
+				const auto key = MeasuredPlan::CalibrationKey(request.at("key"));
+				bool found = false;
+				for (const auto& candidate : diagnostics.at("candidates"))
+					found |= candidate.at("valid").get<bool>() && !candidate.at("capacityRejected").get<bool>() &&
+					         MeasuredPlan::CalibrationKey(candidate.at("key")) == key;
+				if (!found)
+					throw std::invalid_argument("calibration key is not a current admissible candidate");
+				MeasuredPlan::Calibration calibration{ request.at("identity").dump(), key, count.get<std::uint32_t>() };
+				calibration.generation = diagnostics.at("generation").get<std::uint64_t>();
+				calibration.lastFrame = diagnostics.at("sourceWorldFrame").get<std::uint32_t>();
+				calibration.startedMilliseconds = State::CalibrationMilliseconds();
+				calibration.reason = "calibration_armed";
+				state_->measuredCalibration_ = std::move(calibration);
+				state_->measuredCalibrationRecords_.clear();
+				state_->measuredCalibrationKeys_.clear();
+				state_->measuredCalibrationEvidenceFailed_ = false;
+				state_->measuredPlanState_ = {};
+			} catch (const std::exception& error) {
+				return { { "ok", false }, { "errorCode", "measured_calibration_rejected" }, { "error", error.what() }, { "mutationApplied", false } };
+			}
+		} else if (action == "calibration_cancel") {
+			state_->measuredCalibration_.remaining = 0;
+			state_->measuredCalibration_.reason = "calibration_cancelled";
+			state_->measuredPlanState_ = {};
 		} else if (action == "load_profile") {
 			std::optional<MeasuredPlan::Profile> profile;
 			try {
+				if (state_->measuredCalibration_.remaining)
+					throw std::invalid_argument("cancel the active calibration before loading a profile");
 				profile = MeasuredPlan::ReadProfile(request.at("profile"));
 				if (!state_->measuredPlanDiagnostics_.contains("identity") || profile->identity != state_->measuredPlanDiagnostics_["identity"].dump())
 					throw std::invalid_argument("profile identity does not match the current observed backend");
@@ -3689,8 +3796,15 @@ namespace NeuralRendering
 			state_->measuredPlanState_ = {};
 		} else if (action != "status")
 			throw std::invalid_argument("unknown measured-plan action");
+		if (action == "status" && state_->measuredPlanEnabled_)
+			state_->measuredPlanInspectionRequested_ = true;
+		state_->measuredPlanContinuous_ = state_->measuredPlanProfile_.has_value() || state_->measuredCalibration_.remaining != 0;
 		return { { "ok", true }, { "action", action }, { "enabled", state_->measuredPlanEnabled_.load(std::memory_order_relaxed) },
+			{ "inspectionPending", state_->measuredPlanInspectionRequested_.load() },
 			{ "profileLoaded", state_->measuredPlanProfile_.has_value() }, { "productionProfileAdopted", false },
+			{ "calibration", { { "remainingFrames", state_->measuredCalibration_.remaining }, { "reason", state_->measuredCalibration_.reason },
+								 { "evidenceComplete", !state_->measuredCalibrationEvidenceFailed_ }, { "keys", state_->measuredCalibrationKeys_ },
+								 { "records", state_->measuredCalibrationRecords_ } } },
 			{ "diagnostics", state_->measuredPlanDiagnostics_ } };
 	}
 #endif

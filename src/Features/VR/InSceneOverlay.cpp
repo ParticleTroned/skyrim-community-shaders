@@ -9,6 +9,9 @@
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/Runtime.h"
+#endif
 #include "State.h"
 #include "Util.h"
 #include "Utils/VRUtils.h"
@@ -36,6 +39,38 @@ using AttachMode = VR::Settings::OverlayAttachMode;
 
 namespace
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::RenderMap::ResourceObservationInput DescribeSubmittedTexture(
+		ID3D11Texture2D* a_texture)
+	{
+		CSX::RenderMap::ResourceObservationInput result;
+		if (!a_texture)
+			return result;
+		D3D11_TEXTURE2D_DESC desc{};
+		a_texture->GetDesc(&desc);
+		result.d3dObject = reinterpret_cast<std::uintptr_t>(a_texture);
+		result.dimension = CSX::RenderMap::ResourceDimension::kTexture2D;
+		result.widthOrBytes = desc.Width;
+		result.height = desc.Height;
+		result.depthOrArraySize = desc.ArraySize;
+		result.mipLevels = desc.MipLevels;
+		result.format = desc.Format;
+		result.sampleCount = desc.SampleDesc.Count;
+		result.sampleQuality = desc.SampleDesc.Quality;
+		result.usage = desc.Usage;
+		result.bindFlags = desc.BindFlags;
+		result.cpuAccessFlags = desc.CPUAccessFlags;
+		result.miscFlags = desc.MiscFlags;
+		return result;
+	}
+
+	CSX::RenderMap::Eye RenderMapEye(vr::EVREye a_eye) noexcept
+	{
+		return a_eye == vr::Eye_Left ? CSX::RenderMap::Eye::kLeft : CSX::RenderMap::Eye::kRight;
+	}
+
+#endif
+
 	// Publish the cycle token and its promotion-sensitive cooldown policy as one
 	// atomic snapshot. Bit zero is the cycle-start cooldown; the remaining bits
 	// are the OpenVR Submit-cycle token.
@@ -1024,6 +1059,26 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 							screenshotColorSpace);
 					}
 				}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (result == vr::VRCompositorError_None &&
+					submitPacketCurrentAfterSubmit &&
+					isSubmitPacketCurrent() &&
+					submitPacket.directX &&
+					submitPacket.GetColorTexture()) {
+					const vr::VRTextureBounds_t fullBounds{ 0.0f, 0.0f, 1.0f, 1.0f };
+					const auto& bounds = retainedBounds ? *retainedBounds : fullBounds;
+					CSX::RenderMap::GetRuntime().RecordEyeSubmission(
+						DescribeSubmittedTexture(submitPacket.GetColorTexture()),
+						RenderMapEye(submitPacket.eye),
+						submitPacket.eye == vr::Eye_Left ? 1u : 2u,
+						bounds.uMin,
+						bounds.vMin,
+						bounds.uMax,
+						bounds.vMax,
+						static_cast<std::uint32_t>(submitPacket.flags),
+						compositorCycleToken);
+				}
+#endif
 				uint64_t completionScopeEpoch =
 					postLoadSubmitScopeEpoch;
 				if (a_allowPostLoadScopeRebase &&

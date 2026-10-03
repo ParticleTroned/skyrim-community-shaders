@@ -12,6 +12,11 @@
 #include "Globals.h"
 #include "GpuPass.h"
 #include "Menu.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/D3DContextHooks.h"
+#	include "RenderMap/Runtime.h"
+#	include "Utils/D3DPrivateDataLifetime.h"
+#endif
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -39,9 +44,17 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <bit>
+#	include <bcrypt.h>
+#endif
 #include <cstring>
 #include <d3d11_1.h>
 #include <intrin.h>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <limits>
+#	include <vector>
+#endif
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -49,7 +62,347 @@
 #include <string_view>
 #include <winrt/base.h>
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+namespace
+{
+	void AppendMaterialTextureBinding(
+		CSX::RenderMap::MaterialStateObservationInput& a_material,
+		CSX::RenderMap::MaterialTextureRole a_role,
+		std::uint32_t a_bindingIndex,
+		RE::NiSourceTexture* a_texture) noexcept
+	{
+		if (!a_texture)
+			return;
+		if (a_material.textureBindingCount >= CSX::RenderMap::kMaximumMaterialTextureBindings) {
+			a_material.textureBindingsTruncated = true;
+			return;
+		}
+		auto& binding = a_material.textureBindings[a_material.textureBindingCount++];
+		binding.role = a_role;
+		binding.bindingIndex = a_bindingIndex;
+		binding.niSourceTexture = reinterpret_cast<std::uintptr_t>(a_texture);
+		if (a_texture->name.c_str())
+			binding.path = a_texture->name.c_str();
+		if (a_texture->rendererTexture && a_texture->rendererTexture->texture) {
+			binding.resource = CSX::RenderMap::DescribeResource(a_texture->rendererTexture->texture);
+		}
+	}
+
+	void PopulateMaterialTextureBindings(
+		RE::BSShaderMaterial* a_material,
+		CSX::RenderMap::MaterialStateObservationInput& a_observation) noexcept
+	{
+		if (!a_material)
+			return;
+		switch (a_material->GetType()) {
+		case RE::BSShaderMaterial::Type::kLighting:
+			{
+				auto* lighting = static_cast<RE::BSLightingShaderMaterialBase*>(a_material);
+				std::array<RE::NiSourceTexture*, 64> textures{};
+				const auto textureCount = lighting->GetTextures(textures.data());
+				const auto retainedCount = std::min<std::size_t>(textureCount, textures.size());
+				for (std::size_t index = 0; index < retainedCount; ++index) {
+					AppendMaterialTextureBinding(
+						a_observation,
+						CSX::RenderMap::MaterialTextureRole::kRuntimeMaterialList,
+						static_cast<std::uint32_t>(index),
+						textures[index]);
+				}
+				if (textureCount > textures.size())
+					a_observation.textureBindingsTruncated = true;
+				break;
+			}
+		case RE::BSShaderMaterial::Type::kEffect:
+			{
+				auto* effect = static_cast<RE::BSEffectShaderMaterial*>(a_material);
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kEffectSource, 0, effect->sourceTexture.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kEffectGreyscale, 1, effect->greyscaleTexture.get());
+				break;
+			}
+		case RE::BSShaderMaterial::Type::kWater:
+			{
+				auto* water = static_cast<RE::BSWaterShaderMaterial*>(a_material);
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterStaticReflection, 0, water->staticReflectionTexture.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal1, 1, water->normalTexture1.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal2, 2, water->normalTexture2.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal3, 3, water->normalTexture3.get());
+				AppendMaterialTextureBinding(a_observation, CSX::RenderMap::MaterialTextureRole::kWaterNormal4, 4, water->normalTexture4.get());
+				break;
+			}
+		default:
+			break;
+		}
+	}
+
+	CSX::RenderMap::GeometryBoundary BuildRenderMapGeometryBoundary(
+		RE::BSShader* a_shader,
+		RE::BSRenderPass* a_pass,
+		std::uint32_t a_renderFlags,
+		RE::BSShader::Type a_shaderType) noexcept
+	{
+		CSX::RenderMap::GeometryBoundary boundary{
+			.shader = reinterpret_cast<std::uintptr_t>(a_shader),
+			.renderPass = reinterpret_cast<std::uintptr_t>(a_pass),
+			.geometry = reinterpret_cast<std::uintptr_t>(a_pass ? a_pass->geometry : nullptr),
+			.shaderType = static_cast<std::uint32_t>(a_shaderType),
+			.passEnum = a_pass ? a_pass->passEnum : 0,
+			.renderFlags = a_renderFlags,
+		};
+		if (!a_pass || !a_pass->geometry)
+			return boundary;
+
+		auto* geometry = a_pass->geometry;
+		if (auto* reference = geometry->GetUserData()) {
+			boundary.sceneObject.reference = reinterpret_cast<std::uintptr_t>(reference);
+			boundary.sceneObject.referenceFormId = reference->GetFormID();
+			boundary.sceneObject.referenceFormDynamic = reference->IsDynamicForm();
+			if (const auto* name = reference->GetName())
+				boundary.sceneObject.referenceName = name;
+			if (auto* base = reference->GetBaseObject()) {
+				boundary.sceneObject.baseFormId = base->GetFormID();
+				boundary.sceneObject.baseFormDynamic = base->IsDynamicForm();
+				if (const auto* name = base->GetName())
+					boundary.sceneObject.baseFormName = name;
+			}
+		}
+
+		auto& geometryObservation = boundary.geometryObservation;
+		geometryObservation.geometry = reinterpret_cast<std::uintptr_t>(geometry);
+		if (const auto* rtti = geometry->GetRTTI(); rtti && rtti->GetName())
+			geometryObservation.runtimeTypeName = rtti->GetName();
+		if (geometry->name.c_str())
+			geometryObservation.name = geometry->name.c_str();
+		geometryObservation.geometryType = geometry->GetType().underlying();
+		const auto& runtimeData = geometry->GetGeometryRuntimeData();
+		geometryObservation.vertexDescriptor = std::bit_cast<std::uint64_t>(runtimeData.vertexDesc);
+		std::size_t transformIndex = 0;
+		for (const auto& row : geometry->world.rotate.entry) {
+			for (const auto value : row)
+				geometryObservation.worldTransform[transformIndex++] = value;
+		}
+		geometryObservation.worldTransform[9] = geometry->world.translate.x;
+		geometryObservation.worldTransform[10] = geometry->world.translate.y;
+		geometryObservation.worldTransform[11] = geometry->world.translate.z;
+		geometryObservation.worldTransform[12] = geometry->world.scale;
+		geometryObservation.worldTransformAvailable = true;
+		geometryObservation.worldBound = {
+			geometry->worldBound.center.x,
+			geometry->worldBound.center.y,
+			geometry->worldBound.center.z,
+			geometry->worldBound.radius,
+		};
+		geometryObservation.worldBoundAvailable = true;
+
+		if (auto* property = runtimeData.shaderProperty.get()) {
+			auto& materialState = boundary.materialState;
+			materialState.shaderProperty = reinterpret_cast<std::uintptr_t>(property);
+			materialState.shaderPropertyAvailable = true;
+			if (const auto* rtti = property->GetRTTI(); rtti && rtti->GetName())
+				materialState.shaderPropertyRuntimeTypeName = rtti->GetName();
+			materialState.shaderPropertyFlags = property->flags.underlying();
+			materialState.alpha = property->alpha;
+			materialState.engineMaterialType = static_cast<std::uint32_t>(property->GetMaterialType());
+			if (auto* material = property->GetBaseMaterial()) {
+				materialState.material = reinterpret_cast<std::uintptr_t>(material);
+				materialState.materialAvailable = true;
+				materialState.materialType = static_cast<std::uint32_t>(material->GetType());
+				materialState.feature = static_cast<std::uint32_t>(material->GetFeature());
+				materialState.hashKey = material->hashKey;
+				PopulateMaterialTextureBindings(material, materialState);
+			}
+		}
+		return boundary;
+	}
+
+	struct ShaderBytecodeRecord
+	{
+		std::vector<std::uint8_t> bytes;
+		std::uint64_t bytecodeSize{ 0 };
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1> sha256{};
+		bool hashAvailable{ false };
+	};
+
+	struct ShaderBytecodeStore
+	{
+		std::unordered_map<void*, ShaderBytecodeRecord> records;
+		std::shared_mutex mutex;
+		size_t retainedDumpBytes{ 0 };
+		bool warnedAboutRetention{ false };
+	};
+
+	std::shared_ptr<ShaderBytecodeStore> GetShaderBytecodeStore()
+	{
+		static auto store = std::make_shared<ShaderBytecodeStore>();
+		return store;
+	}
+
+	constexpr size_t kMaximumRetainedShaderDumpBytes = 64 * 1024 * 1024;
+	constexpr GUID kShaderMetadataLifetimeGuid{
+		0xd075a19e, 0x62e8, 0x4a50, { 0xab, 0x91, 0x34, 0xda, 0xf2, 0x65, 0x80, 0x11 }
+	};
+
+	std::string_view BoundedShaderString(const char* a_value) noexcept
+	{
+		if (!a_value)
+			return {};
+		std::size_t length = 0;
+		while (length < 1024 && a_value[length] != '\0')
+			++length;
+		return { a_value, length };
+	}
+
+	std::string_view EffectiveShaderCompileSourceName(const RE::BSShader* a_shader) noexcept
+	{
+		if (!a_shader)
+			return {};
+		if (a_shader->shaderType.get() == RE::BSShader::Type::ImageSpace) {
+			return BoundedShaderString(
+				static_cast<const RE::BSImagespaceShader*>(a_shader)->originalShaderName);
+		}
+		return BoundedShaderString(a_shader->fxpFilename);
+	}
+
+	bool ComputeSha256Hex(
+		const void* a_data,
+		size_t a_size,
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1>& a_result)
+	{
+		if (!a_data || a_size > static_cast<size_t>(std::numeric_limits<ULONG>::max()))
+			return false;
+		struct AlgorithmProvider
+		{
+			AlgorithmProvider() noexcept
+			{
+				if (BCryptOpenAlgorithmProvider(&handle, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+					handle = nullptr;
+			}
+			~AlgorithmProvider()
+			{
+				if (handle)
+					BCryptCloseAlgorithmProvider(handle, 0);
+			}
+			BCRYPT_ALG_HANDLE handle{ nullptr };
+		};
+		static AlgorithmProvider provider;
+		if (!provider.handle)
+			return false;
+
+		DWORD objectBytes = 0;
+		DWORD copiedBytes = 0;
+		if (BCryptGetProperty(
+				provider.handle, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes),
+				sizeof(objectBytes), &copiedBytes, 0) < 0) {
+			return false;
+		}
+		std::vector<UCHAR> hashObject(objectBytes);
+		BCRYPT_HASH_HANDLE hash = nullptr;
+		if (BCryptCreateHash(
+				provider.handle, &hash, hashObject.data(), static_cast<ULONG>(hashObject.size()),
+				nullptr, 0, 0) < 0) {
+			return false;
+		}
+		std::array<UCHAR, 32> digest{};
+		const auto hashStatus = BCryptHashData(
+			hash, reinterpret_cast<PUCHAR>(const_cast<void*>(a_data)), static_cast<ULONG>(a_size), 0);
+		const auto finishStatus = hashStatus < 0 ? hashStatus :
+		                                           BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+		BCryptDestroyHash(hash);
+		if (finishStatus < 0) {
+			return false;
+		}
+		constexpr char hex[] = "0123456789abcdef";
+		for (size_t index = 0; index < digest.size(); ++index) {
+			a_result[index * 2] = hex[digest[index] >> 4u];
+			a_result[index * 2 + 1] = hex[digest[index] & 0x0Fu];
+		}
+		a_result.back() = '\0';
+		return true;
+	}
+
+	struct BoundStageSelection
+	{
+		std::uintptr_t wrapper{ 0 };
+		std::uintptr_t d3dObject{ 0 };
+		std::uint32_t wrapperDescriptor{ 0 };
+		CSX::RenderMap::ShaderSelectionRoute route{ CSX::RenderMap::ShaderSelectionRoute::kUnknown };
+	};
+
+	struct TechniqueSelectionContext
+	{
+		BoundStageSelection vertex;
+		BoundStageSelection pixel;
+	};
+
+	thread_local TechniqueSelectionContext* g_techniqueSelectionContext = nullptr;
+
+	class TechniqueSelectionGuard
+	{
+	public:
+		explicit TechniqueSelectionGuard(TechniqueSelectionContext* a_context) noexcept :
+			previous(g_techniqueSelectionContext)
+		{
+			if (a_context) {
+				active = true;
+				g_techniqueSelectionContext = a_context;
+			}
+		}
+		~TechniqueSelectionGuard()
+		{
+			if (active)
+				g_techniqueSelectionContext = previous;
+		}
+		TechniqueSelectionGuard(const TechniqueSelectionGuard&) = delete;
+		TechniqueSelectionGuard& operator=(const TechniqueSelectionGuard&) = delete;
+
+	private:
+		TechniqueSelectionContext* previous{ nullptr };
+		bool active{ false };
+	};
+
+	template <class T>
+	void CaptureStageSelection(
+		T* a_wrapper,
+		CSX::RenderMap::ShaderStage a_stage,
+		CSX::RenderMap::ShaderSelectionRoute a_route) noexcept
+	{
+		if (!g_techniqueSelectionContext)
+			return;
+		auto& selected = a_stage == CSX::RenderMap::ShaderStage::kPixel ?
+		                     g_techniqueSelectionContext->pixel :
+		                     g_techniqueSelectionContext->vertex;
+		selected = {
+			.wrapper = reinterpret_cast<std::uintptr_t>(a_wrapper),
+			.d3dObject = reinterpret_cast<std::uintptr_t>(a_wrapper ? a_wrapper->shader : nullptr),
+			.wrapperDescriptor = a_wrapper ? a_wrapper->id : 0,
+			.route = a_route,
+		};
+	}
+
+	bool GetShaderBytecodeIdentity(
+		void* a_shader,
+		std::uint64_t& a_size,
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1>& a_sha256) noexcept
+	{
+		try {
+			const auto store = GetShaderBytecodeStore();
+			std::shared_lock lock(store->mutex);
+			const auto found = store->records.find(a_shader);
+			if (found == store->records.end())
+				return false;
+			a_size = found->second.bytecodeSize;
+			a_sha256 = found->second.hashAvailable ? found->second.sha256 :
+			                                         std::array<char, CSX::RenderMap::kSha256HexLength + 1>{};
+			return true;
+		} catch (const std::exception&) {
+			a_size = 0;
+			a_sha256 = {};
+			return false;
+		}
+	}
+}
+#else
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
+#endif
 
 namespace
 {
@@ -109,9 +462,79 @@ namespace
 	}
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void RegisterShaderBytecode(
+	CSX::RenderMap::ShaderStage a_stage,
+	ID3D11DeviceChild* Shader,
+	const void* Bytecode,
+	size_t BytecodeLength)
+{
+	try {
+		const auto store = GetShaderBytecodeStore();
+		auto retireIdentity = CSX::RenderMap::GetRuntime().MakeStageShaderRetirementCallback(
+			a_stage, reinterpret_cast<std::uintptr_t>(Shader));
+		const std::weak_ptr<ShaderBytecodeStore> weakStore = store;
+		const auto attached = Util::AttachD3DPrivateDataLifetime(
+			*Shader, kShaderMetadataLifetimeGuid,
+			[weakStore, Shader, retireIdentity = std::move(retireIdentity)]() noexcept {
+				if (const auto liveStore = weakStore.lock()) {
+					std::unique_lock lock(liveStore->mutex);
+					const auto found = liveStore->records.find(Shader);
+					if (found != liveStore->records.end()) {
+						liveStore->retainedDumpBytes -= found->second.bytes.size();
+						liveStore->records.erase(found);
+					}
+				}
+				retireIdentity();
+			});
+		if (FAILED(attached)) {
+			logger::warn("Shader metadata lifetime attachment failed: {:x}", static_cast<unsigned long>(attached));
+			return;
+		}
+
+		ShaderBytecodeRecord record;
+		record.bytecodeSize = BytecodeLength;
+		record.hashAvailable = ComputeSha256Hex(Bytecode, BytecodeLength, record.sha256);
+		CSX::RenderMap::GetRuntime().RegisterCreatedStageShader(
+			a_stage, reinterpret_cast<std::uintptr_t>(Shader), BytecodeLength,
+			record.hashAvailable ? std::string_view(record.sha256.data()) : std::string_view{});
+		std::unique_lock lock(store->mutex);
+		if (store->records.size() >= CSX::RenderMap::kMaximumPersistentStageShaders &&
+			!store->records.contains(Shader)) {
+			if (!std::exchange(store->warnedAboutRetention, true))
+				logger::warn("Shader bytecode retention capacity reached; further identities are unavailable");
+			return;
+		}
+		const auto old = store->records.find(Shader);
+		const auto oldBytes = old == store->records.end() ? 0 : old->second.bytes.size();
+		const auto remainingBytes = kMaximumRetainedShaderDumpBytes - (store->retainedDumpBytes - oldBytes);
+		if (globals::shaderCache && globals::shaderCache->IsDump()) {
+			if (BytecodeLength <= remainingBytes) {
+				record.bytes.resize(BytecodeLength);
+				memcpy(record.bytes.data(), Bytecode, BytecodeLength);
+			} else if (!std::exchange(store->warnedAboutRetention, true)) {
+				logger::warn("Shader dump retention capacity reached; further dumps are unavailable");
+			}
+		}
+		const auto newBytes = record.bytes.size();
+		store->records.insert_or_assign(Shader, std::move(record));
+		store->retainedDumpBytes = store->retainedDumpBytes - oldBytes + newBytes;
+	} catch (const std::exception& error) {
+		logger::warn("Shader diagnostic metadata unavailable: {}", error.what());
+	}
+}
+
+std::vector<std::uint8_t> GetShaderBytecode(void* Shader)
+{
+	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
+	const auto store = GetShaderBytecodeStore();
+	std::shared_lock lock(store->mutex);
+	const auto found = store->records.find(Shader);
+	return found == store->records.end() ? std::vector<std::uint8_t>{} : found->second.bytes;
+}
+#else
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
 {
-	// Grab a copy since the pointer isn't going to be valid forever
 	auto codeCopy = std::make_unique<uint8_t[]>(BytecodeLength);
 	memcpy(codeCopy.get(), Bytecode, BytecodeLength);
 	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
@@ -123,6 +546,7 @@ const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Sha
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
 	return ShaderBytecodeMap.at(Shader);
 }
+#endif
 
 namespace
 {
@@ -656,13 +1080,30 @@ namespace
 }
 
 template <class ShaderType>
-void DumpShader(const REX::BSShader* thisClass, const ShaderType* shader, const std::pair<std::unique_ptr<uint8_t[]>, size_t>& bytecode)
+void DumpShader(
+	const REX::BSShader* thisClass,
+	const ShaderType* shader,
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const std::vector<std::uint8_t>& bytecode)
+#else
+	const std::pair<std::unique_ptr<uint8_t[]>, size_t>& bytecode)
+#endif
 {
 	static_assert(std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> || std::is_same_v<ShaderType, RE::BSGraphics::PixelShader>);
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (bytecode.empty()) {
+		logger::warn("Shader dump skipped because bytecode retention is unavailable");
+		return;
+	}
+	uint8_t* dxbcData = new uint8_t[bytecode.size()];
+	size_t dxbcLen = bytecode.size();
+	memcpy(dxbcData, bytecode.data(), bytecode.size());
+#else
 	uint8_t* dxbcData = new uint8_t[bytecode.second];
 	size_t dxbcLen = bytecode.second;
 	memcpy(dxbcData, bytecode.first.get(), bytecode.second);
+#endif
 
 	constexpr auto shaderExtStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vs" : "ps";
 	constexpr auto shaderTypeStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vertex" : "pixel";
@@ -695,6 +1136,12 @@ struct BSShader_LoadShaders
 
 		auto state = globals::state;
 		auto shaderCache = globals::shaderCache;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		auto& renderMap = CSX::RenderMap::GetRuntime();
+		const auto* shaderToolsView = reinterpret_cast<const REX::BSShader*>(shader);
+		const std::string_view loaderType = shaderToolsView->m_LoaderType ? shaderToolsView->m_LoaderType : "";
+		const auto compileSourceName = EffectiveShaderCompileSourceName(shader);
+#endif
 
 		if (shaderCache->IsDiskCache() || shaderCache->IsDump()) {
 			if (shaderCache->IsDiskCache()) {
@@ -727,6 +1174,29 @@ struct BSShader_LoadShaders
 			}
 		}
 		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		// Record the entries only after every cache and loose-shader replacement
+		// has completed. Registering immediately after the engine load associates
+		// aliases with the displaced vanilla D3D objects instead of the objects
+		// that subsequent draws actually bind.
+		for (const auto& entry : shader->vertexShaders) {
+			if (entry->shader) {
+				renderMap.RegisterEngineStageShader(
+					CSX::RenderMap::ShaderStage::kVertex,
+					reinterpret_cast<std::uintptr_t>(entry->shader), loaderType, entry->id,
+					compileSourceName);
+			}
+		}
+		for (const auto& entry : shader->pixelShaders) {
+			if (entry->shader) {
+				renderMap.RegisterEngineStageShader(
+					CSX::RenderMap::ShaderStage::kPixel,
+					reinterpret_cast<std::uintptr_t>(entry->shader), loaderType, entry->id,
+					compileSourceName);
+			}
+		}
+#endif
 	};
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -736,6 +1206,34 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	auto& renderMap = CSX::RenderMap::GetRuntime();
+	[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+	std::string_view renderMapLoaderType;
+	std::string_view renderMapCompileSourceName;
+	if (renderMap.IsCapturing()) {
+		if (state)
+			renderMap.SetCpuFrame(state->frameCount);
+		std::string_view imageSpaceName;
+		if (shader->shaderType.get() == RE::BSShader::Type::ImageSpace) {
+			const auto* imageSpaceShader = static_cast<const RE::BSImagespaceShader*>(shader);
+			imageSpaceName = BoundedShaderString(imageSpaceShader->name);
+		}
+		renderMapLoaderType = BoundedShaderString(shader->fxpFilename);
+		renderMapCompileSourceName = EffectiveShaderCompileSourceName(shader);
+		renderMapScope = renderMap.EnterTechnique({
+			.shader = reinterpret_cast<std::uintptr_t>(shader),
+			.shaderType = static_cast<std::uint32_t>(shader->shaderType.get()),
+			.vertexDescriptor = vertexDescriptor,
+			.pixelDescriptor = pixelDescriptor,
+			.callerRva = callerRva,
+			.skipPixelShader = skipPixelShader,
+			.fxpFilename = renderMapLoaderType,
+			.imageSpaceName = imageSpaceName,
+			.compileSourceName = renderMapCompileSourceName,
+		});
+	}
+#endif
 	const bool phaseDiagActive = ShouldRecordCSFramePhaseDiag();
 	const uint32_t phaseDiagFrame = phaseDiagActive && state ? state->frameCount : 0;
 	const uint64_t totalStartTicks = phaseDiagActive ? ReadFrameDiagCounterTicks() : 0;
@@ -770,6 +1268,13 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	// Only check against non-shader bits
 	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	TechniqueSelectionContext selectedStages;
+	// The selection context feeds persistent stage identity as well as the
+	// optional technique-resolved event. Keep it active for every render-map
+	// capture, even when technique events themselves were filtered out.
+	TechniqueSelectionGuard selectedStagesGuard(renderMap.IsCapturing() ? std::addressof(selectedStages) : nullptr);
+#endif
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 	if (phaseDiagActive) {
 		const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
@@ -787,6 +1292,14 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		}
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
 			shaderFound = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CaptureStageSelection<RE::BSGraphics::VertexShader>(
+				nullptr, CSX::RenderMap::ShaderStage::kVertex, CSX::RenderMap::ShaderSelectionRoute::kMissing);
+			CaptureStageSelection<RE::BSGraphics::PixelShader>(
+				nullptr, CSX::RenderMap::ShaderStage::kPixel,
+				skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
+								  CSX::RenderMap::ShaderSelectionRoute::kMissing);
+#endif
 		} else {
 			state->settingCustomShader = true;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
@@ -799,6 +1312,13 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 			state->settingCustomShader = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CaptureStageSelection(vertexShader, CSX::RenderMap::ShaderStage::kVertex,
+				CSX::RenderMap::ShaderSelectionRoute::kCSXFallback);
+			CaptureStageSelection(pixelShader, CSX::RenderMap::ShaderStage::kPixel,
+				skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
+								  CSX::RenderMap::ShaderSelectionRoute::kCSXFallback);
+#endif
 			shaderFound = true;
 		}
 		if (phaseDiagActive) {
@@ -810,6 +1330,85 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 
 	state->lastModifiedVertexDescriptor = state->modifiedVertexDescriptor;
 	state->lastModifiedPixelDescriptor = state->modifiedPixelDescriptor;
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	// Technique scope events are optional capture output. Selected-stage
+	// identity is state required by draw observations, so it must still be
+	// resolved when technique events themselves were filtered out.
+	if (renderMap.IsCapturing()) {
+		if (!shaderFound) {
+			selectedStages.vertex = { .route = CSX::RenderMap::ShaderSelectionRoute::kMissing };
+			selectedStages.pixel = {
+				.route = skipPixelShader ? CSX::RenderMap::ShaderSelectionRoute::kSkipped :
+				                           CSX::RenderMap::ShaderSelectionRoute::kMissing,
+			};
+		} else if (skipPixelShader) {
+			selectedStages.pixel = { .route = CSX::RenderMap::ShaderSelectionRoute::kSkipped };
+		}
+
+		// CSX cache selections are distinct D3D objects from the entries owned by
+		// Skyrim's engine shader table. The resolved descriptors at this point are
+		// the authoritative semantic identity for both routes, so register the
+		// selected objects before their stage observations are materialized.
+		if (selectedStages.vertex.d3dObject != 0) {
+			renderMap.RegisterEngineStageShader(
+				CSX::RenderMap::ShaderStage::kVertex,
+				selectedStages.vertex.d3dObject,
+				renderMapLoaderType,
+				state->modifiedVertexDescriptor,
+				renderMapCompileSourceName);
+		}
+		if (selectedStages.pixel.d3dObject != 0) {
+			renderMap.RegisterEngineStageShader(
+				CSX::RenderMap::ShaderStage::kPixel,
+				selectedStages.pixel.d3dObject,
+				renderMapLoaderType,
+				state->modifiedPixelDescriptor,
+				renderMapCompileSourceName);
+		}
+
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1> vertexSha256{};
+		std::array<char, CSX::RenderMap::kSha256HexLength + 1> pixelSha256{};
+		std::uint64_t vertexBytecodeSize = 0;
+		std::uint64_t pixelBytecodeSize = 0;
+		GetShaderBytecodeIdentity(
+			reinterpret_cast<void*>(selectedStages.vertex.d3dObject), vertexBytecodeSize, vertexSha256);
+		GetShaderBytecodeIdentity(
+			reinterpret_cast<void*>(selectedStages.pixel.d3dObject), pixelBytecodeSize, pixelSha256);
+		renderMap.RecordTechniqueResolution({
+			.inputVertexDescriptor = vertexDescriptor,
+			.inputPixelDescriptor = pixelDescriptor,
+			.resolvedVertexDescriptor = state->modifiedVertexDescriptor,
+			.resolvedPixelDescriptor = state->modifiedPixelDescriptor,
+			.shaderFound = shaderFound,
+			.skipPixelShader = skipPixelShader,
+			.vertex = {
+				.route = selectedStages.vertex.route,
+				.shader = {
+					.stage = CSX::RenderMap::ShaderStage::kVertex,
+					.wrapper = selectedStages.vertex.wrapper,
+					.d3dObject = selectedStages.vertex.d3dObject,
+					.wrapperDescriptor = selectedStages.vertex.wrapperDescriptor,
+					.bytecodeSize = vertexBytecodeSize,
+					.bytecodeSha256 = vertexSha256.data(),
+					.cachePath = {},
+				},
+			},
+			.pixel = {
+				.route = selectedStages.pixel.route,
+				.shader = {
+					.stage = CSX::RenderMap::ShaderStage::kPixel,
+					.wrapper = selectedStages.pixel.wrapper,
+					.d3dObject = selectedStages.pixel.d3dObject,
+					.wrapperDescriptor = selectedStages.pixel.wrapperDescriptor,
+					.bytecodeSize = pixelBytecodeSize,
+					.bytecodeSha256 = pixelSha256.data(),
+					.cachePath = {},
+				},
+			},
+		});
+	}
+#endif
 
 	if (phaseDiagActive) {
 		const uint64_t totalEndTicks = ReadFrameDiagCounterTicks();
@@ -827,6 +1426,16 @@ namespace EffectExtensions
 		{
 			if (globals::game::isVR)
 				CSX::Api::BeginAcceptedDrawGeometry(pass);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			auto& renderMap = CSX::RenderMap::GetRuntime();
+			[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+			if (renderMap.IsCapturing()) {
+				if (globals::state)
+					renderMap.SetCpuFrame(globals::state->frameCount);
+				renderMapScope = renderMap.EnterGeometry(
+					BuildRenderMapGeometryBoundary(shader, pass, renderFlags, RE::BSShader::Type::Effect));
+			}
+#endif
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -857,6 +1466,16 @@ namespace LightingExtensions
 
 			if (globals::game::isVR)
 				CSX::Api::BeginAcceptedDrawGeometry(pass);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			auto& renderMap = CSX::RenderMap::GetRuntime();
+			[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+			if (renderMap.IsCapturing()) {
+				if (globals::state)
+					renderMap.SetCpuFrame(globals::state->frameCount);
+				renderMapScope = renderMap.EnterGeometry(
+					BuildRenderMapGeometryBoundary(shader, pass, renderFlags, RE::BSShader::Type::Lighting));
+			}
+#endif
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -911,6 +1530,16 @@ namespace GrassExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			auto& renderMap = CSX::RenderMap::GetRuntime();
+			[[maybe_unused]] CSX::RenderMap::Collector::ScopeGuard renderMapScope;
+			if (renderMap.IsCapturing()) {
+				if (globals::state)
+					renderMap.SetCpuFrame(globals::state->frameCount);
+				renderMapScope = renderMap.EnterGeometry(
+					BuildRenderMapGeometryBoundary(shader, pass, renderFlags, RE::BSShader::Type::Grass));
+			}
+#endif
 			func(shader, pass, renderFlags);
 
 			auto state = globals::state;
@@ -1093,8 +1722,14 @@ struct ID3D11Device_CreateVertexShader
 	{
 		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr) && ppVertexShader && *ppVertexShader) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RegisterShaderBytecode(
+				CSX::RenderMap::ShaderStage::kVertex, *ppVertexShader, pShaderBytecode, BytecodeLength);
+#else
 			RegisterShaderBytecode(*ppVertexShader, pShaderBytecode, BytecodeLength);
+#endif
+		}
 
 		return hr;
 	}
@@ -1129,13 +1764,57 @@ struct ID3D11Device_CreatePixelShader
 	{
 		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr) && ppPixelShader && *ppPixelShader) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			RegisterShaderBytecode(
+				CSX::RenderMap::ShaderStage::kPixel, *ppPixelShader, pShaderBytecode, BytecodeLength);
+#else
 			RegisterShaderBytecode(*ppPixelShader, pShaderBytecode, BytecodeLength);
+#endif
+		}
 
 		return hr;
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+struct ID3D11Device_CreateComputeShader
+{
+	static HRESULT STDMETHODCALLTYPE thunk(
+		ID3D11Device* This,
+		const void* pShaderBytecode,
+		SIZE_T BytecodeLength,
+		ID3D11ClassLinkage* pClassLinkage,
+		ID3D11ComputeShader** ppComputeShader)
+	{
+		const HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppComputeShader);
+		if (SUCCEEDED(hr) && ppComputeShader && *ppComputeShader)
+			RegisterShaderBytecode(
+				CSX::RenderMap::ShaderStage::kCompute, *ppComputeShader, pShaderBytecode, BytecodeLength);
+		return hr;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+#endif
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+struct ID3D11Device_CreateDeferredContext
+{
+	static HRESULT STDMETHODCALLTYPE thunk(
+		ID3D11Device* a_device, UINT a_contextFlags,
+		ID3D11DeviceContext** a_deferredContext)
+	{
+		const auto result = func(a_device, a_contextFlags, a_deferredContext);
+		if (SUCCEEDED(result) && a_deferredContext && *a_deferredContext) {
+			CSX::RenderMap::GetRuntime().RegisterDeferredContext(
+				reinterpret_cast<std::uintptr_t>(*a_deferredContext), a_contextFlags);
+		}
+		return result;
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+#endif
 
 struct ID3D11Device_CreateSamplerState
 {
@@ -1414,13 +2093,24 @@ namespace Hooks
 			stl::detour_vfunc<5, ID3D11Device_CreateTexture2D>(globals::d3d::device);
 #endif
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			// Creation-time bytecode identity is lightweight render-map provenance.
+			// Full bytecode is retained only when Dump Shaders is enabled.
+			stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(globals::d3d::device);
+			stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(globals::d3d::device);
+			stl::detour_vfunc<18, ID3D11Device_CreateComputeShader>(globals::d3d::device);
+#else
 			auto shaderCache = globals::shaderCache;
 			if (shaderCache->IsDump()) {
 				stl::detour_vfunc<12, ID3D11Device_CreateVertexShader>(globals::d3d::device);
 				stl::detour_vfunc<15, ID3D11Device_CreatePixelShader>(globals::d3d::device);
 			}
+#endif
 
 			stl::detour_vfunc<23, ID3D11Device_CreateSamplerState>(globals::d3d::device);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			stl::detour_vfunc<27, ID3D11Device_CreateDeferredContext>(globals::d3d::device);
+#endif
 
 			globals::InstallD3DHooks(globals::d3d::context);
 			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
@@ -1547,6 +2237,10 @@ namespace Hooks
 					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
 						RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 						if (vertexShader) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+							CaptureStageSelection(vertexShader, CSX::RenderMap::ShaderStage::kVertex,
+								CSX::RenderMap::ShaderSelectionRoute::kCSXCache);
+#endif
 							globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
 							*globals::game::currentVertexShader = a_vertexShader;
 							globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
@@ -1558,6 +2252,11 @@ namespace Hooks
 
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CaptureStageSelection(a_vertexShader, CSX::RenderMap::ShaderStage::kVertex,
+				a_vertexShader ? CSX::RenderMap::ShaderSelectionRoute::kEngine :
+								 CSX::RenderMap::ShaderSelectionRoute::kMissing);
+#endif
 			*globals::game::currentVertexShader = a_vertexShader;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader), NULL, NULL);
 		}
@@ -1578,6 +2277,10 @@ namespace Hooks
 					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
 						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
 						if (pixelShader) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+							CaptureStageSelection(pixelShader, CSX::RenderMap::ShaderStage::kPixel,
+								CSX::RenderMap::ShaderSelectionRoute::kCSXCache);
+#endif
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 							*globals::game::currentPixelShader = a_pixelShader;
 							return;
@@ -1586,6 +2289,11 @@ namespace Hooks
 				}
 			}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CaptureStageSelection(a_pixelShader, CSX::RenderMap::ShaderStage::kPixel,
+				a_pixelShader ? CSX::RenderMap::ShaderSelectionRoute::kEngine :
+								CSX::RenderMap::ShaderSelectionRoute::kMissing);
+#endif
 			*globals::game::currentPixelShader = a_pixelShader;
 
 			if (a_pixelShader)
@@ -1807,6 +2515,30 @@ namespace Hooks
 #endif
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::RenderMap::Collector::ScopeGuard EnterRenderPassBoundary(
+		RE::BSRenderPass* a_pass,
+		uint32_t a_technique,
+		bool a_alphaTest,
+		uint32_t a_renderFlags)
+	{
+		auto& renderMap = CSX::RenderMap::GetRuntime();
+		if (!renderMap.IsCapturing())
+			return {};
+		if (globals::state)
+			renderMap.SetCpuFrame(globals::state->frameCount);
+		return renderMap.EnterRenderPass({
+			.renderPass = reinterpret_cast<std::uintptr_t>(a_pass),
+			.geometry = reinterpret_cast<std::uintptr_t>(a_pass ? a_pass->geometry : nullptr),
+			.technique = a_technique,
+			.passEnum = a_pass ? a_pass->passEnum : 0,
+			.renderFlags = a_renderFlags,
+			.alphaTest = a_alphaTest,
+		});
+	}
+
+#endif
+
 	// This is from 1.4.0 but absent in 1.4.6
 	void BSBatchRenderer_RenderPassImmediately1::thunk(
 		RE::BSRenderPass* a_pass,
@@ -1820,6 +2552,9 @@ namespace Hooks
 		}
 
 		// Original call from 1.4.0
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
+#endif
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
@@ -1878,6 +2613,9 @@ namespace Hooks
 			}
 
 			// Original call
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
+#endif
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 		}
 
@@ -1886,6 +2624,9 @@ namespace Hooks
 
 	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		[[maybe_unused]] const auto renderMapScope = EnterRenderPassBoundary(a_pass, a_technique, a_alphaTest, a_renderFlags);
+#endif
 		if (globals::features::interiorSun.loaded) {
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}
@@ -2111,6 +2852,11 @@ namespace Hooks
 	{
 		VRShadowBatch::Install();
 		Util::VRLoadingMenuClear::Install();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		// Construct the inert collector away from render-thread first use. Capture
+		// remains disabled until an explicit controller starts a bounded session.
+		(void)CSX::RenderMap::GetRuntime();
+#endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();
 #endif

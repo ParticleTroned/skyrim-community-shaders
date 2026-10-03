@@ -3207,6 +3207,64 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(ApiRuntimeThreadAffinity PROPERTIES LABELS "ControllerTests")
 
     add_executable(
+        render_map_collector_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_collector_test.cpp
+        src/RenderMap/Collector.cpp
+    )
+    target_compile_features(render_map_collector_test PRIVATE cxx_std_23)
+    target_include_directories(
+        render_map_collector_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME RenderMapCollector COMMAND render_map_collector_test)
+    set_tests_properties(RenderMapCollector PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        render_map_runtime_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_runtime_test.cpp
+        src/RenderMap/Collector.cpp
+        src/RenderMap/Runtime.cpp
+    )
+    target_compile_features(render_map_runtime_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        render_map_runtime_test
+        PRIVATE CSX_RENDER_MAP_TESTING=1
+    )
+    target_include_directories(
+        render_map_runtime_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME RenderMapRuntime COMMAND render_map_runtime_test)
+    set_tests_properties(RenderMapRuntime PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        render_map_controller_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_controller_test.cpp
+        src/RenderMap/Artifacts.cpp
+        src/RenderMap/Collector.cpp
+        src/RenderMap/Controller.cpp
+        src/RenderMap/Runtime.cpp
+        src/RenderMap/Serialization.cpp
+    )
+    target_compile_features(render_map_controller_test PRIVATE cxx_std_23)
+    target_include_directories(
+        render_map_controller_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        render_map_controller_test
+        PRIVATE nlohmann_json::nlohmann_json bcrypt.lib
+    )
+    add_test(NAME RenderMapController COMMAND render_map_controller_test)
+    set_tests_properties(
+        RenderMapController
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    add_executable(
         api_service_foundation_test
         EXCLUDE_FROM_ALL
         tests/api_service_foundation_test.cpp

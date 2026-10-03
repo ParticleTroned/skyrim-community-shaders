@@ -140,6 +140,14 @@ contradict this policy.
 -   Match validation to the changed surface: focused controller tests for policies, shader validation for HLSL, parser/unit tests for tooling, and runtime testing for UI/render/cache behavior.
 -   For shader refactors expected to be behavior-preserving, use `tools/verify-shader-refactor.ps1` first. Identical DXBC is the preferred proof; otherwise use controlled runtime A/B evidence.
 -   Runtime-affecting changes should be exercised through the available DevBench automation for each affected runtime. A new feature or settings surface should expose a DevBench action in the same PR. Changes to an exposed tool/action must update its registered description and schema in the same PR.
+-   Unless an explicit test protocol requires another time, reset in-game
+    comparisons to noon before every condition and separate measurement phase.
+    Verify the observed `gameHour` is in `[12, 12.05]`, then settle for at
+    least five seconds before capture. Preserve the reset and verification
+    receipts; exclude night or mixed-time windows from the matched comparison.
+-   The Astra depth-culling campaign compares native culling off, Legacy,
+    Advanced and Hybrid in every repeated performance and stereo-visual
+    condition. Legacy is required in every matched set.
 -   A PR that changes VR render-scale code or behavior must include the generated
     `csx-render-scale-pr-v1` summary described in
     `docs/development/render-scale-pr-qualification.md`. Preserve the complete

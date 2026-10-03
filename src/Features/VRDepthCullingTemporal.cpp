@@ -62,6 +62,7 @@ namespace VRDepthCullingTemporal
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		VRDepthCullingTelemetryPolicy::WriterGate g_telemetryGate;
 		VRDepthCullingTelemetry::TimingCounters g_nativeReadbackTiming, g_outerDownscaleTiming, g_replayDownscaleTiming, g_nativeProducerTiming;
+		VRNativeVisibilityTelemetry::Counters g_nativeVisibility;
 		std::atomic_uint64_t g_measurementWindowId{ 0 }, g_measurementStartEpoch{ 0 };
 		std::atomic_uint32_t g_measurementStartFrame{ 0 };
 		std::atomic_bool g_measurementResetting{ false };
@@ -349,8 +350,22 @@ namespace VRDepthCullingTemporal
 				}
 				const bool hybridSelected = g_cullingEnabled.load(std::memory_order_acquire) &&
 				                            g_mode.load(std::memory_order_acquire) == Mode::Hybrid;
-				if (!VRHybridCulling::CompleteReadback(a_culler, g_cullingEpoch.load(std::memory_order_acquire), hybridSelected))
+				if (!VRHybridCulling::CompleteReadback(a_culler, g_cullingEpoch.load(std::memory_order_acquire), hybridSelected)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const VRNativeVisibilityTelemetry::Scope visibility(g_nativeVisibility, g_telemetryGate, [a_culler] {
+						VRNativeVisibilityTelemetry::Batch batch;
+						if (a_culler) {
+							auto* bytes = static_cast<std::byte*>(a_culler);
+							batch.count = ReadCullerField<std::uint32_t>(bytes, kObjectCountOffset);
+							batch.selector = ReadCullerField<std::uint32_t>(bytes, kResultSelectorOffset);
+							if (batch.count > 0 && batch.count <= kMaximumObjects && batch.selector <= 1)
+								batch.results = ReadCullerField<const std::uint32_t*>(bytes, kResultsOffset + batch.selector * sizeof(void*));
+						}
+						return batch;
+					});
+#endif
 					RecoverHighRiskObjects(a_culler);
+				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -535,6 +550,7 @@ namespace VRDepthCullingTemporal
 			.outerDownscale = g_outerDownscaleTiming.Read(),
 			.replayDownscale = g_replayDownscaleTiming.Read(),
 			.nativeProducer = g_nativeProducerTiming.Read(),
+			.nativeVisibility = g_nativeVisibility.Read(),
 			.envelopeMisses = g_envelopeMisses.load(std::memory_order_relaxed),
 			.recoveryAttempts = g_recoveryAttempts.load(std::memory_order_relaxed),
 			.objectsInspected = g_objectsInspected.load(std::memory_order_relaxed),
@@ -581,6 +597,7 @@ namespace VRDepthCullingTemporal
 			g_outerDownscaleTiming.Reset();
 			g_replayDownscaleTiming.Reset();
 			g_nativeProducerTiming.Reset();
+			g_nativeVisibility.Reset();
 			g_envelopeMisses.store(0, std::memory_order_relaxed);
 			g_recoveryAttempts.store(0, std::memory_order_relaxed);
 			g_objectsInspected.store(0, std::memory_order_relaxed);

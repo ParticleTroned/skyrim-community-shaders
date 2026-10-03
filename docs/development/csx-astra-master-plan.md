@@ -3,7 +3,16 @@
 Updated 3 October 2026. This is the maintained execution plan for the
 depth-culling, PBR-grass, grass-optimization and Reverse-Z work. The first
 integration is in progress on a worktree based on current `main-VR`.
-The universal DLL, 11 focused CPU/WARP tests and production diagnostic-isolation checks have passed. The requested DevBench-enabled AIO archive is built and verified; runtime qualification remains outstanding.
+The universal DLL, 11 focused CPU/WARP tests and production diagnostic
+isolation checks passed. The verified DevBench AIO has now completed two
+noon performance repeats for Off, Legacy, Advanced and Hybrid. Hybrid
+regressed versus both native methods; it fails performance neutrality in
+this scene. A limited static stereo review found no obvious missing solid
+geometry in the sampled previews. Motion and lifecycle qualification remain
+open; Advanced stays default. The
+[runtime report](vr-hybrid-culling-runtime-2026-10-03.md) preserves all eight
+windows, the 120 Hz budget, original compiled identity and review limits.
+Earlier night/mixed-time data are excluded from this comparison.
 
 ## Scope and authority
 
@@ -84,7 +93,7 @@ Useful historical sections:
 | Integration operation            | Single existing Hybrid feature delta cherry-picked successfully as `29ce68539`; original branch unchanged                                                                                                                                                                        |
 | Identified integration conflict  | `src/MenuDevBenchBridge.cpp`; retain current Sky Sync controls together with the Hybrid additions                                                                                                                                                                                |
 | Integration source/Build ID      | Integration `29ce68539c1fa489b241135d1a7629ccddf6a4e3` plus reviewed working changes; final diagnostic DLL Build ID `8246ebf5ca62ab8ac0aefb6d620059f22b03f4dd2a3bb171e0ec2b578aea0169`; verified AIO Build ID `66b6efdee77bd3e03a565b8698cf395e332c44c4e62d0af479ad7a47ec152088` |
-| Current runtime qualification    | Not run                                                                                                                                                                                                                                                                          |
+| Current runtime qualification    | Noon four-mode performance complete: Hybrid regressed; limited static review complete; motion/lifecycle qualification open                                                                                                                                                       |
 
 The originally published Hybrid source itself had no post-rebase compile/test record.
 The second handoff preserves clean pre-rebase source
@@ -127,7 +136,44 @@ measurement windows and a drained-writer indicator. The final universal
 DLL and 11 focused tests passed. Production preprocessing and syntax
 checks passed for all three affected translation units; a separate
 production DLL link has not run.
-No in-game measurements have run.
+The completed noon comparison records a Hybrid regression of
+5.214575-6.729403 ms CPU and 1.893462-2.560592 ms GPU versus Advanced.
+Both Hybrid windows ran the actual backend with all batches accepted and
+zero recorded fallback/history rejection. Static stereo review is limited.
+Four final motion ROI bursts of 160 consecutive frames each are verified;
+all 640 original PNGs passed artifact checks. They cover 8.7075% of each eye.
+The planned 64-step route appears at 5/9 checkpoints in Advanced, 6/9 in
+Legacy and 9/9 in Hybrid/Off, so only common poses 0 through 32 support
+four-mode comparison. Hybrid route deltas are +84 submitted, +20 accepted,
++64 `view_changed` invalidations and zero native fallback; changes in
+observed cache `cameraAdjust` were recorded. Raw native PNGs open without
+resizing. Sampled common-pose and adjacent-frame review found no obvious
+culling holes or eye-specific geometry disappearance. This bounded result
+does not qualify temporal behavior, physical head motion or the whole
+image; fail-visible rejection limits inference about culling efficacy.
+The [completed review and player](vr-hybrid-culling-runtime-2026-10-03.md#bounded-motion-review)
+retain the exact selection and limitations.
+
+New native result counts before/after recovery passed two focused tests
+and ON/OFF syntax/isolation checks. They are absent from the original
+measured DLL. Their separate universal DevBench ON AIO now links and passes
+all 369-file archive/staging checks. Compiled source is
+`c684ff32c9f75c97f6743fe2829ca7eb040525f2`, dirty digest
+`92ea1d0bb80e669a84b01843dd8cb1ed4403257ddd298e60051c43cb01839c86`;
+Build ID is
+`ee0c10f34abe0a5a7197ce4f77436273355c80b1c72747deb7a9331d9a44d5c3`.
+The 90,846,788-byte archive has SHA-256
+`c4b48a061544cb84a45c58189d51803368a00dce5078c8a18746e954618b9449`.
+After the user's installation/restart, the
+[native-count campaign](vr-hybrid-culling-native-counts-2026-10-03.md)
+verified that identity and completed all four modes. Native Advanced and
+Legacy rejected about 61-62% of observed results; Hybrid rejected about
+19%, with all observed Hybrid batches accepted and no fallback. Separate
+telemetry-disabled timings are descriptive only: the user confirmed a
+concurrent DLL build, and simulation-clock progression differed between
+windows. A quiet timing repeat is pending; its first preflight correctly
+stopped when new build activity appeared. Preserve both measured identities;
+the changed player position prevents a matched cross-build comparison.
 
 For measurement windows, capture the coherent bounded source payload before
 disabling telemetry; disabled telemetry hides it. Wait for admitted writers
@@ -217,6 +263,13 @@ performing a repository-wide behavior-preserving rewrite first.
 
 ## D1: existing Hybrid integration and qualification
 
+Status: implemented in [PR 104](https://github.com/ParticleTroned/skyrim-community-shaders/pull/104),
+with the first four-mode noon assay complete. Performance neutrality failed
+in that fixture; static sampled fidelity is provisionally clear of large
+defects, while motion/lifecycle correctness remains unqualified. Diagnose
+native-versus-Hybrid rejection efficacy without loosening conservative
+history or depth admission. See the [runtime evidence](vr-hybrid-culling-runtime-2026-10-03.md).
+
 The candidate retains native affine OBB collection, per-submission result
 indices, the existing result/staging buffers and delayed CPU consumption.
 It replaces only admitted depth-reduction/visibility production. The native
@@ -252,6 +305,9 @@ Build the exact integration and rerun the focused controller/WARP/FXC
 checks. Exercise Advanced, Legacy, Hybrid and native-disabled configurations
 with grass optimization absent/off. Verify actual effective backend,
 producer identity, fallback and method-round-trip behavior.
+Include all four conditions in every repeated performance and stereo-visual
+comparison; Legacy is required throughout. Reset and verify noon before
+each condition and each separate capture phase, then settle five seconds.
 
 Runtime evidence must include both eyes, stationary and moving views,
 doorway/occluder edges, near/distant geometry, moving occluders, loads/cell
@@ -483,21 +539,21 @@ validation. Keep unrelated broad-merge changes out of the feature PR.
 All original task identifiers remain available for cross-reference.
 Detailed original requirements remain in master Part B sections 4-7.
 
-| Task                             | Current state                                                                                    | Required exit gate                                                                                                            |
-| -------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| 0: baseline and ledger           | In progress                                                                                      | Exact source/build identity, current-main worktree, donor/hook/material/permutation inventory and reproducible baseline       |
-| 1: PBR without GO                | Planned for PR 2                                                                                 | Distinct authored materials, valid disabled/basic/complex paths, consistent depth/color and runtime settings                  |
-| 2: geometry/deformation contract | Planned for PR 3                                                                                 | Documented coordinate spaces; legacy no-op shader evidence where applicable; matching CPU/VS/collision fixtures               |
-| 3: capture/bucket infrastructure | Planned for PR 3                                                                                 | Destruction/queue-swap/material identity tests and failure-safe capacities while original rendering remains valid             |
-| 4: conservative stereo drawing   | Planned for PR 3                                                                                 | Correct both-eye placement/depth/deformation with actual descriptors, eye bases and matched parity settings                   |
-| 5: unified conservative culling  | Planned for PR 3                                                                                 | CPU reject implies both-eye rejection of represented geometry; asymmetric-HMD/near-plane/off-center bounds checks             |
-| 6: activation/recovery           | Design prerequisite for Task 4                                                                   | Transactional patches/shaders/applied state; every injected failure yields a known valid renderer                             |
-| 7a: Hybrid foundation            | Integrated; final DLL and 11 focused tests pass; runtime and cross-consumer evidence remain open | Exact-source build/tests plus attributed native runtime/fallback/history and later source ordering for grass                  |
-| 7b: shared Hi-Z provider         | Planned for additional H1 PR                                                                     | Bounded attributed snapshots, independent demands, WARP coverage and no stale/wrong-phase or duplicate same-content build     |
-| 7c: grass Hi-Z consumer          | Planned after 7b                                                                                 | Full independent native/grass control matrix, array ABI, eight-UAV budget and valid missing-depth drawing                     |
-| 8: quality controls              | Planned after parity                                                                             | Stable stereo/temporal choices, valid LOD fallback and separately reported quality changes                                    |
-| 9: UI/cache/profiling            | Distributed across owning feature PRs                                                            | Valid settings/reset/malformed input, DevBench schema/actions, requested/applied state and cold/warm/managed cache identity   |
-| 10: qualification/release        | Applied per stage; not complete                                                                  | Shader/configuration coverage, affected-runtime checks, real-HMD evidence, lifecycle soak, measured CPU/GPU/VRAM and rollback |
+| Task                             | Current state                                                                                                           | Required exit gate                                                                                                            |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 0: baseline and ledger           | In progress                                                                                                             | Exact source/build identity, current-main worktree, donor/hook/material/permutation inventory and reproducible baseline       |
+| 1: PBR without GO                | Planned for PR 2                                                                                                        | Distinct authored materials, valid disabled/basic/complex paths, consistent depth/color and runtime settings                  |
+| 2: geometry/deformation contract | Planned for PR 3                                                                                                        | Documented coordinate spaces; legacy no-op shader evidence where applicable; matching CPU/VS/collision fixtures               |
+| 3: capture/bucket infrastructure | Planned for PR 3                                                                                                        | Destruction/queue-swap/material identity tests and failure-safe capacities while original rendering remains valid             |
+| 4: conservative stereo drawing   | Planned for PR 3                                                                                                        | Correct both-eye placement/depth/deformation with actual descriptors, eye bases and matched parity settings                   |
+| 5: unified conservative culling  | Planned for PR 3                                                                                                        | CPU reject implies both-eye rejection of represented geometry; asymmetric-HMD/near-plane/off-center bounds checks             |
+| 6: activation/recovery           | Design prerequisite for Task 4                                                                                          | Transactional patches/shaders/applied state; every injected failure yields a known valid renderer                             |
+| 7a: Hybrid foundation            | Integrated in PR 104; noon performance regressed; static review limited; motion/lifecycle and cross-consumer gates open | Exact-source build/tests plus attributed native runtime/fallback/history and later source ordering for grass                  |
+| 7b: shared Hi-Z provider         | Planned for additional H1 PR                                                                                            | Bounded attributed snapshots, independent demands, WARP coverage and no stale/wrong-phase or duplicate same-content build     |
+| 7c: grass Hi-Z consumer          | Planned after 7b                                                                                                        | Full independent native/grass control matrix, array ABI, eight-UAV budget and valid missing-depth drawing                     |
+| 8: quality controls              | Planned after parity                                                                                                    | Stable stereo/temporal choices, valid LOD fallback and separately reported quality changes                                    |
+| 9: UI/cache/profiling            | Distributed across owning feature PRs                                                                                   | Valid settings/reset/malformed input, DevBench schema/actions, requested/applied state and cold/warm/managed cache identity   |
+| 10: qualification/release        | Applied per stage; not complete                                                                                         | Shader/configuration coverage, affected-runtime checks, real-HMD evidence, lifecycle soak, measured CPU/GPU/VRAM and rollback |
 
 ## Validation and evidence record
 
@@ -506,7 +562,11 @@ recorded in [the Hybrid integration record](vr-hybrid-culling.md#current-main-in
 The final DevBench-enabled universal DLL passed after the diagnostic
 extensions, alongside 11 focused tests and the production compiler-output
 audit. Exact intermediate and final dirty-source identities remain in the
-Hybrid record; no in-game measurement is claimed.
+Hybrid record. The [noon runtime report](vr-hybrid-culling-runtime-2026-10-03.md)
+now attributes eight completed fpsVR windows, a limited static stereo
+review and bounded motion ROI review to the original
+`29ce68539-dirty` AIO. New native visibility diagnostics have focused
+test/compiler and complete AIO build evidence, but no runtime evidence.
 
 The three documentation files passed scoped `trailing-whitespace`,
 `mixed-line-ending` and `prettier` hooks. All five relative links in this
@@ -543,22 +603,22 @@ If a PR changes or evaluates VR render-scale behavior, apply the current
 including exact ledgers where required. Do not claim this plan, static
 source review or focused WARP validation satisfies those protocols.
 
-| Evidence                                    | Status in this update                                                                                                                                                      |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Supplied source provenance                  | Passed: initial copies matched the recorded original byte lengths and SHA-256; tracked references use repository formatting normalization                                  |
-| Cross-document scope/sequence audit         | Completed; obsolete prompts and differing donor snapshots identified                                                                                                       |
-| Current-code depth-consumer reconnaissance  | Completed for the concrete surfaces listed above; exhaustive R1 audit remains open                                                                                         |
-| Current-main Hybrid integration             | Integrated as `29ce68539c1fa489b241135d1a7629ccddf6a4e3`; publication/SRV and D3D-owner corrections implemented; final diagnostic artifact recorded in the Hybrid document |
-| Integration changed-file hooks              | Passed except gersemi skipped after proposing an unrelated 438-line CMake baseline rewrite; that rewrite was restored                                                      |
-| Exact integration DLL build                 | Final universal ALL Release DLL passed (SE/AE/VR, DevBench ON, Tracy OFF); manifest and artifact hash/size verified                                                        |
-| Focused controller/WARP tests               | Final pass: 11/11 in 3.75 seconds, including diagnostic serialization, concurrent admission/snapshots and Standard/reversed WARP                                           |
-| Standard shader equivalence                 | Passed: 12/12 Hybrid and 4/4 mask DXBC comparisons identical against integration `29ce68539`; separate strict-FXC sweep not run                                            |
-| Production without DevBench validation      | Passed: actual-flag OFF syntax/preprocessor audit for Hybrid, Temporal and Menu bridge; 27 markers absent per TU; no separate OFF DLL link                                 |
-| DevBench AIO archive                        | Passed: 90,819,500-byte archive; integrity and all 369 extracted file hashes verified; exact identity in the Hybrid record                                                 |
-| Integration deployment/runtime identity     | Not run                                                                                                                                                                    |
-| Native/HMD fidelity, fallback and lifecycle | Not run                                                                                                                                                                    |
-| Comparable CPU/GPU/VRAM performance         | Not run                                                                                                                                                                    |
-| PBR/optimized grass/Reverse-Z qualification | Not started                                                                                                                                                                |
+| Evidence                                    | Status in this update                                                                                                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Supplied source provenance                  | Passed: initial copies matched the recorded original byte lengths and SHA-256; tracked references use repository formatting normalization                                            |
+| Cross-document scope/sequence audit         | Completed; obsolete prompts and differing donor snapshots identified                                                                                                                 |
+| Current-code depth-consumer reconnaissance  | Completed for the concrete surfaces listed above; exhaustive R1 audit remains open                                                                                                   |
+| Current-main Hybrid integration             | Integrated as `29ce68539c1fa489b241135d1a7629ccddf6a4e3`; publication/SRV and D3D-owner corrections implemented; final diagnostic artifact recorded in the Hybrid document           |
+| Integration changed-file hooks              | Passed except gersemi skipped after proposing an unrelated 438-line CMake baseline rewrite; that rewrite was restored                                                                |
+| Exact integration DLL build                 | Final universal ALL Release DLL passed (SE/AE/VR, DevBench ON, Tracy OFF); manifest and artifact hash/size verified                                                                  |
+| Focused controller/WARP tests               | Final pass: 11/11 in 3.75 seconds, including diagnostic serialization, concurrent admission/snapshots and Standard/reversed WARP                                                     |
+| Standard shader equivalence                 | Passed: 12/12 Hybrid and 4/4 mask DXBC comparisons identical against integration `29ce68539`; separate strict-FXC sweep not run                                                      |
+| Production without DevBench validation      | Passed: actual-flag OFF syntax/preprocessor audit for Hybrid, Temporal and Menu bridge; 29 markers absent per TU after native-count follow-up; no separate OFF DLL link              |
+| DevBench AIO archive                        | Original archive preserved; native-count AIO 90,846,788 bytes, 369-file verification passed; installed physical DLL/manifest/receipt match runtime identity                          |
+| Integration deployment/runtime identity     | Runtime receipts match original AIO Build ID/source/hash; measured identity retained in the noon report                                                                              |
+| Native/HMD fidelity, fallback and lifecycle | Static and common-pose motion ROI samples show no obvious defects; 640 originals verified; unequal route coverage, temporal and lifecycle gates remain open                          |
+| Comparable CPU/GPU/VRAM performance         | Original eight noon windows show regression; later native-count-build timings are descriptive because concurrent compilation was confirmed; quiet repeat pending; VRAM not qualified |
+| PBR/optimized grass/Reverse-Z qualification | Not started                                                                                                                                                                          |
 
 For every measurement report backend admission, requested/effective mode,
 sample counts, warmup/transition boundaries, exact configuration and source
@@ -571,7 +631,16 @@ as separate results.
 
 ## Next bounded work
 
-The requested DevBench-enabled AIO archive is complete and verified.
-Finalize the first draft PR, then qualify native fidelity, lifecycle/fallback and matched performance
-using the documented diagnostics. PBR grass is the next feature PR. Keep runtime gates explicit and update this plan in the implementation
-commits; no render-scale qualification is claimed by these checks.
+Keep PR 104 experimental. Native before/after-recovery counters now confirm
+the efficacy gap in all four modes. Complete the timing repeat after the
+other chat's full build sequence finishes, with menu, clock and process
+activity evidence. Investigate bounded finer-cell depth
+tests that can avoid artificial pyramid padding without weakening visibility
+or motion safeguards, then rebuild and repeat the attributed comparison.
+Extend temporal and lifecycle/fallback checks beyond the bounded motion
+review. Preserve both measured noon regressions and their build identities;
+do not infer efficacy from accepted history alone. The donor
+[PR 818 comparison](vr-hybrid-culling-runtime-2026-10-03.md#comparison-with-the-reverse-z-donor-evidence)
+reinforces this distinction but does not qualify motion or CSX correctness.
+PBR grass remains the next independent feature PR, followed by grass
+optimization and Reverse Z. No render-scale qualification is claimed.

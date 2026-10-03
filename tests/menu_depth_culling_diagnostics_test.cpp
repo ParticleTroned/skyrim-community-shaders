@@ -119,6 +119,24 @@ namespace
 		Require(status.at("cpuTimings").at("replayDownscale").at("meanNanoseconds").is_null(),
 			"An unexecuted replay was reported as zero cost");
 	}
+
+	void PreservesNativeVisibilityBeforeAndAfterRecovery()
+	{
+		VRDepthCullingTemporal::Status temporal{};
+		VRHybridCulling::Status hybrid{};
+		const auto empty = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("nativeVisibility");
+		Require(empty.at("batches") == 0 && empty.at("testedObjects") == 0 && empty.at("unreadableBatches") == 0,
+			"Native visibility fabricated an unmeasured batch");
+		temporal.nativeVisibility = { 2, 1, 3, 8, 5, 3, 4, 4 };
+		hybrid.acceptedOccludedObjects = 100;
+		const auto status = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid);
+		const auto& native = status.at("nativeVisibility");
+		Require(native.at("batches") == 2 && native.at("emptyBatches") == 1 && native.at("unreadableBatches") == 3 && native.at("testedObjects") == 8 &&
+					native.at("occludedBeforeRecovery") == 5 && native.at("visibleBeforeRecovery") == 3 &&
+					native.at("occludedAfterRecovery") == 4 && native.at("visibleAfterRecovery") == 4 &&
+					status.at("hybrid").at("acceptedOccludedObjects") == 100,
+			"Native recovery or Hybrid result ownership was lost in serialization");
+	}
 }
 
 int main()
@@ -127,6 +145,7 @@ int main()
 		PreservesInactiveAndFallbackEvidence();
 		DistinguishesMissingSourceAndUnmeasuredTiming();
 		SeparatesNativeReadbackFromValidation();
+		PreservesNativeVisibilityBeforeAndAfterRecovery();
 		std::cout << "Depth-culling diagnostic serialization passed\n";
 		return 0;
 	} catch (const std::exception& error) {

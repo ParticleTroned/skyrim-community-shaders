@@ -11,6 +11,67 @@
 
 namespace
 {
+	void CheckNativeVisibilityObservation()
+	{
+		using namespace VRNativeVisibilityTelemetry;
+		using namespace VRDepthCullingTelemetryPolicy;
+		Counters counters;
+		WriterGate gate;
+		std::array<std::uint32_t, 5> results{ 0, 1, 0, 7, 0 };
+		std::uint32_t reads = 0;
+		const auto readBatch = [&] {
+			++reads;
+			return Batch{ results.data(), static_cast<std::uint32_t>(results.size()), 0 };
+		};
+		gate.SetEnabled(false);
+		{
+			const Scope disabled(counters, gate, readBatch);
+		}
+		if (reads != 0 || counters.Read().batches != 0)
+			throw std::runtime_error("disabled native visibility telemetry inspected results");
+		gate.SetEnabled(true);
+		{
+			const Scope observation(counters, gate, readBatch);
+			if (TryReset(gate, [&]() noexcept { counters.Reset(); }))
+				throw std::runtime_error("reset split native visibility before and after recovery");
+			gate.SetEnabled(false);
+			if (gate.IsFrozen())
+				throw std::runtime_error("native visibility observation lost freeze exclusion");
+			results[0] = 1;
+		}
+		const auto measured = counters.Read();
+		if (!gate.IsFrozen() || reads != 1 || measured.batches != 1 || measured.testedObjects != 5 ||
+			measured.occludedBeforeRecovery != 3 || measured.visibleBeforeRecovery != 2 ||
+			measured.occludedAfterRecovery != 2 || measured.visibleAfterRecovery != 3)
+			throw std::runtime_error("native visibility lost nonzero results or recovery promotions");
+		if (!TryReset(gate, [&]() noexcept { counters.Reset(); }))
+			throw std::runtime_error("native visibility counters could not reset after draining");
+		gate.SetEnabled(true);
+		for (const auto batch : { Batch{}, Batch{ nullptr, 2, 0 }, Batch{ results.data(), 5, 2 },
+				 Batch{ results.data(), VRDepthCullingTemporalPolicy::kMaximumObjects + 1, 0 }, Batch{ nullptr, 0, 1 } }) {
+			const Scope invalid(counters, gate, [batch] { return batch; });
+		}
+		const auto rejected = counters.Read();
+		if (rejected.batches || rejected.testedObjects || rejected.occludedBeforeRecovery || rejected.visibleBeforeRecovery ||
+			rejected.occludedAfterRecovery || rejected.visibleAfterRecovery || rejected.unreadableBatches != 4 || rejected.emptyBatches != 1)
+			throw std::runtime_error("invalid native batches were scanned or reported as visible results");
+		std::array<std::uint32_t, VRDepthCullingTemporalPolicy::kMaximumObjects> maximum{};
+		maximum.back() = 1;
+		{
+			const Scope limit(counters, gate, [&] { return Batch{ maximum.data(), static_cast<std::uint32_t>(maximum.size()), 1 }; });
+		}
+		const auto boundary = counters.Read();
+		if (boundary.batches != 1 || boundary.testedObjects != maximum.size() || boundary.occludedBeforeRecovery != maximum.size() - 1 ||
+			boundary.visibleBeforeRecovery != 1 || boundary.occludedAfterRecovery != boundary.occludedBeforeRecovery || boundary.visibleAfterRecovery != 1)
+			throw std::runtime_error("native visibility lost a maximum-sized batch");
+		if (!TryReset(gate, [&]() noexcept { counters.Reset(); }))
+			throw std::runtime_error("native visibility reset remained busy");
+		const auto cleared = counters.Read();
+		if (cleared.batches || cleared.emptyBatches || cleared.unreadableBatches || cleared.testedObjects ||
+			cleared.occludedBeforeRecovery || cleared.visibleBeforeRecovery || cleared.occludedAfterRecovery || cleared.visibleAfterRecovery)
+			throw std::runtime_error("native visibility reset retained counts");
+	}
+
 	void CheckStageTimingAdmissionAndDistribution()
 	{
 		using namespace VRDepthCullingTelemetry;
@@ -170,6 +231,7 @@ int main()
 	CheckCombinedReset();
 	CheckStageTimingAdmissionAndDistribution();
 	CheckSnapshotPublicationCoherence();
+	CheckNativeVisibilityObservation();
 	static_assert(VRDepthCullingTemporal::Status::DurationBinCount == DurationBinCount);
 	if (DurationBin(0) != 0 || DurationBin(std::numeric_limits<std::uint64_t>::max()) != DurationBinCount - 1) {
 		throw std::runtime_error("duration histogram boundary is incorrect");

@@ -1,9 +1,11 @@
 # Experimental VR Hybrid Hi-Z culling
 
 Hybrid is an optional Skyrim VR 1.4.15 visibility producer for comparison
-with Advanced. Advanced remains the default. Hybrid is not yet accepted
-as performance neutral or visually equivalent: those are separate runtime
-acceptance requirements, and CPU/shader tests do not establish either.
+with Advanced. Advanced remains the default. The first repeated noon
+four-mode assay found Hybrid materially slower than Advanced and Legacy.
+Limited static stereo review found no obvious missing solid geometry in
+sampled previews; motion and lifecycle correctness remain unqualified.
+See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -139,7 +141,7 @@ depth, stereo visibility, viewport margins, clipping, asymmetric
 perspective and small bounds at large world coordinates. History and
 settings tests cover batch correspondence and method migration.
 
-Runtime acceptance requires controlled Advanced/Hybrid comparisons on
+Runtime acceptance requires controlled off/Legacy/Advanced/Hybrid comparisons on
 the same build base, hardware, scene, settings and camera motion. Include
 stationary views, rapid head rotation and translation, dense exteriors,
 interiors, moving occluders, cell transitions, native resolution and
@@ -471,7 +473,8 @@ staging tree by exact relative path, size and SHA-256. The 7-Zip integrity
 test passed. The DLL, PDB, manifest, three Hybrid shaders and DepthOrder
 helper match their producer files. Three pinned FidelityFX DLLs and their
 source license, plus six Streamline DLLs and five notices, were verified.
-No deployment or game launch occurred.
+Packaging did not deploy or launch the game. Later runtime evidence is
+recorded below.
 
 | Field             | AIO identity                                                                                |
 | ----------------- | ------------------------------------------------------------------------------------------- |
@@ -512,10 +515,103 @@ Build logs are `build/astra-validation/aio-configure.log` and
 `build/astra-validation/aio/validate.ps1`. This is a developer package,
 with no release/RC allocation or prebuilt shader-cache generation.
 
+## Noon runtime evaluation and diagnostic follow-up, 2026-10-03
+
+Two approximately 20-second fpsVR repeats completed for each of Off,
+Legacy, Advanced and Hybrid in the same Whiterun exterior fixture, with
+noon reset before each condition and phase. The measured AIO is Build ID
+`66b6efdee77bd3e03a565b8698cf395e332c44c4e62d0af479ad7a47ec152088`, compiled
+from `29ce68539c1fa489b241135d1a7629ccddf6a4e3` plus the recorded dirty
+source, not the later repository head.
+
+Hybrid's mean CPU/GPU times were 18.817793/11.283064 ms and
+16.524725/10.324555 ms. Advanced measured 12.088390/8.722472 ms and
+11.310150/8.431094 ms; Legacy measured 11.615019/8.608075 ms and
+10.922291/8.244168 ms; Off measured 19.704537/11.637931 ms and
+19.360093/11.681488 ms. The Index session budget was 8.333333 ms at 120 Hz.
+CPU and GPU durations overlap. These results fail Hybrid performance
+neutrality in this fixture, despite 6518/6518 and 3205/3205 accepted
+Hybrid batches and zero recorded fallback, invalidated/unreadable batches,
+warm pipeline builds or pyramid allocations.
+
+All four static stereo sequences completed. Independent visual review
+covered 16 previews from 64 validated originals and found no obvious large
+geometry or stereo defects in those samples. JPEG/display scaling, animated
+contents and physical pose variation limit that conclusion. Motion,
+disocclusion, near-plane and lifecycle behavior are not qualified. Exact
+means/quantiles, identity, sample definitions, source links and the
+distinct evidence limits of upstream Reverse-Z PR 818 are in the
+[runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
+
+The new additive `depthCullingTemporal.nativeVisibility` fields count
+native CPU-result batches before and after Advanced recovery. They include
+native fallback and exclude all Hybrid-owned readbacks, retain explicit
+empty/unreadable counts, and use one existing telemetry writer across both
+observations. Counts represent batch observations, not unique objects.
+Disabled telemetry does not inspect the array. No extra GPU readback,
+culling-policy or shader change is introduced. The complete diagnostic
+path is guarded by `DEVBENCH_BRIDGE_ENABLED`.
+
+These counters are absent from the original measured DLL. Both
+`VRDepthCullingTelemetryPolicy` and `MenuDepthCullingDiagnostics` tests
+passed after the change. DevBench ON syntax checks passed for Temporal
+and Menu; OFF syntax/preprocessing passed for Hybrid, Temporal and Menu
+using actual forced headers, with all 29 diagnostic markers absent.
+Scoped formatting and diff checks passed. Evidence is under worktree
+`build/astra-validation/native-visibility-tests-final-20261003T210450171Z/`
+and `build/astra-validation/production-boundary/` (initial OFF
+`20261003T205835011Z`, final Menu OFF `20261003T210440104Z`, ON Temporal/Menu
+`native-visibility-on-20261003T210225404Z`, final Menu ON
+`native-visibility-on-20261003T210453804Z`). The new universal DevBench ON,
+Tracy OFF DLL/AIO has now built and passed archive verification:
+
+| Field                   | Native-count AIO identity                                                       |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| Compiled source         | `c684ff32c9f75c97f6743fe2829ca7eb040525f2`, dirty                               |
+| Dirty digest            | `92ea1d0bb80e669a84b01843dd8cb1ed4403257ddd298e60051c43cb01839c86`              |
+| Build ID                | `ee0c10f34abe0a5a7197ce4f77436273355c80b1c72747deb7a9331d9a44d5c3`              |
+| Archive bytes / SHA-256 | 90,846,788 / `c4b48a061544cb84a45c58189d51803368a00dce5078c8a18746e954618b9449` |
+| DLL bytes / SHA-256     | 29,625,856 / `7ca6b10542a836e33b59033220e3c477bea97aaef02a272f34f4a391d4d7f1a3` |
+
+All 369 extracted files (374,724,498 bytes) matched staging. Archive
+integrity, DLL/PDB/manifest, shader and pinned-runtime verification passed.
+Source remained stable through the build, and both original archive copies
+remain unchanged. The [new archive](D:/Coding/GitHub/skyrim-community-shaders/dist/CSX_AIO-astra-hiz-native-counts-DevBench-ee0c10f34abe.7z)
+has its [own verification receipt](D:/Coding/GitHub/skyrim-community-shaders/dist/CSX_AIO-astra-hiz-native-counts-DevBench-ee0c10f34abe.receipt.json).
+The build/delivery record is worktree
+`build/astra-validation/native-count-rebuild-20261003T213736453Z/`.
+The user installed and restarted this AIO. The separate
+[native-count report](vr-hybrid-culling-native-counts-2026-10-03.md)
+records verified runtime/physical identity, repeated Off/Legacy/Advanced/
+Hybrid count windows and telemetry-disabled timings. Native rejection was
+about 61-62% versus Hybrid's 19%; no Advanced recovery promotions or Hybrid
+history rejection explained that gap. These new timings are descriptive:
+concurrent compilation and differing simulation-clock progression prevent
+a controlled performance verdict. A quiet repeat is pending. Hybrid remains
+experimental following the original measured regression. Counts are repeated
+batch observations, not matched persistent object identities.
+
+The original measured DLL also completed four final motion ROI bursts of
+160 consecutive frames each, covering 8.7075% of each eye. Native PNGs open
+without resizing. The planned 64-step route has nine observed checkpoints;
+captures cover 5/9 in Advanced, 6/9 in Legacy and 9/9 in Hybrid/Off. Only
+common poses 0 through 32 support a fair four-mode comparison. Hybrid route
+deltas are +84 submitted, +20 accepted and +64 `view_changed` invalidations,
+with zero native fallback; observed cache `cameraAdjust` changed. All 640
+original PNGs passed artifact verification. The completed sampled visual
+review found no obvious holes or eye-specific geometry disappearance in
+the common-pose samples and adjacent-frame candidates. This does not
+qualify temporal behavior, physical head motion or the whole image; clean
+samples during fail-visible rejection do not prove sustained culling
+efficacy. Exact selection, review-player and coverage links are in the
+[runtime report](vr-hybrid-culling-runtime-2026-10-03.md#bounded-motion-review).
+
 ## DevBench in-game evaluation procedure
 
-This is a procedure for the final validated build, not a record of an
-executed runtime test. Follow the installed automation controls for session
+Executed results are recorded separately in the
+[noon runtime report](vr-hybrid-culling-runtime-2026-10-03.md). The procedure
+below defines subsequent qualification windows; it does not imply that
+every listed scenario has run. Follow the installed controls for session
 ownership, capture and deployment. Verify the exact enabled AIO DLL against
 its manifest/receipt and the running producer first. Replace every
 `<verified-build-id>` below with that final 64-character Build ID. The text
@@ -542,6 +638,19 @@ material pack, render scale, upscaler/foveation mode and camera route for
 each comparison. GO stays absent/off for D1. Predeclare the sample window,
 repeat count and stopping conditions; a 300-frame profiler capture is one
 bounded window, not necessarily an entire motion/lifecycle route.
+Every repeated performance and stereo-visual comparison includes all four
+conditions: native depth culling off, Legacy, Advanced and Hybrid. Legacy
+is required in each matched set. For off, disable the relevant depth-culling
+enable controls and record the configured method and effective state.
+
+Unless an explicit test protocol requires another time, reset the game to
+noon before every condition and again before each separate visual, profiler
+or fpsVR phase. Use the guarded DevBench command path, verify the scene's
+observed `gameHour` is in `[12, 12.05]`, then settle for at least five seconds
+before capture. Retain the command, scene observation and settling evidence.
+An unverified reset invalidates that window. Preserve earlier night or
+mixed-time captures as diagnostic evidence and exclude them from the final
+matched comparison.
 
 Use `communityshaders.menu` to record settings and select a method:
 
@@ -785,8 +894,9 @@ than continue a mixed-identity campaign.
 | Missing or rejected source                           | Preserve `null` data, `snapshot_busy`, superseded/older-frame/inactive/rejected reasons and `droppedSourceSnapshots`; do not interpret a retained SRV or matrix as a depth-content-freshness proof                                                                                        |
 | Resource counts and bytes                            | Pipeline attempts/builds/recreations, pyramid allocations/builds/dispatches and bounds dispatches expose actual work. Logical R32-float texel bytes/high-water are uncompressed accounting, not driver VRAM/residency                                                                     |
 
-Run repeated matched Advanced/Hybrid windows and diagnostic Legacy/off
-references as appropriate, preferably alternating order to expose drift.
+Run repeated matched off/Legacy/Advanced/Hybrid windows for both performance
+and stereo visuals, preferably alternating order to expose drift. Reset
+and verify noon before every condition and each separate capture phase.
 Retain cold-start/switch/recovery costs separately from warmed steady state.
 Compare stationary dense exterior/interior views, head rotation/translation,
 thin occluders/door edges, moving occluders, near/far geometry and cell/load

@@ -3,6 +3,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "VRDepthCullingTelemetry.h"
 #	include "VRDepthCullingTelemetryPolicy.h"
+#	include "VRNativeVisibilityTelemetry.h"
 
 #	include <array>
 #	include <cstddef>
@@ -61,6 +62,7 @@ namespace VRDepthCullingTemporal
 		std::uint32_t measurementStartFrame = 0;
 		bool measurementWindowCurrent = false;
 		VRDepthCullingTelemetry::StageTiming nativeReadback, outerDownscale, replayDownscale, nativeProducer;
+		VRNativeVisibilityTelemetry::Status nativeVisibility;
 		std::uint64_t envelopeMisses = 0;
 		std::uint64_t recoveryAttempts = 0;
 		std::uint64_t objectsInspected = 0;

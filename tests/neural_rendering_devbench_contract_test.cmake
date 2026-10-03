@@ -3416,8 +3416,8 @@ foreach(_prepared_lookup_contract IN ITEMS
 endforeach()
 string(REGEX MATCHALL [[state_->FindPreparedSlot\(]] _prepared_lookup_calls "${_character_source}")
 list(LENGTH _prepared_lookup_calls _prepared_lookup_count)
-if(NOT _prepared_lookup_count EQUAL 2)
-    message(FATAL_ERROR "The combined prepared-selection accessor and queued finalization must both use shared prepared-resource validation")
+if(NOT _prepared_lookup_count EQUAL 3)
+    message(FATAL_ERROR "Prepared selection, queued finalization and output publication must all use shared prepared-resource validation")
 endif()
 
 string(FIND "${_renderer_source}" [[bool Renderer::State::ApplyBatchLocked(]] _region_batch_begin)

@@ -21,6 +21,12 @@
 
 namespace NeuralRendering
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	namespace MeasuredPlan
+	{
+		struct SearchInput;
+	}
+#endif
 	struct CharacterActorBound
 	{
 		float centerX = 0.0f;
@@ -248,6 +254,9 @@ namespace NeuralRendering
 		CharacterSettings settings{};
 		/** True when compositing into the source raster before temporal upscaling. */
 		bool outputIsJittered = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool measuredPlanSearch = false;
+#endif
 	};
 
 	struct CharacterMaskPrepareResult
@@ -262,6 +271,9 @@ namespace NeuralRendering
 		std::optional<RoiDescriptor> roi;
 		/** A proven-empty episode invalidates model history without retiring resources. */
 		bool resetHistory = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::shared_ptr<const MeasuredPlan::SearchInput> measuredPlanInput;
+#endif
 	};
 
 	/** One locked read of a prepared slot; GPU contents retain render-thread ownership. */
@@ -277,6 +289,11 @@ namespace NeuralRendering
 	class CharacterRendering
 	{
 	public:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Publish only a successful execution's copy domain against its exact prepared mask. */
+		bool PublishOutputPlan(std::uint32_t slot, std::uint32_t frame, std::uint32_t sourceFrame,
+			std::uint64_t generation, std::uint32_t width, std::uint32_t height, const CharacterOutputPlan& output);
+#endif
 		static CharacterRendering& Instance();
 
 		CharacterRendering(const CharacterRendering&) = delete;

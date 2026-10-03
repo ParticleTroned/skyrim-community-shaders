@@ -1,5 +1,5 @@
 include(NeuralRenderingCaptureTests)
-foreach(_test IN ITEMS neural_measured_plan neural_compact_layout)
+foreach(_test IN ITEMS neural_measured_plan neural_measured_search neural_compact_layout)
     add_controller_test(${_test}_test ${_test} tests/${_test}_test.cpp)
     target_compile_definitions(${_test}_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
     target_link_libraries(${_test}_test PRIVATE nlohmann_json::nlohmann_json)
@@ -243,7 +243,8 @@ set(_neural_selection_headers
     "${_neural_selection_test_dir}/neural_empty_dispatch_under_test.h"
     "${_neural_selection_test_dir}/neural_preparation_evidence_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_result_under_test.h"
-    "${_neural_selection_test_dir}/neural_prepared_selection_under_test.h")
+    "${_neural_selection_test_dir}/neural_prepared_selection_under_test.h"
+    "${_neural_selection_test_dir}/neural_output_plan_under_test.h")
 add_custom_command(
     OUTPUT ${_neural_selection_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"

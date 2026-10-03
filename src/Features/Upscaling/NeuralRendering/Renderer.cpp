@@ -12,6 +12,8 @@
 #	include "BuildProvenance.h"
 #	include "ExecutionEvidenceJson.h"
 #	include "MeasuredPlanJson.h"
+#	include "MeasuredPlanSearch.h"
+#	include <atomic>
 #	include "CompactInputLayout.h"
 #	include "ReplayCapture.h"
 #	include <exception>
@@ -655,16 +657,18 @@ namespace NeuralRendering
 		CapacityKey requestedCapacity_{};
 		CapacityFallback capacityFallback_{};
 		std::uint32_t requestedRegionCount_ = 0;
-		bool measuredPlanEnabled_ = false;
+		std::atomic_bool measuredPlanEnabled_{ false };
 		bool forceFullCoordinates_ = false;
 		std::array<CompactInputRetention, Runtime::kFeatureSlotCount> compactRetention_{};
 		ComPtr<ID3D11ComputeShader> copyCompactDepthGuideCS_;
 		std::optional<MeasuredPlan::Profile> measuredPlanProfile_;
-		MeasuredPlan::State measuredPlanState_{};
+		std::array<MeasuredPlan::State, kLogicalFeatureSlotCount> measuredPlanState_{};
 		nlohmann::json measuredPlanDiagnostics_;
 		std::array<RendererApplyArgs, kEyeCount> SelectMeasuredPlanLocked(std::span<const RendererApplyArgs> args);
 		struct ValidatedResources;
 		void ApplyCompactLayoutLocked(const RendererApplyArgs& args, ValidatedResources& resources) const;
+		nlohmann::json MeasuredPlanKeyLocked(std::span<const RendererApplyArgs> args,
+			std::span<const ValidatedResources> resources, std::span<const std::uint64_t> clusters, bool& rejected) const;
 #endif
 
 		struct Slot
@@ -856,9 +860,15 @@ namespace NeuralRendering
 		void FinishLifetimeLocked(LifetimeRecord& record, bool unwinding) noexcept;
 		void CaptureLifetimeResourcesLocked(LifetimeRegion& region, const Slot& slot) const noexcept;
 #endif
+		void FinalizeResourceKeysLocked(const RendererApplyArgs& args, ValidatedResources& resources) const;
 		ValidationFailure ValidateLocked(
 			const RendererApplyArgs& a_args,
-			ValidatedResources& a_resources);
+			ValidatedResources& a_resources
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			bool recordEvidence = true
+#endif
+		);
 		bool ValidateD3D12FormatsLocked(
 			const ValidatedResources& a_resources,
 			std::string& a_detail) const;
@@ -982,7 +992,12 @@ namespace NeuralRendering
 
 	Renderer::State::ValidationFailure Renderer::State::ValidateLocked(
 		const RendererApplyArgs& a_args,
-		ValidatedResources& a_resources)
+		ValidatedResources& a_resources
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		bool recordEvidence
+#endif
+	)
 	{
 		a_resources = {};
 		const auto fail = [](std::string a_detail) {
@@ -1227,6 +1242,39 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		ApplyCompactLayoutLocked(a_args, a_resources);
 #endif
+		FinalizeResourceKeysLocked(a_args, a_resources);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!recordEvidence)
+			return {};
+#endif
+		for (auto& capture : captureInputs_) {
+			if (!capture.Matches(a_args.featureSlot % 4u >= 2u ? 1u : 0u, a_args.frameId,
+					a_args.sourceWorldFrame, a_args.generation, static_cast<std::uint32_t>(a_args.insertionPoint)) ||
+				a_args.featureSlot >= capture.slots.size())
+				continue;
+			auto& observation = capture.slots[a_args.featureSlot];
+			observation.frame = a_args.frameId;
+			observation.sourceWorldFrame = a_args.sourceWorldFrame;
+			observation.generation = a_args.generation;
+			observation.insertion = capture.insertion;
+			observation.slot = a_args.featureSlot;
+			observation.revision = capture.configuration.revision;
+			observation.mode = capture.configuration.EffectiveMode();
+			observation.profile = Color::EffectiveProfile(capture.configuration, capture.insertion);
+			observation.bypass = capture.configuration.experiments.transportBypass;
+			observation.modelEditShown = capture.configuration.experiments.applyModelEdit;
+			observation.lightingPreservation = Color::ResolveReconstructionSettings(capture.configuration.settings).lightingPreservation;
+			observation.rect = a_resources.roi.ownedOutput;
+			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.resourceKey.colorFormat);
+			observation.outputFormat = static_cast<std::uint32_t>(a_resources.resourceKey.outputFormat);
+			capture.slotMask |= 1u << a_args.featureSlot;
+		}
+		return {};
+	}
+
+	void Renderer::State::FinalizeResourceKeysLocked(const RendererApplyArgs& a_args, ValidatedResources& a_resources) const
+	{
+		const bool hasControlMask = a_args.controlMask != nullptr;
 		a_resources.resourceKey = {
 			.colorWidth = a_resources.nativeLayout.color.backing.width,
 			.colorHeight = a_resources.nativeLayout.color.backing.height,
@@ -1270,29 +1318,6 @@ namespace NeuralRendering
 			.useAutoMask = a_args.tuning.useAutoMask,
 			.uiCorrection = a_args.tuning.uiCorrection,
 		};
-		for (auto& capture : captureInputs_) {
-			if (!capture.Matches(a_args.featureSlot % 4u >= 2u ? 1u : 0u, a_args.frameId,
-					a_args.sourceWorldFrame, a_args.generation, static_cast<std::uint32_t>(a_args.insertionPoint)) ||
-				a_args.featureSlot >= capture.slots.size())
-				continue;
-			auto& observation = capture.slots[a_args.featureSlot];
-			observation.frame = a_args.frameId;
-			observation.sourceWorldFrame = a_args.sourceWorldFrame;
-			observation.generation = a_args.generation;
-			observation.insertion = capture.insertion;
-			observation.slot = a_args.featureSlot;
-			observation.revision = capture.configuration.revision;
-			observation.mode = capture.configuration.EffectiveMode();
-			observation.profile = Color::EffectiveProfile(capture.configuration, capture.insertion);
-			observation.bypass = capture.configuration.experiments.transportBypass;
-			observation.modelEditShown = capture.configuration.experiments.applyModelEdit;
-			observation.lightingPreservation = Color::ResolveReconstructionSettings(capture.configuration.settings).lightingPreservation;
-			observation.rect = a_resources.roi.ownedOutput;
-			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.resourceKey.colorFormat);
-			observation.outputFormat = static_cast<std::uint32_t>(a_resources.resourceKey.outputFormat);
-			capture.slotMask |= 1u << a_args.featureSlot;
-		}
-		return {};
 	}
 
 	bool Renderer::State::ValidateD3D12FormatsLocked(
@@ -2186,6 +2211,9 @@ namespace NeuralRendering
 		a_outcome = {};
 		// All regions of both eyes must use immutable inputs and one commit boundary.
 		if (colorConfiguration_.Enabled() ||
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			measuredPlanEnabled_.load(std::memory_order_relaxed) ||
+#endif
 			a_args[0].computeRegions.count != 0u || a_args[1].computeRegions.count != 0u)
 			return ApplyBatchLocked(a_args, a_outcome);
 		SetActiveFeatureSlotLocked(a_args[0].featureSlot);
@@ -2277,6 +2305,58 @@ namespace NeuralRendering
 		}
 	}
 
+	nlohmann::json Renderer::State::MeasuredPlanKeyLocked(std::span<const RendererApplyArgs> args,
+		std::span<const ValidatedResources> resources, std::span<const std::uint64_t> clusters, bool& rejected) const
+	{
+		using Json = nlohmann::json;
+		Json key = Json::array();
+		std::array<bool, kMaximumRegionEvaluations> forced{}, rebuilt{};
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			const auto& value = args[index];
+			const auto& resource = resources[index];
+			const auto& slot = slots_[value.featureSlot];
+			const auto owner = FindSourceTransportOwner(args, resources, index);
+			const auto identities = [](const Slot& source) {
+				return std::array{ source.color.resource12.Get(), source.depth.resource12.Get(),
+					source.motionVectors.resource12.Get(), source.controlMask.resource12.Get() };
+			};
+			const auto requested = identities(slots_[args[owner].featureSlot]);
+			const bool sameOwner = !resource.resourceKey.sharedSourceTransport ||
+			                       ((owner == index || !rebuilt[owner]) && CanReuseSourceBinding(slot.sourceTransportOwnerSlot,
+																			   args[owner].featureSlot, identities(slot), owner == index ? nullptr : &requested));
+			const bool rebuild = !runtimeReady_ || !interop_.IsInitialized() || !slot.resourcesValid || !sameOwner ||
+			                     slot.resourceKey != resource.resourceKey || !device_ || !SameIdentity(device_.Get(), value.device) || !SameIdentity(context_.Get(), value.context);
+			rebuilt[index] = rebuild;
+			forced[index] = rebuild || value.synchronizedHistoryReset || value.synchronizedHistoryDiscontinuity ||
+			                !slot.historyValid || slot.historyKey != resource.historyKey || !IsSequentialFrame(slot.lastSuccessfulFrame, value.frameId) ||
+			                !IsSourceWorldFrameContinuous(slot.lastSuccessfulSourceWorldFrame, value.sourceWorldFrame);
+			rejected |= capacityRejections_.Rejects({ resource.resourceKey, reinterpret_cast<std::uintptr_t>(value.device),
+				value.featureSlot, static_cast<std::uint32_t>(args.size()) });
+			const auto& tuning = value.tuning;
+			key.push_back({ { "slot", value.featureSlot }, { "layout", Evidence::NativeLayoutJson(resource.nativeLayout) },
+				{ "compactSource", resource.roi.compactSource ? Evidence::SubrectJson(*resource.roi.compactSource) : Json(nullptr) },
+				{ "mode", value.executionContext.renderingMode ? Json(GetRenderingModeName(*value.executionContext.renderingMode)) : Json(nullptr) },
+				{ "ownership", Evidence::SubrectJson(resource.roi.ownedOutput) }, { "viewport", Evidence::ViewportJson(value.viewportCrop) },
+				{ "insertion", value.insertionPoint }, { "callerReset", value.reset },
+				{ "effectiveReset", value.reset || forced[index] }, { "resourceRebuild", rebuild },
+				{ "colorFormat", resource.color.desc.Format }, { "outputFormat", resource.output.desc.Format },
+				{ "outputHasUav", (resource.output.desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0 },
+				{ "depthSourceFormat", resource.depth.desc.Format }, { "depthViewFormat", resource.depthViewFormat },
+				{ "motionFormat", resource.motionVectors.desc.Format }, { "controlMask", resource.resourceKey.controlMaskPresent },
+				{ "sharedInputs", resource.resourceKey.sharedSourceTransport }, { "sourceOwnerSlot", args[owner].featureSlot },
+				{ "tuning", { tuning.intensity, tuning.localToneStrength, tuning.localStructureStrength, tuning.skinStructureStrength,
+								tuning.style, tuning.useAutoMask, tuning.uiCorrection } } });
+		}
+		for (std::size_t i = 0; i < key.size(); ++i)
+			for (std::size_t j = i + 1; j < key.size(); ++j)
+				if (IsMatchingRegionStereoPair(args[i].featureSlot, clusters[i], args[j].featureSlot, clusters[j])) {
+					const bool reset = forced[i] || forced[j];
+					key[i]["effectiveReset"] = args[i].reset || reset;
+					key[j]["effectiveReset"] = args[j].reset || reset;
+				}
+		return key;
+	}
+
 	std::array<RendererApplyArgs, kEyeCount> Renderer::State::SelectMeasuredPlanLocked(std::span<const RendererApplyArgs> args)
 	{
 		using Json = nlohmann::json;
@@ -2298,7 +2378,8 @@ namespace NeuralRendering
 			{ "subsystem", desc.SubSysId }, { "revision", desc.Revision }, { "driver", driver.QuadPart },
 			{ "color", Color::ConfigurationEvidenceJson(colorConfiguration_) } };
 		measuredPlanDiagnostics_["identity"] = identity;
-		std::array<std::vector<MeasuredPlan::Partition>, kEyeCount> alternatives;
+		std::array<std::vector<MeasuredPlan::SearchCandidate>, kEyeCount> alternatives;
+		Json searchDiagnostics = Json::array();
 		std::array<ValidatedResources, kEyeCount> inputResources;
 		for (std::size_t eye = 0; eye < args.size(); ++eye) {
 			const auto& value = args[eye];
@@ -2309,19 +2390,28 @@ namespace NeuralRendering
 				measuredPlanDiagnostics_["reason"] = "no_valid_partition";
 				return original;
 			}
-			alternatives[eye] = MeasuredPlan::Candidates(value.computeRegions, value.outputWidth, value.outputHeight);
+			const auto* input = value.measuredPlanInput.get();
+			if (input && !input->Matches(value.sourceWorldFrame, value.generation, value.featureSlot))
+				input = nullptr;
+			auto search = MeasuredPlan::Search(value.computeRegions, value.computeSubrect, value.outputWidth, value.outputHeight, input);
+			searchDiagnostics.push_back({ { "slot", value.featureSlot }, { "inputValid", search.inputValid },
+				{ "coverageSource", !search.inputValid ? "unavailable" : input->gpuCoverage ? "current_gpu_superset" :
+																							  "cpu_actor_eligibility" },
+				{ "visitedCuts", search.visited }, { "rejectedCuts", search.rejected }, { "coverageChecks", search.coverageChecks }, { "coverageCheckBudget", MeasuredPlan::kCoverageCheckBudget }, { "truncated", search.truncated },
+				{ "retainedCandidates", search.candidates.size() }, { "maximumCandidates", MeasuredPlan::kMaximumCandidatesPerEye } });
+			alternatives[eye] = std::move(search.candidates);
 			auto first = value;
 			if (value.computeRegions.count) {
+				first.featureSlot = PhysicalRegionFeatureSlot(value.featureSlot, value.computeRegions.regionSlots[0]);
 				first.computeSubrect = value.computeRegions.regions[0];
 				first.roi = value.computeRegions.roi[0];
 			}
-			if (ValidateLocked(first, inputResources[eye])) {
+			if (ValidateLocked(first, inputResources[eye], false)) {
 				measuredPlanDiagnostics_["reason"] = "invalid_source_resources";
 				return original;
 			}
-			if (alternatives[eye].size() > 16)
-				alternatives[eye].resize(16);
 		}
+		measuredPlanDiagnostics_["search"] = std::move(searchDiagnostics);
 		std::vector<std::array<RendererApplyArgs, kEyeCount>> plans;
 		std::vector<MeasuredPlan::Candidate> candidates;
 		Json keys = Json::array();
@@ -2329,15 +2419,23 @@ namespace NeuralRendering
 			for (std::size_t right = 0; right < (args.size() == 2 ? alternatives[1].size() : 1); ++right) {
 				auto plan = original;
 				Json key = Json::array();
+				Json operations = Json::array();
+				std::vector<std::uint64_t> clusters;
+				std::vector<RendererApplyArgs> physicalArgs;
+				std::vector<ValidatedResources> physicalResources;
 				std::uint64_t partition = 1469598103934665603ull;
 				bool valid = true, rejected = false;
 				for (std::size_t eye = 0; eye < args.size(); ++eye) {
 					const auto& choice = alternatives[eye][eye ? right : left];
 					auto& logical = plan[eye];
 					logical.computeRegions = choice.plan;
+					operations.push_back(choice.operation);
 					partition = (partition ^ choice.id) * 1099511628211ull;
 					rejected |= capacityFallback_.rejected && logical.computeRegions.count > kDefaultRegionsPerEye;
-					valid &= QualifiedHigherRegionGeometry(logical.computeRegions);
+					valid &= QualifiedHigherRegionGeometry(logical.computeRegions) &&
+					         GetCharacterRegionSubmissionViolation(logical.featureSlot, logical.computeRegions, logical.computeSubrect,
+								 logical.outputWidth, logical.outputHeight, true)
+					             .empty();
 					for (std::uint32_t i = 0; i < std::max(1u, logical.computeRegions.count) && valid; ++i) {
 						const auto& regions = logical.computeRegions;
 						partition = (partition ^ regions.clusterIdentities[i]) * 1099511628211ull;
@@ -2357,27 +2455,20 @@ namespace NeuralRendering
 								UpscalingDLSS::BuildMotionVectorPixelScale(physical.viewportCrop), physical.featureUpscaling);
 							ApplyCompactLayoutLocked(physical, resources);
 						}
-						const auto& tuning = physical.tuning;
-						key.push_back({ { "slot", physical.featureSlot }, { "layout", Evidence::NativeLayoutJson(resources.nativeLayout) },
-							{ "compactSource", resources.roi.compactSource ? Evidence::SubrectJson(*resources.roi.compactSource) : Json(nullptr) },
-							{ "mode", physical.executionContext.renderingMode ? Json(GetRenderingModeName(*physical.executionContext.renderingMode)) : Json(nullptr) },
-							{ "ownership", Evidence::SubrectJson(resources.roi.ownedOutput) }, { "viewport", Evidence::ViewportJson(physical.viewportCrop) },
-							{ "insertion", physical.insertionPoint }, { "callerReset", physical.reset },
-							{ "colorFormat", resources.color.desc.Format }, { "outputFormat", resources.output.desc.Format },
-							{ "outputHasUav", (resources.output.desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0 },
-							{ "depthSourceFormat", resources.depth.desc.Format }, { "depthViewFormat", resources.depthViewFormat },
-							{ "motionFormat", resources.motionVectors.desc.Format }, { "controlMask", resources.resourceKey.controlMaskPresent },
-							{ "sharedInputs", colorConfiguration_.experiments.SharedSourceTransportEnabled() && !resources.roi.compactSource },
-							{ "tuning", { tuning.intensity, tuning.localToneStrength, tuning.localStructureStrength, tuning.skinStructureStrength,
-											tuning.style, tuning.useAutoMask, tuning.uiCorrection } } });
+						FinalizeResourceKeysLocked(physical, resources);
+						resources.historyKey.regionIdentity = regions.count ? regions.historyKeys[i] : 0;
+						clusters.push_back(regions.count ? regions.clusterIdentities[i] : 0);
+						physicalArgs.push_back(std::move(physical));
+						physicalResources.push_back(std::move(resources));
 					}
 				}
+				key = MeasuredPlanKeyLocked(physicalArgs, physicalResources, clusters, rejected);
 				plans.push_back(std::move(plan));
 				candidates.push_back({ key.dump(), partition, valid, rejected });
-				keys.push_back({ { "key", std::move(key) }, { "valid", valid }, { "capacityRejected", rejected } });
+				keys.push_back({ { "key", std::move(key) }, { "valid", valid }, { "capacityRejected", rejected }, { "operations", std::move(operations) } });
 			}
 		const auto selected = MeasuredPlan::Select(candidates, 0, identity.dump(), measuredPlanProfile_ ? &*measuredPlanProfile_ : nullptr,
-			args.front().sourceWorldFrame, measuredPlanState_);
+			args.front().sourceWorldFrame, measuredPlanState_[args.front().featureSlot]);
 		measuredPlanDiagnostics_["reason"] = selected.reason;
 		measuredPlanDiagnostics_["selected"] = selected.index;
 		if (measuredPlanProfile_ && measuredPlanProfile_->identity == identity.dump() && selected.index < candidates.size())
@@ -2394,13 +2485,25 @@ namespace NeuralRendering
 		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		outcome = {};
 		std::array<RendererApplyArgs, kEyeCount> selected;
-		if (measuredPlanEnabled_ && !args.empty() && args.size() <= kEyeCount) {
+		const auto route = args.empty() ? kLogicalFeatureSlotCount : args.front().featureSlot;
+		const bool measured = measuredPlanEnabled_ && !args.empty() && args.size() <= kEyeCount && route < kLogicalFeatureSlotCount;
+		const auto previousState = measured ? measuredPlanState_[route] : MeasuredPlan::State{};
+		bool usedFallback = false;
+		const SKSE::stl::scope_exit completeSelection([&] {
+			if (!measured)
+				return;
+			if (usedFallback)
+				measuredPlanState_[route] = {};
+			else if (!outcome.outputPlans[route])
+				measuredPlanState_[route] = previousState;
+		});
+		if (measured) {
 			selected = SelectMeasuredPlanLocked(args);
 			args = std::span(selected).first(args.size());
 		}
 		requestedRegionCount_ = 0;
-		outcome = {};
 		bool higherCount = false;
 		higherCount = colorConfiguration_.experiments.CompactInputsEnabled();
 		for (const auto& arg : args) {
@@ -2414,6 +2517,11 @@ namespace NeuralRendering
 		if (args.empty() || args.size() > kEyeCount)
 			return ApplyRegionBatchLocked(args, outcome);
 		const auto fallback = [&] {
+			usedFallback = true;
+			if (measured) {
+				measuredPlanDiagnostics_["executionFallback"] = true;
+				measuredPlanDiagnostics_.erase("prediction");
+			}
 			const auto previous = forceFullCoordinates_;
 			forceFullCoordinates_ = true;
 			const SKSE::stl::scope_exit restore([&] { forceFullCoordinates_ = previous; });
@@ -2648,7 +2756,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (measuredPlanEnabled_) {
 					nlohmann::json decision;
-					for (const auto* field : { "frame", "reason", "identity", "selected", "prediction" })
+					for (const auto* field : { "frame", "reason", "identity", "selected", "prediction", "search", "executionFallback" })
 						if (measuredPlanDiagnostics_.contains(field))
 							decision[field] = measuredPlanDiagnostics_[field];
 					if (measuredPlanDiagnostics_.contains("selected"))
@@ -2731,18 +2839,8 @@ namespace NeuralRendering
 			if (colorConfiguration_.experiments.SharedSourceTransportEnabled())
 				requestedCapacity_ = { resources[index].resourceKey, reinterpret_cast<std::uintptr_t>(a_args[index].device), a_args[index].featureSlot, static_cast<std::uint32_t>(a_args.size()) };
 #endif
-			const Slot* sourceOwner = nullptr;
-			if (resources[index].resourceKey.sharedSourceTransport) {
-				for (std::size_t prior = 0; prior < index; ++prior) {
-					if (SameSourceTransport(a_args[prior], a_args[index]) &&
-						resources[prior].resourceKey == resources[index].resourceKey &&
-						resources[prior].depthViewFormat == resources[index].depthViewFormat &&
-						resources[prior].depth.desc.Format == resources[index].depth.desc.Format) {
-						sourceOwner = slots[prior];
-						break;
-					}
-				}
-			}
+			const auto owner = FindSourceTransportOwner(a_args, std::span<const ValidatedResources>(resources).first(a_args.size()), index);
+			const Slot* sourceOwner = owner == index ? nullptr : slots[owner];
 			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index], execution, index, sourceOwner))
 				return false;
 			slots[index] = &slots_[a_args[index].featureSlot];
@@ -3319,6 +3417,9 @@ namespace NeuralRendering
 		RefreshInteropTelemetryLocked();
 		executionCompletion.succeeded = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (measuredPlanEnabled_.load(std::memory_order_relaxed))
+			for (const auto& logical : a_logicalArgs)
+				a_logicalOutcome.outputPlans[logical.featureSlot] = CharacterOutputPlan{ logical.computeSubrect, logical.computeRegions };
 		if (lifetime.enabled)
 			lifetime.record->succeeded = true;
 #endif
@@ -3556,6 +3657,11 @@ namespace NeuralRendering
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	bool Renderer::MeasuredPlanSearchEnabled() const noexcept
+	{
+		return state_->measuredPlanEnabled_.load(std::memory_order_relaxed);
+	}
+
 	nlohmann::json Renderer::MeasuredPlanControl(const nlohmann::json& request)
 	{
 		std::unique_lock lock(state_->mutex_, std::try_to_lock);
@@ -3583,7 +3689,7 @@ namespace NeuralRendering
 			state_->measuredPlanState_ = {};
 		} else if (action != "status")
 			throw std::invalid_argument("unknown measured-plan action");
-		return { { "ok", true }, { "action", action }, { "enabled", state_->measuredPlanEnabled_ },
+		return { { "ok", true }, { "action", action }, { "enabled", state_->measuredPlanEnabled_.load(std::memory_order_relaxed) },
 			{ "profileLoaded", state_->measuredPlanProfile_.has_value() }, { "productionProfileAdopted", false },
 			{ "diagnostics", state_->measuredPlanDiagnostics_ } };
 	}

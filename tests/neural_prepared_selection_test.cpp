@@ -76,6 +76,12 @@ struct Fixture
 		ComputeSubrect computeSubrect{ 3, 5, 40, 30 };
 		CharacterComputeRegionPlan computeRegions{};
 		std::optional<RoiDescriptor> roi;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::shared_ptr<const MeasuredPlan::SearchInput> measuredPlanInput;
+		std::optional<CharacterOutputPlan> completedOutput;
+		std::uint32_t completedOutputFrame = 0;
+		std::uint64_t completedOutputSerial = 0;
+#endif
 	};
 	std::array<Slot, 4> slots_{};
 	std::uint64_t earlyMaskCaptureSerial_ = 9;
@@ -122,6 +128,9 @@ namespace NeuralRendering
 
 #include "neural_disposition_under_test.h"
 #include "neural_prepared_selection_under_test.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "neural_output_plan_under_test.h"
+#endif
 }
 
 int main()
@@ -143,6 +152,17 @@ int main()
 		const auto first = read();
 		Require(first.maskSupport == ComputeSubrect{ 6, 8, 15, 13 });
 		Require(first.computeSubrect == slot.computeSubrect);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const CharacterOutputPlan output{ { 3, 5, 40, 30 }, {} };
+		Require(!rendering.PublishOutputPlan(slotIndex, 11, 10, 3, 99, 73, { { 0, 0, 99, 73 }, {} }));
+		Require(!rendering.PublishOutputPlan(slotIndex, 11, 9, 3, 99, 73, output));
+		Require(!rendering.PublishOutputPlan(slotIndex, 11, 10, 4, 99, 73, output));
+		Require(rendering.PublishOutputPlan(slotIndex, 11, 10, 3, 99, 73, output));
+		Require(read().computeRegions.count == 0);
+		Require(read().maskSupport == first.maskSupport && slot.computeRegions == originalPlan);
+		Require(producer->BuildPreparedResult({}, slot).computeRegions == originalPlan);
+		Require(!rendering.PublishOutputPlan(slotIndex, 11, 10, 3, 99, 73, { { 0, 0, 100, 73 }, {} }));
+#endif
 		// Simulate a producer publishing between consumer operations. The old
 		// value must stay coherent, and the old identity must not see the new slot.
 		++slot.contentSerial;

@@ -5201,6 +5201,9 @@ namespace
 			.settings = BuildCharacterSettings(a_settings, a_sourceWorldFrame),
 			.outputIsJittered = NeuralRendering::RunsBeforeDlss(NeuralRendering::ResolvePipelineArrangement(
 				NeuralRendering::ClampRenderingMode(a_settings.neuralRenderingMode))),
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			.measuredPlanSearch = NeuralRendering::Renderer::Instance().MeasuredPlanSearchEnabled(),
+#endif
 		};
 	}
 
@@ -5217,6 +5220,9 @@ namespace
 		a_args.controlMaskHeight = 0;
 		a_args.computeSubrect = {};
 		a_args.computeRegions = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		a_args.measuredPlanInput.reset();
+#endif
 		a_args.roi.reset();
 		a_args.characterVisualIsolation = false;
 		const auto characterSettings = BuildCharacterSettings(a_settings, a_sourceWorldFrame);
@@ -5244,6 +5250,9 @@ namespace
 		a_args.characterEvidence = result.evidence;
 		a_args.computeSubrect = result.computeSubrect;
 		a_args.computeRegions = result.computeRegions;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		a_args.measuredPlanInput = result.measuredPlanInput;
+#endif
 		a_args.roi = result.roi;
 		a_args.reset = a_args.reset || result.resetHistory;
 		a_args.characterVisualIsolation = true;
@@ -5253,6 +5262,21 @@ namespace
 		}
 		return true;
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool PublishMeasuredOutputPlan(NeuralRendering::RendererApplyArgs& args, const NeuralRendering::RendererApplyOutcome& outcome)
+	{
+		if (!args.characterVisualIsolation || args.featureSlot >= outcome.outputPlans.size() || !outcome.outputPlans[args.featureSlot])
+			return true;
+		const auto& output = *outcome.outputPlans[args.featureSlot];
+		if (!NeuralRendering::CharacterRendering::Instance().PublishOutputPlan(args.featureSlot, args.frameId,
+				args.sourceWorldFrame, args.generation, args.outputWidth, args.outputHeight, output))
+			return false;
+		args.computeSubrect = output.enclosure;
+		args.computeRegions = output.regions;
+		return true;
+	}
+#endif
 
 	// Only copy texels that the provider actually produced. A split plan's
 	// enclosing rectangle includes an undefined gap even though the exact mask
@@ -44138,6 +44162,10 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 				logger::error("[DLSSNR] Unexpected renderer exception; preserving normal DLSS");
 			}
 			neuralAttempted = outcome.WasEvaluationAttempted(args.featureSlot);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (applied)
+				applied = PublishMeasuredOutputPlan(args, outcome);
+#endif
 			const bool neuralEvaluationSucceeded =
 				outcome.WasEvaluationSuccessful(args.featureSlot);
 			const auto routeRole =
@@ -44579,6 +44607,9 @@ namespace
 			for (std::uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 				a_batchArgs[eye].computeSubrect = maskResults[eye].computeSubrect;
 				a_batchArgs[eye].computeRegions = maskResults[eye].computeRegions;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				a_batchArgs[eye].measuredPlanInput = maskResults[eye].measuredPlanInput;
+#endif
 				a_batchArgs[eye].roi = maskResults[eye].roi;
 				a_batchArgs[eye].reset = a_batchArgs[eye].reset || maskResults[eye].resetHistory;
 				a_batchArgs[eye].characterEvidence = maskResults[eye].evidence;
@@ -44682,6 +44713,12 @@ namespace
 				applied = NeuralRendering::Renderer::Instance().Apply(
 					a_batchArgs[eye], &outcome);
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (applied)
+				for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye)
+					if ((evaluationEyeMask & (1u << eye)) && !PublishMeasuredOutputPlan(a_batchArgs[eye], outcome))
+						applied = false;
+#endif
 			for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 				const bool attempted =
 					outcome.WasEvaluationAttempted(a_batchArgs[eye].featureSlot);

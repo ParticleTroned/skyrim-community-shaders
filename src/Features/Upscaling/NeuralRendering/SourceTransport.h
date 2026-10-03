@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace NeuralRendering
 {
@@ -70,6 +71,21 @@ namespace NeuralRendering
 		       left.outputWidth == right.outputWidth && left.outputHeight == right.outputHeight &&
 		       left.controlMaskWidth == right.controlMaskWidth && left.controlMaskHeight == right.controlMaskHeight &&
 		       left.featureUpscaling == right.featureUpscaling;
+	}
+
+	/** Return the first compatible earlier source, or this region for an independent owner. */
+	template <class Args, class Resources>
+	[[nodiscard]] std::size_t FindSourceTransportOwner(std::span<const Args> args,
+		std::span<const Resources> resources, std::size_t index) noexcept
+	{
+		if (resources[index].resourceKey.sharedSourceTransport)
+			for (std::size_t prior = 0; prior < index; ++prior)
+				if (SameSourceTransport(args[prior], args[index]) &&
+					resources[prior].resourceKey == resources[index].resourceKey &&
+					resources[prior].depthViewFormat == resources[index].depthViewFormat &&
+					resources[prior].depth.desc.Format == resources[index].depth.desc.Format)
+					return prior;
+		return index;
 	}
 
 	/** A borrowed slot must detach when its next source has no compatible owner. */

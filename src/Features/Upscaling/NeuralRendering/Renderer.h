@@ -21,6 +21,12 @@
 
 namespace NeuralRendering
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	namespace MeasuredPlan
+	{
+		struct SearchInput;
+	}
+#endif
 	enum class RendererStage : std::uint32_t
 	{
 		None,
@@ -223,6 +229,9 @@ namespace NeuralRendering
 		// Pair orchestration keeps separate eye submissions on one reset decision.
 		bool synchronizedHistoryReset = false;
 		bool synchronizedHistoryDiscontinuity = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::shared_ptr<const MeasuredPlan::SearchInput> measuredPlanInput;
+#endif
 	};
 
 	/** Per-call evidence captured at the exact NVIDIA evaluation boundary. */
@@ -230,6 +239,9 @@ namespace NeuralRendering
 	{
 		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
 		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::array<std::optional<CharacterOutputPlan>, kLogicalFeatureSlotCount> outputPlans;
+#endif
 
 		[[nodiscard]] bool WasEvaluationAttempted(
 			std::uint32_t a_featureSlot) const noexcept
@@ -249,6 +261,10 @@ namespace NeuralRendering
 	class Renderer
 	{
 	public:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Lock-free preparation gate; a missing snapshot always retains the ordinary plan. */
+		[[nodiscard]] bool MeasuredPlanSearchEnabled() const noexcept;
+#endif
 		using ApplyArgs = RendererApplyArgs;
 
 		static Renderer& Instance();

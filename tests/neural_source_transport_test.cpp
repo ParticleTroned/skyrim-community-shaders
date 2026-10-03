@@ -66,6 +66,40 @@ int main()
 	reject([](auto& a) { ++a.controlMaskWidth; });
 	reject([](auto& a) { ++a.controlMaskHeight; });
 	reject([](auto& a) { a.featureUpscaling = true; });
+	struct SourceKey
+	{
+		bool sharedSourceTransport = true;
+		unsigned capacity = 1;
+		bool operator==(const SourceKey&) const = default;
+	};
+	struct SourceResource
+	{
+		SourceKey resourceKey{};
+		unsigned depthViewFormat = 1;
+		struct
+		{
+			struct
+			{
+				unsigned Format = 1;
+			} desc;
+		} depth;
+	};
+	const std::array sourceArgs{ first, peer, peer };
+	std::array<SourceResource, 3> sourceResources{};
+	const auto owner = [&](std::size_t index) {
+		return FindSourceTransportOwner(std::span<const RendererApplyArgs>(sourceArgs),
+			std::span<const SourceResource>(sourceResources), index);
+	};
+	Require(owner(0) == 0 && owner(1) == 0 && owner(2) == 0, "whole batch shares the first compatible owner");
+	sourceResources[0].resourceKey.capacity = 2;
+	Require(owner(1) == 1 && owner(2) == 1, "different capacity starts a new owner");
+	sourceResources[1].depthViewFormat = 2;
+	Require(owner(2) == 2, "incompatible source view cannot share");
+	sourceResources = {};
+	sourceResources[0].depth.desc.Format = 2;
+	Require(owner(1) == 1 && owner(2) == 1, "source storage format participates in ownership");
+	sourceResources[2].resourceKey.sharedSourceTransport = false;
+	Require(owner(2) == 2, "private compact input never borrows");
 	const std::array<unsigned, 4> retained{ 10, 11, 12, 13 }, replacement{ 20, 21, 22, 23 };
 	Require(CanReuseSourceBinding(0, 0, retained, &retained), "unchanged shared binding may be reused");
 	Require(!CanReuseSourceBinding(0, 4, retained, static_cast<const std::array<unsigned, 4>*>(nullptr)),

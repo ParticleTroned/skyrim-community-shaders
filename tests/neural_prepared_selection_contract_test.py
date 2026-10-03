@@ -32,7 +32,8 @@ class PreparedSelectionContract(unittest.TestCase):
 
     def test_atomic_lookup_and_consumers(self):
         source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
-        getter = source[source.index("CharacterPreparedSelection CharacterRendering::GetPreparedSelection("):]
+        getter = source[source.index("CharacterPreparedSelection CharacterRendering::GetPreparedSelection("):
+                        source.index("bool CharacterRendering::PublishOutputPlan(")]
         self.assertEqual(getter.count("std::scoped_lock lock(state_->mutex_);"), 1)
         self.assertIn("slot->maskSrv, support, slot->computeSubrect, slot->computeRegions", getter)
         upscaling = read("src/Features/Upscaling.cpp")
@@ -59,6 +60,31 @@ class PreparedSelectionContract(unittest.TestCase):
                     capture_output=True, text=True, check=True)
                 self.assertEqual("FindPreparationEvidence(" in result.stdout, enabled)
                 self.assertEqual("CaptureEvidenceEnabled()" in result.stdout, enabled)
+
+    def test_measured_search_is_absent_from_production(self):
+        import re
+        sources = [read(name) for name in (
+            "src/Features/Upscaling.cpp",
+            "src/Features/Upscaling/NeuralRendering/Renderer.cpp",
+            "src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")]
+        # Preprocess the real conditional blocks without unrelated include trees.
+        with tempfile.TemporaryDirectory(prefix="csx-nr-search-") as directory:
+            unit = Path(directory) / "search.cpp"
+            unit.write_text(re.sub(r"^\s*#\s*include[^\n]*", "", "\n".join(sources), flags=re.M))
+            for enabled in (False, True):
+                result = subprocess.run(
+                    [args.compiler, "/nologo", "/EP", "/TP",
+                     "/DDEVBENCH_BRIDGE_ENABLED" if enabled else "/UDEVBENCH_BRIDGE_ENABLED", str(unit)],
+                    capture_output=True, text=True, check=True)
+                for token in ("CaptureMeasuredInput(", "MeasuredPlan::Search(",
+                              "PublishMeasuredOutputPlan(", "measuredPlanInput", "completedOutputSerial"):
+                    self.assertEqual(token in result.stdout, enabled, token)
+        renderer = sources[1]
+        apply = renderer[renderer.index("bool Renderer::State::ApplyRegionBatchLocked("):
+                         renderer.index("void Renderer::State::CaptureReplayBatch(")]
+        self.assertLess(apply.index("executionCompletion.succeeded = true;"),
+                        apply.index("a_logicalOutcome.outputPlans["))
+        self.assertIn("ValidateLocked(first, inputResources[eye], false)", renderer)
 
     def test_baseline_transition_policy_is_unchanged(self):
         shader = read("features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ColorReconstructCS.hlsl")

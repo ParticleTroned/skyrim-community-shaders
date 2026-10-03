@@ -44,6 +44,15 @@ namespace NeuralRendering
 		bool operator==(const CharacterMultiRoiActor&) const = default;
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Actual private-output writes, distinct from the mask's original planning envelope. */
+	struct CharacterOutputPlan
+	{
+		ComputeSubrect enclosure{};
+		CharacterComputeRegionPlan regions{};
+	};
+#endif
+
 	/** Area accounting uses padded provider rectangles, never semantic mask occupancy. */
 	struct CharacterMultiRoiCost
 	{
@@ -282,20 +291,23 @@ namespace NeuralRendering
 			}
 		}
 
-		template <class Record, class Admit>
-		[[nodiscard]] inline PartitionCandidate FindPartition(std::span<const CharacterMultiRoiActor> actors,
-			std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_regionLimit, Record recordCandidate, Admit admissible)
+		inline constexpr std::size_t kPartitionBeamWidth = 16;
+		inline constexpr std::uint32_t kPartitionCandidateBudget = 16384;
+
+		/** Visit complete cuts while retaining intermediate cuts that later splits may repair. */
+		template <class Visit>
+		inline std::uint32_t VisitPartitions(std::span<const CharacterMultiRoiActor> actors,
+			std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_regionLimit, Visit visit, std::uint32_t budget = kPartitionCandidateBudget)
 		{
-			PartitionCandidate selected;
+			if (actors.empty() || actors.size() > kMaximumActors || !a_width || !a_height || a_regionLimit > kEnabledRegionsPerEye)
+				return 0;
 			PartitionCandidate initial;
 			initial.groups.emplace_back();
 			for (std::size_t i = 0; i < actors.size(); ++i)
 				initial.groups.front().push_back(i);
 			std::vector<PartitionCandidate> beam{ std::move(initial) };
 			std::uint32_t considered = 0;
-			constexpr std::size_t beamWidth = 16;
-			constexpr std::uint32_t candidateBudget = 16384;
-			for (std::uint32_t count = 2; count <= a_regionLimit && !beam.empty() && considered < candidateBudget; ++count) {
+			for (std::uint32_t count = 2; count <= a_regionLimit && !beam.empty() && considered < budget; ++count) {
 				std::vector<PartitionCandidate> next;
 				for (const auto& parent : beam)
 					for (std::size_t group = 0; group < parent.groups.size(); ++group)
@@ -305,16 +317,14 @@ namespace NeuralRendering
 								const auto center = [&](auto i) { const auto& r = actors[i].rect; return axis == 0 ? std::uint64_t(r.minX) + r.maxX : std::uint64_t(r.minY) + r.maxY; };
 								return center(left) != center(right) ? center(left) < center(right) : left < right;
 							});
-							for (std::size_t cut = 1; cut < ordered.size() && considered < candidateBudget; ++cut) {
+							for (std::size_t cut = 1; cut < ordered.size() && considered < budget; ++cut) {
 								++considered;
 								PartitionCandidate candidate;
 								candidate.groups = parent.groups;
 								candidate.groups[group].assign(ordered.begin(), ordered.begin() + cut);
 								candidate.groups.emplace_back(ordered.begin() + cut, ordered.end());
 								PreparePartition(candidate, actors, a_width, a_height);
-								recordCandidate(candidate.providers, false, false);
-								if ((selected.groups.empty() || candidate.area < selected.area) && admissible(candidate, false))
-									selected = candidate;
+								visit(candidate);
 								if (count == a_regionLimit)
 									continue;
 								// Keep intermediate cuts even when their savings/overlap need a later local split.
@@ -322,12 +332,25 @@ namespace NeuralRendering
 									continue;
 								next.push_back(std::move(candidate));
 								std::ranges::stable_sort(next, {}, &PartitionCandidate::area);
-								if (next.size() > beamWidth)
+								if (next.size() > kPartitionBeamWidth)
 									next.pop_back();
 							}
 						}
 				beam = std::move(next);
 			}
+			return considered;
+		}
+
+		template <class Record, class Admit>
+		[[nodiscard]] inline PartitionCandidate FindPartition(std::span<const CharacterMultiRoiActor> actors,
+			std::uint32_t a_width, std::uint32_t a_height, std::uint32_t a_regionLimit, Record recordCandidate, Admit admissible)
+		{
+			PartitionCandidate selected;
+			VisitPartitions(actors, a_width, a_height, a_regionLimit, [&](const PartitionCandidate& candidate) {
+				recordCandidate(candidate.providers, false, false);
+				if ((selected.groups.empty() || candidate.area < selected.area) && admissible(candidate, false))
+					selected = candidate;
+			});
 			return selected;
 		}
 

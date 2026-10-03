@@ -1,6 +1,7 @@
 #include "CharacterRendering.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "CurrentContextExperiment.h"
+#	include "MeasuredPlanSearch.h"
 #endif
 
 #include "CharacterActorPolicy.h"
@@ -503,6 +504,12 @@ namespace NeuralRendering
 
 		struct Slot
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::shared_ptr<const MeasuredPlan::SearchInput> measuredPlanInput;
+			std::optional<CharacterOutputPlan> completedOutput;
+			std::uint32_t completedOutputFrame = 0;
+			std::uint64_t completedOutputSerial = 0;
+#endif
 			std::vector<CharacterMaskRoiTileBounds> mappedBoundsScratch;
 			std::vector<std::uint64_t> ownerScratch;
 			CharacterMaskRoiScratch maskRoiScratch;
@@ -617,6 +624,37 @@ namespace NeuralRendering
 			ProjectedPlan plan;
 		};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Capture only immutable current-source coverage; candidate search never polls the GPU. */
+		void CaptureMeasuredInput(const CharacterMaskPrepareArgs& args, Slot& slot, const ProjectedPlan& plan, bool gpuCoverage)
+		{
+			slot.measuredPlanInput.reset();
+			if (!args.measuredPlanSearch || plan.fullEyeEligibilityFallback || !slot.computeSubrect.Fits(args.outputWidth, args.outputHeight))
+				return;
+			auto input = std::make_shared<MeasuredPlan::SearchInput>();
+			input->enclosure = slot.computeSubrect;
+			input->generation = args.generation;
+			input->sourceFrame = args.sourceWorldFrame;
+			input->logicalSlot = args.featureSlot;
+			input->width = args.outputWidth;
+			input->height = args.outputHeight;
+			input->regionLimit = args.settings.multiRoi ? args.settings.RegionLimit() : 1u;
+			input->gpuCoverage = gpuCoverage;
+			if (gpuCoverage) {
+				const auto columns = (args.outputWidth + kCharacterMaskRoiTileSize - 1u) / kCharacterMaskRoiTileSize;
+				const auto components = CharacterMaskRoiDetail::MaskComponents(slot.mappedBoundsScratch, columns, slot.maskRoiScratch);
+				const auto tracks = MatchSpatialRoiTracks(components, slot.stableMaskRoi.tracks, args.sourceWorldFrame, args.featureSlot + 1u);
+				for (const auto& track : tracks) input->actors.push_back({ track.identity, track.bounds });
+				input->eligibility = slot.maskRoiScratch.occupied;
+			} else {
+				input->actors = plan.actorRegions;
+				input->eligibility = plan.regions;
+			}
+			if (MeasuredPlan::ValidSearchInput(*input))
+				slot.measuredPlanInput = std::move(input);
+		}
+#endif
+
 		PrepareKey SelectionPlanKey(const CharacterMaskPrepareArgs& a_args) const
 		{
 			return {
@@ -725,6 +763,7 @@ namespace NeuralRendering
 				a_slot.computeSubrect, a_slot.computeRegions, {}, a_slot.roi };
 			result.resetHistory = a_slot.requiresEvaluation && a_slot.resetHistoryAfterEmpty;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			result.measuredPlanInput = a_slot.measuredPlanInput;
 			if (Color::Registry::Instance().CaptureEvidenceEnabled())
 				result.evidence = FindPreparationEvidence(
 					a_args.frameId, a_args.sourceWorldFrame, a_args.generation, a_args.featureSlot, true);
@@ -3398,6 +3437,11 @@ namespace NeuralRendering
 						slot.computeSubrect = slot.roi->inferenceContext;
 #endif
 				}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				slot.measuredPlanInput.reset();
+				if (!provenEmpty && authoredMode && !fullOutputMask && a_args.settings.debugView == CharacterDebugView::Off)
+					state_->CaptureMeasuredInput(a_args, slot, plan, usedEarlyBounds);
+#endif
 				slot.contentSerial = state_->AllocatePreparedContentSerial();
 				if (evidence) {
 					evidence->key.contentSerial = slot.contentSerial;
@@ -3562,6 +3606,9 @@ namespace NeuralRendering
 			a_result.computeRegions = slot.computeRegions;
 			a_result.roi = slot.roi;
 			a_result.resetHistory = slot.requiresEvaluation && slot.resetHistoryAfterEmpty;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			a_result.measuredPlanInput = slot.measuredPlanInput;
+#endif
 			if (evidence) {
 				evidence->key.contentSerial = slot.contentSerial;
 				evidence->support = slot.supportEvidence;
@@ -3977,9 +4024,36 @@ namespace NeuralRendering
 			                         (slot->maskWorkSubrect.Fits(a_width, a_height) ?
 											 ExpandCharacterWorkRect(slot->maskWorkSubrect, a_width, a_height, 1) :
 											 full);
-			return { slot->maskSrv, support, slot->computeSubrect, slot->computeRegions };
+			auto result = CharacterPreparedSelection{ slot->maskSrv, support, slot->computeSubrect, slot->computeRegions };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (slot->completedOutput && slot->completedOutputFrame == a_frameId && slot->completedOutputSerial == slot->contentSerial) {
+				result.computeSubrect = slot->completedOutput->enclosure;
+				result.computeRegions = slot->completedOutput->regions;
+			}
+#endif
+			return result;
 		} catch (...) {
 			return {};
 		}
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool CharacterRendering::PublishOutputPlan(std::uint32_t index, std::uint32_t frame, std::uint32_t sourceFrame,
+		std::uint64_t generation, std::uint32_t width, std::uint32_t height, const CharacterOutputPlan& output)
+	{
+		if (!state_ || index >= state_->slots_.size() || !output.enclosure.Fits(width, height) ||
+			!CharacterRegionOutputPixels(output.regions, output.enclosure, width, height))
+			return false;
+		std::scoped_lock lock(state_->mutex_);
+		if (!state_->FindPreparedSlot(index, frame, sourceFrame, generation, width, height))
+			return false;
+		auto& slot = state_->slots_[index];
+		if (output.enclosure != slot.computeSubrect)
+			return false;
+		slot.completedOutput = output;
+		slot.completedOutputFrame = frame;
+		slot.completedOutputSerial = slot.contentSerial;
+		return true;
+	}
+#endif
 }

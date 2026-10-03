@@ -1,5 +1,27 @@
 # main-vr-nr progress and continuation record
 
+## October 3 Task 9 candidate-search code and offline completion
+
+The [candidate-search record](nr-task9-candidate-search-20261003.md) closes
+Task 9's missing split/re-anchor implementation and offline checks. The
+DevBench-only, default-off experiment now compares bounded alternative
+actor/component partitions, local merges and re-anchors from immutable
+current-source coverage. It scores final physical footprints and reset/
+rebuild/source-owner state, then publishes actual successful output domains
+for composition. Missing costs retain the existing heuristic; no cost
+profile or production optimization has been adopted.
+
+Producer `23397d0f9a26` passes the universal DLL build, all 228 tests,
+preset reproducibility and source/artifact provenance checks. Production
+preprocessing excludes the experimental work. No game launch, installation
+or AIO packaging occurred in this offline step.
+
+Task 9's remaining work is live candidate/output qualification and complete
+matched/held-out cost calibration, including prediction error, CPU cost,
+quality and residency. Its split/re-anchor code is no longer outstanding.
+The focused unpaused cost-command check also still needs this DLL in game.
+Task 10's rejected compact candidate and Task 11's audit status are unchanged.
+
 ## October 3 cost-command correction and closure checklist
 
 The [live evidence and closure checklist](nr-task9-10-command-qualification-20261003.md)
@@ -23,11 +45,10 @@ cost enable/status/disable and profile-rejection live check. The AIO has
 not been installed. Original settings were restored; Skyrim and MO2 closed
 normally, with SteamVR and evidence preserved.
 
-Task 9 still lacks alternative split/reanchor implementation and complete
-matched/held-out calibration. Those are distinct from the runtime defects
-now tested: another broad live repeat cannot finish missing search code.
-The next full calibration session should follow that implementation and
-its offline coverage/history tests. Task 10's tested candidate is rejected,
+At this checkpoint Task 9 still lacked split/re-anchor implementation and
+complete matched/held-out calibration. The subsequent candidate-search
+record above closes the code/offline portion; live calibration remains
+separate from the runtime defects already tested. Task 10's tested candidate is rejected,
 not promoted; its remaining quality/residency requirements are not passed.
 Task 11 remains at its ownership/packing audit, without equipment code.
 

@@ -47,6 +47,8 @@ extract("\t\t[[nodiscard]] CharacterMaskPrepareResult BuildPreparedResult(" "\n\
     neural_prepared_result_under_test.h)
 extract("\tCharacterPreparedSelection CharacterRendering::GetPreparedSelection(" "\n\t}"
     neural_prepared_selection_under_test.h)
+extract("\tbool CharacterRendering::PublishOutputPlan(" "\n\t}"
+    neural_output_plan_under_test.h)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" source)
 extract("\tuint32_t BuildNeuralCenterEyeMask(" "\n\t}"
     neural_eye_mask_under_test.h)

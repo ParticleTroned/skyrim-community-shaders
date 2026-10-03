@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include <functional>
+#	include <nlohmann/json_fwd.hpp>
+#endif
 
 namespace VRSubmitInputFreshnessPolicy
 {
@@ -12,6 +16,9 @@ namespace VRSubmitInputFreshnessPolicy
 namespace VRRenderScaleDevBenchBridge
 {
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Runs an API worker's bounded command at the completed render-frame boundary. */
+	nlohmann::json RunRendererCommand(std::function<nlohmann::json()> a_command);
+
 	/** Admits one pending command at a completed render frame under native ownership. */
 	void ProcessRendererCommands();
 

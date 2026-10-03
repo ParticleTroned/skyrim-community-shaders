@@ -1,5 +1,36 @@
 # main-vr-nr progress and continuation record
 
+## October 3 cost-command correction and closure checklist
+
+The [live evidence and closure checklist](nr-task9-10-command-qualification-20261003.md)
+qualifies the earlier unpaused NR/FOV controls, actual C three/four-region
+composition and tested compact capacity retention on producer `47675771439e`.
+There were 129,405 successful native evaluations, zero native/stereo/device/
+quarantine failures, 384 exact stereo frame joins and 1,800 profiler frames.
+The structural 16x16 bursts are not full-image temporal-quality evidence.
+
+The small compact bracket regressed NR stereo GPU self time from
+5.15088 ms to 8.21048 ms (+59.40%) despite 47.76% lower logical transport
+storage and no rebuilds inside its window. Reject this candidate for
+production promotion and retain the negative result. Native allocation
+bytes and broader moving-image quality are still unqualified.
+
+The separate cost-handler mutex race is now corrected through the existing
+completed-frame renderer command queue, entirely behind DevBench. Producer
+`48a11df59671` passes the universal build, all 227 tests, preset/provenance
+checks and all 386 AIO payload hashes. It still needs a focused unpaused
+cost enable/status/disable and profile-rejection live check. The AIO has
+not been installed. Original settings were restored; Skyrim and MO2 closed
+normally, with SteamVR and evidence preserved.
+
+Task 9 still lacks alternative split/reanchor implementation and complete
+matched/held-out calibration. Those are distinct from the runtime defects
+now tested: another broad live repeat cannot finish missing search code.
+The next full calibration session should follow that implementation and
+its offline coverage/history tests. Task 10's tested candidate is rejected,
+not promoted; its remaining quality/residency requirements are not passed.
+Task 11 remains at its ownership/packing audit, without equipment code.
+
 ## October 3 renderer command admission
 
 The [command-admission record](nr-renderer-command-admission-20261003.md)

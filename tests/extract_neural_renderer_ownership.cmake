@@ -24,3 +24,16 @@ foreach(action IN ITEMS nr_configure nr_cycle_modes nr_reset foveation_configure
         message(FATAL_ERROR "${action} bypasses renderer ownership")
     endif()
 endforeach()
+
+# Cost controls share the frame-boundary dispatcher instead of racing native inference.
+file(READ "${PROJECT_ROOT}/src/Features/NeuralRenderingFeature.cpp" feature_source)
+string(FIND "${feature_source}" "void MeasuredPlanHandler(" start)
+string(FIND "${feature_source}" "constexpr auto measuredPlanDescriptor" finish)
+if(start LESS 0 OR finish LESS start)
+    message(FATAL_ERROR "Missing measured-plan handler")
+endif()
+math(EXPR length "${finish} - ${start}")
+string(SUBSTRING "${feature_source}" ${start} ${length} handler)
+if(NOT handler MATCHES "RunRendererCommand\\(\\[request\\]\\(\\) \\{[\n\t ]+return NeuralRendering::Renderer::Instance\\(\\).MeasuredPlanControl\\(request\\);")
+    message(FATAL_ERROR "Measured-plan controls bypass renderer command admission")
+endif()

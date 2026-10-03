@@ -10683,6 +10683,11 @@ namespace
 
 namespace VRRenderScaleDevBenchBridge
 {
+	nlohmann::json RunRendererCommand(std::function<nlohmann::json()> a_command)
+	{
+		return RunWithRendererOwnership(std::move(a_command));
+	}
+
 	void ProcessRendererCommands()
 	{
 		ProcessRendererCommand();

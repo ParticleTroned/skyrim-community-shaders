@@ -14,7 +14,8 @@ namespace VRHybridCullingPolicy
 	inline constexpr std::uint32_t kEyeCount = 2;
 	inline constexpr std::uint32_t kMaximumSourceDimension = 16384;
 	inline constexpr std::uint32_t kMaximumPyramidDimension = 4096;
-	inline constexpr std::uint32_t kDefaultSourceReduction = 4;
+	inline constexpr std::uint32_t kDefaultSourceReduction = 2;
+	inline constexpr std::uint32_t kLargeSourceReduction = 4;
 	inline constexpr float kDefaultDepthBias = 8.0f / 16777216.0f;
 	inline constexpr float kDefaultPixelGuardBand = 1.0f;
 	using OBBTransform = VRDepthCullingTemporalPolicy::OBBTransform;
@@ -129,6 +130,18 @@ namespace VRHybridCullingPolicy
 			return false;
 		a_constants = { a_eyes, a_layout.width, a_layout.height, a_reduction, 0 };
 		return true;
+	}
+
+	/** Retain finer depth where it fits, preserving the admitted source and pyramid limits. */
+	constexpr bool TryMakePreferredBuildConstants(
+		const std::array<EyeRect, kEyeCount>& a_eyes,
+		std::uint32_t a_sourceWidth,
+		std::uint32_t a_sourceHeight,
+		BuildConstants& a_constants,
+		PyramidLayout& a_layout)
+	{
+		return TryMakeBuildConstants(a_eyes, a_sourceWidth, a_sourceHeight, kDefaultSourceReduction, a_constants, a_layout) ||
+		       TryMakeBuildConstants(a_eyes, a_sourceWidth, a_sourceHeight, kLargeSourceReduction, a_constants, a_layout);
 	}
 
 	/** Non-finite or singular cameras cannot establish an occlusion proof. */

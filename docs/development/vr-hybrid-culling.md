@@ -7,12 +7,12 @@ Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
 The [adaptive comparison and GPU analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record the latest repeated comparison with Advanced. Triangle-plane Hybrid
-costs 21.0% more CPU time and 19.5% more GPU time, rejecting 35.8-36.6% of
-candidate records versus 57.9%. Bounds testing consumes 91.4% of measured
-Hybrid GPU work. Motion and lifecycle qualification remain open.
-A subsequent nearest-vertex depth precheck can retain unresolved objects
-before face refinement. Its speed and rejection impact remain unmeasured.
+record the latest repeated comparison with Advanced. Nearest-vertex Hybrid
+costs 7.9% more CPU time and 6.7% more GPU time, rejecting 33.1% of
+candidate records versus 56.3%. Bounds testing consumes 89.1-89.9% of
+measured Hybrid GPU work. Motion and lifecycle qualification remain open.
+The next experiment preserves finer 2x2 depth; its speed and rejection
+impact remain unmeasured.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -59,7 +59,9 @@ inputs are single-sample, double-wide stereo textures with the expected
 full eye viewports and conventional depth range. Unsupported packed
 dynamic-resolution layouts use the native producer with Advanced recovery.
 
-`BuildDepthCS` reduces all pixels in each 4-by-4 source region. Each eye
+`BuildDepthCS` reduces all pixels in each 2-by-2 source region. Sources
+that would exceed the 4096-texel pyramid limit use 4-by-4 reduction,
+preserving the existing 16384 source-dimension and 12-mip limits. Each eye
 gets a separate texture-array layer; its base dimensions are padded to
 powers of two. Zero-depth VR masks, invalid samples, incomplete edge
 regions and padding become far depth. `ReduceDepthCS` then takes the
@@ -67,6 +69,11 @@ maximum of each covered 2-by-2 region. This hierarchy is independent of
 the averaged GI depth pyramid. It stops when both dimensions are at most
 two, because the visibility test never needs a coarser level; a 1-by-1
 base remains valid.
+
+At 1344x1492 per eye, finer depth adds 8 MiB of logical hierarchy storage.
+It can recover occluder detail but adds hierarchy and potential traversal
+work. The selected reduction and logical bytes remain observable through
+the existing DevBench source snapshot. In-game benefit is unmeasured.
 
 `TestBoundsCS` projects all eight OBB corners using each eye's actual
 matrix and camera adjustment. Camera adjustment is subtracted from the
@@ -667,9 +674,9 @@ material pack, render scale, upscaler/foveation mode and camera route for
 each comparison. GO stays absent/off for D1. Predeclare the sample window,
 repeat count and stopping conditions; a 300-frame profiler capture is one
 bounded window, not necessarily an entire motion/lifecycle route.
-Every repeated performance and stereo-visual comparison includes all four
-conditions: native depth culling off, Legacy, Advanced and Hybrid. Legacy
-is required in each matched set. For off, disable the relevant depth-culling
+Full qualification includes native depth culling off, Legacy, Advanced and
+Hybrid. The user's focused optimization comparisons use Advanced and
+Hybrid only. For off, disable the relevant depth-culling
 enable controls and record the configured method and effective state.
 
 Unless an explicit test protocol requires another time, reset the game to

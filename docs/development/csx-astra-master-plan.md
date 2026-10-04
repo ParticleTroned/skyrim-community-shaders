@@ -2,22 +2,22 @@
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
 The [latest comparison and optimization analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record two noon timing repeats per method on the triangle-plane build:
-Hybrid costs 21.0% more CPU time and 19.5% more GPU time than Advanced,
-with 35.8-36.6% candidate rejection versus 57.9%. CPU repeat variance is
-larger than GPU variance; neither establishes parity.
-Two 300-frame GPU captures attribute 91.4% of Hybrid GPU work to bounds
-testing (0.66-0.67 ms). Motion/lifecycle qualification remains open.
+record two noon timing repeats per method on the nearest-vertex build:
+Hybrid costs 7.9% more CPU time and 6.7% more GPU time than Advanced,
+with 33.1% candidate rejection versus 56.3%. Baseline drift and CPU repeat
+variance remain visible; parity is not established.
+Two 300-frame GPU captures attribute 89.1-89.9% of Hybrid GPU work to
+bounds testing (0.53 ms). Motion/lifecycle qualification remains open.
 Advanced remains default. PBR grass, grass optimization and Reverse Z
 remain separate later PRs.
 
-The next bounded change checks the nearest projected vertex against a
-finest-level cell before face refinement. It retains the 64-read budget,
-reuses the sample and exposes a DevBench-only nearest_unresolved reason.
-Surviving candidates can spend one extra budgeted read, so speed and
-rejection rate both need a fresh in-game comparison. Finer hierarchy
-storage remains a separate unmeasured option. Skyrim was shut down cleanly
-after measurements and before implementation.
+The next bounded experiment preserves 2x2 source depth, using the existing
+4x4 reduction when needed to retain the source and pyramid size limits.
+This targets lost occluder detail; it adds 8 MiB of logical hierarchy
+storage at the measured resolution and may increase traversal work.
+The 64-read budget, bias, stereo agreement and history checks remain.
+Speed and rejection rate need a fresh in-game comparison. Skyrim was
+shut down cleanly after measurements and before implementation.
 
 ## Scope and authority
 
@@ -323,8 +323,8 @@ Build the exact integration and rerun the focused controller/WARP/FXC
 checks. Exercise Advanced, Legacy, Hybrid and native-disabled configurations
 with grass optimization absent/off. Verify actual effective backend,
 producer identity, fallback and method-round-trip behavior.
-Include all four conditions in every repeated performance and stereo-visual
-comparison; Legacy is required throughout. Reset and verify noon before
+Use all four conditions for full qualification; the user's current focused
+optimization comparisons use Advanced and Hybrid only. Reset and verify noon before
 each condition and each separate capture phase, then settle five seconds.
 
 Runtime evidence must include both eyes, stationary and moving views,

@@ -49,6 +49,29 @@ namespace
 		       layout.width == 2048 && layout.height == 4096 && layout.mipCount == 12;
 	}
 
+	bool SelectsFinerDepthWithinResourceLimits()
+	{
+		PyramidLayout layout{};
+		BuildConstants constants{};
+		const std::array<EyeRect, 2> typical{ EyeRect{ 0, 0, 1344, 1492 }, EyeRect{ 1344, 0, 1344, 1492 } };
+		if (!TryMakePreferredBuildConstants(typical, 2688, 1492, constants, layout) ||
+			layout.width != 1024 || layout.height != 1024 || layout.mipCount != 10 ||
+			layout.sourceReduction != 2 || constants.sourceReduction != layout.sourceReduction)
+			return false;
+		for (const auto height : { 8192u, 8193u, 16384u }) {
+			const std::array<EyeRect, 2> eyes{ EyeRect{ 0, 0, 8192, height }, EyeRect{ 8192, 0, 8192, height } };
+			const auto expectedReduction = height == 8192 ? 2u : 4u;
+			if (!TryMakePreferredBuildConstants(eyes, 16384, height, constants, layout) ||
+				layout.sourceReduction != expectedReduction || constants.sourceReduction != expectedReduction ||
+				layout.width != 8192 / expectedReduction || layout.height != 4096 || layout.mipCount != 12)
+				return false;
+		}
+		auto invalid = typical;
+		invalid[1].x = std::numeric_limits<std::uint32_t>::max();
+		return !TryMakePreferredBuildConstants(invalid, 2688, 1492, constants, layout) &&
+		       constants.outputWidth == 0 && layout.width == 0;
+	}
+
 	bool CoversEveryIntervalWithRetainedMips()
 	{
 		for (std::uint32_t extent = 1; extent <= 256; extent *= 2) {
@@ -177,6 +200,7 @@ int main()
 	const std::array tests{
 		std::pair{ "padded eye edges", CoversPaddedEyeEdges },
 		std::pair{ "asymmetric rectangles", CoversAsymmetricRectsAndSinglePixel },
+		std::pair{ "finer depth within resource limits", SelectsFinerDepthWithinResourceLimits },
 		std::pair{ "all intervals fit retained mips", CoversEveryIntervalWithRetainedMips },
 		std::pair{ "unsafe dispatch dimensions", RejectsUnsafeDispatchDimensions },
 		std::pair{ "projection and depth bias", RejectsInvalidProjectionAndBias },

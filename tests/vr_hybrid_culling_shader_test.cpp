@@ -511,6 +511,34 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		Require(fixture.Test(objects)[0] == 1, "Thin-rectangle refinement omitted the second eye's visible depth");
 	}
 
+	void RetainsFinerOccluderDetail(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		for (const UINT reduction : { 2u, 4u }) {
+			Fixture fixture(device, context, reversedDepth, 32, 32, reduction);
+			fixture.testConstants.pixelGuardBand = 2.0f;
+			const std::array objects{ BoxForGuardedPixels(fixture, { 11.25f, 11.25f, 20.75f, 20.75f }) };
+			for (const float untrusted : { 0.0f, 1.0f, std::numeric_limits<float>::quiet_NaN() }) {
+				std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+				for (const auto& eye : fixture.testConstants.eyes)
+					pixels[16 * fixture.sourceWidth + eye.x + 9] = untrusted;
+				// The outside pixel shares a coarse leaf with the guard, but not a finer leaf.
+				if (reduction == 2)
+					Require(SourceCellsProveOcclusion(fixture, pixels, { 5, 5, 10, 10 }, 0.7f),
+						"Fine-depth fixture has no complete source-pixel proof");
+				fixture.Build(pixels);
+				Require(fixture.Test(objects)[0] == (reduction == 2 ? 0u : 1u),
+					"Finer leaves failed to recover occluder detail lost by coarse reduction");
+				for (const auto& eye : fixture.testConstants.eyes) {
+					const auto inside = 16 * fixture.sourceWidth + eye.x + 16;
+					pixels[inside] = untrusted;
+					fixture.Build(pixels);
+					Require(fixture.Test(objects)[0] == 1, "Finer leaves lost a covered stereo hole or mask");
+					pixels[inside] = 0.4f;
+				}
+			}
+		}
+	}
+
 	void RefinesOnlyUnresolvedCells(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
 	{
 		Fixture fixture(device, context, reversedDepth, 32, 32, 1);
@@ -604,15 +632,18 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 	void ChecksRefinedProofsAgainstSourcePixels(Fixture& fixture)
 	{
 		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
-		pixels[14 * fixture.sourceWidth + 21] = 1.0f;
-		pixels[22 * fixture.sourceWidth + fixture.testConstants.eyes[1].x + 9] = 0.0f;
+		const auto reduction = fixture.testConstants.pyramid.sourceReduction;
+		pixels[(3 * reduction + 2) * fixture.sourceWidth + 5 * reduction + 1] = 1.0f;
+		pixels[(5 * reduction + 2) * fixture.sourceWidth + fixture.testConstants.eyes[1].x + 2 * reduction + 1] = 0.0f;
 		std::vector<OBBTransform> objects;
 		std::vector<bool> proofs;
 		for (UINT top = 1; top <= 6; ++top) {
 			for (UINT bottom = top; bottom <= 6; ++bottom) {
 				for (UINT left = 1; left <= 6; ++left) {
 					for (UINT right = left; right <= 6; ++right) {
-						const auto reduction = fixture.testConstants.pyramid.sourceReduction;
+						if ((right - left + 1) * reduction <= 2.0f * fixture.testConstants.pixelGuardBand + 0.5f ||
+							(bottom - top + 1) * reduction <= 2.0f * fixture.testConstants.pixelGuardBand + 0.5f)
+							continue;
 						const auto object = BoxForGuardedPixels(fixture,
 							{ left * reduction + 0.25f, top * reduction + 0.25f,
 								(right + 1) * reduction - 0.25f, (bottom + 1) * reduction - 0.25f });
@@ -901,9 +932,9 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		fixture.testConstants = original;
 	}
 
-	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth)
+	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth, UINT reduction = 4)
 	{
-		Fixture fixture(device, context, reversedDepth, eyeWidth, eyeHeight);
+		Fixture fixture(device, context, reversedDepth, eyeWidth, eyeHeight, reduction);
 		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight);
 		for (UINT y = 0; y < fixture.sourceHeight; ++y)
 			for (UINT x = 0; x < fixture.sourceWidth; ++x)
@@ -1095,6 +1126,9 @@ int main()
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 16, 32, false);
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 4, 4, false);
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 8, 4, false);
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 17, 13, true, 2);
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 2, 4, false, 2);
+			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 4, 2, false, 2);
 			Fixture fixture(device.Get(), context.Get(), reversedDepth);
 			ChecksProjectedRegionShortcuts(fixture);
 			CoversVisibilityAndFailures(fixture);
@@ -1108,6 +1142,7 @@ int main()
 			PreservesRefinedFootprintAndStereo(fixture);
 			RefinesThinRectangles(fixture);
 			RefinesOnlyUnresolvedCells(device.Get(), context.Get(), reversedDepth);
+			RetainsFinerOccluderDetail(device.Get(), context.Get(), reversedDepth);
 			RetainsNearestVertexBeforeRefinement(device.Get(), context.Get(), reversedDepth);
 			ExhaustsActualLoadBudget(device.Get(), context.Get(), reversedDepth);
 			TraversesMaximumMipDepth(device.Get(), context.Get(), reversedDepth);
@@ -1117,6 +1152,14 @@ int main()
 			PreservesFaceProofsAcrossAxisPermutations(fixture);
 			RetainsLocalFaceBiasInEitherEye(fixture);
 			ChecksFaceProofsAgainstRays(fixture);
+			Fixture fine(device.Get(), context.Get(), reversedDepth, 32, 32, 2);
+			CoversVisibilityAndFailures(fine);
+			CoversMixedStereoVisibility(fine);
+			BiasRetainsTouchingBounds(fine);
+			CoversEveryOverlappingCell(fine);
+			CoversPerspectiveAndCameraAdjustment(fine);
+			ChecksRefinedProofsAgainstSourcePixels(fine);
+			ChecksFaceProofsAgainstRays(fine);
 			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
 					  << "): mip coverage, bounded face refinement, source-pixel and 3D ray oracles, stereo, bias, perspective and failure fallback\n";
 		}

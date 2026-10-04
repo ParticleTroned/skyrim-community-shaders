@@ -274,7 +274,7 @@ namespace VRHybridCulling
 						a_frame.poses[eye].rotation[row][column] = data.viewMat.m[row][column];
 				a_frame.test.eyes[eye] = { eye * (texture.Width / 2), 0, texture.Width / 2, texture.Height };
 			}
-			if (!TryMakeBuildConstants(a_frame.test.eyes, texture.Width, texture.Height, kDefaultSourceReduction,
+			if (!TryMakePreferredBuildConstants(a_frame.test.eyes, texture.Width, texture.Height,
 					a_frame.build, a_frame.test.pyramid))
 				return false;
 			a_frame.test.objectCount = 1;

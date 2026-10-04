@@ -26,7 +26,20 @@ The latest implementation passed twelve distinct focused tests, twelve
 strict shader permutations, production diagnostic-isolation checks and the
 universal Release DevBench build. The UI selection test also passes.
 Performance parity, motion/lifecycle and SE/AE runtime qualification remain
-open. PBR grass, grass optimization and Reverse Z remain later PRs.
+open. Grass optimization and Reverse Z remain subsequent PRs.
+
+G1 PBR grass is implemented separately on `main-VR` baseline `47c7df09a`
+in [PR106](https://github.com/ParticleTroned/skyrim-community-shaders/pull/106),
+commit `b78b722a1`. It retains native techniques and geometry, prewarms
+combined grass shaders for runtime selection, and isolates new diagnostics
+behind DevBench. The adversarial review fixed incomplete/asynchronous
+shader-pair binding, depth material-buffer admission, IBL/Skylighting
+ownership, and authored-texture fallback behavior. Four focused tests,
+32 strict shader permutations, eight basic bytecode comparisons,
+production isolation, the universal DevBench DLL and AIO verification
+passed. Live material/stereo/lifecycle qualification and the requested
+fresh compilation trace remain pending on the new build. See the
+[G1 implementation and review record](https://github.com/ParticleTroned/skyrim-community-shaders/blob/codex/astra-pbr-grass/docs/development/csx-astra-pbr-grass.md).
 
 ## Scope and authority
 
@@ -350,6 +363,11 @@ to conceal the actual result. Do not promote Hybrid by default on the
 basis of a successful compile or a menu setting.
 
 ## G1: PBR grass on the existing renderer
+
+Implementation is in PR106; runtime qualification remains open as recorded
+above. Proceed with the new compilation trace after installing that build,
+preserving the current cache. G2 starts after G1 behavior is evaluated;
+batching and culling code are not part of PR106.
 
 Port the complete material-construction, render-pass/technique, constant,
 descriptor, resource-binding and shader contract. Populate all material

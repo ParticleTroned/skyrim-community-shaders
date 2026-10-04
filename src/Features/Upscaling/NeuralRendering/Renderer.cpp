@@ -3585,31 +3585,41 @@ namespace NeuralRendering
 				evaluationList = activeKernelBatch->BeginEvaluation(
 					(args.featureSlot % kLogicalFeatureSlotCount) % kEyeCount,
 					args.featureSlot / kLogicalFeatureSlotCount);
-			const bool nativeEvaluated = Runtime::Instance().Execute(
-				evaluationList,
-				args.featureSlot,
-				slot.color.resource12.Get(),
-				slot.depth.resource12.Get(),
-				slot.motionVectors.resource12.Get(),
-				slot.output.resource12.Get(),
-				args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
-				resources[index].nativeLayout,
-				args.tuning,
-				effectiveReset,
-				&evaluationAttempted,
+			bool nativeEvaluated = false;
+			try {
+				nativeEvaluated = Runtime::Instance().Execute(
+					evaluationList,
+					args.featureSlot,
+					slot.color.resource12.Get(),
+					slot.depth.resource12.Get(),
+					slot.motionVectors.resource12.Get(),
+					slot.output.resource12.Get(),
+					args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
+					resources[index].nativeLayout,
+					args.tuning,
+					effectiveReset,
+					&evaluationAttempted,
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				execution || lifetime.enabled ? &runtimeEvidence : nullptr,
+					execution || lifetime.enabled ? &runtimeEvidence : nullptr,
 #else
-				execution ? &runtimeEvidence : nullptr,
+					execution ? &runtimeEvidence : nullptr,
 #endif
-				execution && !suppressEvaluationTiming ? &interop_ : nullptr,
-				static_cast<std::uint32_t>(index), activeKernelBatch);
+					execution && !suppressEvaluationTiming ? &interop_ : nullptr,
+					static_cast<std::uint32_t>(index), activeKernelBatch);
+			} catch (...) {
+				if (activeKernelBatch) {
+					const auto status = activeKernelBatch->GetStatus();
+					if (status.canFallback)
+						return retryIndependent(status.reason);
+				}
+				throw;
+			}
 			const bool evaluationRecorded = !activeKernelBatch || activeKernelBatch->EndEvaluation();
 			if (evaluationAttempted) {
 				Increment(snapshot_.counters.featureEvaluations);
 				a_outcome.evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
 			}
-			if (nativeEvaluated && !evaluationRecorded) {
+			if (!evaluationRecorded) {
 				const auto status = activeKernelBatch->GetStatus();
 				if (status.canFallback)
 					return retryIndependent(status.reason);
@@ -3693,6 +3703,8 @@ namespace NeuralRendering
 			const auto status = activeKernelBatch->GetStatus();
 			const bool privateBatch = kernelBatchMode_ == ExperimentalKernelBatch::Mode::SharedN2 || kernelBatchMode_ == ExperimentalKernelBatch::Mode::ClonedN2;
 			kernelBatchApplied_ = !status.warmup && privateBatch;
+			if (status.warmup && !status.reason.empty())
+				kernelBatchFrameReason_ = status.reason;
 			if (privateBatch && status.warmup && !status.graphMatchesQualified) {
 				kernelBatchFallbackLatched_ = true;
 				kernelBatchRejection_ = status;
@@ -4252,6 +4264,7 @@ namespace NeuralRendering
 			{ "backend", kernelBatchMode_ ? ExperimentalKernelBatch::ModeName(*kernelBatchMode_) : "original" },
 			{ "initialized", status.initialized }, { "failed", status.failed }, { "epochStale", status.epochStale },
 			{ "warmup", status.warmup }, { "frames", status.frames }, { "warmupFrames", status.warmupFrames },
+			{ "descriptorRefreshFrames", status.descriptorRefreshFrames },
 			{ "batchedFrames", status.batchedFrames }, { "logicalLaunches", status.logicalLaunches },
 			{ "physicalLaunches", status.physicalLaunches }, { "privateLaunches", status.privateLaunches },
 			{ "pendingFrames", status.pendingFrames }, { "retirementProven", status.retirementProven },

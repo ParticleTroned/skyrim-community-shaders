@@ -4,6 +4,7 @@
 #include "Upscaling.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
+#include "Upscaling/NeuralRendering/Runtime.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Utils/UI.h"
 #include <algorithm>
@@ -306,7 +307,7 @@ namespace
 		}
 	}
 	constexpr auto kernelBatchDescriptor = R"json({
-  "description":"NR kernel batching diagnostics and matched controls. The normal Info-level Character ROI Method selector is available in pipelines A/B/C: automatic single ROI, independent multi-ROI and batched multi-ROI. This tool reserves configure at the completed render-frame boundary and retires the old feature epoch with the existing bounded GPU idle wait. user_choice releases the session override; original preserves all provider calls, layer-control retains one-region stage scheduling, clonedN2 uses the qualified cloned-body catalog, and sharedN2 uses indexed shared-body kernels. Three successfully submitted original warmup frames precede private work. Pinned kernel-family, parameter-packet, writable-ownership, provider/GPU and catalog checks remain mandatory before private submission. Compatible regions may pair across eyes; each pair retains the exact original launch shapes and independent contexts. status.graphFamilyIdentities reports structural family admission; regionPairs is prospective matching for the latest observed graph. Actual private execution requires attributed submission deltas. graphIdentities retain full shape diagnostics. Incompatible inputs retain original independent rendering with a visible reason. Configuration acceptance is not proof of batching or speed. Inspect status logicalLaunches, physicalLaunches, privateLaunches, effectiveMode, reason, warmup and retirementProven. Per-evaluation GPU timers are absent during deferred recording; the outer native timer includes actual work. inspectUnqualifiedPipeline=true requires original mode and records A/B original-kernel behavior without dispatching guessed private kernels. No production configuration or camera changes. Concurrent or expired unclaimed commands reject before mutation; admitted commands return their actual result. Unexpected failure/transport timeout may be ambiguous; inspect status before retrying.",
+  "description":"NR kernel batching diagnostics and matched controls. The normal Info-level Character ROI Method selector is available in pipelines A/B/C: automatic single ROI, independent multi-ROI and batched multi-ROI. This tool reserves configure at the completed render-frame boundary and retires the old feature epoch with the existing bounded GPU idle wait. user_choice releases the session override; original preserves all provider calls, layer-control retains one-region stage scheduling, clonedN2 uses the qualified cloned-body catalog, and sharedN2 uses indexed shared-body kernels. Three successfully submitted original warmup frames precede private work. Native descriptor refresh before any recorded command keeps that frame on original kernels; descriptorRefreshFrames counts these frames. A late refresh requires proven abort and epoch retirement before independent fallback; no private work is admitted with mutable descriptors. Pinned kernel-family, parameter-packet, writable-ownership, provider/GPU and catalog checks remain mandatory before private submission. Compatible regions may pair across eyes; each pair retains the exact original launch shapes and independent contexts. status.graphFamilyIdentities reports structural family admission; regionPairs is prospective matching for the latest observed graph. Actual private execution requires attributed submission deltas. graphIdentities retain full shape diagnostics. Incompatible inputs retain original independent rendering with a visible reason. Configuration acceptance is not proof of batching or speed. Inspect status logicalLaunches, physicalLaunches, privateLaunches, effectiveMode, reason, warmup and retirementProven. Per-evaluation GPU timers are absent during deferred recording; the outer native timer includes actual work. inspectUnqualifiedPipeline=true requires original mode and records A/B original-kernel behavior without dispatching guessed private kernels. No production configuration or camera changes. Concurrent or expired unclaimed commands reject before mutation; admitted commands return their actual result. Unexpected failure/transport timeout may be ambiguous; inspect status before retrying.",
   "inputSchema":{"type":"object","additionalProperties":false,"required":["action"],"properties":{
     "action":{"enum":["status","configure"]},"mode":{"enum":["user_choice","original","layer-control","clonedN2","sharedN2"]},
     "inspectUnqualifiedPipeline":{"type":"boolean"}},
@@ -321,6 +322,7 @@ namespace
         "description":"Prospective original-region matching for the latest observed graph; zeroed before observation. Original execution is unpaired. Actual private work requires frame attribution and submitted private-launch/batched-frame deltas."},
       "graphIdentities":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"string"}},
       "privateLaunches":{"type":"integer","minimum":0},"physicalLaunches":{"type":"integer","minimum":0},
+	  "descriptorRefreshFrames":{"type":"integer","minimum":0,"description":"Original frames retained because native descriptor metadata refreshed before any kernel or deferred command was recorded."},
       "logicalLaunches":{"type":"integer","minimum":0},"graphMatchesQualified":{"type":"boolean"}}}}}
 })json";
 
@@ -837,6 +839,7 @@ void NeuralRenderingFeature::DrawSettings()
 {
 	globals::features::upscaling.DrawNeuralRenderingSettings(
 		globals::features::upscaling.GetUpscaleMethod());
+	auto runtimeAvailabilityGuard = Util::DisableGuard(!NeuralRendering::Runtime::IsInstalled());
 	const auto& upscaling = globals::features::upscaling;
 	auto fovAvailabilityGuard = Util::DisableGuard(
 		NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly, globals::game::isVR, upscaling.settings.neuralRenderingRenderscaleFov) &&

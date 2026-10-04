@@ -179,6 +179,7 @@ namespace NeuralRendering
 			s.current->warmup = frame.inspectUnqualifiedPipeline || s.status.warmupFrames < 3 || !s.status.graphMatchesQualified;
 			s.current->proxy.reset(new State::Proxy(commandList, [&s](std::string_view name) { return s.probe->BeforeCommand(name); }, [&s](std::string_view reason) { s.probe->RecordFailure(reason); }, {}, {}, [&s](UINT count, const D3D12_RESOURCE_BARRIER* barriers) { return s.probe->BarrierDisposition(count, barriers); }, [&s](UINT count, ID3D12DescriptorHeap* const* heaps) { return s.probe->HeapDisposition(count, heaps); }));
 			s.probe->BeginSample(static_cast<unsigned>(frame.sequence), s.current->warmup);
+			s.Note({});
 			s.frame = frame;
 			s.completedEvaluations = 0;
 			s.pendingCreation = UINT_MAX;
@@ -295,6 +296,10 @@ namespace NeuralRendering
 												 s.current->proxy->Healthy() && !s.current->finished,
 				"kernel frame is incomplete or its proxy failed");
 			s.probe->FinishCommandList();
+			s.current->warmup = s.probe->RuntimeWarmup();
+			s.status.warmup = s.current->warmup;
+			if (s.probe->RuntimeDescriptorRefresh())
+				s.Note("original frame: native descriptor metadata refreshed before kernel recording");
 			s.current->counters = s.probe->GetRuntimeCounters();
 			const auto graph = s.probe->GetRuntimeGraph();
 			s.status.graphLaunches = graph.launches;
@@ -327,6 +332,7 @@ namespace NeuralRendering
 			NrReplay::ProviderFloor::Require(free != s.pending.end(), "kernel submitted arena has no retirement slot");
 			++s.status.frames;
 			s.status.warmupFrames += s.current->warmup;
+			s.status.descriptorRefreshFrames += s.probe->RuntimeDescriptorRefresh();
 			s.status.batchedFrames += s.current->counters.privateLaunches != 0;
 			s.status.logicalLaunches += s.current->counters.logical;
 			s.status.physicalLaunches += s.current->counters.physical;
@@ -383,9 +389,10 @@ namespace NeuralRendering
 	{
 		const auto& s = *state_;
 		auto result = s.status;
-		result.canFallback = s.status.failed && s.status.recording && s.current && !s.current->finished &&
+		result.failed |= s.probe && !s.probe->Healthy();
+		result.canFallback = result.failed && s.status.recording && s.current && !s.current->finished &&
 		                     !s.retained && s.status.retirementProven && s.probe && s.probe->CanRetryOriginalBeforeSubmission();
-		result.reason = s.reason.data();
+		result.reason = s.probe && !s.probe->Healthy() ? s.probe->FailureReason() : std::string_view(s.reason.data());
 		result.pendingFrames = static_cast<std::size_t>(std::ranges::count_if(s.pending, [](const auto& item) { return static_cast<bool>(item); }));
 		result.epochStale |= s.probe && s.probe->RuntimeEpochStale();
 		return result;

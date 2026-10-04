@@ -48,7 +48,7 @@ namespace NeuralRendering
 			bool warmup = true, retirementProven = true;
 			bool canFallback = false;
 			Mode mode = Mode::Original;
-			std::uint64_t frames = 0, warmupFrames = 0, batchedFrames = 0;
+			std::uint64_t frames = 0, warmupFrames = 0, descriptorRefreshFrames = 0, batchedFrames = 0;
 			std::uint64_t logicalLaunches = 0, physicalLaunches = 0, privateLaunches = 0;
 			std::size_t pendingFrames = 0;
 			bool inspection = false, graphMatchesQualified = false;

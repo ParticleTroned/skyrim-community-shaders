@@ -129,6 +129,7 @@ namespace NrReplay
 			return status;
 		}
 		static KernelPair::Sample& PairSample(ProviderKernelChainProbe& probe) { return *probe.pairSample_; }
+		static void MarkNativeAttempt(ProviderKernelChainProbe& probe) { ++probe.nativeAttempts_; }
 		static nlohmann::json PairReceipt(const ProviderKernelChainProbe& probe) { return probe.PairReceipt(); }
 		static void ConfigureRepetition(ProviderKernelChainProbe& probe, ID3D12GraphicsCommandList* list,
 			KernelPair::Pairing pairs = KernelPair::kSameEyePairs, std::array<unsigned, 4> gridWidths = { 1, 1, 1, 1 })
@@ -1848,12 +1849,66 @@ namespace
 					Check(descriptorArguments == std::vector<std::uintptr_t>{ 0x4000, 123, reinterpret_cast<std::uintptr_t>(&output) } && output == 43);
 				if (api == 4)
 					Check(descriptorArguments == std::vector<std::uintptr_t>{ 0x4000, pointer });
-				Check(probe.Healthy() == (mode < 2));
-				if (mode >= 2) {
+				Check(probe.Healthy() == (mode == 0));
+				if (mode != 0) {
 					Reject([&] { probe.EndEvaluation(); });
 					Check(probe.SampleReceipt()["submittedDescriptors"] == 0);
 				}
 			}
+	}
+	void TestRuntimeDescriptorRefresh()
+	{
+		for (unsigned api = 0; api < 5; ++api)
+			for (unsigned scenario = 0; scenario < 5; ++scenario) {
+				Json report;
+				ProviderKernelChainProbe probe(report, "forward", {}, {}, "original", {}, NrReplay::KernelPair::kStages, 1, {}, true);
+				KernelChainProbeTestAccess::Configure(probe, FakeLaunch);
+				KernelChainProbeTestAccess::DescriptorFunctions(probe, { reinterpret_cast<void*>(&MockMerged), reinterpret_cast<void*>(&MockIndependent),
+																		   reinterpret_cast<void*>(&MockTexture), reinterpret_cast<void*>(&MockSurface), reinterpret_cast<void*>(&MockCapture) });
+				probe.BeginSample(3, false);
+				probe.BeginEvaluation(proxy, real, 0, 0);
+				if (scenario == 1)
+					KernelChainProbeTestAccess::PairSample(probe).regions[0].commands.push_back({});
+				if (scenario == 2)
+					KernelChainProbeTestAccess::MarkNativeAttempt(probe);
+				descriptorStatus = scenario == 4 ? NVAPI_ERROR : NVAPI_OK;
+				std::array<std::uint8_t, 1024> params{};
+				NvU32 output = 0;
+				Check(KernelChainProbeTestAccess::DescriptorInvoke(probe, api, params.data(), identityTestDevice, { 123 }, { 456 }, &output, scenario == 3) == descriptorStatus);
+				Check(probe.GetRuntimeCounters().privateAttempts == 0 && probe.GetRuntimeCounters().physical == 0);
+				Check(probe.RuntimeDescriptorRefresh() == (scenario == 0 || scenario == 4));
+				Check(probe.RuntimeWarmup() == probe.RuntimeDescriptorRefresh());
+				Check(probe.Healthy() == (scenario == 0));
+				if (scenario == 0) {
+					KernelChainProbeTestAccess::ConfigureIdentity(probe, FakeModule, FakeFunction);
+					std::array<std::uint8_t, 4> bytes{ 1, 2, 3, 4 };
+					NVDX_ObjectHandle module = nullptr, function = nullptr;
+					Check(KernelChainProbeTestAccess::Module(probe, identityTestDevice, bytes.data(), 4, &module) == NVAPI_OK);
+					Check(KernelChainProbeTestAccess::Function(probe, identityTestDevice, module, "refresh_kernel", &function) == NVAPI_OK);
+					auto launch = Packet(bytes);
+					launch.hFunction = function;
+					submitStatus = NVAPI_OK;
+					Check(KernelChainProbeTestAccess::Invoke(probe, proxy, &launch, 1) == NVAPI_OK);
+					Check(probe.GetRuntimeCounters().logical == 1 && probe.GetRuntimeCounters().physical == 1 && probe.GetRuntimeCounters().privateAttempts == 0);
+					probe.EndEvaluation();
+					probe.FinishCommandList();
+					const auto retained = probe.TakeRuntimeFrame();
+					Check(retained && probe.RuntimeDescriptorRefresh());
+					probe.BeginSample(4, false);
+					Check(!probe.RuntimeWarmup() && !probe.RuntimeDescriptorRefresh());
+				}
+				if (scenario == 1) {
+					Check(probe.CanRetryOriginalBeforeSubmission());
+					auto launch = Packet(params);
+					Check(KernelChainProbeTestAccess::Invoke(probe, proxy, &launch, 1) == NVAPI_ERROR);
+					Check(probe.CanRetryOriginalBeforeSubmission());
+					Check(probe.FailureReason() == "kernel pair descriptor cache mutation invalidates deferred replay");
+				} else
+					Check(!probe.CanRetryOriginalBeforeSubmission());
+				probe.AbortRuntimeFrame();
+				Check(!probe.CanRetryOriginalBeforeSubmission());
+			}
+		descriptorStatus = NVAPI_OK;
 	}
 	void TestPairPackedSubmission()
 	{
@@ -2186,6 +2241,7 @@ int main()
 		TestPairHeapIdentityAndManifest();
 		TestPairAdmissionAndEightSlotRollback();
 		TestPairDescriptorGuards();
+		TestRuntimeDescriptorRefresh();
 		TestPairPackedSubmission();
 		TestSelectedStageDynamicPairs();
 		TestRepeatedSchedules();

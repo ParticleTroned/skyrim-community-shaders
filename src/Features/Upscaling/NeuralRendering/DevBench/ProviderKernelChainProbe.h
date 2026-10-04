@@ -291,6 +291,7 @@ namespace NrReplay
 			}
 			iteration_ = iteration;
 			warmup_ = warmup;
+			runtimeDescriptorRefresh_ = false;
 			descriptors_.clear();
 			events_.clear();
 			parameterBytes_ = observedCalls_ = submittedCalls_ = submittedDescriptors_ = multiCalls_ = maxSubmitted_ = crossRegionCalls_ = maxRegions_ = 0;
@@ -428,6 +429,9 @@ namespace NrReplay
 			sample_ = false;
 		}
 		[[nodiscard]] bool Healthy() const noexcept { return error_[0] == '\0'; }
+		[[nodiscard]] std::string_view FailureReason() const noexcept { return error_.data(); }
+		[[nodiscard]] bool RuntimeWarmup() const noexcept { return warmup_; }
+		[[nodiscard]] bool RuntimeDescriptorRefresh() const noexcept { return runtimeDescriptorRefresh_; }
 		[[nodiscard]] bool RuntimeEpochStale() const noexcept { return runtimeStale_; }
 		[[nodiscard]] std::string ModelCatalogIdentity() const
 		{
@@ -822,6 +826,7 @@ namespace NrReplay
 		unsigned scheduleRepetitions_ = 1;
 		std::string repetitionControl_;
 		bool frameRuntime_ = false, runtimeModelPrepared_ = false;
+		bool runtimeDescriptorRefresh_ = false;
 		std::atomic<bool> runtimeStale_ = false;
 		bool runtimeAdmissionRejected_ = false;
 		std::atomic<bool> runtimeFallbackBlocked_ = false;
@@ -1960,9 +1965,9 @@ namespace NrReplay
 		NvAPI_Status Capture(ID3D12GraphicsCommandList* list, const NVAPI_CU_KERNEL_LAUNCH_PARAMS* values, NvU32 count)
 		{
 			using ProviderFloor::Require;
-			ThrowIfFailed();
 			Require(sample_ && evaluating_ && GetCurrentThreadId() == thread_ && (list == proxy_ || list == realList_),
 				"kernel-chain call escaped the owned evaluation boundary");
+			ThrowIfFailed();
 			Require(count && count <= KernelChain::kMaximumDescriptors, "kernel-chain input descriptor count out of bounds");
 			ValidateReadable(values, sizeof(*values) * count);
 			if (pending_.size() + count > KernelChain::kMaximumDescriptors)
@@ -2014,11 +2019,24 @@ namespace NrReplay
 					probe.runtimeStale_ = true;
 					return nativeFunction(arguments...);
 				}
+				// Refreshes before any recorded command can keep the entire frame original.
+				if (admitted && probe.frameRuntime_ && !probe.warmup_ && probe.Healthy() &&
+					probe.nativeAttempts_ == 0 && probe.privateAttempts_ == 0 &&
+					probe.descriptors_.empty() && probe.pending_.empty() && probe.pairSample_ &&
+					probe.pairSample_->completed == 0 &&
+					std::ranges::all_of(probe.pairSample_->regions, [](const auto& region) { return region.commands.empty(); })) {
+					probe.warmup_ = true;
+					probe.runtimeDescriptorRefresh_ = true;
+				}
 				const bool stable = probe.descriptorGuard_.Observe(Api, admitted && probe.warmup_);
 				const auto status = nativeFunction(arguments...);
 				if (!admitted || status != NVAPI_OK)
 					probe.runtimeFallbackBlocked_ = true;
 				probe.descriptorStatuses_[index] = status;
+				if (status != NVAPI_OK)
+					probe.RecordFailure("native descriptor metadata call failed");
+				if (admitted && !stable)
+					probe.MarkRuntimeAdmissionRejected();
 				if (!admitted || !stable)
 					probe.RecordFailure("kernel pair descriptor cache mutation invalidates deferred replay");
 				return status;
@@ -2063,10 +2081,13 @@ namespace NrReplay
 				const auto start = Clock::now();
 				const auto previousApi = owner_->apiCpu_;
 				NvAPI_Status result = NVAPI_ERROR;
+				const bool admissionAlreadyRejected = owner_->CanRetryOriginalBeforeSubmission();
 				try {
 					result = owner_->Capture(list, values, count);
 				} catch (const std::exception& error) {
-					owner_->runtimeFallbackBlocked_ = true;
+					if (!admissionAlreadyRejected || GetCurrentThreadId() != owner_->thread_ ||
+						!owner_->evaluating_ || (list != owner_->proxy_ && list != owner_->realList_))
+						owner_->runtimeFallbackBlocked_ = true;
 					owner_->RecordFailure(error.what());
 				} catch (...) {
 					owner_->runtimeFallbackBlocked_ = true;

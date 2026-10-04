@@ -27,6 +27,14 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 30)
     endforeach()
 
+    cmake_language(CALL ${register_test}
+        neural_transaction_devbench_evidence_test NeuralTransactionDevBenchEvidence
+        "${repository_root}/tests/neural_transaction_evidence_test.cpp")
+    target_link_libraries(neural_transaction_devbench_evidence_test PRIVATE nlohmann_json::nlohmann_json)
+    target_compile_definitions(neural_transaction_devbench_evidence_test PRIVATE
+        NOMINMAX WIN32_LEAN_AND_MEAN DEVBENCH_BRIDGE_ENABLED)
+    set_tests_properties(NeuralTransactionDevBenchEvidence PROPERTIES TIMEOUT 30)
+
     target_sources(screenshot_neural_diagnostics_test PRIVATE
         "${repository_root}/src/Features/ScreenshotNeuralDiagnostics.cpp")
 

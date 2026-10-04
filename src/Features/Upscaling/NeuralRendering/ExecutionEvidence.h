@@ -5,6 +5,9 @@
 #include "NativeEvaluationLayout.h"
 #include "PipelinePolicy.h"
 #include "RoiDescriptor.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "SharedContextPolicy.h"
+#endif
 #include "Utils/PassTimingCapture.h"
 
 #include <array>
@@ -109,6 +112,10 @@ namespace NeuralRendering
 		std::shared_ptr<const CharacterPreparationEvidence> characterEvidence;
 		ExecutionTexture color{}, depth{}, motion{}, output{}, controlMask{};
 		RoiDescriptor roi{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** A fused native domain retains these original, disjoint private-output writes. */
+		std::optional<SharedContext::Plan> sharedOutputOwnership;
+#endif
 		std::optional<NativeEvaluationLayout> nativeLayout;
 		UpscalingDLSS::ViewportCrop viewportCrop{};
 		float motionVectorScaleX = 0, motionVectorScaleY = 0;
@@ -130,6 +137,7 @@ namespace NeuralRendering
 		bool colorProcessing = false, transportBypass = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::string measuredPlanDecision;
+		std::string sharedContextDecision;
 #endif
 		std::array<ExecutionRegionDescriptor, kMaximumExecutionRegions> regions{};
 	};

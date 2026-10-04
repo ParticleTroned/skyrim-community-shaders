@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -17,6 +18,21 @@ namespace DevBenchAPI
 namespace BuildProvenance
 {
 	void AttachProducer(Json&) {}
+}
+namespace VRRenderScaleDevBenchBridge
+{
+	static bool rejectCommand = false;
+	static unsigned commands = 0;
+	static std::function<void()> beforeCommand;
+	Json RunRendererCommand(std::function<Json()> command)
+	{
+		++commands;
+		if (rejectCommand)
+			return { { "ok", false }, { "errorCode", "renderer_command_busy" }, { "mutationApplied", false } };
+		if (beforeCommand)
+			beforeCommand();
+		return command();
+	}
 }
 namespace logger
 {
@@ -208,5 +224,81 @@ int main()
 		"stateless crop storage does not reset external input epochs");
 	Require(ConfigurationEvidenceJson(compact)["experiments"]["compactInputs"] == true, "captured compact setting");
 	Require(Call({ { "action", "reset_experiments" } })["ok"] == true && !registry.Snapshot().experiments.CompactInputsEnabled(), "reset clears compact experiment");
+	using NeuralRendering::SharedContext::Mode;
+	const auto beforeContext = registry.Snapshot();
+	Require(beforeContext.experiments.sharedContext.mode == Mode::Off && beforeContext.experiments.sharedContext.halo == 256,
+		"shared context defaults off with bounded halo");
+	for (const Json invalid : { Json(-1), Json(1), Json(32), Json(65), Json(512), Json(true), Json("64"), Json(64.0) }) {
+		const auto before = registry.Snapshot();
+		Require(Call({ { "action", "configure" }, { "settings", { { "detailStrength", 0 } } },
+					{ "experiments", { { "sharedContext", { { "mode", "enclosing" }, { "halo", invalid } } } } } })["ok"] == false,
+			"invalid halo rejected without partial settings change");
+		Require(registry.Snapshot().revision == before.revision, "invalid context leaves registry unchanged");
+	}
+	for (const Json invalid : { Json{ { "mode", "unknown" } }, Json{ { "other", true } }, Json::object(), Json(true) })
+		Require(Call({ { "action", "configure" }, { "experiments", { { "sharedContext", invalid } } } })["ok"] == false,
+			"unknown or malformed shared context rejected");
+	VRRenderScaleDevBenchBridge::rejectCommand = true;
+	const auto rejected = Call({ { "action", "configure" }, { "experiments", { { "sharedContext", { { "mode", "enclosing" } } } } } });
+	Require(rejected["errorCode"] == "renderer_command_busy" && rejected["mutationApplied"] == false &&
+				registry.Snapshot().revision == beforeContext.revision,
+		"queue rejection is preserved without registry mutation");
+	VRRenderScaleDevBenchBridge::rejectCommand = false;
+	const auto commandCount = VRRenderScaleDevBenchBridge::commands;
+	Require(Call({ { "action", "status" } })["ok"] == true && VRRenderScaleDevBenchBridge::commands == commandCount,
+		"read-only status bypasses frame command queue");
+	const auto enabled = Call({ { "action", "configure" }, { "expectedRevision", beforeContext.revision },
+		{ "experiments", { { "sharedContext", { { "mode", "enclosing" } } } } } });
+	auto context = registry.Snapshot();
+	Require(enabled["ok"] == true && enabled["mutationApplied"] == true &&
+				context.experiments.sharedContext.mode == Mode::Enclosing && context.experiments.sharedContext.halo == 256 &&
+				context.inputEpoch[0] == beforeContext.inputEpoch[0] + 1 && context.inputEpoch[1] == beforeContext.inputEpoch[1],
+		"enlarged context changes only the pre-upscale input epoch");
+	Require(ConfigurationEvidenceJson(context)["experiments"]["sharedContext"] == Json{ { "mode", "enclosing" }, { "halo", 256 } },
+		"frozen evidence records exact shared context settings");
+	Require(Call({ { "action", "configure" }, { "experiments", { { "sharedContext", { { "mode", "enclosing" } } } } } })["mutationApplied"] == false,
+		"identical context configure is a no-op");
+	for (const char* incompatible : { "compactInputs", "sharedSourceTransport" }) {
+		Require(Call({ { "action", "configure" }, { "experiments", { { incompatible, true } } } })["ok"] == false &&
+					registry.Snapshot().revision == context.revision,
+			"active context rejects incompatible storage experiment");
+		auto invalid = context.experiments;
+		if (std::string_view(incompatible) == "compactInputs")
+			invalid.compactInputs = true;
+		else
+			invalid.sharedSourceTransport = true;
+		Require(!registry.Configure(context.settings, invalid), "registry independently rejects incompatible storage experiment");
+	}
+	Require(Call({ { "action", "configure" }, { "experiments", { { "sharedContext", { { "halo", 64 } } } } } })["ok"] == true &&
+				registry.Snapshot().inputEpoch[0] == context.inputEpoch[0] + 1,
+		"effective enclosure halo changes input epoch");
+	Require(Call({ { "action", "configure" }, { "experiments", { { "sharedContext", { { "mode", "full_eye" } } } } } })["ok"] == true,
+		"full-eye reference accepted");
+	context = registry.Snapshot();
+	Require(Call({ { "action", "configure" }, { "experiments", { { "sharedContext", { { "halo", 0 } } } } } })["ok"] == true &&
+				registry.Snapshot().inputEpoch == context.inputEpoch,
+		"inactive full-eye halo does not change input epoch");
+	feature.SaveSettings(saved);
+	Require(!saved.contains("experiments") && saved.dump().find("sharedContext") == std::string::npos,
+		"shared context remains session-only and is never persisted");
+	Require(Call({ { "action", "reset_experiments" } })["ok"] == true &&
+				registry.Snapshot().experiments.sharedContext == NeuralRendering::SharedContext::Settings{},
+		"queued reset restores off and halo 256");
+	context = registry.Snapshot();
+	Require(Call({ { "action", "configure" }, { "experiments", { { "sharedContext", { { "halo", 128 } } } } } })["ok"] == true &&
+				registry.Snapshot().inputEpoch == context.inputEpoch,
+		"off-mode halo does not change input epoch");
+	const auto beforeBoundary = registry.Snapshot();
+	VRRenderScaleDevBenchBridge::beforeCommand = [&]() {
+		auto changed = registry.Snapshot();
+		changed.settings.detailStrength = changed.settings.detailStrength == 0 ? 1 : 0;
+		Require(registry.Configure(changed.settings, changed.experiments), "simulate settings change before command admission");
+	};
+	const auto staleAtBoundary = Call({ { "action", "configure" }, { "expectedRevision", beforeBoundary.revision },
+		{ "experiments", { { "sharedContext", { { "mode", "enclosing" } } } } } });
+	VRRenderScaleDevBenchBridge::beforeCommand = {};
+	Require(staleAtBoundary["errorCode"] == "nr_color_revision_conflict" && staleAtBoundary["mutationApplied"] == false &&
+				registry.Snapshot().experiments.sharedContext.mode == Mode::Off,
+		"revision check runs at admitted frame boundary");
 	std::printf("Passed %u production settings/registry/evidence checks\n", checks);
 }

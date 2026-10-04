@@ -88,7 +88,120 @@ def native_layout(region):
     return copy.deepcopy(result)
 
 
+def shared_fixture(count=2):
+    pair = fixture("reduced_resolution")
+    context = {"x": 64, "y": 64, "width": 384, "height": 384}
+    outputs = [{"x": 96 + index * 32, "y": 128, "width": 16, "height": 128} for index in range(count)]
+    support = {"x": 96, "y": 128, "width": (count - 1) * 32 + 16, "height": 128}
+    for record in pair:
+        batch = record["executionEvidence"]["executions"][0]
+        batch["activeEvaluationPixels"] = 2 * 384 * 384
+        batch["sharedContext"] = {"phase": "selection_before_native_execution", "mode": "enclosing", "halo": 64}
+        for region in batch["regions"]:
+            for name in ("nrInput", "nrOutput", "nrDepthGuide", "nrMotionGuide"):
+                region[name] = texture(512)
+                region[name].update(work=copy.deepcopy(context), workPixels=384 * 384, workLogicalBytes=384 * 384 * 8)
+            region["nrViewport"] = {"fullInput": {"width": 512, "height": 512},
+                                    "fullOutput": {"width": 512, "height": 512},
+                                    "input": {"left": 0, "top": 0, "right": 512, "bottom": 512},
+                                    "output": {"left": 0, "top": 0, "right": 512, "bottom": 512}}
+            region.update(characterSelection=True, effectiveReset=True, motionVectorScale=[512, 512])
+            region["nativeLayout"] = native_layout(region)
+            region["roi"] = {"contextPolicy": "experimental_shared_original_coordinates",
+                             "coordinateDomain": "output_crop_local", "compactSource": None,
+                             "allocationCapacity": {"width": 512, "height": 512}, "capacityPixels": 512 * 512,
+                             "inferenceContext": copy.deepcopy(context), "inferencePixels": 384 * 384,
+                             "ownedOutput": None, "ownedOutputs": copy.deepcopy(outputs), "ownedOutputPixels": count * 16 * 128,
+                             "samplingSupport": copy.deepcopy(support), "samplingSupportKind": "conservative_guarded_enclosure",
+                             "samplingSupportEnclosurePixels": support["width"] * support["height"],
+                             "temporalEnvelope": None, "temporalEnvelopePixels": None}
+    return pair
+
+
 class TransactionEvidenceTests(unittest.TestCase):
+    def test_shared_ownership_is_distinct_from_inference_and_survives_join(self):
+        for count in (1, 2, 8):
+            frozen, delayed = shared_fixture(count)
+            before = copy.deepcopy(frozen)
+            joined = tx.join_execution_evidence(frozen, delayed)
+            region = joined["executionEvidence"]["executions"][0]["regions"][0]
+            self.assertEqual(region["roi"]["ownedOutputPixels"], count * 16 * 128)
+            self.assertEqual(region["roi"]["inferencePixels"], 384 * 384)
+            self.assertEqual(len(region["roi"]["ownedOutputs"]), count)
+            self.assertEqual(frozen, before)
+            self.assertEqual(joined["companionState"], "joined")
+
+    def test_shared_ownership_rejects_contradictions_on_either_evidence_side(self):
+        mutations = (
+            lambda r: r["roi"].update(ownedOutput=r["roi"]["inferenceContext"]),
+            lambda r: r["roi"].pop("ownedOutput"),
+            lambda r: r["roi"].pop("ownedOutputs"),
+            lambda r: r["roi"].update(ownedOutputs=[]),
+            lambda r: r["roi"].update(ownedOutputs=[r["roi"]["ownedOutputs"][0]] * 9),
+            lambda r: r["roi"]["ownedOutputs"].__setitem__(1, copy.deepcopy(r["roi"]["ownedOutputs"][0])),
+            lambda r: r["roi"]["ownedOutputs"][0].update(x=0),
+            lambda r: r["roi"]["ownedOutputs"][0].update(width=0),
+            lambda r: r["roi"]["ownedOutputs"][0].update(x=True),
+            lambda r: r["roi"]["ownedOutputs"][0].update(width=16385),
+            lambda r: r["roi"].update(ownedOutputPixels=384 * 384),
+            lambda r: r["roi"].update(ownedOutputPixels=True),
+            lambda r: r["roi"].update(inferencePixels=0),
+            lambda r: r["roi"].update(capacityPixels=0),
+            lambda r: r["roi"]["allocationCapacity"].update(width=16385),
+            lambda r: r["roi"]["inferenceContext"].update(width=512),
+            lambda r: r["roi"].update(samplingSupport=None),
+            lambda r: r["roi"]["samplingSupport"].update(x=0),
+            lambda r: r["roi"].update(samplingSupportEnclosurePixels=0),
+            lambda r: r["roi"].update(temporalEnvelope=r["roi"]["inferenceContext"]),
+            lambda r: r["roi"].update(temporalEnvelopePixels=0),
+            lambda r: r["roi"].update(contextPolicy="retained_envelope"),
+            lambda r: r["roi"].update(coordinateDomain="compact_storage_local"),
+            lambda r: r["roi"].update(compactSource={}),
+            lambda r: r.update(nativeLayout=None),
+            lambda r: r.update(characterSelection=False),
+            lambda r: r.update(effectiveReset=False),
+            lambda r: r.update(featureUpscaling=True),
+            lambda r: r.update(controlMask=None),
+            lambda r: r.update(controlMask=texture()),
+        )
+        for index, mutate in enumerate(mutations):
+            for side in (0, 1):
+                with self.subTest(mutation=index, side=side):
+                    pair = shared_fixture()
+                    mutate(pair[side]["executionEvidence"]["executions"][0]["regions"][0])
+                    with self.assertRaises(tx.TransactionEvidenceError):
+                        tx.join_execution_evidence(*pair)
+
+    def test_shared_ownership_and_selection_cannot_be_replanned_in_delayed_evidence(self):
+        frozen, delayed = shared_fixture()
+        for region in delayed["executionEvidence"]["executions"][0]["regions"]:
+            for owned in region["roi"]["ownedOutputs"]:
+                owned["x"] += 64
+            region["roi"]["samplingSupport"]["x"] += 64
+        with self.assertRaisesRegex(tx.TransactionEvidenceError, "delayed ROI roles"):
+            tx.join_execution_evidence(frozen, delayed)
+        frozen, delayed = shared_fixture()
+        delayed["executionEvidence"]["executions"][0]["sharedContext"]["halo"] = 256
+        with self.assertRaisesRegex(tx.TransactionEvidenceError, "delayed shared context"):
+            tx.join_execution_evidence(frozen, delayed)
+
+    def test_shared_failure_before_evaluation_does_not_invent_an_effective_reset(self):
+        frozen, delayed = shared_fixture()
+        for record in (frozen, delayed):
+            envelope = record["executionEvidence"]
+            envelope["workOutcome"] = ["failed", "failed"]
+            envelope["producerBoundary"].update(outcome="failed", committedEyeMask=0)
+            execution = envelope["executions"][0]
+            execution.update(succeeded=False, actualEvaluationCount=0, activeEvaluationPixels=0,
+                             attemptedPhysicalSlotMask=0, succeededPhysicalSlotMask=0, privateCommittedPhysicalSlotMask=0)
+            for region in execution["regions"]:
+                region.update(evaluationAttempted=False, evaluationSucceeded=False, privateOutputCommitted=False,
+                              effectiveReset=False)
+        joined = tx.join_execution_evidence(frozen, delayed)
+        execution = joined["executionEvidence"]["executions"][0]
+        self.assertFalse(execution["succeeded"])
+        self.assertEqual(execution["actualEvaluationCount"], 0)
+
     def test_sparse_and_sixteen_region_execution_membership(self):
         for count in (1, 4, 8):
             source, _ = fixture(route="submit")

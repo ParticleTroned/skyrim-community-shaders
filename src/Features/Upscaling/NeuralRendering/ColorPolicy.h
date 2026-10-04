@@ -5,6 +5,9 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "SharedContextPolicy.h"
+#endif
 
 namespace NeuralRendering::Color
 {
@@ -80,6 +83,7 @@ namespace NeuralRendering::Color
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool sharedSourceTransport = false;
 		bool compactInputs = false;
+		SharedContext::Settings sharedContext{};
 #endif
 		/** Source sharing stays opt-in until native output and cost qualification. */
 		[[nodiscard]] bool SharedSourceTransportEnabled() const noexcept
@@ -157,6 +161,11 @@ namespace NeuralRendering::Color
 
 	[[nodiscard]] inline bool Valid(const Experiments& value) noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!SharedContext::Valid(value.sharedContext) ||
+			(value.sharedContext.mode != SharedContext::Mode::Off && (value.compactInputs || value.sharedSourceTransport)))
+			return false;
+#endif
 		return Valid(value.profiles[0]) && Valid(value.profiles[1]);
 	}
 
@@ -176,6 +185,13 @@ namespace NeuralRendering::Color
 
 	[[nodiscard]] inline bool ChangesInput(const Configuration& oldValue, const Configuration& newValue, std::uint32_t insertion) noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (insertion == 0 &&
+			(oldValue.experiments.sharedContext.mode != newValue.experiments.sharedContext.mode ||
+				(newValue.experiments.sharedContext.mode == SharedContext::Mode::Enclosing &&
+					oldValue.experiments.sharedContext.halo != newValue.experiments.sharedContext.halo)))
+			return true;
+#endif
 		return EffectiveProfile(oldValue, insertion) != EffectiveProfile(newValue, insertion) ||
 		       oldValue.experiments.transportBypass != newValue.experiments.transportBypass;
 	}

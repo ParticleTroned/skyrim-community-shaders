@@ -143,10 +143,25 @@ namespace NeuralRendering::Evidence
 				if (o.evaluationGpu.state == ExecutionTimingState::Complete && o.evaluationGpu.microseconds)
 					aggregateGpuMicroseconds += *o.evaluationGpu.microseconds;
 			}
+			auto roi = RoiJson(r.roi);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (r.sharedOutputOwnership) {
+				roi["contextPolicy"] = "experimental_shared_original_coordinates";
+				roi["ownedOutput"] = nullptr;
+				roi["ownedOutputs"] = Json::array();
+				std::uint64_t ownedPixels = 0;
+				for (std::uint32_t index = 0; index < SharedContext::OutputCount(*r.sharedOutputOwnership); ++index)
+					if (const auto domain = SharedContext::CopyDomain(*r.sharedOutputOwnership, index)) {
+						roi["ownedOutputs"].push_back(SubrectJson(domain->output));
+						ownedPixels += domain->output.Area();
+					}
+				roi["ownedOutputPixels"] = ownedPixels;
+			}
+#endif
 			regions.push_back({ { "physicalSlot", r.physicalSlot }, { "logicalSlot", r.logicalSlot }, { "eye", r.eye },
 				{ "region", r.region }, { "regionIdentity", r.regionIdentity }, { "clusterIdentity", r.clusterIdentity },
 				{ "source", ContextJson(r.context) }, { "nrInput", TextureJson(r.color) }, { "nrOutput", TextureJson(r.output) },
-				{ "roi", RoiJson(r.roi) },
+				{ "roi", std::move(roi) },
 				{ "nativeLayout", r.nativeLayout ? NativeLayoutJson(*r.nativeLayout) : Json(nullptr) },
 				{ "nrDepthGuide", TextureJson(r.depth) }, { "nrMotionGuide", TextureJson(r.motion) }, { "controlMask", TextureJson(r.controlMask) },
 				{ "depthSourceFormat", r.depthSourceFormat }, { "depthViewFormat", r.depthViewFormat },
@@ -182,6 +197,7 @@ namespace NeuralRendering::Evidence
 			{ "transportBypass", d.transportBypass }, { "regions", std::move(regions) },
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			{ "measuredPlan", d.measuredPlanDecision.empty() ? Json(nullptr) : Json::parse(d.measuredPlanDecision) },
+			{ "sharedContext", d.sharedContextDecision.empty() ? Json(nullptr) : Json::parse(d.sharedContextDecision) },
 #endif
 			{ "timing", { { "wholeNrLegacy", PassTimingJson(s.wholePass) }, { "wholeFeatureBatchGpuLegacy", GpuTimingJson(s.batchGpu) },
 							{ "aggregateEvaluationGpu", { { "state", actualEvaluations && aggregateComplete ? "complete" : "unavailable" },

@@ -27,6 +27,10 @@ namespace
 	constexpr std::array<const char*, 3> domains{ "unknown", "linear", "srgb" };
 	constexpr std::array<const char*, 3> transforms{ "identity", "linear_to_srgb", "reversible_proxy" };
 	constexpr std::array<const char*, 3> exposureSources{ "manual", "captured_hdr", "captured_hdr_previous" };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	constexpr std::array<const char*, 3> sharedContextModes{ "off", "enclosing", "full_eye" };
+	static_assert(sharedContextModes.size() == static_cast<std::size_t>(NeuralRendering::SharedContext::Mode::Count));
+#endif
 
 	template <class T, std::size_t N>
 	T Parse(const Json& value, const std::array<const char*, N>& names)
@@ -104,6 +108,38 @@ namespace
 																								(profile.transform == Transform::Identity ? "not_applied" : "manual_calibration") },
 			{ "nrModelDomainVerified", false }, { "srInternalExposureAvailable", false } };
 	}
+	Json ExperimentsJson(const Experiments& experiments)
+	{
+		Json result{ { "upscaled_center", ProfileJson(experiments.profiles[0]) },
+			{ "final_ldr_pre_ui", ProfileJson(experiments.profiles[1]) },
+			{ "transportBypass", experiments.transportBypass }, { "sharedSourceTransport", experiments.SharedSourceTransportEnabled() },
+			{ "compactInputs", experiments.CompactInputsEnabled() }, { "diagnostics", experiments.diagnostics },
+			{ "captureEngineExposure", experiments.captureEngineExposure },
+			{ "captureFrameEvidence", experiments.captureFrameEvidence }, { "applyModelEdit", experiments.applyModelEdit } };
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		result["sharedContext"] = { { "mode", Name(experiments.sharedContext.mode, sharedContextModes) },
+			{ "halo", experiments.sharedContext.halo } };
+#endif
+		return result;
+	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void ReadSharedContext(const Json& object, NeuralRendering::SharedContext::Settings& settings)
+	{
+		Keys(object, { "mode", "halo" });
+		if (object.empty())
+			throw std::invalid_argument("shared context requires mode or halo");
+		if (object.contains("mode"))
+			settings.mode = Parse<NeuralRendering::SharedContext::Mode>(object.at("mode"), sharedContextModes);
+		if (object.contains("halo")) {
+			const auto& value = object.at("halo");
+			if (!value.is_number_integer() || value < 0 || value > 256)
+				throw std::invalid_argument("shared context halo requires 0, 64, 128 or 256");
+			settings.halo = value.get<std::uint32_t>();
+		}
+		if (!NeuralRendering::SharedContext::Valid(settings))
+			throw std::invalid_argument("shared context mode or halo is unsupported");
+	}
+#endif
 	void ReadProfile(const Json& object, Profile& profile)
 	{
 		Keys(object, { "domain", "transform", "exposureMultiplier", "exposureSource" });
@@ -209,11 +245,7 @@ namespace
 		}
 		return { { "ok", true }, { "apiVersion", 3 }, { "revision", config.revision }, { "settings", SettingsJson(config.settings) },
 			{ "effectiveMode", Name(config.EffectiveMode(), modes) },
-			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
-								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
-								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "compactInputs", config.experiments.CompactInputsEnabled() }, { "diagnostics", config.experiments.diagnostics },
-								 { "captureEngineExposure", config.experiments.captureEngineExposure },
-								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } },
+			{ "experiments", ExperimentsJson(config.experiments) },
 			{ "captureEvidenceSchemaVersion", 1 },
 			{ "inputEpoch", config.inputEpoch }, { "slots", slots }, { "measurements", measurements }, { "engineCapture", CaptureJson() },
 			{ "measurementBatches", std::move(batches) },
@@ -295,6 +327,7 @@ namespace
 			return;
 		Json response;
 		std::string errorCode = "nr_color_invalid_request";
+		bool commandRequested = false;
 		try {
 			const auto request = Json::parse(arguments ? arguments : "{}");
 			const auto action = request.at("action").get<std::string>();
@@ -323,74 +356,93 @@ namespace
 				response = { { "ok", true }, { "apiVersion", 3 }, { "captureEvidenceSchemaVersion", 1 }, { "exposures", std::move(exposures) } };
 			} else if (action == "configure" || action == "reset_experiments") {
 				Keys(request, { "action", "settings", "experiments", "expectedRevision" });
-				auto config = Registry::Instance().Snapshot();
-				if (request.contains("expectedRevision")) {
-					const auto& expected = request.at("expectedRevision");
-					if (!expected.is_number_integer() || expected <= 0)
-						throw std::invalid_argument("invalid revision");
-					if (expected.get<std::uint64_t>() != config.revision) {
-						errorCode = "nr_color_revision_conflict";
-						throw std::invalid_argument("configuration changed; read status again");
+				commandRequested = true;
+				response = VRRenderScaleDevBenchBridge::RunRendererCommand([request, action]() -> Json {
+					std::string errorCode = "nr_color_invalid_request";
+					bool mutationApplied = false;
+					try {
+						const auto previous = Registry::Instance().Snapshot();
+						auto config = previous;
+						if (request.contains("expectedRevision")) {
+							const auto& expected = request.at("expectedRevision");
+							if (!expected.is_number_integer() || expected <= 0)
+								throw std::invalid_argument("invalid revision");
+							if (expected.get<std::uint64_t>() != config.revision) {
+								errorCode = "nr_color_revision_conflict";
+								throw std::invalid_argument("configuration changed; read status again");
+							}
+						}
+						if (action == "reset_experiments") {
+							if (request.contains("settings") || request.contains("experiments"))
+								throw std::invalid_argument("reset_experiments does not accept settings");
+							config.experiments = {};
+						} else {
+							if (!request.contains("settings") && !request.contains("experiments"))
+								throw std::invalid_argument("configure requires settings or experiments");
+							if (request.contains("settings"))
+								ReadSettings(request.at("settings"), config.settings);
+							if (request.contains("experiments")) {
+								const auto& e = request.at("experiments");
+								Keys(e, { "upscaled_center", "final_ldr_pre_ui", "sharedSourceTransport", "compactInputs", "sharedContext", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
+								if (e.contains("upscaled_center"))
+									ReadProfile(e.at("upscaled_center"), config.experiments.profiles[0]);
+								if (e.contains("final_ldr_pre_ui"))
+									ReadProfile(e.at("final_ldr_pre_ui"), config.experiments.profiles[1]);
+								if (e.contains("sharedSourceTransport"))
+									config.experiments.sharedSourceTransport = e.at("sharedSourceTransport").get<bool>();
+								if (e.contains("compactInputs"))
+									config.experiments.compactInputs = e.at("compactInputs").get<bool>();
+								if (e.contains("sharedContext"))
+									ReadSharedContext(e.at("sharedContext"), config.experiments.sharedContext);
+								if (e.contains("transportBypass"))
+									config.experiments.transportBypass = e.at("transportBypass").get<bool>();
+								if (e.contains("diagnostics"))
+									config.experiments.diagnostics = e.at("diagnostics").get<bool>();
+								if (e.contains("captureEngineExposure"))
+									config.experiments.captureEngineExposure = e.at("captureEngineExposure").get<bool>();
+								if (e.contains("captureFrameEvidence"))
+									config.experiments.captureFrameEvidence = e.at("captureFrameEvidence").get<bool>();
+								if (e.contains("applyModelEdit"))
+									config.experiments.applyModelEdit = e.at("applyModelEdit").get<bool>();
+							}
+						}
+						if (!Valid(config.experiments))
+							throw std::invalid_argument("invalid experiments; active shared context cannot combine with compact inputs or shared source transport");
+						if (!Registry::Instance().Configure(config.settings, config.experiments, config.revision)) {
+							errorCode = "nr_color_revision_conflict";
+							throw std::invalid_argument("invalid or concurrently changed configuration");
+						}
+						mutationApplied = config.settings != previous.settings || config.experiments != previous.experiments;
+						auto result = StatusJson();
+						result["mutationApplied"] = mutationApplied;
+						return result;
+					} catch (const std::exception& error) {
+						return { { "ok", false }, { "error", error.what() },
+							{ "errorCode", mutationApplied ? "nr_color_handler_failed" : errorCode }, { "mutationApplied", mutationApplied } };
 					}
-				}
-				if (action == "reset_experiments") {
-					if (request.contains("settings") || request.contains("experiments"))
-						throw std::invalid_argument("reset_experiments does not accept settings");
-					config.experiments = {};
-				} else {
-					if (!request.contains("settings") && !request.contains("experiments"))
-						throw std::invalid_argument("configure requires settings or experiments");
-					if (request.contains("settings"))
-						ReadSettings(request.at("settings"), config.settings);
-					if (request.contains("experiments")) {
-						const auto& e = request.at("experiments");
-						Keys(e, { "upscaled_center", "final_ldr_pre_ui", "sharedSourceTransport", "compactInputs", "transportBypass", "diagnostics", "captureEngineExposure", "captureFrameEvidence", "applyModelEdit" });
-						if (e.contains("upscaled_center"))
-							ReadProfile(e.at("upscaled_center"), config.experiments.profiles[0]);
-						if (e.contains("final_ldr_pre_ui"))
-							ReadProfile(e.at("final_ldr_pre_ui"), config.experiments.profiles[1]);
-						if (e.contains("sharedSourceTransport"))
-							config.experiments.sharedSourceTransport = e.at("sharedSourceTransport").get<bool>();
-						if (e.contains("compactInputs"))
-							config.experiments.compactInputs = e.at("compactInputs").get<bool>();
-						if (e.contains("transportBypass"))
-							config.experiments.transportBypass = e.at("transportBypass").get<bool>();
-						if (e.contains("diagnostics"))
-							config.experiments.diagnostics = e.at("diagnostics").get<bool>();
-						if (e.contains("captureEngineExposure"))
-							config.experiments.captureEngineExposure = e.at("captureEngineExposure").get<bool>();
-						if (e.contains("captureFrameEvidence"))
-							config.experiments.captureFrameEvidence = e.at("captureFrameEvidence").get<bool>();
-						if (e.contains("applyModelEdit"))
-							config.experiments.applyModelEdit = e.at("applyModelEdit").get<bool>();
-					}
-				}
-				if (!Registry::Instance().Configure(config.settings, config.experiments, config.revision)) {
-					errorCode = "nr_color_revision_conflict";
-					throw std::invalid_argument("invalid or concurrently changed configuration");
-				}
+				});
 			} else
 				throw std::invalid_argument("unknown action");
-			if (action != "capture_diagnostics")
+			if (action == "status" || action == "assets")
 				response = action == "assets" ? AssetsJson() : StatusJson();
 			response["action"] = action;
 		} catch (const std::exception& error) {
-			response = { { "ok", false }, { "error", error.what() }, { "errorCode", errorCode } };
+			response = { { "ok", false }, { "error", error.what() }, { "errorCode", errorCode }, { "mutationApplied", commandRequested ? Json(nullptr) : Json(false) } };
 		} catch (...) {
-			response = { { "ok", false }, { "error", "colour handler failed" }, { "errorCode", "nr_color_handler_failed" } };
+			response = { { "ok", false }, { "error", "colour handler failed" }, { "errorCode", "nr_color_handler_failed" }, { "mutationApplied", nullptr } };
 		}
 		try {
 			BuildProvenance::AttachProducer(response);
 			const auto text = response.dump();
 			write(sink, text.c_str());
 		} catch (...) {
-			write(sink, R"({"ok":false,"error":"colour status serialization failed"})");
+			write(sink, R"({"ok":false,"error":"colour status serialization failed","mutationApplied":null})");
 		}
 	}
 	Json Descriptor()
 	{
 		return Json::parse(R"schema({
-  "description": "NR colour v3: compactInputs is a default-off stateless equal-grid C compact-storage experiment; unsupported configurations preserve full-coordinate coverage. It requires live quality/cost qualification before promotion. sharedSourceTransport is a default-off DevBench candidate for immutable same-eye ROI inputs with private histories and outputs. Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
+  "description": "NR colour v3: sharedContext is a default-off DevBench experiment for enlarged original-coordinate input contexts with unchanged output ownership; it is not equivalent to independent inference. configure/reset_experiments reserve one command at the completed render-frame boundary. Concurrent or expired unclaimed requests return mutationApplied=false; cancelled commands cannot run later. An admitted command returns its actual result; unexpected command failure reports mutationApplied=null and transport timeouts remain ambiguous. Read-only actions do not require the command queue. compactInputs is a default-off stateless equal-grid C compact-storage experiment; unsupported configurations preserve full-coordinate coverage. It requires live quality/cost qualification before promotion. sharedSourceTransport is a default-off DevBench candidate for immutable same-eye ROI inputs with private histories and outputs. Managed is experimental and selectable in the menu only in Developer Mode (Debug/Trace). Existing saved managed selections remain visible and unchanged outside Developer Mode; automation retains the managed value. opt-in captureFrameEvidence freezes CPU configuration and outer stereo outcomes for accepted HMD screenshots without enabling colour passes or changing input epochs. Shared live controls, display-only A/B, engine HDR exposure capture and asynchronous measurements. Accepted screenshots additionally retain exact CPU companions in terminal actual.captureDiagnostics; callers need not poll rolling status to recover those captures. measurementBatches retains up to four complete private-reconstruction batches, each with an immutable batch ID, expected physical-slot mask and matching frame/revision/generation. Pending readbacks drain even when a region becomes inactive; latest-per-slot measurements remain diagnostic compatibility fields. Complete batches do not prove outer stereo commit or headset presentation. status also reports registered HDR producers and rejected draw bindings. expectedShaderIdentity is the exact shader recorded by the engine/replacement binding hook for this context, producer, engine selection, frame and capture epoch, or the original engine shader when no matching association exists; the live draw must still match it. Capture accepts one visible mip of a 1x1 or 2x2 AvgTex with ordinary non-border sampling. Capture observes finalized engine graphics bindings after BSGraphics_SetDirtyStates and CS state updates, before the HDR draw, as well as all seven D3D11 draw forms inside the exact HDR effect scope. The engine boundary remains valid when D3D11 replaces its per-context draw method entries. Compute flushes and unrelated effects are excluded. producerScopes, lastProducerFrame, graphicsStateFlushes, lastGraphicsStateFlushFrame and drawCounts expose the reached boundaries. Each snapshot producer identifies its actual capture boundary. captured_hdr requires the exact source frame. captured_hdr_previous explicitly requires sourceWorldFrame minus one for pre-HDR experiments; the producer stamp is unchanged and exposureAgeFrames reports the real age. Older, ambiguous and cross-epoch captures are rejected. GPU scalar validity requires identical raw pairs or finite positive x == y in every texel (measured_unit_ratio); texels retain row-major per-texel average, target, ratio and validity, while scalarStatus distinguishes non_uniform_avgtex from a measured_uniform_ratio or an unmeasured_unit_fallback. Other differing fields are observed but never averaged into a correction. Capture alone does not enable reconstruction. configure/reset change only the registry. assets checks presence, not compilation. No NVIDIA ABI assumptions or game/profile mutations.",
   "outputSchema": {
     "type": "object",
     "properties": {
@@ -618,6 +670,16 @@ namespace
             "type": "boolean",
             "description": "Session-only DevBench candidate, default false. Share compatible same-source, same-eye ROI input transport; private native histories and outputs remain separate. Changes retire affected slots at the next source transaction. No performance or native-memory benefit is implied."
           },
+          "sharedContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "mode": { "type": "string", "enum": ["off", "enclosing", "full_eye"], "default": "off" },
+              "halo": { "type": "integer", "enum": [0, 64, 128, 256], "default": 256 }
+            },
+            "description": "Session-only DevBench experiment, default off with halo 256. Enclosing evaluates one enlarged context per eye in original coordinates; full_eye is the full-input reference and ignores halo. Output ownership and character composition stay fixed. Active mode cannot combine with compactInputs or sharedSourceTransport. Unsupported renderer inputs retain the baseline with a reported reason. Only stateless equal-grid reduced-resolution character NR with automatic mask is eligible. Configuration acceptance is not proof of application, output equivalence or performance. Inspect nr_status sourceTransport.sharedContext and frame-attributed execution evidence."
+          },
           "transportBypass": {
             "type": "boolean"
           },
@@ -649,11 +711,7 @@ namespace NeuralRendering::Color
 	nlohmann::json ConfigurationEvidenceJson(const Configuration& config)
 	{
 		return { { "settings", SettingsJson(config.settings) },
-			{ "experiments", { { "upscaled_center", ProfileJson(config.experiments.profiles[0]) },
-								 { "final_ldr_pre_ui", ProfileJson(config.experiments.profiles[1]) },
-								 { "transportBypass", config.experiments.transportBypass }, { "sharedSourceTransport", config.experiments.SharedSourceTransportEnabled() }, { "compactInputs", config.experiments.CompactInputsEnabled() }, { "diagnostics", config.experiments.diagnostics },
-								 { "captureEngineExposure", config.experiments.captureEngineExposure },
-								 { "captureFrameEvidence", config.experiments.captureFrameEvidence }, { "applyModelEdit", config.experiments.applyModelEdit } } } };
+			{ "experiments", ExperimentsJson(config.experiments) } };
 	}
 	nlohmann::json ObservationEvidenceJson(const Observation& observation) { return ObservationJson(observation); }
 	nlohmann::json ExposureEvidenceJson(const ExposureEvidence& evidence) { return EvidenceJson(evidence); }

@@ -15,6 +15,8 @@
 #	include "MeasuredPlanSearch.h"
 #	include <atomic>
 #	include "CompactInputLayout.h"
+#	include "ComputeStateGuard.h"
+#	include "SharedContextPolicy.h"
 #	include "ReplayCapture.h"
 #	include <exception>
 #endif
@@ -749,7 +751,26 @@ namespace NeuralRendering
 		bool ApplyBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
 			RendererApplyOutcome& a_outcome);
-		bool ApplyRegionBatchLocked(std::span<const RendererApplyArgs> a_args, RendererApplyOutcome& a_outcome);
+		bool ApplyRegionBatchLocked(std::span<const RendererApplyArgs> a_args, RendererApplyOutcome& a_outcome
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			std::span<const SharedContext::Plan> a_shared = {}
+#endif
+		);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::optional<bool> TrySharedContextBatchLocked(std::span<const RendererApplyArgs>, RendererApplyOutcome&);
+		struct SharedContextObservation
+		{
+			SharedContext::Settings settings{};
+			const char* reason = "not_requested";
+			std::uint32_t frame = 0, sourceWorldFrame = 0, count = 0, requestedEvaluations = 0;
+			bool applied = false, succeeded = false;
+			std::array<std::uint32_t, kEyeCount> logicalEyes{};
+			std::array<SharedContext::Plan, kEyeCount> plans{};
+		};
+		std::array<SharedContextObservation, 2> sharedContextObservations_{};
+		nlohmann::json SharedContextJsonLocked(std::size_t route) const;
+#endif
 		bool ResetLocked(bool a_resetShader, bool a_destruction);
 		void ShutdownForDestruction() noexcept;
 
@@ -2221,6 +2242,10 @@ namespace NeuralRendering
 		RendererApplyOutcome& a_outcome)
 	{
 		a_outcome = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (const auto shared = TrySharedContextBatchLocked(a_args, a_outcome))
+			return *shared;
+#endif
 		// All regions of both eyes must use immutable inputs and one commit boundary.
 		if (colorConfiguration_.Enabled() ||
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2496,10 +2521,103 @@ namespace NeuralRendering
 	}
 #endif
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	nlohmann::json Renderer::State::SharedContextJsonLocked(std::size_t route) const
+	{
+		const auto& value = sharedContextObservations_[route];
+		auto eyes = nlohmann::json::array();
+		for (std::uint32_t eye = 0; eye < value.count; ++eye) {
+			const auto& plan = value.plans[eye];
+			auto owned = nlohmann::json::array();
+			for (std::uint32_t index = 0; index < SharedContext::OutputCount(plan); ++index)
+				if (const auto domain = SharedContext::CopyDomain(plan, index))
+					owned.push_back(Evidence::SubrectJson(domain->output));
+			eyes.push_back({ { "eye", value.logicalEyes[eye] }, { "inferenceContext", Evidence::SubrectJson(plan.inferenceContext) },
+				{ "ownedOutputs", std::move(owned) } });
+		}
+		return { { "mode", value.settings.mode == SharedContext::Mode::Enclosing ? "enclosing" : value.settings.mode == SharedContext::Mode::FullEye ? "full_eye" :
+																																					   "off" },
+			{ "halo", value.settings.halo }, { "frame", value.frame }, { "sourceWorldFrame", value.sourceWorldFrame },
+			{ "applied", value.applied }, { "succeeded", value.succeeded }, { "reason", value.reason },
+			{ "requestedEvaluations", value.requestedEvaluations }, { "plannedEvaluations", value.applied ? value.count : 0 },
+			{ "coordinateDomain", "original_output_crop_local" }, { "outputOwnershipPreserved", true },
+			{ "productionQualified", false }, { "eyes", std::move(eyes) } };
+	}
+
+	std::optional<bool> Renderer::State::TrySharedContextBatchLocked(
+		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome)
+	{
+		auto& observation = sharedContextObservations_[captureRoute_];
+		const auto settings = colorConfiguration_.experiments.sharedContext;
+		if (settings.mode == SharedContext::Mode::Off) {
+			if (observation.settings.mode != SharedContext::Mode::Off)
+				observation = {};
+			return std::nullopt;
+		}
+		observation = {};
+		observation.settings = settings;
+		observation.reason = "ineligible_original_plan_retained";
+		if (args.empty() || args.size() > kEyeCount)
+			return std::nullopt;
+		observation.frame = args.front().frameId;
+		observation.sourceWorldFrame = args.front().sourceWorldFrame;
+		if (measuredPlanEnabled_ && (measuredPlanContinuous_ || measuredPlanInspectionRequested_)) {
+			observation.reason = "measured_plan_experiment_active";
+			return std::nullopt;
+		}
+		if (colorConfiguration_.experiments.CompactInputsEnabled() || colorConfiguration_.experiments.SharedSourceTransportEnabled() ||
+			colorConfiguration_.experiments.transportBypass) {
+			observation.reason = "incompatible_transport_experiment";
+			return std::nullopt;
+		}
+		std::array<RendererApplyArgs, kEyeCount> sharedArgs{};
+		for (std::size_t eye = 0; eye < args.size(); ++eye) {
+			const auto& logical = args[eye];
+			if (!logical.characterVisualIsolation || !logical.renderingMode ||
+				*logical.renderingMode != RenderingMode::ReducedResolution || !logical.reset ||
+				logical.featureUpscaling || logical.colorWidth != logical.outputWidth || logical.colorHeight != logical.outputHeight ||
+				logical.guideWidth != logical.outputWidth || logical.guideHeight != logical.outputHeight ||
+				logical.controlMask || !logical.tuning.useAutoMask || logical.tuning.uiCorrection ||
+				!GetCharacterRegionSubmissionViolation(logical.featureSlot, logical.computeRegions,
+					logical.computeSubrect, logical.outputWidth, logical.outputHeight, true)
+					.empty())
+				return std::nullopt;
+			const auto capacity = UpscalingDLSS::Extent{ logical.outputWidth, logical.outputHeight };
+			const auto single = logical.roi.value_or(BuildRoiDescriptor(std::nullopt, logical.computeSubrect, capacity, false));
+			const auto descriptors = logical.computeRegions.count ?
+			                             std::span<const RoiDescriptor>(logical.computeRegions.roi).first(logical.computeRegions.count) :
+			                             std::span<const RoiDescriptor>(&single, 1);
+			const auto plan = SharedContext::Build({ logical.computeSubrect, logical.computeRegions }, descriptors,
+				capacity, settings, *logical.renderingMode, logical.featureUpscaling, logical.reset);
+			if (!plan)
+				return std::nullopt;
+			observation.logicalEyes[eye] = logical.featureSlot % 2u;
+			observation.plans[eye] = *plan;
+			observation.requestedEvaluations += SharedContext::OutputCount(*plan);
+			auto& physical = sharedArgs[eye];
+			physical = logical;
+			physical.computeRegions = {};
+			physical.computeSubrect = plan->inferenceContext;
+			physical.roi = BuildRoiDescriptor(plan->samplingSupport, plan->inferenceContext, capacity, false);
+		}
+		observation.count = static_cast<std::uint32_t>(args.size());
+		observation.applied = true;
+		observation.reason = "shared_context_selected";
+		requestedRegionCount_ = observation.requestedEvaluations;
+		const bool success = ApplyRegionBatchLocked(std::span(sharedArgs).first(args.size()), outcome,
+			std::span(observation.plans).first(args.size()));
+		observation.succeeded = success;
+		observation.reason = success ? "shared_context_committed" : "shared_context_execution_failed";
+		return success;
+	}
+#endif
+
 	bool Renderer::State::ApplyBatchLocked(
 		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (const auto shared = TrySharedContextBatchLocked(args, outcome))
+			return *shared;
 		outcome = {};
 		std::array<RendererApplyArgs, kEyeCount> selected;
 		const auto route = args.empty() ? kLogicalFeatureSlotCount : args.front().featureSlot;
@@ -2619,7 +2737,12 @@ namespace NeuralRendering
 
 	bool Renderer::State::ApplyRegionBatchLocked(
 		std::span<const RendererApplyArgs> a_logicalArgs,
-		RendererApplyOutcome& a_logicalOutcome)
+		RendererApplyOutcome& a_logicalOutcome
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		std::span<const SharedContext::Plan> a_shared
+#endif
+	)
 	{
 		a_logicalOutcome = {};
 		RendererApplyOutcome a_outcome{};
@@ -2640,6 +2763,10 @@ namespace NeuralRendering
 		auto a_args = a_logicalArgs;
 		if (a_args.empty() || a_args.size() > 2)
 			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!a_shared.empty() && a_shared.size() != a_args.size())
+			return false;
+#endif
 		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
 		for (const auto& args : a_args) {
 			SetActiveFeatureSlotLocked(args.featureSlot);
@@ -2815,7 +2942,13 @@ namespace NeuralRendering
 				descriptor.regionCount = static_cast<std::uint32_t>(a_args.size());
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				descriptor.requestedRegionCount = requestedRegionCount_;
-				descriptor.capacityFallback = requestedRegionCount_ != descriptor.regionCount;
+				descriptor.capacityFallback = a_shared.empty() && requestedRegionCount_ != descriptor.regionCount;
+				if (colorConfiguration_.experiments.sharedContext.mode != SharedContext::Mode::Off) {
+					auto decision = SharedContextJsonLocked(captureRoute_);
+					decision.erase("succeeded");
+					decision["phase"] = "selection_before_native_execution";
+					descriptor.sharedContextDecision = decision.dump();
+				}
 				if (measuredPlanEvaluating_) {
 					nlohmann::json decision;
 					for (const auto* field : { "frame", "sourceWorldFrame", "generation", "reason", "identity", "selected", "prediction", "search", "executionFallback" })
@@ -2844,6 +2977,10 @@ namespace NeuralRendering
 					region.context = args.executionContext;
 					region.characterEvidence = args.characterEvidence;
 					region.roi = resource.roi;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					if (!a_shared.empty())
+						region.sharedOutputOwnership = a_shared[index];
+#endif
 					region.color = DescribeExecutionTexture(resource.nativeLayout.color.backing.width, resource.nativeLayout.color.backing.height, resource.resourceKey.colorFormat, resource.nativeLayout.color.valid);
 					region.depth = DescribeExecutionTexture(resource.nativeLayout.depth.backing.width, resource.nativeLayout.depth.backing.height, DXGI_FORMAT_R32_FLOAT, resource.nativeLayout.depth.valid);
 					region.motion = DescribeExecutionTexture(resource.nativeLayout.motion.backing.width, resource.nativeLayout.motion.backing.height, resource.resourceKey.motionFormat, resource.nativeLayout.motion.valid);
@@ -3413,6 +3550,17 @@ namespace NeuralRendering
 					"device removal during private NR colour reconstruction", a_args.front().featureSlot, true);
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		// Validate every copy domain before either eye can change caller-owned output.
+		for (std::size_t index = 0; index < a_shared.size(); ++index) {
+			if (resources[index].roi.compactSource || resources[index].roi.inferenceContext != a_shared[index].inferenceContext ||
+				(colorConfiguration_.Enabled() && slots[index]->colorWork.observation.rect != a_shared[index].inferenceContext))
+				return FailLocked(RendererStage::OutputCommit, E_INVALIDARG, "shared context output coordinates changed before commit", a_args[index].featureSlot, true);
+			for (std::uint32_t region = 0; region < SharedContext::OutputCount(a_shared[index]); ++region)
+				if (!SharedContext::CopyDomain(a_shared[index], region))
+					return FailLocked(RendererStage::OutputCommit, E_INVALIDARG, "shared context ownership exceeds initialized output", a_args[index].featureSlot, true);
+		}
+#endif
 		// Both private inputs are prepared before submission and neither caller-owned
 		// output is written until every eye has recorded successfully.
 		const auto outputCommitStarted = std::chrono::steady_clock::now();
@@ -3420,7 +3568,19 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			CS_GPU_DETAIL_PASS("Upscaling::NROutputCommit", execution ? execution->Snapshot().regions[index].outputCopyPass : nullptr);
-			if (colorConfiguration_.Enabled()) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (!a_shared.empty()) {
+				Color::ComputeStateGuard<5> guard(a_args.front().context);
+				for (std::uint32_t region = 0; region < SharedContext::OutputCount(a_shared[index]); ++region) {
+					const auto domain = *SharedContext::CopyDomain(a_shared[index], region);
+					CopyTextureSubrect(a_args.front().context, resources[index].output.texture.Get(),
+						colorConfiguration_.Enabled() ? slots[index]->colorWork.result.resource.Get() : slots[index]->output.resource11.Get(),
+						colorConfiguration_.Enabled() ? domain.contextLocal : domain.output, domain.output.baseX, domain.output.baseY);
+					RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].resourceKey.outputFormat, domain.output.width, domain.output.height));
+				}
+			} else
+#endif
+				if (colorConfiguration_.Enabled()) {
 				colorPipeline_.Commit(a_args.front().context, slots[index]->colorWork,
 					resources[index].output.texture.Get());
 			} else {
@@ -3437,7 +3597,10 @@ namespace NeuralRendering
 						resources[index].roi.ownedOutput);
 			}
 			if (execution) {
-				RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].resourceKey.outputFormat, resources[index].roi.ownedOutput.width, resources[index].roi.ownedOutput.height));
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (a_shared.empty())
+#endif
+					RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].resourceKey.outputFormat, resources[index].roi.ownedOutput.width, resources[index].roi.ownedOutput.height));
 				execution->Update([&](auto& evidence) {
 					evidence.regions[index].outputCopyEnqueued = true;
 				});
@@ -3481,6 +3644,9 @@ namespace NeuralRendering
 		RefreshInteropTelemetryLocked();
 		executionCompletion.succeeded = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!a_shared.empty())
+			for (std::size_t index = 0; index < a_logicalArgs.size(); ++index)
+				a_logicalOutcome.outputPlans[a_logicalArgs[index].featureSlot] = a_shared[index].output;
 		if (measuredPlanEvaluating_)
 			for (const auto& logical : a_logicalArgs)
 				a_logicalOutcome.outputPlans[logical.featureSlot] = CharacterOutputPlan{ logical.computeSubrect, logical.computeRegions };
@@ -3968,6 +4134,7 @@ namespace NeuralRendering
 				{ "sharedSourceTransport", entry.key.resources.sharedSourceTransport } });
 		}
 		return { { "schemaVersion", 1 }, { "requested", state_->colorConfiguration_.experiments.SharedSourceTransportEnabled() },
+			{ "sharedContext", { state_->SharedContextJsonLocked(0), state_->SharedContextJsonLocked(1) } },
 			{ "capacityFallback", { { "active", state_->capacityFallback_.rejected }, { "recoveries", state_->capacityFallback_.recoveries },
 									  { "reason", state_->capacityFallback_.reason == CapacityFailure::Pressure ? "pressure" : state_->capacityFallback_.reason == CapacityFailure::Unsupported ? "unsupported" :
 																																																  "none" },

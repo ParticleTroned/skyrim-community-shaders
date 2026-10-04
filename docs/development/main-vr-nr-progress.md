@@ -1,5 +1,31 @@
 # main-vr-nr progress and continuation record
 
+## October 4 shared-context live candidate
+
+The [DevBench shared-context implementation](nr-shared-context-devbench-20261004.md)
+adds a default-off, session-only C experiment: one enlarged context per
+eye in original coordinates, with the original disjoint output ownership
+and character composition preserved. Enclosing halos of 0/64/128/256 and
+the complete available eye-input reference can be compared through the
+frame-boundary controls. Admission and output copies are validated before
+execution/commit; unsupported requests retain the baseline with a reason.
+New runtime policy compiles only with the DevBench bridge.
+
+Frozen execution evidence separates the larger inference area from the
+original owned-output array, and strict comparison tooling admits that
+contract without changing legacy ownership keys. The requested VR-only
+DevBench AIO preserves the compatible VR shader cache and excludes the
+Horizon Fix installer choice. It is a test candidate, not a production
+promotion or an output-equivalence fix. Live visual, stereo, motion and
+whole-path performance qualification remain to be run after installation.
+
+Producer `8cb747096fd6` passes the full 230-test Release suite, preset
+checks and archive verification. The 193 MiB test archive is under `dist/`
+with `SharedContext-DevBench-VR-ShaderCache` in its name. Its exact dirty
+compile identity, checksum, cache provenance and retained preliminary
+failures are recorded in the implementation document. No deployment or
+live qualification was performed.
+
 ## October 4 output-equivalence investigation
 
 The [equivalence investigation](nr-output-equivalence-investigation-20261004.md)

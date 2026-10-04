@@ -25,7 +25,7 @@ namespace
 		value.colorRevision = 9;
 		value.inputEpoch = 11;
 		value.route = mode == RenderingMode::Foveated ? FeatureSlotRoute::Submit : FeatureSlotRoute::Main;
-		value.insertion = mode == RenderingMode::FullResolution ? InsertionPoint::FinalLdrPreUi : InsertionPoint::UpscaledCenter;
+		value.insertion = ResolveInsertionPoint(mode);
 		value.logicalEyeCount = 2;
 		value.regionCount = characters ? 4 : 2;
 		value.context = { .renderingMode = mode, .fovOnly = fovOnly, .captureEpoch = 13, .configurationEpoch = 17, .sourceContext = "admitted_test_route", .sourceTransactionId = 19, .dlssViewportCrop = UpscalingDLSS::ViewportCrop{ { 756, 840 }, { 0, 0, 756, 840 }, { 1512, 1680 }, { 0, 0, 1512, 1680 } }, .jitterPixels = std::array{ 0.25f, -0.125f }, .sourceColorOrigin = std::array{ 64u, 96u }, .sourceGuideOrigin = std::array{ 128u, 192u } };
@@ -200,6 +200,61 @@ namespace
 		Check(ready["sourceCapture"]["available"] == false && ready["timing"]["explicitWait"]["milliseconds"].is_null(), "unobserved source or wait fabricated");
 		Check(!CharacterPreparationJson({})["available"].get<bool>(), "missing preparation marked available");
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void TestSharedContextOwnership()
+	{
+		const ComputeSubrect context{ 0, 0, 640, 512 };
+		const std::array owned{ ComputeSubrect{ 64, 128, 128, 128 }, ComputeSubrect{ 384, 128, 128, 128 } };
+		auto descriptor = Descriptor(RenderingMode::ReducedResolution, false, true);
+		descriptor.logicalEyeCount = descriptor.regionCount = 1;
+		descriptor.requestedRegionCount = 2;
+		descriptor.sharedContextDecision = Json{ { "mode", "enclosing" }, { "phase", "selection_before_native_execution" },
+			{ "reason", "selected" }, { "applied", true } }
+		                                       .dump();
+		auto& region = descriptor.regions[0];
+		region.color.work = region.output.work = context;
+		region.roi = BuildRoiDescriptor(ComputeSubrect{ 80, 144, 416, 96 }, context, region.output.extent, false);
+		SharedContext::Plan plan;
+		plan.inferenceContext = context;
+		plan.output.enclosure = { 64, 128, 448, 128 };
+		plan.output.regions.count = 2;
+		for (std::uint32_t index = 0; index < owned.size(); ++index)
+			plan.output.regions.regions[index] = owned[index];
+		region.sharedOutputOwnership = plan;
+		ExecutionEvidence evidence(descriptor);
+		region.sharedOutputOwnership->output.regions.regions[0] = {};
+		descriptor.sharedContextDecision.clear();
+		const auto pending = ExecutionJson(evidence);
+		const auto& roi = pending["regions"][0]["roi"];
+		Check(roi["ownedOutput"].is_null() && roi["ownedOutputs"] == Json::array({ SubrectJson(owned[0]), SubrectJson(owned[1]) }),
+			"shared inference lost frozen disjoint ownership or retained a misleading scalar output");
+		Check(roi["ownedOutputPixels"] == 32768 && roi["inferencePixels"] == context.Area() &&
+				  roi["inferencePixels"].get<std::uint64_t>() > roi["ownedOutputPixels"].get<std::uint64_t>(),
+			"shared owned pixels counted the inference context or the gap between outputs");
+		Check(roi["contextPolicy"] == "experimental_shared_original_coordinates" &&
+				  roi["inferenceContext"] == pending["regions"][0]["nrOutput"]["work"],
+			"shared context lost the native work domain");
+		Check(pending["plannedRegionCount"] == 1 && pending["requestedRegionCount"] == 2 && pending["actualEvaluationCount"] == 0 &&
+				  pending["sharedContext"]["phase"] == "selection_before_native_execution" && !pending["sharedContext"].contains("succeeded"),
+			"selection evidence claimed an execution outcome or lost the requested work");
+		evidence.Update([](auto& state) {
+			state.finished = state.succeeded = true;
+			state.regions[0].runtime.evaluateAttempted = state.regions[0].runtime.evaluateSucceeded = true;
+			state.regions[0].privateOutputCommitted = true;
+		});
+		const auto completed = ExecutionJson(evidence);
+		Check(completed["regions"][0]["roi"] == roi && completed["sharedContext"] == pending["sharedContext"] &&
+				  completed["succeeded"] == true && completed["actualEvaluationCount"] == 1 && completed["activeEvaluationPixels"] == context.Area(),
+			"execution outcome changed frozen ownership or counted owned pixels as inference work");
+		region.sharedOutputOwnership.reset();
+		const auto legacy = ExecutionJson(ExecutionEvidence(descriptor));
+		const auto& legacyRoi = legacy["regions"][0]["roi"];
+		Check(legacyRoi["ownedOutput"] == SubrectJson(context) && !legacyRoi.contains("ownedOutputs") &&
+				  legacyRoi["ownedOutputPixels"] == context.Area() && legacy["sharedContext"].is_null(),
+			"ordinary evaluation inherited shared ownership serialization");
+	}
+#endif
 }
 
 int main()
@@ -208,6 +263,9 @@ int main()
 		TestRouteMatrix();
 		TestDelayedAndPartialOutcomes();
 		TestCharacterEmptyAndDelayedCoverage();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		TestSharedContextOwnership();
+#endif
 		std::cout << "Neural transaction evidence JSON tests passed\n";
 		return 0;
 	} catch (const std::exception& error) {

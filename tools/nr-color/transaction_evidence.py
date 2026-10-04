@@ -112,8 +112,74 @@ def texture_area(texture: dict, required: bool) -> int:
     return area
 
 
+def validate_shared_ownership(region: dict) -> None:
+    """Admit one original-coordinate evaluation with independently owned outputs."""
+    roi = region["roi"]
+    require(roi.get("contextPolicy") == "experimental_shared_original_coordinates"
+            and roi.get("coordinateDomain") == "output_crop_local"
+            and "ownedOutput" in roi and roi["ownedOutput"] is None
+            and roi.get("compactSource") is None, "invalid shared ownership contract (ROI roles)")
+    require(isinstance(region.get("nativeLayout"), dict)
+            and region.get("characterSelection") is True and region.get("featureUpscaling") is False
+            and type(region.get("effectiveReset")) is bool
+            and (region.get("evaluationAttempted") is False or region["effectiveReset"] is True)
+            and region.get("source", {}).get("mode") == "reduced_resolution",
+            "unsupported shared ownership state")
+    capacity = roi.get("allocationCapacity")
+    require(isinstance(capacity, dict) and all(uint(capacity.get(k), 16384) and capacity[k] > 0
+                                              for k in ("width", "height")), "invalid shared ownership capacity")
+    full = {"x": 0, "y": 0, "width": capacity["width"], "height": capacity["height"]}
+
+    def contained(rect: object, parent: dict) -> int:
+        require(isinstance(rect, dict) and all(uint(rect.get(k), 16384) for k in ("x", "y", "width", "height"))
+                and rect["width"] > 0 and rect["height"] > 0
+                and rect["x"] >= parent["x"] and rect["y"] >= parent["y"]
+                and rect["x"] + rect["width"] <= parent["x"] + parent["width"]
+                and rect["y"] + rect["height"] <= parent["y"] + parent["height"],
+                "shared ownership rectangle exceeds its domain")
+        return rect["width"] * rect["height"]
+
+    context = roi.get("inferenceContext")
+    context_pixels = contained(context, full)
+    require(context["width"] >= 128 and context["height"] >= 128, "shared context is below the qualified minimum")
+    outputs = roi.get("ownedOutputs")
+    require(isinstance(outputs, list) and 1 <= len(outputs) <= 8, "invalid shared ownership count")
+    owned_pixels = 0
+    for index, rect in enumerate(outputs):
+        owned_pixels += contained(rect, context)
+        for previous in outputs[:index]:
+            require(rect["x"] >= previous["x"] + previous["width"] or
+                    previous["x"] >= rect["x"] + rect["width"] or
+                    rect["y"] >= previous["y"] + previous["height"] or
+                    previous["y"] >= rect["y"] + rect["height"], "shared ownership rectangles overlap")
+    for name, expected in (("ownedOutputPixels", owned_pixels), ("inferencePixels", context_pixels),
+                           ("capacityPixels", capacity["width"] * capacity["height"])):
+        require(uint(roi.get(name)) and roi[name] == expected, "shared ownership pixel accounting mismatch: " + name)
+    require("temporalEnvelope" in roi and roi["temporalEnvelope"] is None
+            and "temporalEnvelopePixels" in roi and roi["temporalEnvelopePixels"] is None,
+            "shared ownership cannot claim a temporal envelope")
+    hull = {"x": min(r["x"] for r in outputs), "y": min(r["y"] for r in outputs)}
+    hull.update(width=max(r["x"] + r["width"] for r in outputs) - hull["x"],
+                height=max(r["y"] + r["height"] for r in outputs) - hull["y"])
+    support_pixels = contained(roi.get("samplingSupport"), hull)
+    require(roi.get("samplingSupportKind") == "conservative_guarded_enclosure"
+            and uint(roi.get("samplingSupportEnclosurePixels"))
+            and roi["samplingSupportEnclosurePixels"] == support_pixels,
+            "invalid shared ownership sampling proof")
+    for name in ("nrInput", "nrDepthGuide", "nrMotionGuide", "nrOutput"):
+        exact({"capacityGrid": capacity, "work": context}, region.get(name), ("capacityGrid", "work"),
+              "shared ownership original-coordinate texture")
+    control = region.get("controlMask")
+    require(isinstance(control, dict) and type(control.get("capacityPixels")) is int
+            and control["capacityPixels"] == 0, "shared ownership has a control mask")
+
+
 def validate_native_layout(region: dict) -> None:
     """A frozen layout must agree with the physical descriptors in its own record."""
+    roi = region.get("roi")
+    if isinstance(roi, dict) and ("ownedOutputs" in roi or ("ownedOutput" in roi and roi["ownedOutput"] is None)
+                                 or roi.get("contextPolicy") == "experimental_shared_original_coordinates"):
+        validate_shared_ownership(region)
     layout = region.get("nativeLayout")
     if layout is None:
         return
@@ -370,6 +436,7 @@ def join_execution_evidence(acquisition: dict, diagnostics: dict | None = None) 
                 other = delayed_ids[identity]
                 exact(execution, other, EXECUTION_DESCRIPTOR, "delayed execution descriptor")
                 optional_exact(execution, other, ("measuredPlan",), "delayed measured plan")
+                optional_exact(execution, other, ("sharedContext",), "delayed shared context")
                 optional_exact(execution, other, ("colourExposureConfiguration", "configurationFingerprint"),
                                "delayed colour configuration")
                 exact_timing_handles(execution.get("timing"), other.get("timing"), "delayed execution")

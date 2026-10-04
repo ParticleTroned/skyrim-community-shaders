@@ -155,6 +155,17 @@ revision 8 and weather-based lighting until enabled in Adaptive Balance.
 
 ## CSX compatibility contract
 
+All three Unified VR tiers explicitly disable the saved frame-generation
+request. VR cannot use frame generation. Keeping that request at zero also
+allows NR to start with the existing production DLL, whose NR gates still
+reject a nonzero saved value. This does not enable NR or FOV automatically;
+their user controls and pipeline prerequisites remain in effect.
+
+The runtime also normalizes frame generation and force-enable to zero
+when loading or saving VR settings, including older and custom presets.
+Both fields default to zero, and VR exposes no controls to enable them.
+SE and AE keep their frame-generation controls and existing behavior.
+
 The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
 package version, VR runtime, inclusive minimum `3.20`, exclusive maximum

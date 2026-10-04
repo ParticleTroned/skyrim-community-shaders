@@ -5,6 +5,8 @@
 
 namespace ProjectedBounds
 {
+	// Invocation-private storage avoids SM5 array-parameter copies; initialize all eight vertices per eye.
+	static float3 Vertices[8];
 	static const uint4 Faces[6] = {
 		uint4(0, 1, 3, 2), uint4(4, 6, 7, 5), uint4(0, 4, 5, 1),
 		uint4(2, 3, 7, 6), uint4(0, 2, 6, 4), uint4(1, 5, 7, 3)
@@ -16,14 +18,14 @@ namespace ProjectedBounds
 		float4 nearestDepth[2];
 	};
 
-	void PrepareFaces(float3 vertices[8], out PreparedFaces bounds)
+	void PrepareFaces(out PreparedFaces bounds)
 	{
 		bounds.nearestDepth[0] = bounds.nearestDepth[1] = DepthOrder::Far();
 		[unroll] for (uint face = 0; face < 6; ++face)
 		{
 			uint4 corners = Faces[face];
-			float3 a = vertices[corners.x], b = vertices[corners.y];
-			float3 c = vertices[corners.z], d = vertices[corners.w];
+			float3 a = Vertices[corners.x], b = Vertices[corners.y];
+			float3 c = Vertices[corners.z], d = Vertices[corners.w];
 			bounds.rectangle[face] = float4(min(min(a.xy, b.xy), min(c.xy, d.xy)), max(max(a.xy, b.xy), max(c.xy, d.xy)));
 			bounds.nearestDepth[face >> 2][face & 3] = DepthOrder::Nearest(DepthOrder::Nearest(a.z, b.z), DepthOrder::Nearest(c.z, d.z));
 		}
@@ -82,50 +84,26 @@ namespace ProjectedBounds
 		return isfinite(residual) && isfinite(residualError) && residual > residualError;
 	}
 
-	bool OccludedInRegion(float3 vertices[8], PreparedFaces bounds, float2 minimumPixel, float2 maximumPixel, float depth, float bias HIZ_DIAGNOSTIC_PARAMETERS)
+	bool OccludedInRegion(PreparedFaces bounds, float2 minimumPixel, float2 maximumPixel, float depth, float bias HIZ_DIAGNOSTIC_PARAMETERS)
 	{
 		// Allow for four rounds of interpolation in addition to the configured depth bias.
 		const float interpolationBias = 64.0 / 16777216.0;
 		const float guardedBias = bias + interpolationBias;
 		[loop] for (uint face = 0; face < 6; ++face)
 		{
-#ifdef CSX_HIZ_GUARDED_VERTEX_BASELINE
 			if (any(bounds.rectangle[face].zw < minimumPixel) || any(bounds.rectangle[face].xy > maximumPixel) ||
 				DepthOrder::IsBehindWithBias(bounds.nearestDepth[face >> 2][face & 3], depth, guardedBias))
 				continue;
-#else
-			if (any(bounds.rectangle[face].zw < minimumPixel) || any(bounds.rectangle[face].xy > maximumPixel))
-				continue;
-			// Original-vertex extrema bound the entire affine face without clipping interpolation.
-			float faceNearest = bounds.nearestDepth[face >> 2][face & 3];
-			if (DepthOrder::IsBehindWithBias(faceNearest, depth, bias)) {
-#	ifdef CSX_HIZ_DIAGNOSTICS
-				if (!DepthOrder::IsBehindWithBias(faceNearest, depth, guardedBias))
-					HIZ_COUNT_FACE_BIAS_PROOF;
-#	endif
-				continue;
-			}
-#endif
 			uint4 corners = Faces[face];
 			[loop] for (uint triangleIndex = 0; triangleIndex < 2; ++triangleIndex)
 			{
 				HIZ_COUNT_TRIANGLE;
-				float3 a = vertices[corners.x];
-				float3 b = vertices[triangleIndex == 0 ? corners.y : corners.z];
-				float3 c = vertices[triangleIndex == 0 ? corners.z : corners.w];
+				float3 a = Vertices[corners.x];
+				float3 b = Vertices[triangleIndex == 0 ? corners.y : corners.z];
+				float3 c = Vertices[triangleIndex == 0 ? corners.z : corners.w];
 				float nearest = DepthOrder::Nearest(a.z, DepthOrder::Nearest(b.z, c.z));
-#ifdef CSX_HIZ_GUARDED_VERTEX_BASELINE
 				if (DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
 					continue;
-#else
-				if (DepthOrder::IsBehindWithBias(nearest, depth, bias)) {
-#	ifdef CSX_HIZ_DIAGNOSTICS
-					if (!DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
-						HIZ_COUNT_TRIANGLE_BIAS_PROOF;
-#	endif
-					continue;
-				}
-#endif
 				float2 minimumTriangle = min(a.xy, min(b.xy, c.xy));
 				float2 maximumTriangle = max(a.xy, max(b.xy, c.xy));
 				if (any(maximumTriangle < minimumPixel) || any(minimumTriangle > maximumPixel))

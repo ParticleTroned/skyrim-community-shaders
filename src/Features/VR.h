@@ -584,6 +584,11 @@ public:
 	// Engine hook integration points
 	bool* gDepthBufferCulling = nullptr;
 	float* gMinOccludeeBoxExtent = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	// Local fallback storage cannot establish the engine's observed state.
+	bool depthCullingEngineGateBound = false;
+	bool depthCullingEngineExtentBound = false;
+#endif
 	std::atomic<bool> depthCullingCacheRefreshPending = false;
 	std::atomic<bool> depthCullingCacheRefreshCompleted = false;
 

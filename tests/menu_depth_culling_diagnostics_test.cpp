@@ -104,73 +104,54 @@ namespace
 			"Reason history lost measured or zero values");
 	}
 
-	void PreservesProofVariantSelectionAndAvailability()
+	void DistinguishesObservedEngineStateFromDesiredPolicy()
 	{
 		VRDepthCullingTemporal::Status temporal{};
 		VRHybridCulling::Status hybrid{};
-		auto comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
-		Require(comparison.at("requested") == "original_vertices" && comparison.at("active") == "pending" &&
-					!comparison.at("baselineAvailable").get<bool>() && comparison.at("baselineAvailability") == "not_created" &&
-					comparison.at("requestedRevision") == 0 && comparison.at("activeRevision") == 0,
-			"Uninitialized proof comparison fabricated an active baseline");
-		temporal.mode = VRDepthCullingTemporal::Mode::Hybrid;
-		hybrid.proofVariantRequested = "guarded_baseline";
-		hybrid.proofSelectionRevision = 2;
-		hybrid.guardedBaselineAvailability = "setup_failed";
-		comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
-		Require(comparison.at("requested") == "guarded_baseline" && comparison.at("active") == "pending" &&
-					!comparison.at("baselineAvailable").get<bool>() && comparison.at("baselineAvailability") == "setup_failed" &&
-					comparison.at("requestedRevision") == 2 && comparison.at("activeRevision") == 0,
-			"A requested but unavailable proof variant was reported active");
-		hybrid.proofVariantActive = "guarded_baseline";
-		hybrid.proofActiveRevision = 2;
-		hybrid.guardedBaselineAvailable = true;
-		hybrid.guardedBaselineAvailability = "ready";
-		comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
-		Require(comparison.at("requested") == "guarded_baseline" && comparison.at("active") == "guarded_baseline" &&
-					comparison.at("baselineAvailable").get<bool>() && comparison.at("baselineAvailability") == "ready" &&
-					comparison.at("requestedRevision") == comparison.at("activeRevision"),
-			"Submitted baseline shader attribution was lost");
-		temporal.mode = VRDepthCullingTemporal::Mode::Balanced;
-		hybrid.proofVariantActive = "inactive";
-		hybrid.proofActiveRevision = 0;
-		comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
-		Require(comparison.at("requested") == "guarded_baseline" && comparison.at("active") == "inactive" &&
-					comparison.at("activeRevision") == 0 && comparison.at("requestedRevision") == 2,
-			"Inactive Hybrid mode lost its remembered selection or claimed an active proof");
+		temporal.cullingEnabled = true;
+		const auto snapshot = [&]() { return MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid); };
+		auto status = snapshot();
+		const auto& missing = status.at("engine");
+		Require(status.at("cullingEnabled").get<bool>() && missing.at("depthBufferCulling").is_null() &&
+					!missing.at("depthBufferCullingAvailable").get<bool>() && missing.at("minimumOccludeeBoxExtent").is_null() &&
+					!missing.at("minimumOccludeeBoxExtentAvailable").get<bool>(),
+			"Desired culling policy fabricated unavailable engine observations");
+		temporal.engineCullingEnabled = false;
+		temporal.engineMinimumExtent = 500.0f;
+		status = snapshot();
+		const auto& observed = status.at("engine");
+		Require(status.at("cullingEnabled").get<bool>() && observed.at("depthBufferCullingAvailable").get<bool>() &&
+					!observed.at("depthBufferCulling").get<bool>() && observed.at("minimumOccludeeBoxExtentAvailable").get<bool>() &&
+					observed.at("minimumOccludeeBoxExtent") == 500.0f,
+			"Engine observations were replaced by desired state or lost a false engine gate");
+		temporal.engineCullingEnabled = true;
+		temporal.engineMinimumExtent = 0.0f;
+		const auto zero = snapshot().at("engine");
+		Require(zero.at("depthBufferCulling").get<bool>() && zero.at("minimumOccludeeBoxExtent") == 0.0f &&
+					zero.at("minimumOccludeeBoxExtentAvailable").get<bool>(),
+			"Measured zero extent was treated as unavailable");
 	}
 
-	void DistinguishesRequestedDepthFromEffectiveReduction()
+	void PreservesGuardedConfigurationAndEffectiveReduction()
 	{
 		VRDepthCullingTemporal::Status temporal{};
 		VRHybridCulling::Status hybrid{};
-		const auto snapshot = [&]() { return MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("depthReductionComparison"); };
-		auto depth = snapshot();
-		Require(depth.at("requestedSourceReduction") == 2 && depth.at("activeSourceReduction") == 0 &&
-					depth.at("state") == "pending" && !depth.at("largeSourceFallback").get<bool>(),
-			"Unsubmitted depth preference was reported as active");
-		hybrid.sourceReductionRequested = 4;
-		hybrid.proofSelectionRevision = 3;
-		depth = snapshot();
-		Require(depth.at("requestedSourceReduction") == 4 && depth.at("activeSourceReduction") == 0 &&
-					depth.at("requestedRevision") == 3 && depth.at("activeRevision") == 0,
-			"A pending coarse selection lost its revision or claimed active resources");
+		const auto snapshot = [&]() { return MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("configuration"); };
+		auto configuration = snapshot();
+		Require(configuration.at("proof") == "guarded" && configuration.at("preferredSourceReduction") == 2 &&
+					configuration.at("activeSourceReduction") == 0 && !configuration.at("largeSourceFallback").get<bool>(),
+			"Inactive Hybrid fabricated an effective reduction or lost its guarded preference");
+		hybrid.sourceReductionActive = 2;
+		configuration = snapshot();
+		Require(configuration.at("activeSourceReduction") == 2 && !configuration.at("largeSourceFallback").get<bool>(),
+			"Submitted fine depth was reported as resource-limit fallback");
 		hybrid.sourceReductionActive = 4;
-		hybrid.proofActiveRevision = 3;
-		hybrid.depthComparisonState = "active";
-		depth = snapshot();
-		Require(depth.at("state") == "active" && depth.at("activeSourceReduction") == 4 &&
-					depth.at("activeRevision") == depth.at("requestedRevision") && !depth.at("largeSourceFallback").get<bool>(),
-			"Effective coarse baseline was confused with large-source fallback");
-		hybrid.sourceReductionRequested = 2;
-		Require(snapshot().at("largeSourceFallback").get<bool>(), "Fine preference hid its effective large-source reduction");
+		configuration = snapshot();
+		Require(configuration.at("preferredSourceReduction") == 2 && configuration.at("activeSourceReduction") == 4 &&
+					configuration.at("largeSourceFallback").get<bool>(),
+			"Large-source fallback hid the fixed fine preference");
 		hybrid.sourceReductionActive = 0;
-		hybrid.proofActiveRevision = 0;
-		hybrid.depthComparisonState = "inactive";
-		depth = snapshot();
-		Require(depth.at("state") == "inactive" && depth.at("activeSourceReduction") == 0 &&
-					!depth.at("largeSourceFallback").get<bool>(),
-			"Inactive comparison retained an effective depth claim");
+		Require(!snapshot().at("largeSourceFallback").get<bool>(), "Inactive Hybrid retained an effective fallback claim");
 	}
 
 	void SeparatesNativeReadbackFromValidation()
@@ -302,8 +283,8 @@ int main()
 		ValidatesTraversalRecords();
 		ValidatesProofCountersAndViewportReasons();
 		PreservesInactiveAndFallbackEvidence();
-		PreservesProofVariantSelectionAndAvailability();
-		DistinguishesRequestedDepthFromEffectiveReduction();
+		DistinguishesObservedEngineStateFromDesiredPolicy();
+		PreservesGuardedConfigurationAndEffectiveReduction();
 		DistinguishesMissingSourceAndUnmeasuredTiming();
 		SeparatesNativeReadbackFromValidation();
 		PreservesNativeVisibilityBeforeAndAfterRecovery();

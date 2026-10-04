@@ -6,6 +6,7 @@
 struct HiZTraversalDiagnostic
 {
 	uint4 traversal;
+	// Keep the readback layout stable; unused proof lanes remain zero.
 	uint4 proofs;
 };
 
@@ -25,8 +26,6 @@ struct HiZTraversalDiagnostic
 #	define HIZ_COUNT_TRIANGLE ++diagnostic.traversal.w
 #	define HIZ_COUNT_PLANE_PROOF ++diagnostic.proofs.x
 #	define HIZ_COUNT_POLYGON_CLIP ++diagnostic.proofs.y
-#	define HIZ_COUNT_FACE_BIAS_PROOF ++diagnostic.proofs.z
-#	define HIZ_COUNT_TRIANGLE_BIAS_PROOF ++diagnostic.proofs.w
 #	define HIZ_VISIBLE(reason)              \
 		{                                    \
 			diagnostic.traversal.x = reason; \
@@ -45,8 +44,6 @@ struct HiZTraversalDiagnostic
 #	define HIZ_COUNT_TRIANGLE
 #	define HIZ_COUNT_PLANE_PROOF
 #	define HIZ_COUNT_POLYGON_CLIP
-#	define HIZ_COUNT_FACE_BIAS_PROOF
-#	define HIZ_COUNT_TRIANGLE_BIAS_PROOF
 #	define HIZ_VISIBLE(reason) return false
 #	define HIZ_OCCLUDED return true
 #endif

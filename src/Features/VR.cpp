@@ -927,6 +927,9 @@ void VR::DrawStereoBlend()
 void VR::PostPostLoad()
 {
 	gDepthBufferCulling = reinterpret_cast<bool*>(REL::Offset(0x1EC6B88).address());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	depthCullingEngineGateBound = globals::game::isVR && gDepthBufferCulling != nullptr;
+#endif
 	if (!gDepthBufferCulling) {
 		static bool s_defaultDepthBufferCulling = false;  // safe fallback
 		gDepthBufferCulling = &s_defaultDepthBufferCulling;
@@ -934,6 +937,9 @@ void VR::PostPostLoad()
 	}
 
 	gMinOccludeeBoxExtent = reinterpret_cast<float*>(REL::Offset(0x1ED64E8).address());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	depthCullingEngineExtentBound = globals::game::isVR && gMinOccludeeBoxExtent != nullptr;
+#endif
 	if (!gMinOccludeeBoxExtent) {
 		static float s_defaultMinOccludeeBoxExtent = VRDepthCullingEnablePolicy::kDefaultMinimumExtent;
 		gMinOccludeeBoxExtent = &s_defaultMinOccludeeBoxExtent;

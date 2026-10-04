@@ -8,6 +8,7 @@
 #	include <array>
 #	include <cstddef>
 #	include <cstdint>
+#	include <optional>
 #endif
 
 namespace VRDepthCullingTemporal
@@ -53,6 +54,8 @@ namespace VRDepthCullingTemporal
 		bool installed = false;
 		bool hybridInstalled = false;
 		bool cullingEnabled = false;
+		std::optional<bool> engineCullingEnabled;
+		std::optional<float> engineMinimumExtent;
 		bool telemetryEnabled = true;
 		bool telemetryFrozen = false;
 		Mode mode = Mode::Balanced;
@@ -89,8 +92,6 @@ namespace VRDepthCullingTemporal
 	/** Return the mode currently observed by the render thread. */
 	[[nodiscard]] Mode GetMode();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	/** Invalidate proof and depth-comparison history from the main-thread DevBench settings path. */
-	void InvalidateHybridProofHistory() noexcept;
 	/** Return thread-safe diagnostics for DevBench inspection. */
 	[[nodiscard]] Status GetStatus();
 	/** Share admission between Advanced and Hybrid samples and their combined reset. */

@@ -1,5 +1,10 @@
 # Hi-Z proof A/B evaluation, 4 October 2026
 
+This is the earlier proof-only assay. The subsequent save-22 depth/proof
+matrix and selected guarded 2x2 implementation are assessed in the
+[current analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md).
+The comparison controls described here are removed from the next build.
+
 The last proof change does not explain the previously observed large
 regression. Both variants remain slower than Advanced. The current
 original-vertex variant B costs 0.014 ms more culling GPU time than the

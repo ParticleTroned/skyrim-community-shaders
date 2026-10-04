@@ -1,43 +1,31 @@
 # CSX Astra master implementation plan
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
-The [latest in-game A/B comparison](vr-hybrid-culling-proof-ab-2026-10-04.md)
-compares the guarded baseline A with original-vertex proofs B in one
-process. Advanced's three noon observations have no isolated outlier;
-the representative median is 10.27 ms CPU / 7.71 ms GPU. B averages
-13.83 / 9.43 ms, respectively 34.7% and 22.4% slower. A ranges from
-12.41-17.44 ms CPU / 9.35-9.98 ms GPU, making whole-frame A/B attribution
-inconclusive. Both variants remain slower than every Advanced window.
+The selected path is guarded projected-face testing with preferred 2x2
+source reduction. Alternative proof/coarse-depth selectors and their extra
+shaders are removed. The existing 4x4 resource-limit fallback remains.
 
-Two separate 300-frame captures per condition measure culling means of
-0.784 ms for A, 0.798 ms for B and 0.188 ms for Advanced. B's observed
-0.014 ms (1.76%) extra cost does not explain the large earlier regression.
-Bounds testing remains about 91% of Hi-Z culling. Frozen counters reject
-about 38-39% of candidates versus Advanced's 62.7%; these are separate
-cohorts, not matched objects. New bias-only shortcuts fire about four
-times per hundred candidates without a demonstrated aggregate gain.
-Actual clipping still runs about 2.5 times per candidate; only 0.278%
-exhaust the read budget in the current B diagnostic cohort.
+The [current detailed analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md)
+records eight comparable noon windows. Guarded 2x2 averaged 11.47 ms CPU /
+9.01 ms GPU against Advanced's 9.65 / 7.42 ms: respectively 18.83% and
+21.47% slower. Separate complete GPU captures measured 0.920 ms Hi-Z
+culling versus 0.086 ms native culling; bounds testing contributes 92.49%
+of the Hi-Z total. Rejection was 38.60% versus 61.17%, from different
+submission cohorts rather than matched objects or useful draw counts.
+Advanced recovery did not alter its observed native results, making the
+native producer relevant to Legacy as well. Fresh Legacy timings were
+excluded because the engine collected no candidates; the recovery reload
+crashed with attribution undetermined.
 
-The earlier, closer 6.7% GPU-gap result belongs to `ac2b7dcfc`, before
-`425b8d373` introduced 2x2 reduction. Its culling scopes cost about
-0.594 ms with 4x4 reduction. The view differed, so this is a candidate
-for controlled testing rather than proof that finer depth regressed.
-The independent DevBench 4x4/2x2 selector is now implemented; its next
-in-game assay holds the guarded proof variant fixed.
-Identical-input comparison and native/Hybrid matched outcomes remain
-needed to attribute recovered objects before a clipping/storage change.
-
-The DevBench A/B selector, both warmed proof variants, requested/effective
-revision reporting and history invalidation were exercised successfully.
-Twelve focused implementation tests and production compiler-output
-isolation checks remain passed for the measured source `6f9ca1c1a`.
-The completed assay changed no runtime code; a subsequent change adds
-the independent coarse-depth selector for the next build. Advanced and original
-instrumentation settings were restored; Skyrim was left running.
-No pictures were taken because performance was not comparable.
-Motion, lifecycle and SE/AE qualification remain open. PBR grass, grass
-optimization and Reverse Z remain separate later PRs.
+The compiled shader repeats an eight-vertex helper-array copy per region.
+Removing this copy is the immediate focused optimization; a shared quad
+proof and selective precise leaf-depth tests are subsequent candidates.
+Matched native/Hi-Z outcomes are needed to identify useful missed culling.
+Developer diagnostics now distinguish observed engine globals from desired
+policy, so an empty batch cannot masquerade as an active native baseline.
+Advanced remains the default. Motion, lifecycle, new-build runtime and
+SE/AE qualification remain open. PBR grass, grass optimization and Reverse
+Z remain separate later PRs.
 
 ## Scope and authority
 
@@ -595,13 +583,17 @@ Detailed original requirements remain in master Part B sections 4-7.
 
 ## Validation and evidence record
 
-The [current A/B comparison](vr-hybrid-culling-proof-ab-2026-10-04.md#evidence)
-preserves compiled source `6f9ca1c1a`, its producer Build ID, complete
-noon timing windows, six bounded GPU captures and frozen diagnostic
-counters. No runtime code changed during the assay. The measured source's
-12/12 focused tests and production compiler-output checks remain passed;
-a separate production DLL link, SE/AE runtime checks and motion/lifecycle
-qualification remain open.
+The [current guarded 2x2 analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md#evidence-and-validation)
+preserves measured source `045fe4e8c`, producer identity, eight noon timing
+windows, separate complete GPU captures and frozen counters. It distinguishes
+the earlier measured DLL from the subsequent guarded-only/copy-optimization
+source. Guarded-only removal passed 12/12 focused tests, four maintained
+and four strict shader equivalence comparisons, and production isolation
+for four translation units. The subsequent private-vertex change passed
+12/12 focused tests and all four strict copy-removal/reflection checks;
+its bytecode intentionally differs. Exact commands and evidence are in
+the linked report. A separate production DLL link, SE/AE runtime checks and
+motion/lifecycle qualification remain open.
 
 The [integration record](vr-hybrid-culling.md#current-main-integration-2026-10-03)
 and [original noon report](vr-hybrid-culling-runtime-2026-10-03.md) retain
@@ -672,23 +664,21 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental. The last proof change costs only about 0.014 ms
-more culling GPU time in the current A/B observations; reverting it cannot
-close the remaining gap. No reliable whole-frame A/B gain was established.
-The [analysis](vr-hybrid-culling-proof-ab-2026-10-04.md#decision-and-next-work)
-uses the implemented 4x4/2x2 depth-reduction switch because the closer
-historical result predates finer depth. Enable both baseline toggles to
-reproduce `ac2b7dcfc` culling, then change only depth reduction. Hold the
-proof variant fixed and
-measure both total frame cost and rejection in one unchanged view.
+Keep PR104 experimental and pursue guarded 2x2 only. First measure the
+focused helper-copy optimization against the last valid guarded baseline.
+Confirm nonempty native batches before timing Advanced or Legacy; reset
+time to noon and keep scene, headset pose and rendering settings comparable.
+Developer traversal/shadow diagnostics must remain separate from timing.
 
-Matched-input comparisons must distinguish useful recovered occlusion
-from offscreen counts. Actual clipping remains a possible cost target,
-with no demonstrated occupancy bottleneck or predicted gain. Do not
-raise the read budget: resolving every observed budget exit could recover
-at most 0.278 percentage points in the current B diagnostic cohort.
-Preserve masks, guards, depth bias and stereo/history safety; require a
-repeatable improvement and motion/lifecycle qualification before promotion.
+The [ordered investigation](vr-hybrid-culling-guarded2-analysis-2026-10-04.md#ordered-follow-up)
+prioritizes matched native/Hi-Z outcomes, shared quad/plane proofs and
+selective source-depth refinement for unresolved leaf regions. Distinguish
+useful hidden geometry from zero-fragment/offscreen counts. Do not raise
+the read budget: every observed budget exit could recover at most 0.278
+percentage points in the earlier diagnostic cohort. No measured occupancy
+or spilling diagnosis exists. Preserve masks, guards, depth allowance and
+stereo/history safety; require a repeatable improvement and motion/lifecycle
+qualification before promotion.
 
 PBR grass remains the next independent feature PR, followed by grass
 optimization and Reverse Z. No render-scale qualification is claimed.

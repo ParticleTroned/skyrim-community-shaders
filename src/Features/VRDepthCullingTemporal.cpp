@@ -523,14 +523,6 @@ namespace VRDepthCullingTemporal
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	void InvalidateHybridProofHistory() noexcept
-	{
-		g_policyEpoch.fetch_add(1, std::memory_order_acq_rel);
-		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
-		g_producerPoseEpoch.store(0, std::memory_order_release);
-		g_policyEpoch.fetch_add(1, std::memory_order_release);
-	}
-
 	Status GetStatus()
 	{
 		const bool frozen = g_telemetryGate.IsFrozen();

@@ -36,7 +36,7 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		std::unique_ptr<D3D11ShaderTest::ConstantBuffer> constants;
 
-		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false, const char* source = nullptr, bool guardedVertexBaseline = false)
+		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false, const char* source = nullptr)
 		{
 			ComPtr<ID3DBlob> code, errors;
 			std::vector<D3D_SHADER_MACRO> defines;
@@ -44,17 +44,15 @@ namespace
 				defines.push_back({ "CSX_DEPTH_ORDER_TEST_REVERSED", "1" });
 			if (diagnostics)
 				defines.push_back({ "CSX_HIZ_DIAGNOSTICS", "1" });
-			if (guardedVertexBaseline)
-				defines.push_back({ "CSX_HIZ_GUARDED_VERTEX_BASELINE", "1" });
 			defines.push_back({ nullptr, nullptr });
 			Util::CustomInclude includes{ "package/Shaders" };
-			static std::map<std::tuple<std::wstring, bool, bool, std::string, bool>, ComPtr<ID3DBlob>> compiled;
-			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics, source ? source : "", guardedVertexBaseline }];
+			static std::map<std::tuple<std::wstring, bool, bool, std::string>, ComPtr<ID3DBlob>> compiled;
+			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics, source ? source : "" }];
 			if (cached) {
 				code = cached;
 			} else {
 				std::wcout << L"Compiling " << path << L" reversed=" << reversedDepth << L" diagnostics=" << diagnostics
-						   << L" guardedVertexBaseline=" << guardedVertexBaseline << std::endl;
+						   << std::endl;
 				constexpr UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
 				const auto result = source ?
 				                        D3DCompile(source, std::strlen(source), nullptr, defines.data(), &includes, "main", "cs_5_0",
@@ -124,7 +122,7 @@ namespace
 	{
 		ID3D11Device* device;
 		ID3D11DeviceContext* context;
-		bool reversedDepth, guardedVertexBaseline;
+		bool reversedDepth;
 		UINT sourceWidth, sourceHeight;
 		BuildConstants buildConstants{};
 		TestConstants testConstants{};
@@ -135,12 +133,12 @@ namespace
 		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
 		std::vector<ComPtr<ID3D11UnorderedAccessView>> mipOutputs;
 
-		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth = 32, UINT eyeHeight = 32, UINT reduction = 4, bool guardedVertexBaseline = false) :
-			device(device), context(context), reversedDepth(reversedDepth), guardedVertexBaseline(guardedVertexBaseline), sourceWidth(2 * eyeWidth), sourceHeight(eyeHeight),
+		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth = 32, UINT eyeHeight = 32, UINT reduction = 4) :
+			device(device), context(context), reversedDepth(reversedDepth), sourceWidth(2 * eyeWidth), sourceHeight(eyeHeight),
 			build(device, L"package/Shaders/VRHybridCulling/BuildDepthCS.hlsl", "BuildConstants", reversedDepth),
 			reduce(device, L"package/Shaders/VRHybridCulling/ReduceDepthCS.hlsl", "ReduceConstants", reversedDepth),
-			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, false, nullptr, guardedVertexBaseline),
-			diagnosticTest(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, true, nullptr, guardedVertexBaseline)
+			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth),
+			diagnosticTest(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, true)
 		{
 			testConstants.eyes = { EyeRect{ 0, 0, eyeWidth, eyeHeight }, EyeRect{ eyeWidth, 0, eyeWidth, eyeHeight } };
 			Require(TryMakeBuildConstants(testConstants.eyes, sourceWidth, sourceHeight, reduction,
@@ -303,8 +301,8 @@ namespace
 					"Diagnostic traversal work exceeded the budget");
 				Require(record[4] + record[5] + record[7] <= record[3] && record[6] <= 6 * record[2],
 					"Diagnostic proof paths exceed the corresponding face or triangle attempts");
-				Require(!guardedVertexBaseline || (record[6] == 0 && record[7] == 0),
-					"Guarded-vertex baseline reported a base-only bias shortcut");
+				Require(record[6] == 0 && record[7] == 0,
+					"Guarded proof reported a base-only bias shortcut");
 				Require((record[0] == 257) == (values[index] == 0), "Diagnostic reasons disagree with visibility");
 			}
 			return values;
@@ -939,7 +937,7 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		fixture.testConstants = original;
 	}
 
-	void ChecksOriginalVertexDepthProofs(Fixture& fixture)
+	void ChecksGuardedVertexDepthProofs(Fixture& fixture)
 	{
 		constexpr const char* source = R"(
 #include "Common/DepthOrder.hlsli"
@@ -955,14 +953,13 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 {
     if (id.x >= Count) return;
     RegionCase value = Cases[id.x];
-    float3 vertices[8];
-    [unroll] for (uint vertex = 0; vertex < 8; ++vertex) vertices[vertex] = value.vertices[vertex].xyz;
+    [unroll] for (uint vertex = 0; vertex < 8; ++vertex) ProjectedBounds::Vertices[vertex] = value.vertices[vertex].xyz;
     ProjectedBounds::PreparedFaces faces;
-    ProjectedBounds::PrepareFaces(vertices, faces);
+    ProjectedBounds::PrepareFaces(faces);
 #ifdef CSX_HIZ_DIAGNOSTICS
     HiZTraversalDiagnostic diagnostic = (HiZTraversalDiagnostic)0;
 #endif
-    Results[id.x] = ProjectedBounds::OccludedInRegion(vertices, faces,
+    Results[id.x] = ProjectedBounds::OccludedInRegion(faces,
         value.rectangle.xy, value.rectangle.zw, value.depth, value.bias HIZ_DIAGNOSTIC_ARGUMENT);
 #ifdef CSX_HIZ_DIAGNOSTICS
     TraversalDiagnostics[id.x] = diagnostic;
@@ -979,9 +976,7 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		constexpr float depthUnit = 1.0f / 16777216.0f;
 		std::vector<RegionCase> cases;
 		std::vector<UINT> expected;
-		std::vector<UINT> baselineExpected;
-		std::vector<bool> expectsFaceBiasProof;
-		const auto add = [&](const OBBTransform& object, float depth, bool hidden, bool baselineHidden, bool faceBiasProof) {
+		const auto add = [&](const OBBTransform& object, float depth, bool hidden) {
 			RegionCase value{};
 			value.depth = depth;
 			for (UINT vertex = 0; vertex < 8; ++vertex) {
@@ -1006,9 +1001,9 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 									continue;
 								++hits;
 								Require(objectDepth > static_cast<double>(depth) + value.bias,
-									"Original-vertex proof has a visible guarded ray in the independent box oracle");
+									"Guarded-vertex proof has a visible guarded ray in the independent box oracle");
 							}
-				Require(hits != 0, "Original-vertex proof fixture has no independent ray intersections");
+				Require(hits != 0, "Guarded-vertex proof fixture has no independent ray intersections");
 			}
 			if (fixture.reversedDepth) {
 				for (auto& vertex : value.vertices)
@@ -1017,8 +1012,6 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 			}
 			cases.push_back(value);
 			expected.push_back(hidden ? 1u : 0u);
-			baselineExpected.push_back(baselineHidden ? 1u : 0u);
-			expectsFaceBiasProof.push_back(faceBiasProof);
 		};
 		for (UINT shape = 0; shape < 3; ++shape) {
 			for (UINT reflection = 0; reflection < 8; ++reflection) {
@@ -1034,23 +1027,22 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 					for (UINT row = 0; row < 3; ++row)
 						object.entry[row][axis] *= (reflection & (1u << axis)) ? -1.0f : 1.0f;
 				}
-				// Adjacent depth units bracket the strict base threshold without interpolation.
+				// Adjacent depth units bracket the full guarded threshold, including equality.
 				for (UINT gap : { 7u, 8u, 9u, 16u, 72u, 73u })
-					add(object, 0.5f - gap * depthUnit, gap > 8, gap > 72, gap > 8 && gap <= 72);
+					add(object, 0.5f - gap * depthUnit, gap > 72);
 			}
 		}
-		// The first triangle is hidden at base bias; another corner keeps its complete face visible.
+		// A sloped face whose nearest corner is unresolved must retain visibility.
 		auto split = Box(0, 0, 0.5f, 0.25f);
 		split.entry[2][0] = 0.125f;
 		split.entry[2][1] = -0.125f;
 		split.entry[2][2] = 0.03125f;
-		add(split, 0.46875f - 16 * depthUnit, false, false, false);
+		add(split, 0.46875f - 16 * depthUnit, false);
 		StructuredBuffer inputs(fixture.device, sizeof(RegionCase), static_cast<UINT>(cases.size()), D3D11_BIND_SHADER_RESOURCE, cases.data());
 		StructuredBuffer outputs(fixture.device, sizeof(UINT), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
 		StructuredBuffer diagnostics(fixture.device, sizeof(fixture.lastDiagnostics[0]), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
-		for (const auto variant : { std::pair{ false, false }, std::pair{ false, true }, std::pair{ true, false }, std::pair{ true, true } }) {
-			const auto [guardedVertexBaseline, diagnostic] = variant;
-			Kernel kernel(fixture.device, L"OriginalVertexDepthProofTest.hlsl", "RegionConstants", fixture.reversedDepth, diagnostic, source, guardedVertexBaseline);
+		for (const bool diagnostic : { false, true }) {
+			Kernel kernel(fixture.device, L"GuardedVertexDepthProofTest.hlsl", "RegionConstants", fixture.reversedDepth, diagnostic, source);
 			kernel.Bind(fixture.context, std::array<UINT, 4>{ static_cast<UINT>(cases.size()), 0, 0, 0 });
 			auto* input = inputs.srv.Get();
 			ID3D11UnorderedAccessView* targets[]{ outputs.uav.Get(), diagnostic ? diagnostics.uav.Get() : nullptr };
@@ -1064,16 +1056,7 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 			std::vector<UINT> actual(cases.size());
 			std::memcpy(actual.data(), mapped.pData, actual.size() * sizeof(actual[0]));
 			fixture.context->Unmap(outputs.staging.Get(), 0);
-			Require(actual == (guardedVertexBaseline ? baselineExpected : expected),
-				"Original-vertex proof variant changed its strict bias, reflected/sheared bounds or visibility");
-			if (guardedVertexBaseline) {
-				bool recoveredOcclusion = false;
-				for (std::size_t index = 0; index < actual.size(); ++index) {
-					Require(actual[index] <= expected[index], "Base-bias variant lost a guarded-baseline occlusion proof");
-					recoveredOcclusion |= actual[index] < expected[index];
-				}
-				Require(recoveredOcclusion, "Bias comparison did not exercise a genuinely different visibility result");
-			}
+			Require(actual == expected, "Guarded proof changed its strict bias, reflected/sheared bounds or visibility");
 			if (!diagnostic)
 				continue;
 			fixture.context->CopyResource(diagnostics.staging.Get(), diagnostics.buffer.Get());
@@ -1081,16 +1064,8 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 			std::vector<std::array<UINT, 8>> records(cases.size());
 			std::memcpy(records.data(), mapped.pData, records.size() * sizeof(records[0]));
 			fixture.context->Unmap(diagnostics.staging.Get(), 0);
-			if (guardedVertexBaseline) {
-				for (const auto& record : records)
-					Require(record[6] == 0 && record[7] == 0, "Guarded proof variant reported base-only bias work");
-				continue;
-			}
-			for (std::size_t index = 0; index < records.size(); ++index)
-				if (expected[index] != 0)
-					Require((records[index][6] != 0) == expectsFaceBiasProof[index], "Whole-face base-only proof counter missed its depth interval");
-			Require(records.back()[7] == 1 && records.back()[3] == 2,
-				"Original-triangle proof was not counted before the independently visible corner");
+			for (const auto& record : records)
+				Require(record[6] == 0 && record[7] == 0, "Guarded proof reported base-only bias work");
 		}
 	}
 
@@ -1304,7 +1279,7 @@ int main()
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 4, 2, false, 2);
 			Fixture fixture(device.Get(), context.Get(), reversedDepth);
 			ChecksProjectedRegionShortcuts(fixture);
-			ChecksOriginalVertexDepthProofs(fixture);
+			ChecksGuardedVertexDepthProofs(fixture);
 			CoversVisibilityAndFailures(fixture);
 			CoversMixedStereoVisibility(fixture);
 			SeparatesViewportRetentionReasons(fixture);
@@ -1335,25 +1310,15 @@ int main()
 			CoversPerspectiveAndCameraAdjustment(fine);
 			ChecksRefinedProofsAgainstSourcePixels(fine);
 			ChecksFaceProofsAgainstRays(fine);
-			for (const UINT reduction : { 2u, 4u }) {
-				Fixture baseline(device.Get(), context.Get(), reversedDepth, 32, 32, reduction, true);
-				CoversVisibilityAndFailures(baseline);
-				CoversMixedStereoVisibility(baseline);
-				SeparatesViewportRetentionReasons(baseline);
-				BiasRetainsTouchingBounds(baseline);
-				CoversEveryOverlappingCell(baseline);
-				CoversShearedCornerExtents(baseline);
-				CoversPerspectiveAndCameraAdjustment(baseline);
-				PreservesSmallBoundsAtLargeWorldCoordinates(baseline);
-				PreservesRefinedFootprintAndStereo(baseline);
-				RefinesThinRectangles(baseline);
-				ChecksRefinedProofsAgainstSourcePixels(baseline);
-				ExcludesEmptyProjectedCorners(baseline);
-				UsesLocalFaceDepth(baseline);
-				PreservesFaceProofsAcrossAxisPermutations(baseline);
-				RetainsLocalFaceBiasInEitherEye(baseline);
-				ChecksFaceProofsAgainstRays(baseline);
-			}
+			SeparatesViewportRetentionReasons(fine);
+			CoversShearedCornerExtents(fine);
+			PreservesSmallBoundsAtLargeWorldCoordinates(fine);
+			PreservesRefinedFootprintAndStereo(fine);
+			RefinesThinRectangles(fine);
+			ExcludesEmptyProjectedCorners(fine);
+			UsesLocalFaceDepth(fine);
+			PreservesFaceProofsAcrossAxisPermutations(fine);
+			RetainsLocalFaceBiasInEitherEye(fine);
 			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
 					  << "): mip coverage, bounded face refinement, source-pixel and 3D ray oracles, stereo, bias, perspective and failure fallback\n";
 		}

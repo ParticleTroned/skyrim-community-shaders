@@ -6,23 +6,27 @@ four-mode assay found Hybrid materially slower than Advanced and Legacy.
 Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
-The [latest proof A/B comparison](vr-hybrid-culling-proof-ab-2026-10-04.md)
-records guarded-baseline A and original-vertex B in the same process.
-B averages 13.83 ms CPU / 9.43 ms GPU against the representative Advanced
-baseline of 10.27 / 7.71 ms. A's whole-frame repeats vary substantially.
-Culling GPU scopes average 0.784 ms for A, 0.798 ms for B and 0.188 ms
-for Advanced; bounds testing remains about 91% of Hi-Z cost. Separate
-normal-shader counters reject about 38-39% versus Advanced's 62.7%.
-The small observed bias-change cost does not explain the earlier large
-regression. A controlled 4x4/2x2 depth comparison is the next experiment.
+The [current analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md)
+selects guarded proofs with 2x2 source-depth reduction for further work.
+In save 22, this configuration averaged 11.47 ms CPU / 9.01 ms GPU against
+Advanced's 9.65 / 7.42 ms; separate GPU captures measured about 0.920 ms
+for Hi-Z culling versus 0.086 ms for Advanced. Bounds testing accounted
+for most Hi-Z cost. Separate candidate counters rejected about 38.6%
+versus Advanced's 61.2%; these are different submission cohorts.
+Motion and lifecycle qualification remain open.
 
-The original-vertex base-bias change has not demonstrated an improvement.
-New shortcuts fire about three times per hundred candidates, while actual
-polygon clipping runs about 2.3 times per candidate. These are work events,
-not uniquely recovered objects. A materially different rendered view
-prevents attributing the apparent cross-session regression to this change.
-Matched-input old/new shader comparison should precede another cost
-optimization. Motion and lifecycle qualification remain open.
+Hybrid now has one proof implementation: the compound guarded face test
+and guarded triangle, retained-vertex, plane and clipping proofs. It
+prefers 2x2 reduction, retaining 4x4 only when the validated source would
+exceed pyramid resource limits. Proof and coarse-depth A/B selectors and
+their extra shaders are removed from the next build. Advanced remains
+the default while Hi-Z performance and runtime correctness are evaluated.
+
+Projection and region testing use one private per-invocation vertex array.
+Projection initializes every vertex for the current eye before any region
+test; the face helpers only read it. This avoids passing the complete array
+by value on every region test. Guarded arithmetic and coverage are retained;
+a runtime performance gain remains unmeasured.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -112,11 +116,10 @@ retain visibility. Only completing all pending regions proves occlusion.
 Within an inconclusive cell, projected box faces are tested against the
 cell expanded by the pixel guard and a rounding margin. Cached bounds,
 retained original vertices and conservative affine depth proofs can settle
-a triangle without clipping. Whole-face and triangle minima select only
-original projected depths, so they use the same base bias as the coarse
-box proof. Affine triangle depth cannot be nearer than those extrema.
-Uncertain cases keep exact clipping and its additional interpolation bias;
-vertex-retention and separately bounded plane proofs retain that allowance.
+a triangle without clipping. Whole-face and triangle minima, retained vertices, bounded plane proofs
+and clipped intersections all use the configured depth bias plus the
+64-depth-unit interpolation allowance. The coarse box proof retains its
+configured base bias. Uncertain cases keep exact clipping.
 Every covered region must prove occlusion
 in both eyes.
 Visibility in either eye retains the object. Coarse cells, depth within
@@ -175,14 +178,23 @@ methods together or reports busy without clearing either. Operational
 backend and failure reasons remain visible with measurement disabled.
 See the [telemetry contract](vr-depth-culling-recovery-telemetry.md).
 
+`depthCullingTemporal.engine` observes the engine's current
+`depthBufferCulling` gate and `minimumOccludeeBoxExtent`, separately from
+the desired `cullingEnabled` policy and configured location extents.
+Each observation has its own availability flag. Values are null on
+non-VR runtimes, before cached engine bindings initialize, for local
+fallback storage, or for a nonfinite observed extent. These main-thread
+reads do not force engine values or resolve new addresses. When native
+batches are empty, inspect these observations before interpreting zero
+rejections or profiling samples as successful culling work.
+
 Enable `set_depth_culling_traversal_diagnostics_enabled` only for reason
 and work measurements, with telemetry enabled, then reset the counters.
 `hybrid.traversalDiagnostics` sums work across both eyes and reports
 `planeProofs` (successful plane proofs), `polygonClips` (clipper entries),
-and `faceBiasOnlyProofs` / `triangleBiasOnlyProofs` (original-depth minima
-that pass the base bias but fail the added interpolation allowance).
-These shortcut counts measure intermediate proof events, not independently recovered
-object rejections. Disable diagnostics for frame-time and GPU comparisons.
+and reserved `faceBiasOnlyProofs` / `triangleBiasOnlyProofs` fields, which
+remain zero with guarded proofs. Plane and clip totals measure
+intermediate work events, not independently recovered object rejections. Disable diagnostics for frame-time and GPU comparisons.
 
 Viewport reasons are `viewport_offscreen` for wholly outside bounds,
 `viewport_partial` for original bounds crossing the viewport, and
@@ -202,111 +214,54 @@ labels `VRHybridCulling::BuildHierarchy` and
 
 ## Validation and acceptance
 
-### DevBench proof-bias A/B
+### Selected guarded 2x2 implementation
 
-The testing build exposes
-`set_depth_culling_guarded_vertex_baseline_enabled` through
-`communityshaders.menu`. With boolean `enabled: true`, A selects the
-previous guarded-bias face/triangle code (`guarded_baseline`); with
-`enabled: false`, B selects the current original-vertex base-bias code
-(`original_vertices`, default). Include `expectedBuildId` in requests.
-The control is VR-only, session-only and does not save settings or enable
-Hybrid, telemetry or traversal diagnostics.
+Select `hybrid` through `set_depth_culling_method`; no proof or reduction
+selection is required. `hybrid.configuration` reports `proof: guarded`,
+`preferredSourceReduction: 2`, `activeSourceReduction` and
+`largeSourceFallback`. Active reduction is zero unless the current
+culling epoch has submitted the effective Hybrid backend. A large source
+reports four with `largeSourceFallback: true`. Source dimensions and
+logical hierarchy bytes remain available in the source snapshot.
 
-Both normal variants and their diagnostic variants are compiled during
-pipeline setup. Switching does not compile shaders or rebuild resources.
-Changed selection invalidates pending visibility history and diagnostic
-records and marks the measurement window stale. Repeating the current
-selection is a no-op. `hybrid.proofBiasComparison` reports requested and
-active variant, their revisions, and baseline shader availability. If the
-baseline shader is unavailable, requested A falls back to native culling;
-it never silently uses B. A failed diagnostic variant leaves its normal
-shader available and reports diagnostic unavailability.
+The next build uses the same guarded shader logic exercised by the
+completed A/B assay. Normal culling and the independently controlled
+traversal diagnostic permutation share that proof implementation. Shader
+or resource setup failure retains native fallback; diagnostic setup
+failure retains normal Hybrid culling. The removed comparison actions
+are no longer advertised or accepted. Existing telemetry, traversal
+reason counters and GPU profiler controls remain DevBench-only, compiled
+out of production.
 
-Before comparing, warm Hybrid and confirm `baselineAvailable: true`.
-For each phase, select A or B, verify matching requested/active revisions
-and effective Hybrid, reset to noon and settle, then reset counters.
-Use A/B/B/A timing windows with traversal diagnostics and telemetry off;
-collect GPU scopes and reason counts in separate windows. Preserve the
-same scene, view and render settings. Restore the original selection and
-Advanced afterward. A new DLL requires an initial game restart, but A/B
-switches within that process do not. This toggled assay is not an
-identical-depth GPU replay; small scene and pose changes still need control.
+After installation, warm Hybrid, verify its effective backend and actual
+reduction, then reset to noon and settle before each capture. Keep
+traversal diagnostics off for timing, collect work and reason counters in
+separate windows, and freeze telemetry before reading final totals.
+The historical A/B records preserve their measured source identities and
+are evidence for selecting this implementation; they do not validate a
+subsequent DLL or replace motion/lifecycle qualification.
 
-All selector state, extra shader creation and the control compile out of
-production. Twelve focused tests pass, including both bias variants with
-standard/reversed depth, diagnostics equivalence and independent visibility
-oracles. Both normal variants are byte-identical to their respective
-source revisions (`425b8d373` baseline, `95edcef20` current), including
-strict optimized `/Ges /WX /O3` standard and reversed-depth permutations.
-Actual compiler flags and forced headers confirm the extra code
-is absent from production preprocessing; no separate production DLL link
-is claimed. The completed [in-game A/B assay](vr-hybrid-culling-proof-ab-2026-10-04.md)
-exercised both requested/active states, revisions and normal/diagnostic
-paths, then restored Advanced. Both variants remain slower than Advanced.
+Initial guarded-only cleanup passed 12/12 tests and preserved all four
+Standard/reversed, normal/diagnostic guarded bytecodes. After private
+vertex storage was introduced, the maintained verifier found intentional
+differences. Strict `/Ges /WX /O3` compilation confirmed both repeated
+eight-vertex copies removed, indexed arrays 10 to 7, normal temporaries
+37 to 31 and unchanged resource bindings/constant layouts
+(`guarded-array-alias-strict-20261004T111651253Z`). Static instruction slots
+increase by 30 in the normal shader; no runtime gain is claimed. Final
+focused validation passed 12/12 tests in 18.90 seconds, including WARP in
+18.64 seconds (`proof-ab-tests-20261004T111806880Z`).
+Actual compiler flags and forced headers passed syntax and production
+preprocessing checks for VR, Hybrid, Temporal and the menu bridge, with
+the developer-only engine observations, diagnostics and comparison
+markers absent (`guarded-only-production-20261004T110300952Z`). These
+evidence directories are under `build/astra-validation/adaptive/`.
+No separately linked production DLL or new in-game result is claimed.
 
-### Coarse-depth baseline comparison
+### Historical original-vertex implementation validation
 
-`set_depth_culling_coarse_depth_baseline_enabled` adds an independent,
-DevBench-only reduction selector. It requires a boolean `enabled` and
-Skyrim VR. True selects 4x4 reduction; false retains the production 2x2
-preference with the existing large-source 4x4 fallback. It changes no
-saved setting, culling method or telemetry preference.
-
-| Comparison configuration               | Guarded-vertex baseline | Coarse-depth baseline | Culling source configuration                      |
-| -------------------------------------- | ----------------------- | --------------------- | ------------------------------------------------- |
-| Earlier nearest-vertex result          | true                    | true                  | `ac2b7dcfc`, guarded proofs and 4x4               |
-| Finer-depth baseline A                 | true                    | false                 | `425b8d373`, guarded proofs and 2x2 preference    |
-| Current proof variant B                | false                   | false                 | Current original-vertex proofs and 2x2 preference |
-| Independent coarse/current cross-check | false                   | true                  | Current original-vertex proofs and 4x4            |
-
-The earlier 6.7% GPU-gap result was measured on `ac2b7dcfc`, not on the
-subsequently delivered `425b8d373` build. Both commits have identical
-Hi-Z shader sources; the prior validated guarded shader and the original
-4x4 layout reproduce that culling configuration inside the current DLL,
-without claiming the entire historical binary has been restored.
-
-Both selectors share revision-based invalidation of prepared work,
-readback, diagnostic admission and measurement windows. Repeating the
-same value is a no-op; changing away and back cannot revive old batches.
-The historical `proof_selection_changed` rejection reason covers either
-comparison axis. Allocation stays on the renderer's existing preparation
-path. No shader compilation or restart is needed when toggling, but a
-changed layout can allocate a pyramid; warm and settle before measuring.
-Setup failure retains the existing native fallback.
-
-`hybrid.depthReductionComparison` exposes `requestedSourceReduction`,
-`activeSourceReduction`, `state`, `largeSourceFallback`, `requestedRevision`
-and `activeRevision`. Active reduction is zero while pending/inactive;
-only a submitted Hybrid dispatch reports the effective reduction. A fine
-request can report four with `largeSourceFallback=true` on large sources.
-Check both comparison states/revisions and actual reduction, then reset
-telemetry. Use the existing source snapshot for dimensions and logical
-bytes; allocations must stay unchanged within warmed timing windows.
-
-Compare coarse/fine/fine/coarse with the guarded proof selected throughout,
-interleaving Advanced baselines. Reset noon for each phase, keep timing
-instrumentation off, and collect rejection/GPU diagnostics separately.
-In-game measurements of the new depth toggle await installation. Its
-policy, serialization and WARP coverage include both reductions and proof
-variants, independent source-pixel/ray checks, no-op/returning selections,
-invalid dimensions and large-source fallback. Production excludes the
-selector, comparison state and extra control.
-
-Validation: `validate-proof-ab.ps1` rebuilt the 12 focused targets and
-passed 12/12 tests in 37.91 seconds, including WARP in 37.04 seconds.
-Evidence: `build/astra-validation/adaptive/proof-ab-tests-20261004T095519482Z/`.
-`validate-depth-ab-production.ps1` passed actual-flag syntax and
-preprocessor checks for Hybrid, Temporal and Menu bridge, with every
-comparison marker absent. Evidence:
-`build/astra-validation/adaptive/depth-ab-production-20261004T095612930Z/`.
-The registered tool JSON parses with both action names and boolean input;
-`git diff ac2b7dcfc 425b8d373 -- package/Shaders/VRHybridCulling` is empty,
-connecting the existing strict DXBC baseline proof to the historical
-coarse configuration. No new performance or visual result is claimed for
-this selector, and no separate production DLL was linked.
-
-### Original-vertex implementation validation
+The following validates the earlier base-bias candidate, which is absent
+from the selected guarded implementation.
 
 The proof-bias iteration passed all 12 focused DepthCulling,
 VRHybridCulling and D3DContextProtection tests in 15.32 seconds. The WARP

@@ -43,7 +43,6 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	float2 maximumUV = -3.402823466e+38;
 	float nearestDepth = DepthOrder::Far();
 	float2 nearestVertexPixel = 0.0;
-	float3 projectedVertices[8];
 	// Camera-relative translation preserves small extents at large world coordinates.
 	precise float4x4 relativeTransform = transform;
 	[unroll] for (uint axis = 0; axis < 3; ++axis)
@@ -63,12 +62,12 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		if (!all(isfinite(ndc)))
 			HIZ_VISIBLE(HIZ_INVALID_INPUT);
 		float2 uv = ndc.xy * float2(0.5, -0.5) + 0.5;
-		projectedVertices[vertex] = float3(uv * EyeRect[eye].zw, ndc.z);
+		ProjectedBounds::Vertices[vertex] = float3(uv * EyeRect[eye].zw, ndc.z);
 		minimumUV = min(minimumUV, uv);
 		maximumUV = max(maximumUV, uv);
 		nearestDepth = DepthOrder::Nearest(nearestDepth, ndc.z);
 		if (ndc.z == nearestDepth)
-			nearestVertexPixel = projectedVertices[vertex].xy;
+			nearestVertexPixel = ProjectedBounds::Vertices[vertex].xy;
 	}
 
 	// Native frustum culling owns off-screen rejection, including stereo margins.
@@ -139,7 +138,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		HIZ_VISIBLE(HIZ_NEAREST_UNRESOLVED);
 
 	ProjectedBounds::PreparedFaces faceBounds;
-	ProjectedBounds::PrepareFaces(projectedVertices, faceBounds);
+	ProjectedBounds::PrepareFaces(faceBounds);
 
 	// Four roots plus three pending siblings per level fit below this fixed capacity.
 	const uint stackCapacity = 40;
@@ -187,7 +186,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		float2 regionMinimum = float2(cell) * cellSize - margin;
 		float2 regionMaximum = (float2(cell) + 1.0) * cellSize + margin;
 		HIZ_COUNT_REGION;
-		if (ProjectedBounds::OccludedInRegion(projectedVertices, faceBounds, regionMinimum, regionMaximum, depth, DepthBias HIZ_DIAGNOSTIC_ARGUMENT))
+		if (ProjectedBounds::OccludedInRegion(faceBounds, regionMinimum, regionMaximum, depth, DepthBias HIZ_DIAGNOSTIC_ARGUMENT))
 			continue;
 		if (nodeMip == 0)
 			HIZ_VISIBLE(HIZ_FINEST_UNRESOLVED);

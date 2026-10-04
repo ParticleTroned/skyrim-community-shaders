@@ -101,6 +101,8 @@ namespace VRHybridCulling
 			winrt::com_ptr<ID3D11ComputeShader> diagnosticTest;
 			winrt::com_ptr<ID3D11Buffer> diagnosticBuffer, diagnosticStaging;
 			winrt::com_ptr<ID3D11UnorderedAccessView> diagnosticUAV;
+			winrt::com_ptr<ID3D11Buffer> matchedBuffer, matchedStaging;
+			winrt::com_ptr<ID3D11UnorderedAccessView> matchedUAV;
 #endif
 			winrt::com_ptr<ID3D11Buffer> constants;
 			winrt::com_ptr<ID3D11Texture2D> pyramid;
@@ -127,6 +129,8 @@ namespace VRHybridCulling
 			winrt::com_ptr<ID3D11Buffer> diagnosticStaging;
 			winrt::com_ptr<ID3D11DeviceContext> diagnosticContext;
 			std::uint64_t diagnosticWindow = 0;
+			bool matched = false;
+			winrt::com_ptr<ID3D11Buffer> matchedStaging;
 #endif
 		};
 
@@ -137,12 +141,33 @@ namespace VRHybridCulling
 		std::atomic_bool g_reloadRequested{ false };
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::atomic_uint32_t g_activeSourceReduction{ 0 };
+		struct MatchedReadback
+		{
+			Batch batch{};
+			std::uint64_t window = 0;
+			bool ready = false;
+			std::array<std::uint32_t, VRDepthCullingTemporalPolicy::kMaximumObjects> hiz{}, nativeBefore{};
+			std::array<VRHybridCullingDiagnostics::Record, VRDepthCullingTemporalPolicy::kMaximumObjects> records{};
+		};
+		MatchedReadback g_matchedReadback;
+		VRHybridCullingDiagnostics::MatchedTotals g_matchedTotals;
+		VRDepthCullingTelemetry::SnapshotSlot<VRHybridCullingDiagnostics::MatchedTotals> g_matchedSnapshot;
+		std::atomic_bool g_matchedEnabled{ false };
+		std::atomic_uint64_t g_matchedSubmitted{ 0 }, g_matchedBatches{ 0 }, g_matchedDropped{ 0 }, g_matchedFailed{ 0 };
 		std::atomic_bool g_traversalEnabled{ false }, g_traversalAvailable{ false };
 		std::atomic<const char*> g_traversalAvailability{ "not_created" };
 		std::atomic_uint64_t g_traversalSubmitted{ 0 }, g_traversalUnavailable{ 0 };
 		std::atomic_uint64_t g_traversalWindow{ 1 }, g_traversalBatches{ 0 }, g_traversalNotReady{ 0 }, g_traversalFailed{ 0 }, g_traversalDiscarded{ 0 };
 		std::atomic_uint64_t g_traversalObjects{ 0 }, g_traversalLoads{ 0 }, g_traversalRegions{ 0 }, g_traversalTriangles{ 0 };
 		std::atomic_uint64_t g_traversalPlaneProofs{ 0 }, g_traversalPolygonClips{ 0 }, g_traversalFaceBiasOnlyProofs{ 0 }, g_traversalTriangleBiasOnlyProofs{ 0 };
+		std::atomic_uint64_t g_clipPlanes{ 0 };
+		std::atomic_uint64_t g_skippedClipPlanes{ 0 };
+		std::atomic_uint64_t g_planeBuilds{ 0 };
+		std::atomic_uint64_t g_planeReuses{ 0 };
+		std::atomic_uint64_t g_refinedCells{ 0 };
+		std::atomic_uint64_t g_sourcePixels{ 0 };
+		std::atomic_uint64_t g_resolvedCells{ 0 };
+		std::atomic_uint64_t g_sourceWitnesses{ 0 };
 		std::array<std::atomic_uint64_t, VRHybridCullingDiagnostics::Reasons.size()> g_traversalReasons{};
 		std::atomic<const char*> g_status{ "idle" };
 		std::atomic<const char*> g_backend{ "pending" }, g_fallbackReason{ "none" }, g_historyRejection{ "none" };
@@ -398,6 +423,20 @@ namespace VRHybridCulling
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 			DX::ThrowIfFailed(resources.device->CreateBuffer(&desc, nullptr, resources.diagnosticStaging.put()));
 			Util::SetResourceName(resources.diagnosticStaging.get(), "VRHybridCulling::TraversalReadback");
+			desc = {};
+			desc.ByteWidth = VRDepthCullingTemporalPolicy::kMaximumObjects * sizeof(std::uint32_t);
+			desc.StructureByteStride = sizeof(std::uint32_t);
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+			DX::ThrowIfFailed(resources.device->CreateBuffer(&desc, nullptr, resources.matchedBuffer.put()));
+			Util::SetResourceName(resources.matchedBuffer.get(), "VRHybridCulling::MatchedVisibility");
+			DX::ThrowIfFailed(resources.device->CreateUnorderedAccessView(resources.matchedBuffer.get(), nullptr, resources.matchedUAV.put()));
+			Util::SetResourceName(resources.matchedUAV.get(), "VRHybridCulling::MatchedVisibility UAV");
+			desc.BindFlags = desc.MiscFlags = desc.StructureByteStride = 0;
+			desc.Usage = D3D11_USAGE_STAGING;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			DX::ThrowIfFailed(resources.device->CreateBuffer(&desc, nullptr, resources.matchedStaging.put()));
+			Util::SetResourceName(resources.matchedStaging.get(), "VRHybridCulling::MatchedReadback");
 			g_traversalAvailability.store("ready", std::memory_order_release);
 			g_traversalAvailable.store(true, std::memory_order_release);
 		}
@@ -434,8 +473,45 @@ namespace VRHybridCulling
 			g_traversalPolygonClips.fetch_add(totals->polygonClips, std::memory_order_relaxed);
 			g_traversalFaceBiasOnlyProofs.fetch_add(totals->faceBiasOnlyProofs, std::memory_order_relaxed);
 			g_traversalTriangleBiasOnlyProofs.fetch_add(totals->triangleBiasOnlyProofs, std::memory_order_relaxed);
+			g_clipPlanes.fetch_add(totals->clipPlanes, std::memory_order_relaxed);
+			g_skippedClipPlanes.fetch_add(totals->skippedClipPlanes, std::memory_order_relaxed);
+			g_planeBuilds.fetch_add(totals->planeBuilds, std::memory_order_relaxed);
+			g_planeReuses.fetch_add(totals->planeReuses, std::memory_order_relaxed);
+			g_refinedCells.fetch_add(totals->refinedCells, std::memory_order_relaxed);
+			g_sourcePixels.fetch_add(totals->sourcePixels, std::memory_order_relaxed);
+			g_resolvedCells.fetch_add(totals->resolvedCells, std::memory_order_relaxed);
+			g_sourceWitnesses.fetch_add(totals->sourceWitnesses, std::memory_order_relaxed);
 			for (std::size_t index = 0; index < totals->eyeReasons.size(); ++index)
 				g_traversalReasons[index].fetch_add(totals->eyeReasons[index], std::memory_order_relaxed);
+		}
+		void ReadMatchedBatch(const Batch& a_batch)
+		{
+			g_matchedReadback.ready = false;
+			if (!HasCurrentTraversalDiagnostics() || !IsMatchedDiagnosticsActive()) {
+				g_matchedDropped.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			auto* context = g_history.diagnosticContext.get();
+			auto* lock = context == globals::d3d::context ? Util::GetRendererContextLock(globals::game::renderer, context) : nullptr;
+			auto result = Util::TryReadbackWithRendererOwnership(context, g_history.matchedStaging.get(), lock,
+				[&](const D3D11_MAPPED_SUBRESOURCE& mapped) -> HRESULT {
+					std::memcpy(g_matchedReadback.hiz.data(), mapped.pData, a_batch.count * sizeof(std::uint32_t));
+					return S_OK;
+				});
+			if (SUCCEEDED(result))
+				result = Util::TryReadbackWithRendererOwnership(context, g_history.diagnosticStaging.get(), lock,
+					[&](const D3D11_MAPPED_SUBRESOURCE& mapped) -> HRESULT {
+						std::memcpy(g_matchedReadback.records.data(), mapped.pData, a_batch.count * sizeof(VRHybridCullingDiagnostics::Record));
+						return S_OK;
+					});
+			if (FAILED(result)) {
+				(result == DXGI_ERROR_WAS_STILL_DRAWING ? g_matchedDropped : g_matchedFailed).fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			g_matchedReadback.batch = a_batch;
+			g_matchedReadback.window = g_history.diagnosticWindow;
+			std::memcpy(g_matchedReadback.nativeBefore.data(), reinterpret_cast<const void*>(a_batch.results), a_batch.count * sizeof(std::uint32_t));
+			g_matchedReadback.ready = true;
 		}
 #endif
 
@@ -490,6 +566,9 @@ namespace VRHybridCulling
 				resources.diagnosticBuffer = nullptr;
 				resources.diagnosticStaging = nullptr;
 				resources.diagnosticUAV = nullptr;
+				resources.matchedBuffer = nullptr;
+				resources.matchedStaging = nullptr;
+				resources.matchedUAV = nullptr;
 				g_traversalAvailability.store("setup_failed", std::memory_order_release);
 				logger::warn("VR: Hybrid traversal diagnostics unavailable; normal culling retained: {}", error.what());
 			}
@@ -569,14 +648,14 @@ namespace VRHybridCulling
 
 		void UnbindCompute()
 		{
-			ID3D11ShaderResourceView* srvs[2]{};
+			ID3D11ShaderResourceView* srvs[3]{};
 			ID3D11UnorderedAccessView* uavs[] = { nullptr
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				,
 				nullptr
 #endif
 			};
-			g_resources.context->CSSetShaderResources(0, 2, srvs);
+			g_resources.context->CSSetShaderResources(0, 3, srvs);
 			g_resources.context->CSSetUnorderedAccessViews(0, static_cast<UINT>(std::size(uavs)), uavs, nullptr);
 		}
 
@@ -675,7 +754,12 @@ namespace VRHybridCulling
 		}
 	}
 
-	bool Dispatch(void* a_culler, std::uint64_t a_epoch)
+	static bool DispatchImpl(void* a_culler, std::uint64_t a_epoch
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		bool a_matched
+#endif
+	)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const Scope telemetry(g_dispatchTiming, VRDepthCullingTemporal::GetTelemetryGate());
@@ -718,12 +802,16 @@ namespace VRHybridCulling
 		});
 		BuildPyramid();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		const bool diagnosticRequested = telemetry && g_traversalEnabled.load(std::memory_order_acquire);
+		const bool diagnosticRequested = telemetry && (a_matched || g_traversalEnabled.load(std::memory_order_acquire));
 		const bool diagnostic = diagnosticRequested && g_traversalAvailable.load(std::memory_order_acquire);
+		if (a_matched && !diagnostic)
+			return false;
 		if (diagnosticRequested && !diagnostic)
 			g_traversalUnavailable.fetch_add(1, std::memory_order_relaxed);
 		if (telemetry && HasCurrentTraversalDiagnostics())
-			g_traversalDiscarded.fetch_add(1, std::memory_order_relaxed);
+			(g_history.matched ? g_matchedDropped : g_traversalDiscarded).fetch_add(1, std::memory_order_relaxed);
+		g_history.matched = a_matched;
+		g_history.matchedStaging = a_matched ? g_resources.matchedStaging : nullptr;
 		g_history.diagnosticStaging = nullptr;
 		g_history.diagnosticContext = nullptr;
 		g_history.diagnosticWindow = g_traversalWindow.load(std::memory_order_acquire);
@@ -733,9 +821,14 @@ namespace VRHybridCulling
 			HYBRID_GPU_PASS("VRHybridCulling::TestBounds", telemetry);
 #endif
 			UploadConstants(g_prepared.test);
-			ID3D11ShaderResourceView* srvs[]{ bounds->srv, g_resources.allMips.get() };
-			context->CSSetShaderResources(0, 2, srvs);
-			context->CSSetUnorderedAccessViews(0, 1, &results->uav, nullptr);
+			ID3D11ShaderResourceView* srvs[]{ bounds->srv, g_resources.allMips.get(), g_prepared.depth.get() };
+			context->CSSetShaderResources(0, 3, srvs);
+			auto* output = results->uav;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (a_matched)
+				output = g_resources.matchedUAV.get();
+#endif
+			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
 			auto* testShader = g_resources.test.get();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (diagnostic) {
@@ -755,10 +848,16 @@ namespace VRHybridCulling
 				context->CopyResource(g_resources.diagnosticStaging.get(), g_resources.diagnosticBuffer.get());
 				g_history.diagnosticStaging = g_resources.diagnosticStaging;
 				g_history.diagnosticContext = g_resources.ownerContext;
-				g_traversalSubmitted.fetch_add(1, std::memory_order_relaxed);
+				if (!a_matched)
+					g_traversalSubmitted.fetch_add(1, std::memory_order_relaxed);
 			}
 #endif
-			context->CopyResource(results->staging, results->buffer);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (a_matched)
+				context->CopyResource(g_resources.matchedStaging.get(), g_resources.matchedBuffer.get());
+			else
+#endif
+				context->CopyResource(results->staging, results->buffer);
 		}
 		g_history.batch = batch;
 		g_history.frame = g_prepared;
@@ -768,6 +867,10 @@ namespace VRHybridCulling
 		g_history.pipelineInvalidated = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		g_activeSourceReduction.store(g_prepared.test.pyramid.sourceReduction, std::memory_order_relaxed);
+		if (a_matched) {
+			g_matchedSubmitted.fetch_add(1, std::memory_order_relaxed);
+			return true;
+		}
 		if (telemetry) {
 			g_lastCount.store(batch.count, std::memory_order_relaxed);
 			g_lastCountEpoch.store(a_epoch, std::memory_order_release);
@@ -782,21 +885,41 @@ namespace VRHybridCulling
 		return true;
 	}
 
+	bool Dispatch(void* a_culler, std::uint64_t a_epoch)
+	{
+		return DispatchImpl(a_culler, a_epoch
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			false
+#endif
+		);
+	}
+
 	bool CompleteReadback(void* a_culler, std::uint64_t a_epoch, bool a_selected)
 	{
 		if (!g_history.pending)
 			return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const Scope telemetry(g_readbackTiming, VRDepthCullingTemporal::GetTelemetryGate());
+		const bool matched = g_history.matched;
+		const bool selected = matched ? IsMatchedDiagnosticsActive() : a_selected;
 		const SKSE::stl::scope_exit releaseDiagnostic([&]() noexcept {
 			g_history.diagnosticStaging = nullptr;
 			g_history.diagnosticContext = nullptr;
+			g_history.matchedStaging = nullptr;
 		});
 #endif
 		Batch batch;
 		if (!ReadBatch(a_culler, a_epoch, batch)) {
 			g_history.pending = false;
 			g_history.frame.depth = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (matched) {
+				if (telemetry)
+					g_matchedDropped.fetch_add(1, std::memory_order_relaxed);
+				return false;
+			}
+#endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			g_historyRejection.store("unreadable_batch", std::memory_order_relaxed);
 			g_historyEpoch.store(a_epoch, std::memory_order_release);
@@ -816,7 +939,13 @@ namespace VRHybridCulling
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const char* rejection = "none";
 #endif
-		if (!a_selected || !VRHybridCullingHistory::Matches(g_history.batch, batch))
+		if (
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			!selected ||
+#else
+			!a_selected ||
+#endif
+			!VRHybridCullingHistory::Matches(g_history.batch, batch))
 			HYBRID_REJECT_HISTORY("batch_mismatch");
 		else if (g_history.pipelineInvalidated || g_reloadRequested.load(std::memory_order_acquire))
 			HYBRID_REJECT_HISTORY("pipeline_changed");
@@ -836,6 +965,15 @@ namespace VRHybridCulling
 		g_history.pending = false;
 		g_history.frame.depth = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		if (matched) {
+			if (telemetry) {
+				if (!rejected)
+					ReadMatchedBatch(batch);
+				else
+					g_matchedDropped.fetch_add(1, std::memory_order_relaxed);
+			}
+			return false;
+		}
 		g_historyRejection.store(rejection, std::memory_order_relaxed);
 		g_historyEpoch.store(a_epoch, std::memory_order_release);
 		if (telemetry)
@@ -914,6 +1052,80 @@ namespace VRHybridCulling
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	bool IsMatchedDiagnosticsActive() noexcept
+	{
+		return g_matchedEnabled.load(std::memory_order_acquire) && VRDepthCullingTemporal::GetTelemetryGate().IsEnabled() &&
+		       VRDepthCullingTemporal::GetMode() != VRDepthCullingTemporal::Mode::Hybrid;
+	}
+
+	void SetMatchedDiagnosticsEnabled(bool a_enabled) noexcept
+	{
+		if (g_matchedEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
+			g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
+	}
+
+	void DispatchMatched(void* a_culler, std::uint64_t a_epoch)
+	{
+		if (IsMatchedDiagnosticsActive() && !DispatchImpl(a_culler, a_epoch, true)) {
+			const VRDepthCullingTelemetryPolicy::WriterScope telemetry(VRDepthCullingTemporal::GetTelemetryGate());
+			if (telemetry)
+				g_matchedDropped.fetch_add(1, std::memory_order_relaxed);
+			CancelPreparation(false, a_epoch);
+		}
+	}
+
+	void CompleteMatchedRecovery(void* a_culler, std::uint64_t a_epoch)
+	{
+		const VRDepthCullingTelemetryPolicy::WriterScope telemetry(VRDepthCullingTemporal::GetTelemetryGate());
+		if (!telemetry || !g_matchedReadback.ready)
+			return;
+		g_matchedReadback.ready = false;
+		Batch batch;
+		if (!IsMatchedDiagnosticsActive() || g_matchedReadback.window != g_traversalWindow.load(std::memory_order_acquire) ||
+			!ReadBatch(a_culler, a_epoch, batch) || !VRHybridCullingHistory::Matches(batch, g_matchedReadback.batch)) {
+			g_matchedDropped.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		const auto totals = VRHybridCullingDiagnostics::SummarizeMatched(
+			{ g_matchedReadback.records.data(), batch.count }, { g_matchedReadback.hiz.data(), batch.count },
+			{ g_matchedReadback.nativeBefore.data(), batch.count }, { reinterpret_cast<const std::uint32_t*>(batch.results), batch.count });
+		if (!totals) {
+			g_matchedFailed.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		for (std::size_t index = 0; index < totals->beforeRecovery.size(); ++index) {
+			g_matchedTotals.beforeRecovery[index] += totals->beforeRecovery[index];
+			g_matchedTotals.afterRecovery[index] += totals->afterRecovery[index];
+		}
+		for (std::size_t index = 0; index < totals->nativeOnlyReasons.size(); ++index) {
+			g_matchedTotals.nativeOnlyReasons[index] += totals->nativeOnlyReasons[index];
+			g_matchedTotals.hizOnlyReasons[index] += totals->hizOnlyReasons[index];
+			g_matchedTotals.work.eyeReasons[index] += totals->work.eyeReasons[index];
+		}
+		g_matchedTotals.work.objects += totals->work.objects;
+		g_matchedTotals.work.depthLoads += totals->work.depthLoads;
+		g_matchedTotals.work.faceRegions += totals->work.faceRegions;
+		g_matchedTotals.work.faceTriangles += totals->work.faceTriangles;
+		g_matchedTotals.work.planeProofs += totals->work.planeProofs;
+		g_matchedTotals.work.polygonClips += totals->work.polygonClips;
+		g_matchedTotals.work.faceBiasOnlyProofs += totals->work.faceBiasOnlyProofs;
+		g_matchedTotals.work.triangleBiasOnlyProofs += totals->work.triangleBiasOnlyProofs;
+		g_matchedTotals.work.clipPlanes += totals->work.clipPlanes;
+		g_matchedTotals.work.skippedClipPlanes += totals->work.skippedClipPlanes;
+		g_matchedTotals.work.planeBuilds += totals->work.planeBuilds;
+		g_matchedTotals.work.planeReuses += totals->work.planeReuses;
+		g_matchedTotals.work.refinedCells += totals->work.refinedCells;
+		g_matchedTotals.work.sourcePixels += totals->work.sourcePixels;
+		g_matchedTotals.work.resolvedCells += totals->work.resolvedCells;
+		g_matchedTotals.work.sourceWitnesses += totals->work.sourceWitnesses;
+		++g_matchedTotals.batches;
+		g_matchedBatches.fetch_add(1, std::memory_order_relaxed);
+		if (!g_matchedSnapshot.Publish(g_matchedTotals)) {
+			g_matchedDropped.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+	}
+
 	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept
 	{
 		if (g_traversalEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
@@ -964,6 +1176,20 @@ namespace VRHybridCulling
 		result.traversalNotReadyBatches = g_traversalNotReady.load(std::memory_order_relaxed);
 		result.traversalFailedBatches = g_traversalFailed.load(std::memory_order_relaxed);
 		result.traversalDiscardedBatches = g_traversalDiscarded.load(std::memory_order_relaxed);
+		result.traversal.clipPlanes = g_clipPlanes.load(std::memory_order_relaxed);
+		result.traversal.skippedClipPlanes = g_skippedClipPlanes.load(std::memory_order_relaxed);
+		result.traversal.planeBuilds = g_planeBuilds.load(std::memory_order_relaxed);
+		result.traversal.planeReuses = g_planeReuses.load(std::memory_order_relaxed);
+		result.traversal.refinedCells = g_refinedCells.load(std::memory_order_relaxed);
+		result.traversal.sourcePixels = g_sourcePixels.load(std::memory_order_relaxed);
+		result.traversal.resolvedCells = g_resolvedCells.load(std::memory_order_relaxed);
+		result.traversal.sourceWitnesses = g_sourceWitnesses.load(std::memory_order_relaxed);
+		result.matchedDiagnosticsEnabled = g_matchedEnabled.load(std::memory_order_acquire);
+		result.matchedSubmittedBatches = g_matchedSubmitted.load(std::memory_order_relaxed);
+		result.matchedBatches = g_matchedBatches.load(std::memory_order_relaxed);
+		result.matchedDroppedBatches = g_matchedDropped.load(std::memory_order_relaxed);
+		result.matchedFailedBatches = g_matchedFailed.load(std::memory_order_relaxed);
+		result.matchedSnapshotAvailable = g_matchedSnapshot.Read(result.matched, &result.matchedSnapshotBusy);
 		result.traversal.objects = g_traversalObjects.load(std::memory_order_relaxed);
 		result.traversal.depthLoads = g_traversalLoads.load(std::memory_order_relaxed);
 		result.traversal.faceRegions = g_traversalRegions.load(std::memory_order_relaxed);
@@ -1008,6 +1234,19 @@ namespace VRHybridCulling
 	void ResetTelemetryUnderLock() noexcept
 	{
 		g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
+		g_matchedReadback.ready = false;
+		g_matchedTotals = {};
+		g_matchedSnapshot.Invalidate();
+		for (auto* counter : { &g_matchedSubmitted, &g_matchedBatches, &g_matchedDropped, &g_matchedFailed })
+			counter->store(0, std::memory_order_relaxed);
+		g_clipPlanes.store(0, std::memory_order_relaxed);
+		g_skippedClipPlanes.store(0, std::memory_order_relaxed);
+		g_planeBuilds.store(0, std::memory_order_relaxed);
+		g_planeReuses.store(0, std::memory_order_relaxed);
+		g_refinedCells.store(0, std::memory_order_relaxed);
+		g_sourcePixels.store(0, std::memory_order_relaxed);
+		g_resolvedCells.store(0, std::memory_order_relaxed);
+		g_sourceWitnesses.store(0, std::memory_order_relaxed);
 		for (auto* counter : { &g_traversalSubmitted, &g_traversalUnavailable, &g_traversalBatches, &g_traversalNotReady, &g_traversalFailed, &g_traversalDiscarded,
 				 &g_traversalObjects, &g_traversalLoads, &g_traversalRegions, &g_traversalTriangles,
 				 &g_traversalPlaneProofs, &g_traversalPolygonClips, &g_traversalFaceBiasOnlyProofs, &g_traversalTriangleBiasOnlyProofs })

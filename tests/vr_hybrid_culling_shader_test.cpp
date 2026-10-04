@@ -127,7 +127,7 @@ namespace
 		BuildConstants buildConstants{};
 		TestConstants testConstants{};
 		Kernel build, reduce, test, diagnosticTest;
-		std::vector<std::array<std::uint32_t, 8>> lastDiagnostics;
+		std::vector<std::array<std::uint32_t, 16>> lastDiagnostics;
 		ComPtr<ID3D11Texture2D> source, pyramid, staging;
 		ComPtr<ID3D11ShaderResourceView> sourceView, pyramidView;
 		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
@@ -201,9 +201,9 @@ namespace
 
 		void Unbind()
 		{
-			ID3D11ShaderResourceView* views[2]{};
+			ID3D11ShaderResourceView* views[3]{};
 			ID3D11UnorderedAccessView* outputs[2]{};
-			context->CSSetShaderResources(0, 2, views);
+			context->CSSetShaderResources(0, 3, views);
 			context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
 		}
 
@@ -255,7 +255,7 @@ namespace
 			return pixels;
 		}
 
-		std::vector<std::uint32_t> Test(std::span<const OBBTransform> objects)
+		std::vector<std::uint32_t> Test(std::span<const OBBTransform> objects, bool sourceAvailable = true)
 		{
 			StructuredBuffer bounds(device, sizeof(OBBTransform), static_cast<UINT>(objects.size()), D3D11_BIND_SHADER_RESOURCE, objects.data());
 			StructuredBuffer results(device, sizeof(std::uint32_t), static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
@@ -266,9 +266,9 @@ namespace
 					for (UINT column = 0; column < 4; ++column)
 						matrix[2][column] = matrix[3][column] - matrix[2][column];
 			test.Bind(context, constants);
-			ID3D11ShaderResourceView* views[]{ bounds.srv.Get(), pyramidView.Get() };
+			ID3D11ShaderResourceView* views[]{ bounds.srv.Get(), pyramidView.Get(), sourceAvailable ? sourceView.Get() : nullptr };
 			auto* output = results.uav.Get();
-			context->CSSetShaderResources(0, 2, views);
+			context->CSSetShaderResources(0, 3, views);
 			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
 			context->Dispatch((testConstants.objectCount + 63) / 64, 1, 1);
 			Unbind();
@@ -281,7 +281,7 @@ namespace
 			StructuredBuffer diagnostics(device, sizeof(lastDiagnostics[0]), static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
 			diagnosticTest.Bind(context, constants);
 			ID3D11UnorderedAccessView* outputs[]{ output, diagnostics.uav.Get() };
-			context->CSSetShaderResources(0, 2, views);
+			context->CSSetShaderResources(0, 3, views);
 			context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
 			context->Dispatch((testConstants.objectCount + 63) / 64, 1, 1);
 			Unbind();
@@ -303,6 +303,9 @@ namespace
 					"Diagnostic proof paths exceed the corresponding face or triangle attempts");
 				Require(record[6] == 0 && record[7] == 0,
 					"Guarded proof reported a base-only bias shortcut");
+				Require(record[8] + record[9] <= 4 * record[5] && record[10] + record[11] <= record[3] &&
+							record[13] <= record[1] && record[14] <= record[12] && record[15] <= 2,
+					"Plane-cache, clipping or source-refinement counters exceeded their work");
 				Require((record[0] == 257) == (values[index] == 0), "Diagnostic reasons disagree with visibility");
 			}
 			return values;
@@ -471,6 +474,20 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		return true;
 	}
 
+	void RetainsUnavailableRefinementSource(Fixture& fixture)
+	{
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		fixture.Build(pixels);
+		const std::array objects{ Box() };
+		Require(fixture.Test(objects)[0] == 0, "Source validation fixture has no solid-depth proof");
+		Require(fixture.Test(objects, false)[0] == 1, "An unbound original-depth source established visibility rejection");
+		const auto eyes = fixture.testConstants.eyes;
+		fixture.testConstants.eyes[1].x = std::numeric_limits<std::uint32_t>::max();
+		Require(fixture.Test(objects)[0] == 1, "An overflowing stereo source rectangle established visibility rejection");
+		fixture.testConstants.eyes = eyes;
+		Require(fixture.Test(objects)[0] == 0, "A rejected source contaminated a subsequent valid batch");
+	}
+
 	void RefinesPastPaddedEyeCells(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
 	{
 		Fixture fixture(device, context, reversedDepth, 1344, 1492);
@@ -531,8 +548,11 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 					Require(SourceCellsProveOcclusion(fixture, pixels, { 5, 5, 10, 10 }, 0.7f),
 						"Fine-depth fixture has no complete source-pixel proof");
 				fixture.Build(pixels);
-				Require(fixture.Test(objects)[0] == (reduction == 2 ? 0u : 1u),
+				Require(fixture.Test(objects)[0] == 0u,
 					"Finer leaves failed to recover occluder detail lost by coarse reduction");
+				if (reduction == 4)
+					Require(fixture.lastDiagnostics[0][12] != 0 && fixture.lastDiagnostics[0][14] != 0,
+						"Coarser depth fixture did not exercise selective source-pixel refinement");
 				for (const auto& eye : fixture.testConstants.eyes) {
 					const auto inside = 16 * fixture.sourceWidth + eye.x + 16;
 					pixels[inside] = untrusted;
@@ -580,7 +600,7 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 					fixture.Build(pixels);
 					Require(fixture.Test(objects)[0] == 1, "Nearest-vertex depth, mask or bias was lost in one eye");
 					const auto& record = fixture.lastDiagnostics[0];
-					Require(record[0] == (eye == 0 ? 8u : 2049u) && record[1] == eye * 4 + (reduction == 8 ? 4u : 5u) &&
+					Require(record[0] == (eye == 0 ? 8u : 2049u) && record[1] == eye * 4 + (reduction == 1 || reduction == 8 ? 5u : 6u) &&
 								record[2] == 0 && record[3] == 0,
 						"Unresolved nearest vertex reached face refinement or reloaded a coarse leaf");
 				}
@@ -960,6 +980,9 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 #endif
     Results[id.x] = ProjectedBounds::OccludedInRegion(
         value.rectangle.xy, value.rectangle.zw, value.depth, value.bias HIZ_DIAGNOSTIC_ARGUMENT);
+    bool repeated = ProjectedBounds::OccludedInRegion(
+        value.rectangle.xy, value.rectangle.zw, value.depth, value.bias HIZ_DIAGNOSTIC_ARGUMENT);
+    if (repeated != (Results[id.x] != 0)) Results[id.x] = 2;
 #ifdef CSX_HIZ_DIAGNOSTICS
     TraversalDiagnostics[id.x] = diagnostic;
 #endif
@@ -1037,6 +1060,17 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		split.entry[2][1] = -0.125f;
 		split.entry[2][2] = 0.03125f;
 		add(split, 0.46875f - 16 * depthUnit, false);
+		// A covered depth boundary forces clipping; repeated regions must reuse its lazy plane.
+		for (const float offset : { 0.0f, 8192.0f }) {
+			RegionCase clipping{};
+			clipping.vertices.fill({ offset + 7, offset + 11, fixture.EncodeDepth(0.8f), 0 });
+			clipping.vertices[0] = { offset + 7, offset + 8, fixture.EncodeDepth(0.8f), 0 };
+			clipping.vertices[1] = { offset + 10, offset + 8, fixture.EncodeDepth(0.2f), 0 };
+			clipping.rectangle = { offset + 8, offset + 8, offset + 8.5f, offset + 11 };
+			clipping.depth = fixture.EncodeDepth(0.5f);
+			cases.push_back(clipping);
+			expected.push_back(0);
+		}
 		StructuredBuffer inputs(fixture.device, sizeof(RegionCase), static_cast<UINT>(cases.size()), D3D11_BIND_SHADER_RESOURCE, cases.data());
 		StructuredBuffer outputs(fixture.device, sizeof(UINT), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
 		StructuredBuffer diagnostics(fixture.device, sizeof(fixture.lastDiagnostics[0]), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
@@ -1060,11 +1094,16 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 				continue;
 			fixture.context->CopyResource(diagnostics.staging.Get(), diagnostics.buffer.Get());
 			Check(fixture.context->Map(diagnostics.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
-			std::vector<std::array<UINT, 8>> records(cases.size());
+			std::vector<std::array<UINT, 16>> records(cases.size());
 			std::memcpy(records.data(), mapped.pData, records.size() * sizeof(records[0]));
 			fixture.context->Unmap(diagnostics.staging.Get(), 0);
-			for (const auto& record : records)
+			bool reused = false, skipped = false;
+			for (const auto& record : records) {
 				Require(record[6] == 0 && record[7] == 0, "Guarded proof reported base-only bias work");
+				reused |= record[11] != 0;
+				skipped |= record[9] != 0;
+			}
+			Require(reused && skipped, "Region oracle cases did not exercise lazy reuse and contained clipping planes");
 		}
 	}
 
@@ -1277,6 +1316,7 @@ int main()
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 2, 4, false, 2);
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 4, 2, false, 2);
 			Fixture fixture(device.Get(), context.Get(), reversedDepth);
+			RetainsUnavailableRefinementSource(fixture);
 			ChecksProjectedRegionShortcuts(fixture);
 			ChecksGuardedVertexDepthProofs(fixture);
 			CoversVisibilityAndFailures(fixture);

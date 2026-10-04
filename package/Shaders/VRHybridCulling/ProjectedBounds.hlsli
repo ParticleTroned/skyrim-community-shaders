@@ -15,10 +15,14 @@ namespace ProjectedBounds
 	// Indexed invocation-private metadata avoids repeated SM5 struct selection in each region.
 	static float4 FaceRectangles[6];
 	static float FaceNearestDepth[6];
+	static uint PlaneKeys[4];
+	static float3 PlaneNormals[4];
+	static float3 PlaneMagnitudes[4];
 
 	/// Requires all eight vertices to be initialized for the current eye.
 	void PrepareFaces()
 	{
+		[unroll] for (uint slot = 0; slot < 4; ++slot) PlaneKeys[slot] = 0xffffffff;
 		[unroll] for (uint face = 0; face < 6; ++face)
 		{
 			uint4 corners = Faces[face];
@@ -46,19 +50,22 @@ namespace ProjectedBounds
 
 	/// Proves a triangle's bounding-rectangle overlap hidden; uncertainty needs exact clipping.
 	/// Requires finite vertices in [0,16384] pixels/[0,1] depth and validated region/depth/bias inputs.
-	bool PlaneProvesOccluded(float3 a, float3 b, float3 c, float2 minimumPixel, float2 maximumPixel, float depth, float guardedBias)
+	void BuildPlane(float3 a, float3 b, float3 c, out float3 normal, out float3 crossMagnitude)
 	{
-		float2 minimumRegion = max(minimumPixel, min(a.xy, min(b.xy, c.xy)));
-		float2 maximumRegion = min(maximumPixel, max(a.xy, max(b.xy, c.xy)));
-		if (any(minimumRegion > maximumRegion))
-			return false;
-
 		precise float3 firstEdge = b - a;
 		precise float3 secondEdge = c - a;
 		precise float3 firstProducts = firstEdge.yzx * secondEdge.zxy;
 		precise float3 secondProducts = firstEdge.zxy * secondEdge.yzx;
-		precise float3 normal = firstProducts - secondProducts;
-		precise float3 crossMagnitude = abs(firstProducts) + abs(secondProducts);
+		precise float3 computedNormal = firstProducts - secondProducts;
+		precise float3 computedMagnitude = abs(firstProducts) + abs(secondProducts);
+		normal = computedNormal;
+		crossMagnitude = computedMagnitude;
+	}
+
+	bool PreparedPlaneProvesOccluded(float3 a, float3 normal, float3 crossMagnitude, float2 minimumRegion, float2 maximumRegion, float depth, float guardedBias)
+	{
+		if (any(minimumRegion > maximumRegion))
+			return false;
 		// 64 float unit roundoffs cover the cross/residual chain.
 		// The floor covers subnormals amplified by the admitted 16384-pixel bounds.
 		const float roundoffFactor = 64.0 / 16777216.0;
@@ -80,6 +87,14 @@ namespace ProjectedBounds
 		precise float residualError = roundoffFactor * roundoffScale + roundoffFloor;
 		// The rectangle contains every covered triangle point, so its minimum is a conservative bound.
 		return isfinite(residual) && isfinite(residualError) && residual > residualError;
+	}
+
+	bool PlaneProvesOccluded(float3 a, float3 b, float3 c, float2 minimumPixel, float2 maximumPixel, float depth, float guardedBias)
+	{
+		float3 normal, magnitude;
+		BuildPlane(a, b, c, normal, magnitude);
+		return PreparedPlaneProvesOccluded(a, normal, magnitude, max(minimumPixel, min(a.xy, min(b.xy, c.xy))),
+			min(maximumPixel, max(a.xy, max(b.xy, c.xy))), depth, guardedBias);
 	}
 
 	bool OccludedInRegion(float2 minimumPixel, float2 maximumPixel, float depth, float bias HIZ_DIAGNOSTIC_PARAMETERS)
@@ -108,7 +123,20 @@ namespace ProjectedBounds
 					continue;
 				if (HasUnresolvedVertex(a, b, c, minimumPixel, maximumPixel, depth, guardedBias))
 					return false;
-				if (PlaneProvesOccluded(a, b, c, minimumPixel, maximumPixel, depth, guardedBias)) {
+				uint planeKey = face * 2 + triangleIndex;
+				uint planeSlot = planeKey & 3;
+				if (PlaneKeys[planeSlot] != planeKey) {
+					float3 normal, magnitude;
+					BuildPlane(a, b, c, normal, magnitude);
+					PlaneNormals[planeSlot] = normal;
+					PlaneMagnitudes[planeSlot] = magnitude;
+					PlaneKeys[planeSlot] = planeKey;
+					HIZ_COUNT_PLANE_BUILD;
+				} else {
+					HIZ_COUNT_PLANE_REUSE;
+				}
+				if (PreparedPlaneProvesOccluded(a, PlaneNormals[planeSlot], PlaneMagnitudes[planeSlot],
+						max(minimumPixel, minimumTriangle), min(maximumPixel, maximumTriangle), depth, guardedBias)) {
 					HIZ_COUNT_PLANE_PROOF;
 					continue;
 				}
@@ -127,6 +155,17 @@ namespace ProjectedBounds
 					bool lower = (plane & 1) == 0;
 					float boundary = lower ? minimumPixel[axis] : maximumPixel[axis];
 					float sign = lower ? 1.0 : -1.0;
+					// Check interpolated survivors too: their rounded coordinates can leave the original extent.
+					if (lower ? minimumTriangle[axis] >= boundary : maximumTriangle[axis] <= boundary) {
+						bool contained = true;
+						[loop] for (uint index = 0; index < count; ++index)
+							contained = contained && sign * (polygon[polygonBase + index][axis] - boundary) >= 0.0;
+						if (contained) {
+							HIZ_COUNT_CLIP_SKIP;
+							continue;
+						}
+					}
+					HIZ_COUNT_CLIP_PLANE;
 					uint outputBase = polygonBase ^ 8;
 					uint outputCount = 0;
 					float3 previous = polygon[polygonBase + count - 1];

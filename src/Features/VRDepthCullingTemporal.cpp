@@ -365,6 +365,9 @@ namespace VRDepthCullingTemporal
 					});
 #endif
 					RecoverHighRiskObjects(a_culler);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					VRHybridCulling::CompleteMatchedRecovery(a_culler, g_cullingEpoch.load(std::memory_order_acquire));
+#endif
 				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -399,6 +402,10 @@ namespace VRDepthCullingTemporal
 					return;
 				}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+				if (g_insideOwnedDownscale && !g_replayNativeDownscale && a_effect == 100 && static_cast<std::uint32_t>(a_source) == 7 && a_depthSource &&
+					g_cullingEnabled.load(std::memory_order_acquire) && (g_policyEpoch.load(std::memory_order_acquire) & 1u) == 0 &&
+					VRHybridCulling::IsMatchedDiagnosticsActive())
+					(void)VRHybridCulling::Prepare(g_cullingEpoch.load(std::memory_order_acquire));
 				const VRDepthCullingTelemetryPolicy::WriterScope telemetry(g_telemetryGate);
 				if (telemetry) {
 					CS_GPU_PASS_SELECT(g_replayNativeDownscale, "VRDepthCulling::ReplayDownscale", "VRDepthCulling::NativeDownscale");
@@ -415,6 +422,18 @@ namespace VRDepthCullingTemporal
 		{
 			static void thunk(RE::BSImagespaceShader* a_shader, std::uint32_t a_param)
 			{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (!g_suppressedDownscale && g_cullingEnabled.load(std::memory_order_acquire) && VRHybridCulling::IsMatchedDiagnosticsActive()) {
+					VRHybridCulling::DispatchMatched(a_shader, g_cullingEpoch.load(std::memory_order_acquire));
+					{
+						const VRDepthCullingTelemetry::Scope telemetry(g_nativeProducerTiming, g_telemetryGate);
+						CS_GPU_PASS("VRDepthCulling::NativeProducer");
+						func(a_shader, a_param);
+					}
+					CaptureProducerPose();
+					return;
+				}
+#endif
 				VRHybridCullingLifecycle::RunProducer(g_suppressedDownscale, [&] { return g_cullingEnabled.load(std::memory_order_acquire) && g_mode.load(std::memory_order_acquire) == Mode::Hybrid &&
 					                                                                      VRHybridCulling::Dispatch(a_shader, g_cullingEpoch.load(std::memory_order_acquire)); }, [] {
 						g_replayNativeDownscale = true;

@@ -200,13 +200,32 @@ and reserved `faceBiasOnlyProofs` / `triangleBiasOnlyProofs` fields, which
 remain zero with guarded proofs. Plane and clip totals measure
 intermediate work events, not independently recovered object rejections. Disable diagnostics for frame-time and GPU comparisons.
 
+`clipPlanes` and `skippedClipPlanes` separate executed clipping planes
+from planes containing every current survivor. `planeBuilds` / `planeReuses`
+measure the four-entry invocation-private lazy plane cache. `refinedCells`,
+`sourcePixels`, `resolvedCells` and `sourceWitnesses` identify selective
+original-depth work. Pyramid and source reads share the 64-read eye budget;
+refinement preserves the configured guard and strict depth allowance.
+
+Enable `set_depth_culling_matched_diagnostics_enabled` in Advanced or
+Legacy with telemetry enabled, then reset counters. The diagnostic path
+runs Hi-Z into private visibility/staging buffers while native culling
+continues to own displayed results. `hybrid.matchedDiagnostics` reports
+four outcome buckets before and after native recovery, and decisive reasons
+for native-only retention. Both paths use the same validated bounds batch,
+frame, source identity and camera history. Compare `snapshotBatches` with
+accepted `batches`; a busy/superseded snapshot may lag. Dropped/failed
+readbacks are explicit and never fabricate matches. These are repeated
+candidate records, not unique scene objects or draw counts. Disable this
+switch and traversal diagnostics before timing either backend.
+
 Viewport reasons are `viewport_offscreen` for wholly outside bounds,
 `viewport_partial` for original bounds crossing the viewport, and
 `viewport_guard` when only the guarded extent reaches outside. All three
 retain visibility. Each retained object contributes one decisive reason;
 an untested second eye is recorded separately. Freeze telemetry before
 using totals and report diagnosed-object coverage and missing batches.
-The 32-byte diagnostic records, their resources, extra comparisons and
+The 64-byte diagnostic records, their resources, extra comparisons and
 readback are absent from production builds.
 
 `status.depthCullingTemporal.hybridInstalled` identifies
@@ -215,6 +234,16 @@ them retains native testing and Advanced recovery. Check effective culling enabl
 since selecting Hybrid does not prove every frame used it. The profiler
 labels `VRHybridCulling::BuildHierarchy` and
 `VRHybridCulling::Visibility` identify its GPU work.
+
+The combined contained-plane/cache/refinement iteration passes 12/12
+focused tests in 24.99 seconds (`validate-proof-ab.ps1`), including WARP
+pixel/ray checks in 24.74 seconds. Four strict FXC permutations pass.
+The normal shader uses 27 temporaries and 144 indexed entries, versus
+23/132 in the last measured build; hardware occupancy and performance are
+unmeasured. Selective refinement reuses the same region tester and polygon
+storage. Production forced-header syntax/preprocessing checks exclude the
+new shadow machinery. The universal DevBench Release DLL and full AIO
+verification pass. No new runtime or motion qualification is claimed.
 
 ## Validation and acceptance
 

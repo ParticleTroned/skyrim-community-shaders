@@ -79,6 +79,9 @@ namespace VRHybridCulling
 		VRHybridCullingDiagnostics::Totals traversal{};
 		std::uint64_t traversalBatches = 0, traversalNotReadyBatches = 0, traversalFailedBatches = 0;
 		std::uint64_t traversalDiscardedBatches = 0;
+		bool matchedDiagnosticsEnabled = false, matchedSnapshotAvailable = false, matchedSnapshotBusy = false;
+		std::uint64_t matchedSubmittedBatches = 0, matchedBatches = 0, matchedDroppedBatches = 0, matchedFailedBatches = 0;
+		VRHybridCullingDiagnostics::MatchedTotals matched{};
 	};
 #endif
 
@@ -95,6 +98,14 @@ namespace VRHybridCulling
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Select the extra shader/readback instrumentation independently of GPU profiling. */
 	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept;
+	/** Enable diagnostic shadow testing while native culling continues to own displayed visibility. */
+	void SetMatchedDiagnosticsEnabled(bool a_enabled) noexcept;
+	/** Return whether the telemetry gate admits native/Hi-Z shadow comparisons. */
+	[[nodiscard]] bool IsMatchedDiagnosticsActive() noexcept;
+	/** Test the prepared native batch into private diagnostic buffers. */
+	void DispatchMatched(void* a_culler, std::uint64_t a_epoch);
+	/** Publish matched outcomes after Advanced recovery, without changing native results. */
+	void CompleteMatchedRecovery(void* a_culler, std::uint64_t a_epoch);
 	/** Read current backend state and gated measurements without owning the render context. */
 	[[nodiscard]] Status GetStatus(std::uint64_t a_epoch, bool a_selected, bool a_enabled, bool a_installed);
 	/** Reset measurements while the shared depth-culling telemetry gate is exclusively held. */

@@ -21,6 +21,16 @@ criteria are retained. Four strict shader permutations and 12/12 focused
 tests pass. The earlier
 vertex-array copy is already removed. See the
 [cost analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md).
+The next test build adds contained-plane skips, a four-entry lazy
+triangle-plane cache, and selective source-pixel refinement within the
+existing 64-read eye budget. DevBench shadow diagnostics compare the same
+native-indexed batch before and after recovery while native visibility
+continues to drive rendering. Its performance has not been measured.
+The combined build passes 12/12 focused tests, including WARP pixel/ray
+oracles and matched-outcome validation. Four strict shader permutations,
+production diagnostic-isolation checks, the universal Release DLL and
+full 371-file AIO verification pass. Per user request, the test archive was
+built from the validated working tree before this implementation commit.
 Advanced remains default. Motion/lifecycle and SE/AE qualification remain
 open. PBR grass, grass optimization and Reverse Z remain later PRs.
 
@@ -661,25 +671,27 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental and pursue guarded 2x2 only. The indexed-face and
-alternating-clip build still trails Advanced. Target safe clipping-plane
-skips next; keep existing guards and full clipping for uncertain boundaries.
-Existing GPU scope timers and rejection counters suffice for the next
-performance decision. Keep traversal/shadow diagnostics separate from timing.
+Keep PR104 experimental and pursue guarded 2x2 only. Test the combined
+contained-plane skip, four-entry lazy plane cache and source-pixel
+refinement build against Advanced at noon. Original vertices and rounded
+polygon survivors must all lie inside a skipped clipping plane. The cache
+is initialized per eye and populated only after the cheap triangle tests.
+Unresolved reduced cells use original-depth pixels with unchanged spatial
+and depth guards; all reads share the existing 64-read eye budget.
 
-The [ordered investigation](vr-hybrid-culling-guarded2-analysis-2026-10-04.md#ordered-follow-up)
-retains matched native/Hi-Z outcomes and selective source-depth refinement
-for the rejection gap. If bounds cost still dominates, measure clip-plane
-work before skipping already-containing planes or caching repeated planes.
-Eagerly preparing all twelve planes would exceed the observed plane-attempt
-count by more than threefold. Shared quad proofs need numerical residual
-bounds before replacing the guarded triangle tests. Distinguish
-useful hidden geometry from zero-fragment/offscreen counts. Do not raise
-the read budget: every observed budget exit could recover at most 0.278
-percentage points in the earlier diagnostic cohort. No measured occupancy
-or spilling diagnosis exists. Preserve masks, guards, depth allowance and
-stereo/history safety; require a repeatable improvement and motion/lifecycle
-qualification before promotion.
+Use `set_depth_culling_matched_diagnostics_enabled` in Advanced or Legacy,
+with telemetry enabled and counters reset, to compare identical validated
+batch indices. Private Hi-Z results never overwrite native visibility.
+Compare outcomes before and after Advanced recovery and inspect decisive
+native-only retention reasons. Nonblocking or rejected readbacks are
+reported as dropped/failed batches. Disable shadow and traversal diagnostics
+before all performance measurements. Neither matched outcomes nor static
+shader tests qualify motion/lifecycle correctness.
+
+Inspect clipping-plane skips, lazy plane builds/reuses, source pixels and
+resolved cells in the separate diagnostic phase. Do not infer a GPU speed
+improvement from reduced arithmetic or recovered proofs. The last measured
+baseline remains source `608aacfd9`; no new in-game comparison is claimed.
 
 PBR grass remains the next independent feature PR, followed by grass
 optimization and Reverse Z. No render-scale qualification is claimed.

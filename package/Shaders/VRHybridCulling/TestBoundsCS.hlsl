@@ -8,6 +8,7 @@ struct OBBTransform
 
 StructuredBuffer<OBBTransform> ObjectBounds : register(t0);
 Texture2DArray<float> DepthPyramid : register(t1);
+Texture2D<float> SourceDepth : register(t2);
 RWStructuredBuffer<uint> Visibility : register(u0);
 #ifdef CSX_HIZ_DIAGNOSTICS
 RWStructuredBuffer<HiZTraversalDiagnostic> TraversalDiagnostics : register(u1);
@@ -30,6 +31,13 @@ cbuffer TestConstants : register(b0)
 bool IsValidPyramidDepth(float depth)
 {
 	return isfinite(depth) && depth >= 0.0 && depth <= 1.0 && (DepthOrder::Reversed || depth != 0.0);
+}
+
+/// Untrusted source pixels cannot provide occlusion evidence, even in the reversed test permutation.
+float ReadSourceDepth(uint2 pixel, uint eye)
+{
+	float depth = SourceDepth.Load(int3(pixel + EyeRect[eye].xy, 0));
+	return isfinite(depth) && depth > 0.0 && depth <= 1.0 ? depth : DepthOrder::Far();
 }
 
 bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
@@ -134,8 +142,17 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	}
 	if (!IsValidPyramidDepth(witnessDepth))
 		HIZ_VISIBLE(HIZ_INVALID_INPUT);
-	if (!DepthOrder::IsBehindWithBias(nearestDepth, witnessDepth, DepthBias))
-		HIZ_VISIBLE(HIZ_NEAREST_UNRESOLVED);
+	if (!DepthOrder::IsBehindWithBias(nearestDepth, witnessDepth, DepthBias)) {
+		if (SourceReduction == 1)
+			HIZ_VISIBLE(HIZ_NEAREST_UNRESOLVED);
+		// A reduced witness can include unrelated holes; test the actual vertex pixel before retaining.
+		float sourceWitness = ReadSourceDepth((uint2)floor(nearestVertexPixel), eye);
+		++depthLoads;
+		HIZ_COUNT_DEPTH;
+		HIZ_COUNT_SOURCE_WITNESS;
+		if (!DepthOrder::IsBehindWithBias(nearestDepth, sourceWitness, DepthBias))
+			HIZ_VISIBLE(HIZ_NEAREST_UNRESOLVED);
+	}
 
 	ProjectedBounds::PrepareFaces();
 
@@ -144,6 +161,8 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	const uint maximumDepthLoads = 64;
 	uint stack[stackCapacity];
 	uint pending = 0;
+	uint sourcePending = 0;
+	uint2 sourceOrigin = 0;
 	const uint initialMip = mip;
 	const uint2 rootMinimum = minimumCell;
 	[unroll] for (uint rootY = 0; rootY < 2; ++rootY)
@@ -157,38 +176,71 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		}
 	}
 
-	[loop] while (pending != 0)
+	[loop] while (pending != 0 || sourcePending != 0)
 	{
-		uint node = stack[--pending];
-		uint2 cell = uint2(node & 4095, (node >> 12) & 4095);
-		uint nodeMip = node >> 24;
+		bool sourcePixel = sourcePending != 0;
+		uint2 cell;
+		uint nodeMip = 0;
 		float depth;
-		if (nodeMip == initialMip) {
-			uint2 root = cell - rootMinimum;
-			depth = coarseDepths[root.y * 2 + root.x];
-		} else if (nodeMip == 0 && all(cell == witnessCell)) {
-			depth = witnessDepth;
-		} else {
+		if (sourcePixel) {
+			--sourcePending;
+			cell = sourceOrigin + uint2(sourcePending % SourceReduction, sourcePending / SourceReduction);
+			if (any(cell >= EyeRect[eye].zw))
+				HIZ_VISIBLE(HIZ_FINEST_UNRESOLVED);
 			if (depthLoads == maximumDepthLoads)
 				HIZ_VISIBLE(HIZ_DEPTH_BUDGET);
-			depth = DepthPyramid.Load(int4(cell, eye, nodeMip));
+			depth = ReadSourceDepth(cell, eye);
 			++depthLoads;
 			HIZ_COUNT_DEPTH;
+			HIZ_COUNT_SOURCE_PIXEL;
+		} else {
+			uint node = stack[--pending];
+			cell = uint2(node & 4095, (node >> 12) & 4095);
+			nodeMip = node >> 24;
+			if (nodeMip == initialMip) {
+				uint2 root = cell - rootMinimum;
+				depth = coarseDepths[root.y * 2 + root.x];
+			} else if (nodeMip == 0 && all(cell == witnessCell)) {
+				depth = witnessDepth;
+			} else {
+				if (depthLoads == maximumDepthLoads)
+					HIZ_VISIBLE(HIZ_DEPTH_BUDGET);
+				depth = DepthPyramid.Load(int4(cell, eye, nodeMip));
+				++depthLoads;
+				HIZ_COUNT_DEPTH;
+			}
 		}
 		if (!IsValidPyramidDepth(depth))
 			HIZ_VISIBLE(HIZ_INVALID_INPUT);
-		if (DepthOrder::IsBehindWithBias(nearestDepth, depth, DepthBias))
+		if (DepthOrder::IsBehindWithBias(nearestDepth, depth, DepthBias)) {
+			if (sourcePixel && sourcePending == 0) {
+				HIZ_COUNT_RESOLVED_CELL;
+			}
 			continue;
+		}
 
-		float cellSize = SourceReduction << nodeMip;
+		float cellSize = sourcePixel ? 1 : SourceReduction << nodeMip;
 		float margin = PixelGuardBand + 1.0 / 32.0;
 		float2 regionMinimum = float2(cell) * cellSize - margin;
 		float2 regionMaximum = (float2(cell) + 1.0) * cellSize + margin;
 		HIZ_COUNT_REGION;
-		if (ProjectedBounds::OccludedInRegion(regionMinimum, regionMaximum, depth, DepthBias HIZ_DIAGNOSTIC_ARGUMENT))
+		if (ProjectedBounds::OccludedInRegion(regionMinimum, regionMaximum, depth, DepthBias HIZ_DIAGNOSTIC_ARGUMENT)) {
+			if (sourcePixel && sourcePending == 0) {
+				HIZ_COUNT_RESOLVED_CELL;
+			}
 			continue;
-		if (nodeMip == 0)
+		}
+		if (sourcePixel)
 			HIZ_VISIBLE(HIZ_FINEST_UNRESOLVED);
+		if (nodeMip == 0) {
+			if (SourceReduction == 1)
+				HIZ_VISIBLE(HIZ_FINEST_UNRESOLVED);
+			// Reuse the same region tester and polygon storage for selectively expanded source pixels.
+			sourceOrigin = cell * SourceReduction;
+			sourcePending = SourceReduction * SourceReduction;
+			HIZ_COUNT_REFINED_CELL;
+			continue;
+		}
 
 		--nodeMip;
 		uint2 childMinimum = max(cell * 2, baseMinimumCell >> nodeMip);
@@ -219,7 +271,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 #ifdef CSX_HIZ_DIAGNOSTICS
 	uint diagnosticCount, diagnosticStride;
 	TraversalDiagnostics.GetDimensions(diagnosticCount, diagnosticStride);
-	if (objectIndex >= diagnosticCount || diagnosticStride != 32)
+	if (objectIndex >= diagnosticCount || diagnosticStride != 64)
 		return;
 	HiZTraversalDiagnostic invalidDiagnostic = (HiZTraversalDiagnostic)0;
 	invalidDiagnostic.traversal.x = HIZ_INVALID_INPUT;
@@ -230,6 +282,8 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	ObjectBounds.GetDimensions(inputCount, inputStride);
 	uint pyramidWidth, pyramidHeight, pyramidLayers, pyramidMips;
 	DepthPyramid.GetDimensions(0, pyramidWidth, pyramidHeight, pyramidLayers, pyramidMips);
+	uint sourceWidth, sourceHeight;
+	SourceDepth.GetDimensions(sourceWidth, sourceHeight);
 	if (ObjectCount > 4096 || objectIndex >= inputCount || inputStride != 64 || resultStride != 4 ||
 		pyramidLayers != 2 || MipCount == 0 || MipCount != pyramidMips || MipCount > 12 ||
 		any(PyramidSize != uint2(pyramidWidth, pyramidHeight)) || any(PyramidSize == 0) ||
@@ -238,6 +292,8 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		!isfinite(DepthBias) || DepthBias < 8.0 / 16777216.0 || DepthBias > 1.0 ||
 		!isfinite(PixelGuardBand) || PixelGuardBand < 1.0 || PixelGuardBand > 16384.0)
 		return;
+	[unroll] for (uint eye = 0; eye < 2; ++eye) if (any(EyeRect[eye].zw == 0) || any(EyeRect[eye].zw > uint2(sourceWidth, sourceHeight)) ||
+													any(EyeRect[eye].xy > uint2(sourceWidth, sourceHeight) - EyeRect[eye].zw)) return;
 
 	float4x4 transform = ObjectBounds[objectIndex].transform;
 	[unroll] for (uint row = 0; row < 4; ++row) if (!all(isfinite(transform[row]))) return;
@@ -256,6 +312,8 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	}
 	diagnostic.traversal = uint4(firstEye.traversal.x | (diagnostic.traversal.x << 8), firstEye.traversal.yzw + diagnostic.traversal.yzw);
 	diagnostic.proofs += firstEye.proofs;
+	diagnostic.planeWork += firstEye.planeWork;
+	diagnostic.refinement += firstEye.refinement;
 	TraversalDiagnostics[objectIndex] = diagnostic;
 #else
 	[branch] if (!IsOccludedInEye(transform, 0)) return;

@@ -275,12 +275,44 @@ namespace
 					status.at("hybrid").at("acceptedOccludedObjects") == 100,
 			"Native recovery or Hybrid result ownership was lost in serialization");
 	}
+
+	void ValidatesMatchedOutcomesAndNewWork()
+	{
+		using namespace VRHybridCullingDiagnostics;
+		const std::array records{ Record{ 8, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
+			Record{ 6, 12, 3, 8, 1, 2, 0, 0, 3, 4, 2, 1, 1, 4, 0, 0 }, Record{ 257, 8, 0, 0 }, Record{ 257, 8, 0, 0 } };
+		const std::array<std::uint32_t, 4> hiz{ 1, 1, 0, 0 }, before{ 1, 0, 1, 0 }, after{ 1, 0, 1, 1 };
+		const auto totals = SummarizeMatched(records, hiz, before, after);
+		Require(totals && totals->beforeRecovery == std::array<std::uint64_t, 4>{ 1, 1, 1, 1 } &&
+					totals->afterRecovery == std::array<std::uint64_t, 4>{ 1, 1, 2, 0 } && totals->nativeOnlyReasons[6] == 1 &&
+					totals->hizOnlyReasons[1] == 2 && totals->work.sourcePixels == 4 && totals->work.planeReuses == 1,
+			"Matched outcomes lost native recovery, decisive retention reasons or refinement work");
+		Require(!SummarizeMatched(records, hiz, std::span(before).first(3), after), "Mismatched cohort sizes were accepted");
+		auto invalidVisibility = after;
+		invalidVisibility[3] = 2;
+		Require(!SummarizeMatched(records, hiz, before, invalidVisibility), "Invalid native visibility was accepted");
+		Require(!SummarizeMatched(records, before, before, after), "Misattributed shader diagnostics were accepted");
+		VRHybridCulling::Status hybrid{};
+		hybrid.matched = *totals;
+		hybrid.matchedDiagnosticsEnabled = true;
+		hybrid.matchedBatches = 1;
+		hybrid.matchedDroppedBatches = 2;
+		const auto status = MenuDepthCullingDiagnostics::BuildStatus({}, hybrid).at("hybrid").at("matchedDiagnostics");
+		Require(status.at("afterRecovery").at("hiz_only_hidden") == 2 && status.at("nativeOnlyReasons").at("finest_unresolved") == 1 &&
+					status.at("sourcePixels") == 4 && status.at("droppedBatches") == 2,
+			"Matched diagnostic serialization lost outcomes or discarded-readback evidence");
+		for (const auto invalid : { Record{ 257, 8, 1, 1, 0, 1, 0, 0, 5, 0 },
+				 Record{ 257, 8, 1, 1, 0, 1, 0, 0, 0, 0, 2, 0 }, Record{ 257, 8, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9 },
+				 Record{ 257, 8, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, Record{ 257, 8, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 } })
+			Require(!Summarize(std::array{ invalid }, std::array<std::uint32_t, 1>{ 0 }), "Malformed new work counters were accepted");
+	}
 }
 
 int main()
 {
 	try {
 		ValidatesTraversalRecords();
+		ValidatesMatchedOutcomesAndNewWork();
 		ValidatesProofCountersAndViewportReasons();
 		PreservesInactiveAndFallbackEvidence();
 		DistinguishesObservedEngineStateFromDesiredPolicy();

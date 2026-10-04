@@ -3175,9 +3175,53 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(
+        menu_depth_culling_diagnostics_test
+        MenuDepthCullingDiagnostics
+        tests/menu_depth_culling_diagnostics_test.cpp
+    )
+    target_compile_definitions(
+        menu_depth_culling_diagnostics_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    target_link_libraries(
+        menu_depth_culling_diagnostics_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
         vr_depth_culling_temporal_policy_test
         VRDepthCullingTemporalPolicy
         tests/vr_depth_culling_temporal_policy_test.cpp
+    )
+    add_controller_test(
+        vr_hybrid_culling_policy_test
+        VRHybridCullingPolicy
+        tests/vr_hybrid_culling_policy_test.cpp
+    )
+    add_controller_test(
+        vr_hybrid_culling_history_test
+        VRHybridCullingHistory
+        tests/vr_hybrid_culling_history_test.cpp
+    )
+    add_d3d_shader_test(
+        vr_hybrid_culling_shader_test
+        VRHybridCullingShader
+        tests/vr_hybrid_culling_shader_test.cpp
+    )
+    set_tests_properties(
+        VRHybridCullingShader
+        PROPERTIES TIMEOUT 180
+    )
+    target_compile_definitions(
+        vr_hybrid_culling_shader_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_sources(
+        vr_hybrid_culling_shader_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        vr_hybrid_culling_shader_test
+        PRIVATE dxguid.lib spdlog::spdlog
     )
     add_controller_test(
         vr_wand_interaction_policy_test

@@ -113,13 +113,16 @@ namespace
 		       VRDepthCullingTemporal::SelectMode(true) == Mode::Legacy &&
 		       static_cast<int>(Mode::Balanced) == 0 &&
 		       static_cast<int>(Mode::Legacy) == 2 &&
+		       static_cast<int>(Mode::Hybrid) == 3 &&
 		       VRDepthCullingTemporal::NormalizeMode(Mode::Balanced) == Mode::Balanced &&
 		       VRDepthCullingTemporal::NormalizeMode(Mode::Legacy) == Mode::Legacy &&
+		       VRDepthCullingTemporal::NormalizeMode(Mode::Hybrid) == Mode::Hybrid &&
 		       VRDepthCullingTemporal::NormalizeMode(static_cast<Mode>(1)) == Mode::Balanced &&
 		       VRDepthCullingTemporal::NormalizeMode(static_cast<Mode>(-1)) == Mode::Balanced &&
-		       VRDepthCullingTemporal::NormalizeMode(static_cast<Mode>(3)) == Mode::Balanced &&
+		       VRDepthCullingTemporal::NormalizeMode(static_cast<Mode>(4)) == Mode::Balanced &&
 		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Balanced)) == "balanced" &&
-		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Legacy)) == "legacy";
+		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Legacy)) == "legacy" &&
+		       std::string_view(VRDepthCullingTemporal::GetModeName(Mode::Hybrid)) == "hybrid";
 	}
 
 	static_assert(CoversMutuallyExclusiveModes());

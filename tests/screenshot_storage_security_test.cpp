@@ -1,6 +1,5 @@
 // One translation unit exposes private path normalization to the custody fixtures.
 #include "screenshot_storage_security_test.h"
-#include "Features/ScreenshotStorageSecurity.cpp"
 
 #include <iostream>
 

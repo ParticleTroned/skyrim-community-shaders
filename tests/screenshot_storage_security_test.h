@@ -1,4 +1,5 @@
-#include "Features/ScreenshotStorageSecurity.h"
+// The fixtures share the production translation unit to inspect private path normalization.
+#include "Features/ScreenshotStorageSecurity.cpp"
 
 #include <Windows.h>
 

@@ -7,12 +7,14 @@ Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
 The [adaptive comparison and GPU analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record the latest repeated comparison with Advanced. Nearest-vertex Hybrid
-costs 7.9% more CPU time and 6.7% more GPU time, rejecting 33.1% of
-candidate records versus 56.3%. Bounds testing consumes 89.1-89.9% of
-measured Hybrid GPU work. Motion and lifecycle qualification remain open.
-The next experiment preserves finer 2x2 depth; its speed and rejection
-impact remain unmeasured.
+record the latest repeated comparison on the finer 2x2-depth build:
+Hybrid costs 12.6% more CPU time and 14.9% more GPU time, rejecting 40.1%
+of candidate records versus Advanced's 59.1%. Measured culling GPU scopes
+average 0.775 ms for Hybrid and 0.133 ms for native Advanced; bounds
+testing consumes 91.3-91.7% of Hybrid GPU work. Runtime counters show no
+Hybrid fallback or invalidated history. Different views prevent an
+isolated comparison with the preceding build. Motion and lifecycle
+qualification remain open.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -73,7 +75,8 @@ base remains valid.
 At 1344x1492 per eye, finer depth adds 8 MiB of logical hierarchy storage.
 It can recover occluder detail but adds hierarchy and potential traversal
 work. The selected reduction and logical bytes remain observable through
-the existing DevBench source snapshot. In-game benefit is unmeasured.
+the existing DevBench source snapshot. The latest comparison confirms
+the finer layout is active, but performance still trails Advanced.
 
 `TestBoundsCS` projects all eight OBB corners using each eye's actual
 matrix and camera adjustment. Camera adjustment is subtracted from the

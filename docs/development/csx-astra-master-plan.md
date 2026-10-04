@@ -2,22 +2,33 @@
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
 The [latest comparison and optimization analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record two noon timing repeats per method on the nearest-vertex build:
-Hybrid costs 7.9% more CPU time and 6.7% more GPU time than Advanced,
-with 33.1% candidate rejection versus 56.3%. Baseline drift and CPU repeat
-variance remain visible; parity is not established.
-Two 300-frame GPU captures attribute 89.1-89.9% of Hybrid GPU work to
-bounds testing (0.53 ms). Motion/lifecycle qualification remains open.
-Advanced remains default. PBR grass, grass optimization and Reverse Z
-remain separate later PRs.
+record two settled noon timing repeats per method on the finer-depth build:
+Hybrid costs 12.6% more CPU time and 14.9% more GPU time than Advanced,
+with 40.1% candidate rejection versus 59.1%. Both Hybrid GPU windows exceed
+both Advanced windows. The initial settling baseline was replaced.
+Different player position and view prevent a cross-build regression claim.
 
-The next bounded experiment preserves 2x2 source depth, using the existing
-4x4 reduction when needed to retain the source and pyramid size limits.
-This targets lost occluder detail; it adds 8 MiB of logical hierarchy
-storage at the measured resolution and may increase traversal work.
-The 64-read budget, bias, stereo agreement and history checks remain.
-Speed and rejection rate need a fresh in-game comparison. Skyrim was
-shut down cleanly after measurements and before implementation.
+Two 300-frame GPU captures per method show culling scope means of
+0.775 ms for Hybrid and 0.133 ms for native Advanced. Bounds testing is
+91.3-91.7% of Hybrid GPU work. The earlier report omitted existing native
+GPU timers; the current comparison includes them. Equal rejection alone
+would not establish parity.
+
+Runtime snapshots confirm finer 2x2 reduction and its additional 8 MiB of
+logical hierarchy storage. No Hybrid fallback, invalidated or unreadable
+batches occurred in the counter windows. Projected-face refinement already
+runs; clip/viewport handling, reduced depth, bias and the unchanged
+64-read budget can still retain candidates. Their proportions require the
+existing traversal diagnostic control, which is absent from this chat's
+stale direct tool inventory. Refresh Codex before collecting those counters;
+no new AIO is indicated.
+
+The next optimization should follow that reason/work breakdown, with a
+focused review of interpolation allowance on non-interpolating proofs.
+Native/Hybrid comparisons on the same submitted batch remain proposed
+DevBench-only diagnostic work. Advanced remains default, and motion and
+lifecycle qualification remain open. PBR grass, grass optimization and
+Reverse Z remain separate later PRs.
 
 ## Scope and authority
 

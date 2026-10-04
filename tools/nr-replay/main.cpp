@@ -1,6 +1,7 @@
 #include "CharacterComputeSubrect.h"
 #include "CharacterMaskWorkPolicy.h"
 #include "D3D12Interop.h"
+#include "GpuCapture.h"
 #include "Runtime.h"
 #include "SourceTransport.h"
 #include "Utils/CryptoHash.h"
@@ -401,6 +402,32 @@ namespace
 		unsigned inputStorageHaloPixels = 0;
 		bool sharedInputs = false;
 	};
+	Variant CustomRegions(const std::string& encoded, const Eye& eye, unsigned mode)
+	{
+		Require(mode == 2, "custom regions require stateless C input");
+		const auto rectangles = Json::parse(encoded);
+		Require(rectangles.is_array() && !rectangles.empty() && rectangles.size() <= kMaximumRegionsPerEye,
+			"custom regions require 1..8 rectangles");
+		Variant variant{ "custom-regions", "packed_region_experiment", "immutable-owned-pixels", "static_reset", {}, {} };
+		variant.sharedInputs = true;
+		for (const auto& item : rectangles) {
+			Require(item.is_array() && item.size() == 4, "custom rectangle must be [x,y,width,height]");
+			for (const auto& coordinate : item)
+				Require(coordinate.is_number_unsigned() && coordinate.get<std::uint64_t>() <= 16384,
+					"custom rectangle coordinates must be unsigned integers <=16384");
+			const ComputeSubrect rect{ item[0].get<unsigned>(), item[1].get<unsigned>(), item[2].get<unsigned>(), item[3].get<unsigned>() };
+			Require(rect.width >= 64 && rect.height >= 64 && rect.Fits(eye.color.width, eye.color.height),
+				"custom rectangles must fit captured resources and have both extents >=64");
+			Require(rectangles.size() <= kDefaultRegionsPerEye || QualifiedExperimentalContextGeometry(rect),
+				"higher-count custom regions require the qualified 128-pixel extent floor");
+			for (const auto& previous : variant.rects)
+				Require(rect.baseX + rect.width <= previous.baseX || previous.baseX + previous.width <= rect.baseX ||
+							rect.baseY + rect.height <= previous.baseY || previous.baseY + previous.height <= rect.baseY,
+					"custom output ownership rectangles overlap");
+			variant.rects.push_back(rect);
+		}
+		return variant;
+	}
 	Json ApplyVariantInputStorage(TextureData& data, const ComputeSubrect& outputRect, unsigned width, unsigned height,
 		const Variant& variant, std::string_view resource)
 	{
@@ -665,7 +692,8 @@ namespace
 		return data;
 	}
 	Json RunCase(Session& session, const Variant& variant, const std::vector<Frame>& frames,
-		unsigned warmup, unsigned samples, Clock::time_point deadline, const std::filesystem::path& outputRoot, bool alternateSentinel)
+		unsigned warmup, unsigned samples, Clock::time_point deadline, const std::filesystem::path& outputRoot, bool alternateSentinel,
+		NrReplay::GpuCapture& capture)
 	{
 		const auto& first = frames.front();
 		const auto width = variant.crop.IsValid() ? variant.crop.width : first.eyes.front().color.width;
@@ -771,6 +799,10 @@ namespace
 					{ "gpuMicroseconds", nullptr }, { "evaluationGpuMicroseconds", Json::array() }, { "runtimeCalls", Json::array() },
 					{ "createdFeatureCount", 0 }, { "evaluationCount", 0 }, { "nonzeroEditPixels", 0 }, { "maximumAbsEdit", 0 } };
 				try {
+					const bool captureSample = capture.Enabled() && iteration == warmup;
+					sample["externalGpuCapture"] = captureSample;
+					if (captureSample)
+						capture.Begin(session.interop.Device());
 					if (variant.history == "cold_create")
 						session.Retire();
 					const auto memoryBefore = session.Memory();
@@ -896,7 +928,7 @@ namespace
 							sample["maskComposites"].push_back({ { "maskSelectedPixels", selected }, { "maskTotalPixels", rect.Area() },
 								{ "sha256", Hash(composite.bytes) }, { "nativeInputsUnmodified", true }, { "excludedFromGpuTiming", true } });
 						}
-						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage" || variant.axis == "source_transport" || variant.axis == "native_context_count" || variant.axis == "call_count") {
+						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage" || variant.axis == "source_transport" || variant.axis == "native_context_count" || variant.axis == "call_count" || variant.axis == "packed_region_experiment") {
 							const bool retainFullResource = variant.temporal && variant.axis != "capacity";
 							const auto retained = retainFullResource ? pixels : Crop(pixels, resources[i].rect);
 							const auto name = std::format("{}-{:03}-slot{}.bin", variant.id, iteration, resources[i].slot);
@@ -910,6 +942,8 @@ namespace
 					}
 					sample["nonzeroEditPixels"] = edits;
 					sample["maximumAbsEdit"] = maxEdit;
+					if (captureSample)
+						capture.End();
 					sample["elapsedCpuMicroseconds"] = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started).count();
 					if (!edits || !maxEdit) {
 						sample["success"] = false;
@@ -951,12 +985,15 @@ int wmain(int argc, wchar_t** argv)
 		{ "ngxHeaderSha256", kNgxHeaderHash }, { "streamlineCoreHeaderSha256", kSlHeaderHash }, { "streamlineSdkVersion", kSlVersion } };
 	result["buildIdentity"]["replaySourceSha256"] = Json::parse(kReplaySourceIdentityJson);
 	result["buildIdentity"]["ngxLibrarySha256"] = kNgxLibraryHash;
-	std::filesystem::path manifestPath, outputRoot, runtimeSource;
+	std::filesystem::path manifestPath, outputRoot, runtimeSource, renderdocPath;
 	unsigned samples = 8, warmup = 3, seconds = 180;
 	unsigned capacitySize = 128;
 	bool capacityTemporal = false;
 	bool alternateSentinel = false;
 	std::string onlyCase;
+	std::string customRects;
+	std::string captureLibraryHash;
+	std::unique_ptr<NrReplay::GpuCapture> capture;
 	bool validateOnly = false, validateStorage = false, inspectOnly = false;
 	bool ownsOutput = false;
 	try {
@@ -998,6 +1035,10 @@ int wmain(int argc, wchar_t** argv)
 				seconds = std::stoul(argument.string());
 			else if (option == L"--case")
 				onlyCase = argument.string();
+			else if (option == L"--rects")
+				customRects = argument.string();
+			else if (option == L"--renderdoc")
+				renderdocPath = argument;
 			else if (option == L"--capacity-size") {
 				const auto size = argument.string();
 				Require(size == "128" || size == "256" || size == "512" || size == "768", "capacity-size must be 128, 256, 512 or 768");
@@ -1009,6 +1050,10 @@ int wmain(int argc, wchar_t** argv)
 		Require(!inspectOnly || (!validateOnly && !validateStorage), "runtime inspection and input-only validation cannot be combined");
 		Require(capacitySize == 128 || (!inspectOnly && !validateStorage && (onlyCase == "capacity-full" || onlyCase == "capacity-compact")), "capacity-size requires an explicit capacity-full or capacity-compact case");
 		Require(!capacityTemporal || (!inspectOnly && !validateOnly && !validateStorage && (onlyCase == "capacity-full" || onlyCase == "capacity-compact")), "capacity-temporal requires an explicit native capacity case");
+		Require(customRects.empty() || (!inspectOnly && !validateStorage && !capacityTemporal && capacitySize == 128 && onlyCase.empty()),
+			"custom rects cannot be combined with another case or capacity/storage/inspection mode");
+		Require(renderdocPath.empty() || (!inspectOnly && !validateOnly && !validateStorage && (!onlyCase.empty() || !customRects.empty())),
+			"RenderDoc capture requires one explicit native case");
 		Require(samples >= 1 && samples <= 64 && warmup <= 32 && seconds >= 1 && seconds <= 600, "replay bounds: samples1..64 warmup0..32 seconds1..600");
 		Require(!std::filesystem::exists(outputRoot), "output directory already exists; preserve earlier evidence");
 		std::filesystem::create_directories(outputRoot);
@@ -1044,6 +1089,11 @@ int wmain(int argc, wchar_t** argv)
 		const auto control = Compare(first.color, first.output, { 0, 0, first.color.width, first.color.height });
 		Require(control.pixels && control.maximum > 0, "capture lacks known nonzero native NR edit control");
 		result["capturedControl"] = { { "nonzeroEditPixels", control.pixels }, { "maximumAbsEdit", control.maximum } };
+		std::vector<Variant> customVariants;
+		if (!customRects.empty()) {
+			customVariants.push_back(CustomRegions(customRects, first, frames.front().metadata.at("mode").get<unsigned>()));
+			result["customRegions"] = Json::parse(customRects);
+		}
 		if (validateOnly || validateStorage) {
 			if (validateStorage)
 				result["inputStorageValidation"] = ValidateInputStorage(frames, control, onlyCase);
@@ -1053,6 +1103,12 @@ int wmain(int argc, wchar_t** argv)
 		}
 		const auto deadline = Clock::now() + std::chrono::seconds(seconds);
 		StageRuntime(runtimeSource, expectedRuntime, manifest.at("runtime").at("sha256").get<std::string>());
+		if (!renderdocPath.empty()) {
+			captureLibraryHash = Hash(Read(renderdocPath, kBundleBudget));
+			result["gpuCapture"] = { { "requested", true }, { "state", "initializing" }, { "timingsInstrumented", true },
+				{ "library", std::filesystem::absolute(renderdocPath).string() }, { "librarySha256", captureLibraryHash } };
+		}
+		capture = std::make_unique<NrReplay::GpuCapture>(renderdocPath, outputRoot / "native-workload");
 		Session session;
 		ComPtr<IDXGIFactory1> factory;
 		Check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "DXGI factory");
@@ -1100,15 +1156,17 @@ int wmain(int argc, wchar_t** argv)
 			{ "parameterCoreSha256", runtime.ParameterCoreHash() } };
 		result["status"] = "running";
 		result["alternateOutputSentinel"] = alternateSentinel;
-		for (auto variant : Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1, capacitySize)) {
-			if (onlyCase.empty() && (variant.axis == "minimum_shape" || variant.axis == "input_storage" || variant.axis == "native_context_count" || variant.axis == "source_transport" || variant.rects.size() > kDefaultRegionsPerEye || variant.pairGroup == "capacity-calls-equal-area"))
+		for (auto variant : customVariants.empty() ? Variants(first.color.width, first.color.height, first.depth.width, first.depth.height, control, frames.size() > 1, capacitySize) : customVariants) {
+			if (customVariants.empty() && onlyCase.empty() && (variant.axis == "minimum_shape" || variant.axis == "input_storage" || variant.axis == "native_context_count" || variant.axis == "source_transport" || variant.rects.size() > kDefaultRegionsPerEye || variant.pairGroup == "capacity-calls-equal-area"))
 				continue;
 			if (!onlyCase.empty() && variant.id != onlyCase)
 				continue;
 			if (capacityTemporal)
 				variant.temporal = true;
 			std::cout << variant.id << std::endl;
-			auto value = RunCase(session, variant, frames, warmup, samples, deadline, outputRoot, alternateSentinel);
+			auto value = RunCase(session, variant, frames, warmup, samples, deadline, outputRoot, alternateSentinel, *capture);
+			result["gpuCapture"] = capture->Report();
+			result["gpuCapture"]["librarySha256"] = captureLibraryHash;
 			value["sourceContentSha256"] = result["sourceContentSha256"];
 			value["sourceGuideAlignmentMethod"] = value["sourceGuideAlignment"];
 			value["sourceGuideAlignment"] = result["captureManifestSha256"];
@@ -1123,6 +1181,10 @@ int wmain(int argc, wchar_t** argv)
 		WriteJson(outputRoot / "results.json", result);
 		return result["status"] == "complete" ? 0 : 2;
 	} catch (const std::exception& error) {
+		if (capture) {
+			result["gpuCapture"] = capture->Report();
+			result["gpuCapture"]["librarySha256"] = captureLibraryHash;
+		}
 		result["status"] = "failed";
 		result["reason"] = error.what();
 		if (ownsOutput) {

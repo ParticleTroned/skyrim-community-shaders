@@ -250,3 +250,91 @@ cannot prove equality. Count both actual eyes and calls, preserve failures
 and unavailable GPU timing, and distinguish native cost from in-game total
 cost. This tool does not establish SE/AE gameplay, overlapping output
 ownership, temporal quality or a production cost model.
+
+## One inference per eye over packed regions
+
+`packed_replay.py` is an offline feasibility experiment. It accepts two to
+four disjoint owned rectangles in a frozen RGBA8 C capture with equal colour
+and guide grids. Each eye has its own atlas. Inputs retain captured pixel
+density, exact guide alignment, motion bytes and their explicit scale.
+The pure input builder also tests rational guide grids; the native campaign
+deliberately has the narrower admission contract above.
+
+The campaign compares separate calls, one enclosing rectangle, and one
+atlas call per eye for each requested context halo. Each halo also runs
+with reversed tile order. Contexts may overlap in source space. Atlas
+padding repeats the final context row within its own tile; only the original
+owned pixels are compared after scattering. Full atlas pixels, including
+context and padding, count toward evaluated area. All evaluations reset
+history; this does not qualify temporal A/B or moving atlas layouts.
+
+```powershell
+python tools/nr-replay/packed_replay.py prepare `
+  --manifest PATH/TO/manifest.json --output build/validation/NEW-CAMPAIGN `
+  --replay build/nr-replay/Release/csx_nr_replay.exe `
+  --roi 192,512,128,128 --roi 672,512,128,128 --halos 0,64,128 --repeats 3
+
+python tools/nr-replay/packed_replay.py run `
+  --campaign build/validation/NEW-CAMPAIGN/campaign.json `
+  --runtime PATH/TO/nvngx_dlssnr.dll --warmup 3 --samples 8
+```
+
+Coordinates above are a fixture example, not automatic character detection.
+Preparation validates inputs without loading the native provider. It writes
+new derived bundles, preserves source metadata separately, and hashes the
+source, executable and analysis code. Run refuses changed identities or
+existing evidence. It holds an exclusive campaign mutex, rejects a running
+Skyrim or replay process, reverses case order on alternate repeats, and
+stops on failed native samples or bounded process timeout. Run with normal
+graphics-driver IPC access; do not overlap with another GPU workload.
+
+`summary.json` verifies every steady sample and retained crop, reports native
+GPU timings, RGB errors, alpha differences, baseline repeatability and tile
+order sensitivity. The strict gate is exact owned RGB equality; alpha is
+reported separately. A completed measurement with differences is a quality
+rejection, not a production pass. CPU packing, uploads, readback and scatter
+are excluded from native timings. GPU preparation/composition and live
+temporal/stereo quality require a later experiment if this gate passes.
+
+The executable's `--rects '[[x,y,width,height],...]'` selects one explicit
+stateless C case and retains output crops. Rectangles must be disjoint,
+bounded and at least 64 pixels per side; more than two per eye requires
+the shared 128-pixel experimental geometry floor. It cannot combine with
+other case, storage, temporal or capacity switches.
+
+### Native workload capture
+
+`--renderdoc PATH/TO/renderdoc.dll` explicitly loads RenderDoc before device
+creation and captures the first post-warmup sample. Use a current compatible
+RenderDoc distribution; no capture library loads by default. Captured-run
+timings are diagnostic and excluded from the uninstrumented comparisons.
+`packed_replay.py capture` accepts the campaign/runtime arguments above plus
+`--case separate` (or an exact atlas case ID) and `--renderdoc`. Every capture
+has its own journal and directory; existing files are preserved.
+
+Set `NR_REPLAY_CAPTURE` to the resulting `.rdc`, `NR_REPLAY_TRACE_OUTPUT` to
+a new JSON path, and `NR_REPLAY_TRACE_SCRIPT` to the absolute path of
+`renderdoc_workload.py`. Launch `qrenderdoc.exe --python` with that script
+using a hidden window. Its embedded Python is required. Check the JSON
+receipt's `complete`, state and gaps; qrenderdoc's exit code alone is not
+an analysis pass. The audit retains dispatch dimensions, compute shader
+identity, resources, API events and available instrumented GPU durations.
+Missing vendor workloads, unsupported replay or counters remain explicit.
+Dispatch counts cannot by themselves prove the provider's internal read
+footprint, model batching support or uninstrumented GPU queue idle time.
+
+The [October 4 qualification](../../docs/development/nr-packed-region-feasibility-20261004.md)
+records `FAIL_PlatformError` during NGX initialization with RenderDoc 1.46
+on this machine. No native capture was produced. Do not bypass NGX admission
+or treat the optional capture path as qualified for that provider; the next
+candidate is a compatible Nsight GPU Trace installation.
+
+Offline regression commands:
+
+```powershell
+python tools/nr-replay/test_input.py build/nr-replay/Release/csx_nr_replay.exe
+python -m unittest discover -s tools/nr-replay -p 'test_packed*.py'
+```
+
+All these additions belong to the standalone tool. They add no renderer
+work, game settings, shader permutation or production DLL dependency.

@@ -1,5 +1,24 @@
 # main-vr-nr progress and continuation record
 
+## October 4 one-inference packed-region experiment
+
+The [offline packed-region record](nr-packed-region-feasibility-20261004.md)
+implements the next ownership/packing experiment and preserves 30 native
+replay processes with 240 accepted steady samples. Combining two regions
+per eye reduces native median cost from 8.6305 to 4.3170 ms at the same
+owned/evaluated area. Padding and reversed tile orders are also measured.
+Every fused layout fails strict owned-RGB equivalence; even one enclosing
+rectangle changes output, and reversing atlas order changes it at every
+tested halo. No production promotion or in-game performance claim follows.
+
+The optional RenderDoc audit fails NGX initialization before inference;
+private dispatch/queue attribution remains unmeasured. All changes are
+standalone tools and documentation. Production DLL behavior, shader caches
+and the existing AIO are unchanged. Task 11 now has an implemented offline
+prototype with a negative output gate, not a qualified live packed adapter.
+Task 9's unqualified production profile and Task 10's earlier compact
+rejection remain separate results.
+
 ## October 3 final calibration-producer live result
 
 The [final live record](nr-task9-10-final-live-20261003.md) qualifies producer

@@ -49,17 +49,35 @@ class ReplayInput(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def run_fixture(self, expected=0, storage=False, case=None):
+    def run_fixture(self, expected=0, storage=False, case=None, rects=None):
         self.case += 1
         self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
         output = self.root / f"result-{self.case}"
-        run = subprocess.run([str(EXECUTABLE), "--manifest", str(self.manifest_path),
-                              "--output", str(output), "--validate-storage" if storage else "--validate-input"] + (["--case", case] if case else []),
-                             capture_output=True, text=True, timeout=15)
+        arguments = [str(EXECUTABLE), "--manifest", str(self.manifest_path), "--output", str(output),
+                     "--validate-storage" if storage else "--validate-input"]
+        if case:
+            arguments += ["--case", case]
+        if rects is not None:
+            arguments += ["--rects", json.dumps(rects)]
+        run = subprocess.run(arguments, capture_output=True, text=True, timeout=15)
         self.assertEqual(run.returncode, expected, run.stdout + run.stderr)
         result = json.loads((output / "results.json").read_text(encoding="utf-8"))
         self.assertEqual(result["cases"], [])
         return result
+
+    def test_custom_regions_are_bounded_stateless_and_exact(self):
+        self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
+                                     bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 128)
+        rects = [[0, 0, 64, 64], [128, 128, 64, 64]]
+        self.assertIn("stateless C", self.run_fixture(1, rects=rects)["reason"])
+        self.frame["mode"] = 2
+        self.assertEqual(self.run_fixture(rects=rects)["customRegions"], rects)
+        for invalid in ([], [[0, 0, 63, 64]], [[240, 0, 64, 64]], [[-1, 0, 64, 64]],
+                        [[0.5, 0, 64, 64]], [[True, 0, 64, 64]], [[0, 0, 64]], rects * 5,
+                        [[0, 0, 64, 64], [64, 0, 64, 64], [128, 0, 64, 64]],
+                        [[0, 0, 64, 64], [32, 0, 64, 64]],
+                        [[0, 0, 2**32, 64]]):
+            self.run_fixture(1, rects=invalid)
 
     def test_scaled_odd_native_grids(self):
         result = self.run_fixture()

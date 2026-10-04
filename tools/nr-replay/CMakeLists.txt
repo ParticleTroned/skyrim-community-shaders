@@ -32,6 +32,7 @@ endforeach()
 set(_replay_identity "{}")
 foreach(_source IN ITEMS
     tools/nr-replay/main.cpp
+    tools/nr-replay/GpuCapture.h
     tools/nr-replay/replay_platform.h
     tools/nr-replay/CMakeLists.txt
     tools/nr-replay/extract_runtime_utilities.cmake
@@ -109,6 +110,7 @@ target_compile_definitions(csx_nr_replay PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UN
 target_include_directories(csx_nr_replay PRIVATE "${CMAKE_CURRENT_LIST_DIR}" "${OUTPUT_DIRECTORY}"
     "${REPOSITORY_ROOT}/src" "${_nr_source}"
     "${CSX_NR_DEPENDENCY_ROOT}/extern/CommonLibSSE-NG/include"
+    "${CSX_NR_DEPENDENCY_ROOT}/extern/FidelityFX-SDK/framework/cauldron/framework/libs/renderdoc/include"
     "${CSX_NR_DEPENDENCY_ROOT}/extern/Streamline-DX12/external/ngx-sdk/include")
 target_compile_options(csx_nr_replay PRIVATE /W4 /EHsc /permissive- /FIreplay_platform.h)
 target_link_libraries(csx_nr_replay PRIVATE nlohmann_json::nlohmann_json spdlog::spdlog

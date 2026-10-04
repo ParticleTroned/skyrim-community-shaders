@@ -16,7 +16,7 @@ from transaction_evidence import TransactionEvidenceError, finite, require, uint
 
 SCHEMA = "csx-nr-replay-results-v1"
 HISTORIES = {"static_reset", "continuous", "cold_create"}
-AXES = {"width", "height", "offset", "aspect_ratio", "call_count", "capacity", "mask_occupancy", "history", "alignment", "minimum_shape", "input_storage"}
+AXES = {"width", "height", "offset", "aspect_ratio", "call_count", "capacity", "mask_occupancy", "history", "alignment", "minimum_shape", "input_storage", "packed_region_experiment"}
 FOOTPRINT_FIELDS = ("modifiedInsidePixels", "modifiedOutsidePixels", "unchangedInsidePixels", "nonfiniteInsidePixels")
 IDENTITY_FIELDS = ("sourceGuideAlignment", "colorConfiguration", "tuning", "sourceFrameIndices",
                    "featureUpscaling", "useAutoMask", "controlMaskPassed", "logicalEyeCount")

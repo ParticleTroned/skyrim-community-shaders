@@ -92,3 +92,18 @@ descriptor APIs, original forwarding after early refresh, late refresh,
 prior submission, foreign-thread calls, native API error, rejection
 propagation and reset of frame-local refresh state. These CPU tests do not
 substitute for new-DLL live qualification.
+
+The isolated packaging review removed two unrelated UI-availability lines
+that entered the first repair commit from a concurrent working-tree edit.
+That guard depended on an uncommitted runtime API; the runtime work remains
+local in the shared checkout. The descriptor repair does not depend on it.
+
+The preset guard hashes complete settings-owner files, including DevBench
+descriptions. Only `NeuralRenderingFeature.cpp` changed from the previously
+reviewed owner inventory. Its descriptor-refresh description and diagnostic
+counter do not change settings keys, defaults, loading or saving. The
+maintained generator therefore refreshes only the revision-8 source
+fingerprint and the resulting three settings hashes; graphics values, base,
+tier overrides, revision and existing user-owned preset archives remain
+unchanged. The reviewed fingerprint is
+`727E977DB57874EF077B6F291E3D82EAAFD43954E0B37A28D43DAABDCE473A93`.

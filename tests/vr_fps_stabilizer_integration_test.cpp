@@ -41,11 +41,18 @@ namespace
 		void ResetIniSettings() override { ++resets; }
 	} provider;
 	bool providerPresent = true;
+	bool modulePresent = true;
 	bool queuePresent = true;
 	bool rejectWrites = false;
 	std::vector<std::function<void()>> queue;
 	std::filesystem::path testRoot;
 	unsigned int dispatchCount = 0;
+}
+
+void* GetModuleHandleW(const wchar_t* name)
+{
+	Require(std::wstring_view(name) == L"VRFpsStabilizer.dll");
+	return modulePresent ? &provider : nullptr;
 }
 
 namespace REL
@@ -102,13 +109,23 @@ namespace globals::features
 		struct Config
 		{
 			uint64_t revision = 0;
+			bool fileReadable = true;
+			bool upscalingSwitchingEnabled = true;
+			bool hasProfiles = true;
+			bool HasAnyUpscalingProfile() const { return hasProfiles; }
 			Profile interior, exterior;
-		} config;
+		} vrFpsStabilizerSessionConfig;
+		mutable std::mutex vrFpsStabilizerSessionConfigMutex;
+		mutable unsigned int initializations = 0;
+		bool openCompositeBlocked = false, renderDocBlocked = false;
 		std::atomic_uint32_t pendingVRFpsStabilizerSyncFrame{ 1 };
-		bool IsVRFpsStabilizerSyncActive() const { return true; }
+		bool IsVRFpsStabilizerSyncActive() const;
+		bool IsOpenCompositeUpscalingBlocked() const { return openCompositeBlocked; }
+		bool IsRenderDocUpscalingBlocked() const { return renderDocBlocked; }
+		void InitializeVRFpsStabilizerSessionConfig() const { ++initializations; }
 		int GetConfiguredUpscaleMethodForTransition() const { return 1; }
 		uint32_t GetEffectiveUpscalingQualityMode() const { return 2; }
-		Config GetVRFpsStabilizerSessionConfig() const { return config; }
+		Config GetVRFpsStabilizerSessionConfig() const { return vrFpsStabilizerSessionConfig; }
 		unsigned int refreshes = 0;
 		bool RefreshVRFpsStabilizerSessionConfig(std::string&)
 		{
@@ -116,6 +133,10 @@ namespace globals::features
 			return true;
 		}
 	} upscaling;
+}
+namespace globals::game
+{
+	bool& isVR = REL::Module::vr;
 }
 using Upscaling = globals::features::Upscaling;
 namespace Util
@@ -159,13 +180,8 @@ int main()
 	testRoot = std::filesystem::current_path() / "stabilizer-integration-fixture";
 	try {
 		auto& upscaling = globals::features::upscaling;
-		Require(!HasPendingVRFpsStabilizerRenderScaleIntent(upscaling));
-		upscaling.config.exterior.renderScaleMode = true;
-		++upscaling.config.revision;
-		Require(HasPendingVRFpsStabilizerRenderScaleIntent(upscaling));
-		upscaling.config.exterior.renderScaleMode = false;
-		++upscaling.config.revision;
-		Require(!HasPendingVRFpsStabilizerRenderScaleIntent(upscaling));
+		auto& config = upscaling.vrFpsStabilizerSessionConfig;
+		Require(!IsLoaded() && !upscaling.IsVRFpsStabilizerSyncActive());
 		Require(!std::filesystem::exists(testRoot));
 		std::filesystem::create_directories(testRoot / "SKSE" / "Plugins");
 		const auto main = ConfigPath();
@@ -174,12 +190,47 @@ int main()
 		std::ofstream(locations) << "[Settings]\nEnabled=1\n";
 		REL::Module::vr = false;
 		Initialize();
-		Require(!Status().available && dispatchCount == 0);
+		Require(!Status().loaded && !Status().available && dispatchCount == 0);
 		REL::Module::vr = true;
+		modulePresent = providerPresent = false;
 		Initialize();
-		Require(Status().available && Status().build == 1413 && dispatchCount == 1);
+		Require(!Status().loaded && !Status().available);
 		IniDocument document;
 		std::string error;
+		config.exterior.renderScaleMode = true;
+		for (const auto file : { ConfigFile::Main, ConfigFile::Locations }) {
+			Require(Load(file, document, error));
+			const auto original = document.original;
+			document.text += "# attempted edit while absent\n";
+			Require(!Save(file, document, error) && error == kNotLoadedMessage);
+			Require(document.original == original);
+			IniDocument disk;
+			Require(Load(file, disk, error) && disk.text == original);
+			Require(!RequestReload(file, error) && error == kNotLoadedMessage && queue.empty());
+		}
+		Require(!upscaling.IsVRFpsStabilizerSyncActive());
+		Require(!HasPendingVRFpsStabilizerRenderScaleIntent(upscaling) && upscaling.initializations == 0);
+		modulePresent = providerPresent = true;
+		Initialize();
+		Require(IsLoaded() && Status().loaded && Status().available && Status().build == 1413 && dispatchCount == 2);
+		Require(upscaling.IsVRFpsStabilizerSyncActive());
+		Require(HasPendingVRFpsStabilizerRenderScaleIntent(upscaling));
+		config.exterior.renderScaleMode = false;
+		++config.revision;
+		Require(!HasPendingVRFpsStabilizerRenderScaleIntent(upscaling));
+		config.exterior.renderScaleMode = true;
+		++config.revision;
+		Require(HasPendingVRFpsStabilizerRenderScaleIntent(upscaling));
+		for (auto* enabled : { &config.fileReadable, &config.upscalingSwitchingEnabled, &config.hasProfiles, &REL::Module::vr }) {
+			*enabled = false;
+			Require(!upscaling.IsVRFpsStabilizerSyncActive());
+			*enabled = true;
+		}
+		for (auto* blocked : { &upscaling.openCompositeBlocked, &upscaling.renderDocBlocked }) {
+			*blocked = true;
+			Require(!upscaling.IsVRFpsStabilizerSyncActive());
+			*blocked = false;
+		}
 		Require(Load(ConfigFile::Main, document, error));
 		Require(document.Set("Settings", "EnableLog", "1", error));
 		Require(Save(ConfigFile::Main, document, error));
@@ -231,14 +282,16 @@ int main()
 		Require(!Status().pending);
 		provider.failHandshake = true;
 		Initialize();
-		Require(!Status().available && Status().build == 0 && Status().message.find("handshake failure") != std::string::npos);
+		Require(Status().loaded && !Status().available && Status().build == 0 && Status().message.find("handshake failure") != std::string::npos);
 		provider.failHandshake = false;
 		providerPresent = false;
 		Initialize();
-		Require(!Status().available);
+		Require(Status().loaded && !Status().available && Status().message.empty());
+		Require(upscaling.IsVRFpsStabilizerSyncActive());
 		Require(document.Set("Settings", "EnableLog", "0", error));
 		Require(Save(ConfigFile::Main, document, error));
 		Require(Status().restartRequired && !Status().pending && queue.empty());
+		Require(!RequestReload(ConfigFile::Main, error) && error.find("revision 1") != std::string::npos);
 		std::filesystem::remove_all(testRoot);
 		std::cout << "Stabilizer interface, save, queue and reload integration checks passed\n";
 		return 0;

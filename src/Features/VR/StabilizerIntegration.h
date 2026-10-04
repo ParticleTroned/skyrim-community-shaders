@@ -7,6 +7,7 @@
 
 namespace VRFpsStabilizer
 {
+	inline constexpr const char* kNotLoadedMessage = "VR FPS Stabilizer is not loaded. Enable it in your mod manager and restart Skyrim VR to use these controls.";
 	enum class ConfigFile
 	{
 		Main,
@@ -14,6 +15,7 @@ namespace VRFpsStabilizer
 	};
 	struct ReloadStatus
 	{
+		bool loaded = false;
 		bool available = false;
 		bool pending = false;
 		bool restartRequired = false;
@@ -24,6 +26,8 @@ namespace VRFpsStabilizer
 
 	/** Acquire the optional external interface from the SKSE PostPostLoad listener. */
 	void Initialize();
+	/** True only when the companion DLL was detected at PostPostLoad, independently of live reload support. */
+	bool IsLoaded();
 	/** Register the diagnostic-only configuration adapter when DevBench is built in. */
 	void InstallDevBench();
 	/** Thread-safe status for the UI and diagnostic adapter. */

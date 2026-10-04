@@ -6,6 +6,7 @@
 #include "VRAPI/VRFpsStabilizerInterface001.h"
 
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <mutex>
 
@@ -14,6 +15,7 @@ namespace VRFpsStabilizer
 	namespace
 	{
 		std::mutex stateMutex;
+		std::atomic_bool pluginLoaded{ false };
 		ReloadStatus status;
 		std::array<bool, 2> needsReload{};
 		VRFpsStabilizerPluginApi::IVRFpsStabilizerInterface001* stabilizerApi = nullptr;
@@ -33,12 +35,16 @@ namespace VRFpsStabilizer
 
 		bool QueueReload(ConfigFile file, std::string& error)
 		{
+			if (!IsLoaded()) {
+				error = kNotLoadedMessage;
+				return false;
+			}
 			if (status.pending) {
 				error = "A Stabilizer reload is already pending. Wait for it to finish.";
 				return false;
 			}
 			if (!stabilizerApi) {
-				error = "Stabilizer's live interface is unavailable.";
+				error = "Live reload requires a VR FPS Stabilizer version with the revision 1 interface.";
 				return false;
 			}
 			const auto* tasks = SKSE::GetTaskInterface();
@@ -84,6 +90,7 @@ namespace VRFpsStabilizer
 
 	void Initialize()
 	{
+		const bool moduleLoaded = REL::Module::IsVR() && GetModuleHandleW(L"VRFpsStabilizer.dll") != nullptr;
 		VRFpsStabilizerPluginApi::IVRFpsStabilizerInterface001* api = nullptr;
 		unsigned int build = 0;
 		std::string failure;
@@ -98,20 +105,28 @@ namespace VRFpsStabilizer
 			failure = "Stabilizer interface failed with an unknown exception.";
 		}
 		std::scoped_lock lock(stateMutex);
+		pluginLoaded.store(moduleLoaded || api != nullptr, std::memory_order_release);
 		stabilizerApi = api;
 		status.available = stabilizerApi != nullptr;
 		status.build = build;
-		if (!failure.empty()) {
-			status.message = std::move(failure);
+		status.message = std::move(failure);
+		if (!status.message.empty()) {
 			logger::info("VR FPS Stabilizer: {}", status.message);
 		}
-		logger::info("VR FPS Stabilizer revision 1 interface: {} (build {})", status.available ? "available" : "unavailable", status.build);
+		logger::info("VR FPS Stabilizer loaded: {}; revision 1 interface: {} (build {})", IsLoaded(), status.available ? "available" : "unavailable", status.build);
+	}
+
+	bool IsLoaded()
+	{
+		return pluginLoaded.load(std::memory_order_acquire);
 	}
 
 	ReloadStatus Status()
 	{
 		std::scoped_lock lock(stateMutex);
-		return status;
+		auto snapshot = status;
+		snapshot.loaded = IsLoaded();
+		return snapshot;
 	}
 
 	std::filesystem::path ConfigPath(ConfigFile file)
@@ -177,6 +192,10 @@ namespace VRFpsStabilizer
 			error = "VR FPS Stabilizer settings require Skyrim VR.";
 			return false;
 		}
+		if (!IsLoaded()) {
+			error = kNotLoadedMessage;
+			return false;
+		}
 		if (!IniDocument::ValidateText(document.text, error) ||
 			(file == ConfigFile::Main && !ValidateSettings(document, error)))
 			return false;
@@ -209,10 +228,6 @@ namespace VRFpsStabilizer
 	{
 		error.clear();
 		std::scoped_lock lock(stateMutex);
-		if (!stabilizerApi) {
-			error = "Live reload requires a VR FPS Stabilizer version with the revision 1 interface.";
-			return false;
-		}
 		return QueueReload(file, error);
 	}
 }

@@ -28,9 +28,13 @@ DataLoaded, PostLoadGame, AfterLoadGame, NewGame and Conditional sections.
     configured events and conditions; reloading does not replay startup
     events. Visual effects require runtime verification.
 
-The status area reports the detected Stabilizer build, reload availability,
-pending work, completion and failures. Without the optional interface,
-**Save INI** remains available and clearly requires restarting Skyrim VR.
+The status area reports whether Stabilizer is loaded, its detected build,
+reload availability, pending work, completion and failures. When the DLL
+is absent, every Stabilizer control is disabled, including page navigation,
+profile switching, fades and save/reload actions. Leftover INIs cannot
+activate profile sync or enable saves. The status explains how to enable
+the companion mod. A loaded older version without the optional interface
+retains **Save INI**, which clearly requires restarting Skyrim VR.
 `ResetIniSettings()` is not invoked: reloading must not unexpectedly reset
 the player's game INI settings.
 
@@ -41,6 +45,13 @@ revision 1 virtual interface supplied by the mod author, without a virtual
 destructor. During SKSE PostPostLoad, VR sends message `0xF43A9D7C` to
 `VRFpsStabilizerPlugin` and requests revision 1. CommonLib's messaging
 wrapper supplies CSX's plugin handle. SE and AE do not dispatch the request.
+
+Companion presence is detected once at PostPostLoad using the loaded
+`VRFpsStabilizer.dll` module, following the existing companion-plugin
+detection pattern. A successful interface handshake also proves presence.
+The cached flag is separate from live API availability and defaults to
+false before detection. UI, persistence, reload and profile reconciliation
+share this gate; an INI on disk never proves that the plugin is loaded.
 
 Main INI reloads call `loadConfig()`; location reloads call
 `loadLocationConfig()`. CSX's save-load profile reconciliation takes a
@@ -88,12 +99,12 @@ only their compatibility fingerprint.
 DevBench builds register `communityshaders.stabilizer`; production builds
 compile out the adapter. All responses carry CSX build provenance.
 
-| Action   | Behavior                                                                       |
-| -------- | ------------------------------------------------------------------------------ |
-| `status` | Interface build, availability, pending state, revision and result              |
-| `read`   | Installed INI contents, path and main control catalog                          |
-| `save`   | Validated `settings` and/or complete `sections` patches; save and queue reload |
-| `reload` | Queue a reload of the saved main or location INI                               |
+| Action   | Behavior                                                                          |
+| -------- | --------------------------------------------------------------------------------- |
+| `status` | Plugin `loaded`, interface build/availability, pending state, revision and result |
+| `read`   | Installed INI contents, path and main control catalog                             |
+| `save`   | Validated `settings` and/or complete `sections` patches; save and queue reload    |
+| `reload` | Queue a reload of the saved main or location INI                                  |
 
 `file` is `main` or `locations`; no arbitrary path is accepted. `save`
 requires `expectedContents` from `read`. Setting and section values are
@@ -101,6 +112,8 @@ strings. `expectedBuildId` rejects requests to an unintended CSX binary.
 The response distinguishes saving from reload completion; inspect `status`
 after pending work completes. Advanced section patches can exercise the
 same conditional profiles exposed by the Profiles UI.
+`save` and `reload` reject requests when the companion is absent. `read`
+remains available for diagnosing leftover INIs without changing them.
 
 ## Validation
 
@@ -144,6 +157,15 @@ and vtable ABI, game-thread queuing, stale edits, atomic replacement
 failure, per-file reload failures and missing-interface fallback. Use
 `pwsh ./tools/validate-local.ps1` for the full DLL, controller, shader,
 preset and build-provenance validation record.
+
+The missing-plugin regression runs with both INIs present. It verifies
+that main/location saves and reloads fail without writing or queuing work,
+and that the extracted production sync and render-scale-intent functions
+remain inactive. Loaded older plugins retain save/restart and profile
+sync; the existing runtime, OpenComposite, RenderDoc and profile validity
+gates remain covered. The menu contract checks the shared disabled scope
+around all Stabilizer pages. Full in-game UI acceptance remains pending
+installation by the user; no DLL deployment is part of this work.
 
 The universal DLL build checks SE/AE/VR compilation. Runtime acceptance
 requires the beta interface, live edits to both INIs, UI inspection, an

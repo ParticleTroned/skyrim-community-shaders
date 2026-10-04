@@ -11643,6 +11643,7 @@ bool Upscaling::RefreshVRFpsStabilizerSessionConfig(std::string& a_error)
 bool Upscaling::IsVRFpsStabilizerSyncActive() const
 {
 	if (!globals::game::isVR ||
+		!VRFpsStabilizer::IsLoaded() ||
 		IsOpenCompositeUpscalingBlocked() ||
 		IsRenderDocUpscalingBlocked())
 		return false;

@@ -1171,6 +1171,8 @@ void VR::DrawSettings()
 
 		if (BeginTabItemWithFont("VR Stabilizer", Menu::FontRole::Subheading)) {
 			if (ImGui::BeginChild("##VRFpsStabilizerFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
+				VRFpsStabilizer::DrawStatus();
+				const auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());
 				static int stabilizerPage = 0;
 				static bool blockedDraftNavigation = false;
 				constexpr std::array pages{ "Profiles", "Performance", "LOD & Grass", "Quality Levels", "Locations", "Commands" };
@@ -1189,7 +1191,6 @@ void VR::DrawSettings()
 					ImGui::TextUnformatted("Profiles control CSX by interior/exterior. Performance controls automatic quality. LOD & Grass controls visibility. Levels and Locations edit quality rules. Commands contains advanced event and conditional scripts.");
 				if (blockedDraftNavigation)
 					Util::Text::WrappedWarning("Save or discard this draft before switching to another INI editor.");
-				VRFpsStabilizer::DrawStatus();
 				ImGui::Separator();
 				if (stabilizerPage == 0)
 					DrawVRFpsStabilizerSettings();
@@ -1852,7 +1853,9 @@ namespace
 		ImGui::Spacing();
 		const bool openCompositeBlocksUpscaling = upscaling.IsOpenCompositeUpscalingBlocked();
 		const auto& sessionConfig = upscaling.GetVRFpsStabilizerSessionConfig();
-		if (openCompositeBlocksUpscaling) {
+		if (!VRFpsStabilizer::IsLoaded()) {
+			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive because the plugin is not loaded.");
+		} else if (openCompositeBlocksUpscaling) {
 			Util::Text::WrappedWarning(
 				"VR FPS Stabilizer profile sync: Inactive because Open Composite owns upscaling for this session.");
 		} else if (upscaling.IsVRFpsStabilizerSyncActive()) {
@@ -1869,7 +1872,7 @@ namespace
 			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; no Interior or Exterior upscaling profile is configured in the loaded INI.");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Profile sync activates automatically when the INI contains an active Interior or Exterior upscaling profile.");
+			ImGui::TextUnformatted("Profile sync activates automatically when Stabilizer is loaded and its INI contains an active Interior or Exterior upscaling profile.");
 			ImGui::TextUnformatted("Save & Apply refreshes both Stabilizer and CSX. Older Stabilizer versions require restarting Skyrim VR.");
 		}
 

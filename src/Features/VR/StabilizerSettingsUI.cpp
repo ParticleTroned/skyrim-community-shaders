@@ -230,6 +230,10 @@ namespace VRFpsStabilizer
 	void DrawStatus()
 	{
 		const auto state = Status();
+		if (!state.loaded) {
+			Util::Text::WrappedWarning("%s", kNotLoadedMessage);
+			return;
+		}
 		if (state.available)
 			ImGui::TextDisabled("Live reload available (Stabilizer build %u)", state.build);
 		else

@@ -255,6 +255,11 @@ namespace NeuralRendering
 						commandContext.timing.featureSlotMask;
 					telemetry_.lastInsertionPoint =
 						commandContext.timing.insertionPoint;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const auto& execution = commandContext.timing.execution;
+					telemetry_.lastExecutionPlan = SummarizeExecutionPlan(execution ? &execution->Descriptor() : nullptr,
+						commandContext.timing.frameId, commandContext.timing.insertionPoint);
+#endif
 				}
 			} else {
 				IncrementSaturating(telemetry_.featureGpuReadbackFailures);

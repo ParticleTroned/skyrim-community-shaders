@@ -1,0 +1,46 @@
+.version 9.4
+.target sm_120
+.address_size 64
+.visible .entry select_original_packet()
+{
+ .reg .b32 %item;
+ .reg .pred %first;
+ mov.u32 %item, %ctaid.z;
+ setp.lt.u32 %first, %item, 1;
+ @%first bra ITEM_ZERO;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ nanosleep.u32 8;
+ ret;
+ITEM_ZERO:
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ nanosleep.u32 16;
+ ret;
+}

@@ -109,7 +109,9 @@ endforeach()
 
 foreach(_telemetry_contract IN ITEMS
     [[rendererSnapshot.performance.lastFeatureLogicalEyeCount]]
-    [=[attributedPreparation->computeRegionCounts[featureSlot]]=]
+    [[rendererSnapshot.performance.lastExecutionPlan]]
+    [[executionPlan->physicalSlotMask & NeuralRendering::RegionRouteMask(a_logicalMask)]]
+    [[NeuralRendering::LogicalRegionMask(lastFeatureSlotMask)]]
     [["physicalSlotMask"]]
     [["logicalSlotMask"]]
     [["computeRegionCount"]]

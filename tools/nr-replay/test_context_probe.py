@@ -110,6 +110,25 @@ class ContextEvidence(unittest.TestCase):
         self.assertEqual(report["status"], "partial", report)
         self.assertTrue(any("sample count" in reason for reason in report["errors"]))
 
+    def test_sentinel_selection_is_bound_to_result_and_each_footprint(self):
+        self.plan["alternateOutputSentinel"] = True
+        report = self.summarize()
+        self.assertTrue(any("sentinel differs from probe plan" in reason for reason in report["errors"]))
+        for path in self.root.glob("context-runs/*/repeat-*/results.json"):
+            raw = probe.read(path)
+            raw["alternateOutputSentinel"] = True
+            for sample in raw["cases"][0]["samples"]:
+                for footprint in sample["providerFootprint"]:
+                    footprint["alternateBytePattern"] = True
+            probe.write(path, raw)
+        self.assertEqual(self.summarize()["status"], "complete")
+        path = self.root / "context-runs/full/repeat-0/results.json"
+        raw = probe.read(path)
+        for sample in raw["cases"][0]["samples"]:
+            sample["providerFootprint"][0]["alternateBytePattern"] = False
+        probe.write(path, raw)
+        self.assertTrue(any("sentinel footprint differs" in reason for reason in self.summarize()["errors"]))
+
 
 class ContextPlan(unittest.TestCase):
     def setUp(self):
@@ -149,12 +168,14 @@ class ContextPlan(unittest.TestCase):
             probe._admit_plan(changed)
 
     def test_native_failure_stops_next_job_and_journals_terminal_reason(self):
+        self.plan["alternateOutputSentinel"] = True
         with patch.object(probe, "require_idle_game"), \
                 patch.object(probe, "invoke", side_effect=RuntimeError("injected native failure")) as invoke, \
                 patch.object(probe, "summarize", return_value={"status": "failed"}):
             with self.assertRaisesRegex(RuntimeError, "injected native failure"):
                 probe.execute(self.plan, self.args.output)
         self.assertEqual(invoke.call_count, 1)
+        self.assertIn("--alternate-output-sentinel", invoke.call_args.args[0])
         journal = probe.read(self.args.output / "run.json")
         self.assertEqual(journal["status"], "failed")
         self.assertEqual(len(journal["jobs"]), 1)

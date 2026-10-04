@@ -1,12 +1,20 @@
 #include "CharacterComputeSubrect.h"
 #include "CharacterMaskWorkPolicy.h"
 #include "D3D12Interop.h"
+#include "FeatureCreationObserver.h"
 #include "GpuCapture.h"
+#include "KernelChainCommandList.h"
+#include "KernelCommandCapture.h"
+#include "KernelScheduleReadback.h"
+#include "ProviderFloorProbe.h"
+#include "ProviderKernelChainProbe.h"
 #include "Runtime.h"
 #include "SourceTransport.h"
 #include "Utils/CryptoHash.h"
 #include "build_identity.h"
 
+#include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -16,6 +24,7 @@
 #include <nlohmann/json.hpp>
 #include <nvsdk_ngx.h>
 #include <thread>
+#include <tuple>
 
 namespace
 {
@@ -401,6 +410,7 @@ namespace
 		std::string inputStorageResource = "all";
 		unsigned inputStorageHaloPixels = 0;
 		bool sharedInputs = false;
+		bool reuseNativeHandles = false;
 	};
 	Variant CustomRegions(const std::string& encoded, const Eye& eye, unsigned mode)
 	{
@@ -427,6 +437,94 @@ namespace
 			variant.rects.push_back(rect);
 		}
 		return variant;
+	}
+	void ConfigureNativeHandleExperiment(Variant& variant, const Frame& frame, std::string_view policy)
+	{
+		Require(policy == "independent" || policy == "per-eye", "native handle policy must be independent or per-eye");
+		Require(frame.metadata.at("mode") == 2 && variant.history == "static_reset" && !variant.temporal &&
+					!variant.crop.IsValid() && variant.inputStorage == "captured" && variant.sharedInputs,
+			"native handle experiment requires unchanged stateless C custom inputs");
+		Require(variant.rects.size() >= 2 && variant.rects.size() <= 4 &&
+					std::ranges::all_of(variant.rects, [](const auto& rect) { return QualifiedExperimentalContextGeometry(rect); }),
+			"native handle experiment requires two to four regions with extents >=128");
+		for (const auto& eye : frame.eyes)
+			Require(!eye.featureUpscaling && eye.color.format == 28 && eye.depth.format == 41 && eye.motion.format == 34 && eye.depth.width == eye.color.width &&
+						eye.depth.height == eye.color.height && eye.motion.width == eye.color.width && eye.motion.height == eye.color.height,
+				"native handle experiment requires RGBA8 C with equal input grids");
+		variant.axis = "native_handle_reuse";
+		variant.pairGroup = "unchanged-independent-contexts";
+		variant.reuseNativeHandles = policy == "per-eye";
+	}
+	void ValidateIndependentProviderContexts(const Variant& variant, const std::vector<Frame>& frames)
+	{
+		Require(frames.size() == 1 && frames.front().metadata.at("mode") == 2 && variant.history == "static_reset" &&
+					!variant.temporal && !variant.crop.IsValid() && variant.inputStorage == "captured" && variant.sharedInputs && !variant.reuseNativeHandles,
+			"provider experiment requires one immutable stateless C capture and independent custom contexts");
+		Require(variant.rects.size() >= 1 && variant.rects.size() <= 4 &&
+					std::ranges::all_of(variant.rects, [](const auto& rect) { return QualifiedExperimentalContextGeometry(rect); }),
+			"provider experiment requires one to four regions with extents >=128");
+		for (const auto& eye : frames.front().eyes)
+			Require(!eye.featureUpscaling && eye.color.format == 28 && eye.depth.format == 41 && eye.motion.format == 34 &&
+						eye.depth.width == eye.color.width && eye.depth.height == eye.color.height &&
+						eye.motion.width == eye.color.width && eye.motion.height == eye.color.height &&
+						std::ranges::all_of(variant.rects, [&](const auto& rect) { return rect.Fits(eye.color.width, eye.color.height); }),
+				"provider experiment requires RGBA8 C with equal input grids and bounded contexts in every eye");
+	}
+	void ConfigureProviderFloorExperiment(Variant& variant, const std::vector<Frame>& frames, std::string_view providerHash, Json& receipt)
+	{
+		namespace Floor = NrReplay::ProviderFloor;
+		Floor::ValidateIdentity(256, providerHash, Floor::kCodeSha256);
+		ValidateIndependentProviderContexts(variant, frames);
+		receipt.update({ { "requested", true }, { "originalFloor", 320 }, { "experimentalFloor", 256 },
+			{ "providerDiskSha256", providerHash }, { "inMemoryState", "not_loaded" }, { "transitions", Json::array() },
+			{ "qualityQualified", false }, { "productionPerformanceQualified", false }, { "modeledShapes", Json::array() } });
+		for (const auto& rect : variant.rects) {
+			const auto original = Floor::PaddedShape(rect.width, rect.height, 320);
+			const auto candidate = Floor::PaddedShape(rect.width, rect.height, 256);
+			receipt["modeledShapes"].push_back({ { "active", { rect.width, rect.height } },
+				{ "original", { original.width, original.height } }, { "candidate", { candidate.width, candidate.height } },
+				{ "scope", "observed_padding_branch_model_not_measured_dispatch" } });
+		}
+	}
+	void ConfigureKernelChainExperiment(const Variant& variant, const std::vector<Frame>& frames,
+		std::string_view providerHash, std::string_view mode, Json& receipt)
+	{
+		Require(mode == "forward" || mode == "group", "kernel chain mode must be forward or group");
+		Require(NrReplay::ProviderFloor::CanonicalSha256(providerHash) == NrReplay::ProviderFloor::kProviderSha256,
+			"kernel chain experiment requires the pinned provider disk SHA256");
+		ValidateIndependentProviderContexts(variant, frames);
+		Require(std::ranges::all_of(variant.rects, [&](const auto& rect) {
+			return rect.width == variant.rects.front().width && rect.height == variant.rects.front().height;
+		}),
+			"kernel chain experiment requires equal region shapes");
+		receipt.update({ { "requested", true }, { "mode", mode }, { "providerDiskSha256", providerHash },
+			{ "inMemoryState", "not_loaded" }, { "transitions", Json::array() },
+			{ "qualityQualified", false }, { "productionPerformanceQualified", false } });
+	}
+	void ValidateKernelPairExperiment(const Variant& variant, const std::vector<Frame>& frames)
+	{
+		ValidateIndependentProviderContexts(variant, frames);
+		Require(frames.front().eyes.size() == 2 && variant.rects.size() == 2 &&
+					std::ranges::all_of(variant.rects, [](const auto& rect) { return rect.width == 192 && rect.height == 256; }),
+			"kernel pair experiment requires two independent 192x256 regions in each eye");
+		for (const auto& eye : frames.front().eyes)
+			Require(eye.color.width == 1008 && eye.color.height == 1120,
+				"kernel pair experiment requires the qualified 1008x1120 input grid");
+	}
+	Json NativeHandlePlan(const Variant& variant, unsigned eyes)
+	{
+		Json slots = Json::array();
+		unsigned mask = 0;
+		for (unsigned eye = 0; eye < eyes; ++eye)
+			for (unsigned region = 0; region < variant.rects.size(); ++region) {
+				const auto slot = PhysicalRegionFeatureSlot(eye, variant.reuseNativeHandles ? 0u : region);
+				slots.push_back(slot);
+				mask |= 1u << slot;
+			}
+		return { { "nativeHandlePolicy", variant.reuseNativeHandles ? "per-eye" : "independent" },
+			{ "nativeHandleSlots", slots }, { "nativeHandleMask", mask }, { "nativeHandleCount", std::popcount(mask) },
+			{ "nativeHandleReuseBarriers", variant.reuseNativeHandles ? eyes * (variant.rects.size() - 1) : 0 },
+			{ "nativeHandleBarrierPolicy", "global_uav_between_reused_handle_evaluations" } };
 	}
 	Json ApplyVariantInputStorage(TextureData& data, const ComputeSubrect& outputRect, unsigned width, unsigned height,
 		const Variant& variant, std::string_view resource)
@@ -564,6 +662,8 @@ namespace
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		D3D12Interop interop;
+		std::unique_ptr<NrReplay::ProviderFloorProbe> providerFloor;
+		std::unique_ptr<NrReplay::ProviderKernelChainProbe> kernelChain;
 		bool active = false;
 		bool ngxInitialized = false;
 		~Session()
@@ -579,7 +679,12 @@ namespace
 			if (interop.IsRecording())
 				(void)interop.AbortD3D12();
 			logger::info("Replay shutdown: waiting for native GPU idle and retiring runtime");
-			if (!interop.WaitForIdle() || !Runtime::Instance().Shutdown()) {
+			const bool idle = interop.WaitForIdle();
+			const bool chainRestored = !kernelChain || kernelChain->Restore(idle);
+			if (!chainRestored)
+				(void)kernelChain.release();
+			const bool restored = (!providerFloor || providerFloor->Restore(idle)) && chainRestored;
+			if (!idle || !restored || !Runtime::Instance().Shutdown()) {
 				Runtime::Instance().AbandonUnsafe();
 				interop.AbandonUnsafe();
 				return false;
@@ -604,11 +709,17 @@ namespace
 		void Restart()
 		{
 			Retire();
+			Require(!kernelChain || kernelChain->Restore(true), "case kernel chain restoration failed");
+			Require(!providerFloor || providerFloor->Restore(true), "case provider floor restoration failed");
 			Require(Runtime::Instance().Shutdown(), "case runtime shutdown failed");
 			Require(interop.Shutdown(), "case resource retirement failed");
 			Require(interop.Initialize(adapter.Get(), device.Get(), context.Get()), interop.LastOperation());
 			if (!Runtime::Instance().Initialize(interop.Device()))
 				throw std::runtime_error(Runtime::Instance().Detail());
+			if (providerFloor)
+				providerFloor->Apply(Runtime::Instance().Path(), Runtime::Instance().Hash());
+			if (kernelChain)
+				kernelChain->Apply(Runtime::Instance().Path(), Runtime::Instance().Hash());
 		}
 		Json Memory()
 		{
@@ -691,9 +802,44 @@ namespace
 		session.context->Unmap(staging.Get(), 0);
 		return data;
 	}
+	Json SaveTextureEvidence(const std::filesystem::path& root, const std::string& name, const TextureData& pixels, unsigned slot, std::string_view scope)
+	{
+		std::ofstream stream(root / name, std::ios::binary);
+		stream.write(reinterpret_cast<const char*>(pixels.bytes.data()), static_cast<std::streamsize>(pixels.bytes.size()));
+		Require(bool(stream), "native output evidence write failed");
+		return { { "file", name }, { "sha256", Hash(pixels.bytes) }, { "format", pixels.format },
+			{ "width", pixels.width }, { "height", pixels.height }, { "rowBytes", pixels.rowBytes }, { "slot", slot }, { "scope", scope } };
+	}
+	void SaveScheduleRepetitions(Json& sample, NrReplay::KernelScheduleReadback& readback, const ExecutionSnapshot& finished,
+		std::span<const Resources> resources, std::span<const std::array<TextureData, 2>> sentinels,
+		const std::filesystem::path& root, const std::string& variant, unsigned iteration, unsigned repetitions, bool alternateSentinel)
+	{
+		sample["kernelScheduleRepetitions"] = Json::array();
+		sample["kernelScheduleTimingScope"] = "complete_frozen_schedule_excludes_sentinel_reset_output_copy_and_between_repetition_uav_join";
+		for (unsigned repetition = 0; repetition < repetitions; ++repetition) {
+			const auto& gpu = finished.regions[repetition].evaluationGpu;
+			Require(gpu.state == ExecutionTimingState::Complete && gpu.microseconds && *gpu.microseconds > 0,
+				"kernel schedule repetition GPU timing unavailable");
+			Json repeated{ { "repetition", repetition }, { "gpuMicroseconds", *gpu.microseconds }, { "outputs", Json::array() } };
+			for (std::size_t i = 0; i < resources.size(); ++i) {
+				auto pixels = resources[i].source;
+				pixels.bytes = readback.Read(repetition, static_cast<unsigned>(i));
+				const auto& sentinel = sentinels[i][repetition & 1u];
+				const auto name = std::format("{}-{:03}-repeat{}-slot{}-full.bin", variant, iteration, repetition, resources[i].slot);
+				auto output = SaveTextureEvidence(root, name, pixels, resources[i].slot, "full_output_resource");
+				output.update({ { "ownedRect", RectJson(resources[i].rect) }, { "ownedSha256", Hash(Crop(pixels, resources[i].rect).bytes) },
+					{ "sentinelSha256", Hash(sentinel.bytes) }, { "sentinelPattern", repetition & 1u },
+					{ "alternateBytePattern", (repetition & 1u) ? !alternateSentinel : alternateSentinel },
+					{ "footprint", Footprint(sentinel, pixels, resources[i].rect) } });
+				repeated["outputs"].push_back(std::move(output));
+			}
+			sample["kernelScheduleRepetitions"].push_back(std::move(repeated));
+		}
+		sample["kernelScheduleReadback"] = readback.Receipt();
+	}
 	Json RunCase(Session& session, const Variant& variant, const std::vector<Frame>& frames,
 		unsigned warmup, unsigned samples, Clock::time_point deadline, const std::filesystem::path& outputRoot, bool alternateSentinel,
-		NrReplay::GpuCapture& capture)
+		NrReplay::GpuCapture& capture, bool batchTimingOnly, bool captureKernelModules, bool kernelPair, unsigned scheduleRepetitions)
 	{
 		const auto& first = frames.front();
 		const auto width = variant.crop.IsValid() ? variant.crop.width : first.eyes.front().color.width;
@@ -722,6 +868,8 @@ namespace
 			{ "inputStorageResource", variant.inputStorageResource }, { "inputStorageHaloPixels", variant.inputStorageHaloPixels },
 			{ "temporalSequence", variant.temporal }, { "qualityAssessment", "not_performed" },
 			{ "status", "unavailable" }, { "reason", "not_started" } };
+		value.update(NativeHandlePlan(variant, static_cast<unsigned>(first.eyes.size())));
+		value["batchTimingOnly"] = batchTimingOnly;
 		if (variant.occupancy >= 0) {
 			value["maskOccupancyFraction"] = variant.occupancy;
 			value["maskPolicy"] = "synthetic_CSX_composite_only_binary_occupancy_proxy_after_native_inference_not_GPU_composite_cost";
@@ -736,7 +884,8 @@ namespace
 				}
 				value["evaluatedSourceRects"].push_back(RectJson(sourceRect));
 				value["evaluatedGuideRects"].push_back(RectJson(MapComputeSubrect(variant.rects[region], width, height, guideWidth, guideHeight)));
-				value["contextIds"].push_back(std::format("{}:fresh-slot-{}", variant.id, eye + region * 4));
+				value["contextIds"].push_back(std::format("{}:fresh-slot-{}", variant.id,
+					PhysicalRegionFeatureSlot(static_cast<unsigned>(eye), variant.reuseNativeHandles ? 0u : static_cast<unsigned>(region))));
 			}
 		if (variant.temporal && frames.size() < warmup + samples) {
 			value["reason"] = "insufficient_consecutive_captured_frames_for_matched_warmup_and_samples";
@@ -798,6 +947,8 @@ namespace
 					{ "reset", variant.history != "continuous" || iteration == 0 },
 					{ "gpuMicroseconds", nullptr }, { "evaluationGpuMicroseconds", Json::array() }, { "runtimeCalls", Json::array() },
 					{ "createdFeatureCount", 0 }, { "evaluationCount", 0 }, { "nonzeroEditPixels", 0 }, { "maximumAbsEdit", 0 } };
+				std::unique_ptr<NrReplay::KernelScheduleReadback> scheduleReadback;
+				std::vector<std::array<TextureData, 2>> scheduleSentinels;
 				try {
 					const bool captureSample = capture.Enabled() && iteration == warmup;
 					sample["externalGpuCapture"] = captureSample;
@@ -829,6 +980,17 @@ namespace
 						resource.sentinel = Sentinel(resource.source, alternateSentinel);
 						session.context->UpdateSubresource(resource.output.resource11.Get(), 0, nullptr, resource.sentinel.bytes.data(), resource.sentinel.rowBytes, 0);
 					}
+					if (scheduleRepetitions > 1 && iteration >= warmup) {
+						std::vector<NrReplay::KernelScheduleReadback::Input> inputs;
+						scheduleSentinels.reserve(resources.size());
+						for (const auto& resource : resources) {
+							scheduleSentinels.push_back({ resource.sentinel, Sentinel(resource.source, !alternateSentinel) });
+							const auto& patterns = scheduleSentinels.back();
+							inputs.push_back({ resource.output.resource12.Get(), resource.source.width, resource.source.height, resource.source.rowBytes,
+								{ patterns[0].bytes, patterns[1].bytes } });
+						}
+						scheduleReadback = std::make_unique<NrReplay::KernelScheduleReadback>(session.interop.Device(), inputs, scheduleRepetitions);
+					}
 					ID3D12GraphicsCommandList* list = nullptr;
 					Require(session.interop.BeginD3D12(&list), session.interop.LastOperation());
 					unsigned slotMask = 0;
@@ -848,20 +1010,81 @@ namespace
 					timing.execution = evidence;
 					Require(session.interop.BeginFeatureTiming(list, timing), session.interop.LastOperation());
 					Transition(list, resources, true);
+					std::unique_ptr<NrReplay::KernelCommandCapture> commandCapture;
+					std::unique_ptr<NrReplay::KernelChainCommandList, NrReplay::KernelChainCommandList::Deleter> chainList;
+					if (session.kernelChain) {
+						session.kernelChain->BeginSample(iteration, iteration < warmup);
+						NrReplay::KernelChainCommandList::BarrierCallback barriers;
+						NrReplay::KernelChainCommandList::HeapCallback heaps;
+						NrReplay::KernelChainCommandList::BarrierDispositionCallback barrierDisposition;
+						NrReplay::KernelChainCommandList::HeapDispositionCallback heapDisposition;
+						if (captureKernelModules) {
+							commandCapture = std::make_unique<NrReplay::KernelCommandCapture>(sample, true);
+							barriers = [&](UINT barrierCount, const D3D12_RESOURCE_BARRIER* values) {
+								commandCapture->Barriers(barrierCount, values);
+							};
+							heaps = [&](UINT heapCount, ID3D12DescriptorHeap* const* values) {
+								commandCapture->Heaps(heapCount, values);
+							};
+						}
+						if (kernelPair) {
+							barrierDisposition = [&](UINT barrierCount, const D3D12_RESOURCE_BARRIER* values) {
+								return session.kernelChain->BarrierDisposition(barrierCount, values);
+							};
+							heapDisposition = [&](UINT heapCount, ID3D12DescriptorHeap* const* values) {
+								return session.kernelChain->HeapDisposition(heapCount, values);
+							};
+						}
+						chainList.reset(new NrReplay::KernelChainCommandList(list, [&](std::string_view name) {
+							if (commandCapture)
+								commandCapture->BeforeCommand();
+							return session.kernelChain->BeforeCommand(name); }, [&](std::string_view reason) {
+							if (commandCapture)
+								commandCapture->RecordFailure(reason);
+							logger::error("Kernel chain command-list rejection: {}", reason); }, std::move(barriers), std::move(heaps), std::move(barrierDisposition), std::move(heapDisposition)));
+					}
+					auto* evaluationList = chainList ? static_cast<ID3D12GraphicsCommandList*>(chainList.get()) : list;
 					const bool reset = variant.history != "continuous" || iteration == 0;
 					std::uint64_t creationCpu = 0, evaluationCpu = 0;
 					unsigned created = 0, evaluated = 0;
+					const auto submissionStarted = Clock::now();
 					for (unsigned i = 0; i < resources.size(); ++i) {
 						const auto& resource = resources[i];
+						if (commandCapture)
+							commandCapture->SetEvaluation(resource.eye, i % static_cast<unsigned>(variant.rects.size()));
 						const auto& eye = frame.eyes[resource.eye];
+						const auto nativeSlot = value["nativeHandleSlots"][i].get<unsigned>();
+						if (variant.reuseNativeHandles && i % variant.rects.size() != 0) {
+							// Shared handle scratch must finish before the next independent call.
+							D3D12_RESOURCE_BARRIER barrier{};
+							barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+							list->ResourceBarrier(1, &barrier);
+						}
 						RuntimeExecutionEvidence native;
 						bool attempted = false;
 						const auto nativeLayout = BuildNativeEvaluationLayout(
 							{ width, height }, { guideWidth, guideHeight }, { width, height }, {}, resource.rect,
 							{ true, eye.motionScale[0], eye.motionScale[1] }, eye.featureUpscaling);
-						const bool succeeded = Runtime::Instance().Execute(list, resource.slot,
+						if (session.kernelChain)
+							session.kernelChain->BeginEvaluation(evaluationList, list, resource.eye, i % static_cast<unsigned>(variant.rects.size()));
+						if (session.kernelChain && (Runtime::Instance().GetResidentFeatureMask() & (1u << nativeSlot)) == 0)
+							Require(session.kernelChain->BeforeCommand("native_feature_creation"), "kernel chain feature-creation boundary failed");
+						if (session.kernelChain && !batchTimingOnly) {
+							Require(session.kernelChain->BeforeCommand("ReplayBeginEvaluationTiming"), "kernel chain pre-evaluation flush failed");
+							session.interop.BeginEvaluationTiming(list, i);
+						}
+						const bool succeeded = Runtime::Instance().Execute(evaluationList, nativeSlot,
 							resource.color.resource12.Get(), resource.depth.resource12.Get(), resource.motion.resource12.Get(), resource.output.resource12.Get(), nullptr,
-							nativeLayout, tuning, reset, &attempted, &native, &session.interop, i);
+							nativeLayout, tuning, reset, &attempted, &native, (session.kernelChain || batchTimingOnly) ? nullptr : &session.interop, i);
+						if (session.kernelChain) {
+							if (!batchTimingOnly) {
+								Require(session.kernelChain->BeforeCommand("ReplayEndEvaluationTiming"), "kernel chain post-evaluation flush failed");
+								session.interop.EndEvaluationTiming(list, i);
+							}
+							session.kernelChain->EndEvaluation();
+							session.kernelChain->ThrowIfFailed();
+							Require(chainList->Healthy(), chainList->FailureReason());
+						}
 						created += native.createSucceeded ? 1 : 0;
 						evaluated += native.evaluateSucceeded ? 1 : 0;
 						creationCpu += native.createCpuMicroseconds.value_or(0);
@@ -870,16 +1093,54 @@ namespace
 						sample["evaluationCount"] = evaluated;
 						sample["createCpuMicroseconds"] = creationCpu;
 						sample["evalCpuMicroseconds"] = evaluationCpu;
-						sample["runtimeCalls"].push_back({ { "slot", resource.slot }, { "createAttempted", native.createAttempted }, { "createSucceeded", native.createSucceeded },
+						sample["runtimeCalls"].push_back({ { "slot", resource.slot }, { "nativeHandleSlot", nativeSlot }, { "createAttempted", native.createAttempted }, { "createSucceeded", native.createSucceeded },
 							{ "evaluationAttempted", attempted }, { "evaluationSucceeded", native.evaluateSucceeded },
 							{ "createResult", native.createResult ? Json(*native.createResult) : Json(nullptr) },
 							{ "evaluateResult", native.evaluateResult ? Json(*native.evaluateResult) : Json(nullptr) } });
 						Require(succeeded && attempted && native.evaluateSucceeded, Runtime::Instance().Detail());
 					}
+					if (session.kernelChain) {
+						Require(!kernelPair || iteration < warmup || created == 0,
+							"kernel pair steady sample unexpectedly created a native feature");
+						if (scheduleReadback) {
+							session.kernelChain->FinishCommandList([&](unsigned repetition) {
+								scheduleReadback->RecordBefore(list, repetition);
+								session.interop.BeginEvaluationTiming(list, repetition); }, [&](unsigned repetition) {
+								session.interop.EndEvaluationTiming(list, repetition);
+								scheduleReadback->RecordAfter(list, repetition); });
+							for (std::size_t i = 0; i < resources.size(); ++i)
+								resources[i].sentinel = scheduleSentinels[i][(scheduleRepetitions - 1) & 1u];
+						} else {
+							session.kernelChain->FinishCommandList();
+						}
+						session.kernelChain->ThrowIfFailed();
+						Require(chainList->Healthy() && chainList->OutstandingReferences() == 1,
+							"kernel chain proxy failed or provider retained an unexpected command-list reference");
+					}
+					sample["submissionCpuMicroseconds"] = std::chrono::duration<double, std::micro>(Clock::now() - submissionStarted).count();
+					sample["submissionCpuScope"] = scheduleReadback ?
+					                                   "one_native_recording_and_repeated_schedule_with_copy_commands_excludes_receipt_encoding_gpu_wait_and_cpu_readback" :
+					                                   "native_evaluation_loop_and_final_chain_flush_excludes_receipt_encoding_gpu_wait_and_readback";
+					if (commandCapture)
+						commandCapture->Complete();
+					if (session.kernelChain)
+						sample["kernelChain"] = session.kernelChain->SampleReceipt();
+					sample["retainedKernelChainProxiesUntilExit"] = NrReplay::KernelChainCommandList::RetainedUntilExitCount();
+					if (session.kernelChain && !batchTimingOnly)
+						sample["kernelChainEvaluationGpuScope"] = "execute_including_feature_creation_on_first_warmup_only";
+					if (variant.axis == "native_handle_reuse") {
+						sample["residentNativeHandleMask"] = Runtime::Instance().GetResidentFeatureMask();
+						sample["nativeHandleReuseBarriers"] = value["nativeHandleReuseBarriers"];
+						Require(sample["residentNativeHandleMask"] == value["nativeHandleMask"] &&
+									created == (iteration == 0 ? value["nativeHandleCount"].get<unsigned>() : 0u),
+							"native handle residency or creation differs from the admitted plan");
+					}
 					Transition(list, resources, false);
 					Require(session.interop.EndFeatureTiming(list), session.interop.LastOperation());
 					Require(session.interop.EndD3D12(), session.interop.LastOperation());
 					Require(session.interop.WaitForIdle(evidence), "replay submission GPU idle proof failed");
+					if (scheduleReadback)
+						scheduleReadback->ConfirmIdle();
 					const auto finished = evidence->Snapshot();
 					const auto memoryAfter = session.Memory();
 					sample.update(Json{ { "iteration", iteration }, { "warmup", iteration < warmup }, { "success", true }, { "reason", "" },
@@ -889,16 +1150,39 @@ namespace
 						{ "memory", { { "localUsageBefore", memoryBefore["local"] }, { "localUsageAfter", memoryAfter["local"] },
 										{ "nonlocalUsageBefore", memoryBefore["nonlocal"] }, { "nonlocalUsageAfter", memoryAfter["nonlocal"] } } },
 						{ "nonzeroEditPixels", 0 }, { "maximumAbsEdit", 0 }, { "outputFiles", Json::array() }, { "providerFootprint", Json::array() } });
+					if (scheduleReadback) {
+						sample["kernelScheduleRepeatCount"] = scheduleRepetitions;
+						sample["executedSchedulePixels"] = area * scheduleRepetitions;
+						SaveScheduleRepetitions(sample, *scheduleReadback, finished, resources, scheduleSentinels,
+							outputRoot, variant.id, iteration, scheduleRepetitions, alternateSentinel);
+					}
 					std::uint64_t edits = 0;
 					double maxEdit = 0;
 					for (unsigned i = 0; i < resources.size(); ++i) {
-						sample["evaluationGpuMicroseconds"].push_back(finished.regions[i].evaluationGpu.microseconds ? Json(*finished.regions[i].evaluationGpu.microseconds) : Json(nullptr));
+						sample["evaluationGpuMicroseconds"].push_back(!scheduleReadback && finished.regions[i].evaluationGpu.microseconds ? Json(*finished.regions[i].evaluationGpu.microseconds) : Json(nullptr));
 						const auto pixels = Download(session, resources[i].output, std::min(deadline, Clock::now() + std::chrono::seconds(2)));
 						auto footprint = Footprint(resources[i].sentinel, pixels, resources[i].rect);
-						footprint["alternateBytePattern"] = alternateSentinel;
+						footprint["alternateBytePattern"] = scheduleReadback && ((scheduleRepetitions - 1) & 1u) ? !alternateSentinel : alternateSentinel;
 						if (variant.sharedInputs && i % variant.rects.size() == 0) {
 							const auto prepared = Download(session, resources[i].color, std::min(deadline, Clock::now() + std::chrono::seconds(2)));
 							Require(prepared.bytes == resources[i].source.bytes, "native evaluation modified immutable prepared colour");
+							if (variant.axis == "native_handle_reuse" || variant.axis == "packed_region_experiment") {
+								const auto& eye = frame.eyes[resources[i].eye];
+								sample["immutableInputChecks"].push_back({ { "eye", resources[i].eye }, { "resource", "color" },
+									{ "sha256", Hash(prepared.bytes) } });
+								for (const auto& [name, texture, input] : {
+										 std::tuple{ "depth", &resources[i].depth, &eye.depth },
+										 std::tuple{ "motion", &resources[i].motion, &eye.motion } }) {
+									const auto unchanged = Download(session, *texture, std::min(deadline, Clock::now() + std::chrono::seconds(2)));
+									Require(unchanged.bytes == input->bytes, "native evaluation modified immutable guide input");
+									sample["immutableInputChecks"].push_back({ { "eye", resources[i].eye }, { "resource", name },
+										{ "sha256", Hash(unchanged.bytes) } });
+								}
+							}
+						}
+						if ((variant.axis == "native_handle_reuse" || variant.axis == "packed_region_experiment") && footprint.at("modifiedOutsidePixels") != 0) {
+							sample["success"] = false;
+							sample["reason"] = "context_probe_wrote_outside_evaluation";
 						}
 						sample["providerFootprint"].push_back(footprint);
 						if (footprint.at("unchangedInsidePixels") != 0 || footprint.at("nonfiniteInsidePixels") != 0) {
@@ -928,16 +1212,24 @@ namespace
 							sample["maskComposites"].push_back({ { "maskSelectedPixels", selected }, { "maskTotalPixels", rect.Area() },
 								{ "sha256", Hash(composite.bytes) }, { "nativeInputsUnmodified", true }, { "excludedFromGpuTiming", true } });
 						}
-						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage" || variant.axis == "source_transport" || variant.axis == "native_context_count" || variant.axis == "call_count" || variant.axis == "packed_region_experiment") {
+						if (variant.temporal || variant.axis == "capacity" || variant.axis == "input_storage" || variant.axis == "source_transport" || variant.axis == "native_context_count" || variant.axis == "call_count" || variant.axis == "packed_region_experiment" || variant.axis == "native_handle_reuse") {
 							const bool retainFullResource = variant.temporal && variant.axis != "capacity";
 							const auto retained = retainFullResource ? pixels : Crop(pixels, resources[i].rect);
 							const auto name = std::format("{}-{:03}-slot{}.bin", variant.id, iteration, resources[i].slot);
-							std::ofstream stream(outputRoot / name, std::ios::binary);
-							stream.write(reinterpret_cast<const char*>(retained.bytes.data()), static_cast<std::streamsize>(retained.bytes.size()));
-							Require(bool(stream), "native output evidence write failed");
-							sample["outputFiles"].push_back({ { "file", name }, { "sha256", Hash(retained.bytes) }, { "format", retained.format },
-								{ "width", retained.width }, { "height", retained.height }, { "rowBytes", retained.rowBytes }, { "slot", resources[i].slot },
-								{ "scope", retainFullResource ? "full_output_resource" : "evaluated_rectangle" } });
+							sample["outputFiles"].push_back(SaveTextureEvidence(outputRoot, name, retained, resources[i].slot,
+								retainFullResource ? "full_output_resource" : "evaluated_rectangle"));
+						}
+						if (scheduleReadback) {
+							const auto ownedHash = Hash(Crop(pixels, resources[i].rect).bytes);
+							for (const auto& repeated : sample.at("kernelScheduleRepetitions")) {
+								const auto& output = repeated.at("outputs").at(i);
+								const auto& repeatedFootprint = output.at("footprint");
+								Require(output.at("ownedSha256") == ownedHash && repeatedFootprint.at("modifiedOutsidePixels") == 0 &&
+											repeatedFootprint.at("unchangedInsidePixels") == 0 && repeatedFootprint.at("nonfiniteInsidePixels") == 0,
+									"repeated schedule output differs or violates its write footprint");
+							}
+							Require(Hash(pixels.bytes) == sample.at("kernelScheduleRepetitions").back().at("outputs").at(i).at("sha256").get<std::string>(),
+								"final output differs from the final recorded repetition");
 						}
 					}
 					sample["nonzeroEditPixels"] = edits;
@@ -951,13 +1243,20 @@ namespace
 					}
 					value["samples"].push_back(std::move(sample));
 				} catch (const std::exception& error) {
+					if (scheduleReadback)
+						sample["kernelScheduleReadback"] = scheduleReadback->Receipt();
 					sample["success"] = false;
 					sample["reason"] = error.what();
+					if (session.kernelChain)
+						sample["kernelChain"] = session.kernelChain->SampleReceipt();
+					sample["retainedKernelChainProxiesUntilExit"] = NrReplay::KernelChainCommandList::RetainedUntilExitCount();
 					sample["interopFailure"] = { { "operation", session.interop.LastOperation() }, { "result", static_cast<std::uint32_t>(session.interop.LastError()) },
 						{ "deviceRemovedReason", static_cast<std::uint32_t>(session.device->GetDeviceRemovedReason()) } };
 					value["samples"].push_back(std::move(sample));
 					throw;
 				}
+				if (variant.axis == "native_handle_reuse" || variant.axis == "packed_region_experiment")
+					Require(value["samples"].back()["success"] == true, "context probe rejected a sample; stopped further calls");
 			}
 			value["status"] = "complete";
 			value["reason"] = "";
@@ -981,17 +1280,25 @@ int wmain(int argc, wchar_t** argv)
 		{ "inputStorageProbes", "explicit_case_only_finite_patterns_outside_requested_native_rectangles" },
 		{ "maskOccupancy", "synthetic_binary_composite_only_proxy_no_provider_ControlMask_no_GPU_composite_timing" },
 		{ "gpuCapture", "not_requested_no_external_capture_tool_attached" } };
+	result["providerFloorExperiment"] = { { "requested", false } };
 	result["buildIdentity"] = { { "runtimeSourceSha256", kRuntimeSourceHash }, { "interopSourceSha256", kInteropSourceHash },
 		{ "ngxHeaderSha256", kNgxHeaderHash }, { "streamlineCoreHeaderSha256", kSlHeaderHash }, { "streamlineSdkVersion", kSlVersion } };
 	result["buildIdentity"]["replaySourceSha256"] = Json::parse(kReplaySourceIdentityJson);
 	result["buildIdentity"]["ngxLibrarySha256"] = kNgxLibraryHash;
-	std::filesystem::path manifestPath, outputRoot, runtimeSource, renderdocPath;
+	std::filesystem::path manifestPath, outputRoot, runtimeSource, renderdocPath, kernelReplacementManifest, modelReplacementManifest;
 	unsigned samples = 8, warmup = 3, seconds = 180;
 	unsigned capacitySize = 128;
 	bool capacityTemporal = false;
 	bool alternateSentinel = false;
+	bool experimentalProviderFloor = false;
+	bool batchTimingOnly = false;
+	bool captureKernelModules = false;
+	std::optional<unsigned> modelBatchStages;
+	std::optional<unsigned> scheduleRepetitions;
+	std::string kernelChainMode, kernelPairMode, repetitionControl;
 	std::string onlyCase;
 	std::string customRects;
+	std::string nativeHandlePolicy;
 	std::string captureLibraryHash;
 	std::unique_ptr<NrReplay::GpuCapture> capture;
 	bool validateOnly = false, validateStorage = false, inspectOnly = false;
@@ -1019,6 +1326,16 @@ int wmain(int argc, wchar_t** argv)
 				alternateSentinel = true;
 				continue;
 			}
+			if (option == L"--batch-timing-only") {
+				Require(!batchTimingOnly, "batch timing flag must be specified once");
+				batchTimingOnly = true;
+				continue;
+			}
+			if (option == L"--capture-kernel-modules") {
+				Require(!captureKernelModules, "kernel module capture flag must be specified once");
+				captureKernelModules = true;
+				continue;
+			}
 			Require(i + 1 < argc, "option requires value");
 			const std::filesystem::path argument = argv[++i];
 			if (option == L"--manifest")
@@ -1037,7 +1354,44 @@ int wmain(int argc, wchar_t** argv)
 				onlyCase = argument.string();
 			else if (option == L"--rects")
 				customRects = argument.string();
-			else if (option == L"--renderdoc")
+			else if (option == L"--native-handle-policy")
+				nativeHandlePolicy = argument.string();
+			else if (option == L"--experimental-provider-floor") {
+				Require(!experimentalProviderFloor && argument.string() == "256", "experimental provider floor must be exactly 256 and specified once");
+				experimentalProviderFloor = true;
+			} else if (option == L"--experimental-kernel-chain") {
+				Require(kernelChainMode.empty() && (argument.string() == "forward" || argument.string() == "group"),
+					"kernel chain mode must be forward or group and specified once");
+				kernelChainMode = argument.string();
+			} else if (option == L"--experimental-kernel-replacement") {
+				Require(kernelReplacementManifest.empty(), "kernel replacement manifest must be specified once");
+				kernelReplacementManifest = argument;
+			} else if (option == L"--experimental-model-replacement") {
+				Require(modelReplacementManifest.empty(), "model replacement manifest must be specified once");
+				modelReplacementManifest = argument;
+			} else if (option == L"--experimental-model-batch-stages") {
+				const auto value = argument.string();
+				Require(!modelBatchStages && !value.empty() && value.size() <= 3 &&
+							std::ranges::all_of(value, [](char c) { return c >= '0' && c <= '9'; }),
+					"model batch stages must be one decimal count, specified once");
+				modelBatchStages = std::stoul(value);
+				Require(*modelBatchStages >= 1 && *modelBatchStages <= NrReplay::KernelPair::kStages,
+					"model batch stages must be within 1..158");
+			} else if (option == L"--experimental-kernel-repetitions") {
+				const auto value = argument.string();
+				Require(!scheduleRepetitions && (value == "2" || value == "3" || value == "4"),
+					"kernel repetitions must be exactly 2, 3 or 4 and specified once");
+				scheduleRepetitions = std::stoul(value);
+			} else if (option == L"--experimental-kernel-comparison") {
+				const auto value = argument.string();
+				Require(repetitionControl.empty() && (value == "original" || value == "layer-control"),
+					"kernel comparison must be original or layer-control and specified once");
+				repetitionControl = value;
+			} else if (option == L"--experimental-kernel-pair") {
+				Require(kernelPairMode.empty() && (argument.string() == "original" || argument.string() == "control" || argument.string() == "layer-control" || argument.string() == "batch" || argument.string() == "model-batch"),
+					"kernel pair mode must be original, control, layer-control, batch or model-batch and specified once");
+				kernelPairMode = argument.string();
+			} else if (option == L"--renderdoc")
 				renderdocPath = argument;
 			else if (option == L"--capacity-size") {
 				const auto size = argument.string();
@@ -1058,6 +1412,46 @@ int wmain(int argc, wchar_t** argv)
 		Require(!std::filesystem::exists(outputRoot), "output directory already exists; preserve earlier evidence");
 		std::filesystem::create_directories(outputRoot);
 		ownsOutput = true;
+		Require(!experimentalProviderFloor || (!customRects.empty() && nativeHandlePolicy.empty() && renderdocPath.empty() &&
+												  !inspectOnly && !validateStorage && !capacityTemporal && capacitySize == 128 && onlyCase.empty() && kernelChainMode.empty()),
+			"experimental provider floor requires custom rectangles without handle, capture, capacity, temporal, storage or inspection options");
+		Require(kernelChainMode.empty() || (!customRects.empty() && nativeHandlePolicy.empty() && renderdocPath.empty() &&
+											   !experimentalProviderFloor && !inspectOnly && !validateStorage && !capacityTemporal && capacitySize == 128 && onlyCase.empty()),
+			"kernel chain experiment requires custom rectangles without floor, handle, capture, capacity, temporal, storage or inspection options");
+		result["kernelChainExperiment"] = { { "requested", false } };
+		Require(!captureKernelModules || kernelChainMode == "forward",
+			"kernel module capture requires the forward kernel-chain probe");
+		result["captureKernelModules"] = captureKernelModules;
+		Require(kernelReplacementManifest.empty() || (captureKernelModules && kernelChainMode == "forward" && !validateOnly),
+			"kernel replacement requires live forward identity capture; parser-only validation cannot qualify its manifest");
+		Require(kernelPairMode.empty() || (captureKernelModules && kernelChainMode == "forward" && batchTimingOnly && warmup >= 1 && !validateOnly),
+			"kernel pair mode requires live forward identity capture, batch timing and at least one unchanged warmup");
+		Require(kernelPairMode.empty() || ((kernelPairMode == "batch") == !kernelReplacementManifest.empty()),
+			"kernel pair batch requires an N2 manifest; original/control require no replacement manifest");
+		Require(modelReplacementManifest.empty() || (kernelReplacementManifest.empty() && (kernelPairMode == "original" || kernelPairMode == "layer-control" || kernelPairMode == "model-batch")),
+			"model replacement requires the original or layer-control pair schedule without another replacement");
+		Require(kernelPairMode != "model-batch" || !modelReplacementManifest.empty(), "model batch requires a pinned replacement manifest");
+		Require(!modelBatchStages || kernelPairMode == "model-batch", "model batch stages requires the model-batch pair schedule");
+		Require(!scheduleRepetitions || ((kernelPairMode == "original" || kernelPairMode == "layer-control" || kernelPairMode == "model-batch") &&
+											modelBatchStages.value_or(NrReplay::KernelPair::kStages) == NrReplay::KernelPair::kStages &&
+											(kernelPairMode == "model-batch" || modelReplacementManifest.empty())),
+			"kernel repetitions requires a complete original, layer-control or model-batch schedule without N1 replacement");
+		NrReplay::KernelPair::ValidateComparison(repetitionControl, scheduleRepetitions.value_or(1), kernelPairMode,
+			modelBatchStages.value_or(NrReplay::KernelPair::kStages));
+		if (scheduleRepetitions)
+			result["kernelScheduleRepetitions"] = *scheduleRepetitions;
+		if (!repetitionControl.empty())
+			result["kernelScheduleComparisonControl"] = repetitionControl;
+		result["modelReplacementRequested"] = !modelReplacementManifest.empty();
+		result["modelBatchStageLimit"] = kernelPairMode == "model-batch" ? Json(modelBatchStages.value_or(NrReplay::KernelPair::kStages)) : Json(nullptr);
+		result["kernelPairMode"] = kernelPairMode;
+		Require(!batchTimingOnly || (!customRects.empty() && nativeHandlePolicy.empty() && renderdocPath.empty() &&
+										!experimentalProviderFloor && !inspectOnly && !validateStorage && !capacityTemporal && capacitySize == 128 && onlyCase.empty()),
+			"batch-only timing requires independent custom contexts without other experiments");
+		result["batchTimingOnly"] = batchTimingOnly;
+		Require(nativeHandlePolicy.empty() || (!customRects.empty() && !capacityTemporal && capacitySize == 128 &&
+												  !inspectOnly && !validateStorage && onlyCase.empty()),
+			"native handle policy requires explicit custom rectangles without capacity, temporal, inspection or storage options");
 		std::array<wchar_t, 32768> executablePath{};
 		const auto executableLength = GetModuleFileNameW(nullptr, executablePath.data(), static_cast<DWORD>(executablePath.size()));
 		Require(executableLength && executableLength < executablePath.size(), "replay executable identity unavailable");
@@ -1076,6 +1470,9 @@ int wmain(int argc, wchar_t** argv)
 		}
 		const auto manifestBytes = Read(manifestPath, 8 * 1024 * 1024);
 		const auto manifest = Json::parse(manifestBytes);
+		Require((kernelReplacementManifest.empty() && kernelPairMode.empty()) || (manifest.at("adapter").at("vendorId") == 0x10de &&
+																					 manifest.at("adapter").at("deviceId") == 0x2f58),
+			"kernel replacement requires the admitted SM120 experiment adapter");
 		result["captureManifest"] = std::filesystem::absolute(manifestPath).string();
 		result["captureManifestSha256"] = Hash(manifestBytes);
 		const auto frames = LoadFrames(manifest, manifestPath.parent_path());
@@ -1092,6 +1489,18 @@ int wmain(int argc, wchar_t** argv)
 		std::vector<Variant> customVariants;
 		if (!customRects.empty()) {
 			customVariants.push_back(CustomRegions(customRects, first, frames.front().metadata.at("mode").get<unsigned>()));
+			if (batchTimingOnly)
+				ValidateIndependentProviderContexts(customVariants.back(), frames);
+			if (!nativeHandlePolicy.empty()) {
+				ConfigureNativeHandleExperiment(customVariants.back(), frames.front(), nativeHandlePolicy);
+				result["nativeHandlePlan"] = NativeHandlePlan(customVariants.back(), static_cast<unsigned>(frames.front().eyes.size()));
+			}
+			if (experimentalProviderFloor)
+				ConfigureProviderFloorExperiment(customVariants.back(), frames, Lower(manifest.at("runtime").at("sha256").get<std::string>()), result["providerFloorExperiment"]);
+			if (!kernelChainMode.empty())
+				ConfigureKernelChainExperiment(customVariants.back(), frames, Lower(manifest.at("runtime").at("sha256").get<std::string>()), kernelChainMode, result["kernelChainExperiment"]);
+			if (!kernelPairMode.empty())
+				ValidateKernelPairExperiment(customVariants.back(), frames);
 			result["customRegions"] = Json::parse(customRects);
 		}
 		if (validateOnly || validateStorage) {
@@ -1110,6 +1519,32 @@ int wmain(int argc, wchar_t** argv)
 		}
 		capture = std::make_unique<NrReplay::GpuCapture>(renderdocPath, outputRoot / "native-workload");
 		Session session;
+		if (experimentalProviderFloor)
+			session.providerFloor = std::make_unique<NrReplay::ProviderFloorProbe>(result["providerFloorExperiment"]);
+		if (!kernelChainMode.empty())
+			session.kernelChain = std::make_unique<NrReplay::ProviderKernelChainProbe>(result["kernelChainExperiment"], kernelChainMode,
+				captureKernelModules ? outputRoot / "kernel-modules" : std::filesystem::path{}, kernelReplacementManifest, kernelPairMode, modelReplacementManifest,
+				modelBatchStages.value_or(NrReplay::KernelPair::kStages), scheduleRepetitions.value_or(1), repetitionControl);
+		std::unique_ptr<NrReplay::FeatureCreationObserver> creationObserver;
+		if (!kernelPairMode.empty()) {
+			result["kernelPairAllocationParameters"] = Json::array();
+			creationObserver = std::make_unique<NrReplay::FeatureCreationObserver>([&](const NVSDK_NGX_Parameter* parameters) {
+				Json values = Json::array();
+				bool admitted = true;
+				for (const auto* key : { NVSDK_NGX_Parameter_ResourceAllocCallback, NVSDK_NGX_Parameter_ResourceReleaseCallback,
+						 NVSDK_NGX_EParameter_ResourceAllocCallback, NVSDK_NGX_EParameter_ResourceReleaseCallback }) {
+					void* callback = nullptr;
+					const auto status = parameters->Get(key, &callback);
+					const bool absent = !callback && (status == NVSDK_NGX_Result_Success || status == NVSDK_NGX_Result_FAIL_UnsupportedParameter);
+					values.push_back({ { "key", key }, { "result", static_cast<unsigned>(status) },
+						{ "callback", reinterpret_cast<std::uintptr_t>(callback) }, { "absentOrNull", absent } });
+					admitted = admitted && absent;
+				}
+				result["kernelPairAllocationParameters"].push_back({ { "parameters", values }, { "admitted", admitted } });
+				Require(admitted, "kernel pair allocation callbacks are present or unavailable");
+				session.kernelChain->ConfirmDefaultAllocationParameters();
+			});
+		}
 		ComPtr<IDXGIFactory1> factory;
 		Check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "DXGI factory");
 		for (unsigned index = 0;; ++index) {
@@ -1164,7 +1599,7 @@ int wmain(int argc, wchar_t** argv)
 			if (capacityTemporal)
 				variant.temporal = true;
 			std::cout << variant.id << std::endl;
-			auto value = RunCase(session, variant, frames, warmup, samples, deadline, outputRoot, alternateSentinel, *capture);
+			auto value = RunCase(session, variant, frames, warmup, samples, deadline, outputRoot, alternateSentinel, *capture, batchTimingOnly, captureKernelModules, !kernelPairMode.empty(), scheduleRepetitions.value_or(1));
 			result["gpuCapture"] = capture->Report();
 			result["gpuCapture"]["librarySha256"] = captureLibraryHash;
 			value["sourceContentSha256"] = result["sourceContentSha256"];

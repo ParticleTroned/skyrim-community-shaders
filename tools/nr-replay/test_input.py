@@ -49,7 +49,7 @@ class ReplayInput(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def run_fixture(self, expected=0, storage=False, case=None, rects=None):
+    def run_fixture(self, expected=0, storage=False, case=None, rects=None, handle_policy=None, extra=()):
         self.case += 1
         self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
         output = self.root / f"result-{self.case}"
@@ -59,11 +59,51 @@ class ReplayInput(unittest.TestCase):
             arguments += ["--case", case]
         if rects is not None:
             arguments += ["--rects", json.dumps(rects)]
+        if handle_policy is not None:
+            arguments += ["--native-handle-policy", handle_policy]
+        arguments += list(extra)
         run = subprocess.run(arguments, capture_output=True, text=True, timeout=15)
         self.assertEqual(run.returncode, expected, run.stdout + run.stderr)
-        result = json.loads((output / "results.json").read_text(encoding="utf-8"))
+        result = (json.loads((output / "results.json").read_text(encoding="utf-8"))
+                  if (output / "results.json").exists() else {"cases": [], "reason": run.stderr})
         self.assertEqual(result["cases"], [])
         return result
+
+    def test_native_handle_plan_preserves_calls_and_private_outputs(self):
+        self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
+                                     bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 256)
+        self.frame["mode"] = 2
+        self.eye["featureUpscaling"] = False
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        for eyes in (1, 2):
+            self.frame["eyes"] = [self.eye] + ([copy.deepcopy(self.eye)] if eyes == 2 else [])
+            for policy in ("independent", "per-eye"):
+                result = self.run_fixture(rects=rects, handle_policy=policy)
+                self.assertEqual(result["customRegions"], rects)
+                plan = result["nativeHandlePlan"]
+                slots = [eye if policy == "per-eye" else region * 4 + eye
+                         for eye in range(eyes) for region in range(2)]
+                self.assertEqual(plan["nativeHandleSlots"], slots)
+                self.assertEqual(plan["nativeHandleCount"], len(set(slots)))
+                self.assertEqual(plan["nativeHandleMask"], sum(1 << s for s in set(slots)))
+                self.assertEqual(plan["nativeHandleReuseBarriers"], eyes if policy == "per-eye" else 0)
+
+    def test_native_handle_probe_rejects_unsupported_contexts_before_runtime(self):
+        self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
+                                     bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 256)
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        self.assertIn("stateless C", self.run_fixture(1, rects=rects, handle_policy="per-eye")["reason"])
+        self.frame["mode"] = 2
+        self.assertIn("equal input grids", self.run_fixture(1, rects=rects, handle_policy="per-eye")["reason"])
+        self.eye["featureUpscaling"] = False
+        for bad in ([], [rects[0]], [[0, 0, 64, 128], rects[1]]):
+            self.run_fixture(1, rects=bad, handle_policy="per-eye")
+        self.assertIn("policy must", self.run_fixture(1, rects=rects, handle_policy="shared")["reason"])
+        self.run_fixture(1, handle_policy="per-eye")
+        self.run_fixture(1, rects=rects, handle_policy="per-eye", case="capacity-full")
+        self.run_fixture(1, rects=rects, handle_policy="per-eye", extra=("--capacity-temporal",))
+        self.run_fixture(1, rects=rects, handle_policy="per-eye", extra=("--capacity-size", "256"))
+        self.run_fixture(1, rects=rects, handle_policy="per-eye", storage=True)
 
     def test_custom_regions_are_bounded_stateless_and_exact(self):
         self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
@@ -78,6 +118,180 @@ class ReplayInput(unittest.TestCase):
                         [[0, 0, 64, 64], [32, 0, 64, 64]],
                         [[0, 0, 2**32, 64]]):
             self.run_fixture(1, rects=invalid)
+
+    def prepare_floor_fixture(self):
+        self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
+                                     bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 256)
+        self.frame["mode"] = 2
+        self.eye["featureUpscaling"] = False
+        self.manifest["runtime"] = {"sha256": "8270b350cd82de5ce89806872cdd6b6a9249b80836b91bbeb3573470744cc206"}
+
+    def test_floor_probe_is_explicit_and_preserves_independent_single_context(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 192, 256]]
+        baseline = self.run_fixture(rects=rects)
+        self.assertEqual(baseline["providerFloorExperiment"], {"requested": False})
+        result = self.run_fixture(rects=rects, extra=("--experimental-provider-floor", "256"))
+        probe = result["providerFloorExperiment"]
+        self.assertEqual(result["customRegions"], rects)
+        self.assertEqual(probe["experimentalFloor"], 256)
+        self.assertEqual(probe["inMemoryState"], "not_loaded")
+        self.assertEqual(probe["transitions"], [])
+        self.assertFalse(probe["qualityQualified"])
+        self.assertFalse(probe["productionPerformanceQualified"])
+        self.assertEqual(probe["modeledShapes"][0]["original"], [320, 320])
+        self.assertEqual(probe["modeledShapes"][0]["candidate"], [320, 256])
+
+    def test_kernel_chain_modes_preserve_context_and_reject_combined_experiments(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        self.assertEqual(self.run_fixture(rects=rects)["kernelChainExperiment"], {"requested": False})
+        for mode in ("forward", "group"):
+            switch = ("--experimental-kernel-chain", mode)
+            result = self.run_fixture(rects=rects, extra=switch)
+            self.assertEqual(result["customRegions"], rects)
+            self.assertEqual(result["providerFloorExperiment"], {"requested": False})
+            probe = result["kernelChainExperiment"]
+            self.assertEqual(probe["mode"], mode)
+            self.assertEqual(probe["inMemoryState"], "not_loaded")
+            self.assertFalse(probe["qualityQualified"])
+            self.assertFalse(probe["productionPerformanceQualified"])
+            self.run_fixture(1, rects=rects, extra=switch + switch)
+            self.run_fixture(1, extra=switch)
+            self.run_fixture(1, rects=rects, extra=switch, handle_policy="independent")
+            self.run_fixture(1, rects=rects, extra=switch, storage=True)
+            for option in (("--experimental-provider-floor", "256"), ("--renderdoc", "unrequested.dll"),
+                           ("--capacity-temporal",), ("--capacity-size", "256")):
+                self.run_fixture(1, rects=rects, extra=switch + option)
+        self.run_fixture(1, rects=rects, extra=("--experimental-kernel-chain", "unknown"))
+        self.run_fixture(1, rects=[[0, 0, 128, 128], [128, 0, 128, 256]],
+                         extra=("--experimental-kernel-chain", "group"))
+        self.manifest["runtime"]["sha256"] = "0" * 64
+        self.assertIn("pinned provider", self.run_fixture(1, rects=rects,
+                      extra=("--experimental-kernel-chain", "forward"))["reason"])
+
+    def test_kernel_module_capture_requires_forward_probe(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        self.assertFalse(self.run_fixture(rects=rects)["captureKernelModules"])
+        switch = ("--experimental-kernel-chain", "forward", "--capture-kernel-modules")
+        result = self.run_fixture(rects=rects, extra=switch)
+        self.assertTrue(result["captureKernelModules"])
+        self.assertEqual(result["kernelChainExperiment"]["inMemoryState"], "not_loaded")
+        self.run_fixture(1, rects=rects, extra=("--capture-kernel-modules",))
+        self.run_fixture(1, rects=rects, extra=("--experimental-kernel-chain", "group", "--capture-kernel-modules"))
+        self.run_fixture(1, rects=rects, extra=switch + ("--capture-kernel-modules",))
+        self.run_fixture(1, rects=rects, extra=switch, storage=True)
+
+    def test_kernel_replacement_rejects_missing_identity_and_parser_only_modes(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        replacement = ("--experimental-kernel-replacement", "not-loaded.json")
+        for capture in ((), ("--experimental-kernel-chain", "forward"),
+                        ("--experimental-kernel-chain", "forward", "--capture-kernel-modules")):
+            self.run_fixture(1, rects=rects, extra=capture + replacement)
+        self.run_fixture(1, rects=rects, extra=replacement + replacement)
+
+    def test_kernel_pair_rejects_unqualified_and_parser_only_modes(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        capture = ("--experimental-kernel-chain", "forward", "--capture-kernel-modules", "--batch-timing-only")
+        for mode in ("original", "control", "layer-control", "batch", "model-batch", "unknown"):
+            pair = ("--experimental-kernel-pair", mode)
+            self.run_fixture(1, rects=rects, extra=pair)
+            self.run_fixture(1, rects=rects, extra=capture + pair)
+        pair = ("--experimental-kernel-pair", "control")
+        self.run_fixture(1, rects=rects, extra=capture + pair + pair)
+        self.run_fixture(1, rects=rects, extra=capture + pair + ("--warmup", "0"))
+
+    def test_model_replacement_requires_owned_live_pair_schedule(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        replacement = ("--experimental-model-replacement", "not-loaded.json")
+        capture = ("--experimental-kernel-chain", "forward", "--capture-kernel-modules", "--batch-timing-only")
+        self.run_fixture(1, rects=rects, extra=replacement)
+        self.run_fixture(1, rects=rects, extra=replacement + replacement)
+        for mode in ("original", "control", "layer-control", "batch", "model-batch"):
+            self.run_fixture(1, rects=rects, extra=capture + ("--experimental-kernel-pair", mode) + replacement)
+
+    def test_batch_only_timing_is_explicit_for_bounded_independent_contexts(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        self.assertFalse(self.run_fixture(rects=rects)["batchTimingOnly"])
+        for mode in (None, "forward", "group"):
+            switch = ("--batch-timing-only",) + (("--experimental-kernel-chain", mode) if mode else ())
+            result = self.run_fixture(rects=rects, extra=switch)
+            self.assertTrue(result["batchTimingOnly"])
+            self.assertEqual(result["customRegions"], rects)
+        self.run_fixture(1, extra=("--batch-timing-only",))
+        self.run_fixture(1, rects=rects, extra=("--batch-timing-only", "--batch-timing-only"))
+        self.run_fixture(1, rects=rects, handle_policy="per-eye", extra=("--batch-timing-only",))
+        self.run_fixture(1, rects=rects, extra=("--batch-timing-only", "--experimental-provider-floor", "256"))
+
+    def test_model_batch_stage_prefix_is_bounded_and_requires_live_model_mode(self):
+        for value in ("0", "159", "1000", "-1", "+1", "1junk", "1.0", ""):
+            result = self.run_fixture(1, extra=("--experimental-model-batch-stages", value))
+            self.assertIn("model batch stages", result["reason"])
+        for value in ("1", "157", "158"):
+            result = self.run_fixture(1, extra=("--experimental-model-batch-stages", value))
+            self.assertIn("requires the model-batch pair schedule", result["reason"])
+        self.assertIn("specified once", self.run_fixture(1, extra=(
+            "--experimental-model-batch-stages", "1", "--experimental-model-batch-stages", "2"))["reason"])
+
+    def test_kernel_repetitions_require_bounded_live_complete_schedules(self):
+        for value in ("0", "1", "5", "100", "-1", "+2", "02", "2junk", "2.0", ""):
+            result = self.run_fixture(1, extra=("--experimental-kernel-repetitions", value))
+            self.assertIn("kernel repetitions must be exactly", result["reason"])
+        for value in ("2", "3", "4"):
+            result = self.run_fixture(1, extra=("--experimental-kernel-repetitions", value))
+            self.assertIn("requires a complete", result["reason"])
+        self.assertIn("specified once", self.run_fixture(1, extra=(
+            "--experimental-kernel-repetitions", "2", "--experimental-kernel-repetitions", "3"))["reason"])
+        self.prepare_floor_fixture()
+        for mode in ("original", "layer-control", "model-batch"):
+            result = self.run_fixture(1, rects=[[0, 0, 192, 256]], extra=(
+                "--experimental-kernel-chain", "forward", "--capture-kernel-modules",
+                "--batch-timing-only", "--experimental-kernel-pair", mode,
+                "--experimental-kernel-repetitions", "4"))
+            self.assertIn("requires live forward", result["reason"])
+
+    def test_kernel_comparison_requires_four_complete_model_repetitions(self):
+        for value in ("", "batch", "model-batch", "forward", "ORIGINAL"):
+            result = self.run_fixture(1, extra=("--experimental-kernel-comparison", value))
+            self.assertIn("kernel comparison must be", result["reason"])
+        for mode in ("original", "layer-control"):
+            result = self.run_fixture(1, extra=("--experimental-kernel-comparison", mode))
+            self.assertIn("with four complete model-batch repetitions", result["reason"])
+        self.assertIn("specified once", self.run_fixture(1, extra=(
+            "--experimental-kernel-comparison", "original",
+            "--experimental-kernel-comparison", "layer-control"))["reason"])
+
+    def test_floor_probe_rejects_incompatible_controls_and_geometry(self):
+        self.prepare_floor_fixture()
+        rects = [[0, 0, 192, 256]]
+        switch = ("--experimental-provider-floor", "256")
+        for value in ("0", "128", "320", "256junk", "0256", "-256"):
+            self.run_fixture(1, rects=rects, extra=("--experimental-provider-floor", value))
+        self.run_fixture(1, rects=rects, extra=switch + switch)
+        self.run_fixture(1, extra=switch)
+        self.run_fixture(1, rects=rects, extra=switch, handle_policy="independent")
+        self.run_fixture(1, rects=rects, extra=switch, storage=True)
+        self.run_fixture(1, rects=rects, extra=switch + ("--capacity-size", "256"))
+        self.run_fixture(1, rects=rects, extra=switch + ("--renderdoc", "unrequested.dll"))
+        self.run_fixture(1, rects=[[0, 0, 64, 128]], extra=switch)
+        self.eye["featureUpscaling"] = True
+        self.assertIn("equal input grids", self.run_fixture(1, rects=rects, extra=switch)["reason"])
+        self.eye["featureUpscaling"] = False
+        self.frame["mode"] = 1
+        self.run_fixture(1, rects=rects, extra=switch)
+        self.frame["mode"] = 2
+        self.manifest["runtime"]["sha256"] = "0" * 64
+        self.assertIn("pinned provider", self.run_fixture(1, rects=rects, extra=switch)["reason"])
+        self.prepare_floor_fixture()
+        second = copy.deepcopy(self.frame)
+        second["sourceWorldFrame"] = 11
+        self.manifest["frames"].append(second)
+        self.assertIn("one immutable", self.run_fixture(1, rects=rects, extra=switch)["reason"])
 
     def test_scaled_odd_native_grids(self):
         result = self.run_fixture()

@@ -167,8 +167,11 @@ def output_equality(left: dict, right: dict, accepted: list[int]) -> dict:
             "scope": "producer_hashes_of_raw_native_evaluated_crops_not_perceptual_or_temporal_quality", "pairs": pairs}
 
 
-def checked_case(case: dict) -> dict:
+def checked_case(case: dict, *, allow_batch_timing_only: bool = False) -> dict:
     require(isinstance(case, dict) and isinstance(case.get("id"), str) and bool(case["id"]), "case id missing")
+    batch_only = case.get("batchTimingOnly", False)
+    require(type(allow_batch_timing_only) is bool and type(batch_only) is bool and (not batch_only or allow_batch_timing_only),
+            "batch-only timing requires explicit caller admission")
     require(case.get("history") in HISTORIES, "invalid history mode: " + case["id"])
     require(case.get("route") in {"A", "B", "C"} and uint(case.get("mode"), 2)
             and case["route"] == "ABC"[case["mode"]], "captured route/mode mismatch")
@@ -266,7 +269,9 @@ def checked_case(case: dict) -> dict:
             case_reasons.append("warmup_provider_state_failed")
         gpu = sample.get("gpuMicroseconds")
         per_call = sample.get("evaluationGpuMicroseconds")
-        if not duration(gpu) or not isinstance(per_call, list) or len(per_call) != case["evaluationsPerSample"] or not all(duration(v) for v in per_call):
+        per_call_valid = (isinstance(per_call, list) and len(per_call) == case["evaluationsPerSample"]
+                          and all(v is None if batch_only else duration(v) for v in per_call))
+        if not duration(gpu) or not per_call_valid:
             reasons.append("gpu_timing_unavailable_or_incomplete")
         edit_pixels, edit = sample.get("nonzeroEditPixels"), sample.get("maximumAbsEdit")
         if not uint(edit_pixels) or edit_pixels <= 0 or not finite(edit) or edit <= 0:
@@ -328,9 +333,12 @@ def checked_case(case: dict) -> dict:
             "providerFootprint": [{field: statistics_summary([sample["providerFootprint"][i][field] for sample in accepted])
                                    for field in FOOTPRINT_FIELDS} for i in range(len(regions))],
             "gpuMicroseconds": statistics_summary([s["gpuMicroseconds"] for s in accepted]),
-            "batchTimingMeaning": "D3D12 NR batch includes cold creation; individual evaluation intervals exclude creation",
-            "perCallGpuMicroseconds": [statistics_summary([s["evaluationGpuMicroseconds"][i] for s in accepted])
+            "batchTimingMeaning": ("D3D12 full NR submission; individual evaluation timestamps deliberately disabled" if batch_only else
+                                   "D3D12 NR batch includes cold creation; individual evaluation intervals exclude creation"),
+            "batchTimingOnly": batch_only,
+            "perCallGpuMicroseconds": None if batch_only else [statistics_summary([s["evaluationGpuMicroseconds"][i] for s in accepted])
                                        for i in range(len(regions))],
+            "perCallTimingUnavailableReason": "disabled_by_explicit_batch_timing_only" if batch_only else None,
             "logicalResourceBytes": logical_bytes,
             "memory": {k: statistics_summary(v) for k, v in memory.items()},
             "memoryMeaning": "bytes; all recorded samples including warmup/failures; DXGI process adapter usage, not provider-only allocations",

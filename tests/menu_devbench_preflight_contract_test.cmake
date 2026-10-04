@@ -14,6 +14,10 @@ if(NOT _descriptor_match)
     message(FATAL_ERROR "Menu DevBench descriptor was not found")
 endif()
 set(_descriptor "${CMAKE_MATCH_1}")
+string(JSON _preparation_ok_type GET "${_descriptor}" outputSchema properties ok type)
+if(NOT _preparation_ok_type STREQUAL "boolean")
+    message(FATAL_ERROR "Preparation success marker must be a boolean")
+endif()
 string(JSON _descriptor_type ERROR_VARIABLE _descriptor_error TYPE "${_descriptor}")
 if(_descriptor_error OR NOT _descriptor_type STREQUAL "OBJECT")
     message(FATAL_ERROR "Invalid menu DevBench descriptor JSON: ${_descriptor_error}")
@@ -124,6 +128,8 @@ foreach(_required_behavior IN ITEMS
     "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Coc)"
     "PrepareRuntimePreflight(MenuDevBenchPreflightPolicy::Preparation::Tuning)"
     "CaptureCocPreflightSnapshot"
+    [[{ "ok", ready }]]
+    [[{ "ok", false }]]
     ".neuralRenderingEnabled = settings.neuralRenderingEnabled"
     "nr_must_be_disabled_for_taa_fixture"
     "GetVRFpsStabilizerSessionConfig()"

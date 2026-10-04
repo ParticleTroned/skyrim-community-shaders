@@ -1455,6 +1455,9 @@ namespace NeuralRendering
 		performance.lastFeatureEvaluationCount = telemetry.lastFeatureEvaluationCount;
 		performance.lastFeatureLogicalEyeCount = telemetry.lastFeatureLogicalEyeCount;
 		performance.lastFeatureSlotMask = telemetry.lastFeatureSlotMask;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		performance.lastExecutionPlan = telemetry.lastExecutionPlan;
+#endif
 		performance.lastInsertionPoint = telemetry.lastInsertionPoint;
 	}
 
@@ -2599,6 +2602,11 @@ namespace NeuralRendering
 			physical.computeRegions = {};
 			physical.computeSubrect = plan->inferenceContext;
 			physical.roi = BuildRoiDescriptor(plan->samplingSupport, plan->inferenceContext, capacity, false);
+		}
+		// Enlarging an already single-call plan cannot amortize native dispatch cost.
+		if (settings.mode == SharedContext::Mode::Enclosing && observation.requestedEvaluations == args.size()) {
+			observation.reason = "no_coalescing_opportunity";
+			return std::nullopt;
 		}
 		observation.count = static_cast<std::uint32_t>(args.size());
 		observation.applied = true;

@@ -127,6 +127,9 @@ namespace NeuralRendering
 		std::uint32_t lastFeatureLogicalEyeCount = 0;
 		std::uint32_t lastFeatureSlotMask = 0;
 		InsertionPoint lastInsertionPoint = InsertionPoint::Count;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::optional<ExecutionPlanSummary> lastExecutionPlan;
+#endif
 	};
 
 	struct RendererSnapshot

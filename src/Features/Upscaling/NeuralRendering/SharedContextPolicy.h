@@ -105,7 +105,7 @@ namespace NeuralRendering::SharedContext
 
 		if (a_settings.mode == Mode::FullEye) {
 			context = { 0, 0, a_capacity.width, a_capacity.height };
-		} else {
+		} else if (a_descriptors.size() > 1) {
 			context = ExpandCharacterWorkRect(context, a_capacity.width, a_capacity.height, a_settings.halo);
 			constexpr auto alignment = kCharacterProviderRoiAlignment;
 			const auto alignedEnd = [](std::uint32_t base, std::uint32_t extent, std::uint32_t limit) {

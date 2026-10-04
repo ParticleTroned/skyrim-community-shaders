@@ -25,6 +25,13 @@ outward to the existing provider grid and clips to the available input.
 FOV cropping active, that means the active crop, not uncropped HMD input.
 Neither mode packs, translates or rearranges the source image.
 
+The [live follow-up](nr-shared-context-live-20261004.md) found no useful
+coalescing when the production planner already selected one call per eye.
+`enclosing` now retains the original execution path in that case, reporting
+`no_coalescing_opportunity`. In mixed batches, single-call eyes retain their
+original inference context. Only multi-call eyes receive enlargement.
+`full_eye` remains an explicit reference regardless of invocation count.
+
 The original disjoint output rectangles and their tracking metadata remain
 intact. Both private eye outputs are evaluated and reconstructed before
 external writes. Every copy domain is checked before either eye is copied.
@@ -84,6 +91,10 @@ join, and cost keys include its exact geometry. Failed-before-evaluation
 records retain their real reset/attempt state.
 
 ## Validation and next live comparison
+
+The original producer and validation below are historical. The
+[live follow-up](nr-shared-context-live-20261004.md) records subsequent
+measurements, output-equivalence rejection and the replacement no-cache AIO.
 
 Policy tests exercise alignment, clipping, geometry and sampling-support
 admission, one through eight ownership rectangles, and coordinate-coded

@@ -1,5 +1,5 @@
 include(NeuralRenderingCaptureTests)
-foreach(_test IN ITEMS neural_measured_plan neural_measured_search neural_compact_layout neural_shared_context)
+foreach(_test IN ITEMS neural_measured_plan neural_measured_search neural_compact_layout neural_shared_context neural_execution_plan)
     add_controller_test(${_test}_test ${_test} tests/${_test}_test.cpp)
     target_compile_definitions(${_test}_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
     target_link_libraries(${_test}_test PRIVATE nlohmann_json::nlohmann_json)

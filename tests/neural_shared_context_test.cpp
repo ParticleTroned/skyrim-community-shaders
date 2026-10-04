@@ -193,7 +193,7 @@ int main()
 	CHECK(!SharedContext::Build(excessive, output.regions.roi, capacity,
 		{ Mode::FullEye, 256 }, RenderingMode::ReducedResolution, false, true));
 
-	// Single-region fallback and edge clipping retain the same output coordinates.
+	// Mixed batches must not enlarge an eye that already uses one native call.
 	for (const auto owned : { ComputeSubrect{ 3, 7, 128, 128 }, ComputeSubrect{ 879, 991, 129, 129 },
 			 ComputeSubrect{ 0, 0, 1008, 1120 } }) {
 		const CharacterOutputPlan single{ owned, {} };
@@ -201,14 +201,19 @@ int main()
 		for (const auto halo : { 0u, 64u, 128u, 256u }) {
 			const auto plan = SharedContext::Build(single, descriptors, capacity,
 				{ Mode::Enclosing, halo }, RenderingMode::ReducedResolution, false, true);
-			CHECK(plan && ContainsComputeSubrect(plan->inferenceContext, owned));
+			CHECK(plan && plan->inferenceContext == owned);
 			CHECK(plan->inferenceContext.Fits(capacity.width, capacity.height));
-			CHECK(plan->inferenceContext.baseX % 64 == 0 && plan->inferenceContext.baseY % 64 == 0);
 			CHECK(plan->output.enclosure == owned && plan->output.regions == single.regions);
-			CHECK(plan->inferenceContext.baseX + plan->inferenceContext.width == capacity.width ||
-				  (plan->inferenceContext.baseX + plan->inferenceContext.width) % 64 == 0);
-			CHECK(plan->inferenceContext.baseY + plan->inferenceContext.height == capacity.height ||
-				  (plan->inferenceContext.baseY + plan->inferenceContext.height) % 64 == 0);
+			auto singleRegion = single;
+			singleRegion.regions.count = 1;
+			singleRegion.regions.regions[0] = owned;
+			singleRegion.regions.roi[0] = descriptors[0];
+			const auto oneRegion = build(singleRegion, { Mode::Enclosing, halo });
+			CHECK(oneRegion && oneRegion->inferenceContext == owned);
+			CHECK(oneRegion->output.regions == singleRegion.regions);
+			const auto fullReference = SharedContext::Build(single, descriptors, capacity,
+				{ Mode::FullEye, halo }, RenderingMode::ReducedResolution, false, true);
+			CHECK(fullReference && fullReference->inferenceContext == (ComputeSubrect{ 0, 0, 1008, 1120 }));
 		}
 	}
 	const ComputeSubrect sliver{ 0, 0, 1, 1 };
@@ -216,7 +221,7 @@ int main()
 	const std::array tinyDescriptors{ BuildRoiDescriptor(sliver, sliver, capacity, true) };
 	CHECK(!SharedContext::Build(tiny, tinyDescriptors, capacity,
 		{ Mode::Enclosing, 0 }, RenderingMode::ReducedResolution, false, true));
-	CHECK(SharedContext::Build(tiny, tinyDescriptors, capacity,
+	CHECK(!SharedContext::Build(tiny, tinyDescriptors, capacity,
 		{ Mode::Enclosing, 64 }, RenderingMode::ReducedResolution, false, true));
 
 	// Touching half-open outputs remain disjoint through the maximum admitted region count.
@@ -229,8 +234,12 @@ int main()
 			adjacent.regions.roi[i] = BuildRoiDescriptor(owned, owned, capacity, true);
 		}
 		const auto plan = build(adjacent);
-		CHECK(plan && plan->output.regions == adjacent.regions);
-		CHECK(CharacterRegionOutputPixels(plan->output.regions, plan->output.enclosure, 1008, 1120) == count * 64u * 128u);
+		if (count == 1) {
+			CHECK(!plan);
+		} else {
+			CHECK(plan && plan->output.regions == adjacent.regions);
+			CHECK(CharacterRegionOutputPixels(plan->output.regions, plan->output.enclosure, 1008, 1120) == count * 64u * 128u);
+		}
 	}
 
 	CHECK(TestScatter(output, capacity) == 0);

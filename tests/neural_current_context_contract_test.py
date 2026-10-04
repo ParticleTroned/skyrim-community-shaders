@@ -32,6 +32,9 @@ class CurrentContextContract(unittest.TestCase):
         self.assertIn("default false", schema["description"])
         output = schema["outputSchema"]["properties"]["neuralRendering"]["properties"]["characterRendering"]
         self.assertEqual(output["properties"]["settings"]["properties"]["experimentalCurrentContext"]["type"], "boolean")
+        sample = output["properties"]["profiling"]["properties"]["lastFeature18GpuSample"]["properties"]
+        self.assertEqual(sample["physicalPlanAvailable"]["type"], "boolean")
+        self.assertEqual(sample["expectedFeatureEvaluationCount"]["type"], ["integer", "null"])
         self.assertIn('!parseBoolean("experimentalCurrentContext", a_request.experimentalCurrentContext)', bridge)
         self.assertIn('requestedSettings.neuralCharacterCurrentContextEnabled = *request.experimentalCurrentContext', bridge)
 
@@ -43,7 +46,9 @@ class CurrentContextContract(unittest.TestCase):
         output = schema["outputSchema"]["properties"]["neuralRendering"]["properties"]["characterRendering"]["properties"]["settings"]["properties"]["experimentalRegionLimit"]
         self.assertEqual((output["minimum"], output["maximum"]), (1, 8))
         self.assertIn('!parseCharacterUint("experimentalRegionLimit", 1u, NeuralRendering::kMaximumRegionsPerEye, a_request.experimentalRegionLimit)', bridge)
-        self.assertIn('attributedPreparation->physicalRegionMasks[featureSlot]', bridge)
+        self.assertIn('executionPlan->physicalSlotMask & NeuralRendering::RegionRouteMask(a_logicalMask)', bridge)
+        self.assertIn('NeuralRendering::LogicalRegionMask(lastFeatureSlotMask)', bridge)
+        self.assertNotIn('attributedPreparation->physicalRegionMasks[featureSlot]', bridge)
         self.assertIn('rendering.erase("neuralCharacterRegionLimit");', read("src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"))
         renderer = read("src/Features/Upscaling/NeuralRendering/Renderer.cpp")
         self.assertIn('QualifiedHigherRegionGeometry(arg.computeRegions)', renderer)

@@ -12,6 +12,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -141,6 +142,31 @@ namespace NeuralRendering
 #endif
 		std::array<ExecutionRegionDescriptor, kMaximumExecutionRegions> regions{};
 	};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Compact immutable attribution retained with the completed GPU sample. */
+	struct ExecutionPlanSummary
+	{
+		std::uint64_t submissionId = 0, generation = 0;
+		std::uint32_t physicalSlotMask = 0, evaluationCount = 0;
+	};
+
+	/** Preparation owns output rectangles; only the frozen execution owns native calls. */
+	[[nodiscard]] inline std::optional<ExecutionPlanSummary> SummarizeExecutionPlan(
+		const ExecutionDescriptor* descriptor, std::uint32_t frame, InsertionPoint insertion) noexcept
+	{
+		if (!descriptor || !descriptor->submissionId || frame == std::numeric_limits<std::uint32_t>::max() ||
+			!IsValidInsertionPoint(insertion) || descriptor->frame != frame || descriptor->insertion != insertion ||
+			!descriptor->regionCount || descriptor->regionCount > kMaximumExecutionRegions ||
+			static_cast<std::uint32_t>(std::popcount(descriptor->plannedPhysicalSlotMask)) != descriptor->regionCount ||
+			(descriptor->plannedPhysicalSlotMask & ~RegionRouteMask(0xFu)) ||
+			!descriptor->logicalEyeCount || descriptor->logicalEyeCount > kEyeCount ||
+			static_cast<std::uint32_t>(std::popcount(LogicalRegionMask(descriptor->plannedPhysicalSlotMask))) != descriptor->logicalEyeCount)
+			return std::nullopt;
+		return ExecutionPlanSummary{ descriptor->submissionId, descriptor->generation,
+			descriptor->plannedPhysicalSlotMask, descriptor->regionCount };
+	}
+#endif
 
 	struct RuntimeExecutionEvidence
 	{

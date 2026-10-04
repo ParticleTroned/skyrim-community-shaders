@@ -132,12 +132,50 @@ def _capture_off(value: object) -> bool:
             and value.get("timingsInstrumented") is False and value.get("state") == "not_requested")
 
 
+def _handle_sample(sample, slots, mask, barriers, manifest):
+    """Bind resource evaluations to the admitted stateless native-handle plan."""
+    calls = sample.get("runtimeCalls")
+    require(isinstance(calls, list) and len(calls) == len(slots)
+            and [c.get("nativeHandleSlot") for c in calls] == slots
+            and sample.get("residentNativeHandleMask") == mask
+            and sample.get("nativeHandleReuseBarriers") == barriers
+            and sample.get("reset") is True and sample.get("success") is True,
+            "native handle routing, residency or barriers differ")
+    first = sample.get("iteration") == 0
+    require(sample.get("createdFeatureCount") == (len(set(slots)) if first else 0),
+            "native handle creation count differs")
+    seen = set()
+    for call, slot in zip(calls, slots):
+        created = first and slot not in seen
+        require(call.get("createAttempted") is created and call.get("createSucceeded") is created,
+                "native handle creation calls differ")
+        seen.add(slot)
+    expected = [(eye, role, entry[role]["sha256"].lower())
+                for eye, entry in enumerate(manifest["frames"][0]["eyes"])
+                for role in ("color", "depth", "motion")]
+    proofs = sample.get("immutableInputChecks")
+    require(isinstance(proofs, list) and len(proofs) == len(expected)
+            and [(p.get("eye"), p.get("resource"), p.get("sha256")) for p in proofs] == expected,
+            "native handle immutable input proof differs")
+
+
 def _repeat(case: dict, directory: Path, manifest: dict, manifest_path: Path,
             content_hash: str, executable_hash: str, owned: list[tuple]) -> dict:
     raw = _json(directory / "results.json")
+    alternate_sentinel = raw.get("alternateOutputSentinel", False)
+    require(type(alternate_sentinel) is bool, "invalid native output sentinel selection")
     require(raw.get("schema") == "csx-nr-replay-results-v1" and raw.get("status") == "complete"
             and raw.get("sessionClosed") is True, "replay failed, incomplete, or session not closed")
     require(_capture_off(raw.get("gpuCapture")), "capture instrumentation present or unavailable")
+    require(raw.get("captureKernelModules", False) is False,
+            "kernel module capture instrumentation cannot qualify timing")
+    require(raw.get("kernelPairMode", "") == "",
+            "kernel pair qualification cannot qualify production timing")
+    require(raw.get("modelReplacementRequested", False) is False,
+            "model replacement qualification cannot qualify production timing")
+    chain = raw.get("kernelChainExperiment", {})
+    require(isinstance(chain, dict) and "identityCapture" not in chain,
+            "kernel module capture instrumentation cannot qualify timing")
     require(raw.get("buildIdentity", {}).get("executableSha256", "").lower() == executable_hash,
             "replay executable identity mismatch")
     require(raw.get("captureManifestSha256", "").lower() == _hash(manifest_path)
@@ -147,7 +185,13 @@ def _repeat(case: dict, directory: Path, manifest: dict, manifest_path: Path,
             "native runtime identity mismatch")
     require(isinstance(raw.get("cases"), list) and len(raw["cases"]) == 1, "expected exactly one custom replay case")
     value = raw["cases"][0]
-    checked = checked_case(value)
+    require(not any("kernelCommandCapture" in sample or "kernelCommandDetails" in sample
+                    for sample in value.get("samples", []) if isinstance(sample, dict)),
+            "kernel module capture instrumentation cannot qualify timing")
+    batch_only = case.get("batchTimingOnly", False)
+    require(type(batch_only) is bool and raw.get("batchTimingOnly", False) is batch_only
+            and value.get("batchTimingOnly", False) is batch_only, "batch-only timing differs from planned experiment")
+    checked = checked_case(value, allow_batch_timing_only=batch_only)
     require(value.get("mode") == 2 and value.get("history") == "static_reset"
             and value.get("temporalSequence") is False, "replay is not frozen stateless C")
     require(value.get("sourceContentSha256") == content_hash, "case input identity mismatch")
@@ -163,20 +207,62 @@ def _repeat(case: dict, directory: Path, manifest: dict, manifest_path: Path,
             "steady samples incomplete: " + json.dumps(checked["excludedSamples"]))
     require(value["warmupIterations"] > 0, "steady evaluation needs a warmup")
     expected_slots = [region * 4 + eye for eye in range(eyes) for region in range(len(rects))]
+    handle_policy = case.get("nativeHandlePolicy", "independent")
+    require(handle_policy in {"independent", "per-eye"}
+            and value.get("nativeHandlePolicy", "independent") == handle_policy,
+            "native handle policy differs from planned experiment")
+    handle_experiment = "nativeHandlePolicy" in case
+    require(value.get("axis") != "native_handle_reuse" or handle_experiment,
+            "native handle experiment not declared by the plan")
+    handle_slots = [eye for eye in range(eyes) for _ in rects] if handle_policy == "per-eye" else expected_slots
+    handle_mask = sum(1 << slot for slot in set(handle_slots))
+    barriers = eyes * (len(rects) - 1) if handle_policy == "per-eye" else 0
+    if handle_experiment:
+        require(value.get("axis") == "native_handle_reuse" and value.get("sharedInputs") is True
+                and value.get("nativeHandleSlots") == handle_slots and value.get("nativeHandleMask") == handle_mask
+                and value.get("nativeHandleCount") == len(set(handle_slots))
+                and value.get("nativeHandleReuseBarriers") == barriers
+                and value.get("nativeHandleBarrierPolicy") == "global_uav_between_reused_handle_evaluations",
+                "native handle execution plan differs")
+        require(2 <= len(rects) <= 4 and all(min(r[2:]) >= 128 for r in rects),
+                "native handle experiment exceeds admitted geometry")
+        source_eye = manifest["frames"][0]["eyes"][0]
+        expected_extents = {role: [source_eye[role]["width"], source_eye[role]["height"]]
+                            for role in ("color", "depth", "motion", "output")}
+        require(value.get("creationExtent") == expected_extents["output"]
+                and value.get("resourceExtents") == expected_extents
+                and all([eye[role]["width"], eye[role]["height"]] == expected_extents[role]
+                        for eye in manifest["frames"][0]["eyes"] for role in expected_extents)
+                and [_rect(r) for r in value.get("evaluatedSourceRects", [])] == rects * eyes
+                and [_rect(r) for r in value.get("evaluatedGuideRects", [])] == rects * eyes,
+                "native handle creation capacity, source or guide domain differs")
     accepted = set(checked["acceptedIterations"])
     tiles = _tiles(case, owned) if case["kind"] == "atlas" else []
     steady = []
     for sample in value["samples"]:
-        if sample["iteration"] not in accepted:
+        if handle_experiment:
+            _handle_sample(sample, handle_slots, handle_mask, barriers, manifest)
+        if handle_experiment or sample["iteration"] in accepted:
+            footprints = sample.get("providerFootprint")
+            require(isinstance(footprints, list) and len(footprints) == len(expected_slots)
+                    and all(p.get("modifiedOutsidePixels") == 0 and p.get("unchangedInsidePixels") == 0
+                            and p.get("nonfiniteInsidePixels") == 0 for p in footprints),
+                    "provider output footprint is incomplete, nonfinite or wrote outside evaluation")
+            require(all(p.get("alternateBytePattern", False) is alternate_sentinel for p in footprints),
+                    "native output sentinel footprint differs from result")
+        if sample["iteration"] not in accepted and not handle_experiment:
             continue
         calls = sample.get("runtimeCalls")
-        require(sample.get("createdFeatureCount") == 0 and isinstance(calls, list)
+        require((sample.get("createdFeatureCount") == 0 or handle_experiment and sample["warmup"])
+                and isinstance(calls, list)
                 and [c.get("slot") for c in calls] == expected_slots
-                and all(c.get("createAttempted") is False and c.get("evaluationAttempted") is True
+                and all((c.get("createAttempted") is False or handle_experiment and sample["warmup"])
+                        and c.get("evaluationAttempted") is True
                         and c.get("evaluationSucceeded") is True for c in calls), "steady native creation or calls differ")
         require(sample.get("evaluatedPixels") == checked["evaluatedPixelsPerSample"], "sample evaluated pixel count differs")
-        require(all(v > 0 for v in sample["evaluationGpuMicroseconds"]), "nonpositive native GPU sample")
-        require(all(p["modifiedOutsidePixels"] == 0 for p in sample["providerFootprint"]), "provider wrote outside evaluation")
+        require(sample["gpuMicroseconds"] > 0 and (batch_only or all(v > 0 for v in sample["evaluationGpuMicroseconds"])),
+                "nonpositive GPU sample")
+        require(sample["nonzeroEditPixels"] > 0 and sample["maximumAbsEdit"] > 0, "nonzero native edit missing")
         outputs = sample.get("outputFiles")
         require(isinstance(outputs, list) and len(outputs) == len(expected_slots)
                 and sorted(o.get("slot") for o in outputs) == sorted(expected_slots), "output slots missing or duplicated")
@@ -195,11 +281,13 @@ def _repeat(case: dict, directory: Path, manifest: dict, manifest_path: Path,
                 require(_contains(evaluated, mapped), "evaluation does not cover owned output")
                 cropped[(eye, region)] = _crop(data, output["width"], output["height"],
                                                (mapped[0] - evaluated[0], mapped[1] - evaluated[1], *mapped[2:]))
-        steady.append({"iteration": sample["iteration"], "crops": cropped,
-                       "nativeGpuMicroseconds": sum(sample["evaluationGpuMicroseconds"]),
-                       "perEvaluationGpuMicroseconds": sample["evaluationGpuMicroseconds"],
-                       "batchGpuMicroseconds": sample["gpuMicroseconds"]})
+        if sample["iteration"] in accepted:
+            steady.append({"iteration": sample["iteration"], "crops": cropped,
+                           "nativeGpuMicroseconds": None if batch_only else sum(sample["evaluationGpuMicroseconds"]),
+                           "perEvaluationGpuMicroseconds": sample["evaluationGpuMicroseconds"],
+                           "batchGpuMicroseconds": sample["gpuMicroseconds"]})
     return {"steady": steady, "checked": checked, "runtime": raw["runtime"],
+            "alternateOutputSentinel": alternate_sentinel,
             "buildIdentity": raw["buildIdentity"], "resultSha256": _hash(directory / "results.json")}
 
 

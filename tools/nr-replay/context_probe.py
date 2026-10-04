@@ -100,7 +100,8 @@ def prepare_plan(args) -> dict:
             "halos": halos, "repeats": args.repeats, "samples": args.samples,
             "warmup": args.warmup, "secondsPerCase": args.seconds, "cases": cases,
             "historyPolicy": "static_reset", "inputMutation": False, "productionQualified": False,
-            "alignmentMeaning": "existing_CSX_provider_ROI_policy_not_verified_native_CNN_stride"}
+            "alignmentMeaning": "existing_CSX_provider_ROI_policy_not_verified_native_CNN_stride",
+            "alternateOutputSentinel": getattr(args, "alternate_output_sentinel", False)}
     root.mkdir(parents=True, exist_ok=False)
     write(root / "plan.json", plan)
     return plan
@@ -110,6 +111,7 @@ def _admit_plan(plan: dict, check_tools: bool = False):
     finite_tree(plan)
     require(plan.get("schema") == "csx-nr-context-probe-v1" and plan.get("status") == "prepared", "expected a prepared context probe")
     _bounds(plan["repeats"], plan["samples"], plan["warmup"], plan["secondsPerCase"])
+    require(type(plan.get("alternateOutputSentinel", False)) is bool, "invalid output sentinel selection")
     for key in ("sourceManifest", "replayExecutable", "runtime"):
         require(digest(plan[key]["path"]) == plan[key]["sha256"], key + " identity changed")
     source = Path(plan["sourceManifest"]["path"])
@@ -133,6 +135,8 @@ def _admit_repeat(plan, case, root, repeat, manifest, content_hash):
                      Path(plan["sourceManifest"]["path"]), content_hash, plan["replayExecutable"]["sha256"], owned)
     require(len(result["steady"]) == plan["samples"] and result["checked"]["warmupSamples"] == plan["warmup"],
             "native sample count differs from probe plan")
+    require(result["alternateOutputSentinel"] is plan.get("alternateOutputSentinel", False),
+            "native output sentinel differs from probe plan")
     return result
 
 
@@ -241,10 +245,12 @@ def execute(plan: dict, root: Path) -> dict:
             journal["jobs"].append(job)
             write(journal_path, journal)
             print(f"{case['id']} repeat {repeat}", flush=True)
-            invoke([plan["replayExecutable"]["path"], "--manifest", plan["sourceManifest"]["path"],
+            arguments = [plan["replayExecutable"]["path"], "--manifest", plan["sourceManifest"]["path"],
                     "--runtime", plan["runtime"]["path"], "--output", output, "--rects", json.dumps(case["rects"]),
-                    "--samples", plan["samples"], "--warmup", plan["warmup"], "--seconds", plan["secondsPerCase"]],
-                   output, plan["secondsPerCase"])
+                    "--samples", plan["samples"], "--warmup", plan["warmup"], "--seconds", plan["secondsPerCase"]]
+            if plan.get("alternateOutputSentinel", False):
+                arguments.append("--alternate-output-sentinel")
+            invoke(arguments, output, plan["secondsPerCase"])
             result = _admit_repeat(plan, case, root, repeat, manifest, content_hash)
             job.update(status="complete", resultsSha256=result["resultSha256"])
             write(journal_path, journal)
@@ -273,6 +279,8 @@ def main():
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--seconds", type=int, default=120)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--alternate-output-sentinel", action="store_true",
+                        help="Use the native complementary RGBA8 marker; ambiguous footprints still fail")
     parser.add_argument("--report", type=Path, help="Rebuild summary for an existing plan.json without native calls")
     args = parser.parse_args()
     if args.report:

@@ -71,7 +71,7 @@ class PackedReportTests(unittest.TestCase):
                     data = b"".join(parts[0][row * 8:(row + 1) * 8] + parts[1][row * 8:(row + 1) * 8]
                                     for row in range(2))
                 elif role in ("color", "output"):
-                    data = b"".join(bytes([x + y * 8 + eye + (role == "output"), 60, 70, 255])
+                    data = b"".join(bytes([(x + y * 8 + eye + (role == "output")) % 256, 60, 70, 255])
                                     for y in range(height) for x in range(width))
                 else:
                     data = bytes(width * height * 4)
@@ -151,6 +151,89 @@ class PackedReportTests(unittest.TestCase):
         self.assertEqual(result["cases"][1]["ownedPixelsPerSample"], 16)
         self.assertEqual(result["cases"][2]["nativeMedianDeltaPercent"], -50)
         self.assertIn("scatter excluded", result["timingScope"])
+
+    def handle_fixture(self, policy):
+        manifest = self.make_manifest("handle-source", 384, 256)
+        path = self.root / "handle-source/manifest.json"
+        case = {"id": "handles", "kind": "separate", "manifest": str(path),
+                "rects": [[0, 0, 128, 128], [256, 128, 128, 128]],
+                "resultDirectory": "runs/handles", "nativeHandlePolicy": policy}
+        self.make_result(case, 0)
+        directory = self.root / case["resultDirectory"] / "repeat-0"
+        raw = json.loads((directory / "results.json").read_text())
+        value = raw["cases"][0]
+        slots = [0, 0, 1, 1] if policy == "per-eye" else [0, 4, 1, 5]
+        mask = sum(1 << slot for slot in set(slots))
+        barriers = 2 if policy == "per-eye" else 0
+        value.update(axis="native_handle_reuse", sharedInputs=True, nativeHandlePolicy=policy,
+                     nativeHandleSlots=slots, nativeHandleMask=mask, nativeHandleCount=len(set(slots)),
+                     nativeHandleReuseBarriers=barriers,
+                     nativeHandleBarrierPolicy="global_uav_between_reused_handle_evaluations")
+        for sample in value["samples"]:
+            first = sample["iteration"] == 0
+            sample.update(residentNativeHandleMask=mask, nativeHandleReuseBarriers=barriers,
+                          createdFeatureCount=len(set(slots)) if first else 0,
+                          immutableInputChecks=[{"eye": eye, "resource": role, "sha256": entry[role]["sha256"]}
+                                                for eye, entry in enumerate(manifest["frames"][0]["eyes"])
+                                                for role in ("color", "depth", "motion")])
+            seen = set()
+            for call, slot in zip(sample["runtimeCalls"], slots):
+                created = first and slot not in seen
+                call.update(nativeHandleSlot=slot, createAttempted=created, createSucceeded=created)
+                seen.add(slot)
+        write_json(directory / "results.json", raw)
+
+        def admitted():
+            _, content = report._manifest(path)
+            return report._repeat(case, directory, manifest, path, content,
+                                  report._hash(self.exe), [tuple(r) for r in case["rects"]])
+        return case, raw, directory, admitted
+
+    def test_native_handle_reuse_keeps_four_evaluations_and_exact_crops(self):
+        for policy in ("independent", "per-eye"):
+            case, raw, directory, admitted = self.handle_fixture(policy)
+            result = admitted()
+            self.assertEqual(len(result["steady"]), 2)
+            self.assertEqual(len(result["steady"][0]["crops"]), 4)
+            self.assertEqual(result["steady"][0]["nativeGpuMicroseconds"], 40)
+            self.assertEqual(result["steady"][0]["batchGpuMicroseconds"], 44)
+
+    def test_native_handle_admission_rejects_false_routing_and_mutated_inputs(self):
+        case, original, directory, admitted = self.handle_fixture("per-eye")
+        mutations = (
+            lambda v: v.update(nativeHandlePolicy="independent"),
+            lambda v: v.update(nativeHandleCount=4),
+            lambda v: v["samples"][1].update(residentNativeHandleMask=51),
+            lambda v: v["samples"][1]["runtimeCalls"][1].update(nativeHandleSlot=4),
+            lambda v: v["samples"][1].update(nativeHandleReuseBarriers=0),
+            lambda v: v["samples"][0].update(createdFeatureCount=4),
+            lambda v: v["samples"][0]["runtimeCalls"][1].update(createAttempted=True),
+            lambda v: v["samples"][1]["immutableInputChecks"][1].update(sha256="0" * 64),
+            lambda v: v["samples"][1]["immutableInputChecks"].pop(),
+            lambda v: v["samples"][1].update(reset=False),
+            lambda v: v["samples"][0].update(success=False),
+            lambda v: v.update(creationExtent=[1024, 1024]),
+            lambda v: v["resourceExtents"].update(output=[1024, 1024]),
+            lambda v: v["evaluatedSourceRects"][0].update(baseX=1),
+            lambda v: v["evaluatedGuideRects"][0].update(baseX=1),
+            lambda v: v["samples"][0]["providerFootprint"][0].update(modifiedOutsidePixels=1),
+            lambda v: v["samples"][0]["providerFootprint"][0].update(alternateBytePattern=True),
+            lambda v: v["samples"][0]["runtimeCalls"][0].update(slot=31),
+            lambda v: v["samples"][0]["runtimeCalls"][0].update(evaluationSucceeded=False),
+            lambda v: v["samples"][0]["outputFiles"][0].update(sha256="0" * 64),
+            lambda v: v["samples"][0].update(evaluatedPixels=1),
+            lambda v: v["samples"][0].update(nonzeroEditPixels=0),
+        )
+        for mutation in mutations:
+            raw = copy.deepcopy(original)
+            mutation(raw["cases"][0])
+            write_json(directory / "results.json", raw)
+            with self.assertRaises(ValueError):
+                admitted()
+        write_json(directory / "results.json", original)
+        del case["nativeHandlePolicy"]
+        with self.assertRaisesRegex(ValueError, "native handle policy"):
+            admitted()
 
     def test_reverse_tile_order_uses_source_index(self):
         self.campaign["cases"][2]["tiles"].reverse()

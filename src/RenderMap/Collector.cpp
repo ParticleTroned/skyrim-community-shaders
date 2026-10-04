@@ -1490,14 +1490,10 @@ namespace CSX::RenderMap
 				if (previous != session->stageShaderByPointer.end()) {
 					auto& record = session->stageShaderObservations[previous->second];
 					if (CompatibleStageShaderEvidence(record, a_input)) {
-						try {
-							session->stageShaderObservationLookup.emplace(identityHash, previous->second);
-							if (AddsStageShaderEvidence(record, a_input))
-								MergeStageShaderEvidence(record, a_input);
-							result = { record.observationId, session->generation, record.pointerGeneration, false };
-						} catch (...) {
-							session->droppedStageShaderObservations.fetch_add(1, std::memory_order_relaxed);
-						}
+						// The pointer index owns enrichment; identity lookup retains one node per record.
+						if (AddsStageShaderEvidence(record, a_input))
+							MergeStageShaderEvidence(record, a_input);
+						result = { record.observationId, session->generation, record.pointerGeneration, false };
 					}
 				}
 			}

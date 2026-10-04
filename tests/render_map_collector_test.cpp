@@ -1,12 +1,36 @@
 #include "RenderMap/Collector.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <iostream>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
+
+namespace
+{
+	thread_local bool countAllocations = false;
+	thread_local std::size_t allocationCount = 0;
+}
+
+void* operator new(std::size_t a_bytes)
+{
+	if (auto* allocation = std::malloc(a_bytes == 0 ? 1 : a_bytes)) {
+		if (countAllocations)
+			++allocationCount;
+		return allocation;
+	}
+	throw std::bad_alloc();
+}
+
+void operator delete(void* a_allocation) noexcept { std::free(a_allocation); }
+void operator delete(void* a_allocation, std::size_t) noexcept { std::free(a_allocation); }
+void* operator new[](std::size_t a_bytes) { return ::operator new(a_bytes); }
+void operator delete[](void* a_allocation) noexcept { std::free(a_allocation); }
+void operator delete[](void* a_allocation, std::size_t) noexcept { std::free(a_allocation); }
 
 namespace
 {
@@ -58,6 +82,69 @@ namespace
 		config = Config();
 		config.maxTargetBindingObservations = 0;
 		Check(collector.Start(config) == StartResult::kInvalidBounds, "zero target-binding-observation bound was accepted");
+	}
+
+	void TestStageShaderEnrichmentDoesNotAllocateLookupNodes()
+	{
+		Collector collector;
+		auto config = Config();
+		config.maxStageShaderObservations = 2;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		Check(collector.Start(config) == StartResult::kStarted, "stage lookup capture did not start");
+		std::array<StageShaderObservationInput::EngineAlias, kMaximumEngineShaderAliasesPerStage> aliases{};
+		for (std::size_t index = 0; index < aliases.size(); ++index)
+			aliases[index] = { "Lighting", "Lighting", static_cast<std::uint32_t>(index) };
+		StageShaderObservationInput input{
+			.stage = ShaderStage::kVertex,
+			.d3dObject = 0xCA00,
+			.engineAliases = aliases.data(),
+			.engineAliasCount = static_cast<std::uint32_t>(aliases.size()),
+			.engineAliasTotalCount = static_cast<std::uint32_t>(aliases.size() + 1),
+		};
+		const auto first = collector.ObserveStageShader(input);
+		Check(first.firstSeen && first.observationId != 0, "truncated stage shader was not observed");
+
+		allocationCount = 0;
+		countAllocations = true;
+		void* probe = ::operator new(sizeof(std::uint64_t));
+		::operator delete(probe);
+		countAllocations = false;
+		Check(allocationCount == 1, "allocation probe did not observe a lookup-sized allocation");
+		allocationCount = 0;
+		countAllocations = true;
+		bool identitiesStable = true;
+		for (std::uint32_t index = 0; index < 5000; ++index) {
+			const auto repeated = collector.ObserveStageShader(input);
+			identitiesStable = identitiesStable && repeated.observationId == first.observationId &&
+			                   !repeated.firstSeen && repeated.pointerGeneration == first.pointerGeneration;
+		}
+		for (std::uint32_t index = 0; index < 5000; ++index) {
+			aliases.back().descriptor = 100 + index;
+			input.engineAliasTotalCount = 10 + index;
+			const auto enriched = collector.ObserveStageShader(input);
+			identitiesStable = identitiesStable && enriched.observationId == first.observationId &&
+			                   !enriched.firstSeen && enriched.pointerGeneration == first.pointerGeneration;
+		}
+		countAllocations = false;
+		Check(identitiesStable, "compatible stage evidence changed shader identity");
+		Check(allocationCount == 0, "compatible stage observations allocated unbudgeted lookup nodes");
+
+		input.wrapperDescriptor = 7;
+		Check(collector.ObserveStageShader(input).observationId == first.observationId,
+			"wrapper enrichment lost pointer ownership");
+		input.wrapperDescriptor = 8;
+		const auto reused = collector.ObserveStageShader(input);
+		Check(reused.firstSeen && reused.observationId != first.observationId &&
+				  reused.pointerGeneration == first.pointerGeneration + 1,
+			"conflicting evidence did not create a new pointer generation");
+		input.wrapperDescriptor = 9;
+		Check(collector.ObserveStageShader(input).observationId == 0,
+			"conflicting shader exceeded the fixed record bound");
+		const auto snapshot = collector.Stop();
+		Check(snapshot && snapshot->stageShaderObservations.size() == 2 &&
+				  snapshot->stageShaderObservations.front().engineAliasesTruncated &&
+				  snapshot->statistics.droppedStageShaderObservations == 1,
+			"bounded enrichment lost truncation or admission evidence");
 	}
 
 	void TestNestedScopes()
@@ -285,6 +372,7 @@ int main()
 {
 	try {
 		TestBoundsValidation();
+		TestStageShaderEnrichmentDoesNotAllocateLookupNodes();
 		TestNestedScopes();
 		TestCapacityLimits();
 		TestFrameLimit();

@@ -29,6 +29,7 @@
 #include "MenuDevBenchBridge.h"
 #include "PerformanceTuningDevBenchBridge.h"
 #include "ProfilerDevBenchBridge.h"
+#include "RenderMap/DevBenchBridge.h"
 #include "SceneSettingsManager.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
@@ -182,6 +183,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 			CSX::Api::EditorDevBenchBridge::Install();
 			CSX::Api::FeatureDevBenchBridge::Install();
 			CSX::Api::ShaderDevBenchBridge::Install();
+			CSX::RenderMap::DevBenchBridge::Install();
 			break;
 		}
 	case SKSE::MessagingInterface::kPostPostLoad:
@@ -199,6 +201,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 				Deferred::Hooks::Install();
 				Hooks::Install();
 				CSX::Api::RegisterAcceptedDrawService();
@@ -303,6 +306,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::UpscalingDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
+				CSX::RenderMap::DevBenchBridge::Install();
 				globals::state->startupMenuInitializationComplete.store(true, std::memory_order_release);
 			}
 

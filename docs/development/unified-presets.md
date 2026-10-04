@@ -41,12 +41,14 @@ Its Dwelling profile enables advanced controls with Omnidirectional Bulbs
 `1.25`, Ambient `0.75`, and Emissive `1.25` in all three tiers.
 Exterior Night also enables advanced controls, with Scene Brightness `0.90`,
 Directional Light `2.50`, Point Lights and Omnidirectional Bulbs `1.25`,
-Ambient `1.0`, and Emissive `1.50`. Its Sky, Fog, and Volumetric Lighting
-gamma offsets are `0.45`, `0.25`, and `0.30`, respectively.
+Ambient `1.0`, and Emissive `1.30`. Its Sky, Clouds, Fog, and Volumetric
+Lighting gamma offsets are `0.45`, `0.05`, `0.25`, and `0.30`, respectively.
 Its detailed water controls are enabled with Water Brightness `0.70`,
 Fresnel Minimum `0.25`, and Global Reflection Amount `1.25`.
 Exterior Day enables advanced controls with Directional Light `1.15` and
 Volumetric Lighting gamma offset `0.75`.
+Its detailed water controls are enabled with Fresnel Minimum `0.25`,
+Fresnel Maximum `1.0`, and Muddiness `0.70`.
 
 True PBR uses PBR Metal Reflection `0.75` in all three tiers.
 
@@ -245,9 +247,10 @@ tier lever. Rain and character-focused anchors remain necessary for Wetterness,
 Subsurface Scattering, and Hair Specular.
 
 The requested Hair Specular and water-appearance settings are shared appearance
-baselines rather than tier levers. The water baseline includes the blue tint,
-0.15 tint strength, 15-unit shore fade, 0.5 wave amplitude, 0.90 Fresnel maximum,
-and 1.25 global reflection amount recorded in the policy.
+baselines rather than tier levers. Water tint strength is `0.0` in every
+tier. The global water baseline includes the 15-unit shore fade, 0.5 wave
+amplitude, 0.90 Fresnel maximum, and 1.25 global reflection amount recorded
+in the policy.
 
 Shader-cache packing, selective invalidation, and compiler thread/priority
 policy are deliberately not graphics-tier settings. Presets keep disk caching

@@ -15,7 +15,7 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "CE85A2F5EB58E6DF0B9AB09E2193C387BEA917A0EA5DB20734A7CF72208BEA7B"
+        "sha256": "244C7251B76538C52E442A6F8008CE8F8F38568BA5E4852067A8F4335ADA754A"
     },
     "runtimeSettingsContract": {
         "revision": 8,
@@ -385,7 +385,7 @@
             "path": ["Unified Water", "WaterTintColor"],
             "value": [0.0, 0.3499999940395355, 1.0]
         },
-        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.0 },
         { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
         { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "AOInteriorsOnly"], "value": true },
@@ -618,7 +618,7 @@
             "path": ["Unified Water", "WaterTintColor"],
             "value": [0.0, 0.3499999940395355, 1.0]
         },
-        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.0 },
         { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
         { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "EnableGI"], "value": false },

@@ -2359,6 +2359,12 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
     add_d3d_shader_test(
+        pbr_grass_shader_test
+        PBRGrassShader
+        tests/pbr_grass_shader_test.cpp
+    )
+    set_tests_properties(PBRGrassShader PROPERTIES TIMEOUT 180)
+    add_d3d_shader_test(
         ambient_balance_shader_test
         AmbientBalanceShader
         tests/ambient_balance_shader_test.cpp
@@ -2445,6 +2451,18 @@ if(BUILD_CONTROLLER_TESTS)
             LABELS "ControllerTests"
             ENVIRONMENT
                 "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    add_test(
+        NAME PBRGrassMaterial
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/pbr_grass_material_test.py"
+    )
+    set_tests_properties(
+        PBRGrassMaterial
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
     )
     add_controller_test(
         motion_sharpening_runtime_compile_test

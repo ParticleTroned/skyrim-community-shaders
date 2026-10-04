@@ -1335,23 +1335,25 @@ int main()
 			CoversPerspectiveAndCameraAdjustment(fine);
 			ChecksRefinedProofsAgainstSourcePixels(fine);
 			ChecksFaceProofsAgainstRays(fine);
-			Fixture baseline(device.Get(), context.Get(), reversedDepth, 32, 32, 2, true);
-			CoversVisibilityAndFailures(baseline);
-			CoversMixedStereoVisibility(baseline);
-			SeparatesViewportRetentionReasons(baseline);
-			BiasRetainsTouchingBounds(baseline);
-			CoversEveryOverlappingCell(baseline);
-			CoversShearedCornerExtents(baseline);
-			CoversPerspectiveAndCameraAdjustment(baseline);
-			PreservesSmallBoundsAtLargeWorldCoordinates(baseline);
-			PreservesRefinedFootprintAndStereo(baseline);
-			RefinesThinRectangles(baseline);
-			ChecksRefinedProofsAgainstSourcePixels(baseline);
-			ExcludesEmptyProjectedCorners(baseline);
-			UsesLocalFaceDepth(baseline);
-			PreservesFaceProofsAcrossAxisPermutations(baseline);
-			RetainsLocalFaceBiasInEitherEye(baseline);
-			ChecksFaceProofsAgainstRays(baseline);
+			for (const UINT reduction : { 2u, 4u }) {
+				Fixture baseline(device.Get(), context.Get(), reversedDepth, 32, 32, reduction, true);
+				CoversVisibilityAndFailures(baseline);
+				CoversMixedStereoVisibility(baseline);
+				SeparatesViewportRetentionReasons(baseline);
+				BiasRetainsTouchingBounds(baseline);
+				CoversEveryOverlappingCell(baseline);
+				CoversShearedCornerExtents(baseline);
+				CoversPerspectiveAndCameraAdjustment(baseline);
+				PreservesSmallBoundsAtLargeWorldCoordinates(baseline);
+				PreservesRefinedFootprintAndStereo(baseline);
+				RefinesThinRectangles(baseline);
+				ChecksRefinedProofsAgainstSourcePixels(baseline);
+				ExcludesEmptyProjectedCorners(baseline);
+				UsesLocalFaceDepth(baseline);
+				PreservesFaceProofsAcrossAxisPermutations(baseline);
+				RetainsLocalFaceBiasInEitherEye(baseline);
+				ChecksFaceProofsAgainstRays(baseline);
+			}
 			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
 					  << "): mip coverage, bounded face refinement, source-pixel and 3D ray oracles, stereo, bias, perspective and failure fallback\n";
 		}

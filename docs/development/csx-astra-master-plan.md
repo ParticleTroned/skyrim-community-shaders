@@ -1,46 +1,43 @@
 # CSX Astra master implementation plan
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
-The proof-bias iteration is implemented and measured: original whole-face and
-triangle minima use base bias, and DevBench reports plane successes,
-clipper entries, bias-only shortcuts and separate viewport reasons.
-Clipping and plane allowances are preserved. The 12 focused tests and
-production compiler-output isolation checks pass.
-The [latest comparison and optimization analysis](vr-hybrid-culling-proof-bias-2026-10-04.md)
-record two settled noon windows per method with instrumentation disabled:
-Hybrid averages 17.40 ms CPU / 10.21 ms GPU versus Advanced's
-11.09 / 8.58 ms, increases of 56.9% and 19.1%. Both Hybrid windows exceed
-both Advanced windows, although the Advanced baseline has material spread.
-Separate counter windows reject 35.4-36.7% versus 61.6% of candidate
-records. This iteration has not demonstrated a performance benefit.
+The [latest in-game A/B comparison](vr-hybrid-culling-proof-ab-2026-10-04.md)
+compares the guarded baseline A with original-vertex proofs B in one
+process. Advanced's three noon observations have no isolated outlier;
+the representative median is 10.27 ms CPU / 7.71 ms GPU. B averages
+13.83 / 9.43 ms, respectively 34.7% and 22.4% slower. A ranges from
+12.41-17.44 ms CPU / 9.35-9.98 ms GPU, making whole-frame A/B attribution
+inconclusive. Both variants remain slower than every Advanced window.
 
-Two 300-frame GPU captures per method show culling scope means of
-0.919 ms for Hybrid and 0.076 ms for native Advanced. Bounds testing is
-about 92% of Hybrid's culling work. New bias-only shortcuts fire about
-three times per hundred candidates; actual polygon clipping runs about
-2.3 times per candidate. These are intermediate work events, not recovered
-object counts. Diagnostic coverage is 99.92%, with no readback failures,
-Hybrid fallback, invalidated or unreadable batches.
+Two separate 300-frame captures per condition measure culling means of
+0.784 ms for A, 0.798 ms for B and 0.188 ms for Advanced. B's observed
+0.014 ms (1.76%) extra cost does not explain the large earlier regression.
+Bounds testing remains about 91% of Hi-Z culling. Frozen counters reject
+about 38-39% of candidates versus Advanced's 62.7%; these are separate
+cohorts, not matched objects. New bias-only shortcuts fire about four
+times per hundred candidates without a demonstrated aggregate gain.
+Actual clipping still runs about 2.5 times per candidate; only 0.278%
+exhaust the read budget in the current B diagnostic cohort.
 
-Retention is concentrated at finest depth (29%), nearest vertex (12%),
-wholly offscreen bounds (13%) and partial viewport bounds (6%). Offscreen
-records can inflate the count gap without representing additional draws.
-Only 0.116-0.126% exhaust the read budget. Different rendered camera views
-prevent attributing the apparent cross-session regression to this commit.
-First isolate the bias change using matched inputs; then select one
-bounded clipping/storage optimization from measured evidence.
-Native/Hybrid comparisons on the same submitted batch remain proposed
-DevBench-only work. Advanced remains default; motion and lifecycle
-qualification remain open. PBR grass, grass optimization and Reverse Z
-remain separate later PRs.
+The earlier, closer 6.7% GPU-gap result belongs to `ac2b7dcfc`, before
+`425b8d373` introduced 2x2 reduction. Its culling scopes cost about
+0.594 ms with 4x4 reduction. The view differed, so this is a candidate
+for controlled testing rather than proof that finer depth regressed.
+The independent DevBench 4x4/2x2 selector is now implemented; its next
+in-game assay holds the guarded proof variant fixed.
+Identical-input comparison and native/Hybrid matched outcomes remain
+needed to attribute recovered objects before a clipping/storage change.
 
-The DevBench A/B build now selects the previous guarded face/triangle
-proofs or current original-vertex proofs without restarting between
-conditions. Both shader variants are warmed at pipeline creation;
-selection invalidates pending history and measurement windows. Twelve
-focused tests and actual-flag production isolation checks pass. The next
-in-game assay uses matched-view A/B/B/A windows at noon to decide whether
-to retain the last bias change. No A/B performance result is claimed yet.
+The DevBench A/B selector, both warmed proof variants, requested/effective
+revision reporting and history invalidation were exercised successfully.
+Twelve focused implementation tests and production compiler-output
+isolation checks remain passed for the measured source `6f9ca1c1a`.
+The completed assay changed no runtime code; a subsequent change adds
+the independent coarse-depth selector for the next build. Advanced and original
+instrumentation settings were restored; Skyrim was left running.
+No pictures were taken because performance was not comparable.
+Motion, lifecycle and SE/AE qualification remain open. PBR grass, grass
+optimization and Reverse Z remain separate later PRs.
 
 ## Scope and authority
 
@@ -598,12 +595,13 @@ Detailed original requirements remain in master Part B sections 4-7.
 
 ## Validation and evidence record
 
-The [current comparison](vr-hybrid-culling-adaptive-2026-10-04.md#validation-and-evidence)
-preserves compiled source `425b8d373`, its producer Build ID, the 12/12
-focused test pass, production compiler-output checks, final timing windows
-and the subsequent same-build traversal diagnosis. No runtime code changed
-for the diagnostic investigation. A separate production DLL link, SE/AE
-runtime checks and motion/lifecycle qualification remain open.
+The [current A/B comparison](vr-hybrid-culling-proof-ab-2026-10-04.md#evidence)
+preserves compiled source `6f9ca1c1a`, its producer Build ID, complete
+noon timing windows, six bounded GPU captures and frozen diagnostic
+counters. No runtime code changed during the assay. The measured source's
+12/12 focused tests and production compiler-output checks remain passed;
+a separate production DLL link, SE/AE runtime checks and motion/lifecycle
+qualification remain open.
 
 The [integration record](vr-hybrid-culling.md#current-main-integration-2026-10-03)
 and [original noon report](vr-hybrid-culling-runtime-2026-10-03.md) retain
@@ -674,19 +672,21 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental. Cached face tests, plane proofs, nearest-vertex
-checks, finer depth and original-vertex base bias are implemented and
-measured. Bounds testing now costs 0.828-0.865 ms GPU in the tested view;
-the hierarchy costs 0.058-0.066 ms. The [analysis](vr-hybrid-culling-proof-bias-2026-10-04.md#apparent-regression-and-next-work)
-prioritizes matched-input old/new shader comparison before another
-optimization. Actual clipping frequency justifies a bounded clipper
-experiment; stackless traversal or cached planes remain alternatives,
-with no demonstrated occupancy bottleneck or predicted gain.
-Do not raise the read budget: even resolving every observed budget exit
-would recover at most 0.126 percentage points in these cohorts.
-Same-batch native comparison must separate useful missed culling from
-offscreen count differences. Present evidence does not justify promising
-parity from another local optimization.
+Keep PR104 experimental. The last proof change costs only about 0.014 ms
+more culling GPU time in the current A/B observations; reverting it cannot
+close the remaining gap. No reliable whole-frame A/B gain was established.
+The [analysis](vr-hybrid-culling-proof-ab-2026-10-04.md#decision-and-next-work)
+uses the implemented 4x4/2x2 depth-reduction switch because the closer
+historical result predates finer depth. Enable both baseline toggles to
+reproduce `ac2b7dcfc` culling, then change only depth reduction. Hold the
+proof variant fixed and
+measure both total frame cost and rejection in one unchanged view.
+
+Matched-input comparisons must distinguish useful recovered occlusion
+from offscreen counts. Actual clipping remains a possible cost target,
+with no demonstrated occupancy bottleneck or predicted gain. Do not
+raise the read budget: resolving every observed budget exit could recover
+at most 0.278 percentage points in the current B diagnostic cohort.
 Preserve masks, guards, depth bias and stereo/history safety; require a
 repeatable improvement and motion/lifecycle qualification before promotion.
 

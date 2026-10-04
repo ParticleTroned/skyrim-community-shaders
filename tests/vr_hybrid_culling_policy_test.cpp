@@ -1,3 +1,4 @@
+#include "Features/VRHybridCullingComparison.h"
 #include "Features/VRHybridCullingPolicy.h"
 
 #include <array>
@@ -8,6 +9,56 @@
 namespace
 {
 	using namespace VRHybridCullingPolicy;
+
+	bool ComparisonChangesPreserveIndependentSettings()
+	{
+		namespace comparison = VRHybridCullingComparison;
+		using comparison::Setting;
+		std::uint64_t selection = 0;
+		std::uint64_t revision = 0;
+		bool guarded = false, coarse = false;
+		for (const auto setting : { Setting::GuardedProof, Setting::CoarseDepth, Setting::GuardedProof, Setting::CoarseDepth,
+				 Setting::CoarseDepth, Setting::GuardedProof, Setting::CoarseDepth, Setting::GuardedProof }) {
+			auto& flag = setting == Setting::GuardedProof ? guarded : coarse;
+			const auto previous = selection;
+			flag = !flag;
+			selection = comparison::Select(selection, setting, flag);
+			if (selection == previous || comparison::Revision(selection) != ++revision ||
+				comparison::GuardedProof(selection) != guarded || comparison::CoarseDepth(selection) != coarse ||
+				comparison::Select(selection, setting, flag) != selection)
+				return false;
+		}
+		return !guarded && !coarse && selection != 0;
+	}
+
+	bool ComparisonLayoutsRetainAdmissionAndFallback()
+	{
+		namespace comparison = VRHybridCullingComparison;
+		for (const bool guarded : { false, true }) {
+			for (const bool coarse : { false, true }) {
+				const auto selection = comparison::Select(comparison::Select(0, comparison::Setting::GuardedProof, guarded), comparison::Setting::CoarseDepth, coarse);
+				for (const auto height : { 1492u, 8192u, 8193u, 16384u }) {
+					const auto eyeWidth = height == 1492 ? 1344u : 8192u;
+					const std::array<EyeRect, 2> eyes{ EyeRect{ 0, 0, eyeWidth, height }, EyeRect{ eyeWidth, 0, eyeWidth, height } };
+					BuildConstants constants{}, expected{};
+					PyramidLayout layout{}, expectedLayout{};
+					const auto reduction = coarse || height > 8192 ? 4u : 2u;
+					if (!comparison::TryMakeBuildConstants(selection, eyes, eyeWidth * 2, height, constants, layout) ||
+						!TryMakeBuildConstants(eyes, eyeWidth * 2, height, reduction, expected, expectedLayout) ||
+						layout.width != expectedLayout.width || layout.height != expectedLayout.height ||
+						layout.mipCount != expectedLayout.mipCount || layout.sourceReduction != reduction ||
+						constants.outputWidth != layout.width || constants.outputHeight != layout.height || constants.sourceReduction != reduction)
+						return false;
+					auto invalid = eyes;
+					invalid[1].x = std::numeric_limits<std::uint32_t>::max();
+					if (comparison::TryMakeBuildConstants(selection, invalid, eyeWidth * 2, height, constants, layout) ||
+						layout.width != 0 || constants.outputWidth != 0)
+						return false;
+				}
+			}
+		}
+		return true;
+	}
 
 	bool CoversPaddedEyeEdges()
 	{
@@ -198,6 +249,8 @@ namespace
 int main()
 {
 	const std::array tests{
+		std::pair{ "independent comparison settings and ABA revisions", ComparisonChangesPreserveIndependentSettings },
+		std::pair{ "comparison layout admission and fallback", ComparisonLayoutsRetainAdmissionAndFallback },
 		std::pair{ "padded eye edges", CoversPaddedEyeEdges },
 		std::pair{ "asymmetric rectangles", CoversAsymmetricRectsAndSinglePixel },
 		std::pair{ "finer depth within resource limits", SelectsFinerDepthWithinResourceLimits },

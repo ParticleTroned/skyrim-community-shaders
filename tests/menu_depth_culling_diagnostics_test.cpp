@@ -140,6 +140,39 @@ namespace
 			"Inactive Hybrid mode lost its remembered selection or claimed an active proof");
 	}
 
+	void DistinguishesRequestedDepthFromEffectiveReduction()
+	{
+		VRDepthCullingTemporal::Status temporal{};
+		VRHybridCulling::Status hybrid{};
+		const auto snapshot = [&]() { return MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("depthReductionComparison"); };
+		auto depth = snapshot();
+		Require(depth.at("requestedSourceReduction") == 2 && depth.at("activeSourceReduction") == 0 &&
+					depth.at("state") == "pending" && !depth.at("largeSourceFallback").get<bool>(),
+			"Unsubmitted depth preference was reported as active");
+		hybrid.sourceReductionRequested = 4;
+		hybrid.proofSelectionRevision = 3;
+		depth = snapshot();
+		Require(depth.at("requestedSourceReduction") == 4 && depth.at("activeSourceReduction") == 0 &&
+					depth.at("requestedRevision") == 3 && depth.at("activeRevision") == 0,
+			"A pending coarse selection lost its revision or claimed active resources");
+		hybrid.sourceReductionActive = 4;
+		hybrid.proofActiveRevision = 3;
+		hybrid.depthComparisonState = "active";
+		depth = snapshot();
+		Require(depth.at("state") == "active" && depth.at("activeSourceReduction") == 4 &&
+					depth.at("activeRevision") == depth.at("requestedRevision") && !depth.at("largeSourceFallback").get<bool>(),
+			"Effective coarse baseline was confused with large-source fallback");
+		hybrid.sourceReductionRequested = 2;
+		Require(snapshot().at("largeSourceFallback").get<bool>(), "Fine preference hid its effective large-source reduction");
+		hybrid.sourceReductionActive = 0;
+		hybrid.proofActiveRevision = 0;
+		hybrid.depthComparisonState = "inactive";
+		depth = snapshot();
+		Require(depth.at("state") == "inactive" && depth.at("activeSourceReduction") == 0 &&
+					!depth.at("largeSourceFallback").get<bool>(),
+			"Inactive comparison retained an effective depth claim");
+	}
+
 	void SeparatesNativeReadbackFromValidation()
 	{
 		VRDepthCullingTemporal::Status temporal{};
@@ -270,6 +303,7 @@ int main()
 		ValidatesProofCountersAndViewportReasons();
 		PreservesInactiveAndFallbackEvidence();
 		PreservesProofVariantSelectionAndAvailability();
+		DistinguishesRequestedDepthFromEffectiveReduction();
 		DistinguishesMissingSourceAndUnmeasuredTiming();
 		SeparatesNativeReadbackFromValidation();
 		PreservesNativeVisibilityBeforeAndAfterRecovery();

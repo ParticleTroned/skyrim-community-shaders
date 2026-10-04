@@ -77,6 +77,8 @@ namespace VRHybridCulling
 		bool guardedBaselineAvailable = false;
 		const char* guardedBaselineAvailability = "not_created";
 		std::uint64_t proofSelectionRevision = 0, proofActiveRevision = 0;
+		std::uint32_t sourceReductionRequested = 2, sourceReductionActive = 0;
+		const char* depthComparisonState = "pending";
 		bool traversalDiagnosticsEnabled = false;
 		bool traversalDiagnosticsAvailable = false;
 		const char* traversalDiagnosticsAvailability = "not_created";
@@ -100,6 +102,8 @@ namespace VRHybridCulling
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Select a warmed proof-bias shader on the main thread and invalidate older measurements/history. */
 	void SetGuardedVertexBaselineEnabled(bool a_enabled) noexcept;
+	/** Select 4x4 reduction on the main thread; reallocate on render preparation and invalidate old proofs. */
+	void SetCoarseDepthBaselineEnabled(bool a_enabled) noexcept;
 	/** Select the extra shader/readback instrumentation independently of GPU profiling. */
 	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept;
 	/** Read current backend state and gated measurements without owning the render context. */

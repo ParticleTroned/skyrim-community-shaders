@@ -18,6 +18,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "GpuPass.h"
+#	include "VRHybridCullingComparison.h"
 #	include "Utils/D3DContextProtection.h"
 #	include <cassert>
 #	include <optional>
@@ -86,7 +87,7 @@ namespace VRHybridCulling
 			VRHybridCullingSnapshot::Source source{};
 			std::uint64_t epoch = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			std::uint64_t proofSelection = 0;
+			std::uint64_t comparisonSelection = 0;
 #endif
 			winrt::com_ptr<ID3D11ShaderResourceView> depth;
 		};
@@ -140,8 +141,9 @@ namespace VRHybridCulling
 		bool g_ready = false;
 		std::atomic_bool g_reloadRequested{ false };
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		// Bit zero selects the shader; higher bits prevent A/B/A changes from reusing an old batch.
-		std::atomic_uint64_t g_proofSelection{ 0 }, g_proofActiveSelection{ 0 }, g_proofActiveEpoch{ 0 };
+		// Both comparison axes share a revision so returning to old settings cannot reuse a batch.
+		std::atomic_uint64_t g_comparisonSelection{ 0 }, g_comparisonActiveSelection{ 0 }, g_comparisonActiveEpoch{ 0 };
+		std::atomic_uint32_t g_activeSourceReduction{ 0 };
 		std::atomic_bool g_guardedBaselineAvailable{ false }, g_guardedBaselineDiagnosticAvailable{ false };
 		std::atomic<const char*> g_guardedBaselineAvailability{ "not_created" };
 		std::atomic_bool g_traversalEnabled{ false }, g_traversalAvailable{ false };
@@ -235,7 +237,7 @@ namespace VRHybridCulling
 		{
 			a_frame = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			a_frame.proofSelection = g_proofSelection.load(std::memory_order_acquire);
+			a_frame.comparisonSelection = g_comparisonSelection.load(std::memory_order_acquire);
 #endif
 			auto* renderer = globals::game::renderer;
 			auto* graphics = globals::game::graphicsState;
@@ -288,8 +290,13 @@ namespace VRHybridCulling
 						a_frame.poses[eye].rotation[row][column] = data.viewMat.m[row][column];
 				a_frame.test.eyes[eye] = { eye * (texture.Width / 2), 0, texture.Width / 2, texture.Height };
 			}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (!VRHybridCullingComparison::TryMakeBuildConstants(a_frame.comparisonSelection, a_frame.test.eyes,
+					texture.Width, texture.Height, a_frame.build, a_frame.test.pyramid))
+#else
 			if (!TryMakePreferredBuildConstants(a_frame.test.eyes, texture.Width, texture.Height,
 					a_frame.build, a_frame.test.pyramid))
+#endif
 				return false;
 			a_frame.test.objectCount = 1;
 			a_frame.test.pixelGuardBand = 2.0f;
@@ -680,7 +687,7 @@ namespace VRHybridCulling
 			g_guardedBaselineAvailable.store(false, std::memory_order_release);
 			g_guardedBaselineDiagnosticAvailable.store(false, std::memory_order_release);
 			g_guardedBaselineAvailability.store("not_created", std::memory_order_release);
-			g_proofActiveEpoch.store(0, std::memory_order_release);
+			g_comparisonActiveEpoch.store(0, std::memory_order_release);
 			g_traversalAvailable.store(false, std::memory_order_release);
 			g_traversalAvailability.store("not_created", std::memory_order_release);
 #endif
@@ -695,7 +702,7 @@ namespace VRHybridCulling
 			if (!EnsurePipeline())
 				return HYBRID_PREPARATION_FAILED("pipeline_unavailable", a_epoch);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			if ((g_prepared.proofSelection & 1) != 0 && !g_resources.guardedBaselineTest)
+			if (VRHybridCullingComparison::GuardedProof(g_prepared.comparisonSelection) && !g_resources.guardedBaselineTest)
 				return HYBRID_PREPARATION_FAILED("proof_baseline_unavailable", a_epoch);
 #endif
 			EnsurePyramid(g_prepared.test.pyramid);
@@ -728,7 +735,7 @@ namespace VRHybridCulling
 		if (g_prepared.epoch != a_epoch || g_prepared.source.frame != batch.frame)
 			return HYBRID_PREPARATION_FAILED("preparation_expired", a_epoch);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (g_prepared.proofSelection != g_proofSelection.load(std::memory_order_acquire))
+		if (g_prepared.comparisonSelection != g_comparisonSelection.load(std::memory_order_acquire))
 			return HYBRID_PREPARATION_FAILED("proof_selection_changed", a_epoch);
 #endif
 		if (!CheckNativeBuffers(a_culler, batch.count, bounds, results))
@@ -761,7 +768,7 @@ namespace VRHybridCulling
 		BuildPyramid();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const bool diagnosticRequested = telemetry && g_traversalEnabled.load(std::memory_order_acquire);
-		const bool guardedBaseline = (g_prepared.proofSelection & 1) != 0;
+		const bool guardedBaseline = VRHybridCullingComparison::GuardedProof(g_prepared.comparisonSelection);
 		const bool diagnostic = diagnosticRequested && g_traversalAvailable.load(std::memory_order_acquire) &&
 		                        (!guardedBaseline || g_guardedBaselineDiagnosticAvailable.load(std::memory_order_acquire));
 		if (diagnosticRequested && !diagnostic)
@@ -813,8 +820,9 @@ namespace VRHybridCulling
 		g_history.pending = true;
 		g_history.pipelineInvalidated = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		g_proofActiveSelection.store(g_prepared.proofSelection, std::memory_order_relaxed);
-		g_proofActiveEpoch.store(a_epoch, std::memory_order_release);
+		g_activeSourceReduction.store(g_prepared.test.pyramid.sourceReduction, std::memory_order_relaxed);
+		g_comparisonActiveSelection.store(g_prepared.comparisonSelection, std::memory_order_relaxed);
+		g_comparisonActiveEpoch.store(a_epoch, std::memory_order_release);
 		if (telemetry) {
 			g_lastCount.store(batch.count, std::memory_order_relaxed);
 			g_lastCountEpoch.store(a_epoch, std::memory_order_release);
@@ -866,7 +874,7 @@ namespace VRHybridCulling
 		if (!a_selected || !VRHybridCullingHistory::Matches(g_history.batch, batch))
 			HYBRID_REJECT_HISTORY("batch_mismatch");
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		else if (g_history.frame.proofSelection != g_proofSelection.load(std::memory_order_acquire))
+		else if (g_history.frame.comparisonSelection != g_comparisonSelection.load(std::memory_order_acquire))
 			HYBRID_REJECT_HISTORY("proof_selection_changed");
 #endif
 		else if (g_history.pipelineInvalidated || g_reloadRequested.load(std::memory_order_acquire))
@@ -965,15 +973,29 @@ namespace VRHybridCulling
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	namespace
+	{
+		void SetComparisonSelection(VRHybridCullingComparison::Setting a_setting, bool a_enabled) noexcept
+		{
+			const auto previous = g_comparisonSelection.load(std::memory_order_acquire);
+			const auto selection = VRHybridCullingComparison::Select(previous, a_setting, a_enabled);
+			if (selection == previous)
+				return;
+			g_comparisonSelection.store(selection, std::memory_order_release);
+			g_comparisonActiveEpoch.store(0, std::memory_order_release);
+			g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
+			VRDepthCullingTemporal::InvalidateHybridProofHistory();
+		}
+	}
+
 	void SetGuardedVertexBaselineEnabled(bool a_enabled) noexcept
 	{
-		const auto previous = g_proofSelection.load(std::memory_order_acquire);
-		if (((previous & 1) != 0) == a_enabled)
-			return;
-		g_proofSelection.store(((previous & ~std::uint64_t{ 1 }) + 2) | std::uint64_t{ a_enabled }, std::memory_order_release);
-		g_proofActiveEpoch.store(0, std::memory_order_release);
-		g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
-		VRDepthCullingTemporal::InvalidateHybridProofHistory();
+		SetComparisonSelection(VRHybridCullingComparison::Setting::GuardedProof, a_enabled);
+	}
+
+	void SetCoarseDepthBaselineEnabled(bool a_enabled) noexcept
+	{
+		SetComparisonSelection(VRHybridCullingComparison::Setting::CoarseDepth, a_enabled);
 	}
 
 	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept
@@ -1014,22 +1036,25 @@ namespace VRHybridCulling
 			.dispatch = g_dispatchTiming.Read(),
 			.readback = g_readbackTiming.Read()
 		};
-		const auto proofSelection = g_proofSelection.load(std::memory_order_acquire);
-		const auto activeEpoch = g_proofActiveEpoch.load(std::memory_order_acquire);
-		const auto activeSelection = g_proofActiveSelection.load(std::memory_order_relaxed);
-		result.proofVariantRequested = (proofSelection & 1) != 0 ? "guarded_baseline" : "original_vertices";
-		const bool proofActive = current && activeEpoch == a_epoch && activeSelection == proofSelection &&
+		const auto comparisonSelection = g_comparisonSelection.load(std::memory_order_acquire);
+		const auto activeEpoch = g_comparisonActiveEpoch.load(std::memory_order_acquire);
+		const auto activeSelection = g_comparisonActiveSelection.load(std::memory_order_relaxed);
+		result.proofVariantRequested = VRHybridCullingComparison::GuardedProof(comparisonSelection) ? "guarded_baseline" : "original_vertices";
+		const bool proofActive = current && activeEpoch == a_epoch && activeSelection == comparisonSelection &&
 		                         std::strcmp(result.effectiveBackend, "hybrid") == 0;
 		result.proofVariantActive = !a_selected || !a_enabled ? "inactive" :
 		                                                        (proofActive ? result.proofVariantRequested : "pending");
-		result.proofSelectionRevision = proofSelection >> 1;
-		result.proofActiveRevision = proofActive ? activeSelection >> 1 : 0;
+		result.proofSelectionRevision = VRHybridCullingComparison::Revision(comparisonSelection);
+		result.proofActiveRevision = proofActive ? VRHybridCullingComparison::Revision(activeSelection) : 0;
+		result.sourceReductionRequested = VRHybridCullingComparison::CoarseDepth(comparisonSelection) ? kLargeSourceReduction : kDefaultSourceReduction;
+		result.sourceReductionActive = proofActive ? g_activeSourceReduction.load(std::memory_order_relaxed) : 0;
+		result.depthComparisonState = !a_selected || !a_enabled ? "inactive" : (proofActive ? "active" : "pending");
 		result.guardedBaselineAvailable = g_guardedBaselineAvailable.load(std::memory_order_acquire);
 		result.guardedBaselineAvailability = g_guardedBaselineAvailability.load(std::memory_order_acquire);
 		result.traversalDiagnosticsEnabled = g_traversalEnabled.load(std::memory_order_acquire);
 		result.traversalDiagnosticsAvailable = g_traversalAvailable.load(std::memory_order_acquire);
 		result.traversalDiagnosticsAvailability = g_traversalAvailability.load(std::memory_order_acquire);
-		if ((proofSelection & 1) != 0 && result.traversalDiagnosticsAvailable && !g_guardedBaselineDiagnosticAvailable.load(std::memory_order_acquire)) {
+		if (VRHybridCullingComparison::GuardedProof(comparisonSelection) && result.traversalDiagnosticsAvailable && !g_guardedBaselineDiagnosticAvailable.load(std::memory_order_acquire)) {
 			result.traversalDiagnosticsAvailable = false;
 			result.traversalDiagnosticsAvailability = "baseline_shader_unavailable";
 		}

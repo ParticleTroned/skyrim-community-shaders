@@ -6,13 +6,15 @@ four-mode assay found Hybrid materially slower than Advanced and Legacy.
 Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
-The [latest proof-bias comparison](vr-hybrid-culling-proof-bias-2026-10-04.md)
-records two noon windows per method with instrumentation disabled:
-Hybrid averages 17.40 ms CPU / 10.21 ms GPU, versus Advanced's
-11.09 / 8.58 ms. Separate counters show 35.4-36.7% candidate rejection
-versus 61.6%. Culling GPU scopes average 0.919 ms versus 0.076 ms;
-bounds testing accounts for about 92% of Hybrid's measured culling work.
-No Hybrid fallback, invalidation or unreadable batches were observed.
+The [latest proof A/B comparison](vr-hybrid-culling-proof-ab-2026-10-04.md)
+records guarded-baseline A and original-vertex B in the same process.
+B averages 13.83 ms CPU / 9.43 ms GPU against the representative Advanced
+baseline of 10.27 / 7.71 ms. A's whole-frame repeats vary substantially.
+Culling GPU scopes average 0.784 ms for A, 0.798 ms for B and 0.188 ms
+for Advanced; bounds testing remains about 91% of Hi-Z cost. Separate
+normal-shader counters reject about 38-39% versus Advanced's 62.7%.
+The small observed bias-change cost does not explain the earlier large
+regression. A controlled 4x4/2x2 depth comparison is the next experiment.
 
 The original-vertex base-bias change has not demonstrated an improvement.
 New shortcuts fire about three times per hundred candidates, while actual
@@ -239,7 +241,70 @@ source revisions (`425b8d373` baseline, `95edcef20` current), including
 strict optimized `/Ges /WX /O3` standard and reversed-depth permutations.
 Actual compiler flags and forced headers confirm the extra code
 is absent from production preprocessing; no separate production DLL link
-or in-game A/B result is claimed yet.
+is claimed. The completed [in-game A/B assay](vr-hybrid-culling-proof-ab-2026-10-04.md)
+exercised both requested/active states, revisions and normal/diagnostic
+paths, then restored Advanced. Both variants remain slower than Advanced.
+
+### Coarse-depth baseline comparison
+
+`set_depth_culling_coarse_depth_baseline_enabled` adds an independent,
+DevBench-only reduction selector. It requires a boolean `enabled` and
+Skyrim VR. True selects 4x4 reduction; false retains the production 2x2
+preference with the existing large-source 4x4 fallback. It changes no
+saved setting, culling method or telemetry preference.
+
+| Comparison configuration               | Guarded-vertex baseline | Coarse-depth baseline | Culling source configuration                      |
+| -------------------------------------- | ----------------------- | --------------------- | ------------------------------------------------- |
+| Earlier nearest-vertex result          | true                    | true                  | `ac2b7dcfc`, guarded proofs and 4x4               |
+| Finer-depth baseline A                 | true                    | false                 | `425b8d373`, guarded proofs and 2x2 preference    |
+| Current proof variant B                | false                   | false                 | Current original-vertex proofs and 2x2 preference |
+| Independent coarse/current cross-check | false                   | true                  | Current original-vertex proofs and 4x4            |
+
+The earlier 6.7% GPU-gap result was measured on `ac2b7dcfc`, not on the
+subsequently delivered `425b8d373` build. Both commits have identical
+Hi-Z shader sources; the prior validated guarded shader and the original
+4x4 layout reproduce that culling configuration inside the current DLL,
+without claiming the entire historical binary has been restored.
+
+Both selectors share revision-based invalidation of prepared work,
+readback, diagnostic admission and measurement windows. Repeating the
+same value is a no-op; changing away and back cannot revive old batches.
+The historical `proof_selection_changed` rejection reason covers either
+comparison axis. Allocation stays on the renderer's existing preparation
+path. No shader compilation or restart is needed when toggling, but a
+changed layout can allocate a pyramid; warm and settle before measuring.
+Setup failure retains the existing native fallback.
+
+`hybrid.depthReductionComparison` exposes `requestedSourceReduction`,
+`activeSourceReduction`, `state`, `largeSourceFallback`, `requestedRevision`
+and `activeRevision`. Active reduction is zero while pending/inactive;
+only a submitted Hybrid dispatch reports the effective reduction. A fine
+request can report four with `largeSourceFallback=true` on large sources.
+Check both comparison states/revisions and actual reduction, then reset
+telemetry. Use the existing source snapshot for dimensions and logical
+bytes; allocations must stay unchanged within warmed timing windows.
+
+Compare coarse/fine/fine/coarse with the guarded proof selected throughout,
+interleaving Advanced baselines. Reset noon for each phase, keep timing
+instrumentation off, and collect rejection/GPU diagnostics separately.
+In-game measurements of the new depth toggle await installation. Its
+policy, serialization and WARP coverage include both reductions and proof
+variants, independent source-pixel/ray checks, no-op/returning selections,
+invalid dimensions and large-source fallback. Production excludes the
+selector, comparison state and extra control.
+
+Validation: `validate-proof-ab.ps1` rebuilt the 12 focused targets and
+passed 12/12 tests in 37.91 seconds, including WARP in 37.04 seconds.
+Evidence: `build/astra-validation/adaptive/proof-ab-tests-20261004T095519482Z/`.
+`validate-depth-ab-production.ps1` passed actual-flag syntax and
+preprocessor checks for Hybrid, Temporal and Menu bridge, with every
+comparison marker absent. Evidence:
+`build/astra-validation/adaptive/depth-ab-production-20261004T095612930Z/`.
+The registered tool JSON parses with both action names and boolean input;
+`git diff ac2b7dcfc 425b8d373 -- package/Shaders/VRHybridCulling` is empty,
+connecting the existing strict DXBC baseline proof to the historical
+coarse configuration. No new performance or visual result is claimed for
+this selector, and no separate production DLL was linked.
 
 ### Original-vertex implementation validation
 

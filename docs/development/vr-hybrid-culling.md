@@ -8,25 +8,28 @@ sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
 The [current analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md)
 selects guarded proofs with 2x2 source-depth reduction for further work.
-In save 22, this configuration averaged 11.47 ms CPU / 9.01 ms GPU against
-Advanced's 9.65 / 7.42 ms; separate GPU captures measured about 0.920 ms
-for Hi-Z culling versus 0.086 ms for Advanced. Bounds testing accounted
-for most Hi-Z cost. Separate candidate counters rejected about 38.6%
-versus Advanced's 61.2%; these are different submission cohorts.
+The latest save-22 noon comparison averaged 15.51 ms CPU / 9.95 ms GPU
+against Advanced's 11.09 / 8.46 ms. Separate GPU captures measured
+0.794-0.831 ms Hi-Z culling versus 0.068 ms Advanced. Bounds testing remains
+the dominant cost. Separate candidate counters rejected 36.47-37.61%
+versus Advanced's 60.06% after recovery; these are different cohorts.
 Motion and lifecycle qualification remain open.
 
 Hybrid now has one proof implementation: the compound guarded face test
 and guarded triangle, retained-vertex, plane and clipping proofs. It
 prefers 2x2 reduction, retaining 4x4 only when the validated source would
 exceed pyramid resource limits. Proof and coarse-depth A/B selectors and
-their extra shaders are removed from the next build. Advanced remains
+their extra shaders are removed. Advanced remains
 the default while Hi-Z performance and runtime correctness are evaluated.
 
 Projection and region testing use one private per-invocation vertex array.
 Projection initializes every vertex for the current eye before any region
 test; the face helpers only read it. This avoids passing the complete array
 by value on every region test. Guarded arithmetic and coverage are retained;
-a runtime performance gain remains unmeasured.
+The next optimization also indexes prepared face metadata directly and
+alternates between two clipping banks, avoiding survivor copies after each
+plane. Clipping order, interpolation and guarded comparisons are unchanged.
+Its runtime gain remains unmeasured.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not

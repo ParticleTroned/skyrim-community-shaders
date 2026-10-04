@@ -5,27 +5,23 @@ The selected path is guarded projected-face testing with preferred 2x2
 source reduction. Alternative proof/coarse-depth selectors and their extra
 shaders are removed. The existing 4x4 resource-limit fallback remains.
 
-The [current detailed analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md)
-records eight comparable noon windows. Guarded 2x2 averaged 11.47 ms CPU /
-9.01 ms GPU against Advanced's 9.65 / 7.42 ms: respectively 18.83% and
-21.47% slower. Separate complete GPU captures measured 0.920 ms Hi-Z
-culling versus 0.086 ms native culling; bounds testing contributes 92.49%
-of the Hi-Z total. Rejection was 38.60% versus 61.17%, from different
-submission cohorts rather than matched objects or useful draw counts.
-Advanced recovery did not alter its observed native results, making the
-native producer relevant to Legacy as well. Fresh Legacy timings were
-excluded because the engine collected no candidates; the recovery reload
-crashed with attribution undetermined.
+The latest noon comparison measured source `e9b2a6960`: guarded 2x2 averaged
+15.51 ms CPU / 9.95 ms GPU against Advanced's 11.09 / 8.46 ms. Hi-Z GPU
+frames remain 17.67% slower, with substantial repeat variation. Separate
+300-frame captures measured 0.794-0.831 ms Hi-Z culling versus 0.068 ms
+Advanced; bounds testing contributes 90.75% of the mean Hi-Z total.
+Separate counter cohorts rejected 36.47-37.61% versus Advanced's 60.06%
+after recovery. These are candidate records, not matched objects or draws.
 
-The compiled shader repeats an eight-vertex helper-array copy per region.
-Removing this copy is the immediate focused optimization; a shared quad
-proof and selective precise leaf-depth tests are subsequent candidates.
-Matched native/Hi-Z outcomes are needed to identify useful missed culling.
-Developer diagnostics now distinguish observed engine globals from desired
-policy, so an empty batch cannot masquerade as an active native baseline.
-Advanced remains the default. Motion, lifecycle, new-build runtime and
-SE/AE qualification remain open. PBR grass, grass optimization and Reverse
-Z remain separate later PRs.
+The next build removes polygon survivor copies using alternating clip
+banks and replaces repeated prepared-face struct selection with indexed
+invocation-private metadata. Guarded arithmetic, clipping order and safety
+criteria are retained. Four strict shader permutations and 12/12 focused
+tests pass; runtime benefit awaits the next in-game comparison. The earlier
+vertex-array copy is already removed. See the
+[cost analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md).
+Advanced remains default. Motion/lifecycle and SE/AE qualification remain
+open. PBR grass, grass optimization and Reverse Z remain later PRs.
 
 ## Scope and authority
 
@@ -664,15 +660,19 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental and pursue guarded 2x2 only. First measure the
-focused helper-copy optimization against the last valid guarded baseline.
-Confirm nonempty native batches before timing Advanced or Legacy; reset
-time to noon and keep scene, headset pose and rendering settings comparable.
-Developer traversal/shadow diagnostics must remain separate from timing.
+Keep PR104 experimental and pursue guarded 2x2 only. Next compare the
+indexed-face/alternating-clip build with Advanced at noon. Existing GPU
+scope timers and rejection counters are sufficient for that first decision;
+additional diagnostic captures are not required. Keep traversal/shadow
+diagnostics separate from timing.
 
 The [ordered investigation](vr-hybrid-culling-guarded2-analysis-2026-10-04.md#ordered-follow-up)
-prioritizes matched native/Hi-Z outcomes, shared quad/plane proofs and
-selective source-depth refinement for unresolved leaf regions. Distinguish
+retains matched native/Hi-Z outcomes and selective source-depth refinement
+for the rejection gap. If bounds cost still dominates, measure clip-plane
+work before skipping already-containing planes or caching repeated planes.
+Eagerly preparing all twelve planes would exceed the observed plane-attempt
+count by more than threefold. Shared quad proofs need numerical residual
+bounds before replacing the guarded triangle tests. Distinguish
 useful hidden geometry from zero-fragment/offscreen counts. Do not raise
 the read budget: every observed budget exit could recover at most 0.278
 percentage points in the earlier diagnostic cohort. No measured occupancy

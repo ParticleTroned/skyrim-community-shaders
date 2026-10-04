@@ -954,12 +954,11 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
     if (id.x >= Count) return;
     RegionCase value = Cases[id.x];
     [unroll] for (uint vertex = 0; vertex < 8; ++vertex) ProjectedBounds::Vertices[vertex] = value.vertices[vertex].xyz;
-    ProjectedBounds::PreparedFaces faces;
-    ProjectedBounds::PrepareFaces(faces);
+    ProjectedBounds::PrepareFaces();
 #ifdef CSX_HIZ_DIAGNOSTICS
     HiZTraversalDiagnostic diagnostic = (HiZTraversalDiagnostic)0;
 #endif
-    Results[id.x] = ProjectedBounds::OccludedInRegion(faces,
+    Results[id.x] = ProjectedBounds::OccludedInRegion(
         value.rectangle.xy, value.rectangle.zw, value.depth, value.bias HIZ_DIAGNOSTIC_ARGUMENT);
 #ifdef CSX_HIZ_DIAGNOSTICS
     TraversalDiagnostics[id.x] = diagnostic;

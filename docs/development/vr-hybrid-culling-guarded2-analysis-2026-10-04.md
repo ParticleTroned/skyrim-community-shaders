@@ -5,7 +5,60 @@ source-depth reduction. The alternative proof and coarse-depth comparison
 controls are removed. A 4x4 reduction remains only as the existing resource
 limit fallback for large sources. Advanced remains the default.
 
-The latest valid save-22 comparison leaves two problems: Hi-Z rejects fewer
+## Current comparison and focused follow-up
+
+After vertex-copy removal, source `e9b2a6960` was measured at noon in
+save 22, with fixed player position/weather and DLSS Quality K at
+1344x1492 per eye. Five 20-second whole-frame windows kept telemetry,
+traversal diagnostics and profiling disabled. All valid windows had no
+detected compiler activity and no source-shader compilation.
+
+| Mode        | CPU mean, ms | GPU mean, ms | Whole-frame repeats                      |
+| ----------- | -----------: | -----------: | ---------------------------------------- |
+| Advanced    |       11.094 |        8.457 | 10.969/8.247, 10.952/8.428, 11.361/8.697 |
+| Guarded 2x2 |       15.509 |        9.951 | 14.036/9.664, 16.982/10.239              |
+
+Means weight each window equally. Hi-Z remains 17.67% slower on GPU and
+39.80% on CPU. Repeat variation and a restarted process/view prevent
+attributing the difference from the preceding campaign to vertex storage.
+No pictures were taken because performance was not comparable.
+
+Two complete 300-frame normal-shader captures measured Hi-Z culling at
+0.793960/0.831383 ms, with bounds testing at 0.724313/0.750759 ms:
+90.75% of mean culling cost. The retained Advanced capture measured
+0.067783 ms. A second complete Advanced capture is excluded from timing
+because build activity was detected at its end. Separate frozen cohorts
+rejected 1,346,510/3,579,904 and 1,432,756/3,928,064 Hi-Z records,
+versus 2,617,583/4,358,144 Advanced records after recovery. Advanced
+promoted 64,704 native-hidden records; its raw native rejection was
+2,682,287/4,358,144. No Hi-Z fallback or invalidated/unreadable history
+was observed. These cohorts do not identify useful missed draws.
+
+The next build uses indexed private face rectangles/nearest depths and
+alternating eight-vertex clipping banks. It removes the compiled face
+selection chain and polygon survivor-copy loop while retaining all guarded
+proofs, precise intersection arithmetic, plane order and capacity checks.
+All four strict Standard/reversed normal/diagnostic shaders compile with
+unchanged resource/constant bindings. The maintained verifier reports the
+expected bytecode differences. Focused tests pass 12/12 in 18.49 seconds,
+including the independent WARP source-pixel/3D-ray tests in 17.94 seconds.
+The existing DevBench diagnostics and GPU timers are retained; no new
+diagnostic surface or production instrumentation is added.
+
+Strict DXBC removes both copy loops and uses direct indexed face reads.
+Normal temporaries decrease from 31 to 23 and static slots from 2,674 to
+2,634. Indexed capacity increases from 120 to 132 four-component entries;
+these declarations do not measure hardware registers or occupancy.
+
+Current evidence is local under
+`build/astra-runtime/20261004T113738Z-hiz-private-vertices` in the primary
+repository. Shader checks used `build/astra-validation/adaptive/validate-clip-storage.ps1`
+and focused tests used `build/astra-validation/adaptive/validate-proof-ab.ps1`
+in the worktree. The new clip-storage build is not yet measured in game.
+
+## Preceding guarded baseline
+
+The preceding valid save-22 comparison leaves two problems: Hi-Z rejects fewer
 candidate records and spends much longer testing their bounds. These need
 separate measurements and improvements. The new build also addresses the
 confirmed per-region projected-vertex array copy; its runtime benefit is

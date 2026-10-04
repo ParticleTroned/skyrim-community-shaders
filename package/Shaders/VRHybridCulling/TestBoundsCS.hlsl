@@ -137,8 +137,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	if (!DepthOrder::IsBehindWithBias(nearestDepth, witnessDepth, DepthBias))
 		HIZ_VISIBLE(HIZ_NEAREST_UNRESOLVED);
 
-	ProjectedBounds::PreparedFaces faceBounds;
-	ProjectedBounds::PrepareFaces(faceBounds);
+	ProjectedBounds::PrepareFaces();
 
 	// Four roots plus three pending siblings per level fit below this fixed capacity.
 	const uint stackCapacity = 40;
@@ -186,7 +185,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		float2 regionMinimum = float2(cell) * cellSize - margin;
 		float2 regionMaximum = (float2(cell) + 1.0) * cellSize + margin;
 		HIZ_COUNT_REGION;
-		if (ProjectedBounds::OccludedInRegion(faceBounds, regionMinimum, regionMaximum, depth, DepthBias HIZ_DIAGNOSTIC_ARGUMENT))
+		if (ProjectedBounds::OccludedInRegion(regionMinimum, regionMaximum, depth, DepthBias HIZ_DIAGNOSTIC_ARGUMENT))
 			continue;
 		if (nodeMip == 0)
 			HIZ_VISIBLE(HIZ_FINEST_UNRESOLVED);

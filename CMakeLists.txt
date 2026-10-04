@@ -1721,7 +1721,7 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
-    add_controller_test(grass_draw_batch_test GrassDrawBatch tests/grass_draw_batch_test.cpp)
+    add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
 
     add_controller_test(
         vr_fps_stabilizer_config_test

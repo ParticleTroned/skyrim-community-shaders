@@ -914,8 +914,6 @@ namespace GrassExtensions
 		{
 			func(shader, pass, renderFlags);
 
-			globals::features::grassOptimizations.PrepareGeometry(pass);
-
 			auto state = globals::state;
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
@@ -925,6 +923,7 @@ namespace GrassExtensions
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
 				}
 			}
+			globals::features::grassOptimizations.PrepareGeometry(pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

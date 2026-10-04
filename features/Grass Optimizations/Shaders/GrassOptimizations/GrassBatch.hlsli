@@ -4,18 +4,27 @@
 cbuffer GrassBatch : register(b9)
 {
 	uint GrassBatchEnabled;
-	uint3 GrassBatchPadding;
+	uint GrassBatchEye;
+	uint GrassBatchBase;
+	uint GrassBatchPadding;
+	float4 GrassBatchOrigin;
 };
 
-StructuredBuffer<float> GrassInstanceFades : register(t2);
+StructuredBuffer<float4> GrassInstanceExtras : register(t2);
 
 float GetGrassBatchFade(uint instanceId)
 {
-#ifdef VR
-	// Native VR layouts repeat each instance record for the two eye invocations.
-	instanceId /= 2;
-#endif
-	return GrassInstanceFades[instanceId];
+	return abs(GrassInstanceExtras[GrassBatchBase + instanceId].w);
+}
+
+bool GetGrassBatchSimpleShading(uint instanceId)
+{
+	return GrassBatchEnabled && GrassInstanceExtras[GrassBatchBase + instanceId].w < 0;
+}
+
+float3 GetGrassBatchOffset(uint instanceId)
+{
+	return GrassBatchEnabled ? GrassInstanceExtras[GrassBatchBase + instanceId].xyz - GrassBatchOrigin.xyz : 0;
 }
 
 #endif

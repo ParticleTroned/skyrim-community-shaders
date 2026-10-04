@@ -75,8 +75,8 @@ derived.
 
 ## Deliberately separate
 
-The DevBench registration adapter is reviewed separately because it is the
-optional external control surface over this runtime. Shader dependency
+The DevBench registration adapter is included in the same composition as the
+runtime. Shader dependency
 analysis, generated shader manifests, engine maps, Ghidra helpers, prior-art
 catalogues, and captured-analysis reports remain development tools; they do
 not enter the Community Shaders binary in either build mode.
@@ -95,6 +95,11 @@ adapter entry points. Registry payload schemas match current serializer outputs.
 The adapter's `deferredContexts` and `commandLists` capabilities remain false
 until bounded live coverage is qualified. Prior stacked PRs are independent
 historical branches, not a runtime dependency of this composition.
+
+The feature and contract coverage of the earlier runtime and adapter proposals
+is recorded in [the supersession audit](./upstream-supersession.md). Historical
+build and review results keep their original source identities; current binary
+and live qualification remain independent gates.
 
 Before publishing stop artifacts, the adapter reserves its cache entry and
 prunes older retained state. Cache admission failure writes no files. A

@@ -268,12 +268,14 @@ namespace Util
 		 * @param path The file to write
 		 * @param contents The complete file contents
 		 * @param errorMessage Details when the write fails
+		 * @param allowDirectFallback Permit a non-atomic write if virtualized replacement fails
 		 * @return True when either the atomic replacement or direct-write fallback succeeds
 		 */
 		bool WriteTextFileAtomic(
 			const std::filesystem::path& path,
 			std::string_view contents,
-			std::string& errorMessage);
+			std::string& errorMessage,
+			bool allowDirectFallback = true);
 
 		/**
 		 * Replaces Windows-invalid filename characters with underscore.

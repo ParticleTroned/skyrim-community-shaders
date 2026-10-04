@@ -151,6 +151,9 @@ $hooksSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/Hooks.cpp
 $preservingShaderHooks = @([regex]::Matches($hooksSource, 'return Util::ObserveSuccessfulShaderCreation\(hr, pp(?<stage>Vertex|Pixel|Compute)Shader,') | ForEach-Object { $_.Groups['stage'].Value } | Sort-Object)
 Assert-True (($preservingShaderHooks -join ',') -eq 'Compute,Pixel,Vertex') 'Every native shader creation hook must preserve its native result across diagnostics'
 $bridgeSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/RenderMap/DevBenchBridge.cpp')
+$shaderCacheHeader = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/ShaderCache.h')
+$shaderCacheSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/ShaderCache.cpp')
+Assert-True ($bridgeSource.Contains('globals::shaderCache->GetCompileContextSnapshot()') -and $shaderCacheHeader.Contains('CompileContextSnapshot GetCompileContextSnapshot() const;') -and $shaderCacheSource.Contains('ShaderCache::CompileContextSnapshot ShaderCache::GetCompileContextSnapshot() const')) 'The callable adapter requires its read-only compiler provenance declaration and implementation'
 Assert-True ($bridgeSource.Contains('"shaderMetadata", BuildShaderMetadataStatus()') -and $bridgeSource.Contains('response["result"]["shaderMetadata"] = BuildShaderMetadataStatus();')) 'Registry/status must expose independent shader metadata limits and failure evidence'
 $publicationSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/RenderMap/CapturePublication.h')
 Assert-True ($bridgeSource.Contains('CSX::RenderMap::WithPreparedCaptureArtifacts(g_artifactBundles, captureId,') -and -not $bridgeSource.Contains('g_artifactBundles.emplace(captureId, artifacts)')) 'Stop must reserve publication ownership through the shared prepared-cache path'

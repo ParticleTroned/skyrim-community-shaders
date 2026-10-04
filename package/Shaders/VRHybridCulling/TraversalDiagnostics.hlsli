@@ -9,6 +9,7 @@
 #	define HIZ_DEPTH_BUDGET 5
 #	define HIZ_FINEST_UNRESOLVED 6
 #	define HIZ_STACK_CAPACITY 7
+#	define HIZ_NEAREST_UNRESOLVED 8
 #	define HIZ_DIAGNOSTIC_PARAMETERS , inout uint4 diagnostic
 #	define HIZ_DIAGNOSTIC_ARGUMENT , diagnostic
 #	define HIZ_COUNT_DEPTH ++diagnostic.y

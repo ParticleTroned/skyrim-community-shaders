@@ -27,6 +27,11 @@ cbuffer TestConstants : register(b0)
 	uint Reserved;
 };
 
+bool IsValidPyramidDepth(float depth)
+{
+	return isfinite(depth) && depth >= 0.0 && depth <= 1.0 && (DepthOrder::Reversed || depth != 0.0);
+}
+
 bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 {
 	if (any(EyeRect[eye].zw == 0) || any(EyeRect[eye].zw > 16384) ||
@@ -37,6 +42,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	float2 minimumUV = 3.402823466e+38;
 	float2 maximumUV = -3.402823466e+38;
 	float nearestDepth = DepthOrder::Far();
+	float2 nearestVertexPixel = 0.0;
 	float3 projectedVertices[8];
 	// Camera-relative translation preserves small extents at large world coordinates.
 	precise float4x4 relativeTransform = transform;
@@ -61,6 +67,8 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		minimumUV = min(minimumUV, uv);
 		maximumUV = max(maximumUV, uv);
 		nearestDepth = DepthOrder::Nearest(nearestDepth, ndc.z);
+		if (ndc.z == nearestDepth)
+			nearestVertexPixel = projectedVertices[vertex].xy;
 	}
 
 	// Native frustum culling owns off-screen rejection, including stereo margins.
@@ -100,7 +108,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 			uint2 cell = min(minimumCell + uint2(x, y), maximumCell);
 			float depth = DepthPyramid.Load(int4(cell, eye, mip));
 			HIZ_COUNT_DEPTH;
-			if (!isfinite(depth) || depth < 0.0 || depth > 1.0 || (!DepthOrder::Reversed && depth == 0.0))
+			if (!IsValidPyramidDepth(depth))
 				HIZ_VISIBLE(HIZ_INVALID_INPUT);
 			coarseDepths[y * 2 + x] = depth;
 			farthestDepth = DepthOrder::Farthest(farthestDepth, depth);
@@ -108,6 +116,23 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	}
 	if (DepthOrder::IsBehindWithBias(nearestDepth, farthestDepth, DepthBias))
 		HIZ_OCCLUDED;
+
+	// A retained nearest vertex also prevents every ancestor covering it from proving occlusion.
+	const uint2 witnessCell = (uint2)floor(nearestVertexPixel) / SourceReduction;
+	uint depthLoads = 4;
+	float witnessDepth;
+	if (mip == 0) {
+		uint2 root = witnessCell - minimumCell;
+		witnessDepth = coarseDepths[root.y * 2 + root.x];
+	} else {
+		witnessDepth = DepthPyramid.Load(int4(witnessCell, eye, 0));
+		++depthLoads;
+		HIZ_COUNT_DEPTH;
+	}
+	if (!IsValidPyramidDepth(witnessDepth))
+		HIZ_VISIBLE(HIZ_INVALID_INPUT);
+	if (!DepthOrder::IsBehindWithBias(nearestDepth, witnessDepth, DepthBias))
+		HIZ_VISIBLE(HIZ_NEAREST_UNRESOLVED);
 
 	ProjectedBounds::PreparedFaces faceBounds;
 	ProjectedBounds::PrepareFaces(projectedVertices, faceBounds);
@@ -117,7 +142,6 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	const uint maximumDepthLoads = 64;
 	uint stack[stackCapacity];
 	uint pending = 0;
-	uint depthLoads = 4;
 	const uint initialMip = mip;
 	const uint2 rootMinimum = minimumCell;
 	[unroll] for (uint rootY = 0; rootY < 2; ++rootY)
@@ -140,6 +164,8 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		if (nodeMip == initialMip) {
 			uint2 root = cell - rootMinimum;
 			depth = coarseDepths[root.y * 2 + root.x];
+		} else if (nodeMip == 0 && all(cell == witnessCell)) {
+			depth = witnessDepth;
 		} else {
 			if (depthLoads == maximumDepthLoads)
 				HIZ_VISIBLE(HIZ_DEPTH_BUDGET);
@@ -147,7 +173,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 			++depthLoads;
 			HIZ_COUNT_DEPTH;
 		}
-		if (!isfinite(depth) || depth < 0.0 || depth > 1.0 || (!DepthOrder::Reversed && depth == 0.0))
+		if (!IsValidPyramidDepth(depth))
 			HIZ_VISIBLE(HIZ_INVALID_INPUT);
 		if (DepthOrder::IsBehindWithBias(nearestDepth, depth, DepthBias))
 			continue;

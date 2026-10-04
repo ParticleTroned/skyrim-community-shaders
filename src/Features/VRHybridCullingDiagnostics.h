@@ -13,7 +13,7 @@ namespace VRHybridCullingDiagnostics
 {
 
 	inline constexpr std::array Reasons{ "not_tested", "occluded", "clip_crossing", "viewport_guard",
-		"invalid_input", "depth_budget", "finest_unresolved", "stack_capacity" };
+		"invalid_input", "depth_budget", "finest_unresolved", "stack_capacity", "nearest_unresolved" };
 
 	/** One diagnostic shader record per native-indexed object; work sums both eyes. */
 	struct Record
@@ -41,6 +41,8 @@ namespace VRHybridCullingDiagnostics
 				(first != 1 && second != 0) || (first == 1 && second == 0) ||
 				((first == 1 && second == 1) != (a_visibility[index] == 0)) ||
 				(second == 0 && record.depthLoads > 64) || (first == 5 && record.depthLoads != 64) ||
+				(first == 8 && (record.depthLoads < 4 || record.depthLoads > 5 || record.faceRegions != 0 || record.faceTriangles != 0)) ||
+				(second == 8 && (record.depthLoads < 8 || record.depthLoads > 69)) ||
 				(second == 5 && record.depthLoads < 68) || record.depthLoads > 128 || record.faceRegions > record.depthLoads || record.faceTriangles > record.faceRegions * 12)
 				return std::nullopt;
 			++result.eyeReasons[first];

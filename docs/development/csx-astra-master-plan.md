@@ -1,22 +1,23 @@
 # CSX Astra master implementation plan
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
-The [latest comparison and adaptive iteration](vr-hybrid-culling-adaptive-2026-10-04.md)
-record two noon timing repeats per method on the cached-face build:
-Hybrid costs 13.0% more CPU time and 17.9% more GPU time than Advanced,
-with 31.8% candidate rejection versus 54.7%.
-Adaptive traversal now preserves proven regions and spends its fixed
-64-load budget only on actual reads. Separate DevBench-only shader
-diagnostics report terminal reasons and work without contaminating normal
-timing. Two 300-frame GPU captures attribute 93.4-93.9% of Hybrid GPU work
-to bounds testing (0.93-0.96 ms). Motion/lifecycle qualification remains open. Advanced
-remains default. PBR grass, grass optimization and Reverse Z remain separate later PRs.
+The [latest comparison and optimization analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
+record two noon timing repeats per method on the triangle-plane build:
+Hybrid costs 21.0% more CPU time and 19.5% more GPU time than Advanced,
+with 35.8-36.6% candidate rejection versus 57.9%. CPU repeat variance is
+larger than GPU variance; neither establishes parity.
+Two 300-frame GPU captures attribute 91.4% of Hybrid GPU work to bounds
+testing (0.66-0.67 ms). Motion/lifecycle qualification remains open.
+Advanced remains default. PBR grass, grass optimization and Reverse Z
+remain separate later PRs.
 
-The measured implementation caches face rectangles/depths and reduces
-polygon-array copies. The next bounded change adds an early unresolved
-vertex test and a conservative affine depth proof before exact clipping.
-Its performance needs a fresh in-game comparison. Skyrim was shut down
-cleanly after measurements and before this implementation.
+The next bounded change checks the nearest projected vertex against a
+finest-level cell before face refinement. It retains the 64-read budget,
+reuses the sample and exposes a DevBench-only nearest_unresolved reason.
+Surviving candidates can spend one extra budgeted read, so speed and
+rejection rate both need a fresh in-game comparison. Finer hierarchy
+storage remains a separate unmeasured option. Skyrim was shut down cleanly
+after measurements and before implementation.
 
 ## Scope and authority
 

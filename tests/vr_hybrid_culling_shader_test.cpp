@@ -528,6 +528,38 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		Require(fixture.lastDiagnostics[0][1] < 64, "Adaptive traversal reloaded complete finer grids");
 	}
 
+	void RetainsNearestVertexBeforeRefinement(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		for (const UINT reduction : { 1u, 2u, 4u, 8u }) {
+			Fixture fixture(device, context, reversedDepth, 32, 32, reduction);
+			const std::array objects{ BoxForGuardedPixels(fixture, { 8.25f, 8.25f, 23.75f, 23.75f }) };
+			const float nearest = objects[0].entry[2][3] - objects[0].entry[2][2];
+			std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+			fixture.Build(pixels);
+			Require(fixture.Test(objects)[0] == 0 && fixture.lastDiagnostics[0][1] == 8,
+				"Nearest-vertex check added work to a successful four-load coarse proof");
+			for (UINT eye = 0; eye < 2; ++eye) {
+				// The nearest tied corner selected last projects to (22.75, 9.25).
+				const auto witness = 9 * fixture.sourceWidth + fixture.testConstants.eyes[eye].x + 22;
+				for (const float depth : { 1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
+						 nearest - 0.5f * fixture.testConstants.depthBias }) {
+					pixels[witness] = depth;
+					fixture.Build(pixels);
+					Require(fixture.Test(objects)[0] == 1, "Nearest-vertex depth, mask or bias was lost in one eye");
+					const auto& record = fixture.lastDiagnostics[0];
+					Require(record[0] == (eye == 0 ? 8u : 2049u) && record[1] == eye * 4 + (reduction == 8 ? 4u : 5u) &&
+								record[2] == 0 && record[3] == 0,
+						"Unresolved nearest vertex reached face refinement or reloaded a coarse leaf");
+				}
+				pixels[witness] = 0.4f;
+			}
+			pixels[22 * fixture.sourceWidth + 9] = 1.0f;
+			fixture.Build(pixels);
+			Require(fixture.Test(objects)[0] == 1 && fixture.lastDiagnostics[0][2] > 0,
+				"A hidden nearest vertex incorrectly proved the rest of the box hidden");
+		}
+	}
+
 	void ExhaustsActualLoadBudget(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
 	{
 		Fixture fixture(device, context, reversedDepth, 256, 256, 1);
@@ -759,14 +791,14 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		const RayBoxOracle oracle(object);
 		const auto& eye = fixture.testConstants.eyes[0];
 		double objectDepth;
-		Require(oracle.Hit(2.0 * 9.25 / eye.width - 1.0, 1.0 - 2.0 * 10.5 / eye.height, 0.0, 0.0, objectDepth),
-			"Local bias fixture missed the independently intersected box edge");
+		Require(oracle.Hit(2.0 * 13.25 / eye.width - 1.0, 1.0 - 2.0 * 14.5 / eye.height, 0.0, 0.0, objectDepth),
+			"Local bias fixture missed the independently intersected box face");
 		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.1f);
 		fixture.Build(pixels);
 		Require(fixture.Test(std::array{ object })[0] == 0, "Local bias fixture has no covered baseline");
 		const float touching = static_cast<float>(objectDepth);
 		for (const auto& targetEye : fixture.testConstants.eyes) {
-			const auto offset = 10 * fixture.sourceWidth + targetEye.x + 9;
+			const auto offset = 14 * fixture.sourceWidth + targetEye.x + 13;
 			for (const float depth : { touching - 0.5f * fixture.testConstants.depthBias, touching,
 					 std::nextafter(touching, 0.0f), std::nextafter(touching, 1.0f) }) {
 				Require(objectDepth <= depth + fixture.testConstants.depthBias,
@@ -1076,6 +1108,7 @@ int main()
 			PreservesRefinedFootprintAndStereo(fixture);
 			RefinesThinRectangles(fixture);
 			RefinesOnlyUnresolvedCells(device.Get(), context.Get(), reversedDepth);
+			RetainsNearestVertexBeforeRefinement(device.Get(), context.Get(), reversedDepth);
 			ExhaustsActualLoadBudget(device.Get(), context.Get(), reversedDepth);
 			TraversesMaximumMipDepth(device.Get(), context.Get(), reversedDepth);
 			ChecksRefinedProofsAgainstSourcePixels(fixture);

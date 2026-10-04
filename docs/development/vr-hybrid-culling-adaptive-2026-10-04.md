@@ -1,77 +1,78 @@
 # Hi-Z traversal and face tests: 4 October 2026
 
-The latest in-game comparison measures the cached-face implementation.
-It still trails Advanced. The next implementation adds conservative
-triangle-plane proofs and early unresolved-vertex checks before exact
-clipping; its runtime performance is not yet measured.
+The latest in-game comparison measures the triangle-plane shortcuts.
+Hybrid still trails Advanced. The next implementation checks the nearest
+projected vertex against a finest-level depth cell before face refinement.
+That early exit's in-game speed and rejection impact remain unmeasured.
 
 ## Latest same-build in-game comparison
 
 Two 20-second fpsVR windows per method ran in Advanced / Hybrid / Hybrid /
 Advanced order. Noon was reset and verified before every counter and
 timing phase, with five seconds of settling. The scene remained
-WhiterunExterior01 with SkyrimClearTU weather. DLSS Quality K used
-1344x1492 render pixels per eye and 2016x2240 display pixels.
-Boundary HMD observations differed by at most 0.497 mm and 0.0503 degrees;
-these observations do not continuously certify pose between boundaries.
+WhiterunExterior01 with SkyrimClearTU weather, using loaded Save 22.
+DLSS Quality K used 1344x1492 render pixels per eye and 2016x2240 display
+pixels throughout. Boundary HMD observations differed by at most 1.303 mm
+and 0.0858 degrees; these are not continuous pose certification.
 
-| Mode     | Run                   | Samples | CPU mean ms | GPU mean ms |
-| -------- | --------------------- | ------: | ----------: | ----------: |
-| Advanced | face-advanced-timing1 |    1541 |    9.949384 |    7.827904 |
-| Hybrid   | face-hybrid1          |    1471 |   11.243508 |    9.151734 |
-| Hybrid   | face-hybrid2          |    1417 |   11.084615 |    9.181087 |
-| Advanced | face-advanced2        |    1653 |    9.815487 |    7.718633 |
+| Mode     | Run                    | Samples | CPU mean ms | GPU mean ms |
+| -------- | ---------------------- | ------: | ----------: | ----------: |
+| Advanced | plane-advanced-timing1 |    1613 |    9.865406 |    7.732238 |
+| Hybrid   | plane-hybrid1          |    1352 |   11.499038 |    9.199482 |
+| Hybrid   | plane-hybrid-timing2   |    1330 |   12.525865 |    9.310602 |
+| Advanced | plane-advanced2        |    1618 |    9.994314 |    7.761187 |
 
-Giving each window equal weight, Advanced averaged **9.882435 ms CPU /
-7.773268 ms GPU**; Hybrid averaged **11.164062 / 9.166410 ms**. Hybrid
-costs **1.281626 ms CPU (+13.0%) and 1.393142 ms GPU (+17.9%)**.
-At 120 Hz, these differences use 15.4% and 16.7% of the 8.333 ms budget
-respectively; CPU and GPU time overlap. The fpsVR process and start
-identity remained the same as the preceding 120 Hz campaign.
+Giving each window equal weight, Advanced averaged **9.929860 ms CPU /
+7.746712 ms GPU**; Hybrid averaged **12.012452 / 9.255042 ms**. Hybrid
+costs **2.082592 ms CPU (+21.0%) and 1.508330 ms GPU (+19.5%)**.
+Hybrid CPU means varied by 1.027 ms between repeats, so its CPU estimate
+is less stable than the GPU comparison. Both repeats still trail Advanced.
+Relative to the campaign's nominal 120 Hz / 8.333 ms budget, the deltas
+are 25.0% CPU and 18.1% GPU; these overlapping times must not be added.
+The unchanged fpsVR process identity is retained, but the quiet-window
+CSV did not independently report the headset refresh rate.
 
 Telemetry, traversal diagnostics and profiling were disabled during
 timing. All four windows retained covering monotonic fpsVR records,
 stable runtime identity, unchanged renderer settings, no shader failures
-and no detected compiler activity. No pictures were taken because both
-repeats showed a material performance gap. This is one static scene;
-motion and lifecycle fidelity remain unqualified.
+and no detected compiler activity. No pictures were taken because
+performance was not comparable. Motion/lifecycle fidelity remains open.
 
-The first preparation stopped before timing because an exact player
-position comparison rejected a 0.005859375 game-unit height change.
-Its completed counter window was retained. Subsequent timing boundaries
-use an explicit 0.1 game-unit position tolerance, retaining raw positions.
-No failed timing window was silently substituted.
+Separate completed 20-second counter windows reported:
 
-Separate 20-second counter windows reported:
+| Mode     | Window          | Culled records | Tested records | Rejection | Batches |
+| -------- | --------------- | -------------: | -------------: | --------: | ------: |
+| Advanced | plane-advanced1 |      4,135,931 |      7,140,240 |     57.9% |   1,787 |
+| Hybrid   | plane-hybrid1   |      2,171,752 |      5,928,946 |     36.6% |   1,463 |
+| Hybrid   | plane-hybrid2   |      2,006,342 |      5,611,520 |     35.8% |   1,370 |
 
-| Mode     | Culled records | Tested records | Rejection | Batches |
-| -------- | -------------: | -------------: | --------: | ------: |
-| Advanced |      3,620,684 |      6,619,671 |     54.7% |   1,782 |
-| Hybrid   |      1,853,021 |      5,835,727 |     31.8% |   1,552 |
+Hybrid recorded zero fallback, invalidated or unreadable batches in both
+counter windows. These are repeated candidate-result observations, not
+unique objects or matched persistent cohorts. The second Hybrid window
+averaged 4,096 candidates per batch, the native capacity. These counters
+do not isolate how lower rejection or capacity pressure affects frame
+time. Different position, view and process from the previous campaign
+prevent an isolated cross-build speedup claim.
 
-Hybrid recorded zero fallback, invalidated or unreadable batches. These
-are repeated candidate-result observations, not unique objects or matched
-persistent cohorts. Lower rejection can leave more geometry to draw,
-but these counters do not isolate its contribution to frame time.
-Earlier binaries were not retested in this process and the player
-position differs from the preceding campaign; cross-build speedup is
-therefore not established.
-
-Measured clean source: `d6115b0d7146cc1b45989f9e0bc6e4d29c9454f3`.
+Measured clean source: `c1f3fd310891d4637112e9cb7361fa8191ef1903`.
 Producer Build ID:
-`edab108772212f745ea94f1caaf043700129bae2a2a587dda9e80b6e727e0465`.
+`108a42ba1904c7d7694e317f2ada8421683cbe931f05895f647d0e7d1aaa44d8`.
 The enabled physical DLL, adjacent manifest, AIO receipt and six depth
 shaders matched the producer and source; no competing enabled loose,
 Overwrite or unmanaged Data provider was found at those paths.
 
 Raw evidence is retained in main-workspace
-`build/astra-runtime/20261004T021030Z-hiz-facecache/`, including
-`final-comparison.json`, original/scoped CSVs, counter windows,
-boundary snapshots and `optimization-analysis.json`. The original
-DLAA profile, Advanced method and telemetry state were restored;
-the profiler and owned fpsVR captures were inactive. The engine's
-`qqq` command then closed PID 22960 cleanly, with no Skyrim process
-remaining and RootBuilder deployment cleared, before implementation began.
+`build/astra-runtime/20261004T044645Z-hiz-plane/`, including
+`final-comparison.json`, original/scoped CSVs, counters, boundary
+snapshots and `optimization-analysis.json`. Two approval-blocked noon
+setups never began timing; their completed counters were preserved and
+used separately. Inactive-capture proofs preceded the replacement timing
+windows. No failed timing samples were substituted into the averages.
+
+Advanced, the original DLSS Quality profile and telemetry preference were
+restored, with profiler and owned fpsVR captures inactive. The engine's
+`qqq` command closed PID 29344 cleanly at 05:03 UTC; no Skyrim process
+remained and RootBuilder deployment was cleared before implementation.
 
 ## Measured optimization opportunity
 
@@ -81,48 +82,99 @@ and captures recorded no query-slot refusals.
 
 | Hybrid GPU self time        | Capture 1 ms | Capture 2 ms |
 | --------------------------- | -----------: | -----------: |
-| Build base                  |     0.024896 |     0.026845 |
-| Reduce mips                 |     0.026754 |     0.025337 |
-| Hierarchy parent remainder  |     0.000651 |     0.000680 |
-| Test bounds                 |     0.926044 |     0.956116 |
-| Copy results                |     0.007653 |     0.004501 |
-| Visibility parent remainder |     0.005194 |     0.005099 |
-| Sum of disjoint self times  |     0.991192 |     1.018577 |
+| Build base                  |     0.025038 |     0.026396 |
+| Reduce mips                 |     0.025429 |     0.026941 |
+| Hierarchy parent remainder  |     0.000655 |     0.000654 |
+| Test bounds                 |     0.659497 |     0.673608 |
+| Copy results                |     0.005498 |     0.005339 |
+| Visibility parent remainder |     0.005301 |     0.004442 |
+| Sum of disjoint self times  |     0.721418 |     0.737379 |
 
-Bounds testing accounts for **93.4-93.9%** of measured Hybrid GPU work.
-The parent rows are exclusive remainders. These diagnostic captures are
-separate from fpsVR timing and cannot be subtracted mechanically from it.
-The Advanced capture lacks an equivalent native depth-culling GPU timer.
+Bounds testing accounts for **91.4%** of measured Hybrid GPU work.
+The parent rows are exclusive remainders. Diagnostic captures are separate
+from fpsVR timing and cannot be subtracted mechanically from it. The
+Advanced capture lacks an equivalent native depth-culling GPU timer.
 
-Counter-window CPU means were 18.07 microseconds for Hybrid dispatch,
-2.89 for preparation, 10.76 for post-native history validation, and
-4.18 for intercepted native readback. These inclusive stages must not be
-summed. They do not support a readback-stall explanation for the 1.28 ms
+Hybrid counter-window CPU means were 20.14-20.96 microseconds for dispatch,
+3.08-3.15 for preparation, 10.50-10.66 for post-native history validation,
+and 4.02-5.13 for intercepted native readback. Inclusive stages must not
+be summed. They do not support a readback-stall explanation for the
 whole-frame CPU gap.
 
-The bounded next target is triangle clipping inside the bounds test.
-A visible original vertex inside the guarded region already disproves
-that region's occlusion. Conversely, an affine triangle-depth proof over
-an enclosing rectangle can prove it hidden without constructing a clipped
-polygon. Both shortcuts retain exact clipping for ambiguity, preserve the
-same depth bias and avoid additional persistent plane arrays.
+The next bounded target is work spent refining candidates that cannot be
+proven hidden. A nearest-vertex depth witness can retain such a candidate
+before face preparation, plane arithmetic and polygon clipping.
+This only targets query cost; it does not improve the rejection gap.
+Parity is not established or predicted from these pass timings.
 
-Hierarchy fusion has a much smaller measured ceiling: the entire
-hierarchy costs only about 0.053 ms. Finer source-depth evidence could
-improve rejection, because the 4x4 maximum-depth base permanently loses
-sub-cell detail, but this run does not establish its benefit or cost.
-It remains a later experiment rather than an unmeasured budget increase.
+Hierarchy fusion has a smaller measured ceiling: base and mip work
+total only 0.05 ms. A 2x2 base could retain more occluder detail than the
+current 4x4 base, but would increase hierarchy size and dispatch work.
+Its cost and rejection benefit remain unmeasured, so it remains a
+separate experiment. Higher traversal limits are likewise not justified
+without the missing termination/work distributions.
 
 The direct connector still omits
 `set_depth_culling_traversal_diagnostics_enabled`, although the loaded
 DLL reports diagnostics ready. No unsupported dispatcher bypass was
 used. Depth-budget, finest-unresolved, clipping and viewport reason
-proportions remain unmeasured. The existing local feedback record
-`AUTO-20261004-013128725-B1AC7F0D` now includes this build's evidence.
+proportions remain unmeasured. Local feedback
+`AUTO-20261004-013128725-B1AC7F0D` includes this build's evidence.
+Raw render-scale status/preparation responses are preserved; this build
+does not expose complete resource-publication qualification fields.
 
-Raw render-scale status/preparation responses are preserved. This build
-does not expose all resource-publication qualification fields, so no
-complete publication, VRAM or lifecycle qualification is claimed.
+## Nearest-vertex precheck
+
+After an inconclusive four-load coarse proof, sample the finest hierarchy
+cell containing the nearest projected box vertex. If this point cannot
+pass the existing depth-bias comparison, retain the object immediately.
+That cell's ancestors are at least as conservative, and every face region
+covering the vertex would also retain it. A hidden vertex alone never
+proves the whole box hidden; the ordinary face traversal still runs.
+
+The sample uses the existing 64-actual-read budget and is reused if
+traversal reaches its leaf. An initial mip-zero sample is reused directly
+from the four coarse reads. A successful coarse proof incurs no new
+texture read. Bounds, masks, stereo, temporal validation, depth bias,
+the 4x4 base and exact clipping remain unchanged.
+
+A surviving candidate can spend one read on a cell that traversal never
+needs, so budget-limited rejection can decrease. This is a measured-next
+tradeoff, not a claim of bitwise visibility equivalence or parity.
+The DevBench-only `nearest_unresolved` termination reason distinguishes
+this precheck from ordinary `finest_unresolved` refinement. Diagnostic
+decoding rejects impossible early-check work and publishes the new reason
+through the existing narrow snapshot. Production has no new diagnostics.
+
+Validation includes both depth-order test permutations and both eyes,
+all four supported source reductions, clear/masked/nonfinite source
+depth, bias retention, coarse-leaf reuse, successful coarse proofs and
+a visible region away from a hidden witness. Existing source-pixel/ray
+oracles, signed-axis permutations, near-parallel faces, 64-read exhaustion
+and maximum mip depth remain covered. The local-bias fixture's patch is
+away from the witness so it still reaches actual face refinement.
+
+Validation for the nearest-vertex change:
+
+-   `pwsh ./tools/cmake.ps1 --build D:/Coding/GitHub/skyrim-community-shaders/build/ahiz --config Release --target vr_hybrid_culling_shader_test menu_depth_culling_diagnostics_test --parallel 4`: passed.
+-   `ctest --test-dir D:/Coding/GitHub/skyrim-community-shaders/build/ahiz -C Release -R '(DepthCulling|VRHybridCulling|D3DContextProtection)' --output-on-failure`: 12/12 passed in 12.92 seconds; WARP 12.33 seconds.
+-   Strict optimized production/diagnostic shaders compile in Standard and
+    reversed test ordering. The maintained comparison against `c1f3fd310`
+    reports different DXBC, as expected; its shell exit was 1.
+-   `pwsh ./build/astra-validation/adaptive/validate-production.ps1`:
+    actual compiler flags/forced-header audit, production syntax and
+    diagnostic-absence checks passed for Hybrid, Temporal and Menu bridge.
+    No separately linked production DLL was run.
+-   Shader reflection excludes the diagnostic UAV from production.
+    Diagnostic tests preserve the new reason through decoding/serialization
+    and reject impossible precheck work.
+
+Exact evidence is retained under worktree
+`build/astra-validation/adaptive/witness-*` and
+`build/astra-validation/adaptive/production-20261004T051224488Z/`.
+The new universal DevBench DLL/AIO is produced by `build-witness-aio.ps1`;
+its delivery receipt records the compiled source and package result.
+Its in-game performance and motion/lifecycle behavior remain unmeasured.
 
 ## Region depth shortcuts
 
@@ -266,8 +318,8 @@ face-triangle iterations. There are no global shader atomics.
 `hybrid.traversalDiagnostics` exposes availability, enable state, accepted
 sampled batches/objects, eye reasons and work totals. Reasons are
 `not_tested`, `occluded`, `clip_crossing`, `viewport_guard`,
-`invalid_input`, `depth_budget`, `finest_unresolved` and
-`stack_capacity`. Only the first decisive reason per attempted eye is
+`invalid_input`, `depth_budget`, `finest_unresolved`, `stack_capacity`
+and `nearest_unresolved`. Only the first decisive reason per attempted eye is
 reported; the second eye is skipped when the first retains visibility.
 The reason histogram therefore includes two entries per sampled object,
 including skipped eyes. Finest-unresolved includes insufficient depth

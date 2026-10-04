@@ -7,12 +7,12 @@ Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
 The [adaptive comparison and GPU analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record the latest repeated comparison with Advanced. Cached-face Hybrid costs
-13.0% more CPU time and 17.9% more GPU time, rejecting 31.8% of candidate
-records versus 54.7%. Bounds testing consumes 93.4-93.9% of measured Hybrid GPU
-work. Motion and lifecycle qualification remain open.
-The subsequent unresolved-vertex and affine-depth shortcuts preserve exact
-clipping for ambiguous regions. Their in-game speed remains unmeasured.
+record the latest repeated comparison with Advanced. Triangle-plane Hybrid
+costs 21.0% more CPU time and 19.5% more GPU time, rejecting 35.8-36.6% of
+candidate records versus 57.9%. Bounds testing consumes 91.4% of measured
+Hybrid GPU work. Motion and lifecycle qualification remain open.
+A subsequent nearest-vertex depth precheck can retain unresolved objects
+before face refinement. Its speed and rejection impact remain unmeasured.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -81,7 +81,14 @@ one of them. If this coarse proof is inconclusive, it retains individually
 proven roots and descends only into unresolved cells. The original four
 samples are reused. A 40-entry depth-first stack holds packed cell/mip
 coordinates; children are restricted to the guarded base-cell bounds.
-The 64-load limit counts actual reads, including the initial four.
+Before face preparation, the nearest projected vertex is checked against
+its finest-level cell. Failure retains visibility immediately; success
+still requires the complete traversal. The sample is reused at its leaf
+or taken from the coarse reads when the initial mip is zero.
+The 64-load limit counts actual reads, including the initial four and this
+precheck. Its extra read can reduce budget-limited rejection when that
+leaf would otherwise never be visited. DevBench reports these early exits
+as nearest_unresolved, separately from unresolved refinement leaves.
 Budget or stack exhaustion, invalid depth and unresolved finest cells
 retain visibility. Only completing all pending regions proves occlusion.
 Within an inconclusive cell, projected box faces are tested against the

@@ -2,14 +2,28 @@
 #include "StabilizerSettings.h"
 #include "Utils/UI.h"
 
+#include <algorithm>
 #include <array>
 #include <imgui.h>
 #include <imgui_stdlib.h>
+#include <string_view>
 
 namespace VRFpsStabilizer
 {
 	namespace
 	{
+		constexpr double kDistanceStep = 500.0;
+
+		bool IsGameUnitDistance(std::string_view key)
+		{
+			constexpr std::array keys{
+				"CPULateStartDistanceToSwitchBackUp", "RainLODOffset",
+				"fBlockLevel0Distance:TerrainManager", "fBlockLevel1Distance:TerrainManager",
+				"fTreeLoadDistance:TerrainManager"
+			};
+			return std::ranges::any_of(keys, [&](const char* distanceKey) { return Equal(key, distanceKey); });
+		}
+
 		struct Editor
 		{
 			IniDocument document;
@@ -29,10 +43,15 @@ namespace VRFpsStabilizer
 			return file == ConfigFile::Locations ? locationEditor : mainEditor;
 		}
 
-		void Tooltip(const char* text)
+		void Tooltip(const char* text, bool distance = false, bool fadeMultiplier = false)
 		{
-			if (auto tooltip = Util::HoverTooltipWrapper())
+			if (auto tooltip = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted(text);
+				if (distance)
+					ImGui::TextUnformatted("Use +/- for 500 game-unit steps, or type a whole-number distance.");
+				else if (fadeMultiplier)
+					ImGui::TextUnformatted("Use +/- for steps of 1, or type a value for smaller adjustments.");
+			}
 		}
 
 		void Reload(Editor& editor, ConfigFile file)
@@ -96,10 +115,13 @@ namespace VRFpsStabilizer
 			if (!editor.filter.PassFilter(setting.label) && !editor.filter.PassFilter(setting.key))
 				return;
 			ImGui::PushID(setting.key);
+			const std::string_view key = setting.key;
+			const bool distance = IsGameUnitDistance(key);
+			const bool fadeMultiplier = key.find("LODFadeOutMult") != key.npos || key.find("LODFadeOutModifier") != key.npos;
 			auto value = editor.document.Get("Settings", setting.key);
 			if (!value) {
 				ImGui::TextDisabled("%s (not configured)", setting.label);
-				Tooltip(setting.help);
+				Tooltip(setting.help, distance, fadeMultiplier);
 				ImGui::SameLine();
 				if (ImGui::SmallButton("Configure"))
 					editor.document.Set("Settings", setting.key, setting.suggested, editor.error);
@@ -117,14 +139,15 @@ namespace VRFpsStabilizer
 				if (changed)
 					*value = enabled ? "1" : "0";
 			} else if (setting.kind != SettingKind::WorldList && numeric) {
-				changed = ImGui::InputDouble(setting.label, &number, setting.kind == SettingKind::Integer ? 1.0 : 0.1, 0,
-					setting.kind == SettingKind::Integer ? "%.0f" : "%.4g");
+				const bool integral = setting.kind == SettingKind::Integer || distance;
+				const double step = distance ? kDistanceStep : (integral || fadeMultiplier ? 1.0 : 0.1);
+				changed = ImGui::InputDouble(setting.label, &number, step, 0, integral ? "%.0f" : "%.4g");
 				if (changed)
-					*value = setting.kind == SettingKind::Integer ? std::format("{:.0f}", std::round(number)) : std::format("{:.8g}", number);
+					*value = integral ? std::format("{:.0f}", std::round(number)) : std::format("{:.8g}", number);
 			} else {
 				changed = ImGui::InputText(setting.label, &*value);
 			}
-			Tooltip(setting.help);
+			Tooltip(setting.help, distance, fadeMultiplier);
 			if (changed) {
 				editor.error.clear();
 				editor.document.Set("Settings", setting.key, *value, editor.error);
@@ -168,17 +191,19 @@ namespace VRFpsStabilizer
 					help = "Distance at which distant tree LOD is visible. Lower values reduce distant tree coverage and rendering cost.";
 				}
 				ImGui::PushID(key.c_str());
+				const bool distance = IsGameUnitDistance(key);
 				double number = 0;
 				bool changed = false;
 				if (ParseNumber(value, number)) {
-					const bool integral = key.starts_with('i') || key.starts_with('b');
-					changed = ImGui::InputDouble(label, &number, integral ? 1 : 100, 0, integral ? "%.0f" : "%.6g");
+					const bool integral = distance || key.starts_with('i') || key.starts_with('b');
+					const double step = distance ? kDistanceStep : (integral ? 1.0 : 100.0);
+					changed = ImGui::InputDouble(label, &number, step, 0, integral ? "%.0f" : "%.6g");
 					if (changed && std::isfinite(number))
 						value = integral ? std::format("{:.0f}", std::round(number)) : std::format("{:.8g}", number);
 				} else {
 					changed = ImGui::InputText(label, &value);
 				}
-				Tooltip(help);
+				Tooltip(help, distance);
 				if (changed) {
 					editor.error.clear();
 					editor.document.Set(section, key, value, editor.error);

@@ -5,6 +5,11 @@ page selector separates Profiles, Performance, LOD & Grass, Quality Levels,
 Locations, and Commands. Normal options use named controls with units and
 tooltips; custom commands remain in explicit advanced editors.
 
+Game-unit distance controls display whole numbers and use 500-unit +/-
+steps. Type a whole-number distance directly for finer adjustments. Actor,
+object and item fade multipliers and city modifiers use steps of 1; direct
+entry also supports fractional values.
+
 The main settings catalog covers all 42 additional `[Settings]` options in
 the supplied VR FPS Stabilizer 1.4.13 beta1 configuration. The existing
 Profiles page owns `CSVRFadeToBlackDuration` and unconditional

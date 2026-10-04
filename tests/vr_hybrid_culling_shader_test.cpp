@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -35,7 +36,7 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		std::unique_ptr<D3D11ShaderTest::ConstantBuffer> constants;
 
-		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false)
+		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false, const char* source = nullptr)
 		{
 			ComPtr<ID3DBlob> code, errors;
 			std::vector<D3D_SHADER_MACRO> defines;
@@ -45,15 +46,18 @@ namespace
 				defines.push_back({ "CSX_HIZ_DIAGNOSTICS", "1" });
 			defines.push_back({ nullptr, nullptr });
 			Util::CustomInclude includes{ "package/Shaders" };
-			static std::map<std::tuple<std::wstring, bool, bool>, ComPtr<ID3DBlob>> compiled;
-			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics }];
+			static std::map<std::tuple<std::wstring, bool, bool, std::string>, ComPtr<ID3DBlob>> compiled;
+			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics, source ? source : "" }];
 			if (cached) {
 				code = cached;
 			} else {
 				std::wcout << L"Compiling " << path << L" reversed=" << reversedDepth << L" diagnostics=" << diagnostics << std::endl;
-				const auto result = D3DCompileFromFile(path, defines.data(), &includes, "main", "cs_5_0",
-					D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-					0, code.GetAddressOf(), errors.GetAddressOf());
+				constexpr UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
+				const auto result = source ?
+				                        D3DCompile(source, std::strlen(source), nullptr, defines.data(), &includes, "main", "cs_5_0",
+											flags, 0, code.GetAddressOf(), errors.GetAddressOf()) :
+				                        D3DCompileFromFile(path, defines.data(), &includes, "main", "cs_5_0",
+											flags, 0, code.GetAddressOf(), errors.GetAddressOf());
 				if (FAILED(result) && errors)
 					throw std::runtime_error(static_cast<const char*>(errors->GetBufferPointer()));
 				Check(result);
@@ -299,6 +303,121 @@ namespace
 			return values;
 		}
 	};
+
+	void ChecksProjectedRegionShortcuts(Fixture& fixture)
+	{
+		constexpr const char* source = R"(
+#include "Common/DepthOrder.hlsli"
+#include "VRHybridCulling/ProjectedBounds.hlsli"
+struct RegionCase { float4 a, b, c, rectangle; float depth, bias; float2 padding; };
+StructuredBuffer<RegionCase> Cases : register(t0);
+RWStructuredBuffer<uint2> Results : register(u0);
+cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
+[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= Count) return;
+    RegionCase value = Cases[id.x];
+    Results[id.x] = uint2(
+        ProjectedBounds::HasUnresolvedVertex(value.a.xyz, value.b.xyz, value.c.xyz,
+            value.rectangle.xy, value.rectangle.zw, value.depth, value.bias),
+        ProjectedBounds::PlaneProvesOccluded(value.a.xyz, value.b.xyz, value.c.xyz,
+            value.rectangle.xy, value.rectangle.zw, value.depth, value.bias));
+})";
+		struct RegionCase
+		{
+			std::array<float, 4> a, b, c, rectangle;
+			float depth, bias;
+			std::array<float, 2> padding{};
+		};
+		std::vector<RegionCase> cases;
+		static_assert(sizeof(RegionCase) == 80);
+		std::vector<std::array<UINT, 2>> expected;
+		const auto add = [&](RegionCase value, UINT unresolved, UINT plane) {
+			cases.push_back(value);
+			expected.push_back({ unresolved, plane });
+		};
+		// The exact plane is z = 1/4 + x/32; its regional minimum is 1/2.
+		const RegionCase slope{ { 0, 0, 0.25f }, { 16, 0, 0.75f }, { 0, 16, 0.25f }, { 8, 2, 10, 4 }, 0.375f, 0.0625f };
+		for (const bool reflected : { false, true }) {
+			auto value = slope;
+			if (reflected)
+				std::swap(value.b, value.c);
+			add(value, 0, 1);
+			for (auto* vertex : { &value.a, &value.b, &value.c }) {
+				(*vertex)[0] += 16360.0f;
+				(*vertex)[1] += 16360.0f;
+			}
+			value.rectangle = { 16368, 16362, 16370, 16364 };
+			add(value, 0, 1);
+		}
+		auto value = slope;
+		value.a[2] = value.c[2] = 0.75f;
+		value.b[2] = 0.25f;
+		value.depth = 0.3125f;
+		add(value, 0, 1);
+		for (const float depth : { 0.375f, std::nextafter(0.375f, 0.0f), std::nextafter(0.375f, 1.0f) }) {
+			value = slope;
+			value.depth = depth;
+			value.bias = 0.125f;
+			add(value, 0, 0);
+		}
+		for (const float delta : { 0.0f, std::nextafter(16.0f, 17.0f) - 16.0f }) {
+			value = { { 0, 0, 0.25f }, { 8, 8, 0.75f }, { 16, 16 + delta, 0.25f }, { 5, 5, 10, 10 }, 0.125f, 0.0625f };
+			add(value, 0, 0);
+			std::swap(value.b, value.c);
+			add(value, 0, 0);
+		}
+		value = slope;
+		value.a[2] = std::numeric_limits<float>::quiet_NaN();
+		add(value, 0, 0);
+		value = { { 0, 0, 0.25f }, { 1e-10f, 0, 0.75f }, { 0, 1e-10f, 0.25f },
+			{ 0.5e-10f, 0.2e-10f, 0.6e-10f, 0.3e-10f }, 0.125f, 0.0625f };
+		add(value, 0, 0);
+		// The low-depth vertex lies on each inclusive edge or corner in turn.
+		constexpr std::array<std::array<float, 2>, 8> boundary{ { { 8, 10 }, { 12, 10 }, { 10, 8 }, { 10, 12 },
+			{ 8, 8 }, { 8, 12 }, { 12, 8 }, { 12, 12 } } };
+		for (const auto& point : boundary) {
+			value = { { point[0], point[1], 0.5f }, { 20, 20, 0.75f }, { 22, 20, 0.75f }, { 8, 8, 12, 12 }, 0.375f, 0.125f };
+			add(value, 1, 0);
+		}
+		for (UINT edge = 0; edge < 4; ++edge) {
+			value = { { boundary[edge][0], boundary[edge][1], 0.5f }, { 20, 20, 0.75f }, { 22, 20, 0.75f }, { 8, 8, 12, 12 }, 0.375f, 0.125f };
+			const UINT axis = edge / 2;
+			value.a[axis] = std::nextafter(value.a[axis], 10.0f);
+			add(value, 1, 0);
+			value.a[axis] = std::nextafter(boundary[edge][axis], edge % 2 == 0 ? 0.0f : 20.0f);
+			add(value, 0, 0);
+		}
+		for (auto& item : cases) {
+			if (fixture.reversedDepth) {
+				item.a[2] = 1.0f - item.a[2];
+				item.b[2] = 1.0f - item.b[2];
+				item.c[2] = 1.0f - item.c[2];
+				item.depth = 1.0f - item.depth;
+			}
+		}
+		Kernel kernel(fixture.device, L"ProjectedBoundsHelperTest.hlsl", "RegionConstants", fixture.reversedDepth, false, source);
+		StructuredBuffer inputs(fixture.device, sizeof(RegionCase), static_cast<UINT>(cases.size()), D3D11_BIND_SHADER_RESOURCE, cases.data());
+		StructuredBuffer outputs(fixture.device, 2 * sizeof(UINT), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
+		kernel.Bind(fixture.context, std::array<UINT, 4>{ static_cast<UINT>(cases.size()), 0, 0, 0 });
+		auto* input = inputs.srv.Get();
+		auto* output = outputs.uav.Get();
+		fixture.context->CSSetShaderResources(0, 1, &input);
+		fixture.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		fixture.context->Dispatch((static_cast<UINT>(cases.size()) + 63) / 64, 1, 1);
+		fixture.Unbind();
+		fixture.context->CopyResource(outputs.staging.Get(), outputs.buffer.Get());
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		Check(fixture.context->Map(outputs.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+		std::vector<std::array<UINT, 2>> actual(cases.size());
+		std::memcpy(actual.data(), mapped.pData, actual.size() * sizeof(actual[0]));
+		fixture.context->Unmap(outputs.staging.Get(), 0);
+		for (std::size_t index = 0; index < cases.size(); ++index)
+			for (UINT helper = 0; helper < 2; ++helper)
+				if (actual[index][helper] != expected[index][helper])
+					throw std::runtime_error("Projected-region shortcut mismatch: case=" + std::to_string(index) +
+											 " helper=" + std::to_string(helper) + " reversed=" + std::to_string(fixture.reversedDepth));
+	}
 
 	OBBTransform Box(float x = 0.0f, float y = 0.0f, float z = 0.75f, float extent = 0.05f)
 	{
@@ -630,6 +749,39 @@ namespace
 		}
 	};
 
+	void RetainsLocalFaceBiasInEitherEye(Fixture& fixture)
+	{
+		const float originalBias = fixture.testConstants.depthBias;
+		fixture.testConstants.depthBias = 0.01f;
+		auto object = BoxForGuardedPixels(fixture, { 8.25f, 8.25f, 19.75f, 19.75f });
+		object.entry[2][0] = 0.25f;
+		object.entry[2][3] = 0.65f;
+		const RayBoxOracle oracle(object);
+		const auto& eye = fixture.testConstants.eyes[0];
+		double objectDepth;
+		Require(oracle.Hit(2.0 * 9.25 / eye.width - 1.0, 1.0 - 2.0 * 10.5 / eye.height, 0.0, 0.0, objectDepth),
+			"Local bias fixture missed the independently intersected box edge");
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.1f);
+		fixture.Build(pixels);
+		Require(fixture.Test(std::array{ object })[0] == 0, "Local bias fixture has no covered baseline");
+		const float touching = static_cast<float>(objectDepth);
+		for (const auto& targetEye : fixture.testConstants.eyes) {
+			const auto offset = 10 * fixture.sourceWidth + targetEye.x + 9;
+			for (const float depth : { touching - 0.5f * fixture.testConstants.depthBias, touching,
+					 std::nextafter(touching, 0.0f), std::nextafter(touching, 1.0f) }) {
+				Require(objectDepth <= depth + fixture.testConstants.depthBias,
+					"Independent local depth must remain within the configured bias");
+				pixels[offset] = depth;
+				fixture.Build(pixels);
+				Require(fixture.Test(std::array{ object })[0] == 1,
+					"A local face touching the occluder bias was rejected in one eye");
+				Require(fixture.lastDiagnostics[0][2] != 0, "Local bias case did not reach face refinement");
+			}
+			pixels[offset] = 0.1f;
+		}
+		fixture.testConstants.depthBias = originalBias;
+	}
+
 	void ChecksFaceProofsAgainstRays(Fixture& fixture)
 	{
 		const auto original = fixture.testConstants;
@@ -646,11 +798,26 @@ namespace
 			object.entry[2][1] = (index % 5 - 2.0f) * 0.04f;
 			objects.push_back(object);
 		}
-		bool rejected = false, retained = false;
+		const auto nearParallelStart = objects.size();
+		for (int exponent : { 8, 12, 16, 20, 24 }) {
+			for (float sign : { -1.0f, 1.0f }) {
+				auto object = Box(0.0f, 0.0f, 0.65f);
+				object.entry[0][0] = object.entry[0][1] = 0.18f;
+				object.entry[1][0] = 0.18f;
+				object.entry[1][1] = 0.18f + sign * std::ldexp(1.0f, -exponent);
+				object.entry[2][0] = 0.10f;
+				object.entry[2][1] = -0.10f;
+				object.entry[0][2] = 0.06f;
+				object.entry[1][2] = -0.06f;
+				object.entry[2][2] = 0.015f;
+				objects.push_back(object);
+			}
+		}
+		bool rejected = false, retained = false, nearParallelRefined = false;
 		for (float perspective : { 0.0f, 0.4f }) {
 			for (UINT eye = 0; eye < 2; ++eye) {
 				fixture.testConstants.viewProjection[eye][3][2] = perspective;
-				fixture.testConstants.viewProjection[eye][0][2] = eye == 0 ? -0.04f : 0.04f;
+				fixture.testConstants.viewProjection[eye][0][2] = perspective == 0.0f ? 0.0f : (eye == 0 ? -0.04f : 0.04f);
 			}
 			for (UINT pattern = 0; pattern < 4; ++pattern) {
 				std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.2f);
@@ -668,11 +835,13 @@ namespace
 				fixture.Build(pixels);
 				const auto visibility = fixture.Test(objects);
 				for (std::size_t index = 0; index < objects.size(); ++index) {
+					nearParallelRefined |= index >= nearParallelStart && fixture.lastDiagnostics[index][2] != 0;
 					retained |= visibility[index] != 0;
 					if (visibility[index] != 0)
 						continue;
 					rejected = true;
 					const RayBoxOracle oracle(objects[index]);
+					UINT rayHits = 0;
 					for (UINT eyeIndex = 0; eyeIndex < 2; ++eyeIndex) {
 						const auto& eye = fixture.testConstants.eyes[eyeIndex];
 						for (UINT y = 0; y < eye.height; ++y)
@@ -684,15 +853,19 @@ namespace
 										double objectDepth;
 										if (!oracle.Hit(nx, ny, perspective, fixture.testConstants.viewProjection[eyeIndex][0][2], objectDepth))
 											continue;
+										++rayHits;
 										const float sceneDepth = pixels[y * fixture.sourceWidth + eye.x + x];
 										Require(sceneDepth > 0.0f && objectDepth > sceneDepth,
 											"A rejected face has a visible guarded ray in the independent 3D box oracle");
 									}
 					}
+					Require(index < nearParallelStart || rayHits != 0,
+						"Near-parallel projection had no independent ray evidence");
 				}
 			}
 		}
 		Require(rejected && retained, "Ray oracle did not exercise both visibility outcomes");
+		Require(nearParallelRefined, "Near-parallel faces did not exercise region refinement");
 		fixture.testConstants = original;
 	}
 
@@ -891,6 +1064,7 @@ int main()
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 4, 4, false);
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 8, 4, false);
 			Fixture fixture(device.Get(), context.Get(), reversedDepth);
+			ChecksProjectedRegionShortcuts(fixture);
 			CoversVisibilityAndFailures(fixture);
 			CoversMixedStereoVisibility(fixture);
 			BiasRetainsTouchingBounds(fixture);
@@ -908,6 +1082,7 @@ int main()
 			ExcludesEmptyProjectedCorners(fixture);
 			UsesLocalFaceDepth(fixture);
 			PreservesFaceProofsAcrossAxisPermutations(fixture);
+			RetainsLocalFaceBiasInEitherEye(fixture);
 			ChecksFaceProofsAgainstRays(fixture);
 			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
 					  << "): mip coverage, bounded face refinement, source-pixel and 3D ray oracles, stereo, bias, perspective and failure fallback\n";

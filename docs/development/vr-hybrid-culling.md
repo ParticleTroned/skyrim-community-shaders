@@ -7,13 +7,12 @@ Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
 The [adaptive comparison and GPU analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record the latest repeated comparison with Advanced. Adaptive Hybrid costs
-17.3% more CPU time and 26.7% more GPU time, rejecting 38.2% of candidate
-records versus 60.4%. Bounds testing consumes 95.8% of measured Hybrid GPU
+record the latest repeated comparison with Advanced. Cached-face Hybrid costs
+13.0% more CPU time and 17.9% more GPU time, rejecting 31.8% of candidate
+records versus 54.7%. Bounds testing consumes 93.4-93.9% of measured Hybrid GPU
 work. Motion and lifecycle qualification remain open.
-The subsequent cached face bounds and clipping shortcuts pass focused
-tests but have not been timed in game; the comparison measures the shader
-before those shortcuts.
+The subsequent unresolved-vertex and affine-depth shortcuts preserve exact
+clipping for ambiguous regions. Their in-game speed remains unmeasured.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -85,11 +84,12 @@ coordinates; children are restricted to the guarded base-cell bounds.
 The 64-load limit counts actual reads, including the initial four.
 Budget or stack exhaustion, invalid depth and unresolved finest cells
 retain visibility. Only completing all pending regions proves occlusion.
-Within an inconclusive cell, all
-projected box faces are clipped against the cell expanded by the pixel
-guard and a rounding margin. Empty regions can be excluded; intersecting
-faces use their clipped nearest depth and an additional interpolation
-bias. Every covered region must prove occlusion in both eyes.
+Within an inconclusive cell, projected box faces are tested against the
+cell expanded by the pixel guard and a rounding margin. Cached bounds,
+retained original vertices and conservative affine depth proofs can settle
+a triangle without clipping. Uncertain cases keep exact clipping and its
+additional interpolation bias. Every covered region must prove occlusion
+in both eyes.
 Visibility in either eye retains the object. Coarse cells, depth within
 the guarded footprint and the finite refinement budget can still reduce
 rejection efficiency; they cannot justify discarding

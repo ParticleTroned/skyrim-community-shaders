@@ -2,20 +2,21 @@
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
 The [latest comparison and adaptive iteration](vr-hybrid-culling-adaptive-2026-10-04.md)
-record two noon timing repeats per method on the adaptive build: Hybrid
-costs 17.3% more CPU time and 26.7% more GPU time than Advanced, with
-38.2% candidate rejection versus 60.4%.
+record two noon timing repeats per method on the cached-face build:
+Hybrid costs 13.0% more CPU time and 17.9% more GPU time than Advanced,
+with 31.8% candidate rejection versus 54.7%.
 Adaptive traversal now preserves proven regions and spends its fixed
 64-load budget only on actual reads. Separate DevBench-only shader
 diagnostics report terminal reasons and work without contaminating normal
-timing. Two 300-frame GPU captures attribute 95.8% of Hybrid GPU work to
-bounds testing. Motion/lifecycle qualification remains open. Advanced
+timing. Two 300-frame GPU captures attribute 93.4-93.9% of Hybrid GPU work
+to bounds testing (0.93-0.96 ms). Motion/lifecycle qualification remains open. Advanced
 remains default. PBR grass, grass optimization and Reverse Z remain separate later PRs.
 
-The next bounded change now caches face rectangles/depths, skips proven
-regions before exact triangle clipping and reduces indexed polygon-array
-copies. Its focused tests pass; the measured timings above still belong
-to the preceding adaptive build. Fresh in-game timing is required.
+The measured implementation caches face rectangles/depths and reduces
+polygon-array copies. The next bounded change adds an early unresolved
+vertex test and a conservative affine depth proof before exact clipping.
+Its performance needs a fresh in-game comparison. Skyrim was shut down
+cleanly after measurements and before this implementation.
 
 ## Scope and authority
 

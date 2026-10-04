@@ -1,140 +1,189 @@
-# Hi-Z adaptive traversal: 4 October 2026
+# Hi-Z traversal and face tests: 4 October 2026
 
-The latest code adds cached face tests and reduces polygon-array copying.
-The measurements below belong to the preceding adaptive build, whose
-exact identity is retained. The new shortcuts pass the focused tests;
-their in-game performance has not yet been measured.
+The latest in-game comparison measures the cached-face implementation.
+It still trails Advanced. The next implementation adds conservative
+triangle-plane proofs and early unresolved-vertex checks before exact
+clipping; its runtime performance is not yet measured.
 
 ## Latest same-build in-game comparison
 
 Two 20-second fpsVR windows per method ran in Advanced / Hybrid / Hybrid /
-Advanced order. Noon was reset before every window, with five seconds of
-settling. The WhiterunExterior01 scene, SkyrimClearTU weather, player
-position and DLSS Quality K fixture were fixed: 1344x1492 render pixels
-per eye, 2016x2240 display pixels. Boundary HMD observations differed by
-at most 1.29 mm and 0.105 degrees. These observations do not continuously
-certify the pose between boundaries.
+Advanced order. Noon was reset and verified before every counter and
+timing phase, with five seconds of settling. The scene remained
+WhiterunExterior01 with SkyrimClearTU weather. DLSS Quality K used
+1344x1492 render pixels per eye and 2016x2240 display pixels.
+Boundary HMD observations differed by at most 0.497 mm and 0.0503 degrees;
+these observations do not continuously certify pose between boundaries.
 
-| Mode     | Run       | Samples | CPU mean ms | GPU mean ms | CPU p95 ms | GPU p95 ms |
-| -------- | --------- | ------: | ----------: | ----------: | ---------: | ---------: |
-| Advanced | advanced1 |    1788 |    9.162808 |    7.229474 |     13.100 |      8.365 |
-| Hybrid   | hybrid1   |    1413 |   10.616844 |    9.299575 |     15.040 |     11.000 |
-| Hybrid   | hybrid2   |    1340 |   11.118507 |    9.324701 |     16.505 |     10.905 |
-| Advanced | advanced2 |    1590 |    9.369686 |    7.468994 |     13.400 |      9.000 |
+| Mode     | Run                   | Samples | CPU mean ms | GPU mean ms |
+| -------- | --------------------- | ------: | ----------: | ----------: |
+| Advanced | face-advanced-timing1 |    1541 |    9.949384 |    7.827904 |
+| Hybrid   | face-hybrid1          |    1471 |   11.243508 |    9.151734 |
+| Hybrid   | face-hybrid2          |    1417 |   11.084615 |    9.181087 |
+| Advanced | face-advanced2        |    1653 |    9.815487 |    7.718633 |
 
-Giving each completed window equal weight, Advanced averaged 9.266247 ms
-CPU / 7.349234 ms GPU; Hybrid averaged 10.867676 / 9.312138 ms. Hybrid
-costs an additional **1.601429 ms CPU (+17.3%) and 1.962904 ms GPU
-(+26.7%)**. Those differences consume 19.2% and 23.6% of the 120 Hz
-8.333 ms frame budget respectively; CPU and GPU time overlap.
+Giving each window equal weight, Advanced averaged **9.882435 ms CPU /
+7.773268 ms GPU**; Hybrid averaged **11.164062 / 9.166410 ms**. Hybrid
+costs **1.281626 ms CPU (+13.0%) and 1.393142 ms GPU (+17.9%)**.
+At 120 Hz, these differences use 15.4% and 16.7% of the 8.333 ms budget
+respectively; CPU and GPU time overlap. The fpsVR process and start
+identity remained the same as the preceding 120 Hz campaign.
 
-Telemetry, traversal diagnostics and the CSX profiler were disabled during
-these timing windows. All four completed with monotonic, covering fpsVR
-records, stable runtime identity, no shader failures and no detected
-compiler activity. Both runs of each mode support the same conclusion.
-This is one static scene, not a general performance or fidelity verdict.
-No images were taken because the measured performance was not similar.
+Telemetry, traversal diagnostics and profiling were disabled during
+timing. All four windows retained covering monotonic fpsVR records,
+stable runtime identity, unchanged renderer settings, no shader failures
+and no detected compiler activity. No pictures were taken because both
+repeats showed a material performance gap. This is one static scene;
+motion and lifecycle fidelity remain unqualified.
+
+The first preparation stopped before timing because an exact player
+position comparison rejected a 0.005859375 game-unit height change.
+Its completed counter window was retained. Subsequent timing boundaries
+use an explicit 0.1 game-unit position tolerance, retaining raw positions.
+No failed timing window was silently substituted.
 
 Separate 20-second counter windows reported:
 
-| Mode     | Culled records | Tested records | Rejection | Accepted batches |
-| -------- | -------------: | -------------: | --------: | ---------------: |
-| Advanced |      4,188,974 |      6,937,834 |     60.4% |            1,837 |
-| Hybrid   |      2,284,772 |      5,983,146 |     38.2% |            1,576 |
+| Mode     | Culled records | Tested records | Rejection | Batches |
+| -------- | -------------: | -------------: | --------: | ------: |
+| Advanced |      3,620,684 |      6,619,671 |     54.7% |   1,782 |
+| Hybrid   |      1,853,021 |      5,835,727 |     31.8% |   1,552 |
 
-Hybrid had zero fallback, invalidated or unreadable batches. Counts are
-repeated candidate-result observations, not unique objects or matched
-persistent cohorts. The gap is not explained by fallback in this scene.
-Earlier builds were not retested in this process, so their timings cannot
-establish the adaptive change's isolated speedup.
+Hybrid recorded zero fallback, invalidated or unreadable batches. These
+are repeated candidate-result observations, not unique objects or matched
+persistent cohorts. Lower rejection can leave more geometry to draw,
+but these counters do not isolate its contribution to frame time.
+Earlier binaries were not retested in this process and the player
+position differs from the preceding campaign; cross-build speedup is
+therefore not established.
 
-Measured clean source: `ea7615fd8975fa341f8eb279425791cc81221850`.
+Measured clean source: `d6115b0d7146cc1b45989f9e0bc6e4d29c9454f3`.
 Producer Build ID:
-`ce938ab2748dce78dfd756051d0970f8ad53fa09390ad79051311f7150a2334f`.
-The enabled physical DLL, manifest, AIO receipt and six depth shaders
-matched the producer and source. Full local evidence is in main-workspace
-`build/astra-runtime/20261004T010846Z-hiz-adaptive/`, including
-`final-comparison.json`, raw CSVs, per-run snapshots, timing distributions
-and the diagnostic analysis. The pre-test DLAA rendering profile,
-Advanced culling and telemetry state were restored after testing.
-Logging stayed at Info and the profiler was restored disabled.
+`edab108772212f745ea94f1caaf043700129bae2a2a587dda9e80b6e727e0465`.
+The enabled physical DLL, adjacent manifest, AIO receipt and six depth
+shaders matched the producer and source; no competing enabled loose,
+Overwrite or unmanaged Data provider was found at those paths.
+
+Raw evidence is retained in main-workspace
+`build/astra-runtime/20261004T021030Z-hiz-facecache/`, including
+`final-comparison.json`, original/scoped CSVs, counter windows,
+boundary snapshots and `optimization-analysis.json`. The original
+DLAA profile, Advanced method and telemetry state were restored;
+the profiler and owned fpsVR captures were inactive. The engine's
+`qqq` command then closed PID 22960 cleanly, with no Skyrim process
+remaining and RootBuilder deployment cleared, before implementation began.
 
 ## Measured optimization opportunity
 
-Two separate 300-frame GPU captures used normal Hybrid shaders with
-telemetry enabled and traversal diagnostics disabled. An Advanced capture
-also completed 300 frames. All bounded captures resolved every submitted
-frame, with no query-slot refusals. Completed capture activity flags are
-false; the Hybrid timers have GPU data and 300 retained samples each.
+Two normal-shader Hybrid captures and one Advanced capture each resolved
+300 GPU frames. Telemetry was enabled, traversal diagnostics disabled,
+and captures recorded no query-slot refusals.
 
 | Hybrid GPU self time        | Capture 1 ms | Capture 2 ms |
 | --------------------------- | -----------: | -----------: |
-| Build base                  |     0.026338 |     0.028442 |
-| Reduce mips                 |     0.027180 |     0.026378 |
-| Hierarchy parent remainder  |     0.000658 |     0.000683 |
-| Test bounds                 |     1.515315 |     1.489838 |
-| Copy results                |     0.005664 |     0.005242 |
-| Visibility parent remainder |     0.006390 |     0.005136 |
-| Sum of disjoint self times  |     1.581546 |     1.555720 |
+| Build base                  |     0.024896 |     0.026845 |
+| Reduce mips                 |     0.026754 |     0.025337 |
+| Hierarchy parent remainder  |     0.000651 |     0.000680 |
+| Test bounds                 |     0.926044 |     0.956116 |
+| Copy results                |     0.007653 |     0.004501 |
+| Visibility parent remainder |     0.005194 |     0.005099 |
+| Sum of disjoint self times  |     0.991192 |     1.018577 |
 
-Bounds testing accounts for **95.8%** of this measured Hybrid GPU work.
-The parent rows are exclusive remainders; no inclusive parent is added
-to its children. These GPU timestamp captures are separate diagnostic
-windows and cannot be subtracted mechanically from the fpsVR timings.
-Native engine depth-culling GPU work is not represented by equivalent
-timers, so the Advanced capture does not establish its absolute cost.
+Bounds testing accounts for **93.4-93.9%** of measured Hybrid GPU work.
+The parent rows are exclusive remainders. These diagnostic captures are
+separate from fpsVR timing and cannot be subtracted mechanically from it.
+The Advanced capture lacks an equivalent native depth-culling GPU timer.
 
-The counter-only window measured Hybrid dispatch at 18.45 microseconds,
-preparation at 2.75 microseconds, post-native validation at 10.34
-microseconds and intercepted native readback at 3.37 microseconds mean.
-Advanced native readback averaged 5.37 microseconds. These inclusive CPU
-stages must not be summed. They provide no evidence that readback stalls
-explain the 1.60 ms whole-frame CPU gap.
+Counter-window CPU means were 18.07 microseconds for Hybrid dispatch,
+2.89 for preparation, 10.76 for post-native history validation, and
+4.18 for intercepted native readback. These inclusive stages must not be
+summed. They do not support a readback-stall explanation for the 1.28 ms
+whole-frame CPU gap.
 
-Offline FXC compilation of the current Standard-Z shader with strict
-O3 flags reports approximately 2,242 instruction slots, 21 ordinary
-temporaries and 12 dynamically indexed temporary arrays containing 160
-float4 entries. Both eye paths are present in the bytecode. This shows
-substantial scratch storage and control flow; it does **not** prove
-hardware register spilling, occupancy or a particular cache bottleneck.
+The bounded next target is triangle clipping inside the bounds test.
+A visible original vertex inside the guarded region already disproves
+that region's occlusion. Conversely, an affine triangle-depth proof over
+an enclosing rectangle can prove it hidden without constructing a clipped
+polygon. Both shortcuts retain exact clipping for ambiguity, preserve the
+same depth bias and avoid additional persistent plane arrays.
 
-The highest-value next experiment is to reduce repeated face work inside
-`TestBoundsCS.hlsl` / `ProjectedBounds.hlsli`:
+Hierarchy fusion has a much smaller measured ceiling: the entire
+hierarchy costs only about 0.053 ms. Finer source-depth evidence could
+improve rejection, because the 4x4 maximum-depth base permanently loses
+sub-cell detail, but this run does not establish its benefit or cost.
+It remains a later experiment rather than an unmeasured budget increase.
 
-1. Prepare reusable face bounds and depth information once per box/eye.
-   Use cheap conservative per-region proofs before exact polygon clipping.
-2. Retain the current exact clipper for ambiguous regions initially.
-   Reduce dynamically indexed polygon copies and repeated triangle setup;
-   preserve the read budget, masks, guards, bias and both-eye proof.
-3. Evaluate tighter finest-level evidence only after measuring rejection
-   reasons. The 4x4 maximum-depth base loses sub-cell coverage permanently;
-   deeper traversal alone cannot recover it.
-
-The face-cache and polygon-copy changes below implement the first bounded
-experiment. Analytic face-plane proofs and finer source-depth evidence
-remain proposals; neither is required for the current shortcuts.
-Halving the roughly 1.50 ms bounds pass suggests about 0.75 ms of local
-GPU work to target. Even removing that pass entirely would not by itself
-account for the 1.96 ms whole-frame gap under a simple additive estimate.
-Parity also needs better rejection or savings elsewhere; the current
-data do not promise it. Hierarchy fusion and readback micro-optimization
-have much smaller measured ceilings.
-
-The direct connector action inventory omitted
+The direct connector still omits
 `set_depth_culling_traversal_diagnostics_enabled`, although the loaded
-DLL reports diagnostic availability. No unsupported dispatcher bypass
-was used. Budget exhaustion, finest-unresolved, clipping and viewport
-reason proportions therefore remain unmeasured. Local feedback receipt:
-`AUTO-20261004-013128725-B1AC7F0D`.
+DLL reports diagnostics ready. No unsupported dispatcher bypass was
+used. Depth-budget, finest-unresolved, clipping and viewport reason
+proportions remain unmeasured. The existing local feedback record
+`AUTO-20261004-013128725-B1AC7F0D` now includes this build's evidence.
 
-Raw render-scale status and preparation snapshots were retained around
-captures. This build's status lacks the complete resource-publication
-fields, and read-only qualification status has no active observation;
-no full resource-publication qualification is claimed. One preparation
-attempt stopped before profiler enable because the local runner treated a
-wait step's absent `ok` field as failure. Its receipt is preserved; the
-parser was corrected and the two completed Hybrid captures are retained.
-No moving-view, lifecycle, VRAM or SE/AE runtime qualification was added.
+Raw render-scale status/preparation responses are preserved. This build
+does not expose all resource-publication qualification fields, so no
+complete publication, VRAM or lifecycle qualification is claimed.
+
+## Region depth shortcuts
+
+Before clipping an overlapping triangle, an original vertex inside the
+expanded region that fails the existing guarded depth test makes that
+region unresolved immediately. Inclusive rectangle boundaries preserve
+the clipper's coverage convention. This only avoids work before refinement
+or retained visibility; it cannot create a new occlusion result.
+
+A second shortcut intersects the region with the triangle's bounding
+rectangle and treats that rectangle as a superset of covered points.
+For triangle edges e and f, their cross product n defines the affine
+depth plane. After orienting n.z positive, the shader evaluates the
+minimum signed plane-depth residual over that rectangle without dividing
+by n.z. It uses the same rounded guarded scene-depth threshold as
+`DepthOrder::IsBehindWithBias`, including reversed test ordering.
+
+The shortcut accepts only a residual greater than its scaled arithmetic
+error. Absolute cross-product terms bound cancellation; maximum rectangle
+displacements and the depth difference scale their contribution to the
+residual. A separate area-sign check rejects uncertain orientation.
+Both filters use 64 float unit roundoffs, with a 1e-20 absolute floor
+covering amplified subnormal/flush-to-zero error in the admitted
+0..16384 pixel and 0..1 depth domain. Nonfinite or uncertain results fall
+through to the unchanged exact clipper. Each triangle keeps its own plane;
+no planar quad or front-face assumption is introduced.
+
+The four-load coarse test, six cached faces, depth bias, region expansion,
+64 actual reads per eye, masks, history validation and both-eye agreement
+remain unchanged. Existing DevBench diagnostics and their production
+build isolation are unchanged. No grass, Reverse Z or render-scale
+behavior is added.
+
+Validation for these shortcuts:
+
+-   `pwsh ./tools/cmake.ps1 --build D:/Coding/GitHub/skyrim-community-shaders/build/ahiz --config Release --target vr_hybrid_culling_shader_test --parallel 4`: passed.
+-   `ctest --test-dir D:/Coding/GitHub/skyrim-community-shaders/build/ahiz -C Release -R '(DepthCulling|VRHybridCulling|D3DContextProtection)' --output-on-failure`: 12/12 passed in 10.39 seconds; WARP 10.12 seconds.
+-   Thirty direct production-helper WARP cases per depth ordering cover
+    successful analytic proofs, winding, large coordinates, threshold
+    equality/adjacent floats, near-degenerate and tiny triangles, and
+    inclusive vertex boundaries. Independent local-bias cases retain
+    visibility in either eye. Ten near-parallel boxes extend the existing
+    double-precision ray oracle and must have actual ray evidence.
+-   The existing 48 signed-axis representations, source-pixel oracle,
+    stereo holes and production/diagnostic visibility parity pass.
+    Shader reflection still excludes the diagnostic UAV from production.
+-   Strict FXC `/Ges /WX /O3 /T cs_5_0` compilation passed. The maintained
+    comparison against `d6115b0d7` compiled all four production/diagnostic
+    and Standard/reversed variants and reported different DXBC.
+    Bytecode or bit-for-bit visibility equivalence is not claimed.
+-   Independent numerical review found no blocker. A supplementary seeded
+    float32/flush-to-zero check covered 30,000 cases: 8,442 positive proofs
+    and no unsafe positives against its float64 reference. This is bounded
+    numerical evidence, not an exhaustive proof or hardware benchmark.
+
+Evidence is retained under worktree
+`build/astra-validation/adaptive/plane-*`. Standard production FXC output
+uses 36 ordinary temporaries, the same 10 indexed arrays / 144 float4
+entries, and approximately 2,520 instruction slots. The longer static
+program trades arithmetic for fewer clipping paths; these counts do not
+establish runtime speed or register spilling.
 
 ## Cached face tests
 
@@ -177,8 +226,9 @@ For the Standard production shader, indexed temporary arrays fall from
 from 21 to 35 and approximate instruction slots from 2,242 to 2,340.
 The shortcut trades setup and branches for fewer repeated clipping loops;
 these static counts do not establish a hardware speedup or lower register
-pressure. A fresh game comparison is still required. Evidence is under
-worktree `build/astra-validation/adaptive/face-fastpath-*`.
+pressure. The in-game comparison above measures this cached-face change.
+Its earlier compile/test evidence remains under worktree
+`build/astra-validation/adaptive/face-fastpath-*`.
 
 ## Adaptive implementation
 

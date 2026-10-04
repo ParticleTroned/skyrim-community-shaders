@@ -16,8 +16,23 @@ def extract(root, output):
     members = re.search(r"\tstd::atomic_bool frameGenerationPrepared\{[^;]+;", header)
     if members is None:
         raise ValueError("Missing frame-generation input readiness state")
-    (output / "frame_generation_members.h").write_text(members[0] + "\n", encoding="utf-8")
+    settings = re.search(
+        r"\t\tuint frameGenerationMode[^;]*;[^\n]*\n"
+        r"\t\tuint frameGenerationForceEnable[^;]*;\n"
+        r"\t\tbool frameGenerationAllowInMenus[^;]*;", header)
+    if settings is None:
+        raise ValueError("Missing frame-generation settings defaults")
+    (output / "frame_generation_members.h").write_text(
+        "struct Settings {\n" + settings[0] + "\n} settings;\n" + members[0] + "\n", encoding="utf-8")
+    for signature in ["void Upscaling::LoadSettings(", "void Upscaling::SaveSettings(",
+                      "void Upscaling::RestoreDefaultSettings()"]:
+        if "SanitizeUpscalingSettings(" not in function(source, signature):
+            raise ValueError("Frame-generation normalization missing from " + signature)
+    if "SanitizeFrameGenerationSettings(" not in function(source, "\tvoid SanitizeUpscalingSettings("):
+        raise ValueError("Frame-generation settings are not normalized at the configuration boundary")
     methods = [function(source, signature) for signature in [
+        "\tuint ClampToggleUInt(uint value)\n",
+        "\tvoid SanitizeFrameGenerationSettings(",
         "void Upscaling::PrepareFrameGenerationInputs()",
         "bool Upscaling::CopySharedD3D12Resources()",
         "bool Upscaling::IsFrameGenerationDx12PathActive()",

@@ -754,6 +754,7 @@ void VR::SetupResources()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	EmitVRPipelineEnvironmentDiagnosticsOnce(*this);
 #endif
+	VRHybridCulling::PrewarmShaders();
 }
 
 void VR::ClearShaderCache()

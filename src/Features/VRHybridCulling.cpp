@@ -656,6 +656,29 @@ namespace VRHybridCulling
 		}
 #endif
 
+		void EnsurePipelineOwner()
+		{
+			const VRHybridCullingSnapshot::PipelineOwner currentOwner{
+				reinterpret_cast<std::uintptr_t>(globals::d3d::device), reinterpret_cast<std::uintptr_t>(globals::d3d::context)
+			};
+			if (!VRHybridCullingSnapshot::ShouldRecreatePipeline(g_resources.Owner(), currentOwner,
+					g_reloadRequested.exchange(false, std::memory_order_acq_rel)))
+				return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const VRDepthCullingTelemetryPolicy::WriterScope telemetry(VRDepthCullingTemporal::GetTelemetryGate());
+			if (telemetry && g_resources.device)
+				g_pipelineRecreations.fetch_add(1, std::memory_order_relaxed);
+#endif
+			g_history.pipelineInvalidated = g_history.pending;
+			g_resources = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			g_traversalAvailable.store(false, std::memory_order_release);
+			g_traversalAvailability.store("not_created", std::memory_order_release);
+#endif
+			g_resources.device.copy_from(globals::d3d::device);
+			g_resources.ownerContext.copy_from(globals::d3d::context);
+		}
+
 		bool EnsurePipeline()
 		{
 			auto& resources = g_resources;
@@ -869,6 +892,22 @@ namespace VRHybridCulling
 		}
 	}
 
+	void PrewarmShaders()
+	{
+		if (!REL::Module::IsVR() || !globals::state || !globals::d3d::device || !globals::d3d::context)
+			return;
+		try {
+			EnsurePipelineOwner();
+			if (g_resources.test || g_resources.failed)
+				return;
+			if (EnsurePipeline())
+				logger::info("VR: Hi-Z shaders prepared during renderer setup");
+		} catch (const std::exception& error) {
+			g_resources.failed = true;
+			logger::warn("VR: Hi-Z shader preparation failed; using native depth culling: {}", error.what());
+		}
+	}
+
 	bool Prepare(std::uint64_t a_epoch)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -881,24 +920,7 @@ namespace VRHybridCulling
 			return HYBRID_PREPARATION_FAILED("unsupported_frame", a_epoch);
 		if (!globals::state || globals::state->GetCompletedRenderTargetResourcePublicationGeneration() == 0)
 			return HYBRID_PREPARATION_FAILED("resource_publication_unavailable", a_epoch);
-		const VRHybridCullingSnapshot::PipelineOwner currentOwner{
-			reinterpret_cast<std::uintptr_t>(globals::d3d::device), reinterpret_cast<std::uintptr_t>(globals::d3d::context)
-		};
-		if (VRHybridCullingSnapshot::ShouldRecreatePipeline(g_resources.Owner(), currentOwner,
-				g_reloadRequested.exchange(false, std::memory_order_acq_rel))) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			if (telemetry && g_resources.device)
-				g_pipelineRecreations.fetch_add(1, std::memory_order_relaxed);
-#endif
-			g_history.pipelineInvalidated = g_history.pending;
-			g_resources = {};
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			g_traversalAvailable.store(false, std::memory_order_release);
-			g_traversalAvailability.store("not_created", std::memory_order_release);
-#endif
-			g_resources.device.copy_from(globals::d3d::device);
-			g_resources.ownerContext.copy_from(globals::d3d::context);
-		}
+		EnsurePipelineOwner();
 		if (g_resources.failed)
 			return HYBRID_PREPARATION_FAILED("pipeline_unavailable", a_epoch);
 		if (!CaptureFrame(g_prepared, a_epoch, VRHybridCullingSnapshot::Phase::NativeDownscale))

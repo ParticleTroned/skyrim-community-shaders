@@ -58,6 +58,12 @@ Logging level does not control the active policy.
 Save settings to retain the selected method after restarting. Advanced is
 the fresh default; changing logging level never resets a saved choice.
 
+Hi-Z shaders are prepared during VR renderer setup, even when Advanced or
+Legacy is selected. Switching to Hi-Z reuses that pipeline. Shader reloads
+or a graphics-device/context change require preparation again. Depth
+textures are allocated when a valid scene needs them. Preparation failure
+retains native culling.
+
 Settings store numeric `DepthCullingMethod` (`0` Advanced, `2` Legacy,
 `3` Hybrid) and separate
 `MinOccludeeBoxExtentExterior` / `MinOccludeeBoxExtentInterior` values.

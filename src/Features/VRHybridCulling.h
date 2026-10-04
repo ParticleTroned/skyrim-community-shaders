@@ -97,6 +97,8 @@ namespace VRHybridCulling
 	};
 #endif
 
+	/** Compile the pipeline during VR renderer setup; depth textures remain frame-dependent. */
+	void PrewarmShaders();
 	/** Prepare stereo resources before suppressing the native depth downsample. */
 	[[nodiscard]] bool Prepare(std::uint64_t a_epoch);
 	/** Write native-indexed visibility and enqueue its existing staging copy. */

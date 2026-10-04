@@ -1678,9 +1678,8 @@ namespace Hooks
 				result = true;
 			}
 
-			// Capture only after the final vanilla/TruePBR properties have been
-			// installed. TerrainHelper intentionally runs earlier because it needs
-			// the original vanilla material hash.
+			// Capture final vanilla/TruePBR properties; TerrainHelper runs earlier
+			// because it needs the original vanilla material hash.
 			auto& meshBlending = globals::features::meshBlending;
 			if (result && meshBlending.loaded) {
 				meshBlending.CaptureLandscapeMaterials(land);

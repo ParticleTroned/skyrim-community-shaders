@@ -1563,7 +1563,12 @@ Full records are
 [`independent-audit.json`](../../build/validation/nr-true-batch-20261004/model-matched-comparison-01/independent-audit.json)
 and [`independent-timings.md`](../../build/validation/nr-true-batch-20261004/model-matched-comparison-01/independent-timings.md).
 
-### Remaining runtime integration boundary
+### Original runtime integration boundary
+
+The proposal below records the boundary before runtime implementation.
+The implemented Info-level controls, production adapter and corrected
+shared-body catalog are documented in
+[the current integration record](nr-batched-roi-ui-20261004.md).
 
 The successful backend remains an offline prototype, not an installed
 game DLL or AIO. Initial integration should be a default-off adapter

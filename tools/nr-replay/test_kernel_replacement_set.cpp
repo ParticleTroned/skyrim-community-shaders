@@ -133,6 +133,28 @@ namespace
 	{
 		return set.Resolve(100, 2000 + module * 10 + function, Original(f, module), "entry" + std::to_string(function), 72, 4);
 	}
+	void RelativeCatalog()
+	{
+		Fixture f(2);
+		const auto fingerprint = f.fingerprint;
+		for (auto& module : f.manifest["modules"])
+			module["path"] = std::filesystem::path(module["path"].get<std::string>()).filename().string();
+		f.Save();
+		Check(f.fingerprint == fingerprint);
+		auto fake = std::make_shared<FakeState>();
+		Subject set(f.path, f.fingerprint, 2, Fake{ fake });
+		Check(set.Receipt()["modules"].size() == 9 && fake->calls.empty());
+		Observe(set, f);
+		Check(Resolve(set, f).batchCount == 2 && set.Retire(true, true));
+		for (const auto* escape : { "../module-0.cubin", "..\\module-0.cubin", "folder/module-0.cubin", "C:module-0.cubin",
+				 "\\module-0.cubin", "module-0.cubin:stream", "module-0:stream.cubin", "", ".", "..", "module-0.bin" }) {
+			f.manifest["modules"][0]["path"] = escape;
+			f.Save();
+			auto rejected = std::make_shared<FakeState>();
+			Reject([&] { Subject invalid(f.path, f.fingerprint, 2, Fake{ rejected }); });
+			Check(rejected->calls.empty());
+		}
+	}
 	void Happy(unsigned batch)
 	{
 		Fixture f(batch);
@@ -423,6 +445,7 @@ int main(int argc, char** argv)
 		Happy(2);
 		Admission();
 		CatalogChoices();
+		RelativeCatalog();
 		Preparation();
 		SubmissionCounts();
 		Failures();

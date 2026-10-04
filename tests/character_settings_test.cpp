@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettingsJson.h"
+#include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 
 #include <array>
 #include <iostream>
@@ -26,6 +27,7 @@ namespace
 		float neuralCharacterHairStrength = CharacterPolicy::kDefaultHairStrength;
 		float neuralCharacterMaximumDistanceMeters = CharacterPolicy::kDefaultMaximumDistanceMeters;
 		bool neuralCharacterAdaptiveRoiSelectionEnabled = CharacterPolicy::kDefaultAdaptiveRoiSelection;
+		std::uint32_t neuralCharacterRoiExecutionMode = 0;
 		bool neuralCharacterMultiRoiEnabled = false;
 		bool neuralCharacterMultiRoiSavingsGateEnabled = true;
 		std::uint32_t neuralCharacterMinimumFacePixelSize = CharacterPolicy::kDefaultMinimumFacePixelSize;
@@ -64,6 +66,7 @@ namespace
 			"neuralCharacterSkinStrength": 0.5, "neuralCharacterHairStrength": 0.75,
 			"neuralCharacterMaximumDistanceMeters": 15.5,
 			"neuralCharacterAdaptiveRoiSelectionEnabled": true,
+			"neuralCharacterRoiExecutionMode": 0,
 			"neuralCharacterMultiRoiEnabled": true, "neuralCharacterMultiRoiSavingsGateEnabled": false,
 			"neuralCharacterMinimumFacePixelSize": 128,
 			"neuralCharacterRoiMargin": 0.5, "neuralCharacterRoiHoldFrames": 12,
@@ -98,6 +101,35 @@ namespace
 		saved["unrelatedField"] = 42;
 		WriteUpscalingCharacterSettingsJson(saved, settings);
 		Require(saved["unrelatedField"] == 42, "Character serialization removed another feature's setting");
+	}
+
+	void RoiMethodsPersistAndLegacyOverridesStaySeparate()
+	{
+		Require(GetUpscalingRoiExecutionMode(FlatSettings{}) == RoiExecutionMode::AutomaticSingle,
+			"Default ROI method must retain single-region execution");
+		for (std::uint32_t mode = 0; mode <= 2; ++mode) {
+			auto settings = Read(json{ { "neuralCharacterRoiExecutionMode", mode } });
+			Require(GetUpscalingRoiExecutionMode(settings) == static_cast<RoiExecutionMode>(mode),
+				"Saved ROI method did not reach the execution policy");
+			json saved;
+			WriteUpscalingCharacterSettingsJson(saved, settings);
+			const auto persisted = PersistentRenderingSettings(saved);
+			Require(persisted.at("neuralCharacterRoiExecutionMode") == mode &&
+						!persisted.contains("neuralCharacterMultiRoiEnabled") &&
+						!persisted.contains("neuralCharacterMultiRoiSavingsGateEnabled"),
+				"Saved method was stripped or a legacy session override was persisted");
+			Require(Read(persisted) == settings, "ROI method changed after complete profile serialization");
+			settings.neuralCharacterMultiRoiEnabled = true;
+			Require(GetUpscalingRoiExecutionMode(settings) == (mode == 0 ? RoiExecutionMode::Independent : static_cast<RoiExecutionMode>(mode)),
+				"Legacy split override replaced an explicit method or failed to select independent execution");
+		}
+		for (const auto invalid : { json(3), json(-1), json(std::numeric_limits<std::uint64_t>::max()) })
+			Require(Read(json{ { "neuralCharacterRoiExecutionMode", invalid } }).neuralCharacterRoiExecutionMode == 0,
+				"Invalid persisted ROI method did not return to the default");
+		Require(RoiExecutionModeName(RoiExecutionMode::AutomaticSingle) == "automatic_single" &&
+					RoiExecutionModeName(RoiExecutionMode::Independent) == "independent" &&
+					RoiExecutionModeName(RoiExecutionMode::Batched) == "batched",
+			"ROI method telemetry names changed");
 	}
 
 	void JsonIntegerBounds()
@@ -139,7 +171,7 @@ namespace
 			Require(rejected, "Wrong character JSON type must be rejected");
 			Require(destination == original, "Rejected character JSON partially changed settings");
 		};
-		for (const char* key : { "neuralCharacterMinimumFacePixelSize", "neuralCharacterRoiHoldFrames", "neuralCharacterFeatherRadius" }) {
+		for (const char* key : { "neuralCharacterMinimumFacePixelSize", "neuralCharacterRoiHoldFrames", "neuralCharacterFeatherRadius", "neuralCharacterRoiExecutionMode" }) {
 			for (const auto& wrong : std::array<json, 8>{ 1.5, 1.0, true, "1", nullptr,
 					 json::array(), json::object(), json::parse("18446744073709551616") })
 				rejects(json{ { "neuralCharacterRenderingEnabled", true }, { key, wrong } });
@@ -230,6 +262,7 @@ namespace
 			"All mask and planning policy must remain immutable for a retained source");
 		expanded.maximumDistanceMeters = 30.0f;
 		expanded.multiRoi = true;
+		expanded.roiExecutionMode = static_cast<std::uint32_t>(RoiExecutionMode::Batched);
 		expanded.multiRoiSavingsGate = false;
 		expanded.depthAwareFeather = true;
 		expanded.featherRadius = 4;
@@ -301,6 +334,7 @@ int main()
 {
 	try {
 		JsonRoundTripAndDefaults();
+		RoiMethodsPersistAndLegacyOverridesStaySeparate();
 		JsonIntegerBounds();
 		JsonTypeErrorsAreTransactional();
 		JsonFloatBounds();

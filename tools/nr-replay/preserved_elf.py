@@ -86,7 +86,7 @@ def encode_attribute(fmt, kind, value, payload):
 
 
 def validate_transform(transform, old_bytes):
-    require(set(transform) <= {'code', 'pc_maps', 'parameter_bytes', 'register_count'},
+    require(set(transform) <= {'code', 'pc_maps', 'parameter_bytes', 'register_count', 'register_cap'},
             'unknown transform field')
     code, maps, parameter = transform['code'], transform['pc_maps'], transform['parameter_bytes']
     require(isinstance(code, bytes) and 0 < len(code) <= 4 * 1024 * 1024 and len(code) % 128 == 0,
@@ -106,8 +106,12 @@ def validate_transform(transform, old_bytes):
     ranges.sort()
     require(all(b[0] >= a[1] for a, b in zip(ranges, ranges[1:])), 'clone PC ranges overlap')
     if 'register_count' in transform:
-        require(isinstance(transform['register_count'], int) and 1 <= transform['register_count'] <= 255,
+        require(type(transform['register_count']) is int and 1 <= transform['register_count'] <= 255,
                 'register count invalid')
+    if 'register_cap' in transform:
+        require('register_count' in transform and type(transform['register_cap']) is int and
+                transform['register_count'] <= transform['register_cap'] <= 255,
+                'explicit register cap requires a bounded matching count')
 
 
 def relocate_attributes(data, transform):
@@ -154,9 +158,14 @@ def relocate_attributes(data, transform):
             require(index == 0 and offset == 0 and packed >> 18 > 0, 'only one aggregate parameter supported')
             payload = struct.pack('<III', index, offset, (packed & 0x3ffff) | (parameter << 18))
         elif kind == 0x1b and 'register_count' in transform:
-            require(fmt == 3 and transform['register_count'] <= value, 'register count exceeds original cap')
+            require(fmt == 3 and 1 <= value <= 255, 'original register cap invalid')
+            if 'register_cap' in transform:
+                require(transform['register_cap'] >= value, 'explicit register cap cannot reduce original budget')
+                value = transform['register_cap']
+            require(transform['register_count'] <= value, 'register count exceeds original cap')
         result += encode_attribute(fmt, kind, value, payload)
     require({0x19, 0x0a, 0x17} <= seen and old_parameter is not None, 'packet metadata missing')
+    require('register_count' not in transform or 0x1b in seen, 'register budget metadata missing')
     return bytes(result), old_parameter
 
 
@@ -277,6 +286,7 @@ def emit_module(source, pinned_sha, destination, transforms):
 
     Each transform provides code bytes, one/two complete original-to-new PC maps
     (including exclusive end), parameter_bytes, and optional register_count.
+    Raising the original cap additionally requires an explicit register_cap.
     """
     destination = Path(destination)
     require(not destination.exists(), 'destination must be a new immutable artifact')
@@ -324,14 +334,24 @@ def emit_module(source, pinned_sha, destination, transforms):
                             cloneCount=len(transform['pc_maps']), functionSymbol=found[0]))
     by_name['.symtab']['data'] = bytes(symbols)
     global_info = bytearray()
+    register_updates = set()
     for fmt, kind, value, payload in attributes(by_name['.nv.info']['data']):
         require(kind in (0x2f, 0x11, 0x12) and fmt == 4 and len(payload) == 8,
                 'unknown global resource metadata')
         symbol, resource = struct.unpack('<II', payload)
         if kind == 0x2f and symbol in transformed_symbols and 'register_count' in transformed_symbols[symbol]:
+            require(symbol not in register_updates and 1 <= resource <= 255,
+                    'original register count missing or repeated')
+            register_updates.add(symbol)
             payload = struct.pack('<II', symbol, transformed_symbols[symbol]['register_count'])
+            for change in changes:
+                if change['functionSymbol'] == symbol:
+                    change.update(originalRegisterCount=resource,
+                                  registerCount=transformed_symbols[symbol]['register_count'])
         global_info += encode_attribute(fmt, kind, value, payload)
     by_name['.nv.info']['data'] = bytes(global_info)
+    require(register_updates == {symbol for symbol, transform in transformed_symbols.items() if 'register_count' in transform},
+            'global register count metadata missing')
     if transformed_symbols:
         require('.debug_frame' in by_name and '.rela.debug_frame' in by_name, 'debug frame provenance missing')
         debug, reloc = relocate_debug_frame(by_name['.debug_frame']['data'], by_name['.rela.debug_frame']['data'],

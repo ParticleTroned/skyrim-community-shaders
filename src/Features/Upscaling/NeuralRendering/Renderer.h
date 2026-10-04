@@ -3,9 +3,9 @@
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
 #include "CharacterMultiRoi.h"
+#include "RoiExecutionMode.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "LifetimeDiagnostics.h"
-#	include <nlohmann/json_fwd.hpp>
 #endif
 #include "PipelinePolicy.h"
 #include "Runtime.h"
@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <d3d11.h>
 #include <limits>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
 #include <wrl/client.h>
@@ -188,6 +189,7 @@ namespace NeuralRendering
 
 	struct RendererApplyArgs
 	{
+		RoiExecutionMode roiExecutionMode = RoiExecutionMode::AutomaticSingle;
 		ID3D11Device* device = nullptr;
 		ID3D11DeviceContext* context = nullptr;
 		std::uint32_t featureSlot = 0;
@@ -298,6 +300,8 @@ namespace NeuralRendering
 		void ResetShaderCache();
 
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;
+		/** Selected and actual kernel backend with a visible reason for safe fallback. */
+		[[nodiscard]] nlohmann::json GetKernelBatchStatus() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Retains the bounded opt-in native lifetime history, including its first failure. */
 		[[nodiscard]] LifetimeSnapshot GetLifetimeDiagnostics() const;
@@ -305,6 +309,8 @@ namespace NeuralRendering
 		[[nodiscard]] nlohmann::json GetSourceTransportDiagnostics() const;
 		/** Session-only measured-plan control; no file I/O, GPU work or production profile adoption. */
 		[[nodiscard]] nlohmann::json MeasuredPlanControl(const nlohmann::json& a_request);
+		/** Session-only kernel batching controls, serialized at the completed frame boundary. */
+		[[nodiscard]] nlohmann::json KernelBatchControl(const nlohmann::json& a_request);
 #endif
 		[[nodiscard]] bool IsFailureLatched() const;
 		[[nodiscard]] bool IsQuarantined() const;

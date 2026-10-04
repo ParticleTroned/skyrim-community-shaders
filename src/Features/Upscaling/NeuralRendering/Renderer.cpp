@@ -4,6 +4,7 @@
 #include "CapacityFallback.h"
 #include "ColorPipeline.h"
 #include "D3D12Interop.h"
+#include "ExperimentalKernelBatch.h"
 #include "PipelinePolicy.h"
 #include "SourceTransport.h"
 #include "Utils/D3D.h"
@@ -80,13 +81,14 @@ namespace NeuralRendering
 			std::shared_ptr<ExecutionEvidence> evidence;
 			const RendererStage& stage;
 			bool succeeded = false;
+			std::optional<RendererStage> failureOverride;
 			~ExecutionCompletionGuard()
 			{
 				if (evidence)
 					evidence->Update([&](auto& snapshot) {
 						snapshot.finished = true;
 						snapshot.succeeded = succeeded;
-						snapshot.failureStage = succeeded ? 0u : static_cast<std::uint32_t>(stage);
+						snapshot.failureStage = succeeded ? 0u : static_cast<std::uint32_t>(failureOverride.value_or(stage));
 					});
 			}
 		};
@@ -494,18 +496,27 @@ namespace NeuralRendering
 		struct RecordingGuard
 		{
 			explicit RecordingGuard(D3D12Interop& a_interop) : interop(a_interop) {}
+			bool Abort()
+			{
+				const bool aborted = interop.AbortD3D12();
+				active = interop.IsRecording();
+				if (aborted && kernelBatch)
+					kernelBatch->Aborted();
+				return aborted;
+			}
 			~RecordingGuard() noexcept
 			{
 				if (!active)
 					return;
 				try {
-					(void)interop.AbortD3D12();
+					(void)Abort();
 				} catch (...) {
 					// The outer renderer boundary quarantines unexpected unwind paths.
 				}
 			}
 
 			D3D12Interop& interop;
+			ExperimentalKernelBatch* kernelBatch = nullptr;
 			bool active = true;
 		};
 
@@ -856,7 +867,6 @@ namespace NeuralRendering
 		LifetimeDiagnostics lifetimeDiagnostics_;
 		LifetimeRecord* activeLifetime_ = nullptr;
 		std::uint64_t backendSerial_ = 0, resourceSerial_ = 0;
-
 		struct LifetimeGuard
 		{
 			State& owner;
@@ -886,6 +896,16 @@ namespace NeuralRendering
 			}
 		};
 #endif
+		std::unique_ptr<ExperimentalKernelBatch> kernelBatch_;
+		std::optional<ExperimentalKernelBatch::Mode> kernelBatchMode_;
+		std::filesystem::path kernelBatchManifest_;
+		RoiExecutionMode roiExecutionMode_ = RoiExecutionMode::AutomaticSingle;
+		bool kernelBatchOverride_ = false, kernelInspectUnqualified_ = false;
+		bool kernelBatchApplied_ = false;
+		bool kernelBatchFallbackLatched_ = false;
+		ExperimentalKernelBatch::Status kernelBatchRejection_{};
+		std::string kernelBatchFrameReason_ = "off";
+		nlohmann::json KernelBatchJsonLocked() const;
 
 	private:
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -905,7 +925,7 @@ namespace NeuralRendering
 		bool ValidateD3D12FormatsLocked(
 			const ValidatedResources& a_resources,
 			std::string& a_detail) const;
-		bool EnsureBackendLocked(const RendererApplyArgs& a_args, const std::shared_ptr<ExecutionEvidence>& a_evidence);
+		bool EnsureBackendLocked(const RendererApplyArgs& a_args, const std::shared_ptr<ExecutionEvidence>& a_evidence, bool a_batchCandidate);
 		bool EnsureSlotLocked(
 			std::uint32_t a_slot,
 			const ValidatedResources& a_resources,
@@ -1696,6 +1716,12 @@ namespace NeuralRendering
 			return failed;
 		}
 
+		if (kernelBatch_) {
+			if (!kernelBatch_->Shutdown(true))
+				return FailLocked(RendererStage::RuntimeReset, E_FAIL,
+					"kernel experiment ownership could not retire after GPU idle",
+					Runtime::kFeatureSlotCount, true, true, a_countApplyFailure);
+		}
 		auto& runtime = Runtime::Instance();
 		if (runtimeReady_ && !runtime.ResetFeatures()) {
 			Increment(snapshot_.counters.resetFailures);
@@ -1790,6 +1816,8 @@ namespace NeuralRendering
 
 	void Renderer::State::AbandonRuntimeOwnershipNoexcept() noexcept
 	{
+		if (kernelBatch_)
+			(void)kernelBatch_->Shutdown(false);
 		if (!runtimeTouched_)
 			return;
 		try {
@@ -1854,16 +1882,47 @@ namespace NeuralRendering
 		}
 	}
 
-	bool Renderer::State::EnsureBackendLocked(const RendererApplyArgs& a_args, const std::shared_ptr<ExecutionEvidence>& a_evidence)
+	bool Renderer::State::EnsureBackendLocked(const RendererApplyArgs& a_args, const std::shared_ptr<ExecutionEvidence>& a_evidence, bool a_batchCandidate)
 	{
+		const auto selected = a_args.roiExecutionMode;
+		const auto desired = kernelBatchOverride_ ? kernelBatchMode_ :
+		                     selected == RoiExecutionMode::Batched ?
+		                                            std::optional(ExperimentalKernelBatch::Mode::SharedN2) :
+		                                            std::nullopt;
+		roiExecutionMode_ = selected;
+		const bool methodChanged = desired != kernelBatchMode_;
+		if (methodChanged) {
+			kernelBatchFallbackLatched_ = false;
+			kernelBatchRejection_ = {};
+		}
 		const bool backendIdentityChanged = device_ &&
 		                                    (!SameIdentity(device_.Get(), a_args.device) ||
 												!SameIdentity(context_.Get(), a_args.context));
-		if (backendIdentityChanged) {
+		const auto batchStatus = kernelBatch_ ? kernelBatch_->GetStatus() : ExperimentalKernelBatch::Status{};
+		const bool retireAdapter = kernelBatch_ && (methodChanged || backendIdentityChanged || !a_batchCandidate ||
+													   kernelBatchFallbackLatched_ || !batchStatus.initialized || batchStatus.epochStale);
+		const bool attach = desired && a_batchCandidate && !kernelBatchFallbackLatched_ && (!kernelBatch_ || retireAdapter);
+		if (methodChanged || backendIdentityChanged || retireAdapter || attach) {
 			ExecutionCpuTimer retirementTimer(a_evidence, &ExecutionSnapshot::resourceRetirementCpuMicroseconds);
 			if (!TeardownBackendLocked(false, false, true, a_evidence))
 				return false;
+			if (kernelBatch_ && !methodChanged)
+				kernelBatchRejection_ = kernelBatch_->GetStatus();
+			kernelBatch_.reset();
+			if (attach) {
+				kernelBatchRejection_ = {};
+				kernelBatch_ = std::make_unique<ExperimentalKernelBatch>();
+			}
 		}
+		kernelBatchMode_ = desired;
+		if (methodChanged || attach) {
+			const bool privateBatch = desired == ExperimentalKernelBatch::Mode::SharedN2 || desired == ExperimentalKernelBatch::Mode::ClonedN2;
+			kernelBatchManifest_ = privateBatch ? std::filesystem::path("Data/Shaders/Upscaling/NeuralRendering/KernelBatch") /
+			                                          (desired == ExperimentalKernelBatch::Mode::ClonedN2 ? "cloned-n2.json" : "shared-n2.json") :
+			                                      std::filesystem::path{};
+		}
+		if (!desired)
+			kernelBatchFrameReason_ = "not_selected";
 
 		if (runtimeReady_ && interop_.IsInitialized())
 			return true;
@@ -1946,6 +2005,18 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		++backendSerial_;
 #endif
+		if (kernelBatch_ && kernelBatchMode_ &&
+			!kernelBatch_->Initialize(interop_.Device(), runtime.Path(), kernelBatchManifest_, *kernelBatchMode_)) {
+			const auto status = kernelBatch_->GetStatus();
+			if (!status.retirementProven)
+				return FailLocked(RendererStage::RuntimeInitialization, E_FAIL,
+					"kernel hook restoration could not be proven after initialization failed",
+					a_args.featureSlot, true, true);
+			kernelBatchFallbackLatched_ = true;
+			kernelBatchRejection_ = status;
+			kernelBatchFrameReason_ = status.reason;
+			kernelBatch_.reset();
+		}
 		Increment(snapshot_.counters.runtimeInitializations);
 		snapshot_.lastCompletedStage = RendererStage::RuntimeInitialization;
 		RefreshRuntimeTelemetryLocked();
@@ -2002,6 +2073,11 @@ namespace NeuralRendering
 					true,
 					true);
 			}
+			if (kernelBatch_ && !kernelBatch_->Shutdown(true))
+				return FailLocked(RendererStage::ResourceRetirement, E_FAIL,
+					"kernel experiment ownership could not retire before feature recreation", a_slot, true, true);
+			if (kernelBatchMode_)
+				kernelBatchFrameReason_ = "feature_recreated_reconfigure_required";
 			if (!Runtime::Instance().ResetFeature(a_slot)) {
 				return FailLocked(
 					RendererStage::ResourceRetirement,
@@ -2760,8 +2836,11 @@ namespace NeuralRendering
 			RendererApplyOutcome& logical;
 			const RendererApplyOutcome& physical;
 			const std::array<std::uint32_t, 4>& required;
+			bool active = true;
 			~OutcomeGuard() noexcept
 			{
+				if (!active)
+					return;
 				logical.evaluationAttemptedFeatureSlotMask = AggregateRegionEvaluationMask(
 					physical.evaluationAttemptedFeatureSlotMask, required, false);
 				logical.evaluationSucceededFeatureSlotMask = AggregateRegionEvaluationMask(
@@ -3032,7 +3111,28 @@ namespace NeuralRendering
 
 		activeStage_ = RendererStage::DeviceCompatibility;
 		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
-		if (!EnsureBackendLocked(a_args.front(), execution))
+		std::optional<ExperimentalKernelBatch::Frame> kernelFrame;
+		std::string_view kernelAdmissionReason = "requires_four_evaluations_and_native_inference";
+		if ((kernelBatchOverride_ || a_args.front().roiExecutionMode == RoiExecutionMode::Batched) &&
+			a_args.size() == 4 && !colorConfiguration_.experiments.transportBypass) {
+			ExperimentalKernelBatch::Frame frame;
+			frame.sequence = a_args.front().frameId;
+			frame.style = a_args.front().tuning.style;
+			frame.useAutoMask = a_args.front().tuning.useAutoMask;
+			frame.uiCorrection = a_args.front().tuning.uiCorrection;
+			frame.singleSubrectScale = a_args.front().tuning.singleSubrectScale;
+			frame.inspectUnqualifiedPipeline = kernelInspectUnqualified_;
+			for (std::size_t index = 0; index < frame.regions.size(); ++index) {
+				const auto& args = a_args[index];
+				frame.regions[index] = { (args.featureSlot % kLogicalFeatureSlotCount) % kEyeCount,
+					args.featureSlot / kLogicalFeatureSlotCount, args.featureSlot,
+					resources[index].nativeLayout, args.reset, args.controlMask != nullptr };
+			}
+			kernelAdmissionReason = ExperimentalKernelBatch::AdmissionViolation(frame);
+			if (kernelAdmissionReason.empty())
+				kernelFrame = frame;
+		}
+		if (!EnsureBackendLocked(a_args.front(), execution, kernelFrame.has_value()))
 			return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (lifetime.enabled)
@@ -3290,8 +3390,7 @@ namespace NeuralRendering
 				!add(slots[index]->motionVectors.resource12.Get(), inputState) ||
 				(a_args[index].controlMask && !add(slots[index]->controlMask.resource12.Get(), inputState)) ||
 				!add(slots[index]->output.resource12.Get(), colorConfiguration_.experiments.transportBypass ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_UNORDERED_ACCESS)) {
-				const bool aborted = interop_.AbortD3D12();
-				recordingGuard.active = interop_.IsRecording();
+				const bool aborted = recordingGuard.Abort();
 				return FailLocked(RendererStage::CommandBegin, E_INVALIDARG,
 					"shared resources require conflicting states or exceed the batch capacity", a_args[index].featureSlot, true, !aborted);
 			}
@@ -3314,8 +3413,7 @@ namespace NeuralRendering
 		                               interop_.RecordTransportSubmission(timing) :
 		                               interop_.BeginFeatureTiming(commandList, timing);
 		if (!timingStarted) {
-			const bool aborted = interop_.AbortD3D12();
-			recordingGuard.active = interop_.IsRecording();
+			const bool aborted = recordingGuard.Abort();
 			return FailLocked(
 				RendererStage::CommandBegin,
 				aborted ? E_FAIL : interop_.LastError(),
@@ -3377,7 +3475,51 @@ namespace NeuralRendering
 			}
 		}
 
+		bool suppressEvaluationTiming = false;
+		ExperimentalKernelBatch* activeKernelBatch = nullptr;
+		kernelBatchApplied_ = false;
+		if (kernelBatch_ && kernelBatchMode_) {
+			if (kernelFrame && kernelBatch_->GetStatus().initialized) {
+				for (std::size_t index = 0; index < kernelFrame->regions.size(); ++index)
+					kernelFrame->regions[index].reset |= forcedHistoryReset[index];
+				recordingGuard.kernelBatch = kernelBatch_.get();
+				if (kernelBatch_->BeginFrame(commandList, interop_.GetLifetimeSnapshot(), *kernelFrame)) {
+					activeKernelBatch = kernelBatch_.get();
+					suppressEvaluationTiming = true;
+					kernelBatchFrameReason_ = "admitted";
+				} else {
+					const auto reason = kernelBatch_->GetStatus().reason;
+					const bool aborted = recordingGuard.Abort();
+					return FailLocked(RendererStage::FeatureEvaluate, E_FAIL,
+						std::format("kernel frame ownership admission failed: {}", reason),
+						a_args.front().featureSlot, true, !aborted);
+				}
+			}
+		} else if (kernelBatchMode_ && !kernelBatchFallbackLatched_) {
+			kernelBatchFrameReason_ = std::string(kernelAdmissionReason);
+		}
 		activeStage_ = RendererStage::FeatureEvaluate;
+		const auto retryIndependent = [&](std::string reason) {
+			if (!recordingGuard.Abort())
+				return FailLocked(RendererStage::FeatureEvaluate, E_FAIL,
+					"kernel admission failed and the unsubmitted list could not be aborted", a_args.front().featureSlot, true, true);
+			kernelBatchFallbackLatched_ = true;
+			kernelBatchApplied_ = false;
+			kernelBatchRejection_ = activeKernelBatch->GetStatus();
+			kernelBatchFrameReason_ = std::move(reason);
+			executionCompletion.failureOverride = RendererStage::FeatureEvaluate;
+			if (!TeardownBackendLocked(false, false, false, execution))
+				return false;
+			kernelBatchRejection_ = kernelBatch_->GetStatus();
+			kernelBatch_.reset();
+			outcomeGuard.active = false;
+			return ApplyRegionBatchLocked(a_logicalArgs, a_logicalOutcome
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				,
+				a_shared
+#endif
+			);
+		};
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			auto& slot = *slots[index];
 			const auto& args = a_args[index];
@@ -3438,8 +3580,13 @@ namespace NeuralRendering
 			});
 			if (execution)
 				execution->Update([&](auto& evidence) { evidence.regions[index].effectiveReset = effectiveReset; });
-			const bool evaluated = Runtime::Instance().Execute(
-				commandList,
+			ID3D12GraphicsCommandList* evaluationList = commandList;
+			if (activeKernelBatch)
+				evaluationList = activeKernelBatch->BeginEvaluation(
+					(args.featureSlot % kLogicalFeatureSlotCount) % kEyeCount,
+					args.featureSlot / kLogicalFeatureSlotCount);
+			const bool nativeEvaluated = Runtime::Instance().Execute(
+				evaluationList,
 				args.featureSlot,
 				slot.color.resource12.Get(),
 				slot.depth.resource12.Get(),
@@ -3455,16 +3602,24 @@ namespace NeuralRendering
 #else
 				execution ? &runtimeEvidence : nullptr,
 #endif
-				execution ? &interop_ : nullptr,
-				static_cast<std::uint32_t>(index));
+				execution && !suppressEvaluationTiming ? &interop_ : nullptr,
+				static_cast<std::uint32_t>(index), activeKernelBatch);
+			const bool evaluationRecorded = !activeKernelBatch || activeKernelBatch->EndEvaluation();
 			if (evaluationAttempted) {
 				Increment(snapshot_.counters.featureEvaluations);
 				a_outcome.evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
 			}
-			if (!evaluated) {
+			if (nativeEvaluated && !evaluationRecorded) {
+				const auto status = activeKernelBatch->GetStatus();
+				if (status.canFallback)
+					return retryIndependent(status.reason);
+				const bool aborted = recordingGuard.Abort();
+				return FailLocked(RendererStage::FeatureEvaluate, E_FAIL,
+					std::format("kernel evaluation failed: {}", status.reason), args.featureSlot, true, !aborted);
+			}
+			if (!nativeEvaluated) {
 				const std::string runtimeDetail = Runtime::Instance().Detail();
-				const bool aborted = interop_.AbortD3D12();
-				recordingGuard.active = interop_.IsRecording();
+				const bool aborted = recordingGuard.Abort();
 				return FailLocked(
 					RendererStage::FeatureEvaluate,
 					aborted ? E_FAIL : interop_.LastError(),
@@ -3499,9 +3654,17 @@ namespace NeuralRendering
 		}
 		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;
 
+		if (activeKernelBatch && !activeKernelBatch->FinishFrame()) {
+			const auto status = activeKernelBatch->GetStatus();
+			if (status.canFallback)
+				return retryIndependent(status.reason);
+			const bool aborted = recordingGuard.Abort();
+			return FailLocked(RendererStage::FeatureEvaluate, E_FAIL,
+				std::format("kernel batch submission failed: {}", status.reason), a_args.front().featureSlot, true, !aborted);
+		}
+
 		if (!colorConfiguration_.experiments.transportBypass && !interop_.EndFeatureTiming(commandList)) {
-			const bool aborted = interop_.AbortD3D12();
-			recordingGuard.active = interop_.IsRecording();
+			const bool aborted = recordingGuard.Abort();
 			return FailLocked(
 				RendererStage::CommandEnd,
 				aborted ? E_FAIL : interop_.LastError(),
@@ -3522,6 +3685,20 @@ namespace NeuralRendering
 				true);
 		}
 		recordingGuard.active = false;
+		if (activeKernelBatch && !activeKernelBatch->Submitted(interop_.GetLifetimeSnapshot()))
+			return FailLocked(RendererStage::CommandEnd, E_FAIL,
+				"kernel batch submission fence could not be proven; external output was withheld",
+				a_args.front().featureSlot, true, true);
+		if (activeKernelBatch) {
+			const auto status = activeKernelBatch->GetStatus();
+			const bool privateBatch = kernelBatchMode_ == ExperimentalKernelBatch::Mode::SharedN2 || kernelBatchMode_ == ExperimentalKernelBatch::Mode::ClonedN2;
+			kernelBatchApplied_ = !status.warmup && privateBatch;
+			if (privateBatch && status.warmup && !status.graphMatchesQualified) {
+				kernelBatchFallbackLatched_ = true;
+				kernelBatchRejection_ = status;
+				kernelBatchFrameReason_ = status.reason;
+			}
+		}
 		snapshot_.lastCompletedStage = RendererStage::CommandEnd;
 
 		activeStage_ = RendererStage::OutputCommit;
@@ -3742,7 +3919,12 @@ namespace NeuralRendering
 
 	bool Renderer::State::ResetLocked(bool a_resetShader, bool a_destruction)
 	{
-		return TeardownBackendLocked(a_resetShader, a_destruction, false);
+		if (!TeardownBackendLocked(a_resetShader, a_destruction, false))
+			return false;
+		kernelBatchFallbackLatched_ = false;
+		kernelBatchRejection_ = {};
+		kernelBatchApplied_ = false;
+		return true;
 	}
 
 	void Renderer::State::ShutdownForDestruction() noexcept
@@ -4059,7 +4241,76 @@ namespace NeuralRendering
 		return state_->SnapshotLocked();
 	}
 
+	nlohmann::json Renderer::State::KernelBatchJsonLocked() const
+	{
+		using Json = nlohmann::json;
+		const auto status = kernelBatch_ ? kernelBatch_->GetStatus() : kernelBatchRejection_;
+		return { { "selectedMode", RoiExecutionModeName(roiExecutionMode_) },
+			{ "effectiveMode", kernelBatchApplied_ ? "batched" : roiExecutionMode_ == RoiExecutionMode::AutomaticSingle ? "automatic_single" :
+																														  "independent" },
+			{ "reason", status.reason.empty() ? kernelBatchFrameReason_ : status.reason },
+			{ "backend", kernelBatchMode_ ? ExperimentalKernelBatch::ModeName(*kernelBatchMode_) : "original" },
+			{ "initialized", status.initialized }, { "failed", status.failed }, { "epochStale", status.epochStale },
+			{ "warmup", status.warmup }, { "frames", status.frames }, { "warmupFrames", status.warmupFrames },
+			{ "batchedFrames", status.batchedFrames }, { "logicalLaunches", status.logicalLaunches },
+			{ "physicalLaunches", status.physicalLaunches }, { "privateLaunches", status.privateLaunches },
+			{ "pendingFrames", status.pendingFrames }, { "retirementProven", status.retirementProven },
+			{ "graphMatchesQualified", status.graphMatchesQualified }, { "graphLaunches", status.graphLaunches },
+			{ "graphIdentities", status.graphIdentities }, { "inspection", status.inspection },
+			{ "devbenchOverride", kernelBatchOverride_ }, { "inspectUnqualifiedPipeline", kernelInspectUnqualified_ } };
+	}
+
+	nlohmann::json Renderer::GetKernelBatchStatus() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->KernelBatchJsonLocked();
+	}
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	nlohmann::json Renderer::KernelBatchControl(const nlohmann::json& request)
+	{
+		using Json = nlohmann::json;
+		std::unique_lock lock(state_->mutex_, std::try_to_lock);
+		if (!lock.owns_lock())
+			return { { "ok", false }, { "errorCode", "renderer_busy" }, { "mutationApplied", false } };
+		const auto action = request.at("action").get<std::string>();
+		if (action == "status")
+			return { { "ok", true }, { "mutationApplied", false }, { "status", state_->KernelBatchJsonLocked() } };
+		if (action != "configure")
+			return { { "ok", false }, { "errorCode", "kernel_batch_invalid_action" }, { "mutationApplied", false } };
+		const auto name = request.at("mode").get<std::string>();
+		std::optional<ExperimentalKernelBatch::Mode> mode;
+		for (auto candidate : { ExperimentalKernelBatch::Mode::Original, ExperimentalKernelBatch::Mode::LayerControl,
+				 ExperimentalKernelBatch::Mode::ClonedN2, ExperimentalKernelBatch::Mode::SharedN2 })
+			if (name == ExperimentalKernelBatch::ModeName(candidate))
+				mode = candidate;
+		if (!mode && name != "user_choice")
+			return { { "ok", false }, { "errorCode", "kernel_batch_invalid_mode" }, { "mutationApplied", false } };
+		const bool inspect = request.value("inspectUnqualifiedPipeline", false);
+		if (inspect && mode != ExperimentalKernelBatch::Mode::Original)
+			return { { "ok", false }, { "errorCode", "kernel_inspection_requires_original_mode" }, { "mutationApplied", false } };
+		const bool batch = mode == ExperimentalKernelBatch::Mode::ClonedN2 || mode == ExperimentalKernelBatch::Mode::SharedN2;
+		const auto manifest = batch ? std::filesystem::path("Data/Shaders/Upscaling/NeuralRendering/KernelBatch") /
+		                                  (mode == ExperimentalKernelBatch::Mode::ClonedN2 ? "cloned-n2.json" : "shared-n2.json") :
+		                              std::filesystem::path{};
+		if (batch && !std::filesystem::is_regular_file(manifest))
+			return { { "ok", false }, { "errorCode", "kernel_catalog_missing" }, { "mutationApplied", false } };
+		if (!state_->TeardownBackendLocked(false, false, false))
+			return { { "ok", false }, { "errorCode", "kernel_retirement_failed" }, { "mutationApplied", true }, { "status", state_->KernelBatchJsonLocked() } };
+		state_->kernelBatch_.reset();
+		state_->kernelBatchMode_ = mode;
+		state_->kernelBatchManifest_ = manifest;
+		state_->kernelBatchOverride_ = mode.has_value();
+		state_->kernelInspectUnqualified_ = inspect;
+		state_->kernelBatchApplied_ = false;
+		state_->kernelBatchFallbackLatched_ = false;
+		state_->kernelBatchRejection_ = {};
+		state_->kernelBatchFrameReason_ = "awaiting_eligible_frame";
+		if (mode)
+			state_->kernelBatch_ = std::make_unique<ExperimentalKernelBatch>();
+		return { { "ok", true }, { "mutationApplied", true }, { "status", state_->KernelBatchJsonLocked() } };
+	}
+
 	nlohmann::json Renderer::GetSourceTransportDiagnostics() const
 	{
 		using json = nlohmann::json;

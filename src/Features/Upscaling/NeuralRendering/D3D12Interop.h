@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExecutionEvidence.h"
+#include "SubmissionFenceSnapshot.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "LifetimeDiagnostics.h"
 #endif
@@ -125,9 +126,9 @@ namespace NeuralRendering
 		[[nodiscard]] HRESULT LastError() const;
 		[[nodiscard]] std::string LastOperation() const;
 		[[nodiscard]] D3D12InteropTelemetry GetTelemetry();
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Reads queue identities and completion without issuing commands, flushing or waiting. */
 		[[nodiscard]] LifetimeFenceSnapshot GetLifetimeSnapshot() const;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Copies lease identities for explicit accounting without changing ownership. */
 		[[nodiscard]] std::vector<SharedTexture> GetResourceLeases() const;
 #endif

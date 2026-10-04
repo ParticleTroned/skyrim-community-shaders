@@ -26,6 +26,15 @@ int main()
 	};
 	for (std::uint32_t index = 0; index < 3; ++index) {
 		const auto mode = static_cast<NeuralRendering::RenderingMode>(index);
+		for (std::uint32_t roi = 0; roi < 3; ++roi) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			const auto method = static_cast<NeuralRendering::RoiExecutionMode>(roi);
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" },
+															 { "mode", index }, { "characterRoiMethod", NeuralRendering::RoiExecutionModeName(method) } },
+				request, error));
+			require(request.characterRoiMethod == method && request.HasCharacterControls());
+		}
 		for (const auto& value : { json(index), json(NeuralRendering::GetRenderingModeName(mode)) }) {
 			NeuralRenderingConfigurationRequest request;
 			json error;
@@ -81,6 +90,24 @@ int main()
 	}
 	NeuralRenderingConfigurationRequest request;
 	json error;
+	for (const auto& invalid : { json(0), json(true), json(nullptr), json::array(), json("unknown") }) {
+		request = {};
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "characterRoiMethod", invalid } }, request, error));
+		require(error.at("field") == "characterRoiMethod");
+	}
+	for (const bool legacy : { false, true }) {
+		request = {};
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" },
+														  { "characterRoiMethod", "batched" }, { "experimentalMultiRoi", legacy } },
+			request, error));
+		require(error.at("errorCode") == "nr_character_roi_method_ambiguous");
+		request = {};
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" },
+														 { "experimentalMultiRoi", legacy } },
+					request, error) &&
+				request.experimentalMultiRoi == legacy);
+	}
+	request = {};
 	require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "fovOnly", false } }, request, error));
 	require(request.HasAnyControl() && request.fovOnly.has_value());
 	for (const bool enabled : { false, true }) {

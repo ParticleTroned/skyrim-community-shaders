@@ -276,6 +276,43 @@ namespace
 			{ "hashVerified", false }, { "note", "Presence only. Run tools/nr-color/verify_assets.py against staged/deployed Data for exact source hash parity." } };
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	void KernelBatchHandler(void*, const char* arguments, void* sink, DevBenchAPI::WriteFn write)
+	{
+		if (!write)
+			return;
+		Json response;
+		bool entered = false;
+		try {
+			const auto request = Json::parse(arguments ? arguments : "{}");
+			const auto action = request.at("action").get<std::string>();
+			if (action == "configure")
+				Keys(request, { "action", "mode", "inspectUnqualifiedPipeline" });
+			else
+				Keys(request, { "action" });
+			entered = true;
+			response = VRRenderScaleDevBenchBridge::RunRendererCommand([request]() {
+				return NeuralRendering::Renderer::Instance().KernelBatchControl(request);
+			});
+		} catch (const std::exception& error) {
+			response = { { "ok", false }, { "errorCode", "kernel_batch_request_failed" }, { "error", error.what() }, { "mutationApplied", entered ? Json(nullptr) : Json(false) } };
+		} catch (...) {
+			response = { { "ok", false }, { "errorCode", "kernel_batch_handler_failed" }, { "mutationApplied", entered ? Json(nullptr) : Json(false) } };
+		}
+		try {
+			BuildProvenance::AttachProducer(response);
+			write(sink, response.dump().c_str());
+		} catch (...) {
+			write(sink, R"({"ok":false,"errorCode":"kernel_batch_serialization_failed","mutationApplied":null})");
+		}
+	}
+	constexpr auto kernelBatchDescriptor = R"json({
+  "description":"NR kernel batching diagnostics and matched controls. The normal Info-level Character ROI Method selector is available in pipelines A/B/C: automatic single ROI, independent multi-ROI and batched multi-ROI. This tool reserves configure at the completed render-frame boundary and retires the old feature epoch with the existing bounded GPU idle wait. user_choice releases the session override; original preserves all provider calls, layer-control retains one-region stage scheduling, clonedN2 uses the qualified cloned-body catalog, and sharedN2 uses indexed shared-body kernels. Three successfully submitted original warmup frames precede private work. Actual graph, parameter packet, launch shape, writable ownership, provider/GPU and catalog identity checks remain mandatory before private submission. Incompatible inputs retain original independent rendering with a visible reason. Configuration acceptance is not proof of batching or speed. Inspect status logicalLaunches, physicalLaunches, privateLaunches, effectiveMode, reason, warmup and retirementProven. Per-evaluation GPU timers are absent during deferred recording; the outer native timer includes actual work. inspectUnqualifiedPipeline=true requires original mode and records A/B original-kernel behavior without dispatching guessed private kernels. No production configuration or camera changes. Concurrent or expired unclaimed commands reject before mutation; admitted commands return their actual result. Unexpected failure/transport timeout may be ambiguous; inspect status before retrying.",
+  "inputSchema":{"type":"object","additionalProperties":false,"required":["action"],"properties":{
+    "action":{"enum":["status","configure"]},"mode":{"enum":["user_choice","original","layer-control","clonedN2","sharedN2"]},
+    "inspectUnqualifiedPipeline":{"type":"boolean"}},
+    "allOf":[{"if":{"properties":{"action":{"const":"configure"}}},"then":{"required":["mode"]}}]}
+})json";
+
 	void MeasuredPlanHandler(void*, const char* arguments, void* sink, DevBenchAPI::WriteFn write)
 	{
 		if (!write)
@@ -987,6 +1024,7 @@ void NeuralRenderingFeature::DataLoaded()
 		static const std::string descriptor = Descriptor().dump();
 		host->RegisterTool("communityshaders.nr_color", descriptor.c_str(), &Handler, nullptr);
 		host->RegisterTool("communityshaders.nr_cost", measuredPlanDescriptor, &MeasuredPlanHandler, nullptr);
+		host->RegisterTool("communityshaders.nr_kernel", kernelBatchDescriptor, &KernelBatchHandler, nullptr);
 		logger::info("[NRColor] Registered communityshaders.nr_color v3");
 	}
 #endif

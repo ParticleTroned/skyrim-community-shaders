@@ -5122,6 +5122,8 @@ namespace
 		policy.experimentalRegionLimit = a_settings.neuralCharacterRegionLimit;
 #endif
 		NeuralRendering::SanitizeCharacterSettings(policy);
+		policy.roiExecutionMode = static_cast<std::uint32_t>(NeuralRendering::GetUpscalingRoiExecutionMode(a_settings));
+		policy.multiRoi = policy.roiExecutionMode != static_cast<std::uint32_t>(NeuralRendering::RoiExecutionMode::AutomaticSingle);
 		policy.enabled = policy.enabled && a_settings.neuralRenderingEnabled;
 		const auto frame = a_sourceFrame != std::numeric_limits<std::uint32_t>::max() ?
 		                       a_sourceFrame :
@@ -5226,6 +5228,7 @@ namespace
 		a_args.roi.reset();
 		a_args.characterVisualIsolation = false;
 		const auto characterSettings = BuildCharacterSettings(a_settings, a_sourceWorldFrame);
+		a_args.roiExecutionMode = NeuralRendering::ClampRoiExecutionMode(characterSettings.roiExecutionMode);
 		if (!characterSettings.enabled || !UsesCharacterVisualIsolation(a_settings)) {
 			a_args.tuning.useAutoMask = true;
 			return true;
@@ -5442,6 +5445,7 @@ namespace
 		settings.neuralCharacterAdaptiveRoiSelectionEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
 		settings.neuralCharacterMultiRoiEnabled = false;
+		settings.neuralCharacterRoiExecutionMode = static_cast<uint>(NeuralRendering::RoiExecutionMode::AutomaticSingle);
 		settings.neuralCharacterMultiRoiSavingsGateEnabled = true;
 		settings.neuralCharacterMinimumFacePixelSize =
 			NeuralRendering::CharacterPolicy::kDefaultMinimumFacePixelSize;
@@ -5512,6 +5516,7 @@ namespace
 		o_json.erase("neuralCharacterMaximumDistanceMeters");
 		o_json.erase("neuralCharacterAdaptiveRoiSelectionEnabled");
 		o_json.erase("neuralCharacterMultiRoiEnabled");
+		o_json.erase("neuralCharacterRoiExecutionMode");
 		o_json.erase("neuralCharacterMultiRoiSavingsGateEnabled");
 		o_json.erase("neuralCharacterMinimumFacePixelSize");
 		o_json.erase("neuralCharacterRoiMargin");
@@ -6679,6 +6684,7 @@ namespace
 			addFloat(a_settings.neuralCharacterMaximumDistanceMeters);
 			add(a_settings.neuralCharacterAdaptiveRoiSelectionEnabled);
 			add(a_settings.neuralCharacterMultiRoiEnabled);
+			add(a_settings.neuralCharacterRoiExecutionMode);
 			add(a_settings.neuralCharacterMultiRoiSavingsGateEnabled);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			add(a_settings.neuralCharacterCurrentContextEnabled);
@@ -18435,22 +18441,35 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 
 			if (settings.neuralCharacterRenderingEnabled) {
 				ImGui::SeparatorText("Character selection");
-				const bool characterOverrideActive = settings.neuralCharacterMultiRoiEnabled ||
-				                                     settings.neuralCharacterDebugView != static_cast<uint>(NeuralRendering::CharacterDebugView::Off) ||
+				static constexpr const char* roiMethods[]{ "Automatic single ROI", "Independent multi-ROI", "Batched multi-ROI" };
+				int roiMethod = static_cast<int>(NeuralRendering::GetUpscalingRoiExecutionMode(settings));
+				if (ImGui::Combo("ROI method", &roiMethod, roiMethods, IM_ARRAYSIZE(roiMethods))) {
+					settings.neuralCharacterRoiExecutionMode = static_cast<uint>(roiMethod);
+					settings.neuralCharacterMultiRoiEnabled = false;
+				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Automatic chooses the smallest supported single rectangle enclosing selected characters and their required context. Independent can split selected characters into separate regions. Batched combines compatible region work while keeping each region's input context and output ownership separate; unsupported configurations use independent execution. Performance and image quality depend on the active configuration.");
+				if (NeuralRendering::GetUpscalingRoiExecutionMode(settings) == NeuralRendering::RoiExecutionMode::Batched) {
+					const auto batchStatus = NeuralRendering::Renderer::Instance().GetKernelBatchStatus();
+					const auto effective = batchStatus.value("effectiveMode", std::string("pending"));
+					const auto reason = batchStatus.value("reason", std::string{});
+					ImGui::TextWrapped("ROI execution: %s", effective.c_str());
+					if (!reason.empty())
+						ImGui::TextWrapped("%s", reason.c_str());
+				}
+				const bool characterOverrideActive = settings.neuralCharacterDebugView != static_cast<uint>(NeuralRendering::CharacterDebugView::Off) ||
 				                                     settings.neuralCharacterMaskTestMode != static_cast<uint>(NeuralRendering::CharacterMaskTestMode::Authored) ||
 				                                     !settings.neuralCharacterVisualIsolationEnabled || !settings.neuralCharacterVisibilityDepthTestEnabled;
 				if (!showDiagnostics && characterOverrideActive) {
 					ImGui::TextWrapped("Character experiments are active. Set Log Level to Debug to inspect them.");
 					if (ImGui::Button("Restore normal character rendering")) {
-						settings.neuralCharacterMultiRoiEnabled = false;
-						settings.neuralCharacterMultiRoiSavingsGateEnabled = true;
 						settings.neuralCharacterDebugView = static_cast<uint>(NeuralRendering::CharacterDebugView::Off);
 						settings.neuralCharacterMaskTestMode = static_cast<uint>(NeuralRendering::CharacterMaskTestMode::Authored);
 						settings.neuralCharacterVisualIsolationEnabled = true;
 						settings.neuralCharacterVisibilityDepthTestEnabled = true;
 					}
 					if (auto tooltip = Util::HoverTooltipWrapper())
-						ImGui::TextUnformatted("Clears character debug and forced-mask overrides, disables Multi-ROI, and restores exact character masking and visibility tests. Your category choices and strengths stay unchanged.");
+						ImGui::TextUnformatted("Clears character debug and forced-mask overrides and restores exact character masking and visibility tests. Your ROI method, category choices and strengths stay unchanged.");
 				}
 				drawCharacterCategories();
 
@@ -18491,9 +18510,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 					"%.1f m", ImGuiSliderFlags_AlwaysClamp);
 				if (auto tooltip = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Fades character NR out over the last metre before this distance, then excludes it. 0 m disables distance culling.");
-				if (showDiagnostics && ImGui::TreeNodeEx(
-										   "Character diagnostics and experiments",
-										   ImGuiTreeNodeFlags_SpanAvailWidth)) {
+				if (ImGui::TreeNodeEx("ROI and edge settings", ImGuiTreeNodeFlags_SpanAvailWidth)) {
 					int minimumFacePixels = static_cast<int>(settings.neuralCharacterMinimumFacePixelSize);
 					if (ImGui::SliderInt("Minimum Face Size", &minimumFacePixels,
 							static_cast<int>(NeuralRendering::CharacterPolicy::kMinimumFacePixelSize),
@@ -18501,27 +18518,6 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						settings.neuralCharacterMinimumFacePixelSize = static_cast<uint>(minimumFacePixels);
 					if (auto tooltip = Util::HoverTooltipWrapper())
 						ImGui::TextUnformatted("Excludes actors whose projected face is smaller than this many pixels. Selected actors are retained down to 75% of the threshold to reduce flicker.");
-					ImGui::Checkbox(
-						"Deterministic Mask Composite",
-						&settings.neuralCharacterVisualIsolationEnabled);
-					if (auto tooltip = Util::HoverTooltipWrapper())
-						ImGui::TextUnformatted("Keeps neural edits on the selected face, skin and hair pixels using their strengths. Disable only to diagnose NR across the full region.");
-					{
-						auto guard = Util::DisableGuard(
-							!settings.neuralCharacterVisualIsolationEnabled &&
-							!settings.neuralCharacterMultiRoiEnabled);
-						ImGui::Checkbox(
-							"Experimental Multi-ROI",
-							&settings.neuralCharacterMultiRoiEnabled);
-						if (auto tooltip = Util::HoverTooltipWrapper())
-							ImGui::TextUnformatted("Tries up to two separate character regions per view instead of one enclosing region. May reduce evaluated area but uses extra model instances and VRAM; faster rendering is not guaranteed.");
-					}
-					{
-						auto guard = Util::DisableGuard(!settings.neuralCharacterMultiRoiEnabled);
-						ImGui::Checkbox("Multi-ROI Savings Gate", &settings.neuralCharacterMultiRoiSavingsGateEnabled);
-						if (auto tooltip = Util::HoverTooltipWrapper())
-							ImGui::TextUnformatted("Requires a meaningful area saving before splitting character regions. Off allows any smaller valid split, which may be slower. This session-only option returns to On when settings load.");
-					}
 					ImGui::Checkbox(
 						"Adaptive ROI Performance",
 						&settings.neuralCharacterAdaptiveRoiSelectionEnabled);
@@ -18546,15 +18542,6 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 					}
 					if (auto tooltip = Util::HoverTooltipWrapper())
 						ImGui::TextUnformatted("Keeps a recently eligible actor selected for this many frames after its face falls below the size threshold. Higher values reduce selection flicker; 0 removes the extra hold.");
-
-					ImGui::TextDisabled(
-						"The provider takes one rectangle per evaluation; Multi-ROI uses separate feature instances.");
-
-					ImGui::Checkbox(
-						"Visibility Depth Test",
-						&settings.neuralCharacterVisibilityDepthTestEnabled);
-					if (auto tooltip = Util::HoverTooltipWrapper())
-						ImGui::TextUnformatted("Prevents character NR from showing through later opaque objects. Disable only to diagnose missing character edits; transparent overlays remain approximate.");
 
 					ImGui::Checkbox(
 						"Depth-aware Edge Feather",
@@ -18584,6 +18571,32 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						if (auto tooltip = Util::HoverTooltipWrapper())
 							ImGui::TextUnformatted("Sets how different neighbouring depths may be during edge smoothing. Lower values better separate surfaces; higher values allow smoothing across larger depth differences.");
 					}
+
+					ImGui::TreePop();
+				}
+				if (showDiagnostics && ImGui::TreeNodeEx(
+										   "Character diagnostics and experiments",
+										   ImGuiTreeNodeFlags_SpanAvailWidth)) {
+					ImGui::Checkbox(
+						"Deterministic Mask Composite",
+						&settings.neuralCharacterVisualIsolationEnabled);
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Keeps neural edits on the selected face, skin and hair pixels using their strengths. Disable only to diagnose NR across the full region.");
+					{
+						auto guard = Util::DisableGuard(NeuralRendering::GetUpscalingRoiExecutionMode(settings) == NeuralRendering::RoiExecutionMode::AutomaticSingle);
+						ImGui::Checkbox("Multi-ROI Savings Gate", &settings.neuralCharacterMultiRoiSavingsGateEnabled);
+						if (auto tooltip = Util::HoverTooltipWrapper())
+							ImGui::TextUnformatted("Requires a meaningful area saving before splitting character regions. Off allows any smaller valid split, which may be slower. This session-only option returns to On when settings load.");
+					}
+
+					ImGui::TextDisabled(
+						"The provider takes one rectangle per evaluation; Multi-ROI uses separate feature instances.");
+
+					ImGui::Checkbox(
+						"Visibility Depth Test",
+						&settings.neuralCharacterVisibilityDepthTestEnabled);
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted("Prevents character NR from showing through later opaque objects. Disable only to diagnose missing character edits; transparent overlays remain approximate.");
 
 					static constexpr const char* debugViews[]{
 						"Off", "Character Mask", "Eligibility Rectangles", "DLSS 5 Output"
@@ -18732,7 +18745,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							eyeStatus.computeSubrect.width,
 							eyeStatus.computeSubrect.height,
 							eyeStatus.computeSubrectCoveragePercent);
-						if (settings.neuralCharacterMultiRoiEnabled) {
+						if (NeuralRendering::GetUpscalingRoiExecutionMode(settings) != NeuralRendering::RoiExecutionMode::AutomaticSingle) {
 							ImGui::TextDisabled(
 								"  Multi-ROI: %s | %u evaluations | %llu planned pixels",
 								NeuralRendering::GetCharacterMultiRoiReasonName(eyeStatus.multiRoiReason),
@@ -20289,7 +20302,8 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 	// cache key, but switching the experiment off must still reclaim its slots.
 	const bool multiRoiChanged =
 		a_previousSettings.neuralCharacterMultiRoiEnabled !=
-		settings.neuralCharacterMultiRoiEnabled;
+			settings.neuralCharacterMultiRoiEnabled ||
+		a_previousSettings.neuralCharacterRoiExecutionMode != settings.neuralCharacterRoiExecutionMode;
 	if (!fovChanged && !multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings)) {
 		return acceptTransition();
 	}

@@ -23,6 +23,7 @@ struct ID3D12Resource;
 namespace NeuralRendering
 {
 	class D3D12Interop;
+	class ExperimentalKernelBatch;
 	enum class RuntimeStatus
 	{
 		NotProbed,
@@ -133,7 +134,7 @@ namespace NeuralRendering
 			bool* a_evaluationAttempted = nullptr,
 			RuntimeExecutionEvidence* a_evidence = nullptr,
 			D3D12Interop* a_timingInterop = nullptr,
-			std::uint32_t a_timingRegion = 0);
+			std::uint32_t a_timingRegion = 0, ExperimentalKernelBatch* a_kernelBatch = nullptr);
 
 		bool ResetFeature(std::uint32_t a_slot);
 		bool ResetFeatures();
@@ -158,10 +159,8 @@ namespace NeuralRendering
 		[[nodiscard]] std::uint64_t SuccessfulFrames() const;
 		[[nodiscard]] std::uint32_t LastPathProxyHits() const;
 		[[nodiscard]] bool LastPathProxyInstalled() const;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Resident handles only; NVIDIA does not expose their allocation byte size. */
 		[[nodiscard]] std::uint32_t GetResidentFeatureMask() const;
-#endif
 
 	private:
 		struct FeatureConfiguration

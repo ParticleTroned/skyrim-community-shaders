@@ -1,0 +1,21 @@
+.version 9.4
+.target sm_120
+.address_size 64
+
+.visible .entry indexed_uniform()
+{
+    .reg .u32 %physical, %item, %index, %mix;
+    .reg .pred %first;
+    mov.u32 %physical, %ctaid.z;
+    shr.u32 %item, %physical, 1;
+    mul.lo.u32 %index, %item, 96;
+    xor.b32 %mix, %physical, %index;
+    setp.lt.u32 %first, %mix, 12345;
+    @%first bra first;
+    nanosleep.u32 80;
+    bra end;
+first:
+    nanosleep.u32 72;
+end:
+    ret;
+}

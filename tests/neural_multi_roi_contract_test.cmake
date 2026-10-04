@@ -278,12 +278,13 @@ if(NOT _copy_helper_occurrence_count EQUAL 3)
 endif()
 
 foreach(_ui_contract IN ITEMS
-    [["Experimental Multi-ROI"]]
+    [["Automatic single ROI", "Independent multi-ROI", "Batched multi-ROI"]]
+    [[ImGui::Combo("ROI method"]]
+    [[GetKernelBatchStatus()]]
     [["Multi-ROI Savings Gate"]]
     [[&settings.neuralCharacterMultiRoiSavingsGateEnabled]]
-    [[&settings.neuralCharacterMultiRoiEnabled]]
-    [[Tries up to two separate character regions per view]]
-    [[uses extra model instances and VRAM; faster rendering is not guaranteed.]]
+    [[settings.neuralCharacterRoiExecutionMode = static_cast<uint>(roiMethod);]]
+    [[unsupported configurations use independent execution.]]
     [[Multi-ROI uses separate feature instances.]]
     [[Requires a meaningful area saving before splitting character regions.]]
     [[This session-only option returns to On when settings load.]]
@@ -294,6 +295,28 @@ foreach(_ui_contract IN ITEMS
         message(FATAL_ERROR
             "Multi-ROI user-facing contract is missing: ${_ui_contract}"
         )
+    endif()
+endforeach()
+
+string(FIND "${_upscaling_source}" [[ImGui::TreeNodeEx("ROI and edge settings"]] _ordinary_roi_begin)
+string(FIND "${_upscaling_source}" [["Character diagnostics and experiments"]] _diagnostic_roi_begin)
+if(_ordinary_roi_begin LESS 0 OR _diagnostic_roi_begin LESS_EQUAL _ordinary_roi_begin)
+    message(FATAL_ERROR "Ordinary ROI controls must precede the Debug-only diagnostic section")
+endif()
+math(EXPR _ordinary_roi_length "${_diagnostic_roi_begin} - ${_ordinary_roi_begin}")
+string(SUBSTRING "${_upscaling_source}" ${_ordinary_roi_begin} ${_ordinary_roi_length} _ordinary_roi_controls)
+foreach(_ordinary_roi_control IN ITEMS
+    [["Minimum Face Size"]]
+    [["Adaptive ROI Performance"]]
+    [["Eligibility Margin"]]
+    [["Eligibility Hold"]]
+    [["Depth-aware Edge Feather"]]
+    [["Edge Radius"]]
+    [["Relative Depth Threshold"]]
+)
+    string(FIND "${_ordinary_roi_controls}" "${_ordinary_roi_control}" _ordinary_roi_position)
+    if(_ordinary_roi_position LESS 0)
+        message(FATAL_ERROR "Ordinary ROI control must be available at Info: ${_ordinary_roi_control}")
     endif()
 endforeach()
 
@@ -315,7 +338,7 @@ string(REGEX REPLACE "[\r\n\t ]+" " "
     _settings_transition_normalized "${_settings_transition}")
 
 foreach(_transition_contract IN ITEMS
-    [[const bool multiRoiChanged = a_previousSettings.neuralCharacterMultiRoiEnabled != settings.neuralCharacterMultiRoiEnabled;]]
+    [[const bool multiRoiChanged = a_previousSettings.neuralCharacterMultiRoiEnabled != settings.neuralCharacterMultiRoiEnabled || a_previousSettings.neuralCharacterRoiExecutionMode != settings.neuralCharacterRoiExecutionMode;]]
     [[if (!fovChanged && !multiRoiChanged && HasSameNeuralRenderingSettingsKey(a_previousSettings, settings))]]
     [[RequestHistoryReset();]]
     [[NeuralRendering::RequiresBackendRetirement(]]

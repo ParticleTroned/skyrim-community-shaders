@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RegionCapacity.h"
+#include "SubmissionFenceSnapshot.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
@@ -14,15 +15,6 @@
 
 namespace NeuralRendering
 {
-	/** Read-only observations; a completed fence value is not a new synchronization point. */
-	struct LifetimeFenceSnapshot
-	{
-		std::uint64_t device = 0, queue = 0, fence = 0, device11 = 0, context11 = 0;
-		std::uint64_t issued = 0, completed = 0;
-		std::array<std::uint64_t, 3> contexts{};
-		bool initialized = false, recording = false, completedKnown = false, deviceRemoved = false;
-	};
-
 	struct LifetimeRegion
 	{
 		std::uint32_t slot = 0, previousFrame = UINT32_MAX, previousSourceFrame = UINT32_MAX;

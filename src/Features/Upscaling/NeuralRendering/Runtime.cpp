@@ -1,5 +1,6 @@
 #include "Runtime.h"
 #include "D3D12Interop.h"
+#include "ExperimentalKernelBatch.h"
 
 #include "Util.h"
 
@@ -1471,7 +1472,7 @@ namespace NeuralRendering
 		bool* a_evaluationAttempted,
 		RuntimeExecutionEvidence* a_evidence,
 		D3D12Interop* a_timingInterop,
-		std::uint32_t a_timingRegion)
+		std::uint32_t a_timingRegion, ExperimentalKernelBatch* a_kernelBatch)
 	{
 		if (a_evaluationAttempted)
 			*a_evaluationAttempted = false;
@@ -1564,6 +1565,11 @@ namespace NeuralRendering
 			parameters->Set("DLSSNR.Hint.Render.Preset", 0u);
 
 			NVSDK_NGX_Handle* handle = nullptr;
+			if (a_kernelBatch && !a_kernelBatch->ValidateFeatureCreation(parameters)) {
+				SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureCreate,
+					"kernel experiment rejected the actual feature-creation parameters");
+				return false;
+			}
 			const auto createStarted = a_evidence ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			if (a_evidence) {
 				a_evidence->createAttempted = true;
@@ -1596,6 +1602,11 @@ namespace NeuralRendering
 			}
 
 			featureHandles_[a_slot] = handle;
+			if (a_kernelBatch && !a_kernelBatch->CommitFeatureCreation()) {
+				SetFailureLocked(RuntimeStatus::FeatureCreateFailed, RuntimeFailureStage::FeatureCreate,
+					"kernel experiment rejected the actual feature-creation parameters");
+				return false;
+			}
 			featureConfigurations_[a_slot] = {
 				.colorBacking = a_layout.color.backing,
 				.creation = a_layout.creation,
@@ -1764,7 +1775,6 @@ namespace NeuralRendering
 		return true;
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	std::uint32_t Runtime::GetResidentFeatureMask() const
 	{
 		std::scoped_lock lock(mutex_);
@@ -1774,7 +1784,6 @@ namespace NeuralRendering
 				mask |= 1u << index;
 		return mask;
 	}
-#endif
 
 	bool Runtime::ResetFeature(std::uint32_t a_slot)
 	{

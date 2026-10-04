@@ -29,7 +29,7 @@ namespace NeuralRendering
 		return colour;
 	}
 
-	/** Migrates legacy lane selection without persisting session-only overrides. */
+	/** Preserves the selected ROI method while stripping legacy session-only overrides. */
 	inline nlohmann::json PersistentRenderingSettings(nlohmann::json rendering)
 	{
 		if (!rendering.is_object())

@@ -1293,7 +1293,7 @@ int wmain(int argc, wchar_t** argv)
 	bool experimentalProviderFloor = false;
 	bool batchTimingOnly = false;
 	bool captureKernelModules = false;
-	std::optional<unsigned> modelBatchStages;
+	std::optional<unsigned> modelBatchStages, modelN1Stages;
 	std::optional<unsigned> scheduleRepetitions;
 	std::string kernelChainMode, kernelPairMode, repetitionControl;
 	std::string onlyCase;
@@ -1377,6 +1377,14 @@ int wmain(int argc, wchar_t** argv)
 				modelBatchStages = std::stoul(value);
 				Require(*modelBatchStages >= 1 && *modelBatchStages <= NrReplay::KernelPair::kStages,
 					"model batch stages must be within 1..158");
+			} else if (option == L"--experimental-model-n1-stages") {
+				const auto value = argument.string();
+				Require(!modelN1Stages && !value.empty() && value.size() <= 3 &&
+							std::ranges::all_of(value, [](char c) { return c >= '0' && c <= '9'; }),
+					"model N1 stages must be one decimal count, specified once");
+				modelN1Stages = std::stoul(value);
+				Require(*modelN1Stages >= 1 && *modelN1Stages <= NrReplay::KernelPair::kStages,
+					"model N1 stages must be within 1..158");
 			} else if (option == L"--experimental-kernel-repetitions") {
 				const auto value = argument.string();
 				Require(!scheduleRepetitions && (value == "2" || value == "3" || value == "4"),
@@ -1432,6 +1440,8 @@ int wmain(int argc, wchar_t** argv)
 			"model replacement requires the original or layer-control pair schedule without another replacement");
 		Require(kernelPairMode != "model-batch" || !modelReplacementManifest.empty(), "model batch requires a pinned replacement manifest");
 		Require(!modelBatchStages || kernelPairMode == "model-batch", "model batch stages requires the model-batch pair schedule");
+		Require(!modelN1Stages || (!modelReplacementManifest.empty() && (kernelPairMode == "original" || kernelPairMode == "layer-control") && !scheduleRepetitions),
+			"model N1 stages requires a single-pass original or layer-control model replacement");
 		Require(!scheduleRepetitions || ((kernelPairMode == "original" || kernelPairMode == "layer-control" || kernelPairMode == "model-batch") &&
 											modelBatchStages.value_or(NrReplay::KernelPair::kStages) == NrReplay::KernelPair::kStages &&
 											(kernelPairMode == "model-batch" || modelReplacementManifest.empty())),
@@ -1444,6 +1454,7 @@ int wmain(int argc, wchar_t** argv)
 			result["kernelScheduleComparisonControl"] = repetitionControl;
 		result["modelReplacementRequested"] = !modelReplacementManifest.empty();
 		result["modelBatchStageLimit"] = kernelPairMode == "model-batch" ? Json(modelBatchStages.value_or(NrReplay::KernelPair::kStages)) : Json(nullptr);
+		result["modelN1StageLimit"] = !modelReplacementManifest.empty() && kernelPairMode != "model-batch" ? Json(modelN1Stages.value_or(NrReplay::KernelPair::kStages)) : Json(nullptr);
 		result["kernelPairMode"] = kernelPairMode;
 		Require(!batchTimingOnly || (!customRects.empty() && nativeHandlePolicy.empty() && renderdocPath.empty() &&
 										!experimentalProviderFloor && !inspectOnly && !validateStorage && !capacityTemporal && capacitySize == 128 && onlyCase.empty()),
@@ -1524,7 +1535,8 @@ int wmain(int argc, wchar_t** argv)
 		if (!kernelChainMode.empty())
 			session.kernelChain = std::make_unique<NrReplay::ProviderKernelChainProbe>(result["kernelChainExperiment"], kernelChainMode,
 				captureKernelModules ? outputRoot / "kernel-modules" : std::filesystem::path{}, kernelReplacementManifest, kernelPairMode, modelReplacementManifest,
-				modelBatchStages.value_or(NrReplay::KernelPair::kStages), scheduleRepetitions.value_or(1), repetitionControl);
+				modelBatchStages.value_or(NrReplay::KernelPair::kStages), scheduleRepetitions.value_or(1), repetitionControl, false,
+				modelN1Stages.value_or(NrReplay::KernelPair::kStages));
 		std::unique_ptr<NrReplay::FeatureCreationObserver> creationObserver;
 		if (!kernelPairMode.empty()) {
 			result["kernelPairAllocationParameters"] = Json::array();

@@ -40,6 +40,13 @@ foreach(_unit IN ITEMS Runtime D3D12Interop)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_nr_source}/${_unit}.cpp")
 endforeach()
 set(_replay_identity "{}")
+file(GLOB _shared_kernel_sources CONFIGURE_DEPENDS "${_nr_source}/DevBench/*.h")
+foreach(_shared_source IN LISTS _shared_kernel_sources)
+    file(RELATIVE_PATH _shared_key "${REPOSITORY_ROOT}" "${_shared_source}")
+    file(SHA256 "${_shared_source}" _shared_hash)
+    string(JSON _replay_identity SET "${_replay_identity}" "${_shared_key}" "\"${_shared_hash}\"")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_shared_source}")
+endforeach()
 foreach(_source IN ITEMS
     tools/nr-replay/main.cpp
     tools/nr-replay/GpuCapture.h
@@ -66,6 +73,9 @@ foreach(_source IN ITEMS
     src/Features/Upscaling/NeuralRendering/D3D12Interop.h
     src/Features/Upscaling/NeuralRendering/ExecutionEvidence.h
     src/Features/Upscaling/NeuralRendering/LifetimeDiagnostics.h
+    src/Features/Upscaling/NeuralRendering/SubmissionFenceSnapshot.h
+    src/Features/Upscaling/NeuralRendering/ExperimentalKernelBatch.h
+    src/Features/Upscaling/NeuralRendering/ExperimentalKernelBatch.cpp
     src/Features/Upscaling/NeuralRendering/ComputeSubrect.h
     src/Features/Upscaling/NeuralRendering/PipelinePolicy.h
     src/Features/Upscaling/NeuralRendering/CharacterMultiRoi.h
@@ -130,6 +140,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${REPOSITORY_ROOT}/src/Features/Upscaling/Streamline.cpp" "${_ngx_library}")
 add_executable(csx_nr_replay main.cpp "${OUTPUT_DIRECTORY}/Runtime.cpp"
     "${OUTPUT_DIRECTORY}/D3D12Interop.cpp" "${OUTPUT_DIRECTORY}/runtime_utilities.cpp"
+    "${_nr_source}/ExperimentalKernelBatch.cpp"
     "${REPOSITORY_ROOT}/src/Utils/CryptoHash.cpp")
 target_compile_features(csx_nr_replay PRIVATE cxx_std_23)
 target_compile_definitions(csx_nr_replay PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DEVBENCH_BRIDGE_ENABLED)
@@ -145,6 +156,11 @@ target_link_libraries(csx_nr_replay PRIVATE nlohmann_json::nlohmann_json spdlog:
     "${_ngx_library}")
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(nr_kernel_frame_fence test_kernel_frame_fence.cpp)
+    target_compile_features(nr_kernel_frame_fence PRIVATE cxx_std_23)
+    target_include_directories(nr_kernel_frame_fence PRIVATE "${REPOSITORY_ROOT}/src")
+    target_compile_options(nr_kernel_frame_fence PRIVATE /W4 /EHsc /permissive-)
+    add_test(NAME nr_kernel_frame_fence COMMAND nr_kernel_frame_fence)
     add_executable(nr_kernel_replacement_set test_kernel_replacement_set.cpp "${REPOSITORY_ROOT}/src/Utils/CryptoHash.cpp")
     target_compile_features(nr_kernel_replacement_set PRIVATE cxx_std_23)
     target_include_directories(nr_kernel_replacement_set PRIVATE "${REPOSITORY_ROOT}/src")
@@ -153,6 +169,7 @@ if(BUILD_TESTING)
     target_link_libraries(nr_kernel_replacement_set PRIVATE nlohmann_json::nlohmann_json bcrypt)
     add_test(NAME nr_kernel_replacement_set COMMAND nr_kernel_replacement_set)
     add_executable(nr_provider_descriptor_guard test_provider_descriptor_guard.cpp)
+    target_include_directories(nr_provider_descriptor_guard PRIVATE "${REPOSITORY_ROOT}/src")
     target_compile_features(nr_provider_descriptor_guard PRIVATE cxx_std_23)
     target_compile_definitions(nr_provider_descriptor_guard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(nr_provider_descriptor_guard PRIVATE /W4 /EHsc /permissive-)
@@ -170,6 +187,7 @@ if(BUILD_TESTING)
     target_link_libraries(nr_provider_floor_contract PRIVATE bcrypt)
     add_test(NAME nr_provider_floor_contract COMMAND nr_provider_floor_contract)
     add_executable(nr_kernel_chain_command_list test_kernel_chain_command_list.cpp)
+    target_include_directories(nr_kernel_chain_command_list PRIVATE "${REPOSITORY_ROOT}/src")
     target_compile_features(nr_kernel_chain_command_list PRIVATE cxx_std_23)
     target_compile_definitions(nr_kernel_chain_command_list PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(nr_kernel_chain_command_list PRIVATE /W4 /EHsc /permissive-)

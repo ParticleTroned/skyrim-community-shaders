@@ -8,6 +8,14 @@ namespace NrReplay
 {
 	struct KernelChainProbeTestAccess
 	{
+		static std::size_t RuntimeStoredFrames(const ProviderKernelChainProbe& probe)
+		{
+			return probe.pairOwners_->samples.size() + (probe.modelBatchOwners_ ? probe.modelBatchOwners_->size() : 0);
+		}
+		static const std::uint8_t* FirstOwnedPacket(const ProviderKernelChainProbe& probe)
+		{
+			return probe.descriptors_.front().bytes.data();
+		}
 		static void Configure(ProviderKernelChainProbe& probe, decltype(probe.real_) launch)
 		{
 			probe.real_ = launch;
@@ -26,6 +34,7 @@ namespace NrReplay
 		{
 			probe.retirementFailed_ = true;
 		}
+		static void MarkCacheUncertain(ProviderKernelChainProbe& probe) { probe.caches_[0].uncertain = true; }
 		static void ConfigureIdentity(ProviderKernelChainProbe& probe, decltype(probe.realCreateModule_) module, decltype(probe.realCreateFunction_) function)
 		{
 			probe.PrepareIdentityOutput();
@@ -208,7 +217,7 @@ namespace NrReplay
 			probe.modelReplacement_ = std::make_unique<KernelReplacement::Set<ProviderKernelChainProbe::ModelOperations>>(
 				manifest, fingerprint, batchCount, ProviderKernelChainProbe::ModelOperations{ module, function, destroyFunction, destroyModule });
 		}
-		static void ObserveTestModel(ProviderKernelChainProbe& probe, ID3D12Device* device, const nlohmann::json& manifest)
+		static void ObserveTestModel(ProviderKernelChainProbe& probe, ID3D12Device* device, const nlohmann::json& manifest, bool prepare = true)
 		{
 			for (const auto& item : manifest.at("modules")) {
 				ProviderKernelChainProbe::ModuleIdentity module;
@@ -217,7 +226,8 @@ namespace NrReplay
 				module.sha256 = item.at("originalSha256");
 				module.called = module.stable = module.fileComplete = true;
 				module.status = NVAPI_OK;
-				probe.modelReplacement_->ObserveOriginalModule(module.device, module.handle, module.sha256);
+				if (prepare)
+					probe.modelReplacement_->ObserveOriginalModule(module.device, module.handle, module.sha256);
 				for (const auto& entry : item.at("functions")) {
 					ProviderKernelChainProbe::FunctionIdentity function;
 					function.device = module.device;
@@ -227,13 +237,24 @@ namespace NrReplay
 					function.name = entry.at("name");
 					function.called = true;
 					function.status = NVAPI_OK;
-					probe.modelReplacement_->ObserveOriginalFunction(function.device, function.module, function.handle, function.name);
-					(void)probe.modelReplacement_->Resolve(function.device, function.handle, module.sha256, function.name, 72, 4);
+					if (prepare) {
+						probe.modelReplacement_->ObserveOriginalFunction(function.device, function.module, function.handle, function.name);
+						(void)probe.modelReplacement_->Resolve(function.device, function.handle, module.sha256, function.name, 72, 4);
+					}
 					probe.functions_.push_back(std::move(function));
 				}
 				probe.modules_.push_back(std::move(module));
 			}
 		}
+		static void RuntimeBindingDescriptors(ProviderKernelChainProbe& probe, unsigned count)
+		{
+			for (unsigned i = 0; i < count; ++i) {
+				const auto& function = probe.functions_.at(i);
+				NVAPI_CU_KERNEL_LAUNCH_PARAMS value{ reinterpret_cast<NVDX_ObjectHandle>(function.handle), { 1, 1, 4 }, { 32, 1, 1 }, 0, nullptr, 72 };
+				probe.descriptors_.push_back({ value, std::vector<std::uint8_t>(72), 0, 0, 0, i });
+			}
+		}
+		static void PrepareRuntimeBindings(ProviderKernelChainProbe& probe) { probe.PrepareRuntimeBindings(); }
 		static auto& Model(ProviderKernelChainProbe& probe) { return *probe.modelReplacement_; }
 		static void ClearFakeReplacement(ProviderKernelChainProbe& probe)
 		{
@@ -284,6 +305,8 @@ namespace
 		std::vector<NVAPI_CU_KERNEL_LAUNCH_PARAMS> descriptors;
 	};
 	std::vector<Submission> submissions;
+	const ProviderKernelChainProbe* inspectLaunchProbe = nullptr;
+	std::vector<std::size_t> privateAttemptsAtCall;
 	std::vector<std::string> retirementCalls;
 	bool failPrivateModule = false, failPrivateFunction = false, failDestroyFunction = false, failDestroyModule = false;
 	NVDX_ObjectHandle privateFunctionHandle = reinterpret_cast<NVDX_ObjectHandle>(0x7000);
@@ -380,6 +403,8 @@ namespace
 	}
 	NvAPI_Status __cdecl FakeLaunch(ID3D12GraphicsCommandList* list, const NVAPI_CU_KERNEL_LAUNCH_PARAMS* values, NvU32 count)
 	{
+		if (inspectLaunchProbe)
+			privateAttemptsAtCall.push_back(inspectLaunchProbe->GetRuntimeCounters().privateAttempts);
 		Submission value{ list, {}, {}, {} };
 		for (NvU32 i = 0; i < count; ++i) {
 			const auto* first = static_cast<const std::uint8_t*>(values[i].pParams);
@@ -568,6 +593,116 @@ namespace
 		const auto foreign = NrReplay::KernelChain::ExchangePointer(conflict, original, hook);
 		Check(!foreign.succeeded && !foreign.rollbackProven && foreign.observed == conflict.value);
 	}
+	void TestRuntimeFrameOwnership()
+	{
+		const auto admittedCatalog = [](std::string_view hash, bool pair, bool runtime) {
+			const auto catalogs = NrReplay::KernelChain::ModelCatalogs(pair, runtime);
+			return std::ranges::find(catalogs, hash) != catalogs.end();
+		};
+		for (const bool runtime : { false, true }) {
+			Check(admittedCatalog("2b4b945d3ac65ebc5c7d9f2ab72405d892412d59d875864c51edb611f7bba6c8", false, runtime));
+			Check(admittedCatalog("094ecf56151133f64e9c57553d5aabf62fd4bea615d4e75b071301005b804597", true, runtime));
+			Check(!admittedCatalog("7f59c83db564ada63d50cd1d8e869aa1f66c898954c98ff11ca81b6a86e64315", false, runtime));
+			Check(!admittedCatalog("d55fde8e1ea12ab25f43c14a671b079216ac877e0a4ca019a8c6efa9fb52dd06", true, runtime));
+			Check(admittedCatalog("2f07438e084824246931f8f2712d395cd6fc15cab267e69b4e99db3af9238b60", false, runtime) == !runtime);
+			Check(!admittedCatalog(NrReplay::KernelChain::kSharedModelControlCatalogSha256, true, runtime));
+			Check(!admittedCatalog(NrReplay::KernelChain::kSharedModelCatalogSha256, false, runtime));
+		}
+		Check(NrReplay::KernelChain::ReplacementCandidateAdmitted(NrReplay::KernelChain::kCorrectedIndexedCandidateSha256, false));
+		Check(NrReplay::KernelChain::ReplacementCandidateAdmitted(NrReplay::KernelChain::kCorrectedIndexedPairCandidateSha256, true));
+		Check(!NrReplay::KernelChain::ReplacementCandidateAdmitted(NrReplay::KernelChain::kCorrectedIndexedPairCandidateSha256, false));
+		Check(!NrReplay::KernelChain::ReplacementCandidateAdmitted(NrReplay::KernelChain::kCorrectedIndexedCandidateSha256, true));
+		Json report;
+		ProviderKernelChainProbe probe(report, "forward", {}, {}, "original", {}, NrReplay::KernelPair::kStages, 1, {}, true);
+		KernelChainProbeTestAccess::Configure(probe, FakeLaunch);
+		KernelChainProbeTestAccess::ConfigureIdentity(probe, FakeModule, FakeFunction);
+		std::array<std::shared_ptr<void>, 3> retained;
+		std::array<std::uint8_t, 4> source{ 1, 2, 3, 4 };
+		const auto* stable = static_cast<const std::uint8_t*>(nullptr);
+		for (unsigned frame = 0; frame < 160; ++frame) {
+			probe.BeginSample(frame, true);
+			Reject([&] { (void)probe.TakeRuntimeFrame(); });
+			probe.BeginEvaluation(proxy, real, 0, 0);
+			if (frame == 0) {
+				NVDX_ObjectHandle module = nullptr, function = nullptr;
+				Check(KernelChainProbeTestAccess::Module(probe, identityTestDevice, source.data(), 4, &module) == NVAPI_OK);
+				Check(KernelChainProbeTestAccess::Function(probe, identityTestDevice, module, "test_kernel", &function) == NVAPI_OK);
+			}
+			auto launch = Packet(source);
+			Check(KernelChainProbeTestAccess::Invoke(probe, proxy, &launch, 1) == NVAPI_OK);
+			probe.EndEvaluation();
+			probe.FinishCommandList();
+			const auto count = probe.GetRuntimeCounters();
+			Check(count.logical == 1 && count.physical == 1 && count.privateLaunches == 0 && count.privateAttempts == 0);
+			if (!frame)
+				stable = KernelChainProbeTestAccess::FirstOwnedPacket(probe);
+			auto owner = probe.TakeRuntimeFrame();
+			Check(owner && KernelChainProbeTestAccess::RuntimeStoredFrames(probe) == 0);
+			if (frame < 3)
+				Check(std::memcmp(stable, source.data(), source.size()) == 0);
+			std::weak_ptr<void> previous = retained[frame % 3];
+			retained[frame % 3] = std::move(owner);
+			Check(previous.expired());
+		}
+		Check(probe.SampleReceipt()["events"].empty());
+		Check(probe.GetRuntimeGraph().qualified == false);
+		auto launch = Packet(source);
+		submitStatus = NVAPI_ERROR;
+		Check(KernelChainProbeTestAccess::Invoke(probe, real, &launch, 1) == NVAPI_ERROR);
+		submitStatus = NVAPI_OK;
+		Check(probe.RuntimeEpochStale() && probe.Healthy());
+		Reject([&] { probe.BeginSample(161, true); });
+		NVDX_ObjectHandle module = nullptr, function = nullptr;
+		Check(KernelChainProbeTestAccess::Module(probe, identityTestDevice, source.data(), 4, &module) == NVAPI_OK);
+		Check(forwardedBlob == source.data());
+		const char name[] = "outside_frame";
+		Check(KernelChainProbeTestAccess::Function(probe, identityTestDevice, module, name, &function) == NVAPI_OK);
+		Check(forwardedName == name && probe.Healthy());
+		Json rejected;
+		Reject([&] { ProviderKernelChainProbe invalid(rejected, "group", {}, {}, "original", {}, NrReplay::KernelPair::kStages, 1, {}, true); });
+		Reject([&] { ProviderKernelChainProbe invalid(rejected, "forward", {}, {}, "original", {}, NrReplay::KernelPair::kStages, 2, {}, true); });
+	}
+	void TestRuntimeFallbackClassification()
+	{
+		for (unsigned scenario = 0; scenario < 7; ++scenario) {
+			Json report;
+			ProviderKernelChainProbe probe(report, "forward", {}, {}, "original", {}, NrReplay::KernelPair::kStages, 1, {}, true);
+			KernelChainProbeTestAccess::Configure(probe, FakeLaunch);
+			probe.BeginSample(3, false);
+			if (scenario != 6)
+				probe.BeginEvaluation(proxy, real, 0, 0);
+			Check(!probe.CanRetryOriginalBeforeSubmission());
+			if (scenario == 1)
+				Check(!probe.BeforeCommand("Dispatch"));
+			if (scenario == 2) {
+				bool result = true;
+				std::thread worker([&] { result = probe.BeforeCommand("Dispatch"); });
+				worker.join();
+				Check(!result);
+			}
+			if (scenario == 3)
+				KernelChainProbeTestAccess::MarkRetirementFailure(probe);
+			if (scenario == 4)
+				KernelChainProbeTestAccess::MarkCacheUncertain(probe);
+			FakeScheduleList list;
+			if (scenario == 5) {
+				KernelChainProbeTestAccess::ConfigureRepetition(probe, list.AsList());
+				submitStatus = NVAPI_ERROR;
+				Reject([&] { KernelChainProbeTestAccess::ReplayRepetition(probe, {}, {}); });
+				submitStatus = NVAPI_OK;
+				Check(probe.GetRuntimeCounters().physical == 1 && probe.GetRuntimeCounters().privateAttempts == 0);
+			}
+			if (scenario == 6) {
+				KernelChainProbeTestAccess::ConfigureRepetition(probe, list.AsList());
+				Reject([&] { probe.FinishCommandList(); });
+				Check(probe.GetRuntimeCounters().physical == 0 && probe.GetRuntimeCounters().privateAttempts == 0);
+			} else
+				Reject([&] { probe.EndEvaluation(); });
+			Check(probe.CanRetryOriginalBeforeSubmission() == (scenario < 2 || scenario == 6));
+			probe.AbortRuntimeFrame();
+			Check(!probe.CanRetryOriginalBeforeSubmission());
+		}
+	}
 	void TestIdentityCapture()
 	{
 		const auto path = UniqueIdentityPath();
@@ -685,6 +820,84 @@ namespace
 	{
 		++comparisonRetired;
 		return NVAPI_OK;
+	}
+	void TestDeferredRuntimePreparation()
+	{
+		for (unsigned scenario = 0; scenario < 3; ++scenario) {
+			ModelFixture fixture(2);
+			FakeDevice device;
+			Json receipt;
+			ProviderKernelChainProbe probe(receipt, "forward", {}, {}, "model-batch", fixture.manifest, NrReplay::KernelPair::kStages, 1, {}, true);
+			KernelChainProbeTestAccess::ConfigureModel(probe, fixture.manifest, fixture.fingerprint, ComparisonModule, ComparisonFunction, ComparisonDestroy, ComparisonDestroy, 2);
+			comparisonModules = comparisonFunctions = comparisonRetired = 0;
+			Json manifest = Json::parse(std::ifstream(fixture.manifest));
+			KernelChainProbeTestAccess::ObserveTestModel(probe, device.AsDevice(), manifest, false);
+			KernelChainProbeTestAccess::RuntimeBindingDescriptors(probe, scenario == 1 ? 43 : 44);
+			Check(comparisonModules == 0 && comparisonFunctions == 0);
+			if (scenario == 2)
+				KernelChainProbeTestAccess::AddOtherFunction(probe, 0xa000);
+			if (scenario == 0) {
+				KernelChainProbeTestAccess::PrepareRuntimeBindings(probe);
+				Check(comparisonModules == 9 && comparisonFunctions == 44 && probe.Healthy());
+				Check(KernelChainProbeTestAccess::Model(probe).Retire(true, true) && comparisonRetired == 53 && device.references == 1);
+			} else {
+				Reject([&] { KernelChainProbeTestAccess::PrepareRuntimeBindings(probe); });
+				Check(!probe.Healthy());
+				Check(KernelChainProbeTestAccess::Model(probe).Retire(true, true) == (scenario == 1));
+				Check(scenario == 1 ? comparisonRetired == 52 && device.references == 1 : comparisonRetired == 0 && device.references == 2);
+			}
+		}
+	}
+	void TestModelN1StagePrefix()
+	{
+		using namespace NrReplay::KernelPair;
+		for (unsigned scenario = 0; scenario < 6; ++scenario) {
+			const unsigned limit = scenario == 0 ? 1 : scenario == 1 ? 25 :
+			                                       scenario == 2     ? 157 :
+			                                       scenario == 3     ? 158 :
+			                                                           1;
+			ModelFixture fixture(1);
+			FakeDevice device;
+			Json report;
+			ProviderKernelChainProbe probe(report, "forward", "identity", {}, "original", fixture.manifest, kStages, 1, {}, false, limit);
+			KernelChainProbeTestAccess::Configure(probe, FakeLaunch);
+			comparisonModules = comparisonFunctions = comparisonRetired = 0;
+			KernelChainProbeTestAccess::ConfigureModel(probe, fixture.manifest, fixture.fingerprint, ComparisonModule, ComparisonFunction, ComparisonDestroy, ComparisonDestroy, 1);
+			KernelChainProbeTestAccess::ObserveTestModel(probe, device.AsDevice(), Json::parse(std::ifstream(fixture.manifest)));
+			Check(comparisonModules == 9 && comparisonFunctions == 44);
+			probe.BeginSample(0, true);
+			submissions.clear();
+			submitStatus = NVAPI_OK;
+			for (unsigned region = 0; region < kRegions; ++region) {
+				probe.BeginEvaluation(proxy, real, region / 2, region % 2);
+				for (unsigned stage = 0; stage < kStages - (scenario == 4 && region == 3 ? 1 : 0); ++stage) {
+					std::array<std::uint8_t, 72> bytes{};
+					bytes[0] = static_cast<std::uint8_t>(stage);
+					const auto index = stage % NrReplay::KernelReplacement::kFunctionCount;
+					NVAPI_CU_KERNEL_LAUNCH_PARAMS value{ reinterpret_cast<NVDX_ObjectHandle>(std::uintptr_t{ 0x3000 } + index), { 1, 1, 4 }, { 32, 1, 1 }, 0, bytes.data(), 72 };
+					Check(KernelChainProbeTestAccess::Invoke(probe, proxy, &value, 1) == NVAPI_OK);
+					const auto& submitted = submissions.back();
+					Check(submitted.descriptors[0].hFunction == reinterpret_cast<NVDX_ObjectHandle>((stage < limit ? std::uintptr_t{ 0xa000 } : std::uintptr_t{ 0x3000 }) + index));
+					Check(submitted.bytes[0] == std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+				}
+				probe.EndEvaluation();
+			}
+			if (scenario == 5)
+				KernelChainProbeTestAccess::Model(probe).RecordSubmission(0, 0);
+			if (scenario >= 4)
+				Reject([&] { probe.FinishCommandList(); });
+			else {
+				probe.FinishCommandList();
+				Check(probe.SampleReceipt()["modelN1StageLimit"] == limit);
+				Check(probe.GetRuntimeCounters().privateAttempts == limit * kRegions);
+			}
+			Check(KernelChainProbeTestAccess::Model(probe).Retire(true, true) && comparisonRetired == 53 && device.references == 1);
+		}
+		Json report;
+		for (const auto count : { 0u, 159u, UINT_MAX })
+			Reject([&] { ProviderKernelChainProbe probe(report, "forward", "identity", {}, "original", "manifest", kStages, 1, {}, false, count); });
+		Reject([&] { ProviderKernelChainProbe probe(report, "forward", {}, {}, "original", "manifest", kStages, 1, {}, true, 1); });
+		Reject([&] { ProviderKernelChainProbe probe(report, "forward", "identity", {}, "model-batch", "manifest", kStages, 1, {}, false, 1); });
 	}
 	void TestModelObserverAndFailedSubmission()
 	{
@@ -1644,11 +1857,16 @@ namespace
 			submissions.clear();
 			submitStatus = NVAPI_OK;
 			unsigned completed = 0;
+			inspectLaunchProbe = &probe;
+			privateAttemptsAtCall.clear();
 			Reject([&] {
 				KernelChainProbeTestAccess::ReplayRepetition(probe, [&](unsigned repetition) {
 					if (repetition == failureRepeat) submitStatus = NVAPI_ERROR; }, [&](unsigned) { ++completed; });
 			});
 			submitStatus = NVAPI_OK;
+			inspectLaunchProbe = nullptr;
+			Check(privateAttemptsAtCall.front() == 1);
+			Check(probe.GetRuntimeCounters().privateAttempts == (failureRepeat == 0 ? 1 : 316));
 			const auto receipt = probe.SampleReceipt();
 			const auto& physical = receipt["events"].back()["physicalLaunches"][0];
 			Check(completed == failureRepeat && receipt["kernelPair"]["submittedComplete"] == false);
@@ -1673,6 +1891,10 @@ int main()
 		TestForeignThreadBoundary();
 		TestRestorationContract();
 		TestIdentityCapture();
+		TestRuntimeFrameOwnership();
+		TestRuntimeFallbackClassification();
+		TestDeferredRuntimePreparation();
+		TestModelN1StagePrefix();
 		TestIdentityRejections();
 		TestModelObserverAndFailedSubmission();
 		TestMultipleCacheRollback();

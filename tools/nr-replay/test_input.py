@@ -238,6 +238,16 @@ class ReplayInput(unittest.TestCase):
         self.assertIn("specified once", self.run_fixture(1, extra=(
             "--experimental-model-batch-stages", "1", "--experimental-model-batch-stages", "2"))["reason"])
 
+    def test_model_n1_stage_prefix_is_bounded_and_requires_live_n1_mode(self):
+        for value in ("0", "159", "1000", "-1", "+1", "1junk", "1.0", ""):
+            result = self.run_fixture(1, extra=("--experimental-model-n1-stages", value))
+            self.assertIn("model N1 stages", result["reason"])
+        for value in ("1", "157", "158"):
+            result = self.run_fixture(1, extra=("--experimental-model-n1-stages", value))
+            self.assertIn("requires a single-pass", result["reason"])
+        self.assertIn("specified once", self.run_fixture(1, extra=(
+            "--experimental-model-n1-stages", "1", "--experimental-model-n1-stages", "2"))["reason"])
+
     def test_kernel_repetitions_require_bounded_live_complete_schedules(self):
         for value in ("0", "1", "5", "100", "-1", "+2", "02", "2junk", "2.0", ""):
             result = self.run_fixture(1, extra=("--experimental-kernel-repetitions", value))

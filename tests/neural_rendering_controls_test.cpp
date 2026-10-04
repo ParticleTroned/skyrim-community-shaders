@@ -90,6 +90,7 @@ struct Upscaling
 	struct Settings
 	{
 		bool neuralRenderingEnabled = false, neuralCharacterMultiRoiEnabled = false;
+		std::uint32_t neuralCharacterRoiExecutionMode = 0;
 		bool neuralRenderingRenderscaleFov = false;
 		bool neuralRenderingFovOnly = false, periphery_taa_enable = false, foveatedVendorDispatch = true;
 		uint32_t neuralRenderingInsertionPoint = 0, neuralRenderingMode = 0;
@@ -162,6 +163,25 @@ int main()
 		}
 	}
 	globals::game::isVR = true;
+	globals::state = nullptr;
+	for (uint32_t previousMethod = 0; previousMethod < 3; ++previousMethod) {
+		for (uint32_t nextMethod = 0; nextMethod < 3; ++nextMethod) {
+			for (const bool retirementSucceeds : { false, true }) {
+				Upscaling upscaling;
+				upscaling.settings.neuralRenderingEnabled = true;
+				upscaling.settings.neuralCharacterRoiExecutionMode = previousMethod;
+				const auto previous = upscaling.settings;
+				upscaling.settings.neuralCharacterRoiExecutionMode = nextMethod;
+				renderer = {};
+				renderer.resetSucceeds = retirementSucceeds;
+				const bool changed = previousMethod != nextMethod;
+				const bool accepted = upscaling.HandleNeuralRenderingSettingsTransition(previous, "ROI method");
+				Require(renderer.resets == (changed ? 1u : 0u), "ROI method changes must retire native backend ownership");
+				Require(accepted == (!changed || retirementSucceeds), "ROI method changes require proven retirement");
+				Require(renderer.resourcesRetained == !(changed && retirementSucceeds), "Failed ROI retirement must retain native owners");
+			}
+		}
+	}
 	{
 		globals::State frame;
 		globals::state = &frame;

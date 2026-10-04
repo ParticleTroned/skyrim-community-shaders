@@ -681,6 +681,14 @@ join after each pair. It represents 632 logical stages with 316 physical
 kernel launches; actual execution, output equivalence and cost require their
 own receipts. It does not change the game DLL.
 
+For N1 fault isolation, `--experimental-model-n1-stages N` replaces only
+the first `N` stages in each region, including warmup (`1..158`, default
+`158`). Later stages retain their original handles and packets. Partial
+N1 runs require a single-pass original or layer-control schedule and still
+prepare all 44 private functions. Their receipts verify all 158 original
+stages per region and exact per-function private submission counts. This
+diagnostic cutoff is unavailable to the in-game adapter.
+
 For fault isolation, `--experimental-model-batch-stages N` limits N=2
 dispatches to the first 1..158 stages per eye. Later stages follow the
 unchanged `layer-control` schedule. The receipt records the limit and exact

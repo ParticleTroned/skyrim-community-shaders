@@ -29,6 +29,7 @@ namespace NeuralRendering
 			visit("neuralCharacterHairStrength", settings.neuralCharacterHairStrength, policy.hairStrength);
 			visit("neuralCharacterMaximumDistanceMeters", settings.neuralCharacterMaximumDistanceMeters, policy.maximumDistanceMeters);
 			visit("neuralCharacterAdaptiveRoiSelectionEnabled", settings.neuralCharacterAdaptiveRoiSelectionEnabled, policy.adaptiveRoiSelection);
+			visit("neuralCharacterRoiExecutionMode", settings.neuralCharacterRoiExecutionMode, policy.roiExecutionMode);
 			visit("neuralCharacterMultiRoiEnabled", settings.neuralCharacterMultiRoiEnabled, policy.multiRoi);
 			visit("neuralCharacterMultiRoiSavingsGateEnabled", settings.neuralCharacterMultiRoiSavingsGateEnabled, policy.multiRoiSavingsGate);
 			visit("neuralCharacterMinimumFacePixelSize", settings.neuralCharacterMinimumFacePixelSize, policy.minimumFacePixelSize);
@@ -68,6 +69,13 @@ namespace NeuralRendering
 				json.get_to(value);
 			}
 		}
+	}
+
+	/** Resolves the saved execution method and the legacy session-only split override. */
+	template <class Settings>
+	[[nodiscard]] constexpr RoiExecutionMode GetUpscalingRoiExecutionMode(const Settings& settings) noexcept
+	{
+		return ResolveRoiExecutionMode(settings.neuralCharacterRoiExecutionMode, settings.neuralCharacterMultiRoiEnabled);
 	}
 
 	/** Copy VR's flat controls without applying the master rendering switch. */

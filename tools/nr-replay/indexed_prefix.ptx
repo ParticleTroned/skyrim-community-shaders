@@ -1,0 +1,32 @@
+.version 9.4
+.target sm_120
+.address_size 64
+
+// Compile at O0 and O3 to retain independently decoded index instructions.
+.visible .entry indexed_packet_32(.param .align 8 .b8 packets[192])
+{
+    .reg .u32 %item, %value;
+    .reg .u64 %address, %base, %offset, %out;
+    mov.u32 %item, %ctaid.z;
+    mul.wide.u32 %offset, %item, 96;
+    mov.u64 %base, packets;
+    add.u64 %address, %base, %offset;
+    ld.param.u64 %out, [%address];
+    ld.param.u32 %value, [%address+8];
+    st.volatile.global.u32 [%out], %value;
+    ret;
+}
+
+.visible .entry indexed_packet_64(.param .align 8 .b8 packets[192])
+{
+    .reg .u32 %item;
+    .reg .u64 %address, %base, %offset, %out, %value;
+    mov.u32 %item, %ctaid.z;
+    mul.wide.u32 %offset, %item, 96;
+    mov.u64 %base, packets;
+    add.u64 %address, %base, %offset;
+    ld.param.u64 %out, [%address];
+    ld.param.u64 %value, [%address+8];
+    st.volatile.global.u64 [%out], %value;
+    ret;
+}

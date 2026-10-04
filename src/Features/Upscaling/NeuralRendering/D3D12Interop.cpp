@@ -1063,6 +1063,7 @@ namespace NeuralRendering
 		return result;
 	}
 
+#endif
 	LifetimeFenceSnapshot D3D12Interop::GetLifetimeSnapshot() const
 	{
 		std::scoped_lock lock(mutex_);
@@ -1084,8 +1085,6 @@ namespace NeuralRendering
 			result.contexts[index] = commandContexts_[index].fenceValue;
 		return result;
 	}
-#endif
-
 	D3D12InteropTelemetry D3D12Interop::GetTelemetry()
 	{
 		std::scoped_lock lock(mutex_);

@@ -501,7 +501,8 @@ public:
 			NeuralRendering::CharacterPolicy::kDefaultMaximumDistanceMeters;
 		bool neuralCharacterAdaptiveRoiSelectionEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultAdaptiveRoiSelection;
-		// Experimental: separate persistent Feature 18 instances for independent regions.
+		uint neuralCharacterRoiExecutionMode = static_cast<uint>(NeuralRendering::RoiExecutionMode::AutomaticSingle);
+		// Legacy session-only override for independent region execution.
 		bool neuralCharacterMultiRoiEnabled = false;
 		bool neuralCharacterMultiRoiSavingsGateEnabled = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED

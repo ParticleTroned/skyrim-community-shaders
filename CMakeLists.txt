@@ -360,6 +360,7 @@ target_include_directories(
         ${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
         ${CLIB_UTIL_INCLUDE_DIRS}
         "${CMAKE_SOURCE_DIR}/package/Shaders"
+        "${CMAKE_SOURCE_DIR}/extern/nvapi"
         ${DETOURS_INCLUDE_DIRS}
 )
 
@@ -385,6 +386,23 @@ target_link_libraries(
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
 )
+
+set(CSX_NR_KERNEL_PAYLOAD_DIR
+    ""
+    CACHE PATH
+    "Hash-pinned private NR kernel catalogs to include in the local test AIO"
+)
+if(CSX_NR_KERNEL_PAYLOAD_DIR)
+    foreach(_nr_catalog IN ITEMS cloned-n2.json shared-n2.json)
+        if(NOT EXISTS "${CSX_NR_KERNEL_PAYLOAD_DIR}/${_nr_catalog}")
+            message(FATAL_ERROR "NR kernel payload is missing ${_nr_catalog}")
+        endif()
+    endforeach()
+    install(
+        DIRECTORY "${CSX_NR_KERNEL_PAYLOAD_DIR}/"
+        DESTINATION "Shaders/Upscaling/NeuralRendering/KernelBatch"
+    )
+endif()
 
 if(DEVBENCH_BRIDGE)
     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API)
@@ -1226,8 +1244,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${CMAKE_COMMAND} -DSRC_DIR="${AIO_DIR}/Shaders"
                     -DDST_DIR="${DEPLOY_TARGET}/Shaders"
                     -DMANIFEST_FILE="${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_shaders.manifest"
-                    -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
-                    -P "${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake"
+                    -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS} -P
+                    "${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders.stamp

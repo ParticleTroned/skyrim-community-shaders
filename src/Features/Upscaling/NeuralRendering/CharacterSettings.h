@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RegionCapacity.h"
+#include "RoiExecutionMode.h"
 
 #include <algorithm>
 #include <array>
@@ -121,7 +122,8 @@ namespace NeuralRendering
 			CharacterPolicy::kDefaultMaximumDistanceMeters;
 		bool adaptiveRoiSelection =
 			CharacterPolicy::kDefaultAdaptiveRoiSelection;
-		/** Experimental independent Feature 18 region handles; deliberately opt-in. */
+		std::uint32_t roiExecutionMode = static_cast<std::uint32_t>(RoiExecutionMode::AutomaticSingle);
+		/** Legacy session override for independent Feature 18 region handles. */
 		bool multiRoi = false;
 		/** Session-only split cost heuristic; coverage and disjointness remain mandatory. */
 		bool multiRoiSavingsGate = true;
@@ -174,6 +176,7 @@ namespace NeuralRendering
 	/** Clamps persisted and runtime controls before resource or dispatch decisions. */
 	inline void SanitizeCharacterSettings(CharacterSettings& a_settings) noexcept
 	{
+		a_settings.roiExecutionMode = static_cast<std::uint32_t>(ClampRoiExecutionMode(a_settings.roiExecutionMode));
 		const auto finiteClamp = [](float value, float fallback, float minimum, float maximum) {
 			return std::clamp(std::isfinite(value) ? value : fallback, minimum, maximum);
 		};

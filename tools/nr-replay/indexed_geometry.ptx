@@ -1,0 +1,18 @@
+.version 9.4
+.target sm_120
+.address_size 64
+
+.visible .entry indexed_geometry(.param .align 8 .b8 packets[192])
+{
+    .reg .u32 %physical, %item, %index;
+    .reg .u64 %base, %offset, %address, %output;
+    mov.u32 %physical, %ctaid.z;
+    shr.u32 %item, %physical, 1;
+    mul.lo.u32 %index, %item, 96;
+    mul.wide.u32 %offset, %item, 96;
+    mov.u64 %base, packets;
+    add.u64 %address, %base, %offset;
+    ld.param.u64 %output, [%address];
+    st.volatile.global.u32 [%output], %index;
+    ret;
+}

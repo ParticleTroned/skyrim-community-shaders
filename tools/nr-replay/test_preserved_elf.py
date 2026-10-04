@@ -179,7 +179,7 @@ class PreservedElfTests(unittest.TestCase):
 
     def test_parameter_code_and_extra_field_bounds(self):
         for field, value in (('parameter_bytes', 0), ('parameter_bytes', 4097), ('code', b'bad'),
-                             ('register_count', 256), ('unknown', True)):
+                             ('register_count', 256), ('register_count', True), ('unknown', True)):
             transform = self.identity(); transform[field] = value
             with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                 self.emit({'fixture': transform})
@@ -195,6 +195,40 @@ class PreservedElfTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'nonempty text relocations'):
             self.emit({'fixture': self.identity()})
         self.assertFalse(self.output.exists())
+
+    def test_register_extension_requires_explicit_cap_and_preserves_frame(self):
+        sections = self.sections(self.source, self.source_hash)
+        metadata_offset = sections['.nv.info.fixture']['header'][4]
+        data = bytearray(self.original)
+        marker = bytes(data).index(struct.pack('<BBH', 3, 0x1b, 255), metadata_offset)
+        struct.pack_into('<H', data, marker + 2, 32)
+        self.source.write_bytes(data)
+        self.source_hash = elf.sha(data)
+        transform = self.identity()
+        transform['register_count'] = 33
+        with self.assertRaisesRegex(ValueError, 'exceeds original cap'):
+            self.emit({'fixture': transform})
+        transform['register_cap'] = 33
+        receipt = self.emit({'fixture': transform})
+        after = self.sections(self.output, receipt['sha256'])
+        attrs = {kind: (fmt, value, payload) for fmt, kind, value, payload in elf.attributes(after['.nv.info.fixture']['data'])}
+        self.assertEqual(attrs[0x1b][1], 33)
+        global_attrs = {kind: struct.unpack('<II', payload) for _, kind, _, payload in elf.attributes(after['.nv.info']['data'])}
+        self.assertEqual(global_attrs[0x2f], (3, 33))
+        self.assertEqual(global_attrs[0x11], (3, 8))
+        self.assertEqual(global_attrs[0x12], (3, 8))
+        self.assertEqual(after['.text.fixture']['data'], bytes(range(128)))
+        self.assertEqual(after['.text.fixture']['header'][7], 3)
+
+    def test_register_cap_rejects_implicit_reduction_missing_count_and_overflow(self):
+        for count, cap in ((None, 255), (32, 31), (33, 256), (32, 32), (33, True)):
+            transform = self.identity()
+            if count is not None:
+                transform['register_count'] = count
+            transform['register_cap'] = cap
+            with self.subTest(count=count, cap=cap), self.assertRaises(ValueError):
+                self.emit({'fixture': transform})
+            self.assertFalse(self.output.exists())
 
     def test_empty_transform_still_checks_native_symbol_targets_and_names(self):
         shoff = struct.unpack_from('<Q', self.original, 40)[0]

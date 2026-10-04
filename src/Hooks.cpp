@@ -23,6 +23,7 @@
 
 #include "Features/AdaptiveBrightness.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/GrassOptimizations.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenshotFeature.h"
@@ -912,6 +913,8 @@ namespace GrassExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
+
+			globals::features::grassOptimizations.PrepareGeometry(pass);
 
 			auto state = globals::state;
 

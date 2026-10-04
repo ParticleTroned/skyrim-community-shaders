@@ -31,7 +31,7 @@ struct VS_INPUT
 	float4 InstanceData2: TEXCOORD5;
 	float4 InstanceData3: TEXCOORD6;
 	float4 InstanceData4: TEXCOORD7;
-#ifdef VR
+#if defined(VR) || defined(GRASS_OPTIMIZATIONS)
 	uint InstanceID: SV_INSTANCEID;
 #endif  // VR
 };
@@ -146,6 +146,19 @@ cbuffer cb8 : register(b8)
 	float4 cb8[240];
 }
 
+#	ifdef GRASS_OPTIMIZATIONS
+#		include "GrassOptimizations/GrassBatch.hlsli"
+#	endif
+
+float GetPerInstanceFade(VS_INPUT input)
+{
+#	ifdef GRASS_OPTIMIZATIONS
+	if (GrassBatchEnabled != 0)
+		return GetGrassBatchFade(input.InstanceID);
+#	endif
+	return dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+}
+
 // Calculate wind displacement for a grass vertex
 float3 CalculateWindDisplacement(VS_INPUT input, float windTimer)
 {
@@ -223,7 +236,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Depth = projSpacePosition.zw;
 #		endif  // RENDER_DEPTH
 
-	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+	float perInstanceFade = GetPerInstanceFade(input);
 
 #		if defined(VR)
 	float distanceFade = 1 - saturate((length(mul(World[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);
@@ -303,7 +316,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float dirLightAngle = dot(DirLightDirection.xyz, instanceNormal);
 	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz;
 
-	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+	float perInstanceFade = GetPerInstanceFade(input);
 
 #		if defined(VR)
 	float distanceFade = 1 - saturate((length(mul(World[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);

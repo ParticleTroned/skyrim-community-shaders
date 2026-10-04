@@ -11,6 +11,7 @@
 #include "Features/FoliageLighting.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
+#include "Features/GrassOptimizations.h"
 #include "Features/HairSpecular.h"
 #include "Features/HorizonFix.h"
 #include "Features/IBL.h"
@@ -68,6 +69,7 @@ namespace globals
 		FoliageLighting foliageLighting{};
 		GrassCollision grassCollision{};
 		GrassLighting grassLighting{};
+		GrassOptimizations grassOptimizations{};
 		IBL ibl{};
 		LightLimitFix lightLimitFix{};
 		LinearLighting linearLighting{};

@@ -2291,6 +2291,9 @@ MeshBlending::Classification MeshBlending::ClassifyOnCacheMiss(
 	                               classificationLogs < kMaximumClassificationLogs;
 	const bool exactModelNeedsNodePath = compiledExactRuleModels.contains(modelPath);
 	std::string nodePath = (flexibleRulesNeedNodePath || exactModelNeedsNodePath) ? BuildNodePath(a_source) : std::string{};
+	if ((flexibleRulesNeedNodePath || exactModelNeedsNodePath) && nodePath.empty()) {
+		return Classification::kRejected;
+	}
 
 	if (MatchesRules(compiledDenyList, compiledExactDenyRules, modelPath, nodePath)) {
 		return Classification::kRejected;

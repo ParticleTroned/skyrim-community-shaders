@@ -19,6 +19,7 @@ foreach(_required IN ITEMS
     "a_signature.ruleIdentity = { BuildModelPath(a_source), BuildNodePathValue(a_source, true) }"
     "BuildNodeCacheIdentity"
     "CanMatchNodeSelector(rule.nodePath, a_nodePath)"
+    "if ((flexibleRulesNeedNodePath || exactModelNeedsNodePath) && nodePath.empty())"
     "BuildCanonicalNodePath"
     "InvalidateCachedClassification"
     "CanonicalizeOverrideSelectors"

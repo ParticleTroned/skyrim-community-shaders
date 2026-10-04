@@ -748,13 +748,14 @@ namespace CSX::RenderMap
 			std::unique_lock lock(catalogue->mutex);
 			const PersistentStageShaderKey key{ a_stage, a_d3dObject };
 			if (!catalogue->records.contains(key) &&
-				catalogue->records.size() >= kMaximumPersistentStageShaders)
+				catalogue->records.size() >= kMaximumPersistentStageShaders) {
+				RecordShaderMetadataFailure();
 				return;
+			}
 			catalogue->records.insert_or_assign(
 				key, identity);
 		} catch (...) {
-			// Provenance is diagnostic. Shader creation must never fail because the
-			// process-lifetime identity catalogue could not grow.
+			RecordShaderMetadataFailure();
 		}
 	}
 
@@ -763,9 +764,13 @@ namespace CSX::RenderMap
 	{
 		const std::weak_ptr<PersistentStageShaderCatalogue> weakCatalogue = EnsurePersistentStageShaderCatalogue();
 		return [weakCatalogue, key = PersistentStageShaderKey{ a_stage, a_d3dObject }]() noexcept {
-			if (const auto catalogue = weakCatalogue.lock()) {
-				std::unique_lock lock(catalogue->mutex);
-				catalogue->records.erase(key);
+			try {
+				if (const auto catalogue = weakCatalogue.lock()) {
+					std::unique_lock lock(catalogue->mutex);
+					catalogue->records.erase(key);
+				}
+			} catch (...) {
+				RecordShaderMetadataFailure();
 			}
 		};
 	}
@@ -803,7 +808,7 @@ namespace CSX::RenderMap
 				}
 			}
 		} catch (...) {
-			// Engine aliases are diagnostic provenance and must never affect loading.
+			RecordShaderMetadataFailure();
 		}
 	}
 
@@ -2148,6 +2153,7 @@ namespace CSX::RenderMap
 			if (found != catalogue->records.end())
 				return found->second;
 		} catch (...) {
+			RecordShaderMetadataFailure();
 		}
 		return std::nullopt;
 	}

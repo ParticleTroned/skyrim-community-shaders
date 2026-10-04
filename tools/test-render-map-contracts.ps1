@@ -148,6 +148,10 @@ foreach ($case in $fixtureEdgeCases.invalid) {
 }
 
 $hooksSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/Hooks.cpp')
+$preservingShaderHooks = @([regex]::Matches($hooksSource, 'return Util::ObserveSuccessfulShaderCreation\(hr, pp(?<stage>Vertex|Pixel|Compute)Shader,') | ForEach-Object { $_.Groups['stage'].Value } | Sort-Object)
+Assert-True (($preservingShaderHooks -join ',') -eq 'Compute,Pixel,Vertex') 'Every native shader creation hook must preserve its native result across diagnostics'
+$bridgeSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/RenderMap/DevBenchBridge.cpp')
+Assert-True ($bridgeSource.Contains('"shaderMetadata", BuildShaderMetadataStatus()') -and $bridgeSource.Contains('response["result"]["shaderMetadata"] = BuildShaderMetadataStatus();')) 'Registry/status must expose independent shader metadata limits and failure evidence'
 $contextHooksSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/RenderMap/D3DContextHooks.cpp')
 Assert-True ($hooksSource.Contains('stl::detour_vfunc<27, ID3D11Device_CreateDeferredContext>')) 'CreateDeferredContext is not hooked at D3D11 device slot 27'
 Assert-True ($contextHooksSource.Contains('stl::detour_vfunc<58, ID3D11DeviceContext_ExecuteCommandList>')) 'ExecuteCommandList is not hooked at context slot 58'
@@ -192,4 +196,4 @@ try {
     }
 }
 
-Write-Output "Render-map contracts passed: 2 schemas, $($fixtureEvents.Count) baseline deferred-command fixtures, $($validEdgeCaseEvents.Count) valid edge cases, $($fixtureEdgeCases.invalid.Count) rejected edge cases, 13 cross-identity cases, 5 hook contracts, and the offline graph suite."
+Write-Output "Render-map contracts passed: 2 schemas, $($fixtureEvents.Count) baseline deferred-command fixtures, $($validEdgeCaseEvents.Count) valid edge cases, $($fixtureEdgeCases.invalid.Count) rejected edge cases, 13 cross-identity cases, 7 hook contracts, and the offline graph suite."

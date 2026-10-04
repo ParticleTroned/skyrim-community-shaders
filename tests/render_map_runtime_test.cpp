@@ -5,6 +5,7 @@
 #		define NOMINMAX
 #	endif
 #	include "Utils/D3DPrivateDataLifetime.h"
+#	include "Utils/D3DShaderCreationObservation.h"
 #endif
 
 #include <algorithm>
@@ -315,6 +316,91 @@ namespace
 			[](const EventRecord& a_event) { return a_event.kind == EventKind::kTechniqueResolved; });
 		Check(resolved != snapshot->events.end() && resolved->payload.words[4] != 0 && resolved->payload.words[5] == 0,
 			"overflowed stage shader was silently joined to an existing observation");
+	}
+
+	void TestShaderBytecodeCatalogueBounds()
+	{
+		ShaderBytecodeCatalogue catalogue(2, 8);
+		const std::array<std::uint8_t, 10> bytes{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+		auto* first = reinterpret_cast<void*>(0xA100);
+		auto* second = reinterpret_cast<void*>(0xA200);
+		auto* third = reinterpret_cast<void*>(0xA300);
+		auto record = [] { return ShaderBytecodeCatalogue::Record{ .bytecodeSize = 4 }; };
+		Check(catalogue.Store(first, record(), bytes.data(), 4, true) == ShaderBytecodeCatalogue::Admission::kStored,
+			"first dump was not admitted");
+		Check(catalogue.Store(second, record(), bytes.data(), 4, true) == ShaderBytecodeCatalogue::Admission::kStored,
+			"exact dump-byte bound was not admitted");
+		Check(catalogue.Store(third, record(), bytes.data(), 4, true) == ShaderBytecodeCatalogue::Admission::kIdentityLimit,
+			"bytecode identity count exceeded its bound");
+		Check(catalogue.Store(first, record(), bytes.data(), 4, true) == ShaderBytecodeCatalogue::Admission::kStored &&
+				  catalogue.ReadBytes(first).size() == 4 && catalogue.ReadBytes(second).size() == 4,
+			"replacement did not credit the previous retained dump");
+		catalogue.Retire(first);
+		Check(catalogue.Store(third, record(), bytes.data(), 8, true) == ShaderBytecodeCatalogue::Admission::kDumpUnavailable &&
+				  catalogue.ReadBytes(third).empty(),
+			"unavailable dump retained bytes beyond its remaining budget");
+		std::uint64_t size = 999;
+		std::array<char, kSha256HexLength + 1> digest{};
+		Check(!catalogue.ReadIdentity(first, size, digest) && size == 0,
+			"retired bytecode identity remained available");
+		Check(catalogue.ReadIdentity(third, size, digest) && size == 8,
+			"dump rejection lost independently available metadata");
+		catalogue.Retire(second);
+		Check(catalogue.Store(third, record(), bytes.data(), 8, true) == ShaderBytecodeCatalogue::Admission::kStored &&
+				  catalogue.ReadBytes(third).size() == 8,
+			"retirement did not reclaim the dump budget");
+		catalogue.Retire(third);
+		Check(catalogue.Store(first, record(), bytes.data(), bytes.size(), false) == ShaderBytecodeCatalogue::Admission::kStored &&
+				  catalogue.ReadBytes(first).empty(),
+			"capture-disabled metadata retained an unrequested dump");
+		auto preallocated = record();
+		preallocated.bytes.assign(32, 1);
+		Check(catalogue.Store(first, std::move(preallocated), bytes.data(), 4, true) == ShaderBytecodeCatalogue::Admission::kStored &&
+				  catalogue.ReadBytes(first).size() == 4,
+			"caller-provided bytes bypassed retained-dump admission");
+		ShaderBytecodeCatalogue closed(0, 0);
+		Check(closed.Store(first, record(), nullptr, 0, false) == ShaderBytecodeCatalogue::Admission::kIdentityLimit,
+			"zero-identity policy failed open");
+	}
+
+	void TestNativeShaderCreationPreservesResultOnDiagnosticFailure()
+	{
+#if defined(_WIN32)
+		struct NativeShader
+		{
+			unsigned identity;
+		};
+		for (const auto stage : { ShaderStage::kVertex, ShaderStage::kPixel, ShaderStage::kCompute }) {
+			NativeShader shader{ static_cast<unsigned>(stage) };
+			auto* output = &shader;
+			for (unsigned phase = 0; phase < 4; ++phase) {
+				const auto failuresBefore = ShaderMetadataFailureCount();
+				bool called = false;
+				const auto result = Util::ObserveSuccessfulShaderCreation(S_FALSE, &output, [&](auto* observed) {
+					called = observed == &shader;
+					if (phase == 3)
+						throw 17;
+					throw std::bad_alloc();
+				});
+				Check(called && result == S_FALSE && output == &shader &&
+						  ShaderMetadataFailureCount() == failuresBefore + 1,
+					"diagnostic byte/hash/runtime/map failure changed native shader success");
+			}
+			bool called = false;
+			Check(Util::ObserveSuccessfulShaderCreation(E_FAIL, &output, [&](auto*) { called = true; }) == E_FAIL &&
+					  !called && output == &shader,
+				"native failure entered the diagnostic observer");
+			output = nullptr;
+			Check(Util::ObserveSuccessfulShaderCreation(S_OK, &output, [&](auto*) { called = true; }) == S_OK && !called,
+				"missing native output entered diagnostics");
+			Check(Util::ObserveSuccessfulShaderCreation(S_OK, static_cast<NativeShader**>(nullptr), [&](auto*) { called = true; }) == S_OK && !called,
+				"missing native output address entered diagnostics");
+			output = &shader;
+			Check(Util::ObserveSuccessfulShaderCreation(S_OK, &output, [&](auto* observed) { called = observed == &shader; }) == S_OK &&
+					  called && output == &shader,
+				"normal diagnostic observation changed native shader success");
+		}
+#endif
 	}
 
 	void TestNativeShaderMetadataLifetime()
@@ -2533,6 +2619,8 @@ int main()
 		TestShaderObservationBoundIsExplicit();
 		TestResolvedStageShaderIdentity();
 		TestStageShaderObservationBoundIsExplicit();
+		TestShaderBytecodeCatalogueBounds();
+		TestNativeShaderCreationPreservesResultOnDiagnosticFailure();
 		TestNativeShaderMetadataLifetime();
 		TestPersistentShaderRetentionBounds();
 		TestImmediateContextDrawAndDispatchState();

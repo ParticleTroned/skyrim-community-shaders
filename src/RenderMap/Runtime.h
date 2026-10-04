@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderMap/Collector.h"
+#include "RenderMap/ShaderBytecodeCatalogue.h"
 
 #include <bitset>
 #include <cstdint>
@@ -17,7 +18,6 @@ namespace CSX::RenderMap
 {
 	inline constexpr std::size_t kMaximumTrackedDeferredContexts = 256;
 	inline constexpr std::size_t kMaximumTrackedCommandLists = 8192;
-	inline constexpr std::size_t kMaximumPersistentStageShaders = 65536;
 
 	enum class PayloadSchema : std::uint16_t
 	{

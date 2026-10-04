@@ -109,3 +109,22 @@ extension `csx.captureIncompleteReasons`. Shutdown/failure termination alone
 makes evidence incomplete without claiming truncation. Summary `state: complete`
 means the capture finished; `completion.incomplete` reports evidence loss or
 failure. Frame/time bounds and intentional filtering remain separate counters.
+
+## Persistent shader diagnostic storage
+
+Bridge-enabled shader provenance is retained independently of a live capture.
+Registry/status `shaderMetadata` declare separate limits: 65,536 bytecode
+identities, 65,536 stage identities, eight bounded aliases per stage identity,
+and 64 MiB of retained optional dump bytes. These limits are not included in
+the live capture's `maxBytes`; neither is a measured process-memory limit.
+Creation metadata retires through an attached D3D private-data reference whose
+cleanup retains only weak catalogue ownership. Failed attachment withholds
+metadata. Retirement reclaims identity/dump capacity; unavailable dumps never
+reuse an older byte sequence. Engine aliases require admitted creation metadata.
+
+Vertex, pixel and compute creation observations run behind a catch-all boundary
+that returns the original native HRESULT and output without modification. Missing
+outputs and failed native calls skip diagnostics. Hash/storage/registration/map
+exceptions and admission or cleanup failures increment the allocation-free
+`failureCount`; no logging or allocation is performed by the exception handler.
+COM teardown and native lifetime behavior still require live qualification.

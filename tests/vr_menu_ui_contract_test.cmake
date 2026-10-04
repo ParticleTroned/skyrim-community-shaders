@@ -17,10 +17,17 @@ function(assert_section_contains _start_marker _end_marker _required_text _surfa
     string(FIND "${_section}" "${_required_text}" _required_position)
     if(_required_position EQUAL -1)
         message(FATAL_ERROR
-            "${_surface} does not expose the shared menu layout toggle"
+            "${_surface} is missing required behavior: ${_required_text}"
         )
     endif()
 endfunction()
+
+assert_section_contains(
+    "if (BeginTabItemWithFont(\"VR Stabilizer\""
+    "if (BeginTabItemWithFont(\"Stereo\""
+    "VRFpsStabilizer::DrawStatus();\n\t\t\t\tconst auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());"
+    "Stabilizer plugin availability gate enclosing navigation and both editors"
+)
 
 assert_section_contains(
     "bool CanConfigureMenuLayout()"

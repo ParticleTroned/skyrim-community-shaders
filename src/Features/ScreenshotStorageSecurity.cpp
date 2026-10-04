@@ -24,16 +24,24 @@ namespace CSX::ScreenshotStorage
 	namespace
 	{
 		std::atomic<DirectoryCreationTestHook> g_directoryCreationTestHook{ nullptr };
+		std::atomic<DirectoryCreationTestHook> g_destinationOpeningTestHook{ nullptr };
 	}
 
 	void SetDirectoryCreationTestHook(DirectoryCreationTestHook a_hook) noexcept
 	{
 		g_directoryCreationTestHook.store(a_hook, std::memory_order_release);
 	}
+
+	void SetDestinationOpeningTestHook(DirectoryCreationTestHook a_hook) noexcept
+	{
+		g_destinationOpeningTestHook.store(a_hook, std::memory_order_release);
+	}
 #endif
 
 	namespace
 	{
+		constexpr std::size_t kMaximumDestinationComponents = 256u;
+
 		class ScopedHandle final
 		{
 		public:
@@ -46,6 +54,7 @@ namespace CSX::ScreenshotStorage
 
 			ScopedHandle(const ScopedHandle&) = delete;
 			ScopedHandle& operator=(const ScopedHandle&) = delete;
+			ScopedHandle(ScopedHandle&& a_other) noexcept : handle(a_other.Release()) {}
 
 			HANDLE Get() const noexcept { return handle; }
 			HANDLE Release() noexcept
@@ -147,17 +156,17 @@ namespace CSX::ScreenshotStorage
 				a_handle, FileDispositionInfo, &disposition, sizeof(disposition));
 		}
 
-		HANDLE OpenDirectory(const std::filesystem::path& a_path)
+		HANDLE OpenDirectory(const std::filesystem::path& a_path, bool a_protectWrites = false)
 		{
 			// Attribute-only handles do not enforce the no-delete sharing lease.
 			return CreateFileW(
 				a_path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
-				FILE_SHARE_READ | FILE_SHARE_WRITE,
+				FILE_SHARE_READ | (a_protectWrites ? 0u : FILE_SHARE_WRITE),
 				nullptr, OPEN_EXISTING,
 				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 		}
 
-		HANDLE CreateDirectoryRelative(HANDLE a_parent, std::wstring_view a_name)
+		HANDLE CreateDirectoryRelative(HANDLE a_parent, std::wstring_view a_name, bool a_exclusive = true)
 		{
 			if (a_name.empty() || a_name.size() > USHRT_MAX / sizeof(wchar_t))
 				throw std::runtime_error("sequence directory name is too long");
@@ -182,14 +191,14 @@ namespace CSX::ScreenshotStorage
 			HANDLE directory = INVALID_HANDLE_VALUE;
 			const auto status = createFile(
 				&directory,
-				FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE,
+				FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE,
 				&attributes,
 				&statusBlock,
 				nullptr,
 				FILE_ATTRIBUTE_NORMAL,
-				FILE_SHARE_READ | FILE_SHARE_WRITE,
-				FILE_CREATE,
-				FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT | FILE_SYNCHRONOUS_IO_NONALERT,
+				FILE_SHARE_READ,
+				a_exclusive ? FILE_CREATE : FILE_OPEN_IF,
+				FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT | FILE_SYNCHRONOUS_IO_NONALERT,
 				nullptr,
 				0);
 			if (status < 0) {
@@ -200,6 +209,41 @@ namespace CSX::ScreenshotStorage
 					static_cast<std::uint32_t>(status)));
 			}
 			return directory;
+		}
+
+		std::vector<ScopedHandle> OpenApprovedDestination(
+			const std::filesystem::path& a_root, const std::filesystem::path& a_destination)
+		{
+			const auto root = std::filesystem::absolute(a_root).lexically_normal();
+			const auto destination = std::filesystem::absolute(a_destination).lexically_normal();
+			const auto relative = destination.lexically_relative(root);
+			if (relative.empty() || relative.is_absolute())
+				throw std::runtime_error("sequence destination is outside its approved root");
+			std::vector<std::filesystem::path> components;
+			for (const auto& component : relative) {
+				if (component == ".")
+					continue;
+				if (component == ".." || component.native().find_first_of(L"\\/:") != std::wstring::npos || components.size() >= kMaximumDestinationComponents)
+					throw std::runtime_error("sequence destination has unsafe or excessive directory components");
+				components.push_back(component);
+			}
+			std::vector<ScopedHandle> chain;
+			chain.reserve(components.size() + 1u);
+			chain.emplace_back(OpenDirectory(root, true));
+			if (chain.back().Get() == INVALID_HANDLE_VALUE)
+				throw std::runtime_error(std::format("approved capture root could not be locked (Win32 error {})", GetLastError()));
+			ReadIdentity(chain.back().Get(), true);
+			if (!SamePath(FinalPath(chain.back().Get()), root))
+				throw std::runtime_error("approved capture root changed before handle acquisition");
+			auto expected = root;
+			for (const auto& component : components) {
+				chain.emplace_back(CreateDirectoryRelative(chain.back().Get(), component.native(), false));
+				ReadIdentity(chain.back().Get(), true);
+				expected /= component;
+				if (!SamePath(FinalPath(chain.back().Get()), expected))
+					throw std::runtime_error("sequence destination changed during approved traversal");
+			}
+			return chain;
 		}
 
 		std::string HashHandle(HANDLE a_handle)
@@ -404,20 +448,27 @@ namespace CSX::ScreenshotStorage
 
 	std::shared_ptr<DirectoryLease> DirectoryLease::CreateExclusive(
 		const std::filesystem::path& a_destination,
-		std::string_view a_requestId)
+		std::string_view a_requestId,
+		const std::filesystem::path& a_approvedRoot)
 	{
 		if (a_requestId.empty() || !std::ranges::all_of(a_requestId, [](const unsigned char value) {
 				return std::isalnum(value) != 0 || value == '-';
 			})) {
 			throw std::runtime_error("sequence request identity is not a safe directory suffix");
 		}
-		std::filesystem::create_directories(a_destination);
-		std::error_code canonicalError;
-		const auto requestedDestination = std::filesystem::weakly_canonical(a_destination, canonicalError);
-		if (canonicalError || !requestedDestination.is_absolute())
-			throw std::runtime_error("sequence destination could not be resolved to an absolute directory");
-
-		ScopedHandle destinationHandle(OpenDirectory(requestedDestination));
+		std::vector<ScopedHandle> ancestors;
+		if (a_approvedRoot.empty()) {
+			std::filesystem::create_directories(a_destination);
+		}
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+		if (const auto hook = g_destinationOpeningTestHook.load(std::memory_order_acquire))
+			hook(a_destination);
+#endif
+		if (!a_approvedRoot.empty())
+			ancestors = OpenApprovedDestination(a_approvedRoot, a_destination);
+		ScopedHandle destinationHandle(ancestors.empty() ? OpenDirectory(a_destination) : ancestors.back().Release());
+		if (!ancestors.empty())
+			ancestors.pop_back();
 		if (destinationHandle.Get() == INVALID_HANDLE_VALUE)
 			throw std::runtime_error(std::format("sequence destination could not be locked (Win32 error {})", GetLastError()));
 		const auto destinationInformation = ReadIdentity(destinationHandle.Get(), true);
@@ -435,9 +486,15 @@ namespace CSX::ScreenshotStorage
 			const auto openedDirectory = FinalPath(directoryHandle.Get());
 			if (!SamePath(openedDirectory, directory))
 				throw std::runtime_error("sequence directory identity did not match its created path");
-			return std::shared_ptr<DirectoryLease>(new DirectoryLease(
-				destinationHandle.Release(), directoryHandle.Release(), destination, openedDirectory,
+			auto lease = std::shared_ptr<DirectoryLease>(new DirectoryLease(
+				nullptr, nullptr, destination, openedDirectory,
 				Identity(destinationInformation), Identity(directoryInformation)));
+			lease->protectedAncestors.resize(ancestors.size(), nullptr);
+			lease->destinationHandle = destinationHandle.Release();
+			lease->directoryHandle = directoryHandle.Release();
+			for (std::size_t index = 0u; index < ancestors.size(); ++index)
+				lease->protectedAncestors[index] = ancestors[index].Release();
+			return lease;
 		} catch (...) {
 			DeleteHandle(directoryHandle.Get());
 			throw;
@@ -450,6 +507,9 @@ namespace CSX::ScreenshotStorage
 			CloseHandle(static_cast<HANDLE>(directoryHandle));
 		if (destinationHandle)
 			CloseHandle(static_cast<HANDLE>(destinationHandle));
+		for (auto* ancestor : protectedAncestors)
+			if (ancestor)
+				CloseHandle(static_cast<HANDLE>(ancestor));
 	}
 
 	void DirectoryLease::Verify() const

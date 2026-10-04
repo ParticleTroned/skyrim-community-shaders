@@ -9,6 +9,7 @@
 #include <format>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <mutex>
 #include <stdexcept>
 
@@ -21,6 +22,10 @@ namespace
 	std::condition_variable g_preparationCondition;
 	bool g_preparationEntered = false;
 	bool g_preparationReleased = false;
+	std::filesystem::path g_destinationParent;
+	std::filesystem::path g_destinationDisplaced;
+	std::filesystem::path g_destinationOutside;
+	bool g_destinationHookCalled = false;
 
 	bool IsLeaseConflict(DWORD a_error)
 	{
@@ -58,6 +63,17 @@ namespace
 		g_preparationCondition.notify_all();
 		g_preparationCondition.wait(lock, [] { return g_preparationReleased; });
 	}
+
+	void SubstituteDestinationParent(const std::filesystem::path&)
+	{
+		g_destinationHookCalled = true;
+		if (!MoveFileExW(g_destinationParent.c_str(), g_destinationDisplaced.c_str(), 0))
+			throw std::runtime_error("could not displace the destination parent race fixture");
+		const auto command = std::format(L"cmd.exe /d /c mklink /J \"{}\" \"{}\" >nul",
+			g_destinationParent.native(), g_destinationOutside.native());
+		if (_wsystem(command.c_str()) != 0)
+			throw std::runtime_error("could not install the destination parent substitution fixture");
+	}
 }
 
 inline void RunScreenshotStorageSecurityTests()
@@ -65,6 +81,7 @@ inline void RunScreenshotStorageSecurityTests()
 	using CSX::ScreenshotStorage::CommittedFile;
 	using CSX::ScreenshotStorage::DirectoryLease;
 	using CSX::ScreenshotStorage::NormalizeFinalPath;
+	using CSX::ScreenshotStorage::SetDestinationOpeningTestHook;
 	using CSX::ScreenshotStorage::SetDirectoryCreationTestHook;
 	if (NormalizeFinalPath(LR"(\\?\UNC\server\share\folder)") !=
 			std::filesystem::path(LR"(\\server\share\folder)") ||
@@ -76,6 +93,63 @@ inline void RunScreenshotStorageSecurityTests()
 	                  std::format("csx-screenshot-storage-{}-{}", GetCurrentProcessId(), GetTickCount64());
 	std::filesystem::create_directories(root);
 	try {
+		const auto approved = root / "approved";
+		std::filesystem::create_directories(approved);
+		const auto nested = approved / "stable" / "parent";
+		auto restricted = DirectoryLease::CreateExclusive(nested, "restricted", approved);
+		if (restricted->Destination() != nested || restricted->Path().parent_path() != nested)
+			throw std::runtime_error("restricted destination receipt did not bind the actual retained parent");
+		for (const auto& protectedPath : { approved, nested.parent_path(), nested }) {
+			if (MoveFileExW(protectedPath.c_str(), (root / "displaced-protected").c_str(), 0) ||
+				!IsLeaseConflict(GetLastError()))
+				throw std::runtime_error("approved ancestry could be displaced during publication");
+			const HANDLE writer = CreateFileW(protectedPath.c_str(), GENERIC_WRITE,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+			if (writer != INVALID_HANDLE_VALUE) {
+				CloseHandle(writer);
+				throw std::runtime_error("approved ancestry allowed reparse mutation during publication");
+			}
+		}
+		restricted->Verify();
+		restricted.reset();
+		g_destinationParent = approved / "substituted";
+		g_destinationDisplaced = approved / "original-parent";
+		g_destinationOutside = root / "outside";
+		std::filesystem::create_directories(g_destinationParent);
+		std::filesystem::create_directories(g_destinationOutside);
+		const auto outsideSentinel = g_destinationOutside / "sentinel.txt";
+		{
+			std::ofstream sentinel(outsideSentinel, std::ios::binary);
+			sentinel << "outside-owned";
+		}
+		g_destinationHookCalled = false;
+		SetDestinationOpeningTestHook(&SubstituteDestinationParent);
+		ExpectFailure([&] {
+			DirectoryLease::CreateExclusive(g_destinationParent / "inner", "parent-race", approved);
+		},
+			"a substituted intermediate parent escaped its approved root");
+		SetDestinationOpeningTestHook(nullptr);
+		if (!g_destinationHookCalled || !std::filesystem::exists(g_destinationDisplaced) ||
+			std::filesystem::exists(g_destinationOutside / "inner") ||
+			std::filesystem::exists(g_destinationOutside / "CS_sequence_parent-race"))
+			throw std::runtime_error("parent substitution created storage outside the approved root");
+		std::ifstream sentinel(outsideSentinel, std::ios::binary);
+		const std::string sentinelBytes((std::istreambuf_iterator<char>(sentinel)), {});
+		if (sentinelBytes != "outside-owned")
+			throw std::runtime_error("parent substitution changed outside-owned contents");
+		sentinel.close();
+		if (!RemoveDirectoryW(g_destinationParent.c_str()))
+			throw std::runtime_error("could not retire the parent substitution junction fixture");
+		ExpectFailure([&] {
+			DirectoryLease::CreateExclusive(g_destinationOutside, "outside-rejected", approved);
+		},
+			"an explicitly outside destination passed restricted containment");
+		if (std::filesystem::exists(g_destinationOutside / "CS_sequence_outside-rejected"))
+			throw std::runtime_error("restricted containment failure created a sequence");
+		auto absolute = DirectoryLease::CreateExclusive(g_destinationOutside, "absolute-permitted");
+		absolute->Verify();
+		absolute.reset();
 		const std::string requestId = "12345678-1234-1234-1234-123456789abc";
 		auto directory = DirectoryLease::CreateExclusive(root, requestId);
 		if (directory->Path().filename() != "CS_sequence_12345678-1234-1234-1234-123456789abc")
@@ -243,6 +317,7 @@ inline void RunScreenshotStorageSecurityTests()
 		std::filesystem::remove_all(root);
 	} catch (...) {
 		SetDirectoryCreationTestHook(nullptr);
+		SetDestinationOpeningTestHook(nullptr);
 		{
 			std::lock_guard lock(g_preparationMutex);
 			g_preparationReleased = true;

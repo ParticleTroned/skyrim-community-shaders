@@ -97,12 +97,27 @@ foreach(_required_contract_text IN ITEMS
 	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
 	effectiveSequence RelativeContainedArtifactPath relativeSequencePath
 	DirectoryLease::CreateExclusive directoryLease VerifyDirectChild
+	"resolvedDirectory, result.requestId, approvedRoot"
+	"Util::PathToUtf8(result.directoryLease->Destination())"
 	SelectSettingsCaptureSource sequence.effective a_sequence.effective
 	DirectoryPreparationJob preparationJobs preparationResults preparationPending
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
         message(FATAL_ERROR "Screenshot API implementation is missing contract behavior: ${_required_contract_text}")
+    endif()
+endforeach()
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotStorageSecurity.cpp" _storage)
+foreach(_required_root_custody IN ITEMS
+    "OpenApprovedDestination(a_approvedRoot, a_destination)"
+    "CreateDirectoryRelative(chain.back().Get(), component.native(), false)"
+    "FILE_OPEN_REPARSE_POINT" "a_exclusive ? FILE_CREATE : FILE_OPEN_IF"
+    "lease->protectedAncestors[index] = ancestors[index].Release()"
+)
+    string(FIND "${_storage}" "${_required_root_custody}" _root_custody_position)
+    if(_root_custody_position EQUAL -1)
+        message(FATAL_ERROR "Restricted sequence storage is missing root custody: ${_required_root_custody}")
     endif()
 endforeach()
 

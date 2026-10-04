@@ -3476,6 +3476,24 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_test(NAME ScreenshotDispatch COMMAND screenshot_dispatch_test)
+
+    add_executable(
+        screenshot_storage_security_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_storage_security_test.cpp
+    )
+    target_compile_features(screenshot_storage_security_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        screenshot_storage_security_test
+        PRIVATE CSX_SCREENSHOT_STORAGE_TESTING NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_include_directories(
+        screenshot_storage_security_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(screenshot_storage_security_test PRIVATE bcrypt)
+    add_test(NAME ScreenshotStorageSecurity COMMAND screenshot_storage_security_test)
+    set_tests_properties(ScreenshotStorageSecurity PROPERTIES LABELS "ControllerTests")
     set_tests_properties(ScreenshotDispatch PROPERTIES LABELS "ControllerTests")
 
     set(_skylighting_lifecycle_test_dir

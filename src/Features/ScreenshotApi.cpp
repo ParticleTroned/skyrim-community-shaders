@@ -42,7 +42,8 @@ namespace
 
 	std::filesystem::path ResolveConfiguredCaptureDirectory(
 		const std::filesystem::path& a_configured,
-		bool a_sequence)
+		bool a_sequence,
+		std::filesystem::path* a_approvedRoot = nullptr)
 	{
 		if (a_configured.empty())
 			throw std::runtime_error("the configured screenshot directory is empty");
@@ -56,6 +57,8 @@ namespace
 		const auto resolved = std::filesystem::weakly_canonical(root / a_configured);
 		if (!CSX::ScreenshotPolicy::IsContainedPath(root, resolved))
 			throw std::runtime_error("the configured screenshot directory escapes its Windows capture root");
+		if (a_approvedRoot)
+			*a_approvedRoot = std::filesystem::weakly_canonical(*knownFolder);
 		return resolved;
 	}
 
@@ -246,11 +249,12 @@ void ScreenshotApi::PreparationWorkerLoop(std::shared_ptr<PreparationWorkerState
 			if (stopping || preparation.cancelled) {
 				result.cancelled = true;
 			} else {
+				std::filesystem::path approvedRoot;
 				const auto resolvedDirectory = ResolveDestinationDirectory(
-					result.capture, preparation.configuredDirectory, true);
-				result.capture["destination"]["resolvedDirectory"] = Util::PathToUtf8(resolvedDirectory);
+					result.capture, preparation.configuredDirectory, true, &approvedRoot);
 				result.directoryLease = CSX::ScreenshotStorage::DirectoryLease::CreateExclusive(
-					resolvedDirectory, result.requestId);
+					resolvedDirectory, result.requestId, approvedRoot);
+				result.capture["destination"]["resolvedDirectory"] = Util::PathToUtf8(result.directoryLease->Destination());
 				result.success = true;
 			}
 		} catch (const std::exception& error) {
@@ -2435,8 +2439,11 @@ bool ScreenshotApi::DrainForShutdown(std::chrono::milliseconds a_timeout)
 std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
 	const json& a_capture,
 	const std::filesystem::path& a_configuredDirectory,
-	bool a_sequence)
+	bool a_sequence,
+	std::filesystem::path* a_approvedRoot)
 {
+	if (a_approvedRoot)
+		a_approvedRoot->clear();
 	const auto destination = a_capture.value("destination", json::object());
 	const auto policy = destination.value("policy", std::string("settings_default"));
 	wchar_t executable[MAX_PATH]{};
@@ -2448,7 +2455,7 @@ std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
 	std::filesystem::path requested;
 	if (policy == "settings_default") {
 		requested = a_configuredDirectory;
-		return ResolveConfiguredCaptureDirectory(requested, a_sequence);
+		return ResolveConfiguredCaptureDirectory(requested, a_sequence, a_approvedRoot);
 	}
 
 	const auto directory = destination.value("directory", std::string{});
@@ -2466,5 +2473,7 @@ std::filesystem::path ScreenshotApi::ResolveDestinationDirectory(
 	const auto relative = std::filesystem::relative(resolved, gameDirectory);
 	if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
 		throw std::runtime_error("game_relative destination escapes the game directory");
+	if (a_approvedRoot)
+		*a_approvedRoot = gameDirectory;
 	return resolved;
 }

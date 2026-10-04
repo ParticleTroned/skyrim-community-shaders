@@ -67,8 +67,9 @@ namespace CSX::ScreenshotStorage
 	{
 		std::filesystem::path path;
 		std::filesystem::path Path() const { return path; }
+		std::filesystem::path Destination() const { return path == "handle-corrected" ? "actual-destination" : path; }
 		void VerifyDirectChild(const std::filesystem::path&) const {}
-		static std::shared_ptr<DirectoryLease> CreateExclusive(const std::filesystem::path& path, const std::string&)
+		static std::shared_ptr<DirectoryLease> CreateExclusive(const std::filesystem::path& path, const std::string&, const std::filesystem::path& = {})
 		{
 			if (path == "denied")
 				throw std::runtime_error("destination denied");
@@ -240,8 +241,9 @@ struct ScreenshotApi
 	~ScreenshotApi();
 	static void PreparationWorkerLoop(std::shared_ptr<PreparationWorkerState>);
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState>);
-	static std::filesystem::path ResolveDestinationDirectory(const json&, const std::filesystem::path& configured, bool)
+	static std::filesystem::path ResolveDestinationDirectory(const json&, const std::filesystem::path& configured, bool, std::filesystem::path* approvedRoot)
 	{
+		approvedRoot->clear();
 		if (configured == "blocked-preparation")
 			preparationIo.Wait();
 		return configured;
@@ -342,6 +344,16 @@ void PrepareParent(ScreenshotApi& api)
 
 void TestProductionWorkerIsolation()
 {
+	{
+		ScreenshotApi api;
+		PrepareParent(api);
+		QueuePreparation(api, "parent", "handle-corrected");
+		AwaitResults(api.preparationWorkerState, 1, 0);
+		std::lock_guard lock(api.preparationWorkerState->mutex);
+		const auto& result = api.preparationWorkerState->preparationResults.front();
+		if (!result.success || result.capture["destination"]["resolvedDirectory"] != "actual-destination")
+			throw std::runtime_error("production preparation published a pre-open destination instead of its retained handle path");
+	}
 	{
 		ScreenshotApi api;
 		PrepareParent(api);

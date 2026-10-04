@@ -492,6 +492,15 @@ capability explicitly permits both.
     any path resolution or directory I/O. The preparation worker resolves the
     destination and creates the sequence directory; failure becomes a terminal
     `destination_unavailable` receipt without blocking request or render work.
+-   Restricted sequence destinations retain the approved game or Windows capture
+    root, then open or create each directory component relative to the previous
+    handle. Reparse components, traversal outside the root, more than 256
+    components, and conflicting write/delete handles fail preparation before
+    creating a sequence directory. Root and intermediate handles prevent rename
+    and reparse mutation until publication finishes. Absolute destinations,
+    including absolute configured folders, retain their unrestricted policy.
+-   `resolvedDirectory` is populated only after the destination lease succeeds
+    and records the parent path obtained from its retained handle.
 -   The sequence directory is created relative to the already-open destination
     handle by one native create-and-open operation. CSX never reopens the new
     directory by pathname to acquire its lease.

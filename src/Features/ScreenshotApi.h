@@ -351,5 +351,6 @@ private:
 	static std::filesystem::path ResolveDestinationDirectory(
 		const json& a_capture,
 		const std::filesystem::path& a_configuredDirectory,
-		bool a_sequence = false);
+		bool a_sequence = false,
+		std::filesystem::path* a_approvedRoot = nullptr);
 };

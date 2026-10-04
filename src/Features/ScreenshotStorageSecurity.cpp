@@ -130,22 +130,35 @@ namespace CSX::ScreenshotStorage
 			const std::filesystem::path& a_destination,
 			bool a_replaceExisting)
 		{
-			const auto destination = std::filesystem::absolute(a_destination).lexically_normal().native();
+			const auto destination = a_destination.filename().native();
+			if (destination.empty() || destination.find_first_of(L"\\/:") != std::wstring::npos)
+				throw std::runtime_error("committed artifact rename requires a regular leaf name");
+			using NtSetInformationFileFunction = NTSTATUS(NTAPI*)(
+				HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+			const auto module = GetModuleHandleW(L"ntdll.dll");
+			const auto setInformation = module ? reinterpret_cast<NtSetInformationFileFunction>(
+													 GetProcAddress(module, "NtSetInformationFile")) :
+			                                     nullptr;
+			if (!setInformation)
+				throw std::runtime_error("same-directory atomic artifact rename is unavailable");
 			constexpr auto headerBytes = offsetof(FILE_RENAME_INFO, FileName);
 			if (destination.size() > (MAXDWORD - headerBytes - sizeof(wchar_t)) / sizeof(wchar_t))
 				throw std::runtime_error("committed artifact destination is too long");
 			const auto nameBytes = destination.size() * sizeof(wchar_t);
-			// Win32 path conversion requires a terminator beyond the counted name.
+			// A native leaf rename avoids reopening the write-protected parent.
 			std::vector<std::byte> storage(std::max<std::size_t>(sizeof(FILE_RENAME_INFO), headerBytes + nameBytes + sizeof(wchar_t)));
 			auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
 			rename->ReplaceIfExists = a_replaceExisting ? TRUE : FALSE;
 			rename->RootDirectory = nullptr;
 			rename->FileNameLength = static_cast<DWORD>(nameBytes);
 			std::memcpy(rename->FileName, destination.data(), nameBytes);
-			if (!SetFileInformationByHandle(
-					a_handle, FileRenameInfo, rename, static_cast<DWORD>(storage.size()))) {
+			IO_STATUS_BLOCK statusBlock{};
+			const auto status = setInformation(
+				a_handle, &statusBlock, rename, static_cast<ULONG>(storage.size()),
+				static_cast<FILE_INFORMATION_CLASS>(10));
+			if (status < 0) {
 				throw std::runtime_error(std::format(
-					"committed artifact rename failed with Win32 error {}", GetLastError()));
+					"committed artifact rename failed with NTSTATUS {:#x}", static_cast<std::uint32_t>(status)));
 			}
 		}
 

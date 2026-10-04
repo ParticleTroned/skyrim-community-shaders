@@ -113,6 +113,13 @@ inline void RunScreenshotStorageSecurityTests()
 			}
 		}
 		restricted->Verify();
+		const auto restrictedArtifact = restricted->Path() / "restricted.bmp";
+		const auto restrictedCommit = CommittedFile::WriteAtomically(
+			restrictedArtifact.native() + L".tmp", restrictedArtifact, "abc", 3, false);
+		if (restrictedCommit.bytes != 3 ||
+			restrictedCommit.sha256 != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+			throw std::runtime_error("restricted ancestry prevented atomic artifact publication");
+		restricted->Verify();
 		restricted.reset();
 		g_destinationParent = approved / "substituted";
 		g_destinationDisplaced = approved / "original-parent";

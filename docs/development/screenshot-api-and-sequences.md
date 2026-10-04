@@ -510,9 +510,11 @@ capability explicitly permits both.
     exclusively, and retains that handle while it writes, flushes, atomically
     renames without replacement, and verifies the committed file's identity,
     size, and SHA-256 custody.
--   The Win32 rename buffer includes a terminating wide NUL beyond its counted
-    filename. Sequence directory handles request directory-list access so
-    their no-delete sharing mode actually prevents rename during publication.
+-   Atomic artifact publication uses a native, same-directory leaf rename on
+    the producer handle. This keeps the parent lease held without reopening
+    that write-protected directory. The counted rename buffer also retains a
+    terminating wide NUL. Sequence directory handles request directory-list
+    access so their no-delete sharing mode prevents rename during publication.
     Publication errors distinguish destination-open, identity and path failures.
 -   The receipt records both the requested destination policy and resolved path.
 -   The API never deletes artifacts.

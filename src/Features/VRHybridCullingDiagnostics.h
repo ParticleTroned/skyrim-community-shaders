@@ -24,8 +24,9 @@ namespace VRHybridCullingDiagnostics
 		std::uint32_t planeProofs, polygonClips, faceBiasOnlyProofs, triangleBiasOnlyProofs;
 		std::uint32_t clipPlanes, skippedClipPlanes, planeBuilds, planeReuses;
 		std::uint32_t refinedCells, sourcePixels, resolvedCells, sourceWitnesses;
+		std::uint32_t triangleRegionTests, disjointTriangles, emptyClips, clipVertexVisits;
 	};
-	static_assert(sizeof(Record) == 64 && offsetof(Record, planeProofs) == 16);
+	static_assert(sizeof(Record) == 80 && offsetof(Record, planeProofs) == 16);
 
 	struct Totals
 	{
@@ -34,7 +35,25 @@ namespace VRHybridCullingDiagnostics
 		std::uint64_t planeProofs = 0, polygonClips = 0, faceBiasOnlyProofs = 0, triangleBiasOnlyProofs = 0;
 		std::uint64_t clipPlanes = 0, skippedClipPlanes = 0, planeBuilds = 0, planeReuses = 0;
 		std::uint64_t refinedCells = 0, sourcePixels = 0, resolvedCells = 0, sourceWitnesses = 0;
+		std::uint64_t triangleRegionTests = 0, disjointTriangles = 0, emptyClips = 0, clipVertexVisits = 0;
 	};
+
+	/** Keep accumulated work complete when a diagnostic field is added. */
+	inline constexpr std::array WorkMembers{
+		&Totals::objects, &Totals::depthLoads, &Totals::faceRegions, &Totals::faceTriangles,
+		&Totals::planeProofs, &Totals::polygonClips, &Totals::faceBiasOnlyProofs, &Totals::triangleBiasOnlyProofs,
+		&Totals::clipPlanes, &Totals::skippedClipPlanes, &Totals::planeBuilds, &Totals::planeReuses,
+		&Totals::refinedCells, &Totals::sourcePixels, &Totals::resolvedCells, &Totals::sourceWitnesses,
+		&Totals::triangleRegionTests, &Totals::disjointTriangles, &Totals::emptyClips, &Totals::clipVertexVisits
+	};
+
+	inline void Accumulate(Totals& a_total, const Totals& a_sample)
+	{
+		for (auto field : WorkMembers)
+			a_total.*field += a_sample.*field;
+		for (std::size_t index = 0; index < a_total.eyeReasons.size(); ++index)
+			a_total.eyeReasons[index] += a_sample.eyeReasons[index];
+	}
 
 	/** Reject malformed or misattributed records before publishing any batch totals. */
 	inline std::optional<Totals> Summarize(std::span<const Record> a_records, std::span<const std::uint32_t> a_visibility)
@@ -57,12 +76,14 @@ namespace VRHybridCullingDiagnostics
 				(second == 5 && record.depthLoads < 68) || record.depthLoads > 128 || record.faceRegions > record.depthLoads ||
 				record.faceTriangles > record.faceRegions * 12 || record.faceBiasOnlyProofs > record.faceRegions * 6 ||
 				record.faceTriangles > (record.faceRegions * 6 - record.faceBiasOnlyProofs) * 2 ||
-				static_cast<std::uint64_t>(record.planeProofs) + record.polygonClips + record.triangleBiasOnlyProofs > record.faceTriangles)
+				static_cast<std::uint64_t>(record.planeProofs) + record.polygonClips + record.disjointTriangles + record.triangleBiasOnlyProofs > record.faceTriangles)
 				return std::nullopt;
 			if (static_cast<std::uint64_t>(record.clipPlanes) + record.skippedClipPlanes > static_cast<std::uint64_t>(record.polygonClips) * 4 ||
 				static_cast<std::uint64_t>(record.planeBuilds) + record.planeReuses > record.faceTriangles ||
 				record.sourcePixels > record.depthLoads || record.sourceWitnesses > 2 || record.resolvedCells > record.refinedCells ||
-				record.refinedCells > record.faceRegions || record.resolvedCells > record.sourcePixels)
+				record.refinedCells > record.faceRegions || record.resolvedCells > record.sourcePixels ||
+				record.emptyClips > record.polygonClips || record.disjointTriangles > record.triangleRegionTests ||
+				record.triangleRegionTests > record.faceTriangles)
 				return std::nullopt;
 			++result.eyeReasons[first];
 			++result.eyeReasons[second];
@@ -82,6 +103,10 @@ namespace VRHybridCullingDiagnostics
 			result.sourcePixels += record.sourcePixels;
 			result.resolvedCells += record.resolvedCells;
 			result.sourceWitnesses += record.sourceWitnesses;
+			result.triangleRegionTests += record.triangleRegionTests;
+			result.disjointTriangles += record.disjointTriangles;
+			result.emptyClips += record.emptyClips;
+			result.clipVertexVisits += record.clipVertexVisits;
 		}
 		return result;
 	}

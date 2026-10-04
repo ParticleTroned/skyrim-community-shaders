@@ -89,6 +89,32 @@ namespace ProjectedBounds
 		return isfinite(residual) && isfinite(residualError) && residual > residualError;
 	}
 
+	/// A strict separating edge excludes the complete rectangle; uncertain orientation needs clipping.
+	bool TriangleOutsideRegion(float3 a, float3 b, float3 c, float3 normal, float3 magnitude, float2 minimumPixel, float2 maximumPixel)
+	{
+		const float roundoffFactor = 64.0 / 16777216.0;
+		const float roundoffFloor = 1e-20;
+		if (!all(isfinite(normal)) || !all(isfinite(magnitude)) || abs(normal.z) <= roundoffFactor * magnitude.z + roundoffFloor)
+			return false;
+		float orientation = normal.z < 0.0 ? -1.0 : 1.0;
+		[unroll] for (uint index = 0; index < 3; ++index)
+		{
+			float2 start = index == 0 ? a.xy : (index == 1 ? b.xy : c.xy);
+			float2 end = index == 0 ? b.xy : (index == 1 ? c.xy : a.xy);
+			precise float2 edge = end - start;
+			float2 gradient = orientation * float2(-edge.y, edge.x);
+			float2 corner = float2(gradient.x >= 0.0 ? maximumPixel.x : minimumPixel.x,
+				gradient.y >= 0.0 ? maximumPixel.y : minimumPixel.y);
+			precise float2 displacement = corner - start;
+			precise float residual = orientation * (edge.x * displacement.y - edge.y * displacement.x);
+			precise float2 maximumDisplacement = max(abs(minimumPixel - start), abs(maximumPixel - start));
+			precise float error = roundoffFactor * dot(abs(edge), maximumDisplacement.yx) + roundoffFloor;
+			if (isfinite(residual) && isfinite(error) && residual < -error)
+				return true;
+		}
+		return false;
+	}
+
 	bool PlaneProvesOccluded(float3 a, float3 b, float3 c, float2 minimumPixel, float2 maximumPixel, float depth, float guardedBias)
 	{
 		float3 normal, magnitude;
@@ -141,6 +167,12 @@ namespace ProjectedBounds
 					continue;
 				}
 
+				HIZ_COUNT_TRIANGLE_REGION;
+				if (TriangleOutsideRegion(a, b, c, PlaneNormals[planeSlot], PlaneMagnitudes[planeSlot], minimumPixel, maximumPixel)) {
+					HIZ_COUNT_DISJOINT_TRIANGLE;
+					continue;
+				}
+
 				HIZ_COUNT_POLYGON_CLIP;
 				// Alternate eight-vertex banks so survivors need no copy; read only initialized entries.
 				float3 polygon[16];
@@ -159,7 +191,10 @@ namespace ProjectedBounds
 					if (lower ? minimumTriangle[axis] >= boundary : maximumTriangle[axis] <= boundary) {
 						bool contained = true;
 						[loop] for (uint index = 0; index < count; ++index)
+						{
+							HIZ_COUNT_CLIP_VERTEX;
 							contained = contained && sign * (polygon[polygonBase + index][axis] - boundary) >= 0.0;
+						}
 						if (contained) {
 							HIZ_COUNT_CLIP_SKIP;
 							continue;
@@ -172,6 +207,7 @@ namespace ProjectedBounds
 					float previousDistance = sign * ((axis == 0 ? previous.x : previous.y) - boundary);
 					[loop] for (uint index = 0; index < count; ++index)
 					{
+						HIZ_COUNT_CLIP_VERTEX;
 						float3 current = polygon[polygonBase + index];
 						float distance = sign * ((axis == 0 ? current.x : current.y) - boundary);
 						if ((previousDistance >= 0.0) != (distance >= 0.0)) {
@@ -198,8 +234,14 @@ namespace ProjectedBounds
 				}
 				// Projected depth is affine on each triangle, including reflected boxes.
 				nearest = DepthOrder::Far();
+				if (count == 0) {
+					HIZ_COUNT_EMPTY_CLIP;
+				}
 				[loop] for (uint index = 0; index < count; ++index)
+				{
+					HIZ_COUNT_CLIP_VERTEX;
 					nearest = DepthOrder::Nearest(nearest, polygon[polygonBase + index].z);
+				}
 				if (count != 0 && !DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
 					return false;
 			}

@@ -185,6 +185,12 @@ namespace VRHybridCullingPolicy
 			a_constants.pixelGuardBand > kMaximumSourceDimension) {
 			return false;
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if ((a_constants.reserved & ~1u) != 0)
+#else
+		if (a_constants.reserved != 0)
+#endif
+			return false;
 		for (std::uint32_t eye = 0; eye < kEyeCount; ++eye) {
 			if (!IsValidProjection(a_constants.viewProjection[eye]))
 				return false;

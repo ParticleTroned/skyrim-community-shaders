@@ -20,7 +20,13 @@ namespace VRHybridCulling
 	};
 	inline constexpr std::array HistoryRejectionReasons{
 		"unreadable_batch", "batch_mismatch", "pipeline_changed", "bounds_changed", "resource_publication_changed",
-		"frame_unavailable", "depth_changed", "view_changed"
+		"frame_unavailable", "depth_changed", "view_changed", "configuration_changed"
+	};
+	inline constexpr std::array MatchedDropReasons{
+		"unreadable_batch", "batch_mismatch", "pipeline_changed", "bounds_changed", "resource_publication_changed",
+		"frame_unavailable", "depth_changed", "view_changed", "configuration_changed", "native_submission_changed",
+		"diagnostics_unavailable", "queue_full", "readback_expired", "window_changed", "submission_abandoned",
+		"renderer_context_changed", "visibility_map_failed", "diagnostic_map_failed", "invalid_record", "native_recovery_changed", "dispatch_failed"
 	};
 
 	struct SourceSnapshot
@@ -72,6 +78,7 @@ namespace VRHybridCulling
 		std::uint32_t lastObjectCount = 0;
 		StageTiming prepare, dispatch, readback;
 		std::uint32_t sourceReductionActive = 0;
+		bool sourceRefinementEnabled = true;
 		bool traversalDiagnosticsEnabled = false;
 		bool traversalDiagnosticsAvailable = false;
 		const char* traversalDiagnosticsAvailability = "not_created";
@@ -81,6 +88,9 @@ namespace VRHybridCulling
 		std::uint64_t traversalDiscardedBatches = 0;
 		bool matchedDiagnosticsEnabled = false, matchedSnapshotAvailable = false, matchedSnapshotBusy = false;
 		std::uint64_t matchedSubmittedBatches = 0, matchedBatches = 0, matchedDroppedBatches = 0, matchedFailedBatches = 0;
+		std::uint64_t matchedPendingBatches = 0, matchedNotReadyPolls = 0;
+		std::uint64_t matchedSnapshotPublicationMisses = 0;
+		std::array<std::uint64_t, MatchedDropReasons.size()> matchedDropReasonCounts{};
 		VRHybridCullingDiagnostics::MatchedTotals matched{};
 	};
 #endif
@@ -104,6 +114,10 @@ namespace VRHybridCulling
 	[[nodiscard]] bool IsMatchedDiagnosticsActive() noexcept;
 	/** Test the prepared native batch into private diagnostic buffers. */
 	void DispatchMatched(void* a_culler, std::uint64_t a_epoch);
+	/** Bind the native output after its producer, retaining the exact submitted input. */
+	void FinalizeMatchedSubmission(void* a_culler, std::uint64_t a_epoch);
+	/** Toggle original-depth refinement for DevBench A/B; production always retains refinement. */
+	void SetSourceRefinementEnabled(bool a_enabled) noexcept;
 	/** Publish matched outcomes after Advanced recovery, without changing native results. */
 	void CompleteMatchedRecovery(void* a_culler, std::uint64_t a_epoch);
 	/** Read current backend state and gated measurements without owning the render context. */

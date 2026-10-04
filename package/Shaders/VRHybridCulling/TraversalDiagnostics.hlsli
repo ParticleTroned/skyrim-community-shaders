@@ -20,6 +20,7 @@ struct HiZTraversalDiagnostic
 	uint4 proofs;
 	uint4 planeWork;
 	uint4 refinement;
+	uint4 regionWork;
 };
 
 #	define HIZ_DIAGNOSTIC_PARAMETERS , inout HiZTraversalDiagnostic diagnostic
@@ -37,6 +38,10 @@ struct HiZTraversalDiagnostic
 #	define HIZ_COUNT_SOURCE_PIXEL ++diagnostic.refinement.y
 #	define HIZ_COUNT_RESOLVED_CELL ++diagnostic.refinement.z
 #	define HIZ_COUNT_SOURCE_WITNESS ++diagnostic.refinement.w
+#	define HIZ_COUNT_TRIANGLE_REGION ++diagnostic.regionWork.x
+#	define HIZ_COUNT_DISJOINT_TRIANGLE ++diagnostic.regionWork.y
+#	define HIZ_COUNT_EMPTY_CLIP ++diagnostic.regionWork.z
+#	define HIZ_COUNT_CLIP_VERTEX ++diagnostic.regionWork.w
 #	define HIZ_VISIBLE(reason)              \
 		{                                    \
 			diagnostic.traversal.x = reason; \
@@ -63,6 +68,10 @@ struct HiZTraversalDiagnostic
 #	define HIZ_COUNT_SOURCE_PIXEL
 #	define HIZ_COUNT_RESOLVED_CELL
 #	define HIZ_COUNT_SOURCE_WITNESS
+#	define HIZ_COUNT_TRIANGLE_REGION
+#	define HIZ_COUNT_DISJOINT_TRIANGLE
+#	define HIZ_COUNT_EMPTY_CLIP
+#	define HIZ_COUNT_CLIP_VERTEX
 #	define HIZ_VISIBLE(reason) return false
 #	define HIZ_OCCLUDED return true
 #endif

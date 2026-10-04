@@ -5,14 +5,14 @@ The selected path is guarded projected-face testing with preferred 2x2
 source reduction. Alternative proof/coarse-depth selectors and their extra
 shaders are removed. The existing 4x4 resource-limit fallback remains.
 
-The [latest noon comparison](vr-hybrid-culling-clip-storage-results-2026-10-04.md)
-measured source `608aacfd9`: guarded 2x2 averaged 11.68 ms CPU / 8.94 ms
-GPU against Advanced's 10.41 / 7.84 ms. Hi-Z GPU frames remain 14.06%
-slower. Separate complete 300-frame captures measured 0.591 ms Hi-Z
-culling versus 0.081 ms Advanced; bounds testing contributes 88.12% of
-Hi-Z culling. Separate counter cohorts rejected 40.54% versus Advanced's
-60.45% after recovery. These are candidate records, not matched objects
-or draws. No fallback or rejected history was recorded.
+The [latest noon comparison](vr-hybrid-culling-refinement-results-2026-10-04.md)
+measured the `605fcf65e` implementation snapshot: guarded 2x2 averaged
+11.47 ms CPU / 9.02 ms GPU against Advanced's 10.13 / 7.85 ms. Hi-Z GPU
+frames remain 14.88% slower. Separate complete 300-frame captures measured
+0.623–0.724 ms Hi-Z culling versus 0.078 ms Advanced; bounds testing
+contributes 88.5–89.1% of Hi-Z culling. Separate counter cohorts rejected
+41.01–41.67% versus Advanced's 60.44%. These are candidate records, not
+matched objects or draws. No normal fallback or rejected history occurred.
 
 The tested build removes polygon survivor copies using alternating clip
 banks and replaces repeated prepared-face struct selection with indexed
@@ -21,11 +21,20 @@ criteria are retained. Four strict shader permutations and 12/12 focused
 tests pass. The earlier
 vertex-array copy is already removed. See the
 [cost analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md).
-The next test build adds contained-plane skips, a four-entry lazy
+The tested build adds contained-plane skips, a four-entry lazy
 triangle-plane cache, and selective source-pixel refinement within the
-existing 64-read eye budget. DevBench shadow diagnostics compare the same
-native-indexed batch before and after recovery while native visibility
-continues to drive rendering. Its performance has not been measured.
+existing 64-read eye budget. Work counters show 32.27% clipping-plane
+skips and 54.40% plane reuse, but only 22.57% of expanded cells resolve.
+Those counts do not isolate the changes' GPU benefit. Offscreen/viewport
+retention covers 16.59% of candidate records and may explain much of the
+aggregate culling gap without implying extra useful draws.
+DevBench shadow diagnostics retained native visibility, but dropped all
+476 tested batches with no accepted matched outcomes. Its runtime
+qualification failed. The next build must expose drop reasons and repair
+matched readback before attributing native-only misses. A DevBench-only
+refinement A/B and cheaper conservative triangle/region rejection should
+then target the remaining cost. Global read-budget growth is not justified:
+only 0.566% of diagnostic records exhausted the budget.
 The combined build passes 12/12 focused tests, including WARP pixel/ray
 oracles and matched-outcome validation. Four strict shader permutations,
 production diagnostic-isolation checks, the universal Release DLL and
@@ -671,27 +680,35 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental and pursue guarded 2x2 only. Test the combined
-contained-plane skip, four-entry lazy plane cache and source-pixel
-refinement build against Advanced at noon. Original vertices and rounded
-polygon survivors must all lie inside a skipped clipping plane. The cache
-is initialized per eye and populated only after the cheap triangle tests.
-Unresolved reduced cells use original-depth pixels with unchanged spatial
-and depth guards; all reads share the existing 64-read eye budget.
+Keep PR104 experimental and pursue guarded 2x2 only. The latest noon
+comparison of source `605fcf65e` is retained in
+[the refinement report](vr-hybrid-culling-refinement-results-2026-10-04.md).
+Hi-Z remains 14.88% slower on GPU; bounds testing dominates its pass cost.
+The separate matched diagnostic accepted zero batches, so aggregate
+retention differences do not identify the missing-culling cause.
 
-Use `set_depth_culling_matched_diagnostics_enabled` in Advanced or Legacy,
-with telemetry enabled and counters reset, to compare identical validated
-batch indices. Private Hi-Z results never overwrite native visibility.
-Compare outcomes before and after Advanced recovery and inspect decisive
-native-only retention reasons. Nonblocking or rejected readbacks are
-reported as dropped/failed batches. Disable shadow and traversal diagnostics
-before all performance measurements. Neither matched outcomes nor static
-shader tests qualify motion/lifecycle correctness.
+The next build adds conservative triangle-edge separation before full
+polygon clipping, with near-degenerate and roundoff uncertainty falling
+back to clipping. New counters expose attempted region tests, disjoint
+triangles, empty clips and vertex-loop visits. Existing contained-plane
+skips, lazy plane reuse and the 64-depth-read eye budget remain in place.
 
-Inspect clipping-plane skips, lazy plane builds/reuses, source pixels and
-resolved cells in the separate diagnostic phase. Do not infer a GPU speed
-improvement from reduced arithmetic or recovered proofs. The last measured
-baseline remains source `608aacfd9`; no new in-game comparison is claimed.
+Matched diagnostics now own the submitted CPU bounds on the GPU, validate
+the native output after production, and retain up to three asynchronous
+readbacks for at most eight frames. Accepted batches require unchanged
+input, source, view and frame identity. Drops have distinct reasons;
+busy reads and missed snapshot publication are separate diagnostics.
+This implementation still needs in-game qualification with the new DLL.
+
+Use `set_depth_culling_source_refinement_enabled` for nonpersistent
+original-depth refinement ON/OFF A/B. It defaults to ON; production
+compiles out the toggle and always refines. Both variants use guarded
+2x2 and retain uncertain cells conservatively. Reset noon and counters
+for each phase, compare Advanced / Hi-Z ON / Hi-Z OFF, and disable
+traversal and matched diagnostics during timing. Collect work and matched
+outcomes separately, with telemetry enabled. Compare CPU/GPU, actual
+hidden records, source reads, resolved cells, clipping work and unmatched
+reasons. No new runtime performance improvement is claimed before this A/B.
 
 PBR grass remains the next independent feature PR, followed by grass
 optimization and Reverse Z. No render-scale qualification is claimed.

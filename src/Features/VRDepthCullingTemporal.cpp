@@ -430,6 +430,7 @@ namespace VRDepthCullingTemporal
 						CS_GPU_PASS("VRDepthCulling::NativeProducer");
 						func(a_shader, a_param);
 					}
+					VRHybridCulling::FinalizeMatchedSubmission(a_shader, g_cullingEpoch.load(std::memory_order_acquire));
 					CaptureProducerPose();
 					return;
 				}

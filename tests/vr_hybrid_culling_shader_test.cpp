@@ -36,7 +36,7 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		std::unique_ptr<D3D11ShaderTest::ConstantBuffer> constants;
 
-		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false, const char* source = nullptr)
+		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false, const char* source = nullptr, bool refinementAB = false)
 		{
 			ComPtr<ID3DBlob> code, errors;
 			std::vector<D3D_SHADER_MACRO> defines;
@@ -44,10 +44,12 @@ namespace
 				defines.push_back({ "CSX_DEPTH_ORDER_TEST_REVERSED", "1" });
 			if (diagnostics)
 				defines.push_back({ "CSX_HIZ_DIAGNOSTICS", "1" });
+			if (refinementAB)
+				defines.push_back({ "CSX_HIZ_REFINEMENT_AB", "1" });
 			defines.push_back({ nullptr, nullptr });
 			Util::CustomInclude includes{ "package/Shaders" };
-			static std::map<std::tuple<std::wstring, bool, bool, std::string>, ComPtr<ID3DBlob>> compiled;
-			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics, source ? source : "" }];
+			static std::map<std::tuple<std::wstring, bool, bool, bool, std::string>, ComPtr<ID3DBlob>> compiled;
+			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics, refinementAB, source ? source : "" }];
 			if (cached) {
 				code = cached;
 			} else {
@@ -127,18 +129,18 @@ namespace
 		BuildConstants buildConstants{};
 		TestConstants testConstants{};
 		Kernel build, reduce, test, diagnosticTest;
-		std::vector<std::array<std::uint32_t, 16>> lastDiagnostics;
+		std::vector<std::array<std::uint32_t, 20>> lastDiagnostics;
 		ComPtr<ID3D11Texture2D> source, pyramid, staging;
 		ComPtr<ID3D11ShaderResourceView> sourceView, pyramidView;
 		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
 		std::vector<ComPtr<ID3D11UnorderedAccessView>> mipOutputs;
 
-		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth = 32, UINT eyeHeight = 32, UINT reduction = 4) :
+		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth = 32, UINT eyeHeight = 32, UINT reduction = 4, bool refinementAB = false) :
 			device(device), context(context), reversedDepth(reversedDepth), sourceWidth(2 * eyeWidth), sourceHeight(eyeHeight),
 			build(device, L"package/Shaders/VRHybridCulling/BuildDepthCS.hlsl", "BuildConstants", reversedDepth),
 			reduce(device, L"package/Shaders/VRHybridCulling/ReduceDepthCS.hlsl", "ReduceConstants", reversedDepth),
-			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth),
-			diagnosticTest(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, true)
+			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, false, nullptr, refinementAB),
+			diagnosticTest(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, true, nullptr, refinementAB)
 		{
 			testConstants.eyes = { EyeRect{ 0, 0, eyeWidth, eyeHeight }, EyeRect{ eyeWidth, 0, eyeWidth, eyeHeight } };
 			Require(TryMakeBuildConstants(testConstants.eyes, sourceWidth, sourceHeight, reduction,
@@ -299,7 +301,7 @@ namespace
 				const auto& record = lastDiagnostics[index];
 				Require(record[1] <= 128 && record[2] <= record[1] && record[3] <= 12 * record[2],
 					"Diagnostic traversal work exceeded the budget");
-				Require(record[4] + record[5] + record[7] <= record[3] && record[6] <= 6 * record[2],
+				Require(record[4] + record[5] + record[17] + record[7] <= record[3] && record[6] <= 6 * record[2],
 					"Diagnostic proof paths exceed the corresponding face or triangle attempts");
 				Require(record[6] == 0 && record[7] == 0,
 					"Guarded proof reported a base-only bias shortcut");
@@ -560,6 +562,32 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 					Require(fixture.Test(objects)[0] == 1, "Finer leaves lost a covered stereo hole or mask");
 					pixels[inside] = 0.4f;
 				}
+			}
+		}
+	}
+
+	void ChecksSourceRefinementAB(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		for (const UINT reduction : { 2u, 4u }) {
+			Fixture fixture(device, context, reversedDepth, 32, 32, reduction, true);
+			const std::array objects{ BoxForGuardedPixels(fixture, { 11.25f, 11.25f, 20.75f, 20.75f }) };
+			std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+			for (const auto& eye : fixture.testConstants.eyes)
+				pixels[16 * fixture.sourceWidth + eye.x + (reduction == 2 ? 10 : 9)] = 1.0f;
+			fixture.Build(pixels);
+			Require(fixture.Test(objects)[0] == 0 && fixture.lastDiagnostics[0][14] != 0,
+				"Refinement ON failed to resolve an unrelated source pixel");
+			fixture.testConstants.reserved = 1;
+			Require(fixture.Test(objects)[0] == 1 && fixture.lastDiagnostics[0][13] == 0 && fixture.lastDiagnostics[0][15] == 0,
+				"Refinement OFF read original depth or accepted an unresolved leaf");
+			fixture.testConstants.reserved = 2;
+			Require(fixture.Test(objects)[0] == 1, "Unknown A/B flag did not fail conservatively");
+			fixture.testConstants.reserved = 0;
+			for (const auto& eye : fixture.testConstants.eyes) {
+				pixels[16 * fixture.sourceWidth + eye.x + 16] = 1.0f;
+				fixture.Build(pixels);
+				Require(fixture.Test(objects)[0] == 1, "Refinement ON lost a covered stereo hole");
+				pixels[16 * fixture.sourceWidth + eye.x + 16] = 0.4f;
 			}
 		}
 	}
@@ -957,6 +985,102 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		fixture.testConstants = original;
 	}
 
+	void ChecksSeparatingEdges(Fixture& fixture)
+	{
+		constexpr const char* source = R"(
+#include "Common/DepthOrder.hlsli"
+#include "VRHybridCulling/ProjectedBounds.hlsli"
+struct RegionCase { float4 a, b, c, rectangle; };
+StructuredBuffer<RegionCase> Cases : register(t0);
+RWStructuredBuffer<uint> Results : register(u0);
+cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
+[numthreads(64,1,1)] void main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= Count) return;
+    RegionCase value = Cases[id.x];
+    float3 normal, magnitude;
+    ProjectedBounds::BuildPlane(value.a.xyz, value.b.xyz, value.c.xyz, normal, magnitude);
+    Results[id.x] = ProjectedBounds::TriangleOutsideRegion(value.a.xyz, value.b.xyz, value.c.xyz,
+        normal, magnitude, value.rectangle.xy, value.rectangle.zw);
+})";
+		struct RegionCase
+		{
+			std::array<float, 4> a, b, c, rectangle;
+		};
+		std::vector<RegionCase> cases;
+		std::uint32_t seed = 17;
+		const auto random = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+		for (const float offset : { 0.0f, 8192.0f }) {
+			for (const float scale : { 0.03125f, 32.0f }) {
+				for (int index = 0; index < 1000; ++index) {
+					RegionCase value{};
+					for (auto* vertex : { &value.a, &value.b, &value.c })
+						*vertex = { offset + scale * random(), offset + scale * random(), random(), 0 };
+					value.rectangle = { offset + scale * random(), offset + scale * random(), offset + scale * random(), offset + scale * random() };
+					if (value.rectangle[0] > value.rectangle[2])
+						std::swap(value.rectangle[0], value.rectangle[2]);
+					if (value.rectangle[1] > value.rectangle[3])
+						std::swap(value.rectangle[1], value.rectangle[3]);
+					cases.push_back(value);
+				}
+			}
+		}
+		const auto boundaries = cases.size();
+		// Inclusive corner/edge contact and a degenerate line always retain the clipping path.
+		cases.push_back({ { 0, 0, 0, 0 }, { 1, 0, 1, 0 }, { 0, 1, 0, 0 }, { 1, 0, 2, 1 } });
+		cases.push_back({ { 0, 0, 0, 0 }, { 2, 0, 1, 0 }, { 1, 0, 0, 0 }, { 3, 0, 4, 1 } });
+		cases.push_back({ { 0, 0, 0, 0 }, { 1, 1, 1, 0 }, { 2, 2, 0, 0 }, { 0, 0, 2, 2 } });
+		const auto overlaps = [](const RegionCase& value) {
+			using Point = std::array<double, 2>;
+			std::vector<Point> polygon{ { value.a[0], value.a[1] }, { value.b[0], value.b[1] }, { value.c[0], value.c[1] } };
+			for (int plane = 0; plane < 4 && !polygon.empty(); ++plane) {
+				const int axis = plane / 2;
+				const double sign = plane % 2 ? -1 : 1;
+				const double boundary = value.rectangle[axis + (plane % 2 ? 2 : 0)];
+				std::vector<Point> output;
+				auto previous = polygon.back();
+				double previousDistance = sign * (previous[axis] - boundary);
+				for (const auto current : polygon) {
+					const double distance = sign * (current[axis] - boundary);
+					if ((distance >= 0) != (previousDistance >= 0)) {
+						const double weight = previousDistance / (previousDistance - distance);
+						output.push_back({ previous[0] + weight * (current[0] - previous[0]), previous[1] + weight * (current[1] - previous[1]) });
+					}
+					if (distance >= 0)
+						output.push_back(current);
+					previous = current;
+					previousDistance = distance;
+				}
+				polygon = std::move(output);
+			}
+			return !polygon.empty();
+		};
+		StructuredBuffer inputs(fixture.device, sizeof(RegionCase), static_cast<UINT>(cases.size()), D3D11_BIND_SHADER_RESOURCE, cases.data());
+		StructuredBuffer outputs(fixture.device, sizeof(UINT), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
+		Kernel kernel(fixture.device, L"TriangleRegionSeparationTest.hlsl", "RegionConstants", fixture.reversedDepth, false, source);
+		kernel.Bind(fixture.context, std::array<UINT, 4>{ static_cast<UINT>(cases.size()), 0, 0, 0 });
+		auto* input = inputs.srv.Get();
+		auto* output = outputs.uav.Get();
+		fixture.context->CSSetShaderResources(0, 1, &input);
+		fixture.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		fixture.context->Dispatch((static_cast<UINT>(cases.size()) + 63) / 64, 1, 1);
+		fixture.Unbind();
+		fixture.context->CopyResource(outputs.staging.Get(), outputs.buffer.Get());
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		Check(fixture.context->Map(outputs.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+		std::vector<UINT> actual(cases.size());
+		std::memcpy(actual.data(), mapped.pData, actual.size() * sizeof(UINT));
+		fixture.context->Unmap(outputs.staging.Get(), 0);
+		UINT separated = 0;
+		for (std::size_t index = 0; index < cases.size(); ++index) {
+			if (!actual[index])
+				continue;
+			++separated;
+			Require(index < boundaries && !overlaps(cases[index]), "Separating-edge rejection removed inclusive triangle coverage");
+		}
+		Require(separated > 100, "Separating-edge fixtures did not exercise useful rejections");
+	}
+
 	void ChecksGuardedVertexDepthProofs(Fixture& fixture)
 	{
 		constexpr const char* source = R"(
@@ -1094,7 +1218,7 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 				continue;
 			fixture.context->CopyResource(diagnostics.staging.Get(), diagnostics.buffer.Get());
 			Check(fixture.context->Map(diagnostics.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
-			std::vector<std::array<UINT, 16>> records(cases.size());
+			std::vector<std::array<UINT, 20>> records(cases.size());
 			std::memcpy(records.data(), mapped.pData, records.size() * sizeof(records[0]));
 			fixture.context->Unmap(diagnostics.staging.Get(), 0);
 			bool reused = false, skipped = false;
@@ -1319,6 +1443,7 @@ int main()
 			RetainsUnavailableRefinementSource(fixture);
 			ChecksProjectedRegionShortcuts(fixture);
 			ChecksGuardedVertexDepthProofs(fixture);
+			ChecksSeparatingEdges(fixture);
 			CoversVisibilityAndFailures(fixture);
 			CoversMixedStereoVisibility(fixture);
 			SeparatesViewportRetentionReasons(fixture);
@@ -1332,6 +1457,7 @@ int main()
 			RefinesThinRectangles(fixture);
 			RefinesOnlyUnresolvedCells(device.Get(), context.Get(), reversedDepth);
 			RetainsFinerOccluderDetail(device.Get(), context.Get(), reversedDepth);
+			ChecksSourceRefinementAB(device.Get(), context.Get(), reversedDepth);
 			RetainsNearestVertexBeforeRefinement(device.Get(), context.Get(), reversedDepth);
 			ExhaustsActualLoadBudget(device.Get(), context.Get(), reversedDepth);
 			TraversesMaximumMipDepth(device.Get(), context.Get(), reversedDepth);

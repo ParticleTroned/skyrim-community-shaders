@@ -1,3 +1,4 @@
+#include "Features/VRHybridCullingMatchedReadback.h"
 #include "MenuDepthCullingDiagnostics.h"
 
 #include <iostream>
@@ -306,12 +307,74 @@ namespace
 				 Record{ 257, 8, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, Record{ 257, 8, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 } })
 			Require(!Summarize(std::array{ invalid }, std::array<std::uint32_t, 1>{ 0 }), "Malformed new work counters were accepted");
 	}
+	void ValidatesMatchedHandoffAndReadbackAge()
+	{
+		using namespace VRHybridCullingMatchedReadback;
+		VRHybridCullingHistory::Batch submitted{ 1, 2, 3, 5, 40, 4, 0 };
+		auto produced = submitted;
+		produced.results = 6;
+		produced.selector = 1;
+		Require(CanBindNativeOutput(submitted, produced, true), "Native output rotation rejected unchanged input");
+		Require(!CanBindNativeOutput(submitted, produced, false), "Changed bounds accepted at native handoff");
+		for (int field = 0; field < 7; ++field) {
+			auto changed = produced;
+			switch (field) {
+			case 0:
+				++changed.culler;
+				break;
+			case 1:
+				++changed.transforms;
+				break;
+			case 2:
+				changed.results = 0;
+				break;
+			case 3:
+				++changed.count;
+				break;
+			case 4:
+				changed.selector = 2;
+				break;
+			case 5:
+				++changed.frame;
+				break;
+			case 6:
+				++changed.epoch;
+				break;
+			}
+			Require(!CanBindNativeOutput(submitted, changed, true), "Mismatched native producer accepted");
+		}
+		const auto wrap = std::numeric_limits<std::uint32_t>::max() - 3;
+		Require(!Expired(40, 48) && Expired(40, 49) && !Expired(wrap, 4) && Expired(wrap, 5),
+			"Bounded pending readback age failed across frame wrap");
+		VRHybridCulling::Status hybrid{};
+		hybrid.sourceRefinementEnabled = false;
+		hybrid.matchedPendingBatches = 3;
+		hybrid.matchedNotReadyPolls = 7;
+		hybrid.matchedSnapshotPublicationMisses = 2;
+		hybrid.matchedDropReasonCounts.back() = 9;
+		hybrid.traversal.triangleRegionTests = 10;
+		hybrid.traversal.disjointTriangles = 4;
+		hybrid.traversal.emptyClips = 2;
+		hybrid.traversal.clipVertexVisits = 18;
+		const auto status = MenuDepthCullingDiagnostics::BuildStatus({}, hybrid).at("hybrid");
+		const auto& matched = status.at("matchedDiagnostics");
+		Require(!status.at("configuration").at("sourceRefinementEnabled").get<bool>() && matched.at("pendingBatches") == 3 &&
+					matched.at("notReadyPolls") == 7 && matched.at("snapshotPublicationMisses") == 2 &&
+					matched.at("dropReasonCounts").at(VRHybridCulling::MatchedDropReasons.back()) == 9,
+			"A/B or pending diagnostic evidence lost during serialization");
+		const auto& traversal = status.at("traversalDiagnostics");
+		Require(traversal.at("triangleRegionTests") == 10 && traversal.at("disjointTriangles") == 4 &&
+					traversal.at("emptyClips") == 2 && traversal.at("clipVertexVisits") == 18,
+			"Region-rejection or clipping-work counters lost during serialization");
+	}
+
 }
 
 int main()
 {
 	try {
 		ValidatesTraversalRecords();
+		ValidatesMatchedHandoffAndReadbackAge();
 		ValidatesMatchedOutcomesAndNewWork();
 		ValidatesProofCountersAndViewportReasons();
 		PreservesInactiveAndFallbackEvidence();

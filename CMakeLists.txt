@@ -3117,6 +3117,10 @@ if(BUILD_CONTROLLER_TESTS)
         VRHybridCullingShader
         tests/vr_hybrid_culling_shader_test.cpp
     )
+    set_tests_properties(
+        VRHybridCullingShader
+        PROPERTIES TIMEOUT 180
+    )
     target_compile_definitions(
         vr_hybrid_culling_shader_test
         PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN

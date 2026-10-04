@@ -28,6 +28,15 @@ cbuffer TestConstants : register(b0)
 	uint Reserved;
 };
 
+bool SourceRefinementEnabled()
+{
+#ifdef CSX_HIZ_REFINEMENT_AB
+	return (Reserved & 1) == 0;
+#else
+	return true;
+#endif
+}
+
 bool IsValidPyramidDepth(float depth)
 {
 	return isfinite(depth) && depth >= 0.0 && depth <= 1.0 && (DepthOrder::Reversed || depth != 0.0);
@@ -143,7 +152,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	if (!IsValidPyramidDepth(witnessDepth))
 		HIZ_VISIBLE(HIZ_INVALID_INPUT);
 	if (!DepthOrder::IsBehindWithBias(nearestDepth, witnessDepth, DepthBias)) {
-		if (SourceReduction == 1)
+		if (SourceReduction == 1 || !SourceRefinementEnabled())
 			HIZ_VISIBLE(HIZ_NEAREST_UNRESOLVED);
 		// A reduced witness can include unrelated holes; test the actual vertex pixel before retaining.
 		float sourceWitness = ReadSourceDepth((uint2)floor(nearestVertexPixel), eye);
@@ -233,7 +242,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		if (sourcePixel)
 			HIZ_VISIBLE(HIZ_FINEST_UNRESOLVED);
 		if (nodeMip == 0) {
-			if (SourceReduction == 1)
+			if (SourceReduction == 1 || !SourceRefinementEnabled())
 				HIZ_VISIBLE(HIZ_FINEST_UNRESOLVED);
 			// Reuse the same region tester and polygon storage for selectively expanded source pixels.
 			sourceOrigin = cell * SourceReduction;
@@ -271,7 +280,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 #ifdef CSX_HIZ_DIAGNOSTICS
 	uint diagnosticCount, diagnosticStride;
 	TraversalDiagnostics.GetDimensions(diagnosticCount, diagnosticStride);
-	if (objectIndex >= diagnosticCount || diagnosticStride != 64)
+	if (objectIndex >= diagnosticCount || diagnosticStride != 80)
 		return;
 	HiZTraversalDiagnostic invalidDiagnostic = (HiZTraversalDiagnostic)0;
 	invalidDiagnostic.traversal.x = HIZ_INVALID_INPUT;
@@ -292,6 +301,13 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		!isfinite(DepthBias) || DepthBias < 8.0 / 16777216.0 || DepthBias > 1.0 ||
 		!isfinite(PixelGuardBand) || PixelGuardBand < 1.0 || PixelGuardBand > 16384.0)
 		return;
+#ifdef CSX_HIZ_REFINEMENT_AB
+	if ((Reserved & ~1u) != 0)
+		return;
+#else
+	if (Reserved != 0)
+		return;
+#endif
 	[unroll] for (uint eye = 0; eye < 2; ++eye) if (any(EyeRect[eye].zw == 0) || any(EyeRect[eye].zw > uint2(sourceWidth, sourceHeight)) ||
 													any(EyeRect[eye].xy > uint2(sourceWidth, sourceHeight) - EyeRect[eye].zw)) return;
 
@@ -314,6 +330,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 	diagnostic.proofs += firstEye.proofs;
 	diagnostic.planeWork += firstEye.planeWork;
 	diagnostic.refinement += firstEye.refinement;
+	diagnostic.regionWork += firstEye.regionWork;
 	TraversalDiagnostics[objectIndex] = diagnostic;
 #else
 	[branch] if (!IsOccludedInEye(transform, 0)) return;

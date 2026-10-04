@@ -22170,32 +22170,33 @@ bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(
 	const bool currentInterior = Util::IsInterior();
 	const auto& currentProfile = currentInterior ? profiles.interior : profiles.exterior;
 	const auto& oppositeProfile = currentInterior ? profiles.exterior : profiles.interior;
+	const auto requestedRenderScale = VRRenderScaleModePolicy::Resolve(
+		IsRenderScaleMethodEligible(a_targetMethod),
+		IsRenderScaleQualityMode(a_qualityMode), a_renderScaleModeEnabled);
 	const auto matchesProfile = [&](const VRFpsStabilizerProfile& a_profile) {
 		if (!a_profile.HasAnyUpscalingSetting())
 			return false;
 		const auto target = ResolveVRFpsStabilizerTransitionTarget(*this, a_profile);
 		return MatchesVRFpsStabilizerTransitionTarget(
 			a_targetMethod,
-			a_renderScaleModeEnabled,
+			requestedRenderScale.enabled,
 			a_qualityMode,
 			a_dlssPreset,
 			target);
 	};
 
 	if (a_bufferedStabilizerDoorHandoffSerial != 0) {
-		// Stabilizer 1.4.11 detects the destination cell before its atomic API
-		// call, while older supported schedules call before the cell flip. During
-		// this narrowly owned LoadingMenu window, either configured cell profile
-		// is a legitimate destination request; PostLoadSync remains authoritative
-		// and corrects a stale request before physical work can begin.
+		// Either cell profile can be the destination during the owned handoff.
+		// PostLoadSync corrects stale requests before renderer mutation.
 		if (!currentProfile.HasAnyUpscalingSetting() && !oppositeProfile.HasAnyUpscalingSetting())
 			return true;
 		return matchesProfile(currentProfile) || matchesProfile(oppositeProfile);
 	}
 
-	// Outside the protected handoff preserve the pre-move contract: only the
-	// opposite cell profile may be asserted, so ordinary current-cell runtime
-	// reconciliation cannot undo a user's CSX-menu selection.
+	// Live reloads and delayed retries can target the cell the player already
+	// occupies. The caller's safety gate still owns renderer admission.
+	if (matchesProfile(currentProfile))
+		return true;
 	if (!oppositeProfile.HasAnyUpscalingSetting())
 		return true;
 	return matchesProfile(oppositeProfile);

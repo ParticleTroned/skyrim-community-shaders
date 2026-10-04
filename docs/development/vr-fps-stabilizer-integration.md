@@ -159,13 +159,36 @@ Skyrim VR still requires runtime acceptance. The correction does not
 rewrite profiles already saved by an older build or establish the cause of
 an NVIDIA driver crash while DLSS Render Scale is active.
 
+CSX API build 12 also accepts a configured current-cell profile after a live
+reload or a delayed retry. Previously, the admission predicate accepted
+only the opposite profile outside LoadingMenu. An exterior
+`(UpscaleMethod=3, RenderScaleMode=true, UpscalePreset=5, DLSSProfile=1)`
+request could therefore return `Blocked` forever while standing outside,
+even when the renderer safety mask was clear. The preflight now checks a
+settled no-op before profile admission, returning `NoChange` when no
+renderer work is needed. A changed current-cell profile returns `Apply`.
+The atomic setter uses the same admission predicate, and Render Scale
+eligibility is resolved with the existing method/quality policy.
+
+The extracted production preflight, setter, target resolver, admission
+predicate and no-op check pass 7,838 assertions. They cover both cell types,
+pre-move and current-cell requests, handoff admission, all four methods,
+seven presets, five DLSS profiles and both Render Scale inputs. FSR ignores
+the DLSS profile field. Active safety masks still block preflight and the
+setter, and unsettled physical state cannot report a no-op. The original
+implementation fails the regression for the author's exact exterior call.
+These tests stub the renderer; beta2 in-game acceptance and the separate
+render-scale qualification have not run. Callers must retry on a later
+game task/frame so CSX and Skyrim can complete pending work.
+
 Build and run the focused parser/validation checks with:
 
 ```powershell
-pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target vr_fps_stabilizer_config_test vr_fps_stabilizer_integration_test vr_fps_stabilizer_profile_editor_test game_setting_persistence_test
+pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target vr_fps_stabilizer_config_test vr_fps_stabilizer_integration_test vr_fps_stabilizer_profile_editor_test vr_fps_stabilizer_api_test game_setting_persistence_test
 ./build/ALL/Release/vr_fps_stabilizer_config_test.exe
 ./build/ALL/Release/vr_fps_stabilizer_integration_test.exe
 ./build/ALL/Release/vr_fps_stabilizer_profile_editor_test.exe
+./build/ALL/Release/vr_fps_stabilizer_api_test.exe
 ./build/ALL/Release/game_setting_persistence_test.exe
 ```
 

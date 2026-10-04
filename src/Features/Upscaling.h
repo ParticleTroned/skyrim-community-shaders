@@ -4369,6 +4369,8 @@ public:
 private:
 	/** NR's own menu warns only after a FOV + TAA fallback in this enabled session. */
 	void DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const;
+	/** Keeps runtime rejection and recovery visible while the NR master is off. */
+	void DrawNeuralRenderingMasterControl(bool a_showDiagnostics);
 	bool neuralRenderingReplacedFovTaa = false;
 	std::once_flag upscalingSDKLoadOnce;
 	std::atomic_bool frameGenerationPrepared{ false };

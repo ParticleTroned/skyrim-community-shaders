@@ -2,11 +2,13 @@
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
+#include <cstdio>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace spdlog::level
@@ -47,6 +49,7 @@ namespace globals
 				kDLSS
 			};
 			unsigned draws = 0;
+			unsigned historyResets = 0;
 			bool loaded = true;
 			struct Settings
 			{
@@ -77,6 +80,8 @@ namespace globals
 			bool IsFoveatedVendorDispatchEnabled(UpscaleMethod) const;
 			bool IsActiveUpscalingFoveatedProfileAvailable() const;
 			void DrawSelectionControls(bool a_essentialsOnly = true);
+			void DrawNeuralRenderingMasterControl(bool a_showDiagnostics);
+			void RequestHistoryReset() { ++historyResets; }
 			void DrawNeuralRenderingFovWarning(bool) const {}
 			static bool ApplyNeuralRenderingFovConstraint(Settings& value)
 			{
@@ -139,6 +144,12 @@ namespace ImGui
 	void TextWrapped(const char* label, Args&&...)
 	{
 		Record(label);
+	}
+	void TextWrapped(const char* label, const char* value)
+	{
+		char text[1024]{};
+		std::snprintf(text, sizeof(text), label, value);
+		Record(text);
 	}
 	template <class... Args>
 	void TextDisabled(const char* label, Args&&...)
@@ -204,6 +215,10 @@ namespace ImGui
 namespace Util
 {
 	bool HoverTooltipWrapper() { return false; }
+	namespace Text
+	{
+		void WrappedError(const char* label) { ImGui::Record(label); }
+	}
 	class DisableGuard
 	{
 		bool disabled_;
@@ -222,6 +237,48 @@ namespace Util
 	};
 }
 #define IM_ARRAYSIZE(value) (sizeof(value) / sizeof((value)[0]))
+
+namespace NeuralRendering
+{
+	struct Renderer
+	{
+		struct Snapshot
+		{
+			bool quarantined = false, failureLatched = false;
+			std::string detail;
+		} snapshot;
+		bool resetSucceeded = true;
+		unsigned resetCalls = 0, snapshotReads = 0;
+		static Renderer& Instance()
+		{
+			static Renderer instance;
+			return instance;
+		}
+		Snapshot GetSnapshot()
+		{
+			++snapshotReads;
+			return snapshot;
+		}
+		bool Reset()
+		{
+			++resetCalls;
+			if (!resetSucceeded || snapshot.quarantined)
+				return false;
+			snapshot = {};
+			return true;
+		}
+	};
+	struct CharacterRendering
+	{
+		unsigned resetCalls = 0;
+		static CharacterRendering& Instance()
+		{
+			static CharacterRendering instance;
+			return instance;
+		}
+		void Reset() { ++resetCalls; }
+	};
+}
 
 namespace NeuralRendering::Color
 {
@@ -345,6 +402,136 @@ int main()
 	require(globals::features::upscaling.draws > 0, "Feature must retain the main NR controls");
 
 	auto& upscaling = globals::features::upscaling;
+	auto& renderer = NeuralRendering::Renderer::Instance();
+	auto& characterRenderer = NeuralRendering::CharacterRendering::Instance();
+	const auto drawMaster = [&](std::string_view click = {}, bool diagnostics = false) {
+		const auto reads = renderer.snapshotReads;
+		ImGui::Clear(click);
+		upscaling.DrawNeuralRenderingMasterControl(diagnostics);
+		require(renderer.snapshotReads == reads + 1, "Master control must use one coherent renderer snapshot per redraw");
+		require(ImGui::disableDepth == 0 && ImGui::treeDepth == 0 && ImGui::comboDepth == 0,
+			"Master control must restore every UI scope");
+	};
+	const auto requirePreferences = [&](const Upscaling::Settings& expected) {
+		require(upscaling.settings.neuralRenderingFovOnly == expected.neuralRenderingFovOnly &&
+					upscaling.settings.neuralRenderingRenderscaleFov == expected.neuralRenderingRenderscaleFov &&
+					upscaling.settings.neuralCharacterRenderingEnabled == expected.neuralCharacterRenderingEnabled &&
+					upscaling.settings.neuralCharacterFacesEnabled == expected.neuralCharacterFacesEnabled &&
+					upscaling.settings.neuralCharacterSkinEnabled == expected.neuralCharacterSkinEnabled &&
+					upscaling.settings.neuralCharacterHairEnabled == expected.neuralCharacterHairEnabled,
+			"Master and runtime recovery controls must retain all character and FOV preferences");
+	};
+	upscaling.settings = {};
+	upscaling.settings.neuralCharacterRenderingEnabled = true;
+	upscaling.settings.neuralCharacterFacesEnabled = false;
+	upscaling.settings.neuralCharacterHairEnabled = false;
+	upscaling.settings.neuralRenderingFovOnly = true;
+	const auto rememberedPreferences = upscaling.settings;
+	for (const bool enabled : { true, false, true, false }) {
+		drawMaster("Enabled");
+		require(upscaling.settings.neuralRenderingEnabled == enabled && !ImGui::Disabled("Enabled"),
+			"Healthy master must remain editable through repeated off/on cycles");
+		requirePreferences(rememberedPreferences);
+		drawMaster();
+		require(upscaling.settings.neuralRenderingEnabled == enabled,
+			"Passive redraw must preserve the master selection");
+		requirePreferences(rememberedPreferences);
+		require(ImGui::Seen("NR is off. Character and colour preferences are retained.") == !enabled,
+			"Disabled master must explain the retained child settings");
+	}
+	for (const auto& [label, member] : {
+			 std::pair{ "Faces", &Upscaling::Settings::neuralCharacterFacesEnabled },
+			 std::pair{ "Skin", &Upscaling::Settings::neuralCharacterSkinEnabled },
+			 std::pair{ "Hair", &Upscaling::Settings::neuralCharacterHairEnabled } }) {
+		for (const bool masterEnabled : { false, true }) {
+			upscaling.settings.neuralRenderingEnabled = masterEnabled;
+			const bool previous = upscaling.settings.*member;
+			ImGui::Clear(label);
+			upscaling.DrawSelectionControls();
+			require(!ImGui::Disabled(label) && upscaling.settings.*member == !previous &&
+						upscaling.settings.neuralRenderingEnabled == masterEnabled,
+				"Faces, Skin and Hair preferences must remain editable independently of the healthy master");
+			const auto editedPreferences = upscaling.settings;
+			drawMaster("Enabled");
+			requirePreferences(editedPreferences);
+			drawMaster("Enabled");
+			requirePreferences(editedPreferences);
+			drawMaster();
+			require(upscaling.settings.neuralRenderingEnabled == masterEnabled,
+				"Editing character categories must not leave a stale master value on redraw");
+			requirePreferences(editedPreferences);
+			require(ImGui::disableDepth == 0 && ImGui::comboDepth == 0,
+				"Category edits and subsequent master cycles must restore UI scopes");
+		}
+	}
+	upscaling.settings.neuralRenderingEnabled = false;
+	const auto recoveryPreferences = upscaling.settings;
+	renderer.snapshot = { .failureLatched = true, .detail = "Recoverable NR failure" };
+	renderer.resetSucceeded = false;
+	const auto resetCalls = renderer.resetCalls;
+	const auto characterResets = characterRenderer.resetCalls;
+	const auto historyResets = upscaling.historyResets;
+	for (unsigned redraw = 0; redraw < 2; ++redraw) {
+		drawMaster();
+		require(ImGui::Seen("Neural Rendering is unavailable. Reset its runtime before enabling it again.") &&
+					ImGui::Seen("Reason: Recoverable NR failure") && ImGui::Seen("Reset Neural Rendering Runtime"),
+			"Recoverable failures must retain their reason and reset action while NR is off");
+		require(!upscaling.settings.neuralRenderingEnabled && ImGui::Disabled("Enabled"),
+			"Recoverable failures must not silently change the stored master preference");
+		requirePreferences(recoveryPreferences);
+	}
+	drawMaster("Enabled");
+	require(!upscaling.settings.neuralRenderingEnabled && ImGui::Disabled("Enabled"),
+		"A failed runtime must reject enabling until explicit recovery succeeds");
+	require(renderer.resetCalls == resetCalls && characterRenderer.resetCalls == characterResets && upscaling.historyResets == historyResets,
+		"Passive failure redraw must not reset runtime, character resources or history");
+	drawMaster("Reset Neural Rendering Runtime");
+	require(renderer.resetCalls == resetCalls + 1 && characterRenderer.resetCalls == characterResets && upscaling.historyResets == historyResets,
+		"Failed runtime reset must retain character resources and history");
+	require(ImGui::Seen("Neural Rendering could not reset safely. Its resources have been retained.") && renderer.snapshot.failureLatched,
+		"Rejected reset must visibly preserve the original latched failure");
+	requirePreferences(recoveryPreferences);
+	renderer.resetSucceeded = true;
+	drawMaster("Reset Neural Rendering Runtime");
+	require(renderer.resetCalls == resetCalls + 2 && characterRenderer.resetCalls == characterResets + 1 && upscaling.historyResets == historyResets + 1 &&
+				!renderer.snapshot.failureLatched && !upscaling.settings.neuralRenderingEnabled,
+		"Successful recovery must clear runtime failure and reset character history without enabling NR");
+	requirePreferences(recoveryPreferences);
+	drawMaster();
+	require(!ImGui::Seen("Reset Neural Rendering Runtime") && !ImGui::Seen("Reason: Recoverable NR failure"),
+		"Recovered renderer must clear stale failure feedback on the next redraw");
+	drawMaster("Enabled");
+	require(upscaling.settings.neuralRenderingEnabled && !ImGui::Disabled("Enabled"),
+		"Recovered renderer must allow enabling NR again");
+	drawMaster("Reset Neural Rendering Runtime", true);
+	require(upscaling.settings.neuralRenderingEnabled && characterRenderer.resetCalls == characterResets + 2 && upscaling.historyResets == historyResets + 2,
+		"Explicit diagnostic reset must preserve an enabled master and reset its history");
+	requirePreferences(recoveryPreferences);
+	upscaling.settings.neuralRenderingEnabled = false;
+	renderer.snapshot = { .quarantined = true, .failureLatched = true, .detail = "Pending GPU resources" };
+	const auto quarantinedResetCalls = renderer.resetCalls;
+	for (const bool diagnostics : { false, true, false }) {
+		drawMaster("Enabled", diagnostics);
+		require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled,
+			"Quarantine must refuse unsafe re-enabling while NR is off");
+		require(ImGui::Seen("Neural Rendering cannot be re-enabled safely in this session. Restart the game to try again.") &&
+					ImGui::Seen("Reason: Pending GPU resources") && !ImGui::Seen("Reset Neural Rendering Runtime"),
+			"Quarantine must retain its reason without offering an unsafe reset at any UI level");
+		requirePreferences(recoveryPreferences);
+	}
+	require(renderer.resetCalls == quarantinedResetCalls,
+		"Quarantined redraw and blocked enabling must not call runtime reset");
+	upscaling.settings.neuralRenderingEnabled = true;
+	drawMaster("Enabled");
+	require(!ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
+				ImGui::Seen("Reason: Pending GPU resources"),
+		"Master OFF must remain available even when the renderer is quarantined");
+	requirePreferences(recoveryPreferences);
+	drawMaster();
+	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled,
+		"After quarantined OFF, passive redraw must preserve OFF and refuse re-enabling");
+	renderer.snapshot = {};
+	upscaling.settings = {};
 	// Exercise the actual routing controls independently of world-frame availability.
 	for (const bool haveWorldState : { false, true }) {
 		globals::state = haveWorldState ? &state : nullptr;

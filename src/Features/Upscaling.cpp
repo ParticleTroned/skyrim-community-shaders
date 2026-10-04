@@ -18220,6 +18220,39 @@ NeuralRendering::PipelineArrangement Upscaling::GetNeuralRenderingArrangement() 
 	return NeuralRendering::ResolvePipelineArrangement(GetNeuralRenderingMode());
 }
 
+void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
+{
+	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
+	{
+		auto guard = Util::DisableGuard((status.failureLatched || status.quarantined) && !settings.neuralRenderingEnabled);
+		ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Turns Neural Rendering on or off. Missing route prerequisites keep NR inactive without locking this switch. Enabling NR turns off FOV + TAA.");
+	}
+	if (!settings.neuralRenderingEnabled)
+		ImGui::TextDisabled("NR is off. Character and colour preferences are retained.");
+	if (status.quarantined) {
+		Util::Text::WrappedError("Neural Rendering cannot be re-enabled safely in this session. Restart the game to try again.");
+	} else if (status.failureLatched) {
+		Util::Text::WrappedError("Neural Rendering is unavailable. Reset its runtime before enabling it again.");
+	}
+	if ((status.failureLatched || status.quarantined) && !status.detail.empty())
+		ImGui::TextWrapped("Reason: %s", status.detail.c_str());
+	if ((a_showDiagnostics || status.failureLatched) && !status.quarantined) {
+		const bool resetRuntime = ImGui::Button("Reset Neural Rendering Runtime");
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Recreates the NR runtime and clears its temporal history. Your settings stay unchanged; quarantined failures require a game restart.");
+		if (resetRuntime) {
+			if (NeuralRendering::Renderer::Instance().Reset()) {
+				NeuralRendering::CharacterRendering::Instance().Reset();
+				RequestHistoryReset();
+			} else {
+				Util::Text::WrappedError("Neural Rendering could not reset safely. Its resources have been retained.");
+			}
+		}
+	}
+}
+
 void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool a_essentialsOnly)
 {
 	const Settings previousSettings = settings;
@@ -18231,9 +18264,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
 		const bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);
-		ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
-		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Turns Neural Rendering on or off. Missing route prerequisites keep NR inactive without locking this switch. Enabling NR turns off FOV + TAA.");
+		DrawNeuralRenderingMasterControl(showDiagnostics);
 		ApplyNeuralRenderingFovConstraint(settings);
 		DrawNeuralRenderingFovWarning(true);
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Renderscale NR before DLSS" };
@@ -18885,21 +18916,6 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 					}
 				}
 				ImGui::TreePop();
-			}
-			if (neuralStatus.quarantined)
-				ImGui::TextWrapped("Neural Rendering could not recover safely. Restart the game to try again.");
-			if ((showDiagnostics || neuralStatus.failureLatched) && !neuralStatus.quarantined) {
-				const bool resetRuntime = ImGui::Button("Reset Neural Rendering Runtime");
-				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Recreates the NR runtime and clears its temporal history to recover from a failure. Your settings stay unchanged; quarantined failures require a game restart.");
-				if (resetRuntime) {
-					if (NeuralRendering::Renderer::Instance().Reset()) {
-						NeuralRendering::CharacterRendering::Instance().Reset();
-						RequestHistoryReset();
-					} else {
-						ImGui::TextWrapped("Neural Rendering is still busy or unavailable. Its resources have been retained.");
-					}
-				}
 			}
 		}
 

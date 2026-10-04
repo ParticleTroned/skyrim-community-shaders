@@ -1,47 +1,38 @@
 # CSX Astra master implementation plan
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
-The next proof-bias iteration is implemented: original whole-face and
+The proof-bias iteration is implemented and measured: original whole-face and
 triangle minima use base bias, and DevBench reports plane successes,
 clipper entries, bias-only shortcuts and separate viewport reasons.
 Clipping and plane allowances are preserved. The 12 focused tests and
-production compiler-output isolation checks pass. The next evaluation
-compares the new DevBench AIO at noon; the timing evidence below predates
-this change and does not establish its performance.
-The [latest comparison and optimization analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record two settled noon timing repeats per method on the finer-depth build:
-Hybrid costs 12.6% more CPU time and 14.9% more GPU time than Advanced,
-with 40.1% candidate rejection versus 59.1%. Both Hybrid GPU windows exceed
-both Advanced windows. The initial settling baseline was replaced.
-Different player position and view prevent a cross-build regression claim.
+production compiler-output isolation checks pass.
+The [latest comparison and optimization analysis](vr-hybrid-culling-proof-bias-2026-10-04.md)
+record two settled noon windows per method with instrumentation disabled:
+Hybrid averages 17.40 ms CPU / 10.21 ms GPU versus Advanced's
+11.09 / 8.58 ms, increases of 56.9% and 19.1%. Both Hybrid windows exceed
+both Advanced windows, although the Advanced baseline has material spread.
+Separate counter windows reject 35.4-36.7% versus 61.6% of candidate
+records. This iteration has not demonstrated a performance benefit.
 
 Two 300-frame GPU captures per method show culling scope means of
-0.775 ms for Hybrid and 0.133 ms for native Advanced. Bounds testing is
-91.3-91.7% of Hybrid GPU work. The earlier report omitted existing native
-GPU timers; the current comparison includes them. Equal rejection alone
-would not establish parity.
+0.919 ms for Hybrid and 0.076 ms for native Advanced. Bounds testing is
+about 92% of Hybrid's culling work. New bias-only shortcuts fire about
+three times per hundred candidates; actual polygon clipping runs about
+2.3 times per candidate. These are intermediate work events, not recovered
+object counts. Diagnostic coverage is 99.92%, with no readback failures,
+Hybrid fallback, invalidated or unreadable batches.
 
-Runtime snapshots confirm finer 2x2 reduction and its additional 8 MiB of
-logical hierarchy storage. No Hybrid fallback, invalidated or unreadable
-batches occurred in the counter windows. Projected-face refinement already
-runs. Two additional same-build diagnostic windows now show 29.45-30.03%
-of candidates retained at finest depth, 12.11-12.17% by the nearest-vertex
-check, 16.56-16.74% by viewport guards and 2.02% by clip crossings.
-Only 0.323-0.325% exhaust the depth-read budget. Coverage is 99.92%,
-with no diagnostic readback failures. Access was restored through fresh
-bundled-controller discovery when no direct DevBench tools were exposed;
-no new AIO was required. This does not verify direct client schema refresh.
-
-The follow-up separates interpolation allowance on non-interpolating
-proofs and adds the corresponding DevBench path counts. Fully offscreen
-bounds can inflate the aggregate
-gap without necessarily saving drawing; nearest-vertex early retention
-mostly avoids work the full current proof would also fail. An average
-1.81 triangle attempts per region weakens a large face-pruning prediction.
+Retention is concentrated at finest depth (29%), nearest vertex (12%),
+wholly offscreen bounds (13%) and partial viewport bounds (6%). Offscreen
+records can inflate the count gap without representing additional draws.
+Only 0.116-0.126% exhaust the read budget. Different rendered camera views
+prevent attributing the apparent cross-session regression to this commit.
+First isolate the bias change using matched inputs; then select one
+bounded clipping/storage optimization from measured evidence.
 Native/Hybrid comparisons on the same submitted batch remain proposed
-DevBench-only diagnostic work. Advanced remains default, and motion and
-lifecycle qualification remain open. PBR grass, grass optimization and
-Reverse Z remain separate later PRs.
+DevBench-only work. Advanced remains default; motion and lifecycle
+qualification remain open. PBR grass, grass optimization and Reverse Z
+remain separate later PRs.
 
 ## Scope and authority
 
@@ -676,17 +667,18 @@ as separate results.
 ## Next bounded work
 
 Keep PR104 experimental. Cached face tests, plane proofs, nearest-vertex
-checks and finer depth are implemented and measured. Bounds testing costs
-0.705-0.714 ms GPU; hierarchy construction costs about 0.055 ms.
-The [analysis](vr-hybrid-culling-adaptive-2026-10-04.md#next-focused-work)
-motivates the implemented non-interpolating depth proofs and targeted
-path diagnostics. Measure the new normal shader against Advanced with
-diagnostics disabled, then collect path counts separately at noon.
+checks, finer depth and original-vertex base bias are implemented and
+measured. Bounds testing now costs 0.828-0.865 ms GPU in the tested view;
+the hierarchy costs 0.058-0.066 ms. The [analysis](vr-hybrid-culling-proof-bias-2026-10-04.md#apparent-regression-and-next-work)
+prioritizes matched-input old/new shader comparison before another
+optimization. Actual clipping frequency justifies a bounded clipper
+experiment; stackless traversal or cached planes remain alternatives,
+with no demonstrated occupancy bottleneck or predicted gain.
 Do not raise the read budget: even resolving every observed budget exit
-would recover at most 0.325 percentage points in these cohorts.
-With other costs unchanged, native culling-scope parity would require
-about a 90.5% reduction in current bounds cost. This is not a whole-frame
-prediction or evidence that a single focused change can achieve parity.
+would recover at most 0.126 percentage points in these cohorts.
+Same-batch native comparison must separate useful missed culling from
+offscreen count differences. Present evidence does not justify promising
+parity from another local optimization.
 Preserve masks, guards, depth bias and stereo/history safety; require a
 repeatable improvement and motion/lifecycle qualification before promotion.
 

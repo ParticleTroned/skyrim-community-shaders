@@ -6,22 +6,21 @@ four-mode assay found Hybrid materially slower than Advanced and Legacy.
 Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
-The [adaptive comparison and GPU analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
-record the latest repeated comparison on the finer 2x2-depth build:
-Hybrid costs 12.6% more CPU time and 14.9% more GPU time, rejecting 40.1%
-of candidate records versus Advanced's 59.1%. Measured culling GPU scopes
-average 0.775 ms for Hybrid and 0.133 ms for native Advanced; bounds
-testing consumes 91.3-91.7% of Hybrid GPU work. Runtime counters show no
-Hybrid fallback or invalidated history. Different views prevent an
-isolated comparison with the preceding build. Motion and lifecycle
-qualification remain open.
+The [latest proof-bias comparison](vr-hybrid-culling-proof-bias-2026-10-04.md)
+records two noon windows per method with instrumentation disabled:
+Hybrid averages 17.40 ms CPU / 10.21 ms GPU, versus Advanced's
+11.09 / 8.58 ms. Separate counters show 35.4-36.7% candidate rejection
+versus 61.6%. Culling GPU scopes average 0.919 ms versus 0.076 ms;
+bounds testing accounts for about 92% of Hybrid's measured culling work.
+No Hybrid fallback, invalidation or unreadable batches were observed.
 
-The subsequent proof-bias change uses the base depth allowance for
-whole-face and original-triangle minima, while retaining the interpolation
-allowance for clipped results, vertex retention and plane proofs. New
-DevBench counters distinguish proof paths and viewport exits. This change
-has no in-game performance or visual result yet; the measurements above
-refer to the preceding compiled source.
+The original-vertex base-bias change has not demonstrated an improvement.
+New shortcuts fire about three times per hundred candidates, while actual
+polygon clipping runs about 2.3 times per candidate. These are work events,
+not uniquely recovered objects. A materially different rendered view
+prevents attributing the apparent cross-session regression to this change.
+Matched-input old/new shader comparison should precede another cost
+optimization. Motion and lifecycle qualification remain open.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not

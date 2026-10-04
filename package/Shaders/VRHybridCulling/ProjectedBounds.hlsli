@@ -18,6 +18,11 @@ namespace ProjectedBounds
 	static uint PlaneKeys[4];
 	static float3 PlaneNormals[4];
 	static float3 PlaneMagnitudes[4];
+#ifdef CSX_HIZ_POLYGON_BASELINE
+	static const bool DirectIntersectionEnabled = false;
+#else
+	static const bool DirectIntersectionEnabled = true;
+#endif
 
 	/// Requires all eight vertices to be initialized for the current eye.
 	void PrepareFaces()
@@ -90,8 +95,10 @@ namespace ProjectedBounds
 	}
 
 	/// A strict separating edge excludes the complete rectangle; uncertain orientation needs clipping.
-	bool TriangleOutsideRegion(float3 a, float3 b, float3 c, float3 normal, float3 magnitude, float2 minimumPixel, float2 maximumPixel)
+	bool TriangleOutsideRegion(float3 a, float3 b, float3 c, float3 normal, float3 magnitude, float2 minimumPixel, float2 maximumPixel,
+		out float3 firstEdge, out float3 secondEdge, out float3 closingEdge)
 	{
+		firstEdge = secondEdge = closingEdge = 0;
 		const float roundoffFactor = 64.0 / 16777216.0;
 		const float roundoffFloor = 1e-20;
 		if (!all(isfinite(normal)) || !all(isfinite(magnitude)) || abs(normal.z) <= roundoffFactor * magnitude.z + roundoffFloor)
@@ -100,8 +107,14 @@ namespace ProjectedBounds
 		[unroll] for (uint index = 0; index < 3; ++index)
 		{
 			float2 start = index == 0 ? a.xy : (index == 1 ? b.xy : c.xy);
-			float2 end = index == 0 ? b.xy : (index == 1 ? c.xy : a.xy);
-			precise float2 edge = end - start;
+			precise float3 edge3 = (index == 0 ? b : (index == 1 ? c : a)) - (index == 0 ? a : (index == 1 ? b : c));
+			if (index == 0)
+				firstEdge = edge3;
+			else if (index == 1)
+				secondEdge = edge3;
+			else
+				closingEdge = edge3;
+			float2 edge = edge3.xy;
 			float2 gradient = orientation * float2(-edge.y, edge.x);
 			float2 corner = float2(gradient.x >= 0.0 ? maximumPixel.x : minimumPixel.x,
 				gradient.y >= 0.0 ? maximumPixel.y : minimumPixel.y);
@@ -113,6 +126,55 @@ namespace ProjectedBounds
 				return true;
 		}
 		return false;
+	}
+
+	bool TriangleOutsideRegion(float3 a, float3 b, float3 c, float3 normal, float3 magnitude, float2 minimumPixel, float2 maximumPixel)
+	{
+		float3 firstEdge, secondEdge, closingEdge;
+		return TriangleOutsideRegion(a, b, c, normal, magnitude, minimumPixel, maximumPixel, firstEdge, secondEdge, closingEdge);
+	}
+
+	/// Bounds the depth-unresolved triangle portion; uncertain intersections retain polygon clipping.
+	bool DirectIntersectionProvesOccluded(float3 a, float3 b, float3 c, float3 firstEdge, float3 secondEdge, float3 closingEdge,
+		float3 normal, float3 magnitude, float2 minimumPixel, float2 maximumPixel, float depth, float guardedBias)
+	{
+		const float roundoffFactor = 64.0 / 16777216.0;
+		const float roundoffFloor = 1e-20;
+		if (!all(isfinite(normal)) || !all(isfinite(magnitude)) || abs(normal.z) <= roundoffFactor * magnitude.z + roundoffFloor)
+			return false;
+		precise float guardedDepth = DepthOrder::Reversed ? depth - guardedBias : depth + guardedBias;
+		precise float depthError = roundoffFactor * (abs(guardedDepth) + max(abs(a.z), max(abs(b.z), abs(c.z)))) + roundoffFloor;
+		precise float threshold = DepthOrder::Reversed ? guardedDepth - depthError : guardedDepth + depthError;
+		float2 minimumFront = 3.402823466e+38;
+		float2 maximumFront = -3.402823466e+38;
+		bool hasFront = false;
+		[unroll] for (uint index = 0; index < 3; ++index)
+		{
+			float3 start = index == 0 ? a : (index == 1 ? b : c);
+			float3 end = index == 0 ? b : (index == 1 ? c : a);
+			float3 edge = index == 0 ? firstEdge : (index == 1 ? secondEdge : closingEdge);
+			bool startFront = DepthOrder::Reversed ? start.z >= threshold : start.z <= threshold;
+			bool endFront = DepthOrder::Reversed ? end.z >= threshold : end.z <= threshold;
+			if (startFront) {
+				minimumFront = min(minimumFront, start.xy);
+				maximumFront = max(maximumFront, start.xy);
+				hasFront = true;
+			}
+			if (startFront != endFront) {
+				precise float weight = (threshold - start.z) / edge.z;
+				precise float weightError = roundoffFactor * (1.0 + abs(weight));
+				precise float2 intersection = start.xy + weight * edge.xy;
+				precise float2 coordinateError = abs(edge.xy) * weightError +
+				                                 roundoffFactor * (abs(start.xy) + abs(edge.xy)) + roundoffFloor;
+				if (!isfinite(weight) || weight < 0.0 || weight > 1.0 || !all(isfinite(intersection)) || !all(isfinite(coordinateError)))
+					return false;
+				minimumFront = min(minimumFront, intersection - coordinateError);
+				maximumFront = max(maximumFront, intersection + coordinateError);
+				hasFront = true;
+			}
+		}
+		// Any covered point that fails depth is inside these outward-rounded front bounds.
+		return !hasFront || any(maximumFront < minimumPixel) || any(minimumFront > maximumPixel);
 	}
 
 	bool PlaneProvesOccluded(float3 a, float3 b, float3 c, float2 minimumPixel, float2 maximumPixel, float depth, float guardedBias)
@@ -168,9 +230,20 @@ namespace ProjectedBounds
 				}
 
 				HIZ_COUNT_TRIANGLE_REGION;
-				if (TriangleOutsideRegion(a, b, c, PlaneNormals[planeSlot], PlaneMagnitudes[planeSlot], minimumPixel, maximumPixel)) {
+				float3 firstEdge, secondEdge, closingEdge;
+				if (TriangleOutsideRegion(a, b, c, PlaneNormals[planeSlot], PlaneMagnitudes[planeSlot], minimumPixel, maximumPixel,
+						firstEdge, secondEdge, closingEdge)) {
 					HIZ_COUNT_DISJOINT_TRIANGLE;
 					continue;
+				}
+				if (DirectIntersectionEnabled) {
+					HIZ_COUNT_DIRECT_TEST;
+					if (DirectIntersectionProvesOccluded(a, b, c, firstEdge, secondEdge, closingEdge,
+							PlaneNormals[planeSlot], PlaneMagnitudes[planeSlot], minimumPixel, maximumPixel, depth, guardedBias)) {
+						HIZ_COUNT_DIRECT_PROOF;
+						continue;
+					}
+					HIZ_COUNT_DIRECT_FALLBACK;
 				}
 
 				HIZ_COUNT_POLYGON_CLIP;

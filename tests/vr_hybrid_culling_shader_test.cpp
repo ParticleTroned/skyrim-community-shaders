@@ -36,7 +36,7 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		std::unique_ptr<D3D11ShaderTest::ConstantBuffer> constants;
 
-		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false, const char* source = nullptr, bool refinementAB = false)
+		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false, const char* source = nullptr, bool refinementAB = false, bool polygonBaseline = false)
 		{
 			ComPtr<ID3DBlob> code, errors;
 			std::vector<D3D_SHADER_MACRO> defines;
@@ -44,12 +44,17 @@ namespace
 				defines.push_back({ "CSX_DEPTH_ORDER_TEST_REVERSED", "1" });
 			if (diagnostics)
 				defines.push_back({ "CSX_HIZ_DIAGNOSTICS", "1" });
-			if (refinementAB)
+			if (refinementAB) {
 				defines.push_back({ "CSX_HIZ_REFINEMENT_AB", "1" });
+				defines.push_back({ "CSX_HIZ_INTERSECTION_AB", "1" });
+				defines.push_back({ "CSX_HIZ_CLIP_AB", "1" });
+			}
+			if (polygonBaseline)
+				defines.push_back({ "CSX_HIZ_POLYGON_BASELINE", "1" });
 			defines.push_back({ nullptr, nullptr });
 			Util::CustomInclude includes{ "package/Shaders" };
-			static std::map<std::tuple<std::wstring, bool, bool, bool, std::string>, ComPtr<ID3DBlob>> compiled;
-			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics, refinementAB, source ? source : "" }];
+			static std::map<std::tuple<std::wstring, bool, bool, bool, bool, std::string>, ComPtr<ID3DBlob>> compiled;
+			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics, refinementAB, polygonBaseline, source ? source : "" }];
 			if (cached) {
 				code = cached;
 			} else {
@@ -129,7 +134,8 @@ namespace
 		BuildConstants buildConstants{};
 		TestConstants testConstants{};
 		Kernel build, reduce, test, diagnosticTest;
-		std::vector<std::array<std::uint32_t, 20>> lastDiagnostics;
+		std::unique_ptr<Kernel> polygonTest, diagnosticPolygonTest;
+		std::vector<std::array<std::uint32_t, 24>> lastDiagnostics;
 		ComPtr<ID3D11Texture2D> source, pyramid, staging;
 		ComPtr<ID3D11ShaderResourceView> sourceView, pyramidView;
 		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
@@ -142,6 +148,10 @@ namespace
 			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, false, nullptr, refinementAB),
 			diagnosticTest(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, true, nullptr, refinementAB)
 		{
+			if (refinementAB) {
+				polygonTest = std::make_unique<Kernel>(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, false, nullptr, true, true);
+				diagnosticPolygonTest = std::make_unique<Kernel>(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, true, nullptr, true, true);
+			}
 			testConstants.eyes = { EyeRect{ 0, 0, eyeWidth, eyeHeight }, EyeRect{ eyeWidth, 0, eyeWidth, eyeHeight } };
 			Require(TryMakeBuildConstants(testConstants.eyes, sourceWidth, sourceHeight, reduction,
 						buildConstants, testConstants.pyramid),
@@ -267,7 +277,8 @@ namespace
 				for (auto& matrix : constants.viewProjection)
 					for (UINT column = 0; column < 4; ++column)
 						matrix[2][column] = matrix[3][column] - matrix[2][column];
-			test.Bind(context, constants);
+			const bool polygonBaseline = polygonTest && (constants.reserved & 2u) != 0;
+			(polygonBaseline ? *polygonTest : test).Bind(context, constants);
 			ID3D11ShaderResourceView* views[]{ bounds.srv.Get(), pyramidView.Get(), sourceAvailable ? sourceView.Get() : nullptr };
 			auto* output = results.uav.Get();
 			context->CSSetShaderResources(0, 3, views);
@@ -281,7 +292,7 @@ namespace
 			std::memcpy(values.data(), mapped.pData, values.size() * sizeof(std::uint32_t));
 			context->Unmap(results.staging.Get(), 0);
 			StructuredBuffer diagnostics(device, sizeof(lastDiagnostics[0]), static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
-			diagnosticTest.Bind(context, constants);
+			(polygonBaseline ? *diagnosticPolygonTest : diagnosticTest).Bind(context, constants);
 			ID3D11UnorderedAccessView* outputs[]{ output, diagnostics.uav.Get() };
 			context->CSSetShaderResources(0, 3, views);
 			context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
@@ -301,7 +312,7 @@ namespace
 				const auto& record = lastDiagnostics[index];
 				Require(record[1] <= 128 && record[2] <= record[1] && record[3] <= 12 * record[2],
 					"Diagnostic traversal work exceeded the budget");
-				Require(record[4] + record[5] + record[17] + record[7] <= record[3] && record[6] <= 6 * record[2],
+				Require(record[4] + record[5] + record[17] + record[21] + record[7] <= record[3] && record[6] <= 6 * record[2],
 					"Diagnostic proof paths exceed the corresponding face or triangle attempts");
 				Require(record[6] == 0 && record[7] == 0,
 					"Guarded proof reported a base-only bias shortcut");
@@ -581,6 +592,9 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 			Require(fixture.Test(objects)[0] == 1 && fixture.lastDiagnostics[0][13] == 0 && fixture.lastDiagnostics[0][15] == 0,
 				"Refinement OFF read original depth or accepted an unresolved leaf");
 			fixture.testConstants.reserved = 2;
+			Require(fixture.Test(objects)[0] == 0 && fixture.lastDiagnostics[0][20] == 0,
+				"Polygon baseline disabled source refinement or used direct intersection proofs");
+			fixture.testConstants.reserved = 8;
 			Require(fixture.Test(objects)[0] == 1, "Unknown A/B flag did not fail conservatively");
 			fixture.testConstants.reserved = 0;
 			for (const auto& eye : fixture.testConstants.eyes) {
@@ -1081,6 +1095,142 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		Require(separated > 100, "Separating-edge fixtures did not exercise useful rejections");
 	}
 
+	void ChecksDirectIntersectionDepth(Fixture& fixture)
+	{
+		constexpr const char* source = R"(
+#include "Common/DepthOrder.hlsli"
+#include "VRHybridCulling/ProjectedBounds.hlsli"
+struct RegionCase { float4 a, b, c, rectangle; float depth, bias; float2 padding; };
+StructuredBuffer<RegionCase> Cases : register(t0);
+RWStructuredBuffer<uint> Results : register(u0);
+cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
+[numthreads(64,1,1)] void main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= Count) return;
+    RegionCase v = Cases[id.x];
+    float3 normal, magnitude, firstEdge, secondEdge, closingEdge;
+    ProjectedBounds::BuildPlane(v.a.xyz, v.b.xyz, v.c.xyz, normal, magnitude);
+    bool separated = ProjectedBounds::TriangleOutsideRegion(v.a.xyz, v.b.xyz, v.c.xyz, normal, magnitude,
+        v.rectangle.xy, v.rectangle.zw, firstEdge, secondEdge, closingEdge);
+    bool direct = !separated && ProjectedBounds::DirectIntersectionProvesOccluded(v.a.xyz, v.b.xyz, v.c.xyz,
+        firstEdge, secondEdge, closingEdge, normal, magnitude, v.rectangle.xy, v.rectangle.zw, v.depth, v.bias);
+    bool plane = ProjectedBounds::PreparedPlaneProvesOccluded(v.a.xyz, normal, magnitude,
+        max(v.rectangle.xy, min(v.a.xy, min(v.b.xy, v.c.xy))),
+        min(v.rectangle.zw, max(v.a.xy, max(v.b.xy, v.c.xy))), v.depth, v.bias);
+    Results[id.x] = (direct ? 1u : 0u) | (plane ? 2u : 0u) | (separated ? 4u : 0u);
+})";
+		struct RegionCase
+		{
+			std::array<float, 4> a, b, c, rectangle;
+			float depth, bias = kDefaultDepthBias + 64.0f / 16777216.0f;
+			std::array<float, 2> padding{};
+		};
+		static_assert(sizeof(RegionCase) == 80);
+		std::vector<RegionCase> cases;
+		std::uint32_t seed = 91;
+		const auto random = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+		for (float offset : { 0.0f, 8192.0f })
+			for (float scale : { 0.03125f, 32.0f })
+				for (int index = 0; index < 1000; ++index) {
+					RegionCase v{};
+					for (auto* point : { &v.a, &v.b, &v.c })
+						*point = { offset + scale * random(), offset + scale * random(), random(), 0 };
+					v.rectangle = { offset + scale * random(), offset + scale * random(), offset + scale * random(), offset + scale * random() };
+					for (int axis = 0; axis < 2; ++axis)
+						if (v.rectangle[axis] > v.rectangle[axis + 2])
+							std::swap(v.rectangle[axis], v.rectangle[axis + 2]);
+					v.depth = random();
+					cases.push_back(v);
+				}
+		const auto useful = cases.size();
+		cases.push_back({ { 0, 0, 0.2f, 0 }, { 10, 0, 0.8f, 0 }, { 9, 10, 0.1f, 0 }, { 9.7f, 0, 9.9f, 10 }, 0.5f });
+		const auto uncertain = cases.size();
+		cases.push_back({ { 0, 0, 0.5f, 0 }, { 2, 0, 0.5f, 0 }, { 1, 0, 0.5f, 0 }, { 0, 0, 2, 1 }, 0.4f });
+		cases.push_back({ { 0, 0, 0.5f, 0 }, { 2, 0, 0.5f, 0 }, { 0, 2, 0.5f, 0 }, { 0, 0, 1, 1 }, 0.5f });
+		cases.push_back({ { 0, 0, 0.4f, 0 }, { 2, 0, 0.6f, 0 }, { 0, 2, 0.6f, 0 }, { 1, 0, 1, 0 }, 0.5f });
+		for (auto& v : cases)
+			if (fixture.reversedDepth) {
+				for (auto* point : { &v.a, &v.b, &v.c }) (*point)[2] = 1.0f - (*point)[2];
+				v.depth = 1.0f - v.depth;
+			}
+		const auto oracle = [&](const RegionCase& v) {
+			using Point = std::array<double, 3>;
+			std::vector<Point> polygon{ { v.a[0], v.a[1], v.a[2] }, { v.b[0], v.b[1], v.b[2] }, { v.c[0], v.c[1], v.c[2] } };
+			for (int plane = 0; plane < 4 && !polygon.empty(); ++plane) {
+				const int axis = plane / 2;
+				const double sign = plane % 2 ? -1 : 1;
+				const double boundary = v.rectangle[axis + (plane % 2 ? 2 : 0)];
+				std::vector<Point> output;
+				auto previous = polygon.back();
+				double previousDistance = sign * (previous[axis] - boundary);
+				for (const auto current : polygon) {
+					const double distance = sign * (current[axis] - boundary);
+					if ((distance >= 0) != (previousDistance >= 0)) {
+						const double weight = previousDistance / (previousDistance - distance);
+						Point intersection{};
+						for (int lane = 0; lane < 3; ++lane) intersection[lane] = previous[lane] + weight * (current[lane] - previous[lane]);
+						output.push_back(intersection);
+					}
+					if (distance >= 0)
+						output.push_back(current);
+					previous = current;
+					previousDistance = distance;
+				}
+				polygon = std::move(output);
+			}
+			for (const auto point : polygon)
+				if (fixture.reversedDepth ? point[2] >= static_cast<double>(v.depth) - v.bias : point[2] <= static_cast<double>(v.depth) + v.bias)
+					return false;
+			return true;
+		};
+		StructuredBuffer inputs(fixture.device, sizeof(RegionCase), static_cast<UINT>(cases.size()), D3D11_BIND_SHADER_RESOURCE, cases.data());
+		StructuredBuffer outputs(fixture.device, sizeof(UINT), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
+		Kernel kernel(fixture.device, L"DirectIntersectionDepthTest.hlsl", "RegionConstants", fixture.reversedDepth, false, source);
+		kernel.Bind(fixture.context, std::array<UINT, 4>{ static_cast<UINT>(cases.size()), 0, 0, 0 });
+		auto* input = inputs.srv.Get();
+		auto* output = outputs.uav.Get();
+		fixture.context->CSSetShaderResources(0, 1, &input);
+		fixture.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		fixture.context->Dispatch((static_cast<UINT>(cases.size()) + 63) / 64, 1, 1);
+		fixture.Unbind();
+		fixture.context->CopyResource(outputs.staging.Get(), outputs.buffer.Get());
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		Check(fixture.context->Map(outputs.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+		std::vector<UINT> actual(cases.size());
+		std::memcpy(actual.data(), mapped.pData, actual.size() * sizeof(UINT));
+		fixture.context->Unmap(outputs.staging.Get(), 0);
+		UINT proofs = 0;
+		for (std::size_t index = 0; index < cases.size(); ++index)
+			if (actual[index] & 1) {
+				++proofs;
+				Require(oracle(cases[index]), "Direct intersection proof removed visible triangle coverage");
+			}
+		Require(proofs > 100 && actual[useful] == 1, "Direct proof did not avoid a clip missed by the plane and separating-edge shortcuts");
+		for (auto index = uncertain; index < cases.size(); ++index)
+			Require((actual[index] & 1) == 0, "Direct proof rejected equality, inclusive edge contact or degenerate geometry");
+	}
+
+	void ChecksFarClipAB(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		Fixture fixture(device, context, reversedDepth, 32, 32, 2, true);
+		const std::array objects{ Box(0, 0, 0.98f), Box(0, 0, 0.02f), Box(2, 0, 0.98f) };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		fixture.Build(pixels);
+		Require(fixture.Test(objects) == std::vector<UINT>{ 0, 1, 1 } && fixture.lastDiagnostics[0][23] != 0,
+			"Far clamping lost its conservative proof or bypassed near/viewport guards");
+		fixture.testConstants.reserved = 4;
+		Require(fixture.Test(objects) == std::vector<UINT>{ 1, 1, 1 } && fixture.lastDiagnostics[0][23] == 0,
+			"Far-clip baseline bypassed its retention rule or counted clamping");
+		fixture.testConstants.reserved = 0;
+		for (UINT eye = 0; eye < 2; ++eye) {
+			const auto offset = 16 * fixture.sourceWidth + fixture.testConstants.eyes[eye].x + 16;
+			pixels[offset] = 1;
+			fixture.Build(pixels);
+			Require(fixture.Test(objects)[0] == 1, "Far clamping ignored a visible source pixel in one eye");
+			pixels[offset] = 0.4f;
+		}
+	}
+
 	void ChecksGuardedVertexDepthProofs(Fixture& fixture)
 	{
 		constexpr const char* source = R"(
@@ -1218,7 +1368,7 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 				continue;
 			fixture.context->CopyResource(diagnostics.staging.Get(), diagnostics.buffer.Get());
 			Check(fixture.context->Map(diagnostics.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
-			std::vector<std::array<UINT, 20>> records(cases.size());
+			std::vector<std::array<UINT, 24>> records(cases.size());
 			std::memcpy(records.data(), mapped.pData, records.size() * sizeof(records[0]));
 			fixture.context->Unmap(diagnostics.staging.Get(), 0);
 			bool reused = false, skipped = false;
@@ -1281,7 +1431,7 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		objects[6].entry[0][0] = std::numeric_limits<float>::quiet_NaN();
 		objects[9].entry[3][0] = 0.25f;
 		fixture.Build(pixels);
-		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 0, 1, 1, 1, 0, 1, 1, 1, 1, 1 },
 			"Depth direction, equality, clipping, uncovered guard margins or invalid bounds failed");
 
 		for (UINT y = 0; y < fixture.sourceHeight; ++y)
@@ -1444,6 +1594,8 @@ int main()
 			ChecksProjectedRegionShortcuts(fixture);
 			ChecksGuardedVertexDepthProofs(fixture);
 			ChecksSeparatingEdges(fixture);
+			ChecksDirectIntersectionDepth(fixture);
+			ChecksFarClipAB(device.Get(), context.Get(), reversedDepth);
 			CoversVisibilityAndFailures(fixture);
 			CoversMixedStereoVisibility(fixture);
 			SeparatesViewportRetentionReasons(fixture);
@@ -1468,6 +1620,15 @@ int main()
 			RetainsLocalFaceBiasInEitherEye(fixture);
 			ChecksFaceProofsAgainstRays(fixture);
 			Fixture fine(device.Get(), context.Get(), reversedDepth, 32, 32, 2);
+			Fixture intersectionAB(device.Get(), context.Get(), reversedDepth, 32, 32, 2, true);
+			for (const UINT controls : { 0u, 2u }) {
+				intersectionAB.testConstants.reserved = controls;
+				ExcludesEmptyProjectedCorners(intersectionAB);
+				UsesLocalFaceDepth(intersectionAB);
+				PreservesFaceProofsAcrossAxisPermutations(intersectionAB);
+				ChecksFaceProofsAgainstRays(intersectionAB);
+				CoversVisibilityAndFailures(intersectionAB);
+			}
 			CoversVisibilityAndFailures(fine);
 			CoversMixedStereoVisibility(fine);
 			BiasRetainsTouchingBounds(fine);

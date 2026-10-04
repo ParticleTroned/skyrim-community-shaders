@@ -28,6 +28,15 @@ cbuffer TestConstants : register(b0)
 	uint Reserved;
 };
 
+bool FarClipEnabled()
+{
+#ifdef CSX_HIZ_CLIP_AB
+	return (Reserved & 4u) == 0;
+#else
+	return true;
+#endif
+}
+
 bool SourceRefinementEnabled()
 {
 #ifdef CSX_HIZ_REFINEMENT_AB
@@ -73,11 +82,21 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		// Clipping a box through the eye or near plane needs a different bound.
 		if (!all(isfinite(clip)))
 			HIZ_VISIBLE(HIZ_INVALID_INPUT);
-		if (clip.w <= 1e-6 || clip.z <= 0.0 || clip.z >= clip.w)
-			HIZ_VISIBLE(HIZ_CLIP_CROSSING);
+		if (clip.w <= 1e-6)
+			HIZ_VISIBLE(HIZ_EYE_CROSSING);
+		if (DepthOrder::Reversed ? clip.z >= clip.w : clip.z <= 0.0)
+			HIZ_VISIBLE(HIZ_NEAR_CROSSING);
+		bool crossesFar = DepthOrder::Reversed ? clip.z <= 0.0 : clip.z >= clip.w;
+		if (crossesFar && !FarClipEnabled())
+			HIZ_VISIBLE(HIZ_FAR_CROSSING);
 		float3 ndc = clip.xyz / clip.w;
 		if (!all(isfinite(ndc)))
 			HIZ_VISIBLE(HIZ_INVALID_INPUT);
+		if (crossesFar) {
+			// Moving far vertices toward the camera lowers the affine face-depth bound.
+			ndc.z = DepthOrder::Farthest(DepthOrder::Near(), DepthOrder::Nearest(ndc.z, DepthOrder::Far()));
+			HIZ_COUNT_FAR_CLAMP;
+		}
 		float2 uv = ndc.xy * float2(0.5, -0.5) + 0.5;
 		ProjectedBounds::Vertices[vertex] = float3(uv * EyeRect[eye].zw, ndc.z);
 		minimumUV = min(minimumUV, uv);
@@ -280,7 +299,7 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 #ifdef CSX_HIZ_DIAGNOSTICS
 	uint diagnosticCount, diagnosticStride;
 	TraversalDiagnostics.GetDimensions(diagnosticCount, diagnosticStride);
-	if (objectIndex >= diagnosticCount || diagnosticStride != 80)
+	if (objectIndex >= diagnosticCount || diagnosticStride != 96)
 		return;
 	HiZTraversalDiagnostic invalidDiagnostic = (HiZTraversalDiagnostic)0;
 	invalidDiagnostic.traversal.x = HIZ_INVALID_INPUT;
@@ -301,8 +320,19 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		!isfinite(DepthBias) || DepthBias < 8.0 / 16777216.0 || DepthBias > 1.0 ||
 		!isfinite(PixelGuardBand) || PixelGuardBand < 1.0 || PixelGuardBand > 16384.0)
 		return;
-#ifdef CSX_HIZ_REFINEMENT_AB
-	if ((Reserved & ~1u) != 0)
+#if defined(CSX_HIZ_REFINEMENT_AB) || defined(CSX_HIZ_INTERSECTION_AB) || defined(CSX_HIZ_CLIP_AB)
+	const uint allowedControls =
+#	ifdef CSX_HIZ_REFINEMENT_AB
+		1u |
+#	endif
+#	ifdef CSX_HIZ_INTERSECTION_AB
+		2u |
+#	endif
+#	ifdef CSX_HIZ_CLIP_AB
+		4u |
+#	endif
+		0u;
+	if ((Reserved & ~allowedControls) != 0)
 		return;
 #else
 	if (Reserved != 0)

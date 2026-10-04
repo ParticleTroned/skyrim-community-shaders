@@ -11,6 +11,13 @@
 namespace VRHybridCullingPolicy
 {
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	inline constexpr std::uint32_t kDisableSourceRefinement = 1;
+	inline constexpr std::uint32_t kDisableDirectIntersection = 2;
+	inline constexpr std::uint32_t kDisableFarClip = 4;
+	inline constexpr std::uint32_t kDevBenchTestControls = kDisableSourceRefinement | kDisableDirectIntersection | kDisableFarClip;
+#endif
+
 	inline constexpr std::uint32_t kEyeCount = 2;
 	inline constexpr std::uint32_t kMaximumSourceDimension = 16384;
 	inline constexpr std::uint32_t kMaximumPyramidDimension = 4096;
@@ -186,7 +193,7 @@ namespace VRHybridCullingPolicy
 			return false;
 		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if ((a_constants.reserved & ~1u) != 0)
+		if ((a_constants.reserved & ~kDevBenchTestControls) != 0)
 #else
 		if (a_constants.reserved != 0)
 #endif

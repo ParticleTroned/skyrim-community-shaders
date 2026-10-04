@@ -1,228 +1,196 @@
 # Hi-Z refinement comparison
 
-The combined contained-plane, lazy-plane and original-depth refinement
-build remains slower than Advanced. Four noon-reset frame windows give
-10.132 / 7.852 ms CPU/GPU for Advanced and 11.475 / 9.021 ms for Hi-Z:
-an additional 1.343 ms CPU (13.26%) and 1.169 ms GPU (14.88%). CPU and
-GPU overlap; these differences must not be added.
+Guarded 2x2 with original-depth refinement ON remains slower than Advanced:
+11.357 / 8.774 ms CPU/GPU versus 9.977 / 7.763 ms. The GPU difference is
+1.011 ms (13.02%); CPU is 1.380 ms (13.83%). CPU and GPU overlap and must
+not be added. Refinement OFF makes the culling shader slightly cheaper,
+but the whole-frame GPU result is 0.268 ms worse than ON. Keep ON.
 
-Implementation snapshot: `605fcf65e3f9727a2400adc848668061e06c5fc0`.
-The archive preceded that commit, as requested. Its compiled manifest
-records `cdaa15649ce5449ca6911dd65d6f158103c58714` plus the validated
-dirty implementation snapshot, rather than claiming to compile commit
-605fcf65. Producer Build ID:
-`a59c7e2411cfecf684a94f0c548e0477cb0528dbd8a62cc5342cadec63101017`.
+Measured implementation: `b949dad8185a660e192c355e6b6fa02a2d512194`.
+The AIO was built before that commit, as requested: its producer records
+source `605fcf65e` plus the dirty implementation snapshot, not a clean
+b949dad81 compile. Producer Build ID:
+`495a513ef59af08f4d2ab05fd5c526aa6848447cc792cd785d417f7f5b993110`.
+The installed DLL and adjacent manifest match the preserved AIO receipt.
 
-## Controlled comparison
+## Final controlled comparison
 
 Skyrim VR, WhiterunExterior01, SkyrimClearTU, DLSS Quality K, render-scale
-ON, 1344x1492 render pixels and 2016x2240 display pixels per eye. Every
-condition resets game hour to 12 and settles for five seconds. Position,
-weather, profile and source-compilation counters remained unchanged
-within the campaign. Observed frame-window boundary HMD variation from
-the first reference was at most 0.504 mm / 0.0628 degrees.
+ON, 1344x1492 render and 2016x2240 display pixels per eye. Every phase
+resets noon and settles for five seconds. Frame-window boundary hours
+were 12.028--12.205. Position, weather, profile and source-compilation
+counters remained unchanged. Observed boundary pose variation was at most
+0.498 mm / 0.0414 degrees. No compiler or packager activity was recorded.
 
-Whole-frame measurements used two 20-second fpsVR windows per method,
-with telemetry, traversal, matched diagnostics and the CSX profiler OFF.
-The mean weights each complete window equally. The guarded collectors
-found no compiler/packager activity, owned and stopped their recordings,
-and retained the complete raw samples. Logging settings were unchanged.
+The selected six 20-second fpsVR windows followed the user's request to
+repeat after a possibly open window. The first six windows remain in the
+raw evidence but are excluded from this comparison. Selected order:
+Advanced, ON, OFF, Advanced, OFF, ON. Diagnostics, telemetry and the CSX
+profiler were OFF. Every complete window receives equal weight.
 
-| Window | Method   | CPU ms | GPU ms | Samples |
-| ------ | -------- | -----: | -----: | ------: |
-| r1     | Advanced | 10.037 |  7.771 |    1566 |
-| r2     | Hi-Z     | 11.453 |  9.009 |    1424 |
-| r3     | Advanced | 10.226 |  7.934 |    1485 |
-| r4     | Hi-Z     | 11.497 |  9.033 |    1403 |
+| Mode                | CPU ms | GPU ms | GPU window range | Samples |
+| ------------------- | -----: | -----: | ---------------: | ------: |
+| Advanced            |  9.977 |  7.763 |     7.609--7.916 |   2,959 |
+| Hi-Z refinement ON  | 11.357 |  8.774 |     8.618--8.929 |   2,738 |
+| Hi-Z refinement OFF | 11.868 |  9.042 |     8.994--9.089 |   2,581 |
 
-Three separate complete 300-frame GPU captures used normal shaders,
-telemetry ON, traversal/matched diagnostics OFF. Profiler times are GPU
-self time. Only independent culling scopes are summed. Every controller
-call passed the registered performance-neutrality guard and retained its
-cleanup receipt. The repeated Hi-Z capture measures substantial timer
-variation; report both results rather than selecting the faster one.
+CPU window ranges were 9.750--10.203, 11.072--11.641 and 11.627--12.109
+ms respectively. Raw p50/p95/p99 and all samples are retained in
+`frame-analysis.json`; baseline drift remains part of the result. fpsVR
+did not expose refresh rate, so no observed-headset-budget percentage is
+claimed. A different process/view prevents a controlled cross-build
+speedup claim against earlier reports.
 
-| Culling scope          | Advanced ms | Hi-Z first ms | Hi-Z repeat ms |
-| ---------------------- | ----------: | ------------: | -------------: |
-| Native downscale       |    0.028747 |             — |              — |
-| Native bounds producer |    0.049383 |             — |              — |
-| Hierarchy setup        |           — |      0.000649 |       0.000647 |
-| Visibility setup       |           — |      0.004947 |       0.005600 |
-| Base depth             |           — |      0.025863 |       0.022663 |
-| Mip reduction          |           — |      0.041079 |       0.034348 |
-| Bounds testing         |           — |      0.640380 |       0.555206 |
-| Result copy            |           — |      0.011068 |       0.004544 |
-| Total                  |    0.078130 |      0.723988 |       0.623008 |
+## Where GPU time goes
 
-Bounds testing accounts for 88.5–89.1% of Hi-Z culling. Mean culling cost
-is 0.673498 ms, 8.62 times Advanced. The remaining hierarchy/copy work
-already costs 0.067802–0.083607 ms, close to Advanced's entire producer.
-Producer parity therefore needs a large change to bounds testing and
-possibly hierarchy overhead, rather than another small arithmetic saving.
+Six separate complete 300-frame captures used normal shaders, telemetry
+ON, traversal/matched diagnostics OFF. The profiler reports GPU self
+time; only independent culling scopes are summed. Table entries are the
+equal-capture means. All native timer histories are retained.
 
-CPU telemetry means in the first normal capture were 3.566 us prepare,
-22.210 us dispatch, 10.630 us Hi-Z validation and 4.528 us native staging
-readback. Advanced producer/readback means were 3.036 / 2.897 us. These
-are inclusive CPU scopes and must not be summed. They do not explain the
-1.343 ms whole-frame CPU difference by themselves; engine drawing and
-GPU/CPU synchronization remain unmeasured contributors.
+| Culling scope          | Advanced ms | Hi-Z ON ms | Hi-Z OFF ms |
+| ---------------------- | ----------: | ---------: | ----------: |
+| Native downscale       |    0.035759 |         -- |          -- |
+| Native bounds producer |    0.075364 |         -- |          -- |
+| Hierarchy setup        |          -- |   0.000678 |    0.000647 |
+| Visibility setup       |          -- |   0.005142 |    0.004999 |
+| Base depth             |          -- |   0.023504 |    0.024044 |
+| Mip reduction          |          -- |   0.033062 |    0.032246 |
+| Bounds testing         |          -- |   0.553424 |    0.507211 |
+| Result copy            |          -- |   0.004844 |    0.004804 |
+| Total                  |    0.111123 |   0.620654 |    0.573951 |
 
-## Culling outcomes
+Advanced's total varied substantially: 0.080698--0.141548 ms. Hi-Z ON
+was 0.611798--0.629510 ms; OFF was 0.564021--0.583882 ms. Retain both
+Advanced captures instead of silently selecting the faster baseline.
+Bounds testing accounts for 89.17% of ON culling. Non-bounds work is
+already 0.067230 ms, near the faster Advanced total.
 
-Frozen normal-shader counter cohorts contain repeated candidate records,
-not unique scene objects, triangles or draw calls. Counters span capture
-and collection, rather than only the 300 profiled frames.
+Refinement adds approximately 0.0467 ms to the culling pass while the
+whole frame is 0.2680 ms faster in the selected ON windows. These are
+separate captures: the observations support keeping refinement, but do
+not establish an exact rendering-time decomposition. Inclusive CPU
+prepare/dispatch/readback timers are retained in `analysis.json`; they
+must not be added into a CPU total. No hardware occupancy or spill
+measurement was obtained.
 
-Advanced hid 2,621,840 of 4,337,664 records over 1,059 batches: 60.444%.
-Before/after recovery counts were identical in this stationary cohort.
-Hi-Z first hid 1,483,235 of 3,616,768 records over 883 batches: 41.010%.
-The Hi-Z repeat hid 1,920,131 of 4,608,000 records over 1,125 batches:
-41.670%. Both methods tested 4,096 records per batch.
-The aggregate gap is 18.77–19.43 percentage points. No normal Hi-Z
-fallback, rejected/unreadable history, pipeline rebuild or allocation was
-recorded. Engine culling was enabled with minimum extent 10.
+Frozen normal-shader cohorts rejected 62.17--62.60% for Advanced,
+39.52--39.63% for ON and 38.11--39.27% for OFF. Each batch contains 4,096
+candidate records. These cohorts span timer collection too, rather than
+only the 300 captured frames. There were no normal Hi-Z fallbacks,
+invalidated histories, unreadable batches, pipeline rebuilds or pyramid
+allocations. Engine culling was enabled with minimum extent 10.
 
-The source was standard-Z R24 depth, 2688x1492, one sample, two
-1344x1492 eye rectangles. Preferred/active reduction was 2. Each eye's
-padded pyramid was 1024x1024 with ten mips; both layers occupy 11,184,800
-logical bytes. This is texture accounting, not a driver VRAM measurement.
-The zero-is-untrusted mask policy, two-pixel spatial guard and depth bias
-8/16777216 remain active. Region tests add a 1/32-pixel roundoff margin
-and a 64/16777216 interpolation-depth allowance. Pyramid/source reads
-share 64 reads per eye.
+The source remained standard-Z R24 depth, 2688x1492, one sample, two
+1344x1492 eye rectangles. Active reduction was 2; each padded pyramid
+layer was 1024x1024 with ten mips. Both layers total 11,184,800 logical
+bytes, not measured driver VRAM. Zero-is-untrusted handling, two-pixel
+guard, depth bias 8/16777216, region roundoff margin 1/32 pixel,
+interpolation allowance 64/16777216 and 64 depth reads per eye remain.
 
-## What the work counters establish
+## Matched outcomes explain the culling gap
 
-A separate six-second traversal window collected 492 complete batches,
-2,015,232 records. Work totals sum both tested eyes. One additional
-accepted visibility batch is outside this traversal cohort; retention
-shares below use only the complete traversal records.
+The repaired shadow diagnostic accepted 523 ON batches / 2,142,208
+records and 537 OFF batches / 2,199,552 records. Both had zero drops,
+failed batches, not-ready polls or snapshot publication misses. One
+in-flight submission at each freeze is outside the accepted cohort; it
+was cleared when diagnostics were disabled. Before/after Advanced
+recovery outcomes were identical. These are same-record comparisons
+within each condition, not cross-toggle matches or unique draw counts.
 
-| Work event                   |      Total | Per candidate |
-| ---------------------------- | ---------: | ------------: |
-| Depth loads                  | 29,451,018 |        14.614 |
-| Face-region tests            | 10,637,074 |         5.278 |
-| Triangle visits              | 20,035,590 |         9.942 |
-| Plane builds                 |  4,964,663 |         2.464 |
-| Plane reuses                 |  5,922,679 |         2.939 |
-| Successful plane proofs      |  3,703,243 |         1.838 |
-| Polygon clip entries         |  7,184,099 |         3.565 |
-| Executed clipping planes     | 18,725,430 |         9.292 |
-| Skipped clipping planes      |  8,921,101 |         4.427 |
-| Expanded reduced-depth cells |    809,992 |         0.402 |
-| Refined source pixels        |  2,467,165 |         1.224 |
-| Resolved expanded cells      |    182,852 |         0.091 |
-| Source-witness reads         |    222,061 |         0.110 |
+| Matched result (% candidates)        |     ON |    OFF |
+| ------------------------------------ | -----: | -----: |
+| Native hidden                        | 62.394 | 61.918 |
+| Hi-Z hidden                          | 40.192 | 38.299 |
+| Native-only hidden                   | 22.589 | 24.001 |
+| Hi-Z-only hidden                     |  0.387 |  0.382 |
+| Net rejection gap, percentage points | 22.203 | 23.619 |
 
-Lazy reuse avoids 54.40% of reached plane builds; contained-plane skips
-avoid 32.27% of reached clipping-plane executions. These are work-event
-savings, not independently measured GPU speedups. The remaining 3.565
-polygon entries and 9.292 executed planes per candidate are still a
-substantial target. More cache entries could increase indexed storage
-and register pressure; no hardware occupancy/spill measurement exists.
+ON's native-only hidden records have these decisive Hi-Z retention
+reasons. Percentages use all 2,142,208 matched candidates:
 
-Only 22.57% of expanded cells resolve completely. Source pixel/witness
-reads are 9.13% of all depth loads, but their associated region/triangle
-work is not timed separately. A resolved cell does not establish an
-additional hidden object: another cell or eye can still retain it.
+| Reason                          | Records | % candidates |
+| ------------------------------- | ------: | -----------: |
+| Wholly offscreen                | 189,466 |        8.844 |
+| Original bounds cross viewport  |  72,961 |        3.406 |
+| Clip/near/far-plane crossing    |  64,304 |        3.002 |
+| Expanded guard crosses viewport |      55 |        0.003 |
+| Finest depth unresolved         | 103,205 |        4.818 |
+| Nearest witness unresolved      |  53,232 |        2.485 |
+| Read budget exhausted           |     690 |        0.032 |
 
-Each retained record contributes one decisive failure across the tested
-eyes. The traversal cohort retains 1,195,943 records:
+Viewport/clip cases are 67.53% of native-only misses, or 15.255% of all
+records. Wholly offscreen proxies belong to native frustum rejection;
+their visibility bits do not imply extra useful draws. Partial viewport
+and clip-plane handling are real capability targets but require a
+conservative per-eye clipped bound, not treating missing depth as hidden.
 
-| Retention reason                | Records | % all candidates | % retained |
-| ------------------------------- | ------: | ---------------: | ---------: |
-| Finest depth unresolved         | 624,335 |           30.981 |     52.204 |
-| Nearest witness unresolved      | 184,674 |            9.164 |     15.442 |
-| Wholly offscreen                | 191,564 |            9.506 |     16.018 |
-| Original bounds cross viewport  | 142,253 |            7.059 |     11.895 |
-| Clip/near-plane crossing        |  41,219 |            2.045 |      3.447 |
-| Read budget exhausted           |  11,406 |            0.566 |      0.954 |
-| Expanded guard crosses viewport |     492 |            0.024 |      0.041 |
-| Invalid input / stack capacity  |       0 |                0 |          0 |
+The remaining in-view depth/witness/budget cases are 7.335% of all
+records. Increasing the global budget targets only 0.032% of matched
+candidates and would increase shader work. The 0.387% Hi-Z-only cohort
+does not by itself prove either correct extra culling or a visual defect;
+motion and visual qualification remain necessary. No pictures were taken
+because performance was not similar.
 
-Offscreen/viewport retention totals 16.589% of all candidates. That is
-large compared with the aggregate rejection gap, but it is not a matched
-native-only result. Native frustum culling owns offscreen rejection;
-these proxy records need not become additional visible draws. Increasing
-the read budget globally targets only 0.566% of records and would add
-work to the already expensive shader.
+## Remaining triangle and clipping work
 
-## Matched diagnostic limitation and next iteration
+Separate six-second traversal windows collected 460 ON batches /
+1,884,160 records and 426 OFF batches / 1,744,896 records. Work sums both
+tested eyes. Diagnostic shader timing is not used for performance.
 
-The Advanced shadow run submitted 476 batches and dropped all 476,
-with zero accepted, zero failed and no matched outcome snapshot. This
-is a failed runtime qualification of the new matched diagnostic. It
-does not invalidate the separate normal performance/traversal captures,
-but prevents attribution of native-only culling and useful extra draws.
+| Work per candidate           |     ON |    OFF |
+| ---------------------------- | -----: | -----: |
+| Depth loads                  | 13.599 | 11.704 |
+| Face-region tests            |  4.887 |  3.941 |
+| Triangle visits              |  9.276 |  7.407 |
+| Plane builds                 |  2.240 |  1.810 |
+| Plane reuses                 |  2.869 |  2.124 |
+| Successful plane proofs      |  1.775 |  1.341 |
+| Triangle/rectangle attempts  |  3.334 |  2.593 |
+| Disjoint triangles skipped   |  1.715 |  1.332 |
+| Polygon clip entries         |  1.619 |  1.262 |
+| Executed clipping planes     |  4.356 |  3.358 |
+| Skipped clipping planes      |  2.122 |  1.688 |
+| Clip vertex-loop visits      | 28.354 | 22.107 |
+| Expanded reduced-depth cells |  0.361 |      0 |
+| Source pixels                |  1.108 |      0 |
+| Source-witness reads         |  0.108 |      0 |
+| Resolved expanded cells      |  0.077 |      0 |
 
-The current dropped counter combines history validation, unavailable
-diagnostic data and nonblocking readback readiness. Source inspection
-also shows that shadow history is retained before the original native
-producer runs; changes to its selector, result ownership or bounds are
-therefore an audit target. The observed receipts do not distinguish these
-causes. Do not weaken validity checks or treat dropped records as matches.
+The separating-edge test skips 51.43% of reached triangle/rectangle
+pairs. Only 299 of 3,051,254 remaining ON clips are empty: 0.0098%.
+Additional disjointness tests have little remaining opportunity.
+Surviving clips average 17.51 vertex-loop visits, including containment
+checks and final depth reduction. Lazy plane reuse is 56.16%; contained
+plane skips are 32.75%. These work-event ratios are not isolated speedups.
+Only 21.19% of expanded cells resolve; refinement-associated region work
+is included in the totals rather than separately timed.
 
-Prioritize these changes for the next test build:
+## Next focused optimization
 
-1. Repair/qualify matched readback and expose explicit drop reasons. Use
-   the resulting same-record outcomes to separate viewport proxies from
-   recoverable in-view occlusion misses.
-2. Add a DevBench-only A/B switch for original-depth refinement within
-   guarded 2x2. Compare GPU cost and matched useful rejections in one
-   process; current cell-resolution counts cannot establish net benefit.
-3. Reduce polygon work before full clipping, starting with a conservative
-   triangle/rectangle disjoint test. Add empty-clip and survivor-work
-   counters to establish how often that test could avoid the clipper.
-   Preserve precise interpolation, uncertainty fallback and all guards.
+1. Keep guarded 2x2 and refinement ON. Target the 0.553 ms bound tester:
+   investigate direct conservative depth extrema over a triangle/rectangle
+   intersection, using contained vertices, rectangle corners and edge
+   crossings to avoid alternating polygon storage and repeated clipping.
+   Preserve strict error bounds and the existing clipper for uncertain
+   cases. Qualify against the current pixel/ray and double-precision
+   oracles, then perform a DevBench A/B; a gain is not yet established.
+2. Investigate reuse of triangle edge equations alongside the existing
+   lazy plane cache. Cache only reached triangles, and compare compiled
+   storage/register behavior: larger indexed arrays can lose the saving.
+3. Address missed culling with conservative viewport/clip handling and
+   the 4.818% finest-depth / 2.485% witness matched cohorts. Validate
+   source/guard coverage and temporal/stereo coherence before relaxing
+   any retention rule. Avoid a global depth-read-budget increase.
 
-Compared with the preceding process, whole-frame GPU is 9.021 rather
-than 8.943 ms and normal bounds testing is 0.555–0.640 rather than
-0.520 ms. Those differences are consistent with extra refinement cost,
-but are not a controlled implementation A/B: the process/view changed
-and timer variation is material. This build has not demonstrated an
-overall performance improvement. The individual changes remain untimed.
+This campaign qualifies the repaired diagnostic and measures refinement;
+it does not isolate the separating-edge optimization against its previous
+implementation. Advanced, refinement ON, telemetry ON and noon were
+restored; profiler/traversal/matched diagnostics are OFF with no pending
+matched slots. Skyrim remains running. Logging was unchanged.
 
-Advanced was restored with profiling, traversal and shadow diagnostics
-OFF. Skyrim remains running. No images were taken because performance
-was not close. Motion/lifecycle and SE/AE runtime qualification remain
-open; static timing and arithmetic tests do not prove visual correctness.
-
-Complete raw evidence and all normalized parameters are retained locally
-under `build/astra-runtime/20261004T142532Z-hiz-refinement-restart`, with
-the combined record in `analysis.json`. The initial first-use action
-timeout and sandbox fpsVR connection failure are preserved separately;
-neither contributed samples to the accepted comparison.
-
-## Follow-up implementation
-
-The next build adds guarded separating-edge rejection before polygon
-clipping, and records region attempts, disjoint triangles, empty clips
-and vertex-loop visits. Uncertain orientation or roundoff still clips.
-This has no additional depth loads or polygon clipping passes.
-
-The matched diagnostic uses a private submitted-bounds snapshot, checks
-native output identity after production, and retains three pending GPU
-readbacks for at most eight frames. Busy maps retain their slot instead
-of being counted as failed matches. Every discarded batch has a reason;
-snapshot publication misses are reported separately. Source, view,
-bounds, epoch and consumer-frame checks remain mandatory.
-
-DevBench action `set_depth_culling_source_refinement_enabled` toggles
-original-depth refinement ON/OFF without changing guarded 2x2. The state
-is not saved. Production has no toggle or diagnostic machinery and keeps
-refinement ON. The next noon campaign must time Advanced and both Hi-Z
-conditions with diagnostics OFF, then collect matched outcomes and work
-counters separately. The 605fcf65 measurements above do not measure this
-new implementation.
-
-Validation: all 12 focused targets passed across the initial run and the
-shader retry. The initial shader test reached its 60-second deadline;
-the retry passed in 56.17 seconds under a 180-second bound. Both depth
-orders exercise refinement ON/OFF, stereo holes, guarded pixel/3D ray
-oracles and 4,003 separating-edge cases against double-precision clipping.
-Eight strict FXC permutations passed (`/Ges /WX /O3`); maintained bytecode
-comparison returned 2 because this change intentionally differs from HEAD.
-DevBench syntax checks and production forced-header syntax/preprocessing
-checks passed for Hybrid, Temporal and Menu bridge. The registered menu
-schema/action contract passed. No new in-game result or production DLL
-link is claimed.
+Complete raw evidence, normalizers, owned-capture stop receipts, guard
+results and parameters remain under
+`build/astra-runtime/20261004T154226Z-hiz-refinement-ab`; the complete
+derived record is `analysis.json`. Motion/lifecycle and SE/AE runtime
+qualification remain open. This report changes no executable code.

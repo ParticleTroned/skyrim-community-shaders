@@ -15,7 +15,7 @@ namespace VRHybridCullingDiagnostics
 
 	inline constexpr std::array Reasons{ "not_tested", "occluded", "clip_crossing", "viewport_guard",
 		"invalid_input", "depth_budget", "finest_unresolved", "stack_capacity", "nearest_unresolved",
-		"viewport_offscreen", "viewport_partial" };
+		"viewport_offscreen", "viewport_partial", "eye_crossing", "near_crossing", "far_crossing" };
 
 	/** One diagnostic shader record per native-indexed object; work sums both eyes. */
 	struct Record
@@ -25,8 +25,9 @@ namespace VRHybridCullingDiagnostics
 		std::uint32_t clipPlanes, skippedClipPlanes, planeBuilds, planeReuses;
 		std::uint32_t refinedCells, sourcePixels, resolvedCells, sourceWitnesses;
 		std::uint32_t triangleRegionTests, disjointTriangles, emptyClips, clipVertexVisits;
+		std::uint32_t directTests, directProofs, directFallbacks, farClampedVertices;
 	};
-	static_assert(sizeof(Record) == 80 && offsetof(Record, planeProofs) == 16);
+	static_assert(sizeof(Record) == 96 && offsetof(Record, planeProofs) == 16);
 
 	struct Totals
 	{
@@ -36,6 +37,7 @@ namespace VRHybridCullingDiagnostics
 		std::uint64_t clipPlanes = 0, skippedClipPlanes = 0, planeBuilds = 0, planeReuses = 0;
 		std::uint64_t refinedCells = 0, sourcePixels = 0, resolvedCells = 0, sourceWitnesses = 0;
 		std::uint64_t triangleRegionTests = 0, disjointTriangles = 0, emptyClips = 0, clipVertexVisits = 0;
+		std::uint64_t directTests = 0, directProofs = 0, directFallbacks = 0, farClampedVertices = 0;
 	};
 
 	/** Keep accumulated work complete when a diagnostic field is added. */
@@ -44,7 +46,8 @@ namespace VRHybridCullingDiagnostics
 		&Totals::planeProofs, &Totals::polygonClips, &Totals::faceBiasOnlyProofs, &Totals::triangleBiasOnlyProofs,
 		&Totals::clipPlanes, &Totals::skippedClipPlanes, &Totals::planeBuilds, &Totals::planeReuses,
 		&Totals::refinedCells, &Totals::sourcePixels, &Totals::resolvedCells, &Totals::sourceWitnesses,
-		&Totals::triangleRegionTests, &Totals::disjointTriangles, &Totals::emptyClips, &Totals::clipVertexVisits
+		&Totals::triangleRegionTests, &Totals::disjointTriangles, &Totals::emptyClips, &Totals::clipVertexVisits,
+		&Totals::directTests, &Totals::directProofs, &Totals::directFallbacks, &Totals::farClampedVertices
 	};
 
 	inline void Accumulate(Totals& a_total, const Totals& a_sample)
@@ -68,7 +71,7 @@ namespace VRHybridCullingDiagnostics
 				(first != 1 && second != 0) || (first == 1 && second == 0) ||
 				((first == 1 && second == 1) != (a_visibility[index] == 0)) ||
 				(second == 0 && record.depthLoads > 64) || (first == 5 && record.depthLoads != 64) ||
-				((first == 2 || first == 3 || first == 9 || first == 10) && record.depthLoads != 0) ||
+				((first == 2 || first == 3 || first == 9 || first == 10 || first >= 11) && record.depthLoads != 0) ||
 				(first == 8 && record.depthLoads == 6 && record.sourceWitnesses == 0) ||
 				(first == 8 && (record.depthLoads < 4 || record.depthLoads > 6 || record.faceRegions != 0 || record.faceTriangles != 0)) ||
 				(second == 8 && record.depthLoads == 70 && record.sourceWitnesses == 0) ||
@@ -76,14 +79,16 @@ namespace VRHybridCullingDiagnostics
 				(second == 5 && record.depthLoads < 68) || record.depthLoads > 128 || record.faceRegions > record.depthLoads ||
 				record.faceTriangles > record.faceRegions * 12 || record.faceBiasOnlyProofs > record.faceRegions * 6 ||
 				record.faceTriangles > (record.faceRegions * 6 - record.faceBiasOnlyProofs) * 2 ||
-				static_cast<std::uint64_t>(record.planeProofs) + record.polygonClips + record.disjointTriangles + record.triangleBiasOnlyProofs > record.faceTriangles)
+				static_cast<std::uint64_t>(record.planeProofs) + record.polygonClips + record.disjointTriangles + record.directProofs + record.triangleBiasOnlyProofs > record.faceTriangles)
 				return std::nullopt;
 			if (static_cast<std::uint64_t>(record.clipPlanes) + record.skippedClipPlanes > static_cast<std::uint64_t>(record.polygonClips) * 4 ||
 				static_cast<std::uint64_t>(record.planeBuilds) + record.planeReuses > record.faceTriangles ||
 				record.sourcePixels > record.depthLoads || record.sourceWitnesses > 2 || record.resolvedCells > record.refinedCells ||
 				record.refinedCells > record.faceRegions || record.resolvedCells > record.sourcePixels ||
 				record.emptyClips > record.polygonClips || record.disjointTriangles > record.triangleRegionTests ||
-				record.triangleRegionTests > record.faceTriangles)
+				record.triangleRegionTests > record.faceTriangles || record.farClampedVertices > 16 ||
+				static_cast<std::uint64_t>(record.directProofs) + record.directFallbacks != record.directTests ||
+				record.directTests > record.triangleRegionTests - record.disjointTriangles)
 				return std::nullopt;
 			++result.eyeReasons[first];
 			++result.eyeReasons[second];
@@ -107,6 +112,10 @@ namespace VRHybridCullingDiagnostics
 			result.disjointTriangles += record.disjointTriangles;
 			result.emptyClips += record.emptyClips;
 			result.clipVertexVisits += record.clipVertexVisits;
+			result.directTests += record.directTests;
+			result.directProofs += record.directProofs;
+			result.directFallbacks += record.directFallbacks;
+			result.farClampedVertices += record.farClampedVertices;
 		}
 		return result;
 	}

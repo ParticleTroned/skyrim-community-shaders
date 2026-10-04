@@ -57,7 +57,6 @@ namespace VRHybridCulling
 		using VRHybridCullingHistory::EyePose;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		using VRHybridCullingMatchedReadback::Stage;
-		inline constexpr std::uint32_t kDisableSourceRefinement = 1;
 #endif
 
 		// These wrappers belong to Skyrim VR 1.4.15, whose callsites gate installation.
@@ -103,7 +102,9 @@ namespace VRHybridCulling
 			winrt::com_ptr<ID3D11ComputeShader> reduce;
 			winrt::com_ptr<ID3D11ComputeShader> test;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			winrt::com_ptr<ID3D11ComputeShader> polygonTest;
 			winrt::com_ptr<ID3D11ComputeShader> diagnosticTest;
+			winrt::com_ptr<ID3D11ComputeShader> diagnosticPolygonTest;
 			winrt::com_ptr<ID3D11Buffer> diagnosticBuffer, diagnosticStaging;
 			winrt::com_ptr<ID3D11UnorderedAccessView> diagnosticUAV;
 			winrt::com_ptr<ID3D11Buffer> matchedBuffer, matchedBounds;
@@ -172,6 +173,15 @@ namespace VRHybridCulling
 		std::atomic_uint64_t g_matchedSnapshotMisses{ 0 };
 		std::array<std::atomic_uint64_t, MatchedDropReasons.size()> g_matchedDropReasons{};
 		std::atomic_bool g_sourceRefinementEnabled{ true };
+		std::atomic_bool g_directIntersectionEnabled{ true };
+		std::atomic_bool g_farClipEnabled{ true };
+
+		std::uint32_t GetTestControls() noexcept
+		{
+			return (g_sourceRefinementEnabled.load(std::memory_order_acquire) ? 0 : kDisableSourceRefinement) |
+			       (g_directIntersectionEnabled.load(std::memory_order_acquire) ? 0 : kDisableDirectIntersection) |
+			       (g_farClipEnabled.load(std::memory_order_acquire) ? 0 : kDisableFarClip);
+		}
 		const char* g_matchedDispatchFailure = "dispatch_failed";
 		std::atomic_bool g_traversalEnabled{ false }, g_traversalAvailable{ false };
 		std::atomic<const char*> g_traversalAvailability{ "not_created" };
@@ -188,6 +198,7 @@ namespace VRHybridCulling
 		std::atomic_uint64_t g_resolvedCells{ 0 };
 		std::atomic_uint64_t g_sourceWitnesses{ 0 };
 		std::atomic_uint64_t g_triangleRegionTests{ 0 }, g_disjointTriangles{ 0 }, g_emptyClips{ 0 }, g_clipVertexVisits{ 0 };
+		std::atomic_uint64_t g_directTests{ 0 }, g_directProofs{ 0 }, g_directFallbacks{ 0 }, g_farClampedVertices{ 0 };
 		std::array<std::atomic_uint64_t, VRHybridCullingDiagnostics::Reasons.size()> g_traversalReasons{};
 		std::atomic<const char*> g_status{ "idle" };
 		std::atomic<const char*> g_backend{ "pending" }, g_fallbackReason{ "none" }, g_historyRejection{ "none" };
@@ -425,7 +436,7 @@ namespace VRHybridCulling
 			a_frame.test.objectCount = 1;
 			a_frame.test.pixelGuardBand = 2.0f;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			a_frame.test.reserved = g_sourceRefinementEnabled.load(std::memory_order_acquire) ? 0 : kDisableSourceRefinement;
+			a_frame.test.reserved = GetTestControls();
 #endif
 			if (!IsValidTestConstants(a_frame.test, texture.Width, texture.Height))
 				return false;
@@ -508,9 +519,11 @@ namespace VRHybridCulling
 		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		winrt::com_ptr<ID3D11ComputeShader> CompileDiagnosticShader()
+		winrt::com_ptr<ID3D11ComputeShader> CompileDiagnosticShader(bool a_polygonBaseline)
 		{
-			const std::vector<std::pair<const char*, const char*>> defines{ { "CSX_HIZ_DIAGNOSTICS", "1" }, { "CSX_HIZ_REFINEMENT_AB", "1" } };
+			std::vector<std::pair<const char*, const char*>> defines{ { "CSX_HIZ_DIAGNOSTICS", "1" }, { "CSX_HIZ_REFINEMENT_AB", "1" }, { "CSX_HIZ_INTERSECTION_AB", "1" }, { "CSX_HIZ_CLIP_AB", "1" } };
+			if (a_polygonBaseline)
+				defines.emplace_back("CSX_HIZ_POLYGON_BASELINE", "1");
 			winrt::com_ptr<ID3D11ComputeShader> shader;
 			shader.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
 				L"Data\\Shaders\\VRHybridCulling\\TestBoundsCS.hlsl", defines, "cs_5_0")));
@@ -527,7 +540,8 @@ namespace VRHybridCulling
 		{
 			auto& resources = g_resources;
 			g_traversalAvailable.store(false, std::memory_order_release);
-			resources.diagnosticTest = CompileDiagnosticShader();
+			resources.diagnosticTest = CompileDiagnosticShader(false);
+			resources.diagnosticPolygonTest = CompileDiagnosticShader(true);
 			D3D11_BUFFER_DESC desc{};
 			desc.ByteWidth = VRDepthCullingTemporalPolicy::kMaximumObjects * sizeof(VRHybridCullingDiagnostics::Record);
 			desc.StructureByteStride = sizeof(VRHybridCullingDiagnostics::Record);
@@ -619,6 +633,10 @@ namespace VRHybridCulling
 			g_disjointTriangles.fetch_add(totals->disjointTriangles, std::memory_order_relaxed);
 			g_emptyClips.fetch_add(totals->emptyClips, std::memory_order_relaxed);
 			g_clipVertexVisits.fetch_add(totals->clipVertexVisits, std::memory_order_relaxed);
+			g_directTests.fetch_add(totals->directTests, std::memory_order_relaxed);
+			g_directProofs.fetch_add(totals->directProofs, std::memory_order_relaxed);
+			g_directFallbacks.fetch_add(totals->directFallbacks, std::memory_order_relaxed);
+			g_farClampedVertices.fetch_add(totals->farClampedVertices, std::memory_order_relaxed);
 			for (std::size_t index = 0; index < totals->eyeReasons.size(); ++index)
 				g_traversalReasons[index].fetch_add(totals->eyeReasons[index], std::memory_order_relaxed);
 		}
@@ -663,14 +681,32 @@ namespace VRHybridCulling
 			std::vector<std::pair<const char*, const char*>> testDefines;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			testDefines.emplace_back("CSX_HIZ_REFINEMENT_AB", "1");
+			testDefines.emplace_back("CSX_HIZ_INTERSECTION_AB", "1");
+			testDefines.emplace_back("CSX_HIZ_CLIP_AB", "1");
 #endif
 			resources.test.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VRHybridCulling\\TestBoundsCS.hlsl", testDefines, "cs_5_0")));
-			if (!resources.build || !resources.reduce || !resources.test) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			testDefines.emplace_back("CSX_HIZ_POLYGON_BASELINE", "1");
+			resources.polygonTest.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\VRHybridCulling\\TestBoundsCS.hlsl", testDefines, "cs_5_0")));
+#endif
+			if (!resources.build || !resources.reduce || !resources.test
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				|| !resources.polygonTest
+#endif
+			) {
 				resources.failed = true;
 				logger::warn("VR: Hybrid Hi-Z shaders unavailable; using native depth culling");
 				return false;
 			}
-			for (auto* shader : { resources.build.get(), resources.reduce.get(), resources.test.get() }) {
+			const std::array shaders{
+				resources.build.get(),
+				resources.reduce.get(),
+				resources.test.get(),
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				resources.polygonTest.get(),
+#endif
+			};
+			for (auto* shader : shaders) {
 				winrt::com_ptr<ID3D11Device> shaderDevice;
 				shader->GetDevice(shaderDevice.put());
 				if (shaderDevice.get() != device) {
@@ -690,6 +726,7 @@ namespace VRHybridCulling
 				CreateTraversalDiagnostics();
 			} catch (const std::exception& error) {
 				resources.diagnosticTest = nullptr;
+				resources.diagnosticPolygonTest = nullptr;
 				resources.diagnosticBuffer = nullptr;
 				resources.diagnosticStaging = nullptr;
 				resources.diagnosticUAV = nullptr;
@@ -921,7 +958,7 @@ namespace VRHybridCulling
 				globals::state->frameCount, reinterpret_cast<std::uintptr_t>(depth)))
 			return HYBRID_PREPARATION_FAILED("prepared_source_changed", a_epoch);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (g_prepared.test.reserved != (g_sourceRefinementEnabled.load(std::memory_order_acquire) ? 0 : kDisableSourceRefinement))
+		if (g_prepared.test.reserved != GetTestControls())
 			return HYBRID_PREPARATION_FAILED("prepared_source_changed", a_epoch);
 #endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -992,10 +1029,13 @@ namespace VRHybridCulling
 			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
 			auto* testShader = g_resources.test.get();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			const bool polygonBaseline = (g_prepared.test.reserved & kDisableDirectIntersection) != 0;
+			if (polygonBaseline)
+				testShader = g_resources.polygonTest.get();
 			if (diagnostic) {
 				auto* diagnosticUAV = g_resources.diagnosticUAV.get();
 				context->CSSetUnorderedAccessViews(1, 1, &diagnosticUAV, nullptr);
-				testShader = g_resources.diagnosticTest.get();
+				testShader = polygonBaseline ? g_resources.diagnosticPolygonTest.get() : g_resources.diagnosticTest.get();
 			}
 #endif
 			context->CSSetShader(testShader, nullptr, 0);
@@ -1121,7 +1161,7 @@ namespace VRHybridCulling
 		else if (g_history.pipelineInvalidated || g_reloadRequested.load(std::memory_order_acquire))
 			HYBRID_REJECT_HISTORY("pipeline_changed");
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		else if (g_history.frame.test.reserved != (g_sourceRefinementEnabled.load(std::memory_order_acquire) ? 0 : kDisableSourceRefinement))
+		else if (g_history.frame.test.reserved != GetTestControls())
 			HYBRID_REJECT_HISTORY("configuration_changed");
 #endif
 		else if (std::memcmp(g_history.bounds.data(), reinterpret_cast<const void*>(batch.transforms), batch.count * sizeof(OBBTransform)) != 0)
@@ -1313,6 +1353,18 @@ namespace VRHybridCulling
 			g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
 	}
 
+	void SetDirectIntersectionEnabled(bool a_enabled) noexcept
+	{
+		if (g_directIntersectionEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
+			g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
+	}
+
+	void SetFarClipEnabled(bool a_enabled) noexcept
+	{
+		if (g_farClipEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
+			g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
+	}
+
 	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept
 	{
 		if (g_traversalEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
@@ -1355,6 +1407,8 @@ namespace VRHybridCulling
 		                                   g_activeSourceReduction.load(std::memory_order_relaxed) :
 		                                   0;
 		result.sourceRefinementEnabled = g_sourceRefinementEnabled.load(std::memory_order_acquire);
+		result.directIntersectionEnabled = g_directIntersectionEnabled.load(std::memory_order_acquire);
+		result.farClipEnabled = g_farClipEnabled.load(std::memory_order_acquire);
 		result.traversalDiagnosticsEnabled = g_traversalEnabled.load(std::memory_order_acquire);
 		result.traversalDiagnosticsAvailable = g_traversalAvailable.load(std::memory_order_acquire);
 		result.traversalDiagnosticsAvailability = g_traversalAvailability.load(std::memory_order_acquire);
@@ -1376,6 +1430,10 @@ namespace VRHybridCulling
 		result.traversal.disjointTriangles = g_disjointTriangles.load(std::memory_order_relaxed);
 		result.traversal.emptyClips = g_emptyClips.load(std::memory_order_relaxed);
 		result.traversal.clipVertexVisits = g_clipVertexVisits.load(std::memory_order_relaxed);
+		result.traversal.directTests = g_directTests.load(std::memory_order_relaxed);
+		result.traversal.directProofs = g_directProofs.load(std::memory_order_relaxed);
+		result.traversal.directFallbacks = g_directFallbacks.load(std::memory_order_relaxed);
+		result.traversal.farClampedVertices = g_farClampedVertices.load(std::memory_order_relaxed);
 		result.matchedDiagnosticsEnabled = g_matchedEnabled.load(std::memory_order_acquire);
 		result.matchedSubmittedBatches = g_matchedSubmitted.load(std::memory_order_relaxed);
 		result.matchedBatches = g_matchedBatches.load(std::memory_order_relaxed);
@@ -1437,7 +1495,8 @@ namespace VRHybridCulling
 		g_matchedSnapshot.Invalidate();
 		for (auto* counter : { &g_matchedSubmitted, &g_matchedBatches, &g_matchedDropped, &g_matchedFailed,
 				 &g_matchedPending, &g_matchedNotReady, &g_matchedSnapshotMisses,
-				 &g_triangleRegionTests, &g_disjointTriangles, &g_emptyClips, &g_clipVertexVisits })
+				 &g_triangleRegionTests, &g_disjointTriangles, &g_emptyClips, &g_clipVertexVisits,
+				 &g_directTests, &g_directProofs, &g_directFallbacks, &g_farClampedVertices })
 			counter->store(0, std::memory_order_relaxed);
 		for (auto& count : g_matchedDropReasons)
 			count.store(0, std::memory_order_relaxed);

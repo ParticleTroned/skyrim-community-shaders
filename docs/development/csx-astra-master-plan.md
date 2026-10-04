@@ -6,13 +6,15 @@ source reduction. Alternative proof/coarse-depth selectors and their extra
 shaders are removed. The existing 4x4 resource-limit fallback remains.
 
 The [latest noon comparison](vr-hybrid-culling-refinement-results-2026-10-04.md)
-measured the `605fcf65e` implementation snapshot: guarded 2x2 averaged
-11.47 ms CPU / 9.02 ms GPU against Advanced's 10.13 / 7.85 ms. Hi-Z GPU
-frames remain 14.88% slower. Separate complete 300-frame captures measured
-0.623–0.724 ms Hi-Z culling versus 0.078 ms Advanced; bounds testing
-contributes 88.5–89.1% of Hi-Z culling. Separate counter cohorts rejected
-41.01–41.67% versus Advanced's 60.44%. These are candidate records, not
-matched objects or draws. No normal fallback or rejected history occurred.
+measured the `b949dad81` implementation snapshot. Repeated guarded 2x2
+refinement ON windows averaged 11.36 ms CPU / 8.77 ms GPU against
+Advanced's 9.98 / 7.76 ms: Hi-Z GPU remains 13.02% slower. Refinement OFF
+was 11.87 / 9.04 ms, so retain ON. Separate 300-frame captures measured
+0.612–0.630 ms Hi-Z ON culling versus 0.081–0.142 ms Advanced; bounds
+testing averages 0.553 ms and contributes 89.17% of Hi-Z culling.
+Matched ON outcomes rejected 40.192% versus native's 62.394%. These are
+candidate records, not unique objects or draws. No normal fallback or
+rejected history occurred.
 
 The tested build removes polygon survivor copies using alternating clip
 banks and replaces repeated prepared-face struct selection with indexed
@@ -22,19 +24,21 @@ tests pass. The earlier
 vertex-array copy is already removed. See the
 [cost analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md).
 The tested build adds contained-plane skips, a four-entry lazy
-triangle-plane cache, and selective source-pixel refinement within the
-existing 64-read eye budget. Work counters show 32.27% clipping-plane
-skips and 54.40% plane reuse, but only 22.57% of expanded cells resolve.
-Those counts do not isolate the changes' GPU benefit. Offscreen/viewport
-retention covers 16.59% of candidate records and may explain much of the
-aggregate culling gap without implying extra useful draws.
-DevBench shadow diagnostics retained native visibility, but dropped all
-476 tested batches with no accepted matched outcomes. Its runtime
-qualification failed. The next build must expose drop reasons and repair
-matched readback before attributing native-only misses. A DevBench-only
-refinement A/B and cheaper conservative triangle/region rejection should
-then target the remaining cost. Global read-budget growth is not justified:
-only 0.566% of diagnostic records exhausted the budget.
+triangle-plane cache, selective source-pixel refinement within the
+existing 64-read eye budget, and conservative separating-edge rejection.
+Work counters show 32.75% clipping-plane skips, 56.16% plane reuse and
+51.43% triangle/rectangle pairs skipped before clipping. Remaining clips
+are empty only 0.0098% of the time; their 17.51 vertex-loop visits per
+clip are the next cost target. Only 21.19% of expanded cells resolve, but
+refinement ON saves 0.268 ms whole-frame GPU despite adding 0.047 ms to
+the culling pass. The separate windows do not establish an exact cost
+decomposition or an isolated separating-edge speedup.
+Repaired DevBench matched diagnostics accepted 523 ON and 537 OFF
+batches with zero drops or failures. Viewport/clip cases explain 67.53%
+of ON native-only misses. Wholly offscreen proxies need not imply useful
+extra draws. Finest-depth and nearest-witness failures account for
+4.818% and 2.485% of all matched candidates. Global read-budget growth
+targets only 0.032% of matched candidates and is not justified.
 The combined build passes 12/12 focused tests, including WARP pixel/ray
 oracles and matched-outcome validation. Four strict shader permutations,
 production diagnostic-isolation checks, the universal Release DLL and
@@ -680,35 +684,81 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental and pursue guarded 2x2 only. The latest noon
-comparison of source `605fcf65e` is retained in
+Keep PR104 experimental and pursue guarded 2x2 with refinement ON. The
+latest noon comparison of implementation `b949dad81` is retained in
 [the refinement report](vr-hybrid-culling-refinement-results-2026-10-04.md).
-Hi-Z remains 14.88% slower on GPU; bounds testing dominates its pass cost.
-The separate matched diagnostic accepted zero batches, so aggregate
-retention differences do not identify the missing-culling cause.
+Hi-Z remains 13.02% slower on GPU; bounds testing dominates its pass cost.
+The measured source identity includes the pre-commit dirty build, as
+recorded in that report. Initial windows potentially affected by an open
+window remain in raw evidence but are excluded from the final comparison.
 
-The next build adds conservative triangle-edge separation before full
-polygon clipping, with near-degenerate and roundoff uncertainty falling
-back to clipping. New counters expose attempted region tests, disjoint
-triangles, empty clips and vertex-loop visits. Existing contained-plane
-skips, lazy plane reuse and the 64-depth-read eye budget remain in place.
+Triangle-edge separation already skips half of reached region tests.
+Almost every remaining polygon clip intersects the rectangle. Investigate
+direct conservative intersection-depth extrema to avoid repeated polygon
+clipping/storage, with uncertain arithmetic falling back to the current
+clipper. Investigate lazy reuse of triangle edge equations without
+expanding indexed storage enough to lose the benefit. Preserve current
+guards, the 64-depth-read eye budget, double-precision and pixel/ray
+oracles, and require a normal-shader DevBench A/B before claiming a gain.
 
 Matched diagnostics now own the submitted CPU bounds on the GPU, validate
 the native output after production, and retain up to three asynchronous
 readbacks for at most eight frames. Accepted batches require unchanged
 input, source, view and frame identity. Drops have distinct reasons;
 busy reads and missed snapshot publication are separate diagnostics.
-This implementation still needs in-game qualification with the new DLL.
+Runtime qualification now accepts matched cohorts without drops. Matched
+ON native-only records identify viewport/clip cases as 67.53% of misses;
+investigate conservative per-eye clipped bounds rather than relaxing
+missing-depth rules. Wholly offscreen proxies remain native frustum work.
+Target in-view finest-depth/witness misses separately. The 0.387%
+Hi-Z-only cohort still requires visual/motion qualification; counts alone
+do not prove correct additional occlusion.
 
 Use `set_depth_culling_source_refinement_enabled` for nonpersistent
 original-depth refinement ON/OFF A/B. It defaults to ON; production
 compiles out the toggle and always refines. Both variants use guarded
-2x2 and retain uncertain cells conservatively. Reset noon and counters
-for each phase, compare Advanced / Hi-Z ON / Hi-Z OFF, and disable
-traversal and matched diagnostics during timing. Collect work and matched
-outcomes separately, with telemetry enabled. Compare CPU/GPU, actual
-hidden records, source reads, resolved cells, clipping work and unmatched
-reasons. No new runtime performance improvement is claimed before this A/B.
+2x2 and retain uncertain cells conservatively. The completed noon A/B
+supports keeping ON: normal culling costs 0.621 ms versus 0.574 ms OFF,
+while whole-frame GPU is 8.774 ms versus 9.042 ms OFF. Matched hidden
+shares are 40.192% ON / 38.299% OFF in separate shadow cohorts. Those
+cohorts are not cross-toggle record matches. Keep telemetry and diagnostics
+OFF for frame timing; collect bounded GPU captures and work/outcomes
+separately. Skyrim is restored to Advanced with diagnostics/profiling OFF.
 
 PBR grass remains the next independent feature PR, followed by grass
 optimization and Reverse Z. No render-scale qualification is claimed.
+
+The next test build adds a direct conservative intersection-depth proof.
+It bounds the triangle portion that can fail the guarded depth test using
+the original vertices and at most two depth-plane edge intersections.
+Strictly disjoint outward-rounded bounds bypass polygon clipping;
+uncertain or overlapping cases retain the existing clipper. Edge vectors
+are reused from triangle-region separation without another indexed cache.
+Guarded 2x2, original-depth refinement ON, lazy plane reuse, contained-plane
+skips, stereo/history guards and the per-eye read budget are preserved.
+
+DevBench action `set_depth_culling_direct_intersection_enabled` selects
+independently compiled candidate and polygon-baseline shaders. This keeps
+the candidate's register allocation out of baseline timing. The separate
+`set_depth_culling_far_clip_enabled` action tests conservative far-depth
+vertex clamping. Near-plane, eye-plane and viewport uncertainty remain
+visible; those cases need a separate proof of coverage under history reuse.
+New direct-attempt/proof/fallback and far-clamped-vertex counters, plus
+distinct eye/near/far retention reasons, support bounded diagnostic captures.
+Both controls default ON and are compiled out in production; diagnostics
+remain DevBench-only. In-game A/B of this build is pending installation.
+
+Validation for this iteration is preserved under
+`build/astra-runtime/intersection-validation/`: `ctest.log` passed all nine
+selected tests including the full Standard/reversed WARP suite;
+`host-ctest.log` passed eleven focused host tests after the control-mask
+fix, giving twelve distinct passing tests. The suite includes 4,004
+direct-proof fixtures per depth order checked against a double-precision
+clip oracle, baseline/candidate ray and stereo checks, and far-clamp A/B.
+`validate-shaders.ps1` passed twelve strict FXC permutations; the maintained
+refactor verifier returned 2 for intentional bytecode changes. Candidate
+normal shaders use 32 temporaries versus 27 for the polygon baseline;
+neither adds an indexed edge cache. Production OFF syntax/preprocessing
+passed for Hybrid, Temporal and the menu bridge with the actual forced
+headers and compiler flags; a separate production DLL link was not run.
+The AIO delivery receipt records the exact pre-commit producer identity.

@@ -14,6 +14,27 @@ namespace
 			throw std::runtime_error(a_message);
 	}
 
+	void ValidatesDevBenchControlsBeforeFrameCapture()
+	{
+		using namespace VRHybridCullingPolicy;
+		TestConstants constants{};
+		constants.eyes = { EyeRect{ 0, 0, 32, 32 }, EyeRect{ 32, 0, 32, 32 } };
+		BuildConstants build{};
+		Require(TryMakeBuildConstants(constants.eyes, 64, 32, 2, build, constants.pyramid), "Invalid control fixture");
+		constants.objectCount = 1;
+		for (auto& matrix : constants.viewProjection)
+			for (unsigned axis = 0; axis < 4; ++axis)
+				matrix[axis][axis] = 1;
+		for (std::uint32_t controls = 0; controls <= kDevBenchTestControls; ++controls) {
+			constants.reserved = controls;
+			Require(IsValidTestConstants(constants, 64, 32), "A supported A/B combination failed host validation");
+		}
+		for (const auto controls : { 8u, 15u, std::numeric_limits<std::uint32_t>::max() }) {
+			constants.reserved = controls;
+			Require(!IsValidTestConstants(constants, 64, 32), "An unknown control bit reached dispatch");
+		}
+	}
+
 	void PreservesInactiveAndFallbackEvidence()
 	{
 		VRDepthCullingTemporal::Status temporal{};
@@ -255,8 +276,40 @@ namespace
 			Require(!Summarize(std::array{ malformed }, occluded), "Invalid or overflowing proof counters were published");
 		const std::array<std::uint32_t, 1> retained{ 1 };
 		for (const auto malformed : { Record{ 2, 1, 0, 0 }, Record{ 3, 1, 0, 0 }, Record{ 9, 1, 0, 0 },
-				 Record{ 10, 1, 0, 0 }, Record{ 11, 0, 0, 0 }, Record{ 2817, 8, 0, 0 } })
+				 Record{ 10, 1, 0, 0 }, Record{ 14, 0, 0, 0 }, Record{ 3585, 8, 0, 0 } })
 			Require(!Summarize(std::array{ malformed }, retained), "Invalid viewport work or unknown reasons were published");
+		Record direct{};
+		direct.reasons = 257;
+		direct.depthLoads = 8;
+		direct.faceRegions = 1;
+		direct.faceTriangles = direct.triangleRegionTests = direct.directTests = 2;
+		direct.directProofs = direct.directFallbacks = direct.polygonClips = 1;
+		direct.farClampedVertices = 16;
+		const auto validDirect = Summarize(std::array{ direct }, occluded);
+		Require(validDirect && validDirect->directTests == 2 && validDirect->directProofs == 1 &&
+					validDirect->directFallbacks == 1 && validDirect->farClampedVertices == 16,
+			"Valid direct proof/fallback work was discarded");
+		for (unsigned failure = 0; failure < 5; ++failure) {
+			auto malformed = direct;
+			if (failure == 0)
+				++malformed.directProofs;
+			if (failure == 1)
+				++malformed.directFallbacks;
+			if (failure == 2)
+				++malformed.farClampedVertices;
+			if (failure == 3)
+				++malformed.disjointTriangles;
+			if (failure == 4)
+				malformed.directTests = malformed.directProofs = maximum;
+			Require(!Summarize(std::array{ malformed }, occluded), "Malformed direct work was published");
+		}
+		for (std::uint32_t reason : { 11u, 12u, 13u }) {
+			Record clipped{};
+			clipped.reasons = reason;
+			Require(Summarize(std::array{ clipped }, retained).has_value(), "Clip-plane retention lost its reason");
+			clipped.depthLoads = 1;
+			Require(!Summarize(std::array{ clipped }, retained), "Early clip retention acquired depth work");
+		}
 	}
 
 	void PreservesNativeVisibilityBeforeAndAfterRecovery()
@@ -348,6 +401,8 @@ namespace
 			"Bounded pending readback age failed across frame wrap");
 		VRHybridCulling::Status hybrid{};
 		hybrid.sourceRefinementEnabled = false;
+		hybrid.directIntersectionEnabled = false;
+		hybrid.farClipEnabled = false;
 		hybrid.matchedPendingBatches = 3;
 		hybrid.matchedNotReadyPolls = 7;
 		hybrid.matchedSnapshotPublicationMisses = 2;
@@ -356,15 +411,23 @@ namespace
 		hybrid.traversal.disjointTriangles = 4;
 		hybrid.traversal.emptyClips = 2;
 		hybrid.traversal.clipVertexVisits = 18;
+		hybrid.traversal.directTests = 6;
+		hybrid.traversal.directProofs = 2;
+		hybrid.traversal.directFallbacks = 4;
+		hybrid.traversal.farClampedVertices = 3;
 		const auto status = MenuDepthCullingDiagnostics::BuildStatus({}, hybrid).at("hybrid");
 		const auto& matched = status.at("matchedDiagnostics");
-		Require(!status.at("configuration").at("sourceRefinementEnabled").get<bool>() && matched.at("pendingBatches") == 3 &&
+		Require(!status.at("configuration").at("sourceRefinementEnabled").get<bool>() &&
+					!status.at("configuration").at("directIntersectionEnabled").get<bool>() &&
+					!status.at("configuration").at("farClipEnabled").get<bool>() && matched.at("pendingBatches") == 3 &&
 					matched.at("notReadyPolls") == 7 && matched.at("snapshotPublicationMisses") == 2 &&
 					matched.at("dropReasonCounts").at(VRHybridCulling::MatchedDropReasons.back()) == 9,
 			"A/B or pending diagnostic evidence lost during serialization");
 		const auto& traversal = status.at("traversalDiagnostics");
 		Require(traversal.at("triangleRegionTests") == 10 && traversal.at("disjointTriangles") == 4 &&
-					traversal.at("emptyClips") == 2 && traversal.at("clipVertexVisits") == 18,
+					traversal.at("emptyClips") == 2 && traversal.at("clipVertexVisits") == 18 &&
+					traversal.at("directTests") == 6 && traversal.at("directProofs") == 2 && traversal.at("directFallbacks") == 4 &&
+					traversal.at("farClampedVertices") == 3,
 			"Region-rejection or clipping-work counters lost during serialization");
 	}
 
@@ -373,6 +436,7 @@ namespace
 int main()
 {
 	try {
+		ValidatesDevBenchControlsBeforeFrameCapture();
 		ValidatesTraversalRecords();
 		ValidatesMatchedHandoffAndReadbackAge();
 		ValidatesMatchedOutcomesAndNewWork();

@@ -79,6 +79,8 @@ namespace VRHybridCulling
 		StageTiming prepare, dispatch, readback;
 		std::uint32_t sourceReductionActive = 0;
 		bool sourceRefinementEnabled = true;
+		bool directIntersectionEnabled = true;
+		bool farClipEnabled = true;
 		bool traversalDiagnosticsEnabled = false;
 		bool traversalDiagnosticsAvailable = false;
 		const char* traversalDiagnosticsAvailability = "not_created";
@@ -118,6 +120,10 @@ namespace VRHybridCulling
 	void FinalizeMatchedSubmission(void* a_culler, std::uint64_t a_epoch);
 	/** Toggle original-depth refinement for DevBench A/B; production always retains refinement. */
 	void SetSourceRefinementEnabled(bool a_enabled) noexcept;
+	/** Toggle direct triangle intersection proofs against the retained polygon clipper for DevBench A/B. */
+	void SetDirectIntersectionEnabled(bool a_enabled) noexcept;
+	/** Toggle conservative far-depth vertex clamping independently of intersection proofs for DevBench A/B. */
+	void SetFarClipEnabled(bool a_enabled) noexcept;
 	/** Publish matched outcomes after Advanced recovery, without changing native results. */
 	void CompleteMatchedRecovery(void* a_culler, std::uint64_t a_epoch);
 	/** Read current backend state and gated measurements without owning the render context. */

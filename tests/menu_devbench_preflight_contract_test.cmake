@@ -205,7 +205,7 @@ foreach(_removed_surface IN ITEMS
     endif()
 endforeach()
 
-foreach(_required_action IN ITEMS set_depth_culling_settings set_depth_culling_legacy_mode set_depth_culling_source_refinement_enabled)
+foreach(_required_action IN ITEMS set_depth_culling_settings set_depth_culling_legacy_mode set_depth_culling_source_refinement_enabled set_depth_culling_direct_intersection_enabled set_depth_culling_far_clip_enabled)
     set(_found FALSE)
     foreach(_index RANGE 0 ${_action_last})
         string(JSON _action GET "${_descriptor}" inputSchema properties action enum ${_index})

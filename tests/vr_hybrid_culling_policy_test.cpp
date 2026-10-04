@@ -191,7 +191,15 @@ namespace
 		}
 		constants = MakeTestConstants();
 		constants.pixelGuardBand = 0.0f;
-		return !IsValidTestConstants(constants, 64, 32);
+		if (IsValidTestConstants(constants, 64, 32))
+			return false;
+		for (const auto controls : { 1u, 2u, 4u, 7u, 8u }) {
+			constants = MakeTestConstants();
+			constants.reserved = controls;
+			if (IsValidTestConstants(constants, 64, 32))
+				return false;
+		}
+		return true;
 	}
 }
 

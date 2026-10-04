@@ -10,6 +10,9 @@
 #define HIZ_NEAREST_UNRESOLVED 8
 #define HIZ_VIEWPORT_OFFSCREEN 9
 #define HIZ_VIEWPORT_PARTIAL 10
+#define HIZ_EYE_CROSSING 11
+#define HIZ_NEAR_CROSSING 12
+#define HIZ_FAR_CROSSING 13
 
 // The diagnostic permutation is compiled and selected only by the DevBench bridge.
 #ifdef CSX_HIZ_DIAGNOSTICS
@@ -21,6 +24,7 @@ struct HiZTraversalDiagnostic
 	uint4 planeWork;
 	uint4 refinement;
 	uint4 regionWork;
+	uint4 intersectionWork;
 };
 
 #	define HIZ_DIAGNOSTIC_PARAMETERS , inout HiZTraversalDiagnostic diagnostic
@@ -42,6 +46,10 @@ struct HiZTraversalDiagnostic
 #	define HIZ_COUNT_DISJOINT_TRIANGLE ++diagnostic.regionWork.y
 #	define HIZ_COUNT_EMPTY_CLIP ++diagnostic.regionWork.z
 #	define HIZ_COUNT_CLIP_VERTEX ++diagnostic.regionWork.w
+#	define HIZ_COUNT_DIRECT_TEST ++diagnostic.intersectionWork.x
+#	define HIZ_COUNT_DIRECT_PROOF ++diagnostic.intersectionWork.y
+#	define HIZ_COUNT_DIRECT_FALLBACK ++diagnostic.intersectionWork.z
+#	define HIZ_COUNT_FAR_CLAMP ++diagnostic.intersectionWork.w
 #	define HIZ_VISIBLE(reason)              \
 		{                                    \
 			diagnostic.traversal.x = reason; \
@@ -72,6 +80,10 @@ struct HiZTraversalDiagnostic
 #	define HIZ_COUNT_DISJOINT_TRIANGLE
 #	define HIZ_COUNT_EMPTY_CLIP
 #	define HIZ_COUNT_CLIP_VERTEX
+#	define HIZ_COUNT_DIRECT_TEST
+#	define HIZ_COUNT_DIRECT_PROOF
+#	define HIZ_COUNT_DIRECT_FALLBACK
+#	define HIZ_COUNT_FAR_CLAMP
 #	define HIZ_VISIBLE(reason) return false
 #	define HIZ_OCCLUDED return true
 #endif

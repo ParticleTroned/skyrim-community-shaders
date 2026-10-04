@@ -1,7 +1,3 @@
-#if defined(PBR_GRASS) && defined(GRASS_LIGHTING)
-#	define TRUE_PBR
-#endif
-
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -12,6 +8,9 @@
 #include "Common/SharedData.hlsli"
 
 #if defined(PSHADER)
+#	if defined(PBR_GRASS) && defined(GRASS_LIGHTING)
+#		define TRUE_PBR
+#	endif
 #	include "Common/LightingCommon.hlsli"
 #endif
 

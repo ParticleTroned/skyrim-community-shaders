@@ -2,6 +2,7 @@
 #include "d3d11_shader_test.h"
 
 #include <array>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -38,6 +39,20 @@ namespace
 			throw std::runtime_error(reason);
 	}
 
+	ComPtr<ID3DBlob> CompileProgram(const D3D_SHADER_MACRO* defines, bool vertex, const char* source = nullptr)
+	{
+		Includes includes;
+		ComPtr<ID3DBlob> bytecode, errors;
+		constexpr UINT options = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
+		const auto result = source ?
+		                        D3DCompile(source, std::strlen(source), "grass-color-regression", defines, &includes, "VerifyLegacyColor", "ps_5_0", options, 0, bytecode.GetAddressOf(), errors.GetAddressOf()) :
+		                        D3DCompileFromFile(L"package/Shaders/RunGrass.hlsl", defines, &includes, "main", vertex ? "vs_5_0" : "ps_5_0", options, 0, bytecode.GetAddressOf(), errors.GetAddressOf());
+		if (errors)
+			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+		Check(result);
+		return bytecode;
+	}
+
 	ComPtr<ID3D11ShaderReflection> Compile(bool vertex, bool vr, bool enhanced, bool pbr, bool depth, bool alpha, bool features)
 	{
 		std::vector<D3D_SHADER_MACRO> defines{ { vertex ? "VSHADER" : "PSHADER", "1" } };
@@ -57,14 +72,7 @@ namespace
 				defines.push_back({ feature, "1" });
 		}
 		defines.push_back({ nullptr, nullptr });
-		Includes includes;
-		ComPtr<ID3DBlob> bytecode, errors;
-		const auto result = D3DCompileFromFile(L"package/Shaders/RunGrass.hlsl", defines.data(), &includes, "main",
-			vertex ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-			0, bytecode.GetAddressOf(), errors.GetAddressOf());
-		if (errors)
-			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-		Check(result);
+		auto bytecode = CompileProgram(defines.data(), vertex);
 		ComPtr<ID3D11ShaderReflection> reflection;
 		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 		return reflection;
@@ -125,6 +133,28 @@ namespace
 			Require(FAILED(shader->GetResourceBindingDescByName("PerMaterial", &binding)), "Depth grass must not bind PBR material constants");
 		}
 	}
+
+	void CheckLegacyColor(bool vr)
+	{
+		constexpr const char* source = R"(
+#include "RunGrass.hlsl"
+float4 VerifyLegacyColor(float4 input : COLOR0) : SV_Target0 {
+    return float4(Color::Diffuse(input.rgb) + Color::DirectionalLight(input.rgb, false) +
+        Color::PointLight(input.rgb, false, 0), input.a);
+}
+)";
+		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "GRASS_LIGHTING", "1" } };
+		if (vr)
+			defines.push_back({ "VR", "1" });
+		defines.push_back({ nullptr, nullptr });
+		auto legacy = CompileProgram(defines.data(), false, source);
+		defines.back() = { "PBR_GRASS", "1" };
+		defines.push_back({ nullptr, nullptr });
+		auto combined = CompileProgram(defines.data(), false, source);
+		Require(legacy->GetBufferSize() == combined->GetBufferSize() &&
+					std::memcmp(legacy->GetBufferPointer(), combined->GetBufferPointer(), legacy->GetBufferSize()) == 0,
+			"Combined PBR grass changed legacy color conversion or light scaling");
+	}
 }
 
 int main()
@@ -132,6 +162,7 @@ int main()
 	try {
 		unsigned compiled = 0;
 		for (bool vr : { false, true }) {
+			CheckLegacyColor(vr);
 			for (bool enhanced : { false, true }) {
 				for (bool pbr : { false, true }) {
 					if (pbr && !enhanced)

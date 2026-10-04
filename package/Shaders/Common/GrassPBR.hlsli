@@ -100,7 +100,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
-	baseColor.xyz = Color::Diffuse(baseColor.xyz);
+	baseColor.xyz = Color::PBRDiffuse(baseColor.xyz);
 
 #if defined(RENDER_DEPTH)
 	float diffuseAlpha = input.Color.w * baseColor.w;
@@ -156,7 +156,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (pbrDetail && (PBRFlags & PBR::Flags::HasFeatureTexture0) != 0)
 	{
 		float4 subsurface = TexSubsurfaceSampler.Sample(SampSubsurfaceSampler, input.TexCoord.xy);
-		material.SubsurfaceColor *= Color::Diffuse(subsurface.xyz);
+		material.SubsurfaceColor *= Color::PBRDiffuse(subsurface.xyz);
 		material.Thickness *= subsurface.w;
 	}
 
@@ -164,7 +164,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
 	float llDirLightMult = (Color::UseLinearLightingColorAdjustments() && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * Color::PBRLightingCompensation * llDirLightMult;
 #	if defined(WATER_EFFECTS)
 	dirLightColor *= WaterEffects::ComputeCaustics(SharedData::GetWaterData(input.WorldPosition.xyz), input.WorldPosition.xyz, eyeIndex);
 #	endif
@@ -227,7 +227,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float attenuation = 1 - distanceFactor * distanceFactor;
 #		endif
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * attenuation * light.fade;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * Color::PBRLightingCompensation * attenuation * light.fade;
 				float lightShadow = 1.0;
 				if (light.lightFlags & LightLimitFix::LightFlags::Shadow)
 					lightShadow = shadowColor[light.shadowLightIndex];

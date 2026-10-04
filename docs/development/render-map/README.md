@@ -96,6 +96,15 @@ The adapter's `deferredContexts` and `commandLists` capabilities remain false
 until bounded live coverage is qualified. Prior stacked PRs are independent
 historical branches, not a runtime dependency of this composition.
 
+Before publishing stop artifacts, the adapter reserves its cache entry and
+prunes older retained state. Cache admission failure writes no files. A
+verified bundle moves into that entry without allocation before constructing
+the response. If response construction fails, a fresh `stop` command for the
+retained capture returns the same paths, hashes and byte counts without
+rewriting either file. This recovery requires the live process and retained
+capture/cache; it does not recover a bundle after process exit. Existing
+unrelated files still fail the writer's no-overwrite contract.
+
 When execution is restricted to selected geometry, draw/dispatch selection also
 resolves paired geometry boundaries and their declarations. The requested mask
 retains the caller's selection. Immediate draws may consume a prepared identity

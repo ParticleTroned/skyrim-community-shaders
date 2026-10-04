@@ -1,4 +1,5 @@
 #include "RenderMap/Artifacts.h"
+#include "RenderMap/CapturePublication.h"
 #include "RenderMap/CaptureStart.h"
 #include "RenderMap/Controller.h"
 #include "RenderMap/PayloadSchemaNames.h"
@@ -10,12 +11,15 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <memory>
 #include <new>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace
@@ -744,6 +748,117 @@ namespace
 			"failed FinishCommandList serialized a materialized list identity or pointer");
 	}
 
+	bool g_failPublicationAllocation{ false };
+
+	template <class T>
+	struct PublicationFaultAllocator
+	{
+		using value_type = T;
+		PublicationFaultAllocator() = default;
+		template <class U>
+		PublicationFaultAllocator(const PublicationFaultAllocator<U>&) noexcept
+		{}
+		T* allocate(std::size_t a_count)
+		{
+			if (std::exchange(g_failPublicationAllocation, false))
+				throw std::bad_alloc();
+			return std::allocator<T>{}.allocate(a_count);
+		}
+		void deallocate(T* a_pointer, std::size_t a_count) noexcept
+		{
+			std::allocator<T>{}.deallocate(a_pointer, a_count);
+		}
+		template <class U>
+		bool operator==(const PublicationFaultAllocator<U>&) const noexcept
+		{
+			return true;
+		}
+	};
+
+	void TestPreparedArtifactPublication()
+	{
+		const auto root = std::filesystem::temp_directory_path() /
+		                  std::format("csx-render-map-publication-test-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+		CaptureController controller;
+		const auto capture = MakeCapture(controller);
+		using Entry = std::pair<const std::string, PreparedCapturePublication>;
+		std::unordered_map<std::string, PreparedCapturePublication, std::hash<std::string>,
+			std::equal_to<std::string>, PublicationFaultAllocator<Entry>>
+			cache;
+		std::size_t writes = 0;
+		auto write = [&] {
+			++writes;
+			return WriteCaptureArtifacts(*capture, ArtifactContext(root), 42);
+		};
+		auto respond = [](const CaptureArtifactBundle& a_bundle) { return SerializeArtifactBundle(a_bundle); };
+
+		g_failPublicationAllocation = true;
+		bool admissionFailed = false;
+		try {
+			WithPreparedCaptureArtifacts(cache, capture->descriptor.captureId, write, respond);
+		} catch (const std::bad_alloc&) {
+			admissionFailed = true;
+		}
+		Check(admissionFailed && !g_failPublicationAllocation && cache.empty() && writes == 0 &&
+				  !std::filesystem::exists(root),
+			"cache admission failure published artifacts or retained a placeholder");
+
+		bool writerFailed = false;
+		try {
+			WithPreparedCaptureArtifacts(cache, capture->descriptor.captureId, []() -> CaptureArtifactBundle { throw std::bad_alloc(); }, respond);
+		} catch (const std::bad_alloc&) {
+			writerFailed = true;
+		}
+		Check(writerFailed && cache.empty() && writes == 0 && !std::filesystem::exists(root),
+			"writer exception retained an unfinished publication");
+
+		bool responseFailed = false;
+		try {
+			WithPreparedCaptureArtifacts(cache, capture->descriptor.captureId, write,
+				[](const CaptureArtifactBundle&) -> nlohmann::json { throw std::bad_alloc(); });
+		} catch (const std::bad_alloc&) {
+			responseFailed = true;
+		}
+		Check(responseFailed && writes == 1 && cache.size() == 1,
+			"response failure lost the completed publication");
+		const auto& retained = cache.at(capture->descriptor.captureId);
+		Check(retained.finished && retained.artifacts.success, "verified publication was not committed before response construction");
+		const auto expected = SerializeArtifactBundle(retained.artifacts);
+		const auto eventsPath = retained.artifacts.directory / "events.jsonl";
+		const auto manifestPath = retained.artifacts.directory / "capture-manifest.json";
+		auto readBytes = [](const std::filesystem::path& a_path) {
+			std::ifstream stream(a_path, std::ios::binary);
+			Check(stream.is_open(), "published artifact cannot be read");
+			return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+		};
+		const auto events = readBytes(eventsPath);
+		const auto manifest = readBytes(manifestPath);
+		const auto eventsTime = std::filesystem::last_write_time(eventsPath);
+		const auto manifestTime = std::filesystem::last_write_time(manifestPath);
+		std::shared_ptr<const CompletedCapture> stoppedAgain;
+		Check(controller.Stop(capture->descriptor.captureId, stoppedAgain) == ControlStatus::kSuccess && stoppedAgain == capture,
+			"fresh stop did not recover the completed capture");
+		const auto recovered = WithPreparedCaptureArtifacts(cache, stoppedAgain->descriptor.captureId, write, respond);
+		Check(recovered == expected && writes == 1 && events == readBytes(eventsPath) && manifest == readBytes(manifestPath) &&
+				  eventsTime == std::filesystem::last_write_time(eventsPath) && manifestTime == std::filesystem::last_write_time(manifestPath),
+			"fresh stop rewrote artifacts or changed verified paths, hashes or byte counts");
+
+		const auto foreign = MakeCapture(controller);
+		const auto foreignDirectory = root / foreign->descriptor.captureId;
+		std::filesystem::create_directories(foreignDirectory);
+		{
+			std::ofstream stream(foreignDirectory / "events.jsonl", std::ios::binary);
+			stream << "unrelated-existing-file";
+		}
+		WithPreparedCaptureArtifacts(cache, foreign->descriptor.captureId, [&] { return WriteCaptureArtifacts(*foreign, ArtifactContext(root), 42); }, respond);
+		const auto& collision = cache.at(foreign->descriptor.captureId).artifacts;
+		Check(!collision.success && collision.error.find("already exists") != std::string::npos &&
+				  readBytes(foreignDirectory / "events.jsonl") == "unrelated-existing-file" &&
+				  !std::filesystem::exists(foreignDirectory / "capture-manifest.json"),
+			"prepared publication accepted or replaced an unrelated existing file");
+		std::filesystem::remove_all(root);
+	}
+
 	void TestDurableArtifacts()
 	{
 		const auto root = std::filesystem::temp_directory_path() /
@@ -899,6 +1014,7 @@ int main()
 		TestResolvedStageSerialization();
 		TestSemanticIdentitySerialization();
 		TestDeferredCommandSerialization();
+		TestPreparedArtifactPublication();
 		TestDurableArtifacts();
 		TestGapArtifact();
 		return 0;

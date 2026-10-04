@@ -7,6 +7,7 @@
 #	include "Globals.h"
 #	include "RenderMap/Artifacts.h"
 #	include "RenderMap/CaptureStart.h"
+#	include "RenderMap/CapturePublication.h"
 #	include "RenderMap/Controller.h"
 #	include "RenderMap/DevBenchCaptureBounds.h"
 #	include "RenderMap/Serialization.h"
@@ -68,7 +69,7 @@ namespace
 	std::atomic_bool g_registered{ false };
 	std::mutex g_artifactMutex;
 	std::unordered_map<std::string, CSX::RenderMap::CaptureArtifactContext> g_artifactContexts;
-	std::unordered_map<std::string, CSX::RenderMap::CaptureArtifactBundle> g_artifactBundles;
+	std::unordered_map<std::string, CSX::RenderMap::PreparedCapturePublication> g_artifactBundles;
 
 	CSX::Api::ServiceFoundation& Foundation()
 	{
@@ -226,7 +227,7 @@ namespace
 		};
 	}
 
-	void PruneArtifactState()
+	void PruneArtifactState(std::string_view a_protectedCaptureId = {})
 	{
 		const auto status = CSX::RenderMap::GetCaptureController().GetStatus();
 		std::unordered_set<std::string> retained(
@@ -234,10 +235,10 @@ namespace
 		if (status.active)
 			retained.insert(status.active->captureId);
 		for (auto it = g_artifactContexts.begin(); it != g_artifactContexts.end();) {
-			it = retained.contains(it->first) ? std::next(it) : g_artifactContexts.erase(it);
+			it = (retained.contains(it->first) || it->first == a_protectedCaptureId) ? std::next(it) : g_artifactContexts.erase(it);
 		}
 		for (auto it = g_artifactBundles.begin(); it != g_artifactBundles.end();) {
-			it = retained.contains(it->first) ? std::next(it) : g_artifactBundles.erase(it);
+			it = (retained.contains(it->first) || it->first == a_protectedCaptureId) ? std::next(it) : g_artifactBundles.erase(it);
 		}
 	}
 
@@ -558,31 +559,24 @@ namespace
 				return ControlFailure(a_args, status);
 			captureId = capture->descriptor.captureId;
 
-			CSX::RenderMap::CaptureArtifactBundle artifacts;
-			{
-				std::lock_guard lock(g_artifactMutex);
-				if (const auto found = g_artifactBundles.find(captureId); found != g_artifactBundles.end()) {
-					artifacts = found->second;
-				} else {
-					const auto context = g_artifactContexts.find(captureId);
-					if (context == g_artifactContexts.end())
-						return Foundation().MakeError(a_args, "capture_provenance_unavailable",
-							"capture-start provenance is not retained; artifacts cannot be reconstructed",
-							"execution", false, "captureId");
-					artifacts = CSX::RenderMap::WriteCaptureArtifacts(*capture, context->second, GetCurrentProcessId());
-					g_artifactBundles.emplace(captureId, artifacts);
-					g_artifactContexts.erase(captureId);
-				}
-				PruneArtifactState();
-			}
-			auto response = Foundation().MakeEnvelope(a_args, true);
-			response["result"] = CSX::RenderMap::SerializeCaptureSummary(*capture);
-			response["result"]["artifacts"] = CSX::RenderMap::SerializeArtifactBundle(artifacts);
-			if (!artifacts.success)
-				response["result"]["warnings"] = json::array({ {
-					{ "code", "artifact_write_failed" },
-					{ "message", artifacts.error },
-				} });
+			std::lock_guard lock(g_artifactMutex);
+			PruneArtifactState(captureId);
+			const auto context = g_artifactContexts.find(captureId);
+			if (!g_artifactBundles.contains(captureId) && context == g_artifactContexts.end())
+				return Foundation().MakeError(a_args, "capture_provenance_unavailable",
+					"capture-start provenance is not retained; artifacts cannot be reconstructed",
+					"execution", false, "captureId");
+			auto response = CSX::RenderMap::WithPreparedCaptureArtifacts(g_artifactBundles, captureId, [&] { return CSX::RenderMap::WriteCaptureArtifacts(*capture, context->second, GetCurrentProcessId()); }, [&](const CSX::RenderMap::CaptureArtifactBundle& a_artifacts) {
+				auto prepared = Foundation().MakeEnvelope(a_args, true);
+				prepared["result"] = CSX::RenderMap::SerializeCaptureSummary(*capture);
+				prepared["result"]["artifacts"] = CSX::RenderMap::SerializeArtifactBundle(a_artifacts);
+				if (!a_artifacts.success)
+					prepared["result"]["warnings"] = json::array({ {
+						{ "code", "artifact_write_failed" },
+						{ "message", a_artifacts.error },
+					} });
+				return prepared; });
+			g_artifactContexts.erase(captureId);
 			return response;
 		}
 

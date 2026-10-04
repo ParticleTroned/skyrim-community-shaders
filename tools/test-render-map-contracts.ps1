@@ -152,6 +152,10 @@ $preservingShaderHooks = @([regex]::Matches($hooksSource, 'return Util::ObserveS
 Assert-True (($preservingShaderHooks -join ',') -eq 'Compute,Pixel,Vertex') 'Every native shader creation hook must preserve its native result across diagnostics'
 $bridgeSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/RenderMap/DevBenchBridge.cpp')
 Assert-True ($bridgeSource.Contains('"shaderMetadata", BuildShaderMetadataStatus()') -and $bridgeSource.Contains('response["result"]["shaderMetadata"] = BuildShaderMetadataStatus();')) 'Registry/status must expose independent shader metadata limits and failure evidence'
+$publicationSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/RenderMap/CapturePublication.h')
+Assert-True ($bridgeSource.Contains('CSX::RenderMap::WithPreparedCaptureArtifacts(g_artifactBundles, captureId,') -and -not $bridgeSource.Contains('g_artifactBundles.emplace(captureId, artifacts)')) 'Stop must reserve publication ownership through the shared prepared-cache path'
+Assert-True ($publicationSource.IndexOf('a_cache.try_emplace') -lt $publicationSource.IndexOf('auto artifacts = a_write();') -and $publicationSource.Contains('std::is_nothrow_move_assignable_v<CaptureArtifactBundle>') -and $publicationSource.IndexOf('entry->second.finished = true;') -lt $publicationSource.IndexOf('return a_response(')) 'Verified publication must be cached without allocation before response construction'
+Assert-True ($bridgeSource.IndexOf('PruneArtifactState(captureId);') -lt $bridgeSource.IndexOf('WithPreparedCaptureArtifacts(g_artifactBundles, captureId,')) 'Fallible stop cache pruning must precede publication'
 $contextHooksSource = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'src/RenderMap/D3DContextHooks.cpp')
 Assert-True ($hooksSource.Contains('stl::detour_vfunc<27, ID3D11Device_CreateDeferredContext>')) 'CreateDeferredContext is not hooked at D3D11 device slot 27'
 Assert-True ($contextHooksSource.Contains('stl::detour_vfunc<58, ID3D11DeviceContext_ExecuteCommandList>')) 'ExecuteCommandList is not hooked at context slot 58'

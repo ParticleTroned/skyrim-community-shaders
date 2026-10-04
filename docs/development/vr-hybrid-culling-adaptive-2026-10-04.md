@@ -111,56 +111,124 @@ These stages do not support a readback-stall explanation for the
 whole-frame regression. Extra retained drawing is a plausible contributor;
 draw-cost attribution was not measured.
 
+## Traversal diagnosis on the same build
+
+Two further 20-second Hybrid counter windows and one Advanced counter
+window ran after a game restart, using the same compiled source and DLL.
+Noon was reset and allowed to settle for five seconds before each window.
+The current position is [17060.19140625, -12208.3115234375,
+-4771.19970703125], about 25 game units from the earlier campaign.
+Weather and renderer settings match. Boundary HMD observations differ by
+at most 0.454 mm and approximately 0.051 degrees, without a continuous
+pose guarantee. These diagnostic runs do not replace the final timing
+comparison above or establish a cross-build change.
+
+| Counter window   | Rejected / tested records | Rejection |
+| ---------------- | ------------------------: | --------: |
+| hybrid-reasons-2 |     1,974,474 / 5,099,520 |    38.72% |
+| hybrid-reasons-3 |     2,041,828 / 5,165,056 |    39.53% |
+| advanced-count   |     3,937,386 / 6,381,568 |    61.70% |
+
+Advanced used policy `balanced`; this settled window recorded no recovery
+attempts or promotions. Recovery returns early for a coherent view. Its
+61.70% must not replace the earlier 59.12% counter result without also
+preserving this changed scene/view and recovery context.
+
+The following percentages use diagnosed candidate objects as denominator,
+with work summed across both eyes. A retained object contributes exactly
+one decisive retention reason; an untested second eye is not another
+retention. These are reasons Hi-Z retained candidates, **not identified
+false negatives against native culling**.
+
+| Decisive retention reason      | Window 2 | Window 3 |
+| ------------------------------ | -------: | -------: |
+| Finest depth unresolved        |  30.028% |  29.447% |
+| Nearest vertex unresolved      |  12.171% |  12.114% |
+| Viewport guard                 |  16.735% |  16.562% |
+| Eye/near/far clip crossing     |   2.024% |   2.020% |
+| Depth-read budget exhausted    |   0.323% |   0.325% |
+| Invalid input / stack capacity |       0% |       0% |
+
+Diagnostic coverage is 5,095,424 / 5,099,520 and
+5,160,960 / 5,165,056 accepted candidates: **99.92%** in each window.
+Each has one boundary batch without a resolved diagnostic record.
+Not-ready, failed, discarded and unavailable diagnostic batches are zero,
+as are Hybrid fallback, history invalidation and unreadable batches.
+Frozen snapshots satisfy the eye-reason and visibility identities; no
+independently sampled atomic counters are treated as one live snapshot.
+
+| Mean work per diagnosed object | Window 2 | Window 3 |
+| ------------------------------ | -------: | -------: |
+| Depth reads                    |   12.438 |   12.432 |
+| Refined regions                |    4.216 |    4.182 |
+| Triangle attempts              |    7.659 |    7.585 |
+| Triangle attempts per region   |    1.817 |    1.814 |
+
+Triangle attempts are counted before vertex/plane shortcuts; they are
+not exact polygon-clip counts. These means do not locate GPU time,
+establish hardware occupancy/spills or describe the expensive tail.
+
 ## Why rejection can remain lower
 
 Projected-face refinement already runs. The test is not limited to a
-loose rectangle with one box depth. Source inspection identifies these
-remaining conservative differences; their proportions are unmeasured:
+loose rectangle with one box depth. Source and diagnostic evidence narrow
+the remaining conservative differences:
 
 -   A corner crossing the eye, near or far plane retains the whole box.
     A guarded rectangle extending beyond an eye viewport also retains it.
-    Native rasterization clips geometry. Conservative clipping could recover
-    some cases, subject to stereo and motion validation.
+    Native rasterization clips geometry. The viewport category also includes
+    wholly offscreen boxes deliberately left to frustum culling. Native
+    rasterization can reject boxes producing no viewport fragments, so part
+    of the count gap may save no drawing. Split offscreen, partial-viewport
+    and guard-only exits before estimating useful clipping gains.
 -   A 2x2 leaf still stores its farthest source depth. Far, masked or invalid
     samples can prevent proof even when most of the region is hidden.
     Guarded face regions extend beyond the cell by two pixels plus a rounding
     margin. Finer depth does not eliminate these differences.
--   The nearest-vertex precheck retains unresolved vertices immediately.
-    The 64-actual-read limit retains unfinished traversals. An extra hierarchy
-    level may increase work or exhaust that unchanged budget.
+-   The nearest-vertex precheck mostly avoids work the complete current
+    proof would also fail: inclusive face tests preserve that vertex.
+    Removing it generally adds work, rather than recovering rejection.
+    Its extra read can affect marginal budget cases. Resolving every recorded
+    budget exit would recover at most 0.325 percentage points here, so a
+    larger budget cannot close the observed gap.
 -   Face refinement adds 64 depth units of interpolation allowance to the
     base 8/16777216 bias, including original-vertex and whole-face shortcuts
     that perform no clipping interpolation. Numerical review should
     distinguish those proofs from interpolated clipping. Globally reducing
     bias would risk missing geometry.
 
-The direct callable menu schema still lacks
-set_depth_culling_traversal_diagnostics_enabled. The loaded source
-contains its handler and descriptor. The installed automation plugin only
-maps the direct DevBench endpoint. DevBench source already advertises
-tools.listChanged and emits list-change notifications. Evidence points to
-stale client discovery, rather than missing shader-counter implementation.
+Nearest-vertex and finest-depth exits together account for about 69% of
+retained candidates. They mix genuine visibility with coarse far/masked
+samples, guard overlap and numerical allowances; aggregate reasons cannot
+separate those causes. The native contract investigation has not fully
+established native downsample/pixel-shader bias and mask semantics.
+Matching native counts alone is not an independent correctness oracle.
 
-Codex documents config/mcpServer/reload for refreshing loaded threads,
-but this session exposes no callable host-refresh control. Reload Codex
-with Skyrim left running, then verify the exact typed setter appears
-before collecting diagnostic windows. No new AIO or game restart is
-indicated. No alternate transport or generic-dispatch bypass was used.
-Feedback AUTO-20261004-013128725-B1AC7F0D remains open until post-refresh
-enable, measurement and restoration succeed.
+Diagnostic access is restored through the sanctioned bundled-controller
+transport. This resumed run had no direct DevBench tools in its callable
+catalog before transport selection. Fresh server discovery exposed the
+exact setter; enable, measurement and restoration succeeded on the same
+DLL. No controller or game restart was needed to collect these counters.
+This does not establish that direct client schema refresh is fixed.
 
 ## Next focused work
 
-First recover diagnostic control and measure per-eye termination reasons,
-depth loads, regions and triangle counts in separate counter windows.
-The completed timing campaign need not be repeated to get these counters.
+The strongest bounded source-level candidate is to use the existing base
+bias for whole-face and original-triangle minimum proofs that perform no
+interpolation, retaining the additional allowance for clipped vertices.
+The current non-interpolating shortcuts use 72 rather than 8 depth units.
+Require numerical review and equality/ULP, sloped-face, reflected/sheared,
+stereo and independent source-pixel/ray tests. Do not globally reduce bias;
+the separate plane proof needs its own error analysis. Recoverable rejection
+and performance gains remain unmeasured.
 
-Prioritize the dominant measured reason. Review interpolation allowance
-on non-interpolating proofs, retaining numerical bounds and independent
-source-pixel/ray tests. Implement conservative viewport or clip handling
-if those exits explain substantial lost rejection. Change traversal or
-refinement if work and budget counts justify it. A larger budget or
-full-resolution hierarchy could increase the dominant bounds-test cost.
+Add DevBench-only counts for actual polygon clips, plane-proof successes,
+and proofs passing base bias but failing the interpolation allowance.
+Split viewport reasons into wholly offscreen, partial and guard-only.
+These bounded diagnostics should choose subsequent face pruning, cached
+planes or clipper changes. Only 1.81 triangle attempts per region are
+observed, so pruning half the six nominal faces does not imply halving
+work. Plane caching can also increase per-thread storage.
 
 Exact attribution could use a DevBench-only mode comparing native and
 Hybrid on the same submitted bounds/depth while preserving displayed
@@ -168,12 +236,20 @@ native results. Record native-only rejections alongside Hybrid reasons.
 Keep duplicate work out of performance windows and production builds.
 This comparison mode is proposed, not implemented.
 
-Reducing expensive per-region face work is the main measured performance
-opportunity. Separating inexpensive candidates from costly refinement may
+Bounds testing is the main measured target; reducing repeated per-region
+face work is a source-informed candidate. Separating inexpensive candidates
+from costly refinement may
 reduce divergence or register pressure, but these captures do not prove
-an occupancy or spill bottleneck. Hierarchy construction is only
+an occupancy or spill bottleneck or justify that larger rewrite yet.
+Hierarchy construction is only
 0.054-0.057 ms, with a much smaller optimization ceiling. Equal rejection
 alone is insufficient evidence of parity.
+
+With current non-bounds cost unchanged, matching the native 0.13326 ms
+culling scope would require reducing bounds from 0.70948 to approximately
+0.06746 ms, a **90.5% reduction**. Halving bounds would still leave about
+0.421 ms total. This arithmetic concerns culling scopes only, not whole
+frame time. Meaningful improvement is plausible; parity is not promised.
 
 ## Validation and evidence
 
@@ -199,5 +275,17 @@ final-settled-comparison.json selects the final timing windows;
 final-analysis.json includes counters and GPU comparisons.
 The preliminary summary and excluded baseline remain preserved.
 
+New diagnostic evidence is under main-workspace
+build/astra-runtime/20261004T071656Z-hiz-reasons/.
+diagnostic-analysis.json preserves counts, denominators, work, boundary
+poses, scene context and restoration. Its generating analyze.py passed
+all counter-identity, frozen-window, health and restoration assertions.
+The first diagnostic response hit the controller's default 15-second
+HTTP timeout; its later frozen state is preserved but excluded from the
+selected comparison. Replacements used an explicit 40-second request
+allowance and retained complete transcripts. Local automation feedback:
+AUTO-20261004-073222781-7D2F94FB.
+
 Advanced and the original telemetry preference are restored, profiling
-and traversal diagnostics are off, and Skyrim PID 26596 remains running.
+and traversal diagnostics are off, and Skyrim PID 30492 was left running.
+No runtime code changed or new DLL was built for this diagnosis.

@@ -17,14 +17,20 @@ would not establish parity.
 Runtime snapshots confirm finer 2x2 reduction and its additional 8 MiB of
 logical hierarchy storage. No Hybrid fallback, invalidated or unreadable
 batches occurred in the counter windows. Projected-face refinement already
-runs; clip/viewport handling, reduced depth, bias and the unchanged
-64-read budget can still retain candidates. Their proportions require the
-existing traversal diagnostic control, which is absent from this chat's
-stale direct tool inventory. Refresh Codex before collecting those counters;
-no new AIO is indicated.
+runs. Two additional same-build diagnostic windows now show 29.45-30.03%
+of candidates retained at finest depth, 12.11-12.17% by the nearest-vertex
+check, 16.56-16.74% by viewport guards and 2.02% by clip crossings.
+Only 0.323-0.325% exhaust the depth-read budget. Coverage is 99.92%,
+with no diagnostic readback failures. Access was restored through fresh
+bundled-controller discovery when no direct DevBench tools were exposed;
+no new AIO was required. This does not verify direct client schema refresh.
 
-The next optimization should follow that reason/work breakdown, with a
-focused review of interpolation allowance on non-interpolating proofs.
+Prioritize interpolation allowance on non-interpolating proofs, with
+DevBench-only counts for bias-limited proofs, actual clips, plane successes
+and split viewport reasons. Fully offscreen bounds can inflate the aggregate
+gap without necessarily saving drawing; nearest-vertex early retention
+mostly avoids work the full current proof would also fail. An average
+1.81 triangle attempts per region weakens a large face-pruning prediction.
 Native/Hybrid comparisons on the same submitted batch remain proposed
 DevBench-only diagnostic work. Advanced remains default, and motion and
 lifecycle qualification remain open. PBR grass, grass optimization and
@@ -586,16 +592,18 @@ Detailed original requirements remain in master Part B sections 4-7.
 
 ## Validation and evidence record
 
-The detailed current commands, logs and intermediate artifact identity are
-recorded in [the Hybrid integration record](vr-hybrid-culling.md#current-main-integration-2026-10-03).
-The final DevBench-enabled universal DLL passed after the diagnostic
-extensions, alongside 11 focused tests and the production compiler-output
-audit. Exact intermediate and final dirty-source identities remain in the
-Hybrid record. The [noon runtime report](vr-hybrid-culling-runtime-2026-10-03.md)
-now attributes eight completed fpsVR windows, a limited static stereo
-review and bounded motion ROI review to the original
-`29ce68539-dirty` AIO. New native visibility diagnostics have focused
-test/compiler and complete AIO build evidence, but no runtime evidence.
+The [current comparison](vr-hybrid-culling-adaptive-2026-10-04.md#validation-and-evidence)
+preserves compiled source `425b8d373`, its producer Build ID, the 12/12
+focused test pass, production compiler-output checks, final timing windows
+and the subsequent same-build traversal diagnosis. No runtime code changed
+for the diagnostic investigation. A separate production DLL link, SE/AE
+runtime checks and motion/lifecycle qualification remain open.
+
+The [integration record](vr-hybrid-culling.md#current-main-integration-2026-10-03)
+and [original noon report](vr-hybrid-culling-runtime-2026-10-03.md) retain
+historical commands, intermediate artifacts and original-build visual
+evidence. The table below describes that integration stage, not the
+current test count or performance verdict.
 
 The three documentation files passed scoped `trailing-whitespace`,
 `mixed-line-ending` and `prettier` hooks. All five relative links in this
@@ -632,7 +640,7 @@ If a PR changes or evaluates VR render-scale behavior, apply the current
 including exact ledgers where required. Do not claim this plan, static
 source review or focused WARP validation satisfies those protocols.
 
-| Evidence                                    | Status in this update                                                                                                                                                                                                          |
+| Evidence                                    | Historical integration status                                                                                                                                                                                                  |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Supplied source provenance                  | Passed: initial copies matched the recorded original byte lengths and SHA-256; tracked references use repository formatting normalization                                                                                      |
 | Cross-document scope/sequence audit         | Completed; obsolete prompts and differing donor snapshots identified                                                                                                                                                           |
@@ -660,14 +668,16 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental. Cached face tests and reduced polygon copying
-are implemented and pass focused validation. Measure this new shader
-against Advanced and the preserved adaptive build before claiming a gain.
-The preceding bounds test costs 1.49-1.52 ms GPU; its entire hierarchy
-costs about 0.055 ms. Restore access to the exact DevBench reason
-toggle before choosing changes to finest-level evidence or read budgets.
-The [analysis](vr-hybrid-culling-adaptive-2026-10-04.md#measured-optimization-opportunity)
-separates measured costs from proposed changes and parity estimates.
+Keep PR104 experimental. Cached face tests, plane proofs, nearest-vertex
+checks and finer depth are implemented and measured. Bounds testing costs
+0.705-0.714 ms GPU; hierarchy construction costs about 0.055 ms.
+The [analysis](vr-hybrid-culling-adaptive-2026-10-04.md#next-focused-work)
+prioritizes non-interpolating depth proofs and targeted path diagnostics.
+Do not raise the read budget: even resolving every observed budget exit
+would recover at most 0.325 percentage points in these cohorts.
+With other costs unchanged, native culling-scope parity would require
+about a 90.5% reduction in current bounds cost. This is not a whole-frame
+prediction or evidence that a single focused change can achieve parity.
 Preserve masks, guards, depth bias and stereo/history safety; require a
 repeatable improvement and motion/lifecycle qualification before promotion.
 

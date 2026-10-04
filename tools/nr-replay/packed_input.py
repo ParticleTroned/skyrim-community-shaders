@@ -47,10 +47,12 @@ def _finite_tree(value: object) -> None:
 
 
 def _read(path: Path, maximum: int) -> bytes:
-    require(path.is_file() and path.stat().st_size <= maximum, "file exceeds bounded replay budget or is not a file")
+    require(path.is_file(), "capture resource is not a file")
+    size = path.stat().st_size
+    require(size <= maximum, "file exceeds bounded replay budget")
     with path.open("rb") as stream:
-        data = stream.read(maximum + 1)
-    require(len(data) <= maximum, "file exceeds bounded replay budget")
+        data = stream.read(size + 1)
+    require(len(data) == size, "capture resource size changed while reading")
     return data
 
 
@@ -191,6 +193,28 @@ def _pack(texture: Texture, layout: dict, guides: bool) -> Texture:
     return Texture(width, height, texture.format, row_bytes, bytes(result))
 
 
+def derived_manifest(manifest: dict, payload_bytes: int, stage: str, scope: str) -> dict:
+    """Create a first-frame metadata skeleton without stale capture geometry.
+
+    Callers fill admitted resource descriptors and outputSubrect for each eye,
+    and retain the original manifest separately with an explicit provenance hash.
+    """
+    require(uint(payload_bytes, BUNDLE_BUDGET), "derived resources exceed bounded replay budget")
+    frame = manifest["frames"][0]
+    frame_keys = ("mode", "sourceWorldFrame", "frame", "generation", "inputEpoch",
+                  "colorRevision", "insertionPoint", "tuning", "colorConfiguration", "characterSelection")
+    derived_frame = {key: copy.deepcopy(frame[key]) for key in frame_keys if key in frame}
+    derived_frame["stage"] = stage
+    derived_frame["eyes"] = [{key: copy.deepcopy(eye[key]) for key in
+                              ("featureUpscaling", "motionVectorScale")} for eye in frame["eyes"]]
+    result = {key: copy.deepcopy(manifest[key]) for key in ("schema", "runtime", "adapter") if key in manifest}
+    result.update(complete=True, state="complete", frames=[derived_frame], capturedFrames=1,
+                  requestedFrames=1, payloadBytes=payload_bytes, byteBudget=BUNDLE_BUDGET,
+                  byteBudgetAccounting="row_packed_derived_resources_excludes_driver_allocation_padding",
+                  replayScope=scope, captureTimingIsPerformanceEvidence=False)
+    return result
+
+
 def prepare(manifest_path: Path, output_root: Path, rects: list[list[int]],
             halo: int, reverse: bool = False) -> dict:
     """Write a fresh atlas bundle and receipt for the first captured C frame.
@@ -246,18 +270,8 @@ def prepare(manifest_path: Path, output_root: Path, rects: list[list[int]],
         math.prod(layout["atlasGuideExtent" if role in ("depth", "motion") else "atlasExtent"])
         * FORMATS[textures[0][role].format] for role in ROLES)
     require(estimated_bytes <= BUNDLE_BUDGET, "packed resources exceed bounded replay budget")
-    frame_keys = ("mode", "sourceWorldFrame", "frame", "generation", "inputEpoch",
-                  "colorRevision", "insertionPoint", "tuning", "colorConfiguration", "characterSelection")
-    derived_frame = {key: copy.deepcopy(frame[key]) for key in frame_keys if key in frame}
-    derived_frame["stage"] = "offline_packed_native_input_fixture"
-    derived_frame["eyes"] = [{key: copy.deepcopy(eye[key]) for key in
-                              ("featureUpscaling", "motionVectorScale")} for eye in frame["eyes"]]
-    result = {key: copy.deepcopy(manifest[key]) for key in ("schema", "runtime", "adapter") if key in manifest}
-    result.update(complete=True, state="complete", frames=[derived_frame], capturedFrames=1,
-                  requestedFrames=1, payloadBytes=estimated_bytes, byteBudget=BUNDLE_BUDGET,
-                  byteBudgetAccounting="row_packed_derived_resources_excludes_driver_allocation_padding",
-                  replayScope="offline_stateless_packed_input_not_captured_game_execution",
-                  captureTimingIsPerformanceEvidence=False)
+    result = derived_manifest(manifest, estimated_bytes, "offline_packed_native_input_fixture",
+                              "offline_stateless_packed_input_not_captured_game_execution")
     receipt = {"schema": "csx-nr-packed-input-v1", "sourceManifestSha256": digest(source_bytes),
                "sourceManifest": str(manifest_path.resolve()), "sourceFrameIndex": 0,
                "sourceCapture": {"manifestFile": "source-manifest.json", "manifestSha256": digest(source_bytes),

@@ -2,10 +2,12 @@
 
 import copy
 import hashlib
+import io
 import json
 from pathlib import Path
 import struct
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -232,6 +234,23 @@ class PackedInput(unittest.TestCase):
                            10000, 2, 10000, 2, False)
         self.frame["eyes"][0]["color"]["format"] = 999
         self.assert_rejected("unsupported capture format")
+
+    def test_read_allocates_for_file_size_and_rejects_concurrent_size_changes(self):
+        class RecordedRead(io.BytesIO):
+            def read(self, size):
+                self.requested_size = size
+                return super().read(size)
+
+        for data in (b"abc", b"ab", b"abcd"):
+            stream = RecordedRead(data)
+            path = SimpleNamespace(is_file=lambda: True, stat=lambda: SimpleNamespace(st_size=3),
+                                   open=lambda mode: stream)
+            if len(data) == 3:
+                self.assertEqual(packed._read(path, packed.BUNDLE_BUDGET), data)
+            else:
+                with self.assertRaisesRegex(ValueError, "size changed"):
+                    packed._read(path, packed.BUNDLE_BUDGET)
+            self.assertEqual(stream.requested_size, 4)
 
 
 if __name__ == "__main__":

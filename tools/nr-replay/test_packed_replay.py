@@ -161,6 +161,8 @@ class PackedReplay(unittest.TestCase):
         journal = replay.read(self.root / "run.json")
         self.assertEqual(journal["status"], "failed")
         self.assertEqual(len(journal["jobs"]), 1)
+        self.assertEqual(journal["jobs"][0]["status"], "failed")
+        self.assertEqual(journal["jobs"][0]["reason"], journal["reason"])
         self.assertFalse((self.root / "runs/enclosing").exists())
         self.assertIn("failed admission", journal["reason"])
         self.report.assert_called_once()

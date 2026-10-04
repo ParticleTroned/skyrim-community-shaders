@@ -1,5 +1,30 @@
 # main-vr-nr progress and continuation record
 
+## October 4 output-equivalence investigation
+
+The [equivalence investigation](nr-output-equivalence-investigation-20261004.md)
+reproduces captured full-eye output exactly and isolates sensitivity to the
+native valid input domain. Independent tight outputs also reproduce exactly
+when replayed separately. Moving a patch by 1/16/32/64 pixels preserves it,
+but rearranging distant packed context changes it with owned coordinates
+and a 128-pixel margin fixed. No alignment, simple crop or uniform colour
+correction fix is established.
+
+A shared original-coordinate context with 256 pixels of margin measures
+6.2335 ms against 8.6245 ms for two tight calls per eye. It is closer to
+full-eye NR, but still differs by mean 0.9479/255 and maximum 11/255. It
+remains a visual-qualification candidate, not an equivalence or live pass.
+Native calls already share submission and retain feature handles; ordinary
+caller batching does not explain the measured native floor.
+
+Context and translation campaigns complete. The horizontal square campaign
+completes; the diagonal campaign stops on a finite sentinel ambiguity.
+An admitted alternate-sentinel replay produces identical full output,
+resolving that ambiguity while preserving the original rejected campaign.
+Exact packed output and production performance remain unqualified. All
+changes are standalone tools and documentation; the production AIO is
+unchanged.
+
 ## October 4 one-inference packed-region experiment
 
 The [offline packed-region record](nr-packed-region-feasibility-20261004.md)

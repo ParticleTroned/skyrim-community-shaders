@@ -338,3 +338,57 @@ python -m unittest discover -s tools/nr-replay -p 'test_packed*.py'
 
 All these additions belong to the standalone tool. They add no renderer
 work, game settings, shader permutation or production DLL dependency.
+
+### Output-equivalence diagnosis
+
+`context_probe.py` keeps the captured resources, backing extents, tuning,
+motion scale and original coordinates fixed. It compares fresh full-image
+and tight-region references with individual and shared enlarged valid
+domains. Output ownership remains fixed. Each case uses fresh processes
+and reset histories; alternate repeats reverse the case order.
+
+```powershell
+python tools/nr-replay/context_probe.py `
+  --manifest PATH/TO/manifest.json --replay PATH/TO/csx_nr_replay.exe `
+  --runtime PATH/TO/nvngx_dlssnr.dll --output build/validation/NEW-CONTEXT `
+  --roi 192,512,128,128 --roi 672,512,128,128 `
+  --halos 0,64,128,256 --samples 6 --warmup 3 --repeats 2
+```
+
+The report compares every retained owned crop against both fresh references
+and checks their repeatability. Individual-context cost sums are explicitly
+sums of independently measured means, not one batched measurement. The
+64-pixel outward alignment comes from CSX's existing provider ROI policy;
+it is not a verified internal network stride. `--prepare-only` creates the
+plan without native calls; `--report PATH/TO/plan.json` regenerates analysis
+while preserving execution provenance and missing-evidence reasons.
+
+`translation_probe.py` rolls the complete captured grids horizontally and
+moves one owned rectangle by the same amount. Texture extents, exact owned
+bytes and motion scale are preserved. Its default shifts are 0, 1, 16, 32
+and 64 pixels. It accepts the same manifest/replay/runtime/output arguments,
+one `--roi`, and `--shifts 0,1,16,32,64`. Cyclic wrapping changes distant
+boundary adjacency, so this is a translation/coordinate diagnostic rather
+than a proof of unchanged global spatial context. It checks every retained
+sample against the unshifted output and preserves rejected execution.
+
+The packed campaign's `prepare --canvas horizontal|vertical|diagonal`
+option creates a square control page from exactly two equal square contexts,
+each duplicated twice without padding. The default remains `strip`. All
+square arrangements have identical pixel populations and backing sizes.
+Horizontal versus diagonal leaves both selected top-row contexts at the
+same coordinates and rearranges only the duplicate bottom row. Source
+indices, tile order and selected ownership remain explicit in the receipt.
+Unequal clipped contexts or unequal guide grids are rejected.
+
+These probes use the same bounded native runner, exclusive campaign mutex,
+process exclusion, hashed input admission and retained-output verification.
+They do not qualify perception, motion, stereo or production performance.
+The [equivalence investigation](../../docs/development/nr-output-equivalence-investigation-20261004.md)
+records the actual controls and distinguishes failed byte equality from
+unmeasured perceptual equivalence.
+
+```powershell
+python -m unittest discover -s tools/nr-replay -p 'test_*probe.py'
+python tools/nr-replay/test_canvas_input.py
+```

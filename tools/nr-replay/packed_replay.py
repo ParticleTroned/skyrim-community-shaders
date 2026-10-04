@@ -16,6 +16,7 @@ from packed_input import prepare
 
 
 TOOL_SOURCES = ("packed_input.py", "packed_replay.py", "packed_report.py",
+                "canvas_input.py",
                 "../nr-color/replay_report.py", "../nr-color/transaction_evidence.py")
 
 
@@ -94,13 +95,19 @@ def prepare_campaign(args):
             for reverse in (False, True):
                 case_id = f"atlas-h{halo}" + ("-reversed" if reverse else "")
                 directory = root / "inputs" / case_id
-                proof = prepare(source, directory, args.roi, halo, reverse)
+                if args.canvas == "strip":
+                    proof = prepare(source, directory, args.roi, halo, reverse)
+                else:
+                    from canvas_input import prepare_canvas
+
+                    proof = prepare_canvas(source, directory, args.roi, halo, reverse, args.canvas)
                 manifest = directory / "manifest.json"
                 atlas = read(manifest)["frames"][0]["eyes"][0]["color"]
                 rects = [[0, 0, atlas["width"], atlas["height"]]]
                 campaign["cases"].append({"id": case_id, "kind": "atlas", "manifest": str(manifest),
                                           "manifestSha256": digest(manifest), "rects": rects,
                                           "tiles": proof["tiles"], "halo": halo, "reverse": reverse,
+                                          "canvas": args.canvas,
                                           "packingReceipt": str(directory / "packing.json"),
                                           "resultDirectory": f"runs/{case_id}"})
                 validation = root / "validation" / case_id
@@ -244,6 +251,8 @@ def execute_campaign(args):
         journal["status"] = "complete"
     except Exception as error:
         journal.update(status="failed", reason=str(error))
+        if journal["jobs"] and journal["jobs"][-1]["status"] == "running":
+            journal["jobs"][-1].update(status="failed", reason=str(error))
         raise
     finally:
         write(receipt, journal)
@@ -260,6 +269,7 @@ def main():
     create.add_argument("--replay", type=Path, required=True)
     create.add_argument("--roi", type=rectangle, action="append", required=True)
     create.add_argument("--halos", default="0,64,128")
+    create.add_argument("--canvas", choices=("strip", "horizontal", "vertical", "diagonal"), default="strip")
     create.add_argument("--repeats", type=int, default=3)
     for command in ("run", "capture", "report"):
         sub = commands.add_parser(command)

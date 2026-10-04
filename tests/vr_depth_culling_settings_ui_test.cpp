@@ -94,9 +94,10 @@ namespace ImGui
 		ids.pop_back();
 	}
 	void SeparatorText(const char*) {}
-	bool BeginTable(const char*, int a_columns, int)
+	bool BeginTable(const char* a_id, int a_columns, int)
 	{
-		Require(a_columns == 2, "Depth controls must use two columns");
+		Require(a_columns == (std::string(a_id) == "##TemporalPolicy" ? 3 : 2),
+			"Culling methods must share three columns; location controls must use two");
 		++openTables;
 		return true;
 	}
@@ -265,7 +266,7 @@ namespace
 		Require(controls.size() == 7 && text == std::vector<std::string>{ "Culling Method" },
 			"Both logging levels should expose Advanced, Hi-Z and Legacy controls");
 		Require(controls[4].kind == "radio" && controls[4].label == "Advanced (Default)" && controls[4].selected &&
-					controls[5].kind == "radio" && controls[5].label == "Hi-Z (Experimental)" && !controls[5].selected &&
+					controls[5].kind == "radio" && controls[5].label == "Hi-Z" && !controls[5].selected &&
 					controls[6].kind == "radio" && controls[6].label == "Legacy" && !controls[6].selected,
 			"Culling method labels or default selection are incorrect");
 
@@ -296,7 +297,7 @@ namespace
 			"Advanced click did not restore the default policy");
 
 		BeginFrame(a_developerMode);
-		radioClick = "Hi-Z (Experimental)";
+		radioClick = "Hi-Z";
 		Draw(vr);
 		Require(vr.settings.DepthCullingMethod == 3 && !vr.settings.DepthCullingLegacyMode &&
 					vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Hybrid &&

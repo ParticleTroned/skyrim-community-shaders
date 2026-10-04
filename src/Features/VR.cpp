@@ -1984,7 +1984,7 @@ namespace
 
 		ImGui::TextUnformatted("Culling Method");
 		auto mode = a_vr.GetDepthCullingMode();
-		if (ImGui::BeginTable("##TemporalPolicy", 2, ImGuiTableFlags_SizingStretchSame)) {
+		if (ImGui::BeginTable("##TemporalPolicy", 3, ImGuiTableFlags_SizingStretchSame)) {
 			ImGui::TableNextColumn();
 			if (ImGui::RadioButton("Advanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
 				mode = VRDepthCullingTemporal::Mode::Balanced;
@@ -1994,12 +1994,12 @@ namespace
 				ImGui::TextUnformatted("Recommended for most players. Keeps good performance and helps prevent objects briefly disappearing when you move your head.");
 			}
 			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Hi-Z (Experimental)", mode == VRDepthCullingTemporal::Mode::Hybrid)) {
+			if (ImGui::RadioButton("Hi-Z", mode == VRDepthCullingTemporal::Mode::Hybrid)) {
 				mode = VRDepthCullingTemporal::Mode::Hybrid;
 				a_vr.SetDepthCullingMode(mode);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("An experimental alternative. Costs a little more performance than Advanced or Legacy, so your frame rate may be lower.");
+				ImGui::TextUnformatted("An alternative that costs a little more performance than Advanced or Legacy, so your frame rate may be lower.");
 			}
 			ImGui::TableNextColumn();
 			if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {

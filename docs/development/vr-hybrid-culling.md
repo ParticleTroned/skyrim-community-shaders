@@ -479,9 +479,7 @@ this rebase, as requested.
 
 ## Current-main integration, 2026-10-03
 
-The [maintained Astra plan](csx-astra-master-plan.md) separates native Hi-Z,
-PBR grass, grass optimization and Reverse Z into reviewable PRs. The
-original experimental branch remains unchanged. Its single feature delta
+The original candidate branch remains unchanged. Its single feature delta
 was integrated on `codex/astra-hiz-depth` from current `main-VR`
 `c3f028b5207a2d9a32d539127aad614d2eef640a` as commit
 `29ce68539c1fa489b241135d1a7629ccddf6a4e3`. The DevBench conflict resolution

@@ -9,6 +9,13 @@
 
 namespace CSX::MeshBlendingPolicy
 {
+	[[nodiscard]] constexpr char LowerAscii(char a_character) noexcept
+	{
+		return a_character >= 'A' && a_character <= 'Z' ?
+		           static_cast<char>(a_character - 'A' + 'a') :
+		           a_character;
+	}
+
 	[[nodiscard]] inline std::string NormalizePath(
 		std::string_view a_path,
 		bool a_isModelPath)
@@ -17,10 +24,7 @@ namespace CSX::MeshBlendingPolicy
 		normalized.reserve(a_path.size() + (a_isModelPath ? 7u : 0u));
 		bool previousSlash = false;
 		for (char value : a_path) {
-			char character = value == '\\' ? '/' : value;
-			if (character >= 'A' && character <= 'Z') {
-				character = static_cast<char>(character - 'A' + 'a');
-			}
+			const char character = LowerAscii(value == '\\' ? '/' : value);
 			if (character == '/') {
 				if (previousSlash) {
 					continue;
@@ -85,7 +89,7 @@ namespace CSX::MeshBlendingPolicy
 	struct RuleIdentity
 	{
 		std::string model;
-		std::string nodePath;
+		std::string nodeIdentity;
 
 		bool operator==(const RuleIdentity&) const = default;
 	};
@@ -96,13 +100,16 @@ namespace CSX::MeshBlendingPolicy
 		std::uint32_t parentIndex;
 	};
 
-	/** Canonicalize a verified root-to-geometry chain; the root has no child index. */
+	/** Retain ordinary rule syntax; ambiguous raw names have no node selector. */
 	[[nodiscard]] inline std::string BuildCanonicalNodePath(std::span<const NodePathPart> a_path)
 	{
 		std::string result;
 		result.reserve(a_path.size() * 24u);
 		for (std::size_t index = 0u; index < a_path.size(); ++index) {
 			const auto& part = a_path[index];
+			if (part.name.find_first_of("/\\#[]*?") != std::string_view::npos ||
+				part.name == "." || part.name == "..")
+				return {};
 			if (index != 0u)
 				result.push_back('/');
 			result.append(part.name.empty() ? "#" : part.name);
@@ -117,6 +124,42 @@ namespace CSX::MeshBlendingPolicy
 			}
 		}
 		return NormalizePath(result, false);
+	}
+
+	/** Frame complete case-folded names and indices without treating names as syntax. */
+	[[nodiscard]] inline std::string BuildNodeCacheIdentity(std::span<const NodePathPart> a_path)
+	{
+		if (a_path.empty())
+			return {};
+		std::string result = "node-v1:";
+		const auto appendNumber = [&](std::uint64_t value) {
+			std::array<char, 24> number{};
+			const auto conversion = std::to_chars(number.data(), number.data() + number.size(), value);
+			if (conversion.ec != std::errc{})
+				return false;
+			result.append(number.data(), conversion.ptr);
+			result.push_back(':');
+			return true;
+		};
+		if (!appendNumber(a_path.size()))
+			return {};
+		for (std::size_t index = 0u; index < a_path.size(); ++index) {
+			const auto& part = a_path[index];
+			if (!appendNumber(part.name.size()))
+				return {};
+			for (const char character : part.name)
+				result.push_back(LowerAscii(character));
+			if (!appendNumber(index == 0u ? 0u : part.parentIndex))
+				return {};
+		}
+		return result;
+	}
+
+	/** An unavailable node selector cannot satisfy even a wildcard node rule. */
+	[[nodiscard]] constexpr bool CanMatchNodeSelector(
+		std::string_view a_rule, std::string_view a_current) noexcept
+	{
+		return a_rule.empty() || !a_current.empty();
 	}
 
 	enum class CachedClassification : std::uint8_t

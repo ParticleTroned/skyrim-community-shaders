@@ -1911,7 +1911,7 @@ void MeshBlending::CompleteOwnershipSignature(const SourceState& a_source, Signa
 	if (!compiledAllowList.empty() || !compiledDenyList.empty() ||
 		!compiledExactAllowRules.empty() || !compiledExactDenyRules.empty()) {
 		// Pointers and immediate-parent state do not prove current rule identity.
-		a_signature.ruleIdentity = { BuildModelPath(a_source), BuildNodePath(a_source) };
+		a_signature.ruleIdentity = { BuildModelPath(a_source), BuildNodePathValue(a_source, true) };
 	}
 }
 
@@ -2073,7 +2073,7 @@ MeshBlending::Classification MeshBlending::GetSourceClassification(
 		}
 		if (!CSX::MeshBlendingPolicy::CanReuseCacheHit(
 				classification, a_source.root->HasAnimation(), automaticReceiverIsCurrentAndSafe,
-				sourceStateCacheAllowed || (!signature.ruleIdentity.nodePath.empty() &&
+				sourceStateCacheAllowed || (!signature.ruleIdentity.nodeIdentity.empty() &&
 											   cachedSignature.ruleIdentity == signature.ruleIdentity))) {
 			InvalidateCachedClassification(cachedSignature);
 			cacheHit = false;
@@ -2108,6 +2108,11 @@ std::string MeshBlending::BuildModelPath(const SourceState& a_source) const
 
 std::string MeshBlending::BuildNodePath(const SourceState& a_source) const
 {
+	return BuildNodePathValue(a_source, false);
+}
+
+std::string MeshBlending::BuildNodePathValue(const SourceState& a_source, bool a_forCacheIdentity) const
+{
 	std::array<const RE::NiAVObject*, kMaximumRootDepth> path{};
 	std::size_t pathLength = 0u;
 	for (auto* current = static_cast<const RE::NiAVObject*>(a_source.geometry);
@@ -2128,8 +2133,9 @@ std::string MeshBlending::BuildNodePath(const SourceState& a_source) const
 		const char* name = object->name.c_str();
 		parts[index] = { name ? name : "", object->parentIndex };
 	}
-	return CSX::MeshBlendingPolicy::BuildCanonicalNodePath(
-		std::span<const CSX::MeshBlendingPolicy::NodePathPart>(parts.data(), pathLength));
+	const auto chain = std::span<const CSX::MeshBlendingPolicy::NodePathPart>(parts.data(), pathLength);
+	return a_forCacheIdentity ? CSX::MeshBlendingPolicy::BuildNodeCacheIdentity(chain) :
+	                            CSX::MeshBlendingPolicy::BuildCanonicalNodePath(chain);
 }
 
 bool MeshBlending::MatchesRules(
@@ -2143,6 +2149,9 @@ bool MeshBlending::MatchesRules(
 		return true;
 	}
 	for (const auto& rule : a_rules) {
+		if (!CSX::MeshBlendingPolicy::CanMatchNodeSelector(rule.nodePath, a_nodePath)) {
+			continue;
+		}
 		const bool modelMatches = rule.model.empty() ||
 		                          (rule.modelHasWildcard ? WildcardMatch(rule.model, a_model) : rule.model == a_model);
 		if (!modelMatches) {

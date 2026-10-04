@@ -59,12 +59,12 @@ namespace
 		const std::array<NodePathPart, 4> original{
 			NodePathPart{ "Root", 0u }, { "Branch", 1u }, { "Parent", 2u }, { "Source", 3u }
 		};
-		const RuleIdentity cached{ NormalizePath("Data\\Meshes\\Example.nif", true), BuildCanonicalNodePath(original) };
-		if (cached.nodePath != "root/branch[1]/parent[2]/source[3]")
+		const RuleIdentity cached{ NormalizePath("Data\\Meshes\\Example.nif", true), BuildNodeCacheIdentity(original) };
+		if (BuildCanonicalNodePath(original) != "root/branch[1]/parent[2]/source[3]" || cached.nodeIdentity.empty())
 			return false;
 		const auto reusable = [&](CachedClassification classification, const RuleIdentity& current) {
 			return CanReuseCacheHit(classification, false, true,
-				!current.nodePath.empty() && cached == current);
+				!current.nodeIdentity.empty() && cached == current);
 		};
 		if (!reusable(CachedClassification::kAllowedByRule, cached) ||
 			!reusable(CachedClassification::kAutomatic, cached))
@@ -74,7 +74,7 @@ namespace
 		for (const auto index : { 0u, 1u, 2u, 3u }) {
 			auto renamed = original;
 			renamed[index].name = "Denied";
-			const RuleIdentity current{ cached.model, BuildCanonicalNodePath(renamed) };
+			const RuleIdentity current{ cached.model, BuildNodeCacheIdentity(renamed) };
 			if (reusable(CachedClassification::kAllowedByRule, current) ||
 				reusable(CachedClassification::kAutomatic, current) ||
 				!reusable(CachedClassification::kRejected, current))
@@ -83,7 +83,7 @@ namespace
 		for (const auto index : { 1u, 2u, 3u }) {
 			auto reindexed = original;
 			++reindexed[index].parentIndex;
-			const RuleIdentity current{ cached.model, BuildCanonicalNodePath(reindexed) };
+			const RuleIdentity current{ cached.model, BuildNodeCacheIdentity(reindexed) };
 			if (reusable(CachedClassification::kAllowedByRule, current) ||
 				reusable(CachedClassification::kAutomatic, current))
 				return false;
@@ -91,10 +91,10 @@ namespace
 		const std::array<NodePathPart, 5> reparented{
 			original[0], { "NewAncestor", 4u }, original[1], original[2], original[3]
 		};
-		const RuleIdentity currentAncestry{ cached.model, BuildCanonicalNodePath(reparented) };
-		const RuleIdentity currentModel{ "meshes/denied.nif", cached.nodePath };
+		const RuleIdentity currentAncestry{ cached.model, BuildNodeCacheIdentity(reparented) };
+		const RuleIdentity currentModel{ "meshes/denied.nif", cached.nodeIdentity };
 		const RuleIdentity unresolved{ cached.model, {} };
-		const RuleIdentity normalized{ NormalizePath("meshes/example.nif", true), cached.nodePath };
+		const RuleIdentity normalized{ NormalizePath("meshes/example.nif", true), cached.nodeIdentity };
 		return !reusable(CachedClassification::kAllowedByRule, currentAncestry) &&
 		       !reusable(CachedClassification::kAutomatic, currentAncestry) &&
 		       !reusable(CachedClassification::kAllowedByRule, currentModel) &&
@@ -103,6 +103,49 @@ namespace
 		       !reusable(CachedClassification::kAutomatic, unresolved) &&
 		       reusable(CachedClassification::kAllowedByRule, normalized) &&
 		       reusable(CachedClassification::kRejected, unresolved);
+	}
+
+	bool TestAmbiguousNodeIdentity()
+	{
+		using namespace CSX::MeshBlendingPolicy;
+		const std::array<NodePathPart, 2> ordinary{ NodePathPart{ "Root", 0u }, { "Child", 1u } };
+		auto folded = ordinary;
+		folded[0].name = "root";
+		folded[1].name = "child";
+		if (BuildNodeCacheIdentity(ordinary) != BuildNodeCacheIdentity(folded) ||
+			BuildCanonicalNodePath(ordinary) != "root/child[1]" ||
+			!BuildNodeCacheIdentity({}).empty())
+			return false;
+		const std::array<NodePathPart, 1> emptyRoot{ NodePathPart{ "", 0u } };
+		const std::array<NodePathPart, 1> literalEmptyMarker{ NodePathPart{ "#", 0u } };
+		if (BuildNodeCacheIdentity(emptyRoot) == BuildNodeCacheIdentity(literalEmptyMarker) ||
+			BuildCanonicalNodePath(emptyRoot) != "#" ||
+			!BuildCanonicalNodePath(literalEmptyMarker).empty())
+			return false;
+		const std::array<NodePathPart, 1> literalHierarchy{ NodePathPart{ "Root/Child[1]", 0u } };
+		if (BuildNodeCacheIdentity(ordinary) == BuildNodeCacheIdentity(literalHierarchy) ||
+			!BuildCanonicalNodePath(literalHierarchy).empty())
+			return false;
+		const auto allowed = RuleIdentity{ "meshes/example.nif", BuildNodeCacheIdentity(ordinary) };
+		for (const std::string_view name : { "", "#", "Child[1]", "Child/Leaf", "Child\\Leaf", "*", "?", ".", "..", "4:name:1:" }) {
+			auto renamed = ordinary;
+			renamed[1].name = name;
+			const auto current = RuleIdentity{ allowed.model, BuildNodeCacheIdentity(renamed) };
+			if (current.nodeIdentity.empty() || current == allowed ||
+				CanReuseCacheHit(CachedClassification::kAllowedByRule, false, true, current == allowed) ||
+				CanReuseCacheHit(CachedClassification::kAutomatic, false, true, current == allowed))
+				return false;
+			if (!name.empty() && name != "4:name:1:" && !BuildCanonicalNodePath(renamed).empty())
+				return false;
+		}
+		auto rawPercent = ordinary;
+		rawPercent[1].name = "Child%2fLeaf";
+		auto rawSlash = ordinary;
+		rawSlash[1].name = "Child/Leaf";
+		return BuildNodeCacheIdentity(rawPercent) != BuildNodeCacheIdentity(rawSlash) &&
+		       BuildCanonicalNodePath(rawPercent) == "root/child%2fleaf[1]" &&
+		       !CanMatchNodeSelector("*", {}) && !CanMatchNodeSelector("#", {}) &&
+		       CanMatchNodeSelector({}, {}) && CanMatchNodeSelector("*", "root/child[1]");
 	}
 
 	bool TestLandscapeSelectorPolicy()
@@ -213,6 +256,7 @@ int main()
 {
 	return TestCacheReusePolicy() &&
 	               TestCurrentRuleIdentity() &&
+	               TestAmbiguousNodeIdentity() &&
 	               TestLandscapeSelectorPolicy() &&
 	               TestCanonicalOverridePolicy() &&
 	               TestCanonicalLandscapePolicy() &&

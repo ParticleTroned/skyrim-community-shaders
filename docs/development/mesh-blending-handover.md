@@ -353,7 +353,7 @@ Asset policy is intentionally isolated in `Data/SKSE/Plugins/CommunityShaders/Me
 
 Save/Clear changes only generated observations and therefore preserves the live LAND registry. If an author edits LAND classification or pair policy while the game is running and then invokes Save/Clear, the changed policy is applied safely, but already loaded LAND entries fail open until their cell/material setup streams again.
 
-Detection modes are `0` disabled, `1` allow-list-only, and `2` automatic. Empty manual `Model` or `NodePath` fields wildcard that component; an entirely empty rule never matches. `*` and `?` wildcards are supported after ASCII lowercase/slash normalization. Generated model/node pairs are always exact. Manual plus generated allow entries share a 1024-entry cap; deny rules have an independent 1024-entry cap, and LTEX identities have an independent 4096-entry cap.
+Detection modes are `0` disabled, `1` allow-list-only, and `2` automatic. Empty manual `Model` or `NodePath` fields wildcard that component; an entirely empty rule never matches. `*` and `?` wildcards are supported after ASCII lowercase/slash normalization. Generated model/node pairs are always exact. A raw scene name containing `/`, `\`, `#`, `[`, `]`, `*`, or `?`, or equal to `.` or `..`, has no representable node selector. Node-specific rules, including `*`, cannot match that unavailable selector, and discovery cannot save it as an exact pair. Model-only rules retain their meaning. Empty names retain the `#` marker; literal `#` names are unavailable. Percent sequences remain literal; no escape syntax is introduced. Manual plus generated allow entries share a 1024-entry cap; deny rules have an independent 1024-entry cap, and LTEX identities have an independent 4096-entry cap.
 
 An allow match should override automatic rejection only for safe render-state requirements. It must not force unsupported blend functions, disabled Z testing, water/effect shaders, or missing depth resources. A deny match always wins.
 
@@ -861,7 +861,7 @@ Exit condition: no state leaks, no shader-cache mismatch, and no unintended cand
 ### Robustness
 
 - Null pass, geometry, shader property, alpha property, parent, root, user data, or renderer data fails closed. A missing model path can match only an explicit node-only allow rule; Automatic mode fails closed.
-- Cache entries validate current live signatures before reuse. With manual rules present, signatures retain the full current canonical model and named/indexed node path. Source or ancestor name, index, and ancestry changes invalidate old policy decisions before reuse; reclassification retains deny-before-allow ordering.
+- Cache entries validate current live signatures before reuse. With manual rules present, signatures retain the full current canonical model and a versioned length-framed node identity. Every raw name is ASCII case-folded without slash or marker normalization, and each non-root child index is framed separately; empty names, literal markers and delimiter-bearing names stay distinct. The human rule selector is separate from this internal identity. Source or ancestor name, index, and ancestry changes invalidate old policy decisions before reuse; reclassification retains deny-before-allow ordering.
 - Cache size remains bounded during cell traversal and fast travel.
 - Logging is rate limited.
 - No persistent scenegraph ownership is introduced.

@@ -448,6 +448,7 @@ private:
 		std::string_view a_nodePath) const;
 	std::string BuildModelPath(const SourceState& a_source) const;
 	std::string BuildNodePath(const SourceState& a_source) const;
+	std::string BuildNodePathValue(const SourceState& a_source, bool a_forCacheIdentity) const;
 	void DrawDiagnostics() const;
 	bool IsDiscoveryCaptureActive() const;
 	bool IsDiscoveryCaptureSaturated() const;

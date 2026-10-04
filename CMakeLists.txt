@@ -1731,6 +1731,34 @@ if(BUILD_CONTROLLER_TESTS)
         VRFpsStabilizerIntegration
         tests/vr_fps_stabilizer_integration_test.cpp
     )
+    add_controller_test(
+        vr_fps_stabilizer_profile_editor_test
+        VRFpsStabilizerProfileEditor
+        tests/vr_fps_stabilizer_profile_editor_test.cpp
+    )
+    set(_stabilizer_profile_editor_test_header
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/stabilizer_profile_editor_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_stabilizer_profile_editor_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_FILE=${_stabilizer_profile_editor_test_header}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_stabilizer_profile_editor.cmake"
+        DEPENDS
+            src/Features/VR.cpp
+            src/Features/Upscaling.cpp
+            tests/extract_stabilizer_profile_editor.cmake
+        VERBATIM
+    )
+    target_sources(
+        vr_fps_stabilizer_profile_editor_test
+        PRIVATE "${_stabilizer_profile_editor_test_header}"
+    )
+    target_include_directories(
+        vr_fps_stabilizer_profile_editor_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
     set(_stabilizer_test_header
         "${CMAKE_CURRENT_BINARY_DIR}/generated/stabilizer_integration_under_test.h"
     )

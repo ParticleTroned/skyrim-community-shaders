@@ -27,6 +27,12 @@ DataLoaded, PostLoadGame, AfterLoadGame, NewGame and Conditional sections.
     CSX refreshed its own profile snapshot. Commands still wait for their
     configured events and conditions; reloading does not replay startup
     events. Visual effects require runtime verification.
+-   When the INI has no Interior/Exterior CSX profile rows, switching starts
+    off. Select a Method in both columns before saving. The other fields
+    initially show the current CSX values so creating profiles does not
+    silently turn existing features off. For DLAA interiors and Hoshipa
+    exteriors, select NVIDIA DLSS in both columns, then DLAA and Hoshipa
+    respectively. Render Scale is a separate choice for the exterior.
 
 The status area reports whether Stabilizer is loaded, its detected build,
 reload availability, pending work, completion and failures. When the DLL
@@ -130,6 +136,7 @@ infrastructure. It found and corrected the following issues:
 | Duplicate-row enumeration repeatedly rescanned the entire file.                | Enumerate in one pass while retaining first-key spelling and last-value semantics; the regression covers case-insensitive duplicates.                                                |
 | A queued reload could execute after its INI disappeared.                       | Recheck bounded, readable text on the game thread before invoking the provider; the test verifies no external call and a recoverable failure.                                        |
 | Optional interface exceptions escaped initialization.                          | Degrade to unavailable with the error recorded; a throwing test provider verifies the fallback.                                                                                      |
+| First-time profiles replaced current CSX values with disabled defaults.        | Keep the resolved runtime values when no managed profile rows exist; switching still starts off until both methods are chosen.                                                       |
 
 Successful edits also clear earlier edit errors, and range errors include
 their actual limits. UI and DevBench share the section catalog. Profile
@@ -143,12 +150,22 @@ had passed all 172 CTest cases plus preset tests before this review; rerun
 the command below for the final committed build. Archive receipts retain
 the final validation directory, build identity, inventory and hashes.
 
+The clean-INI regression extracts the production profile-editor initializer
+and preset mapping. It checks 50,176 Interior/Exterior combinations across
+all four methods, all seven quality presets, both Render Scale states and
+feature switches, including FSR and DLSS. Its 200,728 assertions pass.
+This verifies editor state and preset translation; applying the profile in
+Skyrim VR still requires runtime acceptance. The correction does not
+rewrite profiles already saved by an older build or establish the cause of
+an NVIDIA driver crash while DLSS Render Scale is active.
+
 Build and run the focused parser/validation checks with:
 
 ```powershell
-pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target vr_fps_stabilizer_config_test vr_fps_stabilizer_integration_test game_setting_persistence_test
+pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target vr_fps_stabilizer_config_test vr_fps_stabilizer_integration_test vr_fps_stabilizer_profile_editor_test game_setting_persistence_test
 ./build/ALL/Release/vr_fps_stabilizer_config_test.exe
 ./build/ALL/Release/vr_fps_stabilizer_integration_test.exe
+./build/ALL/Release/vr_fps_stabilizer_profile_editor_test.exe
 ./build/ALL/Release/game_setting_persistence_test.exe
 ```
 

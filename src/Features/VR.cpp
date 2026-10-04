@@ -1486,11 +1486,8 @@ namespace
 		state.revision = VRFpsStabilizer::Status().revision;
 		state.messageIsError = state.loadFailed;
 		state.profilesDefinedInIni = !state.loadFailed && HasVRFpsStabilizerProfileRows(state.config);
-		if (!state.profilesDefinedInIni) {
+		if (!state.profilesDefinedInIni)
 			state.config.upscalingSwitchingEnabled = false;
-			state.config.interior = {};
-			state.config.exterior = {};
-		}
 		state.initialized = true;
 		state.baselineConfig = state.config;
 		RefreshVRFpsStabilizerUIStateDirty(state);

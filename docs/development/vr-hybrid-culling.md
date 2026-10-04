@@ -6,10 +6,14 @@ four-mode assay found Hybrid materially slower than Advanced and Legacy.
 Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
-The [projected-face comparison and adaptive traversal](vr-hybrid-culling-adaptive-2026-10-04.md)
-record the latest four-mode measurements. Projected-face Hybrid remained
-slower and rejected fewer candidates. Adaptive traversal now refines only
-unresolved regions; its in-game performance and motion checks are pending.
+The [adaptive comparison and GPU analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
+record the latest repeated comparison with Advanced. Adaptive Hybrid costs
+17.3% more CPU time and 26.7% more GPU time, rejecting 38.2% of candidate
+records versus 60.4%. Bounds testing consumes 95.8% of measured Hybrid GPU
+work. Motion and lifecycle qualification remain open.
+The subsequent cached face bounds and clipping shortcuts pass focused
+tests but have not been timed in game; the comparison measures the shader
+before those shortcuts.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not

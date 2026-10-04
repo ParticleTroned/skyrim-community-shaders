@@ -5,82 +5,108 @@
 
 namespace ProjectedBounds
 {
-
-	static const uint3 Triangles[12] = {
-		uint3(0, 1, 3), uint3(0, 3, 2), uint3(4, 6, 7), uint3(4, 7, 5),
-		uint3(0, 4, 5), uint3(0, 5, 1), uint3(2, 3, 7), uint3(2, 7, 6),
-		uint3(0, 2, 6), uint3(0, 6, 4), uint3(1, 5, 7), uint3(1, 7, 3)
+	static const uint4 Faces[6] = {
+		uint4(0, 1, 3, 2), uint4(4, 6, 7, 5), uint4(0, 4, 5, 1),
+		uint4(2, 3, 7, 6), uint4(0, 2, 6, 4), uint4(1, 5, 7, 3)
 	};
 
-	// Four clips grow a triangle to at most seven vertices; spare capacity fails safely.
-	bool ClipPlane(inout float3 polygon[8], inout uint count, uint axis, float boundary, float sign)
+	struct PreparedFaces
 	{
-		float3 output[8] = (float3[8])0;
-		uint outputCount = 0;
-		float3 previous = polygon[count - 1];
-		float previousDistance = sign * ((axis == 0 ? previous.x : previous.y) - boundary);
-		[loop] for (uint index = 0; index < count; ++index)
+		float4 rectangle[6];
+		float4 nearestDepth[2];
+	};
+
+	void PrepareFaces(float3 vertices[8], out PreparedFaces bounds)
+	{
+		bounds.nearestDepth[0] = bounds.nearestDepth[1] = DepthOrder::Far();
+		[unroll] for (uint face = 0; face < 6; ++face)
 		{
-			float3 current = polygon[index];
-			float distance = sign * ((axis == 0 ? current.x : current.y) - boundary);
-			if ((previousDistance >= 0.0) != (distance >= 0.0)) {
-				float weight = previousDistance / (previousDistance - distance);
-				precise float3 intersection = previous + weight * (current - previous);
-				if (!isfinite(weight) || weight < 0.0 || weight > 1.0 || !all(isfinite(intersection)) || outputCount >= 8)
-					return false;
-				intersection.x = axis == 0 ? boundary : intersection.x;
-				intersection.y = axis == 1 ? boundary : intersection.y;
-				output[outputCount++] = intersection;
-			}
-			if (distance >= 0.0) {
-				if (outputCount >= 8)
-					return false;
-				output[outputCount++] = current;
-			}
-			previous = current;
-			previousDistance = distance;
+			uint4 corners = Faces[face];
+			float3 a = vertices[corners.x], b = vertices[corners.y];
+			float3 c = vertices[corners.z], d = vertices[corners.w];
+			bounds.rectangle[face] = float4(min(min(a.xy, b.xy), min(c.xy, d.xy)), max(max(a.xy, b.xy), max(c.xy, d.xy)));
+			bounds.nearestDepth[face >> 2][face & 3] = DepthOrder::Nearest(DepthOrder::Nearest(a.z, b.z), DepthOrder::Nearest(c.z, d.z));
 		}
-		count = outputCount;
-		[loop] for (uint copyIndex = 0; copyIndex < count; ++copyIndex)
-			polygon[copyIndex] = output[copyIndex];
-		return true;
 	}
 
-	bool OccludedInRegion(float3 vertices[8], float2 minimumPixel, float2 maximumPixel, float depth, float bias HIZ_DIAGNOSTIC_PARAMETERS)
+	bool OccludedInRegion(float3 vertices[8], PreparedFaces bounds, float2 minimumPixel, float2 maximumPixel, float depth, float bias HIZ_DIAGNOSTIC_PARAMETERS)
 	{
 		// Allow for four rounds of interpolation in addition to the configured depth bias.
 		const float interpolationBias = 64.0 / 16777216.0;
-		[loop] for (uint faceTriangle = 0; faceTriangle < 12; ++faceTriangle)
+		const float guardedBias = bias + interpolationBias;
+		[loop] for (uint face = 0; face < 6; ++face)
 		{
-			HIZ_COUNT_TRIANGLE;
-			float3 polygon[8] = (float3[8])0;
-			polygon[0] = vertices[Triangles[faceTriangle].x];
-			polygon[1] = vertices[Triangles[faceTriangle].y];
-			polygon[2] = vertices[Triangles[faceTriangle].z];
-			float2 minimumTriangle = min(polygon[0].xy, min(polygon[1].xy, polygon[2].xy));
-			float2 maximumTriangle = max(polygon[0].xy, max(polygon[1].xy, polygon[2].xy));
-			if (any(maximumTriangle < minimumPixel) || any(minimumTriangle > maximumPixel))
+			if (any(bounds.rectangle[face].zw < minimumPixel) || any(bounds.rectangle[face].xy > maximumPixel) ||
+				DepthOrder::IsBehindWithBias(bounds.nearestDepth[face >> 2][face & 3], depth, guardedBias))
 				continue;
-			uint count = 3;
-			[loop] for (uint plane = 0; plane < 4; ++plane)
+			uint4 corners = Faces[face];
+			[loop] for (uint triangleIndex = 0; triangleIndex < 2; ++triangleIndex)
 			{
-				uint axis = plane >> 1;
-				bool lower = (plane & 1) == 0;
-				if (!ClipPlane(polygon, count, axis, lower ? minimumPixel[axis] : maximumPixel[axis], lower ? 1.0 : -1.0))
+				HIZ_COUNT_TRIANGLE;
+				float3 a = vertices[corners.x];
+				float3 b = vertices[triangleIndex == 0 ? corners.y : corners.z];
+				float3 c = vertices[triangleIndex == 0 ? corners.z : corners.w];
+				float nearest = DepthOrder::Nearest(a.z, DepthOrder::Nearest(b.z, c.z));
+				if (DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
+					continue;
+				float2 minimumTriangle = min(a.xy, min(b.xy, c.xy));
+				float2 maximumTriangle = max(a.xy, max(b.xy, c.xy));
+				if (any(maximumTriangle < minimumPixel) || any(minimumTriangle > maximumPixel))
+					continue;
+
+				// Only initialized vertices below count are read; four clips need at most seven.
+				float3 polygon[8];
+				polygon[0] = a;
+				polygon[1] = b;
+				polygon[2] = c;
+				uint count = 3;
+				[loop] for (uint plane = 0; plane < 4; ++plane)
+				{
+					uint axis = plane >> 1;
+					bool lower = (plane & 1) == 0;
+					float boundary = lower ? minimumPixel[axis] : maximumPixel[axis];
+					float sign = lower ? 1.0 : -1.0;
+					float3 output[8];
+					uint outputCount = 0;
+					float3 previous = polygon[count - 1];
+					float previousDistance = sign * ((axis == 0 ? previous.x : previous.y) - boundary);
+					[loop] for (uint index = 0; index < count; ++index)
+					{
+						float3 current = polygon[index];
+						float distance = sign * ((axis == 0 ? current.x : current.y) - boundary);
+						if ((previousDistance >= 0.0) != (distance >= 0.0)) {
+							float weight = previousDistance / (previousDistance - distance);
+							precise float3 intersection = previous + weight * (current - previous);
+							if (!isfinite(weight) || weight < 0.0 || weight > 1.0 || !all(isfinite(intersection)) || outputCount >= 8)
+								return false;
+							intersection.x = axis == 0 ? boundary : intersection.x;
+							intersection.y = axis == 1 ? boundary : intersection.y;
+							output[outputCount++] = intersection;
+						}
+						if (distance >= 0.0) {
+							if (outputCount >= 8)
+								return false;
+							output[outputCount++] = current;
+						}
+						previous = current;
+						previousDistance = distance;
+					}
+					count = outputCount;
+					if (count == 0)
+						break;
+					[loop] for (uint copyIndex = 0; copyIndex < count; ++copyIndex)
+						polygon[copyIndex] = output[copyIndex];
+				}
+				// Projected depth is affine on each triangle, including reflected boxes.
+				nearest = DepthOrder::Far();
+				[loop] for (uint index = 0; index < count; ++index)
+					nearest = DepthOrder::Nearest(nearest, polygon[index].z);
+				if (count != 0 && !DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
 					return false;
-				if (count == 0)
-					break;
 			}
-			// Projected z/w is affine on each face triangle, so extrema are at clipped vertices.
-			float nearest = DepthOrder::Far();
-			[loop] for (uint index = 0; index < count; ++index)
-				nearest = DepthOrder::Nearest(nearest, polygon[index].z);
-			if (count != 0 && !DepthOrder::IsBehindWithBias(nearest, depth, bias + interpolationBias))
-				return false;
 		}
 		return true;
 	}
-
 }
 
 #endif

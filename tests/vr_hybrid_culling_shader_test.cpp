@@ -528,6 +528,45 @@ namespace
 		}
 	}
 
+	void PreservesFaceProofsAcrossAxisPermutations(Fixture& fixture)
+	{
+		auto sloped = BoxForGuardedPixels(fixture, { 8.25f, 8.25f, 19.75f, 19.75f });
+		sloped.entry[2][0] = 0.25f;
+		sloped.entry[2][3] = 0.65f;
+		constexpr std::array<std::array<UINT, 3>, 6> permutations{ { { 0, 1, 2 }, { 0, 2, 1 }, { 1, 0, 2 }, { 1, 2, 0 }, { 2, 0, 1 }, { 2, 1, 0 } } };
+		std::vector<OBBTransform> objects;
+		for (const auto& permutation : permutations) {
+			for (UINT signs = 0; signs < 8; ++signs) {
+				auto object = sloped;
+				for (UINT row = 0; row < 3; ++row)
+					for (UINT column = 0; column < 3; ++column)
+						object.entry[row][column] = sloped.entry[row][permutation[column]] * ((signs & (1u << column)) ? -1.0f : 1.0f);
+				objects.push_back(object);
+			}
+		}
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight);
+		for (const auto& eye : fixture.testConstants.eyes)
+			for (UINT y = 0; y < eye.height; ++y)
+				for (UINT x = 0; x < eye.width; ++x)
+					pixels[y * fixture.sourceWidth + eye.x + x] = 0.01f + 0.025f * x;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects) == std::vector<std::uint32_t>(objects.size(), 0),
+			"Equivalent reflected or permuted boxes lost the local face proof");
+		for (const auto& diagnostic : fixture.lastDiagnostics)
+			Require(diagnostic[2] != 0, "Axis-permutation fixture did not reach the face refinement path");
+		for (const auto& eye : fixture.testConstants.eyes) {
+			const auto offset = 14 * fixture.sourceWidth + eye.x + 17;
+			const float original = pixels[offset];
+			for (const float depth : { 0.0f, 1.0f, std::numeric_limits<float>::quiet_NaN() }) {
+				pixels[offset] = depth;
+				fixture.Build(pixels);
+				Require(fixture.Test(objects) == std::vector<std::uint32_t>(objects.size(), 1),
+					"Reflected or permuted face bounds lost a visibility hole in one eye");
+			}
+			pixels[offset] = original;
+		}
+	}
+
 	struct RayBoxOracle
 	{
 		double inverse[3][3]{};
@@ -868,6 +907,7 @@ int main()
 			ChecksRefinedProofsAgainstSourcePixels(fixture);
 			ExcludesEmptyProjectedCorners(fixture);
 			UsesLocalFaceDepth(fixture);
+			PreservesFaceProofsAcrossAxisPermutations(fixture);
 			ChecksFaceProofsAgainstRays(fixture);
 			std::cout << "Hi-Z WARP tests passed (" << (reversedDepth ? "reversed test ordering" : "standard ordering")
 					  << "): mip coverage, bounded face refinement, source-pixel and 3D ray oracles, stereo, bias, perspective and failure fallback\n";

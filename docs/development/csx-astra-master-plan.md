@@ -2,14 +2,20 @@
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
 The [latest comparison and adaptive iteration](vr-hybrid-culling-adaptive-2026-10-04.md)
-record the final projected-face measurements: Hybrid remained slower
-than Legacy and Advanced, with 34.1% candidate rejection versus about 62%.
+record two noon timing repeats per method on the adaptive build: Hybrid
+costs 17.3% more CPU time and 26.7% more GPU time than Advanced, with
+38.2% candidate rejection versus 60.4%.
 Adaptive traversal now preserves proven regions and spends its fixed
 64-load budget only on actual reads. Separate DevBench-only shader
 diagnostics report terminal reasons and work without contaminating normal
-timing. The adaptive candidate still requires in-game performance and
-motion/lifecycle qualification. Advanced remains default. PBR grass, grass
-optimization and Reverse Z remain separate later PRs.
+timing. Two 300-frame GPU captures attribute 95.8% of Hybrid GPU work to
+bounds testing. Motion/lifecycle qualification remains open. Advanced
+remains default. PBR grass, grass optimization and Reverse Z remain separate later PRs.
+
+The next bounded change now caches face rectangles/depths, skips proven
+regions before exact triangle clipping and reduces indexed polygon-array
+copies. Its focused tests pass; the measured timings above still belong
+to the preceding adaptive build. Fresh in-game timing is required.
 
 ## Scope and authority
 
@@ -190,7 +196,9 @@ submitted/readback cohort conservation across that boundary.
 The [projected-face refinement](vr-hybrid-culling-faces-2026-10-04.md)
 addresses both rectangular over-coverage and the whole-box nearest-depth
 limitation. Its runtime comparison still regressed. The subsequent
-adaptive traversal remains pending runtime evaluation. Grass and renderer depth changes remain later PRs.
+adaptive traversal also trails Advanced in the repeated runtime test;
+its measured bounds-testing cost is the next optimization target. Grass
+and renderer depth changes remain later PRs.
 
 PR labels below denote workstreams, not assigned GitHub numbers. Add the
 actual number/link after creation and follow the repository title/branch
@@ -625,7 +633,7 @@ source review or focused WARP validation satisfies those protocols.
 | DevBench AIO archive                        | Original archive preserved; native-count AIO 90,846,788 bytes, 369-file verification passed; installed physical DLL/manifest/receipt match runtime identity                                                                    |
 | Integration deployment/runtime identity     | Runtime receipts match original AIO Build ID/source/hash; measured identity retained in the noon report                                                                                                                        |
 | Native/HMD fidelity, fallback and lifecycle | Static and common-pose motion ROI samples show no obvious defects; 640 originals verified; unequal route coverage, temporal and lifecycle gates remain open                                                                    |
-| Comparable CPU/GPU/VRAM performance         | Original eight noon windows show regression; later native-count-build timings are descriptive because concurrent compilation was confirmed; projected-face repeat also regressed; adaptive runtime pending; VRAM not qualified |
+| Comparable CPU/GPU/VRAM performance         | Original eight noon windows show regression; later native-count-build timings are descriptive because concurrent compilation was confirmed; projected-face repeat also regressed; adaptive still regressed; VRAM not qualified |
 | PBR/optimized grass/Reverse-Z qualification | Not started                                                                                                                                                                                                                    |
 
 For every measurement report backend admission, requested/effective mode,
@@ -639,13 +647,16 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental. Build and deliver the adaptive-traversal DevBench
-AIO, then compare its reason counts and GPU pass costs separately from
-whole-frame timing. Reset noon before each phase and include Off, Legacy
-and Advanced. The preserved projected-face AIO is the algorithm baseline.
-Continue only if the fixed-budget traversal materially closes the measured
-performance gap. Preserve masks, guards, depth bias and stereo/history
-safety; qualify motion and lifecycle behavior before any promotion.
+Keep PR104 experimental. Cached face tests and reduced polygon copying
+are implemented and pass focused validation. Measure this new shader
+against Advanced and the preserved adaptive build before claiming a gain.
+The preceding bounds test costs 1.49-1.52 ms GPU; its entire hierarchy
+costs about 0.055 ms. Restore access to the exact DevBench reason
+toggle before choosing changes to finest-level evidence or read budgets.
+The [analysis](vr-hybrid-culling-adaptive-2026-10-04.md#measured-optimization-opportunity)
+separates measured costs from proposed changes and parity estimates.
+Preserve masks, guards, depth bias and stereo/history safety; require a
+repeatable improvement and motion/lifecycle qualification before promotion.
 
 PBR grass remains the next independent feature PR, followed by grass
 optimization and Reverse Z. No render-scale qualification is claimed.

@@ -12,8 +12,9 @@ design follows [upstream grass optimizations](https://github.com/community-shade
 by Anthony (DwemerEngineer). Ported contributions retain his verified
 Git identity in commit co-author trailers.
 The implementation adapts those techniques to CSX's native grass shader
-and collision contracts. It does not replace them with the donor's newer
-wind, deformation or pixel shader implementations.
+and collision contracts. Open Shaders' separate Wind feature and its
+replacement grass bending formulas are not included. CSX retains its
+existing wind and collision behavior.
 
 The lifecycle and VR contracts were checked against Open Shaders
 [PR815](https://github.com/alandtse/open-shaders/pull/815),

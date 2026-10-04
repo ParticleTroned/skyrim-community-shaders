@@ -167,6 +167,13 @@ gates remain covered. The menu contract checks the shared disabled scope
 around all Stabilizer pages. Full in-game UI acceptance remains pending
 installation by the user; no DLL deployment is part of this work.
 
+Each integration-test run exclusively creates a directory with a clock
+suffix and retries name collisions. Successful runs remove only their own
+fixture; failed runs retain theirs and report its path. A retained legacy
+fixture reproduced the old startup failure. After this correction, two
+sequential and four concurrent runs passed in that same working directory,
+preserved the retained fixture byte-for-byte, and removed their own fixtures.
+
 The universal DLL build checks SE/AE/VR compilation. Runtime acceptance
 requires the beta interface, live edits to both INIs, UI inspection, an
 unavailable-interface case, and transitions using reloaded profiles.

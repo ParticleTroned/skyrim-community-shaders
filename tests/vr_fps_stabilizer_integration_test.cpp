@@ -3,6 +3,7 @@
 #include "VRAPI/VRFpsStabilizerInterface001.h"
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -177,12 +178,17 @@ namespace logger
 int main()
 {
 	using namespace VRFpsStabilizer;
-	testRoot = std::filesystem::current_path() / "stabilizer-integration-fixture";
 	try {
+		const auto parent = std::filesystem::current_path();
+		const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+		for (uint64_t attempt = 0; testRoot.empty(); ++attempt) {
+			auto candidate = parent / std::format("stabilizer-integration-fixture-{}-{}", nonce, attempt);
+			if (std::filesystem::create_directory(candidate))
+				testRoot = std::move(candidate);
+		}
 		auto& upscaling = globals::features::upscaling;
 		auto& config = upscaling.vrFpsStabilizerSessionConfig;
 		Require(!IsLoaded() && !upscaling.IsVRFpsStabilizerSyncActive());
-		Require(!std::filesystem::exists(testRoot));
 		std::filesystem::create_directories(testRoot / "SKSE" / "Plugins");
 		const auto main = ConfigPath();
 		const auto locations = ConfigPath(ConfigFile::Locations);
@@ -296,7 +302,9 @@ int main()
 		std::cout << "Stabilizer interface, save, queue and reload integration checks passed\n";
 		return 0;
 	} catch (const std::exception& e) {
-		std::cerr << e.what() << "\nFixture retained: " << testRoot << '\n';
+		std::cerr << e.what() << '\n';
+		if (!testRoot.empty())
+			std::cerr << "Fixture retained: " << testRoot << '\n';
 		return 1;
 	}
 }

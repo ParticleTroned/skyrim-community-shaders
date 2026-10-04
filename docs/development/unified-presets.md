@@ -146,6 +146,14 @@ revision 5 and weather-based lighting until enabled in Adaptive Balance.
 
 ## CSX compatibility contract
 
+All three Unified VR tiers explicitly disable the saved frame-generation
+request because VR cannot use frame generation.
+
+The runtime also normalizes frame generation and force-enable to zero
+when loading or saving VR settings, including older and custom presets.
+Both fields default to zero, and VR exposes no controls to enable them.
+SE and AE keep their frame-generation controls and existing behavior.
+
 The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
 package version, VR runtime, inclusive minimum `3.20`, exclusive maximum
@@ -160,6 +168,11 @@ review serialized keys, defaults, loading, saving and migrations. If those
 contracts are unchanged, retain the revision and base, regenerate the
 packages, and verify that only compatibility metadata changed in their
 settings. Never bypass the source check or refresh its hash automatically.
+
+PBR Grass adds an optional `True PBR.GrassEnabled` setting, defaulting to
+false when absent. Existing Unified VR tiers keep their authored settings
+and leave PBR Grass disabled. Its shader descriptor flags in `State.h`
+refresh the source fingerprint while retaining revision 5 and the base.
 
 Capture settings keep `FrameCaptureEye` authoritative. The base selects
 `Left`, so its legacy `Sequence.Outputs.SeparateEyes` mirror is false.

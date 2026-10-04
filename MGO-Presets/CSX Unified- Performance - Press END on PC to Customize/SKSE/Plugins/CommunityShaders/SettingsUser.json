@@ -71,7 +71,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.09.27.1",
+    "presetVersion": "d2026.10.04.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.20",
@@ -79,7 +79,7 @@
     },
     "settingsContract": {
       "revision": 5,
-      "sourceTreeSha256": "54D9165BC2450408C22DCA37015E483BE844696A228EA7CA29F95ED40C6663B6"
+      "sourceTreeSha256": "ECB0ED001C4E0A08E1A380CF78F3C09F62791C2CDB70B88CFDCF5EF45E07D972"
     }
   },
   "Upscaling": {
@@ -95,7 +95,7 @@
     "foveatedVendorDispatch": false,
     "frameGenerationAllowInMenus": false,
     "frameGenerationForceEnable": 0,
-    "frameGenerationMode": 1,
+    "frameGenerationMode": 0,
     "frameLimitMode": 1,
     "fsr4RuntimeEnable": true,
     "fsr4RuntimeSelectionSchemaVersion": 1,

@@ -225,10 +225,11 @@ namespace
 	};
 	struct DestroyHook
 	{
-		static void thunk(RE::BSMultiStreamInstanceTriShape* shape)
+		static void* thunk(RE::BSMultiStreamInstanceTriShape* shape, uint32_t flags)
 		{
 			globals::features::grassOptimizations.GetRenderer().RemoveShape(shape);
-			original(shape);
+			// Preserve the deleting destructor's allocation flags across the hook.
+			return original(shape, flags);
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};

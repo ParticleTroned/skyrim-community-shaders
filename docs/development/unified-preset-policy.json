@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.09.27.1",
+    "packageVersion": "d2026.10.04.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -19,7 +19,7 @@
     },
     "runtimeSettingsContract": {
         "revision": 5,
-        "sourceTreeSha256": "54D9165BC2450408C22DCA37015E483BE844696A228EA7CA29F95ED40C6663B6",
+        "sourceTreeSha256": "ECB0ED001C4E0A08E1A380CF78F3C09F62791C2CDB70B88CFDCF5EF45E07D972",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -186,6 +186,11 @@
         ["Wetterness", "WetternessFadeRange"]
     ],
     "commonOverrides": [
+        {
+            "path": ["Upscaling", "frameGenerationMode"],
+            "value": 0,
+            "reason": "VR presets cannot use frame generation; clear its inactive request so older NR gates accept them"
+        },
         {
             "path": ["Advanced", "Log Level"],
             "value": 2,

@@ -222,10 +222,15 @@ namespace Color
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? LinearToSkyrimGamma(color) : color;
 	}
 
+	float3 PBRDiffuse(float3 color)
+	{
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
+	}
+
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
+		return PBRDiffuse(color);
 #	else
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
 #	endif
@@ -464,10 +469,15 @@ namespace Color
 	const static float ReflectionNormalisationScale = 1.0;
 	const static float PBRLightingCompensation = Math::PI;
 
+	float3 PBRDiffuse(float3 color)
+	{
+		return LinearToSrgb(color);
+	}
+
 	float3 Diffuse(float3 color)
 	{
 #	if defined(TRUE_PBR)
-		return LinearToSrgb(color);
+		return PBRDiffuse(color);
 #	else
 		return color;
 #	endif

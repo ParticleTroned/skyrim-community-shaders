@@ -9,6 +9,7 @@
 #include "Utils/VRLoadingMenuClear.h"
 
 #include "Feature.h"
+#include "Features/GrassLighting.h"
 #include "Globals.h"
 #include "GpuPass.h"
 #include "Menu.h"
@@ -697,7 +698,9 @@ struct BSShader_LoadShaders
 		auto state = globals::state;
 		auto shaderCache = globals::shaderCache;
 
-		if (shaderCache->IsDiskCache() || shaderCache->IsDump()) {
+		const bool precompileGrass = shader->shaderType == RE::BSShader::Type::Grass &&
+		                             globals::features::truePBR.loaded && globals::features::grassLighting.loaded;
+		if (shaderCache->IsDiskCache() || shaderCache->IsDump() || precompileGrass) {
 			if (shaderCache->IsDiskCache()) {
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
 					feature->GenerateShaderPermutations(shader);
@@ -898,6 +901,7 @@ namespace GrassExtensions
 			auto* lightingProperty = *reinterpret_cast<RE::BSLightingShaderProperty**>(lightingPropertyAddress);
 
 			RE::BSLightingShaderProperty* grassProperty = func(property);
+			globals::features::truePBR.SetupGrassMaterial(lightingProperty, grassProperty);
 
 			if (lightingProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kEffectLighting)) {
 				grassProperty->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kEffectLighting, true);
@@ -917,13 +921,78 @@ namespace GrassExtensions
 			auto state = globals::state;
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrass);
+			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrassShading);
 
 			if (auto* shaderProperty = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().shaderProperty.get())) {
+				if (globals::features::truePBR.IsPBRGrassMaterial(shaderProperty->material)) {
+					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrass);
+					if (globals::features::truePBR.IsPBRGrassEnabled())
+						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::PBRGrassShading);
+				}
 				if (shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kEffectLighting)) {
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
 				}
 			}
 			globals::features::grassOptimizations.PrepareGeometry(pass);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct BSGrassShader_SetupTechnique
+	{
+		static bool thunk(RE::BSShader* shader, uint32_t technique)
+		{
+			const bool ready = func(shader, technique);
+			auto* state = globals::state;
+			auto* cache = globals::shaderCache;
+			if (!ready || !globals::features::truePBR.loaded || !globals::features::grassLighting.loaded ||
+				!cache->IsEnabled() || !state->ShaderEnabled(RE::BSShader::Type::Grass))
+				return ready;
+			auto* vertex = cache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
+			auto* pixel = cache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
+			if (vertex && pixel) {
+				// Native setup must address the reflected constants of the bound grass pair.
+				globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertex->shader), nullptr, 0);
+				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixel->shader), nullptr, 0);
+				*globals::game::currentVertexShader = vertex;
+				*globals::game::currentPixelShader = pixel;
+				globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
+			} else {
+				auto* nativeVertex = *globals::game::currentVertexShader;
+				auto* nativePixel = *globals::game::currentPixelShader;
+				globals::d3d::context->VSSetShader(nativeVertex ? reinterpret_cast<ID3D11VertexShader*>(nativeVertex->shader) : nullptr, nullptr, 0);
+				globals::d3d::context->PSSetShader(nativePixel ? reinterpret_cast<ID3D11PixelShader*>(nativePixel->shader) : nullptr, nullptr, 0);
+			}
+			return ready;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	class GrassBaseMaterial final : public RE::BSLightingShaderMaterialBase
+	{
+	public:
+		RE::BSShaderMaterial* Create() override
+		{
+			return CreateMaterial(RE::BSShaderMaterial::Feature::kDefault);
+		}
+	};
+	static_assert(sizeof(GrassBaseMaterial) == sizeof(RE::BSLightingShaderMaterialBase));
+
+	struct BSGrassShader_SetupMaterial
+	{
+		static void thunk(RE::BSShader* shader, const RE::BSLightingShaderMaterialBase* material)
+		{
+			auto& pbr = globals::features::truePBR;
+			if (!pbr.IsPBRGrassMaterial(material)) {
+				func(shader, material);
+				return;
+			}
+			// Native grass reads the base material layout, even with PBR shading disabled.
+			GrassBaseMaterial legacyMaterial;
+			legacyMaterial.CopyMembers(const_cast<RE::BSLightingShaderMaterialBase*>(material));
+			func(shader, &legacyMaterial);
+			pbr.SetupGrassShaderMaterial(shader, material);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1809,6 +1878,22 @@ namespace Hooks
 #endif
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	template <class Draw>
+	void ProfileGrassRenderPass(RE::BSRenderPass* pass, Draw&& draw)
+	{
+		auto& pbr = globals::features::truePBR;
+		if (pbr.IsGrassDiagnosticsEnabled() && pass && pass->shader && pass->geometry &&
+			pass->shader->shaderType == RE::BSShader::Type::Grass) {
+			auto* property = static_cast<RE::BSShaderProperty*>(pass->geometry->GetGeometryRuntimeData().shaderProperty.get());
+			CS_GPU_PASS_SELECT(property && pbr.IsPBRGrassMaterial(property->material) && pbr.IsPBRGrassEnabled(), "Grass::PBRRequested", "Grass::Legacy");
+			draw();
+			return;
+		}
+		draw();
+	}
+#endif
+
 	// This is from 1.4.0 but absent in 1.4.6
 	void BSBatchRenderer_RenderPassImmediately1::thunk(
 		RE::BSRenderPass* a_pass,
@@ -1822,7 +1907,11 @@ namespace Hooks
 		}
 
 		// Original call from 1.4.0
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ProfileGrassRenderPass(a_pass, [&] { func(a_pass, a_technique, a_alphaTest, a_renderFlags); });
+#else
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+#endif
 	}
 
 	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
@@ -1880,7 +1969,11 @@ namespace Hooks
 			}
 
 			// Original call
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			ProfileGrassRenderPass(a_pass, [&] { func(a_pass, a_technique, a_alphaTest, a_renderFlags); });
+#else
 			func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+#endif
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
@@ -1892,7 +1985,11 @@ namespace Hooks
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ProfileGrassRenderPass(a_pass, [&] { BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags); });
+#else
 		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+#endif
 	}
 
 	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
@@ -2186,6 +2283,8 @@ namespace Hooks
 		}
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
+		stl::write_vfunc<0x2, GrassExtensions::BSGrassShader_SetupTechnique>(RE::VTABLE_BSGrassShader[0]);
+		stl::write_vfunc<0x4, GrassExtensions::BSGrassShader_SetupMaterial>(RE::VTABLE_BSGrassShader[0]);
 
 		logger::info("Hooking TESObjectLAND");
 		stl::detour_thunk<TESObjectLAND_SetupMaterial>(REL::RelocationID(18368, 18791));

@@ -6,6 +6,8 @@
 #include "VR.h"
 #include "VRDepthCullingTemporal.h"
 
+static_assert(static_cast<int>(VRDepthCullingTemporal::Mode::Hybrid) == GrassPolicy::kSceneHiZMode);
+
 namespace GrassPolicy
 {
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, Enabled, CrossCellBatching, FrustumCulling,

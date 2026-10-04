@@ -74,14 +74,14 @@ windows and GPU/CPU scopes measure this shader through the same backend.
 No diagnostic resource, production instrumentation or logging increase
 is added. Advanced remains default.
 
-Final performance and visual validation are pending on the new AIO.
-After installation and completion of the other chat's build sequence,
-verify the package identity and compare Off, Legacy, Advanced and Hybrid.
-Reset noon before every condition and phase, settle, separate counter
-windows from telemetry-disabled timings, and reject compiler activity or
-paused/menu windows. Compare complete frame cost as well as rejection.
-Use stereo motion sequences in addition to still images. Earlier measured
-packages do not qualify this shader, and no performance gain is claimed.
+The [final projected-face comparison](vr-hybrid-culling-adaptive-2026-10-04.md)
+found Hybrid at 15.59 ms CPU / 9.84 ms GPU versus Advanced at
+11.54 / 8.16 ms and Legacy at 10.97 / 8.13 ms. Candidate rejection was
+34.1% versus approximately 62% native. All observed Hybrid batches were
+accepted, without fallback or invalidation. This shader remained slower;
+no images were requested after that result. Motion and lifecycle
+qualification remain open. The linked report describes the subsequent,
+not yet measured adaptive traversal.
 
 ## Developer AIO
 
@@ -99,5 +99,5 @@ three preceding AIO archives were preserved.
 
 Complete build and delivery evidence is under worktree
 `build/astra-validation/hiz-faces-rebuild-20261003T232211751Z/`.
-This package has not been deployed or validated in game. Later report
-updates do not replace its compiled identity.
+The installed package and producer identity were verified for the linked
+in-game comparison. Later report updates do not replace its compiled identity.

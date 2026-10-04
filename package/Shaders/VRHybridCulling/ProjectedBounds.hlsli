@@ -1,6 +1,8 @@
 #ifndef CSX_HYBRID_PROJECTED_BOUNDS_HLSLI
 #define CSX_HYBRID_PROJECTED_BOUNDS_HLSLI
 
+#include "VRHybridCulling/TraversalDiagnostics.hlsli"
+
 namespace ProjectedBounds
 {
 
@@ -44,12 +46,13 @@ namespace ProjectedBounds
 		return true;
 	}
 
-	bool OccludedInRegion(float3 vertices[8], float2 minimumPixel, float2 maximumPixel, float depth, float bias)
+	bool OccludedInRegion(float3 vertices[8], float2 minimumPixel, float2 maximumPixel, float depth, float bias HIZ_DIAGNOSTIC_PARAMETERS)
 	{
 		// Allow for four rounds of interpolation in addition to the configured depth bias.
 		const float interpolationBias = 64.0 / 16777216.0;
 		[loop] for (uint faceTriangle = 0; faceTriangle < 12; ++faceTriangle)
 		{
+			HIZ_COUNT_TRIANGLE;
 			float3 polygon[8] = (float3[8])0;
 			polygon[0] = vertices[Triangles[faceTriangle].x];
 			polygon[1] = vertices[Triangles[faceTriangle].y];

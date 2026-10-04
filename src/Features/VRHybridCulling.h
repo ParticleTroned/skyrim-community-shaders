@@ -4,6 +4,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "VRDepthCullingTelemetry.h"
+#	include "VRHybridCullingDiagnostics.h"
 #	include "VRHybridCullingPolicy.h"
 #	include "VRHybridCullingSnapshot.h"
 #endif
@@ -70,6 +71,13 @@ namespace VRHybridCulling
 		SourceSnapshot snapshot{};
 		std::uint32_t lastObjectCount = 0;
 		StageTiming prepare, dispatch, readback;
+		bool traversalDiagnosticsEnabled = false;
+		bool traversalDiagnosticsAvailable = false;
+		const char* traversalDiagnosticsAvailability = "not_created";
+		std::uint64_t traversalSubmittedBatches = 0, traversalUnavailableBatches = 0;
+		VRHybridCullingDiagnostics::Totals traversal{};
+		std::uint64_t traversalBatches = 0, traversalNotReadyBatches = 0, traversalFailedBatches = 0;
+		std::uint64_t traversalDiscardedBatches = 0;
 	};
 #endif
 
@@ -84,6 +92,8 @@ namespace VRHybridCulling
 	/** Request pipeline recreation on the next render-thread preparation. */
 	void ClearShaderCache();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Select the extra shader/readback instrumentation independently of GPU profiling. */
+	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept;
 	/** Read current backend state and gated measurements without owning the render context. */
 	[[nodiscard]] Status GetStatus(std::uint64_t a_epoch, bool a_selected, bool a_enabled, bool a_installed);
 	/** Reset measurements while the shared depth-culling telemetry gate is exclusively held. */

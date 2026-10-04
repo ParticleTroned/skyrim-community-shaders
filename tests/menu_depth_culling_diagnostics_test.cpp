@@ -120,6 +120,43 @@ namespace
 			"An unexecuted replay was reported as zero cost");
 	}
 
+	void ValidatesTraversalRecords()
+	{
+		using VRHybridCullingDiagnostics::Record;
+		using VRHybridCullingDiagnostics::Summarize;
+		std::array records{ Record{ 257, 8, 0, 0 }, Record{ 5, 64, 20, 100 }, Record{ 1537, 12, 4, 9 } };
+		const std::array<std::uint32_t, 3> visibility{ 0, 1, 1 };
+		const auto totals = Summarize(records, visibility);
+		Require(totals && totals->objects == 3 && totals->depthLoads == 84 &&
+					totals->eyeReasons[1] == 3 && totals->eyeReasons[0] == 1 &&
+					totals->eyeReasons[5] == 1 && totals->eyeReasons[6] == 1,
+			"Traversal records lost skipped eyes, terminal reasons or work");
+		for (const auto invalid : { Record{ 0, 0, 0, 0 }, Record{ 256, 8, 0, 0 }, Record{ 258, 8, 0, 0 },
+				 Record{ 257, 129, 0, 0 }, Record{ 257, 8, 9, 0 }, Record{ 257, 8, 1, 13 }, Record{ 0x10001, 8, 0, 0 }, Record{ 5, 63, 0, 0 }, Record{ 6, 65, 0, 0 }, Record{ 1281, 67, 0, 0 } }) {
+			records[0] = invalid;
+			Require(!Summarize(records, visibility), "Malformed traversal records were partially published");
+		}
+		records[0] = Record{ 5, 64, 20, 100 };
+		Require(!Summarize(records, visibility), "Traversal records disagreed with native-indexed visibility");
+		VRDepthCullingTemporal::Status temporal{};
+		VRHybridCulling::Status hybrid{};
+		hybrid.traversalDiagnosticsEnabled = true;
+		hybrid.traversalDiagnosticsAvailable = true;
+		hybrid.traversal = *totals;
+		hybrid.traversalBatches = 1;
+		hybrid.traversalDiagnosticsAvailability = "setup_failed";
+		hybrid.traversalSubmittedBatches = 10;
+		hybrid.traversalUnavailableBatches = 6;
+		hybrid.traversalNotReadyBatches = 2;
+		hybrid.traversalFailedBatches = 3;
+		hybrid.traversalDiscardedBatches = 4;
+		const auto status = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("traversalDiagnostics");
+		Require(status.at("objects") == 3 && status.at("depthLoads") == 84 && status.at("eyeReasons").at("depth_budget") == 1 &&
+					status.at("notReadyBatches") == 2 && status.at("failedBatches") == 3 && status.at("discardedBatches") == 4 &&
+					status.at("submittedBatches") == 10 && status.at("unavailableBatches") == 6 && status.at("availability") == "setup_failed",
+			"Traversal status lost measurements or missing-readback evidence");
+	}
+
 	void PreservesNativeVisibilityBeforeAndAfterRecovery()
 	{
 		VRDepthCullingTemporal::Status temporal{};
@@ -142,6 +179,7 @@ namespace
 int main()
 {
 	try {
+		ValidatesTraversalRecords();
 		PreservesInactiveAndFallbackEvidence();
 		DistinguishesMissingSourceAndUnmeasuredTiming();
 		SeparatesNativeReadbackFromValidation();

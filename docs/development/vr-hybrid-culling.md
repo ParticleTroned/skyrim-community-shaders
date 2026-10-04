@@ -6,12 +6,10 @@ four-mode assay found Hybrid materially slower than Advanced and Legacy.
 Limited static stereo review found no obvious missing solid geometry in
 sampled previews; motion and lifecycle correctness remain unqualified.
 See the [2026-10-03 runtime report](vr-hybrid-culling-runtime-2026-10-03.md).
-The subsequent [bounded refinement](vr-hybrid-culling-refinement-2026-10-03.md)
-corrects a reproduced loss of rejection from coarse padded cells. Its
-shader regressions pass; its in-game rejection rate and cost are unmeasured.
-The [projected-face refinement](vr-hybrid-culling-faces-2026-10-04.md)
-also tightens coverage and depth within inconclusive finer cells. Final
-performance and motion validation of the new shader remain pending.
+The [projected-face comparison and adaptive traversal](vr-hybrid-culling-adaptive-2026-10-04.md)
+record the latest four-mode measurements. Projected-face Hybrid remained
+slower and rejected fewer candidates. Adaptive traversal now refines only
+unresolved regions; its in-game performance and motion checks are pending.
 
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
@@ -38,8 +36,11 @@ together for normal comparison.
 The compute test writes every active native result index, then copies
 the result resource to the existing native staging resource. The normal
 readback hook consumes that submission before the engine resets its
-collection. There is no additional readback or synchronous GPU query.
+collection. Ordinary operation adds no readback or synchronous GPU query.
 The native staging map itself can still block if the GPU is late.
+An independently enabled DevBench diagnostic permutation adds a separate
+bounded result copy and nonblocking Map after accepted native readback.
+It never changes native visibility, and is disabled for timing.
 
 D3D11 context-state isolation restores the engine's bindings after the
 compute work. New resources use the shared naming helper and RAII.
@@ -73,12 +74,14 @@ crossings, nonfinite data and non-affine bounds retain visibility.
 Projected rectangles include a pixel guard margin. If that margin leaves
 the eye viewport, visibility is retained. The shader selects a mip at
 which the complete rectangle overlaps at most four cells and reads every
-one of them. If this coarse proof is inconclusive, it recomputes complete
-finer rectangles from the original guarded base-cell bounds. The fixed
-64-load budget per eye includes the initial four loads and every finer
-grid. Budget exhaustion and invalid depth retain visibility. Finer grids
-can exclude unrelated padding or clear depth without removing any cell
-covering the guarded rectangle. Within an inconclusive finer cell, all
+one of them. If this coarse proof is inconclusive, it retains individually
+proven roots and descends only into unresolved cells. The original four
+samples are reused. A 40-entry depth-first stack holds packed cell/mip
+coordinates; children are restricted to the guarded base-cell bounds.
+The 64-load limit counts actual reads, including the initial four.
+Budget or stack exhaustion, invalid depth and unresolved finest cells
+retain visibility. Only completing all pending regions proves occlusion.
+Within an inconclusive cell, all
 projected box faces are clipped against the cell expanded by the pixel
 guard and a rounding margin. Empty regions can be excluded; intersecting
 faces use their clipped nearest depth and an additional interpolation

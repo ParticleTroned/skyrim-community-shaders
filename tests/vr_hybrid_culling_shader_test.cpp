@@ -8,9 +8,11 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -33,21 +35,38 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		std::unique_ptr<D3D11ShaderTest::ConstantBuffer> constants;
 
-		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth)
+		Kernel(ID3D11Device* device, const wchar_t* path, const char* constantsName, bool reversedDepth, bool diagnostics = false)
 		{
 			ComPtr<ID3DBlob> code, errors;
-			const D3D_SHADER_MACRO reverseDefine[]{ { "CSX_DEPTH_ORDER_TEST_REVERSED", "1" }, { nullptr, nullptr } };
+			std::vector<D3D_SHADER_MACRO> defines;
+			if (reversedDepth)
+				defines.push_back({ "CSX_DEPTH_ORDER_TEST_REVERSED", "1" });
+			if (diagnostics)
+				defines.push_back({ "CSX_HIZ_DIAGNOSTICS", "1" });
+			defines.push_back({ nullptr, nullptr });
 			Util::CustomInclude includes{ "package/Shaders" };
-			const auto result = D3DCompileFromFile(path, reversedDepth ? reverseDefine : nullptr, &includes, "main", "cs_5_0",
-				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-				0, code.GetAddressOf(), errors.GetAddressOf());
-			if (FAILED(result) && errors)
-				throw std::runtime_error(static_cast<const char*>(errors->GetBufferPointer()));
-			Check(result);
+			static std::map<std::tuple<std::wstring, bool, bool>, ComPtr<ID3DBlob>> compiled;
+			auto& cached = compiled[{ std::wstring(path), reversedDepth, diagnostics }];
+			if (cached) {
+				code = cached;
+			} else {
+				std::wcout << L"Compiling " << path << L" reversed=" << reversedDepth << L" diagnostics=" << diagnostics << std::endl;
+				const auto result = D3DCompileFromFile(path, defines.data(), &includes, "main", "cs_5_0",
+					D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+					0, code.GetAddressOf(), errors.GetAddressOf());
+				if (FAILED(result) && errors)
+					throw std::runtime_error(static_cast<const char*>(errors->GetBufferPointer()));
+				Check(result);
+				cached = code;
+			}
 			Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
 			Util::SetResourceName(shader.Get(), "HybridCullingTest::%s", constantsName);
 			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 			constants = std::make_unique<D3D11ShaderTest::ConstantBuffer>(device, reflection.Get(), constantsName);
+			D3D11_SHADER_INPUT_BIND_DESC binding{};
+			const auto bound = reflection->GetResourceBindingDescByName("TraversalDiagnostics", &binding);
+			Require(diagnostics ? SUCCEEDED(bound) && binding.BindPoint == 1 : FAILED(bound),
+				"Diagnostic UAV leaked into the production shader or changed slots");
 		}
 
 		template <class T>
@@ -102,7 +121,8 @@ namespace
 		UINT sourceWidth, sourceHeight;
 		BuildConstants buildConstants{};
 		TestConstants testConstants{};
-		Kernel build, reduce, test;
+		Kernel build, reduce, test, diagnosticTest;
+		std::vector<std::array<std::uint32_t, 4>> lastDiagnostics;
 		ComPtr<ID3D11Texture2D> source, pyramid, staging;
 		ComPtr<ID3D11ShaderResourceView> sourceView, pyramidView;
 		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
@@ -112,7 +132,8 @@ namespace
 			device(device), context(context), reversedDepth(reversedDepth), sourceWidth(2 * eyeWidth), sourceHeight(eyeHeight),
 			build(device, L"package/Shaders/VRHybridCulling/BuildDepthCS.hlsl", "BuildConstants", reversedDepth),
 			reduce(device, L"package/Shaders/VRHybridCulling/ReduceDepthCS.hlsl", "ReduceConstants", reversedDepth),
-			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth)
+			test(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth),
+			diagnosticTest(device, L"package/Shaders/VRHybridCulling/TestBoundsCS.hlsl", "TestConstants", reversedDepth, true)
 		{
 			testConstants.eyes = { EyeRect{ 0, 0, eyeWidth, eyeHeight }, EyeRect{ eyeWidth, 0, eyeWidth, eyeHeight } };
 			Require(TryMakeBuildConstants(testConstants.eyes, sourceWidth, sourceHeight, reduction,
@@ -176,9 +197,9 @@ namespace
 		void Unbind()
 		{
 			ID3D11ShaderResourceView* views[2]{};
-			ID3D11UnorderedAccessView* output = nullptr;
+			ID3D11UnorderedAccessView* outputs[2]{};
 			context->CSSetShaderResources(0, 2, views);
-			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+			context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
 		}
 
 		float EncodeDepth(float depth) const
@@ -252,6 +273,29 @@ namespace
 			std::vector<std::uint32_t> values(objects.size());
 			std::memcpy(values.data(), mapped.pData, values.size() * sizeof(std::uint32_t));
 			context->Unmap(results.staging.Get(), 0);
+			StructuredBuffer diagnostics(device, 16, static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
+			diagnosticTest.Bind(context, constants);
+			ID3D11UnorderedAccessView* outputs[]{ output, diagnostics.uav.Get() };
+			context->CSSetShaderResources(0, 2, views);
+			context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
+			context->Dispatch((testConstants.objectCount + 63) / 64, 1, 1);
+			Unbind();
+			context->CopyResource(results.staging.Get(), results.buffer.Get());
+			Check(context->Map(results.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+			const bool identical = std::memcmp(values.data(), mapped.pData, values.size() * sizeof(std::uint32_t)) == 0;
+			context->Unmap(results.staging.Get(), 0);
+			Require(identical, "Diagnostic shader changed visibility");
+			context->CopyResource(diagnostics.staging.Get(), diagnostics.buffer.Get());
+			Check(context->Map(diagnostics.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+			lastDiagnostics.resize(objects.size());
+			std::memcpy(lastDiagnostics.data(), mapped.pData, lastDiagnostics.size() * 16);
+			context->Unmap(diagnostics.staging.Get(), 0);
+			for (std::size_t index = 0; index < lastDiagnostics.size(); ++index) {
+				const auto& record = lastDiagnostics[index];
+				Require(record[1] <= 128 && record[2] <= record[1] && record[3] <= 12 * record[2],
+					"Diagnostic traversal work exceeded the budget");
+				Require((record[0] == 257) == (values[index] == 0), "Diagnostic reasons disagree with visibility");
+			}
 			return values;
 		}
 	};
@@ -309,7 +353,7 @@ namespace
 		fixture.testConstants.pixelGuardBand = 2.0f;
 		const std::array objects{ BoxForGuardedPixels(fixture, { 1000.25f, 400.25f, 1323.75f, 723.75f }) };
 		fixture.Build(std::vector<float>(fixture.sourceWidth * fixture.sourceHeight, 0.4f));
-		// Each eye needs grids of 4, 6, 12 and 36 cells before padding is excluded.
+		// Interior coverage remains provable even when coarse cells include far-valued padding.
 		Require(fixture.Test(objects)[0] == 0, "Padded coarse cells prevented an interior occlusion proof");
 	}
 
@@ -348,7 +392,7 @@ namespace
 		Require(fixture.Test(objects)[0] == 1, "Thin-rectangle refinement omitted the second eye's visible depth");
 	}
 
-	void IncludesCoarseLoadsInPerEyeBudget(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	void RefinesOnlyUnresolvedCells(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
 	{
 		Fixture fixture(device, context, reversedDepth, 32, 32, 1);
 		const std::array objects{ BoxForGuardedPixels(fixture, { 1.25f, 0.25f, 6.75f, 7.75f }) };
@@ -360,8 +404,50 @@ namespace
 					objects[0].entry[2][3] - objects[0].entry[2][2]),
 			"Budget fixture accidentally includes the clear pixel in its guarded cells");
 		fixture.Build(pixels);
-		// The second eye needs 4 + 16 + 48 loads; omitting the coarse four would allow it.
-		Require(fixture.Test(objects)[0] == 1, "Refinement exceeded its 64-load per-eye budget");
+		// One inconclusive branch no longer consumes complete finer rectangles.
+		Require(fixture.Test(objects)[0] == 0, "Adaptive traversal failed to retain completed coarse proofs");
+		Require(fixture.lastDiagnostics[0][1] < 64, "Adaptive traversal reloaded complete finer grids");
+	}
+
+	void ExhaustsActualLoadBudget(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		Fixture fixture(device, context, reversedDepth, 256, 256, 1);
+		fixture.testConstants.pixelGuardBand = 1.0f;
+		auto sloped = Box();
+		sloped.entry[0][0] = sloped.entry[1][1] = 0.8f;
+		sloped.entry[2][0] = 0.25f;
+		sloped.entry[2][2] = 0.01f;
+		sloped.entry[2][3] = 0.65f;
+		const std::array objects{ sloped };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight);
+		for (UINT y = 0; y < fixture.sourceHeight; ++y)
+			for (UINT x = 0; x < fixture.sourceWidth; ++x) {
+				const float ndcX = (static_cast<float>(x % 256) + 0.5f) / 128.0f - 1.0f;
+				pixels[y * fixture.sourceWidth + x] = 0.64f + 0.25f * ndcX / 0.8f - 0.02f;
+			}
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 1, "Partial traversal established an occlusion proof");
+		Require(fixture.lastDiagnostics[0][0] == 5 && fixture.lastDiagnostics[0][1] == 64,
+			"Budget exhaustion did not stop after exactly 64 first-eye depth reads");
+	}
+
+	void TraversesMaximumMipDepth(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth)
+	{
+		Fixture fixture(device, context, reversedDepth, 8192, 8, 2);
+		Require(fixture.testConstants.pyramid.mipCount == 12, "Fixture did not reach the admitted mip limit");
+		const std::array objects{ BoxForGuardedPixels(fixture, { 8.25f, 2.25f, 8183.75f, 5.75f }) };
+		std::vector<float> pixels(fixture.sourceWidth * fixture.sourceHeight, 0.4f);
+		for (const auto& eye : fixture.testConstants.eyes)
+			for (UINT y = 0; y < eye.height; ++y) {
+				pixels[y * fixture.sourceWidth + eye.x] = 1.0f;
+				pixels[y * fixture.sourceWidth + eye.x + eye.width - 1] = 1.0f;
+			}
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 0, "Deep one-dimensional traversal lost a covered region or exceeded its stack");
+		pixels[4 * fixture.sourceWidth + fixture.testConstants.eyes[1].x + 8180] = 1.0f;
+		fixture.Build(pixels);
+		Require(fixture.Test(objects)[0] == 1, "Deep traversal omitted a second-eye leaf at a high cell coordinate");
+		Require((fixture.lastDiagnostics[0][0] >> 8) == 6, "Unresolved deep leaf was not attributed to the second eye");
 	}
 
 	void ChecksRefinedProofsAgainstSourcePixels(Fixture& fixture)
@@ -776,7 +862,9 @@ int main()
 			RefinesPastPaddedEyeCells(device.Get(), context.Get(), reversedDepth);
 			PreservesRefinedFootprintAndStereo(fixture);
 			RefinesThinRectangles(fixture);
-			IncludesCoarseLoadsInPerEyeBudget(device.Get(), context.Get(), reversedDepth);
+			RefinesOnlyUnresolvedCells(device.Get(), context.Get(), reversedDepth);
+			ExhaustsActualLoadBudget(device.Get(), context.Get(), reversedDepth);
+			TraversesMaximumMipDepth(device.Get(), context.Get(), reversedDepth);
 			ChecksRefinedProofsAgainstSourcePixels(fixture);
 			ExcludesEmptyProjectedCorners(fixture);
 			UsesLocalFaceDepth(fixture);

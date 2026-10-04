@@ -326,7 +326,7 @@ namespace NrReplay
 				if (PairRecording()) {
 					auto& region = PairRegion();
 					ProviderFloor::Require(region.descriptors.size() == KernelPair::kStages &&
-											   HashText(region.stageSignature) == KernelPair::kStageSha256 && HashText(region.commandSignature) == KernelPair::kCommandSha256,
+											   HashText(region.stageFamilySignature) == KernelPair::kStageFamilySha256 && HashText(region.commandSignature) == KernelPair::kCommandSha256,
 						"kernel pair stage or command schedule differs from the pinned live trace");
 					ProviderFloor::Require(descriptorGuard_.Healthy() && descriptorGuard_.WarmupObserved(),
 						"kernel pair descriptor cache miss or missing observer warmup proof");
@@ -454,22 +454,36 @@ namespace NrReplay
 		{
 			std::array<std::size_t, 4> launches{};
 			std::array<std::string, 4> identities{};
+			std::array<std::string, 4> familyIdentities{};
+			KernelPair::Pairing pairs = KernelPair::kSameEyePairs;
 			bool qualified = false;
+			std::string reason;
 		};
 		[[nodiscard]] RuntimeGraph GetRuntimeGraph() const
 		{
 			RuntimeGraph result;
 			std::array<std::string, 4> signatures;
+			std::array<std::string, 4> families;
 			for (const auto& captured : descriptors_) {
 				const auto index = captured.eye * 2 + captured.region;
 				ProviderFloor::Require(captured.eye < 2 && captured.region < 2, "runtime graph region identity out of bounds");
 				++result.launches[index];
 				signatures[index] += StageSignature(captured);
+				families[index] += StageSignature(captured, false);
 			}
 			result.qualified = true;
 			for (std::size_t i = 0; i < signatures.size(); ++i) {
 				result.identities[i] = HashText(signatures[i]);
-				result.qualified &= result.launches[i] == KernelPair::kStages && result.identities[i] == KernelPair::kStageSha256;
+				result.familyIdentities[i] = HashText(families[i]);
+				result.qualified &= result.launches[i] == KernelPair::kStages && result.familyIdentities[i] == KernelPair::kStageFamilySha256;
+			}
+			if (!result.qualified)
+				result.reason = "original fallback: actual graph family differs from the qualified private kernel catalog";
+			if (const auto pairs = KernelPair::CompatiblePairing(signatures))
+				result.pairs = *pairs;
+			else if (ModelBatchEnabled() && result.qualified) {
+				result.qualified = false;
+				result.reason = "original fallback: independent regions have no complete matching of identical native launch shapes";
 			}
 			return result;
 		}
@@ -867,12 +881,15 @@ namespace NrReplay
 			region.commandSignature += signature;
 			region.commands.push_back(std::move(command));
 		}
-		std::string StageSignature(const Descriptor& captured) const
+		std::string StageSignature(const Descriptor& captured, bool includeXY = true) const
 		{
 			const auto& d = captured.value;
 			const auto& function = functions_.at(captured.functionIdentity);
 			std::string signature = modules_.at(function.moduleIdentity).sha256 + "|" + function.name;
-			for (const auto value : { d.gridDim.x, d.gridDim.y, d.gridDim.z, d.blockDim.x, d.blockDim.y, d.blockDim.z, d.dynSharedMemBytes, d.paramSize })
+			if (includeXY)
+				for (const auto value : { d.gridDim.x, d.gridDim.y })
+					signature += '|' + std::to_string(value);
+			for (const auto value : { d.gridDim.z, d.blockDim.x, d.blockDim.y, d.blockDim.z, d.dynSharedMemBytes, d.paramSize })
 				signature += '|' + std::to_string(value);
 			return signature + '\n';
 		}
@@ -881,6 +898,7 @@ namespace NrReplay
 			auto& region = PairRegion();
 			ProviderFloor::Require(region.descriptors.size() < KernelPair::kStages, "kernel pair has too many stages");
 			region.stageSignature += StageSignature(descriptors_.at(id));
+			region.stageFamilySignature += StageSignature(descriptors_.at(id), false);
 			if (region.descriptors.size() == KernelPair::kTargetStage)
 				region.target = region.commands.size();
 			region.descriptors.push_back(id);
@@ -905,7 +923,7 @@ namespace NrReplay
 				const auto& d = target.value;
 				const auto& function = functions_.at(target.functionIdentity);
 				Require(function.name == KernelChain::kReplacementEntry && modules_.at(function.moduleIdentity).sha256 == KernelChain::kReplacementOriginalModuleSha256 &&
-							d.paramSize == 96 && d.gridDim.x == 20 && d.gridDim.y == 20 && d.gridDim.z == 1 &&
+							d.paramSize == 96 && d.gridDim.x && d.gridDim.y && d.gridDim.z == 1 &&
 							d.blockDim.x == 32 && d.blockDim.y == 1 && d.blockDim.z == 1 && d.dynSharedMemBytes == 0,
 					"kernel pair original target launch is outside the pinned N2 ABI");
 				if (!device)
@@ -913,20 +931,24 @@ namespace NrReplay
 				Require(function.device == device && device, "kernel pair target native devices differ");
 				const auto& packet = target.bytes;
 				const auto read64 = [&](std::size_t offset) { return KernelPair::Read<std::uint64_t>(packet, offset); };
-				Require(KernelPair::Read<std::uint32_t>(packet, 0x18) == 160 && KernelPair::Read<std::uint32_t>(packet, 0x1c) == 160 &&
-							read64(0x20) == 0 && read64(0x28) == 0 && read64(0x30) == 0 && read64(0x40) == 0 &&
+				const auto tensorWidth = KernelPair::Read<std::uint32_t>(packet, 0x18);
+				const auto tensorHeight = KernelPair::Read<std::uint32_t>(packet, 0x1c);
+				const auto tensorBytes = KernelPair::TensorByteSpan(tensorWidth, tensorHeight);
+				Require(read64(0x20) == 0 && read64(0x28) == 0 && read64(0x30) == 0 && read64(0x40) == 0 &&
 							read64(0x48) == 0 && read64(0x50) == 0 && read64(0x58) == 0,
 					"kernel pair target packet has unsupported extents or optional context");
 				const auto& pre = descriptors_.at(region.descriptors[2]).bytes;
 				const auto& clear = descriptors_.at(region.descriptors[1]).bytes;
 				const auto& next = descriptors_.at(region.descriptors[4]).bytes;
+				const auto clearElements = KernelPair::Read<std::uint32_t>(clear, 8);
 				Require(KernelPair::Read<std::uint32_t>(pre, 0xc8) == 0 && KernelPair::Read<std::uint64_t>(pre, 0xf8) == read64(0) &&
-							KernelPair::Read<std::uint64_t>(clear, 0) == read64(0x38) && KernelPair::Read<std::uint32_t>(clear, 8) == 0x5b00 &&
+							KernelPair::Read<std::uint64_t>(clear, 0) == read64(0x38) && clearElements &&
 							KernelPair::Read<std::uint64_t>(next, 0) == read64(8) && KernelPair::Read<std::uint64_t>(next, 0x28) == read64(0x38),
 					"kernel pair producer, completion clear or consumer dependencies differ");
-				scratch[i] = KernelPair::FindBuffer(*pairOwners_, read64(0), 160 * 160 * 32);
-				Require(KernelPair::FindBuffer(*pairOwners_, read64(8), 160 * 160 * 32) == scratch[i] &&
-							KernelPair::FindBuffer(*pairOwners_, read64(0x38), 0x16c00) == scratch[i],
+				const auto completionBytes = KernelPair::CompletionByteSpan(clearElements);
+				scratch[i] = KernelPair::FindBuffer(*pairOwners_, read64(0), tensorBytes);
+				Require(KernelPair::FindBuffer(*pairOwners_, read64(8), tensorBytes) == scratch[i] &&
+							KernelPair::FindBuffer(*pairOwners_, read64(0x38), completionBytes) == scratch[i],
 					"kernel pair tensor and completion ownership is not one private scratch allocation");
 				weights[i] = KernelPair::FindBuffer(*pairOwners_, read64(0x10), 1);
 				Require(weights[i] != scratch[i], "kernel pair weights alias writable scratch");
@@ -1051,8 +1073,13 @@ namespace NrReplay
 						const auto second = pairSample_->regions.at(operation.secondRegion).commands.at(operation.secondCommand).descriptor;
 						if (ModelBatchEnabled())
 							SubmitModelBatch(modelBatchIndex++, command.descriptor, second, repetition, batchExecution);
-						else
-							SubmitPairBatch(command.descriptor, second, operation.region / 2);
+						else {
+							const auto group = std::ranges::find_if(pairSample_->pairs, [&](const auto& pair) {
+								return pair[0] == operation.region && pair[1] == operation.secondRegion;
+							});
+							ProviderFloor::Require(group != pairSample_->pairs.end(), "kernel pair launch has no matching packet group");
+							SubmitPairBatch(command.descriptor, second, static_cast<std::size_t>(group - pairSample_->pairs.begin()));
+						}
 					} else {
 						pending_ = { command.descriptor };
 						Flush("pair_original_launch", originalControl);
@@ -1063,19 +1090,46 @@ namespace NrReplay
 			}
 			ProviderFloor::Require(!ModelBatchEnabled() || (originalControl ? modelBatchIndex == 0 : modelBatchIndex == modelBatches_->size()), "model batch submission omitted paired stages");
 		}
+		void SelectCompatiblePairing()
+		{
+			if (ModelBatchEnabled() || pairMode_ == "batch" || pairMode_ == "layer-control") {
+				std::array<std::string, KernelPair::kRegions> signatures;
+				for (std::size_t index = 0; index < signatures.size(); ++index)
+					signatures[index] = pairSample_->regions[index].stageSignature;
+				if (const auto pairs = KernelPair::CompatiblePairing(signatures))
+					pairSample_->pairs = *pairs;
+				else
+					ProviderFloor::Require(!ModelBatchEnabled() && pairMode_ != "batch", "kernel batch regions have no complete identical-shape matching");
+			}
+		}
+		void ValidatePairBatchGeometry(std::size_t first, std::size_t second) const
+		{
+			const auto& a = descriptors_.at(first).value;
+			const auto& b = descriptors_.at(second).value;
+			ProviderFloor::Require(a.gridDim.x && a.gridDim.y && a.gridDim.z == 1 && a.paramSize == 96 && b.paramSize == 96 &&
+									   a.gridDim.x == b.gridDim.x && a.gridDim.y == b.gridDim.y && a.gridDim.z == b.gridDim.z &&
+									   a.blockDim.x == b.blockDim.x && a.blockDim.y == b.blockDim.y && a.blockDim.z == b.blockDim.z &&
+									   a.dynSharedMemBytes == b.dynSharedMemBytes,
+				"kernel pair selected-stage launch geometry or packet ABI differs");
+		}
 		void SubmitPair(const RepetitionCallback& begin, const RepetitionCallback& end)
 		{
 			ProviderFloor::Require(pairSample_ && !pairSample_->submitted, "kernel pair sample was already submitted");
+			SelectCompatiblePairing();
 			pairSample_->order = KernelPair::BuildOrder(*pairSample_, pairMode_, modelBatchStages_);
 			if (ComparisonEnabled())
 				pairSample_->controlOrder = KernelPair::BuildOrder(*pairSample_, repetitionControl_);
 			ValidatePairDependencies();
+			if (pairMode_ == "batch")
+				for (const auto& pair : pairSample_->pairs)
+					ValidatePairBatchGeometry(pairSample_->regions[pair[0]].descriptors[KernelPair::kTargetStage],
+						pairSample_->regions[pair[1]].descriptors[KernelPair::kTargetStage]);
 			if (ModelBatchEnabled())
 				PrepareModelBatches();
-			for (std::size_t eye = 0; eye < 2; ++eye) {
-				auto& packet = pairSample_->batchPackets[eye];
+			for (std::size_t group = 0; group < pairSample_->pairs.size(); ++group) {
+				auto& packet = pairSample_->batchPackets[group];
 				for (std::size_t region = 0; region < 2; ++region) {
-					const auto id = pairSample_->regions[eye * 2 + region].descriptors[KernelPair::kTargetStage];
+					const auto id = pairSample_->regions[pairSample_->pairs[group][region]].descriptors[KernelPair::kTargetStage];
 					std::copy(descriptors_[id].bytes.begin(), descriptors_[id].bytes.end(), packet.begin() + region * 96);
 				}
 			}
@@ -1137,11 +1191,12 @@ namespace NrReplay
 				"kernel comparison did not execute its complete private schedule count");
 			pairSample_->submitted = true;
 		}
-		void SubmitPairBatch(std::size_t first, std::size_t second, std::size_t eye)
+		void SubmitPairBatch(std::size_t first, std::size_t second, std::size_t group)
 		{
+			ValidatePairBatchGeometry(first, second);
 			auto value = descriptors_.at(first).value;
 			value.hFunction = replacement_->function;
-			value.pParams = pairSample_->batchPackets.at(eye).data();
+			value.pParams = pairSample_->batchPackets.at(group).data();
 			value.paramSize = 192;
 			value.gridDim.z = 2;
 			for (const auto id : { first, second }) {
@@ -1149,11 +1204,11 @@ namespace NrReplay
 				descriptors_[id].submittedFunction = Pointer(value.hFunction);
 			}
 			const auto started = Clock::now();
-			pairSample_->batchAttempted.at(eye) = true;
+			pairSample_->batchAttempted.at(group) = true;
 			++nativeAttempts_;
 			++privateAttempts_;
 			const auto status = real_(realList_, &value, 1);
-			pairSample_->batchStatuses.at(eye) = status;
+			pairSample_->batchStatuses.at(group) = status;
 			const auto duration = Elapsed(started);
 			apiCpu_ += duration;
 			++submittedCalls_;
@@ -1186,14 +1241,19 @@ namespace NrReplay
 				for (const auto& region : pairSample_->regions)
 					regions.push_back({ { "complete", region.complete }, { "stageSignatureSha256", HashText(region.stageSignature) },
 						{ "commandSignatureSha256", HashText(region.commandSignature) }, { "logicalDescriptors", region.descriptors } });
-				for (std::size_t eye = 0; eye < 2; ++eye) {
-					if (!pairSample_->batchAttempted[eye])
+				for (std::size_t group = 0; group < pairSample_->pairs.size(); ++group) {
+					if (!pairSample_->batchAttempted[group])
 						continue;
-					physicalBatches.push_back({ { "eye", eye }, { "function", replacement_->functionValue },
-						{ "candidateSha256", replacement_->candidateSha256 }, { "grid", { 20, 20, 2 } }, { "block", { 32, 1, 1 } },
-						{ "paramSize", 192 }, { "dynamicSharedMemoryBytes", 0 }, { "paramsHex", Hex(pairSample_->batchPackets[eye]) },
-						{ "paramsSha256", Hash(pairSample_->batchPackets[eye]) }, { "status", pairSample_->batchStatuses[eye] },
-						{ "sourceDescriptorIds", { pairSample_->regions[eye * 2].descriptors[KernelPair::kTargetStage], pairSample_->regions[eye * 2 + 1].descriptors[KernelPair::kTargetStage] } } });
+					const auto& pair = pairSample_->pairs[group];
+					const auto first = pairSample_->regions[pair[0]].descriptors[KernelPair::kTargetStage];
+					const auto second = pairSample_->regions[pair[1]].descriptors[KernelPair::kTargetStage];
+					const auto& value = descriptors_.at(first).value;
+					physicalBatches.push_back({ { "eye", descriptors_.at(first).eye }, { "pair", group }, { "function", replacement_->functionValue },
+						{ "candidateSha256", replacement_->candidateSha256 }, { "grid", { value.gridDim.x, value.gridDim.y, 2 } },
+						{ "block", { value.blockDim.x, value.blockDim.y, value.blockDim.z } },
+						{ "paramSize", 192 }, { "dynamicSharedMemoryBytes", value.dynSharedMemBytes }, { "paramsHex", Hex(pairSample_->batchPackets[group]) },
+						{ "paramsSha256", Hash(pairSample_->batchPackets[group]) }, { "status", pairSample_->batchStatuses[group] },
+						{ "sourceDescriptorIds", { first, second } } });
 				}
 				for (const auto& repetition : pairSample_->repetitions) {
 					repetitions.push_back({ { "ordinal", repetition.ordinal }, { "eventBegin", repetition.eventBegin }, { "eventEnd", repetition.eventEnd },
@@ -1223,6 +1283,7 @@ namespace NrReplay
 			}
 			Json result{ { "requested", true }, { "mode", pairMode_ }, { "warmupForwardedUnchanged", warmup_ && (!ModelEnabled() || ModelBatchEnabled()) },
 				{ "performanceQualified", false }, { "qualityQualified", false }, { "regions", regions }, { "order", order },
+				{ "regionPairs", pairSample_ ? Json(pairSample_->pairs) : Json(nullptr) },
 				{ "physicalBatches", physicalBatches },
 				{ "scheduleRepetitions", scheduleRepetitions_ }, { "repetitions", repetitions },
 				{ "executedScheduleRepetitions", warmup_ ? std::size_t{ 1 } : pairSample_ ? static_cast<std::size_t>(std::count_if(pairSample_->repetitions.begin(), pairSample_->repetitions.end(), [](const auto& value) { return value.completed; })) :

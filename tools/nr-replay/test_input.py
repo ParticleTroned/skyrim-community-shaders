@@ -119,6 +119,189 @@ class ReplayInput(unittest.TestCase):
                         [[0, 0, 2**32, 64]]):
             self.run_fixture(1, rects=invalid)
 
+    def add_native_provenance(self):
+        self.manifest["runtime"] = {
+            "path": "C:/synthetic-native-capture/nvngx_dlssnr.dll", "version": "310.8.0",
+            "sha256": "8270b350cd82de5ce89806872cdd6b6a9249b80836b91bbeb3573470744cc206"}
+        self.frame["tuning"].update(intensity=.8, localToneStrength=.75,
+                                    localStructureStrength=.9, skinStructureStrength=.9,
+                                    style=3, singleSubrectScale=.75)
+        for eye in self.frame["eyes"]:
+            image = lambda role: {
+                "backingExtent": {k: eye[role][k] for k in ("width", "height")},
+                "validRect": {"x": 0, "y": 0, **{k: eye[role][k] for k in ("width", "height")}}}
+            eye["nativeLayout"] = {
+                "coordinateDomain": "resource_local_texels",
+                "creationInputExtent": {k: eye["depth"][k] for k in ("width", "height")},
+                "creationOutputExtent": {k: eye["output"][k] for k in ("width", "height")},
+                **{role: image(role) for role in ("color", "depth", "motion", "output")},
+                "controlMask": None,
+                "inputInitializationContract": "valid_rectangles_before_evaluation",
+                "nativeReadableFootprint": None,
+                "motionSourceUnits": "full_input_normalized",
+                "motionConsumerUnits": "native_guide_pixels",
+                "motionConversion": "native_parameter_scale_once",
+                "motionVectorScale": eye["motionVectorScale"].copy(),
+                "featureUpscaling": eye["featureUpscaling"]}
+            eye.update(callerReset=False, synchronizedHistoryReset=True)
+
+    def test_native_layout_qualification_preserves_unequal_guides_and_regions(self):
+        self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
+                                     bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 171)
+        self.frame["eyes"].append(copy.deepcopy(self.eye))
+        self.add_native_provenance()
+        rects = [[0, 0, 128, 256], [128, 0, 128, 128]]
+        switch = ("--qualify-native-layout", "--experimental-kernel-chain", "forward")
+        for mode in (0, 1):
+            self.frame["mode"] = mode
+            self.assertIn("stateless C", self.run_fixture(1, rects=rects)["reason"])
+            result = self.run_fixture(rects=rects, extra=switch)
+            proof = result["nativeLayoutQualification"]
+            self.assertEqual(result["customRegions"], rects)
+            self.assertEqual(proof["evaluationResetPolicy"], "static_reset_each_evaluation")
+            self.assertFalse(proof["capturedHistoryReproduced"])
+            self.assertFalse(proof["qualityQualified"])
+            self.assertFalse(proof["productionPerformanceQualified"])
+            self.assertEqual(proof["capturedResetProvenance"],
+                             [dict(callerReset=False, synchronizedHistoryReset=True)] * 2)
+
+            self.assertEqual(proof["capturedTuning"]["singleSubrectScale"], .75)
+            for ordinal, layout in enumerate(proof["layouts"]):
+                self.assertEqual(layout["creationInputExtent"], dict(width=171, height=171))
+                self.assertEqual(layout["creationOutputExtent"], dict(width=256, height=256))
+                self.assertEqual(layout["motionVectorScale"], [64, 64])
+                self.assertTrue(layout["featureUpscaling"])
+                self.assertEqual(layout["output"]["validRect"],
+                                 dict(zip(("x", "y", "width", "height"), rects[ordinal % 2])))
+                self.assertEqual(layout["depth"]["validRect"],
+                                 (dict(x=0, y=0, width=86, height=171) if ordinal % 2 == 0 else
+                                  dict(x=85, y=0, width=86, height=86)))
+                self.assertEqual(layout["depth"], layout["motion"])
+
+    def test_native_layout_qualification_preserves_hdr_source_format(self):
+        self.prepare_storage_fixture(26, struct.pack("<I", 0x380 | (0x380 << 11) | (0x1c0 << 22)),
+                                     struct.pack("<I", 0x381 | (0x380 << 11) | (0x1c0 << 22)),
+                                     struct.pack("<I", 0x3c0 | (0x380 << 11) | (0x1c0 << 22)), 171)
+        self.add_native_provenance()
+        result = self.run_fixture(rects=[[0, 0, 128, 256], [128, 0, 128, 128]],
+                                  extra=("--qualify-native-layout", "--batch-timing-only"))
+        self.assertEqual(result["nativeLayoutQualification"]["resourceFormats"],
+                         dict(color=26, output=26, depth=41, motion=34))
+
+    def test_native_layout_flag_alone_requires_complete_runtime_identity(self):
+        self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
+                                     bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 171)
+        self.add_native_provenance()
+        rects = [[0, 0, 128, 256], [128, 0, 128, 128]]
+        switch = ("--qualify-native-layout",)
+        original = self.manifest.pop("runtime")
+        self.assertIn("captured runtime identity", self.run_fixture(1, rects=rects, extra=switch)["reason"])
+        for missing in ("path", "version", "sha256"):
+            self.manifest["runtime"] = {key: value for key, value in original.items() if key != missing}
+            self.assertIn("complete captured runtime identity", self.run_fixture(1, rects=rects, extra=switch)["reason"])
+        for key, invalid in (("path", ""), ("version", ""), ("sha256", "z" * 64), ("sha256", "0" * 63)):
+            self.manifest["runtime"] = {**original, key: invalid}
+            self.run_fixture(1, rects=rects, extra=switch)
+        self.manifest["runtime"] = original
+        result = self.run_fixture(rects=rects, extra=switch)
+        self.assertEqual(result["nativeLayoutQualification"]["capturedRuntimeIdentity"], original)
+        self.assertEqual(result["kernelChainExperiment"], {"requested": False})
+
+    def test_native_layout_qualification_admits_current_full_resolution_capacity(self):
+        self.frame["mode"] = 0
+        for role in ("color", "depth", "motion", "output"):
+            width, height = (1008, 1120) if role in ("depth", "motion") else (1512, 1680)
+            pixel = (struct.pack("<f", .5) if role == "depth" else bytes(4) if role == "motion" else
+                     bytes([20 + (role == "output"), 40, 60, 255]))
+            payload = pixel * (width * height)
+            (self.root / (role + ".bin")).write_bytes(payload)
+            self.eye[role].update(width=width, height=height, rowBytes=width*4,
+                                  sha256=hashlib.sha256(payload).hexdigest())
+        self.eye["outputSubrect"].update(width=1512, height=1680)
+        self.eye["motionVectorScale"] = [1008., 1120.]
+        self.frame["eyes"].append(copy.deepcopy(self.eye))
+        self.add_native_provenance()
+        rects = [[192, 576, 1320, 1104], [672, 96, 256, 320]]
+        result = self.run_fixture(rects=rects, extra=("--qualify-native-layout", "--batch-timing-only"))
+        layouts = result["nativeLayoutQualification"]["layouts"]
+        self.assertEqual(len(layouts), 4)
+        self.assertEqual(layouts[0], layouts[2])
+        self.assertEqual(layouts[1], layouts[3])
+        self.assertEqual(layouts[0]["depth"]["validRect"], dict(x=128, y=384, width=880, height=736))
+        self.assertEqual(layouts[1]["depth"]["validRect"], dict(x=448, y=64, width=171, height=214))
+        self.assertEqual(layouts[1]["motionVectorScale"], [1008, 1120])
+
+    def test_native_layout_qualification_keeps_legacy_c_shape_guards(self):
+        self.prepare_floor_fixture()
+        self.frame["eyes"].append(copy.deepcopy(self.eye))
+        self.add_native_provenance()
+        rects = [[0, 0, 128, 256], [128, 0, 128, 128]]
+        chain = ("--experimental-kernel-chain", "forward")
+        self.assertIn("equal region shapes", self.run_fixture(1, rects=rects, extra=chain)["reason"])
+        self.run_fixture(rects=rects, extra=("--qualify-native-layout",) + chain)
+        self.run_fixture(rects=rects, extra=("--qualify-native-layout", "--batch-timing-only"))
+        for extra in (("--native-handle-policy", "per-eye"), ("--experimental-provider-floor", "256")):
+            self.assertIn("without legacy", self.run_fixture(1, rects=rects,
+                          extra=("--qualify-native-layout",) + extra)["reason"])
+
+    def test_native_layout_qualification_attributes_first_input_from_full_capture(self):
+        self.prepare_floor_fixture()
+        self.add_native_provenance()
+        for source_frame in (11, 12):
+            frame = copy.deepcopy(self.frame)
+            frame["sourceWorldFrame"] = source_frame
+            self.manifest["frames"].append(frame)
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        result = self.run_fixture(rects=rects, extra=("--qualify-native-layout", "--batch-timing-only"))
+        proof = result["nativeLayoutQualification"]
+        self.assertEqual(proof["availableCapturedFrames"], 3)
+        self.assertEqual(proof["selectedSourceFrameIndex"], 0)
+        self.assertEqual(proof["selectedSourceWorldFrame"], 10)
+        self.assertIn("one immutable", self.run_fixture(1, rects=rects, extra=("--batch-timing-only",))["reason"])
+        self.manifest["frames"][2]["eyes"][0]["nativeLayout"]["creationInputExtent"]["width"] -= 1
+        self.assertIn("nativeLayout", self.run_fixture(1, rects=rects,
+                      extra=("--qualify-native-layout",))["reason"])
+
+    def test_native_layout_qualification_rejects_missing_or_inconsistent_provenance(self):
+        self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
+                                     bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 171)
+        rects = [[0, 0, 128, 128], [128, 128, 128, 128]]
+        switch = ("--qualify-native-layout",)
+        self.assertIn("nativeLayout", self.run_fixture(1, rects=rects, extra=switch)["reason"])
+        self.add_native_provenance()
+        original = copy.deepcopy(self.eye)
+        for change in (
+            lambda e: e["nativeLayout"]["creationInputExtent"].update(width=170),
+            lambda e: e["nativeLayout"]["depth"]["validRect"].update(x=1),
+            lambda e: e["nativeLayout"].update(featureUpscaling=False),
+            lambda e: e["nativeLayout"]["motionVectorScale"].__setitem__(0, 171),
+            lambda e: e["nativeLayout"].update(controlMask={}),
+            lambda e: e.pop("callerReset"),
+            lambda e: e.update(synchronizedHistoryReset=1),
+        ):
+            self.eye.clear()
+            self.eye.update(copy.deepcopy(original))
+            change(self.eye)
+            self.run_fixture(1, rects=rects, extra=switch)
+        self.eye.clear()
+        self.eye.update(original)
+        for scale in (0, 1.1, "unknown"):
+            self.frame["tuning"]["singleSubrectScale"] = scale
+            self.run_fixture(1, rects=rects, extra=switch)
+        self.frame["tuning"]["singleSubrectScale"] = .75
+
+        for style in (-1, 2**32):
+            self.frame["tuning"]["style"] = style
+            self.assertIn("unsigned parameter", self.run_fixture(1, rects=rects, extra=switch)["reason"])
+        self.frame["tuning"]["style"] = 4
+        self.assertIn("supported model range", self.run_fixture(1, rects=rects, extra=switch)["reason"])
+        self.frame["tuning"]["style"] = 3
+        self.frame["eyes"].append(copy.deepcopy(self.eye))
+        self.frame["eyes"][1]["nativeLayout"]["motion"]["backingExtent"]["height"] -= 1
+        self.run_fixture(1, rects=rects, extra=switch)
+        self.run_fixture(1, rects=rects, extra=switch + switch)
+        self.run_fixture(1, extra=switch)
+
     def prepare_floor_fixture(self):
         self.prepare_storage_fixture(28, bytes([128, 128, 128, 255]),
                                      bytes([129, 128, 128, 255]), bytes([240, 128, 128, 255]), 256)

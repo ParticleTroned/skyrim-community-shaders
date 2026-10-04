@@ -19,10 +19,15 @@ This loads the driver parameter core that Streamline supplies in game;
 the unchanged production runtime still validates its path, signature,
 version and hash. Bootstrap status and the SDK library hash are retained.
 The SDK is shut down after native GPU work and features have retired.
-Use normal local driver IPC access for GPU replay: the October 1 sandboxed
-SDK-only check stalled in NVIDIA telemetry shutdown, while the identical
-check and replay exited normally outside the sandbox. Preserve such cleanup
-diagnostics separately from completed GPU samples.
+Run native GPU qualification with normal local driver IPC and telemetry
+access rather than a restricted filesystem sandbox. October 1 SDK-only
+and October 4 C-layout checks stalled in NVIDIA telemetry during SDK
+shutdown inside the sandbox. With the same October 4 executable and
+contexts, native, original-schedule, N1 and shared-N2 repeats completed
+outside it. This is observed environment sensitivity, not a guarantee for
+every configuration. Preserve failed receipts and cleanup diagnostics
+separately from completed GPU samples; retain the real SDK shutdown rather
+than bypassing it when a deadline expires.
 
 Configure and build from the repository root. `CSX_NR_DEPENDENCY_ROOT` may
 point to another local checkout with the same populated external SDKs:
@@ -401,8 +406,10 @@ python tools/nr-replay/test_input.py build/nr-replay/Release/csx_nr_replay.exe
 python -m unittest discover -s tools/nr-replay -p 'test_packed*.py'
 ```
 
-All these additions belong to the standalone tool. They add no renderer
-work, game settings, shader permutation or production DLL dependency.
+These packed-input builders and offline runners add no renderer work,
+game settings, shader permutation or production DLL dependency. The
+separate qualified kernel-batching adapter is integrated into the game
+DLL, as described below.
 
 ### Output-equivalence diagnosis
 
@@ -529,6 +536,101 @@ measured dispatch geometry. These files explicitly leave visual quality and
 production performance unqualified; floor reduction may change model
 context or fail provider kernels and must not be promoted on timing alone.
 
+### Native-layout qualification across A/B/C
+
+`--qualify-native-layout` is an explicit replay admission path for original,
+N1 and N2 comparisons over each route's captured native resources. It
+requires `--rects` with one to four disjoint output rectangles per eye,
+each at least 128 pixels on both axes. A kernel-pair run requires exactly
+two regions in each of two eyes. Rectangles remain in native output
+coordinates; backing resources, input pixel density, colour format and
+motion-vector scale remain unchanged. Different region shapes are allowed.
+The pair scheduler separately requires compatible original kernel entries,
+parameter layouts and exact per-stage dispatch dimensions before recording
+a paired launch. Admission alone is not a batching or output-equivalence pass.
+
+Every captured eye must contain the exact full `nativeLayout`,
+`callerReset` and `synchronizedHistoryReset` provenance. Replay checks it
+against the resource descriptors and the production native-layout helper;
+missing or inconsistent metadata is rejected. Complete finite tuning is
+required, with style `0..3`. Supported colour/output formats are RGBA8,
+R11G11B10_FLOAT, RGBA16_FLOAT and RGBA32_FLOAT; depth remains R32_FLOAT and
+motion remains RG16_FLOAT. All resource files retain their recorded format
+and tightly packed bytes. For example, the current A/B captures use
+1512x1680 R11G11B10_FLOAT colour/output with 1008x1120 guides, while C uses
+1008x1120 RGBA8 colour/output and guides. No format conversion, resampling,
+padding change or inferred missing metadata is performed.
+
+A complete capture may contain multiple consecutive frames. This path
+selects frame index `0` and repeats that immutable source with a fresh
+native context per region and `reset=true` on each evaluation. The result's
+`nativeLayoutQualification` records the available frame count, selected
+source frame/world frame, captured reset provenance, exact per-context
+layouts, formats and tuning. `capturedHistoryReproduced` is false: earlier
+in-game A/B histories are not reconstructed. Compare original, N1 and N2
+under the same explicit `static_reset` policy; the capture's full native
+output is an edit control, not an expected tight-region output.
+
+The flag excludes native-handle reuse, provider-floor changes, capacity
+crops, storage-policy changes, temporal controls and inspection mode. The
+legacy C-only, equal-grid and fixed-shape guards remain when it is absent.
+Use a fresh producer executable and unique output directory for every
+lane. Preserve earlier measured executables, captures and receipts.
+
+The following coordinates reproduce one captured C geometry, not a
+universal character layout. Replace the manifest and rectangles with the
+route and exact native regions being tested. No wrapper for the legacy
+C-only campaign silently enables this path.
+
+```powershell
+$nativeArgs = @(
+    '--manifest', '<capture>/manifest.json',
+    '--runtime', '<physical-provider>/nvngx_dlssnr.dll',
+    '--rects', '[[192,320,816,800],[448,64,192,256]]',
+    '--qualify-native-layout',
+    '--experimental-kernel-chain', 'forward',
+    '--capture-kernel-modules', '--batch-timing-only',
+    '--warmup', '3', '--samples', '4', '--seconds', '120'
+)
+$replay = '<fresh-producer>/csx_nr_replay.exe'
+& $replay @nativeArgs --output build/validation/NEW-ORIGINAL `
+    --experimental-kernel-pair original
+& $replay @nativeArgs --output build/validation/NEW-N1 `
+    --experimental-kernel-pair original `
+    --experimental-model-replacement '<qualified-shared-n1-manifest.json>'
+& $replay @nativeArgs --output build/validation/NEW-N2 `
+    --experimental-kernel-pair model-batch `
+    --experimental-model-replacement '<qualified-shared-n2-manifest.json>'
+```
+
+Run original first, then N1 before N2, and preserve a final original
+reference. The pinned catalog must match the actual captured kernel
+family; the flag does not waive module, entry, packet, descriptor-owner,
+creation, barrier, heap, cache or retirement checks. Unknown or incompatible
+native work remains rejected. These are instrumented native-provider gates,
+not live A/B/C, temporal-quality or production-performance qualification.
+
+The `csx-nr-replay-results-v1` result stores each raw evaluated output under
+`cases[].samples[].outputFiles`. Each record contains `file`, `sha256`,
+`format`, `width`, `height`, `rowBytes`, `slot` and
+`scope: evaluated_rectangle`. Resolve files relative to that lane's output
+directory; recheck byte length and SHA-256. Compare records by sample
+iteration and physical slot with matching capture/source identity,
+native layouts, tuning and reset policy. Compare all packed bytes in their
+original DXGI format, including RGBA8 alpha where present; do not decode
+HDR data into PNG or reinterpret it as RGBA8 for an exact-output gate.
+For the four-region lanes above, require four private outputs per accepted
+sample, input-integrity checks
+and successful write footprints. Missing, failed, nonfinite, unwritten or
+outside-owned output cannot establish equivalence.
+
+With repeated schedules, full backing outputs additionally appear in
+`kernelScheduleRepetitions[].outputs` with `scope: full_output_resource`,
+`ownedRect` and `ownedSha256`. Compare the owned packed rectangle using its
+recorded format and row stride; separately verify sentinel preservation
+outside ownership. Keep submission CPU timing and native GPU timing
+separate from hashing, readback and final CSX composition.
+
 ### Experimental native kernel-chain grouping
 
 `--experimental-kernel-chain forward|group` is a standalone, default-off
@@ -536,8 +638,10 @@ experiment for the pinned provider used by the padding probe above. It
 preserves the padding floor, full captured inputs, original coordinates,
 private native handles, output ownership and reset policy. Admission accepts
 one immutable C capture and one to four nonoverlapping, equal-shape regions
-per eye, at least 128 pixels per side. Other provider, handle-reuse, capture,
-capacity and storage experiments cannot be combined with it.
+per eye, at least 128 pixels per side. The explicit native-layout path
+above extends capture admission without changing the grouping algorithm.
+Other provider, handle-reuse, capture, capacity and storage experiments
+cannot be combined with it.
 
 The experiment intercepts the provider's resolved `LaunchCuKernelChain`
 function pointer in its own replay process. Forward mode retains the original
@@ -615,8 +719,10 @@ batching, and its instrumented timings cannot qualify a performance result.
 `--experimental-kernel-pair original|control|layer-control|batch` qualifies the first active
 tilesync stage with two separate region contexts per eye. It requires the
 forward probe, module capture, batch-only timing and at least one unchanged
-warmup. Admission is limited to the pinned SM120 provider, stateless C,
-two 192x256 regions per eye and the captured 1008x1120 input grid. Native
+warmup. Legacy admission is limited to the pinned SM120 provider,
+stateless C, two 192x256 regions per eye and the captured 1008x1120 input
+grid. `--qualify-native-layout` enables the separate exact-layout path
+above; compatible pairs may span eyes when region shapes differ. Native
 handles, full input context, coordinates and reset policy remain separate.
 
 Steady evaluations record owned launch packets, barriers and heap bindings
@@ -660,12 +766,14 @@ to the entire captured model using the `original` or `layer-control` pair
 schedule. It pins the semantic identity of nine candidate modules and all
 44 launched entries, including each original packet size and grid-Z extent.
 Candidate paths can move, but their contents and entry contracts cannot.
-Only the frozen four-region SM120 workload is admitted. Every sample must
+The qualified SM120 kernel family and complete four-region ABI remain
+required; explicit native-layout qualification preserves other captured
+grids and region shapes while checking their actual dispatches. Every sample must
 exercise all entries; each submitted descriptor records the original and
 private function handles. Private modules, functions, parameter storage and
 device references remain owned through proven GPU idle and cache restoration.
-Uncertain retirement retains ownership until process exit. This standalone
-control does not enable a production backend or qualify performance.
+Uncertain retirement retains ownership until process exit. This offline
+control does not change the installed in-game adapter or qualify performance.
 
 The `model-batch` pair lane admits a separately pinned N=2 catalog after the
 corresponding transformed N=1 control has passed. Warmups prepare all private
@@ -679,7 +787,8 @@ context pointers, including scratch, history, output and completion state.
 The conservative schedule retains original commands and adds a global UAV
 join after each pair. It represents 632 logical stages with 316 physical
 kernel launches; actual execution, output equivalence and cost require their
-own receipts. It does not change the game DLL.
+own receipts. The qualified batching family is also used by the in-game
+adapter; replay commands do not modify or install the game DLL.
 
 For N1 fault isolation, `--experimental-model-n1-stages N` replaces only
 the first `N` stages in each region, including warmup (`1..158`, default
@@ -690,7 +799,7 @@ stages per region and exact per-function private submission counts. This
 diagnostic cutoff is unavailable to the in-game adapter.
 
 For fault isolation, `--experimental-model-batch-stages N` limits N=2
-dispatches to the first 1..158 stages per eye. Later stages follow the
+dispatches to the first 1..158 stages in each compatible pair. Later stages follow the
 unchanged `layer-control` schedule. The receipt records the limit and exact
 per-entry submission counts, including zero for unselected replacements.
 The full image and ownership checks remain required; a prefix pass does not
@@ -698,7 +807,7 @@ qualify the complete model.
 
 `--experimental-kernel-repetitions 2|3|4` is a separate sustained-GPU
 diagnostic for the complete `original`, `layer-control` or `model-batch`
-schedule. It retains one admitted set of stateless-C packets and records
+schedule. It retains one admitted set of static-reset packets and records
 the entire schedule repeatedly in one command list. Unchanged warmups
 still execute once. A global UAV boundary separates steady repetitions;
 there is no intermediate CPU wait or readback. The four-repetition limit
@@ -729,9 +838,12 @@ sentinel footprints remain mandatory. These paired timings diagnose GPU
 scheduling variation; they do not measure production frame cost.
 
 The [batching assessment](../../docs/development/nr-independent-context-batching-20261004.md)
-records the exact-output gates, matched timings and remaining runtime
-integration requirements. The current backend is a standalone prototype;
-it is not included in the game DLL or AIO installer.
+records the exact-output gates and matched timings. The qualified kernel
+family is integrated into the game DLL and its AIO kernel catalog, with
+selectable automatic single ROI, independent multi-ROI and batched
+multi-ROI methods. Unsupported native graphs use the independent path
+with a visible reason. This offline qualifier does not extend in-game
+admission or establish live A/B/C output quality or performance.
 
 `preserved_elf.py` emits native CUDA ELF from admitted live captures while
 preserving resource, stack, symbol and relocation metadata. It consumes

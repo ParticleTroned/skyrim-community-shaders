@@ -299,11 +299,13 @@ namespace NeuralRendering
 			const auto graph = s.probe->GetRuntimeGraph();
 			s.status.graphLaunches = graph.launches;
 			s.status.graphIdentities = graph.identities;
+			s.status.graphFamilyIdentities = graph.familyIdentities;
+			s.status.regionPairs = graph.pairs;
 			s.status.graphMatchesQualified = graph.qualified;
 			if (s.current->warmup && graph.qualified)
 				s.probe->PrepareRuntimeModel();
 			if (!graph.qualified)
-				s.Note("original fallback: actual graph differs from the qualified private kernel catalog");
+				s.Note(graph.reason);
 			s.current->packets = s.probe->TakeRuntimeFrame();
 			s.current->finished = true;
 			return true;

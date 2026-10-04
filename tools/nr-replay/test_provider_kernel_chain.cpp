@@ -130,9 +130,11 @@ namespace NrReplay
 		}
 		static KernelPair::Sample& PairSample(ProviderKernelChainProbe& probe) { return *probe.pairSample_; }
 		static nlohmann::json PairReceipt(const ProviderKernelChainProbe& probe) { return probe.PairReceipt(); }
-		static void ConfigureRepetition(ProviderKernelChainProbe& probe, ID3D12GraphicsCommandList* list)
+		static void ConfigureRepetition(ProviderKernelChainProbe& probe, ID3D12GraphicsCommandList* list,
+			KernelPair::Pairing pairs = KernelPair::kSameEyePairs, std::array<unsigned, 4> gridWidths = { 1, 1, 1, 1 })
 		{
 			probe.realList_ = list;
+			probe.pairSample_->pairs = pairs;
 			for (std::size_t region = 0; region < KernelPair::kRegions; ++region) {
 				auto& value = probe.pairSample_->regions[region];
 				value.complete = true;
@@ -142,7 +144,7 @@ namespace NrReplay
 					const auto model = probe.ModelEnabled();
 					const auto index = stage % KernelReplacement::kFunctionCount;
 					std::vector<std::uint8_t> bytes(model ? 72 : 8, static_cast<std::uint8_t>(id));
-					NVAPI_CU_KERNEL_LAUNCH_PARAMS launch{ reinterpret_cast<NVDX_ObjectHandle>(model ? 0x3000 + index : 0x3000), { 1, 1, model ? 4u : 1u }, { 32, 1, 1 }, 0, nullptr, static_cast<NvU32>(bytes.size()) };
+					NVAPI_CU_KERNEL_LAUNCH_PARAMS launch{ reinterpret_cast<NVDX_ObjectHandle>(model ? 0x3000 + index : 0x3000), { gridWidths[region], 1, model ? 4u : 1u }, { 32, 1, 1 }, 0, nullptr, static_cast<NvU32>(bytes.size()) };
 					probe.descriptors_.push_back({ launch, bytes, 0, static_cast<unsigned>(region / 2), static_cast<unsigned>(region % 2), model ? index : SIZE_MAX });
 					value.descriptors.push_back(id);
 					value.commands.push_back({ KernelPair::Kind::Launch, id });
@@ -163,16 +165,43 @@ namespace NrReplay
 			probe.pairSample_->descriptorCacheConfirmed.fill(true);
 		}
 		static void PairDependencies(ProviderKernelChainProbe& probe) { probe.ValidatePairDependencies(); }
-		static void PairBatch(ProviderKernelChainProbe& probe, std::span<const std::uint8_t> a, std::span<const std::uint8_t> b)
+		static void ConfigurePairBatch(ProviderKernelChainProbe& probe, std::span<const std::uint8_t> a, std::span<const std::uint8_t> b,
+			std::array<unsigned, 4> widths = { 20, 20, 20, 20 }, std::array<unsigned, 4> heights = { 20, 20, 20, 20 })
 		{
 			probe.descriptors_.clear();
-			for (auto bytes : { a, b }) {
-				NVAPI_CU_KERNEL_LAUNCH_PARAMS value{ reinterpret_cast<NVDX_ObjectHandle>(0x3000), { 20, 20, 1 }, { 32, 1, 1 }, 0, bytes.data(), 96 };
-				probe.descriptors_.push_back({ value, { bytes.begin(), bytes.end() } });
+			probe.descriptors_.resize(KernelPair::kRegions * KernelPair::kStages);
+			for (std::size_t region = 0; region < KernelPair::kRegions; ++region) {
+				const auto id = region * KernelPair::kStages + KernelPair::kTargetStage;
+				const auto bytes = region % 2 == 0 ? a : b;
+				NVAPI_CU_KERNEL_LAUNCH_PARAMS value{ reinterpret_cast<NVDX_ObjectHandle>(0x3000), { widths[region], heights[region], 1 }, { 32, 1, 1 }, 0, bytes.data(), 96 };
+				probe.descriptors_[id] = { value, { bytes.begin(), bytes.end() }, 0, static_cast<unsigned>(region / 2), static_cast<unsigned>(region % 2) };
+				auto& target = probe.pairSample_->regions[region];
+				target.descriptors.resize(KernelPair::kTargetStage + 1);
+				target.descriptors[KernelPair::kTargetStage] = id;
+				target.stageSignature = std::to_string(widths[region]) + "|" + std::to_string(heights[region]);
 			}
-			std::copy(a.begin(), a.end(), probe.pairSample_->batchPackets[0].begin());
-			std::copy(b.begin(), b.end(), probe.pairSample_->batchPackets[0].begin() + 96);
-			probe.SubmitPairBatch(0, 1, 0);
+			probe.SelectCompatiblePairing();
+			for (std::size_t group = 0; group < probe.pairSample_->pairs.size(); ++group)
+				for (std::size_t region = 0; region < 2; ++region) {
+					const auto id = probe.pairSample_->regions[probe.pairSample_->pairs[group][region]].descriptors[KernelPair::kTargetStage];
+					const auto& bytes = probe.descriptors_[id].bytes;
+					std::copy(bytes.begin(), bytes.end(), probe.pairSample_->batchPackets[group].begin() + region * 96);
+				}
+		}
+		static NVAPI_CU_KERNEL_LAUNCH_PARAMS& PairTarget(ProviderKernelChainProbe& probe, std::size_t region)
+		{
+			return probe.descriptors_.at(probe.pairSample_->regions.at(region).descriptors.at(KernelPair::kTargetStage)).value;
+		}
+		static void SubmitPairBatch(ProviderKernelChainProbe& probe, std::size_t group = 0)
+		{
+			const auto& pair = probe.pairSample_->pairs.at(group);
+			probe.SubmitPairBatch(probe.pairSample_->regions[pair[0]].descriptors[KernelPair::kTargetStage],
+				probe.pairSample_->regions[pair[1]].descriptors[KernelPair::kTargetStage], group);
+		}
+		static void PairBatch(ProviderKernelChainProbe& probe, std::span<const std::uint8_t> a, std::span<const std::uint8_t> b)
+		{
+			ConfigurePairBatch(probe, a, b);
+			SubmitPairBatch(probe);
 		}
 		static void ValidateReplacement(const nlohmann::json& manifest) { ProviderKernelChainProbe::ValidateReplacementManifest(manifest); }
 		static void ConfigureReplacement(ProviderKernelChainProbe& probe, ID3D12Device* device,
@@ -255,6 +284,24 @@ namespace NrReplay
 			}
 		}
 		static void PrepareRuntimeBindings(ProviderKernelChainProbe& probe) { probe.PrepareRuntimeBindings(); }
+		static std::array<std::string, 2> StageSignatures(ProviderKernelChainProbe& probe, const NVAPI_CU_KERNEL_LAUNCH_PARAMS& launch)
+		{
+			ProviderKernelChainProbe::Descriptor descriptor{ launch, {}, 0, 0, 0, 0 };
+			return { probe.StageSignature(descriptor), probe.StageSignature(descriptor, false) };
+		}
+		static void ConfigureStageIdentity(ProviderKernelChainProbe& probe,
+			std::string moduleHash = KernelChain::kReplacementOriginalModuleSha256, std::string entry = KernelChain::kReplacementEntry)
+		{
+			probe.modules_.clear();
+			probe.functions_.clear();
+			ProviderKernelChainProbe::ModuleIdentity module;
+			module.sha256 = std::move(moduleHash);
+			probe.modules_.push_back(std::move(module));
+			ProviderKernelChainProbe::FunctionIdentity function;
+			function.moduleIdentity = 0;
+			function.name = std::move(entry);
+			probe.functions_.push_back(std::move(function));
+		}
 		static auto& Model(ProviderKernelChainProbe& probe) { return *probe.modelReplacement_; }
 		static void ClearFakeReplacement(ProviderKernelChainProbe& probe)
 		{
@@ -1502,6 +1549,165 @@ namespace
 			}
 		}
 	}
+	void TestCompatiblePairing()
+	{
+		using namespace NrReplay::KernelPair;
+		const Pairing aligned{ std::array<std::size_t, 2>{ 0, 2 }, std::array<std::size_t, 2>{ 1, 3 } };
+		const Pairing reversed{ std::array<std::size_t, 2>{ 0, 3 }, std::array<std::size_t, 2>{ 1, 2 } };
+		Check(CompatiblePairing({ "same", "same", "same", "same" }) == kSameEyePairs);
+		Check(CompatiblePairing({ "large", "large", "small", "small" }) == kSameEyePairs);
+		Check(CompatiblePairing({ "large", "small", "large", "small" }) == aligned);
+		Check(CompatiblePairing({ "large", "small", "small", "large" }) == reversed);
+		Check(!CompatiblePairing({ "", "", "", "" }));
+		Check(!CompatiblePairing({ "large", "small", "large", "different" }));
+		Check(!CompatiblePairing({ "large", "small", "different", "large" }));
+		Check(!CompatiblePairing({ "large", "small", "tiny", "different" }));
+		Sample sample;
+		sample.completed = kRegions;
+		for (std::size_t region = 0; region < kRegions; ++region) {
+			auto& commands = sample.regions[region];
+			commands.complete = true;
+			commands.target = kTargetStage;
+			for (std::size_t stage = 0; stage < kStages; ++stage) {
+				commands.descriptors.push_back(region * kStages + stage);
+				commands.commands.push_back({ Kind::Launch, region * kStages + stage });
+			}
+		}
+		for (const auto& pairs : { kSameEyePairs, aligned, reversed }) {
+			Check(ValidPairing(pairs));
+			sample.pairs = pairs;
+			const auto original = BuildOrder(sample, "original");
+			for (std::size_t index = 0; index < original.size(); ++index)
+				Check(sample.regions[original[index].region].commands[original[index].command].descriptor == index);
+			const auto batched = BuildOrder(sample, "model-batch");
+			const auto layer = BuildOrder(sample, "layer-control");
+			Check(batched.size() == 632 && layer.size() == 948);
+			for (std::size_t group = 0; group < pairs.size(); ++group)
+				for (std::size_t stage = 0; stage < kStages; ++stage) {
+					const auto& batch = batched[group * kStages * 2 + stage * 2];
+					Check(batch.kind == Kind::Batch && batch.region == pairs[group][0] && batch.secondRegion == pairs[group][1] &&
+						  batch.command == stage && batch.secondCommand == stage);
+					Check(batched[group * kStages * 2 + stage * 2 + 1].kind == Kind::Join);
+					Check(layer[group * kStages * 3 + stage * 3].region == pairs[group][0] &&
+						  layer[group * kStages * 3 + stage * 3 + 1].region == pairs[group][1]);
+				}
+		}
+		for (const auto& invalid : { Pairing{ std::array<std::size_t, 2>{ 0, 2 }, std::array<std::size_t, 2>{ 1, 2 } },
+				 Pairing{ std::array<std::size_t, 2>{ 0, 4 }, std::array<std::size_t, 2>{ 1, 3 } },
+				 Pairing{ std::array<std::size_t, 2>{ 2, 0 }, std::array<std::size_t, 2>{ 1, 3 } },
+				 Pairing{ std::array<std::size_t, 2>{ 0, 0 }, std::array<std::size_t, 2>{ 1, 3 } } }) {
+			Check(!ValidPairing(invalid));
+			sample.pairs = invalid;
+			Reject([&] { BuildOrder(sample, "model-batch"); });
+		}
+		Check(TensorByteSpan(160, 160) == 819200 && TensorByteSpan(704, 576) == 12976128);
+		Check(TensorByteSpan(16384, 16384) == 8589934592ull);
+		Check(CompletionByteSpan(0x5b00) == 0x16c00 && CompletionByteSpan(UINT32_MAX) == 17179869180ull);
+		for (const auto& extent : { std::array<std::uint32_t, 2>{ 0, 160 }, { 160, 0 }, { 16385, 160 }, { 160, 16385 }, { UINT32_MAX, UINT32_MAX } })
+			Reject([&] { TensorByteSpan(extent[0], extent[1]); });
+		Reject([] { CompletionByteSpan(0); });
+		Owners owners;
+		owners.resources.resize(1);
+		owners.resources[0].base = 100;
+		owners.resources[0].end = 100 + TensorByteSpan(704, 576);
+		Check(FindBuffer(owners, 100, TensorByteSpan(704, 576)) == 0);
+		Reject([&] { FindBuffer(owners, 101, TensorByteSpan(704, 576)); });
+	}
+	void TestStructuralStageIdentity()
+	{
+		Json report;
+		ProviderKernelChainProbe probe(report, "forward");
+		KernelChainProbeTestAccess::ConfigureStageIdentity(probe);
+		NVAPI_CU_KERNEL_LAUNCH_PARAMS launch{ reinterpret_cast<NVDX_ObjectHandle>(0x3000), { 20, 20, 1 }, { 32, 1, 1 }, 0, nullptr, 96 };
+		const auto baseline = KernelChainProbeTestAccess::StageSignatures(probe, launch);
+		launch.gridDim.x = 88;
+		launch.gridDim.y = 72;
+		const auto resized = KernelChainProbeTestAccess::StageSignatures(probe, launch);
+		Check(baseline[0] != resized[0] && baseline[1] == resized[1]);
+		for (unsigned field = 0; field < 6; ++field) {
+			auto changed = launch;
+			switch (field) {
+			case 0:
+				changed.gridDim.z = 2;
+				break;
+			case 1:
+				changed.blockDim.x = 64;
+				break;
+			case 2:
+				changed.blockDim.y = 2;
+				break;
+			case 3:
+				changed.blockDim.z = 2;
+				break;
+			case 4:
+				changed.dynSharedMemBytes = 8;
+				break;
+			case 5:
+				changed.paramSize = 104;
+				break;
+			}
+			Check(KernelChainProbeTestAccess::StageSignatures(probe, changed)[1] != baseline[1]);
+		}
+		KernelChainProbeTestAccess::ConfigureStageIdentity(probe, std::string(64, '0'));
+		Check(KernelChainProbeTestAccess::StageSignatures(probe, launch)[1] != baseline[1]);
+		KernelChainProbeTestAccess::ConfigureStageIdentity(probe, NrReplay::KernelChain::kReplacementOriginalModuleSha256, "unqualified_entry");
+		Check(KernelChainProbeTestAccess::StageSignatures(probe, launch)[1] != baseline[1]);
+	}
+	void TestCrossEyeModelPackets()
+	{
+		using namespace NrReplay::KernelPair;
+		const Pairing aligned{ std::array<std::size_t, 2>{ 0, 2 }, std::array<std::size_t, 2>{ 1, 3 } };
+		const Pairing reversed{ std::array<std::size_t, 2>{ 0, 3 }, std::array<std::size_t, 2>{ 1, 2 } };
+		for (const auto& pairs : { aligned, reversed }) {
+			ModelFixture fixture(2);
+			FakeDevice device;
+			Json report;
+			ProviderKernelChainProbe probe(report, "forward", "identity", {}, "model-batch", fixture.manifest);
+			KernelChainProbeTestAccess::Configure(probe, FakeLaunch);
+			comparisonModules = comparisonFunctions = comparisonRetired = 0;
+			KernelChainProbeTestAccess::ConfigureModel(probe, fixture.manifest, fixture.fingerprint, ComparisonModule, ComparisonFunction, ComparisonDestroy, ComparisonDestroy, 2);
+			KernelChainProbeTestAccess::ObserveTestModel(probe, device.AsDevice(), Json::parse(std::ifstream(fixture.manifest)));
+			probe.BeginSample(3, false);
+			FakeScheduleList list;
+			std::array<unsigned, 4> widths{};
+			for (std::size_t group = 0; group < pairs.size(); ++group)
+				for (const auto region : pairs[group])
+					widths[region] = group == 0 ? 88 : 20;
+			KernelChainProbeTestAccess::ConfigureRepetition(probe, list.AsList(), pairs, widths);
+			submissions.clear();
+			submitStatus = NVAPI_OK;
+			KernelChainProbeTestAccess::ReplayRepetition(probe, {}, {});
+			Check(submissions.size() == 316);
+			for (std::size_t group = 0; group < pairs.size(); ++group)
+				for (std::size_t stage = 0; stage < kStages; ++stage) {
+					const auto& launch = submissions[group * kStages + stage];
+					const auto& packet = launch.bytes.at(0);
+					const auto first = static_cast<std::uint8_t>(pairs[group][0] * kStages + stage);
+					const auto second = static_cast<std::uint8_t>(pairs[group][1] * kStages + stage);
+					Check(packet.size() == 160 && std::all_of(packet.begin(), packet.begin() + 72, [first](auto value) { return value == first; }) &&
+						  std::all_of(packet.begin() + 80, packet.begin() + 152, [second](auto value) { return value == second; }));
+					Check(std::all_of(packet.begin() + 72, packet.begin() + 80, [](auto value) { return value == 0; }) &&
+						  std::all_of(packet.begin() + 152, packet.end(), [](auto value) { return value == 0; }));
+					Check(launch.descriptors.at(0).gridDim.x == widths[pairs[group][0]] && launch.descriptors.at(0).gridDim.y == 1 && launch.descriptors.at(0).gridDim.z == 8);
+				}
+			Check(probe.SampleReceipt()["kernelPair"]["regionPairs"] == Json(pairs));
+			Check(KernelChainProbeTestAccess::Model(probe).Retire(true, true) && comparisonRetired == 53 && device.references == 1);
+		}
+		ModelFixture fixture(2);
+		FakeDevice device;
+		Json report;
+		ProviderKernelChainProbe probe(report, "forward", "identity", {}, "model-batch", fixture.manifest);
+		KernelChainProbeTestAccess::Configure(probe, FakeLaunch);
+		comparisonModules = comparisonFunctions = comparisonRetired = 0;
+		KernelChainProbeTestAccess::ConfigureModel(probe, fixture.manifest, fixture.fingerprint, ComparisonModule, ComparisonFunction, ComparisonDestroy, ComparisonDestroy, 2);
+		KernelChainProbeTestAccess::ObserveTestModel(probe, device.AsDevice(), Json::parse(std::ifstream(fixture.manifest)));
+		probe.BeginSample(3, false);
+		FakeScheduleList list;
+		submissions.clear();
+		Reject([&] { KernelChainProbeTestAccess::ConfigureRepetition(probe, list.AsList(), aligned, { 88, 20, 87, 20 }); });
+		Check(submissions.empty() && probe.GetRuntimeCounters().privateAttempts == 0);
+		Check(KernelChainProbeTestAccess::Model(probe).Retire(true, true) && comparisonRetired == 53 && device.references == 1);
+	}
 	void TestPairHeapIdentityAndManifest()
 	{
 		using namespace NrReplay::KernelPair;
@@ -1671,7 +1877,75 @@ namespace
 		Check(d.hFunction == reinterpret_cast<NVDX_ObjectHandle>(0x7000) && d.gridDim.z == 2 && d.gridDim.x == 20 && d.gridDim.y == 20 && d.paramSize == 192);
 		Check(std::equal(a.begin(), a.end(), submissions[0].bytes[0].begin()) && std::equal(b.begin(), b.end(), submissions[0].bytes[0].begin() + 96));
 		const auto& pair = KernelChainProbeTestAccess::PairSample(probe);
-		Check(pair.submittedLogicalDescriptors == std::vector<std::size_t>{ 0, 1 } && pair.batchedCalls == 1);
+		Check(pair.submittedLogicalDescriptors == std::vector<std::size_t>{ 3, 161 } && pair.batchedCalls == 1);
+		Check(KernelChainProbeTestAccess::RetireReplacement(probe));
+	}
+	void TestSelectedStageDynamicPairs()
+	{
+		using namespace NrReplay::KernelPair;
+		FakeDevice ownedDevice;
+		Json report;
+		ProviderKernelChainProbe probe(report, "forward", "identity", "manifest", "batch");
+		KernelChainProbeTestAccess::Configure(probe, FakeLaunch);
+		KernelChainProbeTestAccess::ConfigureReplacement(probe, ownedDevice.AsDevice(), DestroyPrivateFunction, DestroyPrivateModule);
+		probe.BeginSample(1, false);
+		probe.BeginEvaluation(proxy, real, 0, 0);
+		std::array<std::uint8_t, 96> a{}, b{};
+		a.fill(11);
+		b.fill(29);
+		submissions.clear();
+		Reject([&] { KernelChainProbeTestAccess::ConfigurePairBatch(probe, a, b, { 88, 20, 87, 20 }, { 72, 20, 72, 20 }); });
+		Check(submissions.empty() && probe.GetRuntimeCounters().privateAttempts == 0);
+		KernelChainProbeTestAccess::ConfigurePairBatch(probe, a, b, { 88, 20, 88, 20 }, { 72, 20, 72, 20 });
+		const Pairing aligned{ std::array<std::size_t, 2>{ 0, 2 }, std::array<std::size_t, 2>{ 1, 3 } };
+		Check(KernelChainProbeTestAccess::PairSample(probe).pairs == aligned);
+		auto& second = KernelChainProbeTestAccess::PairTarget(probe, 2);
+		const auto original = second;
+		for (unsigned field = 0; field < 8; ++field) {
+			second = original;
+			switch (field) {
+			case 0:
+				++second.gridDim.x;
+				break;
+			case 1:
+				++second.gridDim.y;
+				break;
+			case 2:
+				++second.gridDim.z;
+				break;
+			case 3:
+				++second.blockDim.x;
+				break;
+			case 4:
+				++second.blockDim.y;
+				break;
+			case 5:
+				++second.blockDim.z;
+				break;
+			case 6:
+				++second.dynSharedMemBytes;
+				break;
+			case 7:
+				++second.paramSize;
+				break;
+			}
+			Reject([&] { KernelChainProbeTestAccess::SubmitPairBatch(probe); });
+			Check(submissions.empty() && probe.GetRuntimeCounters().privateAttempts == 0);
+		}
+		second = original;
+		submitStatus = NVAPI_OK;
+		KernelChainProbeTestAccess::SubmitPairBatch(probe);
+		KernelChainProbeTestAccess::SubmitPairBatch(probe, 1);
+		Check(submissions.size() == 2 && submissions[0].descriptors[0].gridDim.x == 88 && submissions[0].descriptors[0].gridDim.y == 72 &&
+			  submissions[1].descriptors[0].gridDim.x == 20 && submissions[1].descriptors[0].gridDim.y == 20);
+		Check(std::equal(a.begin(), a.end(), submissions[0].bytes[0].begin()) &&
+			  std::equal(a.begin(), a.end(), submissions[0].bytes[0].begin() + 96) &&
+			  std::equal(b.begin(), b.end(), submissions[1].bytes[0].begin()) &&
+			  std::equal(b.begin(), b.end(), submissions[1].bytes[0].begin() + 96));
+		const auto receipt = KernelChainProbeTestAccess::PairReceipt(probe);
+		Check(receipt["regionPairs"] == Json(aligned) && receipt["physicalBatches"].size() == 2);
+		Check(receipt["physicalBatches"][0]["grid"] == Json({ 88, 72, 2 }) && receipt["physicalBatches"][0]["sourceDescriptorIds"] == Json({ 3, 319 }));
+		Check(receipt["physicalBatches"][1]["grid"] == Json({ 20, 20, 2 }) && receipt["physicalBatches"][1]["sourceDescriptorIds"] == Json({ 161, 477 }));
 		Check(KernelChainProbeTestAccess::RetireReplacement(probe));
 	}
 	void TestRepeatedSchedules()
@@ -1906,10 +2180,14 @@ int main()
 		TestReplacementFutureAliases();
 		TestPairPlans();
 		TestLayerControlPlan();
+		TestCompatiblePairing();
+		TestStructuralStageIdentity();
+		TestCrossEyeModelPackets();
 		TestPairHeapIdentityAndManifest();
 		TestPairAdmissionAndEightSlotRollback();
 		TestPairDescriptorGuards();
 		TestPairPackedSubmission();
+		TestSelectedStageDynamicPairs();
 		TestRepeatedSchedules();
 		TestRepetitionFailures();
 		TestBalancedComparisons();

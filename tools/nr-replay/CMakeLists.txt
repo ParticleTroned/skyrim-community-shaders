@@ -72,6 +72,7 @@ foreach(_source IN ITEMS
     src/Features/Upscaling/NeuralRendering/Runtime.h
     src/Features/Upscaling/NeuralRendering/D3D12Interop.h
     src/Features/Upscaling/NeuralRendering/ExecutionEvidence.h
+    src/Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h
     src/Features/Upscaling/NeuralRendering/LifetimeDiagnostics.h
     src/Features/Upscaling/NeuralRendering/SubmissionFenceSnapshot.h
     src/Features/Upscaling/NeuralRendering/ExperimentalKernelBatch.h
@@ -156,6 +157,13 @@ target_link_libraries(csx_nr_replay PRIVATE nlohmann_json::nlohmann_json spdlog:
     "${_ngx_library}")
 include(CTest)
 if(BUILD_TESTING)
+    nr_extract(tools/nr-replay/main.cpp "\t\tbool Close()" "\t\tvoid Retire()" _session_close)
+    file(WRITE "${OUTPUT_DIRECTORY}/session_close_under_test.h" "${_session_close}")
+    add_executable(nr_session_shutdown test_session_shutdown.cpp)
+    target_compile_features(nr_session_shutdown PRIVATE cxx_std_23)
+    target_include_directories(nr_session_shutdown PRIVATE "${OUTPUT_DIRECTORY}")
+    target_compile_options(nr_session_shutdown PRIVATE /W4 /EHsc /permissive-)
+    add_test(NAME nr_session_shutdown COMMAND nr_session_shutdown)
     add_executable(nr_kernel_frame_fence test_kernel_frame_fence.cpp)
     target_compile_features(nr_kernel_frame_fence PRIVATE cxx_std_23)
     target_include_directories(nr_kernel_frame_fence PRIVATE "${REPOSITORY_ROOT}/src")

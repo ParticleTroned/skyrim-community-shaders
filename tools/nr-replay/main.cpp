@@ -1,6 +1,7 @@
 #include "CharacterComputeSubrect.h"
 #include "CharacterMaskWorkPolicy.h"
 #include "D3D12Interop.h"
+#include "ExecutionEvidenceJson.h"
 #include "FeatureCreationObserver.h"
 #include "GpuCapture.h"
 #include "KernelChainCommandList.h"
@@ -148,6 +149,7 @@ namespace
 		TextureData color, depth, motion, output;
 		std::array<float, 2> motionScale{};
 		bool featureUpscaling = false;
+		Json metadata;
 	};
 	struct Frame
 	{
@@ -191,6 +193,7 @@ namespace
 			Require(source.at("eyes").size() >= 1 && source.at("eyes").size() <= 2, "invalid captured eye count");
 			for (const auto& value : source.at("eyes")) {
 				Eye eye;
+				eye.metadata = value;
 				eye.color = LoadTexture(value.at("color"), root, budget);
 				eye.depth = LoadTexture(value.at("depth"), root, budget);
 				eye.motion = LoadTexture(value.at("motion"), root, budget);
@@ -236,6 +239,40 @@ namespace
 			result.push_back(std::move(frame));
 		}
 		return result;
+	}
+	NativeEvaluationLayout NativeLayout(const Eye& eye, const ComputeSubrect& rect)
+	{
+		return BuildNativeEvaluationLayout(
+			{ eye.color.width, eye.color.height }, { eye.depth.width, eye.depth.height },
+			{ eye.output.width, eye.output.height }, {}, rect,
+			{ true, eye.motionScale[0], eye.motionScale[1] }, eye.featureUpscaling);
+	}
+	void ValidateCapturedNativeLayout(const Eye& eye)
+	{
+		const auto expected = NativeLayout(eye, { 0, 0, eye.output.width, eye.output.height });
+		Require(GetNativeEvaluationLayoutViolation(expected, false).empty(), "captured native resource layout is invalid");
+		Require(eye.metadata.contains("nativeLayout") && eye.metadata.at("nativeLayout") == Evidence::NativeLayoutJson(expected),
+			"native-layout qualification requires exact captured nativeLayout provenance");
+		for (const auto* key : { "callerReset", "synchronizedHistoryReset" })
+			Require(eye.metadata.contains(key) && eye.metadata.at(key).is_boolean(), "native-layout qualification lacks captured reset provenance");
+	}
+	void ValidateCapturedRuntimeIdentity(const Json& manifest)
+	{
+		Require(manifest.contains("runtime") && manifest.at("runtime").is_object(),
+			"native-layout qualification requires captured runtime identity");
+		const auto& runtime = manifest.at("runtime");
+		for (const auto* key : { "path", "version", "sha256" })
+			Require(runtime.contains(key) && runtime.at(key).is_string(), "native-layout qualification requires complete captured runtime identity");
+		const auto& path = runtime.at("path").get_ref<const std::string&>();
+		const auto& version = runtime.at("version").get_ref<const std::string&>();
+		Require(!path.empty() && path.size() <= 32768 && path.find('\0') == std::string::npos &&
+					!version.empty() && version.size() <= 512 && version.find('\0') == std::string::npos,
+			"captured runtime path/version identity is empty or invalid");
+		try {
+			(void)NrReplay::ProviderFloor::CanonicalSha256(runtime.at("sha256").get_ref<const std::string&>());
+		} catch (const std::exception& error) {
+			throw std::runtime_error(std::format("captured runtime SHA-256 identity is invalid: {}", error.what()));
+		}
 	}
 	struct Difference
 	{
@@ -411,15 +448,19 @@ namespace
 		unsigned inputStorageHaloPixels = 0;
 		bool sharedInputs = false;
 		bool reuseNativeHandles = false;
+		bool qualifyNativeLayout = false;
 	};
-	Variant CustomRegions(const std::string& encoded, const Eye& eye, unsigned mode)
+	Variant CustomRegions(const std::string& encoded, const Eye& eye, unsigned mode, bool qualifyNativeLayout)
 	{
-		Require(mode == 2, "custom regions require stateless C input");
+		Require(mode == 2 || qualifyNativeLayout, "custom regions require stateless C input or explicit native-layout qualification");
+		if (qualifyNativeLayout)
+			ValidateCapturedNativeLayout(eye);
 		const auto rectangles = Json::parse(encoded);
 		Require(rectangles.is_array() && !rectangles.empty() && rectangles.size() <= kMaximumRegionsPerEye,
 			"custom regions require 1..8 rectangles");
 		Variant variant{ "custom-regions", "packed_region_experiment", "immutable-owned-pixels", "static_reset", {}, {} };
 		variant.sharedInputs = true;
+		variant.qualifyNativeLayout = qualifyNativeLayout;
 		for (const auto& item : rectangles) {
 			Require(item.is_array() && item.size() == 4, "custom rectangle must be [x,y,width,height]");
 			for (const auto& coordinate : item)
@@ -457,23 +498,36 @@ namespace
 	}
 	void ValidateIndependentProviderContexts(const Variant& variant, const std::vector<Frame>& frames)
 	{
-		Require(frames.size() == 1 && frames.front().metadata.at("mode") == 2 && variant.history == "static_reset" &&
+		Require((frames.size() == 1 || variant.qualifyNativeLayout) && (variant.qualifyNativeLayout || frames.front().metadata.at("mode") == 2) && variant.history == "static_reset" &&
 					!variant.temporal && !variant.crop.IsValid() && variant.inputStorage == "captured" && variant.sharedInputs && !variant.reuseNativeHandles,
-			"provider experiment requires one immutable stateless C capture and independent custom contexts");
+			"provider experiment requires one immutable reset-per-evaluation capture and independent custom contexts");
 		Require(variant.rects.size() >= 1 && variant.rects.size() <= 4 &&
 					std::ranges::all_of(variant.rects, [](const auto& rect) { return QualifiedExperimentalContextGeometry(rect); }),
 			"provider experiment requires one to four regions with extents >=128");
-		for (const auto& eye : frames.front().eyes)
-			Require(!eye.featureUpscaling && eye.color.format == 28 && eye.depth.format == 41 && eye.motion.format == 34 &&
-						eye.depth.width == eye.color.width && eye.depth.height == eye.color.height &&
-						eye.motion.width == eye.color.width && eye.motion.height == eye.color.height &&
-						std::ranges::all_of(variant.rects, [&](const auto& rect) { return rect.Fits(eye.color.width, eye.color.height); }),
-				"provider experiment requires RGBA8 C with equal input grids and bounded contexts in every eye");
+		if (variant.qualifyNativeLayout)
+			for (const auto& frame : frames)
+				for (const auto& eye : frame.eyes)
+					ValidateCapturedNativeLayout(eye);
+		for (const auto& eye : frames.front().eyes) {
+			if (!variant.qualifyNativeLayout)
+				Require(!eye.featureUpscaling && eye.color.format == DXGI_FORMAT_R8G8B8A8_UNORM && eye.depth.format == DXGI_FORMAT_R32_FLOAT && eye.motion.format == DXGI_FORMAT_R16G16_FLOAT &&
+							eye.depth.width == eye.color.width && eye.depth.height == eye.color.height &&
+							eye.motion.width == eye.color.width && eye.motion.height == eye.color.height,
+					"provider experiment requires RGBA8 C with equal input grids");
+			const bool replayColorFormat = eye.color.format == DXGI_FORMAT_R8G8B8A8_UNORM || eye.color.format == DXGI_FORMAT_R11G11B10_FLOAT ||
+			                               eye.color.format == DXGI_FORMAT_R16G16B16A16_FLOAT || eye.color.format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+			Require(replayColorFormat && eye.depth.format == DXGI_FORMAT_R32_FLOAT && eye.motion.format == DXGI_FORMAT_R16G16_FLOAT &&
+						std::ranges::all_of(variant.rects, [&](const auto& rect) {
+							return rect.Fits(eye.output.width, eye.output.height) && GetNativeEvaluationLayoutViolation(NativeLayout(eye, rect), false).empty();
+						}),
+				"provider experiment requires captured supported color, R32 depth, RG16 motion and bounded native contexts in every eye");
+		}
 	}
 	void ConfigureProviderFloorExperiment(Variant& variant, const std::vector<Frame>& frames, std::string_view providerHash, Json& receipt)
 	{
 		namespace Floor = NrReplay::ProviderFloor;
 		Floor::ValidateIdentity(256, providerHash, Floor::kCodeSha256);
+		Require(!variant.qualifyNativeLayout, "provider floor requires the legacy stateless C qualification");
 		ValidateIndependentProviderContexts(variant, frames);
 		receipt.update({ { "requested", true }, { "originalFloor", 320 }, { "experimentalFloor", 256 },
 			{ "providerDiskSha256", providerHash }, { "inMemoryState", "not_loaded" }, { "transitions", Json::array() },
@@ -493,7 +547,7 @@ namespace
 		Require(NrReplay::ProviderFloor::CanonicalSha256(providerHash) == NrReplay::ProviderFloor::kProviderSha256,
 			"kernel chain experiment requires the pinned provider disk SHA256");
 		ValidateIndependentProviderContexts(variant, frames);
-		Require(std::ranges::all_of(variant.rects, [&](const auto& rect) {
+		Require(variant.qualifyNativeLayout || std::ranges::all_of(variant.rects, [&](const auto& rect) {
 			return rect.width == variant.rects.front().width && rect.height == variant.rects.front().height;
 		}),
 			"kernel chain experiment requires equal region shapes");
@@ -504,12 +558,15 @@ namespace
 	void ValidateKernelPairExperiment(const Variant& variant, const std::vector<Frame>& frames)
 	{
 		ValidateIndependentProviderContexts(variant, frames);
-		Require(frames.front().eyes.size() == 2 && variant.rects.size() == 2 &&
-					std::ranges::all_of(variant.rects, [](const auto& rect) { return rect.width == 192 && rect.height == 256; }),
-			"kernel pair experiment requires two independent 192x256 regions in each eye");
-		for (const auto& eye : frames.front().eyes)
-			Require(eye.color.width == 1008 && eye.color.height == 1120,
-				"kernel pair experiment requires the qualified 1008x1120 input grid");
+		Require(frames.front().eyes.size() == 2 && variant.rects.size() == 2,
+			"kernel pair experiment requires two independent native regions in each eye");
+		if (!variant.qualifyNativeLayout) {
+			Require(std::ranges::all_of(variant.rects, [](const auto& rect) { return rect.width == 192 && rect.height == 256; }),
+				"C kernel pair experiment requires two independent 192x256 regions in each eye");
+			for (const auto& eye : frames.front().eyes)
+				Require(eye.color.width == 1008 && eye.color.height == 1120,
+					"C kernel pair experiment requires the qualified 1008x1120 input grid");
+		}
 	}
 	Json NativeHandlePlan(const Variant& variant, unsigned eyes)
 	{
@@ -650,10 +707,13 @@ namespace
 		tuning.localToneStrength = json.at("localToneStrength").get<float>();
 		tuning.localStructureStrength = json.at("localStructureStrength").get<float>();
 		tuning.skinStructureStrength = json.at("skinStructureStrength").get<float>();
+		Require(json.at("style").is_number_unsigned() && json.at("style").get<std::uint64_t>() <= std::numeric_limits<unsigned>::max(),
+			"captured native style must be an unsigned parameter value");
 		tuning.style = json.at("style").get<unsigned>();
-		tuning.useAutoMask = true;
-		tuning.uiCorrection = false;
-		tuning.singleSubrectScale = 1.0f;
+		Require(tuning.style <= 3, "captured native style exceeds the supported model range 0..3");
+		tuning.useAutoMask = json.at("useAutoMask").get<bool>();
+		tuning.uiCorrection = json.at("uiCorrection").get<bool>();
+		tuning.singleSubrectScale = json.at("singleSubrectScale").get<float>();
 		return tuning;
 	}
 	struct Session
@@ -666,6 +726,7 @@ namespace
 		std::unique_ptr<NrReplay::ProviderKernelChainProbe> kernelChain;
 		bool active = false;
 		bool ngxInitialized = false;
+		bool closeSucceeded = true;
 		~Session()
 		{
 			if (!Close())
@@ -674,32 +735,43 @@ namespace
 		bool Close()
 		{
 			if (!active)
-				return true;
+				return closeSucceeded;
 			active = false;
+			closeSucceeded = false;
 			if (interop.IsRecording())
 				(void)interop.AbortD3D12();
 			logger::info("Replay shutdown: waiting for native GPU idle and retiring runtime");
 			const bool idle = interop.WaitForIdle();
 			const bool chainRestored = !kernelChain || kernelChain->Restore(idle);
-			if (!chainRestored)
-				(void)kernelChain.release();
 			const bool restored = (!providerFloor || providerFloor->Restore(idle)) && chainRestored;
-			if (!idle || !restored || !Runtime::Instance().Shutdown()) {
+			if (!idle || !restored) {
+				(void)kernelChain.release();
+				(void)providerFloor.release();
 				Runtime::Instance().AbandonUnsafe();
 				interop.AbandonUnsafe();
 				return false;
-			} else {
-				bool closed = true;
-				if (ngxInitialized) {
-					logger::info("Replay shutdown: retiring NGX SDK bootstrap");
-					const auto status = NVSDK_NGX_D3D11_Shutdown1(nullptr);
-					closed = NVSDK_NGX_SUCCEED(status);
-					if (!closed)
-						logger::error("Replay NGX bootstrap shutdown failed: 0x{:08x}", static_cast<unsigned>(status));
-				}
-				logger::info("Replay shutdown: retiring interop resources");
-				return interop.Shutdown() && closed;
 			}
+			// Retired probes still own provider scratch buffers and descriptor heaps.
+			kernelChain.reset();
+			providerFloor.reset();
+			if (!Runtime::Instance().Shutdown()) {
+				Runtime::Instance().AbandonUnsafe();
+				interop.AbandonUnsafe();
+				return false;
+			}
+			bool closed = true;
+			if (ngxInitialized) {
+				logger::info("Replay shutdown: retiring NGX SDK bootstrap");
+				const auto status = NVSDK_NGX_D3D11_Shutdown1(device.Get());
+				closed = NVSDK_NGX_SUCCEED(status);
+				if (closed)
+					ngxInitialized = false;
+				else
+					logger::error("Replay NGX bootstrap shutdown failed: 0x{:08x}", static_cast<unsigned>(status));
+			}
+			logger::info("Replay shutdown: retiring interop resources");
+			closeSucceeded = interop.Shutdown() && closed;
+			return closeSucceeded;
 		}
 		void Retire()
 		{
@@ -856,6 +928,8 @@ namespace
 			{ "route", std::string(1, char('A' + first.metadata.at("mode").get<unsigned>())) }, { "mode", first.metadata.at("mode") },
 			{ "history", variant.history }, { "creationExtent", { width, height } },
 			{ "resourceExtents", { { "color", { width, height } }, { "depth", { guideWidth, guideHeight } }, { "motion", { guideWidth, guideHeight } }, { "output", { width, height } } } },
+			{ "resourceFormats", { { "color", firstEye.color.format }, { "depth", firstEye.depth.format },
+									 { "motion", firstEye.motion.format }, { "output", firstEye.output.format } } },
 			{ "evaluatedRects", Json::array() }, { "evaluatedSourceRects", Json::array() }, { "evaluatedGuideRects", Json::array() }, { "evaluationsPerSample", count }, { "logicalEyeCount", first.eyes.size() },
 			{ "featureUpscaling", firstEye.featureUpscaling }, { "useAutoMask", true }, { "controlMaskPassed", false },
 			{ "warmupIterations", warmup }, { "requestedSamples", samples }, { "colorConfiguration", first.metadata.at("colorConfiguration") },
@@ -870,6 +944,8 @@ namespace
 			{ "status", "unavailable" }, { "reason", "not_started" } };
 		value.update(NativeHandlePlan(variant, static_cast<unsigned>(first.eyes.size())));
 		value["batchTimingOnly"] = batchTimingOnly;
+		value["nativeLayoutQualification"] = variant.qualifyNativeLayout;
+		value["nativeLayouts"] = Json::array();
 		if (variant.occupancy >= 0) {
 			value["maskOccupancyFraction"] = variant.occupancy;
 			value["maskPolicy"] = "synthetic_CSX_composite_only_binary_occupancy_proxy_after_native_inference_not_GPU_composite_cost";
@@ -884,6 +960,9 @@ namespace
 				}
 				value["evaluatedSourceRects"].push_back(RectJson(sourceRect));
 				value["evaluatedGuideRects"].push_back(RectJson(MapComputeSubrect(variant.rects[region], width, height, guideWidth, guideHeight)));
+				value["nativeLayouts"].push_back(Evidence::NativeLayoutJson(BuildNativeEvaluationLayout(
+					{ width, height }, { guideWidth, guideHeight }, { width, height }, {}, variant.rects[region],
+					{ true, first.eyes[eye].motionScale[0], first.eyes[eye].motionScale[1] }, first.eyes[eye].featureUpscaling)));
 				value["contextIds"].push_back(std::format("{}:fresh-slot-{}", variant.id,
 					PhysicalRegionFeatureSlot(static_cast<unsigned>(eye), variant.reuseNativeHandles ? 0u : static_cast<unsigned>(region))));
 			}
@@ -1281,6 +1360,7 @@ int wmain(int argc, wchar_t** argv)
 		{ "maskOccupancy", "synthetic_binary_composite_only_proxy_no_provider_ControlMask_no_GPU_composite_timing" },
 		{ "gpuCapture", "not_requested_no_external_capture_tool_attached" } };
 	result["providerFloorExperiment"] = { { "requested", false } };
+	result["nativeLayoutQualification"] = { { "requested", false } };
 	result["buildIdentity"] = { { "runtimeSourceSha256", kRuntimeSourceHash }, { "interopSourceSha256", kInteropSourceHash },
 		{ "ngxHeaderSha256", kNgxHeaderHash }, { "streamlineCoreHeaderSha256", kSlHeaderHash }, { "streamlineSdkVersion", kSlVersion } };
 	result["buildIdentity"]["replaySourceSha256"] = Json::parse(kReplaySourceIdentityJson);
@@ -1293,6 +1373,7 @@ int wmain(int argc, wchar_t** argv)
 	bool experimentalProviderFloor = false;
 	bool batchTimingOnly = false;
 	bool captureKernelModules = false;
+	bool qualifyNativeLayout = false;
 	std::optional<unsigned> modelBatchStages, modelN1Stages;
 	std::optional<unsigned> scheduleRepetitions;
 	std::string kernelChainMode, kernelPairMode, repetitionControl;
@@ -1334,6 +1415,11 @@ int wmain(int argc, wchar_t** argv)
 			if (option == L"--capture-kernel-modules") {
 				Require(!captureKernelModules, "kernel module capture flag must be specified once");
 				captureKernelModules = true;
+				continue;
+			}
+			if (option == L"--qualify-native-layout") {
+				Require(!qualifyNativeLayout, "native-layout qualification flag must be specified once");
+				qualifyNativeLayout = true;
 				continue;
 			}
 			Require(i + 1 < argc, "option requires value");
@@ -1498,10 +1584,37 @@ int wmain(int argc, wchar_t** argv)
 		Require(control.pixels && control.maximum > 0, "capture lacks known nonzero native NR edit control");
 		result["capturedControl"] = { { "nonzeroEditPixels", control.pixels }, { "maximumAbsEdit", control.maximum } };
 		std::vector<Variant> customVariants;
+		Require(!qualifyNativeLayout || (!customRects.empty() && nativeHandlePolicy.empty() && !experimentalProviderFloor &&
+											!capacityTemporal && capacitySize == 128 && onlyCase.empty() && !validateStorage && !inspectOnly),
+			"native-layout qualification requires custom rectangles without legacy handle, floor, capacity, storage or inspection controls");
 		if (!customRects.empty()) {
-			customVariants.push_back(CustomRegions(customRects, first, frames.front().metadata.at("mode").get<unsigned>()));
-			if (batchTimingOnly)
+			customVariants.push_back(CustomRegions(customRects, first, frames.front().metadata.at("mode").get<unsigned>(), qualifyNativeLayout));
+			if (batchTimingOnly || qualifyNativeLayout)
 				ValidateIndependentProviderContexts(customVariants.back(), frames);
+			if (qualifyNativeLayout) {
+				ValidateCapturedRuntimeIdentity(manifest);
+				const auto tuning = ReadTuning(frames.front().metadata.at("tuning"));
+				Require(std::isfinite(tuning.intensity) && std::isfinite(tuning.localToneStrength) && std::isfinite(tuning.localStructureStrength) &&
+							std::isfinite(tuning.skinStructureStrength) && std::isfinite(tuning.singleSubrectScale) &&
+							tuning.singleSubrectScale >= 0.25f && tuning.singleSubrectScale <= 1.0f,
+					"native-layout qualification requires finite complete captured tuning");
+				Json layouts = Json::array(), reset = Json::array();
+				for (const auto& eye : frames.front().eyes) {
+					for (const auto& rect : customVariants.back().rects)
+						layouts.push_back(Evidence::NativeLayoutJson(NativeLayout(eye, rect)));
+					reset.push_back({ { "callerReset", eye.metadata.at("callerReset") },
+						{ "synchronizedHistoryReset", eye.metadata.at("synchronizedHistoryReset") } });
+				}
+				result["nativeLayoutQualification"] = { { "requested", true }, { "layouts", std::move(layouts) },
+					{ "capturedRuntimeIdentity", manifest.at("runtime") },
+					{ "capturedTuning", frames.front().metadata.at("tuning") },
+					{ "resourceFormats", { { "color", first.color.format }, { "depth", first.depth.format },
+											 { "motion", first.motion.format }, { "output", first.output.format } } },
+					{ "availableCapturedFrames", frames.size() }, { "selectedSourceFrameIndex", 0 },
+					{ "selectedSourceWorldFrame", frames.front().metadata.at("sourceWorldFrame") },
+					{ "capturedResetProvenance", std::move(reset) }, { "evaluationResetPolicy", "static_reset_each_evaluation" },
+					{ "capturedHistoryReproduced", false }, { "qualityQualified", false }, { "productionPerformanceQualified", false } };
+			}
 			if (!nativeHandlePolicy.empty()) {
 				ConfigureNativeHandleExperiment(customVariants.back(), frames.front(), nativeHandlePolicy);
 				result["nativeHandlePlan"] = NativeHandlePlan(customVariants.back(), static_cast<unsigned>(frames.front().eyes.size()));

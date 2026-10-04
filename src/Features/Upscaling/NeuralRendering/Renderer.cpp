@@ -4257,6 +4257,7 @@ namespace NeuralRendering
 			{ "pendingFrames", status.pendingFrames }, { "retirementProven", status.retirementProven },
 			{ "graphMatchesQualified", status.graphMatchesQualified }, { "graphLaunches", status.graphLaunches },
 			{ "graphIdentities", status.graphIdentities }, { "inspection", status.inspection },
+			{ "graphFamilyIdentities", status.graphFamilyIdentities }, { "regionPairs", status.regionPairs },
 			{ "devbenchOverride", kernelBatchOverride_ }, { "inspectUnqualifiedPipeline", kernelInspectUnqualified_ } };
 	}
 

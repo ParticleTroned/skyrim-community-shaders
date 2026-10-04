@@ -9,6 +9,7 @@
 #include <array>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -18,10 +19,27 @@ namespace NrReplay::KernelPair
 {
 	inline constexpr std::size_t kStages = 158, kRegions = 4, kTargetStage = 3;
 	inline constexpr char kStageSha256[] = "a4d24509af262c3ad7e455f97240fd8337e2eebd3c8abbdfd75be419523a1467";
+	inline constexpr char kStageFamilySha256[] = "ec0927de13d71045c684c7f47b0cbf9d0a3aa3dfb75fd0e52982a194411538a5";
 	inline constexpr char kCommandSha256[] = "7ecd5cc71a1a7529fec45da3923f71cef71709795979fbbec46aa53ea3c42245";
 	inline constexpr std::size_t kMaximumRetainedSamples = 128;
 	inline constexpr std::size_t kMaximumRegionCommands = 512;
 	inline constexpr unsigned kMaximumScheduleRepetitions = 4;
+
+	/** The admitted tilesync entry uses 32 FP8 channels per tensor position. */
+	inline std::uint64_t TensorByteSpan(std::uint32_t width, std::uint32_t height)
+	{
+		ProviderFloor::Require(width && height && width <= D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION &&
+								   height <= D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION,
+			"kernel pair tensor extent is outside the bounded native contract");
+		return std::uint64_t{ width } * height * 32;
+	}
+
+	/** Completion clears are 32-bit elements inside the same private scratch allocation. */
+	inline std::uint64_t CompletionByteSpan(std::uint32_t elements)
+	{
+		ProviderFloor::Require(elements != 0, "kernel pair completion clear is empty");
+		return std::uint64_t{ elements } * sizeof(std::uint32_t);
+	}
 
 	/** Repetition is limited to complete, already-qualified static command streams. */
 	inline void ValidateRepetitions(unsigned count, std::string_view mode, std::size_t stages)
@@ -73,10 +91,38 @@ namespace NrReplay::KernelPair
 	{
 		std::vector<Command> commands;
 		std::vector<std::size_t> descriptors;
-		std::string stageSignature, commandSignature;
+		std::string stageSignature, stageFamilySignature, commandSignature;
 		std::size_t target = SIZE_MAX;
 		bool complete = false;
 	};
+	using Pairing = std::array<std::array<std::size_t, 2>, kRegions / 2>;
+	inline constexpr Pairing kSameEyePairs{ std::array<std::size_t, 2>{ 0, 1 }, std::array<std::size_t, 2>{ 2, 3 } };
+
+	/** Every original region occurs once; pairing never changes its eye, slot or packet. */
+	inline bool ValidPairing(const Pairing& pairs) noexcept
+	{
+		std::array<bool, kRegions> used{};
+		for (const auto& pair : pairs) {
+			if (pair[0] >= pair[1] || pair[1] >= kRegions || used[pair[0]] || used[pair[1]])
+				return false;
+			used[pair[0]] = used[pair[1]] = true;
+		}
+		return std::ranges::all_of(used, [](bool value) { return value; });
+	}
+
+	/** Exact complete launch signatures permit stereo pairs without enlarging either context. */
+	inline std::optional<Pairing> CompatiblePairing(const std::array<std::string, kRegions>& signatures)
+	{
+		constexpr std::array<Pairing, 3> candidates{ kSameEyePairs,
+			Pairing{ std::array<std::size_t, 2>{ 0, 2 }, std::array<std::size_t, 2>{ 1, 3 } },
+			Pairing{ std::array<std::size_t, 2>{ 0, 3 }, std::array<std::size_t, 2>{ 1, 2 } } };
+		for (const auto& pairs : candidates)
+			if (std::ranges::all_of(pairs, [&](const auto& pair) {
+					return !signatures[pair[0]].empty() && signatures[pair[0]] == signatures[pair[1]];
+				}))
+				return pairs;
+		return std::nullopt;
+	}
 	struct Operation
 	{
 		Kind kind = Kind::Launch;
@@ -93,6 +139,7 @@ namespace NrReplay::KernelPair
 			bool beginCompleted = false, endCompleted = false, completed = false;
 		};
 		std::array<Region, kRegions> regions;
+		Pairing pairs = kSameEyePairs;
 		std::size_t completed = 0;
 		std::vector<Operation> order;
 		std::vector<Operation> controlOrder;
@@ -187,47 +234,50 @@ namespace NrReplay::KernelPair
 		Require(maximumBatchedStages >= 1 && maximumBatchedStages <= kStages && (mode == "model-batch" || maximumBatchedStages == kStages),
 			"kernel pair stage limit requires model-batch and a prefix within the full stage count");
 		const auto launches = ValidateRegionCommands(sample);
+		Require(ValidPairing(sample.pairs), "kernel pair matching omits or duplicates an original region");
 		std::vector<Operation> result;
 		const auto append = [&](std::size_t region, std::size_t begin, std::size_t end) {
 			for (auto i = begin; i < end; ++i)
 				result.push_back({ sample.regions[region].commands[i].kind, region, i });
 		};
-		for (std::size_t first = 0; first < kRegions; first += 2) {
-			const auto& a = sample.regions[first];
-			const auto& b = sample.regions[first + 1];
-			if (mode == "original") {
-				append(first, 0, a.commands.size());
-				append(first + 1, 0, b.commands.size());
-				continue;
-			}
-			if (mode == "layer-control" || mode == "model-batch") {
-				std::array<std::size_t, 2> next{};
-				for (std::size_t stage = 0; stage < kStages; ++stage) {
-					const bool batch = mode == "model-batch" && stage < maximumBatchedStages;
-					for (std::size_t region = 0; region < 2; ++region) {
-						const auto launch = launches[first + region][stage];
-						append(first + region, next[region], launch + (batch ? 0 : 1));
-						next[region] = launch + 1;
+		if (mode == "original") {
+			for (std::size_t region = 0; region < kRegions; ++region)
+				append(region, 0, sample.regions[region].commands.size());
+		} else {
+			for (const auto& pair : sample.pairs) {
+				const auto first = pair[0], second = pair[1];
+				const auto& a = sample.regions[first];
+				const auto& b = sample.regions[second];
+				if (mode == "layer-control" || mode == "model-batch") {
+					std::array<std::size_t, 2> next{};
+					for (std::size_t stage = 0; stage < kStages; ++stage) {
+						const bool batch = mode == "model-batch" && stage < maximumBatchedStages;
+						for (std::size_t region = 0; region < 2; ++region) {
+							const auto identity = pair[region];
+							const auto launch = launches[identity][stage];
+							append(identity, next[region], launch + (batch ? 0 : 1));
+							next[region] = launch + 1;
+						}
+						if (batch)
+							result.push_back({ Kind::Batch, first, launches[first][stage], second, launches[second][stage] });
+						result.push_back({ Kind::Join, first });
 					}
-					if (batch)
-						result.push_back({ Kind::Batch, first, launches[first][stage], first + 1, launches[first + 1][stage] });
-					result.push_back({ Kind::Join, first });
+					append(first, next[0], a.commands.size());
+					append(second, next[1], b.commands.size());
+					continue;
 				}
-				append(first, next[0], a.commands.size());
-				append(first + 1, next[1], b.commands.size());
-				continue;
+				append(first, 0, a.target);
+				append(second, 0, b.target);
+				if (mode == "batch")
+					result.push_back({ Kind::Batch, first, a.target, second, b.target });
+				else {
+					append(first, a.target, a.target + 1);
+					append(second, b.target, b.target + 1);
+				}
+				result.push_back({ Kind::Join, first });
+				append(first, a.target + 1, a.commands.size());
+				append(second, b.target + 1, b.commands.size());
 			}
-			append(first, 0, a.target);
-			append(first + 1, 0, b.target);
-			if (mode == "batch")
-				result.push_back({ Kind::Batch, first, a.target, first + 1, b.target });
-			else {
-				append(first, a.target, a.target + 1);
-				append(first + 1, b.target, b.target + 1);
-			}
-			result.push_back({ Kind::Join, first });
-			append(first, a.target + 1, a.commands.size());
-			append(first + 1, b.target + 1, b.commands.size());
 		}
 		std::vector<std::size_t> logical;
 		std::array<std::size_t, kRegions> nextCommand{};
@@ -242,7 +292,10 @@ namespace NrReplay::KernelPair
 			if (operation.kind == Kind::Launch || operation.kind == Kind::Batch)
 				logical.push_back(sample.regions[operation.region].commands[operation.command].descriptor);
 			if (operation.kind == Kind::Batch) {
-				Require(operation.region % 2 == 0 && operation.secondRegion == operation.region + 1 && operation.secondRegion < kRegions &&
+				const bool matchingPair = std::ranges::any_of(sample.pairs, [&](const auto& pair) {
+					return pair[0] == operation.region && pair[1] == operation.secondRegion;
+				});
+				Require(matchingPair && operation.secondRegion < kRegions &&
 							operation.secondCommand < sample.regions[operation.secondRegion].commands.size() && operation.secondCommand == nextCommand[operation.secondRegion] &&
 							sample.regions[operation.secondRegion].commands[operation.secondCommand].kind == Kind::Launch &&
 							sample.regions[operation.region].commands[operation.command].descriptor % kStages ==

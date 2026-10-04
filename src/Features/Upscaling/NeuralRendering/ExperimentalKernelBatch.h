@@ -54,6 +54,8 @@ namespace NeuralRendering
 			bool inspection = false, graphMatchesQualified = false;
 			std::array<std::size_t, 4> graphLaunches{};
 			std::array<std::string, 4> graphIdentities{};
+			std::array<std::string, 4> graphFamilyIdentities{};
+			std::array<std::array<std::size_t, 2>, 2> regionPairs{};
 			std::string reason;
 		};
 

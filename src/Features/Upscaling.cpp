@@ -18114,6 +18114,12 @@ void Upscaling::SetNeuralRenderingFeatureAvailable(bool a_available)
 	}
 }
 
+bool Upscaling::IsNeuralRenderingFrameGenerationBlocked() const noexcept
+{
+	return (!globals::game::isVR && settings.frameGenerationMode != 0) ||
+	       IsFrameGenerationDx12PathActive();
+}
+
 bool Upscaling::IsNeuralRenderingRenderScaleRequired() const noexcept
 {
 	return neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled &&
@@ -22258,8 +22264,7 @@ bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const
 			(GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS &&
 				(GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS)))) &&
 		!settings.foveatedPeripheryMaskVisualization &&
-		settings.frameGenerationMode == 0 &&
-		!IsFrameGenerationDx12PathActive();
+		!IsNeuralRenderingFrameGenerationBlocked();
 	if (!routeConfigured)
 		return false;
 	const bool hardMenuBlocked =
@@ -43655,8 +43660,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		GetLatchedNeuralRenderingInsertionPoint() ==
 			NeuralRendering::InsertionPoint::UpscaledCenter &&
 		!IsNeuralRenderingInsertionTransitionBlocked() &&
-		settings.frameGenerationMode == 0 &&
-		!IsFrameGenerationDx12PathActive();
+		!IsNeuralRenderingFrameGenerationBlocked();
 	if (neuralResult)
 		neuralResult->requested = neuralRenderingRequested;
 
@@ -44779,7 +44783,7 @@ bool Upscaling::PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, I
 			                           NeuralStereoFallbackReason::TemporalSourceStale;
 			return false;
 		}
-		route.frameGenerationActive = settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+		route.frameGenerationActive = IsNeuralRenderingFrameGenerationBlocked();
 		route.frameGenerationGatePassed = !route.frameGenerationActive;
 		if (route.frameGenerationActive) {
 			route.fallbackReason = NeuralStereoFallbackReason::FrameGeneration;
@@ -44906,7 +44910,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			NeuralRendering::InsertionPoint::FinalLdrPreUi ||
 		IsNeuralRenderingInsertionTransitionBlocked() ||
 		!IsNeuralRenderingRequested() ||
-		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive() ||
+		IsNeuralRenderingFrameGenerationBlocked() ||
 		!TryClaimNeuralRenderingRoute(a_role)) {
 		return false;
 	}
@@ -45552,7 +45556,7 @@ void Upscaling::PrepareMainFullResolutionNeuralFrame() noexcept
 		route.hardMenuBlocked = menuBlocked;
 		route.menuContinuityAllowed = !menuBlocked;
 		route.temporalAdmission = admission;
-		route.frameGenerationActive = settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+		route.frameGenerationActive = IsNeuralRenderingFrameGenerationBlocked();
 		route.frameGenerationGatePassed = !route.frameGenerationActive;
 		if (!admission.admitted || admission.sourceWorldFrame != globals::state->frameCount) {
 			publishPreparationFallback(!admission.admitted ? GetNeuralTemporalFallbackReason(admission) :
@@ -45635,8 +45639,7 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 			(GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS && IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS))) &&
 		!settings.foveatedPeripheryMaskVisualization &&
 		!IsPresentationUpscalingActive() && temporalAdmission.admitted &&
-		settings.frameGenerationMode == 0 &&
-		!IsFrameGenerationDx12PathActive() &&
+		!IsNeuralRenderingFrameGenerationBlocked() &&
 		GetLatchedNeuralRenderingInsertionPoint() ==
 			NeuralRendering::InsertionPoint::FinalLdrPreUi &&
 		!IsNeuralRenderingInsertionTransitionBlocked();
@@ -46031,8 +46034,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorCenterStereo(UpscaleM
 			GetLatchedNeuralRenderingInsertionPoint() ==
 				NeuralRendering::InsertionPoint::UpscaledCenter &&
 			!IsNeuralRenderingInsertionTransitionBlocked() &&
-			settings.frameGenerationMode == 0 &&
-			!IsFrameGenerationDx12PathActive();
+			!IsNeuralRenderingFrameGenerationBlocked();
 		if (!neuralRouteRequested) {
 			for (uint32_t eye = 0; eye < params.size(); ++eye) {
 				if (const auto dispatched = dispatchPhase(
@@ -46767,7 +46769,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	}
 
 	const bool frameGenerationActive =
-		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+		IsNeuralRenderingFrameGenerationBlocked();
 	const bool neuralBaseEligible =
 		neuralRequested &&
 		a_upscaleMethod == UpscaleMethod::kDLSS &&
@@ -55451,7 +55453,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool fullResolutionNeural = neuralSubmitConfigured &&
 	                                  GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution;
 	const bool neuralSubmitFrameGenerationActive =
-		settings.frameGenerationMode != 0 || IsFrameGenerationDx12PathActive();
+		IsNeuralRenderingFrameGenerationBlocked();
 	bool neuralSubmitBaseEligible = false;
 	NeuralStereoFallbackReason neuralSubmitAdmissionFallbackReason =
 		NeuralStereoFallbackReason::SubmitPresentationGate;

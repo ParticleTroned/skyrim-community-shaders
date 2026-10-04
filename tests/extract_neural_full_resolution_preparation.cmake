@@ -23,6 +23,7 @@ function(extract_function name output)
 endfunction()
 
 extract_function(PrepareMainFullResolutionNeuralFrame _prepare)
+extract_function(IsNeuralRenderingFrameGenerationBlocked _frame_generation_gate "bool")
 extract_function(GetNeuralTemporalFallbackReason _fallback "Upscaling::NeuralStereoFallbackReason")
 extract_function(ApplyMainFinalLdrNeuralStereo _apply)
 extract_function(PerformUpscaling _upscale)
@@ -37,4 +38,4 @@ if(NOT _postprocess MATCHES "else \\{[\n\r\t ]+upscaling.PrepareMainFullResoluti
     message(FATAL_ERROR "Native/TAA guide capture must precede postprocessing on all runtimes")
 endif()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
-file(WRITE "${OUTPUT_DIRECTORY}/neural_full_resolution_preparation_under_test.h" "${_fallback}\n${_prepare}\n")
+file(WRITE "${OUTPUT_DIRECTORY}/neural_full_resolution_preparation_under_test.h" "${_frame_generation_gate}\n${_fallback}\n${_prepare}\n")

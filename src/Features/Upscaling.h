@@ -2528,6 +2528,8 @@ public:
 	[[nodiscard]] bool IsNeuralRenderingRenderScaleRequired() const noexcept;
 	/** Pre-DLSS VR work waits for physically active, requested scaled targets. */
 	[[nodiscard]] bool IsNeuralRenderingRenderScaleAvailable() const noexcept;
+	/** Flat frame-generation requests and DX12 ownership block NR; VR ignores the saved request. */
+	[[nodiscard]] bool IsNeuralRenderingFrameGenerationBlocked() const noexcept;
 	[[nodiscard]] bool IsNeuralRenderingRequested() const noexcept;
 	[[nodiscard]] NeuralRendering::RenderingMode GetNeuralRenderingMode() const noexcept;
 	[[nodiscard]] NeuralRendering::PipelineArrangement GetNeuralRenderingArrangement() const noexcept;

@@ -13,6 +13,10 @@ struct State
 namespace globals
 {
 	State* state = nullptr;
+	namespace game
+	{
+		bool isVR = false;
+	}
 }
 
 struct Upscaling
@@ -88,6 +92,7 @@ struct Upscaling
 	bool IsPresentationUpscalingActive() const { return presentation; }
 	bool IsNeuralRenderingInsertionTransitionBlocked() const { return transition; }
 	bool IsFrameGenerationDx12PathActive() const { return frameGeneration; }
+	bool IsNeuralRenderingFrameGenerationBlocked() const noexcept;
 	auto BuildNeuralTemporalAdmission(NeuralStereoRouteRole, bool blocked, bool continuity) const
 	{
 		auto inputs = world;
@@ -158,7 +163,7 @@ namespace
 			"Failed preparation must report its reason without claiming an NR attempt, bypass or commit");
 		Require(route.temporalAdmission.currentFrame == state.frameCount && route.hardMenuBlocked == upscaling.hardMenu &&
 					route.menuContinuityAllowed == !upscaling.hardMenu &&
-					route.frameGenerationActive == (upscaling.frameGeneration || upscaling.settings.frameGenerationMode != 0) &&
+					route.frameGenerationActive == (upscaling.frameGeneration || (!globals::game::isVR && upscaling.settings.frameGenerationMode != 0)) &&
 					route.frameGenerationGatePassed == !route.frameGenerationActive,
 			"Preparation fallback must preserve the current admission and frame-generation evidence");
 	}
@@ -268,6 +273,23 @@ int main()
 			}
 		}
 		Require(upscaling.resets == 2, "Observational fallback publication must not reset temporal histories");
+		for (const bool isVR : { false, true }) {
+			globals::game::isVR = isVR;
+			for (const uint32_t savedMode : { 0u, 1u, 2u }) {
+				for (const bool dx12Owned : { false, true }) {
+					Upscaling preset;
+					preset.settings.frameGenerationMode = savedMode;
+					preset.frameGeneration = dx12Owned;
+					NextFrame(preset, state);
+					preset.PrepareMainFullResolutionNeuralFrame();
+					const bool blocked = dx12Owned || (!isVR && savedMode != 0);
+					Require(preset.mainFinalLdrNeuralState.ready == !blocked && preset.guideCopies == (blocked ? 0u : 1u),
+						"Saved frame-generation preferences must not block VR NR; flat requests and DX12 ownership must still block");
+					if (blocked)
+						RequireNoAttemptFallback(preset, state, Upscaling::NeuralStereoFallbackReason::FrameGeneration);
+				}
+			}
+		}
 		std::cout << "Full-resolution preparation lifecycle passed\n";
 		return 0;
 	} catch (const std::exception& error) {

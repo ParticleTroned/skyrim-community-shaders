@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "90D2684CC6FCFCEE5AD5738A6A9C455ECAFCCE793A780A4D6DA11466D4E573F0"
+        "sha256": "F47357733D4F1D0195803BE82561302C30816D12A25DEADA3D1305B01B337F1F"
     },
     "runtimeSettingsContract": {
         "revision": 8,
-        "sourceTreeSha256": "F9B5024D472D1A5CFE8B5216848EFA9AC697C15C4735CEA38625083C49BD10A3",
+        "sourceTreeSha256": "CAE2498985888E6820CE22ACA5461FB5017A4FE0A65159BC2CCFB706E9A88AAB",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -31,6 +31,7 @@
                 "src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h",
                 "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
                 "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
+                "src/Features/Upscaling/NeuralRendering/RoiExecutionMode.h",
                 "src/Features/VolumetricLightingTuning.h",
                 "src/Features/VolumetricLightingTuningMigration.h",
                 "src/Features/VR/MenuPositioningPolicy.h",
@@ -123,6 +124,7 @@
             "src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h",
             "src/Features/Upscaling/NeuralRendering/PipelinePolicy.h",
             "src/Features/Upscaling/NeuralRendering/RegionCapacity.h",
+            "src/Features/Upscaling/NeuralRendering/RoiExecutionMode.h",
             "src/Features/VolumetricLighting.cpp",
             "src/Features/VolumetricLighting.h",
             "src/Features/VolumetricLightingTuning.h",
@@ -640,6 +642,7 @@
             ["Neural Rendering Colour"],
             ["Disable at Boot", "NeuralColor"],
             ["Neural Rendering", "experiments"],
+            ["Neural Rendering", "rendering", "neuralCharacterMultiRoiEnabled"],
             ["Water Effects"],
             ["Wetness Effects"],
             ["Adaptive Balance", "rendererControlsEnabled"],
@@ -658,6 +661,10 @@
         "requiredValues": [
             { "path": ["Neural Rendering", "schemaVersion"], "value": 1 },
             { "path": ["Neural Rendering", "rendering", "neuralRenderingEnabled"], "value": false },
+            {
+                "path": ["Neural Rendering", "rendering", "neuralCharacterRoiExecutionMode"],
+                "value": 0
+            },
             { "path": ["Neural Rendering", "colour", "schemaVersion"], "value": 1 },
             { "path": ["Neural Rendering", "colour", "lightingPreservation"], "value": 1.0 },
             { "path": ["Extended Materials", "ParallaxStrength"], "value": 1.0 },

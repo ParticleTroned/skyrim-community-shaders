@@ -120,6 +120,7 @@
       "neuralCharacterMaximumDistanceMeters": 10.0,
       "neuralCharacterMinimumFacePixelSize": 64,
       "neuralCharacterRenderingEnabled": false,
+      "neuralCharacterRoiExecutionMode": 0,
       "neuralCharacterRoiHoldFrames": 3,
       "neuralCharacterRoiMargin": 0.25,
       "neuralCharacterSkinEnabled": true,

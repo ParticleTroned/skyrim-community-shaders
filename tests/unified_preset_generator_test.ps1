@@ -150,6 +150,9 @@ try {
         $neural = $settings.'Neural Rendering'
         Assert-True ($neural.schemaVersion -eq 1 -and $neural.colour.schemaVersion -eq 1) "Missing independent NR schema for $($tierProperty.Name)."
         Assert-True ($neural.rendering.neuralRenderingEnabled -eq $false) "NR was enabled by a graphics tier: $($tierProperty.Name)."
+        Assert-True ($null -ne $neural.rendering.psobject.Properties['neuralCharacterRoiExecutionMode'] -and
+            $neural.rendering.neuralCharacterRoiExecutionMode -eq 0) "Automatic single ROI default is absent or changed for $($tierProperty.Name)."
+        Assert-True ($null -eq $neural.rendering.psobject.Properties['neuralCharacterMultiRoiEnabled']) "Legacy session-only multi-ROI override leaked into $($tierProperty.Name)."
         Assert-True ($neural.colour.lightingPreservation -eq 1.0) "Lighting preservation default changed for $($tierProperty.Name)."
         Assert-True ($null -eq $neural.psobject.Properties['experiments']) "Session-only colour experiments leaked into $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['NeuralColor']) "Legacy NR boot key appeared in $($tierProperty.Name)."

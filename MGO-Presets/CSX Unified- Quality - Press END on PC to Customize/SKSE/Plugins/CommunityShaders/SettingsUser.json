@@ -80,7 +80,7 @@
     },
     "settingsContract": {
       "revision": 8,
-      "sourceTreeSha256": "F9B5024D472D1A5CFE8B5216848EFA9AC697C15C4735CEA38625083C49BD10A3"
+      "sourceTreeSha256": "CAE2498985888E6820CE22ACA5461FB5017A4FE0A65159BC2CCFB706E9A88AAB"
     }
   },
   "Upscaling": {
@@ -134,6 +134,7 @@
       "neuralCharacterMaximumDistanceMeters": 10.0,
       "neuralCharacterMinimumFacePixelSize": 64,
       "neuralCharacterRenderingEnabled": false,
+      "neuralCharacterRoiExecutionMode": 0,
       "neuralCharacterRoiHoldFrames": 3,
       "neuralCharacterRoiMargin": 0.25,
       "neuralCharacterSkinEnabled": true,

@@ -115,8 +115,15 @@ Balance's unified global profile, separate exterior/interior godray profiles,
 wet-grass darkening, locked VR menu placement, depth-culling policy modes, and
 opt-in verbose PBR diagnostics, and the independent Neural Rendering feature.
 Neural Rendering remains off in every tier, with all persistent rendering
-and colour defaults explicit, including lighting preservation at 100%. Their retired keys are explicitly rejected so
-a package cannot silently fall back through legacy migration on first load.
+and colour defaults explicit, including lighting preservation at 100%.
+Character ROI execution defaults to `AutomaticSingle` (`0`) in all tiers,
+preserving the smallest supported single-rectangle behavior. Independent and
+batched multi-ROI remain explicit user choices in the NR menu; presets do not
+enable them. This additive persisted setting retains contract revision 8,
+and its enum/default owner is included in the settings-source fingerprint.
+The legacy multi-ROI session override is not serialized. Retired NR keys are
+explicitly rejected so a package cannot silently fall back through legacy
+migration on first load.
 
 Global and all five Adaptive Balance profiles explicitly include Sky
 Saturation, Caustics Strength, Tiling, Speed and Color Dispersion, and Water
@@ -205,6 +212,9 @@ Generate all three packages and the evidence report:
 ```powershell
 pwsh -NoProfile -File tools/generate-unified-presets.ps1
 ```
+
+Generation updates each preset's settings and metadata plus the report. It
+does not create or replace `.7z` archives beside those preset directories.
 
 Perform the non-writing deterministic check:
 

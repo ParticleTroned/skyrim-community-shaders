@@ -328,6 +328,16 @@ namespace
 		Check(ReadIni() == binaryContents, "Unsupported text encodings must not be silently overwritten");
 		WriteIni("[Water]\nbAutoWaterSilhouetteReflections=0\n");
 
+		const auto strictOriginal = ReadIni();
+		const auto replaceLock = CreateFileW(iniPath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+		Check(replaceLock != INVALID_HANDLE_VALUE, "Strict replacement test must lock the destination against deletion");
+		std::string strictError;
+		const bool strictSaved = Util::FileHelpers::WriteTextFileAtomic(iniPath, "replacement", strictError, false);
+		CloseHandle(replaceLock);
+		Check(!strictSaved && !strictError.empty() && ReadIni() == strictOriginal,
+			"Strict atomic writes must preserve the original when replacement fails");
+
 		globals::game::iniSettingCollection = nullptr;
 		globals::game::iniPrefSettingCollection = nullptr;
 		ExpectFailure([&] { Util::SaveGameSettings(settings); });

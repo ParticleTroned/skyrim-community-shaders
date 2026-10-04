@@ -13,6 +13,8 @@
 #include <cstring>
 #include <d3d11_1.h>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "GpuPass.h"
@@ -83,6 +85,9 @@ namespace VRHybridCulling
 			RE::NiTransform worldCamera{};
 			VRHybridCullingSnapshot::Source source{};
 			std::uint64_t epoch = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::uint64_t proofSelection = 0;
+#endif
 			winrt::com_ptr<ID3D11ShaderResourceView> depth;
 		};
 
@@ -97,6 +102,7 @@ namespace VRHybridCulling
 			winrt::com_ptr<ID3D11ComputeShader> test;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			winrt::com_ptr<ID3D11ComputeShader> diagnosticTest;
+			winrt::com_ptr<ID3D11ComputeShader> guardedBaselineTest, guardedBaselineDiagnosticTest;
 			winrt::com_ptr<ID3D11Buffer> diagnosticBuffer, diagnosticStaging;
 			winrt::com_ptr<ID3D11UnorderedAccessView> diagnosticUAV;
 #endif
@@ -134,6 +140,10 @@ namespace VRHybridCulling
 		bool g_ready = false;
 		std::atomic_bool g_reloadRequested{ false };
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		// Bit zero selects the shader; higher bits prevent A/B/A changes from reusing an old batch.
+		std::atomic_uint64_t g_proofSelection{ 0 }, g_proofActiveSelection{ 0 }, g_proofActiveEpoch{ 0 };
+		std::atomic_bool g_guardedBaselineAvailable{ false }, g_guardedBaselineDiagnosticAvailable{ false };
+		std::atomic<const char*> g_guardedBaselineAvailability{ "not_created" };
 		std::atomic_bool g_traversalEnabled{ false }, g_traversalAvailable{ false };
 		std::atomic<const char*> g_traversalAvailability{ "not_created" };
 		std::atomic_uint64_t g_traversalSubmitted{ 0 }, g_traversalUnavailable{ 0 };
@@ -224,6 +234,9 @@ namespace VRHybridCulling
 		bool CaptureFrame(Frame& a_frame, std::uint64_t a_epoch, VRHybridCullingSnapshot::Phase a_phase)
 		{
 			a_frame = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			a_frame.proofSelection = g_proofSelection.load(std::memory_order_acquire);
+#endif
 			auto* renderer = globals::game::renderer;
 			auto* graphics = globals::game::graphicsState;
 			auto* camera = RE::Main::WorldRootCamera();
@@ -361,18 +374,30 @@ namespace VRHybridCulling
 		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		winrt::com_ptr<ID3D11ComputeShader> CompileProofShader(bool a_baseline, bool a_diagnostic)
+		{
+			std::vector<std::pair<const char*, const char*>> defines;
+			if (a_baseline)
+				defines.push_back({ "CSX_HIZ_GUARDED_VERTEX_BASELINE", "1" });
+			if (a_diagnostic)
+				defines.push_back({ "CSX_HIZ_DIAGNOSTICS", "1" });
+			winrt::com_ptr<ID3D11ComputeShader> shader;
+			shader.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+				L"Data\\Shaders\\VRHybridCulling\\TestBoundsCS.hlsl", defines, "cs_5_0")));
+			if (!shader)
+				throw std::runtime_error("Hybrid proof comparison shader unavailable");
+			winrt::com_ptr<ID3D11Device> shaderDevice;
+			shader->GetDevice(shaderDevice.put());
+			if (shaderDevice.get() != g_resources.device.get())
+				throw std::runtime_error("Hybrid proof comparison shader device changed");
+			return shader;
+		}
+
 		void CreateTraversalDiagnostics()
 		{
 			auto& resources = g_resources;
 			g_traversalAvailable.store(false, std::memory_order_release);
-			resources.diagnosticTest.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
-				L"Data\\Shaders\\VRHybridCulling\\TestBoundsCS.hlsl", { { "CSX_HIZ_DIAGNOSTICS", "1" } }, "cs_5_0")));
-			if (!resources.diagnosticTest)
-				throw std::runtime_error("Hybrid traversal diagnostic shader unavailable");
-			winrt::com_ptr<ID3D11Device> shaderDevice;
-			resources.diagnosticTest->GetDevice(shaderDevice.put());
-			if (shaderDevice.get() != resources.device.get())
-				throw std::runtime_error("Hybrid traversal diagnostic shader device changed");
+			resources.diagnosticTest = CompileProofShader(false, true);
 			D3D11_BUFFER_DESC desc{};
 			desc.ByteWidth = VRDepthCullingTemporalPolicy::kMaximumObjects * sizeof(VRHybridCullingDiagnostics::Record);
 			desc.StructureByteStride = sizeof(VRHybridCullingDiagnostics::Record);
@@ -473,6 +498,14 @@ namespace VRHybridCulling
 			Util::SetResourceName(resources.constants.get(), "VRHybridCulling::Constants");
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			try {
+				resources.guardedBaselineTest = CompileProofShader(true, false);
+				g_guardedBaselineAvailability.store("ready", std::memory_order_release);
+				g_guardedBaselineAvailable.store(true, std::memory_order_release);
+			} catch (const std::exception& error) {
+				g_guardedBaselineAvailability.store("setup_failed", std::memory_order_release);
+				logger::warn("VR: Hybrid guarded proof baseline unavailable: {}", error.what());
+			}
+			try {
 				CreateTraversalDiagnostics();
 			} catch (const std::exception& error) {
 				resources.diagnosticTest = nullptr;
@@ -481,6 +514,14 @@ namespace VRHybridCulling
 				resources.diagnosticUAV = nullptr;
 				g_traversalAvailability.store("setup_failed", std::memory_order_release);
 				logger::warn("VR: Hybrid traversal diagnostics unavailable; normal culling retained: {}", error.what());
+			}
+			if (resources.guardedBaselineTest && resources.diagnosticTest) {
+				try {
+					resources.guardedBaselineDiagnosticTest = CompileProofShader(true, true);
+					g_guardedBaselineDiagnosticAvailable.store(true, std::memory_order_release);
+				} catch (const std::exception& error) {
+					logger::warn("VR: Hybrid guarded proof diagnostics unavailable: {}", error.what());
+				}
 			}
 			if (telemetry)
 				g_pipelineBuilds.fetch_add(1, std::memory_order_relaxed);
@@ -636,6 +677,10 @@ namespace VRHybridCulling
 			g_history.pipelineInvalidated = g_history.pending;
 			g_resources = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			g_guardedBaselineAvailable.store(false, std::memory_order_release);
+			g_guardedBaselineDiagnosticAvailable.store(false, std::memory_order_release);
+			g_guardedBaselineAvailability.store("not_created", std::memory_order_release);
+			g_proofActiveEpoch.store(0, std::memory_order_release);
 			g_traversalAvailable.store(false, std::memory_order_release);
 			g_traversalAvailability.store("not_created", std::memory_order_release);
 #endif
@@ -649,6 +694,10 @@ namespace VRHybridCulling
 		try {
 			if (!EnsurePipeline())
 				return HYBRID_PREPARATION_FAILED("pipeline_unavailable", a_epoch);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if ((g_prepared.proofSelection & 1) != 0 && !g_resources.guardedBaselineTest)
+				return HYBRID_PREPARATION_FAILED("proof_baseline_unavailable", a_epoch);
+#endif
 			EnsurePyramid(g_prepared.test.pyramid);
 			g_ready = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -678,6 +727,10 @@ namespace VRHybridCulling
 			return HYBRID_PREPARATION_FAILED("empty_or_invalid_batch", a_epoch);
 		if (g_prepared.epoch != a_epoch || g_prepared.source.frame != batch.frame)
 			return HYBRID_PREPARATION_FAILED("preparation_expired", a_epoch);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (g_prepared.proofSelection != g_proofSelection.load(std::memory_order_acquire))
+			return HYBRID_PREPARATION_FAILED("proof_selection_changed", a_epoch);
+#endif
 		if (!CheckNativeBuffers(a_culler, batch.count, bounds, results))
 			return HYBRID_PREPARATION_FAILED("native_buffers_invalid", a_epoch);
 		g_ready = false;
@@ -708,7 +761,9 @@ namespace VRHybridCulling
 		BuildPyramid();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const bool diagnosticRequested = telemetry && g_traversalEnabled.load(std::memory_order_acquire);
-		const bool diagnostic = diagnosticRequested && g_traversalAvailable.load(std::memory_order_acquire);
+		const bool guardedBaseline = (g_prepared.proofSelection & 1) != 0;
+		const bool diagnostic = diagnosticRequested && g_traversalAvailable.load(std::memory_order_acquire) &&
+		                        (!guardedBaseline || g_guardedBaselineDiagnosticAvailable.load(std::memory_order_acquire));
 		if (diagnosticRequested && !diagnostic)
 			g_traversalUnavailable.fetch_add(1, std::memory_order_relaxed);
 		if (telemetry && HasCurrentTraversalDiagnostics())
@@ -727,10 +782,12 @@ namespace VRHybridCulling
 			context->CSSetUnorderedAccessViews(0, 1, &results->uav, nullptr);
 			auto* testShader = g_resources.test.get();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+			if (guardedBaseline)
+				testShader = g_resources.guardedBaselineTest.get();
 			if (diagnostic) {
 				auto* diagnosticUAV = g_resources.diagnosticUAV.get();
 				context->CSSetUnorderedAccessViews(1, 1, &diagnosticUAV, nullptr);
-				testShader = g_resources.diagnosticTest.get();
+				testShader = guardedBaseline ? g_resources.guardedBaselineDiagnosticTest.get() : g_resources.diagnosticTest.get();
 			}
 #endif
 			context->CSSetShader(testShader, nullptr, 0);
@@ -756,6 +813,8 @@ namespace VRHybridCulling
 		g_history.pending = true;
 		g_history.pipelineInvalidated = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		g_proofActiveSelection.store(g_prepared.proofSelection, std::memory_order_relaxed);
+		g_proofActiveEpoch.store(a_epoch, std::memory_order_release);
 		if (telemetry) {
 			g_lastCount.store(batch.count, std::memory_order_relaxed);
 			g_lastCountEpoch.store(a_epoch, std::memory_order_release);
@@ -806,6 +865,10 @@ namespace VRHybridCulling
 #endif
 		if (!a_selected || !VRHybridCullingHistory::Matches(g_history.batch, batch))
 			HYBRID_REJECT_HISTORY("batch_mismatch");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		else if (g_history.frame.proofSelection != g_proofSelection.load(std::memory_order_acquire))
+			HYBRID_REJECT_HISTORY("proof_selection_changed");
+#endif
 		else if (g_history.pipelineInvalidated || g_reloadRequested.load(std::memory_order_acquire))
 			HYBRID_REJECT_HISTORY("pipeline_changed");
 		else if (std::memcmp(g_history.bounds.data(), reinterpret_cast<const void*>(batch.transforms), batch.count * sizeof(OBBTransform)) != 0)
@@ -902,6 +965,17 @@ namespace VRHybridCulling
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	void SetGuardedVertexBaselineEnabled(bool a_enabled) noexcept
+	{
+		const auto previous = g_proofSelection.load(std::memory_order_acquire);
+		if (((previous & 1) != 0) == a_enabled)
+			return;
+		g_proofSelection.store(((previous & ~std::uint64_t{ 1 }) + 2) | std::uint64_t{ a_enabled }, std::memory_order_release);
+		g_proofActiveEpoch.store(0, std::memory_order_release);
+		g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
+		VRDepthCullingTemporal::InvalidateHybridProofHistory();
+	}
+
 	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept
 	{
 		if (g_traversalEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
@@ -940,9 +1014,25 @@ namespace VRHybridCulling
 			.dispatch = g_dispatchTiming.Read(),
 			.readback = g_readbackTiming.Read()
 		};
+		const auto proofSelection = g_proofSelection.load(std::memory_order_acquire);
+		const auto activeEpoch = g_proofActiveEpoch.load(std::memory_order_acquire);
+		const auto activeSelection = g_proofActiveSelection.load(std::memory_order_relaxed);
+		result.proofVariantRequested = (proofSelection & 1) != 0 ? "guarded_baseline" : "original_vertices";
+		const bool proofActive = current && activeEpoch == a_epoch && activeSelection == proofSelection &&
+		                         std::strcmp(result.effectiveBackend, "hybrid") == 0;
+		result.proofVariantActive = !a_selected || !a_enabled ? "inactive" :
+		                                                        (proofActive ? result.proofVariantRequested : "pending");
+		result.proofSelectionRevision = proofSelection >> 1;
+		result.proofActiveRevision = proofActive ? activeSelection >> 1 : 0;
+		result.guardedBaselineAvailable = g_guardedBaselineAvailable.load(std::memory_order_acquire);
+		result.guardedBaselineAvailability = g_guardedBaselineAvailability.load(std::memory_order_acquire);
 		result.traversalDiagnosticsEnabled = g_traversalEnabled.load(std::memory_order_acquire);
 		result.traversalDiagnosticsAvailable = g_traversalAvailable.load(std::memory_order_acquire);
 		result.traversalDiagnosticsAvailability = g_traversalAvailability.load(std::memory_order_acquire);
+		if ((proofSelection & 1) != 0 && result.traversalDiagnosticsAvailable && !g_guardedBaselineDiagnosticAvailable.load(std::memory_order_acquire)) {
+			result.traversalDiagnosticsAvailable = false;
+			result.traversalDiagnosticsAvailability = "baseline_shader_unavailable";
+		}
 		result.traversalSubmittedBatches = g_traversalSubmitted.load(std::memory_order_relaxed);
 		result.traversalUnavailableBatches = g_traversalUnavailable.load(std::memory_order_relaxed);
 		result.traversalBatches = g_traversalBatches.load(std::memory_order_relaxed);

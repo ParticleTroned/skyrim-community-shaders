@@ -104,6 +104,42 @@ namespace
 			"Reason history lost measured or zero values");
 	}
 
+	void PreservesProofVariantSelectionAndAvailability()
+	{
+		VRDepthCullingTemporal::Status temporal{};
+		VRHybridCulling::Status hybrid{};
+		auto comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
+		Require(comparison.at("requested") == "original_vertices" && comparison.at("active") == "pending" &&
+					!comparison.at("baselineAvailable").get<bool>() && comparison.at("baselineAvailability") == "not_created" &&
+					comparison.at("requestedRevision") == 0 && comparison.at("activeRevision") == 0,
+			"Uninitialized proof comparison fabricated an active baseline");
+		temporal.mode = VRDepthCullingTemporal::Mode::Hybrid;
+		hybrid.proofVariantRequested = "guarded_baseline";
+		hybrid.proofSelectionRevision = 2;
+		hybrid.guardedBaselineAvailability = "setup_failed";
+		comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
+		Require(comparison.at("requested") == "guarded_baseline" && comparison.at("active") == "pending" &&
+					!comparison.at("baselineAvailable").get<bool>() && comparison.at("baselineAvailability") == "setup_failed" &&
+					comparison.at("requestedRevision") == 2 && comparison.at("activeRevision") == 0,
+			"A requested but unavailable proof variant was reported active");
+		hybrid.proofVariantActive = "guarded_baseline";
+		hybrid.proofActiveRevision = 2;
+		hybrid.guardedBaselineAvailable = true;
+		hybrid.guardedBaselineAvailability = "ready";
+		comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
+		Require(comparison.at("requested") == "guarded_baseline" && comparison.at("active") == "guarded_baseline" &&
+					comparison.at("baselineAvailable").get<bool>() && comparison.at("baselineAvailability") == "ready" &&
+					comparison.at("requestedRevision") == comparison.at("activeRevision"),
+			"Submitted baseline shader attribution was lost");
+		temporal.mode = VRDepthCullingTemporal::Mode::Balanced;
+		hybrid.proofVariantActive = "inactive";
+		hybrid.proofActiveRevision = 0;
+		comparison = MenuDepthCullingDiagnostics::BuildStatus(temporal, hybrid).at("hybrid").at("proofBiasComparison");
+		Require(comparison.at("requested") == "guarded_baseline" && comparison.at("active") == "inactive" &&
+					comparison.at("activeRevision") == 0 && comparison.at("requestedRevision") == 2,
+			"Inactive Hybrid mode lost its remembered selection or claimed an active proof");
+	}
+
 	void SeparatesNativeReadbackFromValidation()
 	{
 		VRDepthCullingTemporal::Status temporal{};
@@ -233,6 +269,7 @@ int main()
 		ValidatesTraversalRecords();
 		ValidatesProofCountersAndViewportReasons();
 		PreservesInactiveAndFallbackEvidence();
+		PreservesProofVariantSelectionAndAvailability();
 		DistinguishesMissingSourceAndUnmeasuredTiming();
 		SeparatesNativeReadbackFromValidation();
 		PreservesNativeVisibilityBeforeAndAfterRecovery();

@@ -34,6 +34,14 @@ DevBench-only work. Advanced remains default; motion and lifecycle
 qualification remain open. PBR grass, grass optimization and Reverse Z
 remain separate later PRs.
 
+The DevBench A/B build now selects the previous guarded face/triangle
+proofs or current original-vertex proofs without restarting between
+conditions. Both shader variants are warmed at pipeline creation;
+selection invalidates pending history and measurement windows. Twelve
+focused tests and actual-flag production isolation checks pass. The next
+in-game assay uses matched-view A/B/B/A windows at noon to decide whether
+to retain the last bias change. No A/B performance result is claimed yet.
+
 ## Scope and authority
 
 The current user request is to cross-check the two supplied handovers,

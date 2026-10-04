@@ -89,6 +89,8 @@ namespace VRDepthCullingTemporal
 	/** Return the mode currently observed by the render thread. */
 	[[nodiscard]] Mode GetMode();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Invalidate proof-variant history from the main-thread DevBench settings path. */
+	void InvalidateHybridProofHistory() noexcept;
 	/** Return thread-safe diagnostics for DevBench inspection. */
 	[[nodiscard]] Status GetStatus();
 	/** Share admission between Advanced and Hybrid samples and their combined reset. */

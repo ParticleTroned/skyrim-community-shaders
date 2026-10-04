@@ -179,7 +179,7 @@ and work measurements, with telemetry enabled, then reset the counters.
 `planeProofs` (successful plane proofs), `polygonClips` (clipper entries),
 and `faceBiasOnlyProofs` / `triangleBiasOnlyProofs` (original-depth minima
 that pass the base bias but fail the added interpolation allowance).
-These shortcut counts measure avoided work, not independently recovered
+These shortcut counts measure intermediate proof events, not independently recovered
 object rejections. Disable diagnostics for frame-time and GPU comparisons.
 
 Viewport reasons are `viewport_offscreen` for wholly outside bounds,
@@ -199,6 +199,49 @@ labels `VRHybridCulling::BuildHierarchy` and
 `VRHybridCulling::Visibility` identify its GPU work.
 
 ## Validation and acceptance
+
+### DevBench proof-bias A/B
+
+The testing build exposes
+`set_depth_culling_guarded_vertex_baseline_enabled` through
+`communityshaders.menu`. With boolean `enabled: true`, A selects the
+previous guarded-bias face/triangle code (`guarded_baseline`); with
+`enabled: false`, B selects the current original-vertex base-bias code
+(`original_vertices`, default). Include `expectedBuildId` in requests.
+The control is VR-only, session-only and does not save settings or enable
+Hybrid, telemetry or traversal diagnostics.
+
+Both normal variants and their diagnostic variants are compiled during
+pipeline setup. Switching does not compile shaders or rebuild resources.
+Changed selection invalidates pending visibility history and diagnostic
+records and marks the measurement window stale. Repeating the current
+selection is a no-op. `hybrid.proofBiasComparison` reports requested and
+active variant, their revisions, and baseline shader availability. If the
+baseline shader is unavailable, requested A falls back to native culling;
+it never silently uses B. A failed diagnostic variant leaves its normal
+shader available and reports diagnostic unavailability.
+
+Before comparing, warm Hybrid and confirm `baselineAvailable: true`.
+For each phase, select A or B, verify matching requested/active revisions
+and effective Hybrid, reset to noon and settle, then reset counters.
+Use A/B/B/A timing windows with traversal diagnostics and telemetry off;
+collect GPU scopes and reason counts in separate windows. Preserve the
+same scene, view and render settings. Restore the original selection and
+Advanced afterward. A new DLL requires an initial game restart, but A/B
+switches within that process do not. This toggled assay is not an
+identical-depth GPU replay; small scene and pose changes still need control.
+
+All selector state, extra shader creation and the control compile out of
+production. Twelve focused tests pass, including both bias variants with
+standard/reversed depth, diagnostics equivalence and independent visibility
+oracles. Both normal variants are byte-identical to their respective
+source revisions (`425b8d373` baseline, `95edcef20` current), including
+strict optimized `/Ges /WX /O3` standard and reversed-depth permutations.
+Actual compiler flags and forced headers confirm the extra code
+is absent from production preprocessing; no separate production DLL link
+or in-game A/B result is claimed yet.
+
+### Original-vertex implementation validation
 
 The proof-bias iteration passed all 12 focused DepthCulling,
 VRHybridCulling and D3DContextProtection tests in 15.32 seconds. The WARP

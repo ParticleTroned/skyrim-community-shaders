@@ -89,17 +89,23 @@ namespace ProjectedBounds
 		const float guardedBias = bias + interpolationBias;
 		[loop] for (uint face = 0; face < 6; ++face)
 		{
+#ifdef CSX_HIZ_GUARDED_VERTEX_BASELINE
+			if (any(bounds.rectangle[face].zw < minimumPixel) || any(bounds.rectangle[face].xy > maximumPixel) ||
+				DepthOrder::IsBehindWithBias(bounds.nearestDepth[face >> 2][face & 3], depth, guardedBias))
+				continue;
+#else
 			if (any(bounds.rectangle[face].zw < minimumPixel) || any(bounds.rectangle[face].xy > maximumPixel))
 				continue;
 			// Original-vertex extrema bound the entire affine face without clipping interpolation.
 			float faceNearest = bounds.nearestDepth[face >> 2][face & 3];
 			if (DepthOrder::IsBehindWithBias(faceNearest, depth, bias)) {
-#ifdef CSX_HIZ_DIAGNOSTICS
+#	ifdef CSX_HIZ_DIAGNOSTICS
 				if (!DepthOrder::IsBehindWithBias(faceNearest, depth, guardedBias))
 					HIZ_COUNT_FACE_BIAS_PROOF;
-#endif
+#	endif
 				continue;
 			}
+#endif
 			uint4 corners = Faces[face];
 			[loop] for (uint triangleIndex = 0; triangleIndex < 2; ++triangleIndex)
 			{
@@ -108,13 +114,18 @@ namespace ProjectedBounds
 				float3 b = vertices[triangleIndex == 0 ? corners.y : corners.z];
 				float3 c = vertices[triangleIndex == 0 ? corners.z : corners.w];
 				float nearest = DepthOrder::Nearest(a.z, DepthOrder::Nearest(b.z, c.z));
+#ifdef CSX_HIZ_GUARDED_VERTEX_BASELINE
+				if (DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
+					continue;
+#else
 				if (DepthOrder::IsBehindWithBias(nearest, depth, bias)) {
-#ifdef CSX_HIZ_DIAGNOSTICS
+#	ifdef CSX_HIZ_DIAGNOSTICS
 					if (!DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
 						HIZ_COUNT_TRIANGLE_BIAS_PROOF;
-#endif
+#	endif
 					continue;
 				}
+#endif
 				float2 minimumTriangle = min(a.xy, min(b.xy, c.xy));
 				float2 maximumTriangle = max(a.xy, max(b.xy, c.xy));
 				if (any(maximumTriangle < minimumPixel) || any(minimumTriangle > maximumPixel))

@@ -115,6 +115,12 @@ namespace MenuDepthCullingDiagnostics
 			{ "hybrid", {
 							{ "state", hybridCulling.state },
 							{ "effectiveBackend", hybridCulling.effectiveBackend },
+							{ "proofBiasComparison", { { "requested", hybridCulling.proofVariantRequested },
+														 { "active", hybridCulling.proofVariantActive },
+														 { "baselineAvailable", hybridCulling.guardedBaselineAvailable },
+														 { "baselineAvailability", hybridCulling.guardedBaselineAvailability },
+														 { "requestedRevision", hybridCulling.proofSelectionRevision },
+														 { "activeRevision", hybridCulling.proofActiveRevision } } },
 							{ "fallbackReason", hybridCulling.fallbackReason },
 							{ "historyRejectionReason", hybridCulling.historyRejectionReason },
 							{ "submittedBatches", hybridCulling.submittedBatches },

@@ -16,11 +16,12 @@ namespace VRHybridCulling
 	inline constexpr std::array FallbackReasons{
 		"unsupported_frame", "resource_publication_unavailable", "pipeline_unavailable", "resource_setup_failed",
 		"not_prepared", "empty_or_invalid_batch", "preparation_expired", "native_buffers_invalid", "renderer_unavailable",
-		"resource_publication_changed", "pipeline_owner_changed", "prepared_source_changed", "replacement_not_prepared"
+		"resource_publication_changed", "pipeline_owner_changed", "prepared_source_changed", "replacement_not_prepared",
+		"proof_baseline_unavailable", "proof_selection_changed"
 	};
 	inline constexpr std::array HistoryRejectionReasons{
 		"unreadable_batch", "batch_mismatch", "pipeline_changed", "bounds_changed", "resource_publication_changed",
-		"frame_unavailable", "depth_changed", "view_changed"
+		"frame_unavailable", "depth_changed", "view_changed", "proof_selection_changed"
 	};
 
 	struct SourceSnapshot
@@ -71,6 +72,11 @@ namespace VRHybridCulling
 		SourceSnapshot snapshot{};
 		std::uint32_t lastObjectCount = 0;
 		StageTiming prepare, dispatch, readback;
+		const char* proofVariantRequested = "original_vertices";
+		const char* proofVariantActive = "pending";
+		bool guardedBaselineAvailable = false;
+		const char* guardedBaselineAvailability = "not_created";
+		std::uint64_t proofSelectionRevision = 0, proofActiveRevision = 0;
 		bool traversalDiagnosticsEnabled = false;
 		bool traversalDiagnosticsAvailable = false;
 		const char* traversalDiagnosticsAvailability = "not_created";
@@ -92,6 +98,8 @@ namespace VRHybridCulling
 	/** Request pipeline recreation on the next render-thread preparation. */
 	void ClearShaderCache();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Select a warmed proof-bias shader on the main thread and invalidate older measurements/history. */
+	void SetGuardedVertexBaselineEnabled(bool a_enabled) noexcept;
 	/** Select the extra shader/readback instrumentation independently of GPU profiling. */
 	void SetTraversalDiagnosticsEnabled(bool a_enabled) noexcept;
 	/** Read current backend state and gated measurements without owning the render context. */

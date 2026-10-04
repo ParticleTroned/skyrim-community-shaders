@@ -673,6 +673,7 @@ public:
 	/** @brief Editable VR FPS Stabilizer settings owned by the VR Stabilizer menu tab. */
 	struct VRFpsStabilizerConfig
 	{
+		uint64_t revision = 0;
 		std::filesystem::path path;
 		bool fileExists = false;
 		bool fileReadable = false;
@@ -4345,9 +4346,11 @@ public:
 	/** @brief Loads and resolves the unconditional Interior/Exterior CSX rows from VRFpsStabilizer.ini. */
 	bool LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::string& a_error) const;
 	/** @brief Persists the editable stabilizer profile while preserving unrelated INI content. */
-	bool SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const;
-	/** @return The immutable active Stabilizer configuration captured for this game session. */
-	const VRFpsStabilizerConfig& GetVRFpsStabilizerSessionConfig() const;
+	bool SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string_view a_originalIni, std::string& a_error) const;
+	/** @return A synchronized snapshot of the startup or most recently reloaded profile configuration. */
+	VRFpsStabilizerConfig GetVRFpsStabilizerSessionConfig() const;
+	/** Refresh profile reconciliation after the external Stabilizer reload returns. */
+	bool RefreshVRFpsStabilizerSessionConfig(std::string& a_error);
 	/** @return True when the session configuration automatically owns save-load profile reconciliation. */
 	bool IsVRFpsStabilizerSyncActive() const;
 
@@ -4490,7 +4493,9 @@ private:
 		std::array<std::atomic<uint32_t>, 2> generation{};
 	};
 
+	void InitializeVRFpsStabilizerSessionConfig() const;
 	mutable std::once_flag vrFpsStabilizerSessionConfigOnce;
+	mutable std::mutex vrFpsStabilizerSessionConfigMutex;
 	mutable VRFpsStabilizerConfig vrFpsStabilizerSessionConfig{};
 	struct VRRenderScaleRuntimeOptionsSnapshot
 	{

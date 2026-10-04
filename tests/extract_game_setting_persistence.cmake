@@ -24,7 +24,9 @@ set(_output "${_output}\n}\nnamespace Util {\n")
 extract_between("src/Utils/GameSetting.h" "struct GameSetting" "\n\t/**")
 extract_between("src/Utils/GameSetting.cpp" "static constexpr std::string_view CS_SETTINGS_PATH" "\n\tvoid DumpSettingsOptions")
 extract_between("src/Utils/Format.cpp" "bool IEquals(" "\n\tstd::string GetShaderDefinesSuffix(")
-set(_output "${_output}\nnamespace FileHelpers {\nnamespace {\n")
+set(_output
+    "${_output}\nnamespace FileHelpers {\nbool WriteTextFileAtomic(const std::filesystem::path&, std::string_view, std::string&, bool allowDirectFallback = true);\nnamespace {\n"
+)
 extract_between("src/Utils/FileSystem.cpp" "bool WriteTextFileDirect(" "\n\t\tDeletionResult SafeDelete(")
 extract_between("src/Utils/FileSystem.cpp" "bool WriteTextFileAtomic(" "\n\t\tstd::string SanitizeFileName(")
 set(_output "${_output}\n}\n")

@@ -5,7 +5,11 @@ source-depth reduction. The alternative proof and coarse-depth comparison
 controls are removed. A 4x4 reduction remains only as the existing resource
 limit fallback for large sources. Advanced remains the default.
 
-## Current comparison and focused follow-up
+The [latest clip-storage comparison](vr-hybrid-culling-clip-storage-results-2026-10-04.md)
+supersedes the frame timings below. This record retains the preceding
+vertex-storage measurements and implementation checks.
+
+## Vertex-storage comparison and focused follow-up
 
 After vertex-copy removal, source `e9b2a6960` was measured at noon in
 save 22, with fixed player position/weather and DLSS Quality K at

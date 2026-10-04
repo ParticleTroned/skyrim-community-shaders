@@ -5,19 +5,20 @@ The selected path is guarded projected-face testing with preferred 2x2
 source reduction. Alternative proof/coarse-depth selectors and their extra
 shaders are removed. The existing 4x4 resource-limit fallback remains.
 
-The latest noon comparison measured source `e9b2a6960`: guarded 2x2 averaged
-15.51 ms CPU / 9.95 ms GPU against Advanced's 11.09 / 8.46 ms. Hi-Z GPU
-frames remain 17.67% slower, with substantial repeat variation. Separate
-300-frame captures measured 0.794-0.831 ms Hi-Z culling versus 0.068 ms
-Advanced; bounds testing contributes 90.75% of the mean Hi-Z total.
-Separate counter cohorts rejected 36.47-37.61% versus Advanced's 60.06%
-after recovery. These are candidate records, not matched objects or draws.
+The [latest noon comparison](vr-hybrid-culling-clip-storage-results-2026-10-04.md)
+measured source `608aacfd9`: guarded 2x2 averaged 11.68 ms CPU / 8.94 ms
+GPU against Advanced's 10.41 / 7.84 ms. Hi-Z GPU frames remain 14.06%
+slower. Separate complete 300-frame captures measured 0.591 ms Hi-Z
+culling versus 0.081 ms Advanced; bounds testing contributes 88.12% of
+Hi-Z culling. Separate counter cohorts rejected 40.54% versus Advanced's
+60.45% after recovery. These are candidate records, not matched objects
+or draws. No fallback or rejected history was recorded.
 
-The next build removes polygon survivor copies using alternating clip
+The tested build removes polygon survivor copies using alternating clip
 banks and replaces repeated prepared-face struct selection with indexed
 invocation-private metadata. Guarded arithmetic, clipping order and safety
 criteria are retained. Four strict shader permutations and 12/12 focused
-tests pass; runtime benefit awaits the next in-game comparison. The earlier
+tests pass. The earlier
 vertex-array copy is already removed. See the
 [cost analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md).
 Advanced remains default. Motion/lifecycle and SE/AE qualification remain
@@ -660,11 +661,11 @@ as separate results.
 
 ## Next bounded work
 
-Keep PR104 experimental and pursue guarded 2x2 only. Next compare the
-indexed-face/alternating-clip build with Advanced at noon. Existing GPU
-scope timers and rejection counters are sufficient for that first decision;
-additional diagnostic captures are not required. Keep traversal/shadow
-diagnostics separate from timing.
+Keep PR104 experimental and pursue guarded 2x2 only. The indexed-face and
+alternating-clip build still trails Advanced. Target safe clipping-plane
+skips next; keep existing guards and full clipping for uncertain boundaries.
+Existing GPU scope timers and rejection counters suffice for the next
+performance decision. Keep traversal/shadow diagnostics separate from timing.
 
 The [ordered investigation](vr-hybrid-culling-guarded2-analysis-2026-10-04.md#ordered-follow-up)
 retains matched native/Hi-Z outcomes and selective source-depth refinement

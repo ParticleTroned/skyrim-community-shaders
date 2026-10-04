@@ -139,6 +139,7 @@ namespace VRHybridCulling
 		std::atomic_uint64_t g_traversalSubmitted{ 0 }, g_traversalUnavailable{ 0 };
 		std::atomic_uint64_t g_traversalWindow{ 1 }, g_traversalBatches{ 0 }, g_traversalNotReady{ 0 }, g_traversalFailed{ 0 }, g_traversalDiscarded{ 0 };
 		std::atomic_uint64_t g_traversalObjects{ 0 }, g_traversalLoads{ 0 }, g_traversalRegions{ 0 }, g_traversalTriangles{ 0 };
+		std::atomic_uint64_t g_traversalPlaneProofs{ 0 }, g_traversalPolygonClips{ 0 }, g_traversalFaceBiasOnlyProofs{ 0 }, g_traversalTriangleBiasOnlyProofs{ 0 };
 		std::array<std::atomic_uint64_t, VRHybridCullingDiagnostics::Reasons.size()> g_traversalReasons{};
 		std::atomic<const char*> g_status{ "idle" };
 		std::atomic<const char*> g_backend{ "pending" }, g_fallbackReason{ "none" }, g_historyRejection{ "none" };
@@ -418,6 +419,10 @@ namespace VRHybridCulling
 			g_traversalLoads.fetch_add(totals->depthLoads, std::memory_order_relaxed);
 			g_traversalRegions.fetch_add(totals->faceRegions, std::memory_order_relaxed);
 			g_traversalTriangles.fetch_add(totals->faceTriangles, std::memory_order_relaxed);
+			g_traversalPlaneProofs.fetch_add(totals->planeProofs, std::memory_order_relaxed);
+			g_traversalPolygonClips.fetch_add(totals->polygonClips, std::memory_order_relaxed);
+			g_traversalFaceBiasOnlyProofs.fetch_add(totals->faceBiasOnlyProofs, std::memory_order_relaxed);
+			g_traversalTriangleBiasOnlyProofs.fetch_add(totals->triangleBiasOnlyProofs, std::memory_order_relaxed);
 			for (std::size_t index = 0; index < totals->eyeReasons.size(); ++index)
 				g_traversalReasons[index].fetch_add(totals->eyeReasons[index], std::memory_order_relaxed);
 		}
@@ -948,6 +953,10 @@ namespace VRHybridCulling
 		result.traversal.depthLoads = g_traversalLoads.load(std::memory_order_relaxed);
 		result.traversal.faceRegions = g_traversalRegions.load(std::memory_order_relaxed);
 		result.traversal.faceTriangles = g_traversalTriangles.load(std::memory_order_relaxed);
+		result.traversal.planeProofs = g_traversalPlaneProofs.load(std::memory_order_relaxed);
+		result.traversal.polygonClips = g_traversalPolygonClips.load(std::memory_order_relaxed);
+		result.traversal.faceBiasOnlyProofs = g_traversalFaceBiasOnlyProofs.load(std::memory_order_relaxed);
+		result.traversal.triangleBiasOnlyProofs = g_traversalTriangleBiasOnlyProofs.load(std::memory_order_relaxed);
 		for (std::size_t index = 0; index < result.traversal.eyeReasons.size(); ++index)
 			result.traversal.eyeReasons[index] = g_traversalReasons[index].load(std::memory_order_relaxed);
 		for (std::size_t index = 0; index < FallbackReasons.size(); ++index)
@@ -985,7 +994,8 @@ namespace VRHybridCulling
 	{
 		g_traversalWindow.fetch_add(1, std::memory_order_acq_rel);
 		for (auto* counter : { &g_traversalSubmitted, &g_traversalUnavailable, &g_traversalBatches, &g_traversalNotReady, &g_traversalFailed, &g_traversalDiscarded,
-				 &g_traversalObjects, &g_traversalLoads, &g_traversalRegions, &g_traversalTriangles })
+				 &g_traversalObjects, &g_traversalLoads, &g_traversalRegions, &g_traversalTriangles,
+				 &g_traversalPlaneProofs, &g_traversalPolygonClips, &g_traversalFaceBiasOnlyProofs, &g_traversalTriangleBiasOnlyProofs })
 			counter->store(0, std::memory_order_relaxed);
 		for (auto& count : g_traversalReasons)
 			count.store(0, std::memory_order_relaxed);

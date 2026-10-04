@@ -1,6 +1,13 @@
 # CSX Astra master implementation plan
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
+The next proof-bias iteration is implemented: original whole-face and
+triangle minima use base bias, and DevBench reports plane successes,
+clipper entries, bias-only shortcuts and separate viewport reasons.
+Clipping and plane allowances are preserved. The 12 focused tests and
+production compiler-output isolation checks pass. The next evaluation
+compares the new DevBench AIO at noon; the timing evidence below predates
+this change and does not establish its performance.
 The [latest comparison and optimization analysis](vr-hybrid-culling-adaptive-2026-10-04.md)
 record two settled noon timing repeats per method on the finer-depth build:
 Hybrid costs 12.6% more CPU time and 14.9% more GPU time than Advanced,
@@ -25,9 +32,9 @@ with no diagnostic readback failures. Access was restored through fresh
 bundled-controller discovery when no direct DevBench tools were exposed;
 no new AIO was required. This does not verify direct client schema refresh.
 
-Prioritize interpolation allowance on non-interpolating proofs, with
-DevBench-only counts for bias-limited proofs, actual clips, plane successes
-and split viewport reasons. Fully offscreen bounds can inflate the aggregate
+The follow-up separates interpolation allowance on non-interpolating
+proofs and adds the corresponding DevBench path counts. Fully offscreen
+bounds can inflate the aggregate
 gap without necessarily saving drawing; nearest-vertex early retention
 mostly avoids work the full current proof would also fail. An average
 1.81 triangle attempts per region weakens a large face-pruning prediction.
@@ -672,7 +679,9 @@ Keep PR104 experimental. Cached face tests, plane proofs, nearest-vertex
 checks and finer depth are implemented and measured. Bounds testing costs
 0.705-0.714 ms GPU; hierarchy construction costs about 0.055 ms.
 The [analysis](vr-hybrid-culling-adaptive-2026-10-04.md#next-focused-work)
-prioritizes non-interpolating depth proofs and targeted path diagnostics.
+motivates the implemented non-interpolating depth proofs and targeted
+path diagnostics. Measure the new normal shader against Advanced with
+diagnostics disabled, then collect path counts separately at noon.
 Do not raise the read budget: even resolving every observed budget exit
 would recover at most 0.325 percentage points in these cohorts.
 With other costs unchanged, native culling-scope parity would require

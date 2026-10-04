@@ -16,6 +16,13 @@ Hybrid fallback or invalidated history. Different views prevent an
 isolated comparison with the preceding build. Motion and lifecycle
 qualification remain open.
 
+The subsequent proof-bias change uses the base depth allowance for
+whole-face and original-triangle minima, while retaining the interpolation
+allowance for clipped results, vertex retention and plane proofs. New
+DevBench counters distinguish proof paths and viewport exits. This change
+has no in-game performance or visual result yet; the measurements above
+refer to the preceding compiled source.
+
 This implementation uses conventional scene depth: near is zero, far is
 one, and each pyramid cell stores the maximum covered depth. It does not
 convert Skyrim to Reverse Z or recover precision lost in the scene depth
@@ -104,8 +111,12 @@ retain visibility. Only completing all pending regions proves occlusion.
 Within an inconclusive cell, projected box faces are tested against the
 cell expanded by the pixel guard and a rounding margin. Cached bounds,
 retained original vertices and conservative affine depth proofs can settle
-a triangle without clipping. Uncertain cases keep exact clipping and its
-additional interpolation bias. Every covered region must prove occlusion
+a triangle without clipping. Whole-face and triangle minima select only
+original projected depths, so they use the same base bias as the coarse
+box proof. Affine triangle depth cannot be nearer than those extrema.
+Uncertain cases keep exact clipping and its additional interpolation bias;
+vertex-retention and separately bounded plane proofs retain that allowance.
+Every covered region must prove occlusion
 in both eyes.
 Visibility in either eye retains the object. Coarse cells, depth within
 the guarded footprint and the finite refinement budget can still reduce
@@ -163,6 +174,24 @@ methods together or reports busy without clearing either. Operational
 backend and failure reasons remain visible with measurement disabled.
 See the [telemetry contract](vr-depth-culling-recovery-telemetry.md).
 
+Enable `set_depth_culling_traversal_diagnostics_enabled` only for reason
+and work measurements, with telemetry enabled, then reset the counters.
+`hybrid.traversalDiagnostics` sums work across both eyes and reports
+`planeProofs` (successful plane proofs), `polygonClips` (clipper entries),
+and `faceBiasOnlyProofs` / `triangleBiasOnlyProofs` (original-depth minima
+that pass the base bias but fail the added interpolation allowance).
+These shortcut counts measure avoided work, not independently recovered
+object rejections. Disable diagnostics for frame-time and GPU comparisons.
+
+Viewport reasons are `viewport_offscreen` for wholly outside bounds,
+`viewport_partial` for original bounds crossing the viewport, and
+`viewport_guard` when only the guarded extent reaches outside. All three
+retain visibility. Each retained object contributes one decisive reason;
+an untested second eye is recorded separately. Freeze telemetry before
+using totals and report diagnosed-object coverage and missing batches.
+The 32-byte diagnostic records, their resources, extra comparisons and
+readback are absent from production builds.
+
 `status.depthCullingTemporal.hybridInstalled` identifies
 whether the optional replacement hooks are available; failure to install
 them retains native testing and Advanced recovery. Check effective culling enablement and producer state,
@@ -171,6 +200,25 @@ labels `VRHybridCulling::BuildHierarchy` and
 `VRHybridCulling::Visibility` identify its GPU work.
 
 ## Validation and acceptance
+
+The proof-bias iteration passed all 12 focused DepthCulling,
+VRHybridCulling and D3DContextProtection tests in 15.32 seconds. The WARP
+test compiles optimized, warnings-as-errors Standard/reversed variants,
+with diagnostics on/off, and verifies matching visibility. New cases
+bracket the base bias at 7/8/9/16/72/73 depth units, preserve equality,
+exercise flat/sloped/sheared and reflected boxes, and check guarded rays
+with an independent double-precision oracle. Separate cases validate
+triangle-only shortcuts, viewport categories and the 32-byte record.
+Host tests cover malformed, overflowing and contradictory work records.
+
+Evidence: `build/astra-validation/adaptive/proof-bias-tests-20261004T074811570Z/`.
+`validate-proof-bias.ps1` builds the 12 named targets and runs their exact
+CTest selection. `validate-fine-production.ps1` passed all three changed
+translation-unit syntax and preprocessing checks using actual compiler
+flags and the generated forced header; source hashes stayed unchanged.
+Evidence: `build/astra-validation/adaptive/production-20261004T074635786Z/`.
+No separate production DLL link or new in-game performance/visual result
+is claimed by these checks.
 
 The portable policy tests cover safe dimensions, power-of-two padding,
 constant validation, projection validity and dispatch limits. The WARP

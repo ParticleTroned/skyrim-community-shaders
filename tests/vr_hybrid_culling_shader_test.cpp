@@ -126,7 +126,7 @@ namespace
 		BuildConstants buildConstants{};
 		TestConstants testConstants{};
 		Kernel build, reduce, test, diagnosticTest;
-		std::vector<std::array<std::uint32_t, 4>> lastDiagnostics;
+		std::vector<std::array<std::uint32_t, 8>> lastDiagnostics;
 		ComPtr<ID3D11Texture2D> source, pyramid, staging;
 		ComPtr<ID3D11ShaderResourceView> sourceView, pyramidView;
 		std::vector<ComPtr<ID3D11ShaderResourceView>> mipViews;
@@ -277,7 +277,7 @@ namespace
 			std::vector<std::uint32_t> values(objects.size());
 			std::memcpy(values.data(), mapped.pData, values.size() * sizeof(std::uint32_t));
 			context->Unmap(results.staging.Get(), 0);
-			StructuredBuffer diagnostics(device, 16, static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
+			StructuredBuffer diagnostics(device, sizeof(lastDiagnostics[0]), static_cast<UINT>(objects.size()), D3D11_BIND_UNORDERED_ACCESS);
 			diagnosticTest.Bind(context, constants);
 			ID3D11UnorderedAccessView* outputs[]{ output, diagnostics.uav.Get() };
 			context->CSSetShaderResources(0, 2, views);
@@ -292,12 +292,14 @@ namespace
 			context->CopyResource(diagnostics.staging.Get(), diagnostics.buffer.Get());
 			Check(context->Map(diagnostics.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
 			lastDiagnostics.resize(objects.size());
-			std::memcpy(lastDiagnostics.data(), mapped.pData, lastDiagnostics.size() * 16);
+			std::memcpy(lastDiagnostics.data(), mapped.pData, lastDiagnostics.size() * sizeof(lastDiagnostics[0]));
 			context->Unmap(diagnostics.staging.Get(), 0);
 			for (std::size_t index = 0; index < lastDiagnostics.size(); ++index) {
 				const auto& record = lastDiagnostics[index];
 				Require(record[1] <= 128 && record[2] <= record[1] && record[3] <= 12 * record[2],
 					"Diagnostic traversal work exceeded the budget");
+				Require(record[4] + record[5] + record[7] <= record[3] && record[6] <= 6 * record[2],
+					"Diagnostic proof paths exceed the corresponding face or triangle attempts");
 				Require((record[0] == 257) == (values[index] == 0), "Diagnostic reasons disagree with visibility");
 			}
 			return values;
@@ -932,6 +934,144 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		fixture.testConstants = original;
 	}
 
+	void ChecksOriginalVertexDepthProofs(Fixture& fixture)
+	{
+		constexpr const char* source = R"(
+#include "Common/DepthOrder.hlsli"
+#include "VRHybridCulling/ProjectedBounds.hlsli"
+struct RegionCase { float4 vertices[8]; float4 rectangle; float depth, bias; float2 padding; };
+StructuredBuffer<RegionCase> Cases : register(t0);
+RWStructuredBuffer<uint> Results : register(u0);
+#ifdef CSX_HIZ_DIAGNOSTICS
+RWStructuredBuffer<HiZTraversalDiagnostic> TraversalDiagnostics : register(u1);
+#endif
+cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
+[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= Count) return;
+    RegionCase value = Cases[id.x];
+    float3 vertices[8];
+    [unroll] for (uint vertex = 0; vertex < 8; ++vertex) vertices[vertex] = value.vertices[vertex].xyz;
+    ProjectedBounds::PreparedFaces faces;
+    ProjectedBounds::PrepareFaces(vertices, faces);
+#ifdef CSX_HIZ_DIAGNOSTICS
+    HiZTraversalDiagnostic diagnostic = (HiZTraversalDiagnostic)0;
+#endif
+    Results[id.x] = ProjectedBounds::OccludedInRegion(vertices, faces,
+        value.rectangle.xy, value.rectangle.zw, value.depth, value.bias HIZ_DIAGNOSTIC_ARGUMENT);
+#ifdef CSX_HIZ_DIAGNOSTICS
+    TraversalDiagnostics[id.x] = diagnostic;
+#endif
+})";
+		struct RegionCase
+		{
+			std::array<std::array<float, 4>, 8> vertices;
+			std::array<float, 4> rectangle{ 0, 0, 32, 32 };
+			float depth, bias = kDefaultDepthBias;
+			std::array<float, 2> padding{};
+		};
+		static_assert(sizeof(RegionCase) == 160);
+		constexpr float depthUnit = 1.0f / 16777216.0f;
+		std::vector<RegionCase> cases;
+		std::vector<UINT> expected;
+		std::vector<bool> expectsFaceBiasProof;
+		const auto add = [&](const OBBTransform& object, float depth, bool hidden, bool faceBiasProof) {
+			RegionCase value{};
+			value.depth = depth;
+			for (UINT vertex = 0; vertex < 8; ++vertex) {
+				std::array<float, 3> position{};
+				for (UINT row = 0; row < 3; ++row) {
+					position[row] = object.entry[row][3];
+					for (UINT axis = 0; axis < 3; ++axis)
+						position[row] += object.entry[row][axis] * ((vertex & (1u << axis)) ? 1.0f : -1.0f);
+				}
+				value.vertices[vertex] = { (position[0] + 1.0f) * 16.0f, (1.0f - position[1]) * 16.0f, position[2], 0 };
+			}
+			if (hidden) {
+				const RayBoxOracle oracle(object);
+				UINT hits = 0;
+				for (UINT y = 0; y < 32; ++y)
+					for (UINT x = 0; x < 32; ++x)
+						for (int dy = -1; dy <= 1; ++dy)
+							for (int dx = -1; dx <= 1; ++dx) {
+								double objectDepth;
+								if (!oracle.Hit(2.0 * (x + 0.5 + dx) / 32.0 - 1.0, 1.0 - 2.0 * (y + 0.5 + dy) / 32.0,
+										0.0, 0.0, objectDepth))
+									continue;
+								++hits;
+								Require(objectDepth > static_cast<double>(depth) + value.bias,
+									"Original-vertex proof has a visible guarded ray in the independent box oracle");
+							}
+				Require(hits != 0, "Original-vertex proof fixture has no independent ray intersections");
+			}
+			if (fixture.reversedDepth) {
+				for (auto& vertex : value.vertices)
+					vertex[2] = 1.0f - vertex[2];
+				value.depth = 1.0f - value.depth;
+			}
+			cases.push_back(value);
+			expected.push_back(hidden ? 1u : 0u);
+			expectsFaceBiasProof.push_back(faceBiasProof);
+		};
+		for (UINT shape = 0; shape < 3; ++shape) {
+			for (UINT reflection = 0; reflection < 8; ++reflection) {
+				auto object = Box(0, 0, 0.5f, 0.25f);
+				object.entry[2][2] = 8 * depthUnit;
+				if (shape != 0) {
+					object.entry[0][1] = 0.0625f;
+					object.entry[2][0] = 16 * depthUnit;
+					object.entry[2][1] = (shape == 1 ? 8 : -8) * depthUnit;
+				}
+				for (UINT axis = 0; axis < 3; ++axis) {
+					object.entry[2][3] += std::abs(object.entry[2][axis]);
+					for (UINT row = 0; row < 3; ++row)
+						object.entry[row][axis] *= (reflection & (1u << axis)) ? -1.0f : 1.0f;
+				}
+				// Adjacent depth units bracket the strict base threshold without interpolation.
+				for (UINT gap : { 7u, 8u, 9u, 16u, 72u, 73u })
+					add(object, 0.5f - gap * depthUnit, gap > 8, gap > 8 && gap <= 72);
+			}
+		}
+		// The first triangle is hidden at base bias; another corner keeps its complete face visible.
+		auto split = Box(0, 0, 0.5f, 0.25f);
+		split.entry[2][0] = 0.125f;
+		split.entry[2][1] = -0.125f;
+		split.entry[2][2] = 0.03125f;
+		add(split, 0.46875f - 16 * depthUnit, false, false);
+		StructuredBuffer inputs(fixture.device, sizeof(RegionCase), static_cast<UINT>(cases.size()), D3D11_BIND_SHADER_RESOURCE, cases.data());
+		StructuredBuffer outputs(fixture.device, sizeof(UINT), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
+		StructuredBuffer diagnostics(fixture.device, sizeof(fixture.lastDiagnostics[0]), static_cast<UINT>(cases.size()), D3D11_BIND_UNORDERED_ACCESS);
+		for (bool diagnostic : { false, true }) {
+			Kernel kernel(fixture.device, L"OriginalVertexDepthProofTest.hlsl", "RegionConstants", fixture.reversedDepth, diagnostic, source);
+			kernel.Bind(fixture.context, std::array<UINT, 4>{ static_cast<UINT>(cases.size()), 0, 0, 0 });
+			auto* input = inputs.srv.Get();
+			ID3D11UnorderedAccessView* targets[]{ outputs.uav.Get(), diagnostic ? diagnostics.uav.Get() : nullptr };
+			fixture.context->CSSetShaderResources(0, 1, &input);
+			fixture.context->CSSetUnorderedAccessViews(0, 2, targets, nullptr);
+			fixture.context->Dispatch((static_cast<UINT>(cases.size()) + 63) / 64, 1, 1);
+			fixture.Unbind();
+			fixture.context->CopyResource(outputs.staging.Get(), outputs.buffer.Get());
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			Check(fixture.context->Map(outputs.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+			std::vector<UINT> actual(cases.size());
+			std::memcpy(actual.data(), mapped.pData, actual.size() * sizeof(actual[0]));
+			fixture.context->Unmap(outputs.staging.Get(), 0);
+			Require(actual == expected, "Original-vertex proofs changed strict bias, reflected/sheared bounds or visibility");
+			if (!diagnostic)
+				continue;
+			fixture.context->CopyResource(diagnostics.staging.Get(), diagnostics.buffer.Get());
+			Check(fixture.context->Map(diagnostics.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+			std::vector<std::array<UINT, 8>> records(cases.size());
+			std::memcpy(records.data(), mapped.pData, records.size() * sizeof(records[0]));
+			fixture.context->Unmap(diagnostics.staging.Get(), 0);
+			for (std::size_t index = 0; index < records.size(); ++index)
+				if (expected[index] != 0)
+					Require((records[index][6] != 0) == expectsFaceBiasProof[index], "Whole-face base-only proof counter missed its depth interval");
+			Require(records.back()[7] == 1 && records.back()[3] == 2,
+				"Original-triangle proof was not counted before the independently visible corner");
+		}
+	}
+
 	void CoversAllReductionPixels(ID3D11Device* device, ID3D11DeviceContext* context, bool reversedDepth, UINT eyeWidth, UINT eyeHeight, bool includeInvalidDepth, UINT reduction = 4)
 	{
 		Fixture fixture(device, context, reversedDepth, eyeWidth, eyeHeight, reduction);
@@ -1006,6 +1146,17 @@ cbuffer RegionConstants : register(b0) { uint Count; uint3 Padding; };
 		fixture.Build(pixels);
 		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 1, 1, 0 },
 			"Mixed first-eye, second-eye and occluded objects lost independent stereo results");
+	}
+
+	void SeparatesViewportRetentionReasons(Fixture& fixture)
+	{
+		const std::array objects{ Box(2.0f), Box(0.98f), Box(0.94f), Box() };
+		fixture.Build(std::vector<float>(fixture.sourceWidth * fixture.sourceHeight, 0.4f));
+		Require(fixture.Test(objects) == std::vector<std::uint32_t>{ 1, 1, 1, 0 },
+			"Viewport reason classification changed visibility");
+		Require(fixture.lastDiagnostics[0][0] == 9 && fixture.lastDiagnostics[1][0] == 10 &&
+					fixture.lastDiagnostics[2][0] == 3 && fixture.lastDiagnostics[3][0] == 257,
+			"Wholly offscreen, partial-viewport and guard-only cases share a diagnostic reason");
 	}
 
 	void BiasRetainsTouchingBounds(Fixture& fixture)
@@ -1131,8 +1282,10 @@ int main()
 			CoversAllReductionPixels(device.Get(), context.Get(), reversedDepth, 4, 2, false, 2);
 			Fixture fixture(device.Get(), context.Get(), reversedDepth);
 			ChecksProjectedRegionShortcuts(fixture);
+			ChecksOriginalVertexDepthProofs(fixture);
 			CoversVisibilityAndFailures(fixture);
 			CoversMixedStereoVisibility(fixture);
+			SeparatesViewportRetentionReasons(fixture);
 			BiasRetainsTouchingBounds(fixture);
 			CoversEveryOverlappingCell(fixture);
 			CoversShearedCornerExtents(fixture);

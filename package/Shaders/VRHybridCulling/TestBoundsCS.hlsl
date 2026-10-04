@@ -10,7 +10,7 @@ StructuredBuffer<OBBTransform> ObjectBounds : register(t0);
 Texture2DArray<float> DepthPyramid : register(t1);
 RWStructuredBuffer<uint> Visibility : register(u0);
 #ifdef CSX_HIZ_DIAGNOSTICS
-RWStructuredBuffer<uint4> TraversalDiagnostics : register(u1);
+RWStructuredBuffer<HiZTraversalDiagnostic> TraversalDiagnostics : register(u1);
 #endif
 
 cbuffer TestConstants : register(b0)
@@ -73,7 +73,11 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 
 	// Native frustum culling owns off-screen rejection, including stereo margins.
 	if (any(maximumUV < 0.0) || any(minimumUV > 1.0))
-		HIZ_VISIBLE(HIZ_VIEWPORT_GUARD);
+		HIZ_VISIBLE(HIZ_VIEWPORT_OFFSCREEN);
+#ifdef CSX_HIZ_DIAGNOSTICS
+	if (any(minimumUV < 0.0) || any(maximumUV > 1.0))
+		HIZ_VISIBLE(HIZ_VIEWPORT_PARTIAL);
+#endif
 	float2 eyeSize = EyeRect[eye].zw;
 	float2 minimumPixelBound = minimumUV * eyeSize - PixelGuardBand;
 	float2 maximumPixelBound = maximumUV * eyeSize + PixelGuardBand;
@@ -217,9 +221,11 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 #ifdef CSX_HIZ_DIAGNOSTICS
 	uint diagnosticCount, diagnosticStride;
 	TraversalDiagnostics.GetDimensions(diagnosticCount, diagnosticStride);
-	if (objectIndex >= diagnosticCount || diagnosticStride != 16)
+	if (objectIndex >= diagnosticCount || diagnosticStride != 32)
 		return;
-	TraversalDiagnostics[objectIndex] = uint4(4, 0, 0, 0);
+	HiZTraversalDiagnostic invalidDiagnostic = (HiZTraversalDiagnostic)0;
+	invalidDiagnostic.traversal.x = HIZ_INVALID_INPUT;
+	TraversalDiagnostics[objectIndex] = invalidDiagnostic;
 #endif
 
 	uint inputCount, inputStride;
@@ -241,16 +247,18 @@ bool IsOccludedInEye(float4x4 transform, uint eye HIZ_DIAGNOSTIC_PARAMETERS)
 		return;
 	// SM5 logical operators evaluate both sides; explicitly skip an unused second eye.
 #ifdef CSX_HIZ_DIAGNOSTICS
-	uint4 diagnostic = 0;
+	HiZTraversalDiagnostic diagnostic = (HiZTraversalDiagnostic)0;
 	bool firstOccluded = IsOccludedInEye(transform, 0 HIZ_DIAGNOSTIC_ARGUMENT);
-	uint4 firstEye = diagnostic;
-	diagnostic = 0;
+	HiZTraversalDiagnostic firstEye = diagnostic;
+	diagnostic = (HiZTraversalDiagnostic)0;
 	[branch] if (firstOccluded)
 	{
 		if (IsOccludedInEye(transform, 1 HIZ_DIAGNOSTIC_ARGUMENT))
 			Visibility[objectIndex] = 0;
 	}
-	TraversalDiagnostics[objectIndex] = uint4(firstEye.x | (diagnostic.x << 8), firstEye.yzw + diagnostic.yzw);
+	diagnostic.traversal = uint4(firstEye.traversal.x | (diagnostic.traversal.x << 8), firstEye.traversal.yzw + diagnostic.traversal.yzw);
+	diagnostic.proofs += firstEye.proofs;
+	TraversalDiagnostics[objectIndex] = diagnostic;
 #else
 	[branch] if (!IsOccludedInEye(transform, 0)) return;
 	if (IsOccludedInEye(transform, 1))

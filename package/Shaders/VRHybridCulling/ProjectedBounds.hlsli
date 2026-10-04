@@ -89,9 +89,17 @@ namespace ProjectedBounds
 		const float guardedBias = bias + interpolationBias;
 		[loop] for (uint face = 0; face < 6; ++face)
 		{
-			if (any(bounds.rectangle[face].zw < minimumPixel) || any(bounds.rectangle[face].xy > maximumPixel) ||
-				DepthOrder::IsBehindWithBias(bounds.nearestDepth[face >> 2][face & 3], depth, guardedBias))
+			if (any(bounds.rectangle[face].zw < minimumPixel) || any(bounds.rectangle[face].xy > maximumPixel))
 				continue;
+			// Original-vertex extrema bound the entire affine face without clipping interpolation.
+			float faceNearest = bounds.nearestDepth[face >> 2][face & 3];
+			if (DepthOrder::IsBehindWithBias(faceNearest, depth, bias)) {
+#ifdef CSX_HIZ_DIAGNOSTICS
+				if (!DepthOrder::IsBehindWithBias(faceNearest, depth, guardedBias))
+					HIZ_COUNT_FACE_BIAS_PROOF;
+#endif
+				continue;
+			}
 			uint4 corners = Faces[face];
 			[loop] for (uint triangleIndex = 0; triangleIndex < 2; ++triangleIndex)
 			{
@@ -100,17 +108,25 @@ namespace ProjectedBounds
 				float3 b = vertices[triangleIndex == 0 ? corners.y : corners.z];
 				float3 c = vertices[triangleIndex == 0 ? corners.z : corners.w];
 				float nearest = DepthOrder::Nearest(a.z, DepthOrder::Nearest(b.z, c.z));
-				if (DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
+				if (DepthOrder::IsBehindWithBias(nearest, depth, bias)) {
+#ifdef CSX_HIZ_DIAGNOSTICS
+					if (!DepthOrder::IsBehindWithBias(nearest, depth, guardedBias))
+						HIZ_COUNT_TRIANGLE_BIAS_PROOF;
+#endif
 					continue;
+				}
 				float2 minimumTriangle = min(a.xy, min(b.xy, c.xy));
 				float2 maximumTriangle = max(a.xy, max(b.xy, c.xy));
 				if (any(maximumTriangle < minimumPixel) || any(minimumTriangle > maximumPixel))
 					continue;
 				if (HasUnresolvedVertex(a, b, c, minimumPixel, maximumPixel, depth, guardedBias))
 					return false;
-				if (PlaneProvesOccluded(a, b, c, minimumPixel, maximumPixel, depth, guardedBias))
+				if (PlaneProvesOccluded(a, b, c, minimumPixel, maximumPixel, depth, guardedBias)) {
+					HIZ_COUNT_PLANE_PROOF;
 					continue;
+				}
 
+				HIZ_COUNT_POLYGON_CLIP;
 				// Only initialized vertices below count are read; four clips need at most seven.
 				float3 polygon[8];
 				polygon[0] = a;

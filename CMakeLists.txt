@@ -1701,6 +1701,17 @@ if(BUILD_CONTROLLER_TESTS)
         NvidiaPipelineContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME MeshBlendingSafetyContract
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/tests/mesh_blending_safety_contract_test.cmake"
+    )
+    set_tests_properties(
+        MeshBlendingSafetyContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_test(
         NAME BuildProvenance
@@ -2790,6 +2801,11 @@ if(BUILD_CONTROLLER_TESTS)
         vr_submit_stereo_batch_test
         VRSubmitStereoBatch
         tests/vr_submit_stereo_batch_test.cpp
+    )
+    add_controller_test(
+        mesh_blending_policy_test
+        MeshBlendingPolicy
+        tests/mesh_blending_policy_test.cpp
     )
     add_controller_test(
         main_thread_dispatch_policy_test

@@ -25,6 +25,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/MeshBlending.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -855,6 +856,18 @@ namespace LightingExtensions
 			globals::state->UpdateLightingShaderPermutation(pass);
 			globals::features::terrainVariation.UpdateMeshPermutation(pass);
 
+			auto& meshBlending = globals::features::meshBlending;
+			if (meshBlending.loaded) {
+				meshBlending.PrepareLightingDraw(pass);
+			} else if (auto* state = globals::state) {
+				// PrepareLightingDraw owns per-draw cleanup while loaded. Preserve the
+				// same cleanup when the feature package is removed at runtime.
+				constexpr auto meshBlendingMask = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::MeshBlending);
+				constexpr auto landscapeClassMask = static_cast<std::uint32_t>(State::ExtraFeatureDescriptors::MeshBlendingLandscapeClasses);
+				state->permutationData.ExtraShaderDescriptor &= ~meshBlendingMask;
+				state->permutationData.ExtraFeatureDescriptor &= ~landscapeClassMask;
+			}
+
 			if (globals::game::isVR)
 				CSX::Api::BeginAcceptedDrawGeometry(pass);
 			func(shader, pass, renderFlags);
@@ -1660,12 +1673,19 @@ namespace Hooks
 
 			// setup material for PBR
 			auto& truePBR = globals::features::truePBR;
+			bool result = vanillaResult;
 			if (truePBR.loaded && truePBR.TESObjectLAND_SetupMaterial(land)) {
-				// if PBR, we are done
-				return true;
+				result = true;
 			}
 
-			return vanillaResult;
+			// Capture final vanilla/TruePBR properties; TerrainHelper runs earlier
+			// because it needs the original vanilla material hash.
+			auto& meshBlending = globals::features::meshBlending;
+			if (result && meshBlending.loaded) {
+				meshBlending.CaptureLandscapeMaterials(land);
+			}
+
+			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

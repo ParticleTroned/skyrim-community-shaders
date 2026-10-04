@@ -1991,7 +1991,15 @@ namespace
 				a_vr.SetDepthCullingMode(mode);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Adds bounded recovery for objects that may become visible during head motion. Save settings to keep this selection after restarting.");
+				ImGui::TextUnformatted("Recommended for most players. Keeps good performance and helps prevent objects briefly disappearing when you move your head.");
+			}
+			ImGui::TableNextColumn();
+			if (ImGui::RadioButton("Hi-Z (Experimental)", mode == VRDepthCullingTemporal::Mode::Hybrid)) {
+				mode = VRDepthCullingTemporal::Mode::Hybrid;
+				a_vr.SetDepthCullingMode(mode);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("An experimental alternative. Costs a little more performance than Advanced or Legacy, so your frame rate may be lower.");
 			}
 			ImGui::TableNextColumn();
 			if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
@@ -1999,15 +2007,7 @@ namespace
 				a_vr.SetDepthCullingMode(mode);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses Skyrim's native visibility results without temporal recovery. Save settings to keep Legacy after restarting.");
-			}
-			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Hybrid Hi-Z (Experimental)", mode == VRDepthCullingTemporal::Mode::Hybrid)) {
-				mode = VRDepthCullingTemporal::Mode::Hybrid;
-				a_vr.SetDepthCullingMode(mode);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Uses a conservative stereo depth hierarchy with native object collection and asynchronous visibility delivery. Invalid history keeps objects visible. Experimental: compare visual quality and frame times with Advanced. Save settings to keep this selection after restarting.");
+				ImGui::TextUnformatted("Original game behavior with similar performance to Advanced. Objects may briefly disappear when you move your head. Try this if another method causes problems.");
 			}
 			ImGui::EndTable();
 		}

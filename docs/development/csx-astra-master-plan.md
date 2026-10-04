@@ -2,49 +2,30 @@
 
 Updated 4 October 2026. PR104 implements optional VR Hi-Z culling.
 The selected path is guarded projected-face testing with preferred 2x2
-source reduction. Alternative proof/coarse-depth selectors and their extra
-shaders are removed. The existing 4x4 resource-limit fallback remains.
+source reduction, original-depth refinement, conservative direct proofs
+and far-depth clamping. The existing 4x4 resource-limit fallback remains.
+Advanced remains the default. The selector lists Advanced, Hi-Z and Legacy
+with plain-language tooltips noting Hi-Z's higher performance cost.
 
-The [latest noon comparison](vr-hybrid-culling-refinement-results-2026-10-04.md)
-measured the `b949dad81` implementation snapshot. Repeated guarded 2x2
-refinement ON windows averaged 11.36 ms CPU / 8.77 ms GPU against
-Advanced's 9.98 / 7.76 ms: Hi-Z GPU remains 13.02% slower. Refinement OFF
-was 11.87 / 9.04 ms, so retain ON. Separate 300-frame captures measured
-0.612–0.630 ms Hi-Z ON culling versus 0.081–0.142 ms Advanced; bounds
-testing averages 0.553 ms and contributes 89.17% of Hi-Z culling.
-Matched ON outcomes rejected 40.192% versus native's 62.394%. These are
-candidate records, not unique objects or draws. No normal fallback or
-rejected history occurred.
+The [latest final comparison](vr-hybrid-culling-intersection-results-2026-10-04.md)
+measured 12.09 ms CPU / 9.19 ms GPU for Hi-Z against Advanced's
+10.43 / 8.06 ms. Hi-Z remains 15.91% slower on CPU and 14.06% slower on
+GPU. Separate complete 300-frame captures average 0.557 ms Hi-Z culling
+versus 0.074 ms Advanced; bounds testing costs 0.490 ms, 87.95% of Hi-Z
+culling. Same-batch shadow outcomes reject 41.680% versus Advanced's
+61.609%, with zero dropped or failed diagnostic batches.
 
-The tested build removes polygon survivor copies using alternating clip
-banks and replaces repeated prepared-face struct selection with indexed
-invocation-private metadata. Guarded arithmetic, clipping order and safety
-criteria are retained. Four strict shader permutations and 12/12 focused
-tests pass. The earlier
-vertex-array copy is already removed. See the
-[cost analysis](vr-hybrid-culling-guarded2-analysis-2026-10-04.md).
-The tested build adds contained-plane skips, a four-entry lazy
-triangle-plane cache, selective source-pixel refinement within the
-existing 64-read eye budget, and conservative separating-edge rejection.
-Work counters show 32.75% clipping-plane skips, 56.16% plane reuse and
-51.43% triangle/rectangle pairs skipped before clipping. Remaining clips
-are empty only 0.0098% of the time; their 17.51 vertex-loop visits per
-clip are the next cost target. Only 21.19% of expanded cells resolve, but
-refinement ON saves 0.268 ms whole-frame GPU despite adding 0.047 ms to
-the culling pass. The separate windows do not establish an exact cost
-decomposition or an isolated separating-edge speedup.
-Repaired DevBench matched diagnostics accepted 523 ON and 537 OFF
-batches with zero drops or failures. Viewport/clip cases explain 67.53%
-of ON native-only misses. Wholly offscreen proxies need not imply useful
-extra draws. Finest-depth and nearest-witness failures account for
-4.818% and 2.485% of all matched candidates. Global read-budget growth
-targets only 0.032% of matched candidates and is not justified.
-The combined build passes 12/12 focused tests, including WARP pixel/ray
-oracles and matched-outcome validation. Four strict shader permutations,
-production diagnostic-isolation checks, the universal Release DLL and
-full 371-file AIO verification pass. Per user request, the test archive was
-built from the validated working tree before this implementation commit.
-Advanced remains default. Motion/lifecycle and SE/AE qualification remain
+The direct proof reduces clipping work by about 18% but mean bounds time
+by only 1.35%. Baseline drift limits small whole-frame A/B conclusions.
+The new direct/far counters omit first-eye contributions and cannot
+establish complete stereo work totals; timing and matched outcomes remain
+valid. Source/depth refinement stays ON. Advanced is restored with
+telemetry, traversal/matched diagnostics and profiling disabled.
+
+The latest implementation passed twelve distinct focused tests, twelve
+strict shader permutations, production diagnostic-isolation checks and the
+universal Release DevBench build. The UI selection test also passes.
+Performance parity, motion/lifecycle and SE/AE runtime qualification remain
 open. PBR grass, grass optimization and Reverse Z remain later PRs.
 
 ## Scope and authority
@@ -728,7 +709,7 @@ separately. Skyrim is restored to Advanced with diagnostics/profiling OFF.
 PBR grass remains the next independent feature PR, followed by grass
 optimization and Reverse Z. No render-scale qualification is claimed.
 
-The next test build adds a direct conservative intersection-depth proof.
+The tested build includes a direct conservative intersection-depth proof.
 It bounds the triangle portion that can fail the guarded depth test using
 the original vertices and at most two depth-plane edge intersections.
 Strictly disjoint outward-rounded bounds bypass polygon clipping;
@@ -746,7 +727,8 @@ visible; those cases need a separate proof of coverage under history reuse.
 New direct-attempt/proof/fallback and far-clamped-vertex counters, plus
 distinct eye/near/far retention reasons, support bounded diagnostic captures.
 Both controls default ON and are compiled out in production; diagnostics
-remain DevBench-only. In-game A/B of this build is pending installation.
+remain DevBench-only. In-game A/B and matched diagnostics are complete;
+see the latest final comparison above for results and limitations.
 
 Validation for this iteration is preserved under
 `build/astra-runtime/intersection-validation/`: `ctest.log` passed all nine

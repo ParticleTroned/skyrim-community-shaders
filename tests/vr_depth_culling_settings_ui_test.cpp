@@ -263,10 +263,10 @@ namespace
 		Draw(vr);
 		RequireLocationPairs();
 		Require(controls.size() == 7 && text == std::vector<std::string>{ "Culling Method" },
-			"Both logging levels should expose Advanced, Legacy and Hybrid Hi-Z controls");
+			"Both logging levels should expose Advanced, Hi-Z and Legacy controls");
 		Require(controls[4].kind == "radio" && controls[4].label == "Advanced (Default)" && controls[4].selected &&
-					controls[5].kind == "radio" && controls[5].label == "Legacy" && !controls[5].selected &&
-					controls[6].kind == "radio" && controls[6].label == "Hybrid Hi-Z (Experimental)" && !controls[6].selected,
+					controls[5].kind == "radio" && controls[5].label == "Hi-Z (Experimental)" && !controls[5].selected &&
+					controls[6].kind == "radio" && controls[6].label == "Legacy" && !controls[6].selected,
 			"Culling method labels or default selection are incorrect");
 
 		BeginFrame(a_developerMode);
@@ -287,7 +287,7 @@ namespace
 
 		BeginFrame(a_developerMode);
 		Draw(vr);
-		Require(!controls[4].selected && controls[5].selected, "Restoring logging level lost the persisted Legacy selection");
+		Require(!controls[4].selected && controls[6].selected, "Restoring logging level lost the persisted Legacy selection");
 		BeginFrame(a_developerMode);
 		radioClick = "Advanced (Default)";
 		Draw(vr);
@@ -296,7 +296,7 @@ namespace
 			"Advanced click did not restore the default policy");
 
 		BeginFrame(a_developerMode);
-		radioClick = "Hybrid Hi-Z (Experimental)";
+		radioClick = "Hi-Z (Experimental)";
 		Draw(vr);
 		Require(vr.settings.DepthCullingMethod == 3 && !vr.settings.DepthCullingLegacyMode &&
 					vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Hybrid &&
@@ -304,7 +304,7 @@ namespace
 			"Hybrid click did not synchronize persisted and published methods");
 		BeginFrame(!a_developerMode);
 		Draw(vr);
-		Require(controls.size() == 7 && controls[6].selected &&
+		Require(controls.size() == 7 && controls[5].selected &&
 					vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Hybrid,
 			"Changing logging level hid or changed the selected Hybrid method");
 		vr.SetDepthCullingLegacyMode(false);

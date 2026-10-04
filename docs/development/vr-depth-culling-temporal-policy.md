@@ -51,8 +51,10 @@ each with its own Minimum Object Size slider. Both locations are enabled
 by default and both thresholds default to 10. The active cell selects the
 appropriate switch and threshold on the existing prepass path.
 
-The Advanced/Legacy/Hybrid Hi-Z selector is visible at normal Info logging
-and in Developer Mode. Logging level does not control the active policy.
+The selector lists Advanced, Hi-Z, and Legacy in that order and is visible
+at normal Info logging and in Developer Mode. Each method has a
+plain-language tooltip; Hi-Z notes its additional performance cost.
+Logging level does not control the active policy.
 Save settings to retain the selected method after restarting. Advanced is
 the fresh default; changing logging level never resets a saved choice.
 

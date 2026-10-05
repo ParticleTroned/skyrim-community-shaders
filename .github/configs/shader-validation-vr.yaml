@@ -153,6 +153,7 @@ file_common_defines:
             - DYNAMIC_CUBEMAPS
             - GRASS_COLLISION
             - GRASS_LIGHTING
+            - GRASS_OPTIMIZATIONS
             - IBL
             - ISL
             - LIGHT_LIMIT_FIX
@@ -16740,6 +16741,7 @@ shaders:
                   - DYNAMIC_CUBEMAPS
                   - GRASS_COLLISION
                   - GRASS_LIGHTING
+                  - GRASS_OPTIMIZATIONS
                   - IBL
                   - ISL
                   - LIGHT_LIMIT_FIX
@@ -16771,6 +16773,7 @@ shaders:
                   - DYNAMIC_CUBEMAPS
                   - GRASS_COLLISION
                   - GRASS_LIGHTING
+                  - GRASS_OPTIMIZATIONS
                   - IBL
                   - ISL
                   - LIGHT_LIMIT_FIX

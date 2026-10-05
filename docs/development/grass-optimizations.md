@@ -164,6 +164,20 @@ fades, frustum and occlusion outcomes, LOD selection, distance/fade
 cutoffs, simple shading flags, invalid/near-plane bounds, mono-eye
 submission, odd depth dimensions and eye seams.
 
+A VR Trace-level startup capture on 2026-10-05 reached zero remaining
+tasks with no logged compilation failures. Its 3,605 distinct managed
+entries match the previous VR inventory; the eight grass entries add
+`GRASS_OPTIMIZATIONS`. The producing source was `516d643b9` and Build ID
+`a885cbc559a256b533a96bbec2a079f1478cb9396ca68cb1906f3fd4443fd74f`.
+The maintained VR inventory preserves that effective configuration.
+Standalone grass-culling and Hi-Z shaders compiled separately and are
+outside the managed inventory. The grass-culling shader emitted a
+duplicate `VR` macro warning. PBR grass was absent from this build, so
+combined PBR/optimization cache coverage remains unverified. Skyrim
+exited after the queue reached zero; final live API verification was
+unavailable. This capture establishes compilation coverage, not runtime
+quality or performance.
+
 `tools/verify-shader-refactor.ps1` produces identical DXBC against
 `88f1b1a26` for feature-absent flat/VR color/depth vertex and pixel
 permutations. Production syntax and preprocessing use the actual compiler

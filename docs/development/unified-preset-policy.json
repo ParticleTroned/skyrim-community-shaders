@@ -19,12 +19,13 @@
     },
     "runtimeSettingsContract": {
         "revision": 5,
-        "sourceTreeSha256": "ECB0ED001C4E0A08E1A380CF78F3C09F62791C2CDB70B88CFDCF5EF45E07D972",
+        "sourceTreeSha256": "75687B05ED58BE0463945E4D5364436D9A5982055C071149375D660DC2AE6EF2",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
                 "src/Feature.cpp",
                 "src/Feature.h",
+                "src/Features/GrassOptimizations/GrassPolicy.h",
                 "src/Features/VolumetricLightingTuning.h",
                 "src/Features/VolumetricLightingTuningMigration.h",
                 "src/Features/VR/MenuPositioningPolicy.h",
@@ -66,6 +67,9 @@
             "src/Features/GrassCollision.h",
             "src/Features/GrassLighting.cpp",
             "src/Features/GrassLighting.h",
+            "src/Features/GrassOptimizations.cpp",
+            "src/Features/GrassOptimizations.h",
+            "src/Features/GrassOptimizations/GrassPolicy.h",
             "src/Features/HairSpecular.cpp",
             "src/Features/HairSpecular.h",
             "src/Features/HorizonFix.h",

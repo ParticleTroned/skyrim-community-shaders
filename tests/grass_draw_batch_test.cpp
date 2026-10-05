@@ -8,6 +8,12 @@ int main()
 		const auto require = [](bool condition) {if(!condition)throw std::runtime_error("Grass settings policy failed"); };
 		GrassPolicy::Settings settings;
 		require(settings.Valid());
+		require(GrassPolicy::BatchCapacityValid(GrassPolicy::kMaxBatchInstances, GrassPolicy::kMaxBatchSlices));
+		require(!GrassPolicy::BatchCapacityValid(GrassPolicy::kMaxBatchInstances + 1ull, 1));
+		require(!GrassPolicy::BatchCapacityValid(1, GrassPolicy::kMaxBatchSlices + 1ull));
+		require(!GrassPolicy::BatchCapacityValid(0, 1));
+		require(!GrassPolicy::BatchCapacityValid(1, 0));
+		require(!GrassPolicy::BatchCapacityValid(UINT64_MAX, UINT64_MAX));
 		require(GrassPolicy::MeshStride(0x8000000000000087ull) == 28);
 		require(GrassPolicy::MeshStride(0x8000000000000080ull) == 0);
 		require(GrassPolicy::OcclusionAllowed(true, 0));

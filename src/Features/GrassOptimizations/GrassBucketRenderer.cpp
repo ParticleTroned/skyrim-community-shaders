@@ -560,7 +560,7 @@ void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass)
 
 void GrassBucketRenderer::Impl::EnsureCapacity(uint32_t instances, uint32_t slices)
 {
-	if (!instances || instances > GrassPolicy::kMaxBatchInstances || !slices || slices > 8192)
+	if (!GrassPolicy::BatchCapacityValid(instances, slices))
 		throw std::length_error("Grass batch exceeds bounded scratch capacity");
 	if (instances <= capacity && input && table && slices <= table->desc.ByteWidth / sizeof(Slice))
 		return;
@@ -597,18 +597,18 @@ ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(uint64_t descriptor)
 {
 	if (auto found = layouts.find(descriptor); found != layouts.end())
 		return found->second.get();
-	CompileSignature();
 	auto desc = std::bit_cast<RE::BSGraphics::VertexDesc>(descriptor);
 	using Vertex = RE::BSGraphics::Vertex;
 	if (!desc.HasFlag(Vertex::VF_VERTEX) || !desc.HasFlag(Vertex::VF_UV) || !desc.HasFlag(Vertex::VF_NORMAL) || !desc.HasFlag(Vertex::VF_COLORS))
-		throw std::invalid_argument("Grass layout missing native attributes");
+		return nullptr;
 	const auto stride = GrassPolicy::MeshStride(descriptor);
 	const bool fullPosition = desc.HasFlag(Vertex::VF_FULLPREC) || desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) >= 16;
 	if (stride < (fullPosition ? 16u : 8u) ||
 		desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) + 4 > stride ||
 		desc.GetAttributeOffset(Vertex::VA_NORMAL) + 4 > stride ||
 		desc.GetAttributeOffset(Vertex::VA_COLOR) + 4 > stride)
-		throw std::invalid_argument("Grass attribute offsets exceed native mesh stride");
+		return nullptr;
+	CompileSignature();
 	std::array<D3D11_INPUT_ELEMENT_DESC, 8> elements{};
 	elements[0] = { "POSITION", 0, fullPosition ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 };
 	elements[1] = { "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 0, desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), D3D11_INPUT_PER_VERTEX_DATA, 0 };
@@ -692,7 +692,12 @@ bool GrassBucketRenderer::Impl::HasBatchShader() const
 
 bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 {
-	if (failed || !frameSettings.Enabled || !HasBatchShader())
+	if (failed || !frameSettings.Enabled || bucket.sources.empty() || !HasBatchShader())
+		return false;
+	uint64_t sliceCount = 0;
+	for (const auto& source : bucket.sources)
+		sliceCount += source.groups.size();
+	if (!GrassPolicy::BatchCapacityValid(bucket.instances, sliceCount))
 		return false;
 	{
 		winrt::com_ptr<ID3D11DepthStencilView> depth;
@@ -746,6 +751,8 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 	}
 	const uint32_t eyes = globals::game::isVR ? 2 : 1;
 	auto layout = Layout(representative.descriptor);
+	if (!layout)
+		return false;
 	winrt::com_ptr<ID3D11Buffer> nativeGeometry;
 	UINT first = 0, count = 0;
 	context->VSGetConstantBuffers1(2, 1, nativeGeometry.put(), &first, &count);
@@ -767,6 +774,7 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 			return false;
 	}
 	std::vector<Slice> slices;
+	slices.reserve(size_t(sliceCount));
 	uint32_t prefix = 0;
 	for (const auto& source : bucket.sources)
 		for (const auto& group : source.groups) {

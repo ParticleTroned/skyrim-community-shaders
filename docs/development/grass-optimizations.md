@@ -54,7 +54,11 @@ Projected quality size uses the model radius and current render height,
 separately from the larger wind/collision bounds used for visibility.
 Simpler shading retains the diffuse/complex-grass atlas and alpha rules;
 it skips detail shadows, clustered lights and complex normal/specular
-work. CSX's independent PBR grass implementation remains in its own PR.
+work. The PBR grass implementation from PR106 is now in the base. Its
+simplified path retains authored diffuse/alpha layout, material scalar
+values and coarse shadows, while skipping normal/RMAOS/subsurface texture
+samples, detailed shadows, clustered lights and specular lobes. Full
+shading remains the default.
 
 Optional mesh LODs use the upstream asset convention:
 
@@ -108,7 +112,9 @@ Destruction invalidates a generation
 token, preventing address reuse from admitting old geometry. Stale-frame
 captures are discarded. A source holds at most 262,144 instances and
 frame capture holds at most 4,096 sources. Oversized or unsupported work
-retains native rendering.
+retains native rendering. Oversized slice tables and unsupported native
+vertex layouts reject only their bucket; they do not latch a session-wide
+renderer failure.
 
 All preparation precedes the first indirect draw. A failed bucket uses
 native rendering for the entire pass; a completed bucket suppresses its
@@ -158,8 +164,11 @@ remain required before enabling the feature by default.
 The universal Release DLL builds with DevBench enabled and Tracy disabled.
 Focused policy tests cover finite settings, threshold ordering, native
 descriptor stride, stereo counts and scene Hi-Z exclusion. Shader tests
-compile 16 vertex and eight pixel variants with warnings treated as
-errors. Flat/VR WARP dispatches verify packed-record preservation, sparse
+compile 16 vertex and eight pixel batching variants plus 64 PBR/native
+and combined permutations with warnings treated as errors. Material and
+native geometry/register reflection checks cover flat and VR paths.
+Specialized simplified/full PBR shaders verify removal of detail textures
+and clustered lighting resources. Flat/VR WARP dispatches verify packed-record preservation, sparse
 fades, frustum and occlusion outcomes, LOD selection, distance/fade
 cutoffs, simple shading flags, invalid/near-plane bounds, mono-eye
 submission, odd depth dimensions and eye seams.
@@ -172,15 +181,25 @@ entries match the previous VR inventory; the eight grass entries add
 The maintained VR inventory preserves that effective configuration.
 Standalone grass-culling and Hi-Z shaders compiled separately and are
 outside the managed inventory. The grass-culling shader emitted a
-duplicate `VR` macro warning. PBR grass was absent from this build, so
+duplicate `VR` macro warning, fixed by letting the runtime-aware compiler
+helper supply that define once. PBR grass was absent from this build, so
 combined PBR/optimization cache coverage remains unverified. Skyrim
 exited after the queue reached zero; final live API verification was
 unavailable. This capture establishes compilation coverage, not runtime
 quality or performance.
 
+The cache builder applies `PBR_GRASS` and `GRASS_OPTIMIZATIONS` only to
+`RunGrass.hlsl` in both shipped and Patka profiles, matching the bundled
+native shader factory for either runtime. It preserves captured entry
+identities and does not leak grass flags to other families. The old
+capture is the inventory basis, not evidence that the combined cache has
+been traced in-game. Grass shader ABI `native-cell-buckets-v4` invalidates
+previous optimization bytecode after the PBR integration.
+
 `tools/verify-shader-refactor.ps1` produces identical DXBC against
-`88f1b1a26` for feature-absent flat/VR color/depth vertex and pixel
-permutations. Production syntax and preprocessing use the actual compiler
+landed PBR grass at `39aadfb2a` for all 24 feature-absent flat/VR
+color/depth vertex and pixel permutations, including Grass Lighting and
+PBR. The checker materializes feature include roots from each revision. Production syntax and preprocessing use the actual compiler
 options and forced header with developer defines removed; diagnostic
 resources and actions are absent. This is not a separately linked
 production DLL test. In-game SE/AE/VR quality, streaming, recovery and

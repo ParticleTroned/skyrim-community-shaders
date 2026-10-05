@@ -8,10 +8,16 @@ namespace GrassPolicy
 {
 	inline constexpr uint32_t kRecordBytes = 32;
 	inline constexpr uint32_t kMaxBatchInstances = 262144;
+	inline constexpr uint32_t kMaxBatchSlices = 8192;
 	inline constexpr uint32_t kMaxFrameSources = 4096;
 	inline constexpr int kSceneHiZMode = 3;
 	/** @brief The native descriptor stores mesh stride in four-byte units in its low nibble. */
 	constexpr uint32_t MeshStride(uint64_t descriptor) { return uint32_t(descriptor & 0xF) * 4; }
+	/** @brief Unsupported batch sizes retain native rendering before scratch allocation. */
+	constexpr bool BatchCapacityValid(uint64_t instances, uint64_t slices)
+	{
+		return instances > 0 && instances <= kMaxBatchInstances && slices > 0 && slices <= kMaxBatchSlices;
+	}
 
 	struct Settings
 	{

@@ -263,8 +263,8 @@ inline void RunScreenshotStorageSecurityTests()
 		std::filesystem::create_directories(g_creationReplacement);
 		const auto replacementSentinel = g_creationReplacement / "sentinel.txt";
 		{
-			std::ofstream sentinel(replacementSentinel, std::ios::binary);
-			sentinel << "attacker-owned";
+			std::ofstream replacementSentinelStream(replacementSentinel, std::ios::binary);
+			replacementSentinelStream << "attacker-owned";
 		}
 		g_creationHookCalled.store(false, std::memory_order_release);
 		SetDirectoryCreationTestHook(&AttemptCreationSubstitution);

@@ -336,7 +336,9 @@ public:
 		GrassSphereNormal = 1 << 5,
 		IsFemale = 1 << 6,
 		SuppressExternalEmittance = 1 << 7,
-		AdditiveLighting = 1 << 8
+		AdditiveLighting = 1 << 8,
+		PBRGrass = 1 << 9,
+		PBRGrassShading = 1 << 10
 	};
 
 	enum class ExtraFeatureDescriptors : uint32_t

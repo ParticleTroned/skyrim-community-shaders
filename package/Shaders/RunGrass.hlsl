@@ -8,6 +8,9 @@
 #include "Common/SharedData.hlsli"
 
 #if defined(PSHADER)
+#	if defined(PBR_GRASS) && defined(GRASS_LIGHTING)
+#		define TRUE_PBR
+#	endif
 #	include "Common/LightingCommon.hlsli"
 #endif
 
@@ -360,6 +363,9 @@ struct PS_OUTPUT
 	float4 NormalGlossiness: SV_Target2;
 	float4 Albedo: SV_Target3;
 	float4 Specular: SV_Target4;
+#		if defined(PBR_GRASS)
+	float4 Reflectance: SV_Target5;
+#		endif
 	float4 Masks: SV_Target6;
 	float4 Masks2: SV_Target7;
 #	endif  // RENDER_DEPTH
@@ -625,6 +631,9 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 
 #	ifdef GRASS_LIGHTING
 #		include "GrassLighting/GrassLighting.hlsli"
+#		if defined(PBR_GRASS)
+#			include "Common/GrassPBR.hlsli"
+#		endif
 
 float GetSoftLightMultiplier(float angle, float rolloff)
 {
@@ -646,6 +655,10 @@ float GetWrappedDiffuseMultiplier(float angle, float wrapAmount, bool useWrapped
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	[branch] if (!SharedData::grassLightingSettings.Enabled) return RenderBasicGrass(input, frontFace);
+#		if defined(PBR_GRASS)
+	[branch] if (SharedData::truePBRSettings.Enabled &&
+				 (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrassShading)) return RenderPBRGrass(input, frontFace);
+#		endif
 
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
@@ -656,6 +669,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 complexTest = TexBaseSampler.Load(int3(0, int(y) - 1, 0)).xyz * 2.0 - 1.0;
 	float complexLength = length(complexTest);
 	bool complex = abs(complexLength - 1.0) < SharedData::grassLightingSettings.ComplexGrassThreshold;
+#		if defined(PBR_GRASS)
+	complex = complex && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass);
+#		endif
 
 	float4 baseColor;
 	if (complex) {

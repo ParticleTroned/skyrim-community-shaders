@@ -169,6 +169,11 @@ contracts are unchanged, retain the revision and base, regenerate the
 packages, and verify that only compatibility metadata changed in their
 settings. Never bypass the source check or refresh its hash automatically.
 
+PBR Grass adds an optional `True PBR.GrassEnabled` setting, defaulting to
+false when absent. Existing Unified VR tiers keep their authored settings
+and leave PBR Grass disabled. Its shader descriptor flags in `State.h`
+refresh the source fingerprint while retaining revision 5 and the base.
+
 Capture settings keep `FrameCaptureEye` authoritative. The base selects
 `Left`, so its legacy `Sequence.Outputs.SeparateEyes` mirror is false.
 This normalization retains the selected eye and settings schema; rendering

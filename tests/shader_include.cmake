@@ -49,6 +49,7 @@ foreach(
         adaptive_balance_color_shader_test
         foveated_blend_curve_shader_test
         ambient_balance_shader_test
+        pbr_grass_shader_test
         vr_depth_encode_shader_test
         skylighting_probe_slice_test
         motion_sharpening_runtime_compile_test

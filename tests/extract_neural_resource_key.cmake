@@ -20,6 +20,7 @@ extract("${header}" "\tenum class VRRenderScaleBackendKind" "\tstruct VRRenderSc
 extract("${header}" "\tstruct VRRenderScaleProfileSnapshot\n" "\t/** @brief Coherent read model" profile)
 extract("${source}" "\tstruct FoveatedMaskProfileParams" "\tfloat FoveatedMaskDistanceUV(" mask_profile)
 extract("${source}" "\tbool SupportsFoveatedVendorDispatch(" "\tbool ShouldUseReducedResolutionForUpscaling(" configuration)
+extract("${source}" "bool Upscaling::IsNeuralRenderingEnabled(" "bool Upscaling::ApplyNeuralRenderingFovConstraint(" availability_policy)
 extract("${source}" "bool Upscaling::IsNeuralRenderingRenderScaleRequired() const noexcept" "NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode()" neural_gate)
 extract("${source}" "bool Upscaling::IsFoveatedVendorDispatchEnabled(" "bool Upscaling::IsFSRRuntimePathActive(" dispatch_gate)
 extract("${source}" "bool Upscaling::IsPeripheryTAAEnabled(" "bool Upscaling::IsPeripheryTAAPathActive(" taa_gate)
@@ -27,4 +28,4 @@ extract("${source}" "Upscaling::VRRenderScaleResourceKey Upscaling::BuildVRRende
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_resource_key_types.h" "${types}\n${profile}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_resource_key_under_test.h"
-    "${mask_profile}\n${configuration}\n${neural_gate}\n${dispatch_gate}\n${taa_gate}\n${resource_key}")
+    "${availability_policy}\n${mask_profile}\n${configuration}\n${neural_gate}\n${dispatch_gate}\n${taa_gate}\n${resource_key}")

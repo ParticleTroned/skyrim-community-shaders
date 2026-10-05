@@ -1,5 +1,6 @@
 #include "Features/FoveatedCommon.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Runtime.h"
 
 #include <algorithm>
 #include <iostream>
@@ -10,6 +11,8 @@ namespace globals::game
 {
 	bool isVR = true;
 }
+bool providerInstalled = true;
+bool NeuralRendering::Runtime::IsInstalled() noexcept { return providerInstalled; }
 
 struct Upscaling
 {
@@ -64,6 +67,7 @@ struct Upscaling
 	bool IsNeuralRenderingFovConfigurationAvailable() const { return settings.foveatedVendorDispatch && settings.foveatedCenterArea < 0.999f; }
 	auto GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 	static uint32_t ClampDLSSPresetUInt(uint32_t value) { return std::min(value, 5u); }
+	static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
 	bool IsNeuralRenderingRenderScaleRequired() const noexcept;
 	bool IsNeuralRenderingRenderScaleAvailable() const noexcept;
 	bool IsNeuralRenderingRequested() const noexcept;
@@ -133,6 +137,15 @@ int main()
 										Require(key.foveatedVendorDispatch == expectedDispatch && key.peripheryTAA == expectedTAA, "Settled resource keys must match runtime dispatch for every mode");
 										Require(key.valid && key.contextCount == (vr ? 2u : 1u), "Runtime-specific resource identity must remain intact");
 									}
+		providerInstalled = false;
+		globals::game::isVR = true;
+		profile.method = Method::kDLSS;
+		upscaling.settings.neuralRenderingEnabled = true;
+		upscaling.settings.foveatedVendorDispatch = upscaling.settings.periphery_taa_enable = true;
+		const auto missingProvider = upscaling.BuildVRRenderScaleResourceKey(profile);
+		Require(!upscaling.IsNeuralRenderingRequested() && missingProvider.foveatedVendorDispatch && missingProvider.peripheryTAA,
+			"Missing NR provider must preserve normal FOV and periphery TAA resources despite the saved master preference");
+		providerInstalled = true;
 		profile.active = false;
 		const auto inactive = upscaling.BuildVRRenderScaleResourceKey(profile);
 		Require(inactive.backend == Backend::None && !inactive.foveatedVendorDispatch && !inactive.peripheryTAA, "Native recovery must not request scaled vendor resources");

@@ -292,6 +292,7 @@ namespace NrReplay
 			iteration_ = iteration;
 			warmup_ = warmup;
 			runtimeDescriptorRefresh_ = false;
+			runtimeOriginalReason_.clear();
 			descriptors_.clear();
 			events_.clear();
 			parameterBytes_ = observedCalls_ = submittedCalls_ = submittedDescriptors_ = multiCalls_ = maxSubmitted_ = crossRegionCalls_ = maxRegions_ = 0;
@@ -432,6 +433,7 @@ namespace NrReplay
 		[[nodiscard]] std::string_view FailureReason() const noexcept { return error_.data(); }
 		[[nodiscard]] bool RuntimeWarmup() const noexcept { return warmup_; }
 		[[nodiscard]] bool RuntimeDescriptorRefresh() const noexcept { return runtimeDescriptorRefresh_; }
+		[[nodiscard]] std::string_view RuntimeOriginalReason() const noexcept { return runtimeOriginalReason_; }
 		[[nodiscard]] bool RuntimeEpochStale() const noexcept { return runtimeStale_; }
 		[[nodiscard]] std::string ModelCatalogIdentity() const
 		{
@@ -449,10 +451,7 @@ namespace NrReplay
 		[[nodiscard]] bool CanRetryOriginalBeforeSubmission() const noexcept
 		{
 			return frameRuntime_ && PairRecording() && runtimeAdmissionRejected_ && !Healthy() &&
-			       !runtimeFallbackBlocked_ && !runtimeStale_ && nativeAttempts_ == 0 && privateAttempts_ == 0 &&
-			       GetCurrentThreadId() == thread_ && realList_ && installed_ && !retirementFailed_ && !abandoned_ &&
-			       (!modelReplacement_ || modelReplacement_->Healthy()) && (!replacement_ || !replacement_->cleanupFailed) &&
-			       std::ranges::none_of(caches_, [](const auto& cache) { return cache.uncertain; });
+			       nativeAttempts_ == 0 && privateAttempts_ == 0 && RuntimeRecordingOwned();
 		}
 		struct RuntimeGraph
 		{
@@ -460,7 +459,7 @@ namespace NrReplay
 			std::array<std::string, 4> identities{};
 			std::array<std::string, 4> familyIdentities{};
 			KernelPair::Pairing pairs = KernelPair::kSameEyePairs;
-			bool qualified = false;
+			bool qualified = false, familyQualified = false;
 			std::string reason;
 		};
 		[[nodiscard]] RuntimeGraph GetRuntimeGraph() const
@@ -483,6 +482,7 @@ namespace NrReplay
 			}
 			if (!result.qualified)
 				result.reason = "original fallback: actual graph family differs from the qualified private kernel catalog";
+			result.familyQualified = result.qualified;
 			if (const auto pairs = KernelPair::CompatiblePairing(signatures))
 				result.pairs = *pairs;
 			else if (ModelBatchEnabled() && result.qualified) {
@@ -827,6 +827,7 @@ namespace NrReplay
 		std::string repetitionControl_;
 		bool frameRuntime_ = false, runtimeModelPrepared_ = false;
 		bool runtimeDescriptorRefresh_ = false;
+		std::string runtimeOriginalReason_;
 		std::atomic<bool> runtimeStale_ = false;
 		bool runtimeAdmissionRejected_ = false;
 		std::atomic<bool> runtimeFallbackBlocked_ = false;
@@ -912,7 +913,35 @@ namespace NrReplay
 			command.descriptor = id;
 			RecordPairCommand(std::move(command), "L\n");
 		}
-		void ValidatePairDependencies()
+		std::string PairDependencyViolation() const
+		{
+			for (std::size_t i = 0; i < KernelPair::kRegions; ++i) {
+				const auto& region = pairSample_->regions[i];
+				const auto& target = descriptors_.at(region.descriptors.at(KernelPair::kTargetStage)).bytes;
+				const auto& pre = descriptors_.at(region.descriptors.at(2)).bytes;
+				const auto& clear = descriptors_.at(region.descriptors.at(1)).bytes;
+				const auto& next = descriptors_.at(region.descriptors.at(4)).bytes;
+				const auto read = [](const auto& bytes, std::size_t offset) { return KernelPair::Read<std::uint64_t>(bytes, offset); };
+				std::string field;
+				if (const auto flag = KernelPair::Read<std::uint32_t>(pre, 0xc8); flag != 0)
+					field = "producer flag at 0xc8=" + std::to_string(flag) + " (requires zero)";
+				else if (read(pre, 0xf8) != read(target, 0))
+					field = "producer output differs from target input";
+				else if (read(clear, 0) != read(target, 0x38))
+					field = "clear output differs from target completion";
+				else if (KernelPair::Read<std::uint32_t>(clear, 8) == 0)
+					field = "completion clear element count is zero";
+				else if (read(next, 0) != read(target, 8))
+					field = "consumer input differs from target output";
+				else if (read(next, 0x28) != read(target, 0x38))
+					field = "consumer completion differs from target completion";
+				if (!field.empty())
+					return "original frame: region " + std::to_string(i) + " dependency: " + field;
+			}
+			return {};
+		}
+		/** Validates private dependencies, or preserves an ineligible runtime frame in native order. */
+		bool ValidatePairDependencies()
 		{
 			using ProviderFloor::Require;
 			Require(std::all_of(defaultAllocationConfirmed_.begin(), defaultAllocationConfirmed_.end(), [](bool value) { return value; }),
@@ -922,6 +951,12 @@ namespace NrReplay
 			std::array<std::size_t, 4> scratch{}, weights{};
 			std::uintptr_t device = 0;
 			KernelPair::ValidateHeapBindings(*pairSample_);
+			const auto dependencyViolation = PairDependencyViolation();
+			if (frameRuntime_ && !dependencyViolation.empty()) {
+				PromoteRuntimeOriginal(dependencyViolation);
+				return false;
+			}
+			Require(dependencyViolation.empty(), dependencyViolation.c_str());
 			for (std::size_t i = 0; i < KernelPair::kRegions; ++i) {
 				const auto& region = pairSample_->regions[i];
 				const auto& target = descriptors_.at(region.descriptors.at(KernelPair::kTargetStage));
@@ -942,14 +977,8 @@ namespace NrReplay
 				Require(read64(0x20) == 0 && read64(0x28) == 0 && read64(0x30) == 0 && read64(0x40) == 0 &&
 							read64(0x48) == 0 && read64(0x50) == 0 && read64(0x58) == 0,
 					"kernel pair target packet has unsupported extents or optional context");
-				const auto& pre = descriptors_.at(region.descriptors[2]).bytes;
 				const auto& clear = descriptors_.at(region.descriptors[1]).bytes;
-				const auto& next = descriptors_.at(region.descriptors[4]).bytes;
 				const auto clearElements = KernelPair::Read<std::uint32_t>(clear, 8);
-				Require(KernelPair::Read<std::uint32_t>(pre, 0xc8) == 0 && KernelPair::Read<std::uint64_t>(pre, 0xf8) == read64(0) &&
-							KernelPair::Read<std::uint64_t>(clear, 0) == read64(0x38) && clearElements &&
-							KernelPair::Read<std::uint64_t>(next, 0) == read64(8) && KernelPair::Read<std::uint64_t>(next, 0x28) == read64(0x38),
-					"kernel pair producer, completion clear or consumer dependencies differ");
 				const auto completionBytes = KernelPair::CompletionByteSpan(clearElements);
 				scratch[i] = KernelPair::FindBuffer(*pairOwners_, read64(0), tensorBytes);
 				Require(KernelPair::FindBuffer(*pairOwners_, read64(8), tensorBytes) == scratch[i] &&
@@ -976,6 +1005,7 @@ namespace NrReplay
 					"kernel pair N2 function ownership is unavailable");
 			if (ModelBatchEnabled())
 				Require(modelReplacement_ && modelReplacement_->Healthy(), "model batch replacement ownership is unavailable");
+			return true;
 		}
 		void PrepareModelBatches()
 		{
@@ -1103,6 +1133,8 @@ namespace NrReplay
 					signatures[index] = pairSample_->regions[index].stageSignature;
 				if (const auto pairs = KernelPair::CompatiblePairing(signatures))
 					pairSample_->pairs = *pairs;
+				else if (frameRuntime_ && (ModelBatchEnabled() || pairMode_ == "batch"))
+					PromoteRuntimeOriginal("original frame: independent regions have no complete matching of identical native launch shapes");
 				else
 					ProviderFloor::Require(!ModelBatchEnabled() && pairMode_ != "batch", "kernel batch regions have no complete identical-shape matching");
 			}
@@ -1117,14 +1149,36 @@ namespace NrReplay
 									   a.dynSharedMemBytes == b.dynSharedMemBytes,
 				"kernel pair selected-stage launch geometry or packet ABI differs");
 		}
+		/** Ownership proof shared by pre-submission recovery and original-frame promotion. */
+		bool RuntimeRecordingOwned() const noexcept
+		{
+			return frameRuntime_ && !runtimeFallbackBlocked_ && !runtimeStale_ &&
+			       GetCurrentThreadId() == thread_ && realList_ && installed_ && !retirementFailed_ && !abandoned_ &&
+			       (!modelReplacement_ || modelReplacement_->Healthy()) && (!replacement_ || !replacement_->cleanupFailed) &&
+			       std::ranges::none_of(caches_, [](const auto& cache) { return cache.uncertain; });
+		}
+		/** Restore native ordering before a metadata refresh; no private launch may precede it. */
+		void PromoteRuntimeOriginal(std::string_view reason)
+		{
+			ProviderFloor::Require(frameRuntime_ && PairRecording() && sample_ && Healthy() &&
+									   RuntimeRecordingOwned() && pairSample_ && pending_.empty() && nativeAttempts_ == 0 && privateAttempts_ == 0,
+				"runtime original promotion lacks an untouched owned recording");
+			const auto order = KernelPair::BuildOriginalPrefix(*pairSample_, descriptors_.size());
+			warmup_ = true;
+			runtimeOriginalReason_ = reason;
+			SubmitPairOrder(order, 0, 0, false);
+		}
 		void SubmitPair(const RepetitionCallback& begin, const RepetitionCallback& end)
 		{
 			ProviderFloor::Require(pairSample_ && !pairSample_->submitted, "kernel pair sample was already submitted");
 			SelectCompatiblePairing();
+			if (frameRuntime_ && warmup_)
+				return;
 			pairSample_->order = KernelPair::BuildOrder(*pairSample_, pairMode_, modelBatchStages_);
 			if (ComparisonEnabled())
 				pairSample_->controlOrder = KernelPair::BuildOrder(*pairSample_, repetitionControl_);
-			ValidatePairDependencies();
+			if (!ValidatePairDependencies())
+				return;
 			if (pairMode_ == "batch")
 				for (const auto& pair : pairSample_->pairs)
 					ValidatePairBatchGeometry(pairSample_->regions[pair[0]].descriptors[KernelPair::kTargetStage],
@@ -2019,13 +2073,8 @@ namespace NrReplay
 					probe.runtimeStale_ = true;
 					return nativeFunction(arguments...);
 				}
-				// Refreshes before any recorded command can keep the entire frame original.
-				if (admitted && probe.frameRuntime_ && !probe.warmup_ && probe.Healthy() &&
-					probe.nativeAttempts_ == 0 && probe.privateAttempts_ == 0 &&
-					probe.descriptors_.empty() && probe.pending_.empty() && probe.pairSample_ &&
-					probe.pairSample_->completed == 0 &&
-					std::ranges::all_of(probe.pairSample_->regions, [](const auto& region) { return region.commands.empty(); })) {
-					probe.warmup_ = true;
+				if (admitted && probe.frameRuntime_ && !probe.warmup_ && probe.Healthy()) {
+					probe.PromoteRuntimeOriginal("original frame: native descriptor metadata refreshed after flushing its original prefix");
 					probe.runtimeDescriptorRefresh_ = true;
 				}
 				const bool stable = probe.descriptorGuard_.Observe(Api, admitted && probe.warmup_);

@@ -175,6 +175,7 @@ namespace NeuralRendering
 			Require(std::ranges::any_of(s.pending, [](const auto& item) { return !item; }), "kernel frame arena capacity is still owned by the GPU");
 			Require(!s.probe->RuntimeEpochStale(), "kernel feature epoch requires retirement after original pass-through");
 			s.current = std::make_unique<State::Arena>();
+			s.Note({});
 			s.current->before = before;
 			s.current->warmup = frame.inspectUnqualifiedPipeline || s.status.warmupFrames < 3 || !s.status.graphMatchesQualified;
 			s.current->proxy.reset(new State::Proxy(commandList, [&s](std::string_view name) { return s.probe->BeforeCommand(name); }, [&s](std::string_view reason) { s.probe->RecordFailure(reason); }, {}, {}, [&s](UINT count, const D3D12_RESOURCE_BARRIER* barriers) { return s.probe->BarrierDisposition(count, barriers); }, [&s](UINT count, ID3D12DescriptorHeap* const* heaps) { return s.probe->HeapDisposition(count, heaps); }));
@@ -298,8 +299,8 @@ namespace NeuralRendering
 			s.probe->FinishCommandList();
 			s.current->warmup = s.probe->RuntimeWarmup();
 			s.status.warmup = s.current->warmup;
-			if (s.probe->RuntimeDescriptorRefresh())
-				s.Note("original frame: native descriptor metadata refreshed before kernel recording");
+			if (!s.probe->RuntimeOriginalReason().empty())
+				s.Note(s.probe->RuntimeOriginalReason());
 			s.current->counters = s.probe->GetRuntimeCounters();
 			const auto graph = s.probe->GetRuntimeGraph();
 			s.status.graphLaunches = graph.launches;
@@ -307,6 +308,7 @@ namespace NeuralRendering
 			s.status.graphFamilyIdentities = graph.familyIdentities;
 			s.status.regionPairs = graph.pairs;
 			s.status.graphMatchesQualified = graph.qualified;
+			s.status.graphFamilyMatchesQualified = graph.familyQualified;
 			if (s.current->warmup && graph.qualified)
 				s.probe->PrepareRuntimeModel();
 			if (!graph.qualified)

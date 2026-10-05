@@ -185,6 +185,57 @@ namespace NrReplay::KernelPair
 		}
 	}
 
+	inline void ValidateOriginalCommand(const Command& command, std::span<const std::size_t> descriptors, std::size_t& stage)
+	{
+		using ProviderFloor::Require;
+		switch (command.kind) {
+		case Kind::Launch:
+			Require(stage < descriptors.size() && command.descriptor == descriptors[stage] && command.barriers.empty() && command.heaps.empty(),
+				"kernel pair launch command differs from the ordered descriptor stream");
+			++stage;
+			break;
+		case Kind::Barrier:
+			Require(command.descriptor == SIZE_MAX && !command.barriers.empty() && command.barriers.size() <= 4096 && command.heaps.empty(),
+				"kernel pair barrier command payload invalid");
+			break;
+		case Kind::Heaps:
+			Require(command.descriptor == SIZE_MAX && command.barriers.empty() && !command.heaps.empty() && command.heaps.size() <= 2 &&
+						std::ranges::all_of(command.heaps, [](const auto* heap) { return heap != nullptr; }),
+				"kernel pair heap command payload invalid");
+			break;
+		default:
+			throw std::runtime_error("kernel pair original stream contains an unsupported command kind");
+		}
+	}
+
+	/** Validates a complete original prefix before metadata may change its bindings. */
+	inline std::vector<Operation> BuildOriginalPrefix(const Sample& sample, std::size_t descriptorCount)
+	{
+		using ProviderFloor::Require;
+		Require(sample.completed <= kRegions && descriptorCount <= kRegions * kStages && !sample.submitted &&
+					sample.commandsSubmitted == 0 && sample.submittedLogicalDescriptors.empty(),
+			"kernel pair original prefix was already submitted or exceeds its bound");
+		std::vector<Operation> order;
+		std::size_t next = 0;
+		for (std::size_t r = 0; r < kRegions; ++r) {
+			const auto& region = sample.regions[r];
+			Require(region.commands.size() <= kMaximumRegionCommands && region.descriptors.size() <= kStages &&
+						region.complete == (r < sample.completed) && (r >= sample.completed || region.descriptors.size() == kStages) &&
+						(r <= sample.completed || (region.commands.empty() && region.descriptors.empty())),
+				"kernel pair original prefix has incomplete or out-of-order regions");
+			for (const auto id : region.descriptors)
+				Require(id == next++, "kernel pair original prefix descriptor order differs");
+			std::size_t stage = 0;
+			for (std::size_t c = 0; c < region.commands.size(); ++c) {
+				ValidateOriginalCommand(region.commands[c], region.descriptors, stage);
+				order.push_back({ region.commands[c].kind, r, c });
+			}
+			Require(stage == region.descriptors.size(), "kernel pair original prefix omits launch commands");
+		}
+		Require(next == descriptorCount, "kernel pair original prefix omits captured descriptors");
+		return order;
+	}
+
 	/** Validates each original command stream and locates its ordered launch boundaries. */
 	inline std::array<std::array<std::size_t, kStages>, kRegions> ValidateRegionCommands(const Sample& sample)
 	{
@@ -202,24 +253,9 @@ namespace NrReplay::KernelPair
 			std::size_t stage = 0;
 			for (std::size_t c = 0; c < region.commands.size(); ++c) {
 				const auto& command = region.commands[c];
-				switch (command.kind) {
-				case Kind::Launch:
-					Require(stage < kStages && command.descriptor == region.descriptors[stage] && command.barriers.empty() && command.heaps.empty(),
-						"kernel pair launch command differs from the ordered descriptor stream");
-					launches[r][stage++] = c;
-					break;
-				case Kind::Barrier:
-					Require(command.descriptor == SIZE_MAX && !command.barriers.empty() && command.barriers.size() <= 4096 && command.heaps.empty(),
-						"kernel pair barrier command payload invalid");
-					break;
-				case Kind::Heaps:
-					Require(command.descriptor == SIZE_MAX && command.barriers.empty() && !command.heaps.empty() && command.heaps.size() <= 2 &&
-								std::all_of(command.heaps.begin(), command.heaps.end(), [](const auto* heap) { return heap != nullptr; }),
-						"kernel pair heap command payload invalid");
-					break;
-				default:
-					throw std::runtime_error("kernel pair original stream contains an unsupported command kind");
-				}
+				if (command.kind == Kind::Launch && stage < kStages)
+					launches[r][stage] = c;
+				ValidateOriginalCommand(command, region.descriptors, stage);
 			}
 			Require(stage == kStages && launches[r][kTargetStage] == region.target, "kernel pair launch boundaries incomplete");
 		}

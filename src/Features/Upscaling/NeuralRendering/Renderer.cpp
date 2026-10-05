@@ -3705,7 +3705,7 @@ namespace NeuralRendering
 			kernelBatchApplied_ = !status.warmup && privateBatch;
 			if (status.warmup && !status.reason.empty())
 				kernelBatchFrameReason_ = status.reason;
-			if (privateBatch && status.warmup && !status.graphMatchesQualified) {
+			if (privateBatch && status.warmup && !status.graphFamilyMatchesQualified) {
 				kernelBatchFallbackLatched_ = true;
 				kernelBatchRejection_ = status;
 				kernelBatchFrameReason_ = status.reason;
@@ -4268,7 +4268,7 @@ namespace NeuralRendering
 			{ "batchedFrames", status.batchedFrames }, { "logicalLaunches", status.logicalLaunches },
 			{ "physicalLaunches", status.physicalLaunches }, { "privateLaunches", status.privateLaunches },
 			{ "pendingFrames", status.pendingFrames }, { "retirementProven", status.retirementProven },
-			{ "graphMatchesQualified", status.graphMatchesQualified }, { "graphLaunches", status.graphLaunches },
+			{ "graphMatchesQualified", status.graphMatchesQualified }, { "graphFamilyMatchesQualified", status.graphFamilyMatchesQualified }, { "graphLaunches", status.graphLaunches },
 			{ "graphIdentities", status.graphIdentities }, { "inspection", status.inspection },
 			{ "graphFamilyIdentities", status.graphFamilyIdentities }, { "regionPairs", status.regionPairs },
 			{ "devbenchOverride", kernelBatchOverride_ }, { "inspectUnqualifiedPipeline", kernelInspectUnqualified_ } };

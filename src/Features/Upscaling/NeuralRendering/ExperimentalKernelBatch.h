@@ -51,7 +51,7 @@ namespace NeuralRendering
 			std::uint64_t frames = 0, warmupFrames = 0, descriptorRefreshFrames = 0, batchedFrames = 0;
 			std::uint64_t logicalLaunches = 0, physicalLaunches = 0, privateLaunches = 0;
 			std::size_t pendingFrames = 0;
-			bool inspection = false, graphMatchesQualified = false;
+			bool inspection = false, graphMatchesQualified = false, graphFamilyMatchesQualified = false;
 			std::array<std::size_t, 4> graphLaunches{};
 			std::array<std::string, 4> graphIdentities{};
 			std::array<std::string, 4> graphFamilyIdentities{};

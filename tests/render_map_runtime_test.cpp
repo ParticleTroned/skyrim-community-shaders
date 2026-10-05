@@ -2023,6 +2023,128 @@ namespace
 		}
 	}
 
+	void TestProducerPublicationRetainsCaptureGeneration()
+	{
+		enum class Producer
+		{
+			kRenderPass,
+			kVisibilityCandidate,
+			kCullDecision,
+			kTechnique,
+			kGeometry,
+			kVisibilityResult,
+			kEyeSubmission,
+			kResourceFlow,
+		};
+		const std::array producers{
+			Producer::kRenderPass,
+			Producer::kVisibilityCandidate,
+			Producer::kCullDecision,
+			Producer::kTechnique,
+			Producer::kGeometry,
+			Producer::kVisibilityResult,
+			Producer::kEyeSubmission,
+			Producer::kResourceFlow,
+		};
+		constexpr std::uintptr_t context = 0xE010;
+		const ResourceObservationInput resource{ .d3dObject = 0xE020 };
+		auto config = Config();
+		config.maxEvents = 128;
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		for (const auto producer : producers) {
+			for (const auto turnOver : { false, true }) {
+				Runtime runtime;
+				runtime.SetImmediateContext(context);
+				Check(runtime.StartCapture(config) == StartResult::kStarted,
+					"producer source capture did not start");
+				const auto generation = runtime.ActiveCaptureGeneration();
+				runtime.PauseNextProducerPublicationForTesting();
+				bool scopeActive = false;
+				std::uint64_t version = 0;
+				EventKind expected = EventKind::kCaptureMarker;
+				std::thread worker([&] {
+					switch (producer) {
+					case Producer::kRenderPass:
+						{
+							expected = EventKind::kRenderPassEnter;
+							auto scope = runtime.EnterRenderPass({ .renderPass = 0xE030 });
+							scopeActive = scope.IsActive();
+							break;
+						}
+					case Producer::kVisibilityCandidate:
+						expected = EventKind::kVisibilityCandidate;
+						runtime.RecordVisibilityCandidate(0xE030, 7, 1);
+						break;
+					case Producer::kCullDecision:
+						expected = EventKind::kCullDecision;
+						runtime.RecordCullDecision(1, generation, 7, true, 1, 1, 0, 0, 1);
+						break;
+					case Producer::kTechnique:
+						{
+							expected = EventKind::kTechniqueBegin;
+							auto scope = runtime.EnterTechnique({ .shader = 0xE030 });
+							scopeActive = scope.IsActive();
+							break;
+						}
+					case Producer::kGeometry:
+						{
+							expected = EventKind::kGeometrySetupBegin;
+							auto scope = runtime.EnterGeometry({
+								.geometry = 0xE030,
+								.sceneObject = { .reference = 0xE040 },
+								.materialState = { .material = 0xE050 },
+							});
+							scopeActive = scope.IsActive();
+							break;
+						}
+					case Producer::kVisibilityResult:
+						expected = EventKind::kVisibilityResultReady;
+						version = runtime.RecordVisibilityResultReady(context,
+							{ .resource = resource },
+							{ .resource = resource, .view = { .d3dObject = 0xE060 } }, 3);
+						break;
+					case Producer::kEyeSubmission:
+						expected = EventKind::kEyeSubmitted;
+						runtime.RecordEyeSubmission(resource, Eye::kLeft, 1, 0, 0, 1, 1, 0, 1);
+						break;
+					case Producer::kResourceFlow:
+						expected = EventKind::kResourceFlow;
+						runtime.RecordResourceFlow(context, ResourceFlowOperation::kCopyResource,
+							resource, { .d3dObject = 0xE070 }, 0, 0);
+						break;
+					}
+				});
+				WaitForDeferredPublicationPause(runtime, worker);
+				if (turnOver) {
+					auto first = runtime.StopCapture();
+					const auto started = runtime.StartCapture(config) == StartResult::kStarted;
+					runtime.ResumeDeferredPublicationForTesting();
+					worker.join();
+					Check(first.has_value() && started, "producer capture turnover failed");
+				} else {
+					runtime.ResumeDeferredPublicationForTesting();
+					worker.join();
+				}
+				auto snapshot = runtime.StopCapture();
+				Check(snapshot.has_value(), "producer capture did not stop");
+				if (turnOver) {
+					Check(snapshot->events.empty(), "stale producer published into the successor capture");
+					Check(snapshot->shaderObservations.empty() && snapshot->resourceObservations.empty() &&
+							  snapshot->targetViewObservations.empty() && snapshot->sceneObjectObservations.empty() &&
+							  snapshot->geometryObservations.empty() && snapshot->materialStateObservations.empty(),
+						"stale observation chain populated the successor catalogues");
+					Check(!scopeActive && version == 0, "stale producer returned a usable scope or version");
+				} else {
+					Check(std::any_of(snapshot->events.begin(), snapshot->events.end(),
+							  [expected](const EventRecord& event) { return event.kind == expected; }),
+						"same-generation producer lost its event");
+					if (producer == Producer::kVisibilityResult)
+						Check(version != 0, "same-generation visibility result lost its version");
+				}
+			}
+		}
+	}
+
 	void TestImmediateStagePublicationRetainsCaptureGeneration()
 	{
 		constexpr std::uintptr_t immediateContext = 0xC010;
@@ -2647,6 +2769,7 @@ int main()
 		TestExecuteRestoreStateIsIndependentOfCaptureAdmission();
 		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
 		TestDiagnosticCatalogueAdmissionFailuresFailOpen();
+		TestProducerPublicationRetainsCaptureGeneration();
 		TestImmediateStagePublicationRetainsCaptureGeneration();
 		TestImmediateDispatchRetainsCaptureGeneration();
 		TestFilteredCaptureMaintainsImmediateStageBinding();

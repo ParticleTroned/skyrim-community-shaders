@@ -697,10 +697,10 @@ namespace CSX::RenderMap
 		bool IsCapturing() const noexcept;
 		bool IsDraining() const noexcept;
 		std::uint64_t ActiveGeneration() const noexcept;
-		bool IsGeometryShaderTypeSelected(std::uint32_t a_shaderType) const noexcept;
+		bool IsGeometryShaderTypeSelected(std::uint32_t a_shaderType, std::uint64_t a_expectedGeneration = 0) const noexcept;
 		bool IsExecutionAllowedByGeometryScope(
 			std::uint64_t a_preparedGeometrySetupObservationId = 0) const noexcept;
-		void CountFiltered(std::uint64_t a_count = 1) noexcept;
+		void CountFiltered(std::uint64_t a_count = 1, std::uint64_t a_expectedGeneration = 0) noexcept;
 
 		RecordResult Record(
 			EventKind a_kind,
@@ -734,17 +734,18 @@ namespace CSX::RenderMap
 			std::uint64_t a_expectedGeneration = 0) noexcept;
 
 		std::uint64_t AllocateObservationId(std::uint64_t a_expectedGeneration = 0) noexcept;
-		ShaderObservationResult ObserveShader(const ShaderObservationInput& a_input) noexcept;
-		StageShaderObservationResult ObserveStageShader(const StageShaderObservationInput& a_input) noexcept;
+		/** A nonzero expected generation rejects observations from a different capture. */
+		ShaderObservationResult ObserveShader(const ShaderObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
+		StageShaderObservationResult ObserveStageShader(const StageShaderObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
 		StageShaderObservationResult FindStageShader(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) noexcept;
-		ResourceObservationResult ObserveResource(const ResourceObservationInput& a_input) noexcept;
-		TargetViewObservationResult ObserveTargetView(const TargetViewObservationInput& a_input) noexcept;
-		TargetBindingObservationResult ObserveTargetBinding(const TargetBindingObservationInput& a_input) noexcept;
-		SceneObjectObservationResult ObserveSceneObject(const SceneObjectObservationInput& a_input) noexcept;
-		GeometryObservationResult ObserveGeometry(const GeometryObservationInput& a_input) noexcept;
-		MaterialStateObservationResult ObserveMaterialState(const MaterialStateObservationInput& a_input) noexcept;
+		ResourceObservationResult ObserveResource(const ResourceObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
+		TargetViewObservationResult ObserveTargetView(const TargetViewObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
+		TargetBindingObservationResult ObserveTargetBinding(const TargetBindingObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
+		SceneObjectObservationResult ObserveSceneObject(const SceneObjectObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
+		GeometryObservationResult ObserveGeometry(const GeometryObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
+		MaterialStateObservationResult ObserveMaterialState(const MaterialStateObservationInput& a_input, std::uint64_t a_expectedGeneration = 0) noexcept;
 		void RetireShaderObservation(std::uintptr_t a_shader) noexcept;
 		void SetThreadFrameContext(const FrameContext& a_context) noexcept;
 		FrameContext GetThreadFrameContext() const noexcept;

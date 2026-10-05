@@ -142,3 +142,19 @@ outputs and failed native calls skip diagnostics. Hash/storage/registration/map
 exceptions and admission or cleanup failures increment the allocation-free
 `failureCount`; no logging or allocation is performed by the exception handler.
 COM teardown and native lifetime behavior still require live qualification.
+
+## Capture generation ownership
+
+A producer retains the nonzero capture generation admitted at entry through
+observation allocation, catalogue admission, scope entry and event publication.
+Multi-step shader, geometry, resource/view and visibility chains use that same
+generation for every observation. A stopped producer cannot fall back to a
+successor generation or add its earlier observation IDs to successor catalogues.
+Visibility-result publication returns an ID only when its final event is recorded.
+Geometry filtering also retains the producer generation.
+
+Deterministic host tests pause render-pass, visibility-candidate, cull-decision,
+technique, geometry, visibility-result, eye-submission and resource-flow producers
+before publication. They verify empty successor events and catalogues after
+stop/start, plus successful same-generation controls. These tests do not establish
+native hook coverage, GPU completion or live capture-turnover qualification.

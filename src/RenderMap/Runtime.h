@@ -382,6 +382,7 @@ namespace CSX::RenderMap
 #if defined(CSX_RENDER_MAP_TESTING)
 		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;
 		void FailNextCommandListCatalogueAdmissionForTesting() noexcept;
+		void PauseNextProducerPublicationForTesting() noexcept;
 		void PauseNextDeferredPublicationForTesting() noexcept;
 		void PauseNextImmediateStagePublicationForTesting() noexcept;
 		void PauseNextImmediateDispatchAdmissionForTesting() noexcept;
@@ -500,7 +501,7 @@ namespace CSX::RenderMap
 			std::uint64_t captureGeneration{ 0 };
 		};
 
-		std::uint64_t EnsureImmediateContextObservation() noexcept;
+		std::uint64_t EnsureImmediateContextObservation(std::uint64_t a_expectedCaptureGeneration) noexcept;
 		ContextObservation EnsureContextObservation(std::uintptr_t a_context) noexcept;
 		std::uint64_t StartDeferredRecording(
 			DeferredContextState& a_state,
@@ -511,6 +512,7 @@ namespace CSX::RenderMap
 			std::uint64_t a_recordingObservationId,
 			CommandRecordingIncompleteReason a_reason) noexcept;
 #if defined(CSX_RENDER_MAP_TESTING)
+		void PauseProducerPublicationForTesting() noexcept;
 		void PauseDeferredPublicationBeforeAppendForTesting() noexcept;
 		void PauseImmediateStagePublicationForTesting() noexcept;
 		void PauseImmediateDispatchBeforeAppendForTesting() noexcept;
@@ -522,12 +524,12 @@ namespace CSX::RenderMap
 		ImmediateStageObservation ReadImmediateStageObservation(ShaderStage a_stage) const noexcept;
 		void ApplyEffectiveResourceViewResetLocked() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
-		ImmediateStageObservation EnsureBoundStageObservation(ShaderStage a_stage) noexcept;
+		ImmediateStageObservation EnsureBoundStageObservation(ShaderStage a_stage, std::uint64_t a_expectedCaptureGeneration) noexcept;
 		StageShaderObservationResult ObserveBoundStage(
 			ShaderStage a_stage,
-			std::uintptr_t a_d3dObject) noexcept;
+			std::uintptr_t a_d3dObject, std::uint64_t a_expectedCaptureGeneration) noexcept;
 		StageShaderObservationResult ObserveStageShaderWithPersistent(
-			const StageShaderObservationInput& a_input) noexcept;
+			const StageShaderObservationInput& a_input, std::uint64_t a_expectedCaptureGeneration) noexcept;
 		std::optional<PersistentStageShaderIdentity> FindCreatedStageShader(
 			ShaderStage a_stage,
 			std::uintptr_t a_d3dObject) const noexcept;
@@ -539,11 +541,11 @@ namespace CSX::RenderMap
 		TargetViewObservationResult ObserveResourceView(
 			const ResourceViewInput& a_input,
 			std::uint64_t a_contextObservationId,
-			std::uint64_t a_commandStreamSequence) noexcept;
+			std::uint64_t a_commandStreamSequence, std::uint64_t a_expectedCaptureGeneration) noexcept;
 		ResourceObservationResult ObserveResource(
 			const ResourceObservationInput& a_input,
 			std::uint64_t a_contextObservationId,
-			std::uint64_t a_commandStreamSequence) noexcept;
+			std::uint64_t a_commandStreamSequence, std::uint64_t a_expectedCaptureGeneration) noexcept;
 
 		Collector collector;
 		// Serializes reset-before-publish capture transitions with shutdown.
@@ -584,6 +586,7 @@ namespace CSX::RenderMap
 #if defined(CSX_RENDER_MAP_TESTING)
 		std::atomic_bool failNextDeferredContextCatalogueAdmission{ false };
 		std::atomic_bool failNextCommandListCatalogueAdmission{ false };
+		std::atomic_bool pauseNextProducerPublication{ false };
 		std::atomic_bool pauseNextDeferredPublication{ false };
 		std::atomic_bool pauseNextImmediateStagePublication{ false };
 		std::atomic_bool pauseNextImmediateDispatchAdmission{ false };

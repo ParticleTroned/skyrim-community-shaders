@@ -348,6 +348,48 @@ namespace
 		Check(threadIds.size() == threadCount, "thread identity was not preserved");
 	}
 
+	void TestObservationChainsRetainCaptureGeneration()
+	{
+		Collector collector;
+		Check(collector.Start(Config()) == StartResult::kStarted, "observation source capture did not start");
+		const auto staleGeneration = collector.ActiveGeneration();
+		auto first = collector.Stop();
+		Check(first.has_value() && collector.Start(Config()) == StartResult::kStarted,
+			"observation capture turnover failed");
+		const auto generation = collector.ActiveGeneration();
+		const auto verify = [&](std::uint64_t expectedGeneration, bool admitted) {
+			Check((collector.ObserveShader({ .shader = 0xE100 }, expectedGeneration).observationId != 0) == admitted,
+				"shader observation ignored its generation");
+			Check((collector.ObserveStageShader({ .d3dObject = 0xE101 }, expectedGeneration).observationId != 0) == admitted,
+				"stage shader observation ignored its generation");
+			const auto resource = collector.ObserveResource({ .d3dObject = 0xE102 }, expectedGeneration);
+			Check((resource.observationId != 0) == admitted, "resource observation ignored its generation");
+			const auto view = collector.ObserveTargetView({ .d3dObject = 0xE103, .resourceObservationId = resource.observationId }, expectedGeneration);
+			Check((view.observationId != 0) == admitted, "view observation ignored its generation");
+			Check((collector.ObserveTargetBinding({ .renderTargetObservationIds = { view.observationId }, .renderTargetCount = 1 }, expectedGeneration).observationId != 0) == admitted,
+				"target binding observation ignored its generation");
+			const auto object = collector.ObserveSceneObject({ .reference = 0xE104 }, expectedGeneration);
+			Check((object.observationId != 0) == admitted, "scene object observation ignored its generation");
+			Check((collector.ObserveGeometry({ .geometry = 0xE105, .sceneObjectObservationId = object.observationId }, expectedGeneration).observationId != 0) == admitted,
+				"geometry observation ignored its generation");
+			Check((collector.ObserveMaterialState({ .material = 0xE106 }, expectedGeneration).observationId != 0) == admitted,
+				"material observation ignored its generation");
+		};
+		verify(staleGeneration, false);
+		collector.CountFiltered(3, staleGeneration);
+		Check(!collector.IsGeometryShaderTypeSelected(0, staleGeneration), "stale geometry filter used successor configuration");
+		verify(generation, true);
+		collector.CountFiltered(2, generation);
+		Check(collector.IsGeometryShaderTypeSelected(0, generation), "current geometry filter rejected its configuration");
+		auto snapshot = collector.Stop();
+		Check(snapshot && snapshot->shaderObservations.size() == 1 && snapshot->stageShaderObservations.size() == 1 &&
+				  snapshot->resourceObservations.size() == 1 && snapshot->targetViewObservations.size() == 1 &&
+				  snapshot->targetBindingObservations.size() == 1 && snapshot->sceneObjectObservations.size() == 1 &&
+				  snapshot->geometryObservations.size() == 1 && snapshot->materialStateObservations.size() == 1 &&
+				  snapshot->statistics.filtered == 2,
+			"stale observation chain changed the successor catalogues or filtered count");
+	}
+
 	void TestStoppedGuardDoesNotLeak()
 	{
 		Collector collector;
@@ -380,6 +422,7 @@ int main()
 		TestOutOfOrderScopeCleanup();
 		TestTimeLimit();
 		TestConcurrentRecording();
+		TestObservationChainsRetainCaptureGeneration();
 		TestStoppedGuardDoesNotLeak();
 		return 0;
 	} catch (const std::exception& error) {

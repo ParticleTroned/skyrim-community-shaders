@@ -261,7 +261,8 @@ namespace
 					Check(!GetRuntime().IsCapturing(), "hooks activated before response construction");
 					Check(contexts.contains(a_capture.captureId), "response preceded context retention");
 					response["captureId"] = a_capture.captureId;
-					throw std::bad_alloc(); }, [&](const std::string& a_captureId) noexcept { contexts.erase(a_captureId); });
+					if (failure == CaptureStartPhase::kResponse)
+						throw std::bad_alloc(); }, [&](const std::string& a_captureId) noexcept { contexts.erase(a_captureId); });
 			Check(status == ControlStatus::kAllocationFailed && phase == failure, "injected start failure was misclassified");
 			Check(!descriptor.captureId.empty(), "failure did not exercise a reserved capture identity");
 			Check(contexts.empty(), "failed start retained artifact context");

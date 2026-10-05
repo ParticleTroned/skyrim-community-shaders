@@ -1721,6 +1721,8 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
+
     add_controller_test(
         vr_fps_stabilizer_config_test
         VRFpsStabilizerConfig
@@ -2358,6 +2360,9 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
+    add_d3d_shader_test(grass_batch_shader_test GrassBatchShader tests/grass_batch_shader_test.cpp)
+    target_sources(grass_batch_shader_test PRIVATE src/Utils/ShaderInclude.cpp)
+    target_link_libraries(grass_batch_shader_test PRIVATE spdlog::spdlog)
     add_d3d_shader_test(
         pbr_grass_shader_test
         PBRGrassShader

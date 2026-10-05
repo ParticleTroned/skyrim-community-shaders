@@ -15,22 +15,22 @@ namespace
 
 	struct Includes : ID3DInclude
 	{
-		std::vector<std::unique_ptr<Util::CustomInclude>> roots;
+		std::vector<std::pair<std::filesystem::path, std::unique_ptr<Util::CustomInclude>>> roots;
 		Includes()
 		{
-			roots.emplace_back(std::make_unique<Util::CustomInclude>("package/Shaders"));
+			roots.emplace_back("package/Shaders", std::make_unique<Util::CustomInclude>("package/Shaders"));
 			for (const auto& feature : std::filesystem::directory_iterator("features"))
 				if (std::filesystem::is_directory(feature.path() / "Shaders"))
-					roots.emplace_back(std::make_unique<Util::CustomInclude>(feature.path() / "Shaders"));
+					roots.emplace_back(feature.path() / "Shaders", std::make_unique<Util::CustomInclude>(feature.path() / "Shaders"));
 		}
 		HRESULT Open(D3D_INCLUDE_TYPE type, LPCSTR name, LPCVOID parent, LPCVOID* data, UINT* size) override
 		{
-			for (size_t index = 0; index < roots.size(); ++index)
-				if (SUCCEEDED(roots[index]->Open(type, name, parent, data, size)))
+			for (auto& [path, root] : roots)
+				if (std::filesystem::is_regular_file(path / name) && SUCCEEDED(root->Open(type, name, parent, data, size)))
 					return S_OK;
 			return E_FAIL;
 		}
-		HRESULT Close(LPCVOID data) override { return roots.front()->Close(data); }
+		HRESULT Close(LPCVOID data) override { return roots.front().second->Close(data); }
 	};
 
 	void Require(bool value, const char* reason)
@@ -53,9 +53,11 @@ namespace
 		return bytecode;
 	}
 
-	ComPtr<ID3D11ShaderReflection> Compile(bool vertex, bool vr, bool enhanced, bool pbr, bool depth, bool alpha, bool features)
+	ComPtr<ID3D11ShaderReflection> Compile(bool vertex, bool vr, bool enhanced, bool pbr, bool depth, bool alpha, bool features, bool optimized)
 	{
 		std::vector<D3D_SHADER_MACRO> defines{ { vertex ? "VSHADER" : "PSHADER", "1" } };
+		if (optimized)
+			defines.push_back({ "GRASS_OPTIMIZATIONS", "1" });
 		if (vr)
 			defines.push_back({ "VR", "1" });
 		if (enhanced)
@@ -134,6 +136,27 @@ namespace
 		}
 	}
 
+	void CheckSimplifiedPBR(bool vr)
+	{
+		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "GRASS_LIGHTING", "1" }, { "PBR_GRASS", "1" },
+			{ "GRASS_OPTIMIZATIONS", "1" }, { "LIGHT_LIMIT_FIX", "1" }, { "SCREEN_SPACE_SHADOWS", "1" } };
+		if (vr)
+			defines.push_back({ "VR", "1" });
+		defines.push_back({ nullptr, nullptr });
+		for (bool detailed : { false, true }) {
+			const auto source = std::string("#include \"RunGrass.hlsl\"\nPS_OUTPUT VerifyLegacyColor(PS_INPUT input, bool frontFace : SV_IsFrontFace) { input.VertexMult = ") +
+			                    (detailed ? "1.0" : "-1.0") + "; return RenderPBRGrass(input, frontFace); }";
+			auto bytecode = CompileProgram(defines.data(), false, source.c_str());
+			ComPtr<ID3D11ShaderReflection> reflection;
+			Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+			for (const char* resource : { "TexNormalSampler", "TexRMAOSSampler", "TexSubsurfaceSampler", "LightLimitFix::lightGrid" }) {
+				D3D11_SHADER_INPUT_BIND_DESC binding{};
+				Require(SUCCEEDED(reflection->GetResourceBindingDescByName(resource, &binding)) == detailed,
+					(std::string("Simplified PBR resource mismatch: ") + resource + (detailed ? " (detailed)" : " (simple)")).c_str());
+			}
+		}
+	}
+
 	void CheckLegacyColor(bool vr)
 	{
 		constexpr const char* source = R"(
@@ -161,34 +184,42 @@ int main()
 {
 	try {
 		unsigned compiled = 0;
-		for (bool vr : { false, true }) {
-			CheckLegacyColor(vr);
-			for (bool enhanced : { false, true }) {
-				for (bool pbr : { false, true }) {
-					if (pbr && !enhanced)
-						continue;
-					for (bool vertex : { false, true }) {
-						for (bool depth : { false, true }) {
-							auto shader = Compile(vertex, vr, enhanced, pbr, depth, true, false);
-							++compiled;
-							if (vertex)
-								CheckGeometry(shader.Get(), vr);
-							else
-								CheckOutputs(shader.Get(), pbr, depth);
-							if (pbr && !vertex && !depth)
-								CheckMaterial(shader.Get());
+		CheckSimplifiedPBR(false);
+		CheckSimplifiedPBR(true);
+		for (bool optimized : { false, true }) {
+			for (bool vr : { false, true }) {
+				CheckLegacyColor(vr);
+				for (bool enhanced : { false, true }) {
+					for (bool pbr : { false, true }) {
+						if (pbr && !enhanced)
+							continue;
+						for (bool vertex : { false, true }) {
+							for (bool depth : { false, true }) {
+								auto shader = Compile(vertex, vr, enhanced, pbr, depth, true, false, optimized);
+								++compiled;
+								if (vertex) {
+									CheckGeometry(shader.Get(), vr);
+									if (optimized) {
+										CheckBinding(shader.Get(), "GrassBatch", 9);
+										CheckBinding(shader.Get(), "GrassInstanceExtras", 2);
+									}
+								} else
+									CheckOutputs(shader.Get(), pbr, depth);
+								if (pbr && !vertex && !depth)
+									CheckMaterial(shader.Get());
+							}
 						}
 					}
 				}
-			}
-			for (bool vertex : { false, true }) {
-				for (bool alpha : { false, true }) {
-					auto shader = Compile(vertex, vr, true, true, false, alpha, true);
-					++compiled;
-					if (vertex)
-						CheckGeometry(shader.Get(), vr);
-					else
-						CheckMaterial(shader.Get());
+				for (bool vertex : { false, true }) {
+					for (bool alpha : { false, true }) {
+						auto shader = Compile(vertex, vr, true, true, false, alpha, true, optimized);
+						++compiled;
+						if (vertex)
+							CheckGeometry(shader.Get(), vr);
+						else
+							CheckMaterial(shader.Get());
+					}
 				}
 			}
 		}

@@ -24,6 +24,7 @@
 
 #include "Features/AdaptiveBrightness.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/GrassOptimizations.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenshotFeature.h"
@@ -933,6 +934,7 @@ namespace GrassExtensions
 					state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::GrassSphereNormal);
 				}
 			}
+			globals::features::grassOptimizations.PrepareGeometry(pass);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

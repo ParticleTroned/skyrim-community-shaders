@@ -174,6 +174,12 @@ false when absent. Existing Unified VR tiers keep their authored settings
 and leave PBR Grass disabled. Its shader descriptor flags in `State.h`
 refresh the source fingerprint while retaining revision 5 and the base.
 
+Grass Optimizations adds optional settings with the master switch defaulting
+to false when absent. Existing Unified VR tiers retain their authored
+settings and do not enable the feature. The runtime contract inventories
+its loader, feature declaration and separate policy/default definitions;
+refreshing the fingerprint preserves revision 5 and the base.
+
 Capture settings keep `FrameCaptureEye` authoritative. The base selects
 `Left`, so its legacy `Sequence.Outputs.SeparateEyes` mirror is false.
 This normalization retains the selected eye and settings schema; rendering

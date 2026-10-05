@@ -89,7 +89,13 @@ class CsxDistributionTests(unittest.TestCase):
                         self.assertEqual(release.strip_feature_audit(stripped), prose)
 
     def test_performance_tuning_version_reaches_both_header_registries(self):
-        ini = ROOT / 'features/Performance Tuning/Shaders/Features/PerformanceTuning.ini'
+        self.assert_feature_header_registries('Performance Tuning', 'PerformanceTuning')
+
+    def test_grass_optimizations_version_reaches_both_header_registries(self):
+        self.assert_feature_header_registries('Grass Optimizations', 'GrassOptimizations')
+
+    def assert_feature_header_registries(self, folder, short_name):
+        ini = ROOT / 'features' / folder / 'Shaders/Features' / f'{short_name}.ini'
         version = audit.get_version_from_ini(ini)
         self.assertIsNotNone(version)
         self.assertTrue(audit.get_feature_ini_metadata(ini)['audit_version'])
@@ -100,7 +106,7 @@ class CsxDistributionTests(unittest.TestCase):
             source = Path(directory) / 'source'
             build = Path(directory) / 'build'
             source.mkdir()
-            shutil.copytree(ROOT / 'features/Performance Tuning', source / 'features/Performance Tuning')
+            shutil.copytree(ROOT / 'features' / folder, source / 'features' / folder)
             (source / 'cmake').mkdir()
             shutil.copyfile(ROOT / 'cmake/FeatureVersions.h.in', source / 'cmake/FeatureVersions.h.in')
             (source / 'CMakeLists.txt').write_text(
@@ -115,10 +121,10 @@ class CsxDistributionTests(unittest.TestCase):
             for header in (build / 'cmake/FeatureVersions.h', ROOT / 'include/FeatureVersions.h'):
                 with self.subTest(header=header):
                     text = header.read_text(encoding='utf-8')
-                    registered = re.search(r'\{"PerformanceTuning"sv,\s*\{(\d+),\s*(\d+),\s*(\d+)\}\}', text)
+                    registered = re.search(r'\{"' + re.escape(short_name) + r'"sv,\s*\{(\d+),\s*(\d+),\s*(\d+)\}\}', text)
                     self.assertIsNotNone(registered)
                     self.assertEqual(tuple(map(int, registered.groups())), version)
-                    self.assertIn('"PerformanceTuning"sv', text.split('FEATURE_CORE_NAMES', 1)[1])
+                    self.assertIn(f'"{short_name}"sv', text.split('FEATURE_CORE_NAMES', 1)[1])
 
     def test_nexus_matrix_is_one_aio_without_inherited_targets(self):
         legacy = [{"name": "Wetterness", "is_core": False, "mod_id": "123", "auto_upload": True}]

@@ -130,7 +130,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal) && !frontFace)
 		vertexNormal = -vertexNormal;
 
-	const bool pbrDetail = true;
+	const bool pbrDetail = GRASS_DETAILED(true);
 	float3 normal = vertexNormal;
 	float4 rawRMAOS = float4(PBRParams1.x, 0, 1, PBRParams1.y);
 	if (pbrDetail) {
@@ -172,11 +172,15 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 	float dirDetailedShadow = 1.0;
 	if (ShadowSampling::HasDirectionalShadows()) {
-		dirDetailedShadow = shadowColor.x * ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+#	if defined(GRASS_OPTIMIZATIONS)
+		dirDetailedShadow = shadowColor.x;
+		if (pbrDetail)
+#	endif
+			dirDetailedShadow = shadowColor.x * ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 	}
 
 #	if defined(SCREEN_SPACE_SHADOWS)
-	if (ShadowSampling::HasDirectionalShadows() && dot(normal, SharedData::DirLightDirection.xyz) >= 0)
+	if (GRASS_DETAILED(ShadowSampling::HasDirectionalShadows() && dot(normal, SharedData::DirLightDirection.xyz) >= 0))
 		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #	endif  // SCREEN_SPACE_SHADOWS
 
@@ -207,7 +211,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(LIGHT_LIMIT_FIX)
 	uint clusterIndex = 0;
 	uint lightCount = 0;
-	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+	if (GRASS_DETAILED(LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex))) {
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;

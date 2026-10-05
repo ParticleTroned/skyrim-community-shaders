@@ -287,7 +287,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             "WETNESS_EFFECTS",
         ]
         return {
-            "common_defines": ["VR", "WETTERNESS", *profile_defines],
+            "common_defines": ["VR", "WETTERNESS", "PBR_GRASS", "GRASS_OPTIMIZATIONS", *profile_defines],
             "file_common_defines": {
                 "Lighting.hlsl": {
                     "PSHADER": ["LIGHT_LIMIT_FIX", *profile_defines],
@@ -297,6 +297,13 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 },
             },
             "shaders": [
+                {
+                    "file": "RunGrass.hlsl",
+                    "configs": {
+                        "PSHADER": {"common_defines": ["GRASS_LIGHTING"], "entries": [{"entry": "Grass:Pixel:7", "defines": ["DO_ALPHA_TEST", "PBR_GRASS"]}]},
+                        "VSHADER": {"common_defines": ["GRASS_LIGHTING"], "entries": [{"entry": "Grass:Vertex:7", "defines": []}]},
+                    },
+                },
                 {
                     "file": "Lighting.hlsl",
                     "configs": {
@@ -619,10 +626,36 @@ class ShaderCachePackagingTests(unittest.TestCase):
         self.assertNotIn("WETTERNESS", config["common_defines"])
 
         for shader in config["shaders"]:
+            if shader["file"] == "RunGrass.hlsl":
+                continue
             self.assertIn(
                 "WETTERNESS",
                 shader["configs"]["PSHADER"]["common_defines"],
             )
+
+    def test_bundled_grass_defines_match_native_factory_without_leaking(self) -> None:
+        for profile in (BUILDER.SHIPPED_CACHE_PROFILE, BUILDER.PATKA_CACHE_PROFILE):
+            with self.subTest(profile=profile.name):
+                original = self._sample_shader_config()
+                config = BUILDER.apply_cache_profile_defines(copy.deepcopy(original), profile)
+                flags = {"PBR_GRASS", "GRASS_OPTIMIZATIONS"}
+                self.assertTrue(flags.isdisjoint(config["common_defines"]))
+                for shader in config["shaders"]:
+                    stages = shader["configs"]
+                    if shader["file"] != "RunGrass.hlsl":
+                        self.assertTrue(flags.isdisjoint(self._all_define_names(stages)))
+                        continue
+                    for stage in stages.values():
+                        for flag in flags:
+                            self.assertEqual(stage["common_defines"].count(flag), 1)
+                        for entry in stage["entries"]:
+                            self.assertTrue(flags.isdisjoint(entry["defines"]))
+                grass_before = original["shaders"][0]["configs"]
+                grass_after = config["shaders"][0]["configs"]
+                self.assertEqual(
+                    {key: [entry["entry"] for entry in stage["entries"]] for key, stage in grass_before.items()},
+                    {key: [entry["entry"] for entry in stage["entries"]] for key, stage in grass_after.items()},
+                )
 
     def test_horizon_variants_layer_onto_the_shipped_profile(self) -> None:
         standard_config = BUILDER.apply_cache_profile_defines(

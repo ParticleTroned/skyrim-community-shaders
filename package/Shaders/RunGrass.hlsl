@@ -34,7 +34,7 @@ struct VS_INPUT
 	float4 InstanceData2: TEXCOORD5;
 	float4 InstanceData3: TEXCOORD6;
 	float4 InstanceData4: TEXCOORD7;
-#ifdef VR
+#if defined(VR) || defined(GRASS_OPTIMIZATIONS)
 	uint InstanceID: SV_INSTANCEID;
 #endif  // VR
 };
@@ -149,6 +149,19 @@ cbuffer cb8 : register(b8)
 	float4 cb8[240];
 }
 
+#	ifdef GRASS_OPTIMIZATIONS
+#		include "GrassOptimizations/GrassBatch.hlsli"
+#	endif
+
+float GetPerInstanceFade(VS_INPUT input)
+{
+#	ifdef GRASS_OPTIMIZATIONS
+	if (GrassBatchEnabled != 0)
+		return GetGrassBatchFade(input.InstanceID);
+#	endif
+	return dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+}
+
 // Calculate wind displacement for a grass vertex
 float3 CalculateWindDisplacement(VS_INPUT input, float windTimer)
 {
@@ -202,16 +215,30 @@ VS_OUTPUT main(VS_INPUT input)
 		input.InstanceID
 #		endif  // VR
 	);
+#		ifdef GRASS_OPTIMIZATIONS
+	if (GrassBatchEnabled)
+		eyeIndex = Stereo::GetEyeIndexVS(GrassBatchEye);
+#		endif
 	float3x3 world3x3 = float3x3(input.InstanceData2.xyz, input.InstanceData3.xyz, float3(input.InstanceData4.x, input.InstanceData2.w, input.InstanceData3.w));
 
 	float4 msPosition = GetMSPosition(input, world3x3);
 
 	float3 windDisplacement = CalculateWindDisplacement(input, WindTimer);
 	float3 previousWindDisplacement = CalculateWindDisplacement(input, PreviousWindTimer);
+#		ifdef GRASS_OPTIMIZATIONS
+	float3 batchOffset = GetGrassBatchOffset(input.InstanceID);
+	msPosition.xyz += batchOffset;
+#		endif
 
 #		ifdef GRASS_COLLISION
 	float3 displacement, previousDisplacement;
+#			ifdef GRASS_OPTIMIZATIONS
+	VS_INPUT collisionInput = input;
+	collisionInput.InstanceData1.xyz += batchOffset;
+	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement);
+#			else
 	GrassCollision::GetDisplacedPosition(input, msPosition.xyz, displacement, previousDisplacement);
+#			endif
 	msPosition.xyz += displacement;
 #		endif  // GRASS_COLLISION
 
@@ -226,7 +253,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Depth = projSpacePosition.zw;
 #		endif  // RENDER_DEPTH
 
-	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+	float perInstanceFade = GetPerInstanceFade(input);
 
 #		if defined(VR)
 	float distanceFade = 1 - saturate((length(mul(World[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);
@@ -238,6 +265,12 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.xyz = input.Color.xyz;
 	vsout.Color.w = distanceFade * perInstanceFade;
 	vsout.VertexMult = input.InstanceData1.w;
+#		ifdef GRASS_OPTIMIZATIONS
+	if (GrassBatchEnabled) {
+		vsout.Color.w = perInstanceFade;
+		vsout.VertexMult = GetGrassBatchSimpleShading(input.InstanceID) ? -1 : 0;
+	}
+#		endif
 
 	vsout.TexCoord.xy = input.TexCoord.xy;
 	vsout.TexCoord.z = FogNearColor.w;
@@ -246,6 +279,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
 
 	float4 previousMsPosition = GetMSPosition(input, world3x3);
+#		ifdef GRASS_OPTIMIZATIONS
+	previousMsPosition.xyz += batchOffset;
+#		endif
 
 #		ifdef GRASS_COLLISION
 	previousMsPosition.xyz += previousDisplacement;
@@ -279,15 +315,29 @@ VS_OUTPUT main(VS_INPUT input)
 		input.InstanceID
 #		endif  // VR
 	);
+#		ifdef GRASS_OPTIMIZATIONS
+	if (GrassBatchEnabled)
+		eyeIndex = Stereo::GetEyeIndexVS(GrassBatchEye);
+#		endif
 
 	float4 msPosition = GetMSPosition(input);
 
 	float3 windDisplacement = CalculateWindDisplacement(input, WindTimer);
 	float3 previousWindDisplacement = CalculateWindDisplacement(input, PreviousWindTimer);
+#		ifdef GRASS_OPTIMIZATIONS
+	float3 batchOffset = GetGrassBatchOffset(input.InstanceID);
+	msPosition.xyz += batchOffset;
+#		endif
 
 #		ifdef GRASS_COLLISION
 	float3 displacement, previousDisplacement;
+#			ifdef GRASS_OPTIMIZATIONS
+	VS_INPUT collisionInput = input;
+	collisionInput.InstanceData1.xyz += batchOffset;
+	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement);
+#			else
 	GrassCollision::GetDisplacedPosition(input, msPosition.xyz, displacement, previousDisplacement);
+#			endif
 	msPosition.xyz += displacement;
 #		endif  // GRASS_COLLISION
 
@@ -306,7 +356,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float dirLightAngle = dot(DirLightDirection.xyz, instanceNormal);
 	float3 diffuseMultiplier = input.InstanceData1.www * input.Color.xyz;
 
-	float perInstanceFade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+	float perInstanceFade = GetPerInstanceFade(input);
 
 #		if defined(VR)
 	float distanceFade = 1 - saturate((length(mul(World[0], msPosition).xyz) - AlphaParam1) / AlphaParam2);
@@ -317,6 +367,12 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.xyz = input.Color.xyz;
 	vsout.Color.w = distanceFade * perInstanceFade;
 	vsout.VertexMult = input.InstanceData1.w;
+#		ifdef GRASS_OPTIMIZATIONS
+	if (GrassBatchEnabled) {
+		vsout.Color.w = perInstanceFade;
+		vsout.VertexMult = GetGrassBatchSimpleShading(input.InstanceID) ? -1 : 0;
+	}
+#		endif
 
 	vsout.TexCoord.xy = input.TexCoord.xy;
 	vsout.TexCoord.z = FogNearColor.w;
@@ -328,6 +384,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.WorldPosition = mul(World[eyeIndex], msPosition);
 
 	float4 previousMsPosition = GetMSPosition(input);
+#		ifdef GRASS_OPTIMIZATIONS
+	previousMsPosition.xyz += batchOffset;
+#		endif
 #		if defined(VR)
 	Stereo::VR_OUTPUT VRout = Stereo::GetVRVSOutput(projSpacePosition, eyeIndex);
 	vsout.HPosition = VRout.VRPosition;
@@ -463,6 +522,13 @@ float3 ApplyGrassWetDarkening(float3 baseColor)
 // This is the original non-Grass-Lighting shader path. It is shared by the
 // boot-disabled permutation and the runtime-disabled Grass Lighting path.
 // Foliage Lighting can opt in to its small grass-scattering augmentation.
+// Preserve native shader conditions when the batching permutation is absent.
+#	ifdef GRASS_OPTIMIZATIONS
+#		define GRASS_DETAILED(condition) (!(input.VertexMult < 0) && (condition))
+#	else
+#		define GRASS_DETAILED(condition) condition
+#	endif
+
 PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
@@ -493,7 +559,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
-	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows()) {
+	if (GRASS_DETAILED(dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())) {
 #		if defined(SCREEN_SPACE_SHADOWS)
 		dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #		endif  // SCREEN_SPACE_SHADOWS
@@ -525,7 +591,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	uint clusterIndex = 0;
 	uint lightCount = 0;
 
-	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+	if (GRASS_DETAILED(LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex))) {
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
@@ -697,7 +763,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::ShouldDisableTerrainVertexColors())
 		input.Color.xyz = 1;
 
-	float4 specColor = complex ? TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5), SharedData::MipBias) : 1;
+	float4 specColor = GRASS_DETAILED(complex) ? TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5), SharedData::MipBias) : 1;
 
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
 	psout.MotionVectors = float4(MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex), 0, 1);
@@ -716,7 +782,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3x3 tbn = 0;
 
-	if (complex) {
+	if (GRASS_DETAILED(complex)) {
 		float3 normalColor = GrassLighting::TransformNormal(specColor.xyz);
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
@@ -740,7 +806,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
-	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows()) {
+	if (GRASS_DETAILED(dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())) {
 #			if defined(SCREEN_SPACE_SHADOWS)
 		if (dirLightAngle >= 0.0 || SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
@@ -801,14 +867,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 subsurfaceColor = unshadowedDirLightColor * dirSoftShadow * GetSoftLightMultiplier(dirLightAngle, softLightRolloff) * Color::VanillaNormalization();
 
-	if (complex)
+	if (GRASS_DETAILED(complex))
 		lightsSpecularColor += GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
 
 #			if defined(LIGHT_LIMIT_FIX)
 	uint clusterIndex = 0;
 	uint lightCount = 0;
 
-	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+	if (GRASS_DETAILED(LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex))) {
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;

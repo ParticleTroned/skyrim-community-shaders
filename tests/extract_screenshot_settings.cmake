@@ -28,7 +28,7 @@ file(
 extract_settings_region("${_feature}" "ScreenshotFeature::CaptureEye ParseCaptureEye(" "std::filesystem::path ResolveCapturePath(" _parse)
 extract_settings_region("${_feature}" "json ScreenshotFeature::BuildCaptureDescriptor(" "ScreenshotFeature::ScreenshotFeature()" _descriptor)
 extract_settings_region("${_feature}" "void ScreenshotFeature::LoadSettings(" "void ScreenshotFeature::SaveSettings(" _load)
-extract_settings_region("${_api}" "class CaptureDescriptorError" "std::filesystem::path ResolveConfiguredCaptureDirectory(" _capture_error)
+extract_settings_region("${_api}" "class CaptureDescriptorError final" "std::filesystem::path ResolveConfiguredCaptureDirectory(" _capture_error)
 extract_settings_region("${_api}" "std::string SourceName(" "std::string CaptureEyeName(" _source_view)
 extract_settings_region("${_api}" "ScreenshotFeature::CaptureEye CaptureEyeFromName(" "bool IsTerminal(" _eye)
 extract_settings_region("${_api}" "ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(" "ScreenshotApi::json ScreenshotApi::BuildSettings(" _normalize)

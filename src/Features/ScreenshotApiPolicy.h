@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -56,6 +57,16 @@ namespace CSX::ScreenshotPolicy
 		return a_sequence ? a_sequenceDirectory : a_stillDirectory;
 	}
 	inline constexpr std::uint32_t MaximumPendingOperations = 64;
+	inline constexpr std::size_t MaximumPreparationJobs = MaximumPendingOperations;
+	inline constexpr std::size_t MaximumManifestJobs = 256;
+	inline constexpr std::size_t MaximumPartialManifestJobs = MaximumManifestJobs - MaximumPendingOperations;
+	inline constexpr std::size_t MaximumRetiredManifestSnapshots = 256;
+
+	/** Include queued, active, and undrained results; reserve one terminal manifest per pending operation. */
+	inline bool CanAdmitManifestJob(std::size_t a_outstanding, bool a_final) noexcept
+	{
+		return a_outstanding < (a_final ? MaximumManifestJobs : MaximumPartialManifestJobs);
+	}
 	inline constexpr std::uint32_t MaximumOutputsPerFrame = 4;
 	inline constexpr std::uint32_t MaximumSequenceDurationMs = 3'600'000;
 	inline constexpr std::uint32_t MaximumSequenceSpanFrames = 216'000;

@@ -4903,6 +4903,14 @@ namespace
 		       nearlyEqual(settings.periphery_taa_center_blend_feather, defaults.periphery_taa_center_blend_feather);
 	}
 
+	void SanitizeFrameGenerationSettings(Upscaling::Settings& settings)
+	{
+		// VR has no frame-generation path; saved requests must not gate other features.
+		const bool isVR = REL::Module::IsVR();
+		settings.frameGenerationMode = isVR ? 0u : ClampToggleUInt(settings.frameGenerationMode);
+		settings.frameGenerationForceEnable = isVR ? 0u : ClampToggleUInt(settings.frameGenerationForceEnable);
+	}
+
 	void SanitizeUpscalingSettings(Upscaling::Settings& settings)
 	{
 		const Upscaling::Settings defaults{};
@@ -4920,8 +4928,7 @@ namespace
 			settings.perfMode = 0;
 		}
 		settings.frameLimitMode = ClampToggleUInt(settings.frameLimitMode);
-		settings.frameGenerationMode = ClampToggleUInt(settings.frameGenerationMode);
-		settings.frameGenerationForceEnable = ClampToggleUInt(settings.frameGenerationForceEnable);
+		SanitizeFrameGenerationSettings(settings);
 		settings.streamlineLogLevel = ClampStreamlineLogLevelUInt(settings.streamlineLogLevel);
 		settings.sharpnessFSR = ClampFiniteUnitRange(settings.sharpnessFSR, defaults.sharpnessFSR);
 		if (!FSRTemporalTuningPolicy::IsValid(settings.fsrTemporalTuning)) {

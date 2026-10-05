@@ -550,9 +550,9 @@
           "CausticsStrength": 1.0,
           "CausticsTiling": 1.0,
           "FresnelMax": 1.0,
-          "FresnelMin": 0.0,
+          "FresnelMin": 0.25,
           "GlobalReflectionAmount": 1.0,
-          "Muddiness": 1.0,
+          "Muddiness": 0.7,
           "ParallaxQuality": 16,
           "ParallaxStrength": 1.0,
           "RefractionAmount": 1.0,
@@ -560,7 +560,7 @@
           "WaterBrightness": 1.0,
           "WaveAmplitude": 1.0
         },
-        "waterAdvanced": false,
+        "waterAdvanced": true,
         "waterGammaOffset": 0.0,
         "waterWind": {
           "calmWaveMultiplier": 1.0,
@@ -587,9 +587,10 @@
         },
         "bloomAdvanced": false,
         "brightness": 0.9,
+        "cloudGammaOffset": 0.05,
         "directionalLightMult": 2.5,
         "effectLightingMult": 1.0,
-        "emitColorMult": 1.5,
+        "emitColorMult": 1.3,
         "fogAlphaGammaOffset": 0.0,
         "fogGammaOffset": 0.25,
         "glowmapMult": 1.0,
@@ -1077,7 +1078,7 @@
       0.3499999940395355,
       1.0
     ],
-    "WaterTintStrength": 0.15
+    "WaterTintStrength": 0.0
   },
   "Wetterness": {
     "DebugSettings": {

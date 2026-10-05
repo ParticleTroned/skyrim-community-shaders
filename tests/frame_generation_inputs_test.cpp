@@ -1,5 +1,6 @@
 #include "Features/Upscaling/NvidiaPipelinePolicy.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -11,6 +12,7 @@
 #include <utility>
 
 using UINT = unsigned;
+using uint = unsigned;
 using HRESULT = std::int32_t;
 constexpr HRESULT S_OK = 0;
 constexpr HRESULT E_FAIL = -1;
@@ -249,11 +251,7 @@ struct Renderer
 
 struct Upscaling
 {
-	struct
-	{
-		unsigned frameGenerationMode = 1;
-		bool frameGenerationAllowInMenus = false;
-	} settings;
+#include "frame_generation_members.h"
 	struct
 	{
 		bool ready = true, disableConfirmed = true, presentResult = true;
@@ -290,7 +288,6 @@ struct Upscaling
 	Gpu* GetUpscaleVS() { return vertexShaderReady ? &shader : nullptr; }
 	DX12SwapChain dx12SwapChain;
 	std::atomic_bool d3d12SwapChainActive{ true };
-#include "frame_generation_members.h"
 	bool limiterUsedGeneration = false;
 	void FrameLimiter() { limiterUsedGeneration = ShouldUseFrameGenerationThisFrame(); }
 	void PrepareFrameGenerationInputs();
@@ -324,6 +321,14 @@ namespace globals
 	}
 }
 
+namespace REL
+{
+	struct Module
+	{
+		static bool IsVR() { return globals::game::isVR; }
+	};
+}
+
 #include "frame_generation_under_test.h"
 
 namespace
@@ -339,6 +344,7 @@ namespace
 		auto& upscaling = globals::features::upscaling;
 		std::destroy_at(&upscaling);
 		std::construct_at(&upscaling);
+		upscaling.settings.frameGenerationMode = 1;
 		globals::stateStorage = {};
 		globals::state = &globals::stateStorage;
 		globals::game::isVR = false;
@@ -350,6 +356,28 @@ namespace
 		globals::d3d::contextStorage = {};
 		globals::d3d::context = &globals::d3d::contextStorage;
 		return upscaling;
+	}
+
+	void RuntimeSettings()
+	{
+		const Upscaling::Settings defaults{};
+		Check(defaults.frameGenerationMode == 0 && defaults.frameGenerationForceEnable == 0,
+			"frame generation defaults must remain disabled");
+		for (const bool isVR : { false, true }) {
+			globals::game::isVR = isVR;
+			for (const uint requested : { 0u, 1u, 2u, UINT32_MAX }) {
+				Upscaling::Settings settings{};
+				settings.frameGenerationMode = requested;
+				settings.frameGenerationForceEnable = requested;
+				SanitizeFrameGenerationSettings(settings);
+				const uint expected = isVR ? 0u : std::min(requested, 1u);
+				Check(settings.frameGenerationMode == expected && settings.frameGenerationForceEnable == expected,
+					"runtime normalization accepted VR frame generation or changed flat clamping");
+				SanitizeFrameGenerationSettings(settings);
+				Check(settings.frameGenerationMode == expected && settings.frameGenerationForceEnable == expected,
+					"frame-generation normalization must be idempotent");
+			}
+		}
 	}
 
 	void MenuTransitions()
@@ -529,6 +557,7 @@ namespace
 int main()
 {
 	try {
+		RuntimeSettings();
 		MenuTransitions();
 		MissingInputs();
 		SafetyGates();

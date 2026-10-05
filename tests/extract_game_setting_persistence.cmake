@@ -27,7 +27,8 @@ extract_between("src/Utils/Format.cpp" "bool IEquals(" "\n\tstd::string GetShade
 set(_output
     "${_output}\nnamespace FileHelpers {\nbool WriteTextFileAtomic(const std::filesystem::path&, std::string_view, std::string&, bool allowDirectFallback = true);\nnamespace {\n"
 )
-extract_between("src/Utils/FileSystem.cpp" "bool WriteTextFileDirect(" "\n\t\tDeletionResult SafeDelete(")
+extract_between("src/Utils/FileSystem.cpp" "std::filesystem::path MakeStagingPath(" "\n\t\tDeletionResult SafeDelete(")
+extract_between("src/Utils/FileSystem.cpp" "bool ReadTextFileBounded(" "\n\t\tnamespace\n")
 extract_between("src/Utils/FileSystem.cpp" "bool WriteTextFileAtomic(" "\n\t\tstd::string SanitizeFileName(")
 set(_output "${_output}\n}\n")
 extract_between("src/Utils/GameSetting.cpp" "\tnamespace\n\t{\n\t\tbool ReadGameSettingsIni(" "}  // namespace Util")

@@ -1,5 +1,9 @@
 # GPU-unified presets
 
+Runtime-settings fingerprints normalize CRLF to LF before hashing source text.
+Both checkout representations retain the same identity; content changes and
+missing or unexpected settings-owner sources still invalidate the contract.
+
 The three `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
 
 | Tier        | Upscaling quality | SSGI                 | Skylighting | Wetterness | Grass collision |

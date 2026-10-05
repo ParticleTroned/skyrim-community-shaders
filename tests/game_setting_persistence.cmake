@@ -20,6 +20,7 @@ add_custom_command(
         src/Utils/GameSetting.cpp
         src/Utils/GameSetting.h
         src/Utils/FileSystem.cpp
+        src/Utils/BoundedTextRead.h
         src/Utils/Format.cpp
         src/Features/DynamicCubemaps.cpp
         extern/CommonLibSSE-NG/include/SKSE/Impl/PCH.h

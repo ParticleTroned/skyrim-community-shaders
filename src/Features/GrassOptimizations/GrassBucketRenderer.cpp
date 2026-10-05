@@ -444,8 +444,6 @@ void GrassBucketRenderer::SetupResources()
 		data.pSysMem = zeros.data();
 		impl->disabled = std::make_unique<Buffer>(desc, &data, "GrassOptimizations::NativeParameters");
 		std::vector<std::pair<const char*, const char*>> defines;
-		if (globals::game::isVR)
-			defines.emplace_back("VR", "1");
 		impl->cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS");
 		impl->hiZ.SetupResources();
 		impl->CompileSignature();
@@ -711,8 +709,6 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 		if (!source.lifetime->alive.load(std::memory_order_acquire))
 			return false;
 	std::vector<std::pair<const char*, const char*>> defines;
-	if (globals::game::isVR)
-		defines.emplace_back("VR", "1");
 	auto shader = cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS");
 	if (!shader || !parameters || !drawConstants)
 		return false;
@@ -1045,8 +1041,6 @@ void GrassBucketRenderer::Impl::PollCounters()
 	}
 	if (diagnostics.load(std::memory_order_relaxed) && !diagnosticShader.get()) {
 		std::vector<std::pair<const char*, const char*>> defines{ { "GRASS_DIAGNOSTICS", "1" } };
-		if (globals::game::isVR)
-			defines.emplace_back("VR", "1");
 		diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS");
 	}
 	countersActive = diagnostics.load(std::memory_order_relaxed) && diagnosticShader.get();

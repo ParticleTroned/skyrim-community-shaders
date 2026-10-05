@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Runtime.h"
 
 #include <cstdint>
 #include <limits>
@@ -6,6 +7,8 @@
 #include <string>
 
 using uint32_t = std::uint32_t;
+bool nrRuntimeInstalled = true;
+bool NeuralRendering::Runtime::IsInstalled() noexcept { return nrRuntimeInstalled; }
 namespace globals
 {
 	struct State
@@ -107,6 +110,7 @@ struct Upscaling
 	void InvalidateFrameScopedUpscalingState() { ++invalidations; }
 	static bool HasSameNeuralRenderingSettingsKey(const Settings& a, const Settings& b) { return a == b; }
 	static bool ApplyNeuralRenderingFovConstraint(Settings&) noexcept;
+	static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
 	bool neuralRenderingReplacedFovTaa = false;
 	bool fovAvailable = true;
 	NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
@@ -252,6 +256,20 @@ int main()
 		Require(upscaling.settings.periphery_taa_enable == (nrEnabled ? taaBeforeDraw : !taaBeforeDraw), "Disabled FOV+TAA control must not change its value");
 		Require(!Util::Text::warning.empty() == nrEnabled, "NR FOV must display the shared red mask warning");
 	}
+	nrRuntimeInstalled = false;
+	{
+		Upscaling upscaling;
+		upscaling.settings.neuralRenderingEnabled = true;
+		upscaling.settings.periphery_taa_enable = true;
+		Require(!Upscaling::ApplyNeuralRenderingFovConstraint(upscaling.settings) && upscaling.settings.periphery_taa_enable,
+			"Missing NR must preserve the saved FOV + TAA preference");
+		Require(upscaling.IsPeripheryTAAEnabled(Upscaling::UpscaleMethod::kDLSS), "Missing NR must retain normal periphery TAA rendering");
+		Util::Text::warning.clear();
+		upscaling.DrawPeripheryTAAControl();
+		Require(!ImGui::checkboxDisabled && !upscaling.settings.periphery_taa_enable && Util::Text::warning.empty(),
+			"Missing NR must leave FOV + TAA editable without NR warnings");
+	}
+	nrRuntimeInstalled = true;
 	for (const bool priorTaa : { false, true }) {
 		Upscaling upscaling;
 		renderer = {};

@@ -104,6 +104,7 @@ cmake -E copy_directory ./build/ALL/aio $MOD_FOLDER
 
 -   If you prefer to run the VC environment manually, launch Developer PowerShell or the x64 Native Tools prompt instead of calling vcvarsall.bat directly from PowerShell.
 -   `BuildRelease.bat ALL` performs the configure and package build. Use an auto-deployment preset when the output should be copied directly to a mod folder.
+-   `BuildRelease.bat Package-nr` builds the NR release AIO with official Streamline 2.14.1 files and user-installed NR DLLs. See [NR release packaging](docs/development/runtime-downloads.md#nr-release-package).
 
 #### Build a zip package
 

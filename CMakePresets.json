@@ -142,6 +142,22 @@
             }
         },
         {
+            "name": "Package-nr",
+            "description": "Release AIO with official Streamline 2.14.1 files and user-installed NR.",
+            "inherits": "ALL",
+            "cacheVariables": {
+                "CSX_NR_RELEASE_PACKAGE": "ON",
+                "CSX_LOCAL_DLSSNR_RUNTIME_FILE": "",
+                "CSX_NR_KERNEL_PAYLOAD_DIR": "",
+                "DEVBENCH_BRIDGE": "OFF",
+                "TRACY_SUPPORT": "OFF",
+                "BUILD_SHADER_TESTS": "OFF",
+                "BUILD_CONTROLLER_TESTS": "ON",
+                "ZIP_TO_DIST": "OFF",
+                "AIO_ZIP_TO_DIST": "OFF"
+            }
+        },
+        {
             "name": "Internal-DLSSNR-AIO",
             "description": "Configure a DevBench AIO with the standard DLSS runtime and an optional local NR provider.",
             "inherits": "ALL",
@@ -212,6 +228,13 @@
             "configurePreset": "AIO-Release",
             "configuration": "Release",
             "targets": ["CommunityShaders", "AIO"]
+        },
+        {
+            "name": "Package-nr",
+            "description": "Build the NR release AIO without redistributing NR DLLs",
+            "configurePreset": "Package-nr",
+            "configuration": "Release",
+            "targets": ["Package-AIO-Manual"]
         },
         {
             "name": "Internal-DLSSNR-AIO",

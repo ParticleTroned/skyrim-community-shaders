@@ -36,6 +36,7 @@
 #include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/NeuralRendering/Renderer.h"
+#include "Upscaling/NeuralRendering/Runtime.h"
 #include "Upscaling/NvidiaComIdentity.h"
 #include "Upscaling/ReflexPolicy.h"
 #include "Upscaling/Streamline.h"
@@ -4851,7 +4852,7 @@ namespace
 
 	bool UsesFinalLdrNeuralBlend(const Upscaling::Settings& settings)
 	{
-		return settings.neuralRenderingEnabled &&
+		return Upscaling::IsNeuralRenderingEnabled(settings) &&
 		       !settings.foveatedPeripheryMaskVisualization &&
 		       NeuralRendering::ResolveInsertionPoint(
 				   NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)) ==
@@ -5069,7 +5070,7 @@ namespace
 	bool UsesCharacterVisualIsolation(
 		const Upscaling::Settings& a_settings) noexcept
 	{
-		return a_settings.neuralRenderingEnabled &&
+		return Upscaling::IsNeuralRenderingEnabled(a_settings) &&
 		       a_settings.neuralCharacterRenderingEnabled &&
 		       a_settings.neuralCharacterVisualIsolationEnabled;
 	}
@@ -5515,7 +5516,7 @@ namespace
 			NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode) == NeuralRendering::RenderingMode::ReducedResolution &&
 			!settings.neuralRenderingRenderscaleFov)
 			return globals::game::isVR;
-		const bool usePeripheryTAAProfile = settings.periphery_taa_enable && !settings.neuralRenderingEnabled;
+		const bool usePeripheryTAAProfile = settings.periphery_taa_enable && !Upscaling::IsNeuralRenderingEnabled(settings);
 		return IsFoveatedMaskConfigured(settings, a_upscaleMethod, usePeripheryTAAProfile);
 	}
 
@@ -16784,7 +16785,7 @@ void Upscaling::DrawSettingsHeaderControls()
 				if (SupportsFoveatedVendorDispatch(upscaleMethod)) {
 					const auto foveatedProfile = GetActiveUpscalingFoveatedProfile();
 					const bool fovActive = foveatedProfile.available && FoveatedCommon::IsActiveCoverage(foveatedProfile.sharedVisibleScale);
-					const bool fovConfigured = IsFoveatedMaskConfigured(settings, upscaleMethod, settings.periphery_taa_enable && !settings.neuralRenderingEnabled);
+					const bool fovConfigured = IsFoveatedMaskConfigured(settings, upscaleMethod, settings.periphery_taa_enable && !Upscaling::IsNeuralRenderingEnabled(settings));
 					drawLabel(fovActive ? "FOV: active" : fovConfigured ? "FOV: configured" :
 																		  "FOV: inactive",
 						fovActive);
@@ -17956,7 +17957,7 @@ void Upscaling::DrawEssentialSettings()
 
 void Upscaling::DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const
 {
-	if (!globals::game::isVR || !settings.neuralRenderingEnabled || !settings.foveatedVendorDispatch)
+	if (!globals::game::isVR || !IsNeuralRenderingEnabled(settings) || !settings.foveatedVendorDispatch)
 		return;
 	if (a_neuralRenderingMenu && (!neuralRenderingReplacedFovTaa ||
 									 !NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) ||
@@ -17965,9 +17966,14 @@ void Upscaling::DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const
 	Util::Text::WrappedError("NR uses FOV centre without TAA. Set both eye masks precisely to cover your visible headset view.");
 }
 
+bool Upscaling::IsNeuralRenderingEnabled(const Settings& a_settings) noexcept
+{
+	return a_settings.neuralRenderingEnabled && NeuralRendering::Runtime::IsInstalled();
+}
+
 bool Upscaling::ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept
 {
-	if (!a_settings.neuralRenderingEnabled || !a_settings.periphery_taa_enable)
+	if (!IsNeuralRenderingEnabled(a_settings) || !a_settings.periphery_taa_enable)
 		return false;
 	a_settings.periphery_taa_enable = false;
 	return true;
@@ -17976,7 +17982,7 @@ bool Upscaling::ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept
 void Upscaling::DrawPeripheryTAAControl()
 {
 	{
-		auto guard = Util::DisableGuard(settings.neuralRenderingEnabled);
+		auto guard = Util::DisableGuard(IsNeuralRenderingEnabled(settings));
 		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -18129,7 +18135,7 @@ bool Upscaling::IsNeuralRenderingFrameGenerationBlocked() const noexcept
 
 bool Upscaling::IsNeuralRenderingRenderScaleRequired() const noexcept
 {
-	return neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled &&
+	return neuralRenderingFeatureAvailable && IsNeuralRenderingEnabled(settings) &&
 	       NeuralRendering::RequiresVRRenderScale(globals::game::isVR, GetNeuralRenderingMode());
 }
 
@@ -18142,7 +18148,7 @@ bool Upscaling::IsNeuralRenderingRenderScaleAvailable() const noexcept
 
 bool Upscaling::IsNeuralRenderingRequested() const noexcept
 {
-	return neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled &&
+	return neuralRenderingFeatureAvailable && IsNeuralRenderingEnabled(settings) &&
 	       NeuralRendering::IsRenderingConfigurationSupported(globals::game::isVR, GetNeuralRenderingMode()) &&
 	       IsNeuralRenderingRenderScaleAvailable() &&
 	       (!NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) ||
@@ -18161,12 +18167,15 @@ NeuralRendering::PipelineArrangement Upscaling::GetNeuralRenderingArrangement() 
 
 void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 {
+	const bool runtimeInstalled = NeuralRendering::Runtime::IsInstalled();
+	if (!runtimeInstalled)
+		ImGui::TextWrapped("%s", NeuralRendering::Runtime::kMissingRuntimeNotice);
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
 	{
-		auto guard = Util::DisableGuard((status.failureLatched || status.quarantined) && !settings.neuralRenderingEnabled);
+		auto guard = Util::DisableGuard(!runtimeInstalled || ((status.failureLatched || status.quarantined) && !settings.neuralRenderingEnabled));
 		ImGui::Checkbox("Enabled", &settings.neuralRenderingEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Turns Neural Rendering on or off. Missing route prerequisites keep NR inactive without locking this switch. Enabling NR turns off FOV + TAA.");
+			ImGui::TextUnformatted("Turns Neural Rendering on or off. Install nvngx_dlssnr.dll and restart to unlock this switch. Missing route prerequisites keep NR inactive. Enabling NR turns off FOV + TAA.");
 	}
 	if (!settings.neuralRenderingEnabled)
 		ImGui::TextDisabled("NR is off. Character and colour preferences are retained.");
@@ -18177,7 +18186,7 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 	}
 	if ((status.failureLatched || status.quarantined) && !status.detail.empty())
 		ImGui::TextWrapped("Reason: %s", status.detail.c_str());
-	if ((a_showDiagnostics || status.failureLatched) && !status.quarantined) {
+	if (runtimeInstalled && (a_showDiagnostics || status.failureLatched) && !status.quarantined) {
 		const bool resetRuntime = ImGui::Button("Reset Neural Rendering Runtime");
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Recreates the NR runtime and clears its temporal history. Your settings stay unchanged; quarantined failures require a game restart.");
@@ -18204,6 +18213,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
 		const bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);
 		DrawNeuralRenderingMasterControl(showDiagnostics);
+		auto runtimeAvailabilityGuard = Util::DisableGuard(!NeuralRendering::Runtime::IsInstalled());
 		ApplyNeuralRenderingFovConstraint(settings);
 		DrawNeuralRenderingFovWarning(true);
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Renderscale NR before DLSS" };
@@ -19034,7 +19044,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 				"Active FOV mode: %s, visible %.2f",
 				GetFoveatedUpscalingModeName(activeFoveatedProfile.mode),
 				activeFoveatedProfile.sharedVisibleScale);
-		} else if (IsFoveatedMaskConfigured(settings, upscaleMethod, settings.periphery_taa_enable && !settings.neuralRenderingEnabled)) {
+		} else if (IsFoveatedMaskConfigured(settings, upscaleMethod, settings.periphery_taa_enable && !Upscaling::IsNeuralRenderingEnabled(settings))) {
 			ImGui::TextDisabled("FOV is configured; waiting for runtime upscaling.");
 		} else {
 			ImGui::TextDisabled("Active FOV mode: Off (full visible coverage).");
@@ -20249,7 +20259,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 		*a_backendResetSucceeded = false;
 	const bool fovChanged = ApplyNeuralRenderingFovConstraint(settings);
 	const auto acceptTransition = [&]() {
-		neuralRenderingReplacedFovTaa = settings.neuralRenderingEnabled &&
+		neuralRenderingReplacedFovTaa = IsNeuralRenderingEnabled(settings) &&
 		                                (neuralRenderingReplacedFovTaa || a_previousSettings.periphery_taa_enable);
 		return true;
 	};
@@ -41833,7 +41843,7 @@ bool Upscaling::IsFSRRuntimeFsr4PathActive(UpscaleMethod a_upscaleMethod) const
 
 bool Upscaling::IsPeripheryTAAEnabled(UpscaleMethod a_upscaleMethod) const
 {
-	return !settings.neuralRenderingEnabled && IsFoveatedVendorDispatchEnabled(a_upscaleMethod) && settings.periphery_taa_enable;
+	return !IsNeuralRenderingEnabled(settings) && IsFoveatedVendorDispatchEnabled(a_upscaleMethod) && settings.periphery_taa_enable;
 }
 
 bool Upscaling::IsPeripheryTAAPathActive(UpscaleMethod a_upscaleMethod) const
@@ -41850,7 +41860,7 @@ bool Upscaling::UseActiveFoveatedPeripheryTAAProfile() const
 
 bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable() const
 {
-	const bool usePeripheryTAAProfile = settings.periphery_taa_enable && !settings.neuralRenderingEnabled;
+	const bool usePeripheryTAAProfile = settings.periphery_taa_enable && !Upscaling::IsNeuralRenderingEnabled(settings);
 	return IsFoveatedMaskConfigured(settings, GetRuntimeUpscaleMethod(), usePeripheryTAAProfile);
 }
 
@@ -62622,8 +62632,8 @@ Upscaling::VRRenderScaleResourceKey Upscaling::BuildVRRenderScaleResourceKey(con
 	// Resource planning can hold the request lock and precede physical latching.
 	// Derive layout from this profile without querying live request/execution state.
 	key.foveatedVendorDispatch = a_profile.active && ResolveFoveatedVendorDispatch(
-														 settings, a_profile.method, neuralRenderingFeatureAvailable && settings.neuralRenderingEnabled);
-	key.peripheryTAA = key.foveatedVendorDispatch && !settings.neuralRenderingEnabled && settings.periphery_taa_enable;
+														 settings, a_profile.method, neuralRenderingFeatureAvailable && IsNeuralRenderingEnabled(settings));
+	key.peripheryTAA = key.foveatedVendorDispatch && !IsNeuralRenderingEnabled(settings) && settings.periphery_taa_enable;
 
 	if (!a_profile.active) {
 		key.backend = VRRenderScaleBackendKind::None;

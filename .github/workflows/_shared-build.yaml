@@ -15,6 +15,10 @@ on:
                 description: "Run C++ plugin build"
                 type: boolean
                 default: true
+            package-nr:
+                description: "Use the NR release package with user-installed NR DLLs"
+                type: boolean
+                default: false
             run-shader-validation:
                 description: "Run HLSL shader compilation validation"
                 type: boolean
@@ -72,8 +76,8 @@ jobs:
             matrix:
                 compiler:
                     - name: vs2026
-                      cmake-preset: ALL
-                      build-dir: build/ALL
+                      cmake-preset: ${{ inputs.package-nr && 'Package-nr' || 'ALL' }}
+                      build-dir: build/${{ inputs.package-nr && 'Package-nr' || 'ALL' }}
             fail-fast: false
         steps:
             - name: Checkout code
@@ -109,7 +113,7 @@ jobs:
               uses: lukka/run-cmake@v10
               with:
                   configurePreset: ${{ matrix.compiler.cmake-preset }}
-                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DCSX_TEST_BUILD=${{ inputs.test-build-id }}', '-DCSX_RELEASE_VERSION=${{ steps.release_identity.outputs.release_version }}', '-DZIP_TO_DIST=${{ inputs.test-build-id != '' && 'OFF' || 'ON' }}', '-DDEVBENCH_BRIDGE=OFF', '-DTRACY_SUPPORT=OFF']"
+                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DCSX_TEST_BUILD=${{ inputs.test-build-id }}', '-DCSX_RELEASE_VERSION=${{ steps.release_identity.outputs.release_version }}', '-DZIP_TO_DIST=${{ (inputs.test-build-id != '' || inputs.package-nr) && 'OFF' || 'ON' }}', '-DDEVBENCH_BRIDGE=OFF', '-DTRACY_SUPPORT=OFF']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
 
             - name: Verify DLL provenance sidecar
@@ -126,6 +130,11 @@ jobs:
             - name: Run controller tests
               run: |
                   ctest --test-dir ${{ matrix.compiler.build-dir }} -C Release --output-on-failure --no-tests=error -L ControllerTests --timeout 60
+
+            - name: Verify NR release payload policy
+              if: inputs.package-nr
+              run: |
+                  ctest --test-dir ${{ matrix.compiler.build-dir }} -C Release --output-on-failure --no-tests=error -R "^(StreamlineRuntimePackaging|NrReleasePayload)$"
 
             - name: Extract version from CMake
               id: get_version

@@ -308,6 +308,11 @@ find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
+option(
+    CSX_NR_RELEASE_PACKAGE
+    "Package official Streamline files without private NR payloads"
+    OFF
+)
 include(Streamline-Runtime)
 include(NeuralRenderingRuntime)
 include(ValidateNeuralColor)
@@ -770,11 +775,15 @@ install(
     DESTINATION SKSE/Plugins
     COMPONENT SKSE
 )
+set(_nr_shader_install_exclusions "")
+if(CSX_NR_RELEASE_PACKAGE)
+    list(APPEND _nr_shader_install_exclusions PATTERN "Streamline" EXCLUDE)
+endif()
 install(
     DIRECTORY ${CMAKE_SOURCE_DIR}/package/ ${FEATURE_PATHS_SLASH}
     DESTINATION .
     COMPONENT Shaders
-    PATTERN "Tests" EXCLUDE
+    PATTERN "Tests" EXCLUDE ${_nr_shader_install_exclusions}
 )
 install(
     FILES ${FFX_RUNTIME_PAYLOAD_FILES}
@@ -786,6 +795,12 @@ install(
     DESTINATION Shaders/Upscaling/Streamline
     COMPONENT StreamlineRuntime
 )
+if(CSX_NR_RELEASE_PACKAGE)
+    install(
+        SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
+        COMPONENT StreamlineRuntime
+    )
+endif()
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
 
 # #######################################################################################################################
@@ -1468,6 +1483,13 @@ endforeach()
 
 # Core package
 list(APPEND CORE_SOURCES "${CSX_RUNTIME_INSTALL_GUARD}")
+if(CSX_NR_RELEASE_PACKAGE)
+    list(
+        APPEND CORE_SOURCES
+        "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
+        "${CMAKE_SOURCE_DIR}/cmake/VerifyNrReleasePayload.cmake"
+    )
+endif()
 set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(

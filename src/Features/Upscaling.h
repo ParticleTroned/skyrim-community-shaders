@@ -2514,7 +2514,9 @@ public:
 	bool SetFoveatedUpscalingEnabled(bool a_enabled);
 	/** Draw shared NR controls, optionally limited to route and character selection. */
 	void DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool a_essentialsOnly = false);
-	/** Selects the saved centre-only FOV profile whenever NR is enabled. */
+	/** Resolve the master preference only when the optional NR provider is installed. */
+	[[nodiscard]] static bool IsNeuralRenderingEnabled(const Settings& a_settings) noexcept;
+	/** Select the centre-only FOV profile when NR can be enabled. */
 	static bool ApplyNeuralRenderingFovConstraint(Settings& a_settings) noexcept;
 	/** Shared FOV toggle and NR incompatibility warning for both menu layouts. */
 	void DrawPeripheryTAAControl();

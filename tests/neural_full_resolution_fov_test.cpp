@@ -6,6 +6,7 @@ using uint = unsigned;
 
 #include "Features/Upscaling/FoveatedRegionPlan.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Runtime.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -14,6 +15,7 @@ namespace globals::game
 {
 	bool isVR = true;
 }
+bool NeuralRendering::Runtime::IsInstalled() noexcept { return true; }
 
 struct Upscaling
 {
@@ -37,6 +39,7 @@ struct Upscaling
 		float periphery_taa_center_blend_feather = 0.03f;
 		float neuralRenderingBlendFeather = 0.10f;
 	} settings;
+	static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
 #include "neural_full_resolution_fov_types.h"
 	bool available = true;
 	std::array<float2, 2> fovOffsets{ float2{ -0.03f, 0.02f }, float2{ 0.04f, -0.01f } };

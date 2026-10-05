@@ -112,6 +112,11 @@ namespace NeuralRendering
 
 		static Runtime& Instance();
 
+		/** Discover the optional provider once per process; installation requires a restart. */
+		[[nodiscard]] static bool IsInstalled() noexcept;
+		static constexpr const char* kMissingRuntimeNotice =
+			"Missing NR DLL: nvngx_dlssnr.dll. Copy it into Data/Shaders/Upscaling/Streamline next to the other DLLs, then restart the game. sl.dlss_nr.dll is not required.";
+
 		Runtime(const Runtime&) = delete;
 		Runtime& operator=(const Runtime&) = delete;
 		~Runtime();

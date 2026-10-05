@@ -1,6 +1,9 @@
 # NR is an optional provider alongside the target branch's normal DLSS runtime.
 set(CSX_LOCAL_DLSSNR_RUNTIME_FILE "" CACHE FILEPATH
     "Optional user-supplied 310.8 Neural Rendering runtime")
+if(CSX_NR_RELEASE_PACKAGE AND (CSX_LOCAL_DLSSNR_RUNTIME_FILE OR CSX_NR_KERNEL_PAYLOAD_DIR))
+    message(FATAL_ERROR "Package-nr cannot include a local NR runtime or private kernel payload")
+endif()
 if(NOT STREAMLINE_RUNTIME_DIRECTORY)
     message(FATAL_ERROR "The standard Streamline runtime must be configured before NR")
 endif()

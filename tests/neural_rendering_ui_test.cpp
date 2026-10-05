@@ -1,6 +1,7 @@
 #include "Features/FoveatedCommon.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/Runtime.h"
 
 #include <cstdio>
 #include <nlohmann/json.hpp>
@@ -83,13 +84,8 @@ namespace globals
 			void DrawNeuralRenderingMasterControl(bool a_showDiagnostics);
 			void RequestHistoryReset() { ++historyResets; }
 			void DrawNeuralRenderingFovWarning(bool) const {}
-			static bool ApplyNeuralRenderingFovConstraint(Settings& value)
-			{
-				if (!value.neuralRenderingEnabled || !value.periphery_taa_enable)
-					return false;
-				value.periphery_taa_enable = false;
-				return true;
-			}
+			static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
+			static bool ApplyNeuralRenderingFovConstraint(Settings&) noexcept;
 			UpscaleMethod GetUpscaleMethod() const { return method; }
 			UpscaleMethod GetRuntimeUpscaleMethod() const { return runtimeMethod.value_or(method); }
 			void DrawNeuralRenderingSettings(UpscaleMethod value, bool = false)
@@ -240,6 +236,8 @@ namespace Util
 
 namespace NeuralRendering
 {
+	bool runtimeInstalled = true;
+	bool Runtime::IsInstalled() noexcept { return runtimeInstalled; }
 	struct Renderer
 	{
 		struct Snapshot
@@ -412,6 +410,26 @@ int main()
 		require(ImGui::disableDepth == 0 && ImGui::treeDepth == 0 && ImGui::comboDepth == 0,
 			"Master control must restore every UI scope");
 	};
+	NeuralRendering::runtimeInstalled = false;
+	upscaling.settings.neuralRenderingEnabled = false;
+	drawMaster("Enabled");
+	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
+				ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice),
+		"Missing runtime must disable NR and name the DLL and installation path");
+	upscaling.settings.neuralRenderingEnabled = true;
+	upscaling.settings.periphery_taa_enable = true;
+	require(!Upscaling::ApplyNeuralRenderingFovConstraint(upscaling.settings) && upscaling.settings.periphery_taa_enable,
+		"Missing provider must preserve a saved FOV + TAA preference");
+	require(!upscaling.IsNeuralRenderingRequested() && !upscaling.IsNeuralRenderingRenderScaleRequired(),
+		"Saved enabled NR cannot render or require render scale without its DLL");
+	draw("Enable colour processing");
+	require(ImGui::Disabled("Enable colour processing"), "Missing runtime must grey out colour settings");
+	NeuralRendering::runtimeInstalled = true;
+	upscaling.settings.periphery_taa_enable = false;
+	upscaling.settings.neuralRenderingEnabled = false;
+	drawMaster();
+	require(!ImGui::Disabled("Enabled") && !ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice),
+		"Installed runtime must unlock the feature controls");
 	const auto requirePreferences = [&](const Upscaling::Settings& expected) {
 		require(upscaling.settings.neuralRenderingFovOnly == expected.neuralRenderingFovOnly &&
 					upscaling.settings.neuralRenderingRenderscaleFov == expected.neuralRenderingRenderscaleFov &&

@@ -50,6 +50,13 @@ if(EXISTS "${STREAMLINE_RUNTIME_EXTRACT_STAMP}")
     endif()
 endif()
 
+if(CSX_NR_RELEASE_PACKAGE)
+    if(SKIP_RUNTIME_DOWNLOADS)
+        message(FATAL_ERROR "Package-nr requires verified official SDK extraction; SKIP_RUNTIME_DOWNLOADS must be OFF")
+    endif()
+    # A release must not trust a previously modified SDK extraction.
+    set(_streamline_extract_required ON)
+endif()
 if(_streamline_extract_required AND NOT SKIP_RUNTIME_DOWNLOADS)
     file(REMOVE_RECURSE "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
     file(MAKE_DIRECTORY "${STREAMLINE_RUNTIME_EXTRACT_ROOT}")
@@ -108,33 +115,24 @@ endfunction()
 set(STREAMLINE_RUNTIME_FILES "")
 set(STREAMLINE_RUNTIME_PAYLOAD_FILES "")
 set(STREAMLINE_RUNTIME_PAYLOAD_MISSING "")
-# Use production binaries and their original notices from the same pinned SDK.
-foreach(
-    _relative_path
-    IN
-    ITEMS
-        bin/x64/nvngx_dlss.dll
-        bin/x64/sl.common.dll
-        bin/x64/sl.dlss.dll
-        bin/x64/sl.interposer.dll
-        bin/x64/sl.pcl.dll
-        bin/x64/sl.reflex.dll
-        license.txt
-        bin/x64/nvngx_dlss.license.txt
-        bin/x64/reflex.license.txt
-        "3rd-party-licenses.md"
-        "NVIDIA Nsight Graphics SDK License (Apache 2.0).txt"
-)
+include("${CMAKE_CURRENT_LIST_DIR}/StreamlineRuntimeFiles.cmake")
+foreach(_relative_path IN LISTS STREAMLINE_OFFICIAL_RUNTIME_PATHS)
     stage_streamline_runtime("${_relative_path}")
 endforeach()
 
 if(BUILD_CONTROLLER_TESTS)
+    add_test(NAME NrReleasePayload COMMAND "${CMAKE_COMMAND}"
+        "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DTEST_ROOT=${PROJECT_BINARY_DIR}/Testing/NrReleasePayload"
+        -P "${PROJECT_SOURCE_DIR}/tests/nr_release_payload_test.cmake")
+    set_tests_properties(NrReleasePayload PROPERTIES LABELS "PackagingTests" RUN_SERIAL TRUE)
     add_test(
         NAME StreamlineRuntimePackaging
         COMMAND
             "${CMAKE_COMMAND}" "-DBUILD_ROOT=${PROJECT_BINARY_DIR}"
             "-DSDK_ROOT=${STREAMLINE_RUNTIME_EXTRACT_ROOT}"
             "-DNR_RUNTIME_FILE=${CSX_LOCAL_DLSSNR_RUNTIME_FILE}"
+            "-DNR_RELEASE_PACKAGE=${CSX_NR_RELEASE_PACKAGE}"
             "-DTEST_CONFIG=$<CONFIG>" -P
             "${PROJECT_SOURCE_DIR}/tests/streamline_runtime_packaging_test.cmake"
     )

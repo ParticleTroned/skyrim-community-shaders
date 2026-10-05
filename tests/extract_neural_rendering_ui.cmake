@@ -36,6 +36,9 @@ extract("src/Features/Upscaling.cpp"
     "\t\tconst bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);"
     "\t\tconst bool routeAvailable =" selection_controls)
 extract("src/Features/Upscaling.cpp"
+    "bool Upscaling::IsNeuralRenderingEnabled("
+    "void Upscaling::DrawPeripheryTAAControl(" availability_policy)
+extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingRenderScaleRequired() const noexcept"
     "NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode()" execution_gate)
 extract("src/Features/Upscaling.cpp"
@@ -46,4 +49,4 @@ extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()" profile_gate)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
-    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${execution_gate}\n${dispatch_gate}\n${profile_gate}\n${master_control}\nvoid Upscaling::DrawSelectionControls(bool a_essentialsOnly) {\nconst auto a_upscaleMethod = GetUpscaleMethod();\nconst bool showDiagnostics = !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();\n${selection_controls}\n}\n")
+    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${availability_policy}\n${execution_gate}\n${dispatch_gate}\n${profile_gate}\n${master_control}\nvoid Upscaling::DrawSelectionControls(bool a_essentialsOnly) {\nconst auto a_upscaleMethod = GetUpscaleMethod();\nconst bool showDiagnostics = !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();\n${selection_controls}\n}\n")

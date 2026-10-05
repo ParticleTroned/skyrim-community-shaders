@@ -1,5 +1,54 @@
 # Builds without upscaler runtime downloads
 
+## NR release package
+
+Use the `Package-nr` configure and build presets for a release AIO with
+Neural Rendering support and no redistributed NR DLLs:
+
+```powershell
+pwsh ./tools/cmake.ps1 --preset Package-nr
+pwsh ./tools/cmake.ps1 --build --preset Package-nr
+```
+
+`BuildRelease.bat Package-nr` runs both steps. The manual GitHub Actions
+workflow **Package-nr** uses the same presets and uploads a `Package-nr`
+artifact containing the complete `CSX_AIO-*.7z` installer. It does not
+publish a release. Local output is under `build/Package-nr/aio` and `dist`.
+
+The Streamline folder contains only six production DLLs and five original
+notices from the SHA-256-pinned official
+[Streamline 2.14.1 SDK](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1).
+Each release configure extracts the verified archive again. Installation
+checks the exact file inventory and hashes, and rejects NR DLLs anywhere
+in the package. Local NR runtime paths, private kernel payloads and
+`SKIP_RUNTIME_DOWNLOADS=ON` are rejected for this release preset.
+
+Neural Rendering is registered and visible like the other core features.
+Without `nvngx_dlssnr.dll`, its controls are greyed out with the full DLL
+name and installation instructions. A saved enabled preference cannot
+request NR rendering or require Render Scale while the DLL is absent.
+Normal FOV + TAA remains available, and its saved mask settings are retained.
+
+Users supply **`nvngx_dlssnr.dll`** in
+**`Data/Shaders/Upscaling/Streamline/`**, beside `nvngx_dlss.dll` and the
+other Streamline DLLs, then restart the game. `sl.dlss_nr.dll` is not
+required: CSX calls the NR provider directly. Keep the official bundled
+Streamline DLLs in place. Installing the provider makes NR controls
+available; users still choose whether to enable NR.
+
+The loader accepts compatible 310.8 variants, including modified or
+unsigned files with unlisted hashes. Admission still verifies the file
+version, required exports and loaded image identity; initialization or
+evaluation failures retain the existing fallback behavior. Developer mode
+is not required. With DevBench enabled in a development build,
+`communityshaders.neural_rendering` action `nr_status` exposes
+`runtime.installed`, `runtime.requiredDll` and `runtime.installationNotice`.
+
+See the [NR release validation and review record](nr-release-package-validation-20261005.md)
+for exact build identity, package checks and local provider-admission results.
+
+## DLL development without runtime downloads
+
 `SKIP_RUNTIME_DOWNLOADS=ON` allows DLL development when the FidelityFX or
 Streamline runtime payloads are unavailable. It defaults to `OFF`. This
 option does not supply other dependencies: the compiler, SDK headers,

@@ -56,4 +56,11 @@ function(csx_configure_runtime_payload)
         "${CMAKE_CURRENT_BINARY_DIR}/runtime_payload_install_guard.cmake"
         @ONLY
     )
+    if(CSX_NR_RELEASE_PACKAGE)
+        configure_file(
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/NrReleaseInstallGuard.cmake.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
+            @ONLY
+        )
+    endif()
 endfunction()

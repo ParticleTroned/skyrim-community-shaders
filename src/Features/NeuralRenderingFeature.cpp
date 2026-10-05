@@ -4,6 +4,7 @@
 #include "Upscaling.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
+#include "Upscaling/NeuralRendering/Runtime.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Utils/UI.h"
 #include <algorithm>
@@ -838,6 +839,7 @@ void NeuralRenderingFeature::DrawSettings()
 {
 	globals::features::upscaling.DrawNeuralRenderingSettings(
 		globals::features::upscaling.GetUpscaleMethod());
+	auto runtimeAvailabilityGuard = Util::DisableGuard(!NeuralRendering::Runtime::IsInstalled());
 	const auto& upscaling = globals::features::upscaling;
 	auto fovAvailabilityGuard = Util::DisableGuard(
 		NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly, globals::game::isVR, upscaling.settings.neuralRenderingRenderscaleFov) &&

@@ -16,6 +16,7 @@ endfunction()
 
 set(header "src/Features/Upscaling.h")
 set(source "src/Features/Upscaling.cpp")
+extract("${source}" "bool Upscaling::IsNeuralRenderingEnabled(" "bool Upscaling::ApplyNeuralRenderingFovConstraint(" availability_policy)
 extract("${header}" "\tstatic constexpr float kFoveatedBlendFeatherMin" "\t// Explicit profile changes" constants)
 extract("${header}" "\tstruct FoveatedDispatchRect" "\tstruct PeripheryTAATile\n" rect)
 extract("${header}" "\tstruct FoveatedRectCacheState" "\tstruct FoveatedEncodeRegion" cache)
@@ -42,4 +43,4 @@ endif()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_full_resolution_fov_types.h" "${constants}\n${rect}\n${cache}\n${profile_type}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_full_resolution_fov_under_test.h"
-    "${helper_constants}\n${helpers}\n${profile_parameters}\n${profile}\n${build}")
+    "${availability_policy}\n${helper_constants}\n${helpers}\n${profile_parameters}\n${profile}\n${build}")

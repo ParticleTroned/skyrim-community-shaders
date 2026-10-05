@@ -18,6 +18,7 @@
 #include <cstring>
 #include <cwctype>
 #include <d3d12.h>
+#include <exception>
 #include <format>
 #include <iomanip>
 #include <memory>
@@ -1094,6 +1095,19 @@ namespace NeuralRendering
 				"[DLSSNR] {} failed at {}: {} (status={}, ngx=0x{:08X})",
 				a_operation, ToString(failureStage_), detail_, ToString(status_), ngxResult_);
 		}
+	}
+
+	bool Runtime::IsInstalled() noexcept
+	{
+		static const bool installed = []() {
+			try {
+				return !ResolveRuntimePath({}).empty();
+			} catch (const std::exception& error) {
+				logger::warn("[DLSSNR] optional runtime discovery failed: {}", error.what());
+				return false;
+			}
+		}();
+		return installed;
 	}
 
 	bool Runtime::ProbeLocked(const std::filesystem::path& a_explicitPath)

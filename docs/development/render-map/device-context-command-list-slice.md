@@ -276,3 +276,9 @@ validates immediate draw ordering only; it does not change the advertised
 `deferredContexts: false` or `commandLists: false` coverage. It also confirms
 the next high-value gap: render-target/depth-target identity and VR eye
 attribution are still absent from otherwise well-joined draw evidence.
+
+Command-list catalogue admission checks the retained capture generation under
+the catalogue mutex before inserting an entry or advancing its pointer
+generation. Capture reset clears the same catalogue under that mutex, so
+resumed work from an older capture cannot consume successor capacity or alter
+the first valid successor declaration.

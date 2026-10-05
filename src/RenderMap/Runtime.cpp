@@ -978,6 +978,43 @@ namespace CSX::RenderMap
 		failNextCommandListCatalogueAdmission.store(true, std::memory_order_release);
 	}
 
+	void Runtime::PauseCommandListAdmissionsForTesting(std::uint32_t a_count) noexcept
+	{
+		resumeCommandListAdmissions.store(false, std::memory_order_release);
+		commandListAdmissionsToPause.store(a_count, std::memory_order_release);
+	}
+
+	std::uint32_t Runtime::PausedCommandListAdmissionsForTesting() const noexcept
+	{
+		return pausedCommandListAdmissions.load(std::memory_order_acquire);
+	}
+
+	void Runtime::ResumeCommandListAdmissionsForTesting() noexcept
+	{
+		resumeCommandListAdmissions.store(true, std::memory_order_release);
+	}
+
+	std::size_t Runtime::CommandListCatalogueSizeForTesting() noexcept
+	{
+		std::scoped_lock lock(commandListMutex);
+		return commandLists.size();
+	}
+
+	void Runtime::PauseCommandListAdmissionForTesting() noexcept
+	{
+		auto remaining = commandListAdmissionsToPause.load(std::memory_order_acquire);
+		while (remaining != 0) {
+			if (!commandListAdmissionsToPause.compare_exchange_weak(remaining, remaining - 1,
+					std::memory_order_acq_rel))
+				continue;
+			pausedCommandListAdmissions.fetch_add(1, std::memory_order_acq_rel);
+			while (!resumeCommandListAdmissions.load(std::memory_order_acquire))
+				std::this_thread::yield();
+			pausedCommandListAdmissions.fetch_sub(1, std::memory_order_acq_rel);
+			return;
+		}
+	}
+
 	void Runtime::PauseNextProducerPublicationForTesting() noexcept
 	{
 		resumeDeferredPublication.store(false, std::memory_order_release);
@@ -1291,8 +1328,13 @@ namespace CSX::RenderMap
 
 		std::uint64_t commandListObservationId = 0;
 		if (a_result >= 0 && a_commandList != 0) {
+#if defined(CSX_RENDER_MAP_TESTING)
+			PauseCommandListAdmissionForTesting();
+#endif
 			try {
 				std::scoped_lock lock(commandListMutex);
+				if (collector.ActiveGeneration() != captureGeneration)
+					return;
 				if (commandLists.contains(a_commandList) ||
 					commandLists.size() < kMaximumTrackedCommandLists) {
 #if defined(CSX_RENDER_MAP_TESTING)
@@ -1413,8 +1455,13 @@ namespace CSX::RenderMap
 		const auto commandSequence = NextCommandStreamSequence();
 		std::uint64_t commandListObservationId = 0;
 		std::uint64_t sourceRecordingObservationId = 0;
+#if defined(CSX_RENDER_MAP_TESTING)
+		PauseCommandListAdmissionForTesting();
+#endif
 		try {
 			std::scoped_lock lock(commandListMutex);
+			if (collector.ActiveGeneration() != captureGeneration)
+				return;
 			if (!commandLists.contains(a_commandList) &&
 				commandLists.size() >= kMaximumTrackedCommandLists) {
 				return;

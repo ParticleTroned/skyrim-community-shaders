@@ -2023,6 +2023,71 @@ namespace
 		}
 	}
 
+	void TestCommandListAdmissionRetainsCaptureGeneration()
+	{
+		constexpr std::uint32_t actorCount = 8;
+		constexpr std::uintptr_t immediate = 0xEA00;
+		constexpr std::uintptr_t deferred = 0xEB00;
+		constexpr std::uintptr_t firstList = 0x100000;
+		auto config = Config();
+		config.maxEvents = static_cast<std::uint32_t>(kMaximumTrackedCommandLists * 6 + 128);
+		config.maxBytes = Collector::RequiredStorageBytes(config);
+		for (const auto finish : { false, true }) {
+			for (const auto turnOver : { false, true }) {
+				Runtime runtime;
+				runtime.SetImmediateContext(immediate);
+				Check(runtime.StartCapture(config) == StartResult::kStarted, "command admission source did not start");
+				for (std::uint32_t actor = 0; actor < actorCount; ++actor)
+					runtime.RegisterDeferredContext(deferred + actor, 0);
+				runtime.PauseCommandListAdmissionsForTesting(actorCount);
+				std::vector<std::thread> workers;
+				for (std::uint32_t actor = 0; actor < actorCount; ++actor) {
+					workers.emplace_back([&, actor] {
+						if (finish)
+							runtime.RecordFinishCommandList(deferred + actor, firstList + actor, true, 0);
+						else
+							runtime.RecordExecuteCommandList(immediate, firstList + actor, true);
+					});
+				}
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+				while (runtime.PausedCommandListAdmissionsForTesting() != actorCount && std::chrono::steady_clock::now() < deadline)
+					std::this_thread::yield();
+				const auto allPaused = runtime.PausedCommandListAdmissionsForTesting() == actorCount;
+				bool successorStarted = true;
+				if (allPaused && turnOver)
+					successorStarted = runtime.StopCapture().has_value() && runtime.StartCapture(config) == StartResult::kStarted;
+				runtime.ResumeCommandListAdmissionsForTesting();
+				for (auto& worker : workers)
+					worker.join();
+				Check(allPaused && successorStarted, "command admission turnover barrier failed");
+				Check(runtime.CommandListCatalogueSizeForTesting() == (turnOver ? 0u : actorCount),
+					"stale command admission consumed successor catalogue entries");
+				if (turnOver) {
+					for (std::size_t index = 0; index < kMaximumTrackedCommandLists; ++index)
+						runtime.RecordExecuteCommandList(immediate, firstList + index, true);
+					Check(runtime.CommandListCatalogueSizeForTesting() == kMaximumTrackedCommandLists,
+						"stale command admission consumed successor catalogue capacity");
+				}
+				const auto capture = runtime.StopCapture();
+				Check(capture.has_value(), "command admission result did not stop");
+				std::size_t declarations = 0;
+				for (const auto& event : capture->events) {
+					if (event.kind != EventKind::kCommandListObserved)
+						continue;
+					++declarations;
+					Check(event.payload.words[2] == 1, "first valid command list inherited a stale pointer generation");
+				}
+				Check(declarations == (turnOver ? kMaximumTrackedCommandLists : actorCount),
+					"command admission lost valid declarations or admitted stale work");
+				if (turnOver)
+					Check(std::none_of(capture->events.begin(), capture->events.end(), [](const EventRecord& event) {
+						return event.kind == EventKind::kFinishCommandList;
+					}),
+						"old finish event entered the successor capture");
+			}
+		}
+	}
+
 	void TestProducerPublicationRetainsCaptureGeneration()
 	{
 		enum class Producer
@@ -2769,6 +2834,7 @@ int main()
 		TestExecuteRestoreStateIsIndependentOfCaptureAdmission();
 		TestDeferredRecordingReportsPartialFilteredAndFailedFinishes();
 		TestDiagnosticCatalogueAdmissionFailuresFailOpen();
+		TestCommandListAdmissionRetainsCaptureGeneration();
 		TestProducerPublicationRetainsCaptureGeneration();
 		TestImmediateStagePublicationRetainsCaptureGeneration();
 		TestImmediateDispatchRetainsCaptureGeneration();

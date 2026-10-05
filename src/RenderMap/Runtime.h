@@ -382,6 +382,10 @@ namespace CSX::RenderMap
 #if defined(CSX_RENDER_MAP_TESTING)
 		void FailNextDeferredContextCatalogueAdmissionForTesting() noexcept;
 		void FailNextCommandListCatalogueAdmissionForTesting() noexcept;
+		void PauseCommandListAdmissionsForTesting(std::uint32_t a_count) noexcept;
+		std::uint32_t PausedCommandListAdmissionsForTesting() const noexcept;
+		void ResumeCommandListAdmissionsForTesting() noexcept;
+		std::size_t CommandListCatalogueSizeForTesting() noexcept;
 		void PauseNextProducerPublicationForTesting() noexcept;
 		void PauseNextDeferredPublicationForTesting() noexcept;
 		void PauseNextImmediateStagePublicationForTesting() noexcept;
@@ -513,6 +517,7 @@ namespace CSX::RenderMap
 			CommandRecordingIncompleteReason a_reason) noexcept;
 #if defined(CSX_RENDER_MAP_TESTING)
 		void PauseProducerPublicationForTesting() noexcept;
+		void PauseCommandListAdmissionForTesting() noexcept;
 		void PauseDeferredPublicationBeforeAppendForTesting() noexcept;
 		void PauseImmediateStagePublicationForTesting() noexcept;
 		void PauseImmediateDispatchBeforeAppendForTesting() noexcept;
@@ -586,6 +591,9 @@ namespace CSX::RenderMap
 #if defined(CSX_RENDER_MAP_TESTING)
 		std::atomic_bool failNextDeferredContextCatalogueAdmission{ false };
 		std::atomic_bool failNextCommandListCatalogueAdmission{ false };
+		std::atomic_uint32_t commandListAdmissionsToPause{ 0 };
+		std::atomic_uint32_t pausedCommandListAdmissions{ 0 };
+		std::atomic_bool resumeCommandListAdmissions{ false };
 		std::atomic_bool pauseNextProducerPublication{ false };
 		std::atomic_bool pauseNextDeferredPublication{ false };
 		std::atomic_bool pauseNextImmediateStagePublication{ false };

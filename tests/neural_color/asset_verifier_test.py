@@ -132,6 +132,21 @@ class AssetTests(unittest.TestCase):
             source.write_text(source.read_text().replace("/", "\\\\"))
         self.assertTrue(assets.verify(self.root)["ok"])
 
+    def test_commented_reference_cannot_satisfy_runtime_inventory(self):
+        source = self.producers / "ExposureCapture.cpp"
+        original = source.read_text()
+        for text in ("// " + original, "/* " + original + " */",
+                     "// disabled compile path\\\n" + original):
+            with self.subTest(text=text):
+                source.write_text(text)
+                self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_commented_unknown_paths_do_not_poison_inventory(self):
+        source = self.producers / "Renderer.cpp"
+        source.write_text(source.read_text() +
+                          '\n// L"Data/Shaders/Old.hlsl"\n/* L"Data/Shaders/Retired.hlsl" */\n')
+        self.assertTrue(assets.verify(self.root)["ok"])
+
     def test_duplicate_package_provider_is_rejected(self):
         for provider in (Path("features/Upscaling"), Path("package")):
             for content in (None, "// stale shader\n"):

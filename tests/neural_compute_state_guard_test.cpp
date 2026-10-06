@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdio>
+#include <d3d11_1.h>
 #include <d3dcompiler.h>
 #include <stdexcept>
 
@@ -11,6 +12,12 @@ namespace
 	using Microsoft::WRL::ComPtr;
 	using NeuralRendering::ComputeStateGuard;
 	using NeuralRendering::ComputeStatePolicy;
+	enum class BufferBinding
+	{
+		None,
+		Whole,
+		Window
+	};
 
 	void Require(bool condition, const char* message)
 	{
@@ -22,6 +29,7 @@ namespace
 	{
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
+		ComPtr<ID3D11DeviceContext1> context1;
 		std::array<ComPtr<ID3D11UnorderedAccessView>, 5> uavs;
 		std::array<ComPtr<ID3D11ShaderResourceView>, 6> srvs;
 		ComPtr<ID3D11ComputeShader> shader;
@@ -36,6 +44,7 @@ namespace
 			Require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
 						&requested, 1, D3D11_SDK_VERSION, &device, nullptr, &context)),
 				"Create WARP device");
+			Require(SUCCEEDED(context.As(&context1)), "Query WARP D3D11.1 context");
 			constexpr char code[] = "[numthreads(1,1,1)] void main() {}";
 			ComPtr<ID3DBlob> bytecode;
 			Require(SUCCEEDED(D3DCompile(code, sizeof(code), nullptr, nullptr, nullptr, "main", "cs_5_0", 0, 0, &bytecode, nullptr)), "Compile shader");
@@ -58,7 +67,7 @@ namespace
 				Util::SetResourceName(srvs[i].Get(), "ComputeStateGuardTest::Input%u SRV", i);
 			}
 			D3D11_BUFFER_DESC bufferDesc{};
-			bufferDesc.ByteWidth = 16;
+			bufferDesc.ByteWidth = 1024;
 			bufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			Require(SUCCEEDED(device->CreateBuffer(&bufferDesc, nullptr, &constantBuffer)), "Create original constant buffer");
 			Util::SetResourceName(constantBuffer.Get(), "ComputeStateGuardTest::OriginalConstants");
@@ -83,7 +92,7 @@ namespace
 			return texture;
 		}
 
-		void Bind(BOOL predicateValue)
+		void Bind(BOOL predicateValue, BufferBinding binding = BufferBinding::Whole)
 		{
 			for (UINT i = 0; i < uavs.size(); ++i) {
 				auto* view = uavs[i].Get();
@@ -93,10 +102,28 @@ namespace
 				auto* view = srvs[i].Get();
 				context->CSSetShaderResources(i, 1, &view);
 			}
-			auto* buffer = constantBuffer.Get();
+			auto* buffer = binding == BufferBinding::None ? nullptr : constantBuffer.Get();
 			context->CSSetConstantBuffers(0, 1, &buffer);
+			if (binding == BufferBinding::Window) {
+				const UINT first = 16, count = 16;
+				context1->CSSetConstantBuffers1(0, 1, &buffer, &first, &count);
+			}
 			context->CSSetShader(shader.Get(), nullptr, 0);
 			context->SetPredication(predicate.Get(), predicateValue);
+		}
+
+		void CheckWindow(BufferBinding binding)
+		{
+			const UINT expectedFirst = binding == BufferBinding::Window ? 16u : 0u;
+			const UINT expectedCount = binding == BufferBinding::Window ? 16u : 4096u;
+			auto* expectedBuffer = binding == BufferBinding::None ? nullptr : constantBuffer.Get();
+			ComPtr<ID3D11Buffer> buffer;
+			UINT first = 0, count = 0;
+			context1->CSGetConstantBuffers1(0, 1, &buffer, &first, &count);
+			if (first != expectedFirst || count != expectedCount)
+				std::fprintf(stderr, "Expected constant window %u/%u, observed %u/%u\n", expectedFirst, expectedCount, first, count);
+			Require(buffer.Get() == expectedBuffer && first == expectedFirst && count == expectedCount,
+				"Constant buffer offset/range restoration");
 		}
 
 		void CheckViews(UINT clearedUavs, UINT clearedSrvs)
@@ -130,21 +157,24 @@ namespace
 	};
 
 	template <UINT SRVCount, UINT UAVCount, ComputeStatePolicy Policy = ComputeStatePolicy::ClearBindingsAndPredication>
-	void CheckGuard(BOOL predicateValue, bool unwind)
+	void CheckGuard(BOOL predicateValue, bool unwind, BufferBinding binding)
 	{
 		using Guard = ComputeStateGuard<SRVCount, UAVCount, Policy>;
 		constexpr bool isolated = Policy == ComputeStatePolicy::ClearBindingsAndPredication;
 		Fixture fixture;
-		fixture.Bind(predicateValue);
+		fixture.Bind(predicateValue, binding);
+		fixture.CheckWindow(binding);
+		auto* originalBuffer = binding == BufferBinding::None ? nullptr : fixture.constantBuffer.Get();
 		fixture.CheckViews(0, 0);
-		fixture.CheckState(fixture.constantBuffer.Get(), fixture.predicate.Get(), predicateValue);
+		fixture.CheckState(originalBuffer, fixture.predicate.Get(), predicateValue);
 		struct UnwindProbe
 		{};
+		bool unwound = false;
 		try {
 			Guard guard(fixture.context.Get());
 			Require(guard.Captured(), "Non-null context captured");
 			fixture.CheckViews(isolated ? UAVCount : 0, isolated ? SRVCount : 0);
-			fixture.CheckState(fixture.constantBuffer.Get(), isolated ? nullptr : fixture.predicate.Get(), isolated ? FALSE : predicateValue);
+			fixture.CheckState(originalBuffer, isolated ? nullptr : fixture.predicate.Get(), isolated ? FALSE : predicateValue);
 			fixture.Bind(!predicateValue);
 			auto* temporary = fixture.temporaryBuffer.Get();
 			fixture.context->CSSetConstantBuffers(0, 1, &temporary);
@@ -164,9 +194,12 @@ namespace
 			if (unwind)
 				throw UnwindProbe{};
 		} catch (const UnwindProbe&) {
+			unwound = true;
 		}
+		Require(unwound == unwind, "Expected exception path exercised");
 		fixture.CheckViews(0, 0);
-		fixture.CheckState(fixture.constantBuffer.Get(), fixture.predicate.Get(), isolated ? predicateValue : !predicateValue);
+		fixture.CheckState(originalBuffer, fixture.predicate.Get(), isolated ? predicateValue : !predicateValue);
+		fixture.CheckWindow(binding);
 		Guard missingContext(nullptr);
 		Require(!missingContext.Captured(), "Null context is not captured");
 		missingContext.Unbind();
@@ -178,12 +211,14 @@ int main()
 	try {
 		for (BOOL predicateValue : { FALSE, TRUE }) {
 			for (bool unwind : { false, true }) {
-				CheckGuard<1, 1>(predicateValue, unwind);
-				CheckGuard<3, 1>(predicateValue, unwind);
-				CheckGuard<4, 4>(predicateValue, unwind);
-				CheckGuard<5, 1>(predicateValue, unwind);
-				CheckGuard<1, 1, ComputeStatePolicy::PreserveBindings>(predicateValue, unwind);
-				CheckGuard<4, 3, ComputeStatePolicy::PreserveBindings>(predicateValue, unwind);
+				for (auto binding : { BufferBinding::None, BufferBinding::Whole, BufferBinding::Window }) {
+					CheckGuard<1, 1>(predicateValue, unwind, binding);
+					CheckGuard<3, 1>(predicateValue, unwind, binding);
+					CheckGuard<4, 4>(predicateValue, unwind, binding);
+					CheckGuard<5, 1>(predicateValue, unwind, binding);
+					CheckGuard<1, 1, ComputeStatePolicy::PreserveBindings>(predicateValue, unwind, binding);
+					CheckGuard<4, 3, ComputeStatePolicy::PreserveBindings>(predicateValue, unwind, binding);
+				}
 			}
 		}
 		std::puts("ComputeStateGuard: isolated colour and preserving renderer/actor WARP checks passed");

@@ -18,6 +18,9 @@ EXTERNAL_RUNTIME_SHADERS = {"Renderer.cpp": {"Data/Shaders/DLSS5ActorProtectionC
 NAMES = ("ColorCommon.hlsli", *(name for names in RUNTIME_SHADERS.values() for name in names))
 MANIFEST_VERSION = re.compile(r"^\s*Version\s*=\s*(\d+)-(\d+)-(\d+)\s*$", re.MULTILINE)
 REGISTRY_VERSION = re.compile(r'"NeuralRendering"sv,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}')
+RUNTIME_TOKENS = re.compile(
+    r'//[^\n]*|/\*.*?\*/|L"(?P<path>(?:\\.|[^"\\])*)"|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\\r\n])*\'',
+    re.DOTALL)
 
 
 def verify(root: Path, deployed_data: Path | None = None) -> dict:
@@ -99,8 +102,10 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
             errors.append(f"Missing runtime producer {name}")
             continue
         try:
-            references = {candidate.replace("\\\\", "/") for candidate in re.findall(
-                r'L"([^"\n]+\.hlsl)"', path.read_text(encoding="utf-8-sig"))}
+            # C++ line splicing precedes comment handling; quoted text must stay intact.
+            source = re.sub(r'\\\r?\n', '', path.read_text(encoding="utf-8-sig"))
+            references = {candidate.replace("\\\\", "/") for match in RUNTIME_TOKENS.finditer(source)
+                          if (candidate := match.group("path")) is not None and candidate.endswith(".hlsl")}
         except (OSError, UnicodeError) as error:
             errors.append(f"Unreadable runtime producer {name}: {error}")
             continue

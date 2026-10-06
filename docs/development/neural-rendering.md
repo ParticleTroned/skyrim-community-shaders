@@ -196,6 +196,53 @@ Evidence is under `build/pr110-nr-refactor-review/`:
     live SE/AE/VR qualification. Earlier producer identities and the
     unresolved stability observation remain unchanged.
 
+### Final adversarial consolidation review (2026-10-06)
+
+The final pass reproduced a constant-buffer binding defect retained from
+the original guards: restoring b0 with the base D3D11 API changed a valid
+`firstConstant=16, numConstants=16` window to `0, 4096`. The buffer object
+was restored, but its shader-visible contents changed. The shared guard
+now captures the D3D11.1 offset and range when that interface is available.
+Whole-buffer, absent-buffer and older D3D11 contexts retain the base API;
+partial bindings use the windowed restoration API. This follows the
+existing optional-context pattern in `ScreenSpaceGI.cpp` without adding
+another helper file or widening `Utils/ComputeState.h`.
+The [D3D11 constant-buffer API contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11devicecontext1-cssetconstantbuffers1)
+defines the distinction between whole-buffer and windowed bindings.
+
+The runtime shader inventory also accepted references inside comments
+and rejected unrelated paths inside comments. Its literal scan now
+handles line/block comments, C++ line splicing and quoted text together.
+Four new failure assertions reproduced those incorrect classifications
+before correction. This remains a source inventory, not a claim of C++
+or shader compilation.
+
+Evidence is under `build/pr110-nr-final-review/`:
+
+-   `NeuralComputeStateGuard` passed all 72 WARP scenarios: six actual
+    caller layouts, both predicate values, normal/exception exits, and
+    absent/whole/windowed constant buffers. Its pre-fix failure records
+    the observed `16/16` to `0/4096` change.
+-   All 20 asset fixtures, colour source contracts and source inventory
+    passed. The existing shader stage still matches all eight NR assets
+    by SHA-256. No shader source or installed path changed.
+-   Seven rendering contracts/actor shader checks and
+    `NRColorExposureWARP` passed. The guard and exposure test targets were
+    rebuilt through `tools/cmake.ps1` before their executable checks.
+-   `cmake --build build/pr110-nr-hmd-devbench --config Release --target CommunityShaders --parallel 6`
+    passed through `tools/cmake.ps1`. The universal DLL enables SE/AE/VR,
+    with DevBench on, Tracy off and auto-deployment off. Its producer is
+    `47b78a331d9861a5a4b7d476b6210b36ef97f48e` plus the saved
+    `producer.patch`; subsequent documentation is not part of that build.
+-   Build ID: `5c5fd9b4790f90a06e1cc4f113bdd90ab94f34f5da69979db40c75a1427d6a1b`.
+    DLL SHA-256: `e51223dbfa34050faf251cd9f370cda557333e91ac7ac21d63769ef58603d02e`
+    (31,986,176 bytes). The adjacent manifest matches the linked DLL.
+    The previous DLL and manifest were preserved in `prior-producer/`.
+-   No new AIO, deployment, production-only DLL build or live SE/AE/VR
+    qualification was performed. The constant-buffer reproduction does
+    not establish the cause of the earlier GPU hangs; that observation
+    remains unresolved, and the diagnostic colour fix stays separate.
+
 ## Local validation (2026-10-06)
 
 The PR110 implementation is based on

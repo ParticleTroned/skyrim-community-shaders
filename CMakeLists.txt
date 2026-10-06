@@ -1799,6 +1799,7 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/Upscaling.cpp
             include/VRAPI/CSpluginapi.h
             tests/extract_stabilizer_api.cmake
+            src/Api/LegacyRuntimeDispatch.h
         VERBATIM
     )
     target_sources(
@@ -3206,6 +3207,8 @@ if(BUILD_CONTROLLER_TESTS)
         volumetric_lighting_tuning_policy_test
         PRIVATE nlohmann_json::nlohmann_json
     )
+    include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_runtime.cmake")
+    add_controller_test(runtime_toggle_test RuntimeToggle tests/runtime_toggle_test.cpp)
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     add_controller_test(

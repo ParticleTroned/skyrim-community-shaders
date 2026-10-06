@@ -4,6 +4,7 @@
 struct InverseSquareLighting : Feature
 {
 private:
+	std::atomic<bool> runtimeSettingsDirty{ true };
 	static constexpr std::string_view MOD_ID = "153542";
 
 public:
@@ -47,6 +48,7 @@ public:
 	virtual bool SupportsVR() override { return true; }
 
 	virtual void PostPostLoad() override;
+	virtual void EarlyPrepass() override;
 	bool IsEnabled() const { return loaded && runtimeEnabled.load(std::memory_order_acquire); }
 
 	static float CalculateRadius(float intensity, bool shadowCaster, float cutoffOverride, float size);

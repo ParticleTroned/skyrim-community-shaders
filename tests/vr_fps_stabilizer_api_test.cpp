@@ -1,4 +1,7 @@
+#include "Api/MainThreadDispatchState.h"
 #include "Features/Upscaling/VRRenderScaleModePolicy.h"
+#include <future>
+#include <queue>
 
 #include <algorithm>
 #include <atomic>
@@ -7,6 +10,41 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+
+namespace CSX::Api
+{
+	inline thread_local bool runtimeOwner = true;
+	bool IsRuntimeMainThread() { return runtimeOwner; }
+	void EnterRuntimeMainThreadTask() { runtimeOwner = true; }
+}
+namespace SKSE
+{
+	struct TaskInterface
+	{
+		std::mutex mutex;
+		std::condition_variable ready;
+		std::queue<std::function<void()>> pending;
+		void AddTask(std::function<void()> task)
+		{
+			std::lock_guard lock(mutex);
+			pending.push(std::move(task));
+			ready.notify_one();
+		}
+		void RunOne()
+		{
+			std::unique_lock lock(mutex);
+			if (!ready.wait_for(lock, std::chrono::seconds(2), [&] { return !pending.empty(); }))
+				throw std::runtime_error("worker did not dispatch");
+			auto task = std::move(pending.front());
+			pending.pop();
+			lock.unlock();
+			task();
+		}
+	};
+	TaskInterface tasks;
+	bool available = true;
+	TaskInterface* GetTaskInterface() { return available ? &tasks : nullptr; }
+}
 
 struct Upscaling
 {
@@ -176,6 +214,7 @@ namespace CSPluginAPI
 		VRUpscalingTransitionProfileDecision GetVRUpscalingTransitionProfileDecision(UpscaleMethod, bool, UpscalePreset, DLSSProfile);
 		void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod, bool, UpscalePreset, DLSSProfile);
 	};
+	inline CSInterface001 g_interface001;
 }
 #include "stabilizer_api_under_test.h"
 
@@ -197,6 +236,43 @@ int main()
 	CSInterface001 api;
 	auto& upscaling = globals::features::upscaling;
 	try {
+		upscaling.blockReasons = 4;
+		auto worker = std::async(std::launch::async, [&] {
+			CSX::Api::runtimeOwner = false;
+			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+		});
+		Require(upscaling.applications == 0);
+		SKSE::tasks.RunOne();
+		worker.get();
+		Require(upscaling.applications == 0);
+		auto query = std::async(std::launch::async, [&] {
+			CSX::Api::runtimeOwner = false;
+			return api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+		});
+		SKSE::tasks.RunOne();
+		Require(query.get() == Decision::kBlocked);
+		SKSE::available = false;
+		CSX::Api::runtimeOwner = false;
+		Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kBlocked);
+		api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+		Require(upscaling.applications == 0);
+		SKSE::available = true;
+		CSX::Api::runtimeOwner = true;
+		upscaling.blockReasons = 0;
+		upscaling.config.exterior.upscaleMethod = Upscaling::UpscaleMethod::kFSR;
+		upscaling.config.exterior.qualityMode = 3;
+		upscaling.config.exterior.renderScaleMode = true;
+		auto accepted = std::async(std::launch::async, [&] {
+			CSX::Api::runtimeOwner = false;
+			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+		});
+		SKSE::tasks.RunOne();
+		accepted.get();
+		Require(upscaling.applications == 1 && upscaling.current.upscaleMethod == Upscaling::UpscaleMethod::kFSR);
+		upscaling.config = {};
+		upscaling.current = {};
+		upscaling.latched = false;
+		upscaling.applications = 0;
 		// The reported exterior request must apply while standing outdoors.
 		upscaling.config.exterior.qualityMode = 1;
 		upscaling.config.exterior.renderScaleMode = true;

@@ -3670,12 +3670,12 @@ namespace
 
 	bool GetVRFpsStabilizerScreenSpaceShadowsEnabled()
 	{
-		return globals::features::screenSpaceShadows.bendSettings.Enable != 0;
+		return globals::features::screenSpaceShadows.IsEnabledRequested();
 	}
 
 	bool GetVRFpsStabilizerScreenSpaceGIEnabled()
 	{
-		return globals::features::screenSpaceGI.settings.Enabled;
+		return globals::features::screenSpaceGI.IsEnabledRequested();
 	}
 
 	bool GetVRFpsStabilizerVolumetricLightingExteriorEnabled()
@@ -3685,7 +3685,7 @@ namespace
 
 	bool GetVRFpsStabilizerContactShadowsEnabled()
 	{
-		return globals::features::lightLimitFix.settings.EnableContactShadows;
+		return globals::features::lightLimitFix.IsContactShadowsRequested();
 	}
 
 	const std::array kVRFpsStabilizerDirectFeatures{

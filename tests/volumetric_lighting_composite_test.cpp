@@ -15,6 +15,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -233,12 +234,19 @@ namespace
 
 		auto& feature = Runtime::globals::features::volumetricLighting;
 		auto& state = Runtime::globals::replacementState;
-		feature = {};
+		feature.settings = {};
+		feature.loaded = true;
 		state = {};
 		Runtime::globals::state = &state;
 		Runtime::LocationContext::interior = false;
 		Runtime::LocationContext::sun = false;
 		const auto expectRuntime = [&](float4 expected, const char* message, bool inWorld = true) {
+			feature.runtimeSettings = feature.settings;
+			feature.runtimeSettings.ExteriorGodrays = VolumetricLightingTuning::SanitizeProfile(feature.settings.ExteriorGodrays);
+			feature.runtimeSettings.InteriorGodrays = VolumetricLightingTuning::SanitizeProfile(feature.settings.InteriorGodrays);
+			feature.initialised = true;
+			feature.inInterior = Runtime::LocationContext::interior;
+			feature.runtimeEnabled = feature.inInterior ? feature.settings.InteriorEnabled && Runtime::LocationContext::sun : feature.settings.ExteriorEnabled;
 			Expect(fixture.Draw(authored, Runtime::Upload(inWorld)), addLens(expected), message);
 		};
 		const float4 neutral{ 1, 0.3f, 0.1f, 0 };

@@ -1,12 +1,15 @@
 #include "VolumetricLighting.h"
+#include "Utils/RuntimeToggle.h"
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
 
+#include "InteriorSun.h"
 #include "LocationContext.h"
 #include "SkySync.h"
 #include "State.h"
+#include "Utils/RendererContextAccess.h"
 #include "VolumetricLightingTuningMigration.h"
 
 namespace
@@ -88,6 +91,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void VolumetricLighting::DrawSettings()
 {
+	std::scoped_lock lock(settingsMutex);
 	SanitizeSettings();
 
 	auto drawVRRestartHint = [] {
@@ -103,8 +107,7 @@ void VolumetricLighting::DrawSettings()
 	};
 
 	if (REL::Module::IsVR()) {
-		if (ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
-			SetupVL();
+		ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Turns off rain-driven volumetric lighting while it is raining, then restores it after rain.");
 	}
@@ -112,23 +115,22 @@ void VolumetricLighting::DrawSettings()
 	DrawGodrayTuningSettings();
 	ImGui::Separator();
 
-	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
-		SetupVL();
+	ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
 	drawVRRestartHint();
 
 	if (settings.ExteriorEnabled)
-		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
+		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false);
 
-	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
-		SetupVL();
+	ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
 	drawVRRestartHint();
 
 	if (settings.InteriorEnabled)
-		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
+		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true);
 }
 
 void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 {
+	std::scoped_lock lock(settingsMutex);
 	SanitizeSettings();
 
 	auto drawVRRestartHint = [] {
@@ -143,12 +145,9 @@ void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 		}
 	};
 
-	auto drawQuality = [&](const char* label, int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType) {
+	auto drawQuality = [&](const char* label, int32_t& quality, TextureSize& customSize, bool isInterior) {
 		quality = ClampQualityIndex(quality);
-		if (ImGui::SliderInt(label, &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality])) {
-			if (inLocationType)
-				SetupVL();
-		}
+		ImGui::SliderInt(label, &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
 
 		if (!a_advanced || static_cast<Quality>(quality) != Quality::Custom) {
 			return;
@@ -157,41 +156,33 @@ void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 		auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
 		if (ImGui::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 			customSize.Width = Width * 32;
-			if (inLocationType)
-				SetupVL();
 		}
 		if (ImGui::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 			customSize.Height = Height * 32;
-			if (inLocationType)
-				SetupVL();
 		}
 		if (ImGui::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 			customSize.Depth = Depth * 10;
-			if (inLocationType)
-				SetupVL();
 		}
 	};
 
-	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
-		SetupVL();
+	ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
 	drawVRRestartHint();
 	if (settings.ExteriorEnabled)
-		drawQuality("Exterior Quality", settings.ExteriorQuality, settings.ExteriorCustomSize, false, !inInterior);
+		drawQuality("Exterior Quality", settings.ExteriorQuality, settings.ExteriorCustomSize, false);
 
-	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
-		SetupVL();
+	ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
 	drawVRRestartHint();
 	if (settings.InteriorEnabled)
-		drawQuality("Interior Quality", settings.InteriorQuality, settings.InteriorCustomSize, true, inInterior);
+		drawQuality("Interior Quality", settings.InteriorQuality, settings.InteriorCustomSize, true);
 
 	if (REL::Module::IsVR()) {
-		if (ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain))
-			SetupVL();
+		ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
 	}
 }
 
 void VolumetricLighting::DrawEssentialSettings()
 {
+	std::scoped_lock lock(settingsMutex);
 	SanitizeSettings();
 
 	auto drawVRRestartHint = [] {
@@ -206,17 +197,16 @@ void VolumetricLighting::DrawEssentialSettings()
 		}
 	};
 
-	if (ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled))
-		SetupVL();
+	ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
 	drawVRRestartHint();
 
-	if (ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled))
-		SetupVL();
+	ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
 	drawVRRestartHint();
 }
 
 json VolumetricLighting::CapturePerformanceSettingsState() const
 {
+	std::scoped_lock lock(settingsMutex);
 	return settings;
 }
 
@@ -261,15 +251,12 @@ void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProf
 	ImGui::TreePop();
 }
 
-void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior, const bool inLocationType)
+void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior)
 {
 	quality = ClampQualityIndex(quality);
 	auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
 
-	if (ImGui::SliderInt(isInterior ? "Interior Quality" : "Exterior Quality", &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality])) {
-		if (inLocationType)
-			SetupVL();
-	}
+	ImGui::SliderInt(isInterior ? "Interior Quality" : "Exterior Quality", &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
 
 	const bool isCustomQuality = static_cast<Quality>(quality) == Quality::Custom;
 	if (!isCustomQuality)
@@ -277,20 +264,14 @@ void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, Textur
 
 	if (ImGui::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Width = Width * 32;
-		if (inLocationType)
-			SetupVL();
 	}
 
 	if (ImGui::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Height = Height * 32;
-		if (inLocationType)
-			SetupVL();
 	}
 
 	if (ImGui::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Depth = Depth * 10;
-		if (inLocationType)
-			SetupVL();
 	}
 
 	if (!isCustomQuality)
@@ -354,6 +335,7 @@ VolumetricLighting::TextureSize& VolumetricLighting::FetchCurrentSizeInUnits(con
 
 void VolumetricLighting::LoadSettings(json& o_json)
 {
+	std::scoped_lock lock(settingsMutex);
 	if (!o_json.is_object()) {
 		settings = {};
 		SanitizeSettings();
@@ -383,6 +365,7 @@ void VolumetricLighting::LoadSettings(json& o_json)
 
 void VolumetricLighting::SaveSettings(json& o_json)
 {
+	std::scoped_lock lock(settingsMutex);
 	SanitizeSettings();
 	o_json = settings;
 	if (!REL::Module::IsVR()) {
@@ -392,14 +375,9 @@ void VolumetricLighting::SaveSettings(json& o_json)
 
 void VolumetricLighting::RestoreDefaultSettings()
 {
+	std::scoped_lock lock(settingsMutex);
 	settings = {};
 	SanitizeSettings();
-	if (globals::game::isVR) {
-		Util::ResetGameSettingsToDefaults(hiddenVREnableSettings);
-		Util::ResetGameSettingsToDefaults(hiddenVRWeatherUpdateSettings);
-	}
-	if (initialised)
-		SetupVL();
 }
 
 int32_t VolumetricLighting::ClampQualityIndex(int32_t quality)
@@ -428,22 +406,16 @@ void VolumetricLighting::SanitizeSettings()
 
 bool VolumetricLighting::IsExteriorEnabled() const
 {
+	std::scoped_lock lock(settingsMutex);
 	return settings.ExteriorEnabled;
 }
 
 bool VolumetricLighting::TryGetActiveGodrayProfile(GodrayProfile& profile) const
 {
-	const bool currentlyInInterior = LocationContext::HasInteriorCell();
-	if (currentlyInInterior) {
-		if (!settings.InteriorEnabled || !LocationContext::IsInteriorWithSun())
-			return false;
-		profile = VolumetricLightingTuning::SanitizeProfile(settings.InteriorGodrays);
-	} else {
-		if (!settings.ExteriorEnabled)
-			return false;
-		profile = VolumetricLightingTuning::SanitizeProfile(settings.ExteriorGodrays);
-	}
-
+	std::scoped_lock lock(settingsMutex);
+	if (!initialised || !runtimeEnabled)
+		return false;
+	profile = inInterior ? runtimeSettings.InteriorGodrays : runtimeSettings.ExteriorGodrays;
 	return true;
 }
 
@@ -457,11 +429,13 @@ VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() 
 
 bool VolumetricLighting::IsPerformanceCostMeasurementEnabled() const
 {
-	return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
+	std::scoped_lock lock(settingsMutex);
+	return initialised && runtimeEnabled;
 }
 
 void VolumetricLighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
+	std::scoped_lock lock(settingsMutex);
 	const Settings defaults{};
 	if (inInterior) {
 		settings.InteriorEnabled = a_enabled;
@@ -477,35 +451,53 @@ void VolumetricLighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 		}
 	}
 
-	SetupVL();
+	SanitizeSettings();
 }
 
 json VolumetricLighting::CapturePerformanceCostMeasurementState() const
 {
+	std::scoped_lock lock(settingsMutex);
 	return settings;
 }
 
 void VolumetricLighting::RestorePerformanceCostMeasurementState(const json& a_state)
 {
+	std::scoped_lock lock(settingsMutex);
 	if (!a_state.is_object())
 		return;
 
 	settings = a_state.get<Settings>();
 	SanitizeSettings();
-	SetupVL();
 }
 
 void VolumetricLighting::SetExteriorEnabled(bool enabled)
 {
+	std::scoped_lock lock(settingsMutex);
 	settings.ExteriorEnabled = enabled;
+}
 
-	if (initialised && !inInterior && globals::game::bEnableVolumetricLighting && gVolumetricLightingSizeHigh) {
-		SetupVL();
-	}
+void VolumetricLighting::RequestRuntimeReset()
+{
+	runtimeResetRequested.store(true, std::memory_order_release);
+}
+
+bool VolumetricLighting::IsRuntimeTransitionBlocked() const
+{
+	const auto* state = globals::state;
+	return Util::IsRuntimeToggleBlocked(state);
+}
+
+bool VolumetricLighting::IsPerformanceCostMeasurementReady() const
+{
+	std::scoped_lock lock(settingsMutex);
+	return runtimeReady.load(std::memory_order_acquire) && !runtimeResetRequested.load(std::memory_order_acquire) &&
+	       settings == runtimeSettings && !IsRuntimeTransitionBlocked();
 }
 
 void VolumetricLighting::PostPostLoad()
 {
+	std::scoped_lock lock(settingsMutex);
+	enabledAtBoot = settings.ExteriorEnabled || settings.InteriorEnabled;
 	if (REL::Module::IsVR()) {
 		if (settings.ExteriorEnabled || settings.InteriorEnabled) {
 			EnableBooleanSettings(hiddenVREnableSettings, GetName());
@@ -540,6 +532,7 @@ void VolumetricLighting::PostPostLoad()
 
 void VolumetricLighting::SetupResources()
 {
+	RequestRuntimeReset();
 	vlDataCB = new ConstantBuffer(ConstantBufferDesc<VLData>(), "VolumetricLighting::Dimensions");
 }
 
@@ -586,63 +579,72 @@ void VolumetricLighting::UpdateBlurDimensions()
 
 void VolumetricLighting::EarlyPrepass()
 {
-	UpdateBlurDimensions();
-
-	const bool currentlyInInterior = LocationContext::HasInteriorCell();
-	const bool nextInteriorWithSun = LocationContext::IsInteriorWithSun();
-	const bool nextRainSuppressionActive =
-		globals::game::isVR &&
-		settings.DisableWeatherInteractionDuringRain &&
-		!currentlyInInterior &&
-		IsRainTransitionActive();
-
-	if (initialised &&
-		currentlyInInterior == inInterior &&
-		nextInteriorWithSun == inInteriorWithSun &&
-		nextRainSuppressionActive == rainOnlySuppressionActive)
+	auto* state = globals::state;
+	if (!state || !runtimeController.BeginFrame(state->frameCount))
 		return;
 
-	initialised = true;
-	inInterior = currentlyInInterior;
-	inInteriorWithSun = nextInteriorWithSun;
-	rainOnlySuppressionActive = nextRainSuppressionActive;
-	SetupVL();
+	runtimeReady.store(false, std::memory_order_release);
+	blurDimensionsValid = false;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	// Deferred toggles must not interrupt the active frame's blur bounds.
+	UpdateBlurDimensions();
+	if (IsRuntimeTransitionBlocked())
+		return;
+
+	auto* tes = globals::game::tes;
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* cell = player ? player->GetParentCell() : nullptr;
+	if (!LocationContext::HasAttachedCell(tes, cell) || !gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting)
+		return;
+	const bool currentlyInInterior = cell->IsInteriorCell();
+
+	Settings requested;
+	{
+		std::scoped_lock lock(settingsMutex);
+		SanitizeSettings();
+		requested = settings;
+	}
+	const bool interiorWithSun = globals::features::interiorSun.IsEnabled() && InteriorSun::IsInteriorWithSun(cell);
+	const bool enabled = (!globals::game::isVR || enabledAtBoot) &&
+	                     LocationContext::AllowsEnabledLocations(requested.InteriorEnabled && interiorWithSun, requested.ExteriorEnabled, currentlyInInterior);
+	const bool suppressRain = globals::game::isVR && requested.DisableWeatherInteractionDuringRain && !currentlyInInterior && IsRainTransitionActive();
+	const int32_t quality = LocationContext::SelectInteriorExterior(currentlyInInterior, requested.InteriorQuality, requested.ExteriorQuality);
+	const auto size = static_cast<Quality>(quality) == Quality::Custom ?
+	                      LocationContext::SelectInteriorExterior(currentlyInInterior, requested.InteriorCustomSize, requested.ExteriorCustomSize) :
+	                      defaultSizeHigh;
+	const VolumetricLightingRuntime::Target target{ enabled, enabled && !suppressRain, std::min(quality, 2), { size.Width, size.Height, size.Depth } };
+	const bool reset = runtimeResetRequested.exchange(false, std::memory_order_acq_rel);
+	const auto changes = runtimeController.Plan(target, reset);
+	ApplyRuntimeTarget(target, changes);
+	runtimeController.Commit(target);
+	{
+		std::scoped_lock lock(settingsMutex);
+		runtimeSettings = requested;
+		initialised = true;
+		inInterior = currentlyInInterior;
+		runtimeEnabled = enabled;
+		runtimeReady.store(true, std::memory_order_release);
+	}
 }
 
-void VolumetricLighting::SetupVL()
+void VolumetricLighting::ApplyRuntimeTarget(const VolumetricLightingRuntime::Target& target, const VolumetricLightingRuntime::Changes& changes)
 {
-	SanitizeSettings();
-
-	auto* bEnableVolumetricLighting = globals::game::bEnableVolumetricLighting;
-	if (!gVolumetricLightingSizeHigh || (!globals::game::isVR && !bEnableVolumetricLighting)) {
-		return;
-	}
-
-	const bool runtimeEnabled = LocationContext::AllowsEnabledLocations(settings.InteriorEnabled && inInteriorWithSun, settings.ExteriorEnabled, inInterior);
-	const int32_t quality = ClampQualityIndex(LocationContext::SelectInteriorExterior(inInterior, settings.InteriorQuality, settings.ExteriorQuality));
-	const TextureSize customSize = LocationContext::SelectInteriorExterior(inInterior, settings.InteriorCustomSize, settings.ExteriorCustomSize);
-
-	if (globals::game::isVR) {
-		rainOnlySuppressionActive =
-			settings.DisableWeatherInteractionDuringRain &&
-			!inInterior &&
-			IsRainTransitionActive();
-		const bool weatherInteractionEnabled = !rainOnlySuppressionActive;
-		const bool effectiveWeatherUpdateEnabled = runtimeEnabled && weatherInteractionEnabled;
-		SetBooleanSettings(hiddenVREnableSettings, GetName(), runtimeEnabled);
-		SetBooleanSettings(hiddenVRWeatherUpdateSettings, GetName(), effectiveWeatherUpdateEnabled);
-		if (runtimeEnabled && !effectiveWeatherUpdateEnabled) {
-			// Drop stale volumetric history immediately when weather updates are suppressed.
-			ClearVolumetricLightingTargets();
+	// The early prepass owns the renderer throughout this engine-state transaction.
+	if (changes.flags) {
+		if (globals::game::isVR) {
+			SetBooleanSettings(hiddenVREnableSettings, GetName(), target.enabled);
+			SetBooleanSettings(hiddenVRWeatherUpdateSettings, GetName(), target.weatherEnabled);
+		} else {
+			*globals::game::bEnableVolumetricLighting = target.enabled;
 		}
-	} else {
-		*bEnableVolumetricLighting = runtimeEnabled;
 	}
-
-	*gVolumetricLightingSizeHigh = static_cast<Quality>(quality) == Quality::Custom ? customSize : defaultSizeHigh;
-	SetVLQuality(GetVLDescriptor(), quality);
-
-	if (!runtimeEnabled)
+	if (changes.quality) {
+		*gVolumetricLightingSizeHigh = { target.highQualitySize[0], target.highQualitySize[1], target.highQualitySize[2] };
+		SetVLQuality(GetVLDescriptor(), target.quality);
+	}
+	if (changes.clearHistory)
 		ClearVolumetricLightingTargets();
 }
 

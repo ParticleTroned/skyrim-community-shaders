@@ -4,6 +4,7 @@
 struct InteriorSun : Feature
 {
 private:
+	std::atomic<bool> runtimeSettingsDirty{ true };
 	static constexpr std::string_view MOD_ID = "153541";
 
 public:

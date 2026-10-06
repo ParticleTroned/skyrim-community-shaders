@@ -3,12 +3,14 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 
 #	include "Api/MainThreadDispatchPolicy.h"
+#	include "Api/MainThreadDispatchState.h"
 #	include "Api/RuntimeThreadAffinity.h"
 #	include "Api/ServiceRegistry.h"
 #	include "BuildProvenance.h"
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
 #	include "Diagnostics/VRPipelineDiagnostics.h"
 #	include "Features/Upscaling.h"
+#	include "Features/Upscaling/NeuralRendering/Runtime.h"
 #	include "Features/Upscaling/VRRenderScaleQualificationPolicy.h"
 #	include "Features/Upscaling/VRRenderScaleReplacementTelemetryPolicy.h"
 #	include "Features/VR.h"
@@ -19,6 +21,7 @@
 #	include "Utils/RendererContextAccess.h"
 #	include "Utils/VRLoadingMenuClear.h"
 #	include "Utils/Form.h"
+#	include "Utils/FileSystem.h"
 #	include "VRAPI/CSserviceapi.h"
 #	include "VRAPI/CSupscalingapi.h"
 
@@ -44,6 +47,24 @@
 #	include <string_view>
 #	include <thread>
 #	include <vector>
+
+#	include "Features/Upscaling/NeuralRendering/CharacterRendering.h"
+#	include "Features/Upscaling/NeuralRendering/CharacterSettingsJson.h"
+
+#	include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+
+#	include "Features/Upscaling/NeuralRendering/Renderer.h"
+#	include "Features/Upscaling/NeuralRendering/LifetimeDiagnosticsJson.h"
+#	include "Features/Upscaling/NeuralRendering/ReplayCapture.h"
+#	include "Features/Upscaling/NeuralRendering/ColorPipeline.h"
+
+#	include "Profiler.h"
+
+#	include "Menu.h"
+
+#	include <bit>
+
+#	include <cstdint>
 
 namespace
 {
@@ -936,6 +957,8 @@ namespace
 			return "open_composite";
 		case Upscaling::UpscalingTransitionApplyRejection::TransitionOwnership:
 			return "transition_ownership";
+		case Upscaling::UpscalingTransitionApplyRejection::NeuralRenderScaleRequired:
+			return "neural_render_scale_required";
 		case Upscaling::UpscalingTransitionApplyRejection::QueueRejected:
 			return "queue_rejected";
 		default:
@@ -1479,6 +1502,1684 @@ namespace
 		};
 	}
 
+	constexpr const char* kNeuralRenderingDescriptor = R"nr({
+  "description":"characterSceneStrengthsEnabled defaults false and enables ordinary-scene material strength adjustments in A/B/C without actor-only coverage. Unselected surfaces retain normal NR; selected strength zero restores the original surface. characterEnabled takes precedence and shares those selections and strengths. Both scopes use one shared model configuration and add no per-category evaluations. Ordinary-scene adjustments do not apply actor-only distance, focus, size, crop or edge controls; their mask and evaluation retain the full configured NR region. nr_toggle invokes the same master toggle as keyboard and controller bindings, at a completed render-frame boundary. It preserves other settings and reports nr_toggle_rejected with a reason when the feature/provider is unavailable, enabling is faulted/quarantined or configuration retirement fails. It is non-idempotent: inspect nr_status after an ambiguous transport timeout before retrying. NR defaults off in reduced_resolution mode. nr_status settings describe requested preferences; effectiveExecution separately reports the configured route policy, including mandatory staged output for reduced_resolution and mono submission on SE/AE. Neither replaces frame-attributed execution evidence. nr_status exposes runtime.installed, runtime.requiredDll and runtime.installationNotice. NR remains registered with disabled menu controls when Shaders/Upscaling/Streamline/nvngx_dlssnr.dll is absent from the installed CSX mod folder. sl.dlss_nr.dll is not required. Missing providers never request NR rendering, require Render Scale or suppress normal FOV + TAA. Actor types are independent toggles characterHumans, characterOtherHumanoids, characterCreatures, characterAnimals and characterOtherActors, all enabled by default. Shared material selections apply only to enabled actor types in all A/B/C modes. Known human races and their morph descendants are Humans; remaining NPC-keyword races are Other humanoids, including elves, Orcs, Khajiit and Argonians. Trolls take precedence over Animal; other Animal-keyword races are Animals; remaining creature/undead/Daedra/dragon/Dwarven keyword races are Beasts / creatures; unmatched races use Other / unknown. Skin includes opaque current skin-armour attachments of non-humanoid actors. nr_status exposes currentActorGroups, currentExcludedActorGroups and currentActorGroupReasons for actors with classifiable geometry. characterArmor and characterWeapons independently include worn clothing/armour/shields and actor-attached weapons/ammunition; both default false. characterArmorStrength and characterWeaponsStrength independently blend their selected material from 0 to 1, default 1; zero excludes that category in Actors only and restores its original appearance during ordinary-scene adjustments. All five material strengths are available in the UI, persisted settings and nr_status, and share CSX compositor and NR provider application. characterMinimumFacePixelSize uses full-eye final-output pixels in every A/B/C mode, independently of internal render resolution. Body-skin materials retain their category; race skin armour is excluded from Armour / clothing, loose world items are excluded, and transparent/player geometry stays excluded. Actor NR uses one automatic single ROI per nonempty eye enclosing all selected actors. characterFocusScale (0.25-1, default 0.75) selects whole actors relative to the visible FOV mask, reusing its exact centres and horizontal shape; 1 adds no exclusion. Without configured FOV it uses a full-size mask centred at offset (0,0) in each eye. The same either-eye decision, hysteresis, eligibility hold and eight-frame fade apply to A/B/C and mono; excluded actors return to ordinary rendering without enabling TAA. nr_status reports the resolved focusMask geometry. Ordinary stereo submission is unchanged. Full-resolution and reduced-resolution NR with character selection (face, skin, hair, strengths and single ROI) support SE/AE/VR; foveated rendering, FOV restriction and stereo implementation controls require Skyrim VR. Reduced-resolution NR runs at the active render resolution before DLSS, which owns temporal reconstruction. In VR it requires active Render Scale; ordinary profiles cannot disable Render Scale while this NR mode is enabled. Saved off/native settings pause NR until scaling becomes active. nr_status exposes renderScalePrerequisite. Flat NR evaluates one mono view; saved stereo scheduling preferences are ignored there. Actor diagnostics report one view on SE/AE and two on VR. NR mode selects full_resolution (0), foveated (1), or reduced_resolution (2); fovOnly reuses the shared mask geometry and feather for full-resolution NR and character isolation combines with every mode. Foveated always uses the configured FOV mask. Renderscale NR before DLSS defaults to the VR FOV crop when FOV is enabled when loading or resetting NR settings; otherwise it defaults to the full eye. Explicit saved renderscaleFov choices take precedence. renderscaleFov controls cropping NR and DLSS to the VR FOV mask, independently of the Full resolution fovOnly preference. Active FOV restrictions require configured, enabled FOV in Upscaling; nr_configure accepts valid settings even when FOV is unavailable: the master remains editable and NR waits without rendering. nr_readiness reports fov_not_configured, and nr_status exposes fovPrerequisite. Unavailable FOV-dependent NR requests remain inactive. With the NR provider installed, NR uses the centre-only FOV profile: enabling NR disables FOV + TAA and returns fovTaaDisabled; foveation controls reject attempts to enable TAA while NR is enabled. Set both eye masks precisely. Switching into or out of reduced-resolution NR retires native ownership before another input domain can evaluate; failed retirement rejects the enabled transition. nr_configure, nr_cycle_modes, nr_reset, foveation_configure and foveation_cycle reserve one command and acquire native renderer ownership at the completed render-frame boundary before accessing settings or retiring resources. Renderer contention defers that same command to a later frame without blocking rendering. renderer_command_busy rejects concurrent requests; renderer_unavailable rejects a missing context; renderer_command_timeout cancels a command not admitted within five seconds. These rejections report ok=false and mutationApplied=false, and a cancelled command cannot run later. An admitted command returns its actual result even if execution exceeds the admission deadline. renderer_command_failed reports mutationApplied=null after an unexpected execution error; inspect state before retrying. A transport timeout remains ambiguous and must not be blindly retried. Disabling NR remains accepted after backend retirement failure; resetSucceeded reports retirement separately from transitionSucceeded. Control and inspect Community Shaders VR render-scale stress iterations, DLSS Neural Rendering, Actor NR masking, and foveated-center tuning. nr_status exposes lifetimeDiagnostics: a bounded 64-record CPU history of native batches and retirements, armed by nr_color captureFrameEvidence. It records resource identities, ROI/history changes, native create/evaluate outcomes and read-only fence observations; the first failure freezes the window across resets and capture disable. It adds no waits or queue commands and does not establish GPU fault causation. nr_status returns the API-v10 NR runtime, routes, temporal admission, GPU telemetry, and frame-attributed per-eye character diagnostics. NR runtime admission is independent of Developer Mode and Streamline logging: any 310.8 runtime with the required exports and stable loaded-image identity is accepted, while SHA-256 is informational. Actor diagnostics count authored face, skin, hair, armour and weapon pixels across the active low-resolution eye input, report visible/rejected evaluation pixels and exact frozen/current depth coordinates, and retain frame-keyed preparation history for asynchronous Feature 18 attribution. lastFeature18GpuSample takes expected physical calls from the same completed sample's frozen execution, not output ownership. physicalPlanAvailable and physicalPlanSource distinguish captured attribution from unavailable_capture_evidence_required; submissionId and generation are decimal strings or null. Expected physical counts/masks and missing/unexpected physical masks are null without matching plan evidence. Missing evidence never infers native counts from preparation; logical coverage remains a legacy frame-only diagnostic. physicalScopeMatchesExecution is the native-plan check; physicalScopeMatchesPreparation is its compatibility alias. Same-frame category/depth capture is idempotent. Temporal history resets retain only current-frame authoring admissions and immutable category/depth source; stale admissions and prepared masks expire. Full resource invalidation still expires both authoring decisions and captured source. characterRendering.runtime.lastPreparationFailure preserves the failing frame, source frame, capture frame, generation, slot, category masks and reason after recovery. Feature 18 bypasses current CPU-selection or completed GPU-category-superset empty proofs bound to source, capture, policy and prepared contents; pending, stale or failed bounds never prove empty. Diagnostic forced-zero is identified separately. Delayed diagnostic coverage never suppresses current-frame evaluation. Empty transactions retain native resources without initialization or keepalive evaluation and reset history on successful re-entry. Diagnostic coverage measurement runs only on policy changes or a fixed cadence. experimentalGpuMaskSupport is a DevBench-only session experiment, default false, and selects the current GPU support mask dispatcher; false retains the reference rectangle dispatcher for matched qualification. GPU mask work consumes current category-superset bounds without waiting for CPU readiness, retains exact depth/distance and sampling tests, and clears departed quantized selection tiles once. Small and completed dense cases retain the reference dispatcher. Actor ROI planning uses current CPU animated-material bounds, conservative fallbacks, immediate growth and delayed shrink, with no GPU reduction or readback. maskRoiStatus describes CPU bounds, while cropDecision and cropQualificationKey identify the inference-domain decision. characterCropMode is 0 calibrated (session), 1 cropped (default) or 2 uncropped. All choices retain the same Actor output mask and A/B/C route. Cropped uses the stable enclosure without a cost profile and expands for coverage safety. Calibrated is an optional comparison using full input until matching session-only quality and whole-frame cost evidence is admitted through nr_crop_calibrate. No profile is implied by pixel area. experimentalCurrentContext is a DevBench-only session experiment, default false. Only authored single-region character NR in reduced_resolution may replace retained motion headroom with current proven support plus the existing spatial padding. Current padded contexts below 128 pixels in either dimension retain the original envelope; this is a conservative experiment qualification bound, not a guarantee against device removal. A/B, debug masks and uncertain bounds retain baseline behavior. Allocation capacity and C reset-every-evaluation remain unchanged. Captured roi.contextPolicy identifies actual application; temporalEnvelope retains the baseline bounds. No quality or performance benefit is qualified. All character policy, projected observations, actor admissions, camera matrices and depth constants latch by source frame for source capture and both eyes; effectiveCategoryMask and effectiveCategoryStrengths report the prepared policy. Edits take effect with the next source frame; uncertain coverage retains a conservative enclosure and diagnostics report the current single-ROI decision. Feature 18 always uses its working automatic-mask invocation; with characterEnabled=true, characterVisualIsolationEnabled=true unions the current per-eye projected selected actor-material eligibility bounds into one private Feature 18 compute subrect; current projected geometry supplies the required enclosure without waiting for GPU bounds. It composites the partial output over normal DLSS through CSX's exact per-eye R8_UNORM 0..1 selection mask. Feature 18 color, depth-guide, motion-vector, provider-output, and late-overlay work are restricted to that rectangle. The Upscaled-Center baseline composite still covers the existing center so normal DLSS fills pixels outside the exact mask. characterProviderBlending=false (default) applies strengths in the CSX compositor. true selects NR provider blending through UIAlpha with the same actor/material mask, strengths and edge controls; CSX keeps exact zero-mask ownership without multiplying strength twice. This works at the common A/B/C evaluation boundary and adds an ROI-sized alpha pass, not an inference saving. Backbuffer uses the prepared model colour input. Switching changes native resource identity and uses bounded retirement; provider errors retain the baseline and existing NR failure latch. characterRendering.settings.providerBlending reports the preference; visualMasking.status, mechanism and scope describe that configured policy and do not prove current execution. renderer.providerBlending and feature18ProviderBlending identify the last requested invocation, not a success guarantee. Native replay capture does not support this extra input. Character isolation forces the Upscaled Center route to staged output so normal DLSS remains available without an extra baseline copy; final-LDR and submit routes already preserve a separate baseline. Full resolution and Foveated always use Final LDR before UI, including with Render Scale disabled; Renderscale NR remains before DLSS. nr_configure insertionPoint is an optional assertion of that fixed placement and rejects conflicts before mutation. nr_configure strictly accepts one or more NR or character controls through the in-game reset/history contract; useAutoMask=false is rejected. nr_status, nr_configure, nr_cycle_modes and nr_reset return explicit ok results; transition failure is never reported as success. Mode or FOV-routing switches retain a healthy backend and its compatible resources; history is invalidated and evaluation is blocked for the transition frame. Resource-key changes still retire incompatible slots through bounded GPU waits. Master changes and routing switches with a failed backend retain full retirement. resetAttempted identifies full backend retirement, independently of historyResetRequested. Debug-view-only changes are applied without a history reset. nr_cycle_modes preserves the VR-only four-lane stereo implementation cycle; use nr_configure mode=full_resolution or mode=reduced_resolution to select either mono route. foveation_configure atomically applies validated foveation controls on the main thread. nr_readiness is a read-only, versioned prepared-NR-scene quiescence check; it reports loading, compilation, target publication, device, resource-transition and scaled-profile/fidelity gates with reasons and full telemetry. A native controller may be settled in Idle or Active; loading and resource-transition gates remain mandatory. It does not qualify presentation or replace render-scale release qualification. Existing render-scale mutations require Skyrim VR and developer mode; apply additionally requires an active stress capture.",
+  "outputSchema":{"type":"object","properties":{"neuralRendering":{"type":"object","properties":{"renderScalePrerequisite":{"type":"object","properties":{"required":{"type":"boolean"},"available":{"type":"boolean"},"locked":{"type":"boolean"}}},"fovPrerequisite":{"type":"object","properties":{"required":{"type":"boolean"},"available":{"type":"boolean"},"reason":{"type":"string"}},"description":"FOV-dependent NR requires active supported foveation with partial centre-only profile coverage; reduced-route allocation alone does not satisfy this prerequisite."},"runtimeSupport":{"type":"object","description":"A/C and Actor NR single ROI support SE/AE/VR; foveated rendering, FOV restriction and stereo implementation controls are VR-only. Reduced resolution requires NVIDIA DLSS. Unsupported enabled configurations are rejected before mutation.","properties":{"fullResolution":{"type":"boolean"},"foveated":{"type":"boolean"},"reducedResolution":{"type":"boolean"},"character":{"type":"boolean"},"stereoSubmission":{"type":"boolean"},"requestedConfiguration":{"type":"boolean"},"reason":{"type":"string"}}},"requestedConfiguration":{"type":"object"},"requestedConfigurationFingerprint":{"type":"string"},"sourceTransport":{"type":"object","description":"Read-only unique input/private-output allocation and retained-lease accounting. Logical texture bytes exclude physical driver/native residency; nativeAllocationBytes is unavailable. Active/cached/native slot masks are distinct. Rejection keys survive mode, frame and target-FPS edits; explicit nr_reset clears them only after both-API retirement. No speculative prewarm or automatic capacity retry."},"lifetimeDiagnostics":{"type":"object","description":"CPU-only opt-in native lifetime observations; 64 chronological records, overwrite count and a first-failure window retained across reset and disable. Identity and fence values are decimal strings; unavailable completed fences are null. Retirement frame fields identify the last renderer request.","properties":{"schemaVersion":{"const":1},"enabled":{"type":"boolean"},"frozen":{"type":"boolean"},"capacity":{"const":64},"totalRecords":{"type":"integer"},"overwrittenRecords":{"type":"integer"},"diagnosticFailures":{"type":"integer"},"records":{"type":"array","maxItems":64},"firstFailure":{"type":["object","null"]}}},"captureEvidence":{"type":"object","description":"Opt-in frozen source transactions with schema-1 executionEvidence: A/full, B/foveated and C/pre-upscale identity, capture/config epochs, exact physical regions and grids, CPU stages and delayed nonblocking D3D11/D3D12 timings, actual evaluation counts, logical bytes, mask bounds and producer outcomes. Per-region roi separates output-crop-local conservative guarded sampling support, exclusive output copies, dense inference context, optional retained spatial envelope and full output allocation capacity under the existing source identity."},"characterRendering":{"type":"object","properties":{"profiling":{"type":"object","properties":{"lastFeature18GpuSample":{"type":"object","properties":{"physicalPlanAvailable":{"type":"boolean"},"physicalPlanSource":{"enum":["frozen_execution","unavailable_capture_evidence_required"]},"submissionId":{"type":["string","null"]},"generation":{"type":["string","null"]},"physicalScopeMatchesExecution":{"type":"boolean"},"expectedPhysicalFeatureSlotMask":{"type":["integer","null"]},"expectedFeatureEvaluationCount":{"type":["integer","null"]},"missingExpectedPhysicalFeatureSlotMask":{"type":["integer","null"]},"unexpectedPhysicalFeatureSlotMask":{"type":["integer","null"]},"sampledScopeExpectedPhysicalSlotMask":{"type":["integer","null"]},"sampledScopeExpectedEvaluationCount":{"type":["integer","null"]}}}}},"settings":{"type":"object","properties":{"experimentalGpuMaskSupport":{"type":"boolean"},"experimentalCurrentContext":{"type":"boolean","description":"Requested session-only C context experiment; captured ROI contextPolicy reports actual application."}}},"runtime":{"type":"object","properties":{"currentSkinnedBounds":{"type":"integer","description":"Unique material meshes using current animated bone bounds in observationFrame."},"currentConservativeBounds":{"type":"integer","description":"Unique material meshes retaining world bounds, including morphing meshes and incomplete or over-budget skins."},"currentUnboundedGeometry":{"type":"integer","description":"Meshes without finite bounds; selected categories require full-eye coverage."},"currentBoundsBoneBudgetUsed":{"type":"integer","description":"Reserved bone work this observationFrame; at most 4096."},"earlyMaskBounds":{"type":"object","description":"GPU-only tile-support experiment telemetry. Production crop planning issues no reduction or readback; polls, pending, ready, used, geometryFallbacks and readbackBytes remain zero.","properties":{"queued":{"type":"integer","minimum":0},"ringBusy":{"type":"integer","minimum":0},"polls":{"type":"integer","minimum":0},"pending":{"type":"integer","minimum":0},"ready":{"type":"integer","minimum":0},"used":{"type":"integer","minimum":0},"geometryFallbacks":{"type":"integer","minimum":0},"failures":{"type":"integer","minimum":0},"lastQueuedFrame":{"type":"integer","minimum":0},"lastUsedSourceFrame":{"type":"integer","minimum":0},"readbackBytes":{"type":"integer","minimum":0},"lastPollCpuMs":{"type":"number","minimum":0},"lastFailure":{"type":"string"},"lastFailureResult":{"type":"integer"}}},"lastPreparationFailure":{"type":["object","null"],"properties":{"sequence":{"type":"integer"},"detail":{"type":"string"},"frame":{"type":"integer"},"sourceWorldFrame":{"type":"integer"},"capturedFrame":{"type":"integer"},"generation":{"type":"integer"},"featureSlot":{"type":"integer"},"eye":{"type":"integer"},"requestedCategories":{"type":"integer"},"capturedCategories":{"type":"integer"}}},"eyes":{"type":"array","description":"One mono view on SE/AE; left and right on VR.","minItems":1,"maxItems":2,"items":{"type":"object","properties":{"effectiveCategoryMask":{"type":"integer"},"effectiveCategoryStrengths":{"type":"array","items":{"type":"number"},"minItems":5,"maxItems":5},"actorEnclosureCountsAvailable":{"type":"boolean","description":"False for scene adjustments, which skip actor enclosure planning; actor enclosure counters are then not measured."},"maskRoiStatus":{"type":"string","description":"scene_full_region retains the configured scene region without actor enclosure planning. cpu_geometry_single uses animated material enclosures without GPU readback; cpu_proven_empty or disabled otherwise."},"maskRoiReadbackWaitMs":{"type":"number","description":"Zero: ROI planning does not wait for GPU readback."},"emptyProof":{"type":"string","enum":["none","cpu_selection","gpu_category_superset","diagnostic_zero"],"description":"NoWork proof kind bound to the prepared source/capture/policy; diagnostic forced-zero is not character visibility."},"sourceCaptureSerial":{"type":"integer","minimum":0,"description":"Identity of the immutable category capture used by this prepared eye."},"maskRoiGpuProvenEmpty":{"type":"boolean","description":"True only for a completed current category-superset empty proof, never pending or delayed diagnostic coverage."},"maskRoiCurrentFrame":{"type":"boolean","description":"True when mask planning uses the matching immutable source frame; scene adjustments use the configured full region and exact material masks still control output."},"maskRoiPlanningCpuMs":{"type":"number","description":"CPU time for single-ROI planning from captured geometry, with no GPU wait. Zero unless opt-in captureFrameEvidence measured this preparation."},"maskRoiReadbackFenceValue":{"type":"integer","minimum":0,"description":"Compatibility field, always zero: ROI planning does not issue a GPU readback."}}}}}}}}}},"resetAttempted":{"type":"boolean","description":"Full backend retirement was required. Switching between pre-DLSS reduced-resolution NR and post-DLSS full/foveated NR retires native ownership even when healthy; same-domain mask and A/B switches only reset history."},"resetSucceeded":{"type":["boolean","null"],"description":"Full backend retirement result, or null when no retirement was attempted. A false result does not reject disabling NR; unsafe resources remain retained."},"fovTaaDisabled":{"type":"boolean","description":"nr_configure selected the saved centre-only FOV profile because enabled NR forbids FOV + TAA."},"historyResetRequested":{"type":"boolean","description":"Temporal history was invalidated independently of backend retirement."}}},
+  "inputSchema":{
+    "type":"object",
+    "properties":{
+      "action":{"type":"string","description":"nr_status includes optional provider installation status and the full required DLL name and installation notice. NR/FOV mutations execute at a completed render-frame boundary under native ownership. Concurrent requests, unavailable context or expired unclaimed requests reject with mutationApplied=false; cancelled commands cannot run later. Claimed execution returns its actual result; transport timeouts remain ambiguous.","enum":["status","record","start","apply","stop","reset","probe_start","probe_stop","probe_record","probe_reset","nr_readiness","nr_status","nr_toggle","nr_configure","nr_cycle_modes","nr_reset","foveation_configure","foveation_cycle"]},
+      "method":{"type":"string","enum":["dlss","fsr"]},
+      "enabled":{"type":"boolean"},
+      "mode":{"oneOf":[{"type":"string","enum":["full_resolution","foveated","reduced_resolution"]},{"type":"integer","minimum":0,"maximum":2}],"description":"NR execution mode: full output resolution, shared FOV masks, or Renderscale NR before DLSS. Foveated requires the shared VR FOV mask; reduced_resolution covers the full eye unless renderscaleFov is true. Flat reduced_resolution covers the mono image. Character selection combines with every mode; runtime admission remains separate from menu configuration."},
+      "fovOnly":{"type":"boolean","description":"Saved optional FOV restriction for Full resolution only. Foveated always uses the mask; Renderscale NR has its independent renderscaleFov switch. Requires configured and enabled VR FOV; flat has no FOV mask. Full resolution shares mask geometry, offsets and feather."},
+      "renderscaleFov":{"type":"boolean","description":"Use the VR FOV mask for Renderscale NR before DLSS. Missing saved values and restored defaults follow enabled VR FOV; explicit saved choices are preserved. True crops NR and DLSS to the FOV region; false processes the full eye. Omitting this field in nr_configure preserves the current choice. Independent of fovOnly; ignored on flat."},
+      "expectedBuildId":{"type":"string","description":"Exact producer Build ID; mismatches reject the operation before execution."},
+      "insertionPoint":{"type":"string","enum":["upscaled_center","final_ldr_pre_ui"],"description":"Optional placement assertion: full_resolution and foveated require final_ldr_pre_ui; reduced_resolution requires upscaled_center. A conflicting request is rejected without changing settings."},
+      "qualityMode":{"type":"integer","minimum":0,"maximum":6},
+      "dlssPreset":{"type":"integer","minimum":0,"maximum":5},
+      "implementation":{"type":"string","enum":["per_eye_staged_commit","stereo_batched_staged_commit","per_eye_direct_commit","stereo_batched_direct_commit"]},
+      "matrixIndex":{"type":"integer","minimum":0,"maximum":3},
+      "preset":{"type":"integer","minimum":0,"maximum":4},
+      "intensity":{"type":"number","minimum":0,"maximum":2},
+      "localToneStrength":{"type":"number","minimum":0,"maximum":2},
+      "localStructureStrength":{"type":"number","minimum":0,"maximum":2},
+      "skinStructureStrength":{"type":"number","minimum":0,"maximum":2},
+      "style":{"type":"integer","minimum":0,"maximum":3},
+      "batchedStereo":{"type":"boolean"},
+      "directCommit":{"type":"boolean"},
+      "optimizedStereoPath":{"type":"boolean"},
+      "useAutoMask":{"type":"boolean"},
+      "uiCorrection":{"type":"boolean"},
+      "characterEnabled":{"type":"boolean","description":"Restrict NR to selected actors and materials, reusing the shared category strengths."},
+      "characterSceneStrengthsEnabled":{"type":"boolean","description":"Default-off material strength adjustments during ordinary scene NR in A/B/C. Shares actor groups and material strengths with Actors only. Unselected surfaces keep scene NR; selected strength zero restores original pixels. One shared model configuration, no per-category evaluations. Actors only takes precedence."},
+      "characterVisualIsolationEnabled":{"type":"boolean"},
+      "experimentalCurrentContext":{"type":"boolean","description":"Session-only, default-off C single-region current-context experiment; preserves spatial padding, allocation capacity, baseline historical envelope and conservative fallback. Padded contexts below 128 pixels in either dimension leave the original ROI unchanged. A/B retain their baseline context. Actual applied policy is captured in roi.contextPolicy."},
+      "experimentalGpuMaskSupport":{"type":"boolean","description":"Session-only, default-off current GPU support mask dispatcher. True enables the unqualified sparse candidate; false selects the reference rectangle dispatcher for matched tests; native ROI, context and output ownership are unchanged. Standalone toggles use normal character-settings admission."},
+      "characterFaces":{"type":"boolean"},
+      "characterSkin":{"type":"boolean"},
+      "characterHair":{"type":"boolean"},
+      "characterHumans":{"type":"boolean"},
+      "characterOtherHumanoids":{"type":"boolean"},
+      "characterCreatures":{"type":"boolean"},
+      "characterAnimals":{"type":"boolean"},
+      "characterOtherActors":{"type":"boolean"},
+      "characterArmor":{"type":"boolean"},
+      "characterWeapons":{"type":"boolean"},
+      "characterProviderBlending":{"type":"boolean"},
+      "characterFaceStrength":{"type":"number","minimum":0.0,"maximum":1.0},
+      "characterSkinStrength":{"type":"number","minimum":0.0,"maximum":1.0},
+      "characterHairStrength":{"type":"number","minimum":0.0,"maximum":1.0},
+      "characterArmorStrength":{"type":"number","minimum":0.0,"maximum":1.0},
+      "characterWeaponsStrength":{"type":"number","minimum":0.0,"maximum":1.0},
+      "characterMaximumDistanceMeters":{"type":"number","minimum":0.0,"maximum":30.0},
+      "characterAdaptiveRoiSelection":{"type":"boolean"},
+      "characterFocusScale":{"type":"number","minimum":0.25,"maximum":1.0},
+      "characterMinimumFacePixelSize":{"type":"integer","minimum":1,"maximum":4096},
+      "characterCropMode":{"type":"integer","minimum":0,"maximum":2,"description":"0 calibrated session comparison (qualified contexts only), 1 cropped (default, no cost profile required), 2 uncropped Actor-only comparison. Exact mask and route stay unchanged."},
+      "characterRoiMargin":{"type":"number","minimum":0.0,"maximum":1.0},
+      "singleSubrectScale":{"type":"number","minimum":0.25,"maximum":1.0},
+      "characterRoiHoldFrames":{"type":"integer","minimum":0,"maximum":30},
+      "characterDepthAwareFeather":{"type":"boolean"},
+      "characterVisibilityDepthTest":{"type":"boolean"},
+      "characterFeatherRadius":{"type":"integer","minimum":0,"maximum":4},
+      "characterFeatherDepthThreshold":{"type":"number","minimum":0.0,"maximum":0.05},
+      "characterDebugView":{"type":"string","enum":["off","character_mask","roi_rectangles","dlss5_output"]},
+      "characterMaskTestMode":{"type":"string","enum":["authored","force_zero","force_one","force_half","invert_authored","authored_without_visibility_depth"]},
+      "foveatedEnabled":{"type":"boolean"},
+      "peripheryTaaEnabled":{"type":"boolean","description":"Enabling FOV + TAA is rejected while NR is enabled; NR uses the saved centre-only profile."},
+      "fovOnlyCenterScale":{"type":"number","minimum":0.25,"maximum":1.0},
+      "peripheryTaaCenterScale":{"type":"number","minimum":0.25,"maximum":1.0},
+      "peripheryTaaOuterScale":{"type":"number","minimum":0.3,"maximum":1.0},
+      "centerHorizontalScale":{"type":"number","minimum":1.0,"maximum":2.0},
+      "leftEyeOffsetX":{"type":"number","minimum":-0.3,"maximum":0.3},
+      "leftEyeOffsetY":{"type":"number","minimum":-0.3,"maximum":0.3},
+      "rightEyeOffsetX":{"type":"number","minimum":-0.3,"maximum":0.3},
+      "rightEyeOffsetY":{"type":"number","minimum":-0.3,"maximum":0.3},
+      "peripheryTaaBlendFeather":{"type":"number","minimum":0.0,"maximum":0.1},
+      "neuralFinalLdrBlendFeather":{"type":"number","minimum":0.0,"maximum":0.1},
+      "maskVisualization":{"type":"boolean"},
+      "control":{"type":"string","enum":["master","periphery_taa","fov_only_center_scale","periphery_taa_center_scale","periphery_taa_outer_scale","center_horizontal_scale","left_eye_offset_x","left_eye_offset_y","right_eye_offset_x","right_eye_offset_y","periphery_taa_blend_feather","neural_final_ldr_blend_feather","mask_visualization"]},
+      "valueIndex":{"type":"integer","minimum":0,"maximum":2},
+      "expectedConfigurationFingerprint":{"type":"string","pattern":"^[0-9a-f]{32}$","description":"Reject nr_configure before mutation if requested full configuration changed."}
+    },
+    "required":["action"],
+    "allOf":[
+      {"if":{"properties":{"action":{"const":"nr_configure"}},"required":["action"]},"then":{"minProperties":2,"propertyNames":{"enum":["action","expectedBuildId","expectedConfigurationFingerprint","enabled","mode","fovOnly","renderscaleFov","insertionPoint","preset","intensity","localToneStrength","localStructureStrength","skinStructureStrength","style","batchedStereo","directCommit","implementation","optimizedStereoPath","useAutoMask","uiCorrection","singleSubrectScale","characterEnabled","characterSceneStrengthsEnabled","characterVisualIsolationEnabled","experimentalCurrentContext","experimentalGpuMaskSupport","characterFaces","characterSkin","characterHair","characterHumans","characterOtherHumanoids","characterCreatures","characterAnimals","characterOtherActors","characterArmor","characterWeapons","characterProviderBlending","characterFaceStrength","characterSkinStrength","characterHairStrength","characterArmorStrength","characterWeaponsStrength","characterMaximumDistanceMeters","characterAdaptiveRoiSelection","characterFocusScale","characterMinimumFacePixelSize","characterCropMode","characterRoiMargin","characterRoiHoldFrames","characterDepthAwareFeather","characterVisibilityDepthTest","characterFeatherRadius","characterFeatherDepthThreshold","characterDebugView","characterMaskTestMode"]}}},
+      {"if":{"properties":{"action":{"const":"foveation_configure"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId","foveatedEnabled","peripheryTaaEnabled","fovOnlyCenterScale","peripheryTaaCenterScale","peripheryTaaOuterScale","centerHorizontalScale","leftEyeOffsetX","leftEyeOffsetY","rightEyeOffsetX","rightEyeOffsetY","peripheryTaaBlendFeather","neuralFinalLdrBlendFeather","maskVisualization"]},"anyOf":[{"required":["foveatedEnabled"]},{"required":["peripheryTaaEnabled"]},{"required":["fovOnlyCenterScale"]},{"required":["peripheryTaaCenterScale"]},{"required":["peripheryTaaOuterScale"]},{"required":["centerHorizontalScale"]},{"required":["leftEyeOffsetX"]},{"required":["leftEyeOffsetY"]},{"required":["rightEyeOffsetX"]},{"required":["rightEyeOffsetY"]},{"required":["peripheryTaaBlendFeather"]},{"required":["neuralFinalLdrBlendFeather"]},{"required":["maskVisualization"]}]}},
+      {"if":{"properties":{"action":{"const":"foveation_cycle"}},"required":["action"]},"then":{"required":["control"],"propertyNames":{"enum":["action","expectedBuildId","control","valueIndex"]}}},
+      {"if":{"properties":{"action":{"const":"foveation_cycle"},"control":{"enum":["master","periphery_taa","center_horizontal_scale","mask_visualization"]}},"required":["action","control"]},"then":{"properties":{"valueIndex":{"maximum":1}}}},
+      {"if":{"properties":{"action":{"const":"nr_toggle"}},"required":["action"]},"then":{"propertyNames":{"enum":["action","expectedBuildId"]}}}
+    ]
+  }
+})nr";
+
+	json NeuralImplementationJson(bool a_batchedStereo, bool a_directCommit)
+	{
+		return {
+			{ "id", NeuralRendering::GetImplementationName(a_batchedStereo, a_directCommit) },
+			{ "displayName", NeuralRendering::GetImplementationDisplayName(a_batchedStereo, a_directCommit) },
+			{ "purpose", NeuralRendering::GetImplementationPurposeName(a_batchedStereo, a_directCommit) },
+			{ "purposeDescription", NeuralRendering::GetImplementationPurpose(a_batchedStereo, a_directCommit) },
+			{ "stereoSubmission", NeuralRendering::GetStereoSubmissionName(a_batchedStereo) },
+			{ "outputCommit", NeuralRendering::GetOutputCommitName(a_directCommit) },
+			{ "batchedStereo", a_batchedStereo },
+			{ "directCommit", a_directCommit },
+		};
+	}
+
+	json NeuralImplementationMatrixJson()
+	{
+		json matrix = json::array();
+		for (uint32_t index = 0;
+			index < NeuralRendering::kPipelineImplementations.size(); ++index) {
+			const auto implementation =
+				NeuralRendering::kPipelineImplementations[index];
+			auto lane = NeuralImplementationJson(
+				implementation.batchedStereo, implementation.directCommit);
+			lane["index"] = index;
+			matrix.push_back(std::move(lane));
+		}
+		return matrix;
+	}
+
+	json NeuralInsertionPointJson(NeuralRendering::InsertionPoint a_insertionPoint)
+	{
+		return {
+			{ "id", NeuralRendering::GetInsertionPointName(a_insertionPoint) },
+			{ "displayName", NeuralRendering::GetInsertionPointDisplayName(a_insertionPoint) },
+			{ "value", static_cast<uint32_t>(a_insertionPoint) },
+			{ "experimental", false },
+		};
+	}
+
+	json NeuralInsertionPointMatrixJson()
+	{
+		json matrix = json::array();
+		for (std::size_t index = 0;
+			index < NeuralRendering::kInsertionPointCount; ++index) {
+			matrix.push_back(NeuralInsertionPointJson(
+				static_cast<NeuralRendering::InsertionPoint>(index)));
+		}
+		return matrix;
+	}
+
+	json NeuralInsertionPointPerformanceJson(
+		const NeuralRendering::RendererPerformanceTelemetry& a_performance)
+	{
+		json telemetry = json::array();
+		for (std::size_t index = 0;
+			index < NeuralRendering::kInsertionPointCount; ++index) {
+			const auto insertionPoint =
+				static_cast<NeuralRendering::InsertionPoint>(index);
+			telemetry.push_back({
+				{ "id", NeuralRendering::GetInsertionPointName(insertionPoint) },
+				{ "value", index },
+				{ "featureGpuSamples", a_performance.featureGpuSamplesByInsertionPoint[index] },
+				{ "featureGpuMicroseconds", a_performance.featureGpuMicrosecondsByInsertionPoint[index] },
+			});
+		}
+		return telemetry;
+	}
+
+	enum class FoveationCycleControl : uint8_t
+	{
+		Master,
+		PeripheryTAA,
+		FovOnlyCenterScale,
+		PeripheryTAACenterScale,
+		PeripheryTAAOuterScale,
+		CenterHorizontalScale,
+		LeftEyeOffsetX,
+		LeftEyeOffsetY,
+		RightEyeOffsetX,
+		RightEyeOffsetY,
+		PeripheryTAABlendFeather,
+		NeuralFinalLdrBlendFeather,
+		MaskVisualization,
+	};
+
+	struct FoveationControlDescriptor
+	{
+		FoveationCycleControl control;
+		std::string_view name;
+	};
+
+	constexpr std::array kFoveationControlDescriptors{
+		FoveationControlDescriptor{ FoveationCycleControl::Master, "master" },
+		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAA, "periphery_taa" },
+		FoveationControlDescriptor{ FoveationCycleControl::FovOnlyCenterScale, "fov_only_center_scale" },
+		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAACenterScale, "periphery_taa_center_scale" },
+		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAAOuterScale, "periphery_taa_outer_scale" },
+		FoveationControlDescriptor{ FoveationCycleControl::CenterHorizontalScale, "center_horizontal_scale" },
+		FoveationControlDescriptor{ FoveationCycleControl::LeftEyeOffsetX, "left_eye_offset_x" },
+		FoveationControlDescriptor{ FoveationCycleControl::LeftEyeOffsetY, "left_eye_offset_y" },
+		FoveationControlDescriptor{ FoveationCycleControl::RightEyeOffsetX, "right_eye_offset_x" },
+		FoveationControlDescriptor{ FoveationCycleControl::RightEyeOffsetY, "right_eye_offset_y" },
+		FoveationControlDescriptor{ FoveationCycleControl::PeripheryTAABlendFeather, "periphery_taa_blend_feather" },
+		FoveationControlDescriptor{ FoveationCycleControl::NeuralFinalLdrBlendFeather, "neural_final_ldr_blend_feather" },
+		FoveationControlDescriptor{ FoveationCycleControl::MaskVisualization, "mask_visualization" },
+	};
+
+	constexpr std::array<float, 3> kCenterScaleCycleValues{
+		FoveatedCommon::kCenterScaleMin,
+		0.60f,
+		FoveatedCommon::kCenterScaleMax,
+	};
+	constexpr std::array<float, 2> kHorizontalScaleCycleValues{
+		FoveatedCommon::kCenterHorizontalScaleMin,
+		FoveatedCommon::kCenterHorizontalScaleMax,
+	};
+	constexpr std::array<float, 3> kManualOffsetCycleValues{
+		Upscaling::kFoveatedManualOffsetMin,
+		0.0f,
+		Upscaling::kFoveatedManualOffsetMax,
+	};
+	constexpr std::array<float, 3> kBlendFeatherCycleValues{
+		Upscaling::kFoveatedBlendFeatherMin,
+		0.05f,
+		Upscaling::kFoveatedBlendFeatherMax,
+	};
+	constexpr double kCenterScaleRequestMin = 0.25;
+	constexpr double kCenterScaleRequestMax = 1.0;
+	constexpr double kCenterHorizontalScaleRequestMin = 1.0;
+	constexpr double kCenterHorizontalScaleRequestMax = 2.0;
+	constexpr double kManualOffsetRequestMin = -0.3;
+	constexpr double kManualOffsetRequestMax = 0.3;
+	constexpr double kBlendFeatherRequestMin = 0.0;
+	constexpr double kBlendFeatherRequestMax = 0.1;
+	constexpr double kPeripheryTAAOuterScaleRequestMin = 0.3;
+	constexpr double kPeripheryTAAOuterScaleRequestMax = 1.0;
+	constexpr bool RequestBoundMatchesRuntime(double a_request, float a_runtime)
+	{
+		const auto difference = a_request - static_cast<double>(a_runtime);
+		constexpr auto tolerance =
+			static_cast<double>(std::numeric_limits<float>::epsilon());
+		return difference >= -tolerance && difference <= tolerance;
+	}
+
+	static_assert(RequestBoundMatchesRuntime(kCenterScaleRequestMin,
+		FoveatedCommon::kCenterScaleMin));
+	static_assert(RequestBoundMatchesRuntime(kCenterScaleRequestMax,
+		FoveatedCommon::kCenterScaleMax));
+	static_assert(RequestBoundMatchesRuntime(kCenterHorizontalScaleRequestMin,
+		FoveatedCommon::kCenterHorizontalScaleMin));
+	static_assert(RequestBoundMatchesRuntime(kCenterHorizontalScaleRequestMax,
+		FoveatedCommon::kCenterHorizontalScaleMax));
+	static_assert(RequestBoundMatchesRuntime(kManualOffsetRequestMin,
+		Upscaling::kFoveatedManualOffsetMin));
+	static_assert(RequestBoundMatchesRuntime(kManualOffsetRequestMax,
+		Upscaling::kFoveatedManualOffsetMax));
+	static_assert(RequestBoundMatchesRuntime(kBlendFeatherRequestMin,
+		Upscaling::kFoveatedBlendFeatherMin));
+	static_assert(RequestBoundMatchesRuntime(kBlendFeatherRequestMax,
+		Upscaling::kFoveatedBlendFeatherMax));
+	static_assert(RequestBoundMatchesRuntime(kPeripheryTAAOuterScaleRequestMin,
+		Upscaling::kPeripheryTAAOuterScaleMin));
+	static_assert(RequestBoundMatchesRuntime(kPeripheryTAAOuterScaleRequestMax,
+		Upscaling::kPeripheryTAAOuterScaleMax));
+
+	const char* GetFoveationCycleControlName(FoveationCycleControl a_control)
+	{
+		for (const auto& descriptor : kFoveationControlDescriptors) {
+			if (descriptor.control == a_control)
+				return descriptor.name.data();
+		}
+		return "unknown";
+	}
+
+	std::optional<FoveationCycleControl> ParseFoveationCycleControl(
+		const std::string& a_name)
+	{
+		for (const auto& descriptor : kFoveationControlDescriptors) {
+			if (a_name == descriptor.name)
+				return descriptor.control;
+		}
+		return std::nullopt;
+	}
+
+	template <class T>
+	json FoveatedPointJson(const T& a_point)
+	{
+		return { { "x", a_point.x }, { "y", a_point.y } };
+	}
+
+	void AppendDistinctFoveationCycleValue(
+		std::vector<float>& a_values,
+		float a_value)
+	{
+		if (a_values.empty() ||
+			std::abs(a_values.back() - a_value) > 1.0e-6f) {
+			a_values.push_back(a_value);
+		}
+	}
+
+	std::vector<float> GetPeripheryTAAOuterScaleCycleValues(
+		const Upscaling::Settings& a_settings)
+	{
+		const float requestedCenter =
+			std::isfinite(a_settings.periphery_taa_center_area) ?
+				a_settings.periphery_taa_center_area :
+				Upscaling::kPeripheryTAAOuterScaleMin;
+		const float minimum = std::clamp(
+			requestedCenter,
+			Upscaling::kPeripheryTAAOuterScaleMin,
+			Upscaling::kPeripheryTAAOuterScaleMax);
+		std::vector<float> values;
+		values.reserve(3u);
+		AppendDistinctFoveationCycleValue(values, minimum);
+		AppendDistinctFoveationCycleValue(
+			values,
+			minimum +
+				(Upscaling::kPeripheryTAAOuterScaleMax - minimum) * 0.5f);
+		AppendDistinctFoveationCycleValue(
+			values, Upscaling::kPeripheryTAAOuterScaleMax);
+		return values;
+	}
+
+	json FoveationCycleMatrixJson(const Upscaling::Settings& a_settings)
+	{
+		return json::array({
+			{ { "control", "master" }, { "values", json::array({ false, true }) } },
+			{ { "control", "periphery_taa" }, { "values", json::array({ false, true }) } },
+			{ { "control", "fov_only_center_scale" }, { "values", kCenterScaleCycleValues } },
+			{ { "control", "periphery_taa_center_scale" }, { "values", kCenterScaleCycleValues } },
+			{ { "control", "periphery_taa_outer_scale" }, { "values", GetPeripheryTAAOuterScaleCycleValues(a_settings) } },
+			{ { "control", "center_horizontal_scale" }, { "values", kHorizontalScaleCycleValues } },
+			{ { "control", "left_eye_offset_x" }, { "values", kManualOffsetCycleValues } },
+			{ { "control", "left_eye_offset_y" }, { "values", kManualOffsetCycleValues } },
+			{ { "control", "right_eye_offset_x" }, { "values", kManualOffsetCycleValues } },
+			{ { "control", "right_eye_offset_y" }, { "values", kManualOffsetCycleValues } },
+			{ { "control", "periphery_taa_blend_feather" }, { "values", kBlendFeatherCycleValues } },
+			{ { "control", "neural_final_ldr_blend_feather" }, { "values", kBlendFeatherCycleValues } },
+			{ { "control", "mask_visualization" }, { "values", json::array({ false, true }) } },
+		});
+	}
+
+	const char* GetFoveatedModeId(Upscaling::FoveatedUpscalingMode a_mode)
+	{
+		switch (a_mode) {
+		case Upscaling::FoveatedUpscalingMode::CenterOnly:
+			return "fov_only";
+		case Upscaling::FoveatedUpscalingMode::PeripheralTAA:
+			return "periphery_taa";
+		case Upscaling::FoveatedUpscalingMode::Disabled:
+		default:
+			return "disabled";
+		}
+	}
+
+	json FoveatedRectJson(const FoveatedRegionPlan::Rect& a_rect)
+	{
+		return {
+			{ "valid", a_rect.IsValid() },
+			{ "minX", a_rect.minX },
+			{ "minY", a_rect.minY },
+			{ "maxX", a_rect.maxX },
+			{ "maxY", a_rect.maxY },
+			{ "width", a_rect.Width() },
+			{ "height", a_rect.Height() },
+		};
+	}
+
+	json FoveatedPlanEyeJson(
+		const FoveatedRegionPlan::Eye& a_eye,
+		uint32_t a_eyeIndex)
+	{
+		return {
+			{ "eye", a_eyeIndex },
+			{ "centerOffset", FoveatedPointJson(a_eye.centerOffset) },
+			{ "pinholeOffset", FoveatedPointJson(a_eye.pinholeOffset) },
+			{ "output", FoveatedRectJson(a_eye.output) },
+			{ "input", FoveatedRectJson(a_eye.input) },
+			{ "encodeInput", FoveatedRectJson(a_eye.encodeInput) },
+			{ "centerInteriorOutput", FoveatedRectJson(a_eye.centerInteriorOutput) },
+			{ "centerUnderlayHoleOutput", FoveatedRectJson(a_eye.centerUnderlayHoleOutput) },
+			{ "peripheryTaaOuterOutput", FoveatedRectJson(a_eye.peripheryTAAOuterOutput) },
+			{ "peripheryTaaHistoryOutput", FoveatedRectJson(a_eye.peripheryTAAHistoryOutput) },
+			{ "peripheryTaaOuterInput", FoveatedRectJson(a_eye.peripheryTAAOuterInput) },
+		};
+	}
+
+	float ClampFoveationFeatherForStatus(float a_value)
+	{
+		return std::clamp(
+			std::isfinite(a_value) ? a_value : FoveatedCommon::kCenterFeather,
+			Upscaling::kFoveatedBlendFeatherMin,
+			Upscaling::kFoveatedBlendFeatherMax);
+	}
+
+	bool NearlyEqualFoveationValue(float a_left, float a_right)
+	{
+		return std::abs(a_left - a_right) <= 0.00001f;
+	}
+
+	bool FoveatedPlanMatchesSettings(
+		const Upscaling& a_upscaling,
+		const Upscaling::RuntimeResolutionPlan& a_resolutionPlan,
+		const Upscaling::ActiveUpscalingFoveatedProfile& a_profile,
+		bool a_refreshPending,
+		float a_expectedSupportFeather)
+	{
+		if (a_refreshPending ||
+			a_resolutionPlan.upscaleMethod != a_upscaling.GetRuntimeUpscaleMethod() ||
+			a_resolutionPlan.foveatedActive != a_profile.available) {
+			return false;
+		}
+
+		const auto& plan = a_resolutionPlan.foveatedRegion;
+		if (!a_profile.available)
+			return !plan.IsValid();
+		if (!plan.IsValid() ||
+			a_resolutionPlan.peripheryTAAActive !=
+				a_profile.usesPeripheryTAAOuterMask ||
+			!NearlyEqualFoveationValue(plan.centerScale, a_profile.vendorCenterScale) ||
+			!NearlyEqualFoveationValue(
+				plan.centerHorizontalScale, a_profile.centerHorizontalScale) ||
+			!NearlyEqualFoveationValue(
+				plan.centerFeather, a_expectedSupportFeather)) {
+			return false;
+		}
+
+		const float expectedOuterScale =
+			a_profile.usesPeripheryTAAOuterMask ?
+				a_profile.sharedVisibleScale :
+				0.0f;
+		if (!NearlyEqualFoveationValue(
+				plan.peripheryTAAOuterScale, expectedOuterScale)) {
+			return false;
+		}
+
+		const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
+		for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+			if (!NearlyEqualFoveationValue(
+					plan.eyes[eye].centerOffset.x,
+					a_profile.centerOffsets[eye].x) ||
+				!NearlyEqualFoveationValue(
+					plan.eyes[eye].centerOffset.y,
+					a_profile.centerOffsets[eye].y)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	json FoveatedPlanJson(
+		const Upscaling& a_upscaling,
+		const Upscaling::ActiveUpscalingFoveatedProfile& a_profile)
+	{
+		const auto& resolutionPlan = a_upscaling.GetRuntimeResolutionPlan();
+		const auto& plan = resolutionPlan.foveatedRegion;
+		const uint32_t observedFrame =
+			globals::state ? globals::state->frameCount : 0u;
+		const uint32_t latchedFrame =
+			a_upscaling.GetRuntimeResolutionPlanFrame();
+		const uint32_t currentWorkFrame =
+			a_upscaling.GetRuntimeResolutionWorkFrame();
+		const bool refreshPending =
+			currentWorkFrame == std::numeric_limits<uint32_t>::max() ||
+			latchedFrame != currentWorkFrame;
+		const bool peripheryPathActive = a_upscaling.IsPeripheryTAAPathActive(
+			a_upscaling.GetRuntimeUpscaleMethod());
+		const float normalBlendFeather = ClampFoveationFeatherForStatus(
+			peripheryPathActive ?
+				a_upscaling.settings.periphery_taa_center_blend_feather :
+				FoveatedCommon::kCenterFeather);
+		const bool finalLdrNeuralSupportRequested =
+			a_upscaling.GetRuntimeUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS &&
+			a_upscaling.settings.neuralRenderingEnabled &&
+			!a_upscaling.settings.foveatedPeripheryMaskVisualization &&
+			a_upscaling.GetNeuralRenderingInsertionPoint() ==
+				NeuralRendering::InsertionPoint::FinalLdrPreUi;
+		const float finalLdrBlendFeather = ClampFoveationFeatherForStatus(
+			a_upscaling.settings.neuralRenderingBlendFeather);
+		const float expectedSupportFeather = finalLdrNeuralSupportRequested ?
+		                                         std::max(normalBlendFeather, finalLdrBlendFeather) :
+		                                         normalBlendFeather;
+		const bool finalLdrNeuralSupportLatched =
+			!refreshPending && a_profile.available &&
+			resolutionPlan.foveatedActive && plan.IsValid() &&
+			finalLdrNeuralSupportRequested &&
+			NearlyEqualFoveationValue(
+				plan.centerFeather, expectedSupportFeather);
+
+		json eyes = json::array();
+		for (uint32_t eye = 0; eye < 2u; ++eye) {
+			eyes.push_back(FoveatedPlanEyeJson(
+				plan.eyes[eye],
+				eye));
+		}
+
+		json latchedFrameJson = nullptr;
+		if (latchedFrame != std::numeric_limits<uint32_t>::max())
+			latchedFrameJson = latchedFrame;
+		json currentWorkFrameJson = nullptr;
+		if (currentWorkFrame != std::numeric_limits<uint32_t>::max())
+			currentWorkFrameJson = currentWorkFrame;
+		json effectiveNotBeforeFrame = nullptr;
+		json measurementSafeFromFrame = nullptr;
+		if (refreshPending) {
+			effectiveNotBeforeFrame = observedFrame;
+			measurementSafeFromFrame = observedFrame ==
+			                                   std::numeric_limits<uint32_t>::max() ?
+			                               observedFrame :
+			                               observedFrame + 1u;
+		}
+
+		return {
+			{ "observedFrame", observedFrame },
+			{ "latchedFrame", std::move(latchedFrameJson) },
+			{ "currentWorkFrame", std::move(currentWorkFrameJson) },
+			{ "refreshPending", refreshPending },
+			{ "effectiveNotBeforeFrame", std::move(effectiveNotBeforeFrame) },
+			{ "measurementSafeFromFrame", std::move(measurementSafeFromFrame) },
+			{ "matchesRequestedSettings", FoveatedPlanMatchesSettings(
+											  a_upscaling,
+											  resolutionPlan,
+											  a_profile,
+											  refreshPending,
+											  expectedSupportFeather) },
+			{ "upscaleMethod", GetUpscaleMethodName(resolutionPlan.upscaleMethod) },
+			{ "foveatedActive", resolutionPlan.foveatedActive },
+			{ "peripheryTaaActive", resolutionPlan.peripheryTAAActive },
+			{ "valid", plan.IsValid() },
+			{ "inputWidthPerEye", plan.inputWidthPerEye },
+			{ "inputHeight", plan.inputHeight },
+			{ "outputWidthPerEye", plan.outputWidthPerEye },
+			{ "outputHeight", plan.outputHeight },
+			{ "centerScale", plan.centerScale },
+			{ "normalBlendFeather", normalBlendFeather },
+			{ "finalLdrNeuralSupportRequested", finalLdrNeuralSupportRequested },
+			{ "finalLdrNeuralSupportLatched", finalLdrNeuralSupportLatched },
+			{ "finalLdrBlendFeather", finalLdrBlendFeather },
+			{ "expectedSupportFeather", expectedSupportFeather },
+			{ "effectiveSupportFeather", plan.centerFeather },
+			{ "centerHorizontalScale", plan.centerHorizontalScale },
+			{ "peripheryTaaOuterScale", plan.peripheryTAAOuterScale },
+			{ "eyes", std::move(eyes) },
+		};
+	}
+
+	json FoveationStatusJson(const Upscaling& a_upscaling)
+	{
+		const auto& settings = a_upscaling.settings;
+		const auto activeProfile = a_upscaling.GetActiveUpscalingFoveatedProfile();
+		json activeOffsets = json::array();
+		for (const auto& offset : activeProfile.centerOffsets) {
+			activeOffsets.push_back({ { "x", offset.x }, { "y", offset.y } });
+		}
+
+		return {
+			{ "settings", {
+							  { "foveatedEnabled", settings.foveatedVendorDispatch },
+							  { "peripheryTaaEnabled", settings.periphery_taa_enable },
+							  { "fovOnlyCenterScale", settings.foveatedCenterArea },
+							  { "peripheryTaaCenterScale", settings.periphery_taa_center_area },
+							  { "peripheryTaaOuterScale", settings.periphery_taa_outer_scale },
+							  { "centerHorizontalScale", settings.foveatedCenterHorizontalScale },
+							  { "leftEyeOffsetX", settings.foveatedLeftEyeMaskOffsetX },
+							  { "leftEyeOffsetY", settings.foveatedLeftEyeMaskOffsetY },
+							  { "rightEyeOffsetX", settings.foveatedRightEyeMaskOffsetX },
+							  { "rightEyeOffsetY", settings.foveatedRightEyeMaskOffsetY },
+							  { "peripheryTaaBlendFeather", settings.periphery_taa_center_blend_feather },
+							  { "neuralFinalLdrBlendFeather", settings.neuralRenderingBlendFeather },
+							  { "maskVisualization", settings.foveatedPeripheryMaskVisualization },
+						  } },
+			{ "active", {
+							{ "available", activeProfile.available },
+							{ "mode", Upscaling::GetFoveatedUpscalingModeName(activeProfile.mode) },
+							{ "modeId", GetFoveatedModeId(activeProfile.mode) },
+							{ "displayName", Upscaling::GetFoveatedUpscalingModeName(activeProfile.mode) },
+							{ "modeValue", static_cast<uint32_t>(activeProfile.mode) },
+							{ "usesPeripheryTaa", activeProfile.usesPeripheryTAAOuterMask },
+							{ "vendorCenterScale", activeProfile.vendorCenterScale },
+							{ "sharedVisibleScale", activeProfile.sharedVisibleScale },
+							{ "centerHorizontalScale", activeProfile.centerHorizontalScale },
+							{ "centerOffsets", std::move(activeOffsets) },
+							{ "maskVisualization", settings.foveatedPeripheryMaskVisualization },
+							{ "neuralSuppressedByMaskVisualization", settings.neuralRenderingEnabled && settings.foveatedPeripheryMaskVisualization },
+						} },
+			{ "ranges", {
+							{ "centerScale", { { "minimum", FoveatedCommon::kCenterScaleMin }, { "maximum", FoveatedCommon::kCenterScaleMax } } },
+							{ "centerHorizontalScale", { { "minimum", FoveatedCommon::kCenterHorizontalScaleMin }, { "maximum", FoveatedCommon::kCenterHorizontalScaleMax } } },
+							{ "manualOffset", { { "minimum", Upscaling::kFoveatedManualOffsetMin }, { "maximum", Upscaling::kFoveatedManualOffsetMax } } },
+							{ "blendFeather", { { "minimum", Upscaling::kFoveatedBlendFeatherMin }, { "maximum", Upscaling::kFoveatedBlendFeatherMax } } },
+							{ "peripheryTaaOuterScale", { { "minimum", Upscaling::kPeripheryTAAOuterScaleMin }, { "maximum", Upscaling::kPeripheryTAAOuterScaleMax } } },
+						} },
+			{ "plan", FoveatedPlanJson(a_upscaling, activeProfile) },
+			{ "cycleMatrix", FoveationCycleMatrixJson(settings) },
+		};
+	}
+
+	const char* GetCharacterDebugViewName(NeuralRendering::CharacterDebugView a_view)
+	{
+		switch (a_view) {
+		case NeuralRendering::CharacterDebugView::Off:
+			return "off";
+		case NeuralRendering::CharacterDebugView::CharacterMask:
+			return "character_mask";
+		case NeuralRendering::CharacterDebugView::RoiRectangles:
+			return "roi_rectangles";
+		case NeuralRendering::CharacterDebugView::Dlss5Output:
+			return "dlss5_output";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* GetCharacterMaskTestModeName(
+		NeuralRendering::CharacterMaskTestMode a_mode)
+	{
+		switch (a_mode) {
+		case NeuralRendering::CharacterMaskTestMode::Authored:
+			return "authored";
+		case NeuralRendering::CharacterMaskTestMode::ForceZero:
+			return "force_zero";
+		case NeuralRendering::CharacterMaskTestMode::ForceOne:
+			return "force_one";
+		case NeuralRendering::CharacterMaskTestMode::ForceHalf:
+			return "force_half";
+		case NeuralRendering::CharacterMaskTestMode::InvertAuthored:
+			return "invert_authored";
+		case NeuralRendering::CharacterMaskTestMode::AuthoredWithoutVisibilityDepth:
+			return "authored_without_visibility_depth";
+		default:
+			return "unknown";
+		}
+	}
+
+	json ProfileTimerJson(std::string_view a_name)
+	{
+		if (!globals::profiler) {
+			return {
+				{ "available", false },
+				{ "reason", "profiler_unavailable" },
+			};
+		}
+
+		const auto& results = globals::profiler->GetResults();
+		const auto result = std::ranges::find_if(
+			results, [a_name](const Profiler::TimerResult& a_result) {
+				return a_result.name == a_name;
+			});
+		if (result == results.end()) {
+			return {
+				{ "available", false },
+				{ "reason", "timer_not_observed" },
+			};
+		}
+
+		return {
+			{ "available", true },
+			{ "valid", result->valid },
+			{ "activeGpu", result->activeGpu },
+			{ "activeCpu", result->activeCpu },
+			{ "gpuMilliseconds", result->hasGpu ? json(result->gpuTimeMs) : json(nullptr) },
+			{ "gpuAverageMilliseconds", result->hasGpu ? json(result->avgMs) : json(nullptr) },
+			{ "gpuP95Milliseconds", result->hasGpu ? json(result->p95Ms) : json(nullptr) },
+			{ "cpuMilliseconds", result->hasCpu ? json(result->cpuTimeMs) : json(nullptr) },
+			{ "cpuAverageMilliseconds", result->hasCpu ? json(result->cpuAvgMs) : json(nullptr) },
+			{ "cpuP95Milliseconds", result->hasCpu ? json(result->cpuP95Ms) : json(nullptr) },
+		};
+	}
+
+	json CharacterRenderingStatusJson(const Upscaling& a_upscaling)
+	{
+		const auto namedCounts = [](const auto& keys, const auto& values) {
+			json result = json::object();
+			for (std::size_t i = 0; i < keys.size(); ++i)
+				result[std::string(keys[i])] = values[i];
+			return result;
+		};
+		const auto& settings = a_upscaling.settings;
+		const auto focusMask = a_upscaling.GetCharacterFocusMask();
+		const auto snapshot =
+			NeuralRendering::CharacterRendering::Instance().GetSnapshot();
+		const auto rendererSnapshot =
+			NeuralRendering::Renderer::Instance().GetSnapshot();
+		const auto routeSnapshots = a_upscaling.GetNeuralStereoRouteSnapshot();
+		const auto debugView = NeuralRendering::ClampCharacterDebugView(
+			settings.neuralCharacterDebugView);
+		const auto maskTestMode = NeuralRendering::ClampCharacterMaskTestMode(
+			settings.neuralCharacterMaskTestMode);
+
+		json eyes = json::array();
+		std::uint32_t currentPreparedCharacterSlotMask = 0;
+		std::uint32_t currentEvaluationRequiredCharacterSlotMask = 0;
+		std::uint32_t currentSuccessfulCharacterSlotMask = 0;
+		std::uint32_t currentAbortedCharacterSlotMask = 0;
+		const std::uint32_t observedFrame =
+			globals::state ? globals::state->frameCount : 0u;
+		for (std::size_t eyeIndex = 0; eyeIndex < (globals::game::isVR ? 2u : 1u); ++eyeIndex) {
+			const auto& eye = snapshot.eyes[eyeIndex];
+			if (eye.maskPrepared && eye.frame == observedFrame &&
+				eye.featureSlot < 32u) {
+				currentPreparedCharacterSlotMask |= 1u << eye.featureSlot;
+			}
+			const auto coveragePreparation = std::ranges::find_if(
+				snapshot.preparedFrames, [&](const auto& a_prepared) {
+					return eye.maskCoverageReady &&
+				           a_prepared.frame == eye.frame;
+				});
+			const bool coverageMatchesPreparation =
+				coveragePreparation != snapshot.preparedFrames.end() &&
+				eye.maskCoverageFeatureSlot < coveragePreparation->widths.size() &&
+				(coveragePreparation->preparedSlotMask &
+					(1u << eye.maskCoverageFeatureSlot)) != 0u &&
+				coveragePreparation->sourceWorldFrames[eye.maskCoverageFeatureSlot] ==
+					eye.maskCoverageFrame &&
+				coveragePreparation->contentSerials[eye.maskCoverageFeatureSlot] != 0 &&
+				coveragePreparation->contentSerials[eye.maskCoverageFeatureSlot] ==
+					eye.maskCoverageContentSerial &&
+				coveragePreparation->widths[eye.maskCoverageFeatureSlot] ==
+					eye.maskCoverageWidth &&
+				coveragePreparation->heights[eye.maskCoverageFeatureSlot] ==
+					eye.maskCoverageHeight;
+			json regions = json::array();
+			for (const auto& region : eye.regions) {
+				regions.push_back({
+					{ "minX", region.minX },
+					{ "minY", region.minY },
+					{ "maxX", region.maxX },
+					{ "maxY", region.maxY },
+					{ "width", region.maxX > region.minX ? region.maxX - region.minX : 0u },
+					{ "height", region.maxY > region.minY ? region.maxY - region.minY : 0u },
+					{ "pixels", region.Area() },
+				});
+			}
+			const auto evaluationPixels =
+				static_cast<std::uint64_t>(eye.evaluationWidth) *
+				eye.evaluationHeight;
+			eyes.push_back({
+				{ "eye", eyeIndex },
+				{ "frame", eye.frame },
+				{ "sourceWorldFrame", eye.sourceWorldFrame },
+				{ "contentSerial", eye.contentSerial },
+				{ "featureSlot", eye.featureSlot },
+				{ "evaluationWidth", eye.evaluationWidth },
+				{ "evaluationHeight", eye.evaluationHeight },
+				{ "evaluationPixels", evaluationPixels },
+				{ "eligibleFaceActors", eye.visibleFaces },
+				{ "actorEnclosureCountsAvailable", eye.actorEnclosureCountsAvailable },
+				{ "eligibleCharacterActors", eye.visibleCharacterRegions },
+				{ "selectedCharacterActors", eye.selectedCharacterRegions },
+				{ "adaptivelyCulledCharacterActors", eye.adaptivelyCulledCharacterRegions },
+				{ "mergedEligibilityRegions", eye.mergedRegions },
+				{ "fullEyeEligibilityFallback", eye.fullEyeEligibilityFallback },
+				{ "projectionDiagnostics", {
+											   { "uncertainActors", eye.projectionUncertainActors },
+											   { "clippedGeometry", eye.projectionClippedGeometry },
+											   { "fallbackActorFormId", eye.projectionFallbackActorFormId != 0 ? json(eye.projectionFallbackActorFormId) : json(nullptr) },
+											   { "fallbackCategory", static_cast<std::uint32_t>(eye.projectionFallbackCategory) },
+											   { "fallbackReason", eye.projectionFallbackActorFormId != 0 ? json(NeuralRendering::CharacterProjectionReasonName(eye.projectionFallbackReason)) : json(nullptr) },
+										   } },
+				{ "eligibilityPixels", eye.roiPixels },
+				{ "eligibilityCoveragePercent", eye.roiCoveragePercent },
+				{ "computeSubrect", {
+										{ "baseX", eye.computeSubrect.baseX },
+										{ "baseY", eye.computeSubrect.baseY },
+										{ "width", eye.computeSubrect.width },
+										{ "height", eye.computeSubrect.height },
+										{ "valid", eye.computeSubrect.IsValid() },
+									} },
+				{ "computeSubrectPixels", eye.computeSubrectPixels },
+				{ "computeSubrectCoveragePercent", eye.computeSubrectCoveragePercent },
+				{ "maskRoiStatus", eye.maskRoiStatus },
+				{ "cropDecision", eye.cropDecision },
+				{ "cropQualificationKey", std::to_string(eye.cropQualificationKey) },
+				{ "cropCandidate", { { "x", eye.cropCandidate.baseX }, { "y", eye.cropCandidate.baseY }, { "width", eye.cropCandidate.width }, { "height", eye.cropCandidate.height } } },
+				{ "maskRoiCurrentFrame", eye.maskRoiCurrentFrame },
+				{ "maskRoiGpuProvenEmpty", eye.maskRoiGpuProvenEmpty },
+				{ "maskRoiOccupiedTiles", eye.maskRoiOccupiedTiles },
+				{ "maskRoiRequiredSubrect", {
+												{ "baseX", eye.maskRoiRequiredSubrect.baseX },
+												{ "baseY", eye.maskRoiRequiredSubrect.baseY },
+												{ "width", eye.maskRoiRequiredSubrect.width },
+												{ "height", eye.maskRoiRequiredSubrect.height },
+												{ "valid", eye.maskRoiRequiredSubrect.IsValid() },
+											} },
+				{ "maskRoiReadbackWaitMs", eye.maskRoiReadbackWaitMs },
+				{ "maskRoiPlanningCpuMs", eye.maskRoiPlanningCpuMs },
+				{ "maskRoiReadbackFenceValue", eye.maskRoiReadbackFenceValue },
+				{ "effectiveCategoryMask", eye.effectiveCategoryMask },
+				{ "effectiveCategoryStrengths", eye.effectiveCategoryStrengths },
+				{ "maskRoiLastFailure", eye.maskRoiLastFailure },
+				{ "maskRoiLastFailureResult", eye.maskRoiLastFailureResult },
+				{ "maskRoiLastFailureFrame", eye.maskRoiLastFailureFrame != UINT32_MAX ? json(eye.maskRoiLastFailureFrame) : json(nullptr) },
+				{ "maskRoiLastFailureWaitMs", eye.maskRoiLastFailureWaitMs },
+				{ "maskRoiReadbackAttempts", eye.maskRoiReadbackAttempts },
+				{ "maskRoiReadbackSuccesses", eye.maskRoiReadbackSuccesses },
+				{ "maskRoiReadbackFallbacks", eye.maskRoiReadbackFallbacks },
+				{ "maskPixels", eye.maskCoverageReady ? json(eye.maskPixels) : json(nullptr) },
+				{ "maskCoveragePercent", eye.maskCoverageReady ? json(eye.maskCoveragePercent) : json(nullptr) },
+				{ "maskCoverageSampleFrame", eye.maskCoverageReady ? json(eye.maskCoverageFrame) : json(nullptr) },
+				{ "maskCoverageSampleFeatureSlot", eye.maskCoverageReady ? json(eye.maskCoverageFeatureSlot) : json(nullptr) },
+				{ "maskCoverageSampleWidth", eye.maskCoverageReady ? json(eye.maskCoverageWidth) : json(nullptr) },
+				{ "maskCoverageSampleHeight", eye.maskCoverageReady ? json(eye.maskCoverageHeight) : json(nullptr) },
+				{ "maskCoverageSampleContentSerial", eye.maskCoverageReady ? json(eye.maskCoverageContentSerial) : json(nullptr) },
+				{ "maskCoverageSampleAgeFrames", eye.maskCoverageReady ? json(observedFrame - eye.maskCoverageFrame) : json(nullptr) },
+				{ "maskCoverageMatchesEvaluation", coverageMatchesPreparation },
+				{ "maskCoverageReady", eye.maskCoverageReady },
+				{ "maskCoverageMatchesCurrentPolicy", eye.maskCoverageMatchesCurrentPolicy },
+				{ "authoredCategoryPixelCountSpace", "active_eye_input_pixels_before_visibility" },
+				{ "visibleCategoryPixelCountSpace", "feature18_evaluation_pixels_after_visibility_and_distance_inside_eligibility" },
+				{ "authoredCategoryPixels", {
+												{ "face", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[0]) : json(nullptr) },
+												{ "skin", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[1]) : json(nullptr) },
+												{ "hair", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[2]) : json(nullptr) },
+												{ "armor", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[3]) : json(nullptr) },
+												{ "weapons", eye.maskCoverageReady ? json(eye.authoredCategoryPixels[4]) : json(nullptr) },
+											} },
+				{ "visibleCategoryPixels", {
+											   { "face", eye.maskCoverageReady ? json(eye.visibleCategoryPixels[0]) : json(nullptr) },
+											   { "skin", eye.maskCoverageReady ? json(eye.visibleCategoryPixels[1]) : json(nullptr) },
+											   { "hair", eye.maskCoverageReady ? json(eye.visibleCategoryPixels[2]) : json(nullptr) },
+											   { "armor", eye.maskCoverageReady ? json(eye.visibleCategoryPixels[3]) : json(nullptr) },
+											   { "weapons", eye.maskCoverageReady ? json(eye.visibleCategoryPixels[4]) : json(nullptr) },
+										   } },
+				{ "visibilityRejectedPixels", eye.maskCoverageReady ? json(eye.visibilityRejectedPixels) : json(nullptr) },
+				{ "distanceRejectedPixels", eye.maskCoverageReady ? json(eye.distanceRejectedPixels) : json(nullptr) },
+				{ "zeroCoverageBypassRequested", eye.zeroCoverageBypassRequested },
+				{ "zeroCoverageBypassResolved", eye.zeroCoverageBypassResolved },
+				{ "zeroCoverageBypassedFeature18", eye.zeroCoverageBypassed },
+				{ "feature18EvaluationSucceeded", eye.feature18EvaluationSucceeded },
+				{ "zeroCoverageCpuProven", eye.zeroCoverageCpuProven },
+				{ "emptyProof", NeuralRendering::GetCharacterEmptyProofName(eye.emptyProof) },
+				{ "sourceCaptureSerial", eye.sourceCaptureSerial },
+				{ "feature18Disposition", NeuralRendering::GetCharacterFeature18DispositionName(eye.feature18Disposition) },
+				{ "depthCoordinates", {
+										  { "valid", eye.depthCoordinatesValid },
+										  { "authoredStereoWidth", eye.authoredStereoWidth },
+										  { "authoredDepthHeight", eye.authoredDepthHeight },
+										  { "authoredEyeBaseX", eye.authoredEyeBaseX },
+										  { "authoredCropGlobalLeft", eye.authoredEyeBaseX + eye.inputCropLeft },
+										  { "authoredCropGlobalRight", eye.authoredEyeBaseX + eye.inputCropLeft + eye.inputCropWidth },
+										  { "authoredCropTop", eye.inputCropTop },
+										  { "authoredCropBottom", eye.inputCropTop + eye.inputCropHeight },
+										  { "currentDepthWidth", eye.currentDepthWidth },
+										  { "currentDepthHeight", eye.currentDepthHeight },
+										  { "inputCropLeft", eye.inputCropLeft },
+										  { "inputCropTop", eye.inputCropTop },
+										  { "inputCropWidth", eye.inputCropWidth },
+										  { "inputCropHeight", eye.inputCropHeight },
+										  { "capturedJitterX", eye.capturedJitterX },
+										  { "capturedJitterY", eye.capturedJitterY },
+										  { "mapping", "output_uv_to_eye_local_crop_then_global_eye_base" },
+									  } },
+				{ "outputCoordinates", {
+										   { "cropLeft", eye.outputCropLeft },
+										   { "cropTop", eye.outputCropTop },
+										   { "cropWidth", eye.outputCropWidth },
+										   { "cropHeight", eye.outputCropHeight },
+										   { "maskIsCropLocal", true },
+									   } },
+				{ "maskPrepared", eye.maskPrepared },
+				{ "evaluationRequired", eye.evaluationRequired },
+				{ "eligibilityRegions", std::move(regions) },
+			});
+		}
+		const auto currentPreparation = std::ranges::find_if(
+			snapshot.preparedFrames, [&](const auto& a_prepared) {
+				return a_prepared.frame == observedFrame;
+			});
+		const bool currentPreparationFound =
+			currentPreparation != snapshot.preparedFrames.end();
+		if (currentPreparationFound) {
+			currentPreparedCharacterSlotMask = currentPreparation->preparedSlotMask;
+			currentEvaluationRequiredCharacterSlotMask =
+				currentPreparation->evaluationRequiredSlotMask;
+			currentSuccessfulCharacterSlotMask =
+				currentPreparation->successfulSlotMask;
+			currentAbortedCharacterSlotMask =
+				currentPreparation->abortedSlotMask;
+		}
+		const std::uint32_t lastFeatureSlotMask =
+			rendererSnapshot.performance.lastFeatureSlotMask;
+		constexpr std::uint32_t kLogicalFeatureSlotMask = 0x0Fu;
+		constexpr auto kPhysicalFeatureSlotMask = NeuralRendering::RegionRouteMask(kLogicalFeatureSlotMask);
+		const std::uint32_t lastLogicalFeatureSlotMask =
+			NeuralRendering::LogicalRegionMask(lastFeatureSlotMask);
+		const std::uint32_t lastFeatureLogicalEyeCount =
+			rendererSnapshot.performance.lastFeatureLogicalEyeCount;
+		const auto attributedPreparation = std::ranges::find_if(
+			snapshot.preparedFrames, [&](const auto& a_prepared) {
+				return a_prepared.frame ==
+			           rendererSnapshot.performance.lastFeatureFrameId;
+			});
+		const bool attributedPreparationFound =
+			attributedPreparation != snapshot.preparedFrames.end();
+		const std::uint32_t preparedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->preparedSlotMask :
+				0u;
+		const std::uint32_t evaluationRequiredCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->evaluationRequiredSlotMask :
+				0u;
+		const std::uint32_t bypassRequestedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->bypassRequestedSlotMask :
+				0u;
+		const std::uint32_t resolutionRecordedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->resolutionRecordedSlotMask :
+				0u;
+		const std::uint32_t evaluatedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->evaluatedSlotMask :
+				0u;
+		const std::uint32_t successfulCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->successfulSlotMask :
+				0u;
+		const std::uint32_t bypassedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->bypassedSlotMask :
+				0u;
+		const std::uint32_t abortedCharacterSlotMask =
+			attributedPreparationFound ?
+				attributedPreparation->abortedSlotMask :
+				0u;
+		auto expectedEvaluationMask = [](
+										  std::uint32_t a_preparedMask,
+										  std::uint32_t a_requiredMask) noexcept {
+			return a_preparedMask & a_requiredMask;
+		};
+		const std::uint32_t expectedFeatureSlotMask =
+			expectedEvaluationMask(
+				preparedCharacterSlotMask,
+				evaluationRequiredCharacterSlotMask);
+		const std::uint32_t currentExpectedFeatureSlotMask =
+			expectedEvaluationMask(
+				currentPreparedCharacterSlotMask,
+				currentEvaluationRequiredCharacterSlotMask);
+		const auto& executionPlan = rendererSnapshot.performance.lastExecutionPlan;
+		auto resolveExpectedPhysicalSlots = [&](
+												std::uint32_t a_logicalMask,
+												std::uint32_t& a_physicalMask,
+												std::uint32_t& a_evaluationCount) noexcept {
+			a_physicalMask = 0u;
+			a_evaluationCount = 0u;
+			if (!executionPlan || !a_logicalMask ||
+				(a_logicalMask & ~kLogicalFeatureSlotMask) != 0u)
+				return false;
+			a_physicalMask = executionPlan->physicalSlotMask & NeuralRendering::RegionRouteMask(a_logicalMask);
+			a_evaluationCount = static_cast<std::uint32_t>(std::popcount(a_physicalMask));
+			if (NeuralRendering::LogicalRegionMask(a_physicalMask) != a_logicalMask)
+				return false;
+			return true;
+		};
+		std::uint32_t expectedPhysicalFeatureSlotMask = 0u;
+		std::uint32_t expectedFeatureEvaluationCount = 0u;
+		const bool expectedFeatureRegionCountsValid =
+			resolveExpectedPhysicalSlots(
+				expectedFeatureSlotMask,
+				expectedPhysicalFeatureSlotMask,
+				expectedFeatureEvaluationCount);
+		std::uint32_t sampledScopeExpectedPhysicalSlotMask = 0u;
+		std::uint32_t sampledScopeExpectedEvaluationCount = 0u;
+		const bool sampledScopeRegionCountsValid =
+			resolveExpectedPhysicalSlots(
+				lastLogicalFeatureSlotMask,
+				sampledScopeExpectedPhysicalSlotMask,
+				sampledScopeExpectedEvaluationCount);
+		const std::uint32_t missingPreparedFeatureSlots =
+			preparedCharacterSlotMask & ~lastLogicalFeatureSlotMask;
+		const std::uint32_t missingExpectedFeatureSlots =
+			expectedFeatureSlotMask & ~lastLogicalFeatureSlotMask;
+		const std::uint32_t unexpectedFeatureSlots =
+			lastLogicalFeatureSlotMask & ~expectedFeatureSlotMask;
+		const std::uint32_t missingExpectedPhysicalFeatureSlots =
+			expectedPhysicalFeatureSlotMask & ~lastFeatureSlotMask;
+		const std::uint32_t unexpectedPhysicalFeatureSlots =
+			lastFeatureSlotMask & ~expectedPhysicalFeatureSlotMask;
+		const bool featureTimingIsStereoPair =
+			lastFeatureLogicalEyeCount == 2u;
+		const bool featureTimingIsEyeSample =
+			lastFeatureLogicalEyeCount == 1u;
+		const bool featureTimingLogicalEyeCountMatches =
+			lastFeatureLogicalEyeCount ==
+			static_cast<std::uint32_t>(
+				std::popcount(lastLogicalFeatureSlotMask));
+		const bool featureTimingPhysicalScopeMatches =
+			sampledScopeRegionCountsValid &&
+			lastFeatureSlotMask == sampledScopeExpectedPhysicalSlotMask &&
+			rendererSnapshot.performance.lastFeatureEvaluationCount ==
+				sampledScopeExpectedEvaluationCount &&
+			(lastFeatureSlotMask & ~kPhysicalFeatureSlotMask) == 0u;
+		const bool featureTimingSlotsMatch =
+			lastLogicalFeatureSlotMask != 0u &&
+			unexpectedFeatureSlots == 0u &&
+			featureTimingLogicalEyeCountMatches &&
+			featureTimingPhysicalScopeMatches &&
+			(featureTimingIsStereoPair ?
+					lastLogicalFeatureSlotMask == expectedFeatureSlotMask :
+					featureTimingIsEyeSample);
+		const bool featureTimingMatchesPreparedMask =
+			attributedPreparationFound && expectedFeatureSlotMask != 0 &&
+			expectedFeatureRegionCountsValid && featureTimingSlotsMatch;
+		const bool visualIsolationConfigured =
+			settings.neuralRenderingEnabled &&
+			(settings.neuralCharacterRenderingEnabled || settings.neuralCharacterSceneStrengthsEnabled) &&
+			settings.neuralCharacterVisualIsolationEnabled;
+		const bool mainCenterCommitForcedStaged =
+			visualIsolationConfigured &&
+			NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode)) ==
+				NeuralRendering::InsertionPoint::UpscaledCenter;
+		const bool privateSingleSubrectEnabled =
+			settings.neuralRenderingSingleSubrectScale < 1.0f &&
+			!(visualIsolationConfigured && !settings.neuralCharacterRenderingEnabled);
+		const bool dynamicCharacterRoiEnabled = visualIsolationConfigured && settings.neuralCharacterRenderingEnabled;
+		const bool dynamicCharacterSingleRectEnabled =
+			dynamicCharacterRoiEnabled;
+		auto routeCommittedForCurrentFrame = [observedFrame](
+												 const auto& a_route,
+												 std::uint32_t a_expectedEyeMask) {
+			return a_route.valid && a_route.frame == observedFrame &&
+			       a_route.pairComplete &&
+			       a_route.appliedEyeMask == a_expectedEyeMask &&
+			       a_route.committedEyeMask == a_expectedEyeMask &&
+			       a_route.disposition ==
+			           Upscaling::NeuralStereoPairDisposition::NeuralPair;
+		};
+		const std::uint32_t currentMainExpectedEyeMask =
+			currentExpectedFeatureSlotMask & 0b0011u;
+		const std::uint32_t currentSubmitExpectedEyeMask =
+			(currentExpectedFeatureSlotMask & 0b1100u) >> 2u;
+		const bool currentMainRouteExpected = currentMainExpectedEyeMask != 0u;
+		const bool currentSubmitRouteExpected = currentSubmitExpectedEyeMask != 0u;
+		const bool currentMainRouteCommitted =
+			routeCommittedForCurrentFrame(
+				routeSnapshots[0], currentMainExpectedEyeMask);
+		const bool currentSubmitRouteCommitted =
+			routeCommittedForCurrentFrame(
+				routeSnapshots[1], currentSubmitExpectedEyeMask);
+		const bool visualIsolationRouteCommitted =
+			(currentMainRouteExpected || currentSubmitRouteExpected) &&
+			(!currentMainRouteExpected || currentMainRouteCommitted) &&
+			(!currentSubmitRouteExpected || currentSubmitRouteCommitted);
+		const bool visualIsolationEffective =
+			visualIsolationConfigured && currentPreparationFound &&
+			currentExpectedFeatureSlotMask != 0u &&
+			(currentSuccessfulCharacterSlotMask &
+				currentExpectedFeatureSlotMask) ==
+				currentExpectedFeatureSlotMask &&
+			(currentAbortedCharacterSlotMask &
+				currentExpectedFeatureSlotMask) == 0u &&
+			visualIsolationRouteCommitted;
+
+		return {
+			{ "settings", {
+							  { "enabled", settings.neuralCharacterRenderingEnabled },
+							  { "sceneStrengthsEnabled", settings.neuralCharacterSceneStrengthsEnabled },
+							  { "scope", settings.neuralCharacterRenderingEnabled ? "actors_only" : settings.neuralCharacterSceneStrengthsEnabled ? "scene_adjustments" :
+																																					"off" },
+							  { "characterVisualIsolationEnabled", settings.neuralCharacterVisualIsolationEnabled },
+							  { "faces", settings.neuralCharacterFacesEnabled },
+							  { "skin", settings.neuralCharacterSkinEnabled },
+							  { "hair", settings.neuralCharacterHairEnabled },
+							  { "humans", settings.neuralCharacterHumansEnabled },
+							  { "otherHumanoids", settings.neuralCharacterOtherHumanoidsEnabled },
+							  { "creatures", settings.neuralCharacterCreaturesEnabled },
+							  { "animals", settings.neuralCharacterAnimalsEnabled },
+							  { "otherActors", settings.neuralCharacterOtherActorsEnabled },
+							  { "armor", settings.neuralCharacterArmorEnabled },
+							  { "weapons", settings.neuralCharacterWeaponsEnabled },
+							  { "providerBlending", settings.neuralCharacterProviderBlending },
+							  { "faceStrength", settings.neuralCharacterFaceStrength },
+							  { "skinStrength", settings.neuralCharacterSkinStrength },
+							  { "hairStrength", settings.neuralCharacterHairStrength },
+							  { "armorStrength", settings.neuralCharacterArmorStrength },
+							  { "weaponsStrength", settings.neuralCharacterWeaponsStrength },
+							  { "maximumDistanceMeters", settings.neuralCharacterMaximumDistanceMeters },
+							  { "adaptiveRoiSelection", settings.neuralCharacterAdaptiveRoiSelectionEnabled },
+							  { "focusScale", settings.neuralCharacterFocusScale },
+							  { "focusMask", { { "configuredFov", focusMask.configuredFov },
+												 { "visibleScale", focusMask.visibleScale },
+												 { "effectiveScale", focusMask.visibleScale * settings.neuralCharacterFocusScale },
+												 { "horizontalScale", focusMask.horizontalScale },
+												 { "eyeOffsets", focusMask.offsets },
+												 { "exclusionActive", FoveatedCommon::IsActiveCoverage(settings.neuralCharacterFocusScale) } } },
+							  { "experimentalCurrentContext", settings.neuralCharacterCurrentContextEnabled },
+							  { "experimentalGpuMaskSupport", settings.neuralCharacterGpuMaskSupportEnabled },
+							  { "minimumFacePixelSize", settings.neuralCharacterMinimumFacePixelSize },
+							  { "cropMode", settings.neuralCharacterCropMode },
+							  { "roiMargin", settings.neuralCharacterRoiMargin },
+							  { "roiHoldFrames", settings.neuralCharacterRoiHoldFrames },
+							  { "depthAwareFeather", settings.neuralCharacterDepthAwareFeatherEnabled },
+							  { "visibilityDepthTest", settings.neuralCharacterVisibilityDepthTestEnabled },
+							  { "featherRadius", settings.neuralCharacterFeatherRadius },
+							  { "featherDepthThreshold", settings.neuralCharacterDepthThreshold },
+							  { "debugView", GetCharacterDebugViewName(debugView) },
+							  { "debugViewValue", static_cast<std::uint32_t>(debugView) },
+							  { "maskTestMode", GetCharacterMaskTestModeName(maskTestMode) },
+							  { "maskTestModeValue", static_cast<std::uint32_t>(maskTestMode) },
+						  } },
+			{ "capability", {
+								{ "visualMasking", {
+													   { "implemented", snapshot.visualMaskImplemented },
+													   { "providerValidated", snapshot.visualMaskProviderValidated },
+													   { "status", settings.neuralCharacterProviderBlending ? "provider_alpha_with_csx_ownership" : "csx_output_composite" },
+													   { "statusScope", "configured_policy" },
+													   { "publicProductSemanticsDescribed", true },
+													   { "exactBindingContractPublished", false },
+													   { "mechanism", settings.neuralCharacterProviderBlending ? "provider_alpha_plus_csx_output_composite_r8" : snapshot.visualMaskMechanism },
+													   { "format", {
+																	   { "value", "R8_UNORM" },
+																	   { "experimental", true },
+																	   { "providerDeclared", false },
+																   } },
+													   { "valueRange", {
+																		   { "value", "0..1" },
+																		   { "experimental", true },
+																		   { "providerDeclared", false },
+																	   } },
+													   { "scope", settings.neuralCharacterProviderBlending ? "per_eye_provider_blend_and_output_composite" : "per_eye_output_composite" },
+													   { "feature18UseAutoMask", rendererSnapshot.useAutoMask },
+													   { "feature18ControlMaskPresent", rendererSnapshot.controlMaskPresent && !rendererSnapshot.providerBlending },
+													   { "feature18ProviderBlending", rendererSnapshot.providerBlending },
+													   { "feature18RequestFrame", rendererSnapshot.frameId },
+													   { "feature18InvocationMatchesEvidenceFrame", rendererSnapshot.frameId == observedFrame },
+												   } },
+								{ "visualIsolation", {
+														 { "requested", settings.neuralCharacterVisualIsolationEnabled },
+														 { "configured", visualIsolationConfigured },
+														 { "active", visualIsolationEffective },
+														 { "evidenceFrame", observedFrame },
+														 { "expectedFeatureSlotMask", currentExpectedFeatureSlotMask },
+														 { "successfulFeatureSlotMask", currentSuccessfulCharacterSlotMask },
+														 { "routeCommitted", visualIsolationRouteCommitted },
+														 { "mainRouteExpected", currentMainRouteExpected },
+														 { "mainRouteCommitted", currentMainRouteCommitted },
+														 { "submitRouteExpected", currentSubmitRouteExpected },
+														 { "submitRouteCommitted", currentSubmitRouteCommitted },
+														 { "guarantee", "feature18_output_composited_only_on_csx_mask_support" },
+														 { "finalVisibilityClassificationGuaranteed", false },
+														 { "requestedOutputCommit", settings.neuralRenderingDirectCommit ? "direct" : "staged" },
+														 { "effectiveUpscaledCenterOutputCommit", mainCenterCommitForcedStaged ? "staged" : (settings.neuralRenderingDirectCommit ? "direct" : "staged") },
+														 { "mainCenterCommitForcedStaged", mainCenterCommitForcedStaged },
+														 { "mainCenterBaseline", "existing_normal_dlss_center" },
+														 { "submitFloatBaseline", "existing_normal_dlss_center" },
+														 { "disabledPurpose", "normal_full_center_feature18_control" },
+														 { "emptyStereoPairPolicy", settings.neuralCharacterRenderingEnabled ? "bypass_empty_eye_evaluate_nonempty_eye" : "evaluate_scene_without_actors" },
+													 } },
+								{ "computeRoi", {
+													{ "supported", snapshot.computeRoiSupported },
+													{ "dynamicCharacterRoiEnabled", dynamicCharacterRoiEnabled },
+													{ "dynamicCharacterSingleRectEnabled", dynamicCharacterSingleRectEnabled },
+													{ "privateSingleSubrectEnabled", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
+													{ "privateSingleSubrectScale", settings.neuralRenderingSingleSubrectScale },
+													{ "source", dynamicCharacterRoiEnabled ? "current_cpu_material_geometry" : "configured_nr_region" },
+													{ "planningRequiresGpuReadback", false },
+													{ "planningWaitsForGpu", false },
+													{ "gpuBoundsReadbackOptional", true },
+													{ "reason", snapshot.computeRoiReason },
+													{ "resolvedMode", dynamicCharacterSingleRectEnabled ? "dynamic_character_single_rect_inference" : (privateSingleSubrectEnabled ? "static_centered_single_rect_inference" : "full_frame_inference") },
+													{ "inferenceRestrictedToRois", dynamicCharacterRoiEnabled || privateSingleSubrectEnabled },
+													{ "preciseMaskAuthority", "csx_selected_actor_material_mask" },
+												} },
+								{ "categoryProvenance", {
+															{ "vrAttachmentFormat", "R16G16_UNORM" },
+															{ "legacyAttachmentFormat", "R16_UNORM" },
+															{ "vrBytesPerPixel", 4 },
+															{ "legacyBytesPerPixel", 2 },
+															{ "additionalVrBytesPerPixel", 2 },
+															{ "inverseVertexAoBits", 16 },
+															{ "attachmentAllocatedWhenFeatureDisabled", true },
+															{ "frozenDepthSnapshotConditional", true },
+														} },
+							} },
+			{ "runtime", {
+							 { "status", snapshot.status },
+							 { "detail", snapshot.detail },
+							 { "observations", snapshot.observations },
+							 { "observationFrame", snapshot.observationFrame != std::numeric_limits<std::uint32_t>::max() ? json(snapshot.observationFrame) : json(nullptr) },
+							 { "currentObservations", snapshot.currentObservations },
+							 { "currentActorGroups", namedCounts(NeuralRendering::kCharacterActorGroupKeys, snapshot.currentActorGroups) },
+							 { "currentExcludedActorGroups", namedCounts(NeuralRendering::kCharacterActorGroupKeys, snapshot.currentExcludedActorGroups) },
+							 { "currentActorGroupReasons", namedCounts(NeuralRendering::kCharacterActorGroupReasonKeys, snapshot.currentActorGroupReasons) },
+							 { "currentSkinnedBounds", snapshot.currentSkinnedBounds },
+							 { "currentConservativeBounds", snapshot.currentConservativeBounds },
+							 { "currentUnboundedGeometry", snapshot.currentUnboundedGeometry },
+							 { "currentBoundsBoneBudgetUsed", snapshot.currentBoundsBoneBudgetUsed },
+							 { "observationCapacityDrops", snapshot.observationCapacityDrops },
+							 { "currentCategoryObservations", {
+																  { "face", snapshot.currentCategoryObservations[0] },
+																  { "skin", snapshot.currentCategoryObservations[1] },
+																  { "hair", snapshot.currentCategoryObservations[2] },
+																  { "armor", snapshot.currentCategoryObservations[3] },
+																  { "weapons", snapshot.currentCategoryObservations[4] },
+															  } },
+							 { "currentClassificationRejections", {
+																	  { "player", snapshot.currentClassificationRejections[0] },
+																	  { "blendedMaterial", snapshot.currentClassificationRejections[1] },
+																	  { "alphaTestAndBlend", snapshot.currentClassificationRejections[2] },
+																	  { "ambiguousFaceGen", snapshot.currentClassificationRejections[3] },
+																	  { "unsupportedMaterial", snapshot.currentClassificationRejections[4] },
+																  } },
+							 { "classificationRejections", {
+															   { "player", snapshot.classificationRejections[0] },
+															   { "blendedMaterial", snapshot.classificationRejections[1] },
+															   { "alphaTestAndBlend", snapshot.classificationRejections[2] },
+															   { "ambiguousFaceGen", snapshot.classificationRejections[3] },
+															   { "unsupportedMaterial", snapshot.classificationRejections[4] },
+														   } },
+							 { "earlyMaskBounds", {
+													  { "queued", snapshot.earlyMaskBounds.queued },
+													  { "ringBusy", snapshot.earlyMaskBounds.ringBusy },
+													  { "polls", snapshot.earlyMaskBounds.polls },
+													  { "pending", snapshot.earlyMaskBounds.pending },
+													  { "ready", snapshot.earlyMaskBounds.ready },
+													  { "used", snapshot.earlyMaskBounds.used },
+													  { "geometryFallbacks", snapshot.earlyMaskBounds.geometryFallbacks },
+													  { "failures", snapshot.earlyMaskBounds.failures },
+													  { "lastQueuedFrame", snapshot.earlyMaskBounds.lastQueuedFrame },
+													  { "lastUsedSourceFrame", snapshot.earlyMaskBounds.lastUsedSourceFrame },
+													  { "readbackBytes", snapshot.earlyMaskBounds.readbackBytes },
+													  { "lastPollCpuMs", snapshot.earlyMaskBounds.lastPollCpuMs },
+													  { "lastPollCpuAvailable", snapshot.earlyMaskBounds.lastPollCpuAvailable },
+													  { "lastFailure", snapshot.earlyMaskBounds.lastFailure },
+													  { "lastFailureResult", snapshot.earlyMaskBounds.lastFailureResult },
+												  } },
+							 { "categoryCaptureAttempts", snapshot.categoryCaptureAttempts },
+							 { "categoryCaptureSuccesses", snapshot.categoryCaptureSuccesses },
+							 { "categoryCaptureFailures", snapshot.categoryCaptureFailures },
+							 { "categoryCaptureEmptyBypasses", snapshot.categoryCaptureEmptyBypasses },
+							 { "categoryCaptureReuses", snapshot.categoryCaptureReuses },
+							 { "categoryCaptureFrame", snapshot.categoryCaptureReady ? json(snapshot.categoryCaptureFrame) : json(nullptr) },
+							 { "categoryCaptureReady", snapshot.categoryCaptureReady },
+							 { "categoryCaptureEmpty", snapshot.categoryCaptureEmpty },
+							 { "authoredMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames },
+							 { "gpuCoverageSamplingRequiresDebugView", true },
+							 { "gpuCoverageSamplingActive", debugView != NeuralRendering::CharacterDebugView::Off },
+							 { "forcedMaskCoverageSampleIntervalFrames", NeuralRendering::CharacterPolicy::kCoverageSampleIntervalFrames },
+							 { "preparationAttempts", snapshot.preparationAttempts },
+							 { "preparationSuccesses", snapshot.preparationSuccesses },
+							 { "preparationFailures", snapshot.preparationFailures },
+							 { "lastPreparationFailure", snapshot.lastPreparationFailure.sequence ? json{ { "sequence", snapshot.lastPreparationFailure.sequence }, { "detail", snapshot.lastPreparationFailure.detail }, { "frame", snapshot.lastPreparationFailure.frame }, { "sourceWorldFrame", snapshot.lastPreparationFailure.sourceWorldFrame }, { "capturedFrame", snapshot.lastPreparationFailure.capturedFrame }, { "generation", snapshot.lastPreparationFailure.generation }, { "featureSlot", snapshot.lastPreparationFailure.featureSlot }, { "eye", snapshot.lastPreparationFailure.eye }, { "requestedCategories", snapshot.lastPreparationFailure.requestedCategories }, { "capturedCategories", snapshot.lastPreparationFailure.capturedCategories } } : json(nullptr) },
+							 { "readbackDrops", snapshot.readbackDrops },
+							 { "provenEmptyFeatureBypassRequests", snapshot.provenEmptyFeatureBypassRequests },
+							 { "provenEmptyFeatureBypasses", snapshot.provenEmptyFeatureBypasses },
+							 { "currentPreparedCharacterSlotMask", currentPreparedCharacterSlotMask },
+							 { "currentPreparationFound", currentPreparationFound },
+							 { "currentBypassRequestedSlotMask", currentPreparationFound ? currentPreparation->bypassRequestedSlotMask : 0u },
+							 { "currentResolutionRecordedSlotMask", currentPreparationFound ? currentPreparation->resolutionRecordedSlotMask : 0u },
+							 { "currentEvaluatedSlotMask", currentPreparationFound ? currentPreparation->evaluatedSlotMask : 0u },
+							 { "currentSuccessfulSlotMask", currentPreparationFound ? currentPreparation->successfulSlotMask : 0u },
+							 { "currentBypassedSlotMask", currentPreparationFound ? currentPreparation->bypassedSlotMask : 0u },
+							 { "currentAbortedSlotMask", currentPreparationFound ? currentPreparation->abortedSlotMask : 0u },
+							 { "eyes", std::move(eyes) },
+						 } },
+			{ "profiling", {
+							   { "categoryCapture", ProfileTimerJson("Upscaling::DLSS5CharacterCategoryCapture") },
+							   { "maskGeneration", ProfileTimerJson("Upscaling::DLSS5CharacterMask") },
+							   { "roiSetup", ProfileTimerJson("Upscaling::DLSS5CharacterRoiSetup") },
+							   { "dlss5Evaluation", {
+														{ "perEye", ProfileTimerJson("Upscaling::DLSSNeuralRendering") },
+														{ "batchedStereo", ProfileTimerJson("Upscaling::DLSSNeuralRenderingStereo") },
+														{ "sequentialStereo", ProfileTimerJson("Upscaling::DLSSNeuralRenderingSequentialStereo") },
+													} },
+							   { "lastFeature18GpuSample", {
+															   { "available", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() },
+															   { "frame", rendererSnapshot.performance.lastFeatureFrameId != std::numeric_limits<std::uint32_t>::max() ? json(rendererSnapshot.performance.lastFeatureFrameId) : json(nullptr) },
+															   { "gpuMicroseconds", rendererSnapshot.performance.lastFeatureGpuMicroseconds },
+															   { "pixelCount", rendererSnapshot.performance.lastFeaturePixelCount },
+															   { "evaluationCount", rendererSnapshot.performance.lastFeatureEvaluationCount },
+															   { "slotMask", lastFeatureSlotMask },
+															   { "physicalSlotMask", lastFeatureSlotMask },
+															   { "logicalSlotMask", lastLogicalFeatureSlotMask },
+															   { "logicalEyeCount", lastFeatureLogicalEyeCount },
+															   { "insertionPoint", NeuralRendering::GetInsertionPointName(rendererSnapshot.performance.lastInsertionPoint) },
+															   { "preparedCharacterSlotMask", preparedCharacterSlotMask },
+															   { "evaluationRequiredCharacterSlotMask", evaluationRequiredCharacterSlotMask },
+															   { "bypassRequestedCharacterSlotMask", bypassRequestedCharacterSlotMask },
+															   { "resolutionRecordedCharacterSlotMask", resolutionRecordedCharacterSlotMask },
+															   { "evaluatedCharacterSlotMask", evaluatedCharacterSlotMask },
+															   { "successfulCharacterSlotMask", successfulCharacterSlotMask },
+															   { "bypassedCharacterSlotMask", bypassedCharacterSlotMask },
+															   { "abortedCharacterSlotMask", abortedCharacterSlotMask },
+															   { "expectedFeatureSlotMask", expectedFeatureSlotMask },
+															   { "expectedPhysicalFeatureSlotMask", expectedFeatureRegionCountsValid ? json(expectedPhysicalFeatureSlotMask) : json(nullptr) },
+															   { "expectedFeatureEvaluationCount", expectedFeatureRegionCountsValid ? json(expectedFeatureEvaluationCount) : json(nullptr) },
+															   { "expectedFeatureRegionCountsValid", expectedFeatureRegionCountsValid },
+															   { "preparedFrameFound", attributedPreparationFound },
+															   { "identityStrength", "legacy_frame_only_diagnostic" },
+															   { "physicalPlanAvailable", executionPlan.has_value() },
+															   { "physicalPlanSource", executionPlan ? "frozen_execution" : "unavailable_capture_evidence_required" },
+															   { "submissionId", executionPlan ? json(std::to_string(executionPlan->submissionId)) : json(nullptr) },
+															   { "generation", executionPlan ? json(std::to_string(executionPlan->generation)) : json(nullptr) },
+															   { "transactionEvidencePath", "neuralRendering.captureEvidence.routes[].executionEvidence" },
+															   { "missingPreparedFeatureSlotMask", missingPreparedFeatureSlots },
+															   { "missingExpectedFeatureSlotMask", missingExpectedFeatureSlots },
+															   { "unexpectedFeatureSlotMask", unexpectedFeatureSlots },
+															   { "missingExpectedPhysicalFeatureSlotMask", expectedFeatureRegionCountsValid ? json(missingExpectedPhysicalFeatureSlots) : json(nullptr) },
+															   { "unexpectedPhysicalFeatureSlotMask", expectedFeatureRegionCountsValid ? json(unexpectedPhysicalFeatureSlots) : json(nullptr) },
+															   { "sampledScopeExpectedPhysicalSlotMask", sampledScopeRegionCountsValid ? json(sampledScopeExpectedPhysicalSlotMask) : json(nullptr) },
+															   { "sampledScopeExpectedEvaluationCount", sampledScopeRegionCountsValid ? json(sampledScopeExpectedEvaluationCount) : json(nullptr) },
+															   { "sampledScopeRegionCountsValid", sampledScopeRegionCountsValid },
+															   { "logicalEyeCountMatchesSlotMask", featureTimingLogicalEyeCountMatches },
+															   { "physicalScopeMatchesPreparation", featureTimingPhysicalScopeMatches },
+															   { "physicalScopeMatchesExecution", featureTimingPhysicalScopeMatches },
+															   { "correlationScope", featureTimingIsStereoPair ? "stereo_pair" : (featureTimingIsEyeSample ? "eye_sample" : "invalid") },
+															   { "coversPreparedStereoPair", featureTimingIsStereoPair && featureTimingMatchesPreparedMask && lastLogicalFeatureSlotMask == expectedFeatureSlotMask },
+															   { "matchesPreparedCharacterMask", featureTimingMatchesPreparedMask },
+														   } },
+							   { "composite", ProfileTimerJson("Upscaling::DLSS5CharacterComposite") },
+							   { "total", {
+											  { "available", false },
+											  { "reason", "D3D11 profile components and asynchronous D3D12 Feature 18 samples are exposed separately; no uncorrelated sum is reported" },
+										  } },
+						   } },
+		};
+	}
+
+	json NeuralRenderingStatusJson(const Upscaling& a_upscaling)
+	{
+		const auto snapshot = NeuralRendering::Renderer::Instance().GetSnapshot();
+		json failuresByStage = json::array();
+		for (std::size_t index = 0;
+			index < static_cast<std::size_t>(NeuralRendering::RendererStage::Count);
+			++index) {
+			const auto stage = static_cast<NeuralRendering::RendererStage>(index);
+			failuresByStage.push_back({
+				{ "stage", NeuralRendering::ToString(stage) },
+				{ "stageValue", index },
+				{ "failures", snapshot.counters.failuresByStage[index] },
+			});
+		}
+
+		json slots = json::array();
+		for (std::size_t index = 0;
+			index < NeuralRendering::Runtime::kFeatureSlotCount;
+			++index) {
+			slots.push_back({
+				{ "slot", index },
+				{ "successes", snapshot.counters.slotSuccesses[index] },
+				{ "failures", snapshot.counters.slotFailures[index] },
+			});
+		}
+
+		const auto routeSnapshots = a_upscaling.GetNeuralStereoRouteSnapshot();
+		const auto submitCycle = a_upscaling.GetLatestNeuralSubmitCycleSnapshot();
+		const uint32_t observedFrame = globals::state ? globals::state->frameCount : 0u;
+		const bool submitCycleCurrentFrame =
+			submitCycle.entryObserved && submitCycle.frame == observedFrame;
+		uint64_t latestRouteSequence = 0;
+		json routes = json::array();
+		for (const auto& route : routeSnapshots) {
+			latestRouteSequence = std::max(latestRouteSequence, route.sequence);
+			const bool submitRole =
+				route.role == Upscaling::NeuralStereoRouteRole::Submit;
+			const bool freshForCurrentFrame = route.valid && route.frame == observedFrame;
+			const bool freshForCurrentCycle =
+				!submitRole ||
+				(submitCycleCurrentFrame && submitCycle.compositorCycle != 0 &&
+					route.valid && route.compositorCycle == submitCycle.compositorCycle);
+			json eyes = json::array();
+			for (uint32_t eye = 0; eye < 2; ++eye) {
+				const uint32_t eyeBit = 1u << eye;
+				eyes.push_back({
+					{ "eye", eye },
+					{ "prepared", (route.preparedEyeMask & eyeBit) != 0 },
+					{ "attempted", (route.attemptedEyeMask & eyeBit) != 0 },
+					{ "applied", (route.appliedEyeMask & eyeBit) != 0 },
+					{ "bypassed", (route.bypassedEyeMask & eyeBit) != 0 },
+					{ "neuralCommitted", (route.committedEyeMask & eyeBit) != 0 },
+					{ "dlssEvaluated", (route.dlssEyeMask & eyeBit) != 0 },
+					{ "dlssEvaluationAttempts", route.dlssEvaluationAttemptCount[eye] },
+					{ "dlssEvaluationSuccesses", route.dlssEvaluationSuccessCount[eye] },
+					{ "feature18EvaluationAttempts", route.featureEvaluationAttemptCount[eye] },
+					{ "feature18EvaluationSuccesses", route.featureEvaluationSuccessCount[eye] },
+					{ "centerBlendAttempts", route.centerBlendAttemptCount[eye] },
+					{ "centerBlendSuccesses", route.centerBlendSuccessCount[eye] },
+					{ "lateNeuralBlendAttempts", route.lateNeuralBlendAttemptCount[eye] },
+					{ "lateNeuralBlendSuccesses", route.lateNeuralBlendSuccessCount[eye] },
+					{ "unexpectedPassCountDetected", (route.unexpectedPassEyeMask & eyeBit) != 0 },
+				});
+			}
+			const auto routeInsertionPoint =
+				static_cast<NeuralRendering::InsertionPoint>(route.insertionPoint);
+			const auto& temporalAdmission = route.temporalAdmission;
+			routes.push_back({
+				{ "valid", route.valid },
+				{ "role", Upscaling::GetNeuralStereoRouteRoleName(route.role) },
+				{ "roleValue", static_cast<uint32_t>(route.role) },
+				{ "sequence", route.sequence },
+				{ "compositorCycle", route.compositorCycle },
+				{ "frame", route.frame },
+				{ "fresh", freshForCurrentFrame && freshForCurrentCycle },
+				{ "freshForCurrentFrame", freshForCurrentFrame },
+				{ "freshForCurrentCycle", freshForCurrentCycle },
+				{ "generation", route.generation },
+				{ "arrangement", NeuralRendering::GetPipelineArrangementName(
+									 static_cast<NeuralRendering::PipelineArrangement>(route.arrangement)) },
+				{ "arrangementValue", route.arrangement },
+				{ "insertionPoint", NeuralRendering::GetInsertionPointName(routeInsertionPoint) },
+				{ "insertionPointValue", route.insertionPoint },
+				{ "requested", route.requested },
+				{ "eligible", route.eligible },
+				{ "sourceBatchEligible", route.sourceBatchEligible },
+				{ "sourceSignatureProven", route.sourceSignatureProven },
+				{ "pairComplete", route.pairComplete },
+				{ "gates", {
+							   { "colorBuffersHDRKnown", route.colorBuffersHDRKnown },
+							   { "colorBuffersHDR", route.colorBuffersHDRKnown ? json(route.colorBuffersHDR) : json(nullptr) },
+							   { "hdrRequired", route.hdrRequired },
+							   { "hdrClassification", route.colorBuffersHDRKnown ? (route.colorBuffersHDR ? "hdr" : "ldr") : "unknown" },
+							   { "frameGenerationActive", route.frameGenerationActive },
+							   { "frameGenerationPassed", route.frameGenerationGatePassed },
+							   { "knownMenuContext", temporalAdmission.menuContextActive },
+							   { "hardMenuBlocked", route.hardMenuBlocked },
+							   { "lateMenuCompositeReady", route.lateMenuCompositeReady },
+							   { "csOverlayOpen", route.csOverlayOpen },
+							   { "menuContinuityAllowed", route.menuContinuityAllowed },
+							   { "gamePaused", temporalAdmission.gamePaused },
+							   { "pausedContinuityAllowed", temporalAdmission.pausedContinuityAllowed },
+							   { "pausedSubmitContinuityAllowed", temporalAdmission.pausedContinuityAllowed },
+							   { "worldFrameStateAvailable", temporalAdmission.worldFrameStateAvailable },
+							   { "worldFrameStarted", temporalAdmission.worldFrameStarted },
+							   { "worldFrameCompleted", temporalAdmission.worldFrameCompleted },
+							   { "retainedWorldFrame", temporalAdmission.retainedWorldFrame },
+							   { "temporalSourceFresh", temporalAdmission.temporalSourceFresh },
+						   } },
+				{ "temporalAdmission", {
+										   { "admitted", temporalAdmission.admitted },
+										   { "blockReason", NeuralRendering::GetTemporalAdmissionBlockReasonName(temporalAdmission.blockReason) },
+										   { "currentFrame", temporalAdmission.currentFrame },
+										   { "sourceWorldFrame", temporalAdmission.sourceWorldFrame },
+										   { "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame },
+										   { "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame },
+									   } },
+				{ "pairDisposition", Upscaling::GetNeuralStereoPairDispositionName(route.disposition) },
+				{ "fallbackReason", Upscaling::GetNeuralStereoFallbackReasonName(route.fallbackReason) },
+				{ "unexpectedPassEyeMask", route.unexpectedPassEyeMask },
+				{ "eyeMasks", {
+								  { "prepared", route.preparedEyeMask },
+								  { "attempted", route.attemptedEyeMask },
+								  { "applied", route.appliedEyeMask },
+								  { "bypassed", route.bypassedEyeMask },
+								  { "neuralCommitted", route.committedEyeMask },
+								  { "dlss", route.dlssEyeMask },
+							  } },
+				{ "eyes", std::move(eyes) },
+			});
+		}
+
+		const bool batchedStereo = a_upscaling.settings.neuralRenderingBatchedStereo;
+		const bool directCommit = a_upscaling.settings.neuralRenderingDirectCommit;
+		const bool effectiveDirectCommit = NeuralRendering::EffectiveDirectCommit(a_upscaling.GetNeuralRenderingMode(), directCommit);
+		const auto insertionPoint = a_upscaling.GetNeuralRenderingInsertionPoint();
+		const bool fovRequired = NeuralRendering::RequiresFoveatedMask(a_upscaling.GetNeuralRenderingMode(), a_upscaling.settings.neuralRenderingFovOnly, globals::game::isVR, a_upscaling.settings.neuralRenderingRenderscaleFov);
+		const bool fovAvailable = a_upscaling.IsNeuralRenderingFovConfigurationAvailable();
+		return {
+			{ "apiVersion", 10 },
+			{ "renderScalePrerequisite", {
+											 { "required", NeuralRendering::RequiresVRRenderScale(globals::game::isVR, a_upscaling.GetNeuralRenderingMode()) },
+											 { "available", a_upscaling.IsNeuralRenderingRenderScaleAvailable() },
+											 { "locked", a_upscaling.IsNeuralRenderingRenderScaleRequired() },
+										 } },
+			{ "fovPrerequisite", { { "required", fovRequired }, { "available", fovAvailable }, { "reason", fovRequired && !fovAvailable ? "Configure and enable FOV in Upscaling before using FOV-dependent NR" : "ready" } } },
+			{ "runtimeSupport", {
+									{ "fullResolution", true },
+									{ "foveated", globals::game::isVR },
+									{ "reducedResolution", true },
+									{ "character", true },
+									{ "stereoSubmission", globals::game::isVR },
+									{ "requestedConfiguration", NeuralRendering::IsRenderingConfigurationSupported(globals::game::isVR, a_upscaling.GetNeuralRenderingMode()) },
+									{ "reason", "Foveated rendering requires Skyrim VR; full-resolution, reduced-resolution and character selection support SE/AE/VR" },
+								} },
+			{ "requestedConfiguration", a_upscaling.GetNeuralRequestedConfiguration() },
+			{ "requestedConfigurationFingerprint", a_upscaling.GetNeuralRequestedConfigurationFingerprint() },
+			{ "captureEvidence", a_upscaling.GetNeuralCaptureStatus() },
+			{ "sourceTransport", NeuralRendering::Renderer::Instance().GetSourceTransportDiagnostics() },
+			{ "lifetimeDiagnostics", NeuralRendering::LifetimeDiagnosticsJson(NeuralRendering::Renderer::Instance().GetLifetimeDiagnostics(), NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled()) },
+			{ "arrangement", NeuralRendering::GetPipelineArrangementName(a_upscaling.GetNeuralRenderingArrangement()) },
+			{ "effectiveExecution", {
+										{ "scope", "configured_route_policy_not_execution_evidence" },
+										{ "stereoSubmission", globals::game::isVR ? NeuralRendering::GetStereoSubmissionName(batchedStereo) : "mono" },
+										{ "outputCommit", NeuralRendering::GetOutputCommitName(effectiveDirectCommit) },
+										{ "directCommit", effectiveDirectCommit },
+										{ "forcedStaged", directCommit && !effectiveDirectCommit },
+										{ "reason", directCommit && !effectiveDirectCommit ? "reduced_resolution_requires_staged_output" : "requested_preference" },
+									} },
+			{ "implementationMatrix", NeuralImplementationMatrixJson() },
+			{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() },
+			{ "foveation", FoveationStatusJson(a_upscaling) },
+			{ "characterRendering", CharacterRenderingStatusJson(a_upscaling) },
+			{ "settings", {
+							  { "executionScope", "requested_preferences" },
+							  { "enabled", a_upscaling.settings.neuralRenderingEnabled },
+							  { "mode", NeuralRendering::GetRenderingModeName(a_upscaling.GetNeuralRenderingMode()) },
+							  { "modeValue", static_cast<uint32_t>(a_upscaling.GetNeuralRenderingMode()) },
+							  { "fovOnly", a_upscaling.settings.neuralRenderingFovOnly },
+							  { "renderscaleFov", a_upscaling.settings.neuralRenderingRenderscaleFov },
+							  { "insertionPoint", NeuralRendering::GetInsertionPointName(insertionPoint) },
+							  { "insertionPointValue", static_cast<uint32_t>(insertionPoint) },
+							  { "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) },
+							  { "batchedStereo", batchedStereo },
+							  { "directCommit", directCommit },
+							  { "stereoSubmission", NeuralRendering::GetStereoSubmissionName(batchedStereo) },
+							  { "outputCommit", NeuralRendering::GetOutputCommitName(directCommit) },
+							  { "implementation", NeuralRendering::GetImplementationName(batchedStereo, directCommit) },
+							  { "comparisonPurpose", NeuralRendering::GetImplementationPurposeName(batchedStereo, directCommit) },
+							  { "comparisonPurposeLabel", NeuralRendering::GetImplementationPurpose(batchedStereo, directCommit) },
+							  { "selectedImplementation", NeuralImplementationJson(batchedStereo, directCommit) },
+							  { "preset", a_upscaling.settings.neuralRenderingPreset },
+							  { "intensity", a_upscaling.settings.neuralRenderingIntensity },
+							  { "localToneStrength", a_upscaling.settings.neuralRenderingLocalTone },
+							  { "localStructureStrength", a_upscaling.settings.neuralRenderingLocalStructure },
+							  { "skinStructureStrength", a_upscaling.settings.neuralRenderingSkinStructure },
+							  { "style", a_upscaling.settings.neuralRenderingStyle },
+							  { "useAutoMask", a_upscaling.settings.neuralRenderingAutoMask },
+							  { "uiCorrection", a_upscaling.settings.neuralRenderingUICorrection },
+							  { "singleSubrectScale", a_upscaling.settings.neuralRenderingSingleSubrectScale },
+						  } },
+			{ "safeControlContract", {
+										 { "useAutoMask", {
+															  { "fixed", true },
+															  { "requiredValue", true },
+															  { "policy", "automatic_with_csx_character_output_isolation" },
+														  } },
+										 { "uiCorrection", { { "fixed", true }, { "requiredValue", false } } },
+									 } },
+			{ "routeObservation", {
+									  { "currentFrame", observedFrame },
+									  { "currentSubmitCycle", submitCycleCurrentFrame ? submitCycle.compositorCycle : 0u },
+									  { "submitCycleSource", "submit_entry" },
+									  { "submitEntryObserved", submitCycle.entryObserved },
+									  { "submitCycleCurrentFrame", submitCycleCurrentFrame },
+									  { "latestSubmitFrame", submitCycle.frame },
+									  { "latestSubmitCycle", submitCycle.compositorCycle },
+									  { "latestSequence", latestRouteSequence },
+								  } },
+			{ "eyeMaskSemantics", {
+									  { "prepared", "complete renderer arguments were prepared for the eye" },
+									  { "attempted", "NVIDIA Feature 18 evaluation was entered for the eye" },
+									  { "applied", "the renderer committed a successful eye output before pair-level fallback" },
+									  { "neuralCommitted", "the final coherent stereo pair retained the neural output" },
+									  { "unexpectedPassCountDetected", "one or more pass kinds executed more than once for the eye" },
+								  } },
+			{ "stereoRoutes", std::move(routes) },
+			{ "runtime", {
+							 { "status", snapshot.status },
+							 { "trust", snapshot.trust },
+							 { "identityClassification", snapshot.trust },
+							 { "publisherTrustEstablished", false },
+							 { "admissionPolicy", "version_exports_and_loaded_image_identity" },
+							 { "developerModeRequired", false },
+							 { "streamlineLogLevelAffectsAdmission", false },
+							 { "allowUnlistedPatchedOrUnsignedRuntime", true },
+							 { "streamlineLogLevel", a_upscaling.settings.streamlineLogLevel },
+							 { "failureStage", snapshot.runtimeFailureStage },
+							 { "detail", snapshot.detail },
+							 { "path", snapshot.runtimePath },
+							 { "installed", NeuralRendering::Runtime::IsInstalled() },
+							 { "requiredDll", "nvngx_dlssnr.dll" },
+							 { "installationNotice", NeuralRendering::Runtime::IsInstalled() ? "" : NeuralRendering::Runtime::kMissingRuntimeNotice },
+							 { "sha256", snapshot.runtimeHash },
+							 { "version", snapshot.runtimeVersion },
+							 { "proxyHits", snapshot.runtimeProxyHits },
+							 { "proxyInstalled", snapshot.runtimeProxyInstalled },
+							 { "successfulFrames", snapshot.runtimeSuccessfulFrames },
+							 { "ngxResult", snapshot.ngxResult },
+							 { "parameterCore", {
+													{ "path", snapshot.parameterCorePath },
+													{ "sha256", snapshot.parameterCoreHash },
+													{ "trust", snapshot.parameterCoreTrust },
+													{ "source", snapshot.parameterCoreSource },
+												} },
+						 } },
+			{ "renderer", {
+							  { "lastCompletedStage", NeuralRendering::ToString(snapshot.lastCompletedStage) },
+							  { "failureStage", NeuralRendering::ToString(snapshot.failureStage) },
+							  { "lastResult", snapshot.lastResult },
+							  { "featureSlot", snapshot.featureSlot },
+							  { "failureFeatureSlot", snapshot.failureFeatureSlot },
+							  { "frame", snapshot.frameId },
+							  { "sourceWorldFrame", snapshot.sourceWorldFrame },
+							  { "generation", snapshot.generation },
+							  { "insertionPoint", NeuralRendering::GetInsertionPointName(snapshot.insertionPoint) },
+							  { "insertionPointValue", static_cast<uint32_t>(snapshot.insertionPoint) },
+							  { "successes", snapshot.successes },
+							  { "failures", snapshot.failures },
+							  { "featureUpscaling", snapshot.featureUpscaling },
+							  { "failureLatched", snapshot.failureLatched },
+							  { "quarantined", snapshot.quarantined },
+							  { "outputCommitted", snapshot.outputCommitted },
+							  { "controlMaskPresent", snapshot.controlMaskPresent && !snapshot.providerBlending },
+							  { "providerBlending", snapshot.providerBlending },
+							  { "useAutoMask", snapshot.useAutoMask },
+						  } },
+			{ "dimensions", {
+								{ "color", { { "width", snapshot.colorWidth }, { "height", snapshot.colorHeight } } },
+								{ "guide", { { "width", snapshot.guideWidth }, { "height", snapshot.guideHeight } } },
+								{ "output", { { "width", snapshot.outputWidth }, { "height", snapshot.outputHeight } } },
+								{ "computeSubrect", {
+														{ "baseX", snapshot.computeSubrect.baseX },
+														{ "baseY", snapshot.computeSubrect.baseY },
+														{ "width", snapshot.computeSubrect.width },
+														{ "height", snapshot.computeSubrect.height },
+														{ "pixels", snapshot.computeSubrect.Area() },
+													} },
+								{ "controlMask", { { "width", snapshot.controlMaskWidth }, { "height", snapshot.controlMaskHeight } } },
+							} },
+			{ "resources", { { "formats", {
+											  { "color", snapshot.colorFormat },
+											  { "depthSource", snapshot.depthSourceFormat },
+											  { "depthView", snapshot.depthViewFormat },
+											  { "motionVectors", snapshot.motionVectorFormat },
+											  { "output", snapshot.outputFormat },
+											  { "controlMask", snapshot.controlMaskFormat },
+										  } } } },
+			{ "counters", {
+							  { "attempts", snapshot.counters.attempts },
+							  { "successes", snapshot.counters.successes },
+							  { "failures", snapshot.counters.failures },
+							  { "validationFailures", snapshot.counters.validationFailures },
+							  { "interopInitializations", snapshot.counters.interopInitializations },
+							  { "runtimeInitializations", snapshot.counters.runtimeInitializations },
+							  { "resourceRebuilds", snapshot.counters.resourceRebuilds },
+							  { "depthGuideCopies", snapshot.counters.depthGuideCopies },
+							  { "controlMaskCopies", snapshot.counters.controlMaskCopies },
+							  { "featureEvaluations", snapshot.counters.featureEvaluations },
+							  { "outputCommits", snapshot.counters.outputCommits },
+							  { "stereoAttempts", snapshot.counters.stereoAttempts },
+							  { "stereoSuccesses", snapshot.counters.stereoSuccesses },
+							  { "stereoFailures", snapshot.counters.stereoFailures },
+							  { "callerHistoryResets", snapshot.counters.callerHistoryResets },
+							  { "forcedHistoryResets", snapshot.counters.forcedHistoryResets },
+							  { "discontinuousHistoryResets", snapshot.counters.discontinuousHistoryResets },
+							  { "resetAttempts", snapshot.counters.resetAttempts },
+							  { "resetSuccesses", snapshot.counters.resetSuccesses },
+							  { "resetFailures", snapshot.counters.resetFailures },
+							  { "deviceRemovals", snapshot.counters.deviceRemovals },
+							  { "quarantines", snapshot.counters.quarantines },
+							  { "latchedBypasses", snapshot.counters.latchedBypasses },
+							  { "quarantinedBypasses", snapshot.counters.quarantinedBypasses },
+							  { "failuresByStage", std::move(failuresByStage) },
+						  } },
+			{ "performance", {
+								 { "d3d11PreparationCpuEnqueueSamples", snapshot.performance.d3d11PreparationCpuEnqueueSamples },
+								 { "d3d11PreparationCpuEnqueueMicroseconds", snapshot.performance.d3d11PreparationCpuEnqueueMicroseconds },
+								 { "lastD3D11PreparationCpuEnqueueMicroseconds", snapshot.performance.lastD3D11PreparationCpuEnqueueMicroseconds },
+								 { "maximumD3D11PreparationCpuEnqueueMicroseconds", snapshot.performance.maximumD3D11PreparationCpuEnqueueMicroseconds },
+								 { "outputCommitCpuEnqueueSamples", snapshot.performance.outputCommitCpuEnqueueSamples },
+								 { "outputCommitCpuEnqueueMicroseconds", snapshot.performance.outputCommitCpuEnqueueMicroseconds },
+								 { "lastOutputCommitCpuEnqueueMicroseconds", snapshot.performance.lastOutputCommitCpuEnqueueMicroseconds },
+								 { "maximumOutputCommitCpuEnqueueMicroseconds", snapshot.performance.maximumOutputCommitCpuEnqueueMicroseconds },
+								 { "commandSubmissions", snapshot.performance.commandSubmissions },
+								 { "mainCommandSubmissions", snapshot.performance.mainCommandSubmissions },
+								 { "submitCommandSubmissions", snapshot.performance.submitCommandSubmissions },
+								 { "stereoCommandSubmissions", snapshot.performance.stereoCommandSubmissions },
+								 { "mainStereoCommandSubmissions", snapshot.performance.mainStereoCommandSubmissions },
+								 { "submitStereoCommandSubmissions", snapshot.performance.submitStereoCommandSubmissions },
+								 { "backpressureWaits", snapshot.performance.backpressureWaits },
+								 { "backpressureWaitMicroseconds", snapshot.performance.backpressureWaitMicroseconds },
+								 { "maximumBackpressureWaitMicroseconds", snapshot.performance.maximumBackpressureWaitMicroseconds },
+								 { "featureGpuSamples", snapshot.performance.featureGpuSamples },
+								 { "featureGpuReadbackFailures", snapshot.performance.featureGpuReadbackFailures },
+								 { "featureGpuMicroseconds", snapshot.performance.featureGpuMicroseconds },
+								 { "mainFeatureGpuSamples", snapshot.performance.mainFeatureGpuSamples },
+								 { "mainFeatureGpuMicroseconds", snapshot.performance.mainFeatureGpuMicroseconds },
+								 { "submitFeatureGpuSamples", snapshot.performance.submitFeatureGpuSamples },
+								 { "submitFeatureGpuMicroseconds", snapshot.performance.submitFeatureGpuMicroseconds },
+								 { "byInsertionPoint", NeuralInsertionPointPerformanceJson(snapshot.performance) },
+								 { "unexpectedFeatureSlotMaskSamples", snapshot.performance.unexpectedFeatureSlotMaskSamples },
+								 { "invalidInsertionPointSamples", snapshot.performance.invalidInsertionPointSamples },
+								 { "lastFeatureGpuMicroseconds", snapshot.performance.lastFeatureGpuMicroseconds },
+								 { "maximumFeatureGpuMicroseconds", snapshot.performance.maximumFeatureGpuMicroseconds },
+								 { "lastFeaturePixelCount", snapshot.performance.lastFeaturePixelCount },
+								 { "lastFeatureFrameId", snapshot.performance.lastFeatureFrameId },
+								 { "lastFeatureEvaluationCount", snapshot.performance.lastFeatureEvaluationCount },
+								 { "lastFeatureLogicalEyeCount", snapshot.performance.lastFeatureLogicalEyeCount },
+								 { "lastFeatureSlotMask", snapshot.performance.lastFeatureSlotMask },
+								 { "lastInsertionPoint", NeuralRendering::GetInsertionPointName(snapshot.performance.lastInsertionPoint) },
+								 { "lastInsertionPointValue", static_cast<uint32_t>(snapshot.performance.lastInsertionPoint) },
+							 } },
+			{ "slots", std::move(slots) },
+		};
+	}
+
 	json BuildStatus(Upscaling& a_upscaling)
 	{
 		const auto controller = a_upscaling.GetVRRenderScaleTransitionSnapshot();
@@ -1598,6 +3299,7 @@ namespace
 											} },
 			{ "loadPresentationProbe", a_upscaling.BuildVRLoadPresentationProbeStatus() },
 			{ "hmdMaskDiagnostics", a_upscaling.BuildVRHMDMaskDiagnosticsStatus() },
+			{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) },
 			{ "session", {
 							 { "id", session.sessionID },
 							 { "active", session.active },
@@ -4948,6 +6650,16 @@ namespace
 	json RenderScaleActions()
 	{
 		return json::array({ "status",
+			"nr_readiness",
+			"nr_status",
+			"nr_toggle",
+			"nr_configure",
+			"nr_crop_calibrate",
+			"nr_cycle_modes",
+			"nr_reset",
+			"foveation_configure",
+			"foveation_cycle",
+
 			"set_render_scale_link",
 			"qualification_status",
 			"qualification_begin",
@@ -5003,14 +6715,21 @@ namespace
 				throw std::runtime_error("arguments must be a JSON object");
 			if (auto mismatch = BuildProvenance::ValidateExpectedBuild(args))
 				output = std::move(*mismatch);
-			else
+			else {
+				args.erase("expectedBuildId");
 				output = a_build(args);
+			}
 		} catch (const std::exception& e) {
 			output = { { "error", "invalid request" }, { "detail", e.what() } };
 		} catch (...) {
 			output = { { "error", "unknown handler error" } };
 		}
 
+		if (output.contains("error")) {
+			output["ok"] = false;
+			if (output.contains("errorCode"))
+				output["code"] = output["errorCode"];
+		}
 		BuildProvenance::AttachProducer(output);
 		try {
 			const std::string serialized = output.dump();
@@ -5061,6 +6780,83 @@ namespace
 			};
 		}
 		return future.get();
+	}
+
+	struct RendererCommand
+	{
+		CSX::Api::MainThreadDispatchState<json> completion;
+		std::function<json()> run;
+	};
+	std::mutex g_rendererCommandMutex;
+	std::shared_ptr<RendererCommand> g_rendererCommand;
+	std::atomic_bool g_rendererCommandPending{ false };
+
+	json RendererCommandRejection(const char* a_code, const char* a_message)
+	{
+		return { { "ok", false }, { "error", a_message },
+			{ "errorCode", a_code }, { "mutationApplied", false } };
+	}
+
+	void ProcessRendererCommand()
+	{
+		if (!g_rendererCommandPending.load(std::memory_order_acquire))
+			return;
+		std::shared_ptr<RendererCommand> command;
+		{
+			std::lock_guard lock(g_rendererCommandMutex);
+			command = g_rendererCommand;
+		}
+		if (!command)
+			return;
+		auto* rendererLock = Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context);
+		const Util::RendererOwnership ownership(rendererLock);
+		if (rendererLock && !ownership)
+			return;
+		// Claim only at the frame boundary under ownership; expired requests cannot run late.
+		if (!command->completion.TryBegin())
+			return;
+		try {
+			command->completion.Complete(ownership ? command->run() :
+													 RendererCommandRejection("renderer_unavailable", "renderer context ownership is unavailable"));
+		} catch (...) {
+			command->completion.Fail(std::current_exception());
+		}
+	}
+
+	json RunWithRendererOwnership(std::function<json()> a_run)
+	{
+		auto command = std::make_shared<RendererCommand>();
+		command->run = std::move(a_run);
+		const SKSE::stl::scope_exit release([&]() noexcept {
+			std::lock_guard lock(g_rendererCommandMutex);
+			if (g_rendererCommand == command) {
+				g_rendererCommandPending.store(false, std::memory_order_release);
+				g_rendererCommand.reset();
+			}
+		});
+		{
+			std::lock_guard lock(g_rendererCommandMutex);
+			if (g_rendererCommand)
+				return RendererCommandRejection("renderer_command_busy", "another renderer command is pending; command was not applied");
+			g_rendererCommand = command;
+			g_rendererCommandPending.store(true, std::memory_order_release);
+		}
+		using Completion = CSX::Api::MainThreadDispatchState<json>;
+		const auto deadline = std::chrono::steady_clock::now() + kMainThreadTimeout;
+		if (command->completion.WaitUntil(deadline) == Completion::Phase::queued &&
+			command->completion.CancelIfQueued()) {
+			return RendererCommandRejection("renderer_command_timeout", "renderer did not admit the command before its deadline; command was cancelled");
+		}
+		try {
+			// Once admitted, report the actual result instead of an ambiguous retryable timeout.
+			return command->completion.WaitForCompletion();
+		} catch (const std::exception& e) {
+			return { { "ok", false }, { "error", "renderer command failed" },
+				{ "errorCode", "renderer_command_failed" }, { "detail", e.what() }, { "mutationApplied", nullptr } };
+		} catch (...) {
+			return { { "ok", false }, { "error", "renderer command failed" },
+				{ "errorCode", "renderer_command_failed" }, { "mutationApplied", nullptr } };
+		}
 	}
 
 	json BuildQualificationReceipt(
@@ -5355,9 +7151,2114 @@ namespace
 			std::clamp<int64_t>(rounded, 1, kMainThreadTimeout.count()));
 	}
 
+	json EnsureFoveationMutationEnvelope(
+		json a_response,
+		std::string_view a_action,
+		std::optional<std::string_view> a_control = std::nullopt)
+	{
+		if (!a_response.is_object()) {
+			a_response = {
+				{ "error", "invalid main-thread response" },
+				{ "errorCode", "main_thread_response_invalid" },
+			};
+		}
+		if (!a_response.contains("action"))
+			a_response["action"] = std::string(a_action);
+		if (a_control && !a_response.contains("control"))
+			a_response["control"] = std::string(*a_control);
+		if (!a_response.contains("mutationFrame"))
+			a_response["mutationFrame"] = nullptr;
+		a_response["executionClaimed"] = false;
+		return a_response;
+	}
+
+	template <std::size_t N>
+	bool TryValidateActionFields(
+		const json& a_args,
+		const std::array<std::string_view, N>& a_allowedFields,
+		std::string_view a_actionName,
+		std::string_view a_errorCode,
+		json& a_error)
+	{
+		for (const auto& item : a_args.items()) {
+			const auto found = std::find(
+				a_allowedFields.begin(),
+				a_allowedFields.end(),
+				std::string_view(item.key()));
+			if (found != a_allowedFields.end())
+				continue;
+
+			a_error = {
+				{ "error", std::format("{} is not valid for {}", item.key(), a_actionName) },
+				{ "errorCode", std::string(a_errorCode) },
+				{ "field", item.key() },
+			};
+			return false;
+		}
+		return true;
+	}
+
+	constexpr std::array kNeuralRenderingConfigureFields{
+		std::string_view{ "action" },
+		std::string_view{ "expectedConfigurationFingerprint" },
+		std::string_view{ "enabled" },
+		std::string_view{ "mode" },
+		std::string_view{ "fovOnly" },
+		std::string_view{ "renderscaleFov" },
+		std::string_view{ "insertionPoint" },
+		std::string_view{ "preset" },
+		std::string_view{ "intensity" },
+		std::string_view{ "localToneStrength" },
+		std::string_view{ "localStructureStrength" },
+		std::string_view{ "skinStructureStrength" },
+		std::string_view{ "style" },
+		std::string_view{ "batchedStereo" },
+		std::string_view{ "directCommit" },
+		std::string_view{ "implementation" },
+		std::string_view{ "optimizedStereoPath" },
+		std::string_view{ "useAutoMask" },
+		std::string_view{ "uiCorrection" },
+		std::string_view{ "singleSubrectScale" },
+		std::string_view{ "characterEnabled" },
+		std::string_view{ "characterSceneStrengthsEnabled" },
+		std::string_view{ "characterVisualIsolationEnabled" },
+		std::string_view{ "experimentalCurrentContext" },
+		std::string_view{ "experimentalGpuMaskSupport" },
+		std::string_view{ "characterFaces" },
+		std::string_view{ "characterSkin" },
+		std::string_view{ "characterHair" },
+		std::string_view{ "characterHumans" },
+		std::string_view{ "characterOtherHumanoids" },
+		std::string_view{ "characterCreatures" },
+		std::string_view{ "characterAnimals" },
+		std::string_view{ "characterOtherActors" },
+		std::string_view{ "characterArmor" },
+		std::string_view{ "characterWeapons" },
+		std::string_view{ "characterProviderBlending" },
+		std::string_view{ "characterFaceStrength" },
+		std::string_view{ "characterSkinStrength" },
+		std::string_view{ "characterHairStrength" },
+		std::string_view{ "characterArmorStrength" },
+		std::string_view{ "characterWeaponsStrength" },
+		std::string_view{ "characterMaximumDistanceMeters" },
+		std::string_view{ "characterAdaptiveRoiSelection" },
+		std::string_view{ "characterFocusScale" },
+		std::string_view{ "characterMinimumFacePixelSize" },
+		std::string_view{ "characterCropMode" },
+		std::string_view{ "characterRoiMargin" },
+		std::string_view{ "characterRoiHoldFrames" },
+		std::string_view{ "characterDepthAwareFeather" },
+		std::string_view{ "characterVisibilityDepthTest" },
+		std::string_view{ "characterFeatherRadius" },
+		std::string_view{ "characterFeatherDepthThreshold" },
+		std::string_view{ "characterDebugView" },
+		std::string_view{ "characterMaskTestMode" },
+	};
+
+	struct NeuralRenderingConfigurationRequest
+	{
+		std::optional<std::string> expectedConfigurationFingerprint;
+		std::optional<bool> enabled;
+		std::optional<NeuralRendering::RenderingMode> mode;
+		std::optional<bool> fovOnly;
+		std::optional<bool> renderscaleFov;
+		std::optional<NeuralRendering::InsertionPoint> insertionPoint;
+		std::optional<uint32_t> preset;
+		std::optional<float> intensity;
+		std::optional<float> localToneStrength;
+		std::optional<float> localStructureStrength;
+		std::optional<float> skinStructureStrength;
+		std::optional<uint32_t> style;
+		std::optional<bool> batchedStereo;
+		std::optional<bool> directCommit;
+		std::optional<std::string> implementation;
+		std::optional<bool> legacyOptimizedStereoPath;
+		std::optional<bool> useAutoMask;
+		std::optional<bool> uiCorrection;
+		std::optional<float> singleSubrectScale;
+		std::optional<bool> characterEnabled;
+		std::optional<bool> characterSceneStrengthsEnabled;
+		std::optional<bool> characterVisualIsolationEnabled;
+		std::optional<bool> experimentalCurrentContext;
+		std::optional<bool> experimentalGpuMaskSupport;
+		std::optional<bool> characterFaces;
+		std::optional<bool> characterSkin;
+		std::optional<bool> characterHair;
+		std::optional<bool> characterHumans;
+		std::optional<bool> characterOtherHumanoids;
+		std::optional<bool> characterCreatures;
+		std::optional<bool> characterAnimals;
+		std::optional<bool> characterOtherActors;
+		std::optional<bool> characterArmor;
+		std::optional<bool> characterWeapons;
+		std::optional<bool> characterProviderBlending;
+		std::optional<float> characterFaceStrength;
+		std::optional<float> characterSkinStrength;
+		std::optional<float> characterHairStrength;
+		std::optional<float> characterArmorStrength;
+		std::optional<float> characterWeaponsStrength;
+		std::optional<float> characterMaximumDistanceMeters;
+		std::optional<bool> characterAdaptiveRoiSelection;
+		std::optional<float> characterFocusScale;
+		std::optional<std::uint32_t> characterMinimumFacePixelSize;
+		std::optional<std::uint32_t> characterCropMode;
+		std::optional<float> characterRoiMargin;
+		std::optional<std::uint32_t> characterRoiHoldFrames;
+		std::optional<bool> characterDepthAwareFeather;
+		std::optional<bool> characterVisibilityDepthTest;
+		std::optional<std::uint32_t> characterFeatherRadius;
+		std::optional<float> characterFeatherDepthThreshold;
+		std::optional<NeuralRendering::CharacterDebugView> characterDebugView;
+		std::optional<NeuralRendering::CharacterMaskTestMode> characterMaskTestMode;
+
+		[[nodiscard]] bool HasImageTuningOverrides() const noexcept
+		{
+			return intensity || localToneStrength || localStructureStrength ||
+			       skinStructureStrength || style;
+		}
+
+		[[nodiscard]] bool HasCharacterControls() const noexcept
+		{
+			return characterEnabled || characterSceneStrengthsEnabled || characterVisualIsolationEnabled || experimentalCurrentContext || experimentalGpuMaskSupport ||
+			       characterFaces || characterSkin ||
+			       characterHair || characterHumans || characterOtherHumanoids || characterCreatures || characterAnimals || characterOtherActors || characterArmor || characterWeapons || characterProviderBlending || characterFaceStrength ||
+			       characterSkinStrength || characterHairStrength || characterArmorStrength || characterWeaponsStrength ||
+			       characterMaximumDistanceMeters ||
+			       characterAdaptiveRoiSelection || characterFocusScale ||
+			       characterMinimumFacePixelSize || characterCropMode || characterRoiMargin ||
+			       characterRoiHoldFrames ||
+			       characterDepthAwareFeather || characterVisibilityDepthTest ||
+			       characterFeatherRadius ||
+			       characterFeatherDepthThreshold ||
+			       characterDebugView || characterMaskTestMode;
+		}
+
+		[[nodiscard]] bool HasAnyControl() const noexcept
+		{
+			return enabled || mode || fovOnly || renderscaleFov || insertionPoint || preset || HasImageTuningOverrides() ||
+			       batchedStereo || directCommit || implementation ||
+			       legacyOptimizedStereoPath || useAutoMask || uiCorrection ||
+			       singleSubrectScale ||
+			       HasCharacterControls();
+		}
+	};
+
+	bool TryParseNeuralRenderingConfiguration(
+		const json& a_args,
+		NeuralRenderingConfigurationRequest& a_request,
+		json& a_error)
+	{
+		if (!TryValidateActionFields(
+				a_args,
+				kNeuralRenderingConfigureFields,
+				"nr_configure",
+				"nr_request_field_unknown",
+				a_error)) {
+			return false;
+		}
+
+		if (const auto expected = a_args.find("expectedConfigurationFingerprint"); expected != a_args.end()) {
+			if (!expected->is_string() || expected->get_ref<const std::string&>().size() != 32 ||
+				expected->get_ref<const std::string&>().find_first_not_of("0123456789abcdef") != std::string::npos) {
+				a_error = { { "error", "expectedConfigurationFingerprint must be a lowercase 32-digit hex identity" } };
+				return false;
+			}
+			a_request.expectedConfigurationFingerprint = expected->get<std::string>();
+		}
+		if (const auto enabled = a_args.find("enabled"); enabled != a_args.end()) {
+			if (!enabled->is_boolean()) {
+				a_error = { { "error", "enabled must be a boolean" } };
+				return false;
+			}
+			a_request.enabled = enabled->get<bool>();
+		}
+
+		if (const auto value = a_args.find("mode"); value != a_args.end()) {
+			if (value->is_string()) {
+				a_request.mode = NeuralRendering::ParseRenderingModeName(value->get_ref<const std::string&>());
+			} else if (value->is_number_integer() && *value >= 0 && *value <= 2) {
+				a_request.mode = static_cast<NeuralRendering::RenderingMode>(value->get<uint32_t>());
+			}
+			if (!a_request.mode) {
+				a_error = { { "error", "mode must be full_resolution, foveated, reduced_resolution, or integer 0..2" },
+					{ "errorCode", "nr_mode_invalid" }, { "field", "mode" } };
+				return false;
+			}
+		}
+		if (const auto value = a_args.find("fovOnly"); value != a_args.end()) {
+			if (!value->is_boolean()) {
+				a_error = { { "error", "fovOnly must be a boolean" }, { "errorCode", "nr_fov_only_invalid" }, { "field", "fovOnly" } };
+				return false;
+			}
+			a_request.fovOnly = value->get<bool>();
+		}
+		if (const auto value = a_args.find("renderscaleFov"); value != a_args.end()) {
+			if (!value->is_boolean()) {
+				a_error = { { "error", "renderscaleFov must be a boolean" }, { "errorCode", "nr_renderscale_fov_invalid" }, { "field", "renderscaleFov" } };
+				return false;
+			}
+			a_request.renderscaleFov = value->get<bool>();
+		}
+
+		if (const auto insertionPoint = a_args.find("insertionPoint");
+			insertionPoint != a_args.end()) {
+			if (!insertionPoint->is_string()) {
+				a_error = {
+					{ "error", "insertionPoint must be a string" },
+					{ "errorCode", "nr_insertion_point_type_invalid" },
+					{ "field", "insertionPoint" },
+				};
+				return false;
+			}
+			const auto requested = insertionPoint->get<std::string>();
+			const auto parsed = NeuralRendering::ParseInsertionPointName(requested);
+			if (!parsed) {
+				a_error = {
+					{ "error", "insertionPoint is not a supported Neural Rendering insertion point" },
+					{ "errorCode", "nr_insertion_point_unknown" },
+					{ "field", "insertionPoint" },
+					{ "requested", requested },
+				};
+				return false;
+			}
+			a_request.insertionPoint = *parsed;
+		}
+
+		if (const auto preset = a_args.find("preset"); preset != a_args.end()) {
+			if (preset->is_number_unsigned()) {
+				const auto requested = preset->get<uint64_t>();
+				if (requested > 4u) {
+					a_error = {
+						{ "error", "preset is outside 0..4" },
+						{ "errorCode", "nr_preset_out_of_range" },
+						{ "field", "preset" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.preset = static_cast<uint32_t>(requested);
+			} else if (preset->is_number_integer()) {
+				const auto requested = preset->get<int64_t>();
+				if (requested < 0 || requested > 4) {
+					a_error = {
+						{ "error", "preset is outside 0..4" },
+						{ "errorCode", "nr_preset_out_of_range" },
+						{ "field", "preset" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.preset = static_cast<uint32_t>(requested);
+			} else {
+				a_error = {
+					{ "error", "preset must be an integer" },
+					{ "errorCode", "nr_preset_type_invalid" },
+					{ "field", "preset" },
+				};
+				return false;
+			}
+		}
+
+		const auto parseStrength =
+			[&](const char* a_name, std::optional<float>& a_output) {
+				const auto value = a_args.find(a_name);
+				if (value == a_args.end())
+					return true;
+				if (!value->is_number()) {
+					a_error = {
+						{ "error", std::format("{} must be a number", a_name) },
+						{ "errorCode", "nr_tuning_type_invalid" },
+						{ "field", a_name },
+					};
+					return false;
+				}
+				const double requested = value->get<double>();
+				if (!std::isfinite(requested)) {
+					a_error = {
+						{ "error", std::format("{} must be finite", a_name) },
+						{ "errorCode", "nr_tuning_non_finite" },
+						{ "field", a_name },
+					};
+					return false;
+				}
+				if (requested < 0.0 || requested > 2.0) {
+					a_error = {
+						{ "error", std::format("{} is outside 0..2", a_name) },
+						{ "errorCode", "nr_tuning_out_of_range" },
+						{ "field", a_name },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_output = static_cast<float>(requested);
+				return true;
+			};
+		if (!parseStrength("intensity", a_request.intensity) ||
+			!parseStrength("localToneStrength", a_request.localToneStrength) ||
+			!parseStrength("localStructureStrength", a_request.localStructureStrength) ||
+			!parseStrength("skinStructureStrength", a_request.skinStructureStrength)) {
+			return false;
+		}
+
+		if (const auto value = a_args.find("singleSubrectScale");
+			value != a_args.end()) {
+			if (!value->is_number()) {
+				a_error = {
+					{ "error", "singleSubrectScale must be a number" },
+					{ "errorCode", "nr_single_subrect_scale_type_invalid" },
+					{ "field", "singleSubrectScale" },
+				};
+				return false;
+			}
+			const double requested = value->get<double>();
+			if (!std::isfinite(requested) || requested < 0.25 || requested > 1.0) {
+				a_error = {
+					{ "error", "singleSubrectScale is outside 0.25..1" },
+					{ "errorCode", "nr_single_subrect_scale_out_of_range" },
+					{ "field", "singleSubrectScale" },
+					{ "requested", requested },
+				};
+				return false;
+			}
+			a_request.singleSubrectScale = static_cast<float>(requested);
+		}
+
+		if (const auto style = a_args.find("style"); style != a_args.end()) {
+			if (style->is_number_unsigned()) {
+				const auto requested = style->get<uint64_t>();
+				if (requested > 3u) {
+					a_error = {
+						{ "error", "style is outside 0..3" },
+						{ "errorCode", "nr_style_out_of_range" },
+						{ "field", "style" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.style = static_cast<uint32_t>(requested);
+			} else if (style->is_number_integer()) {
+				const auto requested = style->get<int64_t>();
+				if (requested < 0 || requested > 3) {
+					a_error = {
+						{ "error", "style is outside 0..3" },
+						{ "errorCode", "nr_style_out_of_range" },
+						{ "field", "style" },
+						{ "requested", requested },
+					};
+					return false;
+				}
+				a_request.style = static_cast<uint32_t>(requested);
+			} else {
+				a_error = {
+					{ "error", "style must be an integer" },
+					{ "errorCode", "nr_style_type_invalid" },
+					{ "field", "style" },
+				};
+				return false;
+			}
+		}
+
+		const auto parseBoolean =
+			[&](const char* a_name, std::optional<bool>& a_output) {
+				const auto value = a_args.find(a_name);
+				if (value == a_args.end())
+					return true;
+				if (!value->is_boolean()) {
+					a_error = { { "error", std::format("{} must be a boolean", a_name) } };
+					return false;
+				}
+				a_output = value->get<bool>();
+				return true;
+			};
+		if (!parseBoolean("batchedStereo", a_request.batchedStereo) ||
+			!parseBoolean("directCommit", a_request.directCommit) ||
+			!parseBoolean("optimizedStereoPath", a_request.legacyOptimizedStereoPath) ||
+			!parseBoolean("useAutoMask", a_request.useAutoMask) ||
+			!parseBoolean("uiCorrection", a_request.uiCorrection) ||
+			!parseBoolean("characterEnabled", a_request.characterEnabled) ||
+			!parseBoolean("characterSceneStrengthsEnabled", a_request.characterSceneStrengthsEnabled) ||
+			!parseBoolean("experimentalCurrentContext", a_request.experimentalCurrentContext) ||
+			!parseBoolean("experimentalGpuMaskSupport", a_request.experimentalGpuMaskSupport) ||
+			!parseBoolean(
+				"characterVisualIsolationEnabled",
+				a_request.characterVisualIsolationEnabled) ||
+			!parseBoolean("characterFaces", a_request.characterFaces) ||
+			!parseBoolean("characterSkin", a_request.characterSkin) ||
+			!parseBoolean("characterHair", a_request.characterHair) ||
+			!parseBoolean("characterHumans", a_request.characterHumans) ||
+			!parseBoolean("characterOtherHumanoids", a_request.characterOtherHumanoids) ||
+			!parseBoolean("characterCreatures", a_request.characterCreatures) ||
+			!parseBoolean("characterAnimals", a_request.characterAnimals) ||
+			!parseBoolean("characterOtherActors", a_request.characterOtherActors) ||
+			!parseBoolean("characterArmor", a_request.characterArmor) ||
+			!parseBoolean("characterWeapons", a_request.characterWeapons) ||
+			!parseBoolean("characterProviderBlending", a_request.characterProviderBlending) ||
+			!parseBoolean(
+				"characterAdaptiveRoiSelection",
+				a_request.characterAdaptiveRoiSelection) ||
+			!parseBoolean(
+				"characterDepthAwareFeather",
+				a_request.characterDepthAwareFeather) ||
+			!parseBoolean(
+				"characterVisibilityDepthTest",
+				a_request.characterVisibilityDepthTest)) {
+			return false;
+		}
+
+		const auto parseCharacterFloat =
+			[&](
+				const char* a_name,
+				double a_minimum,
+				double a_maximum,
+				std::optional<float>& a_output) {
+				const auto value = a_args.find(a_name);
+				if (value == a_args.end())
+					return true;
+				if (!value->is_number()) {
+					a_error = {
+						{ "error", std::format("{} must be a number", a_name) },
+						{ "errorCode", "nr_character_number_type_invalid" },
+						{ "field", a_name },
+					};
+					return false;
+				}
+				const double requested = value->get<double>();
+				if (!std::isfinite(requested)) {
+					a_error = {
+						{ "error", std::format("{} must be finite", a_name) },
+						{ "errorCode", "nr_character_number_non_finite" },
+						{ "field", a_name },
+					};
+					return false;
+				}
+				if (requested < a_minimum || requested > a_maximum) {
+					a_error = {
+						{ "error", std::format("{} is outside {}..{}", a_name, a_minimum, a_maximum) },
+						{ "errorCode", "nr_character_number_out_of_range" },
+						{ "field", a_name },
+						{ "requested", requested },
+						{ "minimum", a_minimum },
+						{ "maximum", a_maximum },
+					};
+					return false;
+				}
+				a_output = static_cast<float>(requested);
+				return true;
+			};
+		const auto parseCharacterUint =
+			[&](
+				const char* a_name,
+				std::uint32_t a_minimum,
+				std::uint32_t a_maximum,
+				std::optional<std::uint32_t>& a_output) {
+				const auto value = a_args.find(a_name);
+				if (value == a_args.end())
+					return true;
+				std::uint64_t requested = 0;
+				if (value->is_number_unsigned()) {
+					requested = value->get<std::uint64_t>();
+				} else if (value->is_number_integer()) {
+					const auto signedValue = value->get<std::int64_t>();
+					if (signedValue < 0) {
+						a_error = {
+							{ "error", std::format("{} is outside {}..{}", a_name, a_minimum, a_maximum) },
+							{ "errorCode", "nr_character_integer_out_of_range" },
+							{ "field", a_name },
+							{ "requested", signedValue },
+							{ "minimum", a_minimum },
+							{ "maximum", a_maximum },
+						};
+						return false;
+					}
+					requested = static_cast<std::uint64_t>(signedValue);
+				} else {
+					a_error = {
+						{ "error", std::format("{} must be an integer", a_name) },
+						{ "errorCode", "nr_character_integer_type_invalid" },
+						{ "field", a_name },
+					};
+					return false;
+				}
+				if (requested < a_minimum || requested > a_maximum) {
+					a_error = {
+						{ "error", std::format("{} is outside {}..{}", a_name, a_minimum, a_maximum) },
+						{ "errorCode", "nr_character_integer_out_of_range" },
+						{ "field", a_name },
+						{ "requested", requested },
+						{ "minimum", a_minimum },
+						{ "maximum", a_maximum },
+					};
+					return false;
+				}
+				a_output = static_cast<std::uint32_t>(requested);
+				return true;
+			};
+
+		if (!parseCharacterFloat("characterFocusScale", FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, a_request.characterFocusScale) ||
+			!parseCharacterFloat(
+				"characterFaceStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
+				a_request.characterFaceStrength) ||
+			!parseCharacterFloat(
+				"characterSkinStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
+				a_request.characterSkinStrength) ||
+			!parseCharacterFloat(
+				"characterHairStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
+				a_request.characterHairStrength) ||
+			!parseCharacterFloat(
+				"characterArmorStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
+				a_request.characterArmorStrength) ||
+			!parseCharacterFloat(
+				"characterWeaponsStrength",
+				NeuralRendering::CharacterPolicy::kMinimumStrength,
+				NeuralRendering::CharacterPolicy::kMaximumStrength,
+				a_request.characterWeaponsStrength) ||
+			!parseCharacterFloat(
+				"characterMaximumDistanceMeters",
+				NeuralRendering::CharacterPolicy::kMinimumDistanceMeters,
+				NeuralRendering::CharacterPolicy::kMaximumDistanceMeters,
+				a_request.characterMaximumDistanceMeters) ||
+			!parseCharacterFloat(
+				"characterRoiMargin",
+				NeuralRendering::CharacterPolicy::kMinimumRoiMargin,
+				NeuralRendering::CharacterPolicy::kMaximumRoiMargin,
+				a_request.characterRoiMargin) ||
+			!parseCharacterFloat(
+				"characterFeatherDepthThreshold", 0.0,
+				NeuralRendering::CharacterPolicy::kMaximumFeatherDepthThreshold,
+				a_request.characterFeatherDepthThreshold) ||
+			!parseCharacterUint("characterCropMode", 0, 2, a_request.characterCropMode) ||
+			!parseCharacterUint(
+				"characterMinimumFacePixelSize",
+				NeuralRendering::CharacterPolicy::kMinimumFacePixelSize,
+				NeuralRendering::CharacterPolicy::kMaximumFacePixelSize,
+				a_request.characterMinimumFacePixelSize) ||
+			!parseCharacterUint(
+				"characterRoiHoldFrames", 0u,
+				NeuralRendering::CharacterPolicy::kMaximumRoiHoldFrames,
+				a_request.characterRoiHoldFrames) ||
+			!parseCharacterUint(
+				"characterFeatherRadius", 0u,
+				NeuralRendering::CharacterPolicy::kMaximumFeatherRadius,
+				a_request.characterFeatherRadius)) {
+			return false;
+		}
+
+		if (const auto debugView = a_args.find("characterDebugView");
+			debugView != a_args.end()) {
+			if (!debugView->is_string()) {
+				a_error = {
+					{ "error", "characterDebugView must be a string" },
+					{ "errorCode", "nr_character_debug_view_type_invalid" },
+					{ "field", "characterDebugView" },
+				};
+				return false;
+			}
+			const auto requested = debugView->get<std::string>();
+			if (requested == "off") {
+				a_request.characterDebugView = NeuralRendering::CharacterDebugView::Off;
+			} else if (requested == "character_mask") {
+				a_request.characterDebugView =
+					NeuralRendering::CharacterDebugView::CharacterMask;
+			} else if (requested == "roi_rectangles") {
+				a_request.characterDebugView =
+					NeuralRendering::CharacterDebugView::RoiRectangles;
+			} else if (requested == "dlss5_output") {
+				a_request.characterDebugView =
+					NeuralRendering::CharacterDebugView::Dlss5Output;
+			} else {
+				a_error = {
+					{ "error", "characterDebugView is not supported" },
+					{ "errorCode", "nr_character_debug_view_unknown" },
+					{ "field", "characterDebugView" },
+					{ "requested", requested },
+				};
+				return false;
+			}
+		}
+
+		if (const auto maskTestMode = a_args.find("characterMaskTestMode");
+			maskTestMode != a_args.end()) {
+			if (!maskTestMode->is_string()) {
+				a_error = {
+					{ "error", "characterMaskTestMode must be a string" },
+					{ "errorCode", "nr_character_mask_test_mode_type_invalid" },
+					{ "field", "characterMaskTestMode" },
+				};
+				return false;
+			}
+			const auto requested = maskTestMode->get<std::string>();
+			if (requested == "authored") {
+				a_request.characterMaskTestMode =
+					NeuralRendering::CharacterMaskTestMode::Authored;
+			} else if (requested == "force_zero") {
+				a_request.characterMaskTestMode =
+					NeuralRendering::CharacterMaskTestMode::ForceZero;
+			} else if (requested == "force_one") {
+				a_request.characterMaskTestMode =
+					NeuralRendering::CharacterMaskTestMode::ForceOne;
+			} else if (requested == "force_half") {
+				a_request.characterMaskTestMode =
+					NeuralRendering::CharacterMaskTestMode::ForceHalf;
+			} else if (requested == "invert_authored") {
+				a_request.characterMaskTestMode =
+					NeuralRendering::CharacterMaskTestMode::InvertAuthored;
+			} else if (requested == "authored_without_visibility_depth") {
+				a_request.characterMaskTestMode =
+					NeuralRendering::CharacterMaskTestMode::AuthoredWithoutVisibilityDepth;
+			} else {
+				a_error = {
+					{ "error", "characterMaskTestMode is not supported" },
+					{ "errorCode", "nr_character_mask_test_mode_unknown" },
+					{ "field", "characterMaskTestMode" },
+					{ "requested", requested },
+				};
+				return false;
+			}
+		}
+
+		if (const auto implementation = a_args.find("implementation");
+			implementation != a_args.end()) {
+			if (!implementation->is_string()) {
+				a_error = { { "error", "implementation must be a string" } };
+				return false;
+			}
+			a_request.implementation = implementation->get<std::string>();
+			const auto parsed =
+				NeuralRendering::ParseImplementationName(*a_request.implementation);
+			if (!parsed) {
+				a_error = {
+					{ "error", "implementation is not a supported Neural Rendering lane" },
+					{ "errorCode", "nr_implementation_unknown" },
+				};
+				return false;
+			}
+			a_request.batchedStereo = parsed->batchedStereo;
+			a_request.directCommit = parsed->directCommit;
+		}
+		if (a_request.implementation &&
+			(a_args.contains("batchedStereo") ||
+				a_args.contains("directCommit") ||
+				a_args.contains("optimizedStereoPath"))) {
+			a_error = {
+				{ "error", "implementation cannot be combined with batchedStereo, directCommit, or optimizedStereoPath" },
+				{ "errorCode", "nr_implementation_controls_ambiguous" },
+			};
+			return false;
+		}
+		if (a_request.legacyOptimizedStereoPath &&
+			(a_request.batchedStereo || a_request.directCommit)) {
+			a_error = {
+				{ "error", "optimizedStereoPath cannot be combined with batchedStereo or directCommit" },
+				{ "errorCode", "nr_implementation_controls_ambiguous" },
+			};
+			return false;
+		}
+		if (a_request.uiCorrection && *a_request.uiCorrection) {
+			a_error = {
+				{ "error", "neural UI correction requires unimplemented UI resources" },
+				{ "errorCode", "nr_ui_correction_unsupported" },
+			};
+			return false;
+		}
+		if (!a_request.HasAnyControl()) {
+			a_error = {
+				{ "error", "nr_configure requires at least one Neural Rendering control" },
+				{ "errorCode", "nr_configure_empty" },
+			};
+			return false;
+		}
+		return true;
+	}
+
+	bool TryValidateNeuralRenderingPlacement(const NeuralRenderingConfigurationRequest& request,
+		NeuralRendering::RenderingMode mode, json& error)
+	{
+		const auto required = NeuralRendering::ResolveInsertionPoint(mode);
+		if (!request.insertionPoint || *request.insertionPoint == required)
+			return true;
+		error = { { "ok", false }, { "error", "Insertion point is fixed by the Neural Rendering mode" },
+			{ "errorCode", "nr_insertion_point_conflict" }, { "action", "nr_configure" },
+			{ "field", "insertionPoint" }, { "requiredValue", NeuralRendering::GetInsertionPointName(required) },
+			{ "settingsChanged", false } };
+		return false;
+	}
+
+	struct FoveationConfigurationRequest
+	{
+		std::optional<bool> foveatedEnabled;
+		std::optional<bool> peripheryTaaEnabled;
+		std::optional<float> fovOnlyCenterScale;
+		std::optional<float> peripheryTaaCenterScale;
+		std::optional<float> peripheryTaaOuterScale;
+		std::optional<float> centerHorizontalScale;
+		std::optional<float> leftEyeOffsetX;
+		std::optional<float> leftEyeOffsetY;
+		std::optional<float> rightEyeOffsetX;
+		std::optional<float> rightEyeOffsetY;
+		std::optional<float> peripheryTaaBlendFeather;
+		std::optional<float> neuralFinalLdrBlendFeather;
+		std::optional<bool> maskVisualization;
+
+		[[nodiscard]] bool HasAnyControl() const noexcept
+		{
+			return foveatedEnabled || peripheryTaaEnabled || fovOnlyCenterScale ||
+			       peripheryTaaCenterScale || peripheryTaaOuterScale ||
+			       centerHorizontalScale ||
+			       leftEyeOffsetX || leftEyeOffsetY || rightEyeOffsetX ||
+			       rightEyeOffsetY || peripheryTaaBlendFeather || neuralFinalLdrBlendFeather ||
+			       maskVisualization;
+		}
+	};
+
+	constexpr std::array kFoveationConfigureFields{
+		std::string_view{ "action" },
+		std::string_view{ "foveatedEnabled" },
+		std::string_view{ "peripheryTaaEnabled" },
+		std::string_view{ "fovOnlyCenterScale" },
+		std::string_view{ "peripheryTaaCenterScale" },
+		std::string_view{ "peripheryTaaOuterScale" },
+		std::string_view{ "centerHorizontalScale" },
+		std::string_view{ "leftEyeOffsetX" },
+		std::string_view{ "leftEyeOffsetY" },
+		std::string_view{ "rightEyeOffsetX" },
+		std::string_view{ "rightEyeOffsetY" },
+		std::string_view{ "peripheryTaaBlendFeather" },
+		std::string_view{ "neuralFinalLdrBlendFeather" },
+		std::string_view{ "maskVisualization" },
+	};
+	constexpr std::array kFoveationCycleFields{
+		std::string_view{ "action" },
+		std::string_view{ "control" },
+		std::string_view{ "valueIndex" },
+	};
+
+	template <std::size_t N>
+	bool TryValidateFoveationActionFields(
+		const json& a_args,
+		const std::array<std::string_view, N>& a_allowedFields,
+		json& a_error)
+	{
+		return TryValidateActionFields(
+			a_args,
+			a_allowedFields,
+			"this foveation action",
+			"foveation_request_field_unknown",
+			a_error);
+	}
+
+	bool TryParseFoveationBoolean(
+		const json& a_args,
+		const char* a_name,
+		std::optional<bool>& a_output,
+		json& a_error)
+	{
+		const auto value = a_args.find(a_name);
+		if (value == a_args.end())
+			return true;
+		if (!value->is_boolean()) {
+			a_error = {
+				{ "error", std::format("{} must be a boolean", a_name) },
+				{ "errorCode", "foveation_boolean_type_invalid" },
+				{ "field", a_name },
+			};
+			return false;
+		}
+		a_output = value->get<bool>();
+		return true;
+	}
+
+	bool TryParseFoveationFloat(
+		const json& a_args,
+		const char* a_name,
+		double a_minimum,
+		double a_maximum,
+		std::optional<float>& a_output,
+		json& a_error)
+	{
+		const auto value = a_args.find(a_name);
+		if (value == a_args.end())
+			return true;
+		if (!value->is_number()) {
+			a_error = {
+				{ "error", std::format("{} must be a number", a_name) },
+				{ "errorCode", "foveation_number_type_invalid" },
+				{ "field", a_name },
+			};
+			return false;
+		}
+
+		const double requested = value->get<double>();
+		if (!std::isfinite(requested)) {
+			a_error = {
+				{ "error", std::format("{} must be finite", a_name) },
+				{ "errorCode", "foveation_number_non_finite" },
+				{ "field", a_name },
+			};
+			return false;
+		}
+		if (requested < a_minimum || requested > a_maximum) {
+			a_error = {
+				{ "error", std::format("{} is outside {}..{}", a_name, a_minimum, a_maximum) },
+				{ "errorCode", "foveation_number_out_of_range" },
+				{ "field", a_name },
+				{ "requested", requested },
+				{ "minimum", a_minimum },
+				{ "maximum", a_maximum },
+			};
+			return false;
+		}
+
+		a_output = static_cast<float>(requested);
+		return true;
+	}
+
+	bool TryParseFoveationConfiguration(
+		const json& a_args,
+		FoveationConfigurationRequest& a_request,
+		json& a_error)
+	{
+		if (!TryValidateFoveationActionFields(
+				a_args, kFoveationConfigureFields, a_error) ||
+			!TryParseFoveationBoolean(a_args, "foveatedEnabled", a_request.foveatedEnabled, a_error) ||
+			!TryParseFoveationBoolean(a_args, "peripheryTaaEnabled", a_request.peripheryTaaEnabled, a_error) ||
+			!TryParseFoveationFloat(a_args, "fovOnlyCenterScale", kCenterScaleRequestMin, kCenterScaleRequestMax, a_request.fovOnlyCenterScale, a_error) ||
+			!TryParseFoveationFloat(a_args, "peripheryTaaCenterScale", kCenterScaleRequestMin, kCenterScaleRequestMax, a_request.peripheryTaaCenterScale, a_error) ||
+			!TryParseFoveationFloat(a_args, "peripheryTaaOuterScale", kPeripheryTAAOuterScaleRequestMin, kPeripheryTAAOuterScaleRequestMax, a_request.peripheryTaaOuterScale, a_error) ||
+			!TryParseFoveationFloat(a_args, "centerHorizontalScale", kCenterHorizontalScaleRequestMin, kCenterHorizontalScaleRequestMax, a_request.centerHorizontalScale, a_error) ||
+			!TryParseFoveationFloat(a_args, "leftEyeOffsetX", kManualOffsetRequestMin, kManualOffsetRequestMax, a_request.leftEyeOffsetX, a_error) ||
+			!TryParseFoveationFloat(a_args, "leftEyeOffsetY", kManualOffsetRequestMin, kManualOffsetRequestMax, a_request.leftEyeOffsetY, a_error) ||
+			!TryParseFoveationFloat(a_args, "rightEyeOffsetX", kManualOffsetRequestMin, kManualOffsetRequestMax, a_request.rightEyeOffsetX, a_error) ||
+			!TryParseFoveationFloat(a_args, "rightEyeOffsetY", kManualOffsetRequestMin, kManualOffsetRequestMax, a_request.rightEyeOffsetY, a_error) ||
+			!TryParseFoveationFloat(a_args, "peripheryTaaBlendFeather", kBlendFeatherRequestMin, kBlendFeatherRequestMax, a_request.peripheryTaaBlendFeather, a_error) ||
+			!TryParseFoveationFloat(a_args, "neuralFinalLdrBlendFeather", kBlendFeatherRequestMin, kBlendFeatherRequestMax, a_request.neuralFinalLdrBlendFeather, a_error) ||
+			!TryParseFoveationBoolean(a_args, "maskVisualization", a_request.maskVisualization, a_error)) {
+			return false;
+		}
+
+		if (!a_request.HasAnyControl()) {
+			a_error = {
+				{ "error", "foveation_configure requires at least one foveation control" },
+				{ "errorCode", "foveation_configure_empty" },
+			};
+			return false;
+		}
+		return true;
+	}
+
+	void ApplyFoveationRequest(
+		Upscaling::Settings& a_settings,
+		const FoveationConfigurationRequest& a_request)
+	{
+		if (a_request.foveatedEnabled)
+			a_settings.foveatedVendorDispatch = *a_request.foveatedEnabled;
+		if (a_request.peripheryTaaEnabled)
+			a_settings.periphery_taa_enable = *a_request.peripheryTaaEnabled;
+		if (a_request.fovOnlyCenterScale)
+			a_settings.foveatedCenterArea = *a_request.fovOnlyCenterScale;
+		if (a_request.peripheryTaaCenterScale)
+			a_settings.periphery_taa_center_area = *a_request.peripheryTaaCenterScale;
+		if (a_request.peripheryTaaOuterScale)
+			a_settings.periphery_taa_outer_scale = *a_request.peripheryTaaOuterScale;
+		if (a_request.centerHorizontalScale)
+			a_settings.foveatedCenterHorizontalScale = *a_request.centerHorizontalScale;
+		if (a_request.leftEyeOffsetX)
+			a_settings.foveatedLeftEyeMaskOffsetX = *a_request.leftEyeOffsetX;
+		if (a_request.leftEyeOffsetY)
+			a_settings.foveatedLeftEyeMaskOffsetY = *a_request.leftEyeOffsetY;
+		if (a_request.rightEyeOffsetX)
+			a_settings.foveatedRightEyeMaskOffsetX = *a_request.rightEyeOffsetX;
+		if (a_request.rightEyeOffsetY)
+			a_settings.foveatedRightEyeMaskOffsetY = *a_request.rightEyeOffsetY;
+		if (a_request.peripheryTaaBlendFeather)
+			a_settings.periphery_taa_center_blend_feather = *a_request.peripheryTaaBlendFeather;
+		if (a_request.neuralFinalLdrBlendFeather)
+			a_settings.neuralRenderingBlendFeather = *a_request.neuralFinalLdrBlendFeather;
+		if (a_request.maskVisualization)
+			a_settings.foveatedPeripheryMaskVisualization = *a_request.maskVisualization;
+	}
+
+	bool HasSameFoveationControls(
+		const Upscaling::Settings& a_left,
+		const Upscaling::Settings& a_right)
+	{
+		return a_left.foveatedVendorDispatch == a_right.foveatedVendorDispatch &&
+		       a_left.periphery_taa_enable == a_right.periphery_taa_enable &&
+		       a_left.foveatedCenterArea == a_right.foveatedCenterArea &&
+		       a_left.periphery_taa_center_area == a_right.periphery_taa_center_area &&
+		       a_left.periphery_taa_outer_scale == a_right.periphery_taa_outer_scale &&
+		       a_left.foveatedCenterHorizontalScale == a_right.foveatedCenterHorizontalScale &&
+		       a_left.foveatedLeftEyeMaskOffsetX == a_right.foveatedLeftEyeMaskOffsetX &&
+		       a_left.foveatedLeftEyeMaskOffsetY == a_right.foveatedLeftEyeMaskOffsetY &&
+		       a_left.foveatedRightEyeMaskOffsetX == a_right.foveatedRightEyeMaskOffsetX &&
+		       a_left.foveatedRightEyeMaskOffsetY == a_right.foveatedRightEyeMaskOffsetY &&
+		       a_left.periphery_taa_center_blend_feather == a_right.periphery_taa_center_blend_feather &&
+		       a_left.neuralRenderingBlendFeather == a_right.neuralRenderingBlendFeather &&
+		       a_left.foveatedPeripheryMaskVisualization == a_right.foveatedPeripheryMaskVisualization;
+	}
+
+	json ApplyFoveationConfiguration(
+		Upscaling& a_upscaling,
+		const FoveationConfigurationRequest& a_request,
+		const char* a_action,
+		bool a_rejectNoOp,
+		json a_response = json::object())
+	{
+		const auto previousSettings = a_upscaling.settings;
+		auto requestedSettings = previousSettings;
+		if (Upscaling::IsNeuralRenderingEnabled(previousSettings) && a_request.peripheryTaaEnabled.value_or(false)) {
+			a_response["action"] = a_action;
+			a_response["ok"] = false;
+			a_response["settingsChanged"] = false;
+			a_response["errorCode"] = "foveation_taa_incompatible_with_nr";
+			a_response["error"] = "NR requires FOV centre without TAA; set both eye masks precisely";
+			return a_response;
+		}
+		ApplyFoveationRequest(requestedSettings, a_request);
+		Upscaling::ApplyNeuralRenderingFovConstraint(requestedSettings);
+		const bool requestedSettingsChanged = !HasSameFoveationControls(
+			previousSettings, requestedSettings);
+		const uint32_t mutationFrame = globals::state ?
+		                                   globals::state->frameCount :
+		                                   0u;
+		const uint32_t measurementSafeFromFrame = mutationFrame ==
+		                                                  std::numeric_limits<uint32_t>::max() ?
+		                                              mutationFrame :
+		                                              mutationFrame + 1u;
+
+		a_response["action"] = a_action;
+		a_response["mutationFrame"] = mutationFrame;
+		a_response["executionClaimed"] = false;
+		a_response["requestedSettingsChanged"] = requestedSettingsChanged;
+		a_response["settingsChanged"] = false;
+		a_response["noOp"] = !requestedSettingsChanged;
+		a_response["historyResetRequested"] = false;
+		a_response["frameScopedStateInvalidated"] = false;
+		a_response["effectiveNotBeforeFrame"] = nullptr;
+		a_response["measurementSafeFromFrame"] = nullptr;
+
+		if (requestedSettings.periphery_taa_outer_scale <
+			requestedSettings.periphery_taa_center_area) {
+			a_response["error"] =
+				"peripheryTaaOuterScale must be at least peripheryTaaCenterScale";
+			a_response["errorCode"] = "foveation_outer_scale_below_center";
+			a_response["field"] = "peripheryTaaOuterScale";
+			a_response["requested"] = requestedSettings.periphery_taa_outer_scale;
+			a_response["minimum"] = requestedSettings.periphery_taa_center_area;
+			a_response["neuralSettingsTransitionAttempted"] = false;
+			a_response["transitionSucceeded"] = true;
+			a_response["neuralRendering"] = NeuralRenderingStatusJson(a_upscaling);
+			return a_response;
+		}
+
+		if (!requestedSettingsChanged) {
+			if (a_rejectNoOp) {
+				a_response["error"] = "requested foveation settings already match the active settings";
+				a_response["errorCode"] = "foveation_configure_noop";
+			}
+			a_response["neuralSettingsTransitionAttempted"] = false;
+			a_response["transitionSucceeded"] = true;
+			a_response["neuralRendering"] = NeuralRenderingStatusJson(a_upscaling);
+			return a_response;
+		}
+
+		const bool neuralSettingsChanged =
+			!Upscaling::HasSameNeuralRenderingSettingsKey(
+				previousSettings, requestedSettings);
+		a_upscaling.settings = requestedSettings;
+		a_upscaling.InvalidateFrameScopedUpscalingState();
+		a_upscaling.RequestHistoryReset();
+		a_response["settingsChanged"] = true;
+		a_response["historyResetRequested"] = true;
+		a_response["frameScopedStateInvalidated"] = true;
+		a_response["effectiveNotBeforeFrame"] = mutationFrame;
+		a_response["measurementSafeFromFrame"] = measurementSafeFromFrame;
+		const bool transitionSucceeded = !neuralSettingsChanged ||
+		                                 a_upscaling.HandleNeuralRenderingSettingsTransition(
+											 previousSettings,
+											 "DevBench foveation configuration");
+		a_response["neuralSettingsTransitionAttempted"] = neuralSettingsChanged;
+		a_response["transitionSucceeded"] = transitionSucceeded;
+		a_response["neuralRendering"] = NeuralRenderingStatusJson(a_upscaling);
+		if (!transitionSucceeded) {
+			a_response["error"] = "neural-rendering transition did not complete";
+			a_response["errorCode"] = "foveation_neural_transition_failed";
+		}
+		return a_response;
+	}
+
+	template <class T, std::size_t N>
+	bool SelectExactCycleValue(
+		const T& a_current,
+		const std::array<T, N>& a_values,
+		const std::optional<uint32_t>& a_requestedIndex,
+		T& a_selected,
+		uint32_t& a_selectedIndex,
+		json& a_error)
+	{
+		if (a_requestedIndex && *a_requestedIndex >= N) {
+			a_error = {
+				{ "error", std::format("valueIndex is outside 0..{}", N - 1u) },
+				{ "errorCode", "foveation_cycle_index_out_of_range" },
+				{ "requested", *a_requestedIndex },
+				{ "maximum", N - 1u },
+			};
+			return false;
+		}
+
+		if (a_requestedIndex) {
+			a_selectedIndex = *a_requestedIndex;
+		} else {
+			std::size_t currentIndex = N;
+			for (std::size_t index = 0; index < N; ++index) {
+				if (a_values[index] == a_current) {
+					currentIndex = index;
+					break;
+				}
+			}
+			a_selectedIndex = currentIndex < N ?
+			                      static_cast<uint32_t>((currentIndex + 1u) % N) :
+			                      0u;
+		}
+		a_selected = a_values[a_selectedIndex];
+		return true;
+	}
+
+	template <class TValues>
+	bool SelectFloatCycleValue(
+		float a_current,
+		const TValues& a_values,
+		const std::optional<uint32_t>& a_requestedIndex,
+		float& a_selected,
+		uint32_t& a_selectedIndex,
+		json& a_error)
+	{
+		const std::size_t valueCount = a_values.size();
+		if (valueCount == 0u) {
+			a_error = {
+				{ "error", "foveation cycle has no values" },
+				{ "errorCode", "foveation_cycle_values_empty" },
+			};
+			return false;
+		}
+		if (a_requestedIndex && *a_requestedIndex >= valueCount) {
+			a_error = {
+				{ "error", std::format("valueIndex is outside 0..{}", valueCount - 1u) },
+				{ "errorCode", "foveation_cycle_index_out_of_range" },
+				{ "requested", *a_requestedIndex },
+				{ "maximum", valueCount - 1u },
+			};
+			return false;
+		}
+
+		if (a_requestedIndex) {
+			a_selectedIndex = *a_requestedIndex;
+		} else {
+			std::size_t currentIndex = valueCount;
+			for (std::size_t index = 0; index < valueCount; ++index) {
+				if (std::abs(a_values[index] - a_current) <= 1.0e-6f) {
+					currentIndex = index;
+					break;
+				}
+			}
+			if (currentIndex < valueCount) {
+				a_selectedIndex = static_cast<uint32_t>(
+					(currentIndex + 1u) % valueCount);
+			} else {
+				a_selectedIndex = 0u;
+				for (std::size_t index = 0; index < valueCount; ++index) {
+					if (a_values[index] > a_current) {
+						a_selectedIndex = static_cast<uint32_t>(index);
+						break;
+					}
+				}
+			}
+		}
+		a_selected = a_values[a_selectedIndex];
+		return true;
+	}
+
+	bool TryParseFoveationCycleRequest(
+		const json& a_args,
+		FoveationCycleControl& a_control,
+		std::optional<uint32_t>& a_valueIndex,
+		json& a_error)
+	{
+		if (!TryValidateFoveationActionFields(
+				a_args, kFoveationCycleFields, a_error)) {
+			return false;
+		}
+		const auto control = a_args.find("control");
+		if (control == a_args.end() || !control->is_string()) {
+			a_error = {
+				{ "error", "control must be a supported foveation control name" },
+				{ "errorCode", "foveation_cycle_control_invalid" },
+				{ "field", "control" },
+			};
+			return false;
+		}
+		const auto parsedControl = ParseFoveationCycleControl(
+			control->get<std::string>());
+		if (!parsedControl) {
+			a_error = {
+				{ "error", "control is not a supported foveation cycle axis" },
+				{ "errorCode", "foveation_cycle_control_unknown" },
+				{ "field", "control" },
+				{ "requested", control->get<std::string>() },
+			};
+			return false;
+		}
+		a_control = *parsedControl;
+
+		const auto valueIndex = a_args.find("valueIndex");
+		if (valueIndex == a_args.end())
+			return true;
+		uint64_t requested = 0;
+		if (valueIndex->is_number_unsigned()) {
+			requested = valueIndex->get<uint64_t>();
+		} else if (valueIndex->is_number_integer()) {
+			const auto signedIndex = valueIndex->get<int64_t>();
+			if (signedIndex < 0) {
+				a_error = {
+					{ "error", "valueIndex must be a non-negative integer" },
+					{ "errorCode", "foveation_cycle_index_invalid" },
+					{ "field", "valueIndex" },
+				};
+				return false;
+			}
+			requested = static_cast<uint64_t>(signedIndex);
+		} else {
+			a_error = {
+				{ "error", "valueIndex must be a non-negative integer" },
+				{ "errorCode", "foveation_cycle_index_invalid" },
+				{ "field", "valueIndex" },
+			};
+			return false;
+		}
+		if (requested > std::numeric_limits<uint32_t>::max()) {
+			a_error = {
+				{ "error", "valueIndex is too large" },
+				{ "errorCode", "foveation_cycle_index_invalid" },
+				{ "field", "valueIndex" },
+			};
+			return false;
+		}
+		a_valueIndex = static_cast<uint32_t>(requested);
+		return true;
+	}
+
+	json ApplyFoveationCycle(
+		Upscaling& a_upscaling,
+		FoveationCycleControl a_control,
+		const std::optional<uint32_t>& a_requestedIndex)
+	{
+		const auto& settings = a_upscaling.settings;
+		FoveationConfigurationRequest request;
+		json response{
+			{ "control", GetFoveationCycleControlName(a_control) },
+		};
+		json error;
+		uint32_t selectedIndex = 0;
+		uint32_t matrixSize = 0;
+		auto recordSelection =
+			[&](json a_previousValue, json a_selectedValue, uint32_t a_size) {
+				matrixSize = a_size;
+				response["previousValue"] = std::move(a_previousValue);
+				response["currentValue"] = std::move(a_selectedValue);
+			};
+
+		switch (a_control) {
+		case FoveationCycleControl::Master:
+			{
+				constexpr std::array values{ false, true };
+				bool selected = false;
+				if (!SelectExactCycleValue(
+						settings.foveatedVendorDispatch,
+						values,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				request.foveatedEnabled = selected;
+				recordSelection(
+					settings.foveatedVendorDispatch, selected,
+					static_cast<uint32_t>(values.size()));
+				break;
+			}
+		case FoveationCycleControl::PeripheryTAA:
+			{
+				constexpr std::array values{ false, true };
+				bool selected = false;
+				if (!SelectExactCycleValue(
+						settings.periphery_taa_enable,
+						values,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				request.peripheryTaaEnabled = selected;
+				recordSelection(
+					settings.periphery_taa_enable, selected,
+					static_cast<uint32_t>(values.size()));
+				break;
+			}
+		case FoveationCycleControl::FovOnlyCenterScale:
+			{
+				float selected = 0.0f;
+				if (!SelectFloatCycleValue(
+						settings.foveatedCenterArea,
+						kCenterScaleCycleValues,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				request.fovOnlyCenterScale = selected;
+				recordSelection(
+					settings.foveatedCenterArea, selected,
+					static_cast<uint32_t>(kCenterScaleCycleValues.size()));
+				break;
+			}
+		case FoveationCycleControl::PeripheryTAACenterScale:
+			{
+				float selected = 0.0f;
+				if (!SelectFloatCycleValue(
+						settings.periphery_taa_center_area,
+						kCenterScaleCycleValues,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				request.peripheryTaaCenterScale = selected;
+				if (settings.periphery_taa_outer_scale < selected) {
+					request.peripheryTaaOuterScale = selected;
+					response["dependentOuterScale"] = selected;
+				}
+				recordSelection(
+					settings.periphery_taa_center_area, selected,
+					static_cast<uint32_t>(kCenterScaleCycleValues.size()));
+				break;
+			}
+		case FoveationCycleControl::PeripheryTAAOuterScale:
+			{
+				const auto values = GetPeripheryTAAOuterScaleCycleValues(settings);
+				float selected = 0.0f;
+				if (!SelectFloatCycleValue(
+						settings.periphery_taa_outer_scale,
+						values,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				request.peripheryTaaOuterScale = selected;
+				recordSelection(
+					settings.periphery_taa_outer_scale, selected,
+					static_cast<uint32_t>(values.size()));
+				break;
+			}
+		case FoveationCycleControl::CenterHorizontalScale:
+			{
+				float selected = 0.0f;
+				if (!SelectFloatCycleValue(
+						settings.foveatedCenterHorizontalScale,
+						kHorizontalScaleCycleValues,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				request.centerHorizontalScale = selected;
+				recordSelection(
+					settings.foveatedCenterHorizontalScale, selected,
+					static_cast<uint32_t>(kHorizontalScaleCycleValues.size()));
+				break;
+			}
+		case FoveationCycleControl::LeftEyeOffsetX:
+		case FoveationCycleControl::LeftEyeOffsetY:
+		case FoveationCycleControl::RightEyeOffsetX:
+		case FoveationCycleControl::RightEyeOffsetY:
+			{
+				float current = 0.0f;
+				switch (a_control) {
+				case FoveationCycleControl::LeftEyeOffsetX:
+					current = settings.foveatedLeftEyeMaskOffsetX;
+					break;
+				case FoveationCycleControl::LeftEyeOffsetY:
+					current = settings.foveatedLeftEyeMaskOffsetY;
+					break;
+				case FoveationCycleControl::RightEyeOffsetX:
+					current = settings.foveatedRightEyeMaskOffsetX;
+					break;
+				case FoveationCycleControl::RightEyeOffsetY:
+					current = settings.foveatedRightEyeMaskOffsetY;
+					break;
+				default:
+					break;
+				}
+				float selected = 0.0f;
+				if (!SelectFloatCycleValue(
+						current,
+						kManualOffsetCycleValues,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				switch (a_control) {
+				case FoveationCycleControl::LeftEyeOffsetX:
+					request.leftEyeOffsetX = selected;
+					break;
+				case FoveationCycleControl::LeftEyeOffsetY:
+					request.leftEyeOffsetY = selected;
+					break;
+				case FoveationCycleControl::RightEyeOffsetX:
+					request.rightEyeOffsetX = selected;
+					break;
+				case FoveationCycleControl::RightEyeOffsetY:
+					request.rightEyeOffsetY = selected;
+					break;
+				default:
+					break;
+				}
+				recordSelection(
+					current, selected,
+					static_cast<uint32_t>(kManualOffsetCycleValues.size()));
+				break;
+			}
+		case FoveationCycleControl::PeripheryTAABlendFeather:
+		case FoveationCycleControl::NeuralFinalLdrBlendFeather:
+			{
+				const float current = a_control == FoveationCycleControl::PeripheryTAABlendFeather ?
+				                          settings.periphery_taa_center_blend_feather :
+				                          settings.neuralRenderingBlendFeather;
+				float selected = 0.0f;
+				if (!SelectFloatCycleValue(
+						current,
+						kBlendFeatherCycleValues,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				if (a_control == FoveationCycleControl::PeripheryTAABlendFeather)
+					request.peripheryTaaBlendFeather = selected;
+				else
+					request.neuralFinalLdrBlendFeather = selected;
+				recordSelection(
+					current, selected,
+					static_cast<uint32_t>(kBlendFeatherCycleValues.size()));
+				break;
+			}
+		case FoveationCycleControl::MaskVisualization:
+			{
+				constexpr std::array values{ false, true };
+				bool selected = false;
+				if (!SelectExactCycleValue(
+						settings.foveatedPeripheryMaskVisualization,
+						values,
+						a_requestedIndex,
+						selected,
+						selectedIndex,
+						error)) {
+					break;
+				}
+				request.maskVisualization = selected;
+				recordSelection(
+					settings.foveatedPeripheryMaskVisualization, selected,
+					static_cast<uint32_t>(values.size()));
+				break;
+			}
+		default:
+			error = {
+				{ "error", "control is not a supported foveation cycle axis" },
+				{ "errorCode", "foveation_cycle_control_unknown" },
+			};
+			break;
+		}
+
+		if (!error.empty()) {
+			error["action"] = "foveation_cycle";
+			error["control"] = GetFoveationCycleControlName(a_control);
+			error["mutationFrame"] = globals::state ? globals::state->frameCount : 0u;
+			error["executionClaimed"] = false;
+			return error;
+		}
+		if (!request.HasAnyControl() || matrixSize == 0) {
+			return {
+				{ "error", "foveation cycle did not select a value" },
+				{ "errorCode", "foveation_cycle_selection_failed" },
+				{ "action", "foveation_cycle" },
+				{ "control", GetFoveationCycleControlName(a_control) },
+				{ "mutationFrame", globals::state ? globals::state->frameCount : 0u },
+				{ "executionClaimed", false },
+			};
+		}
+
+		response["currentIndex"] = selectedIndex;
+		response["nextIndex"] = (selectedIndex + 1u) % matrixSize;
+		response["matrixSize"] = matrixSize;
+		return ApplyFoveationConfiguration(
+			a_upscaling,
+			request,
+			"foveation_cycle",
+			false,
+			std::move(response));
+	}
+
 	json BuildRenderScaleResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
+		if (action == "nr_readiness") {
+			if (a_args.size() != 1)
+				return json{ { "ok", false }, { "error", "nr_readiness accepts only action" } };
+			return RunOnMainThread([]() {
+				auto& upscaling = globals::features::upscaling;
+				const auto snapshot = upscaling.GetVRRenderScaleTransitionSnapshot();
+				json reasons = json::array();
+				const auto require = [&](bool condition, const char* reason) {
+					if (!condition)
+						reasons.push_back(reason);
+				};
+				require(NeuralRendering::IsRenderingConfigurationSupported(globals::game::isVR,
+							upscaling.GetNeuralRenderingMode()),
+					"rendering_configuration_unsupported_runtime");
+				require(!NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly, globals::game::isVR, upscaling.settings.neuralRenderingRenderscaleFov) ||
+							upscaling.IsNeuralRenderingFovConfigurationAvailable(),
+					"fov_not_configured");
+				require(globals::state && !globals::state->IsWorldLoadTransitionActive() &&
+							!globals::state->pendingPostLoadRuntimeReset && !globals::state->isLoadingMenuOpen,
+					"world_load_pending");
+				require(globals::shaderCache && !globals::shaderCache->IsCompiling(), "shaders_compiling");
+				require(!upscaling.IsSubmitStageDeviceLost(), "device_lost");
+				require((globals::state ? globals::state->GetCompletedRenderTargetResourcePublicationGeneration() : 0u) != 0, "targets_not_published");
+				require(!snapshot.metrics.current.valid && !snapshot.postLoadRecovery.active &&
+							!snapshot.memoryTrim.pending && !snapshot.retirement.fencePending &&
+							!snapshot.retirement.capacityBlocked && !snapshot.engineTargetRetirement.fencePending &&
+							!snapshot.engineTargetRetirement.capacityBlocked,
+					"resource_transition_pending");
+				const bool scaled = upscaling.IsVRRenderScaleModeLatched();
+				require(upscaling.GetVRRenderScaleModeRequested() == scaled, "mode_relatch_pending");
+				if (scaled) {
+					require(snapshot.state == Upscaling::VRRenderScaleTransitionState::Active,
+						"scaled_controller_not_active");
+					require(snapshot.requested.valid && snapshot.applied.valid && snapshot.stable.valid &&
+								snapshot.requested.requestID == snapshot.applied.requestID &&
+								snapshot.applied.requestID == snapshot.stable.requestID &&
+								snapshot.applied.contractGeneration == snapshot.stable.contractGeneration,
+						"profiles_not_settled");
+					require(snapshot.fidelity.bothEyesValid && snapshot.fidelity.lastMismatchMask == 0,
+						"stereo_fidelity_unavailable");
+				} else if (globals::game::isVR) {
+					require(snapshot.state == Upscaling::VRRenderScaleTransitionState::Idle ||
+								snapshot.state == Upscaling::VRRenderScaleTransitionState::Active,
+						"native_controller_not_settled");
+				}
+				return json{ { "ok", true }, { "action", "nr_readiness" }, { "readinessVersion", 1 },
+					{ "ready", reasons.empty() }, { "reasons", reasons },
+					{ "status", globals::game::isVR ? BuildStatus(upscaling) : json{ { "neuralRendering", NeuralRenderingStatusJson(upscaling) } } },
+					{ "targetGeneration", (globals::state ? globals::state->GetCompletedRenderTargetResourcePublicationGeneration() : 0u) },
+					{ "scope", "prepared_nr_scene_quiescence" }, { "presentationQualified", false } };
+			});
+		}
+		if (action == "foveation_configure") {
+			FoveationConfigurationRequest request;
+			json error;
+			if (!TryParseFoveationConfiguration(a_args, request, error)) {
+				error["action"] = "foveation_configure";
+				error["mutationFrame"] = nullptr;
+				error["executionClaimed"] = false;
+				return error;
+			}
+
+			return EnsureFoveationMutationEnvelope(
+				RunWithRendererOwnership([request]() {
+					if (!globals::game::isVR) {
+						return json{
+							{ "error", "foveation configuration requires Skyrim VR" },
+							{ "errorCode", "unsupported_runtime" },
+							{ "action", "foveation_configure" },
+							{ "mutationFrame", globals::state ? globals::state->frameCount : 0u },
+							{ "executionClaimed", false },
+						};
+					}
+					return ApplyFoveationConfiguration(
+						globals::features::upscaling,
+						request,
+						"foveation_configure",
+						true);
+				}),
+				"foveation_configure");
+		}
+
+		if (action == "foveation_cycle") {
+			FoveationCycleControl control{};
+			std::optional<uint32_t> requestedIndex;
+			json error;
+			if (!TryParseFoveationCycleRequest(
+					a_args, control, requestedIndex, error)) {
+				error["action"] = "foveation_cycle";
+				error["mutationFrame"] = nullptr;
+				error["executionClaimed"] = false;
+				return error;
+			}
+
+			return EnsureFoveationMutationEnvelope(
+				RunWithRendererOwnership([control, requestedIndex]() {
+					if (!globals::game::isVR) {
+						return json{
+							{ "error", "foveation cycling requires Skyrim VR" },
+							{ "errorCode", "unsupported_runtime" },
+							{ "action", "foveation_cycle" },
+							{ "control", GetFoveationCycleControlName(control) },
+							{ "mutationFrame", globals::state ? globals::state->frameCount : 0u },
+							{ "executionClaimed", false },
+						};
+					}
+					return ApplyFoveationCycle(
+						globals::features::upscaling, control, requestedIndex);
+				}),
+				"foveation_cycle",
+				GetFoveationCycleControlName(control));
+		}
+
+		if (action == "nr_status") {
+			return RunOnMainThread([]() {
+				auto& upscaling = globals::features::upscaling;
+				return json{
+					{ "action", "nr_status" },
+					{ "ok", true },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+			});
+		}
+
+		if (action == "nr_crop_calibrate") {
+			try {
+				for (const auto& [name, value] : a_args.items())
+					if (name != "action" && name != "calibration" && name != "expectedBuildId")
+						throw std::invalid_argument("unknown crop calibration argument");
+				const auto& input = a_args.at("calibration");
+				if (!input.is_object() || input.size() != 5)
+					throw std::invalid_argument("crop calibration requires exactly five fields");
+				std::vector<std::uint64_t> keys;
+				const auto& inputKeys = input.at("keys");
+				if (!inputKeys.is_array() || inputKeys.empty() || inputKeys.size() > 2)
+					throw std::invalid_argument("one or two crop keys required");
+				for (const auto& item : inputKeys) {
+					const auto key = item.get<std::string>();
+					if (key.empty() || key.size() > 20 || key.find_first_not_of("0123456789") != std::string::npos)
+						throw std::invalid_argument("invalid decimal crop key");
+					keys.push_back(std::stoull(key));
+				}
+				NeuralRendering::CharacterCropCalibration calibration;
+				calibration.qualityQualified = input.at("qualityQualified").get<bool>();
+				calibration.switchCostMs = input.at("switchCostMs").get<double>();
+				const auto readWindows = [](const json& source, auto& destination) {
+					if (!source.is_array() || source.size() != destination.size())
+						throw std::invalid_argument("exactly three matched windows required");
+					for (std::size_t i = 0; i < destination.size(); ++i) {
+						const auto& window = source.at(i);
+						if (!window.is_object() || window.size() != 5 || !window.at("frames").is_number_unsigned())
+							throw std::invalid_argument("invalid crop timing window");
+						const auto frames = window.at("frames").get<std::uint64_t>();
+						if (frames > 100000)
+							throw std::invalid_argument("crop sample count out of range");
+						destination[i] = { window.at("frameMs").get<double>(), window.at("cpuMs").get<double>(),
+							window.at("gpuMs").get<double>(), window.at("noiseMs").get<double>(), static_cast<std::uint32_t>(frames) };
+					}
+				};
+				readWindows(input.at("cropped"), calibration.cropped);
+				readWindows(input.at("uncropped"), calibration.uncropped);
+				return RunWithRendererOwnership([keys, calibration]() {
+					const bool accepted = globals::state && NeuralRendering::CharacterRendering::Instance().QualifyCrop(
+																keys, globals::state->frameCount, calibration);
+					return json{ { "ok", accepted }, { "action", "nr_crop_calibrate" },
+						{ "reason", accepted ? "qualified_for_current_session" : "unqualified_or_stale_context" } };
+				});
+			} catch (const std::exception& error) {
+				return json{ { "ok", false }, { "action", "nr_crop_calibrate" }, { "error", error.what() } };
+			}
+		}
+
+		if (action == "nr_toggle") {
+			for (const auto& [name, value] : a_args.items())
+				if (name != "action" && name != "expectedBuildId")
+					return { { "ok", false }, { "error", "unknown nr_toggle argument" }, { "mutationApplied", false } };
+			return RunWithRendererOwnership([]() {
+				auto& upscaling = globals::features::upscaling;
+				std::string error;
+				const bool applied = upscaling.ToggleNeuralRendering(&error);
+				if (!applied)
+					return json{ { "ok", false }, { "action", "nr_toggle" }, { "mutationApplied", false },
+						{ "enabled", upscaling.settings.neuralRenderingEnabled },
+						{ "errorCode", "nr_toggle_rejected" }, { "error", std::move(error) } };
+				return json{ { "ok", applied }, { "action", "nr_toggle" }, { "mutationApplied", applied },
+					{ "enabled", upscaling.settings.neuralRenderingEnabled } };
+			});
+		}
+
+		if (action == "nr_configure") {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			if (!TryParseNeuralRenderingConfiguration(a_args, request, error))
+				return error;
+
+			return RunWithRendererOwnership([request]() {
+				auto& upscaling = globals::features::upscaling;
+				if (request.expectedConfigurationFingerprint &&
+					*request.expectedConfigurationFingerprint != upscaling.GetNeuralRequestedConfigurationFingerprint()) {
+					return json{ { "ok", false }, { "error", "configuration changed before nr_configure" },
+						{ "errorCode", "nr_configuration_conflict" } };
+				}
+				auto& settings = upscaling.settings;
+				const auto previousSettings = settings;
+				auto requestedSettings = previousSettings;
+				if (request.enabled)
+					requestedSettings.neuralRenderingEnabled = *request.enabled;
+				if (request.mode)
+					requestedSettings.neuralRenderingMode = static_cast<uint32_t>(*request.mode);
+				if (request.fovOnly)
+					requestedSettings.neuralRenderingFovOnly = *request.fovOnly;
+				if (request.renderscaleFov)
+					requestedSettings.neuralRenderingRenderscaleFov = *request.renderscaleFov;
+				json placementError;
+				if (!TryValidateNeuralRenderingPlacement(request,
+						NeuralRendering::ClampRenderingMode(requestedSettings.neuralRenderingMode), placementError))
+					return placementError;
+				requestedSettings.neuralRenderingInsertionPoint = static_cast<uint32_t>(
+					NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(requestedSettings.neuralRenderingMode)));
+				if (request.preset)
+					(void)Upscaling::ApplyNeuralRenderingPreset(requestedSettings, *request.preset);
+				if (request.legacyOptimizedStereoPath) {
+					requestedSettings.neuralRenderingBatchedStereo =
+						*request.legacyOptimizedStereoPath;
+					requestedSettings.neuralRenderingDirectCommit =
+						*request.legacyOptimizedStereoPath;
+				}
+				if (request.batchedStereo)
+					requestedSettings.neuralRenderingBatchedStereo = *request.batchedStereo;
+				if (request.directCommit)
+					requestedSettings.neuralRenderingDirectCommit = *request.directCommit;
+				if (request.intensity)
+					requestedSettings.neuralRenderingIntensity = *request.intensity;
+				if (request.localToneStrength)
+					requestedSettings.neuralRenderingLocalTone = *request.localToneStrength;
+				if (request.localStructureStrength)
+					requestedSettings.neuralRenderingLocalStructure = *request.localStructureStrength;
+				if (request.skinStructureStrength)
+					requestedSettings.neuralRenderingSkinStructure = *request.skinStructureStrength;
+				if (request.style)
+					requestedSettings.neuralRenderingStyle = *request.style;
+				if (request.useAutoMask)
+					requestedSettings.neuralRenderingAutoMask = *request.useAutoMask;
+				if (request.uiCorrection)
+					requestedSettings.neuralRenderingUICorrection = *request.uiCorrection;
+				if (request.singleSubrectScale) {
+					requestedSettings.neuralRenderingSingleSubrectScale =
+						*request.singleSubrectScale;
+				}
+				if (request.characterSceneStrengthsEnabled)
+					requestedSettings.neuralCharacterSceneStrengthsEnabled = *request.characterSceneStrengthsEnabled;
+				if (request.characterEnabled)
+					requestedSettings.neuralCharacterRenderingEnabled = *request.characterEnabled;
+				if (request.experimentalCurrentContext)
+					requestedSettings.neuralCharacterCurrentContextEnabled = *request.experimentalCurrentContext;
+				if (request.experimentalGpuMaskSupport)
+					requestedSettings.neuralCharacterGpuMaskSupportEnabled = *request.experimentalGpuMaskSupport;
+				if (request.characterVisualIsolationEnabled) {
+					requestedSettings.neuralCharacterVisualIsolationEnabled =
+						*request.characterVisualIsolationEnabled;
+				}
+				if (request.characterFaces)
+					requestedSettings.neuralCharacterFacesEnabled = *request.characterFaces;
+				if (request.characterSkin)
+					requestedSettings.neuralCharacterSkinEnabled = *request.characterSkin;
+				if (request.characterHair)
+					requestedSettings.neuralCharacterHairEnabled = *request.characterHair;
+				if (request.characterHumans)
+					requestedSettings.neuralCharacterHumansEnabled = *request.characterHumans;
+				if (request.characterOtherHumanoids)
+					requestedSettings.neuralCharacterOtherHumanoidsEnabled = *request.characterOtherHumanoids;
+				if (request.characterCreatures)
+					requestedSettings.neuralCharacterCreaturesEnabled = *request.characterCreatures;
+				if (request.characterAnimals)
+					requestedSettings.neuralCharacterAnimalsEnabled = *request.characterAnimals;
+				if (request.characterOtherActors)
+					requestedSettings.neuralCharacterOtherActorsEnabled = *request.characterOtherActors;
+				if (request.characterArmor)
+					requestedSettings.neuralCharacterArmorEnabled = *request.characterArmor;
+				if (request.characterWeapons)
+					requestedSettings.neuralCharacterWeaponsEnabled = *request.characterWeapons;
+				if (request.characterProviderBlending)
+					requestedSettings.neuralCharacterProviderBlending = *request.characterProviderBlending;
+				if (request.characterFaceStrength)
+					requestedSettings.neuralCharacterFaceStrength = *request.characterFaceStrength;
+				if (request.characterSkinStrength)
+					requestedSettings.neuralCharacterSkinStrength = *request.characterSkinStrength;
+				if (request.characterHairStrength)
+					requestedSettings.neuralCharacterHairStrength = *request.characterHairStrength;
+				if (request.characterArmorStrength)
+					requestedSettings.neuralCharacterArmorStrength = *request.characterArmorStrength;
+				if (request.characterWeaponsStrength)
+					requestedSettings.neuralCharacterWeaponsStrength = *request.characterWeaponsStrength;
+				if (request.characterMaximumDistanceMeters) {
+					requestedSettings.neuralCharacterMaximumDistanceMeters =
+						*request.characterMaximumDistanceMeters;
+				}
+				if (request.characterFocusScale)
+					requestedSettings.neuralCharacterFocusScale = *request.characterFocusScale;
+				if (request.characterAdaptiveRoiSelection) {
+					requestedSettings.neuralCharacterAdaptiveRoiSelectionEnabled =
+						*request.characterAdaptiveRoiSelection;
+				}
+				if (request.characterMinimumFacePixelSize) {
+					requestedSettings.neuralCharacterMinimumFacePixelSize =
+						*request.characterMinimumFacePixelSize;
+				}
+				if (request.characterCropMode)
+					requestedSettings.neuralCharacterCropMode = *request.characterCropMode;
+				if (request.characterRoiMargin)
+					requestedSettings.neuralCharacterRoiMargin = *request.characterRoiMargin;
+				if (request.characterRoiHoldFrames) {
+					requestedSettings.neuralCharacterRoiHoldFrames =
+						*request.characterRoiHoldFrames;
+				}
+				if (request.characterDepthAwareFeather) {
+					requestedSettings.neuralCharacterDepthAwareFeatherEnabled =
+						*request.characterDepthAwareFeather;
+				}
+				if (request.characterVisibilityDepthTest) {
+					requestedSettings.neuralCharacterVisibilityDepthTestEnabled =
+						*request.characterVisibilityDepthTest;
+				}
+				if (request.characterFeatherRadius) {
+					requestedSettings.neuralCharacterFeatherRadius =
+						*request.characterFeatherRadius;
+				}
+				if (request.characterFeatherDepthThreshold) {
+					requestedSettings.neuralCharacterDepthThreshold =
+						*request.characterFeatherDepthThreshold;
+				}
+				if (request.characterDebugView) {
+					requestedSettings.neuralCharacterDebugView =
+						static_cast<std::uint32_t>(*request.characterDebugView);
+				}
+				if (request.characterMaskTestMode) {
+					requestedSettings.neuralCharacterMaskTestMode =
+						static_cast<std::uint32_t>(*request.characterMaskTestMode);
+				}
+				if (request.HasImageTuningOverrides())
+					requestedSettings.neuralRenderingPreset = 0;
+				if (requestedSettings.neuralRenderingEnabled &&
+					!NeuralRendering::IsRenderingConfigurationSupported(globals::game::isVR,
+						NeuralRendering::ClampRenderingMode(requestedSettings.neuralRenderingMode))) {
+					return json{
+						{ "error", "Foveated rendering requires Skyrim VR; full-resolution, reduced-resolution and character selection support SE/AE/VR" },
+						{ "errorCode", "unsupported_runtime" },
+						{ "action", "nr_configure" },
+						{ "settingsChanged", false },
+					};
+				}
+
+				const bool fovTaaDisabled = Upscaling::ApplyNeuralRenderingFovConstraint(requestedSettings);
+				const bool requiredAutoMask = true;
+				if (request.useAutoMask &&
+					*request.useAutoMask != requiredAutoMask) {
+					return json{
+						{ "error", "Feature 18 automatic masking is required; character isolation is applied by the CSX output composite" },
+						{ "errorCode", "nr_automatic_mask_required" },
+						{ "action", "nr_configure" },
+						{ "field", "useAutoMask" },
+						{ "requiredValue", requiredAutoMask },
+						{ "characterEnabled", requestedSettings.neuralCharacterRenderingEnabled },
+						{ "characterSceneStrengthsEnabled", requestedSettings.neuralCharacterSceneStrengthsEnabled },
+					};
+				}
+				requestedSettings.neuralRenderingAutoMask = requiredAutoMask;
+
+				const bool runtimeSettingsChanged = fovTaaDisabled ||
+				                                    !Upscaling::HasSameNeuralRenderingSettingsKey(
+														previousSettings, requestedSettings);
+
+				const bool enableStateChanged =
+					previousSettings.neuralRenderingEnabled !=
+					requestedSettings.neuralRenderingEnabled;
+				const bool insertionPointChanged =
+					previousSettings.neuralRenderingMode != requestedSettings.neuralRenderingMode ||
+					previousSettings.neuralRenderingFovOnly != requestedSettings.neuralRenderingFovOnly ||
+					previousSettings.neuralRenderingRenderscaleFov != requestedSettings.neuralRenderingRenderscaleFov ||
+					NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(previousSettings.neuralRenderingMode)) !=
+						NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(requestedSettings.neuralRenderingMode));
+				const bool stereoSubmissionChanged =
+					previousSettings.neuralRenderingBatchedStereo !=
+					requestedSettings.neuralRenderingBatchedStereo;
+				const bool outputCommitChanged =
+					previousSettings.neuralRenderingDirectCommit !=
+					requestedSettings.neuralRenderingDirectCommit;
+				const bool implementationChanged =
+					stereoSubmissionChanged || outputCommitChanged;
+				const bool characterMaskTestModeChanged =
+					previousSettings.neuralCharacterMaskTestMode !=
+					requestedSettings.neuralCharacterMaskTestMode;
+				const bool characterDebugViewChanged =
+					previousSettings.neuralCharacterDebugView !=
+					requestedSettings.neuralCharacterDebugView;
+				const bool characterVisualIsolationChanged =
+					previousSettings.neuralCharacterVisualIsolationEnabled !=
+					requestedSettings.neuralCharacterVisualIsolationEnabled;
+				const bool characterSettingsChanged =
+					previousSettings.neuralCharacterCurrentContextEnabled != requestedSettings.neuralCharacterCurrentContextEnabled ||
+					previousSettings.neuralCharacterGpuMaskSupportEnabled != requestedSettings.neuralCharacterGpuMaskSupportEnabled ||
+					previousSettings.neuralCharacterRenderingEnabled != requestedSettings.neuralCharacterRenderingEnabled ||
+					previousSettings.neuralCharacterSceneStrengthsEnabled != requestedSettings.neuralCharacterSceneStrengthsEnabled ||
+					characterVisualIsolationChanged ||
+					previousSettings.neuralCharacterFacesEnabled != requestedSettings.neuralCharacterFacesEnabled ||
+					previousSettings.neuralCharacterSkinEnabled != requestedSettings.neuralCharacterSkinEnabled ||
+					previousSettings.neuralCharacterHairEnabled != requestedSettings.neuralCharacterHairEnabled ||
+					previousSettings.neuralCharacterHumansEnabled != requestedSettings.neuralCharacterHumansEnabled ||
+					previousSettings.neuralCharacterOtherHumanoidsEnabled != requestedSettings.neuralCharacterOtherHumanoidsEnabled ||
+					previousSettings.neuralCharacterCreaturesEnabled != requestedSettings.neuralCharacterCreaturesEnabled ||
+					previousSettings.neuralCharacterAnimalsEnabled != requestedSettings.neuralCharacterAnimalsEnabled ||
+					previousSettings.neuralCharacterOtherActorsEnabled != requestedSettings.neuralCharacterOtherActorsEnabled ||
+					previousSettings.neuralCharacterArmorEnabled != requestedSettings.neuralCharacterArmorEnabled ||
+					previousSettings.neuralCharacterWeaponsEnabled != requestedSettings.neuralCharacterWeaponsEnabled ||
+					previousSettings.neuralCharacterProviderBlending != requestedSettings.neuralCharacterProviderBlending ||
+					previousSettings.neuralCharacterFaceStrength != requestedSettings.neuralCharacterFaceStrength ||
+					previousSettings.neuralCharacterSkinStrength != requestedSettings.neuralCharacterSkinStrength ||
+					previousSettings.neuralCharacterHairStrength != requestedSettings.neuralCharacterHairStrength ||
+					previousSettings.neuralCharacterArmorStrength != requestedSettings.neuralCharacterArmorStrength ||
+					previousSettings.neuralCharacterWeaponsStrength != requestedSettings.neuralCharacterWeaponsStrength ||
+					previousSettings.neuralCharacterMaximumDistanceMeters != requestedSettings.neuralCharacterMaximumDistanceMeters ||
+					previousSettings.neuralCharacterAdaptiveRoiSelectionEnabled != requestedSettings.neuralCharacterAdaptiveRoiSelectionEnabled ||
+					previousSettings.neuralCharacterFocusScale != requestedSettings.neuralCharacterFocusScale ||
+					previousSettings.neuralCharacterMinimumFacePixelSize != requestedSettings.neuralCharacterMinimumFacePixelSize ||
+					previousSettings.neuralCharacterCropMode != requestedSettings.neuralCharacterCropMode ||
+					previousSettings.neuralCharacterRoiMargin != requestedSettings.neuralCharacterRoiMargin ||
+					previousSettings.neuralCharacterRoiHoldFrames != requestedSettings.neuralCharacterRoiHoldFrames ||
+					previousSettings.neuralCharacterDepthAwareFeatherEnabled != requestedSettings.neuralCharacterDepthAwareFeatherEnabled ||
+					previousSettings.neuralCharacterVisibilityDepthTestEnabled != requestedSettings.neuralCharacterVisibilityDepthTestEnabled ||
+					previousSettings.neuralCharacterFeatherRadius != requestedSettings.neuralCharacterFeatherRadius ||
+					previousSettings.neuralCharacterDepthThreshold != requestedSettings.neuralCharacterDepthThreshold ||
+					characterDebugViewChanged || characterMaskTestModeChanged;
+				const bool settingsChanged =
+					fovTaaDisabled || previousSettings.neuralRenderingMode != requestedSettings.neuralRenderingMode ||
+					previousSettings.neuralRenderingFovOnly != requestedSettings.neuralRenderingFovOnly ||
+					previousSettings.neuralRenderingRenderscaleFov != requestedSettings.neuralRenderingRenderscaleFov ||
+					previousSettings.neuralRenderingEnabled != requestedSettings.neuralRenderingEnabled ||
+					previousSettings.neuralRenderingInsertionPoint != requestedSettings.neuralRenderingInsertionPoint ||
+					previousSettings.neuralRenderingBatchedStereo != requestedSettings.neuralRenderingBatchedStereo ||
+					previousSettings.neuralRenderingDirectCommit != requestedSettings.neuralRenderingDirectCommit ||
+					previousSettings.neuralRenderingPreset != requestedSettings.neuralRenderingPreset ||
+					previousSettings.neuralRenderingIntensity != requestedSettings.neuralRenderingIntensity ||
+					previousSettings.neuralRenderingLocalTone != requestedSettings.neuralRenderingLocalTone ||
+					previousSettings.neuralRenderingLocalStructure != requestedSettings.neuralRenderingLocalStructure ||
+					previousSettings.neuralRenderingSkinStructure != requestedSettings.neuralRenderingSkinStructure ||
+					previousSettings.neuralRenderingStyle != requestedSettings.neuralRenderingStyle ||
+					previousSettings.neuralRenderingAutoMask != requestedSettings.neuralRenderingAutoMask ||
+					previousSettings.neuralRenderingUICorrection != requestedSettings.neuralRenderingUICorrection ||
+					previousSettings.neuralRenderingSingleSubrectScale != requestedSettings.neuralRenderingSingleSubrectScale ||
+					characterSettingsChanged;
+				if (!settingsChanged) {
+					return json{
+						{ "error", "requested Neural Rendering settings already match the active settings" },
+						{ "errorCode", "nr_configure_noop" },
+						{ "action", "nr_configure" },
+						{ "settingsChanged", false },
+						{ "runtimeSettingsChanged", false },
+						{ "historyResetRequested", false },
+						{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+					};
+				}
+				const bool characterMaskModeChanged =
+					previousSettings.neuralCharacterRenderingEnabled !=
+						requestedSettings.neuralCharacterRenderingEnabled ||
+					previousSettings.neuralCharacterSceneStrengthsEnabled != requestedSettings.neuralCharacterSceneStrengthsEnabled;
+				const char* transition =
+					!runtimeSettingsChanged ?
+						(characterDebugViewChanged ? "character_debug_view" : "settings_staged") :
+					enableStateChanged ?
+						(previousSettings.neuralRenderingEnabled ? "disable" : "enable") :
+					insertionPointChanged    ? "insertion_point" :
+					implementationChanged    ? "implementation" :
+					characterSettingsChanged ? "character_rendering" :
+											   "tuning";
+				const bool resetAttempted =
+					runtimeSettingsChanged &&
+					NeuralRendering::RequiresBackendRetirement(
+						enableStateChanged, insertionPointChanged,
+						NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(previousSettings.neuralRenderingMode)) !=
+								NeuralRendering::ResolveInsertionPoint(NeuralRendering::ClampRenderingMode(requestedSettings.neuralRenderingMode)) ||
+							previousSettings.neuralCharacterProviderBlending != requestedSettings.neuralCharacterProviderBlending,
+						NeuralRendering::Renderer::Instance().IsFailureLatched() ||
+							NeuralRendering::Renderer::Instance().IsQuarantined());
+
+				settings = requestedSettings;
+				bool backendResetSucceeded = false;
+				const bool transitionSucceeded =
+					!runtimeSettingsChanged ||
+					upscaling.HandleNeuralRenderingSettingsTransition(
+						previousSettings,
+						"DevBench neural-rendering configuration", &backendResetSucceeded);
+				if (!transitionSucceeded)
+					settings = previousSettings;
+				json response{
+					{ "action", "nr_configure" },
+					{ "settingsChanged", transitionSucceeded },
+					{ "ok", transitionSucceeded },
+					{ "runtimeSettingsChanged", runtimeSettingsChanged },
+					{ "insertionPointChanged", insertionPointChanged },
+					{ "implementationChanged", implementationChanged },
+					{ "characterSettingsChanged", characterSettingsChanged },
+					{ "characterMaskModeChanged", characterMaskModeChanged },
+					{ "characterMaskTestModeChanged", characterMaskTestModeChanged },
+					{ "characterDebugViewChanged", characterDebugViewChanged },
+					{ "characterVisualIsolationChanged", characterVisualIsolationChanged },
+					{ "stereoSubmissionChanged", stereoSubmissionChanged },
+					{ "outputCommitChanged", outputCommitChanged },
+					{ "transition", transition },
+					{ "transitionSucceeded", transitionSucceeded },
+					{ "historyResetRequested", runtimeSettingsChanged },
+					{ "resetAttempted", resetAttempted },
+					{ "resetSucceeded", resetAttempted ? json(backendResetSucceeded) : json(nullptr) },
+					{ "fovTaaDisabled", transitionSucceeded && fovTaaDisabled },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+				if (!transitionSucceeded) {
+					response["error"] = "neural-rendering backend reset did not complete";
+					response["errorCode"] = "nr_transition_reset_failed";
+				}
+				return response;
+			});
+		}
+
+		if (action == "nr_cycle_modes") {
+			std::optional<uint32_t> requestedIndex;
+			if (const auto matrixIndex = a_args.find("matrixIndex");
+				matrixIndex != a_args.end()) {
+				uint64_t parsedIndex = 0;
+				if (matrixIndex->is_number_unsigned()) {
+					parsedIndex = matrixIndex->get<uint64_t>();
+				} else if (matrixIndex->is_number_integer()) {
+					const auto signedIndex = matrixIndex->get<int64_t>();
+					if (signedIndex < 0) {
+						return {
+							{ "error", "matrixIndex must be an integer in range 0..3" },
+							{ "errorCode", "nr_matrix_index_invalid" },
+						};
+					}
+					parsedIndex = static_cast<uint64_t>(signedIndex);
+				} else {
+					return {
+						{ "error", "matrixIndex must be an integer in range 0..3" },
+						{ "errorCode", "nr_matrix_index_invalid" },
+					};
+				}
+				if (parsedIndex >= NeuralRendering::kPipelineImplementations.size()) {
+					return {
+						{ "error", "matrixIndex must be an integer in range 0..3" },
+						{ "errorCode", "nr_matrix_index_invalid" },
+					};
+				}
+				requestedIndex = static_cast<uint32_t>(parsedIndex);
+			}
+
+			return RunWithRendererOwnership([requestedIndex]() {
+				if (!globals::game::isVR) {
+					return json{
+						{ "error", "neural-rendering stereo implementation cycling requires Skyrim VR" },
+						{ "errorCode", "unsupported_runtime" },
+					};
+				}
+				auto& upscaling = globals::features::upscaling;
+				auto& settings = upscaling.settings;
+				const auto previousSettings = settings;
+				const uint32_t previousIndex =
+					(previousSettings.neuralRenderingBatchedStereo ? 1u : 0u) |
+					(previousSettings.neuralRenderingDirectCommit ? 2u : 0u);
+				const uint32_t matrixSize = static_cast<uint32_t>(
+					NeuralRendering::kPipelineImplementations.size());
+				const uint32_t currentIndex = requestedIndex.value_or(
+					(previousIndex + 1u) % matrixSize);
+				const auto implementation =
+					NeuralRendering::kPipelineImplementations[currentIndex];
+				auto requestedSettings = previousSettings;
+				requestedSettings.neuralRenderingBatchedStereo =
+					implementation.batchedStereo;
+				requestedSettings.neuralRenderingDirectCommit =
+					implementation.directCommit;
+				const bool settingsChanged = previousIndex != currentIndex;
+				if (settingsChanged)
+					settings = requestedSettings;
+				const bool transitionSucceeded = !settingsChanged ||
+				                                 upscaling.HandleNeuralRenderingSettingsTransition(
+													 previousSettings,
+													 "DevBench neural-rendering matrix cycle");
+				if (!transitionSucceeded)
+					settings = previousSettings;
+				const auto appliedIndex = transitionSucceeded ? currentIndex : previousIndex;
+				const auto appliedImplementation = NeuralRendering::kPipelineImplementations[appliedIndex];
+				return json{
+					{ "action", "nr_cycle_modes" },
+					{ "ok", transitionSucceeded },
+					{ "previousIndex", previousIndex },
+					{ "currentIndex", appliedIndex },
+					{ "nextIndex", (appliedIndex + 1u) % matrixSize },
+					{ "settingsChanged", settingsChanged && transitionSucceeded },
+					{ "noOp", !settingsChanged },
+					{ "transitionSucceeded", transitionSucceeded },
+					{ "historyResetRequested", settingsChanged },
+					{ "selectedLane", NeuralImplementationJson(
+										  appliedImplementation.batchedStereo,
+										  appliedImplementation.directCommit) },
+					{ "executionClaimed", false },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+			});
+		}
+
+		if (action == "nr_reset") {
+			return RunWithRendererOwnership([]() {
+				auto& upscaling = globals::features::upscaling;
+				const bool resetSucceeded =
+					NeuralRendering::Renderer::Instance().Reset(true);
+				if (resetSucceeded)
+					NeuralRendering::CharacterRendering::Instance().Reset();
+				upscaling.RequestHistoryReset();
+				json response{
+					{ "action", "nr_reset" },
+					{ "ok", resetSucceeded },
+					{ "resetSucceeded", resetSucceeded },
+					{ "characterStateReset", resetSucceeded },
+					{ "historyResetRequested", true },
+					{ "neuralRendering", NeuralRenderingStatusJson(upscaling) },
+				};
+				if (!resetSucceeded) {
+					response["error"] = "neural-rendering backend reset did not complete";
+					response["errorCode"] = "nr_reset_failed";
+				}
+				return response;
+			});
+		}
+
 		if (action.starts_with("texture_lifetime_") && !globals::game::isVR) {
 			return json{ { "error", "D3D11 texture-lifetime capture requires Skyrim VR" } };
 		}
@@ -6767,6 +10668,50 @@ namespace
 		};
 	}
 
+	json BuildNeuralReplayResult(const json& args)
+	{
+		if (!args.is_object() || !args.contains("action") || !args["action"].is_string())
+			return { { "ok", false }, { "error", "action is required" } };
+		const auto action = args["action"].get<std::string>();
+		for (const auto& [key, value] : args.items()) {
+			(void)value;
+			if (key != "action" && !(action == "capture" && (key == "frames" || key == "timeoutMs")) &&
+				!(action == "cancel" && key == "requestId"))
+				return { { "ok", false }, { "error", "unexpected replay argument" }, { "field", key } };
+		}
+		return RunOnMainThread([args, action]() -> json {
+			if (action == "status")
+				return NeuralRendering::Replay::Status();
+			if (action == "cancel") {
+				if (!args.contains("requestId") || !args["requestId"].is_string())
+					return { { "ok", false }, { "error", "cancel requires the capture requestId" } };
+				return NeuralRendering::Replay::Cancel(args["requestId"].get<std::string>());
+			}
+			if (action != "capture")
+				return { { "ok", false }, { "error", "unknown replay action" } };
+			if (!globals::state || !globals::state->IsDeveloperMode())
+				return { { "ok", false }, { "error", "native replay capture requires developer mode" } };
+			const auto color = NeuralRendering::Color::Registry::Instance().Snapshot();
+			if (!color.experiments.captureFrameEvidence || color.experiments.transportBypass || !color.experiments.applyModelEdit)
+				return { { "ok", false }, { "error", "enable captureFrameEvidence and actual model edits, with transportBypass disabled" } };
+			for (const auto* key : { "frames", "timeoutMs" }) {
+				if (args.contains(key) && (!args[key].is_number_integer() || args[key] < 1 ||
+											  args[key] > (std::string_view(key) == "frames" ? 32 : 30000)))
+					return { { "ok", false }, { "error", "replay count or deadline is out of range" } };
+			}
+			const auto logPath = Util::PathHelpers::GetLogPath();
+			if (logPath.empty())
+				return { { "ok", false }, { "error", "SKSE evidence directory is unavailable" } };
+			return NeuralRendering::Replay::Request(args.value("frames", 1u), args.value("timeoutMs", 30000u),
+				logPath.parent_path() / "NRReplay");
+		});
+	}
+
+	void NeuralReplayToolHandler(void*, const char* args, void* sink, DevBenchAPI::WriteFn write)
+	{
+		RunHandler(&BuildNeuralReplayResult, args, sink, write);
+	}
+
 	void RenderScaleToolHandler(
 		void*,
 		const char* a_argsJson,
@@ -6836,6 +10781,65 @@ namespace
 
 namespace VRRenderScaleDevBenchBridge
 {
+	nlohmann::json RunRendererCommand(std::function<nlohmann::json()> a_command)
+	{
+		return RunWithRendererOwnership(std::move(a_command));
+	}
+
+	void ProcessRendererCommands()
+	{
+		ProcessRendererCommand();
+	}
+
+	void RegisterNeuralRenderingTool()
+	{
+		auto* devBench = DevBenchAPI::GetDevBenchInterface001();
+		if (!devBench)
+			return;
+		static const std::string descriptor = [] {
+			auto result = json::parse(kNeuralRenderingDescriptor);
+			result["inputSchema"]["properties"]["action"]["enum"] = {
+				"nr_status", "nr_toggle", "nr_configure", "nr_crop_calibrate", "nr_cycle_modes", "nr_reset",
+				"nr_readiness", "foveation_configure", "foveation_cycle"
+			};
+			const json duration = { { "type", "number" }, { "minimum", 0 }, { "maximum", 10000 } };
+			const json window = { { "type", "object" }, { "additionalProperties", false },
+				{ "required", { "frameMs", "cpuMs", "gpuMs", "noiseMs", "frames" } },
+				{ "properties", { { "frameMs", duration }, { "cpuMs", duration }, { "gpuMs", duration }, { "noiseMs", duration },
+									{ "frames", { { "type", "integer" }, { "minimum", 120 }, { "maximum", 100000 } } } } } };
+			const json windows = { { "type", "array" }, { "minItems", 3 }, { "maxItems", 3 }, { "items", window } };
+			auto calibration = json::parse(R"json({
+                "type":"object","additionalProperties":false,
+                "required":["keys","cropped","uncropped","switchCostMs","qualityQualified"],
+                "properties":{
+                    "keys":{"type":"array","minItems":1,"maxItems":2,
+                        "items":{"type":"string","pattern":"^[0-9]{1,20}$"}},
+                    "qualityQualified":{"type":"boolean"}
+                },
+                "description":"Session-only admission of current context keys. Supply three matched whole-frame CPU/GPU repeats including preparation, copies, waits and composition, plus independently established image qualification. Noise is the largest measured uncertainty in milliseconds across frame/CPU/GPU; switchCostMs is the measured transition cost. No native-only samples or area estimates. Every repeat must win. Profiles expire after 36000 render frames and never transfer to a new process, device, configuration or context."
+            })json");
+			calibration["properties"]["cropped"] = windows;
+			calibration["properties"]["uncropped"] = windows;
+			calibration["properties"]["switchCostMs"] = duration;
+			result["inputSchema"]["properties"]["calibration"] = std::move(calibration);
+			result["inputSchema"]["allOf"].push_back({ { "if", { { "properties", { { "action", { { "const", "nr_crop_calibrate" } } } } }, { "required", { "action" } } } },
+				{ "then", { { "required", { "calibration" } }, { "propertyNames", { { "enum", { "action", "expectedBuildId", "calibration" } } } } } } });
+			return result.dump();
+		}();
+		devBench->RegisterTool("communityshaders.neural_rendering", descriptor.c_str(), &RenderScaleToolHandler, nullptr);
+		devBench->RegisterTool("communityshaders.nr_replay", R"json({
+			"description":"Developer-only native NR input export for bounded offline replay. Capture 1..32 consecutive source frames, at most 512 MiB of logical staging/CPU payload reservation and 30 seconds, from successful full-rectangle auto-mask NR; preserves scaled guide grids and feature mode. Requires captureFrameEvidence, real model edits and no transport bypass. Partial/character ROI exports fail explicitly; capture a full initialized source first. Does not change rendering settings. Retains prepared colour, depth, motion and native output with source/colour/runtime evidence. This is diagnostic capture, not a performance measurement. Evidence is saved beside the SKSE log under NRReplay. Status reports the immutable bundle path or explicit failure; cancel requires its requestId. Static repeated sources require reset; temporal replay requires consecutive sources and independent initialized contexts.",
+			"inputSchema":{"type":"object","required":["action"],"additionalProperties":false,
+				"properties":{"action":{"type":"string","enum":["capture","status","cancel"]},
+					"frames":{"type":"integer","minimum":1,"maximum":32},
+					"timeoutMs":{"type":"integer","minimum":1,"maximum":30000},
+					"requestId":{"type":"string","minLength":1}},
+				"allOf":[{"if":{"properties":{"action":{"const":"cancel"}}},"then":{"required":["requestId"]}}]}}
+		)json",
+			&NeuralReplayToolHandler, nullptr);
+		logger::info("VRRenderScaleDevBenchBridge: registered communityshaders.neural_rendering");
+	}
+
 	void RecordSubmitBoundaryRejection(
 		VRSubmitInputFreshnessPolicy::OuterBoundaryRejection a_reason) noexcept
 	{
@@ -7704,6 +11708,15 @@ namespace VRRenderScaleDevBenchBridge
 					"COC on the same main-thread operation; its QPC timer is read "
 					"immediately before that command." },
 			};
+			const auto neuralDescriptor = json::parse(kNeuralRenderingDescriptor);
+			descriptor["description"] = descriptor["description"].get<std::string>() + " " + neuralDescriptor.at("description").get<std::string>();
+			for (const auto& [name, schema] : neuralDescriptor.at("inputSchema").at("properties").items()) {
+				if (!descriptor["inputSchema"]["properties"].contains(name))
+					descriptor["inputSchema"]["properties"][name] = schema;
+			}
+			descriptor["inputSchema"]["properties"]["action"]["enum"] = RenderScaleActions();
+			descriptor["inputSchema"]["allOf"] = neuralDescriptor.at("inputSchema").at("allOf");
+			descriptor["outputSchema"] = neuralDescriptor.at("outputSchema");
 			return descriptor.dump();
 		}();
 		devBench->RegisterTool(
@@ -7751,6 +11764,7 @@ namespace VRRenderScaleDevBenchBridge
 namespace VRRenderScaleDevBenchBridge
 {
 	void Install() {}
+	void RegisterNeuralRenderingTool() {}
 
 	bool IsBuilt()
 	{

@@ -468,6 +468,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VRMenuCloseKeys,
 	VROverlayOpenKeys,
 	VROverlayCloseKeys,
+	VRNeuralRenderingToggleKeys,
 	comboTimeout,
 	EnableDragToReposition,
 	kAutoHideSeconds,
@@ -512,6 +513,7 @@ void VR::LoadSettings(json& o_json)
 	LoadVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	LoadVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
 	LoadVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
+	LoadVRControllerBinding(o_json, "VRNeuralRenderingToggleKeys", settings.VRNeuralRenderingToggleKeys);
 	if (!settings.UnlockMenuPositionAndSize &&
 		o_json.is_object() &&
 		o_json.contains("VRMenuOffsetZ") &&
@@ -542,6 +544,7 @@ void VR::SaveSettings(json& o_json)
 	SaveVRControllerBinding(o_json, "VRMenuCloseKeys", settings.VRMenuCloseKeys);
 	SaveVRControllerBinding(o_json, "VROverlayOpenKeys", settings.VROverlayOpenKeys);
 	SaveVRControllerBinding(o_json, "VROverlayCloseKeys", settings.VROverlayCloseKeys);
+	SaveVRControllerBinding(o_json, "VRNeuralRenderingToggleKeys", settings.VRNeuralRenderingToggleKeys);
 	o_json["VRControllerBindingsVersion"] = kVRControllerBindingsVersion;
 }
 
@@ -1263,6 +1266,10 @@ void VR::DrawSettings()
 					break;
 				case VR::ComboType::OverlayOpen:
 					settings.VROverlayOpenKeys = this->recordedCombo;
+					break;
+				case VR::ComboType::NeuralRenderingToggle:
+					settings.VRNeuralRenderingToggleKeys = this->recordedCombo;
+					UpdateNeuralRenderingToggleFromInput(false);
 					break;
 				case VR::ComboType::OverlayClose:
 					settings.VROverlayCloseKeys = this->recordedCombo;
@@ -3050,13 +3057,14 @@ namespace
 			VR::ComboType comboType;
 			const char* description;
 		};
-		const std::array<VRKeyBindingConfig, 4> keyBindingConfigs = {
+		const std::array<VRKeyBindingConfig, 5> keyBindingConfigs = {
 			VRKeyBindingConfig{ "Open CSX Menu", &settings.VRMenuOpenKeys, VR::ComboType::MenuOpen, "Open CSX settings from Main or Tween; also during gameplay with the SteamVR overlay path." },
 			VRKeyBindingConfig{ "Close CSX Menu", &settings.VRMenuCloseKeys, VR::ComboType::MenuClose, "Close CSX settings while its VR menu session is open." },
 			VRKeyBindingConfig{ "Show Performance Overlay", &settings.VROverlayOpenKeys, VR::ComboType::OverlayOpen, "Show the standalone performance panel during gameplay or menus." },
-			VRKeyBindingConfig{ "Hide Performance Overlay", &settings.VROverlayCloseKeys, VR::ComboType::OverlayClose, "Hide the standalone performance panel during gameplay or menus." }
+			VRKeyBindingConfig{ "Hide Performance Overlay", &settings.VROverlayCloseKeys, VR::ComboType::OverlayClose, "Hide the standalone performance panel during gameplay or menus." },
+			VRKeyBindingConfig{ "Toggle Neural Rendering", &settings.VRNeuralRenderingToggleKeys, VR::ComboType::NeuralRenderingToggle, "Turn NR on or off, retaining its settings. Off removes NR rendering cost. Requires the NR DLL." }
 		};
-		std::array<const char*, 4> comboTypes{};
+		std::array<const char*, 5> comboTypes{};
 		for (size_t i = 0; i < keyBindingConfigs.size(); ++i) {
 			comboTypes[i] = keyBindingConfigs[i].label;
 		}
@@ -3142,6 +3150,7 @@ namespace
 			settings.VRMenuCloseKeys = VR::Settings::DefaultVRMenuCloseKeys();
 			settings.VROverlayOpenKeys = VR::Settings::DefaultVROverlayOpenKeys();
 			settings.VROverlayCloseKeys = VR::Settings::DefaultVROverlayCloseKeys();
+			settings.VRNeuralRenderingToggleKeys.clear();
 			vr.ResetComboRecordingState();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {

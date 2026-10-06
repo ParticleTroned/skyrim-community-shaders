@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Utils/FlatFrameTiming.h"
+#include "Utils/PassTimingCapture.h"
 
 #include <atomic>
 #include <cstdint>
@@ -17,12 +18,16 @@ class Profiler
 {
 public:
 	static constexpr uint32_t kMaxTimers = 128;
+	static constexpr uint32_t kMaxDetailTimers = 64;
 	static constexpr uint32_t kFrameLatency = 3;
 	static constexpr uint32_t kHistorySize = 300;
 	// Retain intermittent passes while removing entries absent across sustained capture.
 	static constexpr uint64_t kTimerRetireCycles = 60;
 
 	using PerfEventCallback = std::function<void(std::string_view)>;
+	using PassTimingHandle = Util::PassTimingHandle;
+	/** @brief Records a scope that cannot enter the profiler without replacing an earlier invocation. */
+	static void MarkCaptureUnavailable(const PassTimingHandle& capture, const char* reason, bool detailOnly) noexcept;
 
 	enum class CaptureMode : uint8_t
 	{
@@ -151,8 +156,11 @@ public:
 	}
 
 	void BeginFrame();
-	bool BeginPass(std::string_view name, bool fireCallbacks = true);
+	bool BeginPass(std::string_view name, bool fireCallbacks = true, const PassTimingHandle& capture = {});
 	void EndPass(bool fireCallbacks = true);
+	/** @brief Captures a detail scope without changing legacy nesting, slots, or aggregate rows. */
+	bool BeginDetailPass(std::string_view name, const PassTimingHandle& capture) noexcept;
+	void EndDetailPass() noexcept;
 	bool BeginCpuPass(std::string_view name);
 	void EndCpuPass();
 	void EndFrame(uint32_t a_frameCount);
@@ -237,6 +245,10 @@ private:
 	struct FrameQueries
 	{
 		winrt::com_ptr<ID3D11Query> disjoint;
+		winrt::com_ptr<ID3D11Query> wholeFrameBegin;
+		winrt::com_ptr<ID3D11Query> wholeFrameEnd;
+		uint64_t flatPresentId = 0;
+		bool wholeFrameStarted = false;
 		struct TimerPair
 		{
 			winrt::com_ptr<ID3D11Query> begin;
@@ -252,11 +264,15 @@ private:
 			bool ended = false;
 			bool outermostGpuInRoot = true;
 			bool outermostCpuInRoot = true;
+			PassTimingHandle capture;
 		};
 		std::vector<TimerPair> timers;
+		std::vector<TimerPair> detailTimers;
 		std::vector<CompletedCpuTimer> cpuTimers;
 		std::vector<uint32_t> activeTimerStack;
+		std::vector<uint32_t> activeDetailStack;
 		uint32_t activeCount = 0;
+		uint32_t detailCount = 0;
 		uint32_t capturedFrame = 0;
 		uint64_t captureSessionId = 0;
 		bool capturedCpu = false;
@@ -266,6 +282,21 @@ private:
 	ID3D11DeviceContext* context = nullptr;
 
 	FrameQueries frames[kFrameLatency];
+	struct FlatTiming
+	{
+		Util::FlatFrameTiming::History history;
+		Util::FlatFrameTiming::Sample pending;
+		double cpuBeginMs = 0.0;
+		double presentStartMs = 0.0;
+		uint32_t pendingSlot = 0;
+		uint64_t pendingEpoch = 0;
+		bool presentPending = false;
+		bool hasQuerySlot = false;
+		bool supported = true;
+	};
+	std::unique_ptr<FlatTiming> flatTiming;
+	uint64_t flatSourceEpoch = 0;
+	double ReadFlatClockMs() const;
 	uint32_t writeFrame = 0;
 	uint32_t readFrame = 0;
 	bool initialized = false;
@@ -365,6 +396,12 @@ private:
 	void ClearImmediateCpuResults();
 
 	bool CollectResults();
+	PassTimingHandle ClaimCapture(const PassTimingHandle& capture, bool detailOnly) noexcept;
+	static void InvalidateCapture(const PassTimingHandle& capture, const char* reason) noexcept;
+	static void CompleteCapturedCpu(FrameQueries::TimerPair& timer) noexcept;
+	static void CompleteCapturedGpu(FrameQueries::TimerPair& timer, double inclusiveMs, double selfMs, const char* failure) noexcept;
+	static void BindCapturedFrame(FrameQueries::TimerPair& timer, uint32_t frame) noexcept;
+	static void CancelFrameCaptures(FrameQueries& frame, const char* reason) noexcept;
 	KnownTimer& GetOrCreateTimer(const std::string& name);
 	void RetireStaleTimers();
 	void RebuildTimerIndex();
@@ -381,30 +418,6 @@ private:
 	void ResetFrameState(FrameQueries& frame);
 	void ResetPendingFrames();
 	static bool HasPendingFrameData(const FrameQueries& frame);
-
-	struct FlatTiming
-	{
-		struct Queries
-		{
-			winrt::com_ptr<ID3D11Query> begin, end;
-			uint64_t presentId = 0;
-			bool started = false;
-		};
-		Queries queries[kFrameLatency];
-		Util::FlatFrameTiming::History history;
-		Util::FlatFrameTiming::Sample pending;
-		double cpuBeginMs = 0.0;
-		double presentStartMs = 0.0;
-		uint32_t pendingSlot = 0;
-		uint64_t pendingEpoch = 0;
-		bool presentPending = false;
-		bool hasQuerySlot = false;
-		bool supported = true;
-		void Reset();
-	};
-	std::unique_ptr<FlatTiming> flatTiming;
-	uint64_t flatSourceEpoch = 0;
-	double ReadFlatClockMs() const;
 };
 
 #define CS_PROFILE_SCOPE_CONCAT_INNER(a, b) a##b

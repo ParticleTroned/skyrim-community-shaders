@@ -221,10 +221,16 @@ include(XSEPlugin)
 # a checkout, submodule update, or local edit in an existing build directory.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(CSX_PROVENANCE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/build_provenance.py")
-set(CSX_PROVENANCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>")
+set(CSX_PROVENANCE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>"
+)
 set(CSX_PROVENANCE_HEADER "${CSX_PROVENANCE_DIR}/BuildProvenance.generated.h")
-set(CSX_PROVENANCE_BASE_MANIFEST "${CSX_PROVENANCE_DIR}/CSX.BuildManifest.base.json")
-set(CSX_PROVENANCE_FINAL_MANIFEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/CSX.BuildManifest.json")
+set(CSX_PROVENANCE_BASE_MANIFEST
+    "${CSX_PROVENANCE_DIR}/CSX.BuildManifest.base.json"
+)
+set(CSX_PROVENANCE_FINAL_MANIFEST
+    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/CSX.BuildManifest.json"
+)
 set(_CSX_PROVENANCE_CLEAN_ARG)
 if(CSX_REQUIRE_CLEAN_PROVENANCE)
     set(_CSX_PROVENANCE_CLEAN_ARG --require-clean)
@@ -233,32 +239,28 @@ add_custom_target(
     refresh_build_provenance
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CSX_PROVENANCE_DIR}"
     COMMAND
-        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" generate
-        --source-dir "${CMAKE_SOURCE_DIR}"
-        --output-header "${CSX_PROVENANCE_HEADER}"
-        --output-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
-        --runtime "${CSX_RUNTIME}"
-        --plugin-version "${CSX_PLUGIN_VERSION}"
-        --configuration "$<CONFIG>"
-        --artifact-name "$<TARGET_FILE_NAME:${PROJECT_NAME}>"
-        --compiler-id "${CMAKE_CXX_COMPILER_ID}"
-        --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
-        --compiler-path "${CMAKE_CXX_COMPILER}"
-        --generator "${CMAKE_GENERATOR}"
-        --generator-platform "${CMAKE_GENERATOR_PLATFORM}"
-        --generator-toolset "${CMAKE_GENERATOR_TOOLSET}"
-        --windows-sdk-version "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}"
-        --cmake-version "${CMAKE_VERSION}"
-        --target-triplet "${VCPKG_TARGET_TRIPLET}"
-        --toolchain-file "${CMAKE_TOOLCHAIN_FILE}"
-        --overlay-dir "${VCPKG_OVERLAY_PORTS}"
-        --build-option "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}"
-        --build-option "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}"
-        --build-option "TRACY_SUPPORT=${TRACY_SUPPORT}"
-        --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}"
-        --build-option "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}"
-        --build-option "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}"
-        --build-option "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+        "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" generate --source-dir
+        "${CMAKE_SOURCE_DIR}" --output-header "${CSX_PROVENANCE_HEADER}"
+        --output-manifest "${CSX_PROVENANCE_BASE_MANIFEST}" --runtime
+        "${CSX_RUNTIME}" --plugin-version "${CSX_PLUGIN_VERSION}"
+        --configuration "$<CONFIG>" --artifact-name
+        "$<TARGET_FILE_NAME:${PROJECT_NAME}>" --compiler-id
+        "${CMAKE_CXX_COMPILER_ID}" --compiler-version
+        "${CMAKE_CXX_COMPILER_VERSION}" --compiler-path "${CMAKE_CXX_COMPILER}"
+        --generator "${CMAKE_GENERATOR}" --generator-platform
+        "${CMAKE_GENERATOR_PLATFORM}" --generator-toolset
+        "${CMAKE_GENERATOR_TOOLSET}" --windows-sdk-version
+        "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}" --cmake-version
+        "${CMAKE_VERSION}" --target-triplet "${VCPKG_TARGET_TRIPLET}"
+        --toolchain-file "${CMAKE_TOOLCHAIN_FILE}" --overlay-dir
+        "${VCPKG_OVERLAY_PORTS}" --build-option
+        "DEVBENCH_BRIDGE=${DEVBENCH_BRIDGE}" --build-option
+        "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}" --build-option
+        "TRACY_SUPPORT=${TRACY_SUPPORT}" --build-option
+        "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
+        "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
+        "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
+        "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
         ${_CSX_PROVENANCE_CLEAN_ARG}
     VERBATIM
     COMMENT "Refreshing canonical CSX build provenance"
@@ -270,9 +272,9 @@ add_custom_command(
     POST_BUILD
     COMMAND
         "${Python3_EXECUTABLE}" "${CSX_PROVENANCE_SCRIPT}" finalize
-        --base-manifest "${CSX_PROVENANCE_BASE_MANIFEST}"
-        --artifact "$<TARGET_FILE:${PROJECT_NAME}>"
-        --output-manifest "${CSX_PROVENANCE_FINAL_MANIFEST}"
+        --base-manifest "${CSX_PROVENANCE_BASE_MANIFEST}" --artifact
+        "$<TARGET_FILE:${PROJECT_NAME}>" --output-manifest
+        "${CSX_PROVENANCE_FINAL_MANIFEST}"
     VERBATIM
     COMMENT "Binding CSX build manifest to linked DLL"
 )
@@ -307,6 +309,8 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+include(ValidateNeuralColor)
+csx_validate_neural_color("${CMAKE_CURRENT_SOURCE_DIR}")
 csx_configure_runtime_payload()
 
 string(
@@ -329,7 +333,7 @@ target_compile_definitions(
 include(TracySupport)
 csx_configure_tracy(${PROJECT_NAME})
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE bcrypt shell32 wintrust)
 endif()
 
 file(
@@ -353,6 +357,7 @@ target_include_directories(
         ${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
         ${CLIB_UTIL_INCLUDE_DIRS}
         "${CMAKE_SOURCE_DIR}/package/Shaders"
+        "${CMAKE_SOURCE_DIR}/extern/nvapi"
         ${DETOURS_INCLUDE_DIRS}
 )
 
@@ -373,7 +378,7 @@ target_link_libraries(
         xxHash::xxhash
         Streamline
         d3d12.lib
-		bcrypt.lib
+        bcrypt.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
 )
@@ -749,6 +754,7 @@ install(
     DESTINATION .
     COMPONENT Shaders
     PATTERN "Tests" EXCLUDE
+    PATTERN "Streamline" EXCLUDE
 )
 install(
     FILES ${FFX_RUNTIME_PAYLOAD_FILES}
@@ -760,7 +766,16 @@ install(
     DESTINATION Shaders/Upscaling/Streamline
     COMPONENT StreamlineRuntime
 )
+install(
+    SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
+    COMPONENT StreamlineRuntime
+)
 install(CODE "file(REMOVE \${CMAKE_INSTALL_PREFIX}/Core)" COMPONENT Shaders)
+install(
+    CODE
+        "set(NR_PACKAGE_ROOT \"\${CMAKE_INSTALL_PREFIX}\")\ninclude(\"${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake\")"
+    ALL_COMPONENTS
+)
 
 # #######################################################################################################################
 # # Automatic AIO preparation (incremental copy system)
@@ -818,8 +833,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     set(_feature_paths_list_file
         "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt"
     )
-    set(
-        _aio_source_paths
+    set(_aio_source_paths
         ${FEATURE_PATHS}
         "${FFX_RUNTIME_FEATURE_ROOT}"
         "${STREAMLINE_RUNTIME_FEATURE_ROOT}"
@@ -975,8 +989,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(REMOVE_DUPLICATES _shader_feature_paths)
     endif()
 
-    set(
-        _feature_shader_paths
+    set(_feature_shader_paths
         "${FFX_RUNTIME_SHADER_ROOT}"
         "${STREAMLINE_RUNTIME_SHADER_ROOT}"
     )
@@ -1220,8 +1233,8 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${CMAKE_COMMAND} -DSRC_DIR="${AIO_DIR}/Shaders"
                     -DDST_DIR="${DEPLOY_TARGET}/Shaders"
                     -DMANIFEST_FILE="${CMAKE_CURRENT_BINARY_DIR}/${DEPLOY_TARGET_HASH}_shaders.manifest"
-                    -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
-                    -P "${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake"
+                    -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS} -P
+                    "${CMAKE_SOURCE_DIR}/cmake/SyncShaderDeploy.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E touch
                     ${DEPLOY_TARGET_HASH}_shaders.stamp
@@ -1342,6 +1355,9 @@ if(ZIP_TO_DIST)
         TARGET ${PROJECT_NAME}
         POST_BUILD
         COMMAND
+            ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${ZIP_DIR}" -P
+            "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+        COMMAND
             ${CMAKE_COMMAND} -E tar cf ${CMAKE_SOURCE_DIR}/dist/${TARGET_ZIP}
             --format=7zip -- .
         WORKING_DIRECTORY ${ZIP_DIR}
@@ -1356,8 +1372,7 @@ if(ZIP_TO_DIST)
             "Zipping ${FEATURE_PATH} to ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z"
         )
         if(FEATURE STREQUAL "Upscaling")
-            set(
-                FEATURE_ZIP_STAGE
+            set(FEATURE_ZIP_STAGE
                 "${CMAKE_CURRENT_BINARY_DIR}/feature_zip/${FEATURE}"
             )
             add_custom_command(
@@ -1375,6 +1390,9 @@ if(ZIP_TO_DIST)
                     ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                     "${FEATURE_ZIP_STAGE}" --component StreamlineRuntime
                 COMMAND
+                    ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_ZIP_STAGE}" -P
+                    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+                COMMAND
                     ${CMAKE_COMMAND} -E chdir "${FEATURE_ZIP_STAGE}"
                     ${CMAKE_COMMAND} -E tar cf
                     ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z
@@ -1384,6 +1402,9 @@ if(ZIP_TO_DIST)
             add_custom_command(
                 TARGET ${PROJECT_NAME}
                 POST_BUILD
+                COMMAND
+                    ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+                    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
                 COMMAND
                     ${CMAKE_COMMAND} -E tar cf
                     ${CMAKE_SOURCE_DIR}/dist/${FEATURE}-${CSX_PACKAGE_STAMP}.7z
@@ -1444,7 +1465,16 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 endforeach()
 
 # Core package
-list(APPEND CORE_SOURCES "${CSX_RUNTIME_INSTALL_GUARD}")
+list(
+    APPEND CORE_SOURCES
+    "${CSX_RUNTIME_INSTALL_GUARD}"
+    "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+)
+list(
+    APPEND CORE_SOURCES
+    "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
+    "${CMAKE_SOURCE_DIR}/cmake/VerifyNrReleasePayload.cmake"
+)
 set(FEATURE_PATH "${CMAKE_BINARY_DIR}/Core")
 file(MAKE_DIRECTORY ${FEATURE_PATH})
 add_custom_command(
@@ -1469,6 +1499,9 @@ add_custom_command(
         --component StreamlineRuntime
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${FEATURE_PATH}/Shaders/Tests"
+    COMMAND
+        ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+        "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
     COMMAND ${CMAKE_COMMAND} -E tar cfv ${CORE_PACKAGE} --format=7zip -- .
     WORKING_DIRECTORY ${FEATURE_PATH}
     COMMENT "Creating Core zip package"
@@ -1489,8 +1522,7 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
     set(FEATURE_PACKAGE "${DIST_PATH}/${FEATURE}-${CSX_PACKAGE_STAMP}.7z")
 
     if(FEATURE STREQUAL "Upscaling")
-        set(
-            FEATURE_PACKAGE_STAGE
+        set(FEATURE_PACKAGE_STAGE
             "${CMAKE_CURRENT_BINARY_DIR}/feature_package/${FEATURE}"
         )
         add_custom_command(
@@ -1507,12 +1539,16 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
                 ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix
                 "${FEATURE_PACKAGE_STAGE}" --component StreamlineRuntime
             COMMAND
+                ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PACKAGE_STAGE}" -P
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+            COMMAND
                 ${CMAKE_COMMAND} -E chdir "${FEATURE_PACKAGE_STAGE}"
-                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE}
-                --format=7zip -- .
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
             DEPENDS
                 ${FEATURE_SOURCES}
                 ${CSX_RUNTIME_INSTALL_GUARD}
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
                 ${FFX_RUNTIME_FILES}
                 ${STREAMLINE_RUNTIME_FILES}
             COMMENT "Creating ${FEATURE} zip package"
@@ -1521,10 +1557,15 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
         add_custom_command(
             OUTPUT ${FEATURE_PACKAGE}
             COMMAND
-                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE}
-                --format=7zip -- .
+                ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${FEATURE_PATH}" -P
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
+            COMMAND
+                ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=7zip --
+                .
             WORKING_DIRECTORY "${FEATURE_PATH}"
-            DEPENDS ${FEATURE_SOURCES}
+            DEPENDS
+                ${FEATURE_SOURCES}
+                "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
             COMMENT "Creating ${FEATURE} zip package"
         )
     endif()
@@ -1565,6 +1606,9 @@ add_custom_command(
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${AIO_DIR}
         --config $<CONFIG>
+    COMMAND
+        ${CMAKE_COMMAND} "-DNR_PACKAGE_ROOT=${AIO_DIR}" -P
+        "${CMAKE_SOURCE_DIR}/cmake/VerifyNeuralRenderingPayload.cmake"
     COMMAND
         ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
         ${AIO_PACKAGE} --format=7zip -- .
@@ -1641,50 +1685,45 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME ScreenshotApiContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/screenshot_api_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/screenshot_api_contract_test.cmake"
     )
     add_test(
         NAME MenuDevBenchPreflightContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/menu_devbench_preflight_contract_test.cmake"
     )
     add_test(
         NAME FeaturePresetCompatibilityContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/feature_preset_compatibility_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/feature_preset_compatibility_contract_test.cmake"
     )
     add_test(
         NAME PerformanceTuningDevBenchContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
             "${PROJECT_SOURCE_DIR}/tests/performance_tuning_devbench_contract_test.cmake"
     )
     add_test(
         NAME VRMenuUiContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/vr_menu_ui_contract_test.cmake"
     )
     set_tests_properties(
-        MenuDevBenchPreflightContract PerformanceTuningDevBenchContract
-        VRMenuUiContract FeaturePresetCompatibilityContract
+        MenuDevBenchPreflightContract
+        PerformanceTuningDevBenchContract
+        VRMenuUiContract
+        FeaturePresetCompatibilityContract
         PROPERTIES LABELS "ControllerTests"
     )
     add_test(
         NAME EditorLightPickerContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/editor_light_picker_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/editor_light_picker_contract_test.cmake"
     )
     set_tests_properties(
         EditorLightPickerContract
@@ -1693,9 +1732,8 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME NvidiaPipelineContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P "${PROJECT_SOURCE_DIR}/tests/nvidia_pipeline_contract_test.cmake"
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/nvidia_pipeline_contract_test.cmake"
     )
     set_tests_properties(
         NvidiaPipelineContract
@@ -1723,7 +1761,10 @@ if(BUILD_CONTROLLER_TESTS)
 
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
     add_controller_test(grass_runtime_layout_test GrassRuntimeLayout tests/grass_runtime_layout_test.cpp)
-    target_link_libraries(grass_runtime_layout_test PRIVATE CommonLibSSE::CommonLibSSE)
+    target_link_libraries(
+        grass_runtime_layout_test
+        PRIVATE CommonLibSSE::CommonLibSSE
+    )
 
     add_controller_test(
         vr_fps_stabilizer_config_test
@@ -1760,7 +1801,10 @@ if(BUILD_CONTROLLER_TESTS)
             tests/extract_stabilizer_api.cmake
         VERBATIM
     )
-    target_sources(vr_fps_stabilizer_api_test PRIVATE "${_stabilizer_api_test_header}")
+    target_sources(
+        vr_fps_stabilizer_api_test
+        PRIVATE "${_stabilizer_api_test_header}"
+    )
     target_include_directories(
         vr_fps_stabilizer_api_test
         PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
@@ -2361,6 +2405,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_d3d_shader_test(
+        actor_blending_shader_test ActorBlendingShader
+        tests/actor_blending_shader_test.cpp
+    )
+    target_sources(
+        actor_blending_shader_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        actor_blending_shader_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
     include("${PROJECT_SOURCE_DIR}/tests/vr_depth_encode.cmake")
     add_d3d_shader_test(grass_batch_shader_test GrassBatchShader tests/grass_batch_shader_test.cpp)
     target_sources(grass_batch_shader_test PRIVATE src/Utils/ShaderInclude.cpp)
@@ -2839,9 +2895,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME VRRenderScaleDevBenchContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
             "${PROJECT_SOURCE_DIR}/tests/vr_render_scale_devbench_contract_test.cmake"
     )
     set_tests_properties(
@@ -2851,9 +2905,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_test(
         NAME VRSubmitInputFreshnessContract
         COMMAND
-            "${CMAKE_COMMAND}"
-            "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            -P
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
             "${PROJECT_SOURCE_DIR}/tests/vr_submit_input_freshness_contract_test.cmake"
     )
     set_tests_properties(
@@ -2937,7 +2989,9 @@ if(BUILD_CONTROLLER_TESTS)
         FSRTemporalTuningPolicy
         tests/fsr_temporal_tuning_policy_test.cpp
     )
-    set(_fsr_temporal_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-temporal-tuning")
+    set(_fsr_temporal_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-temporal-tuning"
+    )
     set(_fsr_temporal_headers
         "${_fsr_temporal_test_dir}/temporal_settings_load_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_calls_under_test.h"
@@ -2946,23 +3000,42 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_custom_command(
         OUTPUT ${_fsr_temporal_headers}
-        COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_fsr_temporal_test_dir}" -P
             "${PROJECT_SOURCE_DIR}/tests/extract_fsr_temporal_tuning.cmake"
-        DEPENDS src/Features/Upscaling.cpp src/Features/Upscaling/FidelityFX.cpp
+        DEPENDS
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling/FidelityFX.cpp
             src/Features/Upscaling/FidelityFX.h
             tests/extract_fsr_temporal_tuning.cmake
         VERBATIM
     )
-    add_custom_target(fsr_temporal_tuning_test_headers DEPENDS ${_fsr_temporal_headers})
+    add_custom_target(
+        fsr_temporal_tuning_test_headers
+        DEPENDS ${_fsr_temporal_headers}
+    )
     add_controller_test(fsr_temporal_tuning_serialization_test FSRTemporalTuningSerialization tests/fsr_temporal_tuning_serialization_test.cpp)
     add_controller_test(fsr_temporal_tuning_provider_test FSRTemporalTuningProvider tests/fsr_temporal_tuning_provider_test.cpp)
-    foreach(_temporal_test fsr_temporal_tuning_serialization_test fsr_temporal_tuning_provider_test)
+    foreach(
+        _temporal_test
+        fsr_temporal_tuning_serialization_test
+        fsr_temporal_tuning_provider_test
+    )
         add_dependencies(${_temporal_test} fsr_temporal_tuning_test_headers)
-        target_include_directories(${_temporal_test} PRIVATE "${_fsr_temporal_test_dir}")
+        target_include_directories(
+            ${_temporal_test}
+            PRIVATE "${_fsr_temporal_test_dir}"
+        )
     endforeach()
-    target_link_libraries(fsr_temporal_tuning_serialization_test PRIVATE nlohmann_json::nlohmann_json)
-    target_include_directories(fsr_temporal_tuning_provider_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_link_libraries(
+        fsr_temporal_tuning_serialization_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_include_directories(
+        fsr_temporal_tuning_provider_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
 
     set(_fsr_eye_dispatch_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-eye-dispatch"
@@ -2993,9 +3066,13 @@ if(BUILD_CONTROLLER_TESTS)
         FSREyeDispatch
         tests/fsr_eye_dispatch_test.cpp
     )
-    target_sources(fsr_eye_dispatch_test PRIVATE ${_fsr_eye_dispatch_test_headers})
+    target_sources(
+        fsr_eye_dispatch_test
+        PRIVATE ${_fsr_eye_dispatch_test_headers}
+    )
     target_include_directories(
-        fsr_eye_dispatch_test PRIVATE "${_fsr_eye_dispatch_test_dir}"
+        fsr_eye_dispatch_test
+        PRIVATE "${_fsr_eye_dispatch_test_dir}"
     )
     add_controller_test(
         vr_submit_input_freshness_policy_test
@@ -3232,10 +3309,7 @@ if(BUILD_CONTROLLER_TESTS)
         VRHybridCullingShader
         tests/vr_hybrid_culling_shader_test.cpp
     )
-    set_tests_properties(
-        VRHybridCullingShader
-        PROPERTIES TIMEOUT 180
-    )
+    set_tests_properties(VRHybridCullingShader PROPERTIES TIMEOUT 180)
     target_compile_definitions(
         vr_hybrid_culling_shader_test
         PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
@@ -3342,14 +3416,23 @@ if(BUILD_CONTROLLER_TESTS)
         preset_compatibility_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
-    target_link_libraries(preset_compatibility_test PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(
+        preset_compatibility_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     if(MSVC)
         target_compile_options(preset_compatibility_test PRIVATE /UNDEBUG)
     else()
         target_compile_options(preset_compatibility_test PRIVATE -UNDEBUG)
     endif()
-    add_test(NAME PresetCompatibility COMMAND preset_compatibility_test "${PROJECT_SOURCE_DIR}")
-    set_tests_properties(PresetCompatibility PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME PresetCompatibility
+        COMMAND preset_compatibility_test "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(
+        PresetCompatibility
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_runtime_thread_affinity_test
@@ -3362,8 +3445,14 @@ if(BUILD_CONTROLLER_TESTS)
         api_runtime_thread_affinity_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
-    add_test(NAME ApiRuntimeThreadAffinity COMMAND api_runtime_thread_affinity_test)
-    set_tests_properties(ApiRuntimeThreadAffinity PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME ApiRuntimeThreadAffinity
+        COMMAND api_runtime_thread_affinity_test
+    )
+    set_tests_properties(
+        ApiRuntimeThreadAffinity
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_service_foundation_test
@@ -3376,9 +3465,15 @@ if(BUILD_CONTROLLER_TESTS)
         api_service_foundation_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
-    target_link_libraries(api_service_foundation_test PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(
+        api_service_foundation_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_test(NAME ApiServiceFoundation COMMAND api_service_foundation_test)
-    set_tests_properties(ApiServiceFoundation PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ApiServiceFoundation
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_service_registry_test
@@ -3389,53 +3484,72 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_service_registry_test PRIVATE cxx_std_23)
     target_include_directories(
         api_service_registry_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
     add_test(NAME ApiServiceRegistry COMMAND api_service_registry_test)
     set_tests_properties(ApiServiceRegistry PROPERTIES LABELS "ControllerTests")
 
-	add_executable(
-		api_screenshot_contract_test
-		EXCLUDE_FROM_ALL
-		tests/api_screenshot_contract_test.cpp
-	)
-	target_compile_features(api_screenshot_contract_test PRIVATE cxx_std_23)
-	target_include_directories(
-		api_screenshot_contract_test
-		PRIVATE "${PROJECT_SOURCE_DIR}/include"
-	)
-	add_test(NAME ApiScreenshotContract COMMAND api_screenshot_contract_test)
-	set_tests_properties(ApiScreenshotContract PROPERTIES LABELS "ControllerTests")
+    add_executable(
+        api_screenshot_contract_test
+        EXCLUDE_FROM_ALL
+        tests/api_screenshot_contract_test.cpp
+    )
+    target_compile_features(api_screenshot_contract_test PRIVATE cxx_std_23)
+    target_include_directories(
+        api_screenshot_contract_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    add_test(NAME ApiScreenshotContract COMMAND api_screenshot_contract_test)
+    set_tests_properties(
+        ApiScreenshotContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
-	add_executable(
-		main_thread_dispatch_state_test
-		EXCLUDE_FROM_ALL
-		tests/main_thread_dispatch_state_test.cpp
-	)
-	target_compile_features(main_thread_dispatch_state_test PRIVATE cxx_std_23)
-	target_include_directories(main_thread_dispatch_state_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-	add_test(NAME MainThreadDispatchState COMMAND main_thread_dispatch_state_test)
-	set_tests_properties(MainThreadDispatchState PROPERTIES LABELS "ControllerTests")
+    add_executable(
+        main_thread_dispatch_state_test
+        EXCLUDE_FROM_ALL
+        tests/main_thread_dispatch_state_test.cpp
+    )
+    target_compile_features(main_thread_dispatch_state_test PRIVATE cxx_std_23)
+    target_include_directories(
+        main_thread_dispatch_state_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(
+        NAME MainThreadDispatchState
+        COMMAND main_thread_dispatch_state_test
+    )
+    set_tests_properties(
+        MainThreadDispatchState
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_controller_test(
         devbench_main_thread_dispatch_test
         DevBenchMainThreadDispatch
         tests/devbench_main_thread_dispatch_test.cpp
     )
-    target_link_libraries(devbench_main_thread_dispatch_test PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(
+        devbench_main_thread_dispatch_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     set_tests_properties(DevBenchMainThreadDispatch PROPERTIES TIMEOUT 10)
 
-	add_executable(
-		screenshot_api_policy_test
-		EXCLUDE_FROM_ALL
-		tests/screenshot_api_policy_test.cpp
-	)
-	target_compile_features(screenshot_api_policy_test PRIVATE cxx_std_23)
-	target_include_directories(screenshot_api_policy_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-	add_test(NAME ScreenshotApiPolicy COMMAND screenshot_api_policy_test)
-	set_tests_properties(ScreenshotApiPolicy PROPERTIES LABELS "ControllerTests")
+    add_executable(
+        screenshot_api_policy_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_api_policy_test.cpp
+    )
+    target_compile_features(screenshot_api_policy_test PRIVATE cxx_std_23)
+    target_include_directories(
+        screenshot_api_policy_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    add_test(NAME ScreenshotApiPolicy COMMAND screenshot_api_policy_test)
+    set_tests_properties(
+        ScreenshotApiPolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         screenshot_manifest_snapshot_test
@@ -3463,12 +3577,25 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
-    add_executable(screenshot_native_png_test EXCLUDE_FROM_ALL tests/screenshot_native_png_test.cpp)
+    add_executable(
+        screenshot_native_png_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_native_png_test.cpp
+    )
     target_compile_features(screenshot_native_png_test PRIVATE cxx_std_23)
-    target_include_directories(screenshot_native_png_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    target_link_libraries(screenshot_native_png_test PRIVATE Microsoft::DirectXTex ole32 windowscodecs)
+    target_include_directories(
+        screenshot_native_png_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        screenshot_native_png_test
+        PRIVATE Microsoft::DirectXTex ole32 windowscodecs
+    )
     add_test(NAME ScreenshotNativePng COMMAND screenshot_native_png_test)
-    set_tests_properties(ScreenshotNativePng PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ScreenshotNativePng
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     set(_screenshot_capture_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-capture"
@@ -3589,12 +3716,13 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_upscaling_contract_test PRIVATE cxx_std_23)
     target_include_directories(
         api_upscaling_contract_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
     add_test(NAME ApiUpscalingContract COMMAND api_upscaling_contract_test)
-    set_tests_properties(ApiUpscalingContract PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ApiUpscalingContract
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_upscaling_service_policy_test
@@ -3602,15 +3730,22 @@ if(BUILD_CONTROLLER_TESTS)
         tests/api_upscaling_service_policy_test.cpp
         src/Api/UpscalingServicePolicy.cpp
     )
-    target_compile_features(api_upscaling_service_policy_test PRIVATE cxx_std_23)
+    target_compile_features(
+        api_upscaling_service_policy_test
+        PRIVATE cxx_std_23
+    )
     target_include_directories(
         api_upscaling_service_policy_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
-    add_test(NAME ApiUpscalingServicePolicy COMMAND api_upscaling_service_policy_test)
-    set_tests_properties(ApiUpscalingServicePolicy PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME ApiUpscalingServicePolicy
+        COMMAND api_upscaling_service_policy_test
+    )
+    set_tests_properties(
+        ApiUpscalingServicePolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_shader_service_policy_test
@@ -3621,12 +3756,13 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_shader_service_policy_test PRIVATE cxx_std_23)
     target_include_directories(
         api_shader_service_policy_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
     add_test(NAME ApiShaderServicePolicy COMMAND api_shader_service_policy_test)
-    set_tests_properties(ApiShaderServicePolicy PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ApiShaderServicePolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_shader_compatibility_registry_test
@@ -3635,16 +3771,26 @@ if(BUILD_CONTROLLER_TESTS)
         src/Api/ShaderCompatibilityRegistry.cpp
         src/Utils/CryptoHash.cpp
     )
-    target_compile_features(api_shader_compatibility_registry_test PRIVATE cxx_std_23)
+    target_compile_features(
+        api_shader_compatibility_registry_test
+        PRIVATE cxx_std_23
+    )
     target_include_directories(
         api_shader_compatibility_registry_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
-    target_link_libraries(api_shader_compatibility_registry_test PRIVATE bcrypt.lib)
-    add_test(NAME ApiShaderCompatibilityRegistry COMMAND api_shader_compatibility_registry_test)
-    set_tests_properties(ApiShaderCompatibilityRegistry PROPERTIES LABELS "ControllerTests")
+    target_link_libraries(
+        api_shader_compatibility_registry_test
+        PRIVATE bcrypt.lib
+    )
+    add_test(
+        NAME ApiShaderCompatibilityRegistry
+        COMMAND api_shader_compatibility_registry_test
+    )
+    set_tests_properties(
+        ApiShaderCompatibilityRegistry
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         shader_cache_pack_test
@@ -3660,13 +3806,12 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_include_directories(
         shader_cache_pack_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
     foreach(
         CACHE_TEST_TARGET
-        api_shader_compatibility_registry_test shader_cache_pack_test
+        api_shader_compatibility_registry_test
+        shader_cache_pack_test
         shader_source_provenance_test
         shader_compile_identity_test
     )
@@ -3690,7 +3835,10 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/shader_cache_pack_builder_test.py"
             "$<TARGET_FILE:shader_cache_pack_test>"
     )
-    set_tests_properties(ShaderCachePackBuilder PROPERTIES LABELS "ControllerTests")
+    set_tests_properties(
+        ShaderCachePackBuilder
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_weather_service_policy_test
@@ -3701,12 +3849,16 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_features(api_weather_service_policy_test PRIVATE cxx_std_23)
     target_include_directories(
         api_weather_service_policy_test
-        PRIVATE
-            "${PROJECT_SOURCE_DIR}/include"
-            "${PROJECT_SOURCE_DIR}/src"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src"
     )
-    add_test(NAME ApiWeatherServicePolicy COMMAND api_weather_service_policy_test)
-    set_tests_properties(ApiWeatherServicePolicy PROPERTIES LABELS "ControllerTests")
+    add_test(
+        NAME ApiWeatherServicePolicy
+        COMMAND api_weather_service_policy_test
+    )
+    set_tests_properties(
+        ApiWeatherServicePolicy
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_executable(
         api_profiler_contract_test
@@ -3734,7 +3886,10 @@ if(BUILD_CONTROLLER_TESTS)
         profiler_timing_test
         PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
     )
-    target_link_libraries(profiler_timing_test PRIVATE d3d11.lib runtimeobject.lib)
+    target_link_libraries(
+        profiler_timing_test
+        PRIVATE d3d11.lib runtimeobject.lib
+    )
 
     include(tests/profiler_capture.cmake)
 
@@ -3754,15 +3909,27 @@ if(BUILD_CONTROLLER_TESTS)
         tests/api_editor_contract_test.cpp
     )
     target_compile_features(api_editor_contract_test PRIVATE cxx_std_23)
-    target_include_directories(api_editor_contract_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_include_directories(
+        api_editor_contract_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
     add_test(NAME ApiEditorContract COMMAND api_editor_contract_test)
     set_tests_properties(ApiEditorContract PROPERTIES LABELS "ControllerTests")
 
-    add_executable(api_feature_contract_test EXCLUDE_FROM_ALL tests/api_feature_contract_test.cpp)
+    add_executable(
+        api_feature_contract_test
+        EXCLUDE_FROM_ALL
+        tests/api_feature_contract_test.cpp
+    )
     target_compile_features(api_feature_contract_test PRIVATE cxx_std_23)
-    target_include_directories(api_feature_contract_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_include_directories(
+        api_feature_contract_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
     add_test(NAME ApiFeatureContract COMMAND api_feature_contract_test)
     set_tests_properties(ApiFeatureContract PROPERTIES LABELS "ControllerTests")
+
+    include(NeuralRenderingTests)
 
     # Derive the aggregate from this block so new test executables cannot be omitted.
     get_property(_controller_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

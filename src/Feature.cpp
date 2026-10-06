@@ -23,6 +23,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/NeuralRenderingFeature.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -37,6 +38,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
@@ -171,6 +173,12 @@ void Feature::Load(json& o_json)
 	} else {
 		// No errors, load settings now
 		if (HasFeatureSettings()) {
+			if (GetShortName() == "NeuralRendering" && !o_json.contains(GetName())) {
+				const auto rendering = NeuralRendering::RenderingSettings(o_json.value("Upscaling", json::object()));
+				if (!rendering.empty() || o_json.contains("Neural Rendering Colour"))
+					o_json[GetName()] = { { "schemaVersion", 1 }, { "rendering", std::move(rendering) },
+						{ "colour", NeuralRendering::LegacyColourSettings(o_json) } };
+			}
 			if (o_json[GetName()].is_structured()) {
 				logger::info("Loading {} settings", GetName());
 				try {
@@ -280,6 +288,7 @@ namespace
 			&globals::features::ibl,
 			&globals::features::extendedTranslucency,
 			&globals::features::upscaling,
+			&NeuralRenderingFeature::Instance(),
 			&globals::features::renderDoc,
 			&globals::features::csEditor,
 			&globals::features::weatherPicker,

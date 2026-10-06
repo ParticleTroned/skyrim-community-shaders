@@ -51,9 +51,16 @@ function(csx_configure_runtime_payload)
             list(APPEND ${_provider}_RUNTIME_PAYLOAD_HASHES "${_hash}")
         endforeach()
     endforeach()
+    set(CSX_NEURAL_PAYLOAD_GUARD_SCRIPT
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/VerifyNeuralRenderingPayload.cmake")
     configure_file(
         "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RuntimePayloadInstallGuard.cmake.in"
         "${CMAKE_CURRENT_BINARY_DIR}/runtime_payload_install_guard.cmake"
+        @ONLY
+    )
+    configure_file(
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/NrReleaseInstallGuard.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/nr_release_install_guard.cmake"
         @ONLY
     )
 endfunction()

@@ -1,0 +1,124 @@
+#include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
+#include <stdexcept>
+
+namespace
+{
+	void Require(bool value, const char* detail)
+	{
+		if (!value)
+			throw std::runtime_error(detail);
+	}
+}
+
+int main()
+{
+	using namespace NeuralRendering;
+	using namespace NeuralRendering::Evidence;
+	CharacterPreparationKey key{ 101, 100, 1, 3, 7, 19, 23, 5,
+		{ { 900, 700 }, { 101, 43, 801, 643 }, { 1800, 1400 }, { 202, 86, 1602, 1286 } }, 0.25f, -0.5f };
+	const auto changedKey = [&](auto mutate) {
+		auto changed = key;
+		mutate(changed);
+		Require(changed != key, "identity change was not preserved");
+		Require(CharacterPreparationKeyJson(changed) != CharacterPreparationKeyJson(key), "serialized identity collapsed");
+	};
+	changedKey([](auto& k) { ++k.frame; });
+	changedKey([](auto& k) { ++k.sourceWorldFrame; });
+	changedKey([](auto& k) { ++k.generation; });
+	changedKey([](auto& k) { ++k.contentSerial; });
+	changedKey([](auto& k) { ++k.captureEpoch; });
+	changedKey([](auto& k) { ++k.sourceCaptureSerial; });
+	changedKey([](auto& k) { ++k.settingsKey; });
+	changedKey([](auto& k) { k.eye = 0; });
+	changedKey([](auto& k) { k.featureSlot = 1; });
+	changedKey([](auto& k) { ++k.crop.input.left; });
+	changedKey([](auto& k) { ++k.crop.output.left; });
+	changedKey([](auto& k) { ++k.crop.fullInput.width; });
+	changedKey([](auto& k) { ++k.crop.fullOutput.height; });
+	changedKey([](auto& k) { k.jitterX = -0.25f; });
+	changedKey([](auto& k) { k.jitterY = 0.5f; });
+	changedKey([](auto& k) { k.outputIsJittered = true; });
+
+	Require(CharacterPreparationJson({})["available"] == false, "absent preparation must be unavailable");
+	auto preparation = std::make_shared<CharacterPreparationEvidence>();
+	preparation->key = key;
+	const auto unprepared = CharacterPreparationJson(preparation);
+	Require(unprepared["regions"].empty() && unprepared["roi"].empty(), "unprepared selection must not invent inference work");
+	Require(unprepared["sourceCapture"]["available"] == false, "uncaptured source must remain unavailable");
+	preparation->prepared = true;
+	preparation->requiresEvaluation = false;
+	preparation->outcome = "no_work";
+	preparation->emptyProof = CharacterEmptyProofKind::GpuCategorySuperset;
+	preparation->support = std::make_shared<CharacterMaskSupportCapture>(key);
+	preparation->support->Complete(0);
+	const auto empty = CharacterPreparationJson(preparation);
+	Require(empty["outcome"] == "no_work" && empty["regions"].empty() && empty["roi"].empty(), "empty selection must not invent inference regions");
+	Require(empty["emptyProof"] == "gpu_category_superset", "GPU empty proof must retain its origin");
+	Require(empty["maskSupport"]["state"] == "unavailable" && empty["maskSupport"]["pixels"].is_null(), "CPU empty proof is not a GPU measurement");
+	Require(empty["timing"]["explicitWait"]["milliseconds"].is_null(), "no wait is not a measured zero");
+	Require(empty["timing"]["mask"]["gpu"]["inclusiveMs"].is_null(), "missing GPU timing must remain absent");
+
+	preparation->requiresEvaluation = true;
+	preparation->emptyProof = CharacterEmptyProofKind::None;
+	preparation->outcome = "success";
+	preparation->computeSubrect = { 3, 5, 113, 71 };
+	preparation->roi = BuildRoiDescriptor(preparation->computeSubrect, preparation->computeSubrect, { 1400, 1200 }, true);
+	preparation->boundsReady = true;
+	preparation->boundsUsed = false;
+	preparation->boundsStatus = "early_bounds_empty";
+	preparation->support->Pending();
+	std::shared_ptr<const CharacterPreparationEvidence> captured = preparation;
+	preparation = std::make_shared<CharacterPreparationEvidence>(*preparation);
+	++preparation->key.frame;
+	++preparation->key.contentSerial;
+	++preparation->key.captureEpoch;
+	preparation->computeSubrect = { 7, 9, 121, 83 };
+	preparation->roi.reset();
+	preparation->support = std::make_shared<CharacterMaskSupportCapture>(preparation->key);
+	const auto pending = CharacterPreparationJson(captured);
+	Require(pending["regions"] == Json::array({ SubrectJson(captured->computeSubrect) }) &&
+				pending["key"]["contentSerial"] == 19 && pending["key"]["logicalSlot"] == 3,
+		"later slot reuse changed frozen ROI or producer identity");
+	Require(pending["roi"].size() == 1 && pending["roi"][0]["coordinateDomain"] == "output_crop_local" &&
+				pending["roi"][0]["samplingSupportKind"] == "conservative_guarded_enclosure",
+		"ROI support was reported as exact occupancy");
+	const auto replacement = CharacterPreparationJson(preparation);
+	Require(replacement["regions"] == Json::array({ SubrectJson(preparation->computeSubrect) }) &&
+				replacement["roi"] == Json::array({ nullptr }),
+		"replacement preparation must preserve its own ROI and absent descriptor");
+	Require(pending["bounds"]["ready"] == true && pending["bounds"]["used"] == false, "ready bounds must not imply consumption");
+	Require(pending["maskSupport"]["state"] == "pending" && pending["maskSupport"]["pixels"].is_null(), "pending coverage became a zero");
+	captured->support->Complete(37);
+	captured->support->Complete(99);
+	const auto complete = CharacterPreparationJson(captured);
+	Require(complete["maskSupport"]["pixels"] == 37 && complete["maskSupport"]["producer"]["captureEpoch"] == 5,
+		"delayed coverage lost exact original contents or accepted a duplicate completion");
+	Require(CharacterPreparationJson(preparation)["maskSupport"]["pixels"].is_null(), "old coverage crossed into replacement contents");
+	Require(pending["maskSupport"]["state"] == "pending", "serialized acquisition changed after finalization");
+	Require(pending["roi"] == complete["roi"], "completed exact coverage replaced conservative ROI roles");
+	preparation->support->Pending();
+	preparation->support->Fail("coverage_resources_retired");
+	preparation->support->Complete(88);
+	Require(CharacterPreparationJson(preparation)["maskSupport"]["state"] == "failed" &&
+				CharacterPreparationJson(preparation)["maskSupport"]["pixels"].is_null(),
+		"retired readback cannot later become successful");
+
+	auto source = std::make_shared<CharacterSourceEvidence>();
+	source->eyeWidth = 900;
+	source->height = 700;
+	source->eyeCount = 2;
+	source->sourceWorldFrame = 100;
+	source->captureEpoch = 5;
+	preparation->source = source;
+	const auto stereo = CharacterPreparationJson(preparation);
+	Require(stereo["sourceCapture"]["authoredEyeOrigin"] == Json::array({ 900, 0 }), "packed source eye origin lost");
+	Require(stereo["sourceCapture"]["detectionCpu"]["milliseconds"].is_null(), "unobserved detection cost fabricated");
+	source = std::make_shared<CharacterSourceEvidence>(*source);
+	source->eyeCount = 1;
+	preparation->source = source;
+	preparation->key.eye = 0;
+	const auto mono = CharacterPreparationJson(preparation);
+	Require(mono["sourceCapture"]["authoredGrid"]["width"] == 900 &&
+				mono["sourceCapture"]["authoredEyeOrigin"] == Json::array({ 0, 0 }),
+		"mono source acquired a stereo stride");
+}

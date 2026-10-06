@@ -333,9 +333,10 @@ public:
 		}
 
 		// Key binding configurations
-		std::vector<ButtonCombo> VRMenuOpenKeys = DefaultVRMenuOpenKeys();          ///< Button combos to open VR menu
-		std::vector<ButtonCombo> VRMenuCloseKeys = DefaultVRMenuCloseKeys();        ///< Button combos to close VR menu
-		std::vector<ButtonCombo> VROverlayOpenKeys = DefaultVROverlayOpenKeys();    ///< Button combos to show the Performance Overlay
+		std::vector<ButtonCombo> VRMenuOpenKeys = DefaultVRMenuOpenKeys();        ///< Button combos to open VR menu
+		std::vector<ButtonCombo> VRMenuCloseKeys = DefaultVRMenuCloseKeys();      ///< Button combos to close VR menu
+		std::vector<ButtonCombo> VROverlayOpenKeys = DefaultVROverlayOpenKeys();  ///< Button combos to show the Performance Overlay
+		std::vector<ButtonCombo> VRNeuralRenderingToggleKeys{};
 		std::vector<ButtonCombo> VROverlayCloseKeys = DefaultVROverlayCloseKeys();  ///< Button combos to hide the Performance Overlay
 
 		// General interaction settings
@@ -343,7 +344,7 @@ public:
 		int kAutoHideSeconds = Config::kDefaultAutoHideSeconds;  ///< Auto-hide timeout for overlay messages (>0 shows overlay, <=0 hides it)
 		bool EnableDragToReposition = false;                     ///< Allow drag-and-drop overlay repositioning
 
-		float VRMenuAutoResetDistance = 1000.0f;  // Default: 1000 units ≈ 14.3 meters
+		float VRMenuAutoResetDistance = 1000.0f;  // Default: 1000 units ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  14.3 meters
 
 		/**
 		 * @brief Validates if the current menu scale is within acceptable range
@@ -467,6 +468,10 @@ public:
 	void UpdateWandHoverFeedback();
 	void ResetWandPointingRuntimeState();
 	void UpdateOverlayMenuStateFromInput();
+	/** Tests a binding against the current physical controller states. */
+	bool IsControllerComboPressed(const std::vector<ButtonCombo>& a_combos) const;
+	/** Latches every input event; only a fresh press may activate the binding. */
+	void UpdateNeuralRenderingToggleFromInput(bool a_allowActivation);
 	void ProcessVRButtonEvent(const Menu::KeyEvent& event);
 	void UpdateControllerState(const Menu::KeyEvent& event);
 	void ProcessThumbstickScroll(RE::VRControllerState& controllerState, size_t thumbstickIndex, float deadzone, ImGuiIO& io);
@@ -660,9 +665,11 @@ public:
 		MenuOpen,
 		MenuClose,
 		OverlayOpen,
-		OverlayClose
+		OverlayClose,
+		NeuralRenderingToggle
 	};
 
+	bool neuralRenderingToggleHeld = false;
 	bool isCapturingCombo = false;
 	ComboType currentComboType = ComboType::None;
 	const char* currentComboName = nullptr;

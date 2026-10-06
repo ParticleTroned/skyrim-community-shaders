@@ -2,6 +2,8 @@
 #include "Api/AcceptedDrawService.h"
 #include "EngineFixes/VRShadowBatch.h"
 
+#include "Utils/CharacterCategoryAuthoring.h"
+
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
@@ -20,6 +22,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
+#	include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
 #endif
 
 #include "Features/AdaptiveBrightness.h"
@@ -33,6 +36,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
 #include "Features/VR.h"
 #include "Features/VolumetricLighting.h"
 
@@ -802,6 +806,11 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			*globals::game::currentPixelShader = pixelShader;
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+				globals::d3d::context, shader, pixelShader,
+				pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr);
+#endif
 			state->settingCustomShader = false;
 			shaderFound = true;
 		}
@@ -857,6 +866,7 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
+			CharacterCategoryAuthoring::Update(pass);
 			globals::features::terrainVariation.UpdateMeshPermutation(pass);
 
 			if (globals::game::isVR)
@@ -1052,6 +1062,9 @@ struct IDXGISwapChain_Present
 			FlushCSFrameHookPhaseDiag(completedFrame, intervalMs);
 		}
 		globals::features::upscaling.PresentVRMenuDesktopMirror(This);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		VRRenderScaleDevBenchBridge::ProcessRendererCommands();
+#endif
 		state->Reset();
 		if (globals::game::isVR)
 			CSX::Api::AdvanceAcceptedDrawFrame(globals::d3d::context);
@@ -1134,6 +1147,9 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
+#endif
 		return;
 	}
 
@@ -1155,7 +1171,10 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	globals::state->Draw();
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
-	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, phaseEndTicks - totalStartTicks);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
+#endif
+	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, ReadFrameDiagCounterTicks() - totalStartTicks);
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -1651,6 +1670,11 @@ namespace Hooks
 						if (pixelShader) {
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 							*globals::game::currentPixelShader = a_pixelShader;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+							NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+								globals::d3d::context, currentShader, a_pixelShader,
+								reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader));
+#endif
 							return;
 						}
 					}
@@ -1661,6 +1685,11 @@ namespace Hooks
 
 			if (a_pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader), NULL, NULL);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+				globals::d3d::context, state->currentShader, a_pixelShader,
+				a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr);
+#endif
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

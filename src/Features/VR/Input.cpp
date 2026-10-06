@@ -1,3 +1,4 @@
+#include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Menu.h"
 #include "State.h"
@@ -165,6 +166,45 @@ namespace
 	}
 }
 
+bool VR::IsControllerComboPressed(const std::vector<ButtonCombo>& combos) const
+{
+	if (combos.empty())
+		return false;
+
+	for (size_t i = 0; i < combos.size(); ++i) {
+		const auto& combo = combos[i];
+		bool buttonPressed = false;
+
+		switch (combo.GetDevice()) {
+		case ControllerDevice::Both:
+			buttonPressed = primaryControllerState[combo.GetKey()].isPressed &&
+			                secondaryControllerState[combo.GetKey()].isPressed;
+			break;
+		case ControllerDevice::Primary:
+			buttonPressed = primaryControllerState[combo.GetKey()].isPressed;
+			break;
+		case ControllerDevice::Secondary:
+			buttonPressed = secondaryControllerState[combo.GetKey()].isPressed;
+			break;
+		}
+
+		if (!buttonPressed) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+void VR::UpdateNeuralRenderingToggleFromInput(bool a_allowActivation)
+{
+	const bool pressed = IsControllerComboPressed(settings.VRNeuralRenderingToggleKeys);
+	if (pressed && !neuralRenderingToggleHeld && a_allowActivation && globals::menu &&
+		!isCapturingCombo && !settings.VRMenuControllerDiagnosticsTestMode)
+		(void)globals::features::upscaling.ToggleNeuralRendering();
+	neuralRenderingToggleHeld = pressed;
+}
+
 void VR::UpdateOverlayMenuStateFromInput()
 {
 	if (this->isCapturingCombo) {
@@ -193,39 +233,10 @@ void VR::UpdateOverlayMenuStateFromInput()
 	bool uiMenusOpen = globals::state->isMainMenuOpen ||
 	                   (globals::game::ui && globals::game::ui->IsMenuOpen(RE::TweenMenu::MENU_NAME));
 
-	auto CheckCombo = [&](const std::vector<ButtonCombo>& combos) -> bool {
-		if (combos.empty())
-			return false;
-
-		for (size_t i = 0; i < combos.size(); ++i) {
-			const auto& combo = combos[i];
-			bool buttonPressed = false;
-
-			switch (combo.GetDevice()) {
-			case ControllerDevice::Both:
-				buttonPressed = primaryControllerState[combo.GetKey()].isPressed &&
-				                secondaryControllerState[combo.GetKey()].isPressed;
-				break;
-			case ControllerDevice::Primary:
-				buttonPressed = primaryControllerState[combo.GetKey()].isPressed;
-				break;
-			case ControllerDevice::Secondary:
-				buttonPressed = secondaryControllerState[combo.GetKey()].isPressed;
-				break;
-			}
-
-			if (!buttonPressed) {
-				return false;
-			}
-		}
-
-		return true;
-	};
-
-	const bool menuOpenPressed = CheckCombo(settings.VRMenuOpenKeys);
-	const bool menuClosePressed = CheckCombo(settings.VRMenuCloseKeys);
-	const bool overlayOpenPressed = CheckCombo(settings.VROverlayOpenKeys);
-	const bool overlayClosePressed = CheckCombo(settings.VROverlayCloseKeys);
+	const bool menuOpenPressed = IsControllerComboPressed(settings.VRMenuOpenKeys);
+	const bool menuClosePressed = IsControllerComboPressed(settings.VRMenuCloseKeys);
+	const bool overlayOpenPressed = IsControllerComboPressed(settings.VROverlayOpenKeys);
+	const bool overlayClosePressed = IsControllerComboPressed(settings.VROverlayCloseKeys);
 	const bool canOpenMenuFromWorld = CanOpenMenuFromWorld();
 	const bool canUseMenuBindings = uiMenusOpen || menuSessionOpen || canOpenMenuFromWorld;
 
@@ -294,6 +305,7 @@ void VR::ProcessVREvents(std::vector<Menu::KeyEvent>& vrEvents)
 		}
 		firstCall = false;
 		lastKnownLeftHandedMode = currentLeftHandedMode;
+		neuralRenderingToggleHeld = false;
 		primaryControllerState = {};
 		secondaryControllerState = {};
 	}
@@ -328,6 +340,8 @@ void VR::ProcessVREvents(std::vector<Menu::KeyEvent>& vrEvents)
 				break;
 			}
 		}
+		// Consume every edge before a later event in this queue can release it.
+		UpdateNeuralRenderingToggleFromInput(event.eventType == RE::INPUT_EVENT_TYPE::kButton && event.IsDown());
 		switch (event.eventType) {
 		case RE::INPUT_EVENT_TYPE::kButton:
 			ProcessVRButtonEvent(event);

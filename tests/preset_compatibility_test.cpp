@@ -47,6 +47,10 @@ int main(int argc, char** argv)
 		const auto result = PresetCompatibility::Evaluate(preset, "CSX 3.20.0-VR");
 		assert(result.disposition == Disposition::kCompatible);
 		assert(result.ShouldApply());
+		const auto& nr = preset.at("Neural Rendering").at("rendering");
+		assert(nr.at("neuralRenderingEnabled") == false);
+		assert(nr.at("neuralRenderingMode") == 2);
+		assert(nr.at("neuralRenderingInsertionPoint") == 0);
 	}
 
 	const auto unmarked = PresetCompatibility::Evaluate(nlohmann::json::object(), "CSX 3.19-VR");
@@ -65,6 +69,16 @@ int main(int argc, char** argv)
 	const auto legacy = PresetCompatibility::Evaluate(CompatiblePreset(), "CSX 3.20.0-VR");
 	assert(legacy.disposition == Disposition::kCompatible);
 	assert(legacy.currentVersion == "CSX 3.20.0-VR");
+	for (const auto presetId : { "csx-unified-performance", "csx-unified-balanced", "csx-unified-quality" }) {
+		auto nrLegacy = CompatiblePreset();
+		nrLegacy["Preset Compatibility"]["presetId"] = presetId;
+		assert(PresetCompatibility::Evaluate(nrLegacy, "CSX 3.20.0-VR").ShouldApply());
+	}
+	for (const auto revision : { 5u, 7u, 9u }) {
+		auto incompatibleContract = CompatiblePreset();
+		incompatibleContract["Preset Compatibility"]["settingsContract"]["revision"] = revision;
+		assert(!PresetCompatibility::Evaluate(incompatibleContract, "CSX 3.20.0-VR").ShouldApply());
+	}
 	const auto newer = PresetCompatibility::Evaluate(CompatiblePreset(), "CSX 3.21.0-VR");
 	assert(newer.disposition == Disposition::kRejected);
 	auto thirdParty = CompatiblePreset();
@@ -89,6 +103,10 @@ int main(int argc, char** argv)
 	malformed["Preset Compatibility"]["target"].erase("maximumVersionExclusive");
 	const auto invalid = PresetCompatibility::Evaluate(malformed, "CSX 3.19-VR");
 	assert(invalid.disposition == Disposition::kRejected);
+
+	auto previousSettings = CompatiblePreset();
+	previousSettings["Preset Compatibility"]["settingsContract"]["revision"] = PresetCompatibility::kSettingsContractRevision - 1;
+	assert(!PresetCompatibility::Evaluate(previousSettings, "CSX 3.19-VR").ShouldApply());
 
 	auto futureSettings = CompatiblePreset();
 	futureSettings["Preset Compatibility"]["settingsContract"]["revision"] = PresetCompatibility::kSettingsContractRevision + 1;

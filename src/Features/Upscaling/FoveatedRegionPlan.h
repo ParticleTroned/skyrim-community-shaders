@@ -34,6 +34,13 @@ struct FoveatedRegionPlan
 		{
 			return IsValid() ? maxY - minY : 0u;
 		}
+
+		/** Complete target coverage is required before omitting its background fill. */
+		[[nodiscard]] bool CoversExtent(uint32_t a_width, uint32_t a_height) const
+		{
+			return a_width && a_height && minX == 0u && minY == 0u &&
+			       maxX == a_width && maxY == a_height;
+		}
 	};
 
 	struct TextureRegion
@@ -103,8 +110,8 @@ struct FoveatedRegionPlan
 		plan.centerFeather = std::isfinite(a_centerFeather) ? std::max(0.0f, a_centerFeather) : FoveatedCommon::kCenterFeather;
 		plan.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(a_centerHorizontalScale);
 		plan.peripheryTAAOuterScale = std::isfinite(a_peripheryTAAOuterScale) && a_peripheryTAAOuterScale > 0.0f ?
-			std::max(plan.centerScale, FoveatedCommon::ClampCenterScale(a_peripheryTAAOuterScale)) :
-			0.0f;
+		                                  std::max(plan.centerScale, FoveatedCommon::ClampCenterScale(a_peripheryTAAOuterScale)) :
+		                                  0.0f;
 
 		if (!a_inputWidthPerEye || !a_inputHeight || !a_outputWidthPerEye || !a_outputHeight)
 			return plan;

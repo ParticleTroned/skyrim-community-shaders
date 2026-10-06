@@ -87,6 +87,20 @@ namespace FoveatedCommon
 		return std::clamp(value, kCenterHorizontalScaleMin, kCenterHorizontalScaleMax);
 	}
 
+	/** Shared superellipse distance; one is the FOV boundary in eye-local UVs. */
+	inline float MaskDistanceUV(float uvX, float uvY, float centerScale,
+		float horizontalScale, float offsetX, float offsetY, float relativeScale = 1.0f)
+	{
+		centerScale = ClampCenterScale(centerScale) * ClampCenterScale(relativeScale);
+		horizontalScale = ClampCenterHorizontalScale(horizontalScale);
+		const float x = std::abs((uvX - std::clamp(0.5f + offsetX, 0.0f, 1.0f)) /
+								 (centerScale * horizontalScale * 0.5f));
+		const float y = std::abs((uvY - std::clamp(0.5f + offsetY, 0.0f, 1.0f)) /
+								 (centerScale * 0.5f));
+		return std::pow(std::pow(x, kMaskShapePower) + std::pow(y, kMaskShapePower),
+			1.0f / kMaskShapePower);
+	}
+
 	inline int AlignDownToThreadGroup(int value)
 	{
 		return value & ~(kThreadGroupSize - 1);

@@ -1,0 +1,178 @@
+"""Asset verifier failure-path fixtures (not a deployed-game inventory)."""
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools/nr-color"))
+import verify_assets as assets
+
+
+class AssetTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "source"
+        self.deployed = Path(self.temp.name) / "Data"
+        self.shaders = self.root / assets.FEATURE / assets.SHADERS
+        self.shaders.mkdir(parents=True)
+        (self.root / assets.FEATURE / "CORE").touch()
+        registry = self.root / "include/FeatureVersions.h"
+        registry.parent.mkdir(parents=True)
+        registry.write_text('"NeuralRendering"sv, {1,5,0}\n')
+        manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralRendering.ini"
+        manifest.parent.mkdir(parents=True); manifest.write_text("[Info]\nVersion = 1-5-0\n")
+        for name in assets.NAMES:
+            (self.shaders / name).write_text('#include "Upscaling/NeuralRendering/ColorCommon.hlsli"\n' if name.endswith(".hlsl") else "// fixture\n")
+        self.producers = self.root / "src/Features/Upscaling/NeuralRendering"
+        self.producers.mkdir(parents=True)
+        for producer, shaders in assets.RUNTIME_SHADERS.items():
+            paths = ['L"Data/' + (assets.SHADERS / name).as_posix() + '"' for name in shaders]
+            (self.producers / producer).write_text("\n".join(paths))
+
+    def test_complete_source_and_deployment(self):
+        result = assets.verify(self.root)
+        self.assertTrue(result["ok"], result)
+        for row in result["assets"]:
+            dest = self.deployed / row["destination"]; dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.root / row["source"], dest)
+        self.assertTrue(assets.verify(self.root, self.deployed)["ok"])
+
+    def test_present_but_unpackaged_transitive_include(self):
+        (self.shaders / "ColorCommon.hlsli").write_text('#include "Upscaling/NeuralRendering/Hidden.hlsli"\n')
+        (self.shaders / "Hidden.hlsli").write_text("// Not mapped for deployment\n")
+        result = assets.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("not packaged" in error for error in result["errors"]))
+
+    def test_missing_include(self):
+        (self.shaders / "ColorCommon.hlsli").write_text('#include "Missing.hlsli"\n')
+        self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_sibling_include_is_not_the_runtime_search_path(self):
+        (self.shaders / "ColorPrepareCS.hlsl").write_text('#include "ColorCommon.hlsli"\n')
+        result = assets.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("Unresolved shader include" in error for error in result["errors"]))
+
+    def test_non_utf8_shader_is_structured_failure(self):
+        (self.shaders / "ColorPrepareCS.hlsl").write_bytes(b"\xff\xff")
+        result = assets.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("Unreadable source" in error for error in result["errors"]))
+
+    def test_non_utf8_runtime_is_structured_failure(self):
+        (self.producers / "ColorPipeline.cpp").write_bytes(b"\xff")
+        self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_missing_core_marker(self):
+        (self.root / assets.FEATURE / "CORE").unlink()
+        self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_manifest_requires_one_valid_version(self):
+        manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralRendering.ini"
+        for text in ("[Info]\n", "[Info]\nVersion = 1.5.0\n",
+                     "[Info]\nVersion = 1-5-0\nVersion = 1-5-1\n"):
+            with self.subTest(text=text):
+                manifest.write_text(text)
+                result = assets.verify(self.root)
+                self.assertFalse(result["ok"])
+                self.assertTrue(any("exactly one valid version" in error for error in result["errors"]))
+
+    def test_manifest_must_match_feature_registry(self):
+        manifest = self.root / assets.FEATURE / "Shaders/Features/NeuralRendering.ini"
+        manifest.write_text("[Info]\nVersion = 1-4-0\n")
+        result = assets.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("differs from registry 1-5-0" in error for error in result["errors"]))
+
+    def test_missing_runtime_reference(self):
+        (self.producers / "ExposureCapture.cpp").write_text("// missing compile call\n")
+        self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_depth_shaders_require_nr_sources_and_runtime_references(self):
+        (self.producers / "Renderer.cpp").write_text("// missing depth compile calls\n")
+        self.assertFalse(assets.verify(self.root)["ok"])
+        (self.shaders / "CopyDepthGuideCS.hlsl").unlink()
+        self.assertTrue(any("Missing source" in error for error in assets.verify(self.root)["errors"]))
+
+    def test_unmapped_runtime_shader_is_rejected(self):
+        for producer in ("ColorPipeline.cpp", "ExposureCapture.cpp", "Renderer.cpp"):
+            for path in ('Data/Shaders/Unexpected.hlsl', r'Data\\Shaders\\Unexpected.hlsl'):
+                with self.subTest(producer=producer, path=path):
+                    source = self.producers / producer
+                    original = source.read_text()
+                    source.write_text(original + '\nL"' + path + '"\n')
+                    result = assets.verify(self.root)
+                    source.write_text(original)
+                    self.assertFalse(result["ok"], result)
+
+    def test_runtime_reference_in_wrong_producer_is_rejected(self):
+        exposure = self.producers / "ExposureCapture.cpp"
+        renderer = self.producers / "Renderer.cpp"
+        renderer.write_text(renderer.read_text() + '\n' + exposure.read_text())
+        exposure.write_text("// compile call moved to the wrong owner\n")
+        self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_known_external_shader_is_allowed_only_for_its_owner(self):
+        for producer in ("Renderer.cpp", "ColorPipeline.cpp"):
+            with self.subTest(producer=producer):
+                source = self.producers / producer
+                original = source.read_text()
+                source.write_text(original + '\nL"Data/Shaders/DLSS5ActorProtectionCS.hlsl"\n')
+                result = assets.verify(self.root)
+                source.write_text(original)
+                self.assertEqual(result["ok"], producer == "Renderer.cpp", result)
+                if result["ok"]:
+                    self.assertNotIn("Data/Shaders/DLSS5ActorProtectionCS.hlsl", result["runtimePaths"])
+
+    def test_escaped_windows_runtime_paths(self):
+        for source in self.producers.iterdir():
+            source.write_text(source.read_text().replace("/", "\\\\"))
+        self.assertTrue(assets.verify(self.root)["ok"])
+
+    def test_commented_reference_cannot_satisfy_runtime_inventory(self):
+        source = self.producers / "ExposureCapture.cpp"
+        original = source.read_text()
+        for text in ("// " + original, "/* " + original + " */",
+                     "// disabled compile path\\\n" + original):
+            with self.subTest(text=text):
+                source.write_text(text)
+                self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_commented_unknown_paths_do_not_poison_inventory(self):
+        source = self.producers / "Renderer.cpp"
+        source.write_text(source.read_text() +
+                          '\n// L"Data/Shaders/Old.hlsl"\n/* L"Data/Shaders/Retired.hlsl" */\n')
+        self.assertTrue(assets.verify(self.root)["ok"])
+
+    def test_duplicate_package_provider_is_rejected(self):
+        for provider in (Path("features/Upscaling"), Path("package")):
+            for content in (None, "// stale shader\n"):
+                with self.subTest(provider=provider, content=content):
+                    duplicate = self.root / provider / assets.SHADERS / "CopyDepthGuideCS.hlsl"
+                    duplicate.parent.mkdir(parents=True, exist_ok=True)
+                    duplicate.write_text(content if content is not None else
+                                         (self.shaders / duplicate.name).read_text())
+                    result = assets.verify(self.root)
+                    duplicate.unlink()
+                    self.assertFalse(result["ok"], result)
+
+    def test_stale_deployed_asset(self):
+        result = assets.verify(self.root)
+        for row in result["assets"]:
+            dest = self.deployed / row["destination"]; dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.root / row["source"], dest)
+        (self.deployed / assets.SHADERS / "ColorCommon.hlsli").write_text("// stale\n")
+        self.assertFalse(assets.verify(self.root, self.deployed)["ok"])
+
+    def test_source_presence_does_not_claim_shader_compilation(self):
+        result = assets.verify(self.root)
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["shaderCompilationChecked"])
+        self.assertFalse(result["deployedHashChecked"])
+
+
+if __name__ == "__main__":
+    unittest.main()

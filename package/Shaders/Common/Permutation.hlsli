@@ -68,6 +68,14 @@ namespace Permutation
 		static const uint IsFemale = (1 << 6);
 		static const uint SuppressExternalEmittance = (1 << 7);
 		static const uint AdditiveLighting = (1 << 8);
+		static const uint CharacterCategoryShift = 11;
+		static const uint CharacterCategoryMask = (7 << CharacterCategoryShift);
+		static const uint CharacterExcluded = (1 << 14);
+		static const uint CharacterFocusFadeShift = 15;
+		static const uint CharacterFocusFadeMask = (255 << CharacterFocusFadeShift);
+		static const uint CharacterFace = (1 << CharacterCategoryShift);
+		static const uint CharacterSkin = (2 << CharacterCategoryShift);
+		static const uint CharacterHair = (3 << CharacterCategoryShift);
 	}
 
 	namespace ExtraFeatureFlags

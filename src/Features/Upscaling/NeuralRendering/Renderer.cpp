@@ -1,0 +1,3529 @@
+#include "Renderer.h"
+#include "DevelopmentDiagnostics.h"
+#include "GpuPass.h"
+
+#include "CapacityFallback.h"
+#include "ColorPipeline.h"
+#include "ComputeStateGuard.h"
+#include "D3D12Interop.h"
+#include "PipelinePolicy.h"
+#include "Utils/D3D.h"
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "BuildProvenance.h"
+#	include "ExecutionEvidenceJson.h"
+#	include "CompactInputLayout.h"
+#	include "ReplayCapture.h"
+#	include <exception>
+#endif
+
+#include <DirectXTex.h>
+#include <SKSE/SKSE.h>
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <chrono>
+#include <cmath>
+#include <format>
+#include <limits>
+#include <mutex>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <wrl/client.h>
+
+namespace NeuralRendering
+{
+	using Microsoft::WRL::ComPtr;
+
+	std::optional<std::uint64_t> LogicalTextureBytes(std::uint32_t format, std::uint32_t width, std::uint32_t height) noexcept
+	{
+		std::size_t row = 0, slice = 0;
+		return width && height && SUCCEEDED(DirectX::ComputePitch(static_cast<DXGI_FORMAT>(format), width, height, row, slice)) ?
+		           std::optional<std::uint64_t>(slice) :
+		           std::nullopt;
+	}
+
+	namespace
+	{
+		constexpr std::uint32_t kMaximumTextureDimension =
+			D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+		constexpr std::size_t kMaximumTransitionResourceCount = kEyeCount * 5;
+		static_assert(kEyeCount <= kMaximumExecutionRegions);
+
+		ExecutionTexture DescribeExecutionTexture(std::uint32_t width, std::uint32_t height, DXGI_FORMAT format, ComputeSubrect work)
+		{
+			return { { width, height }, static_cast<std::uint32_t>(format), work,
+				LogicalTextureBytes(format, width, height), LogicalTextureBytes(format, work.width, work.height) };
+		}
+
+		void RecordExecutionCopy(const std::shared_ptr<ExecutionEvidence>& evidence, std::size_t region,
+			std::optional<std::uint64_t> bytes) noexcept
+		{
+			if (evidence)
+				evidence->Update([&](auto& snapshot) {
+					if (bytes)
+						snapshot.regions[region].copiedLogicalBytes += *bytes;
+					else
+						snapshot.regions[region].copyBytesKnown = false;
+				});
+		}
+
+		struct ExecutionCompletionGuard
+		{
+			std::shared_ptr<ExecutionEvidence> evidence;
+			const RendererStage& stage;
+			bool succeeded = false;
+			std::optional<RendererStage> failureOverride;
+			~ExecutionCompletionGuard()
+			{
+				if (evidence)
+					evidence->Update([&](auto& snapshot) {
+						snapshot.finished = true;
+						snapshot.succeeded = succeeded;
+						snapshot.failureStage = succeeded ? 0u : static_cast<std::uint32_t>(failureOverride.value_or(stage));
+					});
+			}
+		};
+
+		class ExecutionCpuTimer
+		{
+		public:
+			ExecutionCpuTimer(std::shared_ptr<ExecutionEvidence> evidence, std::optional<std::uint64_t> ExecutionSnapshot::* field) :
+				evidence_(std::move(evidence)), field_(field), started_(evidence_ ? DiagnosticNow() : std::chrono::steady_clock::time_point{}) {}
+			~ExecutionCpuTimer() { Stop(); }
+			void Stop() noexcept
+			{
+				if (!evidence_)
+					return;
+				const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+					DiagnosticNow() - started_)
+						.count());
+				evidence_->Update([&](auto& snapshot) { snapshot.*field_ = (snapshot.*field_).value_or(0) + elapsed; });
+				evidence_.reset();
+			}
+
+		private:
+			std::shared_ptr<ExecutionEvidence> evidence_;
+			std::optional<std::uint64_t> ExecutionSnapshot::* field_;
+			std::chrono::steady_clock::time_point started_;
+		};
+
+		[[nodiscard]] constexpr bool IsSourceWorldFrameContinuous(
+			std::uint32_t a_previous,
+			std::uint32_t a_current) noexcept
+		{
+			return IsSequentialFrame(a_previous, a_current);
+		}
+
+		// Re-evaluating one frozen frame also reuses that frame's motion vectors,
+		// so it must begin from reset history instead of accumulating them again.
+		static_assert(!IsSourceWorldFrameContinuous(41u, 41u));
+		static_assert(IsSourceWorldFrameContinuous(41u, 42u));
+		static_assert(!IsSourceWorldFrameContinuous(41u, 43u));
+
+		struct CopyDepthGuideConstants
+		{
+			std::uint32_t offsetX = 0;
+			std::uint32_t offsetY = 0;
+			std::uint32_t width = 0;
+			std::uint32_t height = 0;
+		};
+
+		static_assert(sizeof(CopyDepthGuideConstants) == 16);
+
+		[[nodiscard]] ComputeSubrect ResolveComputeSubrect(
+			const RendererApplyArgs& a_args) noexcept
+		{
+			return a_args.computeSubrect.IsValid() ?
+			           a_args.computeSubrect :
+			           BuildCenteredComputeSubrect(
+						   a_args.outputWidth,
+						   a_args.outputHeight,
+						   a_args.tuning.singleSubrectScale);
+		}
+
+		[[nodiscard]] D3D11_BOX MakeCopyBox(
+			const ComputeSubrect& a_subrect) noexcept
+		{
+			return {
+				a_subrect.baseX,
+				a_subrect.baseY,
+				0u,
+				a_subrect.baseX + a_subrect.width,
+				a_subrect.baseY + a_subrect.height,
+				1u,
+			};
+		}
+
+		void CopyTextureSubrect(
+			ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source,
+			const ComputeSubrect& sourceRect, std::uint32_t destinationX, std::uint32_t destinationY) noexcept
+		{
+			const auto box = MakeCopyBox(sourceRect);
+			context->CopySubresourceRegion(destination, 0, destinationX, destinationY, 0, source, 0, &box);
+		}
+
+		void CopyTextureSubrect(
+			ID3D11DeviceContext* a_context,
+			ID3D11Resource* a_destination,
+			ID3D11Resource* a_source,
+			const ComputeSubrect& a_subrect) noexcept
+		{
+			CopyTextureSubrect(a_context, a_destination, a_source, a_subrect, a_subrect.baseX, a_subrect.baseY);
+		}
+
+		void Increment(std::uint64_t& a_counter) noexcept
+		{
+			if constexpr (!kDevelopmentDiagnostics) {
+				return;
+			} else {
+				if (a_counter != std::numeric_limits<std::uint64_t>::max())
+					++a_counter;
+			}
+		}
+
+		void Add(std::uint64_t& a_counter, std::uint64_t a_value) noexcept
+		{
+			if (a_value > std::numeric_limits<std::uint64_t>::max() - a_counter)
+				a_counter = std::numeric_limits<std::uint64_t>::max();
+			else
+				a_counter += a_value;
+		}
+
+		void RecordCpuDuration(
+			std::uint64_t& a_samples,
+			std::uint64_t& a_totalMicroseconds,
+			std::uint64_t& a_lastMicroseconds,
+			std::uint64_t& a_maximumMicroseconds,
+			std::chrono::steady_clock::time_point a_started) noexcept
+		{
+			if constexpr (!kDevelopmentDiagnostics) {
+				return;
+			} else {
+				const auto elapsed = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(
+						DiagnosticNow() - a_started)
+						.count());
+				Increment(a_samples);
+				Add(a_totalMicroseconds, elapsed);
+				a_lastMicroseconds = elapsed;
+				a_maximumMicroseconds = std::max(a_maximumMicroseconds, elapsed);
+			}
+		}
+
+		template <class Callback>
+		void LogOnce(bool& a_logged, Callback&& a_callback) noexcept
+		{
+			if (a_logged)
+				return;
+			a_logged = true;
+			try {
+				std::forward<Callback>(a_callback)();
+			} catch (...) {
+				// Diagnostics must never change renderer success or fallback behavior.
+			}
+		}
+
+		bool IsDeviceLossResult(HRESULT a_result) noexcept
+		{
+			return a_result == DXGI_ERROR_DEVICE_REMOVED ||
+			       a_result == DXGI_ERROR_DEVICE_RESET ||
+			       a_result == DXGI_ERROR_DEVICE_HUNG ||
+			       a_result == DXGI_ERROR_DRIVER_INTERNAL_ERROR;
+		}
+
+		bool IsDeviceLossReason(HRESULT a_result) noexcept
+		{
+			return IsDeviceLossResult(a_result) ||
+			       a_result == DXGI_ERROR_INVALID_CALL;
+		}
+
+		bool SameIdentity(IUnknown* a_left, IUnknown* a_right) noexcept
+		{
+			if (!a_left || !a_right)
+				return false;
+
+			ComPtr<IUnknown> leftIdentity;
+			ComPtr<IUnknown> rightIdentity;
+			return SUCCEEDED(a_left->QueryInterface(IID_PPV_ARGS(&leftIdentity))) &&
+			       SUCCEEDED(a_right->QueryInterface(IID_PPV_ARGS(&rightIdentity))) &&
+			       leftIdentity.Get() == rightIdentity.Get();
+		}
+
+		std::uintptr_t GetIdentityToken(IUnknown* a_object) noexcept
+		{
+			if (!a_object)
+				return 0;
+
+			ComPtr<IUnknown> identity;
+			return SUCCEEDED(a_object->QueryInterface(IID_PPV_ARGS(&identity))) ?
+			           reinterpret_cast<std::uintptr_t>(identity.Get()) :
+			           0;
+		}
+
+		std::string GetStereoPairContractViolation(
+			const std::array<RendererApplyArgs, 2>& a_args)
+		{
+			const auto& left = a_args[0];
+			const auto& right = a_args[1];
+			const std::array<ID3D11Resource*, 5> leftResources{
+				left.colorInput, left.depthGuide, left.motionVectors, left.colorOutput,
+				left.controlMask.Get()
+			};
+			const std::array<ID3D11Resource*, 5> rightResources{
+				right.colorInput, right.depthGuide, right.motionVectors, right.colorOutput,
+				right.controlMask.Get()
+			};
+			const bool resourcesOverlap = std::ranges::any_of(
+				leftResources,
+				[&](ID3D11Resource* a_leftResource) {
+					return std::ranges::any_of(
+						rightResources,
+						[&](ID3D11Resource* a_rightResource) {
+							return SameIdentity(a_leftResource, a_rightResource);
+						});
+				});
+			const bool tuningMatches =
+				left.tuning.intensity == right.tuning.intensity &&
+				left.tuning.localToneStrength == right.tuning.localToneStrength &&
+				left.tuning.localStructureStrength == right.tuning.localStructureStrength &&
+				left.tuning.skinStructureStrength == right.tuning.skinStructureStrength &&
+				left.tuning.style == right.tuning.style &&
+				left.tuning.useAutoMask == right.tuning.useAutoMask &&
+				left.tuning.uiCorrection == right.tuning.uiCorrection &&
+				left.tuning.singleSubrectScale == right.tuning.singleSubrectScale;
+			if (SameIdentity(left.device, right.device) &&
+				SameIdentity(left.context, right.context) &&
+				left.frameId == right.frameId &&
+				left.sourceWorldFrame == right.sourceWorldFrame &&
+				left.generation == right.generation &&
+				left.insertionPoint == right.insertionPoint &&
+				left.featureUpscaling == right.featureUpscaling &&
+				left.providerBlending == right.providerBlending &&
+				left.reset == right.reset &&
+				left.synchronizedHistoryReset == right.synchronizedHistoryReset &&
+				left.synchronizedHistoryDiscontinuity ==
+					right.synchronizedHistoryDiscontinuity &&
+				tuningMatches &&
+				IsOrderedStereoFeatureSlotPair(left.featureSlot, right.featureSlot) &&
+				!resourcesOverlap) {
+				return {};
+			}
+
+			return "stereo eyes require one device, context, frame, generation, insertion point, feature mode, reset policy, tuning, ordered route pair, source world frame, and disjoint resources";
+		}
+
+		bool IsFiniteTuning(const Tuning& a_tuning) noexcept
+		{
+			const auto validStrength = [](float a_value) {
+				return std::isfinite(a_value) && a_value >= 0.0f && a_value <= 2.0f;
+			};
+			return validStrength(a_tuning.intensity) &&
+			       validStrength(a_tuning.localToneStrength) &&
+			       validStrength(a_tuning.localStructureStrength) &&
+			       validStrength(a_tuning.skinStructureStrength) &&
+			       a_tuning.style <= 3 &&
+			       std::isfinite(a_tuning.singleSubrectScale) &&
+			       a_tuning.singleSubrectScale >= 0.25f &&
+			       a_tuning.singleSubrectScale <= 1.0f;
+		}
+
+		bool IsMotionVectorFormat(DXGI_FORMAT a_format) noexcept
+		{
+			return a_format == DXGI_FORMAT_R16G16_FLOAT ||
+			       a_format == DXGI_FORMAT_R32G32_FLOAT;
+		}
+
+		bool SupportsD3D11Format(
+			ID3D11Device* a_device,
+			DXGI_FORMAT a_format,
+			UINT a_requiredSupport) noexcept
+		{
+			UINT support = 0;
+			return a_device && a_format != DXGI_FORMAT_UNKNOWN &&
+			       SUCCEEDED(a_device->CheckFormatSupport(a_format, &support)) &&
+			       (support & a_requiredSupport) == a_requiredSupport;
+		}
+
+		bool SupportsD3D11SharedFormat(
+			ID3D11Device* a_device,
+			DXGI_FORMAT a_format) noexcept
+		{
+			if (!a_device || a_format == DXGI_FORMAT_UNKNOWN)
+				return false;
+
+			D3D11_FEATURE_DATA_FORMAT_SUPPORT2 support{ .InFormat = a_format };
+			return SUCCEEDED(a_device->CheckFeatureSupport(
+					   D3D11_FEATURE_FORMAT_SUPPORT2, &support, sizeof(support))) &&
+			       (support.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_SHAREABLE) != 0;
+		}
+
+		bool SupportsD3D12Format(
+			ID3D12Device* a_device,
+			DXGI_FORMAT a_format,
+			D3D12_FORMAT_SUPPORT1 a_requiredSupport1,
+			D3D12_FORMAT_SUPPORT2 a_requiredSupport2) noexcept
+		{
+			if (!a_device || a_format == DXGI_FORMAT_UNKNOWN)
+				return false;
+
+			D3D12_FEATURE_DATA_FORMAT_SUPPORT support{ .Format = a_format };
+			return SUCCEEDED(a_device->CheckFeatureSupport(
+					   D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support))) &&
+			       (support.Support1 & a_requiredSupport1) == a_requiredSupport1 &&
+			       (support.Support2 & a_requiredSupport2) == a_requiredSupport2;
+		}
+
+		struct TextureInfo
+		{
+			ComPtr<ID3D11Texture2D> texture;
+			D3D11_TEXTURE2D_DESC desc{};
+		};
+
+		bool GetTextureInfo(ID3D11Resource* a_resource, TextureInfo& a_info) noexcept
+		{
+			a_info = {};
+			if (!a_resource || FAILED(a_resource->QueryInterface(IID_PPV_ARGS(&a_info.texture))))
+				return false;
+			a_info.texture->GetDesc(&a_info.desc);
+			return true;
+		}
+
+		bool HasExactTextureContract(
+			const D3D11_TEXTURE2D_DESC& a_desc,
+			std::uint32_t a_width,
+			std::uint32_t a_height) noexcept
+		{
+			return a_desc.Width == a_width &&
+			       a_desc.Height == a_height &&
+			       a_desc.MipLevels == 1 &&
+			       a_desc.ArraySize == 1 &&
+			       a_desc.SampleDesc.Count == 1 &&
+			       a_desc.SampleDesc.Quality == 0 &&
+			       a_desc.Usage == D3D11_USAGE_DEFAULT &&
+			       a_desc.CPUAccessFlags == 0;
+		}
+
+		D3D11_TEXTURE2D_DESC MakeSharedDescription(
+			std::uint32_t a_width,
+			std::uint32_t a_height,
+			DXGI_FORMAT a_format,
+			bool a_shaderResource)
+		{
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = a_width;
+			desc.Height = a_height;
+			desc.MipLevels = 1;
+			desc.ArraySize = 1;
+			desc.Format = a_format;
+			desc.SampleDesc.Count = 1;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS |
+			                 (a_shaderResource ? D3D11_BIND_SHADER_RESOURCE : 0u);
+			return desc;
+		}
+
+		void Abandon(SharedTexture& a_texture) noexcept
+		{
+			(void)a_texture.resource11.Detach();
+			(void)a_texture.srv11.Detach();
+			(void)a_texture.uav11.Detach();
+			(void)a_texture.resource12.Detach();
+			a_texture.desc = {};
+		}
+
+		using RendererComputeStateGuard = ComputeStateGuard<1, 1, ComputeStatePolicy::PreserveBindings>;
+
+		struct RecordingGuard
+		{
+			explicit RecordingGuard(D3D12Interop& a_interop) : interop(a_interop) {}
+			bool Abort()
+			{
+				const bool aborted = interop.AbortD3D12();
+				active = interop.IsRecording();
+				return aborted;
+			}
+			~RecordingGuard() noexcept
+			{
+				if (!active)
+					return;
+				try {
+					(void)Abort();
+				} catch (...) {
+					// The outer renderer boundary quarantines unexpected unwind paths.
+				}
+			}
+
+			D3D12Interop& interop;
+			bool active = true;
+		};
+
+		struct FeatureResourceTransition
+		{
+			ID3D12Resource* resource = nullptr;
+			D3D12_RESOURCE_STATES featureState =
+				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		};
+
+		void TransitionResources(
+			ID3D12GraphicsCommandList* a_commandList,
+			std::span<const FeatureResourceTransition> a_resources,
+			bool a_toFeature)
+		{
+			std::array<D3D12_RESOURCE_BARRIER, kMaximumTransitionResourceCount> barriers{};
+			for (std::size_t index = 0; index < a_resources.size(); ++index) {
+				const auto& resource = a_resources[index];
+				auto& barrier = barriers[index];
+				barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+				barrier.Transition.pResource = resource.resource;
+				barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+				barrier.Transition.StateBefore = a_toFeature ?
+				                                     D3D12_RESOURCE_STATE_COMMON :
+				                                     resource.featureState;
+				barrier.Transition.StateAfter = a_toFeature ?
+				                                    resource.featureState :
+				                                    D3D12_RESOURCE_STATE_COMMON;
+			}
+			a_commandList->ResourceBarrier(
+				static_cast<UINT>(a_resources.size()), barriers.data());
+		}
+	}
+
+	const char* ToString(RendererStage a_stage)
+	{
+		switch (a_stage) {
+		case RendererStage::None:
+			return "none";
+		case RendererStage::Validation:
+			return "validation";
+		case RendererStage::FailureLatched:
+			return "failure_latched";
+		case RendererStage::DeviceCompatibility:
+			return "device_compatibility";
+		case RendererStage::InteropInitialization:
+			return "interop_initialization";
+		case RendererStage::RuntimeProbe:
+			return "runtime_probe";
+		case RendererStage::RuntimeInitialization:
+			return "runtime_initialization";
+		case RendererStage::ResourceRetirement:
+			return "resource_retirement";
+		case RendererStage::ResourceCreation:
+			return "resource_creation";
+		case RendererStage::ColorInputCopy:
+			return "color_input_copy";
+		case RendererStage::DepthGuideCopy:
+			return "depth_guide_copy";
+		case RendererStage::MotionVectorCopy:
+			return "motion_vector_copy";
+		case RendererStage::ControlMaskCopy:
+			return "control_mask_copy";
+		case RendererStage::CommandBegin:
+			return "command_begin";
+		case RendererStage::FeatureEvaluate:
+			return "feature_evaluate";
+		case RendererStage::CommandEnd:
+			return "command_end";
+		case RendererStage::OutputCommit:
+			return "output_commit";
+		case RendererStage::ResetWait:
+			return "reset_wait";
+		case RendererStage::RuntimeReset:
+			return "runtime_reset";
+		case RendererStage::InteropShutdown:
+			return "interop_shutdown";
+		case RendererStage::DeviceRemoved:
+			return "device_removed";
+		case RendererStage::Quarantined:
+			return "quarantined";
+		case RendererStage::Complete:
+			return "complete";
+		default:
+			return "unknown";
+		}
+	}
+
+	class Renderer::State
+	{
+	public:
+		friend class Renderer;
+
+		struct ResourceKey
+		{
+			std::uint32_t colorWidth = 0;
+			std::uint32_t colorHeight = 0;
+			std::uint32_t guideWidth = 0;
+			std::uint32_t guideHeight = 0;
+			std::uint32_t outputWidth = 0;
+			std::uint32_t outputHeight = 0;
+			std::uint32_t controlMaskWidth = 0;
+			std::uint32_t controlMaskHeight = 0;
+			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT motionFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT outputFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT controlMaskFormat = DXGI_FORMAT_UNKNOWN;
+			bool controlMaskPresent = false;
+			bool providerBlending = false;
+			bool featureUpscaling = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			bool compact = false;
+#endif
+
+			bool operator==(const ResourceKey&) const = default;
+		};
+
+		struct HistoryKey
+		{
+			ResourceKey resources{};
+			std::uint64_t generation = 0;
+			InsertionPoint insertionPoint = kDefaultInsertionPoint;
+			UpscalingDLSS::ViewportCrop viewportCrop{};
+			DXGI_FORMAT colorSourceFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT colorDestinationFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT depthSourceFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
+			std::uint32_t intensity = 0;
+			std::uint32_t localToneStrength = 0;
+			std::uint32_t localStructureStrength = 0;
+			std::uint32_t skinStructureStrength = 0;
+			std::uint32_t style = 0;
+			std::uintptr_t controlMaskIdentity = 0;
+			ComputeSubrect computeSubrect{};
+			std::uint64_t regionIdentity = 0;
+			std::uint64_t colorInputEpoch = 0;
+			bool useAutoMask = false;
+			bool uiCorrection = false;
+
+			bool operator==(const HistoryKey&) const = default;
+		};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		CapacityFallback capacityFallback_{};
+		std::uint32_t requestedRegionCount_ = 0;
+		bool forceFullCoordinates_ = false;
+		std::array<CompactInputRetention, Runtime::kFeatureSlotCount> compactRetention_{};
+		ComPtr<ID3D11ComputeShader> copyCompactDepthGuideCS_;
+		struct ValidatedResources;
+		void ApplyCompactLayoutLocked(const RendererApplyArgs& args, ValidatedResources& resources) const;
+#endif
+
+		struct Slot
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			std::uint64_t resourceSerial = 0;
+#endif
+			SharedTexture color;
+			SharedTexture depth;
+			SharedTexture motionVectors;
+			SharedTexture controlMask;
+			SharedTexture output;
+			Color::Work colorWork;
+			ResourceKey resourceKey{};
+			HistoryKey historyKey{};
+			std::uint32_t lastSuccessfulFrame =
+				std::numeric_limits<std::uint32_t>::max();
+			std::uint32_t lastSuccessfulSourceWorldFrame =
+				std::numeric_limits<std::uint32_t>::max();
+			bool resourcesValid = false;
+			bool historyValid = false;
+		};
+
+		struct ValidatedResources
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			bool compactAttempted = false;
+#endif
+			TextureInfo color;
+			TextureInfo depth;
+			TextureInfo motionVectors;
+			TextureInfo controlMask;
+			TextureInfo output;
+			std::uintptr_t controlMaskIdentity = 0;
+			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
+			RoiDescriptor roi{};
+			NativeEvaluationLayout nativeLayout{};
+			ResourceKey resourceKey{};
+			HistoryKey historyKey{};
+		};
+
+		struct ValidationFailure
+		{
+			HRESULT result = S_OK;
+			std::string detail;
+
+			explicit operator bool() const noexcept { return FAILED(result); }
+		};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		void CaptureReplayBatch(std::span<const RendererApplyArgs> args,
+			std::span<Slot* const> slots, std::span<const ValidatedResources> resources,
+			const std::shared_ptr<ExecutionEvidence>& execution) noexcept;
+#endif
+
+		bool ApplyLocked(
+			const RendererApplyArgs& a_args,
+			RendererApplyOutcome& a_outcome);
+		bool ApplyStereoLocked(
+			const std::array<RendererApplyArgs, 2>& a_args,
+			RendererApplyOutcome& a_outcome);
+		bool ApplySequentialStereoLocked(
+			const std::array<RendererApplyArgs, 2>& a_args,
+			RendererApplyOutcome& a_outcome);
+		bool ApplyBatchLocked(
+			std::span<const RendererApplyArgs> a_args,
+			RendererApplyOutcome& a_outcome);
+		bool ApplyRegionBatchLocked(std::span<const RendererApplyArgs> a_args, RendererApplyOutcome& a_outcome);
+		bool ResetLocked(bool a_resetShader, bool a_destruction);
+		void ShutdownForDestruction() noexcept;
+
+		RendererSnapshot SnapshotLocked()
+		{
+			RefreshInteropTelemetryLocked();
+			return snapshot_;
+		}
+		bool IsFailureLatchedLocked() const noexcept { return failureLatched_; }
+		bool IsQuarantinedLocked() const noexcept { return quarantined_; }
+
+		// Latch a configuration for both eyes of each source/evaluation transaction,
+		// including callers that enter through separate public Apply calls.
+		void CaptureColorConfiguration(const RendererApplyArgs& args)
+		{
+			const auto route = args.featureSlot < Runtime::kFeatureSlotCount ?
+			                       ClassifyFeatureSlotMask(1u << args.featureSlot) :
+			                       FeatureSlotRoute::Unexpected;
+			const std::size_t routeIndex = route == FeatureSlotRoute::Submit ? 1u : 0u;
+			captureRoute_ = routeIndex;
+			const ColorTransactionKey key{ args.frameId, args.sourceWorldFrame, args.generation, args.insertionPoint };
+			const bool transactionChanged = !colorTransactionValid_[routeIndex] || key != colorTransactionKeys_[routeIndex];
+			if (transactionChanged) {
+				colorConfigurations_[routeIndex] = Color::Registry::Instance().Snapshot();
+				colorTransactionKeys_[routeIndex] = key;
+				colorTransactionValid_[routeIndex] = true;
+			}
+			colorConfiguration_ = colorConfigurations_[routeIndex];
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			auto& capture = captureInputs_[routeIndex];
+			wholePass_.reset();
+			if (!Color::Registry::Instance().CaptureEvidenceEnabled()) {
+				capture = {};
+			} else if (transactionChanged || capture.sourceTransactionId != args.executionContext.sourceTransactionId ||
+					   capture.captureEpoch != args.executionContext.captureEpoch ||
+					   !capture.Matches(static_cast<std::uint32_t>(routeIndex), args.frameId,
+						   args.sourceWorldFrame, args.generation, static_cast<std::uint32_t>(args.insertionPoint))) {
+				capture = {};
+				capture.valid = true;
+				capture.frame = args.frameId;
+				capture.sourceWorldFrame = args.sourceWorldFrame;
+				capture.generation = args.generation;
+				capture.sourceTransactionId = args.executionContext.sourceTransactionId;
+				capture.captureEpoch = args.executionContext.captureEpoch;
+				capture.insertion = static_cast<std::uint32_t>(args.insertionPoint);
+				capture.route = static_cast<std::uint32_t>(routeIndex);
+				capture.configuration = colorConfiguration_;
+			}
+			if (capture.valid) {
+				try {
+					wholePass_ = std::make_shared<Util::PassTimingCapture>();
+				} catch (...) {
+					++capture.executionEvidenceFailures;
+				}
+			}
+#endif
+		}
+		Color::Configuration colorConfiguration_{};
+		std::array<CaptureInputs, 2> captureInputs_{};
+		std::size_t captureRoute_ = 0;
+		Util::PassTimingHandle wholePass_;
+		void FinishCapture(const RendererApplyOutcome& outcome) noexcept
+		{
+			if constexpr (!kDevelopmentDiagnostics) {
+				return;
+			} else {
+				try {
+					for (auto& capture : std::span<CaptureInputs>(&captureInputs_[captureRoute_], 1)) {
+						if (!capture.valid || capture.configuration.revision != colorConfiguration_.revision)
+							continue;
+						capture.attemptedMask |= outcome.evaluationAttemptedFeatureSlotMask;
+						capture.succeededMask |= outcome.evaluationSucceededFeatureSlotMask;
+						for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
+							const auto& observation = slots_[slot].colorWork.observation;
+							if ((capture.slotMask & (1u << slot)) != 0 && observation.revision == capture.configuration.revision &&
+								observation.frame == capture.frame && observation.sourceWorldFrame == capture.sourceWorldFrame &&
+								observation.generation == capture.generation && observation.insertion == capture.insertion)
+								capture.slots[slot] = observation;
+						}
+					}
+				} catch (...) {
+					for (auto& capture : captureInputs_)
+						capture.valid = false;
+				}
+			}
+		}
+		mutable std::mutex mutex_;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LifetimeDiagnostics lifetimeDiagnostics_;
+		LifetimeRecord* activeLifetime_ = nullptr;
+		std::uint64_t backendSerial_ = 0, resourceSerial_ = 0;
+		struct LifetimeGuard
+		{
+			State& owner;
+			std::optional<LifetimeRecord> record;
+			LifetimeRecord* parent = nullptr;
+			bool enabled = false;
+			int exceptions = 0;
+			LifetimeGuard(State& state, LifetimeOperation operation) :
+				owner(state)
+			{
+				if (!Color::Registry::Instance().CaptureEvidenceEnabled() || state.lifetimeDiagnostics_.Frozen())
+					return;
+				record.emplace();
+				enabled = state.BeginLifetimeLocked(*record, operation);
+				if (enabled) {
+					exceptions = std::uncaught_exceptions();
+					parent = state.activeLifetime_;
+					owner.activeLifetime_ = &*record;
+				}
+			}
+			~LifetimeGuard() noexcept
+			{
+				if (enabled) {
+					owner.FinishLifetimeLocked(*record, std::uncaught_exceptions() > exceptions);
+					owner.activeLifetime_ = parent;
+				}
+			}
+		};
+#endif
+
+	private:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool BeginLifetimeLocked(LifetimeRecord& record, LifetimeOperation operation) noexcept;
+		void FinishLifetimeLocked(LifetimeRecord& record, bool unwinding) noexcept;
+		void CaptureLifetimeResourcesLocked(LifetimeRegion& region, const Slot& slot) const noexcept;
+#endif
+		void FinalizeResourceKeysLocked(const RendererApplyArgs& args, ValidatedResources& resources) const;
+		ValidationFailure ValidateLocked(
+			const RendererApplyArgs& a_args,
+			ValidatedResources& a_resources
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			,
+			bool recordEvidence = true
+#endif
+		);
+		bool ValidateD3D12FormatsLocked(
+			const ValidatedResources& a_resources,
+			std::string& a_detail) const;
+		bool EnsureBackendLocked(const RendererApplyArgs& a_args, const std::shared_ptr<ExecutionEvidence>& a_evidence);
+		bool EnsureSlotLocked(
+			std::uint32_t a_slot,
+			const ValidatedResources& a_resources,
+			const std::shared_ptr<ExecutionEvidence>& a_evidence, std::size_t a_region);
+		bool CopyDepthBatchLocked(
+			std::span<const RendererApplyArgs> a_args,
+			std::span<Slot* const> a_slots,
+			std::span<const ValidatedResources> a_resources,
+			const std::shared_ptr<ExecutionEvidence>& a_evidence);
+		bool TeardownBackendLocked(
+			bool a_resetShader,
+			bool a_destruction,
+			bool a_countApplyFailure, const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
+		void AbandonRuntimeOwnershipNoexcept() noexcept;
+		void AbandonSlotsLocked() noexcept;
+		void QuarantineAfterUnexpectedFailureLocked(
+			RendererStage a_stage,
+			std::uint32_t a_slot,
+			bool a_applyFailure,
+			std::uint64_t a_failuresBefore) noexcept;
+		void RefreshRuntimeTelemetryLocked();
+		void RefreshInteropTelemetryLocked();
+		void SetRequestTelemetryLocked(const RendererApplyArgs& a_args) noexcept;
+		void SetActiveFeatureSlotLocked(std::uint32_t a_slot) noexcept;
+		[[nodiscard]] std::uint32_t ActiveFeatureSlotOrLocked(
+			std::uint32_t a_fallback) const noexcept;
+		HRESULT GetDeviceRemovalReasonLocked(HRESULT a_candidate) const noexcept;
+		bool FailLocked(
+			RendererStage a_stage,
+			HRESULT a_result,
+			std::string a_detail,
+			std::uint32_t a_slot,
+			bool a_latch,
+			bool a_forceQuarantine = false,
+			bool a_countApplyFailure = true);
+		void SucceedLocked(std::uint32_t a_slot) noexcept;
+
+		struct ColorTransactionKey
+		{
+			std::uint32_t frame, worldFrame;
+			std::uint64_t generation;
+			InsertionPoint insertion;
+			bool operator==(const ColorTransactionKey&) const = default;
+		};
+		std::array<ColorTransactionKey, 2> colorTransactionKeys_{};
+		std::array<Color::Configuration, 2> colorConfigurations_{};
+		std::array<bool, 2> colorTransactionValid_{};
+		D3D12Interop interop_;
+		Color::Pipeline colorPipeline_;
+		std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
+		ComPtr<ID3D11Device> device_;
+		ComPtr<ID3D11DeviceContext> context_;
+		ComPtr<ID3D11ComputeShader> copyDepthGuideCS_;
+		ComPtr<ID3D11Buffer> copyDepthGuideCB_;
+		bool copyDepthGuideCompileFailed_ = false;
+		ComPtr<ID3D11ComputeShader> actorProtectionCS_;
+		ComPtr<ID3D11Buffer> actorProtectionCB_;
+		bool PrepareActorProtection(const RendererApplyArgs&, Slot&);
+		RendererSnapshot snapshot_{};
+		bool runtimeReady_ = false;
+		bool runtimeTouched_ = false;
+		bool failureLatched_ = false;
+		bool quarantined_ = false;
+		bool runtimeProbeResultLogged_ = false;
+		bool runtimeInitializationResultLogged_ = false;
+		std::array<bool, Runtime::kFeatureSlotCount> slotEvaluateSuccessLogged_{};
+		RendererStage activeStage_ = RendererStage::None;
+		std::uint32_t activeFeatureSlot_ = Runtime::kFeatureSlotCount;
+	};
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	bool Renderer::State::BeginLifetimeLocked(LifetimeRecord& record, LifetimeOperation operation) noexcept
+	{
+		try {
+			record.operation = operation;
+			record.backendSerial = backendSerial_;
+			record.requestFrame = snapshot_.frameId;
+			record.sourceFrame = snapshot_.sourceWorldFrame;
+			record.generation = snapshot_.generation;
+			record.insertion = static_cast<std::uint32_t>(snapshot_.insertionPoint);
+			record.before = interop_.GetLifetimeSnapshot();
+			return true;
+		} catch (...) {
+			lifetimeDiagnostics_.DiagnosticFailure();
+			return false;
+		}
+	}
+
+	void Renderer::State::FinishLifetimeLocked(LifetimeRecord& record, bool unwinding) noexcept
+	{
+		try {
+			if (!record.failureObserved) {
+				record.stage = static_cast<std::uint32_t>(activeStage_);
+				record.after = interop_.GetLifetimeSnapshot();
+			}
+		} catch (...) {
+			lifetimeDiagnostics_.DiagnosticFailure();
+		}
+		if (unwinding && !record.failureObserved) {
+			record.failureObserved = true;
+			record.result = E_UNEXPECTED;
+			record.succeeded = false;
+		}
+		lifetimeDiagnostics_.Record(record);
+	}
+
+	void Renderer::State::CaptureLifetimeResourcesLocked(LifetimeRegion& region, const Slot& slot) const noexcept
+	{
+		region.resourceSerial = slot.resourceSerial;
+		region.resourcesRebuilt = region.previousResourceSerial != region.resourceSerial;
+		const std::array<const SharedTexture*, 5> resources{ &slot.color, &slot.depth, &slot.motionVectors, &slot.output, &slot.controlMask };
+		for (std::size_t index = 0; index < resources.size(); ++index) {
+			region.resources11[index] = reinterpret_cast<std::uintptr_t>(resources[index]->resource11.Get());
+			region.resources12[index] = reinterpret_cast<std::uintptr_t>(resources[index]->resource12.Get());
+		}
+	}
+
+#endif
+
+	Renderer::State::ValidationFailure Renderer::State::ValidateLocked(
+		const RendererApplyArgs& a_args,
+		ValidatedResources& a_resources
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		bool recordEvidence
+#endif
+	)
+	{
+		a_resources = {};
+		const auto fail = [](std::string a_detail) {
+			return ValidationFailure{ E_INVALIDARG, std::move(a_detail) };
+		};
+
+		if (!a_args.device || !a_args.context)
+			return fail("D3D11 device and immediate context are required");
+		if (a_args.context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+			return fail("deferred D3D11 contexts are not supported");
+		if (a_args.featureSlot >= Runtime::kFeatureSlotCount)
+			return fail(std::format(
+				"feature slot {} is outside [0,{})",
+				a_args.featureSlot,
+				Runtime::kFeatureSlotCount));
+		const auto invalidFrame = std::numeric_limits<std::uint32_t>::max();
+		if (a_args.frameId == invalidFrame)
+			return fail("Feature 18 evaluation frame is invalid");
+		if (a_args.sourceWorldFrame == invalidFrame ||
+			a_args.sourceWorldFrame > a_args.frameId) {
+			return fail(
+				"Feature 18 source world frame is invalid or newer than its evaluation frame");
+		}
+		if (!a_args.generation)
+			return fail("feature-slot generation must be nonzero");
+		if (!IsValidInsertionPoint(a_args.insertionPoint))
+			return fail("Feature 18 insertion point is invalid");
+		if (colorConfiguration_.Enabled() &&
+			(a_args.colorWidth != a_args.outputWidth || a_args.colorHeight != a_args.outputHeight))
+			return fail("NR colour processing currently requires matching colour/output dimensions; guides may be lower resolution");
+		if (!a_args.colorInput || !a_args.depthGuide || !a_args.depthGuideSRV ||
+			!a_args.motionVectors || !a_args.colorOutput) {
+			return fail("color, depth, motion-vector, and output resources are required");
+		}
+
+		const auto validDimension = [](std::uint32_t a_value) {
+			return a_value > 0 && a_value <= kMaximumTextureDimension;
+		};
+		if (!validDimension(a_args.colorWidth) ||
+			!validDimension(a_args.colorHeight) ||
+			!validDimension(a_args.guideWidth) ||
+			!validDimension(a_args.guideHeight) ||
+			!validDimension(a_args.outputWidth) ||
+			!validDimension(a_args.outputHeight)) {
+			return fail("one or more dimensions are zero or exceed the D3D11 Texture2D limit");
+		}
+		const auto expectedFeatureUpscaling = ResolveFeatureUpscaling(
+			a_args.guideWidth, a_args.guideHeight,
+			a_args.outputWidth, a_args.outputHeight);
+		if (!expectedFeatureUpscaling)
+			return fail("Feature 18 guide-to-output geometry is unsupported");
+		if (a_args.featureUpscaling != *expectedFeatureUpscaling) {
+			return fail(
+				"Feature 18 upscaling mode does not match its guide-to-output geometry");
+		}
+		const bool hasExplicitSubrectValue =
+			a_args.computeSubrect.baseX || a_args.computeSubrect.baseY ||
+			a_args.computeSubrect.width || a_args.computeSubrect.height;
+		if (hasExplicitSubrectValue && !a_args.computeSubrect.IsValid())
+			return fail("the explicit Feature 18 compute rectangle is incomplete");
+		const auto provider = ResolveComputeSubrect(a_args);
+		a_resources.roi = a_args.roi.value_or(BuildRoiDescriptor(
+			std::nullopt, provider, { a_args.outputWidth, a_args.outputHeight }, false));
+		if (a_args.characterVisualIsolation && (!a_args.roi || !a_args.roi->samplingSupport))
+			return fail("character evaluation requires prepared ROI roles and current sampling support");
+		if (auto violation = GetRoiDescriptorViolation(a_resources.roi, provider,
+				{ a_args.outputWidth, a_args.outputHeight });
+			!violation.empty())
+			return fail(std::string(violation));
+		const bool hasControlMask = a_args.controlMask != nullptr;
+		if (hasControlMask &&
+			(!validDimension(a_args.controlMaskWidth) ||
+				!validDimension(a_args.controlMaskHeight))) {
+			return fail("control-mask dimensions are zero or exceed the D3D11 Texture2D limit");
+		}
+		if (!hasControlMask && (a_args.controlMaskWidth || a_args.controlMaskHeight)) {
+			return fail("control-mask dimensions must be zero when no mask is supplied");
+		}
+		if (hasControlMask &&
+			(a_args.controlMaskWidth != a_args.outputWidth ||
+				a_args.controlMaskHeight != a_args.outputHeight)) {
+			return fail("the control mask must exactly match the Feature 18 output extent");
+		}
+		if (!a_args.viewportCrop.MatchesEvaluationExtents(
+				a_args.guideWidth,
+				a_args.guideHeight,
+				a_args.outputWidth,
+				a_args.outputHeight)) {
+			return fail("Feature 18 crop does not match the physical guide and output extents");
+		}
+		if (a_args.colorWidth != a_args.viewportCrop.output.Width() ||
+			a_args.colorHeight != a_args.viewportCrop.output.Height()) {
+			return fail("Feature 18 color input does not match the exact output crop extent");
+		}
+		const auto motionVectorScale =
+			UpscalingDLSS::BuildMotionVectorPixelScale(a_args.viewportCrop);
+		if (!motionVectorScale.valid)
+			return fail("Feature 18 motion-vector crop metadata is invalid");
+		a_resources.nativeLayout = BuildNativeEvaluationLayout(
+			{ a_args.colorWidth, a_args.colorHeight }, { a_args.guideWidth, a_args.guideHeight },
+			a_resources.roi.allocationCapacity, { a_args.controlMaskWidth, a_args.controlMaskHeight },
+			a_resources.roi.inferenceContext, motionVectorScale, a_args.featureUpscaling);
+		if (!a_resources.nativeLayout.color.valid.Fits(a_args.colorWidth, a_args.colorHeight) ||
+			!a_resources.nativeLayout.depth.valid.Fits(a_args.guideWidth, a_args.guideHeight))
+			return fail("the Feature 18 compute rectangle could not be mapped to its inputs");
+		if (!IsFiniteTuning(a_args.tuning))
+			return fail("Feature 18 tuning values are outside their validated ranges");
+		if (a_args.tuning.uiCorrection)
+			return fail("UI correction is outside the safe Feature 18 contract");
+		if (a_args.providerBlending) {
+			if (!hasControlMask || !a_args.actorSelection || !a_args.characterVisualIsolation ||
+				!a_args.tuning.useAutoMask || a_resources.nativeLayout.color != a_resources.nativeLayout.output ||
+				(a_args.actorSelectionSupport.IsValid() && !a_args.actorSelectionSupport.Fits(a_args.outputWidth, a_args.outputHeight)))
+				return fail("actor provider blending requires matching colour/output, automatic masking and prepared actor selection");
+			ComPtr<ID3D11Resource> selectionResource;
+			a_args.actorSelection->GetResource(&selectionResource);
+			D3D11_SHADER_RESOURCE_VIEW_DESC selectionView{};
+			a_args.actorSelection->GetDesc(&selectionView);
+			if (!SameIdentity(selectionResource.Get(), a_args.controlMask.Get()) ||
+				selectionView.Format != DXGI_FORMAT_R8_UNORM || selectionView.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+				selectionView.Texture2D.MostDetailedMip != 0 || selectionView.Texture2D.MipLevels != 1)
+				return fail("actor selection view does not match the provider mask source");
+		} else if (hasControlMask == a_args.tuning.useAutoMask) {
+			return fail(hasControlMask ?
+							"a control mask requires automatic masking to be disabled" :
+							"automatic masking is required when no control mask is supplied");
+		}
+
+		ComPtr<ID3D11Device> contextDevice;
+		a_args.context->GetDevice(&contextDevice);
+		if (!SameIdentity(a_args.device, contextDevice.Get()))
+			return fail("the immediate context does not belong to the supplied device");
+
+		struct InputContract
+		{
+			ID3D11Resource* resource;
+			TextureInfo* info;
+			std::uint32_t width;
+			std::uint32_t height;
+			const char* name;
+		};
+		const std::array<InputContract, 4> contracts{
+			InputContract{ a_args.colorInput, &a_resources.color, a_args.colorWidth, a_args.colorHeight, "color input" },
+			InputContract{ a_args.depthGuide, &a_resources.depth, a_args.guideWidth, a_args.guideHeight, "depth guide" },
+			InputContract{ a_args.motionVectors, &a_resources.motionVectors, a_args.guideWidth, a_args.guideHeight, "motion vectors" },
+			InputContract{ a_args.colorOutput, &a_resources.output, a_args.outputWidth, a_args.outputHeight, "color output" },
+		};
+		for (const auto& contract : contracts) {
+			if (!GetTextureInfo(contract.resource, *contract.info))
+				return fail(std::format("{} is not a Texture2D", contract.name));
+			if (!HasExactTextureContract(contract.info->desc, contract.width, contract.height)) {
+				return fail(std::format(
+					"{} does not match the exact {}x{} single-sample, single-subresource DEFAULT contract",
+					contract.name,
+					contract.width,
+					contract.height));
+			}
+			ComPtr<ID3D11Device> resourceDevice;
+			contract.info->texture->GetDevice(&resourceDevice);
+			if (!SameIdentity(a_args.device, resourceDevice.Get()))
+				return fail(std::format("{} belongs to a different D3D11 device", contract.name));
+		}
+		if (hasControlMask) {
+			if (!GetTextureInfo(a_args.controlMask.Get(), a_resources.controlMask))
+				return fail("control mask is not a Texture2D");
+			if (!HasExactTextureContract(
+					a_resources.controlMask.desc,
+					a_args.controlMaskWidth,
+					a_args.controlMaskHeight)) {
+				return fail(std::format(
+					"control mask does not match the exact {}x{} single-sample, single-subresource DEFAULT contract",
+					a_args.controlMaskWidth,
+					a_args.controlMaskHeight));
+			}
+			if (a_resources.controlMask.desc.Format != DXGI_FORMAT_R8_UNORM)
+				return fail("control mask format must be R8_UNORM");
+			if ((a_resources.controlMask.desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0)
+				return fail("control mask must be shader-resource capable");
+
+			ComPtr<ID3D11Device> maskDevice;
+			a_resources.controlMask.texture->GetDevice(&maskDevice);
+			if (!SameIdentity(a_args.device, maskDevice.Get()))
+				return fail("control mask belongs to a different D3D11 device");
+			a_resources.controlMaskIdentity = GetIdentityToken(a_args.controlMask.Get());
+			if (!a_resources.controlMaskIdentity)
+				return fail("control mask COM identity could not be resolved");
+		}
+
+		if (a_resources.color.desc.Format != a_resources.output.desc.Format)
+			return fail("color input and output formats differ");
+		if (!IsMotionVectorFormat(a_resources.motionVectors.desc.Format))
+			return fail(std::format(
+				"motion-vector format {} is not R16G16_FLOAT or R32G32_FLOAT",
+				static_cast<std::uint32_t>(a_resources.motionVectors.desc.Format)));
+
+		ComPtr<ID3D11Resource> depthViewResource;
+		a_args.depthGuideSRV->GetResource(&depthViewResource);
+		if (!SameIdentity(a_args.depthGuide, depthViewResource.Get()))
+			return fail("the depth SRV does not reference the supplied depth guide");
+		D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDesc{};
+		a_args.depthGuideSRV->GetDesc(&depthViewDesc);
+		if (depthViewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+			depthViewDesc.Texture2D.MostDetailedMip != 0 ||
+			depthViewDesc.Texture2D.MipLevels != 1) {
+			return fail("the depth guide SRV must expose Texture2D mip zero only");
+		}
+		a_resources.depthViewFormat = depthViewDesc.Format;
+		if (depthViewDesc.Format == DXGI_FORMAT_UNKNOWN ||
+			!SupportsD3D11Format(
+				a_args.device,
+				depthViewDesc.Format,
+				D3D11_FORMAT_SUPPORT_TEXTURE2D |
+					D3D11_FORMAT_SUPPORT_SHADER_SAMPLE |
+					D3D11_FORMAT_SUPPORT_SHADER_LOAD)) {
+			return fail("the depth guide SRV format is not sampleable");
+		}
+
+		D3D11_FEATURE_DATA_D3D11_OPTIONS5 options5{};
+		if (FAILED(a_args.device->CheckFeatureSupport(
+				D3D11_FEATURE_D3D11_OPTIONS5, &options5, sizeof(options5))) ||
+			options5.SharedResourceTier < D3D11_SHARED_RESOURCE_TIER_1) {
+			return fail("the D3D11 device does not support shared NT-handle resources");
+		}
+
+		constexpr UINT inputSupport = D3D11_FORMAT_SUPPORT_TEXTURE2D |
+		                              D3D11_FORMAT_SUPPORT_SHADER_SAMPLE |
+		                              D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
+		constexpr UINT outputSupport = D3D11_FORMAT_SUPPORT_TEXTURE2D |
+		                               D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
+		if (!SupportsD3D11Format(a_args.device, a_resources.color.desc.Format, inputSupport))
+			return fail("the color format cannot back a shared SRV/UAV texture");
+		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.color.desc.Format))
+			return fail("the color format is not shareable across D3D11 and D3D12");
+		if (!SupportsD3D11Format(a_args.device, a_resources.motionVectors.desc.Format, inputSupport))
+			return fail("the motion-vector format cannot back a shared SRV/UAV texture");
+		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.motionVectors.desc.Format))
+			return fail("the motion-vector format is not shareable across D3D11 and D3D12");
+		if (!SupportsD3D11Format(a_args.device, DXGI_FORMAT_R32_FLOAT, inputSupport))
+			return fail("R32_FLOAT depth-guide sharing is unsupported");
+		if (!SupportsD3D11SharedFormat(a_args.device, DXGI_FORMAT_R32_FLOAT))
+			return fail("R32_FLOAT depth guides are not shareable across D3D11 and D3D12");
+		if (!SupportsD3D11Format(a_args.device, a_resources.output.desc.Format, outputSupport))
+			return fail("the output format cannot back a shared UAV texture");
+		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.output.desc.Format))
+			return fail("the output format is not shareable across D3D11 and D3D12");
+		if (hasControlMask &&
+			!SupportsD3D11Format(a_args.device, DXGI_FORMAT_R8_UNORM, inputSupport)) {
+			return fail("R8_UNORM control masks cannot back a shared SRV/UAV texture");
+		}
+		if (hasControlMask &&
+			!SupportsD3D11SharedFormat(a_args.device, DXGI_FORMAT_R8_UNORM)) {
+			return fail("R8_UNORM control masks are not shareable across D3D11 and D3D12");
+		}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ApplyCompactLayoutLocked(a_args, a_resources);
+#endif
+		FinalizeResourceKeysLocked(a_args, a_resources);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (!recordEvidence)
+			return {};
+#endif
+		for (auto& capture : captureInputs_) {
+			if (!capture.Matches(a_args.featureSlot % 4u >= 2u ? 1u : 0u, a_args.frameId,
+					a_args.sourceWorldFrame, a_args.generation, static_cast<std::uint32_t>(a_args.insertionPoint)) ||
+				a_args.featureSlot >= capture.slots.size())
+				continue;
+			auto& observation = capture.slots[a_args.featureSlot];
+			observation.frame = a_args.frameId;
+			observation.sourceWorldFrame = a_args.sourceWorldFrame;
+			observation.generation = a_args.generation;
+			observation.insertion = capture.insertion;
+			observation.slot = a_args.featureSlot;
+			observation.revision = capture.configuration.revision;
+			observation.mode = capture.configuration.EffectiveMode();
+			observation.profile = Color::EffectiveProfile(capture.configuration, capture.insertion);
+			observation.bypass = capture.configuration.experiments.transportBypass;
+			observation.modelEditShown = capture.configuration.experiments.applyModelEdit;
+			observation.lightingPreservation = Color::ResolveReconstructionSettings(capture.configuration.settings).lightingPreservation;
+			observation.rect = a_resources.roi.ownedOutput;
+			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.color.desc.Format);
+			observation.outputFormat = static_cast<std::uint32_t>(a_resources.output.desc.Format);
+			capture.slotMask |= 1u << a_args.featureSlot;
+		}
+		return {};
+	}
+
+	void Renderer::State::FinalizeResourceKeysLocked(const RendererApplyArgs& a_args, ValidatedResources& a_resources) const
+	{
+		const bool hasControlMask = a_args.controlMask != nullptr;
+		const auto profile = Color::EffectiveProfile(colorConfiguration_, static_cast<std::uint32_t>(a_args.insertionPoint));
+		const bool transformed = profile.transform != Color::Transform::Identity;
+		// Transform in private floating-point storage; preserve the caller's format at commit.
+		const auto processingFormat = a_resources.color.desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT ||
+		                                      a_resources.output.desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT ?
+		                                  DXGI_FORMAT_R32G32B32A32_FLOAT :
+		                                  DXGI_FORMAT_R16G16B16A16_FLOAT;
+		a_resources.resourceKey = {
+			.colorWidth = a_resources.nativeLayout.color.backing.width,
+			.colorHeight = a_resources.nativeLayout.color.backing.height,
+			.guideWidth = a_resources.nativeLayout.depth.backing.width,
+			.guideHeight = a_resources.nativeLayout.depth.backing.height,
+			.outputWidth = a_resources.nativeLayout.output.backing.width,
+			.outputHeight = a_resources.nativeLayout.output.backing.height,
+			.controlMaskWidth = a_resources.nativeLayout.controlMask.backing.width,
+			.controlMaskHeight = a_resources.nativeLayout.controlMask.backing.height,
+			.colorFormat = transformed ? processingFormat : a_resources.color.desc.Format,
+			.motionFormat = a_resources.motionVectors.desc.Format,
+			.outputFormat = transformed ? processingFormat : a_resources.output.desc.Format,
+			.controlMaskFormat = hasControlMask ?
+			                         a_resources.controlMask.desc.Format :
+			                         DXGI_FORMAT_UNKNOWN,
+			.controlMaskPresent = hasControlMask,
+			.providerBlending = a_args.providerBlending,
+			.featureUpscaling = a_args.featureUpscaling,
+		};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_resources.roi.compactSource) {
+			a_resources.resourceKey.compact = true;
+		}
+#endif
+		a_resources.historyKey = {
+			.resources = a_resources.resourceKey,
+			.generation = a_args.generation,
+			.insertionPoint = a_args.insertionPoint,
+			.viewportCrop = a_args.viewportCrop,
+			.colorSourceFormat = a_resources.color.desc.Format,
+			.colorDestinationFormat = a_resources.output.desc.Format,
+			.depthSourceFormat = a_resources.depth.desc.Format,
+			.depthViewFormat = a_resources.depthViewFormat,
+			.intensity = std::bit_cast<std::uint32_t>(a_args.tuning.intensity),
+			.localToneStrength = std::bit_cast<std::uint32_t>(a_args.tuning.localToneStrength),
+			.localStructureStrength = std::bit_cast<std::uint32_t>(a_args.tuning.localStructureStrength),
+			.skinStructureStrength = std::bit_cast<std::uint32_t>(a_args.tuning.skinStructureStrength),
+			.style = a_args.tuning.style,
+			.controlMaskIdentity = a_resources.controlMaskIdentity,
+			.computeSubrect = a_resources.roi.inferenceContext,
+			.colorInputEpoch = colorConfiguration_.inputEpoch[static_cast<std::size_t>(a_args.insertionPoint)],
+			.useAutoMask = a_args.tuning.useAutoMask,
+			.uiCorrection = a_args.tuning.uiCorrection,
+		};
+	}
+
+	bool Renderer::State::ValidateD3D12FormatsLocked(
+		const ValidatedResources& a_resources,
+		std::string& a_detail) const
+	{
+		auto* device = interop_.Device();
+		const auto sampled = static_cast<D3D12_FORMAT_SUPPORT1>(
+			D3D12_FORMAT_SUPPORT1_TEXTURE2D |
+			D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE);
+		const auto texture = D3D12_FORMAT_SUPPORT1_TEXTURE2D;
+		const auto typedStore = D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE;
+		if (!SupportsD3D12Format(
+				device, a_resources.resourceKey.colorFormat, sampled,
+				D3D12_FORMAT_SUPPORT2_NONE)) {
+			a_detail = "the D3D12 device cannot sample the color format";
+			return false;
+		}
+		if (!SupportsD3D12Format(
+				device, DXGI_FORMAT_R32_FLOAT, sampled,
+				D3D12_FORMAT_SUPPORT2_NONE)) {
+			a_detail = "the D3D12 device cannot sample R32_FLOAT depth guides";
+			return false;
+		}
+		if (!SupportsD3D12Format(
+				device, a_resources.resourceKey.motionFormat, sampled,
+				D3D12_FORMAT_SUPPORT2_NONE)) {
+			a_detail = "the D3D12 device cannot sample the motion-vector format";
+			return false;
+		}
+		if (a_resources.resourceKey.controlMaskPresent &&
+			!SupportsD3D12Format(
+				device, a_resources.resourceKey.controlMaskFormat, sampled,
+				D3D12_FORMAT_SUPPORT2_NONE)) {
+			a_detail = "the D3D12 device cannot sample the R8_UNORM control-mask format";
+			return false;
+		}
+		if (!SupportsD3D12Format(
+				device, a_resources.resourceKey.outputFormat, texture, typedStore)) {
+			a_detail = "the D3D12 device cannot store typed UAV output in the color format";
+			return false;
+		}
+		return true;
+	}
+
+	void Renderer::State::RefreshRuntimeTelemetryLocked()
+	{
+		if constexpr (!kDevelopmentDiagnostics) {
+			if (failureLatched_ || quarantined_) {
+				snapshot_.ngxResult = Runtime::Instance().NgxResult();
+				if (snapshot_.detail.empty())
+					snapshot_.detail = Runtime::Instance().Detail();
+			}
+			return;
+		} else {
+			auto& runtime = Runtime::Instance();
+			snapshot_.status = ToString(runtime.Status());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			snapshot_.trust = ToString(runtime.Trust());
+			snapshot_.runtimeFailureStage = ToString(runtime.FailureStage());
+			snapshot_.runtimePath = runtime.Path().string();
+			snapshot_.runtimeHash = runtime.Hash();
+			snapshot_.runtimeVersion = runtime.Version();
+			snapshot_.parameterCorePath = runtime.ParameterCorePath().string();
+			snapshot_.parameterCoreHash = runtime.ParameterCoreHash();
+			snapshot_.parameterCoreTrust = ToString(runtime.CoreTrust());
+			snapshot_.parameterCoreSource = ToString(runtime.CoreSource());
+			snapshot_.ngxResult = runtime.NgxResult();
+			snapshot_.runtimeSuccessfulFrames = runtime.SuccessfulFrames();
+			snapshot_.runtimeProxyHits = runtime.LastPathProxyHits();
+			snapshot_.runtimeProxyInstalled = runtime.LastPathProxyInstalled();
+#endif
+			if (snapshot_.detail.empty())
+				snapshot_.detail = runtime.Detail();
+			snapshot_.successes = snapshot_.counters.successes;
+			snapshot_.failures = snapshot_.counters.failures;
+		}
+	}
+
+	void Renderer::State::RefreshInteropTelemetryLocked()
+	{
+		if constexpr (!kDevelopmentDiagnostics) {
+			return;
+		} else {
+			const auto telemetry = interop_.GetTelemetry();
+			auto& performance = snapshot_.performance;
+			performance.commandSubmissions = telemetry.commandSubmissions;
+			performance.mainCommandSubmissions = telemetry.mainCommandSubmissions;
+			performance.submitCommandSubmissions = telemetry.submitCommandSubmissions;
+			performance.stereoCommandSubmissions = telemetry.stereoCommandSubmissions;
+			performance.mainStereoCommandSubmissions = telemetry.mainStereoCommandSubmissions;
+			performance.submitStereoCommandSubmissions = telemetry.submitStereoCommandSubmissions;
+			performance.backpressureWaits = telemetry.backpressureWaits;
+			performance.backpressureWaitMicroseconds = telemetry.backpressureWaitMicroseconds;
+			performance.maximumBackpressureWaitMicroseconds =
+				telemetry.maximumBackpressureWaitMicroseconds;
+			performance.featureGpuSamples = telemetry.featureGpuSamples;
+			performance.featureGpuReadbackFailures = telemetry.featureGpuReadbackFailures;
+			performance.featureGpuMicroseconds = telemetry.featureGpuMicroseconds;
+			performance.mainFeatureGpuSamples = telemetry.mainFeatureGpuSamples;
+			performance.mainFeatureGpuMicroseconds = telemetry.mainFeatureGpuMicroseconds;
+			performance.submitFeatureGpuSamples = telemetry.submitFeatureGpuSamples;
+			performance.submitFeatureGpuMicroseconds = telemetry.submitFeatureGpuMicroseconds;
+			performance.featureGpuSamplesByInsertionPoint =
+				telemetry.featureGpuSamplesByInsertionPoint;
+			performance.featureGpuMicrosecondsByInsertionPoint =
+				telemetry.featureGpuMicrosecondsByInsertionPoint;
+			performance.unexpectedFeatureSlotMaskSamples =
+				telemetry.unexpectedFeatureSlotMaskSamples;
+			performance.invalidInsertionPointSamples =
+				telemetry.invalidInsertionPointSamples;
+			performance.lastFeatureGpuMicroseconds = telemetry.lastFeatureGpuMicroseconds;
+			performance.maximumFeatureGpuMicroseconds = telemetry.maximumFeatureGpuMicroseconds;
+			performance.lastFeaturePixelCount = telemetry.lastFeaturePixelCount;
+			performance.lastFeatureFrameId = telemetry.lastFeatureFrameId;
+			performance.lastFeatureEvaluationCount = telemetry.lastFeatureEvaluationCount;
+			performance.lastFeatureLogicalEyeCount = telemetry.lastFeatureLogicalEyeCount;
+			performance.lastFeatureSlotMask = telemetry.lastFeatureSlotMask;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			performance.lastExecutionPlan = telemetry.lastExecutionPlan;
+#endif
+			performance.lastInsertionPoint = telemetry.lastInsertionPoint;
+		}
+	}
+
+	void Renderer::State::SetRequestTelemetryLocked(
+		const RendererApplyArgs& a_args) noexcept
+	{
+		if constexpr (!kDevelopmentDiagnostics) {
+			return;
+		} else {
+			snapshot_.featureSlot = a_args.featureSlot;
+			snapshot_.frameId = a_args.frameId;
+			snapshot_.sourceWorldFrame = a_args.sourceWorldFrame;
+			snapshot_.generation = a_args.generation;
+			snapshot_.insertionPoint = a_args.insertionPoint;
+			snapshot_.colorWidth = a_args.colorWidth;
+			snapshot_.colorHeight = a_args.colorHeight;
+			snapshot_.guideWidth = a_args.guideWidth;
+			snapshot_.guideHeight = a_args.guideHeight;
+			snapshot_.outputWidth = a_args.outputWidth;
+			snapshot_.outputHeight = a_args.outputHeight;
+			snapshot_.computeSubrect =
+				a_args.outputWidth && a_args.outputHeight ?
+					ResolveComputeSubrect(a_args) :
+					ComputeSubrect{};
+			snapshot_.controlMaskWidth = a_args.controlMaskWidth;
+			snapshot_.controlMaskHeight = a_args.controlMaskHeight;
+			snapshot_.featureUpscaling = a_args.featureUpscaling;
+			snapshot_.controlMaskPresent = a_args.controlMask != nullptr;
+			snapshot_.providerBlending = a_args.providerBlending;
+			snapshot_.useAutoMask = a_args.tuning.useAutoMask;
+			snapshot_.outputCommitted = false;
+		}
+	}
+
+	void Renderer::State::SetActiveFeatureSlotLocked(
+		std::uint32_t a_slot) noexcept
+	{
+		activeFeatureSlot_ = a_slot < Runtime::kFeatureSlotCount ?
+		                         a_slot :
+		                         Runtime::kFeatureSlotCount;
+	}
+
+	std::uint32_t Renderer::State::ActiveFeatureSlotOrLocked(
+		std::uint32_t a_fallback) const noexcept
+	{
+		if (activeFeatureSlot_ < Runtime::kFeatureSlotCount)
+			return activeFeatureSlot_;
+		return a_fallback < Runtime::kFeatureSlotCount ?
+		           a_fallback :
+		           Runtime::kFeatureSlotCount;
+	}
+
+	HRESULT Renderer::State::GetDeviceRemovalReasonLocked(
+		HRESULT a_candidate) const noexcept
+	{
+		if (device_) {
+			const HRESULT reason = device_->GetDeviceRemovedReason();
+			if (IsDeviceLossReason(reason))
+				return reason;
+		}
+		if (auto* device12 = interop_.Device()) {
+			const HRESULT reason = device12->GetDeviceRemovedReason();
+			if (IsDeviceLossReason(reason))
+				return reason;
+		}
+		return IsDeviceLossResult(a_candidate) ? a_candidate : S_OK;
+	}
+
+	bool Renderer::State::FailLocked(
+		RendererStage a_stage,
+		HRESULT a_result,
+		std::string a_detail,
+		std::uint32_t a_slot,
+		bool a_latch,
+		bool a_forceQuarantine,
+		bool a_countApplyFailure)
+	{
+		SetActiveFeatureSlotLocked(a_slot);
+		if (a_countApplyFailure) {
+			Increment(snapshot_.counters.failures);
+			if (a_slot < Runtime::kFeatureSlotCount)
+				Increment(snapshot_.counters.slotFailures[a_slot]);
+		}
+		const auto stageIndex = static_cast<std::size_t>(a_stage);
+		if (stageIndex < snapshot_.counters.failuresByStage.size())
+			Increment(snapshot_.counters.failuresByStage[stageIndex]);
+		if (a_stage == RendererStage::Validation)
+			Increment(snapshot_.counters.validationFailures);
+
+		const HRESULT removalReason = GetDeviceRemovalReasonLocked(a_result);
+		const bool deviceRemoved = FAILED(removalReason);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (activeLifetime_) {
+			activeLifetime_->failureObserved = true;
+			activeLifetime_->stage = static_cast<std::uint32_t>(a_stage);
+			activeLifetime_->result = deviceRemoved ? removalReason : a_result;
+			try {
+				activeLifetime_->after = interop_.GetLifetimeSnapshot();
+			} catch (...) {
+				lifetimeDiagnostics_.DiagnosticFailure();
+			}
+		}
+#endif
+		if (deviceRemoved) {
+			if (!quarantined_)
+				Increment(snapshot_.counters.deviceRemovals);
+			a_result = removalReason;
+			a_detail = std::format(
+				"{} failed at {}; device removal reason=0x{:08X}",
+				a_detail,
+				ToString(a_stage),
+				static_cast<std::uint32_t>(removalReason));
+		}
+
+		if (deviceRemoved || a_forceQuarantine) {
+			const bool enteringQuarantine = !quarantined_;
+			if (enteringQuarantine)
+				Increment(snapshot_.counters.quarantines);
+			quarantined_ = true;
+			failureLatched_ = true;
+			if (enteringQuarantine)
+				AbandonRuntimeOwnershipNoexcept();
+		} else if (a_latch) {
+			failureLatched_ = true;
+		}
+
+		snapshot_.failureStage = a_stage;
+		snapshot_.failureFeatureSlot = a_slot;
+		snapshot_.lastResult = a_result;
+		snapshot_.failureLatched = failureLatched_;
+		snapshot_.quarantined = quarantined_;
+		snapshot_.outputCommitted = false;
+		snapshot_.detail = std::move(a_detail);
+		if (colorConfiguration_.Enabled() && a_slot < slots_.size()) {
+			auto observation = slots_[a_slot].colorWork.observation;
+			observation.frame = snapshot_.frameId;
+			observation.sourceWorldFrame = snapshot_.sourceWorldFrame;
+			observation.slot = a_slot;
+			observation.revision = colorConfiguration_.revision;
+			observation.failure = snapshot_.detail;
+			observation.rect = {};
+			observation.generation = snapshot_.generation;
+			observation.insertion = static_cast<std::uint32_t>(snapshot_.insertionPoint);
+			observation.mode = colorConfiguration_.EffectiveMode();
+			observation.processed = false;
+			Color::Registry::Instance().Record(observation);
+		}
+		RefreshRuntimeTelemetryLocked();
+		snapshot_.successes = snapshot_.counters.successes;
+		snapshot_.failures = snapshot_.counters.failures;
+		if (a_stage != RendererStage::FailureLatched &&
+			a_stage != RendererStage::Quarantined) {
+			logger::error(
+				"[DLSSNR] Renderer failed at {}: {} (hr=0x{:08X}, ngx=0x{:08X}, latched={}, quarantined={})",
+				ToString(a_stage),
+				snapshot_.detail,
+				static_cast<std::uint32_t>(a_result),
+				snapshot_.ngxResult,
+				failureLatched_,
+				quarantined_);
+		}
+		return false;
+	}
+
+	void Renderer::State::SucceedLocked(std::uint32_t a_slot) noexcept
+	{
+		Increment(snapshot_.counters.successes);
+		if (a_slot < Runtime::kFeatureSlotCount)
+			Increment(snapshot_.counters.slotSuccesses[a_slot]);
+		Increment(snapshot_.counters.outputCommits);
+		snapshot_.successes = snapshot_.counters.successes;
+		snapshot_.failures = snapshot_.counters.failures;
+		snapshot_.lastCompletedStage = RendererStage::Complete;
+		snapshot_.failureStage = RendererStage::None;
+		snapshot_.failureFeatureSlot = Runtime::kFeatureSlotCount;
+		snapshot_.lastResult = S_OK;
+		snapshot_.failureLatched = false;
+		snapshot_.quarantined = false;
+		snapshot_.outputCommitted = true;
+	}
+
+	bool Renderer::State::TeardownBackendLocked(
+		bool a_resetShader,
+		bool a_destruction,
+		bool a_countApplyFailure, const std::shared_ptr<ExecutionEvidence>& a_evidence)
+	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LifetimeGuard lifetime(*this, LifetimeOperation::BackendRetirement);
+		if (lifetime.enabled) {
+			for (std::size_t index = 0; index < slots_.size(); ++index)
+				if (slots_[index].resourcesValid)
+					lifetime.record->slotMask |= 1u << index;
+		}
+#endif
+		Increment(snapshot_.counters.resetAttempts);
+		if (quarantined_) {
+			Increment(snapshot_.counters.resetFailures);
+			snapshot_.failureLatched = true;
+			snapshot_.quarantined = true;
+			snapshot_.outputCommitted = false;
+			if (a_destruction)
+				AbandonSlotsLocked();
+			return false;
+		}
+
+		if (interop_.IsRecording() && !interop_.AbortD3D12()) {
+			Increment(snapshot_.counters.resetFailures);
+			const bool failed = FailLocked(
+				RendererStage::CommandEnd,
+				interop_.LastError(),
+				std::format("could not abort D3D12 recording: {}", interop_.LastOperation()),
+				Runtime::kFeatureSlotCount,
+				true,
+				true,
+				a_countApplyFailure);
+			if (a_destruction)
+				AbandonSlotsLocked();
+			return failed;
+		}
+		if (interop_.IsInitialized() && !interop_.WaitForIdle(a_evidence)) {
+			Increment(snapshot_.counters.resetFailures);
+			const bool failed = FailLocked(
+				RendererStage::ResetWait,
+				interop_.LastError(),
+				std::format("bounded GPU idle wait failed: {}", interop_.LastOperation()),
+				Runtime::kFeatureSlotCount,
+				true,
+				true,
+				a_countApplyFailure);
+			if (a_destruction)
+				AbandonSlotsLocked();
+			return failed;
+		}
+
+		auto& runtime = Runtime::Instance();
+		if (runtimeReady_ && !runtime.ResetFeatures()) {
+			Increment(snapshot_.counters.resetFailures);
+			const bool failed = FailLocked(
+				RendererStage::RuntimeReset,
+				E_FAIL,
+				std::format("Feature 18 release failed: {}", runtime.Detail()),
+				Runtime::kFeatureSlotCount,
+				true,
+				true,
+				a_countApplyFailure);
+			if (a_destruction)
+				AbandonSlotsLocked();
+			return failed;
+		}
+		if (runtimeTouched_ && !runtime.Shutdown()) {
+			Increment(snapshot_.counters.resetFailures);
+			const bool failed = FailLocked(
+				RendererStage::RuntimeReset,
+				E_FAIL,
+				std::format("Feature 18 shutdown failed: {}", runtime.Detail()),
+				Runtime::kFeatureSlotCount,
+				true,
+				true,
+				a_countApplyFailure);
+			if (a_destruction)
+				AbandonSlotsLocked();
+			return failed;
+		}
+		if (interop_.IsInitialized() && !interop_.Shutdown(a_evidence)) {
+			Increment(snapshot_.counters.resetFailures);
+			const bool failed = FailLocked(
+				RendererStage::InteropShutdown,
+				interop_.LastError(),
+				std::format("D3D12 interop shutdown failed: {}", interop_.LastOperation()),
+				Runtime::kFeatureSlotCount,
+				true,
+				true,
+				a_countApplyFailure);
+			if (a_destruction)
+				AbandonSlotsLocked();
+			return failed;
+		}
+
+		slots_ = {};
+		colorPipeline_.Reset();
+		device_.Reset();
+		context_.Reset();
+		if (a_resetShader) {
+			copyDepthGuideCS_.Reset();
+			actorProtectionCS_.Reset();
+			actorProtectionCB_.Reset();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			copyCompactDepthGuideCS_.Reset();
+#endif
+			copyDepthGuideCB_.Reset();
+			copyDepthGuideCompileFailed_ = false;
+		}
+		runtimeReady_ = false;
+		runtimeTouched_ = false;
+		failureLatched_ = false;
+		quarantined_ = false;
+		Increment(snapshot_.counters.resetSuccesses);
+		snapshot_.lastCompletedStage = RendererStage::InteropShutdown;
+		snapshot_.failureStage = RendererStage::None;
+		snapshot_.failureFeatureSlot = Runtime::kFeatureSlotCount;
+		snapshot_.lastResult = S_OK;
+		snapshot_.failureLatched = false;
+		snapshot_.quarantined = false;
+		snapshot_.outputCommitted = false;
+		snapshot_.detail.clear();
+		RefreshRuntimeTelemetryLocked();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (lifetime.enabled)
+			lifetime.record->succeeded = true;
+#endif
+		return true;
+	}
+
+	void Renderer::State::AbandonSlotsLocked() noexcept
+	{
+		for (auto& slot : slots_) {
+			Abandon(slot.color);
+			Abandon(slot.depth);
+			Abandon(slot.motionVectors);
+			Abandon(slot.controlMask);
+			Abandon(slot.output);
+			slot.colorWork.Abandon();
+			slot.resourcesValid = false;
+			slot.historyValid = false;
+		}
+		colorPipeline_.Abandon();
+	}
+
+	void Renderer::State::AbandonRuntimeOwnershipNoexcept() noexcept
+	{
+		if (!runtimeTouched_)
+			return;
+		try {
+			Runtime::Instance().AbandonUnsafe();
+		} catch (...) {
+		}
+		runtimeReady_ = false;
+	}
+
+	void Renderer::State::QuarantineAfterUnexpectedFailureLocked(
+		RendererStage a_stage,
+		std::uint32_t a_slot,
+		bool a_applyFailure,
+		std::uint64_t a_failuresBefore) noexcept
+	{
+		if (a_applyFailure && snapshot_.counters.failures == a_failuresBefore) {
+			Increment(snapshot_.counters.failures);
+			if (a_slot < Runtime::kFeatureSlotCount)
+				Increment(snapshot_.counters.slotFailures[a_slot]);
+			const auto stageIndex = static_cast<std::size_t>(a_stage);
+			if (stageIndex < snapshot_.counters.failuresByStage.size())
+				Increment(snapshot_.counters.failuresByStage[stageIndex]);
+			if (a_stage == RendererStage::Validation)
+				Increment(snapshot_.counters.validationFailures);
+		}
+		if (!a_applyFailure &&
+			snapshot_.counters.resetFailures < snapshot_.counters.resetAttempts) {
+			Increment(snapshot_.counters.resetFailures);
+		}
+
+		const bool enteringQuarantine = !quarantined_;
+		quarantined_ = true;
+		failureLatched_ = true;
+		activeStage_ = RendererStage::Quarantined;
+		if (enteringQuarantine)
+			Increment(snapshot_.counters.quarantines);
+
+		// Ownership must detach before any later destructor can attempt release.
+		AbandonRuntimeOwnershipNoexcept();
+		AbandonSlotsLocked();
+		interop_.AbandonUnsafe();
+
+		snapshot_.failureStage = a_stage;
+		snapshot_.failureFeatureSlot = a_slot;
+		snapshot_.lastResult = E_FAIL;
+		snapshot_.failureLatched = true;
+		snapshot_.quarantined = true;
+		snapshot_.outputCommitted = false;
+		snapshot_.successes = snapshot_.counters.successes;
+		snapshot_.failures = snapshot_.counters.failures;
+		snapshot_.status.clear();
+		snapshot_.runtimeFailureStage.clear();
+		snapshot_.detail.clear();
+		try {
+			snapshot_.status = ToString(Runtime::Instance().Status());
+			snapshot_.runtimeFailureStage =
+				ToString(Runtime::Instance().FailureStage());
+			snapshot_.detail = a_applyFailure ?
+			                       "renderer apply threw; unsafe backend ownership was intentionally retained" :
+			                       "renderer teardown threw; unsafe backend ownership was intentionally retained";
+		} catch (...) {
+		}
+	}
+
+	bool Renderer::State::EnsureBackendLocked(const RendererApplyArgs& a_args, const std::shared_ptr<ExecutionEvidence>& a_evidence)
+	{
+		const bool backendIdentityChanged = device_ &&
+		                                    (!SameIdentity(device_.Get(), a_args.device) ||
+												!SameIdentity(context_.Get(), a_args.context));
+		if (backendIdentityChanged) {
+			ExecutionCpuTimer retirementTimer(a_evidence, &ExecutionSnapshot::resourceRetirementCpuMicroseconds);
+			if (!TeardownBackendLocked(false, false, true, a_evidence))
+				return false;
+		}
+		if (runtimeReady_ && interop_.IsInitialized())
+			return true;
+
+		ComPtr<IDXGIDevice> dxgiDevice;
+		ComPtr<IDXGIAdapter> adapter;
+		activeStage_ = RendererStage::DeviceCompatibility;
+		HRESULT result = a_args.device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+		if (SUCCEEDED(result))
+			result = dxgiDevice->GetAdapter(&adapter);
+		if (FAILED(result)) {
+			return FailLocked(
+				RendererStage::DeviceCompatibility,
+				result,
+				"could not resolve the D3D11 device adapter",
+				a_args.featureSlot,
+				true);
+		}
+
+		activeStage_ = RendererStage::InteropInitialization;
+		if (!interop_.Initialize(adapter.Get(), a_args.device, a_args.context, a_evidence)) {
+			return FailLocked(
+				RendererStage::InteropInitialization,
+				interop_.LastError(),
+				std::format("D3D11/D3D12 interop initialization failed: {}", interop_.LastOperation()),
+				a_args.featureSlot,
+				true);
+		}
+		device_ = a_args.device;
+		context_ = a_args.context;
+		Increment(snapshot_.counters.interopInitializations);
+		snapshot_.lastCompletedStage = RendererStage::InteropInitialization;
+
+		auto& runtime = Runtime::Instance();
+		runtimeTouched_ = true;
+		activeStage_ = RendererStage::RuntimeProbe;
+		const bool probeSucceeded = runtime.Probe();
+		LogOnce(runtimeProbeResultLogged_, [&]() {
+			logger::info(
+				"[DLSSNR] Runtime probe {}: status={}, trust={}, version={}, path={}",
+				probeSucceeded ? "succeeded" : "failed",
+				ToString(runtime.Status()),
+				ToString(runtime.Trust()),
+				runtime.Version(),
+				runtime.Path().string());
+		});
+		if (!probeSucceeded) {
+			return FailLocked(
+				RendererStage::RuntimeProbe,
+				E_FAIL,
+				std::format("Feature 18 runtime probe failed: {}", runtime.Detail()),
+				a_args.featureSlot,
+				true);
+		}
+		snapshot_.lastCompletedStage = RendererStage::RuntimeProbe;
+
+		activeStage_ = RendererStage::RuntimeInitialization;
+		const bool initializationSucceeded = runtime.Initialize(interop_.Device());
+		LogOnce(runtimeInitializationResultLogged_, [&]() {
+			logger::info(
+				"[DLSSNR] Runtime initialization {}: status={}, stage={}, ngx=0x{:08X}",
+				initializationSucceeded ? "succeeded" : "failed",
+				ToString(runtime.Status()),
+				ToString(runtime.FailureStage()),
+				runtime.NgxResult());
+		});
+		if (!initializationSucceeded) {
+			const bool rollbackUnsafe =
+				runtime.Status() == RuntimeStatus::ShutdownFailed ||
+				runtime.Status() == RuntimeStatus::UnsafeAbandoned;
+			return FailLocked(
+				RendererStage::RuntimeInitialization,
+				E_FAIL,
+				std::format("Feature 18 runtime initialization failed: {}", runtime.Detail()),
+				a_args.featureSlot,
+				true,
+				rollbackUnsafe);
+		}
+		runtimeReady_ = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		++backendSerial_;
+#endif
+		Increment(snapshot_.counters.runtimeInitializations);
+		snapshot_.lastCompletedStage = RendererStage::RuntimeInitialization;
+		RefreshRuntimeTelemetryLocked();
+		return true;
+	}
+
+	bool Renderer::State::EnsureSlotLocked(
+		std::uint32_t a_slot,
+		const ValidatedResources& a_resources,
+		const std::shared_ptr<ExecutionEvidence>& a_evidence, std::size_t a_region)
+	{
+		auto& slot = slots_[a_slot];
+		if (a_evidence)
+			a_evidence->Update([&](auto& evidence) {
+				evidence.regions[a_region].rebuildReasons = !slot.resourcesValid                        ? RebuildUnallocated :
+				                                            slot.resourceKey != a_resources.resourceKey ? RebuildResourceContractChanged :
+				                                                                                          RebuildNone;
+			});
+		if (slot.resourcesValid && slot.resourceKey == a_resources.resourceKey)
+			return true;
+
+		if (slot.resourcesValid) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			LifetimeGuard lifetime(*this, LifetimeOperation::SlotRetirement);
+			if (lifetime.enabled) {
+				lifetime.record->slotMask = 1u << a_slot;
+				lifetime.record->regionCount = 1;
+				lifetime.record->regions[0].slot = a_slot;
+				lifetime.record->regions[0].previousResourceSerial = slot.resourceSerial;
+				CaptureLifetimeResourcesLocked(lifetime.record->regions[0], slot);
+			}
+#endif
+			ExecutionCpuTimer retirementTimer(a_evidence, &ExecutionSnapshot::resourceRetirementCpuMicroseconds);
+			activeStage_ = RendererStage::ResourceRetirement;
+			const bool idle = interop_.WaitForIdle(a_evidence);
+			if (!idle) {
+				return FailLocked(
+					RendererStage::ResourceRetirement,
+					interop_.LastError(),
+					std::format("slot {} idle wait failed: {}", a_slot, interop_.LastOperation()),
+					a_slot,
+					true,
+					true);
+			}
+			if (!Runtime::Instance().ResetFeature(a_slot)) {
+				return FailLocked(
+					RendererStage::ResourceRetirement,
+					E_FAIL,
+					std::format("slot {} Feature 18 release failed: {}", a_slot, Runtime::Instance().Detail()),
+					a_slot,
+					true,
+					true);
+			}
+			slot = {};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (lifetime.enabled)
+				lifetime.record->succeeded = true;
+#endif
+			snapshot_.lastCompletedStage = RendererStage::ResourceRetirement;
+		}
+
+		activeStage_ = RendererStage::DeviceCompatibility;
+		std::string formatDetail;
+		if (!ValidateD3D12FormatsLocked(a_resources, formatDetail)) {
+			return FailLocked(
+				RendererStage::DeviceCompatibility,
+				E_NOINTERFACE,
+				std::move(formatDetail),
+				a_slot,
+				true);
+		}
+
+		activeStage_ = RendererStage::ResourceCreation;
+		Slot replacement;
+		const auto prefix = std::format("NeuralRendering::Slot{}::", a_slot);
+		const auto colorDesc = MakeSharedDescription(
+			a_resources.resourceKey.colorWidth,
+			a_resources.resourceKey.colorHeight,
+			a_resources.resourceKey.colorFormat,
+			true);
+		const auto depthDesc = MakeSharedDescription(
+			a_resources.resourceKey.guideWidth,
+			a_resources.resourceKey.guideHeight,
+			DXGI_FORMAT_R32_FLOAT,
+			true);
+		const auto motionDesc = MakeSharedDescription(
+			a_resources.resourceKey.guideWidth,
+			a_resources.resourceKey.guideHeight,
+			a_resources.resourceKey.motionFormat,
+			true);
+		const auto outputDesc = MakeSharedDescription(
+			a_resources.resourceKey.outputWidth,
+			a_resources.resourceKey.outputHeight,
+			a_resources.resourceKey.outputFormat,
+			true);
+		D3D11_TEXTURE2D_DESC controlMaskDesc{};
+		if (a_resources.resourceKey.controlMaskPresent) {
+			controlMaskDesc = MakeSharedDescription(
+				a_resources.resourceKey.controlMaskWidth,
+				a_resources.resourceKey.controlMaskHeight,
+				a_resources.resourceKey.controlMaskFormat,
+				true);
+		}
+
+		const auto create = [&](const D3D11_TEXTURE2D_DESC& desc, SharedTexture& texture, const char* name) {
+			const bool created = interop_.CreateSharedTexture(desc, texture, name);
+			if (a_evidence)
+				a_evidence->Update([&](auto& evidence) {
+					const auto bytes = LogicalTextureBytes(desc.Format, desc.Width, desc.Height);
+					if (created && bytes)
+						evidence.regions[a_region].newlyAllocatedLogicalBytes += *bytes;
+					else
+						evidence.regions[a_region].allocationBytesKnown = false;
+				});
+			return created;
+		};
+		if (!create(colorDesc, replacement.color, (prefix + "Color").c_str()) ||
+			!create(depthDesc, replacement.depth, (prefix + "Depth").c_str()) ||
+			!create(motionDesc, replacement.motionVectors, (prefix + "MotionVectors").c_str()) ||
+			(a_resources.resourceKey.controlMaskPresent &&
+				!create(controlMaskDesc, replacement.controlMask,
+					(prefix + (a_resources.resourceKey.providerBlending ? "ActorProtection" : "ControlMask")).c_str())) ||
+			!create(outputDesc, replacement.output, (prefix + "Output").c_str())) {
+			return FailLocked(
+				RendererStage::ResourceCreation,
+				interop_.LastError(),
+				std::format("slot {} shared-resource creation failed: {}", a_slot, interop_.LastOperation()),
+				a_slot,
+				true);
+		}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		replacement.resourceSerial = ++resourceSerial_;
+#endif
+		replacement.resourceKey = a_resources.resourceKey;
+		replacement.resourcesValid = true;
+		slot = std::move(replacement);
+		Increment(snapshot_.counters.resourceRebuilds);
+		snapshot_.lastCompletedStage = RendererStage::ResourceCreation;
+		return true;
+	}
+
+	bool Renderer::State::PrepareActorProtection(const RendererApplyArgs& args, Slot& slot)
+	{
+		if (!actorProtectionCS_) {
+			actorProtectionCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+				L"Data/Shaders/DLSS5ActorProtectionCS.hlsl", {}, "cs_5_0", "main")));
+			if (!actorProtectionCS_)
+				return false;
+			Util::SetResourceName(actorProtectionCS_.Get(), "NeuralRendering::ActorProtectionCS");
+		}
+		struct Constants
+		{
+			ComputeSubrect evaluation, selection;
+		};
+		static_assert(sizeof(Constants) == 32);
+		if (!actorProtectionCB_) {
+			const D3D11_BUFFER_DESC desc{ .ByteWidth = sizeof(Constants), .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_CONSTANT_BUFFER };
+			if (FAILED(args.device->CreateBuffer(&desc, nullptr, &actorProtectionCB_)))
+				return false;
+			Util::SetResourceName(actorProtectionCB_.Get(), "NeuralRendering::ActorProtectionCB");
+		}
+		const Constants constants{ ResolveComputeSubrect(args), args.actorSelectionSupport };
+		RendererComputeStateGuard guard(args.context);
+		if (!guard.Captured() || !slot.controlMask.uav11)
+			return false;
+		args.context->UpdateSubresource(actorProtectionCB_.Get(), 0, nullptr, &constants, 0, 0);
+		auto* cb = actorProtectionCB_.Get();
+		auto* input = args.actorSelection.Get();
+		auto* output = slot.controlMask.uav11.Get();
+		args.context->CSSetShader(actorProtectionCS_.Get(), nullptr, 0);
+		args.context->CSSetConstantBuffers(0, 1, &cb);
+		args.context->CSSetShaderResources(0, 1, &input);
+		args.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		CS_GPU_PASS("NeuralRendering::ActorProtection");
+		args.context->Dispatch((constants.evaluation.width + 7u) / 8u, (constants.evaluation.height + 7u) / 8u, 1u);
+		return true;
+	}
+
+	bool Renderer::State::CopyDepthBatchLocked(
+		std::span<const RendererApplyArgs> a_args,
+		std::span<Slot* const> a_slots,
+		std::span<const ValidatedResources> a_resources,
+		const std::shared_ptr<ExecutionEvidence>& a_evidence)
+	{
+		if (a_args.empty() || a_args.size() != a_slots.size() ||
+			a_args.size() != a_resources.size()) {
+			return false;
+		}
+		// Validation fixes the source view to mip zero and the shader performs an
+		// identity Load. Only an already typed R32 source can use a raw ROI copy.
+		const auto canCopy = [&](std::size_t index) {
+			return a_resources[index].depth.desc.Format == DXGI_FORMAT_R32_FLOAT &&
+			       a_resources[index].depthViewFormat == DXGI_FORMAT_R32_FLOAT;
+		};
+		bool needsShader = false;
+		for (std::size_t index = 0; index < a_args.size(); ++index)
+			needsShader = needsShader || !canCopy(index);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const bool needsCompactShader = std::ranges::any_of(a_resources, [](const auto& value) {
+			return value.roi.compactSource && (value.depth.desc.Format != DXGI_FORMAT_R32_FLOAT || value.depthViewFormat != DXGI_FORMAT_R32_FLOAT);
+		});
+		if (needsCompactShader && !copyCompactDepthGuideCS_) {
+			copyCompactDepthGuideCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+				L"Data/Shaders/Upscaling/NeuralRendering/CopyCompactDepthGuideCS.hlsl", {}, "cs_5_0", "main")));
+			if (!copyCompactDepthGuideCS_)
+				return false;
+			Util::SetResourceName(copyCompactDepthGuideCS_.Get(), "NeuralRendering::CopyCompactDepthGuideCS");
+		}
+#endif
+		if (needsShader && !copyDepthGuideCS_ && !copyDepthGuideCompileFailed_) {
+			copyDepthGuideCS_.Attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(
+				L"Data/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl",
+				{},
+				"cs_5_0",
+				"main")));
+			copyDepthGuideCompileFailed_ = !copyDepthGuideCS_;
+			if (copyDepthGuideCS_)
+				Util::SetResourceName(copyDepthGuideCS_.Get(), "NeuralRendering::CopyDepthGuideCS");
+		}
+		auto* shader = copyDepthGuideCS_.Get();
+		if (needsShader && !shader)
+			return false;
+		if (needsShader && !copyDepthGuideCB_) {
+			const D3D11_BUFFER_DESC desc{
+				.ByteWidth = sizeof(CopyDepthGuideConstants),
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_CONSTANT_BUFFER,
+			};
+			if (FAILED(a_args.front().device->CreateBuffer(
+					&desc, nullptr, &copyDepthGuideCB_))) {
+				return false;
+			}
+			Util::SetResourceName(
+				copyDepthGuideCB_.Get(), "NeuralRendering::CopyDepthGuideCB");
+		}
+
+		RendererComputeStateGuard stateGuard(a_args.front().context);
+		if (!stateGuard.Captured())
+			return false;
+
+		a_args.front().context->CSSetShader(shader, nullptr, 0);
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			auto roi = a_resources[index].nativeLayout.depth.valid;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			const auto& compact = a_resources[index].roi.compactSource;
+			if (compact)
+				roi = *compact;
+#endif
+			if (canCopy(index)) {
+				ID3D11ShaderResourceView* nullSrv = nullptr;
+				ID3D11UnorderedAccessView* nullUav = nullptr;
+				a_args.front().context->CSSetShaderResources(0, 1, &nullSrv);
+				a_args.front().context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				CS_GPU_PASS_CAPTURE("Upscaling::DLSSNRDepthGuide", a_evidence ? a_evidence->Snapshot().regions[index].depthGuidePass : nullptr);
+				CopyTextureSubrect(a_args.front().context, a_slots[index]->depth.resource11.Get(),
+					a_resources[index].depth.texture.Get(), roi,
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					compact ? 0u : roi.baseX, compact ? 0u : roi.baseY);
+#else
+					roi.baseX, roi.baseY);
+#endif
+				continue;
+			}
+			const CopyDepthGuideConstants constants{
+				.offsetX = roi.baseX,
+				.offsetY = roi.baseY,
+				.width = roi.width,
+				.height = roi.height,
+			};
+			a_args.front().context->UpdateSubresource(
+				copyDepthGuideCB_.Get(), 0, nullptr, &constants, 0, 0);
+			auto* constantBuffer = copyDepthGuideCB_.Get();
+			auto* source = a_args[index].depthGuideSRV;
+			auto* destination = a_slots[index]->depth.uav11.Get();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			a_args.front().context->CSSetShader(compact ? copyCompactDepthGuideCS_.Get() : shader, nullptr, 0);
+#endif
+			a_args.front().context->CSSetConstantBuffers(
+				0, 1, &constantBuffer);
+			a_args.front().context->CSSetShaderResources(0, 1, &source);
+			a_args.front().context->CSSetUnorderedAccessViews(
+				0, 1, &destination, nullptr);
+			{
+				CS_GPU_PASS_CAPTURE("Upscaling::DLSSNRDepthGuide", a_evidence ? a_evidence->Snapshot().regions[index].depthGuidePass : nullptr);
+				a_args.front().context->Dispatch(
+					(roi.width + 7u) / 8u,
+					(roi.height + 7u) / 8u,
+					1);
+			}
+		}
+		return true;
+	}
+
+	bool Renderer::State::ApplyLocked(
+		const RendererApplyArgs& a_args,
+		RendererApplyOutcome& a_outcome)
+	{
+		return ApplyBatchLocked(std::span(&a_args, 1), a_outcome);
+	}
+
+	bool Renderer::State::ApplyStereoLocked(
+		const std::array<RendererApplyArgs, 2>& a_args,
+		RendererApplyOutcome& a_outcome)
+	{
+		return ApplyBatchLocked(a_args, a_outcome);
+	}
+
+	bool Renderer::State::ApplySequentialStereoLocked(
+		const std::array<RendererApplyArgs, 2>& a_args,
+		RendererApplyOutcome& a_outcome)
+	{
+		a_outcome = {};
+		// Colour reconstruction commits both eyes against one immutable input snapshot.
+		if (colorConfiguration_.Enabled())
+			return ApplyBatchLocked(a_args, a_outcome);
+		SetActiveFeatureSlotLocked(a_args[0].featureSlot);
+		if (quarantined_ || failureLatched_) {
+			return ApplyBatchLocked(a_args, a_outcome);
+		}
+		SetActiveFeatureSlotLocked(a_args[1].featureSlot);
+		if (!GetStereoPairContractViolation(a_args).empty()) {
+			return ApplyBatchLocked(a_args, a_outcome);
+		}
+
+		std::array<ValidatedResources, 2> resources{};
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			if (ValidateLocked(a_args[index], resources[index]))
+				return ApplyBatchLocked(a_args, a_outcome);
+		}
+
+		bool synchronizeForcedReset =
+			a_args[0].synchronizedHistoryReset ||
+			!runtimeReady_ || !interop_.IsInitialized();
+		bool synchronizeDiscontinuousReset =
+			a_args[0].synchronizedHistoryDiscontinuity;
+		if (device_ &&
+			(!SameIdentity(device_.Get(), a_args[0].device) ||
+				!SameIdentity(context_.Get(), a_args[0].context))) {
+			synchronizeForcedReset = true;
+		}
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			const auto& args = a_args[index];
+			SetActiveFeatureSlotLocked(args.featureSlot);
+			const auto& slot = slots_[args.featureSlot];
+			const bool evaluationDiscontinuous = slot.historyValid &&
+			                                     !IsSequentialFrame(slot.lastSuccessfulFrame, args.frameId);
+			const bool sourceDiscontinuous = slot.historyValid &&
+			                                 !IsSourceWorldFrameContinuous(
+												 slot.lastSuccessfulSourceWorldFrame,
+												 args.sourceWorldFrame);
+			const bool discontinuous =
+				evaluationDiscontinuous || sourceDiscontinuous;
+			const bool forced =
+				!slot.resourcesValid ||
+				slot.resourceKey != resources[index].resourceKey ||
+				!slot.historyValid ||
+				slot.historyKey != resources[index].historyKey ||
+				discontinuous;
+			synchronizeForcedReset = synchronizeForcedReset || forced;
+			synchronizeDiscontinuousReset =
+				synchronizeDiscontinuousReset || discontinuous;
+		}
+
+		auto synchronizedArgs = a_args;
+		for (auto& args : synchronizedArgs) {
+			args.synchronizedHistoryReset = synchronizeForcedReset;
+			args.synchronizedHistoryDiscontinuity =
+				synchronizeDiscontinuousReset;
+		}
+
+		RendererApplyOutcome leftOutcome{};
+		if (!ApplyBatchLocked(std::span(&synchronizedArgs[0], 1), leftOutcome)) {
+			a_outcome = leftOutcome;
+			return false;
+		}
+		a_outcome.evaluationAttemptedFeatureSlotMask =
+			leftOutcome.evaluationAttemptedFeatureSlotMask;
+		a_outcome.evaluationSucceededFeatureSlotMask =
+			leftOutcome.evaluationSucceededFeatureSlotMask;
+		RendererApplyOutcome rightOutcome{};
+		const bool rightSucceeded = ApplyBatchLocked(
+			std::span(&synchronizedArgs[1], 1), rightOutcome);
+		a_outcome.evaluationAttemptedFeatureSlotMask |=
+			rightOutcome.evaluationAttemptedFeatureSlotMask;
+		a_outcome.evaluationSucceededFeatureSlotMask |=
+			rightOutcome.evaluationSucceededFeatureSlotMask;
+		return rightSucceeded;
+	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void Renderer::State::ApplyCompactLayoutLocked(const RendererApplyArgs& args, ValidatedResources& resources) const
+	{
+		if (colorConfiguration_.experiments.CompactInputsEnabled() && !forceFullCoordinates_ && !capacityFallback_.rejected &&
+			!colorConfiguration_.Enabled() && args.characterVisualIsolation && args.reset &&
+			args.renderingMode == RenderingMode::ReducedResolution && args.featureSlot < slots_.size()) {
+			resources.compactAttempted = true;
+			if (const auto compact = compactRetention_[args.featureSlot].Select(resources.roi, resources.nativeLayout)) {
+				resources.roi = compact->roi;
+				resources.nativeLayout = compact->native;
+			}
+		}
+	}
+#endif
+
+	bool Renderer::State::ApplyBatchLocked(
+		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome)
+	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		requestedRegionCount_ = static_cast<std::uint32_t>(args.size());
+		if (args.empty() || args.size() > kEyeCount)
+			return ApplyRegionBatchLocked(args, outcome);
+		const auto fallback = [&] {
+			const auto previous = forceFullCoordinates_;
+			forceFullCoordinates_ = true;
+			const SKSE::stl::scope_exit restore([&] { forceFullCoordinates_ = previous; });
+			const auto attempted = outcome.evaluationAttemptedFeatureSlotMask;
+			const bool success = ApplyRegionBatchLocked(args, outcome);
+			outcome.evaluationAttemptedFeatureSlotMask |= attempted;
+			return success;
+		};
+		return capacityFallback_.ApplyBatch(colorConfiguration_.experiments.CompactInputsEnabled(), [&] { return ApplyRegionBatchLocked(args, outcome); }, [&] {
+				if (quarantined_ || FAILED(GetDeviceRemovalReasonLocked(S_OK)))
+					return CapacityFailure::Unsafe;
+				if (snapshot_.failureStage == RendererStage::ResourceCreation && snapshot_.lastResult == E_OUTOFMEMORY)
+					return CapacityFailure::Pressure;
+				return snapshot_.failureStage == RendererStage::FeatureEvaluate ?
+					Runtime::Instance().CreationCapacityFailure() : CapacityFailure::Unsafe; }, [&] { return TeardownBackendLocked(false, false, false); }, fallback);
+#else
+		return ApplyRegionBatchLocked(args, outcome);
+#endif
+	}
+
+	bool Renderer::State::ApplyRegionBatchLocked(
+		std::span<const RendererApplyArgs> a_args,
+		RendererApplyOutcome& a_outcome)
+	{
+		a_outcome = {};
+		if (a_args.empty() || a_args.size() > kEyeCount)
+			return false;
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
+		for (const auto& args : a_args) {
+			SetActiveFeatureSlotLocked(args.featureSlot);
+			Increment(snapshot_.counters.attempts);
+			SetRequestTelemetryLocked(args);
+		}
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
+		activeStage_ = RendererStage::Validation;
+
+		if (quarantined_) {
+			for ([[maybe_unused]] const auto& args : a_args)
+				Increment(snapshot_.counters.quarantinedBypasses);
+			snapshot_.failureLatched = true;
+			snapshot_.quarantined = true;
+			snapshot_.outputCommitted = false;
+			return false;
+		}
+		if (failureLatched_) {
+			for ([[maybe_unused]] const auto& args : a_args)
+				Increment(snapshot_.counters.latchedBypasses);
+			snapshot_.failureLatched = true;
+			snapshot_.quarantined = quarantined_;
+			snapshot_.outputCommitted = false;
+			return false;
+		}
+
+		snapshot_.failureStage = RendererStage::None;
+		snapshot_.failureFeatureSlot = Runtime::kFeatureSlotCount;
+		snapshot_.lastCompletedStage = RendererStage::None;
+		snapshot_.lastResult = S_OK;
+		snapshot_.detail.clear();
+		snapshot_.colorFormat = 0;
+		snapshot_.depthSourceFormat = 0;
+		snapshot_.depthViewFormat = 0;
+		snapshot_.motionVectorFormat = 0;
+		snapshot_.outputFormat = 0;
+		snapshot_.controlMaskFormat = 0;
+
+		for (const auto& args : a_args) {
+			if (args.featureSlot >= kLogicalFeatureSlotCount) {
+				SetRequestTelemetryLocked(args);
+				return FailLocked(RendererStage::Validation, E_INVALIDARG,
+					"NR requires a valid main or submit eye feature slot", args.featureSlot, false);
+			}
+		}
+
+		if (a_args.size() == 2) {
+			SetActiveFeatureSlotLocked(a_args[1].featureSlot);
+			std::array<RendererApplyArgs, 2> stereoArgs{ a_args[0], a_args[1] };
+			if (auto violation = GetStereoPairContractViolation(stereoArgs);
+				!violation.empty()) {
+				return FailLocked(
+					RendererStage::Validation,
+					E_INVALIDARG,
+					std::move(violation),
+					a_args[1].featureSlot,
+					false);
+			}
+		}
+
+		const auto logicalEyeCount = static_cast<std::uint32_t>(a_args.size());
+
+		std::array<ValidatedResources, kEyeCount> resources{};
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			const auto& args = a_args[index];
+			SetActiveFeatureSlotLocked(args.featureSlot);
+			SetRequestTelemetryLocked(args);
+			auto validation = ValidateLocked(args, resources[index]);
+			snapshot_.colorFormat =
+				static_cast<std::uint32_t>(resources[index].color.desc.Format);
+			snapshot_.depthSourceFormat =
+				static_cast<std::uint32_t>(resources[index].depth.desc.Format);
+			snapshot_.depthViewFormat =
+				static_cast<std::uint32_t>(resources[index].depthViewFormat);
+			snapshot_.motionVectorFormat =
+				static_cast<std::uint32_t>(resources[index].motionVectors.desc.Format);
+			snapshot_.outputFormat =
+				static_cast<std::uint32_t>(resources[index].output.desc.Format);
+			snapshot_.controlMaskFormat =
+				static_cast<std::uint32_t>(resources[index].controlMask.desc.Format);
+			if (validation) {
+				return FailLocked(
+					RendererStage::Validation,
+					validation.result,
+					std::move(validation.detail),
+					args.featureSlot,
+					false);
+			}
+			resources[index].historyKey.regionIdentity = 0;
+		}
+		snapshot_.lastCompletedStage = RendererStage::Validation;
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		LifetimeGuard lifetime(*this, LifetimeOperation::Batch);
+		if (lifetime.enabled) {
+			lifetime.record->sourceTransactionId = a_args.front().executionContext.sourceTransactionId;
+			if (a_args.front().executionContext.renderingMode)
+				lifetime.record->mode = static_cast<std::uint32_t>(*a_args.front().executionContext.renderingMode);
+			lifetime.record->regionCount = static_cast<std::uint32_t>(a_args.size());
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				const auto& args = a_args[index];
+				const auto& slot = slots_[args.featureSlot];
+				auto& region = lifetime.record->regions[index];
+				region.slot = args.featureSlot;
+				lifetime.record->slotMask |= 1u << args.featureSlot;
+				region.previousResourceSerial = slot.resourceSerial;
+				region.previousFrame = slot.lastSuccessfulFrame;
+				region.previousSourceFrame = slot.lastSuccessfulSourceWorldFrame;
+				region.previousHistoryValid = slot.historyValid;
+				region.previousContext = slot.historyKey.computeSubrect;
+				region.previousRegionIdentity = slot.historyKey.regionIdentity;
+				region.regionIdentity = resources[index].historyKey.regionIdentity;
+				region.context = resources[index].roi.inferenceContext;
+				region.colorSize = { args.colorWidth, args.colorHeight };
+				region.guideSize = { args.guideWidth, args.guideHeight };
+				region.outputSize = { args.outputWidth, args.outputHeight };
+			}
+		}
+#endif
+		std::shared_ptr<ExecutionEvidence> execution;
+		auto& capture = captureInputs_[captureRoute_];
+		if (capture.valid) {
+			try {
+				ExecutionDescriptor descriptor{};
+				descriptor.submissionId = NextExecutionSubmissionId();
+				descriptor.generation = a_args.front().generation;
+				descriptor.colorRevision = colorConfiguration_.revision;
+				descriptor.inputEpoch = colorConfiguration_.inputEpoch[static_cast<std::size_t>(a_args.front().insertionPoint)];
+				descriptor.frame = a_args.front().frameId;
+				descriptor.sourceWorldFrame = a_args.front().sourceWorldFrame;
+				descriptor.route = ClassifyFeatureSlotMask(1u << a_args.front().featureSlot);
+				descriptor.insertion = a_args.front().insertionPoint;
+				descriptor.context = a_args.front().executionContext;
+				descriptor.logicalEyeCount = logicalEyeCount;
+				descriptor.regionCount = static_cast<std::uint32_t>(a_args.size());
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				descriptor.requestedRegionCount = requestedRegionCount_;
+				descriptor.capacityFallback = forceFullCoordinates_;
+#else
+				descriptor.requestedRegionCount = descriptor.regionCount;
+#endif
+				descriptor.colorProcessing = colorConfiguration_.Enabled();
+				descriptor.transportBypass = colorConfiguration_.experiments.transportBypass;
+				for (std::size_t index = 0; index < a_args.size(); ++index) {
+					const auto& args = a_args[index];
+					const auto& resource = resources[index];
+					auto& region = descriptor.regions[index];
+					region.physicalSlot = args.featureSlot;
+					region.logicalSlot = args.featureSlot % 4u;
+					region.eye = args.featureSlot % 2u;
+					region.region = args.featureSlot / 4u;
+					region.regionIdentity = 0;
+					region.clusterIdentity = 0;
+					region.context = args.executionContext;
+					region.characterEvidence = args.characterEvidence;
+					region.roi = resource.roi;
+					region.color = DescribeExecutionTexture(resource.nativeLayout.color.backing.width, resource.nativeLayout.color.backing.height, resource.resourceKey.colorFormat, resource.nativeLayout.color.valid);
+					region.depth = DescribeExecutionTexture(resource.nativeLayout.depth.backing.width, resource.nativeLayout.depth.backing.height, DXGI_FORMAT_R32_FLOAT, resource.nativeLayout.depth.valid);
+					region.motion = DescribeExecutionTexture(resource.nativeLayout.motion.backing.width, resource.nativeLayout.motion.backing.height, resource.resourceKey.motionFormat, resource.nativeLayout.motion.valid);
+					region.output = DescribeExecutionTexture(resource.nativeLayout.output.backing.width, resource.nativeLayout.output.backing.height, resource.resourceKey.outputFormat, resource.nativeLayout.output.valid);
+					if (args.controlMask)
+						region.controlMask = DescribeExecutionTexture(args.controlMaskWidth, args.controlMaskHeight, resource.resourceKey.controlMaskFormat, resource.nativeLayout.controlMask.valid);
+					region.viewportCrop = args.viewportCrop;
+					region.nativeLayout = resource.nativeLayout;
+					region.motionVectorScaleX = resource.nativeLayout.motionVectorScale[0];
+					region.motionVectorScaleY = resource.nativeLayout.motionVectorScale[1];
+					region.depthSourceFormat = static_cast<std::uint32_t>(resource.depth.desc.Format);
+					region.depthViewFormat = static_cast<std::uint32_t>(resource.depthViewFormat);
+					region.characterVisualIsolation = args.characterVisualIsolation;
+					region.featureUpscaling = args.featureUpscaling;
+					descriptor.plannedPhysicalSlotMask |= 1u << args.featureSlot;
+				}
+				if (descriptor.submissionId && capture.executionCount < capture.executions.size()) {
+					execution = std::make_shared<ExecutionEvidence>(std::move(descriptor));
+					capture.executions[capture.executionCount++] = execution;
+					execution->Update([&](auto& evidence) {
+						evidence.wholePass = wholePass_;
+						for (std::size_t index = 0; index < a_args.size(); ++index) {
+							auto& region = evidence.regions[index];
+							region.depthGuidePass = std::make_shared<Util::PassTimingCapture>();
+							region.colorCopyPass = std::make_shared<Util::PassTimingCapture>();
+							region.motionCopyPass = std::make_shared<Util::PassTimingCapture>();
+							region.controlCopyPass = std::make_shared<Util::PassTimingCapture>();
+							region.outputCopyPass = std::make_shared<Util::PassTimingCapture>();
+							region.colorPreparePass = std::make_shared<Util::PassTimingCapture>();
+							region.colorReconstructPass = std::make_shared<Util::PassTimingCapture>();
+						}
+					});
+				} else {
+					++capture.executionEvidenceFailures;
+				}
+			} catch (...) {
+				++capture.executionEvidenceFailures;
+			}
+		}
+		ExecutionCompletionGuard executionCompletion{ execution, activeStage_ };
+
+		activeStage_ = RendererStage::DeviceCompatibility;
+		SetActiveFeatureSlotLocked(a_args.front().featureSlot);
+		if (!EnsureBackendLocked(a_args.front(), execution))
+			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (lifetime.enabled)
+			lifetime.record->backendSerial = backendSerial_;
+#endif
+		for (auto& slot : slots_)
+			colorPipeline_.Poll(a_args.front().context, slot.colorWork);
+		activeStage_ = RendererStage::ResourceCreation;
+		std::array<Slot*, kEyeCount> slots{};
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			if (!EnsureSlotLocked(a_args[index].featureSlot, resources[index], execution, index))
+				return false;
+			slots[index] = &slots_[a_args[index].featureSlot];
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (resources[index].compactAttempted)
+				compactRetention_[a_args[index].featureSlot].Commit(resources[index].roi.compactSource);
+			if (lifetime.enabled)
+				CaptureLifetimeResourcesLocked(lifetime.record->regions[index], *slots[index]);
+#endif
+			if (execution)
+				execution->Update([&](auto& evidence) {
+					evidence.regions[index].resourcesReady = true;
+					evidence.regions[index].inputTransportOwnerSlot = a_args[index].featureSlot;
+				});
+		}
+
+		// Allocate/compile for every physical region before changing any caller output.
+		// The legacy raw lane does not allocate or dispatch colour resources.
+		if (colorConfiguration_.Enabled()) {
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				const auto profile = Color::EffectiveProfile(colorConfiguration_,
+					static_cast<std::uint32_t>(a_args[index].insertionPoint));
+				const auto format = resources[index].resourceKey.colorFormat;
+				const bool floatStorage = format == DXGI_FORMAT_R11G11B10_FLOAT ||
+				                          format == DXGI_FORMAT_R16G16B16A16_FLOAT || format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+				if (profile.transform != Color::Transform::Identity && !floatStorage)
+					return FailLocked(RendererStage::Validation, E_INVALIDARG,
+						"NR encoding/proxy experiment requires floating-point processing resources", a_args[index].featureSlot, false);
+				const auto oldBaseline = slots[index]->colorWork.baseline.resource.Get();
+				const bool colorReady = colorPipeline_.Ensure(a_args[index].device, slots[index]->colorWork,
+					resources[index].roi.inferenceContext, resources[index].output.desc.Format,
+					colorConfiguration_.experiments.diagnostics);
+				if (execution)
+					execution->Update([&](auto& evidence) {
+						auto& region = evidence.regions[index];
+						const auto& work = slots[index]->colorWork;
+						const auto bytes = LogicalTextureBytes(work.format, work.capacityWidth, work.capacityHeight);
+						if (colorReady && bytes) {
+							region.colorRetainedLogicalBytes = *bytes * 2u;
+							if (oldBaseline != work.baseline.resource.Get())
+								region.newlyAllocatedLogicalBytes += *bytes * 2u;
+						} else {
+							region.allocationBytesKnown = false;
+						}
+					});
+				if (!colorReady) {
+					return FailLocked(RendererStage::ResourceCreation, E_FAIL,
+						"shared NR colour shaders/resources are unavailable", a_args[index].featureSlot, true);
+				}
+			}
+		}
+
+		const auto preparationStarted = DiagnosticNow();
+		ExecutionCpuTimer preparationTimer(execution, &ExecutionSnapshot::preparationCpuMicroseconds);
+		activeStage_ = RendererStage::ColorInputCopy;
+		std::uint32_t measurementSlotMask = 0;
+		for (const auto& args : a_args)
+			measurementSlotMask |= 1u << args.featureSlot;
+		const auto measurementBatchId = colorConfiguration_.Enabled() ? colorPipeline_.BeginMeasurementBatch() : 0;
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			if (colorConfiguration_.Enabled()) {
+				Color::Observation observation{};
+				observation.frame = a_args[index].frameId;
+				observation.sourceWorldFrame = a_args[index].sourceWorldFrame;
+				observation.slot = a_args[index].featureSlot;
+				observation.insertion = static_cast<std::uint32_t>(a_args[index].insertionPoint);
+				observation.generation = a_args[index].generation;
+				observation.rect = resources[index].roi.ownedOutput;
+				observation.sourceFormat = static_cast<std::uint32_t>(resources[index].color.desc.Format);
+				observation.outputFormat = static_cast<std::uint32_t>(resources[index].output.desc.Format);
+				observation.atomicStereo = logicalEyeCount == 2u;
+				observation.measurementBatchId = measurementBatchId;
+				observation.expectedMeasurementSlotMask = measurementSlotMask;
+				if (execution) {
+					const auto evidence = execution->Snapshot();
+					observation.preparationPass = evidence.regions[index].colorPreparePass;
+					observation.reconstructionPass = evidence.regions[index].colorReconstructPass;
+				}
+				if (!colorPipeline_.Prepare(a_args.front().context, slots[index]->colorWork,
+						resources[index].color.texture.Get(), slots[index]->color.resource11.Get(),
+						slots[index]->color.uav11.Get(), colorConfiguration_, observation)) {
+					return FailLocked(RendererStage::ColorInputCopy, E_FAIL,
+						"shared NR colour preparation failed", a_args[index].featureSlot, true);
+				}
+				RecordExecutionCopy(execution, index, slots[index]->colorWork.observation.copiedLogicalBytes);
+			} else {
+				CS_GPU_DETAIL_PASS("Upscaling::NRColorInputCopy", execution ? execution->Snapshot().regions[index].colorCopyPass : nullptr);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (resources[index].roi.compactSource)
+					CopyTextureSubrect(a_args.front().context, slots[index]->color.resource11.Get(), resources[index].color.texture.Get(), *resources[index].roi.compactSource, 0, 0);
+				else
+#endif
+					CopyTextureSubrect(
+						a_args.front().context,
+						slots[index]->color.resource11.Get(),
+						resources[index].color.texture.Get(),
+						resources[index].nativeLayout.color.valid);
+				if (execution)
+					RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].color.workLogicalBytes);
+			}
+		}
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::ColorInputCopy,
+				reason,
+				"device removal followed the D3D11 color-input copy",
+				a_args.front().featureSlot,
+				true);
+		}
+		snapshot_.lastCompletedStage = RendererStage::ColorInputCopy;
+
+		activeStage_ = RendererStage::DepthGuideCopy;
+		if (!CopyDepthBatchLocked(
+				a_args,
+				std::span(slots.data(), a_args.size()),
+				std::span(resources.data(), a_args.size()), execution)) {
+			return FailLocked(
+				RendererStage::DepthGuideCopy,
+				E_FAIL,
+				"CopyDepthGuideCS compilation or dispatch setup failed",
+				a_args.front().featureSlot,
+				true);
+		}
+		for ([[maybe_unused]] const auto& args : a_args)
+			Increment(snapshot_.counters.depthGuideCopies);
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::DepthGuideCopy,
+				reason,
+				"device removal followed the D3D11 depth-guide dispatch",
+				a_args.front().featureSlot,
+				true);
+		}
+		snapshot_.lastCompletedStage = RendererStage::DepthGuideCopy;
+
+		activeStage_ = RendererStage::MotionVectorCopy;
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			CS_GPU_DETAIL_PASS("Upscaling::NRMotionVectorCopy", execution ? execution->Snapshot().regions[index].motionCopyPass : nullptr);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (resources[index].roi.compactSource)
+				CopyTextureSubrect(a_args.front().context, slots[index]->motionVectors.resource11.Get(), resources[index].motionVectors.texture.Get(), *resources[index].roi.compactSource, 0, 0);
+			else
+#endif
+				CopyTextureSubrect(
+					a_args.front().context,
+					slots[index]->motionVectors.resource11.Get(),
+					resources[index].motionVectors.texture.Get(),
+					resources[index].nativeLayout.motion.valid);
+			if (execution)
+				RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].motion.workLogicalBytes);
+		}
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::MotionVectorCopy,
+				reason,
+				"device removal followed the D3D11 motion-vector copy",
+				a_args.front().featureSlot,
+				true);
+		}
+		snapshot_.lastCompletedStage = RendererStage::MotionVectorCopy;
+
+		if (std::ranges::any_of(
+				a_args, [](const auto& args) { return args.controlMask != nullptr; })) {
+			activeStage_ = RendererStage::ControlMaskCopy;
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				if (!a_args[index].controlMask)
+					continue;
+				if (a_args[index].providerBlending) {
+					if (!PrepareActorProtection(a_args[index], *slots[index]))
+						return FailLocked(RendererStage::ControlMaskCopy, E_FAIL, "actor protection preparation failed; preserving baseline", a_args[index].featureSlot, true);
+					continue;
+				}
+				CS_GPU_DETAIL_PASS("Upscaling::NRControlMaskCopy", execution ? execution->Snapshot().regions[index].controlCopyPass : nullptr);
+				SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+				CopyTextureSubrect(
+					a_args.front().context,
+					slots[index]->controlMask.resource11.Get(),
+					resources[index].controlMask.texture.Get(),
+					resources[index].nativeLayout.controlMask.valid);
+				Increment(snapshot_.counters.controlMaskCopies);
+				if (execution)
+					RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].controlMask.workLogicalBytes);
+			}
+			if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+				return FailLocked(
+					RendererStage::ControlMaskCopy,
+					reason,
+					"device removal followed the D3D11 control-mask copy",
+					a_args.front().featureSlot,
+					true);
+			}
+			snapshot_.lastCompletedStage = RendererStage::ControlMaskCopy;
+		}
+		RecordCpuDuration(
+			snapshot_.performance.d3d11PreparationCpuEnqueueSamples,
+			snapshot_.performance.d3d11PreparationCpuEnqueueMicroseconds,
+			snapshot_.performance.lastD3D11PreparationCpuEnqueueMicroseconds,
+			snapshot_.performance.maximumD3D11PreparationCpuEnqueueMicroseconds,
+			preparationStarted);
+		preparationTimer.Stop();
+
+		activeStage_ = RendererStage::CommandBegin;
+		ID3D12GraphicsCommandList* commandList = nullptr;
+		ExecutionCpuTimer commandBeginTimer(execution, &ExecutionSnapshot::commandBeginCpuMicroseconds);
+		const bool commandBegan = interop_.BeginD3D12(&commandList, execution);
+		commandBeginTimer.Stop();
+		if (!commandBegan || !commandList) {
+			return FailLocked(
+				RendererStage::CommandBegin,
+				interop_.LastError(),
+				std::format("D3D12 command recording could not begin: {}", interop_.LastOperation()),
+				a_args.front().featureSlot,
+				true);
+		}
+		RecordingGuard recordingGuard(interop_);
+		snapshot_.lastCompletedStage = RendererStage::CommandBegin;
+
+		std::array<FeatureResourceTransition, kMaximumTransitionResourceCount>
+			sharedResources{};
+		std::size_t sharedResourceCount = 0;
+		std::uint64_t pixelCount = 0;
+		std::uint32_t featureSlotMask = 0;
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			const auto add = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES state) {
+				if (!resource || sharedResourceCount == sharedResources.size())
+					return false;
+				sharedResources[sharedResourceCount++] = { resource, state };
+				return true;
+			};
+			const auto inputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+			if (!add(slots[index]->color.resource12.Get(), colorConfiguration_.experiments.transportBypass ? D3D12_RESOURCE_STATE_COPY_SOURCE : inputState) ||
+				!add(slots[index]->depth.resource12.Get(), inputState) ||
+				!add(slots[index]->motionVectors.resource12.Get(), inputState) ||
+				(a_args[index].controlMask && !add(slots[index]->controlMask.resource12.Get(), inputState)) ||
+				!add(slots[index]->output.resource12.Get(), colorConfiguration_.experiments.transportBypass ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_UNORDERED_ACCESS)) {
+				const bool aborted = recordingGuard.Abort();
+				return FailLocked(RendererStage::CommandBegin, E_INVALIDARG,
+					"shared resources require conflicting states or exceed the batch capacity", a_args[index].featureSlot, true, !aborted);
+			}
+			Add(pixelCount, resources[index].roi.inferenceContext.Area());
+			featureSlotMask |= 1u << a_args[index].featureSlot;
+		}
+		const auto resourceSpan =
+			std::span(sharedResources.data(), sharedResourceCount);
+		TransitionResources(commandList, resourceSpan, true);
+		const D3D12InteropSubmissionTiming timing{
+			.frameId = a_args.front().frameId,
+			.pixelCount = pixelCount,
+			.evaluationCount = colorConfiguration_.experiments.transportBypass ? 0u : static_cast<std::uint32_t>(a_args.size()),
+			.featureSlotMask = featureSlotMask,
+			.insertionPoint = a_args.front().insertionPoint,
+			.logicalEyeCount = logicalEyeCount,
+			.execution = execution,
+		};
+		const bool timingStarted = colorConfiguration_.experiments.transportBypass ?
+		                               interop_.RecordTransportSubmission(timing) :
+		                               interop_.BeginFeatureTiming(commandList, timing);
+		if (!timingStarted) {
+			const bool aborted = recordingGuard.Abort();
+			return FailLocked(
+				RendererStage::CommandBegin,
+				aborted ? E_FAIL : interop_.LastError(),
+				"D3D12 Feature 18 timestamp recording could not begin",
+				a_args.front().featureSlot,
+				true,
+				!aborted);
+		}
+
+		std::array<bool, kEyeCount> forcedHistoryReset{};
+		std::array<bool, kEyeCount> discontinuousHistoryReset{};
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			const auto& slot = *slots[index];
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			const bool evaluationDiscontinuous = slot.historyValid &&
+			                                     !IsSequentialFrame(
+													 slot.lastSuccessfulFrame, a_args[index].frameId);
+			const bool sourceDiscontinuous = slot.historyValid &&
+			                                 !IsSourceWorldFrameContinuous(
+												 slot.lastSuccessfulSourceWorldFrame,
+												 a_args[index].sourceWorldFrame);
+			discontinuousHistoryReset[index] =
+				a_args[index].synchronizedHistoryDiscontinuity ||
+				evaluationDiscontinuous || sourceDiscontinuous;
+			forcedHistoryReset[index] =
+				a_args[index].synchronizedHistoryReset ||
+				!slot.historyValid ||
+				slot.historyKey != resources[index].historyKey ||
+				discontinuousHistoryReset[index];
+			if (execution)
+				execution->Update([&](auto& evidence) {
+					evidence.regions[index].resetReasons = (a_args[index].reset ? ResetCaller : 0u) |
+					                                       (!slot.historyValid ? ResetHistoryInvalid : 0u) |
+					                                       (slot.historyKey != resources[index].historyKey ? ResetHistoryKeyChanged : 0u) |
+					                                       (evaluationDiscontinuous ? ResetEvaluationDiscontinuity : 0u) |
+					                                       (sourceDiscontinuous ? ResetSourceDiscontinuity : 0u) |
+					                                       (a_args[index].synchronizedHistoryReset || a_args[index].synchronizedHistoryDiscontinuity ? ResetSynchronized : 0u);
+				});
+		}
+		// Both eye histories reset together while retaining separate native state.
+		for (std::size_t left = 0; left < a_args.size(); ++left) {
+			for (std::size_t right = 0; right < a_args.size(); ++right) {
+				if (!IsOrderedStereoFeatureSlotPair(a_args[left].featureSlot,
+						a_args[right].featureSlot))
+					continue;
+				const bool forced = forcedHistoryReset[left] || forcedHistoryReset[right];
+				if (execution && forced)
+					execution->Update([&](auto& evidence) {
+						if (!forcedHistoryReset[left])
+							evidence.regions[left].resetReasons |= ResetClusterPeer;
+						if (!forcedHistoryReset[right])
+							evidence.regions[right].resetReasons |= ResetClusterPeer;
+					});
+				const bool discontinuous =
+					discontinuousHistoryReset[left] || discontinuousHistoryReset[right];
+				forcedHistoryReset[left] = forcedHistoryReset[right] = forced;
+				discontinuousHistoryReset[left] = discontinuousHistoryReset[right] = discontinuous;
+			}
+		}
+
+		activeStage_ = RendererStage::FeatureEvaluate;
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			auto& slot = *slots[index];
+			const auto& args = a_args[index];
+			if (colorConfiguration_.experiments.transportBypass) {
+				const auto& roi = resources[index].roi.inferenceContext;
+				D3D12_TEXTURE_COPY_LOCATION destination{};
+				destination.pResource = slot.output.resource12.Get();
+				destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+				D3D12_TEXTURE_COPY_LOCATION source{};
+				source.pResource = slot.color.resource12.Get();
+				source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+				const D3D12_BOX box{ roi.baseX, roi.baseY, 0, roi.baseX + roi.width, roi.baseY + roi.height, 1 };
+				commandList->CopyTextureRegion(&destination, roi.baseX, roi.baseY, 0, &source, &box);
+				if (execution)
+					RecordExecutionCopy(execution, index, execution->Descriptor().regions[index].output.workLogicalBytes);
+				// No NGX call, inference mask or inference timer is reported for a copy.
+				continue;
+			}
+			SetActiveFeatureSlotLocked(args.featureSlot);
+			const bool forcedReset = forcedHistoryReset[index];
+			const bool discontinuousReset = discontinuousHistoryReset[index];
+			const bool effectiveReset = args.reset || forcedReset;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (lifetime.enabled)
+				lifetime.record->regions[index].effectiveReset = effectiveReset;
+#endif
+			if (args.reset)
+				Increment(snapshot_.counters.callerHistoryResets);
+			if (forcedReset)
+				Increment(snapshot_.counters.forcedHistoryResets);
+			if (discontinuousReset)
+				Increment(snapshot_.counters.discontinuousHistoryResets);
+			bool evaluationAttempted = false;
+			RuntimeExecutionEvidence runtimeEvidence{};
+			// Runtime diagnostics can throw after evaluation; preserve the actual call outcome.
+			const SKSE::stl::scope_exit retainRuntimeEvidence([&]() noexcept {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (lifetime.enabled) {
+					auto& region = lifetime.record->regions[index];
+					region.createAttempted = runtimeEvidence.createAttempted;
+					region.createSucceeded = runtimeEvidence.createSucceeded;
+					region.evaluateAttempted = runtimeEvidence.evaluateAttempted;
+					region.evaluateSucceeded = runtimeEvidence.evaluateSucceeded;
+				}
+#endif
+				if (execution)
+					execution->Update([&](auto& evidence) {
+						evidence.regions[index].runtime = runtimeEvidence;
+						if (runtimeEvidence.evaluateAttempted)
+							evidence.attemptedPhysicalSlotMask |= 1u << args.featureSlot;
+						if (runtimeEvidence.evaluateSucceeded)
+							evidence.succeededPhysicalSlotMask |= 1u << args.featureSlot;
+					});
+			});
+			if (execution)
+				execution->Update([&](auto& evidence) { evidence.regions[index].effectiveReset = effectiveReset; });
+			const bool nativeEvaluated = Runtime::Instance().Execute(
+				commandList,
+				args.featureSlot,
+				slot.color.resource12.Get(),
+				slot.depth.resource12.Get(),
+				slot.motionVectors.resource12.Get(),
+				slot.output.resource12.Get(),
+				args.controlMask ? slot.controlMask.resource12.Get() : nullptr,
+				resources[index].nativeLayout,
+				args.tuning,
+				effectiveReset,
+				&evaluationAttempted,
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				execution || lifetime.enabled ? &runtimeEvidence : nullptr,
+#else
+				execution ? &runtimeEvidence : nullptr,
+#endif
+				execution ? &interop_ : nullptr,
+				static_cast<std::uint32_t>(index), args.providerBlending);
+			if (evaluationAttempted) {
+				Increment(snapshot_.counters.featureEvaluations);
+				a_outcome.evaluationAttemptedFeatureSlotMask |= 1u << args.featureSlot;
+			}
+			if (!nativeEvaluated) {
+				const std::string runtimeDetail = Runtime::Instance().Detail();
+				const bool aborted = recordingGuard.Abort();
+				return FailLocked(
+					RendererStage::FeatureEvaluate,
+					aborted ? E_FAIL : interop_.LastError(),
+					aborted ?
+						std::format("Feature 18 evaluation failed: {}", runtimeDetail) :
+						std::format(
+							"Feature 18 evaluation failed and command abort failed at {}: {}",
+							interop_.LastOperation(),
+							runtimeDetail),
+					args.featureSlot,
+					true,
+					!aborted);
+			}
+			a_outcome.evaluationSucceededFeatureSlotMask |=
+				1u << args.featureSlot;
+			LogOnce(slotEvaluateSuccessLogged_[args.featureSlot], [&]() {
+				logger::info(
+					"[DLSSNR] First Feature 18 evaluate succeeded: slot={}, color={}x{}, guides={}x{}, output={}x{}, controlMask={}x{}, upscaling={}, reset={}, stereoBatch={}",
+					args.featureSlot,
+					args.colorWidth,
+					args.colorHeight,
+					args.guideWidth,
+					args.guideHeight,
+					args.outputWidth,
+					args.outputHeight,
+					args.controlMaskWidth,
+					args.controlMaskHeight,
+					args.featureUpscaling,
+					effectiveReset,
+					logicalEyeCount == 2u);
+			});
+		}
+		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;
+
+		if (!colorConfiguration_.experiments.transportBypass && !interop_.EndFeatureTiming(commandList)) {
+			const bool aborted = recordingGuard.Abort();
+			return FailLocked(
+				RendererStage::CommandEnd,
+				aborted ? E_FAIL : interop_.LastError(),
+				"D3D12 Feature 18 timestamp recording could not end",
+				a_args.front().featureSlot,
+				true,
+				!aborted);
+		}
+		TransitionResources(commandList, resourceSpan, false);
+		activeStage_ = RendererStage::CommandEnd;
+		if (!interop_.EndD3D12()) {
+			recordingGuard.active = interop_.IsRecording();
+			return FailLocked(
+				RendererStage::CommandEnd,
+				interop_.LastError(),
+				std::format("D3D12 command submission failed: {}", interop_.LastOperation()),
+				a_args.front().featureSlot,
+				true);
+		}
+		recordingGuard.active = false;
+		snapshot_.lastCompletedStage = RendererStage::CommandEnd;
+
+		activeStage_ = RendererStage::OutputCommit;
+		RefreshRuntimeTelemetryLocked();
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::OutputCommit,
+				reason,
+				"device removal was detected before the external output commit",
+				a_args.front().featureSlot,
+				true);
+		}
+
+		// Reconstruct ALL physical regions before the first external write. This is
+		// shared by scene and Actor NR, before material-strength blending.
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (Replay::IsArmed())
+			CaptureReplayBatch(a_args, std::span(slots.data(), a_args.size()),
+				std::span(resources.data(), a_args.size()), execution);
+#endif
+		if (colorConfiguration_.Enabled()) {
+			for (std::size_t index = 0; index < a_args.size(); ++index) {
+				const auto copiedBefore = slots[index]->colorWork.observation.copiedLogicalBytes;
+				if (!colorPipeline_.Reconstruct(a_args.front().context, slots[index]->colorWork,
+						slots[index]->output.resource11.Get(), slots[index]->output.srv11.Get(),
+						slots[index]->color.srv11.Get(), colorConfiguration_)) {
+					return FailLocked(RendererStage::OutputCommit, E_FAIL,
+						"shared NR colour reconstruction failed before pair commit", a_args[index].featureSlot, true);
+				}
+				RecordExecutionCopy(execution, index, slots[index]->colorWork.observation.copiedLogicalBytes - copiedBefore);
+			}
+			if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason))
+				return FailLocked(RendererStage::OutputCommit, reason,
+					"device removal during private NR colour reconstruction", a_args.front().featureSlot, true);
+		}
+
+		// Both private inputs are prepared before submission and neither caller-owned
+		// output is written until every eye has recorded successfully.
+		const auto outputCommitStarted = DiagnosticNow();
+		ExecutionCpuTimer outputCommitTimer(execution, &ExecutionSnapshot::commitCpuMicroseconds);
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			CS_GPU_DETAIL_PASS("Upscaling::NROutputCommit", execution ? execution->Snapshot().regions[index].outputCopyPass : nullptr);
+			if (colorConfiguration_.Enabled()) {
+				colorPipeline_.Commit(a_args.front().context, slots[index]->colorWork,
+					resources[index].output.texture.Get());
+			} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (const auto& compact = resources[index].roi.compactSource)
+					CopyTextureSubrect(a_args.front().context, resources[index].output.texture.Get(), slots[index]->output.resource11.Get(), resources[index].roi.ownedOutput,
+						compact->baseX + resources[index].roi.ownedOutput.baseX, compact->baseY + resources[index].roi.ownedOutput.baseY);
+				else
+#endif
+					CopyTextureSubrect(
+						a_args.front().context,
+						resources[index].output.texture.Get(),
+						slots[index]->output.resource11.Get(),
+						resources[index].roi.ownedOutput);
+			}
+			if (execution) {
+				RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].output.desc.Format, resources[index].roi.ownedOutput.width, resources[index].roi.ownedOutput.height));
+				execution->Update([&](auto& evidence) {
+					evidence.regions[index].outputCopyEnqueued = true;
+				});
+			}
+		}
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
+			return FailLocked(
+				RendererStage::OutputCommit,
+				reason,
+				"device removal followed the external output commit",
+				a_args.front().featureSlot,
+				true);
+		}
+		RecordCpuDuration(
+			snapshot_.performance.outputCommitCpuEnqueueSamples,
+			snapshot_.performance.outputCommitCpuEnqueueMicroseconds,
+			snapshot_.performance.lastOutputCommitCpuEnqueueMicroseconds,
+			snapshot_.performance.maximumOutputCommitCpuEnqueueMicroseconds,
+			outputCommitStarted);
+		outputCommitTimer.Stop();
+		if (execution)
+			execution->Update([&](auto& evidence) {
+				for (std::size_t index = 0; index < a_args.size(); ++index) {
+					evidence.regions[index].privateOutputCommitted = true;
+					evidence.committedPhysicalSlotMask |= 1u << a_args[index].featureSlot;
+				}
+			});
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			slots[index]->historyKey = resources[index].historyKey;
+			slots[index]->lastSuccessfulFrame = a_args[index].frameId;
+			slots[index]->lastSuccessfulSourceWorldFrame =
+				a_args[index].sourceWorldFrame;
+			slots[index]->historyValid = !colorConfiguration_.experiments.transportBypass;
+		}
+		activeStage_ = RendererStage::Complete;
+		for (const auto& args : a_args) {
+			SetActiveFeatureSlotLocked(args.featureSlot);
+			SucceedLocked(args.featureSlot);
+		}
+		RefreshInteropTelemetryLocked();
+		executionCompletion.succeeded = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (lifetime.enabled)
+			lifetime.record->succeeded = true;
+#endif
+		return true;
+	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void Renderer::State::CaptureReplayBatch(std::span<const RendererApplyArgs> args,
+		std::span<Slot* const> slots, std::span<const ValidatedResources> resources,
+		const std::shared_ptr<ExecutionEvidence>& execution) noexcept
+	try {
+		Replay::Batch batch;
+		batch.supported = !args.empty() && args.size() <= 2 &&
+		                  !colorConfiguration_.experiments.transportBypass && colorConfiguration_.experiments.applyModelEdit;
+		batch.unsupportedReason = "replay requires proven full initialized auto-mask inputs with at most two eyes";
+		if (args.empty()) {
+			Replay::Fail(batch.unsupportedReason);
+			return;
+		}
+		const auto& first = args.front();
+		const auto& context = first.executionContext;
+		batch.supported &= context.renderingMode.has_value() && context.sourceTransactionId != 0 &&
+		                   context.jitterPixels.has_value() && context.sourceColorOrigin.has_value() && context.sourceGuideOrigin.has_value();
+		if (!batch.supported) {
+			Replay::Fail(batch.unsupportedReason);
+			return;
+		}
+		const auto& tuning = first.tuning;
+		batch.metadata = {
+			{ "frame", first.frameId }, { "sourceWorldFrame", first.sourceWorldFrame }, { "generation", first.generation },
+			{ "insertionPoint", static_cast<uint32_t>(first.insertionPoint) },
+			{ "mode", static_cast<uint32_t>(*context.renderingMode) },
+			{ "arrangement", static_cast<uint32_t>(ResolvePipelineArrangement(*context.renderingMode)) },
+			{ "source", Evidence::ContextJson(context) }, { "colorRevision", colorConfiguration_.revision },
+			{ "inputEpoch", colorConfiguration_.inputEpoch[static_cast<size_t>(first.insertionPoint)] },
+			{ "colorConfiguration", Color::ConfigurationEvidenceJson(colorConfiguration_) },
+			{ "characterSelection", first.characterVisualIsolation },
+			{ "providerBlending", first.providerBlending },
+			{ "tuning", { { "intensity", tuning.intensity }, { "localToneStrength", tuning.localToneStrength },
+							{ "localStructureStrength", tuning.localStructureStrength }, { "skinStructureStrength", tuning.skinStructureStrength },
+							{ "style", tuning.style }, { "useAutoMask", tuning.useAutoMask }, { "uiCorrection", tuning.uiCorrection },
+							{ "singleSubrectScale", tuning.singleSubrectScale } } },
+			{ "execution", execution ? Evidence::ExecutionJson(*execution) : nlohmann::json(nullptr) },
+			{ "stage", "native_nr_before_colour_reconstruction_and_csx_composite" }
+		};
+		BuildProvenance::AttachProducer(batch.metadata);
+		auto& runtime = Runtime::Instance();
+		batch.runtime = { { "path", runtime.Path().string() }, { "sha256", runtime.Hash() }, { "version", runtime.Version() } };
+		ComPtr<IDXGIDevice> dxgi;
+		ComPtr<IDXGIAdapter> adapter;
+		DXGI_ADAPTER_DESC desc{};
+		if (FAILED(first.device->QueryInterface(IID_PPV_ARGS(&dxgi))) || FAILED(dxgi->GetAdapter(&adapter)) ||
+			FAILED(adapter->GetDesc(&desc))) {
+			Replay::Fail("replay adapter identity unavailable");
+			return;
+		}
+		batch.adapter = { { "vendorId", desc.VendorId }, { "deviceId", desc.DeviceId },
+			{ "description", std::filesystem::path(desc.Description).string() },
+			{ "luid", { { "low", desc.AdapterLuid.LowPart }, { "high", desc.AdapterLuid.HighPart } } } };
+		LARGE_INTEGER driverVersion{};
+		batch.adapter["driverVersion"] = SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driverVersion)) ?
+		                                     nlohmann::json(driverVersion.QuadPart) :
+		                                     nlohmann::json(nullptr);
+		for (size_t index = 0; index < args.size(); ++index) {
+			const auto& value = args[index];
+			const auto& rect = resources[index].roi.inferenceContext;
+			const auto& guideRect = resources[index].nativeLayout.depth.valid;
+			const auto& colorRect = resources[index].nativeLayout.color.valid;
+			batch.supported &= value.featureSlot < 4 && !value.controlMask && value.tuning.useAutoMask &&
+			                   value.colorWidth == value.outputWidth && value.colorHeight == value.outputHeight &&
+			                   guideRect.baseX == 0 && guideRect.baseY == 0 && guideRect.width == value.guideWidth && guideRect.height == value.guideHeight &&
+			                   colorRect.baseX == 0 && colorRect.baseY == 0 && colorRect.width == value.colorWidth && colorRect.height == value.colorHeight &&
+			                   rect.baseX == 0 && rect.baseY == 0 && rect.width == value.outputWidth && rect.height == value.outputHeight &&
+			                   value.executionContext.sourceTransactionId == context.sourceTransactionId;
+			const auto& nativeLayout = resources[index].nativeLayout;
+			batch.eyes.push_back({ .slot = value.featureSlot, .outputSubrect = rect, .motionVectorScale = nativeLayout.motionVectorScale, .featureUpscaling = value.featureUpscaling, .color = slots[index]->color.resource11.Get(), .depth = slots[index]->depth.resource11.Get(), .motion = slots[index]->motionVectors.resource11.Get(), .output = slots[index]->output.resource11.Get(), .metadata = { { "source", Evidence::ContextJson(value.executionContext) }, { "viewport", Evidence::ViewportJson(value.viewportCrop) }, { "nativeLayout", Evidence::NativeLayoutJson(nativeLayout) }, { "callerReset", value.reset }, { "synchronizedHistoryReset", value.synchronizedHistoryReset } } });
+		}
+		Replay::OfferBatch(first.device, first.context, batch);
+	} catch (...) {
+		Replay::Fail("native replay metadata could not be retained");
+	}
+#endif
+
+	bool Renderer::State::ResetLocked(bool a_resetShader, bool a_destruction)
+	{
+		if (!TeardownBackendLocked(a_resetShader, a_destruction, false))
+			return false;
+		return true;
+	}
+
+	void Renderer::State::ShutdownForDestruction() noexcept
+	{
+		try {
+			std::scoped_lock lock(mutex_);
+			if (!TeardownBackendLocked(true, true, false)) {
+				AbandonRuntimeOwnershipNoexcept();
+				AbandonSlotsLocked();
+			}
+		} catch (...) {
+			AbandonRuntimeOwnershipNoexcept();
+			AbandonSlotsLocked();
+		}
+	}
+
+	Renderer& Renderer::Instance()
+	{
+		static Renderer instance;
+		return instance;
+	}
+
+	Renderer::Renderer()
+	{
+		// Construct shared services first so Renderer teardown precedes their teardown.
+		(void)Runtime::Instance();
+		(void)Color::Registry::Instance();
+		state_ = new State();
+	}
+
+	Renderer::~Renderer()
+	{
+		if (!state_)
+			return;
+		state_->ShutdownForDestruction();
+		delete state_;
+		state_ = nullptr;
+	}
+
+	bool Renderer::Apply(
+		const RendererApplyArgs& a_args,
+		RendererApplyOutcome* a_outcome)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		RendererApplyOutcome outcome{};
+		const auto failuresBefore = state_->snapshot_.counters.failures;
+		state_->SetActiveFeatureSlotLocked(a_args.featureSlot);
+		try {
+			state_->CaptureColorConfiguration(a_args);
+			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRendering", state_->wholePass_);
+			const bool succeeded = state_->ApplyLocked(a_args, outcome);
+			state_->FinishCapture(outcome);
+			if (a_outcome)
+				*a_outcome = outcome;
+			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
+			return succeeded;
+		} catch (...) {
+			const auto failureFeatureSlot =
+				state_->ActiveFeatureSlotOrLocked(a_args.featureSlot);
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				state_->activeStage_,
+				failureFeatureSlot,
+				true,
+				failuresBefore);
+			state_->FinishCapture(outcome);
+			if (a_outcome)
+				*a_outcome = outcome;
+			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
+			return false;
+		}
+	}
+
+	bool Renderer::ApplyStereo(
+		const std::array<RendererApplyArgs, 2>& a_args,
+		RendererApplyOutcome* a_outcome)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		RendererApplyOutcome outcome{};
+		Increment(state_->snapshot_.counters.stereoAttempts);
+		const auto failuresBefore = state_->snapshot_.counters.failures;
+		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
+		try {
+			state_->CaptureColorConfiguration(a_args[0]);
+			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingStereo", state_->wholePass_);
+			const bool succeeded = state_->ApplyStereoLocked(a_args, outcome);
+			Increment(
+				succeeded ? state_->snapshot_.counters.stereoSuccesses :
+							state_->snapshot_.counters.stereoFailures);
+			state_->FinishCapture(outcome);
+			if (a_outcome)
+				*a_outcome = outcome;
+			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
+			return succeeded;
+		} catch (...) {
+			const auto failureFeatureSlot =
+				state_->ActiveFeatureSlotOrLocked(a_args[0].featureSlot);
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				state_->activeStage_,
+				failureFeatureSlot,
+				true,
+				failuresBefore);
+			Increment(state_->snapshot_.counters.stereoFailures);
+			state_->FinishCapture(outcome);
+			if (a_outcome)
+				*a_outcome = outcome;
+			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
+			return false;
+		}
+	}
+
+	bool Renderer::ApplySequentialStereo(
+		const std::array<RendererApplyArgs, 2>& a_args,
+		RendererApplyOutcome* a_outcome)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		RendererApplyOutcome outcome{};
+		const auto failuresBefore = state_->snapshot_.counters.failures;
+		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
+		try {
+			state_->CaptureColorConfiguration(a_args[0]);
+			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingSequentialStereo", state_->wholePass_);
+			const bool succeeded =
+				state_->ApplySequentialStereoLocked(a_args, outcome);
+			state_->FinishCapture(outcome);
+			if (a_outcome)
+				*a_outcome = outcome;
+			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
+			return succeeded;
+		} catch (...) {
+			const auto failureFeatureSlot =
+				state_->ActiveFeatureSlotOrLocked(a_args[0].featureSlot);
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				state_->activeStage_,
+				failureFeatureSlot,
+				true,
+				failuresBefore);
+			state_->FinishCapture(outcome);
+			if (a_outcome)
+				*a_outcome = outcome;
+			state_->SetActiveFeatureSlotLocked(Runtime::kFeatureSlotCount);
+			return false;
+		}
+	}
+
+	std::array<CaptureInputs, 2> Renderer::GetCaptureInputs() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		(void)state_->interop_.GetTelemetry();
+		return state_->captureInputs_;
+	}
+
+	bool Renderer::Reset(bool a_clearTransportRejections)
+	{
+		std::scoped_lock lock(state_->mutex_);
+		try {
+			const bool reset = state_->ResetLocked(false, false);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (reset && a_clearTransportRejections) {
+				state_->capacityFallback_ = {};
+				state_->compactRetention_ = {};
+			}
+#else
+			(void)a_clearTransportRejections;
+#endif
+			return reset;
+		} catch (const std::exception& exception) {
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				RendererStage::Quarantined,
+				Runtime::kFeatureSlotCount,
+				false,
+				0);
+			try {
+				logger::error("[DLSSNR] Renderer reset threw: {}", exception.what());
+			} catch (...) {
+			}
+			return false;
+		} catch (...) {
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				RendererStage::Quarantined,
+				Runtime::kFeatureSlotCount,
+				false,
+				0);
+			try {
+				logger::error("[DLSSNR] Renderer reset threw an unknown exception");
+			} catch (...) {
+			}
+			return false;
+		}
+	}
+
+	void Renderer::ResetShaderCache()
+	{
+		std::scoped_lock lock(state_->mutex_);
+		try {
+			(void)state_->ResetLocked(true, false);
+		} catch (const std::exception& exception) {
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				RendererStage::Quarantined,
+				Runtime::kFeatureSlotCount,
+				false,
+				0);
+			try {
+				logger::error("[DLSSNR] Shader-cache reset threw: {}", exception.what());
+			} catch (...) {
+			}
+		} catch (...) {
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				RendererStage::Quarantined,
+				Runtime::kFeatureSlotCount,
+				false,
+				0);
+			try {
+				logger::error("[DLSSNR] Shader-cache reset threw an unknown exception");
+			} catch (...) {
+			}
+		}
+	}
+
+	RendererSnapshot Renderer::GetSnapshot() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->SnapshotLocked();
+	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	nlohmann::json Renderer::GetSourceTransportDiagnostics() const
+	{
+		using json = nlohmann::json;
+		std::scoped_lock lock(state_->mutex_);
+		json textures = json::array(), slots = json::array();
+		std::uint64_t inputBytes = 0, outputBytes = 0, colorBytes = 0, retiredLeaseBytes = 0;
+		std::uint64_t activeBytes = 0, cachedBytes = 0, activeColorBytes = 0, cachedColorBytes = 0;
+		bool bytesKnown = !state_->quarantined_;
+		std::vector<ID3D12Resource*> unique;
+		const auto add = [&](const SharedTexture& texture, const char* role, std::uint64_t& total, std::uint32_t slotMask = 0) {
+			if (!texture.resource12)
+				return;
+			const auto found = std::ranges::find(unique, texture.resource12.Get());
+			if (found != unique.end()) {
+				auto& record = textures[static_cast<std::size_t>(found - unique.begin())];
+				record["slotMask"] = record["slotMask"].get<std::uint32_t>() | slotMask;
+				return;
+			}
+			unique.push_back(texture.resource12.Get());
+			const auto bytes = LogicalTextureBytes(texture.desc.Format, texture.desc.Width, texture.desc.Height);
+			bytesKnown &= bytes.has_value();
+			total += bytes.value_or(0);
+			textures.push_back({ { "identity", std::to_string(reinterpret_cast<std::uintptr_t>(texture.resource12.Get())) },
+				{ "role", role }, { "slotMask", slotMask }, { "logicalBytes", bytes ? json(*bytes) : json(nullptr) } });
+		};
+		const auto nativeMask = Runtime::Instance().GetResidentFeatureMask();
+		std::uint32_t activeMask = 0, cachedMask = 0;
+		for (std::size_t index = 0; index < state_->slots_.size(); ++index) {
+			const auto& slot = state_->slots_[index];
+			if (!slot.resourcesValid)
+				continue;
+			const bool active = slot.lastSuccessfulFrame == state_->snapshot_.frameId;
+			(active ? activeMask : cachedMask) |= 1u << index;
+			for (const auto* input : { &slot.color, &slot.depth, &slot.motionVectors, &slot.controlMask })
+				add(*input, "input", inputBytes, 1u << index);
+			add(slot.output, "private_output", outputBytes, 1u << index);
+			const auto color = slot.colorWork.baseline.resource ? LogicalTextureBytes(slot.colorWork.format,
+																	  slot.colorWork.capacityWidth, slot.colorWork.capacityHeight) :
+			                                                      std::optional<std::uint64_t>(0);
+			colorBytes += color.value_or(0) * 2u;
+			(active ? activeColorBytes : cachedColorBytes) += color.value_or(0) * 2u;
+			bytesKnown &= color.has_value();
+			slots.push_back({ { "slot", index }, { "activeInLastRequest", active },
+				{ "compactStorage", slot.resourceKey.compact },
+				{ "compactMinimumSide", state_->compactRetention_[index].minimumSide },
+				{ "compactFullCoordinateFallback", state_->compactRetention_[index].fullCoordinates },
+				{ "nativeResident", (nativeMask & (1u << index)) != 0 },
+				{ "inputIdentity", std::to_string(reinterpret_cast<std::uintptr_t>(slot.color.resource12.Get())) },
+				{ "privateOutputIdentity", std::to_string(reinterpret_cast<std::uintptr_t>(slot.output.resource12.Get())) },
+				{ "historyIdentity", slot.historyKey.regionIdentity }, { "historyValid", slot.historyValid },
+				{ "sourceTransportOwnerSlot", index },
+				{ "guideCapacity", { slot.resourceKey.guideWidth, slot.resourceKey.guideHeight } },
+				{ "outputCapacity", { slot.resourceKey.outputWidth, slot.resourceKey.outputHeight } } });
+		}
+		const auto leases = state_->interop_.GetResourceLeases();
+		for (const auto& texture : leases)
+			add(texture, "lease_only_retained", retiredLeaseBytes);
+		for (auto& texture : textures) {
+			const auto mask = texture["slotMask"].get<std::uint32_t>();
+			texture["active"] = (mask & activeMask) != 0;
+			texture["cachedOnly"] = (mask & cachedMask) != 0 && (mask & activeMask) == 0;
+			const auto bytes = texture["logicalBytes"].is_null() ? 0 : texture["logicalBytes"].get<std::uint64_t>();
+			if (mask & activeMask)
+				activeBytes += bytes;
+			else if (mask & cachedMask)
+				cachedBytes += bytes;
+		}
+		return { { "schemaVersion", 2 }, { "ownership", "private_per_eye" },
+			{ "capacityFallback", { { "active", state_->capacityFallback_.rejected }, { "recoveries", state_->capacityFallback_.recoveries },
+									  { "reason", state_->capacityFallback_.reason == CapacityFailure::Pressure ? "pressure" : state_->capacityFallback_.reason == CapacityFailure::Unsupported ? "unsupported" :
+																																																  "none" },
+									  { "policy", "one_enclosing_context_per_eye_after_fenced_recoverable_failure_until_explicit_nr_reset" } } },
+			{ "maximumPhysicalContexts", Runtime::kFeatureSlotCount }, { "allocationPolicy", "lazy_exact_capacity_no_speculative_prewarm" },
+			{ "activeSlotMask", activeMask }, { "cachedSlotMask", cachedMask }, { "nativeSlotMask", nativeMask },
+			{ "sharedInputLogicalBytes", inputBytes }, { "privateOutputLogicalBytes", outputBytes }, { "privateColorLogicalBytes", colorBytes },
+			{ "activeTransportLogicalBytes", activeBytes }, { "cachedOnlyTransportLogicalBytes", cachedBytes },
+			{ "activePrivateColorLogicalBytes", activeColorBytes }, { "cachedPrivateColorLogicalBytes", cachedColorBytes },
+			{ "leaseOnlyRetainedLogicalBytes", retiredLeaseBytes }, { "leaseCount", leases.size() }, { "logicalBytesKnown", bytesKnown },
+			{ "logicalByteScope", "unique_transport_and_private_baseline_result_textures_only_excludes_exposure_queries_buffers_and_native_allocations" },
+			{ "nativeAllocationBytes", nullptr }, { "nativeAllocationBytesReason", "provider_does_not_expose_residency_bytes" },
+			{ "quarantined", state_->quarantined_ }, { "physicalResidencyMeasured", false },
+			{ "nativeResidencyKnown", !state_->quarantined_ },
+			{ "abandonedOwnershipBytes", nullptr }, { "abandonedOwnershipPresent", state_->quarantined_ },
+			{ "recovery", "explicit_nr_reset_after_successful_both_api_retirement_or_new_process" },
+			{ "resources", textures }, { "slots", slots } };
+	}
+
+	LifetimeSnapshot Renderer::GetLifetimeDiagnostics() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->lifetimeDiagnostics_.Snapshot();
+	}
+#endif
+	bool Renderer::IsFailureLatched() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->IsFailureLatchedLocked();
+	}
+
+	bool Renderer::IsQuarantined() const
+	{
+		std::scoped_lock lock(state_->mutex_);
+		return state_->IsQuarantinedLocked();
+	}
+}

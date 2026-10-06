@@ -22,7 +22,7 @@ contradict this policy.
 -   **Runtime safety:** Evaluate SE, AE, and VR behavior. Keep runtime-specific divergence small, explicit, and localized.
 -   **Graphics safety:** Name every new D3D11 resource with the existing `Util::SetResourceName` path and use RAII for graphics and ImGui state.
 -   **Validation:** Test in proportion to risk, record exact evidence, and never claim validation that did not run.
--   **Git safety:** Commit on the local destination branch before any authorized push. Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
+-   **Git safety:** Create direct commits locally before pushing. Use the requested GitHub merge method for PRs, then synchronize the local destination branch. Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
 
 ## Code Review Rules
 
@@ -243,14 +243,18 @@ contradict this policy.
 
 -   CSX public releases publish only the complete `CSX_AIO-*.7z` installer. Keep split core, feature and cache packages as internal workflow artifacts. Release notes must describe CSX's bundled features and built-in systems; never inherit upstream Nexus upload destinations. Follow [the CSX distribution contract](docs/development/csx-release-distribution.md).
 -   Never push directly to, force-push, or rebase shared branches such as `main`, `main-VR`, `dev`, or `hotfix/*` without explicit user direction. Use `--force-with-lease` only when rewriting an owned feature branch is necessary and authorized.
--   Create commits locally first. Before an authorized push, the matching
-    local destination branch must already point to the exact commit being
-    pushed. Integrate work from another branch or linked worktree into that
-    local branch by merge or fast-forward before publishing it. Never push
-    a detached HEAD, another branch, or a raw commit directly to a remote
-    destination while leaving its local branch behind; do not bypass this
-    order through a remote API. Verify local and remote commit IDs after
-    every push. A request to commit locally does not authorize a push.
+-   For direct commits to this repository, create the commit locally and
+    update the matching local destination branch before an authorized push.
+    Integrate work from another branch or linked worktree by merge or
+    fast-forward first. Never leave the local destination branch behind a
+    direct remote update. Verify local and remote commit IDs afterward.
+    A request to commit locally does not authorize a push.
+-   Publish PRs through the normal GitHub workflow. Use the user's requested
+    merge method on GitHub, then synchronize the local destination branch.
+    Do not substitute a direct branch push for a normal PR merge unless the
+    user explicitly requests that method. The direct-commit local-first rule
+    does not govern normal PR merges or user-authorized contributions to an
+    existing PR in another repository; follow that PR's workflow instead.
 -   Do not manually create `v*` release tags or hand-edit the CMake project version; release automation owns them.
 -   Synchronize upstream histories by merge rather than cherry-picking individual commits. Preserve VR-specific behavior during conflict resolution and verify upstream ancestry after the merge.
 -   Do not squash upstream-sync PRs when the merge ancestry is itself part of the synchronization contract.

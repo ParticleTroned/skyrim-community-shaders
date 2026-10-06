@@ -178,6 +178,22 @@ float3 CalculateWindDisplacement(VS_INPUT input, float windTimer)
 	return float3(WindVector.xy, 0) * windPower;
 }
 
+float3 GetWindDisplacement(VS_INPUT input, bool previous)
+{
+	float3 displacement = 0;
+#	ifdef GRASS_OPTIMIZATIONS
+	[branch] if (GrassBatchEnabled)
+	{
+		float2 wind = GrassInstanceExtras[GrassBatchBase + input.InstanceID].wind;
+		float power = WindVector.z * ((previous ? wind.y : wind.x) * (0.5 * (input.Color.w * input.Color.w)));
+		displacement = float3(WindVector.xy, 0) * power;
+	}
+	else
+#	endif
+		displacement = CalculateWindDisplacement(input, previous ? PreviousWindTimer : WindTimer);
+	return displacement;
+}
+
 #	ifdef GRASS_LIGHTING
 float4 GetMSPosition(VS_INPUT input, float3x3 world3x3)
 #	else
@@ -223,8 +239,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float4 msPosition = GetMSPosition(input, world3x3);
 
-	float3 windDisplacement = CalculateWindDisplacement(input, WindTimer);
-	float3 previousWindDisplacement = CalculateWindDisplacement(input, PreviousWindTimer);
+	float3 windDisplacement = GetWindDisplacement(input, false);
+	float3 previousWindDisplacement = GetWindDisplacement(input, true);
 #		ifdef GRASS_OPTIMIZATIONS
 	float3 batchOffset = GetGrassBatchOffset(input.InstanceID);
 	msPosition.xyz += batchOffset;
@@ -235,7 +251,8 @@ VS_OUTPUT main(VS_INPUT input)
 #			ifdef GRASS_OPTIMIZATIONS
 	VS_INPUT collisionInput = input;
 	collisionInput.InstanceData1.xyz += batchOffset;
-	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement);
+	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement,
+		GrassBatchEnabled ? GrassBatchCollisionDistance : 2048.0);
 #			else
 	GrassCollision::GetDisplacedPosition(input, msPosition.xyz, displacement, previousDisplacement);
 #			endif
@@ -322,8 +339,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float4 msPosition = GetMSPosition(input);
 
-	float3 windDisplacement = CalculateWindDisplacement(input, WindTimer);
-	float3 previousWindDisplacement = CalculateWindDisplacement(input, PreviousWindTimer);
+	float3 windDisplacement = GetWindDisplacement(input, false);
+	float3 previousWindDisplacement = GetWindDisplacement(input, true);
 #		ifdef GRASS_OPTIMIZATIONS
 	float3 batchOffset = GetGrassBatchOffset(input.InstanceID);
 	msPosition.xyz += batchOffset;
@@ -334,7 +351,8 @@ VS_OUTPUT main(VS_INPUT input)
 #			ifdef GRASS_OPTIMIZATIONS
 	VS_INPUT collisionInput = input;
 	collisionInput.InstanceData1.xyz += batchOffset;
-	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement);
+	GrassCollision::GetDisplacedPosition(collisionInput, msPosition.xyz, displacement, previousDisplacement,
+		GrassBatchEnabled ? GrassBatchCollisionDistance : 2048.0);
 #			else
 	GrassCollision::GetDisplacedPosition(input, msPosition.xyz, displacement, previousDisplacement);
 #			endif
@@ -582,7 +600,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	float3 normal = -normalize(cross(ddx_coarse(input.WorldPosition.xyz), ddy_coarse(input.WorldPosition.xyz)));
 	float3 viewDirection = -input.WorldPosition.xyz * rsqrt(max(dot(input.WorldPosition.xyz, input.WorldPosition.xyz), 1e-8f));
 	float3 foliageNormal = normal;
-	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal) && !frontFace)
+	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal) && dot(foliageNormal, viewDirection) < 0.0)
 		foliageNormal = -foliageNormal;
 	[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 		diffuseColor += directionalLightColor * GetFoliageTransmission(dot(foliageNormal, SharedData::DirLightDirection.xyz), dot(viewDirection, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
@@ -777,7 +795,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Swaps direction of the backfaces otherwise they seem to get lit from the wrong direction.
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::GrassSphereNormal))
-		if (!frontFace)
+		if (dot(normal, viewDirection) < 0.0)
 			normal = -normal;
 
 	float3x3 tbn = 0;

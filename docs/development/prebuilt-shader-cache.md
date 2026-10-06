@@ -69,6 +69,10 @@ runtime compile state.
 Generated inventories may include `captured_shader_variants`, written by
 `.github/configs/generate-shader-configs.ps1`. The builder verifies that exact
 number of entries before compiling so a truncated capture cannot be packaged.
+Both bundled profiles apply `PBR_GRASS=1` and the empty
+`GRASS_OPTIMIZATIONS` macro to RunGrass vertex and pixel stages only. Macro
+values must match the native factory: empty `PBR_GRASS` is a different cache
+identity from `PBR_GRASS=1`, even when both enable the same conditional code.
 The SE release build then adds the small, reviewed
 `CROSS_MODLIST_SHADER_VARIANTS` overlay. It contains known SE-only RunGrass
 permutations which a single clean modlist may not exercise; it is never applied
@@ -87,6 +91,17 @@ This cache does **not** cover feature-specific shaders compiled through
 independent `Util::CompileShader` or direct `D3DCompile*` paths. Those can
 still compile on first use. A new shader path may be added only after it has a
 deterministic cache key and a complete, declared permutation inventory.
+
+For grass, this separate path covers `GrassCullingCS`, its DevBench
+`GRASS_DIAGNOSTICS=1` variant, `GrassDepthCS`, and
+`GrassInstanceSignatureVS`. Scene Hi-Z uses `BuildDepthCS`, `ReduceDepthCS`,
+and `TestBoundsCS`; DevBench additionally compiles its clipping/refinement
+A/B, polygon-baseline and diagnostic variants. Production excludes these
+DevBench variants. Setup warms these shaders in memory; the managed cache
+builder cannot package or reload them. Keep their HLSL and includes in the
+AIO and validate them through `GrassBatchShader` and the Hi-Z shader suite.
+The existing standalone upscaling and foveated validation inventories likewise
+prove compilation, not inclusion in the managed cache pack.
 
 Do not promise users that every possible HLSL compilation is eliminated.
 The supported claim is that matching engine-managed permutations can load from
@@ -359,11 +374,31 @@ zero before exiting. Preserve the completed `CommunityShaders.log`, then run:
 ```
 
 Use `shader-validation.yaml` for an SE capture. Always use the wrapper rather
-than calling `hlslkit-generate` directly. It normalizes padded logger thread
-IDs in a temporary copy and refuses to replace the inventory unless the YAML
+than calling `hlslkit-generate` directly. It normalizes current and legacy
+logger prefixes in a temporary copy and requires a zero-remaining queue
+record after the last compilation. Missing queue evidence, an active queue
+or new compile records after an earlier zero-remaining record are rejected.
+It refuses to replace the inventory unless the YAML
 entry count equals the clean runtime capture count. The runtime UI can show a
 slightly larger total because completed tasks include in-session cache hits;
 only source compilation records produce distinct distributable variants.
+
+The completed VR hook-fix capture from 2026-10-05 used source `0d0c8855e`
+with local hook fixes and Build ID `866a1d02976c`. It completed 3,635 tasks
+with zero failures and contained 3,580 distinct managed source compilations,
+including all eight
+grass vertex/pixel, depth and alpha-test combinations with `PBR_GRASS=1`
+and `GRASS_OPTIMIZATIONS`. Those 3,580 exact release macro identities match
+the updated 3,605-entry VR inventory. Retain the 25 additional lighting
+entries from earlier captures rather than narrowing coverage to this modlist.
+The compact grass regression fixture preserves the producer and log hash;
+the full log and comparison remain local. The log confirms native grass
+hooks installed, with no draw- or model-hook availability warning. Grass
+and scene Hi-Z compute shaders and DevBench variants also compiled through
+their separate startup paths. Existing warnings from Effect, Light Limit
+Fix, terrain shadows and skylighting remain; none are grass/Hi-Z compile
+failures. Hook installation and compilation do not establish visual quality,
+batching performance or live LOD coverage.
 
 The captured SE inventory describes one clean runtime profile. Release builds
 supplement it with the known SE-only permutations in

@@ -50,7 +50,7 @@ The script will:
 
 1. Detect available Skyrim installations
 2. Check for required log files
-3. Normalize padded logger thread IDs in a temporary copy for pinned hlslkit
+3. Normalize current or legacy logger prefixes in a temporary copy for pinned hlslkit
 4. Verify that every captured engine-managed source compilation is represented
 5. Record `captured_shader_variants` for build-time inventory validation
 6. Update the files in `.github\configs\`
@@ -58,8 +58,13 @@ The script will:
 ### Direct Log Generation
 
 Use the repository wrapper for a saved clean log. Do not invoke
-`hlslkit-generate` directly: pinned versions do not recognize padded logger
-thread IDs and can silently produce an incomplete inventory.
+`hlslkit-generate` directly: pinned versions do not recognize current logger
+prefixes or padded thread IDs and can silently produce an incomplete inventory.
+The wrapper requires shader queue-state evidence with a final zero count
+after the last compilation record; missing, active or stale queue evidence
+cannot replace an inventory. Compare
+the completed capture with the existing inventory before updating it; retain
+previously observed valid permutations absent from the new modlist.
 
 ```powershell
 .\.github\configs\generate-shader-configs.ps1 `

@@ -1049,7 +1049,7 @@ SHIPPED_CACHE_PROFILE = CacheProfile(
     file_defines={
         "Lighting.hlsl": ("WETTERNESS",),
         "Water.hlsl": ("WETTERNESS",),
-        "RunGrass.hlsl": ("PBR_GRASS", "GRASS_OPTIMIZATIONS"),
+        "RunGrass.hlsl": ("PBR_GRASS=1", "GRASS_OPTIMIZATIONS"),
     },
 )
 
@@ -1095,7 +1095,7 @@ PATKA_CACHE_PROFILE = CacheProfile(
     disabled_features=PATKA_DISABLED_FEATURES,
     excluded_defines=BASE_EXCLUDED_DEFINES | PATKA_EXCLUDED_DEFINES,
     global_defines=("UNIFIED_WATER",),
-    file_defines={"RunGrass.hlsl": ("PBR_GRASS", "GRASS_OPTIMIZATIONS")},
+    file_defines={"RunGrass.hlsl": ("PBR_GRASS=1", "GRASS_OPTIMIZATIONS")},
 )
 CACHE_PROFILES = {
     profile.name: profile

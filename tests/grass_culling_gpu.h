@@ -42,9 +42,9 @@ void RunCullingShader(bool vr)
 	std::vector<Record> sentinel(capacity * eyes * 3);
 	for (auto& record : sentinel) record.fill(0xdeadbeef);
 	auto output = makeBuffer(UINT(sentinel.size() * sizeof(Record)), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, sentinel.data(), "GrassTest::Output");
-	auto extras = makeBuffer(capacity * eyes * 3 * 16, D3D11_BIND_UNORDERED_ACCESS, 16, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::Extras");
+	auto extras = makeBuffer(capacity * eyes * 3 * 24, D3D11_BIND_UNORDERED_ACCESS, 24, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::Extras");
 	auto args = makeBuffer(192, D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::Args");
-	auto counters = makeBuffer(40, D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::Counters");
+	auto counters = makeBuffer(19 * sizeof(uint32_t), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::Counters");
 	ComPtr<ID3D11ShaderResourceView> inputSRV, tableSRV;
 	D3D11_SHADER_RESOURCE_VIEW_DESC inputView{};
 	inputView.Format = DXGI_FORMAT_R32_TYPELESS;
@@ -63,7 +63,7 @@ void RunCullingShader(bool vr)
 		D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
 		view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 		view.Format = i == 1 ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
-		view.Buffer.NumElements = desc.ByteWidth / (i == 1 ? 16 : 4);
+		view.Buffer.NumElements = desc.ByteWidth / (i == 1 ? 24 : 4);
 		view.Buffer.Flags = i == 1 ? 0 : D3D11_BUFFER_UAV_FLAG_RAW;
 		Check(device->CreateUnorderedAccessView(buffers[i], &view, views[i].GetAddressOf()));
 		Util::SetResourceName(views[i].Get(), "GrassTest::Output%u UAV", i);
@@ -126,6 +126,8 @@ void RunCullingShader(bool vr)
 	params.SetVariable("DepthHeight", 4u);
 	params.SetVariable("DepthBias", .001f);
 	params.SetVariable("DepthUVScale", std::array<float, 4>{ 1, 1, 0, 0 });
+	native.SetVariable("WindTimer", 4.25f);
+	native.SetVariable("PreviousWindTimer", 3.75f);
 	native.Bind(context.Get());
 	const auto read = [&](ID3D11Buffer* source) {
 		D3D11_BUFFER_DESC desc{};
@@ -167,6 +169,8 @@ void RunCullingShader(bool vr)
 	};
 	auto values = dispatch(false, false, false, false);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[eye * 8 + 4] == 3, "Full-density mode dropped an instance");
+	auto counts = read(counters.Get());
+	Require(counts[10] == 3 * eyes && counts[11] == 3 * eyes, "Missing-pyramid diagnostics do not reconcile");
 	auto compacted = read(output.Get());
 	auto fades = read(extras.Get());
 	for (UINT eye = 0; eye < eyes; ++eye) {
@@ -176,14 +180,21 @@ void RunCullingShader(bool vr)
 			std::copy_n(compacted.begin() + start, 8, record.begin());
 			auto original = std::find(records.begin(), records.end(), record);
 			Require(original != records.end(), "Packed instance record changed");
-			const auto fade = std::bit_cast<float>(fades[(eye * capacity + instance) * 4 + 3]);
+			const auto fade = std::bit_cast<float>(fades[(eye * capacity + instance) * 6 + 3]);
 			Require(fade == (original == records.begin() ? .125f : .875f), "Sparse source fade changed");
+			const float x = original == records.begin() ? 0.0f : original == records.begin() + 1 ? 4.0f :
+			                                                                                       -.5f;
+			for (UINT time = 0; time < 2; ++time) {
+				const float angle = .4f * (x * -.0078125f + (time == 0 ? 4.25f : 3.75f));
+				const float scalar = (std::sin(3.14159265358979323846f * std::sin(angle)) + std::sin(6.28318530717958647692f * std::sin(angle))) * .3f + .2f * std::cos(3.14159265358979323846f * std::cos(angle));
+				Require(std::abs(std::bit_cast<float>(fades[(eye * capacity + instance) * 6 + 4 + time]) - scalar) < 1e-5f, "Precomputed wind differs from the native formula");
+			}
 		}
 		Require(compacted[(eye * capacity + 3) * 8] == 0xdeadbeef, "Dispatch wrote beyond survivor count");
 	}
 	values = dispatch(true, false, false, false);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[eye * 8 + 4] == 2, "Frustum culling retained an outside instance or lost a visible one");
-	auto counts = read(counters.Get());
+	counts = read(counters.Get());
 	Require(counts[0] == 3 * eyes && counts[1] == eyes, "Frustum diagnostics do not reconcile");
 	values = dispatch(true, false, true, false);
 	Require(values[4] == 0, "Occluded grass survived");
@@ -191,8 +202,21 @@ void RunCullingShader(bool vr)
 		Require(values[12] == 2, "Grass Hi-Z crossed the eye seam");
 	counts = read(counters.Get());
 	Require(counts[3] == 2, "Hi-Z diagnostics do not reconcile");
+	Require(counts[10] == 2 * eyes && counts[11] == 0 && counts[18] > 0, "Hi-Z eligible and depth-cell diagnostics do not reconcile");
+	if (vr)
+		Require(counts[16] == 2, "Uncovered VR eye depth was not classified");
 	values = dispatch(true, false, false, true);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[(2 * eyes + eye) * 8 + 4] == 2 && values[eye * 8 + 4] == 0, "Far LOD selection lost or duplicated instances");
+	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .7f });
+	params.SetVariable("CollisionEnabled", 1u);
+	for (float distance : { 0.0f, 1.0f, 2048.0f }) {
+		params.SetVariable("CollisionDistance", distance);
+		values = dispatch(true, false, false, false);
+		for (UINT eye = 0; eye < eyes; ++eye)
+			Require(values[eye * 8 + 4] == (distance == 2048 ? 3u : 2u), "Collision distance did not tighten only unreachable collision bounds");
+	}
+	params.SetVariable("CollisionEnabled", 0u);
+	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .05f });
 	params.SetVariable("MinPixels", 64.0f);
 	params.SetVariable("FullPixels", 128.0f);
 	values = dispatch(true, true, false, false);
@@ -218,16 +242,55 @@ void RunCullingShader(bool vr)
 	fades = read(extras.Get());
 	for (UINT eye = 0; eye < eyes; ++eye)
 		for (UINT instance = 0; instance < 3; ++instance)
-			Require(std::bit_cast<float>(fades[(eye * capacity + instance) * 4 + 3]) < 0, "Simple shading flag lost fade magnitude");
+			Require(std::bit_cast<float>(fades[(eye * capacity + instance) * 6 + 3]) < 0, "Simple shading flag lost fade magnitude");
 	params.SetVariable("SimpleShadingPixelSize", 0.0f);
 	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, 1 });
 	values = dispatch(false, false, true, false);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[eye * 8 + 4] == 3, "Near-plane-intersecting bounds were falsely occluded");
+	counts = read(counters.Get());
+	Require(counts[12] == 3 * eyes, "Near-plane projection failures were not classified");
 	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, std::numeric_limits<float>::quiet_NaN() });
 	values = dispatch(true, false, true, false);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[eye * 8 + 4] == 3, "Invalid bounds failed to retain grass");
 	counts = read(counters.Get());
 	Require(counts[7] == 3 * eyes, "Invalid-bound diagnostics do not reconcile");
+	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .05f });
+	D3D11ShaderTest::ConstantBuffer frustum(device.Get(), reflection.Get(), "FrustumParameters");
+	std::array<std::array<float, 4>, 12> sharedPlanes{};
+	for (auto& plane : sharedPlanes) plane = { 0, 0, 0, 1 };
+	sharedPlanes[0] = { 1, 0, 0, .1f };
+	sharedPlanes[6] = { -1, 0, 0, 1 };
+	frustum.SetVariable("CullingPlanes", sharedPlanes);
+	frustum.SetVariable("CullingPlanesValid", 1u);
+	frustum.Bind(context.Get());
+	values = dispatch(true, false, false, false);
+	Require(values[4] == 2 && (!vr || values[12] == 2), "Shared per-eye planes changed visibility");
+	compacted = read(output.Get());
+	const auto contains = [&](UINT eye, const Record& record) {
+		for (UINT instance = 0; instance < values[eye * 8 + 4]; ++instance)
+			if (std::equal(record.begin(), record.end(), compacted.begin() + (eye * capacity + instance) * 8))
+				return true;
+		return false;
+	};
+	Require(contains(0, records[1]) && !contains(0, records[2]), "Left eye did not use its shared frustum");
+	if (vr)
+		Require(!contains(1, records[1]) && contains(1, records[2]), "Right eye used the left frustum");
+	frustum.SetVariable("CullingPlanesValid", 0u);
+	frustum.Bind(context.Get());
+	std::array<Slice, 2> sparse{ Slice{ 2, 1, 1, 0, { 0, 0, 0, .625f } }, Slice{} };
+	context->UpdateSubresource(table.Get(), 0, nullptr, sparse.data(), 0, 0);
+	params.SetVariable("SliceCount", 1u);
+	params.SetVariable("InstanceCount", 1u);
+	values = dispatch(false, false, false, false);
+	compacted = read(output.Get());
+	fades = read(extras.Get());
+	for (UINT eye = 0; eye < eyes; ++eye) {
+		Require(values[eye * 8 + 4] == 1 && std::equal(records[2].begin(), records[2].end(), compacted.begin() + eye * capacity * 8), "Filtered slices lost their raw record offset");
+		Require(std::bit_cast<float>(fades[eye * capacity * 6 + 3]) == .625f, "Filtered slice lost its fade");
+	}
+	context->UpdateSubresource(table.Get(), 0, nullptr, slices.data(), 0, 0);
+	params.SetVariable("SliceCount", 2u);
+	params.SetVariable("InstanceCount", 3u);
 	if (vr) {
 		params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .05f });
 		stereo->SetVariable("StereoEnabled", 0.0f);

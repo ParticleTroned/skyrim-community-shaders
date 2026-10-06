@@ -6,11 +6,15 @@
 #include "Globals.h"
 #include "GpuPass.h"
 #include "GrassD3DState.h"
+#include "GrassFrustum.h"
 #include "GrassHiZ.h"
+#include "GrassRuntime.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "TruePBR.h"
 #include "Util.h"
 #include "Utils/LazyShader.h"
+#include <DirectXPackedVector.h>
 
 #include <bit>
 #include <cstring>
@@ -21,9 +25,15 @@
 
 namespace
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	inline constexpr UINT kCullUAVCount = 4;
+#else
+	inline constexpr UINT kCullUAVCount = 3;
+#endif
 	struct Lifetime
 	{
 		std::atomic_bool alive{ true };
+		std::atomic_uint64_t generation{ 0 };
 		std::unordered_map<RE::BSGraphics::VertexBuffer*, float> birthTimes;
 	};
 	struct Group
@@ -33,7 +43,10 @@ namespace
 		uint32_t count;
 		float fade;
 		bool visible;
-		std::vector<uint8_t> bytes;
+		std::shared_ptr<const std::vector<uint8_t>> bytes;
+		std::array<float, 3> lo{}, hi{};
+		float minVariance = 0, maxVariance = 0, maxBasisNorm = 0;
+		bool boundsKnown = false;
 	};
 	struct Source
 	{
@@ -44,7 +57,9 @@ namespace
 		RE::BSGraphics::TriShape* mesh;
 		winrt::com_ptr<ID3D11Buffer> vertices, indices;
 		uint64_t descriptor, flags;
-		uint32_t triangles, windTimer, capturedFrame;
+		uint32_t triangles, vertexCount, vertexBytes, indexBytes, capturedFrame;
+		uint64_t generation = 0;
+		uint64_t cpuRecordBytes = 0;
 		float wavePeriod, renderDistance;
 		RE::NiPoint3 origin;
 		std::vector<RE::BSLight*> lights;
@@ -59,6 +74,13 @@ namespace
 		std::array<float, 4> originFade;
 	};
 	static_assert(sizeof(Slice) == 32);
+	struct FrustumParameters
+	{
+		std::array<std::array<float, 4>, 12> planes{};
+		uint32_t valid = 0;
+		std::array<uint32_t, 3> padding{};
+	};
+	static_assert(sizeof(FrustumParameters) == 208);
 	struct Parameters
 	{
 		uint32_t instances, slices, capacity, eyes;
@@ -70,13 +92,17 @@ namespace
 		std::array<float, 4> depthScale;
 		float meshCostBias, costBiasStartDistance, invisibleFadeCull, renderDistance;
 		float edgeFadeStart, simpleShadingPixelSize, qualityRadius, meshWeight;
-		uint32_t overrideDistance, padding0 = 0, padding1 = 0, padding2 = 0;
+		uint32_t overrideDistance;
+		float collisionDistance;
+		uint32_t padding1 = 0, padding2 = 0;
 	};
 	struct DrawConstants
 	{
-		uint32_t enabled, eye, base, padding = 0;
+		uint32_t enabled, eye, base;
+		float collisionDistance;
 		std::array<float, 4> origin;
 	};
+	static_assert(sizeof(DrawConstants) == 32 && offsetof(DrawConstants, collisionDistance) == 12);
 	struct Mesh
 	{
 		RE::NiPointer<RE::NiNode> owner;
@@ -91,6 +117,39 @@ namespace
 		Native,
 		Batched
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	inline constexpr uint32_t kDiagnosticCounterCount = 19;
+	enum class CaptureRejection : size_t
+	{
+		Unavailable,
+		Geometry,
+		Source,
+		Mesh,
+		Fade,
+		GroupCapacity,
+		GroupBuffer,
+		Empty,
+		FrameCapacity,
+		Allocation,
+		Stale,
+		Destroyed,
+		Count
+	};
+	enum class DrawRejection : size_t
+	{
+		Shader,
+		Capacity,
+		DepthTarget,
+		Destroyed,
+		Regenerated,
+		Resources,
+		Layout,
+		GeometryConstants,
+		StereoConstants,
+		Viewport,
+		Count
+	};
+#endif
 	struct PassKey
 	{
 		uint32_t pass, vertex, pixel, extra;
@@ -105,7 +164,99 @@ namespace
 		std::vector<Source> sources;
 		uint32_t instances = 0;
 		std::unordered_map<PassKey, Outcome, PassHash> outcomes;
+		std::unique_ptr<Buffer> records;
+		uint32_t recordsCapacity = 0;
+		bool recordsDirty = true;
+		uint32_t dirtyFirstInstance = 0;
 	};
+	size_t RecordLayoutHash(const Bucket& bucket)
+	{
+		size_t value = bucket.instances;
+		const auto combine = [&](size_t item) {
+			value ^= item + 0x9e3779b9 + (value << 6) + (value >> 2);
+		};
+		combine(bucket.sources.size());
+		for (const auto& source : bucket.sources) {
+			combine(std::hash<RE::BSMultiStreamInstanceTriShape*>{}(source.identity));
+			combine(std::hash<uint64_t>{}(source.generation));
+			combine(source.groups.size());
+			for (const auto& group : source.groups) {
+				combine(std::hash<RE::BSGraphics::VertexBuffer*>{}(group.identity));
+				combine(group.count);
+				combine(std::hash<ID3D11Buffer*>{}(group.buffer.get()));
+				combine(std::hash<const std::vector<uint8_t>*>{}(group.bytes.get()));
+			}
+		}
+		return value;
+	}
+	bool SameRecords(const Bucket& current, const Bucket& previous)
+	{
+		if (current.sources.size() != previous.sources.size() || current.instances != previous.instances)
+			return false;
+		for (size_t i = 0; i < current.sources.size(); ++i) {
+			const auto& a = current.sources[i];
+			const auto& b = previous.sources[i];
+			if (a.identity != b.identity || a.generation != b.generation || a.groups.size() != b.groups.size())
+				return false;
+			for (size_t j = 0; j < a.groups.size(); ++j) {
+				const auto& x = a.groups[j];
+				const auto& y = b.groups[j];
+				if (x.identity != y.identity || x.count != y.count || x.buffer != y.buffer || x.bytes != y.bytes)
+					return false;
+			}
+		}
+		return true;
+	}
+	uint32_t SharedRecordPrefix(const Bucket& current, const Bucket& previous)
+	{
+		uint32_t prefix = 0;
+		for (size_t i = 0; i < std::min(current.sources.size(), previous.sources.size()); ++i) {
+			const auto& a = current.sources[i];
+			const auto& b = previous.sources[i];
+			if (a.identity != b.identity || a.generation != b.generation)
+				break;
+			for (size_t j = 0; j < std::min(a.groups.size(), b.groups.size()); ++j) {
+				const auto& x = a.groups[j];
+				const auto& y = b.groups[j];
+				if (x.identity != y.identity || x.count != y.count || x.buffer != y.buffer || x.bytes != y.bytes)
+					return prefix;
+				prefix += x.count;
+			}
+			if (a.groups.size() != b.groups.size())
+				break;
+		}
+		return prefix;
+	}
+	void CacheRootBounds(Group& group, const void* bytes)
+	{
+		if (!bytes || !group.count)
+			return;
+		group.lo.fill(std::numeric_limits<float>::max());
+		group.hi.fill(std::numeric_limits<float>::lowest());
+		group.minVariance = std::numeric_limits<float>::max();
+		group.maxVariance = std::numeric_limits<float>::lowest();
+		for (uint32_t instance = 0; instance < group.count; ++instance) {
+			std::array<uint16_t, 16> packed{};
+			std::memcpy(packed.data(), static_cast<const uint8_t*>(bytes) + instance * GrassPolicy::kRecordBytes, sizeof(packed));
+			std::array<float, 16> record{};
+			for (size_t i = 0; i < record.size(); ++i) {
+				record[i] = DirectX::PackedVector::XMConvertHalfToFloat(packed[i]);
+				if (!std::isfinite(record[i]))
+					return;
+			}
+			for (size_t axis = 0; axis < group.lo.size(); ++axis) {
+				group.lo[axis] = std::min(group.lo[axis], record[axis]);
+				group.hi[axis] = std::max(group.hi[axis], record[axis]);
+			}
+			group.minVariance = std::min(group.minVariance, record[13]);
+			group.maxVariance = std::max(group.maxVariance, record[13]);
+			float norm = 0;
+			for (size_t i = 4; i <= 12; ++i)
+				norm += record[i] * record[i];
+			group.maxBasisNorm = std::max(group.maxBasisNorm, std::sqrt(norm));
+		}
+		group.boundsKnown = true;
+	}
 	bool Finite(const RE::NiPoint3& point) { return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z); }
 	bool Identity(const RE::NiTransform& transform)
 	{
@@ -117,11 +268,28 @@ namespace
 					return false;
 		return true;
 	}
+	bool CurrentContract(const Source& source)
+	{
+		if (!source.property || source.property->material != source.material || source.property->flags.underlying() != source.flags)
+			return false;
+		const auto& data = GrassRuntime::GetPropertyData(static_cast<const RE::BSGrassShaderProperty*>(source.property.get()), globals::game::isVR);
+		return GrassRuntime::MatchesPersistentProperty(data, source.wavePeriod, source.lightMask, source.lights);
+	}
 	bool Compatible(const Source& a, const Source& b)
 	{
-		return a.vertices == b.vertices && a.indices == b.indices && a.material == b.material &&
+		if (!CurrentContract(a) || !CurrentContract(b))
+			return false;
+		const bool sameBuffers = a.vertices == b.vertices && a.indices == b.indices;
+		const bool sameModelMesh = !a.model.empty() && a.model == b.model &&
+		                           a.vertexCount == b.vertexCount && a.vertexBytes == b.vertexBytes && a.indexBytes == b.indexBytes;
+		const bool sameMaterial = a.material == b.material ||
+		                          (!globals::features::truePBR.IsPBRGrassMaterial(a.material) &&
+									  !globals::features::truePBR.IsPBRGrassMaterial(b.material) &&
+									  a.property->GetBaseTexture() == b.property->GetBaseTexture() &&
+									  a.material->DoIsCopy(b.material) && b.material->DoIsCopy(a.material));
+		return (sameBuffers || sameModelMesh) && sameMaterial &&
 		       a.descriptor == b.descriptor && a.flags == b.flags && a.triangles == b.triangles &&
-		       a.lights == b.lights && a.lightMask == b.lightMask && a.renderDistance == b.renderDistance && a.wavePeriod == b.wavePeriod && a.windTimer == b.windTimer && a.model == b.model &&
+		       a.lights == b.lights && a.lightMask == b.lightMask && a.renderDistance == b.renderDistance && a.wavePeriod == b.wavePeriod && a.model == b.model &&
 		       a.bound.radius == b.bound.radius && a.bound.center == b.bound.center;
 	}
 	size_t CompatibilityHash(const Source& source)
@@ -130,9 +298,16 @@ namespace
 		const auto combine = [&]<class T>(const T& item) {
 			value ^= std::hash<T>{}(item) + 0x9e3779b9 + (value << 6) + (value >> 2);
 		};
-		combine(source.vertices.get());
-		combine(source.indices.get());
-		combine(source.material);
+		if (source.model.empty()) {
+			combine(source.vertices.get());
+			combine(source.indices.get());
+		} else {
+			combine(source.vertexCount);
+			combine(source.vertexBytes);
+			combine(source.indexBytes);
+		}
+		if (source.model.empty())
+			combine(source.material);
 		combine(source.descriptor);
 		combine(source.flags);
 		combine(source.triangles);
@@ -214,8 +389,13 @@ namespace
 	{
 		static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::NiCullingProcess* process, int32_t index)
 		{
+			auto& renderer = globals::features::grassOptimizations.GetRenderer();
+			if (process && !process->doCustomCullPlanes && renderer.CaptureVisible(shape, false)) {
+				process->AppendVirtual(*shape, index);
+				return;
+			}
 			original(shape, process, index);
-			if (globals::features::grassOptimizations.GetRenderer().CaptureVisible(shape)) {
+			if (renderer.CaptureVisible(shape)) {
 				const auto& groups = shape->GetMultiStreamTrishapeRuntimeData().instanceGroups;
 				if (std::none_of(groups.begin(), groups.end(), [](auto group) { return group && group->isVisible && group->instanceCount; }))
 					process->AppendVirtual(*shape, index);
@@ -230,6 +410,34 @@ namespace
 			globals::features::grassOptimizations.GetRenderer().RemoveShape(shape);
 			// Preserve the deleting destructor's allocation flags across the hook.
 			return original(shape, flags);
+		}
+		static inline REL::Relocation<decltype(thunk)> original;
+	};
+	struct RemovedGroupHook
+	{
+		static void thunk(RE::BSMultiStreamInstanceTriShape* shape, uint32_t group)
+		{
+			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape);
+			original(shape, group);
+		}
+		static inline REL::Relocation<decltype(thunk)> original;
+	};
+	struct AddedGroupHook
+	{
+		static uint32_t thunk(RE::BSMultiStreamInstanceTriShape* shape, uint32_t count, uint16_t& data, uint32_t arg, float fade)
+		{
+			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape);
+			return original(shape, count, data, arg, fade);
+		}
+		static inline REL::Relocation<decltype(thunk)> original;
+	};
+	struct GeneratedHook
+	{
+		static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSTArray<uint32_t>& instances)
+		{
+			original(shape, instances);
+			globals::features::grassOptimizations.GetRenderer().MarkGenerated(shape);
+			globals::features::grassOptimizations.GetRenderer().CaptureVisible(shape);
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};
@@ -251,9 +459,13 @@ namespace
 struct GrassBucketRenderer::Impl
 {
 	std::mutex captureMutex;
-	std::unordered_map<RE::BSMultiStreamInstanceTriShape*, Source> pending;
+	std::unordered_map<RE::BSMultiStreamInstanceTriShape*, Source> residents;
+	uint64_t residentRevision = 0, preparedRevision = UINT64_MAX;
+	uint64_t cpuRecordBytes = 0;
+	bool preparedBatching = false;
 	std::unordered_map<RE::BSMultiStreamInstanceTriShape*, std::pair<std::shared_ptr<Lifetime>, std::string>> identities;
 	std::vector<Bucket> buckets;
+	std::vector<Bucket> dormantBuckets;
 	std::unordered_map<RE::BSMultiStreamInstanceTriShape*, size_t> admitted;
 	std::unordered_map<std::string, std::unordered_map<uint64_t, std::array<Mesh, 2>>> lodMeshes;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> layouts;
@@ -261,9 +473,13 @@ struct GrassBucketRenderer::Impl
 	winrt::com_ptr<ID3D11DeviceContext1> context;
 	Util::LazyShader<ID3D11ComputeShader> cullShader;
 	GrassHiZ hiZ;
-	std::unique_ptr<Buffer> input, output, extras, arguments, table, parameters, drawConstants, disabled;
+	std::unique_ptr<Buffer> input, output, extras, arguments, table, parameters, drawConstants, disabled, frustumConstants;
+	std::array<float, 152> geometryCPU{};
+	bool geometryCPUValid = false;
+	FrustumParameters frustumData;
 	float nativeRenderDistance = 8000.0f;
 	uint32_t capacity = 0, frame = UINT32_MAX;
+	uint64_t residentRecordBytes = 0;
 	bool installed = false;
 	std::atomic_bool failed{ false };
 	float fadeInSeconds = 0;
@@ -279,19 +495,34 @@ struct GrassBucketRenderer::Impl
 	std::array<bool, 4> pendingReadbacks{};
 	uint32_t counterFrame = UINT32_MAX;
 	bool countersActive = false;
-	std::array<std::atomic_uint64_t, 10> totals{};
+	std::array<std::atomic_uint64_t, kDiagnosticCounterCount> totals{};
 	std::atomic_uint64_t hiZBatches{ 0 }, hiZUnavailable{ 0 };
 	std::atomic_uint64_t nativeDraws{ 0 }, batches{ 0 }, combinedSources{ 0 }, combinedInstances{ 0 }, fallbacks{ 0 }, samples{ 0 }, droppedSamples{ 0 };
+	std::atomic_uint64_t reusedRecordBuckets{ 0 }, uploadedRecordBuckets{ 0 }, uploadedRecordBytes{ 0 };
+	std::atomic_uint64_t persistentBucketFrames{ 0 }, bucketRebuilds{ 0 }, cachedSources{ 0 }, nativeVisibilityBypassed{ 0 };
+	std::atomic_uint64_t coarseRejectedSlices{ 0 }, coarseRejectedInstances{ 0 };
+	std::atomic_uint64_t uncachedRecordBuckets{ 0 };
+	std::atomic_uint64_t captureAttempts{ 0 }, capturedSources{ 0 }, admittedSources{ 0 }, drawAttempts{ 0 };
+	std::atomic_uint64_t unidentifiedModels{ 0 }, sameModelPeers{ 0 }, sameModelCompatible{ 0 };
+	std::array<std::atomic_uint64_t, 7> sameModelMismatches{};
+	std::array<std::atomic_uint64_t, size_t(CaptureRejection::Count)> captureRejections{};
+	std::array<std::atomic_uint64_t, size_t(DrawRejection::Count)> drawRejections{};
+	void RejectCapture(CaptureRejection reason) { ++captureRejections[size_t(reason)]; }
+	void RejectDraw(DrawRejection reason) { ++drawRejections[size_t(reason)]; }
 	void PollCounters();
 #endif
+	bool RefreshSource(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisibility);
+	void EraseResident(RE::BSMultiStreamInstanceTriShape* shape);
 	void PrepareFrame();
+	void ReuseRecordBuffers(std::vector<Bucket>& previousBuckets);
 	void EnsureCapacity(uint32_t instances, uint32_t slices);
 	ID3D11InputLayout* Layout(uint64_t descriptor);
 	void CompileSignature();
 	const std::array<Mesh, 2>& LODMeshes(const Source& source);
 	bool HasBatchShader() const;
+	std::vector<Slice> CullSlices(const Bucket& bucket, float radius, uint32_t eyes, uint32_t& instances);
 	bool DrawBucket(Bucket& bucket, const PassKey& key);
-	void DispatchBucket(const Bucket& bucket, ID3D11ComputeShader* shader, const Parameters& params, ID3D11Buffer* nativeGeometry, UINT first, UINT count);
+	void DispatchBucket(Bucket& bucket, ID3D11ComputeShader* shader, const Parameters& params, ID3D11Buffer* nativeGeometry, UINT first, UINT count);
 	void EmitDraws(const std::array<Mesh, 3>& meshes, ID3D11InputLayout* layout, UINT eyes);
 };
 
@@ -308,9 +539,34 @@ void GrassBucketRenderer::RecordModel(RE::BSMultiStreamInstanceTriShape* shape, 
 		auto& identity = impl->identities[shape];
 		if (!identity.first)
 			identity.first = std::make_shared<Lifetime>();
-		identity.second = path;
+		if (identity.second != path) {
+			identity.second = path;
+			if (auto found = impl->residents.find(shape); found != impl->residents.end()) {
+				found->second.model = identity.second;
+				++impl->residentRevision;
+			}
+		}
 	} catch (const std::bad_alloc&) {
 		logger::warn("Grass model tracking allocation failed; retaining full meshes");
+	}
+}
+void GrassBucketRenderer::MarkGenerated(RE::BSMultiStreamInstanceTriShape* shape)
+{
+	std::scoped_lock lock(impl->captureMutex);
+	impl->EraseResident(shape);
+	++impl->residentRevision;
+	if (auto found = impl->identities.find(shape); found != impl->identities.end() && found->second.first) {
+		++found->second.first->generation;
+		found->second.first->birthTimes.clear();
+	}
+}
+void GrassBucketRenderer::MarkGroupsChanged(RE::BSMultiStreamInstanceTriShape* shape)
+{
+	std::scoped_lock lock(impl->captureMutex);
+	impl->EraseResident(shape);
+	++impl->residentRevision;
+	if (auto found = impl->identities.find(shape); found != impl->identities.end() && found->second.first) {
+		++found->second.first->generation;
 	}
 }
 void GrassBucketRenderer::RemoveShape(RE::BSMultiStreamInstanceTriShape* shape)
@@ -321,89 +577,212 @@ void GrassBucketRenderer::RemoveShape(RE::BSMultiStreamInstanceTriShape* shape)
 			found->second.first->alive.store(false, std::memory_order_release);
 		impl->identities.erase(found);
 	}
-	impl->pending.erase(shape);
+	impl->EraseResident(shape);
+	++impl->residentRevision;
 }
 
-bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shape)
+void GrassBucketRenderer::Impl::EraseResident(RE::BSMultiStreamInstanceTriShape* shape)
+{
+	if (auto found = residents.find(shape); found != residents.end()) {
+		cpuRecordBytes -= found->second.cpuRecordBytes;
+		residents.erase(found);
+	}
+}
+
+bool GrassBucketRenderer::Impl::RefreshSource(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisibility)
+{
+	auto& runtime = shape->GetMultiStreamTrishapeRuntimeData();
+	auto& geometry = shape->GetGeometryRuntimeData();
+	auto property = static_cast<RE::BSGrassShaderProperty*>(geometry.shaderProperty.get());
+	auto& grassData = GrassRuntime::GetPropertyData(property, globals::game::isVR);
+	std::scoped_lock lock(captureMutex);
+	const auto found = residents.find(shape);
+	if (found != residents.end()) {
+		auto& cached = found->second;
+		bool unchanged = cached.lifetime->alive.load(std::memory_order_acquire) &&
+		                 cached.generation == cached.lifetime->generation.load(std::memory_order_acquire) &&
+		                 cached.property.get() == property && cached.material == property->material &&
+		                 cached.mesh == geometry.rendererData && cached.descriptor == std::bit_cast<uint64_t>(geometry.vertexDesc) &&
+		                 cached.origin == shape->world.translate && cached.flags == property->flags.underlying() &&
+		                 cached.bound.center == shape->GetModelData().modelBound.center && cached.bound.radius == shape->GetModelData().modelBound.radius &&
+		                 cached.renderDistance == runtime.renderDistance &&
+		                 GrassRuntime::MatchesPersistentProperty(grassData, cached.wavePeriod, cached.lightMask, cached.lights);
+		size_t groupIndex = 0;
+		for (auto group : runtime.instanceGroups) {
+			if (!group || !group->instanceCount)
+				continue;
+			if (groupIndex >= cached.groups.size()) {
+				unchanged = false;
+				break;
+			}
+			const auto& snapshot = cached.groups[groupIndex++];
+			unchanged &= group->vertexBuffer == snapshot.identity && group->instanceCount == snapshot.count &&
+			             group->vertexBuffer && (!snapshot.buffer || reinterpret_cast<ID3D11Buffer*>(group->vertexBuffer->buffer) == snapshot.buffer.get());
+		}
+		unchanged &= groupIndex == cached.groups.size();
+		if (unchanged && (nativeVisibility || grassData.fadeAlphas.size() >= runtime.instanceGroups.size())) {
+			groupIndex = 0;
+			for (uint32_t index = 0; index < runtime.instanceGroups.size(); ++index) {
+				auto group = runtime.instanceGroups[index];
+				if (!group || !group->instanceCount)
+					continue;
+				auto& snapshot = cached.groups[groupIndex++];
+				const auto born = cached.lifetime->birthTimes.at(snapshot.identity);
+				const float fade = fadeInSeconds > 0 ? std::clamp((globals::state->timer - born) / fadeInSeconds, 0.0f, 1.0f) : 1.0f;
+				if (!nativeVisibility) {
+					group->isVisible = true;
+					grassData.fadeAlphas[uint32_t(index)] = fade;
+				}
+				snapshot.visible = group->isVisible;
+				snapshot.fade = snapshot.visible && index < grassData.fadeAlphas.size() ? grassData.fadeAlphas[uint32_t(index)] : fade;
+				if (!std::isfinite(snapshot.fade))
+					return false;
+			}
+			if (!nativeVisibility)
+				runtime.activeGroupCount = uint32_t(groupIndex);
+			cached.capturedFrame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (diagnostics.load(std::memory_order_relaxed)) {
+				++cachedSources;
+				if (!nativeVisibility)
+					++nativeVisibilityBypassed;
+			}
+#endif
+			return true;
+		}
+	}
+	return false;
+}
+
+bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisibility)
 {
 	auto& feature = globals::features::grassOptimizations;
-	if (!feature.loaded || !feature.IsEnabled() || !impl->installed || impl->failed || !impl->context || !shape)
+	if (!feature.loaded || !feature.IsEnabled())
 		return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (impl->diagnostics.load(std::memory_order_relaxed))
+		++impl->captureAttempts;
+#	define GRASS_CAPTURE_REJECT(reason) (impl->diagnostics.load(std::memory_order_relaxed) ? impl->RejectCapture(CaptureRejection::reason) : void(), false)
+#else
+#	define GRASS_CAPTURE_REJECT(reason) false
+#endif
+	if (!impl->installed || impl->failed || !impl->context || !shape || (!nativeVisibility && (!globals::shaderCache->IsEnabled() || !globals::shaderCache->IsEnableRequested() || !impl->cullShader.get())))
+		return GRASS_CAPTURE_REJECT(Unavailable);
 	try {
 		auto& geometry = shape->GetGeometryRuntimeData();
 		auto& runtime = shape->GetMultiStreamTrishapeRuntimeData();
 		if (!geometry.shaderProperty || geometry.shaderProperty->GetRTTI() != REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSGrassShaderProperty }.get() ||
 			!geometry.rendererData || runtime.instanceSize != 16 || !Identity(shape->world))
-			return false;
+			return GRASS_CAPTURE_REJECT(Geometry);
 		auto property = static_cast<RE::BSGrassShaderProperty*>(geometry.shaderProperty.get());
+		auto& grassData = GrassRuntime::GetPropertyData(property, globals::game::isVR);
+		if (impl->RefreshSource(shape, nativeVisibility))
+			return true;
+		if (!nativeVisibility)
+			return false;
 		Source source{};
 		source.capturedFrame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 		source.identity = shape;
+		{
+			std::scoped_lock lock(impl->captureMutex);
+			auto& identity = impl->identities[shape];
+			if (!identity.first)
+				identity.first = std::make_shared<Lifetime>();
+			source.lifetime = identity.first;
+			source.generation = source.lifetime->generation.load(std::memory_order_acquire);
+			source.model = identity.second;
+		}
 		source.property = geometry.shaderProperty;
 		source.material = property->material;
 		source.mesh = geometry.rendererData;
 		source.vertices.copy_from(reinterpret_cast<ID3D11Buffer*>(source.mesh->vertexBuffer));
 		source.indices.copy_from(reinterpret_cast<ID3D11Buffer*>(source.mesh->indexBuffer));
 		source.descriptor = std::bit_cast<uint64_t>(geometry.vertexDesc);
-		source.lights.assign(property->grassLightData.lights.begin(), property->grassLightData.lights.end());
-		source.lightMask = property->grassLightData.activeLightMask;
+		source.lights.assign(grassData.lightData.lights.begin(), grassData.lightData.lights.end());
+		source.lightMask = grassData.lightData.activeLightMask;
 		source.renderDistance = runtime.renderDistance;
 		source.flags = property->flags.underlying();
-		source.wavePeriod = property->wavePeriod;
-		source.windTimer = property->windTimer;
+		source.wavePeriod = grassData.wavePeriod;
 		source.triangles = shape->GetTrishapeRuntimeData().triangleCount;
+		source.vertexCount = shape->GetTrishapeRuntimeData().vertexCount;
 		source.origin = shape->world.translate;
 		source.bound = shape->GetModelData().modelBound;
 		if (!source.material || !source.vertices || !source.indices || !source.triangles || !Finite(source.origin) ||
 			!std::isfinite(source.renderDistance) || !std::isfinite(source.wavePeriod) ||
 			!Finite(source.bound.center) || !std::isfinite(source.bound.radius) || source.bound.radius <= 0)
-			return false;
+			return GRASS_CAPTURE_REJECT(Source);
 		D3D11_BUFFER_DESC vertices{}, indices{};
 		source.vertices->GetDesc(&vertices);
 		source.indices->GetDesc(&indices);
+		source.vertexBytes = vertices.ByteWidth;
+		source.indexBytes = indices.ByteWidth;
 		const auto stride = GrassPolicy::MeshStride(source.descriptor);
 		if (!stride || !(vertices.BindFlags & D3D11_BIND_VERTEX_BUFFER) || !(indices.BindFlags & D3D11_BIND_INDEX_BUFFER) ||
 			uint64_t(stride) * shape->GetTrishapeRuntimeData().vertexCount > vertices.ByteWidth ||
 			uint64_t(source.triangles) * 6 > indices.ByteWidth)
-			return false;
+			return GRASS_CAPTURE_REJECT(Mesh);
 		uint64_t instances = 0;
 		for (uint32_t index = 0; index < runtime.instanceGroups.size(); ++index) {
 			auto group = runtime.instanceGroups[index];
 			if (!group || !group->instanceCount)
 				continue;
 			if (!group->vertexBuffer ||
-				(group->isVisible && (index >= property->fadeAlphas.size() || !std::isfinite(property->fadeAlphas[index]))))
-				return false;
+				(group->isVisible && (index >= grassData.fadeAlphas.size() || !std::isfinite(grassData.fadeAlphas[index]))))
+				return GRASS_CAPTURE_REJECT(Fade);
 			Group snapshot{ group->vertexBuffer, {}, group->instanceCount,
-				group->isVisible ? property->fadeAlphas[index] : 1.0f, group->isVisible, {} };
+				group->isVisible ? grassData.fadeAlphas[index] : 1.0f, group->isVisible, {} };
 			instances += snapshot.count;
 			const auto bytes = uint64_t(snapshot.count) * GrassPolicy::kRecordBytes;
 			if (instances > GrassPolicy::kMaxBatchInstances)
-				return false;
+				return GRASS_CAPTURE_REJECT(GroupCapacity);
 			if (group->vertexBuffer->buffer) {
 				snapshot.buffer.copy_from(reinterpret_cast<ID3D11Buffer*>(group->vertexBuffer->buffer));
 				D3D11_BUFFER_DESC desc{};
 				snapshot.buffer->GetDesc(&desc);
 				if (bytes > desc.ByteWidth || desc.MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED)
-					return false;
+					return GRASS_CAPTURE_REJECT(GroupBuffer);
 			} else {
 				if (!group->vertexBuffer->m_data || bytes > group->vertexBuffer->byteWidth)
-					return false;
+					return GRASS_CAPTURE_REJECT(GroupBuffer);
 				const auto data = static_cast<const uint8_t*>(group->vertexBuffer->m_data);
-				snapshot.bytes.assign(data, data + bytes);
+				std::shared_ptr<const std::vector<uint8_t>> cached;
+				{
+					std::scoped_lock lock(impl->captureMutex);
+					if (auto found = impl->residents.find(shape); found != impl->residents.end() && found->second.generation == source.generation)
+						for (const auto& previous : found->second.groups)
+							if (previous.identity == snapshot.identity && previous.count == snapshot.count) {
+								cached = previous.bytes;
+								break;
+							}
+				}
+				// Instance generation invalidates this snapshot before new records can be drawn.
+				if (cached && cached->size() == bytes)
+					snapshot.bytes = std::move(cached);
+				else
+					snapshot.bytes = std::make_shared<const std::vector<uint8_t>>(data, data + bytes);
+				source.cpuRecordBytes += bytes;
 			}
+			if (group->vertexBuffer->m_data && group->vertexBuffer->byteWidth >= bytes)
+				CacheRootBounds(snapshot, group->vertexBuffer->m_data);
+			else if (snapshot.bytes)
+				CacheRootBounds(snapshot, snapshot.bytes->data());
 			source.groups.push_back(std::move(snapshot));
 		}
 		if (!instances)
-			return false;
+			return GRASS_CAPTURE_REJECT(Empty);
 		std::scoped_lock lock(impl->captureMutex);
-		if (impl->pending.size() >= GrassPolicy::kMaxFrameSources && !impl->pending.contains(shape))
-			return false;
-		auto& identity = impl->identities[shape];
-		if (!identity.first)
-			identity.first = std::make_shared<Lifetime>();
-		source.lifetime = identity.first;
-		source.model = identity.second;
+		if (!source.lifetime->alive.load(std::memory_order_acquire) ||
+			impl->identities.find(shape) == impl->identities.end() ||
+			impl->identities.at(shape).first != source.lifetime)
+			return GRASS_CAPTURE_REJECT(Destroyed);
+		if (source.lifetime->generation.load(std::memory_order_acquire) != source.generation)
+			return GRASS_CAPTURE_REJECT(Stale);
+		if (impl->residents.size() >= GrassPolicy::kMaxFrameSources && !impl->residents.contains(shape))
+			return GRASS_CAPTURE_REJECT(FrameCapacity);
+		const auto existing = impl->residents.find(shape);
+		const uint64_t previousBytes = existing != impl->residents.end() ? existing->second.cpuRecordBytes : 0;
+		if (!GrassPolicy::SnapshotBudgetValid(impl->cpuRecordBytes, previousBytes, source.cpuRecordBytes))
+			return GRASS_CAPTURE_REJECT(GroupCapacity);
 		const auto now = globals::state->timer;
 		std::unordered_map<RE::BSGraphics::VertexBuffer*, float> activeBirthTimes;
 		for (auto& group : source.groups) {
@@ -414,12 +793,20 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 				group.fade = impl->fadeInSeconds > 0 ? std::clamp((now - born) / impl->fadeInSeconds, 0.0f, 1.0f) : 1.0f;
 		}
 		source.lifetime->birthTimes = std::move(activeBirthTimes);
-		impl->pending.insert_or_assign(shape, std::move(source));
+		const uint64_t nextCpuBytes = impl->cpuRecordBytes - previousBytes + source.cpuRecordBytes;
+		impl->residents.insert_or_assign(shape, std::move(source));
+		impl->cpuRecordBytes = nextCpuBytes;
+		++impl->residentRevision;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (impl->diagnostics.load(std::memory_order_relaxed))
+			++impl->capturedSources;
+#endif
 		return true;
-	} catch (const std::bad_alloc&) {
-		logger::warn("Grass snapshot allocation failed; retaining native rendering");
+	} catch (const std::exception& error) {
+		logger::warn("Grass snapshot unavailable; retaining native rendering: {}", error.what());
 	}
-	return false;
+	return GRASS_CAPTURE_REJECT(Allocation);
+#undef GRASS_CAPTURE_REJECT
 }
 
 void GrassBucketRenderer::SetupResources()
@@ -436,6 +823,7 @@ void GrassBucketRenderer::SetupResources()
 			impl->fadeInSeconds = std::isfinite(value) && value > 0 ? value : 0;
 		}
 		DX::ThrowIfFailed(globals::d3d::context->QueryInterface(__uuidof(ID3D11DeviceContext1), impl->context.put_void()));
+		impl->frustumConstants = std::make_unique<Buffer>(ConstantBufferDesc(sizeof(FrustumParameters)), nullptr, "GrassOptimizations::FrustumParameters");
 		impl->parameters = std::make_unique<Buffer>(ConstantBufferDesc(sizeof(Parameters)), nullptr, "GrassOptimizations::Parameters");
 		impl->drawConstants = std::make_unique<Buffer>(ConstantBufferDesc(6 * 256), nullptr, "GrassOptimizations::DrawParameters");
 		D3D11_SUBRESOURCE_DATA data{};
@@ -450,9 +838,9 @@ void GrassBucketRenderer::SetupResources()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		defines.emplace_back("GRASS_DIAGNOSTICS", "1");
 		impl->diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS");
-		impl->gpuCounters = RawBuffer(40, D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Counters");
+		impl->gpuCounters = RawBuffer(kDiagnosticCounterCount * sizeof(uint32_t), D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Counters");
 		D3D11_BUFFER_DESC staging{};
-		staging.ByteWidth = 40;
+		staging.ByteWidth = kDiagnosticCounterCount * sizeof(uint32_t);
 		staging.Usage = D3D11_USAGE_STAGING;
 		staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		for (size_t i = 0; i < impl->readbacks.size(); ++i) {
@@ -487,26 +875,117 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	frameSettings = globals::features::grassOptimizations.GetSettings();
 	frameSettings.Enabled &= globals::features::grassOptimizations.loaded;
 	frameSettings.EnableOcclusionCulling &= globals::features::grassOptimizations.IsGrassHiZAvailable();
-	buckets.clear();
-	admitted.clear();
 	current = nullptr;
-	std::unordered_map<RE::BSMultiStreamInstanceTriShape*, Source> sources;
-	{
-		std::scoped_lock lock(captureMutex);
-		sources.swap(pending);
-	}
 	frame = now;
+	for (auto& bucket : buckets)
+		bucket.outcomes.clear();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	PollCounters();
 #endif
+	std::scoped_lock lock(captureMutex);
+	for (auto it = residents.begin(); it != residents.end();) {
+		if (!it->second.lifetime->alive.load(std::memory_order_acquire) || it->second.generation != it->second.lifetime->generation.load(std::memory_order_acquire) ||
+			!CurrentContract(it->second)) {
+			cpuRecordBytes -= it->second.cpuRecordBytes;
+			it = residents.erase(it);
+			++residentRevision;
+		} else
+			++it;
+	}
 	if (!frameSettings.Enabled || failed)
 		return;
+	for (const auto& bucket : buckets)
+		for (const auto& source : bucket.sources)
+			if (!Compatible(bucket.sources.front(), source))
+				preparedRevision = UINT64_MAX;
+	if (preparedRevision == residentRevision && preparedBatching == frameSettings.CrossCellBatching) {
+		for (auto& bucket : buckets) {
+			for (auto& source : bucket.sources) {
+				const auto& live = residents.at(source.identity);
+				for (size_t i = 0; i < source.groups.size(); ++i) {
+					auto& group = source.groups[i];
+					const float born = live.lifetime->birthTimes.at(group.identity);
+					group.fade = live.capturedFrame == now ? live.groups[i].fade :
+					                                         (fadeInSeconds > 0 ? std::clamp((globals::state->timer - born) / fadeInSeconds, 0.0f, 1.0f) : 1.0f);
+				}
+			}
+		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics.load(std::memory_order_relaxed))
+			++persistentBucketFrames;
+#endif
+		return;
+	}
+	preparedRevision = residentRevision;
+	preparedBatching = frameSettings.CrossCellBatching;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (diagnostics.load(std::memory_order_relaxed))
+		++bucketRebuilds;
+#endif
+	auto previousBuckets = std::move(buckets);
+	for (auto& dormant : dormantBuckets)
+		previousBuckets.push_back(std::move(dormant));
+	dormantBuckets.clear();
+	buckets.clear();
+	residentRecordBytes = 0;
+	admitted.clear();
+	current = nullptr;
+	std::vector<Source> sources;
+	sources.reserve(residents.size());
+	for (const auto& [identity, source] : residents)
+		sources.push_back(source);
+	std::sort(sources.begin(), sources.end(), [](const Source& a, const Source& b) {
+		return std::less<RE::BSMultiStreamInstanceTriShape*>{}(a.identity, b.identity);
+	});
 	std::unordered_multimap<size_t, size_t> compatibleBuckets;
-	for (auto& [identity, source] : sources) {
-		if (source.capturedFrame != now || !source.lifetime->alive.load(std::memory_order_acquire))
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::unordered_map<std::string, size_t> modelRepresentatives;
+#endif
+	for (auto& source : sources) {
+		auto identity = source.identity;
+		if (!source.lifetime->alive.load(std::memory_order_acquire)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (diagnostics.load(std::memory_order_relaxed))
+				RejectCapture(CaptureRejection::Destroyed);
+#endif
 			continue;
+		}
+		if (source.generation != source.lifetime->generation.load(std::memory_order_acquire)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (diagnostics.load(std::memory_order_relaxed))
+				RejectCapture(CaptureRejection::Stale);
+#endif
+			continue;
+		}
 		uint32_t count = 0;
 		for (const auto& group : source.groups) count += group.count;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics.load(std::memory_order_relaxed)) {
+			if (source.model.empty())
+				++unidentifiedModels;
+			else if (auto found = modelRepresentatives.find(source.model); found != modelRepresentatives.end()) {
+				const auto& first = buckets[found->second].sources.front();
+				++sameModelPeers;
+				if (Compatible(first, source))
+					++sameModelCompatible;
+				if (first.vertices != source.vertices)
+					++sameModelMismatches[0];
+				if (first.indices != source.indices)
+					++sameModelMismatches[1];
+				if (first.material != source.material)
+					++sameModelMismatches[2];
+				if (first.descriptor != source.descriptor || first.triangles != source.triangles)
+					++sameModelMismatches[3];
+				if (first.flags != source.flags)
+					++sameModelMismatches[4];
+				if (first.lights != source.lights || first.lightMask != source.lightMask)
+					++sameModelMismatches[5];
+				if (first.renderDistance != source.renderDistance || first.wavePeriod != source.wavePeriod ||
+					first.bound.radius != source.bound.radius || first.bound.center != source.bound.center)
+					++sameModelMismatches[6];
+			}
+		}
+#endif
 		size_t index = buckets.size();
 		const auto hash = CompatibilityHash(source);
 		if (frameSettings.CrossCellBatching) {
@@ -525,7 +1004,76 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 		}
 		buckets[index].instances += count;
 		buckets[index].sources.push_back(std::move(source));
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics.load(std::memory_order_relaxed) && !buckets[index].sources.back().model.empty())
+			modelRepresentatives.try_emplace(buckets[index].sources.back().model, index);
+#endif
 		admitted.emplace(identity, index);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics.load(std::memory_order_relaxed))
+			++admittedSources;
+#endif
+	}
+	ReuseRecordBuffers(previousBuckets);
+}
+
+void GrassBucketRenderer::Impl::ReuseRecordBuffers(std::vector<Bucket>& previousBuckets)
+{
+	std::unordered_multimap<size_t, size_t> previousByRecords;
+	for (size_t i = 0; i < previousBuckets.size(); ++i)
+		if (previousBuckets[i].records)
+			previousByRecords.emplace(RecordLayoutHash(previousBuckets[i]), i);
+	for (auto& bucket : buckets) {
+		const auto [begin, end] = previousByRecords.equal_range(RecordLayoutHash(bucket));
+		for (auto candidate = begin; candidate != end; ++candidate) {
+			auto& previous = previousBuckets[candidate->second];
+			if (!previous.records || previous.recordsCapacity < bucket.instances || !SameRecords(bucket, previous))
+				continue;
+			const uint64_t bytes = uint64_t(previous.recordsCapacity) * GrassPolicy::kRecordBytes;
+			if (bytes > GrassPolicy::kMaxResidentRecordBytes - residentRecordBytes)
+				continue;
+			bucket.records = std::move(previous.records);
+			bucket.recordsCapacity = previous.recordsCapacity;
+			bucket.recordsDirty = previous.recordsDirty;
+			bucket.dirtyFirstInstance = previous.dirtyFirstInstance;
+			residentRecordBytes += bytes;
+			break;
+		}
+	}
+	for (auto& bucket : buckets) {
+		if (bucket.records)
+			continue;
+		for (auto& previous : previousBuckets) {
+			if (!previous.records || previous.recordsCapacity < bucket.instances || previous.sources.empty() ||
+				!Compatible(bucket.sources.front(), previous.sources.front()))
+				continue;
+			const uint64_t bytes = uint64_t(previous.recordsCapacity) * GrassPolicy::kRecordBytes;
+			if (bytes > GrassPolicy::kMaxResidentRecordBytes - residentRecordBytes)
+				continue;
+			const auto shared = SharedRecordPrefix(bucket, previous);
+			bucket.dirtyFirstInstance = previous.recordsDirty ? std::min(shared, previous.dirtyFirstInstance) : shared;
+			bucket.recordsDirty = bucket.dirtyFirstInstance < bucket.instances;
+			bucket.records = std::move(previous.records);
+			bucket.recordsCapacity = previous.recordsCapacity;
+			residentRecordBytes += bytes;
+			break;
+		}
+	}
+	uint64_t dormantBytes = 0;
+	for (auto& previous : previousBuckets) {
+		if (!previous.records ||
+			!std::all_of(previous.sources.begin(), previous.sources.end(), [](const Source& source) {
+				return source.lifetime->alive.load(std::memory_order_acquire);
+			}))
+			continue;
+		const uint64_t bytes = uint64_t(previous.recordsCapacity) * GrassPolicy::kRecordBytes;
+		if (bytes > GrassPolicy::kMaxDormantRecordBytes - dormantBytes ||
+			bytes > GrassPolicy::kMaxResidentRecordBytes - residentRecordBytes)
+			continue;
+		previous.outcomes.clear();
+		dormantBuckets.push_back(std::move(previous));
+		dormantBytes += bytes;
+		residentRecordBytes += bytes;
 	}
 }
 
@@ -538,6 +1086,8 @@ void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass)
 	impl->context->VSSetConstantBuffers(9, 1, &cb);
 	try {
 		impl->PrepareFrame();
+		if (!impl->frameSettings.Enabled)
+			return;
 		auto found = impl->admitted.find(static_cast<RE::BSMultiStreamInstanceTriShape*>(pass->geometry));
 		if (found == impl->admitted.end())
 			return;
@@ -545,6 +1095,11 @@ void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass)
 		impl->currentPass = pass->passEnum;
 		// The representative translation is the one used by the native geometry constants.
 		impl->currentOrigin = pass->geometry->world.translate;
+		impl->geometryCPUValid = false;
+		if (auto shader = *globals::game::currentVertexShader; shader && shader->constantBuffers[2].data) {
+			std::memcpy(impl->geometryCPU.data(), shader->constantBuffers[2].data, globals::game::isVR ? 608 : 352);
+			impl->geometryCPUValid = true;
+		}
 		static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
 		setDirtyStates(0);
 		auto& bucket = impl->buckets[found->second];
@@ -566,9 +1121,9 @@ void GrassBucketRenderer::Impl::EnsureCapacity(uint32_t instances, uint32_t slic
 		return;
 	const auto next = std::bit_ceil(instances);
 	const auto slots = next * (globals::game::isVR ? 6u : 3u);
-	auto nextInput = RawBuffer(next * 32, D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::Input");
+	auto nextInput = RawBuffer(next * GrassPolicy::kRecordBytes, D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::Input");
 	auto nextOutput = RawBuffer(slots * 32, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
-	auto nextExtras = Structured<std::array<float, 4>>(slots, true, false, "GrassOptimizations::Extras");
+	auto nextExtras = Structured<std::array<float, 6>>(slots, true, false, "GrassOptimizations::Extras");
 	auto nextArgs = RawBuffer(192, D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, "GrassOptimizations::IndirectArgs");
 	auto nextTable = Structured<Slice>(std::bit_ceil(slices), false, true, "GrassOptimizations::Slices");
 	input = std::move(nextInput);
@@ -690,33 +1245,110 @@ bool GrassBucketRenderer::Impl::HasBatchShader() const
 	return bound.get() == reinterpret_cast<ID3D11VertexShader*>(shader->shader);
 }
 
+std::vector<Slice> GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, uint32_t eyes, uint32_t& instances)
+{
+	frustumData = {};
+	std::array<GrassFrustum::Planes, 2> planeSets{};
+	bool planesValid = geometryCPUValid;
+	for (uint32_t eye = 0; eye < eyes && planesValid; ++eye) {
+		GrassFrustum::Matrix matrix{};
+		std::copy_n(geometryCPU.begin() + eye * 16, 16, matrix.begin());
+		GrassFrustum::Matrix world{}, camera{}, unjittered{};
+		std::copy_n(geometryCPU.begin() + (eyes == 2 ? 64 : 32) + eye * 16, 16, world.begin());
+		std::memcpy(camera.data(), &globals::game::frameBufferCached.GetCameraViewProj(eye), sizeof(camera));
+		std::memcpy(unjittered.data(), &globals::game::frameBufferCached.GetCameraViewProjUnjittered(eye), sizeof(unjittered));
+		matrix = GrassFrustum::SelectProjection(matrix, world, camera, unjittered);
+		const auto planes = GrassFrustum::Extract(matrix);
+		if (!planes) {
+			planesValid = false;
+			break;
+		}
+		planeSets[eye] = *planes;
+		std::copy(planes->begin(), planes->end(), frustumData.planes.begin() + eye * 6);
+	}
+	frustumData.valid = planesValid;
+	std::vector<Slice> slices;
+	size_t sliceCount = 0;
+	for (const auto& source : bucket.sources) sliceCount += source.groups.size();
+	slices.reserve(sliceCount);
+	instances = 0;
+	uint32_t recordOffset = 0;
+	for (const auto& source : bucket.sources)
+		for (const auto& group : source.groups) {
+			bool visible = true;
+			if (planesValid && frameSettings.FrustumCulling && group.boundsKnown) {
+				const size_t windOffset = eyes == 2 ? 132 : 68, scaleOffset = eyes == 2 ? 148 : 84;
+				float maximumScale = 0;
+				for (size_t axis = 0; axis < 3; ++axis)
+					maximumScale = std::max({ maximumScale, std::abs(1 + group.minVariance * geometryCPU[scaleOffset + axis]), std::abs(1 + group.maxVariance * geometryCPU[scaleOffset + axis]) });
+				const float reach = (source.bound.center.Length() + radius) * maximumScale * group.maxBasisNorm;
+				const float wind = .4f * std::abs(geometryCPU[windOffset + 2]) * std::hypot(geometryCPU[windOffset], geometryCPU[windOffset + 1]);
+				const float padding = reach * (globals::features::grassCollision.loaded && frameSettings.CollisionDistance > 0 ? 3 : 1) + wind;
+				if (std::isfinite(padding) && padding >= 0) {
+					std::array<float, 3> lo{}, hi{};
+					const std::array<float, 3> offset{ source.origin.x - currentOrigin.x, source.origin.y - currentOrigin.y, source.origin.z - currentOrigin.z };
+					for (size_t axis = 0; axis < 3; ++axis) {
+						lo[axis] = group.lo[axis] + offset[axis] - padding;
+						hi[axis] = group.hi[axis] + offset[axis] + padding;
+					}
+					visible = false;
+					for (uint32_t eye = 0; eye < eyes; ++eye)
+						visible |= GrassFrustum::Visible(planeSets[eye], lo, hi);
+				}
+			}
+			if (visible) {
+				slices.push_back({ recordOffset, group.count, instances + group.count, 0, { source.origin.x, source.origin.y, source.origin.z, group.fade } });
+				instances += group.count;
+			} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (diagnostics.load(std::memory_order_relaxed)) {
+					++coarseRejectedSlices;
+					coarseRejectedInstances += group.count;
+				}
+#endif
+			}
+			recordOffset += group.count;
+		}
+	return slices;
+}
+
 bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (diagnostics.load(std::memory_order_relaxed))
+		++drawAttempts;
+#	define GRASS_DRAW_REJECT(reason) (diagnostics.load(std::memory_order_relaxed) ? RejectDraw(DrawRejection::reason) : void(), false)
+#else
+#	define GRASS_DRAW_REJECT(reason) false
+#endif
 	if (failed || !frameSettings.Enabled || bucket.sources.empty() || !HasBatchShader())
-		return false;
+		return GRASS_DRAW_REJECT(Shader);
 	uint64_t sliceCount = 0;
 	for (const auto& source : bucket.sources)
 		sliceCount += source.groups.size();
 	if (!GrassPolicy::BatchCapacityValid(bucket.instances, sliceCount))
-		return false;
+		return GRASS_DRAW_REJECT(Capacity);
 	{
 		winrt::com_ptr<ID3D11DepthStencilView> depth;
 		context->OMGetRenderTargets(0, nullptr, depth.put());
 		if (!depth)
-			return false;
+			return GRASS_DRAW_REJECT(DepthTarget);
 		winrt::com_ptr<ID3D11Resource> target;
 		depth->GetResource(target.put());
 		const auto main = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture;
 		if (target.get() != reinterpret_cast<ID3D11Resource*>(main))
-			return false;
+			return GRASS_DRAW_REJECT(DepthTarget);
 	}
-	for (const auto& source : bucket.sources)
+	for (const auto& source : bucket.sources) {
 		if (!source.lifetime->alive.load(std::memory_order_acquire))
-			return false;
+			return GRASS_DRAW_REJECT(Destroyed);
+		if (source.generation != source.lifetime->generation.load(std::memory_order_acquire))
+			return GRASS_DRAW_REJECT(Regenerated);
+	}
 	std::vector<std::pair<const char*, const char*>> defines;
 	auto shader = cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS");
 	if (!shader || !parameters || !drawConstants)
-		return false;
+		return GRASS_DRAW_REJECT(Resources);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (countersActive && diagnostics.load(std::memory_order_relaxed) && gpuCounters) {
 		defines.emplace_back("GRASS_DIAGNOSTICS", "1");
@@ -752,42 +1384,51 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 	const uint32_t eyes = globals::game::isVR ? 2 : 1;
 	auto layout = Layout(representative.descriptor);
 	if (!layout)
-		return false;
+		return GRASS_DRAW_REJECT(Layout);
 	winrt::com_ptr<ID3D11Buffer> nativeGeometry;
 	UINT first = 0, count = 0;
 	context->VSGetConstantBuffers1(2, 1, nativeGeometry.put(), &first, &count);
 	if (!nativeGeometry || count * 16 < (eyes == 2 ? 608u : 352u))
-		return false;
+		return GRASS_DRAW_REJECT(GeometryConstants);
 	D3D11_BUFFER_DESC nativeDesc{};
 	nativeGeometry->GetDesc(&nativeDesc);
 	if (uint64_t(first) * 16 + (eyes == 2 ? 608 : 352) > nativeDesc.ByteWidth)
-		return false;
+		return GRASS_DRAW_REJECT(GeometryConstants);
 	if (eyes == 2) {
 		winrt::com_ptr<ID3D11Buffer> stereo;
 		UINT stereoFirst = 0, stereoCount = 0;
 		context->VSGetConstantBuffers1(13, 1, stereo.put(), &stereoFirst, &stereoCount);
 		if (!stereo || stereoCount * 16 < 48)
-			return false;
+			return GRASS_DRAW_REJECT(StereoConstants);
 		D3D11_BUFFER_DESC stereoDesc{};
 		stereo->GetDesc(&stereoDesc);
 		if (uint64_t(stereoFirst) * 16 + 48 > stereoDesc.ByteWidth)
-			return false;
+			return GRASS_DRAW_REJECT(StereoConstants);
 	}
-	std::vector<Slice> slices;
-	slices.reserve(size_t(sliceCount));
 	uint32_t prefix = 0;
-	for (const auto& source : bucket.sources)
-		for (const auto& group : source.groups) {
-			slices.push_back({ prefix, group.count, prefix + group.count, 0, { source.origin.x, source.origin.y, source.origin.z, group.fade } });
-			prefix += group.count;
-		}
+	auto slices = CullSlices(bucket, radius, eyes, prefix);
+	if (slices.empty()) {
+		bucket.outcomes[key] = Outcome::Batched;
+		return true;
+	}
+
 	EnsureCapacity(bucket.instances, uint32_t(slices.size()));
+	if (!bucket.records || bucket.recordsCapacity < bucket.instances) {
+		const auto next = std::bit_ceil(bucket.instances);
+		const uint64_t bytes = uint64_t(next) * GrassPolicy::kRecordBytes;
+		if (bytes <= GrassPolicy::kMaxResidentRecordBytes - residentRecordBytes) {
+			bucket.records = RawBuffer(uint32_t(bytes), D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::BucketRecords");
+			bucket.recordsCapacity = next;
+			bucket.recordsDirty = true;
+			residentRecordBytes += bytes;
+		}
+	}
 	D3D11_VIEWPORT viewport{};
 	UINT viewports = 1;
 	context->RSGetViewports(&viewports, &viewport);
 	if (!viewports || !std::isfinite(viewport.Height) || viewport.Height <= 0)
-		return false;
-	Parameters params{ bucket.instances, uint32_t(slices.size()), capacity, eyes,
+		return GRASS_DRAW_REJECT(Viewport);
+	Parameters params{ prefix, uint32_t(slices.size()), capacity, eyes,
 		frameSettings.FrustumCulling, frameSettings.DensityReduction,
 		meshes[1].vertices && meshes[1].indices ? 1u : 0u, meshes[2].vertices && meshes[2].indices ? 1u : 0u,
 		frameSettings.MinPixelSize, frameSettings.FullDetailPixelSize, frameSettings.MinDensity, frameSettings.MeshLODBandPixels,
@@ -798,12 +1439,13 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 		frameSettings.MeshCostBias, frameSettings.CostBiasStartDistance, frameSettings.InvisibleFadeCull,
 		frameSettings.RenderDistanceOverride > 0 ? frameSettings.RenderDistanceOverride : nativeRenderDistance,
 		frameSettings.EdgeFadeStart, frameSettings.SimpleShadingPixelSize, representative.bound.radius,
-		std::sqrt(std::max(1.0f, representative.triangles / 8.0f)), frameSettings.RenderDistanceOverride > 0 ? 1u : 0u };
+		std::sqrt(std::max(1.0f, representative.triangles / 8.0f)), frameSettings.RenderDistanceOverride > 0 ? 1u : 0u, frameSettings.CollisionDistance };
 	if (frameSettings.EnableOcclusionCulling && globals::features::grassOptimizations.IsGrassHiZAvailable() && hiZ.Build(context.get(), frame)) {
 		params.depthWidth = hiZ.Width();
 		params.depthHeight = hiZ.Height();
 		params.depthMips = hiZ.Mips();
 		params.depthScale = hiZ.Scale();
+		params.bias += hiZ.DepthViewportSlack();
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (diagnostics.load(std::memory_order_relaxed) && frameSettings.EnableOcclusionCulling) {
@@ -818,11 +1460,12 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 	for (uint32_t tier = 0; tier < 3; ++tier)
 		for (uint32_t eye = 0; eye < eyes; ++eye) {
 			const auto slot = tier * eyes + eye;
-			const DrawConstants constants{ 1, eye, slot * capacity, 0, params.origin };
+			const DrawConstants constants{ 1, eye, slot * capacity, frameSettings.CollisionDistance, params.origin };
 			std::memcpy(drawBytes.data() + slot * 256, &constants, sizeof(constants));
 			args[slot * 8 + 3] = meshes[tier].indexCount;
 		}
 	Upload(context.get(), *drawConstants, drawBytes.data(), drawBytes.size());
+	Upload(context.get(), *frustumConstants, &frustumData, sizeof(frustumData));
 	Upload(context.get(), *parameters, &params, sizeof(params));
 	Upload(context.get(), *table, slices.data(), slices.size() * sizeof(Slice));
 	context->UpdateSubresource(arguments->resource.get(), 0, nullptr, args.data(), 0, 0);
@@ -838,28 +1481,57 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 	}
 #endif
 	return true;
+#undef GRASS_DRAW_REJECT
 }
 
-void GrassBucketRenderer::Impl::DispatchBucket(const Bucket& bucket, ID3D11ComputeShader* shader, const Parameters& params, ID3D11Buffer* nativeGeometry, UINT first, UINT count)
+void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket, ID3D11ComputeShader* shader, const Parameters& params, ID3D11Buffer* nativeGeometry, UINT first, UINT count)
 {
 #if defined(DEVBENCH_BRIDGE_ENABLED) || defined(TRACY_SUPPORT)
 	CS_GPU_PASS("GrassOptimizations::PrepareAndCull");
 #endif
-	uint32_t offset = 0;
-	for (const auto& source : bucket.sources)
-		for (const auto& group : source.groups) {
-			const UINT bytes = group.count * 32;
-			const D3D11_BOX box{ 0, 0, 0, bytes, 1, 1 };
-			if (group.buffer)
-				context->CopySubresourceRegion(input->resource.get(), 0, offset, 0, 0, group.buffer.get(), 0, &box);
-			else {
-				const D3D11_BOX destination{ offset, 0, 0, offset + bytes, 1, 1 };
-				context->UpdateSubresource(input->resource.get(), 0, &destination, group.bytes.data(), 0, 0);
+	auto& records = bucket.records ? *bucket.records : *input;
+	if (!bucket.records || bucket.recordsDirty) {
+		uint32_t offset = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		uint32_t uploadedBytes = 0;
+#endif
+		for (const auto& source : bucket.sources)
+			for (const auto& group : source.groups) {
+				const UINT bytes = group.count * GrassPolicy::kRecordBytes;
+				if (bucket.records && offset + bytes <= bucket.dirtyFirstInstance * GrassPolicy::kRecordBytes) {
+					offset += bytes;
+					continue;
+				}
+				const D3D11_BOX box{ 0, 0, 0, bytes, 1, 1 };
+				if (group.buffer)
+					context->CopySubresourceRegion(records.resource.get(), 0, offset, 0, 0, group.buffer.get(), 0, &box);
+				else {
+					const D3D11_BOX destination{ offset, 0, 0, offset + bytes, 1, 1 };
+					context->UpdateSubresource(records.resource.get(), 0, &destination, group.bytes->data(), 0, 0);
+				}
+				offset += bytes;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				uploadedBytes += bytes;
+#endif
 			}
-			offset += bytes;
+		bucket.recordsDirty = false;
+		bucket.dirtyFirstInstance = bucket.instances;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics.load(std::memory_order_relaxed)) {
+			++uploadedRecordBuckets;
+			uploadedRecordBytes += uploadedBytes;
+			if (!bucket.records)
+				++uncachedRecordBuckets;
 		}
+#endif
+	} else {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics.load(std::memory_order_relaxed))
+			++reusedRecordBuckets;
+#endif
+	}
 	{
-		GrassD3D::ComputeState restore(context.get());
+		GrassD3D::ComputeState restore(context.get(), kCullUAVCount);
 		auto cb = parameters->resource.get();
 		auto native = nativeGeometry;
 		winrt::com_ptr<ID3D11Buffer> stereo;
@@ -870,9 +1542,11 @@ void GrassBucketRenderer::Impl::DispatchBucket(const Bucket& bucket, ID3D11Compu
 			context->CSSetConstantBuffers1(1, 1, &buffer, &stereoFirst, &stereoCount);
 		}
 		context->CSSetConstantBuffers(0, 1, &cb);
+		auto frustum = frustumConstants->resource.get();
+		context->CSSetConstantBuffers(3, 1, &frustum);
 		context->CSSetConstantBuffers1(2, 1, &native, &first, &count);
-		std::array<ID3D11ShaderResourceView*, 3> srvs{ input->srv.get(), table->srv.get(), params.depthMips ? hiZ.SRV() : nullptr };
-		std::array<ID3D11UnorderedAccessView*, 4> uavs{ output->uav.get(), extras->uav.get(), arguments->uav.get(), nullptr };
+		std::array<ID3D11ShaderResourceView*, 3> srvs{ records.srv.get(), table->srv.get(), params.depthMips ? hiZ.SRV() : nullptr };
+		std::array<ID3D11UnorderedAccessView*, kCullUAVCount> uavs{ output->uav.get(), extras->uav.get(), arguments->uav.get() };
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (shader == diagnosticShader.get())
 			uavs[3] = gpuCounters->uav.get();
@@ -880,7 +1554,7 @@ void GrassBucketRenderer::Impl::DispatchBucket(const Bucket& bucket, ID3D11Compu
 		context->CSSetShaderResources(0, UINT(srvs.size()), srvs.data());
 		context->CSSetUnorderedAccessViews(0, UINT(uavs.size()), uavs.data(), nullptr);
 		context->CSSetShader(shader, nullptr, 0);
-		context->Dispatch((bucket.instances + 63) / 64, 1, 1);
+		context->Dispatch((params.instances + 63) / 64, 1, 1);
 	}
 }
 
@@ -929,8 +1603,8 @@ void GrassBucketRenderer::DrawGroup(RE::BSGraphics::Renderer* renderer, RE::BSGr
 			const bool same = source != bucket.sources.end() && mesh == source->mesh && firstTriangle == 0 && triangles == source->triangles &&
 			                  std::bit_cast<uint64_t>(descriptor) == source->descriptor &&
 			                  std::any_of(source->groups.begin(), source->groups.end(), [&](const Group& group) {
-								  return group.identity == buffer && buffer && (!group.bytes.empty() || reinterpret_cast<ID3D11Buffer*>(buffer->buffer) == group.buffer.get()) &&
-				                         GrassPolicy::NativeCountMatches(globals::game::isVR, group.count, instances);
+								  return group.identity == buffer && buffer && (group.bytes || reinterpret_cast<ID3D11Buffer*>(buffer->buffer) == group.buffer.get()) &&
+				                         GrassPolicy::NativeCountMatches(group.count, instances);
 							  });
 			if (auto found = bucket.outcomes.find(key); found != bucket.outcomes.end()) {
 				if (found->second == Outcome::Batched && same)
@@ -967,7 +1641,7 @@ void GrassBucketRenderer::InstallHooks()
 {
 	if (impl->installed)
 		return;
-	const auto callsite = REL::RelocationID(100847, 107637).address() + REL::Relocate(0x663, 0x64B);
+	const auto callsite = REL::RelocationID(100847, 107637).address() + REL::Relocate(0x663, 0x64B, 0x75B);
 	if (*reinterpret_cast<const uint8_t*>(callsite) != 0xE8) {
 		logger::warn("Grass optimization hook unavailable: native draw instruction differs");
 		return;
@@ -981,10 +1655,13 @@ void GrassBucketRenderer::InstallHooks()
 	originalDraw = SKSE::GetTrampoline().write_call<5>(callsite, DrawGroup);
 	REL::Relocation<uintptr_t> table{ RE::VTABLE_BSMultiStreamInstanceTriShape[0] };
 	VisibleHook::original = table.write_vfunc(REL::Relocate(0x34, 0x34, 0x35), VisibleHook::thunk);
+	AddedGroupHook::original = table.write_vfunc(REL::Relocate(0x3C, 0x3C, 0x3D), AddedGroupHook::thunk);
+	RemovedGroupHook::original = table.write_vfunc(REL::Relocate(0x3D, 0x3D, 0x3E), RemovedGroupHook::thunk);
+	GeneratedHook::original = table.write_vfunc(REL::Relocate(0x3A, 0x3A, 0x3B), GeneratedHook::thunk);
 	DestroyHook::original = table.write_vfunc(0, DestroyHook::thunk);
 	const std::array<uintptr_t, 3> modelCalls{
-		REL::RelocationID(15204, 15372).address() + REL::Relocate(0x2F5, 0x2F5, 0x305),
-		REL::RelocationID(15205, 15373).address() + REL::Relocate(0x62B, 0x597, 0x590),
+		REL::RelocationID(15204, 15372).address() + REL::Relocate(0x2F5, 0x2F5, 0x2F5),
+		REL::RelocationID(15205, 15373).address() + REL::Relocate(0x62B, 0x597, 0x62B),
 		REL::RelocationID(15206, 15374).address() + REL::Relocate(0x25C, 0x25C)
 	};
 	bool valid = true;
@@ -1058,20 +1735,77 @@ void GrassBucketRenderer::Impl::PollCounters()
 		counterFrame = frame;
 	}
 }
-void GrassBucketRenderer::SetDiagnosticsEnabled(bool enabled) { impl->diagnostics.store(enabled, std::memory_order_relaxed); }
+void GrassBucketRenderer::SetDiagnosticsEnabled(bool enabled)
+{
+	impl->diagnostics.store(enabled, std::memory_order_relaxed);
+	impl->hiZ.SetDiagnosticsEnabled(enabled);
+}
 json GrassBucketRenderer::GetDiagnostics() const
 {
 	auto& self = *impl;
 	const auto value = [](const std::atomic_uint64_t& counter) { return counter.load(std::memory_order_relaxed); };
+	static constexpr std::array captureNames{
+		"unavailable", "geometry", "source", "mesh", "fade", "groupCapacity",
+		"groupBuffer", "empty", "frameCapacity", "allocation", "stale", "destroyed"
+	};
+	static constexpr std::array drawNames{
+		"shader", "capacity", "depthTarget", "destroyed", "regenerated", "resources", "layout",
+		"geometryConstants", "stereoConstants", "viewport"
+	};
+	static_assert(captureNames.size() == size_t(CaptureRejection::Count));
+	static_assert(drawNames.size() == size_t(DrawRejection::Count));
+	json captureReasons = json::object(), drawReasons = json::object();
+	for (size_t i = 0; i < captureNames.size(); ++i)
+		captureReasons[captureNames[i]] = value(self.captureRejections[i]);
+	for (size_t i = 0; i < drawNames.size(); ++i)
+		drawReasons[drawNames[i]] = value(self.drawRejections[i]);
+	static constexpr std::array hiZNames{ "resources", "missingTarget", "targetView", "targetMismatch",
+		"targetFormat", "targetLayout", "targetSRV", "sourceTexture", "depthState", "sourceLayout",
+		"viewport", "extent" };
+	static constexpr std::array mismatchNames{ "vertexBuffer", "indexBuffer", "material", "geometry",
+		"flags", "lighting", "parameters" };
+	static_assert(hiZNames.size() == size_t(GrassHiZ::Failure::Count));
+	static_assert(mismatchNames.size() == self.sameModelMismatches.size());
+	json hiZReasons = json::object(), modelMismatches = json::object();
+	const auto hiZCounts = self.hiZ.FailureCounts();
+	for (size_t i = 0; i < hiZNames.size(); ++i)
+		hiZReasons[hiZNames[i]] = hiZCounts[i];
+	for (size_t i = 0; i < mismatchNames.size(); ++i)
+		modelMismatches[mismatchNames[i]] = value(self.sameModelMismatches[i]);
+	const auto observation = self.hiZ.ObservedFailures();
+	const auto lastHiZFailure = self.hiZ.LastFailure();
 	return { { "hookInstalled", self.installed }, { "diagnosticsEnabled", self.diagnostics.load(std::memory_order_relaxed) },
+		{ "captureAttempts", value(self.captureAttempts) }, { "capturedSources", value(self.capturedSources) },
+		{ "admittedSources", value(self.admittedSources) }, { "drawAttempts", value(self.drawAttempts) },
+		{ "captureRejections", std::move(captureReasons) }, { "drawRejections", std::move(drawReasons) },
 		{ "batchedDraws", value(self.batches) }, { "combinedSources", value(self.combinedSources) }, { "combinedInstances", value(self.combinedInstances) },
+		{ "persistentBucketFrames", value(self.persistentBucketFrames) }, { "bucketRebuilds", value(self.bucketRebuilds) },
+		{ "coarseRejectedSlices", value(self.coarseRejectedSlices) }, { "coarseRejectedInstances", value(self.coarseRejectedInstances) },
+		{ "cachedSources", value(self.cachedSources) }, { "nativeVisibilityBypassed", value(self.nativeVisibilityBypassed) },
+		{ "reusedRecordBuckets", value(self.reusedRecordBuckets) }, { "uploadedRecordBuckets", value(self.uploadedRecordBuckets) },
+		{ "uploadedRecordBytes", value(self.uploadedRecordBytes) }, { "uncachedRecordBuckets", value(self.uncachedRecordBuckets) },
 		{ "nativeDraws", value(self.nativeDraws) }, { "fallbacks", value(self.fallbacks) },
 		{ "hiZBatches", value(self.hiZBatches) }, { "hiZDepthFallbacks", value(self.hiZUnavailable) },
+		{ "hiZBuildFailures", std::move(hiZReasons) },
+		{ "hiZLastBuildFailure", lastHiZFailure == GrassHiZ::Failure::Count ? json(nullptr) : json(hiZNames[size_t(lastHiZFailure)]) },
+		{ "hiZFailureState", { { "depthEnabled", observation.depthEnabled }, { "depthFunction", observation.depthFunction },
+								 { "viewportCount", observation.viewportCount }, { "viewportX", observation.viewportX },
+								 { "viewportY", observation.viewportY }, { "viewportWidth", observation.viewportWidth },
+								 { "viewportHeight", observation.viewportHeight }, { "minDepth", observation.minDepth },
+								 { "maxDepth", observation.maxDepth }, { "sourceWidth", observation.sourceWidth },
+								 { "sourceHeight", observation.sourceHeight } } },
+		{ "unidentifiedModels", value(self.unidentifiedModels) }, { "sameModelPeers", value(self.sameModelPeers) },
+		{ "sameModelCompatible", value(self.sameModelCompatible) }, { "sameModelMismatches", std::move(modelMismatches) },
 		{ "gpuSamples", value(self.samples) }, { "droppedGpuSamples", value(self.droppedSamples) },
 		{ "eyeTests", value(self.totals[0]) }, { "frustumRejected", value(self.totals[1]) }, { "densityRejected", value(self.totals[2]) },
 		{ "hiZRejected", value(self.totals[3]) }, { "fullMeshSurvivors", value(self.totals[4]) }, { "middleMeshSurvivors", value(self.totals[5]) },
 		{ "farMeshSurvivors", value(self.totals[6]) }, { "invalidBoundsRetained", value(self.totals[7]) },
 		{ "distanceRejected", value(self.totals[8]) }, { "fadeRejected", value(self.totals[9]) },
+		{ "hiZOutcomes", { { "eligible", value(self.totals[10]) }, { "noPyramid", value(self.totals[11]) },
+							 { "projectionFailed", value(self.totals[12]) }, { "footprintOutside", value(self.totals[13]) },
+							 { "wideFootprint", value(self.totals[14]) }, { "invalidDepth", value(self.totals[15]) },
+							 { "noDepthCoverage", value(self.totals[16]) }, { "depthNotBehind", value(self.totals[17]) },
+							 { "sampledCells", value(self.totals[18]) } } },
 		{ "counterScope", "cumulative while enabled; GPU counters count eye instances and arrive asynchronously" } };
 }
 #endif

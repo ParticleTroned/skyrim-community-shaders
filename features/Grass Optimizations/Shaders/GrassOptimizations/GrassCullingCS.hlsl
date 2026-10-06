@@ -1,3 +1,6 @@
+#include "Common/Math.hlsli"
+#include "GrassOptimizations/GrassInstance.hlsli"
+
 #ifdef VR
 #	define EYES 2
 #else
@@ -15,7 +18,16 @@ cbuffer Parameters : register(b0)
 	float4 DepthUVScale;
 	float MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistance;
 	float EdgeFadeStart, SimpleShadingPixelSize, QualityRadius, MeshWeight;
-	uint OverrideDistance, Padding0, Padding1, Padding2;
+	uint OverrideDistance;
+	float CollisionDistance;
+	uint Padding1, Padding2;
+};
+
+cbuffer FrustumParameters : register(b3)
+{
+	float4 CullingPlanes[12];
+	uint CullingPlanesValid;
+	uint3 CullingPlanesPadding;
 };
 #ifdef VR
 cbuffer StereoParameters : register(b1)
@@ -52,7 +64,7 @@ ByteAddressBuffer Records : register(t0);
 StructuredBuffer<Slice> Slices : register(t1);
 Texture2D<float> DepthPyramid : register(t2);
 RWByteAddressBuffer Compacted : register(u0);
-RWStructuredBuffer<float4> Extras : register(u1);
+RWStructuredBuffer<GrassInstanceExtra> Extras : register(u1);
 RWByteAddressBuffer Arguments : register(u2);
 #ifdef GRASS_DIAGNOSTICS
 RWByteAddressBuffer Counters : register(u3);
@@ -60,8 +72,15 @@ RWByteAddressBuffer Counters : register(u3);
 void Count(uint index)
 {
 #ifdef GRASS_DIAGNOSTICS
-	uint unused;
+	uint unused = 0;
 	Counters.InterlockedAdd(index * 4, 1, unused);
+#endif
+}
+void CountN(uint index, uint amount)
+{
+#ifdef GRASS_DIAGNOSTICS
+	uint unused = 0;
+	Counters.InterlockedAdd(index * 4, amount, unused);
 #endif
 }
 float2 Unpack(uint value) { return float2(f16tof32(value), f16tof32(value >> 16)); }
@@ -92,6 +111,17 @@ bool Outside(float4 clip, float radius, uint eye)
 	[unroll] for (uint i = 0; i < 6; ++i) if (distances[i] < -radius * length(planes[i].xyz)) return true;
 	return false;
 }
+
+bool OutsideCullingPlanes(float3 center, float radius, uint eye)
+{
+	bool outside = false;
+	if (CullingPlanesValid) {
+		[unroll] for (uint i = 0; i < 6; ++i)
+			outside = outside || dot(CullingPlanes[Eye(eye) * 6 + i], float4(center, 1)) < -radius;
+	} else
+		outside = Outside(mul(WorldViewProj[Eye(eye)], float4(center, 1)), radius, eye);
+	return outside;
+}
 // A cube enclosing the displaced sphere bounds every perspective extremum.
 bool ProjectBounds(float3 center, float radius, uint eye, out float2 lo, out float2 hi, out float nearDepth)
 {
@@ -111,14 +141,20 @@ bool ProjectBounds(float3 center, float radius, uint eye, out float2 lo, out flo
 	}
 	return true;
 }
-bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
+bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out uint cells)
 {
+	reason = 0;
+	cells = 0;
 #ifdef VR
-	if (StereoEnabled != 1 || any(EyeOffsetScale != float2(-.5, .5)))
+	if (StereoEnabled != 1 || any(EyeOffsetScale != float2(-.5, .5))) {
+		reason = 13;
 		return false;
+	}
 #endif
-	if (DepthMips == 0 || any(lo < -1) || any(hi > 1) || nearest <= 0 || nearest > 1)
+	if (DepthMips == 0 || any(lo < -1) || any(hi > 1) || nearest <= 0 || nearest > 1) {
+		reason = 13;
 		return false;
+	}
 	float2 uvLo = float2(lo.x * .5 + .5, .5 - hi.y * .5);
 	float2 uvHi = float2(hi.x * .5 + .5, .5 - lo.y * .5);
 	uvLo *= DepthUVScale.xy;
@@ -131,11 +167,20 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 	DepthPyramid.GetDimensions(mip, width, height, levels);
 	int2 first = clamp(int2(floor(uvLo * float2(width, height))), 0, int2(width, height) - 1);
 	int2 last = clamp(int2(floor(uvHi * float2(width, height))), 0, int2(width, height) - 1);
+	cells = uint(last.x - first.x + 1) * uint(last.y - first.y + 1);
 	float farthest = 0;
 	[loop] for (int y = first.y; y <= last.y; ++y)
 		[loop] for (int x = first.x; x <= last.x; ++x)
 			farthest = max(farthest, DepthPyramid.Load(int3(x, y, mip)));
-	return isfinite(farthest) && nearest > farthest + DepthBias;
+	if (!isfinite(farthest)) {
+		reason = 15;
+		return false;
+	}
+	if (farthest >= 1 - 1e-6)
+		reason = 16;
+	else if (nearest <= farthest + DepthBias)
+		reason = 17;
+	return nearest > farthest + DepthBias;
 }
 [numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
 	if (id.x >= InstanceCount)
@@ -152,7 +197,8 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 	if (left >= SliceCount)
 		return;
 	Slice slice = Slices[left];
-	uint4 a = Records.Load4(id.x * 32), b = Records.Load4(id.x * 32 + 16);
+	uint record = slice.first + id.x - (slice.end - slice.count);
+	uint4 a = Records.Load4(record * 32), b = Records.Load4(record * 32 + 16);
 	float4 instance1 = float4(Unpack(a.x), Unpack(a.y));
 	float4 instance2 = float4(Unpack(a.z), Unpack(a.w));
 	float4 instance3 = float4(Unpack(b.x), Unpack(b.y));
@@ -162,34 +208,25 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 	float3 center = instance1.xyz + mul(rotation, ModelBound.xyz * scale) + slice.originFade.xyz - RepresentativeOrigin.xyz;
 	float norm = sqrt(dot(rotation[0], rotation[0]) + dot(rotation[1], rotation[1]) + dot(rotation[2], rotation[2]));
 	float radius = ModelBound.w * max(abs(scale.x), max(abs(scale.y), abs(scale.z))) * norm;
-	float deformation = .4 * abs(WindVector.z) * length(WindVector.xy);
-	if (CollisionEnabled)
-		deformation += 2 * (length(ModelBound.xyz) + ModelBound.w) * max(abs(scale.x), max(abs(scale.y), abs(scale.z))) * norm;
-	radius += deformation;
 	bool valid = all(isfinite(center)) && isfinite(radius) && radius > 0;
-	float2 lows[EYES], highs[EYES];
-	float nearest[EYES];
-	bool projected[EYES];
-	[unroll] for (uint init = 0; init < EYES; ++init)
-	{
-		projected[init] = false;
-		lows[init] = 0;
-		highs[init] = 0;
-		nearest[init] = 0;
-	}
+	float3 root = instance1.xyz + slice.originFade.xyz - RepresentativeOrigin.xyz;
+	float rootDistance = length(mul(World[0], float4(root, 1)).xyz);
+	float reach = (length(ModelBound.xyz) + ModelBound.w) * max(abs(scale.x), max(abs(scale.y), abs(scale.z))) * norm;
+	float deformation = .4 * abs(WindVector.z) * length(WindVector.xy);
+	if (CollisionEnabled && CollisionDistance > 0 && (!isfinite(rootDistance) || rootDistance <= CollisionDistance + reach))
+		deformation += 2 * reach;
+	radius += deformation;
+	valid = valid && isfinite(radius);
 	float pixels = 1e20;
 	float distance = 0;
 	if (valid) {
 		pixels = 0;
 		[unroll] for (uint eye = 0; eye < EYES; ++eye)
 		{
-			float3 root = instance1.xyz + slice.originFade.xyz - RepresentativeOrigin.xyz;
 			float eyeDistance = length(mul(World[Eye(eye)], float4(root, 1)).xyz);
 			distance = eye == 0 ? eyeDistance : min(distance, eyeDistance);
 			float focal = length(WorldViewProj[Eye(eye)][1].xyz) * ViewHeight * .5;
 			pixels = max(pixels, QualityRadius * max(1, 1 + instance4.y) * focal / max(eyeDistance, 1e-4));
-			if (DepthMips)
-				projected[eye] = ProjectBounds(center, radius, eye, lows[eye], highs[eye], nearest[eye]);
 		}
 	}
 	uint seed = Hash(asuint(instance1.x + slice.originFade.x) ^ Hash(asuint(instance1.y + slice.originFade.y)) ^ a.y);
@@ -206,6 +243,8 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 		tier = 1;
 	if (valid && FarEnabled && pixels < FarPixels + (lodHash - .5) * BandPixels)
 		tier = 2;
+	bool windComputed = false;
+	float2 wind = 0;
 	[unroll] for (uint eye = 0; eye < EYES; ++eye)
 	{
 #ifdef VR
@@ -213,7 +252,7 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 			continue;
 #endif
 		Count(0);
-		if (valid && FrustumEnabled && Outside(mul(WorldViewProj[Eye(eye)], float4(center, 1)), radius, eye)) {
+		if (valid && FrustumEnabled && OutsideCullingPlanes(center, radius, eye)) {
 			Count(1);
 			continue;
 		}
@@ -227,7 +266,6 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 				Count(8);
 				continue;
 			}
-			float3 root = instance1.xyz + slice.originFade.xyz - RepresentativeOrigin.xyz;
 			float nativeDistance;
 #ifdef VR
 			nativeDistance = length(mul(World[0], float4(root, 1)).xyz);
@@ -243,9 +281,27 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 			Count(9);
 			continue;
 		}
-		if (valid && projected[eye] && Hidden(lows[eye], highs[eye], nearest[eye], eye)) {
-			Count(3);
-			continue;
+		if (valid) {
+			Count(10);
+			if (DepthMips) {
+				float2 lo, hi;
+				float nearest;
+				if (ProjectBounds(center, radius, eye, lo, hi, nearest)) {
+					uint reason, cells;
+					bool hidden = Hidden(lo, hi, nearest, eye, reason, cells);
+					CountN(18, cells);
+					if (cells > 9)
+						Count(14);
+					if (reason)
+						Count(reason);
+					if (hidden) {
+						Count(3);
+						continue;
+					}
+				} else
+					Count(12);
+			} else
+				Count(11);
 		}
 		if (!valid)
 			Count(7);
@@ -255,7 +311,15 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye)
 		Compacted.Store4(output * 32, a);
 		Compacted.Store4(output * 32 + 16, b);
 		bool simple = valid && SimpleShadingPixelSize > 0 && pixels < SimpleShadingPixelSize;
-		Extras[output] = float4(slice.originFade.xyz, simple ? -fade : fade);
+		[branch] if (!windComputed)
+		{
+			wind = float2(GrassWindScalar(instance1.xy, WindTimer), GrassWindScalar(instance1.xy, PreviousWindTimer));
+			windComputed = true;
+		}
+		GrassInstanceExtra extra;
+		extra.originFade = float4(slice.originFade.xyz, simple ? -fade : fade);
+		extra.wind = wind;
+		Extras[output] = extra;
 		Count(4 + tier);
 	}
 }

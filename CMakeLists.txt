@@ -1722,6 +1722,8 @@ if(BUILD_CONTROLLER_TESTS)
     endfunction()
 
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
+    add_controller_test(grass_runtime_layout_test GrassRuntimeLayout tests/grass_runtime_layout_test.cpp)
+    target_link_libraries(grass_runtime_layout_test PRIVATE CommonLibSSE::CommonLibSSE)
 
     add_controller_test(
         vr_fps_stabilizer_config_test

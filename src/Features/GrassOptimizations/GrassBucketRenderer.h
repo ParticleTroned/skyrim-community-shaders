@@ -2,7 +2,7 @@
 
 #include <memory>
 
-/** @brief Frame-local renderer retaining GPU buffers and material ownership, never deferred shape dereferences. */
+/** @brief Batches visible grass and retains unchanged GPU instance records across frames. */
 class GrassBucketRenderer
 {
 public:
@@ -14,8 +14,10 @@ public:
 	void PrepareGeometry(RE::BSRenderPass* pass);
 	bool IsHookInstalled() const;
 	void RecordModel(RE::BSMultiStreamInstanceTriShape* shape, const char* path);
+	void MarkGroupsChanged(RE::BSMultiStreamInstanceTriShape* shape);
+	void MarkGenerated(RE::BSMultiStreamInstanceTriShape* shape);
 	void RemoveShape(RE::BSMultiStreamInstanceTriShape* shape);
-	bool CaptureVisible(RE::BSMultiStreamInstanceTriShape* shape);
+	bool CaptureVisible(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisibility = true);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void SetDiagnosticsEnabled(bool enabled);
 	json GetDiagnostics() const;

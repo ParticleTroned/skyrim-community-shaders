@@ -3,12 +3,13 @@
 The feature combines compatible native grass groups across resident cells,
 then uses GPU instance tests and indirect draws. It retains the native
 grass shader geometry contract, placement, native visible-group fades,
-wind, collision and lighting. The master switch defaults to off.
+wind, collision and lighting. The master switch defaults to on.
 
 ## Implementation basis
 
 The bucket, instance compaction, density reduction and middle/far mesh LOD
-design follows [upstream grass optimizations](https://github.com/community-shaders/skyrim-community-shaders/commit/dc11b1af4082ff3200e0518cf463a8b07dc735ca)
+design follows [upstream PR2688](https://github.com/community-shaders/skyrim-community-shaders/pull/2688)
+at [`dc11b1af40`](https://github.com/community-shaders/skyrim-community-shaders/commit/dc11b1af4082ff3200e0518cf463a8b07dc735ca)
 by Anthony (DwemerEngineer). Ported contributions retain his verified
 Git identity in commit co-author trailers.
 The implementation adapts those techniques to CSX's native grass shader
@@ -16,20 +17,45 @@ and collision contracts. Open Shaders' separate Wind feature and its
 replacement grass bending formulas are not included. CSX retains its
 existing wind and collision behavior.
 
-The lifecycle and VR contracts were checked against Open Shaders
+The stereo draw and view-facing normal contracts follow Open Shaders
+[PR630](https://github.com/alandtse/open-shaders/pull/630).
+[PR648](https://github.com/alandtse/open-shaders/pull/648) informs shared
+per-instance work with separate eye outcomes. The lifecycle, runtime
+switching and projection contracts were checked against Open Shaders
 [PR815](https://github.com/alandtse/open-shaders/pull/815),
+[PR816](https://github.com/alandtse/open-shaders/pull/816),
 [PR822](https://github.com/alandtse/open-shaders/pull/822),
 [PR817](https://github.com/alandtse/open-shaders/pull/817),
-[PR752](https://github.com/alandtse/open-shaders/pull/752) and
-[PR812](https://github.com/alandtse/open-shaders/pull/812).
+[PR752](https://github.com/alandtse/open-shaders/pull/752).
 These are reviewed integration references, not wholesale ports. CSX uses
-frame-local GPU snapshots with retained material ownership, native
+resident snapshots with retained material ownership, native
 per-geometry matrices, explicit eye draws and bounded output capacity.
+The Open Shaders VR placement change in PR817 assumes world-space instance
+positions. CSX subtracts the representative origin in its batch offset,
+so the existing per-geometry matrix remains the matching transform.
+
+Open Shaders proposals
+[PR653](https://github.com/alandtse/open-shaders/pull/653),
+[PR812](https://github.com/alandtse/open-shaders/pull/812) and
+[PR824](https://github.com/alandtse/open-shaders/pull/824) informed shared
+padded CPU/GPU frusta, depth-source independence and the reusable SPD
+builder. Those proposals were not merged at the time of this adaptation.
+CSX uses the currently bound main depth target and a grass-owned max-depth
+chain; SSR integration and shared scene-culling resources are not added.
+The AMD SPD shader retains its copyright and license notice.
+
+Universal CommonLib grass properties place their grass-specific fields
+after a 0x160-byte lighting property on SE/AE and a 0x178-byte one on VR.
+The native-tail accessor selects the matching layout before reading fades,
+wind or light data. Reading the desktop fields on VR produces an empty
+fade array and rejects otherwise valid visible groups.
 
 ## Controls
 
-Combining cells and frustum culling default to on inside the disabled
-master switch. Density reduction, mesh LOD and grass Hi-Z default to off.
+The master switch, combining cells, frustum culling, density reduction
+and grass Hi-Z default to on, matching upstream. Mesh LOD defaults to off.
+Existing saved choices are preserved; restoring defaults applies these
+values, with grass Hi-Z disabled when scene Hi-Z is selected.
 Turning density reduction off disables projected-size thinning. Frustum,
 Hi-Z, distance, fade and mesh cost controls remain independent.
 
@@ -49,6 +75,14 @@ Additional upstream controls are available without recompiling shaders:
 | Edge fade start          | 0.85    | Begin fading at this fraction of the effective render distance.                                 |
 | Invisible fade cutoff    | 0       | Skip grass whose combined fade is at or below the threshold.                                    |
 | Simple shading size      | 0       | Keep full shading at zero; otherwise simplify lighting on grass smaller than this pixel radius. |
+| Collision distance       | 2048    | Fade optimized grass collision to zero at this distance; zero disables collision.               |
+
+Collision distance accepts 0–20,480 units, matching screen-space culling
+controls. It requires Grass Collision and retains that feature's local
+collision texture coverage. Increasing the distance changes the fade
+radius within that coverage; it does not enlarge the texture. Native
+fallback draws retain the existing 2,048-unit collision fade. The setting
+applies in SE, AE and VR without recompiling shaders.
 
 Projected quality size uses the model radius and current render height,
 separately from the larger wind/collision bounds used for visibility.
@@ -83,35 +117,62 @@ inactive, retaining the requested setting for a later compatible mode.
 The grass depth pyramid uses only the currently bound main depth target.
 When another feature redirects the depth SRV, a private compatible view
 of the bound main texture avoids a feature dependency. Unsupported views,
-multisampling, nonstandard depth comparisons and invalid viewport
-dimensions retain grass. It does
+multisampling, unsupported depth comparisons and invalid viewport
+dimensions retain grass. The engine's equal-depth grass pass is accepted,
+and a near-one viewport depth maximum adds its mapping difference to the
+occlusion bias so visible grass stays conservative. It does
 not consume scene Hi-Z resources or stale prepass snapshots. Conservative
 max-depth reduction retains empty texels, padded edges and eye seams.
 
-Hi-Z stays opt-in until a same-scene A/B shows that avoided drawing costs
-more than constructing and querying the depth pyramid. Rejection counts
-alone do not establish a performance benefit.
+The reusable depth-pyramid builder uses AMD's single-pass downsampler
+after the conservative source reduction. Devices below feature level 11.1,
+unavailable SPD shaders and unsupported chain lengths use the existing
+per-mip path. Both paths stop before packed stereo eyes can mix.
+Grass still uses its own depth source and capture time; scene Hi-Z and
+SSR do not consume this pyramid.
+
+Grass Hi-Z defaults to on, matching upstream. A same-scene A/B determines
+whether avoided drawing costs outweigh constructing and querying the
+depth pyramid; turn it off where it is slower. Rejection counts alone do
+not establish a performance benefit.
 
 ## Compatibility and failure behavior
 
-Cross-cell buckets require matching mesh buffers, material identity,
-vertex layout, bounds, shader flags, lights, wind timing and render
-distance. They are limited to the main scene target; other targets use
+Cross-cell buckets accept shared mesh buffers or the same recorded model
+path with matching vertex/index buffer sizes and vertex counts. Both paths
+also require the same material or equivalent non-PBR materials with the
+same base texture, plus matching vertex layout, bounds, shader flags,
+lights, wave period and render distance. PBR materials retain exact
+identity because the native material comparison does not cover their
+extended fields. They are limited to the
+main scene target; other targets use
 the native renderer. Unresolved model paths retain full meshes. Native
-shape-level scene admission and group visibility checks remain available
-for fallback. Snapshots include resident groups excluded by native group
-culling. A geometry callback issues the combined draw before the native
-group loop; successful buckets suppress member draws. CSX retains native
-CPU submission work instead of the donor queue-suppression patches. It
-cannot revive shapes rejected before the visibility callback or create
-grass outside loaded cells.
+shape-level scene admission remains in place. Cached groups bypass native
+per-group visibility tests while retaining native fades and complete
+fallback submission. CPU group bounds and GPU instance tests share padded
+per-eye frusta, preferring verified unjittered camera matrices. Entire
+off-screen groups skip GPU work; unknown bounds remain candidates.
+A geometry callback issues the combined draw before the native group
+loop; successful buckets suppress member draws. Native submission remains
+available for shader or resource failures. Grass outside loaded cells
+cannot be created by these controls.
+
+Current and previous native wind scalars are computed once per surviving
+instance and shared by both eyes. Vertex shaders retain native bending
+and per-vertex weights. Collision bounds expand only where the configured
+collision distance can reach the grass. View-facing normal orientation
+handles mirrored grass without changing authored spherical normals.
 
 Snapshots retain GPU buffers, or copy pending CPU instance records, and
 shader properties without later dereferencing captured shapes.
 Destruction invalidates a generation
-token, preventing address reuse from admitting old geometry. Stale-frame
-captures are discarded. A source holds at most 262,144 instances and
-frame capture holds at most 4,096 sources. Oversized or unsupported work
+token, preventing address reuse from admitting old geometry. Generation,
+group addition/removal and changed material contracts retire snapshots.
+Unchanged membership retains CPU buckets and GPU records across frames;
+changed buckets reuse compatible storage and upload their changed tail.
+A source holds at most 262,144 instances and
+residency holds at most 4,096 sources and 128 MiB of CPU record snapshots.
+Oversized or unsupported work
 retains native rendering. Oversized slice tables and unsupported native
 vertex layouts reject only their bucket; they do not latch a session-wide
 renderer failure.
@@ -121,6 +182,14 @@ native rendering for the entire pass; a completed bucket suppresses its
 remaining native member draws. Graphics bindings and constant-buffer
 windows are restored with RAII. SE, AE and VR use their respective native
 relocations and VR virtual slot offsets.
+
+The VR 1.4.15 draw call is at relocation `100847 + 0x75B`, calling
+relocation `75479`. The `0x663` desktop offset lies inside another VR
+instruction. Model tracking uses `15204 + 0x2F5`, `15205 + 0x62B` and
+`15206 + 0x25C`; all three call the same model loader. Installation checks
+the call opcode and destination before modifying code and retains native
+rendering on a mismatch. Submitted counts must equal captured logical
+counts; the VR native draw function expands stereo instances internally.
 
 ## DevBench
 
@@ -142,10 +211,45 @@ and cumulative GPU eye-instance outcomes. GPU outcomes distinguish
 frustum, density, distance, fade and Hi-Z rejection, full/middle/far
 survivors, and invalid bounds retained. VR mono passes do not duplicate
 eye geometry.
+`reusedRecordBuckets`, `uploadedRecordBuckets` and `uploadedRecordBytes`
+show whether persistent bucket records actually avoid per-frame copies.
+Resident record buffers are capped at 128 MiB, including at most 16 MiB
+of temporarily invisible buckets. Destroyed shapes cannot retain a dormant
+bucket. `uncachedRecordBuckets` counts draws that use the bounded shared
+scratch buffer instead.
+
+`persistentBucketFrames`, `bucketRebuilds`, `cachedSources` and
+`nativeVisibilityBypassed` identify CPU reuse. `coarseRejectedSlices` and
+`coarseRejectedInstances` count logical instances excluded before the
+per-eye GPU counters. Combine these separately when assessing culling.
+Per-frame native wind timing does not invalidate persistent sources or
+bucket compatibility. Current and previous wind values still come from
+the native draw constants on each dispatch. Wave-period, light-list and
+light-mask changes retain their compatibility checks; shape generation,
+instance groups, meshes and materials retain their lifetime checks.
+`hiZOutcomes` separates eligible eye instances with no pyramid, failed
+near-plane projection, unusable footprints, invalid or uncovered depth,
+and depth that does not hide the nearest bound. `wideFootprint` and
+`sampledCells` measure depth lookup cost; a wide footprint is an
+additional cost marker, not a rejection reason. The mutually exclusive
+outcome counters plus `hiZRejected` account for eligible instances.
 Readback is asynchronous; `gpuSamples` and
 `droppedGpuSamples` expose coverage. `hiZBatches` and
 `hiZDepthFallbacks` distinguish actual depth testing from unavailable
-depth. Counters arrive several frames after their draws.
+depth. `hiZBuildFailures` records which source, depth state or viewport
+guard rejected the pyramid; `hiZFailureState` shows the observed state at
+the failed depth and viewport guards. Counters arrive several frames after
+their draws.
+With diagnostics enabled, `captureAttempts`, `capturedSources` and
+`admittedSources` show progress from native visibility into frame buckets.
+`captureRejections` separates invalid geometry, sources, fades and buffers
+from frame capacity, stale or destroyed captures. `drawAttempts` and
+`drawRejections` identify shader, depth target, constant-buffer, viewport
+and capacity fallbacks, including sources regenerated after capture,
+before any replacement draw. These CPU counters
+are cumulative and are compiled out of production. `sameModelPeers`,
+`sameModelCompatible`, `sameModelMismatches` and `unidentifiedModels`
+show why sources with a recorded model did or did not combine.
 
 Profiler scopes separate preparation/culling, Hi-Z construction and
 indirect drawing. Measure performance with diagnostic counters off;
@@ -155,9 +259,10 @@ under Advanced and Legacy separately.
 
 Counter buffers, readbacks, diagnostic shaders and DevBench actions are
 compiled only with `DEVBENCH_BRIDGE_ENABLED`. Production shader bytecode
-has no diagnostic counter UAV. User controls remain available in normal
-builds. In-game quality, performance and runtime compatibility testing
-remain required before enabling the feature by default.
+has no diagnostic counter UAV, and grass dispatch saves and binds only
+its three rendering UAV slots. User controls remain available in normal
+builds. The upstream defaults are enabled; in-game quality, performance
+and runtime compatibility require separate validation.
 
 ## Validation
 
@@ -173,34 +278,87 @@ fades, frustum and occlusion outcomes, LOD selection, distance/fade
 cutoffs, simple shading flags, invalid/near-plane bounds, mono-eye
 submission, odd depth dimensions and eye seams.
 
-A VR Trace-level startup capture on 2026-10-05 reached zero remaining
-tasks with no logged compilation failures. Its 3,605 distinct managed
-entries match the previous VR inventory; the eight grass entries add
-`GRASS_OPTIMIZATIONS`. The producing source was `516d643b9` and Build ID
-`a885cbc559a256b533a96bbec2a079f1478cb9396ca68cb1906f3fd4443fd74f`.
-The maintained VR inventory preserves that effective configuration.
-Standalone grass-culling and Hi-Z shaders compiled separately and are
-outside the managed inventory. The grass-culling shader emitted a
-duplicate `VR` macro warning, fixed by letting the runtime-aware compiler
-helper supply that define once. PBR grass was absent from this build, so
-combined PBR/optimization cache coverage remains unverified. Skyrim
-exited after the queue reached zero; final live API verification was
-unavailable. This capture establishes compilation coverage, not runtime
-quality or performance.
+A completed VR Trace capture on 2026-10-05 finished 3,635 tasks with zero
+failures. Its 3,580 distinct managed compilations include all eight grass
+entries with `PBR_GRASS=1` and `GRASS_OPTIMIZATIONS`. The producing source
+was `0d0c8855e` with local hook fixes and Build ID `866a1d02976c`; the compact runtime fixture
+preserves the full producer identity and log hash. The updated 3,605-entry
+inventory matches all captured release macro identities and retains 25
+additional lighting variants from earlier captures. Standalone grass
+and scene Hi-Z shaders compile separately, outside the managed cache.
+This proves compilation and macro coverage, not cache-pack reuse or
+in-game quality/performance. Native grass hooks installed successfully;
+the draw and model-hook availability warnings are absent.
 
-The cache builder applies `PBR_GRASS` and `GRASS_OPTIMIZATIONS` only to
+The cache builder applies `PBR_GRASS=1` and `GRASS_OPTIMIZATIONS` only to
 `RunGrass.hlsl` in both shipped and Patka profiles, matching the bundled
 native shader factory for either runtime. It preserves captured entry
 identities and does not leak grass flags to other families. The old
-capture is the inventory basis, not evidence that the combined cache has
-been traced in-game. Grass shader ABI `native-cell-buckets-v4` invalidates
-previous optimization bytecode after the PBR integration.
+capture retains coverage beyond the latest modlist. Grass shader ABI
+`native-cell-buckets-v6` invalidates previous optimization bytecode
+because instance extras now carry current/previous wind and the culling
+shader uses shared frustum constants.
 
-`tools/verify-shader-refactor.ps1` produces identical DXBC against
-landed PBR grass at `39aadfb2a` for all 24 feature-absent flat/VR
-color/depth vertex and pixel permutations, including Grass Lighting and
-PBR. The checker materializes feature include roots from each revision. Production syntax and preprocessing use the actual compiler
-options and forced header with developer defines removed; diagnostic
-resources and actions are absent. This is not a separately linked
-production DLL test. In-game SE/AE/VR quality, streaming, recovery and
-performance tests have not run; no measured speedup is claimed.
+`tools/verify-shader-refactor.ps1` produces identical DXBC for 12
+feature-absent flat/VR vertex permutations against landed commit
+`0d0c8855e`. Pixel shaders intentionally
+change normal orientation. The checker materializes feature include roots
+from each revision. Production syntax and preprocessing passed for eight
+translation units using the actual compiler options and forced header
+with developer defines removed. Diagnostic resources and actions are
+absent; shader reflection verifies that flat/VR production culling has
+no diagnostic counter UAV. This is not a separately linked production
+DLL test or a production runtime measurement.
+
+In-game SE/AE validation, streaming/recovery and visual wind equivalence
+remain untested. No middle/far LOD survivors were observed; authored LOD
+assets are required to validate their appearance and performance.
+
+Read-only inspection of loaded Skyrim VR 1.4.15 instructions and its
+active address-library mapping verified the four native hook callsites
+listed above and their destinations. The hook-fix universal Release DLL,
+`GrassOptimizationPolicy` test and developer AIO archive verification
+passed. The completed replacement-DLL startup capture confirms hook
+activation; streaming and LOD quality remain separate checks.
+
+## Latest VR comparison
+
+The 2026-10-05 Western Watchtower comparison used Advanced scene culling,
+the Play Game profile and clear weather. Every condition reset the
+observed clock to noon, settled at least five seconds and measured eight
+seconds with grass diagnostics and the CSX profiler off. Each core
+condition ran twice, with the second sequence in reverse order. Player
+position matched; headset pose was not recorded.
+
+| Grass optimization condition | CPU ms | fpsVR reported FPS | FPS vs off |
+| ---------------------------- | ------ | ------------------ | ---------- |
+| Off                          | 7.05   | 90.8               | Baseline   |
+| Full density, Hi-Z off       | 8.05   | 98.4               | +8.4%      |
+| Full density, Hi-Z on        | 7.93   | 97.1               | +6.9%      |
+| Density reduction, Hi-Z off  | 8.27   | 108.6              | +19.6%     |
+| Density reduction, Hi-Z on   | 8.37   | 106.8              | +17.6%     |
+
+Full-density batching increased reported FPS while costing approximately
+1 ms more CPU time. Density reduction changes appearance. Grass Hi-Z
+reduced reported FPS by 1.4% at full density and 1.7% with density
+reduction; it is not a win in this scene. fpsVR GPU data were invalid,
+and independent engine throughput was not captured. Separate CSX GPU
+captures measured grass preparation/culling at 0.371 ms without Hi-Z
+and 0.399 ms with it, plus 0.060 ms to build the pyramid. These are pass
+timings, not whole-frame GPU times; the 120 Hz frame budget is 8.33 ms.
+
+The separate wind-active ten-second diagnostic window recorded 1,127
+persistent frames, 15,778 cached-source hits/native visibility bypasses,
+zero bucket rebuilds, zero uploads and zero native fallbacks. No old/new
+wind-guard timing A/B was measured. Grass Hi-Z rejected 5.81% of eligible
+eye instances; most candidates failed its depth comparison. No depth
+build failures or native fallbacks occurred. Supplementary controls
+changed their intended outcomes, but optional mid/far LODs had zero
+survivors and their appearance/performance remain unvalidated.
+
+The measured source was `0d0c8855ed3b1b223ff1c092b71d7914fcb05643`
+with local follow-up changes, using a universal Release DLL with
+DevBench ON and Tracy OFF. Its producer Build ID was
+`d89d9f1968ffa5852c869adb5d3683a42f46c18693ef05172e7f482a42964e8b`.
+The later production-only UAV-slot cleanup was not in this measurement.
+Raw captures, settings receipts and profiler comparisons remain local.

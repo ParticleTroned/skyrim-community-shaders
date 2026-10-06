@@ -174,11 +174,14 @@ false when absent. Existing Unified VR tiers keep their authored settings
 and leave PBR Grass disabled. Its shader descriptor flags in `State.h`
 refresh the source fingerprint while retaining revision 5 and the base.
 
-Grass Optimizations adds optional settings with the master switch defaulting
-to false when absent. Existing Unified VR tiers retain their authored
-settings and do not enable the feature. The runtime contract inventories
-its loader, feature declaration and separate policy/default definitions;
-refreshing the fingerprint preserves revision 5 and the base.
+Grass Optimizations uses upstream defaults when its optional settings are
+absent: the master switch, combining cells, frustum culling, density
+reduction and grass Hi-Z are enabled; mesh LOD is disabled. Scene Hi-Z
+keeps grass Hi-Z inactive. Existing saved grass choices are preserved.
+The added collision distance defaults to 2,048 units and accepts
+0–20,480 units. The runtime contract inventories the loader, feature
+declaration and policy/default definitions; refreshing its fingerprint
+preserves revision 5, the authored base and tier rendering preferences.
 
 Capture settings keep `FrameCaptureEye` authoritative. The base selects
 `Left`, so its legacy `Sequence.Outputs.SeparateEyes` mirror is false.

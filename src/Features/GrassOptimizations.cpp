@@ -13,7 +13,7 @@ namespace GrassPolicy
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, Enabled, CrossCellBatching, FrustumCulling,
 		DensityReduction, MinPixelSize, FullDetailPixelSize, MinDensity, EnableMeshLOD, EnableMidLOD, EnableFarLOD,
 		MidLODPixelSize, FarLODPixelSize, MeshLODBandPixels, EnableOcclusionCulling, OcclusionBias,
-		MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistanceOverride, EdgeFadeStart, SimpleShadingPixelSize)
+		MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistanceOverride, EdgeFadeStart, SimpleShadingPixelSize, CollisionDistance)
 }
 
 GrassOptimizations::GrassOptimizations() : renderer(std::make_unique<GrassBucketRenderer>()) {}
@@ -36,7 +36,7 @@ bool GrassOptimizations::IsGrassHiZAvailable() const
 bool GrassOptimizations::SetSettings(const GrassPolicy::Settings& requested, std::string& error)
 {
 	if (!requested.Valid()) {
-		error = "Invalid grass settings: finite ordered pixel thresholds and bounded density/bias are required";
+		error = "Invalid grass settings: finite ordered pixel thresholds and bounded density, bias and distances are required";
 		return false;
 	}
 	if (requested.EnableOcclusionCulling && !IsGrassHiZAvailable()) {
@@ -92,19 +92,24 @@ void GrassOptimizations::LoadSettings(json& saved)
 		logger::warn("Invalid saved grass settings: {}", error.what());
 	}
 	if (!next.Valid()) {
-		logger::warn("Invalid saved grass settings; retaining default native grass rendering");
+		logger::warn("Invalid saved grass settings; restoring grass optimization defaults");
 		next = {};
 	}
 	if (!IsGrassHiZAvailable())
 		next.EnableOcclusionCulling = false;
 	std::string error;
-	SetSettings(next, error);
+	if (!SetSettings(next, error))
+		logger::warn("Saved grass settings rejected: {}", error);
 }
 void GrassOptimizations::SaveSettings(json& saved) { saved = GetSettings(); }
 void GrassOptimizations::RestoreDefaultSettings()
 {
+	GrassPolicy::Settings next;
+	if (!IsGrassHiZAvailable())
+		next.EnableOcclusionCulling = false;
 	std::string error;
-	SetSettings({}, error);
+	if (!SetSettings(next, error))
+		logger::warn("Grass defaults rejected: {}", error);
 }
 void GrassOptimizations::SetupResources() { renderer->SetupResources(); }
 void GrassOptimizations::ClearShaderCache() { renderer->ClearShaderCache(); }
@@ -147,6 +152,9 @@ void GrassOptimizations::DrawSettings()
 	changed |= ImGui::SliderFloat("Simpler shading below", &next.SimpleShadingPixelSize, 0.0f, 32.0f, "%.1f px");
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Use simpler lighting for very small grass. Zero keeps full shading everywhere.");
+	changed |= ImGui::SliderFloat("Grass collision distance", &next.CollisionDistance, 0.0f, GrassPolicy::kMaxCollisionDistance, "%.0f units");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Fade grass collision with distance. Zero disables collision for optimized grass. Requires Grass Collision; its local collision area still applies.");
 	changed |= ImGui::Checkbox("Use distant grass meshes", &next.EnableMeshLOD);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Use authored middle/far grass LOD meshes when available. Missing or incompatible meshes retain the full mesh.");

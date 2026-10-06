@@ -1,6 +1,7 @@
 #include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
 #include <bit>
+#include <cmath>
 
 #include <array>
 #include <filesystem>
@@ -74,6 +75,11 @@ namespace
 						D3D11_SHADER_INPUT_BIND_DESC binding{};
 						Check(reflection->GetResourceBindingDescByName("GrassBatch", &binding));
 						Require(binding.BindPoint == 9, "Batch constants changed register");
+						if (collision) {
+							D3D11_SHADER_VARIABLE_DESC collisionDistance{};
+							Check(reflection->GetConstantBufferByName("GrassBatch")->GetVariableByName("GrassBatchCollisionDistance")->GetDesc(&collisionDistance));
+							Require(collisionDistance.StartOffset == 12 && collisionDistance.Size == sizeof(float), "Batch collision distance layout changed");
+						}
 						Check(reflection->GetResourceBindingDescByName("GrassInstanceExtras", &binding));
 						Require(binding.BindPoint == 2, "Batch fade changed register");
 						D3D11_SHADER_VARIABLE_DESC world{}, previous{};
@@ -85,6 +91,7 @@ namespace
 	}
 
 #include "grass_culling_gpu.h"
+#include "grass_spd_gpu.h"
 
 }
 
@@ -108,6 +115,10 @@ int main()
 		RunCullingShader(true);
 		RunDepthReduction(false);
 		RunDepthReduction(true);
+		RunSPDReduction(64, 64, 1);
+		RunSPDReduction(128, 128, 2);
+		RunSPDReduction(1024, 128, 2);
+		RunSPDReduction(2048, 512, 1);
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassDepthCS.hlsl", "cs_5_0");
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassInstanceSignatureVS.hlsl", "vs_5_0");
 		for (bool vr : { false, true }) {
@@ -119,8 +130,14 @@ int main()
 			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 			D3D11_SHADER_INPUT_BIND_DESC binding{};
 			Require(FAILED(reflection->GetResourceBindingDescByName("Counters", &binding)), "Production shader retained diagnostic UAV");
+			defines.push_back({ "GRASS_DIAGNOSTICS", "1" });
+			code = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingCS.hlsl", "cs_5_0", defines);
+			reflection.Reset();
+			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+			Check(reflection->GetResourceBindingDescByName("Counters", &binding));
+			Require(binding.BindPoint == 3, "Diagnostic counter UAV changed slot");
 		}
-		std::cout << "16 grass vertex and 8 pixel variants, production isolation, and flat/VR WARP visibility, quality and depth cases passed\n";
+		std::cout << "16 grass vertex and 8 pixel variants, production diagnostic isolation, flat/VR visibility, sparse offsets, shared frusta, native wind, collision bounds, and conservative SPD mip chains passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

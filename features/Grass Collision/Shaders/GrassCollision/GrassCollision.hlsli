@@ -133,10 +133,15 @@ namespace GrassCollision
 		previousCollision = ComputeNormalFromHeights(previousCollisionCenter, previousCollisionX, previousCollisionY, delta) * avgPreviousAmount;
 	}
 
-	void GetDisplacedPosition(VS_INPUT input, float3 position, out float3 displacement, out float3 previousDisplacement)
+	void GetDisplacedPosition(VS_INPUT input, float3 position, out float3 displacement, out float3 previousDisplacement, float collisionDistance = 2048.0)
 	{
+		if (collisionDistance <= 0.0) {
+			displacement = 0.0;
+			previousDisplacement = 0.0;
+			return;
+		}
 		float3 worldPosition = mul(World[0], float4(position.xyz, 1.0)).xyz;
-		float nearFactor = smoothstep(2048.0, 0.0, length(worldPosition));
+		float nearFactor = smoothstep(collisionDistance, 0.0, length(worldPosition));
 
 		if (input.Color.w > 0.0 && nearFactor > 0.0) {
 			float3 worldPositionCentre = mul(World[0], float4(input.InstanceData1.xyz, 1.0)).xyz;

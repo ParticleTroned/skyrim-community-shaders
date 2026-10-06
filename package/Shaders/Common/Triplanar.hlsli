@@ -66,6 +66,13 @@ namespace Triplanar
 		return result;
 	}
 
+	/// Match a decoded normal's tangent axes to the sign of its projection UV scale.
+	float3 OrientNormalForScale(float3 normal, float scale)
+	{
+		normal.xy *= scale < 0 ? -1 : 1;
+		return normal;
+	}
+
 	/// Whiteout-blend a unit projection normal onto a unit world surface normal; the caller must normalize the result.
 	float3 TransformStochasticNormal(float3 normal, float3 surfaceNormal, float3 weights, float noise)
 	{

@@ -160,9 +160,10 @@ identity because the native material comparison does not cover their
 extended fields. They are limited to the
 main scene target; other targets use
 the native renderer. Unresolved model paths retain full meshes. Native
-shape-level scene admission remains in place. Cached groups bypass native
-per-group visibility tests while retaining native fades and complete
-fallback submission. CPU group bounds and GPU instance tests share padded
+shape-level and per-group visibility remain in place, including native
+fade and active-group state. Draw-time shader and resource failures can
+therefore fall back without submitting groups the engine rejected.
+CPU group bounds and GPU instance tests share padded
 per-eye frusta, preferring verified unjittered camera matrices. Entire
 off-screen groups skip GPU work; unknown bounds remain candidates.
 A geometry callback issues the combined draw before the native group
@@ -187,6 +188,11 @@ Unchanged membership retains CPU buckets and GPU records across frames;
 changed buckets reuse compatible storage and upload their changed tail.
 A source holds at most 262,144 instances and
 residency holds at most 4,096 sources and 128 MiB of CPU record snapshots.
+Only confirmed native visibility renews resident age. Generated sources
+receive a 120-frame grace period; unseen residents expire after that
+interval. Visible arrivals can evict older sources not accepted in the
+current frame when the source or CPU-record budget is full. Eviction also
+invalidates prepared buckets; unchanged visible sources retain CPU/GPU reuse.
 Oversized or unsupported work
 retains native rendering. Oversized slice tables and unsupported native
 vertex layouts reject only their bucket; they do not latch a session-wide
@@ -236,8 +242,11 @@ of temporarily invisible buckets. Destroyed shapes cannot retain a dormant
 bucket. `uncachedRecordBuckets` counts draws that use the bounded shared
 scratch buffer instead.
 
-`persistentBucketFrames`, `bucketRebuilds`, `cachedSources` and
-`nativeVisibilityBypassed` identify CPU reuse. `coarseRejectedSlices` and
+`persistentBucketFrames`, `bucketRebuilds` and `cachedSources` identify CPU
+reuse. `expiredResidents` and `pressureEvictions` distinguish age-based
+retirement from visible-source admission under budget pressure.
+`nativeVisibilityBypassed` remains zero for compatibility with existing
+diagnostic consumers. `coarseRejectedSlices` and
 `coarseRejectedInstances` count logical instances excluded before the
 per-eye GPU counters. Combine these separately when assessing culling.
 Per-frame native wind timing does not invalidate persistent sources or
@@ -294,13 +303,22 @@ The focused CTest set passes (10/10): `GrassOptimizationPolicy`,
 compare every mip with a CPU max-depth reference on two dispatches,
 including 8,192-wide packed stereo and 8,192-tall input. They fail with
 the unrestricted SPD tail and pass with bounded SPD plus per-mip tail.
-`python tests/shader_config_generation_test.py` passes (5/5), including
-rejection of new compilation records after a previous completed queue.
+`python tests/shader_config_generation_test.py` passes (6/6), including
+rejection of missing queue evidence and new compilation records after a
+previous completed queue. Residency policy tests cover unconfirmed captures,
+native-visible refresh, expiry and frame-counter wraparound.
+After the visibility/residency corrections,
+`ctest --test-dir build/ALL -C Release -R '^(GrassOptimizationPolicy|GrassRuntimeLayout|GrassBatchShader)$' --output-on-failure`
+passes (3/3). The universal DLL and policy-test target rebuild successfully;
+`GrassOptimizations`, `GrassBucketRenderer` and `MenuDevBenchBridge` pass
+production syntax and forced-header diagnostic-isolation checks again.
 `pwsh ./tools/generate-unified-presets.ps1 -Check` passes without changing
 saved rendering preferences. Five changed runtime units pass production
 compiler syntax checks with a forced-header assertion that DevBench and
 Tracy definitions are absent. The new UI, cost-comparison restoration,
 source-retirement and viewport safeguards have not been tested in game.
+The native-visibility and residency corrections also require a fresh
+runtime comparison; existing performance results predate these changes.
 
 The universal Release DLL builds with DevBench enabled and Tracy disabled.
 Focused policy tests cover finite settings, threshold ordering, native
@@ -397,4 +415,6 @@ with local follow-up changes, using a universal Release DLL with
 DevBench ON and Tracy OFF. Its producer Build ID was
 `d89d9f1968ffa5852c869adb5d3683a42f46c18693ef05172e7f482a42964e8b`.
 The later production-only UAV-slot cleanup was not in this measurement.
+Native visibility preservation and resident expiry also followed this
+measurement; their CPU cost and cache-pressure behavior are not measured.
 Raw captures, settings receipts and profiler comparisons remain local.

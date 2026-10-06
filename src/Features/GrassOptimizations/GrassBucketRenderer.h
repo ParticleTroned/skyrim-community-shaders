@@ -19,7 +19,8 @@ public:
 	void MarkGroupsChanged(RE::BSMultiStreamInstanceTriShape* shape);
 	void MarkGenerated(RE::BSMultiStreamInstanceTriShape* shape);
 	void RemoveShape(RE::BSMultiStreamInstanceTriShape* shape);
-	bool CaptureVisible(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisibility = true);
+	/** @brief Snapshot generated or culled grass without altering native visibility; only accepted groups renew residency. */
+	bool CaptureVisible(RE::BSMultiStreamInstanceTriShape* shape, bool nativeVisible);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void SetDiagnosticsEnabled(bool enabled);
 	json GetDiagnostics() const;

@@ -104,8 +104,10 @@ function Invoke-ShaderConfigGeneration {
             throw "No engine-managed shader source compilations were found in $resolvedLog"
         }
         $queueStates = [regex]::Matches($logContent, '\[ShaderTiming\][^\r\n]*?remaining=(\d+)')
-        if ($queueStates.Count -gt 0 -and
-            ($queueStates[-1].Groups[1].Value -ne '0' -or $compileRecords[-1].Index -gt $queueStates[-1].Index)) {
+        if ($queueStates.Count -eq 0) {
+            throw 'No shader queue-state records were found; preserve a completed log before generating an inventory'
+        }
+        if ($queueStates[-1].Groups[1].Value -ne '0' -or $compileRecords[-1].Index -gt $queueStates[-1].Index) {
             throw 'Shader compilation is still in progress; preserve a completed log before generating an inventory'
         }
 

@@ -44,6 +44,22 @@ int main()
 		require(!GrassPolicy::SnapshotBudgetValid(GrassPolicy::kMaxCpuRecordBytes, 32, 33));
 		require(!GrassPolicy::SnapshotBudgetValid(0, 32, 0));
 		require(!GrassPolicy::SnapshotBudgetValid(UINT64_MAX, 0, 0));
+		GrassPolicy::Residency generated{ 10, {} };
+		for (uint32_t frame = 10; frame <= 10 + GrassPolicy::kResidentIdleFrames; ++frame) {
+			generated.Observe(frame, false);
+			require(!generated.Expired(frame));
+			require(!generated.VisibleInFrame(frame));
+		}
+		require(generated.Expired(11 + GrassPolicy::kResidentIdleFrames));
+		generated.Observe(200, true);
+		require(generated.VisibleInFrame(200) && !generated.Expired(200));
+		generated.Observe(250, false);
+		require(generated.IdleFrames(250) == 50 && !generated.VisibleInFrame(250));
+		require(generated.Expired(201 + GrassPolicy::kResidentIdleFrames));
+		GrassPolicy::Residency wrapped{ UINT32_MAX - 60, {} };
+		require(!wrapped.Expired(59) && wrapped.Expired(60));
+		wrapped.Observe(0, true);
+		require(wrapped.VisibleInFrame(0) && !wrapped.Expired(0));
 		require(GrassPolicy::MeshStride(0x8000000000000087ull) == 28);
 		require(GrassPolicy::MeshStride(0x8000000000000080ull) == 0);
 		require(GrassPolicy::OcclusionAllowed(true, 0));

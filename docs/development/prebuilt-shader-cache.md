@@ -375,8 +375,9 @@ zero before exiting. Preserve the completed `CommunityShaders.log`, then run:
 
 Use `shader-validation.yaml` for an SE capture. Always use the wrapper rather
 than calling `hlslkit-generate` directly. It normalizes current and legacy
-logger prefixes in a temporary copy and refuses an active compilation queue,
-including new compile records after an earlier zero-remaining record.
+logger prefixes in a temporary copy and requires a zero-remaining queue
+record after the last compilation. Missing queue evidence, an active queue
+or new compile records after an earlier zero-remaining record are rejected.
 It refuses to replace the inventory unless the YAML
 entry count equals the clean runtime capture count. The runtime UI can show a
 slightly larger total because completed tasks include in-session cache hits;

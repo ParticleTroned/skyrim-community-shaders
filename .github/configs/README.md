@@ -60,7 +60,9 @@ The script will:
 Use the repository wrapper for a saved clean log. Do not invoke
 `hlslkit-generate` directly: pinned versions do not recognize current logger
 prefixes or padded thread IDs and can silently produce an incomplete inventory.
-The wrapper rejects a trace whose last shader queue count is nonzero. Compare
+The wrapper requires shader queue-state evidence with a final zero count
+after the last compilation record; missing, active or stale queue evidence
+cannot replace an inventory. Compare
 the completed capture with the existing inventory before updating it; retain
 previously observed valid permutations absent from the new modlist.
 

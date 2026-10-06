@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace GrassPolicy
 {
@@ -10,6 +11,7 @@ namespace GrassPolicy
 	inline constexpr uint32_t kMaxBatchInstances = 262144;
 	inline constexpr uint32_t kMaxBatchSlices = 8192;
 	inline constexpr uint32_t kMaxFrameSources = 4096;
+	inline constexpr uint32_t kResidentIdleFrames = 120;
 	inline constexpr uint64_t kMaxResidentRecordBytes = 128ull * 1024 * 1024;
 	inline constexpr uint64_t kMaxCpuRecordBytes = 128ull * 1024 * 1024;
 	inline constexpr uint64_t kMaxDormantRecordBytes = 16ull * 1024 * 1024;
@@ -27,6 +29,21 @@ namespace GrassPolicy
 	{
 		return previous <= resident && resident <= kMaxCpuRecordBytes && incoming <= kMaxCpuRecordBytes - (resident - previous);
 	}
+	/** @brief Only confirmed native visibility renews residency; generated sources receive an initial grace period. */
+	struct Residency
+	{
+		uint32_t createdFrame = 0;
+		std::optional<uint32_t> lastVisibleFrame;
+
+		void Observe(uint32_t frame, bool nativeVisible)
+		{
+			if (nativeVisible)
+				lastVisibleFrame = frame;
+		}
+		uint32_t IdleFrames(uint32_t frame) const { return frame - lastVisibleFrame.value_or(createdFrame); }
+		bool Expired(uint32_t frame) const { return IdleFrames(frame) > kResidentIdleFrames; }
+		bool VisibleInFrame(uint32_t frame) const { return lastVisibleFrame && *lastVisibleFrame == frame; }
+	};
 
 	struct Settings
 	{

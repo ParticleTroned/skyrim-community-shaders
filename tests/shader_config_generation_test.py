@@ -49,10 +49,17 @@ class ShaderConfigGenerationTests(unittest.TestCase):
         for prefix in ("[12:00:00.001] [ 42 ] [D] ",
                        "[2026-10-05 12:00:00.001] [debug] [ 42 ] [ShaderCache.cpp:5960] "):
             with self.subTest(prefix=prefix):
-                result, output, normalized = self.generate(prefix + MESSAGE + "\n")
+                result, output, normalized = self.generate(prefix + MESSAGE + "\n[ShaderTiming] remaining=0\n")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("captured_shader_variants: 1", output)
-                self.assertEqual(normalized, "[12:00:00.001] [42] [D] " + MESSAGE + "\n")
+                self.assertEqual(normalized, "[12:00:00.001] [42] [D] " + MESSAGE + "\n[ShaderTiming] remaining=0\n")
+
+    def test_missing_queue_evidence_preserves_previous_inventory(self):
+        result, output, normalized = self.generate("[12:00:00.001] [42] [D] " + MESSAGE + "\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No shader queue-state records", result.stderr)
+        self.assertEqual(output, "previous inventory")
+        self.assertIsNone(normalized)
 
     def test_active_queue_preserves_previous_inventory(self):
         result, output, normalized = self.generate(
@@ -80,7 +87,7 @@ class ShaderConfigGenerationTests(unittest.TestCase):
         for text, count in (("[unrecognized] " + MESSAGE + "\n", 1),
                             ("[12:00:00.001] [42] [D] " + MESSAGE + "\n", 0)):
             with self.subTest(text=text, generated=count):
-                result, output, _ = self.generate(text, count)
+                result, output, _ = self.generate(text + "[ShaderTiming] remaining=0\n", count)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(output, "previous inventory")
 

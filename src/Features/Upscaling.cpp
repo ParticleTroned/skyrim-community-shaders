@@ -21968,6 +21968,23 @@ bool TryInstallVRMenuBridgeDirectDrawHook()
 	return true;
 }
 
+struct VRFinalLdrPresentationHook
+{
+	static void thunk(RE::UI* a_ui, uint32_t a_target, const RE::BSFixedString& a_menu, uint32_t a_width, uint32_t a_height)
+	{
+		auto& upscaling = globals::features::upscaling;
+		const bool headsetTarget = a_target == RE::RENDER_TARGETS::kVR_FRAMEBUFFER;
+		if (headsetTarget)
+			upscaling.ApplyMainFinalLdrNeuralStereo();
+		auto finishPresentation = ScopeExit([&]() {
+			if (headsetTarget)
+				upscaling.FinalizeMainFinalLdrNeuralPresentation();
+		});
+		func(a_ui, a_target, a_menu, a_width, a_height);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
 void Upscaling::PostPostLoad()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
@@ -21984,6 +22001,14 @@ void Upscaling::PostPostLoad()
 	}
 
 	if (globals::game::isVR) {
+		// The native scene is complete here, before its final fade and HMD submission.
+		const auto callsite = REL::RelocationID(35560, 36559).address() + 0x894;
+		constexpr std::array<uint8_t, 5> expectedCall{ 0xE8, 0x27, 0x2A, 0x96, 0x00 };
+		if (std::memcmp(reinterpret_cast<const void*>(callsite), expectedCall.data(), expectedCall.size()) == 0) {
+			stl::write_thunk_call<VRFinalLdrPresentationHook>(callsite);
+		} else {
+			logger::error("[NeuralRendering] VR final scene hook signature mismatch; native final-LDR NR is unavailable.");
+		}
 		if (TryInstallVRMenuBridgeHigherCallHook())
 			TryInstallVRMenuBridgeDirectDrawHook();
 		stl::write_vfunc<0x1, VRMapMenuCopyRenderHook>(RE::VTABLE_BSImagespaceShaderCopy[3]);
@@ -66655,7 +66680,9 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 {
 	auto& upscaling = globals::features::upscaling;
 	upscaling.PostDisplay();
-	upscaling.ApplyMainFinalLdrNeuralStereo();
+	// VR interface texture production is not the headset scene-output boundary.
+	if (!globals::game::isVR)
+		upscaling.ApplyMainFinalLdrNeuralStereo();
 	upscaling.BeginVRMenuDrawInterface();
 	const bool presentationTrace = IsVRMenuPresentationTraceActive();
 	const uint32_t presentationTraceSession = presentationTrace ?
@@ -66711,8 +66738,6 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 		});
 		func(a1);
 	}
-	upscaling.FinalizeMainFinalLdrNeuralPresentation();
-
 	if (globals::game::isVR && upscaling.IsVRRenderScaleModeLatched() && IsExplicitVRMenuPresentationContextActive()) {
 		const bool observedProjectedMenu = IsCurrentRenderTargetVRObservedMenuPresentationSeedTexture();
 		if (observedProjectedMenu) {

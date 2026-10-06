@@ -147,6 +147,19 @@ target_include_directories(neural_full_resolution_preparation_test PRIVATE "${_n
 
 add_controller_test(neural_main_depth_presentation_test NeuralMainDepthPresentation
     tests/neural_main_depth_presentation_test.cpp)
+set(_neural_presentation_hook_test_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_presentation_hook_test")
+add_custom_command(
+    OUTPUT "${_neural_presentation_hook_test_dir}/neural_presentation_hook_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_presentation_hook_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_presentation_hook.cmake"
+    DEPENDS src/Features/Upscaling.cpp tests/extract_neural_presentation_hook.cmake
+    VERBATIM
+)
+add_controller_test(neural_presentation_hook_test NeuralPresentationHook tests/neural_presentation_hook_test.cpp)
+target_sources(neural_presentation_hook_test PRIVATE
+    "${_neural_presentation_hook_test_dir}/neural_presentation_hook_under_test.h")
+target_include_directories(neural_presentation_hook_test PRIVATE "${_neural_presentation_hook_test_dir}")
 add_test(NAME NeuralMainDepthPresentationContract COMMAND "${CMAKE_COMMAND}"
     "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
     "${PROJECT_SOURCE_DIR}/tests/neural_main_depth_presentation_contract_test.cmake")

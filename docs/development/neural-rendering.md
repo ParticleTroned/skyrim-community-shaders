@@ -61,6 +61,16 @@ require a DevBench-enabled build and Debug or Trace logging (`Advanced` →
 actionable availability notices. Pipeline placement remains visible at
 ordinary logging levels.
 
+In native-resolution VR, A/B consume the prepared NR result at the final
+scene boundary, before the engine draws its fade overlay and submits the
+headset image. Hidden-area cleanup follows that overlay. The desktop
+interface callback cannot consume VR NR work. SE/AE retain their existing
+interface boundary; scaled submission and mode C retain their existing
+routes. Both strength-application methods share this corrected boundary.
+The VR call site is signature-checked before installation. A conflict
+preserves ordinary rendering and reports the missing NR hook instead of
+running a late desktop-only evaluation.
+
 DevBench `nr_configure` exposes `characterArmorStrength` and
 `characterWeaponsStrength` as finite numbers in [0, 1]. `nr_status` reports
 them as `characterRendering.settings.armorStrength` and `weaponsStrength`.
@@ -121,3 +131,45 @@ limits. Review evidence is preserved under `build/pr110-category-review/`.
 The category-review archive predates live headset validation. The
 subsequent headset fix and its runtime checks are documented separately.
 SE/AE runtime testing and matched performance measurements remain unrun.
+
+## Headset output and control validation (2026-10-06)
+
+The tested universal Release DLL has DevBench enabled and Tracy disabled:
+
+-   Producer source: `b6eaeebcb61d8934061b6b57ad1d7d3b345c37d2` plus the
+    preserved dirty patch, not a later commit identity.
+-   Build ID: `71d9915b02084e5349de2942745132c1f25765fdc96b8764c60aa4e23228240a`.
+-   DLL SHA-256: `2e3581e95e369fca962ce1e02b379fdceecc7ca90aac2b6d2ddc20719b4604bf`.
+-   Producer evidence: `build/nr-visible-20261006-1791293982506/`.
+
+The Release DLL build, four focused controller checks, six NR contracts
+and `NRFramebufferWARP` passed. The presentation-hook test exercises the
+actual hook body and verifies target filtering and finalization ordering.
+
+All exposed NR toggles were functionally exercised through DevBench in
+the control sweep: 109 checks, 144 verified setting readbacks, no readback
+mismatches, and 29 native stereo capture pairs. A/B/C, both strength
+applications, scene adjustments, Actors only, all five materials, shared
+model/colour settings and coverage controls were exercised. Principal
+mode, strength and colour changes were visibly confirmed in both eyes.
+Evidence: `build/nr-controls-review-20261006T143917200Z/resumed-20261006T150205917Z/review-summary.json`.
+
+The debug sweep also exercised mask overrides, preview selection and
+sampling, deterministic composition, depth testing, crop mode, all four
+per-eye/batched and staged/direct A combinations, model-edit visibility,
+transport bypass, exposure capture, asynchronous measurements, frame
+evidence, stop/reset actions and colour experiments. It found two colour
+processing defects: reduced-resolution transformed input was rejected,
+and the +8 EV proxy fell back on many samples. Evidence:
+`build/nr-debug-review-20261006T153141650Z/debug-review-summary.json`.
+
+Functional verification is not an exhaustive visual or stability pass.
+Only humans and one other humanoid were present; absent actor types were
+checked for setting acceptance/exclusion. Physical menu clicking, hover
+tooltips and in-menu preview textures were not separately inspected.
+Frozen actors do not qualify temporal selection or moving occlusion, and
+head-pose drift prevents exact pixel-equivalence claims. API-only
+`experimentalCurrentContext`, `experimentalGpuMaskSupport` and
+`compactInputs` were outside the visible debug-control sweep. Earlier
+input-handling crashes interrupted two sessions; the completed sweep
+reported zero renderer failures. SE/AE live testing remains unrun.

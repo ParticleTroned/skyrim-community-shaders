@@ -2907,14 +2907,31 @@ string(SUBSTRING "${_upscaling}" ${_main_hook_start} 9000 _main_hook)
 string(FIND "${_main_hook}" "upscaling.ApplyMainFinalLdrNeuralStereo();" _main_apply)
 string(FIND "${_main_hook}" "upscaling.BeginVRMenuDrawInterface();" _menu_begin)
 string(FIND "${_main_hook}" "func(a1);" _menu_draw)
-string(FIND "${_main_hook}" "upscaling.FinalizeMainFinalLdrNeuralPresentation();" _mask_finalize)
 if(_main_apply EQUAL -1 OR _menu_begin EQUAL -1 OR _menu_draw EQUAL -1 OR
-    _mask_finalize EQUAL -1 OR NOT _main_apply LESS _menu_begin OR
-    NOT _menu_begin LESS _menu_draw OR NOT _menu_draw LESS _mask_finalize)
+    NOT _main_apply LESS _menu_begin OR NOT _menu_begin LESS _menu_draw OR
+    NOT _main_hook MATCHES "if \\(!globals::game::isVR\\)[\n\r\t ]+upscaling.ApplyMainFinalLdrNeuralStereo\\(\\);")
     message(FATAL_ERROR
-        "Main final-LDR ordering must remain NR, UI draw, then HMD mask repair"
+        "Desktop interface drawing must only consume flat NR; VR owns a pre-submit scene boundary"
     )
 endif()
+string(FIND "${_upscaling}" "struct VRFinalLdrPresentationHook" _vr_main_hook_start)
+string(FIND "${_upscaling}" "void Upscaling::PostPostLoad()" _vr_main_hook_end)
+if(_vr_main_hook_start LESS 0 OR _vr_main_hook_end LESS _vr_main_hook_start)
+    message(FATAL_ERROR "VR final scene presentation hook is missing")
+endif()
+math(EXPR _vr_main_hook_length "${_vr_main_hook_end} - ${_vr_main_hook_start}")
+string(SUBSTRING "${_upscaling}" ${_vr_main_hook_start} ${_vr_main_hook_length} _vr_main_hook)
+foreach(_required IN ITEMS
+    "a_target == RE::RENDER_TARGETS::kVR_FRAMEBUFFER"
+    "upscaling.ApplyMainFinalLdrNeuralStereo();"
+    "upscaling.FinalizeMainFinalLdrNeuralPresentation();"
+    "ScopeExit("
+    "func(a_ui, a_target, a_menu, a_width, a_height);")
+    string(FIND "${_vr_main_hook}" "${_required}" _found)
+    if(_found LESS 0)
+        message(FATAL_ERROR "VR scene boundary is missing ${_required}")
+    endif()
+endforeach()
 
 string(FIND
     "${_upscaling}"

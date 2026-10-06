@@ -109,6 +109,10 @@ contradict this policy.
 
 ## Comments and documentation
 
+-   Never publish machine-specific absolute paths or usernames in PR bodies,
+    comments or committed documentation. Use repository-relative paths or
+    generic placeholders; retain exact physical paths only in ignored local
+    evidence.
 -   Public declarations and API methods should have concise Doxygen documentation, especially for graphics-facing behavior and non-obvious contracts.
 -   Inline comments should explain a constraint, invariant, safety condition, or surprising choice. Do not paraphrase the following statements.
 -   Do not leave comments that refer to a commit, PR, temporary debugging incident, or a tool session. State the durable invariant instead.

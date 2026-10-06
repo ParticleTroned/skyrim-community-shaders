@@ -637,17 +637,19 @@ class ShaderCachePackagingTests(unittest.TestCase):
         for profile in (BUILDER.SHIPPED_CACHE_PROFILE, BUILDER.PATKA_CACHE_PROFILE):
             with self.subTest(profile=profile.name):
                 original = self._sample_shader_config()
+                original["common_defines"].append("PBR_GRASS=0")
                 config = BUILDER.apply_cache_profile_defines(copy.deepcopy(original), profile)
                 flags = {"PBR_GRASS", "GRASS_OPTIMIZATIONS"}
-                self.assertTrue(flags.isdisjoint(config["common_defines"]))
+                self.assertTrue(flags.isdisjoint(self._all_define_names(config["common_defines"])))
                 for shader in config["shaders"]:
                     stages = shader["configs"]
                     if shader["file"] != "RunGrass.hlsl":
                         self.assertTrue(flags.isdisjoint(self._all_define_names(stages)))
                         continue
                     for stage in stages.values():
-                        for flag in flags:
+                        for flag in ("PBR_GRASS=1", "GRASS_OPTIMIZATIONS"):
                             self.assertEqual(stage["common_defines"].count(flag), 1)
+                        self.assertNotIn("PBR_GRASS", stage["common_defines"])
                         for entry in stage["entries"]:
                             self.assertTrue(flags.isdisjoint(entry["defines"]))
                 grass_before = original["shaders"][0]["configs"]

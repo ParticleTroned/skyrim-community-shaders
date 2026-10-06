@@ -22,7 +22,7 @@ contradict this policy.
 -   **Runtime safety:** Evaluate SE, AE, and VR behavior. Keep runtime-specific divergence small, explicit, and localized.
 -   **Graphics safety:** Name every new D3D11 resource with the existing `Util::SetResourceName` path and use RAII for graphics and ImGui state.
 -   **Validation:** Test in proportion to risk, record exact evidence, and never claim validation that did not run.
--   **Git safety:** Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
+-   **Git safety:** Commit on the local destination branch before any authorized push. Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
 
 ## Code Review Rules
 
@@ -121,6 +121,8 @@ contradict this policy.
     fix explanations, investigations, handovers, run reports, and detailed
     provenance belong in `.local-docs/`, which must remain ignored by Git.
     Never force-add local documentation or attach its contents to a PR.
+    This policy applies to every file format, including CSV ledgers, JSON
+    summaries, text handovers, and supporting scripts in evidence folders.
 -   Public declarations and API methods should have concise Doxygen documentation, especially for graphics-facing behavior and non-obvious contracts.
 -   Inline comments should explain a constraint, invariant, safety condition, or surprising choice. Do not paraphrase the following statements.
 -   Do not leave comments that refer to a commit, PR, temporary debugging incident, or a tool session. State the durable invariant instead.
@@ -241,6 +243,14 @@ contradict this policy.
 
 -   CSX public releases publish only the complete `CSX_AIO-*.7z` installer. Keep split core, feature and cache packages as internal workflow artifacts. Release notes must describe CSX's bundled features and built-in systems; never inherit upstream Nexus upload destinations. Follow [the CSX distribution contract](docs/development/csx-release-distribution.md).
 -   Never push directly to, force-push, or rebase shared branches such as `main`, `main-VR`, `dev`, or `hotfix/*` without explicit user direction. Use `--force-with-lease` only when rewriting an owned feature branch is necessary and authorized.
+-   Create commits locally first. Before an authorized push, the matching
+    local destination branch must already point to the exact commit being
+    pushed. Integrate work from another branch or linked worktree into that
+    local branch by merge or fast-forward before publishing it. Never push
+    a detached HEAD, another branch, or a raw commit directly to a remote
+    destination while leaving its local branch behind; do not bypass this
+    order through a remote API. Verify local and remote commit IDs after
+    every push. A request to commit locally does not authorize a push.
 -   Do not manually create `v*` release tags or hand-edit the CMake project version; release automation owns them.
 -   Synchronize upstream histories by merge rather than cherry-picking individual commits. Preserve VR-specific behavior during conflict resolution and verify upstream ancestry after the merge.
 -   Do not squash upstream-sync PRs when the merge ancestry is itself part of the synchronization contract.

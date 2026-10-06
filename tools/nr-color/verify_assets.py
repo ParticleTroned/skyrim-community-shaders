@@ -9,9 +9,13 @@ import re
 
 FEATURE = Path("features/Neural Rendering")
 SHADERS = Path("Shaders/Upscaling/NeuralRendering")
-NAMES = ("ColorCommon.hlsli", "ColorPrepareCS.hlsl", "ColorReconstructCS.hlsl",
-         "ColorMeasureCS.hlsl", "ColorExposureCS.hlsl",
-         "CopyDepthGuideCS.hlsl", "CopyCompactDepthGuideCS.hlsl")
+RUNTIME_SHADERS = {
+    "ColorPipeline.cpp": ("ColorPrepareCS.hlsl", "ColorReconstructCS.hlsl", "ColorMeasureCS.hlsl"),
+    "ExposureCapture.cpp": ("ColorExposureCS.hlsl",),
+    "Renderer.cpp": ("CopyDepthGuideCS.hlsl", "CopyCompactDepthGuideCS.hlsl"),
+}
+EXTERNAL_RUNTIME_SHADERS = {"Renderer.cpp": {"Data/Shaders/DLSS5ActorProtectionCS.hlsl"}}
+NAMES = ("ColorCommon.hlsli", *(name for names in RUNTIME_SHADERS.values() for name in names))
 MANIFEST_VERSION = re.compile(r"^\s*Version\s*=\s*(\d+)-(\d+)-(\d+)\s*$", re.MULTILINE)
 REGISTRY_VERSION = re.compile(r'"NeuralRendering"sv,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}')
 
@@ -33,9 +37,19 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
     packaged = {(root / source).resolve() for source, _ in mappings}
     if not (root / FEATURE / "CORE").is_file():
         errors.append("Missing colour CORE marker")
+    try:
+        providers = [root / "package", *(path for path in (root / "features").iterdir() if path.is_dir())]
+    except OSError as error:
+        providers = []
+        errors.append(f"Unreadable shader source providers: {error}")
     for source, target in mappings:
         path = root / source
         row = {"source": str(source), "destination": str(target), "present": path.is_file()}
+        # Feature overlays share installed paths; even identical copies hide ownership drift.
+        for provider in providers:
+            candidate = provider / target
+            if candidate != path and candidate.is_file():
+                errors.append(f"Duplicate shader asset provider for {target}: {candidate.relative_to(root)}")
         if not path.is_file():
             errors.append(f"Missing source: {source}")
         else:
@@ -76,22 +90,24 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
                 if not row["matches"]:
                     errors.append(f"Missing/stale deployed asset: {target}")
         rows.append(row)
-    # Verify all runtime compile paths have an asset in the known feature mapping.
-    expected = {"Data/" + str(SHADERS / n).replace("\\", "/") for n in NAMES if n.endswith(".hlsl")}
+    # Check each producer so unrelated paths cannot hide missing or untracked assets.
     actual: set[str] = set()
-    for name in ("ColorPipeline.cpp", "ExposureCapture.cpp", "Renderer.cpp"):
+    for name, shaders in RUNTIME_SHADERS.items():
+        expected = {"Data/" + (SHADERS / shader).as_posix() for shader in shaders}
         path = root / "src/Features/Upscaling/NeuralRendering" / name
         if not path.is_file():
             errors.append(f"Missing runtime producer {name}")
             continue
         try:
-            actual.update(candidate for candidate in re.findall(
-                r'L"(Data/Shaders/[^"\n]+\.hlsl)"', path.read_text(encoding="utf-8-sig"))
-                if candidate.startswith("Data/" + SHADERS.as_posix() + "/"))
+            references = {candidate.replace("\\\\", "/") for candidate in re.findall(
+                r'L"([^"\n]+\.hlsl)"', path.read_text(encoding="utf-8-sig"))}
         except (OSError, UnicodeError) as error:
             errors.append(f"Unreadable runtime producer {name}: {error}")
-    if actual != expected:
-        errors.append(f"Runtime shader inventory mismatch: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
+            continue
+        references -= EXTERNAL_RUNTIME_SHADERS.get(name, set())
+        actual.update(references)
+        if references != expected:
+            errors.append(f"Runtime shader inventory mismatch in {name}: missing={sorted(expected-references)}, extra={sorted(references-expected)}")
     return {"ok": not errors, "assets": rows, "errors": errors, "runtimePaths": sorted(actual),
             "deployedHashChecked": deployed_data is not None, "shaderCompilationChecked": False,
             "note": "Hash parity refers to the supplied Data root. MO2/VFS winner selection must also match the running test profile."}

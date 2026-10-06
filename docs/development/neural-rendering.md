@@ -156,6 +156,46 @@ Validation evidence is under `build/pr110-nr-consolidation/`:
     has no new in-game/HMD qualification or production-DLL build; the
     earlier live results describe their original producer builds.
 
+### Adversarial consolidation review (2026-10-06)
+
+The follow-up review found two asset-verification gaps: unexpected shader
+paths outside the NR directory were silently ignored, and competing
+feature/package copies could overwrite the consolidated shader owner.
+Runtime references now match each producer's explicit inventory, including
+escaped Windows paths; only the renderer's known actor-protection shader
+is exempt from the NR mapping. Duplicate providers fail even when their
+bytes match. The inventory also supplies the fixture and asset lists,
+removing positional assumptions about which producer owns each shader.
+
+The shared compute-state guard retained the original caller behavior.
+Its WARP regression now exercises all six actual binding layouts, both
+predicate values and normal/exception exits (24 cases), with distinct
+shader bytecode and untouched resource-slot sentinels. No game code or
+shader source changes were needed by this review.
+
+Evidence is under `build/pr110-nr-refactor-review/`:
+
+-   Before the corrections, the new asset fixtures reproduced 11 failed
+    assertions covering unknown paths, wrong producers and duplicate
+    providers. All 18 fixtures passed after correction.
+-   `cmake --build build/pr110-nr-hmd-devbench --config Release --target neural_compute_state_guard_test --parallel 6`
+    built successfully through `tools/cmake.ps1`.
+-   `ctest --test-dir build/pr110-nr-hmd-devbench -C Release -R '^NeuralComputeStateGuard$' --output-on-failure`
+    passed; the corresponding colour-suite selection
+    `^NRColor(AssetVerifierFixtures|SourceContracts|AssetInventory)$`
+    passed all three tests in `build/pr110-nr-hmd-gpu`.
+-   The initial `prepare_shaders` attempt found the target unavailable
+    because AIO packaging was disabled. Temporarily enabling
+    `AIO_ZIP_TO_DIST`, while keeping auto-deployment off, allowed the
+    maintained staging target to pass. Asset verification with
+    `--deployed-data build/pr110-nr-hmd-devbench/aio` matched all eight
+    NR assets by SHA-256, including both relocated depth shaders. The
+    original packaging configuration was then restored.
+-   This follow-up changes validation and documentation only. It does not
+    rebuild the DLL, create a release archive, deploy to the game or add
+    live SE/AE/VR qualification. Earlier producer identities and the
+    unresolved stability observation remain unchanged.
+
 ## Local validation (2026-10-06)
 
 The PR110 implementation is based on

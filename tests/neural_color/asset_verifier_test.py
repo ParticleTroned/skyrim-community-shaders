@@ -27,10 +27,9 @@ class AssetTests(unittest.TestCase):
             (self.shaders / name).write_text('#include "Upscaling/NeuralRendering/ColorCommon.hlsli"\n' if name.endswith(".hlsl") else "// fixture\n")
         self.producers = self.root / "src/Features/Upscaling/NeuralRendering"
         self.producers.mkdir(parents=True)
-        paths = ['L"Data/' + (assets.SHADERS / name).as_posix() + '"' for name in assets.NAMES if name.endswith(".hlsl")]
-        (self.producers / "ColorPipeline.cpp").write_text("\n".join(paths[:3]))
-        (self.producers / "ExposureCapture.cpp").write_text(paths[3])
-        (self.producers / "Renderer.cpp").write_text("\n".join(paths[4:]))
+        for producer, shaders in assets.RUNTIME_SHADERS.items():
+            paths = ['L"Data/' + (assets.SHADERS / name).as_posix() + '"' for name in shaders]
+            (self.producers / producer).write_text("\n".join(paths))
 
     def test_complete_source_and_deployment(self):
         result = assets.verify(self.root)
@@ -97,6 +96,53 @@ class AssetTests(unittest.TestCase):
         self.assertFalse(assets.verify(self.root)["ok"])
         (self.shaders / "CopyDepthGuideCS.hlsl").unlink()
         self.assertTrue(any("Missing source" in error for error in assets.verify(self.root)["errors"]))
+
+    def test_unmapped_runtime_shader_is_rejected(self):
+        for producer in ("ColorPipeline.cpp", "ExposureCapture.cpp", "Renderer.cpp"):
+            for path in ('Data/Shaders/Unexpected.hlsl', r'Data\\Shaders\\Unexpected.hlsl'):
+                with self.subTest(producer=producer, path=path):
+                    source = self.producers / producer
+                    original = source.read_text()
+                    source.write_text(original + '\nL"' + path + '"\n')
+                    result = assets.verify(self.root)
+                    source.write_text(original)
+                    self.assertFalse(result["ok"], result)
+
+    def test_runtime_reference_in_wrong_producer_is_rejected(self):
+        exposure = self.producers / "ExposureCapture.cpp"
+        renderer = self.producers / "Renderer.cpp"
+        renderer.write_text(renderer.read_text() + '\n' + exposure.read_text())
+        exposure.write_text("// compile call moved to the wrong owner\n")
+        self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_known_external_shader_is_allowed_only_for_its_owner(self):
+        for producer in ("Renderer.cpp", "ColorPipeline.cpp"):
+            with self.subTest(producer=producer):
+                source = self.producers / producer
+                original = source.read_text()
+                source.write_text(original + '\nL"Data/Shaders/DLSS5ActorProtectionCS.hlsl"\n')
+                result = assets.verify(self.root)
+                source.write_text(original)
+                self.assertEqual(result["ok"], producer == "Renderer.cpp", result)
+                if result["ok"]:
+                    self.assertNotIn("Data/Shaders/DLSS5ActorProtectionCS.hlsl", result["runtimePaths"])
+
+    def test_escaped_windows_runtime_paths(self):
+        for source in self.producers.iterdir():
+            source.write_text(source.read_text().replace("/", "\\\\"))
+        self.assertTrue(assets.verify(self.root)["ok"])
+
+    def test_duplicate_package_provider_is_rejected(self):
+        for provider in (Path("features/Upscaling"), Path("package")):
+            for content in (None, "// stale shader\n"):
+                with self.subTest(provider=provider, content=content):
+                    duplicate = self.root / provider / assets.SHADERS / "CopyDepthGuideCS.hlsl"
+                    duplicate.parent.mkdir(parents=True, exist_ok=True)
+                    duplicate.write_text(content if content is not None else
+                                         (self.shaders / duplicate.name).read_text())
+                    result = assets.verify(self.root)
+                    duplicate.unlink()
+                    self.assertFalse(result["ok"], result)
 
     def test_stale_deployed_asset(self):
         result = assets.verify(self.root)

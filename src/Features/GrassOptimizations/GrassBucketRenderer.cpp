@@ -275,6 +275,24 @@ namespace
 		const auto& data = GrassRuntime::GetPropertyData(static_cast<const RE::BSGrassShaderProperty*>(source.property.get()), globals::game::isVR);
 		return GrassRuntime::MatchesPersistentProperty(data, source.wavePeriod, source.lightMask, source.lights);
 	}
+	// The capture lock and live lifetime token keep the native shape valid during these reads.
+	bool CurrentGeometry(const Source& source)
+	{
+		auto& shape = *source.identity;
+		const auto& geometry = shape.GetGeometryRuntimeData();
+		const auto& runtime = shape.GetMultiStreamTrishapeRuntimeData();
+		const auto& mesh = shape.GetTrishapeRuntimeData();
+		const auto& bound = shape.GetModelData().modelBound;
+		return geometry.shaderProperty.get() == source.property.get() &&
+		       geometry.rendererData && geometry.rendererData == source.mesh &&
+		       source.vertices.get() == reinterpret_cast<ID3D11Buffer*>(geometry.rendererData->vertexBuffer) &&
+		       source.indices.get() == reinterpret_cast<ID3D11Buffer*>(geometry.rendererData->indexBuffer) &&
+		       source.descriptor == std::bit_cast<uint64_t>(geometry.vertexDesc) &&
+		       source.triangles == mesh.triangleCount && source.vertexCount == mesh.vertexCount &&
+		       Identity(shape.world) && source.origin == shape.world.translate &&
+		       source.bound.center == bound.center && source.bound.radius == bound.radius &&
+		       runtime.instanceSize == 16 && source.renderDistance == runtime.renderDistance;
+	}
 	bool Compatible(const Source& a, const Source& b)
 	{
 		if (!CurrentContract(a) || !CurrentContract(b))
@@ -529,6 +547,7 @@ struct GrassBucketRenderer::Impl
 GrassBucketRenderer::GrassBucketRenderer() : impl(std::make_unique<Impl>()) {}
 GrassBucketRenderer::~GrassBucketRenderer() = default;
 bool GrassBucketRenderer::IsHookInstalled() const { return impl->installed; }
+bool GrassBucketRenderer::IsRenderingAvailable() const { return impl->installed && !impl->failed.load(std::memory_order_relaxed); }
 
 void GrassBucketRenderer::RecordModel(RE::BSMultiStreamInstanceTriShape* shape, const char* path)
 {
@@ -601,12 +620,7 @@ bool GrassBucketRenderer::Impl::RefreshSource(RE::BSMultiStreamInstanceTriShape*
 		auto& cached = found->second;
 		bool unchanged = cached.lifetime->alive.load(std::memory_order_acquire) &&
 		                 cached.generation == cached.lifetime->generation.load(std::memory_order_acquire) &&
-		                 cached.property.get() == property && cached.material == property->material &&
-		                 cached.mesh == geometry.rendererData && cached.descriptor == std::bit_cast<uint64_t>(geometry.vertexDesc) &&
-		                 cached.origin == shape->world.translate && cached.flags == property->flags.underlying() &&
-		                 cached.bound.center == shape->GetModelData().modelBound.center && cached.bound.radius == shape->GetModelData().modelBound.radius &&
-		                 cached.renderDistance == runtime.renderDistance &&
-		                 GrassRuntime::MatchesPersistentProperty(grassData, cached.wavePeriod, cached.lightMask, cached.lights);
+		                 CurrentGeometry(cached) && CurrentContract(cached);
 		size_t groupIndex = 0;
 		for (auto group : runtime.instanceGroups) {
 			if (!group || !group->instanceCount)
@@ -668,6 +682,18 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 #endif
 	if (!impl->installed || impl->failed || !impl->context || !shape || (!nativeVisibility && (!globals::shaderCache->IsEnabled() || !globals::shaderCache->IsEnableRequested() || !impl->cullShader.get())))
 		return GRASS_CAPTURE_REJECT(Unavailable);
+	bool captured = false;
+	const SKSE::stl::scope_exit retireRejected([&]() noexcept {
+		if (captured)
+			return;
+		std::scoped_lock lock(impl->captureMutex);
+		if (auto found = impl->residents.find(shape); found != impl->residents.end()) {
+			// Reject prepared buckets as well as the resident snapshot on capture failure.
+			++found->second.lifetime->generation;
+			impl->EraseResident(shape);
+			++impl->residentRevision;
+		}
+	});
 	try {
 		auto& geometry = shape->GetGeometryRuntimeData();
 		auto& runtime = shape->GetMultiStreamTrishapeRuntimeData();
@@ -676,8 +702,10 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			return GRASS_CAPTURE_REJECT(Geometry);
 		auto property = static_cast<RE::BSGrassShaderProperty*>(geometry.shaderProperty.get());
 		auto& grassData = GrassRuntime::GetPropertyData(property, globals::game::isVR);
-		if (impl->RefreshSource(shape, nativeVisibility))
+		if (impl->RefreshSource(shape, nativeVisibility)) {
+			captured = true;
 			return true;
+		}
 		if (!nativeVisibility)
 			return false;
 		Source source{};
@@ -797,6 +825,7 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 		impl->residents.insert_or_assign(shape, std::move(source));
 		impl->cpuRecordBytes = nextCpuBytes;
 		++impl->residentRevision;
+		captured = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (impl->diagnostics.load(std::memory_order_relaxed))
 			++impl->capturedSources;
@@ -832,7 +861,8 @@ void GrassBucketRenderer::SetupResources()
 		data.pSysMem = zeros.data();
 		impl->disabled = std::make_unique<Buffer>(desc, &data, "GrassOptimizations::NativeParameters");
 		std::vector<std::pair<const char*, const char*>> defines;
-		impl->cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS");
+		if (!impl->cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS"))
+			throw std::runtime_error("Grass culling shader unavailable");
 		impl->hiZ.SetupResources();
 		impl->CompileSignature();
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -885,7 +915,8 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	std::scoped_lock lock(captureMutex);
 	for (auto it = residents.begin(); it != residents.end();) {
 		if (!it->second.lifetime->alive.load(std::memory_order_acquire) || it->second.generation != it->second.lifetime->generation.load(std::memory_order_acquire) ||
-			!CurrentContract(it->second)) {
+			!CurrentGeometry(it->second) || !CurrentContract(it->second)) {
+			++it->second.lifetime->generation;
 			cpuRecordBytes -= it->second.cpuRecordBytes;
 			it = residents.erase(it);
 			++residentRevision;
@@ -1347,8 +1378,10 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 	}
 	std::vector<std::pair<const char*, const char*>> defines;
 	auto shader = cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS");
-	if (!shader || !parameters || !drawConstants)
+	if (!shader || !parameters || !drawConstants) {
+		failed = true;
 		return GRASS_DRAW_REJECT(Resources);
+	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (countersActive && diagnostics.load(std::memory_order_relaxed) && gpuCounters) {
 		defines.emplace_back("GRASS_DIAGNOSTICS", "1");
@@ -1426,7 +1459,7 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 	D3D11_VIEWPORT viewport{};
 	UINT viewports = 1;
 	context->RSGetViewports(&viewports, &viewport);
-	if (!viewports || !std::isfinite(viewport.Height) || viewport.Height <= 0)
+	if (viewports != 1 || !std::isfinite(viewport.Height) || viewport.Height <= 0)
 		return GRASS_DRAW_REJECT(Viewport);
 	Parameters params{ prefix, uint32_t(slices.size()), capacity, eyes,
 		frameSettings.FrustumCulling, frameSettings.DensityReduction,
@@ -1774,7 +1807,7 @@ json GrassBucketRenderer::GetDiagnostics() const
 		modelMismatches[mismatchNames[i]] = value(self.sameModelMismatches[i]);
 	const auto observation = self.hiZ.ObservedFailures();
 	const auto lastHiZFailure = self.hiZ.LastFailure();
-	return { { "hookInstalled", self.installed }, { "diagnosticsEnabled", self.diagnostics.load(std::memory_order_relaxed) },
+	return { { "hookInstalled", self.installed }, { "renderingAvailable", IsRenderingAvailable() }, { "diagnosticsEnabled", self.diagnostics.load(std::memory_order_relaxed) },
 		{ "captureAttempts", value(self.captureAttempts) }, { "capturedSources", value(self.capturedSources) },
 		{ "admittedSources", value(self.admittedSources) }, { "drawAttempts", value(self.drawAttempts) },
 		{ "captureRejections", std::move(captureReasons) }, { "drawRejections", std::move(drawReasons) },

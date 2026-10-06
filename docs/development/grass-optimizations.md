@@ -137,8 +137,10 @@ max-depth reduction retains empty texels, padded edges and eye seams.
 
 The reusable depth-pyramid builder uses AMD's single-pass downsampler
 after the conservative source reduction. Devices below feature level 11.1,
-unavailable SPD shaders and unsupported chain lengths use the existing
-per-mip path. Both paths stop before packed stereo eyes can mix.
+and unavailable SPD shaders use the existing per-mip path. Sources wider
+or taller than 4,096 pixels use SPD for the first six levels, then finish
+with per-mip reduction: SPD's single tail group cannot cover larger
+sources. Both paths stop before packed stereo eyes can mix.
 Grass still uses its own depth source and capture time; scene Hi-Z and
 SSR do not consume this pyramid.
 
@@ -175,10 +177,12 @@ collision distance can reach the grass. View-facing normal orientation
 handles mirrored grass without changing authored spherical normals.
 
 Snapshots retain GPU buffers, or copy pending CPU instance records, and
-shader properties without later dereferencing captured shapes.
-Destruction invalidates a generation
-token, preventing address reuse from admitting old geometry. Generation,
-group addition/removal and changed material contracts retire snapshots.
+shader properties. Live geometry checks hold the capture lock and require
+a live lifetime token; destruction invalidates that token under the same
+lock before releasing the native shape. Replaced buffers, geometry,
+transforms and properties retire snapshots. Rejected captures invalidate
+already prepared buckets as well. Generation and group changes prevent
+address reuse from admitting old records.
 Unchanged membership retains CPU buckets and GPU records across frames;
 changed buckets reuse compatible storage and upload their changed tail.
 A source holds at most 262,144 instances and
@@ -218,7 +222,10 @@ save settings. The Hi-Z action does not enable the master grass switch.
 
 `status.grassOptimizations` reports requested settings, scene Hi-Z
 availability, native fallback counts, combined sources and instances,
-and cumulative GPU eye-instance outcomes. GPU outcomes distinguish
+and cumulative GPU eye-instance outcomes. `renderingAvailable` distinguishes
+successful hook installation from latched renderer failures. The UI and
+performance-cost readiness use the same availability check; native Off
+measurements remain ready. GPU outcomes distinguish
 frustum, density, distance, fade and Hi-Z rejection, full/middle/far
 survivors, and invalid bounds retained. VR mono passes do not duplicate
 eye geometry.
@@ -277,14 +284,23 @@ and runtime compatibility require separate validation.
 
 ## Validation
 
-The Essentials/profiling follow-up builds as a universal Release DLL.
-`GrassOptimizationPolicy`, `PerformanceTuningDevBenchContract`,
+The reviewed follow-up builds with
+`pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target CommunityShaders`.
+The focused CTest set passes (10/10): `GrassOptimizationPolicy`,
+`GrassRuntimeLayout`, `GrassBatchShader`, `PBRGrassShader`,
+`PBRGrassMaterial`, `TruePBRSettings`, `PerformanceTuningDevBenchContract`,
 `PerformanceTuningStatistics`, `PresetCompatibility` and
-`FeaturePresetCompatibilityContract` pass (5/5). Preset generation and
-its test suite pass without changing saved rendering preferences.
-Both changed UI units pass production compiler syntax checks with the
-forced-header assertion that DevBench and Tracy definitions are absent.
-The new UI and its cost-comparison restoration have not been tested in game.
+`FeaturePresetCompatibilityContract`. Large-pyramid GPU regressions
+compare every mip with a CPU max-depth reference on two dispatches,
+including 8,192-wide packed stereo and 8,192-tall input. They fail with
+the unrestricted SPD tail and pass with bounded SPD plus per-mip tail.
+`python tests/shader_config_generation_test.py` passes (5/5), including
+rejection of new compilation records after a previous completed queue.
+`pwsh ./tools/generate-unified-presets.ps1 -Check` passes without changing
+saved rendering preferences. Five changed runtime units pass production
+compiler syntax checks with a forced-header assertion that DevBench and
+Tracy definitions are absent. The new UI, cost-comparison restoration,
+source-retirement and viewport safeguards have not been tested in game.
 
 The universal Release DLL builds with DevBench enabled and Tracy disabled.
 Focused policy tests cover finite settings, threshold ordering, native

@@ -195,7 +195,7 @@ bool GrassHiZ::Build(ID3D11DeviceContext1* context, uint32_t frame)
 	if (desc.SampleDesc.Count != 1 || desc.ArraySize != 1 || sourceView.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
 		sourceView.Texture2D.MostDetailedMip != 0)
 		GRASS_HIZ_FAIL(SourceLayout);
-	if (!count || viewport.TopLeftX != 0 || viewport.TopLeftY != 0 || !std::isfinite(viewport.Width) ||
+	if (count != 1 || viewport.TopLeftX != 0 || viewport.TopLeftY != 0 || !std::isfinite(viewport.Width) ||
 		!std::isfinite(viewport.Height) || viewport.Width < eyes || viewport.Height < 2 ||
 		viewport.Width > desc.Width || viewport.Height > desc.Height || viewport.MinDepth != 0 ||
 		!std::isfinite(viewport.MaxDepth) || viewport.MaxDepth < 0.9999f || viewport.MaxDepth > 1) {

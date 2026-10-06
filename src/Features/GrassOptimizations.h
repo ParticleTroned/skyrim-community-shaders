@@ -27,10 +27,10 @@ struct GrassOptimizations : Feature
 	void DrawPerformanceSettings(bool advanced) override;
 	json CapturePerformanceSettingsState() const override;
 	bool SupportsPerformanceCostMeasurement() const override { return true; }
-	bool IsPerformanceCostMeasurementEnabled() const override { return IsEnabled(); }
+	bool IsPerformanceCostMeasurementEnabled() const override;
 	void SetPerformanceCostMeasurementEnabled(bool enabled) override { SetEnabled(enabled); }
-	bool IsPerformanceCostMeasurementReady() const override { return IsHookInstalled(); }
-	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for the grass draw hook"; }
+	bool IsPerformanceCostMeasurementReady() const override;
+	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for grass rendering"; }
 	json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
 	/** @brief Restore all grass controls after a cost comparison, respecting scene Hi-Z compatibility. */
 	void RestorePerformanceCostMeasurementState(const json& state) override;

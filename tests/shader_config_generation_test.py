@@ -68,6 +68,14 @@ class ShaderConfigGenerationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("captured_shader_variants: 1", output)
 
+    def test_new_compile_after_completed_queue_preserves_inventory(self):
+        result, output, normalized = self.generate(
+            "[ShaderTiming] remaining=0\n[12:00:00.001] [42] [D] " + MESSAGE + "\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("still in progress", result.stderr)
+        self.assertEqual(output, "previous inventory")
+        self.assertIsNone(normalized)
+
     def test_lost_records_preserve_previous_inventory(self):
         for text, count in (("[unrecognized] " + MESSAGE + "\n", 1),
                             ("[12:00:00.001] [42] [D] " + MESSAGE + "\n", 0)):

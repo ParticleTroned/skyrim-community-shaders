@@ -13,6 +13,8 @@ public:
 	void ClearShaderCache();
 	void PrepareGeometry(RE::BSRenderPass* pass);
 	bool IsHookInstalled() const;
+	/** @brief Whether native integration is installed without a latched rendering failure. */
+	bool IsRenderingAvailable() const;
 	void RecordModel(RE::BSMultiStreamInstanceTriShape* shape, const char* path);
 	void MarkGroupsChanged(RE::BSMultiStreamInstanceTriShape* shape);
 	void MarkGenerated(RE::BSMultiStreamInstanceTriShape* shape);

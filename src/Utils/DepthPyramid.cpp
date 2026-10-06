@@ -1,4 +1,5 @@
 #include "DepthPyramid.h"
+#include "DepthPyramidPolicy.h"
 
 #include "Globals.h"
 #include "Util.h"
@@ -96,7 +97,7 @@ bool DepthPyramid::Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView
 	if (!base)
 		return false;
 	ID3D11ComputeShader* spd = nullptr;
-	if (globals::d3d::device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 && mipCount > 1 && mipCount <= 13)
+	if (globals::d3d::device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 && mipCount > 1)
 		spd = spdShader.Get(L"Data\\Shaders\\Common\\DepthPyramidSPD.hlsl", {}, "cs_5_0", "main", "DepthPyramid::SPDCS");
 	D3DState::ComputeState restore(context, spd ? 14u : 4u);
 	const auto reduce = [&](UINT mip) {
@@ -128,7 +129,8 @@ bool DepthPyramid::Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView
 		return true;
 	}
 	const UINT groupsX = (width + 63) / 64, groupsY = (height + 63) / 64;
-	const std::array<UINT, 4> values{ width, height, mipCount - 1, groupsX * groupsY };
+	const UINT spdMips = DepthPyramidPolicy::SinglePassMipCount(width, height, mipCount);
+	const std::array<UINT, 4> values{ width, height, spdMips, groupsX * groupsY };
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	DX::ThrowIfFailed(context->Map(spdConstants->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 	std::memcpy(mapped.pData, values.data(), sizeof(values));
@@ -136,7 +138,7 @@ bool DepthPyramid::Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView
 	constexpr std::array<UINT, 4> zero{};
 	context->ClearUnorderedAccessViewUint(counter->uav.get(), zero.data());
 	std::array<ID3D11UnorderedAccessView*, 14> outputs{};
-	for (UINT mip = 1; mip < mipCount; ++mip)
+	for (UINT mip = 1; mip <= spdMips; ++mip)
 		outputs[mip - 1] = mipUAVs[mip].get();
 	outputs[12] = counter->uav.get();
 	outputs[13] = mipUAVs[0].get();
@@ -147,6 +149,8 @@ bool DepthPyramid::Build(ID3D11DeviceContext1* context, ID3D11ShaderResourceView
 	context->Dispatch(groupsX, groupsY, 1);
 	outputs.fill(nullptr);
 	context->CSSetUnorderedAccessViews(0, UINT(outputs.size()), outputs.data(), nullptr);
+	for (UINT mip = spdMips + 1; mip < mipCount; ++mip)
+		reduce(mip);
 	valid = true;
 	return true;
 }

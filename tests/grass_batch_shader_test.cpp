@@ -1,3 +1,4 @@
+#include "Utils/DepthPyramidPolicy.h"
 #include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
 #include <bit>
@@ -119,6 +120,8 @@ int main()
 		RunSPDReduction(128, 128, 2);
 		RunSPDReduction(1024, 128, 2);
 		RunSPDReduction(2048, 512, 1);
+		RunSPDReduction(4096, 128, 2);
+		RunSPDReduction(128, 8192, 1);
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassDepthCS.hlsl", "cs_5_0");
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassInstanceSignatureVS.hlsl", "vs_5_0");
 		for (bool vr : { false, true }) {

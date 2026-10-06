@@ -127,8 +127,12 @@ void GrassOptimizations::DrawSettings() { DrawControls(true); }
 void GrassOptimizations::DrawEssentialSettings() { DrawControls(false); }
 void GrassOptimizations::DrawPerformanceSettings(bool advanced) { DrawControls(advanced); }
 json GrassOptimizations::CapturePerformanceSettingsState() const { return GetSettings(); }
+bool GrassOptimizations::IsPerformanceCostMeasurementEnabled() const { return IsEnabled() && renderer->IsRenderingAvailable(); }
+bool GrassOptimizations::IsPerformanceCostMeasurementReady() const { return !IsEnabled() || renderer->IsRenderingAvailable(); }
 void GrassOptimizations::RestorePerformanceCostMeasurementState(const json& state)
 {
+	if (!state.is_object())
+		return;
 	auto saved = state;
 	LoadSettings(saved);
 }
@@ -211,8 +215,8 @@ void GrassOptimizations::DrawControls(bool advanced)
 		if (!SetSettings(next, error))
 			logger::warn("Grass settings rejected: {}", error);
 	}
-	if (!IsHookInstalled())
-		ImGui::TextUnformatted("Native grass rendering: draw hook unavailable.");
+	if (!renderer->IsRenderingAvailable())
+		ImGui::TextUnformatted("Native grass rendering: optimizations are unavailable.");
 }
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void GrassOptimizations::SetDiagnosticsEnabled(bool enabled) { renderer->SetDiagnosticsEnabled(enabled); }

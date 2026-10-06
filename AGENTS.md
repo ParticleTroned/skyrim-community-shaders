@@ -9,8 +9,9 @@ contradict this policy.
 
 ## Quick checklist
 
+-   **PR authorization:** Create a PR, including a draft, only when the user explicitly requests it for the change and names the repository and target base branch. Ask for any missing authorization or destination before publishing.
 -   **PR identity:** Format PR titles as `type(scope): description (#<number>)`. A branch created for an already-numbered PR must contain `pr<number>`; do not rename an open PR's head merely to retrofit the number.
--   **PR title:** Keep the descriptive portion at or below 50 characters when practical, target `main-VR`, and keep the title current because squash merge and release automation consume it.
+-   **PR title:** Keep the descriptive portion at or below 50 characters when practical and keep the title current because squash merge and release automation consume it.
 -   **PR body:** Wrap prose at 72 columns where practical and use `Why`, `What changed`, applicable safety/failure behavior, and exact validation evidence. Update stale text before merge.
 -   **Release-aware type:** Use `feat`, `fix`, or `perf` only for user-visible release changes. Developer tooling and build infrastructure are `build`; CI is `ci`; documentation and agent guidance are `docs`.
 -   **Commits:** Use the same Conventional Commit format. Every agent-created or rewritten commit must have a wrapped body with explicit `Rationale:` and `Implementation:` sections and accurate attribution. Stage only in-scope files.
@@ -38,9 +39,17 @@ contradict this policy.
 
 ## Pull requests and commits
 
+### Explicit authorization
+
+-   Create a pull request, including a draft, only when the user explicitly requests that PR for the change and explicitly names its repository and target base branch. A request to "make a PR" without a target branch is incomplete; ask for the missing destination before publishing a branch or opening the PR.
+-   Never infer PR creation or its destination from the checked-out branch, repository defaults, integration conventions, attached task documents, previous unrelated PRs, or completion of implementation and tests. Repository guidance describes how to prepare an authorized PR; it does not authorize one.
+-   Authorization applies only to the named change and repository. A CSX PR request does not authorize a separate DevBench or automation PR, and a request for fixes or local commits does not authorize any PR.
+-   Continue authorized local implementation, tests, builds, and review while PR authorization is incomplete. Keep the proposed work local until the user supplies the missing instruction.
+-   Permission to create a PR does not authorize merging it, retargeting it, or pushing directly to a shared branch. Each requires a separate explicit user instruction identifying the affected PR or repository and branch.
+
 ### Target and title
 
--   Target the repository's integration branch, currently `main-VR`. Do not target `main`, `dev`, or another release line unless the user explicitly directs it.
+-   Use only the target base branch explicitly named by the user. `main-VR` is the repository's integration branch, but is not an authorized default PR destination.
 -   Use `type(scope): description (#<number>)` for GitHub PR titles and `type(scope): description` for commits. The scope should identify the affected domain, such as `shaders`, `water`, `vr`, `tooling`, `build`, or `ci`.
 -   Every local and remote branch created for work on an already-numbered PR must contain its lowercase `pr<number>` identity, for example `codex/pr58-focused-forward-port`. A new PR needs a stable descriptive head because GitHub assigns its number only after creation; append the assigned number to its title immediately. Never rename or delete an open PR's head solely to retrofit its number because GitHub closes the PR instead of retargeting it.
 -   Use an imperative, specific description. Keep titles at or below 50 characters when practical; never shorten them into ambiguity merely to satisfy the limit.

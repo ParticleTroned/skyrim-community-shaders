@@ -76,7 +76,7 @@ namespace
 			UINT size, offset;
 		};
 		for (const auto& layout : {
-				 Layout{ L"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", "FoveatedCenterBlendCB", "BlendFalloff", 64, 60 },
+				 Layout{ L"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", "FoveatedCenterBlendCB", "BlendFalloff", 96, 76 },
 				 Layout{ L"features/Upscaling/Shaders/Upscaling/FoveatedSpatialCompositeCS.hlsl", "FoveatedSpatialCompositeCB", "Tuning", 96, 80 },
 				 Layout{ L"features/Upscaling/Shaders/Upscaling/PeripheryTAACS.hlsl", "PeripheryTAACB", "BlendTuning", 336, 320 } }) {
 			auto code = Compile(layout.path, vr, std::string_view(layout.buffer) == "PeripheryTAACB");

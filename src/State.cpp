@@ -53,6 +53,7 @@
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SphericalHarmonics.h"
+#include "Utils/WorldLoadTransitionPolicy.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
@@ -126,11 +127,22 @@ namespace
 		return result;
 	}
 
-	void StoreMax(std::atomic_uint32_t& a_target, uint32_t a_value)
+	void ExtendFrameDeadline(
+		std::atomic_uint32_t& a_target,
+		uint32_t a_currentFrame,
+		uint32_t a_frameCount)
 	{
 		uint32_t current = a_target.load(std::memory_order_acquire);
-		while (current < a_value) {
-			if (a_target.compare_exchange_weak(current, a_value, std::memory_order_acq_rel, std::memory_order_acquire)) {
+		for (;;) {
+			const uint32_t extended = Util::WorldLoadTransition::ExtendDeadline(
+				current, a_currentFrame, a_frameCount);
+			if (extended == current)
+				return;
+			if (a_target.compare_exchange_weak(
+					current,
+					extended,
+					std::memory_order_acq_rel,
+					std::memory_order_acquire)) {
 				return;
 			}
 		}
@@ -593,6 +605,11 @@ bool State::IsSaveLoadSafeModeActive() const
 	return saveLoadSafeModeActive.load(std::memory_order_acquire);
 }
 
+bool State::IsWorldLoadTransitionActive() const
+{
+	return worldLoadTransitionActive.load(std::memory_order_acquire);
+}
+
 bool State::IsEngineSaveLoadActivityActive() const
 {
 	return engineSaveLoadActivityActive.load(std::memory_order_acquire);
@@ -630,15 +647,16 @@ void State::RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource a_so
 
 void State::NotifyOrdinarySave(uint32_t a_currentFrame)
 {
-	std::lock_guard lock(saveLoadSafeModeMutex);
-	ExtendSaveLoadSafeModeImpl(a_currentFrame, kSaveLoadSafeModeGraceFrames);
-	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);
+	ExtendSaveGamePersistenceSafeMode(a_currentFrame, kSaveLoadSafeModeGraceFrames);
 }
 
 void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 {
 	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
+	worldLoadTransitionEndFrame.store(0, std::memory_order_release);
+	worldLoadTransitionActive.store(true, std::memory_order_release);
 	saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 	saveLoadSafeModeEndFrame.store(0, std::memory_order_release);
 	if (globals::shaderCache)
@@ -651,18 +669,29 @@ void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
 	std::lock_guard lock(saveLoadSafeModeMutex);
-	ExtendSaveLoadSafeModeImpl(a_currentFrame, a_frameCount);
+	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
+	if (worldLoadTransitionStartFrame.load(std::memory_order_acquire) == 0)
+		worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
+	ExtendFrameDeadline(worldLoadTransitionEndFrame, currentFrame, a_frameCount);
+	worldLoadTransitionActive.store(true, std::memory_order_release);
+	ExtendSaveLoadSafeModeImpl(currentFrame, a_frameCount);
 	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
+}
+
+void State::ExtendSaveGamePersistenceSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	ExtendSaveLoadSafeModeImpl(a_currentFrame, a_frameCount);
+	RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);
 }
 
 void State::ExtendSaveLoadSafeModeImpl(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
-	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
 	if (saveLoadSafeModeStartFrame.load(std::memory_order_acquire) == 0) {
 		saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 	}
-	StoreMax(saveLoadSafeModeEndFrame, endFrame);
+	ExtendFrameDeadline(saveLoadSafeModeEndFrame, currentFrame, a_frameCount);
 	if (globals::shaderCache)
 		globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
 	saveLoadSafeModeActive.store(true, std::memory_order_release);
@@ -673,8 +702,7 @@ void State::BeginPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_fra
 {
 	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
-	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
-	StoreMax(persistentMutationBlockEndFrame, endFrame);
+	ExtendFrameDeadline(persistentMutationBlockEndFrame, currentFrame, a_frameCount);
 	persistentMutationBlocked.store(true, std::memory_order_release);
 }
 
@@ -682,8 +710,7 @@ void State::ExtendPersistentMutationBlock(uint32_t a_currentFrame, uint32_t a_fr
 {
 	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
-	const uint32_t endFrame = currentFrame + std::max(a_frameCount, 1u);
-	StoreMax(persistentMutationBlockEndFrame, endFrame);
+	ExtendFrameDeadline(persistentMutationBlockEndFrame, currentFrame, a_frameCount);
 	persistentMutationBlocked.store(true, std::memory_order_release);
 }
 
@@ -695,18 +722,20 @@ void State::UpdateSaveLoadSafeMode()
 	const bool wasSafeModeActive = safeModeActive;
 
 	bool engineStateKnown = false;
-	bool engineSaving = false;
-	bool engineLoadingOrInitializing = false;
+	Util::WorldLoadTransition::EngineSignals engineSignals;
 	if (auto* saveLoad = RE::BGSSaveLoadGame::GetSingleton()) {
 		engineStateKnown = true;
-		engineSaving = saveLoad->GetSaveGameSaving();
-		engineLoadingOrInitializing =
-			saveLoad->GetSaveGameLoading() ||
-			saveLoad->GetInitingForms() ||
-			saveLoad->GetDeferInitForms() ||
-			saveLoad->GetPositioningPlayerCharacter();
+		engineSignals = {
+			.loading = saveLoad->GetSaveGameLoading(),
+			.saving = saveLoad->GetSaveGameSaving(),
+			.initializingForms = saveLoad->GetInitingForms(),
+			.deferredFormInitialization = saveLoad->GetDeferInitForms(),
+			.positioningPlayer = saveLoad->GetPositioningPlayerCharacter(),
+		};
 	}
-	const bool engineSaveLoadActive = engineSaving || engineLoadingOrInitializing;
+	const bool engineSaving = engineSignals.saving;
+	const bool engineLoadingOrInitializing = engineSignals.ReplacesWorldState();
+	const bool engineSaveLoadActive = engineSignals.RequiresPersistenceGuard();
 	engineSaveLoadActivityActive.store(
 		engineSaveLoadActive,
 		std::memory_order_release);
@@ -720,19 +749,38 @@ void State::UpdateSaveLoadSafeMode()
 	}
 	engineSavingWasActive = engineSaving;
 
+	{
+		const auto worldTransition = Util::WorldLoadTransition::Advance(
+			{
+				.active = worldLoadTransitionActive.load(std::memory_order_acquire),
+				.startFrame = worldLoadTransitionStartFrame.load(std::memory_order_acquire),
+				.endFrame = worldLoadTransitionEndFrame.load(std::memory_order_acquire),
+			},
+			engineSignals,
+			currentFrame,
+			kSaveLoadSafeModeGraceFrames,
+			kSaveLoadSafeModeFallbackFrames);
+		worldLoadTransitionStartFrame.store(worldTransition.startFrame, std::memory_order_release);
+		worldLoadTransitionEndFrame.store(worldTransition.endFrame, std::memory_order_release);
+		worldLoadTransitionActive.store(worldTransition.active, std::memory_order_release);
+	}
+
 	if (engineSaveLoadActive) {
 		if (!safeModeActive) {
 			if (globals::shaderCache)
 				globals::shaderCache->SetSaveLoadDiskPersistenceBlocked(true);
 			saveLoadSafeModeStartFrame.store(currentFrame, std::memory_order_release);
 		}
-		StoreMax(saveLoadSafeModeEndFrame, currentFrame + kSaveLoadSafeModeGraceFrames);
+		ExtendFrameDeadline(
+			saveLoadSafeModeEndFrame,
+			currentFrame,
+			kSaveLoadSafeModeGraceFrames);
 		safeModeActive = true;
 		saveLoadSafeModeActive.store(true, std::memory_order_release);
 	} else if (safeModeActive) {
 		const uint32_t endFrame = saveLoadSafeModeEndFrame.load(std::memory_order_acquire);
 		if (endFrame != 0) {
-			if (currentFrame >= endFrame) {
+			if (Util::WorldLoadTransition::ReachedDeadline(currentFrame, endFrame)) {
 				safeModeActive = false;
 				saveLoadSafeModeActive.store(false, std::memory_order_release);
 				saveLoadSafeModeStartFrame.store(0, std::memory_order_release);
@@ -751,12 +799,15 @@ void State::UpdateSaveLoadSafeMode()
 	}
 
 	uint32_t mutationBlockEndFrame = persistentMutationBlockEndFrame.load(std::memory_order_acquire);
-	if (mutationBlockEndFrame != 0 && currentFrame >= mutationBlockEndFrame) {
+	if (mutationBlockEndFrame != 0 &&
+		Util::WorldLoadTransition::ReachedDeadline(currentFrame, mutationBlockEndFrame)) {
 		persistentMutationBlockEndFrame.store(0, std::memory_order_release);
 		mutationBlockEndFrame = 0;
 	}
 
-	const bool mutationGraceActive = mutationBlockEndFrame != 0 && currentFrame < mutationBlockEndFrame;
+	const bool mutationGraceActive =
+		mutationBlockEndFrame != 0 &&
+		!Util::WorldLoadTransition::ReachedDeadline(currentFrame, mutationBlockEndFrame);
 	persistentMutationBlocked.store(safeModeActive || mutationGraceActive, std::memory_order_release);
 
 	if (wasSafeModeActive && !safeModeActive && globals::shaderCache)

@@ -17,7 +17,7 @@ optimistic success response is published.
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Service name                 | `csx.upscaling`                                                                                                        |
 | ABI                          | 1.0                                                                                                                    |
-| Schema revision              | 1                                                                                                                      |
+| Schema revision              | 2                                                                                                                      |
 | Registry coarse capabilities | inspection, runtime mutation, asynchronous operations, events, transactions; persistent mutation only when implemented |
 
 Major versions are ABI-breaking. Minor versions append function-table entries
@@ -45,6 +45,19 @@ pattern:
     repeat the earlier five-value assumption.
 -   Caller-created fades are not part of this API. CSX owns presentation coverage
     for renderer transitions and must not stack a second timed fade.
+
+## Neural Rendering dependency
+
+Schema revision 2 adds the snapshot flag
+`kSnapshotNeuralRenderScaleRequired` and the rejection condition
+`kConditionNeuralRenderScaleRequired` (`neural_render_scale_required` in
+DevBench). These extend existing bitmasks without changing ABI layouts.
+When enabled VR Renderscale NR requires scaling, preflight rejects a target
+with Render Scale off. Apply checks again before publishing a transition;
+the condition is not retryable without changing the NR mode or disabling NR.
+Native AA/DLAA and ineligible methods cannot bypass the dependency. Loading
+handoffs do not bypass it either. Full/Foveated NR and SE/AE retain their
+existing behavior.
 
 ## Complete profile model
 

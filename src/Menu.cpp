@@ -169,6 +169,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ToggleKey,
 	SkipCompilationKey,
 	EffectToggleKey,
+	NeuralRenderingToggleKey,
 	OverlayToggleKey,
 	ShaderBlockPrevKey,
 	ShaderBlockNextKey,
@@ -408,12 +409,12 @@ void Menu::PaletteFromJson(const json& themeJson, std::array<ImVec4, ImGuiCol_CO
 			for (int i = 0; i <= 32; i++)
 				palette[i] = loadVec4(arr[i]);
 			// [33] InputTextCursor: stays default
-			palette[34] = loadVec4(arr[34]);  // old TabHovered → TabHovered
-			palette[35] = loadVec4(arr[33]);  // old Tab → Tab (swapped)
-			palette[36] = loadVec4(arr[35]);  // old TabActive → TabSelected
+			palette[34] = loadVec4(arr[34]);  // old TabHovered â†’ TabHovered
+			palette[35] = loadVec4(arr[33]);  // old Tab â†’ Tab (swapped)
+			palette[36] = loadVec4(arr[35]);  // old TabActive â†’ TabSelected
 			// [37] TabSelectedOverline: stays default
-			palette[38] = loadVec4(arr[36]);  // old TabUnfocused → TabDimmed
-			palette[39] = loadVec4(arr[37]);  // old TabUnfocusedActive → TabDimmedSelected
+			palette[38] = loadVec4(arr[36]);  // old TabUnfocused â†’ TabDimmed
+			palette[39] = loadVec4(arr[37]);  // old TabUnfocusedActive â†’ TabDimmedSelected
 			// [40] TabDimmedSelectedOverline: stays default
 			for (int i = 38; i <= 48; i++)
 				palette[i + 3] = loadVec4(arr[i]);
@@ -542,6 +543,7 @@ void Menu::Load(json& o_json)
 	migrateKey(o_json, "ToggleKey", settings.ToggleKey);
 	migrateKey(o_json, "SkipCompilationKey", settings.SkipCompilationKey);
 	migrateKey(o_json, "EffectToggleKey", settings.EffectToggleKey);
+	migrateKey(o_json, "NeuralRenderingToggleKey", settings.NeuralRenderingToggleKey);
 	migrateKey(o_json, "OverlayToggleKey", settings.OverlayToggleKey);
 	migrateKey(o_json, "ShaderBlockPrevKey", settings.ShaderBlockPrevKey);
 	migrateKey(o_json, "ShaderBlockNextKey", settings.ShaderBlockNextKey);
@@ -566,6 +568,7 @@ void Menu::Load(json& o_json)
 	loadComboList(o_json, "ToggleKey", settings.ToggleKey);
 	loadComboList(o_json, "SkipCompilationKey", settings.SkipCompilationKey);
 	loadComboList(o_json, "EffectToggleKey", settings.EffectToggleKey);
+	loadComboList(o_json, "NeuralRenderingToggleKey", settings.NeuralRenderingToggleKey);
 	loadComboList(o_json, "OverlayToggleKey", settings.OverlayToggleKey);
 	loadComboList(o_json, "ShaderBlockPrevKey", settings.ShaderBlockPrevKey);
 	loadComboList(o_json, "ShaderBlockNextKey", settings.ShaderBlockNextKey);
@@ -636,6 +639,7 @@ void Menu::Save(json& o_json)
 	InputCombo::ComboList::to_json(o_json["ToggleKey"], settings.ToggleKey);
 	InputCombo::ComboList::to_json(o_json["SkipCompilationKey"], settings.SkipCompilationKey);
 	InputCombo::ComboList::to_json(o_json["EffectToggleKey"], settings.EffectToggleKey);
+	InputCombo::ComboList::to_json(o_json["NeuralRenderingToggleKey"], settings.NeuralRenderingToggleKey);
 	InputCombo::ComboList::to_json(o_json["OverlayToggleKey"], settings.OverlayToggleKey);
 	InputCombo::ComboList::to_json(o_json["ShaderBlockPrevKey"], settings.ShaderBlockPrevKey);
 	InputCombo::ComboList::to_json(o_json["ShaderBlockNextKey"], settings.ShaderBlockNextKey);
@@ -1215,6 +1219,7 @@ void Menu::DrawGeneralSettings()
 	SettingsTabRenderer::SettingsState state{
 		.settingToggleKey = settingToggleKey,
 		.settingsEffectsToggle = settingsEffectsToggle,
+		.settingNeuralRenderingToggleKey = settingNeuralRenderingToggleKey,
 		.settingSkipCompilationKey = settingSkipCompilationKey,
 		.settingOverlayToggleKey = settingOverlayToggleKey,
 		.settingShaderBlockPrevKey = settingShaderBlockPrevKey,
@@ -1529,6 +1534,7 @@ void Menu::ProcessInputEventQueue()
 					 } },
 					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->SetBackgroundCompilation(true); } },
 					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnableRequested()); } },
+					{ settings.NeuralRenderingToggleKey, []() { (void)globals::features::upscaling.ToggleNeuralRendering(); } },
 					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
 					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },
 					{ settings.OverlayToggleKey, []() { Menu::GetSingleton()->overlayVisible = !Menu::GetSingleton()->overlayVisible; } },
@@ -1590,6 +1596,7 @@ void Menu::ProcessInputEventQueue()
 					 } },
 					{ &settings.SkipCompilationKey, &settingSkipCompilationKey, [this](std::vector<InputCombo> keys) { settings.SkipCompilationKey = keys; settingSkipCompilationKey = false; } },
 					{ &settings.EffectToggleKey, &settingsEffectsToggle, [this](std::vector<InputCombo> keys) { settings.EffectToggleKey = keys; settingsEffectsToggle = false; } },
+					{ &settings.NeuralRenderingToggleKey, &settingNeuralRenderingToggleKey, [this](std::vector<InputCombo> keys) { settings.NeuralRenderingToggleKey = keys; settingNeuralRenderingToggleKey = false; } },
 					{ &settings.OverlayToggleKey, &settingOverlayToggleKey, [this](std::vector<InputCombo> keys) { settings.OverlayToggleKey = keys; settingOverlayToggleKey = false; } },
 					{ &settings.ShaderBlockPrevKey, &settingShaderBlockPrevKey, [this](std::vector<InputCombo> keys) { settings.ShaderBlockPrevKey = keys; settingShaderBlockPrevKey = false; } },
 					{ &settings.ShaderBlockNextKey, &settingShaderBlockNextKey, [this](std::vector<InputCombo> keys) { settings.ShaderBlockNextKey = keys; settingShaderBlockNextKey = false; } },
@@ -1676,7 +1683,7 @@ void Menu::ProcessInputEventQueue()
 			// Don't forward hotkey events to ImGui when input is captured (prevents e.g. End key scrolling the feature list)
 			// SkipCompilationKey (ESC) is excluded - ESC must reach ImGui for menu/dialog close.
 			const std::vector<InputCombo>* hotkeys[] = {
-				&settings.ToggleKey, &settings.EffectToggleKey,
+				&settings.ToggleKey, &settings.EffectToggleKey, &settings.NeuralRenderingToggleKey,
 				&settings.OverlayToggleKey, &settings.ShaderBlockPrevKey, &settings.ShaderBlockNextKey,
 				&settings.CSEditorToggleKey
 			};
@@ -1721,7 +1728,7 @@ void Menu::RecordDirectInputWheelDelta(std::int32_t a_delta)
 
 bool Menu::IsCapturingHotkeyInput() const
 {
-	return settingToggleKey || settingSkipCompilationKey || settingsEffectsToggle ||
+	return settingToggleKey || settingSkipCompilationKey || settingsEffectsToggle || settingNeuralRenderingToggleKey ||
 	       settingOverlayToggleKey || settingShaderBlockPrevKey || settingShaderBlockNextKey || settingCSEditorToggleKey || settingScreenshotKey;
 }
 

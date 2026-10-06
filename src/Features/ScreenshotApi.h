@@ -7,6 +7,7 @@
 #endif
 #include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
+#include "ScreenshotNeuralDiagnostics.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -93,6 +94,7 @@ private:
 		json effective = json::object();
 		json artifacts = json::array();
 		json actual = json::object();
+		CSX::ScreenshotPolicy::DiagnosticSnapshot diagnosticSnapshot;
 		json warnings = json::array();
 		json errors = json::array();
 		json error = nullptr;

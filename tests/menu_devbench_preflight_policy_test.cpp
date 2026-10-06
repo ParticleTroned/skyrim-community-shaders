@@ -25,6 +25,12 @@ namespace
 		if (!CanApplyRuntimeSettings(ready) || !HasRequiredFoveation(ready) || !IsReady(ready))
 			return false;
 
+		auto nrEnabled = ready;
+		nrEnabled.neuralRenderingEnabled = true;
+		if (CanApplyRuntimeSettings(nrEnabled) || IsReady(nrEnabled) ||
+			CanApplyRuntimeSettings(nrEnabled, Preparation::Tuning) || IsReady(nrEnabled, Preparation::Tuning))
+			return false;
+
 		auto missingStabilizer = ready;
 		missingStabilizer.stabilizerActiveForSession = false;
 		if (CanApplyRuntimeSettings(missingStabilizer) || IsReady(missingStabilizer))

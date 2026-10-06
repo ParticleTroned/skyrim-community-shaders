@@ -19,9 +19,9 @@ Existing default and user settings may retain `EnableFastProbeSampling`;
 the loader ignores it regardless of value and preserves all supported
 settings. Saving a loaded Skylighting feature replaces its section with the
 current schema, omitting the retired key. Settings for features disabled at
-boot remain preserved until they are enabled and saved. No manual reset or
-settings-contract revision change is required; existing revision-5 unified
-presets remain accepted.
+boot remain preserved until they are enabled and saved. Removing the key
+requires no manual reset or additional settings-contract revision change;
+the current settings contract uses revision 8 and its compatibility rules.
 Generated presets reject the retired key so new packages cannot reintroduce it.
 
 Exterior and interior Volumetric Lighting share godray intensity, opacity,
@@ -126,8 +126,13 @@ The generator rejects:
 The current base includes the main-VR settings migrations for Adaptive
 Balance's unified global profile, separate exterior/interior godray profiles,
 wet-grass darkening, locked VR menu placement, depth-culling policy modes, and
-opt-in verbose PBR diagnostics. Their retired keys are explicitly rejected so
-a package cannot silently fall back through legacy migration on first load.
+opt-in verbose PBR diagnostics, and the independent Neural Rendering feature.
+Neural Rendering remains off in every tier, with all persistent rendering
+and colour defaults explicit, including lighting preservation at 100%.
+Actor NR uses a single enclosing ROI per nonempty eye in all three pipelines.
+Actor crop and exact material masks share the same persistent settings in all
+presets. Session diagnostics are not saved in graphics tiers. Contract revision
+8 and the source fingerprint describe the current settings surface.
 
 Global and all five Adaptive Balance profiles explicitly include Sky
 Saturation, Caustics Strength, Tiling, Speed and Color Dispersion, and Water
@@ -138,11 +143,11 @@ every profile.
 
 Extended Materials includes the independent mesh and terrain Parallax Strength
 at its neutral value of `1.0` in every tier. Legacy settings without the key
-also retain neutral depth; this additive default retains contract revision 5.
+also retain neutral depth; this additive default retains contract revision 8.
 
 Ambient Lighting for Effects and Sky Statics is explicitly off in all
 three tiers. Its additive default preserves existing settings-contract
-revision 5 and weather-based lighting until enabled in Adaptive Balance.
+revision 8 and weather-based lighting until enabled in Adaptive Balance.
 
 ## CSX compatibility contract
 
@@ -158,7 +163,15 @@ The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
 package version, VR runtime, inclusive minimum `3.20`, exclusive maximum
 `3.21`, and the settings-contract fingerprint used to generate it.
-The generator and runtime loader both use settings-contract revision 5.
+The generator and runtime loader both use settings-contract revision 8.
+Actor inference-area selection adds `neuralCharacterCropMode`, default 1
+(Cropped), and `neuralCharacterFocusScale`, default 0.75 relative to the
+visible FOV. All tiers keep NR disabled; missing settings use these defaults.
+Revision 8 remains valid, and the base pins the new values.
+Revision 8 pins final-scene placement for Foveated NR and enables character
+hair selection by default. Earlier marked packages must be regenerated for
+this build. Unmarked user settings retain the existing migration path,
+including explicitly saved hair selections.
 The Release compatibility regression loads every generated tier to verify
 that the shipping loader accepts its metadata.
 
@@ -197,7 +210,7 @@ through the Feature DevBench API's `preset_compatibility` action. Unmarked
 legacy and user-authored settings remain accepted because strict metadata
 cannot be added retroactively.
 
-CSX 3.20 also accepts the three bundled revision-5 unified presets that
+CSX 3.20 also accepts the three bundled revision-8 NR unified presets that
 declare the previous `3.19` to `3.20` range. Their settings schema remains
 supported, so this version update preserves installed user settings. This
 exception does not apply to other preset IDs, other contract revisions,
@@ -234,6 +247,9 @@ Generate all three packages and the evidence report:
 ```powershell
 pwsh -NoProfile -File tools/generate-unified-presets.ps1
 ```
+
+Generation updates each preset's settings and metadata plus the report. It
+does not create or replace `.7z` archives beside those preset directories.
 
 Perform the non-writing deterministic check:
 

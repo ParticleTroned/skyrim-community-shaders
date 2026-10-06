@@ -1,6 +1,7 @@
 <!--
 Title: type(scope): description
-Target: main-VR unless another release line was explicitly requested.
+Create a PR only when the user explicitly requests it and names its repository
+and target base branch. Target only that branch; there is no default destination.
 Keep the title at or below 50 characters when practical.
 Wrap prose at 72 columns where practical; do not break commands or URLs.
 Keep every section synchronized with the final diff before merge.

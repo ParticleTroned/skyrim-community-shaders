@@ -108,6 +108,17 @@ int main()
 			kConditionProviderUnavailable);
 		Check((preexistingProviderFailure.blockingConditions & kConditionProviderUnavailable) != 0,
 			"fallback telemetry suppressed a pre-existing provider failure");
+
+		for (const auto purpose : { RequestPurpose::kDirect, RequestPurpose::kEnvironmentProfileTransition }) {
+			const auto neuralDependency = CSX::Api::ResolveUpscalingAdmission(
+				kConditionLoadingTransition | kConditionNeuralRenderScaleRequired,
+				purpose, PersistencePolicy::kRuntimeOnly, false);
+			Check((neuralDependency.blockingConditions & kConditionNeuralRenderScaleRequired) != 0,
+				"NR dependency must block direct and environment-profile scale-off requests");
+			Check(neuralDependency.route == AdmissionRoute::kDirect,
+				"NR dependency must not enter a loading-door handoff");
+		}
+
 		const auto persistenceUnavailable = CSX::Api::ResolveUpscalingAdmission(
 			kConditionLoadingTransition,
 			RequestPurpose::kEnvironmentProfileTransition,

@@ -1,6 +1,7 @@
 #include "Features/ScreenshotApiPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotBurstPolicy.h"
+#	include "Utils/CaptureRetention.h"
 #endif
 #include "Utils/StringUtils.h"
 #include <algorithm>

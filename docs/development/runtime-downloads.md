@@ -1,5 +1,13 @@
 # Builds without upscaler runtime downloads
 
+## Neural Rendering
+
+Neural Rendering requires `nvngx_dlssnr.dll` at
+`Shaders/Upscaling/Streamline/nvngx_dlssnr.dll`, relative to the installed
+CSX mod folder. Its controls are disabled when this file is absent.
+
+## DLL development without runtime downloads
+
 `SKIP_RUNTIME_DOWNLOADS=ON` allows DLL development when the FidelityFX or
 Streamline runtime payloads are unavailable. It defaults to `OFF`. This
 option does not supply other dependencies: the compiler, SDK headers,

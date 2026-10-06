@@ -43,15 +43,24 @@ namespace
 	const char* ToString(ServiceAPI::Status a_status)
 	{
 		switch (a_status) {
-		case ServiceAPI::Status::kSuccess: return "success";
-		case ServiceAPI::Status::kInvalidArgument: return "invalid_argument";
-		case ServiceAPI::Status::kStructureTooSmall: return "structure_too_small";
-		case ServiceAPI::Status::kIncompatibleRegistryVersion: return "incompatible_registry_version";
-		case ServiceAPI::Status::kServiceNotFound: return "service_not_found";
-		case ServiceAPI::Status::kIncompatibleServiceVersion: return "incompatible_service_version";
-		case ServiceAPI::Status::kMissingCapabilities: return "missing_capabilities";
-		case ServiceAPI::Status::kAlreadyRegistered: return "already_registered";
-		case ServiceAPI::Status::kInternalError: return "internal_error";
+		case ServiceAPI::Status::kSuccess:
+			return "success";
+		case ServiceAPI::Status::kInvalidArgument:
+			return "invalid_argument";
+		case ServiceAPI::Status::kStructureTooSmall:
+			return "structure_too_small";
+		case ServiceAPI::Status::kIncompatibleRegistryVersion:
+			return "incompatible_registry_version";
+		case ServiceAPI::Status::kServiceNotFound:
+			return "service_not_found";
+		case ServiceAPI::Status::kIncompatibleServiceVersion:
+			return "incompatible_service_version";
+		case ServiceAPI::Status::kMissingCapabilities:
+			return "missing_capabilities";
+		case ServiceAPI::Status::kAlreadyRegistered:
+			return "already_registered";
+		case ServiceAPI::Status::kInternalError:
+			return "internal_error";
 		}
 		return "unknown";
 	}
@@ -59,19 +68,32 @@ namespace
 	const char* ToString(UpscalingAPI::Status a_status)
 	{
 		switch (a_status) {
-		case UpscalingAPI::Status::kSuccess: return "success";
-		case UpscalingAPI::Status::kInvalidArgument: return "invalid_argument";
-		case UpscalingAPI::Status::kStructureTooSmall: return "structure_too_small";
-		case UpscalingAPI::Status::kUnsupportedRuntime: return "unsupported_runtime";
-		case UpscalingAPI::Status::kUnsupportedProfile: return "unsupported_profile";
-		case UpscalingAPI::Status::kServiceUnavailable: return "service_unavailable";
-		case UpscalingAPI::Status::kStateConflict: return "state_conflict";
-		case UpscalingAPI::Status::kBlocked: return "blocked";
-		case UpscalingAPI::Status::kBusy: return "busy";
-		case UpscalingAPI::Status::kIdempotencyConflict: return "idempotency_conflict";
-		case UpscalingAPI::Status::kOperationNotFound: return "operation_not_found";
-		case UpscalingAPI::Status::kBufferTooSmall: return "buffer_too_small";
-		case UpscalingAPI::Status::kInternalError: return "internal_error";
+		case UpscalingAPI::Status::kSuccess:
+			return "success";
+		case UpscalingAPI::Status::kInvalidArgument:
+			return "invalid_argument";
+		case UpscalingAPI::Status::kStructureTooSmall:
+			return "structure_too_small";
+		case UpscalingAPI::Status::kUnsupportedRuntime:
+			return "unsupported_runtime";
+		case UpscalingAPI::Status::kUnsupportedProfile:
+			return "unsupported_profile";
+		case UpscalingAPI::Status::kServiceUnavailable:
+			return "service_unavailable";
+		case UpscalingAPI::Status::kStateConflict:
+			return "state_conflict";
+		case UpscalingAPI::Status::kBlocked:
+			return "blocked";
+		case UpscalingAPI::Status::kBusy:
+			return "busy";
+		case UpscalingAPI::Status::kIdempotencyConflict:
+			return "idempotency_conflict";
+		case UpscalingAPI::Status::kOperationNotFound:
+			return "operation_not_found";
+		case UpscalingAPI::Status::kBufferTooSmall:
+			return "buffer_too_small";
+		case UpscalingAPI::Status::kInternalError:
+			return "internal_error";
 		}
 		return "unknown";
 	}
@@ -95,10 +117,14 @@ namespace
 	const char* ToString(UpscalingAPI::Method a_value)
 	{
 		switch (a_value) {
-		case UpscalingAPI::Method::kNone: return "none";
-		case UpscalingAPI::Method::kTAA: return "taa";
-		case UpscalingAPI::Method::kFSR: return "fsr";
-		case UpscalingAPI::Method::kDLSS: return "dlss";
+		case UpscalingAPI::Method::kNone:
+			return "none";
+		case UpscalingAPI::Method::kTAA:
+			return "taa";
+		case UpscalingAPI::Method::kFSR:
+			return "fsr";
+		case UpscalingAPI::Method::kDLSS:
+			return "dlss";
 		}
 		return "unknown";
 	}
@@ -106,13 +132,20 @@ namespace
 	const char* ToString(UpscalingAPI::QualityMode a_value)
 	{
 		switch (a_value) {
-		case UpscalingAPI::QualityMode::kNativeAA: return "native_aa";
-		case UpscalingAPI::QualityMode::kHoshipa: return "hoshipa";
-		case UpscalingAPI::QualityMode::kUltraQuality: return "ultra_quality";
-		case UpscalingAPI::QualityMode::kQuality: return "quality";
-		case UpscalingAPI::QualityMode::kBalanced: return "balanced";
-		case UpscalingAPI::QualityMode::kPerformance: return "performance";
-		case UpscalingAPI::QualityMode::kUltraPerformance: return "ultra_performance";
+		case UpscalingAPI::QualityMode::kNativeAA:
+			return "native_aa";
+		case UpscalingAPI::QualityMode::kHoshipa:
+			return "hoshipa";
+		case UpscalingAPI::QualityMode::kUltraQuality:
+			return "ultra_quality";
+		case UpscalingAPI::QualityMode::kQuality:
+			return "quality";
+		case UpscalingAPI::QualityMode::kBalanced:
+			return "balanced";
+		case UpscalingAPI::QualityMode::kPerformance:
+			return "performance";
+		case UpscalingAPI::QualityMode::kUltraPerformance:
+			return "ultra_performance";
 		}
 		return "unknown";
 	}
@@ -120,12 +153,18 @@ namespace
 	const char* ToString(UpscalingAPI::DLSSProfile a_value)
 	{
 		switch (a_value) {
-		case UpscalingAPI::DLSSProfile::kJ: return "J";
-		case UpscalingAPI::DLSSProfile::kK: return "K";
-		case UpscalingAPI::DLSSProfile::kL: return "L";
-		case UpscalingAPI::DLSSProfile::kM: return "M";
-		case UpscalingAPI::DLSSProfile::kF: return "F";
-		case UpscalingAPI::DLSSProfile::kE: return "E";
+		case UpscalingAPI::DLSSProfile::kJ:
+			return "J";
+		case UpscalingAPI::DLSSProfile::kK:
+			return "K";
+		case UpscalingAPI::DLSSProfile::kL:
+			return "L";
+		case UpscalingAPI::DLSSProfile::kM:
+			return "M";
+		case UpscalingAPI::DLSSProfile::kF:
+			return "F";
+		case UpscalingAPI::DLSSProfile::kE:
+			return "E";
 		}
 		return "unknown";
 	}
@@ -133,71 +172,79 @@ namespace
 	const char* ToString(UpscalingAPI::FSRRuntime a_value)
 	{
 		switch (a_value) {
-		case UpscalingAPI::FSRRuntime::kFSR3: return "fsr3";
-		case UpscalingAPI::FSRRuntime::kFSR4: return "fsr4";
+		case UpscalingAPI::FSRRuntime::kFSR3:
+			return "fsr3";
+		case UpscalingAPI::FSRRuntime::kFSR4:
+			return "fsr4";
 		}
 		return "unknown";
 	}
 
-	#define CSX_ENUM_STRING_FUNCTION(EnumType, ...) \
-		const char* ToString(EnumType a_value) { switch (a_value) { __VA_ARGS__ } return "unknown"; }
+#	define CSX_ENUM_STRING_FUNCTION(EnumType, ...) \
+		const char* ToString(EnumType a_value)      \
+		{                                           \
+			switch (a_value) {                      \
+				__VA_ARGS__                         \
+			}                                       \
+			return "unknown";                       \
+		}
 
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::RuntimeKind,
-		case UpscalingAPI::RuntimeKind::kUnknown: return "unknown";
-		case UpscalingAPI::RuntimeKind::kSkyrimSE: return "skyrim_se";
-		case UpscalingAPI::RuntimeKind::kSkyrimAE: return "skyrim_ae";
-		case UpscalingAPI::RuntimeKind::kSkyrimVR: return "skyrim_vr";)
+		case UpscalingAPI::RuntimeKind::kUnknown : return "unknown";
+		case UpscalingAPI::RuntimeKind::kSkyrimSE : return "skyrim_se";
+		case UpscalingAPI::RuntimeKind::kSkyrimAE : return "skyrim_ae";
+		case UpscalingAPI::RuntimeKind::kSkyrimVR : return "skyrim_vr";)
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::RenderScaleStatus,
-		case UpscalingAPI::RenderScaleStatus::kDisabled: return "disabled";
-		case UpscalingAPI::RenderScaleStatus::kIneligibleMethod: return "ineligible_method";
-		case UpscalingAPI::RenderScaleStatus::kNativeQuality: return "native_quality";
-		case UpscalingAPI::RenderScaleStatus::kRuntimeBlocked: return "runtime_blocked";
-		case UpscalingAPI::RenderScaleStatus::kPendingRelatch: return "pending_relatch";
-		case UpscalingAPI::RenderScaleStatus::kActive: return "active";
-		case UpscalingAPI::RenderScaleStatus::kRestartRequired: return "restart_required";)
+		case UpscalingAPI::RenderScaleStatus::kDisabled : return "disabled";
+		case UpscalingAPI::RenderScaleStatus::kIneligibleMethod : return "ineligible_method";
+		case UpscalingAPI::RenderScaleStatus::kNativeQuality : return "native_quality";
+		case UpscalingAPI::RenderScaleStatus::kRuntimeBlocked : return "runtime_blocked";
+		case UpscalingAPI::RenderScaleStatus::kPendingRelatch : return "pending_relatch";
+		case UpscalingAPI::RenderScaleStatus::kActive : return "active";
+		case UpscalingAPI::RenderScaleStatus::kRestartRequired : return "restart_required";)
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::TransitionState,
-		case UpscalingAPI::TransitionState::kIdle: return "idle";
-		case UpscalingAPI::TransitionState::kRequested: return "requested";
-		case UpscalingAPI::TransitionState::kWaitingForSafePoint: return "waiting_for_safe_point";
-		case UpscalingAPI::TransitionState::kPreparing: return "preparing";
-		case UpscalingAPI::TransitionState::kApplying: return "applying";
-		case UpscalingAPI::TransitionState::kStabilizing: return "stabilizing";
-		case UpscalingAPI::TransitionState::kActive: return "active";)
+		case UpscalingAPI::TransitionState::kIdle : return "idle";
+		case UpscalingAPI::TransitionState::kRequested : return "requested";
+		case UpscalingAPI::TransitionState::kWaitingForSafePoint : return "waiting_for_safe_point";
+		case UpscalingAPI::TransitionState::kPreparing : return "preparing";
+		case UpscalingAPI::TransitionState::kApplying : return "applying";
+		case UpscalingAPI::TransitionState::kStabilizing : return "stabilizing";
+		case UpscalingAPI::TransitionState::kActive : return "active";)
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::PreflightDecision,
-		case UpscalingAPI::PreflightDecision::kNoChange: return "no_change";
-		case UpscalingAPI::PreflightDecision::kApplySynchronously: return "apply_synchronously";
-		case UpscalingAPI::PreflightDecision::kQueue: return "queue";
-		case UpscalingAPI::PreflightDecision::kBlocked: return "blocked";
-		case UpscalingAPI::PreflightDecision::kUnsupported: return "unsupported";)
+		case UpscalingAPI::PreflightDecision::kNoChange : return "no_change";
+		case UpscalingAPI::PreflightDecision::kApplySynchronously : return "apply_synchronously";
+		case UpscalingAPI::PreflightDecision::kQueue : return "queue";
+		case UpscalingAPI::PreflightDecision::kBlocked : return "blocked";
+		case UpscalingAPI::PreflightDecision::kUnsupported : return "unsupported";)
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::AdmissionRoute,
-		case UpscalingAPI::AdmissionRoute::kNone: return "none";
-		case UpscalingAPI::AdmissionRoute::kDirect: return "direct";
-		case UpscalingAPI::AdmissionRoute::kDeferredSafePoint: return "deferred_safe_point";
-		case UpscalingAPI::AdmissionRoute::kLoadingDoorHandoff: return "loading_door_handoff";)
+		case UpscalingAPI::AdmissionRoute::kNone : return "none";
+		case UpscalingAPI::AdmissionRoute::kDirect : return "direct";
+		case UpscalingAPI::AdmissionRoute::kDeferredSafePoint : return "deferred_safe_point";
+		case UpscalingAPI::AdmissionRoute::kLoadingDoorHandoff : return "loading_door_handoff";)
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::ApplyDisposition,
-		case UpscalingAPI::ApplyDisposition::kRejected: return "rejected";
-		case UpscalingAPI::ApplyDisposition::kNoChange: return "no_change";
-		case UpscalingAPI::ApplyDisposition::kAppliedSynchronously: return "applied_synchronously";
-		case UpscalingAPI::ApplyDisposition::kQueued: return "queued";)
+		case UpscalingAPI::ApplyDisposition::kRejected : return "rejected";
+		case UpscalingAPI::ApplyDisposition::kNoChange : return "no_change";
+		case UpscalingAPI::ApplyDisposition::kAppliedSynchronously : return "applied_synchronously";
+		case UpscalingAPI::ApplyDisposition::kQueued : return "queued";)
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::OperationState,
-		case UpscalingAPI::OperationState::kQueued: return "queued";
-		case UpscalingAPI::OperationState::kWaitingForSafePoint: return "waiting_for_safe_point";
-		case UpscalingAPI::OperationState::kPreparing: return "preparing";
-		case UpscalingAPI::OperationState::kApplying: return "applying";
-		case UpscalingAPI::OperationState::kStabilizing: return "stabilizing";
-		case UpscalingAPI::OperationState::kCompleted: return "completed";
-		case UpscalingAPI::OperationState::kFailed: return "failed";
-		case UpscalingAPI::OperationState::kSuperseded: return "superseded";)
+		case UpscalingAPI::OperationState::kQueued : return "queued";
+		case UpscalingAPI::OperationState::kWaitingForSafePoint : return "waiting_for_safe_point";
+		case UpscalingAPI::OperationState::kPreparing : return "preparing";
+		case UpscalingAPI::OperationState::kApplying : return "applying";
+		case UpscalingAPI::OperationState::kStabilizing : return "stabilizing";
+		case UpscalingAPI::OperationState::kCompleted : return "completed";
+		case UpscalingAPI::OperationState::kFailed : return "failed";
+		case UpscalingAPI::OperationState::kSuperseded : return "superseded";)
 	CSX_ENUM_STRING_FUNCTION(UpscalingAPI::EventType,
-		case UpscalingAPI::EventType::kAccepted: return "accepted";
-		case UpscalingAPI::EventType::kQueued: return "queued";
-		case UpscalingAPI::EventType::kStateChanged: return "state_changed";
-		case UpscalingAPI::EventType::kCompleted: return "completed";
-		case UpscalingAPI::EventType::kFailed: return "failed";
-		case UpscalingAPI::EventType::kSuperseded: return "superseded";
-		case UpscalingAPI::EventType::kPersisted: return "persisted";)
+		case UpscalingAPI::EventType::kAccepted : return "accepted";
+		case UpscalingAPI::EventType::kQueued : return "queued";
+		case UpscalingAPI::EventType::kStateChanged : return "state_changed";
+		case UpscalingAPI::EventType::kCompleted : return "completed";
+		case UpscalingAPI::EventType::kFailed : return "failed";
+		case UpscalingAPI::EventType::kSuperseded : return "superseded";
+		case UpscalingAPI::EventType::kPersisted : return "persisted";)
 
-	#undef CSX_ENUM_STRING_FUNCTION
+#	undef CSX_ENUM_STRING_FUNCTION
 
 	template <class T>
 	json Named(T a_value)
@@ -208,43 +255,62 @@ namespace
 	UpscalingAPI::Method ParseMethod(const json& a_value)
 	{
 		const auto value = Lower(a_value.get<std::string>());
-		if (value == "none") return UpscalingAPI::Method::kNone;
-		if (value == "taa") return UpscalingAPI::Method::kTAA;
-		if (value == "fsr") return UpscalingAPI::Method::kFSR;
-		if (value == "dlss") return UpscalingAPI::Method::kDLSS;
+		if (value == "none")
+			return UpscalingAPI::Method::kNone;
+		if (value == "taa")
+			return UpscalingAPI::Method::kTAA;
+		if (value == "fsr")
+			return UpscalingAPI::Method::kFSR;
+		if (value == "dlss")
+			return UpscalingAPI::Method::kDLSS;
 		throw std::runtime_error("target.method must be none, taa, fsr, or dlss");
 	}
 
 	UpscalingAPI::QualityMode ParseQuality(const json& a_value)
 	{
 		const auto value = Lower(a_value.get<std::string>());
-		if (value == "native_aa") return UpscalingAPI::QualityMode::kNativeAA;
-		if (value == "hoshipa") return UpscalingAPI::QualityMode::kHoshipa;
-		if (value == "ultra_quality") return UpscalingAPI::QualityMode::kUltraQuality;
-		if (value == "quality") return UpscalingAPI::QualityMode::kQuality;
-		if (value == "balanced") return UpscalingAPI::QualityMode::kBalanced;
-		if (value == "performance") return UpscalingAPI::QualityMode::kPerformance;
-		if (value == "ultra_performance") return UpscalingAPI::QualityMode::kUltraPerformance;
+		if (value == "native_aa")
+			return UpscalingAPI::QualityMode::kNativeAA;
+		if (value == "hoshipa")
+			return UpscalingAPI::QualityMode::kHoshipa;
+		if (value == "ultra_quality")
+			return UpscalingAPI::QualityMode::kUltraQuality;
+		if (value == "quality")
+			return UpscalingAPI::QualityMode::kQuality;
+		if (value == "balanced")
+			return UpscalingAPI::QualityMode::kBalanced;
+		if (value == "performance")
+			return UpscalingAPI::QualityMode::kPerformance;
+		if (value == "ultra_performance")
+			return UpscalingAPI::QualityMode::kUltraPerformance;
 		throw std::runtime_error("target.qualityMode is invalid");
 	}
 
 	UpscalingAPI::DLSSProfile ParseDLSSProfile(const json& a_value)
 	{
 		const auto value = Lower(a_value.get<std::string>());
-		if (value == "j") return UpscalingAPI::DLSSProfile::kJ;
-		if (value == "k") return UpscalingAPI::DLSSProfile::kK;
-		if (value == "l") return UpscalingAPI::DLSSProfile::kL;
-		if (value == "m") return UpscalingAPI::DLSSProfile::kM;
-		if (value == "f") return UpscalingAPI::DLSSProfile::kF;
-		if (value == "e") return UpscalingAPI::DLSSProfile::kE;
+		if (value == "j")
+			return UpscalingAPI::DLSSProfile::kJ;
+		if (value == "k")
+			return UpscalingAPI::DLSSProfile::kK;
+		if (value == "l")
+			return UpscalingAPI::DLSSProfile::kL;
+		if (value == "m")
+			return UpscalingAPI::DLSSProfile::kM;
+		if (value == "f")
+			return UpscalingAPI::DLSSProfile::kF;
+		if (value == "e")
+			return UpscalingAPI::DLSSProfile::kE;
 		throw std::runtime_error("target.dlssProfile must be J, K, L, M, F, or E");
 	}
 
 	UpscalingAPI::FSRRuntime ParseFSRRuntime(const json& a_value)
 	{
 		const auto value = Lower(a_value.get<std::string>());
-		if (value == "fsr3") return UpscalingAPI::FSRRuntime::kFSR3;
-		if (value == "fsr4") return UpscalingAPI::FSRRuntime::kFSR4;
+		if (value == "fsr3")
+			return UpscalingAPI::FSRRuntime::kFSR3;
+		if (value == "fsr4")
+			return UpscalingAPI::FSRRuntime::kFSR4;
 		throw std::runtime_error("target.fsrRuntime must be fsr3 or fsr4");
 	}
 
@@ -319,6 +385,7 @@ namespace
 			{ UpscalingAPI::kConditionRestartRequired, "restart_required" },
 			{ UpscalingAPI::kConditionPersistenceUnavailable, "persistence_unavailable" },
 			{ UpscalingAPI::kConditionResourceRecovery, "resource_recovery" },
+			{ UpscalingAPI::kConditionNeuralRenderScaleRequired, "neural_render_scale_required" },
 		};
 		for (const auto& [flag, name] : values) {
 			if ((a_mask & static_cast<std::uint64_t>(flag)) != 0)
@@ -346,18 +413,19 @@ namespace
 		const auto queryStatus = a_registry->QueryService(
 			a_registry->context, &query, &outputInterface, &descriptor);
 		a_api = queryStatus == ServiceAPI::Status::kSuccess ?
-			static_cast<const UpscalingAPI::Interface001*>(outputInterface) : nullptr;
+		            static_cast<const UpscalingAPI::Interface001*>(outputInterface) :
+		            nullptr;
 
 		json result{
 			{ "registry", {
-				{ "abiMajor", a_registry->abiMajor },
-				{ "abiMinor", a_registry->abiMinor },
-				{ "structSize", a_registry->structSize },
-				{ "identityStatus", Named(identityStatus) },
-				{ "producer", ProducerIdentity(identity) },
-				{ "queryStatus", Named(queryStatus) },
-				{ "service", Descriptor(descriptor) },
-			} },
+							  { "abiMajor", a_registry->abiMajor },
+							  { "abiMinor", a_registry->abiMinor },
+							  { "structSize", a_registry->structSize },
+							  { "identityStatus", Named(identityStatus) },
+							  { "producer", ProducerIdentity(identity) },
+							  { "queryStatus", Named(queryStatus) },
+							  { "service", Descriptor(descriptor) },
+						  } },
 		};
 		if (a_api) {
 			result["registry"]["interface"] = {
@@ -386,14 +454,14 @@ namespace
 		return {
 			{ "action", "registry" },
 			{ "registry", {
-				{ "structSize", registry->structSize },
-				{ "abiMajor", registry->abiMajor },
-				{ "abiMinor", registry->abiMinor },
-				{ "identityStatus", Named(identityStatus) },
-				{ "producer", ProducerIdentity(identity) },
-				{ "serviceCount", count },
-				{ "services", std::move(services) },
-			} },
+							  { "structSize", registry->structSize },
+							  { "abiMajor", registry->abiMajor },
+							  { "abiMinor", registry->abiMinor },
+							  { "identityStatus", Named(identityStatus) },
+							  { "producer", ProducerIdentity(identity) },
+							  { "serviceCount", count },
+							  { "services", std::move(services) },
+						  } },
 		};
 	}
 
@@ -409,41 +477,46 @@ namespace
 			{ "renderScaleStatus", Named(a_value.renderScaleStatus) },
 			{ "activeOperationId", a_value.activeOperationId },
 			{ "profiles", {
-				{ "configured", Profile(a_value.configured) },
-				{ "requested", Profile(a_value.requested) },
-				{ "applying", Profile(a_value.applying) },
-				{ "effective", Profile(a_value.effective) },
-				{ "stable", Profile(a_value.stable) },
-				{ "persisted", Profile(a_value.persisted) },
-			} },
+							  { "configured", Profile(a_value.configured) },
+							  { "requested", Profile(a_value.requested) },
+							  { "applying", Profile(a_value.applying) },
+							  { "effective", Profile(a_value.effective) },
+							  { "stable", Profile(a_value.stable) },
+							  { "persisted", Profile(a_value.persisted) },
+						  } },
 			{ "dimensions", {
-				{ "displayEyeWidth", a_value.displayEyeWidth },
-				{ "displayEyeHeight", a_value.displayEyeHeight },
-				{ "renderEyeWidth", a_value.renderEyeWidth },
-				{ "renderEyeHeight", a_value.renderEyeHeight },
-			} },
+								{ "displayEyeWidth", a_value.displayEyeWidth },
+								{ "displayEyeHeight", a_value.displayEyeHeight },
+								{ "renderEyeWidth", a_value.renderEyeWidth },
+								{ "renderEyeHeight", a_value.renderEyeHeight },
+							} },
 		};
 	}
 
 	std::uint64_t ExpectedRevision(const json& a_args)
 	{
 		return a_args.contains("expectedStateRevision") ?
-			a_args.at("expectedStateRevision").get<std::uint64_t>() : UpscalingAPI::AnyStateRevision;
+		           a_args.at("expectedStateRevision").get<std::uint64_t>() :
+		           UpscalingAPI::AnyStateRevision;
 	}
 
 	UpscalingAPI::RequestPurpose Purpose(const json& a_args)
 	{
 		const auto value = Lower(a_args.value("purpose", std::string("direct")));
-		if (value == "direct") return UpscalingAPI::RequestPurpose::kDirect;
-		if (value == "environment_profile_transition") return UpscalingAPI::RequestPurpose::kEnvironmentProfileTransition;
+		if (value == "direct")
+			return UpscalingAPI::RequestPurpose::kDirect;
+		if (value == "environment_profile_transition")
+			return UpscalingAPI::RequestPurpose::kEnvironmentProfileTransition;
 		throw std::runtime_error("purpose must be direct or environment_profile_transition");
 	}
 
 	UpscalingAPI::PersistencePolicy Persistence(const json& a_args)
 	{
 		const auto value = Lower(a_args.value("persistence", std::string("runtime_only")));
-		if (value == "runtime_only") return UpscalingAPI::PersistencePolicy::kRuntimeOnly;
-		if (value == "persist_when_stable") return UpscalingAPI::PersistencePolicy::kPersistWhenStable;
+		if (value == "runtime_only")
+			return UpscalingAPI::PersistencePolicy::kRuntimeOnly;
+		if (value == "persist_when_stable")
+			return UpscalingAPI::PersistencePolicy::kPersistWhenStable;
 		throw std::runtime_error("persistence must be runtime_only or persist_when_stable");
 	}
 
@@ -521,11 +594,11 @@ namespace
 				{ "willPersist", result.willPersist != 0 },
 				{ "normalizedTarget", Profile(result.normalizedTarget) },
 				{ "predictedDimensions", {
-					{ "displayEyeWidth", result.predictedDisplayEyeWidth },
-					{ "displayEyeHeight", result.predictedDisplayEyeHeight },
-					{ "renderEyeWidth", result.predictedRenderEyeWidth },
-					{ "renderEyeHeight", result.predictedRenderEyeHeight },
-				} },
+											 { "displayEyeWidth", result.predictedDisplayEyeWidth },
+											 { "displayEyeHeight", result.predictedDisplayEyeHeight },
+											 { "renderEyeWidth", result.predictedRenderEyeWidth },
+											 { "renderEyeHeight", result.predictedRenderEyeHeight },
+										 } },
 			};
 			return output;
 		}
@@ -676,7 +749,7 @@ namespace CSX::Api::UpscalingDevBenchBridge
 		if (g_installAttempted.exchange(true, std::memory_order_acq_rel))
 			return;
 		static constexpr const char* descriptor =
-			R"({"description":"Exercise the registered public csx.upscaling ABI through DevBench. Mutations require exact build identity and idempotency keys.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["registry","capabilities","snapshot","preflight","apply","operation","events"],"default":"snapshot"},"expectedBuildId":{"type":"string"},"expectedStateRevision":{"type":"integer","minimum":0},"target":{"type":"object","properties":{"method":{"type":"string","enum":["none","taa","fsr","dlss"]},"qualityMode":{"type":"string","enum":["native_aa","hoshipa","ultra_quality","quality","balanced","performance","ultra_performance"]},"renderScaleMode":{"type":"boolean"},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode"]},"purpose":{"type":"string","enum":["direct","environment_profile_transition"]},"persistence":{"type":"string","enum":["runtime_only","persist_when_stable"]},"clientId":{"type":"string"},"commandId":{"type":"string"},"reason":{"type":"string"},"operationId":{"type":"integer","minimum":0},"afterEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}}})";
+			R"({"description":"Exercise the registered public csx.upscaling ABI through DevBench. Mutations require exact build identity and idempotency keys. Enabled VR Renderscale NR rejects profiles that disable Render Scale with neural_render_scale_required.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["registry","capabilities","snapshot","preflight","apply","operation","events"],"default":"snapshot"},"expectedBuildId":{"type":"string"},"expectedStateRevision":{"type":"integer","minimum":0},"target":{"type":"object","properties":{"method":{"type":"string","enum":["none","taa","fsr","dlss"]},"qualityMode":{"type":"string","enum":["native_aa","hoshipa","ultra_quality","quality","balanced","performance","ultra_performance"]},"renderScaleMode":{"type":"boolean","description":"Must remain true while VR Renderscale NR is enabled; disable NR or change its mode first."},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","fsr4"]}},"required":["method","qualityMode"]},"purpose":{"type":"string","enum":["direct","environment_profile_transition"]},"persistence":{"type":"string","enum":["runtime_only","persist_when_stable"]},"clientId":{"type":"string"},"commandId":{"type":"string"},"reason":{"type":"string"},"operationId":{"type":"integer","minimum":0},"afterEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}}})";
 		devBench->RegisterTool("communityshaders.upscaling_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("UpscalingDevBenchBridge: registered communityshaders.upscaling_api with devbench build {}", devBench->GetBuildNumber());

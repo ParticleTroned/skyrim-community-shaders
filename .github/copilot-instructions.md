@@ -17,7 +17,7 @@ override or weaken `AGENTS.md`.
 
 ## Pull requests and commits
 
--   Target `main-VR` unless the user explicitly selects another release line.
+-   Follow the explicit PR authorization contract in `AGENTS.md`: require the user's request for that PR and its named repository and target base branch before publishing.
 -   Use `type(scope): description`; keep the title current and release-aware.
 -   Give every commit the `Rationale:`/`Implementation:` body and accurate attribution required by `AGENTS.md`.
 -   Use the PR body structure and validation evidence required by `AGENTS.md`.

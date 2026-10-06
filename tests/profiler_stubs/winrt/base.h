@@ -28,8 +28,9 @@ namespace winrt
 			value = nullptr;
 			return *this;
 		}
-		explicit operator bool() const { return value != nullptr; }
 		T* get() const { return value; }
+		T* operator->() const { return value; }
+		explicit operator bool() const { return value != nullptr; }
 		T** put()
 		{
 			*this = nullptr;

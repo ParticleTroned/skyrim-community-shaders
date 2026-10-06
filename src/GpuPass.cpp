@@ -5,13 +5,18 @@
 #include "State.h"
 
 #ifdef TRACY_ENABLE
-ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, std::string_view a_name)
+ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, std::string_view a_name, const Util::PassTimingHandle& a_capture, bool a_detailOnly) :
+	detailOnly(a_detailOnly)
 {
+	if (detailOnly && !a_capture)
+		return;
 	auto* profiler = globals::profiler;
 	auto* state = globals::state;
 
 	if (profiler)
-		profilerActive = profiler->BeginPass(a_name, false);
+		profilerActive = detailOnly ? profiler->BeginDetailPass(a_name, a_capture) : profiler->BeginPass(a_name, false, a_capture);
+	else
+		Profiler::MarkCaptureUnavailable(a_capture, "profiler_uninitialized", detailOnly);
 
 	cpuZone.emplace(a_sourceLocation, -1, true);
 
@@ -25,13 +30,18 @@ ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, 
 }
 #endif
 
-ScopedGpuPass::ScopedGpuPass(std::string_view a_name)
+ScopedGpuPass::ScopedGpuPass(std::string_view a_name, const Util::PassTimingHandle& a_capture, bool a_detailOnly) :
+	detailOnly(a_detailOnly)
 {
+	if (detailOnly && !a_capture)
+		return;
 	auto* profiler = globals::profiler;
 	auto* state = globals::state;
 
 	if (profiler)
-		profilerActive = profiler->BeginPass(a_name, false);
+		profilerActive = detailOnly ? profiler->BeginDetailPass(a_name, a_capture) : profiler->BeginPass(a_name, false, a_capture);
+	else
+		Profiler::MarkCaptureUnavailable(a_capture, "profiler_uninitialized", detailOnly);
 
 #ifdef TRACY_ENABLE
 	cpuZone.emplace(
@@ -69,6 +79,10 @@ ScopedGpuPass::~ScopedGpuPass()
 	cpuZone.reset();
 #endif
 
-	if (profilerActive && globals::profiler)
-		globals::profiler->EndPass(false);
+	if (profilerActive && globals::profiler) {
+		if (detailOnly)
+			globals::profiler->EndDetailPass();
+		else
+			globals::profiler->EndPass(false);
+	}
 }

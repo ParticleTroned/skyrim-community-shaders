@@ -28,6 +28,10 @@
 
 ## Quick Links
 
+### Experimental rendering
+
+-   **[Neural Rendering](./neural-rendering.md)** - optional runtime requirement
+
 ### Common Tasks
 
 -   **One-time developer setup:** `pwsh ./tools/setup-dev.ps1`

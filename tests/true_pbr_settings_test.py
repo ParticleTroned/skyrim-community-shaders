@@ -24,6 +24,17 @@ class TruePBRSettingsTests(unittest.TestCase):
         base_header = (ROOT / "src/Feature.h").read_text(encoding="utf-8")
         base_source = (ROOT / "src/Feature.cpp").read_text(encoding="utf-8")
         state_header = (ROOT / "src/State.h").read_text(encoding="utf-8")
+        permutation = (ROOT / "package/Shaders/Common/Permutation.hlsli").read_text(encoding="utf-8")
+        extra_flags = block(state_header, "enum class ExtraShaderDescriptors")
+        flag_names = re.findall(r"^\s*(\w+)\s*=", extra_flags, re.MULTILINE)
+        flag_checks = "\n".join(
+            f"static_assert(static_cast<uint32_t>(State::ExtraShaderDescriptors::{name}) == "
+            f"ExtraFlags::{'InReflection' if name == 'IsReflections' else name});"
+            for name in flag_names)
+        allocated_flags = ", ".join(
+            f"static_cast<uint32_t>(State::ExtraShaderDescriptors::{name})"
+            for name in flag_names if not name.endswith("Shift") and
+            name not in ("CharacterFace", "CharacterSkin", "CharacterHair"))
         state_defaults = "\n".join(re.findall(
             r"static constexpr float kDefaultPbrMetal\w+ = [^;]+;", state_header))
         self.assertEqual(len(state_defaults.splitlines()), 2)
@@ -32,6 +43,7 @@ class TruePBRSettingsTests(unittest.TestCase):
         serialization = source[settings_start:source.index(");", settings_start) + 2]
         base_methods = block(base_header, "virtual bool HasFeatureSettings()")
         derived_methods = block(header, "virtual std::string GetName()")
+        derived_methods += "\n" + block(header, "virtual std::string GetShortName()")
         for signature in ("virtual bool HasFeatureSettings()", "virtual void RestoreDefaultSettingsForLoad()"):
             if signature in header:
                 derived_methods += "\n" + block(header, signature)
@@ -44,7 +56,9 @@ class TruePBRSettingsTests(unittest.TestCase):
         ))
         driver = r'''
 #include <nlohmann/json.hpp>
+#include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Utils/Finite.h"
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -58,13 +72,26 @@ template<class... Args> void warn(Args&&...) {}
 }
 struct State {
 STATE_DEFAULTS
+EXTRA_FLAGS;
     float pbrMetalReflectionScale = 0.5f;
     float pbrMetalHighlightScale = 1.5f;
 };
+SHADER_EXTRA_FLAGS
+FLAG_CHECKS
+static_assert([] {
+    uint32_t occupied = 0;
+    for (const uint32_t flag : { ALLOCATED_FLAGS }) {
+        if (flag == 0 || (occupied & flag) != 0)
+            return false;
+        occupied |= flag;
+    }
+    return true;
+}(), "Extra shader flags must have separate bit ranges");
 namespace globals { State instance; State* state = &instance; }
 struct Feature {
     virtual ~Feature() = default;
     virtual std::string GetName() = 0;
+    virtual std::string GetShortName() = 0;
     virtual void SaveSettings(json&) = 0;
     virtual void LoadSettings(json&) = 0;
     virtual void RestoreDefaultSettings() = 0;
@@ -145,6 +172,9 @@ int main() {
 '''
         for marker, value in (
             ("STATE_DEFAULTS", state_defaults),
+            ("SHADER_EXTRA_FLAGS", block(permutation, "namespace ExtraFlags")),
+            ("EXTRA_FLAGS", extra_flags),
+            ("FLAG_CHECKS", flag_checks), ("ALLOCATED_FLAGS", allocated_flags),
             ("BASE_METHODS", base_methods), ("DERIVED_METHODS", derived_methods),
             ("SETTINGS", block(header, "struct alignas(16) Settings")),
             ("LOAD_DISPATCH", block(base_source, "if (HasFeatureSettings())")),

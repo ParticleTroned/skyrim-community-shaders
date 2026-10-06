@@ -10,8 +10,8 @@ namespace Util
 {
 	void SetResourceName(ID3D11DeviceChild* resource, const char* format, ...)
 	{
-		if (!resource || !std::string_view(format).starts_with("Profiler::WholeFrame"))
-			throw std::runtime_error("profiler query missing shared resource naming");
+		if (!resource || !std::string_view(format).starts_with("Profiler::Detail"))
+			throw std::runtime_error("detail query lacks a resource name");
 	}
 }
 
@@ -60,6 +60,50 @@ namespace
 				profiler.EndFrame(frame);
 		}
 	};
+
+	void RetainedEvidenceModes()
+	{
+		using State = Util::PassTimingState;
+		for (const auto mode : { Mode::CPU, Mode::GPU, Mode::Both }) {
+			Fixture f;
+			f.Arm(mode);
+			const auto pass = std::make_shared<Util::PassTimingCapture>();
+			const auto detail = std::make_shared<Util::PassTimingCapture>();
+			const auto clock = profilerTestClock;
+			Check(f.profiler.BeginPass("Retained::Pass", false, pass), "retained pass refused");
+			const bool detailStarted = f.profiler.BeginDetailPass("Retained::Detail", detail);
+			Check(detailStarted == (mode != Mode::CPU), "detail capture ignored source selection");
+			if (detailStarted)
+				f.profiler.EndDetailPass();
+			f.profiler.EndPass(false);
+			f.profiler.EndFrame(1);
+			f.Drain(2);
+			for (const auto& capture : { pass, detail }) {
+				const auto sample = capture->Read();
+				Check(sample.cpuState == (mode == Mode::Both ? State::Ready : State::Unavailable), "CPU evidence ignored capture mode");
+				Check(sample.gpuState == (mode == Mode::CPU ? State::Unavailable : State::Ready), "GPU evidence ignored capture mode");
+				if (mode != Mode::CPU)
+					Check(sample.capturedFrame == 1, "retained sample lost frame identity");
+			}
+			if (mode == Mode::GPU)
+				Check(profilerTestClock == clock, "GPU-only retained capture sampled CPU clock");
+		}
+		Fixture f;
+		f.context.pending = true;
+		f.Arm(Mode::Both);
+		for (unsigned frame = 1; frame <= 4; ++frame) {
+			const auto capture = std::make_shared<Util::PassTimingCapture>();
+			Check(f.profiler.BeginPass("Fallback::Retained", false, capture), "CPU fallback refused");
+			f.profiler.EndPass(false);
+			f.profiler.RequestCapture(Mode::Both);
+			f.profiler.EndFrame(frame);
+			if (frame == 4) {
+				Check(capture->Read().gpuState == State::Unavailable, "fallback left GPU evidence pending");
+				Check(capture->Read().cpuState == State::Unavailable, "fallback falsely retained a query sample");
+				Check(f.profiler.GetCapturedCpuFrameCount() == frame, "fallback blocked independent CPU publication");
+			}
+		}
+	}
 
 	void QueryAllocationFailure()
 	{
@@ -327,6 +371,7 @@ namespace
 int main()
 {
 	try {
+		RetainedEvidenceModes();
 		QueryAllocationFailure();
 		CpuOnlyAndModeSwitch();
 		PendingGpuDoesNotBlockCpu();

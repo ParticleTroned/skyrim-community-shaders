@@ -11,6 +11,7 @@ namespace
 {
 #include "vr_map_event_state_under_test.h"
 	static_assert(std::atomic<VRMapMenuEventState>::is_always_lock_free);
+	std::atomic_uint64_t g_neuralMenuQueryEpoch{ 1 };
 	bool explicitMenu = true;
 	bool presentationTail = false;
 	bool csMenu = false;

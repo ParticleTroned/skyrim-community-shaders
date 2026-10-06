@@ -1,6 +1,7 @@
 #define LIGHTING
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
+#include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -2182,7 +2183,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	StochasticOffsets meshOffset = (StochasticOffsets)0;
 #		if defined(TERRAIN_VARIATION_MESH)
 	const bool applyMeshTV = SharedData::terrainVariationSettings.enableMeshSupport != 0 &&
-		(Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::TVMeshVariation) != 0;
+	                         (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::TVMeshVariation) != 0;
 	[branch] if (applyMeshTV)
 	{
 		g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(uvOriginal);
@@ -4361,9 +4362,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #		endif
 
-	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion
-	// for pixels that do not write to this RT (sky, water, grass, effects).
-	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, psout.Diffuse.w);
+	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion.
+	// Exact R8 codes reject interpolated IDs. The output alpha still supplies
+	// the inherited MRT source blend factor without becoming stored target data.
+	const uint characterCategory =
+		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::CharacterExcluded) != 0u ?
+			CharacterCategoryMask::Excluded :
+			((Permutation::ExtraShaderDescriptor &
+				 Permutation::ExtraFlags::CharacterCategoryMask) >>
+				Permutation::ExtraFlags::CharacterCategoryShift);
+	psout.Masks2 = CharacterCategoryMask::Encode(
+		1.0 - vertexAO, characterCategory, psout.Diffuse.w,
+		(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::CharacterFocusFadeMask) >>
+			Permutation::ExtraFlags::CharacterFocusFadeShift);
 
 	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;

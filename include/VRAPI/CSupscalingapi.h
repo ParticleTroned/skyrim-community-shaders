@@ -8,7 +8,7 @@ namespace CSX::UpscalingAPI
 	inline constexpr char ServiceName[] = "csx.upscaling";
 	inline constexpr std::uint32_t ServiceMajor = 1;
 	inline constexpr std::uint32_t ServiceMinor = 0;
-	inline constexpr std::uint32_t SchemaRevision = 1;
+	inline constexpr std::uint32_t SchemaRevision = 2;
 	inline constexpr std::uint64_t AnyStateRevision = std::numeric_limits<std::uint64_t>::max();
 	inline constexpr std::uint32_t MaximumClientIdLength = 128;
 	inline constexpr std::uint32_t MaximumCommandIdLength = 128;
@@ -197,7 +197,8 @@ namespace CSX::UpscalingAPI
 		kSnapshotRenderScaleRequested = 1ull << 3,
 		kSnapshotRenderScaleLatched = 1ull << 4,
 		kSnapshotRenderScaleActive = 1ull << 5,
-		kSnapshotPersistedStateKnown = 1ull << 6
+		kSnapshotPersistedStateKnown = 1ull << 6,
+		kSnapshotNeuralRenderScaleRequired = 1ull << 7
 	};
 
 	enum OperationFlag : std::uint64_t
@@ -226,7 +227,8 @@ namespace CSX::UpscalingAPI
 		kConditionProviderUnavailable = 1ull << 9,
 		kConditionRestartRequired = 1ull << 10,
 		kConditionPersistenceUnavailable = 1ull << 11,
-		kConditionResourceRecovery = 1ull << 12
+		kConditionResourceRecovery = 1ull << 12,
+		kConditionNeuralRenderScaleRequired = 1ull << 13
 	};
 
 	/** A complete configuration. Backend selections remain meaningful while inactive. */

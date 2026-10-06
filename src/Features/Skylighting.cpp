@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
+#include <utility>
 
 #include "Deferred.h"
 #include "GpuPass.h"
@@ -264,6 +266,8 @@ namespace
 			ImGui::Text("Runtime-safe toggle. Keeps shaders and hooks loaded, but disables Skylighting updates and shading until re-enabled.");
 			ImGui::Text("The performance profiler compares against this Off state, not against a lower Skylighting preset.");
 		}
+		if (a_skylighting.resourceRebuildFailed.load(std::memory_order_acquire))
+			ImGui::TextWrapped("%s", a_skylighting.GetPerformanceCostMeasurementWaitText());
 	}
 
 	float GetPresetProbeFieldSize(const SkylightingPerformancePreset& a_preset)
@@ -494,14 +498,15 @@ void Skylighting::ApplyProbeGridQuality()
 
 void Skylighting::QueueResetSkylighting(bool rebuild)
 {
-	if (rebuild)
+	if (rebuild || resourceRebuildFailed.load(std::memory_order_acquire))
 		queuedRebuildSkylighting.store(true, std::memory_order_release);
 	queuedResetSkylighting.store(true, std::memory_order_release);
 }
 
 bool Skylighting::HasPendingReset() const
 {
-	return queuedResetSkylighting.load(std::memory_order_acquire) || queuedRebuildSkylighting.load(std::memory_order_acquire);
+	return queuedResetSkylighting.load(std::memory_order_acquire) || queuedRebuildSkylighting.load(std::memory_order_acquire) ||
+	       resourceRebuildFailed.load(std::memory_order_acquire);
 }
 
 void Skylighting::EarlyPrepass()
@@ -520,7 +525,7 @@ void Skylighting::EarlyPrepass()
 		if (!globals::d3d::device)
 			return;
 		SetupResources();
-	} else
+	} else if (!resourceRebuildFailed.load(std::memory_order_acquire))
 		ResetSkylighting();
 	// A reset after world publication must revoke its probe-dispatch permission.
 	if (probeUpdateBufferEnabled)
@@ -609,6 +614,8 @@ bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 
 const char* Skylighting::GetPerformanceCostMeasurementWaitText() const
 {
+	if (resourceRebuildFailed.load(std::memory_order_acquire))
+		return "Skylighting rebuild failed. Rebuild or change probe quality to retry.";
 	return "Waiting for Skylighting state to settle";
 }
 
@@ -828,116 +835,123 @@ json Skylighting::CapturePerformanceSettingsState() const
 
 void Skylighting::SetupResources()
 {
-	queuedRebuildSkylighting.exchange(false, std::memory_order_acq_rel);
-	ApplyProbeGridQuality();
-
-	delete texOcclusion;
-	texOcclusion = nullptr;
-	delete texProbeArray;
-	texProbeArray = nullptr;
-	delete texAccumFramesArray;
-	texAccumFramesArray = nullptr;
-	delete texShadowBitmask;
-	texShadowBitmask = nullptr;
-	delete texShadowVisibility;
-	texShadowVisibility = nullptr;
-
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
-	static ID3D11Device* shaderDevice = nullptr;
-	if (shaderDevice != device) {
-		probeUpdateCompute = nullptr;
-		shaderDevice = device;
+	if (!renderer || !device || !globals::d3d::context) {
+		QueueResetSkylighting(true);
+		return;
 	}
-
-	{
-		auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-
-		D3D11_TEXTURE2D_DESC texDesc{};
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
-
-		precipitationOcclusion.texture->GetDesc(&texDesc);
-		precipitationOcclusion.depthSRV->GetDesc(&srvDesc);
-		precipitationOcclusion.views[0]->GetDesc(&dsvDesc);
-
-		texOcclusion = new Texture2D(texDesc, "Skylighting::Occlusion");
-		texOcclusion->CreateSRV(srvDesc);
-		texOcclusion->CreateDSV(dsvDesc);
+	auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+	if (!precipitationOcclusion.texture || !precipitationOcclusion.depthSRV || !precipitationOcclusion.views[0]) {
+		QueueResetSkylighting(true);
+		return;
 	}
+	queuedRebuildSkylighting.exchange(false, std::memory_order_acq_rel);
+	try {
+		const auto& preset = GetProbeGridPreset(settings.ProbeGridQuality);
+		std::unique_ptr<Texture2D> occlusion;
+		std::unique_ptr<Texture3D> probes, accumulation, shadowBitmask, shadowVisibility;
+		winrt::com_ptr<ID3D11SamplerState> sampler;
 
-	{
-		D3D11_TEXTURE3D_DESC texDesc{
-			.Width = probeArrayDims[0],
-			.Height = probeArrayDims[1],
-			.Depth = probeArrayDims[2],
-			.MipLevels = 1,
-			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
-			.CPUAccessFlags = 0,
-			.MiscFlags = 0
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
-			.Texture3D = {
-				.MostDetailedMip = 0,
-				.MipLevels = texDesc.MipLevels }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
-			.Texture3D = {
-				.MipSlice = 0,
-				.FirstWSlice = 0,
-				.WSize = texDesc.Depth }
-		};
+		{
+			D3D11_TEXTURE2D_DESC texDesc{};
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
 
-		texProbeArray = new Texture3D(texDesc, "Skylighting::ProbeArray");
-		texProbeArray->CreateSRV(srvDesc);
-		texProbeArray->CreateUAV(uavDesc);
+			precipitationOcclusion.texture->GetDesc(&texDesc);
+			precipitationOcclusion.depthSRV->GetDesc(&srvDesc);
+			precipitationOcclusion.views[0]->GetDesc(&dsvDesc);
 
-		// Preserve the eight-bit SH count alongside a five-bit shadow sample cursor.
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
+			occlusion = std::make_unique<Texture2D>(texDesc, "Skylighting::Occlusion");
+			occlusion->CreateSRV(srvDesc);
+			occlusion->CreateDSV(dsvDesc);
+		}
 
-		texAccumFramesArray = new Texture3D(texDesc, "Skylighting::AccumFramesArray");
-		texAccumFramesArray->CreateSRV(srvDesc);
-		texAccumFramesArray->CreateUAV(uavDesc);
+		{
+			D3D11_TEXTURE3D_DESC texDesc{
+				.Width = preset.Width,
+				.Height = preset.Height,
+				.Depth = preset.Depth,
+				.MipLevels = 1,
+				.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+				.CPUAccessFlags = 0,
+				.MiscFlags = 0
+			};
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+				.Format = texDesc.Format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
+				.Texture3D = {
+					.MostDetailedMip = 0,
+					.MipLevels = texDesc.MipLevels }
+			};
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+				.Format = texDesc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
+				.Texture3D = {
+					.MipSlice = 0,
+					.FirstWSlice = 0,
+					.WSize = texDesc.Depth }
+			};
 
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_UINT;
+			probes = std::make_unique<Texture3D>(texDesc, "Skylighting::ProbeArray");
+			probes->CreateSRV(srvDesc);
+			probes->CreateUAV(uavDesc);
 
-		texShadowBitmask = new Texture3D(texDesc, "Skylighting::ShadowBitmask");
-		texShadowBitmask->CreateSRV(srvDesc);
-		texShadowBitmask->CreateUAV(uavDesc);
+			// Preserve the eight-bit SH count alongside a five-bit shadow sample cursor.
+			texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
 
-		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+			accumulation = std::make_unique<Texture3D>(texDesc, "Skylighting::AccumFramesArray");
+			accumulation->CreateSRV(srvDesc);
+			accumulation->CreateUAV(uavDesc);
 
-		texShadowVisibility = new Texture3D(texDesc, "Skylighting::ShadowVisibility");
-		texShadowVisibility->CreateSRV(srvDesc);
-		texShadowVisibility->CreateUAV(uavDesc);
+			texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_UINT;
+
+			shadowBitmask = std::make_unique<Texture3D>(texDesc, "Skylighting::ShadowBitmask");
+			shadowBitmask->CreateSRV(srvDesc);
+			shadowBitmask->CreateUAV(uavDesc);
+
+			texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+
+			shadowVisibility = std::make_unique<Texture3D>(texDesc, "Skylighting::ShadowVisibility");
+			shadowVisibility->CreateSRV(srvDesc);
+			shadowVisibility->CreateUAV(uavDesc);
+		}
+
+		{
+			D3D11_SAMPLER_DESC samplerDesc = {};
+			samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
+			samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;               // Address mode (Clamp for shadow maps)
+			samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;  // Comparison function
+			samplerDesc.MinLOD = 0;
+			samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+			DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, sampler.put()));
+			Util::SetResourceName(sampler.get(), "Skylighting::ComparisonSampler");
+		}
+
+		// Publish only complete replacements; failed allocations retain the active grid.
+		delete std::exchange(texOcclusion, occlusion.release());
+		delete std::exchange(texProbeArray, probes.release());
+		delete std::exchange(texAccumFramesArray, accumulation.release());
+		delete std::exchange(texShadowBitmask, shadowBitmask.release());
+		delete std::exchange(texShadowVisibility, shadowVisibility.release());
+		comparisonSampler = std::move(sampler);
+		ApplyProbeGridQuality();
+		if (resourceDevice != device)
+			probeUpdateCompute = nullptr;
+		resourceDevice = device;
+		resourceRebuildFailed.store(false, std::memory_order_release);
+		ResetSkylighting();
+		if (!probeUpdateCompute)
+			CompileComputeShaders();
+	} catch (const std::exception&) {
+		// Keep sampling disabled until an explicit request retries the failed rebuild.
+		resourceRebuildFailed.store(true, std::memory_order_release);
+		queuedResetSkylighting.store(true, std::memory_order_release);
 	}
-
-	// Initialize every history volume before sampler or shader compilation. This
-	// also makes a disabled-at-load performance baseline immediately ready.
-	ResetSkylighting();
-
-	{
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;  // Use comparison filtering
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;               // Address mode (Clamp for shadow maps)
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;  // Comparison function
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, comparisonSampler.put()));
-		Util::SetResourceName(comparisonSampler.get(), "Skylighting::ComparisonSampler");
-	}
-
-	if (!probeUpdateCompute)
-		CompileComputeShaders();
-	resourceDevice = device;
 }
 
 void Skylighting::SetupRenderTargetResources()

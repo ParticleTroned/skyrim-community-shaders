@@ -110,7 +110,7 @@ public:
 	static_assert(sizeof(SkylightingCB) % 16 == 0);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
-	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting; }
+	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting && !resourceRebuildFailed.load(std::memory_order_acquire); }
 	bool HasCurrentShadowData() const;
 
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
@@ -129,6 +129,7 @@ public:
 
 	// cached variables
 	std::atomic_bool queuedRebuildSkylighting{ false };
+	std::atomic_bool resourceRebuildFailed{ false };
 	std::optional<uint32_t> runtimeSettingsFrame;
 	std::atomic_bool queuedResetSkylighting{ true };
 	bool needsOcclusionRefresh = true;
@@ -151,7 +152,7 @@ public:
 
 	/** @brief Queues a render-thread history rebuild without touching graphics resources. */
 	void QueueResetSkylighting(bool rebuild = false);
-	/** @brief A rebuild remains pending even if a history reset consumed its wakeup. */
+	/** @brief Block sampling while reset/rebuild work is pending or failed. */
 	bool HasPendingReset() const;
 	/** @brief Clears probe history on the render thread and requires a fresh occlusion capture. */
 	void ResetSkylighting();

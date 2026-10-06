@@ -523,6 +523,7 @@ namespace
         "properties": {
           "upscaled_center": {
             "type": "object",
+            "description": "Reduced-resolution input profile. Nonidentity transforms use private floating-point processing and preserve the caller output format. Raw colour ignores this profile. reversible_proxy uses ratio-preserving log2(1+maximum)/32 compression before sRGB encoding.",
             "additionalProperties": false,
             "properties": {
               "domain": {
@@ -558,6 +559,7 @@ namespace
           },
           "final_ldr_pre_ui": {
             "type": "object",
+            "description": "Final-resolution input profile. Nonidentity transforms use private floating-point processing and preserve the caller output format. Raw colour ignores this profile. reversible_proxy uses ratio-preserving log2(1+maximum)/32 compression before sRGB encoding.",
             "additionalProperties": false,
             "properties": {
               "domain": {

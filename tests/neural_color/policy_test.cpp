@@ -30,9 +30,9 @@ int main()
 	Require(Valid(p));
 	for (auto transform : { Transform::Identity, Transform::LinearToSRGB, Transform::ReversibleProxy }) {
 		p.transform = transform;
-		for (float exposure : { 0.0625f, 1.0f, 4.0f }) {
+		for (float exposure : { 1.0f / 256.0f, 0.0625f, 1.0f, 4.0f, 256.0f }) {
 			p.exposureMultiplier = transform == Transform::Identity ? 1.0f : exposure;
-			for (float x : { 0.0f, 0.00001f, 0.003f, 0.04f, 0.18f, 0.5f, 1.0f, 4.0f }) {
+			for (float x : { 0.0f, 0.00001f, 0.003f, 0.04f, 0.18f, 0.5f, 1.0f, 4.0f, 33.0f, 65504.0f }) {
 				RGB b{ x, x * 0.5f, x * 0.125f }, prepared{}, inverse{};
 				Require(Forward(b, p, prepared));
 				Require(Inverse(prepared, p, inverse));
@@ -45,8 +45,8 @@ int main()
 	p = { Domain::Linear, Transform::ReversibleProxy, 1.0f };
 	RGB output{};
 	Require(!Forward({ -1.0f, 0.0f, 1.0f }, p, output));
-	Require(!Forward({ 33.0f, 0.0f, 1.0f }, p, output));
-	Require(!Inverse({ 1.0f, 0.0f, 0.0f }, p, output));
+	Require(Forward({ 33.0f, 0.0f, 1.0f }, p, output));
+	Require(!Inverse({ 4.0f, 0.0f, 0.0f }, p, output));
 	Require(!Inverse({ std::numeric_limits<float>::infinity(), 0.0f, 0.0f }, p, output));
 	s = {};
 	Require(DetailGain(2.0f, 2.0f, 1.0f, s) == 1.0f);

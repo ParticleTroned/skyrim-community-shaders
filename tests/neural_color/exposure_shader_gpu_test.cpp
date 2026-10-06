@@ -412,7 +412,7 @@ int main(int argc, char** argv)
 	constants.flags = 0;
 	constants.transform = 2;
 	update();
-	prepared = Make(d.Get(), 8, { 1, 1, 1, 1 });
+	prepared = Make(d.Get(), 8, { 4, 4, 4, 1 });
 	Dispatch(c.Get(), reconstruct.Get(), { baseline.srv.Get(), neural.srv.Get(), prepared.srv.Get() }, result.uav.Get());
 	Require(Read(d.Get(), c.Get(), result.resource.Get()) == b);
 	v = statistics();

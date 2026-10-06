@@ -640,6 +640,8 @@ namespace NeuralRendering
 			std::uint64_t generation = 0;
 			InsertionPoint insertionPoint = kDefaultInsertionPoint;
 			UpscalingDLSS::ViewportCrop viewportCrop{};
+			DXGI_FORMAT colorSourceFormat = DXGI_FORMAT_UNKNOWN;
+			DXGI_FORMAT colorDestinationFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT depthSourceFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;
 			std::uint32_t intensity = 0;
@@ -1280,8 +1282,8 @@ namespace NeuralRendering
 			observation.modelEditShown = capture.configuration.experiments.applyModelEdit;
 			observation.lightingPreservation = Color::ResolveReconstructionSettings(capture.configuration.settings).lightingPreservation;
 			observation.rect = a_resources.roi.ownedOutput;
-			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.resourceKey.colorFormat);
-			observation.outputFormat = static_cast<std::uint32_t>(a_resources.resourceKey.outputFormat);
+			observation.sourceFormat = static_cast<std::uint32_t>(a_resources.color.desc.Format);
+			observation.outputFormat = static_cast<std::uint32_t>(a_resources.output.desc.Format);
 			capture.slotMask |= 1u << a_args.featureSlot;
 		}
 		return {};
@@ -1290,6 +1292,13 @@ namespace NeuralRendering
 	void Renderer::State::FinalizeResourceKeysLocked(const RendererApplyArgs& a_args, ValidatedResources& a_resources) const
 	{
 		const bool hasControlMask = a_args.controlMask != nullptr;
+		const auto profile = Color::EffectiveProfile(colorConfiguration_, static_cast<std::uint32_t>(a_args.insertionPoint));
+		const bool transformed = profile.transform != Color::Transform::Identity;
+		// Transform in private floating-point storage; preserve the caller's format at commit.
+		const auto processingFormat = a_resources.color.desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT ||
+		                                      a_resources.output.desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT ?
+		                                  DXGI_FORMAT_R32G32B32A32_FLOAT :
+		                                  DXGI_FORMAT_R16G16B16A16_FLOAT;
 		a_resources.resourceKey = {
 			.colorWidth = a_resources.nativeLayout.color.backing.width,
 			.colorHeight = a_resources.nativeLayout.color.backing.height,
@@ -1299,9 +1308,9 @@ namespace NeuralRendering
 			.outputHeight = a_resources.nativeLayout.output.backing.height,
 			.controlMaskWidth = a_resources.nativeLayout.controlMask.backing.width,
 			.controlMaskHeight = a_resources.nativeLayout.controlMask.backing.height,
-			.colorFormat = a_resources.color.desc.Format,
+			.colorFormat = transformed ? processingFormat : a_resources.color.desc.Format,
 			.motionFormat = a_resources.motionVectors.desc.Format,
-			.outputFormat = a_resources.output.desc.Format,
+			.outputFormat = transformed ? processingFormat : a_resources.output.desc.Format,
 			.controlMaskFormat = hasControlMask ?
 			                         a_resources.controlMask.desc.Format :
 			                         DXGI_FORMAT_UNKNOWN,
@@ -1319,6 +1328,8 @@ namespace NeuralRendering
 			.generation = a_args.generation,
 			.insertionPoint = a_args.insertionPoint,
 			.viewportCrop = a_args.viewportCrop,
+			.colorSourceFormat = a_resources.color.desc.Format,
+			.colorDestinationFormat = a_resources.output.desc.Format,
 			.depthSourceFormat = a_resources.depth.desc.Format,
 			.depthViewFormat = a_resources.depthViewFormat,
 			.intensity = std::bit_cast<std::uint32_t>(a_args.tuning.intensity),
@@ -2622,7 +2633,7 @@ namespace NeuralRendering
 						"NR encoding/proxy experiment requires floating-point processing resources", a_args[index].featureSlot, false);
 				const auto oldBaseline = slots[index]->colorWork.baseline.resource.Get();
 				const bool colorReady = colorPipeline_.Ensure(a_args[index].device, slots[index]->colorWork,
-					resources[index].roi.inferenceContext, resources[index].resourceKey.outputFormat,
+					resources[index].roi.inferenceContext, resources[index].output.desc.Format,
 					colorConfiguration_.experiments.diagnostics);
 				if (execution)
 					execution->Update([&](auto& evidence) {
@@ -2661,8 +2672,8 @@ namespace NeuralRendering
 				observation.insertion = static_cast<std::uint32_t>(a_args[index].insertionPoint);
 				observation.generation = a_args[index].generation;
 				observation.rect = resources[index].roi.ownedOutput;
-				observation.sourceFormat = static_cast<std::uint32_t>(resources[index].resourceKey.colorFormat);
-				observation.outputFormat = static_cast<std::uint32_t>(resources[index].resourceKey.outputFormat);
+				observation.sourceFormat = static_cast<std::uint32_t>(resources[index].color.desc.Format);
+				observation.outputFormat = static_cast<std::uint32_t>(resources[index].output.desc.Format);
 				observation.atomicStereo = logicalEyeCount == 2u;
 				observation.measurementBatchId = measurementBatchId;
 				observation.expectedMeasurementSlotMask = measurementSlotMask;
@@ -3113,7 +3124,7 @@ namespace NeuralRendering
 						resources[index].roi.ownedOutput);
 			}
 			if (execution) {
-				RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].resourceKey.outputFormat, resources[index].roi.ownedOutput.width, resources[index].roi.ownedOutput.height));
+				RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].output.desc.Format, resources[index].roi.ownedOutput.width, resources[index].roi.ownedOutput.height));
 				execution->Update([&](auto& evidence) {
 					evidence.regions[index].outputCopyEnqueued = true;
 				});

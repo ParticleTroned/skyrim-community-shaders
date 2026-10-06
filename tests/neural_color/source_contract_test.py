@@ -112,6 +112,18 @@ class Contracts(unittest.TestCase):
         self.assertIn("historyValid = !colorConfiguration_.experiments.transportBypass", source)
         self.assertIn("context.timingPending = false", (NR / "ColorTransport.cpp").read_text())
 
+    def test_colour_processing_and_destination_formats_are_distinct(self):
+        source = (NR / "Renderer.cpp").read_text()
+        keys = source.split("void Renderer::State::FinalizeResourceKeysLocked", 1)[1].split(
+            "bool Renderer::State::ValidateD3D12FormatsLocked", 1)[0]
+        self.assertIn(".colorFormat = transformed ? processingFormat", keys)
+        self.assertIn(".outputFormat = transformed ? processingFormat", keys)
+        self.assertIn(".colorSourceFormat = a_resources.color.desc.Format", keys)
+        self.assertIn(".colorDestinationFormat = a_resources.output.desc.Format", keys)
+        ensure = source.split("const bool colorReady = colorPipeline_.Ensure", 1)[1].split(";", 1)[0]
+        self.assertIn("resources[index].output.desc.Format", ensure)
+        self.assertNotIn("resourceKey.outputFormat", ensure)
+
     def test_baseline_selection_not_duplicated(self):
         source = (SHADERS / "ColorReconstructCS.hlsl").read_text()
         self.assertNotIn("CharacterMask", source)

@@ -393,6 +393,7 @@ static void CheckPackedInvalidCandidates(ID3D11Device* device, ID3D11DeviceConte
 				"invalid packed candidates must retain source before storage rounding");
 	}
 }
+#include "exposure_range_gpu_checks.h"
 #include "lighting_preservation_gpu_checks.h"
 
 int main(int argc, char** argv)
@@ -434,6 +435,7 @@ int main(int argc, char** argv)
 	cbDesc.Usage = D3D11_USAGE_DEFAULT;
 	cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	Check(device->CreateBuffer(&cbDesc, nullptr, &cb));
+	CheckExposureRange(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get());
 	std::vector<Pixel> original(4096), sentinel(4096, Pixel{ -7.0f, -7.0f, -7.0f, -7.0f });
 	for (unsigned y = 0; y < 64; ++y)
 		for (unsigned x = 0; x < 64; ++x) {

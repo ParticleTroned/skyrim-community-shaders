@@ -61,6 +61,31 @@ require a DevBench-enabled build and Debug or Trace logging (`Advanced` →
 actionable availability notices. Pipeline placement remains visible at
 ordinary logging levels.
 
+Colour input experiments use private FP16 processing textures (FP32 when
+the caller already uses FP32) in every NR route, including reduced
+resolution. The baseline and reconstructed result retain the caller's
+format, so the final copy never crosses incompatible texture formats.
+Changing an input profile resets the existing input-history epoch.
+
+The reversible colour proxy preserves RGB ratios and encodes brightness
+as `log2(1 + maximum) / 32` before sRGB encoding. Its exponential inverse
+round-trips pure colour transport across -8 to +8 EV without the former
+brightness cutoff or reciprocal singularity. This does not establish
+reliable model output across that range. Negative, nonfinite,
+overflowing or destination-unrepresentable colours still retain the
+original pixel; missing captured exposure still fails closed. Raw colour
+uses Identity regardless of the saved experimental profile.
+
+The colour regression checks cover UNORM and packed-float source images,
+FP16 processing, both transforms, and -8/0/+8 EV. They verify finite output,
+retained edits, source alpha and exact no-edit round trips. The ten focused
+colour/settings/exposure checks passed in Release, including D3D11 WARP.
+The shader suite also passed on the RTX 4090 and AMD integrated GPU; the
+RTX 4090 run compiled without warnings. Existing lighting-preservation
+fixtures remained bit-exact under strict and production shader flags.
+These standalone checks do not execute NGX; live model checks and their
+visual limitations are recorded below.
+
 In native-resolution VR, A/B consume the prepared NR result at the final
 scene boundary, before the engine draws its fade overlay and submits the
 headset image. Hidden-area cleanup follows that overlay. The desktop
@@ -173,3 +198,54 @@ head-pose drift prevents exact pixel-equivalence claims. API-only
 `compactInputs` were outside the visible debug-control sweep. Earlier
 input-handling crashes interrupted two sessions; the completed sweep
 reported zero renderer failures. SE/AE live testing remains unrun.
+
+## Diagnostic colour fix and live retest (2026-10-06)
+
+This change keeps the private processing-format correction and reversible
+proxy correction in one separate commit for independent revert/bisection.
+Managed colour and nondefault experiments are development-only. Raw
+colour retains identity processing; production rejects the experimental
+mode and overrides. Experiments are session-only and are not saved.
+
+-   Producer source: `b6eaeebcb61d8934061b6b57ad1d7d3b345c37d2` with dirty
+    digest `f2b31a6eb7896f807825ab0f3811db29c142d5830b194848e3898deac3cc7361`.
+-   Build ID: `51b6352b33b4287d18563d35b4b24d36cea5090b59070e261507488a2a7188ca`.
+-   DLL SHA-256: `232d06ad059a4a64d2a7764004bc54d2e3b946379cf383d9810ae15ea6115f6a`.
+-   Build and offline evidence: `build/pr110-nr-colour-fixes-20261006T160739059Z/`.
+-   Live evidence: `build/nr-debug-bundled-test-24536/summary.json` and
+    `restoration-verification.json` in the same directory.
+
+The DevBench-on, Tracy-off universal Release build and ten focused colour
+tests passed. `nr_color_shader_gpu_test.exe` passed 18,558,823 checks on
+each of the RTX 4090 and AMD integrated GPU. Archive integrity passed;
+408 extracted FOMOD files matched and all 12 retained scene-cache files
+were unchanged. The existing test AIO retains its dirty-source producer
+identity; these commits do not relabel or rebuild that binary.
+
+PID 24536 completed ten live conditions and 20 native HMD images with
+zero renderer failures or device removals. Reduced-resolution
+linear-to-sRGB now succeeds with both CSX and NGX UIAlpha. The +8 EV proxy
+no longer has widespread forward rejection in A/C; a C CSX capture still
+had sparse inverse guards (1/4095 left, 3/4096 right). Model-edit off/on
+was checked in A. Both-eye inference/output and sampled finite values
+were verified, and starting NR/colour settings were restored exactly.
+Each condition used a verified noon reset and at least five seconds of
+settling. These are targeted checks, not long-term stability qualification.
+
+**Known diagnostic-only limitation, deferred:** Managed colour with the
+reversible proxy at manual -8 EV produces severe green speckling on
+selected actors in both A (Full resolution) and C (Renderscale), in both
+eyes. This configuration is unavailable in production builds and is not
+a production-setting defect. The DevBench test AIO can enable it. Finite
+samples and successful evaluation do not constitute a visual pass.
+The exact cause is unconfirmed; future work should establish a reliable
+model-input brightness range, retain original pixels when reconstruction
+is unstable, and validate real stereo images throughout that range.
+
+**Separate unresolved GPU-hang observation:** two earlier launches of
+this build (PIDs 16556 and 20336) reported `DXGI_ERROR_DEVICE_HUNG`
+(`0x887A0006`) at `color_input_copy` before test mutations, with Raw colour
+and no experimental input processing. The previous build's comparison
+session and the final new-build retest did not reproduce it. Causation
+remains unresolved; neither the successful retest nor this isolated
+commit establishes or rules out a regression.

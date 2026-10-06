@@ -27,7 +27,7 @@ int main()
 	RGB prepared{}, neural{};
 	Check(Forward({ 0.25f, 0.25f, 0.25f }, encoded, prepared));
 	Check(Forward({ 0.5f, 0.5f, 0.5f }, encoded, neural));
-	for (auto invalidBase : { RGB{ -1, 0, 1 }, RGB{ 33, 1, 1 } })
+	for (auto invalidBase : { RGB{ -1, 0, 1 }, RGB{ 1, -0.001f, 1 } })
 		Check(Reconstruct(invalidBase, prepared, neural, encoded) == invalidBase);
 	Check(Reconstruct({ std::numeric_limits<float>::infinity(), 1, 1 }, prepared, neural, encoded) == RGB{});
 	Check(Representable({ 65024, 65024, 64512 }, Storage::R11G11B10));

@@ -210,6 +210,8 @@ namespace NeuralRendering::Color
 
 	// CPU reference. Resolve a captured exposure with ResolveExposureProfile
 	// before calling this; an unbound GPU-dependent profile must fail closed.
+	inline constexpr float kProxyLogScale = 32.0f;
+	inline constexpr float kNaturalLogTwo = 0.6931471805599453f;
 	[[nodiscard]] inline bool Forward(RGB input, const Profile& profile, RGB& output) noexcept
 	{
 		if (!Valid(profile) || profile.exposureSource != ExposureSource::Manual || !Finite(input))
@@ -224,11 +226,10 @@ namespace NeuralRendering::Color
 		if (!Finite(output))
 			return false;
 		const auto maximum = *std::max_element(output.begin(), output.end());
-		if (maximum > 32.0f)
-			return false;
-		if (profile.transform == Transform::ReversibleProxy) {
+		if (profile.transform == Transform::ReversibleProxy && maximum > 0.0f) {
+			const float scale = (std::log1p(maximum) / (kNaturalLogTwo * kProxyLogScale)) / maximum;
 			for (auto& channel : output)
-				channel /= 1.0f + maximum;
+				channel *= scale;
 		}
 		for (auto& channel : output)
 			channel = Encode(channel);
@@ -249,11 +250,15 @@ namespace NeuralRendering::Color
 		if (!Finite(output))
 			return false;
 		if (profile.transform == Transform::ReversibleProxy) {
-			const auto denominator = 1.0f - *std::max_element(output.begin(), output.end());
-			if (denominator < 1.0f / 64.0f)
+			const float maximum = *std::max_element(output.begin(), output.end());
+			const float stops = maximum * kProxyLogScale;
+			if (stops >= 128.0f)
 				return false;
-			for (auto& channel : output)
-				channel /= denominator;
+			if (maximum > 0.0f) {
+				const float scale = std::expm1(stops * kNaturalLogTwo) / maximum;
+				for (auto& channel : output)
+					channel *= scale;
+			}
 		}
 		for (auto& channel : output)
 			channel /= profile.exposureMultiplier;

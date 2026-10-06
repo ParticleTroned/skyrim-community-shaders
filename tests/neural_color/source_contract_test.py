@@ -110,7 +110,7 @@ class Contracts(unittest.TestCase):
         self.assertRegex(source, r"if \(colorConfiguration_\.Enabled\(\)\)\s*return ApplyBatchLocked\(a_args, a_outcome\);")
         self.assertIn("colorInputEpoch = colorConfiguration_.inputEpoch", source)
         self.assertIn("historyValid = !colorConfiguration_.experiments.transportBypass", source)
-        self.assertIn("context.timingPending = false", (NR / "ColorTransport.cpp").read_text())
+        self.assertIn("context.timingPending = false", (NR / "D3D12Interop.cpp").read_text())
 
     def test_colour_processing_and_destination_formats_are_distinct(self):
         source = (NR / "Renderer.cpp").read_text()

@@ -205,17 +205,17 @@ namespace
 			Check(device_->CreateComputeShader(blendBlob->GetBufferPointer(),
 					  blendBlob->GetBufferSize(), nullptr, &blendShader_),
 				"Create blend shader");
-			auto depthBlob = Compile(blendPath.parent_path() / "NeuralRendering/CopyDepthGuideCS.hlsl");
+			const auto colorRoot = shaderDirectory.parent_path().parent_path() / "features/Neural Rendering/Shaders";
+			auto depthBlob = Compile(colorRoot / "Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl");
 			Check(device_->CreateComputeShader(depthBlob->GetBufferPointer(), depthBlob->GetBufferSize(), nullptr,
 					  &depthShader_),
 				"Create depth guide shader");
 			Util::SetResourceName(depthShader_.Get(), "CharacterMaskTest::CopyDepthGuide");
-			auto compactDepthBlob = Compile(blendPath.parent_path() / "NeuralRendering/CopyCompactDepthGuideCS.hlsl");
+			auto compactDepthBlob = Compile(colorRoot / "Upscaling/NeuralRendering/CopyCompactDepthGuideCS.hlsl");
 			Check(device_->CreateComputeShader(compactDepthBlob->GetBufferPointer(), compactDepthBlob->GetBufferSize(), nullptr,
 					  &compactDepthShader_),
 				"Create compact depth guide shader");
 			Util::SetResourceName(compactDepthShader_.Get(), "CharacterMaskTest::CopyCompactDepthGuide");
-			const auto colorRoot = shaderDirectory.parent_path().parent_path() / "features/Neural Rendering/Shaders";
 			PackageIncludes colorIncludes(shaderDirectory, colorRoot);
 			for (const auto& [name, shader] : std::array{
 					 std::pair{ "ColorPrepareCS.hlsl", std::addressof(prepareShader_) },

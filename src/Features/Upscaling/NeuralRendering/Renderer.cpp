@@ -4,6 +4,7 @@
 
 #include "CapacityFallback.h"
 #include "ColorPipeline.h"
+#include "ComputeStateGuard.h"
 #include "D3D12Interop.h"
 #include "PipelinePolicy.h"
 #include "Utils/D3D.h"
@@ -434,67 +435,7 @@ namespace NeuralRendering
 			a_texture.desc = {};
 		}
 
-		class ComputeStateGuard
-		{
-		public:
-			explicit ComputeStateGuard(ID3D11DeviceContext* a_context) noexcept :
-				context_(a_context)
-			{
-				if (!context_)
-					return;
-
-				classInstanceCount_ = static_cast<UINT>(classInstances_.size());
-				context_->CSGetShader(
-					&shader_, classInstances_.data(), &classInstanceCount_);
-				context_->CSGetConstantBuffers(0, 1, &constantBuffer_);
-				context_->CSGetShaderResources(0, 1, &shaderResource_);
-				context_->CSGetUnorderedAccessViews(0, 1, &unorderedAccess_);
-				captured_ = true;
-			}
-
-			ComputeStateGuard(const ComputeStateGuard&) = delete;
-			ComputeStateGuard& operator=(const ComputeStateGuard&) = delete;
-
-			~ComputeStateGuard() noexcept
-			{
-				if (captured_) {
-					ID3D11ShaderResourceView* nullShaderResource = nullptr;
-					ID3D11UnorderedAccessView* nullUnorderedAccess = nullptr;
-					context_->CSSetShaderResources(0, 1, &nullShaderResource);
-					context_->CSSetUnorderedAccessViews(0, 1, &nullUnorderedAccess, nullptr);
-					context_->CSSetShader(
-						shader_, classInstances_.data(), classInstanceCount_);
-					context_->CSSetConstantBuffers(0, 1, &constantBuffer_);
-					context_->CSSetShaderResources(0, 1, &shaderResource_);
-					context_->CSSetUnorderedAccessViews(0, 1, &unorderedAccess_, nullptr);
-				}
-
-				if (shader_)
-					shader_->Release();
-				for (UINT index = 0; index < classInstanceCount_; ++index) {
-					if (classInstances_[index])
-						classInstances_[index]->Release();
-				}
-				if (shaderResource_)
-					shaderResource_->Release();
-				if (unorderedAccess_)
-					unorderedAccess_->Release();
-				if (constantBuffer_)
-					constantBuffer_->Release();
-			}
-
-			[[nodiscard]] bool Captured() const noexcept { return captured_; }
-
-		private:
-			ID3D11DeviceContext* context_ = nullptr;
-			ID3D11ComputeShader* shader_ = nullptr;
-			std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> classInstances_{};
-			UINT classInstanceCount_ = 0;
-			ID3D11ShaderResourceView* shaderResource_ = nullptr;
-			ID3D11UnorderedAccessView* unorderedAccess_ = nullptr;
-			ID3D11Buffer* constantBuffer_ = nullptr;
-			bool captured_ = false;
-		};
+		using RendererComputeStateGuard = ComputeStateGuard<1, 1, ComputeStatePolicy::PreserveBindings>;
 
 		struct RecordingGuard
 		{
@@ -2113,7 +2054,7 @@ namespace NeuralRendering
 			Util::SetResourceName(actorProtectionCB_.Get(), "NeuralRendering::ActorProtectionCB");
 		}
 		const Constants constants{ ResolveComputeSubrect(args), args.actorSelectionSupport };
-		ComputeStateGuard guard(args.context);
+		RendererComputeStateGuard guard(args.context);
 		if (!guard.Captured() || !slot.controlMask.uav11)
 			return false;
 		args.context->UpdateSubresource(actorProtectionCB_.Get(), 0, nullptr, &constants, 0, 0);
@@ -2187,7 +2128,7 @@ namespace NeuralRendering
 				copyDepthGuideCB_.Get(), "NeuralRendering::CopyDepthGuideCB");
 		}
 
-		ComputeStateGuard stateGuard(a_args.front().context);
+		RendererComputeStateGuard stateGuard(a_args.front().context);
 		if (!stateGuard.Captured())
 			return false;
 

@@ -1,7 +1,6 @@
 #include "Features/Upscaling/NeuralRendering/CapacityFallback.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
-#include "Features/Upscaling/NeuralRendering/SourceTransport.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -17,19 +16,6 @@ void Require(bool value, const char* reason)
 int main()
 {
 	static_assert(kPhysicalFeatureSlotCount == 4 && kMaximumRegionEvaluations == 2);
-	struct Transition
-	{
-		unsigned resource = 0, featureState = 0;
-	};
-	std::array<Transition, 3> transitions{};
-	std::size_t count = 0;
-	Require(AddSourceTransition(transitions, count, Transition{ 1, 2 }), "first input");
-	Require(AddSourceTransition(transitions, count, Transition{ 1, 2 }) && count == 1, "one barrier for shared input");
-	Require(!AddSourceTransition(transitions, count, Transition{ 1, 3 }) && count == 1, "conflicting states fail closed");
-	Require(AddSourceTransition(transitions, count, Transition{ 2, 3 }), "private first output");
-	Require(AddSourceTransition(transitions, count, Transition{ 3, 3 }), "private second output");
-	Require(!AddSourceTransition(transitions, count, Transition{ 4, 3 }) && count == 3, "bounded transition storage");
-	Require(!AddSourceTransition(transitions, count, Transition{}), "null resource rejected");
 	Color::Experiments experiment;
 	Require(!experiment.CompactInputsEnabled(), "compact inputs default off in both builds");
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -57,5 +43,5 @@ int main()
 	experiment.compactInputs = true;
 	Require(experiment.CompactInputsEnabled(), "bridge may enable stateless compact inputs");
 #endif
-	std::cout << "Source transitions and compact fallback checks passed\n";
+	std::cout << "Compact fallback checks passed\n";
 }

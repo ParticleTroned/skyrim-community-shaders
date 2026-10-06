@@ -3,12 +3,14 @@
 
 #include <array>
 #include <cstdio>
+#include <d3dcompiler.h>
 #include <stdexcept>
 
 namespace
 {
 	using Microsoft::WRL::ComPtr;
-	using NeuralRendering::Color::ComputeStateGuard;
+	using NeuralRendering::ComputeStateGuard;
+	using NeuralRendering::ComputeStatePolicy;
 
 	void Require(bool condition, const char* message)
 	{
@@ -21,7 +23,9 @@ namespace
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		std::array<ComPtr<ID3D11UnorderedAccessView>, 5> uavs;
-		std::array<ComPtr<ID3D11ShaderResourceView>, 2> srvs;
+		std::array<ComPtr<ID3D11ShaderResourceView>, 5> srvs;
+		ComPtr<ID3D11ComputeShader> shader;
+		ComPtr<ID3D11ComputeShader> temporaryShader;
 		ComPtr<ID3D11Buffer> constantBuffer;
 		ComPtr<ID3D11Buffer> temporaryBuffer;
 		ComPtr<ID3D11Predicate> predicate;
@@ -32,6 +36,13 @@ namespace
 			Require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
 						&requested, 1, D3D11_SDK_VERSION, &device, nullptr, &context)),
 				"Create WARP device");
+			constexpr char code[] = "[numthreads(1,1,1)] void main() {}";
+			ComPtr<ID3DBlob> bytecode;
+			Require(SUCCEEDED(D3DCompile(code, sizeof(code), nullptr, nullptr, nullptr, "main", "cs_5_0", 0, 0, &bytecode, nullptr)), "Compile shader");
+			Require(SUCCEEDED(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, &shader)), "Create original shader");
+			Require(SUCCEEDED(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, &temporaryShader)), "Create temporary shader");
+			Util::SetResourceName(shader.Get(), "ComputeStateGuardTest::OriginalShader");
+			Util::SetResourceName(temporaryShader.Get(), "ComputeStateGuardTest::TemporaryShader");
 			for (UINT i = 0; i < uavs.size(); ++i) {
 				auto texture = Texture(D3D11_BIND_UNORDERED_ACCESS, i);
 				Require(SUCCEEDED(device->CreateUnorderedAccessView(texture.Get(), nullptr, &uavs[i])), "Create UAV");
@@ -80,11 +91,11 @@ namespace
 			}
 			auto* buffer = constantBuffer.Get();
 			context->CSSetConstantBuffers(0, 1, &buffer);
-			context->CSSetShader(nullptr, nullptr, 0);
+			context->CSSetShader(shader.Get(), nullptr, 0);
 			context->SetPredication(predicate.Get(), predicateValue);
 		}
 
-		void CheckViews(UINT clearedUavs, bool clearedSrvs)
+		void CheckViews(UINT clearedUavs, UINT clearedSrvs)
 		{
 			for (UINT i = 0; i < uavs.size(); ++i) {
 				ComPtr<ID3D11UnorderedAccessView> actual;
@@ -94,11 +105,11 @@ namespace
 			for (UINT i = 0; i < srvs.size(); ++i) {
 				ComPtr<ID3D11ShaderResourceView> actual;
 				context->CSGetShaderResources(i, 1, &actual);
-				Require(actual.Get() == (clearedSrvs ? nullptr : srvs[i].Get()), "SRV identity/coverage");
+				Require(actual.Get() == (i < clearedSrvs ? nullptr : srvs[i].Get()), "SRV identity/coverage");
 			}
 		}
 
-		void CheckState(ID3D11Buffer* expectedBuffer, ID3D11Predicate* expectedPredicate, BOOL expectedValue)
+		void CheckState(ID3D11Buffer* expectedBuffer, ID3D11Predicate* expectedPredicate, BOOL expectedValue, bool temporaryShaderExpected = false)
 		{
 			ComPtr<ID3D11Buffer> actualBuffer;
 			context->CSGetConstantBuffers(0, 1, &actualBuffer);
@@ -107,49 +118,60 @@ namespace
 			BOOL actualValue = !expectedValue;
 			context->GetPredication(&actualPredicate, &actualValue);
 			Require(actualPredicate.Get() == expectedPredicate && actualValue == expectedValue, "Predicate identity/value");
-			ComPtr<ID3D11ComputeShader> shader;
+			ComPtr<ID3D11ComputeShader> actualShader;
 			UINT classCount = 0;
-			context->CSGetShader(&shader, nullptr, &classCount);
-			Require(!shader && classCount == 0, "Null shader and class state");
+			context->CSGetShader(&actualShader, nullptr, &classCount);
+			Require(actualShader.Get() == (temporaryShaderExpected ? temporaryShader.Get() : shader.Get()) && classCount == 0, "Shader identity and class state");
 		}
 	};
 
-	template <class Guard, UINT UAVCount>
+	template <UINT SRVCount, UINT UAVCount, ComputeStatePolicy Policy = ComputeStatePolicy::ClearBindingsAndPredication>
 	void CheckGuard(BOOL predicateValue)
 	{
+		using Guard = ComputeStateGuard<SRVCount, UAVCount, Policy>;
+		constexpr bool isolated = Policy == ComputeStatePolicy::ClearBindingsAndPredication;
 		Fixture fixture;
 		fixture.Bind(predicateValue);
-		fixture.CheckViews(0, false);
+		fixture.CheckViews(0, 0);
 		fixture.CheckState(fixture.constantBuffer.Get(), fixture.predicate.Get(), predicateValue);
 		{
 			Guard guard(fixture.context.Get());
-			fixture.CheckViews(UAVCount, true);
-			fixture.CheckState(fixture.constantBuffer.Get(), nullptr, FALSE);
+			Require(guard.Captured(), "Non-null context captured");
+			fixture.CheckViews(isolated ? UAVCount : 0, isolated ? SRVCount : 0);
+			fixture.CheckState(fixture.constantBuffer.Get(), isolated ? nullptr : fixture.predicate.Get(), isolated ? FALSE : predicateValue);
 			fixture.Bind(!predicateValue);
 			auto* temporary = fixture.temporaryBuffer.Get();
 			fixture.context->CSSetConstantBuffers(0, 1, &temporary);
+			fixture.context->CSSetShader(fixture.temporaryShader.Get(), nullptr, 0);
 			guard.Unbind();
-			fixture.CheckViews(UAVCount, true);
-			fixture.CheckState(temporary, fixture.predicate.Get(), !predicateValue);
+			fixture.CheckViews(UAVCount, SRVCount);
+			fixture.CheckState(temporary, fixture.predicate.Get(), !predicateValue, true);
 			// Different bindings ensure scope exit has to restore the captured views.
 			for (UINT i = 0; i < UAVCount; ++i) {
 				auto* view = UAVCount == 1 ? nullptr : fixture.uavs[UAVCount - i - 1].Get();
 				fixture.context->CSSetUnorderedAccessViews(i, 1, &view, nullptr);
 			}
-			auto* srv = fixture.srvs[1].Get();
-			fixture.context->CSSetShaderResources(0, 1, &srv);
+			for (UINT i = 0; i < SRVCount; ++i) {
+				auto* srv = fixture.srvs[SRVCount - i].Get();
+				fixture.context->CSSetShaderResources(i, 1, &srv);
+			}
 		}
-		fixture.CheckViews(0, false);
-		fixture.CheckState(fixture.constantBuffer.Get(), fixture.predicate.Get(), predicateValue);
+		fixture.CheckViews(0, 0);
+		fixture.CheckState(fixture.constantBuffer.Get(), fixture.predicate.Get(), isolated ? predicateValue : !predicateValue);
+		Guard missingContext(nullptr);
+		Require(!missingContext.Captured(), "Null context is not captured");
+		missingContext.Unbind();
 	}
 }
 
 int main()
 {
 	try {
-		CheckGuard<ComputeStateGuard<2, 4>, 4>(TRUE);
-		CheckGuard<ComputeStateGuard<2>, 1>(FALSE);
-		std::puts("ComputeStateGuard: four-UAV and default one-UAV WARP checks passed");
+		CheckGuard<2, 4>(TRUE);
+		CheckGuard<2, 1>(FALSE);
+		CheckGuard<1, 1, ComputeStatePolicy::PreserveBindings>(TRUE);
+		CheckGuard<4, 3, ComputeStatePolicy::PreserveBindings>(FALSE);
+		std::puts("ComputeStateGuard: isolated colour and preserving renderer/actor WARP checks passed");
 		return 0;
 	} catch (const std::exception& error) {
 		std::fprintf(stderr, "ComputeStateGuard: %s\n", error.what());

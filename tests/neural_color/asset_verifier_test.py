@@ -28,8 +28,9 @@ class AssetTests(unittest.TestCase):
         self.producers = self.root / "src/Features/Upscaling/NeuralRendering"
         self.producers.mkdir(parents=True)
         paths = ['L"Data/' + (assets.SHADERS / name).as_posix() + '"' for name in assets.NAMES if name.endswith(".hlsl")]
-        (self.producers / "ColorPipeline.cpp").write_text("\n".join(paths[:-1]))
-        (self.producers / "ExposureCapture.cpp").write_text(paths[-1])
+        (self.producers / "ColorPipeline.cpp").write_text("\n".join(paths[:3]))
+        (self.producers / "ExposureCapture.cpp").write_text(paths[3])
+        (self.producers / "Renderer.cpp").write_text("\n".join(paths[4:]))
 
     def test_complete_source_and_deployment(self):
         result = assets.verify(self.root)
@@ -90,6 +91,12 @@ class AssetTests(unittest.TestCase):
     def test_missing_runtime_reference(self):
         (self.producers / "ExposureCapture.cpp").write_text("// missing compile call\n")
         self.assertFalse(assets.verify(self.root)["ok"])
+
+    def test_depth_shaders_require_nr_sources_and_runtime_references(self):
+        (self.producers / "Renderer.cpp").write_text("// missing depth compile calls\n")
+        self.assertFalse(assets.verify(self.root)["ok"])
+        (self.shaders / "CopyDepthGuideCS.hlsl").unlink()
+        self.assertTrue(any("Missing source" in error for error in assets.verify(self.root)["errors"]))
 
     def test_stale_deployed_asset(self):
         result = assets.verify(self.root)

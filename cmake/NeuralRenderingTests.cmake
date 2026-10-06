@@ -104,7 +104,7 @@ target_sources(neural_compute_state_guard_test PRIVATE
     "${_neural_compute_guard_test_dir}/d3d_resource_naming.h")
 target_include_directories(neural_compute_state_guard_test PRIVATE "${_neural_compute_guard_test_dir}")
 target_compile_definitions(neural_compute_state_guard_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(neural_compute_state_guard_test PRIVATE d3d11)
+target_link_libraries(neural_compute_state_guard_test PRIVATE d3d11 d3dcompiler)
 set_tests_properties(NeuralComputeStateGuard PROPERTIES TIMEOUT 30)
 
 set(_foveated_geometry_test_dir

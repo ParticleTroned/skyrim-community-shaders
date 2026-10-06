@@ -96,7 +96,7 @@ set(
 )
 set(
     _copy_depth_guide_shader_path
-    "${PROJECT_ROOT}/features/Upscaling/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl"
+    "${PROJECT_ROOT}/features/Neural Rendering/Shaders/Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl"
 )
 set(
     _submit_stage_stretch_shader_path
@@ -2369,7 +2369,7 @@ foreach(_capture_contract IN ITEMS
     [[sourceRects[eye] = BuildFullComputeSubrect(a_sourceEyeWidth, a_sourceHeight);]]
     [[sourceRects[eye] = ExpandCharacterWorkRect(sourceRects[eye],]]
     [[OutputMergerStateGuard outputMerger(a_context);]]
-    [[ComputeStateGuard computeState(a_context);]]
+    [[CharacterComputeStateGuard computeState(a_context);]]
     [[state_->captureSourceCategoriesSrv_.Get(), a_depthSource]]
     [[state_->capturedCategoriesUav_.Get(), state_->capturedDepthUav_.Get()]]
     [[eye * a_sourceEyeWidth + rect.baseX, rect.baseY, rect.width, rect.height]]

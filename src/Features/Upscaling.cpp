@@ -44539,7 +44539,7 @@ bool Upscaling::PrepareReducedResolutionNeuralOutput(uint32_t eye, const NeuralR
 	if (!EnsureFoveatedTexture(selected, args.colorInput, args.outputWidth, args.outputHeight,
 			false, true, true, false, name.c_str()))
 		return false;
-	NeuralRendering::Color::ComputeStateGuard<3> stateGuard(context);
+	NeuralRendering::ComputeStateGuard<3> stateGuard(context);
 	winrt::com_ptr<ID3D11SamplerState> previousSampler;
 	context->CSGetSamplers(0, 1, previousSampler.put());
 	auto restoreSampler = ScopeExit([&]() { auto* sampler = previousSampler.get(); context->CSSetSamplers(0, 1, &sampler); });
@@ -44920,7 +44920,7 @@ bool Upscaling::PrepareFlatReducedResolutionNeuralInput(ID3D11Resource* color, I
 			!EnsureFoveatedTexture(foveatedCenterMotionVectors[0], motion, width, height,
 				false, true, false, false, "NeuralRendering::ReducedMotionMono"))
 			return false;
-		NeuralRendering::Color::ComputeStateGuard<4, 4> stateGuard(context);
+		NeuralRendering::ComputeStateGuard<4, 4> stateGuard(context);
 		const auto capture = CaptureNeuralStage(route.role, 0u, route.frame,
 			route.temporalAdmission.sourceWorldFrame, route.generation, "reduced_mono_input_preparation");
 		{
@@ -45577,7 +45577,7 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 			profile.centerHorizontalScale, GetRuntimeUpscaleMethod(), false,
 			settings.neuralRenderingFovOnly ? &sharedMaskProfile : nullptr))
 		return false;
-	NeuralRendering::Color::ComputeStateGuard<1> stateGuard(context);
+	NeuralRendering::ComputeStateGuard<1> stateGuard(context);
 	uint32_t emptyEyeMask = 0;
 	for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 		const auto& rect = foveatedRectCache.rects[eye];

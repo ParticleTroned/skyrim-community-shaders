@@ -13,6 +13,7 @@
 #include <vector>
 #include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
+using NeuralRendering::ComputeStateGuard;
 using namespace NeuralRendering::Color;
 using Pixel = std::array<float, 4>;
 static void Require(bool value)

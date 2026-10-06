@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate NR colour source assets and optionally hash-match a deployed Data root."""
+"""Validate NR shader source assets and optionally hash-match a deployed Data root."""
 from __future__ import annotations
 import argparse
 import hashlib
@@ -10,7 +10,8 @@ import re
 FEATURE = Path("features/Neural Rendering")
 SHADERS = Path("Shaders/Upscaling/NeuralRendering")
 NAMES = ("ColorCommon.hlsli", "ColorPrepareCS.hlsl", "ColorReconstructCS.hlsl",
-         "ColorMeasureCS.hlsl", "ColorExposureCS.hlsl")
+         "ColorMeasureCS.hlsl", "ColorExposureCS.hlsl",
+         "CopyDepthGuideCS.hlsl", "CopyCompactDepthGuideCS.hlsl")
 MANIFEST_VERSION = re.compile(r"^\s*Version\s*=\s*(\d+)-(\d+)-(\d+)\s*$", re.MULTILINE)
 REGISTRY_VERSION = re.compile(r'"NeuralRendering"sv,\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}')
 
@@ -78,13 +79,15 @@ def verify(root: Path, deployed_data: Path | None = None) -> dict:
     # Verify all runtime compile paths have an asset in the known feature mapping.
     expected = {"Data/" + str(SHADERS / n).replace("\\", "/") for n in NAMES if n.endswith(".hlsl")}
     actual: set[str] = set()
-    for name in ("ColorPipeline.cpp", "ExposureCapture.cpp"):
+    for name in ("ColorPipeline.cpp", "ExposureCapture.cpp", "Renderer.cpp"):
         path = root / "src/Features/Upscaling/NeuralRendering" / name
         if not path.is_file():
             errors.append(f"Missing runtime producer {name}")
             continue
         try:
-            actual.update(re.findall(r'L"(Data/Shaders/[^"\n]+\.hlsl)"', path.read_text(encoding="utf-8-sig")))
+            actual.update(candidate for candidate in re.findall(
+                r'L"(Data/Shaders/[^"\n]+\.hlsl)"', path.read_text(encoding="utf-8-sig"))
+                if candidate.startswith("Data/" + SHADERS.as_posix() + "/"))
         except (OSError, UnicodeError) as error:
             errors.append(f"Unreadable runtime producer {name}: {error}")
     if actual != expected:

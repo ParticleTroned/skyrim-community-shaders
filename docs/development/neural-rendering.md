@@ -112,6 +112,50 @@ are rejected before mutation, and edits use the existing frame-boundary
 history/reset contract. Missing or mismatched source capture retains the
 existing baseline/failure behavior rather than using stale category data.
 
+## Implementation consolidation (2026-10-06)
+
+NR colour and depth-copy shader sources now live together under
+`features/Neural Rendering/Shaders/Upscaling/NeuralRendering/`. Their
+installed paths are unchanged. The ordinary depth copy retains output
+coordinates; the diagnostic compact copy starts at the destination origin.
+They remain separate shaders because these operations differ. Asset
+verification covers both depth shaders and their renderer references.
+
+One shared compute-state guard replaces the renderer, actor and colour
+implementations. Renderer/actor callers retain bindings on entry and do
+not alter predication; colour callers retain their existing entry-time
+unbind and predication isolation. Each caller captures the same resource
+slots as before. The existing `Utils/ComputeState.h` requires a D3D11.1
+context and has a fixed three-SRV range, so it does not cover these D3D11
+callers with up to five SRVs without broadening an unrelated contract.
+
+The unused source-transition helper and its disconnected test assertions
+are removed; capacity-fallback tests remain. Private mask-tile definitions
+and actor empty-selection evidence move into their owning files, and the
+single transport-submission method joins `D3D12Interop.cpp`. This removes
+three headers and one implementation file while retaining the renderer,
+interop, colour, actor-policy and test boundaries. The cleanup is separate
+from the diagnostic colour fix and makes no performance claim.
+
+Validation evidence is under `build/pr110-nr-consolidation/`:
+
+-   The maintained shader verifier passed four permutations for each depth
+    shader before relocation. Explicit old-path/new-path compilation then
+    confirmed identical DXBC for all eight flat/VR and HDR combinations.
+-   Two WARP graphics checks, eight controller checks, six source contracts
+    and five colour/asset checks passed (20 distinct CTest cases). The guard
+    test checks non-null shader restoration, constant buffers, resource-slot
+    boundaries, both predication policies and null-context handling.
+-   The universal SE/AE/VR Release DLL built with DevBench on, Tracy off and
+    auto-deployment off. Producer base is `bf1a1cd22` plus `producer.patch`
+    and the two preserved relocated shaders. Formatting hooks passed.
+-   Build ID: `fcd8cfe83b2acb869858199aebb1b678b34030a70dae3e6552f083697db4916f`.
+    DLL SHA-256: `6852c4a2ccaad064548ca15df6892aefe1f0eaf1281526f440e1be30c0f2ed00`
+    (31,985,664 bytes). The adjacent manifest matches the linked DLL.
+-   The existing AIO and running game were not replaced. This consolidation
+    has no new in-game/HMD qualification or production-DLL build; the
+    earlier live results describe their original producer builds.
+
 ## Local validation (2026-10-06)
 
 The PR110 implementation is based on

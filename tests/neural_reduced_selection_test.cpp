@@ -83,14 +83,11 @@ namespace NeuralRendering
 		ComputeSubrect computeSubrect{ 0, 0, 11, 7 };
 	};
 	std::optional<uint64_t> LogicalTextureBytes(unsigned, unsigned w, unsigned h) { return uint64_t(w) * h * 4; }
-	namespace Color
+	template <unsigned>
+	struct ComputeStateGuard
 	{
-		template <unsigned>
-		struct ComputeStateGuard
-		{
-			explicit ComputeStateGuard(Context*) {}
-		};
-	}
+		explicit ComputeStateGuard(Context*) {}
+	};
 }
 template <class F>
 struct ScopeExit

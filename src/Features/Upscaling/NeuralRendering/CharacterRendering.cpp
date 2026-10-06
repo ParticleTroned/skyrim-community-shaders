@@ -8,9 +8,9 @@
 #include "CharacterCategoryFormat.h"
 #include "CharacterComputeSubrect.h"
 #include "CharacterMaskReadback.h"
-#include "CharacterMaskTiles.h"
 #include "CharacterMaskWorkPolicy.h"
 #include "ColorPipeline.h"
+#include "ComputeStateGuard.h"
 
 #include "Globals.h"
 #include "GpuPass.h"
@@ -82,6 +82,20 @@ namespace NeuralRendering
 			return { left.x * 0.5f + right.x * 0.5f,
 				left.y * 0.5f + right.y * 0.5f, left.z * 0.5f + right.z * 0.5f };
 		}
+
+		inline constexpr std::uint32_t kCharacterMaskRoiTileSize = 32;
+		inline constexpr std::uint32_t kCharacterMaskRoiMaximumExtent = 16384;
+
+		/** GPU diagnostic ABI: nonzero-pixel enclosure in each row-major tile. */
+		struct CharacterMaskRoiTileBounds
+		{
+			std::uint32_t minX = 0;
+			std::uint32_t minY = 0;
+			std::uint32_t maxX = 0;
+			std::uint32_t maxY = 0;
+			bool operator==(const CharacterMaskRoiTileBounds&) const = default;
+		};
+		static_assert(sizeof(CharacterMaskRoiTileBounds) == 16);
 
 		enum DiagnosticCounter : std::uint32_t
 		{
@@ -231,67 +245,7 @@ namespace NeuralRendering
 			};
 		}
 
-		class ComputeStateGuard
-		{
-		public:
-			explicit ComputeStateGuard(ID3D11DeviceContext* a_context) noexcept :
-				context_(a_context)
-			{
-				if (!context_)
-					return;
-				classInstanceCount_ = static_cast<UINT>(classInstances_.size());
-				context_->CSGetShader(&shader_, classInstances_.data(), &classInstanceCount_);
-				context_->CSGetConstantBuffers(0, 1, &constantBuffer_);
-				context_->CSGetShaderResources(0, static_cast<UINT>(shaderResources_.size()), shaderResources_.data());
-				context_->CSGetUnorderedAccessViews(0, static_cast<UINT>(unorderedAccess_.size()), unorderedAccess_.data());
-				captured_ = true;
-			}
-
-			ComputeStateGuard(const ComputeStateGuard&) = delete;
-			ComputeStateGuard& operator=(const ComputeStateGuard&) = delete;
-
-			~ComputeStateGuard() noexcept
-			{
-				if (captured_) {
-					std::array<ID3D11ShaderResourceView*, 4> nullSrvs{};
-					std::array<ID3D11UnorderedAccessView*, 3> nullUavs{};
-					context_->CSSetShaderResources(0, static_cast<UINT>(nullSrvs.size()), nullSrvs.data());
-					context_->CSSetUnorderedAccessViews(0, static_cast<UINT>(nullUavs.size()), nullUavs.data(), nullptr);
-					context_->CSSetShader(shader_, classInstances_.data(), classInstanceCount_);
-					context_->CSSetConstantBuffers(0, 1, &constantBuffer_);
-					context_->CSSetShaderResources(0, static_cast<UINT>(shaderResources_.size()), shaderResources_.data());
-					context_->CSSetUnorderedAccessViews(0, static_cast<UINT>(unorderedAccess_.size()), unorderedAccess_.data(), nullptr);
-				}
-				if (shader_)
-					shader_->Release();
-				for (UINT index = 0; index < classInstanceCount_; ++index) {
-					if (classInstances_[index])
-						classInstances_[index]->Release();
-				}
-				if (constantBuffer_)
-					constantBuffer_->Release();
-				for (auto* resource : shaderResources_) {
-					if (resource)
-						resource->Release();
-				}
-				for (auto* resource : unorderedAccess_) {
-					if (resource)
-						resource->Release();
-				}
-			}
-
-			[[nodiscard]] bool Captured() const noexcept { return captured_; }
-
-		private:
-			ID3D11DeviceContext* context_ = nullptr;
-			ID3D11ComputeShader* shader_ = nullptr;
-			std::array<ID3D11ClassInstance*, D3D11_SHADER_MAX_INTERFACES> classInstances_{};
-			UINT classInstanceCount_ = 0;
-			ID3D11Buffer* constantBuffer_ = nullptr;
-			std::array<ID3D11ShaderResourceView*, 4> shaderResources_{};
-			std::array<ID3D11UnorderedAccessView*, 3> unorderedAccess_{};
-			bool captured_ = false;
-		};
+		using CharacterComputeStateGuard = ComputeStateGuard<4, 3, ComputeStatePolicy::PreserveBindings>;
 
 		class OutputMergerStateGuard
 		{
@@ -1628,7 +1582,7 @@ namespace NeuralRendering
 				}
 				if (!EnsureEarlyMaskBounds(*selected, a_device))
 					return;
-				ComputeStateGuard stateGuard(a_context);
+				CharacterComputeStateGuard stateGuard(a_context);
 				if (!stateGuard.Captured()) {
 					(void)FailEarlyMaskBounds("early_bounds_compute_state_unavailable", E_FAIL);
 					return;
@@ -2211,7 +2165,7 @@ namespace NeuralRendering
 			a_args.context->UpdateSubresource(
 				constants_.Get(), 0, nullptr, &constants, 0, 0);
 
-			ComputeStateGuard stateGuard(a_args.context);
+			CharacterComputeStateGuard stateGuard(a_args.context);
 			if (!stateGuard.Captured())
 				return false;
 			if (!a_slot.maskInitialized) {
@@ -2869,7 +2823,7 @@ namespace NeuralRendering
 			if (!outputMerger.Captured())
 				return fail("character category capture could not preserve output state");
 			{
-				ComputeStateGuard computeState(a_context);
+				CharacterComputeStateGuard computeState(a_context);
 				if (!computeState.Captured())
 					return fail("character category capture could not preserve compute state");
 				CS_GPU_PASS_CAPTURE("Upscaling::DLSS5CharacterCategoryCapture", evidence ? evidence->captureTiming : Util::PassTimingHandle{});

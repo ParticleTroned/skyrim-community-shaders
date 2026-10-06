@@ -376,8 +376,7 @@ namespace
 void ScreenSpaceGI::RestoreDefaultSettings()
 {
 	const bool wasEnabled = settings.Enabled;
-	settings = {};
-	SetEnabled(settings.Enabled);
+	runtimeToggle.ReplaceSettings(settings, Settings{}, &Settings::Enabled);
 	ApplyPlatformSettingOverrides(settings);
 	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 	recompileFlag = true;
@@ -973,9 +972,9 @@ void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 		return;
 	}
 
-	settings = Settings{};
-	settings.Enabled = true;
-	SetEnabled(settings.Enabled);
+	Settings defaults{};
+	defaults.Enabled = true;
+	runtimeToggle.ReplaceSettings(settings, defaults, &Settings::Enabled);
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
 	settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
@@ -998,8 +997,7 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 		return;
 
 	const bool wasEnabled = settings.Enabled;
-	settings = a_state.get<Settings>();
-	SetEnabled(settings.Enabled);
+	runtimeToggle.ReplaceSettings(settings, a_state.get<Settings>(), &Settings::Enabled);
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
 	settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
@@ -1013,8 +1011,7 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	const bool wasEnabled = settings.Enabled;
-	settings = o_json;
-	SetEnabled(settings.Enabled);
+	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::Enabled);
 	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
 	if (!o_json.contains("EnableFoveated") && o_json.contains("FoveatedPresetMode")) {
 		// Backward compatibility: legacy foveated preset modes map to the new single toggle.

@@ -151,6 +151,8 @@ public:
 
 	/** @brief Queues a render-thread history rebuild without touching graphics resources. */
 	void QueueResetSkylighting(bool rebuild = false);
+	/** @brief A rebuild remains pending even if a history reset consumed its wakeup. */
+	bool HasPendingReset() const;
 	/** @brief Clears probe history on the render thread and requires a fresh occlusion capture. */
 	void ResetSkylighting();
 	/** @brief Checks the render-thread location state and invalidates history on transitions. */

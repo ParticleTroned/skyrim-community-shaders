@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 namespace Util
 {
@@ -21,6 +22,16 @@ namespace Util
 		explicit RuntimeToggle(bool enabled) : requested(enabled) {}
 		bool Get() const { return requested.load(std::memory_order_acquire); }
 		void Set(bool enabled) { requested.store(enabled, std::memory_order_release); }
+
+		/** @brief Owner-thread settings replacement; retain the applied flag after rendering starts. */
+		template <class Settings, class Flag>
+		void ReplaceSettings(Settings& settings, Settings updated, Flag Settings::* enabled)
+		{
+			Set(updated.*enabled != 0);
+			if (frame)
+				updated.*enabled = settings.*enabled;
+			settings = std::move(updated);
+		}
 
 		template <class Flag, class State>
 		bool Apply(Flag& enabled, const State* state)

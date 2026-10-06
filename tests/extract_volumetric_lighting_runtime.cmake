@@ -19,6 +19,13 @@ file(WRITE "${OUTPUT_FILE}" "${_runtime}")
 
 file(READ "${PROJECT_ROOT}/src/Features/InteriorSun.cpp" _sun)
 file(READ "${PROJECT_ROOT}/src/Features/InverseSquareLighting.cpp" _inverse)
+# Exercise startup publication before native hook installation.
+extract_between("${_sun}" "void InteriorSun::PostPostLoad()" "\t// Hooks and patch" sun_startup.h)
+extract_between("${_inverse}" "void InverseSquareLighting::PostPostLoad()" "\tstl::detour_thunk<CreatePointLight>" inverse_startup.h)
+foreach(_part sun_startup inverse_startup)
+    file(READ "${OUTPUT_DIRECTORY}/${_part}.h" _text)
+    file(APPEND "${OUTPUT_FILE}" "${_text}}\n")
+endforeach()
 extract_between("${_sun}" "void InteriorSun::EarlyPrepass()" "inline bool InteriorSun::IsInteriorWithSun(" sun_apply.h)
 extract_between("${_sun}" "void InteriorSun::SetRuntimeEnabled(" "void InteriorSun::PopulateReplacementJobArrays(" sun_request.h)
 extract_between("${_inverse}" "void InverseSquareLighting::SetRuntimeEnabled(" "void InverseSquareLighting::ApplyRuntimeStateToActiveLights()" inverse_apply.h)

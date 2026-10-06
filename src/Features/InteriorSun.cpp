@@ -100,6 +100,8 @@ void InteriorSun::RestoreDefaultSettings()
 
 void InteriorSun::PostPostLoad()
 {
+	// Hooks must honor the startup preference before any guarded render prepass.
+	runtimeEnabled.store(settings.Enabled, std::memory_order_release);
 	// Hooks and patch to enable directional lighting for interiors
 	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x399, 0x37D, 0x639));
 	stl::write_thunk_call<GetWorldSpace>(REL::RelocationID(35562, 36561).address() + REL::Relocate(0x3AE, 0x392, 0x64E));

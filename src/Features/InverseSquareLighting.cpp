@@ -144,6 +144,8 @@ void InverseSquareLighting::ApplyRuntimeStateToActiveLights() const
 
 void InverseSquareLighting::PostPostLoad()
 {
+	// Hooks must honor the startup preference before any guarded render prepass.
+	runtimeEnabled.store(settings.Enabled, std::memory_order_release);
 	stl::detour_thunk<CreatePointLight>(REL::RelocationID(17208, 17610));
 	stl::detour_thunk<BSLight_GetLuminance>(REL::RelocationID(101303, 108292));
 

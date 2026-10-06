@@ -21,6 +21,36 @@ void Require(bool value, const char* message)
 
 int main()
 try {
+	struct Settings
+	{
+		uint32_t enabled = 1;
+		unsigned quality = 1;
+	};
+	{
+		State state;
+		Util::RuntimeToggle toggle(true);
+		Settings settings;
+		toggle.ReplaceSettings(settings, Settings{ 0, 2 }, &Settings::enabled);
+		Require(!toggle.Get() && settings.enabled == 0 && settings.quality == 2, "startup settings must initialize the applied preference");
+		toggle.Apply(settings.enabled, &state);
+		toggle.ReplaceSettings(settings, Settings{ 1, 3 }, &Settings::enabled);
+		Require(toggle.Get() && settings.enabled == 0 && settings.quality == 3, "settings replacement must stage only the enabled flag after rendering starts");
+		toggle.Apply(settings.enabled, &state);
+		Require(settings.enabled == 0, "same-frame replacement must remain deferred");
+		state.save = true;
+		++state.frameCount;
+		toggle.Apply(settings.enabled, &state);
+		Require(settings.enabled == 0, "settings replacement must obey save/load guards");
+		state.save = false;
+		++state.frameCount;
+		toggle.Apply(settings.enabled, &state);
+		Require(settings.enabled == 1, "settings replacement must apply on the next safe frame");
+		toggle.ReplaceSettings(settings, Settings{ 0, 4 }, &Settings::enabled);
+		toggle.Set(true);
+		++state.frameCount;
+		toggle.Apply(settings.enabled, &state);
+		Require(settings.enabled == 1 && toggle.Get(), "later API request must supersede settings restore");
+	}
 	State state;
 	Util::RuntimeToggle toggle(true);
 	uint32_t applied = 1;

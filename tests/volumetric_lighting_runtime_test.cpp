@@ -62,6 +62,7 @@ namespace
 		std::atomic<bool> runtimeSettingsDirty{ true }, runtimeEnabled{ true }, isInteriorWithSun{ false };
 		float nativeDistance = 100.0f, vanillaInteriorShadowDistance = 60.0f;
 		float* gInteriorShadowDistance = &nativeDistance;
+		void PostPostLoad();
 		void EarlyPrepass();
 		void SetRuntimeEnabled(bool enabled);
 		static void SetShadowDistance(bool interior);
@@ -95,6 +96,7 @@ namespace
 		} settings;
 		std::atomic<bool> runtimeSettingsDirty{ true }, runtimeEnabled{ true };
 		unsigned lightUpdates = 0;
+		void PostPostLoad();
 		void EarlyPrepass();
 		void SetRuntimeEnabled(bool enabled);
 		void ApplyRuntimeStateToActiveLights();
@@ -250,6 +252,22 @@ namespace
 			Require(!vl.IsPerformanceCostMeasurementReady(), "Deferred frame remained measurement-ready");
 		}
 	};
+
+	void TestDisabledNativeStartup()
+	{
+		Fixture f;
+		InteriorSun sun;
+		InverseSquareLighting inverse;
+		sun.SetRuntimeEnabled(false);
+		inverse.SetRuntimeEnabled(false);
+		sun.PostPostLoad();
+		inverse.PostPostLoad();
+		testState.menu = true;
+		sun.EarlyPrepass();
+		inverse.EarlyPrepass();
+		Require(!sun.IsEnabled() && !inverse.runtimeEnabled, "native hooks must honor disabled settings before the first safe frame");
+		Require(sun.runtimeSettingsDirty && inverse.runtimeSettingsDirty, "startup must retain deferred engine reconciliation");
+	}
 
 	void TestNativeLightingToggles()
 	{
@@ -498,6 +516,7 @@ int main()
 	renderThread = GetCurrentThreadId();
 	bool passed = true;
 	for (const auto& [name, test] : std::array{
+			 std::pair{ "Disabled native startup", &TestDisabledNativeStartup },
 			 std::pair{ "Native location during deferral", &TestNativeLocationDuringDeferral },
 			 std::pair{ "Native lighting toggles", &TestNativeLightingToggles },
 			 std::pair{ "Coalescing and frame boundary", &TestCoalescingAndFrameBoundary },

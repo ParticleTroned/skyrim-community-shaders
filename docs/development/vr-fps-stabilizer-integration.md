@@ -79,40 +79,6 @@ their own outstanding reload state so an unrelated successful reload cannot
 clear a restart requirement. The author interface has no success/error
 return for these methods; CSX cannot certify the external parser's outcome.
 
-## Runtime toggle safety
-
-API build 13 stages SSS, SSGI, contact-shadow and VL preferences without
-changing engine or graphics state on the caller. Getters include pending
-requests. Render passes coalesce requests once per frame and defer during
-save/load activity, load grace and main/loading menus. UI, defaults and
-measurement paths retain requested preferences when saving settings.
-
-Legacy upscaling calls use the existing runtime-main task dispatcher before
-reading settings or invoking the transition controller. Calls from workers
-wait for admission; after five seconds, unadmitted tasks are cancelled and
-queries return conservative defaults. Admitted calls finish before return.
-Existing loading, profile-admission and render-scale guards still apply.
-
-VL reconciles after loads/new games, rejects incomplete destinations and
-owns the renderer for native changes. Blur maintenance continues during
-deferral. `CS>VLExterior` always edits the exterior preference; VR retains
-its startup requirement when both locations began disabled.
-
-Interior Sun and Inverse Square Lighting defer engine changes to a guarded
-render prepass. Skylighting queues resets and grid rebuilds, retains work
-when renderer ownership is unavailable, and restores touched pixel bindings.
-Measurements wait for deferred changes to apply. No logging is added.
-
-The universal Release DLL (SE/AE/VR) built successfully. All 11 focused
-CTest checks passed: `RuntimeToggle`,
-`VolumetricLightingRuntime`, `SkylightingLifecycle`, `SkylightingSettings`,
-`SkylightingProbeSlice`, `VRFpsStabilizerAPI`, `MainThreadDispatchState`,
-`FovSettings`, `VolumetricLightingBlur`, `VolumetricLightingComposite`
-and `VolumetricLightingTuningPolicy`. These cover concurrent requests,
-coalescing, load/cell guards, native ownership, deferred resets, bindings,
-worker dispatch and cancellation. They do not establish crash resolution.
-Live acceptance remains with the user; AIO packaging is on hold.
-
 ## Persistence and validation
 
 The editor preserves unedited bytes, including custom commands, comments,

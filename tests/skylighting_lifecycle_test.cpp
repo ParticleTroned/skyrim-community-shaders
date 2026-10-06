@@ -238,13 +238,20 @@ struct Skylighting
 	SkylightingCB GetCommonBufferData(bool inWorld);
 	void Prepass();
 	void SetupRenderTargetResources();
-	void SetupResources() { throw std::runtime_error("unexpected volume replacement"); }
+	unsigned rebuilds = 0;
+	void SetupResources()
+	{
+		++rebuilds;
+		queuedRebuildSkylighting.exchange(false);
+		ResetSkylighting();
+	}
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
 	Texture3D* texShadowBitmask = nullptr;
 	Texture3D* texShadowVisibility = nullptr;
 	UINT probeArrayDims[3] = { 192, 192, 96 };
 	void QueueResetSkylighting(bool rebuild = false);
+	bool HasPendingReset() const;
 	void EarlyPrepass();
 	bool UpdateInteriorState();
 	void ResetSkylighting();
@@ -298,6 +305,40 @@ struct Fixture
 int main()
 try {
 	unsigned scenarios = 0;
+	{
+		Fixture f;
+		f.Ready();
+		f.Publish();
+		Require(f.published.Enabled, "fixture must publish active probes before late invalidation");
+		f.feature.QueueResetSkylighting();
+		f.feature.EarlyPrepass();
+		Require(!f.published.Enabled && !f.feature.probeUpdateBufferEnabled && f.state.updates == 1, "early reset must invalidate already-published probe data");
+		f.feature.needsOcclusionRefresh = false;
+		f.feature.Prepass();
+		Require(f.context.dispatchCount == 0, "fresh capture must not authorize dispatch with stale probe constants");
+		f.Publish();
+		f.feature.Prepass();
+		Require(f.context.dispatchCount == 1, "fresh publication must resume probe dispatch");
+		++scenarios;
+	}
+	{
+		Fixture f;
+		f.Ready();
+		f.feature.QueueResetSkylighting(true);
+		f.feature.ResetSkylighting();
+		Require(!f.feature.queuedResetSkylighting && f.feature.queuedRebuildSkylighting, "history reset must leave resource rebuild pending");
+		f.feature.needsOcclusionRefresh = false;
+		f.Publish();
+		Require(!f.published.Enabled, "pending resource rebuild must block probe sampling");
+		f.feature.EarlyPrepass();
+		Require(f.feature.rebuilds == 0 && f.feature.HasPendingReset(), "missing device must retain resource rebuild");
+		globals::d3d::device = &f.renderer;
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(f.feature.rebuilds == 1 && !f.feature.HasPendingReset(), "resource rebuild must survive consumption of its reset flag");
+		globals::d3d::device = nullptr;
+		++scenarios;
+	}
 	{
 		Fixture f;
 		f.state.blocked = true;

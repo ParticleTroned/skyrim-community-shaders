@@ -222,8 +222,7 @@ json ScreenSpaceShadows::CapturePerformanceSettingsState() const
 void ScreenSpaceShadows::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (a_enabled) {
-		bendSettings = BendSettings{};
-		SetEnabled(bendSettings.Enable != 0);
+		runtimeToggle.ReplaceSettings(bendSettings, BendSettings{}, &BendSettings::Enable);
 		enableStereoSync = false;
 		useStereoReproject = false;
 		return;
@@ -243,8 +242,7 @@ void ScreenSpaceShadows::RestorePerformanceCostMeasurementState(const json& a_st
 		return;
 
 	if (a_state.contains("Settings")) {
-		bendSettings = a_state.at("Settings").get<BendSettings>();
-		SetEnabled(bendSettings.Enable != 0);
+		runtimeToggle.ReplaceSettings(bendSettings, a_state.at("Settings").get<BendSettings>(), &BendSettings::Enable);
 	}
 	enableStereoSync = a_state.value("EnableStereoSync", enableStereoSync);
 	useStereoReproject = a_state.value("UseStereoReproject", useStereoReproject);
@@ -867,8 +865,7 @@ void ScreenSpaceShadows::Prepass()
 
 void ScreenSpaceShadows::LoadSettings(json& o_json)
 {
-	bendSettings = o_json;
-	SetEnabled(bendSettings.Enable != 0);
+	runtimeToggle.ReplaceSettings(bendSettings, o_json.get<BendSettings>(), &BendSettings::Enable);
 	enableStereoSync = o_json.is_object() ? o_json.value("EnableStereoSync", false) : false;
 	useStereoReproject = o_json.is_object() ? o_json.value("UseStereoReproject", false) : false;
 	SanitizeBendSettings(bendSettings);
@@ -884,8 +881,7 @@ void ScreenSpaceShadows::SaveSettings(json& o_json)
 
 void ScreenSpaceShadows::RestoreDefaultSettings()
 {
-	bendSettings = {};
-	SetEnabled(bendSettings.Enable != 0);
+	runtimeToggle.ReplaceSettings(bendSettings, BendSettings{}, &BendSettings::Enable);
 	enableStereoSync = false;
 	useStereoReproject = false;
 }

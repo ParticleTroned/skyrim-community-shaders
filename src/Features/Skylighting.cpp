@@ -499,10 +499,15 @@ void Skylighting::QueueResetSkylighting(bool rebuild)
 	queuedResetSkylighting.store(true, std::memory_order_release);
 }
 
+bool Skylighting::HasPendingReset() const
+{
+	return queuedResetSkylighting.load(std::memory_order_acquire) || queuedRebuildSkylighting.load(std::memory_order_acquire);
+}
+
 void Skylighting::EarlyPrepass()
 {
 	auto* state = globals::state;
-	if (!queuedResetSkylighting.load(std::memory_order_acquire) || !state || runtimeSettingsFrame == state->frameCount)
+	if (!HasPendingReset() || !state || runtimeSettingsFrame == state->frameCount)
 		return;
 	runtimeSettingsFrame = state->frameCount;
 	if (Util::IsRuntimeToggleBlocked(state))
@@ -511,10 +516,15 @@ void Skylighting::EarlyPrepass()
 	if (!ownership)
 		return;
 	inOcclusion = false;
-	if (queuedRebuildSkylighting.load(std::memory_order_acquire))
+	if (queuedRebuildSkylighting.load(std::memory_order_acquire)) {
+		if (!globals::d3d::device)
+			return;
 		SetupResources();
-	else
+	} else
 		ResetSkylighting();
+	// A reset after world publication must revoke its probe-dispatch permission.
+	if (probeUpdateBufferEnabled)
+		state->UpdateFeatureData(true);
 }
 
 bool Skylighting::UpdateInteriorState()
@@ -589,8 +599,7 @@ void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 bool Skylighting::IsPerformanceCostMeasurementReady() const
 {
 	return !Util::IsRuntimeToggleBlocked(globals::state) &&
-	       !queuedResetSkylighting.load(std::memory_order_acquire) &&
-	       !queuedRebuildSkylighting.load(std::memory_order_acquire);
+	       !HasPendingReset();
 }
 
 bool Skylighting::IsPerformanceCostMeasurementEnabled() const
@@ -1063,7 +1072,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!IsRuntimeActive())
 		return data;
 
-	if (UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh || !HasProbeUpdateResources())
+	if (UpdateInteriorState() || HasPendingReset() || needsOcclusionRefresh || !HasProbeUpdateResources())
 		return data;
 
 	if (globals::state->isMapMenuOpen)
@@ -1128,7 +1137,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 void Skylighting::Prepass()
 {
 	auto context = globals::d3d::context;
-	if (!IsRuntimeActive() || UpdateInteriorState() || queuedResetSkylighting.load(std::memory_order_acquire) || needsOcclusionRefresh ||
+	if (!IsRuntimeActive() || UpdateInteriorState() || HasPendingReset() || needsOcclusionRefresh ||
 		globals::state->isMapMenuOpen || !HasProbeUpdateResources() || !probeUpdateBufferEnabled) {
 		// A loading event may invalidate history after the world buffer was uploaded.
 		if (context && probeUpdateBufferEnabled)
@@ -1504,9 +1513,9 @@ void Skylighting::RenderOcclusion()
 	{
 		CS_GPU_PASS("Skylighting::SkylightingMask");
 
-		if (queuedResetSkylighting.load(std::memory_order_acquire))
+		if (HasPendingReset())
 			EarlyPrepass();
-		if (queuedResetSkylighting.load(std::memory_order_acquire))
+		if (HasPendingReset())
 			return;
 
 		const uint occlusionUpdateInterval = GetOcclusionUpdateInterval(settings);

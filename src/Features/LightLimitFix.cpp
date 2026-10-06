@@ -1589,8 +1589,7 @@ void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
 
 void LightLimitFix::LoadSettings(json& o_json)
 {
-	settings = o_json;
-	SetContactShadowsEnabled(settings.EnableContactShadows);
+	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
 }
 
@@ -1603,8 +1602,7 @@ void LightLimitFix::SaveSettings(json& o_json)
 
 void LightLimitFix::RestoreDefaultSettings()
 {
-	settings = {};
-	SetContactShadowsEnabled(settings.EnableContactShadows);
+	runtimeToggle.ReplaceSettings(settings, Settings{}, &Settings::EnableContactShadows);
 	SanitizeSettings(settings);
 }
 

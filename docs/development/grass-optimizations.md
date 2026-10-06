@@ -377,44 +377,57 @@ activation; streaming and LOD quality remain separate checks.
 
 ## Latest VR comparison
 
-The 2026-10-05 Western Watchtower comparison used Advanced scene culling,
-the Play Game profile and clear weather. Every condition reset the
-observed clock to noon, settled at least five seconds and measured eight
-seconds with grass diagnostics and the CSX profiler off. Each core
-condition ran twice, with the second sequence in reverse order. Player
-position matched; headset pose was not recorded.
+The 2026-10-06 final-build comparison used the Play Game profile.
+
+Western Watchtower, Advanced scene culling, clear weather. Each condition
+reset to observed noon, settled at least five seconds and measured eight
+seconds twice, reversing the second sequence. Grass diagnostics, scene
+telemetry and the CSX profiler were off during timing. Player position
+matched; headset pose was not recorded. Means give equal weight to the
+two repeats. The measured final universal Release AIO was
+`f582b926ea5b` (DevBench ON / Tracy OFF), clean source `7c83cbd7a`.
 
 | Grass optimization condition | CPU ms | fpsVR reported FPS | FPS vs off |
-| ---------------------------- | ------ | ------------------ | ---------- |
-| Off                          | 7.05   | 90.8               | Baseline   |
-| Full density, Hi-Z off       | 8.05   | 98.4               | +8.4%      |
-| Full density, Hi-Z on        | 7.93   | 97.1               | +6.9%      |
-| Density reduction, Hi-Z off  | 8.27   | 108.6              | +19.6%     |
-| Density reduction, Hi-Z on   | 8.37   | 106.8              | +17.6%     |
+| ---------------------------- | -----: | -----------------: | ---------: |
+| Off                          |   6.78 |               96.8 |   Baseline |
+| Full density, Hi-Z off       |   7.39 |              106.8 |     +10.3% |
+| Full density, Hi-Z on        |   7.37 |              105.6 |      +9.1% |
+| Density reduction, Hi-Z off  |   7.08 |              116.8 |     +20.6% |
+| Density reduction, Hi-Z on   |   7.53 |              115.3 |     +19.1% |
 
-Full-density batching increased reported FPS while costing approximately
-1 ms more CPU time. Density reduction changes appearance. Grass Hi-Z
-reduced reported FPS by 1.4% at full density and 1.7% with density
-reduction; it is not a win in this scene. fpsVR GPU data were invalid,
-and independent engine throughput was not captured. Separate CSX GPU
-captures measured grass preparation/culling at 0.371 ms without Hi-Z
-and 0.399 ms with it, plus 0.060 ms to build the pyramid. These are pass
-timings, not whole-frame GPU times; the 120 Hz frame budget is 8.33 ms.
+Full density improved reported FPS while costing 0.61 ms more CPU
+time. Density reduction changes appearance. Grass Hi-Z lowered mean
+reported FPS by 1.1% at full density and 1.3% with density
+reduction. These small differences lie within the repeat variation;
+this scene does not establish a grass Hi-Z performance benefit.
+CPU timing also varied: density reduction without Hi-Z measured
+6.62–7.53 ms across repeats. fpsVR GPU readings were invalid; these
+results do not establish whole-frame GPU timing or independently
+measured engine throughput.
 
-The separate wind-active ten-second diagnostic window recorded 1,127
-persistent frames, 15,778 cached-source hits/native visibility bypasses,
-zero bucket rebuilds, zero uploads and zero native fallbacks. No old/new
-wind-guard timing A/B was measured. Grass Hi-Z rejected 5.81% of eligible
-eye instances; most candidates failed its depth comparison. No depth
-build failures or native fallbacks occurred. Supplementary controls
-changed their intended outcomes, but optional mid/far LODs had zero
-survivors and their appearance/performance remain unvalidated.
+Separate fresh CSX captures resolved all 120 frames per condition:
 
-The measured source was `0d0c8855ed3b1b223ff1c092b71d7914fcb05643`
-with local follow-up changes, using a universal Release DLL with
-DevBench ON and Tracy OFF. Its producer Build ID was
-`d89d9f1968ffa5852c869adb5d3683a42f46c18693ef05172e7f482a42964e8b`.
-The later production-only UAV-slot cleanup was not in this measurement.
-Native visibility preservation and resident expiry also followed this
-measurement; their CPU cost and cache-pressure behavior are not measured.
+| Grass GPU pass         | Hi-Z off, ms | Hi-Z on, ms |
+| ---------------------- | -----------: | ----------: |
+| Preparation/culling    |        0.373 |       0.416 |
+| Hi-Z pyramid           |      Not run |       0.066 |
+| Indirect grass drawing |        1.289 |       1.200 |
+
+Hi-Z added 0.108 ms of preparation/pyramid work while
+saving 0.089 ms of indirect drawing. These are individual pass
+timings; the reference 120 Hz frame budget is 8.33 ms.
+
+Grass Hi-Z rejected 4.71% of eligible eye instances. A separate
+ten-second diagnostic wait, with asynchronous counter readback,
+recorded 1,480 persistent frames and 20,720 cached-source hits,
+zero bucket rebuilds, zero uploads, zero depth fallbacks and zero native
+fallbacks. Native visibility bypass stayed zero, as intended; native
+group visibility remains preserved. No resident expiry or pressure
+eviction occurred in this settled scene, so streaming/capacity stress
+remains untested. Original settings and profiler state were restored.
+
+The measured source was `7c83cbd7a43f11223566d50498d7856a609c8ce0` with no local changes.
+Its producer Build ID was
+`f582b926ea5b87db633b83f66f0d3f04d494a68e4bf8223cec1ec7c14c3beb07`.
+The installed DLL matched its adjacent build manifest and AIO receipt.
 Raw captures, settings receipts and profiler comparisons remain local.

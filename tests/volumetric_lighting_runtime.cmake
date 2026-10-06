@@ -11,5 +11,6 @@ add_custom_command(
     VERBATIM
 )
 add_controller_test(volumetric_lighting_runtime_test VolumetricLightingRuntime tests/volumetric_lighting_runtime_test.cpp)
+set_tests_properties(VolumetricLightingRuntime PROPERTIES TIMEOUT 30)
 target_sources(volumetric_lighting_runtime_test PRIVATE "${_vl_runtime_dir}/runtime.h" "${_vl_runtime_dir}/vl_runtime_settings.h")
 target_include_directories(volumetric_lighting_runtime_test PRIVATE "${_vl_runtime_dir}")

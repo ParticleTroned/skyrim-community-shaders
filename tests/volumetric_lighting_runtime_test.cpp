@@ -1,14 +1,19 @@
 #define NOMINMAX
 #include "Features/VolumetricLightingRuntime.h"
 #include "Features/VolumetricLightingTuning.h"
-#include "Utils/RendererOwnership.h"
+#include "LocationContext.h"
+#include "Utils/RendererContextAccess.h"
 
 #include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <future>
 #include <iostream>
 #include <latch>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace
 {
@@ -54,7 +59,18 @@ namespace
 	CRITICAL_SECTION rendererLock;
 	DWORD renderThread;
 	int qualityCalls, flagCalls, clearCalls, uploads;
-	bool enableFlag, raining;
+	int nativeQuality;
+	bool enableFlag, weatherFlag, raining;
+	std::function<void()> duringApply;
+	struct Renderer
+	{
+		struct RuntimeData
+		{
+			ID3D11DeviceContext* context = nullptr;
+		} data;
+		RuntimeData& GetRuntimeData() { return data; }
+		CRITICAL_SECTION& GetLock() { return rendererLock; }
+	} testRenderer;
 	State testState;
 	RE::TES testTes;
 	RE::Cell testCell;
@@ -68,11 +84,11 @@ namespace
 			RE::TES* tes = &::testTes;
 			bool isVR = true;
 			bool* bEnableVolumetricLighting = &enableFlag;
-			int* renderer = &uploads;
+			Renderer* renderer = &testRenderer;
 		}
 		namespace d3d
 		{
-			int* context = &uploads;
+			ID3D11DeviceContext* context = nullptr;
 		}
 		namespace features
 		{
@@ -90,29 +106,13 @@ namespace
 		++flagCalls;
 		if (flags == 0)
 			enableFlag = value;
+		else
+			weatherFlag = value;
+		if (auto callback = std::exchange(duringApply, {}))
+			callback();
 	}
 	bool IsRainTransitionActive() { return raining; }
-	namespace LocationContext
-	{
-		bool AllowsEnabledLocations(bool interior, bool exterior, bool inside) { return inside ? interior : exterior; }
-		template <class T>
-		T SelectInteriorExterior(bool interior, const T& inside, const T& outside)
-		{
-			return interior ? inside : outside;
-		}
-	}
-}
 
-namespace Util
-{
-	CRITICAL_SECTION* GetRendererContextLock(int* renderer, int* context)
-	{
-		return renderer && context ? &rendererLock : nullptr;
-	}
-}
-
-namespace
-{
 	struct VolumetricLighting
 	{
 		using GodrayProfile = VolumetricLightingTuning::Profile;
@@ -120,6 +120,7 @@ namespace
 		Settings settings, runtimeSettings;
 		mutable std::mutex settingsMutex;
 		std::atomic_bool runtimeResetRequested{ true };
+		std::atomic_bool runtimeReady{ false };
 		VolumetricLightingRuntime::Controller runtimeController;
 		bool enabledAtBoot = true, runtimeEnabled = false, initialised = false, inInterior = false, blurDimensionsValid = false;
 		TextureSize defaultSizeHigh, highSize;
@@ -139,6 +140,8 @@ namespace
 		void SetExteriorEnabled(bool enabled);
 		void RequestRuntimeReset();
 		bool IsPerformanceCostMeasurementReady() const;
+		bool IsPerformanceCostMeasurementEnabled() const;
+		bool IsRuntimeTransitionBlocked() const;
 		bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 		void EarlyPrepass();
 		void ApplyRuntimeTarget(const VolumetricLightingRuntime::Target&, const VolumetricLightingRuntime::Changes&);
@@ -148,9 +151,10 @@ namespace
 			RequireRenderer();
 			return 0;
 		}
-		void SetVLQuality(int, int)
+		void SetVLQuality(int, int quality)
 		{
 			RequireRenderer();
+			nativeQuality = quality;
 			++qualityCalls;
 		}
 		void ClearVolumetricLightingTargets()
@@ -179,10 +183,15 @@ namespace
 			testPlayer.testCell = &testCell;
 			globals::state = &testState;
 			globals::game::tes = &testTes;
-			globals::game::renderer = &uploads;
+			globals::game::renderer = &testRenderer;
 			globals::game::isVR = true;
-			globals::d3d::context = &uploads;
-			enableFlag = raining = false;
+			globals::game::bEnableVolumetricLighting = &enableFlag;
+			globals::features::interiorSun.enabled = true;
+			globals::d3d::context = reinterpret_cast<ID3D11DeviceContext*>(&uploads);
+			testRenderer.data.context = globals::d3d::context;
+			enableFlag = weatherFlag = raining = false;
+			duringApply = {};
+			nativeQuality = -1;
 			qualityCalls = flagCalls = clearCalls = uploads = 0;
 		}
 		void Frame()
@@ -190,11 +199,15 @@ namespace
 			++testState.frameCount;
 			vl.EarlyPrepass();
 		}
-		void NoEngineWork(const char* message)
+		void DeferredTransition(const char* message, bool rendererAvailable = true)
 		{
-			const auto before = std::array{ qualityCalls, flagCalls, clearCalls, uploads };
+			const auto before = std::array{ qualityCalls, flagCalls, clearCalls };
+			const auto previousUploads = uploads;
 			Frame();
-			Require(before == std::array{ qualityCalls, flagCalls, clearCalls, uploads }, message);
+			Require(before == std::array{ qualityCalls, flagCalls, clearCalls }, message);
+			Require(uploads == previousUploads + (rendererAvailable ? 1 : 0), "Deferred toggle interrupted frame blur maintenance");
+			Require(vl.blurDimensionsValid == rendererAvailable, "Blur validity does not match renderer ownership");
+			Require(!vl.IsPerformanceCostMeasurementReady(), "Deferred frame remained measurement-ready");
 		}
 	};
 
@@ -232,22 +245,25 @@ namespace
 		f.vl.SetExteriorEnabled(false);
 		for (auto* gate : { &testState.safe, &testState.engineBusy, &testState.menu, &testState.pendingPostLoadRuntimeReset }) {
 			*gate = true;
-			f.NoEngineWork("Save/load/menu gate allowed graphics mutation");
+			f.DeferredTransition("Save/load/menu gate allowed graphics mutation");
 			*gate = false;
 		}
 		testPlayer.testCell = nullptr;
-		f.NoEngineWork("Missing cell was treated as exterior");
+		f.DeferredTransition("Missing cell was treated as exterior");
+		globals::game::tes = nullptr;
+		f.DeferredTransition("Missing TES allowed a transition");
+		globals::game::tes = &testTes;
 		testPlayer.testCell = &testCell;
 		testCell.attached = false;
-		f.NoEngineWork("Detached destination was applied");
+		f.DeferredTransition("Detached destination was applied");
 		testCell.attached = true;
 		testCell.interior = true;
-		f.NoEngineWork("Mismatched interior handoff was applied");
+		f.DeferredTransition("Mismatched interior handoff was applied");
 		testTes.interiorCell = &testCell;
 		f.Frame();
 		Require(enableFlag && f.vl.runtimeResetRequested == false && qualityCalls == 2, "Load reset was lost during blocked frames");
 		testCell.interior = false;
-		f.NoEngineWork("Stale TES interior was accepted as exterior");
+		f.DeferredTransition("Stale TES interior was accepted as exterior");
 		testTes.interiorCell = nullptr;
 		f.Frame();
 		Require(!enableFlag && clearCalls == 1, "Interior-to-exterior transition did not apply once");
@@ -259,21 +275,70 @@ namespace
 	void TestRendererContention()
 	{
 		Fixture f;
-		std::latch locked(1), release(1);
-		std::thread owner([&] {
-			Util::RendererOwnership ownership(&rendererLock, true);
-			locked.count_down();
-			release.wait();
-		});
-		locked.wait();
-		f.NoEngineWork("Renderer lock contention did not defer");
-		release.count_down();
-		owner.join();
+		std::latch locked(1);
+		{
+			std::jthread owner([&](std::stop_token stop) {
+				Util::RendererOwnership ownership(&rendererLock, true);
+				std::mutex waitMutex;
+				std::condition_variable_any release;
+				std::unique_lock waitLock(waitMutex);
+				locked.count_down();
+				release.wait(waitLock, stop, [] { return false; });
+			});
+			locked.wait();
+			f.DeferredTransition("Renderer lock contention did not defer", false);
+		}
 		Require(f.vl.runtimeResetRequested, "Failed ownership consumed reset request");
 		f.Frame();
 		Require(enableFlag && qualityCalls == 1, "Deferred request was lost");
 		globals::d3d::context = nullptr;
-		f.NoEngineWork("Absent context allowed graphics mutation");
+		f.DeferredTransition("Absent context allowed graphics mutation", false);
+		globals::d3d::context = reinterpret_cast<ID3D11DeviceContext*>(&qualityCalls);
+		f.DeferredTransition("Mismatched native context allowed graphics mutation", false);
+		globals::d3d::context = testRenderer.data.context;
+		globals::game::renderer = nullptr;
+		f.DeferredTransition("Missing renderer allowed graphics mutation", false);
+	}
+
+	void TestReadinessDuringDeferral()
+	{
+		Fixture f;
+		f.Frame();
+		for (auto* gate : { &testState.engineBusy, &testState.menu, &testState.pendingPostLoadRuntimeReset, &testState.safe }) {
+			Require(f.vl.IsPerformanceCostMeasurementReady(), "Settled frame was not ready");
+			*gate = true;
+			Require(!f.vl.IsPerformanceCostMeasurementReady(), "Measurement ignored an active lifecycle guard");
+			f.DeferredTransition("Unchanged settings bypassed the lifecycle guard");
+			*gate = false;
+			Require(!f.vl.IsPerformanceCostMeasurementReady(), "Measurement resumed before a safe prepass");
+			f.Frame();
+		}
+		testCell.attached = false;
+		f.DeferredTransition("Detached cell allowed settled-state measurement");
+		testCell.attached = true;
+		f.Frame();
+		Require(f.vl.IsPerformanceCostMeasurementReady(), "Ready destination never recovered");
+	}
+
+	void TestRequestsDuringApplication()
+	{
+		Fixture f;
+		f.vl.SetExteriorEnabled(false);
+		f.Frame();
+		f.vl.SetExteriorEnabled(true);
+		duringApply = [&] {
+			auto worker = std::async(std::launch::async, [&] {
+				f.vl.SetExteriorEnabled(false);
+				f.vl.RequestRuntimeReset();
+			});
+			worker.get();
+			Require(!f.vl.IsPerformanceCostMeasurementReady(), "In-progress transaction was measurement-ready");
+		};
+		f.Frame();
+		Require(enableFlag && !f.vl.IsExteriorEnabled(), "Request during application changed the current transaction");
+		Require(f.vl.runtimeResetRequested && !f.vl.IsPerformanceCostMeasurementReady(), "Publication lost the concurrent reset");
+		f.Frame();
+		Require(!enableFlag && qualityCalls == 2 && !f.vl.runtimeResetRequested, "Concurrent request did not reconcile on the next frame");
 	}
 
 	void TestQualityRainAndRuntimeCompatibility()
@@ -283,19 +348,26 @@ namespace
 		f.vl.settings.DisableWeatherInteractionDuringRain = true;
 		raining = true;
 		f.Frame();
-		Require(enableFlag && clearCalls == 1 && qualityCalls == 1, "Rain suppression changed main enable or quality");
+		Require(enableFlag && !weatherFlag && clearCalls == 1 && qualityCalls == 1, "Rain suppression changed main enable or quality");
 		f.Frame();
 		Require(clearCalls == 1, "Stable rain cleared history every frame");
 		f.vl.settings.ExteriorQuality = 3;
 		f.vl.settings.ExteriorCustomSize = { -1, 99999, 99999 };
 		f.Frame();
-		Require(f.vl.highSize == VolumetricLighting::TextureSize{ 32, 640, 640 } && qualityCalls == 2, "Unsafe custom dimensions reached native quality setter");
+		Require(f.vl.highSize == VolumetricLighting::TextureSize{ 32, 640, 640 } && qualityCalls == 2 && nativeQuality == 2, "Unsafe custom dimensions reached native quality setter");
 		f.vl.enabledAtBoot = false;
 		f.Frame();
 		Require(!enableFlag, "VR enabled VL without startup prerequisites");
+		Require(!f.vl.IsPerformanceCostMeasurementEnabled(), "VR measured an unavailable startup configuration");
 		globals::game::isVR = false;
 		f.Frame();
 		Require(enableFlag, "SE/AE inherited VR-only startup restriction");
+		Require(f.vl.IsPerformanceCostMeasurementEnabled(), "Active SE/AE lighting was not measurable");
+		testCell.interior = true;
+		testCell.sun = false;
+		testTes.interiorCell = &testCell;
+		f.Frame();
+		Require(!enableFlag && !f.vl.IsPerformanceCostMeasurementEnabled(), "Interior without sunlight was measured as enabled");
 	}
 
 	void TestConcurrentRequests()
@@ -322,17 +394,22 @@ int main()
 {
 	InitializeCriticalSection(&rendererLock);
 	renderThread = GetCurrentThreadId();
-	try {
-		TestCoalescingAndFrameBoundary();
-		TestLoadAndDestinationGuards();
-		TestRendererContention();
-		TestQualityRainAndRuntimeCompatibility();
-		TestConcurrentRequests();
-	} catch (const std::exception& error) {
-		std::cerr << error.what() << '\n';
-		DeleteCriticalSection(&rendererLock);
-		return 1;
+	bool passed = true;
+	for (const auto& [name, test] : std::array{
+			 std::pair{ "Coalescing and frame boundary", &TestCoalescingAndFrameBoundary },
+			 std::pair{ "Load and destination guards", &TestLoadAndDestinationGuards },
+			 std::pair{ "Renderer contention", &TestRendererContention },
+			 std::pair{ "Readiness during deferral", &TestReadinessDuringDeferral },
+			 std::pair{ "Requests during application", &TestRequestsDuringApplication },
+			 std::pair{ "Quality, rain and runtime compatibility", &TestQualityRainAndRuntimeCompatibility },
+			 std::pair{ "Concurrent requests", &TestConcurrentRequests } }) {
+		try {
+			test();
+		} catch (const std::exception& error) {
+			std::cerr << name << ": " << error.what() << '\n';
+			passed = false;
+		}
 	}
 	DeleteCriticalSection(&rendererLock);
-	return 0;
+	return passed ? 0 : 1;
 }

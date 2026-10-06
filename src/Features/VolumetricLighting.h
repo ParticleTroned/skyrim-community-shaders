@@ -159,6 +159,7 @@ private:
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
 	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
+	bool IsRuntimeTransitionBlocked() const;
 	void ApplyRuntimeTarget(const VolumetricLightingRuntime::Target& target, const VolumetricLightingRuntime::Changes& changes);
 	void UpdateBlurDimensions();
 	void ClearVolumetricLightingTargets();
@@ -185,6 +186,7 @@ private:
 	TextureSize* gVolumetricLightingSizeLow = nullptr;
 
 	std::atomic_bool runtimeResetRequested{ true };
+	std::atomic_bool runtimeReady{ false };
 	VolumetricLightingRuntime::Controller runtimeController;
 	bool enabledAtBoot = false;
 	bool runtimeEnabled = false;

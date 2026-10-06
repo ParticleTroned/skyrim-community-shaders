@@ -103,7 +103,14 @@ a later frame. Only changed native quality/dimensions are reapplied; history
 is cleared when entering a disabled or weather-suppressed state, on relevant
 quality changes, or during reconciliation. Godray profiles use the same
 applied settings snapshot, and cost measurement waits for its requested
-settings to reach that snapshot.
+settings to reach that snapshot in a safe prepass. A deferred frame invalidates
+measurement readiness even when settings have not changed. Measurement
+availability follows the effective enable state, including interior sunlight
+and VR startup prerequisites.
+
+The toggle guards do not suspend the active frame's blur-dimension update.
+Blur maintenance continues while renderer ownership is available; a missing
+or mismatched context or contended renderer retains the native blur fallback.
 
 VR retains its startup prerequisite: enabling VL after starting with both
 locations disabled requires restarting the game. SE/AE do not inherit that
@@ -115,7 +122,10 @@ prepass and application methods with engine/graphics substitutes and the real
 renderer ownership lock. It covers coalescing, concurrent requests, frame
 boundaries, load/save guards, destination handoffs, lock contention,
 same-location reloads, quality bounds, rain suppression and the VR-only boot
-restriction. The companion blur, composite, tuning and Stabilizer API tests
+restriction. It also uses the production context-ownership and location
+helpers, checks blur continuity during deferral, and injects a worker request
+and load reset between native application and snapshot publication. The
+companion blur, composite, tuning and Stabilizer API tests
 cover the surrounding contracts. These tests do not establish in-game crash
 resolution; live testing is performed by the user with the delivered AIO.
 

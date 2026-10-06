@@ -429,7 +429,7 @@ VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() 
 bool VolumetricLighting::IsPerformanceCostMeasurementEnabled() const
 {
 	std::scoped_lock lock(settingsMutex);
-	return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
+	return initialised && runtimeEnabled;
 }
 
 void VolumetricLighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
@@ -480,11 +480,18 @@ void VolumetricLighting::RequestRuntimeReset()
 	runtimeResetRequested.store(true, std::memory_order_release);
 }
 
+bool VolumetricLighting::IsRuntimeTransitionBlocked() const
+{
+	const auto* state = globals::state;
+	return !state || state->IsSaveLoadSafeModeActive() || state->IsEngineSaveLoadActivityActive() ||
+	       state->IsMainOrLoadingMenuOpen() || state->pendingPostLoadRuntimeReset;
+}
+
 bool VolumetricLighting::IsPerformanceCostMeasurementReady() const
 {
 	std::scoped_lock lock(settingsMutex);
-	return initialised && !runtimeResetRequested.load(std::memory_order_acquire) && settings == runtimeSettings &&
-	       globals::state && !globals::state->IsSaveLoadSafeModeActive();
+	return runtimeReady.load(std::memory_order_acquire) && !runtimeResetRequested.load(std::memory_order_acquire) &&
+	       settings == runtimeSettings && !IsRuntimeTransitionBlocked();
 }
 
 void VolumetricLighting::PostPostLoad()
@@ -576,9 +583,14 @@ void VolumetricLighting::EarlyPrepass()
 	if (!state || !runtimeController.BeginFrame(state->frameCount))
 		return;
 
+	runtimeReady.store(false, std::memory_order_release);
 	blurDimensionsValid = false;
-	if (state->IsSaveLoadSafeModeActive() || state->IsEngineSaveLoadActivityActive() ||
-		state->IsMainOrLoadingMenuOpen() || state->pendingPostLoadRuntimeReset)
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	// Deferred toggles must not interrupt the active frame's blur bounds.
+	UpdateBlurDimensions();
+	if (IsRuntimeTransitionBlocked())
 		return;
 
 	auto* tes = globals::game::tes;
@@ -589,10 +601,6 @@ void VolumetricLighting::EarlyPrepass()
 	const bool currentlyInInterior = cell->IsInteriorCell();
 	// A missing or mismatched destination during a handoff is not an exterior.
 	if ((currentlyInInterior && tes->interiorCell != cell) || (!currentlyInInterior && tes->interiorCell))
-		return;
-
-	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
-	if (!ownership)
 		return;
 
 	Settings requested;
@@ -620,8 +628,8 @@ void VolumetricLighting::EarlyPrepass()
 		initialised = true;
 		inInterior = currentlyInInterior;
 		runtimeEnabled = enabled;
+		runtimeReady.store(true, std::memory_order_release);
 	}
-	UpdateBlurDimensions();
 }
 
 void VolumetricLighting::ApplyRuntimeTarget(const VolumetricLightingRuntime::Target& target, const VolumetricLightingRuntime::Changes& changes)

@@ -42,6 +42,12 @@ namespace Triplanar
 		dPdy = ddy(worldPos * scale);
 	}
 
+	/// Select the same projection plane for texture coordinates and normal orientation.
+	uint SelectProjectionPlane(float3 weights, float noise)
+	{
+		return noise < weights.x ? 0 : (noise < weights.x + weights.y ? 1 : 2);
+	}
+
 	/// Stochastic triplanar: select one projection plane via noise, reducing 3 texture reads to 1.
 	float4 SampleStochastic(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float noise)
 	{
@@ -49,14 +55,34 @@ namespace Triplanar
 		float3 dPdy = 0.0;
 		ComputeGradients(worldPos, scale, dPdx, dPdy);
 
+		uint plane = SelectProjectionPlane(weights, noise);
 		float4 result = 0;
-		if (noise < weights.x)
+		if (plane == 0)
 			result = tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz);
-		else if (noise < weights.x + weights.y)
+		else if (plane == 1)
 			result = tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz);
 		else
 			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);
 		return result;
+	}
+
+	/// Match a decoded normal's tangent axes to the sign of its projection UV scale.
+	float3 OrientNormalForScale(float3 normal, float scale)
+	{
+		normal.xy *= scale < 0 ? -1 : 1;
+		return normal;
+	}
+
+	/// Whiteout-blend a unit projection normal onto a unit world surface normal; the caller must normalize the result.
+	float3 TransformStochasticNormal(float3 normal, float3 surfaceNormal, float3 weights, float noise)
+	{
+		uint plane = SelectProjectionPlane(weights, noise);
+		if (plane == 0)
+			return float3(normal.z * surfaceNormal.x, normal.x + surfaceNormal.y, normal.y + surfaceNormal.z);
+		else if (plane == 1)
+			return float3(normal.x + surfaceNormal.x, normal.z * surfaceNormal.y, normal.y + surfaceNormal.z);
+		else
+			return float3(normal.x + surfaceNormal.x, normal.y + surfaceNormal.y, normal.z * surfaceNormal.z);
 	}
 
 	/// Stochastic triplanar with mip bias via gradient scaling.
@@ -69,10 +95,11 @@ namespace Triplanar
 		dPdx *= biasScale;
 		dPdy *= biasScale;
 
+		uint plane = SelectProjectionPlane(weights, noise);
 		float4 result = 0;
-		if (noise < weights.x)
+		if (plane == 0)
 			result = tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz);
-		else if (noise < weights.x + weights.y)
+		else if (plane == 1)
 			result = tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz);
 		else
 			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);

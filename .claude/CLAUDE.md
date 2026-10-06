@@ -56,7 +56,7 @@ powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 Set `CommunityShadersOutputDir` environment variable to semicolon-separated Skyrim Data directories:
 
 ```
-CommunityShadersOutputDir=F:/MySkyrimModpack/mods/CommunityShaders;F:/SteamLibrary/steamapps/common/SkyrimVR/Data;F:/SteamLibrary/steamapps/common/Skyrim Special Edition/Data
+CommunityShadersOutputDir=<CSX-mod-directory>;<Skyrim-VR-installation>/Data;<Skyrim-SE-installation>/Data
 ```
 
 ### Shader Development and Testing

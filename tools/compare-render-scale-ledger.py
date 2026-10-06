@@ -365,7 +365,7 @@ def main():
         parser.error('comparison output must be separate from both run directories')
     repo = Path(__file__).resolve().parent.parent
     try:
-        ledger = args.ledger or latest_ledger(repo / 'docs/development')
+        ledger = args.ledger or latest_ledger(repo / '.local-docs/development')
         result = complete_reporting(args, ledger)
     except (ValueError, OSError, KeyError) as error:
         parser.exit(1, f'reporting failed: {error}\n')

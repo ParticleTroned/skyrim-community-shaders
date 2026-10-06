@@ -2,6 +2,8 @@ build/
 artifacts/
 bin/
 dist/
+# Local feature notes, investigations, validation records, and provenance.
+/.local-docs/
 /vcpkg/
 /vcpkg_installed/
 /*/vcpkg_cache/

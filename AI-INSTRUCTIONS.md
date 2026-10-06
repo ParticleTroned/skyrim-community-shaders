@@ -37,6 +37,7 @@ SKSE plugin providing advanced DirectX 11 graphics modifications for Skyrim SE/A
 -   **Feature Access**: `globals::features::*` namespace
 -   **PR authorization and target**: Follow `AGENTS.md`; the user must explicitly request the PR and name its repository and target base branch. There is no inferred default destination.
 -   **PR and commit format**: `type(scope): description`; follow the release-aware type rules and use the mandatory `Rationale:`/`Implementation:` commit body and attribution contract in `AGENTS.md`
+-   **Documentation and provenance**: Follow the local-record policy in `AGENTS.md`. Keep investigations and feature setup local; publish reusable build guides and concise validation results without machine-specific paths, usernames, or local evidence locations. Never hardcode machine-specific paths in code or configuration.
 
 ### Build Options
 

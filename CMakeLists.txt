@@ -1761,7 +1761,10 @@ if(BUILD_CONTROLLER_TESTS)
 
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
     add_controller_test(grass_runtime_layout_test GrassRuntimeLayout tests/grass_runtime_layout_test.cpp)
-    target_link_libraries(grass_runtime_layout_test PRIVATE CommonLibSSE::CommonLibSSE)
+    target_link_libraries(
+        grass_runtime_layout_test
+        PRIVATE CommonLibSSE::CommonLibSSE
+    )
 
     add_controller_test(
         vr_fps_stabilizer_config_test
@@ -3306,10 +3309,7 @@ if(BUILD_CONTROLLER_TESTS)
         VRHybridCullingShader
         tests/vr_hybrid_culling_shader_test.cpp
     )
-    set_tests_properties(
-        VRHybridCullingShader
-        PROPERTIES TIMEOUT 180
-    )
+    set_tests_properties(VRHybridCullingShader PROPERTIES TIMEOUT 180)
     target_compile_definitions(
         vr_hybrid_culling_shader_test
         PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN

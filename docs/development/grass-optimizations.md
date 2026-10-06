@@ -59,6 +59,10 @@ values, with grass Hi-Z disabled when scene Hi-Z is selected.
 Turning density reduction off disables projected-size thinning. Frustum,
 Hi-Z, distance, fade and mesh cost controls remain independent.
 
+Hover any control for its effects on grass appearance and rendering cost.
+Help remains available for disabled controls. Grass Hi-Z notes its
+possible small performance cost in some scenes.
+
 Density controls use projected grass size: the default smallest size is
 2 pixels, full-density size is 16 pixels and minimum density is 3%.
 Below the smallest size, grass is removed. Between those thresholds a

@@ -1,14 +1,13 @@
 #pragma once
 
 #include "VRDepthCullingEnablePolicy.h"
-#include "VRDepthCullingTemporal.h"
 
 #include <cmath>
 #include <nlohmann/json.hpp>
 
 namespace VRDepthCullingSettings
 {
-	/** Migrate thresholds and method preferences before deserializing saved settings. */
+	/** Migrates shared thresholds and validates saved location settings before deserialization. */
 	inline bool NormalizeLoadedSettings(nlohmann::json& a_settings)
 	{
 		if (!a_settings.is_object())
@@ -48,29 +47,15 @@ namespace VRDepthCullingSettings
 		const bool hadMasterSwitch = a_settings.contains("DepthCullingLegacyMode") ||
 		                             a_settings.contains("DepthCullingPerformanceMode");
 		// Pre-policy configurations already had independent location switches.
-		if (!hasLocationExtents && hadMasterSwitch && !a_settings.contains("DepthCullingMethod") && !exteriorEnabled)
+		if (!hasLocationExtents && hadMasterSwitch && !exteriorEnabled)
 			interiorEnabled = false;
-
-		using VRDepthCullingTemporal::Mode;
-		auto mode = VRDepthCullingTemporal::SelectMode(readBoolean("DepthCullingLegacyMode", false));
-		if (const auto method = a_settings.find("DepthCullingMethod"); method != a_settings.end()) {
-			mode = Mode::Balanced;
-			if (method->is_number_integer() &&
-				(*method == static_cast<int>(Mode::Balanced) || *method == static_cast<int>(Mode::Legacy) ||
-					*method == static_cast<int>(Mode::Hybrid))) {
-				mode = static_cast<Mode>(method->get<int>());
-			} else {
-				malformed = true;
-			}
-		}
 
 		const float sharedExtent = readExtent("MinOccludeeBoxExtent", VRDepthCullingEnablePolicy::kDefaultMinimumExtent);
 		const float exteriorExtent = readExtent("MinOccludeeBoxExtentExterior", sharedExtent);
 		const float interiorExtent = readExtent("MinOccludeeBoxExtentInterior", sharedExtent);
 		a_settings["EnableDepthBufferCullingExterior"] = exteriorEnabled;
 		a_settings["EnableDepthBufferCullingInterior"] = interiorEnabled;
-		a_settings["DepthCullingMethod"] = static_cast<int>(mode);
-		a_settings["DepthCullingLegacyMode"] = mode == Mode::Legacy;
+		a_settings["DepthCullingLegacyMode"] = readBoolean("DepthCullingLegacyMode", false);
 		a_settings["MinOccludeeBoxExtentExterior"] = exteriorExtent;
 		a_settings["MinOccludeeBoxExtentInterior"] = interiorExtent;
 		a_settings.erase("MinOccludeeBoxExtent");

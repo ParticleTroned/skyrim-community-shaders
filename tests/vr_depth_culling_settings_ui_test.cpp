@@ -94,10 +94,9 @@ namespace ImGui
 		ids.pop_back();
 	}
 	void SeparatorText(const char*) {}
-	bool BeginTable(const char* a_id, int a_columns, int)
+	bool BeginTable(const char*, int a_columns, int)
 	{
-		Require(a_columns == (std::string(a_id) == "##TemporalPolicy" ? 3 : 2),
-			"Culling methods must share three columns; location controls must use two");
+		Require(a_columns == 2, "Depth controls must use two columns");
 		++openTables;
 		return true;
 	}
@@ -170,7 +169,6 @@ struct VR
 
 	void UpdateDepthBufferCulling();
 	void SetDepthCullingMode(VRDepthCullingTemporal::Mode a_mode);
-	void SetDepthCullingLegacyMode(bool a_enabled);
 	VRDepthCullingTemporal::Mode GetDepthCullingMode() const;
 };
 
@@ -218,8 +216,7 @@ namespace
 		BeginFrame(false);
 		Draw(vr);
 		RequireLocationPairs();
-		Require(controls.size() == 7 && text == std::vector<std::string>{ "Culling Method" },
-			"Info should expose all three culling methods alongside the location controls");
+		Require(controls.size() == 4 && text.empty(), "Info exposes policy controls or extra widgets");
 		Require(!controls[1].disabled && !controls[3].disabled, "Default location sliders should be enabled");
 		Require(vr.settings.clampCalls == 0, "Drawing unchanged Info settings modified settings");
 
@@ -257,75 +254,49 @@ namespace
 		Require(!vr.nativeEnabled && vr.nativeExtent == 42.0f, "Interior retained exterior engine values");
 	}
 
-	void TestMethodSelectionAcrossLoggingLevels(bool a_developerMode)
+	void TestDebugSelectionSurvivesInfo()
 	{
 		VR vr;
-		BeginFrame(a_developerMode);
+		BeginFrame(true);
 		Draw(vr);
 		RequireLocationPairs();
-		Require(controls.size() == 7 && text == std::vector<std::string>{ "Culling Method" },
-			"Both logging levels should expose Advanced, Hi-Z and Legacy controls");
+		Require(controls.size() == 6 && text == std::vector<std::string>{ "Culling Method" },
+			"Debug should expose exactly Advanced and Legacy policy controls");
 		Require(controls[4].kind == "radio" && controls[4].label == "Advanced (Default)" && controls[4].selected &&
-					controls[5].kind == "radio" && controls[5].label == "Hi-Z" && !controls[5].selected &&
-					controls[6].kind == "radio" && controls[6].label == "Legacy" && !controls[6].selected,
-			"Culling method labels or default selection are incorrect");
+					controls[5].kind == "radio" && controls[5].label == "Legacy" && !controls[5].selected,
+			"Debug policy labels or default selection are incorrect");
 
-		BeginFrame(a_developerMode);
+		BeginFrame(true);
 		radioClick = "Legacy";
 		Draw(vr);
 		Require(vr.settings.DepthCullingLegacyMode && vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Legacy &&
 					VRDepthCullingTemporal::publishedMode == VRDepthCullingTemporal::Mode::Legacy,
-			"Legacy click did not publish the production mode");
+			"Debug Legacy click did not publish the production mode");
 		const auto publications = VRDepthCullingTemporal::modePublications;
-		BeginFrame(!a_developerMode);
+		BeginFrame(false);
 		Draw(vr);
-		Require(controls.size() == 7 && text == std::vector<std::string>{ "Culling Method" },
-			"Changing logging level hid culling method controls");
+		Require(controls.size() == 4 && text.empty(), "Info exposed the selected Legacy policy controls");
 		Require(vr.settings.DepthCullingLegacyMode && vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Legacy &&
 					VRDepthCullingTemporal::publishedMode == VRDepthCullingTemporal::Mode::Legacy &&
 					VRDepthCullingTemporal::modePublications == publications,
-			"Changing logging level silently changed Legacy mode");
+			"Returning to Info silently changed Legacy mode");
 
-		BeginFrame(a_developerMode);
+		BeginFrame(true);
 		Draw(vr);
-		Require(!controls[4].selected && controls[6].selected, "Restoring logging level lost the persisted Legacy selection");
-		BeginFrame(a_developerMode);
+		Require(!controls[4].selected && controls[5].selected, "Returning to Debug lost the persisted Legacy selection");
+		BeginFrame(true);
 		radioClick = "Advanced (Default)";
 		Draw(vr);
 		Require(!vr.settings.DepthCullingLegacyMode && vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Balanced &&
 					VRDepthCullingTemporal::publishedMode == VRDepthCullingTemporal::Mode::Balanced,
-			"Advanced click did not restore the default policy");
-
-		BeginFrame(a_developerMode);
-		radioClick = "Hi-Z";
-		Draw(vr);
-		Require(vr.settings.DepthCullingMethod == 3 && !vr.settings.DepthCullingLegacyMode &&
-					vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Hybrid &&
-					VRDepthCullingTemporal::publishedMode == VRDepthCullingTemporal::Mode::Hybrid,
-			"Hybrid click did not synchronize persisted and published methods");
-		BeginFrame(!a_developerMode);
-		Draw(vr);
-		Require(controls.size() == 7 && controls[5].selected &&
-					vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Hybrid,
-			"Changing logging level hid or changed the selected Hybrid method");
-		vr.SetDepthCullingLegacyMode(false);
-		Require(vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Balanced && vr.settings.DepthCullingMethod == 0,
-			"Legacy compatibility setter did not select Advanced when disabled");
-		vr.SetDepthCullingLegacyMode(true);
-		Require(vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Legacy && vr.settings.DepthCullingMethod == 2,
-			"Legacy compatibility setter did not select Legacy when enabled");
-		vr.SetDepthCullingMode(static_cast<VRDepthCullingTemporal::Mode>(1));
-		Require(vr.GetDepthCullingMode() == VRDepthCullingTemporal::Mode::Balanced &&
-					vr.settings.DepthCullingMethod == 0 && !vr.settings.DepthCullingLegacyMode,
-			"Retired method identity did not normalize to Advanced");
+			"Debug Advanced click did not restore the default policy");
 	}
 }
 
 int main()
 {
 	TestInfoControlsAndIndependentEdits();
-	TestMethodSelectionAcrossLoggingLevels(false);
-	TestMethodSelectionAcrossLoggingLevels(true);
+	TestDebugSelectionSurvivesInfo();
 	std::puts("Depth culling production UI tests passed");
 	return 0;
 }

@@ -25,7 +25,6 @@
 #include "VRDepthCullingEnablePolicy.h"
 #include "VRDepthCullingSettings.h"
 #include "VRDepthCullingTemporal.h"
-#include "VRHybridCulling.h"
 #include "WaterEffects.h"
 #include "WetnessEffects.h"
 #include "Wetterness.h"
@@ -444,7 +443,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	VR::Settings,
 	EnableDepthBufferCullingInterior,
 	EnableDepthBufferCullingExterior,
-	DepthCullingMethod,
 	DepthCullingLegacyMode,
 	MinOccludeeBoxExtentExterior,
 	MinOccludeeBoxExtentInterior,
@@ -661,7 +659,6 @@ json VR::CapturePerformanceCostMeasurementState() const
 	return {
 		{ "EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior },
 		{ "EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior },
-		{ "DepthCullingMethod", settings.DepthCullingMethod },
 		{ "DepthCullingLegacyMode", settings.DepthCullingLegacyMode },
 		{ "MinOccludeeBoxExtentExterior", settings.MinOccludeeBoxExtentExterior },
 		{ "MinOccludeeBoxExtentInterior", settings.MinOccludeeBoxExtentInterior },
@@ -694,10 +691,6 @@ void VR::RestorePerformanceCostMeasurementState(const json& a_state)
 	settings.EnableDepthBufferCullingExterior = a_state.value("EnableDepthBufferCullingExterior", settings.EnableDepthBufferCullingExterior);
 	settings.EnableDepthBufferCullingInterior = a_state.value("EnableDepthBufferCullingInterior", settings.EnableDepthBufferCullingInterior);
 	settings.DepthCullingLegacyMode = a_state.value("DepthCullingLegacyMode", settings.DepthCullingLegacyMode);
-	settings.DepthCullingMethod = a_state.value("DepthCullingMethod",
-		a_state.contains("DepthCullingLegacyMode") ?
-			static_cast<int>(VRDepthCullingTemporal::SelectMode(settings.DepthCullingLegacyMode)) :
-			settings.DepthCullingMethod);
 	settings.MinOccludeeBoxExtentExterior = a_state.value("MinOccludeeBoxExtentExterior", settings.MinOccludeeBoxExtentExterior);
 	settings.MinOccludeeBoxExtentInterior = a_state.value("MinOccludeeBoxExtentInterior", settings.MinOccludeeBoxExtentInterior);
 	globals::features::screenSpaceShadows.bendSettings.EnableFoveated =
@@ -758,13 +751,11 @@ void VR::SetupResources()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	EmitVRPipelineEnvironmentDiagnosticsOnce(*this);
 #endif
-	VRHybridCulling::PrewarmShaders();
 }
 
 void VR::ClearShaderCache()
 {
 	stereoBlendCS = nullptr;
-	VRHybridCulling::ClearShaderCache();
 }
 
 bool VR::AnyScreenSpaceEffectActive()
@@ -932,9 +923,6 @@ void VR::DrawStereoBlend()
 void VR::PostPostLoad()
 {
 	gDepthBufferCulling = reinterpret_cast<bool*>(REL::Offset(0x1EC6B88).address());
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	depthCullingEngineGateBound = globals::game::isVR && gDepthBufferCulling != nullptr;
-#endif
 	if (!gDepthBufferCulling) {
 		static bool s_defaultDepthBufferCulling = false;  // safe fallback
 		gDepthBufferCulling = &s_defaultDepthBufferCulling;
@@ -942,9 +930,6 @@ void VR::PostPostLoad()
 	}
 
 	gMinOccludeeBoxExtent = reinterpret_cast<float*>(REL::Offset(0x1ED64E8).address());
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	depthCullingEngineExtentBound = globals::game::isVR && gMinOccludeeBoxExtent != nullptr;
-#endif
 	if (!gMinOccludeeBoxExtent) {
 		static float s_defaultMinOccludeeBoxExtent = VRDepthCullingEnablePolicy::kDefaultMinimumExtent;
 		gMinOccludeeBoxExtent = &s_defaultMinOccludeeBoxExtent;
@@ -2023,34 +2008,28 @@ namespace
 			ImGui::EndTable();
 		}
 
-		ImGui::TextUnformatted("Culling Method");
-		auto mode = a_vr.GetDepthCullingMode();
-		if (ImGui::BeginTable("##TemporalPolicy", 3, ImGuiTableFlags_SizingStretchSame)) {
-			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Advanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
-				mode = VRDepthCullingTemporal::Mode::Balanced;
-				a_vr.SetDepthCullingMode(mode);
+		if (globals::state && globals::state->IsDeveloperMode()) {
+			ImGui::TextUnformatted("Culling Method");
+			auto mode = a_vr.GetDepthCullingMode();
+			if (ImGui::BeginTable("##TemporalPolicy", 2, ImGuiTableFlags_SizingStretchSame)) {
+				ImGui::TableNextColumn();
+				if (ImGui::RadioButton("Advanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
+					mode = VRDepthCullingTemporal::Mode::Balanced;
+					a_vr.SetDepthCullingMode(mode);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Adds bounded recovery for objects that may become visible during head motion. This selection stays active when you leave Debug mode.");
+				}
+				ImGui::TableNextColumn();
+				if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
+					mode = VRDepthCullingTemporal::Mode::Legacy;
+					a_vr.SetDepthCullingMode(mode);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Uses Skyrim's native visibility results without temporal recovery. Save settings to keep Legacy after restarting; leaving Debug mode does not change it.");
+				}
+				ImGui::EndTable();
 			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Recommended for most players. Keeps good performance and helps prevent objects briefly disappearing when you move your head.");
-			}
-			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Hi-Z", mode == VRDepthCullingTemporal::Mode::Hybrid)) {
-				mode = VRDepthCullingTemporal::Mode::Hybrid;
-				a_vr.SetDepthCullingMode(mode);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("An alternative that costs a little more performance than Advanced or Legacy, so your frame rate may be lower.");
-			}
-			ImGui::TableNextColumn();
-			if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
-				mode = VRDepthCullingTemporal::Mode::Legacy;
-				a_vr.SetDepthCullingMode(mode);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Original game behavior with similar performance to Advanced. Objects may briefly disappear when you move your head. Try this if another method causes problems.");
-			}
-			ImGui::EndTable();
 		}
 
 		if (changed) {
@@ -4653,16 +4632,15 @@ void VR::UpdateDepthBufferCulling()
 
 void VR::SetDepthCullingMode(VRDepthCullingTemporal::Mode a_mode)
 {
-	const auto mode = VRDepthCullingTemporal::NormalizeMode(a_mode);
-	settings.DepthCullingMethod = static_cast<int>(mode);
-	settings.DepthCullingLegacyMode = mode == VRDepthCullingTemporal::Mode::Legacy;
-	VRDepthCullingTemporal::SetMode(mode);
+	settings.DepthCullingLegacyMode = a_mode == VRDepthCullingTemporal::Mode::Legacy;
+	VRDepthCullingTemporal::SetMode(VRDepthCullingTemporal::SelectMode(
+		settings.DepthCullingLegacyMode));
 }
 
 VRDepthCullingTemporal::Mode VR::GetDepthCullingMode() const
 {
-	return VRDepthCullingTemporal::NormalizeMode(
-		static_cast<VRDepthCullingTemporal::Mode>(settings.DepthCullingMethod));
+	return VRDepthCullingTemporal::SelectMode(
+		settings.DepthCullingLegacyMode);
 }
 
 void VR::SetDepthCullingLegacyMode(bool a_enabled)

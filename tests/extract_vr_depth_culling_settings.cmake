@@ -29,7 +29,7 @@ extract_between("${_source}"
 )
 extract_between("${_source}"
     "void VR::UpdateDepthBufferCulling()"
-    "void VR::ApplyDepthCullingMode("
+    "void VR::SetDepthCullingLegacyMode("
     _update
 )
 file(

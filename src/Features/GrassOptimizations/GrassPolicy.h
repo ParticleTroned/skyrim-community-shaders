@@ -15,7 +15,6 @@ namespace GrassPolicy
 	inline constexpr uint64_t kMaxResidentRecordBytes = 128ull * 1024 * 1024;
 	inline constexpr uint64_t kMaxCpuRecordBytes = 128ull * 1024 * 1024;
 	inline constexpr uint64_t kMaxDormantRecordBytes = 16ull * 1024 * 1024;
-	inline constexpr int kSceneHiZMode = 3;
 	inline constexpr float kMaxCollisionDistance = 20480.0f;
 	/** @brief The native descriptor stores mesh stride in four-byte units in its low nibble. */
 	constexpr uint32_t MeshStride(uint64_t descriptor) { return uint32_t(descriptor & 0xF) * 4; }
@@ -84,8 +83,6 @@ namespace GrassPolicy
 		}
 	};
 
-	/** @brief Scene Hi-Z owns a separate depth path; permit grass occlusion only with native scene policies. */
-	constexpr bool OcclusionAllowed(bool vr, int sceneMode) { return !vr || sceneMode != kSceneHiZMode; }
 	/** @brief Native draw calls receive logical counts; VR expands them inside the draw function. */
 	constexpr bool NativeCountMatches(uint32_t captured, uint32_t submitted)
 	{

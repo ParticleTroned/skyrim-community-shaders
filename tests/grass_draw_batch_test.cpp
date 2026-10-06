@@ -62,10 +62,6 @@ int main()
 		require(wrapped.VisibleInFrame(0) && !wrapped.Expired(0));
 		require(GrassPolicy::MeshStride(0x8000000000000087ull) == 28);
 		require(GrassPolicy::MeshStride(0x8000000000000080ull) == 0);
-		require(GrassPolicy::OcclusionAllowed(true, 0));
-		require(GrassPolicy::OcclusionAllowed(true, 2));
-		require(!GrassPolicy::OcclusionAllowed(true, 3));
-		require(GrassPolicy::OcclusionAllowed(false, 3));
 		require(GrassPolicy::NativeCountMatches(10, 10));
 		require(!GrassPolicy::NativeCountMatches(10, 20));
 		require(!GrassPolicy::NativeCountMatches(10, 21));
@@ -99,7 +95,7 @@ int main()
 			settings.*field = -1;
 			require(!settings.Valid());
 		}
-		std::cout << "Grass bounded settings, threshold ordering and scene Hi-Z conflict policy passed\n";
+		std::cout << "Grass bounded settings and threshold ordering passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

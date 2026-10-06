@@ -244,9 +244,9 @@ endif()
 
 foreach(_ui_contract IN ITEMS
     [[DrawNeuralRenderingCropControl(showDiagnostics);]]
-    [[ImGui::SeparatorText("Actor selection");]]
+    [[ImGui::SeparatorText("Category strengths");]]
     [[ImGui::Checkbox("Actors only", &settings.neuralCharacterRenderingEnabled);]]
-    [[Uncropped processes the complete input with the same actor mask.]]
+    [[Uncropped processes the full view while keeping the same selections.]]
 )
     string(FIND "${_upscaling_source}" "${_ui_contract}" _ui_contract_position)
     if(_ui_contract_position EQUAL -1)
@@ -258,7 +258,7 @@ endforeach()
 # A single ROI is intrinsic, with no selectable legacy execution modes.
 
 
-string(FIND "${_upscaling_source}" [[ImGui::TreeNodeEx("ROI and edge settings"]] _ordinary_roi_begin)
+string(FIND "${_upscaling_source}" [[ImGui::TreeNodeEx("Actor coverage and edges"]] _ordinary_roi_begin)
 string(FIND "${_upscaling_source}" [["Actor diagnostics and experiments"]] _diagnostic_roi_begin)
 if(_ordinary_roi_begin LESS 0 OR _diagnostic_roi_begin LESS_EQUAL _ordinary_roi_begin)
     message(FATAL_ERROR "Ordinary ROI controls must precede the Debug-only diagnostic section")
@@ -267,12 +267,12 @@ math(EXPR _ordinary_roi_length "${_diagnostic_roi_begin} - ${_ordinary_roi_begin
 string(SUBSTRING "${_upscaling_source}" ${_ordinary_roi_begin} ${_ordinary_roi_length} _ordinary_roi_controls)
 foreach(_ordinary_roi_control IN ITEMS
     [["Minimum Face Size"]]
-    [["Adaptive ROI Performance"]]
-    [["Eligibility Margin"]]
-    [["Eligibility Hold"]]
+    [["Skip small distant actors"]]
+    [["Space around actors"]]
+    [["Selection hold"]]
     [["Depth-aware Edge Feather"]]
     [["Edge Radius"]]
-    [["Relative Depth Threshold"]]
+    [["Surface separation"]]
 )
     string(FIND "${_ordinary_roi_controls}" "${_ordinary_roi_control}" _ordinary_roi_position)
     if(_ordinary_roi_position LESS 0)

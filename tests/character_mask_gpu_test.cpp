@@ -7,6 +7,7 @@
 
 #include "Features/Upscaling/NeuralRendering/CharacterCategoryFormat.h"
 #include "Features/Upscaling/NeuralRendering/CharacterMaskWorkPolicy.h"
+#include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "ShaderPackageIncludes.h"
 #include "d3d_resource_naming.h"
 #include "neural_color/ShaderConstants.h"
@@ -72,9 +73,10 @@ namespace
 		float eligibilityRectangles[16][4]{};
 		std::uint32_t dispatchRegion[4]{};
 		std::uint32_t authoredRegion[4]{};
+		std::uint32_t blendOptions[4]{};
 		std::uint32_t supportGrid[4]{};
 	};
-	static_assert(sizeof(MaskConstants) == 496);
+	static_assert(sizeof(MaskConstants) == 512);
 
 	struct alignas(16) BlendConstants
 	{
@@ -711,7 +713,7 @@ namespace
 			const Texture& current, const Texture& output, const MaskResult& reference)
 		{
 			const auto width = constants.outputAndSourceSize[0], height = constants.outputAndSourceSize[1];
-			if (constants.dispatchRegion[0] || constants.dispatchRegion[1] ||
+			if (constants.blendOptions[0] || constants.dispatchRegion[0] || constants.dispatchRegion[1] ||
 				constants.dispatchRegion[2] != width || constants.dispatchRegion[3] != height ||
 				(constants.featherOptions[1] != 0.0f && constants.featherOptions[1] != 5.0f))
 				return;
@@ -842,7 +844,8 @@ namespace
 				std::pair{ "CameraProjInverse", offsetof(MaskConstants, cameraProjInverse) },
 				std::pair{ "CategoryStrengths", offsetof(MaskConstants, categoryStrengths) },
 				std::pair{ "DispatchRegion", offsetof(MaskConstants, dispatchRegion) },
-				std::pair{ "AuthoredRegion", offsetof(MaskConstants, authoredRegion) }
+				std::pair{ "AuthoredRegion", offsetof(MaskConstants, authoredRegion) },
+				std::pair{ "BlendOptions", offsetof(MaskConstants, blendOptions) }
 			};
 			for (const auto& [name, offset] : members) {
 				D3D11_SHADER_VARIABLE_DESC member{};
@@ -1284,6 +1287,112 @@ namespace
 			Require(result.counters[9] == 1 && result.counters[10] == 1 && result.counters[11] == 1 && result.counters[12] == 1,
 				"Equipment diagnostics must retain both material categories");
 		}
+		for (unsigned selection = 0; selection < 4; ++selection) {
+			for (float strength : { 0.0f, 0.375f, 1.0f }) {
+				NeuralRendering::CharacterSettings settings;
+				settings.armor = (selection & 1u) != 0;
+				settings.weapons = (selection & 2u) != 0;
+				settings.armorStrength = strength;
+				settings.weaponsStrength = 1.0f - strength;
+				const auto strengths = NeuralRendering::GetCharacterCategoryStrengths(settings);
+				std::copy_n(strengths.begin(), 4, constants.categoryStrengths);
+				constants.featherOptions[3] = strengths[4];
+				const auto result = gpu.Mask(constants, 5, tuples);
+				ExpectByte(result.pixels[1], static_cast<int>(std::lround(255.0f * strengths[3])), "Authored armour strength");
+				ExpectByte(result.pixels[2], static_cast<int>(std::lround(255.0f * strengths[4])), "Authored weapon strength");
+				Require(result.pixels[3] == 0, "Strength edits must preserve actor exclusion");
+			}
+		}
+	}
+
+	void SceneCategoryStrengths(Harness& gpu)
+	{
+		const std::vector<Tuple> categories{ { 0, 85 }, { 0, 170 }, { 0, 255 }, { 0, 42 }, { 0, 127 }, { 0, 1 }, { 0, 0 } };
+		for (const bool actorsOnly : { false, true }) {
+			NeuralRendering::CharacterSettings settings;
+			settings.enabled = actorsOnly;
+			settings.sceneStrengthsEnabled = true;
+			settings.armor = settings.weapons = true;
+			settings.faceStrength = 0.0f;
+			settings.skinStrength = 0.25f;
+			settings.hairStrength = 0.5f;
+			settings.armorStrength = 0.75f;
+			settings.weaponsStrength = 1.0f;
+			auto constants = Defaults(7, 1);
+			constants.blendOptions[0] = actorsOnly ? 0u : 1u;
+			const auto weights = NeuralRendering::GetCharacterMaskStrengths(settings);
+			std::copy_n(weights.begin(), 4, constants.categoryStrengths);
+			constants.featherOptions[3] = weights.back();
+			const auto result = gpu.Mask(constants, 7, categories);
+			for (unsigned index = 0; index < 5; ++index)
+				ExpectByte(result.pixels[index], static_cast<int>(std::lround(255.0f * index * 0.25f)),
+					"Each material must retain its own strength in both coverage scopes");
+		}
+		for (bool actorsOnly : { false, true }) {
+			for (unsigned selection = 0; selection < 32; ++selection) {
+				for (float strength : { 0.0f, 0.375f, 1.0f }) {
+					NeuralRendering::CharacterSettings settings;
+					settings.enabled = actorsOnly;
+					settings.sceneStrengthsEnabled = true;
+					settings.faces = (selection & 1u) != 0;
+					settings.skin = (selection & 2u) != 0;
+					settings.hair = (selection & 4u) != 0;
+					settings.armor = (selection & 8u) != 0;
+					settings.weapons = (selection & 16u) != 0;
+					settings.faceStrength = settings.skinStrength = settings.hairStrength = strength;
+					settings.armorStrength = settings.weaponsStrength = strength;
+					auto constants = Defaults(7, 1);
+					constants.blendOptions[0] = actorsOnly ? 0u : 1u;
+					const auto weights = NeuralRendering::GetCharacterMaskStrengths(settings);
+					std::copy_n(weights.begin(), 4, constants.categoryStrengths);
+					constants.featherOptions[3] = weights.back();
+					const auto result = gpu.Mask(constants, 7, categories, {}, {}, 73);
+					for (unsigned index = 0; index < 7; ++index) {
+						const bool selected = index < 5 && (selection & (1u << index));
+						const float expected = selected ? strength : actorsOnly ? 0.0f :
+						                                                          1.0f;
+						ExpectByte(result.pixels[index], static_cast<int>(std::lround(255.0f * expected)),
+							"Scene NR, independent categories and actor-only precedence");
+					}
+				}
+			}
+		}
+		auto constants = Defaults(7, 1);
+		constants.blendOptions[0] = 1;
+		constants.visibilityOptions[1] = 1.0f;
+		const auto empty = gpu.Mask(constants, 7, std::vector<Tuple>(7), {}, {}, 73);
+		const auto occluded = gpu.Mask(constants, 7, categories, std::vector<float>(7, 0.99f), std::vector<float>(7, 0.1f));
+		for (unsigned index = 0; index < 7; ++index) {
+			ExpectByte(empty.pixels[index], 255, "No actors must keep ordinary scene NR");
+			ExpectByte(occluded.pixels[index], 255, "Occluders must keep ordinary scene NR");
+		}
+		std::vector<Tuple> stereo(7);
+		stereo.insert(stereo.end(), categories.begin(), categories.end());
+		for (unsigned eye = 0; eye < 2; ++eye) {
+			constants.sourceCrop[0] = eye * 7;
+			const auto result = gpu.Mask(constants, 14, stereo);
+			for (unsigned index = 0; index < 7; ++index)
+				ExpectByte(result.pixels[index], eye == 1 && index < 5 ? 0 : 255,
+					"Scene adjustments must use only their own eye's materials");
+		}
+	}
+
+	void EquipmentOnlyFeather(Harness& gpu)
+	{
+		for (const auto category : { 42u, 127u }) {
+			auto constants = Defaults(5, 1);
+			std::fill_n(constants.categoryStrengths, 4, 0.0f);
+			constants.categoryStrengths[3] = category == 42u ? 0.5f : 0.0f;
+			constants.featherOptions[3] = category == 127u ? 0.5f : 0.0f;
+			constants.options[2] = 2;
+			constants.options[3] = 1;
+			std::vector<Tuple> tuples(5);
+			tuples[2] = { 0, static_cast<std::uint8_t>(category) };
+			const auto result = gpu.Mask(constants, 5, tuples);
+			for (int x = 0; x < 5; ++x)
+				ExpectByte(result.pixels[x], static_cast<int>(std::lround(127.5f * (1.0f - std::abs(x - 2) / 3.0f))),
+					"Armour and weapon edges must feather with face, skin and hair deselected");
+		}
 	}
 
 	void WholeActorFocusFade(Harness& gpu)
@@ -1626,6 +1735,8 @@ int wmain(int argc, wchar_t** argv)
 		SelectionAndCoverage(gpu);
 		WholeActorFocusFade(gpu);
 		EquipmentMaskSelection(gpu);
+		SceneCategoryStrengths(gpu);
+		EquipmentOnlyFeather(gpu);
 		MaskSamplingMatchesOutputGrid(gpu);
 		FractionalFeatherCoverage(gpu);
 		VisibilityAndDistance(gpu);

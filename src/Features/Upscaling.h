@@ -483,6 +483,7 @@ public:
 		bool neuralRenderingUICorrection = false;
 		float neuralRenderingSingleSubrectScale = 1.0f;
 		float neuralRenderingBlendFeather = 0.05f;
+		bool neuralCharacterSceneStrengthsEnabled = false;
 		bool neuralCharacterRenderingEnabled =
 			NeuralRendering::CharacterPolicy::kDefaultEnabled;
 		bool neuralCharacterVisualIsolationEnabled =
@@ -507,6 +508,10 @@ public:
 			NeuralRendering::CharacterPolicy::kDefaultSkinStrength;
 		float neuralCharacterHairStrength =
 			NeuralRendering::CharacterPolicy::kDefaultHairStrength;
+		float neuralCharacterArmorStrength =
+			NeuralRendering::CharacterPolicy::kDefaultArmorStrength;
+		float neuralCharacterWeaponsStrength =
+			NeuralRendering::CharacterPolicy::kDefaultWeaponsStrength;
 		float neuralCharacterMaximumDistanceMeters =
 			NeuralRendering::CharacterPolicy::kDefaultMaximumDistanceMeters;
 		float neuralCharacterFocusScale = NeuralRendering::CharacterPolicy::kDefaultFocusScale;
@@ -2520,7 +2525,8 @@ public:
 	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */
 	bool SetFoveatedUpscalingEnabled(bool a_enabled);
 	/** Draw shared NR controls, optionally limited to route and character selection. */
-	void DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool a_essentialsOnly = false);
+	void DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool a_essentialsOnly = false,
+		const std::function<void()>& a_drawColourSettings = {});
 	/** Resolve the master preference only when the optional NR provider is installed. */
 	[[nodiscard]] static bool IsNeuralRenderingEnabled(const Settings& a_settings) noexcept;
 	/** Select the centre-only FOV profile when NR can be enabled. */

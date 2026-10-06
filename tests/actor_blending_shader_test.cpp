@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
 
@@ -75,20 +76,28 @@ namespace
 		}
 	};
 
-	void Run(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	void Run(ID3D11Device* device, ID3D11DeviceContext* context, bool vr,
+		const NeuralRendering::CharacterSettings& settings)
 	{
 		std::array<std::uint8_t, width * height> weights{};
 		weights.fill(255);
+		const bool scene = NeuralRendering::UsesSceneCharacterStrengths(settings);
+		auto strengths = NeuralRendering::GetCharacterCategoryStrengths(settings);
+		if (scene)
+			for (unsigned index = 0; index < strengths.size(); ++index)
+				if (!NeuralRendering::IsCharacterCategoryEnabled(NeuralRendering::CharacterPolicy::kCategories[index], settings))
+					strengths[index] = 1.0f;
 		for (UINT y = 3; y < 6; ++y)
 			for (UINT x = 5; x < 8; ++x)
-				weights[y * width + x] = x == 5 ? 0 : x == 6 ? 128 :
+				weights[y * width + x] = x == 5 ? 0 : x == 6 ? static_cast<std::uint8_t>(std::lround(255.0f * strengths[y == 3 ? 0 : y == 4 ? 3 :
+																																			  4])) :
 				                                               255;
 		Texture mask(device, DXGI_FORMAT_R8_UNORM, weights.data(), 1);
 		Texture protection(device, DXGI_FORMAT_R8_UNORM, nullptr, 1);
 		Shader alpha(device, L"package/Shaders/DLSS5ActorProtectionCS.hlsl", vr);
 		ConstantBuffer alphaCB(device, alpha.reflection.Get(), "ActorProtection");
-		alphaCB.SetVariable("EvaluationRect", std::array<UINT, 4>{ 3, 2, 9, 5 });
-		alphaCB.SetVariable("SelectionRect", std::array<UINT, 4>{ 5, 3, 3, 3 });
+		alphaCB.SetVariable("EvaluationRect", scene ? std::array<UINT, 4>{ 0, 0, width, height } : std::array<UINT, 4>{ 3, 2, 9, 5 });
+		alphaCB.SetVariable("SelectionRect", scene ? std::array<UINT, 4>{ 0, 0, width, height } : std::array<UINT, 4>{ 5, 3, 3, 3 });
 		alphaCB.Bind(context);
 		const float clear[]{ 64.0f / 255.0f, 0, 0, 0 };
 		context->ClearUnorderedAccessViewFloat(protection.uav.Get(), clear);
@@ -105,8 +114,8 @@ namespace
 		bool valid = true;
 		for (UINT y = 0; y < height; ++y) {
 			for (UINT x = 0; x < width; ++x) {
-				const bool evaluated = x >= 3 && x < 12 && y >= 2 && y < 7;
-				const bool selected = x >= 5 && x < 8 && y >= 3 && y < 6;
+				const bool evaluated = scene || (x >= 3 && x < 12 && y >= 2 && y < 7);
+				const bool selected = scene || (x >= 5 && x < 8 && y >= 3 && y < 6);
 				const auto expected = evaluated ? (selected ? 255 - weights[y * width + x] : 255) : 64;
 				valid &= static_cast<const std::uint8_t*>(mapped.pData)[y * mapped.RowPitch + x] == expected;
 			}
@@ -129,8 +138,14 @@ namespace
 		blendCB.SetVariable("InvSourceDim", std::array{ 1.0f / width, 1.0f / height });
 		blendCB.SetVariable("DispatchDim", std::array{ float(width), float(height) });
 		blendCB.SetVariable("FullImage", 1u);
-		blendCB.SetVariable("CharacterMaskBounds", Pixel{ 5.0f / width, 3.0f / height, 8.0f / width, 6.0f / height });
+		blendCB.SetVariable("CharacterMaskBounds", scene ? Pixel{ 0, 0, 1, 1 } : Pixel{ 5.0f / width, 3.0f / height, 8.0f / width, 6.0f / height });
 		for (UINT mode : { 1u, 2u }) {
+			// The provider fixture models UIAlpha blending before CSX commits it.
+			for (UINT i = 0; i < neural.size(); ++i) {
+				const float weight = mode == 2 ? weights[i] / 255.0f : 1.0f;
+				neural[i] = { 0.2f + 0.6f * weight, 0.2f + 0.6f * weight, 0.2f + 0.6f * weight, 1.0f };
+			}
+			context->UpdateSubresource(model.texture.Get(), 0, nullptr, neural.data(), width * sizeof(Pixel), 0);
 			blendCB.SetVariable("CharacterSelectionMode", mode);
 			blendCB.Bind(context);
 			const std::array<ID3D11ShaderResourceView*, 3> inputs{ model.srv.Get(), baseline.srv.Get(), mask.srv.Get() };
@@ -146,8 +161,8 @@ namespace
 			for (UINT y = 0; y < height; ++y) {
 				const auto* row = reinterpret_cast<const Pixel*>(static_cast<const std::byte*>(mapped.pData) + y * mapped.RowPitch);
 				for (UINT x = 0; x < width; ++x) {
-					const float weight = x >= 5 && x < 8 && y >= 3 && y < 6 ? weights[y * width + x] / 255.0f : 0.0f;
-					const float expected = 0.2f + 0.6f * (mode == 2 && weight > 0 ? 1.0f : weight);
+					const float weight = scene || (x >= 5 && x < 8 && y >= 3 && y < 6) ? weights[y * width + x] / 255.0f : 0.0f;
+					const float expected = 0.2f + 0.6f * weight;
 					valid &= std::abs(row[x][0] - expected) < 1e-6f;
 				}
 			}
@@ -164,9 +179,21 @@ int main()
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context));
-		for (bool vr : { false, true })
-			Run(device.Get(), context.Get(), vr);
-		std::cout << "PASS: actor protection, crop bounds, strength endpoints and both compositors (flat/VR)\n";
+		for (bool vr : { false, true }) {
+			for (unsigned selection = 0; selection < 4; ++selection) {
+				for (float strength : { 0.0f, 0.375f, 1.0f }) {
+					NeuralRendering::CharacterSettings settings;
+					settings.armor = (selection & 1u) != 0;
+					settings.weapons = (selection & 2u) != 0;
+					settings.armorStrength = strength;
+					settings.weaponsStrength = 1.0f - strength;
+					Run(device.Get(), context.Get(), vr, settings);
+					settings.sceneStrengthsEnabled = true;
+					Run(device.Get(), context.Get(), vr, settings);
+				}
+			}
+		}
+		std::cout << "PASS: scene and actor strengths, UIAlpha protection, crop bounds and both composite paths (48 flat/VR cases; provider output simulated)\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

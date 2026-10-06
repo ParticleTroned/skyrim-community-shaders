@@ -20,6 +20,7 @@ namespace NeuralRendering
 		template <class Settings, class Policy, class Visitor>
 		void VisitFields(Settings& settings, Policy& policy, Visitor&& visit)
 		{
+			visit("neuralCharacterSceneStrengthsEnabled", settings.neuralCharacterSceneStrengthsEnabled, policy.sceneStrengthsEnabled);
 			visit("neuralCharacterRenderingEnabled", settings.neuralCharacterRenderingEnabled, policy.enabled);
 			visit("neuralCharacterProviderBlending", settings.neuralCharacterProviderBlending, policy.providerBlending);
 			visit("neuralCharacterFacesEnabled", settings.neuralCharacterFacesEnabled, policy.faces);
@@ -35,6 +36,8 @@ namespace NeuralRendering
 			visit("neuralCharacterFaceStrength", settings.neuralCharacterFaceStrength, policy.faceStrength);
 			visit("neuralCharacterSkinStrength", settings.neuralCharacterSkinStrength, policy.skinStrength);
 			visit("neuralCharacterHairStrength", settings.neuralCharacterHairStrength, policy.hairStrength);
+			visit("neuralCharacterArmorStrength", settings.neuralCharacterArmorStrength, policy.armorStrength);
+			visit("neuralCharacterWeaponsStrength", settings.neuralCharacterWeaponsStrength, policy.weaponsStrength);
 			visit("neuralCharacterMaximumDistanceMeters", settings.neuralCharacterMaximumDistanceMeters, policy.maximumDistanceMeters);
 			visit("neuralCharacterAdaptiveRoiSelectionEnabled", settings.neuralCharacterAdaptiveRoiSelectionEnabled, policy.adaptiveRoiSelection);
 			visit("neuralCharacterFocusScale", settings.neuralCharacterFocusScale, policy.focusScale);

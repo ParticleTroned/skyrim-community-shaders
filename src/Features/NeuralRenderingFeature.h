@@ -20,4 +20,7 @@ struct NeuralRenderingFeature : Feature
 	void DrawEssentialSettings() override;
 	void DataLoaded() override;
 	void EarlyPrepass() override;
+
+private:
+	void DrawColourSettings();
 };

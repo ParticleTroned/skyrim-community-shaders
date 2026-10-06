@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 using json = nlohmann::json;
 
@@ -40,13 +41,33 @@ int main()
 	for (bool enabled : { false, true }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "characterSceneStrengthsEnabled", enabled } }, request, error));
+		require(request.HasAnyControl() && request.HasCharacterControls() && request.characterSceneStrengthsEnabled == enabled);
 		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "characterProviderBlending", enabled } }, request, error));
 		require(request.HasAnyControl() && request.characterProviderBlending == enabled);
 	}
 	for (const auto& value : { json(1), json("true"), json(nullptr) }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "characterSceneStrengthsEnabled", value } }, request, error));
 		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "characterProviderBlending", value } }, request, error));
+	}
+	for (const auto& [field, member] : {
+			 std::pair{ "characterArmorStrength", &NeuralRenderingConfigurationRequest::characterArmorStrength },
+			 std::pair{ "characterWeaponsStrength", &NeuralRenderingConfigurationRequest::characterWeaponsStrength } }) {
+		for (const float value : { 0.0f, 0.375f, 1.0f }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error));
+			require(request.HasAnyControl() && request.HasCharacterControls() && request.*member == value);
+		}
+		for (const auto& value : { json(-0.01), json(1.01), json(true), json("0.5"), json(nullptr),
+				 json(std::numeric_limits<double>::infinity()), json(std::numeric_limits<double>::quiet_NaN()) }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error));
+			require(!error.empty() && !(request.*member).has_value());
+		}
 	}
 	// Explicit placement is an assertion, resolved against the final requested mode.
 	for (const auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::Foveated,

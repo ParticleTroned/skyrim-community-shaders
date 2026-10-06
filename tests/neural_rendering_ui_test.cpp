@@ -1,14 +1,17 @@
 #include "Features/FoveatedCommon.h"
+#include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
 
 #include <cstdio>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -68,8 +71,12 @@ namespace globals
 			{
 				bool neuralRenderingFovOnly = false, neuralRenderingEnabled = false, neuralCharacterRenderingEnabled = false;
 				bool neuralRenderingRenderscaleFov = false;
+				bool neuralCharacterSceneStrengthsEnabled = false;
+				bool neuralCharacterProviderBlending = false;
 				bool neuralCharacterFacesEnabled = true, neuralCharacterSkinEnabled = true, neuralCharacterHairEnabled = true;
 				bool neuralCharacterArmorEnabled = false, neuralCharacterWeaponsEnabled = false;
+				float neuralCharacterFaceStrength = 1.0f, neuralCharacterSkinStrength = 1.0f, neuralCharacterHairStrength = 0.65f;
+				float neuralCharacterArmorStrength = 1.0f, neuralCharacterWeaponsStrength = 1.0f;
 				bool neuralCharacterHumansEnabled = true, neuralCharacterOtherHumanoidsEnabled = true;
 				bool neuralCharacterCreaturesEnabled = true, neuralCharacterAnimalsEnabled = true, neuralCharacterOtherActorsEnabled = true;
 				unsigned neuralRenderingMode = 0;
@@ -120,10 +127,12 @@ namespace globals
 			static bool ApplyNeuralRenderingFovConstraint(Settings&) noexcept;
 			UpscaleMethod GetUpscaleMethod() const { return method; }
 			UpscaleMethod GetRuntimeUpscaleMethod() const { return runtimeMethod.value_or(method); }
-			void DrawNeuralRenderingSettings(UpscaleMethod value, bool = false)
+			void DrawNeuralRenderingSettings(UpscaleMethod value, bool = false, const std::function<void()>& drawColourSettings = {})
 			{
 				++draws;
 				lastDrawMethod = value;
+				if (drawColourSettings)
+					drawColourSettings();
 			}
 		} upscaling;
 	}
@@ -138,6 +147,11 @@ namespace ImGui
 {
 	std::vector<std::string> items;
 	std::vector<bool> disabledItems;
+	std::vector<unsigned> rows;
+	std::vector<std::pair<std::string, std::string>> tooltips;
+	bool drawingTooltip = false;
+	unsigned row = 0;
+	bool nextOnSameLine = false;
 	std::string clicked;
 	int treeDepth = 0, comboDepth = 0;
 	std::string colourPreview;
@@ -148,8 +162,16 @@ namespace ImGui
 	int lightingSliderFlags = 0;
 	void Record(const char* label)
 	{
+		if (drawingTooltip) {
+			tooltips.back().second += label;
+			return;
+		}
 		items.emplace_back(label);
 		disabledItems.push_back(disableDepth != 0);
+		if (!nextOnSameLine)
+			++row;
+		rows.push_back(row);
+		nextOnSameLine = false;
 	}
 	bool Seen(std::string_view label)
 	{
@@ -164,6 +186,10 @@ namespace ImGui
 	{
 		items.clear();
 		disabledItems.clear();
+		rows.clear();
+		tooltips.clear();
+		row = 0;
+		nextOnSameLine = false;
 		clicked = click;
 		treeDepth = comboDepth = 0;
 		colourPreview.clear();
@@ -188,7 +214,7 @@ namespace ImGui
 	void SeparatorText(const char* label) { Record(label); }
 	void Separator() {}
 	void Spacing() {}
-	void SameLine() {}
+	void SameLine() { nextOnSameLine = true; }
 	void PushID(int) {}
 	void PopID() {}
 	bool Button(const char* label)
@@ -243,7 +269,16 @@ namespace ImGui
 }
 namespace Util
 {
-	bool HoverTooltipWrapper() { return false; }
+	struct HoverTooltipWrapper
+	{
+		HoverTooltipWrapper()
+		{
+			ImGui::tooltips.emplace_back(ImGui::items.empty() ? "" : ImGui::items.back(), "");
+			ImGui::drawingTooltip = true;
+		}
+		explicit operator bool() const { return true; }
+		~HoverTooltipWrapper() { ImGui::drawingTooltip = false; }
+	};
 	namespace Text
 	{
 		void WrappedError(const char* label) { ImGui::Record(label); }
@@ -353,6 +388,7 @@ struct NeuralRenderingFeature
 {
 	void DrawSettings();
 	void DrawEssentialSettings();
+	void DrawColourSettings();
 };
 #include "neural_rendering_ui_under_test.h"
 
@@ -364,6 +400,73 @@ int main()
 			throw std::runtime_error(message);
 		}
 	};
+	ImGui::Clear();
+	DrawNeuralRenderingActorCategories(globals::features::upscaling.settings);
+	const auto rowFor = [&](const char* label) {
+		const auto item = std::find(ImGui::items.begin(), ImGui::items.end(), label);
+		require(item != ImGui::items.end(), "Every actor and material selection must remain available");
+		return ImGui::rows[static_cast<std::size_t>(item - ImGui::items.begin())];
+	};
+	for (const auto* label : { "Humans", "Other humanoids", "Beasts / creatures", "Animals", "Other / unknown" })
+		require(rowFor(label) == rowFor("Humans"), "Actor toggles must share one row");
+	for (const auto* label : { "Faces", "Skin", "Hair", "Armour / clothing", "Weapons" })
+		require(rowFor(label) == rowFor("Faces"), "Material toggles must share one row");
+	DrawNeuralRenderingMaterialStrengths(globals::features::upscaling.settings);
+	for (const auto* label : { "Humans", "Other humanoids", "Beasts / creatures", "Animals", "Other / unknown",
+			 "Faces", "Skin", "Hair", "Armour / clothing", "Weapons", "Face Strength", "Skin Strength", "Hair Strength",
+			 "Armour / Clothing Strength", "Weapon Strength" }) {
+		const auto tip = std::find_if(ImGui::tooltips.begin(), ImGui::tooltips.end(), [label](const auto& entry) { return entry.first == label; });
+		require(tip != ImGui::tooltips.end() && !tip->second.empty(), "Each toggle and strength slider must have its own tooltip");
+	}
+	for (unsigned mode = 0; mode < 3; ++mode) {
+		auto& settings = globals::features::upscaling.settings;
+		settings = {};
+		settings.neuralRenderingMode = mode;
+		ImGui::Clear("Adjust categories in scene NR");
+		DrawNeuralRenderingCategoryControls(settings, false);
+		require(settings.neuralCharacterSceneStrengthsEnabled && !settings.neuralCharacterRenderingEnabled &&
+					!ImGui::Disabled("Humans") && !ImGui::Disabled("Face Strength"),
+			"All pipelines must allow ordinary scene category strengths without Actors only");
+		const auto category = std::find(ImGui::items.begin(), ImGui::items.end(), "Category strengths");
+		const auto actors = std::find(ImGui::items.begin(), ImGui::items.end(), "Actors only");
+		require(category < actors, "Shared category choices must precede actor-only coverage");
+		ImGui::Clear("Actors only");
+		DrawNeuralRenderingCategoryControls(settings, false);
+		require(settings.neuralCharacterRenderingEnabled && settings.neuralCharacterSceneStrengthsEnabled,
+			"Actor-only selection must retain the ordinary scene preference");
+	}
+	globals::features::upscaling.settings = {};
+	ImGui::sliderEditValue = 0.375f;
+	for (const auto& [label, selection, strength] : {
+			 std::tuple{ "Face Strength", &Upscaling::Settings::neuralCharacterFacesEnabled, &Upscaling::Settings::neuralCharacterFaceStrength },
+			 std::tuple{ "Skin Strength", &Upscaling::Settings::neuralCharacterSkinEnabled, &Upscaling::Settings::neuralCharacterSkinStrength },
+			 std::tuple{ "Hair Strength", &Upscaling::Settings::neuralCharacterHairEnabled, &Upscaling::Settings::neuralCharacterHairStrength },
+			 std::tuple{ "Armour / Clothing Strength", &Upscaling::Settings::neuralCharacterArmorEnabled, &Upscaling::Settings::neuralCharacterArmorStrength },
+			 std::tuple{ "Weapon Strength", &Upscaling::Settings::neuralCharacterWeaponsEnabled, &Upscaling::Settings::neuralCharacterWeaponsStrength } }) {
+		auto& settings = globals::features::upscaling.settings;
+		settings.*strength = 1.0f;
+		settings.*selection = false;
+		ImGui::Clear(label);
+		DrawNeuralRenderingMaterialStrengths(settings);
+		require(ImGui::Disabled(label) && settings.*strength == 1.0f,
+			"Deselected equipment must retain its strength without allowing edits");
+		settings.*selection = true;
+		ImGui::Clear(label);
+		DrawNeuralRenderingMaterialStrengths(settings);
+		require(!ImGui::Disabled(label) && settings.*strength == 0.375f,
+			"Selected equipment must expose an independent editable strength");
+		require(ImGui::disableDepth == 0, "Material strength disable scopes must be balanced");
+		for (const auto value : { -1.0f, 2.0f }) {
+			ImGui::sliderEditValue = value;
+			ImGui::Clear(label);
+			DrawNeuralRenderingMaterialStrengths(settings);
+			require(settings.*strength == std::clamp(value, 0.0f, 1.0f),
+				"Typed category strengths must remain inside the slider limits");
+		}
+		ImGui::sliderEditValue = 0.375f;
+	}
+	globals::features::upscaling.settings = {};
+	ImGui::sliderEditValue = 50.0f;
 	State state;
 	globals::state = &state;
 	NeuralRenderingFeature feature;
@@ -904,8 +1007,8 @@ int main()
 		require(ImGui::Disabled("Lighting preservation") == (mode != Mode::PreserveSource),
 			"Changing colour mode must update slider availability in the same draw");
 		if (mode == Mode::NeuralLighting) {
-			require(ImGui::Seen("Neural lighting admits the full bounded neural brightness field. Lighting preservation and Neural appearance mix do not apply."),
-				"Neural Lighting must explain its fixed full-tone reconstruction");
+			require(ImGui::Seen("Neural lighting allows lighting changes. Lighting preservation and Neural appearance mix do not apply."),
+				"Neural lighting must explain which controls apply in plain language");
 			require(ImGui::Seen("Detail contribution") && ImGui::Seen("Maximum detail gain (stops)"),
 				"Neural Lighting must expose its shared bounded detail controls");
 			require(!ImGui::Seen("Neural appearance mix"),
@@ -914,6 +1017,18 @@ int main()
 	}
 	state.level = spdlog::level::info;
 	registry.configuration.settings.lightingPreservation = 0.3737f;
+	for (const auto& [label, field, maximum] : {
+			 std::tuple{ "Detail contribution", &Settings::detailStrength, 2.0f },
+			 std::tuple{ "Neural appearance mix", &Settings::appearanceMix, 1.0f },
+			 std::tuple{ "Maximum detail gain (stops)", &Settings::maximumDetailStops, 2.0f } }) {
+		for (const float value : { -1.0f, 3.0f }) {
+			ImGui::sliderEditValue = value;
+			draw(label);
+			require(registry.configuration.settings.*field == std::clamp(value, 0.0f, maximum),
+				"Typed colour controls must stay valid and accept the bounded edit");
+		}
+	}
+	registry.configuration.settings = { .mode = Mode::PreserveSource, .lightingPreservation = 0.3737f };
 	const auto beforePassiveDraw = registry.Snapshot();
 	draw();
 	require(registry.configuration.settings == beforePassiveDraw.settings &&
@@ -1016,6 +1131,8 @@ int main()
 				require(!ImGui::Disabled("Foveated") && !ImGui::Disabled("Actors only") &&
 							upscaling.settings.neuralCharacterRenderingEnabled,
 					"A temporarily masked vendor must not disable configured FOV or character selection");
+				ImGui::Clear();
+				upscaling.DrawSelectionControls();
 				for (const auto* category : { "Faces", "Skin", "Hair" })
 					require(ImGui::Seen(category) && !ImGui::Disabled(category), "Pending FOV must retain editable character categories");
 				if (mode == ModeChoice::FullResolution)

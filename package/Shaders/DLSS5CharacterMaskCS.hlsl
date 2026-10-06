@@ -22,6 +22,7 @@ cbuffer CharacterMaskCB : register(b0)
 	uint4 DispatchRegion;                                     // output-local offset.xy and dispatch extent.zw
 	uint4 AuthoredRegion;                                     // valid current-frame full-eye source offset.xy/extent.zw
 
+	uint4 BlendOptions;  // ordinary-scene strength adjustments, reserved
 #ifdef GPU_CHARACTER_SUPPORT
 	uint4 SupportGrid;  // source tile columns/rows, eye tile base, GPU support enabled
 #endif
@@ -283,7 +284,7 @@ void CountCategory(uint category, uint firstCounter)
 	const uint2 outputPixelId = dispatchThreadId.xy + DispatchRegion.xy;
 
 #ifdef GPU_CHARACTER_SUPPORT
-	const bool useSupport = SupportGrid.w != 0u;
+	const bool useSupport = SupportGrid.w != 0u && BlendOptions.x == 0u;
 	if (useSupport) {
 		if (groupIndex == 0u) {
 			GroupSupport = GroupHasSupport(groupId.xy * 8u) ? 1u : 0u;
@@ -360,7 +361,8 @@ void CountCategory(uint category, uint firstCounter)
 
 			const float featherCeiling = centerCategory != 0u ?
 			                                 centerStrength * centerDistanceWeight :
-			                                 max(CategoryStrengths.x, max(CategoryStrengths.y, CategoryStrengths.z));
+			                                 max(max(CategoryStrengths.x, CategoryStrengths.y),
+												 max(CategoryStrengths.z, max(CategoryStrengths.w, FeatherOptions.w)));
 			if (centerEligible && mask < featherCeiling && Options.w != 0 && Options.z != 0 &&
 				(centerCategory == 0u || GetCategoryStrength(centerCategory) > 0.0)) {
 				const int radius = min(int(Options.z), 4);
@@ -408,6 +410,8 @@ void CountCategory(uint category, uint firstCounter)
 				mask = min(mask, centerStrength * centerDistanceWeight);
 		}
 
+		if (BlendOptions.x != 0u)
+			mask = 1.0 - mask;
 		const uint testMode = uint(FeatherOptions.y + 0.5);
 		if (testMode == 1)
 			mask = 0.0;

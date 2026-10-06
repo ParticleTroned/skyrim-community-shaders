@@ -16,6 +16,7 @@ namespace
 		bool neuralRenderingEnabled = false;
 		bool neuralRenderingBatchedStereo = true;
 		float foveatedRightEyeMaskOffsetX = 0.25f;
+		bool neuralCharacterSceneStrengthsEnabled = false;
 		bool neuralCharacterRenderingEnabled = CharacterPolicy::kDefaultEnabled;
 		bool neuralCharacterVisualIsolationEnabled = CharacterPolicy::kDefaultVisualIsolation;
 		bool neuralCharacterFacesEnabled = CharacterPolicy::kDefaultFaces;
@@ -32,6 +33,8 @@ namespace
 		float neuralCharacterFaceStrength = CharacterPolicy::kDefaultFaceStrength;
 		float neuralCharacterSkinStrength = CharacterPolicy::kDefaultSkinStrength;
 		float neuralCharacterHairStrength = CharacterPolicy::kDefaultHairStrength;
+		float neuralCharacterArmorStrength = CharacterPolicy::kDefaultArmorStrength;
+		float neuralCharacterWeaponsStrength = CharacterPolicy::kDefaultWeaponsStrength;
 		float neuralCharacterMaximumDistanceMeters = CharacterPolicy::kDefaultMaximumDistanceMeters;
 		float neuralCharacterFocusScale = NeuralRendering::CharacterPolicy::kDefaultFocusScale;
 		bool neuralCharacterAdaptiveRoiSelectionEnabled = CharacterPolicy::kDefaultAdaptiveRoiSelection;
@@ -69,9 +72,14 @@ namespace
 			"Missing crop settings must use the stable crop without a calibration profile");
 		Require(Read(json{ { "neuralCharacterCropMode", 999 } }).neuralCharacterCropMode == CharacterPolicy::kDefaultCropMode,
 			"An invalid crop mode must recover to the canonical default");
+		Require(!Read(json::object()).neuralCharacterSceneStrengthsEnabled, "Legacy scenes must not enable category adjustments");
 		Require(!Read(json::object()).neuralCharacterProviderBlending, "Missing strength application keeps the CSX compositor");
+		const auto legacy = Read(json{ { "neuralCharacterArmorEnabled", true }, { "neuralCharacterWeaponsEnabled", true } });
+		Require(legacy.neuralCharacterArmorStrength == 1.0f && legacy.neuralCharacterWeaponsStrength == 1.0f,
+			"Legacy selected armour and weapons must retain their full strength");
 		const auto persisted = json::parse(R"({
 			"neuralCharacterRenderingEnabled": true,
+			"neuralCharacterSceneStrengthsEnabled": true,
 			"neuralCharacterHumansEnabled": true, "neuralCharacterOtherHumanoidsEnabled": false,
 			"neuralCharacterCreaturesEnabled": true, "neuralCharacterAnimalsEnabled": false,
 			"neuralCharacterOtherActorsEnabled": false,
@@ -81,6 +89,7 @@ namespace
 			"neuralCharacterHairEnabled": true, "neuralCharacterArmorEnabled": true,
 			"neuralCharacterWeaponsEnabled": true, "neuralCharacterFaceStrength": 0.25,
 			"neuralCharacterSkinStrength": 0.5, "neuralCharacterHairStrength": 0.75,
+			"neuralCharacterArmorStrength": 0.375, "neuralCharacterWeaponsStrength": 0.875,
 			"neuralCharacterMaximumDistanceMeters": 15.5,
 			"neuralCharacterAdaptiveRoiSelectionEnabled": true,
             "neuralCharacterFocusScale": 0.625,
@@ -164,12 +173,16 @@ namespace
 				rejects(json{ { "neuralCharacterRenderingEnabled", true }, { key, wrong } });
 		}
 		rejects(json{ { "neuralCharacterRenderingEnabled", 1 } });
+		rejects(json{ { "neuralCharacterSceneStrengthsEnabled", 1 } });
 		for (const char* key : { "neuralCharacterHairEnabled", "neuralCharacterArmorEnabled", "neuralCharacterWeaponsEnabled",
 				 "neuralCharacterHumansEnabled", "neuralCharacterOtherHumanoidsEnabled", "neuralCharacterCreaturesEnabled", "neuralCharacterAnimalsEnabled", "neuralCharacterOtherActorsEnabled", "neuralCharacterProviderBlending" })
 			for (const auto& wrong : std::array<json, 5>{ 0, 1, "false", nullptr, json::array() })
 				rejects(json{ { "neuralCharacterRenderingEnabled", true }, { key, wrong } });
 		rejects(json{ { "neuralCharacterRenderingEnabled", true }, { "neuralCharacterFaceStrength", "0.5" } });
 		rejects(json{ { "neuralCharacterRenderingEnabled", true }, { "neuralCharacterHairStrength", false } });
+		for (const char* key : { "neuralCharacterArmorStrength", "neuralCharacterWeaponsStrength" })
+			for (const auto& wrong : std::array<json, 5>{ true, "0.5", nullptr, json::array(), json::object() })
+				rejects(json{ { "neuralCharacterRenderingEnabled", true }, { key, wrong } });
 		rejects(json{ { "neuralCharacterRenderingEnabled", true }, { "neuralCharacterVisualIsolationEnabled", 0 } });
 		for (const auto& wrong : std::array<json, 5>{ nullptr, 1, true, "settings", json::array() })
 			rejects(wrong);
@@ -181,12 +194,15 @@ namespace
 			return GetUpscalingCharacterSettings(Read(json{
 				{ "neuralCharacterFaceStrength", value }, { "neuralCharacterSkinStrength", value },
 				{ "neuralCharacterHairStrength", value }, { "neuralCharacterMaximumDistanceMeters", value },
+				{ "neuralCharacterArmorStrength", value }, { "neuralCharacterWeaponsStrength", value },
 				{ "neuralCharacterRoiMargin", value }, { "neuralCharacterDepthThreshold", value } }));
 		};
 		const auto positive = extreme(json::parse("1.0e300"));
 		Require(positive.faceStrength == CharacterPolicy::kMaximumStrength &&
 					positive.skinStrength == CharacterPolicy::kMaximumStrength &&
 					positive.hairStrength == CharacterPolicy::kMaximumStrength &&
+					positive.armorStrength == CharacterPolicy::kMaximumStrength &&
+					positive.weaponsStrength == CharacterPolicy::kMaximumStrength &&
 					positive.maximumDistanceMeters == CharacterPolicy::kMaximumDistanceMeters &&
 					positive.roiMargin == CharacterPolicy::kMaximumRoiMargin &&
 					positive.featherDepthThreshold == CharacterPolicy::kMaximumFeatherDepthThreshold,
@@ -195,6 +211,8 @@ namespace
 		Require(negative.faceStrength == CharacterPolicy::kMinimumStrength &&
 					negative.skinStrength == CharacterPolicy::kMinimumStrength &&
 					negative.hairStrength == CharacterPolicy::kMinimumStrength &&
+					negative.armorStrength == CharacterPolicy::kMinimumStrength &&
+					negative.weaponsStrength == CharacterPolicy::kMinimumStrength &&
 					negative.maximumDistanceMeters == CharacterPolicy::kMinimumDistanceMeters &&
 					negative.roiMargin == CharacterPolicy::kMinimumRoiMargin &&
 					negative.featherDepthThreshold == 0.0f,
@@ -279,6 +297,16 @@ namespace
 
 	void EquipmentSettings()
 	{
+		CharacterSettings scene;
+		Require(!IsCharacterMaskActive(scene), "Ordinary scene defaults must avoid mask work");
+		scene.sceneStrengthsEnabled = true;
+		scene.faceStrength = 0.0f;
+		Require(IsCharacterMaskActive(scene) && UsesSceneCharacterStrengths(scene) &&
+					IsCharacterCategoryEnabled(CharacterCategory::Face, scene) && GetCharacterMaskStrengths(scene)[0] == 1.0f,
+			"Zero strength must still detect faces to restore their original appearance");
+		scene.enabled = true;
+		Require(!UsesSceneCharacterStrengths(scene) && !IsCharacterCategoryEnabled(CharacterCategory::Face, scene),
+			"Actor-only coverage must take precedence while sharing material strengths");
 		CharacterSettings settings{};
 		Require(!settings.armor && !settings.weapons, "Equipment must be opt-in");
 		settings.faces = settings.skin = settings.hair = false;
@@ -357,9 +385,58 @@ static void ActorGroupCombinations()
 	Require(!IsCharacterActorGroupEnabled(CharacterActorGroup::Count, {}), "Invalid actor group did not fail closed");
 }
 
+static void CoverageScopePreferences()
+{
+	using namespace NeuralRendering;
+	CharacterSettings saved;
+	saved.enabled = true;
+	saved.sceneStrengthsEnabled = true;
+	saved.visibilityDepthTest = false;
+	saved.depthAwareFeather = true;
+	saved.featherRadius = 4;
+	saved.featherDepthThreshold = 0.05f;
+	const auto actor = ResolveCharacterScopeSettings(saved);
+	Require(actor.enabled && !actor.sceneStrengthsEnabled && actor.maximumDistanceMeters == saved.maximumDistanceMeters &&
+				!actor.visibilityDepthTest && actor.depthAwareFeather && actor.featherRadius == 4,
+		"Actor-only coverage must preserve its controls and ignore the saved scene preference");
+	saved.enabled = false;
+	const auto scene = ResolveCharacterScopeSettings(saved);
+	Require(scene.sceneStrengthsEnabled && scene.maximumDistanceMeters == 0.0f && scene.focusScale == 1.0f &&
+				scene.minimumFacePixelSize == 1 && !scene.adaptiveRoiSelection &&
+				scene.cropMode == static_cast<std::uint32_t>(CharacterCropMode::Uncropped) &&
+				scene.roiMargin == 0.0f && scene.roiHoldFrames == 0 && !scene.depthAwareFeather &&
+				scene.featherRadius == 0 && scene.featherDepthThreshold == 0.0f && scene.visibilityDepthTest,
+		"Scene coverage must ignore hidden actor-only controls and keep occlusion rejection");
+	Require(saved.maximumDistanceMeters == CharacterPolicy::kDefaultMaximumDistanceMeters &&
+				!saved.visibilityDepthTest && saved.featherRadius == 4,
+		"Resolving scene coverage must not overwrite saved actor-only preferences");
+	Require(ResolveCharacterScopeSettings(scene) == scene, "Effective scope resolution must be idempotent");
+	for (const auto invalid : { CharacterCategory::None, static_cast<CharacterCategory>(6), static_cast<CharacterCategory>(~0u) })
+		Require(!IsCharacterCategorySelected(invalid, saved) && GetCharacterCategoryStrength(invalid, saved) == 0.0f,
+			"Invalid material categories must fail closed without indexing settings");
+}
+
 int main()
 {
 	try {
+		using namespace NeuralRendering;
+		CharacterSettings materials{};
+		materials.armor = materials.weapons = true;
+		materials.armorStrength = 0.375f;
+		materials.weaponsStrength = 0.875f;
+		Require(GetCharacterCategoryStrengths(materials) == std::array{ 1.0f, 1.0f, 0.65f, 0.375f, 0.875f },
+			"Every material must supply its authored mask strength");
+		CharacterCategoryFramePolicy framePolicy;
+		const auto frozen = framePolicy.Resolve(100, materials);
+		materials.armorStrength = 0.0f;
+		materials.weapons = false;
+		Require(framePolicy.Resolve(100, materials) == frozen, "Strength edits must not split the stereo frame policy");
+		const auto next = framePolicy.Resolve(101, materials);
+		Require(!IsCharacterCategoryEnabled(CharacterCategory::Armor, next) &&
+					!IsCharacterCategoryEnabled(CharacterCategory::Weapons, next) && GetEnabledCharacterCategoryMask(next) == 14,
+			"Zero strength and deselected equipment must leave the next frame mask");
+		const auto strengths = GetCharacterCategoryStrengths(next);
+		Require(strengths[3] == 0.0f && strengths[4] == 0.0f, "Disabled equipment must supply zero effective mask strength");
 		JsonRoundTripAndDefaults();
 		ActorGroupCombinations();
 		JsonIntegerBounds();
@@ -369,6 +446,7 @@ int main()
 		PolicyHelpers();
 		EquipmentSettings();
 		FrameCategoryTransitions();
+		CoverageScopePreferences();
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

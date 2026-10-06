@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstring>
 #include <format>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -163,8 +164,9 @@ namespace NeuralRendering
 			return (a_hash ^ a_value) * 1099511628211ull;
 		}
 
-		std::uint64_t BuildSettingsKey(const CharacterSettings& a_settings) noexcept
+		std::uint64_t BuildSettingsKey(CharacterSettings a_settings) noexcept
 		{
+			a_settings = ResolveCharacterScopeSettings(a_settings);
 			std::uint64_t hash = 1469598103934665603ull;
 			auto add = [&](std::uint64_t a_value) { hash = HashCombine(hash, a_value); };
 			auto addFloat = [&](float a_value) {
@@ -173,6 +175,7 @@ namespace NeuralRendering
 				add(bits);
 			};
 			add(a_settings.enabled);
+			add(a_settings.sceneStrengthsEnabled);
 			add(a_settings.faces);
 			add(a_settings.skin);
 			add(a_settings.hair);
@@ -187,6 +190,8 @@ namespace NeuralRendering
 			addFloat(a_settings.faceStrength);
 			addFloat(a_settings.skinStrength);
 			addFloat(a_settings.hairStrength);
+			addFloat(a_settings.armorStrength);
+			addFloat(a_settings.weaponsStrength);
 			addFloat(a_settings.maximumDistanceMeters);
 			add(a_settings.adaptiveRoiSelection);
 			addFloat(a_settings.focusScale);
@@ -605,6 +610,7 @@ namespace NeuralRendering
 				[CharacterPolicy::kMaximumEligibilityRegions][4]{};
 			std::uint32_t dispatchRegion[4]{};
 			std::uint32_t authoredRegion[4]{};
+			std::uint32_t blendOptions[4]{};
 			std::uint32_t supportGrid[4]{};
 		};
 		static_assert(sizeof(MaskConstants) % 16 == 0);
@@ -2120,7 +2126,7 @@ namespace NeuralRendering
 			                                 (measureCoverage || a_args.settings.debugView != CharacterDebugView::Off);
 			bool supportEnabled = false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			supportEnabled = a_args.settings.experimentalGpuMaskSupport;
+			supportEnabled = a_args.settings.experimentalGpuMaskSupport && !UsesSceneCharacterStrengths(a_args.settings);
 #endif
 			auto* support = supportEnabled && !fullSurfaceDispatch && UsesAuthoredMask(a_args.settings.maskTestMode) ? FindCurrentSupport(a_args) : nullptr;
 			const bool gpuSupport =
@@ -2165,14 +2171,10 @@ namespace NeuralRendering
 			constants.authoredRegion[1] = capturedRegion.baseY;
 			constants.authoredRegion[2] = capturedRegion.width;
 			constants.authoredRegion[3] = capturedRegion.height;
-			constants.categoryStrengths[0] =
-				a_args.settings.faces ? a_args.settings.faceStrength : 0.0f;
-			constants.categoryStrengths[1] =
-				a_args.settings.skin ? a_args.settings.skinStrength : 0.0f;
-			constants.categoryStrengths[2] =
-				a_args.settings.hair ? a_args.settings.hairStrength : 0.0f;
-			constants.categoryStrengths[3] = a_args.settings.armor ? 1.0f : 0.0f;
-			constants.featherOptions[3] = a_args.settings.weapons ? 1.0f : 0.0f;
+			constants.blendOptions[0] = UsesSceneCharacterStrengths(a_args.settings) ? 1u : 0u;
+			const auto categoryStrengths = GetCharacterMaskStrengths(a_args.settings);
+			std::copy_n(categoryStrengths.begin(), std::size(constants.categoryStrengths), constants.categoryStrengths);
+			constants.featherOptions[3] = categoryStrengths.back();
 			if (a_plan.regions.empty() ||
 				a_plan.regions.size() > CharacterPolicy::kMaximumEligibilityRegions) {
 				return false;
@@ -2432,6 +2434,7 @@ namespace NeuralRendering
 		} catch (...) {
 			auto disabled = a_requested;
 			disabled.enabled = false;
+			disabled.sceneStrengthsEnabled = false;
 			return disabled;
 		}
 	}
@@ -2491,6 +2494,11 @@ namespace NeuralRendering
 					++state_->snapshot_.currentExcludedActorGroups[groupIndex];
 #endif
 				return false;
+			}
+			if (UsesSceneCharacterStrengths(a_args.settings)) {
+				admission.admitted = true;
+				admission.focus = { a_frame, a_frame, 0u, true, true };
+				return true;
 			}
 			if (!TryRefineCharacterActor(state_->actorRefinements_)) {
 				admission.distanceMeters = 0.0f;
@@ -3010,7 +3018,7 @@ namespace NeuralRendering
 					evidence->source = state_->sourceEvidence_;
 			}
 			Increment(state_->snapshot_.preparationAttempts);
-			state_->snapshot_.enabled = a_args.settings.enabled;
+			state_->snapshot_.enabled = IsCharacterMaskActive(a_args.settings);
 			const std::uint32_t sourceWorldFrame = a_args.sourceWorldFrame;
 			const auto fail = [&](std::string a_detail) {
 				if (evidence) {
@@ -3032,7 +3040,7 @@ namespace NeuralRendering
 				return false;
 			};
 
-			if (!a_args.settings.enabled)
+			if (!IsCharacterMaskActive(a_args.settings))
 				return fail("character mask preparation was requested while disabled");
 			if (!a_args.device || !a_args.context || a_args.eyeIndex >= (globals::game::isVR ? 2u : 1u) ||
 				a_args.featureSlot >= state_->slots_.size() ||
@@ -3235,19 +3243,20 @@ namespace NeuralRendering
 					evidence->reused = false;
 				auto sourceArgs = a_args;
 				sourceArgs.frameId = sourceWorldFrame;
-				auto plan = state_->BuildPlan(sourceArgs);
+				const bool sceneStrengths = UsesSceneCharacterStrengths(a_args.settings);
+				auto plan = sceneStrengths ? State::ProjectedPlan{} : state_->BuildPlan(sourceArgs);
 				const bool authoredMode =
 					UsesAuthoredMask(a_args.settings.maskTestMode);
 				const bool forcedEmpty =
 					a_args.settings.maskTestMode ==
 					CharacterMaskTestMode::ForceZero;
-				const bool fullOutputMask =
-					a_args.settings.maskTestMode ==
-						CharacterMaskTestMode::ForceOne ||
-					a_args.settings.maskTestMode ==
-						CharacterMaskTestMode::ForceHalf ||
-					a_args.settings.maskTestMode ==
-						CharacterMaskTestMode::InvertAuthored;
+				const bool fullOutputMask = sceneStrengths ||
+				                            a_args.settings.maskTestMode ==
+				                                CharacterMaskTestMode::ForceOne ||
+				                            a_args.settings.maskTestMode ==
+				                                CharacterMaskTestMode::ForceHalf ||
+				                            a_args.settings.maskTestMode ==
+				                                CharacterMaskTestMode::InvertAuthored;
 				if (authoredMode && !logicalEmptyCapture &&
 					plan.projectionUncertain) {
 					// Projection is an optimization boundary, not semantic proof. Fall
@@ -3270,7 +3279,7 @@ namespace NeuralRendering
 						.maxX = a_args.outputWidth,
 						.maxY = a_args.outputHeight,
 					} };
-					plan.fullEyeEligibilityFallback = true;
+					plan.fullEyeEligibilityFallback = !sceneStrengths;
 					plan.eligibilitySignature = HashCombine(
 						plan.eligibilitySignature, 0x46554C4C4D41534Bull);
 				}
@@ -3281,7 +3290,7 @@ namespace NeuralRendering
 												   sourceArgs, plan, sourceEyeWidth,
 												   sourceDesc.Height);
 #endif
-				const bool cpuProvenEmpty = authoredMode &&
+				const bool cpuProvenEmpty = !sceneStrengths && authoredMode &&
 				                            (logicalEmptyCapture || plan.regions.empty());
 				slot.emptyProof = forcedEmpty    ? CharacterEmptyProofKind::DiagnosticZero :
 				                  cpuProvenEmpty ? CharacterEmptyProofKind::CpuSelection :
@@ -3314,22 +3323,23 @@ namespace NeuralRendering
 															a_args.outputHeight);
 				slot.maskWorkSubrect = requiredComputeSubrect;
 				if (selectionEmpty || fullOutputMask) {
-					// Empty authored masks already break provider history. Do not
-					// retain a potentially large stale ROI for the next character.
-					// Diagnostic full-eye modes must not contaminate authored ROI state.
+					// Empty selections and full-region processing must not retain
+					// a stale actor crop for the next restricted selection.
 					slot.stableComputeSubrect = {};
 				}
 				slot.computeSubrect = requiredComputeSubrect;
 				slot.maskRoiCurrentFrame = authoredMode;
 				slot.maskRoiOccupiedTiles = 0;
 				slot.maskRoiRequiredSubrect = requiredComputeSubrect;
-				slot.maskRoiStatus = authoredMode ? "cpu_geometry_single" : "disabled";
+				slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" :
+				                                                                           "disabled";
 				const bool provenEmpty = selectionEmpty;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				auto& cropEye = state_->snapshot_.eyes[a_args.eyeIndex];
 				cropEye.cropQualificationKey = 0;
 				cropEye.cropCandidate = {};
-				cropEye.cropDecision = provenEmpty ? "empty" : "diagnostic_full";
+				cropEye.cropDecision = provenEmpty ? "empty" : sceneStrengths ? "scene_full_region" :
+				                                                                "diagnostic_full";
 #endif
 				bool useCrop = false;
 				if (!provenEmpty && !fullOutputMask) {
@@ -3410,11 +3420,16 @@ namespace NeuralRendering
 				if (forcedEmpty)
 					slot.maskRoiStatus = "diagnostic_zero";
 				if (provenEmpty || logicalEmptyCapture) {
-					float clearValue = 0.0f;
+					float clearValue = sceneStrengths ? 1.0f : 0.0f;
 					switch (a_args.settings.maskTestMode) {
+					case CharacterMaskTestMode::ForceZero:
+						clearValue = 0.0f;
+						break;
 					case CharacterMaskTestMode::ForceOne:
-					case CharacterMaskTestMode::InvertAuthored:
 						clearValue = 1.0f;
+						break;
+					case CharacterMaskTestMode::InvertAuthored:
+						clearValue = sceneStrengths ? 0.0f : 1.0f;
 						break;
 					case CharacterMaskTestMode::ForceHalf:
 						clearValue = 0.5f;
@@ -3459,12 +3474,10 @@ namespace NeuralRendering
 				eye.contentSerial = slot.contentSerial;
 				eye.featureSlot = a_args.featureSlot;
 				eye.effectiveCategoryMask = GetEnabledCharacterCategoryMask(a_args.settings);
-				eye.effectiveCategoryStrengths = {
-					a_args.settings.faceStrength, a_args.settings.skinStrength, a_args.settings.hairStrength,
-					a_args.settings.armor ? 1.0f : 0.0f, a_args.settings.weapons ? 1.0f : 0.0f
-				};
+				eye.effectiveCategoryStrengths = GetCharacterCategoryStrengths(a_args.settings);
 				eye.evaluationWidth = a_args.outputWidth;
 				eye.evaluationHeight = a_args.outputHeight;
+				eye.actorEnclosureCountsAvailable = !sceneStrengths;
 				eye.visibleFaces = plan.visibleFaces;
 				eye.visibleCharacterRegions = plan.visibleCharacters;
 				eye.selectedCharacterRegions = plan.selectedCharacters;
@@ -3701,7 +3714,7 @@ namespace NeuralRendering
 			}
 			bool automaticCrop = false;
 			bool automaticQualified = false;
-			const bool automaticPair = kDevelopmentDiagnostics && a_args.front().settings.cropMode == static_cast<std::uint32_t>(CharacterCropMode::Automatic);
+			const bool automaticPair = kDevelopmentDiagnostics && !UsesSceneCharacterStrengths(a_args.front().settings) && a_args.front().settings.cropMode == static_cast<std::uint32_t>(CharacterCropMode::Automatic);
 			if (automaticPair) {
 				std::array<std::uint64_t, 2> keys{};
 				for (const auto& args : a_args)

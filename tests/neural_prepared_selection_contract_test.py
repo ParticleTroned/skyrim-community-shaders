@@ -121,7 +121,12 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertIn("readback.captureSerial == earlyMaskCaptureSerial_", early)
         self.assertIn("readback.frame == a_args.sourceWorldFrame", early)
         self.assertIn("readback.categories == GetEnabledCharacterCategoryMask(a_args.settings)", early)
-        self.assertIn('slot.maskRoiStatus = authoredMode ? "cpu_geometry_single" : "disabled";', source)
+        self.assertTrue(
+            'slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" : "disabled";' in " ".join(source.split()),
+            "Scene adjustments must report full-region planning separately from actor enclosures",
+        )
+        self.assertTrue("const bool cpuProvenEmpty = !sceneStrengths && authoredMode &&" in source,
+                        "An empty actor selection cannot bypass ordinary scene NR")
         self.assertIn('slot.emptyProof = forcedEmpty', source)
         finalization = source[source.index("bool CharacterRendering::FinalizePreparedMasks("):
                               source.index("void CharacterRendering::ResolveFeature18Disposition(")]

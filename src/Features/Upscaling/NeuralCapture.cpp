@@ -310,7 +310,8 @@ nlohmann::json Upscaling::SerializeNeuralCaptureRecord(const NeuralCaptureRecord
 		{ "route", GetNeuralStereoRouteRoleName(route.role) }, { "logicalEyeCount", globals::game::isVR ? 2u : 1u },
 		{ "mode", NeuralRendering::GetRenderingModeName(mode) }, { "fovOnly", record.settings.neuralRenderingFovOnly },
 		{ "renderscaleFov", record.settings.neuralRenderingRenderscaleFov },
-		{ "characterSelectionEnabled", record.settings.neuralCharacterRenderingEnabled && record.settings.neuralCharacterVisualIsolationEnabled },
+		{ "characterSelectionEnabled", (record.settings.neuralCharacterRenderingEnabled || record.settings.neuralCharacterSceneStrengthsEnabled) && record.settings.neuralCharacterVisualIsolationEnabled },
+		{ "characterSceneStrengthsEnabled", record.settings.neuralCharacterSceneStrengthsEnabled },
 		{ "captureEpoch", record.captureEpoch }, { "configurationEpoch", record.configurationEpoch },
 		{ "sourceContext", mode == NeuralRendering::RenderingMode::ReducedResolution                                     ? "render_resolution_before_dlss" :
 						   route.insertionPoint == static_cast<uint32_t>(NeuralRendering::InsertionPoint::FinalLdrPreUi) ? "final_ldr_before_ui" :

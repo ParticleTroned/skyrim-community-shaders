@@ -85,6 +85,8 @@ namespace NeuralRendering
 		inline constexpr float kDefaultFaceStrength = 1.0f;
 		inline constexpr float kDefaultSkinStrength = 1.0f;
 		inline constexpr float kDefaultHairStrength = 0.65f;
+		inline constexpr float kDefaultArmorStrength = 1.0f;
+		inline constexpr float kDefaultWeaponsStrength = 1.0f;
 		inline constexpr float kDefaultMaximumDistanceMeters = 10.0f;
 		inline constexpr bool kDefaultAdaptiveRoiSelection = false;
 		inline constexpr float kDefaultFocusScale = 0.75f;
@@ -124,7 +126,9 @@ namespace NeuralRendering
 
 	struct CharacterSettings
 	{
+		/** Restrict coverage to actors; otherwise scene adjustments are opt-in. */
 		bool enabled = CharacterPolicy::kDefaultEnabled;
+		bool sceneStrengthsEnabled = false;
 		bool providerBlending = false;
 		bool humans = true;
 		bool otherHumanoids = true;
@@ -139,6 +143,8 @@ namespace NeuralRendering
 		float faceStrength = CharacterPolicy::kDefaultFaceStrength;
 		float skinStrength = CharacterPolicy::kDefaultSkinStrength;
 		float hairStrength = CharacterPolicy::kDefaultHairStrength;
+		float armorStrength = CharacterPolicy::kDefaultArmorStrength;
+		float weaponsStrength = CharacterPolicy::kDefaultWeaponsStrength;
 		float maximumDistanceMeters =
 			CharacterPolicy::kDefaultMaximumDistanceMeters;
 		float focusScale = CharacterPolicy::kDefaultFocusScale;
@@ -165,6 +171,43 @@ namespace NeuralRendering
 
 		bool operator==(const CharacterSettings&) const = default;
 	};
+
+	/** Actor-only coverage takes precedence over ordinary-scene adjustments. */
+	[[nodiscard]] constexpr bool UsesSceneCharacterStrengths(const CharacterSettings& settings) noexcept
+	{
+		return settings.sceneStrengthsEnabled && !settings.enabled;
+	}
+
+	/** Both coverage scopes consume the same source-frame material mask. */
+	[[nodiscard]] constexpr bool IsCharacterMaskActive(const CharacterSettings& settings) noexcept
+	{
+		return settings.enabled || settings.sceneStrengthsEnabled;
+	}
+
+	/** Resolve coverage scope without changing saved actor-only preferences. */
+	[[nodiscard]] constexpr CharacterSettings ResolveCharacterScopeSettings(CharacterSettings settings) noexcept
+	{
+		if (settings.enabled)
+			settings.sceneStrengthsEnabled = false;
+		if (UsesSceneCharacterStrengths(settings)) {
+			settings.maximumDistanceMeters = 0.0f;
+			settings.focusScale = 1.0f;
+			settings.minimumFacePixelSize = 1;
+			settings.adaptiveRoiSelection = false;
+			settings.cropMode = static_cast<std::uint32_t>(CharacterCropMode::Uncropped);
+			settings.roiMargin = 0.0f;
+			settings.roiHoldFrames = 0;
+			settings.depthAwareFeather = false;
+			settings.featherRadius = 0;
+			settings.featherDepthThreshold = 0.0f;
+			settings.visibilityDepthTest = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			settings.experimentalCurrentContext = false;
+			settings.experimentalGpuMaskSupport = false;
+#endif
+		}
+		return settings;
+	}
 
 	[[nodiscard]] constexpr CharacterDebugView ClampCharacterDebugView(
 		std::uint32_t a_value) noexcept
@@ -193,6 +236,10 @@ namespace NeuralRendering
 		a_settings.skinStrength = finiteClamp(a_settings.skinStrength, CharacterPolicy::kDefaultSkinStrength,
 			CharacterPolicy::kMinimumStrength, CharacterPolicy::kMaximumStrength);
 		a_settings.hairStrength = finiteClamp(a_settings.hairStrength, CharacterPolicy::kDefaultHairStrength,
+			CharacterPolicy::kMinimumStrength, CharacterPolicy::kMaximumStrength);
+		a_settings.armorStrength = finiteClamp(a_settings.armorStrength, CharacterPolicy::kDefaultArmorStrength,
+			CharacterPolicy::kMinimumStrength, CharacterPolicy::kMaximumStrength);
+		a_settings.weaponsStrength = finiteClamp(a_settings.weaponsStrength, CharacterPolicy::kDefaultWeaponsStrength,
 			CharacterPolicy::kMinimumStrength, CharacterPolicy::kMaximumStrength);
 		a_settings.maximumDistanceMeters = finiteClamp(a_settings.maximumDistanceMeters,
 			CharacterPolicy::kDefaultMaximumDistanceMeters, CharacterPolicy::kMinimumDistanceMeters,
@@ -247,23 +294,68 @@ namespace NeuralRendering
 		}
 	}
 
+	namespace CharacterPolicy
+	{
+		struct CategoryControl
+		{
+			bool CharacterSettings::* selected;
+			float CharacterSettings::* strength;
+		};
+		inline constexpr std::array<CategoryControl, kCategoryCount> kCategoryControls{ {
+			{ &CharacterSettings::faces, &CharacterSettings::faceStrength },
+			{ &CharacterSettings::skin, &CharacterSettings::skinStrength },
+			{ &CharacterSettings::hair, &CharacterSettings::hairStrength },
+			{ &CharacterSettings::armor, &CharacterSettings::armorStrength },
+			{ &CharacterSettings::weapons, &CharacterSettings::weaponsStrength },
+		} };
+	}
+
+	/** Selection remains meaningful at zero strength in ordinary-scene NR. */
+	[[nodiscard]] constexpr bool IsCharacterCategorySelected(
+		CharacterCategory category, const CharacterSettings& settings) noexcept
+	{
+		return CharacterPolicy::CategoryBit(category) != 0 &&
+		       settings.*CharacterPolicy::kCategoryControls[static_cast<std::size_t>(category) - 1].selected;
+	}
+
+	/** Resolves the shared selection strength for eligibility and GPU masking. */
+	[[nodiscard]] constexpr float GetCharacterCategoryStrength(
+		CharacterCategory a_category, const CharacterSettings& a_settings) noexcept
+	{
+		return IsCharacterCategorySelected(a_category, a_settings) ?
+		           a_settings.*CharacterPolicy::kCategoryControls[static_cast<std::size_t>(a_category) - 1].strength :
+		           0.0f;
+	}
+
+	/** Uses the authored category order for mask constants and diagnostics. */
+	[[nodiscard]] constexpr std::array<float, CharacterPolicy::kCategoryCount> GetCharacterCategoryStrengths(
+		const CharacterSettings& a_settings) noexcept
+	{
+		std::array<float, CharacterPolicy::kCategoryCount> result{};
+		for (std::size_t index = 0; index < result.size(); ++index)
+			result[index] = GetCharacterCategoryStrength(CharacterPolicy::kCategories[index], a_settings);
+		return result;
+	}
+
 	[[nodiscard]] constexpr bool IsCharacterCategoryEnabled(
 		CharacterCategory a_category, const CharacterSettings& a_settings) noexcept
 	{
-		switch (a_category) {
-		case CharacterCategory::Face:
-			return a_settings.faces && a_settings.faceStrength > 0.0f;
-		case CharacterCategory::Skin:
-			return a_settings.skin && a_settings.skinStrength > 0.0f;
-		case CharacterCategory::Hair:
-			return a_settings.hair && a_settings.hairStrength > 0.0f;
-		case CharacterCategory::Armor:
-			return a_settings.armor;
-		case CharacterCategory::Weapons:
-			return a_settings.weapons;
-		default:
-			return false;
+		return UsesSceneCharacterStrengths(a_settings) ? IsCharacterCategorySelected(a_category, a_settings) :
+		                                                 GetCharacterCategoryStrength(a_category, a_settings) > 0.0f;
+	}
+
+	/** Scene masks subtract selected edits from full NR; actor masks add them. */
+	[[nodiscard]] constexpr std::array<float, CharacterPolicy::kCategoryCount> GetCharacterMaskStrengths(
+		const CharacterSettings& settings) noexcept
+	{
+		auto strengths = GetCharacterCategoryStrengths(settings);
+		if (UsesSceneCharacterStrengths(settings)) {
+			for (std::size_t index = 0; index < strengths.size(); ++index)
+				strengths[index] = IsCharacterCategoryEnabled(CharacterPolicy::kCategories[index], settings) ?
+				                       1.0f - strengths[index] :
+				                       0.0f;
 		}
+		return strengths;
 	}
 
 	[[nodiscard]] constexpr std::uint32_t GetEnabledCharacterCategoryMask(

@@ -1973,7 +1973,8 @@ foreach(_strict_zero_contract IN ITEMS
 endforeach()
 foreach(_geometry_roi_contract IN ITEMS
     [[ResolveStableCharacterComputeSubrect(requiredComputeSubrect, a_args.outputWidth,]]
-    [[slot.maskRoiStatus = authoredMode ? "cpu_geometry_single" : "disabled";]]
+    [[slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" :]]
+    [[eye.actorEnclosureCountsAvailable = !sceneStrengths;]]
     [[slot.prepareKey.sourceWorldFrame != args.sourceWorldFrame]]
     [[slot.prepareKey.generation != args.generation]]
     [[slot.prepareKey.settings != BuildSettingsKey(args.settings)]]
@@ -3227,6 +3228,7 @@ endforeach()
 
 set(_character_configuration_fields
     characterEnabled
+    characterSceneStrengthsEnabled
     characterVisualIsolationEnabled
     characterFaces
     characterSkin
@@ -3241,6 +3243,8 @@ set(_character_configuration_fields
     characterFaceStrength
     characterSkinStrength
     characterHairStrength
+    characterArmorStrength
+    characterWeaponsStrength
     characterMaximumDistanceMeters
     characterAdaptiveRoiSelection
     characterFocusScale

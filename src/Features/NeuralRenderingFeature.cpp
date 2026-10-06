@@ -705,7 +705,10 @@ void NeuralRenderingFeature::EarlyPrepass()
 void NeuralRenderingFeature::DrawSettings()
 {
 	globals::features::upscaling.DrawNeuralRenderingSettings(
-		globals::features::upscaling.GetUpscaleMethod());
+		globals::features::upscaling.GetUpscaleMethod(), false, [this] { DrawColourSettings(); });
+}
+void NeuralRenderingFeature::DrawColourSettings()
+{
 	auto runtimeAvailabilityGuard = Util::DisableGuard(!NeuralRendering::Runtime::IsInstalled());
 	const auto& upscaling = globals::features::upscaling;
 	auto fovAvailabilityGuard = Util::DisableGuard(
@@ -715,16 +718,16 @@ void NeuralRenderingFeature::DrawSettings()
 	const bool showDiagnostics = NeuralRendering::kDevelopmentDiagnostics && globals::state && globals::state->IsDeveloperMode();
 	auto config = Registry::Instance().Snapshot();
 	bool changed = false;
-	ImGui::TextWrapped("These controls apply to full-resolution, FOV and before-upscaling NR, including characters.");
+	ImGui::TextWrapped("Colour choices apply to the shared NR image before category strengths.");
 	changed |= ImGui::Checkbox("Enable colour processing", &config.settings.enabled);
 	if (auto tooltip = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Applies the selected colour mode and preservation settings. Off uses Original model output while NR stays on; your colour settings are retained.");
+		ImGui::TextUnformatted("Applies your colour choices below. Off keeps NR on and uses its original colours.");
 	static constexpr std::array colourModes{ "Original", "Managed (experimental)", "Preserve source", "Neural lighting" };
 	static constexpr std::array colourModeHelp{
-		"Uses the model output directly, without source-colour preservation. NR remains active.",
-		"Uses experimental colour and exposure reconstruction with session-only calibration. Preservation sliders do not apply.",
-		"Keeps the game's colour and adds neural brightness detail. The preservation sliders control how much lighting and model appearance may change.",
-		"Keeps the game's source colour and alpha while applying the full bounded neural brightness field. Model chroma is not applied."
+		"Keeps the colours produced by NR without correcting them to match the game.",
+		"Tests an alternative colour correction. Adjustments last only for this game session.",
+		"Keeps the game's colours while adding NR detail. Use the sliders below to control the changes.",
+		"Keeps the game's colours while allowing NR to change lighting and brightness detail."
 	};
 	static_assert(colourModes.size() == static_cast<std::size_t>(Mode::Count) && colourModeHelp.size() == colourModes.size());
 	const bool colourModeOpen = ImGui::BeginCombo("Colour mode", colourModes[static_cast<std::size_t>(config.settings.mode)]);
@@ -749,7 +752,7 @@ void NeuralRenderingFeature::DrawSettings()
 		}
 		ImGui::EndCombo();
 	}
-	ImGui::TextWrapped("Original uses the model output directly. Preserve source retains selected neural detail. Neural lighting keeps source colour while applying neural brightness. Turning colour processing off uses Original while NR stays enabled.");
+
 	if (config.settings.mode == Mode::Managed) {
 		ImGui::TextWrapped("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.");
 		ImGui::TextWrapped(showDiagnostics ?
@@ -768,10 +771,10 @@ void NeuralRenderingFeature::DrawSettings()
 			changed = true;
 		}
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("100% suppresses broad neural brightness changes; 0% allows them. Fine detail can remain at either end. Applies to Preserve source; Neural lighting always uses 0% without changing this saved value.");
+			ImGui::TextUnformatted("100% keeps the game's overall lighting; 0% allows NR to change it. Fine detail can remain. Available with Preserve source.");
 	}
 	if (config.settings.mode == Mode::NeuralLighting)
-		ImGui::TextWrapped("Neural lighting admits the full bounded neural brightness field. Lighting preservation and Neural appearance mix do not apply.");
+		ImGui::TextWrapped("Neural lighting allows lighting changes. Lighting preservation and Neural appearance mix do not apply.");
 	else if (config.settings.mode != Mode::PreserveSource)
 		ImGui::TextWrapped("Choose Preserve source to adjust lighting preservation.");
 	else if (!config.settings.enabled)
@@ -781,19 +784,19 @@ void NeuralRenderingFeature::DrawSettings()
 	else if (config.settings.detailStrength == 0.0f || config.settings.maximumDetailStops == 0.0f)
 		ImGui::TextWrapped("Raise Detail contribution and Maximum detail gain above zero to use lighting preservation.");
 	if (usesSourceColourReconstruction) {
-		changed |= ImGui::SliderFloat("Detail contribution", &config.settings.detailStrength, 0, 2);
+		changed |= ImGui::SliderFloat("Detail contribution", &config.settings.detailStrength, 0, 2, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Sets the strength of neural brightness applied to source colour. 0 removes it; 1 uses its normal strength; 2 doubles it before the gain limit. Shared by Preserve source and Neural lighting.");
+			ImGui::TextUnformatted("Sets how much NR brightness detail is added to the game's colours: 0 removes it, 1 is normal, and 2 doubles it.");
 	}
 	if (config.settings.mode == Mode::PreserveSource) {
-		changed |= ImGui::SliderFloat("Neural appearance mix", &config.settings.appearanceMix, 0, 1);
+		changed |= ImGui::SliderFloat("Neural appearance mix", &config.settings.appearanceMix, 0, 1, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("0 uses source colour with the selected neural detail; 1 uses the reconstructed model appearance. Higher values admit more model colour and lighting and bypass more preservation.");
+			ImGui::TextUnformatted("Blends from the game's colours with NR detail at 0 to the full NR appearance at 1.");
 	}
 	if (usesSourceColourReconstruction) {
-		changed |= ImGui::SliderFloat("Maximum detail gain (stops)", &config.settings.maximumDetailStops, 0, 2);
+		changed |= ImGui::SliderFloat("Maximum detail gain (stops)", &config.settings.maximumDetailStops, 0, 2, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Caps neural brightening and darkening: 1 stop allows up to twice or half the source brightness. Shared by Preserve source and Neural lighting; Preserve source appearance mix is outside this limit.");
+			ImGui::TextUnformatted("Limits added brightness changes. 1 stop allows up to twice or half the original brightness. Neural appearance mix is applied separately.");
 	}
 	if (showDiagnostics && ImGui::TreeNode("Colour experiments and diagnostics")) {
 		if (config.experiments.captureEngineExposure || config.experiments.captureFrameEvidence || config.experiments.diagnostics) {
@@ -851,7 +854,7 @@ void NeuralRenderingFeature::DrawSettings()
 					ImGui::TextUnformatted("Uses manual calibration or captured HDR exposure from the matching current or previous source frame. Previous-frame capture is for early-route experiments; missing evidence cannot supply that correction.");
 				p.exposureSource = static_cast<ExposureSource>(source);
 				float stops = std::log2(p.exposureMultiplier);
-				if (ImGui::SliderFloat("Calibration multiplier (EV)", &stops, -8, 8)) {
+				if (ImGui::SliderFloat("Calibration multiplier (EV)", &stops, -8, 8, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 					p.exposureMultiplier = std::exp2(stops);
 					changed = true;
 				}

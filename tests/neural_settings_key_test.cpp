@@ -41,8 +41,63 @@ int main()
 			actor.neuralRenderingMode = mode;
 			actor.neuralCharacterRenderingEnabled = true;
 			const auto compositorKey = BuildNeuralRenderingSettingsKey(actor);
+			auto savedScenePreference = actor;
+			savedScenePreference.neuralCharacterSceneStrengthsEnabled = true;
+			require(BuildNeuralRenderingSettingsKey(savedScenePreference) == compositorKey);
+			for (const auto field : { &Upscaling::Settings::neuralCharacterArmorStrength, &Upscaling::Settings::neuralCharacterWeaponsStrength }) {
+				auto changed = actor;
+				changed.*field = 0.375f;
+				require(BuildNeuralRenderingSettingsKey(changed) != compositorKey);
+				changed.neuralCharacterRenderingEnabled = false;
+				auto inactive = changed;
+				inactive.*field = 1.0f;
+				require(BuildNeuralRenderingSettingsKey(changed) == BuildNeuralRenderingSettingsKey(inactive));
+			}
 			actor.neuralCharacterProviderBlending = true;
 			require(BuildNeuralRenderingSettingsKey(actor) != compositorKey);
+			actor.neuralCharacterRenderingEnabled = false;
+			const auto ordinaryKey = BuildNeuralRenderingSettingsKey(actor);
+			actor.neuralCharacterSceneStrengthsEnabled = true;
+			const auto sceneKey = BuildNeuralRenderingSettingsKey(actor);
+			require(sceneKey != ordinaryKey);
+			for (const auto field : { &Upscaling::Settings::neuralCharacterMaximumDistanceMeters,
+					 &Upscaling::Settings::neuralCharacterFocusScale, &Upscaling::Settings::neuralCharacterRoiMargin,
+					 &Upscaling::Settings::neuralCharacterDepthThreshold }) {
+				auto changed = actor;
+				changed.*field += 0.25f;
+				require(BuildNeuralRenderingSettingsKey(changed) == sceneKey);
+			}
+			for (const auto field : { &Upscaling::Settings::neuralCharacterMinimumFacePixelSize,
+					 &Upscaling::Settings::neuralCharacterCropMode, &Upscaling::Settings::neuralCharacterRoiHoldFrames,
+					 &Upscaling::Settings::neuralCharacterFeatherRadius }) {
+				auto changed = actor;
+				++(changed.*field);
+				require(BuildNeuralRenderingSettingsKey(changed) == sceneKey);
+			}
+			for (const auto field : { &Upscaling::Settings::neuralCharacterAdaptiveRoiSelectionEnabled,
+					 &Upscaling::Settings::neuralCharacterDepthAwareFeatherEnabled,
+					 &Upscaling::Settings::neuralCharacterVisibilityDepthTestEnabled
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					 ,
+					 &Upscaling::Settings::neuralCharacterCurrentContextEnabled,
+					 &Upscaling::Settings::neuralCharacterGpuMaskSupportEnabled
+#endif
+				 }) {
+				auto changed = actor;
+				changed.*field = !(changed.*field);
+				require(BuildNeuralRenderingSettingsKey(changed) == sceneKey);
+				changed.neuralCharacterRenderingEnabled = true;
+				auto restricted = actor;
+				restricted.neuralCharacterRenderingEnabled = true;
+				require(BuildNeuralRenderingSettingsKey(changed) != BuildNeuralRenderingSettingsKey(restricted));
+			}
+			for (const auto field : { &Upscaling::Settings::neuralCharacterFaceStrength, &Upscaling::Settings::neuralCharacterSkinStrength,
+					 &Upscaling::Settings::neuralCharacterHairStrength, &Upscaling::Settings::neuralCharacterArmorStrength,
+					 &Upscaling::Settings::neuralCharacterWeaponsStrength }) {
+				auto changed = actor;
+				changed.*field = 0.375f;
+				require(BuildNeuralRenderingSettingsKey(changed) != sceneKey);
+			}
 		}
 	}
 	globals::game::isVR = true;

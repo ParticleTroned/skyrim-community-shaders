@@ -59,6 +59,7 @@ namespace NeuralRendering
 		std::array<float, CharacterPolicy::kCategoryCount> effectiveCategoryStrengths{};
 		std::uint32_t evaluationWidth = 0;
 		std::uint32_t evaluationHeight = 0;
+		bool actorEnclosureCountsAvailable = false;
 		std::uint32_t visibleFaces = 0;
 		std::uint32_t visibleCharacterRegions = 0;
 		std::uint32_t selectedCharacterRegions = 0;

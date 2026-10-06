@@ -25,6 +25,11 @@ namespace Runtime
 		using GodrayProfile = VolumetricLightingTuning::Profile;
 #include "volumetric_lighting_settings_under_test.h"
 		Settings settings;
+		Settings runtimeSettings;
+		mutable std::mutex settingsMutex;
+		bool initialised = false;
+		bool runtimeEnabled = false;
+		bool inInterior = false;
 		bool loaded = true;
 		bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 		GodrayProfile GetRuntimeGodrayProfile() const;

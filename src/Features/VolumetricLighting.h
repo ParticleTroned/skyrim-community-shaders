@@ -1,7 +1,11 @@
 #pragma once
 
 #include "RE/B/BSVolumetricLightingRenderData.h"
+#include "VolumetricLightingRuntime.h"
 #include "VolumetricLightingTuning.h"
+
+#include <atomic>
+#include <mutex>
 
 struct VolumetricLighting : Feature
 {
@@ -13,6 +17,8 @@ public:
 		int32_t Width = 320;
 		int32_t Height = 192;
 		int32_t Depth = 90;
+
+		bool operator==(const TextureSize&) const = default;
 	};
 
 	struct Settings
@@ -26,12 +32,16 @@ public:
 		GodrayProfile InteriorGodrays;
 		int32_t InteriorQuality = 2;
 		TextureSize InteriorCustomSize;
+
+		bool operator==(const Settings&) const = default;
 	};
 
+private:
 	Settings settings;
+	Settings runtimeSettings;
+	mutable std::mutex settingsMutex;
 
-	bool enabledAtBoot = false;
-
+public:
 	virtual inline std::string GetName() override { return "Volumetric Lighting"; }
 	virtual inline std::string GetShortName() override { return "VolumetricLighting"; }
 	virtual std::string_view GetShaderCacheAbiVersion() override { return "godray-composite-color-1"; }
@@ -64,8 +74,14 @@ public:
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
+	/** @return The latest requested exterior setting, including changes awaiting a safe frame. */
 	bool IsExteriorEnabled() const;
+	/** @brief Stage an exterior preference from any thread; never touches engine or graphics state. */
 	void SetExteriorEnabled(bool enabled);
+	/** @brief Reconcile engine state at the next safe render boundary after a load. */
+	void RequestRuntimeReset();
+	bool IsPerformanceCostMeasurementReady() const override;
+	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for volumetric lighting transition"; }
 	/** @return The active context's sanitized tuning, or a neutral profile when unavailable. */
 	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void PostPostLoad() override;
@@ -139,11 +155,11 @@ private:
 
 	void DrawGodrayTuningSettings();
 	void DrawGodrayProfileSettings(const char* label, GodrayProfile& profile);
-	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior, bool inLocationType);
+	void DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, bool isInterior);
 	TextureSize& FetchCurrentSizeInUnits(bool interior);
 	bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 	void SanitizeSettings();
-	void SetupVL();
+	void ApplyRuntimeTarget(const VolumetricLightingRuntime::Target& target, const VolumetricLightingRuntime::Changes& changes);
 	void UpdateBlurDimensions();
 	void ClearVolumetricLightingTargets();
 	static int32_t ClampQualityIndex(int32_t quality);
@@ -168,10 +184,12 @@ private:
 	TextureSize* gVolumetricLightingSizeMedium = nullptr;
 	TextureSize* gVolumetricLightingSizeLow = nullptr;
 
+	std::atomic_bool runtimeResetRequested{ true };
+	VolumetricLightingRuntime::Controller runtimeController;
+	bool enabledAtBoot = false;
+	bool runtimeEnabled = false;
 	bool initialised = false;
 	bool inInterior = false;
-	bool inInteriorWithSun = false;
-	bool rainOnlySuppressionActive = false;
 	VolumetricLightingDescriptor runtimeDescriptor{};
 
 	struct VLData

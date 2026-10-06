@@ -79,6 +79,46 @@ their own outstanding reload state so an unrelated successful reload cannot
 clear a restart requirement. The author interface has no success/error
 return for these methods; CSX cannot certify the external parser's outcome.
 
+## Volumetric lighting transitions
+
+`CS>VLExterior` stages the exterior preference. The getter returns the latest
+requested value immediately; the setter is safe to call from a worker and
+never writes engine flags, changes native quality, or clears render targets.
+An Interior conditional containing this command still edits the exterior
+preference, not the separate interior VL checkbox.
+
+API calls, menu edits, defaults and measurement changes share synchronized
+settings. The early render prepass snapshots the final request once per frame
+and applies it while owning the native renderer. Opposing requests received
+before that snapshot cancel without intermediate engine changes. Requests
+received afterward remain pending for a later frame; conflicting policies
+across different frames are not suppressed or assigned a new priority.
+
+Save/load activity, the existing post-load grace, main/loading menus, and an
+unattached or inconsistent destination defer application. Every completed save
+load or new game forces reconciliation, including destinations with the same
+interior/exterior classification. Missing TES or player-cell state does not
+count as an exterior. Renderer-lock contention retains the pending work for
+a later frame. Only changed native quality/dimensions are reapplied; history
+is cleared when entering a disabled or weather-suppressed state, on relevant
+quality changes, or during reconciliation. Godray profiles use the same
+applied settings snapshot, and cost measurement waits for its requested
+settings to reach that snapshot.
+
+VR retains its startup prerequisite: enabling VL after starting with both
+locations disabled requires restarting the game. SE/AE do not inherit that
+VR-only restriction. Existing flag-change logs remain; this hardening adds no
+logging, diagnostic counters, or caller-metadata collection.
+
+`VolumetricLightingRuntime` exercises the extracted production getter, setter,
+prepass and application methods with engine/graphics substitutes and the real
+renderer ownership lock. It covers coalescing, concurrent requests, frame
+boundaries, load/save guards, destination handoffs, lock contention,
+same-location reloads, quality bounds, rain suppression and the VR-only boot
+restriction. The companion blur, composite, tuning and Stabilizer API tests
+cover the surrounding contracts. These tests do not establish in-game crash
+resolution; live testing is performed by the user with the delivered AIO.
+
 ## Persistence and validation
 
 The editor preserves unedited bytes, including custom commands, comments,

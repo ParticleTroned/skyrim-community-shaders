@@ -3129,6 +3129,7 @@ if(BUILD_CONTROLLER_TESTS)
         volumetric_lighting_tuning_policy_test
         PRIVATE nlohmann_json::nlohmann_json
     )
+    include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_runtime.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     add_controller_test(

@@ -109,7 +109,9 @@ namespace CSPluginAPI
 		virtual bool GetSSGIEnabled() = 0;
 		virtual void SetSSGIEnabled(bool enabled) = 0;
 
+		/** @return The requested exterior preference, including pending changes. */
 		virtual bool GetVolumetricLightingExteriorEnabled() = 0;
+		/** @brief Stage a preference from any thread; applied at the next safe render boundary. */
 		virtual void SetVolumetricLightingExteriorEnabled(bool enabled) = 0;
 
 		// Controls the shared DLSS/FSR/FSR4 upscaler preset.

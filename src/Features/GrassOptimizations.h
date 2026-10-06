@@ -32,7 +32,7 @@ struct GrassOptimizations : Feature
 	bool IsPerformanceCostMeasurementReady() const override;
 	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for grass rendering"; }
 	json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
-	/** @brief Restore all grass controls after a cost comparison, respecting scene Hi-Z compatibility. */
+	/** @brief Restore all grass controls after a cost comparison. */
 	void RestorePerformanceCostMeasurementState(const json& state) override;
 	void LoadSettings(json& settings) override;
 	void SaveSettings(json& settings) override;
@@ -44,9 +44,8 @@ struct GrassOptimizations : Feature
 	void SetEnabled(bool enabled);
 	bool IsEnabled() const;
 	bool IsHookInstalled() const;
-	bool IsGrassHiZAvailable() const;
 	GrassPolicy::Settings GetSettings() const;
-	/** @brief Validate a complete settings transaction and reject conflicting grass Hi-Z activation. */
+	/** @brief Validate a complete settings transaction before publishing it. */
 	bool SetSettings(const GrassPolicy::Settings& settings, std::string& error);
 	/** @brief Apply a validated partial settings transaction; unknown fields reject the whole update. */
 	bool UpdateSettings(const json& update, std::string& error);

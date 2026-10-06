@@ -4,11 +4,6 @@
 #include "GrassOptimizations/GrassBucketRenderer.h"
 #include "Util.h"
 #include "Utils/UI.h"
-#include "VR.h"
-#include "VRDepthCullingTemporal.h"
-
-static_assert(static_cast<int>(VRDepthCullingTemporal::Mode::Hybrid) == GrassPolicy::kSceneHiZMode);
-
 namespace GrassPolicy
 {
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, Enabled, CrossCellBatching, FrustumCulling,
@@ -28,20 +23,10 @@ GrassPolicy::Settings GrassOptimizations::GetSettings() const
 
 bool GrassOptimizations::IsEnabled() const { return GetSettings().Enabled; }
 bool GrassOptimizations::IsHookInstalled() const { return renderer->IsHookInstalled(); }
-bool GrassOptimizations::IsGrassHiZAvailable() const
-{
-	return GrassPolicy::OcclusionAllowed(globals::game::isVR,
-		static_cast<int>(globals::features::vr.GetDepthCullingMode()));
-}
-
 bool GrassOptimizations::SetSettings(const GrassPolicy::Settings& requested, std::string& error)
 {
 	if (!requested.Valid()) {
 		error = "Invalid grass settings: finite ordered pixel thresholds and bounded density, bias and distances are required";
-		return false;
-	}
-	if (requested.EnableOcclusionCulling && !IsGrassHiZAvailable()) {
-		error = "Grass Hi-Z is unavailable while scene Hi-Z culling is selected";
 		return false;
 	}
 	{
@@ -55,8 +40,6 @@ void GrassOptimizations::SetEnabled(bool enabled)
 {
 	auto next = GetSettings();
 	next.Enabled = enabled;
-	if (!IsGrassHiZAvailable())
-		next.EnableOcclusionCulling = false;
 	std::string error;
 	if (!SetSettings(next, error))
 		logger::warn("Grass optimization toggle rejected: {}", error);
@@ -96,8 +79,6 @@ void GrassOptimizations::LoadSettings(json& saved)
 		logger::warn("Invalid saved grass settings; restoring grass optimization defaults");
 		next = {};
 	}
-	if (!IsGrassHiZAvailable())
-		next.EnableOcclusionCulling = false;
 	std::string error;
 	if (!SetSettings(next, error))
 		logger::warn("Saved grass settings rejected: {}", error);
@@ -106,8 +87,6 @@ void GrassOptimizations::SaveSettings(json& saved) { saved = GetSettings(); }
 void GrassOptimizations::RestoreDefaultSettings()
 {
 	GrassPolicy::Settings next;
-	if (!IsGrassHiZAvailable())
-		next.EnableOcclusionCulling = false;
 	std::string error;
 	if (!SetSettings(next, error))
 		logger::warn("Grass defaults rejected: {}", error);
@@ -193,24 +172,14 @@ void GrassOptimizations::DrawControls(bool advanced)
 		Util::AddTooltip("Spread changes between grass meshes to soften transitions. Wider values may keep detailed meshes longer and add rendering work.", tooltipFlags);
 	}
 	{
-		const bool available = IsGrassHiZAvailable();
-		auto hiZGuard = Util::DisableGuard(!available);
-		bool hiZ = available && next.EnableOcclusionCulling;
-		if (ImGui::Checkbox("Grass Hi-Z culling", &hiZ)) {
-			next.EnableOcclusionCulling = hiZ;
-			changed = true;
-		}
-		Util::AddTooltip(available ? "Skip grass hidden behind solid objects. Depending on the scene, this can save work or have a small performance cost." :
-									 "Skip hidden grass; some scenes have a small performance cost. Unavailable with scene Hi-Z; select Advanced or Legacy to enable it.",
-			tooltipFlags);
-		if (advanced && hiZ) {
+		changed |= ImGui::Checkbox("Grass Hi-Z culling", &next.EnableOcclusionCulling);
+		Util::AddTooltip("Skip grass hidden behind solid objects. Depending on the scene, this can save work or have a small performance cost.", tooltipFlags);
+		if (advanced && next.EnableOcclusionCulling) {
 			changed |= ImGui::SliderFloat("Grass occlusion tolerance", &next.OcclusionBias, 0.0f, 0.05f, "%.4f");
 			Util::AddTooltip("Make hidden-grass skipping more cautious. Increase this if grass disappears incorrectly; higher values keep more grass and can cost performance.", tooltipFlags);
 		}
 	}
 	if (changed) {
-		if (!IsGrassHiZAvailable())
-			next.EnableOcclusionCulling = false;
 		std::string error;
 		if (!SetSettings(next, error))
 			logger::warn("Grass settings rejected: {}", error);
@@ -227,9 +196,9 @@ json GrassOptimizations::GetDiagnostics() const
 	result["loaded"] = loaded;
 	result["enabled"] = configured.Enabled;
 	result["settings"] = configured;
-	result["grassHiZAvailable"] = IsGrassHiZAvailable();
+	result["grassHiZAvailable"] = true;
 	result["grassHiZRequested"] = configured.EnableOcclusionCulling;
-	result["grassHiZEnabled"] = configured.Enabled && configured.EnableOcclusionCulling && IsGrassHiZAvailable();
+	result["grassHiZEnabled"] = configured.Enabled && configured.EnableOcclusionCulling;
 	return result;
 }
 #endif

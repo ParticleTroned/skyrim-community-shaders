@@ -934,7 +934,6 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 		return;
 	frameSettings = globals::features::grassOptimizations.GetSettings();
 	frameSettings.Enabled &= globals::features::grassOptimizations.loaded;
-	frameSettings.EnableOcclusionCulling &= globals::features::grassOptimizations.IsGrassHiZAvailable();
 	current = nullptr;
 	frame = now;
 	for (auto& bucket : buckets)
@@ -1508,7 +1507,7 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, const PassKey& key)
 		frameSettings.RenderDistanceOverride > 0 ? frameSettings.RenderDistanceOverride : nativeRenderDistance,
 		frameSettings.EdgeFadeStart, frameSettings.SimpleShadingPixelSize, representative.bound.radius,
 		std::sqrt(std::max(1.0f, representative.triangles / 8.0f)), frameSettings.RenderDistanceOverride > 0 ? 1u : 0u, frameSettings.CollisionDistance };
-	if (frameSettings.EnableOcclusionCulling && globals::features::grassOptimizations.IsGrassHiZAvailable() && hiZ.Build(context.get(), frame)) {
+	if (frameSettings.EnableOcclusionCulling && hiZ.Build(context.get(), frame)) {
 		params.depthWidth = hiZ.Width();
 		params.depthHeight = hiZ.Height();
 		params.depthMips = hiZ.Mips();

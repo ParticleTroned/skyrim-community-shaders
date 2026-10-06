@@ -250,15 +250,7 @@ The PR110 implementation is based on
 `codex/pr110-nr-ui-controls`. The local test archive retains its exact
 dirty-source identity and patch in the adjacent build receipt.
 
-Twenty-eight focused checks passed in Release after adversarial review:
-
-```powershell
-$build = 'build/pr110-category-strengths-devbench' # Run from the repository root.
-ctest --test-dir $build -C Release -R '^(character_settings|NeuralRenderingUI|NeuralRenderingRequest|NeuralSettingsKey(Bridge)?|NeuralFeatureSettings(_off)?|NeuralProductionPolicy_(on|off)|NeuralReducedSelection|NeuralPreparedSelection(Bridge)?)$' --output-on-failure
-ctest --test-dir $build -C Release -R '^(ActorBlendingShader|character_mask_shaders|NeuralRenderingControls)$' --output-on-failure
-ctest --test-dir $build -C Release -R '[Nn]eural.*[Cc]ontract' --output-on-failure
-ctest --test-dir $build -C Release -R '^(character_region_policy|character_actor_policy|character_mask_work_policy|character_focus|character_crop|character_material|NeuralControllerToggle)$' --output-on-failure
-```
+Twenty-eight focused checks passed in Release after adversarial review.
 
 The mask checks execute production HLSL on D3D11 WARP, including all 32
 material selections at zero, fractional and full strengths in both

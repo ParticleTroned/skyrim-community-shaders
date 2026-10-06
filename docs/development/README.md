@@ -1,132 +1,56 @@
 # Development Documentation
 
--   [Build provenance](build-provenance.md) — exact DLL, dependency, and shader-cache identities for reproducible tests and releases.
--   [Developer tooling](tooling.md) — reliable Git hooks, GitHub transport, Codex sandbox, and Windows build setup.
--   [Ghidra MCP integration](ghidra-mcp.md) — pinned extension installation,
-    loopback MCP configuration, and Skyrim VR live-dump analysis.
--   [VR depth-culling temporal policy](vr-depth-culling-temporal-policy.md) — bounded recovery for one-frame-late Skyrim VR OBB results.
--   [VR depth-culling evidence](vr-depth-culling-temporal-evidence.md) — source history, live Skyrim VR layout evidence, and exact local validation.
--   [API service registry](api-service-registry.md) — parallel versioned service discovery while retaining the legacy CSAP interface.
--   [Screenshot API and sequences](screenshot-api-and-sequences.md) — asynchronous still/sequence contract, native CSXR discovery, receipts, events, and manifests.
--   [Shader API v1](api-shader-v1.md) — versioned inspection, feature-state, compilation, and cache-lifecycle controls with preflight safety.
--   [Shader compatibility API v1](api-shader-compatibility-v1.md) — startup registration of external shader-facing contracts and narrowly scoped cache identities.
+These public guides cover working with a fork, building CSX, compiling
+shaders, and assembling packages. Feature setup notes, fix investigations,
+and detailed test or provenance records stay in ignored local documentation.
 
-## Getting Started
+## Build and fork setup
 
--   **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
--   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
--   **[Prebuilt Shader Cache](./prebuilt-shader-cache.md)** - Release build, update, validation, and AI-agent runbook
--   **[Shader Runtime A/B](./shader-runtime-ab.md)** - RenderDoc same-frame shader equivalence checks
--   **[GPU-Unified Presets](./unified-presets.md)** - One preset path with capability-selected DLSS or FSR
--   **[Render-scale PR qualification](./render-scale-pr-qualification.md)** - Bounded 20-COC, 25-menu-transition, and three-sequence release gate
--   **[VR render-scale iteration](./vr-render-scale-iteration.md)** - Durable optimization references, safety invariants, and current investigation state
--   **[VR render-scale authority map](./vr-render-scale-authority-map.md)** - Authoritative owners, service paths, and diagnostic liveness invariants
--   **[VR render-scale comparison ledger](./vr-render-scale-comparison-ledger.csv)** - Cross-machine aggregate results without raw per-run evidence
--   **[NVIDIA render-scale tuning](./nvidia-renderscale-tuning-20260829.md)** - Compact result from the first public-API transition matrix
--   **[NVIDIA render-scale tuning failure](./nvidia-renderscale-tuning-failure.md)** - Public-API operation and qualification divergence captured by the interrupted 33-transition assay
--   **[Screenshot API and Sequences](./screenshot-api-and-sequences.md)** - Versioned asynchronous still/sequence contract, acknowledgements, manifests, and implementation gates
+-   [Developer tooling](tooling.md): setup, Git wrappers, hooks, and Windows builds.
+-   [VSCode setup](vscode-setup.md): editor support and optional shader deployment.
+-   [Runtime downloads](runtime-downloads.md): DLL development when runtime payloads are unavailable.
+-   [Build identities](build-provenance.md): manifests, artifact hashes, and verification.
+-   [Test-build versioning](test-build-versioning.md): reproducible test distributions.
+-   [Release distribution](csx-release-distribution.md): complete AIO packaging and fork publication.
 
-## Quick Links
-
-### Common Tasks
-
--   **One-time developer setup:** `pwsh ./tools/setup-dev.ps1`
--   **Tooling diagnostics:** `pwsh ./tools/dev-doctor.ps1 -Network`
--   **Fast shader deployment:** `pwsh ./tools/cmake.ps1 --build build/ALL-WITH-AUTO-DEPLOYMENT --target COPY_SHADERS`
--   **Verify shader refactor bytecode:** `pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl`
--   **Runtime A/B shader check:** `tools/taa-renderdoc-ab.py` via RenderDoc embedded Python
--   **Full build with deployment:** `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
--   **Run shader tests:** `pwsh ./tools/cmake.ps1 --build build/ALL --target run_shader_tests`
--   **Create a worktree with submodules + local preset:** `pwsh ./tools/new-worktree.ps1 -Name my-branch`
--   **Install optional git alias:** `pwsh ./tools/install-worktree-alias.ps1`
--   **Install optional Ghidra MCP extension:**
-    `pwsh ./tools/setup-ghidra-mcp.ps1 -GhidraInstallDir <path> -JavaHome <path>`
--   **Manage headless Ghidra MCP:**
-    `pwsh ./tools/ghidra-mcp-control.ps1 start -GhidraInstallDir <path> -ProgramPath <binary>`
-
-### Build Presets
-
--   `ALL` - Standard build (no auto-deployment)
--   `ALL-WITH-AUTO-DEPLOYMENT` - Build + deploy to game directory
--   `Dev` - Fast iteration preset (recommended for development)
-
-See `CMakePresets.json` for all available presets.
-
-### Complete Local Validation
-
-Use CMake 4.3.5 or newer for the validated Windows toolchain. CMake 4.3.0 and
-4.3.1 have a regular-expression regression that removes semicolons from
-generated test declarations. Check `pwsh ./tools/cmake.ps1 --version` after
-updating. The launcher preserves the CMake selected on `PATH`, including
-command wrappers, before initializing Visual Studio. Validation uses the
-CTest executable recorded by that CMake configuration.
-
-Run the complete sequence and save its evidence with:
+Clone a fork with its submodules, then run from the repository root:
 
 ```powershell
+pwsh ./tools/setup-dev.ps1
+pwsh ./tools/cmake.ps1 --preset ALL
+pwsh ./tools/cmake.ps1 --build --preset CSmain
+```
+
+Keep local deployment configuration in the ignored `CMakeUserPresets.json`.
+Use `CMakeUserPresets.json.template` as a starting point. `CMakePresets.json`
+lists the tracked presets; local presets can add deployment destinations.
+
+## Shader compilation and validation
+
+-   [Shader workflow](shader-workflow.md): targeted compilation, deployment, and bytecode comparisons.
+-   [Prebuilt shader cache](prebuilt-shader-cache.md): permutation inventories, cache generation, validation, and FOMOD assembly.
+-   [Shader runtime comparison](shader-runtime-ab.md): compare baseline and candidate DXBC when bytecode differs.
+
+```powershell
+pwsh ./tools/cmake.ps1 --build build/ALL --target prepare_shaders
+pwsh ./tools/cmake.ps1 --build build/ALL --target validate_changed
+pwsh tools/verify-shader-refactor.ps1 package/Shaders/Foo.hlsl
+python tools/build-shader-cache.py --runtime both --package
+```
+
+Use matching SE/AE and VR permutation inventories when preparing a universal
+package. Preserve existing shader caches unless regeneration is required.
+
+## Worktrees and checks
+
+Create an isolated checkout with submodules and a copied local preset:
+
+```powershell
+pwsh ./tools/new-worktree.ps1 -Name my-branch
+pwsh ./tools/pre-commit.ps1 run
 pwsh ./tools/validate-local.ps1
 ```
 
-The command records source and submodule identity, tool versions, the DLL
-manifest, discovered tests, full command output, exit codes and durations
-under `build/validation/`. It rejects missing, disabled, unbuilt or skipped
-tests and any source change during validation. Existing edits are preserved
-and identified by the manifest's dirty digest. Preset checks run sequentially
-because they share a publication lock.
-
-The main DLL target does not build every test executable. Both test groups
-must be built explicitly. The equivalent manual sequence is:
-
-```powershell
-pwsh ./tools/cmake.ps1 --preset ALL -DBUILD_CONTROLLER_TESTS=ON -DBUILD_SHADER_TESTS=ON
-pwsh ./tools/cmake.ps1 --build --preset CSmain -- /m:1
-pwsh ./tools/cmake.ps1 --build build/ALL --config Release --target controller_tests shader_tests -- /m:1
-ctest --test-dir build/ALL -C Release -N
-ctest --test-dir build/ALL -C Release --output-on-failure --no-tests=error --timeout 300
-pwsh ./tests/unified_preset_generator_test.ps1
-pwsh ./tools/generate-unified-presets.ps1 -Check
-```
-
-The controller aggregate includes every executable declared in its CMake
-block. Controller tests use build-local temporary files; the Skylighting
-settings test initializes MSVC when launched from an ordinary CTest shell.
-An MSVC update at the same executable path is reflected in build provenance
-without manually deleting CMake's compiler cache.
-
-Changes to the VR master custom-shader switch also require a headset runtime check before merge. With render scaling both active and inactive, disable custom shaders from the CSX menu and verify that native eye targets are restored before the switch completes, the scene has no stale overlay or deferred attachment, and re-enabling works. Repeat in the main menu and in-world when the submit path changes.
-
-## Worktrees
-
-Use `tools/new-worktree.ps1` when creating a new worktree for development. The script:
-
--   Creates the worktree under a sibling `<repo>.worktrees/` directory by default
--   Reuses an existing local branch or creates a new one from `HEAD`
--   Runs `git submodule update --init --recursive` in the new worktree
--   Copies `CMakeUserPresets.json` from the main checkout if it exists there
--   Does not overwrite an existing `CMakeUserPresets.json` unless `-ForcePresetCopy` is passed
-
-Examples:
-
--   `pwsh ./tools/new-worktree.ps1 -Name reproj_fixes`
--   `pwsh ./tools/new-worktree.ps1 -Name vr-debug -StartPoint dev`
--   `pwsh ./tools/new-worktree.ps1 -Name clean-build -NoSubmodules`
-
-If you want a Git-native command, install the optional repo-local alias:
-
--   `pwsh ./tools/install-worktree-alias.ps1`
--   Then use `git new-worktree reproj_fixes`
-
-The alias is installed into local Git config by default, so it does not affect other users unless they opt in.
-
-## Build Targets
-
-| Target             | Builds DLL | Runs Tests | Copies Shaders | Use Case               |
-| ------------------ | ---------- | ---------- | -------------- | ---------------------- |
-| `COPY_SHADERS`     | ❌         | ❌         | ✅             | Fast shader iteration  |
-| `DEPLOY_ALL`       | ✅         | ✅         | ✅             | Full deployment (auto) |
-| `prepare_shaders`  | ❌         | ✅         | ✅ (AIO only)  | CI shader validation   |
-| `run_shader_tests` | ❌         | ✅         | ❌             | Test shaders only      |
-
-## Contributing
-
-When adding new features or documentation, please keep development docs organized under `docs/development/`.
+Validation saves complete evidence locally. Public results state checks,
+outcomes, limitations, and source/build identities without machine-specific
+paths, usernames, or local evidence locations.

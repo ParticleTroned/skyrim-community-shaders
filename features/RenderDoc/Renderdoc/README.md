@@ -22,7 +22,7 @@ For example, for v1.43:
 
 1. Download the Windows x64 installer (MSI) from the link above
 2. Install RenderDoc or extract the MSI using a tool like 7-Zip
-3. Copy `renderdoc.dll` from the installation directory (typically `C:\Program Files\RenderDoc\`)
+3. Copy `renderdoc.dll` from the installation directory (typically `<RenderDoc-installation>`)
 4. Place it in this directory (`features/RenderDoc/Renderdoc/`)
 5. The DLL will be deployed with CSX mod package
 

@@ -1,13 +1,5 @@
 # Prebuilt Shader Cache Runbook
 
-> **Upcoming shader-management work:** test distributions now have a separate
-> identity such as `CSX 3.19-VR RC218 (2026-09-07)`. That identity is
-> deliberately excluded from `Plugin::VERSION_LABEL`, compatibility markers,
-> cache metadata, and cache validation for now. The shader-management revamp
-> must explicitly decide whether and how test-build identity should participate
-> in cache ownership or invalidation. See
-> [test-build-versioning.md](test-build-versioning.md).
-
 This is the authoritative maintainer and AI-agent procedure for building,
 updating, validating, and shipping CSX' prebuilt shader cache.
 Use `tools/build-shader-cache.py` for cache generation and
@@ -81,9 +73,8 @@ to VR or named profiles.
 The compiler-identity tests also compare generated SE macro tasks with
 preserved runtime requests and verify that non-shipped conditional includes
 cannot enter the source hash. Pack integrity and matching top-level metadata
-alone do not prove that the runtime can reuse individual records. See the
-[3.19.2 cache investigation](shader-cache-se-3192-20260926.md) for the failure
-and exact identity evidence behind these checks. Trace/debug logging selects
+alone do not prove that the runtime can reuse individual records.
+Trace/debug logging selects
 the separate developer cache, so release-cache reuse must be tested at Info
 level or above.
 
@@ -471,7 +462,7 @@ any cache-contract field, update the named profile and rebuild it; never edit
     --runtime both `
     --package `
     --package-label "v1.7.0" `
-    --fxc "C:\Program Files (x86)\Windows Kits\10\bin\<sdk-version>\x64\fxc.exe" `
+    --fxc "<Windows-SDK>/bin/<sdk-version>\x64\fxc.exe" `
     --jobs 4
 ```
 

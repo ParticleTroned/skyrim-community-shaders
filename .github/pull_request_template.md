@@ -1,6 +1,7 @@
 <!--
 Title: type(scope): description
-Target: main-VR unless another release line was explicitly requested.
+Create a PR only when the user explicitly requests it and names its repository
+and target base branch. Target only that branch; there is no default destination.
 Keep the title at or below 50 characters when practical.
 Wrap prose at 72 columns where practical; do not break commands or URLs.
 Keep every section synchronized with the final diff before merge.
@@ -24,11 +25,13 @@ Remove this section only when none of those concerns apply.
 ## Validation
 
 <!--
-List exact commands, tests, runtime scenarios, measurements, and results.
+List concise checks, runtime scenarios, measurements, and results.
 Distinguish passed, not run, skipped, and blocked validation.
+Include source/build identities when needed to attribute a result.
+Keep detailed reports and provenance local; omit machine-specific paths,
+usernames, and local evidence locations.
 
-For a render-scale code or behavior change, paste the generated
-csx-render-scale-pr-v1 summary here and retain its evidence directory. A
-missing or REVIEW_PENDING visual verdict is not a pass. See
-docs/development/render-scale-pr-qualification.md.
+For a render-scale code or behavior change, run the maintained qualification
+protocol and summarize its outcome here. Keep the complete generated summary
+and evidence local. Missing or inconclusive visual review is not a pass.
 -->

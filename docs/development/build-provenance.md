@@ -1,86 +1,25 @@
-# Build provenance
+# Build identities and local provenance
 
-CSX identifies tested behavior with immutable build evidence rather than a
-branch name or display version. Every DLL build has three related identities:
+Each DLL build has three related identities:
 
--   **Artifact SHA-256** is the authoritative identity of the linked DLL.
--   **Build ID** is SHA-256 over canonical JSON describing the source commit and
-    dirty-content digest, exact submodule checkouts, vcpkg baseline and overlay,
-    compiler/toolchain, runtime, configuration, and behavior-affecting options.
--   **Shader cache ABI ID** is an explicit identity over
-    `config/shader-cache-abi.json`. It is runtime-neutral so one universal DLL
-    accepts the matching SE/AE and VR cache packs; runtime shader permutations
-    remain separated by each record's compile-state digest. The ABI invalidates
-    globally incompatible cache blobs without changing merely because
-    cache-controller or unrelated C++ code was edited. Shader-enabled features
-    default to feature ABI `1`; a feature can override
-    `Feature::GetShaderCacheAbiVersion()` and bumps it only when its non-HLSL
-    compiled-shader contract changes.
+-   **Artifact SHA-256** identifies the linked DLL bytes.
+-   **Build ID** identifies canonical source, dirty-content digest,
+    submodules, dependencies, toolchain, runtime, configuration, and
+    behavior-affecting build options.
+-   **Shader cache ABI ID** identifies the compiled-shader compatibility
+    contract. SE/AE and VR permutations retain separate compile-state
+    identities within the universal build.
 
-`refresh_build_provenance` runs before every DLL compilation. It intentionally
-does not rely on CMake configure time, because an existing build tree can
-survive branch switches and dependency changes. The generated header embeds
-the Build ID in the DLL. A post-link step writes `CSX.BuildManifest.json` beside
-the DLL and binds it to the actual artifact SHA-256. Install, deployment, and
-archive paths copy that sidecar with the DLL.
+`refresh_build_provenance` runs before DLL compilation. The generated
+header embeds the Build ID; a post-link step writes `CSX.BuildManifest.json`
+beside the DLL and binds it to the artifact hash. Deployment and packaging
+copy that sidecar with the DLL.
 
-## Runtime and automation contract
+CI uses `CSX_REQUIRE_CLEAN_PROVENANCE=ON` to reject dirty source, dirty
+submodules, and checkouts that do not match their gitlinks. Local builds
+can retain edits; the dirty-content digest still distinguishes their source.
 
-CSX verifies the sidecar against the loaded DLL once per process and logs the
-result. DevBench menu, profiler, and render-scale responses contain a
-`producer` object with the full Build ID, source identity, artifact SHA-256,
-manifest-verification state, shader ABI, and compiler identity.
-
-Automation may pass `expectedBuildId` to those tools. The operation fails with
-`code: producer_mismatch` before changing state when the loaded DLL is not the
-requested producer. Captures and comparisons should preserve the returned
-`producer` object, not infer provenance from the checked-out branch.
-
-## GPU and driver identity
-
-At renderer initialization, `[GPU]` info entries record the active D3D11
-adapter's model, vendor/device IDs, dedicated VRAM in MiB, and Windows
-driver version. The version uses DXGI's four-part Windows driver format;
-it is not the NVIDIA release label or AMD Adrenalin package version.
-See Microsoft's [DXGI driver-version contract](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiadapter-checkinterfacesupport).
-
-The query runs once per process from the shared SE/AE/VR initialization
-hook and is skipped when info logging is disabled. It adds no per-frame
-work, GPU commands, or GPU synchronization.
-Unavailable information is logged with the failing HRESULT; it does not
-abort initialization or trigger retries.
-
-## Shader caches
-
-Runtime-generated `Info.ini` files record `BuildId`, `ArtifactSHA256`,
-`ShaderCacheABI`, and `ShaderCompilerIdentity`; feature sections may also record
-an explicit `ShaderCacheABI`. Build ID, artifact hash, plugin version, and
-ordinary feature versions are evidence. Global/scoped shader ABI and a changed
-runtime compiler invalidate the corresponding cache scope.
-
-Managed-pack admission treats `PackManifest.json`'s shader ABI as build
-provenance. Per-record content identities carry the global and enabled-feature
-ABIs, so multiple ABI generations can coexist in the same four pack files and
-only the affected lookup recompiles. The offline builder derives the same
-sorted feature-ABI salt from `Info.ini` as the runtime derives from loaded
-features. These feature salts are conservative across shader families.
-Horizon Fix instead delegates its ABI to the Water-scoped compatibility
-provider, so its enabled/disabled states share unrelated records. Any non-HLSL
-change to that integration must update the provider's contract in both
-`src/XSEPlugin.cpp` and `config/shader-compatibility-variants.json`.
-
-The prebuilt-cache generator calculates `ShaderCacheABI` using the same Python
-module and canonical contract file list as the DLL build. Precompiled caches do
-not compare their build-host `fxc.exe` with the player's runtime compiler.
-
-## Clean release builds and verification
-
-CI configures with `CSX_REQUIRE_CLEAN_PROVENANCE=ON`, which rejects dirty source,
-dirty submodules, or submodule checkouts that do not match their gitlinks.
-Local development leaves this off; a dirty-content digest still makes each
-distinct local build unambiguous.
-
-Verify a delivered pair with:
+## Verify an artifact
 
 ```powershell
 python tools/build_provenance.py verify `
@@ -88,5 +27,24 @@ python tools/build_provenance.py verify `
   --artifact path/to/CommunityShaders.dll
 ```
 
-The verifier recalculates both the canonical Build ID and artifact SHA-256 and
-fails if either identity is inconsistent.
+The verifier recalculates the canonical Build ID and artifact SHA-256 and
+fails if either identity is inconsistent. Compare the deployed DLL with
+its manifest and build receipt before attributing a runtime result.
+
+## Shader cache identities
+
+`Info.ini` records build, artifact, shader ABI, and compiler identities.
+Managed packs use content identities that include global and enabled-feature
+ABIs. A matching pack header alone does not prove every permutation matches.
+Use the [cache runbook](prebuilt-shader-cache.md) for generation and checks.
+
+## Publication policy
+
+Keep detailed validation provenance, investigation notes, run reports,
+ledgers, captures, and exact physical locations in ignored local records.
+They are not committed documentation or PR attachments.
+
+Public summaries report concise checks and outcomes, coverage limitations,
+and source commits, Build IDs, or artifact hashes when useful. Omit personal
+usernames, machine-specific paths, and local evidence locations. Reusable
+build instructions use repository-relative paths or neutral placeholders.

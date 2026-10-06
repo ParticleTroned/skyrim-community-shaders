@@ -29,7 +29,7 @@ file(
 
 extract_between("${_source}" "uint ClampStableSliceCount(" "void ApplyOcclusionCornerFrustum(" _probe_policy)
 extract_between("${_source}" "bool ShouldRunPeriodicUpdate(" "void ApplyPlatformDefaults(" _cadence)
-extract_between("${_source}" "void Skylighting::QueueResetSkylighting()" "void Skylighting::SetPerformanceCostMeasurementEnabled(" _lifecycle)
+extract_between("${_source}" "void Skylighting::QueueResetSkylighting(" "void Skylighting::SetPerformanceCostMeasurementEnabled(" _lifecycle)
 extract_between("${_source}" "bool Skylighting::HasProbeUpdateResources()" "void Skylighting::PostPostLoad()" _probe_pass)
 # Exercise the volume retention policy before the unrelated capture allocation.
 extract_between("${_source}" "void Skylighting::SetupRenderTargetResources()" "\n\tdelete texOcclusion;" _target_policy)

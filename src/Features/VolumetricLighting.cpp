@@ -1,4 +1,5 @@
 #include "VolumetricLighting.h"
+#include "Utils/RuntimeToggle.h"
 
 #include <algorithm>
 #include <cmath>
@@ -483,8 +484,7 @@ void VolumetricLighting::RequestRuntimeReset()
 bool VolumetricLighting::IsRuntimeTransitionBlocked() const
 {
 	const auto* state = globals::state;
-	return !state || state->IsSaveLoadSafeModeActive() || state->IsEngineSaveLoadActivityActive() ||
-	       state->IsMainOrLoadingMenuOpen() || state->pendingPostLoadRuntimeReset;
+	return Util::IsRuntimeToggleBlocked(state);
 }
 
 bool VolumetricLighting::IsPerformanceCostMeasurementReady() const
@@ -596,12 +596,9 @@ void VolumetricLighting::EarlyPrepass()
 	auto* tes = globals::game::tes;
 	auto* player = RE::PlayerCharacter::GetSingleton();
 	auto* cell = player ? player->GetParentCell() : nullptr;
-	if (!tes || !cell || !cell->IsAttached() || !gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting)
+	if (!LocationContext::HasAttachedCell(tes, cell) || !gVolumetricLightingSizeHigh || !globals::game::bEnableVolumetricLighting)
 		return;
 	const bool currentlyInInterior = cell->IsInteriorCell();
-	// A missing or mismatched destination during a handoff is not an exterior.
-	if ((currentlyInInterior && tes->interiorCell != cell) || (!currentlyInInterior && tes->interiorCell))
-		return;
 
 	Settings requested;
 	{

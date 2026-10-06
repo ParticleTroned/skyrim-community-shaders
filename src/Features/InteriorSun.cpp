@@ -1,5 +1,8 @@
 #include "InteriorSun.h"
+#include "LocationContext.h"
 #include "State.h"
+#include "Utils/RendererContextAccess.h"
+#include "Utils/RuntimeToggle.h"
 
 #include <numbers>
 
@@ -62,13 +65,9 @@ void InteriorSun::DrawSettings()
 			"Uses the high-detail directional shadow split for the full Interior Sun distance. "
 			"Prevents prepared wall masks from falling into the lower-resolution later split.");
 	}
-	if (ImGui::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f)) {
-		if (gInteriorShadowDistance) {
-			*gInteriorShadowDistance = settings.InteriorShadowDistance;
-			const auto* tes = RE::TES::GetSingleton();
-			SetShadowDistance(tes && tes->interiorCell);
-		}
-	}
+	if (ImGui::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f))
+		runtimeSettingsDirty.store(true, std::memory_order_release);
+
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Sets the distance shadows are rendered at in interiors. "
@@ -136,8 +135,26 @@ void InteriorSun::PostPostLoad()
 
 void InteriorSun::EarlyPrepass()
 {
-	const auto* tes = RE::TES::GetSingleton();
+	const auto* tes = globals::game::tes;
 	isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes ? tes->interiorCell : nullptr), std::memory_order_release);
+	if (!runtimeSettingsDirty.load(std::memory_order_acquire) || Util::IsRuntimeToggleBlocked(globals::state))
+		return;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	const auto* player = RE::PlayerCharacter::GetSingleton();
+	const auto* cell = player ? player->GetParentCell() : nullptr;
+	if (!LocationContext::HasAttachedCell(tes, cell))
+		return;
+	if (runtimeSettingsDirty.exchange(false, std::memory_order_acq_rel)) {
+		const bool changed = runtimeEnabled.exchange(settings.Enabled, std::memory_order_acq_rel) != settings.Enabled;
+		const float distance = settings.Enabled ? settings.InteriorShadowDistance : vanillaInteriorShadowDistance;
+		if (gInteriorShadowDistance && (changed || *gInteriorShadowDistance != distance)) {
+			*gInteriorShadowDistance = distance;
+			SetShadowDistance(cell->IsInteriorCell());
+		}
+	}
+	isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes->interiorCell), std::memory_order_release);
 }
 
 inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
@@ -218,16 +235,7 @@ void InteriorSun::ClearArrays()
 void InteriorSun::SetRuntimeEnabled(bool a_enabled)
 {
 	settings.Enabled = a_enabled;
-	runtimeEnabled.store(a_enabled, std::memory_order_release);
-
-	const auto* tes = RE::TES::GetSingleton();
-	const auto* interiorCell = tes ? tes->interiorCell : nullptr;
-	isInteriorWithSun.store(a_enabled && loaded && IsInteriorWithSun(interiorCell), std::memory_order_release);
-
-	if (gInteriorShadowDistance) {
-		*gInteriorShadowDistance = a_enabled ? settings.InteriorShadowDistance : vanillaInteriorShadowDistance;
-		SetShadowDistance(interiorCell != nullptr);
-	}
+	runtimeSettingsDirty.store(true, std::memory_order_release);
 }
 
 void InteriorSun::PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays)

@@ -1,3 +1,4 @@
+#include "Utils/RuntimeToggle.h"
 
 #include <algorithm>
 #include <array>
@@ -79,6 +80,7 @@ struct View
 {
 	T* value = nullptr;
 	T* get() const { return value; }
+	T** put() { return &value; }
 	View& operator=(std::nullptr_t)
 	{
 		value = nullptr;
@@ -86,6 +88,21 @@ struct View
 	}
 	explicit operator bool() const { return value != nullptr; }
 };
+namespace winrt
+{
+	template <class T>
+	using com_ptr = View<T>;
+}
+namespace SKSE::stl
+{
+	template <class F>
+	struct scope_exit
+	{
+		F run;
+		explicit scope_exit(F f) : run(std::move(f)) {}
+		~scope_exit() { run(); }
+	};
+}
 struct Texture3D
 {
 	ID3D11ShaderResourceView srvObject;
@@ -111,6 +128,7 @@ struct RecordingContext
 	unsigned clearCount = 0;
 	std::vector<UINT> unboundSlots;
 	std::function<void()> duringClear;
+	void PSGetShaderResources(UINT slot, UINT, ID3D11ShaderResourceView** views) { *views = pixelResources[slot]; }
 	void PSSetShaderResources(UINT slot, UINT count, ID3D11ShaderResourceView* const* views)
 	{
 		if (count != 1)
@@ -143,6 +161,12 @@ struct RecordingContext
 };
 struct RecordingState
 {
+	uint32_t frameCount = 1;
+	bool blocked = false;
+	bool pendingPostLoadRuntimeReset = false;
+	bool IsSaveLoadSafeModeActive() const { return blocked; }
+	bool IsEngineSaveLoadActivityActive() const { return false; }
+	bool IsMainOrLoadingMenuOpen() const { return false; }
 	bool isMapMenuOpen = false;
 	unsigned updates = 0;
 	std::function<void()> update;
@@ -186,6 +210,14 @@ namespace globals
 }
 namespace Util
 {
+	inline bool rendererAvailable = true;
+	bool GetRendererContextLock(Renderer* renderer, RecordingContext* context) { return renderer && context && rendererAvailable; }
+	struct RendererOwnership
+	{
+		bool owned;
+		explicit RendererOwnership(bool available) : owned(available) {}
+		explicit operator bool() const { return owned; }
+	};
 	inline bool interior = false;
 	inline float3 eye;
 	float3 GetEyePosition(uint) { return eye; }
@@ -212,7 +244,8 @@ struct Skylighting
 	Texture3D* texShadowBitmask = nullptr;
 	Texture3D* texShadowVisibility = nullptr;
 	UINT probeArrayDims[3] = { 192, 192, 96 };
-	void QueueResetSkylighting();
+	void QueueResetSkylighting(bool rebuild = false);
+	void EarlyPrepass();
 	bool UpdateInteriorState();
 	void ResetSkylighting();
 };
@@ -267,6 +300,32 @@ try {
 	unsigned scenarios = 0;
 	{
 		Fixture f;
+		f.state.blocked = true;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 0 && f.feature.queuedResetSkylighting, "load guard must retain reset");
+		f.state.blocked = false;
+		Util::rendererAvailable = false;
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 0 && f.feature.queuedResetSkylighting, "renderer contention must retain reset");
+		Util::rendererAvailable = true;
+		++f.state.frameCount;
+		f.context.pixelResources[50] = &f.probes.srvObject;
+		f.context.pixelResources[53] = &f.visibility.srvObject;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 4 && !f.feature.queuedResetSkylighting, "safe frame must apply reset once");
+		Require(f.context.pixelResources[50] == &f.probes.srvObject && f.context.pixelResources[53] == &f.visibility.srvObject, "reset must restore pixel bindings");
+		f.feature.QueueResetSkylighting();
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 4 && f.feature.queuedResetSkylighting, "late request must wait for next frame");
+		++f.state.frameCount;
+		f.feature.EarlyPrepass();
+		Require(f.context.clearCount == 8, "next frame must consume late reset");
+		++scenarios;
+	}
+
+	{
+		Fixture f;
 		f.feature.QueueResetSkylighting();
 		f.feature.QueueResetSkylighting();
 		Require(f.context.clearCount == 0, "queueing must not touch the graphics context");
@@ -274,7 +333,7 @@ try {
 		Require(f.context.clearCount == 4, "duplicate requests must coalesce into one reset");
 		Require(!f.feature.queuedResetSkylighting, "completed reset must consume its request");
 		Require(f.feature.needsOcclusionRefresh, "cleared probes still require a fresh capture");
-		Require(f.context.unboundSlots == std::vector<UINT>{ 50, 53 }, "history SRVs must be unbound before clears");
+		Require(f.context.unboundSlots == std::vector<UINT>{ 50, 53, 50, 53 }, "history SRVs must be unbound before clears");
 		Require(f.probes.uavObject.floats[0] > 3.54f && f.probes.uavObject.floats[1] == 0, "SH clear must be neutral");
 		Require(f.confidence.uavObject.uints == std::array<UINT, 4>{ 0, 0, 0, 0 }, "confidence and jitter must reset");
 		Require(f.mask.uavObject.uints[0] == UINT32_MAX, "shadow history must start fully lit");

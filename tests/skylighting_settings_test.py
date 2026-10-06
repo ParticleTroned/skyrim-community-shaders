@@ -127,6 +127,8 @@ int main()
             void LoadSettings(json&);
             void SaveSettings(json&);
             void ApplyProbeGridQuality();
+            bool resetQueued = false;
+            void QueueResetSkylighting(bool) { resetQueued = true; }
             json CapturePerformanceSettingsState() const;
         };""", 1)
         methods = "\n".join(block(self.source, signature) for signature in (
@@ -173,9 +175,12 @@ int main()
             expected.merge_patch(user);
             saved = legacy;
             feature.SaveSettings(saved);
-            if (saved != expected || feature.probeArrayDims[0] != 128 ||
+            if (saved != expected || feature.probeArrayDims[0] != 0 || !feature.resetQueued ||
                 feature.CapturePerformanceSettingsState().contains(retiredKey))
                 return 2;
+            feature.ApplyProbeGridQuality();
+            if (feature.probeArrayDims[0] != 128)
+                return 6;
 
             Skylighting restarted;
             restarted.LoadSettings(saved);

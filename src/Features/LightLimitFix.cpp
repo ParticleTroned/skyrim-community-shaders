@@ -1187,7 +1187,9 @@ void LightLimitFix::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx("Contact Shadows")) {
-			ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+			bool contactShadows = IsContactShadowsRequested();
+			if (ImGui::Checkbox("Enable Point Light Contact Shadows", &contactShadows))
+				SetContactShadowsEnabled(contactShadows);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Adds short screen-space contact shadows to LLF point lights.\n"
@@ -1292,7 +1294,9 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 {
 	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
 
-	ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+	bool contactShadows = IsContactShadowsRequested();
+	if (ImGui::Checkbox("Enable Point Light Contact Shadows", &contactShadows))
+		SetContactShadowsEnabled(contactShadows);
 	ImGui::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
 
 	if (!a_advanced) {
@@ -1334,13 +1338,22 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 void LightLimitFix::DrawEssentialSettings()
 {
 	ImGui::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
-	ImGui::Checkbox("Enable Point Light Contact Shadows", &settings.EnableContactShadows);
+	bool contactShadows = IsContactShadowsRequested();
+	if (ImGui::Checkbox("Enable Point Light Contact Shadows", &contactShadows))
+		SetContactShadowsEnabled(contactShadows);
 	DrawHeatWarpStrengthSetting();
+}
+
+bool LightLimitFix::IsPerformanceCostMeasurementReady() const
+{
+	return !Util::IsRuntimeToggleBlocked(globals::state) && (settings.EnableContactShadows != 0) == IsContactShadowsRequested();
 }
 
 json LightLimitFix::CapturePerformanceSettingsState() const
 {
-	return settings;
+	json captured = settings;
+	captured["EnableContactShadows"] = IsContactShadowsRequested();
+	return captured;
 }
 
 void LightLimitFix::DrawOverlay()
@@ -1367,6 +1380,7 @@ void LightLimitFix::DrawOverlay()
 
 LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 {
+	runtimeToggle.Apply(settings.EnableContactShadows, globals::state);
 	PerFrame perFrame{};
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
@@ -1576,6 +1590,7 @@ void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
 void LightLimitFix::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	SetContactShadowsEnabled(settings.EnableContactShadows);
 	SanitizeSettings(settings);
 }
 
@@ -1583,11 +1598,13 @@ void LightLimitFix::SaveSettings(json& o_json)
 {
 	SanitizeSettings(settings);
 	o_json = settings;
+	o_json["EnableContactShadows"] = IsContactShadowsRequested();
 }
 
 void LightLimitFix::RestoreDefaultSettings()
 {
 	settings = {};
+	SetContactShadowsEnabled(settings.EnableContactShadows);
 	SanitizeSettings(settings);
 }
 

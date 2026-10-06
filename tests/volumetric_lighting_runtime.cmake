@@ -7,6 +7,7 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/tests/extract_volumetric_lighting_runtime.cmake"
     DEPENDS
         src/Features/VolumetricLighting.cpp src/Features/VolumetricLighting.h
+        src/Features/InteriorSun.cpp src/Features/InverseSquareLighting.cpp
         tests/extract_source_region.cmake tests/extract_volumetric_lighting_runtime.cmake
     VERBATIM
 )

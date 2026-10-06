@@ -1758,6 +1758,7 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/Upscaling.cpp
             include/VRAPI/CSpluginapi.h
             tests/extract_stabilizer_api.cmake
+            src/Api/LegacyRuntimeDispatch.h
         VERBATIM
     )
     target_sources(vr_fps_stabilizer_api_test PRIVATE "${_stabilizer_api_test_header}")
@@ -3130,6 +3131,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_runtime.cmake")
+    add_controller_test(runtime_toggle_test RuntimeToggle tests/runtime_toggle_test.cpp)
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     add_controller_test(

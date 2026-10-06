@@ -10,6 +10,11 @@ function(append_section source start_marker end_marker)
 endfunction()
 
 file(WRITE "${OUTPUT_FILE}" "")
+file(READ "${PROJECT_ROOT}/src/Api/LegacyRuntimeDispatch.h" _dispatch)
+string(FIND "${_dispatch}" "namespace CSX::Api" _dispatch_start)
+string(SUBSTRING "${_dispatch}" ${_dispatch_start} -1 _dispatch_body)
+file(APPEND "${OUTPUT_FILE}" "${_dispatch_body}\n")
+
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" _upscaling)
 append_section("${_upscaling}" "VRFpsStabilizerTransitionTarget ResolveVRFpsStabilizerTransitionTarget(" "bool HasCurrentVRRenderScaleControllerTarget(")
 append_section("${_upscaling}" "bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(" "void Upscaling::QueueVRFpsStabilizerLoadSync(")

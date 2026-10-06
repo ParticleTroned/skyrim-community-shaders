@@ -1,4 +1,8 @@
 #include "InverseSquareLighting.h"
+#include "LocationContext.h"
+#include "State.h"
+#include "Utils/RendererContextAccess.h"
+#include "Utils/RuntimeToggle.h"
 
 #include "CSEditor/EditorWindow.h"
 #include "Features/InverseSquareLighting/Common.h"
@@ -87,7 +91,22 @@ void InverseSquareLighting::RestoreDefaultSettings()
 void InverseSquareLighting::SetRuntimeEnabled(bool a_enabled)
 {
 	settings.Enabled = a_enabled;
-	if (runtimeEnabled.exchange(a_enabled, std::memory_order_acq_rel) != a_enabled)
+	runtimeSettingsDirty.store(true, std::memory_order_release);
+}
+
+void InverseSquareLighting::EarlyPrepass()
+{
+	if (!runtimeSettingsDirty.load(std::memory_order_acquire) || Util::IsRuntimeToggleBlocked(globals::state))
+		return;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership || !globals::game::smState || !globals::game::smState->shadowSceneNode[0])
+		return;
+	const auto* player = RE::PlayerCharacter::GetSingleton();
+	const auto* cell = player ? player->GetParentCell() : nullptr;
+	if (!LocationContext::HasAttachedCell(globals::game::tes, cell))
+		return;
+	runtimeSettingsDirty.exchange(false, std::memory_order_acq_rel);
+	if (runtimeEnabled.exchange(settings.Enabled, std::memory_order_acq_rel) != settings.Enabled)
 		ApplyRuntimeStateToActiveLights();
 }
 

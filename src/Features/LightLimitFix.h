@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/RuntimeToggle.h"
+
 #include "Buffer.h"
 #include "OverlayFeature.h"
 #include "Utils/LazyShader.h"
@@ -19,6 +21,7 @@ class ParticleLights;
 struct LightLimitFix : OverlayFeature
 {
 private:
+	Util::RuntimeToggle runtimeToggle{ false };
 	static constexpr std::string_view MOD_ID = "99548";
 	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
 	using SceneLightSnapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<RE::BSLight>>;
@@ -30,6 +33,10 @@ private:
 	static void RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index);
 
 public:
+	/** @brief Read or stage the preference without touching render-owned settings. */
+	bool IsContactShadowsRequested() const { return runtimeToggle.Get(); }
+	void SetContactShadowsEnabled(bool enabled) { runtimeToggle.Set(enabled); }
+
 	virtual inline std::string GetName() override { return "Light Limit Fix"; }
 	virtual inline std::string GetShortName() override { return "LightLimitFix"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
@@ -292,6 +299,7 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
@@ -304,7 +312,7 @@ public:
 			settings.MaxParticlesPerEmitter = defaults.MaxParticlesPerEmitter;
 			settings.MaxParticleDistance = defaults.MaxParticleDistance;
 			settings.EnableParticleLightsOptimization = defaults.EnableParticleLightsOptimization;
-			settings.EnableContactShadows = defaults.EnableContactShadows;
+			SetContactShadowsEnabled(defaults.EnableContactShadows);
 			settings.ContactShadowsInteriorsOnly = defaults.ContactShadowsInteriorsOnly;
 			settings.EnableParticleContactShadows = defaults.EnableParticleContactShadows;
 			settings.ContactShadowQuality = defaults.ContactShadowQuality;
@@ -315,7 +323,7 @@ public:
 		}
 
 		settings.EnableParticleLights = false;
-		settings.EnableContactShadows = false;
+		SetContactShadowsEnabled(false);
 		settings.EnableParticleContactShadows = false;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override
@@ -328,7 +336,7 @@ public:
 			{ "MaxParticlesPerEmitter", settings.MaxParticlesPerEmitter },
 			{ "MaxParticleDistance", settings.MaxParticleDistance },
 			{ "EnableParticleLightsOptimization", settings.EnableParticleLightsOptimization },
-			{ "EnableContactShadows", settings.EnableContactShadows },
+			{ "EnableContactShadows", IsContactShadowsRequested() },
 			{ "ContactShadowsInteriorsOnly", settings.ContactShadowsInteriorsOnly },
 			{ "EnableParticleContactShadows", settings.EnableParticleContactShadows },
 			{ "ContactShadowQuality", settings.ContactShadowQuality },
@@ -349,7 +357,7 @@ public:
 		settings.MaxParticlesPerEmitter = a_state.value("MaxParticlesPerEmitter", settings.MaxParticlesPerEmitter);
 		settings.MaxParticleDistance = a_state.value("MaxParticleDistance", settings.MaxParticleDistance);
 		settings.EnableParticleLightsOptimization = a_state.value("EnableParticleLightsOptimization", settings.EnableParticleLightsOptimization);
-		settings.EnableContactShadows = a_state.value("EnableContactShadows", settings.EnableContactShadows);
+		SetContactShadowsEnabled(a_state.value("EnableContactShadows", IsContactShadowsRequested()));
 		settings.ContactShadowsInteriorsOnly = a_state.value("ContactShadowsInteriorsOnly", settings.ContactShadowsInteriorsOnly);
 		settings.EnableParticleContactShadows = a_state.value("EnableParticleContactShadows", settings.EnableParticleContactShadows);
 		settings.ContactShadowQuality = a_state.value("ContactShadowQuality", settings.ContactShadowQuality);

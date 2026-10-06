@@ -3,6 +3,7 @@
 #include "Features/VolumetricLightingTuning.h"
 #include "LocationContext.h"
 #include "Utils/RendererContextAccess.h"
+#include "Utils/RuntimeToggle.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -53,7 +54,18 @@ namespace
 	struct InteriorSun
 	{
 		bool enabled = true;
-		bool IsEnabled() const { return enabled; }
+		struct Settings
+		{
+			bool Enabled = true;
+			float InteriorShadowDistance = 100.0f;
+		} settings;
+		std::atomic<bool> runtimeSettingsDirty{ true }, runtimeEnabled{ true }, isInteriorWithSun{ false };
+		float nativeDistance = 100.0f, vanillaInteriorShadowDistance = 60.0f;
+		float* gInteriorShadowDistance = &nativeDistance;
+		void EarlyPrepass();
+		void SetRuntimeEnabled(bool enabled);
+		static void SetShadowDistance(bool interior);
+		bool IsEnabled() const { return enabled && runtimeEnabled.load(); }
 		static bool IsInteriorWithSun(RE::Cell* testCell) { return testCell && testCell->interior && testCell->sun; }
 	};
 	CRITICAL_SECTION rendererLock;
@@ -71,6 +83,23 @@ namespace
 		RuntimeData& GetRuntimeData() { return data; }
 		CRITICAL_SECTION& GetLock() { return rendererLock; }
 	} testRenderer;
+	struct ShadowState
+	{
+		void* shadowSceneNode[1]{ reinterpret_cast<void*>(1) };
+	} testShadowState;
+	struct InverseSquareLighting
+	{
+		struct Settings
+		{
+			bool Enabled = true;
+		} settings;
+		std::atomic<bool> runtimeSettingsDirty{ true }, runtimeEnabled{ true };
+		unsigned lightUpdates = 0;
+		void EarlyPrepass();
+		void SetRuntimeEnabled(bool enabled);
+		void ApplyRuntimeStateToActiveLights();
+	};
+	unsigned shadowDistanceUpdates = 0;
 	State testState;
 	RE::TES testTes;
 	RE::Cell testCell;
@@ -82,6 +111,7 @@ namespace
 		namespace game
 		{
 			RE::TES* tes = &::testTes;
+			ShadowState* smState = &testShadowState;
 			bool isVR = true;
 			bool* bEnableVolumetricLighting = &enableFlag;
 			Renderer* renderer = &testRenderer;
@@ -99,6 +129,16 @@ namespace
 	{
 		Require(GetCurrentThreadId() == renderThread, "Graphics work escaped onto the API caller thread");
 		Require(rendererLock.RecursionCount > 0, "Graphics work did not own the renderer");
+	}
+	void InteriorSun::SetShadowDistance(bool)
+	{
+		RequireRenderer();
+		++shadowDistanceUpdates;
+	}
+	void InverseSquareLighting::ApplyRuntimeStateToActiveLights()
+	{
+		RequireRenderer();
+		++lightUpdates;
 	}
 	void SetBooleanSettings(int flags, const std::string&, bool value)
 	{
@@ -210,6 +250,68 @@ namespace
 			Require(!vl.IsPerformanceCostMeasurementReady(), "Deferred frame remained measurement-ready");
 		}
 	};
+
+	void TestNativeLightingToggles()
+	{
+		Fixture f;
+		InteriorSun sun;
+		InverseSquareLighting inverse;
+		shadowDistanceUpdates = 0;
+		sun.SetRuntimeEnabled(false);
+		inverse.SetRuntimeEnabled(false);
+		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "native setters must only request changes");
+		for (bool* guard : { &testState.safe, &testState.engineBusy, &testState.menu, &testState.pendingPostLoadRuntimeReset }) {
+			*guard = true;
+			sun.EarlyPrepass();
+			inverse.EarlyPrepass();
+			Require(sun.runtimeEnabled && inverse.runtimeEnabled, "native toggles must defer protected engine state");
+			*guard = false;
+		}
+		testCell.attached = false;
+		sun.EarlyPrepass();
+		inverse.EarlyPrepass();
+		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "unattached destination must retain native changes");
+		testCell.attached = true;
+		testTes.interiorCell = &testCell;
+		sun.EarlyPrepass();
+		inverse.EarlyPrepass();
+		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "inconsistent destination must retain native changes");
+		testTes.interiorCell = nullptr;
+		auto* context = globals::d3d::context;
+		globals::d3d::context = nullptr;
+		sun.EarlyPrepass();
+		inverse.EarlyPrepass();
+		Require(shadowDistanceUpdates == 0 && inverse.lightUpdates == 0, "missing renderer must retain native changes");
+		globals::d3d::context = context;
+		sun.EarlyPrepass();
+		inverse.EarlyPrepass();
+		Require(shadowDistanceUpdates == 1 && inverse.lightUpdates == 1 && sun.nativeDistance == 60, "safe render boundary must apply native changes");
+		sun.SetRuntimeEnabled(true);
+		sun.SetRuntimeEnabled(false);
+		inverse.SetRuntimeEnabled(true);
+		inverse.SetRuntimeEnabled(false);
+		sun.EarlyPrepass();
+		inverse.EarlyPrepass();
+		Require(shadowDistanceUpdates == 1 && inverse.lightUpdates == 1, "opposing native requests must avoid redundant work");
+	}
+
+	void TestNativeLocationDuringDeferral()
+	{
+		Fixture f;
+		InteriorSun sun;
+		testCell.interior = true;
+		testTes.interiorCell = &testCell;
+		sun.EarlyPrepass();
+		Require(sun.isInteriorWithSun, "interior sun must classify the active cell");
+		testState.safe = true;
+		sun.SetRuntimeEnabled(false);
+		sun.EarlyPrepass();
+		Require(sun.isInteriorWithSun && sun.runtimeEnabled, "saving must preserve applied interior lighting");
+		testCell.interior = false;
+		testTes.interiorCell = nullptr;
+		sun.EarlyPrepass();
+		Require(!sun.isInteriorWithSun && sun.runtimeEnabled, "destination classification must advance while the toggle is deferred");
+	}
 
 	void TestCoalescingAndFrameBoundary()
 	{
@@ -396,6 +498,8 @@ int main()
 	renderThread = GetCurrentThreadId();
 	bool passed = true;
 	for (const auto& [name, test] : std::array{
+			 std::pair{ "Native location during deferral", &TestNativeLocationDuringDeferral },
+			 std::pair{ "Native lighting toggles", &TestNativeLightingToggles },
 			 std::pair{ "Coalescing and frame boundary", &TestCoalescingAndFrameBoundary },
 			 std::pair{ "Load and destination guards", &TestLoadAndDestinationGuards },
 			 std::pair{ "Renderer contention", &TestRendererContention },

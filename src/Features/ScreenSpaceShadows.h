@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/RuntimeToggle.h"
+
 #include "Buffer.h"
 #include "Utils/LazyShader.h"
 
@@ -10,9 +12,14 @@
 struct ScreenSpaceShadows : Feature
 {
 private:
+	Util::RuntimeToggle runtimeToggle{ true };
 	static constexpr std::string_view MOD_ID = "93209";
 
 public:
+	/** @brief Read or stage the preference without touching render-owned settings. */
+	bool IsEnabledRequested() const { return runtimeToggle.Get(); }
+	void SetEnabled(bool enabled) { runtimeToggle.Set(enabled); }
+
 	virtual inline std::string GetName() override { return "Screen Space Shadows"; }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceShadows"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
@@ -135,6 +142,7 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return bendSettings.Enable != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;

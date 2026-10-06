@@ -122,23 +122,12 @@ namespace
 		}
 	}
 
-	void SetScreenSpaceGIEnabled(ScreenSpaceGI::Settings& a_settings, bool a_enabled)
+	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI& feature)
 	{
-		if (a_settings.Enabled == a_enabled)
-			return;
-
-		const bool wasEnabled = a_settings.Enabled;
-		a_settings.Enabled = a_enabled;
-		ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, a_settings);
-	}
-
-	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI::Settings& a_settings)
-	{
-		bool enabled = a_settings.Enabled;
+		bool enabled = feature.IsEnabledRequested();
 		if (!ImGui::Checkbox("Enable", &enabled))
 			return false;
-
-		SetScreenSpaceGIEnabled(a_settings, enabled);
+		feature.SetEnabled(enabled);
 		return true;
 	}
 
@@ -388,6 +377,7 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 {
 	const bool wasEnabled = settings.Enabled;
 	settings = {};
+	SetEnabled(settings.Enabled);
 	ApplyPlatformSettingOverrides(settings);
 	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 	recompileFlag = true;
@@ -410,7 +400,7 @@ void ScreenSpaceGI::DrawSettings()
 	};
 
 	///////////////////////////////
-	DrawScreenSpaceGIEnabledCheckbox(settings);
+	DrawScreenSpaceGIEnabledCheckbox(*this);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
 	}
@@ -901,7 +891,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (!ShadersOK())
 		Util::Text::Error("Compute shaders failed to compile!");
 
-	DrawScreenSpaceGIEnabledCheckbox(settings);
+	DrawScreenSpaceGIEnabledCheckbox(*this);
 
 	DrawOCUEffectFoveationSettings();
 
@@ -963,23 +953,29 @@ void ScreenSpaceGI::DrawEssentialSettings()
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
 
-	DrawScreenSpaceGIEnabledCheckbox(settings);
+	DrawScreenSpaceGIEnabledCheckbox(*this);
+}
+
+bool ScreenSpaceGI::IsPerformanceCostMeasurementReady() const
+{
+	return !Util::IsRuntimeToggleBlocked(globals::state) && (settings.Enabled != 0) == IsEnabledRequested();
 }
 
 json ScreenSpaceGI::CapturePerformanceSettingsState() const
 {
-	return settings;
+	return CapturePerformanceCostMeasurementState();
 }
 
 void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (!a_enabled) {
-		SetScreenSpaceGIEnabled(settings, false);
+		SetEnabled(false);
 		return;
 	}
 
 	settings = Settings{};
 	settings.Enabled = true;
+	SetEnabled(settings.Enabled);
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
 	settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
@@ -991,7 +987,9 @@ void ScreenSpaceGI::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 
 json ScreenSpaceGI::CapturePerformanceCostMeasurementState() const
 {
-	return settings;
+	json captured = settings;
+	captured["Enabled"] = IsEnabledRequested();
+	return captured;
 }
 
 void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
@@ -1001,6 +999,7 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 
 	const bool wasEnabled = settings.Enabled;
 	settings = a_state.get<Settings>();
+	SetEnabled(settings.Enabled);
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
 	settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
@@ -1015,6 +1014,7 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	const bool wasEnabled = settings.Enabled;
 	settings = o_json;
+	SetEnabled(settings.Enabled);
 	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
 	if (!o_json.contains("EnableFoveated") && o_json.contains("FoveatedPresetMode")) {
 		// Backward compatibility: legacy foveated preset modes map to the new single toggle.
@@ -1046,6 +1046,7 @@ void ScreenSpaceGI::SaveSettings(json& o_json)
 {
 	ApplyPlatformSettingOverrides(settings);
 	o_json = settings;
+	o_json["Enabled"] = IsEnabledRequested();
 	if (!REL::Module::IsVR()) {
 		StripVRSpecificSettings(o_json);
 	}
@@ -1701,6 +1702,9 @@ void ScreenSpaceGI::UpdateSB()
 
 void ScreenSpaceGI::DrawSSGI()
 {
+	const bool wasEnabled = settings.Enabled;
+	runtimeToggle.Apply(settings.Enabled, globals::state);
+	ClearScreenSpaceGIProfilerTimersIfDisabled(wasEnabled, settings);
 	ocuEffectActive.store(false, std::memory_order_relaxed);
 	ocuEffectStatus.store(settings.ExperimentalOCUEffectFoveation ? "Native sampling: SSGI pass not active" : "OCU peripheral sampling disabled", std::memory_order_relaxed);
 	ApplyPlatformSettingOverrides(settings);

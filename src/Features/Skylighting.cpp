@@ -9,6 +9,8 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/RendererContextAccess.h"
+#include "Utils/RuntimeToggle.h"
 
 namespace
 {
@@ -249,12 +251,7 @@ namespace
 		if (a_previousEnabled == a_skylighting.settings.EnableSkylighting)
 			return;
 
-		a_skylighting.inOcclusion = false;
-
-		if (globals::d3d::device && globals::game::renderer)
-			a_skylighting.ResetSkylighting();
-		else
-			a_skylighting.QueueResetSkylighting();
+		a_skylighting.QueueResetSkylighting();
 	}
 
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
@@ -297,18 +294,7 @@ namespace
 	{
 		NormalizeSettingsForRuntime(a_skylighting.settings);
 		a_skylighting.settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(a_skylighting.settings, a_skylighting.settings.ProbeUpdateInterval);
-		a_skylighting.ApplyProbeGridQuality();
-
-		const bool probeGridChanged = a_previousProbeGridQuality != a_skylighting.settings.ProbeGridQuality;
-		const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
-
-		if (canResetRuntimeResources && probeGridChanged)
-			a_skylighting.SetupResources();
-
-		if (canResetRuntimeResources)
-			a_skylighting.ResetSkylighting();
-		else
-			a_skylighting.QueueResetSkylighting();
+		a_skylighting.QueueResetSkylighting(a_previousProbeGridQuality != a_skylighting.settings.ProbeGridQuality);
 	}
 
 	void ApplySkylightingPerformancePreset(
@@ -412,7 +398,7 @@ namespace
 		float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
 		if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
 			settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
-			a_skylighting.ResetSkylighting();
+			a_skylighting.QueueResetSkylighting();
 		}
 	}
 
@@ -463,6 +449,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void Skylighting::LoadSettings(json& o_json)
 {
+	const uint previousProbeGridQuality = settings.ProbeGridQuality;
 	ApplyPlatformDefaults(settings);
 
 	LoadIfPresent(o_json, "MaxZenith", settings.MaxZenith);
@@ -479,13 +466,12 @@ void Skylighting::LoadSettings(json& o_json)
 	LoadIfPresent(o_json, "IncludeMarkedRoofOccluders", settings.IncludeMarkedRoofOccluders);
 
 	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
+	QueueResetSkylighting(previousProbeGridQuality != settings.ProbeGridQuality);
 }
 
 void Skylighting::SaveSettings(json& o_json)
 {
 	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
 	o_json = settings;
 }
 
@@ -506,9 +492,29 @@ void Skylighting::ApplyProbeGridQuality()
 	settings.StableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
 }
 
-void Skylighting::QueueResetSkylighting()
+void Skylighting::QueueResetSkylighting(bool rebuild)
 {
+	if (rebuild)
+		queuedRebuildSkylighting.store(true, std::memory_order_release);
 	queuedResetSkylighting.store(true, std::memory_order_release);
+}
+
+void Skylighting::EarlyPrepass()
+{
+	auto* state = globals::state;
+	if (!queuedResetSkylighting.load(std::memory_order_acquire) || !state || runtimeSettingsFrame == state->frameCount)
+		return;
+	runtimeSettingsFrame = state->frameCount;
+	if (Util::IsRuntimeToggleBlocked(state))
+		return;
+	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!ownership)
+		return;
+	inOcclusion = false;
+	if (queuedRebuildSkylighting.load(std::memory_order_acquire))
+		SetupResources();
+	else
+		ResetSkylighting();
 }
 
 bool Skylighting::UpdateInteriorState()
@@ -536,6 +542,15 @@ void Skylighting::ResetSkylighting()
 		return;
 	}
 
+	winrt::com_ptr<ID3D11ShaderResourceView> previousProbes, previousVisibility;
+	context->PSGetShaderResources(50, 1, previousProbes.put());
+	context->PSGetShaderResources(53, 1, previousVisibility.put());
+	const SKSE::stl::scope_exit restoreBindings([&]() noexcept {
+		auto* probes = previousProbes.get();
+		auto* visibility = previousVisibility.get();
+		context->PSSetShaderResources(50, 1, &probes);
+		context->PSSetShaderResources(53, 1, &visibility);
+	});
 	std::array<ID3D11ShaderResourceView*, 2> nullPixelSRVs{};
 	context->PSSetShaderResources(50, 1, nullPixelSRVs.data());
 	context->PSSetShaderResources(53, 1, nullPixelSRVs.data() + 1);
@@ -571,6 +586,13 @@ void Skylighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 	ApplySkylightingRuntimeEnabledChange(*this, previousEnabled);
 }
 
+bool Skylighting::IsPerformanceCostMeasurementReady() const
+{
+	return !Util::IsRuntimeToggleBlocked(globals::state) &&
+	       !queuedResetSkylighting.load(std::memory_order_acquire) &&
+	       !queuedRebuildSkylighting.load(std::memory_order_acquire);
+}
+
 bool Skylighting::IsPerformanceCostMeasurementEnabled() const
 {
 	return IsRuntimeActive();
@@ -597,24 +619,8 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 		return;
 
 	const uint previousProbeGridQuality = settings.ProbeGridQuality;
-	const bool previousEnabled = settings.EnableSkylighting;
 	settings = a_state.get<Settings>();
-	NormalizeSettingsForRuntime(settings);
-	ApplyProbeGridQuality();
-
-	const bool probeGridChanged = previousProbeGridQuality != settings.ProbeGridQuality;
-	if (previousEnabled != settings.EnableSkylighting)
-		inOcclusion = false;
-
-	const bool canResetRuntimeResources = globals::d3d::device && globals::game::renderer;
-
-	if (canResetRuntimeResources && probeGridChanged)
-		SetupResources();
-
-	if (canResetRuntimeResources)
-		ResetSkylighting();
-	else
-		QueueResetSkylighting();
+	ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 }
 
 void Skylighting::DrawSettings()
@@ -627,14 +633,14 @@ void Skylighting::DrawSettings()
 	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
 	if (ImGui::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
-		ResetSkylighting();
+		QueueResetSkylighting();
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Helps skylighting darken under some roofs the game marks specially. May rarely add extra dark patches if hidden helper objects are included.");
 
 	ImGui::Separator();
 
 	if (ImGui::Button("Rebuild Skylighting"))
-		ResetSkylighting();
+		QueueResetSkylighting();
 
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
@@ -740,7 +746,7 @@ void Skylighting::DrawSettings()
 	float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
 	if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
 		settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
-		ResetSkylighting();
+		QueueResetSkylighting();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Sets the total camera-centered skylighting probe field width. Balanced uses 3.2 cells; Performance uses 2.5 cells.");
@@ -813,6 +819,7 @@ json Skylighting::CapturePerformanceSettingsState() const
 
 void Skylighting::SetupResources()
 {
+	queuedRebuildSkylighting.exchange(false, std::memory_order_acq_rel);
 	ApplyProbeGridQuality();
 
 	delete texOcclusion;
@@ -1498,7 +1505,7 @@ void Skylighting::RenderOcclusion()
 		CS_GPU_PASS("Skylighting::SkylightingMask");
 
 		if (queuedResetSkylighting.load(std::memory_order_acquire))
-			ResetSkylighting();
+			EarlyPrepass();
 		if (queuedResetSkylighting.load(std::memory_order_acquire))
 			return;
 

@@ -57,7 +57,7 @@ namespace
 		return globals::game::isVR && globals::features::upscaling.IsVRRenderScaleModeActive();
 	}
 
-	constexpr std::array<std::string_view, 21> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 22> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"AdaptiveBrightness",
@@ -77,6 +77,7 @@ namespace
 		"TruePBR",
 		"ExtendedMaterials",
 		"FoliageLighting",
+		"GrassOptimizations",
 		"GrassLighting",
 		"GrassCollision"
 	};
@@ -2047,6 +2048,8 @@ namespace
 			return "all Foliage Lighting contributions to tree foliage and grass are switched off.";
 		if (shortName == "GrassLighting")
 			return "the Grass Lighting runtime toggle is switched off, so grass uses the basic pixel-shading path; the installed shader permutation and vertex work remain the same in both windows.";
+		if (shortName == "GrassOptimizations")
+			return "grass uses native drawing, with optimized batching, density, mesh LOD and grass Hi-Z switched off. Other grass features keep their current settings.";
 		if (shortName == "GrassCollision")
 			return "Grass Collision is switched off.";
 
@@ -2748,7 +2751,7 @@ void PerformanceTuningRenderer::Render()
 			const json settingsStateBefore = selectedFeature->CapturePerformanceSettingsState();
 			ImGui::BeginDisabled(anyMeasurementRunning);
 			ImGui::BeginGroup();
-			selectedFeature->DrawPerformanceSettings(true);
+			selectedFeature->DrawPerformanceSettings(!globals::menu || !globals::menu->IsEssentialsUiMode());
 			ImGui::EndGroup();
 			ImGui::EndDisabled();
 			RenderFeatureCostMeasurement(selectedFeature, selectedCostState);

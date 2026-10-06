@@ -59,6 +59,13 @@ values, with grass Hi-Z disabled when scene Hi-Z is selected.
 Turning density reduction off disables projected-size thinning. Frustum,
 Hi-Z, distance, fade and mesh cost controls remain independent.
 
+Essentials shows only the master, view culling, distant density, distant
+mesh and grass Hi-Z toggles. Advanced exposes all controls. Performance
+Profiling includes Grass Optimizations with the same mode-specific
+controls, saved-user-default restoration and an Actual feature cost
+comparison against native grass drawing. The comparison restores all
+grass settings and leaves other grass features unchanged.
+
 Hover any control for its effects on grass appearance and rendering cost.
 Help remains available for disabled controls. Grass Hi-Z notes its
 possible small performance cost in some scenes.
@@ -269,6 +276,15 @@ builds. The upstream defaults are enabled; in-game quality, performance
 and runtime compatibility require separate validation.
 
 ## Validation
+
+The Essentials/profiling follow-up builds as a universal Release DLL.
+`GrassOptimizationPolicy`, `PerformanceTuningDevBenchContract`,
+`PerformanceTuningStatistics`, `PresetCompatibility` and
+`FeaturePresetCompatibilityContract` pass (5/5). Preset generation and
+its test suite pass without changing saved rendering preferences.
+Both changed UI units pass production compiler syntax checks with the
+forced-header assertion that DevBench and Tracy definitions are absent.
+The new UI and its cost-comparison restoration have not been tested in game.
 
 The universal Release DLL builds with DevBench enabled and Tracy disabled.
 Focused policy tests cover finite settings, threshold ordering, native

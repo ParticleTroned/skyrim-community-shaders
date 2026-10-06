@@ -212,6 +212,7 @@ foreach(_feature_short_name IN ITEMS
     TruePBR
     ExtendedMaterials
     FoliageLighting
+    GrassOptimizations
 )
     string(FIND "${_renderer}" "\"${_feature_short_name}\"" _feature_position)
     if(_feature_position EQUAL -1)
@@ -227,6 +228,7 @@ foreach(_feature_file IN ITEMS
     "src/Features/VolumetricShadows"
     "src/Features/ExtendedMaterials"
     "src/Features/FoliageLighting"
+    "src/Features/GrassOptimizations"
     "src/TruePBR"
 )
     assert_performance_feature_contract(

@@ -21,6 +21,19 @@ struct GrassOptimizations : Feature
 	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v6"; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	void DrawSettings() override;
+	bool HasEssentialSettings() const override { return true; }
+	void DrawEssentialSettings() override;
+	bool HasPerformanceSettings() const override { return true; }
+	void DrawPerformanceSettings(bool advanced) override;
+	json CapturePerformanceSettingsState() const override;
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return IsEnabled(); }
+	void SetPerformanceCostMeasurementEnabled(bool enabled) override { SetEnabled(enabled); }
+	bool IsPerformanceCostMeasurementReady() const override { return IsHookInstalled(); }
+	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for the grass draw hook"; }
+	json CapturePerformanceCostMeasurementState() const override { return CapturePerformanceSettingsState(); }
+	/** @brief Restore all grass controls after a cost comparison, respecting scene Hi-Z compatibility. */
+	void RestorePerformanceCostMeasurementState(const json& state) override;
 	void LoadSettings(json& settings) override;
 	void SaveSettings(json& settings) override;
 	void RestoreDefaultSettings() override;
@@ -44,6 +57,7 @@ struct GrassOptimizations : Feature
 	json GetDiagnostics() const;
 #endif
 private:
+	void DrawControls(bool advanced);
 	mutable std::mutex settingsMutex;
 	GrassPolicy::Settings settings;
 	std::unique_ptr<GrassBucketRenderer> renderer;

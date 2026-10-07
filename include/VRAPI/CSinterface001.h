@@ -115,8 +115,8 @@ namespace CSPluginAPI
 		/** @brief Stage a preference from any thread; applied at the next safe render boundary. */
 		virtual void SetVolumetricLightingExteriorEnabled(bool enabled) = 0;
 
-		// Upscaling calls use the runtime main thread. Worker calls wait for dispatch;
-		// unadmitted work times out without later execution. Unavailable queries fail closed.
+		// Upscaling admission runs on the caller to preserve preflight/setter ordering.
+		// Callers can hold plugin locks needed by the SKSE task queue.
 		// Controls the shared DLSS/FSR/FSR4 upscaler preset.
 		virtual UpscalePreset GetUpscalePreset() = 0;
 		virtual void SetUpscalePreset(UpscalePreset preset) = 0;

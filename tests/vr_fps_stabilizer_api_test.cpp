@@ -1,51 +1,16 @@
-#include "Api/MainThreadDispatchState.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Features/Upscaling/VRRenderScaleModePolicy.h"
 #include <future>
-#include <queue>
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <source_location>
 #include <stdexcept>
 #include <string>
-
-namespace CSX::Api
-{
-	inline thread_local bool runtimeOwner = true;
-	bool IsRuntimeMainThread() { return runtimeOwner; }
-	void EnterRuntimeMainThreadTask() { runtimeOwner = true; }
-}
-namespace SKSE
-{
-	struct TaskInterface
-	{
-		std::mutex mutex;
-		std::condition_variable ready;
-		std::queue<std::function<void()>> pending;
-		void AddTask(std::function<void()> task)
-		{
-			std::lock_guard lock(mutex);
-			pending.push(std::move(task));
-			ready.notify_one();
-		}
-		void RunOne()
-		{
-			std::unique_lock lock(mutex);
-			if (!ready.wait_for(lock, std::chrono::seconds(2), [&] { return !pending.empty(); }))
-				throw std::runtime_error("worker did not dispatch");
-			auto task = std::move(pending.front());
-			pending.pop();
-			lock.unlock();
-			task();
-		}
-	};
-	TaskInterface tasks;
-	bool available = true;
-	TaskInterface* GetTaskInterface() { return available ? &tasks : nullptr; }
-}
+#include <thread>
 
 struct Upscaling
 {
@@ -101,8 +66,9 @@ struct Upscaling
 
 	bool syncActive = true;
 	uint32_t blockReasons = 0;
-	uint64_t availableSerial = 0, clearedSerial = 0;
+	uint64_t availableSerial = 0, clearedSerial = 0, appliedSerial = 0;
 	unsigned int applications = 0;
+	std::thread::id applyingThread;
 	bool latched = false, converged = true;
 	bool pendingVendorReset = false, pendingTransition = false;
 	VRRenderScaleTransitionState controllerState = VRRenderScaleTransitionState::Active;
@@ -138,9 +104,11 @@ struct Upscaling
 	void ClearVRFpsStabilizerAPITransitionProfileAdmission(uint64_t serial) { clearedSerial = serial; }
 	bool IsVRFpsStabilizerAPITransitionProfileAllowed(UpscaleMethod, bool, uint32_t, uint32_t, uint64_t) const;
 	bool IsVRUpscalingTransitionProfileNoOp(UpscaleMethod, bool, uint32_t, uint32_t) const;
-	void ApplyCSMenuUpscalingTransition(UpscaleMethod method, bool scale, uint32_t quality, uint32_t dlss, const char*, VRUpscalingTransitionOrigin, uint64_t)
+	void ApplyCSMenuUpscalingTransition(UpscaleMethod method, bool scale, uint32_t quality, uint32_t dlss, const char*, VRUpscalingTransitionOrigin, uint64_t serial)
 	{
 		++applications;
+		applyingThread = std::this_thread::get_id();
+		appliedSerial = serial;
 		current.upscaleMethod = method;
 		current.renderScaleMode = VRRenderScaleModePolicy::Resolve(method == UpscaleMethod::kFSR || method == UpscaleMethod::kDLSS, quality != 0, scale).preference;
 		current.qualityMode = quality;
@@ -224,10 +192,11 @@ namespace CSPluginAPI
 	};
 	struct CSInterface001
 	{
+		uint32_t GetVRUpscalingApplyBlockReasons();
+		bool IsVRUpscalingProfileApplyAllowed();
 		VRUpscalingTransitionProfileDecision GetVRUpscalingTransitionProfileDecision(UpscaleMethod, bool, UpscalePreset, DLSSProfile);
 		void SetVRUpscalingTransitionProfileForMethod(UpscaleMethod, bool, UpscalePreset, DLSSProfile);
 	};
-	inline CSInterface001 g_interface001;
 }
 #include "stabilizer_api_under_test.h"
 
@@ -265,39 +234,40 @@ int main()
 		Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kBlocked);
 		upscaling.neuralEnabled = false;
 		upscaling.syncActive = true;
-		upscaling.blockReasons = 4;
+		// Plugin callers can hold a configuration lock that queued reset tasks need.
+		std::recursive_mutex configMutex;
 		auto worker = std::async(std::launch::async, [&] {
-			CSX::Api::runtimeOwner = false;
+			std::lock_guard lock(configMutex);
+			upscaling.blockReasons = 4;
+			Require(api.GetVRUpscalingApplyBlockReasons() == 4);
+			Require(!api.IsVRUpscalingProfileApplyAllowed());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kBlocked);
 			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+			Require(upscaling.applications == 0);
+			upscaling.blockReasons = 0;
+			upscaling.config.exterior.upscaleMethod = Upscaling::UpscaleMethod::kFSR;
+			upscaling.config.exterior.qualityMode = 3;
+			upscaling.config.exterior.renderScaleMode = true;
+			Require(api.IsVRUpscalingProfileApplyAllowed());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kApply);
+			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+			Require(upscaling.applications == 1 && upscaling.current.upscaleMethod == Upscaling::UpscaleMethod::kFSR);
+			Require(upscaling.applyingThread == std::this_thread::get_id());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kNoChange);
+
+			upscaling.current = {};
+			upscaling.latched = false;
+			upscaling.blockReasons = 4;
+			upscaling.availableSerial = 42;
+			Require(!api.IsVRUpscalingProfileApplyAllowed());
+			Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kApply);
+			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+			Require(upscaling.applications == 2 && upscaling.appliedSerial == 42 && upscaling.clearedSerial == 42);
+			Require(upscaling.applyingThread == std::this_thread::get_id());
+			upscaling.blockReasons = 0;
+			upscaling.availableSerial = 0;
 		});
-		Require(upscaling.applications == 0);
-		SKSE::tasks.RunOne();
 		worker.get();
-		Require(upscaling.applications == 0);
-		auto query = std::async(std::launch::async, [&] {
-			CSX::Api::runtimeOwner = false;
-			return api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
-		});
-		SKSE::tasks.RunOne();
-		Require(query.get() == Decision::kBlocked);
-		SKSE::available = false;
-		CSX::Api::runtimeOwner = false;
-		Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kBlocked);
-		api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
-		Require(upscaling.applications == 0);
-		SKSE::available = true;
-		CSX::Api::runtimeOwner = true;
-		upscaling.blockReasons = 0;
-		upscaling.config.exterior.upscaleMethod = Upscaling::UpscaleMethod::kFSR;
-		upscaling.config.exterior.qualityMode = 3;
-		upscaling.config.exterior.renderScaleMode = true;
-		auto accepted = std::async(std::launch::async, [&] {
-			CSX::Api::runtimeOwner = false;
-			api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
-		});
-		SKSE::tasks.RunOne();
-		accepted.get();
-		Require(upscaling.applications == 1 && upscaling.current.upscaleMethod == Upscaling::UpscaleMethod::kFSR);
 		upscaling.config = {};
 		upscaling.current = {};
 		upscaling.latched = false;
@@ -339,7 +309,7 @@ int main()
 							Require(upscaling.applications == 1 && upscaling.current.qualityMode == quality);
 							Require(upscaling.latched == (eligible && quality != 0 && scale != 0));
 							Require(api.GetVRUpscalingTransitionProfileDecision(apiMethod, scale != 0, apiPreset, apiDLSS) == Decision::kNoChange);
-							Require(upscaling.clearedSerial == upscaling.availableSerial);
+							Require(upscaling.appliedSerial == upscaling.availableSerial && upscaling.clearedSerial == upscaling.availableSerial);
 							if (method != 3)
 								Require(api.GetVRUpscalingTransitionProfileDecision(apiMethod, scale != 0, apiPreset, static_cast<DLSSProfile>((dlss + 1) % 5)) == Decision::kNoChange);
 							// A pre-move call uses the same configured target on the other side.

@@ -1799,7 +1799,6 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/Upscaling.cpp
             include/VRAPI/CSpluginapi.h
             tests/extract_stabilizer_api.cmake
-            src/Api/LegacyRuntimeDispatch.h
         VERBATIM
     )
     target_sources(

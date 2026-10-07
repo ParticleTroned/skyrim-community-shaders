@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "Api/LegacyRuntimeDispatch.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Upscaling.h"
 #include "Features/ScreenSpaceGI.h"
@@ -16,7 +15,7 @@
 #include <atomic>
 #include <cstdint>
 
-// Build 13 stages feature switches and marshals legacy upscaling calls.
+// Build 13 stages feature switches; upscaling admission stays synchronous.
 inline constexpr unsigned int CSBuildNumber = 13;
 
 namespace CSPluginAPI
@@ -305,23 +304,12 @@ namespace CSPluginAPI
 
 	inline UpscalePreset CSInterface001::GetUpscalePreset()
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.GetUpscalePreset(); }, UpscalePreset::kNativeAA);
-
 		const uint32_t clampedMode = std::min(globals::features::upscaling.GetEffectiveDLSSQualityMode(), Upscaling::kQualityModeMaxIndex);
 		return detail::QualityModeToUpscalePreset(clampedMode);
 	}
 
 	inline void CSInterface001::SetUpscalePreset(UpscalePreset preset)
 	{
-		if (!CSX::Api::IsRuntimeMainThread()) {
-			CSX::Api::DispatchLegacyRuntimeCall([=] {
-				g_interface001.SetUpscalePreset(preset);
-				return true;
-			}, false);
-			return;
-		}
-
 		if (!detail::IsValidUpscalePreset(preset)) {
 			logger::warn("[CSX API] Ignoring invalid upscaler preset value {}", static_cast<uint32_t>(preset));
 			return;
@@ -357,23 +345,12 @@ namespace CSPluginAPI
 
 	inline DLSSProfile CSInterface001::GetDLSSProfile()
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.GetDLSSProfile(); }, DLSSProfile::kJ);
-
 		const uint32_t clampedProfile = std::min(globals::features::upscaling.GetEffectiveDLSSPreset(), Upscaling::kDLSSPresetMaxIndex);
 		return static_cast<DLSSProfile>(clampedProfile);
 	}
 
 	inline void CSInterface001::SetDLSSProfile(DLSSProfile profile)
 	{
-		if (!CSX::Api::IsRuntimeMainThread()) {
-			CSX::Api::DispatchLegacyRuntimeCall([=] {
-				g_interface001.SetDLSSProfile(profile);
-				return true;
-			}, false);
-			return;
-		}
-
 		if (!detail::IsValidDLSSProfile(profile)) {
 			logger::warn("[CSX API] Ignoring invalid DLSS profile value {}", static_cast<uint32_t>(profile));
 			return;
@@ -406,22 +383,11 @@ namespace CSPluginAPI
 
 	inline bool CSInterface001::GetRenderAtUpscaleResEnabled()
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.GetRenderAtUpscaleResEnabled(); }, false);
-
 		return globals::features::upscaling.GetPerfModeRequested();
 	}
 
 	inline void CSInterface001::SetRenderAtUpscaleResEnabled(bool enabled)
 	{
-		if (!CSX::Api::IsRuntimeMainThread()) {
-			CSX::Api::DispatchLegacyRuntimeCall([=] {
-				g_interface001.SetRenderAtUpscaleResEnabled(enabled);
-				return true;
-			}, false);
-			return;
-		}
-
 		if (detail::ShouldBlockVRUpscalingApply("render-scale mode change"))
 			return;
 
@@ -434,22 +400,11 @@ namespace CSPluginAPI
 
 	inline bool CSInterface001::GetRenderAtUpscaleResActive()
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.GetRenderAtUpscaleResActive(); }, false);
-
 		return globals::features::upscaling.IsPerfModeActive();
 	}
 
 	inline void CSInterface001::SetVRUpscalingTransitionProfile(bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)
 	{
-		if (!CSX::Api::IsRuntimeMainThread()) {
-			CSX::Api::DispatchLegacyRuntimeCall([=] {
-				g_interface001.SetVRUpscalingTransitionProfile(renderScaleModeEnabled, preset, profile);
-				return true;
-			}, false);
-			return;
-		}
-
 		auto& upscaling = globals::features::upscaling;
 		if (!detail::IsValidUpscalePreset(preset)) {
 			logger::warn("[CSX API] Ignoring invalid transition upscaler preset value {}", static_cast<uint32_t>(preset));
@@ -494,22 +449,11 @@ namespace CSPluginAPI
 
 	inline UpscaleMethod CSInterface001::GetUpscaleMethod()
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.GetUpscaleMethod(); }, UpscaleMethod::kNone);
-
 		return detail::FromInternalUpscaleMethod(globals::features::upscaling.GetConfiguredUpscaleMethodForTransition());
 	}
 
 	inline void CSInterface001::SetUpscaleMethod(UpscaleMethod method)
 	{
-		if (!CSX::Api::IsRuntimeMainThread()) {
-			CSX::Api::DispatchLegacyRuntimeCall([=] {
-				g_interface001.SetUpscaleMethod(method);
-				return true;
-			}, false);
-			return;
-		}
-
 		if (!detail::IsValidUpscaleMethod(method)) {
 			logger::warn("[CSX API] Ignoring invalid upscaler method value {}", static_cast<uint32_t>(method));
 			return;
@@ -530,14 +474,6 @@ namespace CSPluginAPI
 
 	inline void CSInterface001::SetVRUpscalingTransitionProfileForMethod(UpscaleMethod method, bool renderScaleModeEnabled, UpscalePreset preset, DLSSProfile profile)
 	{
-		if (!CSX::Api::IsRuntimeMainThread()) {
-			CSX::Api::DispatchLegacyRuntimeCall([=] {
-				g_interface001.SetVRUpscalingTransitionProfileForMethod(method, renderScaleModeEnabled, preset, profile);
-				return true;
-			}, false);
-			return;
-		}
-
 		auto& upscaling = globals::features::upscaling;
 		if (!detail::IsValidUpscaleMethod(method)) {
 			logger::warn("[CSX API] Ignoring invalid transition upscaler method value {}", static_cast<uint32_t>(method));
@@ -586,17 +522,11 @@ namespace CSPluginAPI
 
 	inline uint32_t CSInterface001::GetVRUpscalingApplyBlockReasons()
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.GetVRUpscalingApplyBlockReasons(); }, static_cast<uint32_t>(VRUpscalingApplyBlockReason::kTransitionPending));
-
 		return globals::features::upscaling.GetVRUpscalingApplyBlockReasonsForAPI();
 	}
 
 	inline bool CSInterface001::IsVRUpscalingProfileApplyAllowed()
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.IsVRUpscalingProfileApplyAllowed(); }, false);
-
 		return GetVRUpscalingApplyBlockReasons() == 0;
 	}
 
@@ -606,9 +536,6 @@ namespace CSPluginAPI
 		UpscalePreset preset,
 		DLSSProfile profile)
 	{
-		if (!CSX::Api::IsRuntimeMainThread())
-			return CSX::Api::DispatchLegacyRuntimeCall([=] { return g_interface001.GetVRUpscalingTransitionProfileDecision(method, renderScaleModeEnabled, preset, profile); }, VRUpscalingTransitionProfileDecision::kBlocked);
-
 		if (!detail::IsValidUpscaleMethod(method) ||
 			!detail::IsValidUpscalePreset(preset) ||
 			!detail::IsValidDLSSProfile(profile)) {

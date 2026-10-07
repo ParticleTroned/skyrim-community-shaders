@@ -483,6 +483,8 @@ public:
 	void ResetComboRecordingState();
 	void ReleaseMenuImGuiInputState();
 	void ResetMenuInputRuntimeState();
+	/** Whether a headset controller currently owns menu pointer input. */
+	bool IsMenuPointerInHeadset() const;
 	void RequestFixedWorldMenuReanchor();
 
 	void EnsureOverlayInitialized();

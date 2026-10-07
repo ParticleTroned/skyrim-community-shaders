@@ -1,4 +1,6 @@
 #include "GrassLighting.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
 #include <cmath>
@@ -60,7 +62,7 @@ bool GrassLighting::DrawEnabledCheckbox()
 {
 	SanitizeSettings();
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enable", &enabled))
 		settings.Enabled = enabled ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Enables enhanced grass lighting at runtime. Disable to use the basic grass lighting path without restarting.");
@@ -69,7 +71,7 @@ bool GrassLighting::DrawEnabledCheckbox()
 
 void GrassLighting::DrawComplexGrassDetectionThreshold()
 {
-	ImGui::SliderFloat(
+	Util::Widgets::SliderFloat(
 		"Complex Grass Detection",
 		&settings.ComplexGrassThreshold,
 		kComplexGrassThresholdMin,
@@ -90,9 +92,14 @@ void GrassLighting::DrawSettings()
 
 	ImGui::BeginDisabled(!enabled);
 
-	if (ImGui::TreeNodeEx("Complex Grass")) {
+	MenuUI::SettingsPage page("GrassLighting", {
+												   { "highlights", "Highlights", "Choose how grass reflects direct light." },
+												   { "lighting", "Lighting", "Refine grass colour and indirect lighting." },
+												   { "effects", "Effects", "Refine grass lighting effects." },
+											   });
+	if (page.Is("highlights")) {
 		ImGui::TextWrapped("Specular highlights for complex grass");
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Glossiness",
 			&settings.Glossiness,
 			kGlossinessMin,
@@ -105,7 +112,7 @@ void GrassLighting::DrawSettings()
 				"Specular highlight glossiness. This also defines the dry endpoint for Wetterness grass glossiness after rain and grass drying finish.");
 		}
 
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Specular Strength",
 			&settings.SpecularStrength,
 			kSpecularStrengthMin,
@@ -123,11 +130,10 @@ void GrassLighting::DrawSettings()
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Effects")) {
-		ImGui::SliderFloat(
+	if (page.Is("effects")) {
+		Util::Widgets::SliderFloat(
 			"SSS Amount",
 			&settings.SubsurfaceScatteringAmount,
 			kSubsurfaceScatteringAmountMin,
@@ -146,11 +152,10 @@ void GrassLighting::DrawSettings()
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Lighting")) {
-		ImGui::Checkbox("Wrapped Lighting for Vanilla Grass", (bool*)&settings.EnableWrappedLighting);
+	if (page.Is("lighting")) {
+		Util::Widgets::Checkbox("Wrapped Lighting for Vanilla Grass", (bool*)&settings.EnableWrappedLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Restores the legacy wrapped diffuse transition for vanilla/basic grass. "
@@ -160,7 +165,7 @@ void GrassLighting::DrawSettings()
 		ImGui::Spacing();
 		ImGui::Spacing();
 
-		ImGui::Checkbox("Override Complex Grass Lighting Settings", (bool*)&settings.OverrideComplexGrassSettings);
+		Util::Widgets::Checkbox("Override Complex Grass Lighting Settings", (bool*)&settings.OverrideComplexGrassSettings);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Override the settings set by the grass mesh author. "
@@ -172,23 +177,27 @@ void GrassLighting::DrawSettings()
 		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::TextWrapped("Basic Grass");
-		ImGui::SliderFloat("Brightness", &settings.BasicGrassBrightness, 0.0f, 1.0f);
+		Util::Widgets::SliderFloat("Brightness", &settings.BasicGrassBrightness, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Darkens the grass textures to look better with the new lighting");
 		}
-
-		ImGui::TreePop();
 	}
 	ImGui::EndDisabled();
 }
 
 void GrassLighting::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("GrassLighting", {
+												   { "essentials", "Essentials", "Start with the main choices for this feature." },
+											   });
+	if (!page.Is("essentials"))
+		return;
+
 	const bool enabled = DrawEnabledCheckbox();
 
 	ImGui::BeginDisabled(!enabled);
 
-	ImGui::SliderFloat(
+	Util::Widgets::SliderFloat(
 		"Glossiness",
 		&settings.Glossiness,
 		kGlossinessMin,
@@ -200,7 +209,7 @@ void GrassLighting::DrawEssentialSettings()
 		ImGui::TextUnformatted("Specular highlight glossiness for complex grass.");
 	}
 
-	ImGui::SliderFloat(
+	Util::Widgets::SliderFloat(
 		"Specular Strength",
 		&settings.SpecularStrength,
 		kSpecularStrengthMin,
@@ -212,7 +221,7 @@ void GrassLighting::DrawEssentialSettings()
 		ImGui::TextUnformatted("Specular highlight strength for complex grass.");
 	}
 
-	ImGui::Checkbox("Wrapped Lighting for Vanilla Grass", (bool*)&settings.EnableWrappedLighting);
+	Util::Widgets::Checkbox("Wrapped Lighting for Vanilla Grass", (bool*)&settings.EnableWrappedLighting);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Softens lighting on vanilla/basic grass. Complex grass is unaffected.");
 	}

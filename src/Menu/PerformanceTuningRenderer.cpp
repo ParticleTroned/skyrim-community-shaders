@@ -1,4 +1,5 @@
 #include "PerformanceTuningRenderer.h"
+#include "Menu/SettingsPage.h"
 
 #include <algorithm>
 #include <array>
@@ -2375,29 +2376,36 @@ void PerformanceTuningRenderer::Render()
 	RenderTopPerformanceCounters(timing);
 	ImGui::Spacing();
 
+	MenuUI::SettingsPage page("PerformanceTuning", {
+													   { "features", "Features", "Choose which runtime features are enabled." },
+													   { "compare", "Compare", "Measure feature costs after choosing your scene and settings." },
+												   });
+	if (!page.Is("features") && !page.Is("compare"))
+		return;
 	const bool anyEnabled = std::ranges::any_of(features, [](Feature* feature) {
 		return feature->IsPerformanceCostMeasurementEnabled() && !GetFeatureToggleBlockReason(feature);
 	});
 	const bool busy = HasActiveMeasurements();
-	const double cooldown = GetFeatureCostRestartCooldownRemaining(ImGui::GetTime());
-	ImGui::BeginDisabled(GetFeatureCostStartError(ImGui::GetTime()) != nullptr || !anyEnabled);
-	if (ImGui::Button("Measure")) {
-		const char* error = StartFeatureCostBatch(false);
-		g_featureCostUiMessage = error ? "Measurement could not start. Check that a game is loaded, the editor is closed, and the features are ready." : "";
+	if (page.Is("compare")) {
+		const double cooldown = GetFeatureCostRestartCooldownRemaining(ImGui::GetTime());
+		ImGui::BeginDisabled(GetFeatureCostStartError(ImGui::GetTime()) != nullptr || !anyEnabled);
+		if (ImGui::Button("Measure")) {
+			const char* error = StartFeatureCostBatch(false);
+			g_featureCostUiMessage = error ? "Measurement could not start. Check that a game is loaded, the editor is closed, and the features are ready." : "";
+		}
+		ImGui::EndDisabled();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextWrapped("Measure every active, editable feature against Off/None, one at a time. Inactive features and controls owned by scene or weather overrides are skipped. Each comparison restores its exact prior settings. CS closes for the complete run and reopens with the results. Keep the scene still; allow about 41 seconds per feature. Use the menu shortcut to cancel. These are individual on/off costs; percentages need not add up to 100%.");
+		if (cooldown > 0.0) {
+			ImGui::SameLine();
+			ImGui::TextDisabled("Ready in %.0fs", std::ceil(cooldown));
+		}
+		if (!g_featureCostUiMessage.empty())
+			ImGui::TextWrapped("%s", g_featureCostUiMessage.c_str());
+		if (!g_featureCostBatch.failureMessage.empty())
+			ImGui::TextWrapped("%s", g_featureCostBatch.failureMessage.c_str());
+		ImGui::Spacing();
 	}
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextWrapped("Measure every active, editable feature against Off/None, one at a time. Inactive features and controls owned by scene or weather overrides are skipped. Each comparison restores its exact prior settings. CS closes for the complete run and reopens with the results. Keep the scene still; allow about 41 seconds per feature. Use the menu shortcut to cancel. These are individual on/off costs; percentages need not add up to 100%.");
-	if (cooldown > 0.0) {
-		ImGui::SameLine();
-		ImGui::TextDisabled("Ready in %.0fs", std::ceil(cooldown));
-	}
-	if (!g_featureCostUiMessage.empty())
-		ImGui::TextWrapped("%s", g_featureCostUiMessage.c_str());
-	if (!g_featureCostBatch.failureMessage.empty())
-		ImGui::TextWrapped("%s", g_featureCostBatch.failureMessage.c_str());
-	ImGui::Spacing();
-
 	if (ImGui::BeginTable("##PerformanceFeatureCosts", 5,
 			ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
 		ImGui::TableSetupColumn("Feature", ImGuiTableColumnFlags_WidthStretch, 2.0f);
@@ -2412,7 +2420,7 @@ void PerformanceTuningRenderer::Render()
 			ImGui::TableSetColumnIndex(0);
 			bool enabled = feature->IsPerformanceToggleEnabled();
 			const char* blockReason = GetFeatureToggleBlockReason(feature);
-			ImGui::BeginDisabled(busy || blockReason != nullptr);
+			ImGui::BeginDisabled(page.Is("compare") || busy || blockReason != nullptr);
 			if (Util::FeatureToggle("##Enabled", &enabled)) {
 				const bool applied = SetRuntimeFeatureEnabled(feature, enabled);
 				g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";

@@ -1759,6 +1759,46 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_settings_ui_dir "${CMAKE_CURRENT_BINARY_DIR}/settings_ui_test")
+    add_custom_command(
+        OUTPUT
+            "${_settings_ui_dir}/settings_page_under_test.h"
+            "${_settings_ui_dir}/settings_widget_under_test.h"
+            "${_settings_ui_dir}/settings_widget_declarations.h"
+            "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
+            "${_settings_ui_dir}/settings_model_resolution_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_settings_ui_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_settings_ui.cmake"
+        DEPENDS
+            src/Menu/SettingsPage.cpp
+            src/Features/VolumetricLighting.cpp
+            src/Features/Upscaling.cpp
+            tests/extract_source_region.cmake
+            src/Utils/Slider.cpp
+            src/Utils/UI.h
+            tests/extract_settings_ui.cmake
+        VERBATIM
+    )
+    add_controller_test(settings_ui_test SettingsUI tests/settings_ui_test.cpp)
+    target_sources(
+        settings_ui_test
+        PRIVATE
+            "${_settings_ui_dir}/settings_page_under_test.h"
+            "${_settings_ui_dir}/settings_widget_under_test.h"
+            "${_settings_ui_dir}/settings_widget_declarations.h"
+            "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
+            "${_settings_ui_dir}/settings_model_resolution_under_test.h"
+    )
+    target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
+    target_link_libraries(
+        settings_ui_test
+        PRIVATE imgui::imgui nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(settings_ui_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+    set_tests_properties(SettingsUI PROPERTIES TIMEOUT 30)
+
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
     add_controller_test(grass_runtime_layout_test GrassRuntimeLayout tests/grass_runtime_layout_test.cpp)
     target_link_libraries(

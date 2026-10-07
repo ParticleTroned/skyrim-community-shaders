@@ -1,4 +1,6 @@
 #include "SkySync.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,82 +25,96 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void SkySync::DrawSettings()
 {
-	ImGui::Checkbox("Enable", &settings.Enabled);
+	MenuUI::SettingsPage page("SkySync", {
+											 { "path", "Sky path", "Choose how the sun and moon move and light the scene." },
+											 { "lighting", "Lighting", "Refine horizon lighting and shadow length." },
+											 { "timing", "Timing", "Adjust the visible sunrise and sunset." },
+										 });
+
+	Util::Widgets::Checkbox("Enable", &settings.Enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Enable or disable Sky Sync features.");
 	}
 
-	ImGui::Checkbox("Use alternate sun path", &settings.UseAlternateSunPath);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Calculate sun position based on time of day and season instead of vanilla movement.");
-	}
-
-	ImGui::Checkbox("Enable weather lens flare", &settings.EnableSunLensFlare);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Show lens-flare sprites supplied by the active weather. Some weathers do not provide a lens flare, so the setting has no visible effect in those weathers.");
-	}
-
-	if (settings.UseAlternateSunPath) {
-		if (ImGui::SliderInt("Sun path", &settings.SunPath, 0, static_cast<uint8_t>(SunPath::Count) - 1, SunPathNames[settings.SunPath], ImGuiSliderFlags_AlwaysClamp))
-			SetSunAngle();
+	if (page.Is("path")) {
+		Util::Widgets::Checkbox("Use alternate sun path", &settings.UseAlternateSunPath);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Choose the trajectory the sun takes across the sky.");
+			ImGui::TextUnformatted("Calculate sun position based on time of day and season instead of vanilla movement.");
 		}
 
-		if (settings.SunPath == static_cast<int32_t>(SunPath::Custom)) {
-			if (ImGui::SliderFloat("Custom angle", &settings.CustomAngle, -90.0f, 90.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+		Util::Widgets::Checkbox("Enable weather lens flare", &settings.EnableSunLensFlare);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Show lens-flare sprites supplied by the active weather. Some weathers do not provide a lens flare, so the setting has no visible effect in those weathers.");
+		}
+
+		if (settings.UseAlternateSunPath) {
+			if (Util::Widgets::SliderInt("Sun path", &settings.SunPath, 0, static_cast<uint8_t>(SunPath::Count) - 1, SunPathNames[settings.SunPath], ImGuiSliderFlags_AlwaysClamp))
 				SetSunAngle();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Set a custom angle for the sun's trajectory.");
+				ImGui::TextUnformatted("Choose the trajectory the sun takes across the sky.");
+			}
+
+			if (settings.SunPath == static_cast<int32_t>(SunPath::Custom)) {
+				if (Util::Widgets::SliderFloat("Custom angle", &settings.CustomAngle, -90.0f, 90.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+					SetSunAngle();
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Set a custom angle for the sun's trajectory.");
+				}
 			}
 		}
-	}
 
-	ImGui::SliderInt("Moon light source", &settings.MoonLightSource, 0, static_cast<uint8_t>(MoonLightSource::Count) - 1, MoonLightSourceNames[settings.MoonLightSource], ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Select which moon casts shadows during the night.");
+		Util::Widgets::SliderInt("Moon light source", &settings.MoonLightSource, 0, static_cast<uint8_t>(MoonLightSource::Count) - 1, MoonLightSourceNames[settings.MoonLightSource], ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Select which moon casts shadows during the night.");
+		}
 	}
-
-	ImGui::SliderFloat("Min Shadow Elevation", &settings.MinShadowElevation, 0.0f, 45.0f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("The minimum angle sunlight will set to. Caps shadow length. Higher = shorter shadows at sunset/sunrise.");
+	if (page.Is("lighting")) {
+		Util::Widgets::SliderFloat("Min Shadow Elevation", &settings.MinShadowElevation, 0.0f, 45.0f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("The minimum angle sunlight will set to. Caps shadow length. Higher = shorter shadows at sunset/sunrise.");
+		}
+		bool dimSunlight = settings.DimSunlightUnderHorizon;
+		float fadeHours = settings.HorizonFadeHours;
+		bool dimmingChanged = Util::Widgets::Checkbox("Dim Sunlight Under Horizon", &dimSunlight);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Fade direct lighting around sunset and sunrise while preserving the weather's light colour.");
+		if (dimSunlight)
+			dimmingChanged |= Util::Widgets::SliderFloat("Horizon Fade Duration", &fadeHours, 0.0f, MaxHorizonFadeHours, "%.1f h", ImGuiSliderFlags_AlwaysClamp);
+		if (dimmingChanged)
+			SetSunlightDimming(dimSunlight, fadeHours);
+		ImGui::Spacing();
+		ImGui::Spacing();
 	}
-	bool dimSunlight = settings.DimSunlightUnderHorizon;
-	float fadeHours = settings.HorizonFadeHours;
-	bool dimmingChanged = ImGui::Checkbox("Dim Sunlight Under Horizon", &dimSunlight);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Fade direct lighting around sunset and sunrise while preserving the weather's light colour.");
-	if (dimSunlight)
-		dimmingChanged |= ImGui::SliderFloat("Horizon Fade Duration", &fadeHours, 0.0f, MaxHorizonFadeHours, "%.1f h", ImGuiSliderFlags_AlwaysClamp);
-	if (dimmingChanged)
-		SetSunlightDimming(dimSunlight, fadeHours);
-	ImGui::Spacing();
-	ImGui::Spacing();
-	if (ImGui::TreeNodeEx("Sun Position Offsets")) {
+	if (page.Is("timing")) {
 		ImGui::TextWrapped("Moves the visual sun path during sunrise/sunset. Moon lighting follows the climate's night timings.");
-		ImGui::SliderFloat("Sunrise Begin (Hours)", &settings.SunriseBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Sunrise Begin (Hours)", &settings.SunriseBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Offset for when the sun starts rising.");
 		}
-		ImGui::SliderFloat("Sunrise End (Hours)", &settings.SunriseEndOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Sunrise End (Hours)", &settings.SunriseEndOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Offset for when the sun finishes rising.");
 		}
-		ImGui::SliderFloat("Sunset Begin (Hours)", &settings.SunsetBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Sunset Begin (Hours)", &settings.SunsetBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Offset for when the sun starts setting.");
 		}
-		ImGui::SliderFloat("Sunset End (Hours)", &settings.SunsetEndOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Sunset End (Hours)", &settings.SunsetEndOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Offset for when the sun finishes setting.");
 		}
-		ImGui::TreePop();
 	}
 }
 
 void SkySync::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Enable", &settings.Enabled);
+	MenuUI::SettingsPage page("SkySync", {
+											 { "essentials", "Essentials", "Start with the main choices for this feature." },
+										 });
+	if (!page.Is("essentials"))
+		return;
+
+	Util::Widgets::Checkbox("Enable", &settings.Enabled);
 }
 
 void SkySync::LoadSettings(json& o_json)

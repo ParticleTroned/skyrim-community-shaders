@@ -184,12 +184,12 @@ namespace globals
 			{
 				return { pendingMethod.value_or(method), GetEffectiveUpscalingQualityMode(), renderScaleRequested, renderScaleRequested };
 			}
-			void DrawNeuralRenderingSettings(UpscaleMethod value, bool = false, const std::function<void()>& drawColourSettings = {})
+			void DrawNeuralRenderingSettings(UpscaleMethod value, bool = false, const std::function<void(bool)>& drawColourSettings = {})
 			{
 				++draws;
 				lastDrawMethod = value;
 				if (drawColourSettings)
-					drawColourSettings();
+					drawColourSettings(false);
 			}
 		} upscaling;
 	}
@@ -244,6 +244,8 @@ namespace ImGui
 	std::string clicked;
 	int treeDepth = 0, comboDepth = 0;
 	std::string colourPreview;
+	std::string lastItem;
+	std::vector<std::string> comboOwners;
 	unsigned disableDepth = 0;
 	bool openTrees = true;
 	float sliderEditValue = 50.0f;
@@ -255,6 +257,7 @@ namespace ImGui
 			tooltips.back().second += label;
 			return;
 		}
+		lastItem = label;
 		items.emplace_back(label);
 		disabledItems.push_back(disableDepth != 0);
 		if (!nextOnSameLine)
@@ -285,6 +288,8 @@ namespace ImGui
 		clicked = click;
 		treeDepth = comboDepth = 0;
 		colourPreview.clear();
+		comboOwners.clear();
+		lastItem.clear();
 	}
 	template <class... Args>
 	void TextWrapped(const char* label, Args&&...)
@@ -339,11 +344,17 @@ namespace ImGui
 		if (disableDepth != 0)
 			return false;
 		++comboDepth;
+		comboOwners.emplace_back(label);
 		return true;
 	}
 	bool Selectable(const char* label, bool) { return Button(label); }
 	void SetItemDefaultFocus() {}
-	void EndCombo() { --comboDepth; }
+	void EndCombo()
+	{
+		--comboDepth;
+		lastItem = comboOwners.back();
+		comboOwners.pop_back();
+	}
 	bool SliderFloat(const char* label, float* value, float minimum, float maximum, const char* = "%.3f", int flags = 0)
 	{
 		if (std::string_view(label) == "Lighting preservation")
@@ -376,7 +387,7 @@ namespace Util
 	{
 		HoverTooltipWrapper()
 		{
-			ImGui::tooltips.emplace_back(ImGui::items.empty() ? "" : ImGui::items.back(), "");
+			ImGui::tooltips.emplace_back(ImGui::lastItem, "");
 			ImGui::drawingTooltip = true;
 		}
 		explicit operator bool() const { return true; }
@@ -501,7 +512,7 @@ struct NeuralRenderingFeature
 {
 	void DrawSettings();
 	void DrawEssentialSettings();
-	void DrawColourSettings();
+	void DrawColourSettings(bool a_diagnosticsOnly = false);
 };
 #include "neural_rendering_ui_under_test.h"
 
@@ -570,18 +581,30 @@ int main()
 		auto& settings = globals::features::upscaling.settings;
 		settings = {};
 		settings.neuralRenderingMode = mode;
-		ImGui::Clear("Adjust categories in scene NR");
+		ImGui::Clear("Scene + categories");
 		DrawNeuralRenderingCategoryControls(settings, false);
 		require(settings.neuralCharacterSceneStrengthsEnabled && !settings.neuralCharacterRenderingEnabled &&
 					!ImGui::Disabled("Humans") && !ImGui::Disabled("Face Strength"),
 			"All pipelines must allow ordinary scene category strengths without Actors only");
-		const auto category = std::find(ImGui::items.begin(), ImGui::items.end(), "Category strengths");
-		const auto actors = std::find(ImGui::items.begin(), ImGui::items.end(), "Actors only");
-		require(category < actors, "Shared category choices must precede actor-only coverage");
+		require(ImGui::Seen("Coverage"), "Scene and actor coverage use one mutually exclusive selection");
 		ImGui::Clear("Actors only");
 		DrawNeuralRenderingCategoryControls(settings, false);
 		require(settings.neuralCharacterRenderingEnabled && settings.neuralCharacterSceneStrengthsEnabled,
 			"Actor-only selection must retain the ordinary scene preference");
+	}
+	for (const auto* selection : { "Scene + categories", "Actors only" }) {
+		auto& settings = globals::features::upscaling.settings;
+		settings = {};
+		ImGui::Clear(selection);
+		DrawNeuralRenderingCategoryControls(settings, true);
+		require(!settings.neuralCharacterRenderingEnabled && !settings.neuralCharacterSceneStrengthsEnabled,
+			"Missing FOV cannot newly enable category coverage");
+		settings.neuralCharacterRenderingEnabled = true;
+		settings.neuralCharacterSceneStrengthsEnabled = true;
+		ImGui::Clear("Entire scene");
+		DrawNeuralRenderingCategoryControls(settings, true);
+		require(!settings.neuralCharacterRenderingEnabled && !settings.neuralCharacterSceneStrengthsEnabled,
+			"Missing FOV must still allow disabling existing category coverage");
 	}
 	globals::features::upscaling.settings = {};
 	for (unsigned mode = 0; mode < 3; ++mode) {
@@ -594,18 +617,18 @@ int main()
 			ImGui::Clear();
 			upscaling.DrawSelectionControls(essentials);
 			for (const char* label : { "Full resolution", "Foveated", "Renderscale NR before DLSS", "Shared image settings",
-					 "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style", "Actors only" })
+					 "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style" })
 				require(ImGui::Seen(label), "Essentials and Advanced must expose modes, shared image settings and Actors only");
 			require(ImGui::Seen("NR Model Resolution") == (mode == 2), "Independent model scale belongs only to mode C");
 			require(ImGui::Seen("Restrict to FOV mask") == (mode == 0) &&
 						ImGui::Seen("Use FOV mask for Renderscale NR") == (mode == 2),
 				"Both UI levels must expose the FOV toggle for the selected rendering mode");
-			for (const char* label : { "Strength application", "Category strengths", "Humans", "Armour / clothing", "Face Strength", "Weapon Strength" })
+			for (const char* label : { "Coverage", "Humans", "Armour / clothing", "Face Strength", "Weapon Strength" })
 				require(ImGui::Seen(label) == !essentials, "Category and compositor tuning must stay in Advanced");
 			const auto image = std::find(ImGui::items.begin(), ImGui::items.end(), "Shared image settings");
-			const auto actors = std::find(ImGui::items.begin(), ImGui::items.end(), "Actors only");
+			const auto actors = std::find(ImGui::items.begin(), ImGui::items.end(), essentials ? "Actors only" : "Coverage");
 			require(image < actors, "Shared image settings must precede actor-only selection");
-			for (const char* label : { "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style", "Actors only" })
+			for (const char* label : { "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style", essentials ? "Actors only" : "Coverage" })
 				require(std::any_of(ImGui::tooltips.begin(), ImGui::tooltips.end(),
 							[label](const auto& tip) { return tip.first == label && !tip.second.empty(); }),
 					"Each essential image control and actor toggle must have its own tooltip");
@@ -666,6 +689,7 @@ int main()
 	const auto draw = [&](std::string_view click = {}) {
 		ImGui::Clear(click);
 		feature.DrawSettings();
+		feature.DrawColourSettings(true);
 		require(ImGui::treeDepth == 0 && ImGui::comboDepth == 0, "UI tree and combo scopes must be balanced");
 		require(ImGui::disableDepth == 0, "UI disable scopes must be balanced");
 	};
@@ -1688,7 +1712,7 @@ int main()
 		for (const bool essentials : { false, true }) {
 			ImGui::Clear("Intensity");
 			upscaling.DrawSelectionControls(essentials);
-			for (const char* label : { "Enabled", "Rendering mode", "Preset", "Intensity", "Actors only" })
+			for (const char* label : { "Enabled", "Rendering mode", "Preset", "Intensity", essentials ? "Actors only" : "Coverage" })
 				require(ImGui::Disabled(label), "Unsupported rendering GPUs grey out all NR controls in both views");
 			require(!upscaling.IsNeuralRenderingRequested() && !upscaling.IsNeuralRenderingRenderScaleRequired() &&
 						upscaling.settings.neuralRenderingEnabled && upscaling.settings.periphery_taa_enable,

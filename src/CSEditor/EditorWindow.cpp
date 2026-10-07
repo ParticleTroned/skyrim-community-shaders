@@ -1026,22 +1026,22 @@ void EditorWindow::RenderUI()
 
 			ImGui::Separator();
 
-			if (ImGui::Checkbox("Auto-Apply Changes", &settings.autoApplyChanges)) {
+			if (Util::Widgets::Checkbox("Auto-Apply Changes", &settings.autoApplyChanges)) {
 				Save();
 			}
 			Util::AddTooltip("Automatically apply weather changes to the game as you edit");
 
-			if (ImGui::Checkbox("Enable Inherit From Parent", &settings.enableInheritFromParent)) {
+			if (Util::Widgets::Checkbox("Enable Inherit From Parent", &settings.enableInheritFromParent)) {
 				Save();
 			}
 			Util::AddTooltip("Show inherit from parent options in weather widgets");
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("Window")) {
-			if (ImGui::Checkbox("Viewport", &settings.showViewport)) {
+			if (Util::Widgets::Checkbox("Viewport", &settings.showViewport)) {
 				Save();
 			}
-			if (ImGui::Checkbox("Palette", &PaletteWindow::GetSingleton()->open)) {
+			if (Util::Widgets::Checkbox("Palette", &PaletteWindow::GetSingleton()->open)) {
 			}
 
 			if (ImGui::MenuItem("Reset Window Layout")) {
@@ -1718,15 +1718,15 @@ void EditorWindow::ShowSettingsWindow()
 		ImGui::TableSetColumnIndex(1);
 
 		if (settingsSelectedCategory == "General") {
-			if (ImGui::Checkbox("Auto-apply changes", &settings.autoApplyChanges))
+			if (Util::Widgets::Checkbox("Auto-apply changes", &settings.autoApplyChanges))
 				Save();
 			Util::AddTooltip("Automatically apply changes to weather/lighting when editing");
 
-			if (ImGui::Checkbox("Use text buttons instead of icons", &settings.useTextButtons))
+			if (Util::Widgets::Checkbox("Use text buttons instead of icons", &settings.useTextButtons))
 				Save();
 			Util::AddTooltip("Display action buttons as text labels instead of icons");
 
-			if (ImGui::Checkbox("Enable 'Inherit From Parent' feature", &settings.enableInheritFromParent))
+			if (Util::Widgets::Checkbox("Enable 'Inherit From Parent' feature", &settings.enableInheritFromParent))
 				Save();
 			Util::AddTooltip("Show checkboxes to copy settings from parent weather (editor-only feature)");
 
@@ -1734,7 +1734,7 @@ void EditorWindow::ShowSettingsWindow()
 			ImGui::TextUnformatted("UI Scale");
 			ImGui::Spacing();
 
-			ImGui::SliderFloat("Editor UI Scale", &settings.editorUIScale, 0.5f, 2.0f, "%.2f");
+			Util::Widgets::SliderFloat("Editor UI Scale", &settings.editorUIScale, 0.5f, 2.0f, "%.2f");
 			if (ImGui::IsItemDeactivatedAfterEdit()) {
 				Save();
 			}
@@ -1751,7 +1751,7 @@ void EditorWindow::ShowSettingsWindow()
 			ImGui::TextUnformatted("Session & History");
 			ImGui::Spacing();
 
-			ImGui::SliderInt("Max recent widgets", &settings.maxRecentWidgets, 5, 20);
+			Util::Widgets::SliderInt("Max recent widgets", &settings.maxRecentWidgets, 5, 20);
 			if (ImGui::IsItemDeactivatedAfterEdit())
 				Save();
 			Util::AddTooltip("Maximum number of recent widgets to remember");
@@ -2235,7 +2235,7 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 	if (!calendar || !calendar->gameHour)
 		return false;
 	float hour = calendar->gameHour->value;
-	if (ImGui::SliderFloat(label, &hour, 0.0f, kGameHourMax, format) &&
+	if (Util::Widgets::SliderFloat(label, &hour, 0.0f, kGameHourMax, format) &&
 		std::isfinite(hour) && hour >= 0.0f && hour <= kGameHourMax) {
 		auto* sky = globals::game::sky ? globals::game::sky : RE::Sky::GetSingleton();
 		// Backward clock edits otherwise resemble a midnight wrap and expire the weather override.
@@ -2284,7 +2284,7 @@ void EditorWindow::DrawTimeControls()
 
 	ImGui::SameLine();
 	ImGui::BeginDisabled(timePaused);
-	if (ImGui::SliderFloat("##TimeScale", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
+	if (Util::Widgets::SliderFloat("##TimeScale", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
 			timeScaleSlider == kVanillaTimeScale ? "Vanilla Speed" : "", ImGuiSliderFlags_Logarithmic))
 		calendar->timeScale->value = timeScaleSlider;
 	ImGui::EndDisabled();

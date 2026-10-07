@@ -183,6 +183,8 @@ namespace
 		void RequestRuntimeReset();
 		bool IsPerformanceCostMeasurementReady() const;
 		bool IsPerformanceCostMeasurementEnabled() const;
+		bool IsPerformanceToggleEnabled() const;
+		void SetPerformanceToggleEnabled(bool enabled);
 		bool IsRuntimeTransitionBlocked() const;
 		bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 		void EarlyPrepass();

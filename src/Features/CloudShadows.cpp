@@ -1,4 +1,6 @@
 #include "CloudShadows.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudShadows::Settings,
@@ -16,7 +18,7 @@ namespace
 	bool DrawEnabledCheckbox(CloudShadows::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (ImGui::Checkbox("Enable", &enabled))
+		if (Util::Widgets::Checkbox("Enable", &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
@@ -24,10 +26,16 @@ namespace
 
 void CloudShadows::DrawSettings()
 {
+	MenuUI::SettingsPage page("CloudShadows", {
+												  { "appearance", "Appearance", "Enable cloud shadows, then choose how dark they look." },
+											  });
+	if (!page.Is("appearance"))
+		return;
+
 	const bool enabled = DrawEnabledCheckbox(settings);
 
 	ImGui::BeginDisabled(!enabled);
-	ImGui::SliderFloat("Opacity", &settings.Opacity, 0.0f, 1.0f, "%.1f");
+	Util::Widgets::SliderFloat("Opacity", &settings.Opacity, 0.0f, 1.0f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Higher values make cloud shadows darker.");
@@ -37,6 +45,12 @@ void CloudShadows::DrawSettings()
 
 void CloudShadows::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("CloudShadows", {
+												  { "essentials", "Essentials", "Start with the main choices for this feature." },
+											  });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawEnabledCheckbox(settings);
 }
 

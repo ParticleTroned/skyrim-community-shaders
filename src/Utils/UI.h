@@ -52,6 +52,19 @@ class Feature;
 
 namespace Util
 {
+	namespace Widgets
+	{
+		/** Checkbox with individual hover help; explicit caller help takes precedence. */
+		bool Checkbox(const char* label, bool* value);
+		/** Sliders retain keyboard editing; controller number entry uses a bounded draft. */
+		bool SliderScalar(const char* label, ImGuiDataType type, void* value, const void* minimum, const void* maximum, const char* format = nullptr, ImGuiSliderFlags flags = 0);
+		bool SliderFloat(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+		bool SliderInt(const char* label, int* value, int minimum, int maximum, const char* format = "%d", ImGuiSliderFlags flags = 0);
+		bool SliderFloat2(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+		bool SliderFloat3(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+		bool SliderAngle(const char* label, float* value, float minimum = -360, float maximum = 360, const char* format = "%.0f deg", ImGuiSliderFlags flags = 0);
+	}
+
 	void UpdateImGuiInput(HWND hwnd, float bufferWidth, float bufferHeight);
 	/**
 	 * Represents a single line and its color for any colored text rendering (tooltips, legends, etc.).

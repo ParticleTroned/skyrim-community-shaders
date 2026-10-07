@@ -169,7 +169,7 @@ void ABTestingManager::DrawSettingsUI()
 	const float minSliderWidth = std::min(160.0f, availableWidth);
 	ImGui::SetNextItemWidth(std::clamp(availableWidth * 0.55f, minSliderWidth, availableWidth));
 	int interval = static_cast<int>(testInterval);
-	if (ImGui::SliderInt("A/B Test Interval", &interval, 0, static_cast<int>(kMaxTestInterval))) {
+	if (Util::Widgets::SliderInt("A/B Test Interval", &interval, 0, static_cast<int>(kMaxTestInterval))) {
 		bool overlayWasEnabled = performanceOverlay.settings.ShowInOverlay;
 		SetTestInterval(static_cast<uint32_t>(std::max(interval, 0)));
 		if (testInterval > 0 && !abTestingEnabled) {

@@ -1,12 +1,14 @@
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 // Screenshot Feature
 // Non-blocking screenshot tool for flat (SE/AE) and VR. GPU copy runs on the
 // render thread; encoding and disk I/O run on a dedicated worker thread so
 // capture does not stall the frame.
 
-#include "Features/ScreenshotFeature.h"
 #include "Api/ScreenshotService.h"
 #include "Features/ScreenshotApi.h"
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotFeature.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotNativeImage.h"
 #endif
@@ -1749,7 +1751,7 @@ bool ScreenshotFeature::IsInMenu() const
 void ScreenshotFeature::DrawSettingsHeaderControls()
 {
 	bool runtimeEnabled = enabled.load(std::memory_order_acquire);
-	if (ImGui::Checkbox("Enable Community Shaders Screenshots", &runtimeEnabled)) {
+	if (Util::Widgets::Checkbox("Enable Community Shaders Screenshots", &runtimeEnabled)) {
 		SetEnabled(runtimeEnabled);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1953,206 +1955,158 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 
 void ScreenshotFeature::DrawSettings()
 {
-	ImGui::TextWrapped("Capture and save run asynchronously without stalling the game.");
-	ImGui::TextWrapped(
-		"VR HMD captures use the exact accepted OpenVR eye submissions before compositor distortion. "
-		"SDR and VR captures use the selected lossless format. Desktop FP16 scene sources are tonemapped "
-		"(Reinhard) before SDR save; HDR PNG metadata is intentionally not included in this branch.");
-	if (!IsRuntimeEnabled()) {
-		ImGui::TextDisabled("Community Shaders screenshot capture is off. Output and crop settings can still be edited.");
-	}
-
-	if (globals::game::isVR) {
-		ImGui::SeparatorText("VR Capture Source");
-		int captureSource = IsFramedCapture(vrCaptureSource) ?
-		                        1 :
-		                        (vrCaptureSource == VRCaptureSource::DesktopMirror ? 2 : 0);
-		ImGui::RadioButton(
-			"HMD submission",
-			&captureSource,
-			0);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Captures the selected final accepted eye submission, or both eyes as separate files.");
-		}
-		ImGui::SameLine();
-		ImGui::RadioButton(
-			"Framed view (2560 x 1440)",
-			&captureSource,
-			1);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Saves a left-eye, right-eye, or combined 16:9 view at 2560 x 1440.");
-		}
-		ImGui::SameLine();
-		ImGui::RadioButton(
-			"Desktop mirror",
-			&captureSource,
-			2);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Captures Skyrim's current desktop backbuffer without substituting HMD eye textures.");
-		}
-		if (captureSource == 0) {
-			vrCaptureSource = VRCaptureSource::HMDSubmission;
-		} else if (captureSource == 2) {
-			vrCaptureSource = VRCaptureSource::DesktopMirror;
-		} else if (!IsFramedCapture(vrCaptureSource)) {
-			vrCaptureSource = vrFramedView == VRFramedView::Combined ?
-			                      VRCaptureSource::FramedStereo :
-			                      VRCaptureSource::FramedEye;
-		}
-
-		if (vrCaptureSource != VRCaptureSource::DesktopMirror) {
-			int eye = static_cast<int>(screenshotEye);
-			ImGui::TextUnformatted("Screenshot eye:");
-			ImGui::SameLine();
-			ImGui::RadioButton("Left##ScreenshotEye", &eye, 0);
-			ImGui::SameLine();
-			ImGui::RadioButton("Right##ScreenshotEye", &eye, 1);
-			ImGui::SameLine();
-			ImGui::RadioButton("Both##ScreenshotEye", &eye, 2);
-			screenshotEye = static_cast<CaptureEye>(eye);
-			vrFramedView = eye == 2 ?
-			                   VRFramedView::Combined :
-			                   (eye == 1 ? VRFramedView::Right : VRFramedView::Left);
-			if (IsFramedCapture(vrCaptureSource)) {
-				vrCaptureSource = eye == 2 ? VRCaptureSource::FramedStereo : VRCaptureSource::FramedEye;
-			}
-			if (IsFramedCapture(vrCaptureSource) && eye == 2) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Combined keeps the dominant eye through the shared view and fills its outer edge from the other eye.");
-				}
-				int dominantEye = vrFramedDominantEye == vr::Eye_Right ? 1 : 0;
-				ImGui::TextUnformatted("Dominant eye:");
-				ImGui::SameLine();
-				ImGui::RadioButton("Left##DominantFramedEye", &dominantEye, 0);
-				ImGui::SameLine();
-				ImGui::RadioButton("Right##DominantFramedEye", &dominantEye, 1);
-				vrFramedDominantEye = dominantEye == 1 ? vr::Eye_Right : vr::Eye_Left;
-			}
-		}
-	}
-
-	ImGui::BeginDisabled(!IsRuntimeEnabled());
-	if (ImGui::Button("Take Screenshot Now")) {
-		RequestUiCapture();
-	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
 	const bool usesFixedEyeFraming = globals::game::isVR && IsFramedCapture(vrCaptureSource);
-	if (usesFixedEyeFraming) {
-		bool fixedCropDisabled = false;
-		ImGui::BeginDisabled();
-		ImGui::Checkbox("Apply crop", &fixedCropDisabled);
+
+	MenuUI::SettingsPage page("ScreenshotFeature", {
+													   { "source", "Source", "Choose the image to capture first." },
+													   { "output", "Output", "Choose the file format and destination." },
+													   { "framing", "Framing", "Choose the part of the picture to keep." },
+													   { "sequence", "Sequence", "Record a sequence using your capture and output choices." },
+												   });
+
+	if (page.Is("source")) {
+		ImGui::TextWrapped("Capture and save run asynchronously without stalling the game.");
+		ImGui::TextWrapped(
+			"VR HMD captures use the exact accepted OpenVR eye submissions before compositor distortion. "
+			"SDR and VR captures use the selected lossless format. Desktop FP16 scene sources are tonemapped "
+			"(Reinhard) before SDR save; HDR PNG metadata is intentionally not included in this branch.");
+		if (!IsRuntimeEnabled()) {
+			ImGui::TextDisabled("Community Shaders screenshot capture is off. Output and crop settings can still be edited.");
+		}
+
+		if (globals::game::isVR) {
+			ImGui::SeparatorText("VR Capture Source");
+			int captureSource = IsFramedCapture(vrCaptureSource) ?
+			                        1 :
+			                        (vrCaptureSource == VRCaptureSource::DesktopMirror ? 2 : 0);
+			ImGui::RadioButton(
+				"HMD submission",
+				&captureSource,
+				0);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Captures the selected final accepted eye submission, or both eyes as separate files.");
+			}
+			ImGui::SameLine();
+			ImGui::RadioButton(
+				"Framed view (2560 x 1440)",
+				&captureSource,
+				1);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Saves a left-eye, right-eye, or combined 16:9 view at 2560 x 1440.");
+			}
+			ImGui::SameLine();
+			ImGui::RadioButton(
+				"Desktop mirror",
+				&captureSource,
+				2);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Captures Skyrim's current desktop backbuffer without substituting HMD eye textures.");
+			}
+			if (captureSource == 0) {
+				vrCaptureSource = VRCaptureSource::HMDSubmission;
+			} else if (captureSource == 2) {
+				vrCaptureSource = VRCaptureSource::DesktopMirror;
+			} else if (!IsFramedCapture(vrCaptureSource)) {
+				vrCaptureSource = vrFramedView == VRFramedView::Combined ?
+				                      VRCaptureSource::FramedStereo :
+				                      VRCaptureSource::FramedEye;
+			}
+
+			if (vrCaptureSource != VRCaptureSource::DesktopMirror) {
+				int eye = static_cast<int>(screenshotEye);
+				ImGui::TextUnformatted("Screenshot eye:");
+				ImGui::SameLine();
+				ImGui::RadioButton("Left##ScreenshotEye", &eye, 0);
+				ImGui::SameLine();
+				ImGui::RadioButton("Right##ScreenshotEye", &eye, 1);
+				ImGui::SameLine();
+				ImGui::RadioButton("Both##ScreenshotEye", &eye, 2);
+				screenshotEye = static_cast<CaptureEye>(eye);
+				vrFramedView = eye == 2 ?
+				                   VRFramedView::Combined :
+				                   (eye == 1 ? VRFramedView::Right : VRFramedView::Left);
+				if (IsFramedCapture(vrCaptureSource)) {
+					vrCaptureSource = eye == 2 ? VRCaptureSource::FramedStereo : VRCaptureSource::FramedEye;
+				}
+				if (IsFramedCapture(vrCaptureSource) && eye == 2) {
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted("Combined keeps the dominant eye through the shared view and fills its outer edge from the other eye.");
+					}
+					int dominantEye = vrFramedDominantEye == vr::Eye_Right ? 1 : 0;
+					ImGui::TextUnformatted("Dominant eye:");
+					ImGui::SameLine();
+					ImGui::RadioButton("Left##DominantFramedEye", &dominantEye, 0);
+					ImGui::SameLine();
+					ImGui::RadioButton("Right##DominantFramedEye", &dominantEye, 1);
+					vrFramedDominantEye = dominantEye == 1 ? vr::Eye_Right : vr::Eye_Left;
+				}
+			}
+		}
+
+		ImGui::BeginDisabled(!IsRuntimeEnabled());
+		if (ImGui::Button("Take Screenshot Now")) {
+			RequestUiCapture();
+		}
 		ImGui::EndDisabled();
-	} else {
-		ImGui::Checkbox("Apply crop", &applyCropToScreenshot);
-	}
-
-	ImGui::SeparatorText("Output");
-
-	ImGui::Checkbox("Copy saved file to clipboard", &copyToClipboard);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Places the saved screenshot on the clipboard as a file.");
-		ImGui::Text("Paste in Explorer or attach in chat apps.");
-	}
-
-	int sdrFormat = sdrUsePng ? 1 : 0;
-	ImGui::RadioButton("BMP (lossless)", &sdrFormat, 0);
-	ImGui::SameLine();
-	ImGui::RadioButton("PNG (lossless)", &sdrFormat, 1);
-	sdrUsePng = sdrFormat != 0;
-
-	char buf[260];
-	strncpy_s(buf, sizeof(buf), screenshotPath.c_str(), _TRUNCATE);
-	ImGui::PushItemWidth(-FLT_MIN - 120.0f);  // leave room for Open button + label
-	if (ImGui::InputText("##ScreenshotFolder", buf, sizeof(buf))) {
-		try {
-			(void)ResolveCapturePath(buf, false);
-			screenshotPath = buf;
-		} catch (const std::exception& e) {
-			logger::warn("Rejected unsafe screenshot folder: {}", e.what());
-		}
-	}
-	ImGui::PopItemWidth();
-	ImGui::SameLine();
-	const bool canOpen = !screenshotPath.empty();
-	ImGui::BeginDisabled(!canOpen);
-	if (ImGui::Button("Open")) {
-		try {
-			const auto resolved = ResolveCapturePath(screenshotPath, false);
-			std::error_code ec;
-			std::filesystem::create_directories(resolved, ec);
-			ShellExecuteW(nullptr, L"open", resolved.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-		} catch (const std::exception& e) {
-			logger::error("Could not open screenshot directory: {}", e.what());
-		}
-	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	ImGui::Text("Folder");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Relative paths resolve beneath Pictures\\Community Shaders.");
-		ImGui::Text("Absolute paths (e.g. D:\\Captures) save there directly.");
-	}
-
-	ImGui::SeparatorText("Lossless Frame Sequence");
-	ImGui::TextWrapped("Sequence capture uses Screenshot API v1. Video composition and audio are intentionally outside CSX.");
-	int sequenceFrames = static_cast<int>(sequenceDefaults.frameCount);
-	if (ImGui::SliderInt("Frames", &sequenceFrames, 1, 10000))
-		sequenceDefaults.frameCount = static_cast<uint32_t>(sequenceFrames);
-	int sequenceInterval = static_cast<int>(sequenceDefaults.intervalFrames);
-	if (ImGui::SliderInt("Interval (game frames)", &sequenceInterval, 1, 60))
-		sequenceDefaults.intervalFrames = static_cast<uint32_t>(sequenceInterval);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Start at 12 on a busy mod list, then reduce until the manifest first reports pressure.");
-	}
-
-	int sequenceFormat = frameCaptureUsePng ? 1 : 0;
-	ImGui::RadioButton("BMP (fast)##SequenceFormat", &sequenceFormat, 0);
-	ImGui::SameLine();
-	ImGui::RadioButton("PNG (compact)##SequenceFormat", &sequenceFormat, 1);
-	frameCaptureUsePng = sequenceFormat != 0;
-	if (globals::game::isVR) {
-		int eye = static_cast<int>(frameCaptureEye);
-		ImGui::TextUnformatted("Capture eye:");
 		ImGui::SameLine();
-		ImGui::RadioButton("Left##SequenceEye", &eye, 0);
-		ImGui::SameLine();
-		ImGui::RadioButton("Right##SequenceEye", &eye, 1);
-		ImGui::SameLine();
-		ImGui::RadioButton("Both##SequenceEye", &eye, 2);
-		frameCaptureEye = static_cast<CaptureEye>(eye);
+
+		if (usesFixedEyeFraming) {
+			bool fixedCropDisabled = false;
+			ImGui::BeginDisabled();
+			Util::Widgets::Checkbox("Apply crop", &fixedCropDisabled);
+			ImGui::EndDisabled();
+		} else {
+			Util::Widgets::Checkbox("Apply crop", &applyCropToScreenshot);
+		}
 	}
 
-	char sequencePath[260];
-	strncpy_s(sequencePath, sizeof(sequencePath), frameCapturePath.c_str(), _TRUNCATE);
-	ImGui::PushItemWidth(-FLT_MIN - 120.0f);
-	if (ImGui::InputText("##FrameCaptureFolder", sequencePath, sizeof(sequencePath))) {
-		try {
-			(void)ResolveCapturePath(sequencePath, true);
-			frameCapturePath = sequencePath;
-		} catch (const std::exception& e) {
-			logger::warn("Rejected unsafe frame-capture folder: {}", e.what());
+	if (page.Is("output")) {
+		ImGui::SeparatorText("Output");
+
+		Util::Widgets::Checkbox("Copy saved file to clipboard", &copyToClipboard);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Places the saved screenshot on the clipboard as a file.");
+			ImGui::Text("Paste in Explorer or attach in chat apps.");
 		}
-	}
-	ImGui::PopItemWidth();
-	ImGui::SameLine();
-	ImGui::BeginDisabled(frameCapturePath.empty());
-	if (ImGui::Button("Open##FrameCaptureFolder")) {
-		try {
-			const auto resolved = ResolveCapturePath(frameCapturePath, true);
-			std::error_code ec;
-			std::filesystem::create_directories(resolved, ec);
-			ShellExecuteW(nullptr, L"open", resolved.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-		} catch (const std::exception& e) {
-			logger::error("Could not open frame-capture directory: {}", e.what());
+
+		int sdrFormat = sdrUsePng ? 1 : 0;
+		ImGui::RadioButton("BMP (lossless)", &sdrFormat, 0);
+		ImGui::SameLine();
+		ImGui::RadioButton("PNG (lossless)", &sdrFormat, 1);
+		sdrUsePng = sdrFormat != 0;
+
+		char buf[260];
+		strncpy_s(buf, sizeof(buf), screenshotPath.c_str(), _TRUNCATE);
+		ImGui::PushItemWidth(-FLT_MIN - 120.0f);  // leave room for Open button + label
+		if (ImGui::InputText("##ScreenshotFolder", buf, sizeof(buf))) {
+			try {
+				(void)ResolveCapturePath(buf, false);
+				screenshotPath = buf;
+			} catch (const std::exception& e) {
+				logger::warn("Rejected unsafe screenshot folder: {}", e.what());
+			}
 		}
-	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	ImGui::Text("Folder");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Relative paths resolve beneath Videos\\Community Shaders.");
-		ImGui::Text("Absolute paths save there directly.");
+		ImGui::PopItemWidth();
+		ImGui::SameLine();
+		const bool canOpen = !screenshotPath.empty();
+		ImGui::BeginDisabled(!canOpen);
+		if (ImGui::Button("Open")) {
+			try {
+				const auto resolved = ResolveCapturePath(screenshotPath, false);
+				std::error_code ec;
+				std::filesystem::create_directories(resolved, ec);
+				ShellExecuteW(nullptr, L"open", resolved.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			} catch (const std::exception& e) {
+				logger::error("Could not open screenshot directory: {}", e.what());
+			}
+		}
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		ImGui::Text("Folder");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Relative paths resolve beneath Pictures\\Community Shaders.");
+			ImGui::Text("Absolute paths (e.g. D:\\Captures) save there directly.");
+		}
 	}
 
 	static std::atomic_uint64_t sequenceCommand{ 1 };
@@ -2173,99 +2127,164 @@ void ScreenshotFeature::DrawSettings()
 		}
 	}
 
-	ImGui::BeginDisabled(!IsRuntimeEnabled());
-	if (uiSequenceRequestId.empty()) {
-		if (ImGui::Button("Start Frame Capture")) {
-			auto capture = BuildCaptureDescriptor(frameCaptureEye, frameCaptureUsePng, false);
+	if (page.Is("sequence")) {
+		ImGui::SeparatorText("Lossless Frame Sequence");
+		ImGui::TextWrapped("Sequence capture uses Screenshot API v1. Video composition and audio are intentionally outside CSX.");
+		int sequenceFrames = static_cast<int>(sequenceDefaults.frameCount);
+		if (Util::Widgets::SliderInt("Frames", &sequenceFrames, 1, 10000))
+			sequenceDefaults.frameCount = static_cast<uint32_t>(sequenceFrames);
+		int sequenceInterval = static_cast<int>(sequenceDefaults.intervalFrames);
+		if (Util::Widgets::SliderInt("Interval (game frames)", &sequenceInterval, 1, 60))
+			sequenceDefaults.intervalFrames = static_cast<uint32_t>(sequenceInterval);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Start at 12 on a busy mod list, then reduce until the manifest first reports pressure.");
+		}
+
+		int sequenceFormat = frameCaptureUsePng ? 1 : 0;
+		ImGui::RadioButton("BMP (fast)##SequenceFormat", &sequenceFormat, 0);
+		ImGui::SameLine();
+		ImGui::RadioButton("PNG (compact)##SequenceFormat", &sequenceFormat, 1);
+		frameCaptureUsePng = sequenceFormat != 0;
+		if (globals::game::isVR) {
+			int eye = static_cast<int>(frameCaptureEye);
+			ImGui::TextUnformatted("Capture eye:");
+			ImGui::SameLine();
+			ImGui::RadioButton("Left##SequenceEye", &eye, 0);
+			ImGui::SameLine();
+			ImGui::RadioButton("Right##SequenceEye", &eye, 1);
+			ImGui::SameLine();
+			ImGui::RadioButton("Both##SequenceEye", &eye, 2);
+			frameCaptureEye = static_cast<CaptureEye>(eye);
+		}
+
+		char sequencePath[260];
+		strncpy_s(sequencePath, sizeof(sequencePath), frameCapturePath.c_str(), _TRUNCATE);
+		ImGui::PushItemWidth(-FLT_MIN - 120.0f);
+		if (ImGui::InputText("##FrameCaptureFolder", sequencePath, sizeof(sequencePath))) {
+			try {
+				(void)ResolveCapturePath(sequencePath, true);
+				frameCapturePath = sequencePath;
+			} catch (const std::exception& e) {
+				logger::warn("Rejected unsafe frame-capture folder: {}", e.what());
+			}
+		}
+		ImGui::PopItemWidth();
+		ImGui::SameLine();
+		ImGui::BeginDisabled(frameCapturePath.empty());
+		if (ImGui::Button("Open##FrameCaptureFolder")) {
+			try {
+				const auto resolved = ResolveCapturePath(frameCapturePath, true);
+				std::error_code ec;
+				std::filesystem::create_directories(resolved, ec);
+				ShellExecuteW(nullptr, L"open", resolved.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			} catch (const std::exception& e) {
+				logger::error("Could not open frame-capture directory: {}", e.what());
+			}
+		}
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		ImGui::Text("Folder");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Relative paths resolve beneath Videos\\Community Shaders.");
+			ImGui::Text("Absolute paths save there directly.");
+		}
+
+		ImGui::BeginDisabled(!IsRuntimeEnabled());
+		if (uiSequenceRequestId.empty()) {
+			if (ImGui::Button("Start Frame Capture")) {
+				auto capture = BuildCaptureDescriptor(frameCaptureEye, frameCaptureUsePng, false);
+				const auto response = CSX::Api::DispatchScreenshotServiceRequest({
+					{ "contractMajor", 1 },
+					{ "action", "sequence_start" },
+					{ "clientId", "csx.menu.sequence" },
+					{ "commandId", std::format("start:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
+					{ "sequence", {
+									  { "frameCount", sequenceDefaults.frameCount },
+									  { "useSettings", false },
+									  { "schedule", { { "basis", "game_frames" }, { "intervalFrames", sequenceDefaults.intervalFrames } } },
+									  { "backpressure", { { "policy", "skip" }, { "maximumConsecutiveSkips", 5 } } },
+									  { "failurePolicy", "continue" },
+									  { "capture", std::move(capture) },
+									  { "packaging", { { "frameManifest", true }, { "previewVideo", { { "requested", false } } } } },
+								  } },
+				});
+				if (response.value("ok", false) && response.contains("result"))
+					uiSequenceRequestId = response["result"].value("requestId", std::string{});
+			}
+		} else if (ImGui::Button("Stop Frame Capture")) {
 			const auto response = CSX::Api::DispatchScreenshotServiceRequest({
 				{ "contractMajor", 1 },
-				{ "action", "sequence_start" },
+				{ "action", "sequence_stop" },
 				{ "clientId", "csx.menu.sequence" },
-				{ "commandId", std::format("start:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
-				{ "sequence", {
-								  { "frameCount", sequenceDefaults.frameCount },
-								  { "useSettings", false },
-								  { "schedule", { { "basis", "game_frames" }, { "intervalFrames", sequenceDefaults.intervalFrames } } },
-								  { "backpressure", { { "policy", "skip" }, { "maximumConsecutiveSkips", 5 } } },
-								  { "failurePolicy", "continue" },
-								  { "capture", std::move(capture) },
-								  { "packaging", { { "frameManifest", true }, { "previewVideo", { { "requested", false } } } } },
-							  } },
+				{ "commandId", std::format("stop:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
+				{ "requestId", uiSequenceRequestId },
 			});
-			if (response.value("ok", false) && response.contains("result"))
-				uiSequenceRequestId = response["result"].value("requestId", std::string{});
+			if (response.value("ok", false) && response.contains("result") &&
+				IsTerminalCaptureState(response["result"].value("state", std::string{})))
+				uiSequenceRequestId.clear();
 		}
-	} else if (ImGui::Button("Stop Frame Capture")) {
-		const auto response = CSX::Api::DispatchScreenshotServiceRequest({
-			{ "contractMajor", 1 },
-			{ "action", "sequence_stop" },
-			{ "clientId", "csx.menu.sequence" },
-			{ "commandId", std::format("stop:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
-			{ "requestId", uiSequenceRequestId },
-		});
-		if (response.value("ok", false) && response.contains("result") &&
-			IsTerminalCaptureState(response["result"].value("state", std::string{})))
-			uiSequenceRequestId.clear();
-	}
-	ImGui::EndDisabled();
-
-	auto& menuSettings = Menu::GetSingleton()->GetSettings();
-	Util::InputComboWidget(
-		"Hotkey",
-		menuSettings.ScreenshotKey,
-		Menu::GetSingleton()->settingScreenshotKey,
-		"Change##ScreenshotFeature");
-
-	if (IsRuntimeEnabled() && HotkeyCollidesWithVanilla()) {
-		Util::Text::WrappedWarning(
-			"This hotkey collides with vanilla PrintScreen; both saves will fire. "
-			"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a different hotkey above.");
+		ImGui::EndDisabled();
 	}
 
-	if (usesFixedEyeFraming) {
-		ImGui::SeparatorText("Framing");
-		if (vrCaptureSource == VRCaptureSource::FramedStereo) {
+	if (page.Is("framing")) {
+		auto& menuSettings = Menu::GetSingleton()->GetSettings();
+		Util::InputComboWidget(
+			"Hotkey",
+			menuSettings.ScreenshotKey,
+			Menu::GetSingleton()->settingScreenshotKey,
+			"Change##ScreenshotFeature");
+
+		if (IsRuntimeEnabled() && HotkeyCollidesWithVanilla()) {
+			Util::Text::WrappedWarning(
+				"This hotkey collides with vanilla PrintScreen; both saves will fire. "
+				"Set bAllowScreenShot=0 in Skyrim.ini to suppress vanilla, or pick a different hotkey above.");
+		}
+
+		if (usesFixedEyeFraming) {
+			ImGui::SeparatorText("Framing");
+			if (vrCaptureSource == VRCaptureSource::FramedStereo) {
+				ImGui::TextWrapped(
+					"Combined aligns both submitted eyes in head-projection space. The dominant eye owns the shared view; "
+					"the other eye fills the outer periphery through a narrow feathered join. Without scene depth, nearby "
+					"objects can show a seam or duplication.");
+			} else {
+				ImGui::TextWrapped(
+					"The selected submitted eye is center-cropped to 16:9 and resized to 2560 x 1440 without stretching.");
+			}
 			ImGui::TextWrapped(
-				"Combined aligns both submitted eyes in head-projection space. The dominant eye owns the shared view; "
-				"the other eye fills the outer periphery through a narrow feathered join. Without scene depth, nearby "
-				"objects can show a seam or duplication.");
-		} else {
-			ImGui::TextWrapped(
-				"The selected submitted eye is center-cropped to 16:9 and resized to 2560 x 1440 without stretching.");
+				"The ordinary crop preset is not applied. A live eye submission is required, so framed views are "
+				"unavailable during loading screens.");
+			return;
 		}
-		ImGui::TextWrapped(
-			"The ordinary crop preset is not applied. A live eye submission is required, so framed views are "
-			"unavailable during loading screens.");
-		return;
-	}
 
-	ImGui::SeparatorText("Crop");
+		ImGui::SeparatorText("Crop");
 
-	// The desktop framebuffer remains available for interactive SBS crop setup.
-	// HMD capture replaces its content with the accepted eye pair before applying
-	// the same normalized crop.
-	if (globals::game::isVR && vrCaptureSource == VRCaptureSource::HMDSubmission) {
-		ImGui::TextDisabled("Crop preview uses the desktop SBS layout; saved pixels come from the HMD submission.");
-	}
-	winrt::com_ptr<ID3D11Texture2D> previewTextureKeepAlive;
-	const auto src = SelectCaptureSource(previewTextureKeepAlive);
-
-	ID3D11ShaderResourceView* previewView = src.srv;
-	if (src.texture && (src.needsPreviewCache || !previewView)) {
-		EnsurePreviewCache(src.texture);
-		if (previewCacheSRV && previewCacheTexture) {
-			globals::d3d::context->CopySubresourceRegion(
-				previewCacheTexture.get(), 0, 0, 0, 0, src.texture, 0, nullptr);
-			previewView = previewCacheSRV.get();
+		// The desktop framebuffer remains available for interactive SBS crop setup.
+		// HMD capture replaces its content with the accepted eye pair before applying
+		// the same normalized crop.
+		if (globals::game::isVR && vrCaptureSource == VRCaptureSource::HMDSubmission) {
+			ImGui::TextDisabled("Crop preview uses the desktop SBS layout; saved pixels come from the HMD submission.");
 		}
-	}
+		winrt::com_ptr<ID3D11Texture2D> previewTextureKeepAlive;
+		const auto src = SelectCaptureSource(previewTextureKeepAlive);
 
-	subrect.DrawEditor(
-		previewView,
-		src.texture,
-		1.0f,
-		0.0f,
-		Util::Subrect::OpaquePreviewBlendCallback);
+		ID3D11ShaderResourceView* previewView = src.srv;
+		if (src.texture && (src.needsPreviewCache || !previewView)) {
+			EnsurePreviewCache(src.texture);
+			if (previewCacheSRV && previewCacheTexture) {
+				globals::d3d::context->CopySubresourceRegion(
+					previewCacheTexture.get(), 0, 0, 0, 0, src.texture, 0, nullptr);
+				previewView = previewCacheSRV.get();
+			}
+		}
+
+		subrect.DrawEditor(
+			previewView,
+			src.texture,
+			1.0f,
+			0.0f,
+			Util::Subrect::OpaquePreviewBlendCallback);
+	}
 }
 
 void ScreenshotFeature::EnsurePreviewCache(ID3D11Texture2D* sourceTexture)

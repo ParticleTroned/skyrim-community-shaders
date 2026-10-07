@@ -1,4 +1,5 @@
 #include "Feature.h"
+#include "Menu/SettingsPage.h"
 
 #include <algorithm>
 
@@ -521,4 +522,16 @@ bool Feature::IsFeatureKnown(const std::string& shortName, REL::Version* outVers
 	}
 
 	return false;
+}
+
+void Feature::DrawSettings()
+{
+	MenuUI::SettingsPage page(GetShortName().c_str(), { { "about", "About", "Learn what this feature changes." } });
+	if (!page.Is("about"))
+		return;
+	const auto [description, capabilities] = GetFeatureSummary();
+	ImGui::TextWrapped("%s", description.c_str());
+	for (const auto& capability : capabilities)
+		ImGui::BulletText("%s", capability.c_str());
+	ImGui::TextDisabled("This feature uses your installed materials and has no additional controls.");
 }

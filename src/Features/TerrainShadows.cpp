@@ -1,4 +1,5 @@
 #include "TerrainShadows.h"
+#include "Menu/SettingsPage.h"
 
 #include <DirectXTex.h>
 #include <pystring/pystring.h>
@@ -25,9 +26,15 @@ void TerrainShadows::SaveSettings(json& o_json)
 
 void TerrainShadows::DrawSettings()
 {
-	ImGui::Checkbox("Enable", &settings.EnableTerrainShadow);
+	MenuUI::SettingsPage page("TerrainShadows", {
+													{ "appearance", "Shadows", "Choose terrain shadow coverage and quality." },
+													{ "diagnostics", "Diagnostics", "Inspect terrain shadow diagnostics." },
+												});
 
-	if (ImGui::TreeNodeEx("Debug")) {
+	if (page.Is("appearance")) {
+		Util::Widgets::Checkbox("Enable", &settings.EnableTerrainShadow);
+	}
+	if (page.Is("diagnostics")) {
 		std::string curr_worldspace = "N/A";
 		std::string curr_worldspace_name = "N/A";
 		auto tes = RE::TES::GetSingleton();
@@ -55,24 +62,29 @@ void TerrainShadows::DrawSettings()
 
 		if (ImGui::TreeNode("Buffer Viewer")) {
 			static float debugRescale = .1f;
-			ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+			Util::Widgets::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
 			if (texShadowHeight) {
 				BUFFER_VIEWER_NODE_BULLET(texShadowHeight, debugRescale)
 			}
 			ImGui::TreePop();
 		}
-		ImGui::TreePop();
 	}
 }
 
 void TerrainShadows::DrawPerformanceSettings(bool)
 {
-	ImGui::Checkbox("Enable", &settings.EnableTerrainShadow);
+	Util::Widgets::Checkbox("Enable", &settings.EnableTerrainShadow);
 }
 
 void TerrainShadows::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("TerrainShadows", {
+													{ "essentials", "Essentials", "Start with the main choices for this feature." },
+												});
+	if (!page.Is("essentials"))
+		return;
+
 	DrawPerformanceSettings(false);
 }
 

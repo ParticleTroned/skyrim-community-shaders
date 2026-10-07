@@ -902,3 +902,8 @@ void VR::ProcessControllerInputForImGui()
 	}
 	gWandClaimedCursorThisFrame = false;
 }
+
+bool VR::IsMenuPointerInHeadset() const
+{
+	return gCursorOwner == CursorOwner::Wand;
+}

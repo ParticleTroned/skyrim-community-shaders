@@ -9,6 +9,7 @@
 #include "Menu/Fonts.h"
 #include "Menu/OverlayPolicy.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/SettingsPage.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BSOpenVRControllerDevice.h"
 #include "RE/N/NiPoint3.h"
@@ -152,25 +153,12 @@ namespace
 		return globals::menu && globals::menu->HasClosedMenuOverlay();
 	}
 
-	bool BeginTabItemWithFont(const char* label, Menu::FontRole role, ImGuiTabItemFlags flags = ImGuiTabItemFlags_None)
-	{
-		return MenuFonts::BeginTabItemWithFont(label, role, flags);
-	}
-
 	void ScaleOverlayTransform(vr::HmdMatrix34_t& transform, float width, float height)
 	{
 		for (int row = 0; row < 3; ++row) {
 			transform.m[row][0] *= width;
 			transform.m[row][1] *= height;
 		}
-	}
-
-	ImVec2 GetTabChildSizeWithRestoreButtonReserve()
-	{
-		const float reserveHeight = FeatureListRenderer::GetRestoreDefaultsButtonReserveHeight();
-		ImVec2 size = ImGui::GetContentRegionAvail();
-		size.y = size.y > reserveHeight ? size.y - reserveHeight : 1.0f;
-		return size;
 	}
 
 	HWND GetGameWindowHandle()
@@ -1144,101 +1132,97 @@ bool VR::OpenFovSettings()
 
 void VR::DrawSettings()
 {
+	if (pendingFovTabSelection)
+		MenuUI::SettingsPage::Select("VR", "fov");
+	MenuUI::SettingsPage page("VR", {
+										{ "general", "Menu", "Choose headset menu placement and interaction." },
+										{ "fov", "FOV", "Choose the area to render, then refine its edges." },
+										{ "stabilizer", "Stabilizer", "Choose compatible interior and exterior quality profiles." },
+										{ "stereo", "Stereo", "Refine the appearance shared between your eyes." },
+										{ "bindings", "Bindings", "Choose controller shortcuts.", {}, openVRInfo.isCompatible },
+										{ "diagnostics", "Diagnostics", "Inspect headset and controller diagnostics." },
+									});
+
 	auto menu = globals::menu;
 	if (!menu)
 		return;
-	if (pendingFovTabSelection)
-		ImGui::SetScrollY(0.0f);
-	if (ImGui::BeginTabBar("##VRTabs", ImGuiTabBarFlags_None)) {
-		// Resolve navigation before the first tab triggers layout.
-		if (pendingFovTabSelection)
-			ImGui::TabBarQueueFocus(ImGui::GetCurrentTabBar(), "FOV");
 
-		// General Settings Tab
-		if (BeginTabItemWithFont("General", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRGeneralFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-				DrawGeneralVRSettings();
-				DrawControllerInputInstructions();
-				DrawMenuSettings();
-				DrawMouseSettings();
+	// General Settings Tab
+	if (page.Is("general")) {
+		if (ImGui::BeginChild("##VRGeneralFrame", ImVec2(0, 0), true)) {
+			DrawGeneralVRSettings();
+			DrawControllerInputInstructions();
+			DrawMenuSettings();
+			DrawMouseSettings();
+		}
+		ImGui::EndChild();
+	}
+
+	if (page.Is("fov")) {
+		if (ImGui::BeginChild("##VRFoveatedFrame", ImVec2(0, 0), true)) {
+			if (pendingFovTabSelection) {
+				ImGui::SetScrollY(0.0f);
+				pendingFovTabSelection = false;
+			}
+			DrawFoveationSettings();
+		}
+		ImGui::EndChild();
+	}
+
+	if (page.Is("stabilizer")) {
+		if (ImGui::BeginChild("##VRFpsStabilizerFrame", ImVec2(0, 0), true)) {
+			VRFpsStabilizer::DrawStatus();
+			const auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());
+			static int stabilizerPage = 0;
+			static bool blockedDraftNavigation = false;
+			constexpr std::array pages{ "Profiles", "Performance", "LOD & Grass", "Quality Levels", "Locations", "Commands" };
+			int requestedPage = stabilizerPage;
+			const bool pageHasDraft = stabilizerPage == 0 ? vrFpsStabilizerProfilesDirty :
+			                                                VRFpsStabilizer::HasUnsavedSettings(stabilizerPage == 4 ? VRFpsStabilizer::ConfigFile::Locations : VRFpsStabilizer::ConfigFile::Main);
+			if (!pageHasDraft)
+				blockedDraftNavigation = false;
+			if (ImGui::Combo("Settings page", &requestedPage, pages.data(), static_cast<int>(pages.size()))) {
+				const bool sameMainDraft = stabilizerPage != 0 && stabilizerPage != 4 && requestedPage != 0 && requestedPage != 4;
+				blockedDraftNavigation = pageHasDraft && !sameMainDraft;
+				if (!blockedDraftNavigation)
+					stabilizerPage = requestedPage;
+			}
+			if (auto tooltip = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted("Profiles control CSX by interior/exterior. Performance controls automatic quality. LOD & Grass controls visibility. Levels and Locations edit quality rules. Commands contains advanced event and conditional scripts.");
+			if (blockedDraftNavigation)
+				Util::Text::WrappedWarning("Save or discard this draft before switching to another INI editor.");
+			ImGui::Separator();
+			if (stabilizerPage == 0)
+				DrawVRFpsStabilizerSettings();
+			else
+				VRFpsStabilizer::DrawSettings(pages[stabilizerPage]);
+		}
+		ImGui::EndChild();
+	}
+
+	if (page.Is("stereo")) {
+		if (ImGui::BeginChild("##VRStereoFrame", ImVec2(0, 0), true)) {
+			DrawStereoSettings();
+		}
+		ImGui::EndChild();
+	}
+
+	// Key Bindings Tab
+	if (openVRInfo.isCompatible) {
+		if (page.Is("bindings")) {
+			if (ImGui::BeginChild("##VRBindingsFrame", ImVec2(0, 0), true)) {
+				DrawKeyBindings();
 			}
 			ImGui::EndChild();
-			ImGui::EndTabItem();
 		}
+	}
 
-		if (BeginTabItemWithFont("FOV", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRFoveatedFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-				if (pendingFovTabSelection) {
-					ImGui::SetScrollY(0.0f);
-					pendingFovTabSelection = false;
-				}
-				DrawFoveationSettings();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
+	// Debug Tab (existing debug functionality)
+	if (page.Is("diagnostics")) {
+		if (ImGui::BeginChild("##VRDebugFrame", ImVec2(0, 0), true)) {
+			DrawDebugSection();
 		}
-
-		if (BeginTabItemWithFont("VR Stabilizer", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRFpsStabilizerFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-				VRFpsStabilizer::DrawStatus();
-				const auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());
-				static int stabilizerPage = 0;
-				static bool blockedDraftNavigation = false;
-				constexpr std::array pages{ "Profiles", "Performance", "LOD & Grass", "Quality Levels", "Locations", "Commands" };
-				int requestedPage = stabilizerPage;
-				const bool pageHasDraft = stabilizerPage == 0 ? vrFpsStabilizerProfilesDirty :
-				                                                VRFpsStabilizer::HasUnsavedSettings(stabilizerPage == 4 ? VRFpsStabilizer::ConfigFile::Locations : VRFpsStabilizer::ConfigFile::Main);
-				if (!pageHasDraft)
-					blockedDraftNavigation = false;
-				if (ImGui::Combo("Settings page", &requestedPage, pages.data(), static_cast<int>(pages.size()))) {
-					const bool sameMainDraft = stabilizerPage != 0 && stabilizerPage != 4 && requestedPage != 0 && requestedPage != 4;
-					blockedDraftNavigation = pageHasDraft && !sameMainDraft;
-					if (!blockedDraftNavigation)
-						stabilizerPage = requestedPage;
-				}
-				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted("Profiles control CSX by interior/exterior. Performance controls automatic quality. LOD & Grass controls visibility. Levels and Locations edit quality rules. Commands contains advanced event and conditional scripts.");
-				if (blockedDraftNavigation)
-					Util::Text::WrappedWarning("Save or discard this draft before switching to another INI editor.");
-				ImGui::Separator();
-				if (stabilizerPage == 0)
-					DrawVRFpsStabilizerSettings();
-				else
-					VRFpsStabilizer::DrawSettings(pages[stabilizerPage]);
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		if (BeginTabItemWithFont("Stereo", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRStereoFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-				DrawStereoSettings();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		// Key Bindings Tab
-		if (openVRInfo.isCompatible) {
-			if (BeginTabItemWithFont("Bindings", Menu::FontRole::Subheading)) {
-				if (ImGui::BeginChild("##VRBindingsFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-					DrawKeyBindings();
-				}
-				ImGui::EndChild();
-				ImGui::EndTabItem();
-			}
-		}
-
-		// Debug Tab (existing debug functionality)
-		if (BeginTabItemWithFont("Debug", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##VRDebugFrame", GetTabChildSizeWithRestoreButtonReserve(), true)) {
-				DrawDebugSection();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
+		ImGui::EndChild();
 	}
 
 	// Combo recording popup
@@ -1627,7 +1611,7 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(!renderScaleEligible ||
 													(profile.renderScaleMode && globals::features::upscaling.IsNeuralRenderingRenderScaleRequired()));
-			if (ImGui::Checkbox("Enable##RenderScale", &profile.renderScaleMode)) {
+			if (Util::Widgets::Checkbox("Enable##RenderScale", &profile.renderScaleMode)) {
 				profile.hasRenderScaleMode = true;
 				changed = true;
 			}
@@ -1645,7 +1629,7 @@ namespace
 		bool& hasSetting)
 	{
 		ImGui::PushID(id);
-		const bool changed = ImGui::Checkbox(label, &enabled);
+		const bool changed = Util::Widgets::Checkbox(label, &enabled);
 		ImGui::PopID();
 		if (changed)
 			hasSetting = true;
@@ -1657,7 +1641,7 @@ namespace
 		bool enabled = false;
 		auto disabledGuard = Util::DisableGuard(true);
 		ImGui::PushID(id);
-		ImGui::Checkbox(label, &enabled);
+		Util::Widgets::Checkbox(label, &enabled);
 		ImGui::PopID();
 		return false;
 	}
@@ -1862,7 +1846,7 @@ namespace
 		ImGui::Spacing();
 		{
 			auto disabledGuard = Util::DisableGuard(uiState.loadFailed);
-			if (ImGui::Checkbox(
+			if (Util::Widgets::Checkbox(
 					"Enable VR FPS Stabilizer Interior/Exterior switching",
 					&uiState.config.upscalingSwitchingEnabled)) {
 				HandleVRFpsStabilizerUIEdit(uiState);
@@ -2035,11 +2019,11 @@ namespace
 			const auto drawLocation = [&](const char* a_label, bool& a_enabled, float& a_minimumExtent) {
 				ImGui::TableNextColumn();
 				ImGui::PushID(a_label);
-				changed |= ImGui::Checkbox(a_label, &a_enabled);
+				changed |= Util::Widgets::Checkbox(a_label, &a_enabled);
 				{
 					auto guard = Util::DisableGuard(!a_enabled);
 					ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
-					changed |= ImGui::SliderFloat("Minimum Object Size", &a_minimumExtent,
+					changed |= Util::Widgets::SliderFloat("Minimum Object Size", &a_minimumExtent,
 						VRDepthCullingEnablePolicy::kMinimumExtent, VRDepthCullingEnablePolicy::kMaximumExtent, "%.1f");
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2104,21 +2088,21 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	ImGui::SeparatorText("Stereo");
 	{
 		auto guard = Util::DisableGuard(!screenSpaceShadowsEnabled);
-		ImGui::Checkbox("Stereo Sync SSS", &screenSpaceShadows.enableStereoSync);
+		Util::Widgets::Checkbox("Stereo Sync SSS", &screenSpaceShadows.enableStereoSync);
 	}
 	{
 		auto guard = Util::DisableGuard(!screenSpaceShadowsEnabled || !screenSpaceShadows.enableStereoSync);
-		ImGui::Checkbox("Stereo Reproject SSS", &screenSpaceShadows.useStereoReproject);
+		Util::Widgets::Checkbox("Stereo Reproject SSS", &screenSpaceShadows.useStereoReproject);
 	}
 	{
 		auto guard = Util::DisableGuard(!screenSpaceGIEnabled);
-		ImGui::Checkbox("Stereo Sync SSGI", &screenSpaceGI.settings.EnableStereoSync);
+		Util::Widgets::Checkbox("Stereo Sync SSGI", &screenSpaceGI.settings.EnableStereoSync);
 	}
 	{
 		auto guard = Util::DisableGuard(!screenSpaceGIEnabled || !screenSpaceGI.settings.EnableStereoSync);
-		ImGui::Checkbox("Stereo Reproject SSGI", &screenSpaceGI.settings.UseStereoReproject);
+		Util::Widgets::Checkbox("Stereo Reproject SSGI", &screenSpaceGI.settings.UseStereoReproject);
 	}
-	ImGui::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
+	Util::Widgets::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
 
 	ImGui::SeparatorText("Shader FOV");
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
@@ -2131,18 +2115,18 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	const bool wetternessAvailable = wetterness.loaded && wetterness.IsRuntimeActive() && !wetnessEffectsRuntimeActive;
 	const bool dynamicCubemapsAvailable = dynamicCubemaps.loaded;
 
-	ImGui::Checkbox("Lighting", &settings.EnableLightingFoveation);
+	Util::Widgets::Checkbox("Lighting", &settings.EnableLightingFoveation);
 	{
 		auto guard = Util::DisableGuard(!ssrAvailable);
-		ImGui::Checkbox("SSR", &settings.EnableSSRFoveation);
+		Util::Widgets::Checkbox("SSR", &settings.EnableSSRFoveation);
 	}
 	{
 		auto guard = Util::DisableGuard(!waterParallaxAvailable);
-		ImGui::Checkbox("Water Parallax Detail", &settings.EnableWaterParallaxFoveation);
+		Util::Widgets::Checkbox("Water Parallax Detail", &settings.EnableWaterParallaxFoveation);
 	}
 	{
 		auto guard = Util::DisableGuard(!wetternessAvailable);
-		ImGui::Checkbox("Wetterness", &settings.EnableWetternessFoveation);
+		Util::Widgets::Checkbox("Wetterness", &settings.EnableWetternessFoveation);
 	}
 	if (!ssrAvailable)
 		ImGui::TextDisabled("SSR foveation requires runtime-active Screen Space Reflections.");
@@ -2152,14 +2136,14 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		ImGui::TextDisabled(wetnessEffectsRuntimeActive ? "Wetterness foveation is not available with legacy Wetness Effects." : "Wetterness foveation requires Wetterness to be enabled.");
 	{
 		auto guard = Util::DisableGuard(!dynamicCubemapsAvailable);
-		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
+		Util::Widgets::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 	}
 
 	DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
 	const bool dynamicCubemapVisibilityThrottleBlockedByWetterness = IsWetternessActiveForDynamicCubemapVisibilityThrottle();
 	{
 		auto guard = Util::DisableGuard(!dynamicCubemapsAvailable || dynamicCubemapVisibilityThrottleBlockedByWetterness);
-		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
+		Util::Widgets::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
 	}
 	if (!dynamicCubemapsAvailable)
 		ImGui::TextDisabled("Dynamic Cubemap FOV controls require Dynamic Cubemaps.");
@@ -2168,7 +2152,7 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 
 	if (IsRenderScaleDesktopMirrorQualityAvailable()) {
 		ImGui::SeparatorText("Desktop Mirror");
-		ImGui::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
+		Util::Widgets::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Improves the desktop mirror image when VR Render Scale Mode lowers the source resolution.");
 			ImGui::TextUnformatted("Only the desktop view changes. This can cost a little performance while render scale is active.");
@@ -2193,20 +2177,30 @@ namespace
 
 void VR::DrawEssentialSettings()
 {
-	DrawCSMenuNavigationSettings();
+	MenuUI::SettingsPage page("VR", {
+										{ "general", "Menu", "Choose how to move around the headset menu." },
+										{ "desktop", "Desktop", "Refine the desktop mirror and window behaviour." },
+										{ "bindings", "Bindings", "Set your controller shortcuts." },
+									});
 
-	if (CanConfigureMenuLayout()) {
-		ImGui::SeparatorText("Menu Layout");
-		DrawMenuLayoutUnlockSetting();
+	if (page.Is("general")) {
+		DrawCSMenuNavigationSettings();
+
+		if (CanConfigureMenuLayout()) {
+			ImGui::SeparatorText("Menu Layout");
+			DrawMenuLayoutUnlockSetting();
+		}
 	}
-
-	ImGui::SeparatorText("Desktop");
-	DrawKeepDesktopWindowFocusedForVRMenuSetting();
-	DrawStabilizeRenderScaleDesktopMirrorSetting();
-
-	if (openVRInfo.isCompatible) {
-		ImGui::SeparatorText("Bindings");
-		DrawKeyBindings();
+	if (page.Is("desktop")) {
+		ImGui::SeparatorText("Desktop");
+		DrawKeepDesktopWindowFocusedForVRMenuSetting();
+		DrawStabilizeRenderScaleDesktopMirrorSetting();
+	}
+	if (page.Is("bindings")) {
+		if (openVRInfo.isCompatible) {
+			ImGui::SeparatorText("Bindings");
+			DrawKeyBindings();
+		}
 	}
 }
 
@@ -2237,7 +2231,7 @@ namespace
 		};
 
 		bool mouseNavigation = !effectiveWandNavigation;
-		if (ImGui::Checkbox("Mouse Navigation", &mouseNavigation)) {
+		if (Util::Widgets::Checkbox("Mouse Navigation", &mouseNavigation)) {
 			setWandNavigation(false);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2247,7 +2241,7 @@ namespace
 		ImGui::SameLine();
 
 		bool wandNavigation = effectiveWandNavigation;
-		if (ImGui::Checkbox("Wand Navigation", &wandNavigation)) {
+		if (Util::Widgets::Checkbox("Wand Navigation", &wandNavigation)) {
 			setWandNavigation(true);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2256,7 +2250,7 @@ namespace
 
 		if (effectiveWandNavigation) {
 			ImGui::SetNextItemWidth(220.0f);
-			ImGui::SliderFloat(
+			Util::Widgets::SliderFloat(
 				"Wand Aim Pitch Trim",
 				&settings.WandAimPitchTrimDegrees,
 				VR::Config::kMinWandAimPitchTrimDegrees,
@@ -2276,7 +2270,7 @@ namespace
 		ImGui::PushID(a_idPrefix);
 
 		if (a_includeAutoHideSetting) {
-			ImGui::SliderInt("Welcome Message Timeout", &settings.kAutoHideSeconds, 0, VR::Config::kMaxAutoHideSeconds,
+			Util::Widgets::SliderInt("Welcome Message Timeout", &settings.kAutoHideSeconds, 0, VR::Config::kMaxAutoHideSeconds,
 				settings.kAutoHideSeconds <= 0 ? "Hidden" : "%d seconds");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Set to 0 to hide the startup controller instructions, or choose how long to show them.");
@@ -2429,7 +2423,7 @@ namespace
 	{
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
-		if (ImGui::Checkbox("Keep Desktop Game Window Focused for VR Menu", &settings.KeepDesktopWindowFocusedForVRMenu)) {
+		if (Util::Widgets::Checkbox("Keep Desktop Game Window Focused for VR Menu", &settings.KeepDesktopWindowFocusedForVRMenu)) {
 			if (settings.KeepDesktopWindowFocusedForVRMenu) {
 				vr.UpdateMenuDesktopWindowManagement(true);
 			} else {
@@ -2449,7 +2443,7 @@ namespace
 		const bool available = IsRenderScaleDesktopMirrorQualityAvailable();
 		{
 			auto guard = Util::DisableGuard(!available);
-			ImGui::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
+			Util::Widgets::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Improves the desktop mirror image when VR Render Scale Mode lowers the source resolution.");
@@ -2475,7 +2469,7 @@ namespace
 	{
 		auto& vr = globals::features::vr;
 		bool layoutUnlocked = vr.settings.UnlockMenuPositionAndSize;
-		if (ImGui::Checkbox("Unlock Menu Position and Size", &layoutUnlocked))
+		if (Util::Widgets::Checkbox("Unlock Menu Position and Size", &layoutUnlocked))
 			vr.SetMenuLayoutUnlocked(layoutUnlocked);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped("Allows the desktop CSX window to move, resize, and dock. In the headset, it restores custom placement and controller grip dragging. Locking the layout again preserves the saved headset settings.");
@@ -2498,9 +2492,9 @@ namespace
 			if (!settings.UnlockMenuPositionAndSize) {
 				ImGui::TextWrapped("The headset menu opens 2.25 metres ahead at eye height. It remains vertical and turns to face you.");
 			} else {
-				ImGui::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
+				Util::Widgets::SliderFloat("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f");
 				ImGui::TextWrapped("Move or resize the desktop window directly. Hold a controller grip to move the headset menu; Menu Scale controls its size.");
-				ImGui::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
+				Util::Widgets::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
 
 				const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
 				if (ImGui::Combo("Headset Positioning", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods)) &&
@@ -2520,9 +2514,9 @@ namespace
 				                       settings.attachMode == VR::Settings::OverlayAttachMode::Both;
 				if (showOnHMD && settings.VRMenuPositioningMethod == 0) {
 					ImGui::SeparatorText("HMD-relative offset");
-					ImGui::SliderFloat("Horizontal##HMDMenuOffset", &settings.VRMenuOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
-					ImGui::SliderFloat("Vertical##HMDMenuOffset", &settings.VRMenuOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
-					ImGui::SliderFloat("Depth##HMDMenuOffset", &settings.VRMenuOffsetZ, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					Util::Widgets::SliderFloat("Horizontal##HMDMenuOffset", &settings.VRMenuOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					Util::Widgets::SliderFloat("Vertical##HMDMenuOffset", &settings.VRMenuOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					Util::Widgets::SliderFloat("Depth##HMDMenuOffset", &settings.VRMenuOffsetZ, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
 				} else if (showOnHMD) {
 					if (ImGui::Button("Recenter Headset Menu")) {
 						vr.SetFixedOverlayToCurrentHMD();
@@ -2537,9 +2531,9 @@ namespace
 					if (ImGui::Combo("Attach to Controller", &controller, controllers, IM_ARRAYSIZE(controllers)))
 						settings.VRMenuAttachController = static_cast<ControllerDevice>(controller);
 					ImGui::SeparatorText("Controller-relative offset");
-					ImGui::SliderFloat("Horizontal##ControllerMenuOffset", &settings.VRMenuControllerOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
-					ImGui::SliderFloat("Vertical##ControllerMenuOffset", &settings.VRMenuControllerOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
-					ImGui::SliderFloat("Depth##ControllerMenuOffset", &settings.VRMenuControllerOffsetZ, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					Util::Widgets::SliderFloat("Horizontal##ControllerMenuOffset", &settings.VRMenuControllerOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					Util::Widgets::SliderFloat("Vertical##ControllerMenuOffset", &settings.VRMenuControllerOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
+					Util::Widgets::SliderFloat("Depth##ControllerMenuOffset", &settings.VRMenuControllerOffsetZ, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
 				}
 			}
 
@@ -2565,7 +2559,7 @@ namespace
 		VR::Settings& settings = vr.settings;
 		if (ImGui::CollapsingHeader("Input Settings")) {
 			ImGui::Text("Joystick Settings");
-			ImGui::SliderFloat("Mouse Deadzone", &settings.mouseDeadzone, 0.0f, 1.0f, "%.2f");
+			Util::Widgets::SliderFloat("Mouse Deadzone", &settings.mouseDeadzone, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (vr.CanUseWandPointing()) {
 					ImGui::TextUnformatted("Thumbstick deadzone for CSX menu scrolling while Wand Navigation is active.");
@@ -2573,7 +2567,7 @@ namespace
 					ImGui::TextUnformatted("Thumbstick deadzone for CSX menu cursor movement and scrolling while Mouse Navigation is active.");
 				}
 			}
-			ImGui::SliderFloat("Mouse Speed", &settings.mouseSpeed, 0.1f, 50.0f, "%.2f");
+			Util::Widgets::SliderFloat("Mouse Speed", &settings.mouseSpeed, 0.1f, 50.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Speed multiplier for CSX menu cursor movement while Mouse Navigation is active.");
 			}
@@ -2598,7 +2592,7 @@ namespace
 					const char* a_cost,
 					const char* a_requirement) {
 					auto guard = Util::DisableGuard(!a_available);
-					ImGui::Checkbox(a_label, &a_enabled);
+					Util::Widgets::Checkbox(a_label, &a_enabled);
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::TextUnformatted(a_summary);
 						ImGui::TextUnformatted(a_benefit);
@@ -2619,7 +2613,7 @@ namespace
 			{
 				auto guard = Util::DisableGuard(!screenSpaceShadowsEnabled || !screenSpaceShadows.enableStereoSync);
 				ImGui::Indent();
-				ImGui::Checkbox("Reproject Screen Space Shadows", &screenSpaceShadows.useStereoReproject);
+				Util::Widgets::Checkbox("Reproject Screen Space Shadows", &screenSpaceShadows.useStereoReproject);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted("Transfers Eye 0 (left) shadow into Eye 1 (right).");
 					ImGui::TextUnformatted("Usually faster than bilateral sync because it skips the Eye 1 shadow raymarch.");
@@ -2642,7 +2636,7 @@ namespace
 			{
 				auto guard = Util::DisableGuard(!screenSpaceGIEnabled || !screenSpaceGI.settings.EnableStereoSync);
 				ImGui::Indent();
-				ImGui::Checkbox("Reproject SSGI", &screenSpaceGI.settings.UseStereoReproject);
+				Util::Widgets::Checkbox("Reproject SSGI", &screenSpaceGI.settings.UseStereoReproject);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted("Transfers exact Eye 0 (left) SSGI/AO results into Eye 1 (right).");
 					ImGui::TextUnformatted("Usually faster than bilateral sync because many Eye 1 pixels skip the GI march.");
@@ -2679,7 +2673,7 @@ namespace
 			ImGui::TextWrapped("Advanced fallback for VR screen-space mismatches. It is default-off and only runs when a supported screen-space effect is active.");
 			ImGui::Spacing();
 
-			ImGui::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
+			Util::Widgets::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Helps hide left/right eye mismatches from some effects.");
 				ImGui::TextUnformatted("Use it only if you notice artifacts, because it can cost performance.");
@@ -2691,18 +2685,18 @@ namespace
 
 			ImGui::BeginDisabled(!settings.EnableStereoBlend);
 
-			ImGui::SliderFloat("Max Blend Strength", &settings.StereoBlendMaxFactor, VR::Config::kMinStereoBlendMaxFactor, VR::Config::kMaxStereoBlendMaxFactor, "%.3f");
+			Util::Widgets::SliderFloat("Max Blend Strength", &settings.StereoBlendMaxFactor, VR::Config::kMinStereoBlendMaxFactor, VR::Config::kMaxStereoBlendMaxFactor, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls how strongly the two eyes are blended. Lower is safer.");
 			}
 
-			ImGui::SliderFloat("Depth Match Tolerance", &settings.StereoBlendDepthSigma, VR::Config::kMinStereoBlendDepthSigma, VR::Config::kMaxStereoBlendDepthSigma, "%.3f");
+			Util::Widgets::SliderFloat("Depth Match Tolerance", &settings.StereoBlendDepthSigma, VR::Config::kMinStereoBlendDepthSigma, VR::Config::kMaxStereoBlendDepthSigma, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Controls how closely the two eyes must match before blending.");
 				ImGui::TextUnformatted("Lower values reduce halo risk.");
 			}
 
-			ImGui::SliderFloat("Color Mismatch Threshold", &settings.StereoBlendColorThreshold, VR::Config::kMinStereoBlendColorThreshold, VR::Config::kMaxStereoBlendColorThreshold, "%.3f");
+			Util::Widgets::SliderFloat("Color Mismatch Threshold", &settings.StereoBlendColorThreshold, VR::Config::kMinStereoBlendColorThreshold, VR::Config::kMaxStereoBlendColorThreshold, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Only blends when the two eyes differ enough.");
 				ImGui::TextUnformatted("Higher values blend less often.");
@@ -2754,7 +2748,7 @@ namespace
 					ImGui::TextUnformatted(a_text);
 			};
 
-			ImGui::Checkbox(a_label, &a_enabled);
+			Util::Widgets::Checkbox(a_label, &a_enabled);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				drawTooltipLine(a_line0);
 				drawTooltipLine(a_line1);
@@ -2762,7 +2756,7 @@ namespace
 			}
 
 			ImGui::BeginDisabled(!a_enabled);
-			ImGui::Checkbox(a_hardCutoffLabel, &a_hardCutoff);
+			Util::Widgets::Checkbox(a_hardCutoffLabel, &a_hardCutoff);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				drawTooltipLine(a_hardLine0);
 				drawTooltipLine(a_hardLine1);
@@ -2880,7 +2874,7 @@ namespace
 
 			{
 				auto masterGuard = Util::DisableGuard(!foveatedProfileActive || !anyFoveationFeatureAvailable);
-				if (ImGui::Checkbox("Toggle ALL", &allAvailableFoveationFeaturesEnabled)) {
+				if (Util::Widgets::Checkbox("Toggle ALL", &allAvailableFoveationFeaturesEnabled)) {
 					const bool enableFoveationFeatures = allAvailableFoveationFeaturesEnabled;
 					auto applyMasterToggle = [&](const FoveationToggleRef& a_toggle) {
 						if (!a_toggle.enabled)
@@ -2996,7 +2990,7 @@ namespace
 		}
 
 		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive);
-		ImGui::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
+		Util::Widgets::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Updates cubemap reflections less often when they are less visible.");
 			ImGui::TextUnformatted("Can improve performance, but reflections may react a little slower.");
@@ -3004,7 +2998,7 @@ namespace
 		ImGui::EndDisabled();
 
 		ImGui::BeginDisabled(!foveatedProfileActive || !dynamicCubemapsRuntimeActive || dynamicCubemapVisibilityThrottleBlockedByWetterness);
-		ImGui::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
+		Util::Widgets::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Skips extra cubemap reflection work when it is unlikely to be noticed.");
 			ImGui::TextUnformatted("Can improve performance in low-reflection scenes.");
@@ -3102,7 +3096,7 @@ namespace
 
 		// Combo Settings
 		if (ImGui::CollapsingHeader("Combo Settings")) {
-			ImGui::SliderFloat("Combo Timeout", &settings.comboTimeout, 1.0f, 10.0f, "%.1f seconds");
+			Util::Widgets::SliderFloat("Combo Timeout", &settings.comboTimeout, 1.0f, 10.0f, "%.1f seconds");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Time limit for recording button combinations.");
 			}
@@ -3211,7 +3205,7 @@ namespace
 
 		// Controller Diagnostics Section
 		if (ImGui::CollapsingHeader("Controller Diagnostics")) {
-			if (ImGui::Checkbox("Test Mode: Disable controller menu input (except scroll controller and triggers)", &settings.VRMenuControllerDiagnosticsTestMode)) {
+			if (Util::Widgets::Checkbox("Test Mode: Disable controller menu input (except scroll controller and triggers)", &settings.VRMenuControllerDiagnosticsTestMode)) {
 				ImGui::SetScrollHereY(0.0f);  // Scroll to top of the window when toggled
 			}
 			ImGui::SeparatorText("Button State");

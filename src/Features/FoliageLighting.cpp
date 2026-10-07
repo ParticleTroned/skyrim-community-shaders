@@ -1,4 +1,5 @@
 #include "FoliageLighting.h"
+#include "Menu/SettingsPage.h"
 
 #include "Globals.h"
 #include "TruePBR.h"
@@ -65,7 +66,7 @@ void FoliageLighting::SanitizeSettings(Settings& a_settings)
 void FoliageLighting::DrawSettingsHeaderControls()
 {
 	bool foliageLightingEnabled = IsEnabled();
-	if (ImGui::Checkbox("Enable", &foliageLightingEnabled))
+	if (Util::Widgets::Checkbox("Enable", &foliageLightingEnabled))
 		SetEnabled(foliageLightingEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Controls all tree foliage and grass lighting additions while preserving their saved tuning.");
@@ -117,12 +118,16 @@ void FoliageLighting::DrawSettings()
 	const bool truePBRActive = IsTruePBRActive();
 	ImGui::BeginDisabled(!IsEnabled());
 
-	if (ImGui::TreeNodeEx("Tree Foliage")) {
+	MenuUI::SettingsPage page("FoliageLighting", {
+													 { "trees", "Trees", "Refine light passing through tree leaves." },
+													 { "grass", "Grass", "Refine light passing through grass." },
+												 });
+	if (page.Is("trees")) {
 		DrawFoliageScatteringSetting();
 		DrawFoliageAmbientBoostSetting(truePBRActive);
 
 		ImGui::BeginDisabled(!truePBRActive || settings.EnableFoliageAmbientBoost == 0);
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Ambient Amount",
 			&settings.FoliageAmbientAmount,
 			kAmbientAmountMin,
@@ -135,14 +140,10 @@ void FoliageLighting::DrawSettings()
 			"Strength of the additive indirect ambient response for animated PBR foliage.");
 
 		DrawFoliageAmbientFlipSetting();
-
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Grass")) {
+	if (page.Is("grass")) {
 		DrawGrassScatteringSetting();
-
-		ImGui::TreePop();
 	}
 
 	ImGui::EndDisabled();

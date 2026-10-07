@@ -244,8 +244,8 @@ endif()
 
 foreach(_ui_contract IN ITEMS
     [[DrawNeuralRenderingCropControl(showDiagnostics);]]
-    [[ImGui::SeparatorText("Category strengths");]]
-    [[ImGui::Checkbox("Actors only", &settings.neuralCharacterRenderingEnabled);]]
+    [[ImGui::BeginCombo("Coverage", choices[coverage])]]
+    [[Util::Widgets::Checkbox("Actors only", &settings.neuralCharacterRenderingEnabled);]]
     [[Uncropped processes the full view while keeping the same selections.]]
 )
     string(FIND "${_upscaling_source}" "${_ui_contract}" _ui_contract_position)

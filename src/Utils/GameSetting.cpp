@@ -281,13 +281,13 @@ namespace Util
 		bool success = false;                // Flag to track if element creation is successful
 
 		if constexpr (std::is_same_v<T, bool>) {
-			ImGui::Checkbox(settingData.friendlyName.c_str(), valuePtr);
+			Util::Widgets::Checkbox(settingData.friendlyName.c_str(), valuePtr);
 			success = true;  // Mark as successful
 		} else if constexpr (std::is_same_v<T, float>) {
 			try {
 				auto minFloat = std::get<float>(settingData.minValue);
 				auto maxFloat = std::get<float>(settingData.maxValue);
-				ImGui::SliderFloat(settingData.friendlyName.c_str(), valuePtr, minFloat, maxFloat);
+				Util::Widgets::SliderFloat(settingData.friendlyName.c_str(), valuePtr, minFloat, maxFloat);
 				success = true;  // Mark as successful
 			} catch (const std::bad_variant_access&) {
 				logger::warn("Type mismatch for {} {}: expected float for minValue or maxValue but received other type", collectionName, settingName);
@@ -296,7 +296,7 @@ namespace Util
 			try {
 				auto minInt = std::get<int32_t>(settingData.minValue);
 				auto maxInt = std::get<int32_t>(settingData.maxValue);
-				ImGui::SliderInt(settingData.friendlyName.c_str(), reinterpret_cast<int*>(valuePtr), minInt, maxInt);
+				Util::Widgets::SliderInt(settingData.friendlyName.c_str(), reinterpret_cast<int*>(valuePtr), minInt, maxInt);
 				success = true;  // Mark as successful
 			} catch (const std::bad_variant_access&) {
 				logger::warn("Type mismatch for {} {}: expected int for minValue or maxValue but received other type", collectionName, settingName);
@@ -305,7 +305,7 @@ namespace Util
 			try {
 				auto minUInt = std::get<uint32_t>(settingData.minValue);  // Use uint32_t for unsigned
 				auto maxUInt = std::get<uint32_t>(settingData.maxValue);
-				ImGui::SliderScalar(settingData.friendlyName.c_str(), ImGuiDataType_U32, reinterpret_cast<unsigned int*>(valuePtr), &minUInt, &maxUInt);
+				Util::Widgets::SliderScalar(settingData.friendlyName.c_str(), ImGuiDataType_U32, reinterpret_cast<unsigned int*>(valuePtr), &minUInt, &maxUInt);
 				success = true;  // Mark as successful
 			} catch (const std::bad_variant_access&) {
 				logger::warn("Type mismatch for {} {}: expected unsigned int for minValue or maxValue but received other type", collectionName, settingName);

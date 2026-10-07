@@ -150,6 +150,8 @@ void MenuHeaderRenderer::RenderHeader(
 	}
 
 	std::string title{ Plugin::MENU_TITLE };
+	const std::string brand{ "CSX" };
+	const std::string version = title.substr(4);
 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
 
 	if (forceStableHeader) {
@@ -201,7 +203,9 @@ void MenuHeaderRenderer::RenderHeader(
 				{
 					RoleFontGuard titleFont(Menu::FontRole::Title);
 					ImGui::SetWindowFontScale(textScaleFactor);
-					contentWidth += ImGui::CalcTextSize(title.c_str()).x;
+					contentWidth += ImGui::CalcTextSize(brand.c_str()).x;
+					ImGui::SetWindowFontScale(1.0f);
+					contentWidth += ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize(version.c_str()).x;
 					ImGui::SetWindowFontScale(1.0f);
 				}
 
@@ -232,7 +236,7 @@ void MenuHeaderRenderer::RenderHeader(
 					Util::DrawAlignedTextWithLogo(
 						uiIcons.logo.texture,
 						logoSizeVec,
-						title.c_str(),
+						brand.c_str(),
 						textScaleFactor,
 						logoTint);
 				}
@@ -241,10 +245,15 @@ void MenuHeaderRenderer::RenderHeader(
 				ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 				{
 					RoleFontGuard titleFont(Menu::FontRole::Title);
-					Util::DrawSharpText(title.c_str(), true, textScaleFactor);
+					Util::DrawSharpText(brand.c_str(), true, textScaleFactor);
 				}
 				ImGui::PopStyleVar();
 			}
+
+			const auto brandBottom = ImGui::GetItemRectMax();
+			ImGui::SameLine();
+			ImGui::SetCursorScreenPos({ ImGui::GetCursorScreenPos().x, brandBottom.y - ImGui::GetTextLineHeight() });
+			ImGui::TextDisabled("%s", version.c_str());
 
 			// Buttons on the right
 			ImGui::TableNextColumn();
@@ -269,7 +278,7 @@ void MenuHeaderRenderer::RenderHeader(
 				{
 					RoleFontGuard titleFont(Menu::FontRole::Title);
 					ImGui::SetWindowFontScale(fallbackTextScale);
-					textWidth = ImGui::CalcTextSize(title.c_str()).x;
+					textWidth = ImGui::CalcTextSize(brand.c_str()).x;
 					ImGui::SetWindowFontScale(1.0f);
 				}
 
@@ -283,9 +292,11 @@ void MenuHeaderRenderer::RenderHeader(
 			ImGui::SetWindowFontScale(fallbackTextScale);
 			{
 				RoleFontGuard titleFont(Menu::FontRole::Title);
-				ImGui::TextUnformatted(title.c_str());
+				ImGui::TextUnformatted(brand.c_str());
 			}
 			ImGui::SetWindowFontScale(1.0f);
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", version.c_str());
 		}
 	}
 
@@ -709,8 +720,12 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 		titleFont = ImGui::GetFont();
 	}
 	const float titleFontSize = (titleFont ? titleFont->LegacySize : currentFontSize) * textScaleFactor;
-	const ImVec2 titleSize = titleFont ? titleFont->CalcTextSizeA(titleFontSize, FLT_MAX, 0.0f, title.c_str()) :
-	                                     ImGui::CalcTextSize(title.c_str());
+	const std::string_view brand = "CSX";
+	const std::string version = title.starts_with("CSX ") ? title.substr(4) : title;
+	const float versionSize = currentFontSize;
+	const ImVec2 brandSize = titleFont->CalcTextSizeA(titleFontSize, FLT_MAX, 0, brand.data());
+	const ImVec2 versionTextSize = titleFont->CalcTextSizeA(versionSize, FLT_MAX, 0, version.c_str());
+	const ImVec2 titleSize(brandSize.x + style.ItemSpacing.x + versionTextSize.x, std::max(brandSize.y, versionTextSize.y));
 
 	const float logoAspectRatio = showLogo && uiIcons.logo.size.y > 0.0f ? uiIcons.logo.size.x / uiIcons.logo.size.y : 1.0f;
 	const float logoWidth = showLogo ? logoSize * logoAspectRatio : 0.0f;
@@ -753,7 +768,8 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 		ImVec2(titleX, screenStart.y),
 		ImVec2(titleClipMaxX, screenStart.y + headerHeight),
 		true);
-	drawList->AddText(titleFont, titleFontSize, ImVec2(titleX, centerY - titleSize.y * 0.5f), textColor, title.c_str());
+	drawList->AddText(titleFont, titleFontSize, ImVec2(titleX, centerY - brandSize.y * 0.5f), textColor, brand.data());
+	drawList->AddText(titleFont, versionSize, ImVec2(titleX + brandSize.x + style.ItemSpacing.x, centerY - versionTextSize.y * 0.5f), ImGui::GetColorU32(ImGuiCol_TextDisabled), version.c_str());
 	drawList->PopClipRect();
 
 	float iconX = iconStartX;

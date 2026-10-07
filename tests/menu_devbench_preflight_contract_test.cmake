@@ -401,6 +401,7 @@ foreach(_index RANGE 0 ${_action_last})
     )
     list(APPEND _schema_actions "${_action}")
 endforeach()
+list(REMOVE_DUPLICATES _accepted_actions)
 list(SORT _accepted_actions)
 list(SORT _supported_actions)
 list(SORT _schema_actions)
@@ -488,7 +489,7 @@ foreach(_status_field IN ITEMS
 endforeach()
 
 string(FIND "${_bridge}" "MenuDepthCullingSettingsPolicy::TryParse(" _culling_validate)
-string(FIND "${_bridge}" "return RunOnMainThread([action," _culling_dispatch)
+string(FIND "${_bridge}" "return RunOnMainThread([action, path, enabled, resolution," _culling_dispatch)
 string(FIND "${_bridge}" "MenuDepthCullingSettingsPolicy::Apply(" _culling_apply)
 if(_culling_validate EQUAL -1 OR _culling_dispatch EQUAL -1 OR _culling_apply EQUAL -1 OR
     _culling_validate GREATER _culling_dispatch OR _culling_dispatch GREATER _culling_apply)

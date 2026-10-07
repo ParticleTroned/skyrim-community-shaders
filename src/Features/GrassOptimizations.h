@@ -58,7 +58,7 @@ struct GrassOptimizations : Feature
 	json GetDiagnostics() const;
 #endif
 private:
-	void DrawControls(bool advanced);
+	void DrawControls(bool advanced, std::string_view section = {});
 	mutable std::mutex settingsMutex;
 	GrassPolicy::Settings settings;
 	std::unique_ptr<GrassBucketRenderer> renderer;

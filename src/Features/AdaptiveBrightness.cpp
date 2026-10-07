@@ -1,4 +1,5 @@
 #include "AdaptiveBrightness.h"
+#include "Menu/SettingsPage.h"
 
 #include "Globals.h"
 #include "InverseSquareLighting.h"
@@ -1566,8 +1567,13 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
+	const auto contextSectionToSelect = SyncContextSection();
+	if (contextSectionToSelect == ContextSection::Profiles)
+		MenuUI::SettingsPage::Select("AdaptiveBrightness", "profiles");
+	else if (contextSectionToSelect == ContextSection::Locations)
+		MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
 	bool enabled = settings.enabled;
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enable", &enabled))
 		SetEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable all Adaptive Balance adjustments across Global, profile, and location layers.");
@@ -1585,75 +1591,68 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 
 void AdaptiveBrightness::DrawSettings()
 {
-	const auto contextSectionToSelect = SyncContextSection();
-	const ImGuiTabItemFlags profileSectionFlags =
-		contextSectionToSelect == ContextSection::Profiles ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-	const ImGuiTabItemFlags locationSectionFlags =
-		contextSectionToSelect == ContextSection::Locations ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+	MenuUI::SettingsPage page("AdaptiveBrightness", {
+														{ "global", "Global", "Start with shared lighting, colour, bloom and water." },
+														{ "profiles", "Profiles", "Refine the shared look for time and location types." },
+														{ "locations", "Locations", "Add precise changes for individual places." },
+														{ "presets", "Presets", "Save or load complete appearances and location collections." },
+													});
 
-	if (ImGui::BeginTabBar("##AdaptiveBalanceSections", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("Global")) {
-			ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments applied before the active profile and location layers.");
-			DrawGlobalPresetControls();
-			DrawGlobalSettings(true);
-			ImGui::EndTabItem();
-		}
+	if (page.Is("global")) {
+		ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments applied before the active profile and location layers.");
+		DrawGlobalPresetControls();
+		DrawGlobalSettings(true);
+	}
 
-		if (ImGui::BeginTabItem("Profiles", nullptr, profileSectionFlags)) {
-			ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Context profiles are ordered from broad Worldspace and Location scopes to specific Cities; exact locations and cells remain under Locations.");
-			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive Balance is off. Saved profile values can still be reviewed.");
+	if (page.Is("profiles")) {
+		ImGui::TextWrapped("Tune the lighting, atmosphere, Bloom, and water appearance used for each time and location type. Context profiles are ordered from broad Worldspace and Location scopes to specific Cities; exact locations and cells remain under Locations.");
+		if (!settings.enabled)
+			ImGui::TextDisabled("Adaptive Balance is off. Saved profile values can still be reviewed.");
 
-			ImGui::BeginDisabled(!settings.enabled);
-			DrawExteriorTimeSettings();
-			ImGui::EndDisabled();
+		ImGui::BeginDisabled(!settings.enabled);
+		DrawExteriorTimeSettings();
+		ImGui::EndDisabled();
 
-			const auto profileTabToSelect = SyncSelectedProfileTabToContext();
-			const auto contextScopeToSelect = profileTabToSelect ?
-			                                      GetCurrentContextOverrideScope(GetActiveLocationOverride()) :
-			                                      std::nullopt;
-			if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
-				for (auto profile : kProfileOrder) {
-					const ImGuiTabItemFlags tabFlags =
-						!contextScopeToSelect && profileTabToSelect && *profileTabToSelect == profile ?
-							ImGuiTabItemFlags_SetSelected :
-							ImGuiTabItemFlags_None;
-					if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
-						DrawProfile(profile, settings.enabled);
-						ImGui::EndTabItem();
-					}
+		const auto profileTabToSelect = SyncSelectedProfileTabToContext();
+		const auto contextScopeToSelect = profileTabToSelect ?
+		                                      GetCurrentContextOverrideScope(GetActiveLocationOverride()) :
+		                                      std::nullopt;
+		if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
+			for (auto profile : kProfileOrder) {
+				const ImGuiTabItemFlags tabFlags =
+					!contextScopeToSelect && profileTabToSelect && *profileTabToSelect == profile ?
+						ImGuiTabItemFlags_SetSelected :
+						ImGuiTabItemFlags_None;
+				if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
+					DrawProfile(profile, settings.enabled);
+					ImGui::EndTabItem();
+				}
 
-					if (profile == Profile::Interior) {
-						for (auto scope : kContextProfileOrder) {
-							DrawCurrentContextProfileTab(
-								scope,
-								true,
-								settings.enabled,
-								contextScopeToSelect && *contextScopeToSelect == scope);
-						}
+				if (profile == Profile::Interior) {
+					for (auto scope : kContextProfileOrder) {
+						DrawCurrentContextProfileTab(
+							scope,
+							true,
+							settings.enabled,
+							contextScopeToSelect && *contextScopeToSelect == scope);
 					}
 				}
-				ImGui::EndTabBar();
 			}
-			ImGui::EndTabItem();
+			ImGui::EndTabBar();
 		}
+	}
 
-		if (ImGui::BeginTabItem("Locations", nullptr, locationSectionFlags)) {
-			ImGui::TextWrapped("Create precise profile overrides for worldspaces, regional locations, cities, specific locations, or exact cells.");
-			if (!settings.enabled)
-				ImGui::TextDisabled("Adaptive Balance is off. Saved overrides can still be reviewed.");
-			DrawLocationOverrides(false, true, settings.enabled);
-			ImGui::EndTabItem();
-		}
+	if (page.Is("locations")) {
+		ImGui::TextWrapped("Create precise profile overrides for worldspaces, regional locations, cities, specific locations, or exact cells.");
+		if (!settings.enabled)
+			ImGui::TextDisabled("Adaptive Balance is off. Saved overrides can still be reviewed.");
+		DrawLocationOverrides(false, true, settings.enabled);
+	}
 
-		if (ImGui::BeginTabItem("Presets")) {
-			ImGui::TextWrapped("Import or export location override collections and complete balance configurations. The Worldspace, Locations, and Cities profile tabs also provide JSON presets for their current scope.");
-			DrawLocationOverridePresetControls();
-			DrawFullPresetControls();
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
+	if (page.Is("presets")) {
+		ImGui::TextWrapped("Import or export location override collections and complete balance configurations. The Worldspace, Locations, and Cities profile tabs also provide JSON presets for their current scope.");
+		DrawLocationOverridePresetControls();
+		DrawFullPresetControls();
 	}
 }
 
@@ -1697,6 +1696,12 @@ void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
 
 void AdaptiveBrightness::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("AdaptiveBrightness", {
+														{ "essentials", "Essentials", "Start with the main choices for this feature." },
+													});
+	if (!page.Is("essentials"))
+		return;
+
 	ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments.");
 	DrawGlobalPresetControls();
 	DrawGlobalSettings(false);
@@ -1875,17 +1880,17 @@ std::optional<AdaptiveBrightness::ContextSection> AdaptiveBrightness::SyncContex
 void AdaptiveBrightness::DrawExteriorTimeSettings()
 {
 	ImGui::SeparatorText("Exterior Schedule");
-	ImGui::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
+	Util::Widgets::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Hour when the Exterior Day profile starts blending in.");
 	}
 
-	ImGui::SliderFloat("Night Blend Start", &settings.nightStartHour, 0.0f, 24.0f, "%.1f h");
+	Util::Widgets::SliderFloat("Night Blend Start", &settings.nightStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Hour when the Exterior Night profile starts blending in.");
 	}
 
-	ImGui::SliderFloat("Blend Duration", &settings.transitionHours, 0.0f, 4.0f, "%.1f h");
+	Util::Widgets::SliderFloat("Blend Duration", &settings.transitionHours, 0.0f, 4.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Hours used to blend between Exterior Day and Exterior Night.");
 	}
@@ -2063,10 +2068,10 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 void AdaptiveBrightness::DrawColorSettings(ProfileSettings& a_profile)
 {
 	ImGui::TextWrapped("Adjust the whole scene, including sky, lighting and bloom. One is neutral; Global and active profile adjustments multiply.");
-	ImGui::SliderFloat("Contrast", &a_profile.contrast, kContrastMin, kContrastMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Contrast", &a_profile.contrast, kContrastMin, kContrastMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Adjusts luminance around middle gray while preserving hue. Lower values soften contrast; higher values deepen shadows and brighten highlights.");
-	ImGui::SliderFloat("Saturation", &a_profile.saturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Saturation", &a_profile.saturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Zero makes the scene monochrome; one preserves its colors; higher values increase color intensity. Works with Linear Lighting on or off.");
 }
@@ -2076,12 +2081,12 @@ void AdaptiveBrightness::DrawLightingSettings(
 	bool a_showAdvancedControls,
 	bool a_globalLayer)
 {
-	ImGui::SliderFloat("Scene Brightness", &a_profile.brightness, kBrightnessMin, kBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Scene Brightness", &a_profile.brightness, kBrightnessMin, kBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Master lighting adjustment for this %s layer.", a_globalLayer ? "global" : "profile");
 
 	if (a_globalLayer) {
-		ImGui::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
+		Util::Widgets::Checkbox("Ambient Lighting for Effects and Sky Statics", &settings.useAmbientEffectLighting);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("Replaces weather lighting on effect meshes and sky statics with ambient light, including IBL when enabled, and shadowed directional light. Effect and Sky Static Brightness still apply. This global switch is independent of detailed lighting controls.");
 	}
@@ -2089,7 +2094,7 @@ void AdaptiveBrightness::DrawLightingSettings(
 	if (!a_showAdvancedControls)
 		return;
 
-	ImGui::Checkbox("Show Detailed Lighting Controls", &a_profile.advanced);
+	Util::Widgets::Checkbox("Show Detailed Lighting Controls", &a_profile.advanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Shows and enables the detailed lighting and atmosphere adjustments for this layer.");
 	if (!a_profile.advanced)
@@ -2097,54 +2102,54 @@ void AdaptiveBrightness::DrawLightingSettings(
 
 	ImGui::Indent();
 	ImGui::SeparatorText("Sky and Atmosphere");
-	ImGui::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales sky color saturation independently of clouds. One preserves the current colors; zero makes them monochrome.");
-	ImGui::SliderFloat("Cloud Brightness", &a_profile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Cloud Saturation", &a_profile.cloudSaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Cloud Brightness", &a_profile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Cloud Saturation", &a_profile.cloudSaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent.");
-	ImGui::SliderFloat("Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales weather or ambient/directional effect lighting. One preserves brightness; the Effects lighting multiplier remains independent.");
-	ImGui::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales weather or ambient/directional sky-static lighting. One preserves brightness.");
-	ImGui::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them.");
-	ImGui::SliderFloat("Sun Glare Intensity", &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Sun Glare Intensity", &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales glare already drawn by the engine. Zero removes it; one preserves its brightness. Does not restore missing glare or weather lens flares.");
 	ImGui::SeparatorText("Direct Lighting");
-	ImGui::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 	ImGui::SeparatorText("Point-light Type Balance");
 	ImGui::TextWrapped("Subtype values multiply the Point Lights adjustment after the active layers are composed.");
-	ImGui::SliderFloat("Spotlights", &a_profile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Omnidirectional Bulbs", &a_profile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Spotlights", &a_profile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Omnidirectional Bulbs", &a_profile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
-	ImGui::SliderFloat("Linear Point Lights", &a_profile.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Linear Spotlights", &a_profile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Linear Omnidirectional Bulbs", &a_profile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Linear Point Lights", &a_profile.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Linear Spotlights", &a_profile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Linear Omnidirectional Bulbs", &a_profile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 	ImGui::SeparatorText("Indirect and Material Lighting");
-	ImGui::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales ambient lighting after vanilla or image-based lighting is selected. One preserves the lighting; zero removes its ambient contribution.");
-	ImGui::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 	ImGui::SeparatorText("Atmosphere Gamma Offsets");
-	ImGui::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Clouds", &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Clouds", &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::Unindent();
 }
 
@@ -2159,7 +2164,7 @@ void AdaptiveBrightness::DrawBloomSettings(
 	if (!a_showAdvancedControls)
 		return;
 
-	ImGui::Checkbox("Show Detailed Bloom Controls", &a_profile.bloomAdvanced);
+	Util::Widgets::Checkbox("Show Detailed Bloom Controls", &a_profile.bloomAdvanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Shows detailed shaping that can adjust Bloom inherited from earlier layers without adding strength.");
 	if (!a_profile.bloomAdvanced)
@@ -2185,12 +2190,12 @@ void AdaptiveBrightness::DrawWaterSettings(
 	DrawWaterWindSettings(a_profile, a_globalLayer);
 
 	ImGui::Separator();
-	ImGui::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
+	Util::Widgets::Checkbox("Show Detailed Water Controls", &a_profile.waterAdvanced);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Shows detailed water color, surface, reflection, refraction, clarity, caustics, and parallax adjustments for this layer.");
 	if (a_profile.waterAdvanced) {
 		ImGui::Indent();
-		ImGui::SliderFloat("Water Color Gamma", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Water Color Gamma", &a_profile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Offsets water color gamma for this layer. This is separate from Water Brightness and surface appearance.");
 		WaterAppearance::DrawAdvancedProfileSettings(a_profile.water);
@@ -2203,15 +2208,15 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 	auto& waterWind = a_profile.waterWind;
 	if (a_globalLayer) {
 		waterWind.overrideEnabled = true;
-		if (ImGui::Checkbox("Enable Wind-Driven Waves", &waterWind.enabled))
+		if (Util::Widgets::Checkbox("Enable Wind-Driven Waves", &waterWind.enabled))
 			ResetWaterWindSmoothing();
 	} else {
-		if (ImGui::Checkbox("Override Wind Enable", &waterWind.overrideEnabled))
+		if (Util::Widgets::Checkbox("Override Wind Enable", &waterWind.overrideEnabled))
 			ResetWaterWindSmoothing();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Leave off to inherit whether wind-driven waves are enabled by earlier global, base, or location layers.");
 		ImGui::BeginDisabled(!waterWind.overrideEnabled);
-		if (ImGui::Checkbox("Enable Wind-Driven Waves", &waterWind.enabled))
+		if (Util::Widgets::Checkbox("Enable Wind-Driven Waves", &waterWind.enabled))
 			ResetWaterWindSmoothing();
 		ImGui::EndDisabled();
 	}
@@ -2223,10 +2228,10 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 	SanitizeWaterWindSettings(waterWind);
 	const bool layerDisabled = a_globalLayer ? !waterWind.enabled : waterWind.overrideEnabled && !waterWind.enabled;
 	ImGui::BeginDisabled(layerDisabled);
-	ImGui::SliderFloat("Calm Wave Scale", &waterWind.calmWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Calm Wave Scale", &waterWind.calmWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Multiplies Base Wave Amplitude in calm weather after profile layers are composed. The final amplitude is capped at 2.");
-	ImGui::SliderFloat("Strong Wind Wave Scale", &waterWind.strongWindWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Strong Wind Wave Scale", &waterWind.strongWindWaveMultiplier, kWaterWindMultiplierMin, kWaterWindMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Multiplies Base Wave Amplitude at maximum wind after profile layers are composed. The final amplitude is capped at 2.");
 

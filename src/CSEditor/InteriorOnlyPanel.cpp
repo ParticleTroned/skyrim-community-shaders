@@ -1,4 +1,5 @@
 #include "InteriorOnlyPanel.h"
+#include "Utils/UI.h"
 
 #include "../Globals.h"
 #include "../Menu.h"
@@ -151,7 +152,7 @@ namespace InteriorOnlyPanel
 		case SceneSettingsManager::SettingType::Boolean:
 			{
 				bool val = entry.value.is_boolean() ? entry.value.get<bool>() : (entry.value.get<int>() != 0);
-				if (ImGui::Checkbox("##val", &val)) {
+				if (Util::Widgets::Checkbox("##val", &val)) {
 					// Preserve original JSON type (integer for GPU constant buffer settings, boolean otherwise)
 					if (entry.value.is_boolean())
 						manager->UpdateEntryValue(kSceneType, index, val);

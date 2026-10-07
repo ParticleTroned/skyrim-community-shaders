@@ -1,4 +1,5 @@
 #include "TruePBR.h"
+#include "Menu/SettingsPage.h"
 
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
@@ -189,7 +190,7 @@ namespace
 	bool DrawEnabledCheckbox(TruePBR::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (ImGui::Checkbox("Enable", &enabled))
+		if (Util::Widgets::Checkbox("Enable", &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
@@ -197,7 +198,7 @@ namespace
 	void DrawGrassCheckbox(TruePBR::Settings& settings)
 	{
 		bool enabled = settings.GrassEnabled != 0;
-		if (ImGui::Checkbox("PBR Grass", &enabled))
+		if (Util::Widgets::Checkbox("PBR Grass", &enabled))
 			settings.GrassEnabled = enabled ? 1u : 0u;
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Use authored PBR grass materials for more natural lighting and highlights. Requires Grass Lighting. Ordinary grass stays unchanged. Applies immediately.");
@@ -205,11 +206,11 @@ namespace
 
 	void DrawPBRMetalSliders()
 	{
-		ImGui::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
+		Util::Widgets::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
 		if (ImGui::IsItemHovered()) {
 			ImGui::SetTooltip("Global multiplier for broad TruePBR metallic reflection response.\n1.0 = default. Lower values reduce overall metal reflectivity; higher values strengthen it.\nDoes not affect non-PBR shading.");
 		}
-		ImGui::SliderFloat("PBR Metal Highlight", &globals::state->pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
+		Util::Widgets::SliderFloat("PBR Metal Highlight", &globals::state->pbrMetalHighlightScale, 0.0f, 2.0f, "%.2f");
 		if (ImGui::IsItemHovered()) {
 			ImGui::SetTooltip("Scales focused direct-light highlights on TruePBR metals.\nUse this to reduce sharp bright hotspots without flattening the broader reflection response.");
 		}
@@ -218,36 +219,43 @@ namespace
 
 void TruePBR::DrawSettings()
 {
-	const bool enabled = DrawEnabledCheckbox(settings);
+	MenuUI::SettingsPage page("TruePBR", {
+											 { "look", "Look", "Choose the shared material appearance first." },
+											 { "textures", "Textures", "Refine individual texture materials." },
+											 { "objects", "Objects", "Refine the material appearance of selected objects." },
+											 { "diagnostics", "Diagnostics", "Inspect material loading and diagnostic controls." },
+										 });
+
+	const bool enabled = page.Is("look") ? DrawEnabledCheckbox(settings) : settings.Enabled != 0;
 	ImGui::BeginDisabled(!enabled);
-
-	{
-		DrawPBRMetalSliders();
-		DrawGrassCheckbox(settings);
-		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (page.Is("look")) {
+		{
+			DrawPBRMetalSliders();
+			DrawGrassCheckbox(settings);
+			Util::Widgets::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		}
 	}
-
-	if (ImGui::TreeNodeEx("Texture Set Settings")) {
+	if (page.Is("textures")) {
 		if (Util::SearchableCombo("Texture Set", selectedPbrTextureSetName, pbrTextureSets)) {
 			selectedPbrTextureSet = &pbrTextureSets[selectedPbrTextureSetName];
 		}
 
 		if (selectedPbrTextureSet != nullptr) {
 			bool wasEdited = false;
-			if (ImGui::SliderFloat("Displacement Scale", &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat("Displacement Scale", &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::SliderFloat("Roughness Scale", &selectedPbrTextureSet->roughnessScale, 0.f, 3.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat("Roughness Scale", &selectedPbrTextureSet->roughnessScale, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::SliderFloat("Specular Level", &selectedPbrTextureSet->specularLevel, 0.f, 3.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat("Specular Level", &selectedPbrTextureSet->specularLevel, 0.f, 3.f, "%.3f")) {
 				wasEdited = true;
 			}
 			if (ImGui::TreeNodeEx("Subsurface")) {
 				if (ImGui::ColorPicker3("Subsurface Color", &selectedPbrTextureSet->subsurfaceColor.red)) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Subsurface Opacity", &selectedPbrTextureSet->subsurfaceOpacity, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("Subsurface Opacity", &selectedPbrTextureSet->subsurfaceOpacity, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
 
@@ -257,35 +265,35 @@ void TruePBR::DrawSettings()
 				if (ImGui::ColorPicker3("Coat Color", &selectedPbrTextureSet->coatColor.red)) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Coat Strength", &selectedPbrTextureSet->coatStrength, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("Coat Strength", &selectedPbrTextureSet->coatStrength, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Coat Roughness", &selectedPbrTextureSet->coatRoughness, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("Coat Roughness", &selectedPbrTextureSet->coatRoughness, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Coat Specular Level", &selectedPbrTextureSet->coatSpecularLevel, 0.f, 1.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("Coat Specular Level", &selectedPbrTextureSet->coatSpecularLevel, 0.f, 1.f, "%.3f")) {
 					wasEdited = true;
 				}
-				if (ImGui::SliderFloat("Inner Layer Displacement Offset", &selectedPbrTextureSet->innerLayerDisplacementOffset, 0.f, 3.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("Inner Layer Displacement Offset", &selectedPbrTextureSet->innerLayerDisplacementOffset, 0.f, 3.f, "%.3f")) {
 					wasEdited = true;
 				}
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNodeEx("Glint")) {
-				if (ImGui::Checkbox("Enable", &selectedPbrTextureSet->glintParameters.enabled)) {
+				if (Util::Widgets::Checkbox("Enable", &selectedPbrTextureSet->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrTextureSet->glintParameters.enabled) {
-					if (ImGui::SliderFloat("Screenspace Scale", &selectedPbrTextureSet->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Screenspace Scale", &selectedPbrTextureSet->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Log Microfacet Density", &selectedPbrTextureSet->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Log Microfacet Density", &selectedPbrTextureSet->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Microfacet Roughness", &selectedPbrTextureSet->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Microfacet Roughness", &selectedPbrTextureSet->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Density Randomization", &selectedPbrTextureSet->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Density Randomization", &selectedPbrTextureSet->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
 						wasEdited = true;
 					}
 				}
@@ -311,10 +319,9 @@ void TruePBR::DrawSettings()
 				}
 			}
 		}
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Material Object Settings")) {
+	if (page.Is("objects")) {
 		if (Util::SearchableCombo("Material Object", selectedPbrMaterialObjectName, pbrMaterialObjects)) {
 			selectedPbrMaterialObject = &pbrMaterialObjects[selectedPbrMaterialObjectName];
 		}
@@ -343,7 +350,7 @@ void TruePBR::DrawSettings()
 				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.4f, 0.1f, 0.1f, 0.6f));
 				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
 				ImGui::SetNextItemWidth(sliderWidth);
-				if (ImGui::SliderFloat("##BaseColorScaleR", &selectedPbrMaterialObject->baseColorScale[0], 0.f, 10.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("##BaseColorScaleR", &selectedPbrMaterialObject->baseColorScale[0], 0.f, 10.f, "%.3f")) {
 					wasEdited = true;
 				}
 				ImGui::PopStyleColor(2);
@@ -357,7 +364,7 @@ void TruePBR::DrawSettings()
 				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.4f, 0.1f, 0.6f));
 				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
 				ImGui::SetNextItemWidth(sliderWidth);
-				if (ImGui::SliderFloat("##BaseColorScaleG", &selectedPbrMaterialObject->baseColorScale[1], 0.f, 10.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("##BaseColorScaleG", &selectedPbrMaterialObject->baseColorScale[1], 0.f, 10.f, "%.3f")) {
 					wasEdited = true;
 				}
 				ImGui::PopStyleColor(2);
@@ -371,34 +378,34 @@ void TruePBR::DrawSettings()
 				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.4f, 0.6f));
 				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.3f, 0.3f, 0.9f, 1.0f));
 				ImGui::SetNextItemWidth(sliderWidth);
-				if (ImGui::SliderFloat("##BaseColorScaleB", &selectedPbrMaterialObject->baseColorScale[2], 0.f, 10.f, "%.3f")) {
+				if (Util::Widgets::SliderFloat("##BaseColorScaleB", &selectedPbrMaterialObject->baseColorScale[2], 0.f, 10.f, "%.3f")) {
 					wasEdited = true;
 				}
 				ImGui::PopStyleColor(2);
 
 				ImGui::TreePop();
 			}
-			if (ImGui::SliderFloat("Roughness", &selectedPbrMaterialObject->roughness, 0.f, 1.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat("Roughness", &selectedPbrMaterialObject->roughness, 0.f, 1.f, "%.3f")) {
 				wasEdited = true;
 			}
-			if (ImGui::SliderFloat("Specular Level", &selectedPbrMaterialObject->specularLevel, 0.f, 1.f, "%.3f")) {
+			if (Util::Widgets::SliderFloat("Specular Level", &selectedPbrMaterialObject->specularLevel, 0.f, 1.f, "%.3f")) {
 				wasEdited = true;
 			}
 			if (ImGui::TreeNodeEx("Glint")) {
-				if (ImGui::Checkbox("Enable", &selectedPbrMaterialObject->glintParameters.enabled)) {
+				if (Util::Widgets::Checkbox("Enable", &selectedPbrMaterialObject->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrMaterialObject->glintParameters.enabled) {
-					if (ImGui::SliderFloat("Screenspace Scale", &selectedPbrMaterialObject->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Screenspace Scale", &selectedPbrMaterialObject->glintParameters.screenSpaceScale, 0.f, 3.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Log Microfacet Density", &selectedPbrMaterialObject->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Log Microfacet Density", &selectedPbrMaterialObject->glintParameters.logMicrofacetDensity, 0.f, 40.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Microfacet Roughness", &selectedPbrMaterialObject->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Microfacet Roughness", &selectedPbrMaterialObject->glintParameters.microfacetRoughness, 0.f, 1.f, "%.3f")) {
 						wasEdited = true;
 					}
-					if (ImGui::SliderFloat("Density Randomization", &selectedPbrMaterialObject->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
+					if (Util::Widgets::SliderFloat("Density Randomization", &selectedPbrMaterialObject->glintParameters.densityRandomization, 0.f, 5.f, "%.3f")) {
 						wasEdited = true;
 					}
 				}
@@ -417,19 +424,23 @@ void TruePBR::DrawSettings()
 				}
 			}
 		}
-		ImGui::TreePop();
 	}
 
 	ImGui::EndDisabled();
 
-	if (ImGui::TreeNodeEx("Debug")) {
-		ImGui::Checkbox("Enable verbose JSON logging", &enableVerboseJsonLogging);
-		ImGui::TreePop();
+	if (page.Is("diagnostics")) {
+		Util::Widgets::Checkbox("Enable verbose JSON logging", &enableVerboseJsonLogging);
 	}
 }
 
 void TruePBR::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("TruePBR", {
+											 { "essentials", "Essentials", "Choose the shared material appearance." },
+										 });
+	if (!page.Is("essentials"))
+		return;
+
 	const bool enabled = DrawEnabledCheckbox(settings);
 	ImGui::BeginDisabled(!enabled);
 	DrawPBRMetalSliders();

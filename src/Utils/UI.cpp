@@ -64,7 +64,7 @@ namespace Util
 	bool UIntCheckbox(const char* a_label, unsigned int& a_value)
 	{
 		bool enabled = a_value != 0;
-		const bool changed = ImGui::Checkbox(a_label, &enabled);
+		const bool changed = Util::Widgets::Checkbox(a_label, &enabled);
 		a_value = enabled ? 1u : 0u;
 		return changed;
 	}
@@ -354,7 +354,7 @@ namespace Util
 			ImGui::Separator();
 			ImGui::Spacing();
 
-			ImGui::Checkbox("Don't ask me again", &dontAskAgainCheckbox);
+			Util::Widgets::Checkbox("Don't ask me again", &dontAskAgainCheckbox);
 
 			ImGui::Spacing();
 
@@ -421,7 +421,7 @@ namespace Util
 			ImGui::Spacing();
 
 			if (showDontAskAgain)
-				ImGui::Checkbox("Don't ask me again", &dontAskCheckbox);
+				Util::Widgets::Checkbox("Don't ask me again", &dontAskCheckbox);
 
 			const auto buttonWidthForLabel = [](const std::string& a_label) {
 				return ImGui::CalcTextSize(a_label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -458,7 +458,7 @@ namespace Util
 	bool PercentageSlider(const char* label, float* data, float lb, float ub, const char* format)
 	{
 		float percentageData = (*data) * 1e2f;
-		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format);
+		bool retval = Util::Widgets::SliderFloat(label, &percentageData, lb, ub, format);
 		(*data) = percentageData * 1e-2f;
 		return retval;
 	}
@@ -2366,7 +2366,7 @@ namespace Util
 			}
 
 			ImGuiSliderFlags flags = isControlled ? (static_cast<ImGuiSliderFlags>(ImGuiSliderFlags_NoInput) | static_cast<ImGuiSliderFlags>(ImGuiSliderFlags_ReadOnly)) : ImGuiSliderFlags_None;
-			bool changed = ImGui::SliderFloat(label, value, min, max, format, flags);
+			bool changed = Util::Widgets::SliderFloat(label, value, min, max, format, flags);
 
 			if (isControlled) {
 				ImGui::PopStyleVar();
@@ -2408,7 +2408,7 @@ namespace Util
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
 
-			bool changed = ImGui::Checkbox(label, value);
+			bool changed = Util::Widgets::Checkbox(label, value);
 
 			if (isControlled) {
 				ImGui::PopItemFlag();
@@ -2677,19 +2677,19 @@ namespace Util
 				if (auto* forcedBool = std::get_if<bool>(&constraint.forcedValue)) {
 					bool displayValue = *forcedBool;
 					ImGui::BeginDisabled();
-					ImGui::Checkbox(label, &displayValue);
+					Util::Widgets::Checkbox(label, &displayValue);
 					ImGui::EndDisabled();
 				} else {
 					// Fallback: wrong type, show disabled with stored value
 					ImGui::BeginDisabled();
-					ImGui::Checkbox(label, value);
+					Util::Widgets::Checkbox(label, value);
 					ImGui::EndDisabled();
 				}
 				RenderConstraintTooltip(constraint);
 				return false;
 			}
 
-			return ImGui::Checkbox(label, value);
+			return Util::Widgets::Checkbox(label, value);
 		}
 
 		bool SliderFloat(const char* label, float* value, float min, float max,
@@ -2702,19 +2702,19 @@ namespace Util
 				if (auto* forcedFloat = std::get_if<float>(&constraint.forcedValue)) {
 					float displayValue = *forcedFloat;
 					ImGui::BeginDisabled();
-					ImGui::SliderFloat(label, &displayValue, min, max, format);
+					Util::Widgets::SliderFloat(label, &displayValue, min, max, format);
 					ImGui::EndDisabled();
 				} else {
 					// Fallback: wrong type, show disabled with stored value
 					ImGui::BeginDisabled();
-					ImGui::SliderFloat(label, value, min, max, format);
+					Util::Widgets::SliderFloat(label, value, min, max, format);
 					ImGui::EndDisabled();
 				}
 				RenderConstraintTooltip(constraint);
 				return false;
 			}
 
-			return ImGui::SliderFloat(label, value, min, max, format);
+			return Util::Widgets::SliderFloat(label, value, min, max, format);
 		}
 
 		bool SliderInt(const char* label, int* value, int min, int max,
@@ -2727,19 +2727,19 @@ namespace Util
 				if (auto* forcedInt = std::get_if<int>(&constraint.forcedValue)) {
 					int displayValue = *forcedInt;
 					ImGui::BeginDisabled();
-					ImGui::SliderInt(label, &displayValue, min, max, format);
+					Util::Widgets::SliderInt(label, &displayValue, min, max, format);
 					ImGui::EndDisabled();
 				} else {
 					// Fallback: wrong type, show disabled with stored value
 					ImGui::BeginDisabled();
-					ImGui::SliderInt(label, value, min, max, format);
+					Util::Widgets::SliderInt(label, value, min, max, format);
 					ImGui::EndDisabled();
 				}
 				RenderConstraintTooltip(constraint);
 				return false;
 			}
 
-			return ImGui::SliderInt(label, value, min, max, format);
+			return Util::Widgets::SliderInt(label, value, min, max, format);
 		}
 	}
 }  // namespace Util

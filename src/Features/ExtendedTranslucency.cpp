@@ -1,4 +1,6 @@
 #include "ExtendedTranslucency.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "../ShaderCache.h"
 #include "../State.h"
@@ -19,7 +21,7 @@ namespace
 {
 	void DrawEnabledCheckbox(ExtendedTranslucency::Settings& a_settings)
 	{
-		ImGui::Checkbox("Enable", &a_settings.Enabled);
+		Util::Widgets::Checkbox("Enable", &a_settings.Enabled);
 	}
 }
 
@@ -95,6 +97,12 @@ void ExtendedTranslucency::PostPostLoad()
 
 void ExtendedTranslucency::DrawSettings()
 {
+	MenuUI::SettingsPage page("ExtendedTranslucency", {
+														  { "appearance", "Material", "Choose the material response, then refine its appearance." },
+													  });
+	if (!page.Is("appearance"))
+		return;
+
 	DrawEnabledCheckbox(settings);
 	ImGui::BeginDisabled(!settings.Enabled);
 
@@ -120,28 +128,28 @@ void ExtendedTranslucency::DrawSettings()
 				"  - Isotropic Fabric: Imaginary fabric weaved from threads in one direction, respect normal map, also works well for layer of glass panels.\n"
 				"  - Anisotropic Fabric: Common fabric weaved from tangent and birnormal direction, ignores normal map.\n");
 		}
-		if (ImGui::Checkbox("Skinned Mesh Only", &settings.SkinnedOnly)) {
+		if (Util::Widgets::Checkbox("Skinned Mesh Only", &settings.SkinnedOnly)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Control if this effect should only apply to skinned mesh, check this option if your are seeing undesired effect on random objects.");
 		}
 
-		if (ImGui::SliderFloat("Transparency Increase", &settings.AlphaReduction, 0, 1.f)) {
+		if (Util::Widgets::SliderFloat("Transparency Increase", &settings.AlphaReduction, 0, 1.f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Transluent material will make the material more opaque on average, which could be different from the intent, reduce the alpha to counter this effect and increase the dynamic range of the output.");
 		}
 
-		if (ImGui::SliderFloat("Softness", &settings.AlphaSoftness, 0.0f, 1.0f)) {
+		if (Util::Widgets::SliderFloat("Softness", &settings.AlphaSoftness, 0.0f, 1.0f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Control the softness of the alpha increase, increase the softness reduce the increased amount of alpha.");
 		}
 
-		if (ImGui::SliderFloat("Blend Weight", &settings.AlphaStrength, 0.0f, 1.0f)) {
+		if (Util::Widgets::SliderFloat("Blend Weight", &settings.AlphaStrength, 0.0f, 1.0f)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -158,6 +166,12 @@ void ExtendedTranslucency::DrawSettings()
 
 void ExtendedTranslucency::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("ExtendedTranslucency", {
+														  { "essentials", "Essentials", "Start with the main choices for this feature." },
+													  });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawEnabledCheckbox(settings);
 }
 

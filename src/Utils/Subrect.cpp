@@ -1,5 +1,6 @@
 #include "Utils/Subrect.h"
 #include "Utils/NormalizedCoordinates.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
 #include <cmath>
@@ -239,8 +240,8 @@ namespace Util::Subrect
 		ImGui::Spacing();
 		ImGui::PushItemWidth(250.0f);
 		bool changed = false;
-		changed |= ImGui::SliderFloat2("Position UV (X, Y)", &currentUV.x, 0.0f, 1.0f, "%.3f");
-		changed |= ImGui::SliderFloat2("Size UV (W, H)", &currentUV.w, 0.01f, 1.0f, "%.3f");
+		changed |= Util::Widgets::SliderFloat2("Position UV (X, Y)", &currentUV.x, 0.0f, 1.0f, "%.3f");
+		changed |= Util::Widgets::SliderFloat2("Size UV (W, H)", &currentUV.w, 0.01f, 1.0f, "%.3f");
 		ImGui::PopItemWidth();
 
 		if (changed) {

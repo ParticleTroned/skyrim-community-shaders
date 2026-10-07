@@ -1,4 +1,6 @@
 #include "ExtendedMaterials.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "Utils/Finite.h"
 
@@ -26,7 +28,7 @@ void ExtendedMaterials::SanitizeSettings(Settings& a_settings)
 
 void ExtendedMaterials::DrawParallaxStrength()
 {
-	if (ImGui::SliderFloat("Parallax Strength", &settings.ParallaxStrength,
+	if (Util::Widgets::SliderFloat("Parallax Strength", &settings.ParallaxStrength,
 			kMinParallaxStrength, kMaxParallaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp))
 		SanitizeSettings(settings);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -52,7 +54,13 @@ void ExtendedMaterials::DataLoaded()
 void ExtendedMaterials::DrawSettings()
 {
 	SanitizeSettings(settings);
-	if (ImGui::TreeNodeEx("Complex Material")) {
+
+	MenuUI::SettingsPage page("ExtendedMaterials", {
+													   { "materials", "Materials", "Choose which material features are enabled." },
+													   { "depth", "Depth", "Adjust surface depth and terrain blending." },
+													   { "shadows", "Shadows", "Choose shadows for raised surface detail." },
+												   });
+	if (page.Is("materials")) {
 		Util::UIntCheckbox("Enable Complex Material", settings.EnableComplexMaterial);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -63,10 +71,9 @@ void ExtendedMaterials::DrawSettings()
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Parallax")) {
+	if (page.Is("depth")) {
 		DrawParallaxStrength();
 		Util::UIntCheckbox("Enable Parallax", settings.EnableParallax);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -94,10 +101,9 @@ void ExtendedMaterials::DrawSettings()
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Approximate Soft Shadows")) {
+	if (page.Is("shadows")) {
 		Util::UIntCheckbox("Enable Shadows", settings.EnableShadows);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
@@ -106,13 +112,19 @@ void ExtendedMaterials::DrawSettings()
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TreePop();
 	}
 }
 
 void ExtendedMaterials::DrawEssentialSettings()
 {
 	SanitizeSettings(settings);
+
+	MenuUI::SettingsPage page("ExtendedMaterials", {
+													   { "essentials", "Essentials", "Start with the main choices for this feature." },
+												   });
+	if (!page.Is("essentials"))
+		return;
+
 	Util::UIntCheckbox("Enable Complex Material", settings.EnableComplexMaterial);
 	Util::UIntCheckbox("Enable Parallax", settings.EnableParallax);
 	DrawParallaxStrength();

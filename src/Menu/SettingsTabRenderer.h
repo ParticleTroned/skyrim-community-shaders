@@ -31,9 +31,8 @@ private:
 	static void RenderShadersTab();
 	static void RenderKeybindingsTab(
 		SettingsState& state);
-	static void RenderInterfaceTab();
 
-	// Interface sub-tabs
+	// Interface detail panels
 	static void RenderBehaviorTab();
 	static void RenderThemesTab();
 	static void RenderFontsTab();

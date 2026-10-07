@@ -1,4 +1,5 @@
 #include "WeatherPicker.h"
+#include "Menu/SettingsPage.h"
 
 #include "Feature.h"
 #include "Menu.h"
@@ -117,6 +118,12 @@ void WeatherPicker::EnsureWeatherListLoaded()
 
 void WeatherPicker::DrawSettings()
 {
+	MenuUI::SettingsPage page("WeatherPicker", {
+												   { "appearance", "Weather", "Choose the weather to preview in the world." },
+											   });
+	if (!page.Is("appearance"))
+		return;
+
 	EnsureWeatherListLoaded();
 
 	DrawTimeControls();
@@ -144,7 +151,7 @@ void WeatherPicker::DrawShowInOverlayToggle()
 	const auto& menuSettings = Menu::GetSingleton()->GetSettings();
 
 	bool showInOverlay = WeatherDetailsWindow.ShowInOverlay;
-	if (ImGui::Checkbox(T(TKEY("show_in_overlay"), "Show in Overlay"), &showInOverlay)) {
+	if (Util::Widgets::Checkbox(T(TKEY("show_in_overlay"), "Show in Overlay"), &showInOverlay)) {
 		SetPerformanceCostMeasurementEnabled(showInOverlay);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -599,13 +606,13 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 	}
 
 	ImGui::SameLine();
-	ImGui::Checkbox(T(TKEY("accelerate_weather_change"), "Accelerate Weather Change"), &s_accelerateWeatherChange);
+	Util::Widgets::Checkbox(T(TKEY("accelerate_weather_change"), "Accelerate Weather Change"), &s_accelerateWeatherChange);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("accelerate_weather_change_tooltip"), "When enabled, weather changes instantly"));
 	}
 
 	ImGui::BeginDisabled(!s_accelerateWeatherChange);
-	ImGui::Checkbox("Temporary Weather Preview", &s_transientAcceleratedWeatherPreview);
+	Util::Widgets::Checkbox("Temporary Weather Preview", &s_transientAcceleratedWeatherPreview);
 	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		Util::DrawMultiLineTooltip({ "Previews the selected weather immediately without installing a persistent weather override.",

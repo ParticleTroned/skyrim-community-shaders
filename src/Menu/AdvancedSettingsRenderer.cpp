@@ -1,4 +1,5 @@
 #include "AdvancedSettingsRenderer.h"
+#include "Menu/SettingsPage.h"
 
 #include <algorithm>
 #include <format>
@@ -22,55 +23,23 @@
 void AdvancedSettingsRenderer::RenderAdvancedSettings(
 	const std::function<void()>& drawDisableAtBootSettings)
 {
-	// Tabs ordered alphabetically; each tab is grouped by purpose, not audience.
-	// Shaders   = configure & inspect shader compilation
-	// Diagnostics = log/inspect runtime state & block individual shaders
-	// Disable at Boot = user-facing failsafe toggles
-	// RenderDoc = frame-capture configuration and capture management
-	// Testing   = A/B harness + dev-mode test scaffolding
-	if (ImGui::BeginTabBar("##AdvancedSettingsTabs", ImGuiTabBarFlags_None)) {
-		if (MenuFonts::BeginTabItemWithFont("Diagnostics", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##DiagnosticsContent", ImVec2(0, 0), false)) {
-				RenderDiagnosticsSection();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		if (MenuFonts::BeginTabItemWithFont("Disable at Boot", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##DisableAtBootContent", ImVec2(0, 0), false)) {
-				RenderDisableAtBootSection(drawDisableAtBootSettings);
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		if (MenuFonts::BeginTabItemWithFont("RenderDoc", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##RenderDocContent", ImVec2(0, 0), false)) {
-				globals::features::renderDoc.DrawSettings();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		if (MenuFonts::BeginTabItemWithFont("Shaders", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##ShadersContent", ImVec2(0, 0), false)) {
-				RenderShadersSection();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		if (MenuFonts::BeginTabItemWithFont("Testing", Menu::FontRole::Subheading)) {
-			if (ImGui::BeginChild("##TestingContent", ImVec2(0, 0), false)) {
-				RenderTestingSection();
-			}
-			ImGui::EndChild();
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
-	}
+	MenuUI::SettingsPage page("Advanced", {
+											  { "startup", "Startup", "Choose which features load when the game starts." },
+											  { "shaders", "Shaders", "Refine compilation and shader replacement." },
+											  { "diagnostics", "Diagnostics", "Choose logging and inspect runtime state." },
+											  { "capture", "Capture", "Choose frame capture and recording options." },
+											  { "testing", "Testing", "Compare controlled settings and test scenes." },
+										  });
+	if (page.Is("startup"))
+		RenderDisableAtBootSection(drawDisableAtBootSettings);
+	if (page.Is("shaders"))
+		RenderShadersSection();
+	if (page.Is("diagnostics"))
+		RenderDiagnosticsSection();
+	if (page.Is("capture"))
+		globals::features::renderDoc.DrawSettings();
+	if (page.Is("testing"))
+		RenderTestingSection();
 }
 
 // -----------------------------------------------------------------------------
@@ -129,7 +98,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 
 	// Half-precision (partial precision) shader compile flag
 	bool partialPrecision = globals::state->enablePartialPrecision.load(std::memory_order_relaxed);
-	if (ImGui::Checkbox("Half Precision (Partial Precision)", &partialPrecision)) {
+	if (Util::Widgets::Checkbox("Half Precision (Partial Precision)", &partialPrecision)) {
 		globals::state->enablePartialPrecision.store(partialPrecision, std::memory_order_relaxed);
 		// Force a recompile so the flag actually takes effect on subsequent shader builds.
 		shaderCache->Clear();
@@ -148,7 +117,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	// Avoid flow control compiler flag (transient — not saved to config because the
 	// right setting depends on the current scene, not the user).
 	bool avoidFlowControl = globals::state->enableAvoidFlowControl.load(std::memory_order_relaxed);
-	if (ImGui::Checkbox("Avoid Flow Control", &avoidFlowControl)) {
+	if (Util::Widgets::Checkbox("Avoid Flow Control", &avoidFlowControl)) {
 		globals::state->enableAvoidFlowControl.store(avoidFlowControl, std::memory_order_relaxed);
 		// Force a recompile so the flag actually takes effect on subsequent shader builds.
 		shaderCache->Clear();
@@ -183,7 +152,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	shaderCache->compilationThreadCount = std::clamp(shaderCache->compilationThreadCount, 1, maxThreads);
 	shaderCache->backgroundCompilationThreadCount = std::clamp(shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
 
-	ImGui::SliderInt("Compiler Threads", &shaderCache->compilationThreadCount, 1, maxThreads);
+	Util::Widgets::SliderInt("Compiler Threads", &shaderCache->compilationThreadCount, 1, maxThreads);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Number of threads used to compile shaders at startup. "
@@ -192,7 +161,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 			"startup compiler workers also run at cooperative OS priority. "
 			"Higher values finish compilation faster but may make the system less responsive.");
 	}
-	ImGui::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
+	Util::Widgets::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Number of threads used to compile shaders during gameplay. "
@@ -202,7 +171,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	}
 
 	auto& menuSettings = globals::menu->GetSettings();
-	ImGui::Checkbox("Background Compile on Boot", &menuSettings.BackgroundShaderCompilationOnBoot);
+	Util::Widgets::Checkbox("Background Compile on Boot", &menuSettings.BackgroundShaderCompilationOnBoot);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Load the menu immediately and compile shaders in the background on boot.\n"
@@ -211,7 +180,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	}
 
 	if (globals::game::isVR) {
-		ImGui::Checkbox("Show Compilation HUD in VR", &menuSettings.ShowCompilationHUDInVR);
+		Util::Widgets::Checkbox("Show Compilation HUD in VR", &menuSettings.ShowCompilationHUDInVR);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"When enabled, shader compilation status is shown in both the headset and desktop.\n"
@@ -228,7 +197,7 @@ void AdvancedSettingsRenderer::RenderShaderCacheControls()
 
 	// File Watcher option
 	bool useFileWatcher = shaderCache->UseFileWatcher();
-	if (ImGui::Checkbox("Enable File Watcher", &useFileWatcher)) {
+	if (Util::Widgets::Checkbox("Enable File Watcher", &useFileWatcher)) {
 		shaderCache->SetFileWatcher(useFileWatcher);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -239,7 +208,7 @@ void AdvancedSettingsRenderer::RenderShaderCacheControls()
 
 	// Dump Shaders option
 	bool useDump = shaderCache->IsDump();
-	if (ImGui::Checkbox("Dump Shaders", &useDump)) {
+	if (Util::Widgets::Checkbox("Dump Shaders", &useDump)) {
 		shaderCache->SetDump(useDump);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -276,13 +245,13 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 
 			if (!(SIE::ShaderCache::IsSupportedShader(type) || state->IsDeveloperMode())) {
 				ImGui::BeginDisabled();
-				ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
+				Util::Widgets::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
 				ImGui::EndDisabled();
 			} else
-				ImGui::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
+				Util::Widgets::Checkbox(std::format("{}", magic_enum::enum_name(type)).c_str(), &state->enabledClasses[classIndex]);
 		});
 		if (state->IsDeveloperMode()) {
-			ImGui::Checkbox("Vertex", &state->enableVShaders);
+			Util::Widgets::Checkbox("Vertex", &state->enableVShaders);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Replace Vertex Shaders. "
@@ -290,7 +259,7 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 					"For developers to test whether CSX shaders match vanilla behavior. ");
 			}
 
-			ImGui::Checkbox("Pixel", &state->enablePShaders);
+			Util::Widgets::Checkbox("Pixel", &state->enablePShaders);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Replace Pixel Shaders. "
@@ -298,7 +267,7 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 					"For developers to test whether CSX shaders match vanilla behavior. ");
 			}
 
-			ImGui::Checkbox("Compute", &state->enableCShaders);
+			Util::Widgets::Checkbox("Compute", &state->enableCShaders);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Replace Compute Shaders. "
@@ -646,7 +615,7 @@ void AdvancedSettingsRenderer::RenderRuntimeDebugControls()
 	Util::DrawSectionHeader("Runtime Debug");
 
 	// Frame annotations toggle
-	ImGui::Checkbox("Frame Annotations", &globals::state->frameAnnotations);
+	Util::Widgets::Checkbox("Frame Annotations", &globals::state->frameAnnotations);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable detailed frame annotations for debugging render passes and draw calls.");
 	}
@@ -738,7 +707,7 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 		auto& menuSettings = menu->GetSettings();
 		auto& themeSettings = menuSettings.Theme;
 
-		if (ImGui::Checkbox("Enable Shader Blocking", &menuSettings.EnableShaderBlocking)) {
+		if (Util::Widgets::Checkbox("Enable Shader Blocking", &menuSettings.EnableShaderBlocking)) {
 			// Setting saved automatically on next save
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {

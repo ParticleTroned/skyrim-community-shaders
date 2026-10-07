@@ -124,7 +124,7 @@ require_contract("${_selection}" [[GetVRRenderScaleModePreference()]] "remembere
 section("${_source}" [[void Upscaling::DrawVRRenderScaleLinkSetting(]]
     [[void Upscaling::DrawSettings()]] _checkbox)
 require_contract("${_checkbox}"
-    [[ImGui::Checkbox("Link Render Scale to DLSS/FSR Upscaling", &linked)]] "exact UI name")
+    [[Util::Widgets::Checkbox("Link Render Scale to DLSS/FSR Upscaling", &linked)]] "exact UI name")
 require_contract("${_checkbox}" [[SetRenderScaleLinkedToUpscaling(linked)]]
     "UI uses the shared link setter")
 forbid_contract("${_checkbox}" [[kDefaultRenderScaleQualityMode]] "native-AA quality on link enable")

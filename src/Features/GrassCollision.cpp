@@ -1,4 +1,6 @@
 #include "GrassCollision.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "GpuPass.h"
 #include "State.h"
@@ -27,16 +29,28 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void GrassCollision::DrawSettings()
 {
-	ImGui::Checkbox("Enable", &settings.EnableGrassCollision);
+	MenuUI::SettingsPage page("GrassCollision", {
+													{ "appearance", "Grass response", "Choose whether grass moves around nearby actors." },
+												});
+	if (!page.Is("appearance"))
+		return;
+
+	Util::Widgets::Checkbox("Enable", &settings.EnableGrassCollision);
 }
 
 void GrassCollision::DrawPerformanceSettings(bool)
 {
-	ImGui::Checkbox("Enable", &settings.EnableGrassCollision);
+	Util::Widgets::Checkbox("Enable", &settings.EnableGrassCollision);
 }
 
 void GrassCollision::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("GrassCollision", {
+													{ "essentials", "Essentials", "Start with the main choices for this feature." },
+												});
+	if (!page.Is("essentials"))
+		return;
+
 	DrawPerformanceSettings(false);
 }
 

@@ -49,7 +49,7 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 	ImGui::PushID(&a_profile);
 
 	const auto drawBloomSlider = [&]() {
-		ImGui::SliderFloat("Bloom", &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Bloom", &a_profile.EnhancementIntensity, 0.0f, kEnhancementIntensityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		DrawTooltip("Bloom strength contributed by this layer. 0 adds no strength; detailed controls can still reshape Bloom inherited from earlier layers.");
 	};
 	const auto& style = ImGui::GetStyle();
@@ -98,17 +98,17 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 bool Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
 {
 	bool changed = false;
-	changed |= ImGui::SliderFloat("Halo Radius", &a_profile.HaloRadius, 0.0f, kHaloRadiusMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= Util::Widgets::SliderFloat("Halo Radius", &a_profile.HaloRadius, 0.0f, kHaloRadiusMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Controls the radius of the enhancement's additional bloom samples. Higher values create wider halos.");
-	changed |= ImGui::SliderFloat("Halo Spread", &a_profile.HaloSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= Util::Widgets::SliderFloat("Halo Spread", &a_profile.HaloSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Blends between the original bloom and the widened halo samples. Higher values make the halo softer and more spread out.");
-	changed |= ImGui::SliderFloat("Bloom Saturation", &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= Util::Widgets::SliderFloat("Bloom Saturation", &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Controls the color saturation of the enhanced bloom. Lower values make it whiter; higher values preserve or exaggerate its tint.");
 	changed |= ImGui::ColorEdit3("Bloom Tint", reinterpret_cast<float*>(&a_profile.BloomTint));
 	DrawTooltip("Colors the bloom halo without changing the underlying scene lighting.");
-	changed |= ImGui::SliderFloat("Compression Ceiling", &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= Util::Widgets::SliderFloat("Compression Ceiling", &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Maximum Bloom luminance approached by the soft limiter after tint and enhancement strength are applied.");
-	changed |= ImGui::SliderFloat("Compression Threshold", &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= Util::Widgets::SliderFloat("Compression Threshold", &a_profile.CompressionThreshold, 0.0f, a_profile.CompressionCeiling, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Bloom luminance where soft compression starts after tint and enhancement strength are applied.");
 
 	SanitizeProfile(a_profile);

@@ -32,7 +32,7 @@ namespace
 		float a_max,
 		const char* a_tooltip)
 	{
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			a_label,
 			&a_value,
 			a_min,
@@ -146,7 +146,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 	ImGui::SeparatorText("Parallax");
 	DrawWaterSlider("Parallax Strength", a_profile.ParallaxStrength, kWaterAmountMin, kWaterAmountMax,
 		"Scales the apparent depth of water waves, including flowmaps. Zero disables water parallax.");
-	ImGui::SliderInt("Parallax Quality", &a_profile.ParallaxQuality, Profile::kMinParallaxQuality, Profile::kMaxParallaxQuality, "%d", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderInt("Parallax Quality", &a_profile.ParallaxQuality, Profile::kMinParallaxQuality, Profile::kMaxParallaxQuality, "%d", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("16 preserves the current full-detail quality. Higher values increase sampling cost. VR retains foveated detail reduction.");
 
 	SanitizeProfile(a_profile);

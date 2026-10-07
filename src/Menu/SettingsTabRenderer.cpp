@@ -1,4 +1,5 @@
 #include "SettingsTabRenderer.h"
+#include "Menu/SettingsPage.h"
 
 #include <set>
 #include <string>
@@ -217,376 +218,389 @@ namespace
 
 void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state)
 {
-	MenuFonts::TabBarPaddingGuard tabPaddingGuard(Menu::FontRole::Heading);
-	if (ImGui::BeginTabBar("##GeneralTabBar", ImGuiTabBarFlags_None)) {
+	MenuUI::SettingsPage page("General", {
+											 { "shaders", "Shaders", "Choose shader behaviour and compilation first." },
+											 { "hotkeys", "Hotkeys", "Choose keyboard shortcuts." },
+											 { "behaviour", "Behaviour", "Choose how the menu opens and responds." },
+											 { "themes", "Theme", "Choose the overall appearance first." },
+											 { "fonts", "Fonts", "Refine text size and font choices." },
+											 { "layout", "Layout", "Refine spacing, shape and menu layout." },
+											 { "colours", "Colours", "Refine the selected theme colours." },
+										 });
+	if (page.Is("shaders"))
 		RenderShadersTab();
+	if (page.Is("hotkeys"))
 		RenderKeybindingsTab(state);
-		RenderInterfaceTab();
-		ImGui::EndTabBar();
-	}
+	if (page.Is("behaviour"))
+		RenderBehaviorTab();
+	if (page.Is("themes"))
+		RenderThemesTab();
+	if (page.Is("fonts"))
+		RenderFontsTab();
+	if (page.Is("layout"))
+		RenderStylingTab();
+	if (page.Is("colours"))
+		RenderColorsTab();
 }
 
 void SettingsTabRenderer::RenderShadersTab()
 {
-	if (BeginTabItemWithFont("Shaders", Menu::FontRole::Heading)) {
-		auto shaderCache = globals::shaderCache;
+	auto shaderCache = globals::shaderCache;
 
-		bool useCustomShaders = shaderCache->IsEnableRequested();
-		if (ImGui::Checkbox("Use Custom Shaders", &useCustomShaders)) {
-			shaderCache->SetEnabled(useCustomShaders);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Disabling this effectively disables all features. In VR, native render targets are restored first.");
-		}
+	bool useCustomShaders = shaderCache->IsEnableRequested();
+	if (Util::Widgets::Checkbox("Use Custom Shaders", &useCustomShaders)) {
+		shaderCache->SetEnabled(useCustomShaders);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Disabling this effectively disables all features. In VR, native render targets are restored first.");
+	}
 
-		bool useDiskCache = shaderCache->IsDiskCache();
-		if (ImGui::Checkbox("Enable Disk Cache", &useDiskCache)) {
-			shaderCache->SetDiskCache(useDiskCache);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Disables loading shaders from disk and prevents saving compiled shaders to disk cache.");
-		}
+	bool useDiskCache = shaderCache->IsDiskCache();
+	if (Util::Widgets::Checkbox("Enable Disk Cache", &useDiskCache)) {
+		shaderCache->SetDiskCache(useDiskCache);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Disables loading shaders from disk and prevents saving compiled shaders to disk cache.");
+	}
 
-		bool skipUnchanged = shaderCache->IsSkipUnchangedShaders();
-		ImGui::BeginDisabled(!useDiskCache);
-		if (ImGui::Checkbox("Skip Unchanged Shaders", &skipUnchanged)) {
-			shaderCache->SetSkipUnchangedShaders(skipUnchanged);
-		}
-		ImGui::EndDisabled();
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Reuses disk entries whose shader source, includes, compiler defines, and "
-				"compatibility contracts match. Missing or outdated entries are compiled from source. "
-				"When disabled, disk reads are skipped and compiled shaders still update the cache. "
-				"Requires 'Enable Disk Cache' to be active.");
-		}
+	bool skipUnchanged = shaderCache->IsSkipUnchangedShaders();
+	ImGui::BeginDisabled(!useDiskCache);
+	if (Util::Widgets::Checkbox("Skip Unchanged Shaders", &skipUnchanged)) {
+		shaderCache->SetSkipUnchangedShaders(skipUnchanged);
+	}
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Reuses disk entries whose shader source, includes, compiler defines, and "
+			"compatibility contracts match. Missing or outdated entries are compiled from source. "
+			"When disabled, disk reads are skipped and compiled shaders still update the cache. "
+			"Requires 'Enable Disk Cache' to be active.");
+	}
 
-		bool useAsync = shaderCache->IsAsync();
-		if (ImGui::Checkbox("Enable Async", &useAsync)) {
-			shaderCache->SetAsync(useAsync);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
-		}
+	bool useAsync = shaderCache->IsAsync();
+	if (Util::Widgets::Checkbox("Enable Async", &useAsync)) {
+		shaderCache->SetAsync(useAsync);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Skips a shader being replaced if it hasn't been compiled yet. Also makes compilation blazingly fast!");
+	}
 
-		if (shaderCache->GetTotalTasks() > 0) {
-			ImGui::Text("Last shader cache build duration: %s",
-				shaderCache->GetShaderStatsString(true, true).c_str());
+	if (shaderCache->GetTotalTasks() > 0) {
+		ImGui::Text("Last shader cache build duration: %s",
+			shaderCache->GetShaderStatsString(true, true).c_str());
 
-			// Stacked bar showing compilation breakdown
+		// Stacked bar showing compilation breakdown
+		{
+			uint64_t total = shaderCache->GetTotalTasks();
+			uint64_t completed = shaderCache->GetCompletedTasks();
+			uint64_t failed = shaderCache->GetFailedTasks();
+			uint64_t cacheHits = shaderCache->GetCachedHitTasks();
+			uint64_t diskHits = shaderCache->GetDiskHitTasks();
+			uint64_t slow = shaderCache->GetSlowTasks();
+			uint64_t verySlow = shaderCache->GetVerySlowTasks();
+			// Compiled = tasks that actually went through compilation (excluding disk hits).
+			// Cache hits are separate (returned early without queueing).
+			uint64_t compiled = completed > diskHits ? completed - diskHits : 0;
+			uint64_t fast = compiled > slow ? compiled - slow : 0;
+			uint64_t medium = slow > verySlow ? slow - verySlow : 0;  // 2-8s
+
+			struct Segment
 			{
-				uint64_t total = shaderCache->GetTotalTasks();
-				uint64_t completed = shaderCache->GetCompletedTasks();
-				uint64_t failed = shaderCache->GetFailedTasks();
-				uint64_t cacheHits = shaderCache->GetCachedHitTasks();
-				uint64_t diskHits = shaderCache->GetDiskHitTasks();
-				uint64_t slow = shaderCache->GetSlowTasks();
-				uint64_t verySlow = shaderCache->GetVerySlowTasks();
-				// Compiled = tasks that actually went through compilation (excluding disk hits).
-				// Cache hits are separate (returned early without queueing).
-				uint64_t compiled = completed > diskHits ? completed - diskHits : 0;
-				uint64_t fast = compiled > slow ? compiled - slow : 0;
-				uint64_t medium = slow > verySlow ? slow - verySlow : 0;  // 2-8s
+				uint64_t count;
+				ImU32 color;
+				const char* label;
+			};
+			Segment segments[] = {
+				{ cacheHits, IM_COL32(120, 120, 120, 255), "Deduplicated" },
+				{ diskHits, IM_COL32(70, 130, 200, 255), "Disk cache" },
+				{ fast, IM_COL32(80, 180, 80, 255), "Fast (<2s)" },
+				{ medium, IM_COL32(220, 180, 50, 255), "Slow (2-8s)" },
+				{ verySlow, IM_COL32(220, 60, 60, 255), "Very slow (>=8s)" },
+				{ failed, IM_COL32(160, 30, 30, 255), "Failed" },
+			};
 
-				struct Segment
-				{
-					uint64_t count;
-					ImU32 color;
-					const char* label;
-				};
-				Segment segments[] = {
-					{ cacheHits, IM_COL32(120, 120, 120, 255), "Deduplicated" },
-					{ diskHits, IM_COL32(70, 130, 200, 255), "Disk cache" },
-					{ fast, IM_COL32(80, 180, 80, 255), "Fast (<2s)" },
-					{ medium, IM_COL32(220, 180, 50, 255), "Slow (2-8s)" },
-					{ verySlow, IM_COL32(220, 60, 60, 255), "Very slow (>=8s)" },
-					{ failed, IM_COL32(160, 30, 30, 255), "Failed" },
-				};
+			float barHeight = 14.0f * Util::GetUIScale();
+			float barWidth = ImGui::GetContentRegionAvail().x;
+			ImVec2 cursor = ImGui::GetCursorScreenPos();
+			ImDrawList* drawList = ImGui::GetWindowDrawList();
 
-				float barHeight = 14.0f * Util::GetUIScale();
-				float barWidth = ImGui::GetContentRegionAvail().x;
-				ImVec2 cursor = ImGui::GetCursorScreenPos();
-				ImDrawList* drawList = ImGui::GetWindowDrawList();
+			// Background
+			drawList->AddRectFilled(cursor, ImVec2(cursor.x + barWidth, cursor.y + barHeight), IM_COL32(40, 40, 40, 255));
 
-				// Background
-				drawList->AddRectFilled(cursor, ImVec2(cursor.x + barWidth, cursor.y + barHeight), IM_COL32(40, 40, 40, 255));
-
-				// Draw segments
-				float x = cursor.x;
-				for (auto& seg : segments) {
-					if (seg.count == 0 || total == 0)
-						continue;
-					float segWidth = (static_cast<float>(seg.count) / static_cast<float>(total)) * barWidth;
-					if (segWidth < 1.0f)
-						segWidth = 1.0f;
-					drawList->AddRectFilled(ImVec2(x, cursor.y), ImVec2(x + segWidth, cursor.y + barHeight), seg.color);
-					x += segWidth;
-				}
-
-				// Reserve space and handle tooltip
-				ImGui::Dummy(ImVec2(barWidth, barHeight));
-				if (ImGui::IsItemHovered()) {
-					ImGui::BeginTooltip();
-					for (auto& seg : segments) {
-						if (seg.count == 0)
-							continue;
-						float pct = total > 0 ? 100.0f * static_cast<float>(seg.count) / static_cast<float>(total) : 0.0f;
-						ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(seg.color), "%s: %llu (%.1f%%)", seg.label, seg.count, pct);
-					}
-					ImGui::EndTooltip();
-				}
+			// Draw segments
+			float x = cursor.x;
+			for (auto& seg : segments) {
+				if (seg.count == 0 || total == 0)
+					continue;
+				float segWidth = (static_cast<float>(seg.count) / static_cast<float>(total)) * barWidth;
+				if (segWidth < 1.0f)
+					segWidth = 1.0f;
+				drawList->AddRectFilled(ImVec2(x, cursor.y), ImVec2(x + segWidth, cursor.y + barHeight), seg.color);
+				x += segWidth;
 			}
 
-			auto state = globals::state;
-			if (state->IsDeveloperMode()) {
-				ImGui::Text("Threads: %d compile, %d background, %d pool | P-cores: %d",
-					(int)shaderCache->compilationThreadCount,
-					(int)shaderCache->backgroundCompilationThreadCount,
-					(int)shaderCache->compilationPool.get_thread_count(),
-					(int)Util::GetPerformanceCoreCount());
+			// Reserve space and handle tooltip
+			ImGui::Dummy(ImVec2(barWidth, barHeight));
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				for (auto& seg : segments) {
+					if (seg.count == 0)
+						continue;
+					float pct = total > 0 ? 100.0f * static_cast<float>(seg.count) / static_cast<float>(total) : 0.0f;
+					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(seg.color), "%s: %llu (%.1f%%)", seg.label, seg.count, pct);
+				}
+				ImGui::EndTooltip();
 			}
 		}
 
-		ImGui::EndTabItem();
+		auto state = globals::state;
+		if (state->IsDeveloperMode()) {
+			ImGui::Text("Threads: %d compile, %d background, %d pool | P-cores: %d",
+				(int)shaderCache->compilationThreadCount,
+				(int)shaderCache->backgroundCompilationThreadCount,
+				(int)shaderCache->compilationPool.get_thread_count(),
+				(int)Util::GetPerformanceCoreCount());
+		}
 	}
 }
 
 void SettingsTabRenderer::RenderKeybindingsTab(
 	SettingsState& state)
 {
-	if (BeginTabItemWithFont("Keybindings", Menu::FontRole::Heading)) {
-		auto& settings = globals::menu->GetSettings();
+	auto& settings = globals::menu->GetSettings();
 
-		Util::InputComboWidget(
-			"Menu Toggle Key:",
-			settings.ToggleKey,
-			state.settingToggleKey,
-			"Change##toggle");
+	Util::InputComboWidget(
+		"Menu Toggle Key:",
+		settings.ToggleKey,
+		state.settingToggleKey,
+		"Change##toggle");
 
-		Util::InputComboWidget(
-			"Custom Shaders Toggle Key:",
-			settings.EffectToggleKey,
-			state.settingsEffectsToggle,
-			"Change##EffectToggle");
+	Util::InputComboWidget(
+		"Custom Shaders Toggle Key:",
+		settings.EffectToggleKey,
+		state.settingsEffectsToggle,
+		"Change##EffectToggle");
 
-		Util::InputComboWidget(
-			"Neural Rendering Toggle Key:", settings.NeuralRenderingToggleKey,
-			state.settingNeuralRenderingToggleKey, "Change##NeuralRenderingToggle");
-		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Turns NR on or off while retaining its settings. Off removes NR rendering cost. Unbound by default; requires the NR DLL. Controller bindings are in VR > Key Bindings.");
+	Util::InputComboWidget(
+		"Neural Rendering Toggle Key:", settings.NeuralRenderingToggleKey,
+		state.settingNeuralRenderingToggleKey, "Change##NeuralRenderingToggle");
+	if (auto tooltip = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted("Turns NR on or off while retaining its settings. Off removes NR rendering cost. Unbound by default; requires the NR DLL. Controller bindings are in VR > Key Bindings.");
 
-		Util::InputComboWidget(
-			"Skip Compilation Key:",
-			settings.SkipCompilationKey,
-			state.settingSkipCompilationKey,
-			"Change##skip");
+	Util::InputComboWidget(
+		"Skip Compilation Key:",
+		settings.SkipCompilationKey,
+		state.settingSkipCompilationKey,
+		"Change##skip");
 
-		Util::InputComboWidget(
-			"Overlay Toggle Key:",
-			settings.OverlayToggleKey,
-			state.settingOverlayToggleKey,
-			"Change##OverlayToggle");
-		ImGui::TextWrapped("Shows or hides overlay windows enabled by individual features. Default key: F10.");
+	Util::InputComboWidget(
+		"Overlay Toggle Key:",
+		settings.OverlayToggleKey,
+		state.settingOverlayToggleKey,
+		"Change##OverlayToggle");
+	ImGui::TextWrapped("Shows or hides overlay windows enabled by individual features. Default key: F10.");
 
-		Util::InputComboWidget(
-			"CS Editor Toggle Key:",
-			settings.CSEditorToggleKey,
-			state.settingCSEditorToggleKey,
-			"Change##CSEditorToggle");
+	Util::InputComboWidget(
+		"CS Editor Toggle Key:",
+		settings.CSEditorToggleKey,
+		state.settingCSEditorToggleKey,
+		"Change##CSEditorToggle");
 
-		Util::InputComboWidget(
-			"Screenshot Key:",
-			settings.ScreenshotKey,
-			state.settingScreenshotKey,
-			"Change##Screenshot");
+	Util::InputComboWidget(
+		"Screenshot Key:",
+		settings.ScreenshotKey,
+		state.settingScreenshotKey,
+		"Change##Screenshot");
 
-		ImGui::Separator();
-		ImGui::TextUnformatted("Hardcoded Bindings");
-		ImGui::TextWrapped("RenderDoc is an external graphics frame debugger used to capture frames for graphics debugging. It is only active when RenderDoc capture support is loaded.");
-		DrawReadOnlyKeybinding(
-			"RenderDoc Capture:",
-			"F12 / Print Screen",
-			"Captures the configured frame count. These capture hotkeys are fixed and cannot be changed here.");
-
-		ImGui::EndTabItem();
-	}
-}
-
-void SettingsTabRenderer::RenderInterfaceTab()
-{
-	if (BeginTabItemWithFont("Interface", Menu::FontRole::Heading)) {
-		MenuFonts::TabBarPaddingGuard tabPaddingGuard(Menu::FontRole::Subheading);
-		if (ImGui::BeginTabBar("##tabs", ImGuiTabBarFlags_None)) {
-			RenderBehaviorTab();
-			RenderThemesTab();
-			RenderFontsTab();
-			RenderStylingTab();
-			RenderColorsTab();
-			ImGui::EndTabBar();
-		}
-		ImGui::EndTabItem();
-	}
+	ImGui::Separator();
+	ImGui::TextUnformatted("Hardcoded Bindings");
+	ImGui::TextWrapped("RenderDoc is an external graphics frame debugger used to capture frames for graphics debugging. It is only active when RenderDoc capture support is loaded.");
+	DrawReadOnlyKeybinding(
+		"RenderDoc Capture:",
+		"F12 / Print Screen",
+		"Captures the configured frame count. These capture hotkeys are fixed and cannot be changed here.");
 }
 
 void SettingsTabRenderer::RenderBehaviorTab()
 {
-	if (BeginTabItemWithFont("Behavior", Menu::FontRole::Heading)) {
-		auto& themeSettings = globals::menu->GetSettings().Theme;
-		RenderSaveInfoText();
+	auto& themeSettings = globals::menu->GetSettings().Theme;
+	RenderSaveInfoText();
 
-		SeparatorTextWithFont("UI Behavior", Menu::FontRole::Subheading);
+	SeparatorTextWithFont("UI Behavior", Menu::FontRole::Subheading);
 
-		ImGui::Checkbox("Show Icon Buttons in Header", &themeSettings.ShowActionIcons);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"When enabled: Shows action buttons (Save, Load, Clear Cache) as icons in the header\n"
-				"When disabled: Shows as text buttons below the header");
-		}
+	Util::Widgets::Checkbox("Show Icon Buttons in Header", &themeSettings.ShowActionIcons);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"When enabled: Shows action buttons (Save, Load, Clear Cache) as icons in the header\n"
+			"When disabled: Shows as text buttons below the header");
+	}
 
-		if (themeSettings.ShowActionIcons) {
-			ImGui::Indent();
-			if (ImGui::Checkbox("Use Monochrome Icons", &themeSettings.UseMonochromeIcons)) {
-				globals::menu->pendingIconReload = true;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Uses white monochrome icons that adapt to your theme's text color");
-			}
-			ImGui::SameLine();
-			if (ImGui::Checkbox("Use Monochrome CSX Logo", &themeSettings.UseMonochromeLogo)) {
-				globals::menu->pendingIconReload = true;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Uses monochrome version of the CSX logo");
-			}
-			ImGui::Unindent();
-		}
-
-		ImGui::Checkbox("Show Footer", &themeSettings.ShowFooter);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Shows the footer with game version, swap chain, and GPU information at the bottom of the window");
-		}
-
-		ImGui::Checkbox("Center Header Title", &themeSettings.CenterHeader);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Centers the CSX title and logo in the header title bar");
-		}
-
-		ImGui::Checkbox("Auto-hide Feature List", &globals::menu->GetSettings().AutoHideFeatureList);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Automatically hides the left feature list panel. Move cursor to the left edge to show it.");
-		}
-
-		if (ImGui::Checkbox("Require Shift to Dock", &globals::menu->GetSettings().RequireShiftToDock)) {
-			ImGui::GetIO().ConfigDockingWithShift = globals::menu->GetSettings().RequireShiftToDock;
+	if (themeSettings.ShowActionIcons) {
+		ImGui::Indent();
+		if (Util::Widgets::Checkbox("Use Monochrome Icons", &themeSettings.UseMonochromeIcons)) {
+			globals::menu->pendingIconReload = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("When enabled, you must hold Shift while dragging to dock/snap windows. Prevents accidental docking.");
+			ImGui::Text("Uses white monochrome icons that adapt to your theme's text color");
 		}
-
-		ImGui::SliderFloat("Tooltip Hover Delay", &themeSettings.TooltipHoverDelay, 0.0f, 2.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Time in seconds to wait before a tooltip appears when hovering over an item.");
-		}
-
-		// Skip confirmation when clearing shader cache (UI behavior, not a shader setting).
-		auto& menuSettings = globals::menu->GetSettings();
-		bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;
-		if (ImGui::Checkbox("Skip Clear Cache Confirmation", &skipConfirmation)) {
-			menuSettings.SkipClearCacheConfirmation = skipConfirmation;
+		ImGui::SameLine();
+		if (Util::Widgets::Checkbox("Use Monochrome CSX Logo", &themeSettings.UseMonochromeLogo)) {
+			globals::menu->pendingIconReload = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("When checked, the shader cache will be cleared immediately without asking for confirmation.");
+			ImGui::Text("Uses monochrome version of the CSX logo");
 		}
+		ImGui::Unindent();
+	}
 
-		bool smartClearDefault = menuSettings.SmartClearShaderCacheDefault;
-		if (ImGui::Checkbox("Smart Clear by Default", &smartClearDefault)) {
-			menuSettings.SmartClearShaderCacheDefault = smartClearDefault;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped(
-				"When checked, a normal click clears only shaders drawing the current scene; Shift-click performs "
-				"a full clear. When unchecked, those roles are reversed. Enable this for controller-only VR use.");
-		}
+	Util::Widgets::Checkbox("Show Footer", &themeSettings.ShowFooter);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Shows the footer with game version, swap chain, and GPU information at the bottom of the window");
+	}
 
-		SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);
+	Util::Widgets::Checkbox("Center Header Title", &themeSettings.CenterHeader);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Centers the CSX title and logo in the header title bar");
+	}
 
-		ImGui::BeginDisabled(globals::game::isVR);
-		if (ImGui::Checkbox("Background Blur", &themeSettings.BackgroundBlurEnabled)) {
-			BackgroundBlur::SetEnabled(themeSettings.BackgroundBlurEnabled);
-		}
-		ImGui::EndDisabled();
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			if (globals::game::isVR) {
-				ImGui::Text("Background Blur is unavailable in VR.");
-			} else {
-				ImGui::Text("Applies a blur effect to the background behind the menu window.");
-			}
-		}
+	Util::Widgets::Checkbox("Auto-hide Feature List", &globals::menu->GetSettings().AutoHideFeatureList);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Automatically hides the left feature list panel. Move cursor to the left edge to show it.");
+	}
 
-		ImGui::EndTabItem();
+	if (Util::Widgets::Checkbox("Require Shift to Dock", &globals::menu->GetSettings().RequireShiftToDock)) {
+		ImGui::GetIO().ConfigDockingWithShift = globals::menu->GetSettings().RequireShiftToDock;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("When enabled, you must hold Shift while dragging to dock/snap windows. Prevents accidental docking.");
+	}
+
+	Util::Widgets::SliderFloat("Tooltip Hover Delay", &themeSettings.TooltipHoverDelay, 0.0f, 2.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Time in seconds to wait before a tooltip appears when hovering over an item.");
+	}
+
+	// Skip confirmation when clearing shader cache (UI behavior, not a shader setting).
+	auto& menuSettings = globals::menu->GetSettings();
+	bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;
+	if (Util::Widgets::Checkbox("Skip Clear Cache Confirmation", &skipConfirmation)) {
+		menuSettings.SkipClearCacheConfirmation = skipConfirmation;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("When checked, the shader cache will be cleared immediately without asking for confirmation.");
+	}
+
+	bool smartClearDefault = menuSettings.SmartClearShaderCacheDefault;
+	if (Util::Widgets::Checkbox("Smart Clear by Default", &smartClearDefault)) {
+		menuSettings.SmartClearShaderCacheDefault = smartClearDefault;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextWrapped(
+			"When checked, a normal click clears only shaders drawing the current scene; Shift-click performs "
+			"a full clear. When unchecked, those roles are reversed. Enable this for controller-only VR use.");
+	}
+
+	SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);
+
+	ImGui::BeginDisabled(globals::game::isVR);
+	if (Util::Widgets::Checkbox("Background Blur", &themeSettings.BackgroundBlurEnabled)) {
+		BackgroundBlur::SetEnabled(themeSettings.BackgroundBlurEnabled);
+	}
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		if (globals::game::isVR) {
+			ImGui::Text("Background Blur is unavailable in VR.");
+		} else {
+			ImGui::Text("Applies a blur effect to the background behind the menu window.");
+		}
 	}
 }
 
 void SettingsTabRenderer::RenderThemesTab()
 {
-	if (BeginTabItemWithFont("Themes", Menu::FontRole::Heading)) {
-		auto& themeSettings = globals::menu->GetSettings().Theme;
+	auto& themeSettings = globals::menu->GetSettings().Theme;
 
-		// Static variables for popup state and new theme creation
-		static Util::ConfirmationPopup deleteThemePopup("Delete Theme", "", "Delete", "Cancel");
-		static bool showCreateThemePopup = false;
-		static char newThemeName[128] = "";
-		static char newThemeDisplayName[128] = "";
-		static char newThemeDescription[256] = "";
-		static bool showValidationError = false;
+	// Static variables for popup state and new theme creation
+	static Util::ConfirmationPopup deleteThemePopup("Delete Theme", "", "Delete", "Cancel");
+	static bool showCreateThemePopup = false;
+	static char newThemeName[128] = "";
+	static char newThemeDisplayName[128] = "";
+	static char newThemeDescription[256] = "";
+	static bool showValidationError = false;
 
-		// Update feedback tracking
-		static bool showUpdateFeedback = false;
-		struct ChangedSetting
-		{
-			std::string path;
-			std::string oldValue;
-			std::string newValue;
-		};
-		static std::vector<ChangedSetting> changedSettings;
-		static bool updateSuccess = false;
+	// Update feedback tracking
+	static bool showUpdateFeedback = false;
+	struct ChangedSetting
+	{
+		std::string path;
+		std::string oldValue;
+		std::string newValue;
+	};
+	static std::vector<ChangedSetting> changedSettings;
+	static bool updateSuccess = false;
 
-		// Theme Preset Selection
-		SeparatorTextWithFont("Theme Preset", Menu::FontRole::Subheading);
+	// Theme Preset Selection
+	SeparatorTextWithFont("Theme Preset", Menu::FontRole::Subheading);
 
-		// Get theme manager
-		auto themeManager = ThemeManager::GetSingleton();
+	// Get theme manager
+	auto themeManager = ThemeManager::GetSingleton();
 
-		// Get available themes (force discovery if not done)
-		if (!themeManager->IsDiscovered()) {
-			themeManager->DiscoverThemes();
+	// Get available themes (force discovery if not done)
+	if (!themeManager->IsDiscovered()) {
+		themeManager->DiscoverThemes();
+	}
+
+	const auto& themes = themeManager->GetThemes();
+
+	// Create dropdown items - using static storage to avoid dangling pointers
+	static std::vector<std::string> displayNames;
+	static std::vector<const char*> items;
+
+	// Clear and rebuild the lists
+	displayNames.clear();
+	items.clear();
+
+	// Reserve capacity to prevent reallocations that would invalidate pointers
+	displayNames.reserve(themes.size());
+	items.reserve(themes.size());
+
+	for (const auto& theme : themes) {
+		displayNames.push_back(theme.displayName);
+		items.push_back(displayNames.back().c_str());
+	}
+
+	// Find current selection index - default to "Default" if no theme selected
+	int currentItem = 0;  // Default to first theme (Default Dark)
+	std::string currentThemePreset = globals::menu->GetSettings().SelectedThemePreset;
+
+	// If no theme is selected, default to "Default"
+	if (currentThemePreset.empty()) {
+		currentThemePreset = "Default";
+		globals::menu->GetSettings().SelectedThemePreset = "Default";
+	}
+
+	for (size_t i = 0; i < themes.size(); ++i) {
+		if (themes[i].name == currentThemePreset) {
+			currentItem = static_cast<int>(i);
+			break;
 		}
+	}
 
-		const auto& themes = themeManager->GetThemes();
-
-		// Create dropdown items - using static storage to avoid dangling pointers
-		static std::vector<std::string> displayNames;
-		static std::vector<const char*> items;
-
-		// Clear and rebuild the lists
-		displayNames.clear();
-		items.clear();
-
-		// Reserve capacity to prevent reallocations that would invalidate pointers
-		displayNames.reserve(themes.size());
-		items.reserve(themes.size());
-
-		for (const auto& theme : themes) {
-			displayNames.push_back(theme.displayName);
-			items.push_back(displayNames.back().c_str());
+	// Theme preset dropdown
+	if (ComboWithFont("##ThemePreset", &currentItem, items.data(), static_cast<int>(items.size()), Menu::FontRole::Body)) {
+		std::string selectedTheme = themes[currentItem].name;
+		if (selectedTheme != currentThemePreset && globals::menu->LoadThemePreset(selectedTheme)) {
+			// Theme loaded successfully, update UI
+			currentThemePreset = selectedTheme;
+			showUpdateFeedback = false;
 		}
+	}
 
-		// Find current selection index - default to "Default" if no theme selected
-		int currentItem = 0;  // Default to first theme (Default Dark)
-		std::string currentThemePreset = globals::menu->GetSettings().SelectedThemePreset;
-
-		// If no theme is selected, default to "Default"
-		if (currentThemePreset.empty()) {
+	if (ImGui::Button("Refresh")) {
+		themeManager->RefreshThemes();
+		// Ensure a valid theme is still selected
+		const auto* themeInfo = themeManager->GetThemeInfo(currentThemePreset);
+		if (!themeInfo) {
 			currentThemePreset = "Default";
 			globals::menu->GetSettings().SelectedThemePreset = "Default";
 		}
@@ -597,676 +611,635 @@ void SettingsTabRenderer::RenderThemesTab()
 				break;
 			}
 		}
+	}
 
-		// Theme preset dropdown
-		if (ComboWithFont("##ThemePreset", &currentItem, items.data(), static_cast<int>(items.size()), Menu::FontRole::Body)) {
-			std::string selectedTheme = themes[currentItem].name;
-			if (selectedTheme != currentThemePreset && globals::menu->LoadThemePreset(selectedTheme)) {
-				// Theme loaded successfully, update UI
-				currentThemePreset = selectedTheme;
-				showUpdateFeedback = false;
-			}
-		}
+	ImGui::SameLine();
+	if (ImGui::Button("Open Themes Folder")) {
+		std::filesystem::path themesPath = Util::PathHelpers::GetThemesRealPath();
+		ShellExecuteA(NULL, "open", themesPath.string().c_str(), NULL, NULL, SW_SHOWNORMAL);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Opens the Themes folder where you can add custom theme files.");
+	}
 
-		if (ImGui::Button("Refresh")) {
-			themeManager->RefreshThemes();
-			// Ensure a valid theme is still selected
-			const auto* themeInfo = themeManager->GetThemeInfo(currentThemePreset);
-			if (!themeInfo) {
-				currentThemePreset = "Default";
-				globals::menu->GetSettings().SelectedThemePreset = "Default";
-			}
+	ImGui::Spacing();
+	ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.InfoColor);
+	ImGui::TextWrapped("If you changed the theme above, save your selection using the global \"Save Settings\" button.");
+	ImGui::PopStyleColor();
 
-			for (size_t i = 0; i < themes.size(); ++i) {
-				if (themes[i].name == currentThemePreset) {
-					currentItem = static_cast<int>(i);
-					break;
-				}
-			}
-		}
-
-		ImGui::SameLine();
-		if (ImGui::Button("Open Themes Folder")) {
-			std::filesystem::path themesPath = Util::PathHelpers::GetThemesRealPath();
-			ShellExecuteA(NULL, "open", themesPath.string().c_str(), NULL, NULL, SW_SHOWNORMAL);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Opens the Themes folder where you can add custom theme files.");
-		}
-
+	// Selected theme section: name + description
+	ImGui::Spacing();
+	ImGui::Separator();
+	if (currentItem >= 0 && currentItem < static_cast<int>(themes.size())) {
 		ImGui::Spacing();
-		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.InfoColor);
-		ImGui::TextWrapped("If you changed the theme above, save your selection using the global \"Save Settings\" button.");
-		ImGui::PopStyleColor();
-
-		// Selected theme section: name + description
-		ImGui::Spacing();
-		ImGui::Separator();
-		if (currentItem >= 0 && currentItem < static_cast<int>(themes.size())) {
-			ImGui::Spacing();
-			const auto& selectedTheme = themes[currentItem];
-			ImGui::Text("Selected Theme: ");
-			ImGui::SameLine(0, 0);
-			ImGui::TextColored(themeSettings.StatusPalette.InfoColor, "%s", selectedTheme.displayName.c_str());
-			if (!selectedTheme.description.empty()) {
-				ImGui::TextWrapped("%s", selectedTheme.description.c_str());
-			}
+		const auto& selectedTheme = themes[currentItem];
+		ImGui::Text("Selected Theme: ");
+		ImGui::SameLine(0, 0);
+		ImGui::TextColored(themeSettings.StatusPalette.InfoColor, "%s", selectedTheme.displayName.c_str());
+		if (!selectedTheme.description.empty()) {
+			ImGui::TextWrapped("%s", selectedTheme.description.c_str());
 		}
-		ImGui::Spacing();
+	}
+	ImGui::Spacing();
 
-		const bool isPreset = IsPresetThemeSelected();
-		const auto* currentThemeInfo = themeManager->GetThemeInfo(currentThemePreset);
+	const bool isPreset = IsPresetThemeSelected();
+	const auto* currentThemeInfo = themeManager->GetThemeInfo(currentThemePreset);
 
-		if (!isPreset) {
-			if (Util::ButtonWithFlash("Save")) {
-				if (currentThemeInfo) {
-					// Get current settings
-					json currentThemeJson;
-					globals::menu->SaveTheme(currentThemeJson);
+	if (!isPreset) {
+		if (Util::ButtonWithFlash("Save")) {
+			if (currentThemeInfo) {
+				// Get current settings
+				json currentThemeJson;
+				globals::menu->SaveTheme(currentThemeJson);
 
-					// Get saved theme settings for comparison
-					json savedThemeJson = currentThemeInfo->themeData["Theme"];
+				// Get saved theme settings for comparison
+				json savedThemeJson = currentThemeInfo->themeData["Theme"];
 
-					// Compare and collect changed settings (with old/new values)
-					changedSettings.clear();
-					std::function<void(const std::string&, const json&, const json&)> diffWalker;
-					diffWalker = [&](const std::string& path, const json& oldVal, const json& newVal) {
-						// Handle objects by recursing through union of keys
-						if (oldVal.is_object() && newVal.is_object()) {
-							std::set<std::string> keys;
-							for (auto& [k, _] : oldVal.items()) keys.insert(k);
-							for (auto& [k, _] : newVal.items()) keys.insert(k);
-							for (const auto& k : keys) {
-								auto nextPath = path.empty() ? k : path + "." + k;
-								const json& oldChild = oldVal.contains(k) ? oldVal[k] : json();
-								const json& newChild = newVal.contains(k) ? newVal[k] : json();
-								diffWalker(nextPath, oldChild, newChild);
-							}
-							return;
+				// Compare and collect changed settings (with old/new values)
+				changedSettings.clear();
+				std::function<void(const std::string&, const json&, const json&)> diffWalker;
+				diffWalker = [&](const std::string& path, const json& oldVal, const json& newVal) {
+					// Handle objects by recursing through union of keys
+					if (oldVal.is_object() && newVal.is_object()) {
+						std::set<std::string> keys;
+						for (auto& [k, _] : oldVal.items()) keys.insert(k);
+						for (auto& [k, _] : newVal.items()) keys.insert(k);
+						for (const auto& k : keys) {
+							auto nextPath = path.empty() ? k : path + "." + k;
+							const json& oldChild = oldVal.contains(k) ? oldVal[k] : json();
+							const json& newChild = newVal.contains(k) ? newVal[k] : json();
+							diffWalker(nextPath, oldChild, newChild);
 						}
-
-						// For arrays or primitives, record if different
-						if (oldVal != newVal) {
-							changedSettings.push_back({ path.empty() ? "<root>" : path,
-								oldVal.is_null() ? "null" : oldVal.dump(),
-								newVal.is_null() ? "null" : newVal.dump() });
-						}
-					};
-
-					diffWalker("", savedThemeJson, currentThemeJson["Theme"]);
-
-					logger::info("Attempting to update theme: '{}'", currentThemePreset);
-
-					// Overwrite the current theme with updated settings
-					if (themeManager->SaveTheme(currentThemePreset, currentThemeJson["Theme"],
-							currentThemeInfo->displayName, currentThemeInfo->description)) {
-						logger::info("Theme '{}' updated successfully", currentThemePreset);
-						updateSuccess = true;
-						showUpdateFeedback = true;
-					} else {
-						logger::error("Failed to update theme: '{}'", currentThemePreset);
-						updateSuccess = false;
-						showUpdateFeedback = true;
-						changedSettings.clear();
+						return;
 					}
+
+					// For arrays or primitives, record if different
+					if (oldVal != newVal) {
+						changedSettings.push_back({ path.empty() ? "<root>" : path,
+							oldVal.is_null() ? "null" : oldVal.dump(),
+							newVal.is_null() ? "null" : newVal.dump() });
+					}
+				};
+
+				diffWalker("", savedThemeJson, currentThemeJson["Theme"]);
+
+				logger::info("Attempting to update theme: '{}'", currentThemePreset);
+
+				// Overwrite the current theme with updated settings
+				if (themeManager->SaveTheme(currentThemePreset, currentThemeJson["Theme"],
+						currentThemeInfo->displayName, currentThemeInfo->description)) {
+					logger::info("Theme '{}' updated successfully", currentThemePreset);
+					updateSuccess = true;
+					showUpdateFeedback = true;
 				} else {
-					logger::warn("Cannot update theme '{}' - theme info not found", currentThemePreset);
+					logger::error("Failed to update theme: '{}'", currentThemePreset);
 					updateSuccess = false;
 					showUpdateFeedback = true;
 					changedSettings.clear();
 				}
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Updates the currently selected theme (%s) with your current settings", currentThemePreset.c_str());
-			}
-
-			ImGui::SameLine();
-		}
-
-		if (Util::ButtonWithFlash("Save As New Theme")) {
-			showCreateThemePopup = true;
-			memset(newThemeName, 0, sizeof(newThemeName));
-			memset(newThemeDisplayName, 0, sizeof(newThemeDisplayName));
-			memset(newThemeDescription, 0, sizeof(newThemeDescription));
-			showValidationError = false;
-		}
-
-		if (!isPreset && currentThemeInfo && !currentThemeInfo->filePath.empty()) {
-			ImGui::SameLine();
-			if (Util::ErrorButtonWithFlash("Delete")) {
-				deleteThemePopup.message =
-					"Are you sure you want to delete the theme '" +
-					(currentThemeInfo->displayName.empty() ? currentThemePreset : currentThemeInfo->displayName) +
-					"'?\n\nThis will permanently remove the theme file. This cannot be undone.";
-				deleteThemePopup.Request();
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Delete the theme file for '%s'. This cannot be undone.",
-					(currentThemeInfo->displayName.empty() ? currentThemePreset : currentThemeInfo->displayName).c_str());
-			}
-		}
-
-		// Display update feedback below the buttons
-		if (showUpdateFeedback) {
-			ImGui::Spacing();
-			ImGui::Separator();
-
-			if (updateSuccess) {
-				if (changedSettings.empty()) {
-					ImGui::TextColored(themeSettings.StatusPalette.SuccessColor, "Theme updated successfully - no changes detected");
-				} else {
-					ImGui::TextColored(themeSettings.StatusPalette.SuccessColor, "Theme updated successfully! Changed settings:");
-					ImGui::Indent();
-					for (const auto& change : changedSettings) {
-						ImGui::BulletText("%s: %s -> %s", change.path.c_str(), change.oldValue.c_str(), change.newValue.c_str());
-					}
-					ImGui::Unindent();
-				}
 			} else {
-				ImGui::TextColored(themeSettings.StatusPalette.Error, "Failed to update theme");
+				logger::warn("Cannot update theme '{}' - theme info not found", currentThemePreset);
+				updateSuccess = false;
+				showUpdateFeedback = true;
+				changedSettings.clear();
 			}
-
-			ImGui::Separator();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Updates the currently selected theme (%s) with your current settings", currentThemePreset.c_str());
 		}
 
-		// Create Theme Popup
-		if (showCreateThemePopup) {
-			ImGui::OpenPopup("Create New Theme");
+		ImGui::SameLine();
+	}
+
+	if (Util::ButtonWithFlash("Save As New Theme")) {
+		showCreateThemePopup = true;
+		memset(newThemeName, 0, sizeof(newThemeName));
+		memset(newThemeDisplayName, 0, sizeof(newThemeDisplayName));
+		memset(newThemeDescription, 0, sizeof(newThemeDescription));
+		showValidationError = false;
+	}
+
+	if (!isPreset && currentThemeInfo && !currentThemeInfo->filePath.empty()) {
+		ImGui::SameLine();
+		if (Util::ErrorButtonWithFlash("Delete")) {
+			deleteThemePopup.message =
+				"Are you sure you want to delete the theme '" +
+				(currentThemeInfo->displayName.empty() ? currentThemePreset : currentThemeInfo->displayName) +
+				"'?\n\nThis will permanently remove the theme file. This cannot be undone.";
+			deleteThemePopup.Request();
 		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Delete the theme file for '%s'. This cannot be undone.",
+				(currentThemeInfo->displayName.empty() ? currentThemePreset : currentThemeInfo->displayName).c_str());
+		}
+	}
 
-		// Popup modal for creating new theme
-		if (auto popup = Util::CenteredPopupModal("Create New Theme", &showCreateThemePopup)) {
-			ImGui::Text("Create a new theme with your current settings:");
-			ImGui::Separator();
+	// Display update feedback below the buttons
+	if (showUpdateFeedback) {
+		ImGui::Spacing();
+		ImGui::Separator();
 
-			auto safeNewThemeName = Util::FileHelpers::SanitizeFileName(newThemeName);
-			bool isThemeNameEmpty = safeNewThemeName.empty();
-			bool isDuplicateName = false;
-			bool isDuplicateDisplayName = false;
-
-			for (const auto& t : themes) {
-				if (Util::IEquals(t.name, safeNewThemeName))
-					isDuplicateName = true;
-				if (strlen(newThemeDisplayName) > 0 && Util::IEquals(t.displayName, newThemeDisplayName))
-					isDuplicateDisplayName = true;
-				if (isDuplicateName && isDuplicateDisplayName)
-					break;
-			}
-			bool isThemeNameError = isThemeNameEmpty || isDuplicateName;
-
-			// Highlight the input field if invalid and validation error is shown
-			if (isThemeNameError && showValidationError) {
-				ImGui::PushStyleColor(ImGuiCol_Border, themeSettings.StatusPalette.Error);
-				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
-			}
-
-			ImGui::InputText("Theme Name", newThemeName, sizeof(newThemeName));
-
-			if (isThemeNameError && showValidationError) {
-				ImGui::PopStyleVar();
-				ImGui::PopStyleColor();
-			}
-
-			// Show inline error message
-			if (showValidationError) {
-				if (isThemeNameEmpty) {
-					ImGui::TextColored(themeSettings.StatusPalette.Error, "Theme name is required");
-				} else if (isDuplicateName) {
-					ImGui::TextColored(themeSettings.StatusPalette.Error, "A theme with this name already exists");
+		if (updateSuccess) {
+			if (changedSettings.empty()) {
+				ImGui::TextColored(themeSettings.StatusPalette.SuccessColor, "Theme updated successfully - no changes detected");
+			} else {
+				ImGui::TextColored(themeSettings.StatusPalette.SuccessColor, "Theme updated successfully! Changed settings:");
+				ImGui::Indent();
+				for (const auto& change : changedSettings) {
+					ImGui::BulletText("%s: %s -> %s", change.path.c_str(), change.oldValue.c_str(), change.newValue.c_str());
 				}
+				ImGui::Unindent();
 			}
+		} else {
+			ImGui::TextColored(themeSettings.StatusPalette.Error, "Failed to update theme");
+		}
 
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("File name for the theme (without .json extension)");
+		ImGui::Separator();
+	}
+
+	// Create Theme Popup
+	if (showCreateThemePopup) {
+		ImGui::OpenPopup("Create New Theme");
+	}
+
+	// Popup modal for creating new theme
+	if (auto popup = Util::CenteredPopupModal("Create New Theme", &showCreateThemePopup)) {
+		ImGui::Text("Create a new theme with your current settings:");
+		ImGui::Separator();
+
+		auto safeNewThemeName = Util::FileHelpers::SanitizeFileName(newThemeName);
+		bool isThemeNameEmpty = safeNewThemeName.empty();
+		bool isDuplicateName = false;
+		bool isDuplicateDisplayName = false;
+
+		for (const auto& t : themes) {
+			if (Util::IEquals(t.name, safeNewThemeName))
+				isDuplicateName = true;
+			if (strlen(newThemeDisplayName) > 0 && Util::IEquals(t.displayName, newThemeDisplayName))
+				isDuplicateDisplayName = true;
+			if (isDuplicateName && isDuplicateDisplayName)
+				break;
+		}
+		bool isThemeNameError = isThemeNameEmpty || isDuplicateName;
+
+		// Highlight the input field if invalid and validation error is shown
+		if (isThemeNameError && showValidationError) {
+			ImGui::PushStyleColor(ImGuiCol_Border, themeSettings.StatusPalette.Error);
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+		}
+
+		ImGui::InputText("Theme Name", newThemeName, sizeof(newThemeName));
+
+		if (isThemeNameError && showValidationError) {
+			ImGui::PopStyleVar();
+			ImGui::PopStyleColor();
+		}
+
+		// Show inline error message
+		if (showValidationError) {
+			if (isThemeNameEmpty) {
+				ImGui::TextColored(themeSettings.StatusPalette.Error, "Theme name is required");
+			} else if (isDuplicateName) {
+				ImGui::TextColored(themeSettings.StatusPalette.Error, "A theme with this name already exists");
 			}
+		}
 
-			// Highlight the input field if invalid and validation error is shown
-			if (isDuplicateDisplayName && showValidationError) {
-				ImGui::PushStyleColor(ImGuiCol_Border, themeSettings.StatusPalette.Error);
-				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
-			}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("File name for the theme (without .json extension)");
+		}
 
-			ImGui::InputText("Display Name", newThemeDisplayName, sizeof(newThemeDisplayName));
+		// Highlight the input field if invalid and validation error is shown
+		if (isDuplicateDisplayName && showValidationError) {
+			ImGui::PushStyleColor(ImGuiCol_Border, themeSettings.StatusPalette.Error);
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+		}
 
-			if (isDuplicateDisplayName && showValidationError) {
-				ImGui::PopStyleVar();
-				ImGui::PopStyleColor();
-				ImGui::TextColored(themeSettings.StatusPalette.Error, "A theme with this display name already exists");
-			}
+		ImGui::InputText("Display Name", newThemeDisplayName, sizeof(newThemeDisplayName));
 
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Human-readable name shown in the dropdown");
-			}
+		if (isDuplicateDisplayName && showValidationError) {
+			ImGui::PopStyleVar();
+			ImGui::PopStyleColor();
+			ImGui::TextColored(themeSettings.StatusPalette.Error, "A theme with this display name already exists");
+		}
 
-			{
-				float scale = Util::GetUIScale();
-				ImGui::InputTextMultiline("Description", newThemeDescription, sizeof(newThemeDescription), ImVec2(400 * scale, 80 * scale));
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Optional description for the theme");
-			}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Human-readable name shown in the dropdown");
+		}
 
-			ImGui::Separator();
+		{
+			float scale = Util::GetUIScale();
+			ImGui::InputTextMultiline("Description", newThemeDescription, sizeof(newThemeDescription), ImVec2(400 * scale, 80 * scale));
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Optional description for the theme");
+		}
 
-			// Buttons
-			if (Util::ButtonWithFlash("Create Theme")) {
-				if (!isThemeNameEmpty && !isDuplicateName && !isDuplicateDisplayName) {
-					// Valid theme name, reset error state and proceed
+		ImGui::Separator();
+
+		// Buttons
+		if (Util::ButtonWithFlash("Create Theme")) {
+			if (!isThemeNameEmpty && !isDuplicateName && !isDuplicateDisplayName) {
+				// Valid theme name, reset error state and proceed
+				showValidationError = false;
+
+				// Use the existing SaveTheme method to serialize the theme settings
+				json currentThemeJson;
+				globals::menu->SaveTheme(currentThemeJson);
+
+				std::string displayName = strlen(newThemeDisplayName) > 0 ? std::string(newThemeDisplayName) : std::string(newThemeName);
+				std::string description = strlen(newThemeDescription) > 0 ? std::string(newThemeDescription) : "";
+
+				logger::info("Attempting to save new theme: '{}' with display name: '{}'", safeNewThemeName, displayName);
+
+				if (themeManager->SaveTheme(std::string(newThemeName), currentThemeJson["Theme"], displayName, description)) {
+					logger::info("Theme saved successfully. Loading theme preset: '{}'", safeNewThemeName);
+					// Theme created successfully, load it and exit create mode
+					globals::menu->LoadThemePreset(safeNewThemeName);
 					showValidationError = false;
-
-					// Use the existing SaveTheme method to serialize the theme settings
-					json currentThemeJson;
-					globals::menu->SaveTheme(currentThemeJson);
-
-					std::string displayName = strlen(newThemeDisplayName) > 0 ? std::string(newThemeDisplayName) : std::string(newThemeName);
-					std::string description = strlen(newThemeDescription) > 0 ? std::string(newThemeDescription) : "";
-
-					logger::info("Attempting to save new theme: '{}' with display name: '{}'", safeNewThemeName, displayName);
-
-					if (themeManager->SaveTheme(std::string(newThemeName), currentThemeJson["Theme"], displayName, description)) {
-						logger::info("Theme saved successfully. Loading theme preset: '{}'", safeNewThemeName);
-						// Theme created successfully, load it and exit create mode
-						globals::menu->LoadThemePreset(safeNewThemeName);
-						showValidationError = false;
-						showCreateThemePopup = false;
-						ImGui::CloseCurrentPopup();
-						logger::info("Theme creation complete. Total themes: {}", themeManager->GetThemes().size());
-					} else {
-						logger::error("Failed to save theme: '{}'", newThemeName);
-					}
+					showCreateThemePopup = false;
+					ImGui::CloseCurrentPopup();
+					logger::info("Theme creation complete. Total themes: {}", themeManager->GetThemes().size());
 				} else {
-					// Empty theme name, show validation error
-					showValidationError = true;
+					logger::error("Failed to save theme: '{}'", newThemeName);
 				}
-			}
-
-			ImGui::SameLine();
-			if (ImGui::Button("Cancel")) {
-				showCreateThemePopup = false;
-				ImGui::CloseCurrentPopup();
-			}
-		}
-
-		if (deleteThemePopup.Draw() && currentThemeInfo && !currentThemeInfo->filePath.empty()) {
-			auto result = Util::FileHelpers::SafeDelete(currentThemeInfo->filePath, "Theme '" + currentThemePreset + "'");
-			if (result.success) {
-				themeManager->RefreshThemes();
-				globals::menu->LoadThemePreset("Default");
-				currentThemePreset = "Default";
 			} else {
-				logger::warn("Failed to delete theme '{}': {}", currentThemePreset, result.errorMessage);
+				// Empty theme name, show validation error
+				showValidationError = true;
 			}
 		}
 
-		ImGui::EndTabItem();
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel")) {
+			showCreateThemePopup = false;
+			ImGui::CloseCurrentPopup();
+		}
+	}
+
+	if (deleteThemePopup.Draw() && currentThemeInfo && !currentThemeInfo->filePath.empty()) {
+		auto result = Util::FileHelpers::SafeDelete(currentThemeInfo->filePath, "Theme '" + currentThemePreset + "'");
+		if (result.success) {
+			themeManager->RefreshThemes();
+			globals::menu->LoadThemePreset("Default");
+			currentThemePreset = "Default";
+		} else {
+			logger::warn("Failed to delete theme '{}': {}", currentThemePreset, result.errorMessage);
+		}
 	}
 }
 
 void SettingsTabRenderer::RenderFontsTab()
 {
-	if (BeginTabItemWithFont("Fonts", Menu::FontRole::Heading)) {
-		auto* menuInstance = globals::menu;
-		auto& themeSettings = menuInstance->GetSettings().Theme;
-		RenderSaveInfoText();
+	auto* menuInstance = globals::menu;
+	auto& themeSettings = menuInstance->GetSettings().Theme;
+	RenderSaveInfoText();
 
-		SeparatorTextWithFont("Font", Menu::FontRole::Subheading);
+	SeparatorTextWithFont("Font", Menu::FontRole::Subheading);
 
-		bool& useAutoFont = menuInstance->GetSettings().UseResolutionFont;
-		if (ImGui::Checkbox("Use resolution-based font size", &useAutoFont)) {
-			if (!useAutoFont) {
-				// Seed the fixed-size slider with the current effective size so it doesn't jump
-				float effective = ThemeManager::ResolveFontSize(*menuInstance);
-				themeSettings.FontSize = std::clamp(effective, ThemeManager::Constants::MIN_FONT_SIZE, ThemeManager::Constants::MAX_FONT_SIZE);
+	bool& useAutoFont = menuInstance->GetSettings().UseResolutionFont;
+	if (Util::Widgets::Checkbox("Use resolution-based font size", &useAutoFont)) {
+		if (!useAutoFont) {
+			// Seed the fixed-size slider with the current effective size so it doesn't jump
+			float effective = ThemeManager::ResolveFontSize(*menuInstance);
+			themeSettings.FontSize = std::clamp(effective, ThemeManager::Constants::MIN_FONT_SIZE, ThemeManager::Constants::MAX_FONT_SIZE);
+		}
+		menuInstance->pendingFontReload = true;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("When enabled, the UI font size scales with your screen resolution. Disable to set a fixed size.");
+	}
+
+	ImGui::BeginDisabled(useAutoFont);
+	if (Util::Widgets::SliderFloat("Base Font Size", &themeSettings.FontSize, ThemeManager::Constants::MIN_FONT_SIZE, ThemeManager::Constants::MAX_FONT_SIZE, "%.0f")) {
+		menuInstance->pendingFontReload = true;
+	}
+	ImGui::EndDisabled();
+
+	float effectiveNow = ThemeManager::ResolveFontSize(*menuInstance);
+	ImGui::Text("Effective size: %.0f px", std::round(effectiveNow));
+
+	static Util::Fonts::Catalog fontCatalog;
+	static bool catalogInitialized = false;
+	auto refreshFontCatalog = [&]() {
+		fontCatalog = Util::Fonts::DiscoverFontCatalog();
+	};
+
+	if (!catalogInitialized) {
+		refreshFontCatalog();
+		catalogInitialized = true;
+	}
+
+	ImGui::Spacing();
+	SeparatorTextWithFont("Font Roles", Menu::FontRole::Subheading);
+
+	if (fontCatalog.families.empty()) {
+		Util::Text::Warning("No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/");
+	}
+
+	for (size_t roleIndex = 0; roleIndex < Menu::FontRoleDescriptors.size(); ++roleIndex) {
+		auto role = static_cast<Menu::FontRole>(roleIndex);
+		auto descriptor = Menu::FontRoleDescriptors[roleIndex];
+		auto& roleSettings = themeSettings.FontRoles[roleIndex];
+
+		ImGui::PushID(static_cast<int>(roleIndex));
+		{
+			FontRoleGuard headingFont(Menu::FontRole::Subheading);
+			ImGui::TextUnformatted(descriptor.displayName.data());
+		}
+
+		int familyIndex = 0;
+		if (!fontCatalog.families.empty()) {
+			for (size_t i = 0; i < fontCatalog.families.size(); ++i) {
+				if (Util::IEquals(fontCatalog.families[i].name, roleSettings.Family)) {
+					familyIndex = static_cast<int>(i);
+					break;
+				}
 			}
-			menuInstance->pendingFontReload = true;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("When enabled, the UI font size scales with your screen resolution. Disable to set a fixed size.");
-		}
-
-		ImGui::BeginDisabled(useAutoFont);
-		if (ImGui::SliderFloat("Base Font Size", &themeSettings.FontSize, ThemeManager::Constants::MIN_FONT_SIZE, ThemeManager::Constants::MAX_FONT_SIZE, "%.0f")) {
-			menuInstance->pendingFontReload = true;
-		}
-		ImGui::EndDisabled();
-
-		float effectiveNow = ThemeManager::ResolveFontSize(*menuInstance);
-		ImGui::Text("Effective size: %.0f px", std::round(effectiveNow));
-
-		static Util::Fonts::Catalog fontCatalog;
-		static bool catalogInitialized = false;
-		auto refreshFontCatalog = [&]() {
-			fontCatalog = Util::Fonts::DiscoverFontCatalog();
-		};
-
-		if (!catalogInitialized) {
-			refreshFontCatalog();
-			catalogInitialized = true;
-		}
-
-		ImGui::Spacing();
-		SeparatorTextWithFont("Font Roles", Menu::FontRole::Subheading);
-
-		if (fontCatalog.families.empty()) {
-			Util::Text::Warning("No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/");
-		}
-
-		for (size_t roleIndex = 0; roleIndex < Menu::FontRoleDescriptors.size(); ++roleIndex) {
-			auto role = static_cast<Menu::FontRole>(roleIndex);
-			auto descriptor = Menu::FontRoleDescriptors[roleIndex];
-			auto& roleSettings = themeSettings.FontRoles[roleIndex];
-
-			ImGui::PushID(static_cast<int>(roleIndex));
-			{
-				FontRoleGuard headingFont(Menu::FontRole::Subheading);
-				ImGui::TextUnformatted(descriptor.displayName.data());
+			if (familyIndex >= static_cast<int>(fontCatalog.families.size())) {
+				familyIndex = 0;
 			}
+		}
 
-			int familyIndex = 0;
-			if (!fontCatalog.families.empty()) {
-				for (size_t i = 0; i < fontCatalog.families.size(); ++i) {
-					if (Util::IEquals(fontCatalog.families[i].name, roleSettings.Family)) {
-						familyIndex = static_cast<int>(i);
-						break;
+		const char* familyPreview = fontCatalog.families.empty() ? "No families" : fontCatalog.families[familyIndex].displayName.c_str();
+		std::string familyLabel = std::format("{} Family##{}", descriptor.displayName, roleIndex);
+		{
+			FontRoleGuard familyComboFont(Menu::FontRole::Body);
+			if (ImGui::BeginCombo(familyLabel.c_str(), familyPreview)) {
+				if (fontCatalog.families.empty()) {
+					Util::Text::Disabled("No font families available");
+				} else {
+					for (int i = 0; i < static_cast<int>(fontCatalog.families.size()); ++i) {
+						bool isSelected = (i == familyIndex);
+						if (ImGui::Selectable(fontCatalog.families[i].displayName.c_str(), isSelected)) {
+							familyIndex = i;
+							if (!isSelected) {
+								const auto& newFamily = fontCatalog.families[i];
+								roleSettings.Family = newFamily.name;
+								if (!newFamily.styles.empty()) {
+									const auto& firstStyle = newFamily.styles.front();
+									roleSettings.Style = firstStyle.style;
+									roleSettings.File = firstStyle.file;
+								} else {
+									roleSettings.Style.clear();
+									roleSettings.File.clear();
+								}
+								if (role == Menu::FontRole::Body) {
+									themeSettings.FontName = roleSettings.File;
+								}
+								menuInstance->pendingFontReload = true;
+							}
+						}
+						if (isSelected) {
+							ImGui::SetItemDefaultFocus();
+						}
 					}
 				}
-				if (familyIndex >= static_cast<int>(fontCatalog.families.size())) {
-					familyIndex = 0;
+				ImGui::EndCombo();
+			}
+		}
+
+		const Util::Fonts::FamilyInfo* selectedFamily = (fontCatalog.families.empty()) ? nullptr : &fontCatalog.families[familyIndex];
+		if (selectedFamily && selectedFamily->styles.empty()) {
+			Util::Text::Warning("No style variants found for this family.");
+		} else if (selectedFamily) {
+			int styleIndex = 0;
+			for (size_t s = 0; s < selectedFamily->styles.size(); ++s) {
+				if (Util::IEquals(selectedFamily->styles[s].style, roleSettings.Style)) {
+					styleIndex = static_cast<int>(s);
+					break;
 				}
 			}
-
-			const char* familyPreview = fontCatalog.families.empty() ? "No families" : fontCatalog.families[familyIndex].displayName.c_str();
-			std::string familyLabel = std::format("{} Family##{}", descriptor.displayName, roleIndex);
+			if (styleIndex >= static_cast<int>(selectedFamily->styles.size())) {
+				styleIndex = 0;
+			}
+			const char* stylePreview = selectedFamily->styles.empty() ? "No styles" : selectedFamily->styles[styleIndex].displayName.c_str();
+			std::string styleLabel = std::format("{} Style##{}", descriptor.displayName, roleIndex);
 			{
-				FontRoleGuard familyComboFont(Menu::FontRole::Body);
-				if (ImGui::BeginCombo(familyLabel.c_str(), familyPreview)) {
-					if (fontCatalog.families.empty()) {
-						Util::Text::Disabled("No font families available");
-					} else {
-						for (int i = 0; i < static_cast<int>(fontCatalog.families.size()); ++i) {
-							bool isSelected = (i == familyIndex);
-							if (ImGui::Selectable(fontCatalog.families[i].displayName.c_str(), isSelected)) {
-								familyIndex = i;
-								if (!isSelected) {
-									const auto& newFamily = fontCatalog.families[i];
-									roleSettings.Family = newFamily.name;
-									if (!newFamily.styles.empty()) {
-										const auto& firstStyle = newFamily.styles.front();
-										roleSettings.Style = firstStyle.style;
-										roleSettings.File = firstStyle.file;
-									} else {
-										roleSettings.Style.clear();
-										roleSettings.File.clear();
-									}
-									if (role == Menu::FontRole::Body) {
-										themeSettings.FontName = roleSettings.File;
-									}
-									menuInstance->pendingFontReload = true;
+				FontRoleGuard styleComboFont(Menu::FontRole::Body);
+				if (ImGui::BeginCombo(styleLabel.c_str(), stylePreview)) {
+					for (int s = 0; s < static_cast<int>(selectedFamily->styles.size()); ++s) {
+						bool isSelected = (s == styleIndex);
+						if (ImGui::Selectable(selectedFamily->styles[s].displayName.c_str(), isSelected)) {
+							if (!isSelected) {
+								const auto& chosen = selectedFamily->styles[s];
+								roleSettings.Style = chosen.style;
+								roleSettings.File = chosen.file;
+								roleSettings.Family = selectedFamily->name;
+								if (role == Menu::FontRole::Body) {
+									themeSettings.FontName = roleSettings.File;
 								}
+								menuInstance->pendingFontReload = true;
 							}
-							if (isSelected) {
-								ImGui::SetItemDefaultFocus();
-							}
+						}
+						if (isSelected) {
+							ImGui::SetItemDefaultFocus();
 						}
 					}
 					ImGui::EndCombo();
 				}
 			}
+		}
 
-			const Util::Fonts::FamilyInfo* selectedFamily = (fontCatalog.families.empty()) ? nullptr : &fontCatalog.families[familyIndex];
-			if (selectedFamily && selectedFamily->styles.empty()) {
-				Util::Text::Warning("No style variants found for this family.");
-			} else if (selectedFamily) {
-				int styleIndex = 0;
-				for (size_t s = 0; s < selectedFamily->styles.size(); ++s) {
-					if (Util::IEquals(selectedFamily->styles[s].style, roleSettings.Style)) {
-						styleIndex = static_cast<int>(s);
-						break;
-					}
-				}
-				if (styleIndex >= static_cast<int>(selectedFamily->styles.size())) {
-					styleIndex = 0;
-				}
-				const char* stylePreview = selectedFamily->styles.empty() ? "No styles" : selectedFamily->styles[styleIndex].displayName.c_str();
-				std::string styleLabel = std::format("{} Style##{}", descriptor.displayName, roleIndex);
-				{
-					FontRoleGuard styleComboFont(Menu::FontRole::Body);
-					if (ImGui::BeginCombo(styleLabel.c_str(), stylePreview)) {
-						for (int s = 0; s < static_cast<int>(selectedFamily->styles.size()); ++s) {
-							bool isSelected = (s == styleIndex);
-							if (ImGui::Selectable(selectedFamily->styles[s].displayName.c_str(), isSelected)) {
-								if (!isSelected) {
-									const auto& chosen = selectedFamily->styles[s];
-									roleSettings.Style = chosen.style;
-									roleSettings.File = chosen.file;
-									roleSettings.Family = selectedFamily->name;
-									if (role == Menu::FontRole::Body) {
-										themeSettings.FontName = roleSettings.File;
-									}
-									menuInstance->pendingFontReload = true;
-								}
-							}
-							if (isSelected) {
-								ImGui::SetItemDefaultFocus();
-							}
-						}
-						ImGui::EndCombo();
-					}
-				}
-			}
+		ImGui::TextDisabled("File: %s", roleSettings.File.c_str());
 
-			ImGui::TextDisabled("File: %s", roleSettings.File.c_str());
+		std::string scaleLabel = std::format("{} Scale##{}", descriptor.displayName, roleIndex);
+		if (Util::Widgets::SliderFloat(scaleLabel.c_str(), &roleSettings.SizeScale, 0.5f, 2.5f, "%.2fx", ImGuiSliderFlags_AlwaysClamp)) {
+			menuInstance->pendingFontReload = true;
+		}
+		ImGui::SameLine();
+		std::string resetLabel = std::format("Reset##Scale{}", roleIndex);
+		if (ImGui::Button(resetLabel.c_str())) {
+			roleSettings.SizeScale = Menu::GetFontRoleDefaultScale(role);
+			menuInstance->pendingFontReload = true;
+		}
 
-			std::string scaleLabel = std::format("{} Scale##{}", descriptor.displayName, roleIndex);
-			if (ImGui::SliderFloat(scaleLabel.c_str(), &roleSettings.SizeScale, 0.5f, 2.5f, "%.2fx", ImGuiSliderFlags_AlwaysClamp)) {
-				menuInstance->pendingFontReload = true;
+		// Add Feature Title Scale slider under Title font role
+		if (role == Menu::FontRole::Title) {
+			Util::Widgets::SliderFloat("Feature Header Scale", &themeSettings.FeatureHeading.FeatureTitleScale, 1.0f, 3.0f, "%.1fx", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("Scale multiplier for feature title text in the Settings tab.");
 			}
 			ImGui::SameLine();
-			std::string resetLabel = std::format("Reset##Scale{}", roleIndex);
-			if (ImGui::Button(resetLabel.c_str())) {
-				roleSettings.SizeScale = Menu::GetFontRoleDefaultScale(role);
-				menuInstance->pendingFontReload = true;
+			if (ImGui::Button("Reset##FeatureHeaderScale")) {
+				themeSettings.FeatureHeading.FeatureTitleScale = ThemeManager::Constants::DEFAULT_FEATURE_TITLE_SCALE;
 			}
-
-			// Add Feature Title Scale slider under Title font role
-			if (role == Menu::FontRole::Title) {
-				ImGui::SliderFloat("Feature Header Scale", &themeSettings.FeatureHeading.FeatureTitleScale, 1.0f, 3.0f, "%.1fx", ImGuiSliderFlags_AlwaysClamp);
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Scale multiplier for feature title text in the Settings tab.");
-				}
-				ImGui::SameLine();
-				if (ImGui::Button("Reset##FeatureHeaderScale")) {
-					themeSettings.FeatureHeading.FeatureTitleScale = ThemeManager::Constants::DEFAULT_FEATURE_TITLE_SCALE;
-				}
-			}
-
-			ImGui::Separator();
-			ImGui::PopID();
 		}
 
-		if (ImGui::Button("Refresh Font Families")) {
-			refreshFontCatalog();
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Rescan the Fonts directory after adding or removing font files.");
-		}
+		ImGui::Separator();
+		ImGui::PopID();
+	}
 
-		ImGui::EndTabItem();
+	if (ImGui::Button("Refresh Font Families")) {
+		refreshFontCatalog();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Rescan the Fonts directory after adding or removing font files.");
 	}
 }
 
 void SettingsTabRenderer::RenderStylingTab()
 {
-	if (BeginTabItemWithFont("Styling", Menu::FontRole::Heading)) {
-		auto& themeSettings = globals::menu->GetSettings().Theme;
-		auto& style = themeSettings.Style;
-		RenderSaveInfoText();
+	auto& themeSettings = globals::menu->GetSettings().Theme;
+	auto& style = themeSettings.Style;
+	RenderSaveInfoText();
 
-		SeparatorTextWithFont("Main", Menu::FontRole::Subheading);
-		if (ImGui::SliderFloat("Global Scale", &themeSettings.GlobalScale, -1.f, 1.f, "%.2f")) {
-			float trueScale = exp2(themeSettings.GlobalScale);
+	SeparatorTextWithFont("Main", Menu::FontRole::Subheading);
+	if (Util::Widgets::SliderFloat("Global Scale", &themeSettings.GlobalScale, -1.f, 1.f, "%.2f")) {
+		float trueScale = exp2(themeSettings.GlobalScale);
 
-			ImGui::GetStyle().FontScaleMain = trueScale;
-		}
-
-		SeparatorTextWithFont("Layout", Menu::FontRole::Subheading);
-
-		ImGui::SliderFloat2("Window Padding", (float*)&style.WindowPadding, 0.0f, 20.0f, "%.0f");
-		ImGui::SliderFloat2("Frame Padding", (float*)&style.FramePadding, 0.0f, 20.0f, "%.0f");
-		ImGui::SliderFloat2("Item Spacing", (float*)&style.ItemSpacing, 0.0f, 20.0f, "%.0f");
-		ImGui::SliderFloat2("Item Inner Spacing", (float*)&style.ItemInnerSpacing, 0.0f, 20.0f, "%.0f");
-		ImGui::SliderFloat("Indent Spacing", &style.IndentSpacing, 0.0f, 30.0f, "%.0f");
-		ImGui::SliderFloat("Scrollbar Size", &style.ScrollbarSize, 1.0f, 20.0f, "%.0f");
-		ImGui::SliderFloat("Grab Min Size", &style.GrabMinSize, 1.0f, 20.0f, "%.0f");
-
-		SeparatorTextWithFont("Scrollbar Opacity", Menu::FontRole::Subheading);
-		ImGui::SliderFloat("Track Opacity", &themeSettings.ScrollbarOpacity.Background, 0.0f, 1.0f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Controls the opacity of the scrollbar track/channel (the background area behind the scrollbar).");
-		ImGui::SliderFloat("Thumb Opacity", &themeSettings.ScrollbarOpacity.Thumb, 0.0f, 1.0f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Controls the opacity of the scrollbar thumb (the draggable part).");
-		ImGui::SliderFloat("Thumb Hovered Opacity", &themeSettings.ScrollbarOpacity.ThumbHovered, 0.0f, 1.0f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Controls the opacity of the scrollbar thumb when hovered.");
-		ImGui::SliderFloat("Thumb Active Opacity", &themeSettings.ScrollbarOpacity.ThumbActive, 0.0f, 1.0f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Controls the opacity of the scrollbar thumb when being dragged.");
-
-		SeparatorTextWithFont("Borders", Menu::FontRole::Subheading);
-		ImGui::SliderFloat("Window Border Size", &style.WindowBorderSize, 0.0f, 5.0f, "%.0f");
-		ImGui::SliderFloat("Child Border Size", &style.ChildBorderSize, 0.0f, 5.0f, "%.0f");
-		ImGui::SliderFloat("Popup Border Size", &style.PopupBorderSize, 0.0f, 5.0f, "%.0f");
-		ImGui::SliderFloat("Frame Border Size", &style.FrameBorderSize, 0.0f, 5.0f, "%.0f");
-		ImGui::SliderFloat("Tab Border Size", &style.TabBorderSize, 0.0f, 5.0f, "%.0f");
-		ImGui::SliderFloat("Tab Bar Border Size", &style.TabBarBorderSize, 0.0f, 5.0f, "%.0f");
-
-		SeparatorTextWithFont("Rounding", Menu::FontRole::Subheading);
-		ImGui::SliderFloat("Window Rounding", &style.WindowRounding, 0.0f, 12.0f, "%.0f");
-		ImGui::SliderFloat("Child Rounding", &style.ChildRounding, 0.0f, 12.0f, "%.0f");
-		ImGui::SliderFloat("Frame Rounding", &style.FrameRounding, 0.0f, 12.0f, "%.0f");
-		ImGui::SliderFloat("Popup Rounding", &style.PopupRounding, 0.0f, 12.0f, "%.0f");
-		ImGui::SliderFloat("Scrollbar Rounding", &style.ScrollbarRounding, 0.0f, 12.0f, "%.0f");
-		ImGui::SliderFloat("Grab Rounding", &style.GrabRounding, 0.0f, 12.0f, "%.0f");
-		ImGui::SliderFloat("Tab Rounding", &style.TabRounding, 0.0f, 12.0f, "%.0f");
-
-		SeparatorTextWithFont("Tables", Menu::FontRole::Subheading);
-		ImGui::SliderFloat2("Cell Padding", (float*)&style.CellPadding, 0.0f, 20.0f, "%.0f");
-		ImGui::SliderAngle("Table Angled Headers Angle", &style.TableAngledHeadersAngle, -50.0f, +50.0f);
-
-		SeparatorTextWithFont("Widgets", Menu::FontRole::Subheading);
-		{
-			FontRoleGuard comboFont(Menu::FontRole::Body);
-			ImGui::Combo("Color Button Position", (int*)&style.ColorButtonPosition, "Left\0Right\0");
-		}
-		ImGui::SliderFloat2("Button Text Align", (float*)&style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Alignment applies when a button is larger than its text content.");
-		ImGui::SliderFloat2("Selectable Text Align", (float*)&style.SelectableTextAlign, 0.0f, 1.0f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Alignment applies when a selectable is larger than its text content.");
-		ImGui::SliderFloat("Separator Text Border Size", &style.SeparatorTextBorderSize, 0.0f, 10.0f, "%.0f");
-		ImGui::SliderFloat2("Separator Text Align", (float*)&style.SeparatorTextAlign, 0.0f, 1.0f, "%.2f");
-		ImGui::SliderFloat2("Separator Text Padding", (float*)&style.SeparatorTextPadding, 0.0f, 40.0f, "%.0f");
-		ImGui::SliderFloat("Log Slider Deadzone", &style.LogSliderDeadzone, 0.0f, 12.0f, "%.0f");
-
-		SeparatorTextWithFont("Docking", Menu::FontRole::Subheading);
-		ImGui::SliderFloat("Docking Splitter Size", &style.DockingSeparatorSize, 0.0f, 12.0f, "%.0f");
-
-		ImGui::EndTabItem();
+		ImGui::GetStyle().FontScaleMain = trueScale;
 	}
+
+	SeparatorTextWithFont("Layout", Menu::FontRole::Subheading);
+
+	Util::Widgets::SliderFloat2("Window Padding", (float*)&style.WindowPadding, 0.0f, 20.0f, "%.0f");
+	Util::Widgets::SliderFloat2("Frame Padding", (float*)&style.FramePadding, 0.0f, 20.0f, "%.0f");
+	Util::Widgets::SliderFloat2("Item Spacing", (float*)&style.ItemSpacing, 0.0f, 20.0f, "%.0f");
+	Util::Widgets::SliderFloat2("Item Inner Spacing", (float*)&style.ItemInnerSpacing, 0.0f, 20.0f, "%.0f");
+	Util::Widgets::SliderFloat("Indent Spacing", &style.IndentSpacing, 0.0f, 30.0f, "%.0f");
+	Util::Widgets::SliderFloat("Scrollbar Size", &style.ScrollbarSize, 1.0f, 20.0f, "%.0f");
+	Util::Widgets::SliderFloat("Grab Min Size", &style.GrabMinSize, 1.0f, 20.0f, "%.0f");
+
+	SeparatorTextWithFont("Scrollbar Opacity", Menu::FontRole::Subheading);
+	Util::Widgets::SliderFloat("Track Opacity", &themeSettings.ScrollbarOpacity.Background, 0.0f, 1.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Controls the opacity of the scrollbar track/channel (the background area behind the scrollbar).");
+	Util::Widgets::SliderFloat("Thumb Opacity", &themeSettings.ScrollbarOpacity.Thumb, 0.0f, 1.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Controls the opacity of the scrollbar thumb (the draggable part).");
+	Util::Widgets::SliderFloat("Thumb Hovered Opacity", &themeSettings.ScrollbarOpacity.ThumbHovered, 0.0f, 1.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Controls the opacity of the scrollbar thumb when hovered.");
+	Util::Widgets::SliderFloat("Thumb Active Opacity", &themeSettings.ScrollbarOpacity.ThumbActive, 0.0f, 1.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Controls the opacity of the scrollbar thumb when being dragged.");
+
+	SeparatorTextWithFont("Borders", Menu::FontRole::Subheading);
+	Util::Widgets::SliderFloat("Window Border Size", &style.WindowBorderSize, 0.0f, 5.0f, "%.0f");
+	Util::Widgets::SliderFloat("Child Border Size", &style.ChildBorderSize, 0.0f, 5.0f, "%.0f");
+	Util::Widgets::SliderFloat("Popup Border Size", &style.PopupBorderSize, 0.0f, 5.0f, "%.0f");
+	Util::Widgets::SliderFloat("Frame Border Size", &style.FrameBorderSize, 0.0f, 5.0f, "%.0f");
+	Util::Widgets::SliderFloat("Tab Border Size", &style.TabBorderSize, 0.0f, 5.0f, "%.0f");
+	Util::Widgets::SliderFloat("Tab Bar Border Size", &style.TabBarBorderSize, 0.0f, 5.0f, "%.0f");
+
+	SeparatorTextWithFont("Rounding", Menu::FontRole::Subheading);
+	Util::Widgets::SliderFloat("Window Rounding", &style.WindowRounding, 0.0f, 12.0f, "%.0f");
+	Util::Widgets::SliderFloat("Child Rounding", &style.ChildRounding, 0.0f, 12.0f, "%.0f");
+	Util::Widgets::SliderFloat("Frame Rounding", &style.FrameRounding, 0.0f, 12.0f, "%.0f");
+	Util::Widgets::SliderFloat("Popup Rounding", &style.PopupRounding, 0.0f, 12.0f, "%.0f");
+	Util::Widgets::SliderFloat("Scrollbar Rounding", &style.ScrollbarRounding, 0.0f, 12.0f, "%.0f");
+	Util::Widgets::SliderFloat("Grab Rounding", &style.GrabRounding, 0.0f, 12.0f, "%.0f");
+	Util::Widgets::SliderFloat("Tab Rounding", &style.TabRounding, 0.0f, 12.0f, "%.0f");
+
+	SeparatorTextWithFont("Tables", Menu::FontRole::Subheading);
+	Util::Widgets::SliderFloat2("Cell Padding", (float*)&style.CellPadding, 0.0f, 20.0f, "%.0f");
+	Util::Widgets::SliderAngle("Table Angled Headers Angle", &style.TableAngledHeadersAngle, -50.0f, +50.0f);
+
+	SeparatorTextWithFont("Widgets", Menu::FontRole::Subheading);
+	{
+		FontRoleGuard comboFont(Menu::FontRole::Body);
+		ImGui::Combo("Color Button Position", (int*)&style.ColorButtonPosition, "Left\0Right\0");
+	}
+	Util::Widgets::SliderFloat2("Button Text Align", (float*)&style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Alignment applies when a button is larger than its text content.");
+	Util::Widgets::SliderFloat2("Selectable Text Align", (float*)&style.SelectableTextAlign, 0.0f, 1.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Alignment applies when a selectable is larger than its text content.");
+	Util::Widgets::SliderFloat("Separator Text Border Size", &style.SeparatorTextBorderSize, 0.0f, 10.0f, "%.0f");
+	Util::Widgets::SliderFloat2("Separator Text Align", (float*)&style.SeparatorTextAlign, 0.0f, 1.0f, "%.2f");
+	Util::Widgets::SliderFloat2("Separator Text Padding", (float*)&style.SeparatorTextPadding, 0.0f, 40.0f, "%.0f");
+	Util::Widgets::SliderFloat("Log Slider Deadzone", &style.LogSliderDeadzone, 0.0f, 12.0f, "%.0f");
+
+	SeparatorTextWithFont("Docking", Menu::FontRole::Subheading);
+	Util::Widgets::SliderFloat("Docking Splitter Size", &style.DockingSeparatorSize, 0.0f, 12.0f, "%.0f");
 }
 
 void SettingsTabRenderer::RenderColorsTab()
 {
-	if (BeginTabItemWithFont("Colors", Menu::FontRole::Heading)) {
-		auto& themeSettings = globals::menu->GetSettings().Theme;
-		auto& colors = themeSettings.FullPalette;
-		RenderSaveInfoText();
+	auto& themeSettings = globals::menu->GetSettings().Theme;
+	auto& colors = themeSettings.FullPalette;
+	RenderSaveInfoText();
 
-		// Color filter at the top with search icon
-		static ImGuiTextFilter colorFilter;
+	// Color filter at the top with search icon
+	static ImGuiTextFilter colorFilter;
 
-		const float scale = Util::GetSearchUIScale();
-		const float iconSize = ThemeManager::Constants::SEARCH_ICON_SIZE * scale;
-		const float iconSpace = iconSize + ThemeManager::Constants::SEARCH_INPUT_PADDING_EXTRA * scale;
-		float availableWidth = ImGui::GetFontSize() * 16;
+	const float scale = Util::GetSearchUIScale();
+	const float iconSize = ThemeManager::Constants::SEARCH_ICON_SIZE * scale;
+	const float iconSpace = iconSize + ThemeManager::Constants::SEARCH_INPUT_PADDING_EXTRA * scale;
+	float availableWidth = ImGui::GetFontSize() * 16;
 
-		// Custom style for filter with icon space
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(iconSpace, ThemeManager::Constants::SEARCH_INPUT_FRAME_PADDING_Y * scale));
-		colorFilter.Draw("Filter colors", availableWidth);
-		ImGui::PopStyleVar();
+	// Custom style for filter with icon space
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(iconSpace, ThemeManager::Constants::SEARCH_INPUT_FRAME_PADDING_Y * scale));
+	colorFilter.Draw("Filter colors", availableWidth);
+	ImGui::PopStyleVar();
 
-		// Draw search icon
-		const ImVec2 filterMin = ImGui::GetItemRectMin();
-		const ImVec2 filterSize = ImGui::GetItemRectSize();
-		ImVec2 iconPos = ImVec2(filterMin.x + ThemeManager::Constants::SEARCH_ICON_OFFSET_X * scale, filterMin.y + (filterSize.y - iconSize) * 0.5f);
-		Util::DrawSearchIcon(iconPos, iconSize, ThemeManager::Constants::SEARCH_ICON_ALPHA);
+	// Draw search icon
+	const ImVec2 filterMin = ImGui::GetItemRectMin();
+	const ImVec2 filterSize = ImGui::GetItemRectSize();
+	ImVec2 iconPos = ImVec2(filterMin.x + ThemeManager::Constants::SEARCH_ICON_OFFSET_X * scale, filterMin.y + (filterSize.y - iconSize) * 0.5f);
+	Util::DrawSearchIcon(iconPos, iconSize, ThemeManager::Constants::SEARCH_ICON_ALPHA);
 
-		ImGui::Spacing();
+	ImGui::Spacing();
 
-		// Background & Text
-		if (colorFilter.PassFilter("Background"))
-			ColorEditWithTooltip("Background", themeSettings.Palette.Background, "Base window surface color.");
-		if (colorFilter.PassFilter("Text"))
-			ColorEditWithTooltip("Text", themeSettings.Palette.Text, "Primary text color.");
+	// Background & Text
+	if (colorFilter.PassFilter("Background"))
+		ColorEditWithTooltip("Background", themeSettings.Palette.Background, "Base window surface color.");
+	if (colorFilter.PassFilter("Text"))
+		ColorEditWithTooltip("Text", themeSettings.Palette.Text, "Primary text color.");
 
-		if (ImGui::TreeNodeEx("Borders & Separators")) {
-			if (colorFilter.PassFilter("Window Border"))
-				ColorEditWithTooltip("Window Border", themeSettings.Palette.WindowBorder, "Outer window border color.");
-			if (colorFilter.PassFilter("Control Background"))
-				ColorEditWithTooltip("Control Background", themeSettings.Palette.FrameBorder, "Base background for sliders, checkboxes, inputs, and other framed controls.");
-			if (colorFilter.PassFilter("Separator Line"))
-				ColorEditWithTooltip("Separator Line", themeSettings.Palette.Separator, "Divider and table border color.");
-			if (colorFilter.PassFilter("Resize Grip"))
-				ColorEditWithTooltip("Resize Grip", themeSettings.Palette.ResizeGrip, "Window resize handle color.");
-			ImGui::TreePop();
-		}
+	if (ImGui::TreeNodeEx("Borders & Separators")) {
+		if (colorFilter.PassFilter("Window Border"))
+			ColorEditWithTooltip("Window Border", themeSettings.Palette.WindowBorder, "Outer window border color.");
+		if (colorFilter.PassFilter("Control Background"))
+			ColorEditWithTooltip("Control Background", themeSettings.Palette.FrameBorder, "Base background for sliders, checkboxes, inputs, and other framed controls.");
+		if (colorFilter.PassFilter("Separator Line"))
+			ColorEditWithTooltip("Separator Line", themeSettings.Palette.Separator, "Divider and table border color.");
+		if (colorFilter.PassFilter("Resize Grip"))
+			ColorEditWithTooltip("Resize Grip", themeSettings.Palette.ResizeGrip, "Window resize handle color.");
+		ImGui::TreePop();
+	}
 
-		if (ImGui::TreeNodeEx("Feature Headings")) {
-			if (colorFilter.PassFilter("Feature Heading"))
-				ColorEditWithTooltip("Feature Heading", themeSettings.FeatureHeading.ColorDefault, "Default section and feature heading color.");
-			if (colorFilter.PassFilter("Feature Heading Hovered"))
-				ColorEditWithTooltip("Feature Heading Hovered", themeSettings.FeatureHeading.ColorHovered, "Heading color while hovered.");
-			if (colorFilter.PassFilter("Minimized Transparency")) {
-				ImGui::SliderFloat("Minimized Transparency", &themeSettings.FeatureHeading.MinimizedFactor, 0.0f, 1.0f, "%.2f");
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Alpha multiplier used when a heading is minimized.");
-				}
+	if (ImGui::TreeNodeEx("Feature Headings")) {
+		if (colorFilter.PassFilter("Feature Heading"))
+			ColorEditWithTooltip("Feature Heading", themeSettings.FeatureHeading.ColorDefault, "Default section and feature heading color.");
+		if (colorFilter.PassFilter("Feature Heading Hovered"))
+			ColorEditWithTooltip("Feature Heading Hovered", themeSettings.FeatureHeading.ColorHovered, "Heading color while hovered.");
+		if (colorFilter.PassFilter("Minimized Transparency")) {
+			Util::Widgets::SliderFloat("Minimized Transparency", &themeSettings.FeatureHeading.MinimizedFactor, 0.0f, 1.0f, "%.2f");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Alpha multiplier used when a heading is minimized.");
 			}
-			ImGui::TreePop();
 		}
+		ImGui::TreePop();
+	}
 
-		if (ImGui::TreeNodeEx("Status")) {
-			if (colorFilter.PassFilter("Disabled"))
-				ColorEditWithTooltip("Disabled", themeSettings.StatusPalette.Disable, "Inactive and unavailable controls.");
-			if (colorFilter.PassFilter("Error"))
-				ColorEditWithTooltip("Error", themeSettings.StatusPalette.Error, "Errors, destructive actions, and failed states.");
-			if (colorFilter.PassFilter("Warning"))
-				ColorEditWithTooltip("Warning", themeSettings.StatusPalette.Warning, "Warnings, cautionary actions, and secondary accents.");
-			if (colorFilter.PassFilter("Restart Needed"))
-				ColorEditWithTooltip("Restart Needed", themeSettings.StatusPalette.RestartNeeded, "Feature states that require restart or reload.");
-			if (colorFilter.PassFilter("Current Hotkey"))
-				ColorEditWithTooltip("Current Hotkey", themeSettings.StatusPalette.CurrentHotkey, "Currently selected hotkey highlight.");
-			if (colorFilter.PassFilter("Success"))
-				ColorEditWithTooltip("Success", themeSettings.StatusPalette.SuccessColor, "Successful and positive actions.");
-			if (colorFilter.PassFilter("Info"))
-				ColorEditWithTooltip("Info", themeSettings.StatusPalette.InfoColor, "Informational accents and primary UI highlights.");
-			ImGui::TreePop();
+	if (ImGui::TreeNodeEx("Status")) {
+		if (colorFilter.PassFilter("Disabled"))
+			ColorEditWithTooltip("Disabled", themeSettings.StatusPalette.Disable, "Inactive and unavailable controls.");
+		if (colorFilter.PassFilter("Error"))
+			ColorEditWithTooltip("Error", themeSettings.StatusPalette.Error, "Errors, destructive actions, and failed states.");
+		if (colorFilter.PassFilter("Warning"))
+			ColorEditWithTooltip("Warning", themeSettings.StatusPalette.Warning, "Warnings, cautionary actions, and secondary accents.");
+		if (colorFilter.PassFilter("Restart Needed"))
+			ColorEditWithTooltip("Restart Needed", themeSettings.StatusPalette.RestartNeeded, "Feature states that require restart or reload.");
+		if (colorFilter.PassFilter("Current Hotkey"))
+			ColorEditWithTooltip("Current Hotkey", themeSettings.StatusPalette.CurrentHotkey, "Currently selected hotkey highlight.");
+		if (colorFilter.PassFilter("Success"))
+			ColorEditWithTooltip("Success", themeSettings.StatusPalette.SuccessColor, "Successful and positive actions.");
+		if (colorFilter.PassFilter("Info"))
+			ColorEditWithTooltip("Info", themeSettings.StatusPalette.InfoColor, "Informational accents and primary UI highlights.");
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNode("Full Palette")) {
+		ImGui::TextWrapped("Advanced fallback colors for ImGui elements that are not driven by the semantic palette above.");
+
+		for (int i = 0; i < ImGuiCol_COUNT; i++) {
+			const char* friendlyName = GetFriendlyColorName(i);
+			if (!colorFilter.PassFilter(friendlyName))
+				continue;
+			ImGui::ColorEdit4(friendlyName, (float*)&colors[i], ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
 		}
-
-		if (ImGui::TreeNode("Full Palette")) {
-			ImGui::TextWrapped("Advanced fallback colors for ImGui elements that are not driven by the semantic palette above.");
-
-			for (int i = 0; i < ImGuiCol_COUNT; i++) {
-				const char* friendlyName = GetFriendlyColorName(i);
-				if (!colorFilter.PassFilter(friendlyName))
-					continue;
-				ImGui::ColorEdit4(friendlyName, (float*)&colors[i], ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
-			}
-			ImGui::TreePop();
-		}
-
-		ImGui::EndTabItem();
+		ImGui::TreePop();
 	}
 }

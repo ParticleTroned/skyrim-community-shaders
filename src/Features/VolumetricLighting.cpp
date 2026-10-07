@@ -1,5 +1,7 @@
 #include "VolumetricLighting.h"
+#include "Menu/SettingsPage.h"
 #include "Utils/RuntimeToggle.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
 #include <cmath>
@@ -91,8 +93,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void VolumetricLighting::DrawSettings()
 {
+	{
+		std::scoped_lock lock(settingsMutex);
+		SanitizeSettings();
+	}
+
+	MenuUI::SettingsPage page("VolumetricLighting", {
+														{ "appearance", "Lighting", "Choose fog lighting, then refine strength and quality." },
+													});
+	if (!page.Is("appearance"))
+		return;
+
 	std::scoped_lock lock(settingsMutex);
-	SanitizeSettings();
 
 	auto drawVRRestartHint = [] {
 		if (!globals::game::isVR) {
@@ -107,7 +119,7 @@ void VolumetricLighting::DrawSettings()
 	};
 
 	if (REL::Module::IsVR()) {
-		ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
+		Util::Widgets::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Turns off rain-driven volumetric lighting while it is raining, then restores it after rain.");
 	}
@@ -115,13 +127,13 @@ void VolumetricLighting::DrawSettings()
 	DrawGodrayTuningSettings();
 	ImGui::Separator();
 
-	ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
+	Util::Widgets::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
 	drawVRRestartHint();
 
 	if (settings.ExteriorEnabled)
 		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false);
 
-	ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
+	Util::Widgets::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
 	drawVRRestartHint();
 
 	if (settings.InteriorEnabled)
@@ -147,43 +159,53 @@ void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 
 	auto drawQuality = [&](const char* label, int32_t& quality, TextureSize& customSize, bool isInterior) {
 		quality = ClampQualityIndex(quality);
-		ImGui::SliderInt(label, &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
+		Util::Widgets::SliderInt(label, &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
 
 		if (!a_advanced || static_cast<Quality>(quality) != Quality::Custom) {
 			return;
 		}
 
 		auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
-		if (ImGui::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+		if (Util::Widgets::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 			customSize.Width = Width * 32;
 		}
-		if (ImGui::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+		if (Util::Widgets::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 			customSize.Height = Height * 32;
 		}
-		if (ImGui::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+		if (Util::Widgets::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 			customSize.Depth = Depth * 10;
 		}
 	};
 
-	ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
+	Util::Widgets::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
 	drawVRRestartHint();
 	if (settings.ExteriorEnabled)
 		drawQuality("Exterior Quality", settings.ExteriorQuality, settings.ExteriorCustomSize, false);
 
-	ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
+	Util::Widgets::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
 	drawVRRestartHint();
 	if (settings.InteriorEnabled)
 		drawQuality("Interior Quality", settings.InteriorQuality, settings.InteriorCustomSize, true);
 
 	if (REL::Module::IsVR()) {
-		ImGui::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
+		Util::Widgets::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
 	}
 }
 
 void VolumetricLighting::DrawEssentialSettings()
 {
+	{
+		std::scoped_lock lock(settingsMutex);
+		SanitizeSettings();
+	}
+
+	MenuUI::SettingsPage page("VolumetricLighting", {
+														{ "essentials", "Essentials", "Start with the main choices for this feature." },
+													});
+	if (!page.Is("essentials"))
+		return;
+
 	std::scoped_lock lock(settingsMutex);
-	SanitizeSettings();
 
 	auto drawVRRestartHint = [] {
 		if (!globals::game::isVR) {
@@ -197,10 +219,10 @@ void VolumetricLighting::DrawEssentialSettings()
 		}
 	};
 
-	ImGui::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
+	Util::Widgets::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
 	drawVRRestartHint();
 
-	ImGui::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
+	Util::Widgets::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
 	drawVRRestartHint();
 }
 
@@ -231,7 +253,7 @@ void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProf
 
 	ImGui::PushID(label);
 	auto drawSlider = [](const char* sliderLabel, float& value, float minValue, float maxValue, const char* tooltip) {
-		ImGui::SliderFloat(sliderLabel, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(sliderLabel, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(tooltip);
 	};
@@ -256,21 +278,21 @@ void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, Textur
 	quality = ClampQualityIndex(quality);
 	auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
 
-	ImGui::SliderInt(isInterior ? "Interior Quality" : "Exterior Quality", &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
+	Util::Widgets::SliderInt(isInterior ? "Interior Quality" : "Exterior Quality", &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
 
 	const bool isCustomQuality = static_cast<Quality>(quality) == Quality::Custom;
 	if (!isCustomQuality)
 		ImGui::BeginDisabled();
 
-	if (ImGui::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+	if (Util::Widgets::SliderInt(isInterior ? "Interior Width" : "Exterior Width", &Width, 1, 20, FromUnits(Width, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Width = Width * 32;
 	}
 
-	if (ImGui::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+	if (Util::Widgets::SliderInt(isInterior ? "Interior Height" : "Exterior Height", &Height, 1, 20, FromUnits(Height, 32), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Height = Height * 32;
 	}
 
-	if (ImGui::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+	if (Util::Widgets::SliderInt(isInterior ? "Interior Depth" : "Exterior Depth", &Depth, 1, 64, FromUnits(Depth, 10), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
 		customSize.Depth = Depth * 10;
 	}
 

@@ -1,8 +1,10 @@
 #include "InverseSquareLighting.h"
 #include "LocationContext.h"
+#include "Menu/SettingsPage.h"
 #include "State.h"
 #include "Utils/RendererContextAccess.h"
 #include "Utils/RuntimeToggle.h"
+#include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
 #include "Features/InverseSquareLighting/Common.h"
@@ -55,18 +57,30 @@ namespace
 bool InverseSquareLighting::DrawEnabledCheckbox()
 {
 	bool enabled = settings.Enabled;
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enable", &enabled))
 		SetRuntimeEnabled(enabled);
 	return enabled;
 }
 
 void InverseSquareLighting::DrawSettings()
 {
+	MenuUI::SettingsPage page("InverseSquareLighting", {
+														   { "appearance", "Lighting", "Choose the lighting response for nearby lights." },
+													   });
+	if (!page.Is("appearance"))
+		return;
+
 	DrawEnabledCheckbox();
 }
 
 void InverseSquareLighting::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("InverseSquareLighting", {
+														   { "essentials", "Essentials", "Start with the main choices for this feature." },
+													   });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawEnabledCheckbox();
 }
 

@@ -172,6 +172,11 @@ struct VR
 	VRDepthCullingTemporal::Mode GetDepthCullingMode() const;
 };
 
+namespace Util
+{
+	namespace Widgets = ImGui;
+}
+
 #include "vr_depth_culling_settings_ui_under_test.h"
 
 namespace

@@ -113,7 +113,7 @@ public:
 	virtual void SetupRenderTargetResources() {}
 	virtual void Reset() {}
 	virtual void DrawSettingsHeaderControls() {}
-	virtual void DrawSettings() {}
+	virtual void DrawSettings();
 	virtual bool HasEssentialSettings() const { return false; }
 	virtual void DrawEssentialSettings() {}
 	virtual bool HasPerformanceSettings() const { return false; }

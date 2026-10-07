@@ -1,8 +1,10 @@
 #include "InteriorSun.h"
 #include "LocationContext.h"
+#include "Menu/SettingsPage.h"
 #include "State.h"
 #include "Utils/RendererContextAccess.h"
 #include "Utils/RuntimeToggle.h"
+#include "Utils/UI.h"
 
 #include <numbers>
 
@@ -43,29 +45,35 @@ namespace
 bool InteriorSun::DrawEnabledCheckbox()
 {
 	bool enabled = settings.Enabled;
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enable", &enabled))
 		SetRuntimeEnabled(enabled);
 	return enabled;
 }
 
 void InteriorSun::DrawSettings()
 {
+	MenuUI::SettingsPage page("InteriorSun", {
+												 { "appearance", "Sunlight", "Enable interior sunlight, then adjust its contribution." },
+											 });
+	if (!page.Is("appearance"))
+		return;
+
 	const bool enabled = DrawEnabledCheckbox();
 	ImGui::BeginDisabled(!enabled);
 
-	ImGui::Checkbox("Force Double-Sided Rendering", &settings.ForceDoubleSidedRendering);
+	Util::Widgets::Checkbox("Force Double-Sided Rendering", &settings.ForceDoubleSidedRendering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Disables backface culling during sun shadowmap rendering in interiors. "
 			"Will prevent most light leaking through unmasked/unprepared interiors at a small performance cost. ");
 	}
-	ImGui::Checkbox("Force Single Shadow Cascade", &settings.ForceSingleShadowCascade);
+	Util::Widgets::Checkbox("Force Single Shadow Cascade", &settings.ForceSingleShadowCascade);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Uses the high-detail directional shadow split for the full Interior Sun distance. "
 			"Prevents prepared wall masks from falling into the lower-resolution later split.");
 	}
-	if (ImGui::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f))
+	if (Util::Widgets::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f))
 		runtimeSettingsDirty.store(true, std::memory_order_release);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -78,6 +86,12 @@ void InteriorSun::DrawSettings()
 
 void InteriorSun::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("InteriorSun", {
+												 { "essentials", "Essentials", "Start with the main choices for this feature." },
+											 });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawEnabledCheckbox();
 }
 

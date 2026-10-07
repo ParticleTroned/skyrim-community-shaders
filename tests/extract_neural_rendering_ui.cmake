@@ -11,6 +11,7 @@ function(extract path start_marker end_marker output)
     endif()
     math(EXPR length "${end} - ${start}")
     string(SUBSTRING "${source}" ${start} ${length} result)
+    string(REPLACE "Util::Widgets::" "ImGui::" result "${result}")
     set(${output} "${result}" PARENT_SCOPE)
 endfunction()
 
@@ -42,8 +43,8 @@ extract("src/Features/Upscaling.cpp"
     "bool Upscaling::ApplyNeuralRenderingPreset("
     "bool Upscaling::HasSameNeuralRenderingSettingsKey(" image_preset)
 extract("src/Features/Upscaling.cpp"
-    "\t\tDrawNeuralRenderingSharedImageSettings(settings);"
-    "\t\t\tif (settings.neuralCharacterRenderingEnabled) {" appearance_controls)
+    "\t\t\tDrawNeuralRenderingSharedImageSettings(settings);"
+    "\t\t\tif (page.Is(\"actors\")) {" appearance_controls)
 extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingHardwareSupported() const noexcept"
     "NeuralRendering::RenderingMode Upscaling::GetNeuralRenderingMode()" execution_gate)
@@ -53,9 +54,21 @@ extract("src/Features/Upscaling.cpp"
 extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsActiveUpscalingFoveatedProfileAvailable()"
     "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()" profile_gate)
+# The policy harness visits each panel together; native navigation has a separate ImGui test.
+string(FIND "${selection_controls}" "MenuUI::SettingsPage page(" page_start)
+string(FIND "${selection_controls}" "\t\tif (page.Is(\"mode\")) {" page_end)
+if(page_start LESS 0 OR page_end LESS_EQUAL page_start)
+    message(FATAL_ERROR "NR tab declaration boundaries are missing")
+endif()
+string(SUBSTRING "${selection_controls}" 0 ${page_start} before_page)
+string(SUBSTRING "${selection_controls}" ${page_end} -1 after_page)
+set(selection_controls "${before_page}${after_page}")
+foreach(panel IN ITEMS selection_controls appearance_controls)
+    string(REGEX REPLACE "page\\.Is\\(\"[^\"]+\"\\)" "true" ${panel} "${${panel}}")
+endforeach()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
-    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${availability_policy}\n${execution_gate}\n${dispatch_gate}\n${profile_gate}\n${image_preset}\n${master_control}\nvoid Upscaling::DrawSelectionControls(bool a_essentialsOnly) {\nconst auto a_upscaleMethod = GetUpscaleMethod();\nconst bool showDiagnostics = !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();\nconst std::function<void()> a_drawColourSettings;\n${selection_controls}\n(void)missingRenderScale;\n${appearance_controls}\n}\n}\n")
+    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${availability_policy}\n${execution_gate}\n${dispatch_gate}\n${profile_gate}\n${image_preset}\n${master_control}\nvoid Upscaling::DrawSelectionControls(bool a_essentialsOnly) {\nconst auto a_upscaleMethod = GetUpscaleMethod();\nconst bool showDiagnostics = !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();\nconst std::function<void(bool)> a_drawColourSettings;\n${selection_controls}\n(void)missingRenderScale;\n(void)reducedResolution;\n${appearance_controls}\n}\n}\n")
 
 extract("src/Features/VR/Input.cpp"
     "bool VR::IsControllerComboPressed("

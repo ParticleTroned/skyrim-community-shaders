@@ -28,5 +28,5 @@ struct NeuralRenderingFeature : Feature
 	void EarlyPrepass() override;
 
 private:
-	void DrawColourSettings();
+	void DrawColourSettings(bool a_diagnosticsOnly = false);
 };

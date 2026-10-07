@@ -67,4 +67,8 @@ if(NOT IS_DIRECTORY "${_shader_root}/Experimental")
     message(FATAL_ERROR "NR payload guard removed the rejected directory")
 endif()
 file(REMOVE_RECURSE "${_shader_root}/Experimental")
+# Every shipped NR shader must survive the same release guard as the fixture.
+file(COPY "${PROJECT_ROOT}/features/Neural Rendering/Shaders/Upscaling/NeuralRendering/"
+    DESTINATION "${_shader_root}")
+check(pass "")
 message(STATUS "NR release payload rejects extra files, NR DLLs, modified SDK files and missing files")

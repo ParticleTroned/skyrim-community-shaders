@@ -1,5 +1,6 @@
 #include "Upscaling.h"
 #include "Api/AcceptedDrawService.h"
+#include "Menu/SettingsPage.h"
 #include "Upscaling/NeuralRendering/FramebufferTransaction.h"
 
 #include "BuildProvenance.h"
@@ -16399,7 +16400,7 @@ namespace
 	void DrawFrameGenerationEnabledToggle(Upscaling::Settings& a_settings)
 	{
 		bool enabled = a_settings.frameGenerationMode != 0;
-		if (ImGui::Checkbox("Frame Generation", &enabled)) {
+		if (Util::Widgets::Checkbox("Frame Generation", &enabled)) {
 			a_settings.frameGenerationMode = enabled ? 1u : 0u;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -16412,7 +16413,7 @@ namespace
 	{
 		ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
 		bool forceEnabled = a_upscaling.settings.frameGenerationForceEnable != 0;
-		if (ImGui::Checkbox("Force Enable Frame Generation", &forceEnabled)) {
+		if (Util::Widgets::Checkbox("Force Enable Frame Generation", &forceEnabled)) {
 			a_upscaling.settings.frameGenerationForceEnable = forceEnabled ? 1u : 0u;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -16831,7 +16832,7 @@ void Upscaling::DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod)
 		auto guard = Util::DisableGuard(!linked &&
 										(IsOpenCompositeUpscalingBlocked() || IsRenderDocUpscalingBlocked() ||
 											IsSubmitStageDeviceLost() || IsVRStartupNativeFallbackRestartRequired()));
-		if (ImGui::Checkbox("Link Render Scale to DLSS/FSR Upscaling", &linked)) {
+		if (Util::Widgets::Checkbox("Link Render Scale to DLSS/FSR Upscaling", &linked)) {
 			SetRenderScaleLinkedToUpscaling(linked);
 		}
 	}
@@ -16934,6 +16935,15 @@ void Upscaling::DrawSettingsHeaderControls()
 
 void Upscaling::DrawSettings()
 {
+	MenuUI::SettingsPage page("Upscaling", {
+											   { "mode", "Mode", "Choose your upscaler and quality first." },
+											   { "scale", "Render scale", "Choose whether to render a smaller scene before upscaling.", {}, globals::game::isVR },
+											   { "tuning", "Tuning", "Refine FSR stability and detail.", {}, GetUpscaleMethod() == UpscaleMethod::kFSR },
+											   { "look", "Look", "Refine sharpening after choosing the rendering mode." },
+											   { "motion", "Motion", "Choose extra frames and latency controls.", {}, !globals::game::isVR || streamline.reflexSupportedOnCurrentAdapter },
+											   { "diagnostics", "Diagnostics", "Inspect upscaler status and diagnostic views." },
+										   });
+
 	const uint64_t resourceSettingsKeyBefore = BuildUpscalingResourceMutationSettingsKey(settings);
 
 	struct UpscaleUiChoice
@@ -17005,7 +17015,7 @@ void Upscaling::DrawSettings()
 
 	if (openCompositeBlocksUpscaling)
 		ImGui::BeginDisabled();
-	const bool methodChanged = DrawUpscalingMethodSelection("Method", methodUiIndex, upscaleChoices, *this);
+	const bool methodChanged = page.Is("mode") && DrawUpscalingMethodSelection("Method", methodUiIndex, upscaleChoices, *this);
 	const bool methodEditCommitted = methodChanged;
 	const auto methodEditDispatch =
 		VRVendorRelatchPolicy::SelectMenuEditDispatch(
@@ -17106,6 +17116,8 @@ void Upscaling::DrawSettings()
 	}
 
 	auto drawRenderScaleSettings = [&]() {
+		if (!page.Is("scale"))
+			return;
 		if (!globals::game::isVR)
 			return;
 
@@ -17136,7 +17148,7 @@ void Upscaling::DrawSettings()
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			const bool renderScaleChanged = ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)]);
+			const bool renderScaleChanged = Util::Widgets::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)]);
 			const bool renderScaleEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
 			const auto renderScaleEditDispatch =
 				VRVendorRelatchPolicy::SelectMenuEditDispatch(
@@ -17238,13 +17250,13 @@ void Upscaling::DrawSettings()
 			Upscaling::GetQualityModeResolutionScale(effectiveQualityMode));
 
 		int qualityMode = static_cast<int>(effectiveQualityMode);
-		const bool qualityChanged = ImGui::SliderInt(
-			"Upscale Preset",
-			&qualityMode,
-			IsNeuralRenderingRenderScaleRequired() ? 1 : 0,
-			static_cast<int>(kQualityModeMaxIndex),
-			labelWithScale.c_str());
-		const bool qualityEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+		const bool qualityChanged = page.Is("mode") && Util::Widgets::SliderInt(
+														   "Upscale Preset",
+														   &qualityMode,
+														   IsNeuralRenderingRenderScaleRequired() ? 1 : 0,
+														   static_cast<int>(kQualityModeMaxIndex),
+														   labelWithScale.c_str());
+		const bool qualityEditCommitted = page.Is("mode") && ImGui::IsItemDeactivatedAfterEdit();
 		const auto qualityEditDispatch =
 			VRVendorRelatchPolicy::SelectMenuEditDispatch(
 				qualityChanged,
@@ -17271,31 +17283,33 @@ void Upscaling::DrawSettings()
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
 			drawRenderScaleSettings();
-			ImGui::Spacing();
-			ImGui::Spacing();
-			if (ImGui::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f"))
-				InvalidateFrameScopedUpscalingState();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
-				ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
-			}
-			if (globals::game::isVR) {
-				const bool canChangeSharedGuides = CanChangeFSRSharedGuideInputs();
-				bool sharedGuides = fidelityFX.AreRuntimeSharedGuideInputsEnabled();
-				{
-					ImGui::BeginDisabled(!canChangeSharedGuides);
-					auto endDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
-					if (ImGui::Checkbox("Share FSR guide textures", &sharedGuides))
-						SetFSRSharedGuideInputsEnabled(sharedGuides);
-				}
+			if (page.Is("look")) {
+				ImGui::Spacing();
+				ImGui::Spacing();
+				if (Util::Widgets::SliderFloat("Sharpness", &settings.sharpnessFSR, 0.0f, 1.0f, "%.1f"))
+					InvalidateFrameScopedUpscalingState();
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("May improve FSR performance by avoiding extra GPU copies.");
-					ImGui::TextUnformatted("Disable if you notice flickering, ghosting or differences between eyes.");
+					ImGui::TextUnformatted("Adjusts post-upscale sharpness for FSR.");
+					ImGui::TextUnformatted("Range: low 0.0 (softest) to high 1.0 (sharpest).");
 				}
-				if (!canChangeSharedGuides)
-					ImGui::TextDisabled("Stop GPU performance capture to change guide sharing.");
+				if (globals::game::isVR) {
+					const bool canChangeSharedGuides = CanChangeFSRSharedGuideInputs();
+					bool sharedGuides = fidelityFX.AreRuntimeSharedGuideInputsEnabled();
+					{
+						ImGui::BeginDisabled(!canChangeSharedGuides);
+						auto endDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
+						if (Util::Widgets::Checkbox("Share FSR guide textures", &sharedGuides))
+							SetFSRSharedGuideInputsEnabled(sharedGuides);
+					}
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted("May improve FSR performance by avoiding extra GPU copies.");
+						ImGui::TextUnformatted("Disable if you notice flickering, ghosting or differences between eyes.");
+					}
+					if (!canChangeSharedGuides)
+						ImGui::TextDisabled("Stop GPU performance capture to change guide sharing.");
+				}
 			}
-			if (ImGui::TreeNode("Temporal reconstruction tuning")) {
+			if (page.Is("tuning")) {
 				static FSRTemporalTuningPolicy::Settings draft{};
 				static FSRTemporalTuningPolicy::Settings lastSettings{};
 				if (lastSettings != settings.fsrTemporalTuning) {
@@ -17303,20 +17317,20 @@ void Upscaling::DrawSettings()
 					lastSettings = settings.fsrTemporalTuning;
 				}
 				ImGui::TextWrapped("Optional runtime FSR tuning, including FSR 4.1.1. Apply changes together; disabling restores vendor defaults. If the provider rejects a setting, the complete profile returns to vendor defaults.");
-				ImGui::Checkbox("Enable reconstruction overrides", &draft.enabled);
-				ImGui::SliderFloat("Velocity factor", &draft.velocityFactor, 0.0f, 1.0f);
+				Util::Widgets::Checkbox("Enable reconstruction overrides", &draft.enabled);
+				Util::Widgets::SliderFloat("Velocity factor", &draft.velocityFactor, 0.0f, 1.0f);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Lower values can stabilize bright pixels in motion.");
-				ImGui::SliderFloat("Reactiveness scale", &draft.reactivenessScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
+				Util::Widgets::SliderFloat("Reactiveness scale", &draft.reactivenessScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Higher values reduce history influence where the reactive mask is present.");
-				ImGui::SliderFloat("Shading change scale", &draft.shadingChangeScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
+				Util::Widgets::SliderFloat("Shading change scale", &draft.shadingChangeScale, 0.0f, FSRTemporalTuningPolicy::kMaximumResponseScale);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Higher values respond more strongly to lighting changes.");
-				ImGui::SliderFloat("Accumulation per frame", &draft.accumulationAddedPerFrame, 0.0f, 1.0f);
+				Util::Widgets::SliderFloat("Accumulation per frame", &draft.accumulationAddedPerFrame, 0.0f, 1.0f);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Lower values can reduce ghosting but increase thin-detail flicker.");
-				ImGui::SliderFloat("Minimum disocclusion accumulation", &draft.minimumDisocclusionAccumulation, -1.0f, 1.0f);
+				Util::Widgets::SliderFloat("Minimum disocclusion accumulation", &draft.minimumDisocclusionAccumulation, -1.0f, 1.0f);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Higher values can reduce flicker around moving thin objects but increase ghosting.");
 				if (ImGui::Button("Apply reconstruction tuning"))
@@ -17328,7 +17342,6 @@ void Upscaling::DrawSettings()
 				}
 				const auto tuning = fidelityFX.GetTemporalTuningSnapshot();
 				ImGui::Text("State: %s", FSRTemporalTuningPolicy::StatusLabel(tuning.status));
-				ImGui::TreePop();
 			}
 		} else if (upscaleMethod == UpscaleMethod::kDLSS) {
 			settings.dlssPreset = ClampDLSSPresetUInt(settings.dlssPreset);
@@ -17344,8 +17357,8 @@ void Upscaling::DrawSettings()
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			const bool dlssProfileChanged = ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset));
-			const bool dlssProfileEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+			const bool dlssProfileChanged = page.Is("mode") && Util::Widgets::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset));
+			const bool dlssProfileEditCommitted = page.Is("mode") && ImGui::IsItemDeactivatedAfterEdit();
 			const auto dlssProfileEditDispatch =
 				VRVendorRelatchPolicy::SelectMenuEditDispatch(
 					dlssProfileChanged,
@@ -17374,44 +17387,44 @@ void Upscaling::DrawSettings()
 			ImGui::Spacing();
 			ImGui::Spacing();
 
-			int dlssSharpenerMode = static_cast<int>(ClampDLSSSharpenerModeUInt(settings.dlssSharpener));
-			if (ImGui::Combo("Sharpener", &dlssSharpenerMode, kDLSSSharpenerModeNames.data(), static_cast<int>(kDLSSSharpenerModeNames.size()))) {
-				settings.dlssSharpener = ClampDLSSSharpenerModeUInt(static_cast<uint>(std::max(dlssSharpenerMode, 0)));
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Selects the post-DLSS sharpening pass.");
-				ImGui::TextUnformatted("RCAS is punchier and more obvious, but can add shimmer or harsher edge contrast.");
-				ImGui::TextUnformatted("Luma Unsharp is cleaner and more natural, preserving color while sharpening luminance.");
-			}
-
-			if (GetDLSSSharpenerMode() != DLSSSharpenerMode::Off) {
-				ImGui::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
-					ImGui::TextUnformatted("Range: 0.0 off/softest to 1.0 strongest.");
+			if (page.Is("look")) {
+				int dlssSharpenerMode = static_cast<int>(ClampDLSSSharpenerModeUInt(settings.dlssSharpener));
+				if (ImGui::Combo("Sharpener", &dlssSharpenerMode, kDLSSSharpenerModeNames.data(), static_cast<int>(kDLSSSharpenerModeNames.size()))) {
+					settings.dlssSharpener = ClampDLSSSharpenerModeUInt(static_cast<uint>(std::max(dlssSharpenerMode, 0)));
 				}
-			}
-
-			if (GetDLSSSharpenerMode() != DLSSSharpenerMode::Off) {
-				ImGui::Checkbox("Motion-adaptive sharpening", &settings.motionAdaptiveRCAS);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Adjusts RCAS or Luma Unsharp strength in moving parts of the image.");
-					ImGui::TextUnformatted("Negative adjustment may reduce shimmer during movement but soften detail.");
+					ImGui::TextUnformatted("Selects the post-DLSS sharpening pass.");
+					ImGui::TextUnformatted("RCAS is punchier and more obvious, but can add shimmer or harsher edge contrast.");
+					ImGui::TextUnformatted("Luma Unsharp is cleaner and more natural, preserving color while sharpening luminance.");
 				}
-				if (settings.motionAdaptiveRCAS) {
-					ImGui::SliderFloat("Motion adjustment", &settings.motionSharpnessAdjustment, -1.0f, 1.0f, "%.2f");
-					ImGui::SliderFloat("Motion threshold (pixels/frame)", &settings.motionSharpnessThreshold, 0.0f, 64.0f, "%.1f");
-					ImGui::SliderFloat("Motion sharpness cap", &settings.motionSharpnessCap, 0.0f, 1.0f, "%.2f");
+
+				if (GetDLSSSharpenerMode() != DLSSSharpenerMode::Off) {
+					Util::Widgets::SliderFloat("Sharpness", &settings.sharpnessDLSS, 0.0f, 1.0f, "%.1f");
 					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::TextUnformatted("Caps adjusted sharpness on the same 0-1 scale as Sharpness.");
+						ImGui::TextUnformatted("Adjusts post-upscale sharpness for DLSS.");
+						ImGui::TextUnformatted("Range: 0.0 off/softest to 1.0 strongest.");
+					}
+				}
+
+				if (GetDLSSSharpenerMode() != DLSSSharpenerMode::Off) {
+					Util::Widgets::Checkbox("Motion-adaptive sharpening", &settings.motionAdaptiveRCAS);
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::TextUnformatted("Adjusts RCAS or Luma Unsharp strength in moving parts of the image.");
+						ImGui::TextUnformatted("Negative adjustment may reduce shimmer during movement but soften detail.");
+					}
+					if (settings.motionAdaptiveRCAS) {
+						Util::Widgets::SliderFloat("Motion adjustment", &settings.motionSharpnessAdjustment, -1.0f, 1.0f, "%.2f");
+						Util::Widgets::SliderFloat("Motion threshold (pixels/frame)", &settings.motionSharpnessThreshold, 0.0f, 64.0f, "%.1f");
+						Util::Widgets::SliderFloat("Motion sharpness cap", &settings.motionSharpnessCap, 0.0f, 1.0f, "%.2f");
+						if (auto _tt = Util::HoverTooltipWrapper()) {
+							ImGui::TextUnformatted("Caps adjusted sharpness on the same 0-1 scale as Sharpness.");
+						}
 					}
 				}
 			}
 		}
-
-		if (globals::game::isVR) {
+		if (upscaleMethod == UpscaleMethod::kDLSS && globals::game::isVR)
 			SanitizeFoveatedSettings(settings);
-		}
 	} else {
 		drawRenderScaleSettings();
 	}
@@ -17419,7 +17432,7 @@ void Upscaling::DrawSettings()
 	const bool frameGenerationDx12PathActive = IsFrameGenerationDx12PathActive();
 
 	if (!globals::game::isVR) {
-		if (ImGui::TreeNodeEx("Frame Generation")) {
+		if (page.Is("motion")) {
 			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
 			ImGui::Text("Uses AMD FSR Frame Generation technology");
 			if (HasFrameGenModule())
@@ -17460,7 +17473,7 @@ void Upscaling::DrawSettings()
 			if (!frameGenerationDx12PathActive)
 				ImGui::BeginDisabled();
 
-			ImGui::SliderInt("Frame Limit (Variable Refresh Rate)", (int*)&settings.frameLimitMode, 0, 1, std::format("{}", toggleModes[settings.frameLimitMode]).c_str());
+			Util::Widgets::SliderInt("Frame Limit (Variable Refresh Rate)", (int*)&settings.frameLimitMode, 0, 1, std::format("{}", toggleModes[settings.frameLimitMode]).c_str());
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Applies VRR-aware frame limiting for smoother pacing with Frame Generation.");
 				ImGui::TextUnformatted("Range: 0 Disabled, 1 Enabled.");
@@ -17471,17 +17484,15 @@ void Upscaling::DrawSettings()
 
 			DrawFrameGenerationForceEnableToggle(*this);
 
-			ImGui::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
+			Util::Widgets::Checkbox("Frame Generation in Menus", &settings.frameGenerationAllowInMenus);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Keeps frame generation active while game menus are open.");
 				ImGui::TextUnformatted("May feel smoother, but increases menu input latency.");
 			}
-
-			ImGui::TreePop();
 		}
 	}
 
-	if (streamline.reflexSupportedOnCurrentAdapter && ImGui::TreeNodeEx("NVIDIA Reflex")) {
+	if (streamline.reflexSupportedOnCurrentAdapter && page.Is("motion")) {
 		const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
 		const char* toggleModes[] = { "Disabled", "Enabled" };
@@ -17498,7 +17509,7 @@ void Upscaling::DrawSettings()
 			ImGui::BeginDisabled();
 
 		int lowLatencyMode = settings.reflexLowLatencyMode ? 1 : 0;
-		ImGui::SliderInt("Low Latency Mode", &lowLatencyMode, 0, 1, toggleModes[lowLatencyMode]);
+		Util::Widgets::SliderInt("Low Latency Mode", &lowLatencyMode, 0, 1, toggleModes[lowLatencyMode]);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Cuts input delay by syncing CPU work closer to the GPU.");
 			ImGui::TextUnformatted("May reduce max FPS a little, but usually feels much more responsive.");
@@ -17509,7 +17520,7 @@ void Upscaling::DrawSettings()
 			ImGui::BeginDisabled();
 
 		int lowLatencyBoost = settings.reflexLowLatencyBoost ? 1 : 0;
-		ImGui::SliderInt("Low Latency Boost", &lowLatencyBoost, 0, 1, toggleModes[lowLatencyBoost]);
+		Util::Widgets::SliderInt("Low Latency Boost", &lowLatencyBoost, 0, 1, toggleModes[lowLatencyBoost]);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Keeps GPU clocks higher to avoid latency spikes at low GPU load.");
 			ImGui::TextUnformatted("Useful if frametime jumps and responsiveness feels inconsistent.");
@@ -17521,7 +17532,7 @@ void Upscaling::DrawSettings()
 			ImGui::EndDisabled();
 
 		int useFPSLimit = settings.reflexUseFPSLimit ? 1 : 0;
-		ImGui::SliderInt("Use FPS Limit", &useFPSLimit, 0, 1, toggleModes[useFPSLimit]);
+		Util::Widgets::SliderInt("Use FPS Limit", &useFPSLimit, 0, 1, toggleModes[useFPSLimit]);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Uses Reflex's internal FPS cap for steadier frametimes.");
 			ImGui::TextUnformatted("Can lower latency versus uncapped rendering.");
@@ -17534,7 +17545,7 @@ void Upscaling::DrawSettings()
 		if (!std::isfinite(settings.reflexFPSLimit))
 			settings.reflexFPSLimit = 60.0f;
 		settings.reflexFPSLimit = std::clamp(settings.reflexFPSLimit, 20.0f, 240.0f);
-		ImGui::SliderFloat("FPS Limit", &settings.reflexFPSLimit, 20.0f, 240.0f, "%.0f");
+		Util::Widgets::SliderFloat("FPS Limit", &settings.reflexFPSLimit, 20.0f, 240.0f, "%.0f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Set your frame cap target.");
 			ImGui::TextUnformatted("Start about 2-3 FPS below refresh rate (e.g. 117 for 120 Hz).");
@@ -17545,11 +17556,9 @@ void Upscaling::DrawSettings()
 
 		if (!reflexAvailable || reflexBlockedByFrameGeneration)
 			ImGui::EndDisabled();
-
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Backend Diagnostics")) {
+	if (page.Is("diagnostics")) {
 		if (globals::state && globals::state->IsDeveloperMode() && streamline.reflexSupportedOnCurrentAdapter) {
 			ImGui::SeparatorText("Reflex Debug");
 			const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
@@ -17564,7 +17573,7 @@ void Upscaling::DrawSettings()
 				auto restoreDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
 				const char* toggleModes[] = { "Disabled", "Enabled" };
 				int markersToOptimize = markerOptimization.enabled ? 1 : 0;
-				if (ImGui::SliderInt("Use Markers To Optimize", &markersToOptimize, 0, 1, toggleModes[markersToOptimize]) && markersAvailable)
+				if (Util::Widgets::SliderInt("Use Markers To Optimize", &markersToOptimize, 0, 1, toggleModes[markersToOptimize]) && markersAvailable)
 					settings.reflexUseMarkersToOptimize = markersToOptimize > 0;
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::TextUnformatted("Requests marker-based Reflex scheduling.");
@@ -17583,14 +17592,14 @@ void Upscaling::DrawSettings()
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (IsVRRuntimeActive()) {
-			if (ImGui::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics) &&
+			if (Util::Widgets::Checkbox("Pipeline Diagnostics", &settings.pipelineDiagnostics) &&
 				!settings.pipelineDiagnostics) {
 				settings.pipelineDiagnosticsStructured = false;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Logs VRPIPE environment metadata during VR startup.");
 			}
-			if (ImGui::Checkbox("Pipeline Diagnostics JSONL", &settings.pipelineDiagnosticsStructured) &&
+			if (Util::Widgets::Checkbox("Pipeline Diagnostics JSONL", &settings.pipelineDiagnosticsStructured) &&
 				settings.pipelineDiagnosticsStructured) {
 				settings.pipelineDiagnostics = true;
 			}
@@ -17664,7 +17673,7 @@ void Upscaling::DrawSettings()
 		if (globals::game::isVR) {
 			ImGui::Separator();
 			static float debugRescale = 0.15f;
-			ImGui::SliderFloat("View Resize", &debugRescale, 0.05f, 1.f);
+			Util::Widgets::SliderFloat("View Resize", &debugRescale, 0.05f, 1.f);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Scales debug buffer previews in the diagnostics panel.");
 				ImGui::TextUnformatted("Range: low 0.05 (small previews) to high 1.00 (full-size previews).");
@@ -17729,7 +17738,6 @@ void Upscaling::DrawSettings()
 		ImGui::Separator();
 		Util::DrawDllVersionTable("AMD FidelityFX DLLs (click to open folder)", FidelityFX::PluginDir, FidelityFX::dllVersions, "ffx_dll_versions");
 		Util::DrawDllVersionTable("NVIDIA Streamline DLLs (click to open folder)", Streamline::PluginDir, Streamline::dllVersions, "sl_dll_versions");
-		ImGui::TreePop();
 	}
 
 	if (resourceSettingsKeyBefore != BuildUpscalingResourceMutationSettingsKey(settings))
@@ -17900,7 +17908,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			Upscaling::GetQualityModeResolutionScale(effectiveQualityMode));
 
 		int qualityMode = static_cast<int>(effectiveQualityMode);
-		const bool qualityChanged = ImGui::SliderInt("Upscale Preset", &qualityMode, IsNeuralRenderingRenderScaleRequired() ? 1 : 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str());
+		const bool qualityChanged = Util::Widgets::SliderInt("Upscale Preset", &qualityMode, IsNeuralRenderingRenderScaleRequired() ? 1 : 0, static_cast<int>(kQualityModeMaxIndex), labelWithScale.c_str());
 		const bool qualityEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
 		const auto qualityEditDispatch =
 			VRVendorRelatchPolicy::SelectMenuEditDispatch(
@@ -17936,7 +17944,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 			const int dlssProfileUiMaxIndex = static_cast<int>(kDLSSProfileDisplayOrder.size()) - 1;
 			uint32_t displayedDLSSPreset = kDLSSProfileDisplayOrder[dlssProfileUiIndex];
-			const bool dlssProfileChanged = ImGui::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset));
+			const bool dlssProfileChanged = Util::Widgets::SliderInt("DLSS Profile", &dlssProfileUiIndex, 0, dlssProfileUiMaxIndex, GetDLSSPresetName(displayedDLSSPreset));
 			const bool dlssProfileEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
 			const auto dlssProfileEditDispatch =
 				VRVendorRelatchPolicy::SelectMenuEditDispatch(
@@ -17994,7 +18002,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		int renderScaleMode = publicRenderScaleRequested ? 1 : 0;
 		{
 			auto disabledGuard = Util::DisableGuard(!publicRenderScaleCanEdit);
-			const bool renderScaleChanged = ImGui::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)]);
+			const bool renderScaleChanged = Util::Widgets::SliderInt("Render Scale", &renderScaleMode, 0, 1, renderScaleModes[std::clamp(renderScaleMode, 0, 1)]);
 			const bool renderScaleEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
 			const auto renderScaleEditDispatch =
 				VRVendorRelatchPolicy::SelectMenuEditDispatch(
@@ -18039,7 +18047,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 		if (foveatedDispatchSupportedForMethod) {
 			bool fovEnabled = settings.foveatedVendorDispatch;
-			if (ImGui::Checkbox("Foveated Upscaling (FOV)", &fovEnabled))
+			if (Util::Widgets::Checkbox("Foveated Upscaling (FOV)", &fovEnabled))
 				SetFoveatedUpscalingEnabled(fovEnabled);
 			if (auto tooltip = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Uses a smaller area around the centre of each eye for upscaling. Configure the masks in VR > FOV.");
@@ -18060,7 +18068,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 		if (!reflexAvailable || reflexBlockedByFrameGeneration)
 			ImGui::BeginDisabled();
 		int lowLatencyMode = settings.reflexLowLatencyMode ? 1 : 0;
-		ImGui::SliderInt("Low Latency Mode", &lowLatencyMode, 0, 1, toggleModes[lowLatencyMode]);
+		Util::Widgets::SliderInt("Low Latency Mode", &lowLatencyMode, 0, 1, toggleModes[lowLatencyMode]);
 		settings.reflexLowLatencyMode = lowLatencyMode > 0;
 		if (!reflexAvailable || reflexBlockedByFrameGeneration)
 			ImGui::EndDisabled();
@@ -18072,7 +18080,11 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 
 void Upscaling::DrawEssentialSettings()
 {
-	DrawPerformanceSettings(false);
+	MenuUI::SettingsPage page("Upscaling", {
+											   { "essentials", "Essentials", "Choose the main upscaling and performance settings." },
+										   });
+	if (page.Is("essentials"))
+		DrawPerformanceSettings(false);
 }
 
 void Upscaling::DrawFovSettingsLink() const
@@ -18127,7 +18139,7 @@ void Upscaling::DrawPeripheryTAAControl()
 {
 	{
 		auto guard = Util::DisableGuard(IsNeuralRenderingEnabled(settings));
-		ImGui::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
+		Util::Widgets::Checkbox("FOV + TAA", &settings.periphery_taa_enable);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Enables periphery-only TAA outside the smaller vendor center region.");
@@ -18415,7 +18427,7 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 	{
 		auto guard = Util::DisableGuard(!runtimeInstalled || !renderScaleAvailable || ((status.failureLatched || status.quarantined) && !settings.neuralRenderingEnabled));
 		bool enabled = settings.neuralRenderingEnabled && renderScaleAvailable && hardwareSupported;
-		if (ImGui::Checkbox("Enabled", &enabled))
+		if (Util::Widgets::Checkbox("Enabled", &enabled))
 			settings.neuralRenderingEnabled = enabled;
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : renderScaleAvailable ? "Enhances scene detail using NR. Off removes its rendering cost and keeps your settings. Enabling NR disables FOV + TAA." :
@@ -18517,44 +18529,44 @@ namespace
 	void DrawNeuralRenderingActorCategories(Upscaling::Settings& settings)
 	{
 		ImGui::TextUnformatted("Actor types");
-		ImGui::Checkbox("Humans", &settings.neuralCharacterHumansEnabled);
+		Util::Widgets::Checkbox("Humans", &settings.neuralCharacterHumansEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Applies the material choices below to humans, including children and vampires.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Other humanoids", &settings.neuralCharacterOtherHumanoidsEnabled);
+		Util::Widgets::Checkbox("Other humanoids", &settings.neuralCharacterOtherHumanoidsEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Applies the material choices below to elves, Orcs, Khajiit, Argonians and other humanoid races.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Beasts / creatures", &settings.neuralCharacterCreaturesEnabled);
+		Util::Widgets::Checkbox("Beasts / creatures", &settings.neuralCharacterCreaturesEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Applies the material choices below to creatures such as werewolves, trolls, dragons and undead.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Animals", &settings.neuralCharacterAnimalsEnabled);
+		Util::Widgets::Checkbox("Animals", &settings.neuralCharacterAnimalsEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Applies the material choices below to wildlife, including horses, wolves, spiders and chaurus.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Other / unknown", &settings.neuralCharacterOtherActorsEnabled);
+		Util::Widgets::Checkbox("Other / unknown", &settings.neuralCharacterOtherActorsEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Applies the material choices below to actors whose race has no recognised type.");
 		ImGui::Spacing();
 		ImGui::TextUnformatted("Materials");
-		ImGui::Checkbox("Faces", &settings.neuralCharacterFacesEnabled);
+		Util::Widgets::Checkbox("Faces", &settings.neuralCharacterFacesEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Uses Face Strength on the faces of selected actors.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Skin", &settings.neuralCharacterSkinEnabled);
+		Util::Widgets::Checkbox("Skin", &settings.neuralCharacterSkinEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Uses Skin Strength on selected bodies, including fur and scales.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Hair", &settings.neuralCharacterHairEnabled);
+		Util::Widgets::Checkbox("Hair", &settings.neuralCharacterHairEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Uses Hair Strength on the hair of selected actors.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Armour / clothing", &settings.neuralCharacterArmorEnabled);
+		Util::Widgets::Checkbox("Armour / clothing", &settings.neuralCharacterArmorEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Uses Armour / Clothing Strength on clothing, armour and shields worn by selected actors.");
 		ImGui::SameLine();
-		ImGui::Checkbox("Weapons", &settings.neuralCharacterWeaponsEnabled);
+		Util::Widgets::Checkbox("Weapons", &settings.neuralCharacterWeaponsEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Uses Weapon Strength on weapons and ammunition carried by selected actors. Loose items and your own equipment are excluded.");
 	}
@@ -18563,7 +18575,7 @@ namespace
 	{
 		const auto drawStrength = [](const char* label, bool selected, float& strength, const char* help) {
 			auto guard = Util::DisableGuard(!selected);
-			ImGui::SliderFloat(label, &strength,
+			Util::Widgets::SliderFloat(label, &strength,
 				NeuralRendering::CharacterPolicy::kMinimumStrength,
 				NeuralRendering::CharacterPolicy::kMaximumStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto tooltip = Util::HoverTooltipWrapper())
@@ -18599,7 +18611,7 @@ namespace
 		const auto frame = ImGui::GetFrameCount();
 		const bool editing = storage->GetBool(editingId, false) && storage->GetInt(frameId, -1) == frame - 1;
 		int pending = editing ? storage->GetInt(valueId) : static_cast<int>(settings.neuralRenderingModelResolutionPercent);
-		ImGui::SliderInt("NR Model Resolution", &pending,
+		Util::Widgets::SliderInt("NR Model Resolution", &pending,
 			static_cast<int>(NeuralRendering::kMinimumModelResolutionPercent),
 			static_cast<int>(NeuralRendering::kMaximumModelResolutionPercent), "%d%%", ImGuiSliderFlags_AlwaysClamp);
 		if (ImGui::IsItemDeactivatedAfterEdit())
@@ -18628,19 +18640,19 @@ namespace
 			ImGui::TextUnformatted("Sets Intensity, Local Tone, Local Structure and Skin Structure together. Natural is gentler; Fabric Detail emphasizes texture; Strong increases the effect. Custom keeps your values.");
 
 		bool customTuningChanged = false;
-		customTuningChanged |= ImGui::SliderFloat(
+		customTuningChanged |= Util::Widgets::SliderFloat(
 			"Intensity", &settings.neuralRenderingIntensity, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Sets overall enhancement for the whole NR image. Higher values make the effect stronger.");
-		customTuningChanged |= ImGui::SliderFloat(
+		customTuningChanged |= Util::Widgets::SliderFloat(
 			"Local Tone", &settings.neuralRenderingLocalTone, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjusts local brightness and contrast. Higher values allow stronger changes; colour preservation can soften them.");
-		customTuningChanged |= ImGui::SliderFloat(
+		customTuningChanged |= Util::Widgets::SliderFloat(
 			"Local Structure", &settings.neuralRenderingLocalStructure, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjusts texture and shape detail throughout the NR image. Higher values add stronger detail.");
-		customTuningChanged |= ImGui::SliderFloat(
+		customTuningChanged |= Util::Widgets::SliderFloat(
 			"Skin Structure", &settings.neuralRenderingSkinStructure, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjusts skin detail in the shared NR result. Skin Strength in Advanced controls how much of that result appears on selected bodies.");
@@ -18664,7 +18676,7 @@ namespace
 		ImGui::SeparatorText("Actors only");
 		{
 			auto guard = Util::DisableGuard(missingFov && !settings.neuralCharacterRenderingEnabled);
-			ImGui::Checkbox("Actors only", &settings.neuralCharacterRenderingEnabled);
+			Util::Widgets::Checkbox("Actors only", &settings.neuralCharacterRenderingEnabled);
 			if (auto tooltip = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted("Limits NR to selected actor types and materials. Everything else keeps its original appearance. Change these selections in Advanced.");
 		}
@@ -18672,29 +18684,40 @@ namespace
 
 	void DrawNeuralRenderingCategoryControls(Upscaling::Settings& settings, bool missingFov)
 	{
-		ImGui::SeparatorText("Category strengths");
-		{
-			auto guard = Util::DisableGuard(missingFov && !settings.neuralCharacterSceneStrengthsEnabled);
-			ImGui::Checkbox("Adjust categories in scene NR", &settings.neuralCharacterSceneStrengthsEnabled);
-			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Adjusts selected actor materials while keeping NR elsewhere. Off retains ordinary scene NR. Actors only uses these same choices independently.");
+		int coverage = settings.neuralCharacterRenderingEnabled ? 2 : settings.neuralCharacterSceneStrengthsEnabled ? 1 :
+		                                                                                                              0;
+		constexpr const char* choices[]{ "Entire scene", "Scene + categories", "Actors only" };
+		if (ImGui::BeginCombo("Coverage", choices[coverage])) {
+			for (int option = 0; option < IM_ARRAYSIZE(choices); ++option) {
+				const bool enablesUnavailableMode = missingFov &&
+				                                    ((option == 1 && !settings.neuralCharacterSceneStrengthsEnabled) ||
+														(option == 2 && !settings.neuralCharacterRenderingEnabled));
+				auto guard = Util::DisableGuard(enablesUnavailableMode);
+				if (ImGui::Selectable(choices[option], coverage == option)) {
+					coverage = option;
+					settings.neuralCharacterRenderingEnabled = coverage == 2;
+					if (coverage != 2)
+						settings.neuralCharacterSceneStrengthsEnabled = coverage == 1;
+				}
+			}
+			ImGui::EndCombo();
 		}
-		if (settings.neuralCharacterRenderingEnabled)
-			ImGui::TextDisabled("Actors only uses these selections. The scene adjustment preference is kept for when it is off.");
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Entire scene enhances everything. Scene + categories adjusts selected materials while keeping scene NR elsewhere. Actors only leaves the rest of the scene unchanged.");
 		{
-			auto guard = Util::DisableGuard(missingFov || (!settings.neuralCharacterSceneStrengthsEnabled && !settings.neuralCharacterRenderingEnabled));
+			auto guard = Util::DisableGuard(missingFov || coverage == 0);
 			DrawNeuralRenderingActorCategories(settings);
 			DrawNeuralRenderingMaterialStrengths(settings);
 		}
-		DrawNeuralRenderingActorOnlyControl(settings, missingFov);
 	}
+
 }
 
-void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool a_essentialsOnly, const std::function<void()>& a_drawColourSettings)
+void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool a_essentialsOnly, const std::function<void(bool)>& a_drawColourSettings)
 {
 	const Settings previousSettings = settings;
 	const bool showDiagnostics = NeuralRendering::kDevelopmentDiagnostics && !a_essentialsOnly && globals::state && globals::state->IsDeveloperMode();
-	if (ImGui::TreeNodeEx("Neural Rendering", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
+	{
 		ImGui::TextWrapped("Enhances scene detail and actor appearance.");
 		const bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;
 		const bool foveatedRouteEnabled =
@@ -18704,58 +18727,59 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		auto runtimeAvailabilityGuard = Util::DisableGuard(!NeuralRendering::Runtime::IsInstalled() || !IsNeuralRenderingHardwareSupported());
 		ApplyNeuralRenderingFovConstraint(settings);
 		DrawNeuralRenderingFovWarning(true);
-		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Renderscale NR before DLSS" };
-		static constexpr const char* renderingModeHelp[]{
-			"Enhances the finished scene at full resolution. Offers the most detail and usually costs more performance. FOV restriction is optional.",
-			"Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires FOV and DLSS.",
-			"Enhances a smaller image before DLSS enlarges it. Requires a scaled DLSS preset and active Render Scale in VR. Unavailable with DLAA, TAA or no upscaling. FOV restriction is optional."
-		};
-		const bool renderingModeOpen = ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())]);
-		if (!renderingModeOpen) {
-			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(renderingModeHelp[static_cast<uint>(GetNeuralRenderingMode())]);
-		}
-		if (renderingModeOpen) {
-			for (uint index = 0; index < IM_ARRAYSIZE(renderingModes); ++index) {
-				const auto mode = static_cast<NeuralRendering::RenderingMode>(index);
-				const bool selected = mode == GetNeuralRenderingMode();
-				auto guard = Util::DisableGuard(!NeuralRendering::IsRenderingModeSelectable(globals::game::isVR, mode, fovAvailable) ||
-												!IsNeuralRenderingUpscalingAvailable(mode));
-				if (ImGui::Selectable(renderingModes[index], selected))
-					settings.neuralRenderingMode = index;
+		MenuUI::SettingsPage page("NeuralRendering", { { "mode", "Mode", "Choose where NR works, its resolution and whether to use your FOV mask.", GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution ? "Render scale" : GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated ? "Foveated" :
+																																																																															"Full resolution" },
+														 { "blending", "Blending", "Choose how the enhanced picture blends with the original.", settings.neuralCharacterProviderBlending ? "NGX UIAlpha" : "CSX compositor" },
+														 { "look", "Look", "Choose one shared appearance, then adjust its detail and intensity." },
+														 { "colour", "Colour", "Refine colour and lighting after choosing the appearance.", {}, !a_essentialsOnly },
+														 { "selection", "Selection", "Keep scene NR or adjust selected actors and materials.", settings.neuralCharacterRenderingEnabled ? "Actors only" : settings.neuralCharacterSceneStrengthsEnabled ? "Scene + categories" :
+																																																														  "Entire scene" },
+														 { "actors", "Actors", "Optional: focus processing on actors when Actors only is selected.", settings.neuralCharacterRenderingEnabled ? "Actor coverage and edges" : "Optional · choose Actors only first", !a_essentialsOnly },
+														 { "diagnostics", "Diagnostics", "Inspect diagnostic controls and experiments.", {}, showDiagnostics } });
+		if (page.Is("mode")) {
+			static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Renderscale NR before DLSS" };
+			static constexpr const char* renderingModeHelp[]{
+				"Enhances the finished scene at full resolution. Offers the most detail and usually costs more performance. FOV restriction is optional.",
+				"Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires FOV and DLSS.",
+				"Enhances a smaller image before DLSS enlarges it. Requires a scaled DLSS preset and active Render Scale in VR. Unavailable with DLAA, TAA or no upscaling. FOV restriction is optional."
+			};
+			const bool renderingModeOpen = ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())]);
+			if (!renderingModeOpen) {
 				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted(renderingModeHelp[index]);
-				if (selected)
-					ImGui::SetItemDefaultFocus();
+					ImGui::TextUnformatted(renderingModeHelp[static_cast<uint>(GetNeuralRenderingMode())]);
 			}
-			ImGui::EndCombo();
+			if (renderingModeOpen) {
+				for (uint index = 0; index < IM_ARRAYSIZE(renderingModes); ++index) {
+					const auto mode = static_cast<NeuralRendering::RenderingMode>(index);
+					const bool selected = mode == GetNeuralRenderingMode();
+					auto guard = Util::DisableGuard(!NeuralRendering::IsRenderingModeSelectable(globals::game::isVR, mode, fovAvailable) ||
+													!IsNeuralRenderingUpscalingAvailable(mode));
+					if (ImGui::Selectable(renderingModes[index], selected))
+						settings.neuralRenderingMode = index;
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted(renderingModeHelp[index]);
+					if (selected)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+			if (!globals::game::isVR)
+				ImGui::TextDisabled("SE/AE supports Full resolution and Renderscale NR before DLSS, both with actor selection. Foveated NR requires Skyrim VR.");
+			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution) {
+				auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingFovOnly);
+				Util::Widgets::Checkbox("Restrict to FOV mask", &settings.neuralRenderingFovOnly);
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Limits NR to your FOV masks, preserving the scene outside. A smaller area can save GPU time. Set up the masks in VR > FOV.");
+			} else if (globals::game::isVR && GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution) {
+				auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingRenderscaleFov);
+				Util::Widgets::Checkbox("Use FOV mask for Renderscale NR", &settings.neuralRenderingRenderscaleFov);
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Limits NR and DLSS to your FOV selection. Outside it, the scene keeps ordinary rendering. Off processes the whole view.");
+			}
+			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution)
+				DrawNeuralModelResolutionSettings(settings);
 		}
 		const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;
-		if (reducedResolution)
-			DrawNeuralModelResolutionSettings(settings);
-		if (!a_essentialsOnly) {
-			ImGui::SeparatorText("Pipeline");
-			ImGui::TextUnformatted(reducedResolution ?
-									   "Placement: Render resolution, before DLSS" :
-									   "Placement: Final scene, before UI");
-			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(reducedResolution ?
-										   "NR runs before DLSS at render resolution. DLSS then reconstructs the final image." :
-										   "NR runs after scene post-processing to preserve fire and bright lights. Foveated uses the FOV region with Render Scale on or off.");
-		}
-		if (!globals::game::isVR)
-			ImGui::TextDisabled("SE/AE supports Full resolution and Renderscale NR before DLSS, both with actor selection. Foveated NR requires Skyrim VR.");
-		if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution) {
-			auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingFovOnly);
-			ImGui::Checkbox("Restrict to FOV mask", &settings.neuralRenderingFovOnly);
-			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Limits NR to your FOV masks, preserving the scene outside. A smaller area can save GPU time. Set up the masks in VR > FOV.");
-		} else if (globals::game::isVR && GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution) {
-			auto guard = Util::DisableGuard(!fovAvailable && !settings.neuralRenderingRenderscaleFov);
-			ImGui::Checkbox("Use FOV mask for Renderscale NR", &settings.neuralRenderingRenderscaleFov);
-			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted("Limits NR and DLSS to your FOV selection. Outside it, the scene keeps ordinary rendering. Off processes the whole view.");
-		}
 		const bool missingFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) &&
 		                        !fovAvailable;
 		if (missingFov)
@@ -18765,21 +18789,21 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		else if (NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov) &&
 				 !IsNeuralRenderingFovConfigurationAvailable())
 			ImGui::TextDisabled("FOV is configured; this NR route waits until runtime upscaling is available.");
-		if (!a_essentialsOnly)
+		if (page.Is("blending"))
 			DrawNeuralRenderingStrengthApplication(settings);
 		const bool missingRenderScale = !IsNeuralRenderingUpscalingAvailable();
 		const bool routeAvailable = !missingRenderScale && !missingFov && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution || (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
 		if (!routeAvailable && !missingFov && !missingRenderScale)
 			ImGui::TextDisabled("This mode requires NVIDIA DLSS.");
 
-		if (!a_essentialsOnly) {
+		if (page.Is("mode") && !a_essentialsOnly) {
 			const bool maskedRegion = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov);
 			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution && settings.neuralRenderingFovOnly) {
 				ImGui::TextDisabled("The mask and edge feather follow the shared Upscaling FOV settings.");
 			} else if (maskedRegion && GetNeuralRenderingInsertionPoint() == NeuralRendering::InsertionPoint::FinalLdrPreUi) {
 				ImGui::SeparatorText("Region blending");
 				auto featherGuard = Util::DisableGuard(!routeAvailable || settings.foveatedPeripheryMaskVisualization);
-				ImGui::SliderFloat("FOV edge feather", &settings.neuralRenderingBlendFeather,
+				Util::Widgets::SliderFloat("FOV edge feather", &settings.neuralRenderingBlendFeather,
 					kPeripheryTAACenterBlendFeatherMin, kPeripheryTAACenterBlendFeatherMax, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 				if (auto tooltip = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Sets how softly the NR region blends into the surrounding scene. Higher values widen the transition; this does not change the selected model strength.");
@@ -18787,7 +18811,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		}
 
 		if (!a_essentialsOnly) {
-			if (showDiagnostics && ImGui::TreeNode("Execution diagnostics")) {
+			if (page.Is("diagnostics") && showDiagnostics && ImGui::TreeNode("Execution diagnostics")) {
 				ImGui::TextDisabled("Pipeline arrangement: %s", NeuralRendering::GetPipelineArrangementName(GetNeuralRenderingArrangement()));
 				if (globals::game::isVR) {
 					static constexpr const char* stereoSubmissionModes[]{
@@ -18849,41 +18873,46 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 			}
 		}
 
-		DrawNeuralRenderingSharedImageSettings(settings);
-		if (a_essentialsOnly)
+		if (page.Is("look"))
+			DrawNeuralRenderingSharedImageSettings(settings);
+		if (a_essentialsOnly && page.Is("selection"))
 			DrawNeuralRenderingActorOnlyControl(settings, missingFov);
 		if (!a_essentialsOnly) {
-			if (a_drawColourSettings)
-				a_drawColourSettings();
-			DrawNeuralRenderingCategoryControls(settings, missingFov);
-			if (settings.neuralCharacterRenderingEnabled) {
+			if ((page.Is("colour") || page.Is("diagnostics")) && a_drawColourSettings)
+				a_drawColourSettings(page.Is("diagnostics"));
+			if (page.Is("selection"))
+				DrawNeuralRenderingCategoryControls(settings, missingFov);
+			if (page.Is("actors")) {
+				if (!settings.neuralCharacterRenderingEnabled)
+					ImGui::TextWrapped("Choose Actors only in Selection to use these controls.");
+				auto actorGuard = Util::DisableGuard(!settings.neuralCharacterRenderingEnabled || missingFov);
 				DrawNeuralRenderingCropControl(showDiagnostics);
 
-				ImGui::SliderFloat(
+				Util::Widgets::SliderFloat(
 					"Maximum actor distance", &settings.neuralCharacterMaximumDistanceMeters,
 					NeuralRendering::CharacterPolicy::kMinimumDistanceMeters,
 					NeuralRendering::CharacterPolicy::kMaximumDistanceMeters,
 					"%.1f m", ImGuiSliderFlags_AlwaysClamp);
 				if (auto tooltip = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Fades NR off distant actors. Lower distances can improve performance. 0 m removes the distance limit.");
-				ImGui::SliderFloat("Actor Focus Scale", &settings.neuralCharacterFocusScale,
+				Util::Widgets::SliderFloat("Actor Focus Scale", &settings.neuralCharacterFocusScale,
 					FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 				if (auto tooltip = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Focuses NR on actors near the centre of your view. Smaller values cover less; 1 includes the full view. Actors fade out at the edge.");
 				if (ImGui::TreeNodeEx("Actor coverage and edges", ImGuiTreeNodeFlags_SpanAvailWidth)) {
 					int minimumFacePixels = static_cast<int>(settings.neuralCharacterMinimumFacePixelSize);
-					if (ImGui::SliderInt("Minimum Face Size", &minimumFacePixels,
+					if (Util::Widgets::SliderInt("Minimum Face Size", &minimumFacePixels,
 							static_cast<int>(NeuralRendering::CharacterPolicy::kMinimumFacePixelSize),
 							static_cast<int>(NeuralRendering::CharacterPolicy::kMaximumFacePixelSize), "%d px", ImGuiSliderFlags_AlwaysClamp))
 						settings.neuralCharacterMinimumFacePixelSize = static_cast<uint>(minimumFacePixels);
 					if (auto tooltip = Util::HoverTooltipWrapper())
 						ImGui::TextUnformatted("Skips actors whose faces look smaller than this size on screen. Larger values can improve performance.");
-					ImGui::Checkbox(
+					Util::Widgets::Checkbox(
 						"Skip small distant actors",
 						&settings.neuralCharacterAdaptiveRoiSelectionEnabled);
 					if (auto tooltip = Util::HoverTooltipWrapper())
 						ImGui::TextUnformatted("Skips distant actors with very small faces to save processing time.");
-					ImGui::SliderFloat(
+					Util::Widgets::SliderFloat(
 						"Space around actors", &settings.neuralCharacterRoiMargin,
 						NeuralRendering::CharacterPolicy::kMinimumRoiMargin,
 						NeuralRendering::CharacterPolicy::kMaximumRoiMargin,
@@ -18892,7 +18921,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						ImGui::TextUnformatted("Adds space around selected actors to help preserve nearby detail. Larger margins can cost more performance.");
 					int holdFrames = static_cast<int>(
 						settings.neuralCharacterRoiHoldFrames);
-					if (ImGui::SliderInt(
+					if (Util::Widgets::SliderInt(
 							"Selection hold", &holdFrames, 0,
 							static_cast<int>(
 								NeuralRendering::CharacterPolicy::kMaximumRoiHoldFrames),
@@ -18903,7 +18932,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 					if (auto tooltip = Util::HoverTooltipWrapper())
 						ImGui::TextUnformatted("Keeps small faces selected briefly to reduce flicker as actors move. Higher values keep them selected longer.");
 
-					ImGui::Checkbox(
+					Util::Widgets::Checkbox(
 						"Depth-aware Edge Feather",
 						&settings.neuralCharacterDepthAwareFeatherEnabled);
 					if (auto tooltip = Util::HoverTooltipWrapper())
@@ -18913,7 +18942,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 							!settings.neuralCharacterDepthAwareFeatherEnabled);
 						int featherRadius = static_cast<int>(
 							settings.neuralCharacterFeatherRadius);
-						if (ImGui::SliderInt(
+						if (Util::Widgets::SliderInt(
 								"Edge Radius", &featherRadius, 0,
 								static_cast<int>(
 									NeuralRendering::CharacterPolicy::kMaximumFeatherRadius),
@@ -18923,7 +18952,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 						}
 						if (auto tooltip = Util::HoverTooltipWrapper())
 							ImGui::TextUnformatted("Sets the width of softened actor edges. Larger values soften more; 0 keeps sharp edges.");
-						ImGui::SliderFloat(
+						Util::Widgets::SliderFloat(
 							"Surface separation", &settings.neuralCharacterDepthThreshold,
 							0.0f,
 							NeuralRendering::CharacterPolicy::kMaximumFeatherDepthThreshold,
@@ -18934,18 +18963,22 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 
 					ImGui::TreePop();
 				}
+			}
+
+			if (page.Is("diagnostics") && showDiagnostics) {
+				auto actorGuard = Util::DisableGuard(!settings.neuralCharacterRenderingEnabled || missingFov);
 				if (showDiagnostics && ImGui::TreeNodeEx(
 										   "Actor diagnostics and experiments",
 										   ImGuiTreeNodeFlags_SpanAvailWidth)) {
 					const auto cropSnapshot = NeuralRendering::CharacterRendering::Instance().GetSnapshot();
 					for (std::size_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye)
 						ImGui::TextDisabled("%s: %s", eye ? "Right" : "Left", cropSnapshot.eyes[eye].cropDecision.c_str());
-					ImGui::Checkbox(
+					Util::Widgets::Checkbox(
 						"Deterministic Mask Composite",
 						&settings.neuralCharacterVisualIsolationEnabled);
 					if (auto tooltip = Util::HoverTooltipWrapper())
 						ImGui::TextUnformatted("Keeps neural edits on selected actor material pixels using their strengths. Disable only to diagnose NR across the full region.");
-					ImGui::Checkbox(
+					Util::Widgets::Checkbox(
 						"Visibility Depth Test",
 						&settings.neuralCharacterVisibilityDepthTestEnabled);
 					if (auto tooltip = Util::HoverTooltipWrapper())
@@ -18992,7 +19025,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 				}
 			}
 
-			if (showDiagnostics && ImGui::TreeNode("Runtime diagnostics")) {
+			if (page.Is("diagnostics") && showDiagnostics && ImGui::TreeNode("Runtime diagnostics")) {
 				const auto neuralStatus = NeuralRendering::Renderer::Instance().GetSnapshot();
 				ImGui::TextDisabled(
 					"Status: %s | Identity: %s",
@@ -19200,8 +19233,6 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 				ImGui::TreePop();
 			}
 		}
-
-		ImGui::TreePop();
 	}
 
 	SanitizeFoveatedSettings(settings);
@@ -19267,14 +19298,14 @@ void Upscaling::DrawFoveatedBlendSettings()
 {
 	bool enabled = settings.foveatedBlendCurveEnabled;
 	float falloff = settings.foveatedBlendFalloff;
-	bool changed = ImGui::Checkbox("FOV Blend Curve", &enabled);
+	bool changed = Util::Widgets::Checkbox("FOV Blend Curve", &enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Reshapes the center/periphery fade for FOV-only and FOV + TAA.");
 		ImGui::TextUnformatted("Off restores current feathering and remembers the curve value.");
 	}
 	{
 		auto guard = Util::DisableGuard(!enabled);
-		changed |= ImGui::SliderFloat("FOV Blend Falloff", &falloff, FoveatedBlendPolicy::MinFalloff, FoveatedBlendPolicy::MaxFalloff, "%.2f");
+		changed |= Util::Widgets::SliderFloat("FOV Blend Falloff", &falloff, FoveatedBlendPolicy::MinFalloff, FoveatedBlendPolicy::MaxFalloff, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("1.00 keeps current feathering; lower favors the center, higher favors the periphery.");
 			ImGui::TextUnformatted("Mask shape and transition width stay the same.");
@@ -19342,7 +19373,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 
 	if (foveatedDispatchSupportedForMethod) {
 		bool fovEnabled = settings.foveatedVendorDispatch;
-		if (ImGui::Checkbox("Foveated Upscaling (FOV)", &fovEnabled))
+		if (Util::Widgets::Checkbox("Foveated Upscaling (FOV)", &fovEnabled))
 			SetFoveatedUpscalingEnabled(fovEnabled);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Enables VR FOV-mask upscaling.");
@@ -19402,7 +19433,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 		ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.05f, 1.0f), "Default FOV mask active. Tune it for your HMD for best image and performance.");
 	}
 
-	ImGui::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
+	Util::Widgets::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
 		ImGui::TextUnformatted("Also works at full coverage. Temporarily pauses during loading and game menus.");
@@ -19425,7 +19456,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 
 	{
 		auto areaGuard = Util::DisableGuard(settings.periphery_taa_enable);
-		ImGui::SliderFloat("FOV Only Visible Scale", &settings.foveatedCenterArea, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
+		Util::Widgets::SliderFloat("FOV Only Visible Scale", &settings.foveatedCenterArea, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (settings.periphery_taa_enable) {
@@ -19438,7 +19469,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 		}
 	}
 	settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
-	ImGui::SliderFloat("Expand FOV Scale R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
+	Util::Widgets::SliderFloat("Expand FOV Scale R/L", &settings.foveatedCenterHorizontalScale, FoveatedCommon::kCenterHorizontalScaleMin, FoveatedCommon::kCenterHorizontalScaleMax, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Widens the upscaling center mask horizontally.");
 		if (settings.periphery_taa_enable)
@@ -19455,13 +19486,13 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 			ImGui::TextUnformatted(direction);
 		}
 	};
-	ImGui::SliderFloat("FOV Left Eye Offset X", &settings.foveatedLeftEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	Util::Widgets::SliderFloat("FOV Left Eye Offset X", &settings.foveatedLeftEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 	drawEyeOffsetTooltip("Left", "horizontal", "+X moves right, -X moves left.");
-	ImGui::SliderFloat("FOV Left Eye Offset Y", &settings.foveatedLeftEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	Util::Widgets::SliderFloat("FOV Left Eye Offset Y", &settings.foveatedLeftEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 	drawEyeOffsetTooltip("Left", "vertical", "+Y moves down, -Y moves up.");
-	ImGui::SliderFloat("FOV Right Eye Offset X", &settings.foveatedRightEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	Util::Widgets::SliderFloat("FOV Right Eye Offset X", &settings.foveatedRightEyeMaskOffsetX, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 	drawEyeOffsetTooltip("Right", "horizontal", "+X moves right, -X moves left.");
-	ImGui::SliderFloat("FOV Right Eye Offset Y", &settings.foveatedRightEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
+	Util::Widgets::SliderFloat("FOV Right Eye Offset Y", &settings.foveatedRightEyeMaskOffsetY, kFoveatedMaskOffsetAdjustMin, kFoveatedMaskOffsetAdjustMax, "%.3f");
 	drawEyeOffsetTooltip("Right", "vertical", "+Y moves down, -Y moves up.");
 
 	settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
@@ -19480,7 +19511,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 		ImGui::TextDisabled(a_essentialsLayout ?
 								"Enable FOV + TAA to edit the center and visible outer scales." :
 								"Enable FOV + TAA to edit the center scale, transition, and visible outer scale.");
-	ImGui::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
+	Util::Widgets::SliderFloat("FOV + TAA Center Scale", &settings.periphery_taa_center_area, FoveatedCommon::kCenterScaleMin, FoveatedCommon::kCenterScaleMax, "%.2f");
 	if (settings.periphery_taa_enable) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Actual DLSS/FSR center dispatch size for FOV + TAA.");
@@ -19490,7 +19521,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	}
 	settings.periphery_taa_center_area = ClampFoveatedCenterScale(settings.periphery_taa_center_area);
 	if (!a_essentialsLayout) {
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Center Blend/TAA Transition",
 			&settings.periphery_taa_center_blend_feather,
 			kPeripheryTAACenterBlendFeatherMin,
@@ -19506,7 +19537,7 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 		settings.periphery_taa_center_blend_feather = ClampPeripheryTAACenterBlendFeather(settings.periphery_taa_center_blend_feather);
 	}
 	const float taaOuterRangeMin = GetPeripheryTAAOuterScaleFloor(settings.periphery_taa_center_area);
-	ImGui::SliderFloat(
+	Util::Widgets::SliderFloat(
 		"FOV + TAA Visible Outer Scale",
 		&settings.periphery_taa_outer_scale,
 		taaOuterRangeMin,

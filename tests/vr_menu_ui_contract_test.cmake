@@ -23,9 +23,9 @@ function(assert_section_contains _start_marker _end_marker _required_text _surfa
 endfunction()
 
 assert_section_contains(
-    "if (BeginTabItemWithFont(\"VR Stabilizer\""
-    "if (BeginTabItemWithFont(\"Stereo\""
-    "VRFpsStabilizer::DrawStatus();\n\t\t\t\tconst auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());"
+    "if (page.Is(\"stabilizer\"))"
+    "if (page.Is(\"stereo\"))"
+    "VRFpsStabilizer::DrawStatus();\n\t\t\tconst auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());"
     "Stabilizer plugin availability gate enclosing navigation and both editors"
 )
 
@@ -49,7 +49,7 @@ assert_section_contains(
 )
 assert_section_contains(
     "if (!CanConfigureMenuLayout())"
-    "ImGui::SliderFloat(\"Mouse Speed\""
+    "Util::Widgets::SliderFloat(\"Mouse Speed\""
     "DrawMenuLayoutUnlockSetting();"
     "VR Advanced UI"
 )
@@ -73,7 +73,7 @@ assert_section_contains(
 )
 
 foreach(_required_behavior IN ITEMS
-    "ImGui::Checkbox(\"Unlock Menu Position and Size\""
+    "Util::Widgets::Checkbox(\"Unlock Menu Position and Size\""
     "vr.settings.UnlockMenuPositionAndSize"
     "vr.SetMenuLayoutUnlocked(layoutUnlocked)"
     "float VR::GetEffectiveMenuScale() const"

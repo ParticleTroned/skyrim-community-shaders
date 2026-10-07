@@ -271,6 +271,11 @@ void RE::Sky::ForceWeather(TESWeather* weather, bool isOverride)
 		NativeForceWeather(this, weather, isOverride);
 }
 
+namespace Util
+{
+	namespace Widgets = ImGui;
+}
+
 #include "forced_weather_under_test.h"
 
 namespace

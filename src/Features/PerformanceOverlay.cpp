@@ -1,3 +1,4 @@
+#include "Menu/SettingsPage.h"
 /**
  * @file PerformanceOverlay.cpp
  * @brief Real-time performance monitoring system for CSX
@@ -17,7 +18,6 @@
  *
  */
 
-#include "PerformanceOverlay.h"
 #include "Feature.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTestAggregator.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
@@ -27,6 +27,7 @@
 #include "Menu.h"
 #include "Menu/OverlayRenderer.h"
 #include "Menu/ProfilingRenderer.h"
+#include "PerformanceOverlay.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
@@ -192,7 +193,12 @@ bool PerformanceOverlay::HideFromDesktopWhenSubmittedToVR() const
 
 void PerformanceOverlay::DrawSettings()
 {
-	ImGui::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
+	MenuUI::SettingsPage page("PerformanceOverlay", {
+														{ "counters", "Counters", "Choose which performance counters and graphs to show." },
+														{ "appearance", "Appearance", "Refine size, placement and update speed." },
+													});
+
+	Util::Widgets::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		DrawPerformanceHUDOverlayHelp();
 	}
@@ -200,64 +206,72 @@ void PerformanceOverlay::DrawSettings()
 	if (this->settings.ShowInOverlay) {
 		ImGui::Indent();
 
-		// Display options
-		ImGui::TextUnformatted("Display Options");
-		ImGui::Separator();
+		if (page.Is("counters")) {
+			// Display options
+			ImGui::TextUnformatted("Display Options");
+			ImGui::Separator();
 
-		ImGui::Checkbox("Show FPS Counter", &this->settings.ShowFPS);
-		ImGui::Checkbox("Show Draw Calls", &this->settings.ShowDrawCalls);
-		ImGui::Checkbox("Show CSX Render Passes", &this->settings.ShowCSPasses);
-		ImGui::Checkbox("Show VRAM Usage", &this->settings.ShowVRAM);
+			Util::Widgets::Checkbox("Show FPS Counter", &this->settings.ShowFPS);
+			Util::Widgets::Checkbox("Show Draw Calls", &this->settings.ShowDrawCalls);
+			Util::Widgets::Checkbox("Show CSX Render Passes", &this->settings.ShowCSPasses);
+			Util::Widgets::Checkbox("Show VRAM Usage", &this->settings.ShowVRAM);
 
-		bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
-		if (this->settings.ShowFPS && isFrameGenerationActive) {
-			ImGui::Checkbox("Show Pre-FG Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
+			bool isFrameGenerationActive = globals::features::upscaling.IsFrameGenerationActive();
+			if (this->settings.ShowFPS && isFrameGenerationActive) {
+				Util::Widgets::Checkbox("Show Pre-FG Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
 
-			ImGui::Checkbox("Show Post-FG Frametime Graph", &this->settings.ShowPostFGFrameTimeGraph);
-			if (ImGui::IsItemHovered()) {
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("FSR Frame Generation uses calculated timing data (2x Pre-FG).\nDLSS Frame Generation provides measured timing data.");
+				Util::Widgets::Checkbox("Show Post-FG Frametime Graph", &this->settings.ShowPostFGFrameTimeGraph);
+				if (ImGui::IsItemHovered()) {
+					if (auto _tt = Util::HoverTooltipWrapper()) {
+						ImGui::Text("FSR Frame Generation uses calculated timing data (2x Pre-FG).\nDLSS Frame Generation provides measured timing data.");
+					}
 				}
+			} else if (this->settings.ShowFPS) {
+				Util::Widgets::Checkbox("Show Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
 			}
-		} else if (this->settings.ShowFPS) {
-			ImGui::Checkbox("Show Frametime Graph", &this->settings.ShowPreFGFrameTimeGraph);
+
+			ImGui::Spacing();
+			ImGui::Spacing();
 		}
+		if (page.Is("appearance")) {
+			// Appearance settings
+			ImGui::TextUnformatted("Appearance");
+			ImGui::Separator();
 
-		ImGui::Spacing();
-		ImGui::Spacing();
+			Util::Widgets::SliderFloat("Text Size", &this->settings.TextSize, 0.8f, 1.2f, "%.2f");
+			Util::Widgets::SliderFloat("Background Opacity", &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
+			Util::Widgets::Checkbox("Show Border", &this->settings.ShowBorder);
+			Util::Widgets::SliderFloat("Update Interval", &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
+			Util::Widgets::SliderInt("Frame History Size", &this->settings.FrameHistorySize,
+				this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize);
 
-		// Appearance settings
-		ImGui::TextUnformatted("Appearance");
-		ImGui::Separator();
-
-		ImGui::SliderFloat("Text Size", &this->settings.TextSize, 0.8f, 1.2f, "%.2f");
-		ImGui::SliderFloat("Background Opacity", &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
-		ImGui::Checkbox("Show Border", &this->settings.ShowBorder);
-		ImGui::SliderFloat("Update Interval", &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
-		ImGui::SliderInt("Frame History Size", &this->settings.FrameHistorySize,
-			this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize);
-
-		ImGui::Separator();
-		ImGui::Text("Position:");
-		if (ImGui::Button("Reset Position")) {
-			ResetWindowPosition();
+			ImGui::Separator();
+			ImGui::Text("Position:");
+			if (ImGui::Button("Reset Position")) {
+				ResetWindowPosition();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Restore Defaults")) {
+				RestoreDefaultSettings();
+				globals::menu->RequestSettingsDirtyCheck();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::TextUnformatted("Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals.");
+			}
 		}
-		ImGui::SameLine();
-		if (ImGui::Button("Restore Defaults")) {
-			RestoreDefaultSettings();
-			globals::menu->AcceptCurrentFeatureSettingsAsClean(GetName());
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals.");
-		}
-
 		ImGui::Unindent();
 	}
 }
 
 void PerformanceOverlay::DrawEssentialSettings()
 {
-	ImGui::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
+	MenuUI::SettingsPage page("PerformanceOverlay", {
+														{ "essentials", "Essentials", "Start with the main choices for this feature." },
+													});
+	if (!page.Is("essentials"))
+		return;
+
+	Util::Widgets::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		DrawPerformanceHUDOverlayHelp();
 	}

@@ -33,7 +33,6 @@ public:
 		std::map<std::string, bool>& categoryExpansionStates,
 		const std::function<void()>& drawGeneralSettings,
 		const std::function<void()>& drawAdvancedSettings);
-	static float GetRestoreDefaultsButtonReserveHeight();
 	/** Reveal a feature's complete settings without changing the global UI mode. */
 	static void ShowAdvancedSettings(Feature* a_feature);
 

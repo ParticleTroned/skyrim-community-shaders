@@ -676,6 +676,7 @@ bool Menu::EnsureSettingsDirtyBaseline()
 	settingsDirtyBaseline = std::move(snapshot);
 	settingsDirtyBaselineInitialized = true;
 	settingsDirty = false;
+	dirtySettingsSections.clear();
 	return true;
 }
 
@@ -684,6 +685,7 @@ void Menu::ResetSettingsDirtyState()
 	settingsDirtyBaseline = json::object();
 	settingsDirtyBaselineInitialized = false;
 	settingsDirty = false;
+	dirtySettingsSections.clear();
 	settingsDirtyCheckRequested = false;
 	ClearSettingsSaveResult();
 }
@@ -715,7 +717,23 @@ void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSetti
 		settingsDirtyBaseline.erase(a_featureSettingsName);
 	}
 	settingsDirty = currentSettings != settingsDirtyBaseline;
+	UpdateDirtySettingsSections(currentSettings);
 	ClearSettingsSaveResult();
+}
+
+void Menu::UpdateDirtySettingsSections(const json& currentSettings)
+{
+	dirtySettingsSections.clear();
+	for (const auto& [name, value] : currentSettings.items()) {
+		const auto saved = settingsDirtyBaseline.find(name);
+		if (saved == settingsDirtyBaseline.end() || *saved != value)
+			dirtySettingsSections.insert(name);
+	}
+	for (const auto& [name, value] : settingsDirtyBaseline.items()) {
+		(void)value;
+		if (!currentSettings.contains(name))
+			dirtySettingsSections.insert(name);
+	}
 }
 
 void Menu::UpdateSettingsDirtyState()
@@ -730,6 +748,7 @@ void Menu::UpdateSettingsDirtyState()
 	json currentSettings;
 	if (CaptureCurrentSettingsSnapshot(currentSettings)) {
 		settingsDirty = currentSettings != settingsDirtyBaseline;
+		UpdateDirtySettingsSections(currentSettings);
 		if (settingsDirty && !settingsSaveMessageIsError)
 			ClearSettingsSaveResult();
 	}
@@ -1273,7 +1292,7 @@ void Menu::DrawDisableAtBootSettings()
 			const std::string featureName = feature->GetShortName();
 			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 
-			if (ImGui::Checkbox(featureName.c_str(), &isDisabled)) {
+			if (Util::Widgets::Checkbox(featureName.c_str(), &isDisabled)) {
 				// Update the disabledFeatures map based on user interaction
 				disabledFeatures[featureName] = isDisabled;
 			}

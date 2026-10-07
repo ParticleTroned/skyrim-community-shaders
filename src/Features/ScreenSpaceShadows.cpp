@@ -1,4 +1,5 @@
 #include "ScreenSpaceShadows.h"
+#include "Menu/SettingsPage.h"
 
 #include "Features/TerrainBlending.h"
 #include "FoveatedCommon.h"
@@ -125,8 +126,14 @@ namespace
 
 void ScreenSpaceShadows::DrawSettings()
 {
+	MenuUI::SettingsPage page("ScreenSpaceShadows", {
+														{ "appearance", "Shadows", "Choose shadow coverage, then refine strength and quality." },
+													});
+	if (!page.Is("appearance"))
+		return;
+
 	bool enabled = IsEnabledRequested();
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enable", &enabled))
 		SetEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Turns screen space shadows on or off.");
@@ -137,19 +144,19 @@ void ScreenSpaceShadows::DrawSettings()
 	ImGui::Separator();
 
 	int sampleCount = static_cast<int>(bendSettings.SampleCount);
-	if (ImGui::SliderInt("Sample Count Multiplier", &sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)))
+	if (Util::Widgets::SliderInt("Sample Count Multiplier", &sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)))
 		bendSettings.SampleCount = static_cast<uint>(std::clamp(sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)));
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Higher values improve detail but cost more performance. In VR, values >1 are not recommended.");
 	}
 
 	if (globals::game::isVR) {
-		ImGui::SliderFloat("Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
+		Util::Widgets::SliderFloat("Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Raises or lowers VR shadow quality and GPU cost.");
 		}
 
-		ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+		Util::Widgets::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("0 disables. Lower values improve performance but remove distant shadows.");
 		}
@@ -160,17 +167,17 @@ void ScreenSpaceShadows::DrawSettings()
 	ImGui::TextUnformatted("Fine-tuning");
 	ImGui::Separator();
 
-	ImGui::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
+	Util::Widgets::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Makes contact shadows thinner or thicker.");
 	}
 
-	ImGui::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax);
+	Util::Widgets::SliderFloat("Bilinear Threshold", &bendSettings.BilinearThreshold, kBilinearThresholdMin, kBilinearThresholdMax);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Balances edge sharpness versus smoothness.");
 	}
 
-	ImGui::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, kShadowContrastMin, kShadowContrastMax);
+	Util::Widgets::SliderFloat("Shadow Contrast", &bendSettings.ShadowContrast, kShadowContrastMin, kShadowContrastMax);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Controls overall shadow darkness.");
 	}
@@ -182,24 +189,30 @@ void ScreenSpaceShadows::DrawSettings()
 void ScreenSpaceShadows::DrawPerformanceSettings(bool)
 {
 	bool enabled = IsEnabledRequested();
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enable", &enabled))
 		SetEnabled(enabled);
 
 	int sampleCount = static_cast<int>(bendSettings.SampleCount);
-	if (ImGui::SliderInt("Sample Count Multiplier", &sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)))
+	if (Util::Widgets::SliderInt("Sample Count Multiplier", &sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)))
 		bendSettings.SampleCount = static_cast<uint>(std::clamp(sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)));
 
 	if (globals::game::isVR) {
-		ImGui::SliderFloat("VR Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
-		ImGui::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+		Util::Widgets::SliderFloat("VR Baseline Samples", &bendSettings.VRBaseSamplesAtReference, kVRBaseSamplesMin, kVRBaseSamplesMax, "%.0f");
+		Util::Widgets::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
 		bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
 	}
 }
 
 void ScreenSpaceShadows::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("ScreenSpaceShadows", {
+														{ "essentials", "Essentials", "Start with the main choices for this feature." },
+													});
+	if (!page.Is("essentials"))
+		return;
+
 	bool enabled = IsEnabledRequested();
-	if (ImGui::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enable", &enabled))
 		SetEnabled(enabled);
 }
 
@@ -265,7 +278,7 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 	bool foveatedEnabled = bendSettings.EnableFoveated != 0;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable);
-		if (ImGui::Checkbox("Screen Space Shadows FOV", &foveatedEnabled))
+		if (Util::Widgets::Checkbox("Screen Space Shadows FOV", &foveatedEnabled))
 			bendSettings.EnableFoveated = foveatedEnabled ? 1u : 0u;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {

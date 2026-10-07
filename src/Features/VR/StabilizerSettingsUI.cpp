@@ -135,7 +135,7 @@ namespace VRFpsStabilizer
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.4f);
 			if (setting.kind == SettingKind::Boolean && numeric && (number == 0 || number == 1)) {
 				bool enabled = number == 1;
-				changed = ImGui::Checkbox(setting.label, &enabled);
+				changed = Util::Widgets::Checkbox(setting.label, &enabled);
 				if (changed)
 					*value = enabled ? "1" : "0";
 			} else if (setting.kind != SettingKind::WorldList && numeric) {
@@ -221,7 +221,7 @@ namespace VRFpsStabilizer
 		void DrawLocations(Editor& editor)
 		{
 			bool enabled = editor.document.Get("Settings", "Enabled").value_or("0") == "1";
-			if (ImGui::Checkbox("Enable location rules", &enabled))
+			if (Util::Widgets::Checkbox("Enable location rules", &enabled))
 				editor.document.Set("Settings", "Enabled", enabled ? "1" : "0", editor.error);
 			Tooltip("Use VRFpsStabilizerLocation.ini to choose a quality tier by location name. Good is used for unlisted locations in the supplied configuration.");
 			ImGui::Combo("Location tier", &editor.location, kLocationSections.data(), static_cast<int>(kLocationSections.size()));
@@ -287,7 +287,7 @@ namespace VRFpsStabilizer
 				DrawLocations(editor);
 			} else if (Equal(group, "Quality Levels")) {
 				ImGui::TextWrapped("Level 0 is highest quality; level 9 is lowest. Stabilizer chooses a level using your frame-time targets.");
-				ImGui::SliderInt("Quality level", &editor.level, 0, 9);
+				Util::Widgets::SliderInt("Quality level", &editor.level, 0, 9);
 				Tooltip("Choose the level to configure. This edits that level's rules without forcing the current game to that level.");
 				DrawQualityRows(editor, std::format("Level{}", editor.level).c_str());
 			} else if (Equal(group, "Commands")) {

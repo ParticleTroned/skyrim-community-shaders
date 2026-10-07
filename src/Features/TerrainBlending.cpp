@@ -1,4 +1,6 @@
 #include "TerrainBlending.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "Deferred.h"
 #include "FrameAnnotations.h"
@@ -509,8 +511,14 @@ namespace
 
 void TerrainBlending::DrawSettings()
 {
+	MenuUI::SettingsPage page("TerrainBlending", {
+													 { "appearance", "Blending", "Choose which surfaces blend, then tune their appearance." },
+												 });
+	if (!page.Is("appearance"))
+		return;
+
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable", &enabled)) {
+	if (Util::Widgets::Checkbox("Enable", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 
@@ -518,14 +526,14 @@ void TerrainBlending::DrawSettings()
 		ImGui::Text("Enable seamless blending between terrain and objects.");
 	}
 
-	ImGui::SliderFloat("Blend Strength", &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
+	Util::Widgets::SliderFloat("Blend Strength", &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Scales blending strength. Lower values make blending tighter.");
 	}
 
 	ImGui::Spacing();
 	if (ImGui::TreeNodeEx("Performance Options")) {
-		ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
+		Util::Widgets::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Terrain farther than this distance skips TB depth rendering. Set to 0 to disable culling.");
 		}
@@ -536,17 +544,23 @@ void TerrainBlending::DrawSettings()
 void TerrainBlending::DrawPerformanceSettings(bool)
 {
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable", &enabled)) {
+	if (Util::Widgets::Checkbox("Enable", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 
-	ImGui::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
+	Util::Widgets::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
 }
 
 void TerrainBlending::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("TerrainBlending", {
+													 { "essentials", "Essentials", "Start with the main choices for this feature." },
+												 });
+	if (!page.Is("essentials"))
+		return;
+
 	bool enabled = settings.Enabled != 0;
-	if (ImGui::Checkbox("Enable", &enabled)) {
+	if (Util::Widgets::Checkbox("Enable", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 }

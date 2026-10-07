@@ -1039,7 +1039,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		bool profilingEnabled = profiler.IsUserEnabled();
 		ImGui::TextUnformatted("Profiling");
 		ImGui::SameLine();
-		if (ImGui::Checkbox("Enable", &profilingEnabled)) {
+		if (Util::Widgets::Checkbox("Enable", &profilingEnabled)) {
 			profiler.SetUserEnabled(profilingEnabled);
 			timeSinceLastUpdate = kStatsRefreshSeconds;
 		}

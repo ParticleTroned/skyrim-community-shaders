@@ -1,4 +1,5 @@
 #include "FeatureListRenderer.h"
+#include "Menu/SettingsPage.h"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,7 @@
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
+#include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/Wetterness.h"
 #include "Fonts.h"
 #include "Globals.h"
@@ -38,44 +40,41 @@ namespace
 	constexpr const char* PERFORMANCE_TUNING_MENU_NAME = "Performance Tuning";
 	// Core built-in menu names that always appear before the feature list.
 	constexpr std::array<const char*, 6> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", PERFORMANCE_TUNING_MENU_NAME, "Display" };
-	constexpr float RESTORE_DEFAULTS_ICON_SCALE = 1.2f;
 
 	void DrawSettingsSaveStatus()
 	{
-		bool drewStatus = false;
-		const auto& saveMessage = globals::menu->GetSettingsSaveMessage();
-		const bool hasSaveError = !saveMessage.empty() && globals::menu->IsSettingsSaveMessageError();
-		if (!saveMessage.empty()) {
-			if (hasSaveError)
-				Util::Text::WrappedError("%s", saveMessage.c_str());
-			else
-				Util::Text::WrappedSuccess("%s", saveMessage.c_str());
-			drewStatus = true;
-		}
-
-		if (globals::menu->HasUnsavedSettings() && !hasSaveError) {
-			Util::Text::WrappedError(
-				"Unsaved settings changes. Save them, restore the changed feature's defaults, or restore saved settings.");
-			drewStatus = true;
-		}
-
-		if (drewStatus)
-			ImGui::Spacing();
+		const auto& menu = *globals::menu;
+		const auto& message = menu.GetSettingsSaveMessage();
+		if (menu.IsSettingsSaveMessageError() && !message.empty())
+			Util::Text::WrappedError("%s", message.c_str());
+		else if (menu.HasUnsavedSettings())
+			Util::Text::Warning("Unsaved changes");
+		else
+			ImGui::TextDisabled("Settings saved");
 	}
 
-	ImVec2 GetRestoreDefaultsIconSize()
+	float SettingsFooterHeight()
 	{
-		const float iconDimension = ImGui::GetFrameHeight() * RESTORE_DEFAULTS_ICON_SCALE;
-		return ImVec2(iconDimension, iconDimension);
+		return ImGui::GetFrameHeightWithSpacing() * 2 + ImGui::GetStyle().ItemSpacing.y;
 	}
 
-	ImVec2 GetRestoreDefaultsFrameSize()
+	void DrawSettingsFooterActions()
 	{
-		const auto& style = ImGui::GetStyle();
-		const ImVec2 iconSize = GetRestoreDefaultsIconSize();
-		return ImVec2(
-			iconSize.x + style.FramePadding.x * 2.0f,
-			iconSize.y + style.FramePadding.y * 2.0f);
+		ImGui::Separator();
+		const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
+		const auto normal = Util::Color::Blend(ImGui::GetStyleColorVec4(ImGuiCol_Button), accent, .3f, ImGui::GetStyleColorVec4(ImGuiCol_Button).w);
+		{
+			const Util::StyledButtonWrapper primary(normal, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			if (ImGui::Button(ImGui::GetWindowWidth() < ImGui::GetFontSize() * 27 ? "Save" : "Save settings"))
+				globals::state->Save();
+		}
+		Util::AddTooltip("Save all your CSX settings.");
+		ImGui::SameLine();
+		if (ImGui::Button(ImGui::GetWindowWidth() < ImGui::GetFontSize() * 27 ? "Load" : "Load saved")) {
+			globals::state->Load();
+			globals::features::llf::particleLights.GetConfigs();
+		}
+		Util::AddTooltip("Replace current changes with your saved CSX settings.");
 	}
 
 	struct FeatureBannerTexture
@@ -235,7 +234,7 @@ namespace
 		bool advanced = mode != 0;
 
 		ImGui::PushID("FeatureUiMode");
-		if (ImGui::Checkbox("Advanced", &advanced))
+		if (Util::Widgets::Checkbox("Advanced", &advanced))
 			mode = advanced ? 1 : 0;
 		ImGui::PopID();
 
@@ -404,12 +403,6 @@ namespace
 	bool g_dontShowAgainCheckbox = false;
 }
 
-float FeatureListRenderer::GetRestoreDefaultsButtonReserveHeight()
-{
-	const auto& style = ImGui::GetStyle();
-	return GetRestoreDefaultsFrameSize().y + style.WindowPadding.y + style.ItemSpacing.y;
-}
-
 void FeatureListRenderer::ShowAdvancedSettings(Feature* a_feature)
 {
 	if (a_feature)
@@ -503,7 +496,11 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// infrequently, but could be optimized if performance becomes an issue.
 
 	if (!essentialsMode)
-		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() { ProfilingRenderer::RenderStatistics(); } });
+		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() {
+															  MenuUI::SettingsPage page("Profiling", { { "timings", "Timings", "Enable profiling, then inspect CPU and GPU work." } });
+															  if (page.Is("timings"))
+																  ProfilingRenderer::RenderStatistics();
+														  } });
 
 	if (!essentialsMode) {
 		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "General", drawGeneralSettings });
@@ -795,6 +792,17 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	if (ImGui::Selectable(fmt::format(" {} ", feat->GetDisplayName()).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns)) {
 		selectedMenuRef = listId;
 	}
+	if (selectedMenuRef == listId) {
+		const auto minimum = ImGui::GetItemRectMin();
+		const auto maximum = ImGui::GetItemRectMax();
+		ImGui::GetWindowDrawList()->AddRectFilled(minimum, { minimum.x + ImGui::GetStyle().FramePadding.x, maximum.y }, ImGui::GetColorU32(themeSettings.StatusPalette.InfoColor), ImGui::GetStyle().FrameRounding);
+	}
+	if (globals::menu->HasUnsavedFeatureSettings(feat->GetName())) {
+		const auto maximum = ImGui::GetItemRectMax();
+		const auto minimum = ImGui::GetItemRectMin();
+		const float radius = ImGui::GetFontSize() * 0.12f;
+		ImGui::GetWindowDrawList()->AddCircleFilled({ maximum.x - ImGui::GetStyle().FramePadding.x - radius, (minimum.y + maximum.y) * 0.5f }, radius, ImGui::GetColorU32(themeSettings.StatusPalette.Warning));
+	}
 	ImGui::PopStyleColor();
 	ImGui::EndDisabled();
 	ImGui::PopID();
@@ -804,14 +812,17 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 {
 	ImGui::PushID(menu.name.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		DrawSettingsSaveStatus();
-
-		// Add spacing only for Home menu
-		if (menu.name == "Home") {
-			ImGui::Dummy(ImVec2(0, ThemeManager::Constants::BUTTON_SPACING));
+	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight() }, ImGuiChildFlags_None)) {
+			// Add spacing only for Home menu
+			if (menu.name == "Home") {
+				ImGui::Dummy(ImVec2(0, ThemeManager::Constants::BUTTON_SPACING));
+			}
+			menu.func();
 		}
-		menu.func();
+		ImGui::EndChild();
+		DrawSettingsFooterActions();
+		DrawSettingsSaveStatus();
 	}
 	ImGui::EndChild();
 	ImGui::PopStyleColor();
@@ -842,9 +853,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 
 	ImGui::PushID(featureName.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		DrawSettingsSaveStatus();
-
+	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
 		// Compute scene-controlled state once for both header and settings
 		auto* sceneManager = SceneSettingsManager::GetSingleton();
 		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
@@ -855,10 +864,17 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
 
 		// Render feature settings content
-		RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
+		{
+			MenuUI::FeatureScope featureScope(feat);
+			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight() }, ImGuiChildFlags_None))
+				RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
+			ImGui::EndChild();
+		}
 
-		// Render restore defaults button (floating in bottom-right)
-		RenderRestoreDefaultsButton(feat, isDisabled, isLoaded);
+		// Keep save, load and feature defaults together in the fixed footer.
+		DrawSettingsFooterActions();
+		RenderRestoreDefaultsButton(feat, isDisabled || sceneControlled, isLoaded);
+		DrawSettingsSaveStatus();
 		json performanceSettingsAfter;
 		feat->SaveSettings(performanceSettingsAfter);
 		if (performanceSettingsBefore != performanceSettingsAfter)
@@ -1000,7 +1016,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			const bool moveWeatherPauseToBottom = showWeatherPause && feat->GetShortName() == "LODBlending";
 			auto drawWeatherPauseToggle = [&]() {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
-				if (ImGui::Checkbox("Pause Weather Overrides", &paused)) {
+				if (Util::Widgets::Checkbox("Pause Weather Overrides", &paused)) {
 					WeatherManager::GetSingleton()->SetFeaturePaused(
 						feat->GetShortName(), paused);
 				}
@@ -1105,16 +1121,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
 
-			ImGui::Spacing();
-			ImGui::SeparatorText("Performance");
-			if (!globalEssentialsMode && feat != &globals::features::csEditor && globals::profiler && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
-				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName(), [feat]() {
-					PerformanceTuningRenderer::RenderFeatureMeasurement(feat, true);
-				});
-			} else {
-				PerformanceTuningRenderer::RenderFeatureMeasurement(feat);
-			}
-			ImGui::Dummy(ImVec2(0.0f, GetRestoreDefaultsButtonReserveHeight()));
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();
@@ -1151,32 +1157,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 		return;
 	}
 
-	// Position button in bottom-right corner, accounting for full button frame size
-	const auto& style = ImGui::GetStyle();
-	ImVec2 windowPos = ImGui::GetWindowPos();
-	ImVec2 windowSize = ImGui::GetWindowSize();
-	float scrollbarWidth = ImGui::GetScrollMaxY() > 0 ? style.ScrollbarSize : 0.0f;
-	const ImVec2 iconSize = GetRestoreDefaultsIconSize();
-	const ImVec2 frameSize = GetRestoreDefaultsFrameSize();
-	ImGui::SetCursorScreenPos(ImVec2(
-		windowPos.x + windowSize.x - frameSize.x - style.WindowPadding.x - scrollbarWidth,
-		windowPos.y + windowSize.y - frameSize.y - style.WindowPadding.y));
+	ImGui::SameLine();
+	const bool restoreDefaults = ImGui::Button(ImGui::GetWindowWidth() < ImGui::GetFontSize() * 27 ? "Defaults" : "Restore defaults");
 
-	auto iconButtonStyle = Util::TransparentIconButtonStyle();
-	const std::string restoreDefaultsButtonId = std::format("##RestoreDefaults{}", feat->GetShortName());
-	const std::string restoreDefaultsTextButtonId = std::format("R##RestoreDefaults{}", feat->GetShortName());
-
-	auto& menu = *globals::menu;
-	bool restoreDefaults = false;
-	if (menu.uiIcons.featureSettingRevert.texture) {
-		restoreDefaults = Util::ImageButtonWithFlash(
-			restoreDefaultsButtonId.c_str(),
-			menu.uiIcons.featureSettingRevert.texture,
-			iconSize);
-	} else {
-		restoreDefaults =
-			Util::ButtonWithFlash(restoreDefaultsTextButtonId.c_str(), iconSize);
-	}
 	if (restoreDefaults) {
 		feat->RestoreDefaultSettings();
 		auto* weatherRegistry =
@@ -1188,7 +1171,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 			weatherManager->NotifyUserSettingsChanged();
 			weatherManager->RefreshFeatureOverrides();
 		}
-		globals::menu->AcceptCurrentFeatureSettingsAsClean(feat->GetName());
+		globals::menu->RequestSettingsDirtyCheck();
 	}
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1300,7 +1283,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 		ImGui::Spacing();
 
 		// "Don't show again" checkbox -- same pattern as Clear Cache dialog
-		ImGui::Checkbox("Don't show this warning again", &g_dontShowAgainCheckbox);
+		Util::Widgets::Checkbox("Don't show this warning again", &g_dontShowAgainCheckbox);
 
 		ImGui::Spacing();
 

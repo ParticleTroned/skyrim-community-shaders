@@ -396,21 +396,21 @@ namespace
 		ImGui::SeparatorText("Auto Focus Settings");
 		DrawDofTooltip("Auto Focus uses Skyrim's cached dynamic DOF values. The vanilla Display Depth of Field slider maps to Game Slider / Multiplier.");
 
-		changed |= ImGui::SliderFloat("Near Distance", &a_values.nearDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= Util::Widgets::SliderFloat("Near Distance", &a_values.nearDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Offset before pixels nearer than the sampled focus depth begin to blur.");
-		changed |= ImGui::SliderFloat("Far Distance", &a_values.farDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= Util::Widgets::SliderFloat("Far Distance", &a_values.farDistance, kDofDistanceMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Offset before pixels farther than the sampled focus depth begin to blur.");
-		changed |= ImGui::SliderFloat("Near Range", &a_values.nearRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= Util::Widgets::SliderFloat("Near Range", &a_values.nearRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Fade width for near-side blur. Higher values make the transition into blur more gradual.");
-		changed |= ImGui::SliderFloat("Far Range", &a_values.farRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= Util::Widgets::SliderFloat("Far Range", &a_values.farRange, kDofRangeMin, kDofAutoFocusDepthMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Fade width for far-side blur. Higher values make the transition into blur more gradual.");
 
-		changed |= ImGui::SliderFloat("Near Blur", &a_values.nearBlur, kDofAutoFocusBlurMin, kDofAutoFocusBlurMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= Util::Widgets::SliderFloat("Near Blur", &a_values.nearBlur, kDofAutoFocusBlurMin, kDofAutoFocusBlurMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Near-side blur amount before the game slider multiplier is applied.");
-		changed |= ImGui::SliderFloat("Far Blur", &a_values.farBlur, kDofAutoFocusBlurMin, kDofAutoFocusBlurMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= Util::Widgets::SliderFloat("Far Blur", &a_values.farBlur, kDofAutoFocusBlurMin, kDofAutoFocusBlurMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Far-side blur amount before the game slider multiplier is applied.");
 
-		changed |= ImGui::SliderFloat("Game Slider / Multiplier", &a_values.blurMultiplier, kDofAutoFocusBlurMultiplierMin, kDofAutoFocusBlurMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		changed |= Util::Widgets::SliderFloat("Game Slider / Multiplier", &a_values.blurMultiplier, kDofAutoFocusBlurMultiplierMin, kDofAutoFocusBlurMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		DrawDofTooltip("Scales Near Blur and Far Blur. This matches Skyrim's Settings > Display > Depth of Field slider and fDynamicDOFBlurMultiplier.");
 
 		if (changed) {
@@ -425,7 +425,7 @@ namespace
 		Util::DisableGuard disabled(!a_enabled);
 
 		if (a_allowAutoFocus) {
-			changed |= ImGui::Checkbox("Auto Focus", &a_values.autoFocus);
+			changed |= Util::Widgets::Checkbox("Auto Focus", &a_values.autoFocus);
 			DrawDofTooltip("Uses Skyrim's dynamic DOF path, which shifts focus from the sampled scene depth. bDoDepthOfField can still disable the effect, and fDDOFFocusCenterweightExt changes sample weighting.");
 		} else {
 			a_values.autoFocus = false;
@@ -434,10 +434,10 @@ namespace
 		if (a_values.autoFocus) {
 			changed |= DrawDofAutoFocusControls(a_values.autoFocusSettings);
 		} else {
-			changed |= ImGui::SliderFloat("Strength", &a_values.strength, kDofStrengthMin, kDofStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			changed |= ImGui::SliderFloat("Distance", &a_values.distance, kDofDistanceMin, kDofDistanceMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			changed |= Util::Widgets::SliderFloat("Strength", &a_values.strength, kDofStrengthMin, kDofStrengthMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			changed |= Util::Widgets::SliderFloat("Distance", &a_values.distance, kDofDistanceMin, kDofDistanceMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 			DrawDofTooltip("Static focus distance. Mode decides whether blur applies in front of it, behind it, both, or neither.");
-			changed |= ImGui::SliderFloat("Range", &a_values.range, kDofRangeMin, kDofRangeMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			changed |= Util::Widgets::SliderFloat("Range", &a_values.range, kDofRangeMin, kDofRangeMax, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 			DrawDofTooltip("Static transition width around Distance. Higher values make blur fade in more gradually.");
 		}
 
@@ -450,7 +450,7 @@ namespace
 			ImGui::EndDisabled();
 		}
 
-		changed |= ImGui::Checkbox("Exclude Sky", &a_values.excludeSky);
+		changed |= Util::Widgets::Checkbox("Exclude Sky", &a_values.excludeSky);
 		DrawDofTooltip("Sets the No Sky flag so the sky is excluded from the DOF blur pass.");
 		changed |= DrawDofBlurRadiusCombo(a_values.blurRadius);
 
@@ -713,7 +713,7 @@ void CSUtility::DrawDepthOfFieldSettings()
 	static Util::ConfirmationPopup sceneLockPopup;
 	static Util::ConfirmationPopup underwaterLockPopup;
 
-	ImGui::Checkbox("Enable Underwater Fog DOF Blur Fix", &settings.fixUnderwaterFogDofBlur);
+	Util::Widgets::Checkbox("Enable Underwater Fog DOF Blur Fix", &settings.fixUnderwaterFogDofBlur);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Correctly blurs underwater fog with vanilla DOF. This affects only the fix and takes effect immediately.");
 	}

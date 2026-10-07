@@ -395,7 +395,7 @@ namespace WeatherUtils
 	bool DrawSliderInt8(const std::string& label, int& property)
 	{
 		return DrawTrackedSlider(label, property, nullptr, s_int8Tracker, [&]() {
-			return ImGui::SliderInt(label.c_str(), &property, -127, 127);
+			return Util::Widgets::SliderInt(label.c_str(), &property, -127, 127);
 		});
 	}
 
@@ -450,7 +450,7 @@ namespace WeatherUtils
 	bool DrawSliderInt(const std::string& label, int& property, int min, int max, Widget* widget)
 	{
 		return DrawTrackedSlider(label, property, widget, s_intTracker, [&]() {
-			return ImGui::SliderInt(label.c_str(), &property, min, max);
+			return Util::Widgets::SliderInt(label.c_str(), &property, min, max);
 		});
 	}
 
@@ -463,7 +463,7 @@ namespace WeatherUtils
 		const char* format)
 	{
 		return DrawTrackedSlider(label, property, widget, s_uint32Tracker, [&]() {
-			return ImGui::SliderScalar(
+			return Util::Widgets::SliderScalar(
 				label.c_str(),
 				ImGuiDataType_U32,
 				&property,
@@ -476,7 +476,7 @@ namespace WeatherUtils
 	bool DrawSliderFloat(const std::string& label, float& property, float min, float max, Widget* widget, const char* format)
 	{
 		return DrawTrackedSlider(label, property, widget, s_floatTracker, [&]() {
-			return ImGui::SliderFloat(label.c_str(), &property, min, max, format);
+			return Util::Widgets::SliderFloat(label.c_str(), &property, min, max, format);
 		});
 	}
 
@@ -489,7 +489,7 @@ namespace WeatherUtils
 
 		const bool previous = value;
 		const bool changed = DrawWithWidgetHighlight(w, hid, [&]() {
-			return ImGui::Checkbox(label.c_str(), &value);
+			return Util::Widgets::Checkbox(label.c_str(), &value);
 		});
 		if (changed)
 			PushUndoWithPreviousValue(w, value, previous);
@@ -664,7 +664,7 @@ namespace TOD
 			std::string trackerKey = ScopedKey(valueName);
 			const float previousValue = values[i];
 
-			if (ImGui::SliderFloat(id.c_str(), &values[i], minValue, maxValue, format)) {
+			if (Util::Widgets::SliderFloat(id.c_str(), &values[i], minValue, maxValue, format)) {
 				changed = true;
 				s_todSliderTracker.OnValueChanged(trackerKey, values[i], currentTime);
 			}
@@ -848,7 +848,7 @@ namespace TOD
 				ImGui::SetNextItemWidth(checkboxWidth);
 				std::string inheritId = std::string("##inherit_") + label + std::to_string(i);
 				const bool previousInherit = inheritFlags[i];
-				if (ImGui::Checkbox(inheritId.c_str(), &inheritFlags[i])) {
+				if (Util::Widgets::Checkbox(inheritId.c_str(), &inheritFlags[i])) {
 					PushUndoWithPreviousValue(g_currentWidget, inheritFlags[i], previousInherit);
 					if (inheritFlags[i]) {
 						values[i] = parentValues[i];
@@ -879,7 +879,7 @@ namespace TOD
 
 			ImGui::BeginDisabled(isInherited);
 			const float previousValue = values[i];
-			if (ImGui::SliderFloat(id.c_str(), &values[i], minValue, maxValue, format)) {
+			if (Util::Widgets::SliderFloat(id.c_str(), &values[i], minValue, maxValue, format)) {
 				changed = true;
 				if (inheritFlags)
 					inheritFlags[i] = false;
@@ -949,7 +949,7 @@ namespace TOD
 
 			std::string inheritId = std::string("##inherit_") + label;
 			const bool previousInherit = inheritFlag;
-			if (ImGui::Checkbox(inheritId.c_str(), &inheritFlag)) {
+			if (Util::Widgets::Checkbox(inheritId.c_str(), &inheritFlag)) {
 				PushUndoWithPreviousValue(g_currentWidget, inheritFlag, previousInherit);
 				if (inheritFlag) {
 					// Copy all parent values
@@ -1116,7 +1116,7 @@ namespace TOD
 
 			ImGui::SetNextItemWidth(columnWidth);
 			const float previousValue = values[i];
-			if (ImGui::SliderFloat("##value", &values[i], minValue, maxValue, format)) {
+			if (Util::Widgets::SliderFloat("##value", &values[i], minValue, maxValue, format)) {
 				changed = true;
 			}
 
@@ -1153,7 +1153,7 @@ namespace TOD
 
 			std::string inheritId = std::string("##inherit_") + label;
 			const bool previousInherit = inheritFlag;
-			if (ImGui::Checkbox(inheritId.c_str(), &inheritFlag)) {
+			if (Util::Widgets::Checkbox(inheritId.c_str(), &inheritFlag)) {
 				PushUndoWithPreviousValue(g_currentWidget, inheritFlag, previousInherit);
 				if (inheritFlag) {
 					for (int i = 0; i < Count; ++i) {
@@ -1192,7 +1192,7 @@ namespace TOD
 			ImGui::SetNextItemWidth(columnWidth);
 			const float previousValue = values[i];
 			const std::string itemId = ScopedKey(std::string(label) + "_inherit_" + std::to_string(i));
-			if (ImGui::SliderFloat("##value", &values[i], minValue, maxValue, format)) {
+			if (Util::Widgets::SliderFloat("##value", &values[i], minValue, maxValue, format)) {
 				changed = true;
 				s_todFloatTracker.OnValueChanged(itemId, values[i], ImGui::GetTime());
 			}
@@ -1244,7 +1244,7 @@ namespace TOD
 			std::string id = std::string("##") + label + std::to_string(i);
 			const std::string itemId = ScopedKey(std::string(label) + "_" + std::to_string(i));
 			const int previousValue = values[i];
-			if (ImGui::SliderInt(id.c_str(), &values[i], -127, 127)) {
+			if (Util::Widgets::SliderInt(id.c_str(), &values[i], -127, 127)) {
 				changed = true;
 				s_todInt8Tracker.OnValueChanged(itemId, values[i], currentTime);
 			}

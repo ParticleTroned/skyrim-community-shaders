@@ -10,7 +10,10 @@ set(_nr_shader_files
     ColorExposureCS.hlsl
     ColorMeasureCS.hlsl
     ColorPrepareCS.hlsl
-    ColorReconstructCS.hlsl)
+    ColorReconstructCS.hlsl
+    ModelResolutionCommon.hlsli
+    ModelResolutionPrepareCS.hlsl
+    ModelResolutionReconstructCS.hlsl)
 file(GLOB_RECURSE _nr_entries LIST_DIRECTORIES TRUE
     RELATIVE "${_nr_shader_root}" "${_nr_shader_root}/*")
 foreach(_entry IN LISTS _nr_entries)

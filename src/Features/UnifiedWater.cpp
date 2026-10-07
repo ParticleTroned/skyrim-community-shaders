@@ -1,4 +1,5 @@
-﻿#include "UnifiedWater.h"
+#include "UnifiedWater.h"
+#include "Menu/SettingsPage.h"
 
 #include "Menu.h"
 #include "Menu/OverlayRenderer.h"
@@ -189,7 +190,7 @@ namespace
 		}
 		ImGui::PopID();
 
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Water Tint",
 			&a_settings.WaterTintStrength,
 			kWaterTintStrengthMin,
@@ -646,26 +647,33 @@ void UnifiedWater::RestoreDefaultSettings()
 
 void UnifiedWater::DrawSettings()
 {
+	MenuUI::SettingsPage page("UnifiedWater", {
+												  { "look", "Look", "Choose water colour and surface appearance." },
+												  { "shore", "Shore", "Refine where shallow water meets the shore." },
+												  { "depth", "Depth", "Refine water depth and surface separation." },
+											  });
+
 	SanitizeSettings(settings);
 
-	ImGui::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Uses meshes with significantly lower tri-count for improved performance with no visual quality loss.\n"
-			"Will only affect newly created water - requires a change of location or game restart to take effect.");
+	if (page.Is("look")) {
+		Util::Widgets::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"Uses meshes with significantly lower tri-count for improved performance with no visual quality loss.\n"
+				"Will only affect newly created water - requires a change of location or game restart to take effect.");
+		}
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Water Appearance");
+		DrawWaterTintSettings(settings);
+
+		ImGui::Spacing();
 	}
-
-	ImGui::Spacing();
-	ImGui::SeparatorText("Water Appearance");
-	DrawWaterTintSettings(settings);
-
-	ImGui::Spacing();
-
-	if (ImGui::TreeNodeEx("Shallow Water Surface Visibility")) {
+	if (page.Is("shore")) {
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
 		ImGui::SeparatorText("Shore Contact");
 
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Edge Fade Depth",
 			&settings.ShoreDepthBlendRangeUnits,
 			kShoreDepthBlendRangeUnitsMin,
@@ -678,7 +686,7 @@ void UnifiedWater::DrawSettings()
 				"Set to 0 to disable this world-space fade; Minimum Edge Fade Width remains active.");
 		}
 
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Shallow Fallback Max Distance",
 			&settings.ShallowFallbackMaxDistance,
 			kShallowFallbackMaxDistanceMin,
@@ -692,13 +700,12 @@ void UnifiedWater::DrawSettings()
 		}
 
 		ImGui::EndDisabled();
-		ImGui::TreePop();
 	}
 
 	ImGui::Spacing();
 
-	if (ImGui::TreeNodeEx("Debug")) {
-		ImGui::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
+	if (page.Is("depth")) {
+		Util::Widgets::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Disables the shallow-only surface cue and uses the native Open Shaders-like water blend.\n"
@@ -706,7 +713,7 @@ void UnifiedWater::DrawSettings()
 		}
 
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
-		ImGui::SliderFloat(
+		Util::Widgets::SliderFloat(
 			"Shallow Fallback Strength",
 			&settings.ShallowFallbackStrength,
 			kShallowFallbackStrengthMin,
@@ -725,7 +732,7 @@ void UnifiedWater::DrawSettings()
 
 			ImGui::SeparatorText("Deep Water Protection");
 
-			ImGui::SliderFloat(
+			Util::Widgets::SliderFloat(
 				"Connection Search Reach",
 				&settings.DeepConnectionProbeReachUnits,
 				kDeepConnectionProbeReachUnitsMin,
@@ -738,7 +745,7 @@ void UnifiedWater::DrawSettings()
 					"Increase this for broad shallow banks. Set to 0 to disable connected-depth protection.");
 			}
 
-			ImGui::SliderFloat(
+			Util::Widgets::SliderFloat(
 				"Deep Context Depth",
 				&settings.DeepContextDepthUnits,
 				kDeepContextDepthUnitsMin,
@@ -751,7 +758,7 @@ void UnifiedWater::DrawSettings()
 					"Keep this above Shallow Surface Depth so a uniformly shallow stream retains its fallback surface.");
 			}
 
-			ImGui::SliderFloat(
+			Util::Widgets::SliderFloat(
 				"Deep Context Transition",
 				&settings.DeepContextTransitionUnits,
 				kDeepContextTransitionUnitsMin,
@@ -767,7 +774,7 @@ void UnifiedWater::DrawSettings()
 			ImGui::Spacing();
 			ImGui::SeparatorText("Depth Separation");
 
-			ImGui::SliderFloat(
+			Util::Widgets::SliderFloat(
 				"Shallow Surface Depth",
 				&settings.ShallowSurfaceDepthRangeUnits,
 				kShallowSurfaceDepthRangeUnitsMin,
@@ -783,7 +790,7 @@ void UnifiedWater::DrawSettings()
 			ImGui::Spacing();
 			ImGui::SeparatorText("Shore Contact");
 
-			ImGui::SliderFloat(
+			Util::Widgets::SliderFloat(
 				"Minimum Edge Fade Width",
 				&settings.ShoreContactMinFadePixels,
 				kShoreContactMinFadePixelsMin,
@@ -814,8 +821,6 @@ void UnifiedWater::DrawSettings()
 			if (ImGui::Button("Regenerate Caches") && waterCache)
 				waterCache->RegenerateCaches();
 		}
-
-		ImGui::TreePop();
 	}
 }
 
@@ -841,6 +846,12 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 
 void UnifiedWater::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("UnifiedWater", {
+												  { "essentials", "Essentials", "Start with the main choices for this feature." },
+											  });
+	if (!page.Is("essentials"))
+		return;
+
 	SanitizeSettings(settings);
 	ImGui::SeparatorText("Water Appearance");
 	DrawWaterTintSettings(settings);
@@ -848,7 +859,7 @@ void UnifiedWater::DrawEssentialSettings()
 
 void UnifiedWater::DrawPerformanceSettings(bool)
 {
-	ImGui::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
+	Util::Widgets::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
 }
 
 json UnifiedWater::CapturePerformanceSettingsState() const

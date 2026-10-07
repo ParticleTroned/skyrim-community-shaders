@@ -126,6 +126,8 @@ public:
 	void Init();
 	void DrawSettings();
 	bool HasUnsavedSettings() const { return settingsDirty; }
+	/** Whether a feature differs from the last successfully saved settings. */
+	bool HasUnsavedFeatureSettings(const std::string& name) const { return dirtySettingsSections.contains(name); }
 	void RequestSettingsDirtyCheck() { settingsDirtyCheckRequested = true; }
 	void ResetSettingsDirtyState();
 	void AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName);
@@ -517,6 +519,7 @@ private:
 	json settingsDirtyBaseline = json::object();
 	bool settingsDirtyBaselineInitialized = false;
 	bool settingsDirty = false;
+	std::unordered_set<std::string> dirtySettingsSections;
 	bool settingsDirtyCheckRequested = false;
 	std::string settingsSaveMessage;
 	bool settingsSaveMessageIsError = false;
@@ -524,6 +527,7 @@ private:
 	bool CaptureCurrentSettingsSnapshot(json& a_snapshot);
 	bool EnsureSettingsDirtyBaseline();
 	void UpdateSettingsDirtyState();
+	void UpdateDirtySettingsSections(const json& currentSettings);
 
 	std::string cachedIniPath;  // io.IniFilename must point to a string that lives for the duration of the runtime
 

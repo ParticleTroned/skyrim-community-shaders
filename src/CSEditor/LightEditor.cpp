@@ -496,7 +496,7 @@ void LightEditor::DrawSettings()
 	}
 
 	bool requestedEnabled = enabled;
-	if (ImGui::Checkbox("Enable Light Editor", &requestedEnabled))
+	if (Util::Widgets::Checkbox("Enable Light Editor", &requestedEnabled))
 		SetEnabled(requestedEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s",
@@ -519,8 +519,8 @@ void LightEditor::DrawSettings()
 		ImGui::BeginDisabled();
 	}
 
-	ImGui::Checkbox("Disable Regular Falloff Lights", &disableRegularLights);
-	ImGui::Checkbox("Disable Inverse Square Falloff Lights", &disableInvSqLights);
+	Util::Widgets::Checkbox("Disable Regular Falloff Lights", &disableRegularLights);
+	Util::Widgets::Checkbox("Disable Inverse Square Falloff Lights", &disableInvSqLights);
 
 	if (ImGui::Button("Toggle All LP Lights")) {
 		ScheduleConsoleCommand("tlp 0");
@@ -598,7 +598,7 @@ void LightEditor::DrawSettings()
 		}
 
 		ImGui::SameLine();
-		ImGui::Checkbox("Shadows Only", &shadowsOnly);
+		Util::Widgets::Checkbox("Shadows Only", &shadowsOnly);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", "Only show lights with HemiShadow or OmniShadow flags.");
 		}
@@ -754,7 +754,7 @@ void LightEditor::DrawSettings()
 		DrawDeleteConfirmation();
 	}
 	ImGui::SameLine();
-	ImGui::Checkbox("Log Mode", &extendedLogMode);
+	Util::Widgets::Checkbox("Log Mode", &extendedLogMode);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", "Extend slider ranges and use a logarithmic scale.");
 	}
@@ -879,7 +879,7 @@ void LightEditor::DrawSettings()
 	if (lpInfo.isLPLight) {
 		ImGui::SameLine();
 		const auto saveColorLabel = fmt::format("{}##color", "Save");
-		ImGui::Checkbox(saveColorLabel.c_str(), &saveColorToLP);
+		Util::Widgets::Checkbox(saveColorLabel.c_str(), &saveColorToLP);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", "Include color when saving to Light Placer.\nWhen unchecked, the existing JSON color is preserved.");
 		}
@@ -892,7 +892,7 @@ void LightEditor::DrawSettings()
 						  float extMin, float extMax,
 						  const char* format) -> bool {
 		if (extendedLogMode)
-			return ImGui::SliderFloat(label, &value, extMin, extMax, format, ImGuiSliderFlags_Logarithmic);
+			return Util::Widgets::SliderFloat(label, &value, extMin, extMax, format, ImGuiSliderFlags_Logarithmic);
 		return static_cast<bool>(WeatherUtils::DrawSliderFloat(label, value, normalMin, normalMax, nullptr, format));
 	};
 
@@ -923,10 +923,10 @@ void LightEditor::DrawSettings()
 		ImGui::Text("X: %.2f, Y: %.2f, Z: %.2f", displayInfo.pos.x, displayInfo.pos.y, displayInfo.pos.z);
 		if (selected.isRef) {
 			ImGui::Spacing();
-			ImGui::SliderFloat3("Position Offset", &current.pos.x, -500.f, 500.f, "%.0f");
+			Util::Widgets::SliderFloat3("Position Offset", &current.pos.x, -500.f, 500.f, "%.0f");
 		} else if (lpInfo.isLPLight) {
 			ImGui::Spacing();
-			ImGui::SliderFloat3("Position", &current.pos.x, -1000.f, 1000.f, "%.0f");
+			Util::Widgets::SliderFloat3("Position", &current.pos.x, -1000.f, 1000.f, "%.0f");
 		}
 
 		ImGui::Spacing();
@@ -947,7 +947,7 @@ void LightEditor::DrawSettings()
 				if (disabled)
 					ImGui::BeginDisabled();
 				bool inSet = lpFlagSet.contains(flagName);
-				if (ImGui::Checkbox(flagName, &inSet)) {
+				if (Util::Widgets::Checkbox(flagName, &inSet)) {
 					if (inSet)
 						lpFlagSet.insert(flagName);
 					else

@@ -1,4 +1,5 @@
 #include "DynamicCubemaps.h"
+#include "Menu/SettingsPage.h"
 
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
@@ -152,39 +153,47 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 
 void DynamicCubemaps::DrawSettings()
 {
-	const char* resolutionPreview = settings.CubemapResolution == kPerformanceCubemapResolution ?
-	                                    "128 x 128 (Performance)" :
-	                                    "256 x 256 (Quality)";
-	if (ImGui::BeginCombo("Reflection Resolution", resolutionPreview)) {
-		const bool performanceSelected = settings.CubemapResolution == kPerformanceCubemapResolution;
-		if (ImGui::Selectable("128 x 128 (Performance)", performanceSelected)) {
-			SetCubemapResolution(kPerformanceCubemapResolution);
-		}
-		if (performanceSelected)
-			ImGui::SetItemDefaultFocus();
+	MenuUI::SettingsPage page("DynamicCubemaps", {
+													 { "quality", "Quality", "Choose reflection resolution first." },
+													 { "reflections", "Reflections", "Choose nearby reflection detail and quality." },
+													 { "environment", "Authoring", "Create and export a reflection texture." },
+													 { "vr", "VR", "Refine reflection updates in the headset.", {}, globals::game::isVR },
+												 });
 
-		const bool qualitySelected = settings.CubemapResolution == kQualityCubemapResolution;
-		if (ImGui::Selectable("256 x 256 (Quality)", qualitySelected)) {
-			SetCubemapResolution(kQualityCubemapResolution);
-		}
-		if (qualitySelected)
-			ImGui::SetItemDefaultFocus();
-		ImGui::EndCombo();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextWrapped(
-			"Controls dynamic reflection quality and cost. Use 128 x 128 for performance or 256 x 256 for quality.");
-	}
-	if (IsCubemapResolutionRestartRequired()) {
-		Util::Text::WrappedWarning(
-			"Restart the game to apply the new reflection resolution. The current session remains at %u x %u.",
-			activeCubemapResolution,
-			activeCubemapResolution);
-	}
+	if (page.Is("quality")) {
+		const char* resolutionPreview = settings.CubemapResolution == kPerformanceCubemapResolution ?
+		                                    "128 x 128 (Performance)" :
+		                                    "256 x 256 (Quality)";
+		if (ImGui::BeginCombo("Reflection Resolution", resolutionPreview)) {
+			const bool performanceSelected = settings.CubemapResolution == kPerformanceCubemapResolution;
+			if (ImGui::Selectable("128 x 128 (Performance)", performanceSelected)) {
+				SetCubemapResolution(kPerformanceCubemapResolution);
+			}
+			if (performanceSelected)
+				ImGui::SetItemDefaultFocus();
 
-	if (ImGui::TreeNodeEx("Screen Space Reflections")) {
+			const bool qualitySelected = settings.CubemapResolution == kQualityCubemapResolution;
+			if (ImGui::Selectable("256 x 256 (Quality)", qualitySelected)) {
+				SetCubemapResolution(kQualityCubemapResolution);
+			}
+			if (qualitySelected)
+				ImGui::SetItemDefaultFocus();
+			ImGui::EndCombo();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextWrapped(
+				"Controls dynamic reflection quality and cost. Use 128 x 128 for performance or 256 x 256 for quality.");
+		}
+		if (IsCubemapResolutionRestartRequired()) {
+			Util::Text::WrappedWarning(
+				"Restart the game to apply the new reflection resolution. The current session remains at %u x %u.",
+				activeCubemapResolution,
+				activeCubemapResolution);
+		}
+	}
+	if (page.Is("reflections")) {
 		bool enabledSSR = settings.EnabledSSR != 0;
-		if (ImGui::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
+		if (Util::Widgets::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
 			settings.EnabledSSR = enabledSSR ? 1u : 0u;
 			recompileFlag = true;
 		}
@@ -198,17 +207,16 @@ void DynamicCubemaps::DrawSettings()
 				ImGui::PopStyleColor();
 			}
 		}
-		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx("Dynamic Cubemap Creator")) {
+	if (page.Is("environment")) {
 		ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
 		bool enabledCreator = settings.EnabledCreator != 0;
-		if (ImGui::Checkbox("Enable Creator", &enabledCreator))
+		if (Util::Widgets::Checkbox("Enable Creator", &enabledCreator))
 			settings.EnabledCreator = enabledCreator ? 1u : 0u;
 		if (settings.EnabledCreator) {
 			ImGui::ColorEdit3("Color", reinterpret_cast<float*>(&settings.CubemapColor));
-			ImGui::SliderFloat("Roughness", &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
+			Util::Widgets::SliderFloat("Roughness", &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
 			if (ImGui::Button("Export")) {
 				auto device = globals::d3d::device;
 				auto context = globals::d3d::context;
@@ -279,21 +287,25 @@ void DynamicCubemaps::DrawSettings()
 				image.Release();
 			}
 		}
-		ImGui::TreePop();
 	}
 	if (REL::Module::IsVR()) {
-		if (ImGui::TreeNodeEx("Advanced VR Settings")) {
+		if (page.Is("vr")) {
 			Util::RenderImGuiSettingsTree(iniVRCubeMapSettings, "VR");
 			Util::RenderImGuiSettingsTree(hiddenVRCubeMapSettings, "hiddenVR");
-			ImGui::TreePop();
 		}
 	}
 }
 
 void DynamicCubemaps::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("DynamicCubemaps", {
+													 { "essentials", "Essentials", "Start with the main choices for this feature." },
+												 });
+	if (!page.Is("essentials"))
+		return;
+
 	bool enabledSSR = settings.EnabledSSR != 0;
-	if (ImGui::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
+	if (Util::Widgets::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
 		settings.EnabledSSR = enabledSSR ? 1u : 0u;
 		recompileFlag = true;
 	}

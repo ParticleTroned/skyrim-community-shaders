@@ -1,4 +1,5 @@
 #include "CSUtility.h"
+#include "Menu/SettingsPage.h"
 
 #include "UnderwaterDepthOfField.h"
 #include "Utils/UI.h"
@@ -48,13 +49,19 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void CSUtility::DrawSettingsHeaderControls()
 {
-	ImGui::Checkbox("Enable DOF Utilities", &settings.enabled);
+	Util::Widgets::Checkbox("Enable DOF Utilities", &settings.enabled);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Controls the depth-of-field overrides and underwater fog blur correction on this page.");
 }
 
 void CSUtility::DrawSettings()
 {
+	MenuUI::SettingsPage page("CSUtility", {
+											   { "appearance", "Tools", "Choose the utility you want to use." },
+										   });
+	if (!page.Is("appearance"))
+		return;
+
 	DrawDepthOfFieldSettings();
 }
 

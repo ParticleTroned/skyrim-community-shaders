@@ -1,4 +1,6 @@
 #include "Skylighting.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
 #include <array>
@@ -259,7 +261,7 @@ namespace
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
 	{
 		const bool previousEnabled = a_skylighting.settings.EnableSkylighting;
-		if (ImGui::Checkbox("Enable", &a_skylighting.settings.EnableSkylighting))
+		if (Util::Widgets::Checkbox("Enable", &a_skylighting.settings.EnableSkylighting))
 			ApplySkylightingRuntimeEnabledChange(a_skylighting, previousEnabled);
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -357,7 +359,7 @@ namespace
 	{
 		auto& settings = a_skylighting.settings;
 
-		ImGui::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
+		Util::Widgets::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
 
 		NormalizeSettingsForRuntime(settings);
 		uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, a_skylighting.probeArrayDims[2]);
@@ -366,7 +368,7 @@ namespace
 		ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
 		{
 			int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
-			if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16)) {
+			if (Util::Widgets::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16)) {
 				settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
 				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
 			}
@@ -374,14 +376,14 @@ namespace
 			settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
 			const int minProbeIntervalUI = static_cast<int>(ClampUpdateInterval(settings.OcclusionUpdateInterval));
 			int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
-			if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, minProbeIntervalUI, 16))
+			if (Util::Widgets::SliderInt("Probe Update Interval", &probeIntervalUI, minProbeIntervalUI, 16))
 				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
 		}
 		ImGui::EndDisabled();
 		NormalizeSettingsForRuntime(settings);
 
 		const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
-		if (ImGui::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
+		if (Util::Widgets::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
 			previousIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates) {
 			ResetProbeUpdateWindow(a_skylighting);
 		}
@@ -389,7 +391,7 @@ namespace
 		ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
 		{
 			int stableSliceCountUI = static_cast<int>(stableSliceCount);
-			if (ImGui::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(a_skylighting.probeArrayDims[2]))) {
+			if (Util::Widgets::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(a_skylighting.probeArrayDims[2]))) {
 				const uint nextStableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), a_skylighting.probeArrayDims[2]);
 				if (settings.StableSliceCount != nextStableSliceCount) {
 					settings.StableSliceCount = nextStableSliceCount;
@@ -400,7 +402,7 @@ namespace
 		ImGui::EndDisabled();
 
 		float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
-		if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
+		if (Util::Widgets::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
 			settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
 			a_skylighting.QueueResetSkylighting();
 		}
@@ -641,141 +643,153 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 
 void Skylighting::DrawSettings()
 {
+	MenuUI::SettingsPage page("Skylighting", {
+												 { "quality", "Quality", "Choose a preset, then balance detail and update speed." },
+												 { "coverage", "Coverage", "Set how far skylighting reaches." },
+												 { "look", "Look", "Refine visibility and the direction of shadowing." },
+											 });
+
 	DrawSkylightingRuntimeToggle(*this);
-	DrawSkylightingPerformancePresetButtons(*this, "SkylightingSettingsPerformancePresetButtons");
-	ImGui::Separator();
+	if (page.Is("quality")) {
+		DrawSkylightingPerformancePresetButtons(*this, "SkylightingSettingsPerformancePresetButtons");
+		ImGui::Separator();
+	}
+	if (page.Is("look")) {
+		ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
+		Util::Widgets::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
+		Util::Widgets::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
+		if (Util::Widgets::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
+			QueueResetSkylighting();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Helps skylighting darken under some roofs the game marks specially. May rarely add extra dark patches if hidden helper objects are included.");
+	}
+	if (page.Is("quality")) {
+		ImGui::Separator();
 
-	ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
-	ImGui::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
-	ImGui::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
-	if (ImGui::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
-		QueueResetSkylighting();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Helps skylighting darken under some roofs the game marks specially. May rarely add extra dark patches if hidden helper objects are included.");
+		if (ImGui::Button("Rebuild Skylighting"))
+			QueueResetSkylighting();
 
-	ImGui::Separator();
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
 
-	if (ImGui::Button("Rebuild Skylighting"))
-		QueueResetSkylighting();
+		ImGui::Separator();
+		ImGui::Text("Performance options (highest impact first)");
 
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
+		settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 
-	ImGui::Separator();
-	ImGui::Text("Performance options (highest impact first)");
-
-	settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
-
-	int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
-	if (ImGui::BeginCombo("Probe Grid Quality", GetProbeGridPreset(settings.ProbeGridQuality).Label)) {
-		for (uint quality = 0; quality < kProbeGridPresets.size(); quality++) {
-			const bool isSelected = (probeGridQualityUI == static_cast<int>(quality));
-			if (ImGui::Selectable(kProbeGridPresets[quality].Label, isSelected))
-				probeGridQualityUI = static_cast<int>(quality);
-			if (isSelected)
-				ImGui::SetItemDefaultFocus();
+		int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
+		if (ImGui::BeginCombo("Probe Grid Quality", GetProbeGridPreset(settings.ProbeGridQuality).Label)) {
+			for (uint quality = 0; quality < kProbeGridPresets.size(); quality++) {
+				const bool isSelected = (probeGridQualityUI == static_cast<int>(quality));
+				if (ImGui::Selectable(kProbeGridPresets[quality].Label, isSelected))
+					probeGridQualityUI = static_cast<int>(quality);
+				if (isSelected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
 		}
-		ImGui::EndCombo();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Main quality/performance switch. Performance is fastest; Quality is most detailed.");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Main quality/performance switch. Performance is fastest; Quality is most detailed.");
 
-	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
-	if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {
-		const uint previousProbeGridQuality = settings.ProbeGridQuality;
-		settings.ProbeGridQuality = static_cast<uint>(probeGridQualityUI);
-		ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
-	}
-	ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
+		probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
+		if (settings.ProbeGridQuality != static_cast<uint>(probeGridQualityUI)) {
+			const uint previousProbeGridQuality = settings.ProbeGridQuality;
+			settings.ProbeGridQuality = static_cast<uint>(probeGridQualityUI);
+			ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
+		}
+		ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
 
-	ImGui::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Updates skylighting less often for a bigger FPS gain. Higher values can react a bit slower.");
+		Util::Widgets::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Updates skylighting less often for a bigger FPS gain. Higher values can react a bit slower.");
 
-	NormalizeSettingsForRuntime(settings);
-	uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
-	settings.StableSliceCount = stableSliceCount;
-	bool usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
+		NormalizeSettingsForRuntime(settings);
+		uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
+		settings.StableSliceCount = stableSliceCount;
+		bool usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
 
-	ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
-	{
-		int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
-		if (ImGui::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16)) {
-			settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
+		ImGui::BeginDisabled(!settings.EnableReducedUpdateFrequency);
+		{
+			int occlusionIntervalUI = static_cast<int>(settings.OcclusionUpdateInterval);
+			if (Util::Widgets::SliderInt("Occlusion Update Interval", &occlusionIntervalUI, 1, 16)) {
+				settings.OcclusionUpdateInterval = ClampUpdateInterval(static_cast<uint>(occlusionIntervalUI));
+				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("How often skylight shadowing refreshes. 1 = every frame. Higher = faster, but slower reaction.");
+
 			settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
+			const int minProbeIntervalUI = static_cast<int>(ClampUpdateInterval(settings.OcclusionUpdateInterval));
+			int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
+			if (Util::Widgets::SliderInt("Probe Update Interval", &probeIntervalUI, minProbeIntervalUI, 16))
+				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text(usesIncrementalProbeSlices ?
+								"Minimum matches Occlusion Update Interval. Incremental probe updates still follow fresh occlusion quadrants at runtime." :
+								"How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction. Its minimum always matches Occlusion Update Interval.");
 		}
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("How often skylight shadowing refreshes. 1 = every frame. Higher = faster, but slower reaction.");
+		ImGui::EndDisabled();
+		NormalizeSettingsForRuntime(settings);
 
-		settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval);
-		const int minProbeIntervalUI = static_cast<int>(ClampUpdateInterval(settings.OcclusionUpdateInterval));
-		int probeIntervalUI = static_cast<int>(settings.ProbeUpdateInterval);
-		if (ImGui::SliderInt("Probe Update Interval", &probeIntervalUI, minProbeIntervalUI, 16))
-			settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(usesIncrementalProbeSlices ?
-							"Minimum matches Occlusion Update Interval. Incremental probe updates still follow fresh occlusion quadrants at runtime." :
-							"How often skylight data refreshes. 1 = every frame. Higher = faster, but slower reaction. Its minimum always matches Occlusion Update Interval.");
-	}
-	ImGui::EndDisabled();
-	NormalizeSettingsForRuntime(settings);
-
-	if (settings.EnableReducedUpdateFrequency) {
-		ImGui::Text("Occlusion refresh cadence: every %u frame(s)", settings.OcclusionUpdateInterval);
-		if (usesIncrementalProbeSlices)
-			ImGui::Text("Probe refresh cadence: each fresh occlusion quadrant");
-		else
-			ImGui::Text("Probe refresh cadence: every %u frame(s)", GetProbeUpdateInterval(settings));
-	}
-
-	{
-		const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
-		if (ImGui::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
-			previousIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates) {
-			ResetProbeUpdateWindow(*this);
+		if (settings.EnableReducedUpdateFrequency) {
+			ImGui::Text("Occlusion refresh cadence: every %u frame(s)", settings.OcclusionUpdateInterval);
+			if (usesIncrementalProbeSlices)
+				ImGui::Text("Probe refresh cadence: each fresh occlusion quadrant");
+			else
+				ImGui::Text("Probe refresh cadence: every %u frame(s)", GetProbeUpdateInterval(settings));
 		}
-	}
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Spreads skylighting work over multiple frames to smooth spikes.");
 
-	ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
-	{
-		int stableSliceCountUI = static_cast<int>(stableSliceCount);
-		if (ImGui::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(probeArrayDims[2]))) {
-			const uint nextStableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), probeArrayDims[2]);
-			if (settings.StableSliceCount != nextStableSliceCount) {
-				settings.StableSliceCount = nextStableSliceCount;
+		{
+			const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
+			if (Util::Widgets::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&
+				previousIncrementalProbeUpdates != settings.EnableIncrementalProbeUpdates) {
 				ResetProbeUpdateWindow(*this);
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Lower = smoother performance but takes longer to settle. Higher = reacts faster with more cost.");
-	}
-	ImGui::EndDisabled();
-	usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
-	const uint stableSliceBatches = (probeArrayDims[2] + settings.StableSliceCount - 1) / settings.StableSliceCount;
-	const uint stableRefreshFrames = usesIncrementalProbeSlices ?
-	                                     stableSliceBatches * kOcclusionCornerCount * GetOcclusionUpdateInterval(settings) :
-	                                     GetProbeUpdateInterval(settings);
-	ImGui::Text("Stable probe field full refresh: ~%u frame(s)", stableRefreshFrames);
+			ImGui::Text("Spreads skylighting work over multiple frames to smooth spikes.");
 
-	float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
-	if (ImGui::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
-		settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
-		QueueResetSkylighting();
+		ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
+		{
+			int stableSliceCountUI = static_cast<int>(stableSliceCount);
+			if (Util::Widgets::SliderInt("Stable Slice Count", &stableSliceCountUI, 1, static_cast<int>(probeArrayDims[2]))) {
+				const uint nextStableSliceCount = ClampStableSliceCount(static_cast<uint>(stableSliceCountUI), probeArrayDims[2]);
+				if (settings.StableSliceCount != nextStableSliceCount) {
+					settings.StableSliceCount = nextStableSliceCount;
+					ResetProbeUpdateWindow(*this);
+				}
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Lower = smoother performance but takes longer to settle. Higher = reacts faster with more cost.");
+		}
+		ImGui::EndDisabled();
+		usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
+		const uint stableSliceBatches = (probeArrayDims[2] + settings.StableSliceCount - 1) / settings.StableSliceCount;
+		const uint stableRefreshFrames = usesIncrementalProbeSlices ?
+		                                     stableSliceBatches * kOcclusionCornerCount * GetOcclusionUpdateInterval(settings) :
+		                                     GetProbeUpdateInterval(settings);
+		ImGui::Text("Stable probe field full refresh: ~%u frame(s)", stableRefreshFrames);
 	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Sets the total camera-centered skylighting probe field width. Balanced uses 3.2 cells; Performance uses 2.5 cells.");
-		ImGui::Text("Effective reach is about half this value from the camera.");
-		ImGui::Text("Higher values reach farther, but with the same probe grid each probe covers more space and local detail gets softer.");
-		ImGui::Text("Raise Probe Grid Quality too if you want more reach without losing as much detail.");
+	if (page.Is("coverage")) {
+		float probeFieldSizeCells = ClampProbeFieldSize(settings.ProbeFieldSize) / Skylighting::Settings::kWorldCellSize;
+		if (Util::Widgets::SliderFloat("Skylighting Distance", &probeFieldSizeCells, Skylighting::Settings::kMinProbeFieldSizeCells, Skylighting::Settings::kMaxProbeFieldSizeCells, "%.1f cells", ImGuiSliderFlags_AlwaysClamp)) {
+			settings.ProbeFieldSize = ClampProbeFieldSize(probeFieldSizeCells * Skylighting::Settings::kWorldCellSize);
+			QueueResetSkylighting();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Sets the total camera-centered skylighting probe field width. Balanced uses 3.2 cells; Performance uses 2.5 cells.");
+			ImGui::Text("Effective reach is about half this value from the camera.");
+			ImGui::Text("Higher values reach farther, but with the same probe grid each probe covers more space and local detail gets softer.");
+			ImGui::Text("Raise Probe Grid Quality too if you want more reach without losing as much detail.");
+		}
 	}
-
-	ImGui::Separator();
-	if (ImGui::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90))
-		NormalizeSettingsForRuntime(settings);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Smaller angles create a more focused top-down shadow.");
+	if (page.Is("look")) {
+		ImGui::Separator();
+		if (Util::Widgets::SliderAngle("Max Zenith Angle", &settings.MaxZenith, 0, 90))
+			NormalizeSettingsForRuntime(settings);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Smaller angles create a more focused top-down shadow.");
+	}
 }
 
 void Skylighting::DrawPerformanceSettings(bool a_advanced)
@@ -816,6 +830,12 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 
 void Skylighting::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("Skylighting", {
+												 { "essentials", "Essentials", "Start with the main choices for this feature." },
+											 });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawPerformanceSettings(false);
 }
 

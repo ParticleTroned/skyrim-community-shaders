@@ -33,6 +33,7 @@ namespace Runtime
 		bool loaded = true;
 		bool TryGetActiveGodrayProfile(GodrayProfile& profile) const;
 		GodrayProfile GetRuntimeGodrayProfile() const;
+		bool IsPerformanceToggleEnabled() const;
 	};
 
 	namespace globals

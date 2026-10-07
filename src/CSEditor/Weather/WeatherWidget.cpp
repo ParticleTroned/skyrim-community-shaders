@@ -1108,7 +1108,7 @@ void WeatherWidget::DrawCloudSettings()
 			// Begin horizontal layout for enable checkbox and sliders on left, texture on right
 			ImGui::BeginGroup();
 
-			if (ImGui::Checkbox(std::format("Enable##{}", layer).c_str(), &layerEnabled)) {
+			if (Util::Widgets::Checkbox(std::format("Enable##{}", layer).c_str(), &layerEnabled)) {
 				editorWindow->PushUndoState(this);
 				settings.clouds[i].enabled = layerEnabled;
 				enableChanged = true;
@@ -1941,7 +1941,7 @@ void WeatherWidget::DrawFeatureSettings()
 								ImGui::BeginDisabled(true);
 							}
 
-							if (ImGui::Checkbox(varDisplayName.c_str(), &value)) {
+							if (Util::Widgets::Checkbox(varDisplayName.c_str(), &value)) {
 								EditorWindow::GetSingleton()->PushUndoState(this);
 								featureJson[varName] = value;
 								modified = true;
@@ -1975,7 +1975,7 @@ void WeatherWidget::DrawFeatureSettings()
 							float maxVal = floatVar->GetMax();
 
 							const bool valueChanged =
-								ImGui::SliderFloat(varDisplayName.c_str(), &value, minVal, maxVal, "%.3f");
+								Util::Widgets::SliderFloat(varDisplayName.c_str(), &value, minVal, maxVal, "%.3f");
 							if (ImGui::IsItemActivated())
 								EditorWindow::GetSingleton()->PushUndoState(this);
 							if (valueChanged) {

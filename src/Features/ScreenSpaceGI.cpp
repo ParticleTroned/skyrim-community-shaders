@@ -1,4 +1,5 @@
 #include "ScreenSpaceGI.h"
+#include "Menu/SettingsPage.h"
 
 #include <DirectXTex.h>
 #include <algorithm>
@@ -125,7 +126,7 @@ namespace
 	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI& feature)
 	{
 		bool enabled = feature.IsEnabledRequested();
-		if (!ImGui::Checkbox("Enable", &enabled))
+		if (!Util::Widgets::Checkbox("Enable", &enabled))
 			return false;
 		feature.SetEnabled(enabled);
 		return true;
@@ -407,25 +408,37 @@ void ScreenSpaceGI::DrawSettings()
 	ImGui::SameLine();
 	{
 		auto advancedGuard = Util::DisableGuard(!settings.Enabled);
-		ImGui::Checkbox("Advanced Options", &showAdvanced);
+		Util::Widgets::Checkbox("Advanced Options", &showAdvanced);
 	}
 
 	if (!isVR) {
 		ImGui::SameLine();
 		auto ssaoToggleGuard = Util::DisableGuard(!settings.Enabled);
-		ImGui::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
+		Util::Widgets::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
 		}
 	}
 
-	///////////////////////////////
-	DrawOCUEffectFoveationSettings();
+	MenuUI::SettingsPage page("ScreenSpaceGI", {
+												   { "preset", "Presets", "Choose the shadow and indirect-light baseline." },
+												   { "coverage", "Coverage", "Choose the effects and area to process." },
+												   { "quality", "Quality", "Choose the detail and processing budget." },
+												   { "look", "Look", "Refine shadows and lighting." },
+												   { "indirect", "Indirect light", "Refine bounced-light colour and intensity." },
+												   { "smoothing", "Smoothing", "Reduce noise after choosing the appearance." },
+												   { "diagnostics", "Diagnostics", "Inspect diagnostic buffer views." },
+											   });
 
-	drawCenteredSeparatorText("Presets");
-	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
-	ImGui::TextWrapped("These presets keep SSGI baselines close to the regular quality and resource controls.");
-	ImGui::PopStyleColor();
+	///////////////////////////////
+	if (page.Is("coverage"))
+		DrawOCUEffectFoveationSettings();
+
+	if (page.Is("preset")) {
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
+		ImGui::TextWrapped("These presets keep SSGI baselines close to the regular quality and resource controls.");
+		ImGui::PopStyleColor();
+	}
 
 	{
 		auto presetsAndQualityGuard = Util::DisableGuard(!settings.Enabled);
@@ -434,361 +447,374 @@ void ScreenSpaceGI::DrawSettings()
 			return ImGui::Button(a_label, a_size);
 		};
 
-		if (ImGui::BeginTable("Presets", 4, ImGuiTableFlags_SizingStretchProp)) {
-			ImGui::TableSetupColumn("PresetAO", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableSetupColumn("PresetAOGI", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableSetupColumn("PresetReference", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableSetupColumn("PresetUser", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		if (page.Is("preset")) {
+			if (ImGui::BeginTable("Presets", 4, ImGuiTableFlags_SizingStretchProp)) {
+				ImGui::TableSetupColumn("PresetAO", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+				ImGui::TableSetupColumn("PresetAOGI", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+				ImGui::TableSetupColumn("PresetReference", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+				ImGui::TableSetupColumn("PresetUser", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 
-			ImGui::TableNextColumn();
-			const bool aoOnlyActive = IsAOOnlyPreset(settings, isVR);
-			const bool aoGiActive = IsAOGIPreset(settings, isVR);
-			const bool referenceActive = IsReferencePreset(settings);
-			const bool userActive = !aoOnlyActive && !aoGiActive && !referenceActive;
-			if (drawThemePresetButton("AO only", aoOnlyActive, { -1, 0 })) {
-				ApplyAOOnlyPreset(settings);
+				ImGui::TableNextColumn();
+				const bool aoOnlyActive = IsAOOnlyPreset(settings, isVR);
+				const bool aoGiActive = IsAOGIPreset(settings, isVR);
+				const bool referenceActive = IsReferencePreset(settings);
+				const bool userActive = !aoOnlyActive && !aoGiActive && !referenceActive;
+				if (drawThemePresetButton("AO only", aoOnlyActive, { -1, 0 })) {
+					ApplyAOOnlyPreset(settings);
+					recompileFlag = true;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Full Res, no GI.");
+
+				ImGui::TableNextColumn();
+				if (drawThemePresetButton("AO + GI", aoGiActive, { -1, 0 })) {
+					ApplyAOGIPreset(settings);
+					recompileFlag = true;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("Lighter AO + GI baseline: Full Res, GI resources, 4 slices and 6 steps.");
+
+				ImGui::TableNextColumn();
+				if (drawThemePresetButton("Reference", referenceActive, { -1, 0 })) {
+					ApplyReferencePreset(settings);
+					recompileFlag = true;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("High-quality baseline: Full Res with GI and blur enabled, 8 slices and 10 steps.");
+
+				ImGui::TableNextColumn();
+				if (drawThemePresetButton("User", userActive, { -1, 0 })) {
+					ApplyAOGIPreset(settings);
+					recompileFlag = true;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Copies the AO + GI preset as a starting point.");
+					ImGui::TextUnformatted("Custom settings are shown as User and remain unrestricted.");
+				}
+
+				ImGui::EndTable();
+			}
+
+			///////////////////////////////
+		}
+		if (page.Is("coverage")) {
+			drawCenteredSeparatorText("SSGI Effects & Resources");
+
+			const int previousResourceProfile = settings.ResourceProfile;
+			if (ImGui::BeginTable("SSGIEffectsResources", 3, ImGuiTableFlags_SizingFixedFit)) {
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				{
+					auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
+					if (ImGui::RadioButton("AO-only", !settings.EnableGI)) {
+						DisableGIEffects(settings);
+						recompileFlag = true;
+					}
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("AO-only mode disables GI/IL rendering.");
+				}
+
+				ImGui::TableNextColumn();
+				{
+					auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
+					if (ImGui::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly))
+						settings.ResourceProfile = kResourceProfileAOOnly;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Keeps all AO modes available but does not allocate IL/GI/specular buffers.");
+				}
+
+				ImGui::TableNextColumn();
+				{
+					auto aoInteriorsGuard = Util::DisableGuard(!settings.Enabled);
+					Util::Widgets::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Run AO only in interiors to improve exterior performance.");
+				}
+
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				{
+					auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
+					if (ImGui::RadioButton("AO + GI", settings.EnableGI)) {
+						settings.ResourceProfile = kResourceProfileFullGI;
+						settings.EnableGI = true;
+						recompileFlag = true;
+					}
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("AO + GI enables indirect lighting for global illumination.");
+				}
+
+				ImGui::TableNextColumn();
+				{
+					auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
+					if (ImGui::RadioButton("AO + GI Resources", settings.ResourceProfile == kResourceProfileFullGI))
+						settings.ResourceProfile = kResourceProfileFullGI;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Keeps IL/specular buffers resident so GI can be toggled at runtime.");
+				}
+
+				ImGui::TableNextColumn();
+				{
+					auto ilInteriorsGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
+					Util::Widgets::Checkbox("GI Interiors Only", &settings.ILInteriorsOnly);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Run indirect lighting only in interiors to improve exterior performance.");
+				}
+
+				ImGui::EndTable();
+			}
+
+			if (showAdvanced) {
+				auto hqSpecGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
+				recompileFlag |= Util::Widgets::Checkbox("(Experimental) HQ Specular IL", &settings.EnableExperimentalSpecularGI);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("An experimental specular GI that is more accurate but requires more samples. Won't be blurred.");
+			}
+
+			settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
+			if (settings.ResourceProfile != previousResourceProfile) {
+				if (settings.ResourceProfile == kResourceProfileAOOnly)
+					DisableGIEffects(settings);
 				recompileFlag = true;
 			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Full Res, no GI.");
-
-			ImGui::TableNextColumn();
-			if (drawThemePresetButton("AO + GI", aoGiActive, { -1, 0 })) {
-				ApplyAOGIPreset(settings);
-				recompileFlag = true;
+			if (settings.EnableGI && !HasGIResources())
+				Util::Text::Warning("Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
+			if (IsResourceProfileRestartPending()) {
+				Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
 			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Lighter AO + GI baseline: Full Res, GI resources, 4 slices and 6 steps.");
+		}
+		if (page.Is("quality")) {
+			drawCenteredSeparatorText("Quality/Performance");
 
-			ImGui::TableNextColumn();
-			if (drawThemePresetButton("Reference", referenceActive, { -1, 0 })) {
-				ApplyReferencePreset(settings);
-				recompileFlag = true;
+			if (isVR) {
+				Util::Widgets::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("0 disables. Lower values improve performance but reduce distant AO/IL.");
+				}
+				settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
 			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("High-quality baseline: Full Res with GI and blur enabled, 8 slices and 10 steps.");
 
-			ImGui::TableNextColumn();
-			if (drawThemePresetButton("User", userActive, { -1, 0 })) {
-				ApplyAOGIPreset(settings);
-				recompileFlag = true;
+			if (showAdvanced) {
+				int numSlices = static_cast<int>(settings.NumSlices);
+				if (Util::Widgets::SliderInt("Slices", &numSlices, 1, 10))
+					settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text(
+						"How many directions do the samples take.\n"
+						"Controls noise.");
+
+				int numSteps = static_cast<int>(settings.NumSteps);
+				if (Util::Widgets::SliderInt("Steps Per Slice", &numSteps, 1, 20))
+					settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text(
+						"How many samples does it take in one direction.\n"
+						"Controls accuracy of lighting, and noise when effect radius is large.");
 			}
+
+			recompileFlag |= Util::Widgets::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Copies the AO + GI preset as a starting point.");
-				ImGui::TextUnformatted("Custom settings are shown as User and remain unrestricted.");
+				ImGui::Text("Reduces AO sample count in far distance and low-variance regions to improve performance.");
 			}
 
-			ImGui::EndTable();
+			const int previousResolutionMode = settings.ResolutionMode;
+			settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+
+			bool clickedFullRes = false;
+			bool clickedHalfRes = false;
+			bool clickedQuarterRes = false;
+			if (ImGui::BeginTable("SSGIResolutionMode", 3, ImGuiTableFlags_SizingStretchProp)) {
+				ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+				ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+				ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				clickedFullRes = ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
+				ImGui::TableNextColumn();
+				clickedHalfRes = ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
+				ImGui::TableNextColumn();
+				clickedQuarterRes = ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
+				ImGui::EndTable();
+			}
+
+			settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
+			if (clickedFullRes || clickedHalfRes || clickedQuarterRes) {
+				settings.CenterFullResMaskScale = 0.0f;  // Pure Full/Half/Quarter.
+			}
+			recompileFlag |= (settings.ResolutionMode != previousResolutionMode);
+		}
+	}
+
+	///////////////////////////////
+	if (page.Is("look")) {
+		drawCenteredSeparatorText("Visual");
+
+		{
+			auto visualGuard = Util::DisableGuard(!settings.Enabled);
+
+			Util::Widgets::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
+
+			{
+				auto ilGuard = Util::DisableGuard(!settings.EnableGI);
+				Util::Widgets::SliderFloat("IL Source Brightness", &settings.GIStrength, 0.f, 6.f, "%.2f");
+			}
+
+			ImGui::Separator();
+
+			Util::Widgets::SliderFloat("AO radius", &settings.AORadius, 10.f, 1024.0f, "%.1f units");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				std::vector<std::string> tooltipLines = {
+					"A smaller radius produces tighter AO.",
+					Util::Units::FormatDistance(settings.AORadius)
+				};
+				Util::DrawMultiLineTooltip(tooltipLines);
+			}
+
+			{
+				auto ilRadiusGuard = Util::DisableGuard(!settings.EnableGI);
+
+				Util::Widgets::SliderFloat("IL radius", &settings.GIRadius, 10.f, 1024.0f, "%.1f units");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					std::vector<std::string> tooltipLines = {
+						"A larger radius produces wider IL.",
+						Util::Units::FormatDistance(settings.GIRadius)
+					};
+					Util::DrawMultiLineTooltip(tooltipLines);
+				}
+			}
+
+			if (showAdvanced) {
+				Util::Widgets::SliderFloat("Min Screen Radius", &settings.MinScreenRadius, 0.f, 0.05f, "%.3f");
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text(
+						"The minimum screen-space effect radius as proportion of display width, to prevent far field AO being too small.");
+			}
+
+			Util::Widgets::SliderFloat2("Depth Fade Range", &settings.DepthFadeRange.x, 1e4, 5e4, "%.0f units");
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				std::vector<std::string> tooltipLines = {
+					"Distance range where depth-based effects fade out.",
+					"Near: " + Util::Units::FormatDistance(settings.DepthFadeRange.x),
+					"Far: " + Util::Units::FormatDistance(settings.DepthFadeRange.y)
+				};
+				Util::DrawMultiLineTooltip(tooltipLines);
+			}
+
+			if (showAdvanced) {
+				ImGui::Separator();
+
+				Util::Widgets::SliderFloat("Thickness", &settings.Thickness, 0.f, 128.0f, "%.1f units");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					std::vector<std::string> tooltipLines = {
+						"How thick the occluders are. Only affects AO.",
+						Util::Units::FormatDistance(settings.Thickness)
+					};
+					Util::DrawMultiLineTooltip(tooltipLines);
+				}
+			}
 		}
 
 		///////////////////////////////
-		drawCenteredSeparatorText("SSGI Effects & Resources");
-
-		const int previousResourceProfile = settings.ResourceProfile;
-		if (ImGui::BeginTable("SSGIEffectsResources", 3, ImGuiTableFlags_SizingFixedFit)) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			{
-				auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
-				if (ImGui::RadioButton("AO-only", !settings.EnableGI)) {
-					DisableGIEffects(settings);
-					recompileFlag = true;
-				}
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("AO-only mode disables GI/IL rendering.");
-			}
-
-			ImGui::TableNextColumn();
-			{
-				auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
-				if (ImGui::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly))
-					settings.ResourceProfile = kResourceProfileAOOnly;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Keeps all AO modes available but does not allocate IL/GI/specular buffers.");
-			}
-
-			ImGui::TableNextColumn();
-			{
-				auto aoInteriorsGuard = Util::DisableGuard(!settings.Enabled);
-				ImGui::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Run AO only in interiors to improve exterior performance.");
-			}
-
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			{
-				auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
-				if (ImGui::RadioButton("AO + GI", settings.EnableGI)) {
-					settings.ResourceProfile = kResourceProfileFullGI;
-					settings.EnableGI = true;
-					recompileFlag = true;
-				}
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("AO + GI enables indirect lighting for global illumination.");
-			}
-
-			ImGui::TableNextColumn();
-			{
-				auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
-				if (ImGui::RadioButton("AO + GI Resources", settings.ResourceProfile == kResourceProfileFullGI))
-					settings.ResourceProfile = kResourceProfileFullGI;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Keeps IL/specular buffers resident so GI can be toggled at runtime.");
-			}
-
-			ImGui::TableNextColumn();
-			{
-				auto ilInteriorsGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
-				ImGui::Checkbox("GI Interiors Only", &settings.ILInteriorsOnly);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Run indirect lighting only in interiors to improve exterior performance.");
-			}
-
-			ImGui::EndTable();
-		}
-
-		if (showAdvanced) {
-			auto hqSpecGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
-			recompileFlag |= ImGui::Checkbox("(Experimental) HQ Specular IL", &settings.EnableExperimentalSpecularGI);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("An experimental specular GI that is more accurate but requires more samples. Won't be blurred.");
-		}
-
-		settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
-		if (settings.ResourceProfile != previousResourceProfile) {
-			if (settings.ResourceProfile == kResourceProfileAOOnly)
-				DisableGIEffects(settings);
-			recompileFlag = true;
-		}
-		if (settings.EnableGI && !HasGIResources())
-			Util::Text::Warning("Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
-		if (IsResourceProfileRestartPending()) {
-			Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
-		}
-
-		drawCenteredSeparatorText("Quality/Performance");
-
-		if (isVR) {
-			ImGui::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("0 disables. Lower values improve performance but reduce distant AO/IL.");
-			}
-			settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
-		}
-
-		if (showAdvanced) {
-			int numSlices = static_cast<int>(settings.NumSlices);
-			if (ImGui::SliderInt("Slices", &numSlices, 1, 10))
-				settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"How many directions do the samples take.\n"
-					"Controls noise.");
-
-			int numSteps = static_cast<int>(settings.NumSteps);
-			if (ImGui::SliderInt("Steps Per Slice", &numSteps, 1, 20))
-				settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"How many samples does it take in one direction.\n"
-					"Controls accuracy of lighting, and noise when effect radius is large.");
-		}
-
-		recompileFlag |= ImGui::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Reduces AO sample count in far distance and low-variance regions to improve performance.");
-		}
-
-		const int previousResolutionMode = settings.ResolutionMode;
-		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
-
-		bool clickedFullRes = false;
-		bool clickedHalfRes = false;
-		bool clickedQuarterRes = false;
-		if (ImGui::BeginTable("SSGIResolutionMode", 3, ImGuiTableFlags_SizingStretchProp)) {
-			ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			clickedFullRes = ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
-			ImGui::TableNextColumn();
-			clickedHalfRes = ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
-			ImGui::TableNextColumn();
-			clickedQuarterRes = ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
-			ImGui::EndTable();
-		}
-
-		settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
-		if (clickedFullRes || clickedHalfRes || clickedQuarterRes) {
-			settings.CenterFullResMaskScale = 0.0f;  // Pure Full/Half/Quarter.
-		}
-		recompileFlag |= (settings.ResolutionMode != previousResolutionMode);
 	}
-
-	///////////////////////////////
-	drawCenteredSeparatorText("Visual");
-
-	{
-		auto visualGuard = Util::DisableGuard(!settings.Enabled);
-
-		ImGui::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
+	if (page.Is("indirect")) {
+		drawCenteredSeparatorText("Visual - IL");
 
 		{
-			auto ilGuard = Util::DisableGuard(!settings.EnableGI);
-			ImGui::SliderFloat("IL Source Brightness", &settings.GIStrength, 0.f, 6.f, "%.2f");
-		}
+			auto visualILGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
 
-		ImGui::Separator();
-
-		ImGui::SliderFloat("AO radius", &settings.AORadius, 10.f, 1024.0f, "%.1f units");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			std::vector<std::string> tooltipLines = {
-				"A smaller radius produces tighter AO.",
-				Util::Units::FormatDistance(settings.AORadius)
-			};
-			Util::DrawMultiLineTooltip(tooltipLines);
-		}
-
-		{
-			auto ilRadiusGuard = Util::DisableGuard(!settings.EnableGI);
-
-			ImGui::SliderFloat("IL radius", &settings.GIRadius, 10.f, 1024.0f, "%.1f units");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				std::vector<std::string> tooltipLines = {
-					"A larger radius produces wider IL.",
-					Util::Units::FormatDistance(settings.GIRadius)
-				};
-				Util::DrawMultiLineTooltip(tooltipLines);
-			}
-		}
-
-		if (showAdvanced) {
-			ImGui::SliderFloat("Min Screen Radius", &settings.MinScreenRadius, 0.f, 0.05f, "%.3f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text(
-					"The minimum screen-space effect radius as proportion of display width, to prevent far field AO being too small.");
-		}
-
-		ImGui::SliderFloat2("Depth Fade Range", &settings.DepthFadeRange.x, 1e4, 5e4, "%.0f units");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			std::vector<std::string> tooltipLines = {
-				"Distance range where depth-based effects fade out.",
-				"Near: " + Util::Units::FormatDistance(settings.DepthFadeRange.x),
-				"Far: " + Util::Units::FormatDistance(settings.DepthFadeRange.y)
-			};
-			Util::DrawMultiLineTooltip(tooltipLines);
-		}
-
-		if (showAdvanced) {
-			ImGui::Separator();
-
-			ImGui::SliderFloat("Thickness", &settings.Thickness, 0.f, 128.0f, "%.1f units");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				std::vector<std::string> tooltipLines = {
-					"How thick the occluders are. Only affects AO.",
-					Util::Units::FormatDistance(settings.Thickness)
-				};
-				Util::DrawMultiLineTooltip(tooltipLines);
-			}
-		}
-	}
-
-	///////////////////////////////
-	drawCenteredSeparatorText("Visual - IL");
-
-	{
-		auto visualILGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
-
-		if (showAdvanced) {
-			ImGui::SliderFloat("IL Distance Compensation", &settings.GIDistanceCompensation, -5.0f, 5.0f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("Brighten/Dimming further radiance samples.");
-
-			ImGui::Separator();
-		}
-
-		Util::PercentageSlider("IL Saturation", &settings.GISaturation);
-	}
-
-	///////////////////////////////
-	drawCenteredSeparatorText("Denoising");
-
-	{
-		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
-
-		if (ImGui::BeginTable("denoisers", 2)) {
-			ImGui::TableNextColumn();
-			recompileFlag |= ImGui::Checkbox("Temporal Denoiser", &settings.EnableTemporalDenoiser);
-
-			ImGui::TableNextColumn();
-			ImGui::Checkbox("Blur", &settings.EnableBlur);
-
-			ImGui::EndTable();
-		}
-
-		if (showAdvanced) {
-			ImGui::Separator();
-
-			{
-				auto temporalGuard = Util::DisableGuard(!settings.EnableTemporalDenoiser);
-				ImGui::SliderInt("Max Frame Accumulation", (int*)&settings.MaxAccumFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+			if (showAdvanced) {
+				Util::Widgets::SliderFloat("IL Distance Compensation", &settings.GIDistanceCompensation, -5.0f, 5.0f, "%.1f");
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("How many past frames to accumulate results with. Higher values are less noisy but potentially cause ghosting.");
-			}
-
-			ImGui::Separator();
-
-			{
-				auto disocclusionGuard = Util::DisableGuard(!settings.EnableTemporalDenoiser && !settings.EnableGI);
-
-				Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 20.f);
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(
-						"If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
-						"Lower values are stricter.");
+					ImGui::Text("Brighten/Dimming further radiance samples.");
 
 				ImGui::Separator();
 			}
 
-			{
-				auto blurGuard = Util::DisableGuard(!settings.EnableBlur);
-				ImGui::SliderFloat("Blur Radius", &settings.BlurRadius, 0.f, 30.f, "%.1f px");
+			Util::PercentageSlider("IL Saturation", &settings.GISaturation);
+		}
 
-				ImGui::SliderFloat("Geometry Weight", &settings.DistanceNormalisation, 0.f, 5.f, "%.2f");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text(
-						"Higher value makes the blur more sensitive to differences in geometry.");
+		///////////////////////////////
+	}
+	if (page.Is("smoothing")) {
+		drawCenteredSeparatorText("Denoising");
+
+		{
+			auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
+
+			if (ImGui::BeginTable("denoisers", 2)) {
+				ImGui::TableNextColumn();
+				recompileFlag |= Util::Widgets::Checkbox("Temporal Denoiser", &settings.EnableTemporalDenoiser);
+
+				ImGui::TableNextColumn();
+				Util::Widgets::Checkbox("Blur", &settings.EnableBlur);
+
+				ImGui::EndTable();
+			}
+
+			if (showAdvanced) {
+				ImGui::Separator();
+
+				{
+					auto temporalGuard = Util::DisableGuard(!settings.EnableTemporalDenoiser);
+					Util::Widgets::SliderInt("Max Frame Accumulation", (int*)&settings.MaxAccumFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text("How many past frames to accumulate results with. Higher values are less noisy but potentially cause ghosting.");
+				}
+
+				ImGui::Separator();
+
+				{
+					auto disocclusionGuard = Util::DisableGuard(!settings.EnableTemporalDenoiser && !settings.EnableGI);
+
+					Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 20.f);
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text(
+							"If a pixel has moved too far from the last frame, its radiance will not be carried to this frame.\n"
+							"Lower values are stricter.");
+
+					ImGui::Separator();
+				}
+
+				{
+					auto blurGuard = Util::DisableGuard(!settings.EnableBlur);
+					Util::Widgets::SliderFloat("Blur Radius", &settings.BlurRadius, 0.f, 30.f, "%.1f px");
+
+					Util::Widgets::SliderFloat("Geometry Weight", &settings.DistanceNormalisation, 0.f, 5.f, "%.2f");
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text(
+							"Higher value makes the blur more sensitive to differences in geometry.");
+				}
 			}
 		}
+
+		///////////////////////////////
 	}
+	if (page.Is("diagnostics")) {
+		drawCenteredSeparatorText("Debug");
 
-	///////////////////////////////
-	drawCenteredSeparatorText("Debug");
+		if (ImGui::TreeNode("Buffer Viewer")) {
+			static float debugRescale = .3f;
+			Util::Widgets::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
-		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+			BUFFER_VIEWER_NODE(texNoise, debugRescale)
+			BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
+			BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
+			BUFFER_VIEWER_NODE(texRadiance, debugRescale)
+			BUFFER_VIEWER_NODE(texAo[0], debugRescale)
+			BUFFER_VIEWER_NODE(texAo[1], debugRescale)
+			BUFFER_VIEWER_NODE(texIlY[0], debugRescale)
+			BUFFER_VIEWER_NODE(texIlY[1], debugRescale)
+			BUFFER_VIEWER_NODE(texIlCoCg[0], debugRescale)
+			BUFFER_VIEWER_NODE(texIlCoCg[1], debugRescale)
 
-		BUFFER_VIEWER_NODE(texNoise, debugRescale)
-		BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
-		BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
-		BUFFER_VIEWER_NODE(texRadiance, debugRescale)
-		BUFFER_VIEWER_NODE(texAo[0], debugRescale)
-		BUFFER_VIEWER_NODE(texAo[1], debugRescale)
-		BUFFER_VIEWER_NODE(texIlY[0], debugRescale)
-		BUFFER_VIEWER_NODE(texIlY[1], debugRescale)
-		BUFFER_VIEWER_NODE(texIlCoCg[0], debugRescale)
-		BUFFER_VIEWER_NODE(texIlCoCg[1], debugRescale)
-
-		ImGui::TreePop();
+			ImGui::TreePop();
+		}
 	}
 }
 
@@ -809,7 +835,7 @@ void ScreenSpaceGI::DrawOCUEffectFoveationSettings()
 	if (!REL::Module::IsVR())
 		return;
 	bool enabled = settings.ExperimentalOCUEffectFoveation;
-	if (ImGui::Checkbox("OCU peripheral sampling (experimental)", &enabled))
+	if (Util::Widgets::Checkbox("OCU peripheral sampling (experimental)", &enabled))
 		SetOCUEffectFoveationEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextWrapped("Uses OCU's current eye positions and foveation rings to reduce peripheral AO/GI samples while keeping central samples and the lighting effects enabled.");
@@ -853,7 +879,7 @@ void ScreenSpaceGI::DrawFoveationSettings()
 	bool foveatedEnabled = settings.EnableFoveated;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable || settings.ExperimentalOCUEffectFoveation);
-		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled))
+		if (Util::Widgets::Checkbox("SSGI FOV", &foveatedEnabled))
 			SetFoveationEnabled(foveatedEnabled);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -913,15 +939,15 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 
 	{
 		auto guard = Util::DisableGuard(!settings.Enabled);
-		ImGui::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
+		Util::Widgets::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
 	}
 
 	if (isVR) {
-		ImGui::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
+		Util::Widgets::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
 		settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
 	}
 
-	recompileFlag |= ImGui::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
+	recompileFlag |= Util::Widgets::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
 
 	const int previousResolutionMode = settings.ResolutionMode;
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
@@ -935,10 +961,10 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (a_advanced) {
 		ImGui::SeparatorText("Sampling");
 		int numSlices = static_cast<int>(settings.NumSlices);
-		if (ImGui::SliderInt("Slices", &numSlices, 1, 10))
+		if (Util::Widgets::SliderInt("Slices", &numSlices, 1, 10))
 			settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
 		int numSteps = static_cast<int>(settings.NumSteps);
-		if (ImGui::SliderInt("Steps Per Slice", &numSteps, 1, 20))
+		if (Util::Widgets::SliderInt("Steps Per Slice", &numSteps, 1, 20))
 			settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
 	}
 
@@ -951,6 +977,12 @@ void ScreenSpaceGI::DrawEssentialSettings()
 {
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
+
+	MenuUI::SettingsPage page("ScreenSpaceGI", {
+												   { "essentials", "Essentials", "Start with the main choices for this feature." },
+											   });
+	if (!page.Is("essentials"))
+		return;
 
 	DrawScreenSpaceGIEnabledCheckbox(*this);
 }

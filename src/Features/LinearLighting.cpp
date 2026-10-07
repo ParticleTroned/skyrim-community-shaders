@@ -1,4 +1,6 @@
 #include "LinearLighting.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "AdaptiveBrightness.h"
 #include "LocationContext.h"
@@ -52,53 +54,62 @@ void LinearLighting::SanitizeSettings(Settings& a_settings)
 void LinearLighting::DrawSettings()
 {
 	SanitizeSettings(settings);
-	Util::UIntCheckbox("Enable", settings.enableLinearLighting);
-	Util::UIntCheckbox("Disable in interiors", settings.DisableInInteriors);
-	Util::UIntCheckbox("Disable in exteriors", settings.DisableInExteriors);
 
-	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem("Gamma")) {
-			ImGui::SliderFloat("Ambient Gamma", &settings.ambientGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Color Gamma", &settings.colorGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Effect Gamma", &settings.effectGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Effect Transparency Gamma", &settings.effectAlphaGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Emissive Color Gamma", &settings.emitColorGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Fog Gamma", &settings.fogGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Fog Transparency Gamma", &settings.fogAlphaGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Glowmap Gamma", &settings.glowmapGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Light Gamma", &settings.lightGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Sky Gamma", &settings.skyGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Volumetric Lighting Gamma", &settings.vlGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::SliderFloat("Water Gamma", &settings.waterGamma, kGammaMin, kGammaMax, "%.2f");
-			ImGui::EndTabItem();
+	MenuUI::SettingsPage page("LinearLighting", {
+													{ "coverage", "Coverage", "Choose where linear lighting is enabled." },
+													{ "colour", "Colour", "Refine brightness response after enabling linear lighting." },
+													{ "lighting", "Lighting", "Refine the contribution from each light source." },
+												});
+
+	if (page.Is("coverage")) {
+		Util::UIntCheckbox("Enable", settings.enableLinearLighting);
+		Util::UIntCheckbox("Disable in interiors", settings.DisableInInteriors);
+		Util::UIntCheckbox("Disable in exteriors", settings.DisableInExteriors);
+	}
+
+	if (page.Is("colour")) {
+		Util::Widgets::SliderFloat("Ambient Gamma", &settings.ambientGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Color Gamma", &settings.colorGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Effect Gamma", &settings.effectGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Effect Transparency Gamma", &settings.effectAlphaGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Emissive Color Gamma", &settings.emitColorGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Fog Gamma", &settings.fogGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Fog Transparency Gamma", &settings.fogAlphaGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Glowmap Gamma", &settings.glowmapGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Light Gamma", &settings.lightGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Sky Gamma", &settings.skyGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Volumetric Lighting Gamma", &settings.vlGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Water Gamma", &settings.waterGamma, kGammaMin, kGammaMax, "%.2f");
+	}
+
+	if (page.Is("lighting")) {
+		Util::Widgets::SliderFloat("Ambient Multiplier", &settings.ambientMult, kMultiplierMin, kAmbientMultiplierMax, "%.2f");
+		Util::Widgets::SliderFloat("Vanilla Diffuse Color Multiplier", &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
+		Util::Widgets::SliderFloat("Emissive Color Multiplier", &settings.emitColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
+		Util::Widgets::SliderFloat("Glowmap Multiplier", &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
+		Util::Widgets::SliderFloat("Effect Lighting Multiplier", &settings.effectLightingMult, kMultiplierMin, kMultiplierMax, "%.2f");
+
+		if (ImGui::TreeNodeEx("Effects")) {
+			Util::Widgets::SliderFloat("Blood Effects Multiplier", &settings.bloodEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			Util::Widgets::SliderFloat("Deferred Effects Multiplier", &settings.deferredEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			Util::Widgets::SliderFloat("Membrane Effects Multiplier", &settings.membraneEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			Util::Widgets::SliderFloat("Projected Effects Multiplier", &settings.projectedEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			Util::Widgets::SliderFloat("Other Effects Multiplier", &settings.otherEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
+			ImGui::TreePop();
 		}
-
-		if (ImGui::BeginTabItem("Multipliers")) {
-			ImGui::SliderFloat("Ambient Multiplier", &settings.ambientMult, kMultiplierMin, kAmbientMultiplierMax, "%.2f");
-			ImGui::SliderFloat("Vanilla Diffuse Color Multiplier", &settings.vanillaDiffuseColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
-			ImGui::SliderFloat("Emissive Color Multiplier", &settings.emitColorMult, kMultiplierMin, kMultiplierMax, "%.2f");
-			ImGui::SliderFloat("Glowmap Multiplier", &settings.glowmapMult, kMultiplierMin, kMultiplierMax, "%.2f");
-			ImGui::SliderFloat("Effect Lighting Multiplier", &settings.effectLightingMult, kMultiplierMin, kMultiplierMax, "%.2f");
-
-			if (ImGui::TreeNodeEx("Effects")) {
-				ImGui::SliderFloat("Blood Effects Multiplier", &settings.bloodEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
-				ImGui::SliderFloat("Deferred Effects Multiplier", &settings.deferredEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
-				ImGui::SliderFloat("Membrane Effects Multiplier", &settings.membraneEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
-				ImGui::SliderFloat("Projected Effects Multiplier", &settings.projectedEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
-				ImGui::SliderFloat("Other Effects Multiplier", &settings.otherEffectMult, kMultiplierMin, kMultiplierMax, "%.2f");
-				ImGui::TreePop();
-			}
-
-			ImGui::EndTabItem();
-		}
-
-		ImGui::EndTabBar();
 	}
 }
 
 void LinearLighting::DrawEssentialSettings()
 {
 	SanitizeSettings(settings);
+
+	MenuUI::SettingsPage page("LinearLighting", {
+													{ "essentials", "Essentials", "Start with the main choices for this feature." },
+												});
+	if (!page.Is("essentials"))
+		return;
+
 	Util::UIntCheckbox("Enable", settings.enableLinearLighting);
 }
 

@@ -1,3 +1,4 @@
+#include "Menu/SettingsPage.h"
 // RenderDoc feature implementation providing in-application graphics debugging capabilities
 #include "Features/RenderDoc.h"
 
@@ -139,6 +140,12 @@ void RenderDoc::Load()
 
 void RenderDoc::DrawSettings()
 {
+	MenuUI::SettingsPage page("RenderDoc", {
+											   { "capture", "Capture", "Enable capture, then choose the frames to record." },
+											   { "storage", "Storage", "Monitor storage and remove old captures." },
+											   { "files", "Files", "Browse and open recorded captures." },
+										   });
+
 	// Track section visibility for intelligent cache refreshing
 	bool isSectionVisible = false;
 
@@ -164,8 +171,7 @@ void RenderDoc::DrawSettings()
 		isSectionVisible = true;
 		// Capture Control Section
 		{
-			auto captureSection = Util::SectionWrapper("Capture Control", "Manual capture creation and basic controls");
-			if (captureSection) {
+			if (page.Is("capture")) {
 				ImGui::TextColored(themeSettings.StatusPalette.InfoColor, "RenderDoc capture is active.");
 				ImGui::SameLine();
 
@@ -187,7 +193,7 @@ void RenderDoc::DrawSettings()
 				Util::AddTooltip("Additional comments will be appended to automatic metadata and embedded in the .rdc file");
 
 				int captureFrameCountUI = static_cast<int>(GetCaptureFrameCount());
-				if (ImGui::SliderInt("Capture Frames", &captureFrameCountUI, static_cast<int>(kMinCaptureFrameCount), static_cast<int>(kMaxCaptureFrameCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+				if (Util::Widgets::SliderInt("Capture Frames", &captureFrameCountUI, static_cast<int>(kMinCaptureFrameCount), static_cast<int>(kMaxCaptureFrameCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
 					SetCaptureFrameCount(static_cast<uint32_t>(captureFrameCountUI));
 				}
 				Util::AddTooltip("Number of consecutive frames to capture. 1 uses a normal RenderDoc capture; higher values use TriggerMultiFrameCapture.");
@@ -259,8 +265,7 @@ void RenderDoc::DrawSettings()
 
 		// Disk Usage Section
 		{
-			auto diskSection = Util::SectionWrapper("Disk Usage", "Monitor capture storage usage");
-			if (diskSection) {
+			if (page.Is("storage")) {
 				uint32_t diskUsageMB = CalculateCapturesDiskUsage();
 				float diskUsageGB = static_cast<float>(diskUsageMB) / 1024.0f;
 
@@ -297,8 +302,7 @@ void RenderDoc::DrawSettings()
 
 		// Capture Files Section
 		{
-			auto filesSection = Util::SectionWrapper("Capture Files", "View and manage individual capture files");
-			if (filesSection) {
+			if (page.Is("files")) {
 				// Get cached capture files (auto-refreshes every 5 seconds)
 				const auto& captureFiles = GetCachedCaptureFiles();
 
@@ -563,13 +567,19 @@ void RenderDoc::LoadSettings(json& o_json)
 
 void RenderDoc::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("RenderDoc", {
+											   { "essentials", "Essentials", "Start with the main choices for this feature." },
+										   });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawCaptureEnableToggle();
 }
 
 void RenderDoc::DrawCaptureEnableToggle()
 {
 	bool prevRenderDocCapture = enableRenderDocCapture;
-	if (ImGui::Checkbox("Enable RenderDoc Capture", &enableRenderDocCapture)) {
+	if (Util::Widgets::Checkbox("Enable RenderDoc Capture", &enableRenderDocCapture)) {
 		if (enableRenderDocCapture && !prevRenderDocCapture) {
 			globals::state->useFrameAnnotations = globals::state->frameAnnotations;
 			globals::state->frameAnnotations = true;

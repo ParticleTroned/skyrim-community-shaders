@@ -1,8 +1,10 @@
 #include "TerrainVariation.h"
 #include "../Util.h"
 #include "Globals.h"
+#include "Menu/SettingsPage.h"
 #include "State.h"
 #include "TerrainVariationPolicy.h"
+#include "Utils/UI.h"
 
 #include <mutex>
 
@@ -13,6 +15,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void TerrainVariation::DrawSettings()
 {
+	MenuUI::SettingsPage page("TerrainVariation", {
+													  { "appearance", "Variation", "Choose variation first, then refine the terrain appearance." },
+												  });
+	if (!page.Is("appearance"))
+		return;
+
 	ImGui::TextWrapped(
 		"Terrain Variation is always enabled when installed. "
 		"To turn it off, use Disable at Boot.");
@@ -20,7 +28,7 @@ void TerrainVariation::DrawSettings()
 	ImGui::Spacing();
 
 	bool lodTilingFix = settings.enableLODTerrainTilingFix != 0;
-	if (ImGui::Checkbox("Apply to LOD Terrain", &lodTilingFix)) {
+	if (Util::Widgets::Checkbox("Apply to LOD Terrain", &lodTilingFix)) {
 		settings.enableLODTerrainTilingFix = lodTilingFix ? 1u : 0u;
 		logger::info("TerrainVariation LOD setting changed to: {}", settings.enableLODTerrainTilingFix != 0);
 	}
@@ -30,7 +38,7 @@ void TerrainVariation::DrawSettings()
 			"This helps reduce the visible tiling effect on distant terrain.");
 	}
 	bool meshSupport = settings.enableMeshSupport != 0;
-	if (ImGui::Checkbox("Apply to Landscape-Textured Meshes", &meshSupport))
+	if (Util::Widgets::Checkbox("Apply to Landscape-Textured Meshes", &meshSupport))
 		SetMeshSupportEnabled(meshSupport);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(

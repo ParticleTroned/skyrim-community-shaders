@@ -81,7 +81,8 @@ class PreparedSelectionContract(unittest.TestCase):
                     capture_output=True, text=True, check=True)
                 for token in ("completedOutputSerial", "a_outcome.outputPlans["):
                     self.assertNotIn(token, result.stdout)
-                self.assertEqual("args.renderingMode" in result.stdout, enabled)
+                self.assertEqual("void Renderer::State::ApplyCompactLayoutLocked(" in result.stdout, enabled)
+                self.assertIn("args.renderingMode = GetNeuralRenderingMode();", result.stdout)
         renderer = sources[1]
         apply = renderer[renderer.index("bool Renderer::State::ApplyRegionBatchLocked("):
                          renderer.index("void Renderer::State::CaptureReplayBatch(")]

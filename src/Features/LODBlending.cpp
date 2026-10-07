@@ -1,4 +1,6 @@
 #include "LODBlending.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "WeatherVariableRegistry.h"
 
@@ -67,7 +69,7 @@ namespace
 {
 	bool DrawEnabledCheckbox(bool& a_enabled)
 	{
-		ImGui::Checkbox("Enable", &a_enabled);
+		Util::Widgets::Checkbox("Enable", &a_enabled);
 		return a_enabled;
 	}
 }
@@ -75,17 +77,24 @@ namespace
 void LODBlending::DrawSettings()
 {
 	settings.WaterReflectionStrength = ClampWaterReflectionStrength(settings.WaterReflectionStrength);
+
+	MenuUI::SettingsPage page("LODBlending", {
+												 { "appearance", "Blending", "Choose the distant transition first, then tune its appearance." },
+											 });
+	if (!page.Is("appearance"))
+		return;
+
 	const bool enabled = DrawEnabledCheckbox(Enabled);
 
 	ImGui::BeginDisabled(!enabled);
-	ImGui::SliderFloat("LOD Terrain Brightness", &settings.LODTerrainBrightness, 0.01f, 5.f, "%.2f");
-	ImGui::SliderFloat("LOD Object Brightness", &settings.LODObjectBrightness, 0.01f, 5.f, "%.2f");
-	ImGui::SliderFloat("LOD Object Snow Brightness", &settings.LODObjectSnowBrightness, 0.01f, 5.f, "%.2f");
-	ImGui::SliderFloat("LOD Terrain Gamma", &settings.LODTerrainGamma, 0.1f, 3.f, "%.2f");
-	ImGui::SliderFloat("LOD Object Gamma", &settings.LODObjectGamma, 0.1f, 3.f, "%.2f");
-	ImGui::SliderFloat("LOD Object Snow Gamma", &settings.LODObjectSnowGamma, 0.1f, 3.f, "%.2f");
+	Util::Widgets::SliderFloat("LOD Terrain Brightness", &settings.LODTerrainBrightness, 0.01f, 5.f, "%.2f");
+	Util::Widgets::SliderFloat("LOD Object Brightness", &settings.LODObjectBrightness, 0.01f, 5.f, "%.2f");
+	Util::Widgets::SliderFloat("LOD Object Snow Brightness", &settings.LODObjectSnowBrightness, 0.01f, 5.f, "%.2f");
+	Util::Widgets::SliderFloat("LOD Terrain Gamma", &settings.LODTerrainGamma, 0.1f, 3.f, "%.2f");
+	Util::Widgets::SliderFloat("LOD Object Gamma", &settings.LODObjectGamma, 0.1f, 3.f, "%.2f");
+	Util::Widgets::SliderFloat("LOD Object Snow Gamma", &settings.LODObjectSnowGamma, 0.1f, 3.f, "%.2f");
 
-	ImGui::Checkbox(kEnableWaterReflectionStrengthDisplay, &EnableWaterReflectionStrength);
+	Util::Widgets::Checkbox(kEnableWaterReflectionStrengthDisplay, &EnableWaterReflectionStrength);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", kEnableWaterReflectionStrengthTooltip);
 	}
@@ -113,7 +122,7 @@ void LODBlending::DrawSettings()
 				GetShortName(), { kWaterReflectionStrengthSetting });
 	}
 	bool disableTerrainVertexColors = settings.DisableTerrainVertexColors != 0;
-	if (ImGui::Checkbox("Disable Terrain Vertex Colors", &disableTerrainVertexColors))
+	if (Util::Widgets::Checkbox("Disable Terrain Vertex Colors", &disableTerrainVertexColors))
 		settings.DisableTerrainVertexColors = disableTerrainVertexColors ? 1u : 0u;
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
@@ -125,6 +134,12 @@ void LODBlending::DrawSettings()
 
 void LODBlending::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("LODBlending", {
+												 { "essentials", "Essentials", "Start with the main choices for this feature." },
+											 });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawEnabledCheckbox(Enabled);
 }
 

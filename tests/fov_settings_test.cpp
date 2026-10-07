@@ -140,6 +140,11 @@ void ApplyPlatformSettingOverrides(ScreenSpaceGI::Settings&) {}
 void SyncResolvedSharedMaskScale(ScreenSpaceGI::Settings& settings);
 void drawSection(const char*) { ImGui::Spacing(); }
 
+namespace Util
+{
+	namespace Widgets = ImGui;
+}
+
 #include "fov_under_test.h"
 
 void Require(bool condition, const char* message)

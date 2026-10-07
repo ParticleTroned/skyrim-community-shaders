@@ -1,4 +1,6 @@
 #include "VolumetricShadows.h"
+#include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
 #include <array>
@@ -23,7 +25,7 @@ namespace
 
 	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
 	{
-		ImGui::Checkbox("Enable", &a_settings.Enabled);
+		Util::Widgets::Checkbox("Enable", &a_settings.Enabled);
 	}
 
 	template <class T>
@@ -382,14 +384,18 @@ void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
 
 void VolumetricShadows::DrawSettings()
 {
-	DrawEnabledCheckbox(settings);
-	ImGui::BeginDisabled(!settings.Enabled);
+	MenuUI::SettingsPage page("VolumetricShadows", {
+													   { "appearance", "Shadows", "Choose whether light shafts cast shadows." },
+													   { "diagnostics", "Diagnostics", "Inspect shadow buffers." },
+												   });
 
-	ImGui::SeparatorText("Debug");
+	if (page.Is("appearance"))
+		DrawEnabledCheckbox(settings);
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	if (page.Is("diagnostics")) {
+		const auto disabled = Util::DisableGuard(!settings.Enabled);
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		Util::Widgets::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
 		auto displayRT = [&](const char* a_label, ID3D11Texture2D* a_texture, ID3D11ShaderResourceView* a_srv) {
 			if (!a_srv || !a_texture)
@@ -408,15 +414,17 @@ void VolumetricShadows::DrawSettings()
 
 		displayRT("VSM Cascade 0", shadowCopyTexture, shadowCopyMip0SRV);
 		displayRT("VSM Cascade 1", shadowCopyTexture, shadowCopyMip1SRV);
-
-		ImGui::TreePop();
 	}
-
-	ImGui::EndDisabled();
 }
 
 void VolumetricShadows::DrawEssentialSettings()
 {
+	MenuUI::SettingsPage page("VolumetricShadows", {
+													   { "essentials", "Essentials", "Start with the main choices for this feature." },
+												   });
+	if (!page.Is("essentials"))
+		return;
+
 	DrawEnabledCheckbox(settings);
 }
 

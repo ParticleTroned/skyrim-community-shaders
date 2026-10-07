@@ -1,9 +1,16 @@
 #include "HorizonFix.h"
+#include "Menu/SettingsPage.h"
 
 #include <imgui.h>
 
 void HorizonFix::DrawSettings()
 {
+	MenuUI::SettingsPage page("HorizonFix", {
+												{ "appearance", "Horizon", "Choose the horizon correction for this scene." },
+											});
+	if (!page.Is("appearance"))
+		return;
+
 	ImGui::TextWrapped(
 		"This feature provides compatibility with the Horizon Fix SKSE plugin, which extends the water far clip plane to allow water to be rendered beyond the vanilla far clip distance. This feature is only active when the Horizon Fix plugin is installed.");
 }

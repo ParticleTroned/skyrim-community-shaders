@@ -1,4 +1,5 @@
 #include "GrassOptimizations.h"
+#include "Menu/SettingsPage.h"
 
 #include "Globals.h"
 #include "GrassOptimizations/GrassBucketRenderer.h"
@@ -102,8 +103,27 @@ std::pair<std::string, std::vector<std::string>> GrassOptimizations::GetFeatureS
 		{ "Independent distant density, fading and mesh cost controls", "Optional middle/far meshes and simpler distant shading", "Separate grass Hi-Z switch for performance comparisons" } };
 }
 
-void GrassOptimizations::DrawSettings() { DrawControls(true); }
-void GrassOptimizations::DrawEssentialSettings() { DrawControls(false); }
+void GrassOptimizations::DrawSettings()
+{
+	MenuUI::SettingsPage page("GrassOptimizations", {
+														{ "visibility", "Visibility", "Choose batching and visibility checks first." },
+														{ "density", "Density", "Balance grass coverage and distant density." },
+														{ "distance", "Distance", "Refine how far grass is drawn and shaded." },
+														{ "meshes", "Meshes", "Choose simpler distant meshes and their transitions." },
+													});
+	for (const auto section : { "visibility", "density", "distance", "meshes" })
+		if (page.Is(section))
+			DrawControls(true, section);
+}
+void GrassOptimizations::DrawEssentialSettings()
+{
+	MenuUI::SettingsPage page("GrassOptimizations", {
+														{ "essentials", "Essentials", "Start with the main choices for this feature." },
+													});
+	if (!page.Is("essentials"))
+		return;
+	DrawControls(false);
+}
 void GrassOptimizations::DrawPerformanceSettings(bool advanced) { DrawControls(advanced); }
 json GrassOptimizations::CapturePerformanceSettingsState() const { return GetSettings(); }
 bool GrassOptimizations::IsPerformanceCostMeasurementEnabled() const { return IsEnabled() && renderer->IsRenderingAvailable(); }
@@ -116,69 +136,86 @@ void GrassOptimizations::RestorePerformanceCostMeasurementState(const json& stat
 	LoadSettings(saved);
 }
 
-void GrassOptimizations::DrawControls(bool advanced)
+void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 {
 	constexpr auto tooltipFlags = ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
 	auto next = GetSettings();
-	bool changed = ImGui::Checkbox("Grass optimizations", &next.Enabled);
+	const auto panel = [section](std::string_view id) { return section.empty() || section == id; };
+	bool changed = Util::Widgets::Checkbox("Grass optimizations", &next.Enabled);
 	Util::AddTooltip("Optimize grass drawing and visibility. Quality controls can trade grass density, range or detail for performance.", tooltipFlags);
 	auto guard = Util::DisableGuard(!next.Enabled);
-	if (advanced) {
-		changed |= ImGui::Checkbox("Combine grass across cells", &next.CrossCellBatching);
-		Util::AddTooltip("Group grass across loaded cells into fewer draws. Keeps its appearance and may improve performance.", tooltipFlags);
+
+	if (panel("visibility")) {
+		if (advanced) {
+			changed |= Util::Widgets::Checkbox("Combine grass across cells", &next.CrossCellBatching);
+			Util::AddTooltip("Group grass across loaded cells into fewer draws. Keeps its appearance and may improve performance.", tooltipFlags);
+		}
+		changed |= Util::Widgets::Checkbox("Skip grass outside the view", &next.FrustumCulling);
+		Util::AddTooltip("Skip grass outside your view to save rendering work without changing visible grass.", tooltipFlags);
 	}
-	changed |= ImGui::Checkbox("Skip grass outside the view", &next.FrustumCulling);
-	Util::AddTooltip("Skip grass outside your view to save rendering work without changing visible grass.", tooltipFlags);
-	changed |= ImGui::Checkbox("Reduce distant grass density", &next.DensityReduction);
-	Util::AddTooltip("Thin distant grass to save rendering work. Can improve performance but makes grass coverage sparser.", tooltipFlags);
-	if (advanced && next.DensityReduction) {
-		changed |= ImGui::SliderFloat("Smallest grass size", &next.MinPixelSize, 0.0f, 64.0f, "%.1f px");
-		Util::AddTooltip("Remove grass smaller than this on screen. Higher values save rendering work but can leave sparse patches or shorten its visible reach.", tooltipFlags);
-		next.FullDetailPixelSize = std::max(next.FullDetailPixelSize, next.MinPixelSize + 0.01f);
-		changed |= ImGui::SliderFloat("Full-density grass size", &next.FullDetailPixelSize, next.MinPixelSize + 0.01f, 256.0f, "%.1f px");
-		Util::AddTooltip("Grass above this on-screen size keeps full density. Higher values thin more grass, saving work at the cost of coverage.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Minimum density", &next.MinDensity, 0.0f, 1.0f, "%.2f");
-		Util::AddTooltip("Set how much distant grass to keep. Higher values fill gaps but cost more; grass below the smallest-size cutoff is still removed.", tooltipFlags);
-	}
-	if (advanced) {
-		changed |= ImGui::SliderFloat("Distant mesh cost bias", &next.MeshCostBias, 0.0f, 1.0f, "%.2f");
-		Util::AddTooltip("Give complex grass meshes less distant reach and, with density reduction on, thinner coverage to save work. Zero disables this adjustment.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Cost bias start distance", &next.CostBiasStartDistance, 0.0f, 20000.0f, "%.0f");
-		Util::AddTooltip("Choose where mesh cost bias starts reducing grass. Lower distances trade coverage for performance sooner; zero starts immediately.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Grass render distance", &next.RenderDistanceOverride, 0.0f, 100000.0f, "%.0f");
-		Util::AddTooltip("Set how far grass is visible. Shorter distances save rendering work; zero uses the game's setting. Limited to loaded grass.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Distance fade start", &next.EdgeFadeStart, 0.0f, 1.0f, "%.2f");
-		Util::AddTooltip("Choose where grass starts fading toward its distance limit. Lower values fade it sooner and more gradually; skipping faded grass can save work.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Skip nearly invisible grass", &next.InvisibleFadeCull, 0.0f, 1.0f, "%.3f");
-		Util::AddTooltip("Stop drawing grass below this fade value. Higher values save rendering work but can make grass disappear more abruptly.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Simpler shading below", &next.SimpleShadingPixelSize, 0.0f, 32.0f, "%.1f px");
-		Util::AddTooltip("Use simpler lighting on grass smaller than this on screen. Higher values save work but reduce shading detail; zero keeps full shading.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Grass collision distance", &next.CollisionDistance, 0.0f, GrassPolicy::kMaxCollisionDistance, "%.0f units");
-		Util::AddTooltip("Limit how far optimized grass responds to collisions. Shorter distances save work; zero disables this bending. Requires Grass Collision and its local coverage.", tooltipFlags);
-	}
-	changed |= ImGui::Checkbox("Use distant grass meshes", &next.EnableMeshLOD);
-	Util::AddTooltip("Use simpler distant meshes to save rendering work, with less detail. Requires compatible grass LOD meshes; missing ones keep full detail.", tooltipFlags);
-	if (advanced && next.EnableMeshLOD) {
-		changed |= ImGui::Checkbox("Middle grass LOD", &next.EnableMidLOD);
-		Util::AddTooltip("Use simpler meshes for middle-distance grass, reducing detail and rendering cost. Requires compatible grass LOD meshes.", tooltipFlags);
-		changed |= ImGui::Checkbox("Far grass LOD", &next.EnableFarLOD);
-		Util::AddTooltip("Use simpler meshes for faraway grass, reducing distant detail and rendering cost. Requires compatible grass LOD meshes.", tooltipFlags);
-		changed |= ImGui::SliderFloat("Middle LOD size", &next.MidLODPixelSize, 0.01f, 128.0f, "%.1f px");
-		Util::AddTooltip("Use the middle grass mesh below this on-screen size. Higher values switch sooner, saving work but reducing detail.", tooltipFlags);
-		next.FarLODPixelSize = std::min(next.FarLODPixelSize, next.MidLODPixelSize);
-		changed |= ImGui::SliderFloat("Far LOD size", &next.FarLODPixelSize, 0.01f, next.MidLODPixelSize, "%.1f px");
-		Util::AddTooltip("Use the far grass mesh below this on-screen size. Higher values trade more distant detail for performance.", tooltipFlags);
-		changed |= ImGui::SliderFloat("LOD transition width", &next.MeshLODBandPixels, 0.01f, 32.0f, "%.1f px");
-		Util::AddTooltip("Spread changes between grass meshes to soften transitions. Wider values may keep detailed meshes longer and add rendering work.", tooltipFlags);
-	}
-	{
-		changed |= ImGui::Checkbox("Grass Hi-Z culling", &next.EnableOcclusionCulling);
-		Util::AddTooltip("Skip grass hidden behind solid objects. Depending on the scene, this can save work or have a small performance cost.", tooltipFlags);
-		if (advanced && next.EnableOcclusionCulling) {
-			changed |= ImGui::SliderFloat("Grass occlusion tolerance", &next.OcclusionBias, 0.0f, 0.05f, "%.4f");
-			Util::AddTooltip("Make hidden-grass skipping more cautious. Increase this if grass disappears incorrectly; higher values keep more grass and can cost performance.", tooltipFlags);
+
+	if (panel("density")) {
+		changed |= Util::Widgets::Checkbox("Reduce distant grass density", &next.DensityReduction);
+		Util::AddTooltip("Thin distant grass to save rendering work. Can improve performance but makes grass coverage sparser.", tooltipFlags);
+		if (advanced && next.DensityReduction) {
+			changed |= Util::Widgets::SliderFloat("Smallest grass size", &next.MinPixelSize, 0.0f, 64.0f, "%.1f px");
+			Util::AddTooltip("Remove grass smaller than this on screen. Higher values save rendering work but can leave sparse patches or shorten its visible reach.", tooltipFlags);
+			next.FullDetailPixelSize = std::max(next.FullDetailPixelSize, next.MinPixelSize + 0.01f);
+			changed |= Util::Widgets::SliderFloat("Full-density grass size", &next.FullDetailPixelSize, next.MinPixelSize + 0.01f, 256.0f, "%.1f px");
+			Util::AddTooltip("Grass above this on-screen size keeps full density. Higher values thin more grass, saving work at the cost of coverage.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Minimum density", &next.MinDensity, 0.0f, 1.0f, "%.2f");
+			Util::AddTooltip("Set how much distant grass to keep. Higher values fill gaps but cost more; grass below the smallest-size cutoff is still removed.", tooltipFlags);
 		}
 	}
+
+	if (panel("distance")) {
+		if (advanced) {
+			changed |= Util::Widgets::SliderFloat("Distant mesh cost bias", &next.MeshCostBias, 0.0f, 1.0f, "%.2f");
+			Util::AddTooltip("Give complex grass meshes less distant reach and, with density reduction on, thinner coverage to save work. Zero disables this adjustment.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Cost bias start distance", &next.CostBiasStartDistance, 0.0f, 20000.0f, "%.0f");
+			Util::AddTooltip("Choose where mesh cost bias starts reducing grass. Lower distances trade coverage for performance sooner; zero starts immediately.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Grass render distance", &next.RenderDistanceOverride, 0.0f, 100000.0f, "%.0f");
+			Util::AddTooltip("Set how far grass is visible. Shorter distances save rendering work; zero uses the game's setting. Limited to loaded grass.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Distance fade start", &next.EdgeFadeStart, 0.0f, 1.0f, "%.2f");
+			Util::AddTooltip("Choose where grass starts fading toward its distance limit. Lower values fade it sooner and more gradually; skipping faded grass can save work.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Skip nearly invisible grass", &next.InvisibleFadeCull, 0.0f, 1.0f, "%.3f");
+			Util::AddTooltip("Stop drawing grass below this fade value. Higher values save rendering work but can make grass disappear more abruptly.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Simpler shading below", &next.SimpleShadingPixelSize, 0.0f, 32.0f, "%.1f px");
+			Util::AddTooltip("Use simpler lighting on grass smaller than this on screen. Higher values save work but reduce shading detail; zero keeps full shading.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Grass collision distance", &next.CollisionDistance, 0.0f, GrassPolicy::kMaxCollisionDistance, "%.0f units");
+			Util::AddTooltip("Limit how far optimized grass responds to collisions. Shorter distances save work; zero disables this bending. Requires Grass Collision and its local coverage.", tooltipFlags);
+		}
+	}
+
+	if (panel("meshes")) {
+		changed |= Util::Widgets::Checkbox("Use distant grass meshes", &next.EnableMeshLOD);
+		Util::AddTooltip("Use simpler distant meshes to save rendering work, with less detail. Requires compatible grass LOD meshes; missing ones keep full detail.", tooltipFlags);
+		if (advanced && next.EnableMeshLOD) {
+			changed |= Util::Widgets::Checkbox("Middle grass LOD", &next.EnableMidLOD);
+			Util::AddTooltip("Use simpler meshes for middle-distance grass, reducing detail and rendering cost. Requires compatible grass LOD meshes.", tooltipFlags);
+			changed |= Util::Widgets::Checkbox("Far grass LOD", &next.EnableFarLOD);
+			Util::AddTooltip("Use simpler meshes for faraway grass, reducing distant detail and rendering cost. Requires compatible grass LOD meshes.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("Middle LOD size", &next.MidLODPixelSize, 0.01f, 128.0f, "%.1f px");
+			Util::AddTooltip("Use the middle grass mesh below this on-screen size. Higher values switch sooner, saving work but reducing detail.", tooltipFlags);
+			next.FarLODPixelSize = std::min(next.FarLODPixelSize, next.MidLODPixelSize);
+			changed |= Util::Widgets::SliderFloat("Far LOD size", &next.FarLODPixelSize, 0.01f, next.MidLODPixelSize, "%.1f px");
+			Util::AddTooltip("Use the far grass mesh below this on-screen size. Higher values trade more distant detail for performance.", tooltipFlags);
+			changed |= Util::Widgets::SliderFloat("LOD transition width", &next.MeshLODBandPixels, 0.01f, 32.0f, "%.1f px");
+			Util::AddTooltip("Spread changes between grass meshes to soften transitions. Wider values may keep detailed meshes longer and add rendering work.", tooltipFlags);
+		}
+	}
+
+	if (panel("visibility")) {
+		{
+			changed |= Util::Widgets::Checkbox("Grass Hi-Z culling", &next.EnableOcclusionCulling);
+			Util::AddTooltip("Skip grass hidden behind solid objects. Depending on the scene, this can save work or have a small performance cost.", tooltipFlags);
+			if (advanced && next.EnableOcclusionCulling) {
+				changed |= Util::Widgets::SliderFloat("Grass occlusion tolerance", &next.OcclusionBias, 0.0f, 0.05f, "%.4f");
+				Util::AddTooltip("Make hidden-grass skipping more cautious. Increase this if grass disappears incorrectly; higher values keep more grass and can cost performance.", tooltipFlags);
+			}
+		}
+	}
+
 	if (changed) {
 		std::string error;
 		if (!SetSettings(next, error))

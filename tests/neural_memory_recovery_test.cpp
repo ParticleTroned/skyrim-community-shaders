@@ -1,4 +1,4 @@
-#include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
+#include "Features/Upscaling/NeuralRendering/MemoryConservationPolicy.h"
 
 #include <limits>
 #include <stdexcept>
@@ -21,6 +21,126 @@ namespace
 	{
 		sample.sampledAtMs = nowMs;
 		return policy.Admit(sample, additionalBytes, nowMs);
+	}
+
+	void TestConservationHysteresis()
+	{
+		MemoryConservationPolicy policy;
+		auto sample = healthy;
+		sample.sampledAtMs = 1000;
+		policy.Update(sample, 0, false, 1000);
+		Require(!policy.active, "Healthy NR entered conservation");
+		policy.Update(sample, 800 * mib, false, 1000);
+		Require(policy.active && policy.entries == 1, "Projected 80 percent usage did not trigger conservation");
+		MemoryRecoveryPolicy recovery;
+		Require(recovery.Admit(sample, 800 * mib, 1000), "Conservation threshold also suspended NR");
+		for (std::uint64_t now = 1000; now < 6000; now += 250) {
+			sample.sampledAtMs = now;
+			policy.Update(sample, 0, false, now);
+			Require(policy.active, "Conservation exited before stable headroom");
+		}
+		sample.sampledAtMs = 6000;
+		policy.Update(sample, 0, false, 6000);
+		Require(!policy.active && policy.exits == 1, "Stable healthy samples did not restore normal caching");
+		sample.usageBytes = 12500 * mib;
+		sample.sampledAtMs = 6250;
+		policy.Update(sample, 0, false, 6250);
+		Require(!policy.active, "Hysteresis band restarted conservation");
+		policy.Update(sample, 0, true, 6250);
+		Require(policy.active && policy.entries == 2, "Recovery did not preserve conservation for rebuilding");
+	}
+
+	void TestTrimLimitSurvivesRecoveryAndRebuilds()
+	{
+		MemoryConservationPolicy policy;
+		auto sample = high;
+		sample.sampledAtMs = 1000;
+		Require(!policy.CanTrimColorBuffers(0), "Inactive policy admitted a trim");
+		policy.Update(sample, 0, false, 1000);
+		policy.RecordColorTrim(0, 64 * mib);
+		Require(!policy.CanTrimColorBuffers(0) && policy.CanTrimColorBuffers(1), "Trim limit did not remain per physical eye");
+		policy.RecordColorTrim(0, 64 * mib);
+		policy.RecordColorTrim(kPhysicalFeatureSlotCount, 64 * mib);
+		Require(!policy.CanTrimColorBuffers(kPhysicalFeatureSlotCount) && policy.trimmedColorBuffers == 2 &&
+					policy.reclaimedLogicalBytes == 64 * mib,
+			"Duplicate or invalid trims changed the counters");
+
+		MemoryRecoveryPolicy recovery;
+		recovery.Suspend(1250);
+		recovery.Retired();
+		policy.Update({}, 0, true, 1500);
+		Require(!policy.CanTrimColorBuffers(0), "Backend retirement reset the trim limit");
+		sample = healthy;
+		for (std::uint64_t now = 1750; now <= 2250; now += 250)
+			Observe(recovery, sample, 0, now);
+		recovery.Succeeded(2250);
+		Require(recovery.phase == MemoryRecoveryPhase::Ready, "Recovery test did not finish rebuilding");
+		for (std::uint64_t now = 2500; now < 7500; now += 250) {
+			sample.sampledAtMs = now;
+			policy.Update(sample, 0, false, now);
+			Require(!policy.CanTrimColorBuffers(0), "Rebuilding within an episode allowed another trim");
+		}
+		sample.sampledAtMs = 7500;
+		policy.Update(sample, 0, false, 7500);
+		Require(!policy.active, "Healthy headroom did not end the pressure episode");
+		sample = high;
+		sample.sampledAtMs = 7750;
+		policy.Update(sample, 0, false, 7750);
+		Require(policy.CanTrimColorBuffers(0), "A new pressure episode retained the old trim limit");
+		policy.RecordColorTrim(0, 32 * mib);
+		Require(policy.trimmedColorBuffers == 4 && policy.reclaimedLogicalBytes == 96 * mib,
+			"New-episode trim accounting was incorrect");
+	}
+
+	void TestConservationNeedsFreshHeadroom()
+	{
+		MemoryConservationPolicy policy;
+		policy.Update({}, 0, false, 1000);
+		Require(!policy.active, "Unknown budget activated conservation");
+		policy.Update({}, 0, true, 1000);
+		Require(policy.active, "Recovery needs conservation even without a budget sample");
+		auto sample = healthy;
+		sample.sampledAtMs = 1000;
+		policy.Update(sample, 0, false, 1000);
+		policy.Update(sample, 0, false, 6000);
+		Require(policy.active && !policy.healthyWindow, "Reused stale sample exited conservation");
+		sample.sampledAtMs = 6250;
+		policy.Update(sample, 0, false, 6250);
+		sample.sampledAtMs = 12000;
+		policy.Update(sample, 0, false, 12000);
+		Require(policy.active && policy.healthySinceMs == 12000, "Sample gap was treated as continuous health");
+		sample.sampledAtMs = 12500;
+		policy.Update(sample, 0, false, 12250);
+		Require(!policy.healthyWindow, "Future sample retained a healthy window");
+		sample.sampledAtMs = 12250;
+		sample.usageBytes = 12400 * mib;
+		policy.Update(sample, 0, false, 12250);
+		Require(policy.active && !policy.healthyWindow, "Usage above exit threshold counted as healthy");
+		MemoryConservationPolicy largeEstimate;
+		sample = healthy;
+		sample.sampledAtMs = 13000;
+		largeEstimate.Update(sample, std::numeric_limits<std::uint64_t>::max(), false, 13000);
+		Require(largeEstimate.active, "Very large allocation estimate wrapped out of conservation");
+	}
+
+	void TestConservationHeadroomAndReclaimLimits()
+	{
+		MemoryConservationPolicy policy;
+		MemoryBudgetSample sample{ 3000 * mib, 1976 * mib, true, 0, false, 1000 };
+		policy.Update(sample, 0, false, 1000);
+		Require(policy.active, "Low absolute headroom did not activate conservation");
+		for (std::uint64_t now = 1000; now <= 7000; now += 250) {
+			sample.sampledAtMs = now;
+			policy.Update(sample, 0, false, now);
+		}
+		Require(policy.active && !policy.healthyWindow, "Low absolute headroom was mistaken for recovery");
+		Require(!MemoryConservationPolicy::IsInactive(2000, 1999), "Clock regression evicted a route");
+		Require(!MemoryConservationPolicy::IsInactive(2000, 3999), "Recently active route could be evicted");
+		Require(MemoryConservationPolicy::IsInactive(2000, 4000), "Idle route could not be reclaimed");
+		Require(!MemoryConservationPolicy::WorthTrimming(100 * mib, 69 * mib), "Small byte savings triggered a trim");
+		Require(!MemoryConservationPolicy::WorthTrimming(200 * mib, 151 * mib), "Small relative savings triggered a trim");
+		Require(MemoryConservationPolicy::WorthTrimming(200 * mib, 150 * mib), "Material savings could not be reclaimed");
+		Require(!MemoryConservationPolicy::WorthTrimming(32 * mib, 64 * mib), "Required growth was mistaken for a trim");
 	}
 
 	void TestRetirementAndCompletion()
@@ -165,6 +285,10 @@ namespace
 
 int main()
 {
+	TestConservationHysteresis();
+	TestConservationNeedsFreshHeadroom();
+	TestTrimLimitSurvivesRecoveryAndRebuilds();
+	TestConservationHeadroomAndReclaimLimits();
 	TestRetirementAndCompletion();
 	TestDlssWarningsRequireFreshRecovery();
 	TestFreshConsecutiveSamples();

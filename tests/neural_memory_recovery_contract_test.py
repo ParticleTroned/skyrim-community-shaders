@@ -20,6 +20,44 @@ def body(source, signature, indent="\t"):
 
 
 class MemoryRecoveryContracts(unittest.TestCase):
+    def test_conservation_retires_before_allocating_and_preserves_stereo(self):
+        source = body(RENDERER, "bool Renderer::State::AdmitMemoryLocked(")
+        self.assertLess(source.index("memoryConservation_.Update("), source.index("ReclaimMemoryLocked("))
+        self.assertLess(source.index("ReclaimMemoryLocked("), source.index("memoryRecovery_.Admit("))
+        after_reclaim = source.split("if (reclaimed)", 1)[1]
+        self.assertLess(after_reclaim.index("EstimateAdditionalMemoryLocked("), after_reclaim.index("memoryRecovery_.Admit("))
+        self.assertIn("SampleMemoryBudgetLocked(first.device, nowMs, true)", after_reclaim)
+        reclaim = body(RENDERER, "bool Renderer::State::ReclaimMemoryLocked(")
+        self.assertIn("FeatureSlotBit(slotIndex) | FeatureSlotBit(slotIndex ^ 1u)", reclaim)
+        self.assertIn("MemoryConservationPolicy::IsInactive(slot.lastUsedMs, nowMs)", reclaim)
+        self.assertIn("IsSequentialFrame(slot.lastSuccessfulFrame, args.front().frameId)", reclaim)
+        self.assertIn("memoryConservation_.CanTrimColorBuffers(slotIndex)", reclaim)
+        self.assertIn("memoryConservation_.RecordColorTrim(index, trimmedBytes[index])", reclaim)
+        slot = RENDERER.split("struct Slot\n", 1)[1].split("struct ValidatedResources", 1)[0]
+        self.assertNotIn("colorTrimEpoch", slot)
+        self.assertLess(reclaim.index("interop_.WaitForIdle("), reclaim.index("slot.colorWork.baseline = {}"))
+        self.assertNotIn("historyValid = false", reclaim)
+        retire = body(RENDERER, "bool Renderer::State::RetireSlotLocked(")
+        self.assertLess(retire.index("interop_.WaitForIdle("), retire.index("colorPipeline_.Poll("))
+        self.assertLess(retire.index("colorPipeline_.Poll("), retire.index("ResetFeature("))
+        self.assertLess(retire.index("SetActiveFeatureSlotLocked(a_slot)"), retire.index("interop_.WaitForIdle("))
+        self.assertLess(retire.index("DropMeasurement()"), retire.index("slot = {}"))
+        self.assertIn("if constexpr (kDevelopmentDiagnostics)", retire)
+        self.assertLess(retire.index("ResetFeature("), retire.index("slot = {}"))
+        ensure = body(RENDERER, "bool Renderer::State::EnsureSlotLocked(")
+        self.assertIn("RetireSlotLocked(a_slot, a_evidence)", ensure)
+
+    def test_conservation_output_is_typed_and_unknown_bytes_are_explicit(self):
+        descriptor = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', BRIDGE, re.S).group(1))
+        output = descriptor["outputSchema"]["properties"]["neuralRendering"]["properties"]["renderer"]["properties"]["memoryConservation"]
+        self.assertEqual(output["properties"]["active"]["type"], "boolean")
+        self.assertEqual(output["properties"]["reclaimedLogicalBytes"]["type"], ["integer", "null"])
+        self.assertEqual(set(output["required"]), set(output["properties"]))
+        serialization = body(BRIDGE, "json NeuralMemoryConservationJson(")
+        self.assertIn("policy.reclaimedLogicalBytesKnown ? json(policy.reclaimedLogicalBytes) : json(nullptr)", serialization)
+        fields = set(re.findall(r'\{ "(\w+)",', serialization))
+        self.assertEqual(fields, set(output["properties"]))
+
     def test_completion_follows_the_entire_transaction(self):
         for entry in ("Apply", "ApplyStereo", "ApplySequentialStereo"):
             source = body(RENDERER, f"bool Renderer::{entry}(")
@@ -62,7 +100,8 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertIn("state_->snapshot_.memoryRecovery = state_->memoryRecovery_", source)
         ui = UPSCALING.split('Neural Rendering cannot recover safely in this session.', 1)[1].split('if ((status.failureLatched || status.quarantined)', 1)[0]
         self.assertIn("else if (status.failureLatched)", ui)
-        self.assertIn("else if (settings.neuralRenderingEnabled", ui)
+        self.assertIn("else if (IsNeuralRenderingRequested()", ui)
+        self.assertIn("IsNeuralRenderingRequested() && status.memoryConservation.active", ui)
         self.assertIn("MemoryRecoveryPhase::Retiring", ui)
         self.assertIn("MemoryRecoveryPhase::Waiting", ui)
 
@@ -105,7 +144,7 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertIn("nr_memory_recovery", schema["properties"]["action"]["enum"])
         self.assertEqual(schema["properties"]["durationMilliseconds"]["maximum"], 30000)
         scoped = next(rule for rule in schema["allOf"] if rule["if"].get("properties", {}).get("action", {}).get("const") == "nr_memory_recovery")
-        self.assertEqual(set(scoped["then"]["propertyNames"]["enum"]), {"action", "expectedBuildId", "durationMilliseconds", "simulateDlssWarning"})
+        self.assertEqual(set(scoped["then"]["propertyNames"]["enum"]), {"action", "expectedBuildId", "durationMilliseconds", "simulateDlssWarning", "conservationOnly"})
         injection = next(rule for rule in schema["allOf"] if rule["if"] == {"required": ["durationMilliseconds"]})
         self.assertEqual(injection["then"]["properties"]["action"]["const"], "nr_memory_recovery")
         enum = BRIDGE.split('result["inputSchema"]["properties"]["action"]["enum"] = {', 1)[1].split("};", 1)[0]
@@ -114,6 +153,11 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertTrue("TryGetNonNegativeInteger(" in handler)
         self.assertLess(handler.index("RunWithRendererOwnership("), handler.index("SimulateMemoryPressure("))
         self.assertTrue('{ "mutationApplied", applied }' in handler)
+        self.assertEqual(schema["properties"]["conservationOnly"]["const"], True)
+        conservation = next(rule for rule in schema["allOf"] if rule["if"] == {"required": ["conservationOnly"]})
+        self.assertEqual(conservation["then"]["required"], ["durationMilliseconds"])
+        self.assertIn('"conservationOnly must be true and requires durationMilliseconds"', handler)
+        self.assertIn("SimulateMemoryPressure(durationMs, conservationOnly)", handler)
         self.assertEqual(schema["properties"]["simulateDlssWarning"]["const"], True)
         self.assertEqual(injection["then"]["not"], {"required": ["simulateDlssWarning"]})
         warning = handler.split('if (a_args.contains("simulateDlssWarning"))', 1)[1].split('if (!a_args.contains("durationMilliseconds"))', 1)[0]

@@ -30,12 +30,19 @@ namespace NeuralRendering
 
 	struct MemoryBudgetSample
 	{
+		static constexpr std::uint64_t kMaximumAgeMs = 500;
 		std::uint64_t budgetBytes = 0;
 		std::uint64_t usageBytes = 0;
 		bool valid = false;
 		std::int32_t result = 0;
 		bool simulated = false;
 		std::uint64_t sampledAtMs = 0;
+
+		/** Budget samples cannot authorize recovery after a gap in observation. */
+		[[nodiscard]] bool IsFresh(std::uint64_t nowMs) const noexcept
+		{
+			return valid && budgetBytes != 0 && sampledAtMs <= nowMs && nowMs - sampledAtMs <= kMaximumAgeMs;
+		}
 
 		[[nodiscard]] std::uint64_t Headroom() const noexcept
 		{
@@ -52,7 +59,7 @@ namespace NeuralRendering
 		static constexpr double kResumeBudgetRatio = 0.85;
 		static constexpr std::uint64_t kSampleIntervalMs = 250;
 		static constexpr std::uint64_t kStableHeadroomMs = 500;
-		static constexpr std::uint64_t kMaximumSampleGapMs = 2 * kSampleIntervalMs;
+		static constexpr std::uint64_t kMaximumSampleGapMs = MemoryBudgetSample::kMaximumAgeMs;
 		static constexpr std::uint64_t kRetryResetMs = 30000;
 		static constexpr std::uint32_t kMaximumRetryLevel = 6;
 		// Native allocation bytes are private; this is a reserve, not a measurement.
@@ -121,8 +128,7 @@ namespace NeuralRendering
 		/** Unknown samples preserve ordinary admission but cannot admit recovery. */
 		[[nodiscard]] bool Admit(MemoryBudgetSample current, std::uint64_t additionalBytes, std::uint64_t nowMs) noexcept
 		{
-			current.valid = current.valid && current.budgetBytes != 0 && current.sampledAtMs <= nowMs &&
-			                nowMs - current.sampledAtMs <= kMaximumSampleGapMs;
+			current.valid = current.IsFresh(nowMs);
 			sample = current;
 			requiredBytes = additionalBytes;
 			if (phase == MemoryRecoveryPhase::Retiring)

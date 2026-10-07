@@ -18387,8 +18387,7 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 		Util::Text::WrappedError("Neural Rendering cannot recover safely in this session. Restart the game to try again.");
 	} else if (status.failureLatched) {
 		Util::Text::WrappedError("Neural Rendering is paused after an error. Use Reset Neural Rendering Runtime below to try again. Your settings are retained.");
-	} else if (settings.neuralRenderingEnabled && runtimeInstalled && renderScaleAvailable &&
-			   status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready) {
+	} else if (IsNeuralRenderingRequested() && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready) {
 		const char* recoveryStage = "rebuilding resources and resetting history";
 		if (status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Retiring)
 			recoveryStage = "safely releasing resources";
@@ -18396,6 +18395,8 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 			recoveryStage = "waiting for enough GPU memory";
 		Util::Text::WrappedWarning("%sNeural Rendering is recovering: %s. Normal rendering is active; NR will resume automatically. Your settings are retained.",
 			status.memoryRecovery.dlssWarning ? "DLSS reported GPU memory pressure. " : "", recoveryStage);
+	} else if (IsNeuralRenderingRequested() && status.memoryConservation.active) {
+		Util::Text::WrappedWarning("Neural Rendering memory saving is active: releasing unused resources and oversized buffers. Image quality is unchanged. Normal caching will resume automatically when GPU memory pressure eases.");
 	}
 	if ((status.failureLatched || status.quarantined) && !status.detail.empty())
 		ImGui::TextWrapped("Reason: %s", status.detail.c_str());

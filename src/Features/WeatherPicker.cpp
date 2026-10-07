@@ -126,6 +126,18 @@ void WeatherPicker::DrawSettings()
 	DrawShowInOverlayToggle();
 }
 
+bool WeatherPicker::IsPerformanceCostMeasurementEnabled() const
+{
+	return WeatherDetailsWindow.ShowInOverlay && WeatherDetailsWindow.Enabled && Menu::GetSingleton()->overlayVisible;
+}
+
+void WeatherPicker::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	WeatherDetailsWindow.ShowInOverlay = a_enabled;
+	if (a_enabled && Menu::GetSingleton()->overlayVisible)
+		WeatherDetailsWindow.Enabled = true;
+}
+
 void WeatherPicker::DrawShowInOverlayToggle()
 {
 	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
@@ -133,9 +145,7 @@ void WeatherPicker::DrawShowInOverlayToggle()
 
 	bool showInOverlay = WeatherDetailsWindow.ShowInOverlay;
 	if (ImGui::Checkbox(T(TKEY("show_in_overlay"), "Show in Overlay"), &showInOverlay)) {
-		WeatherDetailsWindow.ShowInOverlay = showInOverlay;
-		if (showInOverlay && Menu::GetSingleton()->overlayVisible)
-			WeatherDetailsWindow.Enabled = true;
+		SetPerformanceCostMeasurementEnabled(showInOverlay);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("show_in_overlay_tooltip"),

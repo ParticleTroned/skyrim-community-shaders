@@ -39,6 +39,13 @@ public:
 	bool featureAvailable = false;
 
 	virtual void DataLoaded() override;
+	/** Exposes the runtime toggle only when its companion plugin is present. */
+	bool SupportsPerformanceCostMeasurement() const override { return featureAvailable; }
+	/** Returns the requested terrain-helper state. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableTerrainHelper; }
+	/** Changes the runtime toggle and clears transient terrain bindings when disabled. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;

@@ -619,6 +619,13 @@ bool VR::IsPerformanceCostMeasurementEnabled() const
 	       (IsRenderScaleDesktopMirrorQualityAvailable() && settings.StabilizeRenderScaleDesktopMirror);
 }
 
+void VR::SetPerformanceToggleEnabled(bool a_enabled)
+{
+	const auto depthMode = GetDepthCullingMode();
+	SetPerformanceCostMeasurementEnabled(a_enabled);
+	SetDepthCullingMode(depthMode);
+}
+
 void VR::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	const Settings defaults{};

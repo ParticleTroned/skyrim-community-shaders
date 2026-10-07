@@ -22715,6 +22715,28 @@ namespace
 	}
 }
 
+const char* Upscaling::GetPerformanceToggleBlockReason() const
+{
+	return IsNeuralRenderingUpscalingProfileAllowed(UpscaleMethod::kNONE, 0, false) ? nullptr :
+	                                                                                  "Disable Neural Rendering before switching Upscaling off or measuring it against None.";
+}
+
+void Upscaling::SetPerformanceToggleEnabled(bool a_enabled)
+{
+	if (!a_enabled) {
+		SetPerformanceCostMeasurementEnabled(false);
+		return;
+	}
+	if (ApplyOpenCompositeUpscalingBlocker(true))
+		return;
+	const auto method = GetDefaultPerformanceCostMeasurementMethod(*this);
+	const auto quality = ClampQualityModeUInt(settings.qualityMode);
+	ApplyCSMenuUpscalingTransition(method,
+		ClampToggleUInt(settings.renderScaleMode) != 0 && IsRenderScaleMethodEligible(method) && IsRenderScaleQualityMode(quality),
+		quality, ClampDLSSPresetUInt(settings.dlssPreset), "performance overview on",
+		VRUpscalingTransitionOrigin::CSMenu, 0, settings.fsr4RuntimeEnable);
+}
+
 void Upscaling::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (ApplyOpenCompositeUpscalingBlocker(true))

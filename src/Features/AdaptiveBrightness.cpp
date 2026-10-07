@@ -1717,6 +1717,15 @@ json AdaptiveBrightness::CapturePerformanceSettingsState() const
 	};
 }
 
+void AdaptiveBrightness::RestorePerformanceCostMeasurementState(const json& a_state)
+{
+	if (!a_state.is_boolean())
+		return;
+	const bool enabled = a_state.get<bool>();
+	SetEnabled(enabled);
+	SetPerformanceCostMeasurementEnabled(enabled);
+}
+
 void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (performanceCostMeasurementEnabled == a_enabled)

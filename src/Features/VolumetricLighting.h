@@ -70,8 +70,12 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the requested enable setting for the current interior/exterior context. */
+	bool IsPerformanceToggleEnabled() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Uses the native runtime control without replacing the current tuning. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	/** @return The latest requested exterior setting, including changes awaiting a safe frame. */

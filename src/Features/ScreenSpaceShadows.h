@@ -142,6 +142,10 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Reports staged changes before the next render pass applies them. */
+	bool IsPerformanceToggleEnabled() const override { return IsEnabledRequested(); }
+	/** Uses the native switch without resetting detailed settings. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return bendSettings.Enable != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;

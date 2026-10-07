@@ -112,6 +112,8 @@ struct LinearLighting : Feature
 	virtual void DrawPerformanceSettings(bool) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Keeps the overview toggle independent of scene activity and resource readiness. */
+	bool IsPerformanceToggleEnabled() const override { return settings.enableLinearLighting != 0; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.enableLinearLighting = a_enabled ? 1u : 0u; }
 

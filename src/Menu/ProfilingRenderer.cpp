@@ -1225,7 +1225,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	}
 }
 
-void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
+void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix, const std::function<void()>& drawActions)
 {
 	auto& profiler = (*globals::profiler);
 	auto& featureMode = featureTimingModes[featurePrefix];
@@ -1250,6 +1250,9 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 		ImGui::TextUnformatted("GPU/CPU: enable runtime profiling and show this feature's timing in the selected mode.");
 		ImGui::TextUnformatted("No restart required.");
 	}
+
+	if (drawActions)
+		drawActions();
 
 	if (featureMode == FeatureTimingMode::Off) {
 		ImGui::TextDisabled("Feature profiling is off.");

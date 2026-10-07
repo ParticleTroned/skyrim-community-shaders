@@ -142,7 +142,7 @@ public:
 	/// True when a status-only overlay must remain visible with the menu closed.
 	bool HasClosedMenuOverlay() const;
 	/// Opens a fresh main-menu session and prepares VR positioning/input state.
-	void OpenMenu();
+	void OpenMenu(bool a_cancelUserMeasurement = false);
 	/// Closes the main menu and any active CS Editor surface as one UI session.
 	void CloseMenu();
 

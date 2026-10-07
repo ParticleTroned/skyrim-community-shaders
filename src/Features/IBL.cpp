@@ -6,6 +6,7 @@
 #include "LocationContext.h"
 #include "Shadercache.h"
 #include "State.h"
+#include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
 #include <DDSTextureLoader.h>
@@ -125,6 +126,26 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DisableInWorldMap,
 	DisableInLoadingScreen,
 	CaptureWeatherBaselineOnSliderChange)
+
+const char* IBL::GetPerformanceToggleBlockReason() const
+{
+	return WeatherManager::GetSingleton()->IsVariableOverrideActive("ImageBasedLighting", "EnableIBL") ?
+	           "Pause this feature's weather overrides before toggling or measuring it." :
+	           nullptr;
+}
+
+void IBL::SetPerformanceToggleEnabled(bool a_enabled)
+{
+	SetPerformanceCostMeasurementEnabled(a_enabled);
+	if (settings.CaptureWeatherBaselineOnSliderChange)
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetShortName(), { "EnableIBL" });
+}
+
+void IBL::RestorePerformanceToggleState(const json& a_state)
+{
+	if (a_state.is_boolean())
+		SetPerformanceToggleEnabled(a_state.get<bool>());
+}
 
 void IBL::DrawSettings()
 {

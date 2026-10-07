@@ -2515,7 +2515,11 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
+	/** Prevents an Off comparison from violating the active NR route's required upscaler. */
+	const char* GetPerformanceToggleBlockReason() const override;
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Uses the native runtime control without replacing the current tuning. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override;
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual bool RequiresMenuCloseForPerformanceCostMeasurement(bool a_targetEnabled) const override;

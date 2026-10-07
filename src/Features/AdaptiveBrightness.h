@@ -291,9 +291,15 @@ struct AdaptiveBrightness : Feature
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Keeps the overview toggle independent of scene activity and resource readiness. */
+	bool IsPerformanceToggleEnabled() const override { return settings.enabled; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return IsRuntimeEnabled(); }
 	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Persists the native master switch without using the temporary measurement bypass. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
+	/** Restores both the native switch and temporary bypass after an overview toggle or comparison. */
+	void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	virtual bool IsPerformanceCostMeasurementReady() const override { return IsRuntimeAvailable(); }
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for a gameplay cell"; }
 

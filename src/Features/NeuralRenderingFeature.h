@@ -15,6 +15,12 @@ struct NeuralRenderingFeature : Feature
 	void LoadSettings(nlohmann::json&) override;
 	void SaveSettings(nlohmann::json&) override;
 	void RestoreDefaultSettings() override;
+	/** Uses the installed NR provider's native master toggle for on/off comparisons. */
+	bool SupportsPerformanceCostMeasurement() const override;
+	bool IsPerformanceToggleEnabled() const override;
+	bool IsPerformanceCostMeasurementEnabled() const override;
+	bool IsPerformanceCostMeasurementReady() const override;
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 	void DrawSettings() override;
 	bool HasEssentialSettings() const override { return true; }
 	void DrawEssentialSettings() override;

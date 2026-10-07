@@ -107,6 +107,26 @@ namespace
 		return moments.sampleWeight == 1.0 && GetMean(moments) == 10.0;
 	}
 
+	bool CoversCostPercentages()
+	{
+		double percentage = 0.0;
+		if (!TryGetCostPercentage(2.0, 10.0, percentage) || !Near(percentage, 20.0))
+			return false;
+		if (!TryGetCostPercentage(-2.0, 8.0, percentage) || !Near(percentage, -25.0))
+			return false;
+		// A 10 ms enabled frame versus 8 ms off loses 25 of the off state's 125 FPS.
+		if (!TryGetCostPercentage(125.0 - 100.0, 125.0, percentage) || !Near(percentage, 20.0))
+			return false;
+		if (!TryGetCostPercentage(0.0, 10.0, percentage) || percentage != 0.0)
+			return false;
+		for (const double total : { 0.0, -1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity() }) {
+			if (TryGetCostPercentage(1.0, total, percentage) || percentage != 0.0)
+				return false;
+		}
+		return !TryGetCostPercentage(std::numeric_limits<double>::infinity(), 1.0, percentage) &&
+		       !TryGetCostPercentage(std::numeric_limits<double>::max(), std::numeric_limits<double>::min(), percentage);
+	}
+
 	bool CoversTimingDiscontinuities()
 	{
 		return !IsTimingSampleInterrupted(10, 11, true) &&
@@ -123,7 +143,8 @@ int main()
 	               CoversSignificanceLimits() &&
 	               CoversMissingSampleTolerance() &&
 	               CoversInvalidSampleExclusion() &&
-	               CoversTimingDiscontinuities() ?
+	               CoversTimingDiscontinuities() &&
+	               CoversCostPercentages() ?
 	           0 :
 	           1;
 }

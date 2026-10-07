@@ -58,6 +58,16 @@ struct ScreenshotFeature : public Feature
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsInMenu() const override;
 
+	/** Measures the idle runtime overhead of the screenshot service's enable toggle. */
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the existing in-game screenshot enable state. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return IsRuntimeEnabled(); }
+	/** Uses the native toggle so pending source work obeys the same cancellation contract. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { SetEnabled(a_enabled); }
+	/** Excludes active source acquisition and encoder work from idle comparisons. */
+	bool IsPerformanceCostMeasurementReady() const override { return !HasPendingCapture() && GetOutstandingCaptureJobCount() == 0; }
+	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for screenshot capture work to finish"; }
+
 	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }

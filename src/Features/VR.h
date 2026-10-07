@@ -199,6 +199,8 @@ public:
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Preserves the selected culling quality when toggling runtime optimizations. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 

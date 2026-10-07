@@ -1383,8 +1383,10 @@ bool Menu::HasClosedMenuOverlay() const
 	return PerformanceTuningRenderer::HasActiveMeasurements();
 }
 
-void Menu::OpenMenu()
+void Menu::OpenMenu(bool a_cancelUserMeasurement)
 {
+	if (a_cancelUserMeasurement)
+		PerformanceTuningRenderer::CancelUserMeasurements();
 	if (IsEnabled || HasClosedMenuOverlay())
 		return;
 
@@ -1527,7 +1529,7 @@ void Menu::ProcessInputEventQueue()
 							 if (IsMenuSessionOpen()) {
 								 CloseMenu();
 							 } else {
-								 OpenMenu();
+								 OpenMenu(true);
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
 							 }
 						 }

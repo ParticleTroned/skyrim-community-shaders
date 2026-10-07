@@ -34,6 +34,9 @@ endif()
 
 foreach(_schema_contract IN ITEMS
     "start_feature_cost"
+    "start_feature_costs"
+    "set_feature_enabled"
+    "enabled"
     "start_upscaling_sweep"
     "cancel"
     "featureShortName"
@@ -50,6 +53,30 @@ foreach(_schema_contract IN ITEMS
         message(FATAL_ERROR
             "Performance-tuning schema is missing: ${_schema_contract}"
         )
+    endif()
+endforeach()
+
+string(JSON _toggle_type GET
+    "${_descriptor}" inputSchema properties enabled type
+)
+if(NOT _toggle_type STREQUAL "boolean")
+    message(FATAL_ERROR "Runtime feature toggles require a boolean enabled value")
+endif()
+string(JSON _action_count LENGTH
+    "${_descriptor}" inputSchema properties action enum
+)
+set(_registered_actions)
+math(EXPR _action_last "${_action_count} - 1")
+foreach(_index RANGE 0 ${_action_last})
+    string(JSON _action GET
+        "${_descriptor}" inputSchema properties action enum ${_index}
+    )
+    list(APPEND _registered_actions "${_action}")
+endforeach()
+foreach(_required_action IN ITEMS start_feature_costs set_feature_enabled)
+    list(FIND _registered_actions "${_required_action}" _required_action_index)
+    if(_required_action_index EQUAL -1)
+        message(FATAL_ERROR "Missing registered tuning action: ${_required_action}")
     endif()
 endforeach()
 
@@ -82,6 +109,8 @@ foreach(_bridge_contract IN ITEMS
     "PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(matrix, dlssPreset)"
     "PerformanceTuningRenderer::GetDevBenchMeasurementStatus("
     "PerformanceTuningRenderer::CancelDevBenchMeasurements()"
+    "PerformanceTuningRenderer::StartDevBenchFeatureCostBatch()"
+    "PerformanceTuningRenderer::SetDevBenchFeatureEnabled(featureShortName, enabled)"
 )
     string(FIND "${_bridge}" "${_bridge_contract}" _bridge_position)
     if(_bridge_position EQUAL -1)
@@ -137,6 +166,11 @@ foreach(_renderer_contract IN ITEMS
     "StartDevBenchFeatureCostMeasurement("
     "\"availableFeatureCosts\""
     "\"featureResults\""
+    "\"featureBatch\""
+    "\"costPercent\""
+    "\"costPercentBasis\""
+    "\"measurementEnabled\""
+    "\"toggleBlockReason\""
     "\"devbench_feature_cost\""
     "\"relativeTo\", \"none\""
     "\"frameMs\""

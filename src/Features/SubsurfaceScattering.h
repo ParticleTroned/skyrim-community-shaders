@@ -117,6 +117,8 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableSubsurfaceScattering; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Uses the native master switch while preserving detailed settings. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override { settings.EnableSubsurfaceScattering = a_enabled; }
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 

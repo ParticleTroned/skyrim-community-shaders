@@ -50,6 +50,21 @@ namespace PerformanceTuningStatistics
 		return moments.sampleWeight > 0.0 ? moments.sum / moments.sampleWeight : 0.0;
 	}
 
+	/** Calculate a signed cost share, rejecting missing or non-finite totals. */
+	[[nodiscard]] inline bool TryGetCostPercentage(double delta, double total, double& percentage)
+	{
+		percentage = 0.0;
+		if (!std::isfinite(delta) || !std::isfinite(total) || total <= 0.0)
+			return false;
+
+		const double candidate = (delta / total) * 100.0;
+		if (!std::isfinite(candidate))
+			return false;
+
+		percentage = candidate;
+		return true;
+	}
+
 	/** Check combined missing-sample coverage without overflowing the count. */
 	[[nodiscard]] inline bool IsMissingSampleCountWithinLimit(
 		std::size_t currentMissingSampleCount,

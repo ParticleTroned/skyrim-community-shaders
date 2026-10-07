@@ -1204,8 +1204,7 @@ void Wetterness::DrawEnabledCheckbox()
 {
 	bool enabled = settings.EnableWetterness != 0;
 	if (ImGui::Checkbox("Enable", &enabled)) {
-		settings.EnableWetterness = enabled ? 1u : 0u;
-		InvalidateSanitizedSettingsCache();
+		SetPerformanceToggleEnabled(enabled);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Enables wetness visuals. Off = no rain film, puddles, or shore wetness.");
@@ -2113,6 +2112,12 @@ json Wetterness::CapturePerformanceSettingsState() const
 		{ "RainGrassDarkening", rainGrassDarkening },
 		{ "PuddleMaskMode", static_cast<uint32_t>(puddleMaskMode) }
 	};
+}
+
+void Wetterness::SetPerformanceToggleEnabled(bool a_enabled)
+{
+	settings.EnableWetterness = a_enabled ? 1u : 0u;
+	InvalidateSanitizedSettingsCache();
 }
 
 void Wetterness::SetPerformanceCostMeasurementEnabled(bool a_enabled)

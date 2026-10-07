@@ -147,28 +147,6 @@ namespace
 		       feature->IsInMenu();
 	}
 
-	bool IsPerformanceTuningMenuSelected(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t selectedMenu)
-	{
-		if (selectedMenu >= menuList.size())
-			return false;
-
-		const auto* builtInMenu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuList[selectedMenu]);
-		return builtInMenu && builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME;
-	}
-
-	bool TrySelectPerformanceTuningMenu(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList, size_t& selectedMenu)
-	{
-		for (size_t i = 0; i < menuList.size(); ++i) {
-			const auto* builtInMenu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuList[i]);
-			if (builtInMenu && builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME) {
-				selectedMenu = i;
-				return true;
-			}
-		}
-
-		return false;
-	}
-
 	bool IsPerformanceMeasurementNavigationLocked(size_t listId, size_t selectedMenu)
 	{
 		return PerformanceTuningRenderer::HasActiveMeasurements() && listId != selectedMenu;
@@ -465,15 +443,7 @@ void FeatureListRenderer::RenderFeatureList(
 		selectedMenu = menuList.size();
 
 	HandlePendingFeatureSelection(pendingFeatureSelection, menuList, selectedMenu);
-	if (PerformanceTuningRenderer::HasActiveMeasurements() && !IsPerformanceTuningMenuSelected(menuList, selectedMenu))
-		TrySelectPerformanceTuningMenu(menuList, selectedMenu);
 	SelectFallbackMenuEntry(menuList, selectedMenu);
-
-	auto cancelPerformanceMeasurementsIfInactive = [&]() {
-		if (!IsPerformanceTuningMenuSelected(menuList, selectedMenu))
-			PerformanceTuningRenderer::CancelActiveMeasurements();
-	};
-	cancelPerformanceMeasurementsIfInactive();
 
 	// Determine if left panel should be visible based on auto-hide settings
 	bool leftPanelVisible = ShouldShowLeftPanel();
@@ -485,12 +455,10 @@ void FeatureListRenderer::RenderFeatureList(
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
-			cancelPerformanceMeasurementsIfInactive();
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		} else {
 			// When left panel is hidden, right column takes full width
 			ImGui::TableSetupColumn("##MenuConfig", 0, 1);
-			cancelPerformanceMeasurementsIfInactive();
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		}
 
@@ -527,7 +495,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
 		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() {
 						DrawFeatureHeader(PERFORMANCE_TUNING_MENU_NAME,
-							"Adjust graphics settings and measure their impact on game performance.");
+							"Toggle runtime features and measure their share of frame, CPU, GPU and FPS costs.");
 						PerformanceTuningRenderer::Render();
 					} }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
@@ -696,6 +664,10 @@ void FeatureListRenderer::RenderRightColumn(
 	std::string& pendingFeatureSelection)
 {
 	ImGui::TableNextColumn();
+
+	const auto* builtInMenu = selectedMenu < menuList.size() ? std::get_if<BuiltInMenu>(&menuList[selectedMenu]) : nullptr;
+	if (!builtInMenu || builtInMenu->name != PERFORMANCE_TUNING_MENU_NAME)
+		PerformanceTuningRenderer::NotifyOverviewInactive();
 
 	if (selectedMenu < menuList.size()) {
 		std::visit(DrawMenuVisitor{ pendingFeatureSelection }, menuList[selectedMenu]);
@@ -878,6 +850,8 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
 
 		// Render feature header with integrated action buttons
+		json performanceSettingsBefore;
+		feat->SaveSettings(performanceSettingsBefore);
 		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
 
 		// Render feature settings content
@@ -885,6 +859,10 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 
 		// Render restore defaults button (floating in bottom-right)
 		RenderRestoreDefaultsButton(feat, isDisabled, isLoaded);
+		json performanceSettingsAfter;
+		feat->SaveSettings(performanceSettingsAfter);
+		if (performanceSettingsBefore != performanceSettingsAfter)
+			PerformanceTuningRenderer::NotifyFeatureSettingsChanged(feat);
 	}
 	ImGui::EndChild();
 	ImGui::PopStyleColor();
@@ -1127,12 +1105,16 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
 			}
 
+			ImGui::Spacing();
+			ImGui::SeparatorText("Performance");
 			if (!globalEssentialsMode && feat != &globals::features::csEditor && globals::profiler && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
-				ImGui::Spacing();
-				ImGui::SeparatorText("Profiling");
-				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
-				ImGui::Dummy(ImVec2(0.0f, GetRestoreDefaultsButtonReserveHeight()));
+				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName(), [feat]() {
+					PerformanceTuningRenderer::RenderFeatureMeasurement(feat, true);
+				});
+			} else {
+				PerformanceTuningRenderer::RenderFeatureMeasurement(feat);
 			}
+			ImGui::Dummy(ImVec2(0.0f, GetRestoreDefaultsButtonReserveHeight()));
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();

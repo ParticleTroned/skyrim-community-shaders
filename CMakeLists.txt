@@ -2550,6 +2550,15 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(
+        performance_tuning_controller_test
+        PerformanceTuningController
+        tests/performance_tuning_controller_test.cpp
+    )
+    target_link_libraries(
+        performance_tuning_controller_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(
         performance_tuning_statistics_test
         PerformanceTuningStatistics
         tests/performance_tuning_statistics_test.cpp

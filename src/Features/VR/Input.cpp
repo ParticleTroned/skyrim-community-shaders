@@ -238,7 +238,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 	const bool overlayOpenPressed = IsControllerComboPressed(settings.VROverlayOpenKeys);
 	const bool overlayClosePressed = IsControllerComboPressed(settings.VROverlayCloseKeys);
 	const bool canOpenMenuFromWorld = CanOpenMenuFromWorld();
-	const bool canUseMenuBindings = uiMenusOpen || menuSessionOpen || canOpenMenuFromWorld;
+	const bool canUseMenuBindings = uiMenusOpen || menuSessionOpen || canOpenMenuFromWorld || globals::menu->HasClosedMenuOverlay();
 
 	bool inValidMenuState =
 		uiMenusOpen ||
@@ -263,7 +263,7 @@ void VR::UpdateOverlayMenuStateFromInput()
 			 return menuOpenPressed && !isEnabled && canUseMenuBindings;
 		 },
 			[&]() {
-				globals::menu->OpenMenu();
+				globals::menu->OpenMenu(true);
 			} },
 
 		// Close CSX menu when open

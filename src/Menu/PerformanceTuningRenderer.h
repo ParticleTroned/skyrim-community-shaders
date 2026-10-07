@@ -6,14 +6,26 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+struct Feature;
+
 class PerformanceTuningRenderer
 {
 public:
 	static void Render();
+	/** Restores overview profiling when another panel is selected and no comparison is active. */
+	static void NotifyOverviewInactive();
+	/** Draws the shared cost test and results in a feature's settings footer. */
+	static void RenderFeatureMeasurement(Feature* a_feature, bool a_inlineButton = false);
+	/** Invalidates measured costs when a feature's settings change. */
+	static void NotifyFeatureSettingsChanged(Feature* a_feature);
 	/** Advances an active cost test while the main settings window is closed. */
 	static void UpdateClosedMenuMeasurement();
 	/** Draws the non-interactive progress widget used by a closed-menu cost test. */
 	static void RenderClosedMenuMeasurementOverlay();
+	/** Cancels UI-owned comparisons, restoring runtime state before reopening the menu. */
+	static bool CancelUserMeasurements();
+	/** Invalidates saved toggle configurations and costs before loading settings. */
+	static void NotifyConfigurationChanging();
 	/** Cancels every cost test and restores any transient comparison state. */
 	static void CancelActiveMeasurements();
 	/** Starts the closed-menu phase after the settings window has closed. */
@@ -22,6 +34,11 @@ public:
 	/** Starts one surfaced feature's closed-menu cost comparison. */
 	static nlohmann::json StartDevBenchFeatureCostMeasurement(
 		std::string_view a_featureShortName);
+	/** Measures each enabled runtime feature using the shared on/off protocol. */
+	static nlohmann::json StartDevBenchFeatureCostBatch();
+	/** Changes a runtime toggle, retaining its prior enabled configuration. */
+	static nlohmann::json SetDevBenchFeatureEnabled(
+		std::string_view a_featureShortName, bool a_enabled);
 	/** Starts a hardware-specific Upscaling cost sweep relative to None. */
 	static nlohmann::json StartDevBenchUpscalingCostSweep(
 		std::string_view a_matrix = "auto",

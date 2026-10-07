@@ -43,6 +43,7 @@
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "PresetCompatibility.h"
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
@@ -1479,6 +1480,7 @@ void State::LoadFromJson(
 	bool a_loadFeatureSettings,
 	SettingsApplyMode a_applyMode)
 {
+	PerformanceTuningRenderer::NotifyConfigurationChanging();
 	std::lock_guard<std::mutex> lock(m_mutex);
 	if (a_loadFeatureSettings)
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);

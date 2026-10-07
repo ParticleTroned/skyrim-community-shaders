@@ -52,6 +52,13 @@ public:
 
 	eastl::unique_ptr<Texture2D> texTangentShift = nullptr;
 
+	/** Supports a cost comparison through the existing in-game enable toggle. */
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the requested state without changing the feature's configuration. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
+	/** Uses the same runtime enable path as the feature's settings panel. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }
+
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;

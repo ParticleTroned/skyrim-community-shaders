@@ -39,10 +39,8 @@ void TerrainHelper::DrawSettings()
 		return;
 	}
 
-	if (ImGui::Checkbox("Enable", &settings.EnableTerrainHelper)) {
-		if (!settings.EnableTerrainHelper)
-			ClearTerrainHelperRuntimeState();
-	}
+	if (ImGui::Checkbox("Enable", &settings.EnableTerrainHelper))
+		SetPerformanceCostMeasurementEnabled(settings.EnableTerrainHelper);
 }
 
 void TerrainHelper::DrawEssentialSettings()
@@ -52,10 +50,15 @@ void TerrainHelper::DrawEssentialSettings()
 		return;
 	}
 
-	if (ImGui::Checkbox("Enable", &settings.EnableTerrainHelper)) {
-		if (!settings.EnableTerrainHelper)
-			ClearTerrainHelperRuntimeState();
-	}
+	if (ImGui::Checkbox("Enable", &settings.EnableTerrainHelper))
+		SetPerformanceCostMeasurementEnabled(settings.EnableTerrainHelper);
+}
+
+void TerrainHelper::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	settings.EnableTerrainHelper = a_enabled;
+	if (!a_enabled)
+		ClearTerrainHelperRuntimeState();
 }
 
 void TerrainHelper::LoadSettings(json& o_json)

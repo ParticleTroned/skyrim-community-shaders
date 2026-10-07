@@ -27,6 +27,8 @@ struct GrassOptimizations : Feature
 	void DrawPerformanceSettings(bool advanced) override;
 	json CapturePerformanceSettingsState() const override;
 	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Keeps the overview toggle independent of scene activity and resource readiness. */
+	bool IsPerformanceToggleEnabled() const override { return IsEnabled(); }
 	bool IsPerformanceCostMeasurementEnabled() const override;
 	void SetPerformanceCostMeasurementEnabled(bool enabled) override { SetEnabled(enabled); }
 	bool IsPerformanceCostMeasurementReady() const override;

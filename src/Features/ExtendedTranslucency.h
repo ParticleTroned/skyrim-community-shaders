@@ -15,6 +15,13 @@ struct ExtendedTranslucency final : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	virtual bool HasShaderDefine(RE::BSShader::Type shaderType) override { return RE::BSShader::Type::Lighting == shaderType; };
 	virtual void PostPostLoad() override;
+	/** Supports a cost comparison through the existing in-game enable toggle. */
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the requested state without changing the feature's configuration. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	/** Uses the same runtime enable path as the feature's settings panel. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled; }
+
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;

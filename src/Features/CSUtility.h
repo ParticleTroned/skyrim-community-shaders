@@ -66,6 +66,13 @@ struct CSUtility : Feature
 	} settings;
 
 	virtual void DrawSettingsHeaderControls() override;
+	/** Supports a cost comparison through the existing in-game enable toggle. */
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the requested state without changing the feature's configuration. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.enabled; }
+	/** Uses the same runtime enable path as the feature's settings panel. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.enabled = a_enabled; }
+
 	virtual void DrawSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -79,5 +86,4 @@ struct CSUtility : Feature
 
 	static void SanitizeDepthOfFieldSettings(DepthOfFieldSettings& a_settings);
 	static void SanitizeDepthOfFieldOverride(DepthOfFieldOverride& a_override);
-
 };

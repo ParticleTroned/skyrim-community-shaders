@@ -4,6 +4,7 @@
 #include "Upscaling.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/ConfigurationSerialization.h"
+#include "Upscaling/NeuralRendering/Renderer.h"
 #include "Upscaling/NeuralRendering/Runtime.h"
 #include "Upscaling/VRRenderScaleDevBenchBridge.h"
 #include "Utils/CharacterCategoryAuthoring.h"
@@ -704,6 +705,39 @@ void NeuralRenderingFeature::EarlyPrepass()
 	ExposureCapture::Instance().RefreshProducers();
 #endif
 }
+bool NeuralRenderingFeature::SupportsPerformanceCostMeasurement() const
+{
+	return NeuralRendering::Runtime::IsInstalled() && globals::features::upscaling.IsNeuralRenderingHardwareSupported();
+}
+
+bool NeuralRenderingFeature::IsPerformanceToggleEnabled() const
+{
+	return globals::features::upscaling.settings.neuralRenderingEnabled;
+}
+
+bool NeuralRenderingFeature::IsPerformanceCostMeasurementEnabled() const
+{
+	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
+	return !status.failureLatched && !status.quarantined &&
+	       globals::features::upscaling.IsNeuralRenderingRequested();
+}
+
+bool NeuralRenderingFeature::IsPerformanceCostMeasurementReady() const
+{
+	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
+	return !status.failureLatched && !status.quarantined &&
+	       globals::features::upscaling.IsPerformanceCostMeasurementReady();
+}
+
+void NeuralRenderingFeature::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+{
+	if (IsPerformanceToggleEnabled() == a_enabled)
+		return;
+	std::string error;
+	if (!globals::features::upscaling.ToggleNeuralRendering(&error))
+		logger::warn("[NeuralRendering] Performance toggle rejected: {}", error);
+}
+
 void NeuralRenderingFeature::DrawSettings()
 {
 	globals::features::upscaling.DrawNeuralRenderingSettings(

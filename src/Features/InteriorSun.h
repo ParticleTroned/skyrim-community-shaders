@@ -21,6 +21,19 @@ public:
 				"Fixes geometry culling issues that cause light leakage" }
 		};
 	}
+	/** Supports a cost comparison through the existing in-game enable toggle. */
+	bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Returns the requested state without changing the feature's configuration. */
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
+	/** Uses the same runtime enable path as the feature's settings panel. */
+	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { SetRuntimeEnabled(a_enabled); }
+	/** Waits for the render-thread toggle transaction to finish. */
+	bool IsPerformanceCostMeasurementReady() const override
+	{
+		return !runtimeSettingsDirty.load(std::memory_order_acquire) &&
+		       runtimeEnabled.load(std::memory_order_acquire) == settings.Enabled;
+	}
+
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;

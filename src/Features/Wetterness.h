@@ -267,6 +267,8 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableWetterness != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Uses the native runtime control without replacing the current tuning. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 

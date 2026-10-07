@@ -427,10 +427,22 @@ VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() 
 	return profile;
 }
 
+bool VolumetricLighting::IsPerformanceToggleEnabled() const
+{
+	std::scoped_lock lock(settingsMutex);
+	return inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled;
+}
+
 bool VolumetricLighting::IsPerformanceCostMeasurementEnabled() const
 {
 	std::scoped_lock lock(settingsMutex);
 	return initialised && runtimeEnabled;
+}
+
+void VolumetricLighting::SetPerformanceToggleEnabled(bool a_enabled)
+{
+	std::scoped_lock lock(settingsMutex);
+	(inInterior ? settings.InteriorEnabled : settings.ExteriorEnabled) = a_enabled;
 }
 
 void VolumetricLighting::SetPerformanceCostMeasurementEnabled(bool a_enabled)

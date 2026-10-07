@@ -120,6 +120,14 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) { (void)a_advanced; }
 	virtual json CapturePerformanceSettingsState() const { return CapturePerformanceCostMeasurementState(); }
 	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
+	/** Returns the requested on/off state, including features inactive in the current scene. */
+	virtual bool IsPerformanceToggleEnabled() const { return IsPerformanceCostMeasurementEnabled(); }
+	/** Applies the persistent runtime control used by the compact tuning overview. */
+	virtual void SetPerformanceToggleEnabled(bool a_enabled) { SetPerformanceCostMeasurementEnabled(a_enabled); }
+	/** Returns why automatic settings currently own the overview toggle, or null when editable. */
+	virtual const char* GetPerformanceToggleBlockReason() const { return nullptr; }
+	/** Restores an overview toggle without losing the feature's detailed enabled configuration. */
+	virtual void RestorePerformanceToggleState(const json& a_state) { RestorePerformanceCostMeasurementState(a_state); }
 	virtual bool IsPerformanceCostMeasurementEnabled() const { return false; }
 	virtual bool UsesTotalPerformanceCostMeasurement() const { return false; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) { (void)a_enabled; }
@@ -141,7 +149,7 @@ public:
 		return false;
 	}
 	virtual uint32_t GetPerformanceCostMeasurementMenuCloseWaitMs() const { return 5000u; }
-	virtual json CapturePerformanceCostMeasurementState() const { return IsPerformanceCostMeasurementEnabled(); }
+	virtual json CapturePerformanceCostMeasurementState() const { return IsPerformanceToggleEnabled(); }
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state)
 	{
 		if (a_state.is_boolean())

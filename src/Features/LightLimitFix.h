@@ -299,6 +299,16 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
+	/** Includes deferred contact-shadow requests in the overview state. */
+	bool IsPerformanceToggleEnabled() const override { return settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows; }
+	/** Changes effect switches while retaining particle and shadow quality controls. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override
+	{
+		const Settings defaults{};
+		settings.EnableParticleLights = a_enabled && defaults.EnableParticleLights;
+		SetContactShadowsEnabled(a_enabled && defaults.EnableContactShadows);
+		settings.EnableParticleContactShadows = a_enabled && defaults.EnableParticleContactShadows;
+	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override

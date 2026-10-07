@@ -55,6 +55,8 @@ public:
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled != 0; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	/** Uses the native master switch while preserving detailed settings. */
+	void SetPerformanceToggleEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }
 	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override;
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;

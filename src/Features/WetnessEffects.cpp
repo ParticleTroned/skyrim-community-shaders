@@ -281,6 +281,12 @@ json WetnessEffects::CapturePerformanceSettingsState() const
 	};
 }
 
+void WetnessEffects::SetPerformanceToggleEnabled(bool a_enabled)
+{
+	settings.EnableWetnessEffects = a_enabled ? 1u : 0u;
+	Ripples::UpdateSettings();
+}
+
 void WetnessEffects::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (a_enabled) {

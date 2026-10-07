@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.10.04.1",
+    "packageVersion": "d2026.10.07.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,7 +15,7 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "E436554C6FF569A793811D38687CF54C30A1083FEC32D09196C9AA8921160487"
+        "sha256": "38688C5590AADCF339BF61B542E9920438FC602EE2D476BA1811E47079A115EB"
     },
     "runtimeSettingsContract": {
         "revision": 8,
@@ -336,6 +336,10 @@
         { "path": ["Subsurface Scattering", "HumanFemaleSSSSaturation"], "value": 1.0 },
         { "path": ["Subsurface Scattering", "HumanFemaleSSSBrightness"], "value": 0.75 },
         { "path": ["Subsurface Scattering", "HumanFemaleSSSBaseSaturation"], "value": 1.05 },
+        { "path": ["Grass Lighting", "OverrideComplexGrassSettings"], "value": 0 },
+        { "path": ["Adaptive Balance", "dayStartHour"], "value": 6.0 },
+        { "path": ["Adaptive Balance", "nightStartHour"], "value": 19.0 },
+        { "path": ["Adaptive Balance", "transitionHours"], "value": 2.0 },
         {
             "path": ["Adaptive Balance", "globalProfile", "bloom", "EnhancementIntensity"],
             "value": 0.5,
@@ -579,6 +583,10 @@
             "value": 1.0
         },
         { "path": ["Hair Specular", "Enabled"], "value": 1 },
+        { "path": ["Grass Lighting", "OverrideComplexGrassSettings"], "value": 0 },
+        { "path": ["Adaptive Balance", "dayStartHour"], "value": 6.0 },
+        { "path": ["Adaptive Balance", "nightStartHour"], "value": 19.0 },
+        { "path": ["Adaptive Balance", "transitionHours"], "value": 2.0 },
         {
             "path": ["Adaptive Balance", "globalProfile", "bloom", "EnhancementIntensity"],
             "value": 0.5

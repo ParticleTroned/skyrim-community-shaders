@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 NR = ROOT / "src/Features/Upscaling/NeuralRendering"
 RENDERER = (NR / "Renderer.cpp").read_text()
 PIPELINE = (NR / "ColorPipeline.cpp").read_text()
+STREAMLINE = (ROOT / "src/Features/Upscaling/Streamline.cpp").read_text()
+UPSCALING = (ROOT / "src/Features/Upscaling.cpp").read_text()
 BRIDGE = (ROOT / "src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp").read_text()
 
 
@@ -49,6 +51,21 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertLess(source.index("interop_.WaitForIdle("), source.index("runtime.ResetFeatures()"))
         self.assertLess(source.index("runtime.ResetFeatures()"), source.index("slots_ = {}"))
 
+    def test_dlss_warning_is_gated_and_defers_gpu_retirement(self):
+        warning = STREAMLINE.split("if (evalResult == sl::Result::eWarnOutOfVRAM) {", 1)[1].split("if (!evaluationSucceeded)", 1)[0]
+        self.assertLess(warning.index("IsNeuralRenderingRequested()"), warning.index("NotifyDlssMemoryPressure()"))
+        self.assertLess(warning.index("NotifyDlssMemoryPressure()"), warning.index("ShouldLog("))
+        source = body(RENDERER, "bool Renderer::NotifyDlssMemoryPressure(")
+        self.assertLess(source.index("state_->failureLatched_ || state_->quarantined_"), source.index("ReportDlssWarning("))
+        self.assertNotIn("TeardownBackendLocked(", source)
+        self.assertNotIn("RetireMemoryPressureLocked(", source)
+        self.assertIn("state_->snapshot_.memoryRecovery = state_->memoryRecovery_", source)
+        ui = UPSCALING.split('Neural Rendering cannot recover safely in this session.', 1)[1].split('if ((status.failureLatched || status.quarantined)', 1)[0]
+        self.assertIn("else if (status.failureLatched)", ui)
+        self.assertIn("else if (settings.neuralRenderingEnabled", ui)
+        self.assertIn("MemoryRecoveryPhase::Retiring", ui)
+        self.assertIn("MemoryRecoveryPhase::Waiting", ui)
+
     def test_colour_allocation_preserves_errors_and_one_sizing_rule(self):
         allocation = body(PIPELINE, "bool CreateTexture(", "\t\t")
         for operation in ("CreateTexture2D", "CreateShaderResourceView", "CreateUnorderedAccessView"):
@@ -88,7 +105,7 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertIn("nr_memory_recovery", schema["properties"]["action"]["enum"])
         self.assertEqual(schema["properties"]["durationMilliseconds"]["maximum"], 30000)
         scoped = next(rule for rule in schema["allOf"] if rule["if"].get("properties", {}).get("action", {}).get("const") == "nr_memory_recovery")
-        self.assertEqual(set(scoped["then"]["propertyNames"]["enum"]), {"action", "expectedBuildId", "durationMilliseconds"})
+        self.assertEqual(set(scoped["then"]["propertyNames"]["enum"]), {"action", "expectedBuildId", "durationMilliseconds", "simulateDlssWarning"})
         injection = next(rule for rule in schema["allOf"] if rule["if"] == {"required": ["durationMilliseconds"]})
         self.assertEqual(injection["then"]["properties"]["action"]["const"], "nr_memory_recovery")
         enum = BRIDGE.split('result["inputSchema"]["properties"]["action"]["enum"] = {', 1)[1].split("};", 1)[0]
@@ -97,6 +114,12 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertTrue("TryGetNonNegativeInteger(" in handler)
         self.assertLess(handler.index("RunWithRendererOwnership("), handler.index("SimulateMemoryPressure("))
         self.assertTrue('{ "mutationApplied", applied }' in handler)
+        self.assertEqual(schema["properties"]["simulateDlssWarning"]["const"], True)
+        self.assertEqual(injection["then"]["not"], {"required": ["simulateDlssWarning"]})
+        warning = handler.split('if (a_args.contains("simulateDlssWarning"))', 1)[1].split('if (!a_args.contains("durationMilliseconds"))', 1)[0]
+        self.assertIn('!warning.is_boolean() || !warning.get<bool>() || a_args.contains("durationMilliseconds")', warning)
+        self.assertLess(warning.index("RunWithRendererOwnership("), warning.index("NotifyDlssMemoryPressure()"))
+        self.assertLess(warning.index("IsNeuralRenderingRequested()"), warning.index("NotifyDlssMemoryPressure()"))
 
 
 if __name__ == "__main__":

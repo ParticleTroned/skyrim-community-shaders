@@ -71,6 +71,8 @@ namespace NeuralRendering
 		std::uint64_t resumes = 0;
 		std::uint64_t outOfMemoryFailures = 0;
 		std::uint64_t bypasses = 0;
+		std::uint64_t dlssWarnings = 0;
+		bool dlssWarning = false;
 
 		void ClearHealthyWindow() noexcept
 		{
@@ -104,6 +106,16 @@ namespace NeuralRendering
 			phase = MemoryRecoveryPhase::Waiting;
 			ClearHealthyWindow();
 			++retirements;
+		}
+
+		/** A valid DLSS output can still require NR retirement before another evaluation. */
+		void ReportDlssWarning(std::uint64_t nowMs) noexcept
+		{
+			Suspend(nowMs);
+			dlssWarning = true;
+			++dlssWarnings;
+			ClearHealthyWindow();
+			retryAfterMs = std::max(retryAfterMs, nowMs + kStableHeadroomMs);
 		}
 
 		/** Unknown samples preserve ordinary admission but cannot admit recovery. */
@@ -154,6 +166,7 @@ namespace NeuralRendering
 		{
 			if (phase == MemoryRecoveryPhase::Rebuilding) {
 				phase = MemoryRecoveryPhase::Ready;
+				dlssWarning = false;
 				++resumes;
 				lastResumeMs = nowMs;
 			}

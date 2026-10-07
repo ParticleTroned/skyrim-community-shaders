@@ -23,6 +23,7 @@
 #include "../Upscaling.h"
 #include "CameraReprojection.h"
 #include "DX12SwapChain.h"
+#include "NeuralRendering/Renderer.h"
 #include "NvidiaBoundedLog.h"
 #include "NvidiaPipelinePolicy.h"
 #include "ReflexPolicy.h"
@@ -3318,6 +3319,8 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		state->EndPerfEvent();
 
 	if (evalResult == sl::Result::eWarnOutOfVRAM) {
+		if (globals::features::upscaling.IsNeuralRenderingRequested())
+			NeuralRendering::Renderer::Instance().NotifyDlssMemoryPressure();
 		const uint32_t logEye = globals::game::isVR ? eyeIndex : 0u;
 		const uint32_t frame = state ? state->frameCount : 0u;
 		if (dlssBudgetWarningThrottle.ShouldLog(logEye, frame)) {

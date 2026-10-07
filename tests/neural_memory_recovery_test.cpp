@@ -104,6 +104,37 @@ namespace
 		Require(policy.retryLevel == 3, "Time spent waiting reset the failed-rebuild backoff");
 	}
 
+	void TestDlssWarningsRequireFreshRecovery()
+	{
+		MemoryRecoveryPolicy policy;
+		policy.ReportDlssWarning(1000);
+		Require(policy.phase == MemoryRecoveryPhase::Retiring && policy.dlssWarning, "DLSS warning did not request retirement");
+		Require(policy.outOfMemoryFailures == 0, "Valid DLSS output was counted as an allocation failure");
+		Require(!Observe(policy, healthy, 0, 1500), "DLSS warning bypassed retirement");
+		policy.Retired();
+		Require(!Observe(policy, healthy, 0, 1500), "DLSS recovery skipped stable headroom");
+		policy.ReportDlssWarning(1750);
+		policy.ReportDlssWarning(1800);
+		Require(policy.suspensions == 1 && policy.retirements == 1 && policy.retryLevel == 1,
+			"Repeated warnings retired resources again or escalated the same recovery episode");
+		Require(!Observe(policy, healthy, 0, 2250), "Renewed warning did not extend the cooldown");
+		Require(!Observe(policy, {}, 0, 2300), "DLSS recovery accepted unknown headroom");
+		Require(!Observe(policy, healthy, 0, 2300), "Renewed warning kept the previous healthy window");
+		Require(!Observe(policy, healthy, 0, 2550), "DLSS recovery was premature");
+		Require(Observe(policy, healthy, 0, 2800), "DLSS recovery did not admit a rebuild");
+		Require(policy.dlssWarning, "Warning cleared before successful rebuilding");
+		policy.ReportDlssWarning(2801);
+		policy.Succeeded(2802);
+		Require(policy.phase == MemoryRecoveryPhase::Retiring && policy.resumes == 0,
+			"Warning during a rebuild was marked recovered");
+		policy.Retired();
+		Require(!Observe(policy, healthy, 0, 4000), "Second recovery skipped stable headroom");
+		Require(Observe(policy, healthy, 0, 4500), "Second recovery did not admit rebuilding");
+		policy.Succeeded(4501);
+		Require(!policy.dlssWarning && policy.dlssWarnings == 4 && policy.resumes == 1,
+			"Successful recovery retained the warning or lost its diagnostic count");
+	}
+
 	void TestRepeatedPressureBackoff()
 	{
 		MemoryRecoveryPolicy policy;
@@ -135,6 +166,7 @@ namespace
 int main()
 {
 	TestRetirementAndCompletion();
+	TestDlssWarningsRequireFreshRecovery();
 	TestFreshConsecutiveSamples();
 	TestHeadroomAndInvalidBudgets();
 	TestRepeatedPressureBackoff();

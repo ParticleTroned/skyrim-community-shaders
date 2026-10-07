@@ -288,6 +288,8 @@ namespace NeuralRendering
 		void ResetShaderCache();
 
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;
+		/** Queues recovery without GPU work; the caller must gate this on requested NR. */
+		bool NotifyDlssMemoryPressure();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		static constexpr std::uint32_t kMaximumMemorySimulationMilliseconds = 30000;
 		/** Simulates recoverable pressure for at most 30 seconds without changing settings. */

@@ -3592,6 +3592,17 @@ namespace NeuralRendering
 		return state_->SnapshotLocked();
 	}
 
+	bool Renderer::NotifyDlssMemoryPressure()
+	{
+		std::scoped_lock lock(state_->mutex_);
+		if (state_->failureLatched_ || state_->quarantined_)
+			return false;
+		state_->memoryRecovery_.ReportDlssWarning(GetTickCount64());
+		state_->snapshot_.memoryRecovery = state_->memoryRecovery_;
+		state_->nextMemorySampleMs_ = 0;
+		return true;
+	}
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	nlohmann::json Renderer::GetSourceTransportDiagnostics() const
 	{

@@ -18383,13 +18383,19 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Turns off your saved NR choice so it stays off when compatible upscaling is available.");
 	}
-	if (settings.neuralRenderingEnabled && runtimeInstalled && renderScaleAvailable &&
-		!status.failureLatched && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready)
-		ImGui::TextWrapped("Neural Rendering is temporarily paused while GPU memory recovers. It will resume automatically; your settings are retained.");
 	if (status.quarantined) {
-		Util::Text::WrappedError("Neural Rendering cannot be re-enabled safely in this session. Restart the game to try again.");
+		Util::Text::WrappedError("Neural Rendering cannot recover safely in this session. Restart the game to try again.");
 	} else if (status.failureLatched) {
-		Util::Text::WrappedError("Neural Rendering is unavailable. Reset its runtime before enabling it again.");
+		Util::Text::WrappedError("Neural Rendering is paused after an error. Use Reset Neural Rendering Runtime below to try again. Your settings are retained.");
+	} else if (settings.neuralRenderingEnabled && runtimeInstalled && renderScaleAvailable &&
+			   status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready) {
+		const char* recoveryStage = "rebuilding resources and resetting history";
+		if (status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Retiring)
+			recoveryStage = "safely releasing resources";
+		else if (status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Waiting)
+			recoveryStage = "waiting for enough GPU memory";
+		Util::Text::WrappedWarning("%sNeural Rendering is recovering: %s. Normal rendering is active; NR will resume automatically. Your settings are retained.",
+			status.memoryRecovery.dlssWarning ? "DLSS reported GPU memory pressure. " : "", recoveryStage);
 	}
 	if ((status.failureLatched || status.quarantined) && !status.detail.empty())
 		ImGui::TextWrapped("Reason: %s", status.detail.c_str());

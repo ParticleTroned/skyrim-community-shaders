@@ -1,4 +1,5 @@
 #include "Api/MainThreadDispatchState.h"
+#include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Features/Upscaling/VRRenderScaleModePolicy.h"
 #include <future>
 #include <queue>
@@ -87,6 +88,17 @@ struct Upscaling
 		VRFpsStabilizerProfile interior, exterior;
 	} config;
 	VRFpsStabilizerProfile current;
+	struct Settings
+	{
+		bool neuralRenderingFovOnly = false, foveatedVendorDispatch = false;
+	} settings;
+	bool neuralEnabled = false;
+	NeuralRendering::RenderingMode neuralMode = NeuralRendering::RenderingMode::ReducedResolution;
+	bool IsNeuralRenderingEnabled() const noexcept { return neuralEnabled; }
+	NeuralRendering::RenderingMode GetNeuralRenderingMode() const noexcept { return neuralMode; }
+	const char* GetNeuralRenderingUpscalingProfileBlocker(NeuralRendering::RenderingMode, UpscaleMethod, uint32_t, bool) const noexcept;
+	bool IsNeuralRenderingUpscalingProfileAllowed(UpscaleMethod, uint32_t, bool) const noexcept;
+
 	bool syncActive = true;
 	uint32_t blockReasons = 0;
 	uint64_t availableSerial = 0, clearedSerial = 0;
@@ -105,6 +117,7 @@ struct Upscaling
 	bool IsVRFpsStabilizerSyncActive() const { return syncActive; }
 	const Config& GetVRFpsStabilizerSessionConfig() const { return config; }
 	UpscaleMethod GetConfiguredUpscaleMethodForTransition() const { return current.upscaleMethod; }
+	UpscaleMethod GetUpscaleMethod() const { return current.upscaleMethod; }
 	UpscaleMethod GetLegacyDLSSPreferredUpscaleMethodForAPI() const { return UpscaleMethod::kDLSS; }
 	uint32_t GetEffectiveUpscalingQualityMode() const { return current.qualityMode; }
 	uint32_t GetEffectiveDLSSPreset() const { return current.dlssPreset; }
@@ -236,6 +249,22 @@ int main()
 	CSInterface001 api;
 	auto& upscaling = globals::features::upscaling;
 	try {
+		upscaling.neuralEnabled = true;
+		upscaling.syncActive = false;
+		for (const auto method : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA,
+				 Upscaling::UpscaleMethod::kFSR, Upscaling::UpscaleMethod::kDLSS }) {
+			for (const unsigned quality : { 0u, 3u }) {
+				for (const bool renderScale : { false, true }) {
+					const bool compatible = method == Upscaling::UpscaleMethod::kDLSS && quality != 0 && renderScale;
+					Require(upscaling.IsVRFpsStabilizerAPITransitionProfileAllowed(method, renderScale, quality, 1, 0) == compatible);
+				}
+			}
+		}
+		api.SetVRUpscalingTransitionProfileForMethod(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ);
+		Require(upscaling.applications == 0);
+		Require(api.GetVRUpscalingTransitionProfileDecision(UpscaleMethod::kFSR, true, UpscalePreset::kQuality, DLSSProfile::kJ) == Decision::kBlocked);
+		upscaling.neuralEnabled = false;
+		upscaling.syncActive = true;
 		upscaling.blockReasons = 4;
 		auto worker = std::async(std::launch::async, [&] {
 			CSX::Api::runtimeOwner = false;

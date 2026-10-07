@@ -1519,19 +1519,22 @@ namespace
 		if (ImGui::BeginCombo("##UpscaleMethod", preview)) {
 			for (int option = 0; option < static_cast<int>(kVRFpsStabilizerMethodNames.size()); ++option) {
 				const bool selected = methodConfigured && option == method;
+				auto disabledGuard = Util::DisableGuard(!globals::features::upscaling.IsNeuralRenderingUpscalingProfileAllowed(static_cast<Upscaling::UpscaleMethod>(option), Upscaling::kQualityModeMaxIndex, true));
 				if (ImGui::Selectable(kVRFpsStabilizerMethodNames[option], selected)) {
 					changed = !selected || profile.hasLegacyMethodSelection;
 					profile.upscaleMethod = static_cast<Upscaling::UpscaleMethod>(option);
 					profile.hasUpscaleMethod = true;
 					profile.hasLegacyMethodSelection = false;
 				}
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Selects this profile's upscaling method. Choices incompatible with enabled NR are unavailable.");
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
 			ImGui::EndCombo();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("AMD FSR profiles keep the current AMD FSR3 or AMD FSR4 selection.");
+			ImGui::TextUnformatted("Selects the profile's upscaling method. Renderscale NR requires DLSS; turn NR off or change its rendering mode to use another method.");
 		}
 
 		return changed;
@@ -1555,10 +1558,25 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(!vendorUpscaling);
 			ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
-			if (ImGui::Combo("##UpscalePreset", &qualityMode, presetNames.data(), static_cast<int>(presetNames.size()))) {
-				profile.qualityMode = static_cast<uint32_t>(qualityMode);
-				profile.hasQualityMode = true;
-				changed = true;
+			const bool open = ImGui::BeginCombo("##UpscalePreset", presetNames[qualityMode]);
+			if (!open) {
+				if (auto tooltip = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted("Chooses image quality and performance. Renderscale NR requires a below-native DLSS preset.");
+			}
+			if (open) {
+				for (int option = 0; option < static_cast<int>(presetNames.size()); ++option) {
+					auto optionGuard = Util::DisableGuard(option == 0 && globals::features::upscaling.IsNeuralRenderingRenderScaleRequired());
+					if (ImGui::Selectable(presetNames[option], option == qualityMode)) {
+						profile.qualityMode = static_cast<uint32_t>(option);
+						profile.hasQualityMode = true;
+						changed = true;
+					}
+					if (auto tooltip = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted(option == 0 ? "Uses native resolution. Unavailable with Renderscale NR." : "Uses a smaller render image to improve performance.");
+					if (option == qualityMode)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
 			}
 		}
 		return changed;
@@ -1582,6 +1600,8 @@ namespace
 				changed = true;
 			}
 		}
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Chooses the DLSS image reconstruction preset for this profile.");
 		return changed;
 	}
 
@@ -1598,14 +1618,15 @@ namespace
 			changed = true;
 		}
 		{
-			auto disabledGuard = Util::DisableGuard(!renderScaleEligible);
+			auto disabledGuard = Util::DisableGuard(!renderScaleEligible ||
+													(profile.renderScaleMode && globals::features::upscaling.IsNeuralRenderingRenderScaleRequired()));
 			if (ImGui::Checkbox("Enable##RenderScale", &profile.renderScaleMode)) {
 				profile.hasRenderScaleMode = true;
 				changed = true;
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Available with AMD FSR or NVIDIA DLSS and a below-native preset.");
+			ImGui::TextUnformatted("Uses a smaller render image. Renderscale NR requires this on in both profiles. Turn NR off or change its rendering mode to turn this off.");
 		}
 		return changed;
 	}
@@ -1715,6 +1736,22 @@ namespace
 				drawProfileCells([](auto& profile) { return DrawVRFpsStabilizerRenderScale(profile); });
 
 			ImGui::EndTable();
+		}
+
+		const auto& upscaling = globals::features::upscaling;
+		if (config.upscalingSwitchingEnabled && !showNotConfigured && upscaling.IsNeuralRenderingEnabled()) {
+			const auto blocker = [&](const auto& profile) {
+				return upscaling.GetNeuralRenderingUpscalingProfileBlocker(upscaling.GetNeuralRenderingMode(), profile.upscaleMethod, profile.qualityMode, profile.renderScaleMode);
+			};
+			const char* modeName = upscaling.IsNeuralRenderingRenderScaleRequired() ? "Renderscale NR" : "NR";
+			const char* interiorBlocker = blocker(config.interior);
+			const char* exteriorBlocker = blocker(config.exterior);
+			if (interiorBlocker)
+				Util::Text::WrappedWarning("Interior profile is incompatible with %s: %s.", modeName, interiorBlocker);
+			if (exteriorBlocker)
+				Util::Text::WrappedWarning("Exterior profile is incompatible with %s: %s.", modeName, exteriorBlocker);
+			if (interiorBlocker || exteriorBlocker)
+				ImGui::TextWrapped("These profiles cannot be applied with the selected NR mode. Choose compatible upscaling in both profiles, turn NR off, or change its rendering mode. Renderscale NR requires scaled DLSS with Render Scale.");
 		}
 
 		ImGui::Spacing();

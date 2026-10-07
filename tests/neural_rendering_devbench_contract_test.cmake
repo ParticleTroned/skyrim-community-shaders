@@ -3481,18 +3481,25 @@ foreach(_field IN ITEMS required available locked)
     endif()
 endforeach()
 
-# A rejected native target must not queue work or change saved settings.
+# Reject incompatible selections before settings or transition mutation.
 string(FIND "${_upscaling}" "Upscaling::UpscalingTransitionApplyResult Upscaling::ApplyCSMenuUpscalingTransition(" _transition_start)
 string(FIND "${_upscaling}" "void Upscaling::SetVRUpscalingTransitionProfile(" _transition_end)
 math(EXPR _transition_length "${_transition_end} - ${_transition_start}")
 string(SUBSTRING "${_upscaling}" ${_transition_start} ${_transition_length} _transition)
 string(FIND "${_transition}" "UpscalingTransitionApplyRejection::NeuralRenderScaleRequired" _dependency_guard)
-foreach(_mutation IN ITEMS "QueueVR" "settings.renderScaleMode =")
+foreach(_mutation IN ITEMS "QueueVRRenderScaleRequest(" "settings.renderScaleMode =" "settings.qualityMode =" "*currentUpscaleMode =")
     string(FIND "${_transition}" "${_mutation}" _mutation_position)
     if(_dependency_guard LESS 0 OR _mutation_position LESS_EQUAL _dependency_guard)
-        message(FATAL_ERROR "NR dependency rejection must precede transition publication: ${_mutation}")
+        message(FATAL_ERROR "NR dependency rejection must precede transition mutation: ${_mutation}")
     endif()
 endforeach()
+
+file(READ "${PROJECT_ROOT}/src/Api/UpscalingService.cpp" _upscaling_service)
+string(FIND "${_upscaling_service}"
+    "globals::features::upscaling.IsNeuralRenderingUpscalingProfileAllowed(" _profile_blocker)
+if(_profile_blocker EQUAL -1)
+    message(FATAL_ERROR "Upscaling preflight must reject NR incompatibility using the shared profile policy")
+endif()
 
 foreach(_field IN ITEMS
     [[{ "executionScope", "requested_preferences" }]]
@@ -3509,4 +3516,21 @@ string(JSON _toggle_action GET "${_descriptor_json}" inputSchema allOf 4 if prop
 string(JSON _toggle_fields LENGTH "${_descriptor_json}" inputSchema allOf 4 then propertyNames enum)
 if(NOT _toggle_action STREQUAL "nr_toggle" OR NOT _toggle_fields EQUAL 2)
     message(FATAL_ERROR "NR toggle must advertise its narrow no-settings mutation schema")
+endif()
+
+string(JSON _nvidia_type GET "${_descriptor_json}"
+    outputSchema properties neuralRendering properties runtimeSupport properties nvidiaGpu type)
+if(NOT _nvidia_type STREQUAL "boolean")
+    message(FATAL_ERROR "NR status must expose active rendering GPU compatibility")
+endif()
+foreach(_guard IN ITEMS "nr_unsupported_gpu" "nr_upscaling_incompatible" "requestedSettings.neuralRenderingFovOnly != previousSettings.neuralRenderingFovOnly")
+    string(FIND "${_bridge}" "${_guard}" _guard_position)
+    if(_guard_position EQUAL -1)
+        message(FATAL_ERROR "NR configure must preserve GPU and FOV admission: ${_guard}")
+    endif()
+endforeach()
+
+string(FIND "${_transition}" "a_origin != VRUpscalingTransitionOrigin::RecoveryRelatch &&" _recovery_exception)
+if(_recovery_exception EQUAL -1 OR _recovery_exception GREATER _dependency_guard)
+    message(FATAL_ERROR "NR admission must preserve internal native-target recovery")
 endif()

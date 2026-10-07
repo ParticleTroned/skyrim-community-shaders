@@ -113,10 +113,27 @@ int main()
 			const auto neuralDependency = CSX::Api::ResolveUpscalingAdmission(
 				kConditionLoadingTransition | kConditionNeuralRenderScaleRequired,
 				purpose, PersistencePolicy::kRuntimeOnly, false);
-			Check((neuralDependency.blockingConditions & kConditionNeuralRenderScaleRequired) != 0,
-				"NR dependency must block direct and environment-profile scale-off requests");
-			Check(neuralDependency.route == AdmissionRoute::kDirect,
-				"NR dependency must not enter a loading-door handoff");
+			Check((neuralDependency.observedConditions & kConditionNeuralRenderScaleRequired) != 0 &&
+					  (neuralDependency.blockingConditions & kConditionNeuralRenderScaleRequired) != 0,
+				"Enabled NR must reject incompatible direct and environment profiles");
+			Check(neuralDependency.route == AdmissionRoute::kDirect &&
+					  neuralDependency.blockingConditions == (kConditionLoadingTransition | kConditionNeuralRenderScaleRequired),
+				"Loading-door admission must not bypass the NR dependency");
+			const auto incompatibleProfile = CSX::Api::ResolveUpscalingAdmission(
+				kConditionNeuralRenderScaleRequired, purpose, PersistencePolicy::kRuntimeOnly, false);
+			Check(incompatibleProfile.blockingConditions == kConditionNeuralRenderScaleRequired,
+				"An incompatible profile remains blocked while NR is enabled");
+			for (const auto condition : { kConditionRaceSexMenu, kConditionRaceSexStartupTail,
+					 kConditionOpenCompositeUpscaling, kConditionRelatchPending,
+					 kConditionProviderCheckPending, kConditionProviderUnavailable,
+					 kConditionPersistenceUnavailable }) {
+				const auto blockedProfile = CSX::Api::ResolveUpscalingAdmission(
+					condition | kConditionLoadingTransition | kConditionNeuralRenderScaleRequired,
+					purpose, PersistencePolicy::kRuntimeOnly, false);
+				Check((blockedProfile.blockingConditions & condition) != 0 &&
+						  blockedProfile.route == AdmissionRoute::kDirect,
+					"The NR dependency must preserve provider and transition safety");
+			}
 		}
 
 		const auto persistenceUnavailable = CSX::Api::ResolveUpscalingAdmission(

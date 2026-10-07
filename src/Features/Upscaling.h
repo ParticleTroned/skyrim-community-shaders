@@ -1979,7 +1979,7 @@ public:
 
 	struct VRRenderScaleStereoResourceLifetime
 	{
-		static constexpr uint32_t kAuxiliaryLifetimeCapacity = 32;
+		static constexpr uint32_t kAuxiliaryLifetimeCapacity = 36;
 
 		winrt::com_ptr<ID3D11Device> device;
 		uint64_t revision = 0;
@@ -2541,10 +2541,19 @@ public:
 	/** Toggle through the settings transition on the menu render thread. */
 	bool ToggleNeuralRendering(std::string* a_error = nullptr);
 	void SetNeuralRenderingFeatureAvailable(bool a_available);
-	/** Configured NR dependency, independent of temporary runtime admission. */
+	/** Tests the active rendering device rather than other installed adapters. */
+	[[nodiscard]] bool IsNeuralRenderingHardwareSupported() const noexcept;
+	/** Returns the installed, supported and loaded NR enable preference. */
+	[[nodiscard]] bool IsNeuralRenderingEnabled() const noexcept;
+	/** Enabled pre-DLSS NR requires compatible profiles; physical Render Scale is VR-only. */
 	[[nodiscard]] bool IsNeuralRenderingRenderScaleRequired() const noexcept;
-	/** Pre-DLSS VR work waits for physically active, requested scaled targets. */
-	[[nodiscard]] bool IsNeuralRenderingRenderScaleAvailable() const noexcept;
+	/** User-facing incompatible setting, or null when the profile supports the NR route. */
+	[[nodiscard]] const char* GetNeuralRenderingUpscalingProfileBlocker(NeuralRendering::RenderingMode a_mode, UpscaleMethod a_method, uint32_t a_qualityMode, bool a_renderScaleMode) const noexcept;
+	/** Rejects incompatible profile selections while the NR preference is enabled. */
+	[[nodiscard]] bool IsNeuralRenderingUpscalingProfileAllowed(UpscaleMethod a_method, uint32_t a_qualityMode, bool a_renderScaleMode) const noexcept;
+	/** Requires a compatible pending profile and, for pre-DLSS NR, active scaled targets. */
+	[[nodiscard]] bool IsNeuralRenderingUpscalingAvailable() const noexcept;
+	[[nodiscard]] bool IsNeuralRenderingUpscalingAvailable(NeuralRendering::RenderingMode a_mode) const noexcept;
 	/** Flat frame-generation requests and DX12 ownership block NR; VR ignores the saved request. */
 	[[nodiscard]] bool IsNeuralRenderingFrameGenerationBlocked() const noexcept;
 	[[nodiscard]] bool IsNeuralRenderingRequested() const noexcept;
@@ -2930,7 +2939,7 @@ public:
 	void EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
 	bool EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc, bool allowResourceCreation = true);
+		ID3D11Resource* colorSrc, bool allowResourceCreation = true, DXGI_FORMAT colorFormat = DXGI_FORMAT_R8G8B8A8_UNORM);
 	struct VRExistingVendorProviderSnapshot
 	{
 		bool valid = false;
@@ -3318,6 +3327,8 @@ public:
 	eastl::unique_ptr<Texture2D> submitNeuralFloatColorIn[2];
 	eastl::unique_ptr<Texture2D> submitNeuralFloatColorOut[2];
 	eastl::unique_ptr<Texture2D> submitNeuralFloatStagedOut[2];
+	eastl::unique_ptr<Texture2D> neuralFullResolutionDepth[2];
+	eastl::unique_ptr<Texture2D> neuralFullResolutionMotionVectors[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterDepth[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterMotionVectors[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterReactiveMask[2];
@@ -4332,6 +4343,8 @@ public:
 		float inputTextureScaleX = 1.0f, float inputTextureScaleY = 1.0f, float inputTextureOffsetX = 0.0f, float inputTextureOffsetY = 0.0f);
 	bool IsFoveatedMaskVisualizationEnabled(UpscaleMethod a_upscaleMethod) const;
 	bool DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex);
+	/** Draw a complete native HDR preview; false retains ordinary vendor upscaling. */
+	bool TryDrawMainFoveatedMaskVisualization(bool a_allowResourceCreation);
 	bool DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* peripherySRV, ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t peripherySourceWidth, uint32_t peripherySourceHeight, uint32_t outputWidth, uint32_t outputHeight, const FoveatedDispatchRect& centerRect, float peripherySourceScaleX, float peripherySourceScaleY, float peripherySourceOffsetX, float peripherySourceOffsetY, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather);
 	bool DispatchFoveatedBlendPass(ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t outputWidthPerEye, uint32_t outputHeight, const FoveatedDispatchRect& rect, const FoveatedRegionPlan::Rect& visibleOutput, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather, uint32_t targetOffsetX = 0, ID3D11ShaderResourceView* baselineCenterSRV = nullptr, ID3D11ShaderResourceView* characterMaskSRV = nullptr, uint32_t finalLdrColorMode = 0, bool forceFullImage = false, const NeuralRendering::ComputeSubrect* characterMaskSupport = nullptr, bool providerBlending = false);
 

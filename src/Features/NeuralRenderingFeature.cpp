@@ -711,7 +711,8 @@ void NeuralRenderingFeature::DrawSettings()
 }
 void NeuralRenderingFeature::DrawColourSettings()
 {
-	auto runtimeAvailabilityGuard = Util::DisableGuard(!NeuralRendering::Runtime::IsInstalled());
+	auto runtimeAvailabilityGuard = Util::DisableGuard(!NeuralRendering::Runtime::IsInstalled() ||
+													   !globals::features::upscaling.IsNeuralRenderingHardwareSupported());
 	const auto& upscaling = globals::features::upscaling;
 	auto fovAvailabilityGuard = Util::DisableGuard(
 		NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly, globals::game::isVR, upscaling.settings.neuralRenderingRenderscaleFov) &&

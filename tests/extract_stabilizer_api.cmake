@@ -17,6 +17,7 @@ file(APPEND "${OUTPUT_FILE}" "${_dispatch_body}\n")
 
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" _upscaling)
 append_section("${_upscaling}" "VRFpsStabilizerTransitionTarget ResolveVRFpsStabilizerTransitionTarget(" "bool HasCurrentVRRenderScaleControllerTarget(")
+append_section("${_upscaling}" "const char* Upscaling::GetNeuralRenderingUpscalingProfileBlocker(" "bool Upscaling::IsNeuralRenderingUpscalingAvailable(NeuralRendering::RenderingMode")
 append_section("${_upscaling}" "bool Upscaling::IsVRFpsStabilizerAPITransitionProfileAllowed(" "void Upscaling::QueueVRFpsStabilizerLoadSync(")
 
 file(READ "${PROJECT_ROOT}/include/VRAPI/CSpluginapi.h" _api)

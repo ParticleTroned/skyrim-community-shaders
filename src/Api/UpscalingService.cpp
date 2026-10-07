@@ -905,8 +905,10 @@ namespace
 			}
 
 			std::uint64_t observed = currentSnapshot.observedConditions;
-			if ((currentSnapshot.flags & kSnapshotNeuralRenderScaleRequired) != 0 &&
-				!a_request.target.renderScaleMode)
+			if (!globals::features::upscaling.IsNeuralRenderingUpscalingProfileAllowed(
+					FromAPI(a_request.target.method),
+					static_cast<std::uint32_t>(a_request.target.qualityMode),
+					a_request.target.renderScaleMode != 0))
 				observed |= kConditionNeuralRenderScaleRequired;
 			const auto methodIndex = static_cast<std::uint32_t>(a_request.target.method);
 			const auto methodBit = Bit(methodIndex);

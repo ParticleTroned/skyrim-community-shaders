@@ -40,9 +40,26 @@ class PreviewIntegration(unittest.TestCase):
         self.assertLess(main.index("if (vrRenderScaleSubmitStageOwnsOutput)"), preview)
         self.assertLess(preview, main.index("auto encodeUpscalingTextures ="))
         draw = main[preview:main.index("pendingDLSSHistoryReset.exchange", preview)]
-        self.assertIn("main.texture, !vendorLifecycleMutationDeferred", draw)
-        self.assertIn("DispatchFoveatedMaskVisualization(0) && DispatchFoveatedMaskVisualization(1)", draw)
+        self.assertIn("TryDrawMainFoveatedMaskVisualization(!vendorLifecycleMutationDeferred)", draw)
+        self.assertIn("|| IsSubmitStageDeviceLost()", draw)
         self.assertIn("RequestHistoryReset();", draw)
+
+    def test_failed_preview_cannot_bypass_vendor_recovery_admission(self):
+        main = section("void Upscaling::Upscale()", "void Upscaling::PerformUpscaling()")
+        preview = main.index("TryDrawMainFoveatedMaskVisualization(")
+        guard = main.index("if (vendorLifecycleMutationDeferred && !CanDispatchExistingVRVendorEvaluation(upscaleMethod))")
+        encoding = main.index("auto encodeUpscalingTextures =")
+        self.assertLess(preview, guard)
+        self.assertLess(guard, encoding)
+        self.assertIn("return;", main[guard:encoding])
+
+    def test_native_preview_uses_scene_format_without_widening_submit_contract(self):
+        helper = section("bool Upscaling::TryDrawMainFoveatedMaskVisualization(", "bool Upscaling::DispatchFoveatedPeripheryPass(")
+        self.assertIn("a_allowResourceCreation, mainDesc.Format", helper)
+        allocator = section("bool Upscaling::EnsureVRPresentationTextures(", "void Upscaling::",)
+        self.assertIn("colorSrcDesc.Format != colorFormat", allocator)
+        header = (ROOT / "src/Features/Upscaling.h").read_text()
+        self.assertIn("DXGI_FORMAT colorFormat = DXGI_FORMAT_R8G8B8A8_UNORM", header)
 
     def test_preview_mirror_cannot_allocate_during_protection(self):
         mirror = section("bool Upscaling::UpdateVRSubmitDesktopMirror(", "bool Upscaling::SubmitVRUpscaledFrame(")
@@ -52,6 +69,13 @@ class PreviewIntegration(unittest.TestCase):
         for resource in ("vrDesktopMirrorBlitTarget != sourceTexture", "!vrDesktopMirrorBlitRTV", "!vrDesktopMirrorBlitPS", "!upscaleVS"):
             self.assertIn(resource, mirror[guard:blit])
         self.assertIn("return true;", mirror[guard:blit])
+
+    def test_eye_preview_preserves_bindings_outside_its_compute_slots(self):
+        dispatch = section("bool Upscaling::DispatchFoveatedMaskVisualization(", "bool Upscaling::TryDrawMainFoveatedMaskVisualization(")
+        self.assertIn("NeuralRendering::ComputeStateGuard<1>", dispatch)
+        self.assertIn("CSGetSamplers", dispatch)
+        self.assertIn("CSSetSamplers", dispatch)
+        self.assertNotIn("UnbindUpscalingResources()", dispatch)
 
 
 if __name__ == "__main__":

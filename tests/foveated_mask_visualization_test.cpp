@@ -44,12 +44,94 @@ namespace
 	};
 }
 
+using UINT = unsigned;
+constexpr UINT D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT = 8;
+using DXGI_FORMAT = unsigned;
+struct D3D11_TEXTURE2D_DESC
+{
+	UINT Width = 2560, Height = 1440;
+	DXGI_FORMAT Format = 26;
+};
+struct View
+{
+	void Release() {}
+};
+using ID3D11RenderTargetView = View;
+using ID3D11DepthStencilView = View;
+using ID3D11SamplerState = View;
+struct PreviewContext
+{
+	bool predicate = true, targetBound = true;
+	View target, depth, sampler;
+	void OMGetRenderTargets(UINT, View** targets, View** dsv)
+	{
+		targets[0] = &target;
+		*dsv = &depth;
+	}
+	void OMSetRenderTargets(UINT count, View* const* targets, View*) { targetBound = count && targets[0] == &target; }
+	void CSGetSamplers(UINT, UINT, View** value) { *value = &sampler; }
+	void CSSetSamplers(UINT, UINT, View* const* value) { Check(*value == &sampler, "Original sampler must be restored"); }
+};
+namespace winrt
+{
+	template <class T>
+	struct com_ptr
+	{
+		T* value = nullptr;
+		T** put() { return &value; }
+		T* get() const { return value; }
+	};
+}
+namespace NeuralRendering
+{
+	template <UINT>
+	struct ComputeStateGuard
+	{
+		PreviewContext* context;
+		bool predicate;
+		ComputeStateGuard(PreviewContext* c) : context(c), predicate(c->predicate) { c->predicate = false; }
+		~ComputeStateGuard() { context->predicate = predicate; }
+	};
+}
+namespace RE::RENDER_TARGETS
+{
+	constexpr unsigned kMAIN = 0;
+}
+struct PreviewRenderer
+{
+	struct NativeTexture
+	{
+		D3D11_TEXTURE2D_DESC desc;
+	} nativeTexture;
+	struct Data
+	{
+		struct Target
+		{
+			PreviewRenderer::NativeTexture* texture = nullptr;
+		} renderTargets[1];
+	} data;
+	PreviewRenderer() { data.renderTargets[0].texture = &nativeTexture; }
+	Data& GetRuntimeData() { return data; }
+};
+bool TryGetTexture2DDesc(PreviewRenderer::NativeTexture* t, D3D11_TEXTURE2D_DESC& d)
+{
+	if (!t)
+		return false;
+	d = t->desc;
+	return true;
+}
+
 namespace globals
 {
 	State* state = nullptr;
 	namespace game
 	{
 		bool isVR = true;
+		PreviewRenderer* renderer = nullptr;
+	}
+	namespace d3d
+	{
+		PreviewContext* context = nullptr;
 	}
 }
 
@@ -89,7 +171,7 @@ struct Upscaling
 	std::array<std::unique_ptr<Texture>, 2> vrIntermediateColorOut{
 		std::make_unique<Texture>(), std::make_unique<Texture>()
 	};
-	uint32_t ensures = 0, creations = 0, dispatches = 0, unbinds = 0;
+	uint32_t ensures = 0, creations = 0, dispatches = 0;
 	float dispatchedScale = 0;
 	float2 dispatchedOffset{};
 	bool usedTaaOffsets = false;
@@ -100,7 +182,6 @@ struct Upscaling
 	bool IsSubmitStageDeviceLost() const { return deviceLost; }
 	bool MarkSubmitStageDeviceLostIfDeviceRemoved(const char*) const { return deviceLost; }
 	bool MarkSubmitStageDeviceLostIfNeeded(const std::exception&, const char*) const { return deviceLost; }
-	void UnbindUpscalingResources() { ++unbinds; }
 	bool EnsureFoveatedDispatchShaders(bool a_taa, bool a_visualize, const char*, const char*)
 	{
 		Check(!a_taa && a_visualize, "Preview must not prepare temporal shaders");
@@ -132,8 +213,34 @@ struct Upscaling
 			throw std::runtime_error("simulated constant buffer update failure");
 		dispatchedScale = a_scale;
 		dispatchedOffset = { a_offsetX, a_offsetY };
-		return dispatchReady;
+		return dispatchReady && a_output != (failEye < 2 ? vrIntermediateColorOut[failEye]->uav.get() : nullptr);
 	}
+	bool presentationReady = true, throwAllocation = false;
+	bool observedCreationAllowed = false;
+	DXGI_FORMAT observedFormat = 0;
+	unsigned finalizations = 0, failEye = 2;
+	bool GetRuntimeFoveatedRegionDimensions(uint32_t& iw, uint32_t& ih, uint32_t& ow, uint32_t& oh) const
+	{
+		iw = ow = 1280;
+		ih = oh = 1440;
+		return true;
+	}
+	bool EnsureVRPresentationTextures(uint32_t, uint32_t, uint32_t, uint32_t,
+		PreviewRenderer::NativeTexture* source, bool allow, DXGI_FORMAT format)
+	{
+		observedCreationAllowed = allow;
+		observedFormat = format;
+		Check(source && source->desc.Format == format, "Main preview must preserve the native scene format");
+		if (throwAllocation)
+			throw std::runtime_error("allocation failed");
+		return presentationReady;
+	}
+	void FinalizePerEyeOutputs(PreviewRenderer::NativeTexture*)
+	{
+		Check(!globals::d3d::context->predicate, "Final copy must not inherit an occlusion predicate");
+		++finalizations;
+	}
+	bool TryDrawMainFoveatedMaskVisualization(bool);
 	bool IsFoveatedMaskVisualizationEnabled(UpscaleMethod) const;
 	bool DispatchFoveatedMaskVisualization(uint32_t);
 };
@@ -157,7 +264,9 @@ Upscaling::Profile GetFoveatedMaskProfileParams(const Upscaling::Settings& a_set
 int main()
 {
 	State state;
+	PreviewContext context;
 	globals::state = &state;
+	globals::d3d::context = &context;
 	Upscaling upscaling;
 	using Method = Upscaling::UpscaleMethod;
 	for (const auto method : { Method::DLSS, Method::FSR }) {
@@ -209,11 +318,40 @@ int main()
 	upscaling.throwDispatch = true;
 	Check(!upscaling.DispatchFoveatedMaskVisualization(0), "Drawing exceptions must fall back safely");
 	upscaling.throwDispatch = false;
-	Check(upscaling.dispatches == upscaling.unbinds, "Every dispatched preview must release bindings");
+	Check(context.predicate && context.targetBound, "Failed eye dispatches must preserve graphics state");
 	Check(!upscaling.DispatchFoveatedMaskVisualization(2), "Invalid eyes must fail closed");
 	upscaling.vrIntermediateColorOut[0]->uav.reset();
 	Check(!upscaling.DispatchFoveatedMaskVisualization(0), "Missing output view must fail closed");
 	upscaling.deviceLost = true;
 	Check(!upscaling.DispatchFoveatedMaskVisualization(1), "Device loss must fail closed");
+	PreviewRenderer renderer;
+	globals::game::renderer = &renderer;
+	globals::d3d::context = &context;
+	Upscaling mainPreview;
+	for (const DXGI_FORMAT format : { 26u, 10u, 28u }) {
+		renderer.nativeTexture.desc.Format = format;
+		Check(mainPreview.TryDrawMainFoveatedMaskVisualization(true), "HDR and LDR native previews must complete");
+		Check(mainPreview.observedFormat == format && context.predicate && context.targetBound,
+			"Native format and caller graphics state must survive the preview");
+	}
+	const auto completePairs = mainPreview.finalizations;
+	mainPreview.failEye = 1;
+	Check(!mainPreview.TryDrawMainFoveatedMaskVisualization(true) && mainPreview.finalizations == completePairs,
+		"An incomplete stereo preview must keep normal vendor upscaling and never copy one eye");
+	Check(context.predicate && context.targetBound, "Failed drawing must restore caller state");
+	mainPreview.failEye = 2;
+	mainPreview.presentationReady = false;
+	Check(!mainPreview.TryDrawMainFoveatedMaskVisualization(false) && !mainPreview.observedCreationAllowed,
+		"Unavailable protected resources must fall back without allocation");
+	mainPreview.presentationReady = true;
+	Check(mainPreview.TryDrawMainFoveatedMaskVisualization(false) && !mainPreview.observedCreationAllowed,
+		"Compatible existing preview resources must remain usable during lifecycle protection");
+	mainPreview.throwAllocation = true;
+	Check(!mainPreview.TryDrawMainFoveatedMaskVisualization(true), "Allocation exceptions must retain normal upscaling");
+	mainPreview.throwAllocation = false;
+	renderer.nativeTexture.desc.Width = 1280;
+	Check(!mainPreview.TryDrawMainFoveatedMaskVisualization(true), "Small main targets must never receive a full stereo copy");
+	globals::d3d::context = nullptr;
+	Check(!mainPreview.TryDrawMainFoveatedMaskVisualization(true), "Missing device context must fail closed");
 	std::cout << "FOV mask preview admission and dispatch checks passed\n";
 }

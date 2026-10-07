@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
@@ -57,6 +58,7 @@ namespace globals
 	{
 		struct Upscaling
 		{
+			static constexpr unsigned kQualityModeMaxIndex = 6, kDLSSPresetF = 4;
 			enum class UpscaleMethod
 			{
 				kNONE,
@@ -80,6 +82,9 @@ namespace globals
 				bool neuralCharacterHumansEnabled = true, neuralCharacterOtherHumanoidsEnabled = true;
 				bool neuralCharacterCreaturesEnabled = true, neuralCharacterAnimalsEnabled = true, neuralCharacterOtherActorsEnabled = true;
 				unsigned neuralRenderingMode = 0;
+				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = 0;
+				float neuralRenderingIntensity = 1.0f, neuralRenderingLocalTone = 1.0f;
+				float neuralRenderingLocalStructure = 1.0f, neuralRenderingSkinStructure = 1.0f;
 				unsigned neuralCharacterCropMode = 1;
 				bool foveatedVendorDispatch = true, periphery_taa_enable = false;
 				float periphery_taa_center_area = 0.3f, foveatedCenterArea = 0.3f;
@@ -87,19 +92,52 @@ namespace globals
 				float foveatedLeftEyeMaskOffsetX = 0.0f, foveatedLeftEyeMaskOffsetY = 0.0f;
 				float foveatedRightEyeMaskOffsetX = 0.0f, foveatedRightEyeMaskOffsetY = 0.0f;
 			} settings;
+			struct AdapterFixture
+			{
+				bool nvidia = true;
+				bool IsNvidiaAdapterDetected() const { return nvidia; }
+			} fidelityFX;
+			bool IsNeuralRenderingHardwareSupported() const noexcept;
+			bool IsNeuralRenderingEnabled() const noexcept;
+			bool IsNeuralRenderingUpscalingProfileAllowed(UpscaleMethod, uint32_t, bool) const noexcept;
+
 			bool neuralRenderingFeatureAvailable = true;
 			UpscaleMethod method = UpscaleMethod::kDLSS;
 			std::optional<UpscaleMethod> runtimeMethod;
+			std::optional<UpscaleMethod> pendingMethod;
 			UpscaleMethod lastDrawMethod = UpscaleMethod::kNONE;
 			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
 			bool IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod a_upscaleMethod) const;
 			bool renderScaleRequested = true, renderScaleLatched = true, renderScaleActive = true;
 			bool GetVRRenderScaleModeRequested() const { return renderScaleRequested; }
+			bool GetVRRenderScaleModePreference() const { return renderScaleRequested; }
+			bool GetVRRenderScalePreferenceForSelection(UpscaleMethod) const { return renderScaleRequested; }
 			bool IsVRRenderScaleModeLatched() const { return renderScaleLatched; }
 			bool IsVRRenderScaleModeActive() const { return renderScaleActive; }
 			bool IsNeuralRenderingRenderScaleRequired() const noexcept;
-			bool IsNeuralRenderingRenderScaleAvailable() const noexcept;
+			const char* GetNeuralRenderingUpscalingProfileBlocker(NeuralRendering::RenderingMode, UpscaleMethod, uint32_t, bool) const noexcept;
+			struct VRFpsStabilizerProfile
+			{
+				UpscaleMethod upscaleMethod = UpscaleMethod::kDLSS;
+				unsigned qualityMode = 3;
+				bool renderScaleMode = true;
+				bool configured = true;
+				bool hasUpscaleMethod = true, hasLegacyMethodSelection = false, hasQualityMode = true;
+				bool hasRenderScaleMode = true, hasDLSSPreset = true;
+				unsigned dlssPreset = 1;
+				bool HasAnyUpscalingSetting() const { return configured; }
+			};
+			struct VRFpsStabilizerConfig
+			{
+				VRFpsStabilizerProfile interior, exterior;
+				bool upscalingSwitchingEnabled = true;
+			} stabilizerConfig;
+			bool stabilizerSyncActive = false;
+			bool IsVRFpsStabilizerSyncActive() const { return stabilizerSyncActive; }
+			VRFpsStabilizerConfig GetVRFpsStabilizerSessionConfig() const { return stabilizerConfig; }
+			bool IsNeuralRenderingUpscalingAvailable() const noexcept;
+			bool IsNeuralRenderingUpscalingAvailable(NeuralRendering::RenderingMode) const noexcept;
 			bool IsNeuralRenderingRequested() const noexcept;
 			bool IsFoveatedVendorDispatchEnabled(UpscaleMethod) const;
 			bool IsActiveUpscalingFoveatedProfileAvailable() const;
@@ -125,8 +163,23 @@ namespace globals
 			void DrawNeuralRenderingFovWarning(bool) const {}
 			static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
 			static bool ApplyNeuralRenderingFovConstraint(Settings&) noexcept;
+			static bool ApplyNeuralRenderingPreset(Settings&, uint32_t) noexcept;
 			UpscaleMethod GetUpscaleMethod() const { return method; }
 			UpscaleMethod GetRuntimeUpscaleMethod() const { return runtimeMethod.value_or(method); }
+			unsigned runtimeQualityMode = 3;
+			unsigned GetRuntimeQualityMode() const { return runtimeQualityMode; }
+			std::optional<unsigned> configuredQualityMode;
+			unsigned GetEffectiveUpscalingQualityMode() const { return configuredQualityMode.value_or(runtimeQualityMode); }
+			struct DesiredProfile
+			{
+				UpscaleMethod method;
+				unsigned qualityMode;
+				bool renderScaleModeEnabled, renderScaleModePreference;
+			};
+			DesiredProfile GetPendingVRRenderScaleDesiredProfile() const
+			{
+				return { pendingMethod.value_or(method), GetEffectiveUpscalingQualityMode(), renderScaleRequested, renderScaleRequested };
+			}
 			void DrawNeuralRenderingSettings(UpscaleMethod value, bool = false, const std::function<void()>& drawColourSettings = {})
 			{
 				++draws;
@@ -139,6 +192,17 @@ namespace globals
 }
 using Upscaling = globals::features::Upscaling;
 using uint = unsigned;
+bool IsRenderScaleQualityMode(unsigned quality) { return quality > 0; }
+struct StabilizerTarget
+{
+	Upscaling::UpscaleMethod method;
+	unsigned qualityMode;
+	bool renderScaleModePreference;
+};
+StabilizerTarget ResolveVRFpsStabilizerTransitionTarget(const Upscaling&, const Upscaling::VRFpsStabilizerProfile& profile)
+{
+	return { profile.upscaleMethod, profile.qualityMode, profile.renderScaleMode };
+}
 float ClampFoveatedCenterScale(float value) { return FoveatedCommon::ClampCenterScale(value); }
 float ClampFoveatedCenterHorizontalScale(float value) { return FoveatedCommon::ClampCenterHorizontalScale(value); }
 float ClampFoveatedMaskOffsetAdjustment(float value) { return value; }
@@ -149,6 +213,7 @@ namespace ImGui
 	std::vector<bool> disabledItems;
 	std::vector<unsigned> rows;
 	std::vector<std::pair<std::string, std::string>> tooltips;
+	std::vector<std::pair<std::string, bool>> checkboxValues;
 	bool drawingTooltip = false;
 	unsigned row = 0;
 	bool nextOnSameLine = false;
@@ -188,6 +253,7 @@ namespace ImGui
 		disabledItems.clear();
 		rows.clear();
 		tooltips.clear();
+		checkboxValues.clear();
 		row = 0;
 		nextOnSameLine = false;
 		clicked = click;
@@ -214,8 +280,10 @@ namespace ImGui
 	void SeparatorText(const char* label) { Record(label); }
 	void Separator() {}
 	void Spacing() {}
+	void SetNextItemWidth(float) {}
 	void SameLine() { nextOnSameLine = true; }
 	void PushID(int) {}
+	void PushID(const char*) {}
 	void PopID() {}
 	bool Button(const char* label)
 	{
@@ -224,6 +292,7 @@ namespace ImGui
 	}
 	bool Checkbox(const char* label, bool* value)
 	{
+		checkboxValues.emplace_back(label, *value);
 		if (!Button(label))
 			return false;
 		*value = !*value;
@@ -282,8 +351,16 @@ namespace Util
 	namespace Text
 	{
 		void WrappedError(const char* label) { ImGui::Record(label); }
-		void WrappedWarning(const char* label, const char* value) { ImGui::TextWrapped(label, value); }
+		template <class... Args>
+		void WrappedWarning(const char* label, Args... args)
+		{
+			char text[1024]{};
+			std::snprintf(text, sizeof(text), label, args...);
+			ImGui::Record(text);
+		}
 	}
+	bool interior = true;
+	bool IsInterior() { return interior; }
 	class DisableGuard
 	{
 		bool disabled_;
@@ -436,6 +513,46 @@ int main()
 			"Actor-only selection must retain the ordinary scene preference");
 	}
 	globals::features::upscaling.settings = {};
+	for (unsigned mode = 0; mode < 3; ++mode) {
+		for (const bool essentials : { true, false }) {
+			auto& upscaling = globals::features::upscaling;
+			upscaling.settings = {};
+			upscaling.settings.neuralRenderingMode = mode;
+			upscaling.settings.neuralCharacterHumansEnabled = false;
+			upscaling.settings.neuralCharacterArmorEnabled = true;
+			ImGui::Clear();
+			upscaling.DrawSelectionControls(essentials);
+			for (const char* label : { "Full resolution", "Foveated", "Renderscale NR before DLSS", "Shared image settings",
+					 "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style", "Actors only" })
+				require(ImGui::Seen(label), "Essentials and Advanced must expose modes, shared image settings and Actors only");
+			require(ImGui::Seen("Restrict to FOV mask") == (mode == 0) &&
+						ImGui::Seen("Use FOV mask for Renderscale NR") == (mode == 2),
+				"Both UI levels must expose the FOV toggle for the selected rendering mode");
+			for (const char* label : { "Strength application", "Category strengths", "Humans", "Armour / clothing", "Face Strength", "Weapon Strength" })
+				require(ImGui::Seen(label) == !essentials, "Category and compositor tuning must stay in Advanced");
+			const auto image = std::find(ImGui::items.begin(), ImGui::items.end(), "Shared image settings");
+			const auto actors = std::find(ImGui::items.begin(), ImGui::items.end(), "Actors only");
+			require(image < actors, "Shared image settings must precede actor-only selection");
+			for (const char* label : { "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style", "Actors only" })
+				require(std::any_of(ImGui::tooltips.begin(), ImGui::tooltips.end(),
+							[label](const auto& tip) { return tip.first == label && !tip.second.empty(); }),
+					"Each essential image control and actor toggle must have its own tooltip");
+			require(!upscaling.settings.neuralCharacterHumansEnabled && upscaling.settings.neuralCharacterArmorEnabled,
+				"Changing UI levels must preserve hidden actor and material selections");
+			ImGui::comboEditValue = 3;
+			ImGui::Clear("Preset");
+			upscaling.DrawSelectionControls(essentials);
+			require(upscaling.settings.neuralRenderingPreset == 3 && upscaling.settings.neuralRenderingIntensity == 0.8f,
+				"Shared presets must apply from both UI levels");
+			ImGui::sliderEditValue = 0.375f;
+			ImGui::Clear("Intensity");
+			upscaling.DrawSelectionControls(essentials);
+			require(upscaling.settings.neuralRenderingPreset == 0 && upscaling.settings.neuralRenderingIntensity == 0.375f,
+				"Shared slider edits must select Custom from both UI levels");
+		}
+	}
+	globals::features::upscaling.settings = {};
+	ImGui::comboEditValue = 0;
 	ImGui::sliderEditValue = 0.375f;
 	for (const auto& [label, selection, strength] : {
 			 std::tuple{ "Face Strength", &Upscaling::Settings::neuralCharacterFacesEnabled, &Upscaling::Settings::neuralCharacterFaceStrength },
@@ -652,7 +769,7 @@ int main()
 			upscaling.settings.neuralRenderingEnabled = masterEnabled;
 			const bool previous = upscaling.settings.*member;
 			ImGui::Clear(label);
-			upscaling.DrawSelectionControls();
+			upscaling.DrawSelectionControls(false);
 			require(!ImGui::Disabled(label) && upscaling.settings.*member == !previous &&
 						upscaling.settings.neuralRenderingEnabled == masterEnabled,
 				"Actor category preferences must remain editable independently of the healthy master");
@@ -853,8 +970,8 @@ int main()
 		upscaling.settings.neuralCharacterRenderingEnabled = true;
 		for (const auto* category : { "Faces", "Skin", "Hair" }) {
 			ImGui::Clear(category);
-			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(category) && !ImGui::Disabled(category), "Both flat modes must expose editable essential character categories");
+			upscaling.DrawSelectionControls(false);
+			require(ImGui::Seen(category) && !ImGui::Disabled(category), "Both flat modes must expose editable Advanced character categories");
 		}
 		require(!upscaling.settings.neuralCharacterFacesEnabled && !upscaling.settings.neuralCharacterSkinEnabled &&
 					!upscaling.settings.neuralCharacterHairEnabled,
@@ -876,13 +993,15 @@ int main()
 		upscaling.settings.neuralCharacterRenderingEnabled = true;
 		ImGui::Clear("Renderscale NR before DLSS");
 		upscaling.DrawSelectionControls();
-		require(!ImGui::Disabled("Renderscale NR before DLSS") && upscaling.GetNeuralRenderingMode() == ModeChoice::ReducedResolution,
-			"Flat reduced mode remains selectable independently of backend readiness");
+		const bool dlss = method == Upscaling::UpscaleMethod::kDLSS;
+		require(ImGui::Disabled("Renderscale NR before DLSS") == !dlss &&
+					upscaling.GetNeuralRenderingMode() == (dlss ? ModeChoice::ReducedResolution : ModeChoice::FullResolution),
+			"Flat reduced mode requires DLSS; unavailable choices preserve Full resolution");
 		for (const bool enabled : { true, false }) {
 			ImGui::Clear("Enabled");
 			upscaling.DrawSelectionControls();
 			require(!ImGui::Disabled("Enabled") && upscaling.settings.neuralRenderingEnabled == enabled,
-				"Flat reduced mode cannot make the master stale when the upscaler changes");
+				"Full resolution remains editable without DLSS; scaled DLSS permits reduced NR");
 		}
 		ImGui::Clear("Full resolution");
 		upscaling.DrawSelectionControls();
@@ -1128,11 +1247,11 @@ int main()
 				upscaling.DrawSelectionControls();
 				require(ImGui::Seen("FOV is configured; this NR route waits until runtime upscaling is available."),
 					"Pending runtime admission must not be reported as missing FOV configuration");
-				require(!ImGui::Disabled("Foveated") && !ImGui::Disabled("Actors only") &&
+				require(ImGui::Disabled("Foveated") == (configured != Upscaling::UpscaleMethod::kDLSS) && !ImGui::Disabled("Actors only") &&
 							upscaling.settings.neuralCharacterRenderingEnabled,
 					"A temporarily masked vendor must not disable configured FOV or character selection");
 				ImGui::Clear();
-				upscaling.DrawSelectionControls();
+				upscaling.DrawSelectionControls(false);
 				for (const auto* category : { "Faces", "Skin", "Hair" })
 					require(ImGui::Seen(category) && !ImGui::Disabled(category), "Pending FOV must retain editable character categories");
 				if (mode == ModeChoice::FullResolution)
@@ -1151,22 +1270,55 @@ int main()
 				for (const bool enabled : { false, true }) {
 					ImGui::Clear("Enabled");
 					upscaling.DrawSelectionControls();
-					require(!ImGui::Disabled("Enabled") && upscaling.settings.neuralRenderingEnabled == enabled &&
+					const bool unavailable = mode == ModeChoice::ReducedResolution || (mode == ModeChoice::Foveated && configured == Upscaling::UpscaleMethod::kFSR);
+					require(ImGui::Disabled("Enabled") == unavailable && upscaling.settings.neuralRenderingEnabled == (unavailable || enabled) &&
 								!upscaling.IsNeuralRenderingRequested(),
-						"Pending FOV must leave the master editable without admitting runtime work");
+						"Full/Foveated remain editable; reduced NR waits for actual scaled DLSS without admitting work");
 				}
 				upscaling.runtimeMethod = configured;
-				require(upscaling.IsNeuralRenderingRequested(), "Restoring the effective vendor must admit the configured FOV request");
+				require(upscaling.IsNeuralRenderingRequested() == (configured == Upscaling::UpscaleMethod::kDLSS || mode == ModeChoice::FullResolution),
+					"Full resolution resumes with either vendor; Foveated and Reduced require DLSS");
 				upscaling.runtimeMethod = effective;
 				globals::game::isVR = false;
 				require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(configured) &&
-							upscaling.IsNeuralRenderingRequested() == (mode == ModeChoice::ReducedResolution),
+							upscaling.IsNeuralRenderingRequested() == (mode == ModeChoice::ReducedResolution && configured == Upscaling::UpscaleMethod::kDLSS && effective == Upscaling::UpscaleMethod::kDLSS),
 					"Configured vendor readiness cannot expose VR FOV on flat runtimes");
 			}
 		}
 	}
 	upscaling.runtimeMethod.reset();
 	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	for (const bool isVR : { false, true }) {
+		globals::game::isVR = isVR;
+		upscaling.runtimeQualityMode = 3;
+		upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = true;
+		for (const auto pending : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA, Upscaling::UpscaleMethod::kFSR }) {
+			upscaling.pendingMethod = pending;
+			for (const auto mode : { ModeChoice::Foveated, ModeChoice::ReducedResolution }) {
+				upscaling.settings = {};
+				upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
+				require(!upscaling.IsNeuralRenderingUpscalingAvailable() && !upscaling.ToggleNeuralRendering() &&
+							!upscaling.settings.neuralRenderingEnabled,
+					"Pending incompatible methods must block activation even while the old DLSS profile still renders");
+				upscaling.settings.neuralRenderingEnabled = true;
+				require(!upscaling.IsNeuralRenderingRequested(), "A saved NR request cannot race a queued incompatible profile");
+				ImGui::Clear();
+				upscaling.DrawSelectionControls();
+				require(ImGui::Disabled("Enabled") && !ImGui::Disabled("Full resolution"),
+					"Pending incompatibility greys activation without preventing Full resolution selection");
+				if (pending == Upscaling::UpscaleMethod::kFSR)
+					require(ImGui::Seen(mode == ModeChoice::ReducedResolution ? "Renderscale NR paused: FSR." : "NR paused: FSR."),
+						"The warning must name the pending incompatible setting, not the previous DLSS profile");
+			}
+		}
+		upscaling.pendingMethod.reset();
+		upscaling.settings = {};
+		upscaling.settings.neuralRenderingMode = 2;
+		upscaling.configuredQualityMode = 0;
+		require(!upscaling.ToggleNeuralRendering(), "Pending DLAA must block Renderscale NR while scaled DLSS still renders");
+		upscaling.configuredQualityMode.reset();
+		require(upscaling.ToggleNeuralRendering(), "Cancelling the incompatible profile restores NR activation");
+	}
 	// Saved off/native settings and an in-flight relatch must never admit pre-DLSS VR NR.
 	for (const bool isVR : { false, true }) {
 		globals::game::isVR = isVR;
@@ -1180,19 +1332,22 @@ int main()
 						upscaling.renderScaleRequested = requested;
 						upscaling.renderScaleLatched = latched;
 						upscaling.renderScaleActive = active;
-						const bool required = isVR && mode == ModeChoice::ReducedResolution;
+						const bool required = mode == ModeChoice::ReducedResolution;
+						const bool physicalRequired = isVR && required;
 						const bool supported = isVR || mode != ModeChoice::Foveated;
-						require(upscaling.IsNeuralRenderingRenderScaleRequired() == required, "Only enabled VR renderscale NR locks Render Scale");
-						require(upscaling.IsNeuralRenderingRequested() == (supported && (!required || (requested && latched && active))),
+						require(upscaling.IsNeuralRenderingRenderScaleRequired() == required, "Enabled Renderscale NR requires compatible scaled DLSS profiles");
+						require(upscaling.IsNeuralRenderingRequested() == (supported && (!physicalRequired || (requested && latched && active))),
 							"VR renderscale NR requires requested and physical scaling; Full/Foveated and flat remain independent");
 						ImGui::Clear("Enabled");
 						upscaling.DrawSelectionControls();
-						require(!ImGui::Disabled("Enabled") && !upscaling.IsNeuralRenderingRenderScaleRequired(),
-							"Master remains editable and disabling NR releases the dependency");
+						const bool unavailable = physicalRequired && !(requested && latched && active);
+						require(ImGui::Disabled("Enabled") == unavailable &&
+									upscaling.settings.neuralRenderingEnabled == unavailable,
+							"Unavailable reduced NR cannot be enabled; redraw preserves the saved preference");
 						upscaling.settings.neuralRenderingEnabled = true;
 						upscaling.neuralRenderingFeatureAvailable = false;
 						require(!upscaling.IsNeuralRenderingRenderScaleRequired() && !upscaling.IsNeuralRenderingRequested(),
-							"Unloaded NR cannot lock Render Scale or run the model");
+							"Unloaded NR cannot require Render Scale or run the model");
 						upscaling.neuralRenderingFeatureAvailable = true;
 					}
 				}
@@ -1200,6 +1355,282 @@ int main()
 		}
 	}
 	upscaling.settings.neuralRenderingEnabled = false;
+	upscaling.settings.neuralRenderingMode = 2;
+	upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = true;
+	for (const bool isVR : { false, true }) {
+		globals::game::isVR = isVR;
+		for (const auto method : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA,
+				 Upscaling::UpscaleMethod::kFSR, Upscaling::UpscaleMethod::kDLSS }) {
+			upscaling.method = method;
+			for (const unsigned quality : { 0u, 1u, 3u, 6u }) {
+				upscaling.runtimeQualityMode = quality;
+				const bool available = method == Upscaling::UpscaleMethod::kDLSS && quality != 0;
+				for (const bool fov : { false, true }) {
+					upscaling.settings = {};
+					upscaling.settings.neuralRenderingMode = 2;
+					upscaling.settings.neuralRenderingRenderscaleFov = fov;
+					upscaling.settings.foveatedVendorDispatch = false;
+					ImGui::Clear("Enabled");
+					upscaling.DrawSelectionControls();
+					require(ImGui::Disabled("Enabled") == !available && upscaling.settings.neuralRenderingEnabled == available,
+						"Reduced NR requires scaled DLSS with either FOV preference");
+					upscaling.settings.neuralRenderingEnabled = false;
+					require(upscaling.ToggleNeuralRendering() == available && upscaling.settings.neuralRenderingEnabled == available,
+						"Controller toggles obey the reduced NR prerequisite");
+					upscaling.settings.neuralRenderingEnabled = true;
+					ImGui::Clear();
+					upscaling.DrawSelectionControls();
+					const auto master = std::find_if(ImGui::checkboxValues.begin(), ImGui::checkboxValues.end(),
+						[](const auto& value) { return value.first == "Enabled"; });
+					require(master != ImGui::checkboxValues.end() && master->second == available,
+						"A saved incompatible request must never appear active in the master checkbox");
+					if (!available) {
+						ImGui::Clear("Turn off NR");
+						upscaling.DrawSelectionControls();
+						require(!upscaling.settings.neuralRenderingEnabled && !ImGui::Disabled("Turn off NR"),
+							"A saved inactive NR request must remain removable without changing upscaling");
+						upscaling.settings.neuralRenderingEnabled = true;
+					}
+					require(upscaling.ToggleNeuralRendering() && !upscaling.settings.neuralRenderingEnabled,
+						"Controller toggles can always remove a saved incompatible request");
+					for (const auto mode : { ModeChoice::FullResolution, ModeChoice::Foveated }) {
+						require(upscaling.IsNeuralRenderingUpscalingAvailable(mode) ==
+									(mode == ModeChoice::FullResolution || method == Upscaling::UpscaleMethod::kDLSS),
+							"Full resolution supports ordinary upscaling; Foveated NR requires DLSS");
+					}
+					ImGui::Clear("Full resolution");
+					upscaling.DrawSelectionControls();
+					require(!ImGui::Disabled("Full resolution") && upscaling.GetNeuralRenderingMode() == ModeChoice::FullResolution,
+						"A saved incompatible reduced mode always permits Full resolution");
+					ImGui::Clear("Renderscale NR before DLSS");
+					upscaling.DrawSelectionControls();
+					require(ImGui::Disabled("Renderscale NR before DLSS") == !available &&
+								upscaling.GetNeuralRenderingMode() == (available ? ModeChoice::ReducedResolution : ModeChoice::FullResolution),
+						"The mode list must reject reduced NR with native AA, TAA, FSR or None");
+				}
+			}
+		}
+	}
+	globals::game::isVR = true;
+	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	upscaling.runtimeQualityMode = 0;
+	upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = false;
+	for (const auto mode : { ModeChoice::FullResolution, ModeChoice::Foveated }) {
+		upscaling.settings = {};
+		upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
+		upscaling.settings.neuralRenderingEnabled = true;
+		require(upscaling.IsNeuralRenderingRequested(), "Full resolution and Foveated must still run with DLAA and Render Scale off");
+		ImGui::Clear();
+		upscaling.DrawSelectionControls();
+		require(!ImGui::Disabled("Enabled") && !ImGui::Disabled("Foveated") && !ImGui::Seen("Turn off NR"),
+			"Full resolution and Foveated keep their normal master and mode controls");
+	}
+	upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = true;
+	upscaling.runtimeQualityMode = 3;
+	upscaling.settings = {};
+	upscaling.settings.neuralRenderingMode = 2;
+	for (const bool fov : { false, true }) {
+		upscaling.settings.neuralRenderingEnabled = true;
+		upscaling.settings.neuralRenderingRenderscaleFov = fov;
+		upscaling.settings.neuralCharacterFaceStrength = 0.42f;
+		for (const auto& [method, quality, scaled] : {
+				 std::tuple{ Upscaling::UpscaleMethod::kDLSS, 3u, true },
+				 std::tuple{ Upscaling::UpscaleMethod::kDLSS, 0u, false },
+				 std::tuple{ Upscaling::UpscaleMethod::kTAA, 0u, false },
+				 std::tuple{ Upscaling::UpscaleMethod::kNONE, 0u, false },
+				 std::tuple{ Upscaling::UpscaleMethod::kDLSS, 3u, false },
+				 std::tuple{ Upscaling::UpscaleMethod::kDLSS, 3u, true } }) {
+			upscaling.method = method;
+			upscaling.runtimeQualityMode = quality;
+			upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = scaled;
+			require(upscaling.IsNeuralRenderingRequested() == scaled,
+				"Externally loaded incompatible settings keep NR inactive until compatible scaled DLSS returns");
+			ImGui::Clear();
+			upscaling.DrawSelectionControls();
+			require(upscaling.settings.neuralRenderingEnabled && upscaling.settings.neuralRenderingMode == 2 &&
+						upscaling.settings.neuralRenderingRenderscaleFov == fov && upscaling.settings.neuralCharacterFaceStrength == 0.42f,
+				"Profile changes must preserve NR preferences and never switch to Full resolution");
+		}
+	}
+	upscaling.settings.neuralRenderingRenderscaleFov = false;
+	for (const auto& [method, quality, reason] : {
+			 std::tuple{ Upscaling::UpscaleMethod::kDLSS, 0u, "DLAA" },
+			 std::tuple{ Upscaling::UpscaleMethod::kFSR, 0u, "Native AA" },
+			 std::tuple{ Upscaling::UpscaleMethod::kFSR, 3u, "FSR" },
+			 std::tuple{ Upscaling::UpscaleMethod::kTAA, 0u, "TAA" },
+			 std::tuple{ Upscaling::UpscaleMethod::kNONE, 0u, "None" },
+			 std::tuple{ Upscaling::UpscaleMethod::kDLSS, 3u, "Render Scale off" } }) {
+		upscaling.method = method;
+		upscaling.runtimeQualityMode = quality;
+		upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = false;
+		ImGui::Clear();
+		upscaling.DrawSelectionControls();
+		require(ImGui::Seen(std::string("Renderscale NR paused: ") + reason + "."),
+			"The NR panel must name the setting that pauses NR");
+		upscaling.stabilizerSyncActive = true;
+		for (const bool interior : { false, true }) {
+			Util::interior = interior;
+			auto& profile = interior ? upscaling.stabilizerConfig.interior : upscaling.stabilizerConfig.exterior;
+			profile = { method, quality, false };
+			ImGui::Clear();
+			upscaling.DrawSelectionControls();
+			require(ImGui::Seen(std::string("Renderscale NR paused: VR FPS Stabilizer ") +
+								(interior ? "Interior" : "Exterior") + " profile, " + reason + "."),
+				"A matching active Stabilizer profile must be named with its incompatible setting");
+			profile.qualityMode = quality + 1;
+			ImGui::Clear();
+			upscaling.DrawSelectionControls();
+			require(ImGui::Seen(std::string("Renderscale NR paused: ") + reason + "."),
+				"Manual settings must not be blamed on a different Stabilizer profile");
+		}
+		upscaling.stabilizerSyncActive = false;
+	}
+	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	upscaling.runtimeQualityMode = 3;
+	upscaling.renderScaleRequested = upscaling.renderScaleLatched = true;
+	upscaling.renderScaleActive = false;
+	upscaling.runtimeMethod = Upscaling::UpscaleMethod::kNONE;
+	ImGui::Clear();
+	upscaling.DrawSelectionControls();
+	require(ImGui::Seen("Renderscale NR is waiting for scaling to become active."),
+		"Pending targets must not be mistaken for an incompatible configured profile");
+	upscaling.runtimeMethod.reset();
+	upscaling.renderScaleActive = true;
+	upscaling.stabilizerConfig.interior = { Upscaling::UpscaleMethod::kDLSS, 0u, false };
+	upscaling.stabilizerConfig.exterior = { Upscaling::UpscaleMethod::kDLSS, 3u, false };
+	ImGui::Clear();
+	DrawStabilizerNRWarnings(upscaling.stabilizerConfig, false);
+	require(ImGui::Seen("Interior profile is incompatible with Renderscale NR: DLAA.") &&
+				ImGui::Seen("Exterior profile is incompatible with Renderscale NR: Render Scale off.") &&
+				upscaling.stabilizerConfig.interior.qualityMode == 0 && !upscaling.stabilizerConfig.exterior.renderScaleMode,
+		"Stabilizer warnings must name both incompatible profiles without changing the user's selection");
+	for (const bool enabled : { false, true }) {
+		upscaling.settings.neuralRenderingEnabled = enabled;
+		for (const unsigned mode : { 0u, 1u, 2u }) {
+			upscaling.settings.neuralRenderingMode = mode;
+			for (const bool switching : { false, true }) {
+				upscaling.stabilizerConfig.upscalingSwitchingEnabled = switching;
+				for (const bool unconfigured : { false, true }) {
+					ImGui::Clear();
+					DrawStabilizerNRWarnings(upscaling.stabilizerConfig, unconfigured);
+					require(ImGui::Seen("Interior profile is incompatible with Renderscale NR: DLAA.") ==
+								(enabled && mode == 2 && switching && !unconfigured),
+						"Stabilizer warnings apply only to enabled Renderscale NR and active profile switching");
+				}
+			}
+		}
+	}
+	upscaling.stabilizerConfig = {};
+	upscaling.settings.foveatedVendorDispatch = false;
+	ImGui::Clear();
+	DrawStabilizerNRWarnings(upscaling.stabilizerConfig, false);
+	require(ImGui::items.empty(), "Compatible Stabilizer profiles must not show an incompatibility warning");
+	for (const bool enabled : { false, true }) {
+		upscaling.settings.neuralRenderingEnabled = enabled;
+		for (const unsigned mode : { 0u, 1u, 2u }) {
+			upscaling.settings.neuralRenderingMode = mode;
+			for (const auto method : { Upscaling::UpscaleMethod::kNONE, Upscaling::UpscaleMethod::kTAA,
+					 Upscaling::UpscaleMethod::kFSR, Upscaling::UpscaleMethod::kDLSS }) {
+				for (const unsigned quality : { 0u, 1u, 3u, 6u }) {
+					for (const bool renderScale : { false, true }) {
+						const bool compatible = mode == 0 ||
+						                        (method == Upscaling::UpscaleMethod::kDLSS && (mode == 1 || (quality != 0 && renderScale)));
+						require(upscaling.IsNeuralRenderingUpscalingProfileAllowed(method, quality, renderScale) == (!enabled || compatible),
+							"Enabled NR blocks incompatible profiles; disabled NR preserves all normal upscaling choices");
+					}
+				}
+			}
+			upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+			upscaling.runtimeQualityMode = 3;
+			upscaling.renderScaleRequested = true;
+			Upscaling::VRFpsStabilizerProfile profile{ Upscaling::UpscaleMethod::kDLSS, 3, true };
+			for (const char* method : { "None", "TAA", "AMD FSR", "NVIDIA DLSS" }) {
+				ImGui::Clear(method);
+				DrawVRFpsStabilizerUpscaleMethod(profile);
+				const bool blocked = enabled && mode != 0 && std::string_view(method) != "NVIDIA DLSS";
+				require(ImGui::Disabled(method) == blocked, "Stabilizer disables each incompatible method choice");
+				if (blocked)
+					require(profile.upscaleMethod == Upscaling::UpscaleMethod::kDLSS, "A disabled profile method cannot mutate the saved selection");
+				profile.upscaleMethod = Upscaling::UpscaleMethod::kDLSS;
+			}
+			ImGui::Clear("DLAA");
+			DrawVRFpsStabilizerUpscalePreset(profile);
+			require(ImGui::Disabled("DLAA") == (enabled && mode == 2) && profile.qualityMode == (enabled && mode == 2 ? 3u : 0u),
+				"Stabilizer forbids DLAA only while Renderscale NR is enabled");
+			profile.qualityMode = 3;
+			ImGui::Clear("Enable##RenderScale");
+			DrawVRFpsStabilizerRenderScale(profile);
+			require(ImGui::Disabled("Enable##RenderScale") == (enabled && mode == 2) && profile.renderScaleMode == (enabled && mode == 2),
+				"Stabilizer cannot turn Render Scale off while Renderscale NR is enabled");
+			ImGui::Clear("##DLSSProfile");
+			DrawVRFpsStabilizerDLSSProfile(profile);
+			require(!ImGui::Disabled("##DLSSProfile"), "Compatible DLSS appearance profiles remain editable");
+			struct MethodChoice
+			{
+				Upscaling::UpscaleMethod method;
+				const char* label;
+			};
+			const std::array choices{ MethodChoice{ Upscaling::UpscaleMethod::kNONE, "None" },
+				MethodChoice{ Upscaling::UpscaleMethod::kTAA, "TAA" }, MethodChoice{ Upscaling::UpscaleMethod::kFSR, "FSR" },
+				MethodChoice{ Upscaling::UpscaleMethod::kDLSS, "DLSS" } };
+			for (const auto& choice : choices) {
+				int selected = 3;
+				ImGui::Clear(choice.label);
+				DrawUpscalingMethodSelection("Method", selected, choices, upscaling);
+				const bool allowed = upscaling.IsNeuralRenderingUpscalingProfileAllowed(choice.method, 3, true);
+				require(ImGui::Disabled(choice.label) == !allowed && (allowed || selected == 3),
+					"Both upscaling views use the same disabled-choice policy without mutating rejected selections");
+			}
+		}
+	}
+	upscaling.method = Upscaling::UpscaleMethod::kFSR;
+	upscaling.runtimeQualityMode = 3;
+	for (const bool enabled : { false, true }) {
+		for (const bool upscalingFov : { false, true }) {
+			for (const bool nrFov : { false, true }) {
+				upscaling.settings = {};
+				upscaling.settings.neuralRenderingEnabled = enabled;
+				upscaling.settings.foveatedVendorDispatch = upscalingFov;
+				upscaling.settings.neuralRenderingFovOnly = nrFov;
+				require(upscaling.IsNeuralRenderingUpscalingAvailable() &&
+							upscaling.IsNeuralRenderingRequested() == (enabled && (!nrFov || upscalingFov)),
+					"FSR Full resolution NR supports optional configured FOV");
+				require(upscaling.IsNeuralRenderingUpscalingProfileAllowed(Upscaling::UpscaleMethod::kFSR, 3, true),
+					"FSR profiles retain Full resolution NR with either FOV setting");
+				for (const char* mode : { "Foveated", "Renderscale NR before DLSS" }) {
+					ImGui::Clear(mode);
+					upscaling.DrawSelectionControls();
+					require(ImGui::Disabled(mode) && upscaling.settings.neuralRenderingMode == 0,
+						"FSR cannot select Foveated or Renderscale NR");
+				}
+			}
+		}
+	}
+	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	upscaling.fidelityFX.nvidia = false;
+	for (const unsigned mode : { 0u, 1u, 2u }) {
+		upscaling.settings = {};
+		upscaling.settings.neuralRenderingMode = mode;
+		upscaling.settings.neuralRenderingEnabled = true;
+		upscaling.settings.periphery_taa_enable = true;
+		for (const bool essentials : { false, true }) {
+			ImGui::Clear("Intensity");
+			upscaling.DrawSelectionControls(essentials);
+			for (const char* label : { "Enabled", "Rendering mode", "Preset", "Intensity", "Actors only" })
+				require(ImGui::Disabled(label), "Unsupported rendering GPUs grey out all NR controls in both views");
+			require(!upscaling.IsNeuralRenderingRequested() && !upscaling.IsNeuralRenderingRenderScaleRequired() &&
+						upscaling.settings.neuralRenderingEnabled && upscaling.settings.periphery_taa_enable,
+				"Unsupported hardware preserves saved NR and ordinary FOV preferences without dispatching or locking upscaling");
+			require(ImGui::Seen(NeuralRendering::Runtime::kUnsupportedHardwareNotice) && ImGui::disableDepth == 0,
+				"The hardware requirement is explained and UI scopes remain balanced");
+		}
+		upscaling.settings.neuralRenderingEnabled = false;
+		std::string error;
+		require(!upscaling.ToggleNeuralRendering(&error) && error == NeuralRendering::Runtime::kUnsupportedHardwareNotice,
+			"Bindings reject activation on unsupported rendering GPUs");
+	}
+	upscaling.fidelityFX.nvidia = true;
+	upscaling.settings = {};
 	upscaling.settings.neuralRenderingMode = 2;
 	renderer.snapshot = {};
 	NeuralRendering::runtimeInstalled = false;

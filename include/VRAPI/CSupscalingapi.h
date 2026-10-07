@@ -198,6 +198,7 @@ namespace CSX::UpscalingAPI
 		kSnapshotRenderScaleLatched = 1ull << 4,
 		kSnapshotRenderScaleActive = 1ull << 5,
 		kSnapshotPersistedStateKnown = 1ull << 6,
+		/** Enabled Renderscale NR requires compatible scaled DLSS profiles. */
 		kSnapshotNeuralRenderScaleRequired = 1ull << 7
 	};
 
@@ -228,6 +229,7 @@ namespace CSX::UpscalingAPI
 		kConditionRestartRequired = 1ull << 10,
 		kConditionPersistenceUnavailable = 1ull << 11,
 		kConditionResourceRecovery = 1ull << 12,
+		/** The target is incompatible with the enabled NR route. */
 		kConditionNeuralRenderScaleRequired = 1ull << 13
 	};
 

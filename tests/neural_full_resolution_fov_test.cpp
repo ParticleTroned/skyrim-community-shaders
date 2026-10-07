@@ -17,6 +17,14 @@ namespace globals::game
 }
 bool NeuralRendering::Runtime::IsInstalled() noexcept { return true; }
 
+namespace globals::features
+{
+	struct AdapterFixture
+	{
+		bool IsNeuralRenderingHardwareSupported() const noexcept { return true; }
+	} upscaling;
+}
+
 struct Upscaling
 {
 	enum class UpscaleMethod

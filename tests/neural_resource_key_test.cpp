@@ -14,14 +14,22 @@ namespace globals::game
 bool providerInstalled = true;
 bool NeuralRendering::Runtime::IsInstalled() noexcept { return providerInstalled; }
 
+namespace globals::features
+{
+	struct AdapterFixture
+	{
+		bool IsNeuralRenderingHardwareSupported() const noexcept { return true; }
+	} upscaling;
+}
+
 struct Upscaling
 {
 	enum class UpscaleMethod
 	{
 		kNONE,
 		kTAA,
-		kDLSS,
-		kFSR
+		kFSR,
+		kDLSS
 	};
 	enum class DLSSSharpenerMode
 	{
@@ -47,6 +55,7 @@ struct Upscaling
 	struct FidelityFXFixture
 	{
 		bool runtime = false, failed = false, fsr4 = false, fsr4Failed = false;
+		bool IsNvidiaAdapterDetected() const { return true; }
 		bool IsRuntimeUpscalerFailureLatched() const { return failed; }
 		bool ShouldUseRuntimeUpscalerForFSR() const { return runtime; }
 		bool IsRuntimeFsr4FailureLatched() const { return fsr4Failed; }
@@ -63,19 +72,41 @@ struct Upscaling
 		return requested;
 	}
 	bool IsVRRenderScaleModeLatched() const { return latched; }
+	bool GetVRRenderScaleModePreference() const { return requested; }
 	bool IsVRRenderScaleModeActive() const { return active; }
 	bool IsNeuralRenderingFovConfigurationAvailable() const { return settings.foveatedVendorDispatch && settings.foveatedCenterArea < 0.999f; }
 	auto GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
 	static uint32_t ClampDLSSPresetUInt(uint32_t value) { return std::min(value, 5u); }
 	static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
+	bool IsNeuralRenderingEnabled() const noexcept { return neuralRenderingFeatureAvailable && IsNeuralRenderingEnabled(settings); }
+	bool IsNeuralRenderingUpscalingProfileAllowed(UpscaleMethod, uint32_t, bool) const noexcept;
+
 	bool IsNeuralRenderingRenderScaleRequired() const noexcept;
-	bool IsNeuralRenderingRenderScaleAvailable() const noexcept;
+	const char* GetNeuralRenderingUpscalingProfileBlocker(NeuralRendering::RenderingMode, UpscaleMethod, uint32_t, bool) const noexcept;
+	bool IsNeuralRenderingUpscalingAvailable(NeuralRendering::RenderingMode) const noexcept;
+	UpscaleMethod GetUpscaleMethod() const { return UpscaleMethod::kDLSS; }
+	uint32_t GetEffectiveUpscalingQualityMode() const { return 3; }
+	UpscaleMethod GetRuntimeUpscaleMethod() const { return UpscaleMethod::kDLSS; }
+	uint32_t GetRuntimeQualityMode() const { return 3; }
+	struct DesiredProfile
+	{
+		UpscaleMethod method = UpscaleMethod::kDLSS;
+		uint32_t qualityMode = 3;
+		bool renderScaleModeEnabled;
+	};
+	DesiredProfile GetPendingVRRenderScaleDesiredProfile() const
+	{
+		++liveRequestReads;
+		return { UpscaleMethod::kDLSS, 3, requested };
+	}
+	bool IsNeuralRenderingUpscalingAvailable() const noexcept;
 	bool IsNeuralRenderingRequested() const noexcept;
 	bool IsFoveatedVendorDispatchEnabled(UpscaleMethod) const;
 	bool IsPeripheryTAAEnabled(UpscaleMethod) const;
 	VRRenderScaleResourceKey BuildVRRenderScaleResourceKey(const VRRenderScaleProfileSnapshot&) const;
 };
 
+bool IsRenderScaleQualityMode(uint32_t quality) { return quality != 0; }
 float ClampFoveatedCenterScale(float value) { return FoveatedCommon::ClampCenterScale(value); }
 float ClampFoveatedCenterHorizontalScale(float value) { return FoveatedCommon::ClampCenterHorizontalScale(value); }
 float ClampFoveatedMaskOffsetAdjustment(float value) { return value; }

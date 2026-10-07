@@ -81,6 +81,14 @@ namespace Util
 		void WrappedWarning(const char* text) { warning = text; }
 	}
 }
+namespace globals::features
+{
+	struct AdapterFixture
+	{
+		bool IsNeuralRenderingHardwareSupported() const noexcept { return true; }
+	} upscaling;
+}
+
 struct Upscaling
 {
 	enum class UpscaleMethod

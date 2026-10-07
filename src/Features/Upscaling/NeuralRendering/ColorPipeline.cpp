@@ -60,7 +60,7 @@ namespace NeuralRendering::Color
 				settings.lightingPreservation, {} };
 		}
 		bool CreateTexture(ID3D11Device* device, Texture& texture,
-			std::uint32_t width, std::uint32_t height, DXGI_FORMAT format, bool output)
+			std::uint32_t width, std::uint32_t height, DXGI_FORMAT format, bool output, HRESULT& result)
 		{
 			D3D11_TEXTURE2D_DESC desc{};
 			desc.Width = width;
@@ -71,9 +71,11 @@ namespace NeuralRendering::Color
 			desc.SampleDesc.Count = 1;
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (output ? D3D11_BIND_UNORDERED_ACCESS : 0u);
-			const bool created = SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture.resource)) &&
-			                     SUCCEEDED(device->CreateShaderResourceView(texture.resource.Get(), nullptr, &texture.srv)) &&
-			                     (!output || SUCCEEDED(device->CreateUnorderedAccessView(texture.resource.Get(), nullptr, &texture.uav)));
+			result = device->CreateTexture2D(&desc, nullptr, &texture.resource);
+			if (SUCCEEDED(result))
+				result = device->CreateShaderResourceView(texture.resource.Get(), nullptr, &texture.srv);
+			if (SUCCEEDED(result) && output)
+				result = device->CreateUnorderedAccessView(texture.resource.Get(), nullptr, &texture.uav);
 			const char* name = output ? "NeuralRendering::ColourReconstruction" : "NeuralRendering::ColourBaseline";
 			if (texture.resource)
 				Util::SetResourceName(texture.resource.Get(), "%s", name);
@@ -81,7 +83,7 @@ namespace NeuralRendering::Color
 				Util::SetResourceName(texture.srv.Get(), "%s SRV", name);
 			if (texture.uav)
 				Util::SetResourceName(texture.uav.Get(), "%s UAV", name);
-			return created;
+			return SUCCEEDED(result);
 		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool CreateReadback(ID3D11Device* device, Readback& readback)
@@ -262,8 +264,9 @@ namespace NeuralRendering::Color
 		prepared = false;
 		for (auto& readback : readbacks) readback.Abandon();
 	}
-	bool Pipeline::EnsureShaders(ID3D11Device* device, bool diagnostics)
+	bool Pipeline::EnsureShaders(ID3D11Device* device, bool diagnostics, HRESULT& result)
 	{
+		result = E_FAIL;
 		if (compileFailed_)
 			return false;
 		if (!prepare_)
@@ -280,7 +283,7 @@ namespace NeuralRendering::Color
 			desc.ByteWidth = sizeof(Constants);
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-			if (FAILED(device->CreateBuffer(&desc, nullptr, &constants_)))
+			if (FAILED(result = device->CreateBuffer(&desc, nullptr, &constants_)))
 				return false;
 			Util::SetResourceName(constants_.Get(), "NeuralRendering::ColourConstants");
 		}
@@ -293,13 +296,29 @@ namespace NeuralRendering::Color
 				measure_.Reset();
 			}
 		}
+		result = S_OK;
 		return true;
 	}
-	bool Pipeline::Ensure(ID3D11Device* device, Work& work, const ComputeSubrect& roi, DXGI_FORMAT format, bool diagnostics)
+	bool Work::Fits(const ComputeSubrect& roi, DXGI_FORMAT requestedFormat) const noexcept
 	{
+		return baseline.resource && result.resource && capacityWidth >= roi.width &&
+		       capacityHeight >= roi.height && format == requestedFormat;
+	}
+
+	std::array<std::uint32_t, 2> Work::AllocationExtent(const ComputeSubrect& roi) noexcept
+	{
+		return { (roi.width + 63u) & ~63u, (roi.height + 63u) & ~63u };
+	}
+
+	bool Pipeline::Ensure(ID3D11Device* device, Work& work, const ComputeSubrect& roi, DXGI_FORMAT format, bool diagnostics, HRESULT& allocationResult)
+	{
+		allocationResult = E_INVALIDARG;
 		if (!device || !roi.IsValid() || roi.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
-			roi.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || !EnsureShaders(device, diagnostics))
+			roi.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
 			return false;
+		if (!EnsureShaders(device, diagnostics, allocationResult))
+			return false;
+		allocationResult = E_INVALIDARG;
 		switch (format) {
 		case DXGI_FORMAT_R11G11B10_FLOAT:
 		case DXGI_FORMAT_R16G16B16A16_FLOAT:
@@ -312,13 +331,17 @@ namespace NeuralRendering::Color
 			return false;
 		}
 		UINT support = 0;
-		if (FAILED(device->CheckFormatSupport(format, &support)) || (support & D3D11_FORMAT_SUPPORT_SHADER_LOAD) == 0 ||
-			(support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) == 0)
+		if (FAILED(allocationResult = device->CheckFormatSupport(format, &support)))
 			return false;
-		if (!work.baseline.resource || work.capacityWidth < roi.width || work.capacityHeight < roi.height || work.format != format) {
+		if ((support & D3D11_FORMAT_SUPPORT_SHADER_LOAD) == 0 ||
+			(support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW) == 0) {
+			allocationResult = E_NOINTERFACE;
+			return false;
+		}
+		if (!work.Fits(roi, format)) {
 			Texture baseline, result;
-			const auto width = (roi.width + 63u) & ~63u, height = (roi.height + 63u) & ~63u;
-			if (!CreateTexture(device, baseline, width, height, format, false) || !CreateTexture(device, result, width, height, format, true))
+			const auto [width, height] = Work::AllocationExtent(roi);
+			if (!CreateTexture(device, baseline, width, height, format, false, allocationResult) || !CreateTexture(device, result, width, height, format, true, allocationResult))
 				return false;
 			work.baseline = std::move(baseline);
 			work.result = std::move(result);
@@ -339,6 +362,7 @@ namespace NeuralRendering::Color
 			}
 		}
 #endif
+		allocationResult = S_OK;
 		return true;
 	}
 	void Pipeline::Poll(ID3D11DeviceContext* context, Work& work)

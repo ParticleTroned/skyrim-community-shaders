@@ -104,6 +104,10 @@ namespace NeuralRendering::Color
 		bool readbackAttempted = false, prepared = false;
 		Configuration configuration{};
 		Observation observation{};
+		/** Whether both retained colour buffers can serve this input. */
+		[[nodiscard]] bool Fits(const ComputeSubrect&, DXGI_FORMAT) const noexcept;
+		/** Allocation dimensions for a validated input rectangle. */
+		[[nodiscard]] static std::array<std::uint32_t, 2> AllocationExtent(const ComputeSubrect&) noexcept;
 		void Abandon() noexcept;
 	};
 	class Pipeline
@@ -113,7 +117,8 @@ namespace NeuralRendering::Color
 		void Poll(ID3D11DeviceContext*, Work&);
 		/** Monotonic identity survives resource resets; zero means exhausted diagnostics. */
 		std::uint64_t BeginMeasurementBatch() noexcept;
-		bool Ensure(ID3D11Device*, Work&, const ComputeSubrect&, DXGI_FORMAT, bool diagnostics);
+		/** Preserves allocation HRESULTs so healthy-device memory failures can recover. */
+		bool Ensure(ID3D11Device*, Work&, const ComputeSubrect&, DXGI_FORMAT, bool diagnostics, HRESULT& result);
 		bool Prepare(ID3D11DeviceContext*, Work&, ID3D11Resource* original,
 			ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV,
 			const Configuration&, Observation);
@@ -124,7 +129,7 @@ namespace NeuralRendering::Color
 		void Abandon() noexcept;
 
 	private:
-		bool EnsureShaders(ID3D11Device*, bool diagnostics);
+		bool EnsureShaders(ID3D11Device*, bool diagnostics, HRESULT& result);
 		void Measure(ID3D11DeviceContext*, Work&, ID3D11ShaderResourceView* neural, ID3D11ShaderResourceView* prepared);
 		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, measure_;
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;

@@ -24,6 +24,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <dxgi1_4.h>
 #include <format>
 #include <limits>
 #include <mutex>
@@ -674,9 +675,22 @@ namespace NeuralRendering
 			RendererApplyOutcome& a_outcome);
 		bool ApplyBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
-			RendererApplyOutcome& a_outcome);
-		bool ApplyRegionBatchLocked(std::span<const RendererApplyArgs> a_args, RendererApplyOutcome& a_outcome);
+			RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
+		bool ApplyRegionBatchLocked(std::span<const RendererApplyArgs> a_args, RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
 		bool ResetLocked(bool a_resetShader, bool a_destruction);
+		bool RetireMemoryPressureLocked();
+		void FinishMemoryRecoveryLocked(bool a_succeeded, RendererApplyOutcome& a_outcome);
+		std::optional<std::uint64_t> EstimateAdditionalMemoryLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>) const;
+		MemoryBudgetSample SampleMemoryBudgetLocked(ID3D11Device*, std::uint64_t a_nowMs, bool a_force);
+		bool AdmitMemoryLocked(std::span<const RendererApplyArgs> a_args, std::span<const ValidatedResources> a_resources);
+		MemoryRecoveryPolicy memoryRecovery_{};
+		MemoryBudgetSample memorySample_{};
+		ComPtr<ID3D11Device> memorySampleDevice_;
+		ComPtr<IDXGIAdapter3> memoryAdapter_;
+		std::uint64_t nextMemorySampleMs_ = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::uint64_t simulatedPressureUntilMs_ = 0;
+#endif
 		void ShutdownForDestruction() noexcept;
 
 		RendererSnapshot SnapshotLocked()
@@ -1528,6 +1542,12 @@ namespace NeuralRendering
 			failureLatched_ = true;
 			if (enteringQuarantine)
 				AbandonRuntimeOwnershipNoexcept();
+		} else if (a_countApplyFailure &&
+				   ((a_stage == RendererStage::ResourceCreation && a_result == E_OUTOFMEMORY) ||
+					   (a_stage == RendererStage::FeatureEvaluate && Runtime::Instance().CreationCapacityFailure() == CapacityFailure::Pressure))) {
+			memoryRecovery_.Suspend(GetTickCount64(), true);
+			snapshot_.memoryRecovery = memoryRecovery_;
+			logger::warn("[DLSSNR][Memory] Recoverable allocation failure; retiring NR before automatic retry");
 		} else if (a_latch) {
 			failureLatched_ = true;
 		}
@@ -1897,6 +1917,134 @@ namespace NeuralRendering
 		return true;
 	}
 
+	bool Renderer::State::RetireMemoryPressureLocked()
+	{
+		if (memoryRecovery_.phase != MemoryRecoveryPhase::Retiring)
+			return true;
+		if (failureLatched_ || quarantined_ || !TeardownBackendLocked(false, false, false)) {
+			snapshot_.memoryRecovery = memoryRecovery_;
+			return false;
+		}
+		memoryRecovery_.Retired();
+		snapshot_.memoryRecovery = memoryRecovery_;
+		nextMemorySampleMs_ = 0;
+		return true;
+	}
+
+	void Renderer::State::FinishMemoryRecoveryLocked(bool a_succeeded, RendererApplyOutcome& a_outcome)
+	{
+		if (a_succeeded)
+			memoryRecovery_.Succeeded(GetTickCount64());
+		else if (!RetireMemoryPressureLocked())
+			a_outcome.memoryPressureBypass = false;
+		snapshot_.memoryRecovery = memoryRecovery_;
+	}
+
+	std::optional<std::uint64_t> Renderer::State::EstimateAdditionalMemoryLocked(
+		std::span<const RendererApplyArgs> a_args, std::span<const ValidatedResources> a_resources) const
+	{
+		const bool replacingBackend = device_ && (!SameIdentity(device_.Get(), a_args.front().device) ||
+													 !SameIdentity(context_.Get(), a_args.front().context));
+		std::uint64_t additionalBytes = 0;
+		const auto append = [&](DXGI_FORMAT format, UpscalingDLSS::Extent extent) {
+			const auto bytes = LogicalTextureBytes(format, extent.width, extent.height);
+			if (!bytes)
+				return false;
+			additionalBytes += *bytes;
+			return true;
+		};
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			const auto& resource = a_resources[index];
+			const auto& slot = slots_[a_args[index].featureSlot];
+			const bool replacing = replacingBackend || !slot.resourcesValid || slot.resourceKey != resource.resourceKey;
+			if (replacing) {
+				const auto& layout = resource.nativeLayout;
+				additionalBytes += MemoryRecoveryPolicy::kNativeFeatureReserve;
+				if (!append(resource.resourceKey.colorFormat, layout.color.backing) ||
+					!append(DXGI_FORMAT_R32_FLOAT, layout.depth.backing) ||
+					!append(resource.resourceKey.motionFormat, layout.motion.backing) ||
+					!append(resource.resourceKey.outputFormat, layout.output.backing) ||
+					(resource.resourceKey.controlMaskPresent && !append(resource.resourceKey.controlMaskFormat, layout.controlMask.backing)))
+					return std::nullopt;
+			}
+			const auto& roi = resource.roi.inferenceContext;
+			if (colorConfiguration_.Enabled() && (replacing || !slot.colorWork.Fits(roi, resource.output.desc.Format))) {
+				const auto [width, height] = Color::Work::AllocationExtent(roi);
+				if (!append(resource.output.desc.Format, { width, height }) || !append(resource.output.desc.Format, { width, height }))
+					return std::nullopt;
+			}
+		}
+		return additionalBytes;
+	}
+
+	MemoryBudgetSample Renderer::State::SampleMemoryBudgetLocked(ID3D11Device* a_device, std::uint64_t a_nowMs, bool a_force)
+	{
+		if (memorySampleDevice_.Get() != a_device) {
+			memorySampleDevice_ = a_device;
+			memoryAdapter_.Reset();
+			memorySample_ = {};
+			nextMemorySampleMs_ = 0;
+			memoryRecovery_.ClearHealthyWindow();
+		}
+		if (a_nowMs >= nextMemorySampleMs_ || a_force) {
+			HRESULT result = S_OK;
+			if (!memoryAdapter_) {
+				ComPtr<IDXGIDevice> dxgiDevice;
+				ComPtr<IDXGIAdapter> adapter;
+				result = a_device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+				if (SUCCEEDED(result))
+					result = dxgiDevice->GetAdapter(&adapter);
+				if (SUCCEEDED(result))
+					result = adapter.As(&memoryAdapter_);
+			}
+			DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+			if (SUCCEEDED(result))
+				result = memoryAdapter_->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
+			memorySample_ = { info.Budget, info.CurrentUsage, SUCCEEDED(result) && info.Budget != 0, result, false, a_nowMs };
+			nextMemorySampleMs_ = a_nowMs + MemoryRecoveryPolicy::kSampleIntervalMs;
+		}
+		auto sample = memorySample_;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_nowMs < simulatedPressureUntilMs_)
+			sample = { 16 * 1024 * MemoryRecoveryPolicy::kMiB, 16 * 1024 * MemoryRecoveryPolicy::kMiB, true, S_OK, true, a_nowMs };
+#endif
+		return sample;
+	}
+
+	bool Renderer::State::AdmitMemoryLocked(
+		std::span<const RendererApplyArgs> a_args,
+		std::span<const ValidatedResources> a_resources)
+	{
+		const auto& first = a_args.front();
+		SetRequestTelemetryLocked(first);
+		if (const HRESULT reason = first.device->GetDeviceRemovedReason(); FAILED(reason))
+			return FailLocked(RendererStage::DeviceRemoved, reason, "NR memory admission found a lost D3D11 device", first.featureSlot, true);
+		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason))
+			return FailLocked(RendererStage::DeviceRemoved, reason, "NR memory admission found device loss", first.featureSlot, true);
+		const auto additionalBytes = EstimateAdditionalMemoryLocked(a_args, a_resources);
+		if (!additionalBytes)
+			return FailLocked(RendererStage::Validation, E_INVALIDARG, "NR allocation size could not be established", first.featureSlot, false);
+		const auto nowMs = GetTickCount64();
+		const auto sample = SampleMemoryBudgetLocked(first.device, nowMs,
+			*additionalBytes && memoryRecovery_.phase != MemoryRecoveryPhase::Waiting);
+		const auto previous = memoryRecovery_.phase;
+		const bool admitted = memoryRecovery_.Admit(sample, *additionalBytes, nowMs);
+		if (memoryRecovery_.phase == MemoryRecoveryPhase::Retiring) {
+			if (previous != MemoryRecoveryPhase::Retiring)
+				logger::warn("[DLSSNR][Memory] Temporarily using the baseline while retiring NR under memory pressure");
+			if (!RetireMemoryPressureLocked())
+				return false;
+		}
+		if (!admitted) {
+			++memoryRecovery_.bypasses;
+			snapshot_.outputCommitted = false;
+		} else if (previous == MemoryRecoveryPhase::Waiting) {
+			logger::info("[DLSSNR][Memory] Headroom recovered; rebuilding NR with fresh temporal history");
+		}
+		snapshot_.memoryRecovery = memoryRecovery_;
+		return admitted;
+	}
+
 	bool Renderer::State::EnsureSlotLocked(
 		std::uint32_t a_slot,
 		const ValidatedResources& a_resources,
@@ -2224,6 +2372,11 @@ namespace NeuralRendering
 				return ApplyBatchLocked(a_args, a_outcome);
 		}
 
+		if (!AdmitMemoryLocked(a_args, resources)) {
+			a_outcome.memoryPressureBypass = !failureLatched_ && !quarantined_ && memoryRecovery_.phase != MemoryRecoveryPhase::Ready;
+			return false;
+		}
+
 		bool synchronizeForcedReset =
 			a_args[0].synchronizedHistoryReset ||
 			!runtimeReady_ || !interop_.IsInitialized();
@@ -2264,8 +2417,9 @@ namespace NeuralRendering
 				synchronizeDiscontinuousReset;
 		}
 
+		// Only this validated pair may reuse admission; fallback allocations recheck it.
 		RendererApplyOutcome leftOutcome{};
-		if (!ApplyBatchLocked(std::span(&synchronizedArgs[0], 1), leftOutcome)) {
+		if (!ApplyBatchLocked(std::span(&synchronizedArgs[0], 1), leftOutcome, true)) {
 			a_outcome = leftOutcome;
 			return false;
 		}
@@ -2275,7 +2429,7 @@ namespace NeuralRendering
 			leftOutcome.evaluationSucceededFeatureSlotMask;
 		RendererApplyOutcome rightOutcome{};
 		const bool rightSucceeded = ApplyBatchLocked(
-			std::span(&synchronizedArgs[1], 1), rightOutcome);
+			std::span(&synchronizedArgs[1], 1), rightOutcome, true);
 		a_outcome.evaluationAttemptedFeatureSlotMask |=
 			rightOutcome.evaluationAttemptedFeatureSlotMask;
 		a_outcome.evaluationSucceededFeatureSlotMask |=
@@ -2299,7 +2453,7 @@ namespace NeuralRendering
 #endif
 
 	bool Renderer::State::ApplyBatchLocked(
-		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome)
+		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome, bool a_memoryAdmitted)
 	{
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		requestedRegionCount_ = static_cast<std::uint32_t>(args.size());
@@ -2314,21 +2468,22 @@ namespace NeuralRendering
 			outcome.evaluationAttemptedFeatureSlotMask |= attempted;
 			return success;
 		};
-		return capacityFallback_.ApplyBatch(colorConfiguration_.experiments.CompactInputsEnabled(), [&] { return ApplyRegionBatchLocked(args, outcome); }, [&] {
-				if (quarantined_ || FAILED(GetDeviceRemovalReasonLocked(S_OK)))
+		return capacityFallback_.ApplyBatch(colorConfiguration_.experiments.CompactInputsEnabled(), [&] { return ApplyRegionBatchLocked(args, outcome, a_memoryAdmitted); }, [&] {
+				if (memoryRecovery_.phase == MemoryRecoveryPhase::Retiring || memoryRecovery_.phase == MemoryRecoveryPhase::Waiting ||
+					quarantined_ || FAILED(GetDeviceRemovalReasonLocked(S_OK)))
 					return CapacityFailure::Unsafe;
 				if (snapshot_.failureStage == RendererStage::ResourceCreation && snapshot_.lastResult == E_OUTOFMEMORY)
 					return CapacityFailure::Pressure;
 				return snapshot_.failureStage == RendererStage::FeatureEvaluate ?
 					Runtime::Instance().CreationCapacityFailure() : CapacityFailure::Unsafe; }, [&] { return TeardownBackendLocked(false, false, false); }, fallback);
 #else
-		return ApplyRegionBatchLocked(args, outcome);
+		return ApplyRegionBatchLocked(args, outcome, a_memoryAdmitted);
 #endif
 	}
 
 	bool Renderer::State::ApplyRegionBatchLocked(
 		std::span<const RendererApplyArgs> a_args,
-		RendererApplyOutcome& a_outcome)
+		RendererApplyOutcome& a_outcome, bool a_memoryAdmitted)
 	{
 		a_outcome = {};
 		if (a_args.empty() || a_args.size() > kEyeCount)
@@ -2424,6 +2579,10 @@ namespace NeuralRendering
 			resources[index].historyKey.regionIdentity = 0;
 		}
 		snapshot_.lastCompletedStage = RendererStage::Validation;
+		if (!a_memoryAdmitted && !AdmitMemoryLocked(a_args, std::span(resources.data(), a_args.size()))) {
+			a_outcome.memoryPressureBypass = !failureLatched_ && !quarantined_ && memoryRecovery_.phase != MemoryRecoveryPhase::Ready;
+			return false;
+		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		LifetimeGuard lifetime(*this, LifetimeOperation::Batch);
@@ -2573,9 +2732,10 @@ namespace NeuralRendering
 					return FailLocked(RendererStage::Validation, E_INVALIDARG,
 						"NR encoding/proxy experiment requires floating-point processing resources", a_args[index].featureSlot, false);
 				const auto oldBaseline = slots[index]->colorWork.baseline.resource.Get();
+				HRESULT colorResult = S_OK;
 				const bool colorReady = colorPipeline_.Ensure(a_args[index].device, slots[index]->colorWork,
 					resources[index].roi.inferenceContext, resources[index].output.desc.Format,
-					colorConfiguration_.experiments.diagnostics);
+					colorConfiguration_.experiments.diagnostics, colorResult);
 				if (execution)
 					execution->Update([&](auto& evidence) {
 						auto& region = evidence.regions[index];
@@ -2590,7 +2750,7 @@ namespace NeuralRendering
 						}
 					});
 				if (!colorReady) {
-					return FailLocked(RendererStage::ResourceCreation, E_FAIL,
+					return FailLocked(RendererStage::ResourceCreation, colorResult,
 						"shared NR colour shaders/resources are unavailable", a_args[index].featureSlot, true);
 				}
 			}
@@ -3196,6 +3356,15 @@ namespace NeuralRendering
 	{
 		if (!TeardownBackendLocked(a_resetShader, a_destruction, false))
 			return false;
+		memoryRecovery_ = {};
+		snapshot_.memoryRecovery = {};
+		memorySample_ = {};
+		memorySampleDevice_.Reset();
+		memoryAdapter_.Reset();
+		nextMemorySampleMs_ = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		simulatedPressureUntilMs_ = 0;
+#endif
 		return true;
 	}
 
@@ -3248,6 +3417,7 @@ namespace NeuralRendering
 			state_->CaptureColorConfiguration(a_args);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRendering", state_->wholePass_);
 			const bool succeeded = state_->ApplyLocked(a_args, outcome);
+			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
@@ -3282,9 +3452,9 @@ namespace NeuralRendering
 			state_->CaptureColorConfiguration(a_args[0]);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingStereo", state_->wholePass_);
 			const bool succeeded = state_->ApplyStereoLocked(a_args, outcome);
-			Increment(
-				succeeded ? state_->snapshot_.counters.stereoSuccesses :
-							state_->snapshot_.counters.stereoFailures);
+			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
+			if (!outcome.memoryPressureBypass)
+				Increment(succeeded ? state_->snapshot_.counters.stereoSuccesses : state_->snapshot_.counters.stereoFailures);
 			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
@@ -3320,6 +3490,7 @@ namespace NeuralRendering
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingSequentialStereo", state_->wholePass_);
 			const bool succeeded =
 				state_->ApplySequentialStereoLocked(a_args, outcome);
+			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			state_->FinishCapture(outcome);
 			if (a_outcome)
 				*a_outcome = outcome;
@@ -3514,7 +3685,20 @@ namespace NeuralRendering
 		std::scoped_lock lock(state_->mutex_);
 		return state_->lifetimeDiagnostics_.Snapshot();
 	}
+
+	bool Renderer::SimulateMemoryPressure(std::uint32_t a_durationMilliseconds)
+	{
+		if (a_durationMilliseconds > kMaximumMemorySimulationMilliseconds)
+			return false;
+		std::scoped_lock lock(state_->mutex_);
+		if (a_durationMilliseconds && (state_->quarantined_ || state_->failureLatched_))
+			return false;
+		state_->simulatedPressureUntilMs_ = a_durationMilliseconds ? GetTickCount64() + a_durationMilliseconds : 0;
+		state_->nextMemorySampleMs_ = 0;
+		return true;
+	}
 #endif
+
 	bool Renderer::IsFailureLatched() const
 	{
 		std::scoped_lock lock(state_->mutex_);

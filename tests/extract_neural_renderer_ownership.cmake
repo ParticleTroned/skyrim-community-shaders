@@ -25,5 +25,19 @@ foreach(action IN ITEMS nr_configure nr_cycle_modes nr_reset foveation_configure
     endif()
 endforeach()
 
+# Recovery status is read-only; pressure injection requires renderer ownership.
+string(FIND "${source}" "if (action == \"nr_memory_recovery\") {" recovery_start)
+string(FIND "${source}" "if (action == \"nr_reset\") {" recovery_end)
+if(recovery_start LESS 0 OR recovery_end LESS recovery_start)
+    message(FATAL_ERROR "Missing memory recovery handler")
+endif()
+math(EXPR recovery_length "${recovery_end} - ${recovery_start}")
+string(SUBSTRING "${source}" ${recovery_start} ${recovery_length} recovery_handler)
+string(FIND "${recovery_handler}" "return RunWithRendererOwnership([durationMs" ownership_start)
+string(FIND "${recovery_handler}" "SimulateMemoryPressure(durationMs)" mutation_start)
+if(ownership_start LESS 0 OR mutation_start LESS ownership_start)
+    message(FATAL_ERROR "Memory pressure injection bypasses renderer ownership")
+endif()
+
 # Only the supported NR tools may be registered.
 file(READ "${PROJECT_ROOT}/src/Features/NeuralRenderingFeature.cpp" feature_source)

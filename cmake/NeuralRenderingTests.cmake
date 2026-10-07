@@ -1,3 +1,8 @@
+add_controller_test(neural_memory_recovery_test NeuralMemoryRecovery tests/neural_memory_recovery_test.cpp)
+add_test(NAME NeuralMemoryRecoveryContract COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_memory_recovery_contract_test.py")
+set_tests_properties(NeuralMemoryRecoveryContract PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
+
 include(NeuralRenderingCaptureTests)
 foreach(_bridge IN ITEMS on off)
     add_controller_test(neural_production_policy_${_bridge}_test NeuralProductionPolicy_${_bridge}

@@ -875,8 +875,8 @@ string(JSON
     inputSchema
     allOf
 )
-if(NOT _descriptor_all_of_length EQUAL 5)
-    message(FATAL_ERROR "DevBench schema must retain NR and foveation conditional contracts")
+if(NOT _descriptor_all_of_length EQUAL 7)
+    message(FATAL_ERROR "DevBench schema must retain NR, memory recovery and foveation conditional contracts")
 endif()
 string(JSON
     _descriptor_cycle_required

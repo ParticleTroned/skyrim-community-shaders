@@ -18383,6 +18383,9 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Turns off your saved NR choice so it stays off when compatible upscaling is available.");
 	}
+	if (settings.neuralRenderingEnabled && runtimeInstalled && renderScaleAvailable &&
+		!status.failureLatched && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready)
+		ImGui::TextWrapped("Neural Rendering is temporarily paused while GPU memory recovers. It will resume automatically; your settings are retained.");
 	if (status.quarantined) {
 		Util::Text::WrappedError("Neural Rendering cannot be re-enabled safely in this session. Restart the game to try again.");
 	} else if (status.failureLatched) {

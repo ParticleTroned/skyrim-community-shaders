@@ -2,6 +2,7 @@
 
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
+#include "MemoryRecoveryPolicy.h"
 #include "RoiDescriptor.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "LifetimeDiagnostics.h"
@@ -179,6 +180,7 @@ namespace NeuralRendering
 		bool useAutoMask = true;
 		RendererCounters counters{};
 		RendererPerformanceTelemetry performance{};
+		MemoryRecoveryPolicy memoryRecovery{};
 	};
 
 	struct RendererApplyArgs
@@ -238,6 +240,7 @@ namespace NeuralRendering
 	{
 		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
 		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
+		bool memoryPressureBypass = false;
 
 		[[nodiscard]] bool WasEvaluationAttempted(
 			std::uint32_t a_featureSlot) const noexcept
@@ -286,6 +289,9 @@ namespace NeuralRendering
 
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		static constexpr std::uint32_t kMaximumMemorySimulationMilliseconds = 30000;
+		/** Simulates recoverable pressure for at most 30 seconds without changing settings. */
+		bool SimulateMemoryPressure(std::uint32_t a_durationMilliseconds);
 		/** Retains the bounded opt-in native lifetime history, including its first failure. */
 		[[nodiscard]] LifetimeSnapshot GetLifetimeDiagnostics() const;
 		/** Read-only allocation/lease accounting; native provider byte sizes remain unknown. */

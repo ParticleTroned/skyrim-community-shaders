@@ -26,7 +26,8 @@ namespace
 	};
 	struct Texture
 	{
-		bool resource = true;
+		std::unique_ptr<int> resource = std::make_unique<int>(1);
+		std::unique_ptr<int> srv = std::make_unique<int>(1);
 		std::unique_ptr<int> uav = std::make_unique<int>(1);
 		struct
 		{
@@ -59,8 +60,20 @@ struct View
 using ID3D11RenderTargetView = View;
 using ID3D11DepthStencilView = View;
 using ID3D11SamplerState = View;
+struct D3D11_BOX
+{
+	UINT left, top, front, right, bottom, back;
+};
 struct PreviewContext
 {
+	unsigned copies = 0;
+	std::array<D3D11_BOX, 2> copiedBoxes{};
+	template <class T>
+	void CopySubresourceRegion(int* destination, UINT, UINT, UINT, UINT, T* source, UINT, const D3D11_BOX* box)
+	{
+		Check(destination && source && !targetBound && !predicate, "Scene copy must have valid resources and unbound targets/predicate");
+		copiedBoxes[copies++ % 2] = *box;
+	}
 	bool predicate = true, targetBound = true;
 	View target, depth, sampler;
 	void OMGetRenderTargets(UINT, View** targets, View** dsv)
@@ -171,6 +184,10 @@ struct Upscaling
 	std::array<std::unique_ptr<Texture>, 2> vrIntermediateColorOut{
 		std::make_unique<Texture>(), std::make_unique<Texture>()
 	};
+	std::array<std::unique_ptr<Texture>, 2> vrIntermediateColorIn{
+		std::make_unique<Texture>(), std::make_unique<Texture>()
+	};
+	float sourceScaleX = 0, sourceScaleY = 0;
 	uint32_t ensures = 0, creations = 0, dispatches = 0;
 	float dispatchedScale = 0;
 	float2 dispatchedOffset{};
@@ -201,9 +218,13 @@ struct Upscaling
 	}
 	bool DispatchFoveatedPeripheryPass(void* a_source, int* a_output, uint32_t a_sourceWidth, uint32_t a_sourceHeight,
 		uint32_t a_width, uint32_t a_height, uint32_t a_x, uint32_t a_y, uint32_t a_dispatchWidth, uint32_t a_dispatchHeight,
-		float a_scale, float a_horizontalScale, bool a_keepBindings, float, float, float, float, float a_offsetX, float a_offsetY, bool a_visualize)
+		float a_scale, float a_horizontalScale, bool a_keepBindings, float sx, float sy, float, float, float a_offsetX, float a_offsetY, bool a_visualize, uint32_t eye)
 	{
-		Check(!a_source && !a_sourceWidth && !a_sourceHeight, "Preview must not require vendor inputs");
+		Check(eye < 2 && a_source == vrIntermediateColorIn[eye]->srv.get() &&
+				  a_sourceWidth == vrIntermediateColorIn[eye]->desc.Width && a_sourceHeight == vrIntermediateColorIn[eye]->desc.Height,
+			"Preview must sample the current eye scene");
+		sourceScaleX = sx;
+		sourceScaleY = sy;
 		Check(a_output && a_width == 1280 && a_height == 1440, "Preview must use the actual eye output");
 		Check(!a_x && !a_y && a_dispatchWidth == a_width && a_dispatchHeight == a_height,
 			"Preview must cover the entire eye, including full coverage");
@@ -242,7 +263,7 @@ struct Upscaling
 	}
 	bool TryDrawMainFoveatedMaskVisualization(bool);
 	bool IsFoveatedMaskVisualizationEnabled(UpscaleMethod) const;
-	bool DispatchFoveatedMaskVisualization(uint32_t);
+	bool DispatchFoveatedMaskVisualization(uint32_t, uint32_t = 1280, uint32_t = 1440);
 };
 
 bool IsFoveatedVendorDispatchRequested(const Upscaling::Settings& a_settings, Upscaling::UpscaleMethod a_method)
@@ -322,6 +343,14 @@ int main()
 	Check(!upscaling.DispatchFoveatedMaskVisualization(2), "Invalid eyes must fail closed");
 	upscaling.vrIntermediateColorOut[0]->uav.reset();
 	Check(!upscaling.DispatchFoveatedMaskVisualization(0), "Missing output view must fail closed");
+	Check(!upscaling.DispatchFoveatedMaskVisualization(1, 0, 1440), "Empty sources must fail closed");
+	Check(!upscaling.DispatchFoveatedMaskVisualization(1, 2560, 1440), "Oversized input must fail closed");
+	upscaling.vrIntermediateColorIn[1]->srv.reset();
+	Check(!upscaling.DispatchFoveatedMaskVisualization(1), "Missing scene view must fail closed");
+	upscaling.vrIntermediateColorIn[1]->srv = std::make_unique<int>(1);
+	upscaling.dispatchReady = true;
+	Check(upscaling.DispatchFoveatedMaskVisualization(1, 640, 720) && upscaling.sourceScaleX == 0.5f && upscaling.sourceScaleY == 0.5f,
+		"Reused larger allocations must sample only the current image");
 	upscaling.deviceLost = true;
 	Check(!upscaling.DispatchFoveatedMaskVisualization(1), "Device loss must fail closed");
 	PreviewRenderer renderer;
@@ -334,6 +363,9 @@ int main()
 		Check(mainPreview.observedFormat == format && context.predicate && context.targetBound,
 			"Native format and caller graphics state must survive the preview");
 	}
+	Check(context.copies == 6 && context.copiedBoxes[0].left == 0 && context.copiedBoxes[0].right == 1280 &&
+			  context.copiedBoxes[1].left == 1280 && context.copiedBoxes[1].right == 2560 && context.copiedBoxes[1].bottom == 1440,
+		"Native previews must copy fresh stereo input before tinting");
 	const auto completePairs = mainPreview.finalizations;
 	mainPreview.failEye = 1;
 	Check(!mainPreview.TryDrawMainFoveatedMaskVisualization(true) && mainPreview.finalizations == completePairs,

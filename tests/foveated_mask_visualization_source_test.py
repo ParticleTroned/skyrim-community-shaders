@@ -28,7 +28,7 @@ class PreviewIntegration(unittest.TestCase):
         self.assertIn("presentationOnly = true;", submit[admission:admission + 160])
         self.assertIn("if (!presentationOnly)", submit[temporal:temporal + 100])
         stretch = submit[submit.index("const auto presentStretchOutput ="):submit.index("auto presentDeferredVendorOutput =")]
-        self.assertIn("DispatchFoveatedMaskVisualization(eyeIndex)", stretch)
+        self.assertIn("DispatchFoveatedMaskVisualization(eyeIndex, inputWidth, inputHeight)", stretch)
         self.assertIn("UpdateVRSubmitDesktopMirror(", stretch)
         self.assertIn("submitStageVendorEyeState = {};", stretch)
         self.assertIn("submitStageRuntimeFSRStereoState = {};", stretch)

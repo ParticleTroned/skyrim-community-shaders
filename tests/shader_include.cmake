@@ -41,6 +41,12 @@ add_d3d_shader_test(
     tests/foveated_blend_curve_shader_test.cpp
 )
 
+add_d3d_shader_test(
+    foveated_mask_overlay_shader_test
+    FoveatedMaskOverlayShader
+    tests/foveated_mask_overlay_shader_test.cpp
+)
+
 foreach(
     _target
     IN
@@ -48,6 +54,7 @@ foreach(
         shader_include_test
         adaptive_balance_color_shader_test
         foveated_blend_curve_shader_test
+        foveated_mask_overlay_shader_test
         ambient_balance_shader_test
         pbr_grass_shader_test
         vr_depth_encode_shader_test

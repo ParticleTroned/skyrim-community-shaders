@@ -1930,24 +1930,20 @@ namespace
 	};
 
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
-	constexpr const char* kFoveatedUpscalingSetupIntro = R"(- Upscaling FOV renders the green visible area with DLSS/DLAA or FSR and uses a cheaper outer mask. Smaller visible scale means more performance, but more risk of peripheral shimmer.
+	constexpr const char* kFoveatedUpscalingSetupIntro = R"(Turn on FOV Mask Visualization.
+Transparent magenta = left FOV, green = right FOV, white = their overlap, charcoal = TAA.
+Solid yellow = a gap in either mask where the eye views overlap, or in this eye at a one-eye edge.
 
-- Upscaling FOV + TAA adds a yellow TAA ring around a smaller green center to reduce shimmer. It costs more than Upscaling FOV alone, but can let you keep the vendor center scale smaller while the visible scale still covers the HMD view.
-
-- Shader foveation features reuse this shared mask; they do not have separate scale sliders.)";
-	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Use the FOV Only Visible Scale slider to decrease FOV scale to 0.25 and place the green center mask in the center of each eye. Per-eye positions do not have to be vertically or horizontally aligned.
-3) Expand FOV Only Visible Scale until the green mask touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
-4) Use the Expand FOV Scale R/L slider to horizontally expand the mask until the green part just touches the field of view.
-5) Ideally, you do not see the blue outer mask anymore, except in the corners, or only a tiny bit.
-6) The larger the visible scale, the less performance savings you have.
-7) Test in game that you do not have strong peripheral shimmer. If yes, increase the green mask scale. If not, reduce it to just before shimmer appears for best performance.)";
-	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Activate FOV Mask Visualization
-2) Lower the FOV + TAA Center Scale slider to 0.30. You can later try 0.25 if these settings work for you for even more performance wins.
-3) Use the FOV + TAA Visible Outer Scale slider until the yellow ring touches the top and bottom view of your HMD. If needed, reposition right and left eye to get the best top and bottom fit.
-4) Ideally, you do not see the blue outer ring anymore, except in the corners, or only a tiny bit.
-5) The larger the FOV + TAA center or visible outer scale, the less performance savings you have.
-6) Test in game that you do not have strong peripheral shimmer. If yes, increase the FOV + TAA visible outer scale or, if needed, the center scale. If not, reduce them to just before shimmer appears for best performance.)";
+Check each eye in your headset. Use the smallest mask area that leaves no yellow visible, including at the edges. Keep a little margin.
+FOV area saved compares the combined masks and feathering with the full CSX eye image. Higher is better, provided no yellow is visible. It is not a measured performance gain.)";
+	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Leave FOV + TAA off.
+2) Adjust FOV Only Visible Scale, Expand FOV Scale R/L and the per-eye offsets until no yellow is visible in either eye.
+3) Reduce the area carefully while keeping yellow out of view. A scale of 1.00 covers the full eye image.
+4) Turn visualization off and check scenery in motion. Increase coverage if peripheral shimmer is distracting.)";
+	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Enable FOV + TAA. The centre and TAA ring together provide coverage.
+2) Adjust FOV + TAA Visible Outer Scale, horizontal expansion and per-eye offsets until no yellow is visible.
+3) Keep total area as small as your view allows. Reduce FOV + TAA Center Scale separately to give more of that area to TAA.
+4) Turn visualization off and check scenery in motion. Increase centre or outer coverage if needed.)";
 
 	uint ClampToggleUInt(uint value);
 
@@ -19176,6 +19172,20 @@ void Upscaling::DrawFoveatedBlendSettings()
 		SetFoveatedBlendCurve(enabled, falloff);
 }
 
+std::array<FoveatedMaskVisualization::Coverage, 2> Upscaling::GetFoveatedMaskCoverage() const
+{
+	const bool taa = settings.periphery_taa_enable;
+	const auto profile = GetFoveatedMaskProfileParams(settings, taa);
+	const auto offsets = GetResolvedFoveatedMaskCenterOffsets(taa);
+	const float feather = GetNormalFoveatedBlendFeather(settings, taa);
+	const float outerScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, profile.centerScale);
+	std::array<FoveatedMaskVisualization::Coverage, 2> result{};
+	for (uint32_t eye = 0; eye < result.size(); ++eye)
+		result[eye] = FoveatedMaskVisualization::MeasureCoverage(profile.centerScale, feather, profile.centerHorizontalScale,
+			offsets[eye].x, offsets[eye].y, taa, outerScale);
+	return result;
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -19284,12 +19294,14 @@ void Upscaling::DrawFoveatedSettings(bool a_essentialsLayout)
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
 		ImGui::TextUnformatted("Also works at full coverage. Temporarily pauses during loading and game menus.");
-		ImGui::TextUnformatted("Green = upscaling center mask.");
-		if (settings.periphery_taa_enable)
-			ImGui::TextUnformatted("Gold = TAA ring, blue = outer lightweight ring.");
-		else
-			ImGui::TextUnformatted("Dark = outside the upscaling FOV mask.");
+		ImGui::TextUnformatted("Magenta = left FOV, green = right FOV, white = overlap, charcoal = TAA.");
+		ImGui::TextUnformatted("Solid yellow flags a gap in either eye within their shared view. One-eye edges use that eye's mask.");
+		ImGui::TextUnformatted("Adjust both masks until no yellow is visible, then keep their area as small as possible.");
 	}
+
+	const auto coverage = GetFoveatedMaskCoverage();
+	ImGui::Text("FOV area saved (approx.): L %.1f%% / R %.1f%%", coverage[0].savedPercent, coverage[1].savedPercent);
+	ImGui::TextWrapped("Increase this value while keeping solid yellow out of view in both eyes. Includes all active masks and feathering; full CSX FOV saves 0%%. This is area, not measured performance.");
 
 	if (a_essentialsLayout)
 		ImGui::TextDisabled("All FOV controls are available in the VR tab.");
@@ -43291,14 +43303,17 @@ bool Upscaling::IsFoveatedMaskVisualizationEnabled(UpscaleMethod a_upscaleMethod
 	       !runtimeResolutionPlan.menuContextActive && !runtimeResolutionPlan.loadingMenuActive;
 }
 
-bool Upscaling::DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex)
+bool Upscaling::DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex, uint32_t a_inputWidth, uint32_t a_inputHeight)
 {
 	auto* context = globals::d3d::context;
 	if (!globals::game::isVR || a_eyeIndex >= std::size(vrIntermediateColorOut) ||
 		!context || !settings.foveatedPeripheryMaskVisualization || IsSubmitStageDeviceLost())
 		return false;
+	const auto& input = vrIntermediateColorIn[a_eyeIndex];
 	const auto& output = vrIntermediateColorOut[a_eyeIndex];
-	if (!output || !output->resource || !output->uav || !output->desc.Width || !output->desc.Height)
+	if (!input || !input->resource || !input->srv || !a_inputWidth || !a_inputHeight ||
+		a_inputWidth > input->desc.Width || a_inputHeight > input->desc.Height ||
+		!output || !output->resource || !output->uav || !output->desc.Width || !output->desc.Height)
 		return false;
 	// A preview can reuse resources during a save or relatch, but cannot create them.
 	if (ShouldDeferVRVendorLifecycleMutation() && (!foveatedPeripheryCS || !foveatedPeripheryCB))
@@ -43318,9 +43333,12 @@ bool Upscaling::DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex)
 	try {
 		const auto profile = GetFoveatedMaskProfileParams(settings, settings.periphery_taa_enable);
 		const auto offset = GetResolvedFoveatedMaskCenterOffsets(settings.periphery_taa_enable)[a_eyeIndex];
-		return DispatchFoveatedPeripheryPass(nullptr, output->uav.get(), 0, 0,
+		return DispatchFoveatedPeripheryPass(input->srv.get(), output->uav.get(), input->desc.Width, input->desc.Height,
 				   output->desc.Width, output->desc.Height, 0, 0, output->desc.Width, output->desc.Height,
-				   profile.centerScale, profile.centerHorizontalScale, false, 1.0f, 1.0f, 0.0f, 0.0f, offset.x, offset.y, true) &&
+				   profile.centerScale, profile.centerHorizontalScale, false,
+				   static_cast<float>(a_inputWidth) / input->desc.Width,
+				   static_cast<float>(a_inputHeight) / input->desc.Height,
+				   0.0f, 0.0f, offset.x, offset.y, true, a_eyeIndex) &&
 		       !MarkSubmitStageDeviceLostIfDeviceRemoved("FOV mask visualization");
 	} catch (const std::exception& e) {
 		LogWarnOnce(loggedMaskPreviewFailure, "[Upscaling] FOV mask preview unavailable; keeping normal presentation", e);
@@ -43359,7 +43377,18 @@ bool Upscaling::TryDrawMainFoveatedMaskVisualization(bool a_allowResourceCreatio
 					target->Release();
 		});
 		context->OMSetRenderTargets(0, nullptr, nullptr);
-		if (!DispatchFoveatedMaskVisualization(0) || !DispatchFoveatedMaskVisualization(1))
+		if (mainDesc.Width < uint64_t(inputWidth) * 2u || mainDesc.Height < inputHeight)
+			return false;
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const auto& input = vrIntermediateColorIn[eye];
+			if (!input || !input->resource || !input->srv ||
+				input->desc.Width < inputWidth || input->desc.Height < inputHeight)
+				return false;
+			const D3D11_BOX sourceBox{ eye * inputWidth, 0, 0, (eye + 1u) * inputWidth, inputHeight, 1 };
+			context->CopySubresourceRegion(input->resource.get(), 0, 0, 0, 0, main.texture, 0, &sourceBox);
+		}
+		if (!DispatchFoveatedMaskVisualization(0, inputWidth, inputHeight) ||
+			!DispatchFoveatedMaskVisualization(1, inputWidth, inputHeight))
 			return false;
 		FinalizePerEyeOutputs(main.texture);
 		return true;
@@ -43375,10 +43404,10 @@ bool Upscaling::TryDrawMainFoveatedMaskVisualization(bool a_allowResourceCreatio
 	return false;
 }
 
-bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY, bool visualizeMask)
+bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound, float sourceScaleX, float sourceScaleY, float sourceOffsetX, float sourceOffsetY, float centerOffsetX, float centerOffsetY, bool visualizeMask, uint32_t eyeIndex)
 {
 	auto* peripheryCS = GetFoveatedPeripheryCS();
-	if (!peripheryCS || (!visualizeMask && !sourceSRV) || !outputUAV || !foveatedPeripheryCB)
+	if (!peripheryCS || !sourceSRV || !sourceWidth || !sourceHeight || !outputUAV || !foveatedPeripheryCB || (visualizeMask && eyeIndex >= 2))
 		return false;
 	if (!dispatchWidth || !dispatchHeight)
 		return false;
@@ -43413,10 +43442,7 @@ bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 	centerScale = ClampFoveatedCenterScale(centerScale);
 	centerHorizontalScale = ClampFoveatedCenterHorizontalScale(centerHorizontalScale);
 	const bool showThreeZoneMask = visualizeMask && settings.periphery_taa_enable;
-	const float centerFeather = showThreeZoneMask ?
-	                                ClampPeripheryTAACenterBlendFeather(
-										settings.periphery_taa_center_blend_feather) :
-	                                FoveatedCommon::kCenterFeather;
+	const float centerFeather = GetNormalFoveatedBlendFeather(settings, showThreeZoneMask);
 	const float taaOuterScale = ClampPeripheryTAAOuterScaleForCenter(settings.periphery_taa_outer_scale, centerScale);
 	cbData.centerAndMask = {
 		centerOffsetX,
@@ -43430,6 +43456,23 @@ bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 		centerHorizontalScale,
 		taaOuterScale
 	};
+	if (visualizeMask) {
+		const auto offsets = GetResolvedFoveatedMaskCenterOffsets(settings.periphery_taa_enable);
+		const uint32_t otherEye = 1u - eyeIndex;
+		cbData.preview = { offsets[otherEye].x, offsets[otherEye].y, static_cast<float>(eyeIndex),
+			FoveatedCommon::IsActiveCoverage(centerScale) ? 0.0f : 1.0f };
+		const auto& camera = globals::game::frameBufferCached;
+		auto eyeToWorld = camera.GetCameraViewInverse(eyeIndex);
+		auto worldToOtherEye = camera.GetCameraView(otherEye);
+		// Mask overlap compares viewing directions; eye separation must not add scene-depth parallax.
+		eyeToWorld._14 = eyeToWorld._24 = eyeToWorld._34 = 0.0f;
+		worldToOtherEye._14 = worldToOtherEye._24 = worldToOtherEye._34 = 0.0f;
+		cbData.previewClipToOtherEye = camera.GetCameraProjUnjittered(otherEye) * worldToOtherEye *
+		                               eyeToWorld * camera.GetCameraProjUnjitteredInverse(eyeIndex);
+		cbData.previewArea.x = FoveatedMaskVisualization::MeasureCoverage(centerScale, centerFeather,
+			centerHorizontalScale, centerOffsetX, centerOffsetY, showThreeZoneMask, taaOuterScale)
+		                           .savedPercent;
+	}
 	foveatedPeripheryCB->Update(cbData);
 
 	if (keepBindingsBound) {
@@ -46653,7 +46696,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(UpscaleM
 			params.peripherySourceOffsetY,
 			centerOffset.x,
 			centerOffset.y,
-			params.visualizeMask);
+			params.visualizeMask, eyeIndex);
 	};
 
 	auto dispatchPeripheryTAA = [&](ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight) -> bool {
@@ -57651,7 +57694,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			submitStageRuntimeFSRStereoState = {};
 			submitStageFoveatedCenterState = {};
 		}
-		const bool maskDrawn = foveatedMaskVisualizationPreview && DispatchFoveatedMaskVisualization(eyeIndex);
+		const bool maskDrawn = foveatedMaskVisualizationPreview && DispatchFoveatedMaskVisualization(eyeIndex, inputWidth, inputHeight);
 		if ((!maskDrawn && !StretchSubmitStageEyeOutput(eyeIndex, inputWidth, inputHeight, eyeWidthOut, eyeHeightOut)) ||
 			!vrIntermediateColorOut[eyeIndex] || !vrIntermediateColorOut[eyeIndex]->resource) {
 			return false;

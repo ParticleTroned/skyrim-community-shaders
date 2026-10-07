@@ -5,6 +5,7 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedMaskVisualization.h"
 #include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
@@ -2318,6 +2319,9 @@ public:
 		float2 jitter;
 		float4 centerAndMask;  // xy=centerOffset, z=visualizeMask, w=showThreeZoneMask
 		float4 tuning0;        // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=taaOuterScale
+		float4 preview;        // xy=other eye center, z=eye index, w=full-image coverage
+		Matrix previewClipToOtherEye;
+		float4 previewArea;  // x=percentage of full eye area saved
 	};
 
 	struct FoveatedCenterBlendCB
@@ -2390,7 +2394,10 @@ public:
 		"UpscalingDataCB source bounds offset changed; update HLSL cbuffer.");
 	static_assert(sizeof(DynamicResolutionStretchCB) == 48, "DynamicResolutionStretchCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(VRMenuLayerCompositeCB) == 16, "VRMenuLayerCompositeCB layout changed; update HLSL cbuffer.");
-	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(FoveatedPeripheryCB) == 192, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
+	static_assert(offsetof(FoveatedPeripheryCB, preview) == 96, "Preview offsets must match HLSL.");
+	static_assert(offsetof(FoveatedPeripheryCB, previewClipToOtherEye) == 112, "Preview projection must match HLSL.");
+	static_assert(offsetof(FoveatedPeripheryCB, previewArea) == 176, "Preview area must match HLSL.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 96, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedSpatialCompositeCB) == 96, "FoveatedSpatialCompositeCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(PeripheryTAACB) == 336, "PeripheryTAACB layout changed; update HLSL cbuffer.");
@@ -4330,7 +4337,7 @@ public:
 	void PrepareMainFullResolutionNeuralFrame() noexcept;
 	void ApplyMainFinalLdrNeuralStereo() noexcept;
 	void FinalizeMainFinalLdrNeuralPresentation() noexcept;
-	bool DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f, bool visualizeMask = false);
+	bool DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f, bool visualizeMask = false, uint32_t eyeIndex = 0);
 	/** Returns true only after issuing the history write and releasing its compute bindings. */
 	[[nodiscard]] bool DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 		ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,
@@ -4342,7 +4349,10 @@ public:
 		bool resetHistory, float centerScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY,
 		float inputTextureScaleX = 1.0f, float inputTextureScaleY = 1.0f, float inputTextureOffsetX = 0.0f, float inputTextureOffsetY = 0.0f);
 	bool IsFoveatedMaskVisualizationEnabled(UpscaleMethod a_upscaleMethod) const;
-	bool DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex);
+	/** Composites the configured mask over the freshly copied eye image. */
+	bool DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex, uint32_t a_inputWidth, uint32_t a_inputHeight);
+	/** Approximate per-eye fractions of the rendered image for the selected mask profile. */
+	std::array<FoveatedMaskVisualization::Coverage, 2> GetFoveatedMaskCoverage() const;
 	/** Draw a complete native HDR preview; false retains ordinary vendor upscaling. */
 	bool TryDrawMainFoveatedMaskVisualization(bool a_allowResourceCreation);
 	bool DispatchFoveatedSpatialComposite(ID3D11ShaderResourceView* peripherySRV, ID3D11ShaderResourceView* centerSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t peripherySourceWidth, uint32_t peripherySourceHeight, uint32_t outputWidth, uint32_t outputHeight, const FoveatedDispatchRect& centerRect, float peripherySourceScaleX, float peripherySourceScaleY, float peripherySourceOffsetX, float peripherySourceOffsetY, float centerScale, float centerHorizontalScale, const float2& centerOffset, float centerFeather);

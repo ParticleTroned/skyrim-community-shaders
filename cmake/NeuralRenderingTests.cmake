@@ -1,3 +1,24 @@
+add_controller_test(nr_model_resolution_policy_test NRModelResolutionPolicy tests/nr_model_resolution_policy_test.cpp)
+set(_nr_accounting_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/nr-model-resolution")
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+    "-DOUTPUT_DIRECTORY=${_nr_accounting_directory}" -P
+    "${PROJECT_SOURCE_DIR}/tests/extract_nr_model_resolution_accounting.cmake"
+    COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/src/Features/Upscaling/NeuralRendering/Renderer.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/extract_nr_model_resolution_accounting.cmake")
+set(_nr_model_targets nr_model_resolution_shader_test nr_model_resolution_shader_bridge_test)
+set(_nr_model_tests NRModelResolutionShadersWARP NRModelResolutionShadersWARPBridge)
+foreach(_target _test IN ZIP_LISTS _nr_model_targets _nr_model_tests)
+    add_d3d_shader_test(${_target} ${_test} tests/nr_model_resolution_shader_test.cpp)
+    target_sources(${_target} PRIVATE src/Features/Upscaling/NeuralRendering/ModelResolution.cpp)
+    target_compile_definitions(${_target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(${_target} PRIVATE nlohmann_json::nlohmann_json Microsoft::DirectXTex)
+    target_include_directories(${_target} SYSTEM PRIVATE
+        "$<TARGET_PROPERTY:Tracy::TracyClient,INTERFACE_INCLUDE_DIRECTORIES>")
+    target_include_directories(${_target} PRIVATE "${_nr_accounting_directory}")
+endforeach()
+target_compile_definitions(nr_model_resolution_shader_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 add_controller_test(neural_memory_recovery_test NeuralMemoryRecovery tests/neural_memory_recovery_test.cpp)
 add_test(NAME NeuralMemoryRecoveryContract COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_memory_recovery_contract_test.py")

@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
+#include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 
 #include <algorithm>
@@ -25,6 +26,20 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering request validation invariant");
 	};
+	for (const auto& value : { json(33), json(75u), json(100) }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "modelResolutionPercent", value } }, request, error));
+		require(request.HasAnyControl() && request.modelResolutionPercent == value.get<std::uint32_t>());
+	}
+	for (const auto& value : { json(32), json(101), json(-1), json(75.0), json(75.5), json(true), json("75"),
+			 json(nullptr), json::array(), json::object(), json(std::numeric_limits<std::uint64_t>::max()),
+			 json(std::numeric_limits<std::int64_t>::min()), json(std::numeric_limits<std::int64_t>::max()) }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "modelResolutionPercent", value } }, request, error));
+		require(!request.modelResolutionPercent.has_value() && !error.empty());
+	}
 	for (std::uint32_t index = 0; index < 3; ++index) {
 		const auto mode = static_cast<NeuralRendering::RenderingMode>(index);
 		for (const auto& value : { json(index), json(NeuralRendering::GetRenderingModeName(mode)) }) {

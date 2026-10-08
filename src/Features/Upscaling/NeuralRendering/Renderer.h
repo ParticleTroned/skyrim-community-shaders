@@ -151,6 +151,9 @@ namespace NeuralRendering
 			std::numeric_limits<std::uint32_t>::max();
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
+		std::uint32_t modelResolutionPercent = 100;
+		std::uint32_t modelSourceWidth = 0, modelSourceHeight = 0;
+		std::uint32_t modelWidth = 0, modelHeight = 0;
 		std::uint32_t colorWidth = 0;
 		std::uint32_t colorHeight = 0;
 		std::uint32_t guideWidth = 0;
@@ -208,6 +211,7 @@ namespace NeuralRendering
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> actorSelection;
 		bool providerBlending = false;
 		ComputeSubrect actorSelectionSupport{};
+		std::uint32_t modelResolutionPercent = 100;
 		std::uint32_t colorWidth = 0;
 		std::uint32_t colorHeight = 0;
 		std::uint32_t guideWidth = 0;
@@ -230,10 +234,8 @@ namespace NeuralRendering
 		// Pair orchestration keeps separate eye submissions on one reset decision.
 		bool synchronizedHistoryReset = false;
 		bool synchronizedHistoryDiscontinuity = false;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Runtime policy input independent of optional capture evidence. */
 		std::optional<RenderingMode> renderingMode;
-#endif
 	};
 
 	/** Per-call evidence captured at the exact NVIDIA evaluation boundary. */

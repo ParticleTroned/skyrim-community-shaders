@@ -30,7 +30,7 @@ namespace FeatureVersions
         {"LODBlending"sv,          {1,0,0}},
         {"LightLimitFix"sv,        {3,5,1}},
         {"LinearLighting"sv,       {1,0,5}},
-        {"NeuralRendering"sv,          {1,5,0}},
+        {"NeuralRendering"sv,          {1,6,0}},
         {"PerformanceOverlay"sv,   {1,2,0}},
         {"PerformanceTuning"sv,    {1,0,0}},
         {"RenderDoc"sv,            {1,1,0}},

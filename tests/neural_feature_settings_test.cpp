@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
@@ -82,8 +84,9 @@ struct IndependentSettings
 	unsigned neuralCharacterMaskTestMode = 0;
 	bool neuralCharacterCurrentContextEnabled = false;
 	bool neuralCharacterGpuMaskSupportEnabled = false;
+	unsigned neuralRenderingModelResolutionPercent = 100;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent)
 
 int main()
 {
@@ -92,6 +95,15 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering feature settings invariant");
 	};
+	for (std::uint32_t percent : { 33u, 50u, 75u, 100u }) {
+		for (const auto& value : { Json(percent), Json(std::int64_t(percent)) })
+			require(NeuralRendering::ParseModelResolutionPercent(value) == percent);
+	}
+	for (const auto& value : { Json(0), Json(32), Json(101), Json(-1), Json(75.0), Json(75.5), Json(true),
+			 Json("75"), Json(nullptr), Json::array(), Json::object(), Json(std::numeric_limits<std::uint64_t>::max()),
+			 Json(std::numeric_limits<std::int64_t>::min()), Json(std::numeric_limits<std::int64_t>::max()),
+			 Json(std::numeric_limits<double>::infinity()), Json(std::numeric_limits<double>::quiet_NaN()) })
+		require(!NeuralRendering::ParseModelResolutionPercent(value).has_value());
 	for (const auto legacy : { Json(0u), Json(1u), Json(2u), Json(-1), Json(0.5), Json("invalid"), Json(false) }) {
 		for (const unsigned resolved : { 0u, 1u }) {
 			bool accepted = false;
@@ -179,10 +191,12 @@ int main()
 	}
 
 	IndependentSettings live{ 2, true, 1.75f, 2, 1 };
+	live.neuralRenderingModelResolutionPercent = 67;
 	IndependentSettings upscalerEdit{ 4, false, 0.0f, 0, 0 };
 	NeuralRendering::CopyRenderingSettings(upscalerEdit, live);
 	require(upscalerEdit.qualityMode == 4 && upscalerEdit.neuralRenderingEnabled);
 	require(upscalerEdit.neuralRenderingIntensity == live.neuralRenderingIntensity);
+	require(upscalerEdit.neuralRenderingModelResolutionPercent == 67);
 	require(upscalerEdit.neuralCharacterDebugView == 2 && upscalerEdit.neuralCharacterMaskTestMode == 1);
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 } }).empty());
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 }, { "neuralRenderingEnabled", false } }).size() == 1);

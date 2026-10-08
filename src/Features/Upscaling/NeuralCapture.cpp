@@ -2,6 +2,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidence.h"
 #include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
 #include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
+#include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
 #include "Globals.h"
 #include "State.h"
@@ -108,9 +109,9 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	const UpscalingDLSS::ViewportCrop& dlssCrop, const std::array<uint32_t, 2>& colorOrigin,
 	const std::array<uint32_t, 2>& guideOrigin) noexcept
 try {
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	args.renderingMode = GetNeuralRenderingMode();
-#endif
+	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
+		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
 	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return;
 	const auto role = NeuralRendering::ClassifyFeatureSlotMask(1u << args.featureSlot);

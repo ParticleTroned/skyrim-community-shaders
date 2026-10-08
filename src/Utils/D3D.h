@@ -1,5 +1,6 @@
 #pragma once
 #include "ResourceName.h"
+#include "ShaderCompiler.h"
 #include <array>
 #include <cstdint>
 #include <d3d11.h>
@@ -30,19 +31,6 @@ namespace Util
 	std::string GetNameFromSRV(ID3D11ShaderResourceView* a_srv);
 	std::string GetNameFromRTV(ID3D11RenderTargetView* a_rtv);
 
-	/** @brief Optional QPC accumulator separating compiler and device creation cost. */
-	struct ShaderCompileTiming
-	{
-		uint64_t bytecodeCompilationQpcTicks = 0;
-		uint64_t d3dObjectCreationQpcTicks = 0;
-	};
-
-	ID3D11DeviceChild* CompileShader(
-		const wchar_t* FilePath,
-		const std::vector<std::pair<const char*, const char*>>& Defines,
-		const char* ProgramType,
-		const char* Program = "main",
-		ShaderCompileTiming* a_timing = nullptr);
 	void BindFrameBufferConstantBuffersForCS(ID3D11DeviceContext* a_context);
 	void BindSharedDataConstantBuffersForPS(ID3D11DeviceContext* a_context);
 	void BindSharedDataConstantBuffersForCS(ID3D11DeviceContext* a_context);

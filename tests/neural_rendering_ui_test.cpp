@@ -1,12 +1,15 @@
 #include "Features/FoveatedCommon.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
-#include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/MemoryConservationPolicy.h"
+#include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
+#include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
 
 #include <cstdio>
 #include <functional>
 #include <limits>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
@@ -82,6 +85,7 @@ namespace globals
 				bool neuralCharacterHumansEnabled = true, neuralCharacterOtherHumanoidsEnabled = true;
 				bool neuralCharacterCreaturesEnabled = true, neuralCharacterAnimalsEnabled = true, neuralCharacterOtherActorsEnabled = true;
 				unsigned neuralRenderingMode = 0;
+				unsigned neuralRenderingModelResolutionPercent = 100;
 				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = 0;
 				float neuralRenderingIntensity = 1.0f, neuralRenderingLocalTone = 1.0f;
 				float neuralRenderingLocalStructure = 1.0f, neuralRenderingSkinStructure = 1.0f;
@@ -209,6 +213,26 @@ float ClampFoveatedMaskOffsetAdjustment(float value) { return value; }
 constexpr int ImGuiSliderFlags_AlwaysClamp = 1;
 namespace ImGui
 {
+	struct StateStorage
+	{
+		std::map<std::string, int> values;
+		int GetInt(const std::string& key, int fallback = 0) const
+		{
+			const auto value = values.find(key);
+			return value == values.end() ? fallback : value->second;
+		}
+		bool GetBool(const std::string& key, bool fallback = false) const { return GetInt(key, fallback) != 0; }
+		void SetInt(const std::string& key, int value) { values[key] = value; }
+		void SetBool(const std::string& key, bool value) { SetInt(key, value); }
+	} stateStorage;
+	int frameCount = 0, modelSliderPresentedValue = 0;
+	bool itemActive = false, itemDeactivatedAfterEdit = false;
+	StateStorage* GetStateStorage() { return &stateStorage; }
+	std::string GetID(const char* name) { return name; }
+	int GetFrameCount() { return frameCount; }
+	bool IsItemActive() { return itemActive; }
+	bool IsItemDeactivatedAfterEdit() { return itemDeactivatedAfterEdit; }
+
 	std::vector<std::string> items;
 	std::vector<bool> disabledItems;
 	std::vector<unsigned> rows;
@@ -249,6 +273,8 @@ namespace ImGui
 	}
 	void Clear(std::string_view click = {})
 	{
+		++frameCount;
+		itemActive = itemDeactivatedAfterEdit = false;
 		items.clear();
 		disabledItems.clear();
 		rows.clear();
@@ -327,6 +353,14 @@ namespace ImGui
 		*value = (flags & ImGuiSliderFlags_AlwaysClamp) ? std::clamp(sliderEditValue, minimum, maximum) : sliderEditValue;
 		return true;
 	}
+	bool SliderInt(const char* label, int* value, int minimum, int maximum, const char*, int flags)
+	{
+		modelSliderPresentedValue = *value;
+		if (!Button(label))
+			return false;
+		*value = (flags & ImGuiSliderFlags_AlwaysClamp) ? std::clamp(int(sliderEditValue), minimum, maximum) : int(sliderEditValue);
+		return true;
+	}
 	bool TreeNode(const char* label)
 	{
 		Record(label);
@@ -390,6 +424,8 @@ namespace NeuralRendering
 		{
 			bool quarantined = false, failureLatched = false;
 			std::string detail;
+			MemoryRecoveryPolicy memoryRecovery{};
+			MemoryConservationPolicy memoryConservation{};
 		} snapshot;
 		bool resetSucceeded = true;
 		unsigned resetCalls = 0, snapshotReads = 0;
@@ -477,6 +513,41 @@ int main()
 			throw std::runtime_error(message);
 		}
 	};
+	{
+		Upscaling::Settings settings;
+		ImGui::Clear("NR Model Resolution");
+		ImGui::sliderEditValue = 75;
+		ImGui::itemActive = true;
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingModelResolutionPercent == 100, "Dragging must not resize model resources before release");
+		ImGui::Clear("NR Model Resolution");
+		ImGui::sliderEditValue = 67;
+		ImGui::itemActive = true;
+		DrawNeuralModelResolutionSettings(settings);
+		require(ImGui::modelSliderPresentedValue == 75 && settings.neuralRenderingModelResolutionPercent == 100,
+			"Consecutive drag frames must retain pending scale independently of live settings");
+		ImGui::Clear();
+		ImGui::itemDeactivatedAfterEdit = true;
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingModelResolutionPercent == 67, "Releasing the slider must commit the pending model scale");
+		ImGui::Clear("NR Model Resolution");
+		ImGui::sliderEditValue = 33;
+		ImGui::itemActive = true;
+		DrawNeuralModelResolutionSettings(settings);
+		ImGui::Clear();
+		ImGui::Clear();
+		settings.neuralRenderingModelResolutionPercent = 90;
+		DrawNeuralModelResolutionSettings(settings);
+		require(ImGui::modelSliderPresentedValue == 90 && settings.neuralRenderingModelResolutionPercent == 90,
+			"A hidden slider must discard stale pending input before showing updated settings");
+		for (const auto [requested, expected] : { std::pair{ -1.0f, 33u }, std::pair{ 101.0f, 100u } }) {
+			ImGui::Clear("NR Model Resolution");
+			ImGui::sliderEditValue = requested;
+			ImGui::itemDeactivatedAfterEdit = true;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingModelResolutionPercent == expected, "Typed scale must remain inside safe model limits");
+		}
+	}
 	ImGui::Clear();
 	DrawNeuralRenderingActorCategories(globals::features::upscaling.settings);
 	const auto rowFor = [&](const char* label) {
@@ -525,6 +596,7 @@ int main()
 			for (const char* label : { "Full resolution", "Foveated", "Renderscale NR before DLSS", "Shared image settings",
 					 "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style", "Actors only" })
 				require(ImGui::Seen(label), "Essentials and Advanced must expose modes, shared image settings and Actors only");
+			require(ImGui::Seen("NR Model Resolution") == (mode == 2), "Independent model scale belongs only to mode C");
 			require(ImGui::Seen("Restrict to FOV mask") == (mode == 0) &&
 						ImGui::Seen("Use FOV mask for Renderscale NR") == (mode == 2),
 				"Both UI levels must expose the FOV toggle for the selected rendering mode");
@@ -795,7 +867,7 @@ int main()
 	const auto historyResets = upscaling.historyResets;
 	for (unsigned redraw = 0; redraw < 2; ++redraw) {
 		drawMaster();
-		require(ImGui::Seen("Neural Rendering is unavailable. Reset its runtime before enabling it again.") &&
+		require(ImGui::Seen("Neural Rendering is paused after an error. Use Reset Neural Rendering Runtime below to try again. Your settings are retained.") &&
 					ImGui::Seen("Reason: Recoverable NR failure") && ImGui::Seen("Reset Neural Rendering Runtime"),
 			"Recoverable failures must retain their reason and reset action while NR is off");
 		require(!upscaling.settings.neuralRenderingEnabled && ImGui::Disabled("Enabled"),
@@ -836,7 +908,7 @@ int main()
 		drawMaster("Enabled", diagnostics);
 		require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled,
 			"Quarantine must refuse unsafe re-enabling while NR is off");
-		require(ImGui::Seen("Neural Rendering cannot be re-enabled safely in this session. Restart the game to try again.") &&
+		require(ImGui::Seen("Neural Rendering cannot recover safely in this session. Restart the game to try again.") &&
 					ImGui::Seen("Reason: Pending GPU resources") && !ImGui::Seen("Reset Neural Rendering Runtime"),
 			"Quarantine must retain its reason without offering an unsafe reset at any UI level");
 		requirePreferences(recoveryPreferences);

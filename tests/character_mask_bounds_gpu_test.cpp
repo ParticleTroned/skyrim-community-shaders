@@ -325,9 +325,9 @@ namespace
 				std::array<float, 16> cameraProjInverse{};
 				std::array<float, 4> jitter{}, categoryStrengths{};
 				std::array<std::array<float, 4>, 16> eligibilityRectangles{};
-				Bounds dispatchRegion{}, authoredRegion{};
+				Bounds dispatchRegion{}, authoredRegion{}, blendOptions{};
 			};
-			static_assert(sizeof(MaskConstants) == 480);
+			static_assert(sizeof(MaskConstants) == 496);
 			const auto compile = [&](const wchar_t* name) {
 				ComPtr<ID3DBlob> code, errors;
 				const auto path = shaderDirectory / name;
@@ -387,7 +387,8 @@ namespace
 					 std::pair{ "CategoryStrengths", offsetof(MaskConstants, categoryStrengths) },
 					 std::pair{ "EligibilityRectangles", offsetof(MaskConstants, eligibilityRectangles) },
 					 std::pair{ "DispatchRegion", offsetof(MaskConstants, dispatchRegion) },
-					 std::pair{ "AuthoredRegion", offsetof(MaskConstants, authoredRegion) } }) {
+					 std::pair{ "AuthoredRegion", offsetof(MaskConstants, authoredRegion) },
+					 std::pair{ "BlendOptions", offsetof(MaskConstants, blendOptions) } }) {
 				D3D11_SHADER_VARIABLE_DESC desc{};
 				Check(reflectedCb->GetVariableByName(field.first)->GetDesc(&desc), "Reflect connected constants field");
 				Require(desc.StartOffset == field.second, std::string("Connected constants offset: ") + field.first);

@@ -7,7 +7,7 @@ extract_between("${_header}" "\tstruct TextureSize" "\nprivate:" vl_runtime_sett
 extract_between("${_source}" "\tconstexpr int32_t kTextureWidthMin" "\n\tbool IsImageSpaceReplacementEnabled()" vl_runtime_limits.h)
 extract_between("${_source}" "int32_t VolumetricLighting::ClampQualityIndex(" "bool VolumetricLighting::TryGetActiveGodrayProfile(" vl_runtime_settings_methods.h)
 extract_between("${_source}" "bool VolumetricLighting::TryGetActiveGodrayProfile(" "VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile()" vl_runtime_profile.h)
-extract_between("${_source}" "bool VolumetricLighting::IsPerformanceCostMeasurementEnabled()" "void VolumetricLighting::SetPerformanceCostMeasurementEnabled(" vl_runtime_measurement.h)
+extract_between("${_source}" "bool VolumetricLighting::IsPerformanceCostMeasurementEnabled()" "void VolumetricLighting::SetPerformanceToggleEnabled(" vl_runtime_measurement.h)
 extract_between("${_source}" "void VolumetricLighting::SetExteriorEnabled(" "void VolumetricLighting::PostPostLoad()" vl_runtime_api.h)
 extract_between("${_source}" "void VolumetricLighting::EarlyPrepass()" "void VolumetricLighting::ClearVolumetricLightingTargets()" vl_runtime_apply.h)
 set(_runtime "")

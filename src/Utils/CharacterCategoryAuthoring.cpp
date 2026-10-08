@@ -232,7 +232,8 @@ void CharacterCategoryAuthoring::Update(RE::BSRenderPass* a_pass)
 					  static_cast<uint32_t>(State::ExtraShaderDescriptors::AdditiveLighting)) == 0);
 	state->permutationData.ExtraShaderDescriptor &= ~categoryFlags;
 
-	if (!globals::deferred || !globals::deferred->deferredPass ||
+	if (!globals::features::upscaling.IsNeuralRenderingEnabled() ||
+		!globals::deferred || !globals::deferred->deferredPass ||
 		!state->inWorld || !a_pass || !a_pass->geometry || !a_pass->shaderProperty)
 		return;
 

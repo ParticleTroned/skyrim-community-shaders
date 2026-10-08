@@ -131,7 +131,8 @@ namespace FrameAnnotations
 			std::optional<NeuralRendering::Color::ExposureProducerScope> exposureScope;
 			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
 						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade)
-				exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(static_cast<RE::ImageSpaceEffect*>(imageSpaceShader)));
+				if (globals::features::upscaling.IsNeuralRenderingEnabled())
+					exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(static_cast<RE::ImageSpaceEffect*>(imageSpaceShader)));
 #endif
 			func(imageSpaceShader, shape, param);
 
@@ -158,7 +159,8 @@ namespace FrameAnnotations
 			std::optional<NeuralRendering::Color::ExposureProducerScope> exposureScope;
 			if constexpr (EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematic ||
 						  EffectType == RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade)
-				exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(imageSpaceShader));
+				if (globals::features::upscaling.IsNeuralRenderingEnabled())
+					exposureScope.emplace(static_cast<RE::BSImagespaceShader*>(imageSpaceShader));
 #endif
 			func(imageSpaceShader, a1, a2, a3);
 

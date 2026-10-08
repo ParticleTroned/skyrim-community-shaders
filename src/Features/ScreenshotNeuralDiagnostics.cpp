@@ -1,11 +1,12 @@
-#include "ScreenshotNeuralDiagnostics.h"
-#include "Upscaling/NeuralRendering/CaptureEvidence.h"
-#include <algorithm>
-#include <nlohmann/json.hpp>
-#include <stdexcept>
-#include <string_view>
-#include <utility>
-#include <vector>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "ScreenshotNeuralDiagnostics.h"
+#	include "Upscaling/NeuralRendering/CaptureEvidence.h"
+#	include <algorithm>
+#	include <nlohmann/json.hpp>
+#	include <stdexcept>
+#	include <string_view>
+#	include <utility>
+#	include <vector>
 
 namespace CSX::ScreenshotPolicy
 {
@@ -130,3 +131,5 @@ namespace CSX::ScreenshotPolicy
 		}
 	}
 }
+
+#endif

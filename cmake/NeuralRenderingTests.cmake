@@ -360,3 +360,39 @@ add_custom_command(
 add_controller_test(neural_rendering_controls_test NeuralRenderingControls tests/neural_rendering_controls_test.cpp)
 target_include_directories(neural_rendering_controls_test PRIVATE "${_neural_controls_test_dir}")
 target_sources(neural_rendering_controls_test PRIVATE "${_neural_controls_test_dir}/neural_rendering_controls_under_test.h")
+
+set(_neural_context_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-execution-context")
+add_custom_command(
+    OUTPUT "${_neural_context_directory}/neural_execution_context_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_context_directory}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_execution_context.cmake"
+    DEPENDS src/Features/Upscaling/NeuralCapture.cpp tests/extract_neural_execution_context.cmake
+        tests/extract_source_region.cmake
+    VERBATIM)
+foreach(_bridge IN ITEMS on off)
+    add_controller_test(neural_execution_context_${_bridge}_test NeuralExecutionContext_${_bridge}
+        tests/neural_execution_context_test.cpp)
+    target_sources(neural_execution_context_${_bridge}_test PRIVATE
+        "${_neural_context_directory}/neural_execution_context_under_test.h")
+    target_include_directories(neural_execution_context_${_bridge}_test PRIVATE "${_neural_context_directory}")
+endforeach()
+target_compile_definitions(neural_execution_context_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+
+set(_nr_camera_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/nr-camera-upload")
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+    "-DOUTPUT_DIRECTORY=${_nr_camera_directory}" -P
+    "${PROJECT_SOURCE_DIR}/tests/extract_nr_camera_upload.cmake"
+    COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/src/Globals.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/extract_nr_camera_upload.cmake")
+foreach(_bridge IN ITEMS on off)
+    add_controller_test(nr_camera_upload_${_bridge}_test NRCameraUpload_${_bridge}
+        tests/nr_camera_upload_gate_test.cpp)
+    target_include_directories(nr_camera_upload_${_bridge}_test PRIVATE "${_nr_camera_directory}")
+endforeach()
+target_compile_definitions(nr_camera_upload_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_test(NAME NRDiagnosticsBridgeGate COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/nr_diagnostics_bridge_gate_test.py" --compiler "${CMAKE_CXX_COMPILER}")
+set_tests_properties(NRDiagnosticsBridgeGate PROPERTIES LABELS "ControllerTests" TIMEOUT 30)

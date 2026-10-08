@@ -62,8 +62,13 @@ namespace NeuralRendering::Color
 		Status GetStatus() const;
 		/** Retain only CPU measurement evidence for an accepted screenshot. */
 		MeasurementBatchHistory<Measurement>::Lease PinMeasurementBatch(const MeasurementBatchKey&);
-		bool CaptureEvidenceEnabled() const noexcept { return kDevelopmentDiagnostics && captureEvidenceEnabled_.load(std::memory_order_acquire); }
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool CaptureEvidenceEnabled() const noexcept { return captureEvidenceEnabled_.load(std::memory_order_acquire); }
 		std::uint64_t CaptureEpoch() const noexcept { return captureEpoch_.load(std::memory_order_acquire); }
+#else
+		bool CaptureEvidenceEnabled() const noexcept { return false; }
+		std::uint64_t CaptureEpoch() const noexcept { return 0; }
+#endif
 		bool Configure(const Settings&, const Experiments&, std::uint64_t expectedRevision = 0);
 		void Record(const Observation&) noexcept;
 		void Record(const Measurement&) noexcept;
@@ -73,10 +78,12 @@ namespace NeuralRendering::Color
 		mutable std::mutex mutex_;
 		Configuration configuration_{};
 		std::atomic<std::uint64_t> revision_{ 1 };
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::atomic_bool captureEvidenceEnabled_{ false };
 		std::atomic<std::uint64_t> captureEpoch_{ 0 };
 		Status status_{};
 		MeasurementBatchHistory<Measurement> measurementBatches_{};
+#endif
 	};
 	struct Texture
 	{
@@ -98,7 +105,9 @@ namespace NeuralRendering::Color
 	{
 		Texture baseline, result;
 		ExposureBinding exposure;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::array<Readback, 3> readbacks{};
+#endif
 		std::uint32_t capacityWidth = 0, capacityHeight = 0;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 		bool readbackAttempted = false, prepared = false;
@@ -131,10 +140,16 @@ namespace NeuralRendering::Color
 	private:
 		bool EnsureShaders(ID3D11Device*, bool diagnostics, HRESULT& result);
 		void Measure(ID3D11DeviceContext*, Work&, ID3D11ShaderResourceView* neural, ID3D11ShaderResourceView* prepared);
-		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_, measure_;
+		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare_, reconstruct_;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		Microsoft::WRL::ComPtr<ID3D11ComputeShader> measure_;
+#endif
 		Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
-		bool compileFailed_ = false, measureCompileAttempted_ = false;
+		bool compileFailed_ = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool measureCompileAttempted_ = false;
 		std::uint64_t measurementOrder_ = 0;  // Intentionally survives Reset, like Registry status.
 		std::uint64_t measurementBatchOrder_ = 0;
+#endif
 	};
 }

@@ -94,7 +94,9 @@ private:
 		json effective = json::object();
 		json artifacts = json::array();
 		json actual = json::object();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		CSX::ScreenshotPolicy::DiagnosticSnapshot diagnosticSnapshot;
+#endif
 		json warnings = json::array();
 		json errors = json::array();
 		json error = nullptr;

@@ -191,6 +191,7 @@ public:
 		Count
 	};
 	/** @brief Records one physical render-pass attempt or success for DevBench. */
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	void RecordNeuralPassTelemetry(
 		NeuralStereoRouteRole a_role,
 		uint32_t a_eyeIndex,
@@ -198,6 +199,10 @@ public:
 		bool a_attempt,
 		bool a_success,
 		uint32_t a_frame) noexcept;
+#else
+	void RecordNeuralPassTelemetry(NeuralStereoRouteRole, uint32_t, NeuralPhysicalPass,
+		bool, bool, uint32_t) noexcept {}
+#endif
 
 	/** @brief Latest valid-eye submit entry, independent of later route admission. */
 	struct NeuralSubmitCycleSnapshot
@@ -565,6 +570,8 @@ public:
 	};
 
 	Settings settings;
+	struct VRRenderScalePresentationObservation;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct NeuralCaptureStage
 	{
 		const char* name = "";
@@ -596,7 +603,6 @@ public:
 		std::array<std::array<float, 16>, 2> view{}, projection{};
 		std::array<std::array<float, 4>, 2> positionAdjust{};
 	};
-	struct VRRenderScalePresentationObservation;
 	/** Freeze the engine framebuffer camera when its mapped buffer is published. */
 	void RecordNeuralCaptureCamera(uint32_t a_frame) noexcept;
 	/** Frozen render/route values; never reconstruct applied state from current settings. */
@@ -609,6 +615,8 @@ public:
 	nlohmann::json CaptureNeuralSubmission(vr::EVREye a_eye, uint64_t a_cycle,
 		ID3D11Texture2D* a_texture, std::string_view a_path,
 		const VRRenderScalePresentationObservation* a_observation) const;
+
+#endif
 
 	/** @brief One unconditional Interior or Exterior CSX profile from VRFpsStabilizer.ini. */
 	struct VRFpsStabilizerProfile
@@ -1463,8 +1471,10 @@ public:
 		bool transitionCooldown = false;
 		VRPresentationStretchTelemetryPolicy::StretchReason stretchReason =
 			VRPresentationStretchTelemetryPolicy::StretchReason::Unattributed;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::shared_ptr<const NeuralCaptureRecord> neuralCapture;
 		std::uintptr_t neuralCaptureTexture = 0;
+#endif
 		bool retainedNeuralPair = false;
 		uint64_t retainedNeuralCompositorCycleToken = 0;
 		uint64_t retainedNeuralSettingsKey = 0;
@@ -3847,7 +3857,9 @@ public:
 		uint64_t menuLayerGeneration = 0;
 		uint32_t presentedEyeMask = 0;
 		NeuralStereoRouteSnapshot publishedRoute{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::shared_ptr<const NeuralCaptureRecord> publishedCapture;
+#endif
 		std::array<VRRenderScalePresentationObservation, 2> publishedPresentationObservations{};
 		vr::EColorSpace publishedColorSpace = vr::ColorSpace_Auto;
 		D3D11_TEXTURE2D_DESC publishedSourceDesc{};
@@ -4420,6 +4432,9 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	void SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& a_args,
+		const UpscalingDLSS::ViewportCrop& a_dlssCrop, const std::array<uint32_t, 2>& a_colorOrigin,
+		const std::array<uint32_t, 2>& a_guideOrigin) noexcept;
 	/** NR's own menu warns only after a FOV + TAA fallback in this enabled session. */
 	void DrawNeuralRenderingFovWarning(bool a_neuralRenderingMenu) const;
 	/** Keeps runtime rejection and recovery visible while the NR master is off. */
@@ -4450,6 +4465,7 @@ private:
 	std::atomic_uint64_t vrNativeRestoreCommitSuccessCount{ 0 };
 	void RecordVRMainPassDispatchStage(VRMainPassDispatchStage a_stage, uint32_t a_frame) noexcept;
 #endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	static constexpr std::size_t kNeuralPassTelemetryFrameCount = 4;
 	static constexpr std::size_t kNeuralRouteCount =
 		static_cast<std::size_t>(NeuralStereoRouteRole::Count);
@@ -4489,7 +4505,7 @@ private:
 	uint64_t neuralCaptureConfigurationColorRevision = 0;
 	std::atomic_uint64_t neuralCaptureEvidenceFailures{ 0 };
 	void BeginNeuralCaptureFrame(NeuralStereoRouteRole a_role, uint32_t a_frame, uint64_t a_cycle = 0) noexcept;
-	void SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& a_args,
+	void SetNeuralCaptureExecutionContext(NeuralRendering::RendererApplyArgs& a_args,
 		const UpscalingDLSS::ViewportCrop& a_dlssCrop, const std::array<uint32_t, 2>& a_colorOrigin,
 		const std::array<uint32_t, 2>& a_guideOrigin) noexcept;
 	Util::PassTimingHandle CaptureNeuralStage(NeuralStereoRouteRole a_role, uint32_t a_eye,
@@ -4504,8 +4520,19 @@ private:
 	uint64_t neuralStereoRouteSnapshotSequence = 0;
 	std::array<NeuralStereoRouteSnapshot, 2> neuralStereoRouteSnapshots{
 		NeuralStereoRouteSnapshot{ .role = NeuralStereoRouteRole::Main },
-		NeuralStereoRouteSnapshot{ .role = NeuralStereoRouteRole::Submit }
+		NeuralStereoRouteSnapshot {.role = NeuralStereoRouteRole::Submit }
 	};
+#else
+	void BeginNeuralCaptureFrame(NeuralStereoRouteRole, uint32_t, uint64_t = 0) noexcept {}
+	Util::PassTimingHandle CaptureNeuralStage(NeuralStereoRouteRole, uint32_t,
+		uint32_t, uint32_t, uint64_t, const char*,
+		std::optional<uint64_t> = {}, std::optional<uint64_t> = {}) noexcept { return {}; }
+	void RecordNeuralStageWork(const Util::PassTimingHandle&, uint64_t,
+		std::optional<uint64_t> = {}) noexcept {}
+	void PinNeuralCapturePresentation(VRRenderScalePresentationObservation&, ID3D11Texture2D*) const noexcept {}
+	void PublishNeuralSubmitCycleSnapshot(uint64_t, uint32_t) noexcept {}
+	void PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot&) noexcept {}
+#endif
 	struct NeuralSubmitPairBoundaryState
 	{
 		uint64_t token = 0;

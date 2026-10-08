@@ -53,7 +53,7 @@ file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_color_route_latch_state.h" "${transaction}\n${capture}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_color_route_latch_pipeline.h"
     "namespace NeuralRendering::Color {\n${constants}\n"
-    "void LatchWork(Work& work, const Configuration& config, Observation observation) { std::uint64_t measurementOrder_ = 0;\n${work_latch}\n}\n"
+    "void LatchWork(Work& work, const Configuration& config, Observation observation) { [[maybe_unused]] std::uint64_t measurementOrder_ = 0;\n${work_latch}\n}\n"
     "// Only handle presence is modeled; the exact production preflight runs before any GPU work.\n"
     "struct ReconstructionPreflight {\n"
     "bool context = true, neural = true, neuralSRV = true, preparedSRV = true, reconstruct_ = true, constants_ = true;\n"

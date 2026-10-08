@@ -138,11 +138,15 @@ namespace NeuralRendering::Color
 	}
 	Status Registry::GetStatus() const
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::scoped_lock lock(mutex_);
 		auto status = status_;
 		status.measurementBatches = measurementBatches_.Latest();
 		status.evictedIncompleteBatches = measurementBatches_.EvictedIncomplete();
 		return status;
+#else
+		return {};
+#endif
 	}
 	bool Registry::Configure(const Settings& settings, const Experiments& experiments, std::uint64_t expectedRevision)
 	{
@@ -155,10 +159,12 @@ namespace NeuralRendering::Color
 			return true;
 		if (configuration_.revision == std::numeric_limits<std::uint64_t>::max())
 			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		const bool beginCapture = experiments.captureFrameEvidence && !configuration_.experiments.captureFrameEvidence;
 		const auto captureEpoch = captureEpoch_.load(std::memory_order_relaxed);
 		if (beginCapture && captureEpoch == std::numeric_limits<std::uint64_t>::max())
 			return false;
+#endif
 		auto next = configuration_;
 		next.settings = settings;
 		next.experiments = experiments;
@@ -172,21 +178,26 @@ namespace NeuralRendering::Color
 		}
 		configuration_ = next;
 		revision_.store(next.revision, std::memory_order_release);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (beginCapture)
 			captureEpoch_.store(captureEpoch + 1, std::memory_order_release);
 		captureEvidenceEnabled_.store(next.experiments.captureFrameEvidence, std::memory_order_release);
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		ExposureCapture::Instance().Request(NeedsExposureCapture(next));
 #endif
 		return true;
 	}
-	MeasurementBatchHistory<Measurement>::Lease Registry::PinMeasurementBatch(const MeasurementBatchKey& key)
+	MeasurementBatchHistory<Measurement>::Lease Registry::PinMeasurementBatch([[maybe_unused]] const MeasurementBatchKey& key)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		std::scoped_lock lock(mutex_);
 		return measurementBatches_.Pin(key);
+#else
+		return {};
+#endif
 	}
-	void Registry::Record(const Observation& observation) noexcept
+	void Registry::Record([[maybe_unused]] const Observation& observation) noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if constexpr (!kDevelopmentDiagnostics) {
 			return;
 		} else {
@@ -206,9 +217,11 @@ namespace NeuralRendering::Color
 			} catch (...) { /* Optional diagnostics never alter rendering. */
 			}
 		}
+#endif
 	}
-	void Registry::Record(const Measurement& measurement) noexcept
+	void Registry::Record([[maybe_unused]] const Measurement& measurement) noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if constexpr (!kDevelopmentDiagnostics) {
 			return;
 		} else {
@@ -230,9 +243,11 @@ namespace NeuralRendering::Color
 			} catch (...) { /* Optional diagnostics never alter rendering. */
 			}
 		}
+#endif
 	}
 	void Registry::DropMeasurement() noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if constexpr (!kDevelopmentDiagnostics) {
 			return;
 		} else {
@@ -241,6 +256,7 @@ namespace NeuralRendering::Color
 				++status_.dropped;
 			} catch (...) {}
 		}
+#endif
 	}
 	void Texture::Abandon() noexcept
 	{
@@ -262,9 +278,11 @@ namespace NeuralRendering::Color
 		result.Abandon();
 		exposure.Abandon();
 		prepared = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		for (auto& readback : readbacks) readback.Abandon();
+#endif
 	}
-	bool Pipeline::EnsureShaders(ID3D11Device* device, bool diagnostics, HRESULT& result)
+	bool Pipeline::EnsureShaders(ID3D11Device* device, [[maybe_unused]] bool diagnostics, HRESULT& result)
 	{
 		result = E_FAIL;
 		if (compileFailed_)
@@ -287,6 +305,7 @@ namespace NeuralRendering::Color
 				return false;
 			Util::SetResourceName(constants_.Get(), "NeuralRendering::ColourConstants");
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (kDevelopmentDiagnostics && diagnostics && !measure_ && !measureCompileAttempted_) {
 			measureCompileAttempted_ = true;
 			try {
@@ -296,6 +315,7 @@ namespace NeuralRendering::Color
 				measure_.Reset();
 			}
 		}
+#endif
 		result = S_OK;
 		return true;
 	}
@@ -365,8 +385,9 @@ namespace NeuralRendering::Color
 		allocationResult = S_OK;
 		return true;
 	}
-	void Pipeline::Poll(ID3D11DeviceContext* context, Work& work)
+	void Pipeline::Poll([[maybe_unused]] ID3D11DeviceContext* context, [[maybe_unused]] Work& work)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if constexpr (!kDevelopmentDiagnostics) {
 			return;
 		} else {
@@ -397,27 +418,37 @@ namespace NeuralRendering::Color
 				Registry::Instance().Record(measurement);
 			}
 		}
+#endif
 	}
 	std::uint64_t Pipeline::BeginMeasurementBatch() noexcept
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if constexpr (!kDevelopmentDiagnostics) {
 			return 0;
 		} else {
 			return measurementBatchOrder_ == std::numeric_limits<std::uint64_t>::max() ? 0 : ++measurementBatchOrder_;
 		}
+#else
+		return 0;
+#endif
 	}
 	bool Pipeline::Prepare(ID3D11DeviceContext* context, Work& work, ID3D11Resource* original,
 		ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV, const Configuration& config, Observation observation)
 	{
 		work.prepared = false;
-		if (!context || !original || !prepared || !preparedUAV || !work.baseline.resource || !constants_ ||
-			measurementOrder_ == std::numeric_limits<std::uint64_t>::max())
+		if (!context || !original || !prepared || !preparedUAV || !work.baseline.resource || !constants_)
 			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (measurementOrder_ == std::numeric_limits<std::uint64_t>::max())
+			return false;
+#endif
 		const auto start = DiagnosticNow();
 		work.observation = std::move(observation);
 		work.configuration = config;
 		auto& o = work.observation;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		o.measurementOrder = ++measurementOrder_;
+#endif
 		o.profile = EffectiveProfile(config, o.insertion);
 		o.mode = config.EffectiveMode();
 		o.revision = config.revision;
@@ -433,6 +464,7 @@ namespace NeuralRendering::Color
 		o.retainedBytes = 2 * pixelBytes * work.capacityWidth * work.capacityHeight;
 		CS_GPU_DETAIL_PASS("Upscaling::NRColorPreparation", o.preparationPass);
 		ComputeStateGuard<5> guard(context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (NeedsExposureCapture(config)) {
 			const ExposureTransaction key{ o.frame, o.sourceWorldFrame, o.insertion, (o.slot % 4u) / 2u, o.generation,
 				o.profile.exposureSource == ExposureSource::Manual ? ExposureSource::CapturedHDR : o.profile.exposureSource };
@@ -440,7 +472,9 @@ namespace NeuralRendering::Color
 				return false;
 			o.exposureState = work.exposure.state;
 			o.exposure = work.exposure.evidence;
-		} else {
+		} else
+#endif
+		{
 			o.exposureState = ExposureBindingState::NotRequested;
 			o.exposure = {};
 		}
@@ -512,9 +546,10 @@ namespace NeuralRendering::Color
 			Measure(context, work, neuralSRV, preparedSRV);
 		return true;
 	}
-	void Pipeline::Measure(ID3D11DeviceContext* context, Work& work,
-		ID3D11ShaderResourceView* neural, ID3D11ShaderResourceView* prepared)
+	void Pipeline::Measure([[maybe_unused]] ID3D11DeviceContext* context, [[maybe_unused]] Work& work,
+		[[maybe_unused]] ID3D11ShaderResourceView* neural, [[maybe_unused]] ID3D11ShaderResourceView* prepared)
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if constexpr (!kDevelopmentDiagnostics) {
 			return;
 		} else {
@@ -538,6 +573,7 @@ namespace NeuralRendering::Color
 			readback.source = work.observation;
 			readback.pending = true;
 		}
+#endif
 	}
 	void Pipeline::Commit(ID3D11DeviceContext* context, const Work& work, ID3D11Resource* destination)
 	{
@@ -550,10 +586,14 @@ namespace NeuralRendering::Color
 	{
 		prepare_.Reset();
 		reconstruct_.Reset();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		measure_.Reset();
+#endif
 		constants_.Reset();
 		compileFailed_ = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		measureCompileAttempted_ = false;
+#endif
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		ExposureCapture::Instance().Reset();
 #endif
@@ -562,7 +602,9 @@ namespace NeuralRendering::Color
 	{
 		(void)prepare_.Detach();
 		(void)reconstruct_.Detach();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		(void)measure_.Detach();
+#endif
 		(void)constants_.Detach();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		ExposureCapture::Instance().Abandon();

@@ -20654,6 +20654,8 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 		return acceptTransition();
 	}
 
+	NeuralRendering::CharacterRendering::Instance().Invalidate();
+	neuralTemporalAdmissionLatch.store(0, std::memory_order_release);
 	const bool resetSucceeded = neuralRenderer.Reset();
 	if (a_backendResetSucceeded)
 		*a_backendResetSucceeded = resetSucceeded;
@@ -20693,6 +20695,9 @@ bool Upscaling::IsNeuralRenderingInsertionTransitionBlocked() const noexcept
 bool Upscaling::TryClaimNeuralRenderingRoute(
 	NeuralStereoRouteRole a_role) noexcept
 {
+	if (!IsNeuralRenderingEnabled())
+		return false;
+
 	if (!globals::state || a_role == NeuralStereoRouteRole::Count ||
 		IsNeuralRenderingInsertionTransitionBlocked()) {
 		return false;
@@ -47184,12 +47189,15 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 	auto state = globals::state;
 	if (!state)
 		return FidelityFX::UpscaleResult::Failed;
-	const auto neuralInsertionPoint =
-		GetLatchedNeuralRenderingInsertionPoint();
-	if (mainFinalLdrNeuralState.frame != state->frameCount)
-		mainFinalLdrNeuralState = {};
-	BeginNeuralCaptureFrame(NeuralStereoRouteRole::Main, state->frameCount);
 	const bool neuralRequested = IsNeuralRenderingRequested();
+	const auto neuralInsertionPoint = neuralRequested ?
+	                                      GetLatchedNeuralRenderingInsertionPoint() :
+	                                      NeuralRendering::kDefaultInsertionPoint;
+	if (neuralRequested) {
+		if (mainFinalLdrNeuralState.frame != state->frameCount)
+			mainFinalLdrNeuralState = {};
+		BeginNeuralCaptureFrame(NeuralStereoRouteRole::Main, state->frameCount);
+	}
 	const bool neuralHardMenuBlocked = neuralRequested &&
 	                                   IsNeuralRenderingHardMenuBlocked(*this, state);
 	const auto neuralTemporalAdmission = neuralRequested ? BuildNeuralTemporalAdmission(
@@ -55866,9 +55874,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const uint32_t currentFrame = state->frameCount;
 	const bool neuralSubmitConfigured = IsNeuralRenderingRequested();
 	const uint32_t currentSubmitThreadId = GetCurrentThreadId();
-	BeginNeuralCaptureFrame(NeuralStereoRouteRole::Submit, currentFrame, a_compositorCycleToken);
-	const auto neuralInsertionPoint =
-		GetLatchedNeuralRenderingInsertionPoint();
+	if (neuralSubmitConfigured)
+		BeginNeuralCaptureFrame(NeuralStereoRouteRole::Submit, currentFrame, a_compositorCycleToken);
+	const auto neuralInsertionPoint = neuralSubmitConfigured ?
+	                                      GetLatchedNeuralRenderingInsertionPoint() :
+	                                      NeuralRendering::kDefaultInsertionPoint;
 	const bool currentMenuPresentationContext =
 		IsVRMenuPresentationContextActive();
 	const auto requiresNeuralMenuLayer = [&]() {
@@ -55884,14 +55894,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					   vrMenuFrameTransaction.OwnsPresentationWork()));
 	};
 	const bool csOverlayOpen = IsCommunityShadersMenuOpen();
-	const bool hardMenuBlocked =
-		IsMainMenuContextActive() ||
-		IsVRLoadingPresentationContextActive(state) ||
-		IsSaveLoadTransitionContextActive() ||
-		IsVRLoadingSubmitProtectionContextActive(*this, state);
-	const uint64_t neuralMenuQueryEpoch =
-		g_neuralMenuQueryEpoch.load(std::memory_order_acquire);
+	const bool hardMenuBlocked = neuralSubmitConfigured &&
+	                             (IsMainMenuContextActive() ||
+									 IsVRLoadingPresentationContextActive(state) ||
+									 IsSaveLoadTransitionContextActive() ||
+									 IsVRLoadingSubmitProtectionContextActive(*this, state));
+	const uint64_t neuralMenuQueryEpoch = neuralSubmitConfigured ?
+	                                          g_neuralMenuQueryEpoch.load(std::memory_order_acquire) :
+	                                          0;
 	const bool replayLateMenuCompositeReady =
+		neuralSubmitConfigured &&
 		submitStageNeuralStereoState.usedMenuFinalComposite &&
 		vrMenuCommittedLayerValid &&
 		vrMenuCommittedLayerOperationCount != 0 &&
@@ -55902,14 +55914,16 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const uint64_t replayMenuLayerGeneration =
 		replayLateMenuCompositeReady ? vrMenuCommittedLayerGeneration : 0;
 	const bool replayMenuContinuityAllowed =
+		neuralSubmitConfigured &&
 		NeuralRendering::ResolveMenuContinuityAllowed(
 			hardMenuBlocked,
 			requiresNeuralMenuLayer(),
 			replayLateMenuCompositeReady);
-	auto neuralTemporalAdmission = BuildNeuralTemporalAdmission(
-		NeuralStereoRouteRole::Submit,
-		hardMenuBlocked,
-		replayMenuContinuityAllowed);
+	auto neuralTemporalAdmission = neuralSubmitConfigured ? BuildNeuralTemporalAdmission(
+																NeuralStereoRouteRole::Submit,
+																hardMenuBlocked,
+																replayMenuContinuityAllowed) :
+	                                                        NeuralRendering::TemporalAdmissionResult{};
 	bool routeLateMenuCompositeReady = replayLateMenuCompositeReady;
 	bool routeMenuContinuityAllowed = replayMenuContinuityAllowed;
 	if (neuralSubmitConfigured)
@@ -55919,11 +55933,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		return false;
 	}
 
-	if (submitStageNeuralStereoState.IsCycleLatched() &&
-		submitStageNeuralStereoState.compositorCycle != a_compositorCycleToken) {
+	if (submitStageNeuralStereoState.decisionReady &&
+		(!neuralSubmitConfigured || submitStageNeuralStereoState.compositorCycle != a_compositorCycleToken)) {
 		submitStageNeuralStereoState = {};
 	}
 	const bool replayLatchedNeuralCycle =
+		neuralSubmitConfigured &&
 		a_compositorCycleToken != 0 &&
 		submitStageNeuralStereoState.IsCycleLatched() &&
 		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken;
@@ -55981,7 +55996,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	const bool fullResolutionNeural = neuralSubmitConfigured &&
 	                                  GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution;
 	const bool neuralSubmitFrameGenerationActive =
-		IsNeuralRenderingFrameGenerationBlocked();
+		neuralSubmitConfigured && IsNeuralRenderingFrameGenerationBlocked();
 	bool neuralSubmitBaseEligible = false;
 	NeuralStereoFallbackReason neuralSubmitAdmissionFallbackReason =
 		NeuralStereoFallbackReason::SubmitPresentationGate;
@@ -56200,6 +56215,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	uint64_t submitStageMenuLayerGeneration =
 		lateMenuCompositeReady ? vrMenuCommittedLayerGeneration : 0;
 	const bool menuContinuityAllowed =
+		neuralSubmitConfigured &&
 		NeuralRendering::ResolveMenuContinuityAllowed(
 			hardMenuBlocked,
 			requiresNeuralMenuLayer(),
@@ -56208,10 +56224,11 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		.menuContextActive = hardMenuBlocked,
 		.pausedContinuityAllowed = menuContinuityAllowed,
 	};
-	neuralTemporalAdmission = BuildNeuralTemporalAdmission(
-		NeuralStereoRouteRole::Submit,
-		submitTemporalMenuPolicy.menuContextActive,
-		submitTemporalMenuPolicy.pausedContinuityAllowed);
+	neuralTemporalAdmission = neuralSubmitConfigured ? BuildNeuralTemporalAdmission(
+														   NeuralStereoRouteRole::Submit,
+														   submitTemporalMenuPolicy.menuContextActive,
+														   submitTemporalMenuPolicy.pausedContinuityAllowed) :
+	                                                   NeuralRendering::TemporalAdmissionResult{};
 	if (neuralSubmitConfigured)
 		ObserveNeuralTemporalAdmission(
 			NeuralStereoRouteRole::Submit, neuralTemporalAdmission);
@@ -56756,6 +56773,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		NeuralStereoFallbackReason::SubmitResourcePreparationFailed;
 	const uint64_t neuralSettingsKey = neuralSubmitConfigured ? BuildNeuralRenderingSettingsKey(settings) : 0;
 	const bool frozenNeuralStereoPairForCycle =
+		neuralSubmitConfigured &&
 		a_compositorCycleToken != 0 &&
 		submitStageNeuralStereoState.outputsReady &&
 		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken &&
@@ -56764,6 +56782,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		submitStageNeuralStereoState.publishedOutputs[1] &&
 		submitStageNeuralStereoState.publishedOutputs[1]->resource;
 	const bool terminalNeuralStereoFailureForCycle =
+		neuralSubmitConfigured &&
 		a_compositorCycleToken != 0 &&
 		submitStageNeuralStereoState.decisionReady &&
 		submitStageNeuralStereoState.preflightFailed &&
@@ -58147,14 +58166,15 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		TryClaimNeuralRenderingRoute(NeuralStereoRouteRole::Submit);
 	neuralSubmitRequested =
 		neuralSubmitRouteCandidate && neuralSubmitRouteClaimed;
-	const auto neuralSubmitSourceProof =
-		NeuralRendering::ResolveSubmitStereoSourceProof(
-			a_compositorCycleToken,
-			a_expectedSubmitPairBoundaryToken,
-			a_matchedSubmitPairBoundaryToken,
-			sourceUsesCombinedStereoLayout,
-			sourceDesc.ArraySize,
-			neuralSubmitSourceSignatureProven);
+	const auto neuralSubmitSourceProof = neuralSubmitRequested ?
+	                                         NeuralRendering::ResolveSubmitStereoSourceProof(
+												 a_compositorCycleToken,
+												 a_expectedSubmitPairBoundaryToken,
+												 a_matchedSubmitPairBoundaryToken,
+												 sourceUsesCombinedStereoLayout,
+												 sourceDesc.ArraySize,
+												 neuralSubmitSourceSignatureProven) :
+	                                         NeuralRendering::SubmitStereoSourceProof{};
 	neuralSubmitSourceBatchEligible =
 		neuralSubmitRequested &&
 		peerInputFreshnessProven &&
@@ -58277,10 +58297,12 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		};
 		submitStageNeuralStereoState.publishedRoute = route;
 		PublishNeuralStereoRouteSnapshot(route);
-		if (a_pairComplete) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_pairComplete && NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled()) {
 			std::scoped_lock captureLock(neuralCaptureMutex);
 			submitStageNeuralStereoState.publishedCapture = neuralCaptureRecords[1];
 		}
+#endif
 	};
 	if (neuralStereoDecisionChanged && !neuralSubmitSourceBatchEligible) {
 		const auto disposition =
@@ -59361,6 +59383,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		true,
 		submitStageFSRBatch);
 	const bool retainedNeuralPairForPresentation =
+		neuralSubmitConfigured &&
 		submitStageNeuralStereoState.outputsReady &&
 		VRSubmitInputFreshnessPolicy::MatchesProducerProof(submitStageNeuralStereoState.inputProof, submitInputProof) &&
 		submitStageNeuralStereoState.compositorCycle == a_compositorCycleToken &&
@@ -59686,9 +59709,10 @@ bool Upscaling::TryReplaceVanillaDynamicResolutionUpsample(const char* a_passNam
 void Upscaling::RequestHistoryReset() noexcept
 {
 	historyResetRequested = true;
-	NeuralRendering::CharacterRendering::Instance().Invalidate(globals::state ?
-																   globals::state->frameCount :
-																   std::numeric_limits<uint32_t>::max());
+	if (IsNeuralRenderingEnabled())
+		NeuralRendering::CharacterRendering::Instance().Invalidate(globals::state ?
+																	   globals::state->frameCount :
+																	   std::numeric_limits<uint32_t>::max());
 	if (auto* state = globals::state; state && historyResetLatchedFrame == state->frameCount)
 		historyResetThisFrame = true;
 }
@@ -59721,6 +59745,9 @@ void Upscaling::ObserveNeuralTemporalAdmission(
 	NeuralStereoRouteRole a_role,
 	const NeuralRendering::TemporalAdmissionResult& a_admission) noexcept
 {
+	if (!IsNeuralRenderingEnabled())
+		return;
+
 	const auto routeIndex = static_cast<uint32_t>(a_role);
 	if (routeIndex >= static_cast<uint32_t>(NeuralStereoRouteRole::Count))
 		return;
@@ -61381,8 +61408,11 @@ const char* Upscaling::GetNeuralStereoFallbackReasonName(NeuralStereoFallbackRea
 	}
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 void Upscaling::PublishNeuralSubmitCycleSnapshot(uint64_t a_compositorCycle, uint32_t a_frame) noexcept
 {
+	if (!IsNeuralRenderingEnabled())
+		return;
 	if constexpr (!NeuralRendering::kDevelopmentDiagnostics) {
 		return;
 	} else {
@@ -61407,6 +61437,8 @@ void Upscaling::RecordNeuralPassTelemetry(
 	bool a_success,
 	uint32_t a_frame) noexcept
 {
+	if (!IsNeuralRenderingEnabled())
+		return;
 	if constexpr (!NeuralRendering::kDevelopmentDiagnostics) {
 		return;
 	} else {
@@ -61524,6 +61556,8 @@ void Upscaling::PopulateNeuralRoutePassTelemetry(
 
 void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot& a_snapshot) noexcept
 {
+	if (!IsNeuralRenderingEnabled())
+		return;
 	if constexpr (!NeuralRendering::kDevelopmentDiagnostics) {
 		return;
 	} else {
@@ -61547,6 +61581,8 @@ void Upscaling::PublishNeuralStereoRouteSnapshot(const NeuralStereoRouteSnapshot
 		}
 	}
 }
+
+#endif
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void Upscaling::StartVRRenderScaleStressSession()

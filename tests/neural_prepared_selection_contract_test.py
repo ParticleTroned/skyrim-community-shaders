@@ -81,7 +81,9 @@ class PreparedSelectionContract(unittest.TestCase):
                     capture_output=True, text=True, check=True)
                 for token in ("completedOutputSerial", "a_outcome.outputPlans["):
                     self.assertNotIn(token, result.stdout)
-                self.assertEqual("args.renderingMode" in result.stdout, enabled)
+                self.assertIn("args.renderingMode = GetNeuralRenderingMode();", result.stdout)
+                self.assertIn("args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent", result.stdout)
+                self.assertEqual("SetNeuralCaptureExecutionContext" in result.stdout, enabled)
         renderer = sources[1]
         apply = renderer[renderer.index("bool Renderer::State::ApplyRegionBatchLocked("):
                          renderer.index("void Renderer::State::CaptureReplayBatch(")]
@@ -94,10 +96,11 @@ class PreparedSelectionContract(unittest.TestCase):
 
     def test_runtime_mode_is_independent_of_capture(self):
         source = read("src/Features/Upscaling/NeuralCapture.cpp")
-        setter = source[source.index("void Upscaling::SetNeuralExecutionContext("):
-                        source.index("Util::PassTimingHandle Upscaling::CaptureNeuralStage(")]
-        self.assertLess(setter.index("args.renderingMode = GetNeuralRenderingMode();"),
-                        setter.index("CaptureEvidenceEnabled()"))
+        start = source.index("void Upscaling::SetNeuralExecutionContext(")
+        setter = source[start:source.index("\n}\n", start)]
+        for parameter in ("args.renderingMode = GetNeuralRenderingMode();",
+                          "args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent"):
+            self.assertLess(setter.index(parameter), setter.index("SetNeuralCaptureExecutionContext("))
         renderer = read("src/Features/Upscaling/NeuralRendering/Renderer.cpp")
         policies = renderer[renderer.index("void Renderer::State::ApplyCompactLayoutLocked("):
                             renderer.index("bool Renderer::State::ApplyBatchLocked(")]

@@ -99,6 +99,7 @@ namespace
 			{ "detailStrength", settings.detailStrength }, { "appearanceMix", settings.appearanceMix },
 			{ "maximumDetailStops", settings.maximumDetailStops }, { "lightingPreservation", settings.lightingPreservation } };
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	Json ProfileJson(const Profile& profile)
 	{
 		return { { "domain", Name(profile.domain, domains) }, { "transform", Name(profile.transform, transforms) },
@@ -254,7 +255,6 @@ namespace
 		return { { "ok", true }, { "action", "assets" }, { "allPresent", complete }, { "assets", assets },
 			{ "hashVerified", false }, { "note", "Presence only. Run tools/nr-color/verify_assets.py against staged/deployed Data for exact source hash parity." } };
 	}
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	void Handler(void*, const char* arguments, void* sink, DevBenchAPI::WriteFn write)
 	{
 		if (!write)
@@ -605,11 +605,12 @@ namespace
             "type": "boolean"
           },
           "captureEngineExposure": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Development builds only; HDR observation is suspended while the NR master toggle is off."
           },
           "captureFrameEvidence": {
             "type": "boolean",
-            "description": "Arm frozen NR configuration/outcome evidence and CPU diagnostic timings for HMD screenshots. With GPU profiling enabled, the armed scopes also issue GPU detail timestamps. Does not enable colour passes or change input epochs; disable for performance baselines."
+            "description": "Development builds only; recording is suspended while the NR master toggle is off. Arm frozen NR configuration/outcome evidence and CPU diagnostic timings for HMD screenshots. With GPU profiling enabled, the armed scopes also issue GPU detail timestamps. Does not enable colour passes or change input epochs; disable for performance baselines."
           },
           "applyModelEdit": {
             "type": "boolean"
@@ -624,6 +625,7 @@ namespace
 #endif
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 namespace NeuralRendering::Color
 {
 	nlohmann::json ConfigurationEvidenceJson(const Configuration& config)
@@ -654,6 +656,7 @@ namespace NeuralRendering::Color
 	}
 }
 
+#endif
 NeuralRenderingFeature& NeuralRenderingFeature::Instance()
 {
 	static NeuralRenderingFeature instance;
@@ -702,7 +705,8 @@ void NeuralRenderingFeature::EarlyPrepass()
 {
 	globals::features::upscaling.SetNeuralRenderingFeatureAvailable(loaded);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	ExposureCapture::Instance().RefreshProducers();
+	if (globals::features::upscaling.IsNeuralRenderingEnabled())
+		ExposureCapture::Instance().RefreshProducers();
 #endif
 }
 bool NeuralRenderingFeature::SupportsPerformanceCostMeasurement() const
@@ -792,9 +796,13 @@ void NeuralRenderingFeature::DrawColourSettings()
 
 	if (config.settings.mode == Mode::Managed) {
 		ImGui::TextWrapped("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.");
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		ImGui::TextWrapped(showDiagnostics ?
 							   "Adjust its session-only calibration under Colour experiments and diagnostics. Identity calibration can look like Original." :
 							   "Your saved mode is retained. Choose Original or Preserve source, or set Log Level to Debug to inspect its calibration.");
+#else
+		ImGui::TextWrapped("Your saved mode is retained. Choose Original or Preserve source.");
+#endif
 	}
 	const bool usesSourceColourReconstruction =
 		config.settings.mode == Mode::PreserveSource || config.settings.mode == Mode::NeuralLighting;
@@ -835,6 +843,7 @@ void NeuralRenderingFeature::DrawColourSettings()
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Limits added brightness changes. 1 stop allows up to twice or half the original brightness. Neural appearance mix is applied separately.");
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	if (showDiagnostics && ImGui::TreeNode("Colour experiments and diagnostics")) {
 		if (config.experiments.captureEngineExposure || config.experiments.captureFrameEvidence || config.experiments.diagnostics) {
 			ImGui::TextWrapped("Diagnostic captures are active and add overhead.");
@@ -926,6 +935,7 @@ void NeuralRenderingFeature::DrawColourSettings()
 			ImGui::TextUnformatted(assets.c_str());
 		ImGui::TreePop();
 	}
+#endif
 	if (changed && !Registry::Instance().Configure(config.settings, config.experiments, config.revision))
 		ImGui::TextWrapped("Settings changed concurrently; retry after the next UI refresh.");
 }

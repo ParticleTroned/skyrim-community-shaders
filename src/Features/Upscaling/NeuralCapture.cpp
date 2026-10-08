@@ -1,15 +1,29 @@
 #include "Features/Upscaling.h"
-#include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidence.h"
-#include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
-#include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
-#include "Globals.h"
-#include "State.h"
-#include "Utils/ContentHash.h"
-#include <algorithm>
-#include <cstring>
-#include <memory>
+
+void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& args,
+	[[maybe_unused]] const UpscalingDLSS::ViewportCrop& dlssCrop, [[maybe_unused]] const std::array<uint32_t, 2>& colorOrigin,
+	[[maybe_unused]] const std::array<uint32_t, 2>& guideOrigin) noexcept
+{
+	args.renderingMode = GetNeuralRenderingMode();
+	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
+		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	SetNeuralCaptureExecutionContext(args, dlssCrop, colorOrigin, guideOrigin);
+#endif
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidence.h"
+#	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
+#	include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
+#	include "Globals.h"
+#	include "State.h"
+#	include "Utils/ContentHash.h"
+#	include <algorithm>
+#	include <cstring>
+#	include <memory>
 
 void to_json(nlohmann::json&, const Upscaling::Settings&);
 
@@ -23,10 +37,10 @@ namespace
 		// Capture fingerprints include transient controls even though saves omit them.
 		values["neuralCharacterDebugView"] = settings.neuralCharacterDebugView;
 		values["neuralCharacterMaskTestMode"] = settings.neuralCharacterMaskTestMode;
-#ifdef DEVBENCH_BRIDGE_ENABLED
+#	ifdef DEVBENCH_BRIDGE_ENABLED
 		values["neuralCharacterCurrentContextEnabled"] = settings.neuralCharacterCurrentContextEnabled;
 		values["neuralCharacterGpuMaskSupportEnabled"] = settings.neuralCharacterGpuMaskSupportEnabled;
-#endif
+#	endif
 		return { { "upscaling", std::move(values) }, { "color", NeuralRendering::Color::ConfigurationEvidenceJson(color) } };
 	}
 	Json Unavailable(std::string_view reason)
@@ -47,7 +61,7 @@ std::string Upscaling::GetNeuralRequestedConfigurationFingerprint() const
 
 void Upscaling::RecordNeuralCaptureCamera(uint32_t frame) noexcept
 {
-	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+	if (!IsNeuralRenderingEnabled() || !NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return;
 	std::scoped_lock lock(neuralCaptureMutex);
 	neuralCaptureCamera.viewSourceFrame = frame;
@@ -67,7 +81,7 @@ void Upscaling::RecordNeuralCaptureCamera(uint32_t frame) noexcept
 
 void Upscaling::BeginNeuralCaptureFrame(NeuralStereoRouteRole role, uint32_t frame, uint64_t cycle) noexcept
 {
-	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+	if (!IsNeuralRenderingEnabled() || !NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return;
 	try {
 		const auto index = static_cast<size_t>(role);
@@ -105,14 +119,11 @@ void Upscaling::BeginNeuralCaptureFrame(NeuralStereoRouteRole role, uint32_t fra
 	}
 }
 
-void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& args,
+void Upscaling::SetNeuralCaptureExecutionContext(NeuralRendering::RendererApplyArgs& args,
 	const UpscalingDLSS::ViewportCrop& dlssCrop, const std::array<uint32_t, 2>& colorOrigin,
 	const std::array<uint32_t, 2>& guideOrigin) noexcept
 try {
-	args.renderingMode = GetNeuralRenderingMode();
-	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
-		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
-	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+	if (!IsNeuralRenderingEnabled() || !NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return;
 	const auto role = NeuralRendering::ClassifyFeatureSlotMask(1u << args.featureSlot);
 	const auto index = role == NeuralRendering::FeatureSlotRoute::Main ? 0u : 1u;
@@ -150,7 +161,7 @@ Util::PassTimingHandle Upscaling::CaptureNeuralStage(NeuralStereoRouteRole role,
 	uint32_t frame, uint32_t world, uint64_t generation, const char* name,
 	std::optional<uint64_t> pixels, std::optional<uint64_t> bytes) noexcept
 try {
-	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+	if (!IsNeuralRenderingEnabled() || !NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return {};
 	std::scoped_lock lock(neuralCaptureMutex);
 	auto& begin = neuralCaptureBeginnings[static_cast<size_t>(role)];
@@ -186,7 +197,7 @@ try {
 
 void Upscaling::RecordNeuralCaptureRoute(const NeuralStereoRouteSnapshot& route) noexcept
 {
-	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+	if (!IsNeuralRenderingEnabled() || !NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return;
 	try {
 		const auto index = static_cast<size_t>(route.role);
@@ -391,7 +402,7 @@ nlohmann::json Upscaling::GetNeuralCaptureStatus() const
 	for (const auto& record : records)
 		if (record)
 			routes.push_back(SerializeNeuralCaptureRecord(*record));
-	return { { "schemaVersion", 1 }, { "enabled", NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled() },
+	return { { "schemaVersion", 1 }, { "enabled", IsNeuralRenderingEnabled() && NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled() },
 		{ "evidenceFailureCount", neuralCaptureEvidenceFailures.load(std::memory_order_relaxed) }, { "routes", std::move(routes) } };
 }
 
@@ -421,7 +432,7 @@ void Upscaling::PinNeuralCapturePresentation(VRRenderScalePresentationObservatio
 {
 	observation.neuralCapture.reset();
 	observation.neuralCaptureTexture = 0;
-	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled() || !output)
+	if (!IsNeuralRenderingEnabled() || !NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled() || !output)
 		return;
 	std::scoped_lock lock(neuralCaptureMutex);
 	if (observation.retainedNeuralPair) {
@@ -441,7 +452,7 @@ void Upscaling::PinNeuralCapturePresentation(VRRenderScalePresentationObservatio
 nlohmann::json Upscaling::CaptureNeuralSubmission(vr::EVREye eye, uint64_t cycle, ID3D11Texture2D* texture,
 	std::string_view path, const VRRenderScalePresentationObservation* observation) const
 {
-	if (!NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
+	if (!IsNeuralRenderingEnabled() || !NeuralRendering::Color::Registry::Instance().CaptureEvidenceEnabled())
 		return Unavailable("capture_frame_evidence_disabled");
 	const uint32_t eyeIndex = eye == vr::Eye_Right ? 1u : 0u;
 	std::shared_ptr<const NeuralCaptureRecord> record;
@@ -470,3 +481,5 @@ nlohmann::json Upscaling::CaptureNeuralSubmission(vr::EVREye eye, uint64_t cycle
 	result["retainedPair"] = observation && observation->retainedNeuralPair;
 	return result;
 }
+
+#endif

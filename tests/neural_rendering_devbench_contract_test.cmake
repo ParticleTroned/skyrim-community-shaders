@@ -1093,7 +1093,7 @@ foreach(_status_contract IN ITEMS
     [[{ "fullResolution", true }]]
     [[{ "reducedResolution", true }]]
     [[{ "foveated", globals::game::isVR }]]
-    [[Reduced-resolution NR runs at the active render resolution before DLSS, which owns temporal reconstruction.]]
+    [[Reduced-resolution NR runs before DLSS, which owns temporal reconstruction.]]
     [[eyeIndex < (globals::game::isVR ? 2u : 1u)]]
     [[{ "plan", FoveatedPlanJson(a_upscaling, activeProfile) }]]
     [[{ "observedFrame", observedFrame }]]

@@ -42,7 +42,7 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertLess(retire.index("colorPipeline_.Poll("), retire.index("ResetFeature("))
         self.assertLess(retire.index("SetActiveFeatureSlotLocked(a_slot)"), retire.index("interop_.WaitForIdle("))
         self.assertLess(retire.index("DropMeasurement()"), retire.index("slot = {}"))
-        self.assertIn("if constexpr (kDevelopmentDiagnostics)", retire)
+        self.assertIn("#ifdef DEVBENCH_BRIDGE_ENABLED\n\t\tfor (const auto& readback : slot.colorWork.readbacks)", retire)
         self.assertLess(retire.index("ResetFeature("), retire.index("slot = {}"))
         ensure = body(RENDERER, "bool Renderer::State::EnsureSlotLocked(")
         self.assertIn("RetireSlotLocked(a_slot, a_evidence)", ensure)

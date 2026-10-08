@@ -1289,7 +1289,9 @@ void ScreenshotApi::TransitionLocked(RequestRecord& a_record, std::string a_stat
 		return;
 	a_record.state = std::move(a_state);
 	if (IsTerminal(a_record.state)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		CSX::ScreenshotPolicy::FinalizeNeuralDiagnostics(a_record.diagnosticSnapshot, a_record.actual);
+#endif
 		a_record.terminalUtc = CSX::Api::ServiceFoundation::TimestampUtc();
 		a_record.terminalAt = std::chrono::steady_clock::now();
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1478,6 +1480,7 @@ void ScreenshotApi::OnSourceAcquired(std::string_view a_requestId, json a_acquis
 		}
 #endif
 		record.actual["acquisition"] = a_acquisition;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		const auto evidence = a_acquisition.value("nrEvidence", json::object());
 		const auto transaction = evidence.is_object() && evidence.contains("sourceTransactionId") &&
 		                                 evidence.at("sourceTransactionId").is_number_unsigned() ?
@@ -1493,6 +1496,7 @@ void ScreenshotApi::OnSourceAcquired(std::string_view a_requestId, json a_acquis
 		} catch (...) {
 			record.actual["captureDiagnostics"] = { { "schemaVersion", 1 }, { "finalized", true }, { "available", false }, { "reason", "companion_retention_failed" } };
 		}
+#endif
 		AppendEventLocked(record, "source.acquired", std::move(a_acquisition));
 	}
 }

@@ -807,9 +807,10 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
-				globals::d3d::context, shader, pixelShader,
-				pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+					globals::d3d::context, shader, pixelShader,
+					pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr);
 #endif
 			state->settingCustomShader = false;
 			shaderFound = true;
@@ -1148,7 +1149,8 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
+		if (globals::features::upscaling.IsNeuralRenderingEnabled())
+			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
 #endif
 		return;
 	}
@@ -1172,7 +1174,8 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
+	if (globals::features::upscaling.IsNeuralRenderingEnabled())
+		NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
 #endif
 	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesTotal, frame, ReadFrameDiagCounterTicks() - totalStartTicks);
 }
@@ -1671,9 +1674,10 @@ namespace Hooks
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 							*globals::game::currentPixelShader = a_pixelShader;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-							NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
-								globals::d3d::context, currentShader, a_pixelShader,
-								reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader));
+							if (globals::features::upscaling.IsNeuralRenderingEnabled())
+								NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+									globals::d3d::context, currentShader, a_pixelShader,
+									reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader));
 #endif
 							return;
 						}
@@ -1686,9 +1690,10 @@ namespace Hooks
 			if (a_pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader), NULL, NULL);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
-				globals::d3d::context, state->currentShader, a_pixelShader,
-				a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
+					globals::d3d::context, state->currentShader, a_pixelShader,
+					a_pixelShader ? reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader) : nullptr);
 #endif
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

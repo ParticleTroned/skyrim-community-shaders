@@ -18421,7 +18421,7 @@ void Upscaling::DrawNeuralRenderingEnableControl()
 		}
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : renderScaleAvailable ? "Enhances scene detail using NR. Off removes its rendering cost and keeps your settings. Enabling NR disables FOV + TAA." :
-																																	  "Choose compatible upscaling for this NR mode. Renderscale NR needs scaled DLSS and Render Scale in VR. Foveated NR requires DLSS.");
+																																	  "Choose compatible upscaling for this NR mode. Renderscale NR needs scaled DLSS and Render Scale in VR. Foveated NR requires DLSS or FSR.");
 	}
 }
 
@@ -18459,12 +18459,12 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 			else
 				Util::Text::WrappedWarning("%s %s: %s.", reducedResolution ? "Renderscale NR" : "NR", settings.neuralRenderingEnabled ? "paused" : "unavailable", blocker);
 			if (!reducedResolution)
-				ImGui::TextWrapped("Choose DLSS for Foveated NR, or select Full resolution NR to use FSR.");
+				ImGui::TextWrapped("Choose DLSS or FSR for Foveated NR, or select Full resolution NR.");
 			else if (!GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, true))
 				ImGui::TextWrapped("Enable Render Scale in Upscaling to use Renderscale NR.");
 			else
 				ImGui::TextWrapped("%s", globals::game::isVR ?
-											 "Select scaled DLSS with Render Scale, or choose Full resolution or Foveated NR. Foveated requires DLSS and FOV." :
+											 "Select scaled DLSS with Render Scale, or choose Full resolution or Foveated NR. Foveated requires DLSS or FSR and FOV." :
 											 "Select scaled DLSS or choose Full resolution NR.");
 		} else
 			Util::Text::WrappedWarning("%s", "Renderscale NR is waiting for scaling to become active.");
@@ -18710,7 +18710,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 			"Your NR setup", "Choose a mode, then refine the picture.", std::format("{} / {} / {} / {}", modeName, usesFov ? "FOV mask" : "Whole view", blendingName, selectionName));
 		if (page.Is("mode")) {
 			std::array<MenuUI::Choice, 3> renderingModes{ { { "full", "Full resolution", "Finished scene · higher cost", "Enhances the finished scene at full resolution. Offers the most detail and usually costs more performance. FOV restriction is optional." },
-				{ "foveated", "Foveated", "Finished scene · FOV required", "Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires VR, FOV and DLSS." },
+				{ "foveated", "Foveated", "Finished scene · FOV required", "Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires VR, FOV and DLSS or FSR." },
 				{ "scaled", "Render scale", "Before DLSS · scaled image", "Enhances a smaller image before DLSS enlarges it. Requires scaled DLSS and Render Scale in VR. Unavailable with DLAA, FSR, TAA or no upscaling. FOV restriction is optional." } } };
 			for (uint index = 0; index < renderingModes.size(); ++index) {
 				const auto mode = static_cast<NeuralRendering::RenderingMode>(index);
@@ -18765,13 +18765,13 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		if (page.Is("blending"))
 			DrawNeuralRenderingStrengthApplication(settings);
 		const bool missingRenderScale = !IsNeuralRenderingUpscalingAvailable();
-		const bool routeAvailable = !missingRenderScale && !missingFov && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution || (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
+		const bool routeAvailable = !missingRenderScale && !missingFov && (NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), a_upscaleMethod == UpscaleMethod::kFSR) || (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
 		if (!routeAvailable && !missingFov && !missingRenderScale)
 			ImGui::TextDisabled("This mode requires NVIDIA DLSS.");
 
 		if (page.Is("mode")) {
 			const bool maskedRegion = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov);
-			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution && settings.neuralRenderingFovOnly) {
+			if (NeuralRendering::UsesSharedFinalLdrFovMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, a_upscaleMethod == UpscaleMethod::kFSR)) {
 				ImGui::TextDisabled("The mask and edge feather follow the shared settings in VR > FOV.");
 			} else if (maskedRegion && GetNeuralRenderingInsertionPoint() == NeuralRendering::InsertionPoint::FinalLdrPreUi) {
 				ImGui::SeparatorText("Region blending");

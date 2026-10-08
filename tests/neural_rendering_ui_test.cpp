@@ -22,6 +22,8 @@
 #include <vector>
 
 constexpr int ImGuiHoveredFlags_AllowWhenDisabled = 1;
+constexpr float kPeripheryTAACenterBlendFeatherMin = 0.0f;
+constexpr float kPeripheryTAACenterBlendFeatherMax = 0.25f;
 
 namespace logger
 {
@@ -95,6 +97,8 @@ namespace globals
 				float neuralRenderingLocalStructure = 1.0f, neuralRenderingSkinStructure = 1.0f;
 				unsigned neuralCharacterCropMode = 1;
 				bool foveatedVendorDispatch = true, periphery_taa_enable = false;
+				bool foveatedPeripheryMaskVisualization = false;
+				float neuralRenderingBlendFeather = 0.05f;
 				float periphery_taa_center_area = 0.3f, foveatedCenterArea = 0.3f;
 				float foveatedCenterHorizontalScale = 1.0f;
 				float foveatedLeftEyeMaskOffsetX = 0.0f, foveatedLeftEyeMaskOffsetY = 0.0f;
@@ -115,6 +119,7 @@ namespace globals
 			std::optional<UpscaleMethod> pendingMethod;
 			UpscaleMethod lastDrawMethod = UpscaleMethod::kNONE;
 			NeuralRendering::RenderingMode GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
+			NeuralRendering::InsertionPoint GetNeuralRenderingInsertionPoint() const { return NeuralRendering::ResolveInsertionPoint(GetNeuralRenderingMode(), 1); }
 			bool IsNeuralRenderingFovConfigurationAvailable() const;
 			bool IsNeuralRenderingFovConfigurationAvailable(UpscaleMethod a_upscaleMethod) const;
 			bool renderScaleRequested = true, renderScaleLatched = true, renderScaleActive = true;
@@ -589,6 +594,7 @@ nlohmann::json AssetsJson()
 }
 struct NeuralRenderingFeature
 {
+	std::string_view GetSettingsFooterText() const;
 	void DrawSettings();
 	void DrawColourSettings(bool a_diagnosticsOnly = false);
 };
@@ -1784,6 +1790,14 @@ int main()
 				require(ImGui::Disabled("Foveated") == !upscalingFov && upscaling.GetNeuralRenderingMode() ==
 																			(upscalingFov ? ModeChoice::Foveated : ModeChoice::FullResolution),
 					"FSR can select Foveated NR when its mask is configured");
+				require(!ImGui::Seen("FOV edge feather"),
+					"FSR final-scene NR must not expose the unused independent NR feather");
+				if (upscalingFov) {
+					require(ImGui::Seen("The mask and edge feather follow the shared settings in VR > FOV."),
+						"FSR Foveated NR directs feather edits to the shared FOV page");
+					require(NeuralRenderingFeature{}.GetSettingsFooterText().find("DLSS or FSR") != std::string_view::npos,
+						"The Foveated footer names both supported upscalers");
+				}
 				const auto selectedMode = upscaling.GetNeuralRenderingMode();
 				ImGui::Clear("Render scale");
 				upscaling.DrawSelectionControls();
@@ -1793,6 +1807,15 @@ int main()
 		}
 	}
 	upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+	upscaling.settings = {};
+	upscaling.settings.neuralRenderingMode = static_cast<unsigned>(ModeChoice::Foveated);
+	ImGui::Clear();
+	upscaling.DrawSelectionControls();
+	require(ImGui::Seen("FOV edge feather") && !ImGui::Disabled("FOV edge feather"),
+		"DLSS Foveated NR retains its editable NR edge feather");
+	upscaling.settings.neuralRenderingMode = static_cast<unsigned>(ModeChoice::ReducedResolution);
+	require(NeuralRenderingFeature{}.GetSettingsFooterText().find("scaled DLSS") != std::string_view::npos,
+		"Render scale NR continues to describe its DLSS requirement");
 	upscaling.fidelityFX.nvidia = false;
 	for (const unsigned mode : { 0u, 1u, 2u }) {
 		upscaling.settings = {};

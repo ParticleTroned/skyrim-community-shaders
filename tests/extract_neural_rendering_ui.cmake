@@ -16,7 +16,7 @@ function(extract path start_marker end_marker output)
 endfunction()
 
 extract("src/Features/NeuralRenderingFeature.cpp"
-    "void NeuralRenderingFeature::DrawSettings()"
+    "std::string_view NeuralRenderingFeature::GetSettingsFooterText() const"
     "void NeuralRenderingFeature::DataLoaded()" draw_settings)
 extract("src/State.cpp"
     "bool State::IsDeveloperMode()"
@@ -34,8 +34,8 @@ extract("src/Features/Upscaling.cpp"
     "bool Upscaling::ToggleNeuralRendering("
     "void Upscaling::DrawNeuralRenderingSettings(" master_control)
 extract("src/Features/Upscaling.cpp"
-    "\t\tconst bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);"
-    "\t\tconst bool routeAvailable =" selection_controls)
+    "\t\tconst bool dlssSelected = a_upscaleMethod == UpscaleMethod::kDLSS;"
+    "\t\t{\n\t\t\tif (page.Is(\"diagnostics\")" selection_controls)
 extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingEnabled("
     "void Upscaling::DrawPeripheryTAAControl(" availability_policy)

@@ -7,7 +7,8 @@
     across a set of preprocessor permutations, then compares the resulting DXBC.
     The base ref's entire include tree (-IncludeDir) is materialized with
     git archive, so the base compiles against base-ref headers and the working
-    tree against working-tree headers.
+    tree against working-tree headers. Feature shader include roots are also
+    materialized and resolved independently for each revision.
 
     Tier 1: identical SHA-256 of the compiled .cso means the GPU program is
     byte-for-byte identical. fxc emits no timestamps without /Zi, so the result
@@ -180,7 +181,7 @@ try {
     New-Item -ItemType Directory -Force $baseRoot | Out-Null
 
     $tar = Join-Path $work "base.tar"
-    git archive --format=tar -o $tar $BaseRef -- $includeRel $relPath 2>$null
+    git archive --format=tar -o $tar $BaseRef -- $includeRel $relPath features 2>$null
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tar)) {
         throw "git archive failed for '$BaseRef' (paths: $includeRel, $relPath)."
     }
@@ -204,7 +205,15 @@ try {
         }
 
         $fmt = if ($Asm) { "/Fc" } else { "/Fo" }
-        $out = & $fxcPath /nologo /T $Profile /E $Entry @defArgs /I $Include $Source $fmt $OutFile 2>&1
+        $includeArgs = @('/I', $Include)
+        $revisionRoot = if ($Source -eq $baseFile) { $baseRoot } else { $repoRoot }
+        foreach ($feature in (Get-ChildItem -LiteralPath (Join-Path $revisionRoot 'features') -Directory)) {
+            $featureShaders = Join-Path $feature.FullName 'Shaders'
+            if (Test-Path -LiteralPath $featureShaders -PathType Container) {
+                $includeArgs += @('/I', $featureShaders)
+            }
+        }
+        $out = & $fxcPath /nologo /T $Profile /E $Entry @defArgs @includeArgs $Source $fmt $OutFile 2>&1
         return @{ Code = $LASTEXITCODE; Out = $out }
     }
 
@@ -275,7 +284,13 @@ try {
     $exitCode = 1
 } finally {
     if ($work -and (Test-Path $work)) {
-        Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+        $resolvedWork = (Resolve-Path -LiteralPath $work).Path
+        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
+        if ([IO.Path]::GetDirectoryName($resolvedWork) -ne $tempRoot -or
+            [IO.Path]::GetFileName($resolvedWork) -notmatch '^shaderverify_[0-9a-f]{32}$') {
+            throw "Refusing to remove unexpected shader verification path '$resolvedWork'."
+        }
+        Remove-Item -LiteralPath $resolvedWork -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($pushedLocation) {
         Pop-Location

@@ -27,7 +27,7 @@ RUNTIME_TEST = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.
 
 
 class ShaderCompileIdentityTests(unittest.TestCase):
-    def test_se_release_macros_match_preserved_runtime_requests(self) -> None:
+    def test_se_release_macros_preserve_requests_with_current_grass_features(self) -> None:
         fixture = json.loads((REPO / "tests/data/shader_cache_se_runtime_trace.json").read_text(encoding="utf-8"))
         distribution = BUILDER.derive_distribution_profile(REPO)
         stages = {"Pixel": "PSHADER", "Vertex": "VSHADER", "Compute": "CSHADER"}
@@ -50,10 +50,45 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                     for token in macros.split()
                     if token not in {"D3DCOMPILE_DEBUG", "D3DCOMPILE_SKIP_OPTIMIZATION"}
                 ]
+                if source == "RunGrass.hlsl":
+                    # This SE trace predates grass features; fresh VR requests cover them.
+                    defines.extend(
+                        token if "=" in token else token + "="
+                        for token in BUILDER.SHIPPED_CACHE_PROFILE.file_defines[source]
+                    )
                 captured = compile_task_defines([(source, stages[stage], f"{family}:{stage}:{descriptor}", defines)])
                 for key, expected in captured.items():
                     with self.subTest(source=source, stage=stage, descriptor=descriptor):
                         self.assertIn(key, generated)
+                        self.assertEqual(generated[key], expected)
+
+    def test_vr_grass_macros_match_completed_runtime_requests(self) -> None:
+        fixture = json.loads((REPO / "tests/data/shader_cache_vr_grass_runtime_trace.json").read_text(encoding="utf-8"))
+        self.assertTrue(fixture["grassHooksInstalled"])
+        self.assertEqual(fixture["failedTasks"], 0)
+        self.assertGreater(fixture["completedTasks"], 0)
+        pattern = re.compile(r"Compiling Data/Shaders/(\S+) (\S+):(Pixel|Vertex):([0-9A-F]+) to (.*)")
+        stages = {"Pixel": "PSHADER", "Vertex": "VSHADER"}
+        with tempfile.TemporaryDirectory() as temporary:
+            filtered = BUILDER.filter_profile_defines(
+                REPO / ".github/configs/shader-validation-vr.yaml",
+                Path(temporary) / "VR.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                additional_excluded_defines=frozenset({"HORIZON_FIX"}),
+            )
+            generated = compile_task_defines(parse_shader_configs(str(filtered)))
+            self.assertEqual(len(fixture["compileLines"]), 8)
+            for line in fixture["compileLines"]:
+                match = pattern.search(line)
+                self.assertIsNotNone(match, line)
+                source, family, stage, descriptor, macros = match.groups()
+                defines = [
+                    token if "=" in token else token + "="
+                    for token in macros.split()
+                    if token not in {"D3DCOMPILE_DEBUG", "D3DCOMPILE_SKIP_OPTIMIZATION"}
+                ]
+                captured = compile_task_defines([(source, stages[stage], f"{family}:{stage}:{descriptor}", defines)])
+                for key, expected in captured.items():
+                    with self.subTest(stage=stage, descriptor=descriptor):
                         self.assertEqual(generated[key], expected)
 
     def test_se_stage_excludes_non_shipped_includes_from_source_identity(self) -> None:

@@ -69,9 +69,9 @@ try {
 }
 
 # Generate from a clean runtime trace without silently losing logger records.
-# The pinned hlslkit parser expects an unpadded thread ID such as [196], while
-# spdlog can emit [ 196 ]. Normalize only that logger-prefix field in a temporary
-# copy, then verify the generated inventory has one entry per captured source
+# The pinned parser expects [time] [thread] [level], while current spdlog uses
+# dates, level names and source locations. Normalize logger prefixes only, then
+# verify the generated inventory has one entry per captured source
 # compilation before replacing the requested output.
 function Invoke-ShaderConfigGeneration {
     param(
@@ -89,22 +89,36 @@ function Invoke-ShaderConfigGeneration {
     $temporaryOutput = Join-Path $outputParent ".$(Split-Path $fullOutputPath -Leaf).$([IO.Path]::GetRandomFileName()).generating"
     $temporaryBackup = "$temporaryOutput.previous"
 
-    $compilePattern = '(?m)^\[(\d{2}:\d{2}:\d{2}\.\d{3})\] \[\s*(\d+)\s*\] \[D\] Compiling (.*?)\s+([^:]+:[^:]+:[0-9a-fA-F]+)\s+to\s+(.*)$'
+    $compilePattern = '(?m)\bCompiling (.*?)\s+([^\s:]+:(?:Vertex|Pixel|Compute):[0-9a-fA-F]+)\s+to\s+([^\r\n]*)'
     $strictCompilePattern = '(?m)^\[(\d{2}:\d{2}:\d{2}\.\d{3})\] \[(\d+)\] \[D\] Compiling (.*?)\s+([^:]+:[^:]+:[0-9a-fA-F]+)\s+to\s+(.*)$'
     $threadPrefixPattern = '(?m)^(\[\d{2}:\d{2}:\d{2}\.\d{3}\]) \[\s*(\d+)\s*\]'
+    $currentPrefixPattern = '(?m)^\[\d{4}-\d{2}-\d{2} (\d{2}:\d{2}:\d{2}\.\d{3})\] \[(trace|debug|info|warning|error|critical)\] \[\s*(\d+)\s*\] \[[^\]\r\n]+\] '
+    $levelLetters = @{trace='T'; debug='D'; info='I'; warning='W'; error='E'; critical='C'}
     $utf8NoBom = [Text.UTF8Encoding]::new($false)
 
     try {
         $logContent = [IO.File]::ReadAllText($resolvedLog)
-        $capturedVariants = [regex]::Matches($logContent, $compilePattern).Count
+        $compileRecords = [regex]::Matches($logContent, $compilePattern)
+        $capturedVariants = $compileRecords.Count
         if ($capturedVariants -eq 0) {
             throw "No engine-managed shader source compilations were found in $resolvedLog"
         }
+        $queueStates = [regex]::Matches($logContent, '\[ShaderTiming\][^\r\n]*?remaining=(\d+)')
+        if ($queueStates.Count -eq 0) {
+            throw 'No shader queue-state records were found; preserve a completed log before generating an inventory'
+        }
+        if ($queueStates[-1].Groups[1].Value -ne '0' -or $compileRecords[-1].Index -gt $queueStates[-1].Index) {
+            throw 'Shader compilation is still in progress; preserve a completed log before generating an inventory'
+        }
 
-        $normalizedLog = [regex]::Replace($logContent, $threadPrefixPattern, '$1 [$2]')
+        $normalizedLog = [regex]::Replace($logContent, $currentPrefixPattern, {
+            param($match)
+            '[' + $match.Groups[1].Value + '] [' + $match.Groups[3].Value + '] [' + $levelLetters[$match.Groups[2].Value] + '] '
+        })
+        $normalizedLog = [regex]::Replace($normalizedLog, $threadPrefixPattern, '$1 [$2]')
         $normalizedVariants = [regex]::Matches($normalizedLog, $strictCompilePattern).Count
         if ($normalizedVariants -ne $capturedVariants) {
-            throw "Thread-ID normalization retained $normalizedVariants of $capturedVariants captured shader variants"
+            throw "Logger-prefix normalization retained $normalizedVariants of $capturedVariants captured shader variants"
         }
         [IO.File]::WriteAllText($temporaryLog, $normalizedLog, $utf8NoBom)
 

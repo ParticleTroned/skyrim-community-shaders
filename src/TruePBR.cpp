@@ -3,6 +3,7 @@
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
 
+#include "Features/GrassLighting.h"
 #include "Features/InteriorSun.h"
 #include "Hooks.h"
 #include "ShaderCache.h"
@@ -47,6 +48,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TruePBR::Settings,
 	Enabled,
+	GrassEnabled,
 	VertexAOStrength);
 
 // Vanilla SetupMaterial reads field offsets for a different material layout
@@ -192,6 +194,15 @@ namespace
 		return enabled;
 	}
 
+	void DrawGrassCheckbox(TruePBR::Settings& settings)
+	{
+		bool enabled = settings.GrassEnabled != 0;
+		if (ImGui::Checkbox("PBR Grass", &enabled))
+			settings.GrassEnabled = enabled ? 1u : 0u;
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Use authored PBR grass materials for more natural lighting and highlights. Requires Grass Lighting. Ordinary grass stays unchanged. Applies immediately.");
+	}
+
 	void DrawPBRMetalSliders()
 	{
 		ImGui::SliderFloat("PBR Metal Reflection", &globals::state->pbrMetalReflectionScale, 0.0f, 2.0f, "%.2f");
@@ -212,6 +223,7 @@ void TruePBR::DrawSettings()
 
 	{
 		DrawPBRMetalSliders();
+		DrawGrassCheckbox(settings);
 		ImGui::SliderFloat("Vertex AO Strength", &settings.VertexAOStrength, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	}
 
@@ -421,6 +433,7 @@ void TruePBR::DrawEssentialSettings()
 	const bool enabled = DrawEnabledCheckbox(settings);
 	ImGui::BeginDisabled(!enabled);
 	DrawPBRMetalSliders();
+	DrawGrassCheckbox(settings);
 	ImGui::EndDisabled();
 }
 
@@ -431,12 +444,14 @@ void TruePBR::DrawPerformanceSettings(bool)
 		ImGui::TextUnformatted(
 			"Disabling bypasses True PBR material shading. The cost difference depends on visible PBR content.");
 	}
+	DrawGrassCheckbox(settings);
 }
 
 json TruePBR::CapturePerformanceSettingsState() const
 {
 	return {
-		{ "Enabled", settings.Enabled != 0 }
+		{ "Enabled", settings.Enabled != 0 },
+		{ "GrassEnabled", settings.GrassEnabled != 0 }
 	};
 }
 
@@ -449,6 +464,7 @@ void TruePBR::LoadSettings(json& o_json)
 {
 	auto loadedSettings = o_json.get<Settings>();
 	loadedSettings.Enabled = loadedSettings.Enabled ? 1u : 0u;
+	loadedSettings.GrassEnabled = loadedSettings.GrassEnabled ? 1u : 0u;
 	loadedSettings.VertexAOStrength = Util::ClampFinite(loadedSettings.VertexAOStrength, 0.0f, 1.0f, Settings{}.VertexAOStrength);
 	settings = loadedSettings;
 }
@@ -833,6 +849,132 @@ namespace
 		return material;
 	}
 }
+
+bool TruePBR::IsPBRGrassMaterial(const RE::BSShaderMaterial* material) const
+{
+	return loaded && material != nullptr &&
+	       BSLightingShaderMaterialPBR::All.Contains(const_cast<BSLightingShaderMaterialPBR*>(static_cast<const BSLightingShaderMaterialPBR*>(material)));
+}
+
+bool TruePBR::IsPBRGrassEnabled() const
+{
+	return loaded && settings.Enabled && settings.GrassEnabled &&
+	       globals::features::grassLighting.loaded && globals::features::grassLighting.settings.Enabled;
+}
+
+void TruePBR::SetupGrassMaterial(RE::BSLightingShaderProperty* source, RE::BSLightingShaderProperty* grass)
+{
+	if (source == nullptr || grass == nullptr || grass->material == nullptr ||
+		!source->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting) ||
+		!IsPBRGrassMaterial(source->material))
+		return;
+
+	BSLightingShaderMaterialPBR material;
+	material.CopyMembers(source->material);
+	const auto* generated = static_cast<const RE::BSLightingShaderMaterialBase*>(grass->material);
+	material.diffuseTexture = generated->diffuseTexture;
+	material.textureClampMode = generated->textureClampMode;
+	const auto& defaults = globals::game::graphicsState->GetRuntimeData();
+	if (!material.diffuseTexture)
+		material.diffuseTexture = defaults.defaultTextureWhite;
+	if (!material.normalTexture)
+		material.normalTexture = defaults.defaultTextureNormalMap;
+	if (material.rmaosTexture == defaults.defaultTextureWhite)
+		material.rmaosTexture.reset();
+	// Missing RMAOS is interpreted as a rough, nonmetal surface by the shader.
+	grass->SetMaterial(&material, true);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (grassDiagnosticsEnabled.load(std::memory_order_relaxed)) {
+		grassMaterialsCreated.fetch_add(1, std::memory_order_relaxed);
+		if (!material.rmaosTexture)
+			grassMissingRmaos.fetch_add(1, std::memory_order_relaxed);
+	}
+#endif
+}
+
+void TruePBR::SetupGrassShaderMaterial(RE::BSShader* shader, const RE::BSLightingShaderMaterialBase* material)
+{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool diagnostics = grassDiagnosticsEnabled.load(std::memory_order_relaxed);
+	if (diagnostics)
+		grassMaterialSetups.fetch_add(1, std::memory_order_relaxed);
+#endif
+	if (shader->shaderType != RE::BSShader::Type::Grass || !IsPBRGrassMaterial(material) ||
+		!globals::features::grassLighting.loaded)
+		return;
+	auto* customShader = globals::shaderCache->GetPixelShader(*shader, globals::state->modifiedPixelDescriptor);
+	const auto& constants = ShaderConstants::GrassPS::Get();
+	if (customShader == nullptr || customShader != *globals::game::currentPixelShader ||
+		customShader->constantBuffers[1].buffer == nullptr ||
+		customShader->constantTable[constants.PBRFlags] != 0 ||
+		customShader->constantTable[constants.PBRParams1] != 1 ||
+		customShader->constantTable[constants.PBRParams2] != 4) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (diagnostics)
+			grassShaderFallbackSetups.fetch_add(1, std::memory_order_relaxed);
+#endif
+		return;
+	}
+	const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
+	const auto& defaults = globals::game::graphicsState->GetRuntimeData();
+	auto* state = globals::game::shadowState;
+	const auto clampMode = static_cast<RE::BSGraphics::TextureAddressMode>(std::clamp(pbr->textureClampMode, 0, 3));
+	const std::array<RE::NiSourceTexture*, 3> textures{
+		pbr->normalTexture ? pbr->normalTexture.get() : defaults.defaultTextureNormalMap.get(),
+		pbr->rmaosTexture ? pbr->rmaosTexture.get() : defaults.defaultTextureWhite.get(),
+		pbr->featuresTexture0 ? pbr->featuresTexture0.get() : defaults.defaultTextureWhite.get()
+	};
+	for (size_t index = 0; index < textures.size(); ++index) {
+		state->SetPSTexture(index + 2, textures[index] ? textures[index]->rendererTexture : nullptr);
+		state->SetPSTextureAddressMode(index + 2, clampMode);
+		state->SetPSTextureFilterMode(index + 2, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+	}
+	uint32_t flags = pbr->pbrFlags.any(PBRFlags::Subsurface) ? static_cast<uint32_t>(PBRShaderFlags::Subsurface) : 0u;
+	if (pbr->featuresTexture0 && pbr->featuresTexture0 != defaults.defaultTextureWhite)
+		flags |= static_cast<uint32_t>(PBRShaderFlags::HasFeaturesTexture0);
+	if (pbr->rmaosTexture)
+		flags |= static_cast<uint32_t>(PBRShaderFlags::GrassHasRmaos);
+	const std::array<float, 3> parameters{
+		Util::ClampFinite(pbr->GetRoughnessScale(), 0.f, 3.f, 1.f),
+		Util::ClampFinite(pbr->GetSpecularLevel(), 0.f, 3.f, 0.04f), 0.f
+	};
+	const auto& color = pbr->GetSubsurfaceColor();
+	const std::array<float, 4> subsurface{
+		Util::ClampFinite(color.red, 0.f, 1.f, 0.f),
+		Util::ClampFinite(color.green, 0.f, 1.f, 0.f),
+		Util::ClampFinite(color.blue, 0.f, 1.f, 0.f),
+		Util::ClampFinite(pbr->GetSubsurfaceOpacity(), 0.f, 1.f, 0.f)
+	};
+	RE::BSGraphics::Renderer::PreparePSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
+	state->SetPSConstant(flags, RE::BSGraphics::ConstantGroupLevel::PerMaterial, constants.PBRFlags);
+	state->SetPSConstant(parameters, RE::BSGraphics::ConstantGroupLevel::PerMaterial, constants.PBRParams1);
+	state->SetPSConstant(subsurface, RE::BSGraphics::ConstantGroupLevel::PerMaterial, constants.PBRParams2);
+	RE::BSGraphics::Renderer::FlushPSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
+	RE::BSGraphics::Renderer::ApplyPSConstantGroup(RE::BSGraphics::ConstantGroupLevel::PerMaterial);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (diagnostics && IsPBRGrassEnabled())
+		grassPBRMaterialSetups.fetch_add(1, std::memory_order_relaxed);
+#endif
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+void TruePBR::SetGrassDiagnosticsEnabled(bool enabled)
+{
+	grassDiagnosticsEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+json TruePBR::GetGrassDiagnostics() const
+{
+	return {
+		{ "enabled", grassDiagnosticsEnabled.load(std::memory_order_relaxed) },
+		{ "materialsCreated", grassMaterialsCreated.load(std::memory_order_relaxed) },
+		{ "missingRmaosMaterials", grassMissingRmaos.load(std::memory_order_relaxed) },
+		{ "authoredMaterialSetups", grassMaterialSetups.load(std::memory_order_relaxed) },
+		{ "pbrMaterialSetups", grassPBRMaterialSetups.load(std::memory_order_relaxed) },
+		{ "shaderUnavailableOrDepthSetups", grassShaderFallbackSetups.load(std::memory_order_relaxed) }
+	};
+}
+#endif
 
 struct BSLightingShaderProperty_LoadBinary
 {

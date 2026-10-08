@@ -1,7 +1,5 @@
-// Zeros color in the HMD hidden area for a single eye region.
-// Prevents temporal upscalers from accumulating hidden-area clear color into
-// visible pixels during head movement. Skyrim uses reversed Z, so depth near
-// zero identifies the unrendered region.
+// Native VR mask pixels have near-zero depth under Standard Z.
+// Clearing their color keeps temporal filtering from bleeding into visible pixels.
 //
 // The host accepts only equal-size or upscaling color mappings. An 8x8 color
 // group therefore spans at most eight depth texels, and a 12x12 shared tile

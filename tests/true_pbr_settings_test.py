@@ -98,6 +98,7 @@ int main() {
     for (const float strength : { 0.0f, 0.25f, 1.0f }) {
         feature.settings.VertexAOStrength = strength;
         feature.settings.Enabled = 0;
+        feature.settings.GrassEnabled = 1;
         json saved = json::object();
         dispatch.Save(saved);
         Check(saved.contains("True PBR"));
@@ -106,11 +107,13 @@ int main() {
         feature.settings = {};
         dispatch.Load(saved);
         Check(feature.settings.VertexAOStrength == strength && feature.settings.Enabled == 0);
+        Check(feature.settings.GrassEnabled == 1);
         TruePBR restarted;
         restarted.Load(saved);
         Check(restarted.settings.VertexAOStrength == strength && restarted.settings.Enabled == 0);
+        Check(restarted.settings.GrassEnabled == 1);
     }
-    const json defaults = { { "Enabled", 1 }, { "VertexAOStrength", 1.0f } };
+    const json defaults = { { "Enabled", 1 }, { "GrassEnabled", 0 }, { "VertexAOStrength", 1.0f } };
     for (json legacy : { json::object(), json{ { "True PBR", json::object() } },
              json{ { "True PBR", nullptr } }, json{ { "True PBR", "invalid" } },
              json{ { "True PBR", { { "VertexAOStrength", "invalid" } } } } }) {
@@ -134,6 +137,9 @@ int main() {
     Check(json(feature.settings) == defaults && !feature.enableVerboseJsonLogging);
     Check(globals::state->pbrMetalReflectionScale == State::kDefaultPbrMetalReflectionScale);
     Check(globals::state->pbrMetalHighlightScale == State::kDefaultPbrMetalHighlightScale);
+    json authored = { { "True PBR", { { "GrassEnabled", 7 } } } };
+    dispatch.Load(authored);
+    Check(feature.settings.GrassEnabled == 1);
     std::cout << "Save/restore, restart, legacy defaults, invalid input and explicit defaults passed\n";
 }
 '''

@@ -146,6 +146,19 @@ namespace ShaderConstants
 		const int32_t PreviousWorldMat = -1;
 	};
 
+	/** Reflection indices for grass material constants; geometry indices stay native. */
+	struct GrassPS
+	{
+		static const GrassPS& Get()
+		{
+			static const GrassPS instance;
+			return instance;
+		}
+		const int32_t PBRFlags = 15;
+		const int32_t PBRParams1 = 16;
+		const int32_t PBRParams2 = 17;
+	};
+
 	struct EffectPS
 	{
 		static const EffectPS& Get()

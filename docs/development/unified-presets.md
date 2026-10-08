@@ -41,12 +41,14 @@ Its Dwelling profile enables advanced controls with Omnidirectional Bulbs
 `1.25`, Ambient `0.75`, and Emissive `1.25` in all three tiers.
 Exterior Night also enables advanced controls, with Scene Brightness `0.90`,
 Directional Light `2.50`, Point Lights and Omnidirectional Bulbs `1.25`,
-Ambient `1.0`, and Emissive `1.50`. Its Sky, Fog, and Volumetric Lighting
-gamma offsets are `0.45`, `0.25`, and `0.30`, respectively.
+Ambient `1.0`, and Emissive `1.30`. Its Sky, Clouds, Fog, and Volumetric
+Lighting gamma offsets are `0.45`, `0.05`, `0.25`, and `0.30`, respectively.
 Its detailed water controls are enabled with Water Brightness `0.70`,
 Fresnel Minimum `0.25`, and Global Reflection Amount `1.25`.
 Exterior Day enables advanced controls with Directional Light `1.15` and
 Volumetric Lighting gamma offset `0.75`.
+Its detailed water controls are enabled with Fresnel Minimum `0.25`,
+Fresnel Maximum `1.0`, and Muddiness `0.70`.
 
 True PBR uses PBR Metal Reflection `0.75` in all three tiers.
 
@@ -144,6 +146,14 @@ revision 5 and weather-based lighting until enabled in Adaptive Balance.
 
 ## CSX compatibility contract
 
+All three Unified VR tiers explicitly disable the saved frame-generation
+request because VR cannot use frame generation.
+
+The runtime also normalizes frame generation and force-enable to zero
+when loading or saving VR settings, including older and custom presets.
+Both fields default to zero, and VR exposes no controls to enable them.
+SE and AE keep their frame-generation controls and existing behavior.
+
 The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
 package version, VR runtime, inclusive minimum `3.20`, exclusive maximum
@@ -158,6 +168,20 @@ review serialized keys, defaults, loading, saving and migrations. If those
 contracts are unchanged, retain the revision and base, regenerate the
 packages, and verify that only compatibility metadata changed in their
 settings. Never bypass the source check or refresh its hash automatically.
+
+PBR Grass adds an optional `True PBR.GrassEnabled` setting, defaulting to
+false when absent. Existing Unified VR tiers keep their authored settings
+and leave PBR Grass disabled. Its shader descriptor flags in `State.h`
+refresh the source fingerprint while retaining revision 5 and the base.
+
+Grass Optimizations uses upstream defaults when its optional settings are
+absent: the master switch, combining cells, frustum culling, density
+reduction and grass Hi-Z are enabled; mesh LOD is disabled. Scene Hi-Z
+keeps grass Hi-Z inactive. Existing saved grass choices are preserved.
+The added collision distance defaults to 2,048 units and accepts
+0–20,480 units. The runtime contract inventories the loader, feature
+declaration and policy/default definitions; refreshing its fingerprint
+preserves revision 5, the authored base and tier rendering preferences.
 
 Capture settings keep `FrameCaptureEye` authoritative. The base selects
 `Left`, so its legacy `Sequence.Outputs.SeparateEyes` mirror is false.
@@ -229,9 +253,10 @@ tier lever. Rain and character-focused anchors remain necessary for Wetterness,
 Subsurface Scattering, and Hair Specular.
 
 The requested Hair Specular and water-appearance settings are shared appearance
-baselines rather than tier levers. The water baseline includes the blue tint,
-0.15 tint strength, 15-unit shore fade, 0.5 wave amplitude, 0.90 Fresnel maximum,
-and 1.25 global reflection amount recorded in the policy.
+baselines rather than tier levers. Water tint strength is `0.0` in every
+tier. The global water baseline includes the 15-unit shore fade, 0.5 wave
+amplitude, 0.90 Fresnel maximum, and 1.25 global reflection amount recorded
+in the policy.
 
 Shader-cache packing, selective invalidation, and compiler thread/priority
 policy are deliberately not graphics-tier settings. Presets keep disk caching

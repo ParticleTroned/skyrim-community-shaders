@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.09.27.1",
+    "packageVersion": "d2026.10.04.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,16 +15,17 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "6E58C90B498296193E189839ECFFC70367673A7D4DBAA3CE37AC4F7A282C1407"
+        "sha256": "1D3490B5C51C97E73A2ECC6CC8DE9B5413019F9DF050EC20F3780F99E2426CF0"
     },
     "runtimeSettingsContract": {
         "revision": 5,
-        "sourceTreeSha256": "54D9165BC2450408C22DCA37015E483BE844696A228EA7CA29F95ED40C6663B6",
+        "sourceTreeSha256": "F33CE65C178AF31E19A7D925CD0A6CE560BCA320D1299918061DEC05DEC6E05A",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
                 "src/Feature.cpp",
                 "src/Feature.h",
+                "src/Features/GrassOptimizations/GrassPolicy.h",
                 "src/Features/VolumetricLightingTuning.h",
                 "src/Features/VolumetricLightingTuningMigration.h",
                 "src/Features/VR/MenuPositioningPolicy.h",
@@ -66,6 +67,9 @@
             "src/Features/GrassCollision.h",
             "src/Features/GrassLighting.cpp",
             "src/Features/GrassLighting.h",
+            "src/Features/GrassOptimizations.cpp",
+            "src/Features/GrassOptimizations.h",
+            "src/Features/GrassOptimizations/GrassPolicy.h",
             "src/Features/HairSpecular.cpp",
             "src/Features/HairSpecular.h",
             "src/Features/HorizonFix.h",
@@ -186,6 +190,11 @@
         ["Wetterness", "WetternessFadeRange"]
     ],
     "commonOverrides": [
+        {
+            "path": ["Upscaling", "frameGenerationMode"],
+            "value": 0,
+            "reason": "VR presets cannot use frame generation; clear its inactive request so older NR gates accept them"
+        },
         {
             "path": ["Advanced", "Log Level"],
             "value": 2,
@@ -369,7 +378,7 @@
             "path": ["Unified Water", "WaterTintColor"],
             "value": [0.0, 0.3499999940395355, 1.0]
         },
-        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.0 },
         { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
         { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "AOInteriorsOnly"], "value": true },
@@ -602,7 +611,7 @@
             "path": ["Unified Water", "WaterTintColor"],
             "value": [0.0, 0.3499999940395355, 1.0]
         },
-        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.0 },
         { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
         { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "EnableGI"], "value": false },

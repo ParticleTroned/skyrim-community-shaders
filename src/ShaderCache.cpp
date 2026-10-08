@@ -1,6 +1,8 @@
 #include "ShaderCache.h"
 #include "Api/ShaderCompatibilityRegistry.h"
 #include "BuildProvenance.h"
+#include "Features/GrassLighting.h"
+#include "TruePBR.h"
 
 #include "Globals.h"
 #include "ShaderCacheDisablePolicy.h"
@@ -1420,6 +1422,8 @@ namespace SIE
 		{
 			const auto technique = descriptor & 0b1111;
 			size_t lastIndex = 0;
+			if (globals::features::truePBR.loaded && globals::features::grassLighting.loaded)
+				defines[lastIndex++] = { "PBR_GRASS", "1" };
 			if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth)) {
 				defines[lastIndex++] = { "RENDER_DEPTH", nullptr };
 			}
@@ -2024,6 +2028,12 @@ namespace SIE
 			} else {
 				grassVS.insert({ "ShadowClampValue", 14 });
 			}
+			auto& grassPS = result[static_cast<size_t>(RE::BSShader::Type::Grass)][static_cast<size_t>(ShaderClass::Pixel)];
+			grassPS = grassVS;
+			const auto& grassConstants = ShaderConstants::GrassPS::Get();
+			grassPS.insert({ "PBRFlags", grassConstants.PBRFlags });
+			grassPS.insert({ "PBRParams1", grassConstants.PBRParams1 });
+			grassPS.insert({ "PBRParams2", grassConstants.PBRParams2 });
 
 			auto& particleVS = result[static_cast<size_t>(RE::BSShader::Type::Particle)]
 									 [static_cast<size_t>(ShaderClass::Vertex)];

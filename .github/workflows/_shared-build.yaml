@@ -256,6 +256,11 @@ jobs:
               shell: pwsh
               run: python tests/validate_changed_shaders_test.py
 
+            - name: Test shader inventory generation
+              if: steps.check-hlsl.outputs.skip != 'true'
+              shell: pwsh
+              run: python tests/shader_config_generation_test.py
+
             - name: Validate shader compilation (${{ matrix.config.name }})
               if: steps.check-hlsl.outputs.skip != 'true'
               shell: bash

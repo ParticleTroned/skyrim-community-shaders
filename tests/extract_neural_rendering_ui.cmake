@@ -78,16 +78,16 @@ extract("src/Features/VR/Input.cpp"
     "void VR::ProcessVRButtonEvent(" controller_events)
 file(WRITE "${OUTPUT_DIRECTORY}/neural_controller_toggle_under_test.h" "${controller_toggle}\n${controller_events}\n")
 
-extract("src/Features/VR.cpp"
+extract("src/Menu/StabilizerPage.cpp"
     "\t\tconst auto& upscaling = globals::features::upscaling;"
     "\t\tImGui::Spacing();\n\t\tImGui::SeparatorText(\"Features\");" stabilizer_warning)
 file(APPEND "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
     "\nvoid DrawStabilizerNRWarnings(const Upscaling::VRFpsStabilizerConfig& config, bool showNotConfigured) {\n${stabilizer_warning}\n}\n")
 
-extract("src/Features/VR.cpp"
+extract("src/Menu/StabilizerPage.cpp"
     "\tconstexpr std::array<const char*, 4> kVRFpsStabilizerMethodNames"
     "\tstruct VRFpsStabilizerUIState" stabilizer_names)
-extract("src/Features/VR.cpp"
+extract("src/Menu/StabilizerPage.cpp"
     "\tbool DrawVRFpsStabilizerUpscaleMethod("
     "\tbool DrawVRFpsStabilizerFeatureToggle(" stabilizer_selectors)
 extract("src/Features/Upscaling.cpp"

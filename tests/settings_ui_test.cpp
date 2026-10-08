@@ -48,13 +48,31 @@ namespace globals
 			struct Palette
 			{
 				ImVec4 InfoColor{ 1, .7f, .2f, 1 };
+				ImVec4 Error{ 1, .1f, .1f, 1 };
+				ImVec4 Warning{ 1, .7f, .2f, 1 };
 			} StatusPalette;
 		} theme;
 		const Theme& GetTheme() const { return theme; }
+		bool IsSettingsSaveMessageError() const { return false; }
+		std::string GetSettingsSaveMessage() const { return {}; }
+		bool HasUnsavedSettings() const { return false; }
 	} menuStorage;
 	auto* menu = &menuStorage;
+	struct State
+	{
+		void Save() {}
+		void Load() {}
+	} stateStorage;
+	auto* state = &stateStorage;
 	namespace features
 	{
+		namespace llf
+		{
+			struct ParticleLights
+			{
+				void GetConfigs() {}
+			} particleLights;
+		}
 		struct Pointer
 		{
 			bool headset = false;
@@ -130,14 +148,49 @@ namespace Util
 		explicit operator bool() const { return shown; }
 		~Popup()
 		{
-			if (shown)
+			if (shown) {
+				controls["Popup last control"] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
 				ImGui::EndPopup();
+			}
 		}
 	};
 	Popup CenteredPopupModal(const char* name) { return { ImGui::BeginPopupModal(name, nullptr, ImGuiWindowFlags_AlwaysAutoResize) }; }
+	enum class ActionGlyph
+	{
+		SaveSettings,
+		LoadSettings,
+		RestoreDefaults
+	};
+	void DrawActionGlyph(ImDrawList*, ActionGlyph, ImVec2, ImVec2, ImU32) {}
+	struct StyledButtonWrapper
+	{
+		StyledButtonWrapper(ImVec4 button, ImVec4 hover, ImVec4 active)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, button);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
+		}
+		~StyledButtonWrapper() { ImGui::PopStyleColor(3); }
+	};
 }
 #include "settings_page_under_test.h"
 #include "settings_widget_under_test.h"
+namespace MenuUI
+{
+#include "settings_external_actions_under_test.h"
+	struct StabilizerPage
+	{
+		static inline bool dirty = false;
+		static StabilizerPage& Get()
+		{
+			static StabilizerPage page;
+			return page;
+		}
+		bool HasUnsavedChanges() const { return dirty; }
+	};
+}
+#include "settings_footer_under_test.h"
+#include "settings_stabilizer_navigation_under_test.h"
 struct Upscaling
 {
 	struct Settings
@@ -405,6 +458,31 @@ int main()
 			require(MenuUI::SettingsPage::Navigate(name, "profiling") != screenshot, "profiling tab eligibility differs from its overview card");
 			require(MenuUI::SettingsPage::Navigate(name, "settings"), "profiling changes must preserve ordinary settings");
 		}
+
+		bool draft = true;
+		auto drawGuarded = [&] {
+			MenuUI::SettingsPage page("CompanionDraft", { { "profiles", "Profiles", "Edit profiles" }, { "commands", "Commands", "Edit commands" } }, "Your setup", "Choose an editor", {}, [&](std::string_view target) { return !draft || target != "commands"; });
+		};
+		frame(drawGuarded);
+		require(MenuUI::SettingsPage::Select("CompanionDraft", "profiles"), "draft editor remains reachable");
+		frame(drawGuarded);
+		frame(drawGuarded);
+		require(!MenuUI::SettingsPage::Navigate("CompanionDraft", "commands"), "DevBench cannot bypass unsaved draft protection");
+		click(Util::controls.at("Edit commands").GetCenter(), drawGuarded);
+		frame(drawGuarded);
+		frame(drawGuarded);
+		require(MenuUI::SettingsPage::Selected("CompanionDraft") == "profiles", "tab click cannot hide another editor's draft");
+		require(MenuUI::SettingsPage::Select("CompanionDraft", "overview"), "overview remains reachable with draft");
+		frame(drawGuarded);
+		frame(drawGuarded);
+		click(Util::controls.at("Edit commands").GetCenter(), drawGuarded);
+		frame(drawGuarded);
+		require(MenuUI::SettingsPage::Selected("CompanionDraft") == "overview", "card cannot bypass unsaved draft protection");
+		draft = false;
+		require(MenuUI::SettingsPage::Navigate("CompanionDraft", "commands"), "saving or discarding releases navigation");
+		frame(drawGuarded);
+		frame(drawGuarded);
+		require(MenuUI::SettingsPage::Selected("CompanionDraft") == "commands", "accepted navigation opens the requested editor");
 
 		ImGuiID firstTabId = 0, secondTabId = 0;
 		float firstScroll = 0, secondScroll = 0;
@@ -822,6 +900,74 @@ int main()
 			frame(customCombo);
 			require(GImGui->OpenPopupStack.empty(), "disabled dropdown cannot be opened programmatically");
 		}
+
+		// Invalid IDs must not change which file owns the footer or release a draft lock.
+		MenuUI::StabilizerPage::dirty = false;
+		require(CanSelectEditor("profiles"), "profile editor accepts clean navigation");
+		MenuUI::StabilizerPage::dirty = true;
+		require(!CanSelectEditor("commands") && editorGroup == "profiles", "profile draft blocks other main-file editors");
+		require(CanSelectEditor("overview") && editorGroup == "profiles", "overview retains draft owner");
+		require(!CanSelectEditor("missing") && editorGroup == "profiles", "unknown direct selection cannot steal draft owner");
+		MenuUI::StabilizerPage::dirty = false;
+		require(CanSelectEditor("targets"), "clean main-file editor becomes owner");
+		MenuUI::StabilizerPage::dirty = true;
+		for (const char* section : { "lod", "levels", "commands", "targets" })
+			require(CanSelectEditor(section), "main INI sections share one draft");
+		require(!CanSelectEditor("locations") && !CanSelectEditor("profiles"), "main draft cannot switch documents");
+		require(!CanSelectEditor("missing") && editorGroup == "targets", "invalid main section is rejected");
+		MenuUI::StabilizerPage::dirty = false;
+		require(CanSelectEditor("locations"), "clean location editor becomes owner");
+		MenuUI::StabilizerPage::dirty = true;
+		require(!CanSelectEditor("targets") && CanSelectEditor("locations"), "location draft remains visible");
+		MenuUI::StabilizerPage::dirty = false;
+
+		int saves = 0, discards = 0, applies = 0;
+		MenuUI::SettingsFooter footer{
+			true, false, "Unsaved INI changes", "VRFpsStabilizer.ini",
+			{ MenuUI::SettingsAction{ "Save & Apply", "Save INI help", true, [&] { ++saves; }, nullptr, "Save" },
+				{ "Discard edits", "Discard INI help", true, [&] { ++discards; }, "Discard this draft?", "Discard" },
+				{ "Apply saved INI", "Apply INI help", false, [&] { ++applies; }, nullptr, "Apply" } }
+		};
+		float footerWidth = 850;
+		auto drawFooter = [&] {
+			ImGui::BeginChild("Footer", { footerWidth, 500 });
+			const auto layout = GetSettingsFooterLayout("External", true, &footer);
+			const float height = SettingsFooterHeight("External", true, &footer);
+			const float top = ImGui::GetCursorScreenPos().y;
+			const auto styles = GImGui->StyleVarStack.Size;
+			const auto colors = GImGui->ColorStack.Size;
+			const auto fonts = GImGui->FontStack.Size;
+			const auto ids = ImGui::GetCurrentWindow()->IDStack.Size;
+			DrawSettingsFooter("External", {}, &footer);
+			for (const char* help : { "Save INI help", "Discard INI help", "Apply INI help" }) {
+				const auto bounds = Util::controls.at(help);
+				const auto region = ImGui::GetCurrentWindow()->InnerRect;
+				require(bounds.Min.x >= region.Min.x && bounds.Max.x <= region.Max.x + .1f, "footer action stays within its panel");
+				require(bounds.Max.y < top + height, "footer reserves every action row");
+			}
+			if (footerWidth < 250)
+				require(layout.actionRows > 1, "small footer wraps actions instead of clipping them");
+			require(styles == GImGui->StyleVarStack.Size && colors == GImGui->ColorStack.Size && fonts == GImGui->FontStack.Size && ids == ImGui::GetCurrentWindow()->IDStack.Size,
+				"footer restores ImGui styles, fonts and IDs");
+			ImGui::EndChild();
+		};
+		for (float panelWidth : { 850.0f, 450.0f, 180.0f }) {
+			footerWidth = panelWidth;
+			frame(drawFooter);
+			frame(drawFooter);
+		}
+		footerWidth = 850;
+		frame(drawFooter);
+		click(Util::controls.at("Save INI help").GetCenter(), drawFooter);
+		require(saves == 1, "external save invokes only its own persistence callback");
+		click(Util::controls.at("Apply INI help").GetCenter(), drawFooter);
+		require(applies == 0, "disabled external action cannot mutate settings");
+		click(Util::controls.at("Discard INI help").GetCenter(), drawFooter);
+		frame(drawFooter);
+		require(discards == 0 && !GImGui->OpenPopupStack.empty(), "destructive draft read requires confirmation");
+		footer.actions[1].enabled = false;
+		click(Util::controls.at("Popup last control").GetCenter(), drawFooter);
+		require(discards == 0 && GImGui->OpenPopupStack.empty(), "pending reload cannot trap a disabled confirmation modal");
 
 		ImGui::DestroyContext();
 		std::cout << "Settings navigation and numeric interaction checks passed\n";

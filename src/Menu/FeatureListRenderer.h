@@ -11,6 +11,8 @@ struct Feature;
 class FeatureListRenderer
 {
 public:
+	/** Menu features plus optional companion pages, without registering companions with the renderer. */
+	static std::vector<Feature*> GetMenuFeatures();
 	/** Explicit sidebar choice takes precedence over automatic hover hiding. */
 	static void SetSidebarVisible(bool a_visible);
 	static bool IsSidebarVisible();

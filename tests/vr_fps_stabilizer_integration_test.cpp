@@ -10,8 +10,10 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <source_location>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -192,15 +194,19 @@ int main()
 		std::filesystem::create_directories(testRoot / "SKSE" / "Plugins");
 		const auto main = ConfigPath();
 		const auto locations = ConfigPath(ConfigFile::Locations);
+		Require(!InspectAvailability().iniDetected && !InspectAvailability().CanEdit());
 		std::ofstream(main) << "[Settings]\nEnableLog=0\n";
 		std::ofstream(locations) << "[Settings]\nEnabled=1\n";
 		REL::Module::vr = false;
 		Initialize();
 		Require(!Status().loaded && !Status().available && dispatchCount == 0);
+		Require(!InspectAvailability().CanEdit() && !InspectAvailability().message.empty());
 		REL::Module::vr = true;
 		modulePresent = providerPresent = false;
 		Initialize();
 		Require(!Status().loaded && !Status().available);
+		const auto leftover = InspectAvailability();
+		Require(leftover.iniDetected && leftover.iniReadable && !leftover.CanEdit() && !leftover.message.empty());
 		IniDocument document;
 		std::string error;
 		config.exterior.renderScaleMode = true;
@@ -219,6 +225,26 @@ int main()
 		modulePresent = providerPresent = true;
 		Initialize();
 		Require(IsLoaded() && Status().loaded && Status().available && Status().build == 1413 && dispatchCount == 2);
+		Require(InspectAvailability().CanEdit() && InspectAvailability().message.empty());
+		StabilizerAvailabilityCache availability;
+		const auto firstCheck = std::chrono::steady_clock::now();
+		Require(availability.Get(firstCheck).CanEdit());
+		std::filesystem::remove(ConfigPath());
+		Require(availability.Get(firstCheck + std::chrono::milliseconds(500)).CanEdit());
+		Require(!availability.Get(firstCheck + std::chrono::seconds(1)).iniDetected);
+		std::ofstream(main) << "[Settings]\nEnableLog=0\n";
+		Require(availability.Get(firstCheck + std::chrono::seconds(2)).CanEdit());
+		std::ofstream(main, std::ios::binary).write("\0", 1);
+		Require(!availability.Get(firstCheck + std::chrono::seconds(3)).CanEdit());
+		std::ofstream(main) << "[Settings]\nEnableLog=0\n";
+		Require(availability.Get(firstCheck + std::chrono::seconds(4)).CanEdit());
+
+		std::filesystem::remove(main);
+		Require(!InspectAvailability().iniDetected && !InspectAvailability().CanEdit());
+		std::ofstream(main, std::ios::binary).write("\0", 1);
+		Require(InspectAvailability().iniDetected && !InspectAvailability().iniReadable && !InspectAvailability().CanEdit());
+		std::ofstream(main) << "[Settings]\nEnableLog=0\n";
+		Require(InspectAvailability().CanEdit());
 		Require(upscaling.IsVRFpsStabilizerSyncActive());
 		Require(HasPendingVRFpsStabilizerRenderScaleIntent(upscaling));
 		config.exterior.renderScaleMode = false;
@@ -293,6 +319,7 @@ int main()
 		providerPresent = false;
 		Initialize();
 		Require(Status().loaded && !Status().available && Status().message.empty());
+		Require(InspectAvailability().CanEdit());
 		Require(upscaling.IsVRFpsStabilizerSyncActive());
 		Require(document.Set("Settings", "EnableLog", "0", error));
 		Require(Save(ConfigFile::Main, document, error));

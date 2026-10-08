@@ -36,3 +36,13 @@ file(
     APPEND "${_directory}/stabilizer_intent_under_test.h"
     "\n${_implementation}"
 )
+
+file(READ "${PROJECT_ROOT}/src/Menu/StabilizerPage.cpp" _source)
+string(FIND "${_source}" "class StabilizerAvailabilityCache" _start)
+string(FIND "${_source}" "const VRFpsStabilizer::Availability& Availability()" _end)
+if(_start EQUAL -1 OR _end LESS_EQUAL _start)
+    message(FATAL_ERROR "Cannot extract Stabilizer availability cache")
+endif()
+math(EXPR _length "${_end} - ${_start}")
+string(SUBSTRING "${_source}" ${_start} ${_length} _implementation)
+file(APPEND "${OUTPUT_FILE}" "\n${_implementation}")

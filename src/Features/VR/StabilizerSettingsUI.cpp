@@ -1,3 +1,4 @@
+#include "Menu/ExternalSettingsPage.h"
 #include "StabilizerIntegration.h"
 #include "StabilizerSettings.h"
 #include "Utils/UI.h"
@@ -62,52 +63,12 @@ namespace VRFpsStabilizer
 			editor.revision = Status().revision;
 		}
 
-		void DrawActions(Editor& editor, ConfigFile file)
+		Editor& EnsureEditor(ConfigFile file)
 		{
-			const auto runtime = Status();
-			const bool dirty = editor.document.text != editor.document.original;
-			std::string validation;
-			const bool valid = file != ConfigFile::Main || ValidateSettings(editor.document, validation);
-			{
-				auto disabled = Util::DisableGuard(!editor.readable || !dirty || !valid || runtime.pending);
-				if (ImGui::Button(runtime.available ? "Save & Apply" : "Save INI")) {
-					if (Save(file, editor.document, editor.error))
-						editor.revision = Status().revision;
-				}
-			}
-			Tooltip("Save this INI's edits. With Stabilizer's live interface, reload them in the running game. Quality, location and event rules still follow their configured conditions.");
-			ImGui::SameLine();
-			if (ImGui::Button(dirty ? "Discard changes..." : "Read INI")) {
-				if (dirty)
-					ImGui::OpenPopup("Discard Stabilizer edits?");
-				else
-					Reload(editor, file);
-			}
-			Tooltip("Read the installed INI into the editor. This does not execute Stabilizer's reload interface.");
-			if (ImGui::BeginPopup("Discard Stabilizer edits?")) {
-				ImGui::TextUnformatted("Discard unsaved changes in this INI?");
-				if (ImGui::Button("Discard & read INI")) {
-					Reload(editor, file);
-					ImGui::CloseCurrentPopup();
-				}
-				ImGui::SameLine();
-				if (ImGui::Button("Keep editing"))
-					ImGui::CloseCurrentPopup();
-				ImGui::EndPopup();
-			}
-			ImGui::SameLine();
-			{
-				auto disabled = Util::DisableGuard(dirty || runtime.pending || !runtime.available || !editor.readable);
-				if (ImGui::Button("Apply saved INI"))
-					RequestReload(file, editor.error);
-			}
-			Tooltip("Ask Stabilizer to reload the saved file, including edits made outside CSX. Unsaved editor changes must be saved or discarded first.");
-			if (dirty)
-				Util::Text::WrappedWarning("Unsaved changes in %s.", file == ConfigFile::Main ? "VRFpsStabilizer.ini" : "VRFpsStabilizerLocation.ini");
-			if (!validation.empty())
-				Util::Text::WrappedError("%s", validation.c_str());
-			if (!editor.error.empty())
-				Util::Text::WrappedError("%s", editor.error.c_str());
+			auto& editor = GetEditor(file);
+			if (!editor.initialized || (editor.revision != Status().revision && editor.document.text == editor.document.original))
+				Reload(editor, file);
+			return editor;
 		}
 
 		void DrawSetting(Editor& editor, const Setting& setting)
@@ -275,19 +236,21 @@ namespace VRFpsStabilizer
 	{
 		const bool locations = Equal(group, "Locations");
 		const auto file = locations ? ConfigFile::Locations : ConfigFile::Main;
-		auto& editor = GetEditor(file);
-		const auto revision = Status().revision;
-		if (!editor.initialized || (editor.revision != revision && editor.document.text == editor.document.original))
-			Reload(editor, file);
+		auto& editor = EnsureEditor(file);
 		ImGui::PushID(locations ? "StabilizerLocations" : "StabilizerMain");
-		DrawActions(editor, file);
+		if (!editor.error.empty())
+			Util::Text::WrappedError("%s", editor.error.c_str());
+		std::string validation;
+		if (file == ConfigFile::Main && !ValidateSettings(editor.document, validation))
+			Util::Text::WrappedError("%s", validation.c_str());
 		if (editor.readable) {
 			ImGui::Separator();
 			if (locations) {
 				DrawLocations(editor);
 			} else if (Equal(group, "Quality Levels")) {
 				ImGui::TextWrapped("Level 0 is highest quality; level 9 is lowest. Stabilizer chooses a level using your frame-time targets.");
-				Util::Widgets::SliderInt("Quality level", &editor.level, 0, 9);
+				constexpr std::array levels{ "Level 0 (highest)", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7", "Level 8", "Level 9 (lowest)" };
+				Util::Widgets::Combo("Quality level", &editor.level, levels.data(), static_cast<int>(levels.size()));
 				Tooltip("Choose the level to configure. This edits that level's rules without forcing the current game to that level.");
 				DrawQualityRows(editor, std::format("Level{}", editor.level).c_str());
 			} else if (Equal(group, "Commands")) {
@@ -320,6 +283,28 @@ namespace VRFpsStabilizer
 			}
 		}
 		ImGui::PopID();
+	}
+
+	MenuUI::SettingsFooter GetSettingsFooter(ConfigFile file)
+	{
+		auto& editor = EnsureEditor(file);
+		const auto runtime = Status();
+		const bool dirty = editor.document.text != editor.document.original;
+		std::string validation;
+		const bool valid = file != ConfigFile::Main || ValidateSettings(editor.document, validation);
+		const bool error = !editor.error.empty() || !valid;
+		return { dirty, error,
+			error ? "Check INI settings" : dirty ? "Unsaved INI changes" :
+												   "INI saved",
+			!editor.error.empty() ? editor.error : !valid               ? validation :
+											   file == ConfigFile::Main ? "VRFpsStabilizer.ini" :
+																		  "VRFpsStabilizerLocation.ini",
+			{ MenuUI::SettingsAction{ runtime.available ? "Save & Apply" : "Save INI", "Save this INI and reload when supported; rules still follow their conditions.", editor.readable && dirty && valid && !runtime.pending,
+				  [&editor, file] { if (Save(file, editor.document, editor.error)) editor.revision = Status().revision; }, nullptr, "Save" },
+				{ dirty ? "Discard edits" : "Read INI", "Read the installed INI without applying it to the game.", !runtime.pending,
+					[&editor, file] { Reload(editor, file); }, dirty ? "Discard unsaved changes in this INI?" : nullptr, dirty ? "Discard" : "Read" },
+				{ "Apply saved INI", "Reload the saved file. Save or discard the current draft first.", !dirty && runtime.available && !runtime.pending && editor.readable,
+					[&editor, file] { RequestReload(file, editor.error); }, nullptr, "Apply" } } };
 	}
 
 	bool HasUnsavedSettings(ConfigFile file)

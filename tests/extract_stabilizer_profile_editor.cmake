@@ -1,4 +1,4 @@
-file(READ "${PROJECT_ROOT}/src/Features/VR.cpp" _source)
+file(READ "${PROJECT_ROOT}/src/Menu/StabilizerPage.cpp" _source)
 string(FIND "${_source}" "struct VRFpsStabilizerUIState" _start)
 string(FIND "${_source}" "bool DrawVRFpsStabilizerUpscaleMethod(" _end)
 if(_start EQUAL -1 OR _end LESS_EQUAL _start)

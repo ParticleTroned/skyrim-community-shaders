@@ -63,16 +63,6 @@ public:
 		std::unordered_map<std::string, PerformanceTimingTotals> features;
 	};
 
-	struct PerformanceTimingHighlight
-	{
-		int frameDirection = 0;
-		int fpsDirection = 0;
-		int gpuTotalDirection = 0;
-		int cpuTotalDirection = 0;
-		int featureGpuDirection = 0;
-		int featureCpuDirection = 0;
-	};
-
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
 	/** Identifies feature-owned and shared profiling views before samples exist. */
 	static bool CanProfileFeature(std::string_view a_feature);
@@ -80,12 +70,8 @@ public:
 	/** Draws Off/GPU/CPU controls and live timing graphs for one feature. */
 	static void RenderFeatureTimers(const std::string& featurePrefix);
 	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
-	static void RenderFeaturePerformanceSummary(
-		const std::string& featurePrefix,
-		const PerformanceTimingHighlight* highlight = nullptr);
-	static void RenderFeaturePerformanceSummary(
-		const std::vector<std::string>& featurePrefixes,
-		const PerformanceTimingHighlight* highlight = nullptr);
+	/** Draws both feature timing views, preserving owned versus shared attribution. */
+	static void RenderFeaturePerformanceSummary(const std::string& featurePrefix);
 
 private:
 	static constexpr uint32_t kFeatureGraphHistorySize = 60;

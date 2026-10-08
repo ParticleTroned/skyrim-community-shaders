@@ -85,7 +85,13 @@ struct ProfilingRenderer
 	static inline int draws = 0;
 	static inline int globalDraws = 0;
 	static inline std::string feature;
-	static void RenderStatistics() { ++globalDraws; }
+	static inline std::function<void()> inspect;
+	static void RenderStatistics()
+	{
+		++globalDraws;
+		if (inspect)
+			inspect();
+	}
 	static void RenderFeatureTimers(const std::string& prefix)
 	{
 		if (!globals::profiler)
@@ -98,11 +104,16 @@ struct PerformanceTuningRenderer
 {
 	static inline int draws = 0;
 	static inline int globalDraws = 0;
+	static inline int inactiveNotifications = 0;
+	static void NotifyOverviewInactive() { ++inactiveNotifications; }
 	static inline std::string feature;
 	static inline std::function<void()> inspect;
-	static void Render() { ++globalDraws; }
-	static void RenderFeatureMeasurement(Feature* selected, bool = false)
+	static void RenderMeasurementSuite(Feature* selected = nullptr)
 	{
+		if (!selected) {
+			++globalDraws;
+			return;
+		}
 		feature = selected->GetShortName();
 		++draws;
 		if (inspect)
@@ -331,39 +342,35 @@ int main()
 		MenuUI::SettingsPage::Select("FeaturePage", "overview");
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
 		const auto measurementCard = Util::controls.at("Measures in-game frame times and FPS with the current feature settings.");
-		const auto profilingCard = Util::controls.at("Choose CPU, GPU or Off to inspect timings.");
 		const auto setupCard = Util::controls.at("Appearance");
-		require(measurementCard.Min.y == profilingCard.Min.y && measurementCard.Max.x < profilingCard.Min.x, "inspection cards share a bottom row");
-		require(measurementCard.Min.x == setupCard.Min.x && measurementCard.GetSize().x == setupCard.GetSize().x && measurementCard.GetSize().y == setupCard.GetSize().y && profilingCard.GetSize().x == setupCard.GetSize().x && profilingCard.GetSize().y == setupCard.GetSize().y, "inspection cards match setup card size and column alignment");
+		require(measurementCard.Min.x == setupCard.Min.x && measurementCard.GetSize().x == setupCard.GetSize().x && measurementCard.GetSize().y == setupCard.GetSize().y, "measurement card matches setup card size and column alignment");
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement suite owns profiling instead of a second tab");
 		const int measurementsBefore = PerformanceTuningRenderer::draws;
-		click(profilingCard.GetCenter(), drawPerformance);
-		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		require(MenuUI::SettingsPage::Selected("FeaturePage") == "profiling" && ProfilingRenderer::feature == "FeaturePage", "profiling card opens the selected feature even before timing data exists");
-		require(PerformanceTuningRenderer::draws == measurementsBefore, "profiling never invokes measurement controls");
 		int profilingBefore = ProfilingRenderer::draws;
-		globals::profiler = nullptr;
-		frame(drawPerformance);
-		require(ProfilingRenderer::draws == profilingBefore, "unavailable profiler is handled without dereferencing it");
-		globals::profiler = &globals::profilerStorage;
-		MenuUI::SettingsPage::Select("FeaturePage", "overview");
+		click(measurementCard.GetCenter(), drawPerformance);
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		profilingBefore = ProfilingRenderer::draws;
-		click(Util::controls.at("Measures in-game frame times and FPS with the current feature settings.").GetCenter(), drawPerformance);
-		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance" && PerformanceTuningRenderer::draws > measurementsBefore, "measurement card opens the existing readiness-aware controls");
-		require(ProfilingRenderer::draws == profilingBefore, "measurement does not select a profiling mode");
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance" && PerformanceTuningRenderer::draws > measurementsBefore, "measurement card opens the shared suite");
+		require(ProfilingRenderer::draws == profilingBefore, "measurement suite does not invoke a separate profiling mode selector");
 		feature.supportsMeasurement = true;
 		MenuUI::SettingsPage::Select("TestPage", "performance");
 		for (int i = 0; i < 3; ++i) frame(drawPage);
 		require(PerformanceTuningRenderer::globalDraws > 0, "non-feature pages open the global measurement view");
+		const int inactiveBeforeProfiling = PerformanceTuningRenderer::inactiveNotifications;
+		ProfilingRenderer::inspect = [&] {
+			require(PerformanceTuningRenderer::inactiveNotifications > inactiveBeforeProfiling, "leaving tuning releases temporary capture before independent profiling controls draw");
+		};
 		MenuUI::SettingsPage::Select("TestPage", "profiling");
 		for (int i = 0; i < 3; ++i) frame(drawPage);
 		require(ProfilingRenderer::globalDraws > 0, "non-feature pages open the global profiling view");
+		ProfilingRenderer::inspect = {};
 
 		feature.supportsMeasurement = false;
 		MenuUI::SettingsPage::Select("FeaturePage", "performance");
 		Util::controls.clear();
 		const int measurementsBeforeRemoval = PerformanceTuningRenderer::draws;
+		const int inactiveBeforeRemoval = PerformanceTuningRenderer::inactiveNotifications;
+		frame(drawPerformance);
+		require(PerformanceTuningRenderer::inactiveNotifications > inactiveBeforeRemoval, "removing tuning releases temporary capture when selection falls back");
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
 		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "removing tuning returns a previously selected measurement tab to overview");
 		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !Util::controls.contains("Measures in-game frame times and FPS with the current feature settings."), "removed tuning has neither a reachable tab nor an overview card");
@@ -387,9 +394,10 @@ int main()
 		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
 		require(MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement eligibility is independent of profiling");
 		ProfilingRenderer::eligible = true;
-		auto drawGlobalPerformance = [&] { MenuUI::SettingsPage page("PerformanceTuning", { { "features", "Features", "Choose features" } }); };
+		auto drawGlobalPerformance = [&] { MenuUI::SettingsPage page("PerformanceTuning", { { "compare", "Compare total feature set", "Compare features" } }); };
 		frame(drawGlobalPerformance);
 		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "performance"), "global measurement view cannot recursively open itself");
+		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "profiling") && MenuUI::SettingsPage::Navigate("PerformanceTuning", "compare"), "global tuning exposes comparison without profiling");
 
 		for (const auto name : { "ImageBasedLighting", "CSUtility", "CloudShadows", "InteriorSun", "Wetterness", "TruePBR", "ExtendedMaterials", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects", "VR", "Screenshot" }) {
 			Feature profiledFeature{ name, false };

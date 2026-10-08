@@ -14,10 +14,10 @@ public:
 	static void Render();
 	/** Draws a shared feature switch through the existing reversible toggle path. */
 	static void RenderFeatureEnabledControl(Feature* a_feature);
-	/** Restores overview profiling when another panel is selected and no comparison is active. */
+	/** Restores temporary profiling when no tuning panel or comparison is active. */
 	static void NotifyOverviewInactive();
-	/** Draws the shared cost test and results for a feature's current settings. */
-	static void RenderFeatureMeasurement(Feature* a_feature, bool a_inlineButton = false);
+	/** Draws live counters, measurement controls and results; null compares all features. */
+	static void RenderMeasurementSuite(Feature* a_feature = nullptr);
 	/** Invalidates measured costs when a feature's settings change. */
 	static void NotifyFeatureSettingsChanged(Feature* a_feature);
 	/** Advances an active cost test while the main settings window is closed. */

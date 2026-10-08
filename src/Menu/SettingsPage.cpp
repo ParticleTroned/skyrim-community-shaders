@@ -160,7 +160,7 @@ namespace MenuUI
 		const std::string pageId = activeFeature ? activeFeature->GetShortName() : a_id;
 		a_id = pageId.c_str();
 		const bool measurementAvailable = activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning";
-		const bool profilingAvailable = globals::profiler && (activeFeature ? ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling");
+		const bool profilingAvailable = globals::profiler && (activeFeature ? !measurementAvailable && ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning");
 		sections.push_back({ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" });
 		sections.push_back({ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false });
 		ImGui::PushID(a_id);
@@ -234,20 +234,16 @@ namespace MenuUI
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
 			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
 		}
+		if (!contentVisible || (selected != "performance" && !(pageId == "PerformanceTuning" && selected == "compare")))
+			PerformanceTuningRenderer::NotifyOverviewInactive();
 		if (contentLeftPadding > 0)
 			ImGui::Indent(contentLeftPadding);
 		if (contentVisible && selected != "overview") {
 			DrawDetailHeader(a_id, a_summary);
 			controlLayout = std::make_unique<Util::Widgets::ControlLayout>();
 		}
-		if (contentVisible && selected == "performance") {
-			if (activeFeature) {
-				ImGui::TextWrapped("Measure this feature with your current settings, then compare it with the feature turned off.");
-				PerformanceTuningRenderer::RenderFeatureMeasurement(activeFeature);
-			} else {
-				PerformanceTuningRenderer::Render();
-			}
-		}
+		if (contentVisible && selected == "performance")
+			PerformanceTuningRenderer::RenderMeasurementSuite(activeFeature);
 		if (contentVisible && selected == "profiling") {
 			if (!globals::profiler)
 				ImGui::TextColored(Util::Color::SecondaryText(), "Profiling is not available yet.");

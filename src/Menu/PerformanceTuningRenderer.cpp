@@ -1551,16 +1551,23 @@ namespace
 		return true;
 	}
 
+	void RenderFeatureCostValue(const char* value, const ImVec4& color)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+		const SKSE::stl::scope_exit restoreColor([] { ImGui::PopStyleColor(); });
+		MenuUI::DetailText(value);
+	}
+
 	void RenderFeatureCostPercentage(const FeatureCostMetricDelta& metric)
 	{
 		if (!metric.available || !metric.hasStandardError || !metric.hasCostPercent) {
-			ImGui::TextDisabled("--");
+			RenderFeatureCostValue("--", ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			return;
 		}
 
 		const int direction = metric.significant ? GetDirectionFromFeatureCostFrameTimeDelta(static_cast<float>(metric.costPercent)) : 0;
-		ImGui::TextColored(direction != 0 ? Util::Color::PerformanceDelta(direction) : ImGui::GetStyleColorVec4(ImGuiCol_Text),
-			"%+.1f%%%s", metric.costPercent, metric.significant ? "*" : "");
+		RenderFeatureCostValue(fmt::format("{:+.1f}%{}", metric.costPercent, metric.significant ? "*" : "").c_str(),
+			direction != 0 ? Util::Color::PerformanceDelta(direction) : ImGui::GetStyleColorVec4(ImGuiCol_Text));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Frame/CPU/GPU: (current - off) / current. FPS loss: (off - current) / off.");
 			ImGui::TextUnformatted("Negative costs indicate a performance saving. * indicates p <= 0.05.");
@@ -1576,57 +1583,77 @@ namespace
 	{
 		ImGui::TableNextRow();
 		ImGui::TableSetColumnIndex(0);
-		ImGui::TextDisabled("%s", label);
+		ImGui::TextColored(Util::Color::SecondaryText(), "%s", label);
 		ImGui::TableSetColumnIndex(1);
 		if (!metric.available || !metric.hasStandardError) {
-			ImGui::TextDisabled("--");
+			RenderFeatureCostValue("--", ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			ImGui::TableSetColumnIndex(2);
-			ImGui::TextDisabled("--");
+			RenderFeatureCostValue("--", ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			return;
 		}
 
 		const int colorDirection = metric.significant ? direction : 0;
-		if (colorDirection != 0)
-			ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::PerformanceDelta(colorDirection));
-
 		const char* significanceMarker = metric.significant ? "*" : "";
 		std::string missingSampleMarker;
 		if (metric.missingSampleCount > 0)
 			missingSampleMarker = fmt::format(" \xE2\x80\xA0{}", metric.missingSampleCount);
-		if (fps) {
-			ImGui::Text("%+.1f%s \xC2\xB1 %.1f%s", metric.value, significanceMarker, metric.standardError, missingSampleMarker.c_str());
-		} else {
-			ImGui::Text("%+.3f%s \xC2\xB1 %.3f ms%s", metric.value, significanceMarker, metric.standardError, missingSampleMarker.c_str());
-		}
-
-		if (colorDirection != 0)
-			ImGui::PopStyleColor();
+		const auto value = fps ?
+		                       fmt::format("{:+.1f}{} \xC2\xB1 {:.1f}{}", metric.value, significanceMarker, metric.standardError, missingSampleMarker) :
+		                       fmt::format("{:+.3f}{} \xC2\xB1 {:.3f} ms{}", metric.value, significanceMarker, metric.standardError, missingSampleMarker);
+		RenderFeatureCostValue(value.c_str(), colorDirection != 0 ? Util::Color::PerformanceDelta(colorDirection) : ImGui::GetStyleColorVec4(ImGuiCol_Text));
 		ImGui::TableSetColumnIndex(2);
 		RenderFeatureCostPercentage(metric);
 	}
 
-	void RenderMetricCounter(const char* id, const char* label, float value, const char* format, int direction, bool valid)
+	struct MeasurementTableStyle
 	{
-		ImGui::PushID(id);
-		if (direction != 0)
-			ImGui::PushStyleColor(ImGuiCol_Border, Util::Color::PerformanceDelta(direction));
-
-		const float height = 58.0f * Util::GetUIScale();
-		if (ImGui::BeginChild("##Counter", ImVec2(0.0f, height), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-			ImGui::TextDisabled("%s", label);
-			if (!valid) {
-				ImGui::TextDisabled("--");
-			} else if (direction != 0) {
-				ImGui::TextColored(Util::Color::PerformanceDelta(direction), format, value);
-			} else {
-				ImGui::Text(format, value);
-			}
+		MeasurementTableStyle()
+		{
+			const float font = ImGui::GetFontSize();
+			ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, { font * .75f, font * .5f });
+			ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+			ImGui::PushStyleColor(ImGuiCol_TableRowBg, { 0, 0, 0, 0 });
+			ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, Util::Color::WithAlpha(ImGui::GetStyleColorVec4(ImGuiCol_Text), .035f));
 		}
-		ImGui::EndChild();
+		~MeasurementTableStyle()
+		{
+			ImGui::PopStyleColor(3);
+			ImGui::PopStyleVar();
+		}
+		MeasurementTableStyle(const MeasurementTableStyle&) = delete;
+		MeasurementTableStyle& operator=(const MeasurementTableStyle&) = delete;
+	};
 
-		if (direction != 0)
-			ImGui::PopStyleColor();
-		ImGui::PopID();
+	void RenderMeasurementTableHeaders()
+	{
+		ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+		for (int column = 0; column < ImGui::TableGetColumnCount(); ++column) {
+			ImGui::TableSetColumnIndex(column);
+			ImGui::TextWrapped("%s", ImGui::TableGetColumnName(column));
+		}
+	}
+
+	void RenderMetricCounter(const char* label, float value, const char* format, bool valid)
+	{
+		ImGui::PushID(label);
+		const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+		const float font = ImGui::GetFontSize();
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { font * .75f, font * .6f });
+		const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleVar(); ImGui::PopStyleColor(); });
+		const float height = font * 3.8f + ImGui::GetStyle().ItemSpacing.y;
+		const bool visible = ImGui::BeginChild("##Counter", { 0, height }, ImGuiChildFlags_AlwaysUseWindowPadding,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		const SKSE::stl::scope_exit endChild([] { ImGui::EndChild(); });
+		if (!visible)
+			return;
+		ImGui::TextColored(Util::Color::SecondaryText(), "%s", label);
+		ImGui::PushFont(ImGui::GetFont(), font * 1.6f);
+		const SKSE::stl::scope_exit restoreFont([] { ImGui::PopFont(); });
+		if (valid)
+			ImGui::Text(format, value);
+		else
+			ImGui::TextDisabled("--");
 	}
 
 	void RenderTopPerformanceCounters(const ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -1636,18 +1663,34 @@ namespace
 		float displayCpuMs = 0.0f;
 		const bool hasDisplayCpu = TryGetDisplayCpuMs(summary, displayCpuMs);
 
-		if (ImGui::BeginTable("##PerformanceTuningTopCounters", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			RenderMetricCounter("Game", "Game:", summary.frameMs, "%.2f ms", 0, summary.frameMs > 0.0f);
-			ImGui::TableNextColumn();
-			RenderMetricCounter("GPU", "GPU:", displayGpuMs, "%.2f ms", 0, hasDisplayGpu);
-			ImGui::TableNextColumn();
-			RenderMetricCounter("CPU", "CPU:", displayCpuMs, "%.2f ms", 0, hasDisplayCpu);
-			ImGui::TableNextColumn();
-			RenderMetricCounter("FPS", "FPS:", summary.fps, "%.0f", 0, summary.fps > 0.0f);
-			ImGui::EndTable();
-		}
+		const float minimumWidth = ImGui::GetFontSize() * 10;
+		const int columns = ImGui::GetContentRegionAvail().x >= minimumWidth * 4 ? 4 : 2;
+		MenuUI::DetailGrid counters("##PerformanceTuningTopCounters", columns, minimumWidth);
+		counters.Next();
+		RenderMetricCounter("Game", summary.frameMs, "%.2f ms", summary.frameMs > 0.0f);
+		counters.Next();
+		RenderMetricCounter("GPU", displayGpuMs, "%.2f ms", hasDisplayGpu);
+		counters.Next();
+		RenderMetricCounter("CPU", displayCpuMs, "%.2f ms", hasDisplayCpu);
+		counters.Next();
+		RenderMetricCounter("FPS", summary.fps, "%.0f", summary.fps > 0.0f);
+	}
+
+	bool RenderMeasureButton(bool canStart)
+	{
+		auto guard = Util::DisableGuard(!canStart);
+		return ImGui::Button("Measure", { ImGui::GetFontSize() * 10, ImGui::GetFrameHeight() * 1.4f });
+	}
+
+	void RenderMeasurementStatus(bool running)
+	{
+		const double cooldown = GetFeatureCostRestartCooldownRemaining(ImGui::GetTime());
+		if (running)
+			MenuUI::DetailText("Running with CS closed");
+		else if (PerformanceTuningRenderer::HasActiveMeasurements())
+			MenuUI::DetailText("Finish the current measurement first");
+		else if (cooldown > 0.0)
+			MenuUI::DetailText(fmt::format("Ready in {:.0f}s", std::ceil(cooldown)).c_str());
 	}
 
 	const char* GetFeatureCostComparisonLabel(Feature* feature)
@@ -1724,29 +1767,21 @@ namespace
 
 	void RenderFeatureCostMeasurement(
 		Feature* feature,
-		FeatureCostMeasurementState& state,
-		bool inlineButton)
+		FeatureCostMeasurementState& state)
 	{
 		if (!feature)
 			return;
 
-		const bool running = IsFeatureCostMeasurementActive(state);
-		const bool anyMeasurementRunning = IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active;
 		const double currentTime = ImGui::GetTime();
-		const double restartCooldownRemaining =
-			GetFeatureCostRestartCooldownRemaining(currentTime);
 		const char* blockReason = GetFeatureToggleBlockReason(feature);
 		const bool canStartMeasurement =
 			feature->loaded && feature->SupportsPerformanceCostMeasurement() &&
 			feature->IsPerformanceCostMeasurementEnabled() && feature->IsPerformanceCostMeasurementReady() && !blockReason &&
 			GetFeatureCostStartError(currentTime) == nullptr;
-		if (inlineButton)
-			ImGui::SameLine();
-		ImGui::BeginDisabled(!canStartMeasurement);
-		if (ImGui::Button("Measure")) {
+		MenuUI::SectionHeading("Measurement");
+		MenuUI::DetailText(fmt::format("Compare current settings with {}. Your settings are restored after the run.", GetFeatureCostComparisonLabel(feature)).c_str());
+		if (RenderMeasureButton(canStartMeasurement))
 			StartFeatureCostMeasurement(feature, state, currentTime);
-		}
-		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			if (blockReason)
 				ImGui::TextUnformatted(blockReason);
@@ -1771,23 +1806,15 @@ namespace
 				GetFeatureCostComparisonLabel(feature),
 				GetFeatureCostComparisonDetails(feature));
 		}
-		if (restartCooldownRemaining > 0.0) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("Ready in %.0fs", std::ceil(restartCooldownRemaining));
-		}
-		if (!running && anyMeasurementRunning && !IsFeatureCostMeasurementActive(state)) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("Finish the current measurement first");
-		}
+		RenderMeasurementStatus(IsFeatureCostMeasurementActive(state));
+		if (IsFeatureCostMeasurementActive(state))
+			return;
 
-		if (IsFeatureCostMeasurementActive(state)) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("Running with CS closed");
+		MenuUI::SectionHeading("Results");
+		if (state.phase != FeatureCostMeasurementPhase::Complete) {
+			MenuUI::DetailText("No measurement yet. Choose Measure to compare this feature in the current scene.");
 			return;
 		}
-
-		if (state.phase != FeatureCostMeasurementPhase::Complete)
-			return;
 
 		if (!state.failureMessage.empty()) {
 			ImGui::Spacing();
@@ -1799,8 +1826,7 @@ namespace
 
 		if (!state.delta.frame.available && !state.delta.fps.available &&
 			!state.delta.gameGpu.available && !state.delta.gameCpu.available) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("No game timing data");
+			MenuUI::DetailText("No game timing data");
 			return;
 		}
 
@@ -1813,12 +1839,13 @@ namespace
 				3,
 				ImGuiTableFlags_RowBg |
 					ImGuiTableFlags_BordersInnerH |
+					ImGuiTableFlags_PadOuterX |
 					ImGuiTableFlags_SizingStretchProp |
 					ImGuiTableFlags_NoSavedSettings)) {
-			ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthFixed, std::ceil(ImGui::CalcTextSize("Metric").x));
 			ImGui::TableSetupColumn(differenceHeader.c_str(), ImGuiTableColumnFlags_WidthStretch);
 			ImGui::TableSetupColumn("Cost / FPS loss (%)", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableHeadersRow();
+			RenderMeasurementTableHeaders();
 			RenderFeatureCostMetricRow(
 				"Game",
 				state.delta.frame,
@@ -1841,7 +1868,9 @@ namespace
 				false);
 			ImGui::EndTable();
 		}
-		ImGui::TextDisabled(
+		ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::SecondaryText());
+		const SKSE::stl::scope_exit restoreFootnoteColor([] { ImGui::PopStyleColor(); });
+		ImGui::TextWrapped(
 			"* p <= 0.05    \xE2\x80\xA0"
 			"1/\xE2\x80\xA0"
 			"2: raw samples missing; 3+ = --");
@@ -2377,105 +2406,97 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
 
 void PerformanceTuningRenderer::Render()
 {
-	CaptureProfilerStateForPerformanceTuning();
-	const auto features = BuildPerformanceFeatureList();
-	const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(BuildPerformanceFeaturePrefixes(features), true);
+	MenuUI::SettingsPage page("PerformanceTuning", { { "compare", "Compare total feature set", "Measure each enabled feature against Off or None in the current scene.", "Frame times, FPS and individual feature costs", true, true, "Compare your setup" } }, "Performance tuning", "Choose the comparison to measure your current feature set.");
+	if (page.Is("compare"))
+		RenderMeasurementSuite();
+}
 
-	MenuUI::SettingsPage page("PerformanceTuning", {
-													   { "features", "Features", "Choose which runtime features are enabled.", "Runtime feature switches", true, true, "Choose features and compare" },
-													   { "compare", "Compare", "Measure feature costs after choosing your scene and settings.", "Frame, CPU, GPU and FPS costs", true, true, nullptr },
-												   });
-	if (!page.Is("features") && !page.Is("compare"))
-		return;
-	RenderTopPerformanceCounters(timing);
-	ImGui::Spacing();
-	const bool anyEnabled = std::ranges::any_of(features, [](Feature* feature) {
-		return feature->IsPerformanceCostMeasurementEnabled() && !GetFeatureToggleBlockReason(feature);
-	});
-	const bool busy = HasActiveMeasurements();
-	if (page.Is("compare")) {
-		const double cooldown = GetFeatureCostRestartCooldownRemaining(ImGui::GetTime());
-		ImGui::BeginDisabled(GetFeatureCostStartError(ImGui::GetTime()) != nullptr || !anyEnabled);
-		if (ImGui::Button("Measure")) {
+namespace
+{
+	void RenderFeatureSetMeasurement(const std::vector<Feature*>& features)
+	{
+		const bool anyEnabled = std::ranges::any_of(features, [](Feature* feature) {
+			return feature->IsPerformanceCostMeasurementEnabled() && !GetFeatureToggleBlockReason(feature);
+		});
+		MenuUI::SectionHeading("Measurement");
+		MenuUI::DetailText("Measure each active feature against Off or None, one at a time. Your settings are restored after every comparison.");
+		if (RenderMeasureButton(GetFeatureCostStartError(ImGui::GetTime()) == nullptr && anyEnabled)) {
 			const char* error = StartFeatureCostBatch(false);
 			g_featureCostUiMessage = error ? "Measurement could not start. Check that a game is loaded, the editor is closed, and the features are ready." : "";
 		}
-		ImGui::EndDisabled();
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("Measure every active, editable feature against Off/None, one at a time. Inactive features and controls owned by scene or weather overrides are skipped. Each comparison restores its exact prior settings. CS closes for the complete run and reopens with the results. Keep the scene still; allow about 41 seconds per feature. Use the menu shortcut to cancel. These are individual on/off costs; percentages need not add up to 100%.");
-		if (cooldown > 0.0) {
-			ImGui::SameLine();
-			ImGui::TextDisabled("Ready in %.0fs", std::ceil(cooldown));
-		}
+			ImGui::TextWrapped("Measure every active, editable feature against Off/None, one at a time. Inactive features and controls owned by scene or weather overrides are skipped. Each comparison restores its exact prior settings. CS closes for the complete run and reopens with the results. Keep the scene still; allow about 41 seconds per feature. Use the menu shortcut to cancel.");
+		RenderMeasurementStatus(g_featureCostBatch.active);
 		if (!g_featureCostUiMessage.empty())
-			ImGui::TextWrapped("%s", g_featureCostUiMessage.c_str());
+			MenuUI::DetailText(g_featureCostUiMessage.c_str());
 		if (!g_featureCostBatch.failureMessage.empty())
-			ImGui::TextWrapped("%s", g_featureCostBatch.failureMessage.c_str());
-		ImGui::Spacing();
-	}
-	if (ImGui::BeginTable("##PerformanceFeatureCosts", 5,
-			ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
-		ImGui::TableSetupColumn("Feature", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-		ImGui::TableSetupColumn("Frame (%)");
-		ImGui::TableSetupColumn("CPU (%)");
-		ImGui::TableSetupColumn("GPU (%)");
-		ImGui::TableSetupColumn("FPS loss (%)");
-		ImGui::TableHeadersRow();
-		for (auto* feature : features) {
-			ImGui::PushID(feature->GetShortName().c_str());
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			bool enabled = feature->IsPerformanceToggleEnabled();
-			const char* blockReason = GetFeatureToggleBlockReason(feature);
-			ImGui::BeginDisabled(page.Is("compare") || busy || blockReason != nullptr);
-			if (Util::FeatureToggle("##Enabled", &enabled)) {
-				const bool applied = SetRuntimeFeatureEnabled(feature, enabled);
-				g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";
-			}
-			ImGui::EndDisabled();
-			if (blockReason) {
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted(blockReason);
-			}
-			ImGui::SameLine();
-			ImGui::TextUnformatted(GetPerformanceFeatureLabel(feature).c_str());
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextWrapped("Compared with Off: %s", GetFeatureCostComparisonDetails(feature));
-			if (blockReason) {
-				ImGui::SameLine();
-				ImGui::TextDisabled("(controlled)");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted(blockReason);
-			} else if (enabled && !feature->IsPerformanceCostMeasurementEnabled()) {
-				ImGui::SameLine();
-				ImGui::TextDisabled("(inactive)");
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::TextWrapped("This feature remains enabled. Its cost comparison requires a scene in which it is active.");
-			}
-			const auto result = g_costMeasurementStates.find(feature->GetShortName());
-			const FeatureCostDelta* delta = result != g_costMeasurementStates.end() &&
-			                                        result->second.phase == FeatureCostMeasurementPhase::Complete &&
-			                                        result->second.failureMessage.empty() ?
-			                                    &result->second.delta :
-			                                    nullptr;
-			for (const auto* metric : { delta ? &delta->frame : nullptr, delta ? &delta->gameCpu : nullptr,
-					 delta ? &delta->gameGpu : nullptr, delta ? &delta->fps : nullptr }) {
-				ImGui::TableNextColumn();
-				if (metric)
-					RenderFeatureCostPercentage(*metric);
-				else
-					ImGui::TextDisabled("--");
-			}
-			if (result != g_costMeasurementStates.end() && !result->second.failureMessage.empty()) {
+			MenuUI::DetailText(g_featureCostBatch.failureMessage.c_str());
+		MenuUI::SectionHeading("Features and results");
+		MenuUI::DetailText("Choose the enabled features below. These are individual on/off costs; percentages do not add up to a total. Unmeasured or unavailable results show --.");
+		const bool busy = PerformanceTuningRenderer::HasActiveMeasurements();
+		if (ImGui::BeginTable("##PerformanceFeatureCosts", 5,
+				ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
+			ImGui::TableSetupColumn("Feature (in game toggle)", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+			ImGui::TableSetupColumn("Frame (%)");
+			ImGui::TableSetupColumn("CPU (%)");
+			ImGui::TableSetupColumn("GPU (%)");
+			ImGui::TableSetupColumn("FPS loss (%)");
+			RenderMeasurementTableHeaders();
+			for (auto* feature : features) {
+				ImGui::PushID(feature->GetShortName().c_str());
+				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
-				ImGui::TextWrapped("%s", result->second.failureMessage.c_str());
+				bool enabled = feature->IsPerformanceToggleEnabled();
+				const char* blockReason = GetFeatureToggleBlockReason(feature);
+				ImGui::BeginDisabled(busy || blockReason != nullptr);
+				if (Util::Widgets::Checkbox("##Enabled", &enabled)) {
+					const bool applied = SetRuntimeFeatureEnabled(feature, enabled);
+					g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";
+				}
+				ImGui::EndDisabled();
+				if (blockReason) {
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted(blockReason);
+				}
+				ImGui::SameLine();
+				ImGui::TextWrapped("%s", GetPerformanceFeatureLabel(feature).c_str());
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextWrapped("Compared with %s: %s", GetFeatureCostComparisonLabel(feature), GetFeatureCostComparisonDetails(feature));
+				if (blockReason) {
+					ImGui::TextDisabled("(controlled)");
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::TextUnformatted(blockReason);
+				} else if (enabled && !feature->IsPerformanceCostMeasurementEnabled()) {
+					ImGui::TextDisabled("(inactive)");
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::TextWrapped("This feature remains enabled. Its cost comparison requires a scene in which it is active.");
+				}
+				const auto result = g_costMeasurementStates.find(feature->GetShortName());
+				const FeatureCostDelta* delta = result != g_costMeasurementStates.end() &&
+				                                        result->second.phase == FeatureCostMeasurementPhase::Complete &&
+				                                        result->second.failureMessage.empty() ?
+				                                    &result->second.delta :
+				                                    nullptr;
+				for (const auto* metric : { delta ? &delta->frame : nullptr, delta ? &delta->gameCpu : nullptr,
+						 delta ? &delta->gameGpu : nullptr, delta ? &delta->fps : nullptr }) {
+					ImGui::TableNextColumn();
+					if (metric)
+						RenderFeatureCostPercentage(*metric);
+					else
+						RenderFeatureCostValue("--", ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+				}
+				if (result != g_costMeasurementStates.end() && !result->second.failureMessage.empty()) {
+					ImGui::TableSetColumnIndex(0);
+					ImGui::TextWrapped("%s", result->second.failureMessage.c_str());
+				}
+				ImGui::PopID();
 			}
-			ImGui::PopID();
+			ImGui::EndTable();
 		}
-		ImGui::EndTable();
+		if (features.empty())
+			ImGui::TextDisabled("No loaded features support switching on and off in game.");
 	}
-	if (features.empty())
-		ImGui::TextDisabled("No loaded features support switching on and off in game.");
+
 }
 
 void PerformanceTuningRenderer::NotifyOverviewInactive()
@@ -2484,13 +2505,31 @@ void PerformanceTuningRenderer::NotifyOverviewInactive()
 		RestoreProfilerStateAfterPerformanceTuning();
 }
 
-void PerformanceTuningRenderer::RenderFeatureMeasurement(Feature* a_feature, bool a_inlineButton)
+void PerformanceTuningRenderer::RenderMeasurementSuite(Feature* a_feature)
 {
-	if (!a_feature)
+	if (a_feature && !a_feature->SupportsPerformanceCostMeasurement())
 		return;
-	ImGui::PushID(a_feature->GetShortName().c_str());
-	RenderFeatureCostMeasurement(a_feature, g_costMeasurementStates[a_feature->GetShortName()], a_inlineButton);
-	ImGui::PopID();
+	CaptureProfilerStateForPerformanceTuning();
+	const auto features = a_feature ? std::vector<Feature*>{ a_feature } : BuildPerformanceFeatureList();
+	RenderTopPerformanceCounters(ProfilingRenderer::CapturePerformanceTimingSummary(BuildPerformanceFeaturePrefixes(features), true));
+	if (!a_feature) {
+		MeasurementTableStyle tableStyle;
+		RenderFeatureSetMeasurement(features);
+		return;
+	}
+
+	const auto name = a_feature->GetShortName();
+	ImGui::PushID(name.c_str());
+	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+	const bool profiling = ProfilingRenderer::CanProfileFeature(name);
+	MenuUI::DetailGrid suite("##MeasurementSuite", profiling ? 2 : 1);
+	MeasurementTableStyle tableStyle;
+	suite.Next();
+	RenderFeatureCostMeasurement(a_feature, g_costMeasurementStates[name]);
+	if (profiling) {
+		suite.Next();
+		ProfilingRenderer::RenderFeaturePerformanceSummary(name);
+	}
 }
 
 void PerformanceTuningRenderer::NotifyFeatureSettingsChanged(Feature* a_feature)

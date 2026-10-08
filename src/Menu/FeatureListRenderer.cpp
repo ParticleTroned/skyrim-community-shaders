@@ -749,8 +749,17 @@ void FeatureListRenderer::RenderRightColumn(
 	ImGui::TableNextColumn();
 
 	const auto* builtInMenu = selectedMenu < menuList.size() ? std::get_if<BuiltInMenu>(&menuList[selectedMenu]) : nullptr;
-	const bool performanceOverview = builtInMenu && (builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME || MenuUI::SettingsPage::Selected(builtInMenu->name.c_str()) == "performance");
-	if (!performanceOverview)
+	const auto* feature = selectedMenu < menuList.size() ? std::get_if<Feature*>(&menuList[selectedMenu]) : nullptr;
+	bool performancePanel = false;
+	if (builtInMenu) {
+		performancePanel = builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME ?
+		                       MenuUI::SettingsPage::Selected("PerformanceTuning") == "compare" :
+		                       MenuUI::SettingsPage::Selected(builtInMenu->name.c_str()) == "performance";
+	} else if (feature && *feature && (*feature)->loaded && (*feature)->SupportsPerformanceCostMeasurement()) {
+		const auto name = (*feature)->GetShortName();
+		performancePanel = !globals::state->IsFeatureDisabled(name) && MenuUI::SettingsPage::Selected(name.c_str()) == "performance";
+	}
+	if (!performancePanel)
 		PerformanceTuningRenderer::NotifyOverviewInactive();
 
 	if (selectedMenu < menuList.size()) {

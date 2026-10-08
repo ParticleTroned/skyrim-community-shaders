@@ -101,17 +101,34 @@ namespace
 		globals::source.results.push_back(timer);
 	}
 
-	std::string Draw(const char* feature, int mode)
+	std::string Draw(const char* feature, int mode, float panelWidth = 1500, float fontSize = 13)
 	{
 		MenuUI::chosenMode = mode;
 		ImGui::NewFrame();
 		ImGui::SetNextWindowPos({ 0, 0 });
-		ImGui::SetNextWindowSize({ 1500, 1000 });
+		ImGui::SetNextWindowSize({ panelWidth, 1000 });
 		ImGui::Begin("Profiling test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+		ImGui::PushFont(ImGui::GetFont(), fontSize);
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, { fontSize * .75f, fontSize * .5f });
 		ImGui::LogToBuffer();
-		ProfilingRenderer::RenderFeatureTimers(feature);
+		if (mode < 0)
+			ProfilingRenderer::RenderFeaturePerformanceSummary(feature);
+		else
+			ProfilingRenderer::RenderFeatureTimers(feature);
 		const std::string text = GImGui->LogBuffer.c_str();
 		ImGui::LogFinish();
+		if (panelWidth < 1500) {
+			for (int i = 0; i < GImGui->Tables.GetBufSize(); ++i) {
+				const auto* table = GImGui->Tables.GetByIndex(i);
+				if (!table || table->LastFrameActive != ImGui::GetFrameCount())
+					continue;
+				for (int column = 1; column < table->ColumnsCount; ++column)
+					Check(table->Columns[column].WidthGiven >= ImGui::CalcTextSize("20.000").x,
+						"shared timing metrics clip at the measurement panel's body size");
+			}
+		}
+		ImGui::PopStyleVar();
+		ImGui::PopFont();
 		ImGui::End();
 		ImGui::Render();
 		return text;
@@ -171,6 +188,25 @@ int main()
 		}
 		const auto vr = Draw("VR", 1);
 		Check(vr.contains("StereoBlend") && vr.contains("ScreenSpaceGI::GI") && vr.contains("Partial VR coverage"), "VR lost stereo or partial shared coverage");
+		Draw("TruePBR", -1, 650, 27);
+		Draw("TruePBR", -1, 650, 27);
+		Draw("TruePBR", -1, 350, 27);
+		Draw("TruePBR", -1, 350, 27);
+		const auto summaryRequests = globals::source.requests;
+		const auto integrated = Draw("Wetterness", -1);
+		Check(integrated.contains("Shared GPU pass timings") && integrated.contains("Feature CPU timings"), "measurement summary lost CPU or shared GPU attribution");
+		Check(integrated.contains("Instrumented average: 0.010 ms"), "summary average includes shared rendering cost");
+		Check(Draw("TruePBR", -1).contains("Shared CPU pass timings") && !Draw("TruePBR", -1).contains("Instrumented average"), "shared-only summary claims an isolated feature cost");
+		int sharedTables = 0;
+		for (int i = 0; i < GImGui->Tables.GetBufSize(); ++i) {
+			const auto* table = GImGui->Tables.GetByIndex(i);
+			if (table && table->LastFrameActive == ImGui::GetFrameCount())
+				++sharedTables;
+		}
+		Check(sharedTables == 2, "CPU and GPU summaries must retain independent table identities");
+		Check(Draw("ImageBasedLighting", -1).contains("Feature GPU timings") && Draw("ImageBasedLighting", -1).contains("Feature CPU timings"), "summary must display both owned profiles");
+		Check(globals::source.requests == summaryRequests, "summary must leave capture ownership to its measurement suite");
+		Check(Draw("Screenshot", -1).empty(), "excluded feature reopened the performance summary");
 		const auto requests = globals::source.requests;
 		Check(Draw("Screenshot", 1).empty() && !ProfilingRenderer::HasFeatureTimers("Screenshot"), "stale screenshot samples reopened profiling");
 		Check(Draw("Wetterness", 0).contains("profiling is off") && globals::source.requests == requests, "off mode or excluded feature requested capture");
@@ -192,6 +228,7 @@ int main()
 		Check(ProfilingRenderer::CollectFeatureTimingData(std::string("CSUtility"), false).entries.empty(), "uninitialized profiler returned stale samples");
 		globals::profiler = nullptr;
 		Check(Draw("ImageBasedLighting", 1).contains("Profiler is unavailable"), "missing profiler crashed a registered view");
+		Check(Draw("ImageBasedLighting", -1).contains("Profiler is unavailable"), "missing profiler crashed the integrated summary");
 		Check(ProfilingRenderer::CollectFeatureTimingData(std::string("ImageBasedLighting"), false).entries.empty(), "missing profiler was dereferenced by timing collection");
 		Check(!ProfilingRenderer::RenderFeatureOverview(), "missing profiler rendered an overview");
 		Check(globals::source.requests == unavailableRequests, "unavailable profiler received capture requests");

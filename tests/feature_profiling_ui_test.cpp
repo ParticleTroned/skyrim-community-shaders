@@ -132,6 +132,46 @@ int main()
 
 		for (const auto& view : Util::FeatureProfiling::views)
 			Check(ProfilingRenderer::CanProfileFeature(view.feature), "registered view is hidden before samples exist");
+		// NR uses two timer namespaces; unrelated upscaling and lookalike names stay excluded.
+		for (const char* evaluation : { "Upscaling::DLSSNeuralRendering", "Upscaling::DLSSNeuralRenderingStereo", "Upscaling::DLSSNeuralRenderingSequentialStereo" }) {
+			globals::source.results.clear();
+			AddTimer("Upscaling::DLSS", 4, .4f);
+			AddTimer(evaluation, 2, .2f, 0, 0);
+			Check(ProfilingRenderer::HasFeatureTimers("NeuralRendering"), "NR evaluation alone does not expose live feature timings");
+			const auto gpu = ProfilingRenderer::CollectFeatureTimingData(std::string("NeuralRendering"), false);
+			const auto cpu = ProfilingRenderer::CollectFeatureTimingData(std::string("NeuralRendering"), true);
+			Check(gpu.entries.size() == 1 && gpu.entries[0].colorKey == evaluation && std::abs(gpu.totalAvg - 2) < .00001f,
+				"NR GPU evaluation nested in Upscaling is missing or includes ordinary DLSS cost");
+			Check(cpu.entries.size() == 1 && std::abs(cpu.totalAvg - .2f) < .00001f,
+				"NR CPU submission timing is missing from its view");
+			Draw("NeuralRendering", 1);
+			Check(Draw("NeuralRendering", 1).contains(evaluation), "NR evaluation does not reach the profiling table");
+		}
+		globals::source.results.clear();
+		AddTimer("Upscaling::NeuralFinalLdrPreUi", .1f, .01f, 3.6f, .36f);
+		AddTimer("Upscaling::DLSSNeuralRenderingStereo", 2, .2f, 0, 0);
+		AddTimer("Upscaling::NRColorPrepare", .3f, .03f, 0, 0);
+		AddTimer("Upscaling::NRColorReconstruct", .4f, .04f, 0, 0);
+		AddTimer("Upscaling::DLSS5CharacterMask", .5f, .05f, 0, 0);
+		AddTimer("NeuralRendering::ActorProtection", .2f, .02f, .3f, .03f);
+		AddTimer("NeuralRendering::ModelResolutionPrepare", .1f, .01f, 0, 0);
+		AddTimer("Upscaling::DLSS5CharacterRoiSetup", -1, .06f, -1, 0);
+		AddTimer("Upscaling::DLSS", 10, 1);
+		AddTimer("Upscaling::FoveatedMaskVisualization", 20, 2);
+		AddTimer("Upscaling::DLSSNeuralRenderingOther", 30, 3);
+		AddTimer("NeuralRenderingExtra::Pass", 40, 4);
+		const auto nrGpu = ProfilingRenderer::CollectFeatureTimingData(std::string("NeuralRendering"), false);
+		const auto nrCpu = ProfilingRenderer::CollectFeatureTimingData(std::string("NeuralRendering"), true);
+		Check(nrGpu.entries.size() == 7 && std::abs(nrGpu.totalAvg - 3.6f) < .00001f && std::abs(nrGpu.totalP95 - 3.6f) < .00001f && std::abs(nrGpu.totalP99 - 3.6f) < .00001f,
+			"nested NR GPU passes are omitted or counted more than once");
+		Check(nrCpu.entries.size() == 8 && std::abs(nrCpu.totalAvg - .42f) < .00001f,
+			"NR CPU-only actor preparation is lost or unrelated upscaling leaked into the subtotal");
+		globals::source.results.clear();
+		AddTimer("Upscaling::DLSS", 1, .1f);
+		AddTimer("Upscaling::DLSSNeuralRenderingOther", 1, .1f);
+		Check(!ProfilingRenderer::HasFeatureTimers("NeuralRendering") && ProfilingRenderer::CollectFeatureTimingData(std::string("NeuralRendering"), false).entries.empty(),
+			"NR matching accepts ordinary upscaling or similarly named effects");
+		globals::source.results.clear();
 		AddTimer("IBL::EnvDiffuseIBL", .2f, .01f);
 		AddTimer("UnderwaterDepthOfField::InputFog", .3f, .02f);
 		AddTimer("Wetterness::UpdateWeatherState", -1, .01f);

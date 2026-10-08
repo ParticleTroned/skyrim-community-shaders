@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <string_view>
@@ -14,9 +15,10 @@ namespace Util::FeatureProfiling
 		std::span<const std::string_view> sharedPrefixes{};
 		bool ownedGpu = true;
 		const char* coverage = "Timings cover the instrumented passes on this page.";
+		std::span<const std::string_view> ownedPrefixes{};  // Additional owned passes outside ownedRoot.
 
 		/** CPU-only update scopes never become feature-owned GPU timings. */
-		bool HasOwnedTimings(bool cpuMode) const { return !ownedRoot.empty() && (cpuMode || ownedGpu); }
+		bool HasOwnedTimings(bool cpuMode) const { return (!ownedRoot.empty() || !ownedPrefixes.empty()) && (cpuMode || ownedGpu); }
 	};
 
 	inline constexpr auto materialPasses = std::to_array<std::string_view>({ "SharedScene::World", "DeferredComposite" });
@@ -24,6 +26,10 @@ namespace Util::FeatureProfiling
 	inline constexpr auto shadowPasses = std::to_array<std::string_view>({ "SharedScene::DirectionalShadows" });
 	inline constexpr auto vrPasses = std::to_array<std::string_view>({ "ScreenSpaceShadows", "ScreenSpaceGI", "DynamicCubemaps", "DeferredComposite",
 		"StereoBlend", "Upscaling::FoveatedMaskVisualization" });
+	inline constexpr auto neuralRenderingPasses = std::to_array<std::string_view>({ "Upscaling::DLSSNeuralRendering", "Upscaling::DLSSNeuralRenderingStereo", "Upscaling::DLSSNeuralRenderingSequentialStereo",
+		"Upscaling::DLSSNRDepthGuide", "Upscaling::NRColorPrepare", "Upscaling::NRColorReconstruct", "Upscaling::NRColorExposureCapture",
+		"Upscaling::DLSS5EarlyCharacterMaskBounds", "Upscaling::DLSS5CharacterMask", "Upscaling::DLSS5CharacterCategoryCapture",
+		"Upscaling::DLSS5CharacterRoiSetup", "Upscaling::DLSS5CharacterComposite", "Upscaling::NeuralFinalLdrPreUi" });
 	inline constexpr const char* sharedCoverage =
 		"These shared pass self times include vanilla rendering and other effects. They are not summed as a feature cost. Use an on/off comparison to isolate this feature's additional cost.";
 	inline constexpr const char* materialCoverage =
@@ -34,7 +40,7 @@ namespace Util::FeatureProfiling
 		{ "GrassOptimizations", "GrassOptimizations" },
 		{ "ImageBasedLighting", "IBL" },
 		{ "LightLimitFix", "LightLimitFix" },
-		{ "NeuralRendering", "NeuralRendering" },
+		{ "NeuralRendering", "NeuralRendering", {}, true, "Includes neural-rendering evaluation, colour processing and actor preparation. The subtotal covers these instrumented passes; ordinary upscaling is excluded.", neuralRenderingPasses },
 		{ "ScreenSpaceGI", "ScreenSpaceGI" },
 		{ "ScreenSpaceShadows", "ScreenSpaceShadows" },
 		{ "Skylighting", "Skylighting" },
@@ -73,4 +79,11 @@ namespace Util::FeatureProfiling
 		return !prefix.empty() && (timer == prefix ||
 									  (timer.starts_with(prefix) && timer.substr(prefix.size()).starts_with("::")));
 	}
+	/** Match owned passes without attributing unrelated work from their enclosing feature. */
+	inline bool MatchesOwned(const View& view, std::string_view timer)
+	{
+		return Matches(timer, view.ownedRoot) ||
+		       std::ranges::any_of(view.ownedPrefixes, [&](auto prefix) { return Matches(timer, prefix); });
+	}
+
 }

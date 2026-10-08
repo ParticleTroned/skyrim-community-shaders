@@ -1768,11 +1768,17 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
             "${_settings_ui_dir}/menu_settings_under_test.h"
+            "${_settings_ui_dir}/settings_footer_under_test.h"
+            "${_settings_ui_dir}/settings_external_actions_under_test.h"
+            "${_settings_ui_dir}/settings_stabilizer_navigation_under_test.h"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_settings_ui_dir}" -P
             "${PROJECT_SOURCE_DIR}/tests/extract_settings_ui.cmake"
         DEPENDS
+            src/Menu/FeatureListRenderer.cpp
+            src/Menu/ExternalSettingsPage.h
+            src/Menu/StabilizerPage.cpp
             src/Menu/SettingsPage.cpp
             src/Menu.h
             src/Menu.cpp
@@ -1794,6 +1800,9 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
             "${_settings_ui_dir}/menu_settings_under_test.h"
+            "${_settings_ui_dir}/settings_footer_under_test.h"
+            "${_settings_ui_dir}/settings_external_actions_under_test.h"
+            "${_settings_ui_dir}/settings_stabilizer_navigation_under_test.h"
     )
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     target_link_libraries(
@@ -1863,7 +1872,7 @@ if(BUILD_CONTROLLER_TESTS)
             "-DOUTPUT_FILE=${_stabilizer_profile_editor_test_header}" -P
             "${PROJECT_SOURCE_DIR}/tests/extract_stabilizer_profile_editor.cmake"
         DEPENDS
-            src/Features/VR.cpp
+            src/Menu/StabilizerPage.cpp
             src/Features/Upscaling.cpp
             tests/extract_stabilizer_profile_editor.cmake
         VERBATIM
@@ -1890,6 +1899,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/extract_stabilizer_integration.cmake"
         DEPENDS
             src/Features/VR/StabilizerIntegration.cpp
+            src/Menu/StabilizerPage.cpp
             src/Features/Upscaling.cpp
             tests/extract_stabilizer_integration.cmake
         VERBATIM

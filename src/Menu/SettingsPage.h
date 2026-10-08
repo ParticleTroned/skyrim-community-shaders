@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <imgui.h>
 #include <initializer_list>
 #include <memory>
@@ -98,12 +99,13 @@ namespace MenuUI
 	class SettingsPage
 	{
 	public:
-		SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle = "Your setup", const char* a_guidance = "Choose a step, then refine the result.", std::string_view a_summary = {});
+		/** The optional navigation guard is retained between frames and must outlive the page ID. */
+		SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle = "Your setup", const char* a_guidance = "Choose a step, then refine the result.", std::string_view a_summary = {}, std::function<bool(std::string_view)> a_canSelect = {});
 		~SettingsPage();
 		SettingsPage(const SettingsPage&) = delete;
 		SettingsPage& operator=(const SettingsPage&) = delete;
 		bool Is(std::string_view a_section) const;
-		static void Select(const char* a_page, const char* a_section);
+		static bool Select(const char* a_page, const char* a_section);
 		static std::string Selected(const char* a_page);
 		/** Left edge of the last overview column within its owning feature panel. */
 		static float OverviewLastColumnInset(const char* a_page, float a_panelWidth);

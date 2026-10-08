@@ -22,12 +22,6 @@ function(assert_section_contains _start_marker _end_marker _required_text _surfa
     endif()
 endfunction()
 
-assert_section_contains(
-    "if (page.Is(\"stabilizer\"))"
-    "if (page.Is(\"stereo\"))"
-    "VRFpsStabilizer::DrawStatus();\n\t\t\tconst auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());"
-    "Stabilizer plugin availability gate enclosing navigation and both editors"
-)
 
 assert_section_contains(
     "bool CanConfigureMenuLayout()"

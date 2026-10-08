@@ -784,17 +784,24 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
 	if (view && !view->HasOwnedTimings(cpuMode))
 		return {};
-	return CollectFeatureTimingData(
-		std::vector<std::string>{ view ? std::string(view->ownedRoot) : featurePrefix },
-		cpuMode,
-		includePercentiles);
+	std::vector<std::string> prefixes;
+	if (view) {
+		if (!view->ownedRoot.empty())
+			prefixes.emplace_back(view->ownedRoot);
+		for (auto prefix : view->ownedPrefixes)
+			prefixes.emplace_back(prefix);
+	} else {
+		prefixes.push_back(featurePrefix);
+	}
+	return CollectFeatureTimingData(prefixes, cpuMode, includePercentiles, TimingAttribution::Feature, view && !view->ownedPrefixes.empty());
 }
 
 ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(
 	const std::vector<std::string>& featurePrefixes,
 	bool cpuMode,
 	bool includePercentiles,
-	TimingAttribution attribution)
+	TimingAttribution attribution,
+	bool useSelfTimesForTotal)
 {
 	FeatureTimingData data;
 	data.attribution = attribution;
@@ -830,10 +837,11 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 		data.maxP95 = std::max(data.maxP95, p95);
 		data.maxP99 = std::max(data.maxP99, p99);
 		if (attribution == TimingAttribution::Feature) {
-			std::array<float, kDisplayedRollingFrameCount> outermostSamples{};
-			const uint32_t outermostSampleCount =
-				CollectDisplayTimingSamples(r, cpuMode, outermostSamples, DisplayTimingContribution::Outermost);
-			totalSamples.Add(outermostSamples, outermostSampleCount);
+			// Selected passes can nest across roots or inside an unselected parent.
+			const auto contribution = useSelfTimesForTotal ? DisplayTimingContribution::Self : DisplayTimingContribution::Outermost;
+			std::array<float, kDisplayedRollingFrameCount> contributionSamples{};
+			const uint32_t contributionSampleCount = CollectDisplayTimingSamples(r, cpuMode, contributionSamples, contribution);
+			totalSamples.Add(contributionSamples, contributionSampleCount);
 		}
 	}
 
@@ -943,7 +951,7 @@ bool ProfilingRenderer::RenderTimingSection(const std::string& key, const Featur
 			ImGui::TableNextColumn();
 			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Instrumented subtotal");
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextWrapped("Inclusive cost of each matching timer namespace. Individual rows show self time with profiled descendants excluded.");
+				ImGui::TextWrapped("Subtotal of the instrumented passes with nesting overlap excluded. Individual rows show self time with profiled descendants excluded.");
 			ImGui::TableNextColumn();
 			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
 			ImGui::TableNextColumn();
@@ -1044,7 +1052,7 @@ bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 		const bool hasOwnedSamples = !view ||
 		                             (view->HasOwnedTimings(false) && HasLiveTimingMode(result, false)) ||
 		                             (view->HasOwnedTimings(true) && HasLiveTimingMode(result, true));
-		if (hasOwnedSamples && Util::FeatureProfiling::Matches(result.name, view ? view->ownedRoot : featurePrefix))
+		if (hasOwnedSamples && (view ? Util::FeatureProfiling::MatchesOwned(*view, result.name) : Util::FeatureProfiling::Matches(result.name, featurePrefix)))
 			return true;
 		if (view && std::ranges::any_of(view->sharedPrefixes, [&](auto prefix) { return Util::FeatureProfiling::Matches(result.name, prefix); }))
 			return true;

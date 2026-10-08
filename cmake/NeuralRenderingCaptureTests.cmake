@@ -73,6 +73,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         "${repository_root}/src/Features/Upscaling.cpp"
         "${repository_root}/src/Features/Upscaling.h"
         "${repository_root}/src/Features/VR.cpp"
+        "${repository_root}/src/Menu/StabilizerPage.cpp"
         "${repository_root}/src/Features/VR/Input.cpp"
         "${repository_root}/src/State.cpp")
 endfunction()

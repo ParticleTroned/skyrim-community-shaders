@@ -185,6 +185,30 @@ namespace VRFpsStabilizer
 		return true;
 	}
 
+	Availability InspectAvailability()
+	{
+		Availability result;
+		if (!REL::Module::IsVR()) {
+			result.message = "VR FPS Stabilizer requires Skyrim VR.";
+			return result;
+		}
+		result.pluginLoaded = IsLoaded();
+		std::error_code error;
+		const auto path = ConfigPath();
+		result.iniDetected = std::filesystem::is_regular_file(path, error);
+		if (!result.iniDetected) {
+			result.message = "VR FPS Stabilizer is inactive or not installed. VRFpsStabilizer.ini was not detected. Enable the mod and its INI in your mod manager, then restart Skyrim VR.";
+			return result;
+		}
+		std::string contents;
+		result.iniReadable = ReadIni(path, contents, result.message);
+		if (!result.iniReadable)
+			result.message = "VR FPS Stabilizer controls are unavailable because its INI cannot be read. " + result.message;
+		else if (!result.pluginLoaded)
+			result.message = "VRFpsStabilizer.ini was detected, but the mod is inactive. Enable VR FPS Stabilizer in your mod manager and restart Skyrim VR.";
+		return result;
+	}
+
 	bool Save(ConfigFile file, IniDocument& document, std::string& error)
 	{
 		error.clear();

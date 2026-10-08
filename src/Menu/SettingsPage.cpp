@@ -21,6 +21,7 @@ namespace MenuUI
 		struct Navigation
 		{
 			std::string selected = "overview";
+			std::function<bool(std::string_view)> canSelect;
 			bool pending = false;
 			std::vector<Section> sections;
 		};
@@ -112,12 +113,15 @@ namespace MenuUI
 		return padding + (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0);
 	}
 
-	void SettingsPage::Select(const char* a_page, const char* a_section)
+	bool SettingsPage::Select(const char* a_page, const char* a_section)
 	{
 		std::scoped_lock lock(navigationMutex);
 		auto& state = navigation[a_page];
+		if (state.canSelect && !state.canSelect(a_section))
+			return false;
 		state.selected = a_section;
 		state.pending = true;
+		return true;
 	}
 
 	std::string SettingsPage::Selected(const char* a_page)
@@ -134,8 +138,7 @@ namespace MenuUI
 		if (page == navigation.end() || (std::string_view(a_section) != "overview" &&
 											std::ranges::none_of(page->second.sections, [&](const Section& step) { return step.visible && std::string_view(a_section) == step.id; })))
 			return false;
-		Select(a_page, a_section);
-		return true;
+		return Select(a_page, a_section);
 	}
 
 	nlohmann::json SettingsPage::Describe()
@@ -153,7 +156,7 @@ namespace MenuUI
 	}
 #endif
 
-	SettingsPage::SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle, const char* a_guidance, std::string_view a_summary) :
+	SettingsPage::SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle, const char* a_guidance, std::string_view a_summary, std::function<bool(std::string_view)> a_canSelect) :
 		overviewTitle(a_overviewTitle), overviewGuidance(a_guidance), sections(a_sections)
 	{
 		std::scoped_lock lock(navigationMutex);
@@ -165,6 +168,8 @@ namespace MenuUI
 		sections.push_back({ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false });
 		ImGui::PushID(a_id);
 		auto& state = navigation[a_id];
+		state.canSelect = std::move(a_canSelect);
+		bool rejectedSelection = false;
 		state.sections = sections;
 		if (state.selected != "overview" && std::ranges::none_of(sections, [&](const Section& step) {
 				return step.visible && state.selected == step.id;
@@ -200,7 +205,10 @@ namespace MenuUI
 					ImGui::PopStyleColor();
 					ImGui::PopStyleVar();
 					if (active) {
-						state.selected = id;
+						if (state.selected != id && state.canSelect && !state.canSelect(id))
+							rejectedSelection = true;
+						else
+							state.selected = id;
 						ImGui::EndTabItem();
 						const auto minimum = ImGui::GetItemRectMin();
 						const auto maximum = ImGui::GetItemRectMax();
@@ -226,7 +234,7 @@ namespace MenuUI
 						tab(step.id, step.title, step.description);
 			}
 		}
-		state.pending = false;
+		state.pending = rejectedSelection;
 		selected = state.selected;
 		contentLeftPadding = ImGui::GetStyle().WindowPadding.x;
 		{

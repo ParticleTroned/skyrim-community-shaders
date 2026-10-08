@@ -5,6 +5,11 @@
 #include <filesystem>
 #include <string>
 
+namespace MenuUI
+{
+	struct SettingsFooter;
+}
+
 namespace VRFpsStabilizer
 {
 	inline constexpr const char* kNotLoadedMessage = "VR FPS Stabilizer is not loaded. Enable it in your mod manager and restart Skyrim VR to use these controls.";
@@ -23,6 +28,17 @@ namespace VRFpsStabilizer
 		uint64_t revision = 0;
 		std::string message;
 	};
+
+	struct Availability
+	{
+		bool iniDetected = false;
+		bool iniReadable = false;
+		bool pluginLoaded = false;
+		std::string message;
+		bool CanEdit() const { return iniReadable && pluginLoaded; }
+	};
+	/** Inspect the installed main INI and loaded plugin without changing either. */
+	Availability InspectAvailability();
 
 	/** Acquire the optional external interface from the SKSE PostPostLoad listener. */
 	void Initialize();
@@ -45,6 +61,8 @@ namespace VRFpsStabilizer
 	void DrawSettings(const char* group);
 	/** Report a pending editor draft so navigation cannot hide edits to another INI view. */
 	bool HasUnsavedSettings(ConfigFile file);
+	/** Footer actions for the currently selected INI editor. */
+	MenuUI::SettingsFooter GetSettingsFooter(ConfigFile file);
 	/** Display shared reload availability, pending state and completion. */
 	void DrawStatus();
 }

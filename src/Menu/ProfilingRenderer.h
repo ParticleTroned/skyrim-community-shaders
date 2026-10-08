@@ -153,7 +153,8 @@ private:
 		const std::vector<std::string>& featurePrefixes,
 		bool cpuMode,
 		bool includePercentiles = true,
-		TimingAttribution attribution = TimingAttribution::Feature);
+		TimingAttribution attribution = TimingAttribution::Feature,
+		bool useSelfTimesForTotal = false);
 	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight);
 	static bool RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable);
 	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);

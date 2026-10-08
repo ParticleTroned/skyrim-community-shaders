@@ -72,3 +72,20 @@ math(EXPR length "${end} + 1")
 string(SUBSTRING "${rest}" 0 ${length} serializer)
 file(WRITE "${OUTPUT_DIRECTORY}/menu_settings_under_test.h"
     "struct Menu { using ThemeSettings = nlohmann::json; ${declaration} };\n${serializer}\n")
+
+# Exercise shared external actions and the Stabilizer's draft guard with real ImGui.
+file(READ "${PROJECT_ROOT}/src/Menu/FeatureListRenderer.cpp" source)
+extract_between("${source}"
+    "\tconstexpr float footerTextScale"
+    "\tstruct FeatureBannerTexture"
+    "settings_footer_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Menu/ExternalSettingsPage.h" source)
+extract_between("${source}"
+    "\tstruct SettingsAction"
+    "\t/** Menu-only"
+    "settings_external_actions_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Menu/StabilizerPage.cpp" source)
+extract_between("${source}"
+    "\tstd::string editorGroup"
+    "\n}\n\nnamespace MenuUI"
+    "settings_stabilizer_navigation_under_test.h")

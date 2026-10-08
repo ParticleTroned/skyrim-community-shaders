@@ -2568,6 +2568,81 @@ if(BUILD_CONTROLLER_TESTS)
         VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp
     )
+    set(_vr_recovery_contract_test_header
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vr_recovery_contract_under_test.h"
+    )
+    set(_vr_recovery_contract_test_headers
+        "${_vr_recovery_contract_test_header}"
+    )
+    foreach(
+        _name
+        IN
+        ITEMS preserve take pending select capture
+    )
+        list(
+            APPEND _vr_recovery_contract_test_headers
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/vr_recovery_${_name}.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_vr_recovery_contract_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_FILE=${_vr_recovery_contract_test_header}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_recovery_contract.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_vr_recovery_contract.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        vr_recovery_contract_test
+        VRRecoveryContract
+        tests/vr_recovery_contract_test.cpp
+    )
+    target_sources(
+        vr_recovery_contract_test
+        PRIVATE ${_vr_recovery_contract_test_headers}
+    )
+    target_include_directories(
+        vr_recovery_contract_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
+    set(_vendor_texture_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/vendor-texture-validation"
+    )
+    set(_vendor_texture_test_headers)
+    foreach(_name IN ITEMS scope_exit identity resource validation)
+        list(
+            APPEND _vendor_texture_test_headers
+            "${_vendor_texture_test_dir}/vendor_texture_${_name}.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_vendor_texture_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vendor_texture_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vendor_texture_validation.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_vendor_texture_validation.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_d3d_shader_test(
+        vendor_texture_validation_test VendorTextureValidation
+        tests/vendor_texture_validation_test.cpp
+    )
+    target_sources(
+        vendor_texture_validation_test
+        PRIVATE ${_vendor_texture_test_headers}
+    )
+    target_include_directories(
+        vendor_texture_validation_test
+        PRIVATE "${_vendor_texture_test_dir}"
+    )
     add_controller_test(
         vr_relatch_drain_policy_test
         VRRelatchDrainPolicy

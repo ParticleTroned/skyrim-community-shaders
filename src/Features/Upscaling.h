@@ -4803,7 +4803,8 @@ private:
 	void InvalidateCommonVendorResourceContract();
 	void PublishCommonVendorResourceContract(UpscaleMethod a_upscaleMethod);
 	bool IsCommonVendorResourceContractCurrent(UpscaleMethod a_upscaleMethod) const;
-	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const;
+	/** @brief Validates vendor inputs and optionally describes the first failing resource/check. */
+	bool AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod, std::string* a_failureReason = nullptr) const;
 	bool IsVRRenderScalePhysicalContractConverged(
 		UpscaleMethod a_upscaleMethod,
 		uint32_t a_qualityMode,

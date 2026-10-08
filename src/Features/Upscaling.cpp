@@ -1692,6 +1692,19 @@ namespace
 		       GetVRUpscalingTransitionOriginPriority(currentRequest.origin);
 	}
 
+	bool IsVRRenderScaleNativeRecoveryProfile(
+		const Upscaling::VRRenderScaleProfileSnapshot& a_profile,
+		uint64_t a_transitionEpoch)
+	{
+		return a_profile.valid && a_profile.requestID != 0 &&
+		       a_profile.transitionEpoch != 0 &&
+		       a_profile.transitionEpoch == a_transitionEpoch &&
+		       IsVRRenderScaleRecoveryOrigin(a_profile.origin) &&
+		       (a_profile.method == Upscaling::UpscaleMethod::kTAA ||
+				   a_profile.method == Upscaling::UpscaleMethod::kNONE) &&
+		       !a_profile.renderScaleModeEnabled && !a_profile.perfModeEnabled;
+	}
+
 	bool ShouldPreserveActiveVRRenderScaleContractForRecovery(
 		const Upscaling& a_upscaling,
 		Upscaling::VRUpscalingTransitionOrigin a_origin,
@@ -7609,34 +7622,91 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 		       uavDesc.Texture2D.MipSlice == 0;
 	}
 
+	std::string DescribeCommonVendorTextureDesc(const D3D11_TEXTURE2D_DESC& a_desc)
+	{
+		return std::format(
+			"{}x{} format={} mips={} array={} samples={}/{} usage={} bind={:#x} cpu={:#x} misc={:#x}",
+			a_desc.Width, a_desc.Height, static_cast<uint32_t>(a_desc.Format),
+			a_desc.MipLevels, a_desc.ArraySize, a_desc.SampleDesc.Count,
+			a_desc.SampleDesc.Quality, static_cast<uint32_t>(a_desc.Usage),
+			a_desc.BindFlags, a_desc.CPUAccessFlags, a_desc.MiscFlags);
+	}
+
 	bool IsCommonVendorTextureCompatible(
 		const Texture2D* a_texture,
-		const D3D11_TEXTURE2D_DESC& a_expected)
+		const D3D11_TEXTURE2D_DESC& a_expected,
+		std::string* a_failureReason = nullptr)
 	{
-		if (!a_texture ||
-			!a_texture->resource ||
-			!a_texture->srv ||
-			!a_texture->uav ||
-			!globals::d3d::device) {
+		if (a_failureReason)
+			a_failureReason->clear();
+		const auto fail = [&](const char* a_reason) {
+			if (a_failureReason)
+				*a_failureReason = a_reason;
 			return false;
-		}
+		};
+		if (!a_texture)
+			return fail("missing texture wrapper");
+		if (!a_texture->resource)
+			return fail("missing texture resource");
+		if (!a_texture->srv)
+			return fail("missing SRV");
+		if (!a_texture->uav)
+			return fail("missing UAV");
+		if (!globals::d3d::device)
+			return fail("missing current D3D11 device");
 
 		winrt::com_ptr<ID3D11Device> textureDevice;
 		a_texture->resource->GetDevice(textureDevice.put());
 		if (GetCOMIdentityAddress(textureDevice.get()) !=
 			GetCOMIdentityAddress(globals::d3d::device)) {
-			return false;
+			return fail("texture belongs to a different D3D11 device");
 		}
-		if (!ViewReferencesResource(a_texture->srv.get(), a_texture->resource.get()) ||
-			!ViewReferencesResource(a_texture->uav.get(), a_texture->resource.get())) {
-			return false;
-		}
+		if (!ViewReferencesResource(a_texture->srv.get(), a_texture->resource.get()))
+			return fail("SRV references a different resource");
+		if (!ViewReferencesResource(a_texture->uav.get(), a_texture->resource.get()))
+			return fail("UAV references a different resource");
 
 		D3D11_TEXTURE2D_DESC actual{};
 		a_texture->resource->GetDesc(&actual);
-		return SameTexture2DDesc(actual, a_expected) &&
-		       SameTexture2DDesc(a_texture->desc, a_expected) &&
-		       HasCompatibleCommonVendorViews(*a_texture, actual);
+		const auto matchesDesc = [&](const D3D11_TEXTURE2D_DESC& a_actual, const char* a_label) {
+			if (SameTexture2DDesc(a_actual, a_expected))
+				return true;
+			if (a_failureReason) {
+				*a_failureReason = std::format("{} descriptor mismatch: expected [{}], actual [{}]",
+					a_label, DescribeCommonVendorTextureDesc(a_expected),
+					DescribeCommonVendorTextureDesc(a_actual));
+			}
+			return false;
+		};
+		if (!matchesDesc(actual, "resource") || !matchesDesc(a_texture->desc, "wrapper"))
+			return false;
+		if (!HasCompatibleCommonVendorViews(*a_texture, actual)) {
+			if (a_failureReason) {
+				D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+				a_texture->srv->GetDesc(&srvDesc);
+				a_texture->uav->GetDesc(&uavDesc);
+				if (srvDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D) {
+					*a_failureReason = std::format(
+						"incompatible SRV dimension={} (Texture2D required); resource [{}]",
+						static_cast<uint32_t>(srvDesc.ViewDimension), DescribeCommonVendorTextureDesc(actual));
+				} else if (uavDesc.ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D) {
+					*a_failureReason = std::format(
+						"incompatible UAV dimension={} (Texture2D required); resource [{}]",
+						static_cast<uint32_t>(uavDesc.ViewDimension), DescribeCommonVendorTextureDesc(actual));
+				} else {
+					*a_failureReason = std::format(
+						"incompatible views for [{}]: SRV format={} dimension={} firstMip={} mips={}; UAV format={} dimension={} mip={}",
+						DescribeCommonVendorTextureDesc(actual),
+						static_cast<uint32_t>(srvDesc.Format), static_cast<uint32_t>(srvDesc.ViewDimension),
+						srvDesc.Texture2D.MostDetailedMip, srvDesc.Texture2D.MipLevels,
+						static_cast<uint32_t>(uavDesc.Format), static_cast<uint32_t>(uavDesc.ViewDimension),
+						uavDesc.Texture2D.MipSlice);
+				}
+			}
+			return false;
+		}
+		return true;
 	}
 
 	D3D11_TEXTURE2D_DESC BuildFlatRuntimeFsrDepthDesc(
@@ -24944,8 +25014,10 @@ bool Upscaling::IsCommonVendorResourceContractCurrent(
 	return current;
 }
 
-bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) const
+bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod, std::string* a_failureReason) const
 {
+	if (a_failureReason)
+		a_failureReason->clear();
 	if (!IsVendorUpscalingMethod(a_upscaleMethod))
 		return true;
 
@@ -24954,53 +25026,71 @@ bool Upscaling::AreCommonVendorTexturesReady(UpscaleMethod a_upscaleMethod) cons
 		VRRenderScaleCPUPerformanceCounter::ResourceFullValidations);
 #endif
 
+	const auto fail = [&](const char* a_reason) {
+		if (a_failureReason)
+			*a_failureReason = a_reason;
+		return false;
+	};
+	const auto checkTexture = [&](const char* a_name, const Texture2D* a_texture, const D3D11_TEXTURE2D_DESC& a_expected) {
+		if (IsCommonVendorTextureCompatible(a_texture, a_expected, a_failureReason))
+			return true;
+		if (a_failureReason)
+			*a_failureReason = std::format("{}: {}", a_name, *a_failureReason);
+		return false;
+	};
 	auto* renderer = globals::game::renderer;
 	if (!renderer)
-		return false;
+		return fail("missing renderer");
 	const auto& targets = renderer->GetRuntimeData().renderTargets;
 	const auto& main = targets[RE::RENDER_TARGETS::kMAIN];
-	if (!main.texture || !main.SRV || !main.UAV || !globals::d3d::device)
-		return false;
+	if (!main.texture)
+		return fail("main: missing texture");
+	if (!main.SRV)
+		return fail("main: missing SRV");
+	if (!main.UAV)
+		return fail("main: missing UAV");
+	if (!globals::d3d::device)
+		return fail("missing current D3D11 device");
 
 	winrt::com_ptr<ID3D11Device> mainDevice;
 	main.texture->GetDevice(mainDevice.put());
-	if (GetCOMIdentityAddress(mainDevice.get()) !=
-			GetCOMIdentityAddress(globals::d3d::device) ||
-		!ViewReferencesResource(main.SRV, main.texture) ||
-		!ViewReferencesResource(main.UAV, main.texture)) {
-		return false;
-	}
+	if (GetCOMIdentityAddress(mainDevice.get()) != GetCOMIdentityAddress(globals::d3d::device))
+		return fail("main: texture belongs to a different D3D11 device");
+	if (!ViewReferencesResource(main.SRV, main.texture))
+		return fail("main: SRV references a different resource");
+	if (!ViewReferencesResource(main.UAV, main.texture))
+		return fail("main: UAV references a different resource");
 
 	D3D11_TEXTURE2D_DESC mainDesc{};
 	main.texture->GetDesc(&mainDesc);
 	auto maskDesc = mainDesc;
 	maskDesc.Format = DXGI_FORMAT_R8_UNORM;
 	maskDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	if (!IsCommonVendorTextureCompatible(reactiveMaskTexture, maskDesc) ||
-		!IsCommonVendorTextureCompatible(transparencyCompositionMaskTexture, maskDesc)) {
+	if (!checkTexture("reactive mask", reactiveMaskTexture, maskDesc) ||
+		!checkTexture("transparency composition mask", transparencyCompositionMaskTexture, maskDesc)) {
 		return false;
 	}
 
 	if (!globals::game::isVR) {
 		const auto& motionVector = targets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 		if (!motionVector.texture)
-			return false;
+			return fail("motion vector: missing engine texture");
 		D3D11_TEXTURE2D_DESC motionDesc{};
 		motionVector.texture->GetDesc(&motionDesc);
-		if (!IsCommonVendorTextureCompatible(motionVectorCopyTexture, motionDesc))
+		if (!checkTexture("motion vector copy", motionVectorCopyTexture, motionDesc))
 			return false;
 
 		if (a_upscaleMethod == UpscaleMethod::kFSR &&
 			fidelityFX.ShouldUseRuntimeUpscalerForFSR()) {
 			const auto depthDesc = BuildFlatRuntimeFsrDepthDesc(mainDesc);
-			if (!IsCommonVendorTextureCompatible(runtimeFsrDepthTexture, depthDesc))
+			if (!checkTexture("FSR depth", runtimeFsrDepthTexture, depthDesc))
 				return false;
 		}
 	}
 
 	mainDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	return a_upscaleMethod != UpscaleMethod::kDLSS ||
-	       IsCommonVendorTextureCompatible(sharpenerTexture, mainDesc);
+	       checkTexture("DLSS sharpener", sharpenerTexture, mainDesc);
 }
 
 bool Upscaling::IsVRRenderScalePhysicalContractConverged(
@@ -26929,6 +27019,11 @@ void Upscaling::RequestPerfModeRenderTargetRecreate(
 		pendingPerfModeRenderTargetRecreateForcePhysical.store(
 			true,
 			std::memory_order_release);
+	} else if (pendingControllerProfile &&
+			   IsVRRenderScaleNativeRecoveryProfile(*pendingControllerProfile, relatchEpoch)) {
+		// The physical tuple must retain the native recovery decision after its
+		// controller owner advances or retires.
+		pendingVRRenderScaleRecoverySnapshot = {};
 	} else if (IsVRRenderScaleRecoveryOrigin(effectiveOrigin) ||
 			   (effectiveOrigin == VRUpscalingTransitionOrigin::PostLoadSync &&
 				   a_recoverySnapshot &&
@@ -40584,11 +40679,12 @@ Upscaling::VRVendorResourceResetResult Upscaling::RecreateVendorRuntimeResources
 			BoolText(fidelityFX.HasFSRResources()));
 	}
 	CreateUpscalingTextureResources(a_upscaleMethod);
-	if (!AreCommonVendorTexturesReady(a_upscaleMethod)) {
+	std::string commonTextureFailure;
+	if (!AreCommonVendorTexturesReady(a_upscaleMethod, &commonTextureFailure)) {
 		MarkVendorRuntimeResourcesDirty(a_upscaleMethod, contractGeneration);
 		logger::error(
-			"[Upscaling] Refusing to publish {} vendor runtime with incomplete or dimension-incompatible common textures.",
-			magic_enum::enum_name(a_upscaleMethod));
+			"[Upscaling] Refusing to publish {} vendor runtime with incomplete or dimension-incompatible common textures: {}.",
+			magic_enum::enum_name(a_upscaleMethod), commonTextureFailure);
 		return VRVendorResourceResetResult::Failed;
 	}
 	auto fsrCreateResult = FidelityFX::LifecycleResult::Ready;

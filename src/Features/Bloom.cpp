@@ -104,7 +104,7 @@ bool Bloom::DrawAdvancedProfileSettings(Profile& a_profile)
 	DrawTooltip("Blends between the original bloom and the widened halo samples. Higher values make the halo softer and more spread out.");
 	changed |= Util::Widgets::SliderFloat("Bloom Saturation", &a_profile.BloomSaturation, 0.0f, kBloomSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Controls the color saturation of the enhanced bloom. Lower values make it whiter; higher values preserve or exaggerate its tint.");
-	changed |= ImGui::ColorEdit3("Bloom Tint", reinterpret_cast<float*>(&a_profile.BloomTint));
+	changed |= Util::Widgets::ColorEdit3("Bloom Tint", reinterpret_cast<float*>(&a_profile.BloomTint));
 	DrawTooltip("Colors the bloom halo without changing the underlying scene lighting.");
 	changed |= Util::Widgets::SliderFloat("Compression Ceiling", &a_profile.CompressionCeiling, 0.0f, kCompressionCeilingMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	DrawTooltip("Maximum Bloom luminance approached by the soft limiter after tint and enhancement strength are applied.");

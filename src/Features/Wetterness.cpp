@@ -1249,14 +1249,9 @@ void Wetterness::DrawSettings()
 											});
 
 	InvalidateSanitizedSettingsCache();
-	const auto drawUintCheckbox = [](const char* label, uint& value) {
-		bool enabled = value != 0;
-		const bool changed = Util::Widgets::Checkbox(label, &enabled);
-		value = enabled ? 1u : 0u;
-		return changed;
-	};
+
 	const auto drawUintCheckboxWithTooltip = [&](const char* label, uint& value, const char* tooltip) {
-		const bool changed = drawUintCheckbox(label, value);
+		const bool changed = Util::UIntCheckbox(label, value);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(tooltip);
 		}
@@ -1339,7 +1334,7 @@ void Wetterness::DrawSettings()
 
 		auto& weatherPicker = globals::features::weatherPicker;
 		if (weatherPicker.loaded) {
-			if (ImGui::SmallButton("Open Weather Picker")) {
+			if (ImGui::Button("Open Weather Picker")) {
 				Menu::GetSingleton()->SelectFeatureMenu(weatherPicker.GetShortName());
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1378,7 +1373,7 @@ void Wetterness::DrawSettings()
 		drawSectionDivider();
 	}
 	if (page.Is("rain")) {
-		drawUintCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
+		Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Master switch for raindrop splashes and ripple motion. One of the main wetness performance drivers.");
 		}
@@ -1388,12 +1383,12 @@ void Wetterness::DrawSettings()
 
 		ImGui::BeginDisabled(raindropSettingsDisabled);
 
-		drawUintCheckbox("Enable Splashes", settings.EnableSplashes);
+		Util::UIntCheckbox("Enable Splashes", settings.EnableSplashes);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Shows splash marks where raindrops hit. Off = no splash marks. Reduces raindrop effect cost when disabled.");
 		}
 
-		drawUintCheckbox("Enable Ripples", settings.EnableRipples);
+		Util::UIntCheckbox("Enable Ripples", settings.EnableRipples);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Shows circular ripple rings on wet surfaces. Off = no ripple rings. Can be a noticeable cost in heavy rain.");
 		}
@@ -1418,6 +1413,7 @@ void Wetterness::DrawSettings()
 		}
 
 		if (page.Is("rain")) {
+			MenuUI::SectionHeading("Raindrops");
 			Util::Widgets::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
 			markPresetDirtyIfEdited();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1442,7 +1438,9 @@ void Wetterness::DrawSettings()
 		}
 
 		if (page.Is("rain")) {
-			Util::Widgets::SliderFloat("Strength", &settings.SplashesStrength, 0.f, 2.f, "%.2f");
+			MenuUI::SectionHeading("Splashes");
+			const auto groupDisabled = Util::DisableGuard(settings.EnableSplashes == 0);
+			Util::Widgets::SliderFloat("Strength##Splashes", &settings.SplashesStrength, 0.f, 2.f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("How visible splash marks are. Higher = bolder splashes, lower = subtler splashes.");
 			}
@@ -1460,14 +1458,16 @@ void Wetterness::DrawSettings()
 				ImGui::TextUnformatted("Maximum splash size. Higher = bigger possible splashes, lower = caps splash size. Cannot go below Min Radius.");
 			}
 
-			Util::Widgets::SliderFloat("Lifetime", &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
+			Util::Widgets::SliderFloat("Lifetime##Splashes", &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("How long each splash stays visible. Higher = lingers longer, lower = fades sooner.");
 			}
 		}
 
 		if (page.Is("rain")) {
-			Util::Widgets::SliderFloat("Strength", &settings.RippleStrength, 0.f, 2.f, "%.2f");
+			MenuUI::SectionHeading("Ripples");
+			const auto groupDisabled = Util::DisableGuard(settings.EnableRipples == 0);
+			Util::Widgets::SliderFloat("Strength##Ripples", &settings.RippleStrength, 0.f, 2.f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("How strong ripple rings look. Higher = stronger ripples, lower = softer ripples.");
 			}
@@ -1482,7 +1482,7 @@ void Wetterness::DrawSettings()
 				ImGui::TextUnformatted("Ripple ring thickness. Higher = thicker rings, lower = thinner rings.");
 			}
 
-			Util::Widgets::SliderFloat("Lifetime", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
+			Util::Widgets::SliderFloat("Lifetime##Ripples", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("How long each ripple remains visible. Higher = longer rings, lower = faster fade.");
 			}
@@ -1645,9 +1645,6 @@ void Wetterness::DrawSettings()
 			ImGui::TextUnformatted(
 				"Reduces grass albedo while wet. The effect reaches this strength during rain and fades out using the grass drying time. Applies to basic and complex grass.");
 		}
-
-		ImGui::Separator();
-		ImGui::TextUnformatted("Rain");
 	}
 	if (page.Is("surface")) {
 		Util::Widgets::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 2.5f);
@@ -1704,12 +1701,10 @@ void Wetterness::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("How wet skin and hair look in rain. Higher = stronger wet look, lower = subtler wet look.");
 		}
-
-		ImGui::Separator();
-		ImGui::TextUnformatted("Puddles");
-		DrawPuddleMaskSettings();
 	}
 	if (page.Is("puddles")) {
+		MenuUI::SectionHeading("Puddle coverage");
+		DrawPuddleMaskSettings();
 		Util::Widgets::SliderFloat("Puddle Wetness", &settings.MaxPuddleWetness, 0.0f, 6.0f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1760,9 +1755,6 @@ void Wetterness::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Post-rain wet reflection clarity. Higher = less cubemap sky glare on post-rain wet reflections, with deeper/clearer body response on puddles. 0 = more mirror-like reflection.");
 		}
-
-		ImGui::Separator();
-		ImGui::TextUnformatted("Shore");
 	}
 	if (page.Is("shore")) {
 		Util::Widgets::SliderFloat("Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
@@ -2019,13 +2011,6 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 {
 	InvalidateSanitizedSettingsCache();
 
-	auto drawUintCheckbox = [](const char* label, uint& value) {
-		bool enabled = value != 0;
-		const bool changed = Util::Widgets::Checkbox(label, &enabled);
-		value = enabled ? 1u : 0u;
-		return changed;
-	};
-
 	auto markPresetDirtyIfEdited = [this]() {
 		if (ImGui::IsItemDeactivatedAfterEdit()) {
 			DetectCurrentPreset();
@@ -2073,13 +2058,13 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	ImGui::SeparatorText("Rain Effects");
-	drawUintCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
+	Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 	const bool raindropSettingsDisabled = settings.EnableRaindropFx == 0;
 	const bool raindropAdvancedDisabled = raindropSettingsDisabled || settings.EnableWetterness == 0;
 
 	ImGui::BeginDisabled(raindropSettingsDisabled);
-	drawUintCheckbox("Enable Splashes", settings.EnableSplashes);
-	drawUintCheckbox("Enable Ripples", settings.EnableRipples);
+	Util::UIntCheckbox("Enable Splashes", settings.EnableSplashes);
+	Util::UIntCheckbox("Enable Ripples", settings.EnableRipples);
 	ImGui::EndDisabled();
 
 	ImGui::BeginDisabled(raindropAdvancedDisabled);

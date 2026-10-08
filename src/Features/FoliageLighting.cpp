@@ -146,7 +146,6 @@ void FoliageLighting::DrawSettings()
 		DrawGrassScatteringSetting();
 	}
 
-	ImGui::EndDisabled();
 	SanitizeSettings(settings);
 }
 

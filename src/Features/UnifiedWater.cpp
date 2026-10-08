@@ -172,7 +172,7 @@ namespace
 		if (ImGui::ColorButton("##Preview", tintPreview, ImGuiColorEditFlags_NoAlpha))
 			ImGui::OpenPopup("Picker");
 		ImGui::SameLine();
-		ImGui::ColorEdit3(
+		Util::Widgets::ColorEdit3(
 			"Water Tint Color",
 			tintColor,
 			ImGuiColorEditFlags_NoAlpha |
@@ -649,7 +649,7 @@ void UnifiedWater::DrawSettings()
 {
 	MenuUI::SettingsPage page("UnifiedWater", {
 												  { "look", "Look", "Choose water colour and surface appearance.", "Water colour and surface", true, true, "Shape water and shores" },
-												  { "shore", "Shore", "Refine where shallow water meets the shore.", "Shallow-water transitions", true, true, nullptr },
+												  { "shore", "Shore", "Refine where shallow water meets the shore.", "Shallow-water transitions", true, true, nullptr, nullptr, nullptr, !settings.UseOpenShadersDepthBehaviour },
 												  { "depth", "Depth", "Refine water depth and surface separation.", "Depth and surface separation", true, true, "Refine water depth" },
 											  });
 
@@ -670,6 +670,9 @@ void UnifiedWater::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("shore")) {
+		if (settings.UseOpenShadersDepthBehaviour &&
+			MenuUI::DetailNote("Shore tuning is inactive while Open Shaders depth behaviour is enabled. Your values are preserved.", "Open Depth"))
+			MenuUI::SettingsPage::Select("UnifiedWater", "depth");
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
 		ImGui::SeparatorText("Shore Contact");
 

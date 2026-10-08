@@ -195,6 +195,8 @@ namespace MenuUI
 				const auto requested = state.selected;
 				const bool restoreSelection = state.pending || ImGui::IsWindowAppearing();
 				auto tab = [&](const char* id, const char* title, const char* help) {
+					ImGui::PushID(id);
+					const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 					const auto flags = restoreSelection && requested == id ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
 					const float titleWidth = ImGui::CalcTextSize(title).x;
 					const float width = std::max(tabWidth - 1, titleWidth + font * .7f);
@@ -453,11 +455,20 @@ namespace MenuUI
 		if (a_link) {
 			ImGui::SetCursorScreenPos({ start.x + inset, start.y + inset + textHeight + line * .3f });
 			clicked = ImGui::Button(a_link, { std::min(textWidth, ImGui::CalcTextSize(a_link).x + line * 2), line * 2.2f });
-			Util::AddTooltip("Open the selection controls. Your current settings are kept.");
+			Util::AddTooltip("Open these settings. Your current settings are kept.");
 		}
 		ImGui::SetCursorScreenPos(start);
 		ImGui::Dummy({ width, height });
 		return clicked;
+	}
+
+	void ActionFeedback::Draw() const
+	{
+		if (message.empty())
+			return;
+		ImGui::PushTextWrapPos(0);
+		const SKSE::stl::scope_exit restoreWrap([] { ImGui::PopTextWrapPos(); });
+		ImGui::TextColored(error ? globals::menu->GetTheme().StatusPalette.Error : Util::Color::SecondaryText(), "%s", message.c_str());
 	}
 
 	DetailGrid::DetailGrid(const char* a_id, int a_maxColumns, float a_minColumnWidth)

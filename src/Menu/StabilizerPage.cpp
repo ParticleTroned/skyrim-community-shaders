@@ -542,10 +542,10 @@ namespace
 		ImGui::SeparatorText("Render Scale Transition Fade");
 		{
 			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
-			float fadeDuration = uiState.config.fadeDuration;
-			if (ImGui::InputFloat("Fade-to-black duration (seconds)", &fadeDuration, 0.25f, 1.0f, "%.2f")) {
+			double fadeDuration = uiState.config.fadeDuration;
+			if (Util::Widgets::InputDouble("Fade-to-black duration (seconds)", &fadeDuration, 0.25, 1.0, "%.2f")) {
 				if (std::isfinite(fadeDuration)) {
-					uiState.config.fadeDuration = std::max(fadeDuration, 0.0f);
+					uiState.config.fadeDuration = static_cast<float>(std::clamp(fadeDuration, 0.0, 1000000.0));
 					uiState.config.hasFadeDuration = true;
 					HandleVRFpsStabilizerUIEdit(uiState);
 				}
@@ -711,7 +711,7 @@ namespace MenuUI
 			blockedDraftNavigation = false;
 		if (blockedDraftNavigation)
 			Util::Text::WrappedWarning("Save or discard the current draft before switching to another INI editor.");
-		SettingsPage page("VRFpsStabilizer", { { "profiles", "Profiles", "Choose compatible interior and exterior quality profiles.", "Upscaling and CSX feature profiles", true, true, "Choose automatic behavior", nullptr, nullptr, available }, { "targets", "Performance", "Choose frame-time targets and automatic quality behavior.", "Frame-time targets and response", true, true, nullptr, nullptr, nullptr, available }, { "lod", "LOD & Grass", "Balance distance and density as quality changes.", "Grass, distant LOD and fade distances", true, true, "Refine scene detail", nullptr, nullptr, available }, { "levels", "Quality Levels", "Configure the settings used by each automatic quality level.", "Level 0 through level 9", true, true, nullptr, nullptr, nullptr, available }, { "locations", "Locations", "Choose quality rules for individual locations.", "Location tiers and interior rules", true, true, "Refine location and event rules", nullptr, nullptr, available }, { "commands", "Commands", "Edit commands that run on game events and conditions.", "Startup, loading and conditional commands", true, true, nullptr, nullptr, nullptr, available } }, "Your Stabilizer setup", "Choose a step, then save its INI changes.", {}, CanSelectEditor);
+		SettingsPage page("VRFpsStabilizer", { { "profiles", "Profiles", "Choose compatible interior and exterior quality profiles.", "Upscaling and CSX feature profiles", true, true, "Choose automatic behavior", nullptr, nullptr, available }, { "targets", "Frame targets", "Choose frame-time targets and automatic quality behavior.", "Frame-time targets and response", true, true, nullptr, nullptr, nullptr, available }, { "lod", "LOD & Grass", "Balance distance and density as quality changes.", "Grass, distant LOD and fade distances", true, true, "Refine scene detail", nullptr, nullptr, available }, { "levels", "Quality Levels", "Configure the settings used by each automatic quality level.", "Level 0 through level 9", true, true, nullptr, nullptr, nullptr, available }, { "locations", "Locations", "Choose quality rules for individual locations.", "Location tiers and interior rules", true, true, "Refine location and event rules", nullptr, nullptr, available }, { "commands", "Commands", "Edit commands that run on game events and conditions.", "Startup, loading and conditional commands", true, true, nullptr, nullptr, nullptr, available } }, "Your Stabilizer setup", "Choose a step, then save its INI changes.", {}, CanSelectEditor);
 		if (!available)
 			return;
 		if (page.Is("profiles"))

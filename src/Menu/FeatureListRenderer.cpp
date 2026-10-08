@@ -1344,7 +1344,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (hasFailedMessage && feat->DrawFailLoadMessage() && !FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 		ImGui::Spacing();
 		SeparatorTextWithFont("Error", Menu::FontRole::Subheading);
-		ImGui::TextColored(themeSettings.StatusPalette.Error, feat->failedLoadedMessage.c_str());
+		Util::Text::WrappedError("%s", feat->failedLoadedMessage.c_str());
 	}
 }
 
@@ -1386,8 +1386,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 	// Center the popup (ImGuiCond_Always matches the Clear Cache dialog pattern)
 	ImVec2 center = ImGui::GetMainViewport()->GetCenter();
 	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	const auto viewportSize = ImGui::GetMainViewport()->WorkSize;
+	const float margin = ImGui::GetFontSize() * 2;
+	const ImVec2 maximumSize{ std::max(1.0f, viewportSize.x - margin), std::max(1.0f, viewportSize.y - margin) };
+	ImGui::SetNextWindowSize({ std::min(ImGui::GetFontSize() * 48, maximumSize.x), 0 }, ImGuiCond_Always);
+	ImGui::SetNextWindowSizeConstraints({ 0, 0 }, maximumSize);
 
 	if (ImGui::BeginPopupModal("Setting Change Warning", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		const auto endPopup = SKSE::stl::scope_exit([] { ImGui::EndPopup(); });
 		ImGui::TextWrapped("Some of your settings have been automatically adjusted due to feature incompatibilities.");
 		ImGui::Spacing();
 		ImGui::Separator();
@@ -1395,6 +1401,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 
 		// Table columns: Impacted Feature | Setting | Constrained By | Forced To
 		if (ImGui::BeginTable("##ReactiveConstraintTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+			const auto endTable = SKSE::stl::scope_exit([] { ImGui::EndTable(); });
 			ImGui::TableSetupColumn("Impacted Feature", ImGuiTableColumnFlags_WidthStretch);
 			ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch);
 			ImGui::TableSetupColumn("Constrained By", ImGuiTableColumnFlags_WidthStretch);
@@ -1461,8 +1468,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 
 				rowIndex++;
 			}
-
-			ImGui::EndTable();
 		}
 
 		ImGui::Spacing();
@@ -1498,7 +1503,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 			ImGui::CloseCurrentPopup();
 		}
 
-		ImGui::EndPopup();
 	} else {
 		// Popup was closed externally (e.g. clicked outside), reset state
 		g_reactiveWarningShow = false;

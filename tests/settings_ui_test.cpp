@@ -10,6 +10,7 @@
 #include <functional>
 #include <future>
 #include <imgui_internal.h>
+#include <imgui_stdlib.h>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -36,6 +37,8 @@ struct Feature
 	bool supportsMeasurement = true;
 	std::string GetShortName() const { return name; }
 	bool SupportsPerformanceCostMeasurement() const { return supportsMeasurement; }
+	std::string GetDisplayName() const { return name; }
+	static std::vector<Feature*> GetFeatureList() { return {}; }
 };
 namespace globals
 {
@@ -52,6 +55,11 @@ namespace globals
 				ImVec4 Warning{ 1, .7f, .2f, 1 };
 			} StatusPalette;
 		} theme;
+		struct Settings
+		{
+			bool SkipConstraintWarning = false;
+		} settings;
+		Settings& GetSettings() { return settings; }
 		const Theme& GetTheme() const { return theme; }
 		bool IsSettingsSaveMessageError() const { return false; }
 		std::string GetSettingsSaveMessage() const { return {}; }
@@ -186,6 +194,10 @@ namespace Util
 }
 #include "settings_page_under_test.h"
 #include "settings_widget_under_test.h"
+namespace Util
+{
+#include "settings_uint_checkbox_under_test.h"
+}
 namespace MenuUI
 {
 #include "settings_external_actions_under_test.h"
@@ -219,6 +231,110 @@ struct VolumetricLighting : Feature
 	void DrawSettings();
 };
 #include "settings_lighting_pages_under_test.h"
+
+using uint = unsigned int;
+struct float3
+{
+	float x, y, z;
+};
+using float4 = ImVec4;
+namespace REL::Module
+{
+	bool IsVR() { return globals::features::vr.headset; }
+}
+bool pbrAvailable = true;
+bool IsTruePBRActive() { return pbrAvailable; }
+void DrawTruePBRDependentTooltip(bool, const char*) {}
+#pragma warning(push)
+#pragma warning(disable: 4324)
+struct FoliageLighting : Feature
+{
+#include "settings_foliage_fields_under_test.h"
+	Settings settings;
+	static constexpr float kAmbientAmountMin = 0, kAmbientAmountMax = 1;
+	bool enabled = true;
+	bool IsEnabled() const { return enabled; }
+	void SanitizeSettings(Settings&) {}
+	void DrawFoliageScatteringSetting();
+	void DrawFoliageAmbientBoostSetting(bool);
+	void DrawFoliageAmbientFlipSetting();
+	void DrawGrassScatteringSetting();
+	void DrawSettings();
+};
+#pragma warning(pop)
+#include "settings_foliage_under_test.h"
+constexpr float kHumanSkinControlMin = 0, kHumanSkinControlMax = 2;
+#include "settings_skin_controls_under_test.h"
+struct SubsurfaceScattering : Feature
+{
+#include "settings_skin_fields_under_test.h"
+	bool updateKernels = true;
+	void DrawSettings();
+};
+#include "Utils/StringUtils.h"
+#include "settings_skin_under_test.h"
+#include "settings_ui_inventory_under_test.h"
+namespace
+{
+	INT_PTR shellResult = 33;
+	int shellCalls = 0;
+	std::wstring shellTarget;
+	HINSTANCE FakeShellExecuteW(HWND, LPCWSTR, LPCWSTR target, LPCWSTR, LPCWSTR, int)
+	{
+		++shellCalls;
+		shellTarget = target;
+		return reinterpret_cast<HINSTANCE>(shellResult);
+	}
+}
+#define ShellExecuteW FakeShellExecuteW
+namespace Util
+{
+#include "settings_shell_under_test.h"
+}
+#undef ShellExecuteW
+#include "settings_capture_feedback_under_test.h"
+namespace fmt
+{
+	using std::format;
+}
+namespace ThemeManager::Constants
+{
+	constexpr float POPUP_BUTTON_WIDTH = 100;
+}
+namespace FeatureConstraints
+{
+	struct SettingId
+	{
+		std::string featureShortName, settingPath;
+	};
+	struct Source
+	{
+		std::string featureName, featureShortName, reason;
+	};
+	struct ConstraintResult
+	{
+		std::vector<Source> sources;
+		bool forcedValue;
+	};
+	std::string FormatConstraintValue(bool value) { return value ? "true" : "false"; }
+}
+bool g_reactiveWarningShow = false, g_dontShowAgainCheckbox = false;
+std::vector<std::pair<FeatureConstraints::SettingId, FeatureConstraints::ConstraintResult>> g_reactiveWarningConstraints;
+struct FeatureListRenderer
+{
+	struct DrawMenuVisitor
+	{
+		std::string pendingFeatureSelection;
+		void RenderReactiveConstraintWarningDialog();
+	};
+};
+bool TrackedSelectable(const char* label)
+{
+	const bool clicked = ImGui::Selectable(label);
+	Util::controls[label] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+	return clicked;
+}
+#include "settings_constraint_warning_under_test.h"
 
 void require(bool condition, const char* reason)
 {
@@ -279,6 +395,26 @@ int main()
 				const auto loaded = legacyMenu.get<Menu::Settings>();
 				require(nlohmann::json(loaded) == expectedMenu, "legacy mode keys must not hide controls or change other menu preferences");
 				require(!nlohmann::json(loaded).contains(key), "saving must retire obsolete mode keys");
+			}
+		}
+
+		{
+			std::string error;
+			require(!Util::OpenInShell({}, error) && !error.empty() && shellCalls == 0, "empty shell targets fail without launching");
+			const std::filesystem::path target(L"capture-\u65e5\u672c");
+			for (const INT_PTR failure : { 0, 2, 5, 31, 32 }) {
+				shellResult = failure;
+				require(!Util::OpenInShell(target, error) && error.find(Util::PathToUtf8(target)) != error.npos, "all shell failure codes remain visible with Unicode paths");
+			}
+			shellResult = 33;
+			require(Util::OpenInShell(target, error) && error.empty() && shellTarget == target.native(), "successful shell launch preserves the target and clears stale errors");
+			const auto accepted = CaptureRequestFeedback({ { "ok", true }, { "result", { { "state", "queued" } } } }, "Requested");
+			require(!accepted.error && accepted.message == "Requested", "accepted capture actions show success");
+			for (const auto& response : nlohmann::json::array({ { { "ok", false }, { "error", { { "message", "Capture is busy" } } } },
+					 { { "ok", true }, { "result", { { "state", "failed_partial" }, { "error", "Disk is full" } } } },
+					 { { "ok", false }, { "error", { { "code", "transport_error" } } } } })) {
+				const auto feedback = CaptureRequestFeedback(response, "Requested");
+				require(feedback.error && !feedback.message.empty() && feedback.message != "Requested", "capture rejection, partial failure and transport failures cannot appear as success");
 			}
 		}
 
@@ -909,6 +1045,86 @@ int main()
 			require(GImGui->OpenPopupStack.empty(), "disabled dropdown cannot be opened programmatically");
 		}
 
+		{
+			std::string first = "First";
+			char second[64] = "Second";
+			double entryNumber = .25;
+			std::string multiline = "Commands";
+			char description[64] = "Description";
+			float color3[]{ .1f, .2f, .3f }, color4[]{ .1f, .2f, .3f, 1.f };
+			bool entriesDisabled = false;
+			float panel = 850;
+			ImRect firstBounds, secondBounds;
+			const auto entries = [&] {
+				ImGui::BeginChild("EntryControls", { panel, 600 });
+				const auto endChild = SKSE::stl::scope_exit([] { ImGui::EndChild(); });
+				const Util::Widgets::ControlLayout layout;
+				Util::DisableGuard guard(entriesDisabled);
+				const int styles = GImGui->StyleVarStack.Size, fonts = GImGui->FontStack.Size, ids = ImGui::GetCurrentWindow()->IDStack.Size;
+				Util::Widgets::InputTextWithHint("Name", "Type here", &first);
+				firstBounds = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+				Util::Widgets::InputText("Longer name", second, sizeof(second));
+				secondBounds = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+				Util::Widgets::InputDouble("Number", &entryNumber, .1);
+				Util::Widgets::ColorEdit3("Tint", color3);
+				Util::Widgets::ColorEdit4("Tint with alpha", color4);
+				Util::Widgets::InputTextMultiline("Commands", &multiline, { 0, 60 });
+				Util::Widgets::InputTextMultiline("Description", description, sizeof(description), { 0, 60 });
+				const auto bounds = ImGui::GetCurrentWindow()->InnerRect;
+				for (const auto& entry : { firstBounds, secondBounds })
+					if (!(entry.Min.x >= bounds.Min.x && entry.Max.x <= bounds.Max.x + .1f && entry.GetHeight() >= ImGui::GetFontSize() * 2))
+						throw std::runtime_error(std::format("Entry bounds {}..{} height {} panel {}..{} font {}", entry.Min.x, entry.Max.x, entry.GetHeight(), bounds.Min.x, bounds.Max.x, ImGui::GetFontSize()));
+				require(std::abs(firstBounds.Max.x - secondBounds.Max.x) < 1, "entry widths align independently of label length");
+				require(styles == GImGui->StyleVarStack.Size && fonts == GImGui->FontStack.Size && ids == ImGui::GetCurrentWindow()->IDStack.Size, "text, numeric and color entries restore every shared style and ID scope");
+			};
+			for (const float entryWidth : { 850.f, 420.f }) {
+				panel = entryWidth;
+				frame(entries);
+				frame(entries);
+			}
+			click({ firstBounds.Max.x - 20, firstBounds.GetCenter().y }, entries);
+			ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, true);
+			key(ImGuiKey_A, entries);
+			ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, false);
+			ImGui::GetIO().AddInputCharactersUTF8("Edited");
+			frame(entries);
+			key(ImGuiKey_Enter, entries);
+			require(first == "Edited" && std::string(second) == "Second", "text entry changes only its own setting");
+			entriesDisabled = true;
+			click({ secondBounds.Max.x - 20, secondBounds.GetCenter().y }, entries);
+			ImGui::GetIO().AddInputCharactersUTF8("Ignored");
+			frame(entries);
+			require(std::string(second) == "Second", "disabled text fields cannot change settings");
+			entriesDisabled = false;
+			globals::features::vr.headset = true;
+			frame(entries);
+			click(Util::controls.at("Enter this number using the headset number pad.").GetCenter(), entries);
+			frame(entries);
+			require(!GImGui->OpenPopupStack.empty(), "numeric input fields open the shared HMD keypad");
+			click(Util::controls.at("Keep the previous value.").GetCenter(), entries);
+			require(entryNumber == .25 && GImGui->OpenPopupStack.empty(), "canceling numeric input preserves its value");
+			globals::features::vr.headset = false;
+		}
+
+		{
+			FeatureListRenderer::DrawMenuVisitor warning;
+			const auto drawWarning = [&] {
+				const auto windows = GImGui->CurrentWindowStack.Size, tables = GImGui->TablesTempDataStacked;
+				warning.RenderReactiveConstraintWarningDialog();
+				require(windows == GImGui->CurrentWindowStack.Size && tables == GImGui->TablesTempDataStacked, "warning links restore table and popup state before navigating");
+			};
+			for (const char* target : { "Impacted", "Source" }) {
+				g_reactiveWarningShow = true;
+				g_reactiveWarningConstraints = { { { "Impacted", "Setting" }, { { { "Source", "Source", "Dependency" } }, false } } };
+				for (int settle = 0; settle < 4; ++settle)
+					frame(drawWarning);
+				const auto link = Util::controls.at(std::format("{}##{}0", target, std::string_view(target) == "Impacted" ? "imp" : "src"));
+				click(link.GetCenter(), drawWarning);
+				if (!(warning.pendingFeatureSelection == target && !g_reactiveWarningShow && GImGui->OpenPopupStack.empty()))
+					throw std::runtime_error(std::format("Warning target {} selected {} show {} popup {} at {},{}", target, warning.pendingFeatureSelection, g_reactiveWarningShow, GImGui->OpenPopupStack.Size, link.GetCenter().x, link.GetCenter().y));
+			}
+		}
+
 		// Invalid IDs must not change which file owns the footer or release a draft lock.
 		MenuUI::StabilizerPage::dirty = false;
 		require(CanSelectEditor("profiles"), "profile editor accepts clean navigation");
@@ -976,6 +1192,103 @@ int main()
 		footer.actions[1].enabled = false;
 		click(Util::controls.at("Popup last control").GetCenter(), drawFooter);
 		require(discards == 0 && GImGui->OpenPopupStack.empty(), "pending reload cannot trap a disabled confirmation modal");
+
+		{
+			const auto duplicateTitle = [] {
+				MenuUI::SettingsPage page("DuplicateTitle", { { "targets", "Performance", "Frame targets" } });
+			};
+			frame(duplicateTitle);
+			frame(duplicateTitle);
+			for (const char* id : { "targets", "performance", "targets" }) {
+				require(MenuUI::SettingsPage::Navigate("DuplicateTitle", id), "same-title tabs have valid independent destinations");
+				frame(duplicateTitle);
+				frame(duplicateTitle);
+				require(MenuUI::SettingsPage::Selected("DuplicateTitle") == id, "same-title tabs preserve destination identity");
+			}
+		}
+
+		for (const float font : { 13.0f, 21.0f }) {
+			for (const float panel : { 850.0f, 420.0f }) {
+				for (const auto& route : uiReviewRoutes) {
+					bool conditional = true;
+					const auto draw = [&] {
+						ImGui::PushFont(ImGui::GetFont(), font);
+						ImGui::BeginChild("RegisteredPage", { panel, 600 });
+						DrawUiReviewPage(route.page, conditional);
+						ImGui::EndChild();
+						ImGui::PopFont();
+					};
+					MenuUI::SettingsPage::Select(route.page, "overview");
+					frame(draw);
+					frame(draw);
+					require(MenuUI::SettingsPage::Navigate(route.page, route.section), "every registered detail route is reachable");
+					frame(draw);
+					frame(draw);
+					if (MenuUI::SettingsPage::Selected(route.page) != route.section)
+						throw std::runtime_error(std::format("Route {}/{} selected {} at font {} and width {}", route.page, route.section, MenuUI::SettingsPage::Selected(route.page), font, panel));
+					const auto back = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+					require(back.Min.x >= 0 && back.Max.x <= panel + 10, "back action stays inside wide and narrow panels");
+					click(back.GetCenter(), draw);
+					frame(draw);
+					frame(draw);
+					require(MenuUI::SettingsPage::Selected(route.page) == "overview", "every detail back button returns to the same production page");
+					if (route.conditional) {
+						conditional = false;
+						frame(draw);
+						require(!MenuUI::SettingsPage::Navigate(route.page, route.section), "unavailable runtime sections cannot be selected");
+					}
+				}
+			}
+		}
+		std::cout << "Checked " << std::size(uiReviewRoutes) << " production section routes at two widths and two font sizes\n";
+
+		{
+			FoliageLighting foliage;
+			for (const bool enabled : { false, true }) {
+				foliage.enabled = enabled;
+				for (const bool pbr : { false, true }) {
+					pbrAvailable = pbr;
+					for (const char* section : { "overview", "trees", "grass" }) {
+						MenuUI::SettingsPage::Select("FoliageLighting", section);
+						const auto draw = [&] {
+							Util::DisableGuard outerDisabled(true);
+							const auto disabledDepth = GImGui->DisabledStackSize;
+							const auto styleDepth = GImGui->StyleVarStack.Size;
+							foliage.DrawSettings();
+							require(GImGui->DisabledStackSize == disabledDepth && GImGui->StyleVarStack.Size == styleDepth,
+								"foliage pages must preserve enclosing disabled and style scopes");
+						};
+						frame(draw);
+						frame(draw);
+					}
+				}
+			}
+			SubsurfaceScattering skin;
+			skin.settings.SSMode = 0;
+			MenuUI::SettingsPage::Select("SubsurfaceScattering", "profiles");
+			const auto draw = [&] { skin.DrawSettings(); };
+			frame(draw);
+			frame(draw);
+			std::string log;
+			frame([&] {
+				ImGui::LogToBuffer();
+				skin.DrawSettings();
+				log = GImGui->LogBuffer.c_str();
+				ImGui::LogFinish();
+			});
+			for (const char* label : { "Strength", "Falloff" }) {
+				const auto first = log.find(label);
+				require(first != log.npos && log.find(label, first + 1) != log.npos,
+					"both skin profiles keep colour controls visible while kernel updates are pending");
+			}
+			unsigned int toggle = 256;
+			const auto drawToggle = [&] { Util::UIntCheckbox("Uint control", toggle); };
+			frame(drawToggle);
+			frame(drawToggle);
+			require(toggle == 1, "integer-backed toggles normalize the full value");
+			click(Util::controls.at("Turn Uint control on or off.").GetCenter(), drawToggle);
+			require(toggle == 0, "integer-backed toggles can clear values outside the low byte");
+		}
 
 		ImGui::DestroyContext();
 		std::cout << "Settings navigation and numeric interaction checks passed\n";

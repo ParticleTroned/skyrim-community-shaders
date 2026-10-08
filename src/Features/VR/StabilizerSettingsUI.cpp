@@ -84,7 +84,7 @@ namespace VRFpsStabilizer
 				ImGui::TextDisabled("%s (not configured)", setting.label);
 				Tooltip(setting.help, distance, fadeMultiplier);
 				ImGui::SameLine();
-				if (ImGui::SmallButton("Configure"))
+				if (ImGui::Button("Configure"))
 					editor.document.Set("Settings", setting.key, setting.suggested, editor.error);
 				Tooltip("Add this option using the supplied 1.4.13 beta template value. Saving is still required; omitted settings otherwise keep Stabilizer's own defaults.");
 				ImGui::PopID();
@@ -102,11 +102,11 @@ namespace VRFpsStabilizer
 			} else if (setting.kind != SettingKind::WorldList && numeric) {
 				const bool integral = setting.kind == SettingKind::Integer || distance;
 				const double step = distance ? kDistanceStep : (integral || fadeMultiplier ? 1.0 : 0.1);
-				changed = ImGui::InputDouble(setting.label, &number, step, 0, integral ? "%.0f" : "%.4g");
+				changed = Util::Widgets::InputDouble(setting.label, &number, step, 0, integral ? "%.0f" : "%.4g");
 				if (changed)
 					*value = integral ? std::format("{:.0f}", std::round(number)) : std::format("{:.8g}", number);
 			} else {
-				changed = ImGui::InputText(setting.label, &*value);
+				changed = Util::Widgets::InputText(setting.label, &*value);
 			}
 			Tooltip(setting.help, distance, fadeMultiplier);
 			if (changed) {
@@ -121,7 +121,7 @@ namespace VRFpsStabilizer
 			ImGui::PushID(section);
 			ImGui::TextWrapped("%s", help);
 			auto body = editor.document.Body(section);
-			if (ImGui::InputTextMultiline("##Commands", &body, ImVec2(-1, ImGui::GetTextLineHeightWithSpacing() * 12))) {
+			if (Util::Widgets::InputTextMultiline("##Commands", &body, ImVec2(-1, ImGui::GetTextLineHeightWithSpacing() * 12))) {
 				editor.error.clear();
 				editor.document.SetBody(section, body, editor.error);
 			}
@@ -158,11 +158,11 @@ namespace VRFpsStabilizer
 				if (ParseNumber(value, number)) {
 					const bool integral = distance || key.starts_with('i') || key.starts_with('b');
 					const double step = distance ? kDistanceStep : (integral ? 1.0 : 100.0);
-					changed = ImGui::InputDouble(label, &number, step, 0, integral ? "%.0f" : "%.6g");
+					changed = Util::Widgets::InputDouble(label, &number, step, 0, integral ? "%.0f" : "%.6g");
 					if (changed && std::isfinite(number))
 						value = integral ? std::format("{:.0f}", std::round(number)) : std::format("{:.8g}", number);
 				} else {
-					changed = ImGui::InputText(label, &value);
+					changed = Util::Widgets::InputText(label, &value);
 				}
 				Tooltip(help, distance);
 				if (changed) {
@@ -191,7 +191,7 @@ namespace VRFpsStabilizer
 			if (editor.location < 5) {
 				auto namesText = editor.document.Get("Settings", tier).value_or("");
 				ImGui::TextUnformatted("Location names (comma-separated)");
-				if (ImGui::InputText("##Locations", &namesText))
+				if (Util::Widgets::InputText("##Locations", &namesText))
 					editor.document.Set("Settings", tier, namesText, editor.error);
 				Tooltip("Use the location names expected by Stabilizer, separated by commas, for example Whiterun,Riverwood. Changing this list moves the rule's scope; it does not move the player.");
 			}

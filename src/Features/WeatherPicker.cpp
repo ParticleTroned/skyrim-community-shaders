@@ -394,7 +394,7 @@ void WeatherPicker::DisplayLightningInfo(RE::TESWeather* weather, bool showInter
 		flags |= ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoTooltip;
 		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, theme.StatusPalette.Disable.w);
 	}
-	bool colorChanged = ImGui::ColorEdit3("##LightningColor", lightningColor, flags);
+	bool colorChanged = Util::Widgets::ColorEdit3("##LightningColor", lightningColor, flags);
 	if (!showInteractiveElements) {
 		ImGui::PopStyleVar();
 	}
@@ -521,6 +521,7 @@ void WeatherPicker::DisplayWeatherInfo(RE::TESWeather* weather, float weatherPct
 
 void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 {
+	auto* editorWindow = EditorWindow::GetSingleton();
 	ImGui::SeparatorText(T(TKEY("weather_selection"), "Weather Selection"));
 
 	ImGui::Text("%s", T(TKEY("filter_by_weather_type"), "Filter by Weather Type:"));
@@ -560,51 +561,53 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 		s_lastWeatherFlagFilter = s_weatherFlagFilter;
 	}
 
-	if (ImGui::Button(T(TKEY("reset_weather"), "Reset Weather"))) {
-		sky->ResetWeather();
-		// Update the selection box to reflect the reset weather without double-applying
-		s_selectedWeatherIdx = FindWeatherIndex(sky->defaultWeather);
-		logger::info("[WeatherPicker] Reset weather to default");
-	}
+	{
+		MenuUI::DetailGrid actions("WeatherActions", 3);
+		actions.Next();
+		if (ImGui::Button(T(TKEY("reset_weather"), "Reset Weather"))) {
+			sky->ResetWeather();
+			// Update the selection box to reflect the reset weather without double-applying
+			s_selectedWeatherIdx = FindWeatherIndex(sky->defaultWeather);
+			logger::info("[WeatherPicker] Reset weather to default");
+		}
 
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("reset_weather_tooltip"), "Resets weather to default"));
-	}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("reset_weather_tooltip"), "Resets weather to default"));
+		}
 
-	// Lock Weather toggle
-	ImGui::SameLine();
-	auto editorWindow = EditorWindow::GetSingleton();
-	bool isLocked = editorWindow->IsWeatherLocked();
-	bool hooksInstalled = EditorWindow::AreWeatherLockHooksInstalled();
-	const char* lockLabel = isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("lock_weather"), "Lock Weather");
+		// Lock Weather toggle
+		actions.Next();
+		bool isLocked = editorWindow->IsWeatherLocked();
+		bool hooksInstalled = EditorWindow::AreWeatherLockHooksInstalled();
+		const char* lockLabel = isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("lock_weather"), "Lock Weather");
 
-	if (isLocked) {
-		const auto& theme = Menu::GetSingleton()->GetTheme();
-		ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.SuccessColor);
-	}
-	if (ImGui::Button(lockLabel)) {
 		if (isLocked) {
-			editorWindow->UnlockWeather();
-		} else if (sky->currentWeather) {
-			editorWindow->LockWeather(sky->currentWeather);
+			const auto& theme = Menu::GetSingleton()->GetTheme();
+			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.SuccessColor);
+		}
+		if (ImGui::Button(lockLabel)) {
+			if (isLocked) {
+				editorWindow->UnlockWeather();
+			} else if (sky->currentWeather) {
+				editorWindow->LockWeather(sky->currentWeather);
+			}
+		}
+		if (isLocked) {
+			ImGui::PopStyleColor();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			if (hooksInstalled)
+				ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
+			else
+				ImGui::TextUnformatted("Weather-lock hooks are unavailable; the lock still works but weather may briefly flash before correction");
+		}
+
+		actions.Next();
+		Util::Widgets::Checkbox(T(TKEY("accelerate_weather_change"), "Accelerate Weather Change"), &s_accelerateWeatherChange);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("accelerate_weather_change_tooltip"), "When enabled, weather changes instantly"));
 		}
 	}
-	if (isLocked) {
-		ImGui::PopStyleColor();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		if (hooksInstalled)
-			ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
-		else
-			ImGui::TextUnformatted("Weather-lock hooks are unavailable; the lock still works but weather may briefly flash before correction");
-	}
-
-	ImGui::SameLine();
-	Util::Widgets::Checkbox(T(TKEY("accelerate_weather_change"), "Accelerate Weather Change"), &s_accelerateWeatherChange);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("accelerate_weather_change_tooltip"), "When enabled, weather changes instantly"));
-	}
-
 	ImGui::BeginDisabled(!s_accelerateWeatherChange);
 	Util::Widgets::Checkbox("Temporary Weather Preview", &s_transientAcceleratedWeatherPreview);
 	ImGui::EndDisabled();

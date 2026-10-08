@@ -128,7 +128,7 @@ void SubsurfaceScattering::DrawSettings()
 													  });
 
 	if (page.Is("model")) {
-		Util::Widgets::Checkbox("Enable Character Lighting", (bool*)&settings.EnableCharacterLighting);
+		Util::UIntCheckbox("Enable Character Lighting", settings.EnableCharacterLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Vanilla feature, not recommended.");
 		}
@@ -155,8 +155,8 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::Text("Blur radius relative to depth.");
 			}
 
-			updateKernels = updateKernels || ImGui::ColorEdit3("Strength", (float*)&settings.BaseProfile.Strength);
-			updateKernels = updateKernels || ImGui::ColorEdit3("Falloff", (float*)&settings.BaseProfile.Falloff);
+			updateKernels |= Util::Widgets::ColorEdit3("Strength", (float*)&settings.BaseProfile.Strength);
+			updateKernels |= Util::Widgets::ColorEdit3("Falloff", (float*)&settings.BaseProfile.Falloff);
 
 			ImGui::PopID();
 		}
@@ -174,8 +174,8 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::Text("Blur radius relative to depth.");
 			}
 
-			updateKernels = updateKernels || ImGui::ColorEdit3("Strength", (float*)&settings.HumanProfile.Strength);
-			updateKernels = updateKernels || ImGui::ColorEdit3("Falloff", (float*)&settings.HumanProfile.Falloff);
+			updateKernels |= Util::Widgets::ColorEdit3("Strength", (float*)&settings.HumanProfile.Strength);
+			updateKernels |= Util::Widgets::ColorEdit3("Falloff", (float*)&settings.HumanProfile.Falloff);
 
 			ImGui::PopID();
 		}
@@ -186,7 +186,7 @@ void SubsurfaceScattering::DrawSettings()
 		{
 			MenuUI::SectionHeading("Base Profile");
 			ImGui::PushID("Base Profile");
-			ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathBase);
+			Util::Widgets::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathBase);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
 			}
@@ -200,7 +200,7 @@ void SubsurfaceScattering::DrawSettings()
 		{
 			MenuUI::SectionHeading("Humanoid Profile");
 			ImGui::PushID("Humanoid Profile");
-			ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathHuman);
+			Util::Widgets::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathHuman);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
 			}

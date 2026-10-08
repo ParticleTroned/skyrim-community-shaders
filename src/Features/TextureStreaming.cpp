@@ -11,6 +11,7 @@
 #include "Utils/GpuMemoryBudget.h"
 #include "Utils/RendererContextAccess.h"
 #include "Utils/ResourceName.h"
+#include "Utils/UI.h"
 #include "Utils/VirtualFunctionHook.h"
 #include <algorithm>
 #include <atomic>
@@ -815,14 +816,14 @@ void TextureStreaming::DrawSettingsEnabledControl()
 {
 	auto status = GetStatus();
 	bool enabled = status["enabled"];
-	if (ImGui::Checkbox("Enable texture streaming", &enabled))
+	if (Util::Widgets::Checkbox("Enable texture streaming", &enabled))
 		Configure(enabled, status["maximumMipDrop"]);
 }
 void TextureStreaming::DrawSettings()
 {
 	const auto status = GetStatus();
 	int maximum = status["maximumMipDrop"];
-	if (ImGui::SliderInt("Maximum mip levels removed", &maximum, 1, Policy::MaximumDrop))
+	if (Util::Widgets::SliderInt("Maximum mip levels removed", &maximum, 1, Policy::MaximumDrop))
 		Configure(status["enabled"], maximum);
 	ImGui::TextWrapped("Only suitable static opaque DDS materials are streamed. Detail follows both eyes, output resolution and shader mip bias. Neural Rendering scale does not lower texture detail.");
 	ImGui::TextWrapped("Disabling restores textures gradually as memory headroom permits.");

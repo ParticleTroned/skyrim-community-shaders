@@ -64,7 +64,7 @@ void HairSpecular::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("highlights")) {
-		Util::Widgets::Checkbox("Enable Tangent Shift", (bool*)&settings.EnableTangentShift);
+		Util::UIntCheckbox("Enable Tangent Shift", settings.EnableTangentShift);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Enables the use of a tangent shift texture to vary specular highlights across hair strands.\n"
@@ -77,12 +77,13 @@ void HairSpecular::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("shadows")) {
-		Util::Widgets::Checkbox("Enable Screen-Space Self Shadow", (bool*)&settings.EnableSelfShadow);
+		Util::UIntCheckbox("Enable Screen-Space Self Shadow", settings.EnableSelfShadow);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Enables screen-space self-shadowing for hair.\n"
 				"Marschner hair model might have overly bright transmission without self-shadowing.\n");
 		}
+		const auto shadowsDisabled = Util::DisableGuard(settings.EnableSelfShadow == 0);
 		Util::Widgets::SliderFloat("Self Shadow Strength", &settings.SelfShadowStrength, 0.0f, 1.0f, "%.2f");
 		Util::Widgets::SliderFloat("Self Shadow Exponent", &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
 		Util::Widgets::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");

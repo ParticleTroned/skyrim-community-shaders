@@ -2,6 +2,7 @@
 #include "FeatureListRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "Utils/UI.h"
+#include "Utils/WinApi.h"
 
 #include <set>
 #include <string>
@@ -211,7 +212,7 @@ namespace
 
 	void ColorEditWithTooltip(const char* label, ImVec4& color, const char* tooltip, ImGuiColorEditFlags flags = 0)
 	{
-		ImGui::ColorEdit4(label, (float*)&color, flags);
+		Util::Widgets::ColorEdit4(label, (float*)&color, flags);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(tooltip);
 		}
@@ -516,11 +517,14 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 void SettingsTabRenderer::RenderThemesTab()
 {
+	static MenuUI::ActionFeedback feedback;
+	const auto showFeedback = SKSE::stl::scope_exit([&] { feedback.Draw(); });
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 
 	// Static variables for popup state and new theme creation
 	static Util::ConfirmationPopup deleteThemePopup("Delete Theme", "", "Delete", "Cancel");
 	static bool showCreateThemePopup = false;
+	static MenuUI::ActionFeedback createFeedback;
 	static char newThemeName[128] = "";
 	static char newThemeDisplayName[128] = "";
 	static char newThemeDescription[256] = "";
@@ -614,7 +618,7 @@ void SettingsTabRenderer::RenderThemesTab()
 	ImGui::SameLine();
 	if (ImGui::Button("Open Themes Folder")) {
 		std::filesystem::path themesPath = Util::PathHelpers::GetThemesRealPath();
-		ShellExecuteA(NULL, "open", themesPath.string().c_str(), NULL, NULL, SW_SHOWNORMAL);
+		feedback.error = !Util::OpenInShell(themesPath, feedback.message);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Opens the Themes folder where you can add custom theme files.");
@@ -711,6 +715,7 @@ void SettingsTabRenderer::RenderThemesTab()
 
 	if (Util::ButtonWithFlash("Save As New Theme")) {
 		showCreateThemePopup = true;
+		createFeedback = {};
 		memset(newThemeName, 0, sizeof(newThemeName));
 		memset(newThemeDisplayName, 0, sizeof(newThemeDisplayName));
 		memset(newThemeDescription, 0, sizeof(newThemeDescription));
@@ -786,7 +791,7 @@ void SettingsTabRenderer::RenderThemesTab()
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
 		}
 
-		ImGui::InputText("Theme Name", newThemeName, sizeof(newThemeName));
+		Util::Widgets::InputText("Theme Name", newThemeName, sizeof(newThemeName));
 
 		if (isThemeNameError && showValidationError) {
 			ImGui::PopStyleVar();
@@ -812,7 +817,7 @@ void SettingsTabRenderer::RenderThemesTab()
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
 		}
 
-		ImGui::InputText("Display Name", newThemeDisplayName, sizeof(newThemeDisplayName));
+		Util::Widgets::InputText("Display Name", newThemeDisplayName, sizeof(newThemeDisplayName));
 
 		if (isDuplicateDisplayName && showValidationError) {
 			ImGui::PopStyleVar();
@@ -824,10 +829,8 @@ void SettingsTabRenderer::RenderThemesTab()
 			ImGui::Text("Human-readable name shown in the dropdown");
 		}
 
-		{
-			float scale = Util::GetUIScale();
-			ImGui::InputTextMultiline("Description", newThemeDescription, sizeof(newThemeDescription), ImVec2(400 * scale, 80 * scale));
-		}
+		Util::Widgets::InputTextMultiline("Description", newThemeDescription, sizeof(newThemeDescription),
+			ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 4));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Optional description for the theme");
 		}
@@ -859,6 +862,7 @@ void SettingsTabRenderer::RenderThemesTab()
 					logger::info("Theme creation complete. Total themes: {}", themeManager->GetThemes().size());
 				} else {
 					logger::error("Failed to save theme: '{}'", newThemeName);
+					createFeedback = { "Could not save this theme. Check that the theme folder is writable and try again.", true };
 				}
 			} else {
 				// Empty theme name, show validation error
@@ -871,6 +875,7 @@ void SettingsTabRenderer::RenderThemesTab()
 			showCreateThemePopup = false;
 			ImGui::CloseCurrentPopup();
 		}
+		createFeedback.Draw();
 	}
 
 	if (deleteThemePopup.Draw() && currentThemeInfo && !currentThemeInfo->filePath.empty()) {
@@ -881,6 +886,7 @@ void SettingsTabRenderer::RenderThemesTab()
 			currentThemePreset = "Default";
 		} else {
 			logger::warn("Failed to delete theme '{}': {}", currentThemePreset, result.errorMessage);
+			feedback = { result.errorMessage, true };
 		}
 	}
 }
@@ -1234,7 +1240,7 @@ void SettingsTabRenderer::RenderColorsTab()
 			const char* friendlyName = GetFriendlyColorName(i);
 			if (!colorFilter.PassFilter(friendlyName))
 				continue;
-			ImGui::ColorEdit4(friendlyName, (float*)&colors[i], ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+			Util::Widgets::ColorEdit4(friendlyName, (float*)&colors[i], ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
 		}
 		ImGui::TreePop();
 	}

@@ -2502,7 +2502,7 @@ namespace Util
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
 
-			bool changed = ImGui::ColorEdit3(label, col);
+			bool changed = Util::Widgets::ColorEdit3(label, col);
 
 			if (isControlled) {
 				ImGui::PopItemFlag();
@@ -2545,7 +2545,7 @@ namespace Util
 				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
 			}
 
-			bool changed = ImGui::ColorEdit4(label, col);
+			bool changed = Util::Widgets::ColorEdit4(label, col);
 
 			if (isControlled) {
 				ImGui::PopItemFlag();

@@ -1075,7 +1075,7 @@ void LightLimitFix::DrawSettings()
 {
 	MenuUI::SettingsPage page("LightLimitFix", {
 												   { "particles", "Particles", "Choose which small light effects illuminate the scene.", "Small effects that emit light", true, true, "Choose light sources" },
-												   { "placed", "Placed lights", "Choose lighting from supported objects.", "Lighting from placed objects", true, true, nullptr },
+												   { "placed", "Placed lights", "Choose lighting from supported objects.", "Lighting from placed objects", true, true, nullptr, nullptr, nullptr, globals::features::inverseSquareLighting.loaded },
 												   { "shadows", "Shadows", "Refine contact shadows after choosing your lights.", "Contact-shadow quality", true, true, "Refine light interaction" },
 												   { "effects", "Heat distortion", "Refine heat distortion around lights.", "Refraction around lights", true, true, nullptr },
 												   { "diagnostics", "Diagnostics", "Inspect light counts and diagnostic views.", "Light counts and buffer views", true, false, nullptr },
@@ -1097,7 +1097,8 @@ void LightLimitFix::DrawSettings()
 			}
 
 			ImGui::Separator();
-			ImGui::TextWrapped("Particle Lights Performance");
+			const auto particlesDisabled = Util::DisableGuard(!settings.EnableParticleLights);
+			MenuUI::SectionHeading("Particle Lights Performance");
 
 			Util::Widgets::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1188,7 +1189,7 @@ void LightLimitFix::DrawSettings()
 			ImGui::EndDisabled();
 
 			if (!jsonPlacedLightsSupported) {
-				ImGui::TextDisabled("Requires Inverse Square Lighting to identify JSON-placed runtime lights.");
+				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in the sidebar and restart the game.");
 			}
 
 			ImGui::Spacing();
@@ -1205,6 +1206,7 @@ void LightLimitFix::DrawSettings()
 					"Uses a cached per-cluster candidate list to limit the number of ray marches.");
 			}
 
+			const auto shadowsDisabled = Util::DisableGuard(!contactShadows);
 			Util::Widgets::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Only run LLF contact shadows in interior cells.");

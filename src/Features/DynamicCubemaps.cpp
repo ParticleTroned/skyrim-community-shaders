@@ -190,15 +190,19 @@ void DynamicCubemaps::DrawSettings()
 				ImGui::PopStyleColor();
 			}
 		}
+		if (REL::Module::IsVR() && settings.EnabledSSR != 0 && !enabledAtBoot)
+			Util::Text::WrappedWarning("Save settings and restart to enable water screen space reflections in VR.");
 	}
 
 	if (page.Is("environment")) {
+		static std::string exportMessage;
+		static bool exportFailed = false;
 		ImGui::Text("You must enable creator mode by adding the shader define CREATOR");
 		bool enabledCreator = settings.EnabledCreator != 0;
 		if (Util::Widgets::Checkbox("Enable Creator", &enabledCreator))
 			settings.EnabledCreator = enabledCreator ? 1u : 0u;
 		if (settings.EnabledCreator) {
-			ImGui::ColorEdit3("Color", reinterpret_cast<float*>(&settings.CubemapColor));
+			Util::Widgets::ColorEdit3("Color", reinterpret_cast<float*>(&settings.CubemapColor));
 			Util::Widgets::SliderFloat("Roughness", &settings.CubemapColor.w, 0.0f, 1.0f, "%.2f");
 			if (ImGui::Button("Export")) {
 				auto device = globals::d3d::device;
@@ -246,6 +250,7 @@ void DynamicCubemaps::DrawSettings()
 
 				try {
 					DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, subresourceData, tempTexture.put()));
+					Util::SetResourceName(tempTexture.get(), "DynamicCubemaps::CreatorExport");
 					DX::ThrowIfFailed(CaptureTexture(device, context, tempTexture.get(), image));
 
 					if (std::filesystem::create_directories(defaultDynamicCubeMapSavePath)) {
@@ -258,17 +263,29 @@ void DynamicCubemaps::DrawSettings()
 
 					if (std::filesystem::exists(DynamicCubeMapSavePath)) {
 						logger::info("DynamicCubeMap Creator file for {} already exists, skipping.", filename.string());
+						exportMessage = std::format("Already exists: {}", DynamicCubeMapSavePath.string());
+						exportFailed = false;
 					} else {
 						DX::ThrowIfFailed(SaveToDDSFile(image.GetImages(), image.GetImageCount(), image.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, DynamicCubeMapSavePath.c_str()));
 						logger::info("DynamicCubeMap Creator file for {} written", filename.string());
+						exportMessage = std::format("Saved: {}", DynamicCubeMapSavePath.string());
+						exportFailed = false;
 					}
 
 				} catch (const std::exception& e) {
 					logger::error("Failed in DynamicCubeMap Creator file: {} {}", defaultDynamicCubeMapSavePath, e.what());
+					exportMessage = std::format("Cubemap export failed: {}", e.what());
+					exportFailed = true;
 				}
 
 				image.Release();
 			}
+		}
+		if (!exportMessage.empty()) {
+			if (exportFailed)
+				Util::Text::WrappedError("%s", exportMessage.c_str());
+			else
+				MenuUI::DetailText(exportMessage.c_str());
 		}
 	}
 	if (REL::Module::IsVR()) {

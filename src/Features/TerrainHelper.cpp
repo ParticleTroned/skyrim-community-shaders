@@ -37,15 +37,14 @@ void TerrainHelper::DataLoaded()
 void TerrainHelper::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainHelper", {
-												   { "appearance", "Terrain", "Choose how distant terrain meets nearby ground.", "Distant-to-near ground matching", true, true, "Refine terrain continuity" },
+												   { "appearance", "Terrain", "Enable matching between distant terrain and nearby ground.", "Distant-to-near ground matching", true, true, "Refine terrain continuity", nullptr, nullptr, featureAvailable },
 											   });
-	if (!page.Is("appearance"))
-		return;
-
-	if (!featureAvailable) {
-		ImGui::TextDisabled("TerrainHelper.esp not detected. Runtime toggle is unavailable.");
+	if (!featureAvailable && (page.Is("overview") || page.Is("appearance"))) {
+		Util::Text::WrappedWarning("TerrainHelper.esp was not detected. Install and enable its plugin, then restart to use Terrain Helper.");
 		return;
 	}
+	if (!page.Is("appearance"))
+		return;
 
 	if (Util::Widgets::Checkbox("Enabled", &settings.EnableTerrainHelper))
 		SetPerformanceCostMeasurementEnabled(settings.EnableTerrainHelper);

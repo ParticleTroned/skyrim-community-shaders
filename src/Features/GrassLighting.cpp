@@ -154,7 +154,7 @@ void GrassLighting::DrawSettings()
 	}
 
 	if (page.Is("lighting")) {
-		Util::Widgets::Checkbox("Wrapped Lighting for Vanilla Grass", (bool*)&settings.EnableWrappedLighting);
+		Util::UIntCheckbox("Wrapped Lighting for Vanilla Grass", settings.EnableWrappedLighting);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Restores the legacy wrapped diffuse transition for vanilla/basic grass. "
@@ -164,7 +164,7 @@ void GrassLighting::DrawSettings()
 		ImGui::Spacing();
 		ImGui::Spacing();
 
-		Util::Widgets::Checkbox("Override Complex Grass Lighting Settings", (bool*)&settings.OverrideComplexGrassSettings);
+		Util::UIntCheckbox("Override Complex Grass Lighting Settings", settings.OverrideComplexGrassSettings);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Override the settings set by the grass mesh author. "

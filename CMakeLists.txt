@@ -1759,6 +1759,11 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    file(
+        GLOB_RECURSE _settings_ui_sources
+        CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/*.cpp"
+    )
     set(_settings_ui_dir "${CMAKE_CURRENT_BINARY_DIR}/settings_ui_test")
     add_custom_command(
         OUTPUT
@@ -1771,6 +1776,21 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_footer_under_test.h"
             "${_settings_ui_dir}/settings_external_actions_under_test.h"
             "${_settings_ui_dir}/settings_stabilizer_navigation_under_test.h"
+            "${_settings_ui_dir}/settings_uint_checkbox_under_test.h"
+            "${_settings_ui_dir}/settings_foliage_under_test.h"
+            "${_settings_ui_dir}/settings_foliage_fields_under_test.h"
+            "${_settings_ui_dir}/settings_skin_controls_under_test.h"
+            "${_settings_ui_dir}/settings_skin_under_test.h"
+            "${_settings_ui_dir}/settings_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_ui_inventory_under_test.h"
+            "${_settings_ui_dir}/settings_shell_under_test.h"
+            "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
+            "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/ui_page_inventory.py" --root
+            "${PROJECT_SOURCE_DIR}" --header
+            "${_settings_ui_dir}/settings_ui_inventory_under_test.h"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_settings_ui_dir}" -P
@@ -1783,11 +1803,19 @@ if(BUILD_CONTROLLER_TESTS)
             src/Menu.h
             src/Menu.cpp
             src/Features/VolumetricLighting.cpp
+            src/Features/FoliageLighting.cpp
+            src/Features/FoliageLighting.h
+            src/Features/SubsurfaceScattering.cpp
+            src/Features/SubsurfaceScattering.h
+            src/Utils/UI.cpp
+            src/Utils/WinApi.cpp
             src/Features/Upscaling.cpp
             tests/extract_source_region.cmake
             src/Utils/Slider.cpp
             src/Utils/UI.h
             tests/extract_settings_ui.cmake
+            tests/ui_page_inventory.py
+            ${_settings_ui_sources}
         VERBATIM
     )
     add_controller_test(settings_ui_test SettingsUI tests/settings_ui_test.cpp)
@@ -1803,6 +1831,16 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_footer_under_test.h"
             "${_settings_ui_dir}/settings_external_actions_under_test.h"
             "${_settings_ui_dir}/settings_stabilizer_navigation_under_test.h"
+            "${_settings_ui_dir}/settings_uint_checkbox_under_test.h"
+            "${_settings_ui_dir}/settings_foliage_under_test.h"
+            "${_settings_ui_dir}/settings_foliage_fields_under_test.h"
+            "${_settings_ui_dir}/settings_skin_controls_under_test.h"
+            "${_settings_ui_dir}/settings_skin_under_test.h"
+            "${_settings_ui_dir}/settings_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_ui_inventory_under_test.h"
+            "${_settings_ui_dir}/settings_shell_under_test.h"
+            "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
+            "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
     )
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     target_link_libraries(

@@ -2265,7 +2265,6 @@ void EditorWindow::DrawTimeControls()
 		TogglePause();
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Pause or resume game time progression");
-	ImGui::SameLine();
 	DrawGameHourSlider();
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Adjust the current game time");
@@ -2276,21 +2275,15 @@ void EditorWindow::DrawTimeControls()
 	else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
 		timeScaleSlider = calendar->timeScale->value;
 
-	// Row 2: Reset Speed + TimeScale slider + speed label
 	if (ImGui::Button("Reset Speed", ImVec2(buttonWidth, 0)))
 		ResetTimeScale();
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Reset time speed to vanilla (%.1fx)", kVanillaTimeScale);
 
-	ImGui::SameLine();
-	ImGui::BeginDisabled(timePaused);
-	if (Util::Widgets::SliderFloat("##TimeScale", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
-			timeScaleSlider == kVanillaTimeScale ? "Vanilla Speed" : "", ImGuiSliderFlags_Logarithmic))
+	const Util::DisableGuard pausedGuard(timePaused);
+	if (Util::Widgets::SliderFloat("Time Speed", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
+			"%.1fx", ImGuiSliderFlags_Logarithmic))
 		calendar->timeScale->value = timeScaleSlider;
-	ImGui::EndDisabled();
-
-	ImGui::SameLine();
-	ImGui::Text("%.1fx", calendar->timeScale->value);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Adjust how fast time passes (vanilla: %.1fx)", kVanillaTimeScale);
 }

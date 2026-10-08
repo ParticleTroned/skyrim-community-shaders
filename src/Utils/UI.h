@@ -98,6 +98,17 @@ namespace Util
 		/** Aligned dropdown with large, individually selectable options. */
 		bool Combo(const char* label, int* selected, const char* const items[], int count);
 		bool Combo(const char* label, int* selected, const char* items);
+		/** Aligned text and numeric entries with the common control font and hit target. */
+		bool InputText(const char* label, char* text, size_t size, ImGuiInputTextFlags flags = 0);
+		bool InputText(const char* label, std::string* text, ImGuiInputTextFlags flags = 0);
+		bool InputTextWithHint(const char* label, const char* hint, char* text, size_t size, ImGuiInputTextFlags flags = 0);
+		bool InputTextWithHint(const char* label, const char* hint, std::string* text, ImGuiInputTextFlags flags = 0);
+		bool InputTextMultiline(const char* label, char* text, size_t size, const ImVec2& fieldSize = {}, ImGuiInputTextFlags flags = 0);
+		bool InputTextMultiline(const char* label, std::string* text, const ImVec2& fieldSize = {}, ImGuiInputTextFlags flags = 0);
+		bool InputDouble(const char* label, double* value, double step = 0, double fastStep = 0, const char* format = "%.6f", ImGuiInputTextFlags flags = 0);
+		/** Aligned colour fields using the shared detail font and headset-sized frames. */
+		bool ColorEdit3(const char* label, float color[3], ImGuiColorEditFlags flags = 0);
+		bool ColorEdit4(const char* label, float color[4], ImGuiColorEditFlags flags = 0);
 		/** Scoped custom dropdown using the same field and option sizing as Combo. */
 		class ComboBox
 		{

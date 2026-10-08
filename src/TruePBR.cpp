@@ -10,7 +10,9 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/FileSystem.h"
 #include "Utils/Finite.h"
+#include "Utils/UI.h"
 
 #include <atomic>
 #include <mutex>
@@ -149,21 +151,22 @@ namespace PNState
 		}
 	}
 
-	void SavePBRRecordConfig(const std::string& rootPath, const std::string& editorId, const json& config)
+	bool SavePBRRecordConfig(const std::string& rootPath, const std::string& editorId, const json& config, std::string& error)
 	{
-		std::filesystem::create_directory(rootPath);
-
-		const std::string outputPath = std::format("{}\\{}.json", rootPath, editorId);
-		std::ofstream fileStream(outputPath);
-		if (!fileStream.is_open()) {
-			logger::error("[TruePBR] failed to write {}", outputPath);
-			return;
-		}
 		try {
-			fileStream << std::setw(4) << config;
-		} catch (const nlohmann::json::type_error& e) {
-			logger::error("[TruePBR] failed to serialize {} : {}", outputPath, e.what());
-			return;
+			const std::filesystem::path name(editorId);
+			if (name.empty() || name != name.filename() || name == "." || name == "..")
+				throw std::runtime_error("Material name is not a valid filename.");
+			std::filesystem::create_directories(rootPath);
+			const auto outputPath = std::filesystem::path(rootPath) / (editorId + ".json");
+			if (!Util::FileHelpers::WriteTextFileAtomic(outputPath, config.dump(4), error))
+				throw std::runtime_error(error);
+			error = "Material overrides saved.";
+			return true;
+		} catch (const std::exception& e) {
+			error = std::format("Could not save material overrides: {}", e.what());
+			logger::error("[TruePBR] {}", error);
+			return false;
 		}
 	}
 }
@@ -219,6 +222,7 @@ namespace
 
 void TruePBR::DrawSettings()
 {
+	static MenuUI::ActionFeedback feedback;
 	MenuUI::SettingsPage page("TruePBR", {
 											 { "look", "Look", "Choose the shared material appearance first." },
 											 { "textures", "Textures", "Refine individual texture materials." },
@@ -240,6 +244,8 @@ void TruePBR::DrawSettings()
 			selectedPbrTextureSet = &pbrTextureSets[selectedPbrTextureSetName];
 		}
 
+		if (pbrTextureSets.empty())
+			MenuUI::DetailNote("No authored PBR texture sets have been loaded. Load a scene using PBR materials to edit them here.");
 		if (selectedPbrTextureSet != nullptr) {
 			bool wasEdited = false;
 			if (Util::Widgets::SliderFloat("Displacement Scale", &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
@@ -252,7 +258,7 @@ void TruePBR::DrawSettings()
 				wasEdited = true;
 			}
 			if (ImGui::TreeNodeEx("Subsurface")) {
-				if (ImGui::ColorPicker3("Subsurface Color", &selectedPbrTextureSet->subsurfaceColor.red)) {
+				if (Util::Widgets::ColorEdit3("Subsurface Color", &selectedPbrTextureSet->subsurfaceColor.red)) {
 					wasEdited = true;
 				}
 				if (Util::Widgets::SliderFloat("Subsurface Opacity", &selectedPbrTextureSet->subsurfaceOpacity, 0.f, 1.f, "%.3f")) {
@@ -262,7 +268,7 @@ void TruePBR::DrawSettings()
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNodeEx("Coat")) {
-				if (ImGui::ColorPicker3("Coat Color", &selectedPbrTextureSet->coatColor.red)) {
+				if (Util::Widgets::ColorEdit3("Coat Color", &selectedPbrTextureSet->coatColor.red)) {
 					wasEdited = true;
 				}
 				if (Util::Widgets::SliderFloat("Coat Strength", &selectedPbrTextureSet->coatStrength, 0.f, 1.f, "%.3f")) {
@@ -315,7 +321,7 @@ void TruePBR::DrawSettings()
 			}
 			if (selectedPbrTextureSet != nullptr) {
 				if (ImGui::Button("Save")) {
-					PNState::SavePBRRecordConfig("Data\\PBRTextureSets", selectedPbrTextureSetName, *selectedPbrTextureSet);
+					feedback.error = !PNState::SavePBRRecordConfig("Data\\PBRTextureSets", selectedPbrTextureSetName, *selectedPbrTextureSet, feedback.message);
 				}
 			}
 		}
@@ -326,6 +332,8 @@ void TruePBR::DrawSettings()
 			selectedPbrMaterialObject = &pbrMaterialObjects[selectedPbrMaterialObjectName];
 		}
 
+		if (pbrMaterialObjects.empty())
+			MenuUI::DetailNote("No authored PBR material objects have been loaded. Load a scene using PBR materials to edit them here.");
 		if (selectedPbrMaterialObject != nullptr) {
 			bool wasEdited = false;
 			if (ImGui::TreeNodeEx("Base Color Scale")) {
@@ -334,55 +342,14 @@ void TruePBR::DrawSettings()
 					wasEdited = true;
 				}
 
-				const float indent = ImGui::GetCursorPosX();
-				const float defaultItemWidth = ImGui::CalcItemWidth();
-				const float letterColWidth = ImGui::CalcTextSize("Green").x + ImGui::GetStyle().ItemSpacing.x;
-				const float sliderStartX = indent + letterColWidth;
-				const float sliderWidth = defaultItemWidth - (sliderStartX - ImGui::GetStyle().ItemSpacing.x);
-				const float colorLabelStartX = sliderStartX - ImGui::GetStyle().ItemSpacing.x - letterColWidth;
-
-				ImGui::AlignTextToFramePadding();
-				ImGui::SetCursorPosX(colorLabelStartX);
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-				ImGui::Text("Red");
-				ImGui::PopStyleColor();
-				ImGui::SameLine(sliderStartX);
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.4f, 0.1f, 0.1f, 0.6f));
-				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-				ImGui::SetNextItemWidth(sliderWidth);
-				if (Util::Widgets::SliderFloat("##BaseColorScaleR", &selectedPbrMaterialObject->baseColorScale[0], 0.f, 10.f, "%.3f")) {
-					wasEdited = true;
+				{
+					ImGui::PushID("BaseColorScale");
+					const auto restoreId = SKSE::stl::scope_exit([] { ImGui::PopID(); });
+					for (int channel = 0; channel < 3; ++channel) {
+						constexpr const char* names[] = { "Red", "Green", "Blue" };
+						wasEdited |= Util::Widgets::SliderFloat(names[channel], &selectedPbrMaterialObject->baseColorScale[channel], 0.f, 10.f, "%.3f");
+					}
 				}
-				ImGui::PopStyleColor(2);
-
-				ImGui::AlignTextToFramePadding();
-				ImGui::SetCursorPosX(colorLabelStartX);
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
-				ImGui::Text("Green");
-				ImGui::PopStyleColor();
-				ImGui::SameLine(sliderStartX);
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.4f, 0.1f, 0.6f));
-				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.3f, 0.9f, 0.3f, 1.0f));
-				ImGui::SetNextItemWidth(sliderWidth);
-				if (Util::Widgets::SliderFloat("##BaseColorScaleG", &selectedPbrMaterialObject->baseColorScale[1], 0.f, 10.f, "%.3f")) {
-					wasEdited = true;
-				}
-				ImGui::PopStyleColor(2);
-
-				ImGui::AlignTextToFramePadding();
-				ImGui::SetCursorPosX(colorLabelStartX);
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.3f, 0.9f, 1.0f));
-				ImGui::Text("Blue");
-				ImGui::PopStyleColor();
-				ImGui::SameLine(sliderStartX);
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.4f, 0.6f));
-				ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.3f, 0.3f, 0.9f, 1.0f));
-				ImGui::SetNextItemWidth(sliderWidth);
-				if (Util::Widgets::SliderFloat("##BaseColorScaleB", &selectedPbrMaterialObject->baseColorScale[2], 0.f, 10.f, "%.3f")) {
-					wasEdited = true;
-				}
-				ImGui::PopStyleColor(2);
-
 				ImGui::TreePop();
 			}
 			if (Util::Widgets::SliderFloat("Roughness", &selectedPbrMaterialObject->roughness, 0.f, 1.f, "%.3f")) {
@@ -420,13 +387,15 @@ void TruePBR::DrawSettings()
 			}
 			if (selectedPbrMaterialObject != nullptr) {
 				if (ImGui::Button("Save")) {
-					PNState::SavePBRRecordConfig("Data\\PBRMaterialObjects", selectedPbrMaterialObjectName, *selectedPbrMaterialObject);
+					feedback.error = !PNState::SavePBRRecordConfig("Data\\PBRMaterialObjects", selectedPbrMaterialObjectName, *selectedPbrMaterialObject, feedback.message);
 				}
 			}
 		}
 	}
 
 	ImGui::EndDisabled();
+	if (page.Is("textures") || page.Is("objects"))
+		feedback.Draw();
 
 	if (page.Is("diagnostics")) {
 		Util::Widgets::Checkbox("Enable verbose JSON logging", &enableVerboseJsonLogging);

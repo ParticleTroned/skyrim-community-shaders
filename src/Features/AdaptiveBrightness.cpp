@@ -1469,7 +1469,7 @@ namespace
 		                                 std::min(280.0f * Util::GetUIScale(), std::max(120.0f, availableWidth * 0.45f));
 		const float inputWidth = std::clamp(requestedWidth, 1.0f, availableWidth);
 		ImGui::SetNextItemWidth(inputWidth);
-		ImGui::InputTextWithHint(a_id, "Preset name", &a_name);
+		Util::Widgets::InputTextWithHint(a_id, "Preset name", &a_name);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextWrapped("Export path: %s", a_exportPath.string().c_str());
 			if (a_alternateImportPath)
@@ -1663,7 +1663,7 @@ void AdaptiveBrightness::DrawProfileControlTabs(
 	bool a_globalLayer,
 	bool a_allowEdits)
 {
-	if (ImGui::BeginTabBar(a_tabBarID, ImGuiTabBarFlags_None)) {
+	if (ImGui::BeginTabBar(a_tabBarID, ImGuiTabBarFlags_FittingPolicyScroll)) {
 		const auto drawTab = [&](const char* a_label, const auto& a_drawControls) {
 			if (!ImGui::BeginTabItem(a_label))
 				return;
@@ -2020,7 +2020,6 @@ void AdaptiveBrightness::DrawContextProfilePresetControls(
 	const auto inputLabel = std::format("{} profile", GetContextScopeName(a_scope));
 	DrawPresetNameInput(inputLabel.c_str(), "##ContextProfilePresetName", presetName, presetPath);
 
-	ImGui::SameLine();
 	ImGui::BeginDisabled(!a_locationOverride);
 	if (ImGui::Button("Export Profile") && a_locationOverride)
 		ExportContextProfile(a_scope, a_target, *a_locationOverride);
@@ -2028,7 +2027,8 @@ void AdaptiveBrightness::DrawContextProfilePresetControls(
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Export the current %s profile to JSON.", GetContextScopeName(a_scope));
 
-	ImGui::SameLine();
+	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Profile Import Profile").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
+		ImGui::SameLine();
 	ImGui::BeginDisabled(!a_allowEdits);
 	if (ImGui::Button("Import Profile"))
 		ImportContextProfile(a_scope, a_target);
@@ -2478,12 +2478,12 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			}
 
 			ImGui::TableSetColumnIndex(4);
-			if (ImGui::SmallButton(a_allowEdits ? "Edit" : "View")) {
+			if (ImGui::Button(a_allowEdits ? "Edit" : "View")) {
 				selectedLocationOverrideKey = locationOverride.key;
 			}
 			ImGui::SameLine();
 			ImGui::BeginDisabled(locationOverride.cocCode.empty());
-			if (ImGui::SmallButton("Copy")) {
+			if (ImGui::Button("Copy")) {
 				const auto command = std::format("coc {}", locationOverride.cocCode);
 				ImGui::SetClipboardText(command.c_str());
 			}
@@ -2492,7 +2492,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 				ImGui::Text("Copy the COC command saved with this override.");
 			}
 			ImGui::BeginDisabled(!a_allowEdits);
-			if (ImGui::SmallButton("Delete")) {
+			if (ImGui::Button("Delete")) {
 				deleteIndex = overrideIndex;
 			}
 			ImGui::EndDisabled();
@@ -2538,7 +2538,6 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 	const auto overridePath = GetLocationOverrideLiveOverridePath(locationOverridePresetName);
 	DrawPresetNameInput("Override preset", "##LocationOverridePresetName", locationOverridePresetName, presetPath, &overridePath);
 
-	ImGui::SameLine();
 	ImGui::BeginDisabled(settings.locationOverrides.empty());
 	if (ImGui::Button("Export Overrides")) {
 		ExportLocationOverrides();
@@ -2548,7 +2547,8 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 		ImGui::Text("Export the saved override list.");
 	}
 
-	ImGui::SameLine();
+	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Overrides Import Overrides").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
+		ImGui::SameLine();
 	if (ImGui::Button("Import Overrides")) {
 		ImportLocationOverrides();
 	}
@@ -2572,7 +2572,6 @@ void AdaptiveBrightness::DrawFullPresetControls()
 	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);
 	DrawPresetNameInput("Full preset", "##FullPresetName", fullPresetName, presetPath);
 
-	ImGui::SameLine();
 	if (ImGui::Button("Export Full")) {
 		ExportFullPreset();
 	}
@@ -2580,7 +2579,8 @@ void AdaptiveBrightness::DrawFullPresetControls()
 		ImGui::Text("Export the global adjustment layer, exterior timing, the five profiles, and all saved overrides.");
 	}
 
-	ImGui::SameLine();
+	if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Export Full Import Full").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
+		ImGui::SameLine();
 	if (ImGui::Button("Import Full")) {
 		ImportFullPreset();
 	}

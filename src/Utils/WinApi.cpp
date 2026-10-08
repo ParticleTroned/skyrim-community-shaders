@@ -1,8 +1,11 @@
 #include "WinApi.h"
+#include "StringUtils.h"
 
 #include "ShaderCompilationSchedulingPolicy.h"
 
 #include <ShlObj.h>
+#include <format>
+#include <shellapi.h>
 
 namespace Util
 {
@@ -17,6 +20,21 @@ namespace Util
 			CoTaskMemFree(path);
 			return result;
 		}
+	}
+
+	bool OpenInShell(const std::filesystem::path& path, std::string& error)
+	{
+		if (path.empty()) {
+			error = "No file or directory was specified.";
+			return false;
+		}
+		const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+		if (result <= 32) {
+			error = std::format("Windows could not open {} (shell error {}).", PathToUtf8(path), result);
+			return false;
+		}
+		error.clear();
+		return true;
 	}
 
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath)

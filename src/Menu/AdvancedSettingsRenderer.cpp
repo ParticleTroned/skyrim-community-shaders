@@ -1,5 +1,6 @@
 #include "AdvancedSettingsRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/WinApi.h"
 
 #include <algorithm>
 #include <format>
@@ -83,7 +84,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 
 	// Shader Defines input
 	auto shaderDefines = globals::state->GetShaderDefinesSnapshot()->canonicalText;
-	if (ImGui::InputText("Shader Defines", &shaderDefines)) {
+	if (Util::Widgets::InputText("Shader Defines", &shaderDefines)) {
 		globals::state->SetDefines(shaderDefines);
 	}
 	if (ImGui::IsItemDeactivatedAfterEdit() || (ImGui::IsItemActive() &&
@@ -601,13 +602,15 @@ void AdvancedSettingsRenderer::RenderLoggingControls()
 
 	ImGui::NextColumn();
 
+	static MenuUI::ActionFeedback feedback;
 	// Open Logs button
 	std::filesystem::path logPath = Util::PathHelpers::GetLogPath();
 	if (!logPath.empty() && ImGui::Button("Open Logs", { -1, 0 })) {
-		ShellExecuteA(NULL, "open", logPath.string().c_str(), NULL, NULL, SW_SHOWNORMAL);
+		feedback.error = !Util::OpenInShell(logPath, feedback.message);
 	}
 
 	ImGui::Columns(1);
+	feedback.Draw();
 }
 
 void AdvancedSettingsRenderer::RenderRuntimeDebugControls()
@@ -652,7 +655,7 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 		if (ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, maxHeight), true, ImGuiChildFlags_AutoResizeY)) {
 			Util::Text::Error("Shader Blocking Active");
 			ImGui::SameLine();
-			if (ImGui::SmallButton("Stop Blocking##Section")) {
+			if (ImGui::Button("Stop Blocking##Section")) {
 				shaderCache->DisableShaderBlocking();
 			}
 
@@ -668,7 +671,7 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 
 					// Add button to copy shader info to clipboard
 					ImGui::PushID(shader.key.c_str());
-					if (ImGui::SmallButton("Copy Info##BlockedShader")) {
+					if (ImGui::Button("Copy Info##BlockedShader")) {
 						std::string diskPathStr;
 						diskPathStr.reserve(shader.diskPath.size());
 						for (wchar_t wc : shader.diskPath) {

@@ -399,7 +399,7 @@ void WetnessEffects::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("surface")) {
-		if (Util::Widgets::Checkbox("Enabled", (bool*)&settings.EnableWetnessEffects)) {
+		if (Util::UIntCheckbox("Enabled", settings.EnableWetnessEffects)) {
 			Ripples::UpdateSettings();  // Update cache when settings change
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -420,14 +420,14 @@ void WetnessEffects::DrawSettings()
 	ImGui::Spacing();
 
 	if (page.Is("rain")) {
-		Util::Widgets::Checkbox("Enable Raindrop Effects", (bool*)&settings.EnableRaindropFx);
+		Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 
 		ImGui::BeginDisabled(!settings.EnableRaindropFx);
 
-		Util::Widgets::Checkbox("Enable Splashes", (bool*)&settings.EnableSplashes);
+		Util::UIntCheckbox("Enable Splashes", settings.EnableSplashes);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Enables small splashes of wetness on dry surfaces.");
-		Util::Widgets::Checkbox("Enable Ripples", (bool*)&settings.EnableRipples);
+		Util::UIntCheckbox("Enable Ripples", settings.EnableRipples);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Enables circular ripples on puddles, and to a less extent other wet surfaces");
 
@@ -436,7 +436,7 @@ void WetnessEffects::DrawSettings()
 		                                "Enable Vanilla Ripples - Controlled by Splashes of Storms" :
 		                                "Enable Vanilla Ripples";
 
-		if (Util::Widgets::Checkbox(checkboxLabel.c_str(), (bool*)&settings.EnableVanillaRipples)) {
+		if (Util::UIntCheckbox(checkboxLabel.c_str(), settings.EnableVanillaRipples)) {
 			Ripples::UpdateSettings();  // Update cache when settings change
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -478,23 +478,27 @@ void WetnessEffects::DrawSettings()
 		}
 
 		if (page.Is("rain")) {
-			Util::Widgets::SliderFloat("Strength", &settings.SplashesStrength, 0.f, 2.f, "%.2f");
+			MenuUI::SectionHeading("Splashes");
+			const auto groupDisabled = Util::DisableGuard(settings.EnableSplashes == 0);
+			Util::Widgets::SliderFloat("Strength##Splashes", &settings.SplashesStrength, 0.f, 2.f, "%.2f");
 			Util::Widgets::SliderFloat("Min Radius", &settings.SplashesMinRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("As portion of grid size.");
 			Util::Widgets::SliderFloat("Max Radius", &settings.SplashesMaxRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("As portion of grid size.");
-			Util::Widgets::SliderFloat("Lifetime", &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
+			Util::Widgets::SliderFloat("Lifetime##Splashes", &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
 		}
 
 		if (page.Is("rain")) {
-			Util::Widgets::SliderFloat("Strength", &settings.RippleStrength, 0.f, 2.f, "%.2f");
+			MenuUI::SectionHeading("Ripples");
+			const auto groupDisabled = Util::DisableGuard(settings.EnableRipples == 0);
+			Util::Widgets::SliderFloat("Strength##Ripples", &settings.RippleStrength, 0.f, 2.f, "%.2f");
 			Util::Widgets::SliderFloat("Radius", &settings.RippleRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("As portion of grid size.");
 			Util::Widgets::SliderFloat("Breadth", &settings.RippleBreadth, 0.f, 1.f, "%.2f");
-			Util::Widgets::SliderFloat("Lifetime", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
+			Util::Widgets::SliderFloat("Lifetime##Ripples", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
 		}
 
 		ImGui::EndDisabled();
@@ -554,7 +558,7 @@ void WetnessEffects::DrawSettings()
 	ImGui::Spacing();
 	auto& weatherPicker = globals::features::weatherPicker;
 	if (weatherPicker.loaded) {
-		if (ImGui::SmallButton("Open Weather Picker")) {
+		if (ImGui::Button("Open Weather Picker")) {
 			Menu::GetSingleton()->SelectFeatureMenu(weatherPicker.GetShortName());
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {

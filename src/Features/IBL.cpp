@@ -218,7 +218,8 @@ void IBL::DrawSettings()
 		{
 			int dalcMode = static_cast<int>(settings.DALCMode);
 			auto _ = Util::DisableGuard(IsDALCModeDisabled(settings));
-			ImGui::Text("DALC Mode");
+			if (Util::Widgets::Combo("DALC Mode", &dalcMode, "Luminance Ratio\0Color Ratio\0DALC + Sky\0DALC + Sky (Directional)\0"))
+				settings.DALCMode = static_cast<uint>(dalcMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"How the DALC-to-IBL brightness ratio is computed:\n"
@@ -227,29 +228,10 @@ void IBL::DrawSettings()
 					"DALC + Sky: Uses vanilla ambient as base, sky IBL on top. Skylighting only affects sky.\n"
 					"DALC + Sky (Directional): Same, but Skylighting also dims vanilla ambient per-direction.");
 			}
-			if (ImGui::BeginTable("##IBLDALCMode", 2, ImGuiTableFlags_SizingStretchSame)) {
-				ImGui::TableNextColumn();
-				if (Util::Widgets::RadioButton("Luminance Ratio", &dalcMode, static_cast<int>(kDALCLuminanceRatioMode))) {
-					settings.DALCMode = static_cast<uint>(dalcMode);
-				}
-				ImGui::TableNextColumn();
-				if (Util::Widgets::RadioButton("DALC + Sky", &dalcMode, static_cast<int>(kDALCPlusSkyMode))) {
-					settings.DALCMode = static_cast<uint>(dalcMode);
-				}
-				ImGui::TableNextColumn();
-				if (Util::Widgets::RadioButton("Color Ratio", &dalcMode, static_cast<int>(kDALCColorRatioMode))) {
-					settings.DALCMode = static_cast<uint>(dalcMode);
-				}
-				ImGui::TableNextColumn();
-				if (Util::Widgets::RadioButton("DALC + Sky (Directional)", &dalcMode, static_cast<int>(kDALCPlusSkyDirectionalMode))) {
-					settings.DALCMode = static_cast<uint>(dalcMode);
-				}
-				ImGui::EndTable();
-			}
 		}
 	}
 	if (page.Is("colour")) {
-		Util::Widgets::Checkbox("Use Static IBL For Out-of-World Objects", (bool*)&settings.UseStaticIBL);
+		Util::UIntCheckbox("Use Static IBL For Out-of-World Objects", settings.UseStaticIBL);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Uses pre-baked static IBL cubemap textures for objects rendered outside the game world (e.g. inventory items, loading screens).");
 		}
@@ -258,7 +240,7 @@ void IBL::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Blends the fog color toward the IBL ambient color.\n0 = vanilla fog, 1 = fog fully tinted by IBL.");
 		}
-		Util::Widgets::Checkbox("Preserve Fog Luminance", (bool*)&settings.PreserveFogLuminance);
+		Util::UIntCheckbox("Preserve Fog Luminance", settings.PreserveFogLuminance);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("When Fog Mix is active, rescales the IBL-tinted fog to keep the original fog brightness.\nPrevents fog from becoming too bright or too dark.");
 		}

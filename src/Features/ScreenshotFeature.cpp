@@ -1960,8 +1960,29 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 	subrect.SaveSettings(a_json);
 }
 
+namespace
+{
+	MenuUI::ActionFeedback CaptureRequestFeedback(const nlohmann::json& response, const char* success)
+	{
+		const auto errorText = [](const nlohmann::json& error) {
+			if (error.is_object())
+				return error.value("message", std::string("Capture service could not complete this request."));
+			return error.is_string() ? error.get<std::string>() : std::string("Capture service could not complete this request.");
+		};
+		if (!response.value("ok", false) || !response.contains("result"))
+			return { errorText(response.value("error", nlohmann::json{})), true };
+		const auto& result = response.at("result");
+		const auto state = result.value("state", std::string{});
+		if (state == "failed" || state == "failed_partial")
+			return { errorText(result.value("error", nlohmann::json{})), true };
+		return { success };
+	}
+}
+
 void ScreenshotFeature::DrawSettings()
 {
+	static MenuUI::ActionFeedback folderFeedback;
+	static MenuUI::ActionFeedback captureFeedback;
 	const bool usesFixedEyeFraming = globals::game::isVR && IsFramedCapture(vrCaptureSource);
 
 	MenuUI::SettingsPage page("ScreenshotFeature", {
@@ -2027,10 +2048,9 @@ void ScreenshotFeature::DrawSettings()
 
 		ImGui::BeginDisabled(!IsRuntimeEnabled());
 		if (ImGui::Button("Take Screenshot Now")) {
-			RequestUiCapture();
+			captureFeedback = CaptureRequestFeedback(RequestApiCapture("ui"), "Screenshot requested.");
 		}
 		ImGui::EndDisabled();
-		ImGui::SameLine();
 
 		if (usesFixedEyeFraming) {
 			bool fixedCropDisabled = false;
@@ -2057,17 +2077,15 @@ void ScreenshotFeature::DrawSettings()
 
 		char buf[260];
 		strncpy_s(buf, sizeof(buf), screenshotPath.c_str(), _TRUNCATE);
-		ImGui::PushItemWidth(-FLT_MIN - 120.0f);  // leave room for Open button + label
-		if (ImGui::InputText("##ScreenshotFolder", buf, sizeof(buf))) {
+		if (Util::Widgets::InputText("Folder##ScreenshotFolder", buf, sizeof(buf))) {
 			try {
 				(void)ResolveCapturePath(buf, false);
 				screenshotPath = buf;
 			} catch (const std::exception& e) {
 				logger::warn("Rejected unsafe screenshot folder: {}", e.what());
+				folderFeedback = { e.what(), true };
 			}
 		}
-		ImGui::PopItemWidth();
-		ImGui::SameLine();
 		const bool canOpen = !screenshotPath.empty();
 		ImGui::BeginDisabled(!canOpen);
 		if (ImGui::Button("Open")) {
@@ -2075,19 +2093,25 @@ void ScreenshotFeature::DrawSettings()
 				const auto resolved = ResolveCapturePath(screenshotPath, false);
 				std::error_code ec;
 				std::filesystem::create_directories(resolved, ec);
-				ShellExecuteW(nullptr, L"open", resolved.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+				if (ec)
+					throw std::filesystem::filesystem_error("Could not create capture directory", resolved, ec);
+				if (!Util::OpenInShell(resolved, folderFeedback.message))
+					throw std::runtime_error(folderFeedback.message);
+				folderFeedback = { std::format("Opened {}.", Util::PathToUtf8(resolved)) };
 			} catch (const std::exception& e) {
 				logger::error("Could not open screenshot directory: {}", e.what());
+				folderFeedback = { e.what(), true };
 			}
 		}
 		ImGui::EndDisabled();
-		ImGui::SameLine();
-		ImGui::Text("Folder");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Relative paths resolve beneath Pictures\\Community Shaders.");
 			ImGui::Text("Absolute paths (e.g. D:\\Captures) save there directly.");
 		}
 	}
+
+	if (page.Is("output"))
+		folderFeedback.Draw();
 
 	static std::atomic_uint64_t sequenceCommand{ 1 };
 	const auto now = std::chrono::steady_clock::now();
@@ -2102,14 +2126,20 @@ void ScreenshotFeature::DrawSettings()
 		});
 		if (response.value("ok", false) && response.contains("result")) {
 			const auto state = response["result"].value("state", std::string{});
-			if (IsTerminalCaptureState(state))
+			if (IsTerminalCaptureState(state)) {
+				captureFeedback = CaptureRequestFeedback(response, state == "cancelled" ? "Frame capture stopped." : "Frame capture complete.");
+				uiSequenceRequestId.clear();
+			}
+		} else {
+			captureFeedback = CaptureRequestFeedback(response, "");
+			if (response.value("error", nlohmann::json::object()).value("code", std::string{}) == "request_not_found")
 				uiSequenceRequestId.clear();
 		}
 	}
 
 	if (page.Is("sequence")) {
 		MenuUI::SectionHeading("Lossless Frame Sequence");
-		ImGui::TextWrapped("Sequence capture uses Screenshot API v1. Video composition and audio are intentionally outside CSX.");
+		ImGui::TextWrapped("Save a timed sequence of lossless images. Video composition and audio are not included.");
 		int sequenceFrames = static_cast<int>(sequenceDefaults.frameCount);
 		if (Util::Widgets::SliderInt("Frames", &sequenceFrames, 1, 10000))
 			sequenceDefaults.frameCount = static_cast<uint32_t>(sequenceFrames);
@@ -2131,37 +2161,40 @@ void ScreenshotFeature::DrawSettings()
 
 		char sequencePath[260];
 		strncpy_s(sequencePath, sizeof(sequencePath), frameCapturePath.c_str(), _TRUNCATE);
-		ImGui::PushItemWidth(-FLT_MIN - 120.0f);
-		if (ImGui::InputText("##FrameCaptureFolder", sequencePath, sizeof(sequencePath))) {
+		if (Util::Widgets::InputText("Folder##FrameCaptureFolder", sequencePath, sizeof(sequencePath))) {
 			try {
 				(void)ResolveCapturePath(sequencePath, true);
 				frameCapturePath = sequencePath;
 			} catch (const std::exception& e) {
 				logger::warn("Rejected unsafe frame-capture folder: {}", e.what());
+				folderFeedback = { e.what(), true };
 			}
 		}
-		ImGui::PopItemWidth();
-		ImGui::SameLine();
 		ImGui::BeginDisabled(frameCapturePath.empty());
 		if (ImGui::Button("Open##FrameCaptureFolder")) {
 			try {
 				const auto resolved = ResolveCapturePath(frameCapturePath, true);
 				std::error_code ec;
 				std::filesystem::create_directories(resolved, ec);
-				ShellExecuteW(nullptr, L"open", resolved.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+				if (ec)
+					throw std::filesystem::filesystem_error("Could not create capture directory", resolved, ec);
+				if (!Util::OpenInShell(resolved, folderFeedback.message))
+					throw std::runtime_error(folderFeedback.message);
+				folderFeedback = { std::format("Opened {}.", Util::PathToUtf8(resolved)) };
 			} catch (const std::exception& e) {
 				logger::error("Could not open frame-capture directory: {}", e.what());
+				folderFeedback = { e.what(), true };
 			}
 		}
 		ImGui::EndDisabled();
-		ImGui::SameLine();
-		ImGui::Text("Folder");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Relative paths resolve beneath Videos\\Community Shaders.");
 			ImGui::Text("Absolute paths save there directly.");
 		}
 
-		ImGui::BeginDisabled(!IsRuntimeEnabled());
+		folderFeedback.Draw();
+
+		ImGui::BeginDisabled(!IsRuntimeEnabled() && uiSequenceRequestId.empty());
 		if (uiSequenceRequestId.empty()) {
 			if (ImGui::Button("Start Frame Capture")) {
 				auto capture = BuildCaptureDescriptor(frameCaptureEye, frameCaptureUsePng, false);
@@ -2180,8 +2213,12 @@ void ScreenshotFeature::DrawSettings()
 									  { "packaging", { { "frameManifest", true }, { "previewVideo", { { "requested", false } } } } },
 								  } },
 				});
-				if (response.value("ok", false) && response.contains("result"))
+				captureFeedback = CaptureRequestFeedback(response, "Frame capture started.");
+				if (!captureFeedback.error) {
 					uiSequenceRequestId = response["result"].value("requestId", std::string{});
+					if (uiSequenceRequestId.empty())
+						captureFeedback = { "Frame capture returned no request identifier. Check capture service availability.", true };
+				}
 			}
 		} else if (ImGui::Button("Stop Frame Capture")) {
 			const auto response = CSX::Api::DispatchScreenshotServiceRequest({
@@ -2191,12 +2228,16 @@ void ScreenshotFeature::DrawSettings()
 				{ "commandId", std::format("stop:{}:{}", GetTickCount64(), sequenceCommand.fetch_add(1, std::memory_order_relaxed)) },
 				{ "requestId", uiSequenceRequestId },
 			});
+			captureFeedback = CaptureRequestFeedback(response, "Frame capture is stopping.");
 			if (response.value("ok", false) && response.contains("result") &&
 				IsTerminalCaptureState(response["result"].value("state", std::string{})))
 				uiSequenceRequestId.clear();
 		}
 		ImGui::EndDisabled();
 	}
+
+	if (page.Is("source") || page.Is("sequence"))
+		captureFeedback.Draw();
 
 	if (page.Is("framing")) {
 		auto& menuSettings = Menu::GetSingleton()->GetSettings();

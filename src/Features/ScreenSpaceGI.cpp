@@ -395,7 +395,7 @@ void ScreenSpaceGI::DrawSettings()
 												   { "coverage", "Coverage", "Choose the effects and area to process.", "Effects and processing area", true, true, nullptr },
 												   { "quality", "Quality", "Choose the detail and processing budget.", "Resolution and sample budget", true, true, "Balance detail and appearance" },
 												   { "look", "Look", "Refine shadows and lighting.", "Shadow strength and lighting", true, true, nullptr },
-												   { "indirect", "Indirect light", "Refine bounced-light colour and intensity.", "Bounced-light colour", true, true, "Refine indirect light" },
+												   { "indirect", "Indirect light", "Refine bounced-light colour and intensity.", "Bounced-light colour", true, true, "Refine indirect light", nullptr, nullptr, settings.EnableGI },
 												   { "smoothing", "Smoothing", "Reduce noise after choosing the appearance.", "Temporal and spatial smoothing", true, true, nullptr },
 												   { "diagnostics", "Diagnostics", "Inspect diagnostic buffer views.", "Diagnostic buffer views", true, false, nullptr },
 											   });
@@ -449,73 +449,32 @@ void ScreenSpaceGI::DrawSettings()
 			MenuUI::SectionHeading("SSGI Effects & Resources");
 
 			const int previousResourceProfile = settings.ResourceProfile;
-			if (ImGui::BeginTable("SSGIEffectsResources", 3, ImGuiTableFlags_SizingFixedFit)) {
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				{
-					auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
-					if (Util::Widgets::RadioButton("AO-only", !settings.EnableGI)) {
-						DisableGIEffects(settings);
-						recompileFlag = true;
-					}
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("AO-only mode disables GI/IL rendering.");
-				}
-
-				ImGui::TableNextColumn();
-				{
-					auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
-					if (Util::Widgets::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly))
-						settings.ResourceProfile = kResourceProfileAOOnly;
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Keeps all AO modes available but does not allocate IL/GI/specular buffers.");
-				}
-
-				ImGui::TableNextColumn();
-				{
-					auto aoInteriorsGuard = Util::DisableGuard(!settings.Enabled);
-					Util::Widgets::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Run AO only in interiors to improve exterior performance.");
-				}
-
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				{
-					auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
-					if (Util::Widgets::RadioButton("AO + GI", settings.EnableGI)) {
+			{
+				MenuUI::DetailGrid controls("SSGIEffectsResources");
+				controls.Next();
+				bool enableGI = settings.EnableGI;
+				if (Util::Widgets::Checkbox("Enable indirect lighting", &enableGI)) {
+					if (enableGI) {
 						settings.ResourceProfile = kResourceProfileFullGI;
 						settings.EnableGI = true;
-						recompileFlag = true;
+					} else {
+						DisableGIEffects(settings);
 					}
+					recompileFlag = true;
 				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("AO + GI enables indirect lighting for global illumination.");
-				}
-
-				ImGui::TableNextColumn();
-				{
-					auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
-					if (Util::Widgets::RadioButton("AO + GI Resources", settings.ResourceProfile == kResourceProfileFullGI))
-						settings.ResourceProfile = kResourceProfileFullGI;
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Keeps IL/specular buffers resident so GI can be toggled at runtime.");
-				}
-
-				ImGui::TableNextColumn();
-				{
-					auto ilInteriorsGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
-					Util::Widgets::Checkbox("GI Interiors Only", &settings.ILInteriorsOnly);
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("Run indirect lighting only in interiors to improve exterior performance.");
-				}
-
-				ImGui::EndTable();
+				Util::AddTooltip("Adds bounced light to ambient shadows. Turning it off keeps ambient shadows enabled.");
+				controls.Next();
+				bool keepGIResources = settings.ResourceProfile == kResourceProfileFullGI;
+				if (Util::Widgets::Checkbox("Keep GI resources resident", &keepGIResources))
+					settings.ResourceProfile = keepGIResources ? kResourceProfileFullGI : kResourceProfileAOOnly;
+				Util::AddTooltip("Keep indirect-light buffers allocated for runtime switching. Turning this off frees them after a restart and disables GI.");
+				controls.Next();
+				Util::Widgets::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
+				Util::AddTooltip("Run ambient shadows only in interiors.");
+				controls.Next();
+				const auto indirectDisabled = Util::DisableGuard(!settings.EnableGI);
+				Util::Widgets::Checkbox("GI Interiors Only", &settings.ILInteriorsOnly);
+				Util::AddTooltip("Run indirect lighting only in interiors.");
 			}
 
 			if (showAdvanced) {
@@ -660,6 +619,8 @@ void ScreenSpaceGI::DrawSettings()
 		///////////////////////////////
 	}
 	if (page.Is("indirect")) {
+		if (!settings.EnableGI && MenuUI::DetailNote("Indirect-light tuning is inactive while GI is off. Enable indirect lighting in Coverage to use it.", "Open Coverage"))
+			MenuUI::SettingsPage::Select("ScreenSpaceGI", "coverage");
 		MenuUI::SectionHeading("Visual - IL");
 
 		{
@@ -684,14 +645,12 @@ void ScreenSpaceGI::DrawSettings()
 		{
 			auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-			if (ImGui::BeginTable("denoisers", 2)) {
-				ImGui::TableNextColumn();
+			{
+				MenuUI::DetailGrid denoisers("denoisers");
+				denoisers.Next();
 				recompileFlag |= Util::Widgets::Checkbox("Temporal Denoiser", &settings.EnableTemporalDenoiser);
-
-				ImGui::TableNextColumn();
+				denoisers.Next();
 				Util::Widgets::Checkbox("Blur", &settings.EnableBlur);
-
-				ImGui::EndTable();
 			}
 
 			if (showAdvanced) {

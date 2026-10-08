@@ -1,6 +1,7 @@
 #include "HomePageRenderer.h"
 #include "PCH.h"
 #include "SettingsPage.h"
+#include "Utils/WinApi.h"
 
 #include <imgui.h>
 
@@ -92,6 +93,7 @@ void HomePageRenderer::RenderHomePage()
 
 void HomePageRenderer::RenderWelcomeSection()
 {
+	static MenuUI::ActionFeedback feedback;
 	const float scale = Util::GetUIScale();
 	auto menu = Menu::GetSingleton();
 	const auto& theme = menu->GetTheme();
@@ -230,7 +232,7 @@ void HomePageRenderer::RenderWelcomeSection()
 		const bool hovered = ImGui::IsItemHovered();
 		const bool hasActiveFlash = Util::IsButtonFlashActive("HomeDiscordButton");
 		if (clicked) {
-			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+			feedback.error = !Util::OpenInShell(DISCORD_URL, feedback.message);
 			Util::TriggerButtonFlash("HomeDiscordButton");
 		}
 		const ImVec2 buttonMin = ImGui::GetItemRectMin();
@@ -261,13 +263,15 @@ void HomePageRenderer::RenderWelcomeSection()
 			ImGui::Text("Open MGO Discord");
 		}
 	} else if (Util::ButtonWithFlash("Discord##HomeDiscordButton", discordButtonSize)) {
-		ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+		feedback.error = !Util::OpenInShell(DISCORD_URL, feedback.message);
 	}
 
 	ImGui::SameLine(0.0f, linkButtonSpacing);
 	if (Util::ButtonWithFlash("GitHub##HomeGitHubButton", ImVec2(githubButtonWidth, linkButtonHeight))) {
-		ShellExecuteA(NULL, "open", GITHUB_URL, NULL, NULL, SW_SHOWNORMAL);
+		feedback.error = !Util::OpenInShell(GITHUB_URL, feedback.message);
 	}
+
+	feedback.Draw();
 
 	// Pop the style var we pushed at the start
 	ImGui::PopStyleVar();
@@ -277,14 +281,17 @@ void HomePageRenderer::RenderWelcomeSection()
 void HomePageRenderer::RenderCacheMismatchSection()
 {
 	auto* shaderCache = globals::shaderCache;
-	if (!shaderCache || (!shaderCache->IsDiskCacheHeld() &&
-							!shaderCache->HasFeatureSetChanges() &&
-							!shaderCache->HasFeatureSetRevertPending() &&
-							!shaderCache->HasPreviousDiskCache()))
+	if (!shaderCache) {
+		Util::Text::WrappedWarning("Shader cache status is not available yet.");
 		return;
+	}
+	if (!shaderCache->IsDiskCacheHeld() && !shaderCache->HasFeatureSetChanges() &&
+		!shaderCache->HasFeatureSetRevertPending() && !shaderCache->HasPreviousDiskCache()) {
+		MenuUI::DetailNote("Your shader cache matches the current feature setup. No cache action is needed.");
+		return;
+	}
 
 	auto* menu = Menu::GetSingleton();
-	const ImVec4 warningColor = menu ? menu->GetTheme().StatusPalette.Warning : ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
 	const bool featureSetChanged = shaderCache->HasFeatureSetChanges();
 	const bool revertPending = shaderCache->HasFeatureSetRevertPending();
 	const bool featureSetCacheBackedUp = shaderCache->HasFeatureSetCacheBackup();
@@ -293,11 +300,7 @@ void HomePageRenderer::RenderCacheMismatchSection()
 	const bool cacheHeld = shaderCache->IsDiskCacheHeld() && !featureSetChanged && !revertPending;
 	const bool featureChangeHeld = shaderCache->IsDiskCacheHeld() && featureSetChanged && !featureSetCacheBackedUp;
 
-	ImGui::PushStyleColor(ImGuiCol_Text, warningColor);
-	const bool headerOpen = ImGui::CollapsingHeader("Shader Cache Changes");
-	ImGui::PopStyleColor();
-	if (!headerOpen)
-		return;
+	MenuUI::SectionHeading("Shader Cache Changes");
 
 	if (revertPending) {
 		const ImVec4 restartColor = menu ? menu->GetTheme().StatusPalette.RestartNeeded : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);

@@ -89,3 +89,37 @@ extract_between("${source}"
     "\tstd::string editorGroup"
     "\n}\n\nnamespace MenuUI"
     "settings_stabilizer_navigation_under_test.h")
+
+# Exercise complete material-page draw paths with only game services substituted.
+file(READ "${PROJECT_ROOT}/src/Utils/UI.cpp" source)
+extract_between("${source}" "	bool UIntCheckbox(" "
+	namespace" "settings_uint_checkbox_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Features/FoliageLighting.cpp" source)
+extract_between("${source}" "void FoliageLighting::DrawFoliageScatteringSetting()" "void FoliageLighting::DrawPerformanceSettings" "settings_foliage_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Features/FoliageLighting.h" source)
+extract_between("${source}" "	struct alignas(16) Settings" "	STATIC_ASSERT_ALIGNAS_16" "settings_foliage_fields_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Features/SubsurfaceScattering.cpp" source)
+extract_between("${source}" "	void DrawHumanSkinControls(" "
+	void ApplyClampedHumanSkinControls(" "settings_skin_controls_under_test.h")
+extract_between("${source}" "void SubsurfaceScattering::DrawSettings()" "void SubsurfaceScattering::DrawPerformanceSettings" "settings_skin_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Features/SubsurfaceScattering.h" source)
+extract_between("${source}" "	struct DiffusionProfile" "
+	float CharacterLightingStrengthOriginal" "settings_skin_fields_under_test.h")
+
+file(READ "${PROJECT_ROOT}/src/Utils/WinApi.cpp" source)
+extract_between("${source}" "	bool OpenInShell(" "
+	std::optional<REL::Version>" "settings_shell_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotFeature.cpp" source)
+extract_between("${source}" "	MenuUI::ActionFeedback CaptureRequestFeedback(" "
+}
+
+void ScreenshotFeature::DrawSettings()" "settings_capture_feedback_under_test.h")
+
+file(READ "${PROJECT_ROOT}/src/Menu/FeatureListRenderer.cpp" source)
+string(FIND "${source}" "void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog()" warning_start)
+if(warning_start LESS 0)
+    message(FATAL_ERROR "Constraint warning dialog is missing")
+endif()
+string(SUBSTRING "${source}" ${warning_start} -1 warning_body)
+string(REPLACE "ImGui::Selectable(" "TrackedSelectable(" warning_body "${warning_body}")
+file(WRITE "${OUTPUT_DIRECTORY}/settings_constraint_warning_under_test.h" "${warning_body}")

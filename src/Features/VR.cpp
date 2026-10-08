@@ -1324,44 +1324,18 @@ void VR::DrawSettings()
 				}
 			}
 
-			// Handle ENTER key to accept combo
-			if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
-				applyRecordedCombo();
-
-				// Reset recording state
-				this->isCapturingCombo = false;
-				this->currentComboType = VR::ComboType::None;
-				this->currentComboName = nullptr;
-				this->recordedCombo.clear();
-				this->comboStartTime = 0.0;
-				recordingButtonControllers.clear();
-				ImGui::CloseCurrentPopup();
+			bool accept = false;
+			{
+				Util::DisableGuard disabled(this->recordedCombo.empty());
+				accept = ImGui::Button("Use combo");
 			}
-
-			// Handle ESC key to cancel
-			if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-				// Reset recording state
-				this->isCapturingCombo = false;
-				this->currentComboType = VR::ComboType::None;
-				this->currentComboName = nullptr;
-				this->recordedCombo.clear();
-				this->comboStartTime = 0.0;
-				recordingButtonControllers.clear();
-				ImGui::CloseCurrentPopup();
-			}
-
-			// Handle timeout - auto-accept if buttons were pressed, auto-cancel if not
-			if (remainingTime <= 0.0) {
-				applyRecordedCombo();
-				// Auto-cancel if no buttons were pressed (do nothing, just close)
-
-				// Reset recording state
-				this->isCapturingCombo = false;
-				this->currentComboType = VR::ComboType::None;
-				this->currentComboName = nullptr;
-				this->recordedCombo.clear();
-				this->comboStartTime = 0.0;
-				recordingButtonControllers.clear();
+			ImGui::SameLine();
+			const bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape);
+			accept |= ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || remainingTime <= 0.0;
+			if (accept || cancel) {
+				if (!cancel)
+					applyRecordedCombo();
+				ResetComboRecordingState();
 				ImGui::CloseCurrentPopup();
 			}
 		}
@@ -2436,9 +2410,7 @@ namespace
 		ImGui::Separator();
 		// Combo box for selecting which combo to record
 		static int selectedComboIndex = 0;
-		ImGui::Text("Select Combo to Record:");
-		ImGui::SameLine();
-		if (Util::Widgets::Combo("##ComboSelector", &selectedComboIndex, comboTypes.data(), static_cast<int>(comboTypes.size()))) {
+		if (Util::Widgets::Combo("Action to record##ComboSelector", &selectedComboIndex, comboTypes.data(), static_cast<int>(comboTypes.size()))) {
 			vr.ResetComboRecordingState();
 		}
 		auto& selectedConfig = keyBindingConfigs[static_cast<size_t>(selectedComboIndex)];
@@ -2452,7 +2424,8 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Start recording a controller combination for the selected action.");
 		}
-		ImGui::SameLine();
+		if (ImGui::GetContentRegionAvail().x >= ImGui::CalcTextSize("Record Selected Combo Unbind Selected Action").x + ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x)
+			ImGui::SameLine();
 		if (ImGui::Button("Unbind Selected Action")) {
 			selectedConfig.combos->clear();
 			vr.ResetComboRecordingState();

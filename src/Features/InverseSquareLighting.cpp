@@ -65,7 +65,7 @@ bool InverseSquareLighting::DrawEnabledCheckbox()
 void InverseSquareLighting::DrawSettings()
 {
 	MenuUI::SettingsPage page("InverseSquareLighting", {
-														   { "appearance", "Lighting", "Choose the lighting response for nearby lights.", "Light falloff and intensity", true, true, "Shape nearby lighting" },
+														   { "appearance", "Lighting", "Enable physically based falloff for nearby lights.", "Nearby light falloff", true, true, "Shape nearby lighting" },
 													   });
 	if (!page.Is("appearance"))
 		return;

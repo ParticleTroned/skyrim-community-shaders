@@ -214,10 +214,9 @@ void VolumetricLighting::DrawGodrayTuningSettings()
 
 void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProfile& profile)
 {
-	if (!ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_DefaultOpen))
-		return;
-
+	MenuUI::SectionHeading(label);
 	ImGui::PushID(label);
+	const auto restoreId = SKSE::stl::scope_exit([] { ImGui::PopID(); });
 	auto drawSlider = [](const char* sliderLabel, float& value, float minValue, float maxValue, const char* tooltip) {
 		Util::Widgets::SliderFloat(sliderLabel, &value, minValue, maxValue, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -235,8 +234,6 @@ void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProf
 	drawSlider("Custom Color Green", profile.CustomColorGreen, 0.0f, 1.0f, "Green channel for custom volumetric color.");
 	drawSlider("Custom Color Blue", profile.CustomColorBlue, 0.0f, 1.0f, "Blue channel for custom volumetric color.");
 	ImGui::EndDisabled();
-	ImGui::PopID();
-	ImGui::TreePop();
 }
 
 void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, TextureSize& customSize, const bool isInterior)

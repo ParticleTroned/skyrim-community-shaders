@@ -57,6 +57,14 @@ namespace MenuUI
 	/** A wrapped explanation using the shared detail-panel style. */
 	bool DetailNote(const char* a_text, const char* a_link = nullptr);
 
+	/** Persistent feedback for a page action; errors remain beside its controls. */
+	struct ActionFeedback
+	{
+		std::string message;
+		bool error = false;
+		void Draw() const;
+	};
+
 	/** Equal columns for related controls, stacking when the panel is narrow. */
 	class DetailGrid
 	{

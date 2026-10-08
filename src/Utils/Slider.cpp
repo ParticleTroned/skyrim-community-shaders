@@ -7,6 +7,7 @@
 #include <cstring>
 #include <format>
 #include <imgui_internal.h>
+#include <imgui_stdlib.h>
 #include <limits>
 #include <optional>
 #include <string>
@@ -103,7 +104,7 @@ namespace Util::Widgets
 		}
 
 		template <class T>
-		bool DrawNumberPad(const char* label, ImGuiDataType type, T* value, T minimum, T maximum, const char* inputFormat, ImGuiSliderFlags flags, bool locked)
+		bool DrawNumberPad(const char* label, ImGuiDataType type, T* value, T minimum, T maximum, const char* inputFormat, ImGuiSliderFlags flags, bool locked, bool showRange = true)
 		{
 			bool entryCommitted = false;
 			// Drafts belong to the widget ID; no pointer to a feature setting outlives this call.
@@ -143,7 +144,8 @@ namespace Util::Widgets
 				ImGui::DataTypeFormatString(lower, IM_ARRAYSIZE(lower), type, &minimum, inputFormat);
 				ImGui::DataTypeFormatString(upper, IM_ARRAYSIZE(upper), type, &maximum, inputFormat);
 				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + keypadWidth);
-				ImGui::TextWrapped("Range: %s to %s", lower, upper);
+				if (showRange)
+					ImGui::TextWrapped("Range: %s to %s", lower, upper);
 				ImGui::PopTextWrapPos();
 				const auto parsed = MenuUI::ParseNumber<T>(draft, minimum, maximum);
 				const ImVec2 actionSize{ (keypadWidth - ImGui::GetStyle().ItemSpacing.x) * .5f, key * .85f };
@@ -403,6 +405,75 @@ namespace Util::Widgets
 		if (!name.empty())
 			Util::AddTooltip(std::format("Turn {} on or off.", name).c_str());
 		return changed;
+	}
+
+	namespace
+	{
+		template <class Draw>
+		bool DrawEntry(const char* label, Draw draw)
+		{
+			ControlStyle style(controlLayout != 0);
+			ControlRow row(label);
+			ImGui::PushID(label);
+			const SKSE::stl::scope_exit restore([] { ImGui::PopID(); });
+			return draw(row.active ? "##Entry" : label);
+		}
+	}
+
+	bool InputText(const char* label, char* text, size_t size, ImGuiInputTextFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::InputText(id, text, size, flags); });
+	}
+
+	bool InputText(const char* label, std::string* text, ImGuiInputTextFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::InputText(id, text, flags); });
+	}
+
+	bool InputTextWithHint(const char* label, const char* hint, char* text, size_t size, ImGuiInputTextFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::InputTextWithHint(id, hint, text, size, flags); });
+	}
+
+	bool InputTextWithHint(const char* label, const char* hint, std::string* text, ImGuiInputTextFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::InputTextWithHint(id, hint, text, flags); });
+	}
+
+	bool InputTextMultiline(const char* label, char* text, size_t size, const ImVec2& fieldSize, ImGuiInputTextFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::InputTextMultiline(id, text, size, fieldSize, flags); });
+	}
+
+	bool InputTextMultiline(const char* label, std::string* text, const ImVec2& fieldSize, ImGuiInputTextFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::InputTextMultiline(id, text, fieldSize, flags); });
+	}
+
+	bool InputDouble(const char* label, double* value, double step, double fastStep, const char* format, ImGuiInputTextFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) {
+			if (!globals::features::vr.IsMenuPointerInHeadset())
+				return ImGui::InputDouble(id, value, step, fastStep, format, flags);
+			const bool locked = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0 || (flags & ImGuiInputTextFlags_ReadOnly) != 0;
+			char formatted[128]{};
+			ImGui::DataTypeFormatString(formatted, IM_ARRAYSIZE(formatted), ImGuiDataType_Double, value, format);
+			if (ImGui::Button(std::format("{}###Entry", formatted).c_str(), { ImGui::CalcItemWidth(), ImGui::GetFrameHeight() }) && !locked)
+				ImGui::OpenPopup("Enter value");
+			Util::AddTooltip("Enter this number using the headset number pad.");
+			return DrawNumberPad(label, ImGuiDataType_Double, value, std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max(), format,
+				ImGuiSliderFlags_NoRoundToFormat, locked, false);
+		});
+	}
+
+	bool ColorEdit3(const char* label, float color[3], ImGuiColorEditFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::ColorEdit3(id, color, flags); });
+	}
+
+	bool ColorEdit4(const char* label, float color[4], ImGuiColorEditFlags flags)
+	{
+		return DrawEntry(label, [&](const char* id) { return ImGui::ColorEdit4(id, color, flags); });
 	}
 
 	bool CheckboxFlags(const char* label, unsigned int* flags, unsigned int mask)

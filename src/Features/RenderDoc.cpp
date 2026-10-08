@@ -140,6 +140,7 @@ void RenderDoc::Load()
 
 void RenderDoc::DrawSettings()
 {
+	static MenuUI::ActionFeedback feedback;
 	MenuUI::SettingsPage page("RenderDoc", {
 											   { "capture", "Capture", "Enable capture, then choose the frames to record.", "Capture activation and frames", true, true, "Choose capture and storage" },
 											   { "storage", "Storage", "Monitor storage and remove old captures.", "Disk usage and cleanup", true, true, nullptr },
@@ -148,6 +149,8 @@ void RenderDoc::DrawSettings()
 
 	if (!page.Is("capture") && !page.Is("storage") && !page.Is("files"))
 		return;
+
+	const auto showFeedback = SKSE::stl::scope_exit([&] { feedback.Draw(); });
 
 	// Track section visibility for intelligent cache refreshing
 	bool isSectionVisible = false;
@@ -162,12 +165,12 @@ void RenderDoc::DrawSettings()
 	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
 
 	if (renderDocCaptureEnabled && !renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.RestartNeeded, "Requires restart to enable RenderDoc capture.");
+		Util::Text::WrappedWarning("Requires restart to enable RenderDoc capture.");
 		return;
 	}
 
 	if (!renderDocCaptureEnabled && renderDocActive) {
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, "Requires restart to disable RenderDoc capture, performance will be severely impacted.");
+		Util::Text::WrappedWarning("Requires restart to disable RenderDoc capture. Capture overhead remains until then.");
 		return;
 	}
 
@@ -198,7 +201,7 @@ void RenderDoc::DrawSettings()
 				// Comments input for next capture
 				static char commentsBuffer[kCommentsBufferSize] = { 0 };
 
-				ImGui::InputTextWithHint("##CaptureComments", "Additional comments for next capture (optional)", commentsBuffer, sizeof(commentsBuffer));
+				Util::Widgets::InputTextWithHint("##CaptureComments", "Additional comments for next capture (optional)", commentsBuffer, sizeof(commentsBuffer));
 				Util::AddTooltip("Additional comments will be appended to automatic metadata and embedded in the .rdc file");
 
 				int captureFrameCountUI = static_cast<int>(GetCaptureFrameCount());
@@ -226,16 +229,19 @@ void RenderDoc::DrawSettings()
 
 							// Actual capture logic
 							logger::info("[RenderDoc] Manual capture triggered by user");
-							TriggerConfiguredCapture(false);
+							feedback = TriggerConfiguredCapture(false) ?
+							               MenuUI::ActionFeedback{ "Capture requested." } :
+							               MenuUI::ActionFeedback{ "Capture could not start. Check RenderDoc availability and free disk space.", true };
 						}
 					} catch (const std::exception& e) {
 						logger::error("[RenderDoc] Exception during capture logic: {}", e.what());
+						feedback = { e.what(), true };
 					}
 				}
 
 				if (ImGui::BeginPopup("Not enough disk space##RenderDoc")) {
 					ImGui::Text("Not enough free disk space to create a capture.");
-					ImGui::Text("At least {} MB of free space is required.", GetRequiredCaptureSpaceBytes() / (1024 * 1024));
+					ImGui::Text("At least %llu MB of free space is required.", static_cast<unsigned long long>(GetRequiredCaptureSpaceBytes() / (1024 * 1024)));
 					if (ImGui::Button("OK")) {
 						ImGui::CloseCurrentPopup();
 					}
@@ -247,9 +253,12 @@ void RenderDoc::DrawSettings()
 					// Open the directory where captures are saved
 					try {
 						auto capturesDir = GetCapturesDirectory();
-						ShellExecuteA(nullptr, "open", capturesDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+						if (!Util::OpenInShell(capturesDir, feedback.message))
+							throw std::runtime_error(feedback.message);
+						feedback = { "Opened capture directory." };
 					} catch (const std::exception& e) {
 						logger::error("[RenderDoc] Exception while trying to open captures directory: {}", e.what());
+						feedback = { e.what(), true };
 					}
 				}
 
@@ -265,6 +274,7 @@ void RenderDoc::DrawSettings()
 							logger::info("[RenderDoc] Copied captures directory path to clipboard: {}", capturesDir);
 						} catch (const std::exception& e) {
 							logger::error("[RenderDoc] Exception while copying directory path: {}", e.what());
+							feedback = { e.what(), true };
 						}
 					}
 					ImGui::EndPopup();
@@ -405,10 +415,13 @@ void RenderDoc::DrawSettings()
 								if (ImGui::IsMouseDoubleClicked(0)) {
 									// Double-clicked - open the file
 									try {
-										ShellExecuteW(nullptr, L"open", file.fullPath.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+										if (!Util::OpenInShell(file.fullPath, feedback.message))
+											throw std::runtime_error(feedback.message);
+										feedback = { std::format("Opened {}.", file.filename) };
 										logger::info("[RenderDoc] Opened capture file: {}", file.fullPath.string());
 									} catch (const std::exception& e) {
 										logger::error("[RenderDoc] Failed to open capture file '{}': {}", file.fullPath.string(), e.what());
+										feedback = { e.what(), true };
 									}
 								}
 							}

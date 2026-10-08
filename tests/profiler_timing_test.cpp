@@ -1,4 +1,5 @@
 #include "Profiler.h"
+#include "Utils/FeatureProfiling.h"
 #include "Utils/ProfilerTiming.h"
 #include "Utils/ResourceName.h"
 
@@ -35,6 +36,35 @@ namespace
 	void Near(double actual, double expected, const char* message)
 	{
 		Check(std::isfinite(actual) && std::abs(actual - expected) < 0.001, message);
+	}
+
+	void TestFeatureViews()
+	{
+		using namespace Util::FeatureProfiling;
+		const auto* ibl = Find("ImageBasedLighting");
+		const auto* utility = Find("CSUtility");
+		Check(ibl && Matches("IBL::EnvDiffuseIBL", ibl->ownedRoot) && Matches("IBL::SkyDiffuseIBL", ibl->ownedRoot), "IBL page lost its existing GPU timers");
+		Check(utility && Matches("UnderwaterDepthOfField::InputFog", utility->ownedRoot), "DOF timer is not available on CS Utility");
+		Check(!Find("Screenshot") && !Find("WeatherPicker") && !Find("Unknown"), "unprofiled utilities gained a view");
+		Check(!Matches("IBLExtra::Pass", "IBL") && !Matches("IBL::Pass", "") && Matches("DeferredComposite", "DeferredComposite"), "timer matching crosses namespace boundaries");
+		for (const auto feature : { "Wetterness", "InteriorSun" }) {
+			const auto* view = Find(feature);
+			Check(view && !view->ownedGpu && !view->ownedRoot.empty() && !view->sharedPrefixes.empty(), "CPU update scopes must not be advertised as feature-owned GPU cost");
+		}
+		for (const auto feature : { "TruePBR", "ExtendedMaterials", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects" }) {
+			const auto* view = Find(feature);
+			Check(view && view->ownedRoot.empty() && !view->ownedGpu && !view->sharedPrefixes.empty(), "shared shader view incorrectly owns rendering cost");
+		}
+		const auto* vr = Find("VR");
+		Check(vr && Matches("VR::StereoBlend", vr->ownedRoot), "VR stereo timing was removed");
+		for (const auto pass : { "ScreenSpaceShadows::StereoSync", "ScreenSpaceGI::GI", "DynamicCubemaps::UpdateCubemap", "DeferredComposite", "StereoBlend::Bilateral" }) {
+			Check(std::ranges::any_of(vr->sharedPrefixes, [&](auto prefix) { return Matches(pass, prefix); }), "VR partial shared-pass coverage was lost");
+		}
+		for (size_t i = 0; i < views.size(); ++i) {
+			Check(views[i].coverage && *views[i].coverage, "profiling view has no coverage explanation");
+			for (size_t j = i + 1; j < views.size(); ++j)
+				Check(views[i].feature != views[j].feature, "duplicate feature profiling view");
+		}
 	}
 
 	void TestIntervals()
@@ -295,6 +325,7 @@ namespace
 int main()
 {
 	try {
+		TestFeatureViews();
 		TestIntervals();
 		TestProfiler();
 		std::cout << "Profiler self-time and D3D11 WARP integration tests passed\n";

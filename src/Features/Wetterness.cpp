@@ -2,6 +2,7 @@
 #include "GrassLighting.h"
 #include "Menu.h"
 #include "Menu/SettingsPage.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Utils/UI.h"
 #include "WeatherPicker.h"
@@ -2196,6 +2197,7 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		return data;
 	}
 
+	CS_PROFILE_CPU_SCOPE("Wetterness::UpdateWeatherState");
 	PerFrame data{};
 
 	data.Raining = 0.0f;

@@ -74,7 +74,7 @@ public:
 	};
 
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
-	/** Identifies instrumented features before their first timing sample exists. */
+	/** Identifies feature-owned and shared profiling views before samples exist. */
 	static bool CanProfileFeature(std::string_view a_feature);
 	static bool HasFeatureTimers(const std::string& featurePrefix);
 	/** Draws Off/GPU/CPU controls and live timing graphs for one feature. */
@@ -132,8 +132,14 @@ private:
 		float p95Ms;
 		float p99Ms;
 	};
+	enum class TimingAttribution
+	{
+		Feature,
+		Shared
+	};
 	struct FeatureTimingData
 	{
+		TimingAttribution attribution = TimingAttribution::Feature;
 		std::vector<FeatureTimingEntry> entries;
 		float totalAvg = 0.0f;
 		float totalP95 = 0.0f;
@@ -160,7 +166,9 @@ private:
 	static FeatureTimingData CollectFeatureTimingData(
 		const std::vector<std::string>& featurePrefixes,
 		bool cpuMode,
-		bool includePercentiles = true);
+		bool includePercentiles = true,
+		TimingAttribution attribution = TimingAttribution::Feature);
 	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight);
+	static bool RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable);
 	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);
 };

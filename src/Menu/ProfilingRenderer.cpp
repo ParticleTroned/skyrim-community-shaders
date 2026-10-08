@@ -16,6 +16,7 @@
 #include "RE/M/Misc.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/FeatureProfiling.h"
 #include "Utils/OpenVRFrameTiming.h"
 #include "Utils/UI.h"
 
@@ -459,15 +460,10 @@ static std::string BuildProfilerGraphLabel(std::string_view label)
 
 static bool TryMatchTimingPrefix(std::string_view timerName, std::string_view prefix, bool compactLabel, std::string& label)
 {
-	if (timerName == prefix) {
-		label.assign(timerName.data(), timerName.size());
-		return true;
-	}
-
-	if (!timerName.starts_with(prefix) || timerName.size() <= prefix.size() + 2 || timerName[prefix.size()] != ':' || timerName[prefix.size() + 1] != ':')
+	if (!Util::FeatureProfiling::Matches(timerName, prefix))
 		return false;
 
-	if (compactLabel) {
+	if (compactLabel && timerName != prefix) {
 		const auto compact = timerName.substr(prefix.size() + 2);
 		label.assign(compact.data(), compact.size());
 	} else {
@@ -808,8 +804,11 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	bool cpuMode,
 	bool includePercentiles)
 {
+	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
+	if (view && !view->HasOwnedTimings(cpuMode))
+		return {};
 	return CollectFeatureTimingData(
-		std::vector<std::string>{ featurePrefix },
+		std::vector<std::string>{ view ? std::string(view->ownedRoot) : featurePrefix },
 		cpuMode,
 		includePercentiles);
 }
@@ -817,11 +816,14 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData(
 	const std::vector<std::string>& featurePrefixes,
 	bool cpuMode,
-	bool includePercentiles)
+	bool includePercentiles,
+	TimingAttribution attribution)
 {
-	const auto& results = globals::profiler->GetResults();
-
 	FeatureTimingData data;
+	data.attribution = attribution;
+	if (!globals::profiler || !globals::profiler->IsInitialized())
+		return data;
+	const auto& results = globals::profiler->GetResults();
 	DisplayTimingSampleAccumulator totalSamples;
 	const bool compactLabel = featurePrefixes.size() == 1;
 	for (const auto& r : results) {
@@ -850,10 +852,12 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 		data.maxAvg = std::max(data.maxAvg, avg);
 		data.maxP95 = std::max(data.maxP95, p95);
 		data.maxP99 = std::max(data.maxP99, p99);
-		std::array<float, kDisplayedRollingFrameCount> outermostSamples{};
-		const uint32_t outermostSampleCount =
-			CollectDisplayTimingSamples(r, cpuMode, outermostSamples, DisplayTimingContribution::Outermost);
-		totalSamples.Add(outermostSamples, outermostSampleCount);
+		if (attribution == TimingAttribution::Feature) {
+			std::array<float, kDisplayedRollingFrameCount> outermostSamples{};
+			const uint32_t outermostSampleCount =
+				CollectDisplayTimingSamples(r, cpuMode, outermostSamples, DisplayTimingContribution::Outermost);
+			totalSamples.Add(outermostSamples, outermostSampleCount);
+		}
 	}
 
 	const auto totalStats = totalSamples.GetStats(includePercentiles);
@@ -907,28 +911,31 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 	return true;
 }
 
-bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable)
+bool ProfilingRenderer::RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable)
 {
-	bool cpuMode = featureMode == FeatureTimingMode::CPU;
-	const auto data = CollectFeatureTimingData(featurePrefix, cpuMode);
-
+	const bool shared = data.attribution == TimingAttribution::Shared;
 	if (data.entries.empty()) {
-		ImGui::TextDisabled("No timing data");
+		ImGui::TextDisabled("No samples for these passes in the current scene.");
 		return false;
 	}
 
-	ImGui::PushID(featurePrefix.c_str());
-	auto& state = featureGraphs[featurePrefix];
-	auto& graph = cpuMode ? state.cpuGraph : state.gpuGraph;
-	if (RenderFeatureTimingGraph(featurePrefix, data, graph, 100))
-		ImGui::Spacing();
+	ImGui::PushID(key.c_str());
+	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+	if (!shared) {
+		auto& state = featureGraphs[key];
+		auto& graph = cpuMode ? state.cpuGraph : state.gpuGraph;
+		if (RenderFeatureTimingGraph(key, data, graph, 100))
+			ImGui::Spacing();
+	}
 
-	if (showTable && ImGui::BeginTable("##FeatureTimers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX)) {
+	if ((showTable || shared) && ImGui::BeginTable("##FeatureTimers", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX)) {
+		const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
 		std::vector<std::string> passLabels;
 		passLabels.reserve(data.entries.size() + 1);
 		for (const auto& e : data.entries)
 			passLabels.push_back(e.label);
-		passLabels.emplace_back("Total");
+		if (!shared)
+			passLabels.emplace_back("Instrumented subtotal");
 		SetupTimingTableColumns(GetTextColumnWidth("Pass", passLabels, GetColorMarkerExtraWidth()), false);
 		ImGui::TableHeadersRow();
 
@@ -945,28 +952,47 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 			TextHeat("%.3f", e.p99Ms, data.maxP99);
 		}
 
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Total");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Inclusive cost of each matching timer namespace. Individual rows show self time with profiled descendants excluded.");
+		if (!shared) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Instrumented subtotal");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextWrapped("Inclusive cost of each matching timer namespace. Individual rows show self time with profiled descendants excluded.");
+			ImGui::TableNextColumn();
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
+			ImGui::TableNextColumn();
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP95);
+			ImGui::TableNextColumn();
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP99);
 		}
-		ImGui::TableNextColumn();
-		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
-		ImGui::TableNextColumn();
-		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP95);
-		ImGui::TableNextColumn();
-		ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP99);
-
-		ImGui::EndTable();
 	}
-
-	ImGui::PopID();
 	return true;
+}
+
+bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable)
+{
+	const bool cpuMode = featureMode == FeatureTimingMode::CPU;
+	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
+	bool rendered = false;
+	if (!view || view->HasOwnedTimings(cpuMode)) {
+		MenuUI::SectionHeading(cpuMode ? "Feature CPU timings (ms)" : "Feature GPU timings (ms)");
+		const auto data = CollectFeatureTimingData(featurePrefix, cpuMode);
+		rendered = RenderTimingSection(featurePrefix, data, cpuMode, showTable);
+	}
+	if (view && !view->sharedPrefixes.empty()) {
+		MenuUI::SectionHeading(cpuMode ? "Shared CPU pass timings (ms)" : "Shared GPU pass timings (ms)");
+		MenuUI::DetailText(Util::FeatureProfiling::sharedCoverage);
+		std::vector<std::string> prefixes(view->sharedPrefixes.begin(), view->sharedPrefixes.end());
+		const auto data = CollectFeatureTimingData(prefixes, cpuMode, true, TimingAttribution::Shared);
+		rendered = RenderTimingSection(featurePrefix + "::shared", data, cpuMode, true) || rendered;
+	}
+	return rendered;
 }
 
 bool ProfilingRenderer::RenderFeatureOverview()
 {
+	if (!globals::profiler || !globals::profiler->IsInitialized())
+		return false;
 	std::vector<std::string> activeFeatures;
 	activeFeatures.reserve(featureTimingModes.size());
 	for (const auto& [featurePrefix, featureMode] : featureTimingModes) {
@@ -985,6 +1011,7 @@ bool ProfilingRenderer::RenderFeatureOverview()
 
 	if (ImGui::BeginTable("##FeatureProfilingOverview", 3,
 			ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_RowBg)) {
+		const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
 		ImGui::TableSetupColumn("Feature", ImGuiTableColumnFlags_WidthFixed, GetTextColumnWidth("Feature", activeFeatures));
 		ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableSetupColumn("CPU", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -995,24 +1022,16 @@ bool ProfilingRenderer::RenderFeatureOverview()
 			ImGui::TableNextColumn();
 			ImGui::TextUnformatted(featurePrefix.c_str());
 
-			const auto gpuData = CollectFeatureTimingData(featurePrefix, false);
-			const auto cpuData = CollectFeatureTimingData(featurePrefix, true);
-			auto& state = featureGraphs[featurePrefix + "::overview"];
+			if (const auto* view = Util::FeatureProfiling::Find(featurePrefix))
+				Util::AddTooltip(view->coverage);
 
-			ImGui::TableNextColumn();
-			ImGui::PushID((featurePrefix + "::GPU").c_str());
-			if (!RenderFeatureTimingGraph(featurePrefix, gpuData, state.gpuGraph, 85))
-				ImGui::TextDisabled("No GPU timing data");
-			ImGui::PopID();
-
-			ImGui::TableNextColumn();
-			ImGui::PushID((featurePrefix + "::CPU").c_str());
-			if (!RenderFeatureTimingGraph(featurePrefix, cpuData, state.cpuGraph, 85))
-				ImGui::TextDisabled("No CPU timing data");
-			ImGui::PopID();
+			for (const auto mode : { FeatureTimingMode::GPU, FeatureTimingMode::CPU }) {
+				ImGui::TableNextColumn();
+				ImGui::PushID((featurePrefix + (mode == FeatureTimingMode::CPU ? "::CPU" : "::GPU")).c_str());
+				const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+				RenderFeatureTimingData(featurePrefix, mode, false);
+			}
 		}
-
-		ImGui::EndTable();
 	}
 
 	ImGui::Spacing();
@@ -1021,32 +1040,36 @@ bool ProfilingRenderer::RenderFeatureOverview()
 
 bool ProfilingRenderer::CanProfileFeature(std::string_view a_feature)
 {
-	// Eligibility follows named passes, not whether this scene has produced a sample yet.
-	static constexpr std::array<std::string_view, 18> instrumented{
-		"DynamicCubemaps", "GrassCollision", "GrassOptimizations", "IBL", "LightLimitFix",
-		"NeuralRendering", "Screenshot", "ScreenSpaceGI", "ScreenSpaceShadows", "Skylighting",
-		"SubsurfaceScattering", "TerrainBlending", "TerrainShadows", "UnderwaterDepthOfField",
-		"Upscaling", "VolumetricLighting", "VolumetricShadows", "VR"
-	};
-	return std::ranges::find(instrumented, a_feature) != instrumented.end() || HasFeatureTimers(std::string(a_feature));
+	return a_feature != "Screenshot" &&
+	       (Util::FeatureProfiling::Find(a_feature) || HasFeatureTimers(std::string(a_feature)));
 }
 
 bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 {
-	if (!globals::profiler)
+	if (!globals::profiler || !globals::profiler->IsInitialized() || featurePrefix == "Screenshot")
 		return false;
 
-	const std::string prefix = featurePrefix + "::";
+	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
 	for (const auto& result : globals::profiler->GetResults()) {
-		if (result.valid && HasAnyLiveTimingMode(result) && result.name.starts_with(prefix))
+		if (!result.valid || !HasAnyLiveTimingMode(result))
+			continue;
+		const bool hasOwnedSamples = !view ||
+		                             (view->HasOwnedTimings(false) && HasLiveTimingMode(result, false)) ||
+		                             (view->HasOwnedTimings(true) && HasLiveTimingMode(result, true));
+		if (hasOwnedSamples && Util::FeatureProfiling::Matches(result.name, view ? view->ownedRoot : featurePrefix))
+			return true;
+		if (view && std::ranges::any_of(view->sharedPrefixes, [&](auto prefix) { return Util::FeatureProfiling::Matches(result.name, prefix); }))
 			return true;
 	}
-
 	return false;
 }
 
 void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 {
+	if (!globals::profiler || !globals::profiler->IsInitialized()) {
+		ImGui::TextDisabled("Profiler is unavailable.");
+		return;
+	}
 	auto& profiler = (*globals::profiler);
 	const bool fullProfilerPage = showTable || showModeToggle;
 
@@ -1242,6 +1265,15 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 
 void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 {
+	if (!CanProfileFeature(featurePrefix))
+		return;
+	if (!globals::profiler || !globals::profiler->IsInitialized()) {
+		ImGui::TextDisabled("Profiler is unavailable.");
+		return;
+	}
+	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
+	if (view)
+		MenuUI::DetailNote(view->coverage);
 	auto& profiler = (*globals::profiler);
 	auto& featureMode = featureTimingModes[featurePrefix];
 
@@ -1249,8 +1281,8 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 	const int previousMode = mode;
 	const MenuUI::Choice choices[] = {
 		{ "off", "Off", "Stop live profiling", "No feature timing capture." },
-		{ "gpu", "GPU", "Graphics-card timings", "Show this feature's graphics-card cost." },
-		{ "cpu", "CPU", "Processor timings", "Show this feature's processor cost." }
+		{ "gpu", "GPU", "Graphics-card timings", "Show instrumented graphics-card pass timings." },
+		{ "cpu", "CPU", "Processor timings", "Show CPU updates and rendering submission timings." }
 	};
 	const int chosen = MenuUI::ChoiceCards("FeatureTimingMode", mode, choices);
 	if (chosen >= 0)

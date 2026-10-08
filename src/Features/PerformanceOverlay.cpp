@@ -191,6 +191,12 @@ bool PerformanceOverlay::HideFromDesktopWhenSubmittedToVR() const
 	       vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 }
 
+void PerformanceOverlay::DrawSettingsEnabledControl()
+{
+	Util::Widgets::Checkbox("Enabled", &settings.ShowInOverlay);
+	Util::AddTooltip("Shows or hides the performance overlay.");
+}
+
 void PerformanceOverlay::DrawSettings()
 {
 	MenuUI::SettingsPage page("PerformanceOverlay", {

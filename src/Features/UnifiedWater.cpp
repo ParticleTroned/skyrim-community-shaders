@@ -844,16 +844,10 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	return data;
 }
 
-void UnifiedWater::DrawPerformanceSettings(bool)
+void UnifiedWater::DrawSettingsEnabledControl()
 {
-	Util::Widgets::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
-}
-
-json UnifiedWater::CapturePerformanceSettingsState() const
-{
-	return {
-		{ "UseOptimisedMeshes", settings.UseOptimisedMeshes }
-	};
+	Util::Widgets::Checkbox("Enabled", &settings.UseOptimisedMeshes);
+	Util::AddTooltip("Uses optimized water meshes. Applies to newly created water after a location change or restart.");
 }
 
 void UnifiedWater::DrawOverlay()

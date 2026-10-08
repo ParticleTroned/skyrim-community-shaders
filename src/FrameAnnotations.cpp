@@ -212,6 +212,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			CS_GPU_PASS("SharedScene::DirectionalShadows");
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)
 				globals::state->BeginPerfEvent("Directional Light Shadowmaps");
@@ -359,11 +360,14 @@ namespace FrameAnnotations
 	{
 		static void thunk(bool a1)
 		{
-			globals::state->BeginPerfEvent("World");
+			const bool annotate = globals::state->frameAnnotations;
+			if (annotate)
+				globals::state->BeginPerfEvent("World");
 
 			func(a1);
 
-			globals::state->EndPerfEvent();
+			if (annotate)
+				globals::state->EndPerfEvent();
 		};
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -502,6 +506,11 @@ namespace FrameAnnotations
 		stl::write_vfunc<0xC,
 			BSImagespaceShader_Dispatch<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
 			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[0]);
+
+		// Shared profiling stages must remain available when annotation capture is off.
+		stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(
+			RE::VTABLE_BSShadowDirectionalLight[0]);
+		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 
 		if (!globals::state->frameAnnotations)
 			return;
@@ -1150,8 +1159,6 @@ namespace FrameAnnotations
 
 		stl::write_vfunc<0x35, BSCubeMapCamera_RenderCubemap>(RE::VTABLE_BSCubeMapCamera[0]);
 
-		stl::write_vfunc<0xA, BSShadowDirectionalLight_RenderShadowmaps>(
-			RE::VTABLE_BSShadowDirectionalLight[0]);
 		stl::write_vfunc<0xA, BSShadowFrustumLight_RenderShadowmaps>(
 			RE::VTABLE_BSShadowFrustumLight[0]);
 		stl::write_vfunc<0xA, BSShadowParabolicLight_RenderShadowmaps>(
@@ -1162,7 +1169,6 @@ namespace FrameAnnotations
 		stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 		stl::detour_thunk<Main_RenderFirstPersonView>(REL::RelocationID(100411, 107129));
 		stl::detour_thunk<Main_RenderPlayerView>(REL::RelocationID(35560, 36559));
-		stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 		if (!globals::game::isVR)
 			stl::detour_thunk<BSShaderAccumulator_RenderBatches>(REL::RelocationID(99963, 106609));
 		stl::detour_thunk<BSShaderAccumulator_RenderPersistentPassList>(REL::RelocationID(100840, 107630));

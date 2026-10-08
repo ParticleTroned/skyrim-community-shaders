@@ -49,7 +49,7 @@ namespace
 		kFeatureCostMeasurementBlockCount == 5 &&
 		kFeatureCostMeasurementBlockCount * kFeatureCostIntervalMilliseconds == kFeatureCostMeasurementMilliseconds);
 
-	constexpr std::array<std::string_view, 22> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 21> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"AdaptiveBrightness",
@@ -63,7 +63,6 @@ namespace
 		"TerrainShadows",
 		"VolumetricLighting",
 		"VolumetricShadows",
-		"UnifiedWater",
 		"Wetterness",
 		"SubsurfaceScattering",
 		"TruePBR",
@@ -1662,12 +1661,8 @@ namespace
 	std::string GetPerformanceFeatureLabel(Feature* feature)
 	{
 		const auto name = feature->GetShortName();
-		if (name == "WeatherPicker")
-			return "Weather Picker overlay";
 		if (name == "VR")
 			return "VR optimizations";
-		if (name == "UnifiedWater")
-			return "Unified Water meshes";
 		if (name == "LightLimitFix")
 			return "Light Limit Fix effects";
 		return feature->GetDisplayName();
@@ -1683,10 +1678,6 @@ namespace
 			return "Upscaling is set to None, with foveated upscaling disabled.";
 		if (shortName == "NeuralRendering")
 			return "Neural Rendering is switched off, retaining its route, character, and colour settings.";
-		if (shortName == "WeatherPicker")
-			return "the weather-details overlay is hidden; weather and time are unchanged.";
-		if (shortName == "Screenshot")
-			return "the idle screenshot service is switched off; active capture jobs must finish first.";
 		if (shortName == "VR")
 			return "depth culling, screen-space stereo sync, screen-space FOV, stereo blend, shader FOV, and dynamic cubemap throttle are switched off.";
 		if (shortName == "AdaptiveBrightness")
@@ -1711,8 +1702,6 @@ namespace
 			return "Volumetric Lighting is switched off for the current interior/exterior context.";
 		if (shortName == "VolumetricShadows")
 			return "directional shadow-map copying, downsampling, and blurring are switched off.";
-		if (shortName == "UnifiedWater")
-			return "optimized water meshes are switched off.";
 		if (shortName == "Wetterness")
 			return "Wetterness is switched off.";
 		if (shortName == "SubsurfaceScattering")

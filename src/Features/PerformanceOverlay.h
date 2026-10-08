@@ -115,12 +115,7 @@ struct PerformanceOverlay : OverlayFeature
 	const char* GetOverlayWindowName() const override { return kOverlayWindowName; }
 	bool HideFromDesktopWhenSubmittedToVR() const override;
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
-	/** Supports a cost comparison through the existing in-game enable toggle. */
-	bool SupportsPerformanceCostMeasurement() const override { return true; }
-	/** Returns the requested state without changing the feature's configuration. */
-	bool IsPerformanceCostMeasurementEnabled() const override { return settings.ShowInOverlay; }
-	/** Uses the same runtime enable path as the feature's settings panel. */
-	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.ShowInOverlay = a_enabled; }
+	void DrawSettingsEnabledControl() override;
 
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;

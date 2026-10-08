@@ -80,6 +80,40 @@ foreach(_required_action IN ITEMS start_feature_costs set_feature_enabled)
     endif()
 endforeach()
 
+set(_excluded_features WeatherPicker PerformanceOverlay Screenshot UnifiedWater)
+string(JSON _excluded_count LENGTH
+    "${_descriptor}" inputSchema properties featureShortName not enum
+)
+list(LENGTH _excluded_features _expected_excluded_count)
+if(NOT _excluded_count EQUAL _expected_excluded_count)
+    message(FATAL_ERROR "Performance-tuning schema has unexpected exclusions")
+endif()
+math(EXPR _excluded_last "${_excluded_count} - 1")
+foreach(_index RANGE 0 ${_excluded_last})
+    string(JSON _excluded_feature GET
+        "${_descriptor}" inputSchema properties featureShortName not enum ${_index}
+    )
+    list(FIND _excluded_features "${_excluded_feature}" _excluded_position)
+    if(_excluded_position EQUAL -1)
+        message(FATAL_ERROR "Unexpected tuning exclusion: ${_excluded_feature}")
+    endif()
+    list(REMOVE_ITEM _excluded_features "${_excluded_feature}")
+    set(_feature_file "${_excluded_feature}")
+    if(_feature_file STREQUAL "Screenshot")
+        set(_feature_file "ScreenshotFeature")
+    endif()
+    file(READ "${PROJECT_ROOT}/src/Features/${_feature_file}.h" _feature_header)
+    file(READ "${PROJECT_ROOT}/src/Features/${_feature_file}.cpp" _feature_source)
+    if("${_feature_header}${_feature_source}" MATCHES
+        "SupportsPerformanceCostMeasurement|IsPerformanceCostMeasurement|SetPerformanceCostMeasurement|GetPerformanceCostMeasurement|IsPerformanceToggleEnabled|HasPerformanceSettings|DrawPerformanceSettings|CapturePerformanceSettingsState")
+        message(FATAL_ERROR "${_excluded_feature} still has a tuning adapter")
+    endif()
+    string(FIND "${_renderer}" "\"${_excluded_feature}\"" _feature_position)
+    if(NOT _feature_position EQUAL -1)
+        message(FATAL_ERROR "Tuning still registers ${_excluded_feature}")
+    endif()
+endforeach()
+
 string(JSON _preset_count LENGTH
     "${_descriptor}" inputSchema properties dlssPreset enum
 )

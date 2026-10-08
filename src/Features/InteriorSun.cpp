@@ -1,6 +1,7 @@
 #include "InteriorSun.h"
 #include "LocationContext.h"
 #include "Menu/SettingsPage.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Utils/RendererContextAccess.h"
 #include "Utils/RuntimeToggle.h"
@@ -245,6 +246,7 @@ void InteriorSun::SetRuntimeEnabled(bool a_enabled)
 
 void InteriorSun::PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays)
 {
+	CS_PROFILE_CPU_SCOPE("InteriorSun::PrepareShadowJobs");
 	if (cell != currentCell) {
 		InitialiseOnNewCell(portalGraph);
 		currentCell = cell;
@@ -279,6 +281,7 @@ void InteriorSun::PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, co
 	auto lightDir = -dirLight->GetShadowDirectionalLightRuntimeData().sunVector;
 	lightDir.Unitize();
 
+	CS_PROFILE_CPU_SCOPE("InteriorSun::SelectShadowCasters");
 	// Add extra rooms and portals that are in the direction of the sun
 	for (const auto& object : currentCellRoomsAndPortals) {
 		if (addedSet.find(object.get()) != addedSet.end() || !IsInSunDirectionAndWithinShadowDistance(object, lightDir, playerPos))

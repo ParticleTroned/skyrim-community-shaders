@@ -1,0 +1,207 @@
+#include "Menu/SettingsPage.h"
+#include "Profiler.h"
+#include "Utils/FeatureProfiling.h"
+#include "Utils/LegitProfiler.h"
+
+#include <array>
+#include <cmath>
+#include <functional>
+#include <imgui_internal.h>
+#include <iostream>
+#include <map>
+#include <stdexcept>
+#include <unordered_map>
+
+#define private public
+#include "Menu/ProfilingRenderer.h"
+#undef private
+
+namespace SKSE::stl
+{
+	template <class F>
+	struct scope_exit
+	{
+		F function;
+		explicit scope_exit(F f) : function(std::move(f)) {}
+		~scope_exit() { function(); }
+	};
+}
+namespace Util
+{
+	float GetUIScale() { return 1.0f; }
+	bool HoverTooltipWrapper() { return false; }
+	void AddTooltip(const char*) {}
+}
+namespace MenuUI
+{
+	int chosenMode = 1;
+	int ChoiceCards(const char*, int, std::span<const Choice>) { return chosenMode; }
+	void SectionHeading(const char* text) { ImGui::TextUnformatted(text); }
+	void DetailText(const char* text) { ImGui::TextWrapped("%s", text); }
+	bool DetailNote(const char* text, const char*)
+	{
+		DetailText(text);
+		return false;
+	}
+}
+namespace globals
+{
+	struct TimingSource
+	{
+		bool enabled = true;
+		bool initialized = true;
+		int requests = 0;
+		std::vector<Profiler::TimerResult> results;
+		bool IsUserEnabled() const { return enabled; }
+		bool IsInitialized() const { return initialized; }
+		void SetUserEnabled(bool value) { enabled = value; }
+		void RequestCapture() { ++requests; }
+		const auto& GetResults() const { return results; }
+	} source;
+	auto* profiler = &source;
+}
+
+// The extracted helpers also serve global graphs outside this feature-view test.
+#pragma warning(push)
+#pragma warning(disable: 4505)
+#include "feature_profiling_under_test.h"
+#pragma warning(pop)
+
+namespace
+{
+	void Check(bool value, const char* message)
+	{
+		if (!value)
+			throw std::runtime_error(message);
+	}
+
+	void AddTimer(const std::string& name, float gpu, float cpu, float gpuOutermost = -1, float cpuOutermost = -1)
+	{
+		static std::map<std::string, std::array<float, Profiler::kHistorySize>> histories;
+		auto& gpuHistory = histories[name + "gpu"];
+		auto& cpuHistory = histories[name + "cpu"];
+		gpuHistory.fill(gpu);
+		cpuHistory.fill(cpu);
+		auto& gpuInclusive = histories[name + "gpuOutermost"];
+		auto& cpuInclusive = histories[name + "cpuOutermost"];
+		gpuInclusive.fill(gpuOutermost < 0 ? gpu : gpuOutermost);
+		cpuInclusive.fill(cpuOutermost < 0 ? cpu : cpuOutermost);
+		Profiler::TimerResult timer;
+		timer.name = name;
+		timer.valid = true;
+		timer.activeGpu = timer.hasGpu = gpu >= 0;
+		timer.activeCpu = timer.hasCpu = cpu >= 0;
+		timer.historyBuffer = gpuHistory.data();
+		timer.cpuHistoryBuffer = cpuHistory.data();
+		timer.outermostGpuHistoryBuffer = gpuInclusive.data();
+		timer.outermostCpuHistoryBuffer = cpuInclusive.data();
+		timer.historyHead = timer.cpuHistoryHead = 60;
+		timer.historyCount = timer.activeGpu ? 60 : 0;
+		timer.cpuHistoryCount = timer.activeCpu ? 60 : 0;
+		globals::source.results.push_back(timer);
+	}
+
+	std::string Draw(const char* feature, int mode)
+	{
+		MenuUI::chosenMode = mode;
+		ImGui::NewFrame();
+		ImGui::SetNextWindowPos({ 0, 0 });
+		ImGui::SetNextWindowSize({ 1500, 1000 });
+		ImGui::Begin("Profiling test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+		ImGui::LogToBuffer();
+		ProfilingRenderer::RenderFeatureTimers(feature);
+		const std::string text = GImGui->LogBuffer.c_str();
+		ImGui::LogFinish();
+		ImGui::End();
+		ImGui::Render();
+		return text;
+	}
+}
+
+int main()
+{
+	try {
+		ImGui::CreateContext();
+		auto& io = ImGui::GetIO();
+		io.DisplaySize = { 1500, 1000 };
+		io.DeltaTime = 1.0f / 60;
+		io.IniFilename = nullptr;
+		unsigned char* pixels;
+		int width, height;
+		io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+		for (const auto& view : Util::FeatureProfiling::views)
+			Check(ProfilingRenderer::CanProfileFeature(view.feature), "registered view is hidden before samples exist");
+		AddTimer("IBL::EnvDiffuseIBL", .2f, .01f);
+		AddTimer("UnderwaterDepthOfField::InputFog", .3f, .02f);
+		AddTimer("Wetterness::UpdateWeatherState", -1, .01f);
+		AddTimer("InteriorSun::PrepareShadowJobs", -1, .03f, -1, .04f);
+		AddTimer("InteriorSun::SelectShadowCasters", -1, .01f, -1, 0);
+		AddTimer("CloudShadows::CopyCubemap", .02f, .001f);
+		AddTimer("SharedScene::World", 8, .8f, 20, 2);
+		AddTimer("SharedScene::DirectionalShadows", 2, .2f);
+		AddTimer("Water::RenderWaterEffects", 1, .1f);
+		AddTimer("DeferredComposite", .5f, .05f);
+		AddTimer("VR::StereoBlend", .4f, .04f);
+		AddTimer("ScreenSpaceGI::GI", .6f, .06f);
+		AddTimer("Screenshot::Stage", 3, .3f);
+
+		Draw("ImageBasedLighting", 1);
+		Check(Draw("ImageBasedLighting", 1).contains("EnvDiffuseIBL"), "IBL page does not display its mapped timer");
+		Check(Draw("CSUtility", 1).contains("InputFog"), "CS Utility does not display underwater DOF timing");
+		const auto gpuWetness = Draw("Wetterness", 1);
+		Check(gpuWetness.contains("Shared GPU pass timings") && gpuWetness.contains("SharedScene::World") && !gpuWetness.contains("Instrumented subtotal") && !gpuWetness.contains("UpdateWeatherState"), "wetness shared GPU passes were presented as owned cost");
+		const auto cpuWetness = Draw("Wetterness", 2);
+		Check(cpuWetness.contains("UpdateWeatherState") && cpuWetness.contains("Shared CPU pass timings"), "wetness CPU updates or shared context are missing");
+		const auto ownedCpu = ProfilingRenderer::CollectFeatureTimingData(std::string("Wetterness"), true);
+		Check(std::abs(ownedCpu.totalAvg - .01f) < .00001f, "wetness CPU subtotal includes unrelated shared rendering time");
+		Check(ProfilingRenderer::CollectFeatureTimingData(std::string("Wetterness"), false).entries.empty(), "CPU-only update produced an owned GPU timer");
+		Check(Draw("InteriorSun", 2).contains("PrepareShadowJobs"), "interior shadow job timing is missing");
+		const auto shadowCpu = ProfilingRenderer::CollectFeatureTimingData(std::string("InteriorSun"), true);
+		Check(shadowCpu.entries.size() == 2 && std::abs(shadowCpu.totalAvg - .04f) < .00001f, "nested caster selection double-counted in CPU subtotal");
+		const auto shared = ProfilingRenderer::CollectFeatureTimingData(
+			std::vector<std::string>{ "SharedScene::World", "DeferredComposite" }, false, true, ProfilingRenderer::TimingAttribution::Shared);
+		Check(shared.entries.size() == 2 && shared.totalAvg == 0 && shared.totalP95 == 0 && shared.totalP99 == 0, "shared stages produced an aggregate feature cost");
+		Check(shared.maxAvg == 8 && shared.maxP95 == 8 && shared.maxP99 == 8, "shared table heat colours include an invisible inclusive aggregate");
+		Check(Draw("InteriorSun", 1).contains("DirectionalShadows"), "interior sun shared GPU shadow timing is missing");
+		Check(Draw("CloudShadows", 1).contains("CopyCubemap"), "cloud copy timing is missing");
+		for (const auto feature : { "TruePBR", "ExtendedMaterials", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects" }) {
+			const auto output = Draw(feature, 1);
+			Check(output.contains("Shared GPU pass timings") && !output.contains("Instrumented subtotal"), "shared shader page claims a feature cost subtotal");
+		}
+		const auto vr = Draw("VR", 1);
+		Check(vr.contains("StereoBlend") && vr.contains("ScreenSpaceGI::GI") && vr.contains("Partial VR coverage"), "VR lost stereo or partial shared coverage");
+		const auto requests = globals::source.requests;
+		Check(Draw("Screenshot", 1).empty() && !ProfilingRenderer::HasFeatureTimers("Screenshot"), "stale screenshot samples reopened profiling");
+		Check(Draw("Wetterness", 0).contains("profiling is off") && globals::source.requests == requests, "off mode or excluded feature requested capture");
+		const auto retained = globals::source.results;
+		globals::source.results.clear();
+		AddTimer("Wetterness::GpuOnly", .5f, -1);
+		Check(!ProfilingRenderer::HasFeatureTimers("Wetterness"), "CPU-only ownership accepted unrelated GPU samples");
+		globals::source.results.clear();
+		AddTimer("IBLExtra::Pass", .5f, .1f);
+		Check(!ProfilingRenderer::HasFeatureTimers("ImageBasedLighting"), "feature mapping crossed a timer namespace boundary");
+		Check(Draw("ImageBasedLighting", 1).contains("No samples"), "empty mapped view claimed timing coverage");
+		std::string label;
+		Check(!TryMatchTimingPrefix("", "", true, label), "empty timer name matched an empty feature prefix");
+		globals::source.results = retained;
+		globals::source.initialized = false;
+		const auto unavailableRequests = globals::source.requests;
+		Check(Draw("Wetterness", 1).contains("Profiler is unavailable"), "uninitialized profiler requested capture");
+		Check(!ProfilingRenderer::HasFeatureTimers("CSUtility"), "uninitialized profiler exposed retained samples");
+		Check(ProfilingRenderer::CollectFeatureTimingData(std::string("CSUtility"), false).entries.empty(), "uninitialized profiler returned stale samples");
+		globals::profiler = nullptr;
+		Check(Draw("ImageBasedLighting", 1).contains("Profiler is unavailable"), "missing profiler crashed a registered view");
+		Check(ProfilingRenderer::CollectFeatureTimingData(std::string("ImageBasedLighting"), false).entries.empty(), "missing profiler was dereferenced by timing collection");
+		Check(!ProfilingRenderer::RenderFeatureOverview(), "missing profiler rendered an overview");
+		Check(globals::source.requests == unavailableRequests, "unavailable profiler received capture requests");
+		globals::profiler = &globals::source;
+		globals::source.initialized = true;
+		ImGui::DestroyContext();
+		std::cout << "Feature profiling attribution and native UI checks passed\n";
+		return 0;
+	} catch (const std::exception& error) {
+		std::cerr << error.what() << '\n';
+		return 1;
+	}
+}

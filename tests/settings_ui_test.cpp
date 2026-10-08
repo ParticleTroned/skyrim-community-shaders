@@ -1,5 +1,6 @@
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/FeatureProfiling.h"
 #include "Utils/NumericEntry.h"
 #include <algorithm>
 #include <array>
@@ -80,7 +81,7 @@ namespace SKSE::stl
 struct ProfilingRenderer
 {
 	static inline bool eligible = true;
-	static bool CanProfileFeature(std::string_view) { return eligible; }
+	static bool CanProfileFeature(std::string_view name) { return eligible && (name == "FeaturePage" || Util::FeatureProfiling::Find(name)); }
 	static inline int draws = 0;
 	static inline int globalDraws = 0;
 	static inline std::string feature;
@@ -360,6 +361,21 @@ int main()
 		require(ProfilingRenderer::globalDraws > 0, "non-feature pages open the global profiling view");
 
 		feature.supportsMeasurement = false;
+		MenuUI::SettingsPage::Select("FeaturePage", "performance");
+		Util::controls.clear();
+		const int measurementsBeforeRemoval = PerformanceTuningRenderer::draws;
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "removing tuning returns a previously selected measurement tab to overview");
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !Util::controls.contains("Measures in-game frame times and FPS with the current feature settings."), "removed tuning has neither a reachable tab nor an overview card");
+		require(Util::controls.contains("Appearance") && Util::controls.contains("Choose CPU, GPU or Off to inspect timings."), "ordinary settings and profiling cards remain without tuning");
+		require(MenuUI::SettingsPage::Navigate("FeaturePage", "look"), "ordinary settings remain reachable without tuning");
+		frame(drawPerformance);
+		profilingBefore = ProfilingRenderer::draws;
+		require(MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "profiling remains reachable without tuning");
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		require(ProfilingRenderer::draws > profilingBefore && PerformanceTuningRenderer::draws == measurementsBeforeRemoval, "preserved profiling does not invoke removed tuning");
+
+		feature.supportsMeasurement = false;
 		ProfilingRenderer::eligible = false;
 		MenuUI::SettingsPage::Select("FeaturePage", "overview");
 		Util::controls.clear();
@@ -374,6 +390,21 @@ int main()
 		auto drawGlobalPerformance = [&] { MenuUI::SettingsPage page("PerformanceTuning", { { "features", "Features", "Choose features" } }); };
 		frame(drawGlobalPerformance);
 		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "performance"), "global measurement view cannot recursively open itself");
+
+		for (const auto name : { "ImageBasedLighting", "CSUtility", "CloudShadows", "InteriorSun", "Wetterness", "TruePBR", "ExtendedMaterials", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects", "VR", "Screenshot" }) {
+			Feature profiledFeature{ name, false };
+			auto drawProfiledPage = [&] {
+				MenuUI::FeatureScope scope(&profiledFeature);
+				MenuUI::SettingsPage page("Unused", { { "settings", "Settings", "Ordinary settings" } });
+			};
+			MenuUI::SettingsPage::Select(name, "overview");
+			Util::controls.clear();
+			for (int i = 0; i < 3; ++i) frame(drawProfiledPage);
+			const bool screenshot = std::string_view(name) == "Screenshot";
+			require(Util::controls.contains("Choose CPU, GPU or Off to inspect timings.") != screenshot, "profiling card must follow feature coverage without waiting for samples");
+			require(MenuUI::SettingsPage::Navigate(name, "profiling") != screenshot, "profiling tab eligibility differs from its overview card");
+			require(MenuUI::SettingsPage::Navigate(name, "settings"), "profiling changes must preserve ordinary settings");
+		}
 
 		ImGuiID firstTabId = 0, secondTabId = 0;
 		float firstScroll = 0, secondScroll = 0;

@@ -12,6 +12,7 @@
 #	include "PresetCompatibility.h"
 #	include "Profiler.h"
 #	include "State.h"
+#	include "Utils/FeatureProfiling.h"
 
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
@@ -65,8 +66,23 @@ namespace
 			});
 		}
 
+		json featureViews = json::array();
+		for (const auto& view : Util::FeatureProfiling::views) {
+			json sharedPrefixes = json::array();
+			for (auto prefix : view.sharedPrefixes)
+				sharedPrefixes.push_back(prefix);
+			featureViews.push_back({ { "feature", view.feature },
+				{ "ownedRoot", view.ownedRoot },
+				{ "ownedGpu", view.HasOwnedTimings(false) },
+				{ "ownedCpu", view.HasOwnedTimings(true) },
+				{ "sharedPrefixes", std::move(sharedPrefixes) },
+				{ "sharedTimingsAreFeatureCost", false },
+				{ "coverage", view.coverage } });
+		}
+
 		return {
 			{ "timingSemantics", "gpu_cpu_self_time" },
+			{ "featureViews", std::move(featureViews) },
 			{ "enabled", a_profiler.IsUserEnabled() },
 			{ "capturing", a_profiler.IsEnabled() },
 			{ "frame_count", globals::state ? globals::state->frameCount : 0u },
@@ -286,7 +302,7 @@ namespace ProfilerDevBenchBridge
 		}
 
 		static constexpr const char* descriptor =
-			R"({"description":"Inspect and control the CSX GPU/CPU profiler. cpu_burst_snapshot is a DevBench-only read-only main-thread snapshot of effective feature settings, preset compatibility, accepted-draw counters, OCU state and QPC/process/thread identity; it does not enable profiling or stack recording. accepted_draws reports VR accepted-draw API readiness, callbacks, isolated replays and faults without enabling capture. ocu_foveation reports requested and active peripheral GI sampling and its fallback reason without changing settings or enabling capture. set_ocu_foveation requires boolean enabled, stages this VR-only SSGI setting until settings are saved, and resets history on the next render pass. Timer values and statistics are self time with profiled descendants excluded; topLevelMs and resolvedTotalMs retain inclusive depth-zero GPU time. CPU totals sum CPU self time. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable","accepted_draws","ocu_foveation","set_ocu_foveation","cpu_burst_snapshot"],"default":"status","description":"Status reports timingSemantics=gpu_cpu_self_time."},"enabled":{"type":"boolean","description":"Required by set_ocu_foveation; stages optional peripheral sampling without saving settings."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
+			R"({"description":"Inspect and control the CSX GPU/CPU profiler. cpu_burst_snapshot is a DevBench-only read-only main-thread snapshot of effective feature settings, preset compatibility, accepted-draw counters, OCU state and QPC/process/thread identity; it does not enable profiling or stack recording. accepted_draws reports VR accepted-draw API readiness, callbacks, isolated replays and faults without enabling capture. ocu_foveation reports requested and active peripheral GI sampling and its fallback reason without changing settings or enabling capture. set_ocu_foveation requires boolean enabled, stages this VR-only SSGI setting until settings are saved, and resets history on the next render pass. Timer values and statistics are self time with profiled descendants excluded; topLevelMs and resolvedTotalMs retain inclusive depth-zero GPU time. CPU totals sum CPU self time. Every response identifies the exact producing DLL. expectedBuildId makes captures fail closed when the loaded binary is not the intended build.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","enable","disable","accepted_draws","ocu_foveation","set_ocu_foveation","cpu_burst_snapshot"],"default":"status","description":"Status reports timingSemantics=gpu_cpu_self_time and featureViews with ownedRoot, ownedGpu, ownedCpu, sharedPrefixes, coverage and sharedTimingsAreFeatureCost=false. Shared stages include other features and do not isolate incremental cost. Screenshot capture timers are excluded; the VR view retains partial stereo and foveation-related coverage."},"enabled":{"type":"boolean","description":"Required by set_ocu_foveation; stages optional peripheral sampling without saving settings."},"expectedBuildId":{"type":"string","description":"Exact 64-character CSX Build ID required for this operation."}}}})";
 		devBench->RegisterTool(
 			"communityshaders.profiler",
 			descriptor,

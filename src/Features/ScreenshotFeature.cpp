@@ -16,7 +16,6 @@
 #include "Features/ScreenshotStorageSecurity.h"
 #include "Features/VR.h"
 #include "Globals.h"
-#include "GpuPass.h"
 #include "Menu.h"
 #include "Profiler.h"
 #include "State.h"
@@ -1748,6 +1747,14 @@ bool ScreenshotFeature::IsInMenu() const
 	return true;
 }
 
+void ScreenshotFeature::DrawSettingsEnabledControl()
+{
+	bool runtimeEnabled = enabled.load(std::memory_order_acquire);
+	if (Util::Widgets::Checkbox("Enabled", &runtimeEnabled))
+		SetEnabled(runtimeEnabled);
+	Util::AddTooltip("Controls Community Shaders captures. Vanilla Skyrim screenshots are unaffected.");
+}
+
 void ScreenshotFeature::DrawSettingsHeaderControls()
 {
 	bool runtimeEnabled = enabled.load(std::memory_order_acquire);
@@ -3425,16 +3432,12 @@ bool ScreenshotFeature::StageTexturePlane(
 	if (!sourceDevice || !sourceContext) {
 		return false;
 	}
-	CS_GPU_PASS("Screenshot::Stage");
 	const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, sourceContext.get()));
 	if (!ownership || !ValidateReadbackContext(sourceContext.get())) {
 		logger::error("Screenshot staging requires ownership of the current renderer context.");
 		return false;
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	CS_GPU_PASS("Screenshot::SequenceCapture");
-#endif
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	a_sourceTexture->GetDesc(&sourceDesc);
 	if (sourceDesc.Width == 0 || sourceDesc.Height == 0 ||

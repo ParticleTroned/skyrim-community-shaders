@@ -133,12 +133,15 @@ void WeatherPicker::DrawSettings()
 	DrawShowInOverlayToggle();
 }
 
-bool WeatherPicker::IsPerformanceCostMeasurementEnabled() const
+void WeatherPicker::DrawSettingsEnabledControl()
 {
-	return WeatherDetailsWindow.ShowInOverlay && WeatherDetailsWindow.Enabled && Menu::GetSingleton()->overlayVisible;
+	bool enabled = WeatherDetailsWindow.ShowInOverlay;
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
+		SetOverlayVisible(enabled);
+	Util::AddTooltip("Shows or hides the weather-details overlay. Weather and time are unchanged.");
 }
 
-void WeatherPicker::SetPerformanceCostMeasurementEnabled(bool a_enabled)
+void WeatherPicker::SetOverlayVisible(bool a_enabled)
 {
 	WeatherDetailsWindow.ShowInOverlay = a_enabled;
 	if (a_enabled && Menu::GetSingleton()->overlayVisible)
@@ -152,7 +155,7 @@ void WeatherPicker::DrawShowInOverlayToggle()
 
 	bool showInOverlay = WeatherDetailsWindow.ShowInOverlay;
 	if (Util::Widgets::Checkbox(T(TKEY("show_in_overlay"), "Show in Overlay"), &showInOverlay)) {
-		SetPerformanceCostMeasurementEnabled(showInOverlay);
+		SetOverlayVisible(showInOverlay);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("show_in_overlay_tooltip"),

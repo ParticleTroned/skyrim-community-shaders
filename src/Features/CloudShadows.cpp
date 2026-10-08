@@ -1,4 +1,5 @@
 #include "CloudShadows.h"
+#include "GpuPass.h"
 #include "Menu/SettingsPage.h"
 #include "Utils/UI.h"
 
@@ -96,6 +97,7 @@ void CloudShadows::CheckResourcesSide(int side)
 	auto context = globals::d3d::context;
 
 	float black[4] = { 0, 0, 0, 0 };
+	CS_GPU_PASS("CloudShadows::ClearCubemapFace");
 	context->ClearRenderTargetView(cubemapCloudOccRTVs[side], black);
 }
 
@@ -185,7 +187,10 @@ void CloudShadows::ReflectionsPrepass()
 
 		auto context = globals::d3d::context;
 
-		context->CopyResource(texCubemapCloudOccCopy->resource.get(), texCubemapCloudOcc->resource.get());
+		{
+			CS_GPU_PASS("CloudShadows::CopyCubemap");
+			context->CopyResource(texCubemapCloudOccCopy->resource.get(), texCubemapCloudOcc->resource.get());
+		}
 
 		ID3D11ShaderResourceView* srv = texCubemapCloudOccCopy->srv.get();
 		context->PSSetShaderResources(25, 1, &srv);

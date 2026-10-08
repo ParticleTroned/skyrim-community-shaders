@@ -23,11 +23,7 @@ public:
 				"Persistent overlay window for continuous weather monitoring while playing" } };
 	}
 
-	/** Measures the existing weather-details overlay visibility switch. */
-	bool SupportsPerformanceCostMeasurement() const override { return true; }
-	bool IsPerformanceToggleEnabled() const override { return WeatherDetailsWindow.ShowInOverlay; }
-	bool IsPerformanceCostMeasurementEnabled() const override;
-	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	void DrawSettingsEnabledControl() override;
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;
@@ -81,6 +77,7 @@ public:
 private:
 	bool resetWindowSize = false;
 
+	void SetOverlayVisible(bool a_enabled);
 	void DrawShowInOverlayToggle();
 	void DrawTimeControls();
 	void DrawWeatherPickerSection();

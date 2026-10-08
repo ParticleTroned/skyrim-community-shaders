@@ -4001,6 +4001,47 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE d3d11.lib runtimeobject.lib
     )
 
+    set(_profiling_ui_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_profiling_ui_test"
+    )
+    set(_profiling_ui_sources
+        "${_profiling_ui_dir}/feature_profiling_under_test.h"
+    )
+    foreach(
+        _part
+        IN
+        ITEMS constants validity helpers columns views controls
+    )
+        list(
+            APPEND _profiling_ui_sources
+            "${_profiling_ui_dir}/profiling_${_part}.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_profiling_ui_sources}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_profiling_ui_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_feature_profiling.cmake"
+        DEPENDS
+            src/Menu/ProfilingRenderer.cpp
+            tests/extract_feature_profiling.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(feature_profiling_ui_test FeatureProfilingUI tests/feature_profiling_ui_test.cpp)
+    target_sources(feature_profiling_ui_test PRIVATE ${_profiling_ui_sources})
+    target_include_directories(
+        feature_profiling_ui_test
+        PRIVATE "${_profiling_ui_dir}"
+    )
+    target_link_libraries(feature_profiling_ui_test PRIVATE imgui::imgui)
+    target_compile_definitions(
+        feature_profiling_ui_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    set_tests_properties(FeatureProfilingUI PROPERTIES TIMEOUT 30)
+
     include(tests/profiler_capture.cmake)
 
     add_controller_test(

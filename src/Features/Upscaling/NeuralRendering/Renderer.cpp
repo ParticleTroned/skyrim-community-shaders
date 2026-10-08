@@ -10,6 +10,7 @@
 #include "PipelinePolicy.h"
 #include "Utils/ComIdentity.h"
 #include "Utils/D3D.h"
+#include "Utils/GpuMemoryBudget.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "BuildProvenance.h"
@@ -679,9 +680,18 @@ namespace NeuralRendering
 		MemoryConservationPolicy memoryConservation_{};
 		MemoryRecoveryPolicy memoryRecovery_{};
 		MemoryBudgetSample memorySample_{};
+		Util::GpuMemoryBudget::Reservation memoryReservation_;
 		ComPtr<ID3D11Device> memorySampleDevice_;
-		ComPtr<IDXGIAdapter3> memoryAdapter_;
 		std::uint64_t nextMemorySampleMs_ = 0;
+		void FinishMemoryAdmissionLocked()
+		{
+			if (memoryReservation_)
+				Util::GpuMemoryBudget::Get().Sample(memorySampleDevice_.Get(), 0, true);
+			memoryReservation_.Reset();
+			Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::NeuralRendering,
+				memoryRecovery_.phase != MemoryRecoveryPhase::Ready);
+		}
+
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::uint64_t simulatedPressureUntilMs_ = 0;
 		bool simulateConservationOnly_ = false;
@@ -1986,27 +1996,15 @@ namespace NeuralRendering
 	{
 		if (memorySampleDevice_.Get() != a_device) {
 			memorySampleDevice_ = a_device;
-			memoryAdapter_.Reset();
 			memorySample_ = {};
 			nextMemorySampleMs_ = 0;
 			memoryRecovery_.ClearHealthyWindow();
 			memoryConservation_.ClearHealthyWindow();
 		}
 		if (a_nowMs >= nextMemorySampleMs_ || a_force) {
-			HRESULT result = S_OK;
-			if (!memoryAdapter_) {
-				ComPtr<IDXGIDevice> dxgiDevice;
-				ComPtr<IDXGIAdapter> adapter;
-				result = a_device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
-				if (SUCCEEDED(result))
-					result = dxgiDevice->GetAdapter(&adapter);
-				if (SUCCEEDED(result))
-					result = adapter.As(&memoryAdapter_);
-			}
-			DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-			if (SUCCEEDED(result))
-				result = memoryAdapter_->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
-			memorySample_ = { info.Budget, info.CurrentUsage, SUCCEEDED(result) && info.Budget != 0, result, false, a_nowMs };
+			const auto observation = Util::GpuMemoryBudget::Get().Sample(a_device, MemoryRecoveryPolicy::kSampleIntervalMs, a_force);
+			memorySample_ = { observation.local.Budget, observation.local.CurrentUsage,
+				observation.Fresh(GetTickCount64()), observation.result, false, observation.sampledAtMs };
 			nextMemorySampleMs_ = a_nowMs + MemoryRecoveryPolicy::kSampleIntervalMs;
 		}
 		auto sample = memorySample_;
@@ -2127,13 +2125,14 @@ namespace NeuralRendering
 		auto additionalBytes = EstimateAdditionalMemoryLocked(a_args, a_resources);
 		if (!additionalBytes)
 			return FailLocked(RendererStage::Validation, E_INVALIDARG, "NR allocation size could not be established", first.featureSlot, false);
-		*additionalBytes += a_additionalBytes;
+		*additionalBytes = Util::GpuMemoryBudget::Add(*additionalBytes, a_additionalBytes);
 		auto nowMs = GetTickCount64();
 		auto sample = SampleMemoryBudgetLocked(first.device, nowMs,
 			*additionalBytes && memoryRecovery_.phase != MemoryRecoveryPhase::Waiting);
 		nowMs = GetTickCount64();
 		const bool wasConserving = memoryConservation_.active;
-		memoryConservation_.Update(sample, *additionalBytes, memoryRecovery_.phase != MemoryRecoveryPhase::Ready, nowMs);
+		const auto pendingBytes = Util::GpuMemoryBudget::Get().PendingBytes(Util::GpuMemoryBudget::Owner::NeuralRendering);
+		memoryConservation_.Update(sample, Util::GpuMemoryBudget::Add(*additionalBytes, pendingBytes), memoryRecovery_.phase != MemoryRecoveryPhase::Ready, nowMs);
 		if (wasConserving != memoryConservation_.active)
 			logger::info("[DLSSNR][Memory] {}", memoryConservation_.active ?
 													"Memory conservation active; reclaiming optional NR capacity without changing quality" :
@@ -2146,13 +2145,16 @@ namespace NeuralRendering
 			additionalBytes = EstimateAdditionalMemoryLocked(a_args, a_resources);
 			if (!additionalBytes)
 				return FailLocked(RendererStage::Validation, E_INVALIDARG, "NR replacement size could not be established", first.featureSlot, false);
-			*additionalBytes += a_additionalBytes;
+			*additionalBytes = Util::GpuMemoryBudget::Add(*additionalBytes, a_additionalBytes);
 			nowMs = GetTickCount64();
 			sample = SampleMemoryBudgetLocked(first.device, nowMs, true);
 		}
 		nowMs = GetTickCount64();
 		const auto previous = memoryRecovery_.phase;
-		const bool admitted = memoryRecovery_.Admit(sample, *additionalBytes, nowMs);
+		const bool admitted = memoryRecovery_.Admit(sample, Util::GpuMemoryBudget::Add(*additionalBytes, pendingBytes), nowMs);
+		Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::NeuralRendering, !admitted || *additionalBytes != 0);
+		if (admitted && *additionalBytes)
+			memoryReservation_ = Util::GpuMemoryBudget::Get().Reserve(Util::GpuMemoryBudget::Owner::NeuralRendering, first.device, *additionalBytes);
 		if (memoryRecovery_.phase == MemoryRecoveryPhase::Retiring) {
 			if (previous != MemoryRecoveryPhase::Retiring)
 				logger::warn("[DLSSNR][Memory] Temporarily using the baseline while retiring NR under memory pressure");
@@ -3652,12 +3654,13 @@ namespace NeuralRendering
 	{
 		if (!TeardownBackendLocked(a_resetShader, a_destruction, false))
 			return false;
+		memoryReservation_.Reset();
+		Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::NeuralRendering, false);
 		memoryRecovery_ = {};
 		memoryConservation_ = {};
 		snapshot_.memoryRecovery = {};
 		memorySample_ = {};
 		memorySampleDevice_.Reset();
-		memoryAdapter_.Reset();
 		nextMemorySampleMs_ = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		simulatedPressureUntilMs_ = 0;
@@ -3707,6 +3710,9 @@ namespace NeuralRendering
 		RendererApplyOutcome* a_outcome)
 	{
 		std::scoped_lock lock(state_->mutex_);
+		const SKSE::stl::scope_exit releaseMemory([&] {
+			state_->FinishMemoryAdmissionLocked();
+		});
 		RendererApplyOutcome outcome{};
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args.featureSlot);
@@ -3741,6 +3747,9 @@ namespace NeuralRendering
 		RendererApplyOutcome* a_outcome)
 	{
 		std::scoped_lock lock(state_->mutex_);
+		const SKSE::stl::scope_exit releaseMemory([&] {
+			state_->FinishMemoryAdmissionLocked();
+		});
 		RendererApplyOutcome outcome{};
 		Increment(state_->snapshot_.counters.stereoAttempts);
 		const auto failuresBefore = state_->snapshot_.counters.failures;
@@ -3779,6 +3788,9 @@ namespace NeuralRendering
 		RendererApplyOutcome* a_outcome)
 	{
 		std::scoped_lock lock(state_->mutex_);
+		const SKSE::stl::scope_exit releaseMemory([&] {
+			state_->FinishMemoryAdmissionLocked();
+		});
 		RendererApplyOutcome outcome{};
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);

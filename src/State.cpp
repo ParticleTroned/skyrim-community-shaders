@@ -1,4 +1,5 @@
 #include "State.h"
+#include "Features/TextureStreaming.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #	define WIN32_LEAN_AND_MEAN
@@ -2163,6 +2164,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 		auto& upscaling = globals::features::upscaling;
 		data.MipBias = upscaling.ResolveRuntimeMipBias(temporal);
+		if (a_inWorld)
+			TextureStreaming::Instance().CaptureWorldDemand(data.MipBias);
 		data.RefractionScale = refractionScale;
 		data.PBRMetalReflectionScale = pbrMetalReflectionScale;
 		data.PBRMetalHighlightScale = pbrMetalHighlightScale;

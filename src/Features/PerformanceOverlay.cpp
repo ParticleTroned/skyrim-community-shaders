@@ -1,4 +1,5 @@
 #include "Menu/SettingsPage.h"
+#include "Utils/GpuMemoryBudget.h"
 /**
  * @file PerformanceOverlay.cpp
  * @brief Real-time performance monitoring system for CSX
@@ -337,9 +338,6 @@ void PerformanceOverlay::DrawOverlay()
 	if (!menu->overlayVisible) {
 		return;
 	}
-	if (this->settings.ShowVRAM && (!menu->GetDXGIAdapter3())) {
-		return;
-	}
 	if (!ImGui::GetCurrentContext()) {
 		return;
 	}
@@ -430,7 +428,8 @@ void PerformanceOverlay::DrawOverlay()
 	if (this->settings.ShowDrawCalls) {
 		minWidth = std::max(minWidth, Settings::kDrawCallsTableWidth * scale * this->settings.TextSize);
 	}
-	const bool hasVRAMSection = this->settings.ShowVRAM && menu->GetDXGIAdapter3();
+	const bool hasVRAMSection = this->settings.ShowVRAM &&
+	                            Util::GpuMemoryBudget::Get().Sample(globals::d3d::device).Fresh(GetTickCount64());
 	if (hasVRAMSection) {
 		minWidth = std::max(minWidth, Settings::kVRAMSectionWidth * scale * this->settings.TextSize);
 	}
@@ -599,17 +598,9 @@ void PerformanceOverlay::DrawFPS()
 
 void PerformanceOverlay::DrawVRAM()
 {
-	auto menu = Menu::GetSingleton();
-	if (!menu)
-		return;
-	auto dxgiAdapter3 = menu->GetDXGIAdapter3();
-	if (!dxgiAdapter3)
-		return;
-	DXGI_QUERY_VIDEO_MEMORY_INFO videoMemoryInfo{};
-	HRESULT hr = dxgiAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &videoMemoryInfo);
-
-	// Only proceed if the call succeeded and Budget is not zero
-	if (SUCCEEDED(hr) && videoMemoryInfo.Budget > 0) {
+	const auto observation = Util::GpuMemoryBudget::Get().Sample(globals::d3d::device);
+	const auto& videoMemoryInfo = observation.local;
+	if (observation.Fresh(GetTickCount64())) {
 		float currentGpuUsage = videoMemoryInfo.CurrentUsage / (1024.f * 1024.f * 1024.f);
 		float totalGpuMemory = videoMemoryInfo.Budget / (1024.f * 1024.f * 1024.f);
 		float percent = currentGpuUsage / totalGpuMemory;

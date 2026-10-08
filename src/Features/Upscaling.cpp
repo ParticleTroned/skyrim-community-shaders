@@ -2,6 +2,7 @@
 #include "Api/AcceptedDrawService.h"
 #include "Menu/SettingsPage.h"
 #include "Upscaling/NeuralRendering/FramebufferTransaction.h"
+#include "Utils/GpuMemoryBudget.h"
 
 #include "BuildProvenance.h"
 #include "Deferred.h"
@@ -20684,6 +20685,17 @@ Upscaling::GetLatchedNeuralRenderingInsertionPoint() noexcept
 	return neuralInsertionPointLatched;
 }
 
+bool Upscaling::IsTextureStreamingTransitionActive() const noexcept
+{
+	return postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+	       pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+	       perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+	       (globals::game::isVR && (vrRenderScaleTransitionState.load(std::memory_order_acquire) != VRRenderScaleTransitionState::Idle ||
+									   deferredVRRenderScalePostLoadRecoveryEpoch.load(std::memory_order_acquire) != 0 ||
+									   vrRenderScaleMemoryTrimPending.load(std::memory_order_acquire))) ||
+	       IsNeuralRenderingInsertionTransitionBlocked();
+}
+
 bool Upscaling::IsNeuralRenderingInsertionTransitionBlocked() const noexcept
 {
 	return globals::state &&
@@ -27319,6 +27331,11 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 {
 	if (!globals::game::isVR)
 		return true;
+	Util::GpuMemoryBudget::Reservation memoryReservation;
+	const SKSE::stl::scope_exit releaseReservation([&] {
+		if (memoryReservation)
+			Util::GpuMemoryBudget::Get().Sample(globals::d3d::device, 0, true);
+	});
 	if (!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire)) {
 		if (vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0) {
 			const std::scoped_lock queueLock(perfModeRenderTargetRecreateQueueMutex);
@@ -30244,9 +30261,13 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 			relatchPlan.estimatedAdditionalBytes,
 			kVRRenderScaleProjectedResidencyNumerator,
 			kVRRenderScaleProjectedResidencyDenominator);
+		memoryReservation = Util::GpuMemoryBudget::Get().Reserve(Util::GpuMemoryBudget::Owner::RenderScale,
+			globals::d3d::device, relatchPlan.projectedAdditionalBytes);
 		relatchPlan.projectedUsageBytes =
 			memoryAtAdmission.valid ?
-				saturatingAdd(memoryAtAdmission.currentUsageBytes, relatchPlan.projectedAdditionalBytes) :
+				saturatingAdd(saturatingAdd(memoryAtAdmission.currentUsageBytes,
+								  Util::GpuMemoryBudget::Get().PendingBytes(Util::GpuMemoryBudget::Owner::RenderScale)),
+					relatchPlan.projectedAdditionalBytes) :
 				0u;
 		if (memoryAtAdmission.valid && memoryAtAdmission.budgetBytes != 0) {
 			const uint64_t ratioLimit =
@@ -33838,29 +33859,9 @@ bool Upscaling::SampleVRRenderScaleMemory(bool a_force, const char* a_reason)
 		vrRenderScaleMemorySnapshotValid.store(false, std::memory_order_release);
 	};
 
-	if (vrRenderScaleMemoryAdapterDevice != globals::d3d::device) {
-		vrRenderScaleMemoryAdapter = nullptr;
-		vrRenderScaleMemoryAdapterDevice = globals::d3d::device;
-	}
-	if (!vrRenderScaleMemoryAdapter) {
-		winrt::com_ptr<IDXGIDevice> dxgiDevice;
-		if (FAILED(globals::d3d::device->QueryInterface(dxgiDevice.put()))) {
-			publishInvalidSample();
-			return false;
-		}
-		winrt::com_ptr<IDXGIAdapter> dxgiAdapter;
-		if (FAILED(dxgiDevice->GetAdapter(dxgiAdapter.put()))) {
-			publishInvalidSample();
-			return false;
-		}
-		if (FAILED(dxgiAdapter->QueryInterface(vrRenderScaleMemoryAdapter.put()))) {
-			publishInvalidSample();
-			return false;
-		}
-	}
-
-	DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-	if (FAILED(vrRenderScaleMemoryAdapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)) || info.Budget == 0) {
+	const auto observation = Util::GpuMemoryBudget::Get().Sample(globals::d3d::device, 0, true);
+	const auto& info = observation.local;
+	if (!observation.Fresh(GetTickCount64())) {
 		publishInvalidSample();
 		return false;
 	}
@@ -55691,8 +55692,6 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	ClearVRVendorWorkGates("submit-stage device loss");
 	pendingPostLoadRuntimeResetEpoch.store(0, std::memory_order_release);
 	vrRenderScaleResourceTrackingSyncPending.store(false, std::memory_order_release);
-	vrRenderScaleMemoryAdapter = nullptr;
-	vrRenderScaleMemoryAdapterDevice = nullptr;
 	vrRenderScaleMemoryLastSampleFrame = 0;
 	vrRenderScaleMemorySnapshotValid.store(false, std::memory_order_release);
 	ClearAllVRLowPeakNativeRestoreProgress();
@@ -63712,6 +63711,7 @@ bool Upscaling::RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesire
 
 void Upscaling::StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState a_state) noexcept
 {
+	Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::RenderScale, a_state != VRRenderScaleTransitionState::Idle);
 	vrRenderScaleTransitionController.state = a_state;
 	vrRenderScaleTransitionState.store(a_state, std::memory_order_release);
 }

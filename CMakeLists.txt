@@ -4091,6 +4091,7 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(ApiFeatureContract PROPERTIES LABELS "ControllerTests")
 
     include(NeuralRenderingTests)
+    include(TextureStreamingTests)
 
     # Derive the aggregate from this block so new test executables cannot be omitted.
     get_property(_controller_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

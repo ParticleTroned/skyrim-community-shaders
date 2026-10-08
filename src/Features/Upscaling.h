@@ -2941,8 +2941,6 @@ public:
 	std::vector<VREngineTargetSlotProvenance> vrEngineTargetOwnedOutputProvenance;
 	void* vrEngineTargetProvenanceRenderer = nullptr;
 	ID3D11Device* vrEngineTargetProvenanceDevice = nullptr;
-	winrt::com_ptr<IDXGIAdapter3> vrRenderScaleMemoryAdapter;
-	ID3D11Device* vrRenderScaleMemoryAdapterDevice = nullptr;
 	uint32_t vrRenderScaleMemoryLastSampleFrame = 0;
 	std::atomic_bool vrRenderScaleMemorySnapshotValid{ false };
 	winrt::com_ptr<ID3D11Query> vrRenderScaleMemoryTrimFence;
@@ -4337,6 +4335,8 @@ public:
 	NeuralRendering::InsertionPoint GetLatchedNeuralRenderingInsertionPoint() noexcept;
 	bool TryClaimNeuralRenderingRoute(NeuralStereoRouteRole a_role) noexcept;
 	bool IsNeuralRenderingInsertionTransitionBlocked() const noexcept;
+	/** Optional texture work must yield to renderer recovery and replacement allocations. */
+	bool IsTextureStreamingTransitionActive() const noexcept;
 	bool ApplyFinalLdrNeuralStereo(
 		NeuralStereoRouteRole a_role,
 		const std::array<FinalLdrNeuralEyeTarget, 2>& a_targets,

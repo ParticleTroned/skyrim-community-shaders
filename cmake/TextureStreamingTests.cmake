@@ -1,0 +1,9 @@
+add_controller_test(texture_streaming_policy_test TextureStreamingPolicy tests/texture_streaming_policy_test.cpp)
+target_compile_definitions(texture_streaming_policy_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(texture_streaming_policy_test PRIVATE nlohmann_json::nlohmann_json)
+add_d3d_shader_test(texture_streaming_gpu_test TextureStreamingWARP tests/texture_streaming_gpu_test.cpp)
+target_sources(texture_streaming_gpu_test PRIVATE
+    src/Features/TextureStreaming/TextureData.cpp
+    src/Utils/GpuMemoryBudget.cpp)
+target_compile_definitions(texture_streaming_gpu_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(texture_streaming_gpu_test PRIVATE Microsoft::DirectXTex dxgi)

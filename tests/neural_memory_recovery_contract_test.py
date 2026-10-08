@@ -123,10 +123,10 @@ class MemoryRecoveryContracts(unittest.TestCase):
 
     def test_device_change_and_reset_invalidate_monitoring(self):
         source = body(RENDERER, "MemoryBudgetSample Renderer::State::SampleMemoryBudgetLocked(")
-        self.assertLess(source.index("memorySampleDevice_.Get() != a_device"), source.index("QueryVideoMemoryInfo("))
+        self.assertLess(source.index("memorySampleDevice_.Get() != a_device"), source.index("Util::GpuMemoryBudget::Get().Sample("))
         self.assertTrue("memoryRecovery_.ClearHealthyWindow()" in source)
         source = body(RENDERER, "bool Renderer::State::ResetLocked(")
-        for expression in ("memorySampleDevice_.Reset()", "memoryAdapter_.Reset()", "memorySample_ = {}", "simulatedPressureUntilMs_ = 0"):
+        for expression in ("memorySampleDevice_.Reset()", "memoryReservation_.Reset()", "memorySample_ = {}", "simulatedPressureUntilMs_ = 0"):
             self.assertTrue(expression in source)
         source = body(RENDERER, "bool Renderer::SimulateMemoryPressure(")
         self.assertTrue("a_durationMilliseconds && (state_->quarantined_ || state_->failureLatched_)" in source)

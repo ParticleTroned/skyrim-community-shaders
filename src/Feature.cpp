@@ -38,6 +38,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/TerrainShadows.h"
 #include "Features/TerrainVariation.h"
+#include "Features/TextureStreaming.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
@@ -291,6 +292,7 @@ namespace
 			&globals::features::extendedTranslucency,
 			&globals::features::upscaling,
 			&NeuralRenderingFeature::Instance(),
+			&TextureStreaming::Instance(),
 			&globals::features::renderDoc,
 			&globals::features::csEditor,
 			&globals::features::weatherPicker,

@@ -4,6 +4,8 @@
 
 #	include "Api/DevBenchMainThreadDispatch.h"
 #	include "Api/FeatureService.h"
+#	include "Features/TextureStreaming.h"
+#	include "Features/TextureStreaming/Settings.h"
 #	include "Api/ServiceFoundation.h"
 #	include "BuildProvenance.h"
 #	include "FeatureIssues.h"
@@ -118,14 +120,14 @@ namespace
 	json BuildResult(const json& args)
 	{
 		const auto action = args.value("action", std::string{});
-		const bool known = action == "registry" || action == "snapshot" || action == "features" || action == "issues" || action == "preset_compatibility" || action == "settings" || action == "constraints" || action == "preflight" || action == "execute";
+		const bool known = action == "texture_streaming" || action == "registry" || action == "snapshot" || action == "features" || action == "issues" || action == "preset_compatibility" || action == "settings" || action == "constraints" || action == "preflight" || action == "execute";
 		if (!known)
 			return Foundation().MakeError(args, "unknown_action", "action is not supported", "validation", false, "action");
 		if (action == "registry") {
 			auto response = Foundation().MakeEnvelope(args, true);
 			response["result"] = { { "service", ServiceName }, { "major", 1 }, { "minor", 1 }, { "schemaRevision", 2 },
 				{ "capabilities", ServiceCapabilities }, { "mainThreadAffine", true }, { "registryMainThreadAffine", false },
-				{ "preflightTokenLifetimeMs", 30000 }, { "actions", json::array({ "registry", "snapshot", "features", "issues", "preset_compatibility", "settings", "constraints", "preflight", "execute" }) },
+				{ "preflightTokenLifetimeMs", 30000 }, { "actions", json::array({ "registry", "snapshot", "features", "issues", "preset_compatibility", "settings", "texture_streaming", "constraints", "preflight", "execute" }) },
 				{ "mutations", json::array({ "set_disabled_at_boot" }) }, { "legacyInterfacesPreserved", true } };
 			return response;
 		}
@@ -136,10 +138,31 @@ namespace
 			} catch (const std::exception& e) {
 				return Foundation().MakeError(args, "invalid_mutation", e.what(), "validation", false, "mutation");
 			}
+		if (args.contains("textureStreaming")) {
+			try {
+				const auto& settings = args.at("textureStreaming");
+				if (action != "texture_streaming" || !settings.is_object() || settings.size() != 2 ||
+					!settings.contains("enabled") || !settings.at("enabled").is_boolean() || !settings.contains("maximumMipDrop"))
+					throw std::invalid_argument("textureStreaming requires the texture_streaming action, enabled and maximumMipDrop");
+				(void)StreamingTextures::ParseMaximumMipDrop(settings.at("maximumMipDrop"));
+			} catch (const std::exception& e) {
+				return Foundation().MakeError(args, "invalid_settings", e.what(), "validation", false, "textureStreaming");
+			}
+		}
 		auto result = OnMain([action, args] {
 			const auto* api = CSX::Api::GetFeatureService001();
 			if (!api)
 				return json{ { "error", "feature API unavailable" } };
+			if (action == "texture_streaming") {
+				auto& streaming = TextureStreaming::Instance();
+				if (args.contains("textureStreaming")) {
+					const auto& settings = args.at("textureStreaming");
+					if (!streaming.loaded)
+						return json{ { "error", "Texture Streaming feature is not loaded" }, { "errorCode", "feature_unavailable" } };
+					streaming.Configure(settings.at("enabled"), StreamingTextures::ParseMaximumMipDrop(settings.at("maximumMipDrop")));
+				}
+				return streaming.GetStatus();
+			}
 			if (action == "snapshot") {
 				Snapshot001 v;
 				const auto s = api->GetSnapshot(api->context, &v);
@@ -206,6 +229,8 @@ namespace
 			return json{ { "status", StatusName(s) }, { "applied", v.applied != 0 }, { "changed", v.changed != 0 }, { "persisted", v.persisted != 0 },
 				{ "previousStateRevision", v.previousStateRevision }, { "stateRevision", v.stateRevision }, { "message", v.message ? v.message : "" }, { "current", SnapshotJson(current) } };
 		});
+		if (result.value("errorCode", std::string{}) == "feature_unavailable")
+			return Foundation().MakeError(args, "feature_unavailable", result.at("error"), "admission", false, "textureStreaming");
 		if (result.contains("error"))
 			return Foundation().MakeError(args, "main_thread_dispatch_failed", result.value("detail", result.value("error", std::string("feature API dispatch failed"))), "dispatch", true);
 		auto response = Foundation().MakeEnvelope(args, true);
@@ -247,7 +272,7 @@ namespace CSX::Api::FeatureDevBenchBridge
 			logger::info("FeatureDevBenchBridge: devbench host not present; feature API tool not registered");
 			return;
 		}
-		const char* descriptor = R"({"description":"Versioned CSX feature catalog, settings/constraint inspection, detected feature issues, preset compatibility diagnostics, and guarded boot-configuration API. issues returns boot warning data; preset_compatibility reports whether marked SettingsUser content was accepted or rejected.","inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},"action":{"type":"string","enum":["registry","snapshot","features","issues","preset_compatibility","settings","constraints","preflight","execute"]},"featureShortName":{"type":"string"},"mutation":{"type":"object","required":["action","expectedStateRevision","featureShortName","disabled"],"properties":{"action":{"type":"string","const":"set_disabled_at_boot"},"expectedStateRevision":{"type":"integer","minimum":0},"featureShortName":{"type":"string"},"disabled":{"type":"boolean"},"persist":{"type":"boolean"},"allowDisruptive":{"type":"boolean"},"preflightToken":{"type":"string"}}}}}})";
+		const char* descriptor = R"({"description":"Versioned CSX feature catalog, settings/constraint inspection, detected feature issues, preset compatibility diagnostics, texture streaming inspection/configuration, and guarded boot-configuration API. texture_streaming reports shared GPU observations and logical capacities; optional textureStreaming applies session settings and disabling queues gradual restoration. issues returns boot warning data; preset_compatibility reports whether marked SettingsUser content was accepted or rejected.","inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},"action":{"type":"string","enum":["registry","snapshot","features","issues","preset_compatibility","settings","texture_streaming","constraints","preflight","execute"]},"textureStreaming":{"type":"object","additionalProperties":false,"required":["enabled","maximumMipDrop"],"properties":{"enabled":{"type":"boolean"},"maximumMipDrop":{"type":"integer","minimum":1,"maximum":3}}},"featureShortName":{"type":"string"},"mutation":{"type":"object","required":["action","expectedStateRevision","featureShortName","disabled"],"properties":{"action":{"type":"string","const":"set_disabled_at_boot"},"expectedStateRevision":{"type":"integer","minimum":0},"featureShortName":{"type":"string"},"disabled":{"type":"boolean"},"persist":{"type":"boolean"},"allowDisruptive":{"type":"boolean"},"preflightToken":{"type":"string"}}}}}})";
 		host->RegisterTool("communityshaders.feature_api", descriptor, &Handler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("FeatureDevBenchBridge: registered communityshaders.feature_api with devbench build {}", host->GetBuildNumber());

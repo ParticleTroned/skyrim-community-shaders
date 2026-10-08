@@ -1,16 +1,49 @@
-#define NOMINMAX
+#include "Features/Upscaling/NeuralRendering/ModelResolution.h"
+#include "GpuPass.h"
 #include "ShaderPackageIncludes.h"
+#include "Utils/ShaderCompiler.h"
 #include "d3d11_shader_test.h"
+#include "nr_model_resolution_accounting_under_test.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <span>
 #include <stdexcept>
 #include <vector>
+
+namespace AdapterCompiler
+{
+	ID3D11Device* device = nullptr;
+	unsigned calls = 0;
+	bool vr = false;
+}
+
+// Substitute only engine compilation/profiling; the adapter and GPU work are production code.
+ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
+	const std::vector<std::pair<const char*, const char*>>&, const char* target, const char* entry, ShaderCompileTiming*)
+{
+	++AdapterCompiler::calls;
+	const auto shaderPath = std::filesystem::path("features/Neural Rendering/Shaders/Upscaling/NeuralRendering") /
+	                        std::filesystem::path(path).filename();
+	PackageIncludes includes("package/Shaders", "features/Neural Rendering/Shaders");
+	const D3D_SHADER_MACRO defines[]{ { "VR", "1" }, { nullptr, nullptr } };
+	Microsoft::WRL::ComPtr<ID3DBlob> code, errors;
+	const auto result = D3DCompileFromFile(shaderPath.c_str(), AdapterCompiler::vr ? defines : defines + 1, &includes,
+		entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
+	if (errors)
+		std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+	D3D11ShaderTest::Check(result);
+	ID3D11ComputeShader* shader = nullptr;
+	D3D11ShaderTest::Check(AdapterCompiler::device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader));
+	return shader;
+}
+ScopedGpuPass::ScopedGpuPass(std::string_view, const Util::PassTimingHandle&, bool) {}
+ScopedGpuPass::~ScopedGpuPass() = default;
 
 namespace
 {
@@ -297,6 +330,99 @@ namespace
 			}
 		}
 	}
+	void CheckAdapter(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		using namespace NeuralRendering;
+		constexpr Size source{ 13, 9 };
+		const std::vector<Pixel> color(source[0] * source[1], Pixel{ 0.2f, 0.3f, 0.4f, 0.375f });
+		const std::vector<Pixel> colorRight(color.size(), Pixel{ 0.6f, 0.15f, 0.1f, 0.625f });
+		Texture input(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, color);
+		Texture inputRight(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, colorRight);
+		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, std::vector(color.size(), 0.5f));
+		Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, std::vector(color.size(), Motion{ 0.1f, -0.2f }));
+		Texture outputLeft(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
+		Texture outputRight(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
+		RendererApplyArgs inputArgs;
+		inputArgs.device = device;
+		inputArgs.context = context;
+		inputArgs.colorInput = input.texture.Get();
+		inputArgs.depthGuide = depth.texture.Get();
+		inputArgs.depthGuideSRV = depth.srv.Get();
+		inputArgs.motionVectors = motion.texture.Get();
+		inputArgs.colorOutput = outputLeft.texture.Get();
+		inputArgs.colorWidth = inputArgs.guideWidth = inputArgs.outputWidth = source[0];
+		inputArgs.colorHeight = inputArgs.guideHeight = inputArgs.outputHeight = source[1];
+		inputArgs.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]);
+		inputArgs.computeSubrect = { 3, 2, 7, 5 };
+		inputArgs.renderingMode = RenderingMode::ReducedResolution;
+		inputArgs.modelResolutionPercent = 50;
+		inputArgs.reset = true;
+		std::array args{ inputArgs, inputArgs };
+		args[1].featureSlot = 1;
+		args[1].colorInput = inputRight.texture.Get();
+		args[1].colorOutput = outputRight.texture.Get();
+		ModelResolution adapter;
+		ModelResolution::Batch batch;
+		HRESULT result = S_OK;
+		const auto estimate = adapter.AdditionalBytes(args);
+		Require(estimate && *estimate > 0, "Proxy allocation must be admitted before preparation");
+		Require(adapter.Prepare(args, batch, result), "Production proxy preparation failed");
+		Require(adapter.AdditionalBytes(args) == 0, "Unchanged eye allocations must be reused");
+		Require(adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *estimate,
+			"Admission and retained-allocation accounting disagree");
+		Require(batch.arguments[0].outputWidth == 7 && batch.arguments[0].outputHeight == 5,
+			"Production adapter did not use the independent model grid");
+		Require(batch.arguments[0].computeSubrect == ComputeSubrect{ 1, 1, 5, 3 },
+			"Production adapter lost outward ROI coverage");
+		for (const auto& eye : batch.arguments)
+			context->CopyResource(eye.colorOutput, eye.colorInput);
+		const auto unchanged = outputLeft.Read<Pixel>(device, context);
+		Require(std::ranges::all_of(unchanged, [](const auto& pixel) { return pixel == sentinel; }),
+			"Preparation exposed a private eye before pair reconstruction");
+		const auto compilations = AdapterCompiler::calls;
+		adapter.Reset();
+		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "Reset retained cached proxy allocations");
+		Require(adapter.Reconstruct(args, batch, result), "An admitted batch must survive native backend reset");
+		Require(AdapterCompiler::calls == compilations, "Backend reset unnecessarily recompiles an admitted batch's shaders");
+		adapter.Commit(args, batch);
+		for (const auto* output : { &outputLeft, &outputRight }) {
+			const auto pixels = output->Read<Pixel>(device, context);
+			for (UINT y = 0; y < source[1]; ++y)
+				for (UINT x = 0; x < source[0]; ++x) {
+					const bool owned = x >= 3 && x < 10 && y >= 2 && y < 7;
+					const auto index = y * source[0] + x;
+					for (UINT channel = 0; channel < 4; ++channel)
+						Near(pixels[index][channel], owned ? (output == &outputLeft ? color : colorRight)[index][channel] : sentinel[channel],
+							"Production commit changed identity colour, alpha, or pixels outside the owned ROI");
+				}
+		}
+		ModelResolution::Batch incomplete;
+		incomplete.count = args.size();
+		Require(!adapter.Reconstruct(args, incomplete, result) && result == E_INVALIDARG,
+			"An incomplete batch must fail before touching caller outputs");
+		Texture mask(device, source, DXGI_FORMAT_R8_UNORM, std::vector<std::uint8_t>(color.size(), 255));
+		for (auto& eye : args) {
+			eye.controlMask = mask.texture;
+			eye.controlMaskWidth = source[0];
+			eye.controlMaskHeight = source[1];
+			eye.tuning.useAutoMask = false;
+		}
+		Require(adapter.AdditionalBytes(args) == *estimate + 2u * 7u * 5u, "Mask allocations are missing from memory admission");
+		Require(adapter.Prepare(args, batch, result), "Masked proxy recreation failed");
+		Require(adapter.AdditionalBytes(args) == 0, "Masked proxy allocation was not retained");
+		Require(adapter.RetainedBytes(0).value() + adapter.RetainedBytes(1).value() == *estimate + 2u * 7u * 5u,
+			"Masked retained-memory accounting disagrees with admission");
+		auto resized = args;
+		resized[0].modelResolutionPercent = resized[1].modelResolutionPercent = 33;
+		Require(adapter.AdditionalBytes(resized).value() > 0, "A changed model grid reused incompatible allocations");
+		auto invalid = args;
+		invalid[1].viewportCrop = {};
+		Require(!adapter.AdditionalBytes(invalid) && !adapter.Prepare(invalid, incomplete, result),
+			"Invalid right-eye geometry must fail before proxy allocation or dispatch");
+		args[0].modelResolutionPercent = args[1].modelResolutionPercent = 100;
+		adapter.ReleaseUnscaledSlots(args);
+		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "100% retained downscaling caches");
+	}
 }
 
 int main()
@@ -305,7 +431,10 @@ int main()
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context));
+		AdapterCompiler::device = device.Get();
 		for (bool vr : { false, true }) {
+			AdapterCompiler::vr = vr;
+			CheckAdapter(device.Get(), context.Get());
 			Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
 			Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
 			for (bool mask : { false, true })
@@ -316,7 +445,7 @@ int main()
 			for (unsigned condition = 0; condition < 7; ++condition)
 				CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
 		}
-		std::cout << "PASS: NR production shaders on WARP: area reduction, guide/mask ownership, odd sizes, identity, residual detail, alpha, ROI isolation and finite fallback (flat/VR)\n";
+		std::cout << "PASS: NR production adapter and shaders on WARP: batch reset ownership, allocation reuse, stereo commit, area reduction, guide/mask ownership, odd sizes, identity, residual detail, alpha, ROI isolation and finite fallback (flat/VR)\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

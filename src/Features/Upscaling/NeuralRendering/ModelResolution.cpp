@@ -1,7 +1,8 @@
 #include "ModelResolution.h"
 #include "ComputeStateGuard.h"
 #include "GpuPass.h"
-#include "Utils/D3D.h"
+#include "Utils/ResourceName.h"
+#include "Utils/ShaderCompiler.h"
 
 #include <algorithm>
 #include <array>
@@ -89,6 +90,43 @@ namespace NeuralRendering
 			}
 		}
 
+		struct AllocationKey
+		{
+			UpscalingDLSS::Extent sourceSize{}, modelSize{};
+			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN, outputFormat = DXGI_FORMAT_UNKNOWN, motionFormat = DXGI_FORMAT_UNKNOWN;
+			bool hasMask = false;
+
+			bool operator==(const AllocationKey&) const = default;
+
+			static std::optional<AllocationKey> Read(const RendererApplyArgs& input, const RendererApplyArgs& projected)
+			{
+				D3D11_TEXTURE2D_DESC color{}, output{}, motion{};
+				if (!ReadDescription(input.colorInput, color) || !ReadDescription(input.colorOutput, output) ||
+					!ReadDescription(input.motionVectors, motion) ||
+					color.Width != input.colorWidth || color.Height != input.colorHeight ||
+					output.Width != input.outputWidth || output.Height != input.outputHeight ||
+					motion.Width != input.guideWidth || motion.Height != input.guideHeight)
+					return std::nullopt;
+				return AllocationKey{ { input.outputWidth, input.outputHeight }, { projected.outputWidth, projected.outputHeight },
+					color.Format, output.Format, motion.Format, input.controlMask != nullptr };
+			}
+
+			std::optional<std::uint64_t> Bytes() const noexcept
+			{
+				std::uint64_t total = 0;
+				for (auto format : { colorFormat, DXGI_FORMAT_R32_FLOAT, motionFormat, outputFormat }) {
+					const auto bytes = LogicalTextureBytes(format, modelSize.width, modelSize.height);
+					if (!bytes)
+						return std::nullopt;
+					total += *bytes;
+				}
+				if (hasMask)
+					total += static_cast<std::uint64_t>(modelSize.width) * modelSize.height;
+				const auto fullOutput = LogicalTextureBytes(outputFormat, sourceSize.width, sourceSize.height);
+				return fullOutput ? std::optional{ total + *fullOutput } : std::nullopt;
+			}
+		};
+
 		ComputeSubrect SourceRegion(const RendererApplyArgs& args)
 		{
 			return args.roi                      ? args.roi->ownedOutput :
@@ -99,9 +137,7 @@ namespace NeuralRendering
 
 	struct ModelResolution::Work
 	{
-		UpscalingDLSS::Extent sourceSize{}, modelSize{};
-		DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN, outputFormat = DXGI_FORMAT_UNKNOWN, motionFormat = DXGI_FORMAT_UNKNOWN;
-		bool hasMask = false;
+		AllocationKey allocation{};
 		Color::Texture color, depth, motion, mask, output, reconstructed;
 		ComPtr<ID3D11Resource> sourceColor, sourceMotion, sourceMask;
 		ComPtr<ID3D11ShaderResourceView> colorView, motionView, maskView;
@@ -159,48 +195,25 @@ namespace NeuralRendering
 			if (input.featureSlot >= slots_.size())
 				return std::nullopt;
 			RendererApplyArgs projected;
-			D3D11_TEXTURE2D_DESC color{}, output{}, motion{};
-			if (!Project(input, projected) || !ReadDescription(input.colorInput, color) ||
-				!ReadDescription(input.colorOutput, output) || !ReadDescription(input.motionVectors, motion))
+			if (!Project(input, projected))
 				return std::nullopt;
-			const UpscalingDLSS::Extent sourceSize{ input.outputWidth, input.outputHeight }, modelSize{ projected.outputWidth, projected.outputHeight };
+			const auto allocation = AllocationKey::Read(input, projected);
+			if (!allocation)
+				return std::nullopt;
 			const auto& cached = slots_[input.featureSlot];
-			if (device_.Get() == input.device && cached && cached->sourceSize == sourceSize && cached->modelSize == modelSize &&
-				cached->colorFormat == color.Format && cached->outputFormat == output.Format &&
-				cached->motionFormat == motion.Format && cached->hasMask == (input.controlMask != nullptr))
+			if (device_.Get() == input.device && cached && cached->allocation == *allocation)
 				continue;
-			for (auto format : { color.Format, DXGI_FORMAT_R32_FLOAT, motion.Format, output.Format }) {
-				auto bytes = LogicalTextureBytes(format, modelSize.width, modelSize.height);
-				if (!bytes)
-					return std::nullopt;
-				total += *bytes;
-			}
-			if (input.controlMask)
-				total += static_cast<std::uint64_t>(modelSize.width) * modelSize.height;
-			auto fullOutput = LogicalTextureBytes(output.Format, sourceSize.width, sourceSize.height);
-			if (!fullOutput)
+			const auto bytes = allocation->Bytes();
+			if (!bytes)
 				return std::nullopt;
-			total += *fullOutput;
+			total += *bytes;
 		}
 		return total;
 	}
 
 	std::optional<std::uint64_t> ModelResolution::RetainedBytes(std::uint32_t slot) const noexcept
 	{
-		if (slot >= slots_.size() || !slots_[slot])
-			return 0;
-		const auto& work = *slots_[slot];
-		std::uint64_t total = 0;
-		for (auto format : { work.colorFormat, DXGI_FORMAT_R32_FLOAT, work.motionFormat, work.outputFormat }) {
-			auto bytes = LogicalTextureBytes(format, work.modelSize.width, work.modelSize.height);
-			if (!bytes)
-				return std::nullopt;
-			total += *bytes;
-		}
-		if (work.hasMask)
-			total += static_cast<std::uint64_t>(work.modelSize.width) * work.modelSize.height;
-		auto fullOutput = LogicalTextureBytes(work.outputFormat, work.sourceSize.width, work.sourceSize.height);
-		return fullOutput ? std::optional{ total + *fullOutput } : std::nullopt;
+		return slot < slots_.size() && slots_[slot] ? slots_[slot]->allocation.Bytes() : std::optional<std::uint64_t>{ 0 };
 	}
 
 	bool ModelResolution::EnsureShaders(ID3D11Device* device, HRESULT& result)
@@ -244,14 +257,9 @@ namespace NeuralRendering
 		batch = {};
 		if (args.empty() || args.size() > batch.arguments.size())
 			return false;
-		for (const auto& input : args) {
-			if (!input.device || !input.context || input.featureSlot >= slots_.size() ||
-				input.renderingMode != RenderingMode::ReducedResolution || !input.reset || input.featureUpscaling ||
-				input.modelResolutionPercent == kMaximumModelResolutionPercent ||
-				!IsValidModelResolutionPercent(input.modelResolutionPercent) ||
-				input.colorWidth != input.outputWidth || input.colorHeight != input.outputHeight ||
-				input.guideWidth != input.outputWidth || input.guideHeight != input.outputHeight ||
-				!SourceRegion(input).Fits(input.outputWidth, input.outputHeight))
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			const auto& input = args[index];
+			if (!input.device || !input.context || input.featureSlot >= slots_.size() || !Project(input, batch.arguments[index]))
 				return false;
 		}
 		if (!EnsureShaders(args.front().device, result))
@@ -259,32 +267,24 @@ namespace NeuralRendering
 		try {
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
-				const UpscalingDLSS::Extent sourceSize{ input.outputWidth, input.outputHeight };
-				const auto modelSize = BuildModelResolutionExtent(sourceSize.width, sourceSize.height, input.modelResolutionPercent);
-				D3D11_TEXTURE2D_DESC colorDesc{}, outputDesc{}, motionDesc{};
-				if (!modelSize.IsValid() || !ReadDescription(input.colorInput, colorDesc) ||
-					!ReadDescription(input.colorOutput, outputDesc) || !ReadDescription(input.motionVectors, motionDesc)) {
+				const auto allocation = AllocationKey::Read(input, batch.arguments[index]);
+				if (!allocation) {
 					result = E_INVALIDARG;
 					return false;
 				}
+				const auto& key = *allocation;
+				const auto sourceSize = key.sourceSize, modelSize = key.modelSize;
+				const bool hasMask = key.hasMask;
 				auto work = slots_[input.featureSlot];
-				const bool hasMask = input.controlMask != nullptr;
-				if (!work || work->sourceSize != sourceSize || work->modelSize != modelSize ||
-					work->colorFormat != colorDesc.Format || work->outputFormat != outputDesc.Format ||
-					work->motionFormat != motionDesc.Format || work->hasMask != hasMask) {
+				if (!work || work->allocation != key) {
 					work = std::make_shared<Work>();
-					work->sourceSize = sourceSize;
-					work->modelSize = modelSize;
-					work->colorFormat = colorDesc.Format;
-					work->outputFormat = outputDesc.Format;
-					work->motionFormat = motionDesc.Format;
-					work->hasMask = hasMask;
+					work->allocation = key;
 					const auto prefix = std::format("NeuralRendering::ModelSlot{}::", input.featureSlot);
-					if (!CreateTexture(input.device, work->color, modelSize, colorDesc.Format, prefix + "Color", result) ||
+					if (!CreateTexture(input.device, work->color, modelSize, key.colorFormat, prefix + "Color", result) ||
 						!CreateTexture(input.device, work->depth, modelSize, DXGI_FORMAT_R32_FLOAT, prefix + "Depth", result) ||
-						!CreateTexture(input.device, work->motion, modelSize, motionDesc.Format, prefix + "Motion", result) ||
-						!CreateTexture(input.device, work->output, modelSize, outputDesc.Format, prefix + "Output", result) ||
-						!CreateTexture(input.device, work->reconstructed, sourceSize, outputDesc.Format, prefix + "Reconstructed", result) ||
+						!CreateTexture(input.device, work->motion, modelSize, key.motionFormat, prefix + "Motion", result) ||
+						!CreateTexture(input.device, work->output, modelSize, key.outputFormat, prefix + "Output", result) ||
+						!CreateTexture(input.device, work->reconstructed, sourceSize, key.outputFormat, prefix + "Reconstructed", result) ||
 						(hasMask && !CreateTexture(input.device, work->mask, modelSize, DXGI_FORMAT_R8_UNORM, prefix + "Mask", result)))
 						return false;
 					slots_[input.featureSlot] = work;
@@ -308,14 +308,10 @@ namespace NeuralRendering
 					{ sourceSize.width, sourceSize.height }, { modelSize.width, modelSize.height },
 					{ source.baseX, source.baseY }, { source.width, source.height },
 					{ model.baseX, model.baseY }, { model.width, model.height },
-					hasMask ? 1u : 0u, OutputFormat(outputDesc.Format),
+					hasMask ? 1u : 0u, OutputFormat(key.outputFormat),
 					geometry->motionNormalization
 				};
 				auto& adapted = batch.arguments[index];
-				if (!Project(input, adapted)) {
-					result = E_INVALIDARG;
-					return false;
-				}
 				adapted.colorInput = work->color.resource.Get();
 				adapted.depthGuide = work->depth.resource.Get();
 				adapted.depthGuideSRV = work->depth.srv.Get();
@@ -337,14 +333,16 @@ namespace NeuralRendering
 			return false;
 		}
 		batch.count = args.size();
+		batch.reconstructionShader = reconstruct_;
+		batch.constants = constants_;
 		auto* context = args.front().context;
 		ComputeStateGuard<4, 4> guard(context);
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& work = *batch.resources[index];
 			context->UpdateSubresource(constants_.Get(), 0, nullptr, &work.constants, 0, 0);
 			auto* cb = constants_.Get();
-			const std::array srvs{ work.colorView.Get(), args[index].depthGuideSRV, work.motionView.Get(), work.hasMask ? work.maskView.Get() : nullptr };
-			const std::array uavs{ work.color.uav.Get(), work.depth.uav.Get(), work.motion.uav.Get(), work.hasMask ? work.mask.uav.Get() : nullptr };
+			const std::array srvs{ work.colorView.Get(), args[index].depthGuideSRV, work.motionView.Get(), work.allocation.hasMask ? work.maskView.Get() : nullptr };
+			const std::array uavs{ work.color.uav.Get(), work.depth.uav.Get(), work.motion.uav.Get(), work.allocation.hasMask ? work.mask.uav.Get() : nullptr };
 			context->CSSetShader(prepare_.Get(), nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);
 			context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
@@ -362,17 +360,19 @@ namespace NeuralRendering
 	bool ModelResolution::Reconstruct(std::span<const RendererApplyArgs> args, const Batch& batch, HRESULT& result)
 	{
 		result = E_INVALIDARG;
-		if (batch.count != args.size() || args.empty() || !EnsureShaders(args.front().device, result))
+		if (batch.count != args.size() || args.empty() || args.size() > batch.resources.size() ||
+			!batch.reconstructionShader || !batch.constants ||
+			std::ranges::any_of(std::span(batch.resources.data(), batch.count), [](const auto& work) { return !work; }))
 			return false;
 		auto* context = args.front().context;
 		ComputeStateGuard<3> guard(context);
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& work = *batch.resources[index];
-			context->UpdateSubresource(constants_.Get(), 0, nullptr, &work.constants, 0, 0);
-			auto* cb = constants_.Get();
+			context->UpdateSubresource(batch.constants.Get(), 0, nullptr, &work.constants, 0, 0);
+			auto* cb = batch.constants.Get();
 			const std::array srvs{ work.colorView.Get(), work.color.srv.Get(), work.output.srv.Get() };
 			auto* uav = work.reconstructed.uav.Get();
-			context->CSSetShader(reconstruct_.Get(), nullptr, 0);
+			context->CSSetShader(batch.reconstructionShader.Get(), nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);
 			context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);

@@ -19,6 +19,8 @@ namespace NeuralRendering
 		{
 			std::array<RendererApplyArgs, 2> arguments{};
 			std::array<std::shared_ptr<Work>, 2> resources{};
+			Microsoft::WRL::ComPtr<ID3D11ComputeShader> reconstructionShader;
+			Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
 			std::size_t count = 0;
 		};
 

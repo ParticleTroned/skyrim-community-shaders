@@ -156,7 +156,6 @@ foreach(_required_behavior IN ITEMS
     "VRDepthCullingTemporal::SetTelemetryEnabled(enabled)"
     "VRDepthCullingTemporal::TryResetStatus()"
     "depth_culling_telemetry_busy"
-    "\"durationHistogramNanoseconds\""
 )
     string(FIND "${_bridge}" "${_required_behavior}" _behavior_position)
     if(_behavior_position EQUAL -1)
@@ -206,7 +205,7 @@ foreach(_removed_surface IN ITEMS
     endif()
 endforeach()
 
-foreach(_required_action IN ITEMS set_depth_culling_settings set_depth_culling_legacy_mode)
+foreach(_required_action IN ITEMS set_depth_culling_settings set_depth_culling_legacy_mode set_depth_culling_source_refinement_enabled set_depth_culling_direct_intersection_enabled set_depth_culling_far_clip_enabled)
     set(_found FALSE)
     foreach(_index RANGE 0 ${_action_last})
         string(JSON _action GET "${_descriptor}" inputSchema properties action enum ${_index})
@@ -262,3 +261,25 @@ if(_culling_validate EQUAL -1 OR _culling_dispatch EQUAL -1 OR _culling_apply EQ
     message(FATAL_ERROR "Depth-culling mutation must follow complete validation and main-thread dispatch")
 endif()
 message(STATUS "Independent depth-culling DevBench settings contract is coherent")
+
+string(JSON _ambient_schema GET "${_descriptor}" inputSchema properties visuals properties ambient)
+string(JSON _ambient_type GET "${_ambient_schema}" type)
+string(JSON _ambient_min GET "${_ambient_schema}" minimum)
+string(JSON _ambient_max GET "${_ambient_schema}" maximum)
+if(NOT _ambient_type STREQUAL "number" OR NOT _ambient_min EQUAL 0 OR NOT _ambient_max EQUAL 5)
+    message(FATAL_ERROR "Adaptive Balance Ambient schema must match its 0-5 slider")
+endif()
+
+string(JSON _refinement_description GET "${_descriptor}" description)
+string(FIND "${_descriptor}" "set_depth_culling_source_refinement_enabled" _refinement_action)
+string(FIND "${_refinement_description}" "nonpersistent Hi-Z A/B" _refinement_contract)
+if(_refinement_action LESS 0 OR _refinement_contract LESS 0)
+    message(FATAL_ERROR "Menu DevBench refinement A/B action or contract is missing")
+endif()
+
+file(READ "${PROJECT_ROOT}/src/MenuDepthCullingDiagnostics.h" _depth_diagnostics)
+string(FIND "${_depth_diagnostics}" "durationHistogramNanoseconds" _histogram_position)
+string(FIND "${_bridge}" "MenuDepthCullingDiagnostics::BuildStatus" _diagnostics_call)
+if(_histogram_position LESS 0 OR _diagnostics_call LESS 0)
+    message(FATAL_ERROR "Depth-culling diagnostics must preserve timing histograms")
+endif()

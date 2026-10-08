@@ -176,11 +176,11 @@ void Feature::Load(json& o_json)
 					LoadSettings(o_json[GetName()]);
 				} catch (...) {
 					logger::warn("Invalid settings for {}, using default.", GetName());
-					RestoreDefaultSettings();
+					RestoreDefaultSettingsForLoad();
 				}
 			} else {
 				logger::info("Loading default settings for {}", GetName());
-				RestoreDefaultSettings();
+				RestoreDefaultSettingsForLoad();
 			}
 		}
 	}

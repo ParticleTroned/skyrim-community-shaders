@@ -803,7 +803,7 @@ The most useful controls are **Wrapped Lighting for Vanilla Grass**, complex gra
 
 **Skylighting** controls probe-based sky and ambient lighting. At good visual settings, assume it can cost roughly `1.5 ms` in VR, so treat it as a quality feature.
 
-Important controls include **Diffuse Min Visibility**, **Specular Min Visibility**, **Probe Grid Quality**, reduced update frequency, incremental probe updates, fast probe sampling, and **Max Zenith Angle**. The update-frequency and probe controls are the performance levers. If you need more FPS, Skylighting is one of the first features to test disabling.
+Important controls include **Diffuse Min Visibility**, **Specular Min Visibility**, **Probe Grid Quality**, reduced update frequency, incremental probe updates, and **Max Zenith Angle**. The update-frequency and probe controls are the performance levers. If you need more FPS, Skylighting is one of the first features to test disabling.
 
 #### True PBR
 
@@ -825,6 +825,12 @@ Intensity linearly changes brightness, while opacity shapes shaft presence after
 temporal lighting without changing the weather-authored density. Higher quality
 and larger volume dimensions cost more; avoid pushing intensity or opacity too
 high because it can make weather lighting look washed out.
+
+Saturation adjusts the weather godray color at final composition: 0 is grayscale,
+1 preserves the authored color, and higher values increase saturation, including
+HDR colors. Custom Color Contribution blends the selected RGB color over that
+result; 0 preserves the weather color and 1 fully replaces it. These controls
+apply to both VR and flat Skyrim and require ImageSpace shader replacement.
 
 ### Performance Optimization
 
@@ -893,7 +899,7 @@ Performance-first tuning. Uses aggressive culling, smaller FOV areas, hard cutof
 | Wetterness in heavy rain/storm          |                                    Up to `2.0 ms` |    `0.4-0.8 ms` |   `1.2-2.0 ms` | **Wetterness Preset** at **Quality** for moderate tuning, **Wetterness Dynamic Detail** in **VR > Foveation**, **Wetness Fade Range**, **Raindrop Effect Range**, **Enable Raindrop Effects**, **Enable Splashes**, **Enable Ripples**, **Puddle Radius**, **Shore Range**, lower preset or disable **Enable Wetterness** in worst cases |
 | Subsurface Scattering                   |                                      `0.3-0.5 ms` |    `0.1-0.2 ms` |   `0.3-0.5 ms` | **Burley Samples**, **Blur Radius**, **Thickness**, **Enable Character Lighting**, lower profile strength values                                                                                                                                                                                                                         |
 | Grass Lighting                          |                                      `0.1-0.3 ms` |   `0.05-0.1 ms` |   `0.1-0.2 ms` | **Detection Threshold**, complex grass glossiness/specular controls, **Wrapped Lighting for Vanilla Grass**, **Override Complex Grass Lighting Settings** if needed                                                                                                                                                                      |
-| Skylighting                             |                                          `1.5 ms` |    `0.4-0.8 ms` |   `1.0-1.5 ms` | **Probe Grid Quality**, **Enable Reduced Update Frequency**, **Occlusion Update Interval**, **Probe Update Interval**, **Enable Incremental Probe Updates**, **Stable Slice Count**, **Enable Fast Probe Sampling**, **Max Zenith Angle**, or disable the feature                                                                        |
+| Skylighting                             |                                          `1.5 ms` |    `0.4-0.8 ms` |   `1.0-1.5 ms` | **Probe Grid Quality**, **Enable Reduced Update Frequency**, **Occlusion Update Interval**, **Probe Update Interval**, **Enable Incremental Probe Updates**, **Stable Slice Count**, **Max Zenith Angle**, or disable the feature                                                                                                        |
 | True PBR                                |                  `0.2-0.5 ms`, material dependent |   `0.05-0.2 ms` |   `0.2-0.5 ms` | Lower **PBR Metal Reflection** / **PBR Metal Highlight**, avoid expensive **Glint** settings, reduce displacement/coat/subsurface values, or disable if a material setup is too expensive                                                                                                                                                |
 | Volumetric Lighting                     |                                      `0.4-0.9 ms` |    `0.2-0.4 ms` |   `0.5-0.9 ms` | **Exterior Quality**, **Interior Quality**, custom **Width / Height / Depth**, **Disable Weather-Driven Volumetric Lighting During Rain**, **Enable Volumetric Lighting in Exteriors/Interiors**, VR FPS Stabilizer **CS>VLExterior** rules                                                                                              |
 | Cloud Shadows                           |                                          `0.3 ms` |    `0.1-0.2 ms` |       `0.3 ms` | Disable if you need easy savings; Skyrim VR already has many imperfect shadows                                                                                                                                                                                                                                                           |

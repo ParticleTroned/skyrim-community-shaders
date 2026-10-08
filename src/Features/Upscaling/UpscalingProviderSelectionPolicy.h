@@ -47,6 +47,19 @@ namespace UpscalingProviderSelectionPolicy
 		};
 	}
 
+	/** Queries adapter identity only while the provider capability is unresolved. */
+	template <class Query>
+	Selection SelectWithAdapterQuery(Inputs a_inputs, Query&& a_query)
+	{
+		if (a_inputs.primaryRequestsDLSS && !a_inputs.dlssAvailable &&
+			!a_inputs.providerCheckComplete && !a_inputs.adapterKnown) {
+			const auto vendorID = a_query();
+			a_inputs.adapterKnown = vendorID.has_value();
+			a_inputs.adapterVendorID = vendorID.value_or(0);
+		}
+		return Select(a_inputs);
+	}
+
 	/** Restricts automatic fallback to the zero-ID profile bound from saved settings. */
 	constexpr bool ShouldNormalizePortableBootProfile(
 		const Selection& a_selection,

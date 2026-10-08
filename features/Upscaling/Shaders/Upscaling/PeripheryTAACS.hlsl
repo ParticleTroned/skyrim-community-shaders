@@ -1,4 +1,4 @@
-#include "Common/FoveatedMask.hlsli"
+#include "Upscaling/FoveatedBlend.hlsli"
 
 // Custom CSX VR periphery-only TAA.
 // Source lineage and required attribution for adapted MIT-licensed ideas:
@@ -33,6 +33,7 @@ cbuffer PeripheryTAACB : register(b0)
 	row_major float4x4 PreviousViewProj;
 	float4 CurrentCameraPosAdjust;
 	float4 PreviousCameraPosAdjust;
+	float4 BlendTuning;  // x=blendFalloff
 };
 
 Texture2D<float4> CurrentColor : register(t0);
@@ -332,7 +333,7 @@ bool IsHistoryAuxValid(float2 historyUV, float centerScale, float centerFeather,
 	if (any(historyOutputPos < HistoryRect.xy) || any(historyOutputPos >= HistoryRect.xy + HistoryRect.zw))
 		return false;
 
-	float historyCenterWeight = FoveatedComputeCenterBlendWeight(historyUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset);
+	float historyCenterWeight = FoveatedComputeCurvedBlendWeight(historyUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset, BlendTuning.x);
 	if (historyCenterWeight >= 1.0)
 		return false;
 
@@ -456,7 +457,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 
 	if (groupFastPath) {
 		float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputTextureUV, 0.0);
-		float centerWeight = FoveatedComputeCenterBlendWeight(outputUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset);
+		float centerWeight = FoveatedComputeCurvedBlendWeight(outputUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset, BlendTuning.x);
 		if (centerWeight >= 1.0 || gTileFastPathMode == kTileFastPathCenter) {
 			StoreHistory(outputPos, currentSample, 0.0.xx, 0.0);
 			return;
@@ -476,7 +477,7 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 		}
 	}
 
-	float centerWeight = FoveatedComputeCenterBlendWeight(outputUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset);
+	float centerWeight = FoveatedComputeCurvedBlendWeight(outputUV, centerScale, centerFeather, centerHorizontalScale, CenterOffset, BlendTuning.x);
 	float peripheryWeight = saturate(1.0 - centerWeight);
 	float4 currentSample = CurrentColor.SampleLevel(LinearSampler, inputTextureUV, 0.0);
 	if (peripheryWeight <= 0.0) {
@@ -499,7 +500,8 @@ void main(uint3 dispatchID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, ui
 	float2 currentVelocity = neighborhood.velocity;
 	float2 hmdHistoryDeltaLookup = 0.0.xx;
 	hmdHistoryDeltaLookup = ComputeHmdHistoryDelta(neighborhood.uv, currentDepth);
-	float2 historyVelocity = currentVelocity + hmdHistoryDeltaLookup;
+	// Per-eye motion vectors already include camera motion as well as object motion.
+	float2 historyVelocity = currentVelocity;
 	float2 rejectionVelocity = currentVelocity;
 	float velocityPixels = length(rejectionVelocity * OutputDim);
 	float2 historyUV = outputUV + historyVelocity;

@@ -13,6 +13,96 @@ implementation has no performance claim or runtime qualification result;
 new measurements must use the existing comparison ledger and reporting
 workflow.
 
+## September 29: periphery TAA history continuity
+
+The selective [Open Shaders #791 adaptation](periphery-taa-history-continuity.md)
+reseeds periphery TAA after gaps in successfully committed stereo history.
+It reuses the existing frame/cycle adjacency and resource-contract policy
+for both main-pass and submit-stage DLSS/FSR foveated rendering. The
+submit route retains its immutable producer identity across desktop
+Present; only a complete eye pair advances the history record.
+
+No shader, resource allocation, menu policy or sampling work is added.
+Reseeding can change rendered pixels and history acceptance, so runtime
+quality and performance neutrality are not established by source review.
+Controller regression cases are added; their compiled execution and the
+DLL build remain deferred by user instruction until the end of the sync.
+Physical-HMD qualification and matched runtime evidence remain pending.
+There is no new measurement, numbered ledger snapshot or Build ID.
+
+## September 27: periphery TAA camera motion correction
+
+The [periphery TAA correction](periphery-taa-reprojection.md) removes the
+duplicate camera displacement from history lookup while preserving
+camera-inclusive object motion, typed depth and existing history rejection.
+It applies to DLSS/FSR FOV + TAA in both dispatch routes and curve states,
+without adding samples, resources or passes. Upscaling metadata is 2.6.1.
+
+The adversarial review strengthened the source regression to evaluate the
+motion producer's sign/scale as well as the history lookup. Eleven tests
+pass; the old shader fails 42 assertions and six further negative controls
+are detected. The review changes only tests and documentation.
+The requested production AIO DLL build and archive validation passed;
+the linked report preserves the exact source commit and Build ID.
+Standalone shader compilation and runtime checks were not run.
+The reported 3.19.2 regression's trigger remains unconfirmed on the tester's
+GPU. Static work is unchanged apart from removing one float2 addition,
+but corrected history acceptance can change executed sampling work.
+Image quality, physical-HMD qualification and measured performance
+neutrality remain pending; no runtime measurement or ledger is claimed.
+
+## September 27: optional FOV blend curve implementation
+
+The selective [Open Shaders #778 port](fov-blend-curve.md) adds an in-game
+FOV checkbox, off by default, and a remembered 0.5-2 falloff exponent.
+Neutral or disabled retains existing feathering. The curve affects the
+center/periphery transition in main and submit compositors and periphery
+TAA, preserving mask geometry, region sizes, tile ownership and other
+features' FOV weights. Effective changes reset history, and submit-eye
+output reuse checks the exponent.
+
+Source checks and extraction are recorded in the selective-sync review.
+The end-of-sync universal DLL build and controller/WARP fixtures passed
+within all 160 registered tests; producer source, Build ID and shader
+diagnostic limitations are preserved in the
+[validation report](open-shaders-dev-validation.md). Deployment, SE/AE/VR
+in-game checks, physical-HMD qualification and matched performance evidence
+remain pending. No measurements or numbered ledger snapshot are created.
+
+## September 27: typed per-eye depth implementation
+
+The selective [Open Shaders #769 port](open-shaders-dev-sync.md#769-typed-per-eye-foveated-depth-accepted)
+reuses the guide encoder to write native depth values into R32_FLOAT
+per-eye textures for VR DLSS. FSR retains its existing typed output;
+periphery TAA copies that output when needed. Foveated crops consequently
+copy typed colour-format resources rather than boxed depth-stencil
+subresources. Source identity, bounds and destination readiness are
+checked before dispatch. Input preparation cannot replace resources after
+their guides have been encoded.
+
+Source extraction and script contracts passed. The end-of-sync universal
+DLL build and new D3D11 WARP fixture also passed within all 160 registered
+tests; exact compiled source and Build ID are preserved in the
+[validation report](open-shaders-dev-validation.md). SE/AE/VR in-game
+checks, physical-HMD qualification and matched performance evidence
+remain pending. No new measurements or numbered ledger snapshot are
+claimed or created.
+
+## September 20: native menu pointer overlay
+
+The [native pointer correction](vr-menu-pointer-overlay.md) captures only
+the engine-owned UI pointer and composites it above the existing final
+menu layer. It preserves native rendering, menu transaction policy and
+the render-scale-off path. Capture resources and signature validation are
+cached; the pointer shares the existing menu draw without recurring
+diagnostic logging. Unsupported captures fall back to native rendering.
+
+Source review, focused controller tests and D3D11 WARP exercise ownership,
+stereo placement, native output preservation and graphics state restoration.
+Exact-build headset validation and matched CPU/GPU measurements remain
+pending. This implementation adds no runtime measurements or numbered
+ledger snapshot.
+
 ## September 16: eight-run depth-culling comparison
 
 The [complete culling handover](depth-culling-comparison-20260916/README.md)
@@ -2022,3 +2112,69 @@ establish the original hang's cause or certify a performance improvement.
 The exact corrected build still needs COC, capture, flowmap and matched
 performance evidence. No new runtime measurements or ledger cells are
 published by this implementation review.
+
+## September 24: production CPU fast-path integration
+
+The [production CPU integration](vr-cpu-fastpaths-20260924.md) combines lazy
+provider/adapter selection, active shadow-bucket bookkeeping and immediate
+material-admission reuse on main-VR `8ade30b8e`. Ordinary VR draws bypass
+provider normalization when no physical change is pending; startup capability
+callbacks and pending-transition normalization remain. Diagnostic scene
+logging is excluded; the available FidelityFX pin is now main-VR's own pin.
+
+Adversarial review of `fecd92a75` added tests of the actual particle/terrain
+routing and strengthened the particle callback boundary while removing
+redundant eligibility checks. Ten focused Release tests passed, including
+unchanged provider selection and late-capability behavior. No game timing,
+render-scale qualification or new measurement ledger is claimed. Existing
+measurement ledgers remain unchanged; the implementation and validation
+limits are recorded in the linked integration report.
+
+The clean implementation `40d1dd047` subsequently passed a universal
+Production Release DLL build and all ten tests through the full project.
+Three ownership/routing tests also passed under AddressSanitizer. The
+producer Build ID and DLL hash are recorded in the integration report.
+This compile and controller evidence does not qualify real render-scale
+transitions, gameplay stability or frame-time improvement.
+
+## September 26: production grass COC stability assay
+
+The [COC report](grass-coc-20260926/README.md) and
+[snapshot 0005](vr-render-scale-ledger-0005-investigation.csv) preserve the
+same-process 20 × 10s, 25 × 5s and 20 × 3s campaigns on compiled main-VR
+source `3baaf91b90416ad25d067cdb26c34ce293cf7a5e`, Build ID
+`5c8dfa4c9f482d14faf6cf82e06455724d317eda840b3a59db1baba961660d25`.
+The stripped grass implementation was tested with DevBench enabled and
+Tracy disabled. Its physical DLL, enabled AIO, manifest and receipt matched.
+
+Execution was COMPLETE, with all 65 strict transitions satisfied and no
+crash or freeze. Raw aggregate acceptance was PASS / FAIL / FAIL; the two
+failures remain recorded as native-presentation `CONTRACT_MISMATCH` with
+the exact native same-frame both-eye evidence. Relatch retries numbered
+3/12/10, without failure counter deltas. Mean renderer stabilization was
+43.30/43.20/42.15 frames. Task 2 was not part of this COC protocol.
+
+The improvement-or-neutral assessment is INCONCLUSIVE: the external tracer
+remained active, run order was sequential, profiler scene mix differed, and
+the historical PrePR19/RC166-derived references used different resolution
+and instrumentation. Export recovery introduced inter-campaign pauses but
+no repeated fixture setup or game restart. CPU/GPU scope metrics, all
+transition timings and route comparisons, health gates, memory and evidence
+gaps are retained. All owned captures were stopped before normal `qqq`
+shutdown; no Skyrim or SKSE loader process remained. The implementation
+and tests are unchanged by this documentation amendment.
+
+## September 29: periphery history source review
+
+Review of `4a5d6f0cd9f8244c3a2f51e34c3f9ed7b420ad2a` found missing
+failure propagation between the periphery TAA dispatch and its composite.
+All existing no-dispatch guards now return false to the tile-list or
+rectangle caller; the committed-history record cannot advance after that
+failure. No resource, frame/cycle, dimension or scheduling policy changes.
+
+The [continuity record](periphery-taa-history-continuity.md) and
+[port review](open-shaders-217-adversarial-review.md) record the source and
+fixture checks. The user stopped the preliminary final build and requested
+review before further builds. No compiled-test pass, runtime measurement,
+Build ID or render-scale qualification is reported for this correction.
+There are no new measurement rows; existing numbered ledgers are intact.

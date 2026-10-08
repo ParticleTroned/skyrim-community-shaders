@@ -1,5 +1,4 @@
 
-#include "commonlib_d3d_bridge_fake.h"
 #include <algorithm>
 #include <array>
 #include <atomic>

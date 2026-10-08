@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <string_view>
@@ -2425,6 +2426,86 @@ namespace VRVendorRelatchPolicy
 		StartupNativeFallbackPublication publication{};
 		bool fallbackActive = false;
 	};
+
+	using StartupNativeFallbackAtomicState = std::uint8_t;
+	inline constexpr StartupNativeFallbackAtomicState
+		kStartupNativeFallbackInactive = 0;
+	inline constexpr StartupNativeFallbackAtomicState
+		kStartupNativeFallbackActive = 1u << 0;
+	inline constexpr StartupNativeFallbackAtomicState
+		kStartupNativeFallbackRetryInvalidated = 1u << 1;
+
+	[[nodiscard]] constexpr bool IsStartupNativeFallbackActive(
+		StartupNativeFallbackAtomicState a_state) noexcept
+	{
+		return (a_state & kStartupNativeFallbackActive) != 0;
+	}
+
+	[[nodiscard]] constexpr bool IsStartupNativeFallbackRetryInvalidated(
+		StartupNativeFallbackAtomicState a_state) noexcept
+	{
+		return (a_state & kStartupNativeFallbackRetryInvalidated) != 0;
+	}
+
+	/** @brief Publish activity without clearing terminal Retry invalidation. */
+	inline void SetStartupNativeFallbackActive(
+		std::atomic<StartupNativeFallbackAtomicState>& a_state,
+		bool a_active) noexcept
+	{
+		if (a_active) {
+			a_state.fetch_or(
+				kStartupNativeFallbackActive,
+				std::memory_order_acq_rel);
+			return;
+		}
+
+		auto observed = a_state.load(std::memory_order_acquire);
+		while (!IsStartupNativeFallbackRetryInvalidated(observed) &&
+			   IsStartupNativeFallbackActive(observed)) {
+			const auto desired = static_cast<StartupNativeFallbackAtomicState>(
+				observed & ~kStartupNativeFallbackActive);
+			if (a_state.compare_exchange_weak(
+					observed,
+					desired,
+					std::memory_order_acq_rel,
+					std::memory_order_acquire)) {
+				return;
+			}
+		}
+	}
+
+	/** @brief Re-arm fallback and invalidate Retry in one atomic transition. */
+	inline void InvalidateStartupNativeFallbackRetry(
+		std::atomic<StartupNativeFallbackAtomicState>& a_state) noexcept
+	{
+		a_state.fetch_or(
+			static_cast<StartupNativeFallbackAtomicState>(
+				kStartupNativeFallbackActive |
+				kStartupNativeFallbackRetryInvalidated),
+			std::memory_order_acq_rel);
+	}
+
+	// Resolution and device-loss invalidation share one atomic word. Whichever
+	// wins, invalidation leaves terminal fallback armed.
+	/** @brief Resolve active fallback only while Retry authority remains valid. */
+	[[nodiscard]] inline bool TryResolveStartupNativeFallbackAtomic(
+		std::atomic<StartupNativeFallbackAtomicState>& a_state) noexcept
+	{
+		auto observed = a_state.load(std::memory_order_acquire);
+		while (IsStartupNativeFallbackActive(observed) &&
+			   !IsStartupNativeFallbackRetryInvalidated(observed)) {
+			const auto desired = static_cast<StartupNativeFallbackAtomicState>(
+				observed & ~kStartupNativeFallbackActive);
+			if (a_state.compare_exchange_weak(
+					observed,
+					desired,
+					std::memory_order_acq_rel,
+					std::memory_order_acquire)) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	// The owner must hold its publication locks while applying this state change.
 	// Keeping proof and mutation together makes stale authority fail closed.

@@ -142,25 +142,12 @@ namespace
 		return true;
 	}
 
-	bool IsSharedFoveatedMaskActive()
-	{
-		if (!REL::Module::IsVR())
-			return false;
-
-		auto& upscaling = globals::features::upscaling;
-		if (!upscaling.loaded)
-			return false;
-
-		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
-		return profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
-	}
-
 	bool IsRuntimeFoveatedActive(const ScreenSpaceGI::Settings& a_settings)
 	{
 		// The OCU sample-count experiment preserves the complete GI/temporal path.
 		// Do not let the older AO-only crop silently replace that path.
 		return REL::Module::IsVR() && !a_settings.ExperimentalOCUEffectFoveation &&
-		       a_settings.EnableFoveated && IsSharedFoveatedMaskActive();
+		       a_settings.EnableFoveated && globals::features::upscaling.IsSharedFoveatedMaskActive();
 	}
 
 	uint32_t QuantizeCenterOffset(float a_value)
@@ -844,6 +831,21 @@ void ScreenSpaceGI::DrawOCUEffectFoveationSettings()
 		ImGui::TextDisabled("%s", ocuEffectStatus.load(std::memory_order_relaxed));
 }
 
+bool ScreenSpaceGI::IsRuntimeEnabled() const
+{
+	return loaded && settings.Enabled;
+}
+
+void ScreenSpaceGI::SetFoveationEnabled(bool a_enabled)
+{
+	a_enabled = REL::Module::IsVR() && a_enabled;
+	if (settings.EnableFoveated != a_enabled) {
+		settings.EnableFoveated = a_enabled;
+		recompileFlag = true;
+	}
+	SyncResolvedSharedMaskScale(settings);
+}
+
 void ScreenSpaceGI::DrawFoveationSettings()
 {
 	if (!REL::Module::IsVR()) {
@@ -853,36 +855,31 @@ void ScreenSpaceGI::DrawFoveationSettings()
 
 	ApplyPlatformSettingOverrides(settings);
 	SyncResolvedSharedMaskScale(settings);
-	DrawOCUEffectFoveationSettings();
-	const bool featureRuntimeActive = loaded && settings.Enabled;
-	const auto profile = globals::features::upscaling.GetActiveUpscalingFoveatedProfile();
-	const bool foveatedAvailable = profile.available && FoveatedCommon::IsActiveCoverage(profile.sharedVisibleScale);
+	const bool featureRuntimeActive = IsRuntimeEnabled();
+	{
+		auto featureGuard = Util::DisableGuard(!featureRuntimeActive);
+		DrawOCUEffectFoveationSettings();
+	}
+	const bool foveatedAvailable = globals::features::upscaling.IsSharedFoveatedMaskActive();
 	bool foveatedEnabled = settings.EnableFoveated;
 	{
 		auto foveatedGuard = Util::DisableGuard(!featureRuntimeActive || !foveatedAvailable || settings.ExperimentalOCUEffectFoveation);
-		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled)) {
-			settings.EnableFoveated = foveatedEnabled;
-			if (settings.EnableFoveated) {
-				settings.CenterFullResMaskScale = GetUpscalingActiveSharedMaskScale();
-			} else {
-				settings.CenterFullResMaskScale = 0.0f;
-			}
-			recompileFlag = true;
-		}
+		if (ImGui::Checkbox("SSGI FOV", &foveatedEnabled))
+			SetFoveationEnabled(foveatedEnabled);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Focuses ambient shadowing in the clearest part of the VR view.");
 		ImGui::TextUnformatted("Can improve performance, but the effect is reduced near the edge of your view.");
 		if (!loaded)
 			ImGui::TextUnformatted("Requires Screen Space GI.");
-		else if (!settings.Enabled)
+		else if (!featureRuntimeActive)
 			ImGui::TextUnformatted("Requires Screen Space GI to be enabled.");
 		else if (!foveatedAvailable)
 			ImGui::TextUnformatted("Requires active foveated upscaling.");
 	}
 	if (!loaded)
 		ImGui::TextDisabled("SSGI FOV requires Screen Space GI.");
-	else if (!settings.Enabled)
+	else if (!featureRuntimeActive)
 		ImGui::TextDisabled("Enable Screen Space GI to use SSGI FOV.");
 
 	ImGui::Spacing();
@@ -1183,7 +1180,7 @@ void ScreenSpaceGI::SetupResources()
 		};
 
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-		REX::W32::AsReal(mainTex.texture)->GetDesc(&texDesc);
+		mainTex.texture->GetDesc(&texDesc);
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.CPUAccessFlags = 0;
 		texDesc.MiscFlags = 0;
@@ -2121,12 +2118,12 @@ void ScreenSpaceGI::DrawSSGI()
 	// fetch radiance and disocclusion (optional in AO-only + no temporal mode)
 	if (runRadianceDisoccPass) {
 		resetViews();
-		srvs.at(0) = REX::W32::AsReal(runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr);
+		srvs.at(0) = runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr;
 		srvs.at(1) = texWorkingDepth->srv.get();
-		srvs.at(2) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(2) = rts[NORMALROUGHNESS].SRV;
 		if (temporalEnabled) {
 			srvs.at(3) = texPrevGeo->srv.get();
-			srvs.at(4) = REX::W32::AsReal(rts[RE::RENDER_TARGET::kMOTION_VECTOR].SRV);
+			srvs.at(4) = rts[RE::RENDER_TARGET::kMOTION_VECTOR].SRV;
 			srvs.at(5) = texAccumFrames[lastFrameAccumTexIdx]->srv.get();
 			srvs.at(6) = texAo[inputAoTexIdx]->srv.get();
 			if (runILPath) {
@@ -2186,7 +2183,7 @@ void ScreenSpaceGI::DrawSSGI()
 	// Prefilter normals for the regular AO/GI path.
 	if (!foveatedSsgiActive) {
 		resetViews();
-		srvs.at(0) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(0) = rts[NORMALROUGHNESS].SRV;
 		uavs.at(0) = uavNormal[0].get();
 		uavs.at(1) = uavNormal[1].get();
 		uavs.at(2) = uavNormal[2].get();
@@ -2206,7 +2203,7 @@ void ScreenSpaceGI::DrawSSGI()
 	if (!foveatedSsgiActive) {
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
-		srvs.at(1) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(1) = rts[NORMALROUGHNESS].SRV;
 		srvs.at(2) = runILPath ? texRadiance->srv.get() : nullptr;
 		srvs.at(3) = texNoise->srv.get();
 		if (temporalEnabled) {
@@ -2328,7 +2325,7 @@ void ScreenSpaceGI::DrawSSGI()
 	if (blurEnabled) {
 		resetViews();
 		srvs.at(0) = texWorkingDepth->srv.get();
-		srvs.at(1) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+		srvs.at(1) = rts[NORMALROUGHNESS].SRV;
 		srvs.at(2) = temporalEnabled ? texAccumFrames[lastFrameAccumTexIdx]->srv.get() : nullptr;
 		srvs.at(3) = texIlY[inputGITexIdx]->srv.get();
 		srvs.at(4) = texIlCoCg[inputGITexIdx]->srv.get();
@@ -2397,10 +2394,10 @@ void ScreenSpaceGI::DrawSSGI()
 		{
 			resetViews();
 			srvs.at(0) = texWorkingDepth->srv.get();
-			srvs.at(1) = REX::W32::AsReal(rts[NORMALROUGHNESS].SRV);
+			srvs.at(1) = rts[NORMALROUGHNESS].SRV;
 			srvs.at(2) = runILPath ? texRadiance->srv.get() : nullptr;
 			srvs.at(3) = texNoise->srv.get();
-			srvs.at(9) = REX::W32::AsReal(runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr);
+			srvs.at(9) = runILPath ? rts[deferred->forwardRenderTargets[0]].SRV : nullptr;
 			srvs.at(10) = texNormal->srv.get();
 
 			uavs.at(0) = centerBlendNeeded ? texCenterAo->uav.get() : texAo[!inputAoTexIdx]->uav.get();

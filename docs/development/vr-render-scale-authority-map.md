@@ -23,6 +23,24 @@ introduced and hardened that gate; `d6d821404` removed it. The diagnostic
 resolver deliberately has no production caller and must not become a wake
 mask, cache, or early-return condition.
 
+## Terminal startup fallback authority
+
+Startup fallback activity and terminal Retry invalidation share
+`vrStartupRenderScaleNativeFallbackState`. Confirmed device loss re-arms
+fallback and invalidates Retry with one atomic `fetch_or`, before publishing
+the separate device-health diagnostic. Final resolution uses compare-exchange
+on that same state while queue, request and controller ownership still bind
+the exact committed request. If resolution wins first, device loss re-arms
+fallback; if device loss wins first, resolution rejects. An ordinary inactive
+publication cannot erase terminal invalidation.
+
+The policy regression checks one-use resolution, invalidation before
+resolution, preservation during inactive publication and 128 bounded
+two-thread resolution/invalidation races. The source contract also rejects
+restoring separate fallback activity and invalidation atomics. These checks
+complement the required runtime qualification; their source presence does not
+establish native execution, live recovery or a visual/performance result.
+
 ## Service classes
 
 | Service class                 | Production service path                                                                                                                      |
@@ -249,6 +267,23 @@ DevBench exposes this as `authorityLiveness` in status, including decoded masks,
 the compound owner summary, inconsistencies, and whether the controller
 revision remained stable across the cross-domain sample. This status is
 observational. No production service path reads the result.
+
+## Deferred shader-disable authority
+
+`ShaderCache::SetEnabled` and deferred native-restoration disable service
+share `perfModeRenderTargetRecreateQueueMutex` in VR. The service's atomic
+pending flag is only a stable-frame fast gate. Its transaction re-reads
+pending/request state after acquiring authority and retains that authority
+through native-status resolution and disable publication. An enable request
+published before acquisition cancels old service work; one published after
+service completion restores enabled state normally. A fresh disable is
+evaluated against the current requested state.
+
+`ShaderCacheDisablePolicy::ApplyPendingDisable` owns this transaction. Its
+deterministic policy test inserts publications at acquisition after the old
+fast check, covers both enable/service orderings, repeated enable and renewed
+disable, and checks that stable frames avoid ownership and status resolution.
+The source contract also covers the production service and helper boundaries.
 
 ## Audit result and follow-up boundary
 

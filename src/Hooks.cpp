@@ -1,9 +1,11 @@
 #include "Hooks.h"
 #include "Api/AcceptedDrawService.h"
+#include "EngineFixes/VRShadowBatch.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/TracyVRFrameTiming.h"
 #include "Utils/VRLoadingMenuClear.h"
 
 #include "Feature.h"
@@ -40,15 +42,66 @@
 #include <cstring>
 #include <d3d11_1.h>
 #include <intrin.h>
+#include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <winrt/base.h>
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
 
 namespace
 {
 	std::shared_mutex g_renderTargetRecreationMutex;
+
+	void LogGraphicsAdapterInfoOnce(ID3D11Device* a_device)
+	{
+		if (!spdlog::should_log(spdlog::level::info))
+			return;
+
+		static std::once_flag logged;
+		std::call_once(logged, [a_device]() {
+			winrt::com_ptr<IDXGIDevice> dxgiDevice;
+			const auto deviceResult = a_device ? a_device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())) : E_POINTER;
+			if (FAILED(deviceResult)) {
+				logger::info("[GPU] Adapter information unavailable: DXGI device query failed (0x{:08X}).", static_cast<uint32_t>(deviceResult));
+				return;
+			}
+
+			winrt::com_ptr<IDXGIAdapter> adapter;
+			const auto adapterResult = dxgiDevice->GetAdapter(adapter.put());
+			if (FAILED(adapterResult)) {
+				logger::info("[GPU] Adapter information unavailable: adapter query failed (0x{:08X}).", static_cast<uint32_t>(adapterResult));
+				return;
+			}
+
+			DXGI_ADAPTER_DESC description{};
+			const auto descriptionResult = adapter->GetDesc(&description);
+			if (FAILED(descriptionResult)) {
+				logger::info("[GPU] Adapter information unavailable: description query failed (0x{:08X}).", static_cast<uint32_t>(descriptionResult));
+				return;
+			}
+
+			logger::info("[GPU] {} (vendor=0x{:04X}, device=0x{:04X}, dedicated VRAM={} MiB).",
+				stl::utf16_to_utf8(description.Description).value_or("<GPU name conversion failed>"),
+				description.VendorId,
+				description.DeviceId,
+				description.DedicatedVideoMemory / (1024u * 1024u));
+
+			LARGE_INTEGER driverVersion{};
+			// DXGI accepts IDXGIDevice for the Windows driver version, not D3D11 interfaces.
+			const auto driverResult = adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driverVersion);
+			if (SUCCEEDED(driverResult)) {
+				const auto high = static_cast<uint32_t>(driverVersion.HighPart);
+				const auto low = driverVersion.LowPart;
+				logger::info("[GPU] Windows driver version: {}.{}.{}.{}.",
+					HIWORD(high), LOWORD(high), HIWORD(low), LOWORD(low));
+			} else {
+				logger::info("[GPU] Windows driver version unavailable: DXGI query failed (0x{:08X}).", static_cast<uint32_t>(driverResult));
+			}
+		});
+	}
 
 	bool UseNativeWaterShaders(const RE::BSShader& shader)
 	{
@@ -889,7 +942,7 @@ namespace WaterBlendHistory
 					if (rtv) {
 						// Clear stale coverage left by discarded non-water pixels.
 						constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
-						globals::d3d::context->ClearRenderTargetView(REX::W32::AsReal(rtv), clearColor);
+						globals::d3d::context->ClearRenderTargetView(rtv, clearColor);
 					}
 				}
 			}
@@ -905,6 +958,10 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// Flat-screen status probes must not draw or advance frame accounting.
+		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0)
+			return func(This, SyncInterval, Flags);
+
 		auto state = globals::state;
 		const bool armStartupMenuBlurSource =
 			!state->startupMenuBlurSourceReady &&
@@ -932,7 +989,12 @@ struct IDXGISwapChain_Present
 		globals::features::screenshotFeature.DrawPostCaptureIndicator();
 
 		const uint64_t beforePresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
+		const bool flatPresent = !globals::game::isVR &&
+		                         globals::profiler->BeginFlatPresent(state->frameCount - 1, Flags,
+									 !globals::features::upscaling.IsFrameGenerationDx12PathActive());
 		HRESULT retval = func(This, SyncInterval, Flags);
+		if (flatPresent)
+			globals::profiler->CompleteFlatPresent(retval);
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
 		if (SUCCEEDED(retval) && armStartupMenuBlurSource)
 			state->startupMenuBlurSourceReady = true;
@@ -1338,6 +1400,7 @@ namespace Hooks
 
 			logger::info("Accessing render device information");
 			globals::ReInit();
+			LogGraphicsAdapterInfoOnce(globals::d3d::device);
 			const auto validationResult = Util::ValidateImmediateContext(globals::d3d::context);
 			if (FAILED(validationResult)) {
 				logger::critical("Renderer immediate-context validation failed: 0x{:08X}", static_cast<uint32_t>(validationResult));
@@ -1481,15 +1544,13 @@ namespace Hooks
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
-					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
-							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
-							if (vertexShader) {
-								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
-								*globals::game::currentVertexShader = a_vertexShader;
-								globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
-								return;
-							}
+					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
+						RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
+						if (vertexShader) {
+							globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+							*globals::game::currentVertexShader = a_vertexShader;
+							globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
+							return;
 						}
 					}
 				}
@@ -1514,14 +1575,12 @@ namespace Hooks
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
-					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1] && !UseNativeWaterShaders(*currentShader)) {
-							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
-							if (pixelShader) {
-								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
-								*globals::game::currentPixelShader = a_pixelShader;
-								return;
-							}
+					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
+						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
+						if (pixelShader) {
+							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+							*globals::game::currentPixelShader = a_pixelShader;
+							return;
 						}
 					}
 				}
@@ -1628,6 +1687,11 @@ namespace Hooks
 				return;
 			}
 
+			// Vanilla setup dereferences these textures unless a render target supplies diffuse.
+			if ((material->diffuseRenderTargetSourceIndex == -1 && !material->diffuseTexture) || !material->normalTexture) {
+				return;
+			}
+
 			// vanilla
 			func(shader, material);
 
@@ -1722,18 +1786,22 @@ namespace Hooks
 		return true;
 	}
 
-	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique)
+	bool ShouldSkipRenderPassForParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique, bool* a_admissionInvalidated = nullptr)
 	{
+		if (a_admissionInvalidated)
+			*a_admissionInvalidated = false;
 #if defined(_MSC_VER)
 		__try
 #endif
 		{
 			return globals::features::lightLimitFix.loaded &&
-			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique);
+			       !globals::features::lightLimitFix.CheckParticleLights(a_pass, a_technique, a_admissionInvalidated);
 		}
 #if defined(_MSC_VER)
 		__except (1) {
 			// Fail open on transient invalid render-pass data to avoid crashing render-thread hooks.
+			if (a_admissionInvalidated)
+				*a_admissionInvalidated = true;
 			return false;
 		}
 #endif
@@ -1755,6 +1823,8 @@ namespace Hooks
 		func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
+	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags);
+
 	struct BSBatchRenderer_RenderPassImmediately2  // This is from 1.4.0 but absent in 1.4.6
 	{
 		static void thunk(RE::BSRenderPass* a_pass,
@@ -1762,22 +1832,33 @@ namespace Hooks
 			bool a_alphaTest,
 			uint32_t a_renderFlags)
 		{
+			bool particleInvalidated = true;
 			if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique) ||
-				ShouldSkipRenderPassForParticleLights(a_pass, a_technique)) {
+				ShouldSkipRenderPassForParticleLights(a_pass, a_technique, &particleInvalidated)) {
 				return;
 			}
 
+			bool terrainInvalidated = false;
+			auto action = TerrainBlending::RenderPassImmediatelyAction::Draw;
 			if (globals::features::terrainBlending.loaded) {
-				const auto action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+				terrainInvalidated = true;
+				action = globals::features::terrainBlending.OnRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags, &terrainInvalidated);
 				if (action == TerrainBlending::RenderPassImmediatelyAction::Skip) {
 					return;
 				}
-				if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
-					DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
-				}
 			}
 
-			DrawRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			if (particleInvalidated || terrainInvalidated) {
+				if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+					return;
+			}
+			DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+
+			if (action == TerrainBlending::RenderPassImmediatelyAction::DrawTwice) {
+				// Native setup can replace material state, even within the same terrain pair.
+				if (!ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+					DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+			}
 		}
 
 		// This is from 1.4.0 but absent in 1.4.6
@@ -1803,12 +1884,8 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;  // This is from 1.4.0 but absent in 1.4.6
 	};
 
-	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	static void DrawAdmittedRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 	{
-		// Revalidate stored terrain passes at replay, before native setup can publish partial material state.
-		if (ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
-			return;
-
 		if (globals::features::interiorSun.loaded) {
 			globals::features::interiorSun.UpdateRasterStateCullMode(a_pass, a_technique);
 		}
@@ -1816,13 +1893,32 @@ namespace Hooks
 		BSBatchRenderer_RenderPassImmediately2::func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	}
 
+	void DrawRenderPassImmediately(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
+	{
+		// Stored passes must be admitted afresh after any intervening engine work.
+		if (!ShouldSkipInvalidVRLightingMaterial(a_pass, a_technique))
+			DrawAdmittedRenderPassImmediately(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	}
+
 #ifdef TRACY_ENABLE
 	struct Main_Update
 	{
 		static void thunk(RE::Main* a_this, float a2)
 		{
-			func(a_this, a2);
+			const bool isVR = REL::Module::IsVR();
+			{
+				ZoneNamedN(mainUpdateCpuZone, "Game::MainUpdateCpu", isVR);
+				static constexpr tracy::SourceLocationData gpuSource{
+					"Game::MainUpdateD3D11", __FUNCTION__, __FILE__, static_cast<std::uint32_t>(__LINE__), 0
+				};
+				std::optional<tracy::D3D11ZoneScope> gpuZone;
+				if (auto* state = globals::state; isVR && state && state->tracyCtx)
+					gpuZone.emplace(state->tracyCtx, &gpuSource, true);
+				func(a_this, a2);
+			}
 			FrameMark;
+			if (isVR)
+				Util::TracyVRFrameTiming::Record(globals::state ? globals::state->frameCount : 0);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1898,7 +1994,7 @@ namespace Hooks
 					}
 				});
 
-				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
+				if (state->ShaderEnabled(RE::BSShader::Type::ImageSpace)) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
 					bool horizontalBlur = false;
@@ -2013,6 +2109,7 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		VRShadowBatch::Install();
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();

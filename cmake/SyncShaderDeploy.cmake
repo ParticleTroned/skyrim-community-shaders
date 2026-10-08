@@ -11,6 +11,9 @@
 #   SRC_DIR       Staged AIO/Shaders directory.
 #   DST_DIR       Deployed Shaders directory.
 #   MANIFEST_FILE Per-target ownership manifest outside DST_DIR.
+# Optional SKIP_RUNTIME_DOWNLOADS leaves both deployed runtime directories intact.
+
+include("${CMAKE_CURRENT_LIST_DIR}/PreservedRuntimePaths.cmake")
 
 foreach(_required IN ITEMS SRC_DIR DST_DIR MANIFEST_FILE)
     if(NOT DEFINED ${_required} OR "${${_required}}" STREQUAL "")
@@ -212,6 +215,10 @@ foreach(_index RANGE 0 ${_source_last})
     list(GET _src_files ${_index} _src)
     list(GET _source_keys ${_index} _key)
     list(GET _source_rels ${_index} _rel)
+    csx_is_preserved_runtime_path("${_rel}" _preserved_runtime)
+    if(_preserved_runtime)
+        continue()
+    endif()
     path_under_root("${_dst_root}" "${_rel}" _dst)
     get_filename_component(_dst_dir "${_dst}" DIRECTORY)
     file(MAKE_DIRECTORY "${_dst_dir}")
@@ -250,8 +257,9 @@ if(_previous_count GREATER 0)
     math(EXPR _previous_last "${_previous_count} - 1")
     foreach(_index RANGE 0 ${_previous_last})
         list(GET _previous_keys ${_index} _old_key)
+        csx_is_preserved_runtime_path("${_old_key}" _preserved_runtime)
         list(FIND _source_keys "${_old_key}" _current_index)
-        if(NOT _current_index EQUAL -1)
+        if(NOT _current_index EQUAL -1 AND NOT _preserved_runtime)
             continue()
         endif()
 
@@ -267,6 +275,14 @@ if(_previous_count GREATER 0)
             file(SHA256 "${_stale_path}" _current_hash)
             string(TOLOWER "${_current_hash}" _current_hash)
             if(_current_hash STREQUAL _old_hash)
+                if(_preserved_runtime)
+                    # Retain ownership so normal sync can resume safe stale cleanup.
+                    list(
+                        APPEND _new_manifest_entries
+                        "${_old_key}|${_old_hash}|${_old_rel}"
+                    )
+                    continue()
+                endif()
                 file(REMOVE "${_stale_path}")
                 if(EXISTS "${_stale_path}")
                     message(FATAL_ERROR "Failed to remove stale shader: ${_stale_path}")

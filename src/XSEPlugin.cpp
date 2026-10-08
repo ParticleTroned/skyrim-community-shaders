@@ -20,6 +20,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
+#include "Features/VR/StabilizerIntegration.h"
 #include "FrameAnnotations.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -124,7 +125,7 @@ void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::
 	spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%t] [%s:%#] %v");
 }
 
-SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* a_skse)
+extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
 #ifndef NDEBUG
 	while (!REX::W32::IsDebuggerPresent()) {};
@@ -132,12 +133,8 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* a_skse)
 	InitializeLog();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::BUILD_LABEL);
 	BuildProvenance::LogRuntimeIdentity();
-	// CSX owns the startup log and its build identity records.
-	SKSE::Init(a_skse, { .log = false, .trampoline = true, .trampolineSize = kTrampolineCapacity });
-	if (!SKSE::GetTrampolineInterface()) {
-		// Loaders without a branch pool still need storage for CSX hooks.
-		SKSE::GetTrampoline().create(kTrampolineCapacity);
-	}
+	SKSE::Init(a_skse, false);
+	SKSE::AllocTrampoline(kTrampolineCapacity);
 	return Load();
 }
 
@@ -150,7 +147,7 @@ extern "C" DLLEXPORT constinit auto SKSEPlugin_Version = []() noexcept {
 	return v;
 }();
 
-SKSE_PLUGIN_QUERY(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
+extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, SKSE::PluginInfo* pluginInfo)
 {
 	pluginInfo->name = SKSEPlugin_Version.pluginName;
 	pluginInfo->infoVersion = SKSE::PluginInfo::kVersion;
@@ -190,6 +187,8 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
+				VRFpsStabilizer::Initialize();
+				VRFpsStabilizer::InstallDevBench();
 				ScreenshotDevBenchBridge::Install();
 				CSX::Api::ProfilerApiDevBenchBridge::Install();
 				// DevBench publishes its interface from its own PostLoad listener. If
@@ -374,7 +373,7 @@ bool Load()
 	}
 
 	if (REL::Module::IsVR()) {
-		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.207.0", true);
+		REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.269.0", true);
 	}
 
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");

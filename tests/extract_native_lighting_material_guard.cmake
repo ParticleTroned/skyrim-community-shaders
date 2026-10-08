@@ -34,17 +34,12 @@ extract_between(
 )
 extract_between(
     "${_lighting_shader}" "enum class TechniqueFlag"
-    "};" _lighting_technique
-)
-extract_between(
-    "${_lighting_shader}" "static constexpr std::uint32_t kTechniqueIDBase"
-    ";" _lighting_technique_base
+    "uint32_t unk90;" _lighting_technique
 )
 file(
     WRITE "${OUTPUT_DIRECTORY}/native_lighting_material_types_under_test.h"
     "namespace SIE { struct ShaderCache {\n${_lighting_types}\n}; }\n"
-    "namespace RE { struct BSLightingShader : BSShader {\n${_lighting_technique}};\n"
-    "${_lighting_technique_base};\n"
+    "namespace RE { struct BSLightingShader : BSShader {\n${_lighting_technique}\n"
     "uint32_t unk90 = 0;\nuint32_t currentRawTechnique = 0;\n}; }\n"
 )
 extract_between(
@@ -102,4 +97,19 @@ extract_between(
 file(
     WRITE "${OUTPUT_DIRECTORY}/native_lighting_material_utilities_under_test.h"
     "${_pointer}\n${_count}\n${_index}"
+)
+
+file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix.cpp" _particle)
+file(READ "${PROJECT_ROOT}/src/Features/TerrainBlending.cpp" _terrain)
+extract_between(
+    "${_particle}" "bool LightLimitFix::CheckParticleLights("
+    "bool LightLimitFix::AddParticleLight(" _particle_routing
+)
+extract_between(
+    "${_terrain}" "TerrainBlending::RenderPassImmediatelyAction TerrainBlending::OnRenderPassImmediately("
+    "void TerrainBlending::Hooks::BSUtilityShader_SetupGeometry::thunk(" _terrain_routing
+)
+file(
+    WRITE "${OUTPUT_DIRECTORY}/render_pass_admission_routing_under_test.h"
+    "${_particle_routing}\n${_terrain_routing}"
 )

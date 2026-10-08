@@ -356,7 +356,7 @@ struct PS_OUTPUT
 	float4 PS: SV_Target0;
 #	else
 	float4 Diffuse: SV_Target0;
-	float2 MotionVectors: SV_Target1;
+	float4 MotionVectors: SV_Target1;
 	float4 NormalGlossiness: SV_Target2;
 	float4 Albedo: SV_Target3;
 	float4 Specular: SV_Target4;
@@ -371,7 +371,7 @@ struct PS_OUTPUT
 	float4 PS: SV_Target0;
 #	else
 	float4 Diffuse: SV_Target0;
-	float2 MotionVectors: SV_Target1;
+	float4 MotionVectors: SV_Target1;
 	float4 Normal: SV_Target2;
 	float4 Albedo: SV_Target3;
 	float4 Masks: SV_Target6;
@@ -484,10 +484,10 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
-	float dirShadow = !SharedData::InInterior ? shadowColor.x : 1.0;
+	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
-	if (dirShadow > 0.0 && !SharedData::InInterior) {
+	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows()) {
 #		if defined(SCREEN_SPACE_SHADOWS)
 		dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #		endif  // SCREEN_SPACE_SHADOWS
@@ -590,6 +590,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	}
 #		endif
 
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
 	diffuseColor += directionalAmbientColor;
 
 	float3 albedo = ApplyGrassWetDarkening(baseColor.xyz) * vertexColor;
@@ -607,7 +608,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #		endif
 
 	psout.Diffuse = float4(diffuseColor, 1);
-	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
+	psout.MotionVectors = float4(MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex), 0, 1);
 #		if defined(GRASS_LIGHTING)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false, eyeIndex)), 0, 0);
 #		else
@@ -683,7 +684,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 specColor = complex ? TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, 0.5 + input.TexCoord.y * 0.5), SharedData::MipBias) : 1;
 
 	uint eyeIndex = Stereo::GetEyeIndexPS(input.HPosition, VPOSOffset);
-	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);
+	psout.MotionVectors = float4(MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex), 0, 1);
 
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
 	float3 normal = normalize(input.VertexNormal.xyz);
@@ -720,10 +721,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
-	float dirShadow = !SharedData::InInterior ? shadowColor.x : 1.0;
+	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
-	if (dirShadow > 0.0 && !SharedData::InInterior) {
+	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows()) {
 #			if defined(SCREEN_SPACE_SHADOWS)
 		if (dirLightAngle >= 0.0 || SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
@@ -862,6 +863,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 
+	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
 	diffuseColor += directionalAmbientColor;
 	diffuseColor += subsurfaceColor * albedo;
 	diffuseColor *= albedo;

@@ -202,7 +202,7 @@ namespace
 		}
 
 		D3D11_TEXTURE2D_DESC texDesc{};
-		REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
+		main.texture->GetDesc(&texDesc);
 		return { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
 	}
 
@@ -769,7 +769,8 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
-	globals::profiler->EndFrame(frameCount);
+	if (globals::game::isVR)
+		globals::profiler->EndFrame(frameCount);
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
@@ -1715,9 +1716,8 @@ std::shared_ptr<const State::ShaderDefinesSnapshot> State::GetShaderDefinesSnaps
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
-	auto index = magic_enum::enum_integer(a_type) + 1;
-	if (index < sizeof(enabledClasses)) {
-		return enabledClasses[index];
+	if (a_type > RE::BSShader::Type::None && a_type < RE::BSShader::Type::Total) {
+		return enabledClasses[magic_enum::enum_integer(a_type) - 1];
 	}
 	return false;
 }
@@ -1846,7 +1846,7 @@ void State::SetupResources()
 	}
 
 	if (globals::profiler && globals::d3d::device && globals::d3d::context) {
-		globals::profiler->Initialize(globals::d3d::device, globals::d3d::context);
+		globals::profiler->Initialize(globals::d3d::device, globals::d3d::context, !globals::game::isVR);
 		if (frameAnnotations) {
 			globals::profiler->SetPerfEventCallbacks(
 				[this](std::string_view a_title) { BeginPerfEvent(a_title); },
@@ -2116,8 +2116,13 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.HasDirectionalShadows = HasDirectionalShadows();
 		const auto& volumetricShadows = globals::features::volumetricShadows;
 		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
-		data.VolumetricLightingOpacity =
-			a_inWorld ? globals::features::volumetricLighting.GetRuntimeGodrayOpacity() : 1.0f;
+		const auto godrayProfile = a_inWorld ? globals::features::volumetricLighting.GetRuntimeGodrayProfile() : VolumetricLighting::GodrayProfile{};
+		data.VolumetricLightingOpacity = godrayProfile.Opacity;
+		data.VolumetricLightingSaturation = godrayProfile.Saturation;
+		data.VolumetricLightingCustomColor = {
+			godrayProfile.CustomColorRed, godrayProfile.CustomColorGreen,
+			godrayProfile.CustomColorBlue, godrayProfile.CustomColorContribution
+		};
 
 		data.SSSHumanMaleIntensity = sssHumanMaleIntensity;
 		data.SSSHumanMaleSaturation = sssHumanMaleSaturation;

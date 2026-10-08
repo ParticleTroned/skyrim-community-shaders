@@ -21,7 +21,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 uint32_t DynamicCubemaps::SanitizeCubemapResolution(uint32_t a_resolution)
 {
-	return a_resolution == kQualityCubemapResolution ? kQualityCubemapResolution : kPerformanceCubemapResolution;
+	return a_resolution == kQualityCubemapResolution || a_resolution == kPerformanceCubemapResolution ? a_resolution : Settings{}.CubemapResolution;
 }
 
 void DynamicCubemaps::RefreshActiveCubemapResolution()
@@ -309,10 +309,10 @@ void DynamicCubemaps::LoadSettings(json& o_json)
 		logger::warn(
 			"Unsupported dynamic cubemap resolution {}; using {}",
 			settings.CubemapResolution,
-			kPerformanceCubemapResolution);
+			Settings{}.CubemapResolution);
 	}
 	RefreshActiveCubemapResolution();
-	if (REL::Module::IsVR()) {
+	if (REL::Module::IsVR() && gameSettingsInitialized) {
 		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
 	recompileFlag = true;
@@ -354,6 +354,9 @@ void DynamicCubemaps::DataLoaded()
 		// enable cubemap settings in VR
 		Util::EnableBooleanSettings(iniVRCubeMapSettings, GetName());
 		Util::EnableBooleanSettings(hiddenVRCubeMapSettings, GetName());
+		// Apply saved choices after defaults so disabled reflections survive a restart.
+		gameSettingsInitialized = true;
+		Util::LoadGameSettings(iniVRCubeMapSettings);
 	}
 	MenuOpenCloseEventHandler::Register();
 }
@@ -493,7 +496,7 @@ bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	ID3D11ShaderResourceView* srvs[2] = { REX::W32::AsReal(depth.depthSRV), REX::W32::AsReal(main.SRV) };
+	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, main.SRV };
 	context->CSSetShaderResources(0, 2, srvs);
 
 	uint index = a_reflections ? 1 : 0;
@@ -584,7 +587,7 @@ bool DynamicCubemaps::Inferrence(bool a_reflections)
 
 	auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 
-	ID3D11ShaderResourceView* srvs[3] = { (a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->srv.get(), REX::W32::AsReal(cubemap.SRV), REX::W32::AsReal(defaultCubemap) };
+	ID3D11ShaderResourceView* srvs[3] = { (a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->srv.get(), cubemap.SRV, defaultCubemap };
 	context->CSSetShaderResources(0, 3, srvs);
 
 	context->CSSetSamplers(0, 1, &computeSampler);
@@ -815,8 +818,7 @@ void DynamicCubemaps::UpdateCubemap()
 	CS_GPU_PASS("DynamicCubemaps::UpdateCubemap");
 
 	auto context = globals::d3d::context;
-	ID3D11Buffer* sharedBuffers[2]{ globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
-	context->CSSetConstantBuffers(5, 2, sharedBuffers);
+	Util::BindSharedDataConstantBuffersForCS(context);
 
 	// Reset capture when game time jumps (wait menu, timescale changes, console commands)
 	if (auto calendar = globals::game::calendar) {
@@ -935,7 +937,7 @@ void DynamicCubemaps::SetupResources()
 
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
-		REX::W32::AsReal(cubemap.texture)->GetDesc(&texDesc);
+		cubemap.texture->GetDesc(&texDesc);
 		if (texDesc.Width != requestedCubemapResolution || texDesc.Height != requestedCubemapResolution) {
 			logger::warn(
 				"Dynamic cubemap target is {}x{}, expected {}x{}; using the renderer target dimensions",
@@ -949,7 +951,7 @@ void DynamicCubemaps::SetupResources()
 		}
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		REX::W32::AsReal(cubemap.SRV)->GetDesc(&srvDesc);
+		cubemap.SRV->GetDesc(&srvDesc);
 
 		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 

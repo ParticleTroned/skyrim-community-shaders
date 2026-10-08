@@ -21,6 +21,8 @@ namespace CSX::Api
 	void SuspendAcceptedDrawGeometry();
 	/** Unwind a verified pass or count and invalidate an unmatched scope. */
 	void EndAcceptedDrawGeometry(RE::BSRenderPass* a_pass);
+	/** Borrow the live native geometry, or null during setup, restoration and replays. */
+	const void* GetCurrentAcceptedDrawGeometry() noexcept;
 	/** Publish only attributed immediate-context draws against the current main scene depth. */
 	void PublishAcceptedDraw(ID3D11DeviceContext* a_context,
 		const CSXAcceptedDrawAPI::Arguments& a_arguments, AcceptedDrawRegistry::NativeReplay a_replay) noexcept;

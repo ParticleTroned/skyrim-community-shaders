@@ -33,6 +33,64 @@ bool SettingsMigrations::HasLegacyUnifiedWaterAppearanceValues(const nlohmann::j
 									  });
 }
 
+bool SettingsMigrations::MigrateCloudProfileSettings(nlohmann::json& a_profile)
+{
+	if (!a_profile.is_object())
+		return false;
+
+	constexpr std::array fields{
+		std::pair{ "skyBrightnessMult", "cloudBrightnessMult" },
+		std::pair{ "skySaturation", "cloudSaturation" },
+		std::pair{ "skyGammaOffset", "cloudGammaOffset" }
+	};
+	bool migrated = false;
+	for (const auto& [skyName, cloudName] : fields) {
+		if (!a_profile.contains(cloudName)) {
+			if (const auto sky = a_profile.find(skyName); sky != a_profile.end() && sky->is_number()) {
+				a_profile[cloudName] = *sky;
+				migrated = true;
+			}
+		}
+	}
+	return migrated;
+}
+
+bool SettingsMigrations::MigrateCloudSettingsLayer(nlohmann::json& a_settings)
+{
+	if (!a_settings.is_object())
+		return false;
+
+	bool migrated = false;
+	if (auto global = a_settings.find("globalProfile"); global != a_settings.end())
+		migrated |= MigrateCloudProfileSettings(*global);
+	if (auto profiles = a_settings.find("profiles"); profiles != a_settings.end() && profiles->is_array()) {
+		for (auto& profile : *profiles)
+			migrated |= MigrateCloudProfileSettings(profile);
+	}
+	if (auto locations = a_settings.find("locationOverrides"); locations != a_settings.end() && locations->is_array()) {
+		for (auto& location : *locations) {
+			if (auto profile = location.find("profile"); profile != location.end())
+				migrated |= MigrateCloudProfileSettings(*profile);
+		}
+	}
+
+	// Preserve legacy global brightness before lower-priority cloud defaults merge.
+	if (const auto lighting = a_settings.find("lighting"); lighting != a_settings.end() && lighting->is_object()) {
+		if (const auto sky = lighting->find("skyBrightness"); sky != lighting->end() && sky->is_number()) {
+			auto global = a_settings.find("globalProfile");
+			if (global == a_settings.end()) {
+				a_settings["globalProfile"] = nlohmann::json::object();
+				global = a_settings.find("globalProfile");
+			}
+			if (global->is_object() && !global->contains("cloudBrightnessMult")) {
+				(*global)["cloudBrightnessMult"] = *sky;
+				migrated = true;
+			}
+		}
+	}
+	return migrated;
+}
+
 namespace
 {
 	using json = nlohmann::json;
@@ -249,6 +307,8 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
 	auto migratedLayer = a_layer;
 	bool migrated = MigrateLegacyAdaptiveBrightnessRoot(migratedLayer);
 	migrated |= MigrateLegacyUnifiedWaterAppearanceRoot(migratedLayer, a_forceLegacyWaterAppearance);
+	if (auto adaptive = migratedLayer.find(kAdaptiveBalanceSettingsName.data()); adaptive != migratedLayer.end())
+		migrated |= MigrateCloudSettingsLayer(*adaptive);
 
 	const auto sourceCSUtilityIt = migratedLayer.find(kCSUtilitySettingsName.data());
 	if (sourceCSUtilityIt == migratedLayer.end() ||
@@ -338,6 +398,7 @@ bool SettingsMigrations::MigrateAdaptiveBalanceRootLayer(
 		}
 	}
 
+	migrated |= MigrateCloudSettingsLayer(*adaptiveIt);
 	if (migrated)
 		a_layer = std::move(migratedLayer);
 	return migrated;

@@ -7,6 +7,7 @@
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/VRMenuPointerOverlay.h"
 #include "Upscaling/VROrdinarySaveRecovery.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
 #include "Upscaling/VRRelatchReleasePolicy.h"
@@ -316,10 +317,10 @@ public:
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
-		float sharpnessFSR = 0.9f;
+		float sharpnessFSR = REL::Module::IsVR() ? 0.9f : 0.0f;
 		bool fsrSharedGuideInputs = true;
 		FSRTemporalTuningPolicy::Settings fsrTemporalTuning{};
-		float sharpnessDLSS = 0.9f;
+		float sharpnessDLSS = REL::Module::IsVR() ? 0.9f : 0.5f;
 		uint dlssSharpener = static_cast<uint>(DLSSSharpenerMode::RCAS);
 		bool motionAdaptiveRCAS = false;
 		float motionSharpnessAdjustment = -0.5f;
@@ -327,11 +328,15 @@ public:
 		float motionSharpnessCap = 1.0f;
 		bool fsr4RuntimeEnable = true;
 		uint fsr4RuntimeSelectionSchemaVersion = kFsr4RuntimeSelectionSchemaVersion;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		bool pipelineDiagnostics = false;
 		bool pipelineDiagnosticsStructured = false;
+#endif
 		bool foveatedVendorDispatch = false;
 		float foveatedCenterArea = 0.3f;
 		float foveatedCenterHorizontalScale = 1.0f;
+		bool foveatedBlendCurveEnabled = false;
+		float foveatedBlendFalloff = 1.0f;
 		float foveatedLeftEyeMaskOffsetX = 0.0f;
 		float foveatedLeftEyeMaskOffsetY = 0.0f;
 		float foveatedRightEyeMaskOffsetX = 0.0f;
@@ -427,6 +432,7 @@ public:
 	/** @brief Editable VR FPS Stabilizer settings owned by the VR Stabilizer menu tab. */
 	struct VRFpsStabilizerConfig
 	{
+		uint64_t revision = 0;
 		std::filesystem::path path;
 		bool fileExists = false;
 		bool fileReadable = false;
@@ -2039,7 +2045,7 @@ public:
 		float2 sourceOffset;
 		float2 invSourceDim;
 		float centerHorizontalScale;
-		float centerHorizontalScalePadding;
+		float blendFalloff;
 	};
 
 	struct FoveatedSpatialCompositeCB
@@ -2054,7 +2060,7 @@ public:
 		float2 centerRectDim;
 		float2 invCenterSourceDim;
 		float2 centerOffset;
-		float4 tuning;  // x=centerScale, y=centerFeather, z=centerHorizontalScale
+		float4 tuning;  // x=centerScale, y=centerFeather, z=centerHorizontalScale, w=blendFalloff
 	};
 
 	struct PeripheryTAACB
@@ -2078,6 +2084,7 @@ public:
 		float4x4 previousViewProj;
 		float4 currentCameraPosAdjust;
 		float4 previousCameraPosAdjust;
+		float4 blendTuning;  // x=blendFalloff
 	};
 
 	struct CameraMotionVectorsCB
@@ -2095,7 +2102,10 @@ public:
 	static_assert(sizeof(FoveatedPeripheryCB) == 96, "FoveatedPeripheryCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedCenterBlendCB) == 64, "FoveatedCenterBlendCB layout changed; update HLSL cbuffer.");
 	static_assert(sizeof(FoveatedSpatialCompositeCB) == 96, "FoveatedSpatialCompositeCB layout changed; update HLSL cbuffer.");
-	static_assert(sizeof(PeripheryTAACB) == 320, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(sizeof(PeripheryTAACB) == 336, "PeripheryTAACB layout changed; update HLSL cbuffer.");
+	static_assert(offsetof(FoveatedCenterBlendCB, blendFalloff) == 60, "Center blend falloff must match HLSL.");
+	static_assert(offsetof(FoveatedSpatialCompositeCB, tuning) == 80, "Spatial blend tuning must match HLSL.");
+	static_assert(offsetof(PeripheryTAACB, blendTuning) == 320, "Periphery blend tuning must match HLSL.");
 	static_assert(sizeof(CameraMotionVectorsCB) == 256, "CameraMotionVectorsCB layout changed; update HLSL cbuffer.");
 
 	struct FoveatedDispatchRect
@@ -2184,12 +2194,19 @@ public:
 
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationDx12PathActive() const;
+	/** Returns whether current settings, menus and provider health permit preparing inputs. */
+	bool ShouldPrepareFrameGeneration() const;
+	/** Uses the prepared frame's menu decision while retaining live provider safety gates. */
 	bool ShouldUseFrameGenerationThisFrame() const;
+	/** Invalidates copied inputs after presentation or before replacing their resources. */
+	void InvalidateFrameGenerationInputs() noexcept;
 	bool IsFrameGenerationActive() const;
 	float GetFrameGenerationFrameTime() const;
 	bool IsUpscalingActive() const;
 
 	// Feature interface overrides
+	/** Show compact DLSS guidance and VR FOV status beneath the feature description. */
+	virtual void DrawSettingsHeaderControls() override;
 	virtual void DrawSettings() override;
 	virtual bool HasEssentialSettings() const override { return true; }
 	virtual void DrawEssentialSettings() override;
@@ -2213,6 +2230,14 @@ public:
 	void DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod);
 	/** Apply the shared menu/API link policy without bypassing transition admission. */
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
+	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */
+	bool SetFoveatedUpscalingEnabled(bool a_enabled);
+	/** Return the effective curve, neutral when disabled or outside VR. */
+	float GetFoveatedBlendFalloff() const;
+	/** Set the saved VR curve and invalidate affected temporal/frame state. */
+	bool SetFoveatedBlendCurve(bool a_enabled, float a_falloff);
+	/** Draw the shared FOV-only and FOV + TAA blend controls. */
+	void DrawFoveatedBlendSettings();
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings(bool a_essentialsLayout = false);
 	virtual void SaveSettings(json& o_json) override;
@@ -2286,8 +2311,9 @@ public:
 	static const char* GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status);
 	bool IsVRStartupNativeFallbackRestartRequired() const noexcept
 	{
-		return vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire);
+		return VRVendorRelatchPolicy::IsStartupNativeFallbackActive(
+			vrStartupRenderScaleNativeFallbackState.load(
+				std::memory_order_acquire));
 	}
 	bool IsVRStartupNativeFallbackSavedIntentActive() const;
 	bool CanRetryVRStartupNativeFallbackFromCSMenu(bool a_forceMemorySample = false);
@@ -2356,6 +2382,8 @@ public:
 	};
 	static const char* GetFoveatedUpscalingModeName(FoveatedUpscalingMode a_mode);
 	ActiveUpscalingFoveatedProfile GetActiveUpscalingFoveatedProfile() const;
+	/** Reports whether loaded VR upscaling provides a shared mask below full coverage. */
+	bool IsSharedFoveatedMaskActive() const;
 	float GetActiveFoveatedSharedVisibleScale() const;
 	float GetActiveFoveatedCenterHorizontalScale() const;
 	std::array<float2, 2> GetActiveResolvedFoveatedMaskCenterOffsets() const;
@@ -2451,7 +2479,7 @@ public:
 	// Owned here so both Streamline (DLSS) and FidelityFX (FSR) can use them.
 	eastl::unique_ptr<Texture2D> vrIntermediateColorIn[2];            // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateColorOut[2];           // per-eye output resolution
-	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye render resolution (R24G8_TYPELESS, shared depth copy)
+	eastl::unique_ptr<Texture2D> vrIntermediateDepth[2];              // per-eye native depth values (R32_FLOAT, DLSS/periphery input)
 	eastl::unique_ptr<Texture2D> vrIntermediateLinearDepth[2];        // per-eye render resolution (R32_FLOAT, FSR input)
 	eastl::unique_ptr<Texture2D> vrIntermediateMotionVectors[2];      // per-eye render resolution
 	eastl::unique_ptr<Texture2D> vrIntermediateReactiveMask[2];       // per-eye render resolution
@@ -2574,6 +2602,7 @@ public:
 		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false);
 
 	// Shared Pipeline Steps
+	/** Prepares color and optional guides after encoding; DLSS depth is already encoded. */
 	bool PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
@@ -2783,6 +2812,9 @@ public:
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
 		const char** a_decisionReason = nullptr);
 	static bool ShouldTraceVRMenuBridgeDrawOperation(const char** a_decisionReason = nullptr);
+	/** Capture the native VR UI pointer without suppressing its scene draw. */
+	static bool TryCaptureVRMenuPointerDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, bool a_instanced);
 	static bool TraceVRMenuBridgeDrawOperation(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva,
 		const char** a_decisionReason = nullptr);
@@ -2941,7 +2973,7 @@ public:
 	uint32_t peripheryTAATileCapacity[2] = {};
 	std::array<PeripheryTAATileCacheState, 2> peripheryTAATileCache{};
 	uint32_t peripheryTAAHistoryReadIndex = 0;
-	bool peripheryTAAHistoryValid = false;
+	VRSubmitTemporalSnapshot::CommittedHistory peripheryTAAHistory;
 
 	virtual void ClearShaderCache() override;
 
@@ -2991,6 +3023,7 @@ public:
 	bool previousHistoryFoveatedDispatch = false;
 	float previousHistoryFoveatedCenterScale = 1.0f;
 	float previousHistoryFoveatedCenterHorizontalScale = 1.0f;
+	float previousHistoryFoveatedBlendFalloff = 1.0f;
 	std::array<float2, 2> previousHistoryFoveatedCenterOffsets = {};
 	bool previousHistoryPeripheryTAA = false;
 	bool previousHistoryPeripheryTAAPathActive = false;
@@ -3008,7 +3041,10 @@ public:
 	// process on the coherent startup None/native contract. Automatic replay and
 	// boot relatching remain blocked; only an explicit inactive profile or a new
 	// CS-menu request admitted after native/memory recovery may clear the latch.
-	std::atomic<bool> vrStartupRenderScaleNativeFallbackRestartRequired{ false };
+	std::atomic<VRVendorRelatchPolicy::StartupNativeFallbackAtomicState>
+		vrStartupRenderScaleNativeFallbackState{
+			VRVendorRelatchPolicy::kStartupNativeFallbackInactive
+		};
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
@@ -3305,6 +3341,7 @@ public:
 		VRSubmitInputFreshnessPolicy::ProducerProof inputProof{};
 		VRSubmitInputReusePolicy::CurrentEyeIdentity currentEyeIdentity{};
 		bool usedFoveatedVendorPath = false;
+		float foveatedBlendFalloff = 1.0f;
 		bool usedDLSSSharpening = false;
 		bool usedMenuFinalComposite = false;
 		uint64_t menuLayerGeneration = 0;
@@ -3471,7 +3508,10 @@ public:
 	uint64_t submitStageFoveatedPeripheryTAACycle = 0;
 	std::array<bool, 2> submitStageFoveatedPeripheryTAAEyeReady = {};
 	std::atomic_bool vrRenderScaleResourceTrackingSyncPending{ false };
-	void CopySharedD3D12Resources();
+	/** Publishes readiness only after both motion and depth inputs have been copied. */
+	void PrepareFrameGenerationInputs();
+	/** Returns false without copying when required shaders or resources are unavailable. */
+	bool CopySharedD3D12Resources();
 	void PostDisplay();
 	void PerformUpscaling();
 	void UpscaleDepth();
@@ -3651,6 +3691,8 @@ public:
 	bool EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCapacity);
 	bool BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidth, uint32_t outputHeight, float centerScale, float taaOuterScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY, uint32_t coveragePadding, uint32_t& outTileCount);
 	void DestroyPeripheryTAAResources();
+	/** Returns the producer and resource contract used by both periphery history dispatch routes. */
+	[[nodiscard]] VRSubmitTemporalSnapshot::Key GetPeripheryTAAHistoryKey(UpscaleMethod a_upscaleMethod, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight) const;
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */
 	[[nodiscard]] FidelityFX::UpscaleResult DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr);
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */
@@ -3701,7 +3743,8 @@ public:
 	/// Draw the configured mask into an existing eye output without vendor inputs.
 	bool DispatchFoveatedMaskVisualization(uint32_t a_eyeIndex);
 	bool DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSRV, ID3D11UnorderedAccessView* outputUAV, uint32_t sourceWidth, uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint32_t outputOffsetX, uint32_t outputOffsetY, uint32_t dispatchWidth, uint32_t dispatchHeight, float centerScale, float centerHorizontalScale, bool keepBindingsBound = false, float sourceScaleX = 1.0f, float sourceScaleY = 1.0f, float sourceOffsetX = 0.0f, float sourceOffsetY = 0.0f, float centerOffsetX = 0.0f, float centerOffsetY = 0.0f, bool visualizeMask = false);
-	void DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
+	/** Returns true only after issuing the history write and releasing its compute bindings. */
+	[[nodiscard]] bool DispatchPeripheryTAAPass(ID3D11ShaderResourceView* currentColorSRV, ID3D11ShaderResourceView* currentDepthSRV, ID3D11ShaderResourceView* currentMotionVectorSRV,
 		ID3D11ShaderResourceView* currentReactiveSRV, ID3D11ShaderResourceView* currentTransparencySRV, ID3D11ShaderResourceView* historyColorSRV,
 		ID3D11ShaderResourceView* historyVelocitySRV, ID3D11ShaderResourceView* historyLockSRV, ID3D11UnorderedAccessView* outputColorUAV, ID3D11UnorderedAccessView* outputHistoryColorUAV,
 		ID3D11UnorderedAccessView* outputVelocityUAV, ID3D11UnorderedAccessView* outputLockUAV, ID3D11ShaderResourceView* tileListSRV, uint32_t tileCount,
@@ -3746,9 +3789,11 @@ public:
 	/** @brief Loads and resolves the unconditional Interior/Exterior CSX rows from VRFpsStabilizer.ini. */
 	bool LoadVRFpsStabilizerConfig(VRFpsStabilizerConfig& a_config, std::string& a_error) const;
 	/** @brief Persists the editable stabilizer profile while preserving unrelated INI content. */
-	bool SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string& a_error) const;
-	/** @return The immutable active Stabilizer configuration captured for this game session. */
-	const VRFpsStabilizerConfig& GetVRFpsStabilizerSessionConfig() const;
+	bool SaveVRFpsStabilizerConfig(const VRFpsStabilizerConfig& a_config, std::string_view a_originalIni, std::string& a_error) const;
+	/** @return A synchronized snapshot of the startup or most recently reloaded profile configuration. */
+	VRFpsStabilizerConfig GetVRFpsStabilizerSessionConfig() const;
+	/** Refresh profile reconciliation after the external Stabilizer reload returns. */
+	bool RefreshVRFpsStabilizerSessionConfig(std::string& a_error);
 	/** @return True when the session configuration automatically owns save-load profile reconciliation. */
 	bool IsVRFpsStabilizerSyncActive() const;
 
@@ -3769,6 +3814,7 @@ public:
 
 private:
 	std::once_flag upscalingSDKLoadOnce;
+	std::atomic_bool frameGenerationPrepared{ false };
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic<VRMainPassDispatchStage> vrMainPassDispatchLastStage{ VRMainPassDispatchStage::None };
 	std::atomic_uint32_t vrMainPassDispatchLastFrame{ 0 };
@@ -3815,7 +3861,9 @@ private:
 		std::array<std::atomic<uint32_t>, 2> generation{};
 	};
 
+	void InitializeVRFpsStabilizerSessionConfig() const;
 	mutable std::once_flag vrFpsStabilizerSessionConfigOnce;
+	mutable std::mutex vrFpsStabilizerSessionConfigMutex;
 	mutable VRFpsStabilizerConfig vrFpsStabilizerSessionConfig{};
 	struct VRRenderScaleRuntimeOptionsSnapshot
 	{
@@ -4209,6 +4257,16 @@ private:
 	uint32_t vrMenuFinalCompositeFrame = std::numeric_limits<uint32_t>::max();
 	eastl::unique_ptr<Texture2D> vrMenuFinalCompositeLayer;
 	eastl::unique_ptr<Texture2D> vrMenuCommittedCompositeLayer;
+	VRMenuPointerOverlay vrMenuPointerOverlay;
+	Util::LazyShader<ID3D11PixelShader> vrMenuPointerOverlayPS;
+	Util::LazyShader<ID3D11PixelShader> vrMenuPointerCompositePS;
+	const void* vrMenuPointerGeometry = nullptr;
+	uint32_t vrMenuPointerPresentationFrame = std::numeric_limits<uint32_t>::max();
+	bool vrMenuPointerPresentationVisible = false;
+	bool vrMenuPointerCaptureFailed = false;
+	bool CaptureVRMenuPointerOverlay(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
+		UINT a_startIndex, INT a_baseVertex, UINT a_startInstance, bool a_instanced);
+	ID3D11ShaderResourceView* GetCurrentVRMenuPointerOverlay(uint32_t a_frame);
 	winrt::com_ptr<ID3D11Texture2D> vrMenuFullResolutionDepth;
 	winrt::com_ptr<ID3D11DepthStencilView> vrMenuFullResolutionDSV;
 	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMenuFullResolutionDepthViews{};

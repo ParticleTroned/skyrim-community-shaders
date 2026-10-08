@@ -107,7 +107,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #if defined(TRUE_PBR)
 	PBR::GetDirectLightInput(lightingOutput, context, material, tbnTr, uv);
 #else
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairDirectLight(lightingOutput, context, material, tbnTr, uv);
 		return;
@@ -144,7 +144,7 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 #if defined(TRUE_PBR)
 	PBR::GetIndirectLobeWeights(lobeWeights, context, material);
 #else
-#	if defined(HAIR) && defined(CS_HAIR)
+#	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairIndirectLobeWeights(lobeWeights, context, material, uv);
 		return;

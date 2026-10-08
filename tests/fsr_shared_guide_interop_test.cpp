@@ -10,6 +10,7 @@
 #include <iostream>
 #include <new>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace DX
@@ -27,7 +28,7 @@ struct TextureHandleOwner
 
 struct WrappedResource
 {
-	WrappedResource(ID3D11Texture2D*, ID3D12Device*, HANDLE);
+	WrappedResource(ID3D11Texture2D*, ID3D12Device*, const std::string&, HANDLE);
 	winrt::com_ptr<ID3D11Texture2D> resource11;
 	winrt::com_ptr<ID3D12Resource> resource;
 };
@@ -107,7 +108,7 @@ namespace
 	void ReadSharedGuide(Devices& a_devices, TextureHandleOwner& a_texture, ID3D11UnorderedAccessView* a_uav,
 		uint32_t a_bytesPerPixel, uint32_t a_expectedPixel, float a_value)
 	{
-		WrappedResource imported(a_texture.resource.get(), a_devices.device12.get(), a_texture.GetOrCreateSharedHandle());
+		WrappedResource imported(a_texture.resource.get(), a_devices.device12.get(), "InteropTest::GuideImport", a_texture.GetOrCreateSharedHandle());
 		D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
 		UINT64 totalBytes = 0;
 		const auto resourceDesc = imported.resource->GetDesc();

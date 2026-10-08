@@ -199,8 +199,10 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	float fontScale = 1.0f;
 	auto& io = ImGui::GetIO();
 	if (io.FontDefault) {
-		constexpr float kBaselineFontSize = Constants::DEFAULT_SCREEN_HEIGHT * Constants::DEFAULT_FONT_RATIO;
-		fontScale = io.FontDefault->LegacySize / kBaselineFontSize;
+		const float baselineFontSize = REL::Module::IsVR() ?
+		                                   Constants::DEFAULT_SCREEN_HEIGHT * Constants::DEFAULT_FONT_RATIO :
+		                                   Util::kBaselineFontSize;
+		fontScale = io.FontDefault->LegacySize / baselineFontSize;
 	}
 	const float scaleFactor = fontScale * exp2(globalScale);
 	styleCopy.ScaleAllSizes(scaleFactor);
@@ -221,6 +223,12 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	styleCopy.DockingSeparatorSize = scaleSize(themeSettings.Style.DockingSeparatorSize);
 
 	styleCopy.MouseCursorScale = 1.f;
+	if (!REL::Module::IsVR()) {
+		// Desktop font state belongs to ImGui, not saved theme geometry.
+		styleCopy.FontSizeBase = style.FontSizeBase;
+		styleCopy.FontScaleDpi = style.FontScaleDpi;
+		styleCopy._NextFrameFontSizeBase = style._NextFrameFontSizeBase;
+	}
 	style = styleCopy;
 	style.HoverDelayNormal = themeSettings.TooltipHoverDelay;
 	style.FontScaleMain = exp2(globalScale);
@@ -911,12 +919,10 @@ float ThemeManager::ResolveFontSize(const Menu& menu)
 			dynamicSize = Constants::DEFAULT_FONT_SIZE;
 		}
 	} else if (globals::state && globals::state->screenSize.y > 0) {
-		// Non-VR: use current screen height
-		dynamicSize = globals::state->screenSize.y * Constants::DEFAULT_FONT_RATIO;
+		dynamicSize = Util::kBaselineFontSize * (globals::state->screenSize.y / Constants::DEFAULT_SCREEN_HEIGHT);
 	} else {
-		// Fallback: use default font size
-		logger::warn("ThemeManager::ResolveFontSize() - Falling back to Constants::DEFAULT_FONT_SIZE due to missing screen height.");
-		dynamicSize = Constants::DEFAULT_FONT_SIZE;
+		logger::warn("ThemeManager::ResolveFontSize() - Falling back to the desktop baseline due to missing screen height.");
+		dynamicSize = Util::kBaselineFontSize;
 	}
 	return std::clamp(dynamicSize, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
 }

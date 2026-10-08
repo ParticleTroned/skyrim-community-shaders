@@ -34,6 +34,7 @@ public:
 
 	virtual inline std::string GetName() override { return "Volumetric Lighting"; }
 	virtual inline std::string GetShortName() override { return "VolumetricLighting"; }
+	virtual std::string_view GetShaderCacheAbiVersion() override { return "godray-composite-color-1"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -65,8 +66,8 @@ public:
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 	bool IsExteriorEnabled() const;
 	void SetExteriorEnabled(bool enabled);
-	/** @return The active context's finite-safe shader opacity, or neutral when tuning is unavailable. */
-	float GetRuntimeGodrayOpacity() const;
+	/** @return The active context's sanitized tuning, or a neutral profile when unavailable. */
+	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;
 	virtual void EarlyPrepass() override;

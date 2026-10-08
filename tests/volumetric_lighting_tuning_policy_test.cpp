@@ -1,25 +1,12 @@
 #include "Features/VolumetricLightingTuning.h"
 #include "Features/VolumetricLightingTuningMigration.h"
 
-#include <cmath>
 #include <limits>
 
 namespace
 {
 	using namespace VolumetricLightingTuning;
 	using json = nlohmann::json;
-
-	bool Near(float a_left, float a_right, float a_epsilon = 1e-5f)
-	{
-		return std::abs(a_left - a_right) <= a_epsilon;
-	}
-
-	bool Near(const Color& a_left, const Color& a_right)
-	{
-		return Near(a_left.red, a_right.red) &&
-		       Near(a_left.green, a_right.green) &&
-		       Near(a_left.blue, a_right.blue);
-	}
 
 	bool CoversProfileSanitization()
 	{
@@ -40,70 +27,6 @@ namespace
 		       sanitized.CustomColorRed == 0.0f &&
 		       sanitized.CustomColorGreen == 0.5f &&
 		       sanitized.CustomColorBlue == 1.0f;
-	}
-
-	bool CoversAuthoredColorBaseline()
-	{
-		const Color descriptor{ 0.8f, 0.2f, 0.4f };
-		const Color sun{ 0.1f, 0.2f, 0.3f };
-		const Color expectedBlend{ 0.275f, 0.2f, 0.325f };
-		const Color invalidSun{ std::numeric_limits<float>::quiet_NaN(), 0.2f, 0.3f };
-
-		return Near(ResolveEffectiveColor({ descriptor, 0.0f }, &sun), sun) &&
-		       Near(ResolveEffectiveColor({ descriptor, 1.0f }, &sun), descriptor) &&
-		       Near(ResolveEffectiveColor({ descriptor, 0.25f }, &sun), expectedBlend) &&
-		       Near(ResolveEffectiveColor({ descriptor, 0.25f }, nullptr), descriptor) &&
-		       Near(ResolveEffectiveColor({ descriptor, 0.25f }, &invalidSun), descriptor);
-	}
-
-	bool CoversExactCustomColorComposition()
-	{
-		const Color sun{ 0.1f, 0.2f, 0.3f };
-		const ColorBlend authored{ { 0.8f, 0.4f, 0.2f }, 0.35f };
-		const Color userColor{ 0.2f, 0.7f, 0.9f };
-		const float userContribution = 0.45f;
-		const auto composed = ComposeUserColor(authored, userColor, userContribution);
-		const auto authoredEffective = ResolveEffectiveColor(authored, &sun);
-		const auto expected = LerpColor(authoredEffective, userColor, userContribution);
-		const auto unchanged = ComposeUserColor(authored, userColor, 0.0f);
-
-		return Near(ResolveEffectiveColor(composed, &sun), expected) &&
-		       Near(unchanged.color, authored.color) &&
-		       unchanged.contribution == authored.contribution &&
-		       Near(ResolveEffectiveColor(ComposeUserColor(authored, userColor, 1.0f), &sun), userColor);
-	}
-
-	bool CoversColorSanitization()
-	{
-		const Color unsafe{
-			std::numeric_limits<float>::infinity(),
-			-1.0f,
-			std::numeric_limits<float>::quiet_NaN()
-		};
-		const Color fallback{ 0.2f, 0.3f, 0.4f };
-		const Color expected{ 0.2f, 0.0f, 0.4f };
-		const Color excessive{ kColorChannelMax * 2.0f, 0.5f, 0.25f };
-
-		return Near(SanitizeColor(unsafe, fallback), expected) &&
-		       SanitizeColor(excessive).red == kColorChannelMax;
-	}
-
-	bool CoversGamutPreservingSaturation()
-	{
-		const Color hdrColor{ 2.0f, 0.6f, 0.2f };
-		const auto neutral = SaturateColor(hdrColor, 1.0f);
-		const auto grayscale = SaturateColor(hdrColor, 0.0f);
-		const auto saturated = SaturateColor(hdrColor, kSaturationMax);
-		const float originalLuminance = GetLuminance(hdrColor);
-
-		return Near(neutral, hdrColor) &&
-		       Near(grayscale.red, originalLuminance) &&
-		       Near(grayscale.green, originalLuminance) &&
-		       Near(grayscale.blue, originalLuminance) &&
-		       Near(GetLuminance(saturated), originalLuminance) &&
-		       saturated.red >= 0.0f && saturated.red <= 2.0f &&
-		       saturated.green >= 0.0f && saturated.green <= 2.0f &&
-		       saturated.blue >= 0.0f && saturated.blue <= 2.0f;
 	}
 
 	bool CoversDistinctOpacityCurve()
@@ -171,10 +94,6 @@ namespace
 int main()
 {
 	return CoversProfileSanitization() &&
-	               CoversAuthoredColorBaseline() &&
-	               CoversExactCustomColorComposition() &&
-	               CoversColorSanitization() &&
-	               CoversGamutPreservingSaturation() &&
 	               CoversDistinctOpacityCurve() &&
 	               CoversLegacyMigration() &&
 	               CoversNestedProfileParsing() ?

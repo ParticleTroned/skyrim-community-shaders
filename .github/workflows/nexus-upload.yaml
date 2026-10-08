@@ -11,13 +11,17 @@ on:
                 required: false
                 default: "skyrimspecialedition"
             nexus_mod_id:
-                description: "Nexus mod ID"
+                description: "CSX Nexus mod ID (or repository variable CSX_NEXUS_MOD_ID)"
                 required: false
-                default: "86492"
+                default: ""
+            nexus_file_group_id:
+                description: "CSX Nexus file group ID (or repository variable CSX_NEXUS_FILE_GROUP_ID)"
+                required: false
+                default: ""
             artifact_pattern:
                 description: "Artifact glob pattern to select the package to upload"
                 required: false
-                default: "CSX-*.7z"
+                default: "CSX_AIO-*.7z"
             mod_filename:
                 description: "Filename used for the Nexus mod upload"
                 required: false
@@ -46,11 +50,15 @@ on:
             nexus_mod_id:
                 required: false
                 type: string
-                default: "86492"
+                default: ""
+            nexus_file_group_id:
+                required: false
+                type: string
+                default: ""
             artifact_pattern:
                 required: false
                 type: string
-                default: "CSX-*.7z"
+                default: "CSX_AIO-*.7z"
             mod_filename:
                 required: false
                 type: string
@@ -100,24 +108,16 @@ jobs:
             - name: Resolve release tag
               id: resolve
               run: |
+                  set -euo pipefail
                   TAG="$INPUT_TAG"
-                  if [ -z "$TAG" ]; then
-                    echo 'No tag provided for Nexus upload' >&2
+                  if [[ ! "$TAG" =~ ^csx[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    echo "A stable csxMAJOR.MINOR.PATCH tag is required." >&2
                     exit 1
                   fi
-                  if [[ "$TAG" == *-* ]]; then
-                    echo "ERROR: '$TAG' is a pre-release tag. Only stable releases are uploaded to Nexus." >&2
-                    exit 1
-                  fi
-                  DRAFT=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
-                    --jq ".[] | select(.tag_name == \"$TAG\") | .draft" 2>/dev/null | head -1)
-                  if [ "$DRAFT" != "false" ]; then
-                    echo "ERROR: Release '$TAG' is not published. Publish the GitHub release before uploading to Nexus." >&2
-                    exit 1
-                  fi
-                  VERSION="${TAG#v}"
-                  echo "tag=$TAG" >> $GITHUB_OUTPUT
-                  echo "version=$VERSION" >> $GITHUB_OUTPUT
+                  gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release.json
+                  python -c 'import json, sys; sys.path.insert(0, "tools"); from csx_release import parse_version; parse_version(sys.argv[1][3:]); r=json.load(open("release.json")); assert r["tag_name"] == sys.argv[1] and r["draft"] is False and r["prerelease"] is False, "A published stable CSX release is required"' "$TAG"
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+                  echo "version=${TAG#csx}" >> "$GITHUB_OUTPUT"
               env:
                   INPUT_TAG: ${{ inputs.tag || '' }}
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -136,72 +136,36 @@ jobs:
             - name: Generate Nexus upload matrix
               id: generate
               run: |
-                  ARGS=( --export-nexus-matrix --matrix-output nexus-matrix-raw.json )
-                  PREVIOUS_TAG=$(git tag --merged "$RELEASE_TAG" --list 'v*.*.*' --sort=-v:refname 2>/dev/null \
-                    | grep -v -- '-' \
-                    | awk -v current="$RELEASE_TAG" '$0 != current { print; exit }')
-                  if [ -n "$PREVIOUS_TAG" ]; then
-                    ARGS+=( --base "$PREVIOUS_TAG" )
-                  else
-                    ARGS+=( --all-features )
+                  set -euo pipefail
+                  ARGS=( --export-nexus-matrix --matrix-output nexus-matrix-raw.json --base "$RELEASE_TAG" )
+                  ARGS+=( --core-mod-id "$INPUT_NEXUS_MOD_ID" --core-file-group-id "$INPUT_NEXUS_FILE_GROUP_ID" )
+                  ARGS+=( --core-filename "$INPUT_MOD_FILENAME" --core-artifact-pattern "$INPUT_ARTIFACT_PATTERN" )
+                  if [ "$DRY_RUN" = false ] && { [ -z "$INPUT_NEXUS_MOD_ID" ] || [ -z "$INPUT_NEXUS_FILE_GROUP_ID" ]; }; then
+                    echo "Real uploads require the CSX Nexus mod ID and file group ID." >&2
+                    exit 1
                   fi
-                  if [ -n "$INPUT_NEXUS_MOD_ID" ]; then
-                    ARGS+=( --core-mod-id "$INPUT_NEXUS_MOD_ID" )
-                  fi
-                  if [ -n "$INPUT_MOD_FILENAME" ]; then
-                    ARGS+=( --core-filename "$INPUT_MOD_FILENAME" )
-                  fi
-                  if [ -n "$INPUT_ARTIFACT_PATTERN" ]; then
-                    ARGS+=( --core-artifact-pattern "$INPUT_ARTIFACT_PATTERN" )
+                  if [ -z "$INPUT_NEXUS_MOD_ID" ]; then
+                    echo "No CSX Nexus destination configured; dry run will inspect the AIO without scheduling an upload."
                   fi
                   python tools/feature_version_audit.py "${ARGS[@]}"
-
-                  # Fetch the specific release by tag to avoid pagination issues with
-                  # the releases list endpoint (default page size is 30).
-                  gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-                    2>/dev/null > release.json || echo '{}' > release.json
                   python -c "
-                  import json, os, re
+                  import json, sys, fnmatch
+                  sys.path.insert(0, 'tools')
+                  from csx_release import strip_feature_audit
                   with open('release.json') as f:
                       release = json.load(f)
-                  if not isinstance(release, dict):
-                      release = {}
-                  body = release.get('body') or ''
-                  # Strip feature audit appendix — Nexus changelog should only
-                  # contain human-readable release notes, not the audit table.
-                  # GitHub's release body API may return CRLF line endings.
-                  body = re.sub(r'\r?\n---\r?\n+# Feature Version Audit\b.*', '', body, flags=re.DOTALL).strip()
+                  body = strip_feature_audit(release.get('body') or '')
                   with open('nexus-matrix-raw.json') as f:
                       data = json.load(f)
-                  for row in data:
-                      if row.get('name') == 'core':
-                          row['changelog'] = body
-                          break
-                  with open('nexus-matrix-raw.json', 'w') as f:
-                      json.dump(data, f)
-                  "
-
-                  python -c "
-                  import json, fnmatch
-                  with open('nexus-matrix-raw.json') as f:
-                      data = json.load(f)
-                  # Load asset names from the release to skip uploads where the
-                  # artifact was not included. Applies to all rows, including core.
-                  try:
-                      with open('release.json') as f:
-                          release = json.load(f)
-                      if not isinstance(release, dict):
-                          release = {}
-                  except Exception:
-                      release = {}
-                  asset_names = [a['name'] for a in release.get('assets', [])]
-                  def artifact_in_release(row):
-                      pat = row.get('artifact_pattern', '')
-                      return bool(pat) and any(fnmatch.fnmatch(n, pat) for n in asset_names)
-                  # Full matrix for artifact prep; upload matrix excludes auto_upload=false
-                  # and features whose standalone artifact is absent from the release.
-                  upload_data = [row for row in data
-                                 if row.get('auto_upload', True) and artifact_in_release(row)]
+                  if len(data) != 1 or data[0]['artifact_pattern'] != 'CSX_AIO-*.7z':
+                      raise ValueError('Expected one CSX AIO upload plan')
+                  row = data[0]
+                  matches = [a['name'] for a in release['assets']
+                             if fnmatch.fnmatchcase(a['name'], row['artifact_pattern'])]
+                  if len(matches) != 1:
+                      raise ValueError(f'Expected exactly one released CSX AIO; found {matches}')
+                  row['changelog'] = body
+                  upload_data = [row] if row['auto_upload'] else []
                   has_uploads = bool(upload_data)
                   with open('nexus-matrix.json', 'w') as f:
                       json.dump({'include': data}, f)
@@ -223,9 +187,11 @@ jobs:
                   echo "has_uploads=${HAS_UPLOADS}" >> "$GITHUB_OUTPUT"
               env:
                   RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
-                  INPUT_NEXUS_MOD_ID: ${{ inputs.nexus_mod_id || '' }}
-                  INPUT_MOD_FILENAME: ${{ inputs.mod_filename || '' }}
-                  INPUT_ARTIFACT_PATTERN: ${{ inputs.artifact_pattern || '' }}
+                  INPUT_NEXUS_MOD_ID: ${{ inputs.nexus_mod_id || vars.CSX_NEXUS_MOD_ID || '' }}
+                  INPUT_NEXUS_FILE_GROUP_ID: ${{ inputs.nexus_file_group_id || vars.CSX_NEXUS_FILE_GROUP_ID || '' }}
+                  DRY_RUN: ${{ steps.dryrun.outputs.dry_run }}
+                  INPUT_MOD_FILENAME: ${{ inputs.mod_filename || 'Community Shaders Expanded (CSX)' }}
+                  INPUT_ARTIFACT_PATTERN: ${{ inputs.artifact_pattern || 'CSX_AIO-*.7z' }}
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     prepare-artifacts:
@@ -238,25 +204,21 @@ jobs:
             - name: Download GitHub release assets
               run: |
                   mkdir -p release-assets
-                  gh release download "${{ needs.prepare-nexus-matrix.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern "*.7z" --dir release-assets
+                  gh release download "${{ needs.prepare-nexus-matrix.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern "CSX_AIO-*.7z" --dir release-assets
                   ls -lah release-assets
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Select release artifact
               id: artifact
-              continue-on-error: true
               run: |
-                  pattern='${{ matrix.artifact_pattern }}'
-                  echo "Searching for artifact matching: $pattern"
-                  asset=$(find release-assets -maxdepth 1 -name "$pattern" | sort | head -n 1)
-                  if [ -z "$asset" ]; then
-                    echo "ERROR: No release artifact matching pattern '$pattern' found for ${{ matrix.name }}" >&2
-                    echo "Available artifacts:"
-                    ls -1 release-assets/ | sed 's/^/  /'
-                    echo "artifact_found=false" >> $GITHUB_OUTPUT
-                    exit 0
+                  shopt -s nullglob
+                  assets=(release-assets/CSX_AIO-*.7z)
+                  if [ "${#assets[@]}" -ne 1 ]; then
+                    echo "Expected exactly one released CSX AIO; found ${#assets[@]}." >&2
+                    exit 1
                   fi
+                  asset="${assets[0]}"
                   echo "Found artifact: $asset"
                   echo "artifact_path=$asset" >> $GITHUB_OUTPUT
                   echo "artifact_found=true" >> $GITHUB_OUTPUT
@@ -429,17 +391,16 @@ jobs:
                   RELEASE_TAG: ${{ needs.prepare-nexus-matrix.outputs.tag }}
                   REPO: ${{ github.repository }}
               run: |
-                  FILE=$(find upload/ -maxdepth 1 -name "*.7z" | sort | head -n 1)
-                  if [ -z "$FILE" ]; then
-                    echo "ERROR: No .7z file found in upload/ directory" >&2
+                  shopt -s nullglob
+                  assets=(upload/CSX_AIO-*.7z)
+                  if [ "${#assets[@]}" -ne 1 ]; then
+                    echo "Expected exactly one CSX AIO upload artifact; found ${#assets[@]}." >&2
                     exit 1
                   fi
+                  FILE="${assets[0]}"
                   echo "file=$FILE" >> $GITHUB_OUTPUT
                   LINK="https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"
-                  # file_description is multi-line (per-feature compatibility
-                  # bullets), so write it with the heredoc-delimiter form. A plain
-                  # 'description=...' breaks $GITHUB_OUTPUT on the embedded newlines
-                  # ("Error: Invalid format 'HDR 1.0.2'").
+                  # Preserve multiline descriptions in the workflow output protocol.
                   {
                     echo 'description<<NEXUS_DESC_EOF'
                     if [ -n "$FILE_DESC" ]; then
@@ -458,7 +419,7 @@ jobs:
               run: |
                   if [ -z "$FILE_GROUP_ID" ] || [ "$FILE_GROUP_ID" = "000000" ]; then
                     echo "ERROR: file_group_id is '${FILE_GROUP_ID}' for '$MOD_NAME'." >&2
-                    echo "Set nexusfilegroupid in the feature's [Nexus] ini section." >&2
+                    echo "Set nexus_file_group_id or the CSX_NEXUS_FILE_GROUP_ID repository variable." >&2
                     exit 1
                   fi
 

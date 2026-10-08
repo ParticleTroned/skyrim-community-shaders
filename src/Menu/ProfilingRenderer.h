@@ -48,6 +48,12 @@ public:
 		float frameSampleMs = 0.0f;
 		float fpsSample = 0.0f;
 		uint32_t frameCount = 0;
+		uint32_t sampleFrameCount = 0;
+		uint64_t samplePresentId = 0;
+		uint64_t flatPresentId = 0;
+		uint64_t flatTimingEpoch = 0;
+		bool flatTiming = false;
+		std::vector<Util::FlatFrameTiming::Sample> flatSamples;
 		bool hasGameGpu = false;
 		bool hasGameCpu = false;
 		bool hasGameGpuSample = false;

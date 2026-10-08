@@ -20,6 +20,7 @@
 #include "../../State.h"
 #include "../../Util.h"
 #include "../Upscaling.h"
+#include "CameraReprojection.h"
 #include "DX12SwapChain.h"
 #include "NvidiaBoundedLog.h"
 #include "NvidiaPipelinePolicy.h"
@@ -791,7 +792,7 @@ namespace
 				}
 			} else if (a_stage == Streamline::DLSSDevBenchTraceStage::Evaluate) {
 				++state.evaluateCalls;
-				if (a_resultCode != static_cast<int32_t>(sl::Result::eOk)) {
+				if (!DLSSResultPolicy::IsEvaluationSuccessful(static_cast<sl::Result>(a_resultCode))) {
 					++state.evaluateFailures;
 					state.lastEvaluateFailureFound = true;
 					state.lastEvaluateFailure = record;
@@ -1411,6 +1412,7 @@ bool Streamline::LoadInterposer()
 	InvalidateDLSSOptionsCache();
 	reflexOptionsCache = {};
 	lastReflexSleepFrame = UINT32_MAX;
+	dlssBudgetWarningThrottle.Reset();
 	lifecycleState.store(LifecycleState::Initialized, std::memory_order_release);
 	logger::info("[Streamline] Successfully initialized Streamline");
 	return true;
@@ -1822,16 +1824,24 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraFar = temporalSnapshot ? temporalSnapshot->scalars.cameraFar : *globals::game::cameraFar;
 
 	auto viewMatrix = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex)).Transpose();
-	auto cameraViewToClip = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].projectionUnjittered : globals::game::frameBufferCached.GetCameraProjUnjittered(eyeIndex)).Transpose();
+	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
+	const auto& previousCameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousPosition : globals::game::frameBufferCached.GetCameraPreviousPosAdjust(eyeIndex);
+	const auto cameraMatrices = UpscalingCamera::BuildReprojection(
+		viewMatrix,
+		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose(),
+		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose(),
+		float3(cameraPosition.x - previousCameraPosition.x, cameraPosition.y - previousCameraPosition.y, cameraPosition.z - previousCameraPosition.z));
 
 	slConstants.cameraMotionIncluded = sl::Boolean::eTrue;
 	slConstants.cameraPinholeOffset = { 0.f, 0.f };
 	slConstants.cameraRight = { viewMatrix._11, viewMatrix._12, viewMatrix._13 };
 	slConstants.cameraUp = { viewMatrix._21, viewMatrix._22, viewMatrix._23 };
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
-	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
 	slConstants.cameraPos = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
-	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
+	slConstants.cameraViewToClip = std::bit_cast<sl::float4x4>(cameraMatrices.cameraViewToClip);
+	slConstants.clipToCameraView = std::bit_cast<sl::float4x4>(cameraMatrices.clipToCameraView);
+	slConstants.clipToPrevClip = std::bit_cast<sl::float4x4>(cameraMatrices.clipToPrevClip);
+	slConstants.prevClipToClip = std::bit_cast<sl::float4x4>(cameraMatrices.prevClipToClip);
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
 	if (globals::game::isVR) {
@@ -1860,19 +1870,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 			};
 		}
 
-		// VR: compute clipToCameraView / clipToPrevClip / prevClipToClip from Skyrim's per-eye matrices.
-		// recalculateCameraMatrices() uses a single static prev-frame slot -- unusable for two viewports.
 		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);
-
-		auto currViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose();
-		auto prevViewProj = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose();
-
-		sl::float4x4 currViewProjSL = *(sl::float4x4*)&currViewProj;
-		sl::float4x4 prevViewProjSL = *(sl::float4x4*)&prevViewProj;
-
-		sl::float4x4 invCurrViewProj;
-		sl::matrixFullInvert(invCurrViewProj, currViewProjSL);
-		sl::matrixMul(slConstants.clipToPrevClip, invCurrViewProj, prevViewProjSL);
 
 		if (applyCroppedConstantsCorrection) {
 			const float invScaleX = 1.0f / clampedViewportScaleX;
@@ -1891,8 +1889,6 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 		}
 
 		sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
-	} else {
-		recalculateCameraMatrices(slConstants);
 	}
 
 	const auto jitter = upscaling.GetJitterForDispatch();
@@ -3076,7 +3072,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 	if (state && state->frameAnnotations)
 		state->EndPerfEvent();
 
-	if (evalResult != sl::Result::eOk) {
+	const bool evaluationSucceeded = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
+	if (evalResult == sl::Result::eWarnOutOfVRAM) {
+		const uint32_t logEye = globals::game::isVR ? eyeIndex : 0u;
+		const uint32_t frame = state ? state->frameCount : 0u;
+		if (dlssBudgetWarningThrottle.ShouldLog(logEye, frame)) {
+			logger::warn("[Streamline] DLSS output valid but VRAM budget exceeded{} frame={} viewport={} result={} ({})",
+				globals::game::isVR ? std::format(" for eye {}", eyeIndex) : "",
+				frame, static_cast<uint32_t>(vp), static_cast<int>(evalResult), magic_enum::enum_name(evalResult));
+		}
+	}
+	if (!evaluationSucceeded) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		LogDLSSDispatchDiagnostics(DLSSDiagnosticStage::Evaluate, evalResult, diagnosticsPtr);
 #endif
@@ -3108,7 +3114,7 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		}
 	}
 
-	return evalResult == sl::Result::eOk;
+	return evaluationSucceeded;
 }
 
 bool Streamline::UpscaleRegion(uint32_t eyeIndex, ID3D11Resource* colorIn, ID3D11Resource* colorOut, ID3D11Resource* depth,
@@ -3176,7 +3182,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		sharpenerOutputReady &&
 		upscaling.ShouldRouteDLSSMainPassThroughSharpener();
 	ID3D11Resource* colorOut = useSharpenerOutput ? upscaling.sharpenerTexture->resource.get() : a_upscalingTexture;
-	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : REX::W32::AsReal(mainTarget.UAV);
+	ID3D11UnorderedAccessView* colorOutUAV = useSharpenerOutput ? upscaling.sharpenerTexture->uav.get() : mainTarget.UAV;
 	const bool outputToSharpener = useSharpenerOutput;
 
 	// VR: Combined-buffer mode with extent offsets causes temporal ghosting on the right eye
@@ -3257,7 +3263,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// per-eye depth for both eyes.
 		if (!upscaling.PreparePerEyeInputs(
 				a_upscalingTexture,
-				REX::W32::AsReal(depthTexture.texture),
+				depthTexture.texture,
 				a_motionVectors,
 				a_reactiveMask,
 				a_transparencyCompositionMask,
@@ -3354,7 +3360,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 		// Eye 0 writes directly to combined output.
 		const bool leftEvaluated = EvaluateDLSS(viewport, 0,
 			upscaling.vrIntermediateColorIn[0]->resource.get(), colorOut,
-			REX::W32::AsReal(depthTexture.texture), upscaling.vrIntermediateMotionVectors[0]->resource.get(),
+			depthTexture.texture, upscaling.vrIntermediateMotionVectors[0]->resource.get(),
 			upscaling.vrIntermediateReactiveMask[0]->resource.get(), upscaling.vrIntermediateTransparencyMask[0]->resource.get(),
 			extentIn, extentOut, eyeWidthOut,
 			0.0f,
@@ -3383,8 +3389,8 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		if (leftEvaluated && rightEvaluated) {
 			if (depthTexture.depthSRV) {
-				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, REX::W32::AsReal(depthTexture.depthSRV), eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
-				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), REX::W32::AsReal(depthTexture.depthSRV), eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				upscaling.ClearVRDirectUpscaledEyeOutput(0, colorOutUAV, depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
+				upscaling.ClearVRDirectUpscaledEyeOutput(1, upscaling.vrIntermediateColorOut[1]->uav.get(), depthTexture.depthSRV, eyeWidthIn, eyeHeightIn, eyeWidthOut, eyeHeightOut);
 			}
 
 			D3D11_BOX rightOut = { 0, 0, 0, eyeWidthOut, eyeHeightOut, 1 };
@@ -3422,7 +3428,7 @@ bool Streamline::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_r
 
 		const bool evaluated = EvaluateDLSS(viewport, 0,
 			a_upscalingTexture, colorOut,
-			REX::W32::AsReal(depthTexture.texture), a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
+			depthTexture.texture, a_motionVectors, a_reactiveMask, a_transparencyCompositionMask,
 			extentIn, extentOut, (uint)screenSize.x,
 			0.0f,
 			0.0f,

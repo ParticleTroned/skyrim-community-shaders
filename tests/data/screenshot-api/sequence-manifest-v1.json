@@ -9,7 +9,21 @@
     "acceptedUtc": "2026-08-29T20:00:00.000Z",
     "completedUtc": "2026-08-29T20:00:01.000Z",
     "requested": { "frameCount": 1, "capture": { "source": { "kind": "hmd_submission" } } },
-    "effective": { "source": { "kind": "hmd_submission" }, "outputs": [{ "view": "left_eye" }] },
+    "effective": {
+        "frameCount": 1,
+        "useSettings": false,
+        "schedule": { "basis": "game_frames", "intervalFrames": 1, "startDelayFrames": 0 },
+        "backpressure": { "policy": "skip", "maximumConsecutiveSkips": 10 },
+        "failurePolicy": "continue",
+        "capture": {
+            "source": { "kind": "hmd_submission" },
+            "outputs": [{ "view": "left_eye" }]
+        },
+        "packaging": {
+            "frameManifest": true,
+            "previewVideo": { "requested": false, "required": false }
+        }
+    },
     "actual": { "children": 1, "fallbacksPresent": true },
     "counts": {
         "requested": 1,
@@ -39,10 +53,10 @@
             },
             "artifacts": [
                 {
-                    "path": "C:/captures/frame_000001.png",
+                    "path": "left/frame_000001.png",
                     "bytes": 1234,
                     "committed": true,
-                    "sha256": "0123456789abcdef",
+                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     "actual": {
                         "view": "source_native",
                         "width": 1920,

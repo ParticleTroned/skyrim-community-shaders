@@ -150,6 +150,8 @@ public:
 	static void InstallWeatherLockHooks();
 	static bool AreWeatherLockHooksInstalled();
 	static void MaintainWeatherLock();
+	/** Forces weather on the engine thread, preserving locks and refreshing sky visuals. */
+	static void ForceWeather(RE::Sky* a_sky, RE::TESWeather* a_weather, bool a_override);
 
 	void PauseTime();
 	void ResumeTime();

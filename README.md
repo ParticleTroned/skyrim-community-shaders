@@ -12,6 +12,17 @@ Community Shaders Expanded (CSX) restores (and extends) Particle Lights function
 
 This fork inherits the original GPL-3.0-or-later license with the Modding Exception and Linking Exception (see below).
 
+## Installing a CSX release
+
+Download the single `CSX_AIO-*.7z` asset from the
+[CSX releases page](https://github.com/ParticleTroned/skyrim-community-shaders/releases).
+All shipped features are bundled, including Adaptive Balance, Performance
+Tuning, Wetterness, Unified Water, Hair Specular and the terrain features.
+The FOMOD offers VR, SE/AE, or no prebuilt shader cache; each runtime cache
+includes both standard and Horizon Fix Water variants. Optional integrations
+still require their companion plugins. GitHub's source archives are for
+development, not installation.
+
 ## Requirements
 
 -   Any terminal of your choice (e.g., PowerShell)
@@ -44,7 +55,7 @@ Install them manually only if you want them in everywhere.
 -   [Address Library for SKSE](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
     -   Needed for SSE/AE
 -   [VR Address Library for SKSEVR](https://www.nexusmods.com/skyrimspecialedition/mods/58101)
-    -   Needed for VR
+    -   Version 0.269.0 or later is required for VR, including forced-weather sky model cleanup.
 
 ## Build Instructions
 
@@ -97,7 +108,10 @@ cmake -E copy_directory ./build/ALL/aio $MOD_FOLDER
 #### Build a zip package
 
 You can build zip packages for optional cmake targets.
-Currently support `AIO_ZIP_PACKAGE`, `Package-AIO-Manual`, `Package-Core`, and `Package-<Feature>`:
+Developer packaging supports `AIO_ZIP_PACKAGE`, `Package-AIO-Manual`,
+`Package-Core`, and `Package-<Feature>`. Core-only and individual feature
+packages are internal build outputs; public CSX releases use the
+[complete AIO with its cache FOMOD](docs/development/csx-release-distribution.md):
 
 ```pwsh
 # Create a AIO package in ./dist/
@@ -129,8 +143,24 @@ If you want an example CMakeUserPreset to start off with you can copy the `CMake
 #### TRACY_SUPPORT
 
 -   This option is default `"OFF"`
--   This will enable tracy support, might need to delete build folder when this option is changed
--   The client is pinned to Tracy protocol v82 (`ef099b05`); use a protocol-v82 profiler because protocol-v81 tools cannot connect
+-   Enables Tracy instrumentation in the DLL. Reconfigure after changing it.
+-   With this option off, the DLL uses only Tracy's disabled macros and does not link the Tracy client. DevBench capture controls are independently gated by `DEVBENCH_BRIDGE`.
+-   The client is pinned to Tracy `0.14.2-a8db9bd8`, protocol **83**. Capture and viewer tools must use the same protocol.
+-   The `ALL-TRACY` configure preset also selects the `tracy-tools` manifest feature, building the CLI tools and viewer from the same pinned source. Custom presets can select `VCPKG_MANIFEST_FEATURES=tracy-tools` alongside `TRACY_SUPPORT=ON`.
+
+To build the matched profiling configuration:
+
+```powershell
+pwsh ./tools/cmake.ps1 --preset ALL-TRACY
+pwsh ./tools/cmake.ps1 --build build/ALL-TRACY --config Release --target CommunityShaders
+```
+
+With the default install layout, use `tracy-capture.exe`, `tracy-csvexport.exe`
+and `tracy-profiler.exe` under
+`build/ALL-TRACY/vcpkg_installed/x64-windows-static-md/tools/tracy`.
+The tools build in Release; production presets keep them optional and keep
+Tracy instrumentation disabled. Existing binaries remain at their original
+protocol until rebuilt, so retain their matched tools for older captures.
 
 When using custom preset you can call BuildRelease.bat with an parameter to specify which preset to configure eg:
 `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
@@ -236,6 +266,12 @@ through the pinned [Streamline submodule](extern/Streamline-DX12).
 The public 2.14.1 SDK archive does not contain `sl.dlss_nr.dll`,
 `nvngx_dlssnr.dll`, or their implementation sources. This update does not package
 DLSS Neural Rendering or add support for it.
+
+### SKSE Plugin API
+
+[LGPL-3.0-or-later](COPYING.LESSER): `include/VRAPI/CSinterface001.h` and
+`src/VRAPI/CSinterface001.cpp` only (see [API.md](API.md)). Everything else
+under `VRAPI/` remains [Default](#default).
 
 ### Shaders
 

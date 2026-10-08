@@ -2,6 +2,10 @@
 
 #include "Api/ServiceFoundation.h"
 #include "Features/ScreenshotApiPolicy.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Features/ScreenshotBurstPolicy.h"
+#endif
+#include "Features/ScreenshotStorageSecurity.h"
 #include "ScreenshotManifestSnapshot.h"
 
 #include <chrono>
@@ -9,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -37,6 +42,10 @@ public:
 
 	/** Validate and dispatch a contract request while retaining its idempotent receipt. */
 	json HandleRequest(ScreenshotFeature& a_feature, const json& a_request);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Admit a DevBench reference PNG and report its terminal receipt outside service locks. */
+	json HandleReferenceRequest(ScreenshotFeature& a_feature, const json& a_request, std::function<void(const json&)> a_completion);
+#endif
 	void Tick(ScreenshotFeature& a_feature, uint64_t a_engineFrame);
 
 	void OnSourceWaiting(std::string_view a_requestId, std::string_view a_actualSourceKind);
@@ -52,7 +61,8 @@ public:
 		bool a_success,
 		const std::filesystem::path& a_path,
 		std::string_view a_error = {},
-		json a_actual = json::object());
+		json a_actual = json::object(),
+		std::optional<CSX::ScreenshotStorage::CommittedArtifact> a_committedArtifact = std::nullopt);
 	void OnSourceTerminal(std::string_view a_requestId, std::string_view a_state, std::string_view a_error = {});
 	void OnFeatureDisabled(std::string_view a_reason);
 	void BeginShutdown(std::string_view a_reason);
@@ -86,6 +96,9 @@ private:
 		json warnings = json::array();
 		json errors = json::array();
 		json error = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::function<void(const json&)> referenceCompletion;
+#endif
 		bool acknowledged = false;
 		bool cancelRequested = false;
 		uint32_t expectedArtifacts = 1;
@@ -104,6 +117,7 @@ private:
 		std::string requestId;
 		json requested = json::object();
 		json capture = json::object();
+		json effective = json::object();
 		uint32_t frameCount = 0;
 		uint32_t intervalFrames = 1;
 		uint32_t startDelayFrames = 0;
@@ -111,6 +125,11 @@ private:
 		uint32_t maximumConsecutiveSkips = 10;
 		uint32_t nextOrdinal = 1;
 		uint32_t scheduled = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ScreenshotBurst::Plan burst;
+		ScreenshotBurst::Continuity continuity;
+		json burstSource = nullptr;
+#endif
 		uint32_t acquired = 0;
 		uint32_t written = 0;
 		uint32_t dropped = 0;
@@ -134,6 +153,7 @@ private:
 		std::filesystem::path directory;
 		std::filesystem::path partialManifestPath;
 		std::filesystem::path finalManifestPath;
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		std::shared_ptr<const ManifestChildNode> manifestChildren;
 		std::size_t childCount = 0;
 		json packaging = json::object();
@@ -146,6 +166,7 @@ private:
 		bool final = false;
 		std::filesystem::path destination;
 		std::filesystem::path partialPath;
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
 		json header = json::object();
 		std::shared_ptr<const ManifestChildNode> children;
 	};
@@ -191,6 +212,23 @@ private:
 		std::chrono::steady_clock::time_point expiresAt{};
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct ReferenceNotification
+	{
+		std::function<void(const json&)> completion;
+		json receipt;
+	};
+	std::vector<ReferenceNotification> referenceNotifications;
+#endif
+	json DispatchRequest(ScreenshotFeature& a_feature, const json& a_request
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		std::function<void(const json&)> a_completion = {}
+#endif
+	);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void DrainReferenceNotifications();
+#endif
 	CSX::Api::ServiceFoundation service;
 	mutable std::mutex mutex;
 	std::unordered_map<std::string, RequestRecord> requests;
@@ -217,7 +255,12 @@ private:
 	static constexpr auto kRetention = std::chrono::hours(1);
 	static constexpr uint32_t kMaximumSequenceFrames = 10000;
 
-	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request);
+	json HandleValidatedRequest(ScreenshotFeature& a_feature, const json& a_request
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		,
+		std::function<void(const json&)> a_completion = {}
+#endif
+	);
 	/** Freeze and validate a still or sequence descriptor using its own settings. */
 	json NormalizeCaptureDescriptor(
 		const ScreenshotFeature& a_feature,

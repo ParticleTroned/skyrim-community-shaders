@@ -52,6 +52,7 @@ namespace Permutation
 		static const uint GrayscaleToColor = (1 << 19);
 		static const uint GrayscaleToAlpha = (1 << 20);
 		static const uint IgnoreTexAlpha = (1 << 21);
+		static const uint SkyObject = (1 << 24);
 	}
 
 	namespace ExtraFlags

@@ -909,15 +909,18 @@ namespace
 				observed |= kConditionProviderCheckPending;
 			else if ((currentCapabilities.availableMethodMask & methodBit) == 0)
 				observed |= kConditionProviderUnavailable;
-			if (a_request.target.method == Method::kFSR &&
-				a_request.target.fsrRuntime == FSRRuntime::kFSR4) {
-				observed |= currentCapabilities.fsrRuntimeUnavailableConditions[static_cast<std::uint32_t>(FSRRuntime::kFSR4)];
-			}
+			// FSR4 is a preference. FidelityFX keeps the FSR method usable by
+			// selecting its host or FSR3 provider when FSR4 is unavailable.
+			const auto fsrRuntimeFallbackConditions =
+				CSX::Api::ResolveFSRRuntimeFallbackConditions(
+					a_request.target,
+					currentCapabilities);
 			const auto admission = CSX::Api::ResolveUpscalingAdmission(
 				observed,
 				a_request.purpose,
 				a_request.persistence,
-				false);
+				false,
+				fsrRuntimeFallbackConditions);
 			result.observedConditions = admission.observedConditions;
 			result.blockingConditions = admission.blockingConditions;
 			result.admissionRoute = admission.route;

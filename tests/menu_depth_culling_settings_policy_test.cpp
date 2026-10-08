@@ -68,6 +68,24 @@ namespace
 				"Rejected update partially modified staged values");
 		}
 	}
+
+	void TestMethodIdentifiers()
+	{
+		using VRDepthCullingTemporal::Mode;
+		Mode method = Mode::Balanced;
+		std::string error = "previous error";
+		for (const auto expected : { Mode::Balanced, Mode::Legacy, Mode::Hybrid }) {
+			Require(MenuDepthCullingSettingsPolicy::TryParseMethod(VRDepthCullingTemporal::GetModeName(expected), method, error),
+				"Supported method identifier rejected");
+			Require(method == expected && error.empty(), "Method parse returned an incorrect result");
+		}
+		const json invalidMethods[] = { nullptr, true, 0, 2, 3, "", "advanced", "Hybrid", "performance", json::object(), json::array() };
+		for (const auto& value : invalidMethods) {
+			method = Mode::Hybrid;
+			Require(!MenuDepthCullingSettingsPolicy::TryParseMethod(value, method, error), "Invalid method identifier accepted");
+			Require(method == Mode::Hybrid && !error.empty(), "Rejected method modified the selected value or omitted its error");
+		}
+	}
 }
 
 int main()
@@ -75,6 +93,7 @@ int main()
 	try {
 		TestIndependentUpdates();
 		TestInvalidUpdates();
+		TestMethodIdentifiers();
 		std::cout << "Depth-culling DevBench update validation passed\n";
 		return 0;
 	} catch (const std::exception& error) {

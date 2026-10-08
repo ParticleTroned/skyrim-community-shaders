@@ -1,5 +1,6 @@
 #include "Profiler.h"
 #include "Utils/ProfilerTiming.h"
+#include "Utils/ResourceName.h"
 
 #include <array>
 #include <chrono>
@@ -8,6 +9,15 @@
 #include <numeric>
 #include <stdexcept>
 #include <thread>
+
+namespace Util
+{
+	void SetResourceName(ID3D11DeviceChild* resource, const char* format, ...)
+	{
+		if (!resource || !std::string_view(format).starts_with("Profiler::WholeFrame"))
+			throw std::runtime_error("profiler query missing shared resource naming");
+	}
+}
 
 namespace
 {
@@ -127,6 +137,26 @@ namespace
 		Near(cpuSum, profiler.GetResolvedCpuTotalTimeMs(), "resolved CPU total differs from row sum");
 		profiler.ClearTimers();
 		Check(profiler.GetResults().empty(), "history reset retained timers");
+		profiler.Release();
+
+		profiler.Initialize(device.get(), context.get(), true);
+		const auto flatDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		bool flatResolved = false;
+		for (uint32_t frame = 0; !flatResolved && std::chrono::steady_clock::now() < flatDeadline; ++frame) {
+			profiler.RequestCapture();
+			Work();
+			profiler.BeginFlatPresent(frame, 0);
+			context->Flush();
+			profiler.CompleteFlatPresent(S_OK);
+			for (const auto& sample : profiler.GetFlatTiming()->samples) {
+				if (!sample.hasGpu || !sample.hasCpu)
+					continue;
+				Check(sample.presentId == sample.frame + 1 && sample.cpuMs > 0 && sample.gpuMs > 0,
+					"WARP whole-frame timing lost CPU/GPU source identity");
+				flatResolved = true;
+			}
+		}
+		Check(flatResolved, "whole-frame D3D11 queries did not resolve on WARP");
 		profiler.Release();
 	}
 }

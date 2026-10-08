@@ -255,7 +255,7 @@ namespace
 			return false;
 
 		D3D11_TEXTURE2D_DESC desc{};
-		REX::W32::AsReal(a_target.texture)->GetDesc(&desc);
+		a_target.texture->GetDesc(&desc);
 		if (a_scratch.texture &&
 			a_scratch.width == desc.Width &&
 			a_scratch.height == desc.Height &&
@@ -423,7 +423,7 @@ namespace
 			return false;
 
 		context->OMSetRenderTargets(0, nullptr, nullptr);
-		context->CopyResource(a_scratch.texture->resource.get(), REX::W32::AsReal(a_target.texture));
+		context->CopyResource(a_scratch.texture->resource.get(), a_target.texture);
 
 		D3D11_VIEWPORT viewport{};
 		viewport.Width = static_cast<float>(a_scratch.width);
@@ -444,7 +444,7 @@ namespace
 
 		ID3D11ShaderResourceView* srvs[] = {
 			a_scratch.texture->srv.get(),
-			REX::W32::AsReal(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV),
+			globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV,
 			a_maskSRV
 		};
 		context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -456,7 +456,7 @@ namespace
 			context->PSSetConstantBuffers(12, ARRAYSIZE(frameBuffers), frameBuffers);
 		}
 
-		ID3D11RenderTargetView* rtvs[] = { REX::W32::AsReal(a_target.RTV) };
+		ID3D11RenderTargetView* rtvs[] = { a_target.RTV };
 		context->OMSetRenderTargets(1, rtvs, nullptr);
 		context->VSSetShader(vertexShader, nullptr, 0);
 		context->PSSetShader(pixelShader, nullptr, 0);
@@ -487,7 +487,7 @@ namespace
 		RE::BSGraphics::RenderTargetData* result = nullptr;
 		for (auto targetIndex : kDepthOfFieldInputTargets) {
 			auto& target = renderTargets[targetIndex];
-			if (REX::W32::AsReal(target.SRV) == a_sourceSRV || REX::W32::AsReal(target.texture) == sourceResource) {
+			if (target.SRV == a_sourceSRV || target.texture == sourceResource) {
 				result = &target;
 				break;
 			}
@@ -548,7 +548,7 @@ namespace
 
 		CS_GPU_PASS("UnderwaterDepthOfField::InputFog");
 		GraphicsStateScope graphicsScope(context);
-		appliedFogToDepthOfFieldInput = DrawDepthOfFieldInputPass(*inputTarget, sharpScratch, REX::W32::AsReal(maskSRV));
+		appliedFogToDepthOfFieldInput = DrawDepthOfFieldInputPass(*inputTarget, sharpScratch, maskSRV);
 	}
 
 	void RunPendingDepthOfFieldInputPass()

@@ -8,6 +8,60 @@ The three `CSX Unified` MGO presets use one settings policy on AMD and NVIDIA:
 | Balanced    | Quality           | Off                  | Low         | On         | On              |
 | Quality     | Ultra Quality     | AO-only, provisional | Medium      | On         | On              |
 
+Image Based Lighting (IBL) is disabled in all three tiers through the shared
+`Image Based Lighting/EnableIBL=0` policy and generation guard.
+
+Skylighting's `Sample` and `SampleWithShadow` functions always apply
+normal-based probe weighting on SE, AE and VR.
+The fast-sampling toggle is retired following the inconclusive whole-frame
+benefit reported in [Open Shaders PR 706](https://github.com/alandtse/open-shaders/pull/706#issuecomment-5888378723).
+Existing default and user settings may retain `EnableFastProbeSampling`;
+the loader ignores it regardless of value and preserves all supported
+settings. Saving a loaded Skylighting feature replaces its section with the
+current schema, omitting the retired key. Settings for features disabled at
+boot remain preserved until they are enabled and saved. No manual reset or
+settings-contract revision change is required; existing revision-5 unified
+presets remain accepted.
+Generated presets reject the retired key so new packages cannot reintroduce it.
+
+Exterior and interior Volumetric Lighting share godray intensity, opacity,
+saturation, custom colour contribution, and RGB values of `1.0` across all
+tiers. Disabling weather-driven Volumetric Lighting during rain is unchecked.
+
+Sky Sync selects the Vanilla sun path with Use Alternate Sun Path disabled
+in all three tiers.
+
+Adaptive Balance uses the built-in Fantasy preset for global Bloom shaping,
+with the global Bloom strength reduced to `0.50` in every tier.
+Its Interior profile enables advanced controls with Emissive `2.0` and
+Ambient `0.75` in the shared base for all three tiers.
+Its Dungeon profile enables advanced controls with Omnidirectional Bulbs
+`1.25` and Ambient `0.75` in all three tiers.
+Its Dwelling profile enables advanced controls with Omnidirectional Bulbs
+`1.25`, Ambient `0.75`, and Emissive `1.25` in all three tiers.
+Exterior Night also enables advanced controls, with Scene Brightness `0.90`,
+Directional Light `2.50`, Point Lights and Omnidirectional Bulbs `1.25`,
+Ambient `1.0`, and Emissive `1.30`. Its Sky, Clouds, Fog, and Volumetric
+Lighting gamma offsets are `0.45`, `0.05`, `0.25`, and `0.30`, respectively.
+Its detailed water controls are enabled with Water Brightness `0.70`,
+Fresnel Minimum `0.25`, and Global Reflection Amount `1.25`.
+Exterior Day enables advanced controls with Directional Light `1.15` and
+Volumetric Lighting gamma offset `0.75`.
+Its detailed water controls are enabled with Fresnel Minimum `0.25`,
+Fresnel Maximum `1.0`, and Muddiness `0.70`.
+
+True PBR uses PBR Metal Reflection `0.75` in all three tiers.
+
+Hair Specular uses Marschner with glossiness `70`, specular multiplier `1.70`,
+and diffuse multiplier `0.75`. Indirect specular, indirect diffuse, base
+colour, saturation, and transmission are `1.0` in every tier. Tangent shift
+and screen-space self shadow are enabled; self-shadow strength, exponent,
+and scale remain `1.0`, `0.1`, and `2.5`.
+
+Subsurface Scattering uses Burley with 16 samples and character lighting off
+in every tier. Male/female SSS intensity is `1.00`/`1.10`; both use SSS
+saturation `1.00`, skin brightness `0.75`, and skin saturation `1.05`.
+
 The capability boundary is the existing pair of upscaling settings. Together
 they describe one preference, not a staged DLSS-to-FSR transition:
 
@@ -18,6 +72,14 @@ When the active adapter is known to be non-NVIDIA, CSX resolves the preference
 directly to FSR without publishing DLSS as the runtime target. On NVIDIA, CSX
 waits for Streamline's capability result before publishing either DLSS or the
 fallback. An unknown adapter remains unresolved rather than guessing.
+
+Provider selection reuses the device-owned adapter-description cache and
+does not query it when the configured method or completed DLSS capability
+already determines the route. Failed adapter queries remain retryable and a
+different graphics device requires a fresh identity. Ordinary VR draws with
+no pending render-target change return before provider normalization; startup
+capability callbacks and pending physical changes still normalize portable
+boot profiles before resource application.
 
 Provider-specific tuning remains in the same generated JSON. DLSS reads its
 preset and sharpener values; FSR reads its own sharpness and runtime-provider
@@ -74,12 +136,28 @@ at `16`. These appearance defaults are shared across tiers and GPU vendors.
 Wind-driven waves remain opt-in; their existing settings are explicit in
 every profile.
 
+Extended Materials includes the independent mesh and terrain Parallax Strength
+at its neutral value of `1.0` in every tier. Legacy settings without the key
+also retain neutral depth; this additive default retains contract revision 5.
+
+Ambient Lighting for Effects and Sky Statics is explicitly off in all
+three tiers. Its additive default preserves existing settings-contract
+revision 5 and weather-based lighting until enabled in Adaptive Balance.
+
 ## CSX compatibility contract
 
-The generated packages target CSX 3.19-VR only. Each `SettingsUser.json`
+All three Unified VR tiers explicitly disable the saved frame-generation
+request because VR cannot use frame generation.
+
+The runtime also normalizes frame generation and force-enable to zero
+when loading or saving VR settings, including older and custom presets.
+Both fields default to zero, and VR exposes no controls to enable them.
+SE and AE keep their frame-generation controls and existing behavior.
+
+The generated packages target CSX 3.20.0-VR. Each `SettingsUser.json`
 contains a versioned `Preset Compatibility` object with a stable preset ID,
-package version, VR runtime, inclusive minimum `3.19`, exclusive maximum
-`3.20`, and the settings-contract fingerprint used to generate it.
+package version, VR runtime, inclusive minimum `3.20`, exclusive maximum
+`3.21`, and the settings-contract fingerprint used to generate it.
 The generator and runtime loader both use settings-contract revision 5.
 The Release compatibility regression loads every generated tier to verify
 that the shipping loader accepts its metadata.
@@ -98,12 +176,19 @@ quality and tier choices are unaffected.
 
 CSX validates marked settings before canonicalization, migration, or merge.
 Malformed metadata, an unsupported compatibility-contract version, the wrong
-runtime, or a CSX version outside the declared range rejects the complete user
+runtime, or an unsupported CSX version rejects the complete user
 layer without rewriting it. Defaults remain active, saving is blocked to
 protect the rejected file, and the decision is recorded in the log and exposed
 through the Feature DevBench API's `preset_compatibility` action. Unmarked
 legacy and user-authored settings remain accepted because strict metadata
 cannot be added retroactively.
+
+CSX 3.20 also accepts the three bundled revision-5 unified presets that
+declare the previous `3.19` to `3.20` range. Their settings schema remains
+supported, so this version update preserves installed user settings. This
+exception does not apply to other preset IDs, other contract revisions,
+SE/AE, or CSX 3.21 and later. Product labels include the patch component;
+preset compatibility bounds continue to describe major/minor lines.
 
 The three generated presets never hard-disable a feature: every `Disable at
 Boot` value is false. Tier exclusions use feature-owned live/soft settings.
@@ -154,9 +239,10 @@ tier lever. Rain and character-focused anchors remain necessary for Wetterness,
 Subsurface Scattering, and Hair Specular.
 
 The requested Hair Specular and water-appearance settings are shared appearance
-baselines rather than tier levers. The water baseline includes the blue tint,
-0.15 tint strength, 15-unit shore fade, 0.5 wave amplitude, 0.90 Fresnel maximum,
-and 1.25 global reflection amount recorded in the policy.
+baselines rather than tier levers. Water tint strength is `0.0` in every
+tier. The global water baseline includes the 15-unit shore fade, 0.5 wave
+amplitude, 0.90 Fresnel maximum, and 1.25 global reflection amount recorded
+in the policy.
 
 Shader-cache packing, selective invalidation, and compiler thread/priority
 policy are deliberately not graphics-tier settings. Presets keep disk caching

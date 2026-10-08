@@ -15,6 +15,7 @@ same PR. Earlier snapshots stay unchanged. See the
 | 0002    | [History 2](vr-render-scale-ledger-0002-history.csv)                         |                                           83,607,079 bytes / 79.734 MiB | Remaining intermediate PR66/PR73 runs; 4 run columns                                                                                 |
 | 0003    | [PR73 and baselines](vr-render-scale-ledger-0003-pr73.csv)                   |                                           72,209,582 bytes / 68.864 MiB | Both PR65 baseline repeats, PR66 reference, latest PR73 measurement; 4 run columns                                                   |
 | 0004    | [Depth-culling investigation](vr-render-scale-ledger-0004-investigation.csv) | See [coverage receipt](depth-culling-comparison-20260916/coverage.json) | Eight same-build gameft-sw runs; 48 saves; complete summaries, producer final records, settings, provenance and derived WPR analysis |
+| 0005    | [Grass COC investigation](vr-render-scale-ledger-0005-investigation.csv)     |                                           57,070,396 bytes / 54.427 MiB | Three same-process COC runs, all 65 transitions, two exact historical reference columns, complete summaries and clean shutdown       |
 
 The archives differ by 120,213 bytes. The original three are plain CSV files below
 100 MiB. Their column headers retain exact run and compiled-source
@@ -26,7 +27,7 @@ Snapshot `0003` pins PR65 sources `348803c18` and `7c8e3e656`, PR66 source
 `renderscale-tuning-nvidia-2026-09-11T17-09-55-165Z`. The older PR73
 comparison source `269bded15` is retained in `0002`.
 
-The next finalized measurement uses `0005-pr<PR number>`. If one PR's
+The next finalized measurement uses `0006-pr<PR number>`. If one PR's
 complete evidence exceeds the file limit, use consecutive numbers with
 that PR identity and list its parts together here. Baselines may recur
 in later snapshots, but their copied cells must remain exact.
@@ -45,6 +46,19 @@ local. Historical snapshots `0001`–`0003` are unchanged.
 The tuning comparison wrapper discovers `prNUMBER` and `history`
 snapshots; it does not interpret this investigation schema as a tuning
 assay. Use the committed `verify.py` for its coverage audit.
+
+Snapshot `0005` records the direct main-VR grass implementation assay on
+measured source `3baaf91b90416ad25d067cdb26c34ce293cf7a5e`; no PR number
+was assigned. Its `investigation` suffix follows snapshot `0004`.
+The [report](grass-coc-20260926/README.md) separates all 65 strict successes
+from raw aggregate PASS / FAIL / FAIL and the two proven native-path gate
+contract mismatches. The complete summaries, exact requests, per-transition
+timings, comparisons and shutdown receipt are in structured detail cells.
+The two historical columns are copied exactly from `0001`; snapshots
+`0001`–`0004` remain unchanged. The [coverage receipt](grass-coc-20260926/coverage.json)
+records exact JSON reconstruction, scalar timing coverage, historical hashes
+and all measured source identities. This is a direct COC scenario format,
+not the tuning wrapper's fixed-matrix worker protocol. Raw traces stay local.
 
 ## Migration verification
 

@@ -32,11 +32,13 @@ The default `shipped` release profile:
 
 -   merges `package/Shaders` and feature `Shaders` trees;
 -   excludes every `Tests` directory;
--   mirrors the AIO hidden-feature contract for SE, including Wetness Effects
-    when it is part of the AIO, while retaining the existing VR exclusion of
-    the legacy `Wetness Effects` package and `WETNESS_EFFECTS` define;
+-   mirrors the AIO hidden-feature contract for SE and retains the mandatory
+    exclusion of legacy `Wetness Effects` sources, metadata and
+    `WETNESS_EFFECTS` in both runtimes;
 -   enables `UNIFIED_WATER` globally;
--   enables `WETTERNESS` for `Lighting.hlsl` and `Water.hlsl`;
+-   removes captured global occurrences of file-scoped defines before enabling
+    `WETTERNESS` only for `Lighting.hlsl` and `Water.hlsl`;
+-   removes obsolete captured `VANILLA_FRESNEL` and `HDR_OUTPUT` defines;
 -   omits the VR feature metadata from an SE cache;
 -   compiles optimized release bytecode, without developer/debug defines.
 
@@ -72,6 +74,15 @@ The SE release build then adds the small, reviewed
 permutations which a single clean modlist may not exercise; it is never applied
 to VR or named profiles.
 
+The compiler-identity tests also compare generated SE macro tasks with
+preserved runtime requests and verify that non-shipped conditional includes
+cannot enter the source hash. Pack integrity and matching top-level metadata
+alone do not prove that the runtime can reuse individual records. See the
+[3.19.2 cache investigation](shader-cache-se-3192-20260926.md) for the failure
+and exact identity evidence behind these checks. Trace/debug logging selects
+the separate developer cache, so release-cache reuse must be tested at Info
+level or above.
+
 This cache does **not** cover feature-specific shaders compiled through
 independent `Util::CompileShader` or direct `D3DCompile*` paths. Those can
 still compile on first use. A new shader path may be added only after it has a
@@ -94,6 +105,7 @@ the supplied cache.
 | Runtime macro serialization                     | `src/Utils/ShaderDefines.h`                         |
 | Offline compiler adapter                        | `tools/shader_cache_compile.py`                     |
 | Offline compile-input manifest                  | `tools/shader_cache_manifest.py`                    |
+| DXBC container and shader-stage validation      | `tools/shader_bytecode.py`                          |
 | Runtime manifest schema and atomic persistence  | `src/Utils/ShaderCacheManifest.h`                   |
 | Managed A/B pack format and runtime store       | `src/Utils/ShaderCachePack.*`                       |
 | External compatibility ABI                      | `include/VRAPI/CSshadercompatibilityapi.h`          |
@@ -479,7 +491,10 @@ Successful builder completion already proves:
     variants;
 -   every requested single-cache named profile contains at least one compiled
     blob;
--   every `.pso`, `.vso`, and `.cso` starts with `DXBC`;
+-   every `.pso`, `.vso`, and `.cso` has a bounded DXBC container with a
+    matching declared size, non-overlapping chunks, one shader program,
+    consistent program length, and the corresponding pixel, vertex or
+    compute stage;
 -   the temporary loose-cache manifest uses the supported schema and is removed
     after its content contracts are embedded in pack records;
 -   every blob has exactly one valid 32-character lowercase digest;
@@ -505,6 +520,16 @@ different bytecode. Additional contents may
 coexist; each visible optimized record must still match a declared variant's
 canonical identity. Record metadata is compared byte for byte, as on an exact
 runtime hit.
+
+`tools/shader_bytecode.py` supplies the same structural and stage checks for
+loose compiler output and visible optimized archive/FOMOD records. Replaced
+records and obsolete generations retain the managed store's existing
+visibility rules. Chunk bounds and stage tokens follow Microsoft's
+[container declarations](https://github.com/microsoft/DirectXShaderCompiler/blob/main/include/dxc/DxilContainer/DxilContainer.h)
+and [tokenized program format](https://github.com/microsoft/DirectXShaderCompiler/blob/main/include/dxc/Support/d3d12TokenizedProgramFormat.hpp).
+These checks do not validate individual instructions, the DXBC checksum or
+GPU execution. Pack SHA-256 validation remains separate. Python tests use
+synthetic structural fixtures and do not compile or execute shaders.
 
 Optional operator checks:
 
@@ -538,8 +563,9 @@ contract and rerun the supported builder.
 
 ## Install and ship
 
-The standalone SE and VR archives are validated release inputs and optional
-manual-install artifacts. Each contains one top-level managed `ShaderCache`
+The standalone SE and VR archives are validated internal workflow artifacts,
+available to maintainers for manual installation. Public CSX releases attach
+only the complete AIO. Each internal cache archive contains a managed `ShaderCache`
 directory. Its optimized pack contains both the standard and Horizon-compatible
 Water records; runtime compatibility registration selects the exact record.
 
@@ -620,6 +646,41 @@ both runtimes; manual runs include both by default.
 
 ## CI and release workflow
 
+### Stable main-VR releases
+
+Dispatch `Release: Semantic Version` on `main-VR` with `release_type=stable`
+and `expected_version` set to the next CSX patch, for example `3.19.2`
+after `csx3.19.1`. The explicit expectation prevents accidentally releasing
+a different version. The pipeline requires a clean checkout, the exact
+current remote head, a reachable CSX baseline in the universal core's
+major/minor line, and an unused next patch tag. It never rewrites tags or
+force-pushes a branch. The existing dev/hotfix semantic-release path remains
+separate.
+
+The pipeline audits feature versions against the preceding CSX tag, applies
+required feature INI bumps unless disabled, and rejects unresolved audit
+items. Any metadata commit uses the release bot identity with Rationale and
+Implementation sections. It creates the immutable `csx<version>` tag, then
+a draft release, and explicitly dispatches the existing artifact workflow.
+If artifact dispatch fails after allocation, resume `release-build.yaml`
+on that existing tag; do not allocate or replace the tag again.
+
+The shared build passes the validated tag version as `CSX_RELEASE_VERSION`.
+For `csx3.19.2`, the DLL/file version is `3.19.2`, its display label is
+`CSX 3.19.2-VR`, and the AIO is `CSX_AIO-3.19.2-VR.7z`. The compatibility
+label remains `CSX 3.19-VR`, shared by the universal core and both shader
+caches. The release version is recorded in producer provenance and cannot
+be combined with a test-build identity. Ordinary builds retain their
+existing version behavior.
+
+Production explicitly disables DevBench and Tracy. The release build runs
+controller tests, shader validation and shader tests, builds both runtime
+caches with both Water compatibility variants, validates the FOMOD and
+attaches the archives to the draft. Publishing the draft remains a separate
+release action. Local allocation/version validation is
+`python tests/csx_release_test.py`; packaging coverage remains in
+`tests/release_fomod_workflow_test.py`.
+
 `Release: Prebuilt Shader Cache` runs on `windows-2025`, executes the builder
 and pinned requirements from the selected target ref, and creates fixed GitHub
 artifact names:
@@ -654,7 +715,10 @@ downloads both artifacts into `dist`, and extracts them beside the plain AIO.
 writes the one-page manual FOMOD, and replaces the plain AIO archive only after
 the replacement is nonempty and contains every required payload. Artifact
 attestation and draft-release publication happen after that replacement. The
-standalone runtime archives remain attached for operators and manual installs.
+standalone runtime archives remain internal workflow artifacts. Only the final
+`CSX_AIO-*.7z` is attested and attached to the public release; core-only and
+individual feature packages also stay internal. See the
+[CSX distribution contract](csx-release-distribution.md).
 No separate manual cache run is required for that path.
 
 The final AIO archive contains:

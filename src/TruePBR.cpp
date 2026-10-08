@@ -8,6 +8,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/Finite.h"
 
 #include <atomic>
 #include <mutex>
@@ -446,8 +447,10 @@ void TruePBR::SaveSettings(json& o_json)
 
 void TruePBR::LoadSettings(json& o_json)
 {
-	settings = o_json;
-	settings.Enabled = settings.Enabled ? 1u : 0u;
+	auto loadedSettings = o_json.get<Settings>();
+	loadedSettings.Enabled = loadedSettings.Enabled ? 1u : 0u;
+	loadedSettings.VertexAOStrength = Util::ClampFinite(loadedSettings.VertexAOStrength, 0.0f, 1.0f, Settings{}.VertexAOStrength);
+	settings = loadedSettings;
 }
 
 void TruePBR::SetupResources()
@@ -749,7 +752,7 @@ struct ExtendedRendererState
 
 	void SetPSTexture(size_t textureIndex, RE::BSGraphics::Texture* newTexture)
 	{
-		ID3D11ShaderResourceView* resourceView = newTexture ? REX::W32::AsReal(newTexture->resourceView) : nullptr;
+		ID3D11ShaderResourceView* resourceView = newTexture ? newTexture->resourceView : nullptr;
 		//if (PSTexture[textureIndex] != resourceView)
 		{
 			PSTexture[textureIndex] = resourceView;

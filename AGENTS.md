@@ -79,6 +79,7 @@ contradict this policy.
 ### Commit hygiene
 
 -   Commit only files required by the requested change. Leave unrelated tracked changes and untracked user files untouched.
+-   Keep implementation-related documentation, investigation notes, and validation records in the same commit as the change they explain. Fold later documentation updates into that commit instead of publishing separate documentation-only follow-ups. Preserve the exact measured source commits and Build IDs when folding evidence. Standalone documentation work may have its own `docs` commit; rewriting a shared branch still requires explicit user authorization.
 -   Every commit created or rewritten by an agent must use this structure, even when the change is small:
 
     ```text
@@ -108,6 +109,11 @@ contradict this policy.
 ## Code quality and architecture
 
 -   Prefer complete, focused changes with explicit error handling and graceful degradation.
+-   Compile developer-only tracing and capture machinery out of production:
+    use `TRACY_SUPPORT` for Tracy and `DEVBENCH_BRIDGE_ENABLED` for DevBench
+    diagnostics. Runtime inactivity is not a substitute for build isolation.
+    Preserve user-facing performance controls and timing readouts. Verify
+    compiler output and forced headers, not just project definitions.
 -   Use descriptive domain names rather than unexplained abbreviations. Keep each feature and helper responsible for one coherent technique or policy.
 -   Break functions approaching roughly 200 lines into focused helpers when doing so clarifies state ownership and control flow. Do not split merely to satisfy a number.
 -   Centralize durable constants and UI theme values instead of repeating magic numbers.
@@ -134,6 +140,14 @@ contradict this policy.
 -   Match validation to the changed surface: focused controller tests for policies, shader validation for HLSL, parser/unit tests for tooling, and runtime testing for UI/render/cache behavior.
 -   For shader refactors expected to be behavior-preserving, use `tools/verify-shader-refactor.ps1` first. Identical DXBC is the preferred proof; otherwise use controlled runtime A/B evidence.
 -   Runtime-affecting changes should be exercised through the available DevBench automation for each affected runtime. A new feature or settings surface should expose a DevBench action in the same PR. Changes to an exposed tool/action must update its registered description and schema in the same PR.
+-   Unless an explicit test protocol requires another time, reset in-game
+    comparisons to noon before every condition and separate measurement phase.
+    Verify the observed `gameHour` is in `[12, 12.05]`, then settle for at
+    least five seconds before capture. Preserve the reset and verification
+    receipts; exclude night or mixed-time windows from the matched comparison.
+-   The Astra depth-culling campaign compares native culling off, Legacy,
+    Advanced and Hybrid in every repeated performance and stereo-visual
+    condition. Legacy is required in every matched set.
 -   A PR that changes VR render-scale code or behavior must include the generated
     `csx-render-scale-pr-v1` summary described in
     `docs/development/render-scale-pr-qualification.md`. Preserve the complete
@@ -145,9 +159,11 @@ contradict this policy.
     the numbered ledgers indexed by `docs/development/vr-render-scale-ledger.md`,
     `docs/development/vr-render-scale-iteration.md`, and the relevant compact
     tuning or failure summary. If runtime evidence follows an implementation
-    commit, make an immediate documentation commit before starting the next
-    render-scale change. Do not version raw per-run evidence trees merely to
-    preserve a measurement.
+    commit, fold its documentation into that implementation commit before
+    starting the next render-scale change, preserving the original measured
+    source identity and following the shared-branch rewrite authorization
+    rules. Do not version raw per-run evidence trees merely to preserve a
+    measurement.
 -   Create a new immutable numbered ledger for every finalized measurement
     and whenever publishing measurements for a different PR. Use
     `docs/development/vr-render-scale-ledger-NNNN-prNUMBER.csv`, increasing
@@ -250,6 +266,7 @@ contradict this policy.
 
 ## Git and release safety
 
+-   CSX public releases publish only the complete `CSX_AIO-*.7z` installer. Keep split core, feature and cache packages as internal workflow artifacts. Release notes must describe CSX's bundled features and built-in systems; never inherit upstream Nexus upload destinations. Follow [the CSX distribution contract](docs/development/csx-release-distribution.md).
 -   Never push directly to, force-push, or rebase shared branches such as `main`, `main-VR`, `dev`, or `hotfix/*` without explicit user direction. Use `--force-with-lease` only when rewriting an owned feature branch is necessary and authorized.
 -   Do not manually create `v*` release tags or hand-edit the CMake project version; release automation owns them.
 -   Synchronize upstream histories by merge rather than cherry-picking individual commits. Preserve VR-specific behavior during conflict resolution and verify upstream ancestry after the merge.

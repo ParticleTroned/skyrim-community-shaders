@@ -28,7 +28,8 @@ namespace SharedData
 		float PBRMetalReflectionScale;  // Global scale for PBR metal reflections (1.0 = default)
 		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights (1.0 = default)
 		uint HasDirectionalShadows;     // Exterior or Interior Sun directional shadow availability
-		float2 PBRMetalReflectionScalePad0;
+		float VolumetricLightingSaturation;
+		float PBRMetalReflectionScalePad1;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;
@@ -45,6 +46,8 @@ namespace SharedData
 		float4 VRFoveationData0;          // x=center scale, y=feather, z=horizontal scale, w=lighting auxiliary mode: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationModes;          // x=SSR raymarch mode, y=water parallax mode, z=Wetterness dynamic detail mode, w=unused: 0 off, 1 feathered, 2 hard cutoff
 		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
+
+		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
 	};
 
 	struct GrassLightingSettings
@@ -68,7 +71,8 @@ namespace SharedData
 		bool EnableHeightBlending;
 		bool EnableShadows;
 		bool EnableParallaxWarpingFix;
-		uint2 pad0;
+		float ParallaxStrength;
+		uint pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -86,6 +90,8 @@ namespace SharedData
 		float3 Scale;
 		float2 ZRange;
 		float2 Offset;
+		float ZBlur;
+		float3 pad0;
 	};
 
 	struct LightLimitFixSettings
@@ -216,7 +222,7 @@ namespace SharedData
 		float4 OcclusionSHBasis4Pi;
 
 		float3 PosOffset;  // cell origin in camera model space
-		uint FastSamplingMode;
+		uint PosOffsetPadding;
 		uint3 ArrayOrigin;  // xyz: array origin
 		uint Enabled;
 		int4 ValidMargin;
@@ -276,7 +282,7 @@ namespace SharedData
 	struct TerrainVariationSettings
 	{
 		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
-		uint enableMeshSupport;        ///< 1 = apply variation to eligible meshes.
+		uint enableMeshSupport;          ///< 1 = apply variation to eligible meshes.
 		uint2 pad;
 	};
 
@@ -315,7 +321,17 @@ namespace SharedData
 		float omnidirectionalBulbMult;
 		float linearOmnidirectionalBulbMult;
 		float skySaturation;
-		float3 pad;
+		float ambientMult;
+		float contrast;
+		float saturation;
+		float cloudBrightness;
+		float cloudSaturation;
+		float fogIntensity;
+		float sunGlareIntensity;
+		uint useAmbientEffectLighting;
+		float skyStaticTransparency;
+		float effectBrightness;
+		float skyStaticBrightness;
 	};
 
 	struct LinearLightingSettings
@@ -346,7 +362,8 @@ namespace SharedData
 		float deferredEffectMult;
 		float otherEffectMult;
 		uint enableAdaptiveBrightnessColorAdjustments;
-		uint2 pad0;
+		float cloudGamma;
+		uint pad0;
 	};
 
 	struct TerrainBlendingSettings

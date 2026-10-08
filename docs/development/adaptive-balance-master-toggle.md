@@ -1,6 +1,6 @@
 # Adaptive Balance master toggle
 
-See [sky and water controls](adaptive-balance-visual-controls.md) for
+See [color, sky and water controls](adaptive-balance-visual-controls.md) for
 their profile composition, Waves and Wind grouping, and DevBench updates.
 
 The `Enable` checkbox sits in the shared feature header, before the
@@ -16,6 +16,7 @@ When disabled:
 
 -   Lighting multipliers become neutral, and Adaptive Balance contributes
     no gamma/color changes to Linear Lighting's own settings.
+-   Whole-scene Contrast and Saturation become neutral and bypass grading.
 -   Its Bloom enhancement becomes inactive; native Bloom remains available.
 -   Its water appearance scales become neutral, and its wind-driven wave
     modulation stops. Unified Water geometry, flowmaps, displacement, and

@@ -55,6 +55,7 @@ from shader_cache_manifest import (
     STAGE_EXTENSIONS,
     prepare_fxc_defines,
 )
+from shader_bytecode import validate_dxbc
 
 REPO = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = "ShaderCache"
@@ -77,7 +78,7 @@ PUBLICATION_REPLACE_ATTEMPTS = 20
 PUBLICATION_REPLACE_RETRY_SECONDS = 0.5
 CAPTURED_VARIANT_COUNT_KEY = "captured_shader_variants"
 CSX_PLUGIN_VERSION_PATTERN = re.compile(
-    r"^CSX (?P<version>[0-9]+\.[0-9]+)-(?P<runtime>SE|VR)$"
+    r"^CSX (?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)-(?P<runtime>SE|VR)$"
 )
 HORIZON_FIX_SHORT_NAME = "HorizonFix"
 HORIZON_FIX_CACHE_DIRECTORY = f"{CACHE_DIRECTORY}-HorizonFix"
@@ -129,6 +130,7 @@ DEBUG_PROFILE_DEFINES = {
     "D3DCOMPILE_DEBUG",
     "D3DCOMPILE_SKIP_OPTIMIZATION",
 }
+OBSOLETE_CAPTURE_DEFINES = frozenset({"VANILLA_FRESNEL", "HDR_OUTPUT"})
 NON_SHIPPED_PACKAGES = {
     feature["package"]
     for feature in NON_SHIPPED_FEATURES.values()
@@ -145,6 +147,7 @@ CROSS_MODLIST_SHADER_VARIANTS = {
             "Grass:Pixel:10006": ("DO_ALPHA_TEST",),
         },
         "VSHADER": {
+            "Grass:Vertex:0": (),
             "Grass:Vertex:5": (),
             "Grass:Vertex:7": (),
         },
@@ -782,17 +785,23 @@ class PackagedCompatibilityInventory:
         ):
             raise SystemExit("packaged cache declares an unknown compatibility variant")
         self.variants = {name: variants[name] for name in declared_variants}
-        self.records: dict[str, dict[str, tuple[str, str, bytes, bytes]]] = {}
+        self.records: dict[str, dict[str, tuple[str, str, str | None, bytes]]] = {}
 
     def inspector(self, file_name: str) -> Callable[[str, str, str, bytes], None]:
         records = self.records.setdefault(file_name, {})
 
         def inspect(logical: str, exact: str, metadata_text: str, bytecode: bytes) -> None:
-            records[exact] = (logical, metadata_text, bytecode[:4], hashlib.sha256(bytecode).digest())
+            error = None
+            try:
+                validate_dxbc(bytecode, Path(logical.split("|", 1)[0]).suffix)
+            except ValueError as exc:
+                error = str(exc)
+            # Only visible records participate in admission; obsolete generations can be ignored.
+            records[exact] = (logical, metadata_text, error, hashlib.sha256(bytecode).digest())
 
         return inspect
 
-    def identify(self, logical: str, exact: str, metadata_text: str, signature: bytes) -> tuple[set[str], tuple[str, str]]:
+    def identify(self, logical: str, exact: str, metadata_text: str, bytecode_error: str | None) -> tuple[set[str], tuple[str, str]]:
         relative = logical.split("|", 1)[0]
         if not re.fullmatch(r"[A-Za-z0-9_-]+/[0-9A-F]{1,8}(?:_[0-9A-F]{8})?\.(?:pso|vso|cso)", relative):
             raise SystemExit(f"packaged shader record has an invalid cache path: {relative!r}")
@@ -803,8 +812,8 @@ class PackagedCompatibilityInventory:
         content = metadata.get("contentContract") if isinstance(metadata, dict) else None
         if not isinstance(content, str) or not re.fullmatch(r"[0-9a-f]{32}", content):
             raise SystemExit(f"packaged shader record has invalid content identity: {relative}")
-        if signature != b"DXBC":
-            raise SystemExit(f"packaged shader record is not a DXBC container: {relative}")
+        if bytecode_error is not None:
+            raise SystemExit(f"invalid packaged shader bytecode {relative}: {bytecode_error}")
         matching = set()
         for name, variant in self.variants.items():
             expected = shader_pack_record_identity(relative, content, variant["registrations"])
@@ -824,8 +833,8 @@ class PackagedCompatibilityInventory:
                 visible.update(self.records.get(name, {}))
         coverage: dict[str, dict[str, dict[str, bytes]]] = {name: {} for name in self.variants}
         exclusive = set()
-        for exact, (logical, metadata, signature, digest) in visible.items():
-            matching, (relative, content) = self.identify(logical, exact, metadata, signature)
+        for exact, (logical, metadata, bytecode_error, digest) in visible.items():
+            matching, (relative, content) = self.identify(logical, exact, metadata, bytecode_error)
             for name in matching:
                 coverage[name].setdefault(relative, {})[content] = digest
             if len(matching) == 1:
@@ -1027,7 +1036,9 @@ def build_managed_shader_packs(
     return variant_counts
 
 
-BASE_EXCLUDED_DEFINES = frozenset(NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES)
+BASE_EXCLUDED_DEFINES = frozenset(
+    NON_SHIPPED_DEFINES | DEBUG_PROFILE_DEFINES | OBSOLETE_CAPTURE_DEFINES
+)
 SHIPPED_CACHE_PROFILE = CacheProfile(
     name="shipped",
     display_name="Shipped",
@@ -1365,15 +1376,15 @@ def derive_distribution_profile(source_root: Path) -> DistributionProfile:
         )
 
     return DistributionProfile(
-        excluded_short_names=frozenset(hidden_short_names),
+        excluded_short_names=frozenset(hidden_short_names | NON_SHIPPED_FEATURES.keys()),
         excluded_packages=frozenset(
             packages[short_name] for short_name in hidden_short_names
-        ),
+        ) | frozenset(NON_SHIPPED_PACKAGES),
         excluded_defines=frozenset(
             contract.shader_define
             for short_name, contract in contracts.items()
             if short_name in hidden_short_names and contract.shader_define
-        ),
+        ) | frozenset(NON_SHIPPED_DEFINES),
         horizon_fix_define=horizon_fix.shader_define,
     )
 
@@ -1534,15 +1545,24 @@ def apply_cache_profile_defines(
     profile: CacheProfile,
     *,
     additional_excluded_defines: frozenset[str] = frozenset(),
-    excluded_define_exceptions: frozenset[str] = frozenset(),
     additional_file_defines: dict[str, tuple[str, ...]] | None = None,
     add_cross_modlist_variants: bool = False,
 ) -> object:
+    profile_file_defines = dict(profile.file_defines)
+    for file_name, defines in (additional_file_defines or {}).items():
+        profile_file_defines[file_name] = (
+            *profile_file_defines.get(file_name, ()),
+            *defines,
+        )
+
+    # Captures may contain older global scopes; reapply only the selected files.
+    scoped_defines = {
+        define for defines in profile_file_defines.values() for define in defines
+    }
     excluded_defines = {
         normalized_define_name(define)
         for define in (
-            (profile.excluded_defines - excluded_define_exceptions)
-            | additional_excluded_defines
+            profile.excluded_defines | additional_excluded_defines | scoped_defines
         )
     }
 
@@ -1566,13 +1586,6 @@ def apply_cache_profile_defines(
 
     if add_cross_modlist_variants:
         append_cross_modlist_variants(config)
-
-    profile_file_defines = dict(profile.file_defines)
-    for file_name, defines in (additional_file_defines or {}).items():
-        profile_file_defines[file_name] = (
-            *profile_file_defines.get(file_name, ()),
-            *defines,
-        )
 
     common_defines = config.get("common_defines")
     if not isinstance(common_defines, list):
@@ -1681,7 +1694,6 @@ def filter_profile_defines(
     profile: CacheProfile,
     *,
     additional_excluded_defines: frozenset[str] = frozenset(),
-    excluded_define_exceptions: frozenset[str] = frozenset(),
     additional_file_defines: dict[str, tuple[str, ...]] | None = None,
     add_cross_modlist_variants: bool = False,
 ) -> Path:
@@ -1694,7 +1706,6 @@ def filter_profile_defines(
         config,
         profile,
         additional_excluded_defines=additional_excluded_defines,
-        excluded_define_exceptions=excluded_define_exceptions,
         additional_file_defines=additional_file_defines,
         add_cross_modlist_variants=add_cross_modlist_variants,
     )
@@ -1954,7 +1965,18 @@ def default_plugin_version(source_root: Path, runtime: str) -> str:
         cache_variables = preset.get("cacheVariables", {})
         version = cache_variables.get("CSX_VERSION")
         if isinstance(version, str) and version:
-            return f"CSX {version}"
+            match = re.fullmatch(r"([0-9]+)\.([0-9]+)-(SE|VR)", version)
+            if not match:
+                raise SystemExit(f"invalid CSX_VERSION in preset {preset_name}: {version!r}")
+            major, minor, suffix = match.groups()
+            release = cache_variables.get("CSX_RELEASE_VERSION", "")
+            if release:
+                if not isinstance(release, str) or not re.fullmatch(
+                    rf"{major}\.{minor}\.(0|[1-9][0-9]*)", release
+                ):
+                    raise SystemExit(f"invalid CSX_RELEASE_VERSION in preset {preset_name}")
+                return f"CSX {release}-{suffix}"
+            return f"CSX {major}.{minor}.0-{suffix}"
 
     raise SystemExit(
         f"cannot derive {runtime} plugin version from CMakePresets.json; pass --plugin-version"
@@ -2085,12 +2107,9 @@ def validate_cache(
             invalid_entries.append(relative_path)
 
         try:
-            with blob_path.open("rb") as stream:
-                signature = stream.read(4)
-            if signature != b"DXBC":
-                invalid_blobs.append(relative_path)
-        except OSError:
-            invalid_blobs.append(relative_path)
+            validate_dxbc(blob_path.read_bytes(), blob_path.suffix)
+        except (OSError, ValueError) as exc:
+            invalid_blobs.append(f"{relative_path}: {exc}")
 
     if missing_entries:
         raise SystemExit(
@@ -2724,7 +2743,6 @@ def build_runtime(
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         additional_excluded_defines = frozenset()
-        excluded_define_exceptions = frozenset()
         additional_file_defines: dict[str, tuple[str, ...]] = {}
         excluded_features: frozenset[str] | None = None
         enabled_overrides: dict[str, bool] = {}
@@ -2738,7 +2756,6 @@ def build_runtime(
             )
             if runtime == "SE":
                 additional_excluded_defines |= distribution_profile.excluded_defines
-                excluded_define_exceptions = frozenset(NON_SHIPPED_DEFINES)
                 excluded_features = distribution_profile.excluded_short_names
                 add_cross_modlist = True
             if variant.horizon_fix_enabled:
@@ -2764,7 +2781,6 @@ def build_runtime(
             yaml,
             profile,
             additional_excluded_defines=additional_excluded_defines,
-            excluded_define_exceptions=excluded_define_exceptions,
             additional_file_defines=additional_file_defines,
             add_cross_modlist_variants=add_cross_modlist,
         )

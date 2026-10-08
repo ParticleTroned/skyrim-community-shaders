@@ -23,6 +23,14 @@ file(READ
     _upscaling_source
 )
 file(READ
+    "${PROJECT_ROOT}/src/Features/Upscaling/VRVendorRelatchPolicy.h"
+    _vendor_relatch_policy
+)
+file(READ
+    "${PROJECT_ROOT}/tests/vr_vendor_relatch_policy_test.cpp"
+    _vendor_relatch_test
+)
+file(READ
     "${PROJECT_ROOT}/src/State.cpp"
     _state_source
 )
@@ -109,6 +117,34 @@ string(FIND
 if(NOT _split_fallback_resolution_position EQUAL -1)
     message(FATAL_ERROR
         "Fallback proof and clear remain split from controller publication"
+    )
+endif()
+
+foreach(_atomic_fallback_contract IN ITEMS
+    "vrStartupRenderScaleNativeFallbackState"
+    "InvalidateStartupNativeFallbackRetry("
+    "TryResolveStartupNativeFallbackAtomic("
+    "CoversStartupNativeFallbackAtomicInvalidation()"
+)
+    string(FIND
+        "${_upscaling_header}\n${_upscaling_source}\n${_vendor_relatch_policy}\n${_vendor_relatch_test}"
+        "${_atomic_fallback_contract}"
+        _atomic_fallback_contract_position
+    )
+    if(_atomic_fallback_contract_position EQUAL -1)
+        message(FATAL_ERROR
+            "Atomic fallback invalidation contract is missing: ${_atomic_fallback_contract}"
+        )
+    endif()
+endforeach()
+string(FIND
+    "${_upscaling_header}\n${_upscaling_source}"
+    "vrStartupRenderScaleNativeFallbackRestartRequired"
+    _split_fallback_atomic_position
+)
+if(NOT _split_fallback_atomic_position EQUAL -1)
+    message(FATAL_ERROR
+        "Fallback activation and invalidation remain split across atomics"
     )
 endif()
 
@@ -216,6 +252,48 @@ foreach(_forbidden_watchdog_hot_path IN ITEMS
             "Render-scale watchdog returned to a per-draw path: ${_forbidden_watchdog_hot_path}"
         )
     endif()
+endforeach()
+
+string(FIND "${_shader_cache_source}" "bool ShaderCache::IsAsync" _shader_service_end)
+if(_shader_service_end LESS_EQUAL _shader_toggle_end)
+    message(FATAL_ERROR "Pending shader disable service boundary was not found")
+endif()
+math(EXPR _shader_service_length "${_shader_service_end} - ${_shader_toggle_end}")
+string(SUBSTRING "${_shader_cache_source}" ${_shader_toggle_end}
+    ${_shader_service_length} _shader_service)
+foreach(_service_contract IN ITEMS
+    "ShaderCacheDisablePolicy::ApplyPendingDisable("
+    "upscaling.perfModeRenderTargetRecreateQueueMutex"
+    "pendingDisableAfterVRNativeRestore,"
+    "enableRequested,"
+    "isEnabled,"
+)
+    string(FIND "${_shader_service}" "${_service_contract}" _service_position)
+    if(_service_position EQUAL -1)
+        message(FATAL_ERROR "Pending disable bypasses request authority: ${_service_contract}")
+    endif()
+endforeach()
+string(FIND "${_shader_service}" ".store(" _unowned_service_store)
+if(NOT _unowned_service_store EQUAL -1)
+    message(FATAL_ERROR "Pending disable commits state outside its authority transaction")
+endif()
+file(READ "${PROJECT_ROOT}/src/ShaderCacheDisablePolicy.h" _shader_disable_policy)
+set(_previous_disable_position -1)
+foreach(_transaction_contract IN ITEMS
+    "if (!a_pendingDisable.load("
+    "const std::scoped_lock authorityLock(a_authorityMutex)"
+    "const bool pendingDisable = a_pendingDisable.load("
+    "const bool enableRequested = a_enableRequested.load("
+    "a_nativeTargetsRestored()"
+    "a_pendingDisable.store(false"
+    "a_enabled.store(false"
+)
+    string(FIND "${_shader_disable_policy}" "${_transaction_contract}" _transaction_position)
+    if(_transaction_position EQUAL -1 OR
+       _transaction_position LESS_EQUAL _previous_disable_position)
+        message(FATAL_ERROR "Pending disable transaction ordering changed: ${_transaction_contract}")
+    endif()
+    set(_previous_disable_position ${_transaction_position})
 endforeach()
 
 foreach(_action IN ITEMS

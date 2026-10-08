@@ -616,7 +616,7 @@ void Menu::Load(json& o_json)
 	}
 
 	if (settings.BackgroundShaderCompilationOnBoot)
-		globals::shaderCache->backgroundCompilation = true;
+		globals::shaderCache->SetBackgroundCompilation(true);
 }
 
 void Menu::Save(json& o_json)
@@ -1048,7 +1048,14 @@ void Menu::DrawSettings()
 			restoreAfterTopStatusWindow = !useVRTopStatusWindowLayout && vrTopStatusWindowLayoutWasActive;
 			vrTopStatusWindowLayoutWasActive = useVRTopStatusWindowLayout;
 		} else if (!REL::Module::IsVR()) {
-			const ImVec2 originalWindowPos = windowPos;
+			// An explicit drag replaces the placement saved before automatic displacement.
+			if (auto* movingWindow = ImGui::GetCurrentContext()->MovingWindow;
+				movingWindow && movingWindow == ImGui::FindWindowByName(title.c_str())) {
+				menuWasOffsetForTopStatusWindow = false;
+			}
+			// Test the saved position, not the already-displaced window, until it is clear.
+			const ImVec2 originalWindowPos = menuWasOffsetForTopStatusWindow ? preTopStatusWindowPos : windowPos;
+			windowPos = originalWindowPos;
 			autoOffsetForTopStatusWindow =
 				OverlayRenderer::MoveWindowBelowShaderCompilationStatus(windowPos, windowSizeForOverlap, centeredPivot);
 			if (autoOffsetForTopStatusWindow && !menuWasOffsetForTopStatusWindow) {
@@ -1520,7 +1527,7 @@ void Menu::ProcessInputEventQueue()
 							 }
 						 }
 					 } },
-					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->backgroundCompilation = true; } },
+					{ settings.SkipCompilationKey, [this, shaderCache]() { if (!ShouldSwallowInput() && shaderCache->IsCompiling()) shaderCache->SetBackgroundCompilation(true); } },
 					{ settings.EffectToggleKey, [shaderCache]() { shaderCache->SetEnabled(!shaderCache->IsEnableRequested()); } },
 					{ settings.ShaderBlockPrevKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(); } },
 					{ settings.ShaderBlockNextKey, [this, shaderCache]() { if (settings.EnableShaderBlocking) shaderCache->IterateShaderBlock(false); } },

@@ -12,7 +12,7 @@
 #include <memory>
 #include <stdexcept>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SubsurfaceScattering::DiffusionProfile,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubsurfaceScattering::DiffusionProfile,
 	BlurRadius, Thickness, Strength, Falloff)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -40,6 +40,14 @@ namespace
 	constexpr float kHumanSkinControlMin = 0.0f;
 	constexpr float kHumanSkinControlMax = 2.0f;
 	constexpr uint32_t kBlurHorizontalTempAllocationRetryFrames = 120;
+
+	SubsurfaceScattering::Settings ReadSettingsWithDefaults(const json& a_json)
+	{
+		// Partial profiles need their enclosing base/human defaults, including runtime blur radii.
+		json merged = SubsurfaceScattering::Settings{};
+		merged.update(a_json, true);
+		return merged.get<SubsurfaceScattering::Settings>();
+	}
 
 	template <class TNPC>
 	auto IsFemaleImpl(TNPC* npc, int) -> decltype(npc->IsFemale(), bool{})
@@ -226,6 +234,7 @@ void SubsurfaceScattering::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 {
 	if (a_enabled) {
 		settings = Settings{};
+		updateKernels = true;
 		return;
 	}
 
@@ -242,7 +251,8 @@ void SubsurfaceScattering::RestorePerformanceCostMeasurementState(const json& a_
 	if (!a_state.is_object())
 		return;
 
-	settings = a_state.get<Settings>();
+	settings = ReadSettingsWithDefaults(a_state);
+	updateKernels = true;
 }
 
 float3 SubsurfaceScattering::Gaussian(DiffusionProfile& a_profile, float variance, float r)
@@ -415,17 +425,17 @@ void SubsurfaceScattering::DrawSSS()
 		context->CSSetConstantBuffers(1, 1, buffer);
 
 		D3D11_TEXTURE2D_DESC mainDesc{};
-		REX::W32::AsReal(main.texture)->GetDesc(&mainDesc);
+		main.texture->GetDesc(&mainDesc);
 
 		ID3D11UnorderedAccessView* uav = blurUAV;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		ID3D11ShaderResourceView* views[5];
-		views[0] = REX::W32::AsReal(main.SRV);
+		views[0] = main.SRV;
 		views[1] = Util::GetCurrentSceneDepthSRV(true);
-		views[2] = REX::W32::AsReal(mask.SRV);
-		views[3] = REX::W32::AsReal(albedo.SRV);
-		views[4] = REX::W32::AsReal(normal.SRV);
+		views[2] = mask.SRV;
+		views[3] = albedo.SRV;
+		views[4] = normal.SRV;
 
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
@@ -449,7 +459,7 @@ void SubsurfaceScattering::DrawSSS()
 				views[0] = blurHorizontalTemp->srv.get();
 				context->CSSetShaderResources(0, 1, views);
 
-				ID3D11UnorderedAccessView* uavs[1] = { REX::W32::AsReal(main.UAV) };
+				ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
 				context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 				auto shader = GetComputeShaderVerticalBlur();
@@ -483,9 +493,9 @@ void SubsurfaceScattering::DrawSSS()
 						std::min(blurHorizontalTemp->desc.Height, mainDesc.Height),
 						1
 					};
-					context->CopySubresourceRegion(REX::W32::AsReal(main.texture), 0, 0, 0, 0, blurHorizontalTemp->resource.get(), 0, &sourceBox);
+					context->CopySubresourceRegion(main.texture, 0, 0, 0, 0, blurHorizontalTemp->resource.get(), 0, &sourceBox);
 				} else {
-					context->CopyResource(REX::W32::AsReal(main.texture), blurHorizontalTemp->resource.get());
+					context->CopyResource(main.texture, blurHorizontalTemp->resource.get());
 				}
 			}
 		}
@@ -521,7 +531,7 @@ bool SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a
 		return failPrerequisite("SubsurfaceScattering::EnsureBlurHorizontalTemp missing main render target resources");
 
 	D3D11_TEXTURE2D_DESC texDesc{};
-	REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
+	main.texture->GetDesc(&texDesc);
 	if (texDesc.Width == 0 || texDesc.Height == 0)
 		return failPrerequisite("SubsurfaceScattering::EnsureBlurHorizontalTemp invalid main render target size");
 
@@ -561,10 +571,10 @@ bool SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a
 	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-	REX::W32::AsReal(main.SRV)->GetDesc(&srvDesc);
+	main.SRV->GetDesc(&srvDesc);
 
 	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-	REX::W32::AsReal(main.UAV)->GetDesc(&uavDesc);
+	main.UAV->GetDesc(&uavDesc);
 
 	try {
 		auto replacement = std::make_unique<Texture2D>(texDesc, "SubsurfaceScattering::BlurHorizontalTemp");
@@ -631,7 +641,7 @@ void SubsurfaceScattering::SetupResources()
 	loggedMissingMainTarget = false;
 
 	D3D11_TEXTURE2D_DESC texDesc{};
-	REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
+	main.texture->GetDesc(&texDesc);
 
 	EnsureBlurHorizontalTemp(texDesc.Width, texDesc.Height, false);
 }
@@ -684,11 +694,13 @@ void SubsurfaceScattering::Reset()
 void SubsurfaceScattering::RestoreDefaultSettings()
 {
 	settings = {};
+	updateKernels = true;
 }
 
 void SubsurfaceScattering::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	settings = ReadSettingsWithDefaults(o_json);
+	updateKernels = true;
 
 	// Backward compatibility: older configs used one Human* control set.
 	ApplyLegacyHumanControl(o_json, "HumanSSSIntensity", "HumanMaleSSSIntensity", settings.HumanMaleSSSIntensity, settings.HumanFemaleSSSIntensity);

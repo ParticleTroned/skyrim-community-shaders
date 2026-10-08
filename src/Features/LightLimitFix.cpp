@@ -1,4 +1,5 @@
 #include "LightLimitFix.h"
+#include "EngineFix.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
 #include "GpuPass.h"
@@ -1657,30 +1658,33 @@ void LightLimitFix::RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint3
 	if (!a_node)
 		return;
 	RE::NiPointer<RE::ShadowSceneNode> sceneOwner;
-	RE::BSShadowLight* sceneSun = nullptr;
-	std::optional<SceneLightSnapshot> snapshot;
-	std::vector<RE::BSShadowLight*> renderOrder;
-	try {
-		auto& runtime = a_node->GetRuntimeData();
-		const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
-		if (a_index >= runtime.shadowLightsAccum.size() || !runtime.shadowLightsAccum[a_index])
-			return;
-		// The scene directly deletes its sun; retaining the sun itself would misapply intrusive ownership.
-		sceneOwner.reset(a_node);
-		sceneSun = runtime.sunShadowDirLight;
-		snapshot.emplace();
-		// Native dispatch uses accumulated order and needs no clustered-light enumeration.
-		snapshot->RetainScene(runtime, false);
-		renderOrder.assign(runtime.shadowLightsAccum.begin(), runtime.shadowLightsAccum.end());
-	} catch (const std::bad_alloc&) {
-		logger::error("Light Limit Fix: native shadow capture allocation failed; skipping shadow maps");
-		return;
-	}
+	std::optional<SceneLightSnapshot::OwnerIndex> ownerIndex;
+	auto& runtime = a_node->GetRuntimeData();
 
-	while (a_index < renderOrder.size()) {
-		// Only this scene's sun bypasses the queued-light owner lookup; the scene remains retained.
-		auto* key = renderOrder[a_index];
-		auto* light = key == sceneSun ? static_cast<RE::BSLight*>(sceneSun) : snapshot->Find(key);
+	for (;;) {
+		RE::NiPointer<RE::BSLight> lightOwner;
+		RE::BSLight* light = nullptr;
+		try {
+			const RE::BSSpinLockGuard lock{ runtime.lightQueueLock };
+			// Native selection observes the live array after each Render; withdrawn work must stay withdrawn.
+			if (a_index >= runtime.shadowLightsAccum.size() || !runtime.shadowLightsAccum[a_index])
+				break;
+			auto* key = runtime.shadowLightsAccum[a_index];
+			if (!sceneOwner)
+				sceneOwner.reset(a_node);
+			if (key == runtime.sunShadowDirLight) {
+				// The scene directly deletes its sun; only the scene may supply its lifetime lease.
+				light = runtime.sunShadowDirLight;
+			} else {
+				if (!ownerIndex)
+					ownerIndex.emplace(runtime);
+				lightOwner = ownerIndex->Retain(runtime, key);
+				light = lightOwner.get();
+			}
+		} catch (const std::bad_alloc&) {
+			logger::error("Light Limit Fix: native shadow owner index allocation failed; skipping remaining shadow maps");
+			return;
+		}
 		if (!light || !light->IsShadowLight())
 			break;
 		const auto previousIndex = a_index;
@@ -2101,24 +2105,9 @@ void ResolveBillboardTint(
 	}
 }
 
-LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass)
+LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE::BSRenderPass* a_pass, RE::BSEffectShaderProperty* shaderProperty)
 {
-	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty) {
-		return {};
-	}
-
-	if (!settings.EnableParticleLights) {
-		return {};
-	}
-
 	auto& particleLights = globals::features::llf::particleLights;
-	auto shaderProperty = a_pass->shaderProperty->GetRTTI() == globals::rtti::BSEffectShaderPropertyRTTI.get() ?
-	                          static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty) :
-	                          nullptr;
-	if (!shaderProperty || shaderProperty->lightData) {
-		return {};
-	}
-
 	auto material = shaderProperty->GetMaterial();
 	if (!material) {
 		return {};
@@ -2239,18 +2228,29 @@ LightLimitFix::ParticleLightReference LightLimitFix::GetParticleLightConfigs(RE:
 	return cacheReference(reference);
 }
 
-bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t)
+bool LightLimitFix::CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t, bool* a_admissionInvalidated)
 {
+	if (a_admissionInvalidated)
+		*a_admissionInvalidated = false;
 	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty) {
 		return true;
 	}
 
 	auto shaderCache = globals::shaderCache;
 
-	if (!shaderCache->IsEnabled())
+	if (!shaderCache->IsEnabled() || !settings.EnableParticleLights)
 		return true;
 
-	auto reference = GetParticleLightConfigs(a_pass);
+	auto* shaderProperty = a_pass->shaderProperty->GetRTTI() == globals::rtti::BSEffectShaderPropertyRTTI.get() ?
+	                           static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty) :
+	                           nullptr;
+	if (!shaderProperty || shaderProperty->lightData)
+		return true;
+
+	// Only identity/flag reads precede this boundary; effect work may invoke callbacks.
+	if (a_admissionInvalidated)
+		*a_admissionInvalidated = true;
+	auto reference = GetParticleLightConfigs(a_pass, shaderProperty);
 	if (reference.valid) {
 		if (AddParticleLight(a_pass, reference)) {
 			return !(settings.EnableParticleLightsCulling && reference.config.cull);
@@ -2380,6 +2380,11 @@ bool LightLimitFix::AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLig
 
 void LightLimitFix::Hooks::InstallAlphaGeometryGroupGuard()
 {
+	if (EngineFix::IsInstalledByEngineFixes("BatchRendererAlphaGeometryGroupOverflow")) {
+		logger::info("[LLF] Skipped alpha GeometryGroup guard (already installed by Engine Fixes)");
+		return;
+	}
+
 	// Decode the counter from ClearAlphaGeometryGroups so the guard stays portable across runtimes.
 	constexpr std::uint8_t kMovDwordImmediateOpcode = 0xC7;
 	constexpr std::uint8_t kRipRelativeModRM = 0x05;

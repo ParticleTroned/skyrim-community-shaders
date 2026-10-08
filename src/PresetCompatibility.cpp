@@ -50,14 +50,30 @@ namespace
 			return std::nullopt;
 
 		const auto dot = a_value.find('.');
-		if (dot == std::string_view::npos || a_value.find('.', dot + 1) != std::string_view::npos)
+		if (dot == std::string_view::npos)
 			return std::nullopt;
+		if (const auto patchDot = a_value.find('.', dot + 1); patchDot != std::string_view::npos) {
+			if (!a_requireRuntime || !ParseComponent(a_value.substr(patchDot + 1)))
+				return std::nullopt;
+			a_value = a_value.substr(0, patchDot);
+		}
 		const auto major = ParseComponent(a_value.substr(0, dot));
 		const auto minor = ParseComponent(a_value.substr(dot + 1));
 		if (!major || !minor)
 			return std::nullopt;
 
 		return Version{ *major, *minor, std::string(runtime) };
+	}
+
+	bool IsCompatibleLegacyUnifiedPreset(const PresetCompatibility::Evaluation& a_evaluation, const Version& a_current)
+	{
+		// Bundled revision-5 settings support both the 3.19 and 3.20 version lines.
+		return a_current.major == 3 && a_current.minor == 20 && a_current.runtime == "VR" &&
+		       a_evaluation.settingsContractRevision == 5 &&
+		       a_evaluation.minimumVersion == "3.19" && a_evaluation.maximumVersionExclusive == "3.20" &&
+		       (a_evaluation.presetId == "csx-unified-performance" ||
+				   a_evaluation.presetId == "csx-unified-balanced" ||
+				   a_evaluation.presetId == "csx-unified-quality");
 	}
 
 	bool IsSha256(std::string_view a_value)
@@ -180,7 +196,8 @@ PresetCompatibility::Evaluation PresetCompatibility::Evaluate(
 	}
 
 	const Version currentWithoutRuntime{ current->major, current->minor, {} };
-	if (currentWithoutRuntime < *minimum || currentWithoutRuntime >= *maximum) {
+	if ((currentWithoutRuntime < *minimum || currentWithoutRuntime >= *maximum) &&
+		!IsCompatibleLegacyUnifiedPreset(evaluation, *current)) {
 		return Reject(
 			std::move(evaluation),
 			std::format(

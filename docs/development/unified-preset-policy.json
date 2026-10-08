@@ -2,24 +2,24 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.08.30.2",
+    "packageVersion": "d2026.10.04.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
         "target": {
             "runtime": "VR",
-            "minimumVersion": "3.19",
-            "maximumVersionExclusive": "3.20"
+            "minimumVersion": "3.20",
+            "maximumVersionExclusive": "3.21"
         }
     },
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "1AF5E2A3F435BAB7D31BB920FA93029C891033438079B0585537249817467651"
+        "sha256": "1D3490B5C51C97E73A2ECC6CC8DE9B5413019F9DF050EC20F3780F99E2426CF0"
     },
     "runtimeSettingsContract": {
         "revision": 5,
-        "sourceTreeSha256": "FF2268962AA725EB545A6AFDED4115DD6500D0776771C2200D2F662392A68F02",
+        "sourceTreeSha256": "350C0C72B9C34540B0B90687A1AB579D40E87719A050E379F686A7B1378C76AF",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -187,6 +187,11 @@
     ],
     "commonOverrides": [
         {
+            "path": ["Upscaling", "frameGenerationMode"],
+            "value": 0,
+            "reason": "VR presets cannot use frame generation; clear its inactive request so older NR gates accept them"
+        },
+        {
             "path": ["Advanced", "Log Level"],
             "value": 2,
             "reason": "ship Info shaders, not debug shader variants"
@@ -223,8 +228,8 @@
         },
         {
             "path": ["Image Based Lighting", "EnableIBL"],
-            "value": 1,
-            "reason": "shared measured ambient-replacement baseline"
+            "value": 0,
+            "reason": "disable IBL in every unified tier"
         },
         {
             "path": ["Volumetric Shadows", "Enabled"],
@@ -241,6 +246,27 @@
             "value": 2,
             "reason": "current normalized interior policy pending a fresh profiler comparison"
         },
+        { "path": ["Volumetric Lighting", "DisableWeatherInteractionDuringRain"], "value": false },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Opacity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "Saturation"], "value": 1.0 },
+        {
+            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorBlue"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "ShaftIntensity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "Opacity"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "Saturation"], "value": 1.0 },
+        {
+            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorRed"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorGreen"], "value": 1.0 },
+        { "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorBlue"], "value": 1.0 },
         {
             "path": ["Hair Specular", "Enabled"],
             "value": 1,
@@ -252,18 +278,64 @@
             "reason": "use the requested Marschner hair model"
         },
         { "path": ["Hair Specular", "HairGlossiness"], "value": 70.0 },
-        { "path": ["Hair Specular", "SpecularMult"], "value": 1.38 },
-        { "path": ["Hair Specular", "DiffuseMult"], "value": 1.02 },
-        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 3.0 },
-        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 0.7 },
-        { "path": ["Hair Specular", "BaseColorMult"], "value": 0.81 },
-        { "path": ["Hair Specular", "HairSaturation"], "value": 0.8 },
+        { "path": ["Hair Specular", "SpecularMult"], "value": 1.7 },
+        { "path": ["Hair Specular", "DiffuseMult"], "value": 0.75 },
+        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "BaseColorMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "HairSaturation"], "value": 1.0 },
         { "path": ["Hair Specular", "Transmission"], "value": 1.0 },
         { "path": ["Hair Specular", "EnableTangentShift"], "value": 1 },
         { "path": ["Hair Specular", "EnableSelfShadow"], "value": 1 },
         { "path": ["Hair Specular", "SelfShadowStrength"], "value": 1.0 },
         { "path": ["Hair Specular", "SelfShadowExponent"], "value": 0.1 },
         { "path": ["Hair Specular", "SelfShadowScale"], "value": 2.5 },
+        {
+            "path": ["Subsurface Scattering", "EnableSubsurfaceScattering"],
+            "value": true,
+            "reason": "shared Burley skin appearance baseline across all tiers"
+        },
+        { "path": ["Subsurface Scattering", "EnableCharacterLighting"], "value": 0 },
+        { "path": ["Subsurface Scattering", "SSMode"], "value": 1 },
+        { "path": ["Subsurface Scattering", "BurleySamples"], "value": 16 },
+        {
+            "path": ["Subsurface Scattering", "MeanFreePathBase"],
+            "value": [
+                0.5600000023841858, 0.5600000023841858, 0.5600000023841858, 2.6700000762939453
+            ]
+        },
+        {
+            "path": ["Subsurface Scattering", "MeanFreePathHuman"],
+            "value": [1.0, 0.3700000047683716, 0.30000001192092896, 2.6700000762939453]
+        },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSIntensity"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBaseSaturation"], "value": 1.05 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSIntensity"], "value": 1.1 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBaseSaturation"], "value": 1.05 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "EnhancementIntensity"],
+            "value": 0.5,
+            "reason": "use the built-in Fantasy bloom shaping with reduced global strength"
+        },
+        { "path": ["Adaptive Balance", "globalProfile", "bloom", "HaloRadius"], "value": 5.0 },
+        { "path": ["Adaptive Balance", "globalProfile", "bloom", "HaloSpread"], "value": 1.0 },
+        { "path": ["Adaptive Balance", "globalProfile", "bloom", "BloomSaturation"], "value": 1.3 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "BloomTint"],
+            "value": [1.0, 0.9800000190734863, 0.9399999976158142]
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "CompressionThreshold"],
+            "value": 0.0
+        },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "CompressionCeiling"],
+            "value": 0.67
+        },
         {
             "path": ["Adaptive Balance", "globalProfile", "water", "WaterBrightness"],
             "value": 1.0,
@@ -302,7 +374,7 @@
             "path": ["Unified Water", "WaterTintColor"],
             "value": [0.0, 0.3499999940395355, 1.0]
         },
-        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.0 },
         { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
         { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "AOInteriorsOnly"], "value": true },
@@ -476,17 +548,37 @@
         { "path": ["Menu", "UI Mode"], "value": 0 },
         { "path": ["VR", "EnableWandPointing"], "value": true },
         { "path": ["Weather Picker", "Enabled"], "value": true },
-        { "path": ["Image Based Lighting", "EnableIBL"], "value": 1 },
+        { "path": ["Image Based Lighting", "EnableIBL"], "value": 0 },
         { "path": ["Volumetric Shadows", "Enabled"], "value": true },
+        {
+            "path": ["Volumetric Lighting", "ExteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
+        {
+            "path": ["Volumetric Lighting", "InteriorGodrays", "CustomColorContribution"],
+            "value": 1.0
+        },
         { "path": ["Hair Specular", "Enabled"], "value": 1 },
+        {
+            "path": ["Adaptive Balance", "globalProfile", "bloom", "EnhancementIntensity"],
+            "value": 0.5
+        },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSIntensity"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanMaleSSSBaseSaturation"], "value": 1.05 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSIntensity"], "value": 1.1 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSSaturation"], "value": 1.0 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBrightness"], "value": 0.75 },
+        { "path": ["Subsurface Scattering", "HumanFemaleSSSBaseSaturation"], "value": 1.05 },
         { "path": ["Hair Specular", "HairMode"], "value": 1 },
         { "path": ["Hair Specular", "HairGlossiness"], "value": 70.0 },
-        { "path": ["Hair Specular", "SpecularMult"], "value": 1.38 },
-        { "path": ["Hair Specular", "DiffuseMult"], "value": 1.02 },
-        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 3.0 },
-        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 0.7 },
-        { "path": ["Hair Specular", "BaseColorMult"], "value": 0.81 },
-        { "path": ["Hair Specular", "HairSaturation"], "value": 0.8 },
+        { "path": ["Hair Specular", "SpecularMult"], "value": 1.7 },
+        { "path": ["Hair Specular", "DiffuseMult"], "value": 0.75 },
+        { "path": ["Hair Specular", "SpecularIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "DiffuseIndirectMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "BaseColorMult"], "value": 1.0 },
+        { "path": ["Hair Specular", "HairSaturation"], "value": 1.0 },
         { "path": ["Hair Specular", "Transmission"], "value": 1.0 },
         { "path": ["Hair Specular", "EnableTangentShift"], "value": 1 },
         { "path": ["Hair Specular", "EnableSelfShadow"], "value": 1 },
@@ -515,7 +607,7 @@
             "path": ["Unified Water", "WaterTintColor"],
             "value": [0.0, 0.3499999940395355, 1.0]
         },
-        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.15 },
+        { "path": ["Unified Water", "WaterTintStrength"], "value": 0.0 },
         { "path": ["Unified Water", "ShoreDepthBlendRangeUnits"], "value": 15.0 },
         { "path": ["Unified Water", "ShallowFallbackMaxDistance"], "value": 26000.0 },
         { "path": ["Screen Space GI", "EnableGI"], "value": false },
@@ -532,6 +624,7 @@
     ],
     "validation": {
         "stalePaths": [
+            ["Skylighting", "EnableFastProbeSampling"],
             ["Advanced", "Background Compiler Threads"],
             ["Advanced", "Compiler Threads"],
             ["VR", "EnableCurrentFrameDepthCulling"],
@@ -551,6 +644,7 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            { "path": ["Extended Materials", "ParallaxStrength"], "value": 1.0 },
             { "path": ["Screenshot", "SettingsSchemaVersion"], "value": 2 },
             { "path": ["Screenshot", "Sequence", "Schedule", "Basis"], "value": "game_frames" },
             { "path": ["Advanced", "PBR Verbose JSON Logging"], "value": false },

@@ -43,8 +43,8 @@ public:
 		float Glossiness = 20.0f;
 		float SpecularStrength = 0.5f;
 		float SubsurfaceScatteringAmount = 1.0f;
-		uint OverrideComplexGrassSettings = true;
-		float BasicGrassBrightness = 0.75f;
+		uint OverrideComplexGrassSettings = REL::Module::IsVR();
+		float BasicGrassBrightness = REL::Module::IsVR() ? 0.75f : 1.0f;
 		uint EnableWrappedLighting = false;
 		float ComplexGrassThreshold = 0.03f;
 		uint Enabled = true;

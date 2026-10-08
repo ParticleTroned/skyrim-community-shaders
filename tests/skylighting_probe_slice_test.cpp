@@ -1,6 +1,6 @@
 #define NOMINMAX
 #include "Utils/ShaderInclude.h"
-#include "d3d_resource_naming.h"
+#include "d3d11_shader_test.h"
 
 #include <d3d11.h>
 #include <d3d11shader.h>
@@ -27,11 +27,8 @@ namespace
 	constexpr uint32_t volumeDepth = 8;
 	constexpr size_t volumeElements = volumeWidth * volumeWidth * volumeDepth;
 
-	void Check(HRESULT result)
-	{
-		if (FAILED(result))
-			throw std::runtime_error("Skylighting shader test HRESULT " + std::to_string(result));
-	}
+	using D3D11ShaderTest::Check;
+	using D3D11ShaderTest::ConstantBuffer;
 
 	struct ShaderIncludes : ID3DInclude
 	{
@@ -45,61 +42,6 @@ namespace
 		}
 
 		HRESULT Close(LPCVOID data) override { return package.Close(data); }
-	};
-
-	struct ConstantBuffer
-	{
-		ID3D11ShaderReflectionConstantBuffer* reflection;
-		std::vector<std::byte> bytes;
-		ComPtr<ID3D11Buffer> buffer;
-		UINT slot;
-
-		ConstantBuffer(ID3D11Device* device, ID3D11ShaderReflection* shader, const char* name) :
-			reflection(shader->GetConstantBufferByName(name))
-		{
-			D3D11_SHADER_BUFFER_DESC reflected{};
-			Check(reflection->GetDesc(&reflected));
-			bytes.resize(reflected.Size);
-			D3D11_SHADER_INPUT_BIND_DESC binding{};
-			Check(shader->GetResourceBindingDescByName(name, &binding));
-			slot = binding.BindPoint;
-			D3D11_BUFFER_DESC desc{};
-			desc.ByteWidth = reflected.Size;
-			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-			Check(device->CreateBuffer(&desc, nullptr, buffer.GetAddressOf()));
-			Util::SetResourceName(buffer.Get(), "SkylightingTest::%s", name);
-		}
-
-		template <class T>
-		void SetVariable(const char* name, const T& value)
-		{
-			D3D11_SHADER_VARIABLE_DESC variable{};
-			Check(reflection->GetVariableByName(name)->GetDesc(&variable));
-			if (sizeof(value) > variable.Size || variable.StartOffset + sizeof(value) > bytes.size())
-				throw std::runtime_error("Reflected shader variable exceeds its constant buffer");
-			std::memcpy(bytes.data() + variable.StartOffset, &value, sizeof(value));
-		}
-
-		template <class T>
-		void SetMember(const char* variable, const char* member, const T& value)
-		{
-			auto* reflectedVariable = reflection->GetVariableByName(variable);
-			D3D11_SHADER_VARIABLE_DESC variableDesc{};
-			Check(reflectedVariable->GetDesc(&variableDesc));
-			D3D11_SHADER_TYPE_DESC memberDesc{};
-			Check(reflectedVariable->GetType()->GetMemberTypeByName(member)->GetDesc(&memberDesc));
-			const size_t offset = variableDesc.StartOffset + memberDesc.Offset;
-			if (offset + sizeof(value) > bytes.size())
-				throw std::runtime_error("Reflected Skylighting setting exceeds its constant buffer");
-			std::memcpy(bytes.data() + offset, &value, sizeof(value));
-		}
-
-		void Bind(ID3D11DeviceContext* context)
-		{
-			context->UpdateSubresource(buffer.Get(), 0, nullptr, bytes.data(), 0, 0);
-			ID3D11Buffer* raw = buffer.Get();
-			context->CSSetConstantBuffers(slot, 1, &raw);
-		}
 	};
 
 	template <class T>

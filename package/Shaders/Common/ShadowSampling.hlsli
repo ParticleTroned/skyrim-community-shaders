@@ -339,7 +339,7 @@ namespace ShadowSampling
 
 	float3 GetSceneLightingColor()
 	{
-		return GetAmbientLighting(LightingSampleNormal) + GetDirectionalLighting();
+		return Color::ApplyAmbientBalance(GetAmbientLighting(LightingSampleNormal)) + GetDirectionalLighting();
 	}
 
 	void DecomposeLighting(float3 inputColor, float3 sourceAmbientColor, float3 sourceDirectionalColor,

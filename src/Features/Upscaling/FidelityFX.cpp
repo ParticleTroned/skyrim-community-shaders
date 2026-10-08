@@ -22,6 +22,7 @@
 #include "../../ShaderCache.h"
 #include "../../State.h"
 #include "../../Utils/FileSystem.h"
+#include "../../Utils/ResourceName.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
 #include "NvidiaComIdentity.h"
@@ -578,14 +579,17 @@ namespace
 	ffxReturnCode_t DispatchRuntimeUpscalerProtected(
 		ffx::Context* a_context,
 		const ffxDispatchDescHeader* a_desc,
-		bool& a_crashed)
+		bool& a_crashed,
+		uint32_t& a_exceptionCode)
 	{
 		a_crashed = false;
+		a_exceptionCode = 0;
 		ffxReturnCode_t result = FFX_API_RETURN_ERROR;
 		__try {
 			if (ffxModule.Dispatch)
 				result = ffxModule.Dispatch(a_context, a_desc);
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			a_exceptionCode = GetExceptionCode();
 			a_crashed = true;
 		}
 		return result;
@@ -708,14 +712,16 @@ namespace
 			resource.reset();
 	}
 
-	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters, bool& a_crashed)
+	bool DispatchHostFsr3UpscaleProtected(FfxFsr3Context& a_context, FfxFsr3DispatchUpscaleDescription& a_dispatchParameters, bool& a_crashed, uint32_t& a_exceptionCode)
 	{
 		a_crashed = false;
+		a_exceptionCode = 0;
 		bool dispatchOk = true;
 
 		__try {
 			dispatchOk = ffxFsr3ContextDispatchUpscale(&a_context, &a_dispatchParameters) == FFX_OK;
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			a_exceptionCode = GetExceptionCode();
 			a_crashed = true;
 			dispatchOk = false;
 		}
@@ -1448,6 +1454,7 @@ bool FidelityFX::SetupFrameGeneration()
 
 bool FidelityFX::ResetFrameGenerationRenderContext() noexcept
 {
+	globals::features::upscaling.InvalidateFrameGenerationInputs();
 	bool resetComplete = true;
 	bool crashed = false;
 	if (frameGenContextIndeterminate) {
@@ -2905,6 +2912,14 @@ bool FidelityFX::TryGetCurrentAdapterDesc(
 	return true;
 }
 
+std::optional<uint32_t> FidelityFX::GetCurrentAdapterVendorID() const
+{
+	DXGI_ADAPTER_DESC adapterDesc{};
+	if (TryGetCurrentAdapterDesc(adapterDesc))
+		return adapterDesc.VendorId;
+	return std::nullopt;
+}
+
 bool FidelityFX::IsAmdAdapterDetected() const
 {
 	DXGI_ADAPTER_DESC adapterDesc{};
@@ -3222,6 +3237,8 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()
 			DX::ThrowIfFailed(swapChain.d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&runtimeD3D12Fence)));
 			DX::ThrowIfFailed(swapChain.d3d12Device->CreateSharedHandle(runtimeD3D12Fence.get(), nullptr, GENERIC_ALL, nullptr, sharedFenceHandle.put()));
 			DX::ThrowIfFailed(swapChain.d3d11Device->OpenSharedFence(sharedFenceHandle.get(), IID_PPV_ARGS(&runtimeD3D11Fence)));
+			runtimeD3D12Fence->SetName(L"FidelityFX::RuntimeFence");
+			Util::SetResourceName(runtimeD3D11Fence.get(), "FidelityFX::RuntimeFence");
 			runtimeFenceValue = 1;
 			for (auto& commandContext : runtimeCommandContexts)
 				commandContext.fenceValue = 0;
@@ -3714,12 +3731,12 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(uin
 	try {
 		InvalidateFSRRelatchDrain();
 		for (uint32_t i = 0; i < a_contextCount; ++i) {
-			newColorShared[i] = std::make_unique<WrappedResource>(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newDepthShared[i] = std::make_unique<WrappedResource>(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newMotionShared[i] = std::make_unique<WrappedResource>(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newReactiveShared[i] = std::make_unique<WrappedResource>(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newTransparencyShared[i] = std::make_unique<WrappedResource>(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
-			newOutputShared[i] = std::make_unique<WrappedResource>(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get());
+			newColorShared[i] = std::make_unique<WrappedResource>(desiredColorDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeColor[{}]", i));
+			newDepthShared[i] = std::make_unique<WrappedResource>(desiredDepthDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeDepth[{}]", i));
+			newMotionShared[i] = std::make_unique<WrappedResource>(desiredMotionDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeMotionVectors[{}]", i));
+			newReactiveShared[i] = std::make_unique<WrappedResource>(desiredReactiveDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeReactive[{}]", i));
+			newTransparencyShared[i] = std::make_unique<WrappedResource>(desiredTransparencyDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeTransparency[{}]", i));
+			newOutputShared[i] = std::make_unique<WrappedResource>(desiredOutputDesc, swapChain.d3d11Device.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::RuntimeOutput[{}]", i));
 		}
 	} catch (const std::exception& e) {
 		logger::error("[FidelityFX] Failed to create runtime shared resources: {}", e.what());
@@ -3828,18 +3845,23 @@ WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(uint32_t a_eye, FSRShared
 	auto& upscaling = globals::features::upscaling;
 	auto& swapChain = upscaling.dx12SwapChain;
 	Texture2D* expectedGuide = nullptr;
+	const char* guideName = "";
 	switch (a_guide) {
 	case Guide::Depth:
 		expectedGuide = upscaling.vrIntermediateLinearDepth[a_eye].get();
+		guideName = "Depth";
 		break;
 	case Guide::MotionVectors:
 		expectedGuide = upscaling.vrIntermediateMotionVectors[a_eye].get();
+		guideName = "MotionVectors";
 		break;
 	case Guide::Reactive:
 		expectedGuide = upscaling.vrIntermediateReactiveMask[a_eye].get();
+		guideName = "Reactive";
 		break;
 	case Guide::Transparency:
 		expectedGuide = upscaling.vrIntermediateTransparencyMask[a_eye].get();
+		guideName = "Transparency";
 		break;
 	default:
 		return nullptr;
@@ -3872,7 +3894,7 @@ WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(uint32_t a_eye, FSRShared
 			return nullptr;
 		winrt::com_ptr<ID3D11Texture2D> texture;
 		DX::ThrowIfFailed(cached.source->QueryInterface(IID_PPV_ARGS(texture.put())));
-		cached.imported = std::make_unique<WrappedResource>(texture.get(), swapChain.d3d12Device.get(), expectedGuide->GetOrCreateSharedHandle());
+		cached.imported = std::make_unique<WrappedResource>(texture.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::Runtime{}Import[{}]", guideName, a_eye), expectedGuide->GetOrCreateSharedHandle());
 		return cached.imported.get();
 	} catch (const winrt::hresult_error& e) {
 		logger::warn("[FidelityFX] Shared guide import failed for eye {} guide {}; retaining the copy path: 0x{:08X}",
@@ -4165,18 +4187,20 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(std::span<c
 			dispatchParameters.flags = 0;
 
 			bool dispatchCrashed = false;
+			uint32_t dispatchExceptionCode = 0;
 			const auto dispatchResult = DispatchRuntimeUpscalerProtected(
 				&runtimeUpscalerContexts[contextIndex],
 				&dispatchParameters.header,
-				dispatchCrashed);
+				dispatchCrashed,
+				dispatchExceptionCode);
 			if (dispatchCrashed) {
 				runtimeUpscalerContextIndeterminate[contextIndex] = true;
 				QuarantineRuntimeUpscalerForSession("a runtime upscaler dispatch fault");
 				const auto failureResult = ResolveRuntimeUpscalerLifecycleFailure("runtime upscaler dispatch fault");
 				runtimeUpscalerQuarantineRetirement = NormalizeRuntimeQuarantineResult(failureResult);
 				logger::critical(
-					"[FidelityFX] Runtime upscaler dispatch faulted for eye {}; retaining its indeterminate context and resources for this session.",
-					contextIndex);
+					"[FidelityFX] Runtime upscaler dispatch faulted for eye {} (exception 0x{:08X}); retaining its indeterminate context and resources for this session.",
+					contextIndex, dispatchExceptionCode);
 			}
 			if (dispatchCrashed || dispatchResult != FFX_API_RETURN_OK) {
 				logger::error("[FidelityFX] Runtime upscaler dispatch failed for eye {}.", contextIndex);
@@ -4418,8 +4442,9 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 	dispatchParameters.flags = 0;
 
 	bool hostDispatchCrashed = false;
+	uint32_t hostDispatchExceptionCode = 0;
 	InvalidateFSRRelatchDrain();
-	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed);
+	const bool dispatchOK = DispatchHostFsr3UpscaleProtected(fsrContext[a_contextIndex], dispatchParameters, hostDispatchCrashed, hostDispatchExceptionCode);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (dispatchOK)
 		RecordDevBenchSuccessfulDispatch(fallbackFramePath);
@@ -4433,7 +4458,7 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 			a_contextIndex,
 			"an FSR3 host dispatch fault");
 		if (!fsrDispatchCrashLogged) {
-			logger::critical("[FidelityFX] Region FSR3 dispatch faulted for eye {}; its indeterminate context and shared scratch ownership have been quarantined for this session.", a_contextIndex);
+			logger::critical("[FidelityFX] Region FSR3 dispatch faulted for eye {} (exception 0x{:08X}); its indeterminate context and shared scratch ownership have been quarantined for this session.", a_contextIndex, hostDispatchExceptionCode);
 			fsrDispatchCrashLogged = true;
 		}
 	}

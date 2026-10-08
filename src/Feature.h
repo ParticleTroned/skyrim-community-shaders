@@ -176,6 +176,8 @@ public:
 
 	virtual bool HasFeatureSettings() const { return true; }
 	virtual void RestoreDefaultSettings() {}
+	/** @brief Reset missing or invalid feature settings without replacing separately loaded settings. */
+	virtual void RestoreDefaultSettingsForLoad() { RestoreDefaultSettings(); }
 	virtual bool ToggleAtBootSetting();
 
 	/**

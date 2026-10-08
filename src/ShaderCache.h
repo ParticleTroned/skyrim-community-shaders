@@ -270,6 +270,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		std::atomic<int64_t> lastResetQpc{ 0 };
@@ -442,6 +444,7 @@ namespace SIE
 		/** Restores the persisted startup state without scheduling runtime transitions. */
 		void RestoreEnabledSetting(bool value);
 		void SetEnabled(bool value);
+		/** @brief Commit deferred disable under render-scale request authority. */
 		void ServicePendingDisable();
 		bool IsAsync() const;
 		void SetAsync(bool value);
@@ -582,6 +585,8 @@ namespace SIE
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
+		/** Return an existing vertex shader by exact descriptor without compiling or scheduling work. */
+		RE::BSGraphics::VertexShader* GetVertexShaderIfCached(const RE::BSShader& shader, uint32_t descriptor);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
@@ -685,6 +690,8 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
+		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
+		bool SetBackgroundCompilation(bool value);
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
 		// Set only after DataLoaded and the initial compilation batch have both
@@ -945,6 +952,11 @@ namespace SIE
 		}
 
 		void StartActiveShaderCaptureWindow(ActiveShaderCaptureStage a_stage);
+		/** @brief Releases one runtime variant; callers own bytecode, disk and task eviction. */
+		void EvictShaderResources(
+			RE::BSShader::Type a_type,
+			uint32_t a_descriptor,
+			ShaderClass a_shaderClass);
 		void EvictShader(
 			const std::string& a_key,
 			RE::BSShader::Type a_type,
@@ -957,8 +969,9 @@ namespace SIE
 		std::chrono::steady_clock::time_point activeShaderCaptureDeadline;
 		bool activeShaderCaptureMenuWasVisible = false;
 		std::atomic<std::thread::id> activeShaderCaptureThread{};
-		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> capturedShaders;
-		std::unordered_set<std::string> clearedThisCaptureCycle;
+		ankerl::unordered_dense::map<size_t, ActiveShaderInfo> capturedShaders;
+		std::unordered_set<size_t> clearedThisCaptureCycle;
+		std::unordered_set<std::string> clearedBytecodeThisCaptureCycle;
 		size_t lastScopedClearCount = 0;
 		double lastScopedClearMs = 0.0;
 

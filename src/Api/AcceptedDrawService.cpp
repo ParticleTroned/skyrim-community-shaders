@@ -87,6 +87,11 @@ namespace CSX::Api
 			geometryScopeErrors.fetch_add(1, std::memory_order_relaxed);
 	}
 
+	const void* GetCurrentAcceptedDrawGeometry() noexcept
+	{
+		return suppressionDepth || AcceptedDrawRegistry::IsDispatching() ? nullptr : geometryScope.Current();
+	}
+
 	SuppressAcceptedDraw::SuppressAcceptedDraw() { ++suppressionDepth; }
 	SuppressAcceptedDraw::~SuppressAcceptedDraw() { --suppressionDepth; }
 

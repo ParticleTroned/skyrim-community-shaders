@@ -24,11 +24,11 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 	const std::function<void()>& drawDisableAtBootSettings)
 {
 	MenuUI::SettingsPage page("Advanced", {
-											  { "startup", "Startup", "Choose which features load when the game starts." },
-											  { "shaders", "Shaders", "Refine compilation and shader replacement." },
-											  { "diagnostics", "Diagnostics", "Choose logging and inspect runtime state." },
-											  { "capture", "Capture", "Choose frame capture and recording options." },
-											  { "testing", "Testing", "Compare controlled settings and test scenes." },
+											  { "startup", "Startup", "Choose which features load when the game starts.", "Features loaded at startup", true, true, "Choose startup and compilation" },
+											  { "shaders", "Shaders", "Refine compilation and shader replacement.", "Compilation and replacement", true, true, nullptr },
+											  { "diagnostics", "Diagnostics", "Choose logging and inspect runtime state.", "Logs and runtime state", true, false, "Inspect and record" },
+											  { "capture", "Capture", "Choose frame capture and recording options.", "Frame capture and storage", true, true, nullptr },
+											  { "testing", "Testing", "Compare controlled settings and test scenes.", "Controlled scene comparisons", true, true, "Validate your setup" },
 										  });
 	if (page.Is("startup"))
 		RenderDisableAtBootSection(drawDisableAtBootSettings);
@@ -585,7 +585,7 @@ void AdvancedSettingsRenderer::RenderLoggingControls()
 		"off"
 	};
 	int item_current = static_cast<int>(logLevel);
-	if (ImGui::Combo("Log Level", &item_current, items, IM_ARRAYSIZE(items))) {
+	if (Util::Widgets::Combo("Log Level", &item_current, items, IM_ARRAYSIZE(items))) {
 		globals::state->SetLogLevel(static_cast<spdlog::level::level_enum>(item_current));
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {

@@ -141,15 +141,19 @@ void RenderDoc::Load()
 void RenderDoc::DrawSettings()
 {
 	MenuUI::SettingsPage page("RenderDoc", {
-											   { "capture", "Capture", "Enable capture, then choose the frames to record." },
-											   { "storage", "Storage", "Monitor storage and remove old captures." },
-											   { "files", "Files", "Browse and open recorded captures." },
+											   { "capture", "Capture", "Enable capture, then choose the frames to record.", "Capture activation and frames", true, true, "Choose capture and storage" },
+											   { "storage", "Storage", "Monitor storage and remove old captures.", "Disk usage and cleanup", true, true, nullptr },
+											   { "files", "Files", "Browse and open recorded captures.", "Recorded captures", true, true, "Review captured frames" },
 										   });
+
+	if (!page.Is("capture") && !page.Is("storage") && !page.Is("files"))
+		return;
 
 	// Track section visibility for intelligent cache refreshing
 	bool isSectionVisible = false;
 
-	DrawCaptureEnableToggle();
+	if (page.Is("capture"))
+		DrawCaptureEnableToggle();
 
 	// The rest of the UI renders only when capture is active
 	bool renderDocCaptureEnabled = enableRenderDocCapture;
@@ -165,6 +169,11 @@ void RenderDoc::DrawSettings()
 	if (!renderDocCaptureEnabled && renderDocActive) {
 		ImGui::TextColored(themeSettings.StatusPalette.Warning, "Requires restart to disable RenderDoc capture, performance will be severely impacted.");
 		return;
+	}
+
+	if (!renderDocCaptureEnabled && !renderDocActive && !page.Is("capture")) {
+		if (MenuUI::DetailNote("Enable RenderDoc capture before reviewing storage and recorded files. Activation requires a game restart.", "Open Capture"))
+			MenuUI::SettingsPage::Select("RenderDoc", "capture");
 	}
 
 	if (renderDocCaptureEnabled && renderDocActive) {
@@ -563,17 +572,6 @@ void RenderDoc::LoadSettings(json& o_json)
 			static_cast<int64_t>(kMaxCaptureFrameCount));
 		SetCaptureFrameCount(static_cast<uint32_t>(frameCount));
 	}
-}
-
-void RenderDoc::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("RenderDoc", {
-											   { "essentials", "Essentials", "Start with the main choices for this feature." },
-										   });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawCaptureEnableToggle();
 }
 
 void RenderDoc::DrawCaptureEnableToggle()

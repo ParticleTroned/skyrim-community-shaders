@@ -1,4 +1,5 @@
 #include "CSUtility.h"
+#include "Menu/SettingsPage.h"
 
 #include "Globals.h"
 #include "UnderwaterDepthOfField.h"
@@ -347,7 +348,7 @@ namespace
 		};
 
 		int mode = static_cast<int>(ClampDofMode(a_mode));
-		const bool changed = ImGui::Combo("Mode", &mode, modeLabels, IM_ARRAYSIZE(modeLabels));
+		const bool changed = Util::Widgets::Combo("Mode", &mode, modeLabels, IM_ARRAYSIZE(modeLabels));
 
 		if (!changed)
 			return false;
@@ -370,7 +371,7 @@ namespace
 		};
 
 		int blurRadius = static_cast<int>(ClampDofBlurRadius(a_blurRadius));
-		const bool changed = ImGui::Combo("Blur Radius", &blurRadius, blurRadiusLabels, IM_ARRAYSIZE(blurRadiusLabels));
+		const bool changed = Util::Widgets::Combo("Blur Radius", &blurRadius, blurRadiusLabels, IM_ARRAYSIZE(blurRadiusLabels));
 
 		if (!changed)
 			return false;
@@ -516,8 +517,7 @@ namespace
 		bool a_allowAutoFocus,
 		const char* a_missingDataText)
 	{
-		if (!ImGui::TreeNodeEx(a_label))
-			return;
+		MenuUI::SectionHeading(a_label);
 
 		ImGui::PushID(a_id);
 		SetDepthOfFieldPopupText(a_popup, a_id);
@@ -540,7 +540,6 @@ namespace
 		}
 
 		ImGui::PopID();
-		ImGui::TreePop();
 	}
 
 	bool IsCurrentUnderwaterImageSpace(RE::ImageSpaceManager* a_imageSpaceManager)

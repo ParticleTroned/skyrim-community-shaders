@@ -327,11 +327,11 @@ void WetnessEffects::RestorePerformanceCostMeasurementState(const json& a_state)
 void WetnessEffects::DrawSettings()
 {
 	MenuUI::SettingsPage page("WetnessEffects", {
-													{ "presets", "Presets", "Choose the overall wet-weather appearance first." },
-													{ "surface", "Surfaces", "Refine wet surfaces and puddles." },
-													{ "rain", "Rain", "Choose raindrops, splashes and ripples." },
-													{ "refine", "Refine", "Refine weather response, shores and puddles." },
-													{ "diagnostics", "Diagnostics", "Inspect wetness diagnostics." },
+													{ "presets", "Presets", "Choose the overall wet-weather appearance first.", "Wet-weather baselines", true, true, "Choose the wet-weather look" },
+													{ "surface", "Surfaces", "Refine wet surfaces and puddles.", "Wet surfaces and puddles", true, true, nullptr },
+													{ "rain", "Rain", "Choose raindrops, splashes and ripples.", "Drops, splashes and ripples", true, true, "Refine weather interaction" },
+													{ "refine", "Refine", "Refine weather response, shores and puddles.", "Weather, shore and puddle response", true, true, nullptr },
+													{ "diagnostics", "Diagnostics", "Inspect wetness diagnostics.", "Diagnostic wetness views", true, false, nullptr },
 												});
 
 	// Climate Preset Selection - Always visible at the top
@@ -348,7 +348,7 @@ void WetnessEffects::DrawSettings()
 
 		{
 			Util::PresetControlStyleWrapper presetControlStyle;
-			if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
+			if (MenuUI::ChoiceSetting("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
 				// Simplified: map combo index directly to enum, with bounds check
 				ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
 
@@ -399,7 +399,7 @@ void WetnessEffects::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("surface")) {
-		if (Util::Widgets::Checkbox("Enable", (bool*)&settings.EnableWetnessEffects)) {
+		if (Util::Widgets::Checkbox("Enabled", (bool*)&settings.EnableWetnessEffects)) {
 			Ripples::UpdateSettings();  // Update cache when settings change
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -643,7 +643,7 @@ void WetnessEffects::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	bool enabled = settings.EnableWetnessEffects != 0;
-	if (Util::Widgets::Checkbox("Enable", &enabled)) {
+	if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 		settings.EnableWetnessEffects = enabled ? 1u : 0u;
 		Ripples::UpdateSettings();
 	}
@@ -655,7 +655,7 @@ void WetnessEffects::DrawPerformanceSettings(bool a_advanced)
 	int currentComboIndex = static_cast<int>(climatePreset);
 	{
 		Util::PresetControlStyleWrapper presetControlStyle;
-		if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {
+		if (MenuUI::ChoiceSetting("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {
 			ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
 			climatePreset = newPreset;
 			if (newPreset != ClimatePreset::Custom) {

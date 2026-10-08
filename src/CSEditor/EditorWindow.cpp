@@ -444,7 +444,7 @@ void EditorWindow::ShowObjectsWindow()
 			ImGui::SameLine();
 			ImGui::SetNextItemWidth(comboW);
 			int col = static_cast<int>(m_currentFilterColumn);
-			if (ImGui::Combo("##FilterBy", &col, kFilterColumnNames, IM_ARRAYSIZE(kFilterColumnNames)))
+			if (Util::Widgets::Combo("##FilterBy", &col, kFilterColumnNames, IM_ARRAYSIZE(kFilterColumnNames)))
 				m_currentFilterColumn = static_cast<FilterColumn>(col);
 
 			ImGui::SameLine();

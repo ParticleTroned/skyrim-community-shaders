@@ -57,7 +57,7 @@ void CSUtility::DrawSettingsHeaderControls()
 void CSUtility::DrawSettings()
 {
 	MenuUI::SettingsPage page("CSUtility", {
-											   { "appearance", "Tools", "Choose the utility you want to use." },
+											   { "appearance", "Tools", "Choose the utility you want to use.", "Scene and underwater depth of field", true, true, "Choose a utility" },
 										   });
 	if (!page.Is("appearance"))
 		return;

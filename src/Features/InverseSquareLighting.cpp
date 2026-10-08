@@ -57,7 +57,7 @@ namespace
 bool InverseSquareLighting::DrawEnabledCheckbox()
 {
 	bool enabled = settings.Enabled;
-	if (Util::Widgets::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		SetRuntimeEnabled(enabled);
 	return enabled;
 }
@@ -65,20 +65,9 @@ bool InverseSquareLighting::DrawEnabledCheckbox()
 void InverseSquareLighting::DrawSettings()
 {
 	MenuUI::SettingsPage page("InverseSquareLighting", {
-														   { "appearance", "Lighting", "Choose the lighting response for nearby lights." },
+														   { "appearance", "Lighting", "Choose the lighting response for nearby lights.", "Light falloff and intensity", true, true, "Shape nearby lighting" },
 													   });
 	if (!page.Is("appearance"))
-		return;
-
-	DrawEnabledCheckbox();
-}
-
-void InverseSquareLighting::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("InverseSquareLighting", {
-														   { "essentials", "Essentials", "Start with the main choices for this feature." },
-													   });
-	if (!page.Is("essentials"))
 		return;
 
 	DrawEnabledCheckbox();

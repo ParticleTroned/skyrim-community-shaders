@@ -66,7 +66,7 @@ void FoliageLighting::SanitizeSettings(Settings& a_settings)
 void FoliageLighting::DrawSettingsHeaderControls()
 {
 	bool foliageLightingEnabled = IsEnabled();
-	if (Util::Widgets::Checkbox("Enable", &foliageLightingEnabled))
+	if (Util::Widgets::Checkbox("Enabled", &foliageLightingEnabled))
 		SetEnabled(foliageLightingEnabled);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("Controls all tree foliage and grass lighting additions while preserving their saved tuning.");
@@ -116,12 +116,12 @@ void FoliageLighting::DrawSettings()
 {
 	SanitizeSettings(settings);
 	const bool truePBRActive = IsTruePBRActive();
-	ImGui::BeginDisabled(!IsEnabled());
 
 	MenuUI::SettingsPage page("FoliageLighting", {
-													 { "trees", "Trees", "Refine light passing through tree leaves." },
-													 { "grass", "Grass", "Refine light passing through grass." },
+													 { "trees", "Trees", "Refine light passing through tree leaves.", "Leaf translucency", true, true, "Balance vegetation lighting" },
+													 { "grass", "Grass", "Refine light passing through grass.", "Grass translucency", true, true, nullptr },
 												 });
+	const auto controlsDisabled = Util::DisableGuard(!(IsEnabled()));
 	if (page.Is("trees")) {
 		DrawFoliageScatteringSetting();
 		DrawFoliageAmbientBoostSetting(truePBRActive);

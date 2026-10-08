@@ -28,9 +28,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return std::make_pair(
-			"True PBR replaces Skyrim's legacy material system with physically-based rendering. "
-			"Mod authors can supply PBR texture sets that are interpreted in a physically correct BRDF, "
-			"producing realistic surface response to lighting across weather and time-of-day conditions.",
+			"Makes supported materials respond more realistically to light.",
 			std::vector<std::string>{
 				"Physically-based BRDF",
 				"Roughness, metallic, and displacement map support",
@@ -39,8 +37,6 @@ public:
 	}
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
 	virtual json CapturePerformanceSettingsState() const override;

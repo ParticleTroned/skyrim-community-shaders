@@ -14,7 +14,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Allows for the sun and moon to cast light and shadows into interior spaces.",
+			"Lets sunlight and moonlight cast light and shadows into supported interiors.",
 			{ "Functions only for explicitly enabled interiors",
 				"Utilizes existing sun, moon, and weather systems",
 				"Includes an option to force double-sided rendering for unprepared interiors",
@@ -35,8 +35,6 @@ public:
 	}
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;

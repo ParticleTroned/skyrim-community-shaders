@@ -25,7 +25,7 @@ namespace
 
 	void DrawEnabledCheckbox(VolumetricShadows::Settings& a_settings)
 	{
-		Util::Widgets::Checkbox("Enable", &a_settings.Enabled);
+		Util::Widgets::Checkbox("Enabled", &a_settings.Enabled);
 	}
 
 	template <class T>
@@ -385,8 +385,8 @@ void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
 void VolumetricShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("VolumetricShadows", {
-													   { "appearance", "Shadows", "Choose whether light shafts cast shadows." },
-													   { "diagnostics", "Diagnostics", "Inspect shadow buffers." },
+													   { "appearance", "Shadows", "Choose whether light shafts cast shadows.", "Shadows through light shafts", true, true, "Shape volumetric shadows" },
+													   { "diagnostics", "Diagnostics", "Inspect shadow buffers.", "Diagnostic shadow buffers", true, false, nullptr },
 												   });
 
 	if (page.Is("appearance"))
@@ -415,17 +415,6 @@ void VolumetricShadows::DrawSettings()
 		displayRT("VSM Cascade 0", shadowCopyTexture, shadowCopyMip0SRV);
 		displayRT("VSM Cascade 1", shadowCopyTexture, shadowCopyMip1SRV);
 	}
-}
-
-void VolumetricShadows::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("VolumetricShadows", {
-													   { "essentials", "Essentials", "Start with the main choices for this feature." },
-												   });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawEnabledCheckbox(settings);
 }
 
 void VolumetricShadows::DrawPerformanceSettings(bool)

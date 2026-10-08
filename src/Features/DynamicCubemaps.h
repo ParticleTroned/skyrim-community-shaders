@@ -187,7 +187,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides real-time environment mapping and reflections by generating dynamic cube maps that capture the surrounding environment, enabling realistic reflections on surfaces.",
+			"Updates reflections to match the surrounding scene.",
 			{ "Real-time environment capture for realistic reflections",
 				"Dynamic cube map generation based on camera position",
 				"Enhanced water reflections with environmental details",
@@ -207,8 +207,6 @@ public:
 	virtual void OnSettingsSaved() override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual void DataLoaded() override;
 	virtual void PostPostLoad() override;
 

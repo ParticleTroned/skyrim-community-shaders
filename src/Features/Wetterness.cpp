@@ -1204,7 +1204,7 @@ const Wetterness::Settings& Wetterness::GetSanitizedSettings() const
 void Wetterness::DrawEnabledCheckbox()
 {
 	bool enabled = settings.EnableWetterness != 0;
-	if (Util::Widgets::Checkbox("Enable", &enabled)) {
+	if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 		SetPerformanceToggleEnabled(enabled);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1221,7 +1221,7 @@ void Wetterness::DrawPuddleMaskSettings()
 		"Legacy Procedural"
 	};
 	int selectedMode = static_cast<int>(puddleMaskMode);
-	if (ImGui::Combo("Puddle Mask", &selectedMode, modeNames, IM_ARRAYSIZE(modeNames))) {
+	if (Util::Widgets::Combo("Puddle Mask", &selectedMode, modeNames, IM_ARRAYSIZE(modeNames))) {
 		puddleMaskMode = SanitizePuddleMaskMode(static_cast<uint32_t>(selectedMode));
 		InvalidateSanitizedSettingsCache();
 	}
@@ -1237,14 +1237,14 @@ void Wetterness::DrawPuddleMaskSettings()
 void Wetterness::DrawSettings()
 {
 	MenuUI::SettingsPage page("Wetterness", {
-												{ "presets", "Presets", "Choose the overall wet-weather appearance first." },
-												{ "reflections", "Reflections", "Choose how wet surfaces reflect their surroundings." },
-												{ "surface", "Surfaces", "Refine rain wetness, darkening and skin." },
-												{ "puddles", "Puddles", "Refine puddle coverage and reflections." },
-												{ "shore", "Shore", "Refine water along the shore." },
-												{ "rain", "Rain", "Choose raindrops, splashes and ripples." },
-												{ "drying", "Drying", "Choose how quickly surfaces dry after rain." },
-												{ "diagnostics", "Diagnostics", "Inspect wetness diagnostics." },
+												{ "presets", "Presets", "Choose the overall wet-weather appearance first.", "Wet-weather baselines", true, true, "Choose appearance and reflections" },
+												{ "reflections", "Reflections", "Choose how wet surfaces reflect their surroundings.", "Reflection source and response", true, true, nullptr },
+												{ "surface", "Surfaces", "Refine rain wetness, darkening and skin.", "Wetness, darkening and skin", true, true, "Shape surfaces and puddles" },
+												{ "puddles", "Puddles", "Refine puddle coverage and reflections.", "Puddle coverage and reflections", true, true, nullptr },
+												{ "shore", "Shore", "Refine water along the shore.", "Water along the shoreline", true, true, "Refine water interaction" },
+												{ "rain", "Rain", "Choose raindrops, splashes and ripples.", "Drops, splashes and ripples", true, true, nullptr },
+												{ "drying", "Drying", "Choose how quickly surfaces dry after rain.", "Drying after rain", true, true, "Refine recovery" },
+												{ "diagnostics", "Diagnostics", "Inspect wetness diagnostics.", "Diagnostic wetness views", true, false, nullptr },
 											});
 
 	InvalidateSanitizedSettingsCache();
@@ -1286,7 +1286,7 @@ void Wetterness::DrawSettings()
 
 		{
 			Util::PresetControlStyleWrapper presetControlStyle;
-			if (ImGui::Combo("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
+			if (MenuUI::ChoiceSetting("Climate Preset", &currentComboIndex, presetNames, static_cast<int>(CLIMATE_PRESET_INFO.size()))) {  // Map combo index back to preset enum
 				// Simplified: map combo index directly to enum, with bounds check
 				ClimatePreset newPreset = (currentComboIndex >= 0 && currentComboIndex < static_cast<int>(CLIMATE_PRESET_INFO.size())) ? static_cast<ClimatePreset>(currentComboIndex) : defaultPreset;
 
@@ -1500,7 +1500,7 @@ void Wetterness::DrawSettings()
 			reflectionMode = 2;
 		}
 		const char* reflectionModeItems[] = { "Off", "Modern", "Legacy" };
-		if (ImGui::Combo("Reflection Mode", &reflectionMode, reflectionModeItems, IM_ARRAYSIZE(reflectionModeItems))) {
+		if (MenuUI::ChoiceSetting("Reflection Mode", &reflectionMode, reflectionModeItems, IM_ARRAYSIZE(reflectionModeItems))) {
 			settings.EnableModernWetReflection = (reflectionMode == 1) ? 1u : 0u;
 			settings.EnableLegacyWetReflection = (reflectionMode == 2) ? 1u : 0u;
 		}
@@ -2094,17 +2094,6 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 	Util::Widgets::SliderFloat("Wetness Fade Range", &wetnessDistanceFadeRange, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
 
 	sanitizePersistentPresetState();
-}
-
-void Wetterness::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("Wetterness", {
-												{ "essentials", "Essentials", "Start with the main choices for this feature." },
-											});
-	if (!page.Is("essentials"))
-		return;
-
-	DrawPerformanceSettings(false);
 }
 
 json Wetterness::CapturePerformanceSettingsState() const

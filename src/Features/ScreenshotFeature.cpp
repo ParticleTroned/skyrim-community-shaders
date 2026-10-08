@@ -1958,10 +1958,10 @@ void ScreenshotFeature::DrawSettings()
 	const bool usesFixedEyeFraming = globals::game::isVR && IsFramedCapture(vrCaptureSource);
 
 	MenuUI::SettingsPage page("ScreenshotFeature", {
-													   { "source", "Source", "Choose the image to capture first." },
-													   { "output", "Output", "Choose the file format and destination." },
-													   { "framing", "Framing", "Choose the part of the picture to keep." },
-													   { "sequence", "Sequence", "Record a sequence using your capture and output choices." },
+													   { "source", "Source", "Choose the image to capture first.", "Capture source and stereo eyes", true, true, "Choose capture and output" },
+													   { "output", "Output", "Choose the file format and destination.", "Format and destination", true, true, nullptr },
+													   { "framing", "Framing", "Choose the part of the picture to keep.", "Crop and framing", true, true, "Refine framing and sequences" },
+													   { "sequence", "Sequence", "Record a sequence using your capture and output choices.", "Timed image sequences", true, true, nullptr },
 												   });
 
 	if (page.Is("source")) {
@@ -1975,33 +1975,18 @@ void ScreenshotFeature::DrawSettings()
 		}
 
 		if (globals::game::isVR) {
-			ImGui::SeparatorText("VR Capture Source");
+			MenuUI::SectionHeading("VR Capture Source");
 			int captureSource = IsFramedCapture(vrCaptureSource) ?
 			                        1 :
 			                        (vrCaptureSource == VRCaptureSource::DesktopMirror ? 2 : 0);
-			ImGui::RadioButton(
-				"HMD submission",
-				&captureSource,
-				0);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Captures the selected final accepted eye submission, or both eyes as separate files.");
-			}
-			ImGui::SameLine();
-			ImGui::RadioButton(
-				"Framed view (2560 x 1440)",
-				&captureSource,
-				1);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Saves a left-eye, right-eye, or combined 16:9 view at 2560 x 1440.");
-			}
-			ImGui::SameLine();
-			ImGui::RadioButton(
-				"Desktop mirror",
-				&captureSource,
-				2);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Captures Skyrim's current desktop backbuffer without substituting HMD eye textures.");
-			}
+			const MenuUI::Choice sources[] = {
+				{ "hmd", "HMD submission", "Final image sent to the headset", "Capture the selected eye, or both as separate files." },
+				{ "framed", "Framed view", "2560 x 1440 image", "Save a left, right or combined 16:9 view." },
+				{ "mirror", "Desktop mirror", "Current desktop picture", "Capture Skyrim's desktop backbuffer." }
+			};
+			const int chosen = MenuUI::ChoiceCards("CaptureSource", captureSource, sources);
+			if (chosen >= 0)
+				captureSource = chosen;
 			if (captureSource == 0) {
 				vrCaptureSource = VRCaptureSource::HMDSubmission;
 			} else if (captureSource == 2) {
@@ -2014,13 +1999,7 @@ void ScreenshotFeature::DrawSettings()
 
 			if (vrCaptureSource != VRCaptureSource::DesktopMirror) {
 				int eye = static_cast<int>(screenshotEye);
-				ImGui::TextUnformatted("Screenshot eye:");
-				ImGui::SameLine();
-				ImGui::RadioButton("Left##ScreenshotEye", &eye, 0);
-				ImGui::SameLine();
-				ImGui::RadioButton("Right##ScreenshotEye", &eye, 1);
-				ImGui::SameLine();
-				ImGui::RadioButton("Both##ScreenshotEye", &eye, 2);
+				MenuUI::ChoiceSetting("Screenshot eye", &eye, "Left\0Right\0Both\0");
 				screenshotEye = static_cast<CaptureEye>(eye);
 				vrFramedView = eye == 2 ?
 				                   VRFramedView::Combined :
@@ -2033,11 +2012,7 @@ void ScreenshotFeature::DrawSettings()
 						ImGui::TextUnformatted("Combined keeps the dominant eye through the shared view and fills its outer edge from the other eye.");
 					}
 					int dominantEye = vrFramedDominantEye == vr::Eye_Right ? 1 : 0;
-					ImGui::TextUnformatted("Dominant eye:");
-					ImGui::SameLine();
-					ImGui::RadioButton("Left##DominantFramedEye", &dominantEye, 0);
-					ImGui::SameLine();
-					ImGui::RadioButton("Right##DominantFramedEye", &dominantEye, 1);
+					MenuUI::ChoiceSetting("Dominant eye", &dominantEye, "Left\0Right\0");
 					vrFramedDominantEye = dominantEye == 1 ? vr::Eye_Right : vr::Eye_Left;
 				}
 			}
@@ -2061,7 +2036,7 @@ void ScreenshotFeature::DrawSettings()
 	}
 
 	if (page.Is("output")) {
-		ImGui::SeparatorText("Output");
+		MenuUI::SectionHeading("Output");
 
 		Util::Widgets::Checkbox("Copy saved file to clipboard", &copyToClipboard);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2070,9 +2045,7 @@ void ScreenshotFeature::DrawSettings()
 		}
 
 		int sdrFormat = sdrUsePng ? 1 : 0;
-		ImGui::RadioButton("BMP (lossless)", &sdrFormat, 0);
-		ImGui::SameLine();
-		ImGui::RadioButton("PNG (lossless)", &sdrFormat, 1);
+		MenuUI::ChoiceSetting("File format", &sdrFormat, "BMP (lossless)\0PNG (lossless)\0");
 		sdrUsePng = sdrFormat != 0;
 
 		char buf[260];
@@ -2128,7 +2101,7 @@ void ScreenshotFeature::DrawSettings()
 	}
 
 	if (page.Is("sequence")) {
-		ImGui::SeparatorText("Lossless Frame Sequence");
+		MenuUI::SectionHeading("Lossless Frame Sequence");
 		ImGui::TextWrapped("Sequence capture uses Screenshot API v1. Video composition and audio are intentionally outside CSX.");
 		int sequenceFrames = static_cast<int>(sequenceDefaults.frameCount);
 		if (Util::Widgets::SliderInt("Frames", &sequenceFrames, 1, 10000))
@@ -2141,19 +2114,11 @@ void ScreenshotFeature::DrawSettings()
 		}
 
 		int sequenceFormat = frameCaptureUsePng ? 1 : 0;
-		ImGui::RadioButton("BMP (fast)##SequenceFormat", &sequenceFormat, 0);
-		ImGui::SameLine();
-		ImGui::RadioButton("PNG (compact)##SequenceFormat", &sequenceFormat, 1);
+		MenuUI::ChoiceSetting("Sequence format", &sequenceFormat, "BMP (fast)\0PNG (compact)\0");
 		frameCaptureUsePng = sequenceFormat != 0;
 		if (globals::game::isVR) {
 			int eye = static_cast<int>(frameCaptureEye);
-			ImGui::TextUnformatted("Capture eye:");
-			ImGui::SameLine();
-			ImGui::RadioButton("Left##SequenceEye", &eye, 0);
-			ImGui::SameLine();
-			ImGui::RadioButton("Right##SequenceEye", &eye, 1);
-			ImGui::SameLine();
-			ImGui::RadioButton("Both##SequenceEye", &eye, 2);
+			MenuUI::ChoiceSetting("Sequence eye", &eye, "Left\0Right\0Both\0");
 			frameCaptureEye = static_cast<CaptureEye>(eye);
 		}
 
@@ -2241,7 +2206,7 @@ void ScreenshotFeature::DrawSettings()
 		}
 
 		if (usesFixedEyeFraming) {
-			ImGui::SeparatorText("Framing");
+			MenuUI::SectionHeading("Framing");
 			if (vrCaptureSource == VRCaptureSource::FramedStereo) {
 				ImGui::TextWrapped(
 					"Combined aligns both submitted eyes in head-projection space. The dominant eye owns the shared view; "
@@ -2257,7 +2222,7 @@ void ScreenshotFeature::DrawSettings()
 			return;
 		}
 
-		ImGui::SeparatorText("Crop");
+		MenuUI::SectionHeading("Crop");
 
 		// The desktop framebuffer remains available for interactive SBS crop setup.
 		// HMD capture replaces its content with the accepted eye pair before applying

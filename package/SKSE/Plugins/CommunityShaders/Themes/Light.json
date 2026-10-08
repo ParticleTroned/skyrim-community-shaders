@@ -43,7 +43,6 @@
         "ShowActionIcons": true,
         "UseMonochromeIcons": true,
         "ShowFooter": false,
-        "CenterHeader": true,
         "TooltipHoverDelay": 0.5,
         "BackgroundBlurEnabled": false,
         "Palette": {

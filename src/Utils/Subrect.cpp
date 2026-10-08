@@ -200,7 +200,7 @@ namespace Util::Subrect
 		std::string currentPreview =
 			(selectedPresetIndex >= 0 && selectedPresetIndex < static_cast<int>(presets.size())) ? presets[selectedPresetIndex].name : "(Custom)";
 
-		if (ImGui::BeginCombo("Crop Preset", currentPreview.c_str())) {
+		if (auto combo = Util::Widgets::ComboBox("Crop Preset", currentPreview.c_str())) {
 			for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
 				const bool isSelected = selectedPresetIndex == i;
 				if (ImGui::Selectable(presets[i].name.c_str(), isSelected)) {
@@ -210,7 +210,6 @@ namespace Util::Subrect
 					ImGui::SetItemDefaultFocus();
 				}
 			}
-			ImGui::EndCombo();
 		}
 
 		ImGui::InputText("Save As", newPresetName, sizeof(newPresetName));

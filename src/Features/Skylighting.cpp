@@ -261,7 +261,7 @@ namespace
 	void DrawSkylightingRuntimeToggle(Skylighting& a_skylighting)
 	{
 		const bool previousEnabled = a_skylighting.settings.EnableSkylighting;
-		if (Util::Widgets::Checkbox("Enable", &a_skylighting.settings.EnableSkylighting))
+		if (Util::Widgets::Checkbox("Enabled", &a_skylighting.settings.EnableSkylighting))
 			ApplySkylightingRuntimeEnabledChange(a_skylighting, previousEnabled);
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -326,33 +326,18 @@ namespace
 
 	void DrawSkylightingPerformancePresetButtons(Skylighting& a_skylighting, const char* a_tableId)
 	{
-		ImGui::TextUnformatted("Performance Profiles");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("These profiles tune Skylighting quality without changing the Enable switch.");
-			ImGui::Text("The performance profiler compares against turning Skylighting off instead of using one of these profiles.");
+		MenuUI::SectionHeading("Quality preset");
+		std::vector<MenuUI::Choice> choices;
+		int selected = -1;
+		for (size_t index = 0; index < kSkylightingPerformancePresets.size(); ++index) {
+			const auto& preset = kSkylightingPerformancePresets[index];
+			choices.push_back({ preset.Name, preset.Name, preset.Description, preset.Description });
+			if (MatchesSkylightingPerformancePreset(a_skylighting, preset))
+				selected = static_cast<int>(index);
 		}
-
-		if (ImGui::BeginTable(a_tableId, static_cast<int>(kSkylightingPerformancePresets.size()), ImGuiTableFlags_SizingStretchProp)) {
-			for (size_t i = 0; i < kSkylightingPerformancePresets.size(); ++i) {
-				ImGui::TableSetupColumn(kSkylightingPerformancePresets[i].Name, ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			}
-
-			ImGui::TableNextRow();
-			for (size_t i = 0; i < kSkylightingPerformancePresets.size(); ++i) {
-				ImGui::TableNextColumn();
-				const auto& preset = kSkylightingPerformancePresets[i];
-				const bool presetActive = MatchesSkylightingPerformancePreset(a_skylighting, preset);
-				[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
-				if (ImGui::Button(preset.Name, ImVec2(-1.0f, 0.0f))) {
-					ApplySkylightingPerformancePreset(a_skylighting, preset);
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(preset.Description);
-				}
-			}
-
-			ImGui::EndTable();
-		}
+		const int choice = MenuUI::ChoiceCards(a_tableId, selected, choices);
+		if (choice >= 0)
+			ApplySkylightingPerformancePreset(a_skylighting, kSkylightingPerformancePresets[choice]);
 	}
 
 	void DrawSkylightingUpdatePerformanceSettings(Skylighting& a_skylighting)
@@ -644,12 +629,11 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 void Skylighting::DrawSettings()
 {
 	MenuUI::SettingsPage page("Skylighting", {
-												 { "quality", "Quality", "Choose a preset, then balance detail and update speed." },
-												 { "coverage", "Coverage", "Set how far skylighting reaches." },
-												 { "look", "Look", "Refine visibility and the direction of shadowing." },
+												 { "quality", "Quality", "Choose a preset, then balance detail and update speed.", "Preset and probe update budget", true, true, "Choose detail and coverage" },
+												 { "coverage", "Coverage", "Set how far skylighting reaches.", "Skylight reach and occlusion", true, true, nullptr },
+												 { "look", "Look", "Refine visibility and the direction of shadowing.", "Visibility and direction", true, true, "Refine the shared picture" },
 											 });
 
-	DrawSkylightingRuntimeToggle(*this);
 	if (page.Is("quality")) {
 		DrawSkylightingPerformancePresetButtons(*this, "SkylightingSettingsPerformancePresetButtons");
 		ImGui::Separator();
@@ -678,16 +662,10 @@ void Skylighting::DrawSettings()
 		settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 
 		int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
-		if (ImGui::BeginCombo("Probe Grid Quality", GetProbeGridPreset(settings.ProbeGridQuality).Label)) {
-			for (uint quality = 0; quality < kProbeGridPresets.size(); quality++) {
-				const bool isSelected = (probeGridQualityUI == static_cast<int>(quality));
-				if (ImGui::Selectable(kProbeGridPresets[quality].Label, isSelected))
-					probeGridQualityUI = static_cast<int>(quality);
-				if (isSelected)
-					ImGui::SetItemDefaultFocus();
-			}
-			ImGui::EndCombo();
-		}
+		std::vector<const char*> qualityLabels;
+		for (const auto& preset : kProbeGridPresets)
+			qualityLabels.push_back(preset.Label);
+		MenuUI::ChoiceSetting("Probe Grid Quality", &probeGridQualityUI, qualityLabels.data(), static_cast<int>(qualityLabels.size()));
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Main quality/performance switch. Performance is fastest; Quality is most detailed.");
 
@@ -805,7 +783,7 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 	settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 
 	int probeGridQualityUI = static_cast<int>(settings.ProbeGridQuality);
-	if (ImGui::BeginCombo("Probe Grid Quality", GetProbeGridPreset(settings.ProbeGridQuality).Label)) {
+	if (auto combo = Util::Widgets::ComboBox("Probe Grid Quality", GetProbeGridPreset(settings.ProbeGridQuality).Label)) {
 		for (uint quality = 0; quality < kProbeGridPresets.size(); quality++) {
 			const bool isSelected = (probeGridQualityUI == static_cast<int>(quality));
 			if (ImGui::Selectable(kProbeGridPresets[quality].Label, isSelected))
@@ -813,7 +791,6 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 			if (isSelected)
 				ImGui::SetItemDefaultFocus();
 		}
-		ImGui::EndCombo();
 	}
 
 	probeGridQualityUI = std::max(0, std::min(probeGridQualityUI, static_cast<int>(kProbeGridPresets.size() - 1)));
@@ -826,17 +803,6 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 
 	ImGui::SeparatorText("Update Work");
 	DrawSkylightingUpdatePerformanceSettings(*this);
-}
-
-void Skylighting::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("Skylighting", {
-												 { "essentials", "Essentials", "Start with the main choices for this feature." },
-											 });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawPerformanceSettings(false);
 }
 
 json Skylighting::CapturePerformanceSettingsState() const

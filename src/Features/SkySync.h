@@ -21,7 +21,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Synchronizes volumetric lighting and shadows with the actual sun and moon positions in the sky.",
+			"Aligns lighting and shadows with the sun and moons.",
 			{ "Fixes the mismatch between the positions of the sun and moons and the lighting direction",
 				"Includes a configurable alternative sun path for more realistic and dramatic lighting",
 				"Smoothly switches the light source between the sun and moons based on visibility",
@@ -58,8 +58,6 @@ public:
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled; }
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

@@ -69,7 +69,7 @@ namespace
 {
 	bool DrawEnabledCheckbox(bool& a_enabled)
 	{
-		Util::Widgets::Checkbox("Enable", &a_enabled);
+		Util::Widgets::Checkbox("Enabled", &a_enabled);
 		return a_enabled;
 	}
 }
@@ -79,7 +79,7 @@ void LODBlending::DrawSettings()
 	settings.WaterReflectionStrength = ClampWaterReflectionStrength(settings.WaterReflectionStrength);
 
 	MenuUI::SettingsPage page("LODBlending", {
-												 { "appearance", "Blending", "Choose the distant transition first, then tune its appearance." },
+												 { "appearance", "Blending", "Choose the distant transition first, then tune its appearance.", "Distant-object transitions", true, true, "Refine distant transitions" },
 											 });
 	if (!page.Is("appearance"))
 		return;
@@ -130,17 +130,6 @@ void LODBlending::DrawSettings()
 			"Best combined with terrain LOD generated in xLODGen with Vertex Color Intensity set to 0. ");
 	}
 	ImGui::EndDisabled();
-}
-
-void LODBlending::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("LODBlending", {
-												 { "essentials", "Essentials", "Start with the main choices for this feature." },
-											 });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawEnabledCheckbox(Enabled);
 }
 
 void LODBlending::LoadSettings(json& o_json)

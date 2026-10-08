@@ -1,5 +1,6 @@
 #include "DynamicCubemaps.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
@@ -154,36 +155,18 @@ std::vector<std::pair<std::string_view, std::string_view>> DynamicCubemaps::GetS
 void DynamicCubemaps::DrawSettings()
 {
 	MenuUI::SettingsPage page("DynamicCubemaps", {
-													 { "quality", "Quality", "Choose reflection resolution first." },
-													 { "reflections", "Reflections", "Choose nearby reflection detail and quality." },
-													 { "environment", "Authoring", "Create and export a reflection texture." },
-													 { "vr", "VR", "Refine reflection updates in the headset.", {}, globals::game::isVR },
+													 { "quality", "Quality", "Choose reflection resolution first.", "Reflection resolution and cost", true, true, "Choose reflection quality" },
+													 { "reflections", "Reflections", "Choose nearby reflection detail and quality.", "Nearby water reflections", true, true, nullptr },
+													 { "environment", "Authoring", "Create and export a reflection texture.", "Cubemap creation and export", true, true, "Refine updates and authoring" },
+													 { "vr", "VR", "Refine reflection updates in the headset.", "Headset reflection updates", globals::game::isVR, true, nullptr },
 												 });
 
 	if (page.Is("quality")) {
-		const char* resolutionPreview = settings.CubemapResolution == kPerformanceCubemapResolution ?
-		                                    "128 x 128 (Performance)" :
-		                                    "256 x 256 (Quality)";
-		if (ImGui::BeginCombo("Reflection Resolution", resolutionPreview)) {
-			const bool performanceSelected = settings.CubemapResolution == kPerformanceCubemapResolution;
-			if (ImGui::Selectable("128 x 128 (Performance)", performanceSelected)) {
-				SetCubemapResolution(kPerformanceCubemapResolution);
-			}
-			if (performanceSelected)
-				ImGui::SetItemDefaultFocus();
-
-			const bool qualitySelected = settings.CubemapResolution == kQualityCubemapResolution;
-			if (ImGui::Selectable("256 x 256 (Quality)", qualitySelected)) {
-				SetCubemapResolution(kQualityCubemapResolution);
-			}
-			if (qualitySelected)
-				ImGui::SetItemDefaultFocus();
-			ImGui::EndCombo();
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped(
-				"Controls dynamic reflection quality and cost. Use 128 x 128 for performance or 256 x 256 for quality.");
-		}
+		const std::array<MenuUI::Choice, 2> choices{ { { "performance", "Performance", "128 x 128 reflections", "Lower reflection cost and detail." },
+			{ "quality", "Quality", "256 x 256 reflections", "More reflection detail at higher cost." } } };
+		const int choice = MenuUI::ChoiceCards("Reflection resolution", settings.CubemapResolution == kPerformanceCubemapResolution ? 0 : 1, choices);
+		if (choice >= 0)
+			SetCubemapResolution(choice == 0 ? kPerformanceCubemapResolution : kQualityCubemapResolution);
 		if (IsCubemapResolutionRestartRequired()) {
 			Util::Text::WrappedWarning(
 				"Restart the game to apply the new reflection resolution. The current session remains at %u x %u.",
@@ -293,24 +276,6 @@ void DynamicCubemaps::DrawSettings()
 			Util::RenderImGuiSettingsTree(iniVRCubeMapSettings, "VR");
 			Util::RenderImGuiSettingsTree(hiddenVRCubeMapSettings, "hiddenVR");
 		}
-	}
-}
-
-void DynamicCubemaps::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("DynamicCubemaps", {
-													 { "essentials", "Essentials", "Start with the main choices for this feature." },
-												 });
-	if (!page.Is("essentials"))
-		return;
-
-	bool enabledSSR = settings.EnabledSSR != 0;
-	if (Util::Widgets::Checkbox("Enable Screen Space Reflections", &enabledSSR)) {
-		settings.EnabledSSR = enabledSSR ? 1u : 0u;
-		recompileFlag = true;
-	}
-	if (REL::Module::IsVR() && settings.EnabledSSR && !enabledAtBoot) {
-		Util::Text::Warning("SSR was not enabled at boot. Save settings and restart to enable it in VR.");
 	}
 }
 

@@ -27,7 +27,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Adds realistic wetness effects including rain-based surface wetness, puddle formation, shore wetness, and dynamic raindrop effects for enhanced weather immersion.",
+			"Adds rain-wet surfaces, puddles, shore wetness and raindrop effects.",
 			{ "Dynamic surface wetness based on weather conditions",
 				"Realistic puddle formation and shore wetness effects",
 				"Animated raindrop effects with splashes and ripples",

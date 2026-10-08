@@ -21,8 +21,6 @@ struct GrassOptimizations : Feature
 	std::string_view GetShaderCacheAbiVersion() override { return "native-cell-buckets-v6"; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override;
 	bool HasPerformanceSettings() const override { return true; }
 	void DrawPerformanceSettings(bool advanced) override;
 	json CapturePerformanceSettingsState() const override;

@@ -47,6 +47,110 @@
 
 namespace Util
 {
+	void DrawActionGlyph(ImDrawList* draw, ActionGlyph glyph, ImVec2 minimum, ImVec2 maximum, ImU32 color, bool selected)
+	{
+		const float extent = std::min(maximum.x - minimum.x, maximum.y - minimum.y);
+		const float inset = extent * .12f;
+		const ImVec2 start{ minimum.x + inset, minimum.y + inset };
+		const float size = extent - inset * 2;
+		const float thickness = std::max(1.0f, extent * .028f);
+		auto point = [&](float x, float y) { return ImVec2{ start.x + size * x, start.y + size * y }; };
+		auto line = [&](float x1, float y1, float x2, float y2) { draw->AddLine(point(x1, y1), point(x2, y2), color, thickness); };
+		auto rectangle = [&](float x1, float y1, float x2, float y2) { draw->AddRect(point(x1, y1), point(x2, y2), color, size * .06f, 0, thickness); };
+		switch (glyph) {
+		case ActionGlyph::Home:
+			draw->PathLineTo(point(.2f, .45f));
+			draw->PathLineTo(point(.5f, .12f));
+			draw->PathLineTo(point(.8f, .45f));
+			draw->PathLineTo(point(.8f, .92f));
+			draw->PathLineTo(point(.2f, .92f));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			break;
+		case ActionGlyph::General:
+		case ActionGlyph::RestoreDefaults:
+			draw->AddCircle(point(.5f, .5f), size * .3f, color, 24, thickness);
+			draw->AddCircle(point(.5f, .5f), size * .1f, color, 16, thickness);
+			for (int tooth = 0; tooth < 8; ++tooth) {
+				const float angle = tooth * IM_PI * .25f;
+				line(.5f + std::cos(angle) * .31f, .5f + std::sin(angle) * .31f,
+					.5f + std::cos(angle) * .44f, .5f + std::sin(angle) * .44f);
+			}
+			break;
+		case ActionGlyph::Advanced:
+			draw->PathLineTo(point(.5f, .06f));
+			draw->PathLineTo(point(.94f, .5f));
+			draw->PathLineTo(point(.5f, .94f));
+			draw->PathLineTo(point(.06f, .5f));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			break;
+		case ActionGlyph::Profiling:
+			rectangle(.05f, .12f, .95f, .88f);
+			for (const float x : { .275f, .5f, .725f })
+				line(x, .12f, x, .88f);
+			break;
+		case ActionGlyph::PerformanceTuning:
+			for (const float y : { .26f, .5f, .74f }) {
+				draw->PathLineTo(point(.16f, y + .08f));
+				draw->PathBezierCubicCurveTo(point(.35f, y - .22f), point(.65f, y + .22f), point(.84f, y - .08f));
+				draw->PathStroke(color, ImDrawFlags_None, thickness);
+			}
+			break;
+		case ActionGlyph::Sidebar:
+			rectangle(0, 0, 1, 1);
+			line(.32f, 0, .32f, 1);
+			if (selected) {
+				for (const float y : { .28f, .5f, .72f })
+					line(.12f, y, .21f, y);
+			}
+			break;
+		case ActionGlyph::SaveSettings:
+			draw->PathLineTo(point(.08f, 0));
+			draw->PathLineTo(point(.74f, 0));
+			draw->PathLineTo(point(1, .26f));
+			draw->PathLineTo(point(1, .92f));
+			draw->PathLineTo(point(.92f, 1));
+			draw->PathLineTo(point(.08f, 1));
+			draw->PathLineTo(point(0, .92f));
+			draw->PathLineTo(point(0, .08f));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			rectangle(.22f, 0, .66f, .34f);
+			rectangle(.2f, .59f, .8f, 1);
+			break;
+		case ActionGlyph::LoadSettings:
+			draw->PathArcTo(point(.5f, .5f), size * .48f, -IM_PI * .75f, IM_PI);
+			draw->PathStroke(color, ImDrawFlags_None, thickness);
+			line(.16f, .16f, .16f, .42f);
+			line(.16f, .16f, .42f, .16f);
+			if (glyph == ActionGlyph::LoadSettings) {
+				line(.5f, .26f, .5f, .52f);
+				line(.5f, .52f, .68f, .64f);
+			}
+			break;
+		case ActionGlyph::ClearCache:
+			draw->PathLineTo(point(.58f, .94f));
+			draw->PathLineTo(point(.06f, .94f));
+			draw->PathLineTo(point(0, .88f));
+			draw->PathLineTo(point(0, .12f));
+			draw->PathLineTo(point(.06f, .06f));
+			draw->PathLineTo(point(.35f, .06f));
+			draw->PathLineTo(point(.48f, .24f));
+			draw->PathLineTo(point(.94f, .24f));
+			draw->PathLineTo(point(1, .3f));
+			draw->PathLineTo(point(1, .57f));
+			draw->PathStroke(color, ImDrawFlags_None, thickness);
+			line(0, .39f, 1, .39f);
+			line(.7f, .7f, 1, 1);
+			line(.7f, 1, 1, .7f);
+			break;
+		case ActionGlyph::Close:
+			line(.05f, .05f, .95f, .95f);
+			line(.05f, .95f, .95f, .05f);
+			break;
+		default:
+			break;
+		}
+	}
+
 	static ImVec2 g_screenScaleRatio = { 1.0f, 1.0f };
 	static ImVec2 g_displaySize = { 0.0f, 0.0f };
 
@@ -1038,98 +1142,36 @@ namespace Util
 			categoryIcon = menu.postProcessing.texture;
 		}
 
-		// Add categoryCount to categoryName
-		std::string displayName = std::format("{} ({})", categoryName, categoryCount);
-
-		// Draw category header with custom styling
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		ImVec2 pos = ImGui::GetCursorScreenPos();
-		float availableWidth = ImGui::GetContentRegionAvail().x;
-
-		// Calculate icon size based on current font size to match text scaling
-		// This ensures icons scale consistently with text when the font scale changes
-		const float currentFontSize = ImGui::GetFontSize();
-		const float iconSize = currentFontSize * 1.2f;     // 20% larger than font height
-		const float iconSpacing = currentFontSize * 0.3f;  // 30% of font height for spacing
-		ImVec2 textSize = ImGui::CalcTextSize(displayName.c_str());
-
-		// Calculate total content width (icon + spacing + text)
-		float contentWidth = textSize.x;
-		if (categoryIcon) {
-			contentWidth += iconSize + iconSpacing;
-		}
-
-		// Calculate line positions
-		float lineY = pos.y + textSize.y * 0.5f;
-		float lineLength = (availableWidth - contentWidth - 20.0f) * 0.5f;  // 20px for padding
-
-		// Create selectable area for the entire header
-		ImGui::PushID(displayName.c_str());
-		bool hovered = false;
-		bool clicked = false;
-
-		// Invisible button for hover detection and clicking
-		ImGui::SetCursorScreenPos(pos);
-		if (ImGui::InvisibleButton("##CategoryHeader", ImVec2(availableWidth, textSize.y + 4.0f))) {
-			clicked = true;
-		}
-		hovered = ImGui::IsItemHovered();
-
-		// Draw the lines and text using Menu theme colors
-		auto& themeSettings = globals::menu->GetSettings().Theme;
-		auto& palette = themeSettings.Palette;
-
-		// Use theme text color
-		ImVec4 color = palette.Text;
-
-		// If minimized, apply reduced alpha
-		if (!isExpanded) {
-			color.w *= 0.7f;  // 70% alpha when minimized
-		}
-		// If hovered, slightly dim the color
-		if (hovered) {
-			color.w *= 0.8f;  // 80% alpha when hovered
-		}
-		ImU32 headerColor = ImGui::GetColorU32(color);  // Left line
-		if (lineLength > 0) {
-			drawList->AddLine(ImVec2(pos.x, lineY), ImVec2(pos.x + lineLength, lineY), headerColor, 1.0f);
-		}
-
-		// Right line
-		float rightLineStart = pos.x + lineLength + 10.0f + contentWidth + 10.0f;
-		if (rightLineStart < pos.x + availableWidth) {
-			drawList->AddLine(ImVec2(rightLineStart, lineY), ImVec2(pos.x + availableWidth, lineY), headerColor, 1.0f);
-		}
-
-		// Draw icon and text
-		float currentX = pos.x + lineLength + 10.0f;
-
-		// Draw icon if available
-		if (categoryIcon) {
-			ImVec2 iconPos = ImVec2(currentX, pos.y + (textSize.y - iconSize) * 0.5f + 2.0f);
-			ImVec2 iconMax = ImVec2(iconPos.x + iconSize, iconPos.y + iconSize);
-
-			// Apply the same color tint as the text
-			ImU32 iconTint = headerColor;
-			drawList->AddImage(categoryIcon, iconPos, iconMax, ImVec2(0, 0), ImVec2(1, 1), iconTint);
-
-			currentX += iconSize + iconSpacing;
-		}
-
-		// Center text
-		ImVec2 textPos = ImVec2(currentX, pos.y + 2.0f);
-		drawList->AddText(textPos, headerColor, displayName.c_str());
-
-		// Handle click to toggle expansion
-		if (clicked) {
+		const float font = ImGui::GetFontSize();
+		const float height = font * 2.6f;
+		const auto origin = ImGui::GetCursorScreenPos();
+		const float width = ImGui::GetContentRegionAvail().x;
+		ImGui::PushID(categoryName);
+		const SKSE::stl::scope_exit popId([] { ImGui::PopID(); });
+		const bool clicked = ImGui::Selectable("##CategoryHeader", false, ImGuiSelectableFlags_None, { width, height });
+		if (clicked)
 			isExpanded = !isExpanded;
+		Util::AddTooltip(isExpanded ? "Hide the features in this category." : "Show the features in this category.");
+		auto* draw = ImGui::GetWindowDrawList();
+		const auto color = ImGui::GetColorU32(ImGuiCol_Text);
+		const float y = origin.y + (height - font) * .5f;
+		if (categoryIcon)
+			draw->AddImage(categoryIcon, { origin.x + font * .3f, y - font * .1f }, { origin.x + font * 1.5f, y + font * 1.1f }, { 0, 0 }, { 1, 1 }, color);
+		const float right = origin.x + width - font * .7f;
+		draw->PushClipRect({ origin.x, origin.y }, { right - font * 2.3f, origin.y + height }, true);
+		draw->AddText({ origin.x + font * 1.9f, y }, color, categoryName);
+		draw->PopClipRect();
+		const auto count = std::to_string(categoryCount);
+		draw->AddText({ right - font * 1.6f, y }, ImGui::GetColorU32(Util::Color::SecondaryText()), count.c_str());
+		const ImVec2 centre{ right, y + font * .5f };
+		const float r = font * .2f;
+		if (isExpanded) {
+			draw->AddLine({ centre.x - r, centre.y - r * .5f }, { centre.x, centre.y + r * .5f }, color);
+			draw->AddLine({ centre.x, centre.y + r * .5f }, { centre.x + r, centre.y - r * .5f }, color);
+		} else {
+			draw->AddLine({ centre.x - r * .5f, centre.y - r }, { centre.x + r * .5f, centre.y }, color);
+			draw->AddLine({ centre.x + r * .5f, centre.y }, { centre.x - r * .5f, centre.y + r }, color);
 		}
-
-		ImGui::PopID();
-
-		// Move cursor to next line
-		ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + textSize.y + 8.0f));
-		ImGui::Dummy(ImVec2(availableWidth, 0.0f));
 		return clicked;
 	}
 
@@ -2247,11 +2289,8 @@ namespace Util
 		return true;
 	}
 
-	bool FeatureToggle(const char* label, bool* enabled, const ImVec2& size)
+	ImVec2 FeatureToggleSize(const ImVec2& size)
 	{
-		if (!enabled)
-			return false;
-
 		const bool isVR = globals::game::isVR;
 		const float textLineHeight = ImGui::GetTextLineHeight();
 		const float frameHeight = ImGui::GetFrameHeight();
@@ -2264,6 +2303,17 @@ namespace Util
 			toggleSize.x = isVR ? std::round(toggleSize.y * 1.86f) :
 			                      frameHeight * ThemeManager::Constants::FLAT_TOGGLE_WIDTH_RATIO;
 		}
+
+		return toggleSize;
+	}
+
+	bool FeatureToggle(const char* label, bool* enabled, const ImVec2& size)
+	{
+		if (!enabled)
+			return false;
+		const bool isVR = globals::game::isVR;
+		const float textLineHeight = ImGui::GetTextLineHeight();
+		const ImVec2 toggleSize = FeatureToggleSize(size);
 
 		const ImVec2 hitSize(toggleSize.x, std::max(toggleSize.y, textLineHeight));
 

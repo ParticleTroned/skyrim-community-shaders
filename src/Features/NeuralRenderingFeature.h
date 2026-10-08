@@ -21,9 +21,11 @@ struct NeuralRenderingFeature : Feature
 	bool IsPerformanceCostMeasurementEnabled() const override;
 	bool IsPerformanceCostMeasurementReady() const override;
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
+	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override { return { "Uses AI to enhance scene detail and actor appearance.", {} }; }
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
+	void DrawSettingsEnabledControl() override;
+	std::string_view GetSettingsFooterText() const override;
 	void DrawSettings() override;
-	bool HasEssentialSettings() const override { return true; }
-	void DrawEssentialSettings() override;
 	void DataLoaded() override;
 	void EarlyPrepass() override;
 

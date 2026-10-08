@@ -1,6 +1,7 @@
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -29,6 +30,16 @@ namespace logger
 }
 namespace NeuralRendering
 {
+	struct CharacterRendering
+	{
+		unsigned invalidations = 0;
+		static CharacterRendering& Instance()
+		{
+			static CharacterRendering instance;
+			return instance;
+		}
+		void Invalidate() { ++invalidations; }
+	};
 	struct Renderer
 	{
 		bool resetSucceeds = true, failed = false, quarantined = false;
@@ -114,6 +125,7 @@ struct Upscaling
 		int value = 0;
 	} mainFinalLdrNeuralState{ 17 }, mainFinalLdrPresentationState{ 18 };
 	uint32_t neuralInsertionPointTransitionFrame = 0;
+	std::atomic_uint32_t neuralTemporalAdmissionLatch{ 7 };
 	unsigned historyResets = 0, invalidations = 0;
 	void RequestHistoryReset() { ++historyResets; }
 	void InvalidateFrameScopedUpscalingState() { ++invalidations; }
@@ -209,7 +221,11 @@ int main()
 			auto previous = upscaling.settings;
 			previous.neuralRenderingEnabled = true;
 			bool resetSucceeded = true;
+			const auto characterInvalidations = NeuralRendering::CharacterRendering::Instance().invalidations;
 			const bool accepted = upscaling.HandleNeuralRenderingSettingsTransition(previous, "NR off", &resetSucceeded);
+			Require(NeuralRendering::CharacterRendering::Instance().invalidations == characterInvalidations + 1 &&
+						upscaling.neuralTemporalAdmissionLatch.load() == 0,
+				"Off must invalidate character state and reset temporal admission once");
 			if (!accepted)
 				upscaling.settings = previous;
 			Require(accepted && !upscaling.settings.neuralRenderingEnabled, "Off must remain accepted even when retirement fails or no world frame exists");

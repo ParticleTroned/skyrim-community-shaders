@@ -382,7 +382,7 @@ void LightEditor::DrawExternalEmittanceCombo()
 	const char* kNoneLabel = "(None)";
 	const char* preview = externalEmittanceEdid.empty() ? kNoneLabel : externalEmittanceEdid.c_str();
 	const auto externalEmittanceLabel = fmt::format("{}##combo", "External Emittance");
-	if (ImGui::BeginCombo(externalEmittanceLabel.c_str(), preview)) {
+	if (auto combo = Util::Widgets::ComboBox(externalEmittanceLabel.c_str(), preview)) {
 		auto searchText = Util::DrawComboSearchInput(kEmittanceComboId);
 		if (searchText.empty() || Util::StringMatchesSearch(kNoneLabel, searchText)) {
 			if (ImGui::Selectable(kNoneLabel, externalEmittanceEdid.empty())) {
@@ -405,7 +405,7 @@ void LightEditor::DrawExternalEmittanceCombo()
 			if (isCurrent)
 				ImGui::SetItemDefaultFocus();
 		}
-		ImGui::EndCombo();
+
 	} else {
 		Util::ClearComboSearch(kEmittanceComboId);
 	}
@@ -586,14 +586,14 @@ void LightEditor::DrawSettings()
 
 		ImGui::SetNextItemWidth(filterComboWidth);
 		int selectedFilter = static_cast<int>(filterOption);
-		if (ImGui::Combo("##Type", &selectedFilter, filterLabels, static_cast<int>(FilterOption::Count))) {
+		if (Util::Widgets::Combo("##Type", &selectedFilter, filterLabels, static_cast<int>(FilterOption::Count))) {
 			filterOption = static_cast<FilterOption>(selectedFilter);
 		}
 
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(sortComboWidth);
 		int selectedSort = static_cast<int>(sortOption);
-		if (ImGui::Combo("##Sorting", &selectedSort, sortLabels, static_cast<int>(SortOption::Count))) {
+		if (Util::Widgets::Combo("##Sorting", &selectedSort, sortLabels, static_cast<int>(SortOption::Count))) {
 			sortOption = static_cast<SortOption>(selectedSort);
 		}
 
@@ -607,31 +607,34 @@ void LightEditor::DrawSettings()
 	static constexpr const char* kLightsComboId = "LightsCombo";
 	LightInfo thisFrameHovered = {};
 	bool anyItemHovered = false;  // mouse over any combo entry this frame (flashable or not)
-	const bool lightsComboOpen = ImGui::BeginCombo("Lights", selected.isSelected ? GetLightName(selected).c_str() : "Select a light");
-	if (lightsComboOpen) {
-		auto searchText = Util::DrawComboSearchInput(kLightsComboId);
-		for (auto& light : lights) {
-			const auto displayName = GetLightName(light);
-			if (!searchText.empty() && !Util::StringMatchesSearch(displayName, searchText))
-				continue;
-			const bool isSelected = light == selected;
-			if (ImGui::Selectable(displayName.c_str(), isSelected)) {
-				selected = light;
-				Util::ClearComboSearch(kLightsComboId);
+	bool lightsComboOpen;
+	{
+		auto combo = Util::Widgets::ComboBox("Lights", selected.isSelected ? GetLightName(selected).c_str() : "Select a light");
+		lightsComboOpen = static_cast<bool>(combo);
+		if (lightsComboOpen) {
+			auto searchText = Util::DrawComboSearchInput(kLightsComboId);
+			for (auto& light : lights) {
+				const auto displayName = GetLightName(light);
+				if (!searchText.empty() && !Util::StringMatchesSearch(displayName, searchText))
+					continue;
+				const bool isSelected = light == selected;
+				if (ImGui::Selectable(displayName.c_str(), isSelected)) {
+					selected = light;
+					Util::ClearComboSearch(kLightsComboId);
+				}
+				// Flash only a flashable target: a ref/attached light (id != 0) other than the selected one
+				// (whose fade ApplyOverrides drives). Selected/Other hover leaves thisFrameHovered empty, clearing it.
+				if (ImGui::IsItemHovered()) {
+					anyItemHovered = true;
+					if (!isSelected && light.id != 0)
+						thisFrameHovered = light;
+				}
+				if (isSelected)
+					ImGui::SetItemDefaultFocus();
 			}
-			// Flash only a flashable target: a ref/attached light (id != 0) other than the selected one
-			// (whose fade ApplyOverrides drives). Selected/Other hover leaves thisFrameHovered empty, clearing it.
-			if (ImGui::IsItemHovered()) {
-				anyItemHovered = true;
-				if (!isSelected && light.id != 0)
-					thisFrameHovered = light;
-			}
-			if (isSelected)
-				ImGui::SetItemDefaultFocus();
+		} else {
+			Util::ClearComboSearch(kLightsComboId);
 		}
-		ImGui::EndCombo();
-	} else {
-		Util::ClearComboSearch(kLightsComboId);
 	}
 
 	// Re-evaluate the hover flash whenever the mouse is over an entry or the combo closed. Moving onto
@@ -830,7 +833,7 @@ void LightEditor::DrawSettings()
 
 		static constexpr const char* kLighOverrideId = "LighFormOverride";
 		const auto bulbTypeLabel = fmt::format("{}##combo", "Bulb type");
-		if (ImGui::BeginCombo(bulbTypeLabel.c_str(), previewEdid)) {
+		if (auto combo = Util::Widgets::ComboBox(bulbTypeLabel.c_str(), previewEdid)) {
 			auto searchText = Util::DrawComboSearchInput(kLighOverrideId);
 			if (searchText.empty() || Util::StringMatchesSearch(kOriginalLabel, searchText)) {
 				if (ImGui::Selectable(kOriginalLabel, current.data.lighFormId == original.data.lighFormId)) {
@@ -864,7 +867,7 @@ void LightEditor::DrawSettings()
 				if (isCurrent)
 					ImGui::SetItemDefaultFocus();
 			}
-			ImGui::EndCombo();
+
 		} else {
 			Util::ClearComboSearch(kLighOverrideId);
 		}
@@ -969,24 +972,24 @@ void LightEditor::DrawSettings()
 		if (!lpInfo.isLPLight) {
 			// Inverse Square is disabled for spotlights since they have their own falloff model.
 			ImGui::BeginDisabled(selected.isSpotlight);
-			ImGui::CheckboxFlags("Inverse Square", runtimeFlags, static_cast<uint32_t>(LightLimitFix::LightFlags::InverseSquare));
+			Util::Widgets::CheckboxFlags("Inverse Square", runtimeFlags, static_cast<uint32_t>(LightLimitFix::LightFlags::InverseSquare));
 			ImGui::EndDisabled();
-			ImGui::CheckboxFlags("Linear", runtimeFlags, static_cast<uint32_t>(LightLimitFix::LightFlags::Linear));
+			Util::Widgets::CheckboxFlags("Linear", runtimeFlags, static_cast<uint32_t>(LightLimitFix::LightFlags::Linear));
 		}
 
 		// Dynamic and Negative are always shown; Flicker/OmniShadow/PortalStrict are hidden for LP lights.
-		ImGui::CheckboxFlags("Dynamic", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kDynamic));
-		ImGui::CheckboxFlags("Negative", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kNegative));
+		Util::Widgets::CheckboxFlags("Dynamic", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kDynamic));
+		Util::Widgets::CheckboxFlags("Negative", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kNegative));
 		if (!lpInfo.isLPLight)
-			ImGui::CheckboxFlags("Flicker", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kFlicker));
-		ImGui::CheckboxFlags("Flicker Slow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kFlickerSlow));
-		ImGui::CheckboxFlags("Pulse", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPulse));
-		ImGui::CheckboxFlags("Pulse Slow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPulseSlow));
-		ImGui::CheckboxFlags("Hemi Shadow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kHemiShadow));
+			Util::Widgets::CheckboxFlags("Flicker", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kFlicker));
+		Util::Widgets::CheckboxFlags("Flicker Slow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kFlickerSlow));
+		Util::Widgets::CheckboxFlags("Pulse", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPulse));
+		Util::Widgets::CheckboxFlags("Pulse Slow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPulseSlow));
+		Util::Widgets::CheckboxFlags("Hemi Shadow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kHemiShadow));
 		if (!lpInfo.isLPLight)
-			ImGui::CheckboxFlags("Omni Shadow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kOmniShadow));
+			Util::Widgets::CheckboxFlags("Omni Shadow", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kOmniShadow));
 		if (!lpInfo.isLPLight)
-			ImGui::CheckboxFlags("Portal Strict", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPortalStrict));
+			Util::Widgets::CheckboxFlags("Portal Strict", flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPortalStrict));
 
 		ImGui::EndDisabled();
 	}
@@ -1100,9 +1103,9 @@ void LightEditor::DrawAddLightButton()
 
 	if (picker.IsPicking()) {
 		int pm = static_cast<int>(picker.pickMode);
-		ImGui::RadioButton("Collision", &pm, 0);
+		Util::Widgets::RadioButton("Collision", &pm, 0);
 		ImGui::SameLine();
-		ImGui::RadioButton("Effect mesh", &pm, 1);
+		Util::Widgets::RadioButton("Effect mesh", &pm, 1);
 		const auto newPickMode = static_cast<LightPicker::PickMode>(pm);
 		if (newPickMode != picker.pickMode) {
 			picker.pickMode = newPickMode;
@@ -1146,23 +1149,20 @@ bool LightEditor::MatchesComboFilter(std::string_view filter, const std::string&
 	return filter.empty() || Util::StringMatchesSearch(text, std::string(filter));
 }
 
-bool LightEditor::BeginSearchableCombo(const char* label, const char* preview, const char* searchId,
+std::unique_ptr<Util::Widgets::ComboBox> LightEditor::BeginSearchableCombo(const char* label, const char* preview, const char* searchId,
 	char* searchBuf, size_t searchBufSize, std::string_view& filterOut, bool openNow)
 {
 	filterOut = {};
-	// SetNextItemOpen is ignored for combos (they open via the derived popup id), so open it directly to
-	// show the list without an extra click. One-shot: openNow is true only the frame the mode is entered.
-	if (openNow)
-		ImGui::OpenPopup(ImHashStr("##ComboPopup", 0, ImGui::GetID(label)));
-	if (!ImGui::BeginCombo(label, preview, ImGuiComboFlags_HeightLarge))
-		return false;
+	auto combo = std::make_unique<Util::Widgets::ComboBox>(label, preview, ImGuiComboFlags_HeightLarge, openNow);
+	if (!*combo)
+		return {};
 	if (ImGui::IsWindowAppearing())
 		ImGui::SetKeyboardFocusHere();
 	ImGui::SetNextItemWidth(-1.0f);
 	ImGui::InputText(searchId, searchBuf, searchBufSize);
 	ImGui::Separator();
 	filterOut = searchBuf;
-	return true;
+	return combo;
 }
 
 void LightEditor::NotifyResult(bool ok, const char* okMsg, const char* failMsg)
@@ -1184,7 +1184,7 @@ int LightEditor::DrawAttachedBulbCombo(const char* searchId, bool openNow)
 	int clicked = -1;
 	const char* preview = (addSelectedBulb >= 0 && addSelectedBulb < (int)attachedBulbs.size()) ? attachedBulbs[addSelectedBulb].lightEDID.c_str() : "Select a bulb";
 	std::string_view filter;
-	if (BeginSearchableCombo("Attached bulb", preview, searchId, addBulbSearch, sizeof(addBulbSearch), filter, openNow)) {
+	if (auto combo = BeginSearchableCombo("Attached bulb", preview, searchId, addBulbSearch, sizeof(addBulbSearch), filter, openNow)) {
 		for (int i = 0; i < (int)attachedBulbs.size(); ++i) {
 			const auto& bulb = attachedBulbs[i];
 			const std::string label = fmt::format("{}[{}]  ({})", bulb.lightEDID, bulb.index, bulb.configPath);
@@ -1198,7 +1198,6 @@ int LightEditor::DrawAttachedBulbCombo(const char* searchId, bool openNow)
 			if (isSel)
 				ImGui::SetItemDefaultFocus();
 		}
-		ImGui::EndCombo();
 	}
 	return clicked;
 }
@@ -1210,7 +1209,7 @@ void LightEditor::DrawLightRecordCombo(const char* searchId)
 	if (const auto* edid = LighEdidPtrForFormId(addSelectedLighFormId))
 		preview = edid->c_str();
 	std::string_view filter;
-	if (BeginSearchableCombo("Light record", preview, searchId, addLighSearch, sizeof(addLighSearch), filter, false)) {
+	if (auto combo = BeginSearchableCombo("Light record", preview, searchId, addLighSearch, sizeof(addLighSearch), filter, false)) {
 		for (auto& [edid, ligh] : s_lighFormList) {
 			if (!MatchesComboFilter(filter, edid))
 				continue;
@@ -1220,7 +1219,6 @@ void LightEditor::DrawLightRecordCombo(const char* searchId)
 			if (isSel)
 				ImGui::SetItemDefaultFocus();
 		}
-		ImGui::EndCombo();
 	}
 }
 
@@ -1378,7 +1376,7 @@ void LightEditor::DrawAddLightPopup()
 			if (!hasBulbs || addLightSubMode == SubModeNewEntry) {
 				const char* configPreview = (addSelectedConfig >= 0 && addSelectedConfig < (int)lpConfigPaths.size()) ? lpConfigPaths[addSelectedConfig].c_str() : "Select a config";
 				std::string_view cfgFilter;
-				if (BeginSearchableCombo("Target JSON", configPreview, "##cfg_search", addConfigSearch, sizeof(addConfigSearch), cfgFilter, false)) {
+				if (auto combo = BeginSearchableCombo("Target JSON", configPreview, "##cfg_search", addConfigSearch, sizeof(addConfigSearch), cfgFilter, false)) {
 					if (lpConfigPaths.empty())
 						ImGui::TextDisabled("%s", "No configs found in Data\\LightPlacer\\");
 					for (int i = 0; i < (int)lpConfigPaths.size(); ++i) {
@@ -1390,7 +1388,6 @@ void LightEditor::DrawAddLightPopup()
 						if (isSel)
 							ImGui::SetItemDefaultFocus();
 					}
-					ImGui::EndCombo();
 				}
 
 				if (addSelectedConfig >= 0) {
@@ -1574,7 +1571,7 @@ void LightEditor::DrawAddLightPopup()
 		if (addPopupMode == ModeRemoveFromList) {
 			const char* filterPreview = (addSelectedFilterEntry >= 0 && addSelectedFilterEntry < (int)filterListEntries.size()) ? filterListEntries[addSelectedFilterEntry].lightEDID.c_str() : "Select a bulb";
 			std::string_view filterSv;
-			if (BeginSearchableCombo("Attached bulb", filterPreview, "##filter_search", addFilterSearch, sizeof(addFilterSearch), filterSv, false)) {
+			if (auto combo = BeginSearchableCombo("Attached bulb", filterPreview, "##filter_search", addFilterSearch, sizeof(addFilterSearch), filterSv, false)) {
 				for (int i = 0; i < (int)filterListEntries.size(); ++i) {
 					const auto& fe = filterListEntries[i];
 					const std::string lbl = fmt::format("[{}]  {}  ({})  \"{}\"",
@@ -1589,7 +1586,6 @@ void LightEditor::DrawAddLightPopup()
 					if (isSel)
 						ImGui::SetItemDefaultFocus();
 				}
-				ImGui::EndCombo();
 			}
 
 			ImGui::Separator();

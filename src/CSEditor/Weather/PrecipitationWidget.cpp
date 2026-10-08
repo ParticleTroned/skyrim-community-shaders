@@ -5,6 +5,7 @@
 #include "RE/B/BSShaderManager.h"
 #include "RE/N/NiSourceTexture.h"
 #include "Utils/Game.h"
+#include "Utils/UI.h"
 
 #include <cmath>
 #include <cstdint>
@@ -177,7 +178,7 @@ void PrecipitationWidget::DrawWidget()
 					const char* types[] = { "Rain", "Snow" };
 					int currentType = static_cast<int>(settings.particleType);
 					bool comboChanged = DrawWithHighlight(label, [&]() {
-						return ImGui::Combo(label, &currentType, types, IM_ARRAYSIZE(types));
+						return Util::Widgets::Combo(label, &currentType, types, IM_ARRAYSIZE(types));
 					});
 					if (comboChanged) {
 						EditorWindow::GetSingleton()->PushUndoState(this);

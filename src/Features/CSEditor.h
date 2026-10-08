@@ -32,7 +32,7 @@ public:
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;
 
-	void DrawLauncherButton();
+	void DrawLauncherButton(float width = -1.0f);
 
 	static void OpenEditorWindow();
 	static void ToggleEditorWindow();

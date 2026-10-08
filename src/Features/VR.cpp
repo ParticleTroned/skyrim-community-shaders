@@ -1124,7 +1124,6 @@ bool VR::OpenFovSettings()
 		globals::state->IsFeatureDisabled(GetShortName()))
 		return false;
 
-	FeatureListRenderer::ShowAdvancedSettings(this);
 	globals::menu->SelectFeatureMenu(GetShortName());
 	pendingFovTabSelection = true;
 	return true;
@@ -1135,12 +1134,12 @@ void VR::DrawSettings()
 	if (pendingFovTabSelection)
 		MenuUI::SettingsPage::Select("VR", "fov");
 	MenuUI::SettingsPage page("VR", {
-										{ "general", "Menu", "Choose headset menu placement and interaction." },
-										{ "fov", "FOV", "Choose the area to render, then refine its edges." },
-										{ "stabilizer", "Stabilizer", "Choose compatible interior and exterior quality profiles." },
-										{ "stereo", "Stereo", "Refine the appearance shared between your eyes." },
-										{ "bindings", "Bindings", "Choose controller shortcuts.", {}, openVRInfo.isCompatible },
-										{ "diagnostics", "Diagnostics", "Inspect headset and controller diagnostics." },
+										{ "general", "Menu", "Choose headset menu placement and interaction.", "Headset placement and interaction", true, true, "Set up view and interaction" },
+										{ "fov", "FOV", "Choose the area to render, then refine its edges.", "Foveated area and edges", true, true, nullptr },
+										{ "stabilizer", "Stabilizer", "Choose compatible interior and exterior quality profiles.", "Automatic quality profiles", true, true, "Balance stability and stereo" },
+										{ "stereo", "Stereo", "Refine the appearance shared between your eyes.", "Shared stereo appearance", true, true, nullptr },
+										{ "bindings", "Bindings", "Choose controller shortcuts.", "Controller shortcuts", openVRInfo.isCompatible, true, "Refine input" },
+										{ "diagnostics", "Diagnostics", "Inspect headset and controller diagnostics.", "Headset and controller state", true, false, nullptr },
 									});
 
 	auto menu = globals::menu;
@@ -1149,28 +1148,26 @@ void VR::DrawSettings()
 
 	// General Settings Tab
 	if (page.Is("general")) {
-		if (ImGui::BeginChild("##VRGeneralFrame", ImVec2(0, 0), true)) {
+		{
 			DrawGeneralVRSettings();
 			DrawControllerInputInstructions();
 			DrawMenuSettings();
 			DrawMouseSettings();
 		}
-		ImGui::EndChild();
 	}
 
 	if (page.Is("fov")) {
-		if (ImGui::BeginChild("##VRFoveatedFrame", ImVec2(0, 0), true)) {
+		{
 			if (pendingFovTabSelection) {
 				ImGui::SetScrollY(0.0f);
 				pendingFovTabSelection = false;
 			}
 			DrawFoveationSettings();
 		}
-		ImGui::EndChild();
 	}
 
 	if (page.Is("stabilizer")) {
-		if (ImGui::BeginChild("##VRFpsStabilizerFrame", ImVec2(0, 0), true)) {
+		{
 			VRFpsStabilizer::DrawStatus();
 			const auto disableStabilizer = Util::DisableGuard(!VRFpsStabilizer::IsLoaded());
 			static int stabilizerPage = 0;
@@ -1181,7 +1178,7 @@ void VR::DrawSettings()
 			                                                VRFpsStabilizer::HasUnsavedSettings(stabilizerPage == 4 ? VRFpsStabilizer::ConfigFile::Locations : VRFpsStabilizer::ConfigFile::Main);
 			if (!pageHasDraft)
 				blockedDraftNavigation = false;
-			if (ImGui::Combo("Settings page", &requestedPage, pages.data(), static_cast<int>(pages.size()))) {
+			if (MenuUI::ChoiceSetting("Settings page", &requestedPage, pages.data(), static_cast<int>(pages.size()))) {
 				const bool sameMainDraft = stabilizerPage != 0 && stabilizerPage != 4 && requestedPage != 0 && requestedPage != 4;
 				blockedDraftNavigation = pageHasDraft && !sameMainDraft;
 				if (!blockedDraftNavigation)
@@ -1197,32 +1194,28 @@ void VR::DrawSettings()
 			else
 				VRFpsStabilizer::DrawSettings(pages[stabilizerPage]);
 		}
-		ImGui::EndChild();
 	}
 
 	if (page.Is("stereo")) {
-		if (ImGui::BeginChild("##VRStereoFrame", ImVec2(0, 0), true)) {
+		{
 			DrawStereoSettings();
 		}
-		ImGui::EndChild();
 	}
 
 	// Key Bindings Tab
 	if (openVRInfo.isCompatible) {
 		if (page.Is("bindings")) {
-			if (ImGui::BeginChild("##VRBindingsFrame", ImVec2(0, 0), true)) {
+			{
 				DrawKeyBindings();
 			}
-			ImGui::EndChild();
 		}
 	}
 
 	// Debug Tab (existing debug functionality)
 	if (page.Is("diagnostics")) {
-		if (ImGui::BeginChild("##VRDebugFrame", ImVec2(0, 0), true)) {
+		{
 			DrawDebugSection();
 		}
-		ImGui::EndChild();
 	}
 
 	// Combo recording popup
@@ -1507,7 +1500,7 @@ namespace
 		const bool methodConfigured = profile.hasUpscaleMethod || profile.hasLegacyMethodSelection;
 		const char* preview = methodConfigured ? kVRFpsStabilizerMethodNames[method] : "Not configured";
 		ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
-		if (ImGui::BeginCombo("##UpscaleMethod", preview)) {
+		if (auto combo = Util::Widgets::ComboBox("##UpscaleMethod", preview)) {
 			for (int option = 0; option < static_cast<int>(kVRFpsStabilizerMethodNames.size()); ++option) {
 				const bool selected = methodConfigured && option == method;
 				auto disabledGuard = Util::DisableGuard(!globals::features::upscaling.IsNeuralRenderingUpscalingProfileAllowed(static_cast<Upscaling::UpscaleMethod>(option), Upscaling::kQualityModeMaxIndex, true));
@@ -1522,7 +1515,6 @@ namespace
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
-			ImGui::EndCombo();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Selects the profile's upscaling method. Renderscale NR requires DLSS; turn NR off or change its rendering mode to use another method.");
@@ -1549,7 +1541,8 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(!vendorUpscaling);
 			ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
-			const bool open = ImGui::BeginCombo("##UpscalePreset", presetNames[qualityMode]);
+			auto combo = Util::Widgets::ComboBox("##UpscalePreset", presetNames[qualityMode]);
+			const bool open = static_cast<bool>(combo);
 			if (!open) {
 				if (auto tooltip = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Chooses image quality and performance. Renderscale NR requires a below-native DLSS preset.");
@@ -1567,7 +1560,6 @@ namespace
 					if (option == qualityMode)
 						ImGui::SetItemDefaultFocus();
 				}
-				ImGui::EndCombo();
 			}
 		}
 		return changed;
@@ -1585,7 +1577,7 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(profile.upscaleMethod != Upscaling::UpscaleMethod::kDLSS);
 			ImGui::SetNextItemWidth(-std::numeric_limits<float>::min());
-			if (ImGui::Combo("##DLSSProfile", &dlssPreset, kVRFpsStabilizerDLSSProfileNames.data(), static_cast<int>(kVRFpsStabilizerDLSSProfileNames.size()))) {
+			if (Util::Widgets::Combo("##DLSSProfile", &dlssPreset, kVRFpsStabilizerDLSSProfileNames.data(), static_cast<int>(kVRFpsStabilizerDLSSProfileNames.size()))) {
 				profile.dlssPreset = static_cast<uint32_t>(dlssPreset);
 				profile.hasDLSSPreset = true;
 				changed = true;
@@ -1611,7 +1603,7 @@ namespace
 		{
 			auto disabledGuard = Util::DisableGuard(!renderScaleEligible ||
 													(profile.renderScaleMode && globals::features::upscaling.IsNeuralRenderingRenderScaleRequired()));
-			if (Util::Widgets::Checkbox("Enable##RenderScale", &profile.renderScaleMode)) {
+			if (Util::Widgets::Checkbox("Enabled##RenderScale", &profile.renderScaleMode)) {
 				profile.hasRenderScaleMode = true;
 				changed = true;
 			}
@@ -1722,7 +1714,7 @@ namespace
 
 			DrawVRFpsStabilizerProfileRowLabel("Render Scale");
 			if (showNotConfigured)
-				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("RenderScale", "Enable"); });
+				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("RenderScale", "Enabled"); });
 			else
 				drawProfileCells([](auto& profile) { return DrawVRFpsStabilizerRenderScale(profile); });
 
@@ -1752,12 +1744,12 @@ namespace
 
 			DrawVRFpsStabilizerProfileRowLabel("Screen Space Shadows");
 			if (showNotConfigured) {
-				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("ScreenSpaceShadows", "Enable"); });
+				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("ScreenSpaceShadows", "Enabled"); });
 			} else {
 				drawProfileCells([](auto& profile) {
 					return DrawVRFpsStabilizerFeatureToggle(
 						"ScreenSpaceShadows",
-						"Enable",
+						"Enabled",
 						profile.screenSpaceShadowsEnabled,
 						profile.hasScreenSpaceShadows);
 				});
@@ -1765,12 +1757,12 @@ namespace
 
 			DrawVRFpsStabilizerProfileRowLabel("Screen Space GI");
 			if (showNotConfigured) {
-				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("ScreenSpaceGI", "Enable"); });
+				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("ScreenSpaceGI", "Enabled"); });
 			} else {
 				drawProfileCells([](auto& profile) {
 					return DrawVRFpsStabilizerFeatureToggle(
 						"ScreenSpaceGI",
-						"Enable",
+						"Enabled",
 						profile.screenSpaceGIEnabled,
 						profile.hasScreenSpaceGI);
 				});
@@ -1778,12 +1770,12 @@ namespace
 
 			DrawVRFpsStabilizerProfileRowLabel("Point Light Contact Shadows");
 			if (showNotConfigured) {
-				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("PointLightContactShadows", "Enable"); });
+				drawProfileCells([](auto&) { return DrawVRFpsStabilizerNotConfiguredToggle("PointLightContactShadows", "Enabled"); });
 			} else {
 				drawProfileCells([](auto& profile) {
 					return DrawVRFpsStabilizerFeatureToggle(
 						"PointLightContactShadows",
-						"Enable",
+						"Enabled",
 						profile.contactShadowsEnabled,
 						profile.hasContactShadows);
 				});
@@ -2041,7 +2033,7 @@ namespace
 			auto mode = a_vr.GetDepthCullingMode();
 			if (ImGui::BeginTable("##TemporalPolicy", 2, ImGuiTableFlags_SizingStretchSame)) {
 				ImGui::TableNextColumn();
-				if (ImGui::RadioButton("Advanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
+				if (Util::Widgets::RadioButton("Advanced (Default)", mode == VRDepthCullingTemporal::Mode::Balanced)) {
 					mode = VRDepthCullingTemporal::Mode::Balanced;
 					a_vr.SetDepthCullingMode(mode);
 				}
@@ -2049,7 +2041,7 @@ namespace
 					ImGui::TextUnformatted("Adds bounded recovery for objects that may become visible during head motion. This selection stays active when you leave Debug mode.");
 				}
 				ImGui::TableNextColumn();
-				if (ImGui::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
+				if (Util::Widgets::RadioButton("Legacy", mode == VRDepthCullingTemporal::Mode::Legacy)) {
 					mode = VRDepthCullingTemporal::Mode::Legacy;
 					a_vr.SetDepthCullingMode(mode);
 				}
@@ -2173,35 +2165,6 @@ namespace
 	void DrawMenuLayoutUnlockSetting();
 	void DrawKeyBindings();
 	void DrawControllerBindingSummary(bool a_includeAutoHideSetting, const char* a_idPrefix);
-}
-
-void VR::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("VR", {
-										{ "general", "Menu", "Choose how to move around the headset menu." },
-										{ "desktop", "Desktop", "Refine the desktop mirror and window behaviour." },
-										{ "bindings", "Bindings", "Set your controller shortcuts." },
-									});
-
-	if (page.Is("general")) {
-		DrawCSMenuNavigationSettings();
-
-		if (CanConfigureMenuLayout()) {
-			ImGui::SeparatorText("Menu Layout");
-			DrawMenuLayoutUnlockSetting();
-		}
-	}
-	if (page.Is("desktop")) {
-		ImGui::SeparatorText("Desktop");
-		DrawKeepDesktopWindowFocusedForVRMenuSetting();
-		DrawStabilizeRenderScaleDesktopMirrorSetting();
-	}
-	if (page.Is("bindings")) {
-		if (openVRInfo.isCompatible) {
-			ImGui::SeparatorText("Bindings");
-			DrawKeyBindings();
-		}
-	}
 }
 
 json VR::CapturePerformanceSettingsState() const
@@ -2497,14 +2460,14 @@ namespace
 				Util::Widgets::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
 
 				const char* positioningMethods[] = { "HMD Relative", "Fixed World Position" };
-				if (ImGui::Combo("Headset Positioning", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods)) &&
+				if (MenuUI::ChoiceSetting("Headset Positioning", &settings.VRMenuPositioningMethod, positioningMethods, IM_ARRAYSIZE(positioningMethods)) &&
 					settings.VRMenuPositioningMethod == 1) {
 					vr.SetFixedOverlayToCurrentHMD();
 				}
 
 				const char* attachModes[] = { "HMD Only", "Controller Only", "Both", "Desktop Only" };
 				int attachMode = static_cast<int>(settings.attachMode);
-				if (ImGui::Combo("Headset Presentation", &attachMode, attachModes, IM_ARRAYSIZE(attachModes))) {
+				if (MenuUI::ChoiceSetting("Headset Presentation", &attachMode, attachModes, IM_ARRAYSIZE(attachModes))) {
 					settings.attachMode = static_cast<VR::Settings::OverlayAttachMode>(attachMode);
 					vr.InvalidatePresentedMenuSurfaces();
 					vr.ResetMenuInputRuntimeState();
@@ -2528,7 +2491,7 @@ namespace
 				if (showOnController) {
 					const char* controllers[] = { "Primary Controller", "Secondary Controller" };
 					int controller = static_cast<int>(settings.VRMenuAttachController);
-					if (ImGui::Combo("Attach to Controller", &controller, controllers, IM_ARRAYSIZE(controllers)))
+					if (MenuUI::ChoiceSetting("Attach to Controller", &controller, controllers, IM_ARRAYSIZE(controllers)))
 						settings.VRMenuAttachController = static_cast<ControllerDevice>(controller);
 					ImGui::SeparatorText("Controller-relative offset");
 					Util::Widgets::SliderFloat("Horizontal##ControllerMenuOffset", &settings.VRMenuControllerOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
@@ -2539,7 +2502,7 @@ namespace
 
 			const char* menuOverlayPaths[] = { "Auto", "IVROverlay", "In-scene" };
 			int menuOverlayPath = static_cast<int>(settings.menuOverlayPath);
-			if (ImGui::Combo("Menu Overlay Path", &menuOverlayPath, menuOverlayPaths, IM_ARRAYSIZE(menuOverlayPaths))) {
+			if (MenuUI::ChoiceSetting("Menu Overlay Path", &menuOverlayPath, menuOverlayPaths, IM_ARRAYSIZE(menuOverlayPaths))) {
 				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -3106,7 +3069,7 @@ namespace
 		static int selectedComboIndex = 0;
 		ImGui::Text("Select Combo to Record:");
 		ImGui::SameLine();
-		if (ImGui::Combo("##ComboSelector", &selectedComboIndex, comboTypes.data(), static_cast<int>(comboTypes.size()))) {
+		if (Util::Widgets::Combo("##ComboSelector", &selectedComboIndex, comboTypes.data(), static_cast<int>(comboTypes.size()))) {
 			vr.ResetComboRecordingState();
 		}
 		auto& selectedConfig = keyBindingConfigs[static_cast<size_t>(selectedComboIndex)];

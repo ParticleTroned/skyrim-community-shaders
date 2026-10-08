@@ -413,13 +413,13 @@ void LerpDirectional(RE::BGSDirectionalAmbientLightingColors::Directional& oldCo
 	LerpColor(oldColor.z.min, newColor.z.min, changePct);
 }
 
-void CSEditor::DrawLauncherButton()
+void CSEditor::DrawLauncherButton(float width)
 {
 	auto* state = globals::state;
 	const bool canOpen = loaded && CanOpenEditor();
 	ImGui::BeginDisabled(!canOpen);
 	ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-	if (ImGui::Button("Open CS Editor", { -1, 0 }))
+	if (ImGui::Button("Open CS Editor", { width, 0 }))
 		OpenEditorWindow();
 	ImGui::PopStyleVar();
 	ImGui::EndDisabled();

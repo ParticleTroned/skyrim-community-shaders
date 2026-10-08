@@ -19,7 +19,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Enables dynamic grass interactions where grass bends and moves in response to actors walking through it, creating more immersive environmental reactions.",
+			"Makes grass bend around nearby actors.",
 			{ "Real-time grass deformation from actor movement",
 				"Collision detection for up to 256 simultaneous interactions",
 				"Dynamic tracking of actor positions for grass response",
@@ -83,8 +83,6 @@ public:
 	virtual void SetupResources() override;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

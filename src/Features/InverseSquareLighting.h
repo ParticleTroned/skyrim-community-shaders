@@ -19,7 +19,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Implements an additional inverse square falloff for lighting which allows for a more physically accurate and realistic looking light attenuation.",
+			"Makes light fade more naturally with distance.",
 			{ "Automatic light radius calculation based on intensity",
 				"Lights smoothly fade out at a configurable cutoff, solving the infinite distance problem",
 				"Does not modify any existing lighting",
@@ -52,8 +52,6 @@ public:
 	}
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;

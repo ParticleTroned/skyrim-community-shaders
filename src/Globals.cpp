@@ -266,8 +266,10 @@ namespace globals
 			frameBufferCached.nonVR = *frameBuffer;
 		}
 		mappedFrameBuffer = nullptr;
-		if (game::isVR && state)
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (game::isVR && state && features::upscaling.IsNeuralRenderingEnabled())
 			features::upscaling.RecordNeuralCaptureCamera(state->frameCount);
+#endif
 	}
 
 	void ObserveVRFrameBufferUpload(ID3D11DeviceContext* context, ID3D11Resource* resource,
@@ -353,7 +355,8 @@ namespace globals
 		{
 			UnderwaterDepthOfField::BeforeDraw();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indexed);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indexed);
 #endif
 			func(This, IndexCount, StartIndexLocation, BaseVertexLocation);
 		}
@@ -366,7 +369,8 @@ namespace globals
 		{
 			UnderwaterDepthOfField::BeforeDraw();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Direct);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Direct);
 #endif
 			func(This, VertexCount, StartVertexLocation);
 		}
@@ -378,7 +382,8 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, UINT indexCount, UINT instanceCount, UINT startIndex, INT baseVertex, UINT startInstance)
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedInstanced);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedInstanced);
 #endif
 			func(This, indexCount, instanceCount, startIndex, baseVertex, startInstance);
 		}
@@ -390,7 +395,8 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, UINT vertexCount, UINT instanceCount, UINT startVertex, UINT startInstance)
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Instanced);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Instanced);
 #endif
 			func(This, vertexCount, instanceCount, startVertex, startInstance);
 		}
@@ -402,7 +408,8 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This)
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Auto);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Auto);
 #endif
 			func(This);
 		}
@@ -414,7 +421,8 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* arguments, UINT offset)
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedIndirect);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::IndexedIndirect);
 #endif
 			func(This, arguments, offset);
 		}
@@ -426,7 +434,8 @@ namespace globals
 		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* arguments, UINT offset)
 		{
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indirect);
+			if (globals::features::upscaling.IsNeuralRenderingEnabled())
+				NeuralRendering::Color::ExposureCapture::Instance().ObserveDraw(This, NeuralRendering::Color::ExposureDrawKind::Indirect);
 #endif
 			func(This, arguments, offset);
 		}

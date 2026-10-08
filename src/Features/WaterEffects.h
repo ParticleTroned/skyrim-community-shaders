@@ -18,8 +18,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Water Effects enhances water rendering with realistic caustics and underwater lighting effects.\n"
-			"This feature adds dynamic light patterns and improved water visual quality.",
+			"Adds moving light patterns and underwater lighting effects.",
 			{ "Realistic water caustics",
 				"Enhanced underwater lighting",
 				"Dynamic light patterns on water surfaces",

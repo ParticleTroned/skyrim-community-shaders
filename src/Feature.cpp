@@ -1,4 +1,5 @@
 #include "Feature.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 
 #include <algorithm>
@@ -524,14 +525,19 @@ bool Feature::IsFeatureKnown(const std::string& shortName, REL::Version* outVers
 	return false;
 }
 
+void Feature::DrawSettingsEnabledControl()
+{
+	PerformanceTuningRenderer::RenderFeatureEnabledControl(this);
+}
+
 void Feature::DrawSettings()
 {
-	MenuUI::SettingsPage page(GetShortName().c_str(), { { "about", "About", "Learn what this feature changes." } });
-	if (!page.Is("about"))
-		return;
-	const auto [description, capabilities] = GetFeatureSummary();
-	ImGui::TextWrapped("%s", description.c_str());
-	for (const auto& capability : capabilities)
-		ImGui::BulletText("%s", capability.c_str());
-	ImGui::TextDisabled("This feature uses your installed materials and has no additional controls.");
+	MenuUI::SettingsPage page(GetShortName().c_str(), { { "about", "How it works", "Learn what this feature contributes to the scene.", "Automatic rendering improvements", true, true, "Review the feature" } });
+	if (page.Is("about")) {
+		const auto [description, keyFeatures] = GetFeatureSummary();
+		MenuUI::DetailText(description.c_str());
+		for (const auto& benefit : keyFeatures)
+			MenuUI::DetailNote(benefit.c_str());
+		MenuUI::DetailNote("This feature has no additional tuning controls. Use Enabled in the header to control it.");
+	}
 }

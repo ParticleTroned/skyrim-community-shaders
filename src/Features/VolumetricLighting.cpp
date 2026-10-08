@@ -99,7 +99,7 @@ void VolumetricLighting::DrawSettings()
 	}
 
 	MenuUI::SettingsPage page("VolumetricLighting", {
-														{ "appearance", "Lighting", "Choose fog lighting, then refine strength and quality." },
+														{ "appearance", "Lighting", "Choose fog lighting, then refine strength and quality.", "Fog lighting and light shafts", true, true, "Balance atmosphere and cost" },
 													});
 	if (!page.Is("appearance"))
 		return;
@@ -159,7 +159,7 @@ void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 
 	auto drawQuality = [&](const char* label, int32_t& quality, TextureSize& customSize, bool isInterior) {
 		quality = ClampQualityIndex(quality);
-		Util::Widgets::SliderInt(label, &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
+		Util::Widgets::Combo(label, &quality, QualityNames, static_cast<int>(Quality::Count));
 
 		if (!a_advanced || static_cast<Quality>(quality) != Quality::Custom) {
 			return;
@@ -190,40 +190,6 @@ void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
 	if (REL::Module::IsVR()) {
 		Util::Widgets::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
 	}
-}
-
-void VolumetricLighting::DrawEssentialSettings()
-{
-	{
-		std::scoped_lock lock(settingsMutex);
-		SanitizeSettings();
-	}
-
-	MenuUI::SettingsPage page("VolumetricLighting", {
-														{ "essentials", "Essentials", "Start with the main choices for this feature." },
-													});
-	if (!page.Is("essentials"))
-		return;
-
-	std::scoped_lock lock(settingsMutex);
-
-	auto drawVRRestartHint = [] {
-		if (!globals::game::isVR) {
-			return;
-		}
-
-		ImGui::SameLine();
-		ImGui::TextDisabled("(VR restart required)");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("In VR, this change needs a restart before it fully applies.");
-		}
-	};
-
-	Util::Widgets::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
-	drawVRRestartHint();
-
-	Util::Widgets::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
-	drawVRRestartHint();
 }
 
 json VolumetricLighting::CapturePerformanceSettingsState() const
@@ -278,7 +244,7 @@ void VolumetricLighting::DrawVolumetricLightingSettings(int32_t& quality, Textur
 	quality = ClampQualityIndex(quality);
 	auto& [Width, Height, Depth] = FetchCurrentSizeInUnits(isInterior);
 
-	Util::Widgets::SliderInt(isInterior ? "Interior Quality" : "Exterior Quality", &quality, 0, static_cast<uint8_t>(Quality::Count) - 1, QualityNames[quality]);
+	Util::Widgets::Combo(isInterior ? "Interior Quality" : "Exterior Quality", &quality, QualityNames, static_cast<int>(Quality::Count));
 
 	const bool isCustomQuality = static_cast<Quality>(quality) == Quality::Custom;
 	if (!isCustomQuality)

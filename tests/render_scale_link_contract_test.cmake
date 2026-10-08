@@ -158,8 +158,21 @@ forbid_contract("${_link_setter}" [[kDefaultRenderScaleQualityMode]] "native-AA 
 section("${_source}" [[void Upscaling::DrawSettings()]]
     [[void Upscaling::DrawPerformanceSettings(]] _full_menu)
 section("${_source}" [[void Upscaling::DrawPerformanceSettings(]]
-    [[void Upscaling::DrawEssentialSettings()]] _performance_menu)
+    [[bool Upscaling::ApplyNeuralRenderingPreset(]] _performance_menu)
 foreach(_menu IN ITEMS _full_menu _performance_menu)
+	foreach(_setting IN ITEMS renderScale quality dlssProfile)
+		require_contract("${${_menu}}"
+			"const bool ${_setting}EditCommitted = ${_setting}Changed;"
+			"${_menu} commits each discrete ${_setting} choice immediately")
+	endforeach()
+	require_contract("${${_menu}}"
+		[[Util::Widgets::Checkbox("Render Scale", &renderScaleMode)]]
+		"${_menu} uses the shared on/off control")
+	require_contract("${${_menu}}"
+		[[DrawUpscalingQualitySelection(qualityMode, upscaleMethod, IsNeuralRenderingRenderScaleRequired())]]
+		"${_menu} uses a preset dropdown retaining the NR constraint")
+	require_contract("${${_menu}}" [[DrawDLSSProfileSelection(dlssProfileUiIndex)]]
+		"${_menu} uses the shared profile dropdown")
     require_contract("${${_menu}}"
         [[GetVRRenderScalePreferenceForSelection(selectedUpscaleChoice.method)]] "${_menu} method selection")
     require_contract("${${_menu}}"

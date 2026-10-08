@@ -23,7 +23,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Adds realistic cloud shadows that move across the landscape, creating dynamic lighting changes as clouds pass overhead, enhancing atmospheric immersion.",
+			"Casts moving cloud shadows across the landscape.",
 			{ "Dynamic cloud shadow projection on terrain and objects",
 				"Configurable shadow opacity for artistic control",
 				"Real-time shadow movement synchronized with cloud motion",
@@ -47,8 +47,6 @@ public:
 	virtual void SetupResources() override;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
 	virtual json CapturePerformanceSettingsState() const override;

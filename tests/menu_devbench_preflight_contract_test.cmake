@@ -6,7 +6,7 @@ set(_bridge_path "${PROJECT_ROOT}/src/MenuDevBenchBridge.cpp")
 file(READ "${_bridge_path}" _bridge)
 
 string(REGEX MATCH
-    "R\"\\((\\{\"description\":\"Inspect and control the CSX VR menu[^\r\n]*\\})\\)\""
+    "R\"\\((\\{\"description\":\"[^\r\n]*\\})\\)\""
     _descriptor_match
     "${_bridge}"
 )

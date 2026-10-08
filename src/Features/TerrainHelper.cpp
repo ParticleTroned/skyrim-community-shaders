@@ -37,7 +37,7 @@ void TerrainHelper::DataLoaded()
 void TerrainHelper::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainHelper", {
-												   { "appearance", "Terrain", "Choose how distant terrain meets nearby ground." },
+												   { "appearance", "Terrain", "Choose how distant terrain meets nearby ground.", "Distant-to-near ground matching", true, true, "Refine terrain continuity" },
 											   });
 	if (!page.Is("appearance"))
 		return;
@@ -47,24 +47,7 @@ void TerrainHelper::DrawSettings()
 		return;
 	}
 
-	if (Util::Widgets::Checkbox("Enable", &settings.EnableTerrainHelper))
-		SetPerformanceCostMeasurementEnabled(settings.EnableTerrainHelper);
-}
-
-void TerrainHelper::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("TerrainHelper", {
-												   { "essentials", "Essentials", "Start with the main choices for this feature." },
-											   });
-	if (!page.Is("essentials"))
-		return;
-
-	if (!featureAvailable) {
-		ImGui::TextDisabled("TerrainHelper.esp not detected. Runtime toggle is unavailable.");
-		return;
-	}
-
-	if (Util::Widgets::Checkbox("Enable", &settings.EnableTerrainHelper))
+	if (Util::Widgets::Checkbox("Enabled", &settings.EnableTerrainHelper))
 		SetPerformanceCostMeasurementEnabled(settings.EnableTerrainHelper);
 }
 

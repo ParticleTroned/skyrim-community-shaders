@@ -9,7 +9,7 @@ struct LODBlending : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides seamless visual transitions between Level of Detail (LOD) objects and full-detail objects, eliminating harsh transitions and creating smooth visual continuity.",
+			"Smooths brightness differences between nearby objects and their distant versions.",
 			{ "Smooth LOD object brightness blending",
 				"Enhanced terrain LOD appearance matching",
 				"Snow-specific LOD brightness adjustment",
@@ -44,8 +44,6 @@ struct LODBlending : Feature
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { Enabled = a_enabled; }
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

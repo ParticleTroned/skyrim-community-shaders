@@ -28,15 +28,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void HairSpecular::DrawSettings()
 {
 	MenuUI::SettingsPage page("HairSpecular", {
-												  { "model", "Model", "Choose the hair lighting model first." },
-												  { "look", "Look", "Balance brightness, colour and shine." },
-												  { "highlights", "Highlights", "Refine the highlights along hair strands." },
-												  { "shadows", "Shadows", "Refine how hair shadows itself." },
+												  { "model", "Model", "Choose the hair lighting model first.", "Kajiya-Kay or Marschner", true, true, "Choose model and appearance" },
+												  { "look", "Look", "Balance brightness, colour and shine.", "Brightness, colour and shine", true, true, nullptr },
+												  { "highlights", "Highlights", "Refine the highlights along hair strands.", "Strand highlight direction", true, true, "Refine highlights and shadows" },
+												  { "shadows", "Shadows", "Refine how hair shadows itself.", "Screen-space self-shadowing", true, true, nullptr },
 											  });
 
-	Util::Widgets::Checkbox("Enable", (bool*)&settings.Enabled);
 	if (page.Is("model")) {
-		ImGui::Combo("Hair Mode", (int*)&settings.HairMode, "Kajiya-Kay\0Marschner\0");
+		MenuUI::ChoiceSetting("Hair Mode", (int*)&settings.HairMode, "Kajiya-Kay\0Marschner\0");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Select the hair shading model to use.\n"
@@ -88,17 +87,6 @@ void HairSpecular::DrawSettings()
 		Util::Widgets::SliderFloat("Self Shadow Exponent", &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
 		Util::Widgets::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
 	}
-}
-
-void HairSpecular::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("HairSpecular", {
-												  { "essentials", "Essentials", "Start with the main choices for this feature." },
-											  });
-	if (!page.Is("essentials"))
-		return;
-
-	Util::Widgets::Checkbox("Enable", (bool*)&settings.Enabled);
 }
 
 void HairSpecular::LoadSettings(json& o_json)

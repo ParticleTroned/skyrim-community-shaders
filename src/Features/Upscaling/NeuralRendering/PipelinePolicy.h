@@ -25,6 +25,18 @@ namespace NeuralRendering
 		return mode == RenderingMode::Foveated;
 	}
 
+	/** FSR final-scene NR uses independent guides instead of oversized vendor crops. */
+	[[nodiscard]] constexpr bool UsesIndependentFinalLdrInputs(RenderingMode mode, bool fsr) noexcept
+	{
+		return mode == RenderingMode::FullResolution || (fsr && mode == RenderingMode::Foveated);
+	}
+
+	/** Independent masked routes share the visible upscaler mask and its edge feather. */
+	[[nodiscard]] constexpr bool UsesSharedFinalLdrFovMask(RenderingMode mode, bool fovOnly, bool fsr) noexcept
+	{
+		return (mode == RenderingMode::FullResolution && fovOnly) || (fsr && mode == RenderingMode::Foveated);
+	}
+
 	/** Keeps renderscale masking independent of Full resolution and inactive on flat. */
 	[[nodiscard]] constexpr bool RequiresFoveatedMask(RenderingMode mode, bool fovOnly, bool isVR, bool renderscaleFov) noexcept
 	{

@@ -25,7 +25,9 @@ namespace NeuralRendering::Color
 	{
 		liveConfiguration.settings = settings;
 		liveConfiguration.experiments = experiments;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		captureEvidenceEnabled_.store(experiments.captureFrameEvidence, std::memory_order_release);
+#endif
 		return true;
 	}
 }

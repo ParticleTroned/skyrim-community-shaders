@@ -1,5 +1,6 @@
 #include "HomePageRenderer.h"
 #include "PCH.h"
+#include "SettingsPage.h"
 
 #include <imgui.h>
 
@@ -65,38 +66,6 @@ namespace
 		}
 	}
 
-	bool BigRadioButton(const char* label, int* value, int buttonValue, float diameter)
-	{
-		const ImGuiStyle& style = ImGui::GetStyle();
-		const ImVec2 labelSize = ImGui::CalcTextSize(label);
-		const float rowHeight = std::max(diameter, labelSize.y);
-		const ImVec2 pos = ImGui::GetCursorScreenPos();
-		const ImVec2 size(diameter + style.ItemInnerSpacing.x + labelSize.x, rowHeight);
-		const bool selected = *value == buttonValue;
-
-		const bool pressed = ImGui::InvisibleButton(label, size);
-		if (pressed)
-			*value = buttonValue;
-
-		const ImVec2 center(pos.x + diameter * 0.5f, pos.y + rowHeight * 0.5f);
-		const float radius = diameter * 0.5f;
-		const ImU32 bgColor = ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
-		const ImU32 borderColor = ImGui::GetColorU32(ImGuiCol_Border);
-		const ImU32 checkColor = ImGui::GetColorU32(ImGuiCol_CheckMark);
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-
-		drawList->AddCircleFilled(center, radius, bgColor, 32);
-		drawList->AddCircle(center, radius, borderColor, 32, std::max(1.0f, 2.0f * Util::GetUIScale()));
-		if (selected)
-			drawList->AddCircleFilled(center, radius * 0.62f, checkColor, 32);
-
-		drawList->AddText(
-			ImVec2(pos.x + diameter + style.ItemInnerSpacing.x, pos.y + (rowHeight - labelSize.y) * 0.5f),
-			ImGui::GetColorU32(ImGuiCol_Text),
-			label);
-
-		return pressed;
-	}
 }
 
 // Static member definitions
@@ -114,59 +83,11 @@ bool HomePageRenderer::ShouldSkipKeyRelease(uint32_t key)
 
 void HomePageRenderer::RenderHomePage()
 {
-	ImGui::BeginChild("HomePage", ImVec2(0, 0), false);
-
-	RenderWelcomeSection();
-	ImGui::Spacing();
-
-	RenderCacheMismatchSection();
-
-	// RenderQuickLinksSection();
-	// ImGui::Spacing();
-
-	// RenderFAQSection();
-
-	ImGui::EndChild();
-}
-
-void HomePageRenderer::RenderModeSection()
-{
-	auto* menu = Menu::GetSingleton();
-	if (!menu)
-		return;
-
-	auto& settings = menu->GetSettings();
-	settings.UiMode = std::clamp(settings.UiMode, 0, 1);
-
-	const char* modeLabel = "UI Mode";
-	const char* essentialsLabel = "Essentials (Recommended)";
-	const char* advancedLabel = "Advanced (Full UI)";
-	const ImGuiStyle& style = ImGui::GetStyle();
-	const float contentWidth = ImGui::GetContentRegionAvail().x;
-	const float radioDiameter = ImGui::GetFrameHeight() * 1.5f;
-	const ImVec2 modeLabelSize = ImGui::CalcTextSize(modeLabel);
-	const ImVec2 essentialsLabelSize = ImGui::CalcTextSize(essentialsLabel);
-	const ImVec2 advancedLabelSize = ImGui::CalcTextSize(advancedLabel);
-	const float modeLabelWidth = modeLabelSize.x;
-	const float essentialsWidth = radioDiameter + style.ItemInnerSpacing.x + essentialsLabelSize.x;
-	const float advancedWidth = radioDiameter + style.ItemInnerSpacing.x + advancedLabelSize.x;
-	const float spacing = style.ItemSpacing.x * 3.0f;
-	const float rowWidth = modeLabelWidth + essentialsWidth + advancedWidth + spacing;
-	const float rowHeight = std::max(radioDiameter, modeLabelSize.y);
-	const float rowY = ImGui::GetCursorPosY();
-	const float rowX = ImGui::GetCursorPosX() + std::max(0.0f, (contentWidth - rowWidth) * 0.5f);
-
-	ImGui::SetCursorPos(ImVec2(rowX, rowY + (rowHeight - modeLabelSize.y) * 0.5f));
-	ImGui::TextUnformatted(modeLabel);
-
-	ImGui::PushID("HomeInterfaceMode");
-	ImGui::SetCursorPos(ImVec2(rowX + modeLabelWidth + style.ItemSpacing.x, rowY));
-	BigRadioButton(essentialsLabel, &settings.UiMode, 0, radioDiameter);
-	ImGui::SetCursorPos(ImVec2(rowX + modeLabelWidth + style.ItemSpacing.x * 2.0f + essentialsWidth, rowY));
-	BigRadioButton(advancedLabel, &settings.UiMode, 1, radioDiameter);
-	ImGui::PopID();
-
-	ImGui::SetCursorPosY(rowY + rowHeight);
+	MenuUI::SettingsPage page("Home", { { "welcome", "Welcome", "About Community Shaders Expanded and its contributors.", "Project, credits and community", true, true, "Explore your installation" }, { "cache", "Shader cache", "Review changes affecting your compiled shaders.", "Shader cache compatibility", true, true } }, "Welcome", "Choose a page to get started.");
+	if (page.Is("welcome"))
+		RenderWelcomeSection();
+	if (page.Is("cache"))
+		RenderCacheMismatchSection();
 }
 
 void HomePageRenderer::RenderWelcomeSection()
@@ -243,7 +164,6 @@ void HomePageRenderer::RenderWelcomeSection()
 		windowSize.x, forkNoticeColor);
 
 	ImGui::Spacing();
-	RenderModeSection();
 	ImGui::Spacing();
 
 	// Vertical padding between intro text and the social artwork.

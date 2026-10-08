@@ -56,9 +56,9 @@ void ExtendedMaterials::DrawSettings()
 	SanitizeSettings(settings);
 
 	MenuUI::SettingsPage page("ExtendedMaterials", {
-													   { "materials", "Materials", "Choose which material features are enabled." },
-													   { "depth", "Depth", "Adjust surface depth and terrain blending." },
-													   { "shadows", "Shadows", "Choose shadows for raised surface detail." },
+													   { "materials", "Materials", "Choose which material features are enabled.", "Complex surfaces and reflections", true, true, "Choose surface detail" },
+													   { "depth", "Depth", "Adjust surface depth and terrain blending.", "Parallax and terrain transitions", true, true, nullptr },
+													   { "shadows", "Shadows", "Choose shadows for raised surface detail.", "Raised-detail shadows", true, true, "Refine surface lighting" },
 												   });
 	if (page.Is("materials")) {
 		Util::UIntCheckbox("Enable Complex Material", settings.EnableComplexMaterial);
@@ -113,21 +113,6 @@ void ExtendedMaterials::DrawSettings()
 		ImGui::Spacing();
 		ImGui::Spacing();
 	}
-}
-
-void ExtendedMaterials::DrawEssentialSettings()
-{
-	SanitizeSettings(settings);
-
-	MenuUI::SettingsPage page("ExtendedMaterials", {
-													   { "essentials", "Essentials", "Start with the main choices for this feature." },
-												   });
-	if (!page.Is("essentials"))
-		return;
-
-	Util::UIntCheckbox("Enable Complex Material", settings.EnableComplexMaterial);
-	Util::UIntCheckbox("Enable Parallax", settings.EnableParallax);
-	DrawParallaxStrength();
 }
 
 void ExtendedMaterials::DrawPerformanceSettings(bool)

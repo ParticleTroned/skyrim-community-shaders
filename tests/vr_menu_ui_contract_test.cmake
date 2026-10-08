@@ -36,22 +36,10 @@ assert_section_contains(
     "menu layout runtime gate"
 )
 assert_section_contains(
-    "void VR::DrawEssentialSettings()"
-    "json VR::CapturePerformanceSettingsState() const"
-    "CanConfigureMenuLayout()"
-    "VR Essentials UI"
-)
-assert_section_contains(
-    "void VR::DrawEssentialSettings()"
-    "json VR::CapturePerformanceSettingsState() const"
-    "DrawMenuLayoutUnlockSetting();"
-    "VR Essentials UI"
-)
-assert_section_contains(
     "if (!CanConfigureMenuLayout())"
     "Util::Widgets::SliderFloat(\"Mouse Speed\""
     "DrawMenuLayoutUnlockSetting();"
-    "VR Advanced UI"
+    "VR settings UI"
 )
 assert_section_contains(
     "float VR::GetEffectiveMenuScale() const"

@@ -33,8 +33,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Terrain Variation reduces the repeating pattern effect on terrain textures.\n"
-			"This technique creates more natural-looking terrain by adding variation to texture sampling.",
+			"Reduces visible repetition in terrain textures.",
 			{ "Reduces terrain and landscape-textured mesh tiling",
 				"Stochastic texture sampling",
 				"Improved terrain visual quality",
@@ -56,8 +55,6 @@ public:
 
 	/** @brief Draws the ImGui settings panel for Terrain Variation configuration. */
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	/** @brief Suppresses the default failed-load message display. */
 	virtual bool DrawFailLoadMessage() const override;
 	virtual void LoadSettings(json& o_json) override;

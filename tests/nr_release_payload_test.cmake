@@ -49,7 +49,10 @@ file(REMOVE "${_runtime_root}/sl.common.dll")
 check(fail "missing official SDK file")
 set(_shader_root "${NR_RELEASE_ROOT}/Shaders/Upscaling/NeuralRendering")
 file(MAKE_DIRECTORY "${_shader_root}")
-file(WRITE "${_shader_root}/ColorPrepareCS.hlsl" "valid shader fixture")
+foreach(_shader IN ITEMS ColorPrepareCS.hlsl ModelResolutionCommon.hlsli
+        ModelResolutionPrepareCS.hlsl ModelResolutionReconstructCS.hlsl)
+    file(WRITE "${_shader_root}/${_shader}" "valid shader fixture")
+endforeach()
 # Restore the official fixture before inspecting the unrelated shader tree.
 file(WRITE "${_runtime_root}/sl.common.dll" "official fixture sl.common.dll")
 check(pass "")

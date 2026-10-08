@@ -428,7 +428,7 @@ string(REGEX REPLACE
     "${_upscaling_source}"
 )
 foreach(_freshness_contract IN ITEMS
-    [[const bool retainedNeuralPairForPresentation = submitStageNeuralStereoState.outputsReady && VRSubmitInputFreshnessPolicy::MatchesProducerProof(submitStageNeuralStereoState.inputProof, submitInputProof) &&]]
+    [[const bool retainedNeuralPairForPresentation = neuralSubmitConfigured && submitStageNeuralStereoState.outputsReady && VRSubmitInputFreshnessPolicy::MatchesProducerProof(submitStageNeuralStereoState.inputProof, submitInputProof) &&]]
     [[const VRSubmitInputFreshnessPolicy::SubmitBoundaryIdentity& a_submitBoundaryIdentity]]
     [[const uint64_t a_expectedSubmitPairBoundaryToken = a_submitBoundaryIdentity.scopeToken;]]
     [[const uint64_t a_matchedSubmitPairBoundaryToken = a_submitBoundaryIdentity.matchedToken;]]
@@ -449,7 +449,7 @@ foreach(_freshness_contract IN ITEMS
 endforeach()
 
 foreach(_source_proof_use IN ITEMS
-    [[ResolveSubmitStereoSourceProof( a_compositorCycleToken, a_expectedSubmitPairBoundaryToken, a_matchedSubmitPairBoundaryToken, sourceUsesCombinedStereoLayout, sourceDesc.ArraySize, neuralSubmitSourceSignatureProven);]]
+    [[ResolveSubmitStereoSourceProof( a_compositorCycleToken, a_expectedSubmitPairBoundaryToken, a_matchedSubmitPairBoundaryToken, sourceUsesCombinedStereoLayout, sourceDesc.ArraySize, neuralSubmitSourceSignatureProven) : NeuralRendering::SubmitStereoSourceProof{};]]
     [[neuralSubmitSourceBatchEligible = neuralSubmitRequested && peerInputFreshnessProven && neuralSubmitSourceProof.IsValid();]]
     [[ResolveSubmitStereoSourceProof( a_compositorCycleToken, a_expectedSubmitPairBoundaryToken, a_matchedSubmitPairBoundaryToken, submitStageNeuralStereoState.publishedSourceUsesCombinedStereoLayout, replaySourceDesc.ArraySize, submitStageNeuralStereoState.sourceSignatureProven && !cachedPairSourceSignatureMismatch);]]
     [[MatchesSubmitStereoSourceProof( submitStageNeuralStereoState.submitSourceProof, replaySubmitSourceProof);]]

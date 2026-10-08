@@ -2220,11 +2220,11 @@ namespace NeuralRendering
 				true,
 				true);
 		}
-		if constexpr (kDevelopmentDiagnostics) {
-			for (const auto& readback : slot.colorWork.readbacks)
-				if (readback.pending)
-					Color::Registry::Instance().DropMeasurement();
-		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		for (const auto& readback : slot.colorWork.readbacks)
+			if (readback.pending)
+				Color::Registry::Instance().DropMeasurement();
+#endif
 		slot = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (lifetime.enabled)

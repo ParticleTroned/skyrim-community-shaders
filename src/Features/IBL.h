@@ -16,7 +16,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Replaces the game's ambient lighting with physically-based IBL derived from cubemap spherical harmonics.",
+			"Lights the scene using colours from the surrounding environment and sky.",
 			{ "Projects environment and sky cubemaps into spherical harmonics (SH) for irradiance",
 				"Dual IBL sources: environment cubemap (Dynamic Cubemaps) and Skyrim's native sky reflections cubemap",
 				"DALC brightness matching to keep IBL consistent with the game's ambient light levels",
@@ -48,8 +48,6 @@ public:
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.EnableIBL = a_enabled ? 1u : 0u; }
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

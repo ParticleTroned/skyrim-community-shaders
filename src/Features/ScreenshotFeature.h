@@ -69,9 +69,8 @@ struct ScreenshotFeature : public Feature
 	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for screenshot capture work to finish"; }
 
 	virtual void DrawSettingsHeaderControls() override;
+	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override { return { "Captures screenshots or image sequences from the desktop view or headset.", {} }; }
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override { DrawSettings(); }
 	/** Load a settings layer, migrating a supplied legacy eye only when canonical selection is absent. */
 	virtual void LoadSettings(json& a_json) override;
 	/** Persist canonical capture choices and their backward-compatible sequence mirror. */

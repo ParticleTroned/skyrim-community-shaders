@@ -206,6 +206,8 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	}
 	const float scaleFactor = fontScale * exp2(globalScale);
 	styleCopy.ScaleAllSizes(scaleFactor);
+	// Keep scrolling targets usable at the same scale as the detail controls.
+	styleCopy.ScrollbarSize = std::max(styleCopy.ScrollbarSize, 28.0f * scaleFactor);
 
 	// ScaleAllSizes skips border and separator sizes — scale them manually, flooring non-zero values at 1px
 	auto scaleSize = [scaleFactor](float value) -> float {

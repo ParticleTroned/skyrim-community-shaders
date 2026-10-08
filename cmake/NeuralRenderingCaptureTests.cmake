@@ -53,6 +53,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         "${repository_root}/tests/neural_controller_toggle_test.cpp")
     target_include_directories(neural_controller_toggle_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/neural_rendering_ui")
 
+    target_compile_definitions(screenshot_neural_diagnostics_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
     target_sources(screenshot_neural_diagnostics_test PRIVATE
         "${repository_root}/src/Features/ScreenshotNeuralDiagnostics.cpp")
 
@@ -71,6 +72,7 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         "${repository_root}/src/Features/NeuralRenderingFeature.cpp"
         "${repository_root}/src/Features/Upscaling.cpp"
         "${repository_root}/src/Features/Upscaling.h"
+        "${repository_root}/src/Features/VR.cpp"
         "${repository_root}/src/Features/VR/Input.cpp"
         "${repository_root}/src/State.cpp")
 endfunction()

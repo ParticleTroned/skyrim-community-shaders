@@ -15,7 +15,7 @@ struct LinearLighting : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Linear Lighting does internal color space conversion to improve lighting calculation accuracy.",
+			"Improves the accuracy of lighting and colour blending.",
 			{ "Customizable gamma correction",
 				"Corrects lighting calculations",
 				"Makes PBR really work" }
@@ -106,8 +106,6 @@ struct LinearLighting : Feature
 	float dirLightMult = 1.0f;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
 	virtual json CapturePerformanceSettingsState() const override;

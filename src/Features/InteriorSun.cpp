@@ -45,7 +45,7 @@ namespace
 bool InteriorSun::DrawEnabledCheckbox()
 {
 	bool enabled = settings.Enabled;
-	if (Util::Widgets::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		SetRuntimeEnabled(enabled);
 	return enabled;
 }
@@ -53,7 +53,7 @@ bool InteriorSun::DrawEnabledCheckbox()
 void InteriorSun::DrawSettings()
 {
 	MenuUI::SettingsPage page("InteriorSun", {
-												 { "appearance", "Sunlight", "Enable interior sunlight, then adjust its contribution." },
+												 { "appearance", "Sunlight", "Enable interior sunlight, then adjust its contribution.", "Interior sunlight contribution", true, true, "Balance interior light" },
 											 });
 	if (!page.Is("appearance"))
 		return;
@@ -82,17 +82,6 @@ void InteriorSun::DrawSettings()
 			"Lower values provide higher quality shadows and improved performance but may cause distant interior spaces to light up incorrectly. ");
 	}
 	ImGui::EndDisabled();
-}
-
-void InteriorSun::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("InteriorSun", {
-												 { "essentials", "Essentials", "Start with the main choices for this feature." },
-											 });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawEnabledCheckbox();
 }
 
 void InteriorSun::LoadSettings(json& o_json)

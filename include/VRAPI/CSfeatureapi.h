@@ -71,7 +71,7 @@ namespace CSX::FeatureAPI
 		std::uint32_t disabledAtBoot = 0;
 		std::uint32_t runtimeDisabledByMissingDependency = 0;
 		std::uint32_t hiddenFromUserView = 0;
-		std::uint32_t hiddenInEssentialsMode = 0;
+		std::uint32_t reservedMenuVisibility = 0;  // Reserved for binary compatibility.
 		std::uint32_t hasFeatureSettings = 0;
 		std::uint32_t hasShaderDefine = 0;
 		std::uint32_t activeConstraintCount = 0;

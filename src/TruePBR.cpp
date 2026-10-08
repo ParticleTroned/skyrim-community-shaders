@@ -190,7 +190,7 @@ namespace
 	bool DrawEnabledCheckbox(TruePBR::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (Util::Widgets::Checkbox("Enable", &enabled))
+		if (Util::Widgets::Checkbox("Enabled", &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
@@ -280,7 +280,7 @@ void TruePBR::DrawSettings()
 				ImGui::TreePop();
 			}
 			if (ImGui::TreeNodeEx("Glint")) {
-				if (Util::Widgets::Checkbox("Enable", &selectedPbrTextureSet->glintParameters.enabled)) {
+				if (Util::Widgets::Checkbox("Enabled", &selectedPbrTextureSet->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrTextureSet->glintParameters.enabled) {
@@ -392,7 +392,7 @@ void TruePBR::DrawSettings()
 				wasEdited = true;
 			}
 			if (ImGui::TreeNodeEx("Glint")) {
-				if (Util::Widgets::Checkbox("Enable", &selectedPbrMaterialObject->glintParameters.enabled)) {
+				if (Util::Widgets::Checkbox("Enabled", &selectedPbrMaterialObject->glintParameters.enabled)) {
 					wasEdited = true;
 				}
 				if (selectedPbrMaterialObject->glintParameters.enabled) {
@@ -431,21 +431,6 @@ void TruePBR::DrawSettings()
 	if (page.Is("diagnostics")) {
 		Util::Widgets::Checkbox("Enable verbose JSON logging", &enableVerboseJsonLogging);
 	}
-}
-
-void TruePBR::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("TruePBR", {
-											 { "essentials", "Essentials", "Choose the shared material appearance." },
-										 });
-	if (!page.Is("essentials"))
-		return;
-
-	const bool enabled = DrawEnabledCheckbox(settings);
-	ImGui::BeginDisabled(!enabled);
-	DrawPBRMetalSliders();
-	DrawGrassCheckbox(settings);
-	ImGui::EndDisabled();
 }
 
 void TruePBR::DrawPerformanceSettings(bool)

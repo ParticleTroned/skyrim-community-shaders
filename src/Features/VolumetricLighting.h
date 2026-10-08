@@ -50,8 +50,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Volumetric Lighting creates realistic light scattering effects through fog, dust, and atmospheric particles.\n"
-			"This adds dramatic god rays and atmospheric depth to both interior and exterior environments.",
+			"Adds shafts of light and atmospheric scattering through fog and dust.",
 			{ "Realistic light scattering",
 				"God rays and atmospheric effects",
 				"Separate interior/exterior settings",
@@ -64,8 +63,6 @@ public:
 	virtual void LoadSettings(json&) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

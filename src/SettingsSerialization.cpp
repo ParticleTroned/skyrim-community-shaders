@@ -120,32 +120,9 @@ namespace
 
 	std::string SerializeMember(const std::string& a_key, const nlohmann::json& a_value)
 	{
-		std::string serialized;
-		const char* promotedMenuKey = nullptr;
-		if (a_key == "Menu" && a_value.is_object()) {
-			if (a_value.contains("UI Mode")) {
-				promotedMenuKey = "UI Mode";
-			} else if (a_value.contains("PerformanceUiMode")) {
-				promotedMenuKey = "PerformanceUiMode";
-			}
-		}
-
-		if (promotedMenuKey) {
-			nlohmann::ordered_json orderedMenu = nlohmann::ordered_json::object();
-			orderedMenu[promotedMenuKey] = a_value.at(promotedMenuKey);
-			for (const auto& [key, value] : a_value.items()) {
-				if (key != promotedMenuKey)
-					orderedMenu[key] = value;
-			}
-
-			nlohmann::ordered_json wrapper = nlohmann::ordered_json::object();
-			wrapper[a_key] = std::move(orderedMenu);
-			serialized = wrapper.dump(1);
-		} else {
-			nlohmann::json wrapper = nlohmann::json::object();
-			wrapper[a_key] = a_value;
-			serialized = wrapper.dump(1);
-		}
+		nlohmann::json wrapper = nlohmann::json::object();
+		wrapper[a_key] = a_value;
+		const auto serialized = wrapper.dump(1);
 
 		const auto firstNewline = serialized.find('\n');
 		const auto lastNewline = serialized.rfind('\n');

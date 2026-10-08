@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <functional>
 #include <imgui.h>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -52,10 +53,68 @@ class Feature;
 
 namespace Util
 {
+	/** Shared outline symbols for menu actions. */
+	enum class ActionGlyph
+	{
+		Texture,
+		Home,
+		General,
+		Advanced,
+		Profiling,
+		PerformanceTuning,
+		Sidebar,
+		SaveSettings,
+		LoadSettings,
+		RestoreDefaults,
+		ClearCache,
+		Close
+	};
+	/** Draw an action symbol within its button bounds using the current theme colour. */
+	void DrawActionGlyph(ImDrawList* a_draw, ActionGlyph a_glyph, ImVec2 a_minimum, ImVec2 a_maximum, ImU32 a_color, bool a_selected = false);
+
 	namespace Widgets
 	{
+		/** Visible right and bottom offsets for one line in the current font, excluding trailing whitespace. */
+		ImVec2 VisibleTextEnd(const char* text);
+
+		/** Scope aligned detail controls without changing the surrounding page typography. */
+		class ControlLayout
+		{
+		public:
+			explicit ControlLayout(bool fullWidth = false);
+			~ControlLayout();
+			ControlLayout(const ControlLayout&) = delete;
+			ControlLayout& operator=(const ControlLayout&) = delete;
+
+		private:
+			int previous;
+		};
+		/** Shared square size, independent of the label font and local frame padding. */
+		float CheckboxSize();
 		/** Checkbox with individual hover help; explicit caller help takes precedence. */
 		bool Checkbox(const char* label, bool* value);
+		/** Shared checkbox for a flag mask, preserving unrelated bits. */
+		bool CheckboxFlags(const char* label, unsigned int* flags, unsigned int mask);
+		/** Aligned dropdown with large, individually selectable options. */
+		bool Combo(const char* label, int* selected, const char* const items[], int count);
+		bool Combo(const char* label, int* selected, const char* items);
+		/** Scoped custom dropdown using the same field and option sizing as Combo. */
+		class ComboBox
+		{
+		public:
+			ComboBox(const char* label, const char* preview, ImGuiComboFlags flags = 0, bool openImmediately = false);
+			~ComboBox();
+			ComboBox(const ComboBox&) = delete;
+			ComboBox& operator=(const ComboBox&) = delete;
+			explicit operator bool() const;
+
+		private:
+			struct State;
+			std::unique_ptr<State> state;
+		};
+		/** Mutually exclusive secondary choice with a headset-sized hit target. */
+		bool RadioButton(const char* label, bool active);
+		bool RadioButton(const char* label, int* selected, int value);
 		/** Sliders retain keyboard editing; controller number entry uses a bounded draft. */
 		bool SliderScalar(const char* label, ImGuiDataType type, void* value, const void* minimum, const void* maximum, const char* format = nullptr, ImGuiSliderFlags flags = 0);
 		bool SliderFloat(const char* label, float* value, float minimum, float maximum, const char* format = "%.3f", ImGuiSliderFlags flags = 0);
@@ -469,6 +528,9 @@ namespace Util
 		return clicked;
 	}
 
+	/** Resolve switch dimensions so callers can align its track and hit area. */
+	ImVec2 FeatureToggleSize(const ImVec2& size = ImVec2(0, 0));
+
 	/**
 	 * Clean, minimalist toggle switch for feature enable/disable state
 	 * @param label Label text to display next to the toggle
@@ -879,7 +941,7 @@ namespace Util
 			searchOptionsCStr.push_back(option.c_str());
 		}
 
-		ImGui::Combo("Search In", &searchColumn, searchOptionsCStr.data(), static_cast<int>(searchOptionsCStr.size()));
+		Util::Widgets::Combo("Search In", &searchColumn, searchOptionsCStr.data(), static_cast<int>(searchOptionsCStr.size()));
 
 		// Filter rows based on search column and filter text
 		std::vector<T> filteredRows;
@@ -1055,6 +1117,14 @@ namespace Util
 	 */
 	namespace Color
 	{
+		/** Readable supporting text, distinct from unavailable controls. */
+		inline ImVec4 SecondaryText()
+		{
+			auto color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			color.w *= 0.78f;
+			return color;
+		}
+
 		ImVec4 WithAlpha(ImVec4 color, float alpha);
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha);
 		ImVec4 Lift(ImVec4 color, float amount, float alpha);
@@ -1255,7 +1325,7 @@ namespace Util
 	{
 		bool valueChanged = false;
 
-		if (ImGui::BeginCombo(label, selectedName.c_str())) {
+		if (auto combo = Util::Widgets::ComboBox(label, selectedName.c_str())) {
 			auto searchText = DrawComboSearchInput(label);
 
 			for (auto& [itemName, item] : itemMap) {
@@ -1269,7 +1339,6 @@ namespace Util
 				}
 			}
 
-			ImGui::EndCombo();
 		} else {
 			ClearComboSearch(label);
 		}
@@ -1448,7 +1517,7 @@ namespace Util
 				searchOptionsCStr.push_back(option.c_str());
 			}
 
-			ImGui::Combo("Search In", &searchColumn, searchOptionsCStr.data(), static_cast<int>(searchOptionsCStr.size()));
+			Util::Widgets::Combo("Search In", &searchColumn, searchOptionsCStr.data(), static_cast<int>(searchOptionsCStr.size()));
 
 			// Update filter text from buffer
 			filterText = filterBuffer;

@@ -16,6 +16,17 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <unordered_map>
+#define NOMINMAX
+#include <windows.h>
+
+// Input bindings are opaque to menu-layout migration; exercise the real settings serializer.
+struct InputCombo
+{
+	int key = 0;
+	static InputCombo Keyboard(int code) { return { code }; }
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(InputCombo, key)
+#include "menu_settings_under_test.h"
 
 // Only game services are substituted. Layout, input, tabs and popups use real ImGui.
 struct Feature
@@ -31,8 +42,6 @@ namespace globals
 	auto* profiler = &profilerStorage;
 	struct FakeMenu
 	{
-		bool essentials = false;
-		bool IsEssentialsUiMode() const { return essentials; }
 		struct Theme
 		{
 			struct Palette
@@ -70,24 +79,30 @@ namespace SKSE::stl
 }
 struct ProfilingRenderer
 {
-	static inline bool hasTimers = false;
+	static inline bool eligible = true;
+	static bool CanProfileFeature(std::string_view) { return eligible; }
 	static inline int draws = 0;
-	static bool HasFeatureTimers(const std::string&) { return hasTimers; }
-	template <class F>
-	static void RenderFeatureTimers(const std::string&, F callback)
+	static inline int globalDraws = 0;
+	static inline std::string feature;
+	static void RenderStatistics() { ++globalDraws; }
+	static void RenderFeatureTimers(const std::string& prefix)
 	{
 		if (!globals::profiler)
 			throw std::runtime_error("missing profiler");
+		feature = prefix;
 		++draws;
-		callback();
 	}
 };
 struct PerformanceTuningRenderer
 {
 	static inline int draws = 0;
+	static inline int globalDraws = 0;
+	static inline std::string feature;
 	static inline std::function<void()> inspect;
-	static void RenderFeatureMeasurement(Feature*, bool = false)
+	static void Render() { ++globalDraws; }
+	static void RenderFeatureMeasurement(Feature* selected, bool = false)
 	{
+		feature = selected->GetShortName();
 		++draws;
 		if (inspect)
 			inspect();
@@ -97,7 +112,12 @@ namespace Util
 {
 	bool HoverTooltipWrapper() { return false; }
 	std::map<std::string, ImRect> controls;
-	void AddTooltip(const char* help) { controls[help] = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()); }
+	std::map<std::string, ImGuiHoveredFlags> tooltipFlags;
+	void AddTooltip(const char* help, ImGuiHoveredFlags flags = 0)
+	{
+		controls[help] = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+		tooltipFlags[help] = flags;
+	}
 	struct DisableGuard
 	{
 		explicit DisableGuard(bool disabled) { ImGui::BeginDisabled(disabled); }
@@ -116,7 +136,6 @@ namespace Util
 	Popup CenteredPopupModal(const char* name) { return { ImGui::BeginPopupModal(name, nullptr, ImGuiWindowFlags_AlwaysAutoResize) }; }
 }
 #include "settings_page_under_test.h"
-#include "settings_widget_declarations.h"
 #include "settings_widget_under_test.h"
 struct Upscaling
 {
@@ -133,7 +152,6 @@ struct VolumetricLighting : Feature
 	int sanitizations = 0;
 	void SanitizeSettings() { ++sanitizations; }
 	void DrawSettings();
-	void DrawEssentialSettings();
 };
 #include "settings_lighting_pages_under_test.h"
 
@@ -184,6 +202,21 @@ int main()
 		require(!ParseNumber<float>("0", std::numeric_limits<float>::quiet_NaN(), 1), "invalid range rejected");
 		require(!ParseNumber<float>("0", 1, 0), "reversed range rejected");
 
+		const nlohmann::json savedMenu = {
+			{ "AutoHideFeatureList", true }, { "SelectedThemePreset", "NordicFrost" },
+			{ "FirstTimeSetupCompleted", true }, { "RequireShiftToDock", false }
+		};
+		const auto expectedMenu = nlohmann::json(savedMenu.get<Menu::Settings>());
+		for (const auto* key : { "UI Mode", "PerformanceUiMode" }) {
+			for (const auto& obsoleteValue : nlohmann::json::array({ 0, 1, -1, "invalid", nullptr })) {
+				auto legacyMenu = savedMenu;
+				legacyMenu[key] = obsoleteValue;
+				const auto loaded = legacyMenu.get<Menu::Settings>();
+				require(nlohmann::json(loaded) == expectedMenu, "legacy mode keys must not hide controls or change other menu preferences");
+				require(!nlohmann::json(loaded).contains(key), "saving must retire obsolete mode keys");
+			}
+		}
+
 		ImGui::CreateContext();
 		auto& io = ImGui::GetIO();
 		io.DisplaySize = { 1000, 800 };
@@ -213,6 +246,63 @@ int main()
 		frame(drawPage);
 		frame(drawPage);
 		require(MenuUI::SettingsPage::Selected("TestPage") == "mode", "card opens matching tab");
+		click(Util::controls.at("Return to this feature's setup overview. Your settings are kept.").GetCenter(), drawPage);
+		frame(drawPage);
+		frame(drawPage);
+		require(MenuUI::SettingsPage::Selected("TestPage") == "overview", "detail back button returns to its own overview");
+
+		int selectedChoice = 0;
+		bool parentDisabled = false, narrowChoices = false;
+		auto drawChoices = [&] {
+			ImGui::BeginChild("Choices", { narrowChoices ? 230.0f : 850.0f, 600 });
+			{
+				Util::DisableGuard disabled(parentDisabled);
+				const MenuUI::Choice choices[]{
+					{ "first", "Full resolution", "A finished scene", "First choice help" },
+					{ "blocked", "Foveated", "A longer subtitle which must wrap inside a narrow card", "Blocked choice help", false },
+					{ "last", "Render scale", "A smaller image", "Last choice help" }
+				};
+				const int result = MenuUI::ChoiceCards("Mode", selectedChoice, choices);
+				if (result >= 0)
+					selectedChoice = result;
+				MenuUI::DetailNote("A wrapped explanation stays within the available panel width, including narrow windows.");
+			}
+			ImGui::EndChild();
+		};
+		frame(drawChoices);
+		frame(drawChoices);
+		const auto firstChoice = Util::controls.at("First choice help");
+		const auto blockedChoice = Util::controls.at("Blocked choice help");
+		const auto lastChoice = Util::controls.at("Last choice help");
+		require(firstChoice.Min.y == lastChoice.Min.y && firstChoice.GetSize().x == blockedChoice.GetSize().x && firstChoice.GetSize().y == blockedChoice.GetSize().y, "choice cards share width and wrap-aware height");
+		click(blockedChoice.GetCenter(), drawChoices);
+		require(selectedChoice == 0, "disabled choices cannot apply");
+		require((Util::tooltipFlags.at("Blocked choice help") & ImGuiHoveredFlags_AllowWhenDisabled) != 0, "disabled choices still explain their requirements");
+		click(lastChoice.GetCenter(), drawChoices);
+		require(selectedChoice == 2, "choice card applies the corresponding option");
+		parentDisabled = true;
+		click(firstChoice.GetCenter(), drawChoices);
+		require(selectedChoice == 2, "choice cards honor an outer hardware or runtime guard");
+		parentDisabled = false;
+		narrowChoices = true;
+		frame(drawChoices);
+		frame(drawChoices);
+		const auto narrowFirst = Util::controls.at("First choice help");
+		const auto narrowLast = Util::controls.at("Last choice help");
+		require(narrowFirst.Min.x == narrowLast.Min.x && narrowFirst.Max.y < narrowLast.Min.y && narrowFirst.GetSize().y == narrowLast.GetSize().y, "narrow choice cards stack without overlapping and keep equal size");
+		click(narrowFirst.GetCenter(), drawChoices);
+		require(selectedChoice == 0, "stacked cards retain selection behavior");
+		narrowChoices = false;
+		selectedChoice = 2;
+		frame(drawChoices);
+		key(ImGuiKey_Tab, drawChoices);
+		key(ImGuiKey_Space, drawChoices);
+		require(selectedChoice == 0, "Tab enters keyboard navigation and Space selects a card");
+		key(ImGuiKey_Tab, drawChoices);
+		key(ImGuiKey_Enter, drawChoices);
+		require(selectedChoice == 2, "keyboard navigation skips the disabled choice and Enter selects a card");
+		frame(drawPage);
+
 		require(MenuUI::SettingsPage::Navigate("TestPage", "extra"), "visible tab accepted");
 		frame(drawPage);
 		frame(drawPage);
@@ -234,23 +324,56 @@ int main()
 		};
 		globals::profiler = nullptr;
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		require(PerformanceTuningRenderer::draws > 0 && ProfilingRenderer::draws == 0, "measurement works without profiler");
+		require(PerformanceTuningRenderer::draws > 0 && ProfilingRenderer::draws == 0, "measurement panel does not open profiling");
+		require(PerformanceTuningRenderer::feature == "FeaturePage", "measurement receives the selected feature");
 		globals::profiler = &globals::profilerStorage;
-		feature.supportsMeasurement = false;
-		ProfilingRenderer::hasTimers = true;
+		MenuUI::SettingsPage::Select("FeaturePage", "overview");
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		require(ProfilingRenderer::draws > 0, "timers remain accessible without cost measurement support");
-		globals::menu->essentials = true;
-		const int timerDraws = ProfilingRenderer::draws;
+		const auto measurementCard = Util::controls.at("Measures in-game frame times and FPS with the current feature settings.");
+		const auto profilingCard = Util::controls.at("Choose CPU, GPU or Off to inspect timings.");
+		const auto setupCard = Util::controls.at("Appearance");
+		require(measurementCard.Min.y == profilingCard.Min.y && measurementCard.Max.x < profilingCard.Min.x, "inspection cards share a bottom row");
+		require(measurementCard.Min.x == setupCard.Min.x && measurementCard.GetSize().x == setupCard.GetSize().x && measurementCard.GetSize().y == setupCard.GetSize().y && profilingCard.GetSize().x == setupCard.GetSize().x && profilingCard.GetSize().y == setupCard.GetSize().y, "inspection cards match setup card size and column alignment");
+		const int measurementsBefore = PerformanceTuningRenderer::draws;
+		click(profilingCard.GetCenter(), drawPerformance);
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "profiling" && ProfilingRenderer::feature == "FeaturePage", "profiling card opens the selected feature even before timing data exists");
+		require(PerformanceTuningRenderer::draws == measurementsBefore, "profiling never invokes measurement controls");
+		int profilingBefore = ProfilingRenderer::draws;
+		globals::profiler = nullptr;
 		frame(drawPerformance);
-		require(ProfilingRenderer::draws == timerDraws && !MenuUI::SettingsPage::Navigate("FeaturePage", "performance"), "Essentials retains previous timer visibility");
+		require(ProfilingRenderer::draws == profilingBefore, "unavailable profiler is handled without dereferencing it");
+		globals::profiler = &globals::profilerStorage;
+		MenuUI::SettingsPage::Select("FeaturePage", "overview");
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		profilingBefore = ProfilingRenderer::draws;
+		click(Util::controls.at("Measures in-game frame times and FPS with the current feature settings.").GetCenter(), drawPerformance);
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance" && PerformanceTuningRenderer::draws > measurementsBefore, "measurement card opens the existing readiness-aware controls");
+		require(ProfilingRenderer::draws == profilingBefore, "measurement does not select a profiling mode");
 		feature.supportsMeasurement = true;
-		frame(drawPerformance);
-		require(MenuUI::SettingsPage::Navigate("FeaturePage", "performance"), "Essentials retains measurement controls");
-		frame(drawPerformance);
-		frame(drawPerformance);
-		require(ProfilingRenderer::draws == timerDraws, "Essentials measurements do not show profiler timers");
-		globals::menu->essentials = false;
+		MenuUI::SettingsPage::Select("TestPage", "performance");
+		for (int i = 0; i < 3; ++i) frame(drawPage);
+		require(PerformanceTuningRenderer::globalDraws > 0, "non-feature pages open the global measurement view");
+		MenuUI::SettingsPage::Select("TestPage", "profiling");
+		for (int i = 0; i < 3; ++i) frame(drawPage);
+		require(ProfilingRenderer::globalDraws > 0, "non-feature pages open the global profiling view");
+
+		feature.supportsMeasurement = false;
+		ProfilingRenderer::eligible = false;
+		MenuUI::SettingsPage::Select("FeaturePage", "overview");
+		Util::controls.clear();
+		auto drawNoTuning = [&] { MenuUI::FeatureScope scope(&feature); MenuUI::SettingsPage page("Unused", {}); };
+		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "unsupported tools cannot be opened");
+		require(Util::controls.empty(), "a feature without tuning or eligible tools has an empty body");
+		feature.supportsMeasurement = true;
+		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
+		require(MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement eligibility is independent of profiling");
+		ProfilingRenderer::eligible = true;
+		auto drawGlobalPerformance = [&] { MenuUI::SettingsPage page("PerformanceTuning", { { "features", "Features", "Choose features" } }); };
+		frame(drawGlobalPerformance);
+		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "performance"), "global measurement view cannot recursively open itself");
 
 		ImGuiID firstTabId = 0, secondTabId = 0;
 		float firstScroll = 0, secondScroll = 0;
@@ -284,8 +407,7 @@ int main()
 
 		VolumetricLighting lighting;
 		lighting.name = "VolumetricLighting";
-		for (bool essentials : { false, true }) {
-			globals::menu->essentials = essentials;
+		{
 			int inspected = 0;
 			PerformanceTuningRenderer::inspect = [&] {
 				++inspected;
@@ -300,10 +422,7 @@ int main()
 			};
 			auto drawLighting = [&] {
 				MenuUI::FeatureScope scope(&lighting);
-				if (essentials)
-					lighting.DrawEssentialSettings();
-				else
-					lighting.DrawSettings();
+				lighting.DrawSettings();
 			};
 			frame(drawLighting);
 			require(MenuUI::SettingsPage::Navigate("VolumetricLighting", "performance"), "lighting performance tab remains reachable");
@@ -311,7 +430,78 @@ int main()
 			require(inspected > 0 && lighting.sanitizations > 0, "lighting keeps validation and performance controls");
 		}
 		PerformanceTuningRenderer::inspect = {};
-		globals::menu->essentials = false;
+
+		{
+			float first = .5f, second = .75f;
+			ImRect firstNumber, secondNumber, headerToggle, detailToggle;
+			int commits = 0;
+			bool checked = true;
+			auto form = [&] {
+				Util::Widgets::Checkbox("Enabled", &checked);
+				headerToggle = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+				const Util::Widgets::ControlLayout layout;
+				Util::Widgets::Checkbox("Detail checkbox", &checked);
+				detailToggle = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+				Util::Widgets::SliderFloat("Short", &first, 0, 1, "%.2f");
+				commits += ImGui::IsItemDeactivatedAfterEdit() ? 1 : 0;
+				firstNumber = Util::controls.at("Double-click to enter a value. In the headset, this opens the number pad.");
+				Util::Widgets::SliderFloat("A longer label", &second, 0, 1, "%.2f");
+				secondNumber = Util::controls.at("Double-click to enter a value. In the headset, this opens the number pad.");
+			};
+			globals::features::vr.headset = true;
+			frame(form);
+			frame(form);
+			require(std::abs(headerToggle.GetHeight() - detailToggle.GetHeight()) < 1, "header and detail square toggles have identical sizes");
+			require(std::abs(firstNumber.Min.x - secondNumber.Min.x) < 1 && std::abs(firstNumber.Max.x - secondNumber.Max.x) < 1, "detail values align independently of label lengths");
+			require(firstNumber.GetHeight() >= ImGui::GetFontSize() * 2.4f && firstNumber.GetWidth() >= ImGui::GetFontSize() * 5, "numeric entry has a large HMD target");
+			const ImVec2 paddedCorner{ firstNumber.Min.x + 2, firstNumber.Min.y + 2 };
+			click(paddedCorner, form);
+			click(paddedCorner, form);
+			frame(form);
+			require(!GImGui->OpenPopupStack.empty(), "the padded numeric target opens the headset keypad");
+			const auto digit = Util::controls.at("Add this digit.");
+			const auto apply = Util::controls.at("Use this value.");
+			const auto cancel = Util::controls.at("Keep the previous value.");
+			require(digit.GetHeight() > firstNumber.GetHeight() && apply.GetHeight() >= firstNumber.GetHeight() && cancel.GetHeight() == apply.GetHeight(), "digits and keypad actions retain large HMD targets");
+			click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), form);
+			click(Util::controls.at("Add this digit.").GetCenter(), form);
+			click(Util::controls.at("Use this value.").GetCenter(), form);
+			require(first == 0 && second == .75f && commits == 1, "form keypad commits only its setting and publishes release once");
+			globals::features::vr.headset = false;
+			int preset = 0;
+			const char* options[]{ "Natural", "Strong" };
+			auto combo = [&] {
+				const Util::Widgets::ControlLayout layout;
+				Util::Widgets::Combo("Preset", &preset, options, 2);
+			};
+			frame(combo);
+			frame(combo);
+			const auto comboBounds = Util::controls.at("Choose Preset.");
+			click({ comboBounds.Max.x - 10, comboBounds.GetCenter().y }, combo);
+			frame(combo);
+			frame(combo);
+			const auto option = Util::controls.at("Select Strong for Preset.");
+			require(option.GetHeight() >= firstNumber.GetHeight(), "dropdown choices have full-height HMD targets");
+			click(option.GetCenter(), combo);
+			require(preset == 1, "large dropdown selection changes the original setting");
+		}
+		{
+			std::array<bool, 10> enabled{};
+			const std::array<MenuUI::ToggleChoice, 5> first{ { { "Humans", &enabled[0], "a0" }, { "Other humanoids", &enabled[1], "a1" }, { "Creatures", &enabled[2], "a2" }, { "Animals", &enabled[3], "a3" }, { "Other", &enabled[4], "a4" } } };
+			const std::array<MenuUI::ToggleChoice, 5> second{ { { "Faces", &enabled[5], "b0" }, { "Skin", &enabled[6], "b1" }, { "Hair", &enabled[7], "b2" }, { "Armour", &enabled[8], "b3" }, { "Weapons", &enabled[9], "b4" } } };
+			auto grids = [&] {
+				const Util::Widgets::ControlLayout layout;
+				MenuUI::ToggleGrid("Types", first, 220);
+				MenuUI::ToggleGrid("Materials", second, 220);
+			};
+			frame(grids);
+			frame(grids);
+			for (int i = 0; i < 5; ++i)
+				require(std::abs(Util::controls.at(std::format("a{}", i)).Min.x - Util::controls.at(std::format("b{}", i)).Min.x) < 1, "checkbox groups share aligned responsive columns");
+			require(Util::controls.at("a4").Min.y > Util::controls.at("a0").Min.y, "wide checkbox targets wrap onto another row");
+			click(Util::controls.at("b1").GetCenter(), grids);
+			require(enabled[6] && std::count(enabled.begin(), enabled.end(), true) == 1, "aligned checkbox grid edits only the clicked setting");
+		}
 
 		float value = .5f;
 		bool disabled = false;
@@ -507,6 +697,101 @@ int main()
 		click(Util::controls.at("Keep the previous value.").GetCenter(), drawSlider);
 		require(GImGui->OpenPopupStack.empty() && value == .5f, "an unavailable setting must still allow keypad cancellation");
 		disabled = false;
+		bool checked = true;
+		bool checkboxDisabled = false;
+		ImVec2 checkboxCentre;
+		auto drawCheckbox = [&] {
+			const auto colorsBefore = ImGui::GetStyle();
+			const auto stackBefore = GImGui->ColorStack.Size;
+			ImGui::BeginDisabled(checkboxDisabled);
+			Util::Widgets::Checkbox("Enabled", &checked);
+			checkboxCentre = ImGui::GetItemRectMin();
+			checkboxCentre.x += ImGui::GetFrameHeight() * .5f;
+			checkboxCentre.y += ImGui::GetFrameHeight() * .5f;
+			ImGui::EndDisabled();
+			require(GImGui->ColorStack.Size == stackBefore, "checkbox styling restores its color stack");
+			require(std::memcmp(colorsBefore.Colors, ImGui::GetStyle().Colors, sizeof(colorsBefore.Colors)) == 0,
+				"checkbox styling must not leak into the next control");
+		};
+		frame(drawCheckbox);
+		click(checkboxCentre, drawCheckbox);
+		require(!checked, "filled checkbox can be switched off");
+		click(checkboxCentre, drawCheckbox);
+		require(checked, "empty checkbox can be switched on");
+		checkboxDisabled = true;
+		click(checkboxCentre, drawCheckbox);
+		require(checked, "disabled checkbox retains its value");
+
+		{
+			bool blocked = false;
+			int selection = 0;
+			auto choices = [&] {
+				Util::DisableGuard guard(blocked);
+				MenuUI::ChoiceSetting("Quality", &selection, "Performance\0Quality\0");
+			};
+			frame(choices);
+			frame(choices);
+			click(Util::controls.at("Quality").GetCenter(), choices);
+			require(selection == 1, "visible primary choices retain zero-separated option ordering");
+			blocked = true;
+			click(Util::controls.at("Performance").GetCenter(), choices);
+			require(selection == 1, "primary choice groups respect the feature's disabled state");
+
+			unsigned int lightFlags = 0b1001;
+			ImVec2 flagCentre;
+			auto drawFlags = [&] {
+				const auto itemFlags = GImGui->CurrentItemFlags;
+				Util::Widgets::CheckboxFlags("Light flags", &lightFlags, 0b0011);
+				flagCentre = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()).GetCenter();
+				require(itemFlags == GImGui->CurrentItemFlags, "flag toggles restore mixed-value state");
+			};
+			frame(drawFlags);
+			click(flagCentre, drawFlags);
+			require(lightFlags == 0b1011, "mixed flag toggle enables its complete mask and preserves unrelated bits");
+			click(flagCentre, drawFlags);
+			require(lightFlags == 0b1000, "flag toggle disables only its mask");
+
+			bool openImmediately = false;
+			bool comboDisabled = false;
+			ImRect comboBounds;
+			auto customCombo = [&] {
+				const auto styles = GImGui->StyleVarStack.Size;
+				const auto colors = GImGui->ColorStack.Size;
+				const auto fonts = GImGui->FontStack.Size;
+				const auto ids = ImGui::GetCurrentWindow()->IDStack.Size;
+				const auto windows = GImGui->CurrentWindowStack.Size;
+				{
+					const Util::Widgets::ControlLayout layout;
+					Util::DisableGuard guard(comboDisabled);
+					if (auto combo = Util::Widgets::ComboBox("Custom preset", "Natural", 0, openImmediately)) {
+						ImGui::Selectable("Natural");
+						ImGui::Selectable("Strong");
+					}
+					comboBounds = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+				}
+				require(styles == GImGui->StyleVarStack.Size && colors == GImGui->ColorStack.Size && fonts == GImGui->FontStack.Size,
+					"custom dropdown restores frame, font and colour state whether open or closed");
+				require(ids == ImGui::GetCurrentWindow()->IDStack.Size && windows == GImGui->CurrentWindowStack.Size,
+					"custom dropdown restores its owner window and ID scope");
+			};
+			frame(customCombo);
+			frame(customCombo);
+			click(comboBounds.GetCenter(), customCombo);
+			frame(customCombo);
+			require(!GImGui->OpenPopupStack.empty(), "custom dropdown opens with a padded hit target");
+			key(ImGuiKey_Escape, customCombo);
+			require(GImGui->OpenPopupStack.empty(), "custom dropdown closes on Escape");
+			openImmediately = true;
+			frame(customCombo);
+			require(!GImGui->OpenPopupStack.empty(), "editor can open the shared dropdown on entering its mode");
+			openImmediately = false;
+			key(ImGuiKey_Escape, customCombo);
+			comboDisabled = true;
+			openImmediately = true;
+			frame(customCombo);
+			require(GImGui->OpenPopupStack.empty(), "disabled dropdown cannot be opened programmatically");
+		}
+
 		ImGui::DestroyContext();
 		std::cout << "Settings navigation and numeric interaction checks passed\n";
 	} catch (const std::exception& error) {

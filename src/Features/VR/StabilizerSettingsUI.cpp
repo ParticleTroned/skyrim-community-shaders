@@ -224,7 +224,7 @@ namespace VRFpsStabilizer
 			if (Util::Widgets::Checkbox("Enable location rules", &enabled))
 				editor.document.Set("Settings", "Enabled", enabled ? "1" : "0", editor.error);
 			Tooltip("Use VRFpsStabilizerLocation.ini to choose a quality tier by location name. Good is used for unlisted locations in the supplied configuration.");
-			ImGui::Combo("Location tier", &editor.location, kLocationSections.data(), static_cast<int>(kLocationSections.size()));
+			Util::Widgets::Combo("Location tier", &editor.location, kLocationSections.data(), static_cast<int>(kLocationSections.size()));
 			Tooltip("Select a tier to edit its location list and settings. Interior contains commands for interior cells, without a location-name list.");
 			const auto* tier = kLocationSections[editor.location];
 			if (editor.location < 5) {
@@ -298,7 +298,7 @@ namespace VRFpsStabilizer
 					"Console commands run when a new game starts.",
 					"Conditional rules: Interior|command or Exterior,Raining|command. Optional hours: Exterior|4|16|command. Supports INI>, CS> and IMOD> commands. This section also contains the profiles edited on the Profiles page; save here before switching there."
 				};
-				ImGui::Combo("Run commands on", &editor.event, kEventSections.data(), static_cast<int>(kEventSections.size()));
+				Util::Widgets::Combo("Run commands on", &editor.event, kEventSections.data(), static_cast<int>(kEventSections.size()));
 				Tooltip("Select the event or condition controlling these commands. Saving reloads the rules; each command still waits for its event or condition.");
 				DrawCommands(editor, kEventSections[editor.event], help[editor.event]);
 			} else {

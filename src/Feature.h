@@ -90,11 +90,6 @@ public:
 	virtual bool IsHiddenFromUserView() const { return false; }
 
 	/**
-	 * Whether the feature should be hidden while the menu is in Essentials mode.
-	 */
-	virtual bool IsHiddenInEssentialsMode() const { return false; }
-
-	/**
 	 * Whether to print the INI version missing message when this feature is unloaded
 	 */
 	virtual bool DrawFailLoadMessage() const { return true; }
@@ -112,10 +107,19 @@ public:
 	// completed. Features own any intentional disabled/degraded resource state.
 	virtual void SetupRenderTargetResources() {}
 	virtual void Reset() {}
+	struct SettingsHeaderStatus
+	{
+		std::string_view label = "Ready";
+		bool needsAttention = false;
+	};
+	/** Feature-specific readiness; placement and appearance belong to the shared header. */
+	virtual SettingsHeaderStatus GetSettingsHeaderStatus() const { return {}; }
+	/** Uses the existing runtime toggle, retaining the feature's enabled configuration. */
+	virtual void DrawSettingsEnabledControl();
 	virtual void DrawSettingsHeaderControls() {}
+	/** Brief requirements shown above the settings actions. */
+	virtual std::string_view GetSettingsFooterText() const { return {}; }
 	virtual void DrawSettings();
-	virtual bool HasEssentialSettings() const { return false; }
-	virtual void DrawEssentialSettings() {}
 	virtual bool HasPerformanceSettings() const { return false; }
 	virtual void DrawPerformanceSettings(bool a_advanced) { (void)a_advanced; }
 	virtual json CapturePerformanceSettingsState() const { return CapturePerformanceCostMeasurementState(); }

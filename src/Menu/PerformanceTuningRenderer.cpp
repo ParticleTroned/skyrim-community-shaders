@@ -2368,20 +2368,38 @@ namespace
 	}
 }
 
+void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
+{
+	const bool supported = a_feature->SupportsPerformanceCostMeasurement();
+	bool enabled = supported ? a_feature->IsPerformanceToggleEnabled() : a_feature->loaded;
+	const auto* reason = GetFeatureToggleBlockReason(a_feature);
+	const bool busy = HasActiveMeasurements();
+	{
+		auto guard = Util::DisableGuard(!a_feature->loaded || !supported || reason || busy);
+		if (Util::Widgets::Checkbox("Enabled", &enabled)) {
+			const bool applied = SetRuntimeFeatureEnabled(a_feature, enabled);
+			g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";
+		}
+	}
+	Util::AddTooltip(reason ? reason : busy   ? "Wait for the current measurement to finish." :
+								   !supported ? "This feature has no separate runtime switch. Use its sidebar switch, then restart the game." :
+												"Turns this feature on or off while keeping your current tuning.");
+}
+
 void PerformanceTuningRenderer::Render()
 {
 	CaptureProfilerStateForPerformanceTuning();
 	const auto features = BuildPerformanceFeatureList();
 	const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(BuildPerformanceFeaturePrefixes(features), true);
-	RenderTopPerformanceCounters(timing);
-	ImGui::Spacing();
 
 	MenuUI::SettingsPage page("PerformanceTuning", {
-													   { "features", "Features", "Choose which runtime features are enabled." },
-													   { "compare", "Compare", "Measure feature costs after choosing your scene and settings." },
+													   { "features", "Features", "Choose which runtime features are enabled.", "Runtime feature switches", true, true, "Choose features and compare" },
+													   { "compare", "Compare", "Measure feature costs after choosing your scene and settings.", "Frame, CPU, GPU and FPS costs", true, true, nullptr },
 												   });
 	if (!page.Is("features") && !page.Is("compare"))
 		return;
+	RenderTopPerformanceCounters(timing);
+	ImGui::Spacing();
 	const bool anyEnabled = std::ranges::any_of(features, [](Feature* feature) {
 		return feature->IsPerformanceCostMeasurementEnabled() && !GetFeatureToggleBlockReason(feature);
 	});

@@ -648,9 +648,9 @@ void UnifiedWater::RestoreDefaultSettings()
 void UnifiedWater::DrawSettings()
 {
 	MenuUI::SettingsPage page("UnifiedWater", {
-												  { "look", "Look", "Choose water colour and surface appearance." },
-												  { "shore", "Shore", "Refine where shallow water meets the shore." },
-												  { "depth", "Depth", "Refine water depth and surface separation." },
+												  { "look", "Look", "Choose water colour and surface appearance.", "Water colour and surface", true, true, "Shape water and shores" },
+												  { "shore", "Shore", "Refine where shallow water meets the shore.", "Shallow-water transitions", true, true, nullptr },
+												  { "depth", "Depth", "Refine water depth and surface separation.", "Depth and surface separation", true, true, "Refine water depth" },
 											  });
 
 	SanitizeSettings(settings);
@@ -842,19 +842,6 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
 	return data;
-}
-
-void UnifiedWater::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("UnifiedWater", {
-												  { "essentials", "Essentials", "Start with the main choices for this feature." },
-											  });
-	if (!page.Is("essentials"))
-		return;
-
-	SanitizeSettings(settings);
-	ImGui::SeparatorText("Water Appearance");
-	DrawWaterTintSettings(settings);
 }
 
 void UnifiedWater::DrawPerformanceSettings(bool)

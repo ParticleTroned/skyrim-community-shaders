@@ -14,7 +14,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides enhanced terrain material support for terrain mods that require additional texture slots and parallax mapping capabilities.",
+			"Supports terrain mods with extra texture detail and surface depth.",
 			{ "Extended texture slot support for terrain materials",
 				"Parallax mapping integration for terrain textures",
 				"Automatic terrain material detection and setup",
@@ -47,8 +47,6 @@ public:
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;

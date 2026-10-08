@@ -1,4 +1,5 @@
 #include "MenuHeaderRenderer.h"
+#include "FeatureListRenderer.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -21,6 +22,14 @@ namespace
 {
 	using RoleFontGuard = MenuFonts::FontRoleGuard;
 	constexpr float kHeaderActionIconScale = 0.75f;
+
+	struct HeaderContentAlignment
+	{
+		ImGuiID window = 0;
+		int frame = -1;
+		float right = 0;
+	};
+	HeaderContentAlignment headerContentAlignment;
 
 	float GetHeaderIconSize(float a_uiScale)
 	{
@@ -68,7 +77,7 @@ namespace
 		return std::max(ImGui::GetStyle().WindowBorderSize, 1.0f * a_uiScale);
 	}
 
-	struct SteamVRResizeDragState
+	struct MenuResizeDragState
 	{
 		ImGuiID activeId = 0;
 		ImVec2 startMouse = ImVec2(0.0f, 0.0f);
@@ -76,7 +85,7 @@ namespace
 		ImVec2 startSize = ImVec2(0.0f, 0.0f);
 	};
 
-	SteamVRResizeDragState g_steamVRResizeDragState;
+	MenuResizeDragState g_menuResizeDragState;
 	constexpr float kSteamVRResizePointerSensitivity = 1.5f;
 
 	bool HasValidMousePos(const ImVec2& a_pos)
@@ -153,6 +162,8 @@ void MenuHeaderRenderer::RenderHeader(
 	const std::string brand{ "CSX" };
 	const std::string version = title.substr(4);
 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
+	if (!isDocked || forceStableHeader)
+		actionIcons.push_back({ "HeaderClose", nullptr, nullptr, "Close menu", [] { globals::menu->CloseMenu(); }, ActionIcon::Glyph::Close });
 
 	if (forceStableHeader) {
 		RenderStableHeader(title, showLogo, actionIcons, uiScale, uiIcons);
@@ -160,144 +171,7 @@ void MenuHeaderRenderer::RenderHeader(
 		// Draw action icons in the title bar area
 		RenderDockedIcons(actionIcons, uiScale);
 	} else {
-		// When not docked, show the custom header
-		const bool centerHeader = globals::menu->GetTheme().CenterHeader && !showSteamVRDockHandle;
-
-		const float baseTextScale = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE;
-		const float textScaleFactor = baseTextScale * uiScale;
-		const float logoSize = GetHeaderIconSize(uiScale);
-		const float iconSpacing = GetUndockedIconSpacing(uiScale);
-		const float actionButtonWidth = GetUndockedActionButtonSize(uiScale);
-		const float actionButtonsWidth = actionIcons.empty() ? 0.0f :
-		                                                       actionButtonWidth * static_cast<float>(actionIcons.size()) +
-		                                                           iconSpacing * static_cast<float>(actionIcons.size() - 1);
-		const float dockHandleWidth = showSteamVRDockHandle ? GetSteamVRDockHandleSize(uiScale) : 0.0f;
-		const float dockHandleSpacing = showSteamVRDockHandle && !actionIcons.empty() ? iconSpacing : 0.0f;
-		const float rightControlInset = showSteamVRDockHandle ? GetSteamVRHeaderRightInset(uiScale) : 0.0f;
-		const float buttonColumnWidth = actionButtonsWidth + dockHandleSpacing + dockHandleWidth + rightControlInset;
-		const float titleLeftPadding =
-			ThemeManager::Constants::CURSOR_POSITION_PADDING +
-			(showSteamVRDockHandle ? GetSteamVRResizeHandleSize(uiScale) + ImGui::GetStyle().ItemSpacing.x : 0.0f);
-		const float headerRowHeight = std::max({ logoSize,
-			actionButtonWidth,
-			dockHandleWidth,
-			ImGui::GetFontSize() * textScaleFactor });
-
-		if ((showLogo || canShowIcons || showSteamVRDockHandle) && ImGui::BeginTable("##HeaderLayout", 2, ImGuiTableFlags_SizingStretchProp)) {
-			ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("Buttons", ImGuiTableColumnFlags_WidthFixed, buttonColumnWidth);
-			const float headerRowStartY = ImGui::GetCursorPosY();
-			ImGui::TableNextColumn();  // Title on the left with logo
-			ImGui::SetCursorPosY(headerRowStartY + std::max(0.0f, (headerRowHeight - logoSize) * 0.5f));
-
-			if (centerHeader) {
-				// Calculate the width of the content
-				float contentWidth = 0.0f;
-
-				if (showLogo) {
-					float logoAspectRatio = uiIcons.logo.size.x / uiIcons.logo.size.y;
-					contentWidth = (logoSize * logoAspectRatio) + ImGui::GetStyle().ItemSpacing.x;
-				}
-
-				// Calculate text width
-				{
-					RoleFontGuard titleFont(Menu::FontRole::Title);
-					ImGui::SetWindowFontScale(textScaleFactor);
-					contentWidth += ImGui::CalcTextSize(brand.c_str()).x;
-					ImGui::SetWindowFontScale(1.0f);
-					contentWidth += ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize(version.c_str()).x;
-					ImGui::SetWindowFontScale(1.0f);
-				}
-
-				float offset = Util::GetCenterOffsetForContent(contentWidth);
-				if (offset > 0.0f) {
-					ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset);
-				}
-			} else {
-				// Add padding for left-aligned layout
-				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + titleLeftPadding);
-			}
-
-			// Always display logo if texture is available
-			if (showLogo) {
-				float logoAspectRatio = uiIcons.logo.size.x / uiIcons.logo.size.y;
-				ImVec2 logoSizeVec(logoSize * logoAspectRatio, logoSize);
-
-				// Determine tint color for logo
-				ImU32 logoTint = IM_COL32_WHITE;
-				if (globals::menu->GetSettings().Theme.UseMonochromeLogo) {
-					ImVec4 textColor = globals::menu->GetSettings().Theme.Palette.Text;
-					logoTint = ImGui::GetColorU32(textColor);
-				}
-
-				// Use our helper to render aligned logo and text with perfect vertical alignment
-				{
-					RoleFontGuard titleFont(Menu::FontRole::Title);
-					Util::DrawAlignedTextWithLogo(
-						uiIcons.logo.texture,
-						logoSizeVec,
-						brand.c_str(),
-						textScaleFactor,
-						logoTint);
-				}
-			} else {
-				// No logo, just render the text with proper alignment
-				ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-				{
-					RoleFontGuard titleFont(Menu::FontRole::Title);
-					Util::DrawSharpText(brand.c_str(), true, textScaleFactor);
-				}
-				ImGui::PopStyleVar();
-			}
-
-			const auto brandBottom = ImGui::GetItemRectMax();
-			ImGui::SameLine();
-			ImGui::SetCursorScreenPos({ ImGui::GetCursorScreenPos().x, brandBottom.y - ImGui::GetTextLineHeight() });
-			ImGui::TextDisabled("%s", version.c_str());
-
-			// Buttons on the right
-			ImGui::TableNextColumn();
-			const float buttonRowHeight = std::max(actionButtonWidth, dockHandleWidth);
-			ImGui::SetCursorPosY(headerRowStartY + std::max(0.0f, (headerRowHeight - buttonRowHeight) * 0.5f));
-			RenderUndockedIcons(actionIcons, uiScale);
-			if (showSteamVRDockHandle) {
-				if (!actionIcons.empty()) {
-					ImGui::SameLine(0.0f, iconSpacing);
-				}
-				RenderSteamVRDockHandle(uiScale, steamVRDockSpaceId);
-			}
-
-			ImGui::EndTable();
-		} else if (!(showLogo || canShowIcons)) {
-			// No icons available - show just the title without the table layout
-			const float fallbackTextScale = ThemeManager::Constants::HEADER_FALLBACK_TEXT_SCALE * uiScale;
-
-			if (centerHeader) {
-				// Calculate text width for centering
-				float textWidth = 0.0f;
-				{
-					RoleFontGuard titleFont(Menu::FontRole::Title);
-					ImGui::SetWindowFontScale(fallbackTextScale);
-					textWidth = ImGui::CalcTextSize(brand.c_str()).x;
-					ImGui::SetWindowFontScale(1.0f);
-				}
-
-				// Use helper to get centering offset
-				float offset = Util::GetCenterOffsetForContent(textWidth);
-				if (offset > 0.0f) {
-					ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset);
-				}
-			}
-
-			ImGui::SetWindowFontScale(fallbackTextScale);
-			{
-				RoleFontGuard titleFont(Menu::FontRole::Title);
-				ImGui::TextUnformatted(brand.c_str());
-			}
-			ImGui::SetWindowFontScale(1.0f);
-			ImGui::SameLine();
-			ImGui::TextDisabled("%s", version.c_str());
-		}
+		RenderStableHeader(title, showLogo, actionIcons, uiScale, uiIcons, showSteamVRDockHandle, steamVRDockSpaceId);
 	}
 
 	// Add separators - no separator needed for docked mode since icons are in title bar
@@ -393,7 +267,11 @@ void MenuHeaderRenderer::RenderHeader(
 
 std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons(bool canShowIcons, const Menu::UIIcons& uiIcons)
 {
-	std::vector<ActionIcon> actionIcons;
+	std::vector<ActionIcon> actionIcons{
+		{ "HeaderSidebar", nullptr, nullptr,
+			FeatureListRenderer::IsSidebarVisible() ? "Hide feature list" : "Show feature list",
+			[] { FeatureListRenderer::SetSidebarVisible(!FeatureListRenderer::IsSidebarVisible()); }, ActionIcon::Glyph::Sidebar }
+	};
 
 	if (!canShowIcons) {
 		return actionIcons;
@@ -407,7 +285,8 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			"Save Settings",
 			[]() {
 				globals::state->Save();
-			} });
+			},
+			ActionIcon::Glyph::SaveSettings });
 	}
 	if (uiIcons.loadSettings.texture) {
 		actionIcons.push_back({ "HeaderRestoreSavedSettings",
@@ -417,7 +296,8 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			[]() {
 				globals::state->Load();
 				globals::features::llf::particleLights.GetConfigs();
-			} });
+			},
+			ActionIcon::Glyph::LoadSettings });
 	}
 	if (uiIcons.clearCache.texture) {
 		actionIcons.push_back({ "HeaderClearShaderCache",
@@ -426,10 +306,29 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			Util::GetClearShaderCacheTooltip(),
 			[]() {
 				Util::RequestClearShaderCacheConfirmation(Util::ResolveShaderCacheClearScope());
-			} });
+			},
+			ActionIcon::Glyph::ClearCache });
 	}
 
 	return actionIcons;
+}
+
+void MenuHeaderRenderer::DrawActionIcon(ImDrawList* draw, const ActionIcon& icon, ImVec2 minimum, ImVec2 maximum, ImU32 tint)
+{
+	if (icon.glyph == ActionIcon::Glyph::Texture) {
+		if (icon.texture)
+			draw->AddImage(icon.texture, minimum, maximum, { 0, 0 }, { 1, 1 }, tint);
+		return;
+	}
+	const int vertexStart = draw->VtxBuffer.Size;
+	Util::DrawActionGlyph(draw, icon.glyph, minimum, maximum,
+		ImGui::GetColorU32(Util::Color::SecondaryText()), FeatureListRenderer::IsSidebarVisible());
+	if (icon.glyph == ActionIcon::Glyph::Close) {
+		float right = minimum.x;
+		for (int vertex = vertexStart; vertex < draw->VtxBuffer.Size; ++vertex)
+			right = std::max(right, draw->VtxBuffer[vertex].pos.x);
+		headerContentAlignment = { ImGui::GetCurrentWindow()->ID, ImGui::GetFrameCount(), right };
+	}
 }
 
 void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale)
@@ -472,7 +371,7 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 		const bool hasActiveFlash = it->flashId && Util::IsButtonFlashActive(it->flashId);
 
 		// Only render if texture is valid
-		if (it->texture) {
+		if (it->texture || it->glyph != ActionIcon::Glyph::Texture) {
 			// Draw icon with hover effect, using reduced area to minimize padding
 			ImU32 tintColor;
 			if (globals::menu->GetSettings().Theme.UseMonochromeIcons) {
@@ -486,7 +385,7 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 				// Use white/gray tint for colored icons
 				tintColor = (isHovered || hasActiveFlash) ? IM_COL32(255, 255, 255, 255) : IM_COL32(220, 220, 220, 220);
 			}
-			fgDrawList->AddImage(it->texture, iconMin, iconMax, ImVec2(0, 0), ImVec2(1, 1), tintColor);
+			DrawActionIcon(fgDrawList, *it, iconMin, iconMax, tintColor);
 		}
 
 		if (isHovered || hasActiveFlash) {
@@ -539,16 +438,20 @@ void MenuHeaderRenderer::RenderUndockedIcons(const std::vector<ActionIcon>& acti
 		const auto& icon = actionIcons[i];
 
 		// Skip if texture is null
-		if (!icon.texture) {
+		if (!icon.texture && icon.glyph == ActionIcon::Glyph::Texture) {
 			continue;
 		}
 
 		std::string buttonId = std::format("##{}", icon.id);
 
 		// Use ImageButton with reduced image size to minimize padding
-		const bool clicked = icon.flashId ?
+		const bool clicked = icon.glyph != ActionIcon::Glyph::Texture ?
+		                         ImGui::InvisibleButton(buttonId.c_str(), imageSize) :
+		                     icon.flashId ?
 		                         Util::ImageButtonWithFlash(icon.flashId, icon.texture, imageSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tintColor) :
 		                         ImGui::ImageButton(buttonId.c_str(), icon.texture, imageSize, ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tintColor);
+		if (icon.glyph != ActionIcon::Glyph::Texture)
+			DrawActionIcon(ImGui::GetWindowDrawList(), icon, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::GetColorU32(tintColor));
 		if (clicked) {
 			icon.callback();
 		}
@@ -607,72 +510,103 @@ void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpac
 	drawList->AddLine(ImVec2(center.x, center.y - radius * 0.55f), ImVec2(center.x, center.y + radius * 0.55f), lineColor, 1.2f);
 }
 
+float MenuHeaderRenderer::GetFeaturePanelWidth()
+{
+	const float available = ImGui::GetContentRegionAvail().x;
+	if (headerContentAlignment.frame != ImGui::GetFrameCount())
+		return available;
+	auto* window = ImGui::GetCurrentWindow();
+	while (window && window->ID != headerContentAlignment.window)
+		window = window->ParentWindow;
+	if (!window)
+		return available;
+	const auto& style = ImGui::GetStyle();
+	const float rightPadding = style.ChildBorderSize > 0 ? style.WindowPadding.x : 0;
+	return std::clamp(headerContentAlignment.right + rightPadding - ImGui::GetCursorScreenPos().x, 1.0f, std::max(1.0f, available));
+}
+
 void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 {
+	RenderResizeHandles(uiScale, true);
+}
+
+void MenuHeaderRenderer::RenderResizeGrip(float uiScale)
+{
+	RenderResizeHandles(uiScale, false);
+}
+
+void MenuHeaderRenderer::RenderResizeHandles(float uiScale, bool steamVRControls)
+{
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
-	if (!window || window->DockIsActive)
+	if (!window || window->DockIsActive || (!steamVRControls && (window->Flags & (ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize))))
 		return;
 
-	const ImVec2 savedCursor = ImGui::GetCursorPos();
 	const ImVec2 windowPos = window->Pos;
 	const ImVec2 windowSize = window->Size;
-	const float handleSize = GetSteamVRResizeHandleSize(uiScale);
+	const float topLeftSize = GetSteamVRResizeHandleSize(uiScale);
+	const float bottomRightSize = steamVRControls ? topLeftSize * 1.2f : std::max(ImGui::GetFontSize() * 1.5f, 18.0f) * uiScale;
 	const float handleInset = GetSteamVRResizeHandleInset(uiScale);
-	const float minWidth = 420.0f * uiScale;
-	const float minHeight = 320.0f * uiScale;
+	const float minWidth = steamVRControls ? 420.0f * uiScale : ImGui::GetStyle().WindowMinSize.x;
+	const float minHeight = steamVRControls ? 320.0f * uiScale : ImGui::GetStyle().WindowMinSize.y;
+	const float sensitivity = steamVRControls ? kSteamVRResizePointerSensitivity : 1.0f;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	const ImVec2 resizeBoundsMin = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
 	const ImVec2 resizeBoundsMax = viewport ?
 	                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y) :
 	                                   ImGui::GetIO().DisplaySize;
 
-	auto drawResizeHandle = [&](const char* id, const ImVec2& min, bool topLeft) {
-		ImGui::SetCursorScreenPos(min);
-		ImGui::InvisibleButton(id, ImVec2(handleSize, handleSize));
-		const bool hovered = ImGui::IsItemHovered();
-		const bool active = ImGui::IsItemActive();
+	auto drawResizeHandle = [&](const char* id, const ImVec2& min, bool topLeft, float handleSize) {
+		const ImGuiID itemId = window->GetID(id);
+		const ImRect bounds(min, ImVec2(min.x + handleSize, min.y + handleSize));
+		if (!ImGui::ItemAdd(bounds, itemId, nullptr, ImGuiItemFlags_NoNav))
+			return;
+		bool hovered = false, active = false;
+		const auto mouse = ImGui::GetIO().MousePos;
+		const float diagonal = mouse.x - min.x + mouse.y - min.y;
+		const bool insideTriangle = bounds.Contains(mouse) && (topLeft ? diagonal <= handleSize : diagonal >= handleSize);
+		if (insideTriangle || ImGui::GetActiveID() == itemId)
+			ImGui::ButtonBehavior(bounds, itemId, &hovered, &active, ImGuiButtonFlags_MouseButtonLeft | static_cast<ImGuiButtonFlags>(ImGuiButtonFlags_FlattenChildren));
 		const bool activated = ImGui::IsItemActivated();
-		const ImGuiID itemId = ImGui::GetItemID();
 		if (hovered || active) {
 			ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
 		}
 
 		if (activated) {
-			g_steamVRResizeDragState.activeId = itemId;
-			g_steamVRResizeDragState.startMouse = ImGui::GetIO().MousePos;
-			g_steamVRResizeDragState.startPos = window->Pos;
-			g_steamVRResizeDragState.startSize = window->Size;
+			g_menuResizeDragState.activeId = itemId;
+			g_menuResizeDragState.startMouse = ImGui::GetIO().MousePos;
+			g_menuResizeDragState.startPos = window->Pos;
+			g_menuResizeDragState.startSize = window->Size;
 		}
 
-		if (!active && g_steamVRResizeDragState.activeId == itemId) {
-			g_steamVRResizeDragState = {};
+		if (!active && g_menuResizeDragState.activeId == itemId) {
+			g_menuResizeDragState = {};
 		}
 
-		if (active && g_steamVRResizeDragState.activeId == itemId) {
+		if (active && g_menuResizeDragState.activeId == itemId) {
 			const ImVec2 mousePos = ImGui::GetIO().MousePos;
 			if (HasValidMousePos(mousePos)) {
 				const ImVec2 clampedMousePos(
 					ClampResizeValue(mousePos.x, resizeBoundsMin.x, resizeBoundsMax.x),
 					ClampResizeValue(mousePos.y, resizeBoundsMin.y, resizeBoundsMax.y));
 				const ImVec2 delta(
-					(clampedMousePos.x - g_steamVRResizeDragState.startMouse.x) * kSteamVRResizePointerSensitivity,
-					(clampedMousePos.y - g_steamVRResizeDragState.startMouse.y) * kSteamVRResizePointerSensitivity);
-				ImVec2 newPos = g_steamVRResizeDragState.startPos;
-				ImVec2 newSize = g_steamVRResizeDragState.startSize;
+					(clampedMousePos.x - g_menuResizeDragState.startMouse.x) * sensitivity,
+					(clampedMousePos.y - g_menuResizeDragState.startMouse.y) * sensitivity);
+				ImVec2 newPos = g_menuResizeDragState.startPos;
+				ImVec2 newSize = g_menuResizeDragState.startSize;
 				if (topLeft) {
 					const ImVec2 fixedBottomRight(
-						g_steamVRResizeDragState.startPos.x + g_steamVRResizeDragState.startSize.x,
-						g_steamVRResizeDragState.startPos.y + g_steamVRResizeDragState.startSize.y);
-					newPos.x = ClampResizeValue(g_steamVRResizeDragState.startPos.x + delta.x, resizeBoundsMin.x, fixedBottomRight.x - minWidth);
-					newPos.y = ClampResizeValue(g_steamVRResizeDragState.startPos.y + delta.y, resizeBoundsMin.y, fixedBottomRight.y - minHeight);
+						g_menuResizeDragState.startPos.x + g_menuResizeDragState.startSize.x,
+						g_menuResizeDragState.startPos.y + g_menuResizeDragState.startSize.y);
+					newPos.x = ClampResizeValue(g_menuResizeDragState.startPos.x + delta.x, resizeBoundsMin.x, fixedBottomRight.x - minWidth);
+					newPos.y = ClampResizeValue(g_menuResizeDragState.startPos.y + delta.y, resizeBoundsMin.y, fixedBottomRight.y - minHeight);
 					newSize.x = fixedBottomRight.x - newPos.x;
 					newSize.y = fixedBottomRight.y - newPos.y;
 					ImGui::SetWindowPos(window, newPos, ImGuiCond_Always);
 				} else {
-					const float rightEdge = ClampResizeValue(g_steamVRResizeDragState.startPos.x + g_steamVRResizeDragState.startSize.x + delta.x, g_steamVRResizeDragState.startPos.x + minWidth, resizeBoundsMax.x);
-					const float bottomEdge = ClampResizeValue(g_steamVRResizeDragState.startPos.y + g_steamVRResizeDragState.startSize.y + delta.y, g_steamVRResizeDragState.startPos.y + minHeight, resizeBoundsMax.y);
-					newSize.x = rightEdge - g_steamVRResizeDragState.startPos.x;
-					newSize.y = bottomEdge - g_steamVRResizeDragState.startPos.y;
+					const float rightEdge = ClampResizeValue(g_menuResizeDragState.startPos.x + g_menuResizeDragState.startSize.x + delta.x, g_menuResizeDragState.startPos.x + minWidth, resizeBoundsMax.x);
+					const float bottomEdge = ClampResizeValue(g_menuResizeDragState.startPos.y + g_menuResizeDragState.startSize.y + delta.y, g_menuResizeDragState.startPos.y + minHeight, resizeBoundsMax.y);
+					newSize.x = rightEdge - g_menuResizeDragState.startPos.x;
+					newSize.y = bottomEdge - g_menuResizeDragState.startPos.y;
 				}
 				ImGui::SetWindowSize(window, newSize, ImGuiCond_Always);
 			}
@@ -693,12 +627,13 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 		drawList->PopClipRect();
 	};
 
-	drawResizeHandle("##SteamVRResizeTopLeft", ImVec2(windowPos.x + handleInset, windowPos.y + handleInset), true);
-	drawResizeHandle("##SteamVRResizeBottomRight", ImVec2(windowPos.x + windowSize.x - handleSize - handleInset, windowPos.y + windowSize.y - handleSize - handleInset), false);
-	ImGui::SetCursorPos(savedCursor);
+	if (steamVRControls)
+		drawResizeHandle("##SteamVRResizeTopLeft", ImVec2(windowPos.x + handleInset, windowPos.y + handleInset), true, topLeftSize);
+	drawResizeHandle(steamVRControls ? "##SteamVRResizeBottomRight" : "##MenuResizeBottomRight",
+		ImVec2(windowPos.x + windowSize.x - bottomRightSize - handleInset, windowPos.y + windowSize.y - bottomRightSize - handleInset), false, bottomRightSize);
 }
 
-void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showLogo, const std::vector<ActionIcon>& actionIcons, float uiScale, const Menu::UIIcons& uiIcons)
+void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showLogo, const std::vector<ActionIcon>& actionIcons, float uiScale, const Menu::UIIcons& uiIcons, bool showSteamVRDockHandle, ImGuiID steamVRDockSpaceId)
 {
 	auto* menu = globals::menu;
 	if (!menu)
@@ -706,48 +641,47 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 
 	ImGuiStyle& style = ImGui::GetStyle();
 	const float currentFontSize = ImGui::GetFontSize();
-	const float baseIconSize = currentFontSize * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
-	const float logoSize = baseIconSize * uiScale;
 	const float actionIconSize = GetHeaderActionIconSize(uiScale);
 	const float textScaleFactor = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE * uiScale;
-	const float paddingX = ThemeManager::Constants::CURSOR_POSITION_PADDING * uiScale;
+	const float paddingX = currentFontSize;
+	const float dockReserve = showSteamVRDockHandle ? GetSteamVRDockHandleSize(uiScale) + GetSteamVRHeaderRightInset(uiScale) + style.ItemSpacing.x : 0;
 	const float paddingY = style.FramePadding.y * 2.0f;
 	const float iconSpacing = ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING * uiScale;
 	const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * uiScale;
 
-	ImFont* titleFont = menu->GetFont(Menu::FontRole::Title);
+	ImFont* titleFont = menu->GetFont(Menu::FontRole::Body);
 	if (!titleFont) {
 		titleFont = ImGui::GetFont();
 	}
-	const float titleFontSize = (titleFont ? titleFont->LegacySize : currentFontSize) * textScaleFactor;
+	const float titleFontSize = currentFontSize * textScaleFactor * 1.3f;
 	const std::string_view brand = "CSX";
 	const std::string version = title.starts_with("CSX ") ? title.substr(4) : title;
-	const float versionSize = currentFontSize;
+	const float versionSize = currentFontSize * 1.25f;
 	const ImVec2 brandSize = titleFont->CalcTextSizeA(titleFontSize, FLT_MAX, 0, brand.data());
 	const ImVec2 versionTextSize = titleFont->CalcTextSizeA(versionSize, FLT_MAX, 0, version.c_str());
 	const ImVec2 titleSize(brandSize.x + style.ItemSpacing.x + versionTextSize.x, std::max(brandSize.y, versionTextSize.y));
 
+	const float brandBlockHeight = titleFontSize + currentFontSize * 1.05f;
+	const float logoSize = brandBlockHeight;
 	const float logoAspectRatio = showLogo && uiIcons.logo.size.y > 0.0f ? uiIcons.logo.size.x / uiIcons.logo.size.y : 1.0f;
 	const float logoWidth = showLogo ? logoSize * logoAspectRatio : 0.0f;
-	const float titleGroupWidth = logoWidth + (showLogo ? style.ItemSpacing.x : 0.0f) + titleSize.x;
 	const float iconsWidth = actionIcons.empty() ? 0.0f :
 	                                               (static_cast<float>(actionIcons.size()) * actionIconSize) +
 	                                                   (static_cast<float>(actionIcons.size() - 1) * iconSpacing);
 
-	const float headerHeight = std::max(std::max(logoSize, actionIconSize), titleFontSize) + paddingY * 2.0f;
+	const float brandRowHeight = std::max({ logoSize, actionIconSize, brandBlockHeight }) + paddingY * 2.0f;
 	const ImVec2 cursorStart = ImGui::GetCursorPos();
 	const ImVec2 screenStart = ImGui::GetCursorScreenPos();
 	const float availableWidth = ImGui::GetContentRegionAvail().x;
+	const float subtitleWidth = ImGui::CalcTextSize("Community Shaders Expanded").x;
+	const float brandWidth = std::max(titleSize.x, subtitleWidth) + logoWidth + style.ItemSpacing.x;
+	const bool stackedActions = availableWidth < brandWidth + iconsWidth + dockReserve + paddingX * 2 + currentFontSize;
+	const float headerHeight = brandRowHeight + (stackedActions ? actionIconSize + paddingY : 0);
 	const float rightLimit = screenStart.x + availableWidth;
-	const float iconStartX = rightLimit - paddingX - iconsWidth;
-	const float titleAreaWidth = std::max(0.0f, availableWidth - iconsWidth - paddingX * 3.0f);
-
-	float titleX = screenStart.x + paddingX;
-	if (menu->GetTheme().CenterHeader && titleGroupWidth < titleAreaWidth) {
-		titleX = screenStart.x + paddingX + (titleAreaWidth - titleGroupWidth) * 0.5f;
-	}
-	titleX = std::min(titleX, std::max(screenStart.x + paddingX, iconStartX - style.ItemSpacing.x - titleGroupWidth));
-	const float centerY = screenStart.y + headerHeight * 0.5f;
+	const float iconStartX = rightLimit - paddingX - iconsWidth - dockReserve;
+	float titleX = screenStart.x + paddingX + (showSteamVRDockHandle ? GetSteamVRResizeHandleSize(uiScale) : 0);
+	const float centerY = screenStart.y + brandRowHeight * 0.5f;
+	const float actionsY = stackedActions ? screenStart.y + brandRowHeight + actionIconSize * .5f : centerY;
 
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImU32 logoTint = IM_COL32_WHITE;
@@ -763,22 +697,38 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	}
 
 	const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
-	const float titleClipMaxX = std::max(titleX, iconStartX - style.ItemSpacing.x);
+	const float titleClipMaxX = std::max(titleX, stackedActions ? rightLimit - paddingX : iconStartX - style.ItemSpacing.x);
 	drawList->PushClipRect(
 		ImVec2(titleX, screenStart.y),
 		ImVec2(titleClipMaxX, screenStart.y + headerHeight),
 		true);
-	drawList->AddText(titleFont, titleFontSize, ImVec2(titleX, centerY - brandSize.y * 0.5f), textColor, brand.data());
-	drawList->AddText(titleFont, versionSize, ImVec2(titleX + brandSize.x + style.ItemSpacing.x, centerY - versionTextSize.y * 0.5f), ImGui::GetColorU32(ImGuiCol_TextDisabled), version.c_str());
+	drawList->AddText(titleFont, titleFontSize, ImVec2(titleX, centerY - brandBlockHeight * .5f), textColor, brand.data());
+	drawList->AddText(ImGui::GetFont(), versionSize, ImVec2(titleX + brandSize.x + style.ItemSpacing.x, centerY - brandBlockHeight * .5f + brandSize.y - versionTextSize.y), ImGui::GetColorU32(Util::Color::SecondaryText()), version.c_str());
+	drawList->AddText(ImGui::GetFont(), currentFontSize, { titleX, centerY + brandBlockHeight * .5f - currentFontSize }, ImGui::GetColorU32(Util::Color::SecondaryText()), "Community Shaders Expanded");
 	drawList->PopClipRect();
+
+	const char* runtime = globals::game::isVR ? "Skyrim VR" : "Skyrim SE / AE";
+	const float badgeWidth = ImGui::CalcTextSize(runtime).x + currentFontSize * 1.2f;
+	const float badgeRight = iconStartX - currentFontSize * 1.4f;
+	if (!stackedActions && badgeRight - badgeWidth > titleX + std::max(titleSize.x, subtitleWidth) + currentFontSize) {
+		const ImVec2 badgeMin{ badgeRight - badgeWidth, centerY - currentFontSize };
+		const ImVec2 badgeMax{ badgeRight, centerY + currentFontSize };
+		drawList->AddRectFilled(badgeMin, badgeMax, ImGui::GetColorU32(ImGuiCol_FrameBg), currentFontSize * .25f);
+		drawList->AddRect(badgeMin, badgeMax, ImGui::GetColorU32(ImGuiCol_Border), currentFontSize * .25f);
+		drawList->AddText({ badgeMin.x + currentFontSize * .6f, centerY - currentFontSize * .5f }, textColor, runtime);
+	}
+	if (showSteamVRDockHandle) {
+		ImGui::SetCursorScreenPos({ rightLimit - paddingX - GetSteamVRDockHandleSize(uiScale) - GetSteamVRHeaderRightInset(uiScale), actionsY - GetSteamVRDockHandleSize(uiScale) * .5f });
+		RenderSteamVRDockHandle(uiScale, steamVRDockSpaceId);
+	}
 
 	float iconX = iconStartX;
 	for (size_t i = 0; i < actionIcons.size(); ++i) {
 		const auto& icon = actionIcons[i];
-		if (!icon.texture)
+		if (!icon.texture && icon.glyph == ActionIcon::Glyph::Texture)
 			continue;
 
-		const ImVec2 buttonMin(iconX, centerY - actionIconSize * 0.5f);
+		const ImVec2 buttonMin(iconX, actionsY - actionIconSize * 0.5f);
 		const ImVec2 buttonMax(buttonMin.x + actionIconSize, buttonMin.y + actionIconSize);
 		const ImVec2 imageMin(buttonMin.x + paddingReduction * 0.5f, buttonMin.y + paddingReduction * 0.5f);
 		const ImVec2 imageMax(buttonMax.x - paddingReduction * 0.5f, buttonMax.y - paddingReduction * 0.5f);
@@ -809,7 +759,7 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 		if (menu->GetSettings().Theme.UseMonochromeIcons) {
 			tintColor = menu->GetSettings().Theme.Palette.Text;
 		}
-		drawList->AddImage(icon.texture, imageMin, imageMax, ImVec2(0, 0), ImVec2(1, 1), ImGui::GetColorU32(tintColor));
+		DrawActionIcon(drawList, icon, imageMin, imageMax, ImGui::GetColorU32(tintColor));
 		ImGui::PopID();
 
 		iconX += actionIconSize + iconSpacing;

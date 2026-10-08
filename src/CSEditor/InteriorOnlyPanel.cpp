@@ -56,7 +56,7 @@ namespace InteriorOnlyPanel
 		const char* featurePreview = (selectedFeatureIdx >= 0 && selectedFeatureIdx < static_cast<int>(cachedFeatureNames.size())) ? cachedFeatureNames[selectedFeatureIdx].c_str() : "Select Feature...";
 
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * C::SCENE_FEATURE_DROPDOWN_RATIO);
-		if (ImGui::BeginCombo("##FeatureSelect", featurePreview)) {
+		if (auto combo = Util::Widgets::ComboBox("##FeatureSelect", featurePreview)) {
 			for (int i = 0; i < static_cast<int>(cachedFeatureNames.size()); ++i) {
 				bool selected = (i == selectedFeatureIdx);
 				if (ImGui::Selectable(cachedFeatureNames[i].c_str(), selected)) {
@@ -67,7 +67,6 @@ namespace InteriorOnlyPanel
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
-			ImGui::EndCombo();
 		}
 
 		ImGui::SameLine();
@@ -79,7 +78,7 @@ namespace InteriorOnlyPanel
 			const char* settingPreview = (selectedSettingIdx >= 0 && selectedSettingIdx < static_cast<int>(cachedSettingKeys.size())) ? cachedSettingKeys[selectedSettingIdx].c_str() : "Select Setting...";
 
 			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * C::SCENE_SETTING_DROPDOWN_RATIO);
-			if (ImGui::BeginCombo("##SettingSelect", settingPreview)) {
+			if (auto combo = Util::Widgets::ComboBox("##SettingSelect", settingPreview)) {
 				for (int i = 0; i < static_cast<int>(cachedSettingKeys.size()); ++i) {
 					bool selected = (i == selectedSettingIdx);
 					bool alreadyAdded = selectedFeatureIdx >= 0 &&
@@ -96,7 +95,6 @@ namespace InteriorOnlyPanel
 					if (selected)
 						ImGui::SetItemDefaultFocus();
 				}
-				ImGui::EndCombo();
 			}
 		}
 

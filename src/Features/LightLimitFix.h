@@ -46,8 +46,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Light Limit Fix removes the vanilla game's 4-light limit, allowing unlimited dynamic lights in scenes.\n"
-			"This dramatically improves lighting quality and enables more realistic illumination scenarios.",
+			"Allows more lights to illuminate the scene at the same time.",
 			{ "Removes 4-light limit",
 				"Unlimited dynamic lights",
 				"Improved lighting quality",
@@ -293,8 +292,6 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

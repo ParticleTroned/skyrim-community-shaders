@@ -126,7 +126,7 @@ namespace
 	bool DrawScreenSpaceGIEnabledCheckbox(ScreenSpaceGI& feature)
 	{
 		bool enabled = feature.IsEnabledRequested();
-		if (!Util::Widgets::Checkbox("Enable", &enabled))
+		if (!Util::Widgets::Checkbox("Enabled", &enabled))
 			return false;
 		feature.SetEnabled(enabled);
 		return true;
@@ -313,11 +313,11 @@ namespace
 			ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
-			clickedResolutionMode |= ImGui::RadioButton("Full Res", &a_resolutionMode, 0);
+			clickedResolutionMode |= Util::Widgets::RadioButton("Full Res", &a_resolutionMode, 0);
 			ImGui::TableNextColumn();
-			clickedResolutionMode |= ImGui::RadioButton("Half Res", &a_resolutionMode, 1);
+			clickedResolutionMode |= Util::Widgets::RadioButton("Half Res", &a_resolutionMode, 1);
 			ImGui::TableNextColumn();
-			clickedResolutionMode |= ImGui::RadioButton("Quarter Res", &a_resolutionMode, 2);
+			clickedResolutionMode |= Util::Widgets::RadioButton("Quarter Res", &a_resolutionMode, 2);
 			ImGui::EndTable();
 		}
 		return clickedResolutionMode;
@@ -390,45 +390,26 @@ void ScreenSpaceGI::DrawSettings()
 	static bool showAdvanced;
 	const bool isVR = REL::Module::IsVR();
 
-	if (!ShadersOK())
-		Util::Text::Error("Compute shaders failed to compile!");
-
-	auto drawCenteredSeparatorText = [](const char* a_label) {
-		ImGui::PushStyleVar(ImGuiStyleVar_SeparatorTextAlign, ImVec2(0.5f, 0.5f));
-		ImGui::SeparatorText(a_label);
-		ImGui::PopStyleVar();
-	};
-
-	///////////////////////////////
-	DrawScreenSpaceGIEnabledCheckbox(*this);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable Screen Space Global Illumination. When disabled, all other settings are ignored.");
-	}
-
-	ImGui::SameLine();
-	{
-		auto advancedGuard = Util::DisableGuard(!settings.Enabled);
-		Util::Widgets::Checkbox("Advanced Options", &showAdvanced);
-	}
-
-	if (!isVR) {
-		ImGui::SameLine();
-		auto ssaoToggleGuard = Util::DisableGuard(!settings.Enabled);
-		Util::Widgets::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enable Skyrim's built-in SSAO. Usually disabled when using SSGI to avoid double-darkening.");
-		}
-	}
-
 	MenuUI::SettingsPage page("ScreenSpaceGI", {
-												   { "preset", "Presets", "Choose the shadow and indirect-light baseline." },
-												   { "coverage", "Coverage", "Choose the effects and area to process." },
-												   { "quality", "Quality", "Choose the detail and processing budget." },
-												   { "look", "Look", "Refine shadows and lighting." },
-												   { "indirect", "Indirect light", "Refine bounced-light colour and intensity." },
-												   { "smoothing", "Smoothing", "Reduce noise after choosing the appearance." },
-												   { "diagnostics", "Diagnostics", "Inspect diagnostic buffer views." },
+												   { "preset", "Presets", "Choose the shadow and indirect-light baseline.", "AO and indirect-light baselines", true, true, "Choose the rendering foundation" },
+												   { "coverage", "Coverage", "Choose the effects and area to process.", "Effects and processing area", true, true, nullptr },
+												   { "quality", "Quality", "Choose the detail and processing budget.", "Resolution and sample budget", true, true, "Balance detail and appearance" },
+												   { "look", "Look", "Refine shadows and lighting.", "Shadow strength and lighting", true, true, nullptr },
+												   { "indirect", "Indirect light", "Refine bounced-light colour and intensity.", "Bounced-light colour", true, true, "Refine indirect light" },
+												   { "smoothing", "Smoothing", "Reduce noise after choosing the appearance.", "Temporal and spatial smoothing", true, true, nullptr },
+												   { "diagnostics", "Diagnostics", "Inspect diagnostic buffer views.", "Diagnostic buffer views", true, false, nullptr },
 											   });
+
+	if (!page.Is("overview") && !page.Is("performance") && !page.Is("profiling")) {
+		if (!ShadersOK())
+			Util::Text::Error("Compute shaders failed to compile!");
+		Util::Widgets::Checkbox("Advanced options", &showAdvanced);
+	}
+	if (page.Is("coverage") && !isVR) {
+		auto guard = Util::DisableGuard(!settings.Enabled);
+		Util::Widgets::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
+		Util::AddTooltip("Enable Skyrim's built-in SSAO. Usually disabled with SSGI to avoid double-darkening.");
+	}
 
 	///////////////////////////////
 	if (page.Is("coverage"))
@@ -442,63 +423,30 @@ void ScreenSpaceGI::DrawSettings()
 
 	{
 		auto presetsAndQualityGuard = Util::DisableGuard(!settings.Enabled);
-		auto drawThemePresetButton = [&](const char* a_label, bool a_active, const ImVec2& a_size) {
-			[[maybe_unused]] auto style = Util::PresetButtonStyle(a_active);
-			return ImGui::Button(a_label, a_size);
-		};
 
 		if (page.Is("preset")) {
-			if (ImGui::BeginTable("Presets", 4, ImGuiTableFlags_SizingStretchProp)) {
-				ImGui::TableSetupColumn("PresetAO", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-				ImGui::TableSetupColumn("PresetAOGI", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-				ImGui::TableSetupColumn("PresetReference", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-				ImGui::TableSetupColumn("PresetUser", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-
-				ImGui::TableNextColumn();
-				const bool aoOnlyActive = IsAOOnlyPreset(settings, isVR);
-				const bool aoGiActive = IsAOGIPreset(settings, isVR);
-				const bool referenceActive = IsReferencePreset(settings);
-				const bool userActive = !aoOnlyActive && !aoGiActive && !referenceActive;
-				if (drawThemePresetButton("AO only", aoOnlyActive, { -1, 0 })) {
+			const int selected = IsAOOnlyPreset(settings, isVR) ? 0 : IsAOGIPreset(settings, isVR) ? 1 :
+			                                                      IsReferencePreset(settings)      ? 2 :
+			                                                                                         3;
+			const MenuUI::Choice choices[] = {
+				{ "ao", "AO only", "Full resolution ambient shadows", "Full resolution with GI disabled." },
+				{ "gi", "AO + GI", "Ambient shadows and bounced light", "Full resolution, 4 slices and 6 steps." },
+				{ "reference", "Reference", "Higher quality, higher cost", "Full resolution with GI and blur, 8 slices and 10 steps." },
+				{ "user", "User", "Start from AO + GI and customise", "Copies AO + GI. Custom settings remain unrestricted." }
+			};
+			const int chosen = MenuUI::ChoiceCards("SSGIPreset", selected, choices);
+			if (chosen >= 0) {
+				if (chosen == 0)
 					ApplyAOOnlyPreset(settings);
-					recompileFlag = true;
-				}
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Full Res, no GI.");
-
-				ImGui::TableNextColumn();
-				if (drawThemePresetButton("AO + GI", aoGiActive, { -1, 0 })) {
-					ApplyAOGIPreset(settings);
-					recompileFlag = true;
-				}
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Lighter AO + GI baseline: Full Res, GI resources, 4 slices and 6 steps.");
-
-				ImGui::TableNextColumn();
-				if (drawThemePresetButton("Reference", referenceActive, { -1, 0 })) {
+				else if (chosen == 2)
 					ApplyReferencePreset(settings);
-					recompileFlag = true;
-				}
-				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("High-quality baseline: Full Res with GI and blur enabled, 8 slices and 10 steps.");
-
-				ImGui::TableNextColumn();
-				if (drawThemePresetButton("User", userActive, { -1, 0 })) {
+				else
 					ApplyAOGIPreset(settings);
-					recompileFlag = true;
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted("Copies the AO + GI preset as a starting point.");
-					ImGui::TextUnformatted("Custom settings are shown as User and remain unrestricted.");
-				}
-
-				ImGui::EndTable();
+				recompileFlag = true;
 			}
-
-			///////////////////////////////
 		}
 		if (page.Is("coverage")) {
-			drawCenteredSeparatorText("SSGI Effects & Resources");
+			MenuUI::SectionHeading("SSGI Effects & Resources");
 
 			const int previousResourceProfile = settings.ResourceProfile;
 			if (ImGui::BeginTable("SSGIEffectsResources", 3, ImGuiTableFlags_SizingFixedFit)) {
@@ -506,7 +454,7 @@ void ScreenSpaceGI::DrawSettings()
 				ImGui::TableNextColumn();
 				{
 					auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
-					if (ImGui::RadioButton("AO-only", !settings.EnableGI)) {
+					if (Util::Widgets::RadioButton("AO-only", !settings.EnableGI)) {
 						DisableGIEffects(settings);
 						recompileFlag = true;
 					}
@@ -518,7 +466,7 @@ void ScreenSpaceGI::DrawSettings()
 				ImGui::TableNextColumn();
 				{
 					auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
-					if (ImGui::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly))
+					if (Util::Widgets::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly))
 						settings.ResourceProfile = kResourceProfileAOOnly;
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -538,7 +486,7 @@ void ScreenSpaceGI::DrawSettings()
 				ImGui::TableNextColumn();
 				{
 					auto effectModeGuard = Util::DisableGuard(!settings.Enabled);
-					if (ImGui::RadioButton("AO + GI", settings.EnableGI)) {
+					if (Util::Widgets::RadioButton("AO + GI", settings.EnableGI)) {
 						settings.ResourceProfile = kResourceProfileFullGI;
 						settings.EnableGI = true;
 						recompileFlag = true;
@@ -551,7 +499,7 @@ void ScreenSpaceGI::DrawSettings()
 				ImGui::TableNextColumn();
 				{
 					auto resourceProfileGuard = Util::DisableGuard(!settings.Enabled);
-					if (ImGui::RadioButton("AO + GI Resources", settings.ResourceProfile == kResourceProfileFullGI))
+					if (Util::Widgets::RadioButton("AO + GI Resources", settings.ResourceProfile == kResourceProfileFullGI))
 						settings.ResourceProfile = kResourceProfileFullGI;
 				}
 				if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -590,7 +538,7 @@ void ScreenSpaceGI::DrawSettings()
 			}
 		}
 		if (page.Is("quality")) {
-			drawCenteredSeparatorText("Quality/Performance");
+			MenuUI::SectionHeading("Quality/Performance");
 
 			if (isVR) {
 				Util::Widgets::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
@@ -626,26 +574,15 @@ void ScreenSpaceGI::DrawSettings()
 			const int previousResolutionMode = settings.ResolutionMode;
 			settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 
-			bool clickedFullRes = false;
-			bool clickedHalfRes = false;
-			bool clickedQuarterRes = false;
-			if (ImGui::BeginTable("SSGIResolutionMode", 3, ImGuiTableFlags_SizingStretchProp)) {
-				ImGui::TableSetupColumn("FullRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-				ImGui::TableSetupColumn("HalfRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-				ImGui::TableSetupColumn("QuarterRes", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				clickedFullRes = ImGui::RadioButton("Full Res", &settings.ResolutionMode, 0);
-				ImGui::TableNextColumn();
-				clickedHalfRes = ImGui::RadioButton("Half Res", &settings.ResolutionMode, 1);
-				ImGui::TableNextColumn();
-				clickedQuarterRes = ImGui::RadioButton("Quarter Res", &settings.ResolutionMode, 2);
-				ImGui::EndTable();
-			}
-
-			settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
-			if (clickedFullRes || clickedHalfRes || clickedQuarterRes) {
-				settings.CenterFullResMaskScale = 0.0f;  // Pure Full/Half/Quarter.
+			const MenuUI::Choice resolutions[] = {
+				{ "full", "Full resolution", "Maximum spatial detail", "Processes every pixel." },
+				{ "half", "Half resolution", "Balance detail and cost", "Processes a reduced-resolution image." },
+				{ "quarter", "Quarter resolution", "Lowest processing cost", "Processes the smallest image." }
+			};
+			const int chosen = MenuUI::ChoiceCards("SSGIResolutionMode", settings.ResolutionMode, resolutions);
+			if (chosen >= 0) {
+				settings.ResolutionMode = chosen;
+				settings.CenterFullResMaskScale = 0.0f;
 			}
 			recompileFlag |= (settings.ResolutionMode != previousResolutionMode);
 		}
@@ -653,7 +590,7 @@ void ScreenSpaceGI::DrawSettings()
 
 	///////////////////////////////
 	if (page.Is("look")) {
-		drawCenteredSeparatorText("Visual");
+		MenuUI::SectionHeading("Visual");
 
 		{
 			auto visualGuard = Util::DisableGuard(!settings.Enabled);
@@ -723,7 +660,7 @@ void ScreenSpaceGI::DrawSettings()
 		///////////////////////////////
 	}
 	if (page.Is("indirect")) {
-		drawCenteredSeparatorText("Visual - IL");
+		MenuUI::SectionHeading("Visual - IL");
 
 		{
 			auto visualILGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
@@ -742,7 +679,7 @@ void ScreenSpaceGI::DrawSettings()
 		///////////////////////////////
 	}
 	if (page.Is("smoothing")) {
-		drawCenteredSeparatorText("Denoising");
+		MenuUI::SectionHeading("Denoising");
 
 		{
 			auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
@@ -796,7 +733,7 @@ void ScreenSpaceGI::DrawSettings()
 		///////////////////////////////
 	}
 	if (page.Is("diagnostics")) {
-		drawCenteredSeparatorText("Debug");
+		MenuUI::SectionHeading("Debug");
 
 		if (ImGui::TreeNode("Buffer Viewer")) {
 			static float debugRescale = .3f;
@@ -923,7 +860,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	const int previousResourceProfile = settings.ResourceProfile;
 	{
 		auto guard = Util::DisableGuard(!settings.Enabled);
-		if (ImGui::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly)) {
+		if (Util::Widgets::RadioButton("AO-only Resources", settings.ResourceProfile == kResourceProfileAOOnly)) {
 			settings.ResourceProfile = kResourceProfileAOOnly;
 		}
 	}
@@ -971,20 +908,6 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (IsResourceProfileRestartPending()) {
 		Util::Text::Warning("Resource profile changes require restart to allocate/free VRAM and recompile SSGI shaders.");
 	}
-}
-
-void ScreenSpaceGI::DrawEssentialSettings()
-{
-	ApplyPlatformSettingOverrides(settings);
-	SyncResolvedSharedMaskScale(settings);
-
-	MenuUI::SettingsPage page("ScreenSpaceGI", {
-												   { "essentials", "Essentials", "Start with the main choices for this feature." },
-											   });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawScreenSpaceGIEnabledCheckbox(*this);
 }
 
 bool ScreenSpaceGI::IsPerformanceCostMeasurementReady() const

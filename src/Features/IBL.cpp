@@ -152,20 +152,22 @@ void IBL::RestorePerformanceToggleState(const json& a_state)
 void IBL::DrawSettings()
 {
 	MenuUI::SettingsPage page("IBL", {
-										 { "coverage", "Coverage", "Choose where environment lighting is enabled." },
-										 { "lighting", "Lighting", "Balance light from the environment and sky." },
-										 { "colour", "Colour", "Refine colour, brightness matching and fog." },
+										 { "coverage", "Coverage", "Choose where environment lighting is enabled.", "Interior and exterior coverage", true, true, "Choose coverage and light" },
+										 { "lighting", "Lighting", "Balance light from the environment and sky.", "Environment and sky contribution", true, true, nullptr },
+										 { "colour", "Colour", "Refine colour, brightness matching and fog.", "Colour matching and fog", true, true, "Refine the shared picture" },
 									 });
 
 	SanitizeSettings(settings);
 	std::set<std::string> changedWeatherBaselines;
-	bool enableIBL = settings.EnableIBL != 0;
-	if (Util::WeatherUI::Checkbox("Enable", this, "EnableIBL", &enableIBL)) {
-		settings.EnableIBL = enableIBL ? 1u : 0u;
-		changedWeatherBaselines.insert("EnableIBL");
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");
+	if (page.Is("coverage")) {
+		bool enableIBL = settings.EnableIBL != 0;
+		if (Util::WeatherUI::Checkbox("Enabled", this, "EnableIBL", &enableIBL)) {
+			settings.EnableIBL = enableIBL ? 1u : 0u;
+			changedWeatherBaselines.insert("EnableIBL");
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");
+		}
 	}
 
 	ImGui::BeginDisabled(settings.EnableIBL == 0);
@@ -227,19 +229,19 @@ void IBL::DrawSettings()
 			}
 			if (ImGui::BeginTable("##IBLDALCMode", 2, ImGuiTableFlags_SizingStretchSame)) {
 				ImGui::TableNextColumn();
-				if (ImGui::RadioButton("Luminance Ratio", &dalcMode, static_cast<int>(kDALCLuminanceRatioMode))) {
+				if (Util::Widgets::RadioButton("Luminance Ratio", &dalcMode, static_cast<int>(kDALCLuminanceRatioMode))) {
 					settings.DALCMode = static_cast<uint>(dalcMode);
 				}
 				ImGui::TableNextColumn();
-				if (ImGui::RadioButton("DALC + Sky", &dalcMode, static_cast<int>(kDALCPlusSkyMode))) {
+				if (Util::Widgets::RadioButton("DALC + Sky", &dalcMode, static_cast<int>(kDALCPlusSkyMode))) {
 					settings.DALCMode = static_cast<uint>(dalcMode);
 				}
 				ImGui::TableNextColumn();
-				if (ImGui::RadioButton("Color Ratio", &dalcMode, static_cast<int>(kDALCColorRatioMode))) {
+				if (Util::Widgets::RadioButton("Color Ratio", &dalcMode, static_cast<int>(kDALCColorRatioMode))) {
 					settings.DALCMode = static_cast<uint>(dalcMode);
 				}
 				ImGui::TableNextColumn();
-				if (ImGui::RadioButton("DALC + Sky (Directional)", &dalcMode, static_cast<int>(kDALCPlusSkyDirectionalMode))) {
+				if (Util::Widgets::RadioButton("DALC + Sky (Directional)", &dalcMode, static_cast<int>(kDALCPlusSkyDirectionalMode))) {
 					settings.DALCMode = static_cast<uint>(dalcMode);
 				}
 				ImGui::EndTable();
@@ -275,30 +277,6 @@ void IBL::DrawSettings()
 		WeatherVariables::GlobalWeatherRegistry::GetSingleton()
 			->CaptureFeatureUserSettings(
 				GetShortName(), changedWeatherBaselines);
-	}
-}
-
-void IBL::DrawEssentialSettings()
-{
-	SanitizeSettings(settings);
-
-	MenuUI::SettingsPage page("IBL", {
-										 { "essentials", "Essentials", "Start with the main choices for this feature." },
-									 });
-	if (!page.Is("essentials"))
-		return;
-
-	bool enableIBL = settings.EnableIBL != 0;
-	if (Util::WeatherUI::Checkbox("Enable", this, "EnableIBL", &enableIBL)) {
-		settings.EnableIBL = enableIBL ? 1u : 0u;
-		if (settings.CaptureWeatherBaselineOnSliderChange) {
-			WeatherVariables::GlobalWeatherRegistry::GetSingleton()
-				->CaptureFeatureUserSettings(
-					GetShortName(), { "EnableIBL" });
-		}
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");
 	}
 }
 

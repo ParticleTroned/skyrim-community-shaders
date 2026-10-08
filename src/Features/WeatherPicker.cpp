@@ -119,7 +119,7 @@ void WeatherPicker::EnsureWeatherListLoaded()
 void WeatherPicker::DrawSettings()
 {
 	MenuUI::SettingsPage page("WeatherPicker", {
-												   { "appearance", "Weather", "Choose the weather to preview in the world." },
+												   { "appearance", "Weather", "Choose the weather to preview in the world.", "Weather preview and analysis", true, true, "Choose the world atmosphere" },
 											   });
 	if (!page.Is("appearance"))
 		return;
@@ -528,36 +528,27 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 	if (ImGui::Button(T(TKEY("clear_all"), "Clear All"))) {
 		s_weatherFlagFilter = 0x00;  // No flags
 	}
-	// Dynamic checkbox layout - calculate how many fit per row
-	float availableWidth = ImGui::GetContentRegionAvail().x;
-	float checkboxWidth = 110.0f;  // Fits "Aurora Sun" label
-	const auto checkboxesPerRow = static_cast<size_t>(std::max(1, static_cast<int>(availableWidth / checkboxWidth)));
-
-	// Classified weather filters share the canonical flag metadata used by analysis displays.
-	size_t filterIndex = 0;
-	for (const auto& filter : kClassifiedWeatherFlags) {
-		if (filterIndex > 0 && filterIndex % checkboxesPerRow != 0) {
-			ImGui::SameLine();
+	float filterWidth = 0;
+	for (const auto& filter : kClassifiedWeatherFlags)
+		filterWidth = std::max(filterWidth, ImGui::CalcTextSize(GetWeatherFilterLabel(filter)).x);
+	filterWidth = filterWidth * 14.0f / 12.0f + Util::Widgets::CheckboxSize() + ImGui::GetFontSize() * 2;
+	{
+		MenuUI::DetailGrid filters("WeatherFilters", static_cast<int>(kClassifiedWeatherFlags.size()) + 1, filterWidth);
+		for (const auto& filter : kClassifiedWeatherFlags) {
+			filters.Next();
+			const auto flag = static_cast<uint32_t>(filter.flag);
+			bool enabled = (s_weatherFlagFilter & flag) == flag;
+			ImGui::PushStyleColor(ImGuiCol_Text, GetWeatherFlagColor(filter.flag));
+			if (Util::Widgets::Checkbox(GetWeatherFilterLabel(filter), &enabled))
+				s_weatherFlagFilter = enabled ? s_weatherFlagFilter | flag : s_weatherFlagFilter & ~flag;
+			ImGui::PopStyleColor();
 		}
-
-		ImGui::PushStyleColor(ImGuiCol_Text, GetWeatherFlagColor(filter.flag));
-		ImGui::CheckboxFlags(GetWeatherFilterLabel(filter), &s_weatherFlagFilter, static_cast<uint32_t>(filter.flag));
-		ImGui::PopStyleColor();
-		++filterIndex;
+		filters.Next();
+		bool unclassified = (s_weatherFlagFilter & UNCLASSIFIED_FLAG) != 0;
+		if (Util::Widgets::Checkbox(T(TKEY("none_filter"), "None"), &unclassified))
+			s_weatherFlagFilter = unclassified ? s_weatherFlagFilter | UNCLASSIFIED_FLAG : s_weatherFlagFilter & ~UNCLASSIFIED_FLAG;
+		Util::AddTooltip(T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."));
 	}
-
-	// Unclassified weather remains a separate synthetic filter bit.
-	if (filterIndex % checkboxesPerRow != 0) {
-		ImGui::SameLine();
-	}
-	ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
-	ImGui::CheckboxFlags(T(TKEY("none_filter"), "None"), &s_weatherFlagFilter, UNCLASSIFIED_FLAG);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		Util::DrawMultiLineTooltip({ T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."),
-			T(TKEY("none_filter_tooltip_1"), "Includes weathers with no flags or only untracked flags."),
-			T(TKEY("none_filter_tooltip_2"), "Categories tracked: Pleasant, Cloudy, Rainy, Snow, Aurora, Aurora Sun") });
-	}
-	ImGui::PopStyleColor();
 
 	// Update filtered weathers when filter changes
 	if (s_lastWeatherFlagFilter != s_weatherFlagFilter) {
@@ -634,7 +625,7 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 
 	static constexpr const char* kWeatherSearchId = "WeatherPicker";
 
-	if (ImGui::BeginCombo(T(TKEY("weather"), "Weather"), comboPreview)) {
+	if (auto combo = Util::Widgets::ComboBox(T(TKEY("weather"), "Weather"), comboPreview)) {
 		auto searchText = Util::DrawComboSearchInput(kWeatherSearchId);
 
 		for (int i = 0; i < static_cast<int>(s_filteredWeathers.size()); ++i) {
@@ -687,7 +678,7 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 			if (isSelected)
 				ImGui::SetItemDefaultFocus();
 		}
-		ImGui::EndCombo();
+
 	} else {
 		Util::ClearComboSearch(kWeatherSearchId);
 	}

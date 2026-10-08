@@ -12,9 +12,11 @@ class PerformanceTuningRenderer
 {
 public:
 	static void Render();
+	/** Draws a shared feature switch through the existing reversible toggle path. */
+	static void RenderFeatureEnabledControl(Feature* a_feature);
 	/** Restores overview profiling when another panel is selected and no comparison is active. */
 	static void NotifyOverviewInactive();
-	/** Draws the shared cost test and results in a feature's settings footer. */
+	/** Draws the shared cost test and results for a feature's current settings. */
 	static void RenderFeatureMeasurement(Feature* a_feature, bool a_inlineButton = false);
 	/** Invalidates measured costs when a feature's settings change. */
 	static void NotifyFeatureSettingsChanged(Feature* a_feature);

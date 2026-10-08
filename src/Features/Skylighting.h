@@ -21,7 +21,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Simulates realistic ambient lighting by calculating sky occlusion and directional lighting, providing more accurate and natural illumination in outdoor environments.",
+			"Shades ambient light where objects block the sky.",
 			{ "Sky occlusion calculation for ambient lighting",
 				"Directional skylighting based on environment geometry",
 				"Enhanced ambient lighting for outdoor scenes",
@@ -33,8 +33,6 @@ public:
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }

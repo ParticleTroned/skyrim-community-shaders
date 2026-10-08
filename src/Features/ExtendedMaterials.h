@@ -12,8 +12,7 @@ struct ExtendedMaterials : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Extended Materials adds advanced material effects including parallax occlusion mapping and complex material blending.\n"
-			"This feature enhances surface detail and depth perception for more realistic textures.",
+			"Adds depth and richer lighting to supported materials.",
 			{ "Parallax occlusion mapping for depth",
 				"Complex material blending",
 				"Terrain heightmap support",
@@ -47,8 +46,6 @@ struct ExtendedMaterials : Feature
 	virtual void DataLoaded() override;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool) override;
 	virtual json CapturePerformanceSettingsState() const override;

@@ -1,18 +1,19 @@
-#include "ExposureCapture.h"
-#include "ColorPipeline.h"
-#include "ComputeStateGuard.h"
-#include "Features/Upscaling.h"
-#include "Globals.h"
-#include "GpuPass.h"
-#include "RE/B/BSImagespaceShader.h"
-#include "RE/I/ImageSpaceManager.h"
-#include "State.h"
-#include "Utils/D3D.h"
-#include <algorithm>
-#include <atomic>
-#include <cstring>
-#include <mutex>
-#include <utility>
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "ExposureCapture.h"
+#	include "ColorPipeline.h"
+#	include "ComputeStateGuard.h"
+#	include "Features/Upscaling.h"
+#	include "Globals.h"
+#	include "GpuPass.h"
+#	include "RE/B/BSImagespaceShader.h"
+#	include "RE/I/ImageSpaceManager.h"
+#	include "State.h"
+#	include "Utils/D3D.h"
+#	include <algorithm>
+#	include <atomic>
+#	include <cstring>
+#	include <mutex>
+#	include <utility>
 
 namespace NeuralRendering::Color
 {
@@ -662,3 +663,5 @@ namespace NeuralRendering::Color
 		}
 	}
 }
+
+#endif

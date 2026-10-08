@@ -155,7 +155,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UseMonochromeIcons,
 	UseMonochromeLogo,
 	ShowFooter,
-	CenterHeader,
 	TooltipHoverDelay,
 	BackgroundBlurEnabled,
 	ScrollbarOpacity,
@@ -230,12 +229,8 @@ namespace
 		return static_cast<double>(a_bytes) / static_cast<double>(kBytesPerGiB);
 	}
 
-	constexpr const char* UI_MODE_SETTING_KEY = "UI Mode";
-	constexpr const char* LEGACY_PERFORMANCE_UI_MODE_SETTING_KEY = "PerformanceUiMode";
 	constexpr const char* SHOW_COMPILATION_HUD_IN_VR_SETTING_KEY = "ShowCompilationHUDInVR";
 	constexpr const char* LEGACY_HIDE_COMPILATION_HUD_IN_VR_SETTING_KEY = "HideCompilationHUDInVR";
-	constexpr int ESSENTIALS_UI_MODE = 0;
-	constexpr int ADVANCED_UI_MODE = 1;
 
 	struct SettingsWindowLayout
 	{
@@ -508,27 +503,6 @@ void Menu::Load(json& o_json)
 	// Restore Theme - don't load it from config, only from theme preset files
 	settings.Theme = currentTheme;
 
-	// "PerformanceUiMode" was the original persisted name, but the setting
-	// controls the entire UI's Essentials/Advanced presentation rather than
-	// performance alone. Prefer the clearer user-facing key while continuing
-	// to accept existing configs.
-	auto loadUiMode = [&](const char* key) {
-		const auto it = o_json.find(key);
-		if (it == o_json.end())
-			return false;
-
-		if (!it->is_number_integer()) {
-			logger::warn("Invalid '{}', expected an integer; using Essentials UI mode.", key);
-			settings.UiMode = ESSENTIALS_UI_MODE;
-			return true;
-		}
-
-		settings.UiMode = std::clamp(it->get<int>(), ESSENTIALS_UI_MODE, ADVANCED_UI_MODE);
-		return true;
-	};
-	if (!loadUiMode(UI_MODE_SETTING_KEY))
-		loadUiMode(LEGACY_PERFORMANCE_UI_MODE_SETTING_KEY);
-
 	// Migration: Convert legacy uint32_t keys to InputCombo vectors if needed
 	auto migrateKey = [](json& j, const char* keyName, std::vector<InputCombo>& target) {
 		if (j.contains(keyName) && j[keyName].is_number_integer()) {
@@ -625,12 +599,10 @@ void Menu::Load(json& o_json)
 void Menu::Save(json& o_json)
 {
 	settings.Theme.FontName = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)].File;
-	settings.UiMode = std::clamp(settings.UiMode, ESSENTIALS_UI_MODE, ADVANCED_UI_MODE);
 
 	// Save all settings except Theme values
 	// Theme values should only be saved in theme preset files, not in the main config
 	o_json = settings;
-	o_json[UI_MODE_SETTING_KEY] = settings.UiMode;
 
 	// Remove Theme object from config, only keep SelectedThemePreset
 	o_json.erase("Theme");
@@ -1205,6 +1177,8 @@ void Menu::DrawSettings()
 
 		if (showSteamVRWindowControls) {
 			MenuHeaderRenderer::RenderSteamVRResizeHandles(uiScale);
+		} else {
+			MenuHeaderRenderer::RenderResizeGrip(uiScale);
 		}
 	}
 	ImGui::End();

@@ -23,11 +23,22 @@ string(FIND "${source}" "\tnamespace Widgets" start)
 string(FIND "${source}" "\n\tvoid UpdateImGuiInput" end)
 math(EXPR length "${end} - ${start}")
 string(SUBSTRING "${source}" ${start} ${length} declarations)
-file(WRITE "${OUTPUT_DIRECTORY}/settings_widget_declarations.h" "namespace Util { ${declarations} }")
+string(FIND "${source}" "		inline ImVec4 SecondaryText()" color_start)
+string(SUBSTRING "${source}" ${color_start} -1 color_rest)
+string(FIND "${color_rest}" "
+		}" color_end)
+math(EXPR color_length "${color_end} + 4")
+string(SUBSTRING "${color_rest}" 0 ${color_length} secondary_text)
+file(WRITE "${OUTPUT_DIRECTORY}/settings_widget_declarations.h"
+    "#pragma once\nnamespace Util { ${declarations} }")
+
+file(READ "${OUTPUT_DIRECTORY}/settings_page_under_test.h" page_body)
+file(WRITE "${OUTPUT_DIRECTORY}/settings_page_under_test.h"
+    "#include \"settings_widget_declarations.h\"\nnamespace Util::Color { ${secondary_text} }\n${page_body}")
 
 file(READ "${PROJECT_ROOT}/src/Features/VolumetricLighting.cpp" source)
 set(prefixes "")
-foreach(method IN ITEMS DrawSettings DrawEssentialSettings)
+foreach(method IN ITEMS DrawSettings)
     string(FIND "${source}" "void VolumetricLighting::${method}()" start)
     string(SUBSTRING "${source}" ${start} -1 rest)
     string(FIND "${rest}" "auto drawVRRestartHint" end)
@@ -45,3 +56,19 @@ extract_between("${source}"
     "\tvoid DrawNeuralModelResolutionSettings("
     "\tvoid DrawNeuralRenderingSharedImageSettings("
     "settings_model_resolution_under_test.h")
+
+# Exercise the production menu settings declaration and serializer with legacy inputs.
+file(READ "${PROJECT_ROOT}/src/Menu.h" source)
+string(FIND "${source}" "	struct Settings\n	{" start)
+string(SUBSTRING "${source}" ${start} -1 rest)
+string(FIND "${rest}" "\n	};" end)
+math(EXPR length "${end} + 4")
+string(SUBSTRING "${rest}" 0 ${length} declaration)
+file(READ "${PROJECT_ROOT}/src/Menu.cpp" source)
+string(FIND "${source}" "NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(\n	Menu::Settings," start)
+string(SUBSTRING "${source}" ${start} -1 rest)
+string(FIND "${rest}" ")" end)
+math(EXPR length "${end} + 1")
+string(SUBSTRING "${rest}" 0 ${length} serializer)
+file(WRITE "${OUTPUT_DIRECTORY}/menu_settings_under_test.h"
+    "struct Menu { using ThemeSettings = nlohmann::json; ${declaration} };\n${serializer}\n")

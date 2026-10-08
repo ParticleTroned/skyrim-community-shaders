@@ -33,7 +33,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Foliage Lighting adds inexpensive transmission and ambient controls for animated tree foliage and grass.",
+			"Adds light transmission and ambient lighting controls for trees and grass.",
 			{ "View-dependent tree foliage transmission",
 				"Stereo-stable ambient backface sampling in VR",
 				"Independent grass scattering control" }

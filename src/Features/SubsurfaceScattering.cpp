@@ -123,27 +123,28 @@ namespace
 void SubsurfaceScattering::DrawSettings()
 {
 	MenuUI::SettingsPage page("SubsurfaceScattering", {
-														  { "model", "Model", "Choose how light passes through skin." },
-														  { "profiles", "Profiles", "Refine the chosen model for ordinary and humanoid materials." },
+														  { "model", "Model", "Choose how light passes through skin.", "Separable or Burley scattering", true, true, "Choose model and profiles" },
+														  { "profiles", "Profiles", "Refine the chosen model for ordinary and humanoid materials.", "Base and humanoid skin response", true, true, nullptr },
 													  });
 
-	Util::Widgets::Checkbox("Enable", &settings.EnableSubsurfaceScattering);
-	Util::Widgets::Checkbox("Enable Character Lighting", (bool*)&settings.EnableCharacterLighting);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Vanilla feature, not recommended.");
-	}
-	if (settings.EnableCharacterLighting) {
-		Util::Widgets::SliderFloat("Strength", &settings.CharacterLightingStrength, 0, 5, "%.2f");
+	if (page.Is("model")) {
+		Util::Widgets::Checkbox("Enable Character Lighting", (bool*)&settings.EnableCharacterLighting);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Vanilla feature, not recommended.");
+		}
+		if (settings.EnableCharacterLighting) {
+			Util::Widgets::SliderFloat("Strength", &settings.CharacterLightingStrength, 0, 5, "%.2f");
+		}
 	}
 
 	if (page.Is("model")) {
-		ImGui::RadioButton("Separable SSS", &settings.SSMode, 0);
-		ImGui::SameLine();
-		ImGui::RadioButton("Burley", &settings.SSMode, 1);
+		MenuUI::ChoiceSetting("Scattering model", &settings.SSMode, "Separable SSS\0Burley\0");
 	}
 
 	if (page.Is("profiles") && settings.SSMode == 0) {
-		if (ImGui::TreeNodeEx("Base Profile")) {
+		{
+			MenuUI::SectionHeading("Base Profile");
+			ImGui::PushID("Base Profile");
 			Util::Widgets::SliderFloat("Blur Radius", &settings.BaseProfile.BlurRadius, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Blur radius.");
@@ -157,10 +158,12 @@ void SubsurfaceScattering::DrawSettings()
 			updateKernels = updateKernels || ImGui::ColorEdit3("Strength", (float*)&settings.BaseProfile.Strength);
 			updateKernels = updateKernels || ImGui::ColorEdit3("Falloff", (float*)&settings.BaseProfile.Falloff);
 
-			ImGui::TreePop();
+			ImGui::PopID();
 		}
 
-		if (ImGui::TreeNodeEx("Humanoid Profile")) {
+		{
+			MenuUI::SectionHeading("Humanoid Profile");
+			ImGui::PushID("Humanoid Profile");
 			Util::Widgets::SliderFloat("Blur Radius", &settings.HumanProfile.BlurRadius, 0, 3, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Blur radius.");
@@ -174,13 +177,15 @@ void SubsurfaceScattering::DrawSettings()
 			updateKernels = updateKernels || ImGui::ColorEdit3("Strength", (float*)&settings.HumanProfile.Strength);
 			updateKernels = updateKernels || ImGui::ColorEdit3("Falloff", (float*)&settings.HumanProfile.Falloff);
 
-			ImGui::TreePop();
+			ImGui::PopID();
 		}
 	} else if (page.Is("profiles") && settings.SSMode == 1) {
 		int burleySamples = static_cast<int>(settings.BurleySamples);
 		if (Util::Widgets::SliderInt("Burley Samples", &burleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
 			settings.BurleySamples = static_cast<uint>(std::clamp(burleySamples, 1, 64));
-		if (ImGui::TreeNodeEx("Base Profile")) {
+		{
+			MenuUI::SectionHeading("Base Profile");
+			ImGui::PushID("Base Profile");
 			ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathBase);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
@@ -189,10 +194,12 @@ void SubsurfaceScattering::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls the distance that Mean Free Path Color goes into subsurface.");
 			}
-			ImGui::TreePop();
+			ImGui::PopID();
 		}
 
-		if (ImGui::TreeNodeEx("Humanoid Profile")) {
+		{
+			MenuUI::SectionHeading("Humanoid Profile");
+			ImGui::PushID("Humanoid Profile");
 			ImGui::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathHuman);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Controls how far light goes into the subsurface in the red, green, and blue channel. It is scaled by the Mean Free Path Distance.");
@@ -205,7 +212,7 @@ void SubsurfaceScattering::DrawSettings()
 			DrawHumanSkinControls("Humanoid Skin (Male)", settings.HumanMaleSSSIntensity, settings.HumanMaleSSSSaturation, settings.HumanMaleSSSBrightness, settings.HumanMaleSSSBaseSaturation);
 			DrawHumanSkinControls("Humanoid Skin (Female)", settings.HumanFemaleSSSIntensity, settings.HumanFemaleSSSSaturation, settings.HumanFemaleSSSBrightness, settings.HumanFemaleSSSBaseSaturation);
 
-			ImGui::TreePop();
+			ImGui::PopID();
 		}
 	}
 
@@ -215,29 +222,18 @@ void SubsurfaceScattering::DrawSettings()
 
 void SubsurfaceScattering::DrawPerformanceSettings(bool)
 {
-	Util::Widgets::Checkbox("Enable", &settings.EnableSubsurfaceScattering);
+	Util::Widgets::Checkbox("Enabled", &settings.EnableSubsurfaceScattering);
 
 	ImGui::TextUnformatted("SSS Mode");
-	ImGui::RadioButton("Separable SSS", &settings.SSMode, 0);
+	Util::Widgets::RadioButton("Separable SSS", &settings.SSMode, 0);
 	ImGui::SameLine();
-	ImGui::RadioButton("Burley", &settings.SSMode, 1);
+	Util::Widgets::RadioButton("Burley", &settings.SSMode, 1);
 
 	if (settings.SSMode == 1) {
 		int burleySamples = static_cast<int>(settings.BurleySamples);
 		if (Util::Widgets::SliderInt("Burley Samples", &burleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
 			settings.BurleySamples = static_cast<uint>(std::clamp(burleySamples, 1, 64));
 	}
-}
-
-void SubsurfaceScattering::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("SubsurfaceScattering", {
-														  { "essentials", "Essentials", "Start with the main choices for this feature." },
-													  });
-	if (!page.Is("essentials"))
-		return;
-
-	Util::Widgets::Checkbox("Enable", &settings.EnableSubsurfaceScattering);
 }
 
 json SubsurfaceScattering::CapturePerformanceSettingsState() const

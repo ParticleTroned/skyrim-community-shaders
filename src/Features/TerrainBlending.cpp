@@ -512,13 +512,13 @@ namespace
 void TerrainBlending::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainBlending", {
-													 { "appearance", "Blending", "Choose which surfaces blend, then tune their appearance." },
+													 { "appearance", "Blending", "Choose which surfaces blend, then tune their appearance.", "Object-to-ground transitions", true, true, "Shape terrain transitions" },
 												 });
 	if (!page.Is("appearance"))
 		return;
 
 	bool enabled = settings.Enabled != 0;
-	if (Util::Widgets::Checkbox("Enable", &enabled)) {
+	if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 
@@ -544,25 +544,11 @@ void TerrainBlending::DrawSettings()
 void TerrainBlending::DrawPerformanceSettings(bool)
 {
 	bool enabled = settings.Enabled != 0;
-	if (Util::Widgets::Checkbox("Enable", &enabled)) {
+	if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 		settings.Enabled = enabled ? 1u : 0u;
 	}
 
 	Util::Widgets::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
-}
-
-void TerrainBlending::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("TerrainBlending", {
-													 { "essentials", "Essentials", "Start with the main choices for this feature." },
-												 });
-	if (!page.Is("essentials"))
-		return;
-
-	bool enabled = settings.Enabled != 0;
-	if (Util::Widgets::Checkbox("Enable", &enabled)) {
-		settings.Enabled = enabled ? 1u : 0u;
-	}
 }
 
 json TerrainBlending::CapturePerformanceSettingsState() const

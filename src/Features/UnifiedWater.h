@@ -14,7 +14,7 @@ struct UnifiedWater : OverlayFeature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Unified Water provides a comprehensive fix to water LOD mismatch by replacing distant water tiles with LOD0 (Close Water).",
+			"Keeps nearby and distant water consistent in colour, lighting and appearance.",
 			{ "Unifies distant and close water appearance, streamlining all lighting visuals.",
 				"Completely and fundamentally resolves water LOD mismatch issues.",
 				"Provides background systems for water geometry rendering, allowing more advanced water effects.",
@@ -122,8 +122,6 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

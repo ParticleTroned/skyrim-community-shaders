@@ -16,14 +16,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void TerrainVariation::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainVariation", {
-													  { "appearance", "Variation", "Choose variation first, then refine the terrain appearance." },
+													  { "appearance", "Variation", "Choose variation first, then refine the terrain appearance.", "Large-scale terrain variation", true, true, "Shape the landscape" },
 												  });
 	if (!page.Is("appearance"))
 		return;
 
 	ImGui::TextWrapped(
 		"Terrain Variation is always enabled when installed. "
-		"To turn it off, use Disable at Boot.");
+		"To turn it off, use its sidebar switch, then restart the game.");
 
 	ImGui::Spacing();
 
@@ -46,11 +46,6 @@ void TerrainVariation::DrawSettings()
 			"Keeps foliage, trees, decals and clamped textures unchanged.\n"
 			"Additional texture sampling may increase GPU cost.");
 	}
-}
-
-void TerrainVariation::DrawEssentialSettings()
-{
-	DrawSettings();
 }
 
 void TerrainVariation::PostPostLoad()

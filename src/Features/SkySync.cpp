@@ -26,15 +26,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void SkySync::DrawSettings()
 {
 	MenuUI::SettingsPage page("SkySync", {
-											 { "path", "Sky path", "Choose how the sun and moon move and light the scene." },
-											 { "lighting", "Lighting", "Refine horizon lighting and shadow length." },
-											 { "timing", "Timing", "Adjust the visible sunrise and sunset." },
+											 { "path", "Sky path", "Choose how the sun and moon move and light the scene.", "Sun and moon trajectories", true, true, "Choose movement and light" },
+											 { "lighting", "Lighting", "Refine horizon lighting and shadow length.", "Horizon fading and shadows", true, true, nullptr },
+											 { "timing", "Timing", "Adjust the visible sunrise and sunset.", "Sunrise and sunset offsets", true, true, "Refine time transitions" },
 										 });
-
-	Util::Widgets::Checkbox("Enable", &settings.Enabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Enable or disable Sky Sync features.");
-	}
 
 	if (page.Is("path")) {
 		Util::Widgets::Checkbox("Use alternate sun path", &settings.UseAlternateSunPath);
@@ -48,7 +43,7 @@ void SkySync::DrawSettings()
 		}
 
 		if (settings.UseAlternateSunPath) {
-			if (Util::Widgets::SliderInt("Sun path", &settings.SunPath, 0, static_cast<uint8_t>(SunPath::Count) - 1, SunPathNames[settings.SunPath], ImGuiSliderFlags_AlwaysClamp))
+			if (Util::Widgets::Combo("Sun path", &settings.SunPath, SunPathNames, static_cast<int>(SunPath::Count)))
 				SetSunAngle();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Choose the trajectory the sun takes across the sky.");
@@ -63,7 +58,7 @@ void SkySync::DrawSettings()
 			}
 		}
 
-		Util::Widgets::SliderInt("Moon light source", &settings.MoonLightSource, 0, static_cast<uint8_t>(MoonLightSource::Count) - 1, MoonLightSourceNames[settings.MoonLightSource], ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::Combo("Moon light source", &settings.MoonLightSource, MoonLightSourceNames, static_cast<int>(MoonLightSource::Count));
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Select which moon casts shadows during the night.");
 		}
@@ -104,17 +99,6 @@ void SkySync::DrawSettings()
 			ImGui::TextUnformatted("Offset for when the sun finishes setting.");
 		}
 	}
-}
-
-void SkySync::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("SkySync", {
-											 { "essentials", "Essentials", "Start with the main choices for this feature." },
-										 });
-	if (!page.Is("essentials"))
-		return;
-
-	Util::Widgets::Checkbox("Enable", &settings.Enabled);
 }
 
 void SkySync::LoadSettings(json& o_json)

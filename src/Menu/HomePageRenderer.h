@@ -45,7 +45,6 @@ public:
 	static bool ShouldSkipKeyRelease(uint32_t key);
 
 private:
-	static void RenderModeSection();
 	static void RenderWelcomeSection();
 	static void RenderCacheMismatchSection();
 	static void MarkFirstTimeSetupComplete(uint32_t closingKey, bool skipNextKeyRelease = true);

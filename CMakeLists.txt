@@ -1767,12 +1767,15 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_widget_declarations.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
+            "${_settings_ui_dir}/menu_settings_under_test.h"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_settings_ui_dir}" -P
             "${PROJECT_SOURCE_DIR}/tests/extract_settings_ui.cmake"
         DEPENDS
             src/Menu/SettingsPage.cpp
+            src/Menu.h
+            src/Menu.cpp
             src/Features/VolumetricLighting.cpp
             src/Features/Upscaling.cpp
             tests/extract_source_region.cmake
@@ -1790,6 +1793,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_widget_declarations.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
+            "${_settings_ui_dir}/menu_settings_under_test.h"
     )
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     target_link_libraries(
@@ -2995,6 +2999,27 @@ if(BUILD_CONTROLLER_TESTS)
         vr_submit_stereo_batch_test
         VRSubmitStereoBatch
         tests/vr_submit_stereo_batch_test.cpp
+    )
+    set(_stereo_admission_dir "${CMAKE_CURRENT_BINARY_DIR}/vr_stereo_admission")
+    add_custom_command(
+        OUTPUT "${_stereo_admission_dir}/vr_stereo_admission_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_stereo_admission_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_stereo_admission.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_vr_stereo_admission.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        vr_submit_stereo_batch_test
+        PRIVATE "${_stereo_admission_dir}/vr_stereo_admission_under_test.h"
+    )
+    target_include_directories(
+        vr_submit_stereo_batch_test
+        PRIVATE "${_stereo_admission_dir}"
     )
     add_controller_test(
         main_thread_dispatch_policy_test

@@ -18,7 +18,7 @@ namespace
 	bool DrawEnabledCheckbox(CloudShadows::Settings& a_settings)
 	{
 		bool enabled = a_settings.Enabled != 0;
-		if (Util::Widgets::Checkbox("Enable", &enabled))
+		if (Util::Widgets::Checkbox("Enabled", &enabled))
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
@@ -27,7 +27,7 @@ namespace
 void CloudShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("CloudShadows", {
-												  { "appearance", "Appearance", "Enable cloud shadows, then choose how dark they look." },
+												  { "appearance", "Appearance", "Enable cloud shadows, then choose how dark they look.", "Moving shade and opacity", true, true, "Shape cloud shadows" },
 											  });
 	if (!page.Is("appearance"))
 		return;
@@ -41,17 +41,6 @@ void CloudShadows::DrawSettings()
 			"Higher values make cloud shadows darker.");
 	}
 	ImGui::EndDisabled();
-}
-
-void CloudShadows::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("CloudShadows", {
-												  { "essentials", "Essentials", "Start with the main choices for this feature." },
-											  });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawEnabledCheckbox(settings);
 }
 
 void CloudShadows::DrawPerformanceSettings(bool)

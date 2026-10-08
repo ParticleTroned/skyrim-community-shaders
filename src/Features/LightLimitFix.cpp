@@ -8,6 +8,7 @@
 #include "LinearLighting.h"
 #include "LocationContext.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include "Menu/ThemeManager.h"
 #include "Shadercache.h"
@@ -1073,11 +1074,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void LightLimitFix::DrawSettings()
 {
 	MenuUI::SettingsPage page("LightLimitFix", {
-												   { "particles", "Particles", "Choose which small light effects illuminate the scene." },
-												   { "placed", "Placed lights", "Choose lighting from supported objects." },
-												   { "shadows", "Shadows", "Refine contact shadows after choosing your lights." },
-												   { "effects", "Heat distortion", "Refine heat distortion around lights." },
-												   { "diagnostics", "Diagnostics", "Inspect light counts and diagnostic views." },
+												   { "particles", "Particles", "Choose which small light effects illuminate the scene.", "Small effects that emit light", true, true, "Choose light sources" },
+												   { "placed", "Placed lights", "Choose lighting from supported objects.", "Lighting from placed objects", true, true, nullptr },
+												   { "shadows", "Shadows", "Refine contact shadows after choosing your lights.", "Contact-shadow quality", true, true, "Refine light interaction" },
+												   { "effects", "Heat distortion", "Refine heat distortion around lights.", "Refraction around lights", true, true, nullptr },
+												   { "diagnostics", "Diagnostics", "Inspect light counts and diagnostic views.", "Light counts and buffer views", true, false, nullptr },
 											   });
 
 	{
@@ -1211,7 +1212,7 @@ void LightLimitFix::DrawSettings()
 
 			const char* qualityOptions[] = { "Low", "Medium", "High" };
 			int contactShadowQuality = static_cast<int>(settings.ContactShadowQuality);
-			if (ImGui::Combo("Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
+			if (MenuUI::ChoiceSetting("Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
 				settings.ContactShadowQuality = static_cast<uint>(std::clamp(contactShadowQuality, 0, static_cast<int>(kContactShadowQualityMax)));
 			}
 
@@ -1275,7 +1276,7 @@ void LightLimitFix::DrawSettings()
 
 		{
 			static const char* comboOptions[] = { "Light Limit", "Strict Lights Count", "Clustered Lights Count", "Shadow Mask" };
-			ImGui::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 4);
+			Util::Widgets::Combo("Lights Visualisation Mode", (int*)&settings.LightsVisualisationMode, comboOptions, 4);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					" - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n"
@@ -1320,7 +1321,7 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	ImGui::SeparatorText("Contact Shadows");
 	const char* qualityOptions[] = { "Low", "Medium", "High" };
 	int contactShadowQuality = static_cast<int>(settings.ContactShadowQuality);
-	if (ImGui::Combo("Contact Shadow Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
+	if (MenuUI::ChoiceSetting("Contact Shadow Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {
 		settings.ContactShadowQuality = static_cast<uint>(std::clamp(contactShadowQuality, 0, static_cast<int>(kContactShadowQualityMax)));
 	}
 
@@ -1339,21 +1340,6 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	if (Util::Widgets::SliderInt("Particle Budget per Cluster", &particleContactShadowBudget, 0, static_cast<int>(kParticleContactShadowBudgetMax))) {
 		settings.ParticleContactShadowBudget = static_cast<uint>(particleContactShadowBudget);
 	}
-}
-
-void LightLimitFix::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("LightLimitFix", {
-												   { "essentials", "Essentials", "Start with the main choices for this feature." },
-											   });
-	if (!page.Is("essentials"))
-		return;
-
-	Util::Widgets::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
-	bool contactShadows = IsContactShadowsRequested();
-	if (Util::Widgets::Checkbox("Enable Point Light Contact Shadows", &contactShadows))
-		SetContactShadowsEnabled(contactShadows);
-	DrawHeatWarpStrengthSetting();
 }
 
 bool LightLimitFix::IsPerformanceCostMeasurementReady() const

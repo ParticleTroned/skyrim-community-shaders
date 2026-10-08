@@ -1,4 +1,5 @@
 #include "ProfilingRenderer.h"
+#include "SettingsPage.h"
 
 #include <algorithm>
 #include <array>
@@ -715,11 +716,13 @@ void ProfilingRenderer::RenderTimingModeToggle()
 {
 	int mode = static_cast<int>(timingMode);
 
-	ImGui::PushID("ProfilingTimingMode");
-	ImGui::RadioButton("GPU", &mode, static_cast<int>(TimingMode::GPU));
-	ImGui::SameLine();
-	ImGui::RadioButton("CPU", &mode, static_cast<int>(TimingMode::CPU));
-	ImGui::PopID();
+	const MenuUI::Choice choices[] = {
+		{ "gpu", "GPU", "Graphics-card timings", "Inspect render-pass cost." },
+		{ "cpu", "CPU", "Processor timings", "Inspect processor work." }
+	};
+	const int chosen = MenuUI::ChoiceCards("ProfilingTimingMode", timingMode == TimingMode::GPU ? 0 : 1, choices);
+	if (chosen >= 0)
+		mode = static_cast<int>(chosen == 0 ? TimingMode::GPU : TimingMode::CPU);
 
 	const auto newMode = static_cast<TimingMode>(mode);
 	if (newMode != timingMode) {
@@ -1016,6 +1019,18 @@ bool ProfilingRenderer::RenderFeatureOverview()
 	return true;
 }
 
+bool ProfilingRenderer::CanProfileFeature(std::string_view a_feature)
+{
+	// Eligibility follows named passes, not whether this scene has produced a sample yet.
+	static constexpr std::array<std::string_view, 18> instrumented{
+		"DynamicCubemaps", "GrassCollision", "GrassOptimizations", "IBL", "LightLimitFix",
+		"NeuralRendering", "Screenshot", "ScreenSpaceGI", "ScreenSpaceShadows", "Skylighting",
+		"SubsurfaceScattering", "TerrainBlending", "TerrainShadows", "UnderwaterDepthOfField",
+		"Upscaling", "VolumetricLighting", "VolumetricShadows", "VR"
+	};
+	return std::ranges::find(instrumented, a_feature) != instrumented.end() || HasFeatureTimers(std::string(a_feature));
+}
+
 bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 {
 	if (!globals::profiler)
@@ -1039,7 +1054,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		bool profilingEnabled = profiler.IsUserEnabled();
 		ImGui::TextUnformatted("Profiling");
 		ImGui::SameLine();
-		if (Util::Widgets::Checkbox("Enable", &profilingEnabled)) {
+		if (Util::Widgets::Checkbox("Enabled", &profilingEnabled)) {
 			profiler.SetUserEnabled(profilingEnabled);
 			timeSinceLastUpdate = kStatsRefreshSeconds;
 		}
@@ -1225,18 +1240,21 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	}
 }
 
-void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix, const std::function<void()>& drawActions)
+void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 {
 	auto& profiler = (*globals::profiler);
 	auto& featureMode = featureTimingModes[featurePrefix];
 
 	int mode = static_cast<int>(featureMode);
 	const int previousMode = mode;
-	ImGui::RadioButton("Off", &mode, static_cast<int>(FeatureTimingMode::Off));
-	ImGui::SameLine();
-	ImGui::RadioButton("GPU", &mode, static_cast<int>(FeatureTimingMode::GPU));
-	ImGui::SameLine();
-	ImGui::RadioButton("CPU", &mode, static_cast<int>(FeatureTimingMode::CPU));
+	const MenuUI::Choice choices[] = {
+		{ "off", "Off", "Stop live profiling", "No feature timing capture." },
+		{ "gpu", "GPU", "Graphics-card timings", "Show this feature's graphics-card cost." },
+		{ "cpu", "CPU", "Processor timings", "Show this feature's processor cost." }
+	};
+	const int chosen = MenuUI::ChoiceCards("FeatureTimingMode", mode, choices);
+	if (chosen >= 0)
+		mode = chosen;
 
 	mode = std::clamp(mode, static_cast<int>(FeatureTimingMode::Off), static_cast<int>(FeatureTimingMode::CPU));
 	if (mode != previousMode) {
@@ -1244,15 +1262,6 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix, co
 		if (featureMode != FeatureTimingMode::Off)
 			profiler.SetUserEnabled(true);
 	}
-
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted("Off: do not request profiling capture for this feature.");
-		ImGui::TextUnformatted("GPU/CPU: enable runtime profiling and show this feature's timing in the selected mode.");
-		ImGui::TextUnformatted("No restart required.");
-	}
-
-	if (drawActions)
-		drawActions();
 
 	if (featureMode == FeatureTimingMode::Off) {
 		ImGui::TextDisabled("Feature profiling is off.");

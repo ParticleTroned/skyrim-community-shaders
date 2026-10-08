@@ -127,13 +127,13 @@ namespace
 void ScreenSpaceShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("ScreenSpaceShadows", {
-														{ "appearance", "Shadows", "Choose shadow coverage, then refine strength and quality." },
+														{ "appearance", "Shadows", "Choose shadow coverage, then refine strength and quality.", "Shadow reach, samples and contrast", true, true, "Shape contact shadows" },
 													});
 	if (!page.Is("appearance"))
 		return;
 
 	bool enabled = IsEnabledRequested();
-	if (Util::Widgets::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		SetEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Turns screen space shadows on or off.");
@@ -189,7 +189,7 @@ void ScreenSpaceShadows::DrawSettings()
 void ScreenSpaceShadows::DrawPerformanceSettings(bool)
 {
 	bool enabled = IsEnabledRequested();
-	if (Util::Widgets::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		SetEnabled(enabled);
 
 	int sampleCount = static_cast<int>(bendSettings.SampleCount);
@@ -201,19 +201,6 @@ void ScreenSpaceShadows::DrawPerformanceSettings(bool)
 		Util::Widgets::SliderFloat("Shadow Cull Distance", &bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
 		bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
 	}
-}
-
-void ScreenSpaceShadows::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("ScreenSpaceShadows", {
-														{ "essentials", "Essentials", "Start with the main choices for this feature." },
-													});
-	if (!page.Is("essentials"))
-		return;
-
-	bool enabled = IsEnabledRequested();
-	if (Util::Widgets::Checkbox("Enable", &enabled))
-		SetEnabled(enabled);
 }
 
 bool ScreenSpaceShadows::IsPerformanceCostMeasurementReady() const

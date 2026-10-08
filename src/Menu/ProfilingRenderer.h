@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -75,9 +74,11 @@ public:
 	};
 
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
+	/** Identifies instrumented features before their first timing sample exists. */
+	static bool CanProfileFeature(std::string_view a_feature);
 	static bool HasFeatureTimers(const std::string& featurePrefix);
-	/** Draws profiling controls, optional adjacent actions, and live feature timings. */
-	static void RenderFeatureTimers(const std::string& featurePrefix, const std::function<void()>& drawActions = {});
+	/** Draws Off/GPU/CPU controls and live timing graphs for one feature. */
+	static void RenderFeatureTimers(const std::string& featurePrefix);
 	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture = true);
 	static void RenderFeaturePerformanceSummary(
 		const std::string& featurePrefix,

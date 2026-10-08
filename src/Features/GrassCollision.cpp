@@ -29,29 +29,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void GrassCollision::DrawSettings()
 {
-	MenuUI::SettingsPage page("GrassCollision", {
-													{ "appearance", "Grass response", "Choose whether grass moves around nearby actors." },
-												});
-	if (!page.Is("appearance"))
-		return;
-
-	Util::Widgets::Checkbox("Enable", &settings.EnableGrassCollision);
+	Feature::DrawSettings();
 }
 
 void GrassCollision::DrawPerformanceSettings(bool)
 {
-	Util::Widgets::Checkbox("Enable", &settings.EnableGrassCollision);
-}
-
-void GrassCollision::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("GrassCollision", {
-													{ "essentials", "Essentials", "Start with the main choices for this feature." },
-												});
-	if (!page.Is("essentials"))
-		return;
-
-	DrawPerformanceSettings(false);
+	Util::Widgets::Checkbox("Enabled", &settings.EnableGrassCollision);
 }
 
 json GrassCollision::CapturePerformanceSettingsState() const

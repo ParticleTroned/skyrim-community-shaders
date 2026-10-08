@@ -11,6 +11,12 @@ struct Feature;
 class FeatureListRenderer
 {
 public:
+	/** Explicit sidebar choice takes precedence over automatic hover hiding. */
+	static void SetSidebarVisible(bool a_visible);
+	static bool IsSidebarVisible();
+	/** Resume the user's automatic visibility preference. */
+	static void ResetSidebarVisibility();
+
 	struct BuiltInMenu
 	{
 		std::string name;
@@ -33,8 +39,6 @@ public:
 		std::map<std::string, bool>& categoryExpansionStates,
 		const std::function<void()>& drawGeneralSettings,
 		const std::function<void()>& drawAdvancedSettings);
-	/** Reveal a feature's complete settings without changing the global UI mode. */
-	static void ShowAdvancedSettings(Feature* a_feature);
 
 private:
 	struct ListMenuVisitor

@@ -106,23 +106,14 @@ std::pair<std::string, std::vector<std::string>> GrassOptimizations::GetFeatureS
 void GrassOptimizations::DrawSettings()
 {
 	MenuUI::SettingsPage page("GrassOptimizations", {
-														{ "visibility", "Visibility", "Choose batching and visibility checks first." },
-														{ "density", "Density", "Balance grass coverage and distant density." },
-														{ "distance", "Distance", "Refine how far grass is drawn and shaded." },
-														{ "meshes", "Meshes", "Choose simpler distant meshes and their transitions." },
+														{ "visibility", "Visibility", "Choose batching and visibility checks first.", "Batching and visibility checks", true, true, "Balance coverage and cost" },
+														{ "density", "Density", "Balance grass coverage and distant density.", "Near and distant coverage", true, true, nullptr },
+														{ "distance", "Distance", "Refine how far grass is drawn and shaded.", "Draw and shading distances", true, true, "Refine distant grass" },
+														{ "meshes", "Meshes", "Choose simpler distant meshes and their transitions.", "Simplified meshes and transitions", true, true, nullptr },
 													});
 	for (const auto section : { "visibility", "density", "distance", "meshes" })
 		if (page.Is(section))
 			DrawControls(true, section);
-}
-void GrassOptimizations::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("GrassOptimizations", {
-														{ "essentials", "Essentials", "Start with the main choices for this feature." },
-													});
-	if (!page.Is("essentials"))
-		return;
-	DrawControls(false);
 }
 void GrassOptimizations::DrawPerformanceSettings(bool advanced) { DrawControls(advanced); }
 json GrassOptimizations::CapturePerformanceSettingsState() const { return GetSettings(); }

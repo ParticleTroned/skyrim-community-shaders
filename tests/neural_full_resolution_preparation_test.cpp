@@ -21,6 +21,16 @@ namespace globals
 
 struct Upscaling
 {
+	enum class UpscaleMethod
+	{
+		kNONE,
+		kTAA,
+		kFSR,
+		kDLSS
+	};
+	UpscaleMethod method = UpscaleMethod::kDLSS;
+	UpscaleMethod GetRuntimeUpscaleMethod() const { return method; }
+	uint64_t vrFSRRuntimeResourceGeneration = 9;
 	enum class NeuralStereoRouteRole
 	{
 		Main
@@ -273,6 +283,23 @@ int main()
 			}
 		}
 		Require(upscaling.resets == 2, "Observational fallback publication must not reset temporal histories");
+		for (const auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::Foveated,
+				 NeuralRendering::RenderingMode::ReducedResolution }) {
+			Upscaling fsr;
+			fsr.method = Upscaling::UpscaleMethod::kFSR;
+			fsr.mode = mode;
+			NextFrame(fsr, state);
+			fsr.PrepareMainFullResolutionNeuralFrame();
+			const bool finalScene = mode != NeuralRendering::RenderingMode::ReducedResolution;
+			Require(fsr.mainFinalLdrNeuralState.ready == finalScene && fsr.guideCopies == (finalScene ? 1u : 0u),
+				"FSR Full and Foveated must prepare the same independent guide path; Reduced must not");
+			if (finalScene)
+				Require(fsr.mainFinalLdrNeuralState.generation == fsr.vrFSRRuntimeResourceGeneration,
+					"FSR guides must retain their vendor resource generation");
+			fsr.PrepareMainFullResolutionNeuralFrame();
+			Require(fsr.guideCopies == (finalScene ? 1u : 0u), "Repeated FSR hooks must not add guide copies");
+		}
+
 		for (const bool isVR : { false, true }) {
 			globals::game::isVR = isVR;
 			for (const uint32_t savedMode : { 0u, 1u, 2u }) {

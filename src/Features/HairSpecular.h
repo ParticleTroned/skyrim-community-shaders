@@ -13,7 +13,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides better hair shading with realistic specular highlights and tangent-based light interaction for more lifelike hair appearance.",
+			"Adds realistic highlights and shading to hair.",
 			{ "Realistic hair specular highlights",
 				"Enhanced hair glossiness and saturation controls",
 				"Separate specular and diffuse lighting multipliers",
@@ -60,8 +60,6 @@ public:
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.Enabled = a_enabled ? 1u : 0u; }
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

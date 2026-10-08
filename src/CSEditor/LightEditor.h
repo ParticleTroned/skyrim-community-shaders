@@ -1,14 +1,20 @@
-﻿#pragma once
+#pragma once
 #include "Features/InverseSquareLighting/Common.h"
 #include "LightPicker.h"
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+namespace Util::Widgets
+{
+	class ComboBox;
+}
 
 namespace RE
 {
@@ -407,7 +413,7 @@ private:
 	/** @brief Draws the modal confirming deletion of the selected LP light entry. */
 	void DrawDeleteConfirmation();
 	/** @brief Opens a persistent-buffer searchable combo (Add-Light style); true while open, with the filter in filterOut. */
-	static bool BeginSearchableCombo(const char* label, const char* preview, const char* searchId,
+	static std::unique_ptr<Util::Widgets::ComboBox> BeginSearchableCombo(const char* label, const char* preview, const char* searchId,
 		char* searchBuf, size_t searchBufSize, std::string_view& filterOut, bool openNow);
 	/** @brief True when an item should be shown for the given combo filter (empty matches everything). */
 	static bool MatchesComboFilter(std::string_view filter, const std::string& text);

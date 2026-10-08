@@ -27,12 +27,12 @@ void TerrainShadows::SaveSettings(json& o_json)
 void TerrainShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainShadows", {
-													{ "appearance", "Shadows", "Choose terrain shadow coverage and quality." },
-													{ "diagnostics", "Diagnostics", "Inspect terrain shadow diagnostics." },
+													{ "appearance", "Shadows", "Choose terrain shadow coverage and quality.", "Shadow coverage and quality", true, true, "Shape terrain shadows" },
+													{ "diagnostics", "Diagnostics", "Inspect terrain shadow diagnostics.", "Diagnostic terrain views", true, false, nullptr },
 												});
 
 	if (page.Is("appearance")) {
-		Util::Widgets::Checkbox("Enable", &settings.EnableTerrainShadow);
+		Util::Widgets::Checkbox("Enabled", &settings.EnableTerrainShadow);
 	}
 	if (page.Is("diagnostics")) {
 		std::string curr_worldspace = "N/A";
@@ -74,18 +74,7 @@ void TerrainShadows::DrawSettings()
 
 void TerrainShadows::DrawPerformanceSettings(bool)
 {
-	Util::Widgets::Checkbox("Enable", &settings.EnableTerrainShadow);
-}
-
-void TerrainShadows::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("TerrainShadows", {
-													{ "essentials", "Essentials", "Start with the main choices for this feature." },
-												});
-	if (!page.Is("essentials"))
-		return;
-
-	DrawPerformanceSettings(false);
+	Util::Widgets::Checkbox("Enabled", &settings.EnableTerrainShadow);
 }
 
 json TerrainShadows::CapturePerformanceSettingsState() const

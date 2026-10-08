@@ -151,7 +151,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides VR-specific optimizations and enhancements for CSX, improving performance and visual quality in virtual reality environments.",
+			"Controls headset rendering, performance and how you interact with the menu.",
 			{ "Depth buffer culling optimization for VR performance",
 				"Configurable occlusion culling parameters",
 				"VR-specific rendering pipeline improvements",
@@ -190,8 +190,6 @@ public:
 	virtual void DrawSettings() override;
 	/** Queue navigation to the FOV tab; return false when VR settings are unavailable. */
 	bool OpenFovSettings();
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

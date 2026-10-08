@@ -1,5 +1,6 @@
 #include "NeuralRenderingFeature.h"
 #include "BuildProvenance.h"
+#include "Menu/SettingsPage.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
@@ -99,6 +100,7 @@ namespace
 			{ "detailStrength", settings.detailStrength }, { "appearanceMix", settings.appearanceMix },
 			{ "maximumDetailStops", settings.maximumDetailStops }, { "lightingPreservation", settings.lightingPreservation } };
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	Json ProfileJson(const Profile& profile)
 	{
 		return { { "domain", Name(profile.domain, domains) }, { "transform", Name(profile.transform, transforms) },
@@ -254,7 +256,6 @@ namespace
 		return { { "ok", true }, { "action", "assets" }, { "allPresent", complete }, { "assets", assets },
 			{ "hashVerified", false }, { "note", "Presence only. Run tools/nr-color/verify_assets.py against staged/deployed Data for exact source hash parity." } };
 	}
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	void Handler(void*, const char* arguments, void* sink, DevBenchAPI::WriteFn write)
 	{
 		if (!write)
@@ -605,11 +606,12 @@ namespace
             "type": "boolean"
           },
           "captureEngineExposure": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Development builds only; HDR observation is suspended while the NR master toggle is off."
           },
           "captureFrameEvidence": {
             "type": "boolean",
-            "description": "Arm frozen NR configuration/outcome evidence and CPU diagnostic timings for HMD screenshots. With GPU profiling enabled, the armed scopes also issue GPU detail timestamps. Does not enable colour passes or change input epochs; disable for performance baselines."
+            "description": "Development builds only; recording is suspended while the NR master toggle is off. Arm frozen NR configuration/outcome evidence and CPU diagnostic timings for HMD screenshots. With GPU profiling enabled, the armed scopes also issue GPU detail timestamps. Does not enable colour passes or change input epochs; disable for performance baselines."
           },
           "applyModelEdit": {
             "type": "boolean"
@@ -624,6 +626,7 @@ namespace
 #endif
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 namespace NeuralRendering::Color
 {
 	nlohmann::json ConfigurationEvidenceJson(const Configuration& config)
@@ -654,6 +657,7 @@ namespace NeuralRendering::Color
 	}
 }
 
+#endif
 NeuralRenderingFeature& NeuralRenderingFeature::Instance()
 {
 	static NeuralRenderingFeature instance;
@@ -702,7 +706,8 @@ void NeuralRenderingFeature::EarlyPrepass()
 {
 	globals::features::upscaling.SetNeuralRenderingFeatureAvailable(loaded);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	ExposureCapture::Instance().RefreshProducers();
+	if (globals::features::upscaling.IsNeuralRenderingEnabled())
+		ExposureCapture::Instance().RefreshProducers();
 #endif
 }
 bool NeuralRenderingFeature::SupportsPerformanceCostMeasurement() const
@@ -738,10 +743,42 @@ void NeuralRenderingFeature::SetPerformanceCostMeasurementEnabled(bool a_enabled
 		logger::warn("[NeuralRendering] Performance toggle rejected: {}", error);
 }
 
+Feature::SettingsHeaderStatus NeuralRenderingFeature::GetSettingsHeaderStatus() const
+{
+	const auto& upscaling = globals::features::upscaling;
+	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
+	const bool unavailable = !NeuralRendering::Runtime::IsInstalled() || !upscaling.IsNeuralRenderingHardwareSupported();
+	const bool failed = status.failureLatched || status.quarantined;
+	const bool recovering = upscaling.IsNeuralRenderingRequested() && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready;
+	const bool needsFov = NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly,
+		globals::game::isVR, upscaling.settings.neuralRenderingRenderscaleFov);
+	const bool waiting = !upscaling.IsNeuralRenderingUpscalingAvailable() || (needsFov && !upscaling.IsNeuralRenderingFovConfigurationAvailable());
+	const std::string_view label = unavailable ? "Unavailable" : failed ? "Paused" :
+	                                                         recovering ? "Recovering" :
+	                                                         waiting    ? "Waiting" :
+	                                                                      "Ready";
+	return { label, unavailable || failed || recovering || waiting };
+}
+
+void NeuralRenderingFeature::DrawSettingsEnabledControl()
+{
+	globals::features::upscaling.DrawNeuralRenderingEnableControl();
+}
+
+std::string_view NeuralRenderingFeature::GetSettingsFooterText() const
+{
+	const auto& upscaling = globals::features::upscaling;
+	if (upscaling.GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution)
+		return globals::game::isVR ? "Requires scaled DLSS. In VR, turn Render Scale on." : "Requires scaled DLSS.";
+	if (upscaling.GetNeuralRenderingMode() == NeuralRendering::RenderingMode::Foveated || upscaling.settings.neuralRenderingFovOnly)
+		return "Requires DLSS and an enabled FOV mask.";
+	return "Processes the full view at full resolution.";
+}
+
 void NeuralRenderingFeature::DrawSettings()
 {
 	globals::features::upscaling.DrawNeuralRenderingSettings(
-		globals::features::upscaling.GetUpscaleMethod(), false, [this](bool diagnosticsOnly) { DrawColourSettings(diagnosticsOnly); });
+		globals::features::upscaling.GetUpscaleMethod(), [this](bool diagnosticsOnly) { DrawColourSettings(diagnosticsOnly); });
 }
 void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 {
@@ -755,47 +792,41 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 	auto config = Registry::Instance().Snapshot();
 	bool changed = false;
 	if (!a_diagnosticsOnly) {
-		ImGui::SeparatorText("Colour processing");
-		ImGui::TextWrapped("Colour choices apply to the shared NR image before category strengths.");
 		changed |= Util::Widgets::Checkbox("Enable colour processing", &config.settings.enabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Applies your colour choices below. Off keeps NR on and uses its original colours.");
-		static constexpr std::array colourModes{ "Original", "Managed (experimental)", "Preserve source", "Neural lighting" };
-		static constexpr std::array colourModeHelp{
-			"Keeps the colours produced by NR without correcting them to match the game.",
-			"Tests an alternative colour correction. Adjustments last only for this game session.",
-			"Keeps the game's colours while adding NR detail. Use the sliders below to control the changes.",
-			"Keeps the game's colours while allowing NR to change lighting and brightness detail."
-		};
-		static_assert(colourModes.size() == static_cast<std::size_t>(Mode::Count) && colourModeHelp.size() == colourModes.size());
-		const bool colourModeOpen = ImGui::BeginCombo("Colour mode", colourModes[static_cast<std::size_t>(config.settings.mode)]);
-		if (!colourModeOpen) {
-			if (auto tooltip = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(colourModeHelp[static_cast<std::size_t>(config.settings.mode)]);
+		const std::array<MenuUI::Choice, 4> colourModes{ { { "original", "Original", "Use the model's colours", "Keeps the colours produced by NR without correcting them to match the game." },
+			{ "managed", "Managed (experimental)", "Session calibration", "Tests an alternative colour correction. Adjustments last only for this game session." },
+			{ "preserve", "Preserve source", "Keep the game's lighting", "Keeps the game's colours while adding NR detail. Use the sliders below to control the changes." },
+			{ "lighting", "Neural lighting", "Allow lighting changes", "Keeps the game's colours while allowing NR to change lighting and brightness detail." } } };
+		static_assert(colourModes.size() == static_cast<std::size_t>(Mode::Count));
+		std::vector<MenuUI::Choice> visibleModes;
+		std::vector<Mode> modeValues;
+		int selected = -1;
+		for (std::size_t index = 0; index < colourModes.size(); ++index) {
+			const auto mode = static_cast<Mode>(index);
+			if (mode == Mode::Managed && !showDiagnostics)
+				continue;
+			if (config.settings.mode == mode)
+				selected = static_cast<int>(visibleModes.size());
+			visibleModes.push_back(colourModes[index]);
+			modeValues.push_back(mode);
 		}
-		if (colourModeOpen) {
-			for (std::size_t index = 0; index < colourModes.size(); ++index) {
-				const auto mode = static_cast<Mode>(index);
-				if (mode == Mode::Managed && !showDiagnostics)
-					continue;
-				const bool selected = config.settings.mode == mode;
-				if (ImGui::Selectable(colourModes[index], selected)) {
-					config.settings.mode = mode;
-					changed = true;
-				}
-				if (auto tooltip = Util::HoverTooltipWrapper())
-					ImGui::TextUnformatted(colourModeHelp[index]);
-				if (selected)
-					ImGui::SetItemDefaultFocus();
-			}
-			ImGui::EndCombo();
+		const int choice = MenuUI::ChoiceCards("Colour mode", selected, visibleModes);
+		if (choice >= 0) {
+			config.settings.mode = modeValues[choice];
+			changed = true;
 		}
 
 		if (config.settings.mode == Mode::Managed) {
 			ImGui::TextWrapped("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.");
+#ifdef DEVBENCH_BRIDGE_ENABLED
 			ImGui::TextWrapped(showDiagnostics ?
 								   "Adjust its session-only calibration under Colour experiments and diagnostics. Identity calibration can look like Original." :
 								   "Your saved mode is retained. Choose Original or Preserve source, or set Log Level to Debug to inspect its calibration.");
+#else
+			ImGui::TextWrapped("Your saved mode is retained. Choose Original or Preserve source.");
+#endif
 		}
 		const bool usesSourceColourReconstruction =
 			config.settings.mode == Mode::PreserveSource || config.settings.mode == Mode::NeuralLighting;
@@ -836,7 +867,9 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			if (auto tooltip = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted("Limits added brightness changes. 1 stop allows up to twice or half the original brightness. Neural appearance mix is applied separately.");
 		}
+		MenuUI::DetailNote("Preserve the game's lighting while keeping NR detail. These choices apply to the shared result.");
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	if (a_diagnosticsOnly && showDiagnostics && ImGui::TreeNode("Colour experiments and diagnostics")) {
 		if (config.experiments.captureEngineExposure || config.experiments.captureFrameEvidence || config.experiments.diagnostics) {
 			ImGui::TextWrapped("Diagnostic captures are active and add overhead.");
@@ -868,7 +901,7 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			ImGui::TextUnformatted(i ? "Final LDR pre-UI" : "Upscaled Centre");
 			auto& p = config.experiments.profiles[i];
 			int domain = static_cast<int>(p.domain), transform = static_cast<int>(p.transform);
-			changed |= ImGui::Combo("Source-domain candidate", &domain, "Unknown/native\0Linear RGB\0sRGB encoded\0");
+			changed |= Util::Widgets::Combo("Source-domain candidate", &domain, "Unknown/native\0Linear RGB\0sRGB encoded\0");
 			if (auto tooltip = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted("Declares how this route's input colour should be interpreted for experiments. Non-identity transforms require Linear RGB; changing away from it restores Identity.");
 			p.domain = static_cast<Domain>(domain);
@@ -878,7 +911,7 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			}
 			if (p.domain == Domain::Linear) {
 				transform = static_cast<int>(p.transform);
-				changed |= ImGui::Combo("Model input transform", &transform, "Identity\0Linear to sRGB\0Reversible proxy + sRGB\0");
+				changed |= Util::Widgets::Combo("Model input transform", &transform, "Identity\0Linear to sRGB\0Reversible proxy + sRGB\0");
 				if (auto tooltip = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Identity leaves input colour unchanged. Linear to sRGB encodes it; Reversible proxy also compresses its range. Experimental transforms are reversed during reconstruction.");
 				p.transform = static_cast<Transform>(transform);
@@ -888,7 +921,7 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 				p.exposureSource = ExposureSource::Manual;
 			} else {
 				int source = static_cast<int>(p.exposureSource);
-				changed |= ImGui::Combo("Exposure source", &source, "Manual calibration\0Captured engine HDR (current frame)\0Captured engine HDR (previous frame)\0");
+				changed |= Util::Widgets::Combo("Exposure source", &source, "Manual calibration\0Captured engine HDR (current frame)\0Captured engine HDR (previous frame)\0");
 				if (auto tooltip = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Uses manual calibration or captured HDR exposure from the matching current or previous source frame. Previous-frame capture is for early-route experiments; missing evidence cannot supply that correction.");
 				p.exposureSource = static_cast<ExposureSource>(source);
@@ -928,12 +961,9 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			ImGui::TextUnformatted(assets.c_str());
 		ImGui::TreePop();
 	}
+#endif
 	if (changed && !Registry::Instance().Configure(config.settings, config.experiments, config.revision))
 		ImGui::TextWrapped("Settings changed concurrently; retry after the next UI refresh.");
-}
-void NeuralRenderingFeature::DrawEssentialSettings()
-{
-	globals::features::upscaling.DrawNeuralRenderingSettings(globals::features::upscaling.GetUpscaleMethod(), true);
 }
 void NeuralRenderingFeature::DataLoaded()
 {

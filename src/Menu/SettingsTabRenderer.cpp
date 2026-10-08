@@ -1,5 +1,7 @@
 #include "SettingsTabRenderer.h"
+#include "FeatureListRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <set>
 #include <string>
@@ -189,7 +191,7 @@ namespace
 	bool ComboWithFont(const char* label, int* currentItem, const char* const items[], int itemCount, Menu::FontRole role)
 	{
 		FontRoleGuard guard(role);
-		return ImGui::Combo(label, currentItem, items, itemCount);
+		return Util::Widgets::Combo(label, currentItem, items, itemCount);
 	}
 
 	bool IsPresetThemeSelected()
@@ -219,13 +221,13 @@ namespace
 void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state)
 {
 	MenuUI::SettingsPage page("General", {
-											 { "shaders", "Shaders", "Choose shader behaviour and compilation first." },
-											 { "hotkeys", "Hotkeys", "Choose keyboard shortcuts." },
-											 { "behaviour", "Behaviour", "Choose how the menu opens and responds." },
-											 { "themes", "Theme", "Choose the overall appearance first." },
-											 { "fonts", "Fonts", "Refine text size and font choices." },
-											 { "layout", "Layout", "Refine spacing, shape and menu layout." },
-											 { "colours", "Colours", "Refine the selected theme colours." },
+											 { "shaders", "Shaders", "Choose shader behaviour and compilation first.", "Shader and compilation behavior", true, true, "Choose system behavior" },
+											 { "hotkeys", "Hotkeys", "Choose keyboard shortcuts.", "Keyboard shortcuts", true, true, nullptr },
+											 { "behaviour", "Behaviour", "Choose how the menu opens and responds.", "Opening, focus and interaction", true, true, "Choose interaction and appearance" },
+											 { "themes", "Theme", "Choose the overall appearance first.", "Overall appearance", true, true, nullptr },
+											 { "fonts", "Fonts", "Refine text size and font choices.", "Font families and sizes", true, true, "Refine readability" },
+											 { "layout", "Layout", "Refine spacing, shape and menu layout.", "Spacing, shape and placement", true, true, nullptr },
+											 { "colours", "Colours", "Refine the selected theme colours.", "Theme palette", true, true, "Refine the palette" },
 										 });
 	if (page.Is("shaders"))
 		RenderShadersTab();
@@ -458,12 +460,8 @@ void SettingsTabRenderer::RenderBehaviorTab()
 		ImGui::Text("Shows the footer with game version, swap chain, and GPU information at the bottom of the window");
 	}
 
-	Util::Widgets::Checkbox("Center Header Title", &themeSettings.CenterHeader);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Centers the CSX title and logo in the header title bar");
-	}
-
-	Util::Widgets::Checkbox("Auto-hide Feature List", &globals::menu->GetSettings().AutoHideFeatureList);
+	if (Util::Widgets::Checkbox("Auto-hide Feature List", &globals::menu->GetSettings().AutoHideFeatureList))
+		FeatureListRenderer::ResetSidebarVisibility();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Automatically hides the left feature list panel. Move cursor to the left edge to show it.");
 	}
@@ -963,7 +961,7 @@ void SettingsTabRenderer::RenderFontsTab()
 		std::string familyLabel = std::format("{} Family##{}", descriptor.displayName, roleIndex);
 		{
 			FontRoleGuard familyComboFont(Menu::FontRole::Body);
-			if (ImGui::BeginCombo(familyLabel.c_str(), familyPreview)) {
+			if (auto combo = Util::Widgets::ComboBox(familyLabel.c_str(), familyPreview)) {
 				if (fontCatalog.families.empty()) {
 					Util::Text::Disabled("No font families available");
 				} else {
@@ -993,7 +991,6 @@ void SettingsTabRenderer::RenderFontsTab()
 						}
 					}
 				}
-				ImGui::EndCombo();
 			}
 		}
 
@@ -1015,7 +1012,7 @@ void SettingsTabRenderer::RenderFontsTab()
 			std::string styleLabel = std::format("{} Style##{}", descriptor.displayName, roleIndex);
 			{
 				FontRoleGuard styleComboFont(Menu::FontRole::Body);
-				if (ImGui::BeginCombo(styleLabel.c_str(), stylePreview)) {
+				if (auto combo = Util::Widgets::ComboBox(styleLabel.c_str(), stylePreview)) {
 					for (int s = 0; s < static_cast<int>(selectedFamily->styles.size()); ++s) {
 						bool isSelected = (s == styleIndex);
 						if (ImGui::Selectable(selectedFamily->styles[s].displayName.c_str(), isSelected)) {
@@ -1034,7 +1031,6 @@ void SettingsTabRenderer::RenderFontsTab()
 							ImGui::SetItemDefaultFocus();
 						}
 					}
-					ImGui::EndCombo();
 				}
 			}
 		}
@@ -1137,7 +1133,7 @@ void SettingsTabRenderer::RenderStylingTab()
 	SeparatorTextWithFont("Widgets", Menu::FontRole::Subheading);
 	{
 		FontRoleGuard comboFont(Menu::FontRole::Body);
-		ImGui::Combo("Color Button Position", (int*)&style.ColorButtonPosition, "Left\0Right\0");
+		Util::Widgets::Combo("Color Button Position", (int*)&style.ColorButtonPosition, "Left\0Right\0");
 	}
 	Util::Widgets::SliderFloat2("Button Text Align", (float*)&style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())

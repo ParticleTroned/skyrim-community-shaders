@@ -16,7 +16,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Provides seamless blending between terrain and objects, eliminating harsh transitions where objects meet the ground for more natural-looking landscapes.",
+			"Softens the seams where objects meet the ground.",
 			{ "Seamless terrain-to-object blending transitions",
 				"Advanced depth buffer manipulation for smooth integration",
 				"Support for alternative terrain rendering modes",
@@ -47,8 +47,6 @@ public:
 	Settings settings;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

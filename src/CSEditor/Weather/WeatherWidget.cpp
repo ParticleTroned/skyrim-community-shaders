@@ -126,7 +126,7 @@ void WeatherWidget::DrawWidget()
 			settings.parent = "None";
 
 		if (editorWindow->settings.enableInheritFromParent) {
-			if (ImGui::BeginCombo("Parent", settings.parent.c_str())) {
+			if (auto combo = Util::Widgets::ComboBox("Parent", settings.parent.c_str())) {
 				// Option for "None"
 				if (ImGui::Selectable("None", parent == nullptr)) {
 					editorWindow->PushUndoState(this);
@@ -153,7 +153,6 @@ void WeatherWidget::DrawWidget()
 						ImGui::SetItemDefaultFocus();
 					}
 				}
-				ImGui::EndCombo();
 			}
 			ImGui::SameLine();
 			ImGui::TextDisabled("(?)");
@@ -1108,7 +1107,7 @@ void WeatherWidget::DrawCloudSettings()
 			// Begin horizontal layout for enable checkbox and sliders on left, texture on right
 			ImGui::BeginGroup();
 
-			if (Util::Widgets::Checkbox(std::format("Enable##{}", layer).c_str(), &layerEnabled)) {
+			if (Util::Widgets::Checkbox(std::format("Enabled##{}", layer).c_str(), &layerEnabled)) {
 				editorWindow->PushUndoState(this);
 				settings.clouds[i].enabled = layerEnabled;
 				enableChanged = true;

@@ -1,3 +1,4 @@
+#include "Utils/UI.h"
 #pragma once
 
 #include "Util.h"
@@ -466,7 +467,7 @@ namespace WeatherUtils
 			if (width > 0.0f)
 				ImGui::SetNextItemWidth(width);
 
-			if (ImGui::BeginCombo(label, previewText.c_str())) {
+			if (auto combo = Util::Widgets::ComboBox(label, previewText.c_str())) {
 				if (allowNone && ImGui::Selectable("None", currentForm == nullptr) && currentForm != nullptr) {
 					WeatherUtils::PushWidgetUndo(widget);
 					currentForm = nullptr;
@@ -486,7 +487,6 @@ namespace WeatherUtils
 					if (isSelected)
 						ImGui::SetItemDefaultFocus();
 				});
-				ImGui::EndCombo();
 			}
 
 			return changed;

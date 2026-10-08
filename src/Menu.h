@@ -47,7 +47,7 @@ public:
 	 * ]
 	 *
 	 * SizeScale multiplies the base FontSize for each role.
-	 * Example: FontSize=27, Heading SizeScale=1.05 Ã¢â€ â€™ 28.35px rendered size
+	 * Example: FontSize=27, Heading SizeScale=1.05 â†’ 28.35px rendered size
 	 *
 	 * Migration from Legacy:
 	 * Old "FontName" field auto-populates Body role on theme load.
@@ -289,7 +289,6 @@ public:
 		bool UseMonochromeIcons = false;     // whether to use monochrome (white) action icons with text color tinting
 		bool UseMonochromeLogo = false;      // whether to use monochrome CSX logo
 		bool ShowFooter = true;              // whether to show the footer with game version/GPU info
-		bool CenterHeader = false;           // whether to center the header title and logo
 		float TooltipHoverDelay = 0.5f;      // tooltip hover delay in seconds
 		bool BackgroundBlurEnabled = false;  // enable background blur effect
 		// Scrollbar opacity settings
@@ -442,7 +441,6 @@ public:
 		bool ShowCompilationHUDInVR = false;                                            // Opt in to shader compilation status in the HMD; desktop status is unaffected
 		bool AutoHideFeatureList = false;                                               // Auto-hide left feature list panel, show on hover
 		bool SkipConstraintWarning = false;                                             // Skip popup when a setting change creates new constraints
-		int UiMode = 0;                                                                 // Persisted as "UI Mode"; 0 = Essentials, 1 = Advanced
 		bool RequireShiftToDock = true;                                                 // Require holding Shift to dock windows
 		bool UseResolutionFont = true;                                                  // When true, runtime font size scales with screen resolution; when persisted to theme files, FontSize is zeroed for backward compatibility
 		ThemeSettings Theme;
@@ -451,8 +449,6 @@ public:
 	const ThemeSettings& GetTheme() const { return settings.Theme; }  // Provide read-only access to the Theme.
 	Settings& GetSettings() { return settings; }                      // Provide access to settings for other components
 	const Settings& GetSettings() const { return settings; }
-	bool IsEssentialsUiMode() const { return settings.UiMode == 0; }
-	bool IsAdvancedUiMode() const { return settings.UiMode != 0; }
 	winrt::com_ptr<IDXGIAdapter3> GetDXGIAdapter3() const { return dxgiAdapter3; }  // Provide access to dxgiAdapter3
 	ThemeSettings::FontRoleSettings& GetFontRoleSettings(FontRole role) { return settings.Theme.FontRoles[static_cast<size_t>(role)]; }
 	const ThemeSettings::FontRoleSettings& GetFontRoleSettings(FontRole role) const { return settings.Theme.FontRoles[static_cast<size_t>(role)]; }

@@ -56,13 +56,13 @@ void LinearLighting::DrawSettings()
 	SanitizeSettings(settings);
 
 	MenuUI::SettingsPage page("LinearLighting", {
-													{ "coverage", "Coverage", "Choose where linear lighting is enabled." },
-													{ "colour", "Colour", "Refine brightness response after enabling linear lighting." },
-													{ "lighting", "Lighting", "Refine the contribution from each light source." },
+													{ "coverage", "Coverage", "Choose where linear lighting is enabled.", "Interior and exterior response", true, true, "Choose coverage and colour" },
+													{ "colour", "Colour", "Refine brightness response after enabling linear lighting.", "Brightness and colour response", true, true, nullptr },
+													{ "lighting", "Lighting", "Refine the contribution from each light source.", "Individual light contributions", true, true, "Balance light sources" },
 												});
 
 	if (page.Is("coverage")) {
-		Util::UIntCheckbox("Enable", settings.enableLinearLighting);
+		Util::UIntCheckbox("Enabled", settings.enableLinearLighting);
 		Util::UIntCheckbox("Disable in interiors", settings.DisableInInteriors);
 		Util::UIntCheckbox("Disable in exteriors", settings.DisableInExteriors);
 	}
@@ -100,25 +100,12 @@ void LinearLighting::DrawSettings()
 	}
 }
 
-void LinearLighting::DrawEssentialSettings()
-{
-	SanitizeSettings(settings);
-
-	MenuUI::SettingsPage page("LinearLighting", {
-													{ "essentials", "Essentials", "Start with the main choices for this feature." },
-												});
-	if (!page.Is("essentials"))
-		return;
-
-	Util::UIntCheckbox("Enable", settings.enableLinearLighting);
-}
-
 void LinearLighting::DrawPerformanceSettings(bool)
 {
 	SanitizeSettings(settings);
 	const bool availableInCurrentCell = !IsDisabledForCurrentCell();
 	ImGui::BeginDisabled(!availableInCurrentCell);
-	Util::UIntCheckbox("Enable", settings.enableLinearLighting);
+	Util::UIntCheckbox("Enabled", settings.enableLinearLighting);
 	ImGui::EndDisabled();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(

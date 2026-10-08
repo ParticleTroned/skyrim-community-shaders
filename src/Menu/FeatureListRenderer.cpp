@@ -1,13 +1,16 @@
 #include "FeatureListRenderer.h"
+#include "Menu/MenuHeaderRenderer.h"
 #include "Menu/SettingsPage.h"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <d3d11.h>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
+#include <optional>
 #include <ranges>
 #include <string_view>
 #include <system_error>
@@ -41,40 +44,157 @@ namespace
 	// Core built-in menu names that always appear before the feature list.
 	constexpr std::array<const char*, 6> CORE_MENU_NAMES = { "Home", "General", "Advanced", "Profiling", PERFORMANCE_TUNING_MENU_NAME, "Display" };
 
-	void DrawSettingsSaveStatus()
+	constexpr float sidebarTextScale = 14.0f / 12.0f;
+	struct SidebarFontScope
 	{
-		const auto& menu = *globals::menu;
-		const auto& message = menu.GetSettingsSaveMessage();
-		if (menu.IsSettingsSaveMessageError() && !message.empty())
-			Util::Text::WrappedError("%s", message.c_str());
-		else if (menu.HasUnsavedSettings())
-			Util::Text::Warning("Unsaved changes");
-		else
-			ImGui::TextDisabled("Settings saved");
+		MenuFonts::FontRoleGuard role{ Menu::FontRole::Subheading };
+		SidebarFontScope() { ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * sidebarTextScale); }
+		~SidebarFontScope() { ImGui::PopFont(); }
+	};
+
+	constexpr float featureDescriptionScale = 1.4f;
+	constexpr float footerTextScale = 14.0f / 12.0f;
+	constexpr float footerButtonPadding = 1.85f;
+	constexpr float footerButtonHeight = 2.8f;
+
+	float SettingsActionTextWidth(const char* label)
+	{
+		return ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize() * footerTextScale, FLT_MAX, 0, label).x;
 	}
 
-	float SettingsFooterHeight()
+	std::array<const char*, 3> SettingsActionLabels()
 	{
-		return ImGui::GetFrameHeightWithSpacing() * 2 + ImGui::GetStyle().ItemSpacing.y;
+		const float fullWidth = SettingsActionTextWidth("Save settings") + SettingsActionTextWidth("Load saved") + SettingsActionTextWidth("Restore defaults") +
+		                        ImGui::GetFontSize() * footerButtonPadding * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
+		const bool compact = ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x * 2 < fullWidth;
+		return compact ? std::array{ "Save", "Load", "Defaults" } : std::array{ "Save settings", "Load saved", "Restore defaults" };
 	}
 
-	void DrawSettingsFooterActions()
+	float SettingsActionWidth(bool a_restore)
 	{
+		const float padding = ImGui::GetFontSize() * footerButtonPadding;
+		const auto labels = SettingsActionLabels();
+		return SettingsActionTextWidth(labels[0]) + SettingsActionTextWidth(labels[1]) + padding * 2 + ImGui::GetStyle().ItemSpacing.x +
+		       (a_restore ? SettingsActionTextWidth(labels[2]) + padding + ImGui::GetStyle().ItemSpacing.x : 0);
+	}
+
+	bool SettingsActionButton(size_t a_index)
+	{
+		const auto* label = SettingsActionLabels()[a_index];
+		const float font = ImGui::GetFontSize();
+		const float width = SettingsActionTextWidth(label) + font * footerButtonPadding;
+		constexpr std::array glyphs{ Util::ActionGlyph::SaveSettings, Util::ActionGlyph::LoadSettings, Util::ActionGlyph::RestoreDefaults };
+		ImGui::PushFont(ImGui::GetFont(), font * footerTextScale);
+		ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, { 1, .5f });
+		const SKSE::stl::scope_exit restoreAlign([] { ImGui::PopStyleVar(); ImGui::PopFont(); });
+		const bool clicked = ImGui::Button(label, { width, font * footerButtonHeight });
+		const auto minimum = ImGui::GetItemRectMin();
+		const float extent = font;
+		const float y = minimum.y + (ImGui::GetItemRectSize().y - extent) * .5f;
+		Util::DrawActionGlyph(ImGui::GetWindowDrawList(), glyphs[a_index],
+			{ minimum.x + font * .3f, y }, { minimum.x + font * .3f + extent, y + extent }, ImGui::GetColorU32(ImGuiCol_Text));
+		return clicked;
+	}
+
+	struct SettingsFooterLayout
+	{
+		float actionsLeft;
+		float statusLeft;
+		float statusWidth;
+		float actionSpacing;
+		bool stacked;
+	};
+
+	SettingsFooterLayout GetSettingsFooterLayout(const char* a_page, bool a_restore)
+	{
+		const float width = ImGui::GetContentRegionAvail().x;
+		const float font = ImGui::GetFontSize();
+		const float actionsWidth = SettingsActionWidth(a_restore);
+		const float inset = std::min(MenuUI::SettingsPage::OverviewLastColumnInset(a_page, width), std::max(0.0f, width - actionsWidth));
+		const bool stacked = inset < font * 12;
+		const float textInset = MenuUI::SettingsPage::OverviewTextInset(a_page, width);
+		const float alignedStatus = textInset > ImGui::GetStyle().WindowPadding.x ? textInset - font : std::max(0.0f, textInset - font);
+		const float statusLeft = stacked ? std::max(inset, alignedStatus) : alignedStatus;
+		const float statusWidth = stacked ? width - statusLeft : inset - statusLeft - font;
+		const float actionSpacing = ImGui::GetStyle().ItemSpacing.x + std::max(0.0f, width - inset - actionsWidth) / (a_restore ? 2 : 1);
+		return { inset, statusLeft, std::max(1.0f, statusWidth), actionSpacing, stacked };
+	}
+
+	float SettingsFooterHeight(const char* a_page, bool a_restore = false)
+	{
+		const auto layout = GetSettingsFooterLayout(a_page, a_restore);
+		return ImGui::GetTextLineHeight() * (layout.stacked ? 7.2f : 4.3f) + ImGui::GetStyle().ItemSpacing.y;
+	}
+
+	void DrawSettingsFooter(const char* a_page, const std::function<void()>& a_defaults = {})
+	{
+		const auto footerStart = ImGui::GetCursorScreenPos();
+		const auto background = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+		const bool light = background.x + background.y + background.z > 1.5f;
+		const ImVec4 lift = light ? ImVec4(-.02f, -.02f, -.02f, 0) : ImVec4(.09f, .105f, .11f, 0);
+		const ImVec4 footerColor{ std::clamp(background.x + lift.x, 0.0f, 1.0f), std::clamp(background.y + lift.y, 0.0f, 1.0f), std::clamp(background.z + lift.z, 0.0f, 1.0f), 1 };
+		ImGui::GetWindowDrawList()->AddRectFilled(footerStart,
+			{ footerStart.x + ImGui::GetContentRegionAvail().x, footerStart.y + SettingsFooterHeight(a_page, static_cast<bool>(a_defaults)) }, ImGui::GetColorU32(footerColor));
 		ImGui::Separator();
-		const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
-		const auto normal = Util::Color::Blend(ImGui::GetStyleColorVec4(ImGuiCol_Button), accent, .3f, ImGui::GetStyleColorVec4(ImGuiCol_Button).w);
+		const float font = ImGui::GetFontSize();
+		ImGui::Dummy({ 0, font * .6f });
+		const auto start = ImGui::GetCursorScreenPos();
+		const auto layout = GetSettingsFooterLayout(a_page, static_cast<bool>(a_defaults));
+		const ImVec2 statusStart{ start.x + layout.statusLeft, start.y + (layout.stacked ? font * 3.3f : 0) };
+		const auto& menu = *globals::menu;
+		const auto& palette = menu.GetTheme().StatusPalette;
+		const bool error = menu.IsSettingsSaveMessageError() && !menu.GetSettingsSaveMessage().empty();
+		const bool dirty = menu.HasUnsavedSettings();
+		const char* status = error ? "Settings not saved" : dirty ? "Unsaved changes" :
+		                                                            "Settings saved";
+		const std::string detail = error ? menu.GetSettingsSaveMessage() : dirty ? "Save to keep your current choices." :
+		                                                                           "Your choices are up to date.";
+		const auto statusColor = error ? palette.Error : dirty ? palette.Warning :
+		                                                         Util::Color::SecondaryText();
+		auto* draw = ImGui::GetWindowDrawList();
 		{
-			const Util::StyledButtonWrapper primary(normal, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-			if (ImGui::Button(ImGui::GetWindowWidth() < ImGui::GetFontSize() * 27 ? "Save" : "Save settings"))
+			draw->PushClipRect({ statusStart.x - font * .2f, statusStart.y }, { statusStart.x + layout.statusWidth, statusStart.y + font * 2.8f }, true);
+			const SKSE::stl::scope_exit restoreClip([draw] { draw->PopClipRect(); });
+			const ImVec2 marker{ statusStart.x + font * .35f, statusStart.y + font * 1.3f };
+			draw->AddCircleFilled(marker, font * .52f, ImGui::GetColorU32({ statusColor.x, statusColor.y, statusColor.z, .10f }));
+			draw->AddCircleFilled(marker, font * .26f, ImGui::GetColorU32(statusColor));
+			draw->AddText(nullptr, font * footerTextScale, { statusStart.x + font, statusStart.y + font * .2f }, ImGui::GetColorU32(statusColor), status);
+			draw->AddText(nullptr, font * .95f, { statusStart.x + font, statusStart.y + font * 1.7f }, ImGui::GetColorU32(Util::Color::SecondaryText()), detail.c_str());
+		}
+		ImGui::SetCursorScreenPos(statusStart);
+		ImGui::Dummy({ layout.statusWidth, font * 2.8f });
+		Util::AddTooltip(detail.c_str());
+		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft, start.y });
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { font * .35f, font * .55f });
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, font * .3f);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1);
+		const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleVar(3); });
+		{
+			const auto primary = Util::StyledButtonWrapper(palette.InfoColor, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			const auto accent = palette.InfoColor;
+			const float brightness = accent.x * .299f + accent.y * .587f + accent.z * .114f;
+			ImGui::PushStyleColor(ImGuiCol_Text, brightness > .55f ? ImVec4(.08f, .08f, .08f, 1) : ImVec4(1, 1, 1, 1));
+			const SKSE::stl::scope_exit restoreText([] { ImGui::PopStyleColor(); });
+			if (SettingsActionButton(0))
 				globals::state->Save();
 		}
 		Util::AddTooltip("Save all your CSX settings.");
-		ImGui::SameLine();
-		if (ImGui::Button(ImGui::GetWindowWidth() < ImGui::GetFontSize() * 27 ? "Load" : "Load saved")) {
-			globals::state->Load();
-			globals::features::llf::particleLights.GetConfigs();
+		ImGui::SameLine(0, layout.actionSpacing);
+		{
+			const float contrast = light ? -.04f : .05f;
+			const ImVec4 secondary{ std::clamp(footerColor.x + contrast, 0.0f, 1.0f), std::clamp(footerColor.y + contrast, 0.0f, 1.0f), std::clamp(footerColor.z + contrast, 0.0f, 1.0f), 1 };
+			const auto secondaryStyle = Util::StyledButtonWrapper(secondary, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			if (SettingsActionButton(1)) {
+				globals::state->Load();
+				globals::features::llf::particleLights.GetConfigs();
+			}
 		}
 		Util::AddTooltip("Replace current changes with your saved CSX settings.");
+		if (a_defaults) {
+			ImGui::SameLine(0, layout.actionSpacing);
+			const auto outlineStyle = Util::StyledButtonWrapper({ 0, 0, 0, 0 }, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			a_defaults();
+		}
 	}
 
 	struct FeatureBannerTexture
@@ -138,11 +258,10 @@ namespace
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
 	}
 
-	bool IsFeatureVisibleInMenuMode(Feature* feature, bool essentialsMode)
+	bool IsFeatureVisible(Feature* feature)
 	{
 		return feature &&
 		       !feature->IsHiddenFromUserView() &&
-		       !(essentialsMode && feature->IsHiddenInEssentialsMode()) &&
 		       feature->IsInMenu();
 	}
 
@@ -203,60 +322,18 @@ namespace
 		selectedMenu = 0;
 	}
 
-	int& GetFeatureUiModeValue(Feature* feature)
-	{
-		static std::unordered_map<std::string, int> featureUiModes;
-		static int fallbackMode = 0;
-		if (!feature)
-			return fallbackMode;
-
-		const std::string featureShortName = feature->GetShortName();
-		return featureUiModes[featureShortName];
-	}
-
-	bool IsFeatureAdvancedUiMode(Feature* feature)
-	{
-		if (!feature || !globals::menu || !globals::menu->IsEssentialsUiMode())
-			return false;
-
-		int& mode = GetFeatureUiModeValue(feature);
-		mode = std::clamp(mode, 0, 1);
-		return mode != 0;
-	}
-
-	bool DrawFeatureUiModeToggle(Feature* feature)
-	{
-		if (!feature || !globals::menu || !globals::menu->IsEssentialsUiMode())
-			return false;
-
-		int& mode = GetFeatureUiModeValue(feature);
-		mode = std::clamp(mode, 0, 1);
-		bool advanced = mode != 0;
-
-		ImGui::PushID("FeatureUiMode");
-		if (Util::Widgets::Checkbox("Advanced", &advanced))
-			mode = advanced ? 1 : 0;
-		ImGui::PopID();
-
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Shows every setting for this feature.");
-			ImGui::TextUnformatted("Turn it off to return to the simpler Essentials view.");
-		}
-		return mode != 0;
-	}
-
-	float GetFeatureUiModeToggleWidth()
-	{
-		const ImGuiStyle& style = ImGui::GetStyle();
-		return ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize("Advanced").x;
-	}
-
 	/**
 	 * @brief Determines if the left feature panel should be visible based on auto-hide settings and mouse position
 	 * @return true if panel should be visible, false if it should be hidden
 	 */
+	std::optional<bool> sidebarVisibilityOverride;
+	bool sidebarVisible = true;
+
 	bool ShouldShowLeftPanel()
 	{
+		if (sidebarVisibilityOverride.has_value())
+			return *sidebarVisibilityOverride;
+
 		bool autoHideEnabled = globals::menu->GetSettings().AutoHideFeatureList;
 		static bool leftPanelVisible = true;
 		static float hoverStartTime = 0.0f;
@@ -336,7 +413,6 @@ namespace
 	float DrawFeatureHeader(const std::string& featureName, const std::string& description = "", float reservedRightWidth = 0.0f)
 	{
 		auto& themeSettings = globals::menu->GetTheme();
-		auto& palette = themeSettings.Palette;
 		auto& featureHeading = themeSettings.FeatureHeading;
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const float availableWidth = ImGui::GetContentRegionAvail().x;
@@ -355,11 +431,10 @@ namespace
 		const float titleStartY = ImGui::GetCursorPosY();
 		{
 			MenuFonts::FontRoleGuard titleGuard(Menu::FontRole::Title);
-			ImGui::SetWindowFontScale(titleScale);
+			ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * titleScale * (4.0f / 3.0f));
 			ImGui::PushTextWrapPos(wrapPosX);
+			const SKSE::stl::scope_exit restoreTitle([] { ImGui::PopTextWrapPos(); ImGui::PopFont(); });
 			ImGui::TextUnformatted(featureName.c_str());
-			ImGui::PopTextWrapPos();
-			ImGui::SetWindowFontScale(1.0f);
 		}
 
 		// Store the title-only height for return value
@@ -368,17 +443,17 @@ namespace
 		// Draw description if provided (wrapped to content width)
 		if (!description.empty()) {
 			MenuFonts::FontRoleGuard subtextGuard(Menu::FontRole::Subtext);
-			ImVec4 descColor = palette.Text;
-			descColor.w *= 0.7f;  // Slightly dimmed
+			ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * featureDescriptionScale);
+			const SKSE::stl::scope_exit restoreDescriptionFont([] { ImGui::PopFont(); });
+			const auto descColor = Util::Color::SecondaryText();
 			ImGui::PushStyleColor(ImGuiCol_Text, descColor);
-			ImGui::PushTextWrapPos(wrapPosX);
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + availableWidth);
 			ImGui::TextUnformatted(description.c_str());
 			ImGui::PopTextWrapPos();
 			ImGui::PopStyleColor();
 		}
 
-		// Draw plain separator below
-		ImGui::Separator();
+		ImGui::Dummy({ 0, ImGui::GetTextLineHeight() * .7f });
 
 		return titleOnlyHeight;
 	}
@@ -403,11 +478,15 @@ namespace
 	bool g_dontShowAgainCheckbox = false;
 }
 
-void FeatureListRenderer::ShowAdvancedSettings(Feature* a_feature)
+void FeatureListRenderer::SetSidebarVisible(bool a_visible)
 {
-	if (a_feature)
-		GetFeatureUiModeValue(a_feature) = 1;
+	sidebarVisibilityOverride = a_visible;
+	sidebarVisible = a_visible;
 }
+
+bool FeatureListRenderer::IsSidebarVisible() { return sidebarVisible; }
+
+void FeatureListRenderer::ResetSidebarVisibility() { sidebarVisibilityOverride.reset(); }
 
 void FeatureListRenderer::RenderFeatureList(
 	float footerHeight,
@@ -439,14 +518,14 @@ void FeatureListRenderer::RenderFeatureList(
 	SelectFallbackMenuEntry(menuList, selectedMenu);
 
 	// Determine if left panel should be visible based on auto-hide settings
-	bool leftPanelVisible = ShouldShowLeftPanel();
+	const bool leftPanelVisible = sidebarVisible = ShouldShowLeftPanel();
 
 	// Create the table with appropriate number of columns based on visibility
 	int numColumns = leftPanelVisible ? 2 : 1;
-	if (ImGui::BeginTable("Menus Table", numColumns, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
+	if (ImGui::BeginTable(leftPanelVisible ? "Menus Table" : "Menus Table Hidden", numColumns, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
 		if (leftPanelVisible) {
-			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
-			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
+			ImGui::TableSetupColumn("##ListOfMenus", 0, 2.4f);
+			ImGui::TableSetupColumn("##MenuConfig", 0, 7.6f);
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		} else {
@@ -483,26 +562,22 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		sortedFeatureList.erase(it, sortedFeatureList.end());
 	}
 
-	const bool essentialsMode = globals::menu && globals::menu->IsEssentialsUiMode();
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
 		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() {
-						DrawFeatureHeader(PERFORMANCE_TUNING_MENU_NAME,
-							"Toggle runtime features and measure their share of frame, CPU, GPU and FPS costs.");
 						PerformanceTuningRenderer::Render();
 					} }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
 
-	if (!essentialsMode)
-		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() {
-															  MenuUI::SettingsPage page("Profiling", { { "timings", "Timings", "Enable profiling, then inspect CPU and GPU work." } });
-															  if (page.Is("timings"))
-																  ProfilingRenderer::RenderStatistics();
-														  } });
+	menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() {
+														  MenuUI::SettingsPage page("Profiling", { { "timings", "Timings", "Enable profiling, then inspect CPU and GPU work.", "Live CPU and GPU timings", true, true, "Choose a timing view" } });
+														  if (page.Is("timings"))
+															  ProfilingRenderer::RenderStatistics();
+													  } });
 
-	if (!essentialsMode) {
+	{
 		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "General", drawGeneralSettings });
 		menuList.insert(menuList.begin() + 2, BuiltInMenu{ "Advanced", drawAdvancedSettings });
 	}
@@ -510,7 +585,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
 	for (Feature* feat : sortedFeatureList) {
-		if (IsFeatureVisibleInMenuMode(feat, essentialsMode) && feat->loaded) {
+		if (IsFeatureVisible(feat) && feat->loaded) {
 			std::string category(feat->GetCategory());
 			categorizedFeatures[category].push_back(feat);
 		}
@@ -568,8 +643,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		}
 	}
 
-	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([essentialsMode](Feature* feat) {
-		return IsFeatureVisibleInMenuMode(feat, essentialsMode) && !feat->loaded &&
+	auto unloadedFeatures = sortedFeatureList | std::ranges::views::filter([](Feature* feat) {
+		return IsFeatureVisible(feat) && !feat->loaded &&
 		       (!FeatureIssues::IsObsoleteFeature(feat->GetShortName()) || globals::state->IsDeveloperMode());
 	});
 	if (std::ranges::distance(unloadedFeatures) != 0) {
@@ -579,7 +654,9 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// Add top section for feature issues (rejected features, obsolete info, etc.)
 	if (FeatureIssues::HasFeatureIssues()) {
 		menuList.insert(menuList.begin(), BuiltInMenu{ "Feature Issues", []() {
-														  FeatureIssues::DrawFeatureIssuesUI();
+														  MenuUI::SettingsPage page("Feature Issues", { { "review", "Review", "Resolve unavailable or incompatible feature files.", "Feature status and recovery", true, true, "Review and resolve issues" } });
+														  if (page.Is("review"))
+															  FeatureIssues::DrawFeatureIssuesUI();
 													  } });
 	}
 
@@ -635,7 +712,16 @@ void FeatureListRenderer::RenderLeftColumn(
 		}
 
 		// Add Features header and search bar after built-in settings
-		Util::DrawSectionHeader((globals::menu && globals::menu->IsEssentialsUiMode()) ? "Essentials" : "Features", true);
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+		const float searchLeft = ImGui::GetCursorPosX() + [] {
+			SidebarFontScope fontGuard;
+			return ImGui::GetFontSize() * .3f;
+		}();
+		ImGui::SetCursorPosX(searchLeft);
+		ImGui::TextColored(Util::Color::SecondaryText(), "FEATURES");
+		ImGui::SetCursorPosX(searchLeft);
 		Util::DrawFeatureSearchBar(featureSearch);
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
@@ -663,7 +749,8 @@ void FeatureListRenderer::RenderRightColumn(
 	ImGui::TableNextColumn();
 
 	const auto* builtInMenu = selectedMenu < menuList.size() ? std::get_if<BuiltInMenu>(&menuList[selectedMenu]) : nullptr;
-	if (!builtInMenu || builtInMenu->name != PERFORMANCE_TUNING_MENU_NAME)
+	const bool performanceOverview = builtInMenu && (builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME || MenuUI::SettingsPage::Selected(builtInMenu->name.c_str()) == "performance");
+	if (!performanceOverview)
 		PerformanceTuningRenderer::NotifyOverviewInactive();
 
 	if (selectedMenu < menuList.size()) {
@@ -675,28 +762,35 @@ void FeatureListRenderer::RenderRightColumn(
 
 void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 {
-	MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Subheading);
-
-	// Use error color for Feature Issues menu item
-	bool isFeatureIssues = (menu.name == "Feature Issues");
-	if (isFeatureIssues) {
-		auto& themeSettings = globals::menu->GetSettings().Theme;
-		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
-
-		const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
-		ImGui::BeginDisabled(navigationLocked);
-		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
-			selectedMenuRef = listId;
-		ImGui::EndDisabled();
-
-		ImGui::PopStyleColor();
-	} else {
-		const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
-		ImGui::BeginDisabled(navigationLocked);
-		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
-			selectedMenuRef = listId;
-		ImGui::EndDisabled();
+	SidebarFontScope fontGuard;
+	constexpr std::array icons{
+		std::pair{ "Home", Util::ActionGlyph::Home },
+		std::pair{ "General", Util::ActionGlyph::General },
+		std::pair{ "Advanced", Util::ActionGlyph::Advanced },
+		std::pair{ "Profiling", Util::ActionGlyph::Profiling },
+		std::pair{ "Performance Tuning", Util::ActionGlyph::PerformanceTuning }
+	};
+	const auto icon = std::ranges::find_if(icons, [&](const auto& entry) { return menu.name == entry.first; });
+	const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
+	const auto guard = Util::DisableGuard(navigationLocked);
+	const float font = ImGui::GetFontSize();
+	const auto start = ImGui::GetCursorScreenPos();
+	if (ImGui::Selectable(("##" + menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns, { 0, ImGui::GetTextLineHeight() * 2 }))
+		selectedMenuRef = listId;
+	const auto maximum = ImGui::GetItemRectMax();
+	const float middle = (start.y + maximum.y) * .5f;
+	const float textLeft = start.x + font * 1.9f;
+	const auto color = menu.name == "Feature Issues" ? globals::menu->GetTheme().StatusPalette.Error : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	auto* draw = ImGui::GetWindowDrawList();
+	if (icon != icons.end())
+		Util::DrawActionGlyph(draw, icon->second, { start.x + font * .15f, middle - font * .75f }, { start.x + font * 1.65f, middle + font * .75f }, ImGui::GetColorU32(ImGuiCol_Text));
+	{
+		draw->PushClipRect({ textLeft, start.y }, maximum, true);
+		const SKSE::stl::scope_exit restoreClip([draw] { draw->PopClipRect(); });
+		draw->AddText({ textLeft, middle - ImGui::GetTextLineHeight() * .5f }, ImGui::GetColorU32(color), menu.name.c_str());
 	}
+	if (ImGui::CalcTextSize(menu.name.c_str()).x > maximum.x - textLeft)
+		Util::AddTooltip(menu.name.c_str());
 }
 
 void FeatureListRenderer::ListMenuVisitor::operator()(const std::string& label)
@@ -716,9 +810,9 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const CategoryHeader& head
 	bool isExpanded = categoryExpansionStates[header.name];
 
 	// Draw category header with custom styling using util:UI function
-	// Use Heading font for category headers
+	// Keep category labels at the same size as navigation and feature rows.
 	{
-		MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Heading);
+		SidebarFontScope fontGuard;
 		Util::DrawCategoryHeader(header.name.c_str(), isExpanded, header.count);
 	}
 
@@ -728,15 +822,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const CategoryHeader& head
 
 void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 {
-	if (feat == &globals::features::csEditor) {
-		const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
-		ImGui::BeginDisabled(navigationLocked);
-		globals::features::csEditor.DrawLauncherButton();
-		ImGui::EndDisabled();
-		return;
-	}
-
-	MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Subheading);
+	SidebarFontScope fontGuard;
 
 	const auto featureName = feat->GetShortName();
 	bool isDisabled = globals::state->IsFeatureDisabled(featureName);
@@ -767,43 +853,47 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	ImGui::PushID(featureName.c_str());
 	const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
 	ImGui::BeginDisabled(navigationLocked);
-	bool bootEnabled = !isDisabled;
-	if (hasFailedMessage) {
-		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
+	const auto rowStart = ImGui::GetCursorScreenPos();
+	const float rowWidth = ImGui::GetContentRegionAvail().x;
+	const float rowHeight = ImGui::GetTextLineHeight() * 2;
+	const auto switchSize = Util::FeatureToggleSize();
+	const float switchWidth = switchSize.x;
+	const float switchLeft = rowStart.x + std::max(0.0f, rowWidth - switchWidth - ImGui::GetStyle().FramePadding.x);
+	const float labelWidth = std::max(1.0f, switchLeft - rowStart.x - ImGui::GetStyle().ItemSpacing.x);
+	const bool selected = selectedMenuRef == listId;
+	if (selected) {
+		auto* draw = ImGui::GetWindowDrawList();
+		draw->AddRectFilled(rowStart, { rowStart.x + rowWidth, rowStart.y + rowHeight }, ImGui::GetColorU32(ImGuiCol_Header));
+		draw->AddRectFilled(rowStart, { rowStart.x + ImGui::GetStyle().FramePadding.x, rowStart.y + rowHeight }, ImGui::GetColorU32(themeSettings.StatusPalette.InfoColor), ImGui::GetStyle().FrameRounding);
 	}
-	if (Util::FeatureToggle("##BootToggleList", &bootEnabled)) {
-		bool newState = feat->ToggleAtBootSetting();
-		logger::info("{}: {} at boot.", featureName, newState ? "Enabled" : "Disabled");
-	}
-	if (hasFailedMessage) {
-		ImGui::PopStyleColor();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text(
-			"Turns this feature on or off after restart.\n"
-			"Current state: %s\n"
-			"Turning it off can improve performance.",
-			bootEnabled ? "Enabled" : "Disabled");
-	}
-	ImGui::SameLine();
 
-	// Create selectable item with semantic color
 	ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-	if (ImGui::Selectable(fmt::format(" {} ", feat->GetDisplayName()).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns)) {
-		selectedMenuRef = listId;
-	}
-	if (selectedMenuRef == listId) {
-		const auto minimum = ImGui::GetItemRectMin();
-		const auto maximum = ImGui::GetItemRectMax();
-		ImGui::GetWindowDrawList()->AddRectFilled(minimum, { minimum.x + ImGui::GetStyle().FramePadding.x, maximum.y }, ImGui::GetColorU32(themeSettings.StatusPalette.InfoColor), ImGui::GetStyle().FrameRounding);
-	}
-	if (globals::menu->HasUnsavedFeatureSettings(feat->GetName())) {
-		const auto maximum = ImGui::GetItemRectMax();
-		const auto minimum = ImGui::GetItemRectMin();
-		const float radius = ImGui::GetFontSize() * 0.12f;
-		ImGui::GetWindowDrawList()->AddCircleFilled({ maximum.x - ImGui::GetStyle().FramePadding.x - radius, (minimum.y + maximum.y) * 0.5f }, radius, ImGui::GetColorU32(themeSettings.StatusPalette.Warning));
+	if (feat == &globals::features::csEditor) {
+		ImGui::SetCursorScreenPos({ rowStart.x, rowStart.y + std::max(0.0f, (rowHeight - ImGui::GetFrameHeight()) * .5f) });
+		globals::features::csEditor.DrawLauncherButton(labelWidth);
+	} else {
+		ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, { 0, .5f });
+		const SKSE::stl::scope_exit restoreAlign([] { ImGui::PopStyleVar(); });
+		if (ImGui::Selectable(fmt::format("    {} ", feat->GetDisplayName()).c_str(), false, ImGuiSelectableFlags_None, { labelWidth, rowHeight }))
+			selectedMenuRef = listId;
 	}
 	ImGui::PopStyleColor();
+	if (globals::menu->HasUnsavedFeatureSettings(feat->GetName())) {
+		const float radius = ImGui::GetFontSize() * .12f;
+		ImGui::GetWindowDrawList()->AddCircleFilled({ switchLeft - ImGui::GetStyle().ItemSpacing.x * .5f, rowStart.y + rowHeight * .5f }, radius, ImGui::GetColorU32(themeSettings.StatusPalette.Warning));
+	}
+
+	ImGui::SetCursorScreenPos({ switchLeft, rowStart.y + (rowHeight - std::max(switchSize.y, ImGui::GetTextLineHeight())) * .5f });
+	bool bootEnabled = !isDisabled;
+	{
+		ImGui::PushStyleColor(ImGuiCol_CheckMark, themeSettings.Palette.Text);
+		const SKSE::stl::scope_exit restoreColor([] { ImGui::PopStyleColor(); });
+		if (Util::FeatureToggle("##BootToggleList", &bootEnabled, switchSize))
+			feat->ToggleAtBootSetting();
+	}
+	Util::AddTooltip("Turn this feature on or off at startup. Changes take effect after restarting the game.");
+	ImGui::SetCursorScreenPos({ rowStart.x, rowStart.y + rowHeight });
+	ImGui::Dummy({ 0, 0 });
 	ImGui::EndDisabled();
 	ImGui::PopID();
 }
@@ -812,17 +902,25 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 {
 	ImGui::PushID(menu.name.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight() }, ImGuiChildFlags_None)) {
-			// Add spacing only for Home menu
-			if (menu.name == "Home") {
-				ImGui::Dummy(ImVec2(0, ThemeManager::Constants::BUTTON_SPACING));
-			}
-			menu.func();
+	if (ImGui::BeginChild("##FeatureConfigFrame", { MenuHeaderRenderer::GetFeaturePanelWidth(), 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+		const char* pageId = menu.name == PERFORMANCE_TUNING_MENU_NAME ? "PerformanceTuning" : menu.name.c_str();
+		const char* description = menu.name == "Home"           ? "Welcome to Community Shaders Expanded." :
+		                          menu.name == "General"        ? "Choose how the menu looks and responds." :
+		                          menu.name == "Advanced"       ? "Manage shader compilation, compatibility and diagnostics." :
+		                          menu.name == "Profiling"      ? "Inspect CPU and GPU timings in the current scene." :
+		                          menu.name == "Feature Issues" ? "Review feature compatibility and available recovery actions." :
+		                                                          "Choose runtime features, then measure their cost in your scene.";
+		{
+			const float inset = MenuUI::SettingsPage::OverviewTextInset(pageId, ImGui::GetContentRegionAvail().x);
+			ImGui::Indent(inset);
+			const SKSE::stl::scope_exit restoreIndent([inset] { ImGui::Unindent(inset); });
+			ImGui::TextColored(Util::Color::SecondaryText(), "SETTINGS");
+			DrawFeatureHeader(menu.name, description);
 		}
+		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight(pageId) }, ImGuiChildFlags_None))
+			menu.func();
 		ImGui::EndChild();
-		DrawSettingsFooterActions();
-		DrawSettingsSaveStatus();
+		DrawSettingsFooter(pageId);
 	}
 	ImGui::EndChild();
 	ImGui::PopStyleColor();
@@ -853,7 +951,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 
 	ImGui::PushID(featureName.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+	if (ImGui::BeginChild("##FeatureConfigFrame", { MenuHeaderRenderer::GetFeaturePanelWidth(), 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
 		// Compute scene-controlled state once for both header and settings
 		auto* sceneManager = SceneSettingsManager::GetSingleton();
 		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
@@ -863,18 +961,28 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		feat->SaveSettings(performanceSettingsBefore);
 		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
 
-		// Render feature settings content
+		const auto requirement = feat->GetSettingsFooterText();
+		const float textInset = MenuUI::SettingsPage::OverviewTextInset(featureName.c_str(), ImGui::GetContentRegionAvail().x);
+		const float requirementWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - textInset);
+		const float requirementHeight = requirement.empty() ? 0 : ImGui::CalcTextSize(requirement.data(), requirement.data() + requirement.size(), false, requirementWidth).y + ImGui::GetStyle().ItemSpacing.y;
 		{
 			MenuUI::FeatureScope featureScope(feat);
-			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight() }, ImGuiChildFlags_None))
+			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight(featureName.c_str(), true) - requirementHeight }, ImGuiChildFlags_None))
 				RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
 			ImGui::EndChild();
 		}
 
+		if (!requirement.empty()) {
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + textInset);
+			const auto color = Util::Color::SecondaryText();
+			ImGui::PushStyleColor(ImGuiCol_Text, color);
+			ImGui::PushTextWrapPos(0);
+			ImGui::TextUnformatted(requirement.data(), requirement.data() + requirement.size());
+			ImGui::PopTextWrapPos();
+			ImGui::PopStyleColor();
+		}
 		// Keep save, load and feature defaults together in the fixed footer.
-		DrawSettingsFooterActions();
-		RenderRestoreDefaultsButton(feat, isDisabled || sceneControlled, isLoaded);
-		DrawSettingsSaveStatus();
+		DrawSettingsFooter(featureName.c_str(), [&] { RenderRestoreDefaultsButton(feat, isDisabled || sceneControlled, isLoaded); });
 		json performanceSettingsAfter;
 		feat->SaveSettings(performanceSettingsAfter);
 		if (performanceSettingsBefore != performanceSettingsAfter)
@@ -897,96 +1005,94 @@ bool FeatureListRenderer::DrawMenuVisitor::IsFeatureInstalled(const std::string&
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
 {
 	const auto featureName = feat->GetShortName();
-	const bool showFeatureUiModeToggle = isLoaded && globals::menu && globals::menu->IsEssentialsUiMode();
-
-	// Calculate action button widths
-	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
-	const float toggleWidth = showFeatureUiModeToggle ? GetFeatureUiModeToggleWidth() : 0.0f;
-
-	const char* overrideButtonText = "Apply Override";
-	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
-
-	// Check if override is available for this feature
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
-
-	float totalButtonWidth = 0.0f;
-	if (!isDisabled && isLoaded && hasOverrides) {
-		totalButtonWidth = overrideButtonWidth;
+	const float textInset = MenuUI::SettingsPage::OverviewTextInset(featureName.c_str(), ImGui::GetContentRegionAvail().x);
+	ImGui::Indent(textInset);
+	const SKSE::stl::scope_exit restoreIndent([textInset] { ImGui::Unindent(textInset); });
+	const float font = ImGui::GetFontSize();
+	const float spacing = ImGui::GetStyle().ItemSpacing.x;
+	const float availableWidth = ImGui::GetContentRegionAvail().x;
+	auto category = std::string(feat->GetCategory());
+	std::ranges::transform(category, category.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+	ImGui::TextColored(Util::Color::SecondaryText(), "%s", category.c_str());
+	const auto categoryRight = ImGui::GetItemRectMax().x;
+	auto* overrideManager = SettingsOverrideManager::GetSingleton();
+	if (!isDisabled && isLoaded && overrideManager && overrideManager->HasFeatureOverrides(featureName)) {
+		const char* label = "Apply Override";
+		const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+		const float left = ImGui::GetCursorScreenPos().x + std::max(0.0f, availableWidth - width);
+		if (left > categoryRight + spacing)
+			ImGui::SameLine();
+		ImGui::SetCursorScreenPos({ left, ImGui::GetCursorScreenPos().y });
+		{
+			auto guard = Util::DisableGuard(sceneControlled || PerformanceTuningRenderer::HasActiveMeasurements());
+			if (ImGui::Button(label)) {
+				if (feat->ReapplyOverrideSettings())
+					logger::info("Successfully reapplied override settings for {}", featureName);
+				else
+					logger::warn("Failed to reapply override settings for {}", featureName);
+			}
+		}
+		Util::AddTooltip(sceneControlled ?
+							 "Pause scene settings before restoring settings supplied by a mod." :
+							 "Restore settings supplied by an installed mod, replacing your changes for this feature.");
 	}
-	if (showFeatureUiModeToggle) {
-		if (totalButtonWidth > 0.0f)
-			totalButtonWidth += ImGui::GetStyle().ItemSpacing.x;
-		totalButtonWidth += toggleWidth;
+
+	auto status = feat->GetSettingsHeaderStatus();
+	if (!isLoaded)
+		status = { "Unavailable", true };
+	else if (isDisabled)
+		status = { "Restart pending", true };
+	else if (sceneControlled)
+		status = { "Scene settings", true };
+	const auto& palette = globals::menu->GetTheme().StatusPalette;
+	const auto color = status.needsAttention ? palette.Warning : palette.SuccessColor;
+	ImFont* statusFont;
+	float statusFontSize, statusWidth, enabledTextWidth;
+	{
+		MenuFonts::FontRoleGuard subtextGuard(Menu::FontRole::Subtext);
+		statusFont = ImGui::GetFont();
+		statusFontSize = ImGui::GetFontSize() * featureDescriptionScale;
+		ImGui::PushFont(statusFont, statusFontSize);
+		const SKSE::stl::scope_exit restoreMeasureFont([] { ImGui::PopFont(); });
+		statusWidth = ImGui::CalcTextSize(status.label.data(), status.label.data() + status.label.size()).x + font * .75f;
+		enabledTextWidth = Util::Widgets::VisibleTextEnd("Enabled").x;
 	}
-
-	// Get available content width for positioning
-	float availableWidth = ImGui::GetContentRegionAvail().x;
-
-	// Save position before drawing title
-	ImVec2 titleStartPos = ImGui::GetCursorScreenPos();
-
-	// Get feature description for subtitle
+	const float statusGap = spacing + font;
+	const float toggleSize = Util::Widgets::CheckboxSize();
+	const float controlsWidth = statusWidth + statusGap + toggleSize + ImGui::GetStyle().ItemInnerSpacing.x + enabledTextWidth;
+	const bool stacked = availableWidth < controlsWidth + font * 15;
+	const auto titleStart = ImGui::GetCursorScreenPos();
 	auto [description, keyFeatures] = feat->GetFeatureSummary();
-	(void)keyFeatures;  // Not used for subtitle display
-
-	// Draw feature title and description on the left.
-	const float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), description, totalButtonWidth);
-
-	// Save cursor position after header (for restoring after buttons are drawn)
-	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
-
-	// Position header actions inside the header row, aligned to the title line.
-	const float buttonHeight = ImGui::GetFrameHeight();
-	const float buttonY = titleStartPos.y + std::max(0.0f, (titleOnlyHeight - buttonHeight) * 0.5f);
-	float buttonX = titleStartPos.x + availableWidth - totalButtonWidth;
-
-	// Apply Override button (when feature has available overrides)
-	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));
-		if (sceneControlled)
-			ImGui::BeginDisabled();
-		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
-			if (feat->ReapplyOverrideSettings()) {
-				logger::info("Successfully reapplied override settings for {}", featureName);
-			} else {
-				logger::warn("Failed to reapply override settings for {}", featureName);
-			}
+	description = description.substr(0, description.find_first_of("\r\n"));
+	const float titleHeight = DrawFeatureHeader(feat->GetDisplayName(), description, stacked ? 0 : controlsWidth + spacing);
+	const auto afterTitle = ImGui::GetCursorScreenPos();
+	if (!stacked)
+		ImGui::SetCursorScreenPos({ titleStart.x + availableWidth - controlsWidth, titleStart.y + std::max(0.0f, (titleHeight - toggleSize) * .5f) });
+	{
+		ImGui::PushFont(statusFont, statusFontSize);
+		const SKSE::stl::scope_exit restoreStatusFont([] { ImGui::PopFont(); });
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { ImGui::GetStyle().FramePadding.x, std::max(0.0f, (toggleSize - statusFontSize) * .5f) });
+		const SKSE::stl::scope_exit restoreTogglePadding([] { ImGui::PopStyleVar(); });
+		const auto statusStart = ImGui::GetCursorScreenPos();
+		ImGui::GetWindowDrawList()->AddCircleFilled({ statusStart.x + font * .25f, statusStart.y + ImGui::GetFrameHeight() * .5f }, font * .2f, ImGui::GetColorU32(color));
+		ImGui::Dummy({ font * .75f, ImGui::GetFrameHeight() });
+		ImGui::SameLine(0, 0);
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextColored(color, "%.*s", static_cast<int>(status.label.size()), status.label.data());
+		Util::AddTooltip("Shows whether this feature is ready. Requirements and problems are shown below.");
+		ImGui::SameLine(0, statusGap);
+		{
+			auto guard = Util::DisableGuard(isDisabled || !isLoaded || sceneControlled || PerformanceTuningRenderer::HasActiveMeasurements());
+			feat->DrawSettingsEnabledControl();
 		}
-		if (sceneControlled)
-			ImGui::EndDisabled();
-
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			if (sceneControlled) {
-				ImGui::Text(
-					"Cannot apply overrides while scene-specific settings are active.\n"
-					"Pause scene settings for this feature first.");
-			} else {
-				ImGui::Text(
-					"Restores original override settings from mod files.\n"
-					"This will discard your customizations and revert to\n"
-					"the mod author's recommended settings.");
-			}
-		}
-
-		buttonX += overrideButtonWidth + ImGui::GetStyle().ItemSpacing.x;
 	}
-
-	if (showFeatureUiModeToggle) {
-		ImGui::SetCursorScreenPos(ImVec2(buttonX, buttonY));
-		DrawFeatureUiModeToggle(feat);
-	}
-
-	// Restore cursor position after the title and separator
-	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
+	if (!stacked)
+		ImGui::SetCursorScreenPos(afterTitle);
+	else
+		ImGui::Spacing();
 	if (!isDisabled && isLoaded) {
-		if (sceneControlled)
-			ImGui::BeginDisabled();
-
+		auto guard = Util::DisableGuard(sceneControlled);
 		feat->DrawSettingsHeaderControls();
-
-		if (sceneControlled)
-			ImGui::EndDisabled();
 	}
 	DrawFeatureBanner(feat);
 }
@@ -998,7 +1104,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (isDisabled) {
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled until restart.");
 		ImGui::Spacing();
-		ImGui::Text("Enable the feature in the feature list to access its configuration options.");
+		ImGui::Text("Turn on this feature using its sidebar switch, then restart the game.");
 		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
 			ImGui::Spacing();
 			ImGui::TextColored(
@@ -1007,12 +1113,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		}
 	} else {
 		if (isLoaded) {
-			const bool globalEssentialsMode = globals::menu && globals::menu->IsEssentialsUiMode();
-			const bool featureAdvancedMode = IsFeatureAdvancedUiMode(feat);
-			const bool essentialsFeatureMode = globalEssentialsMode && !featureAdvancedMode;
-			const bool hasEssentialSettings = essentialsFeatureMode && feat->HasEssentialSettings();
 			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			const bool showWeatherPause = !essentialsFeatureMode && weatherRegistry->HasWeatherSupport(feat->GetShortName());
+			const bool showWeatherPause = weatherRegistry->HasWeatherSupport(feat->GetShortName());
 			const bool moveWeatherPauseToBottom = showWeatherPause && feat->GetShortName() == "LODBlending";
 			auto drawWeatherPauseToggle = [&]() {
 				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
@@ -1037,7 +1139,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				const auto& featureShortName = feat->GetShortName();
 				auto* sceneMgr = SceneSettingsManager::GetSingleton();
 				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
-				if (!essentialsFeatureMode && (sceneControlled || scenePaused)) {
+				if (sceneControlled || scenePaused) {
 					bool active = !scenePaused;
 					if (Util::FeatureToggle("##PauseSceneSettings", &active))
 						sceneMgr->SetFeaturePaused(featureShortName, !active);
@@ -1055,13 +1157,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				ImGui::BeginDisabled();
 
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			if (hasEssentialSettings) {
-				feat->DrawEssentialSettings();
-			} else if (essentialsFeatureMode) {
-				ImGui::TextDisabled("Toggle Advanced in the header to expose feature's full UI");
-			} else {
-				feat->DrawSettings();
-			}
+			feat->DrawSettings();
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 
 			if (sceneControlled)
@@ -1153,12 +1249,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 
 void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded)
 {
-	if (isDisabled || !isLoaded) {
-		return;
-	}
-
-	ImGui::SameLine();
-	const bool restoreDefaults = ImGui::Button(ImGui::GetWindowWidth() < ImGui::GetFontSize() * 27 ? "Defaults" : "Restore defaults");
+	const auto guard = Util::DisableGuard(isDisabled || !isLoaded);
+	const bool restoreDefaults = SettingsActionButton(2);
 
 	if (restoreDefaults) {
 		feat->RestoreDefaultSettings();

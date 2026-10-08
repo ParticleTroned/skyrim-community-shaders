@@ -168,7 +168,7 @@ static const std::unordered_map<RE::BSShader::Type, std::string> kShaderTypeTool
 
 std::pair<std::string, std::vector<std::string>> PerformanceOverlay::GetFeatureSummary()
 {
-	std::string description = "Real-time performance monitoring system that displays FPS, frame times, draw calls, VRAM usage, and detailed shader performance analysis.";
+	std::string description = "Shows live frame times, FPS, memory use and rendering statistics.";
 
 	std::vector<std::string> keyFeatures = {
 		"Real-time FPS and frame time monitoring with configurable update intervals",
@@ -194,9 +194,12 @@ bool PerformanceOverlay::HideFromDesktopWhenSubmittedToVR() const
 void PerformanceOverlay::DrawSettings()
 {
 	MenuUI::SettingsPage page("PerformanceOverlay", {
-														{ "counters", "Counters", "Choose which performance counters and graphs to show." },
-														{ "appearance", "Appearance", "Refine size, placement and update speed." },
+														{ "counters", "Counters", "Choose which performance counters and graphs to show.", "FPS, draw calls and graphs", true, true, "Choose information and layout" },
+														{ "appearance", "Appearance", "Refine size, placement and update speed.", "Size, opacity and position", true, true, nullptr },
 													});
+
+	if (!page.Is("counters") && !page.Is("appearance"))
+		return;
 
 	Util::Widgets::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -204,8 +207,6 @@ void PerformanceOverlay::DrawSettings()
 	}
 
 	if (this->settings.ShowInOverlay) {
-		ImGui::Indent();
-
 		if (page.Is("counters")) {
 			// Display options
 			ImGui::TextUnformatted("Display Options");
@@ -259,21 +260,6 @@ void PerformanceOverlay::DrawSettings()
 				ImGui::TextUnformatted("Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals.");
 			}
 		}
-		ImGui::Unindent();
-	}
-}
-
-void PerformanceOverlay::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("PerformanceOverlay", {
-														{ "essentials", "Essentials", "Start with the main choices for this feature." },
-													});
-	if (!page.Is("essentials"))
-		return;
-
-	Util::Widgets::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		DrawPerformanceHUDOverlayHelp();
 	}
 }
 

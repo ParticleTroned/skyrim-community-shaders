@@ -18,7 +18,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Adds realistic shadow casting from terrain features using heightmap data to create accurate terrain shadows that enhance depth perception and visual realism.",
+			"Adds shadows cast by hills and mountains.",
 			{ "Heightmap-based terrain shadow calculation",
 				"Dynamic shadow updates based on sun position",
 				"Support for custom heightmap files",
@@ -89,8 +89,6 @@ public:
 	ID3D11ComputeShader* GetShadowUpdateProgram();
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

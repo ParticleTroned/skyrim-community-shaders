@@ -30,8 +30,7 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Screen Space Shadows enhances shadow quality by adding detailed contact shadows and improving shadow accuracy.\n"
-			"This technique adds fine-detail shadows that traditional shadow mapping might miss.",
+			"Adds fine contact shadows to visible surfaces.",
 			{ "Enhanced contact shadows",
 				"Improved shadow detail",
 				"Better shadow accuracy",
@@ -136,8 +135,6 @@ public:
 	virtual void SetupRenderTargetResources() override;
 
 	virtual void DrawSettings() override;
-	virtual bool HasEssentialSettings() const override { return true; }
-	virtual void DrawEssentialSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;

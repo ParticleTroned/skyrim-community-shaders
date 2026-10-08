@@ -21,7 +21,7 @@ namespace
 {
 	void DrawEnabledCheckbox(ExtendedTranslucency::Settings& a_settings)
 	{
-		Util::Widgets::Checkbox("Enable", &a_settings.Enabled);
+		Util::Widgets::Checkbox("Enabled", &a_settings.Enabled);
 	}
 }
 
@@ -98,7 +98,7 @@ void ExtendedTranslucency::PostPostLoad()
 void ExtendedTranslucency::DrawSettings()
 {
 	MenuUI::SettingsPage page("ExtendedTranslucency", {
-														  { "appearance", "Material", "Choose the material response, then refine its appearance." },
+														  { "appearance", "Material", "Choose the material response, then refine its appearance.", "Fabric, glass and edge response", true, true, "Choose the material response" },
 													  });
 	if (!page.Is("appearance"))
 		return;
@@ -106,7 +106,9 @@ void ExtendedTranslucency::DrawSettings()
 	DrawEnabledCheckbox(settings);
 	ImGui::BeginDisabled(!settings.Enabled);
 
-	if (ImGui::TreeNodeEx("Translucent Material")) {
+	{
+		MenuUI::SectionHeading("Translucent Material");
+		ImGui::PushID("Translucent Material");
 		static constexpr const char* AlphaModeNames[] = {
 			"0 - Disabled",
 			"1 - Rim Edge",
@@ -117,7 +119,7 @@ void ExtendedTranslucency::DrawSettings()
 		static constexpr int AlphaModeSize = static_cast<int>(std::size(AlphaModeNames));
 
 		bool changed = false;
-		if (ImGui::Combo("Default Material Model", (int*)&settings.AlphaMode, AlphaModeNames, AlphaModeSize)) {
+		if (MenuUI::ChoiceSetting("Default Material Model", (int*)&settings.AlphaMode, AlphaModeNames, AlphaModeSize)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -158,21 +160,10 @@ void ExtendedTranslucency::DrawSettings()
 
 		ImGui::Spacing();
 		ImGui::Spacing();
-		ImGui::TreePop();
+		ImGui::PopID();
 	}
 
 	ImGui::EndDisabled();
-}
-
-void ExtendedTranslucency::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("ExtendedTranslucency", {
-														  { "essentials", "Essentials", "Start with the main choices for this feature." },
-													  });
-	if (!page.Is("essentials"))
-		return;
-
-	DrawEnabledCheckbox(settings);
 }
 
 void ExtendedTranslucency::LoadSettings(json& o_json)
@@ -193,8 +184,7 @@ void ExtendedTranslucency::RestoreDefaultSettings()
 std::pair<std::string, std::vector<std::string>> ExtendedTranslucency::GetFeatureSummary()
 {
 	return {
-		"Extended Translucency provides realistic rendering of thin fabric and other translucent materials.\n"
-		"This feature supports multiple material models for different types of translucent surfaces.",
+		"Lets light pass through thin fabrics and other translucent materials.",
 		{ "Multiple translucency material models (rim edge, isotropic/anisotropic fabric)",
 			"Realistic fabric translucency with directional light transmission",
 			"Per-material override support via NIF extra data",

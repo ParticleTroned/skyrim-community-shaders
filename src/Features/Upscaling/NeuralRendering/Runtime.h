@@ -111,7 +111,7 @@ namespace NeuralRendering
 		static constexpr const char* kMissingRuntimeNotice =
 			"Missing DLL: Shaders/Upscaling/Streamline/nvngx_dlssnr.dll";
 		static constexpr const char* kUnsupportedHardwareNotice =
-			"Neural Rendering requires an NVIDIA GPU.";
+			"Incompatible GPU detected. Neural Rendering requires an NVIDIA GPU.";
 
 		Runtime(const Runtime&) = delete;
 		Runtime& operator=(const Runtime&) = delete;

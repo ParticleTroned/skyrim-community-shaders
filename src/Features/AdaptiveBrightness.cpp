@@ -1573,7 +1573,7 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 	else if (contextSectionToSelect == ContextSection::Locations)
 		MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
 	bool enabled = settings.enabled;
-	if (Util::Widgets::Checkbox("Enable", &enabled))
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		SetEnabled(enabled);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable all Adaptive Balance adjustments across Global, profile, and location layers.");
@@ -1592,10 +1592,10 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 void AdaptiveBrightness::DrawSettings()
 {
 	MenuUI::SettingsPage page("AdaptiveBrightness", {
-														{ "global", "Global", "Start with shared lighting, colour, bloom and water." },
-														{ "profiles", "Profiles", "Refine the shared look for time and location types." },
-														{ "locations", "Locations", "Add precise changes for individual places." },
-														{ "presets", "Presets", "Save or load complete appearances and location collections." },
+														{ "global", "Global", "Start with shared lighting, colour, bloom and water.", "Shared lighting, colour, bloom and water", true, true, "Build the shared look" },
+														{ "profiles", "Profiles", "Refine the shared look for time and location types.", "Time and location profiles", true, true, nullptr },
+														{ "locations", "Locations", "Add precise changes for individual places.", "Exact places and cells", true, true, "Refine local changes" },
+														{ "presets", "Presets", "Save or load complete appearances and location collections.", "Complete looks and collections", true, true, nullptr },
 													});
 
 	if (page.Is("global")) {
@@ -1692,19 +1692,6 @@ void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
 		true,
 		settings.enabled);
 	ClampProfileSettings(settings.globalProfile);
-}
-
-void AdaptiveBrightness::DrawEssentialSettings()
-{
-	MenuUI::SettingsPage page("AdaptiveBrightness", {
-														{ "essentials", "Essentials", "Start with the main choices for this feature." },
-													});
-	if (!page.Is("essentials"))
-		return;
-
-	ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments.");
-	DrawGlobalPresetControls();
-	DrawGlobalSettings(false);
 }
 
 void AdaptiveBrightness::DrawPerformanceSettings(bool a_advanced)

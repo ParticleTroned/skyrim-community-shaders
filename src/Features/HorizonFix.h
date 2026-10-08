@@ -31,7 +31,7 @@ struct HorizonFix : Feature
 	/** @brief Returns a summary description for the UI. */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { "Enables water rendering beyond the far clip plane in support of the HorizonFix plugin, which fills the horizon gap between the farthest visible water and the sky.",
+		return { "Extends distant water into the horizon when the HorizonFix plugin is installed.",
 			{ "Active only while the HorizonFix SKSE plugin is installed.",
 				"Without HorizonFix, water keeps exact vanilla far clip behavior." } };
 	}

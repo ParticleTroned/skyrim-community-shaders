@@ -58133,7 +58133,10 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	if (upscaleMethod == UpscaleMethod::kDLSS)
 		streamline.ClearLastDLSSFailureState();
 
-	bool vendorSucceeded = false;
+	// A completed stereo batch has already advanced both FSR histories.
+	bool vendorSucceeded = reuseRuntimeFSRStereoOutput;
+	if (reuseRuntimeFSRStereoOutput)
+		submitStageFSRBatch = &submitStageRuntimeFSRStereoState;
 	bool submitNeuralStereoBatchAttempted = false;
 	bool submitNeuralStereoBatchFinalized = false;
 	const bool neuralSubmitRouteCandidate =

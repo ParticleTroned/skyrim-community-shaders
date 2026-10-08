@@ -2956,6 +2956,27 @@ if(BUILD_CONTROLLER_TESTS)
         VRSubmitStereoBatch
         tests/vr_submit_stereo_batch_test.cpp
     )
+    set(_stereo_admission_dir "${CMAKE_CURRENT_BINARY_DIR}/vr_stereo_admission")
+    add_custom_command(
+        OUTPUT "${_stereo_admission_dir}/vr_stereo_admission_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_stereo_admission_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_stereo_admission.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_vr_stereo_admission.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        vr_submit_stereo_batch_test
+        PRIVATE "${_stereo_admission_dir}/vr_stereo_admission_under_test.h"
+    )
+    target_include_directories(
+        vr_submit_stereo_batch_test
+        PRIVATE "${_stereo_admission_dir}"
+    )
     add_controller_test(
         main_thread_dispatch_policy_test
         MainThreadDispatchPolicy

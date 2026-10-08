@@ -53,6 +53,37 @@ namespace
 		}
 	};
 
+	bool SubmitAdmissionPreservesBothEyeHistories()
+	{
+		Fixture fixture;
+		std::uint64_t dispatchCount = 0;
+		std::array<std::uint64_t, 2> historyAdvances{};
+		for (std::uint32_t cycle = 20; cycle < 24; ++cycle) {
+			const auto frame = 100u + cycle - 20u;
+			const auto countBefore = dispatchCount;
+			for (std::uint32_t submit = 0; submit < 4; ++submit) {
+				// Exercise both eye submissions and repeated compositor submissions.
+				[[maybe_unused]] const bool reuseRuntimeFSRStereoOutput = fixture.Matches(frame, cycle);
+				[[maybe_unused]] auto& submitStageRuntimeFSRStereoState = fixture.cache;
+				const Cache* submitStageFSRBatch = nullptr;
+#include "vr_stereo_admission_under_test.h"
+				if (!vendorSucceeded) {
+					++dispatchCount;
+					++historyAdvances[0];
+					++historyAdvances[1];
+					fixture.cache.Record(frame, cycle, 7, 64, 48, 128, 96, &fixture.source, fixture.regions,
+						{ true, frame, Path::RuntimeFSR3, dispatchCount });
+					submitStageFSRBatch = &fixture.cache;
+				}
+				if (!submitStageFSRBatch || !submitStageFSRBatch->HasValidDispatchProof() ||
+					submitStageFSRBatch->dispatchProof.serial != countBefore + 1 ||
+					dispatchCount != countBefore + 1)
+					return false;
+			}
+		}
+		return dispatchCount == 4 && historyAdvances[0] == 4 && historyAdvances[1] == 4;
+	}
+
 	bool ReusesOriginalDispatchAfterPresent()
 	{
 		Fixture fixture;
@@ -157,7 +188,7 @@ namespace
 
 int main()
 {
-	return ReusesOriginalDispatchAfterPresent() && RejectsChangedBatchContracts() &&
+	return SubmitAdmissionPreservesBothEyeHistories() && ReusesOriginalDispatchAfterPresent() && RejectsChangedBatchContracts() &&
 	               RequiresSuccessfulEvidenceFromTheRecordedFrame() && NormalizesOnlyDispatchEvidenceAtFrameZero() && SupportsBuildsWithoutDispatchTelemetry() ?
 	           0 :
 	           1;

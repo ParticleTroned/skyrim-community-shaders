@@ -244,11 +244,14 @@ endif()
 
 foreach(_ui_contract IN ITEMS
     [[DrawNeuralRenderingCropControl(showDiagnostics);]]
-    [[ImGui::BeginCombo("Coverage", choices[coverage])]]
-    [[constexpr const char* choices[]{ "Entire scene", "Scene + categories", "Actors only" };]]
-    [[if (ImGui::Selectable(choices[option], coverage == option))]]
+    [[MenuUI::ChoiceCards("Coverage", coverage, choices)]]
+    [[{ "scene", "Entire scene",]]
+    [[{ "categories", "Scene + categories",]]
+    [[{ "actors", "Actors only",]]
     [[settings.neuralCharacterRenderingEnabled = coverage == 2;]]
-    [[Uncropped processes the full view while keeping the same selections.]]
+    [[settings.neuralCharacterSceneStrengthsEnabled = coverage == 1;]]
+    [[MenuUI::ChoiceCards("Actor processing area",]]
+    [[{ "uncropped", "Uncropped", "Process the full view",]]
 )
     string(FIND "${_upscaling_source}" "${_ui_contract}" _ui_contract_position)
     if(_ui_contract_position EQUAL -1)

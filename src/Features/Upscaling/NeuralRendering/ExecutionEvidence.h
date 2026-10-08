@@ -259,6 +259,58 @@ namespace NeuralRendering
 			});
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Merge early resource setup once per execution; the first prepared slot owns shared CPU costs. */
+		void MergeResourcePreparation(const ExecutionEvidence& preparation) noexcept
+		{
+			const auto& descriptor = preparation.Descriptor();
+			const auto prepared = preparation.Snapshot();
+			Update([&](auto& snapshot) {
+				snapshot.evidenceFailed |= prepared.evidenceFailed;
+				if (!descriptor.regionCount || descriptor.regionCount > kMaximumExecutionRegions ||
+					!descriptor_.regionCount || descriptor_.regionCount > kMaximumExecutionRegions) {
+					snapshot.evidenceFailed = true;
+					for (auto& region : snapshot.regions)
+						region.allocationBytesKnown = false;
+					return;
+				}
+				bool ownsSharedCosts = false;
+				for (std::size_t index = 0; index < descriptor_.regionCount; ++index) {
+					auto& region = snapshot.regions[index];
+					bool matched = false;
+					for (std::size_t source = 0; source < descriptor.regionCount; ++source) {
+						if (descriptor_.regions[index].physicalSlot != descriptor.regions[source].physicalSlot)
+							continue;
+						region.newlyAllocatedLogicalBytes += prepared.regions[source].newlyAllocatedLogicalBytes;
+						region.rebuildReasons |= prepared.regions[source].rebuildReasons;
+						region.allocationBytesKnown &= prepared.regions[source].allocationBytesKnown && !prepared.evidenceFailed;
+						ownsSharedCosts |= source == 0;
+						matched = true;
+						break;
+					}
+					if (!matched) {
+						region.allocationBytesKnown = false;
+						snapshot.evidenceFailed = true;
+					}
+				}
+				if (!ownsSharedCosts)
+					return;
+				if (prepared.resourceRetirementCpuMicroseconds)
+					snapshot.resourceRetirementCpuMicroseconds = snapshot.resourceRetirementCpuMicroseconds.value_or(0) + *prepared.resourceRetirementCpuMicroseconds;
+				if (prepared.cpuWaitMicroseconds)
+					snapshot.cpuWaitMicroseconds = snapshot.cpuWaitMicroseconds.value_or(0) + *prepared.cpuWaitMicroseconds;
+				snapshot.cpuWaitCalls += prepared.cpuWaitCalls;
+				snapshot.cpuWaitSamplesDropped += prepared.cpuWaitSamplesDropped;
+				for (std::size_t index = 0; index < prepared.cpuWaitSampleCount && index < prepared.cpuWaitSamples.size(); ++index) {
+					if (snapshot.cpuWaitSampleCount < snapshot.cpuWaitSamples.size())
+						snapshot.cpuWaitSamples[snapshot.cpuWaitSampleCount++] = prepared.cpuWaitSamples[index];
+					else
+						++snapshot.cpuWaitSamplesDropped;
+				}
+			});
+		}
+#endif
+
 	private:
 		const ExecutionDescriptor descriptor_;
 		mutable std::mutex mutex_;

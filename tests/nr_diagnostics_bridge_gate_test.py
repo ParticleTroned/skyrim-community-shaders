@@ -12,6 +12,8 @@ root = Path(__file__).resolve().parents[1]
 empty_units = ["src/Features/Upscaling/NeuralRendering/ExposureCapture.cpp",
                "src/Features/ScreenshotNeuralDiagnostics.cpp"]
 checks = {
+    "src/Features/Upscaling/NeuralRendering/Renderer.cpp": ["modelPreparationEvidence_", "MergeModelPreparationEvidenceLocked"],
+    "src/Features/Upscaling/NeuralRendering/ExecutionEvidence.h": ["MergeResourcePreparation"],
     "src/Features/Upscaling/NeuralCapture.cpp": ["SetNeuralCaptureExecutionContext", "neuralCaptureMutex", "SerializeNeuralCaptureRecord"],
     "src/Globals.cpp": ["RecordNeuralCaptureCamera", "ExposureCapture::"],
     "src/Hooks.cpp": ["ExposureCapture::"],

@@ -128,6 +128,79 @@ int main()
 		}
 		Require(!activeWait && !pending->Snapshot().cpuWaitMicroseconds,
 			"wait scope attributed work to another transaction");
+		ExecutionDescriptor preparationDescriptor{};
+		preparationDescriptor.regionCount = 2;
+		preparationDescriptor.regions[0].physicalSlot = 2;
+		preparationDescriptor.regions[1].physicalSlot = 3;
+		ExecutionEvidence preparation(preparationDescriptor);
+		preparation.Update([](auto& snapshot) {
+			snapshot.regions[0].newlyAllocatedLogicalBytes = 100;
+			snapshot.regions[1].newlyAllocatedLogicalBytes = 200;
+			snapshot.regions[0].rebuildReasons = RebuildResourceContractChanged;
+			snapshot.resourceRetirementCpuMicroseconds = 37;
+		});
+		for (int index = 0; index < 18; ++index)
+			preparation.RecordCpuWait({ "early retirement", 1, 258, 5, 250 });
+		for (bool sequential : { false, true }) {
+			for (std::uint32_t eye = 0; eye < (sequential ? 2u : 1u); ++eye) {
+				auto descriptor = preparationDescriptor;
+				if (sequential) {
+					descriptor.regionCount = 1;
+					descriptor.regions[0] = preparationDescriptor.regions[eye];
+				}
+				ExecutionEvidence execution(descriptor);
+				execution.Update([](auto& snapshot) {
+					snapshot.regions[0].newlyAllocatedLogicalBytes = 5;
+					snapshot.regions[0].rebuildReasons = RebuildUnallocated;
+					snapshot.resourceRetirementCpuMicroseconds = 2;
+				});
+				execution.RecordCpuWait({ "native command begin", 11, 0, 0, 1000 });
+				execution.MergeResourcePreparation(preparation);
+				const auto merged = execution.Snapshot();
+				Require(!merged.evidenceFailed && merged.regions[0].newlyAllocatedLogicalBytes == (eye ? 205u : 105u) &&
+							(sequential || merged.regions[1].newlyAllocatedLogicalBytes == 200),
+					"early allocations were lost or joined to the wrong physical slot");
+				Require(merged.regions[0].rebuildReasons == (eye ? RebuildUnallocated : RebuildUnallocated | RebuildResourceContractChanged),
+					"early or native rebuild reason was overwritten");
+				Require(merged.resourceRetirementCpuMicroseconds == (eye ? 2u : 39u) &&
+							merged.cpuWaitCalls == (eye ? 1u : 19u) && merged.cpuWaitMicroseconds == (eye ? 11u : 29u) &&
+							merged.cpuWaitSampleCount == (eye ? 1u : 16u) && merged.cpuWaitSamplesDropped == (eye ? 0u : 3u),
+					"early retirement/wait costs were lost, doubled across sequential eyes or overflowed bounded detail");
+				if (!eye)
+					Require(merged.cpuWaitSamples[1].result == 258 && merged.cpuWaitSamples[1].error == 5 &&
+								merged.cpuWaitSamples[1].timeoutMilliseconds == 250,
+						"early wait failure details were lost");
+			}
+		}
+		ExecutionEvidence unmeasured(preparationDescriptor), unmeasuredExecution(preparationDescriptor);
+		unmeasuredExecution.MergeResourcePreparation(unmeasured);
+		Require(!unmeasuredExecution.Snapshot().resourceRetirementCpuMicroseconds && !unmeasuredExecution.Snapshot().cpuWaitMicroseconds,
+			"unobserved early costs became measured zero");
+		unmeasured.Update([](auto& snapshot) {
+			snapshot.resourceRetirementCpuMicroseconds = 0;
+			snapshot.cpuWaitMicroseconds = 0;
+		});
+		ExecutionEvidence zeroExecution(preparationDescriptor);
+		zeroExecution.MergeResourcePreparation(unmeasured);
+		Require(zeroExecution.Snapshot().resourceRetirementCpuMicroseconds == 0 && zeroExecution.Snapshot().cpuWaitMicroseconds == 0,
+			"measured zero early costs became unavailable");
+		preparation.Update([](auto&) { throw std::runtime_error("early evidence failure"); });
+		ExecutionEvidence failedExecution(preparationDescriptor);
+		failedExecution.MergeResourcePreparation(preparation);
+		Require(failedExecution.Snapshot().evidenceFailed && !failedExecution.Snapshot().regions[0].allocationBytesKnown &&
+					!failedExecution.Snapshot().regions[1].allocationBytesKnown,
+			"early instrumentation failure became trustworthy allocation evidence");
+		for (unsigned malformed = 0; malformed < 2; ++malformed) {
+			auto descriptor = preparationDescriptor;
+			if (malformed)
+				descriptor.regionCount = kMaximumExecutionRegions + 1;
+			else
+				descriptor.regions[0].physicalSlot = 0;
+			ExecutionEvidence invalid(descriptor);
+			invalid.MergeResourcePreparation(unmeasured);
+			Require(invalid.Snapshot().evidenceFailed && !invalid.Snapshot().regions[0].allocationBytesKnown,
+				"invalid preparation correlation was accepted");
+		}
 		Require(!ExecutionContext{}.renderingMode && !ExecutionContext{}.captureEpoch, "missing caller facts inferred");
 		pending->Update([](auto&) { throw std::runtime_error("evidence failure"); });
 		Require(pending->Snapshot().evidenceFailed, "instrumentation exception disappeared");

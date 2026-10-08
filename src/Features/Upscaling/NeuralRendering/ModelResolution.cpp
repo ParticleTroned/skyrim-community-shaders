@@ -1,6 +1,7 @@
 #include "ModelResolution.h"
 #include "ComputeStateGuard.h"
 #include "GpuPass.h"
+#include "Utils/ComIdentity.h"
 #include "Utils/ResourceName.h"
 #include "Utils/ShaderCompiler.h"
 
@@ -90,16 +91,39 @@ namespace NeuralRendering
 			}
 		}
 
+		bool HasActorInputs(const RendererApplyArgs& input) noexcept
+		{
+			return input.controlMask || input.actorSelection || input.providerBlending || input.characterVisualIsolation;
+		}
+
+		bool ValidBatchLayout(std::span<const RendererApplyArgs> args) noexcept
+		{
+			if (args.empty() || args.size() > kMaximumRegionEvaluations || !args.front().device || !args.front().context)
+				return false;
+			for (std::size_t index = 0; index < args.size(); ++index) {
+				const auto& input = args[index];
+				if (input.featureSlot >= kLogicalFeatureSlotCount || !Util::SameIdentity(input.device, args.front().device) ||
+					!Util::SameIdentity(input.context, args.front().context))
+					return false;
+				for (std::size_t previous = 0; previous < index; ++previous)
+					if (args[previous].featureSlot == input.featureSlot)
+						return false;
+			}
+			return true;
+		}
+
 		struct AllocationKey
 		{
 			UpscalingDLSS::Extent sourceSize{}, modelSize{};
 			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN, outputFormat = DXGI_FORMAT_UNKNOWN, motionFormat = DXGI_FORMAT_UNKNOWN;
-			bool hasMask = false;
+			bool hasMask = false, sharedTargets = false;
 
 			bool operator==(const AllocationKey&) const = default;
 
-			static std::optional<AllocationKey> Read(const RendererApplyArgs& input, const RendererApplyArgs& projected)
+			static std::optional<AllocationKey> Read(const RendererApplyArgs& input, const RendererApplyArgs& projected, bool sharedTargets = false)
 			{
+				if (sharedTargets && HasActorInputs(input))
+					return std::nullopt;
 				D3D11_TEXTURE2D_DESC color{}, output{}, motion{};
 				if (!ReadDescription(input.colorInput, color) || !ReadDescription(input.colorOutput, output) ||
 					!ReadDescription(input.motionVectors, motion) ||
@@ -108,11 +132,14 @@ namespace NeuralRendering
 					motion.Width != input.guideWidth || motion.Height != input.guideHeight)
 					return std::nullopt;
 				return AllocationKey{ { input.outputWidth, input.outputHeight }, { projected.outputWidth, projected.outputHeight },
-					color.Format, output.Format, motion.Format, input.controlMask != nullptr };
+					color.Format, output.Format, motion.Format, input.controlMask != nullptr, sharedTargets };
 			}
 
 			std::optional<std::uint64_t> Bytes() const noexcept
 			{
+				const auto fullOutput = LogicalTextureBytes(outputFormat, sourceSize.width, sourceSize.height);
+				if (sharedTargets)
+					return fullOutput;
 				std::uint64_t total = 0;
 				for (auto format : { colorFormat, DXGI_FORMAT_R32_FLOAT, motionFormat, outputFormat }) {
 					const auto bytes = LogicalTextureBytes(format, modelSize.width, modelSize.height);
@@ -122,10 +149,67 @@ namespace NeuralRendering
 				}
 				if (hasMask)
 					total += static_cast<std::uint64_t>(modelSize.width) * modelSize.height;
-				const auto fullOutput = LogicalTextureBytes(outputFormat, sourceSize.width, sourceSize.height);
 				return fullOutput ? std::optional{ total + *fullOutput } : std::nullopt;
 			}
 		};
+
+		bool ValidateTarget(ID3D11Device* device, const Color::Texture& target,
+			UpscalingDLSS::Extent size, DXGI_FORMAT format)
+		{
+			D3D11_TEXTURE2D_DESC desc{};
+			if (!target.resource || !target.srv || !target.uav || !ReadDescription(target.resource.Get(), desc) ||
+				desc.Width != size.width || desc.Height != size.height || desc.Format != format || desc.Usage != D3D11_USAGE_DEFAULT)
+				return false;
+			ComPtr<ID3D11Device> owner;
+			target.resource->GetDevice(&owner);
+			if (!Util::SameIdentity(owner.Get(), device))
+				return false;
+			ComPtr<ID3D11Resource> srvResource, uavResource;
+			target.srv->GetResource(&srvResource);
+			target.uav->GetResource(&uavResource);
+			if (!Util::SameIdentity(srvResource.Get(), target.resource.Get()) || !Util::SameIdentity(uavResource.Get(), target.resource.Get()))
+				return false;
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
+			target.srv->GetDesc(&srv);
+			target.uav->GetDesc(&uav);
+			return srv.Format == format && srv.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D &&
+			       srv.Texture2D.MostDetailedMip == 0 && srv.Texture2D.MipLevels == 1 &&
+			       uav.Format == format && uav.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D && uav.Texture2D.MipSlice == 0;
+		}
+
+		bool ValidateTargets(std::span<const RendererApplyArgs> args, std::span<const ModelResolution::Targets> targets)
+		{
+			std::array<ComPtr<IUnknown>, kMaximumRegionEvaluations * 4> identities{}, sources{};
+			std::size_t count = 0, sourceCount = 0;
+			for (const auto& input : args)
+				for (auto* source : { input.colorInput, input.depthGuide, input.motionVectors, input.colorOutput }) {
+					if (!(sources[sourceCount] = Util::GetComIdentity(source)))
+						return false;
+					++sourceCount;
+				}
+			for (std::size_t index = 0; index < args.size(); ++index) {
+				RendererApplyArgs projected;
+				if (!ModelResolution::Project(args[index], projected))
+					return false;
+				const auto allocation = AllocationKey::Read(args[index], projected, true);
+				if (!allocation)
+					return false;
+				const auto& t = targets[index];
+				const std::array formats{ allocation->colorFormat, DXGI_FORMAT_R32_FLOAT, allocation->motionFormat, allocation->outputFormat };
+				const std::array textures{ &t.color, &t.depth, &t.motion, &t.output };
+				for (std::size_t role = 0; role < textures.size(); ++role) {
+					if (!ValidateTarget(args[index].device, *textures[role], allocation->modelSize, formats[role]))
+						return false;
+					const auto identity = Util::GetComIdentity(textures[role]->resource.Get());
+					if (!identity || std::find(identities.begin(), identities.begin() + count, identity) != identities.begin() + count ||
+						std::ranges::find(sources, identity) != sources.end())
+						return false;
+					identities[count++] = identity;
+				}
+			}
+			return true;
+		}
 
 		ComputeSubrect SourceRegion(const RendererApplyArgs& args)
 		{
@@ -188,16 +272,25 @@ namespace NeuralRendering
 		return true;
 	}
 
-	std::optional<std::uint64_t> ModelResolution::AdditionalBytes(std::span<const RendererApplyArgs> args) const
+	bool ModelResolution::CanUseSharedTargets(std::span<const RendererApplyArgs> args, bool colorProcessing, bool compactInputs) noexcept
 	{
+		return !colorProcessing && !compactInputs && ValidBatchLayout(args) &&
+		       std::ranges::all_of(args, [](const auto& input) {
+				   RendererApplyArgs projected;
+				   return !HasActorInputs(input) && Project(input, projected);
+			   });
+	}
+
+	std::optional<std::uint64_t> ModelResolution::AdditionalBytes(std::span<const RendererApplyArgs> args, bool sharedTargets) const
+	{
+		if (!ValidBatchLayout(args))
+			return std::nullopt;
 		std::uint64_t total = 0;
 		for (const auto& input : args) {
-			if (input.featureSlot >= slots_.size())
-				return std::nullopt;
 			RendererApplyArgs projected;
 			if (!Project(input, projected))
 				return std::nullopt;
-			const auto allocation = AllocationKey::Read(input, projected);
+			const auto allocation = AllocationKey::Read(input, projected, sharedTargets);
 			if (!allocation)
 				return std::nullopt;
 			const auto& cached = slots_[input.featureSlot];
@@ -251,23 +344,37 @@ namespace NeuralRendering
 		return true;
 	}
 
-	bool ModelResolution::Prepare(std::span<const RendererApplyArgs> args, Batch& batch, HRESULT& result)
+	bool ModelResolution::Prepare(std::span<const RendererApplyArgs> args, Batch& batch, HRESULT& result, std::span<const Targets> targets)
 	{
 		result = E_INVALIDARG;
 		batch = {};
-		if (args.empty() || args.size() > batch.arguments.size())
+		if (!ValidBatchLayout(args) || (!targets.empty() && targets.size() != args.size()))
+			return false;
+		ComPtr<ID3D11Device> contextDevice;
+		args.front().context->GetDevice(&contextDevice);
+		if (!Util::SameIdentity(contextDevice.Get(), args.front().device) || args.front().context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
 			return false;
 		for (std::size_t index = 0; index < args.size(); ++index) {
 			const auto& input = args[index];
-			if (!input.device || !input.context || input.featureSlot >= slots_.size() || !Project(input, batch.arguments[index]))
+			if (!input.depthGuideSRV || !Project(input, batch.arguments[index]))
+				return false;
+			ComPtr<ID3D11Resource> depth;
+			input.depthGuideSRV->GetResource(&depth);
+			D3D11_SHADER_RESOURCE_VIEW_DESC depthView{};
+			input.depthGuideSRV->GetDesc(&depthView);
+			if (!Util::SameIdentity(depth.Get(), input.depthGuide) || depthView.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+				depthView.Texture2D.MostDetailedMip != 0 || depthView.Texture2D.MipLevels != 1)
 				return false;
 		}
+		const bool sharedTargets = !targets.empty();
+		if (sharedTargets && !ValidateTargets(args, targets))
+			return false;
 		if (!EnsureShaders(args.front().device, result))
 			return false;
 		try {
 			for (std::size_t index = 0; index < args.size(); ++index) {
 				const auto& input = args[index];
-				const auto allocation = AllocationKey::Read(input, batch.arguments[index]);
+				const auto allocation = AllocationKey::Read(input, batch.arguments[index], sharedTargets);
 				if (!allocation) {
 					result = E_INVALIDARG;
 					return false;
@@ -280,10 +387,11 @@ namespace NeuralRendering
 					work = std::make_shared<Work>();
 					work->allocation = key;
 					const auto prefix = std::format("NeuralRendering::ModelSlot{}::", input.featureSlot);
-					if (!CreateTexture(input.device, work->color, modelSize, key.colorFormat, prefix + "Color", result) ||
-						!CreateTexture(input.device, work->depth, modelSize, DXGI_FORMAT_R32_FLOAT, prefix + "Depth", result) ||
-						!CreateTexture(input.device, work->motion, modelSize, key.motionFormat, prefix + "Motion", result) ||
-						!CreateTexture(input.device, work->output, modelSize, key.outputFormat, prefix + "Output", result) ||
+					if ((!sharedTargets &&
+							(!CreateTexture(input.device, work->color, modelSize, key.colorFormat, prefix + "Color", result) ||
+								!CreateTexture(input.device, work->depth, modelSize, DXGI_FORMAT_R32_FLOAT, prefix + "Depth", result) ||
+								!CreateTexture(input.device, work->motion, modelSize, key.motionFormat, prefix + "Motion", result) ||
+								!CreateTexture(input.device, work->output, modelSize, key.outputFormat, prefix + "Output", result))) ||
 						!CreateTexture(input.device, work->reconstructed, sourceSize, key.outputFormat, prefix + "Reconstructed", result) ||
 						(hasMask && !CreateTexture(input.device, work->mask, modelSize, DXGI_FORMAT_R8_UNORM, prefix + "Mask", result)))
 						return false;
@@ -311,12 +419,14 @@ namespace NeuralRendering
 					hasMask ? 1u : 0u, OutputFormat(key.outputFormat),
 					geometry->motionNormalization
 				};
+				auto& target = batch.targets[index];
+				target = sharedTargets ? targets[index] : Targets{ work->color, work->depth, work->motion, work->output };
 				auto& adapted = batch.arguments[index];
-				adapted.colorInput = work->color.resource.Get();
-				adapted.depthGuide = work->depth.resource.Get();
-				adapted.depthGuideSRV = work->depth.srv.Get();
-				adapted.motionVectors = work->motion.resource.Get();
-				adapted.colorOutput = work->output.resource.Get();
+				adapted.colorInput = target.color.resource.Get();
+				adapted.depthGuide = target.depth.resource.Get();
+				adapted.depthGuideSRV = target.depth.srv.Get();
+				adapted.motionVectors = target.motion.resource.Get();
+				adapted.colorOutput = target.output.resource.Get();
 
 				if (hasMask) {
 					adapted.controlMask = work->mask.resource;
@@ -332,7 +442,6 @@ namespace NeuralRendering
 			result = E_OUTOFMEMORY;
 			return false;
 		}
-		batch.count = args.size();
 		batch.reconstructionShader = reconstruct_;
 		batch.constants = constants_;
 		auto* context = args.front().context;
@@ -342,7 +451,8 @@ namespace NeuralRendering
 			context->UpdateSubresource(constants_.Get(), 0, nullptr, &work.constants, 0, 0);
 			auto* cb = constants_.Get();
 			const std::array srvs{ work.colorView.Get(), args[index].depthGuideSRV, work.motionView.Get(), work.allocation.hasMask ? work.maskView.Get() : nullptr };
-			const std::array uavs{ work.color.uav.Get(), work.depth.uav.Get(), work.motion.uav.Get(), work.allocation.hasMask ? work.mask.uav.Get() : nullptr };
+			const auto& target = batch.targets[index];
+			const std::array uavs{ target.color.uav.Get(), target.depth.uav.Get(), target.motion.uav.Get(), work.allocation.hasMask ? work.mask.uav.Get() : nullptr };
 			context->CSSetShader(prepare_.Get(), nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);
 			context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
@@ -354,6 +464,8 @@ namespace NeuralRendering
 			guard.Unbind();
 		}
 		result = args.front().device->GetDeviceRemovedReason();
+		if (SUCCEEDED(result))
+			batch.count = args.size();
 		return SUCCEEDED(result);
 	}
 
@@ -362,7 +474,8 @@ namespace NeuralRendering
 		result = E_INVALIDARG;
 		if (batch.count != args.size() || args.empty() || args.size() > batch.resources.size() ||
 			!batch.reconstructionShader || !batch.constants ||
-			std::ranges::any_of(std::span(batch.resources.data(), batch.count), [](const auto& work) { return !work; }))
+			std::ranges::any_of(std::span(batch.resources.data(), batch.count), [](const auto& work) { return !work; }) ||
+			std::ranges::any_of(std::span(batch.targets.data(), batch.count), [](const auto& target) { return !target.color.srv || !target.output.srv; }))
 			return false;
 		auto* context = args.front().context;
 		ComputeStateGuard<3> guard(context);
@@ -370,7 +483,7 @@ namespace NeuralRendering
 			const auto& work = *batch.resources[index];
 			context->UpdateSubresource(batch.constants.Get(), 0, nullptr, &work.constants, 0, 0);
 			auto* cb = batch.constants.Get();
-			const std::array srvs{ work.colorView.Get(), work.color.srv.Get(), work.output.srv.Get() };
+			const std::array srvs{ work.colorView.Get(), batch.targets[index].color.srv.Get(), batch.targets[index].output.srv.Get() };
 			auto* uav = work.reconstructed.uav.Get();
 			context->CSSetShader(batch.reconstructionShader.Get(), nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &cb);

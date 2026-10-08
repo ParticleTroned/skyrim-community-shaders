@@ -106,6 +106,9 @@ namespace
 			Util::SetResourceName(uav.Get(), "NRModelResolutionTest::Texture UAV");
 		}
 
+		Texture(const NeuralRendering::Color::Texture& source, Size dimensions) :
+			texture(source.resource), srv(source.srv), uav(source.uav), size(dimensions) {}
+
 		template <class T>
 		std::vector<T> Read(ID3D11Device* device, ID3D11DeviceContext* context) const
 		{
@@ -330,6 +333,169 @@ namespace
 			}
 		}
 	}
+	void CheckSharedAdapter(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		using namespace NeuralRendering;
+		constexpr Size source{ 17, 11 };
+		std::vector<Pixel> color(source[0] * source[1]), right(color.size());
+		std::vector<float> depths(color.size());
+		std::vector<Motion> velocities(color.size());
+		for (std::size_t i = 0; i < color.size(); ++i) {
+			color[i] = { float(i % 7) * 0.03f, float(i % 11) * 0.02f, float(i % 5) * 0.04f, 0.375f };
+			right[i] = { color[i][2] + 0.1f, color[i][0] + 0.05f, color[i][1], 0.625f };
+			depths[i] = float(i % 13) / 13.0f;
+			velocities[i] = { float(i % 3) * 0.01f, -float(i % 7) * 0.02f };
+		}
+		Texture leftInput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, color);
+		Texture rightInput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, right);
+		Texture depth(device, source, DXGI_FORMAT_R32_FLOAT, depths);
+		Texture motion(device, source, DXGI_FORMAT_R32G32_FLOAT, velocities);
+		Texture leftOutput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
+		Texture rightOutput(device, source, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(color.size(), sentinel));
+		RendererApplyArgs input;
+		input.device = device;
+		input.context = context;
+		input.colorInput = leftInput.texture.Get();
+		input.depthGuide = depth.texture.Get();
+		input.depthGuideSRV = depth.srv.Get();
+		input.motionVectors = motion.texture.Get();
+		input.colorOutput = leftOutput.texture.Get();
+		input.colorWidth = input.guideWidth = input.outputWidth = source[0];
+		input.colorHeight = input.guideHeight = input.outputHeight = source[1];
+		input.viewportCrop = UpscalingDLSS::ViewportCrop::Identity(source[0], source[1], source[0], source[1]);
+		input.computeSubrect = { 3, 2, 11, 7 };
+		input.featureSlot = 2;
+		input.renderingMode = RenderingMode::ReducedResolution;
+		input.reset = true;
+		for (unsigned percent : { 90u, 80u, 50u, 33u }) {
+			input.modelResolutionPercent = percent;
+			std::array args{ input, input };
+			args[1].featureSlot = 3;
+			args[1].colorInput = rightInput.texture.Get();
+			args[1].colorOutput = rightOutput.texture.Get();
+			Require(ModelResolution::CanUseSharedTargets(args, false, false), "Raw stateless C must accept shared preparation");
+			Require(!ModelResolution::CanUseSharedTargets(args, true, false) && !ModelResolution::CanUseSharedTargets(args, false, true),
+				"Color processing and compact recovery must retain staged inputs");
+			ModelResolution staged, shared;
+			ModelResolution::Batch baseline, candidate, invalid;
+			HRESULT result = S_OK;
+			Require(staged.Prepare(args, baseline, result), "Staged reference preparation failed");
+			const Size model{ baseline.arguments[0].outputWidth, baseline.arguments[0].outputHeight };
+			const auto count = model[0] * model[1];
+			std::array<ModelResolution::Targets, 2> targets;
+			const auto own = [](const Texture& texture) { return Color::Texture{ texture.texture, texture.srv, texture.uav }; };
+			for (auto& target : targets) {
+				target = { own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel))),
+					own(Texture(device, model, DXGI_FORMAT_R32_FLOAT, std::vector(count, -1.0f))),
+					own(Texture(device, model, DXGI_FORMAT_R32G32_FLOAT, std::vector(count, Motion{ -1, -1 }))),
+					own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel))) };
+			}
+			const auto retained = 2u * source[0] * source[1] * sizeof(Pixel);
+			Require(shared.AdditionalBytes(args, true) == retained, "Shared aliases must not enter private allocation admission");
+			auto bad = targets;
+			bad[1].color.srv = bad[1].depth.srv;
+			Require(!shared.Prepare(args, invalid, result, bad) && result == E_INVALIDARG && invalid.count == 0,
+				"Mismatched right-eye view must reject the whole batch before preparation");
+			const auto untouched = Texture(targets[0].color, model).Read<Pixel>(device, context);
+			Require(std::ranges::all_of(untouched, [](const auto& value) { return value == sentinel; }),
+				"Invalid right-eye target dispatched left-eye preparation");
+			bad = targets;
+			bad[1] = bad[0];
+			Require(!shared.Prepare(args, invalid, result, bad), "Aliased eyes must not share mutable model targets");
+			Require(!shared.Prepare(args, invalid, result, std::span(targets.data(), 1)), "Incomplete target pair was accepted");
+			ComPtr<ID3D11DeviceContext> deferred;
+			Check(device->CreateDeferredContext(0, &deferred));
+			for (unsigned contract = 0; contract < 5; ++contract) {
+				auto malformed = args;
+				if (contract == 0)
+					malformed[1].featureSlot = malformed[0].featureSlot;
+				else if (contract == 1)
+					malformed[1].depthGuideSRV = nullptr;
+				else if (contract == 2)
+					malformed[1].depthGuideSRV = motion.srv.Get();
+				else if (contract == 3)
+					malformed[1].context = deferred.Get();
+				else
+					malformed[0].context = malformed[1].context = deferred.Get();
+				Require(!shared.Prepare(malformed, invalid, result, targets) && result == E_INVALIDARG && invalid.count == 0,
+					"Malformed shared-input batch reached preparation");
+			}
+			Require(Texture(targets[0].color, model).Read<Pixel>(device, context) == untouched,
+				"Rejected batch changed a valid eye before preflight completed");
+			ModelResolution::Batch mono;
+			const auto monoArgs = std::span(args.data(), 1);
+			Require(shared.Prepare(monoArgs, mono, result, std::span(targets.data(), 1)) && mono.count == 1,
+				"Direct mono preparation failed");
+			Require(Texture(targets[1].color, model).Read<Pixel>(device, context) == untouched,
+				"Mono preparation touched the unused eye");
+			Require(shared.Prepare(args, candidate, result, targets), "Direct shared-target preparation failed");
+			Require(shared.AdditionalBytes(args, true) == 0 && shared.RetainedBytes(2).value() + shared.RetainedBytes(3).value() == retained,
+				"Shared-target cache retains duplicate model-sized allocations");
+			const auto previousColor = candidate.targets[0].color.resource;
+			const auto previousReconstruction = candidate.resources[0];
+			targets[0].color = own(Texture(device, model, DXGI_FORMAT_R32G32B32A32_FLOAT, std::vector(count, sentinel)));
+			Require(shared.Prepare(args, candidate, result, targets) && candidate.arguments[0].colorInput != previousColor.Get() &&
+						candidate.resources[0] == previousReconstruction && shared.AdditionalBytes(args, true) == 0,
+				"Replaced shared views must bind without retaining stale targets or reallocating reconstruction");
+			const auto rect = baseline.arguments[0].computeSubrect;
+			for (std::size_t eye = 0; eye < args.size(); ++eye) {
+				Require(candidate.arguments[eye].colorInput == targets[eye].color.resource.Get() &&
+							candidate.arguments[eye].colorOutput == targets[eye].output.resource.Get(),
+					"Shared target identities were replaced");
+				const auto oldColor = Texture(baseline.targets[eye].color, model).Read<Pixel>(device, context);
+				const auto newColor = Texture(candidate.targets[eye].color, model).Read<Pixel>(device, context);
+				const auto oldDepth = Texture(baseline.targets[eye].depth, model).Read<float>(device, context);
+				const auto newDepth = Texture(candidate.targets[eye].depth, model).Read<float>(device, context);
+				const auto oldMotion = Texture(baseline.targets[eye].motion, model).Read<Motion>(device, context);
+				const auto newMotion = Texture(candidate.targets[eye].motion, model).Read<Motion>(device, context);
+				std::vector<Pixel> neural(count, sentinel);
+				for (UINT y = rect.baseY; y < rect.baseY + rect.height; ++y)
+					for (UINT x = rect.baseX; x < rect.baseX + rect.width; ++x) {
+						const auto i = y * model[0] + x;
+						Require(oldColor[i] == newColor[i] && oldDepth[i] == newDepth[i] && oldMotion[i] == newMotion[i],
+							"Direct preparation changed color, nearest depth or correlated motion");
+						neural[i] = { newColor[i][0] + 0.025f, newColor[i][1] - 0.01f, newColor[i][2] + 0.005f, 1 };
+					}
+				context->UpdateSubresource(baseline.arguments[eye].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
+				context->UpdateSubresource(candidate.arguments[eye].colorOutput, 0, nullptr, neural.data(), static_cast<UINT>(model[0] * sizeof(Pixel)), 0);
+			}
+			Require(staged.Reconstruct(args, baseline, result), "Staged reference reconstruction failed");
+			staged.Commit(args, baseline);
+			const auto expectedLeft = leftOutput.Read<Pixel>(device, context), expectedRight = rightOutput.Read<Pixel>(device, context);
+			const std::vector clear(color.size(), sentinel);
+			context->UpdateSubresource(leftOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
+			context->UpdateSubresource(rightOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
+			Require(shared.Reconstruct(monoArgs, mono, result), "Direct mono reconstruction failed");
+			shared.Commit(monoArgs, mono);
+			Require(leftOutput.Read<Pixel>(device, context) == expectedLeft && rightOutput.Read<Pixel>(device, context) == clear,
+				"Direct mono output differs or publishes the unused eye");
+			context->UpdateSubresource(leftOutput.texture.Get(), 0, nullptr, clear.data(), static_cast<UINT>(source[0] * sizeof(Pixel)), 0);
+			shared.Reset();
+			bad = {};
+			invalid = {};
+			targets = {};
+			Require(shared.Reconstruct(args, candidate, result), "Retained shared targets failed across backend reset");
+			Require(leftOutput.Read<Pixel>(device, context) == clear && rightOutput.Read<Pixel>(device, context) == clear,
+				"Reconstruction published an eye before atomic pair commit");
+			shared.Commit(args, candidate);
+			Require(leftOutput.Read<Pixel>(device, context) == expectedLeft && rightOutput.Read<Pixel>(device, context) == expectedRight,
+				"Shared transport changed residual color, alpha or owned ROI");
+			for (unsigned policy = 0; policy < 4; ++policy) {
+				auto masked = args;
+				if (policy == 0)
+					masked[1].actorSelection = motion.srv;
+				else if (policy == 1)
+					masked[1].controlMask = depth.texture;
+				else if (policy == 2)
+					masked[1].providerBlending = true;
+				else
+					masked[1].characterVisualIsolation = true;
+				Require(!ModelResolution::CanUseSharedTargets(masked, false, false), "Actor and mask policies must retain staged semantics");
+				Require(!shared.AdditionalBytes(masked, true), "Shared memory admission accepted an unsupported mask policy");
+			}
+		}
+	}
+
 	void CheckAdapter(ID3D11Device* device, ID3D11DeviceContext* context)
 	{
 		using namespace NeuralRendering;
@@ -435,6 +601,7 @@ int main()
 		for (bool vr : { false, true }) {
 			AdapterCompiler::vr = vr;
 			CheckAdapter(device.Get(), context.Get());
+			CheckSharedAdapter(device.Get(), context.Get());
 			Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
 			Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
 			for (bool mask : { false, true })
@@ -445,7 +612,7 @@ int main()
 			for (unsigned condition = 0; condition < 7; ++condition)
 				CheckReconstruct(device.Get(), context.Get(), reconstruct, condition);
 		}
-		std::cout << "PASS: NR production adapter and shaders on WARP: batch reset ownership, allocation reuse, stereo commit, area reduction, guide/mask ownership, odd sizes, identity, residual detail, alpha, ROI isolation and finite fallback (flat/VR)\n";
+		std::cout << "PASS: NR production adapter and shaders on WARP: shared/staged pixel equivalence, target preflight, alias rejection, batch reset ownership, allocation reuse, stereo commit, area reduction, guide/mask ownership, odd sizes, identity, residual detail, alpha, ROI isolation and finite fallback (flat/VR)\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

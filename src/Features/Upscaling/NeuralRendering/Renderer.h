@@ -152,6 +152,7 @@ namespace NeuralRendering
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		std::uint32_t modelResolutionPercent = 100;
+		bool modelSharedInputs = false;
 		std::uint32_t modelSourceWidth = 0, modelSourceHeight = 0;
 		std::uint32_t modelWidth = 0, modelHeight = 0;
 		std::uint32_t colorWidth = 0;

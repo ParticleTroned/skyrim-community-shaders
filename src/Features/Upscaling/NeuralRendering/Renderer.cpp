@@ -8,6 +8,7 @@
 #include "D3D12Interop.h"
 #include "ModelResolution.h"
 #include "PipelinePolicy.h"
+#include "Utils/ComIdentity.h"
 #include "Utils/D3D.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -243,27 +244,11 @@ namespace NeuralRendering
 			       a_result == DXGI_ERROR_INVALID_CALL;
 		}
 
-		bool SameIdentity(IUnknown* a_left, IUnknown* a_right) noexcept
-		{
-			if (!a_left || !a_right)
-				return false;
-
-			ComPtr<IUnknown> leftIdentity;
-			ComPtr<IUnknown> rightIdentity;
-			return SUCCEEDED(a_left->QueryInterface(IID_PPV_ARGS(&leftIdentity))) &&
-			       SUCCEEDED(a_right->QueryInterface(IID_PPV_ARGS(&rightIdentity))) &&
-			       leftIdentity.Get() == rightIdentity.Get();
-		}
+		using Util::SameIdentity;
 
 		std::uintptr_t GetIdentityToken(IUnknown* a_object) noexcept
 		{
-			if (!a_object)
-				return 0;
-
-			ComPtr<IUnknown> identity;
-			return SUCCEEDED(a_object->QueryInterface(IID_PPV_ARGS(&identity))) ?
-			           reinterpret_cast<std::uintptr_t>(identity.Get()) :
-			           0;
+			return reinterpret_cast<std::uintptr_t>(Util::GetComIdentity(a_object).Get());
 		}
 
 		std::string GetStereoPairContractViolation(
@@ -607,6 +592,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		CapacityFallback capacityFallback_{};
 		std::uint32_t requestedRegionCount_ = 0;
+		std::shared_ptr<ExecutionEvidence> modelPreparationEvidence_;
 		bool forceFullCoordinates_ = false;
 		std::array<CompactInputRetention, Runtime::kFeatureSlotCount> compactRetention_{};
 		ComPtr<ID3D11ComputeShader> copyCompactDepthGuideCS_;
@@ -823,6 +809,7 @@ namespace NeuralRendering
 
 	private:
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		void MergeModelPreparationEvidenceLocked(ExecutionEvidence& execution) const noexcept;
 		bool BeginLifetimeLocked(LifetimeRecord& record, LifetimeOperation operation) noexcept;
 		void FinishLifetimeLocked(LifetimeRecord& record, bool unwinding) noexcept;
 		void CaptureLifetimeResourcesLocked(LifetimeRegion& region, const Slot& slot) const noexcept;
@@ -1448,6 +1435,7 @@ namespace NeuralRendering
 			snapshot_.generation = a_args.generation;
 			snapshot_.insertionPoint = a_args.insertionPoint;
 			snapshot_.modelResolutionPercent = a_args.modelResolutionPercent;
+			snapshot_.modelSharedInputs = false;
 			snapshot_.modelSourceWidth = snapshot_.modelWidth = a_args.colorWidth;
 			snapshot_.modelSourceHeight = snapshot_.modelHeight = a_args.colorHeight;
 			snapshot_.colorWidth = a_args.colorWidth;
@@ -2380,6 +2368,11 @@ namespace NeuralRendering
 			a_args.size() != a_resources.size()) {
 			return false;
 		}
+		bool alreadyPrepared = true;
+		for (std::size_t index = 0; index < a_args.size(); ++index)
+			alreadyPrepared &= SameIdentity(a_resources[index].depth.texture.Get(), a_slots[index]->depth.resource11.Get());
+		if (alreadyPrepared)
+			return true;
 		// Validation fixes the source view to mip zero and the shader performs an
 		// identity Load. Only an already typed R32 source can use a raw ROI copy.
 		const auto canCopy = [&](std::size_t index) {
@@ -2435,6 +2428,8 @@ namespace NeuralRendering
 		a_args.front().context->CSSetShader(shader, nullptr, 0);
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			if (SameIdentity(a_resources[index].depth.texture.Get(), a_slots[index]->depth.resource11.Get()))
+				continue;
 			auto roi = a_resources[index].nativeLayout.depth.valid;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			const auto& compact = a_resources[index].roi.compactSource;
@@ -2610,6 +2605,20 @@ namespace NeuralRendering
 	}
 #endif
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void Renderer::State::MergeModelPreparationEvidenceLocked(ExecutionEvidence& execution) const noexcept
+	{
+		if (modelPreparationEvidence_)
+			execution.MergeResourcePreparation(*modelPreparationEvidence_);
+		else
+			execution.Update([](auto& evidence) {
+				evidence.evidenceFailed = true;
+				for (auto& region : evidence.regions)
+					region.allocationBytesKnown = false;
+			});
+	}
+#endif
+
 	bool Renderer::State::ApplyModelResolutionLocked(std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome, bool sequential)
 	{
 		outcome = {};
@@ -2618,6 +2627,11 @@ namespace NeuralRendering
 		if (failureLatched_ || quarantined_)
 			return ApplyRegionBatchLocked(args, outcome);
 		const auto& first = args.front();
+		// A backend identity change retires its slots; staged proxies survive that reset.
+		const bool stableBackend = !device_ || (SameIdentity(device_.Get(), first.device) && SameIdentity(context_.Get(), first.context));
+		const bool sharedTargets = stableBackend && ModelResolution::CanUseSharedTargets(args,
+														colorConfiguration_.Enabled(), colorConfiguration_.experiments.CompactInputsEnabled());
+		bool sharedInputsPrepared = false;
 		SetRequestTelemetryLocked(first);
 		const SKSE::stl::scope_exit restoreTelemetry([&] {
 			if constexpr (kDevelopmentDiagnostics) {
@@ -2625,6 +2639,7 @@ namespace NeuralRendering
 				const auto& observed = matched != args.end() ? *matched : first;
 				const auto extent = BuildModelResolutionExtent(observed.outputWidth, observed.outputHeight, observed.modelResolutionPercent);
 				snapshot_.modelResolutionPercent = observed.modelResolutionPercent;
+				snapshot_.modelSharedInputs = sharedInputsPrepared;
 				snapshot_.modelSourceWidth = observed.outputWidth;
 				snapshot_.modelSourceHeight = observed.outputHeight;
 				snapshot_.modelWidth = extent.width;
@@ -2660,7 +2675,7 @@ namespace NeuralRendering
 				proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), false);
 			FinalizeResourceKeysLocked(proxy, resource);
 		}
-		const auto additional = modelResolution_.AdditionalBytes(args);
+		const auto additional = modelResolution_.AdditionalBytes(args, sharedTargets);
 		if (!additional)
 			return FailLocked(RendererStage::Validation, E_INVALIDARG,
 				"NR model-resolution allocation size could not be established", first.featureSlot, false);
@@ -2669,12 +2684,43 @@ namespace NeuralRendering
 			return false;
 		}
 
+		std::shared_ptr<ExecutionEvidence> preparationEvidence;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (sharedTargets && captureInputs_[captureRoute_].valid) {
+			try {
+				ExecutionDescriptor descriptor{};
+				descriptor.regionCount = static_cast<std::uint32_t>(args.size());
+				for (std::size_t index = 0; index < args.size(); ++index)
+					descriptor.regions[index].physicalSlot = args[index].featureSlot;
+				preparationEvidence = std::make_shared<ExecutionEvidence>(std::move(descriptor));
+			} catch (const std::bad_alloc&) {
+				++captureInputs_[captureRoute_].executionEvidenceFailures;
+			}
+		}
+		const auto previousPreparation = std::exchange(modelPreparationEvidence_, preparationEvidence);
+		const SKSE::stl::scope_exit restorePreparation([&] { modelPreparationEvidence_ = previousPreparation; });
+#endif
+		std::array<ModelResolution::Targets, kEyeCount> targets{};
+		if (sharedTargets) {
+			if (!EnsureBackendLocked(first, preparationEvidence))
+				return false;
+			for (std::size_t index = 0; index < args.size(); ++index) {
+				if (!EnsureSlotLocked(args[index].featureSlot, resources[index], preparationEvidence, index))
+					return false;
+				const auto& slot = slots_[args[index].featureSlot];
+				const auto retain = [](const SharedTexture& texture) {
+					return Color::Texture{ texture.resource11, texture.srv11, texture.uav11 };
+				};
+				targets[index] = { retain(slot.color), retain(slot.depth), retain(slot.motionVectors), retain(slot.output) };
+			}
+		}
 		ModelResolution::Batch batch;
 		HRESULT result = S_OK;
 		activeStage_ = RendererStage::ResourceCreation;
-		if (!modelResolution_.Prepare(args, batch, result))
+		if (!modelResolution_.Prepare(args, batch, result, sharedTargets ? std::span(targets.data(), args.size()) : std::span<const ModelResolution::Targets>{}))
 			return FailLocked(RendererStage::ResourceCreation, result,
 				"NR model-resolution input preparation failed; original render input retained", first.featureSlot, true);
+		sharedInputsPrepared = sharedTargets;
 		const bool nativeSucceeded = sequential ? ApplySequentialStereoLocked(batch.arguments, outcome, true) :
 		                                          ApplyBatchLocked(std::span(batch.arguments.data(), batch.count), outcome, true);
 		if (!nativeSucceeded)
@@ -2960,6 +3006,11 @@ namespace NeuralRendering
 				});
 		}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (execution && SameIdentity(a_args.front().colorInput, slots.front()->color.resource11.Get()))
+			MergeModelPreparationEvidenceLocked(*execution);
+#endif
+
 		// Allocate/compile for every physical region before changing any caller output.
 		// The legacy raw lane does not allocate or dispatch colour resources.
 		if (colorConfiguration_.Enabled()) {
@@ -3031,7 +3082,7 @@ namespace NeuralRendering
 						"shared NR colour preparation failed", a_args[index].featureSlot, true);
 				}
 				RecordExecutionCopy(execution, index, slots[index]->colorWork.observation.copiedLogicalBytes);
-			} else {
+			} else if (!SameIdentity(slots[index]->color.resource11.Get(), resources[index].color.texture.Get())) {
 				CS_GPU_DETAIL_PASS("Upscaling::NRColorInputCopy", execution ? execution->Snapshot().regions[index].colorCopyPass : nullptr);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (resources[index].roi.compactSource)
@@ -3069,8 +3120,9 @@ namespace NeuralRendering
 				a_args.front().featureSlot,
 				true);
 		}
-		for ([[maybe_unused]] const auto& args : a_args)
-			Increment(snapshot_.counters.depthGuideCopies);
+		for (const auto& args : a_args)
+			if (!SameIdentity(args.depthGuide, slots_[args.featureSlot].depth.resource11.Get()))
+				Increment(snapshot_.counters.depthGuideCopies);
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason)) {
 			return FailLocked(
 				RendererStage::DepthGuideCopy,
@@ -3084,6 +3136,8 @@ namespace NeuralRendering
 		activeStage_ = RendererStage::MotionVectorCopy;
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
+			if (SameIdentity(slots[index]->motionVectors.resource11.Get(), resources[index].motionVectors.texture.Get()))
+				continue;
 			CS_GPU_DETAIL_PASS("Upscaling::NRMotionVectorCopy", execution ? execution->Snapshot().regions[index].motionCopyPass : nullptr);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (resources[index].roi.compactSource)
@@ -3452,7 +3506,7 @@ namespace NeuralRendering
 			if (colorConfiguration_.Enabled()) {
 				colorPipeline_.Commit(a_args.front().context, slots[index]->colorWork,
 					resources[index].output.texture.Get());
-			} else {
+			} else if (!SameIdentity(resources[index].output.texture.Get(), slots[index]->output.resource11.Get())) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				if (const auto& compact = resources[index].roi.compactSource)
 					CopyTextureSubrect(a_args.front().context, resources[index].output.texture.Get(), slots[index]->output.resource11.Get(), resources[index].roi.ownedOutput,
@@ -3465,7 +3519,7 @@ namespace NeuralRendering
 						slots[index]->output.resource11.Get(),
 						resources[index].roi.ownedOutput);
 			}
-			if (execution) {
+			if (execution && (colorConfiguration_.Enabled() || !SameIdentity(resources[index].output.texture.Get(), slots[index]->output.resource11.Get()))) {
 				RecordExecutionCopy(execution, index, LogicalTextureBytes(resources[index].output.desc.Format, resources[index].roi.ownedOutput.width, resources[index].roi.ownedOutput.height));
 				execution->Update([&](auto& evidence) {
 					evidence.regions[index].outputCopyEnqueued = true;
@@ -3852,7 +3906,7 @@ namespace NeuralRendering
 		using json = nlohmann::json;
 		std::scoped_lock lock(state_->mutex_);
 		json textures = json::array(), slots = json::array();
-		std::uint64_t inputBytes = 0, outputBytes = 0, colorBytes = 0, retiredLeaseBytes = 0;
+		std::uint64_t inputBytes = 0, outputBytes = 0, colorBytes = 0, modelBytes = 0, retiredLeaseBytes = 0;
 		std::uint64_t activeBytes = 0, cachedBytes = 0, activeColorBytes = 0, cachedColorBytes = 0;
 		bool bytesKnown = !state_->quarantined_;
 		std::vector<ID3D12Resource*> unique;
@@ -3876,6 +3930,9 @@ namespace NeuralRendering
 		std::uint32_t activeMask = 0, cachedMask = 0;
 		for (std::size_t index = 0; index < state_->slots_.size(); ++index) {
 			const auto& slot = state_->slots_[index];
+			const auto model = state_->modelResolution_.RetainedBytes(static_cast<std::uint32_t>(index));
+			modelBytes += model.value_or(0);
+			bytesKnown &= model.has_value();
 			if (!slot.resourcesValid)
 				continue;
 			const bool active = slot.lastSuccessfulFrame == state_->snapshot_.frameId;
@@ -3890,6 +3947,7 @@ namespace NeuralRendering
 			(active ? activeColorBytes : cachedColorBytes) += color.value_or(0) * 2u;
 			bytesKnown &= color.has_value();
 			slots.push_back({ { "slot", index }, { "activeInLastRequest", active },
+				{ "modelResolutionPrivateLogicalBytes", model ? json(*model) : json(nullptr) },
 				{ "compactStorage", slot.resourceKey.compact },
 				{ "compactMinimumSide", state_->compactRetention_[index].minimumSide },
 				{ "compactFullCoordinateFallback", state_->compactRetention_[index].fullCoordinates },
@@ -3922,10 +3980,11 @@ namespace NeuralRendering
 			{ "maximumPhysicalContexts", Runtime::kFeatureSlotCount }, { "allocationPolicy", "lazy_exact_capacity_no_speculative_prewarm" },
 			{ "activeSlotMask", activeMask }, { "cachedSlotMask", cachedMask }, { "nativeSlotMask", nativeMask },
 			{ "sharedInputLogicalBytes", inputBytes }, { "privateOutputLogicalBytes", outputBytes }, { "privateColorLogicalBytes", colorBytes },
+			{ "modelResolutionPrivateLogicalBytes", modelBytes },
 			{ "activeTransportLogicalBytes", activeBytes }, { "cachedOnlyTransportLogicalBytes", cachedBytes },
 			{ "activePrivateColorLogicalBytes", activeColorBytes }, { "cachedPrivateColorLogicalBytes", cachedColorBytes },
 			{ "leaseOnlyRetainedLogicalBytes", retiredLeaseBytes }, { "leaseCount", leases.size() }, { "logicalBytesKnown", bytesKnown },
-			{ "logicalByteScope", "unique_transport_and_private_baseline_result_textures_only_excludes_exposure_queries_buffers_and_native_allocations" },
+			{ "logicalByteScope", "unique_transport_private_color_and_model_resolution_textures_excludes_exposure_queries_buffers_and_native_allocations" },
 			{ "nativeAllocationBytes", nullptr }, { "nativeAllocationBytesReason", "provider_does_not_expose_residency_bytes" },
 			{ "quarantined", state_->quarantined_ }, { "physicalResidencyMeasured", false },
 			{ "nativeResidencyKnown", !state_->quarantined_ },

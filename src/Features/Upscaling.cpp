@@ -18303,7 +18303,9 @@ const char* Upscaling::GetNeuralRenderingUpscalingProfileBlocker(NeuralRendering
 	if (a_mode == NeuralRendering::RenderingMode::FullResolution)
 		return nullptr;
 	if (a_method == UpscaleMethod::kFSR)
-		return IsRenderScaleQualityMode(a_qualityMode) ? "FSR" : "Native AA";
+		return a_mode == NeuralRendering::RenderingMode::Foveated ? nullptr :
+		       IsRenderScaleQualityMode(a_qualityMode)            ? "FSR" :
+		                                                            "Native AA";
 	switch (a_method) {
 	case UpscaleMethod::kNONE:
 		return "None";
@@ -18419,7 +18421,7 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 			settings.neuralRenderingEnabled = enabled;
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : renderScaleAvailable ? "Enhances scene detail using NR. Off removes its rendering cost and keeps your settings. Enabling NR disables FOV + TAA." :
-																																	  "Choose compatible upscaling for this NR mode. Renderscale NR needs scaled DLSS and Render Scale in VR. Foveated NR requires DLSS.");
+																																	  "Choose compatible upscaling for this NR mode. Renderscale NR needs scaled DLSS and Render Scale in VR. Foveated NR requires DLSS or FSR.");
 	}
 	if (!renderScaleAvailable) {
 		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
@@ -18443,12 +18445,12 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 			else
 				Util::Text::WrappedWarning("%s %s: %s.", reducedResolution ? "Renderscale NR" : "NR", settings.neuralRenderingEnabled ? "paused" : "unavailable", blocker);
 			if (!reducedResolution)
-				ImGui::TextWrapped("Choose DLSS for Foveated NR, or select Full resolution NR to use FSR.");
+				ImGui::TextWrapped("Choose DLSS or FSR for Foveated NR, or select Full resolution NR.");
 			else if (!GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, true))
 				ImGui::TextWrapped("Enable Render Scale in Upscaling to use Renderscale NR.");
 			else
 				ImGui::TextWrapped("%s", globals::game::isVR ?
-											 "Select scaled DLSS with Render Scale, or choose Full resolution or Foveated NR. Foveated requires DLSS and FOV." :
+											 "Select scaled DLSS with Render Scale, or choose Full resolution or Foveated NR. Foveated requires DLSS or FSR and FOV." :
 											 "Select scaled DLSS or choose Full resolution NR.");
 		} else
 			Util::Text::WrappedWarning("%s", "Renderscale NR is waiting for scaling to become active.");
@@ -18707,7 +18709,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		static constexpr const char* renderingModes[]{ "Full resolution", "Foveated", "Renderscale NR before DLSS" };
 		static constexpr const char* renderingModeHelp[]{
 			"Enhances the finished scene at full resolution. Offers the most detail and usually costs more performance. FOV restriction is optional.",
-			"Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires FOV and DLSS.",
+			"Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires FOV and DLSS or FSR.",
 			"Enhances a smaller image before DLSS enlarges it. Requires a scaled DLSS preset and active Render Scale in VR. Unavailable with DLAA, TAA or no upscaling. FOV restriction is optional."
 		};
 		const bool renderingModeOpen = ImGui::BeginCombo("Rendering mode", renderingModes[static_cast<uint>(GetNeuralRenderingMode())]);
@@ -18768,13 +18770,13 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, bool 
 		if (!a_essentialsOnly)
 			DrawNeuralRenderingStrengthApplication(settings);
 		const bool missingRenderScale = !IsNeuralRenderingUpscalingAvailable();
-		const bool routeAvailable = !missingRenderScale && !missingFov && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution || (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
+		const bool routeAvailable = !missingRenderScale && !missingFov && (NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), a_upscaleMethod == UpscaleMethod::kFSR) || (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
 		if (!routeAvailable && !missingFov && !missingRenderScale)
 			ImGui::TextDisabled("This mode requires NVIDIA DLSS.");
 
 		if (!a_essentialsOnly) {
 			const bool maskedRegion = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov);
-			if (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution && settings.neuralRenderingFovOnly) {
+			if (NeuralRendering::UsesSharedFinalLdrFovMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, a_upscaleMethod == UpscaleMethod::kFSR)) {
 				ImGui::TextDisabled("The mask and edge feather follow the shared Upscaling FOV settings.");
 			} else if (maskedRegion && GetNeuralRenderingInsertionPoint() == NeuralRendering::InsertionPoint::FinalLdrPreUi) {
 				ImGui::SeparatorText("Region blending");
@@ -22660,7 +22662,7 @@ bool Upscaling::IsCharacterNeuralRenderingRouteRequested() const
 		loaded && IsNeuralRenderingRequested() &&
 		(settings.neuralCharacterRenderingEnabled || settings.neuralCharacterSceneStrengthsEnabled) &&
 		settings.neuralCharacterVisualIsolationEnabled &&
-		(GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
+		(NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR) ||
 			(GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS &&
 				(GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS)))) &&
 		!settings.foveatedPeripheryMaskVisualization &&
@@ -45494,7 +45496,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 		!globals::deferred->linearSampler) {
 		return false;
 	}
-	const bool fullResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution;
+	const bool fullResolution = NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR);
 	auto& depthGuides = fullResolution ? neuralFullResolutionDepth : foveatedCenterDepth;
 	auto& motionGuides = fullResolution ? neuralFullResolutionMotionVectors : foveatedCenterMotionVectors;
 
@@ -45897,7 +45899,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			}
 		}
 		const bool sharedFullResolutionFovMask =
-			GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution && settings.neuralRenderingFovOnly;
+			NeuralRendering::UsesSharedFinalLdrFovMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR);
 		for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 			lateEye = eye;
 			if (neuralResults[eye].bypassed) {
@@ -45999,13 +46001,14 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 		inputHeight > motionDesc.Height || motionDesc.SampleDesc.Count != 1 || motionDesc.ArraySize != 1)
 		return false;
 	const auto profile = GetFoveatedMaskProfileParams(settings, false);
-	const auto sharedMaskProfile = settings.neuralRenderingFovOnly ?
+	const bool useSharedFovMask = NeuralRendering::UsesSharedFinalLdrFovMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR);
+	const auto sharedMaskProfile = useSharedFovMask ?
 	                                   GetActiveUpscalingFoveatedProfile() :
 	                                   ActiveUpscalingFoveatedProfile{};
 	if (!BuildFoveatedDispatchRects(inputWidthPerEye, inputHeight, outputWidthPerEye, outputHeight,
 			globals::game::isVR, profile.centerScale, settings.neuralRenderingBlendFeather,
 			profile.centerHorizontalScale, GetRuntimeUpscaleMethod(), false,
-			settings.neuralRenderingFovOnly ? &sharedMaskProfile : nullptr))
+			useSharedFovMask ? &sharedMaskProfile : nullptr))
 		return false;
 	NeuralRendering::ComputeStateGuard<1> stateGuard(context);
 	uint32_t emptyEyeMask = 0;
@@ -46061,7 +46064,7 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 void Upscaling::PrepareMainFullResolutionNeuralFrame() noexcept
 {
 	if (!globals::state || !IsNeuralRenderingRequested() ||
-		GetNeuralRenderingMode() != NeuralRendering::RenderingMode::FullResolution ||
+		!NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR) ||
 		IsPresentationUpscalingActive())
 		return;
 	if (mainFullResolutionNeuralPreparationFrame == globals::state->frameCount)
@@ -46072,7 +46075,10 @@ void Upscaling::PrepareMainFullResolutionNeuralFrame() noexcept
 	route.valid = true;
 	route.role = NeuralStereoRouteRole::Main;
 	route.frame = globals::state->frameCount;
-	route.generation = std::max<uint64_t>(vrDLSSRuntimeResourceGeneration, 1u);
+	route.generation = std::max<uint64_t>(GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR ?
+											  vrFSRRuntimeResourceGeneration :
+											  vrDLSSRuntimeResourceGeneration,
+		1u);
 	route.insertionPoint = static_cast<uint32_t>(NeuralRendering::InsertionPoint::FinalLdrPreUi);
 	route.requested = true;
 	const auto publishPreparationFallback = [&](NeuralStereoFallbackReason reason) noexcept {
@@ -46167,7 +46173,7 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 	}
 	const bool routeStillEligible =
 		IsNeuralRenderingRequested() &&
-		(GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution ||
+		(NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR) ||
 			(GetRuntimeUpscaleMethod() == UpscaleMethod::kDLSS && IsFoveatedVendorDispatchEnabled(UpscaleMethod::kDLSS))) &&
 		!settings.foveatedPeripheryMaskVisualization &&
 		!IsPresentationUpscalingActive() && temporalAdmission.admitted &&
@@ -47411,7 +47417,7 @@ FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(UpscaleMeth
 		PublishNeuralStereoRouteSnapshot(neuralRoute);
 	};
 	const bool prepareNeuralCenterPair = !visualizeMask && IsNeuralRenderingRequested() &&
-	                                     GetNeuralRenderingMode() != NeuralRendering::RenderingMode::FullResolution;
+	                                     !NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), a_upscaleMethod == UpscaleMethod::kFSR);
 	const auto centerResult = !prepareNeuralCenterPair ? FidelityFX::UpscaleResult::Ready : DispatchFoveatedVendorCenterStereo(a_upscaleMethod, eyeParams, neuralEligible, neuralPairApplied, &neuralResults);
 	if (centerResult != FidelityFX::UpscaleResult::Ready) {
 		publishNeuralRoute(false, false);
@@ -55994,7 +56000,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 			0u;
 
 	const bool fullResolutionNeural = neuralSubmitConfigured &&
-	                                  GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution;
+	                                  NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), upscaleMethod == UpscaleMethod::kFSR);
 	const bool neuralSubmitFrameGenerationActive =
 		neuralSubmitConfigured && IsNeuralRenderingFrameGenerationBlocked();
 	bool neuralSubmitBaseEligible = false;

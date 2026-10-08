@@ -54,7 +54,8 @@ struct Upscaling
 	std::array<float2, 2> taaOffsets{ float2{ -0.06f, 0.03f }, float2{ 0.07f, -0.02f } };
 	bool IsNeuralRenderingRequested() const { return settings.neuralRenderingEnabled; }
 	auto GetNeuralRenderingMode() const { return NeuralRendering::ClampRenderingMode(settings.neuralRenderingMode); }
-	UpscaleMethod GetRuntimeUpscaleMethod() const { return UpscaleMethod::kDLSS; }
+	UpscaleMethod method = UpscaleMethod::kDLSS;
+	UpscaleMethod GetRuntimeUpscaleMethod() const { return method; }
 	bool IsActiveUpscalingFoveatedProfileAvailable() const { return available; }
 	bool IsPeripheryTAAEnabled(UpscaleMethod) const { return available && settings.periphery_taa_enable; }
 	auto GetResolvedFoveatedMaskCenterOffsets(bool taa) const { return taa ? taaOffsets : fovOffsets; }
@@ -85,7 +86,7 @@ void CheckSharedPlan(Upscaling& upscaling)
 	const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();
 	Require(profile.available, "Shared profile must be active");
 	Require(upscaling.BuildFoveatedDispatchRects(1007, 811, 1511, 1217, true,
-				0.26f, 0.10f, 1.7f, Upscaling::UpscaleMethod::kDLSS, true, &profile),
+				0.26f, 0.10f, 1.7f, upscaling.GetRuntimeUpscaleMethod(), true, &profile),
 		"Shared mask planning failed");
 	const auto& cache = upscaling.foveatedRectCache;
 	Require(cache.plan.IsValid(), "Both eye plans must be valid");
@@ -113,6 +114,22 @@ int main()
 	try {
 		Upscaling upscaling;
 		CheckSharedPlan(upscaling);
+		const auto fullMasked = upscaling.foveatedRectCache.plan;
+		upscaling.method = Upscaling::UpscaleMethod::kFSR;
+		upscaling.settings.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
+		for (const bool fullFovPreference : { false, true }) {
+			upscaling.settings.neuralRenderingFovOnly = fullFovPreference;
+			Require(NeuralRendering::UsesSharedFinalLdrFovMask(upscaling.GetNeuralRenderingMode(), fullFovPreference, true),
+				"FSR Foveated must select the shared mask independently of the Full mode preference");
+			CheckSharedPlan(upscaling);
+			for (uint eye = 0; eye < 2; ++eye)
+				Require(Equal(fullMasked.eyes[eye].input, upscaling.foveatedRectCache.plan.eyes[eye].input) &&
+							Equal(fullMasked.eyes[eye].output, upscaling.foveatedRectCache.plan.eyes[eye].output),
+					"FSR Foveated and Full plus FOV must use identical eye crops");
+		}
+		upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+		upscaling.settings.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::FullResolution);
+		upscaling.settings.neuralRenderingFovOnly = true;
 		const auto centerOnly = upscaling.foveatedRectCache.plan;
 		upscaling.settings.periphery_taa_enable = true;
 		const auto profile = upscaling.GetActiveUpscalingFoveatedProfile();

@@ -1319,7 +1319,7 @@ int main()
 				upscaling.DrawSelectionControls();
 				require(ImGui::Seen("FOV is configured; this NR route waits until runtime upscaling is available."),
 					"Pending runtime admission must not be reported as missing FOV configuration");
-				require(ImGui::Disabled("Foveated") == (configured != Upscaling::UpscaleMethod::kDLSS) && !ImGui::Disabled("Actors only") &&
+				require(!ImGui::Disabled("Foveated") && !ImGui::Disabled("Actors only") &&
 							upscaling.settings.neuralCharacterRenderingEnabled,
 					"A temporarily masked vendor must not disable configured FOV or character selection");
 				ImGui::Clear();
@@ -1342,14 +1342,14 @@ int main()
 				for (const bool enabled : { false, true }) {
 					ImGui::Clear("Enabled");
 					upscaling.DrawSelectionControls();
-					const bool unavailable = mode == ModeChoice::ReducedResolution || (mode == ModeChoice::Foveated && configured == Upscaling::UpscaleMethod::kFSR);
+					const bool unavailable = mode == ModeChoice::ReducedResolution;
 					require(ImGui::Disabled("Enabled") == unavailable && upscaling.settings.neuralRenderingEnabled == (unavailable || enabled) &&
 								!upscaling.IsNeuralRenderingRequested(),
 						"Full/Foveated remain editable; reduced NR waits for actual scaled DLSS without admitting work");
 				}
 				upscaling.runtimeMethod = configured;
-				require(upscaling.IsNeuralRenderingRequested() == (configured == Upscaling::UpscaleMethod::kDLSS || mode == ModeChoice::FullResolution),
-					"Full resolution resumes with either vendor; Foveated and Reduced require DLSS");
+				require(upscaling.IsNeuralRenderingRequested() == (configured == Upscaling::UpscaleMethod::kDLSS || mode != ModeChoice::ReducedResolution),
+					"Full resolution and Foveated resume with either vendor; Reduced requires DLSS");
 				upscaling.runtimeMethod = effective;
 				globals::game::isVR = false;
 				require(!upscaling.IsNeuralRenderingFovConfigurationAvailable(configured) &&
@@ -1369,6 +1369,13 @@ int main()
 			for (const auto mode : { ModeChoice::Foveated, ModeChoice::ReducedResolution }) {
 				upscaling.settings = {};
 				upscaling.settings.neuralRenderingMode = static_cast<unsigned>(mode);
+				if (pending == Upscaling::UpscaleMethod::kFSR && mode == ModeChoice::Foveated) {
+					require(upscaling.IsNeuralRenderingUpscalingAvailable() && upscaling.ToggleNeuralRendering(),
+						"A pending FSR profile must preserve compatible Foveated NR activation");
+					require(upscaling.IsNeuralRenderingRequested() == isVR,
+						"A compatible pending FSR profile must retain the VR-only Foveated route");
+					continue;
+				}
 				require(!upscaling.IsNeuralRenderingUpscalingAvailable() && !upscaling.ToggleNeuralRendering() &&
 							!upscaling.settings.neuralRenderingEnabled,
 					"Pending incompatible methods must block activation even while the old DLSS profile still renders");
@@ -1467,8 +1474,8 @@ int main()
 						"Controller toggles can always remove a saved incompatible request");
 					for (const auto mode : { ModeChoice::FullResolution, ModeChoice::Foveated }) {
 						require(upscaling.IsNeuralRenderingUpscalingAvailable(mode) ==
-									(mode == ModeChoice::FullResolution || method == Upscaling::UpscaleMethod::kDLSS),
-							"Full resolution supports ordinary upscaling; Foveated NR requires DLSS");
+									(mode == ModeChoice::FullResolution || method == Upscaling::UpscaleMethod::kDLSS || method == Upscaling::UpscaleMethod::kFSR),
+							"Full resolution supports ordinary upscaling; Foveated NR supports DLSS and FSR");
 					}
 					ImGui::Clear("Full resolution");
 					upscaling.DrawSelectionControls();
@@ -1605,7 +1612,7 @@ int main()
 					 Upscaling::UpscaleMethod::kFSR, Upscaling::UpscaleMethod::kDLSS }) {
 				for (const unsigned quality : { 0u, 1u, 3u, 6u }) {
 					for (const bool renderScale : { false, true }) {
-						const bool compatible = mode == 0 ||
+						const bool compatible = mode == 0 || (mode == 1 && method == Upscaling::UpscaleMethod::kFSR) ||
 						                        (method == Upscaling::UpscaleMethod::kDLSS && (mode == 1 || (quality != 0 && renderScale)));
 						require(upscaling.IsNeuralRenderingUpscalingProfileAllowed(method, quality, renderScale) == (!enabled || compatible),
 							"Enabled NR blocks incompatible profiles; disabled NR preserves all normal upscaling choices");
@@ -1619,7 +1626,8 @@ int main()
 			for (const char* method : { "None", "TAA", "AMD FSR", "NVIDIA DLSS" }) {
 				ImGui::Clear(method);
 				DrawVRFpsStabilizerUpscaleMethod(profile);
-				const bool blocked = enabled && mode != 0 && std::string_view(method) != "NVIDIA DLSS";
+				const bool blocked = enabled && mode != 0 && std::string_view(method) != "NVIDIA DLSS" &&
+				                     !(mode == 1 && std::string_view(method) == "AMD FSR");
 				require(ImGui::Disabled(method) == blocked, "Stabilizer disables each incompatible method choice");
 				if (blocked)
 					require(profile.upscaleMethod == Upscaling::UpscaleMethod::kDLSS, "A disabled profile method cannot mutate the saved selection");
@@ -1669,12 +1677,16 @@ int main()
 					"FSR Full resolution NR supports optional configured FOV");
 				require(upscaling.IsNeuralRenderingUpscalingProfileAllowed(Upscaling::UpscaleMethod::kFSR, 3, true),
 					"FSR profiles retain Full resolution NR with either FOV setting");
-				for (const char* mode : { "Foveated", "Renderscale NR before DLSS" }) {
-					ImGui::Clear(mode);
-					upscaling.DrawSelectionControls();
-					require(ImGui::Disabled(mode) && upscaling.settings.neuralRenderingMode == 0,
-						"FSR cannot select Foveated or Renderscale NR");
-				}
+				ImGui::Clear("Foveated");
+				upscaling.DrawSelectionControls();
+				require(ImGui::Disabled("Foveated") == !upscalingFov && upscaling.GetNeuralRenderingMode() ==
+																			(upscalingFov ? ModeChoice::Foveated : ModeChoice::FullResolution),
+					"FSR can select Foveated NR when its mask is configured");
+				const auto selectedMode = upscaling.GetNeuralRenderingMode();
+				ImGui::Clear("Renderscale NR before DLSS");
+				upscaling.DrawSelectionControls();
+				require(ImGui::Disabled("Renderscale NR before DLSS") && upscaling.GetNeuralRenderingMode() == selectedMode,
+					"FSR cannot select Renderscale NR with either FOV preference");
 			}
 		}
 	}

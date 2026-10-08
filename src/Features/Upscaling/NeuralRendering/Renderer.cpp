@@ -6,6 +6,7 @@
 #include "ColorPipeline.h"
 #include "ComputeStateGuard.h"
 #include "D3D12Interop.h"
+#include "ModelResolution.h"
 #include "PipelinePolicy.h"
 #include "Utils/D3D.h"
 
@@ -303,6 +304,8 @@ namespace NeuralRendering
 				left.generation == right.generation &&
 				left.insertionPoint == right.insertionPoint &&
 				left.featureUpscaling == right.featureUpscaling &&
+				left.modelResolutionPercent == right.modelResolutionPercent &&
+				left.renderingMode == right.renderingMode &&
 				left.providerBlending == right.providerBlending &&
 				left.reset == right.reset &&
 				left.synchronizedHistoryReset == right.synchronizedHistoryReset &&
@@ -673,7 +676,8 @@ namespace NeuralRendering
 			RendererApplyOutcome& a_outcome);
 		bool ApplySequentialStereoLocked(
 			const std::array<RendererApplyArgs, 2>& a_args,
-			RendererApplyOutcome& a_outcome);
+			RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
+		bool ApplyModelResolutionLocked(std::span<const RendererApplyArgs>, RendererApplyOutcome&, bool sequential = false);
 		bool ApplyBatchLocked(
 			std::span<const RendererApplyArgs> a_args,
 			RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
@@ -683,7 +687,7 @@ namespace NeuralRendering
 		void FinishMemoryRecoveryLocked(bool a_succeeded, RendererApplyOutcome& a_outcome);
 		std::optional<std::uint64_t> EstimateAdditionalMemoryLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>) const;
 		MemoryBudgetSample SampleMemoryBudgetLocked(ID3D11Device*, std::uint64_t a_nowMs, bool a_force);
-		bool AdmitMemoryLocked(std::span<const RendererApplyArgs> a_args, std::span<const ValidatedResources> a_resources);
+		bool AdmitMemoryLocked(std::span<const RendererApplyArgs> a_args, std::span<const ValidatedResources> a_resources, std::uint64_t a_additionalBytes = 0);
 		bool RetireSlotLocked(std::uint32_t a_slot, const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
 		bool ReclaimMemoryLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>, std::uint64_t a_nowMs, bool& a_reclaimed);
 		MemoryConservationPolicy memoryConservation_{};
@@ -885,6 +889,7 @@ namespace NeuralRendering
 		std::array<bool, 2> colorTransactionValid_{};
 		D3D12Interop interop_;
 		Color::Pipeline colorPipeline_;
+		ModelResolution modelResolution_;
 		std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
@@ -990,6 +995,8 @@ namespace NeuralRendering
 			return fail("feature-slot generation must be nonzero");
 		if (!IsValidInsertionPoint(a_args.insertionPoint))
 			return fail("Feature 18 insertion point is invalid");
+		if (!IsValidModelResolutionPercent(a_args.modelResolutionPercent))
+			return fail("NR model resolution must be an integer percentage from 33 to 100");
 		if (colorConfiguration_.Enabled() &&
 			(a_args.colorWidth != a_args.outputWidth || a_args.colorHeight != a_args.outputHeight))
 			return fail("NR colour processing currently requires matching colour/output dimensions; guides may be lower resolution");
@@ -1440,6 +1447,9 @@ namespace NeuralRendering
 			snapshot_.sourceWorldFrame = a_args.sourceWorldFrame;
 			snapshot_.generation = a_args.generation;
 			snapshot_.insertionPoint = a_args.insertionPoint;
+			snapshot_.modelResolutionPercent = a_args.modelResolutionPercent;
+			snapshot_.modelSourceWidth = snapshot_.modelWidth = a_args.colorWidth;
+			snapshot_.modelSourceHeight = snapshot_.modelHeight = a_args.colorHeight;
 			snapshot_.colorWidth = a_args.colorWidth;
 			snapshot_.colorHeight = a_args.colorHeight;
 			snapshot_.guideWidth = a_args.guideWidth;
@@ -1712,6 +1722,7 @@ namespace NeuralRendering
 
 		slots_ = {};
 		colorPipeline_.Reset();
+		modelResolution_.Reset();
 		device_.Reset();
 		context_.Reset();
 		if (a_resetShader) {
@@ -2076,8 +2087,12 @@ namespace NeuralRendering
 			for (const auto* texture : { &slot.colorWork.baseline, &slot.colorWork.result })
 				if (texture->resource)
 					appendBytes(slot.colorWork.format, slot.colorWork.capacityWidth, slot.colorWork.capacityHeight);
+			const auto modelBytes = modelResolution_.RetainedBytes(index);
+			bytesKnown &= modelBytes.has_value();
+			bytes += modelBytes.value_or(0);
 			if (!RetireSlotLocked(index))
 				return false;
+			modelResolution_.ReleaseSlot(index);
 			++memoryConservation_.retiredSlots;
 			memoryConservation_.reclaimedLogicalBytesKnown &= bytesKnown;
 			memoryConservation_.reclaimedLogicalBytes += bytes;
@@ -2113,7 +2128,7 @@ namespace NeuralRendering
 
 	bool Renderer::State::AdmitMemoryLocked(
 		std::span<const RendererApplyArgs> a_args,
-		std::span<const ValidatedResources> a_resources)
+		std::span<const ValidatedResources> a_resources, std::uint64_t a_additionalBytes)
 	{
 		const auto& first = a_args.front();
 		SetRequestTelemetryLocked(first);
@@ -2124,6 +2139,7 @@ namespace NeuralRendering
 		auto additionalBytes = EstimateAdditionalMemoryLocked(a_args, a_resources);
 		if (!additionalBytes)
 			return FailLocked(RendererStage::Validation, E_INVALIDARG, "NR allocation size could not be established", first.featureSlot, false);
+		*additionalBytes += a_additionalBytes;
 		auto nowMs = GetTickCount64();
 		auto sample = SampleMemoryBudgetLocked(first.device, nowMs,
 			*additionalBytes && memoryRecovery_.phase != MemoryRecoveryPhase::Waiting);
@@ -2142,6 +2158,7 @@ namespace NeuralRendering
 			additionalBytes = EstimateAdditionalMemoryLocked(a_args, a_resources);
 			if (!additionalBytes)
 				return FailLocked(RendererStage::Validation, E_INVALIDARG, "NR replacement size could not be established", first.featureSlot, false);
+			*additionalBytes += a_additionalBytes;
 			nowMs = GetTickCount64();
 			sample = SampleMemoryBudgetLocked(first.device, nowMs, true);
 		}
@@ -2473,6 +2490,7 @@ namespace NeuralRendering
 		const RendererApplyArgs& a_args,
 		RendererApplyOutcome& a_outcome)
 	{
+		modelResolution_.ReleaseUnscaledSlots(std::span(&a_args, 1));
 		return ApplyBatchLocked(std::span(&a_args, 1), a_outcome);
 	}
 
@@ -2480,17 +2498,22 @@ namespace NeuralRendering
 		const std::array<RendererApplyArgs, 2>& a_args,
 		RendererApplyOutcome& a_outcome)
 	{
+		modelResolution_.ReleaseUnscaledSlots(a_args);
 		return ApplyBatchLocked(a_args, a_outcome);
 	}
 
 	bool Renderer::State::ApplySequentialStereoLocked(
 		const std::array<RendererApplyArgs, 2>& a_args,
-		RendererApplyOutcome& a_outcome)
+		RendererApplyOutcome& a_outcome, bool a_memoryAdmitted)
 	{
 		a_outcome = {};
 		// Colour reconstruction commits both eyes against one immutable input snapshot.
+		if (a_args[0].modelResolutionPercent != kMaximumModelResolutionPercent || a_args[1].modelResolutionPercent != kMaximumModelResolutionPercent)
+			return ApplyModelResolutionLocked(a_args, a_outcome, true);
+		if (!a_memoryAdmitted)
+			modelResolution_.ReleaseUnscaledSlots(a_args);
 		if (colorConfiguration_.Enabled())
-			return ApplyBatchLocked(a_args, a_outcome);
+			return ApplyBatchLocked(a_args, a_outcome, a_memoryAdmitted);
 		SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		if (quarantined_ || failureLatched_) {
 			return ApplyBatchLocked(a_args, a_outcome);
@@ -2507,7 +2530,7 @@ namespace NeuralRendering
 				return ApplyBatchLocked(a_args, a_outcome);
 		}
 
-		if (!AdmitMemoryLocked(a_args, resources)) {
+		if (!a_memoryAdmitted && !AdmitMemoryLocked(a_args, resources)) {
 			a_outcome.memoryPressureBypass = !failureLatched_ && !quarantined_ && memoryRecovery_.phase != MemoryRecoveryPhase::Ready;
 			return false;
 		}
@@ -2587,9 +2610,92 @@ namespace NeuralRendering
 	}
 #endif
 
+	bool Renderer::State::ApplyModelResolutionLocked(std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome, bool sequential)
+	{
+		outcome = {};
+		if (args.empty() || args.size() > kEyeCount)
+			return false;
+		if (failureLatched_ || quarantined_)
+			return ApplyRegionBatchLocked(args, outcome);
+		const auto& first = args.front();
+		SetRequestTelemetryLocked(first);
+		const SKSE::stl::scope_exit restoreTelemetry([&] {
+			if constexpr (kDevelopmentDiagnostics) {
+				const auto matched = std::ranges::find_if(args, [&](const auto& value) { return value.featureSlot == snapshot_.featureSlot; });
+				const auto& observed = matched != args.end() ? *matched : first;
+				const auto extent = BuildModelResolutionExtent(observed.outputWidth, observed.outputHeight, observed.modelResolutionPercent);
+				snapshot_.modelResolutionPercent = observed.modelResolutionPercent;
+				snapshot_.modelSourceWidth = observed.outputWidth;
+				snapshot_.modelSourceHeight = observed.outputHeight;
+				snapshot_.modelWidth = extent.width;
+				snapshot_.modelHeight = extent.height;
+			}
+		});
+		if (args.size() == 2) {
+			if (auto violation = GetStereoPairContractViolation({ args[0], args[1] }); !violation.empty())
+				return FailLocked(RendererStage::Validation, E_INVALIDARG, std::move(violation), first.featureSlot, false);
+		}
+		std::array<ValidatedResources, kEyeCount> resources{};
+		std::array<RendererApplyArgs, kEyeCount> projected{};
+		for (std::size_t index = 0; index < args.size(); ++index) {
+			const auto& input = args[index];
+			auto& resource = resources[index];
+			if (auto failure = ValidateLocked(input, resource
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					,
+					false
+#endif
+				);
+				failure)
+				return FailLocked(RendererStage::Validation, failure.result, std::move(failure.detail), input.featureSlot, false);
+			auto& proxy = projected[index];
+			if (!ModelResolution::Project(input, proxy))
+				return FailLocked(RendererStage::Validation, E_INVALIDARG,
+					"model resolution requires uncompressed stateless C inputs with matching source grids", input.featureSlot, false);
+			resource.roi = proxy.roi.value_or(BuildRoiDescriptor(std::nullopt, proxy.computeSubrect,
+				{ proxy.outputWidth, proxy.outputHeight }, false));
+			resource.nativeLayout = BuildNativeEvaluationLayout(
+				{ proxy.colorWidth, proxy.colorHeight }, { proxy.guideWidth, proxy.guideHeight },
+				{ proxy.outputWidth, proxy.outputHeight }, { proxy.controlMaskWidth, proxy.controlMaskHeight },
+				proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), false);
+			FinalizeResourceKeysLocked(proxy, resource);
+		}
+		const auto additional = modelResolution_.AdditionalBytes(args);
+		if (!additional)
+			return FailLocked(RendererStage::Validation, E_INVALIDARG,
+				"NR model-resolution allocation size could not be established", first.featureSlot, false);
+		if (!AdmitMemoryLocked(std::span(projected.data(), args.size()), std::span(resources.data(), args.size()), *additional)) {
+			outcome.memoryPressureBypass = !failureLatched_ && !quarantined_ && memoryRecovery_.phase != MemoryRecoveryPhase::Ready;
+			return false;
+		}
+
+		ModelResolution::Batch batch;
+		HRESULT result = S_OK;
+		activeStage_ = RendererStage::ResourceCreation;
+		if (!modelResolution_.Prepare(args, batch, result))
+			return FailLocked(RendererStage::ResourceCreation, result,
+				"NR model-resolution input preparation failed; original render input retained", first.featureSlot, true);
+		const bool nativeSucceeded = sequential ? ApplySequentialStereoLocked(batch.arguments, outcome, true) :
+		                                          ApplyBatchLocked(std::span(batch.arguments.data(), batch.count), outcome, true);
+		if (!nativeSucceeded)
+			return false;
+		activeStage_ = RendererStage::OutputCommit;
+		if (!modelResolution_.Reconstruct(args, batch, result))
+			return FailLocked(RendererStage::OutputCommit, result,
+				"NR model-resolution reconstruction failed before pair commit", first.featureSlot, true);
+		modelResolution_.Commit(args, batch);
+		if (const auto removed = first.device->GetDeviceRemovedReason(); FAILED(removed))
+			return FailLocked(RendererStage::OutputCommit, removed,
+				"device removal followed NR model-resolution pair commit", first.featureSlot, true);
+		activeStage_ = RendererStage::Complete;
+		return true;
+	}
+
 	bool Renderer::State::ApplyBatchLocked(
 		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome, bool a_memoryAdmitted)
 	{
+		if (std::ranges::any_of(args, [](const auto& value) { return value.modelResolutionPercent != kMaximumModelResolutionPercent; }))
+			return ApplyModelResolutionLocked(args, outcome);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		requestedRegionCount_ = static_cast<std::uint32_t>(args.size());
 		if (args.empty() || args.size() > kEyeCount)

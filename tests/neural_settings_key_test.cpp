@@ -1,5 +1,5 @@
 #include "Features/Upscaling/FoveatedBlendPolicy.h"
-#include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 
 #include <cmath>
 #include <cstdint>
@@ -30,6 +30,22 @@ int main()
 		if (!value)
 			throw std::runtime_error("NR effective settings-key invariant");
 	};
+	for (bool enabled : { false, true }) {
+		for (auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::Foveated,
+				 NeuralRendering::RenderingMode::ReducedResolution }) {
+			Upscaling::Settings baseline{};
+			baseline.neuralRenderingEnabled = enabled;
+			baseline.neuralRenderingMode = static_cast<uint>(mode);
+			baseline.neuralRenderingModelResolutionPercent = 100;
+			const auto key = BuildNeuralRenderingSettingsKey(baseline);
+			for (uint percent : { 33u, 67u, 99u }) {
+				auto changed = baseline;
+				changed.neuralRenderingModelResolutionPercent = percent;
+				require((BuildNeuralRenderingSettingsKey(changed) != key) ==
+						(enabled && mode == NeuralRendering::RenderingMode::ReducedResolution));
+			}
+		}
+	}
 	Upscaling::Settings foveated{};
 	foveated.neuralRenderingEnabled = true;
 	foveated.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);

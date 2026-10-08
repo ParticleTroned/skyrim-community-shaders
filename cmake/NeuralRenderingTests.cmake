@@ -1,3 +1,5 @@
+add_controller_test(nr_model_resolution_policy_test NRModelResolutionPolicy tests/nr_model_resolution_policy_test.cpp)
+add_d3d_shader_test(nr_model_resolution_shader_test NRModelResolutionShadersWARP tests/nr_model_resolution_shader_test.cpp)
 add_controller_test(neural_memory_recovery_test NeuralMemoryRecovery tests/neural_memory_recovery_test.cpp)
 add_test(NAME NeuralMemoryRecoveryContract COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_memory_recovery_contract_test.py")

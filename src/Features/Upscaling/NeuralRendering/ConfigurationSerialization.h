@@ -1,12 +1,32 @@
 #pragma once
 
 #include "DevelopmentDiagnostics.h"
+#include "ModelResolutionPolicy.h"
 
+#include <cstdint>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <stdexcept>
 
 namespace NeuralRendering
 {
+	/** Rejects fractional, wrapped, or out-of-range model-resolution requests. */
+	[[nodiscard]] inline std::optional<std::uint32_t> ParseModelResolutionPercent(const nlohmann::json& value)
+	{
+		if (!value.is_number_integer())
+			return std::nullopt;
+		if (value.is_number_unsigned()) {
+			const auto percent = value.get<std::uint64_t>();
+			if (percent < kMinimumModelResolutionPercent || percent > kMaximumModelResolutionPercent)
+				return std::nullopt;
+			return static_cast<std::uint32_t>(percent);
+		}
+		const auto percent = value.get<std::int64_t>();
+		if (percent < kMinimumModelResolutionPercent || percent > kMaximumModelResolutionPercent)
+			return std::nullopt;
+		return static_cast<std::uint32_t>(percent);
+	}
+
 	/** Selects feature-owned fields from an ordinary or legacy upscaling profile. */
 	inline nlohmann::json RenderingSettings(const nlohmann::json& settings)
 	{

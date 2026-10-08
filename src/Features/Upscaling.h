@@ -474,6 +474,7 @@ public:
 			NeuralRendering::ResolveInsertionPoint(NeuralRendering::RenderingMode::ReducedResolution));
 		bool neuralRenderingBatchedStereo = true;
 		bool neuralRenderingDirectCommit = true;
+		uint neuralRenderingModelResolutionPercent = 100;
 		uint neuralRenderingPreset = 3;
 		float neuralRenderingIntensity = 0.8f;
 		float neuralRenderingLocalTone = 0.75f;

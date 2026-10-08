@@ -107,7 +107,7 @@ class Contracts(unittest.TestCase):
         self.assertEqual(source.count("state_->CaptureColorConfiguration("), 3)
         self.assertLess(source.index("colorPipeline_.Prepare("), source.index("Runtime::Instance().Execute("))
         self.assertLess(source.index("colorPipeline_.Reconstruct("), source.index("colorPipeline_.Commit("))
-        self.assertRegex(source, r"if \(colorConfiguration_\.Enabled\(\)\)\s*return ApplyBatchLocked\(a_args, a_outcome\);")
+        self.assertRegex(source, r"if \(colorConfiguration_\.Enabled\(\)\)\s*return ApplyBatchLocked\(a_args, a_outcome, a_memoryAdmitted\);")
         self.assertIn("colorInputEpoch = colorConfiguration_.inputEpoch", source)
         self.assertIn("historyValid = !colorConfiguration_.experiments.transportBypass", source)
         self.assertIn("context.timingPending = false", (NR / "D3D12Interop.cpp").read_text())
@@ -153,7 +153,7 @@ class Contracts(unittest.TestCase):
         self.assertIn("&NeuralRenderingFeature::Instance()", source)
         self.assertTrue((ROOT / "features/Neural Rendering/CORE").exists())
         ini = ROOT / "features/Neural Rendering/Shaders/Features/NeuralRendering.ini"
-        self.assertIn("Version = 1-5-0", ini.read_text())
+        self.assertIn("Version = 1-6-0", ini.read_text())
         ui = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
         self.assertIn('"communityshaders.nr_color"', ui)
         save = ui[ui.index("void NeuralRenderingFeature::SaveSettings"):ui.index("void NeuralRenderingFeature::RestoreDefaultSettings")]

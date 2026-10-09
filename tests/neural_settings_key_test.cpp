@@ -37,16 +37,45 @@ int main()
 			baseline.neuralRenderingEnabled = enabled;
 			baseline.neuralRenderingMode = static_cast<uint>(mode);
 			baseline.neuralRenderingModelResolutionPercent = 100;
+			baseline.neuralRenderingCentralAreaPercent = 100;
+			baseline.neuralRenderingCentralFeatherPixels = 64;
 			const auto key = BuildNeuralRenderingSettingsKey(baseline);
-			for (uint percent : { 33u, 67u, 99u }) {
+			auto central = baseline;
+			central.neuralRenderingCentralAreaPercent = 50;
+			require((BuildNeuralRenderingSettingsKey(central) != key) == enabled);
+			auto feather = baseline;
+			feather.neuralRenderingCentralFeatherPixels = 256;
+			require(BuildNeuralRenderingSettingsKey(feather) == key);
+			feather.neuralRenderingCentralAreaPercent = 50;
+			require((BuildNeuralRenderingSettingsKey(feather) != BuildNeuralRenderingSettingsKey(central)) == enabled);
+			for (uint percent : { 30u, 33u, 67u, 99u }) {
 				auto changed = baseline;
 				changed.neuralRenderingModelResolutionPercent = percent;
 				require((BuildNeuralRenderingSettingsKey(changed) != key) ==
-						(enabled && mode == NeuralRendering::RenderingMode::ReducedResolution));
+						enabled);
 			}
 		}
 	}
+	{
+		Upscaling::Settings central{};
+		central.neuralRenderingEnabled = true;
+		central.neuralRenderingCentralAreaPercent = 50;
+		central.neuralRenderingCentralFeatherPixels = 64;
+		central.neuralRenderingModelResolutionPercent = 100;
+		central.foveatedVendorDispatch = false;
+		central.neuralRenderingFovOnly = false;
+		central.neuralRenderingRenderscaleFov = false;
+		globals::game::isVR = true;
+		const auto key = BuildNeuralRenderingSettingsKey(central);
+		for (auto member : { &Upscaling::Settings::foveatedCenterArea, &Upscaling::Settings::foveatedCenterHorizontalScale,
+				 &Upscaling::Settings::foveatedLeftEyeMaskOffsetX, &Upscaling::Settings::foveatedRightEyeMaskOffsetY }) {
+			auto moved = central;
+			moved.*member += 0.05f;
+			require(BuildNeuralRenderingSettingsKey(moved) != key);
+		}
+	}
 	Upscaling::Settings foveated{};
+	foveated.neuralRenderingCentralAreaPercent = 100;
 	foveated.neuralRenderingEnabled = true;
 	foveated.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
 	const auto foveatedKey = BuildNeuralRenderingSettingsKey(foveated);
@@ -136,6 +165,8 @@ int main()
 	globals::game::isVR = true;
 	for (const auto mode : { NeuralRendering::RenderingMode::FullResolution, NeuralRendering::RenderingMode::ReducedResolution }) {
 		Upscaling::Settings baseline{};
+		baseline.neuralRenderingCentralAreaPercent = 100;
+		baseline.neuralRenderingCentralFeatherPixels = 64;
 		baseline.neuralRenderingEnabled = true;
 		baseline.neuralRenderingMode = static_cast<uint>(mode);
 		baseline.neuralRenderingFovOnly = true;

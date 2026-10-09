@@ -53,7 +53,7 @@ file(WRITE "${OUTPUT_DIRECTORY}/settings_lighting_pages_under_test.h" "${prefixe
 include("${CMAKE_CURRENT_LIST_DIR}/extract_source_region.cmake")
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" source)
 extract_between("${source}"
-    "\tvoid DrawNeuralModelResolutionSettings("
+    "\tvoid DrawNeuralIntegerSetting("
     "\tvoid DrawNeuralRenderingSharedImageSettings("
     "settings_model_resolution_under_test.h")
 

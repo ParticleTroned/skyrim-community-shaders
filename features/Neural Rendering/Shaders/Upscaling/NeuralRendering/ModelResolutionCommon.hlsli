@@ -9,4 +9,12 @@ cbuffer ModelResolutionConstants : register(b0)
 	uint HasMask;
 	uint OutputFormat;
 	float2 MotionVectorScale;
+	float2 FullEyeSize;
+	float2 CropOrigin;
+	float CentralScale;
+	float CentralHorizontalScale;
+	float CentralFeather;
+	uint CentralActive;
+	float2 CentralOffset;
+	float2 FinalOutputSize;
 };

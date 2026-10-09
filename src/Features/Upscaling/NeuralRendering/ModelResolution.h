@@ -31,9 +31,14 @@ namespace NeuralRendering
 			std::size_t count = 0;
 		};
 
+		/** One reconstruction boundary handles either independent model scale or area restriction. */
+		static bool Required(const RendererApplyArgs& args) noexcept
+		{
+			return args.modelResolutionPercent != kMaximumModelResolutionPercent || args.centralArea.Active() || !args.centralArea.Valid();
+		}
 		/** Project validated source geometry without allocating or dispatching. */
 		static bool Project(const RendererApplyArgs&, RendererApplyArgs&) noexcept;
-		/** Shared preparation preserves only the raw, unmasked stateless contract. */
+		/** Shared preparation preserves the raw, unmasked input contract. */
 		static bool CanUseSharedTargets(std::span<const RendererApplyArgs>, bool colorProcessing, bool compactInputs) noexcept;
 		/** Count additional private textures before memory admission; shared aliases are excluded. */
 		std::optional<std::uint64_t> AdditionalBytes(std::span<const RendererApplyArgs>, bool sharedTargets = false) const;

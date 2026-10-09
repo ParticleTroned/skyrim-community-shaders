@@ -6,6 +6,7 @@
 
 namespace NeuralRendering
 {
+	inline constexpr std::uint32_t kMaximumNeuralImageDimension = 16384;
 	struct ComputeSubrect
 	{
 		std::uint32_t baseX = 0;
@@ -35,6 +36,15 @@ namespace NeuralRendering
 
 		bool operator==(const ComputeSubrect&) const = default;
 	};
+
+	/** Intersect validated rectangles without allowing unsigned edge wrap. */
+	[[nodiscard]] inline constexpr ComputeSubrect IntersectComputeSubrect(const ComputeSubrect& a, const ComputeSubrect& b) noexcept
+	{
+		const auto x = std::max(a.baseX, b.baseX), y = std::max(a.baseY, b.baseY);
+		const auto right = std::min(std::uint64_t(a.baseX) + a.width, std::uint64_t(b.baseX) + b.width);
+		const auto bottom = std::min(std::uint64_t(a.baseY) + a.height, std::uint64_t(b.baseY) + b.height);
+		return right > x && bottom > y ? ComputeSubrect{ x, y, static_cast<std::uint32_t>(right - x), static_cast<std::uint32_t>(bottom - y) } : ComputeSubrect{};
+	}
 
 	[[nodiscard]] inline ComputeSubrect BuildCenteredComputeSubrect(
 		std::uint32_t a_width,

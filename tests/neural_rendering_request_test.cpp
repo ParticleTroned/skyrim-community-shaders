@@ -1,6 +1,7 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include <tuple>
 
 #include <algorithm>
 #include <array>
@@ -26,13 +27,30 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering request validation invariant");
 	};
-	for (const auto& value : { json(33), json(75u), json(100) }) {
+	for (const auto& [field, minimum, maximum, member] : {
+			 std::tuple{ "centralAreaPercent", 25u, 100u, &NeuralRenderingConfigurationRequest::centralAreaPercent },
+			 std::tuple{ "centralFeatherPixels", 0u, 256u, &NeuralRenderingConfigurationRequest::centralFeatherPixels } }) {
+		for (const auto value : { minimum, (minimum + maximum) / 2, maximum }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error));
+			require(request.HasAnyControl() && request.*member == value);
+		}
+		for (const auto& value : { json(-1), json(maximum + 1), json(50.0), json(true), json("50"), json(nullptr),
+				 json::array(), json::object(), json(std::numeric_limits<std::uint64_t>::max()) }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error));
+			require(!(request.*member).has_value() && error.at("field") == field);
+		}
+	}
+	for (const auto& value : { json(30), json(33), json(75u), json(100) }) {
 		NeuralRenderingConfigurationRequest request;
 		json error;
 		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "modelResolutionPercent", value } }, request, error));
 		require(request.HasAnyControl() && request.modelResolutionPercent == value.get<std::uint32_t>());
 	}
-	for (const auto& value : { json(32), json(101), json(-1), json(75.0), json(75.5), json(true), json("75"),
+	for (const auto& value : { json(29), json(101), json(-1), json(75.0), json(75.5), json(true), json("75"),
 			 json(nullptr), json::array(), json::object(), json(std::numeric_limits<std::uint64_t>::max()),
 			 json(std::numeric_limits<std::int64_t>::min()), json(std::numeric_limits<std::int64_t>::max()) }) {
 		NeuralRenderingConfigurationRequest request;

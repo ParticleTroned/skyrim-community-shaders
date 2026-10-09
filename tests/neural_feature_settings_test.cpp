@@ -85,8 +85,9 @@ struct IndependentSettings
 	bool neuralCharacterCurrentContextEnabled = false;
 	bool neuralCharacterGpuMaskSupportEnabled = false;
 	unsigned neuralRenderingModelResolutionPercent = 100;
+	unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
 
 int main()
 {
@@ -95,11 +96,15 @@ int main()
 		if (!value)
 			throw std::runtime_error("Neural Rendering feature settings invariant");
 	};
-	for (std::uint32_t percent : { 33u, 50u, 75u, 100u }) {
+	const auto defaults = NeuralRendering::RenderingSettings(Json(IndependentSettings{}));
+	require(defaults.at("neuralRenderingCentralAreaPercent") == 100 && defaults.at("neuralRenderingCentralFeatherPixels") == 64);
+	const auto savedArea = NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingCentralAreaPercent", 50 }, { "neuralRenderingCentralFeatherPixels", 256 } });
+	require(savedArea.at("neuralRenderingCentralAreaPercent") == 50 && savedArea.at("neuralRenderingCentralFeatherPixels") == 256);
+	for (std::uint32_t percent : { 30u, 33u, 50u, 75u, 100u }) {
 		for (const auto& value : { Json(percent), Json(std::int64_t(percent)) })
 			require(NeuralRendering::ParseModelResolutionPercent(value) == percent);
 	}
-	for (const auto& value : { Json(0), Json(32), Json(101), Json(-1), Json(75.0), Json(75.5), Json(true),
+	for (const auto& value : { Json(0), Json(29), Json(101), Json(-1), Json(75.0), Json(75.5), Json(true),
 			 Json("75"), Json(nullptr), Json::array(), Json::object(), Json(std::numeric_limits<std::uint64_t>::max()),
 			 Json(std::numeric_limits<std::int64_t>::min()), Json(std::numeric_limits<std::int64_t>::max()),
 			 Json(std::numeric_limits<double>::infinity()), Json(std::numeric_limits<double>::quiet_NaN()) })

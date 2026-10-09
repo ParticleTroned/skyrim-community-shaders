@@ -1,6 +1,7 @@
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/Renderer.h"
+#include "Globals.h"
 
 void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& args,
 	[[maybe_unused]] const UpscalingDLSS::ViewportCrop& dlssCrop, [[maybe_unused]] const std::array<uint32_t, 2>& colorOrigin,
@@ -9,6 +10,16 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 	args.renderingMode = GetNeuralRenderingMode();
 	args.modelResolutionPercent = NeuralRendering::EffectiveModelResolutionPercent(
 		*args.renderingMode, settings.neuralRenderingModelResolutionPercent);
+	args.centralArea = {
+		settings.neuralRenderingCentralAreaPercent, settings.neuralRenderingCentralFeatherPixels,
+		globals::game::isVR ? FoveatedCommon::ClampCenterHorizontalScale(settings.foveatedCenterHorizontalScale) : 1.0f,
+		{}, dlssCrop.fullOutput
+	};
+	if (globals::game::isVR) {
+		const auto offsets = GetResolvedFoveatedMaskCenterOffsets(false);
+		const auto& offset = offsets[args.featureSlot % NeuralRendering::kEyeCount];
+		args.centralArea.offset = { offset.x, offset.y };
+	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	SetNeuralCaptureExecutionContext(args, dlssCrop, colorOrigin, guideOrigin);
 #endif
@@ -18,7 +29,6 @@ void Upscaling::SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& ar
 #	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidence.h"
 #	include "Features/Upscaling/NeuralRendering/CharacterPreparationEvidenceJson.h"
 #	include "Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h"
-#	include "Globals.h"
 #	include "State.h"
 #	include "Utils/ContentHash.h"
 #	include <algorithm>

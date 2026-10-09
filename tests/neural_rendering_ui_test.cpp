@@ -92,6 +92,7 @@ namespace globals
 				bool neuralCharacterCreaturesEnabled = true, neuralCharacterAnimalsEnabled = true, neuralCharacterOtherActorsEnabled = true;
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
+				unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = 0;
 				float neuralRenderingIntensity = 1.0f, neuralRenderingLocalTone = 1.0f;
 				float neuralRenderingLocalStructure = 1.0f, neuralRenderingSkinStructure = 1.0f;
@@ -394,7 +395,8 @@ namespace ImGui
 	}
 	bool SliderInt(const char* label, int* value, int minimum, int maximum, const char*, int flags)
 	{
-		modelSliderPresentedValue = *value;
+		if (std::string_view(label) == "NR Model Resolution")
+			modelSliderPresentedValue = *value;
 		if (!Button(label))
 			return false;
 		*value = (flags & ImGuiSliderFlags_AlwaysClamp) ? std::clamp(int(sliderEditValue), minimum, maximum) : int(sliderEditValue);
@@ -635,12 +637,28 @@ int main()
 		DrawNeuralModelResolutionSettings(settings);
 		require(ImGui::modelSliderPresentedValue == 90 && settings.neuralRenderingModelResolutionPercent == 90,
 			"A hidden slider must discard stale pending input before showing updated settings");
-		for (const auto [requested, expected] : { std::pair{ -1.0f, 33u }, std::pair{ 101.0f, 100u } }) {
+		for (const auto [requested, expected] : { std::pair{ -1.0f, 30u }, std::pair{ 101.0f, 100u } }) {
 			ImGui::Clear("NR Model Resolution");
 			ImGui::sliderEditValue = requested;
 			ImGui::itemDeactivatedAfterEdit = true;
 			DrawNeuralModelResolutionSettings(settings);
 			require(settings.neuralRenderingModelResolutionPercent == expected, "Typed scale must remain inside safe model limits");
+		}
+	}
+	{
+		Upscaling::Settings settings;
+		require(settings.neuralRenderingCentralAreaPercent == 100 && settings.neuralRenderingCentralFeatherPixels == 64,
+			"Central coverage and feather defaults changed");
+		for (const auto& [label, minimum, maximum, member] : {
+				 std::tuple{ "NR central area", 25, 100, &Upscaling::Settings::neuralRenderingCentralAreaPercent },
+				 std::tuple{ "NR central feather", 0, 256, &Upscaling::Settings::neuralRenderingCentralFeatherPixels } }) {
+			for (int requested : { -1, (minimum + maximum) / 2, maximum + 1 }) {
+				ImGui::Clear(label);
+				ImGui::sliderEditValue = float(requested);
+				ImGui::itemDeactivatedAfterEdit = true;
+				DrawNeuralCentralAreaSettings(settings);
+				require(settings.*member == unsigned(std::clamp(requested, minimum, maximum)), "Central slider accepted an unsafe typed value");
+			}
 		}
 	}
 	ImGui::Clear();
@@ -703,9 +721,11 @@ int main()
 			for (const char* label : { "Full resolution", "Foveated", "Render scale", "Preset",
 					 "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style" })
 				require(ImGui::Seen(label), "The full interface exposes modes, shared image settings and actor selection");
-			require(ImGui::Seen("NR Model Resolution") == (mode == 2), "Independent model scale belongs only to mode C");
-			require(ImGui::Seen("Restrict to FOV mask") == (mode == 0) &&
-						ImGui::Seen("Use FOV mask for Render scale NR") == (mode == 2),
+			require(ImGui::Seen("NR Model Resolution") && ImGui::Seen("NR central area") && ImGui::Seen("NR central feather"),
+				"All NR modes expose independent model scale, central area and feather controls");
+			require(!ImGui::Seen("FOV edge feather"), "The old route-specific NR feather must not duplicate the central feather");
+			require(ImGui::Seen("Clip to headset mask") == (mode == 0) &&
+						ImGui::Seen("Clip Render scale to headset mask") == (mode == 2),
 				"Expose the FOV toggle for the selected rendering mode");
 			for (const char* label : { "Entire scene", "Humans", "Armour / clothing", "Face Strength", "Weapon Strength" })
 				require(ImGui::Seen(label), "Category and compositor tuning must remain accessible");
@@ -1086,7 +1106,7 @@ int main()
 								require(upscaling.settings.neuralRenderingMode == 0, "Unavailable Foveated mode must allow return to Full resolution");
 							}
 							if (fovOnly && upscaling.GetNeuralRenderingMode() == NeuralRendering::RenderingMode::FullResolution) {
-								ImGui::Clear("Restrict to FOV mask");
+								ImGui::Clear("Clip to headset mask");
 								upscaling.DrawSelectionControls();
 								require(!upscaling.settings.neuralRenderingFovOnly, "Selected FOV restriction must always be removable");
 							}
@@ -1115,11 +1135,11 @@ int main()
 	upscaling.DrawSelectionControls();
 	require(upscaling.GetNeuralRenderingMode() == ModeChoice::ReducedResolution && upscaling.IsNeuralRenderingRequested(),
 		"VR renderscale selection defaults to the unrestricted route");
-	require(ImGui::Seen("Use FOV mask for Render scale NR") && !upscaling.settings.neuralRenderingRenderscaleFov,
+	require(ImGui::Seen("Clip Render scale to headset mask") && !upscaling.settings.neuralRenderingRenderscaleFov,
 		"Renderscale must expose an independent, default-off FOV switch");
 	upscaling.settings.neuralRenderingFovOnly = true;
 	for (const bool masked : { true, false, true }) {
-		ImGui::Clear("Use FOV mask for Render scale NR");
+		ImGui::Clear("Clip Render scale to headset mask");
 		upscaling.DrawSelectionControls();
 		require(upscaling.settings.neuralRenderingRenderscaleFov == masked && upscaling.settings.neuralRenderingFovOnly,
 			"Repeated renderscale comparisons must preserve the Full resolution restriction");
@@ -1129,16 +1149,16 @@ int main()
 	upscaling.DrawSelectionControls();
 	require(!upscaling.IsNeuralRenderingRequested() && !ImGui::Disabled("Enabled"),
 		"An enabled renderscale FOV restriction must wait for configured FOV without locking its master");
-	ImGui::Clear("Use FOV mask for Render scale NR");
+	ImGui::Clear("Clip Render scale to headset mask");
 	upscaling.DrawSelectionControls();
 	require(!upscaling.settings.neuralRenderingRenderscaleFov && upscaling.IsNeuralRenderingRequested() &&
 				upscaling.IsFoveatedVendorDispatchEnabled(Upscaling::UpscaleMethod::kDLSS),
 		"Removing an unavailable FOV restriction must restore the full-eye NR dispatch adapter");
 	require(!upscaling.IsActiveUpscalingFoveatedProfileAvailable(),
 		"Full-eye NR dispatch must not enable shared shader foveation while global FOV is off");
-	ImGui::Clear("Use FOV mask for Render scale NR");
+	ImGui::Clear("Clip Render scale to headset mask");
 	upscaling.DrawSelectionControls();
-	require(ImGui::Disabled("Use FOV mask for Render scale NR") && !upscaling.settings.neuralRenderingRenderscaleFov,
+	require(ImGui::Disabled("Clip Render scale to headset mask") && !upscaling.settings.neuralRenderingRenderscaleFov,
 		"Missing configured FOV must prevent newly enabling the restriction");
 	ImGui::Clear("Full resolution");
 	upscaling.DrawSelectionControls();
@@ -1161,10 +1181,10 @@ int main()
 		ImGui::Clear("Foveated");
 		upscaling.DrawSelectionControls();
 		require(ImGui::Disabled("Foveated") && upscaling.GetNeuralRenderingMode() == mode, "Flat modes cannot select the VR Foveated route");
-		ImGui::Clear("Restrict to FOV mask");
+		ImGui::Clear("Clip to headset mask");
 		upscaling.DrawSelectionControls();
-		require((mode == ModeChoice::ReducedResolution ? !ImGui::Seen("Use FOV mask for Render scale NR") :
-														 ImGui::Disabled("Restrict to FOV mask")) &&
+		require((mode == ModeChoice::ReducedResolution ? !ImGui::Seen("Clip Render scale to headset mask") :
+														 ImGui::Disabled("Clip to headset mask")) &&
 					!upscaling.settings.neuralRenderingFovOnly,
 			"Flat modes cannot newly enable VR FOV restriction");
 	}
@@ -1437,7 +1457,7 @@ int main()
 				for (const auto* category : { "Faces", "Skin", "Hair" })
 					require(ImGui::Seen(category) && !ImGui::Disabled(category), "Pending FOV must retain editable character categories");
 				if (mode == ModeChoice::FullResolution)
-					require(!ImGui::Disabled("Restrict to FOV mask"), "Configured FOV restriction remains editable in main/loading menus");
+					require(!ImGui::Disabled("Clip to headset mask"), "Configured FOV restriction remains editable in main/loading menus");
 				registry.configuration = {};
 				registry.configuration.settings.mode = Mode::PreserveSource;
 				registry.configuration.settings.lightingPreservation = 0.25f;
@@ -1791,10 +1811,10 @@ int main()
 																			(upscalingFov ? ModeChoice::Foveated : ModeChoice::FullResolution),
 					"FSR can select Foveated NR when its mask is configured");
 				require(!ImGui::Seen("FOV edge feather"),
-					"FSR final-scene NR must not expose the unused independent NR feather");
+					"The old normalized NR feather is replaced by the shared pixel feather");
 				if (upscalingFov) {
-					require(ImGui::Seen("The mask and edge feather follow the shared settings in VR > FOV."),
-						"FSR Foveated NR directs feather edits to the shared FOV page");
+					require(ImGui::Seen("NR central area") && ImGui::Seen("NR central feather"),
+						"FSR Foveated NR exposes the independent central-area controls");
 					require(NeuralRenderingFeature{}.GetSettingsFooterText().find("DLSS or FSR") != std::string_view::npos,
 						"The Foveated footer names both supported upscalers");
 				}
@@ -1811,8 +1831,8 @@ int main()
 	upscaling.settings.neuralRenderingMode = static_cast<unsigned>(ModeChoice::Foveated);
 	ImGui::Clear();
 	upscaling.DrawSelectionControls();
-	require(ImGui::Seen("FOV edge feather") && !ImGui::Disabled("FOV edge feather"),
-		"DLSS Foveated NR retains its editable NR edge feather");
+	require(ImGui::Seen("NR central feather") && !ImGui::Disabled("NR central feather") && !ImGui::Seen("FOV edge feather"),
+		"DLSS Foveated NR exposes one independent pixel feather");
 	upscaling.settings.neuralRenderingMode = static_cast<unsigned>(ModeChoice::ReducedResolution);
 	require(NeuralRenderingFeature{}.GetSettingsFooterText().find("scaled DLSS") != std::string_view::npos,
 		"Render scale NR continues to describe its DLSS requirement");

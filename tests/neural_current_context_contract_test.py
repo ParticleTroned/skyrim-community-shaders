@@ -30,6 +30,20 @@ class CurrentContextContract(unittest.TestCase):
         configure = next(x for x in inputs["allOf"] if x.get("if", {}).get("properties", {}).get("action", {}).get("const") == "nr_configure")
         self.assertIn("experimentalCurrentContext", configure["then"]["propertyNames"]["enum"])
         self.assertIn("default false", schema["description"])
+        for field, minimum, maximum, default in (
+            ("modelResolutionPercent", 30, 100, 100),
+            ("centralAreaPercent", 25, 100, 100),
+            ("centralFeatherPixels", 0, 256, 64),
+        ):
+            control = inputs["properties"][field]
+            self.assertEqual((control["type"], control["minimum"], control["maximum"], control["default"]),
+                             ("integer", minimum, maximum, default))
+            self.assertIn(field, configure["then"]["propertyNames"]["enum"])
+        model = schema["outputSchema"]["properties"]["neuralRendering"]["properties"]["modelResolution"]["properties"]
+        last_request = model["lastRequest"]["properties"]
+        for percent in (model["requestedPercent"], model["configuredPercent"],
+                        last_request["percent"], last_request["committedPercent"]):
+            self.assertEqual((percent["minimum"], percent["maximum"]), (30, 100))
         output = schema["outputSchema"]["properties"]["neuralRendering"]["properties"]["characterRendering"]
         self.assertEqual(output["properties"]["settings"]["properties"]["experimentalCurrentContext"]["type"], "boolean")
         sample = output["properties"]["profiling"]["properties"]["lastFeature18GpuSample"]["properties"]

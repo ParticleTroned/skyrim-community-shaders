@@ -219,6 +219,7 @@ struct Upscaling
 	struct Settings
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
+		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 	};
 };
 #include "settings_model_resolution_under_test.h"
@@ -873,69 +874,83 @@ int main()
 		});
 		frame([&] { float vector[3]{1,2,3}; Util::Widgets::SliderFloat3("Position", vector, 0, 5); });
 
-		Upscaling::Settings modelSettings;
-		auto drawModelResolution = [&] {
-			ImGui::SetNextItemWidth(300);
-			DrawNeuralModelResolutionSettings(modelSettings);
+		struct NeuralSliderCase
+		{
+			const char* label;
+			uint32_t Upscaling::Settings::* member;
+			void (*draw)(Upscaling::Settings&);
+			uint32_t minimum, maximum;
 		};
-		globals::features::vr.headset = false;
-		frame(drawModelResolution);
-		frame(drawModelResolution);
-		auto modelBounds = Util::controls.at("Adjust NR Model Resolution. Double-click the value to enter a number.");
-		const ImVec2 modelNumber(modelBounds.Min.x + 290, modelBounds.Min.y + ImGui::GetFrameHeight() * .5f);
-		io.AddMousePosEvent(modelBounds.Min.x + 70, modelNumber.y);
-		frame(drawModelResolution);
-		io.AddMouseButtonEvent(0, true);
-		frame(drawModelResolution);
-		io.AddMousePosEvent(modelBounds.Min.x + 140, modelNumber.y);
-		frame(drawModelResolution);
-		require(modelSettings.neuralRenderingModelResolutionPercent == 100, "model resolution must not resize while dragging");
-		io.AddMouseButtonEvent(0, false);
-		frame(drawModelResolution);
-		const auto draggedResolution = modelSettings.neuralRenderingModelResolutionPercent;
-		require(draggedResolution > 33 && draggedResolution < 100, "model resolution applies after releasing the slider");
+		for (const auto& test : {
+				 NeuralSliderCase{ "NR Model Resolution", &Upscaling::Settings::neuralRenderingModelResolutionPercent, DrawNeuralModelResolutionSettings, 30, 100 },
+				 NeuralSliderCase{ "NR central area", &Upscaling::Settings::neuralRenderingCentralAreaPercent, DrawNeuralCentralAreaSettings, 25, 100 },
+				 NeuralSliderCase{ "NR central feather", &Upscaling::Settings::neuralRenderingCentralFeatherPixels, DrawNeuralCentralAreaSettings, 0, 256 } }) {
+			Upscaling::Settings neuralSettings;
+			const auto initialValue = neuralSettings.*test.member;
+			auto drawNeuralSlider = [&] {
+				ImGui::PushItemWidth(300);
+				const SKSE::stl::scope_exit restoreWidth([] { ImGui::PopItemWidth(); });
+				test.draw(neuralSettings);
+			};
+			globals::features::vr.headset = false;
+			frame(drawNeuralSlider);
+			frame(drawNeuralSlider);
+			auto sliderBounds = Util::controls.at(std::format("Adjust {}. Double-click the value to enter a number.", test.label));
+			const ImVec2 sliderNumber(sliderBounds.Min.x + 290, sliderBounds.Min.y + ImGui::GetFrameHeight() * .5f);
+			io.AddMousePosEvent(sliderBounds.Min.x + 70, sliderNumber.y);
+			frame(drawNeuralSlider);
+			io.AddMouseButtonEvent(0, true);
+			frame(drawNeuralSlider);
+			io.AddMousePosEvent(sliderBounds.Min.x + 140, sliderNumber.y);
+			frame(drawNeuralSlider);
+			require(neuralSettings.*test.member == initialValue, "NR slider must not resize while dragging");
+			io.AddMouseButtonEvent(0, false);
+			frame(drawNeuralSlider);
+			const auto draggedValue = neuralSettings.*test.member;
+			require(draggedValue > test.minimum && draggedValue < test.maximum, "NR slider applies after releasing the slider");
 
-		globals::features::vr.headset = true;
-		for (int i = 0; i < 25; ++i) frame(drawModelResolution);
-		click(modelNumber, drawModelResolution);
-		click(modelNumber, drawModelResolution);
-		frame(drawModelResolution);
-		require(!GImGui->OpenPopupStack.empty(), "model resolution supports the headset keypad");
-		click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), drawModelResolution);
-		auto zeroKey = Util::controls.at("Add this digit.");
-		// The keypad's 7 is three rows above and one column left of 0.
-		const ImVec2 sevenKey(zeroKey.GetCenter().x - zeroKey.GetWidth() - ImGui::GetStyle().ItemSpacing.x,
-			zeroKey.GetCenter().y - 3 * (zeroKey.GetHeight() + ImGui::GetStyle().ItemSpacing.y));
-		click(sevenKey, drawModelResolution);
-		click(Util::controls.at("Add this digit.").GetCenter(), drawModelResolution);
-		require(modelSettings.neuralRenderingModelResolutionPercent == draggedResolution, "model resolution keypad stages a draft without resizing");
-		frame(drawModelResolution);
-		frame(drawModelResolution);
-		click(Util::controls.at("Use this value.").GetCenter(), drawModelResolution);
-		require(modelSettings.neuralRenderingModelResolutionPercent == 70 && GImGui->OpenPopupStack.empty(), "model resolution keypad Apply commits the deferred integer setting");
-		for (int i = 0; i < 25; ++i) frame(drawModelResolution);
-		click(modelNumber, drawModelResolution);
-		click(modelNumber, drawModelResolution);
-		frame(drawModelResolution);
-		click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), drawModelResolution);
-		frame(drawModelResolution);
-		frame(drawModelResolution);
-		click(Util::controls.at("Keep the previous value.").GetCenter(), drawModelResolution);
-		require(modelSettings.neuralRenderingModelResolutionPercent == 70 && GImGui->OpenPopupStack.empty(), "model resolution keypad Cancel preserves the setting");
+			globals::features::vr.headset = true;
+			for (int i = 0; i < 25; ++i) frame(drawNeuralSlider);
+			click(sliderNumber, drawNeuralSlider);
+			click(sliderNumber, drawNeuralSlider);
+			frame(drawNeuralSlider);
+			require(!GImGui->OpenPopupStack.empty(), std::format("{} supports the headset keypad", test.label).c_str());
+			click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), drawNeuralSlider);
+			auto zeroKey = Util::controls.at("Add this digit.");
+			// The keypad's 7 is three rows above and one column left of 0.
+			const ImVec2 sevenKey(zeroKey.GetCenter().x - zeroKey.GetWidth() - ImGui::GetStyle().ItemSpacing.x,
+				zeroKey.GetCenter().y - 3 * (zeroKey.GetHeight() + ImGui::GetStyle().ItemSpacing.y));
+			click(sevenKey, drawNeuralSlider);
+			click(Util::controls.at("Add this digit.").GetCenter(), drawNeuralSlider);
+			require(neuralSettings.*test.member == draggedValue, "NR slider keypad stages a draft without resizing");
+			frame(drawNeuralSlider);
+			frame(drawNeuralSlider);
+			click(Util::controls.at("Use this value.").GetCenter(), drawNeuralSlider);
+			require(neuralSettings.*test.member == 70 && GImGui->OpenPopupStack.empty(), "NR slider keypad Apply commits the deferred integer setting");
+			for (int i = 0; i < 25; ++i) frame(drawNeuralSlider);
+			click(sliderNumber, drawNeuralSlider);
+			click(sliderNumber, drawNeuralSlider);
+			frame(drawNeuralSlider);
+			click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), drawNeuralSlider);
+			frame(drawNeuralSlider);
+			frame(drawNeuralSlider);
+			click(Util::controls.at("Keep the previous value.").GetCenter(), drawNeuralSlider);
+			require(neuralSettings.*test.member == 70 && GImGui->OpenPopupStack.empty(), "NR slider keypad Cancel preserves the setting");
 
-		globals::features::vr.headset = false;
-		for (int i = 0; i < 25; ++i) frame(drawModelResolution);
-		click(modelNumber, drawModelResolution);
-		click(modelNumber, drawModelResolution);
-		frame(drawModelResolution);
-		io.AddKeyEvent(ImGuiMod_Ctrl, true);
-		key(ImGuiKey_A, drawModelResolution);
-		io.AddKeyEvent(ImGuiMod_Ctrl, false);
-		io.AddInputCharactersUTF8("85");
-		frame(drawModelResolution);
-		require(modelSettings.neuralRenderingModelResolutionPercent == 70, "model resolution desktop entry stages a draft");
-		key(ImGuiKey_Enter, drawModelResolution);
-		require(modelSettings.neuralRenderingModelResolutionPercent == 85, "model resolution desktop Enter commits the deferred integer setting");
+			globals::features::vr.headset = false;
+			for (int i = 0; i < 25; ++i) frame(drawNeuralSlider);
+			click(sliderNumber, drawNeuralSlider);
+			click(sliderNumber, drawNeuralSlider);
+			frame(drawNeuralSlider);
+			io.AddKeyEvent(ImGuiMod_Ctrl, true);
+			key(ImGuiKey_A, drawNeuralSlider);
+			io.AddKeyEvent(ImGuiMod_Ctrl, false);
+			io.AddInputCharactersUTF8("85");
+			frame(drawNeuralSlider);
+			require(neuralSettings.*test.member == 70, "NR slider desktop entry stages a draft");
+			key(ImGuiKey_Enter, drawNeuralSlider);
+			require(neuralSettings.*test.member == 85, "NR slider desktop Enter commits the deferred integer setting");
+		}
 
 		globals::features::vr.headset = true;
 		value = .5f;

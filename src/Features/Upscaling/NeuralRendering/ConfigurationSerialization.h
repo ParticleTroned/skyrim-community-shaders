@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CentralAreaPolicy.h"
 #include "DevelopmentDiagnostics.h"
 #include "ModelResolutionPolicy.h"
 
@@ -10,21 +11,27 @@
 
 namespace NeuralRendering
 {
-	/** Rejects fractional, wrapped, or out-of-range model-resolution requests. */
-	[[nodiscard]] inline std::optional<std::uint32_t> ParseModelResolutionPercent(const nlohmann::json& value)
+	/** Rejects fractional, wrapped, or out-of-range integer controls. */
+	[[nodiscard]] inline std::optional<std::uint32_t> ParseBoundedInteger(const nlohmann::json& value, std::uint32_t minimum, std::uint32_t maximum)
 	{
 		if (!value.is_number_integer())
 			return std::nullopt;
 		if (value.is_number_unsigned()) {
 			const auto percent = value.get<std::uint64_t>();
-			if (percent < kMinimumModelResolutionPercent || percent > kMaximumModelResolutionPercent)
+			if (percent < minimum || percent > maximum)
 				return std::nullopt;
 			return static_cast<std::uint32_t>(percent);
 		}
 		const auto percent = value.get<std::int64_t>();
-		if (percent < kMinimumModelResolutionPercent || percent > kMaximumModelResolutionPercent)
+		if (percent < minimum || percent > maximum)
 			return std::nullopt;
 		return static_cast<std::uint32_t>(percent);
+	}
+
+	/** Validated independent model scale. */
+	[[nodiscard]] inline auto ParseModelResolutionPercent(const nlohmann::json& value)
+	{
+		return ParseBoundedInteger(value, kMinimumModelResolutionPercent, kMaximumModelResolutionPercent);
 	}
 
 	/** Selects feature-owned fields from an ordinary or legacy upscaling profile. */

@@ -24,8 +24,12 @@ namespace NeuralRendering
 			std::array<std::uint32_t, 2> sourceOffset, sourceRegion, modelOffset, modelRegion;
 			std::uint32_t hasMask = 0, outputFormat = 0;
 			std::array<float, 2> motionScale{ 1.0f, 1.0f };
+			std::array<float, 2> fullEyeSize{}, cropOrigin{};
+			float centralScale = 1.0f, centralHorizontalScale = 1.0f, centralFeather = 0.0f;
+			std::uint32_t centralActive = 0;
+			std::array<float, 2> centralOffset{}, finalOutputSize{};
 		};
-		static_assert(sizeof(Constants) == 64);
+		static_assert(sizeof(Constants) == 112);
 
 		bool ReadDescription(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& desc)
 		{
@@ -114,7 +118,7 @@ namespace NeuralRendering
 
 		struct AllocationKey
 		{
-			UpscalingDLSS::Extent sourceSize{}, modelSize{};
+			UpscalingDLSS::Extent sourceSize{}, modelSize{}, modelGuideSize{};
 			DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN, outputFormat = DXGI_FORMAT_UNKNOWN, motionFormat = DXGI_FORMAT_UNKNOWN;
 			bool hasMask = false, sharedTargets = false;
 
@@ -131,7 +135,7 @@ namespace NeuralRendering
 					output.Width != input.outputWidth || output.Height != input.outputHeight ||
 					motion.Width != input.guideWidth || motion.Height != input.guideHeight)
 					return std::nullopt;
-				return AllocationKey{ { input.outputWidth, input.outputHeight }, { projected.outputWidth, projected.outputHeight },
+				return AllocationKey{ { input.outputWidth, input.outputHeight }, { projected.outputWidth, projected.outputHeight }, { projected.guideWidth, projected.guideHeight },
 					color.Format, output.Format, motion.Format, input.controlMask != nullptr, sharedTargets };
 			}
 
@@ -141,8 +145,10 @@ namespace NeuralRendering
 				if (sharedTargets)
 					return fullOutput;
 				std::uint64_t total = 0;
-				for (auto format : { colorFormat, DXGI_FORMAT_R32_FLOAT, motionFormat, outputFormat }) {
-					const auto bytes = LogicalTextureBytes(format, modelSize.width, modelSize.height);
+				const std::array formats{ colorFormat, DXGI_FORMAT_R32_FLOAT, motionFormat, outputFormat };
+				const std::array sizes{ modelSize, modelGuideSize, modelGuideSize, modelSize };
+				for (std::size_t index = 0; index < formats.size(); ++index) {
+					const auto bytes = LogicalTextureBytes(formats[index], sizes[index].width, sizes[index].height);
 					if (!bytes)
 						return std::nullopt;
 					total += *bytes;
@@ -198,8 +204,9 @@ namespace NeuralRendering
 				const auto& t = targets[index];
 				const std::array formats{ allocation->colorFormat, DXGI_FORMAT_R32_FLOAT, allocation->motionFormat, allocation->outputFormat };
 				const std::array textures{ &t.color, &t.depth, &t.motion, &t.output };
+				const std::array sizes{ allocation->modelSize, allocation->modelGuideSize, allocation->modelGuideSize, allocation->modelSize };
 				for (std::size_t role = 0; role < textures.size(); ++role) {
-					if (!ValidateTarget(args[index].device, *textures[role], allocation->modelSize, formats[role]))
+					if (!ValidateTarget(args[index].device, *textures[role], sizes[role], formats[role]))
 						return false;
 					const auto identity = Util::GetComIdentity(textures[role]->resource.Get());
 					if (!identity || std::find(identities.begin(), identities.begin() + count, identity) != identities.begin() + count ||
@@ -217,6 +224,23 @@ namespace NeuralRendering
 			       args.computeSubrect.IsValid() ? args.computeSubrect :
 			                                       BuildCenteredComputeSubrect(args.outputWidth, args.outputHeight, args.tuning.singleSubrectScale);
 		}
+		std::optional<ModelResolutionGeometry> Geometry(const RendererApplyArgs& args)
+		{
+			if (!args.centralArea.Valid())
+				return std::nullopt;
+			auto geometry = BuildModelResolutionGeometry(args.viewportCrop, { args.outputWidth, args.outputHeight }, SourceRegion(args),
+				args.modelResolutionPercent, { args.guideWidth, args.guideHeight });
+			if (geometry && args.centralArea.Active()) {
+				const auto support = IntersectComputeSubrect(SourceRegion(args), BuildCentralAreaSupport(args.viewportCrop, args.centralArea));
+				if (support.IsValid() && (!args.characterVisualIsolation || !args.roi || !args.roi->samplingSupport ||
+											 IntersectComputeSubrect(support, *args.roi->samplingSupport).IsValid())) {
+					const auto modelSupport = MapComputeSubrect(support, args.outputWidth, args.outputHeight, geometry->modelSize.width, geometry->modelSize.height);
+					const auto context = BuildCharacterProviderComputeSubrect(modelSupport, geometry->modelSize.width, geometry->modelSize.height);
+					geometry->modelRegion = IntersectComputeSubrect(geometry->modelRegion, context);
+				}
+			}
+			return geometry;
+		}
 	}
 
 	struct ModelResolution::Work
@@ -230,12 +254,14 @@ namespace NeuralRendering
 
 	bool ModelResolution::Project(const RendererApplyArgs& input, RendererApplyArgs& adapted) noexcept
 	{
-		const auto geometry = BuildModelResolutionGeometry(input.viewportCrop,
-			{ input.outputWidth, input.outputHeight }, SourceRegion(input), input.modelResolutionPercent);
-		if (!geometry || input.renderingMode != RenderingMode::ReducedResolution || !input.reset || input.featureUpscaling ||
-			input.modelResolutionPercent == kMaximumModelResolutionPercent ||
+		const auto geometry = Geometry(input);
+		const auto featureUpscaling = ResolveFeatureUpscaling(input.guideWidth, input.guideHeight, input.outputWidth, input.outputHeight);
+		if (!geometry || !input.renderingMode ||
+			EffectiveModelResolutionPercent(*input.renderingMode, input.modelResolutionPercent) != input.modelResolutionPercent ||
+			(input.renderingMode == RenderingMode::ReducedResolution && (!input.reset || input.featureUpscaling)) ||
+			!featureUpscaling || input.featureUpscaling != *featureUpscaling ||
+			!Required(input) ||
 			input.colorWidth != input.outputWidth || input.colorHeight != input.outputHeight ||
-			input.guideWidth != input.outputWidth || input.guideHeight != input.outputHeight ||
 			!SourceRegion(input).Fits(input.outputWidth, input.outputHeight))
 			return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -249,19 +275,28 @@ namespace NeuralRendering
 		};
 		adapted = input;
 		adapted.modelResolutionPercent = kMaximumModelResolutionPercent;
-		adapted.colorWidth = adapted.guideWidth = adapted.outputWidth = modelSize.width;
-		adapted.colorHeight = adapted.guideHeight = adapted.outputHeight = modelSize.height;
+		adapted.modelResolutionHistory = ModelResolutionHistory{ input.viewportCrop, input.modelResolutionPercent,
+			SourceRegion(input), reinterpret_cast<std::uintptr_t>(Util::GetComIdentity(input.controlMask.Get()).Get()),
+			input.centralArea.Active() ? input.centralArea : CentralArea{} };
+		adapted.centralArea = {};
+		adapted.guideWidth = geometry->modelGuideSize.width;
+		adapted.guideHeight = geometry->modelGuideSize.height;
+		adapted.featureUpscaling = *ResolveFeatureUpscaling(adapted.guideWidth, adapted.guideHeight, modelSize.width, modelSize.height);
+		adapted.colorWidth = adapted.outputWidth = modelSize.width;
+		adapted.colorHeight = adapted.outputHeight = modelSize.height;
 		adapted.computeSubrect = geometry->modelRegion;
 		adapted.viewportCrop = geometry->nativeCrop;
 		if (input.roi) {
 			auto& roi = *adapted.roi;
-			roi.ownedOutput = map(input.roi->ownedOutput);
-			roi.inferenceContext = map(input.roi->inferenceContext);
+			roi.ownedOutput = geometry->modelRegion;
+			roi.inferenceContext = geometry->modelRegion;
 			roi.allocationCapacity = modelSize;
-			if (input.roi->samplingSupport)
-				roi.samplingSupport = map(*input.roi->samplingSupport);
+			if (input.roi->samplingSupport) {
+				const auto support = IntersectComputeSubrect(map(*input.roi->samplingSupport), geometry->modelRegion);
+				roi.samplingSupport = support.IsValid() ? std::optional{ support } : std::nullopt;
+			}
 			if (input.roi->temporalEnvelope)
-				roi.temporalEnvelope = map(*input.roi->temporalEnvelope);
+				roi.temporalEnvelope = geometry->modelRegion;
 		}
 		if (input.controlMask) {
 			adapted.controlMaskWidth = modelSize.width;
@@ -362,7 +397,9 @@ namespace NeuralRendering
 			input.depthGuideSRV->GetResource(&depth);
 			D3D11_SHADER_RESOURCE_VIEW_DESC depthView{};
 			input.depthGuideSRV->GetDesc(&depthView);
-			if (!Util::SameIdentity(depth.Get(), input.depthGuide) || depthView.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
+			D3D11_TEXTURE2D_DESC depthDesc{};
+			if (!ReadDescription(depth.Get(), depthDesc) || depthDesc.Width != input.guideWidth || depthDesc.Height != input.guideHeight ||
+				!Util::SameIdentity(depth.Get(), input.depthGuide) || depthView.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
 				depthView.Texture2D.MostDetailedMip != 0 || depthView.Texture2D.MipLevels != 1)
 				return false;
 		}
@@ -389,8 +426,8 @@ namespace NeuralRendering
 					const auto prefix = std::format("NeuralRendering::ModelSlot{}::", input.featureSlot);
 					if ((!sharedTargets &&
 							(!CreateTexture(input.device, work->color, modelSize, key.colorFormat, prefix + "Color", result) ||
-								!CreateTexture(input.device, work->depth, modelSize, DXGI_FORMAT_R32_FLOAT, prefix + "Depth", result) ||
-								!CreateTexture(input.device, work->motion, modelSize, key.motionFormat, prefix + "Motion", result) ||
+								!CreateTexture(input.device, work->depth, key.modelGuideSize, DXGI_FORMAT_R32_FLOAT, prefix + "Depth", result) ||
+								!CreateTexture(input.device, work->motion, key.modelGuideSize, key.motionFormat, prefix + "Motion", result) ||
 								!CreateTexture(input.device, work->output, modelSize, key.outputFormat, prefix + "Output", result))) ||
 						!CreateTexture(input.device, work->reconstructed, sourceSize, key.outputFormat, prefix + "Reconstructed", result) ||
 						(hasMask && !CreateTexture(input.device, work->mask, modelSize, DXGI_FORMAT_R8_UNORM, prefix + "Mask", result)))
@@ -405,7 +442,7 @@ namespace NeuralRendering
 									"NeuralRendering::ModelSourceMask", result)))
 					return false;
 
-				const auto geometry = BuildModelResolutionGeometry(input.viewportCrop, sourceSize, SourceRegion(input), input.modelResolutionPercent);
+				const auto geometry = Geometry(input);
 				if (!geometry) {
 					result = E_INVALIDARG;
 					return false;
@@ -417,7 +454,11 @@ namespace NeuralRendering
 					{ source.baseX, source.baseY }, { source.width, source.height },
 					{ model.baseX, model.baseY }, { model.width, model.height },
 					hasMask ? 1u : 0u, OutputFormat(key.outputFormat),
-					geometry->motionNormalization
+					geometry->motionNormalization,
+					{ static_cast<float>(input.viewportCrop.fullOutput.width), static_cast<float>(input.viewportCrop.fullOutput.height) },
+					{ static_cast<float>(input.viewportCrop.output.left), static_cast<float>(input.viewportCrop.output.top) },
+					input.centralArea.Scale(), input.centralArea.horizontalScale, static_cast<float>(input.centralArea.featherPixels), input.centralArea.Active() ? 1u : 0u,
+					input.centralArea.offset, { static_cast<float>(input.centralArea.finalOutput.width), static_cast<float>(input.centralArea.finalOutput.height) }
 				};
 				auto& target = batch.targets[index];
 				target = sharedTargets ? targets[index] : Targets{ work->color, work->depth, work->motion, work->output };
@@ -459,7 +500,11 @@ namespace NeuralRendering
 			context->CSSetUnorderedAccessViews(0, static_cast<UINT>(uavs.size()), uavs.data(), nullptr);
 			{
 				CS_GPU_PASS("NeuralRendering::ModelResolutionPrepare");
-				context->Dispatch((work.constants.modelRegion[0] + 7u) / 8u, (work.constants.modelRegion[1] + 7u) / 8u, 1);
+				const auto guideRegion = MapComputeSubrect(batch.arguments[index].computeSubrect,
+					work.allocation.modelSize.width, work.allocation.modelSize.height,
+					work.allocation.modelGuideSize.width, work.allocation.modelGuideSize.height);
+				context->Dispatch((std::max(work.constants.modelRegion[0], guideRegion.width) + 7u) / 8u,
+					(std::max(work.constants.modelRegion[1], guideRegion.height) + 7u) / 8u, 1);
 			}
 			guard.Unbind();
 		}
@@ -524,7 +569,7 @@ namespace NeuralRendering
 	void ModelResolution::ReleaseUnscaledSlots(std::span<const RendererApplyArgs> args) noexcept
 	{
 		for (const auto& input : args)
-			if (input.modelResolutionPercent == kMaximumModelResolutionPercent)
+			if (!Required(input))
 				ReleaseSlot(input.featureSlot);
 	}
 	void ModelResolution::ReleaseSlot(std::uint32_t slot) noexcept

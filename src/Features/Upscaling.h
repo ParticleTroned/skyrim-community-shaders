@@ -9,6 +9,7 @@
 #include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
+#include "Upscaling/NeuralRendering/CentralAreaPolicy.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/MainDepthPresentation.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
@@ -480,6 +481,8 @@ public:
 		bool neuralRenderingBatchedStereo = true;
 		bool neuralRenderingDirectCommit = true;
 		uint neuralRenderingModelResolutionPercent = 100;
+		uint neuralRenderingCentralAreaPercent = NeuralRendering::kMaximumCentralAreaPercent;
+		uint neuralRenderingCentralFeatherPixels = NeuralRendering::kDefaultCentralFeatherPixels;
 		uint neuralRenderingPreset = 3;
 		float neuralRenderingIntensity = 0.8f;
 		float neuralRenderingLocalTone = 0.75f;

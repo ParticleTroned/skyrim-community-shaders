@@ -571,6 +571,7 @@ namespace NeuralRendering
 			std::uint64_t generation = 0;
 			InsertionPoint insertionPoint = kDefaultInsertionPoint;
 			UpscalingDLSS::ViewportCrop viewportCrop{};
+			std::optional<ModelResolutionHistory> modelResolutionHistory;
 			DXGI_FORMAT colorSourceFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT colorDestinationFormat = DXGI_FORMAT_UNKNOWN;
 			DXGI_FORMAT depthSourceFormat = DXGI_FORMAT_UNKNOWN;
@@ -993,7 +994,7 @@ namespace NeuralRendering
 		if (!IsValidInsertionPoint(a_args.insertionPoint))
 			return fail("Feature 18 insertion point is invalid");
 		if (!IsValidModelResolutionPercent(a_args.modelResolutionPercent))
-			return fail("NR model resolution must be an integer percentage from 33 to 100");
+			return fail("NR model resolution must be an integer percentage from 30 to 100");
 		if (colorConfiguration_.Enabled() &&
 			(a_args.colorWidth != a_args.outputWidth || a_args.colorHeight != a_args.outputHeight))
 			return fail("NR colour processing currently requires matching colour/output dimensions; guides may be lower resolution");
@@ -1293,6 +1294,7 @@ namespace NeuralRendering
 			.generation = a_args.generation,
 			.insertionPoint = a_args.insertionPoint,
 			.viewportCrop = a_args.viewportCrop,
+			.modelResolutionHistory = a_args.modelResolutionHistory,
 			.colorSourceFormat = a_resources.color.desc.Format,
 			.colorDestinationFormat = a_resources.output.desc.Format,
 			.depthSourceFormat = a_resources.depth.desc.Format,
@@ -2505,7 +2507,7 @@ namespace NeuralRendering
 	{
 		a_outcome = {};
 		// Colour reconstruction commits both eyes against one immutable input snapshot.
-		if (a_args[0].modelResolutionPercent != kMaximumModelResolutionPercent || a_args[1].modelResolutionPercent != kMaximumModelResolutionPercent)
+		if (ModelResolution::Required(a_args[0]) || ModelResolution::Required(a_args[1]))
 			return ApplyModelResolutionLocked(a_args, a_outcome, true);
 		if (!a_memoryAdmitted)
 			modelResolution_.ReleaseUnscaledSlots(a_args);
@@ -2668,13 +2670,13 @@ namespace NeuralRendering
 			auto& proxy = projected[index];
 			if (!ModelResolution::Project(input, proxy))
 				return FailLocked(RendererStage::Validation, E_INVALIDARG,
-					"model resolution requires uncompressed stateless C inputs with matching source grids", input.featureSlot, false);
+					"model resolution requires supported colour/output grids and valid guide geometry", input.featureSlot, false);
 			resource.roi = proxy.roi.value_or(BuildRoiDescriptor(std::nullopt, proxy.computeSubrect,
 				{ proxy.outputWidth, proxy.outputHeight }, false));
 			resource.nativeLayout = BuildNativeEvaluationLayout(
 				{ proxy.colorWidth, proxy.colorHeight }, { proxy.guideWidth, proxy.guideHeight },
 				{ proxy.outputWidth, proxy.outputHeight }, { proxy.controlMaskWidth, proxy.controlMaskHeight },
-				proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), false);
+				proxy.computeSubrect, UpscalingDLSS::BuildMotionVectorPixelScale(proxy.viewportCrop), proxy.featureUpscaling);
 			FinalizeResourceKeysLocked(proxy, resource);
 		}
 		const auto additional = modelResolution_.AdditionalBytes(args, sharedTargets);
@@ -2742,7 +2744,7 @@ namespace NeuralRendering
 	bool Renderer::State::ApplyBatchLocked(
 		std::span<const RendererApplyArgs> args, RendererApplyOutcome& outcome, bool a_memoryAdmitted)
 	{
-		if (std::ranges::any_of(args, [](const auto& value) { return value.modelResolutionPercent != kMaximumModelResolutionPercent; }))
+		if (std::ranges::any_of(args, [](const auto& value) { return ModelResolution::Required(value); }))
 			return ApplyModelResolutionLocked(args, outcome);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		requestedRegionCount_ = static_cast<std::uint32_t>(args.size());

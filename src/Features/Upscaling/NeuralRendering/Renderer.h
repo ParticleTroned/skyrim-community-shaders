@@ -3,6 +3,7 @@
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
 #include "MemoryConservationPolicy.h"
+#include "ModelResolutionPolicy.h"
 #include "RoiDescriptor.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "LifetimeDiagnostics.h"
@@ -213,6 +214,9 @@ namespace NeuralRendering
 		bool providerBlending = false;
 		ComputeSubrect actorSelectionSupport{};
 		std::uint32_t modelResolutionPercent = 100;
+		CentralArea centralArea{};
+		/** Original sampling basis retained by independently scaled temporal inputs. */
+		std::optional<ModelResolutionHistory> modelResolutionHistory;
 		std::uint32_t colorWidth = 0;
 		std::uint32_t colorHeight = 0;
 		std::uint32_t guideWidth = 0;

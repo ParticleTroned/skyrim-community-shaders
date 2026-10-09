@@ -29,6 +29,28 @@ namespace
 		       sanitized.CustomColorBlue == 1.0f;
 	}
 
+	bool CoversProfileComposition()
+	{
+		const Profile base{ .ShaftIntensity = 2.0f, .Opacity = 0.5f, .Saturation = 0.5f, .CustomColorContribution = 0.4f, .CustomColorRed = 1.0f, .CustomColorGreen = 0.0f, .CustomColorBlue = 0.0f };
+		const Profile layer{ .ShaftIntensity = 2.0f, .Opacity = 2.0f, .Saturation = 2.0f, .CustomColorContribution = 0.5f, .CustomColorRed = 0.0f, .CustomColorGreen = 0.0f, .CustomColorBlue = 1.0f };
+		const auto composed = ComposeProfiles(base, layer);
+		const auto inactiveTint = ComposeProfiles(base, Profile{ .CustomColorRed = 0.0f, .CustomColorGreen = 0.0f });
+		const auto replacement = ComposeProfiles(base, Profile{ .CustomColorContribution = 1.0f, .CustomColorGreen = 0.0f });
+		const auto invalid = ComposeProfiles(base, Profile{ .ShaftIntensity = std::numeric_limits<float>::infinity(),
+													   .Opacity = std::numeric_limits<float>::quiet_NaN(),
+													   .CustomColorContribution = std::numeric_limits<float>::quiet_NaN() });
+		const auto evaluate = [](float authored, float tint, float amount) { return authored * (1.0f - amount) + tint * amount; };
+		const float expectedRed = evaluate(evaluate(0.3f, base.CustomColorRed, base.CustomColorContribution), layer.CustomColorRed, layer.CustomColorContribution);
+		return ComposeProfiles(base, Profile{}) == base && inactiveTint == base && invalid == base &&
+		       composed.ShaftIntensity == kShaftIntensityMax && composed.Opacity == 1.0f && composed.Saturation == 1.0f &&
+		       IsNear(composed.CustomColorContribution, 0.7f) &&
+		       IsNear(evaluate(0.3f, composed.CustomColorRed, composed.CustomColorContribution), expectedRed) &&
+		       IsNear(composed.CustomColorBlue * composed.CustomColorContribution, 0.5f) &&
+		       replacement.CustomColorContribution == 1.0f && replacement.CustomColorRed == 1.0f &&
+		       replacement.CustomColorGreen == 0.0f && replacement.CustomColorBlue == 1.0f &&
+		       base.CustomColorContribution == 0.4f && layer.CustomColorContribution == 0.5f;
+	}
+
 	bool CoversDistinctOpacityCurve()
 	{
 		const float input = 0.5f;
@@ -94,6 +116,7 @@ namespace
 int main()
 {
 	return CoversProfileSanitization() &&
+	               CoversProfileComposition() &&
 	               CoversDistinctOpacityCurve() &&
 	               CoversLegacyMigration() &&
 	               CoversNestedProfileParsing() ?

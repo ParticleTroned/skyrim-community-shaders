@@ -54,6 +54,8 @@ def extract(root, output):
         function(migrations, "bool SettingsMigrations::MigrateCloudProfileSettings("),
         function(migrations, "bool SettingsMigrations::MigrateCloudSettingsLayer("),
         function(source, "\tvoid MigrateLegacyProfileLighting("),
+        function(menu, "\tdouble AdaptiveBalanceAppearanceBound("),
+        function(menu, "\tjson BuildAdaptiveBalanceAppearanceSchema("),
         function(menu, "\tstd::string ValidateAdaptiveBalanceVisuals("),
         function(source, "bool AdaptiveBrightness::IsRuntimeAvailable()"),
         function(source, "void AdaptiveBrightness::SetEnabled("),

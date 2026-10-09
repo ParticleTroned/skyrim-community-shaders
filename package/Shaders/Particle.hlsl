@@ -312,9 +312,22 @@ PS_OUTPUT main(PS_INPUT input)
 	if (ShadowSampling::HasDirectionalShadows())
 		dirSoftShadow = ShadowSampling::GetLightingShadow(positionWS.xyz, eyeIndex, dirDetailedShadow);
 #	endif
-	float3 dirLightRaw = SharedData::DirLightColor.xyz * dirWorldShadow * dirSoftShadow * dirDetailedShadow;
-	float3 dirLightColor = Color::DirectionalLight(dirLightRaw / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
+	float3 dirLightColor;
+	if (Color::IsSceneColorDraw() && SharedData::adaptiveBalanceSettings.appearance.directionalCurve != 1.0) {
+		dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5),
+							SharedData::linearLightingSettings.isDirLightLinear, dirWorldShadow * dirSoftShadow * dirDetailedShadow) *
+		                llDirLightMult * 0.5;
+	} else {
+		float3 dirLightRaw = SharedData::DirLightColor.xyz * dirWorldShadow * dirSoftShadow * dirDetailedShadow;
+		dirLightColor = Color::DirectionalLight(dirLightRaw / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult * 0.5;
+	}
 	float3 ambientColor = Color::ApplyAmbientBalance(Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 1)))));
+	if (Color::IsSceneColorDraw()) {
+		if (SharedData::adaptiveBalanceSettings.appearance.particleDirectionalInfluence != 1.0)
+			dirLightColor *= SharedData::adaptiveBalanceSettings.appearance.particleDirectionalInfluence;
+		if (SharedData::adaptiveBalanceSettings.appearance.particleAmbientInfluence != 1.0)
+			ambientColor *= SharedData::adaptiveBalanceSettings.appearance.particleAmbientInfluence;
+	}
 
 	propertyColor += dirLightColor;
 	propertyColor += ambientColor;
@@ -348,6 +361,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade * 0.5;
+				if (Color::IsSceneColorDraw() && SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence != 1.0)
+					lightColor *= SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence;
 				propertyColor += lightColor;
 			}
 		}
@@ -355,6 +370,8 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 	psout.Color.xyz = propertyColor * baseColor.xyz;
+	psout.Color.xyz = AdaptiveBalanceAppearance::ApplyColor(psout.Color.xyz,
+		SharedData::adaptiveBalanceSettings.appearance.particleIntensity, 1.0, 1.0, 1.0.xxx);
 	psout.Color.w = baseColor.w;
 	psout.Normal.w = baseColor.w;
 	psout.Normal.xyz = float3(0, 1, 0);

@@ -100,6 +100,11 @@ struct AdaptiveBrightness : Feature
 		float skyStaticTransparency = 0.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
+		float pointLightSaturation = 1.0f;
+		float pointLightCurve = 1.0f;
+		float fireIntensity = 1.0f;
+		float fireSaturation = 1.0f;
+		float fireCurve = 1.0f;
 		float linearPointLightMult = 1.0f;
 		float spotlightMult = 1.0f;
 		float linearSpotlightMult = 1.0f;
@@ -120,6 +125,7 @@ struct AdaptiveBrightness : Feature
 		Bloom::Profile bloom;
 		WaterAppearance::Profile water;
 		WaterWindSettings waterWind;
+		AdaptiveBalanceAppearanceSettings appearance;
 
 		static ProfileSettings AdjustmentDefaults();
 		static ProfileSettings GlobalDefaults();
@@ -187,9 +193,17 @@ struct AdaptiveBrightness : Feature
 		float skyStaticTransparency;
 		float effectBrightness;
 		float skyStaticBrightness;
+		float pointLightSaturation;
+		float fireIntensity;
+		float fireSaturation;
+		float fireCurve;
+		float pointLightCurve;
+		float pointLightCurvePadding[3];
+		AdaptiveBalanceAppearanceSettings appearance;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 80);
+	static_assert(sizeof(PerFrameData) == 320);
+	static_assert(offsetof(PerFrameData, appearance) == 112);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);
 	static_assert(offsetof(PerFrameData, contrast) == 40);
@@ -200,6 +214,11 @@ struct AdaptiveBrightness : Feature
 	static_assert(offsetof(PerFrameData, skyStaticTransparency) == 68);
 	static_assert(offsetof(PerFrameData, effectBrightness) == 72);
 	static_assert(offsetof(PerFrameData, skyStaticBrightness) == 76);
+	static_assert(offsetof(PerFrameData, pointLightSaturation) == 80);
+	static_assert(offsetof(PerFrameData, fireIntensity) == 84);
+	static_assert(offsetof(PerFrameData, fireSaturation) == 88);
+	static_assert(offsetof(PerFrameData, fireCurve) == 92);
+	static_assert(offsetof(PerFrameData, pointLightCurve) == 96);
 
 	struct alignas(16) VanillaPointLightData
 	{

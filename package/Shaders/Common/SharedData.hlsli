@@ -310,6 +310,44 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
+	struct AdaptiveBalanceAppearanceSettings
+	{
+		float directionalSaturation;
+		float directionalCurve;
+		float ambientSaturation;
+		float fogBrightness;
+		float3 directionalTint;
+		float cloudOpacity;
+		float3 fogTint;
+		float starsIntensity;
+		float3 cloudTint;
+		float starsCurve;
+		float3 skyTopTint;
+		float skyTopIntensity;
+		float3 skyMiddleTint;
+		float skyMiddleIntensity;
+		float3 skyHorizonTint;
+		float skyHorizonIntensity;
+		float skyTopCurve;
+		float skyMiddleCurve;
+		float skyHorizonCurve;
+		float skyStaticCurve;
+		float3 skyStaticTint;
+		float lightSpriteIntensity;
+		float lightSpriteCurve;
+		float particleIntensity;
+		float particleDirectionalInfluence;
+		float particleAmbientInfluence;
+		float particlePointInfluence;
+		float cloudShadowStrength;
+		float godrayIntensity;
+		float godrayOpacity;
+		float3 godrayTint;
+		float godrayTintAmount;
+		float godraySaturation;
+		float3 padding;
+	};
+
 	struct AdaptiveBalanceSettings
 	{
 		float skyBrightness;
@@ -332,6 +370,13 @@ namespace SharedData
 		float skyStaticTransparency;
 		float effectBrightness;
 		float skyStaticBrightness;
+		float pointLightSaturation;
+		float fireIntensity;
+		float fireSaturation;
+		float fireCurve;
+		float pointLightCurve;
+		float3 padding;
+		AdaptiveBalanceAppearanceSettings appearance;
 	};
 
 	struct LinearLightingSettings

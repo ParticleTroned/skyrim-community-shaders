@@ -1,6 +1,7 @@
 #ifndef __COLOR_DEPENDENCY_HLSL__
 #define __COLOR_DEPENDENCY_HLSL__
 
+#include "Common/AdaptiveBalanceColorBounds.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/PointLightFlags.hlsli"
 #include "Common/SharedData.hlsli"
@@ -253,13 +254,6 @@ namespace Color
 #	endif
 	}
 
-	float3 DirectionalLight(float3 color, bool isLinear = false)
-	{
-		return Light(color, isLinear) *
-		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		       SharedData::adaptiveBalanceSettings.directionalLightMult;
-	}
-
 	float GetPointLightMultiplier(bool isLinear)
 	{
 		return isLinear ? SharedData::adaptiveBalanceSettings.linearPointLightMult : SharedData::adaptiveBalanceSettings.pointLightMult;
@@ -274,12 +268,37 @@ namespace Color
 		return 1.0f;
 	}
 
+	bool IsSceneColorDraw()
+	{
+#	if defined(PSHADER) && defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
+		return (Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0;
+#	else
+		return true;
+#	endif
+	}
+
+	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
 	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0, bool preserveHDRIntensity = false)
 	{
-		return Light(color, isLinear, preserveHDRIntensity) *
-		       ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		       GetPointLightMultiplier(isLinear) *
-		       GetPointLightTypeMultiplier(isLinear, lightFlags);
+		const float curve = SharedData::adaptiveBalanceSettings.pointLightCurve;
+		const float saturation = SharedData::adaptiveBalanceSettings.pointLightSaturation;
+		const bool grade = IsSceneColorDraw() && (curve != 1.0 || saturation != 1.0);
+		// Grade authored RGB before light conversion; neutral settings retain signed inputs.
+		[branch] if (IsSceneColorDraw() && curve != 1.0)
+			color = pow(max(color, 0.0), curve);
+		color = Light(color, isLinear, preserveHDRIntensity);
+		if (grade)
+			color = AdaptiveBalanceColorBounds::Intermediate(color, ENABLE_LL_COLOR_ADJUSTMENTS);
+		// Neutral profiles preserve the authored color without a gamma round trip.
+		[branch] if (IsSceneColorDraw() && saturation != 1.0)
+		{
+			float3 linearColor = ENABLE_LL_COLOR_ADJUSTMENTS ? color : GammaToLinearSafe(color);
+			linearColor = Saturation(linearColor, saturation);
+			color = ENABLE_LL_COLOR_ADJUSTMENTS ? linearColor : LinearToGammaSafe(linearColor);
+		}
+		color = color * ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
+		        GetPointLightMultiplier(isLinear) * GetPointLightTypeMultiplier(isLinear, lightFlags);
+		return grade ? AdaptiveBalanceColorBounds::Output(color) : color;
 	}
 
 	float3 PointLightPreserveHDRIntensity(float3 color, bool isLinear = false, uint lightFlags = 0)
@@ -334,25 +353,9 @@ namespace Color
 	}
 
 	/// Scene adjustments include reflections and exclude out-of-world object previews.
-	bool IsSceneColorDraw()
-	{
-#	if defined(PSHADER) && defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
-		return (Permutation::ExtraShaderDescriptor & (Permutation::ExtraFlags::InWorld | Permutation::ExtraFlags::InReflection)) != 0;
-#	else
-		return true;
-#	endif
-	}
-
-	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
 	float AmbientBalanceMultiplier()
 	{
 		return IsSceneColorDraw() ? SharedData::adaptiveBalanceSettings.ambientMult : 1.0;
-	}
-
-	/// Apply once after ambient sources are combined, in the renderer's lighting space.
-	float3 ApplyAmbientBalance(float3 color)
-	{
-		return color * AmbientBalanceMultiplier();
 	}
 
 	float3 Fog(float3 color)
@@ -449,12 +452,6 @@ namespace Color
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSkyrimGamma(color);
 	}
 
-	/// Match the ambient brightness adjustment for contributions already in linear space.
-	float3 ApplyAmbientBalanceLinear(float3 color)
-	{
-		return color * IrradianceToLinear(AmbientBalanceMultiplier());
-	}
-
 	float VanillaNormalization()
 	{
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? 1.0 / Math::PI : 1.0f;
@@ -493,5 +490,7 @@ namespace Color
 	}
 #endif
 }
+
+#include "Common/AdaptiveBalanceAppearance.hlsli"
 
 #endif  //__COLOR_DEPENDENCY_HLSL__

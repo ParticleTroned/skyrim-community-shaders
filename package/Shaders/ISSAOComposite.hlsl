@@ -7,7 +7,7 @@ typedef VS_OUTPUT PS_INPUT;
 
 struct PS_OUTPUT
 {
-	float4 Color : SV_Target0;
+	float4 Color: SV_Target0;
 };
 
 #if defined(PSHADER)
@@ -180,6 +180,7 @@ PS_OUTPUT main(PS_INPUT input)
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #		endif
+	fogColor = AdaptiveBalanceAppearance::ApplyFog(fogColor);
 	if (depth < 0.999999) {
 		composedColor.xyz = FogNearColor.w * lerp(composedColor.xyz, fogColor, Color::FogAlpha(fogFactor));
 	}

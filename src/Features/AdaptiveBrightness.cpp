@@ -65,6 +65,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	skyStaticTransparency,
 	directionalLightMult,
 	pointLightMult,
+	pointLightSaturation,
+	pointLightCurve,
+	fireIntensity,
+	fireSaturation,
+	fireCurve,
 	linearPointLightMult,
 	spotlightMult,
 	linearSpotlightMult,
@@ -82,7 +87,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	vlGammaOffset,
 	bloom,
 	water,
-	waterWind)
+	waterWind,
+	appearance)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::LocationOverride,
@@ -134,6 +140,10 @@ namespace
 	constexpr float kContrastMin = 0.5f;
 	constexpr float kContrastMax = 2.0f;
 	constexpr float kSaturationMax = 2.0f;
+	constexpr float kPointLightCurveMin = 0.1f;
+	constexpr float kPointLightCurveMax = 4.0f;
+	constexpr float kFireCurveMin = 0.25f;
+	constexpr float kFireCurveMax = 4.0f;
 	constexpr float kGlobalLightingMultiplierMax = 5.0f;
 	constexpr float kWaterWindMultiplierMin = 0.0f;
 	constexpr float kWaterWindMultiplierMax = 2.0f;
@@ -336,6 +346,7 @@ namespace
 
 	void SanitizeSharedLightingSettings(SharedLightingSettings& a_settings)
 	{
+		AdaptiveBalanceAppearance::Sanitize(a_settings.appearance);
 		const SharedLightingSettings defaults{};
 		const auto clamp = [](float a_value, float a_max, float a_default) {
 			return std::clamp(SafeFinite(a_value, a_default), 0.0f, a_max);
@@ -355,6 +366,11 @@ namespace
 		a_settings.ambientMult = ClampMultiplier(a_settings.ambientMult);
 		a_settings.directionalLightMult = clamp(a_settings.directionalLightMult, kGlobalLightingMultiplierMax, defaults.directionalLightMult);
 		a_settings.pointLightMult = clamp(a_settings.pointLightMult, kGlobalLightingMultiplierMax, defaults.pointLightMult);
+		a_settings.pointLightSaturation = clamp(a_settings.pointLightSaturation, kSaturationMax, defaults.pointLightSaturation);
+		a_settings.pointLightCurve = Util::ClampFinite(a_settings.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, defaults.pointLightCurve);
+		a_settings.fireIntensity = clamp(a_settings.fireIntensity, kGlobalLightingMultiplierMax, defaults.fireIntensity);
+		a_settings.fireSaturation = clamp(a_settings.fireSaturation, kSaturationMax, defaults.fireSaturation);
+		a_settings.fireCurve = Util::ClampFinite(a_settings.fireCurve, kFireCurveMin, kFireCurveMax, defaults.fireCurve);
 		a_settings.linearPointLightMult = clamp(a_settings.linearPointLightMult, kGlobalLightingMultiplierMax, defaults.linearPointLightMult);
 		a_settings.spotlightMult = clamp(a_settings.spotlightMult, kGlobalLightingMultiplierMax, defaults.spotlightMult);
 		a_settings.linearSpotlightMult = clamp(a_settings.linearSpotlightMult, kGlobalLightingMultiplierMax, defaults.linearSpotlightMult);
@@ -653,6 +669,7 @@ namespace
 
 	void ClampProfileSettings(AdaptiveBrightness::ProfileSettings& a_profile)
 	{
+		AdaptiveBalanceAppearance::Sanitize(a_profile.appearance);
 		a_profile.brightness = ClampBrightness(a_profile.brightness);
 		a_profile.contrast = Util::ClampFinite(a_profile.contrast, kContrastMin, kContrastMax, 1.0f);
 		a_profile.saturation = Util::ClampFinite(a_profile.saturation, 0.0f, kSaturationMax, 1.0f);
@@ -667,6 +684,11 @@ namespace
 		a_profile.skyStaticTransparency = Util::ClampFinite(a_profile.skyStaticTransparency, 0.0f, 1.0f, 0.0f);
 		a_profile.directionalLightMult = ClampMultiplier(a_profile.directionalLightMult);
 		a_profile.pointLightMult = ClampMultiplier(a_profile.pointLightMult);
+		a_profile.pointLightSaturation = Util::ClampFinite(a_profile.pointLightSaturation, 0.0f, kSaturationMax, 1.0f);
+		a_profile.pointLightCurve = Util::ClampFinite(a_profile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, 1.0f);
+		a_profile.fireIntensity = Util::ClampFinite(a_profile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+		a_profile.fireSaturation = Util::ClampFinite(a_profile.fireSaturation, 0.0f, kSaturationMax, 1.0f);
+		a_profile.fireCurve = Util::ClampFinite(a_profile.fireCurve, kFireCurveMin, kFireCurveMax, 1.0f);
 		a_profile.linearPointLightMult = ClampMultiplier(a_profile.linearPointLightMult);
 		a_profile.spotlightMult = ClampMultiplier(a_profile.spotlightMult);
 		a_profile.linearSpotlightMult = ClampMultiplier(a_profile.linearSpotlightMult);
@@ -2056,6 +2078,42 @@ void AdaptiveBrightness::DrawColorSettings(ProfileSettings& a_profile)
 		ImGui::TextUnformatted("Zero makes the scene monochrome; one preserves its colors; higher values increase color intensity. Works with Linear Lighting on or off.");
 }
 
+namespace
+{
+	void DrawAppearanceSettings(AdaptiveBalanceAppearanceSettings& appearance)
+	{
+		constexpr std::array groups{ "Direct and Ambient Lighting", "Fog and Clouds", "Sky Gradient",
+			"Stars", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows" };
+		MenuUI::SectionHeading("Appearance controls");
+		for (const auto* group : groups) {
+			if (!ImGui::CollapsingHeader(group))
+				continue;
+			if (std::string_view(group) == "Godrays and Cloud Shadows")
+				ImGui::TextWrapped("Adjusts the existing Volumetric Lighting and Cloud Shadows settings while those features are active. Scales of one and colour contribution of zero preserve their settings.");
+			else if (std::string_view(group) == "Particles and Glow Sprites")
+				ImGui::TextWrapped("Glow sprites include additive non-fire effects, including some magic. Particle influence controls adjust received lighting; fire tuning remains separate.");
+			else
+				ImGui::TextWrapped("One and white are neutral. Colour curves below one lift dim colours; above one deepen them and strengthen HDR highlights.");
+			MenuUI::DetailGrid grid(group, 2, ImGui::GetFontSize() * 32);
+			const Util::Widgets::ControlLayout controls(true);
+			for (const auto& field : AdaptiveBalanceAppearance::kScalars) {
+				if (std::string_view(field.group) != group)
+					continue;
+				grid.Next();
+				Util::Widgets::SliderFloat(field.label, &(appearance.*field.member), field.minimum, field.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			}
+			for (const auto& field : AdaptiveBalanceAppearance::kTints) {
+				if (std::string_view(field.group) != group)
+					continue;
+				grid.Next();
+				auto& tint = appearance.*field.member;
+				Util::Widgets::ColorEdit3(field.label, &tint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+			}
+		}
+		AdaptiveBalanceAppearance::Sanitize(appearance);
+	}
+}
+
 void AdaptiveBrightness::DrawLightingSettings(
 	ProfileSettings& a_profile,
 	bool a_showAdvancedControls,
@@ -2080,61 +2138,83 @@ void AdaptiveBrightness::DrawLightingSettings(
 	if (!a_profile.advanced)
 		return;
 
-	MenuUI::DetailGrid grid("LightingGroups", 2, ImGui::GetFontSize() * 32);
-	const Util::Widgets::ControlLayout controls(true);
-	grid.Next();
-	MenuUI::SectionHeading("Sky and atmosphere");
-	Util::Widgets::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales sky color saturation independently of clouds. One preserves the current colors; zero makes them monochrome.");
-	Util::Widgets::SliderFloat("Cloud Brightness", &a_profile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Cloud Saturation", &a_profile.cloudSaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent.");
-	Util::Widgets::SliderFloat("Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales weather or ambient/directional effect lighting. One preserves brightness; the Effects lighting multiplier remains independent.");
-	Util::Widgets::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales weather or ambient/directional sky-static lighting. One preserves brightness.");
-	Util::Widgets::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them.");
-	Util::Widgets::SliderFloat("Sun Glare Intensity", &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales glare already drawn by the engine. Zero removes it; one preserves its brightness. Does not restore missing glare or weather lens flares.");
-	grid.Next();
-	MenuUI::SectionHeading("Direct lighting");
-	Util::Widgets::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	{
+		MenuUI::DetailGrid grid("LightingGroups", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
+		grid.Next();
+		MenuUI::SectionHeading("Sky and atmosphere");
+		Util::Widgets::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Scales sky color saturation independently of clouds. One preserves the current colors; zero makes them monochrome.");
+		Util::Widgets::SliderFloat("Cloud Brightness", &a_profile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Cloud Saturation", &a_profile.cloudSaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Vanilla Fog Intensity", &a_profile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Scales distance-fog opacity. Zero removes it; one preserves its current strength. Fog gamma remains independent.");
+		Util::Widgets::SliderFloat("Effect Brightness", &a_profile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Scales weather or ambient/directional effect lighting. One preserves brightness; the Effects lighting multiplier remains independent.");
+		Util::Widgets::SliderFloat("Sky Static Brightness", &a_profile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Scales weather or ambient/directional sky-static lighting. One preserves brightness.");
+		Util::Widgets::SliderFloat("Sky Static Transparency", &a_profile.skyStaticTransparency, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Fades sky-static effect meshes such as mountain mist. Zero preserves visibility; one hides them.");
+		Util::Widgets::SliderFloat("Sun Glare Intensity", &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Scales glare already drawn by the engine. Zero removes it; one preserves its brightness. Does not restore missing glare or weather lens flares.");
+		grid.Next();
+		MenuUI::SectionHeading("Direct lighting");
+		Util::Widgets::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Point Light Saturation", &a_profile.pointLightSaturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Adjusts all point-light colors, including spotlights and particle lights. Zero makes their light monochrome; one preserves their colors. Global and active profile adjustments multiply. Works with Linear Lighting on or off.");
 
-	MenuUI::SectionHeading("Point-light balance");
-	ImGui::TextWrapped("Subtype values multiply the Point Lights adjustment after the active layers are composed.");
-	Util::Widgets::SliderFloat("Spotlights", &a_profile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Omnidirectional Bulbs", &a_profile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
-	Util::Widgets::SliderFloat("Linear Point Lights", &a_profile.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Linear Spotlights", &a_profile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Linear Omnidirectional Bulbs", &a_profile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Point Light Colour Curve", &a_profile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Adjusts individual point-light color channels before intensity and saturation. One preserves the color response. Below one raises channels below one; above one deepens them and strengthens HDR channels above one. Global and active profile adjustments multiply.");
 
-	grid.Next();
-	MenuUI::SectionHeading("Indirect and material lighting");
-	Util::Widgets::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Scales ambient lighting after vanilla or image-based lighting is selected. One preserves the lighting; zero removes its ambient contribution.");
-	Util::Widgets::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		MenuUI::SectionHeading("Point-light balance");
+		ImGui::TextWrapped("Subtype values multiply the Point Lights adjustment after the active layers are composed.");
+		Util::Widgets::SliderFloat("Spotlights", &a_profile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Omnidirectional Bulbs", &a_profile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
+		Util::Widgets::SliderFloat("Linear Point Lights", &a_profile.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Linear Spotlights", &a_profile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Linear Omnidirectional Bulbs", &a_profile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	grid.Next();
-	MenuUI::SectionHeading("Atmosphere gamma offsets");
-	Util::Widgets::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Clouds", &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	Util::Widgets::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		MenuUI::SectionHeading("Fire");
+		ImGui::TextWrapped("Adjusts visible flame effects. Cast lights remain independent; some similarly authored effects also respond.");
+		Util::Widgets::SliderFloat("Intensity##Fire", &a_profile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Scales visible flame color. One preserves brightness; zero removes its color contribution.");
+		Util::Widgets::SliderFloat("Saturation##Fire", &a_profile.fireSaturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Zero makes flames monochrome; one preserves their colors; values above one intensify their colors.");
+		Util::Widgets::SliderFloat("Brightness Curve##Fire", &a_profile.fireCurve, kFireCurveMin, kFireCurveMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Adjusts luminance in linear light while preserving hue. One is neutral; below one lifts dim parts; above one strengthens bright cores and darkens dim areas.");
+
+		grid.Next();
+		MenuUI::SectionHeading("Indirect and material lighting");
+		Util::Widgets::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Scales ambient lighting after vanilla or image-based lighting is selected. One preserves the lighting; zero removes its ambient contribution.");
+		Util::Widgets::SliderFloat("Emissive", &a_profile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+		grid.Next();
+		MenuUI::SectionHeading("Atmosphere gamma offsets");
+		Util::Widgets::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Clouds", &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	}
+	DrawAppearanceSettings(a_profile.appearance);
 }
 
 void AdaptiveBrightness::DrawBloomSettings(
@@ -3424,6 +3504,8 @@ namespace
 SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSettings& a_base, const ProfileSettings& a_profile) const
 {
 	auto out = a_base;
+	if (a_profile.advanced)
+		out.appearance = AdaptiveBalanceAppearance::Compose(out.appearance, a_profile.appearance);
 	const float brightness = ClampBrightness(a_profile.brightness);
 	const float brightnessDelta = brightness - 1.0f;
 
@@ -3450,6 +3532,16 @@ SharedLightingSettings AdaptiveBrightness::ApplyProfile(const SharedLightingSett
 	out.directionalLightMult = ClampMultiplier(out.directionalLightMult * masterScale(0.70f) * advancedMult(a_profile.directionalLightMult));
 
 	const float pointLightBrightness = masterScale(0.75f);
+	const float pointLightSaturation = a_profile.advanced ? Util::ClampFinite(a_profile.pointLightSaturation, 0.0f, kSaturationMax, 1.0f) : 1.0f;
+	out.pointLightSaturation = Util::ClampFinite(out.pointLightSaturation * pointLightSaturation, 0.0f, kSaturationMax, 1.0f);
+	const float pointLightCurve = a_profile.advanced ? Util::ClampFinite(a_profile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, 1.0f) : 1.0f;
+	out.pointLightCurve = Util::ClampFinite(out.pointLightCurve * pointLightCurve, kPointLightCurveMin, kPointLightCurveMax, 1.0f);
+	const float fireIntensity = a_profile.advanced ? Util::ClampFinite(a_profile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f) : 1.0f;
+	const float fireSaturation = a_profile.advanced ? Util::ClampFinite(a_profile.fireSaturation, 0.0f, kSaturationMax, 1.0f) : 1.0f;
+	const float fireCurve = a_profile.advanced ? Util::ClampFinite(a_profile.fireCurve, kFireCurveMin, kFireCurveMax, 1.0f) : 1.0f;
+	out.fireIntensity = Util::ClampFinite(out.fireIntensity * fireIntensity, 0.0f, kGlobalLightingMultiplierMax, 1.0f);
+	out.fireSaturation = Util::ClampFinite(out.fireSaturation * fireSaturation, 0.0f, kSaturationMax, 1.0f);
+	out.fireCurve = Util::ClampFinite(out.fireCurve * fireCurve, kFireCurveMin, kFireCurveMax, 1.0f);
 	out.pointLightMult = ClampMultiplier(
 		out.pointLightMult * pointLightBrightness * advancedMult(a_profile.pointLightMult));
 	out.linearPointLightMult = ClampMultiplier(
@@ -3593,6 +3685,12 @@ SharedLightingSettings AdaptiveBrightness::LerpSettings(const SharedLightingSett
 	out.ambientMult = lerp(a_a.ambientMult, a_b.ambientMult);
 	out.directionalLightMult = lerp(a_a.directionalLightMult, a_b.directionalLightMult);
 	out.pointLightMult = lerp(a_a.pointLightMult, a_b.pointLightMult);
+	out.pointLightSaturation = lerp(a_a.pointLightSaturation, a_b.pointLightSaturation);
+	out.pointLightCurve = lerp(a_a.pointLightCurve, a_b.pointLightCurve);
+	out.fireIntensity = lerp(a_a.fireIntensity, a_b.fireIntensity);
+	out.fireSaturation = lerp(a_a.fireSaturation, a_b.fireSaturation);
+	out.fireCurve = lerp(a_a.fireCurve, a_b.fireCurve);
+	out.appearance = AdaptiveBalanceAppearance::Lerp(a_a.appearance, a_b.appearance, t);
 	out.linearPointLightMult = lerp(a_a.linearPointLightMult, a_b.linearPointLightMult);
 	out.spotlightMult = lerp(a_a.spotlightMult, a_b.spotlightMult);
 	out.linearSpotlightMult = lerp(a_a.linearSpotlightMult, a_b.linearSpotlightMult);
@@ -3795,6 +3893,12 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	data.ambientMult = effectiveSettings.ambientMult;
 	data.directionalLightMult = effectiveSettings.directionalLightMult;
 	data.pointLightMult = effectiveSettings.pointLightMult;
+	data.pointLightSaturation = effectiveSettings.pointLightSaturation;
+	data.pointLightCurve = effectiveSettings.pointLightCurve;
+	data.fireIntensity = effectiveSettings.fireIntensity;
+	data.fireSaturation = effectiveSettings.fireSaturation;
+	data.fireCurve = effectiveSettings.fireCurve;
+	data.appearance = effectiveSettings.appearance;
 	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
 	data.spotlightMult = effectiveSettings.spotlightMult;
 	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;
@@ -3910,9 +4014,15 @@ struct AdaptiveBrightness::Hooks
 			if (a_sky) {
 				effect.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting]);
 				statics.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics]);
+				upper.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyUpper]);
+				middle.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyLower]);
+				horizon.Restore(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kHorizon]);
 			} else {
 				effect = {};
 				statics = {};
+				upper = {};
+				middle = {};
+				horizon = {};
 			}
 			func(a_sky, a_delta);
 			if (!a_sky || !a_sky->currentWeather)
@@ -3922,6 +4032,13 @@ struct AdaptiveBrightness::Hooks
 				const auto lighting = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings();
 				effect.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kEffectLighting], lighting.effectBrightness);
 				statics.Apply(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyStatics], lighting.skyStaticBrightness);
+				const auto& appearance = lighting.appearance;
+				upper.ApplyGrade(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyUpper], appearance.skyTopIntensity, appearance.skyTopCurve,
+					{ appearance.skyTopTint.x, appearance.skyTopTint.y, appearance.skyTopTint.z });
+				middle.ApplyGrade(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kSkyLower], appearance.skyMiddleIntensity, appearance.skyMiddleCurve,
+					{ appearance.skyMiddleTint.x, appearance.skyMiddleTint.y, appearance.skyMiddleTint.z });
+				horizon.ApplyGrade(a_sky, a_sky->skyColor[RE::TESWeather::ColorTypes::kHorizon], appearance.skyHorizonIntensity, appearance.skyHorizonCurve,
+					{ appearance.skyHorizonTint.x, appearance.skyHorizonTint.y, appearance.skyHorizonTint.z });
 				loggedFailure = false;
 			} catch (const std::exception& error) {
 				if (!loggedFailure)
@@ -3932,6 +4049,9 @@ struct AdaptiveBrightness::Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 		static inline WeatherColorAdjustment<RE::NiColor> effect;
 		static inline WeatherColorAdjustment<RE::NiColor> statics;
+		static inline WeatherColorAdjustment<RE::NiColor> upper;
+		static inline WeatherColorAdjustment<RE::NiColor> middle;
+		static inline WeatherColorAdjustment<RE::NiColor> horizon;
 		static inline bool loggedFailure = false;
 	};
 

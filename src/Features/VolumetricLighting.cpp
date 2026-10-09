@@ -1,4 +1,5 @@
 #include "VolumetricLighting.h"
+#include "AdaptiveBrightness.h"
 #include "Menu/SettingsPage.h"
 #include "Utils/RuntimeToggle.h"
 #include "Utils/UI.h"
@@ -404,9 +405,19 @@ bool VolumetricLighting::TryGetActiveGodrayProfile(GodrayProfile& profile) const
 VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile() const
 {
 	GodrayProfile profile{};
-	if (loaded && IsImageSpaceReplacementEnabled())
-		TryGetActiveGodrayProfile(profile);
-	return profile;
+	if (!loaded || !IsImageSpaceReplacementEnabled() || !TryGetActiveGodrayProfile(profile))
+		return profile;
+	const auto appearance = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings().appearance;
+	const GodrayProfile layer{
+		.ShaftIntensity = appearance.godrayIntensity,
+		.Opacity = appearance.godrayOpacity,
+		.Saturation = appearance.godraySaturation,
+		.CustomColorContribution = appearance.godrayTintAmount,
+		.CustomColorRed = appearance.godrayTint.x,
+		.CustomColorGreen = appearance.godrayTint.y,
+		.CustomColorBlue = appearance.godrayTint.z,
+	};
+	return VolumetricLightingTuning::ComposeProfiles(profile, layer);
 }
 
 bool VolumetricLighting::IsPerformanceToggleEnabled() const

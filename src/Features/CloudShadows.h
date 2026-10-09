@@ -15,6 +15,9 @@ public:
 
 	Settings settings;
 
+	/** Composes the active Adaptive Balance layer without changing authored settings. */
+	Settings GetCommonBufferData() const;
+
 	virtual inline std::string GetName() override { return "Cloud Shadows"; }
 	virtual inline std::string GetShortName() override { return "CloudShadows"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }

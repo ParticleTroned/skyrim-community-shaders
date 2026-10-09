@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include "Features/VolumetricLightingTuning.h"
 #include "Utils/ShaderInclude.h"
+#include "adaptive_balance_test_settings.h"
 #include "d3d11_shader_test.h"
 
 #include <d3d11.h>
@@ -149,6 +150,7 @@ namespace
 			context->ClearState();
 			feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint(linear));
 			feature->SetMember("SharedData::linearLightingSettings", "vlGamma", 1.0f);
+			feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", AdaptiveBalanceTest::NeutralAppearance());
 			feature->Bind(context, D3D11ShaderTest::Stage::Pixel);
 			if (volumetric) {
 				std::memcpy(shared->bytes.data(), &data, sizeof(data));
@@ -235,6 +237,8 @@ namespace
 		auto& feature = Runtime::globals::features::volumetricLighting;
 		auto& state = Runtime::globals::replacementState;
 		feature.settings = {};
+		auto& balance = Runtime::globals::features::adaptiveBrightness;
+		balance = {};
 		feature.loaded = true;
 		state = {};
 		Runtime::globals::state = &state;
@@ -254,6 +258,19 @@ namespace
 		expectRuntime({ grey, grey, grey, 0 }, "Exterior saturation did not reach composite");
 		feature.settings.ExteriorGodrays = { .Opacity = 2, .CustomColorContribution = 1, .CustomColorRed = 0, .CustomColorBlue = 0 };
 		expectRuntime({ 0, 0.75f, 0, 0 }, "Exterior color and opacity did not reach composite");
+		const auto authoredProfile = feature.settings.ExteriorGodrays;
+		balance.effective.appearance = { .godrayIntensity = 2.0f, .godrayOpacity = 0.5f, .godrayTint = { 0.0f, 0.0f, 1.0f }, .godrayTintAmount = 0.5f };
+		expectRuntime({ 0, 0.25f, 0.25f, 0 }, "Adaptive Balance did not overlay standalone godray colour and opacity");
+		Require(feature.GetRuntimeGodrayProfile().ShaftIntensity == 2.0f, "Adaptive Balance shaft intensity did not compose");
+		Require(feature.settings.ExteriorGodrays == authoredProfile, "Adaptive Balance changed authored godray settings");
+		balance.enabled = false;
+		expectRuntime({ 0, 0.75f, 0, 0 }, "Disabled Adaptive Balance did not retain standalone godray tuning");
+		balance.enabled = true;
+		feature.settings.ExteriorEnabled = false;
+		expectRuntime(neutral, "Adaptive Balance re-enabled disabled godray tuning");
+		feature.settings.ExteriorEnabled = true;
+		expectRuntime(neutral, "Adaptive Balance godray appearance affected a non-world pass", false);
+		balance = {};
 		feature.settings.InteriorGodrays = { .CustomColorContribution = 1, .CustomColorGreen = 0, .CustomColorBlue = 0 };
 		Runtime::LocationContext::interior = true;
 		expectRuntime(neutral, "Sunless interior retained exterior tuning");

@@ -505,6 +505,83 @@ if(NOT _ambient_type STREQUAL "number" OR NOT _ambient_min EQUAL 0 OR NOT _ambie
     message(FATAL_ERROR "Adaptive Balance Ambient schema must match its 0-5 slider")
 endif()
 
+string(JSON _point_saturation_schema GET "${_descriptor}" inputSchema properties visuals properties pointLightSaturation)
+string(JSON _point_saturation_type GET "${_point_saturation_schema}" type)
+string(JSON _point_saturation_min GET "${_point_saturation_schema}" minimum)
+string(JSON _point_saturation_max GET "${_point_saturation_schema}" maximum)
+string(JSON _point_saturation_default GET "${_point_saturation_schema}" default)
+if(NOT _point_saturation_type STREQUAL "number" OR NOT _point_saturation_min EQUAL 0 OR
+    NOT _point_saturation_max EQUAL 2 OR NOT _point_saturation_default EQUAL 1)
+    message(FATAL_ERROR "Adaptive Balance point-light saturation schema must preserve its neutral default and 0-2 bounds")
+endif()
+
+string(JSON _point_curve_schema GET "${_descriptor}" inputSchema properties visuals properties pointLightCurve)
+string(JSON _point_curve_type GET "${_point_curve_schema}" type)
+string(JSON _point_curve_min GET "${_point_curve_schema}" minimum)
+string(JSON _point_curve_max GET "${_point_curve_schema}" maximum)
+string(JSON _point_curve_default GET "${_point_curve_schema}" default)
+if(NOT _point_curve_type STREQUAL "number" OR NOT _point_curve_min EQUAL 0.1 OR
+    NOT _point_curve_max EQUAL 4 OR NOT _point_curve_default EQUAL 1)
+    message(FATAL_ERROR "Adaptive Balance point-light colour curve schema must preserve its neutral default and 0.1-4 bounds")
+endif()
+
+foreach(_field IN ITEMS fireIntensity fireSaturation fireCurve)
+    string(JSON _fire_schema GET "${_descriptor}" inputSchema properties visuals properties ${_field})
+    string(JSON _fire_type GET "${_fire_schema}" type)
+    string(JSON _fire_min GET "${_fire_schema}" minimum)
+    string(JSON _fire_max GET "${_fire_schema}" maximum)
+    string(JSON _fire_default GET "${_fire_schema}" default)
+    set(_expected_min 0)
+    set(_expected_max 5)
+    if(_field STREQUAL "fireSaturation")
+        set(_expected_max 2)
+    elseif(_field STREQUAL "fireCurve")
+        set(_expected_min 0.25)
+        set(_expected_max 4)
+    endif()
+    if(NOT _fire_type STREQUAL "number" OR NOT _fire_min EQUAL _expected_min OR
+        NOT _fire_max EQUAL _expected_max OR NOT _fire_default EQUAL 1)
+        message(FATAL_ERROR "Adaptive Balance ${_field} schema must preserve its neutral default and slider bounds")
+    endif()
+endforeach()
+
+# Appearance bounds are generated from the same metadata as validation and UI.
+foreach(_appearance_contract IN ITEMS
+    "double AdaptiveBalanceAppearanceBound(float value)"
+    "std::stod(std::to_string(value))"
+    "json BuildAdaptiveBalanceAppearanceSchema()"
+    "for (const auto& field : AdaptiveBalanceAppearance::kScalars)"
+    "for (const auto& field : AdaptiveBalanceAppearance::kTints)"
+    "{ \"minimum\", AdaptiveBalanceAppearanceBound(field.minimum) }"
+    "{ \"maximum\", AdaptiveBalanceAppearanceBound(field.maximum) }"
+    "{ \"default\", field.neutral }"
+    "{ \"minItems\", 3 }, { \"maxItems\", 3 }"
+    "{ \"additionalProperties\", false }"
+    "appearanceValue.size() != 3"
+    "number < AdaptiveBalanceAppearanceBound(scalar->minimum)"
+    "number > AdaptiveBalanceAppearanceBound(scalar->maximum)"
+    "number > AdaptiveBalanceAppearanceBound(tint->maximum)"
+    "configured[\"appearance\"] = profile.appearance;"
+    "effective[\"appearance\"] = lighting.appearance;"
+    "appearance.merge_patch(visuals.at(\"appearance\"));"
+    "profile.appearance = appearance.get<AdaptiveBalanceAppearanceSettings>();"
+    "document[\"inputSchema\"][\"properties\"][\"visuals\"][\"properties\"][\"appearance\"] = BuildAdaptiveBalanceAppearanceSchema();"
+    "RegisterTool(\"communityshaders.menu\", descriptor.c_str(), &ToolHandler, nullptr)"
+)
+    string(FIND "${_bridge}" "${_appearance_contract}" _appearance_position)
+    if(_appearance_position EQUAL -1)
+        message(FATAL_ERROR "Adaptive Balance appearance contract missing: ${_appearance_contract}")
+    endif()
+endforeach()
+string(FIND "${_bridge}" "ValidateAdaptiveBalanceVisuals(visuals)" _appearance_validate)
+string(FIND "${_bridge}" "appearance.merge_patch(visuals.at(\"appearance\"));" _appearance_merge)
+string(FIND "${_bridge}" "balance.settings.globalProfile = profile;" _appearance_commit)
+if(_appearance_validate GREATER _culling_dispatch OR _culling_dispatch GREATER _appearance_merge OR
+    _appearance_merge GREATER _appearance_commit)
+    message(FATAL_ERROR "Appearance updates must validate fully before main-thread staged merge and commit")
+endif()
+message(STATUS "Adaptive Balance appearance metadata, RGB validation, staged update and schema are coherent")
+
 # Clients need input bounds and viewport acknowledgements for bounded UI scrolling.
 foreach(_bound IN ITEMS minimum maximum)
     string(JSON _value GET "${_descriptor}" inputSchema properties scrollRatio ${_bound})

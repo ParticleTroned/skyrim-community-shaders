@@ -2237,6 +2237,7 @@ PS_OUTPUT main(PS_INPUT input)
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #						endif
+	fogColor = AdaptiveBalanceAppearance::ApplyFog(fogColor);
 
 	float3 finalColor = lerp(finalColorPreFog, fogColor * PosAdjust[eyeIndex].w, Color::FogAlpha(fogDistanceFactor));
 
@@ -2267,6 +2268,7 @@ PS_OUTPUT main(PS_INPUT input)
 		preFogColor = ImageBasedLighting::GetFogIBLColor(preFogColor);
 	}
 #						endif
+	preFogColor = AdaptiveBalanceAppearance::ApplyFog(preFogColor);
 
 	finalColorPreFog = lerp(finalColorPreFog, preFogColor * PosAdjust[eyeIndex].w, Color::FogAlpha(fogDistanceFactor));
 
@@ -2279,6 +2281,7 @@ PS_OUTPUT main(PS_INPUT input)
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #						endif
+	fogColor = AdaptiveBalanceAppearance::ApplyFog(fogColor);
 	refractionColor = lerp(refractionColor, fogColor, Color::FogAlpha(fogFactor));
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);

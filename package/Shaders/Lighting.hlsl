@@ -4126,6 +4126,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #		endif
+	fogColor = AdaptiveBalanceAppearance::ApplyFog(fogColor);
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0)
 		fogColor = 0.0;
 	if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z)

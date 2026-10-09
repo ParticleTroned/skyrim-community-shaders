@@ -1,5 +1,6 @@
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
+#include "Common/AdaptiveBalanceFire.hlsli"
 #include "Common/CharacterCategoryMask.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
@@ -535,6 +536,41 @@ cbuffer PerGeometry : register(b2)
 
 #	include "Common/ShadowSampling.hlsli"
 
+bool IsParticleEffect()
+{
+#	if !defined(MOTIONVECTORS_NORMALS) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL) && !defined(MEMBRANE)
+	return Color::IsSceneColorDraw() &&
+	       !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) &&
+	       !AdaptiveBalanceFire::IsFire();
+#	else
+	return false;
+#	endif
+}
+
+bool UseParticleLightingInfluence()
+{
+	return IsParticleEffect() &&
+	       (SharedData::adaptiveBalanceSettings.appearance.particleDirectionalInfluence != 1.0 ||
+			   SharedData::adaptiveBalanceSettings.appearance.particleAmbientInfluence != 1.0);
+}
+
+void ApplyParticleLightingInfluence(inout float3 dirColor, inout float3 ambientColor)
+{
+	if (UseParticleLightingInfluence()) {
+		if (SharedData::adaptiveBalanceSettings.appearance.particleDirectionalInfluence != 1.0)
+			dirColor *= SharedData::adaptiveBalanceSettings.appearance.particleDirectionalInfluence;
+		if (SharedData::adaptiveBalanceSettings.appearance.particleAmbientInfluence != 1.0)
+			ambientColor *= SharedData::adaptiveBalanceSettings.appearance.particleAmbientInfluence;
+	}
+}
+
+float3 ApplyParticlePointInfluence(float3 color)
+{
+	if (IsParticleEffect() && SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence != 1.0)
+		color *= SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence;
+	return color;
+}
+
 bool UseAmbientEffectLighting()
 {
 	return SharedData::adaptiveBalanceSettings.useAmbientEffectLighting &&
@@ -595,6 +631,9 @@ float3 GetAmbientEffectLighting(float3 worldPosition, float2 screenPosition, uin
 #	endif
 	float3 ambientColor = Color::ApplyAmbientBalance(GetEffectAmbientLighting(skylightingDiffuse));
 	float3 dirColor = ShadowSampling::GetDirectionalLighting() * EffectDirectionalLightScale;
+#	if defined(LIGHTING)
+	ApplyParticleLightingInfluence(dirColor, ambientColor);
+#	endif
 	[branch] if (!any(dirColor != 0.0))
 	{
 		shadowVariance = 1.0;
@@ -633,6 +672,7 @@ void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 am
 	float3 dirLightColorDir = ShadowSampling::GetDirectionalLighting();
 	ShadowSampling::DecomposeLighting(inputColor, ambientColorAmb, dirLightColorDir, dirColor, ambientColor);
 	ambientColor = Color::ApplyAmbientBalance(ambientColor);
+	ApplyParticleLightingInfluence(dirColor, ambientColor);
 }
 
 #	if defined(LIGHTING)
@@ -656,7 +696,14 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	}
 	else if (suppressExternalEmittance)
 	{
-		color = ShadowSampling::GetSceneLightingColor();
+		if (UseParticleLightingInfluence()) {
+			float3 ambientColor = Color::ApplyAmbientBalance(ShadowSampling::GetAmbientLighting(ShadowSampling::LightingSampleNormal));
+			float3 dirColor = ShadowSampling::GetDirectionalLighting();
+			ApplyParticleLightingInfluence(dirColor, ambientColor);
+			color = ambientColor + dirColor;
+		} else {
+			color = ShadowSampling::GetSceneLightingColor();
+		}
 	}
 	else if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::EffectShadows))
 	{
@@ -674,6 +721,14 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	}
 	else
 	{
+		if (UseParticleLightingInfluence()) {
+			float3 ambientColor;
+			float3 dirColor;
+			ShadowSampling::DecomposeLighting(color, GetEffectAmbientLighting(1.0),
+				ShadowSampling::GetDirectionalLighting(), dirColor, ambientColor);
+			ApplyParticleLightingInfluence(dirColor, ambientColor);
+			color = ambientColor + dirColor;
+		}
 #		if defined(SKYLIGHTING)
 		if (!SharedData::InInterior) {
 			float skylightingDiffuse = GetEffectSkylightingDiffuse(worldPosition, eyeIndex);
@@ -689,9 +744,11 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
 #		endif
 	{
-		color.x += dot(Color::PointLight(PLightColorR.xxx).x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
-		color.y += dot(Color::PointLight(PLightColorG.xxx).x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
-		color.z += dot(Color::PointLight(PLightColorB.xxx).x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
+		// Saturation needs the complete light color before its channels are accumulated.
+		float3 pointLightColor = ApplyParticlePointInfluence(Color::PointLight(float3(PLightColorR.x, PLightColorG.x, PLightColorB.x)));
+		color.x += dot(pointLightColor.x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
+		color.y += dot(pointLightColor.y * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
+		color.z += dot(pointLightColor.z * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
 	}
 
 	return color;
@@ -789,7 +846,7 @@ PS_OUTPUT main(PS_INPUT input)
 				const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
 				float3 lightColor =
 					Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
-				propertyColor += lightColor;
+				propertyColor += ApplyParticlePointInfluence(lightColor);
 			}
 		}
 	}
@@ -905,6 +962,14 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 #	if !defined(MOTIONVECTORS_NORMALS)
+	if (!AdaptiveBalanceFire::IsFire() && (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject))) {
+		lightColor = AdaptiveBalanceAppearance::ApplyColor(lightColor, 1.0,
+			SharedData::adaptiveBalanceSettings.appearance.skyStaticCurve, 1.0,
+			SharedData::adaptiveBalanceSettings.appearance.skyStaticTint);
+	} else if (IsParticleEffect()) {
+		lightColor = AdaptiveBalanceAppearance::ApplyColor(lightColor,
+			SharedData::adaptiveBalanceSettings.appearance.particleIntensity, 1.0, 1.0, 1.0.xxx);
+	}
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
 		discard;
 	}
@@ -912,8 +977,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 #		if defined(ADDBLEND)
-	float3 blendedColor =
-		lightColor * (1 - Color::FogAlpha(input.FogParam.w).xxx);
+	float3 additiveColor = AdaptiveBalanceFire::Apply(lightColor);
+	if (!AdaptiveBalanceFire::IsFire()) {
+		additiveColor = AdaptiveBalanceAppearance::ApplyColor(additiveColor,
+			SharedData::adaptiveBalanceSettings.appearance.lightSpriteIntensity,
+			SharedData::adaptiveBalanceSettings.appearance.lightSpriteCurve, 1.0, 1.0.xxx);
+	}
+	float3 blendedColor = additiveColor * (1 - Color::FogAlpha(input.FogParam.w).xxx);
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 	float3 blendedColor =
 		lerp(lightColor, 1.0.xxx, saturate(1.5 * Color::FogAlpha(input.FogParam.w)).xxx);
@@ -924,6 +994,7 @@ PS_OUTPUT main(PS_INPUT input)
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #			endif
+	fogColor = AdaptiveBalanceAppearance::ApplyFog(fogColor);
 	float3 blendedColor =
 		lerp(lightColor, fogColor, Color::FogAlpha(input.FogParam.w).xxx);
 #		endif

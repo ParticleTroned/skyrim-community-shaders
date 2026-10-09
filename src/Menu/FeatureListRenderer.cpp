@@ -612,12 +612,16 @@ void FeatureListRenderer::RenderFeatureList(
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 2.4f);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 7.6f);
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
-			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		} else {
 			// When left panel is hidden, right column takes full width
 			ImGui::TableSetupColumn("##MenuConfig", 0, 1);
-			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto entry = IsSelectableMenuEntry(menuList, selectedMenu) ? GetSelectableMenuEntryId(menuList[selectedMenu]) : std::string{};
+		if (entry != selectedMenuEntryId)
+			MenuUI::DevBenchViewport::Invalidate();
+#endif
+		RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 
 		ImGui::EndTable();
 	}
@@ -748,17 +752,15 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 }
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-bool FeatureListRenderer::TryQueueBuiltInPage(const std::string& a_page)
+std::string FeatureListRenderer::GetBuiltInPageMenuEntryId(const std::string& a_page)
 {
 	std::map<std::string, bool> categories;
 	for (const auto& entry : BuildMenuList({}, categories, {}, {})) {
 		const auto* menu = std::get_if<BuiltInMenu>(&entry);
-		if (menu && a_page == BuiltInPageId(*menu)) {
-			globals::menu->SelectFeatureMenu(GetSelectableMenuEntryId(entry));
-			return true;
-		}
+		if (menu && a_page == BuiltInPageId(*menu))
+			return GetSelectableMenuEntryId(entry);
 	}
-	return false;
+	return {};
 }
 #endif
 

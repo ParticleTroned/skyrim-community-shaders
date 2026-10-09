@@ -17,8 +17,8 @@ public:
 	static void SetSidebarVisible(bool a_visible);
 	static bool IsSidebarVisible();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	/** Queue an existing built-in page through the normal menu selection path. */
-	static bool TryQueueBuiltInPage(const std::string& a_page);
+	/** Return an existing built-in menu entry ID without queuing navigation. */
+	static std::string GetBuiltInPageMenuEntryId(const std::string& a_page);
 #endif
 	/** Resume the user's automatic visibility preference. */
 	static void ResetSidebarVisibility();

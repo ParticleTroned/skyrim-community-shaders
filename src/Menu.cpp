@@ -27,6 +27,7 @@
 #include "Features/Upscaling.h"
 #include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/BackgroundBlur.h"
+#include "Menu/DevBenchViewport.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "Menu/HomePageRenderer.h"
@@ -1384,6 +1385,9 @@ void Menu::OpenMenu(bool a_cancelUserMeasurement)
 		return;
 
 	IsEnabled = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	MenuUI::DevBenchViewport::Invalidate();
+#endif
 	if (globals::features::vr.IsOpenVRCompatible()) {
 		auto& vr = globals::features::vr;
 		vr.ResetMenuInputRuntimeState();
@@ -1404,6 +1408,9 @@ void Menu::CloseMenu()
 		editorWindow->UpdateOpenState();
 	}
 	IsEnabled = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	MenuUI::DevBenchViewport::Invalidate();
+#endif
 	systemCommitLastRefreshTime = -1.0;
 
 	PerformanceTuningRenderer::NotifyMenuClosed();
@@ -1787,5 +1794,8 @@ bool Menu::IsPreviewFlying()
 void Menu::SelectFeatureMenu(const std::string& featureName)
 {
 	pendingFeatureSelection = featureName;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	MenuUI::DevBenchViewport::Invalidate();
+#endif
 	logger::info("Queued navigation to {} feature menu", featureName);
 }

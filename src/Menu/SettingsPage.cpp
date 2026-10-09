@@ -121,6 +121,9 @@ namespace MenuUI
 			return false;
 		state.selected = a_section;
 		state.pending = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		DevBenchViewport::Invalidate();
+#endif
 		return true;
 	}
 

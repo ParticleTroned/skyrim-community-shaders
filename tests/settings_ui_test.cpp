@@ -433,9 +433,9 @@ int main()
 
 		using Viewport = MenuUI::DevBenchViewport;
 		bool allowScroll = true;
-		auto drawScrollable = [&](const char* tab = "content") {
+		auto drawScrollable = [&](const char* tab = "content", const char* window = "ScrollContent") {
 			Viewport outer("ScrollTest", "legacy", allowScroll);
-			ImGui::BeginChild("ScrollContent", { 0, 250 });
+			ImGui::BeginChild(window, { 0, 250 });
 			{
 				Viewport inner("ScrollTest", tab, allowScroll);
 				ImGui::Dummy({ 1, 2000 });
@@ -474,6 +474,42 @@ int main()
 			frame([] {});
 		frame(drawScroll);
 		require(Viewport::Describe(true)["appliedGeneration"] == applied, "request cannot survive an absent UI viewport");
+		frame(drawScroll);
+		frame(drawScroll);
+		require(Viewport::Scroll("ScrollTest", "content", 0), "window ownership fixture accepted");
+		frame([&] { drawScrollable("content", "OtherScrollContent"); });
+		frame(drawScroll);
+		require(Viewport::Describe(true)["appliedGeneration"] == applied, "identical page and tab cannot transfer a scroll to another window");
+		for (int i = 0; i < 3; ++i)
+			frame([] {});
+		require(!Viewport::Describe(true)["fresh"].get<bool>() && !Viewport::Scroll("ScrollTest", "content", 0), "absent viewport loses freshness before the wall-clock timeout");
+		frame(drawScroll);
+		auto drawParent = [&] { Viewport outer("ScrollTest", "legacy", true); ImGui::Dummy({ 1, 2000 }); };
+		frame(drawParent);
+		frame(drawParent);
+		require(Viewport::Scroll("ScrollTest", "legacy", 0), "new nested viewport fixture accepted");
+		frame(drawScroll);
+		frame(drawScroll);
+		require(Viewport::Describe(true)["appliedGeneration"] == applied && Viewport::Describe(true)["tab"] == "content", "a parent cannot consume a request after nested content becomes the active viewport");
+		require(Viewport::Scroll("ScrollTest", "content", 0), "menu closure fixture accepted");
+		Viewport::Invalidate();
+		require(!Viewport::Describe(false)["pending"].get<bool>() && !Viewport::Describe(true)["fresh"].get<bool>() && !Viewport::Scroll("ScrollTest", "content", 0), "closure and reopening require a newly rendered viewport");
+		frame(drawScroll);
+		require(Viewport::Describe(true)["fresh"].get<bool>(), "reopened viewport becomes fresh after rendering");
+		frame([&] { Viewport scope("ScrollTest", "content", true); Viewport::Invalidate(); });
+		require(!Viewport::Describe(true)["fresh"].get<bool>(), "an invalidated scope cannot republish stale state on destruction");
+		frame(drawScroll);
+		require(Viewport::Scroll("ScrollTest", "content", 0), "context replacement fixture accepted");
+		auto* originalContext = ImGui::GetCurrentContext();
+		ImGui::SetCurrentContext(ImGui::CreateContext());
+		require(!Viewport::Describe(true)["fresh"].get<bool>() && !Viewport::Describe(true)["pending"].get<bool>() && !Viewport::Scroll("ScrollTest", "content", 0), "a different ImGui context cannot use prior observations or requests");
+		ImGui::DestroyContext();
+		ImGui::SetCurrentContext(originalContext);
+		frame(drawScroll);
+		require(Viewport::Describe(true)["appliedGeneration"] == applied, "context replacement cancels the old request");
+		ImGui::SetCurrentContext(nullptr);
+		require(!Viewport::Describe(true)["fresh"].get<bool>() && !Viewport::Scroll("ScrollTest", "content", 0), "absent ImGui context fails closed without dereferencing it");
+		ImGui::SetCurrentContext(originalContext);
 		frame([&] { Viewport legacy("LegacyTest", "legacy", true); ImGui::Dummy({ 1, 2000 }); });
 		require(Viewport::Describe(true)["page"] == "LegacyTest" && Viewport::Describe(true)["tab"] == "legacy", "untabbed content remains observable");
 
@@ -488,6 +524,11 @@ int main()
 		frame(drawPage);
 		frame(drawPage);
 		require(MenuUI::SettingsPage::Selected("TestPage") == "overview", "overview is default");
+		require(Viewport::Scroll("TestPage", "overview", 0), "tab round trip fixture accepted");
+		require(MenuUI::SettingsPage::Navigate("TestPage", "look") && MenuUI::SettingsPage::Navigate("TestPage", "overview"), "tab round trip queued before rendering");
+		require(!Viewport::Describe(true)["pending"].get<bool>() && !Viewport::Describe(true)["fresh"].get<bool>() && !Viewport::Scroll("TestPage", "overview", 0), "queued navigation immediately invalidates the old viewport even after a round trip");
+		frame(drawPage);
+		frame(drawPage);
 		require(!MenuUI::SettingsPage::Navigate("Missing", "mode"), "unknown page rejected");
 		require(!MenuUI::SettingsPage::Navigate("TestPage", "missing"), "unknown tab rejected");
 		const auto card = Util::controls.at("Choose the rendering mode.");

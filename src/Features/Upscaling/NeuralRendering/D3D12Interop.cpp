@@ -601,6 +601,8 @@ namespace NeuralRendering
 				logger::warn("[DLSSNR] D3D12 command contexts saturated; applying bounded CPU backpressure");
 				backpressureLogged_ = true;
 			}
+			// Submit D3D11 readiness signals before the CPU waits on dependent D3D12 work.
+			context11_->Flush();
 			IncrementSaturating(telemetry_.backpressureWaits);
 			const auto waitStarted = DiagnosticNow();
 			const bool waitSucceeded = WaitForFenceLocked(

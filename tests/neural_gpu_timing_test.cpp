@@ -2,10 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <dxgi1_6.h>
 #include <format>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace logger
 {
@@ -48,9 +51,64 @@ namespace globals
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <wrl/client.h>
+// Model D3D11's buffered Signal/Wait packets using a second real D3D12 queue.
+class BufferedD3D11Context : public IUnknown
+{
+	ULONG references = 1;
+	Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+	Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+	std::vector<std::pair<bool, std::uint64_t>> commands;
+
+public:
+	bool holdSubmission = false;
+	int flushes = 0;
+	BufferedD3D11Context(ID3D12CommandQueue* producer, ID3D12Fence* shared) : queue(producer), fence(shared) {}
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID requested, void** object) override
+	{
+		if (!object)
+			return E_POINTER;
+		*object = nullptr;
+		if (requested == __uuidof(IUnknown)) {
+			*object = static_cast<IUnknown*>(this);
+			AddRef();
+			return S_OK;
+		}
+		return E_NOINTERFACE;
+	}
+	ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+	ULONG STDMETHODCALLTYPE Release() override
+	{
+		const auto remaining = --references;
+		if (!remaining)
+			delete this;
+		return remaining;
+	}
+	HRESULT Signal(ID3D11Fence*, std::uint64_t value)
+	{
+		commands.emplace_back(true, value);
+		return S_OK;
+	}
+	HRESULT Wait(ID3D11Fence*, std::uint64_t value)
+	{
+		commands.emplace_back(false, value);
+		return S_OK;
+	}
+	void Flush()
+	{
+		++flushes;
+		if (holdSubmission)
+			return;
+		for (const auto& [signal, value] : commands)
+			if (FAILED(signal ? queue->Signal(fence.Get(), value) : queue->Wait(fence.Get(), value)))
+				throw std::runtime_error("buffered D3D11 producer queue failed");
+		commands.clear();
+	}
+};
+#define ID3D11DeviceContext4 BufferedD3D11Context
 #define private public
 #include "Features/Upscaling/NeuralRendering/D3D12Interop.h"
 #undef private
+#undef ID3D11DeviceContext4
 #include "neural_gpu_timing_under_test.h"
 namespace NeuralRendering
 {
@@ -84,9 +142,27 @@ namespace
 			D3D12_COMMAND_QUEUE_DESC desc{};
 			Check(interop.device12_->CreateCommandQueue(&desc, IID_PPV_ARGS(&interop.queue12_)));
 			Check(interop.device12_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&interop.fence12_)));
+			ComPtr<ID3D12CommandQueue> producer;
+			Check(interop.device12_->CreateCommandQueue(&desc, IID_PPV_ARGS(&producer)));
+			SetD3D12Name(producer.Get(), "NRBackpressureTest::D3D11Producer");
+			interop.context11_.Attach(new BufferedD3D11Context(producer.Get(), interop.fence12_.Get()));
 			for (std::size_t index = 0; index < interop.kCommandContextCount; ++index)
 				Require(interop.CreateCommandContextLocked(index), "command context creation failed");
 			interop.initialized_ = true;
+		}
+		~Fixture()
+		{
+			try {
+				interop.context11_->holdSubmission = false;
+				Require(interop.queue12_ != nullptr, "test cleanup lost its consumer queue");
+				if (interop.recording_)
+					Require(interop.AbortD3D12(), "test cleanup could not abort command recording");
+				Require(interop.WaitForIdle(), "test cleanup could not drain the queues");
+			} catch (const std::exception& error) {
+				// Do not release resources or event handles while GPU work may still use them.
+				std::cerr << "GPU fixture cleanup failed: " << error.what() << std::endl;
+				std::_Exit(EXIT_FAILURE);
+			}
 		}
 		ID3D12GraphicsCommandList* Begin(std::size_t index = 0)
 		{
@@ -109,15 +185,11 @@ namespace
 			Check(context.commandList->Close());
 			ID3D12CommandList* lists[]{ context.commandList.Get() };
 			interop.queue12_->ExecuteCommandLists(1, lists);
-			Check(interop.queue12_->Signal(interop.fence12_.Get(), ++fence));
-			context.fenceValue = fence;
-			HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-			Require(event != nullptr, "fence event failed");
-			const auto result = interop.fence12_->SetEventOnCompletion(fence, event);
-			const auto wait = SUCCEEDED(result) ? WaitForSingleObject(event, 5000) : WAIT_FAILED;
-			CloseHandle(event);
-			Require(wait == WAIT_OBJECT_0, "test GPU completion timed out");
 			interop.recording_ = false;
+			fence = ++interop.fenceValue_;
+			Check(interop.queue12_->Signal(interop.fence12_.Get(), fence));
+			context.fenceValue = fence;
+			Require(interop.WaitForFenceLocked(fence, 5000, "Test submission"), "test GPU completion timed out");
 		}
 		static D3D12InteropSubmissionTiming Timing(std::uint32_t evaluations = 2)
 		{
@@ -136,7 +208,61 @@ namespace
 			interop.BeginEvaluationTiming(list, region);
 			interop.EndEvaluationTiming(list, region);
 		}
+		void RecordSubmission(ID3D12GraphicsCommandList* list, std::uint32_t frame)
+		{
+			auto timing = Timing();
+			timing.frameId = frame;
+			Require(BeginFeatureScope(list, timing), "submission timing scope failed");
+			Evaluate(list, 0);
+			Evaluate(list, 1);
+			Require(EndFeatureScope(list), "submission timing scope close failed");
+			Require(interop.EndD3D12(), "command submission failed");
+		}
 	};
+	void CommandBackpressure()
+	{
+		for (std::size_t cursor = 0; cursor < D3D12Interop::kCommandContextCount; ++cursor)
+			for (const auto epoch : { 0u, 1u })
+				for (const bool stall : { false, true }) {
+					Fixture f;
+					globals::source.epoch = epoch;
+					f.interop.commandContextCursor_ = cursor;
+					auto& immediate = *f.interop.context11_.Get();
+					ID3D12GraphicsCommandList* list = nullptr;
+					for (std::uint32_t i = 0; i < f.interop.kCommandContextCount; ++i) {
+						Require(f.interop.BeginD3D12(&list), "free command slot could not begin recording");
+						f.RecordSubmission(list, i + 1);
+					}
+					Require(immediate.flushes == 0, "a free command slot unnecessarily flushed D3D11");
+					Require(globals::source.samples.empty(), "timing published before producer submission");
+					std::array<std::uint64_t, D3D12Interop::kCommandContextCount> busyFences{};
+					for (std::size_t i = 0; i < busyFences.size(); ++i)
+						busyFences[i] = f.interop.commandContexts_[i].fenceValue;
+					const auto submittedFence = f.interop.fenceValue_;
+					immediate.holdSubmission = stall;
+					const bool began = f.interop.BeginD3D12(&list);
+					Require(began != stall, "buffered producer submission timed out or a stalled queue reused a busy allocator");
+					Require(f.interop.recording_ == began && (list != nullptr) == began, "command recording ownership does not match its result");
+					if (stall) {
+						Require(f.interop.lastError_ == HRESULT_FROM_WIN32(ERROR_TIMEOUT) &&
+									f.interop.lastOperation_ == "BeginD3D12 backpressure" && f.interop.pendingFenceEvents_.size() == 1,
+							"genuine backpressure timeout lost its bounded failure and pending fence ownership");
+						Require(f.interop.commandContextCursor_ == cursor && f.interop.fenceValue_ == submittedFence,
+							"timeout advanced command or fence ownership");
+						for (std::size_t i = 0; i < busyFences.size(); ++i)
+							Require(f.interop.commandContexts_[i].fenceValue == busyFences[i], "timeout discarded an in-flight context fence");
+						immediate.holdSubmission = false;
+						Require(f.interop.BeginD3D12(&list), "command recording did not recover after producer submission resumed");
+					}
+					f.RecordSubmission(list, 4);
+					Require(f.interop.WaitForIdle(), "backpressure submissions failed to drain");
+					Require(f.interop.pendingFenceEvents_.empty(), "completed timeout event was not retired");
+					const auto& samples = globals::source.samples;
+					Require(samples.size() == 4 * epoch, "backpressure lost or fabricated an inference sample");
+					for (std::size_t i = 0; i < samples.size(); ++i)
+						Require(samples[i].frameId == i + 1, "command reuse published inference samples out of submission order");
+				}
+	}
 	void OffAndLive()
 	{
 		Fixture f;
@@ -274,6 +400,7 @@ namespace
 int main()
 {
 	try {
+		CommandBackpressure();
 		OffAndLive();
 		CancelAndFailure();
 		EvaluationIntervals();

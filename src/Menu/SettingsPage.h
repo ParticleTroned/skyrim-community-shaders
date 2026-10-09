@@ -36,7 +36,8 @@ namespace MenuUI
 		const char* stage = nullptr;
 		const char* cardTitle = nullptr;
 		const char* guidance = nullptr;
-		bool active = true;  // Inactive steps remain navigable for their explanation.
+		bool active = true;   // Inactive steps remain navigable for their explanation.
+		bool showTab = true;  // Card-only sections retain navigation and overview cards.
 	};
 
 	/** One mutually exclusive option; disabled choices keep their own help. */
@@ -126,7 +127,7 @@ namespace MenuUI
 		/** Align surrounding text with the line through the overview step markers. */
 		static float OverviewTextInset(const char* a_page, float a_panelWidth);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		/** Navigate only to an available tab of an observed page. */
+		/** Navigate to an available section, including tools opened from overview cards. */
 		static bool Navigate(const char* a_page, const char* a_section);
 		static nlohmann::json Describe();
 #endif

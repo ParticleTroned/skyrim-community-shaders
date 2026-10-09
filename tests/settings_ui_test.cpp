@@ -489,14 +489,14 @@ void frame(const std::function<void()>& draw)
 	ImGui::Render();
 	require(GImGui->ErrorCountCurrentFrame == 0, "UI frame leaves ImGui windows, IDs and styles balanced");
 }
-void click(const ImVec2& point, const std::function<void()>& draw)
+void click(const ImVec2& point, const std::function<void()>& draw, int mouseButton = 0)
 {
 	auto& io = ImGui::GetIO();
 	io.AddMousePosEvent(point.x, point.y);
 	frame(draw);
-	io.AddMouseButtonEvent(0, true);
+	io.AddMouseButtonEvent(mouseButton, true);
 	frame(draw);
-	io.AddMouseButtonEvent(0, false);
+	io.AddMouseButtonEvent(mouseButton, false);
 	frame(draw);
 }
 void key(ImGuiKey keyCode, const std::function<void()>& draw)
@@ -808,6 +808,12 @@ int main()
 		feature.supportsMeasurement = true;
 		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
 		require(MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement eligibility is independent of profiling");
+		for (int settle = 0; settle < 3; ++settle) frame(drawNoTuning);
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance", "a feature without ordinary tabs still opens its performance card section");
+		for (const auto& entry : MenuUI::SettingsPage::Describe())
+			if (entry["page"] == "FeaturePage")
+				for (const auto& tab : entry["tabs"])
+					require(!tab["showTab"].get<bool>(), "a feature with only tool cards reports no visible top tabs");
 		ProfilingRenderer::eligible = true;
 		auto drawGlobalPerformance = [&] { MenuUI::SettingsPage page("PerformanceTuning", { { "compare", "Compare total feature set", "Compare features" } }); };
 		frame(drawGlobalPerformance);
@@ -830,7 +836,11 @@ int main()
 		}
 
 		Feature neuralRendering{ "NeuralRendering", true, true };
+		ImGuiID neuralTabBar = 0;
 		auto drawNeuralRendering = [&] {
+			ImGui::PushID("NeuralRendering");
+			neuralTabBar = ImGui::GetID("##SetupTabs");
+			ImGui::PopID();
 			MenuUI::FeatureScope scope(&neuralRendering);
 			MenuUI::SettingsPage page("Unused", { { "mode", "Mode", "NR route" } });
 		};
@@ -844,6 +854,93 @@ int main()
 		for (int i = 0; i < 3; ++i) frame(drawNeuralRendering);
 		require(ProfilingRenderer::draws > profilingBefore && PerformanceTuningRenderer::draws == nrMeasurementBefore, "NR profiling tab draws independent controls without starting measurement");
 		require(MenuUI::SettingsPage::Navigate("NeuralRendering", "performance") && MenuUI::SettingsPage::Navigate("NeuralRendering", "mode"), "NR independent profiling preserves measurement and route navigation");
+
+		auto* featureTabs = GImGui->TabBars.GetByKey(neuralTabBar);
+		require(featureTabs && featureTabs->Tabs.Size == 2, "feature top bar contains only Overview and its settings tab");
+		for (auto& tab : featureTabs->Tabs)
+			require(std::string_view(ImGui::TabBarGetTabName(featureTabs, &tab)) == "Overview" ||
+						std::string_view(ImGui::TabBarGetTabName(featureTabs, &tab)) == "Mode",
+				"performance and profiling tools must not appear in feature top tabs");
+		for (const auto& entry : MenuUI::SettingsPage::Describe())
+			if (entry["page"] == "NeuralRendering")
+				for (const auto& tab : entry["tabs"])
+					require(tab["showTab"] == (tab["id"] == "overview" || tab["id"] == "mode"), "DevBench distinguishes card-only tools from top tabs without losing navigation");
+
+		for (const char* previous : { "overview", "mode" })
+			for (const char* tool : { "performance", "profiling" })
+				for (const char* target : { "overview", "mode" }) {
+					require(MenuUI::SettingsPage::Navigate("NeuralRendering", previous), "feature settings can precede a card-only tool");
+					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
+					require(MenuUI::SettingsPage::Navigate("NeuralRendering", tool), "DevBench can still open card-only tools");
+					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == tool, "retained ImGui top selection cannot replace a card-only tool");
+					const char* help = std::string_view(target) == "overview" ? "Start here. Choose a card to open its settings." : "NR route";
+					click(Util::controls.at(help).GetCenter(), drawNeuralRendering);
+					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == target, "top tabs leave card-only tools even when ImGui already retains the clicked tab");
+					require(MenuUI::SettingsPage::Navigate("NeuralRendering", tool), "retained-tab right-click fixture opens a card-only tool");
+					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
+					click(Util::controls.at(help).GetCenter(), drawNeuralRendering, 1);
+					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == target, "right-clicks leave card-only tools even when ImGui already retains the clicked tab");
+				}
+
+		Feature toolNavigation{ "FeaturePage", true, true };
+		ImGuiID toolNavigationBar = 0;
+		bool allowTopNavigation = true, showRouteTab = true;
+		float toolPanelWidth = 850, toolTabFontSize = 0;
+		auto drawToolNavigation = [&] {
+			ImGui::BeginChild("ToolNavigation", { toolPanelWidth, 600 });
+			toolTabFontSize = ImGui::GetFontSize();
+			{
+				ImGui::PushID("FeaturePage");
+				toolNavigationBar = ImGui::GetID("##SetupTabs");
+				ImGui::PopID();
+				MenuUI::FeatureScope scope(&toolNavigation);
+				MenuUI::SettingsPage page("Unused", { { "route", "Choose the rendering route", "Navigation route", {}, showRouteTab }, { "look", "Adjust the rendering appearance", "Navigation appearance" }, { "advanced", "Configure additional rendering options", "Navigation options" } }, "Your setup", "", {}, [&](std::string_view target) {
+					return allowTopNavigation || target == "overview" || target == "performance" || target == "profiling";
+				});
+			}
+			ImGui::EndChild();
+		};
+		for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+		for (const char* tool : { "performance", "profiling" }) {
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", "overview"), "overflow fixture starts at Overview");
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "overflow fixture opens a card-only tool");
+			toolPanelWidth = 210;
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			auto* bar = GImGui->TabBars.GetByKey(toolNavigationBar);
+			require(bar && bar->ScrollButtonEnabled, "narrow feature pages expose native overflow arrows");
+			const ImVec2 rightArrow{ bar->BarRect.Max.x - (toolTabFontSize - 2) * .5f, bar->BarRect.GetCenter().y };
+			click(rightArrow, drawToolNavigation);
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == "route", "overflow arrows leave card-only tools and select ordinary settings");
+			toolPanelWidth = 850;
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "right-click fixture opens a card-only tool");
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			click(Util::controls.at("Navigation appearance").GetCenter(), drawToolNavigation, 1);
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == "look", "right-click selection leaves card-only tools");
+
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "guard fixture opens a card-only tool");
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			allowTopNavigation = false;
+			click(Util::controls.at("Navigation route").GetCenter(), drawToolNavigation);
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == tool, "top-tab selection cannot bypass a guard while a card-only tool is open");
+			allowTopNavigation = true;
+			click(Util::controls.at("Navigation route").GetCenter(), drawToolNavigation);
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == "route", "a released guard restores top-tab navigation");
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "visibility fixture opens a card-only tool");
+			showRouteTab = false;
+			for (int settle = 0; settle < 4; ++settle) frame(drawToolNavigation);
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == tool, "automatic replacement of a hidden retained tab cannot leave a card-only tool");
+			showRouteTab = true;
+			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
+		}
 
 		ProfilingRenderer::inspect = PerformanceTuningRenderer::inspect = [] { ImGui::Dummy({ 0, 1000 }); };
 		for (const float font : { 13.0f, 21.0f })

@@ -13,6 +13,7 @@
 #include <imgui_internal.h>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 
 namespace MenuUI
 {
@@ -171,10 +172,11 @@ namespace MenuUI
 		std::scoped_lock lock(navigationMutex);
 		auto result = nlohmann::json::array();
 		for (const auto& [id, state] : navigation) {
-			auto tabs = nlohmann::json::array({ { { "id", "overview" }, { "title", "Overview" } } });
+			const bool showOverviewTab = std::ranges::any_of(state.sections, [](const Section& step) { return step.visible && step.showTab; });
+			auto tabs = nlohmann::json::array({ { { "id", "overview" }, { "title", "Overview" }, { "showTab", showOverviewTab } } });
 			for (const auto& step : state.sections)
 				if (step.visible)
-					tabs.push_back({ { "id", step.id }, { "title", step.title }, { "summary", step.summary } });
+					tabs.push_back({ { "id", step.id }, { "title", step.title }, { "summary", step.summary }, { "showTab", step.showTab } });
 			result.push_back({ { "page", id }, { "selected", state.selected }, { "tabs", std::move(tabs) } });
 		}
 		return result;
@@ -190,8 +192,11 @@ namespace MenuUI
 		const bool measurementAvailable = activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning";
 		const bool profilingAvailable = globals::profiler && (activeFeature ? (!measurementAvailable || activeFeature->HasIndependentProfilingTab()) && ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning");
 		if (activeFeature || (pageId != "Home" && pageId != "General" && pageId != "Advanced")) {
-			sections.push_back({ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" });
-			sections.push_back({ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false });
+			Section performance{ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" };
+			Section profiling{ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false };
+			performance.showTab = profiling.showTab = !activeFeature;
+			sections.push_back(std::move(performance));
+			sections.push_back(std::move(profiling));
 		}
 		ImGui::PushID(a_id);
 		auto [entry, inserted] = navigation.try_emplace(a_id);
@@ -202,6 +207,7 @@ namespace MenuUI
 		}
 		state.canSelect = std::move(a_canSelect);
 		bool rejectedSelection = false;
+		bool activatedTopTab = false;
 		state.sections = sections;
 		if (state.selected != "overview" && std::ranges::none_of(sections, [&](const Section& step) {
 				return step.visible && state.selected == step.id;
@@ -209,23 +215,30 @@ namespace MenuUI
 			state.selected = "overview";
 			state.pending = true;
 		}
-		if (std::ranges::any_of(sections, [](const Section& step) { return step.visible; })) {
+		const bool cardOnlySelection = std::ranges::any_of(sections, [&](const Section& step) {
+			return step.visible && !step.showTab && state.selected == step.id;
+		});
+		const auto visibleTabCount = std::ranges::count_if(sections, [](const Section& step) { return step.visible && step.showTab; });
+		if (visibleTabCount > 0) {
 			const float font = ImGui::GetFontSize();
 			const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
-			const float tabCount = 1.0f + static_cast<float>(std::ranges::count_if(sections, [](const Section& step) { return step.visible; }));
+			const float tabCount = 1.0f + static_cast<float>(visibleTabCount);
 			const float tabWidth = ImGui::GetContentRegionAvail().x / tabCount;
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { font * .75f, font * tabVerticalPadding });
 			ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 0);
 			ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0);
 			ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, { 1, ImGui::GetStyle().ItemInnerSpacing.y });
 			ImGui::PushStyleColor(ImGuiCol_Tab, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-			ImGui::PushStyleColor(ImGuiCol_TabSelected, ImGui::GetStyleColorVec4(ImGuiCol_Header));
+			ImGui::PushStyleColor(ImGuiCol_TabSelected, ImGui::GetStyleColorVec4(cardOnlySelection ? ImGuiCol_FrameBg : ImGuiCol_Header));
 			ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, { 0, 0, 0, 0 });
 			const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleColor(3); ImGui::PopStyleVar(4); });
 			if (ImGui::BeginTabBar("##SetupTabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
 				const SKSE::stl::scope_exit endTabs([] { ImGui::EndTabBar(); });
 				const auto requested = state.selected;
 				const bool restoreSelection = state.pending || ImGui::IsWindowAppearing();
+				auto* tabBar = ImGui::GetCurrentTabBar();
+				const auto retainedTab = tabBar->SelectedTabId;
+				const auto queuedTab = !restoreSelection ? tabBar->NextSelectedTabId : 0;
 				auto tab = [&](const char* id, const char* title, const char* help) {
 					ImGui::PushID(id);
 					const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
@@ -238,15 +251,25 @@ namespace MenuUI
 					const bool active = ImGui::BeginTabItem(title, nullptr, flags);
 					ImGui::PopStyleColor();
 					ImGui::PopStyleVar();
+					const auto tabId = ImGui::GetItemID();
+					// Native arrows and right-clicks select tabs without activating the tab item.
+					const bool nativeSelection = tabBar->NextSelectedTabId == tabId || (active && queuedTab == tabId) ||
+					                             (active && !restoreSelection && tabBar->SelectedTabId != retainedTab && ImGui::TabBarFindTabByID(tabBar, retainedTab));
+					if ((active && !cardOnlySelection) || (cardOnlySelection && (ImGui::IsItemActivated() || ImGui::IsItemClicked(ImGuiMouseButton_Right) || nativeSelection))) {
+						if (state.selected != id) {
+							if (!Select(a_id, id))
+								rejectedSelection = true;
+							else
+								activatedTopTab = cardOnlySelection;
+						}
+					}
 					if (active) {
-						if (state.selected != id && state.canSelect && !state.canSelect(id))
-							rejectedSelection = true;
-						else
-							state.selected = id;
 						ImGui::EndTabItem();
-						const auto minimum = ImGui::GetItemRectMin();
-						const auto maximum = ImGui::GetItemRectMax();
-						ImGui::GetWindowDrawList()->AddLine({ minimum.x, maximum.y - 1 }, { maximum.x, maximum.y - 1 }, ImGui::GetColorU32(accent), 2);
+						if (!cardOnlySelection) {
+							const auto minimum = ImGui::GetItemRectMin();
+							const auto maximum = ImGui::GetItemRectMax();
+							ImGui::GetWindowDrawList()->AddLine({ minimum.x, maximum.y - 1 }, { maximum.x, maximum.y - 1 }, ImGui::GetColorU32(accent), 2);
+						}
 					}
 					const auto minimum = ImGui::GetItemRectMin();
 					const auto maximum = ImGui::GetItemRectMax();
@@ -258,17 +281,17 @@ namespace MenuUI
 						draw->PushClipRect(clipMin, clipMax, true);
 						const SKSE::stl::scope_exit unclip([draw] { draw->PopClipRect(); });
 						draw->AddText({ minimum.x + (maximum.x - minimum.x - titleWidth) * .5f, minimum.y + font * tabVerticalPadding },
-							ImGui::GetColorU32(active ? accent : ImGui::GetStyleColorVec4(ImGuiCol_Text)), title);
+							ImGui::GetColorU32(active && !cardOnlySelection ? accent : ImGui::GetStyleColorVec4(ImGuiCol_Text)), title);
 					}
 					Util::AddTooltip(help);
 				};
 				tab("overview", "Overview", "Start here. Choose a card to open its settings.");
 				for (const auto& step : sections)
-					if (step.visible)
+					if (step.visible && step.showTab)
 						tab(step.id, step.title, step.description);
 			}
 		}
-		state.pending = rejectedSelection;
+		state.pending = rejectedSelection || activatedTopTab;
 		selected = state.selected;
 		contentLeftPadding = ImGui::GetStyle().WindowPadding.x;
 		{

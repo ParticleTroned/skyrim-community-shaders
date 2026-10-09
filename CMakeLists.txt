@@ -2662,6 +2662,85 @@ if(BUILD_CONTROLLER_TESTS)
         PerformanceTuningStatistics
         tests/performance_tuning_statistics_test.cpp
     )
+    set(_cost_measurement_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/cost_measurement_test"
+    )
+    set(_cost_measurement_headers
+        "${_cost_measurement_dir}/performance_tuning_measurement_under_test.h"
+    )
+    foreach(
+        part
+        IN
+        ITEMS
+            summary
+            constants
+            types
+            active
+            cooldown
+            validity
+            statistics
+            samples
+            phases
+            phase_names
+            trace_types
+            trace_state
+            trace_helpers
+            status
+            upscaling_settle
+    )
+        list(
+            APPEND _cost_measurement_headers
+            "${_cost_measurement_dir}/measurement_${part}.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_cost_measurement_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_cost_measurement_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_performance_tuning_measurement.cmake"
+        DEPENDS
+            src/Menu/PerformanceTuningRenderer.cpp
+            src/Menu/ProfilingRenderer.h
+            src/Features/Upscaling.h
+            tests/extract_performance_tuning_measurement.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        performance_tuning_measurement_test
+        PerformanceTuningMeasurement
+        tests/performance_tuning_measurement_test.cpp
+    )
+    add_controller_test(
+        performance_tuning_measurement_devbench_test
+        PerformanceTuningMeasurementDevBench
+        tests/performance_tuning_measurement_test.cpp
+    )
+    target_compile_definitions(
+        performance_tuning_measurement_devbench_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    foreach(
+        _measurement_target
+        IN
+        ITEMS
+            performance_tuning_measurement_test
+            performance_tuning_measurement_devbench_test
+    )
+        target_sources(
+            ${_measurement_target}
+            PRIVATE ${_cost_measurement_headers}
+        )
+        target_include_directories(
+            ${_measurement_target}
+            PRIVATE "${_cost_measurement_dir}"
+        )
+        target_link_libraries(
+            ${_measurement_target}
+            PRIVATE nlohmann_json::nlohmann_json
+        )
+    endforeach()
     add_controller_test(
         vr_vendor_relatch_policy_test
         VRVendorRelatchPolicy

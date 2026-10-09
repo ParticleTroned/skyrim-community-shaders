@@ -2533,6 +2533,11 @@ public:
 	/** Uses the native runtime control without replacing the current tuning. */
 	void SetPerformanceToggleEnabled(bool a_enabled) override;
 	virtual bool IsPerformanceCostMeasurementReady() const override;
+	/** Allow upscaler teardown and render targets to settle in the None comparison. */
+	virtual double GetPerformanceCostMeasurementSettleSeconds(bool a_targetEnabled) const override
+	{
+		return a_targetEnabled ? Feature::GetPerformanceCostMeasurementSettleSeconds(true) : 10.0;
+	}
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override;
 	virtual bool RequiresMenuCloseForPerformanceCostMeasurement(bool a_targetEnabled) const override;
 	virtual bool RequiresMenuCloseForPerformanceCostMeasurementRestore(const json& a_state) const override;

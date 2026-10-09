@@ -51,6 +51,17 @@ foreach(_schema_contract IN ITEMS
     "traceAfterSequence"
     "maximumTraceSamples"
     "expectedBuildId"
+    "six 500 ms current windows"
+    "three-second Off settling (ten seconds for Upscaling None)"
+    "five-second inter-feature cooldown"
+    "five-second inter-case cooldown"
+    "measurementIntervalMs"
+    "measurementBlockCount"
+    "upscalingComparisonWaitMs"
+    "restoreWaitMs"
+    "postRunCooldownMs"
+    "expectedRunMs"
+    "active measurement and availableFeatureCosts report the actual comparisonWaitMs"
 )
     string(FIND "${_descriptor}" "${_schema_contract}" _schema_position)
     if(_schema_position EQUAL -1)
@@ -179,12 +190,14 @@ foreach(_forbidden_startup_mutation IN ITEMS
 endforeach()
 
 foreach(_renderer_contract IN ITEMS
-    "constexpr double kFeatureCostInitialWaitSeconds = 10.0"
-    "constexpr double kFeatureCostComparisonWaitSeconds = 10.0"
+    "constexpr double kFeatureCostMeasurementSeconds = 3.0"
+    "constexpr double kFeatureCostIntervalMilliseconds = 500.0"
+    "constexpr double kFeatureCostInitialWaitSeconds = 2.0"
+    "constexpr double kFeatureCostComparisonWaitSeconds = 3.0"
     "constexpr double kFeatureCostRestoreWaitSeconds = 1.0"
-    "constexpr double kFeatureCostRestartCooldownSeconds = 10.0"
+    "constexpr double kFeatureCostRestartCooldownSeconds = 5.0"
     "constexpr double kFeatureCostTraceIntervalSeconds = 0.1"
-    "kFeatureCostMeasurementBlockCount == 5"
+    "kFeatureCostMeasurementBlockCount == 6"
     "g_quickScan.controller.phase == PerformanceQuickScan::Phase::Complete"
     "scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration())"
     "BuildNvidiaUpscalingCostSweepCases"

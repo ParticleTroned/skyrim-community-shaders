@@ -36,22 +36,25 @@
 namespace
 {
 	static_assert(PerformanceQuickScan::kCaptureFrames <= Profiler::kHistorySize);
-	constexpr double kFeatureCostMeasurementSeconds = 5.0;
+	constexpr double kFeatureCostMeasurementSeconds = 3.0;
 	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
-	constexpr double kFeatureCostIntervalMilliseconds = 1000.0;
-	constexpr double kFeatureCostInitialWaitSeconds = 10.0;
-	constexpr double kFeatureCostComparisonWaitSeconds = 10.0;
+	constexpr double kFeatureCostIntervalMilliseconds = 500.0;
+	constexpr double kFeatureCostInitialWaitSeconds = 2.0;
+	constexpr double kFeatureCostComparisonWaitSeconds = 3.0;
 	constexpr double kFeatureCostRestoreWaitSeconds = 1.0;
-	constexpr double kFeatureCostRestartCooldownSeconds = 10.0;
+	constexpr double kFeatureCostRestartCooldownSeconds = 5.0;
 	constexpr double kFeatureCostMaximumRunSeconds = 45.0;
 	constexpr std::size_t kFeatureCostMaximumMissingMetricSamples = 2;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	constexpr double kFeatureCostTraceIntervalSeconds = 0.1;
 	constexpr std::size_t kFeatureCostTraceCapacity = 8192;
 	constexpr std::size_t kFeatureCostMaximumTracePageSize = 512;
+#endif
+
 	constexpr std::size_t kFeatureCostMeasurementBlockCount =
 		static_cast<std::size_t>(kFeatureCostMeasurementMilliseconds / kFeatureCostIntervalMilliseconds);
 	static_assert(
-		kFeatureCostMeasurementBlockCount == 5 &&
+		kFeatureCostMeasurementBlockCount == 6 &&
 		kFeatureCostMeasurementBlockCount * kFeatureCostIntervalMilliseconds == kFeatureCostMeasurementMilliseconds);
 
 	constexpr std::array<std::string_view, 21> kPerformanceFeatureOrder = {
@@ -199,6 +202,7 @@ namespace
 		std::string failureMessage;
 	};
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct FeatureCostTraceSample
 	{
 		std::uint64_t sequence = 0;
@@ -218,11 +222,16 @@ namespace
 		std::string caseId;
 	};
 
+#endif
+
 	static std::unordered_map<std::string, FeatureCostMeasurementState> g_costMeasurementStates;
 	static UpscalingCostSweepState g_upscalingCostSweep;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	static std::deque<FeatureCostTraceSample> g_featureCostTrace;
 	static std::uint64_t g_featureCostTraceNextSequence = 1;
 	static double g_featureCostTraceLastTime = -1.0;
+#endif
+
 	static double g_costMeasurementRestartAllowedTime = 0.0;
 	static Util::VanityCameraSuppressionLease g_featureCostVanityCameraSuppression;
 	static bool g_profilerStateCaptured = false;
@@ -380,6 +389,7 @@ namespace
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* GetUpscalingCostSweepMatrixName(UpscalingCostSweepMatrix matrix)
 	{
 		switch (matrix) {
@@ -410,6 +420,8 @@ namespace
 		return json::array({ "J", "K", "L", "M", "F", "E" });
 	}
 
+#endif
+
 	double GetFeatureCostRestartCooldownRemaining(double currentTime)
 	{
 		return std::max(0.0, g_costMeasurementRestartAllowedTime - currentTime);
@@ -420,6 +432,7 @@ namespace
 		g_costMeasurementRestartAllowedTime = currentTime + kFeatureCostRestartCooldownSeconds;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct UpscalingCostSweepReadiness
 	{
 		bool idle = false;
@@ -478,6 +491,8 @@ namespace
 				   fidelityFX.IsRuntimeUpscalerSupportConfirmed());
 	}
 
+#endif
+
 	void SyncFeatureCostVanityCameraSuppression()
 	{
 		if (PerformanceTuningRenderer::HasActiveMeasurements())
@@ -498,10 +513,13 @@ namespace
 
 	void ResetFeatureCostTrace()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		g_featureCostTrace.clear();
 		g_featureCostTraceLastTime = -1.0;
+#endif
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	void RecordFeatureCostTrace(
 		const ProfilingRenderer::PerformanceTimingSummary& summary,
 		double currentTime,
@@ -536,6 +554,8 @@ namespace
 			g_featureCostTrace.pop_front();
 		g_featureCostTraceLastTime = currentTime;
 	}
+
+#endif
 
 	void AddFeatureCostMoment(
 		FeatureCostMetricSample& sample,
@@ -985,6 +1005,7 @@ namespace
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	json QuickScanStatus()
 	{
 		json rows = json::array();
@@ -1007,6 +1028,8 @@ namespace
 			{ "isOnOffCost", false }, { "failure", g_quickScan.failure.empty() ? json(nullptr) : json(g_quickScan.failure) },
 			{ "results", std::move(rows) } };
 	}
+
+#endif
 
 	void FinishQuickScan(PerformanceQuickScan::Phase phase, std::string failure = {}, bool reopen = true)
 	{
@@ -1184,7 +1207,7 @@ namespace
 			!feature->IsPerformanceCostMeasurementEnabled() || GetFeatureToggleBlockReason(feature))
 			return false;
 		if (GetFeatureCostRestartCooldownRemaining(currentTime) > 0.0) {
-			logger::warn("Actual feature cost measurement was not started because the 10-second restart cooldown is active");
+			logger::warn("Actual feature cost measurement was not started because the {}-second restart cooldown is active", kFeatureCostRestartCooldownSeconds);
 			return false;
 		}
 		if (IsAnyFeatureCostMeasurementActive()) {
@@ -1402,7 +1425,7 @@ namespace
 					FeatureCostMeasurementPhase::PreparingTest,
 					state,
 					currentTime,
-					kFeatureCostInitialWaitSeconds);
+					GetFeatureCostComparisonWaitSeconds(feature));
 				return;
 			}
 			const auto sampleResult = AddFeatureCostSample(state.testSample, current);
@@ -1425,6 +1448,7 @@ namespace
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* GetQualityModeId(std::uint32_t qualityMode)
 	{
 		switch (qualityMode) {
@@ -1541,6 +1565,8 @@ namespace
 		}
 		return cases;
 	}
+
+#endif
 
 	bool IsUpscalingCostSweepStateSelected(const json& profile)
 	{
@@ -1677,6 +1703,7 @@ namespace
 		const bool reopenMainMenu = sweep.mainMenuWasOpen;
 		const bool reopenEditor = sweep.editorWasOpen;
 		sweep.phase = sweep.terminalPhase;
+		StartFeatureCostRestartCooldown(currentTime);
 		sweep.phaseStartTime = currentTime;
 		SyncFeatureCostVanityCameraSuppression();
 		RestoreProfilerStateAfterPerformanceTuning();
@@ -2060,9 +2087,24 @@ namespace
 				ImGui::TextUnformatted("This feature is enabled but inactive in the current scene.");
 			else if (!feature->IsPerformanceCostMeasurementReady())
 				ImGui::TextUnformatted(feature->GetPerformanceCostMeasurementWaitText());
-			ImGui::TextWrapped("CS closes automatically for the complete run. Keep the headset and scene still for about 31 seconds; a small overlay shows progress and CS reopens with the results.");
-			ImGui::TextWrapped("After a ten-second cooldown following menu closure, current settings are measured as five one-second intervals. The feature then changes to Off/None, waits ten seconds, and measures five more one-second intervals before restoring the exact prior state for one second.");
-			ImGui::TextWrapped("If game-frame timing is interrupted during capture, only that five-second measurement restarts.");
+			ImGui::TextWrapped(
+				"CS closes automatically for the complete run. Keep the headset and scene still for about %.0f seconds; a small overlay shows progress and CS reopens with the results.",
+				GetFeatureCostExpectedRunSeconds(feature));
+			ImGui::TextWrapped(
+				"After %.0f seconds of settling following menu closure, current settings are measured as %zu intervals of %.0f ms. The feature then changes to %s, settles for %.0f seconds, and measures %zu more intervals before restoring the exact prior state and waiting %.0f second to verify restoration.",
+				kFeatureCostInitialWaitSeconds,
+				kFeatureCostMeasurementBlockCount,
+				kFeatureCostIntervalMilliseconds,
+				GetFeatureCostComparisonLabel(feature),
+				GetFeatureCostComparisonWaitSeconds(feature),
+				kFeatureCostMeasurementBlockCount,
+				kFeatureCostRestoreWaitSeconds);
+			ImGui::TextWrapped(
+				"If game-frame timing is interrupted during capture, only that %.0f-second measurement restarts. Readiness can extend the settling and restoration waits.",
+				kFeatureCostMeasurementSeconds);
+			ImGui::TextWrapped(
+				"After completion, wait %.0f seconds before remeasuring or starting the next feature or Upscaling case.",
+				kFeatureCostRestartCooldownSeconds);
 			ImGui::TextWrapped("GPU and CPU rows tolerate up to two missing raw samples across both states. Three or more make only that row unavailable; missing data never blocks Game or FPS.");
 			ImGui::TextWrapped("The automatic idle/vanity camera remains suppressed for the complete run and its previous delay is restored afterward.");
 			if (feature && feature->GetShortName() == "Skylighting") {
@@ -2378,6 +2420,7 @@ namespace
 		return !batch.active && batch.reopenMenuOnCompletion;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	json FeatureCostMetricDeltaJson(const FeatureCostMetricDelta& metric, std::string_view unit)
 	{
 		json result = {
@@ -2510,6 +2553,23 @@ namespace
 		};
 	}
 
+	json FeatureCostMeasurementStatusJson(
+		std::string_view shortName,
+		const FeatureCostMeasurementState& state,
+		const Feature* feature,
+		double currentTime)
+	{
+		return {
+			{ "feature", shortName },
+			{ "phase", GetFeatureCostPhaseName(state.phase) },
+			{ "phaseElapsedMs", std::max(0.0, currentTime - state.phaseStartTime) * 1000.0 },
+			{ "runElapsedMs", std::max(0.0, currentTime - state.runStartTime) * 1000.0 },
+			{ "comparisonWaitMs", GetFeatureCostComparisonWaitSeconds(feature) * 1000.0 },
+			{ "expectedRunMs", GetFeatureCostExpectedRunSeconds(feature) * 1000.0 },
+			{ "estimatedRemainingMs", GetFeatureCostRemainingSeconds(state, feature, currentTime) * 1000.0 },
+		};
+	}
+
 	json BuildDevBenchMeasurementStatus(std::uint64_t traceAfterSequence, std::size_t maximumTraceSamples)
 	{
 		const double currentTime = ImGui::GetTime();
@@ -2543,6 +2603,8 @@ namespace
 				{ "enabled", feature->IsPerformanceToggleEnabled() },
 				{ "measurementEnabled", feature->IsPerformanceCostMeasurementEnabled() },
 				{ "comparisonDetails", GetFeatureCostComparisonDetails(feature) },
+				{ "comparisonWaitMs", GetFeatureCostComparisonWaitSeconds(feature) * 1000.0 },
+				{ "expectedRunMs", GetFeatureCostExpectedRunSeconds(feature) * 1000.0 },
 				{ "ready", feature->IsPerformanceCostMeasurementReady() },
 				{ "toggleBlockReason", GetFeatureToggleBlockReason(feature) ? json(GetFeatureToggleBlockReason(feature)) : json(nullptr) },
 			});
@@ -2555,20 +2617,10 @@ namespace
 			currentCase["index"] = g_upscalingCostSweep.currentCaseIndex;
 		}
 
-		json measurement = nullptr;
-		if (activeMeasurement) {
-			measurement = {
-				{ "feature", activeFeature },
-				{ "phase", GetFeatureCostPhaseName(activeMeasurement->phase) },
-				{ "phaseElapsedMs", std::max(0.0, currentTime - activeMeasurement->phaseStartTime) * 1000.0 },
-				{ "runElapsedMs", std::max(0.0, currentTime - activeMeasurement->runStartTime) * 1000.0 },
-				{ "estimatedRemainingMs", GetFeatureCostRemainingSeconds(
-											  *activeMeasurement,
-											  FindFeatureByShortName(activeFeature),
-											  currentTime) *
-											  1000.0 },
-			};
-		}
+		json measurement = activeMeasurement ?
+		                       FeatureCostMeasurementStatusJson(activeFeature, *activeMeasurement,
+								   FindFeatureByShortName(activeFeature), currentTime) :
+		                       json(nullptr);
 
 		json latestTiming = nullptr;
 		if (!g_featureCostTrace.empty()) {
@@ -2640,7 +2692,11 @@ namespace
 		response["timing"] = {
 			{ "initialCooldownMs", kFeatureCostInitialWaitSeconds * 1000.0 },
 			{ "measurementWindowMs", kFeatureCostMeasurementMilliseconds },
+			{ "measurementIntervalMs", kFeatureCostIntervalMilliseconds },
+			{ "measurementBlockCount", kFeatureCostMeasurementBlockCount },
 			{ "comparisonWaitMs", kFeatureCostComparisonWaitSeconds * 1000.0 },
+			{ "upscalingComparisonWaitMs", GetFeatureCostComparisonWaitSeconds(&globals::features::upscaling) * 1000.0 },
+			{ "restoreWaitMs", kFeatureCostRestoreWaitSeconds * 1000.0 },
 			{ "postRunCooldownMs", kFeatureCostRestartCooldownSeconds * 1000.0 },
 		};
 		response["latestTiming"] = std::move(latestTiming);
@@ -2650,6 +2706,8 @@ namespace
 		response["availableFeatureCosts"] = std::move(availableFeatureCosts);
 		return response;
 	}
+#endif
+
 }
 
 void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
@@ -2899,6 +2957,7 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 
 		const auto prefixes = BuildProfilingPrefixesForFeature(shortName);
 		const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(prefixes, true);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		const bool sweepMeasurement =
 			g_upscalingCostSweep.phase == UpscalingCostSweepPhase::Measuring &&
 			shortName == "Upscaling" &&
@@ -2910,6 +2969,8 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 			state.phaseStartTime,
 			GetFeatureCostPhaseName(state.phase),
 			sweepMeasurement ? g_upscalingCostSweep.cases[g_upscalingCostSweep.currentCaseIndex].id : shortName);
+#endif
+
 		UpdateFeatureCostMeasurement(feature, state, timing, currentTime);
 		if (!IsFeatureCostMeasurementActive(state)) {
 			shouldReopenMenu = shouldReopenMenu || reopenMenuOnCompletion;
@@ -2921,6 +2982,7 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 	shouldReopenMenu = UpdateFeatureCostBatch(currentTime) || shouldReopenMenu;
 	const bool batchCompleted = batchWasActive && !g_featureCostBatch.active;
 	UpdateUpscalingCostSweep(currentTime);
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	if (IsUpscalingCostSweepRunning() && !IsAnyFeatureCostMeasurementActive()) {
 		const auto timing = ProfilingRenderer::CapturePerformanceTimingSummary(
 			BuildProfilingPrefixesForFeature("Upscaling"),
@@ -2933,6 +2995,8 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 			GetUpscalingCostSweepPhaseName(g_upscalingCostSweep.phase),
 			GetUpscalingCostSweepTraceCaseId());
 	}
+
+#endif
 
 	SyncFeatureCostVanityCameraSuppression();
 	if ((completedDevBenchMeasurement || shouldReopenMenu || batchCompleted) && !HasActiveMeasurements())
@@ -3148,6 +3212,7 @@ bool PerformanceTuningRenderer::HasActiveMeasurements()
 	return g_quickScan.controller.Active() || IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active;
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
 	std::string_view a_featureShortName)
 {
@@ -3389,3 +3454,5 @@ nlohmann::json PerformanceTuningRenderer::CancelDevBenchMeasurements()
 		{ "status", BuildDevBenchMeasurementStatus(0, 128) },
 	};
 }
+
+#endif

@@ -33,6 +33,7 @@ public:
 	/** Starts the closed-menu phase after the settings window has closed. */
 	static void NotifyMenuClosed();
 	static bool HasActiveMeasurements();
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Starts one surfaced feature's closed-menu cost comparison. */
 	static nlohmann::json StartDevBenchFeatureCostMeasurement(
 		std::string_view a_featureShortName);
@@ -53,4 +54,5 @@ public:
 		std::size_t a_maximumTraceSamples = 128);
 	/** Cancels DevBench-owned measurement work and restores its original state. */
 	static nlohmann::json CancelDevBenchMeasurements();
+#endif
 };

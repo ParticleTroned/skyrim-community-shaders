@@ -1,3 +1,4 @@
+#include "Features/RenderDoc.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Upscaling.h"
 #include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
@@ -6,6 +7,7 @@
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
+#include "Features/VR/WandBeamRenderer.h"
 #include "Globals.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/EngineStutterMonitor.h"
@@ -140,9 +142,18 @@ namespace
 		       vr.GetEffectiveMenuAttachMode() != AttachMode::None;
 	}
 
+	bool ShouldRenderStandaloneWandBeam(const VR& vr)
+	{
+		return vr.CanUseWandPointing() && !vr.ocuPointerAvailable &&
+		       !vr.wandState.usingOCUPointer && vr.IsMenuPointerInHeadset() &&
+		       vr.customVRCursorVisible && vr.wandState.isIntersecting &&
+		       vr.ShouldPresentOverlayInHeadset() &&
+		       !globals::features::renderDoc.ShouldBlockUpscaling();
+	}
+
 	bool ShouldRenderInSceneContent(const VR& vr)
 	{
-		return ShouldRenderInSceneMenu(vr) || vr.ShouldRenderCaptureIndicatorInScene();
+		return ShouldRenderInSceneMenu(vr) || ShouldRenderStandaloneWandBeam(vr) || vr.ShouldRenderCaptureIndicatorInScene();
 	}
 
 	bool MatchesSubmitCopyDesc(const D3D11_TEXTURE2D_DESC& lhs, const D3D11_TEXTURE2D_DESC& rhs)
@@ -506,6 +517,42 @@ namespace
 			packet.captureError = vr::VRCompositorError_RequestFailed;
 		packet.valid = eyeValid && packet.publicationLease.IsValid();
 		return packet;
+	}
+
+	bool TryProjectWandBeam(VR& a_vr, VR::OverlayType a_type, const Matrix& a_menuWorld,
+		const Matrix& a_worldViewProjection, const WandBeamGeometry::Viewport& a_viewport,
+		UINT a_targetWidth, UINT a_targetHeight, WandBeamGeometry::ScreenBeam& a_beam)
+	{
+		if (!a_vr.CanUseWandPointing() || a_vr.ocuPointerAvailable || a_vr.wandState.usingOCUPointer ||
+			!a_vr.IsMenuPointerInHeadset() || !a_vr.customVRCursorVisible || !a_vr.wandState.isIntersecting ||
+			a_vr.customVRCursorOverlayType != a_type || a_vr.wandState.overlayType != a_type)
+			return false;
+		std::uint32_t canvasWidth = 0;
+		std::uint32_t canvasHeight = 0;
+		if (!a_vr.GetMenuCanvasSize(canvasWidth, canvasHeight) || canvasWidth == 0 || canvasHeight == 0)
+			return false;
+		const float u = a_vr.customVRCursorPos.x / float(canvasWidth);
+		const float v = a_vr.customVRCursorPos.y / float(canvasHeight);
+		if (!std::isfinite(u) || !std::isfinite(v) || u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f)
+			return false;
+
+		// The displayed cursor includes smoothing and click holds; its surface
+		// point is the beam endpoint in both eyes, even when the raw hit moves.
+		Vector3 endpoint = Vector3::Transform(Vector3(u - 0.5f, 0.5f - v, 0.0f), a_menuWorld);
+		if (!a_vr.ShouldUseInSceneOverlay() && a_vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR) {
+			VR::PresentedMenuSurface surface;
+			if (!a_vr.TryGetPresentedMenuSurface(a_type, surface))
+				return false;
+			endpoint = surface.topLeft + (surface.topRight - surface.topLeft) * u +
+			           (surface.bottomLeft - surface.topLeft) * v;
+		}
+		const Vector3& origin = a_vr.wandState.rayOrigin;
+		const auto project = [&](const Vector3& a_point) {
+			const XMVECTOR clip = XMVector4Transform(XMVectorSet(a_point.x, a_point.y, a_point.z, 1.0f), a_worldViewProjection);
+			return WandBeamGeometry::ClipPoint{ XMVectorGetX(clip), XMVectorGetY(clip), XMVectorGetZ(clip), XMVectorGetW(clip) };
+		};
+		return WandBeamGeometry::Project(project(origin), project(endpoint), a_viewport,
+			a_targetWidth, a_targetHeight, WandBeamRenderer::RadiusPixels, a_beam);
 	}
 
 	constexpr char kSubmitCompositeCS[] = R"(
@@ -2459,6 +2506,29 @@ void VR::PublishPresentedMenuSurface(OverlayType a_type, const Matrix& a_worldMa
 
 bool VR::TryGetPresentedMenuSurface(OverlayType a_type, PresentedMenuSurface& a_outSurface) const
 {
+	if (!ShouldUseInSceneOverlay() && openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR) {
+		auto* openvr = RE::BSOpenVR::GetSingleton();
+		auto* overlay = openvr ? RE::BSOpenVR::GetIVROverlayFromContext(&openvr->vrContext) : nullptr;
+		auto* compositor = RE::BSOpenVR::GetIVRCompositor();
+		const auto handle = a_type == OverlayType::HMD ? menuOverlayHandle : menuControllerOverlayHandle;
+		if (!overlay || !compositor || handle == vr::k_ulOverlayHandleInvalid || !overlay->IsOverlayVisible(handle))
+			return false;
+		PresentedMenuSurface surface;
+		const std::array coordinates{ vr::HmdVector2_t{ { 0, 1 } }, vr::HmdVector2_t{ { 1, 1 } }, vr::HmdVector2_t{ { 0, 0 } } };
+		const std::array points{ &surface.topLeft, &surface.topRight, &surface.bottomLeft };
+		for (std::size_t corner = 0; corner < coordinates.size(); ++corner) {
+			vr::HmdMatrix34_t transform{};
+			if (overlay->GetTransformForOverlayCoordinates(handle, compositor->GetTrackingSpace(),
+					coordinates[corner], &transform) != vr::VROverlayError_None)
+				return false;
+			*points[corner] = Util::HmdMatrix34ToMatrix(transform).Translation();
+			if (!std::isfinite(points[corner]->x) || !std::isfinite(points[corner]->y) || !std::isfinite(points[corner]->z))
+				return false;
+		}
+		surface.valid = true;
+		a_outSurface = surface;
+		return true;
+	}
 	std::lock_guard lock(g_presentedMenuSurfaceMutex);
 	a_outSurface = presentedMenuSurfaces[static_cast<std::size_t>(a_type)];
 	return a_outSurface.valid;
@@ -2789,8 +2859,17 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 			inSceneResources.menuSRV,
 			inSceneResources.cachedMenuTexture,
 			"HMD");
-		if (hmdOverlayDrawn)
+		if (hmdOverlayDrawn) {
 			PublishPresentedMenuSurface(OverlayType::HMD, worldModelMatrix);
+			WandBeamGeometry::ScreenBeam beam;
+			const WandBeamGeometry::Viewport viewport{ vpDesc.TopLeftX, vpDesc.TopLeftY, vpDesc.Width, vpDesc.Height };
+			if (TryProjectWandBeam(*this, OverlayType::HMD, worldModelMatrix, vpWorldSpace,
+					viewport, texDesc.Width, texDesc.Height, beam)) {
+				const auto colour = GetWandPointerColor();
+				WandBeamRenderer::Draw(globals::d3d::device, inSceneResources.immediateContext.get(), beam, viewport,
+					{ colour.x, colour.y, colour.z, colour.w });
+			}
+		}
 		overlayDrawn = hmdOverlayDrawn || overlayDrawn;
 	}
 
@@ -2838,8 +2917,17 @@ void VR::RenderInSceneOverlay(vr::EVREye eye, ID3D11Texture2D* targetTexture, co
 							inSceneResources.cachedMenuTexture,
 							"HMD");
 					}
-					if (controllerOverlayDrawn)
+					if (controllerOverlayDrawn) {
 						PublishPresentedMenuSurface(OverlayType::Controller, modelMatrix);
+						WandBeamGeometry::ScreenBeam beam;
+						const WandBeamGeometry::Viewport viewport{ vpDesc.TopLeftX, vpDesc.TopLeftY, vpDesc.Width, vpDesc.Height };
+						if (TryProjectWandBeam(*this, OverlayType::Controller, modelMatrix, vpWorldSpace,
+								viewport, texDesc.Width, texDesc.Height, beam)) {
+							const auto colour = GetWandPointerColor();
+							WandBeamRenderer::Draw(globals::d3d::device, inSceneResources.immediateContext.get(), beam, viewport,
+								{ colour.x, colour.y, colour.z, colour.w });
+						}
+					}
 					overlayDrawn = controllerOverlayDrawn || overlayDrawn;
 				}
 			}
@@ -2937,8 +3025,11 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	const float menuScale = GetEffectiveMenuScale();
 	const Vector3 hmdOffset = GetEffectiveHMDMenuOffset();
 	const Vector3 controllerOffset = GetEffectiveControllerMenuOffset();
-	const bool showOnHMD = attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both;
-	const bool showOnController = attachMode == AttachMode::ControllerOnly;
+	const bool beamOnly = !ShouldRenderInSceneMenu(*this);
+	const bool showOnHMD = beamOnly ? customVRCursorOverlayType == OverlayType::HMD :
+	                                  attachMode == AttachMode::HMDOnly || attachMode == AttachMode::Both;
+	const bool showOnController = beamOnly ? customVRCursorOverlayType == OverlayType::Controller :
+	                                         attachMode == AttachMode::ControllerOnly;
 	if (showOnHMD) {
 		if (UseFixedWorldMenuPositioning()) {
 			modelMatrix = VR::Config::CreateHMDOverlayScaleMatrix(menuScale) * fixedWorldOverlayPosition.m;
@@ -2967,6 +3058,20 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 		worldModelMatrix = modelMatrix;
 		viewProjection = vpWorldSpace;
 	} else {
+		return;
+	}
+
+	if (beamOnly) {
+		WandBeamGeometry::ScreenBeam beam;
+		const WandBeamGeometry::Viewport viewport{ viewX, viewY, viewW, viewH };
+		if (ShouldRenderStandaloneWandBeam(*this) && TryProjectWandBeam(*this, presentedType,
+														 worldModelMatrix, vpWorldSpace, viewport, targetDesc.Width, targetDesc.Height, beam)) {
+			const auto colour = GetWandPointerColor();
+			const bool drawn = WandBeamRenderer::Composite(device, inSceneResources.immediateContext.get(),
+				targetUAV, beam, viewport, { colour.x, colour.y, colour.z, colour.w });
+			if (overlayComposited)
+				*overlayComposited = drawn;
+		}
 		return;
 	}
 
@@ -3097,6 +3202,14 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->Dispatch((cbData.dispatchSize[0] + 7) / 8, (cbData.dispatchSize[1] + 7) / 8, 1);
 	PublishPresentedMenuSurface(presentedType, worldModelMatrix);
+	WandBeamGeometry::ScreenBeam beam;
+	const WandBeamGeometry::Viewport viewport{ viewX, viewY, viewW, viewH };
+	if (TryProjectWandBeam(*this, presentedType, worldModelMatrix, vpWorldSpace,
+			viewport, targetDesc.Width, targetDesc.Height, beam)) {
+		const auto colour = GetWandPointerColor();
+		WandBeamRenderer::Composite(device, inSceneResources.immediateContext.get(), targetUAV, beam, viewport,
+			{ colour.x, colour.y, colour.z, colour.w });
+	}
 	if (overlayComposited) {
 		*overlayComposited = true;
 	}
@@ -3369,7 +3482,7 @@ bool VR::PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t*
 
 	context->CopyResource(submitCopy.texture.get(), sourceTexture.get());
 	bool menuComposited = false;
-	if (ShouldRenderInSceneMenu(*this)) {
+	if (ShouldRenderInSceneMenu(*this) || ShouldRenderStandaloneWandBeam(*this)) {
 		CompositeInSceneOverlaySubmitTexture(
 			eye,
 			submitCopy.texture.get(),

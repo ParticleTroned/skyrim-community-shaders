@@ -616,6 +616,9 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu)
 {
 	// Start the Dear ImGui frame
 	ImGui_ImplDX11_NewFrame();
+	// Wand canvas coordinates must never reposition the physical desktop mouse.
+	if (globals::features::vr.IsOpenVRCompatible())
+		ImGui::GetIO().WantSetMousePos = false;
 	ImGui_ImplWin32_NewFrame();
 
 	// ImGui_ImplWin32_NewFrame() restores DisplaySize from the desktop window.

@@ -1,6 +1,9 @@
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
+#include "Features/VR/WandMouseEventQueue.h"
+#include "Features/VR/WandTriggerEdges.h"
 #include "Menu.h"
+#include "RE/B/BSOpenVR.h"
 #include "State.h"
 #include "Utils/PerfUtils.h"
 #include "Utils/VRUtils.h"
@@ -44,7 +47,21 @@ namespace
 		int frame = -1;
 	};
 	std::array<QueuedWandClickOwner, ImGuiMouseButton_COUNT> gQueuedWandClickOwners{};
-	bool gLastVRInputHandedness = false;
+	struct WandMousePointer
+	{
+		ControllerDevice controller = ControllerDevice::Both;
+		ImVec2 position{};
+		VR::WandIntersectionState state{};
+	};
+	WandMouseEventQueue<WandMousePointer, ImGuiMouseButton_COUNT> gWandMouseEvents;
+	std::array<WandMousePointer, ImGuiMouseButton_COUNT> gWandMousePressPointers{};
+	bool gDispatchedWandMouseButtonDown[ImGuiMouseButton_COUNT] = {};
+	std::array<ControllerDevice, ImGuiMouseButton_COUNT> gDispatchedWandMouseButtonOwners = [] {
+		std::array<ControllerDevice, ImGuiMouseButton_COUNT> owners{};
+		owners.fill(ControllerDevice::Both);
+		return owners;
+	}();
+	WandMousePointer gLastPresentedWandPointer;
 	std::unordered_map<size_t, ScrollAccum> gVRScrollAccums;
 	CursorOwner gCursorOwner = CursorOwner::Desktop;
 	ImVec2 gLastDesktopMousePos = ImVec2(0.0f, 0.0f);
@@ -56,12 +73,78 @@ namespace
 	bool gHasLastMenuNavigationMode = false;
 	bool gLastMenuNavigationUsesWand = false;
 	bool gWandClaimedCursorThisFrame = false;
+	bool gWandInputCancelledThisFrame = false;
+	bool gHasOCUPointerInputSource = false;
+	bool gUsingOCUPointerInput = false;
+	std::uint64_t gOCUPointerInputGeneration = 0;
+	std::array<WandTriggerEdges, 2> gOCUTriggerEdges{};
+	std::array<std::uint64_t, 2> gOCUInputHandGenerations{};
+	std::array<bool, 2> gBlockRawTriggerUntilRelease{};
 	constexpr float kDesktopCursorMotionThresholdSq = 2.0f * 2.0f;
+
+	std::array<RE::ButtonMapping, kNumVRInputMappings> GetVRInputMappings(bool a_secondary)
+	{
+		return { {
+			{ RE::BSOpenVRControllerDevice::Keys::kTrigger, ImGuiMouseButton_Left, false, ImGuiKey_None, false },
+			{ RE::BSOpenVRControllerDevice::Keys::kGrip, ImGuiMouseButton_Right, false, ImGuiKey_None, false },
+			{ RE::BSOpenVRControllerDevice::Keys::kTouchpadClick, ImGuiMouseButton_Middle, false, ImGuiKey_None, false },
+			{ RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger, ImGuiMouseButton_Middle, false, ImGuiKey_None, false },
+			{ RE::BSOpenVRControllerDevice::Keys::kBY, -1, true, Util::Input::VirtualKeyToImGuiKey(VK_TAB), a_secondary },
+			{ RE::BSOpenVRControllerDevice::Keys::kXA, -1, true, Util::Input::VirtualKeyToImGuiKey(VK_RETURN), false },
+		} };
+	}
+
+	void ObserveRawTriggerReleases(const VR& a_vr)
+	{
+		if (std::none_of(gBlockRawTriggerUntilRelease.begin(), gBlockRawTriggerUntilRelease.end(), [](bool blocked) { return blocked; }))
+			return;
+		auto* system = RE::BSOpenVR::GetIVRSystem();
+		auto* compositor = RE::BSOpenVR::GetIVRCompositor();
+		if (!system || !compositor)
+			return;
+		for (std::size_t slot = 0; slot < gBlockRawTriggerUntilRelease.size(); ++slot) {
+			if (!gBlockRawTriggerUntilRelease[slot])
+				continue;
+			const auto controller = slot == 0 ? ControllerDevice::Primary : ControllerDevice::Secondary;
+			const auto index = Util::GetControllerIndexForDevice(controller, a_vr.lastKnownLeftHandedMode);
+			vr::TrackedDevicePose_t pose{};
+			vr::VRControllerState_t state{};
+			if (index == vr::k_unTrackedDeviceIndexInvalid ||
+				compositor->GetLastPoseForTrackedDeviceIndex(index, &pose, nullptr) != vr::VRCompositorError_None ||
+				!pose.bPoseIsValid || !pose.bDeviceIsConnected || !system->GetControllerState(index, &state, sizeof(state)) ||
+				!std::isfinite(state.rAxis[1].x) || state.rAxis[1].x >= 0.3f ||
+				(state.ulButtonPressed & vr::ButtonMaskFromId(vr::k_EButton_SteamVR_Trigger)) != 0)
+				continue;
+			gBlockRawTriggerUntilRelease[slot] = false;
+			(slot == 0 ? gPrevPrimaryVRInputStates : gPrevSecondaryVRInputStates)[0] = false;
+		}
+	}
 
 	void ResetVRImGuiButtonState()
 	{
+		auto& io = ImGui::GetIO();
+		for (const bool secondary : { false, true }) {
+			const auto mappings = GetVRInputMappings(secondary);
+			const bool* previous = secondary ? gPrevSecondaryVRInputStates : gPrevPrimaryVRInputStates;
+			for (std::size_t index = 0; index < mappings.size(); ++index) {
+				if (previous[index] && mappings[index].isKeyEvent) {
+					io.AddKeyEvent(static_cast<ImGuiKey>(mappings[index].key), false);
+					if (mappings[index].isShift)
+						io.AddKeyEvent(ImGuiMod_Shift, false);
+				}
+			}
+		}
 		std::fill_n(gPrevPrimaryVRInputStates, kNumVRInputMappings, false);
 		std::fill_n(gPrevSecondaryVRInputStates, kNumVRInputMappings, false);
+		for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
+			if (gDispatchedWandMouseButtonDown[button] || gVRMouseButtonDown[button])
+				io.AddMouseButtonEvent(button, false);
+		}
+		std::fill_n(gDispatchedWandMouseButtonDown, ImGuiMouseButton_COUNT, false);
+		gDispatchedWandMouseButtonOwners.fill(ControllerDevice::Both);
+		gWandMouseEvents.Clear();
+		gWandMousePressPointers = {};
+		gLastPresentedWandPointer = {};
 		std::fill_n(gVRMouseButtonDown, ImGuiMouseButton_COUNT, false);
 		std::fill_n(gLastObservedMouseButtonDown, ImGuiMouseButton_COUNT, false);
 		gVRMouseButtonOwners.fill(ControllerDevice::Both);
@@ -151,13 +234,26 @@ namespace
 		gWandClaimedCursorThisFrame = false;
 	}
 
+	void CancelWandMouseInput(VR& a_vr)
+	{
+		gWandInputCancelledThisFrame = gWandInputCancelledThisFrame || gCursorOwner == CursorOwner::Wand ||
+		                               std::any_of(std::begin(gVRMouseButtonDown), std::end(gVRMouseButtonDown), [](bool down) { return down; }) ||
+		                               std::any_of(std::begin(gDispatchedWandMouseButtonDown), std::end(gDispatchedWandMouseButtonDown), [](bool down) { return down; });
+		// Cancel away from every widget so a lost lease cannot activate the old hover target.
+		ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+		ResetVRImGuiButtonState();
+		ResetCursorOwnershipState();
+		a_vr.capturedWandController = ControllerDevice::Both;
+		gOCUTriggerEdges = {};
+	}
+
 	bool UpdateMenuNavigationPathState(bool a_useWandNavigation)
 	{
 		const bool changed = !gHasLastMenuNavigationMode || gLastMenuNavigationUsesWand != a_useWandNavigation;
 		if (changed) {
 			gVRScrollAccums.clear();
-			ResetVRImGuiButtonState();
-			ResetCursorOwnershipState();
+			CancelWandMouseInput(globals::features::vr);
+			gBlockRawTriggerUntilRelease.fill(true);
 		}
 
 		gHasLastMenuNavigationMode = true;
@@ -305,11 +401,19 @@ void VR::ProcessVREvents(std::vector<Menu::KeyEvent>& vrEvents)
 		}
 		firstCall = false;
 		lastKnownLeftHandedMode = currentLeftHandedMode;
+		CancelWandMouseInput(*this);
+		ResetWandPointingRuntimeState();
+		gBlockRawTriggerUntilRelease.fill(true);
 		neuralRenderingToggleHeld = false;
 		primaryControllerState = {};
 		secondaryControllerState = {};
 	}
 
+	RefreshOCUPointerState();
+	if (gUsingOCUPointerInput && !ocuPointerAvailable)
+		gBlockRawTriggerUntilRelease.fill(true);
+	if (!ocuPointerAvailable)
+		ObserveRawTriggerReleases(*this);
 	double nowSecs = Util::GetNowSecs();
 	for (auto& event : vrEvents) {
 		bool isPrimary = RE::BSOpenVRControllerDevice::IsPrimaryController(event.device);
@@ -368,19 +472,8 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 	if (globals::menu && globals::menu->IsEnabled && (isPrimary || isSecondary)) {
 		ImGuiIO& io = ImGui::GetIO();
 		bool& testMode = settings.VRMenuControllerDiagnosticsTestMode;
-		RE::ButtonMapping mappings[kNumVRInputMappings] = {
-			{ RE::BSOpenVRControllerDevice::Keys::kTrigger, ImGuiMouseButton_Left, false, ImGuiKey_None, false },
-			{ RE::BSOpenVRControllerDevice::Keys::kGrip, ImGuiMouseButton_Right, false, ImGuiKey_None, false },
-			{ RE::BSOpenVRControllerDevice::Keys::kTouchpadClick, ImGuiMouseButton_Middle, false, ImGuiKey_None, false },
-			{ RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger, ImGuiMouseButton_Middle, false, ImGuiKey_None, false },
-			{ RE::BSOpenVRControllerDevice::Keys::kBY, -1, true, Util::Input::VirtualKeyToImGuiKey(VK_TAB), isSecondary },
-			{ RE::BSOpenVRControllerDevice::Keys::kXA, -1, true, Util::Input::VirtualKeyToImGuiKey(VK_RETURN), false },
-		};
+		const auto mappings = GetVRInputMappings(isSecondary);
 
-		if (gLastVRInputHandedness != lastKnownLeftHandedMode) {
-			ResetVRImGuiButtonState();
-			gLastVRInputHandedness = lastKnownLeftHandedMode;
-		}
 		bool* prevStates = isPrimary ? gPrevPrimaryVRInputStates : gPrevSecondaryVRInputStates;
 
 		RE::InputDeviceState& controllerState = isPrimary ? primaryControllerState : secondaryControllerState;
@@ -388,8 +481,15 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 		size_t limit = testMode ? kNumVRTriggerMappings : kNumVRInputMappings;
 
 		for (size_t i = 0; i < limit; ++i) {
+			// OCU masks its owned trigger from game input; its shared snapshot owns these edges.
+			if (i == 0 && ocuPointerAvailable && !testMode && CanUseWandPointing())
+				continue;
 			RE::ButtonState* state = &controllerState[mappings[i].keyCode];
 			bool curr = state ? state->isPressed : false;
+			if (i == 0 && gBlockRawTriggerUntilRelease[isPrimary ? 0 : 1]) {
+				prevStates[i] = curr;
+				continue;
+			}
 			if (curr != prevStates[i]) {
 				if (mappings[i].isKeyEvent) {
 					if (mappings[i].isShift)
@@ -398,42 +498,11 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 				} else if (mappings[i].logicalButton >= 0 && mappings[i].logicalButton < ImGuiMouseButton_COUNT) {
 					const int logicalButton = mappings[i].logicalButton;
 					const bool useWandPointing = !testMode && CanUseWandPointing();
-					bool emitMouseEvent = true;
-					if (useWandPointing) {
-						if (curr) {
-							UpdateCursorFromWandPointing(true, eventController);
-							emitMouseEvent =
-								IsWandControllerIntersecting(eventController) &&
-								TryCaptureWandController(eventController) &&
-								io.WantSetMousePos &&
-								HasUsableCursorPos(io.MousePos);
-							if (emitMouseEvent) {
-								gVRMouseButtonOwners[logicalButton] = eventController;
-								gCursorOwner = CursorOwner::Wand;
-								gLastControllerCursorPos = io.MousePos;
-								gHasLastControllerCursorPos = true;
-								gWandClaimedCursorThisFrame = true;
-								TriggerWandHaptic(eventController, 8.0f);
-							}
-						} else {
-							emitMouseEvent = gVRMouseButtonOwners[logicalButton] == eventController;
-						}
-					}
-
-					if (emitMouseEvent) {
+					if (useWandPointing)
+						QueueWandMouseButton(eventController, logicalButton, curr);
+					else {
 						gVRMouseButtonDown[logicalButton] = curr;
 						io.AddMouseButtonEvent(logicalButton, curr);
-						if (curr && useWandPointing)
-							RecordQueuedWandClickOwner(logicalButton, eventController);
-						if (!curr && useWandPointing) {
-							gVRMouseButtonOwners[logicalButton] = ControllerDevice::Both;
-							const bool anyWandMouseButtonDown = std::any_of(
-								std::begin(gVRMouseButtonDown),
-								std::end(gVRMouseButtonDown),
-								[](bool a_down) { return a_down; });
-							if (!anyWandMouseButtonDown)
-								ReleaseWandControllerCapture(eventController);
-						}
 					}
 				}
 				prevStates[i] = curr;
@@ -456,6 +525,124 @@ void VR::ProcessVRButtonEvent(const Menu::KeyEvent& event)
 	if (vrControllerEventLog.size() > 32) {
 		vrControllerEventLog.erase(vrControllerEventLog.begin());
 	}
+}
+
+void VR::QueueWandMouseButton(ControllerDevice a_controller, int a_button, bool a_down)
+{
+	if (a_button < 0 || a_button >= ImGuiMouseButton_COUNT ||
+		(a_controller != ControllerDevice::Primary && a_controller != ControllerDevice::Secondary))
+		return;
+	auto& io = ImGui::GetIO();
+	if (a_down) {
+		if (gVRMouseButtonDown[a_button])
+			return;
+		UpdateCursorFromWandPointing(true, a_controller);
+		if (!IsWandControllerIntersecting(a_controller) || !io.WantSetMousePos ||
+			!HasUsableCursorPos(io.MousePos) || !TryCaptureWandController(a_controller))
+			return;
+		gVRMouseButtonOwners[a_button] = a_controller;
+		gWandMousePressPointers[a_button] = { a_controller, io.MousePos, wandState };
+		TriggerWandHaptic(a_controller, 8.0f);
+	} else if (gVRMouseButtonOwners[a_button] != a_controller) {
+		return;
+	}
+
+	gVRMouseButtonDown[a_button] = a_down;
+	auto pointer = gWandMousePressPointers[a_button];
+	if (!a_down) {
+		UpdateCursorFromWandPointing(false);
+		if (!IsWandControllerIntersecting(a_controller)) {
+			pointer.position = ImVec2(-FLT_MAX, -FLT_MAX);
+			pointer.state.isIntersecting = false;
+			pointer.state.isActivelyDrivingCursor = false;
+		} else if (!gWandMouseEvents.HasPendingPress(a_button) &&
+				   gLastPresentedWandPointer.controller == a_controller) {
+			pointer = gLastPresentedWandPointer;
+		}
+	}
+	if (!gWandMouseEvents.Push({ a_button, a_down, pointer })) {
+		CancelWandMouseInput(*this);
+		gBlockRawTriggerUntilRelease.fill(true);
+		return;
+	}
+	if (!a_down) {
+		gVRMouseButtonOwners[a_button] = ControllerDevice::Both;
+		if (std::none_of(std::begin(gVRMouseButtonDown), std::end(gVRMouseButtonDown), [](bool down) { return down; }))
+			ReleaseWandControllerCapture(a_controller);
+	}
+}
+
+void VR::ProcessOCUPointerInput()
+{
+	RefreshOCUPointerState();
+	const bool sourceChanged = gHasOCUPointerInputSource &&
+	                           (gUsingOCUPointerInput != ocuPointerAvailable || gOCUPointerInputGeneration != ocuPointerGeneration);
+	gHasOCUPointerInputSource = true;
+	gUsingOCUPointerInput = ocuPointerAvailable;
+	gOCUPointerInputGeneration = ocuPointerGeneration;
+
+	if (sourceChanged) {
+		CancelWandMouseInput(*this);
+		if (!ocuPointerAvailable)
+			gBlockRawTriggerUntilRelease.fill(true);
+	}
+	auto& io = ImGui::GetIO();
+	const ImVec2 desktopPosition = io.MousePos;
+	const bool desktopWantPosition = io.WantSetMousePos;
+	UpdateCursorFromWandPointing(false);
+	if (!ocuPointerAvailable) {
+		const auto hasTracking = [&](ControllerDevice controller) {
+			return controller == ControllerDevice::Both ||
+			       wandHandStates[controller == ControllerDevice::Primary ? 0 : 1].poseValid;
+		};
+		bool trackingLost = !hasTracking(capturedWandController);
+		for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+			trackingLost = trackingLost || (gDispatchedWandMouseButtonDown[button] && !hasTracking(gDispatchedWandMouseButtonOwners[button])) ||
+			               gWandMouseEvents.HasPendingPress(button, [&](const WandMousePointer& pointer) {
+							   return !hasTracking(pointer.controller);
+						   });
+		if (trackingLost) {
+			CancelWandMouseInput(*this);
+			gBlockRawTriggerUntilRelease.fill(true);
+		}
+		io.MousePos = desktopPosition;
+		io.WantSetMousePos = desktopWantPosition;
+		return;
+	}
+	if (gOCUPointerInputGeneration != ocuPointerGeneration) {
+		CancelWandMouseInput(*this);
+		gOCUPointerInputGeneration = ocuPointerGeneration;
+	}
+	const auto capturedSlot = capturedWandController == ControllerDevice::Primary ? 0u : 1u;
+	if (!ocuPointerValid || (capturedWandController != ControllerDevice::Both &&
+								!wandHandStates[capturedSlot].ocuOwnsInput)) {
+		CancelWandMouseInput(*this);
+	} else {
+		for (std::size_t slot = 0; slot < wandHandStates.size(); ++slot) {
+			const auto controller = slot == 0 ? ControllerDevice::Primary : ControllerDevice::Secondary;
+			const auto& hand = wandHandStates[slot];
+			const auto edges = gOCUTriggerEdges[slot].Update(hand.ocuTriggerSequence,
+				hand.ocuTriggerDown, hand.ocuTriggerEligible, hand.ocuOwnershipGeneration);
+			gOCUInputHandGenerations[slot] = hand.ocuOwnershipGeneration;
+			if (edges.cancel) {
+				bool hasOwnedInput = capturedWandController == controller;
+				for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+					hasOwnedInput = hasOwnedInput || gVRMouseButtonOwners[button] == controller ||
+					                (gDispatchedWandMouseButtonDown[button] && gDispatchedWandMouseButtonOwners[button] == controller) ||
+					                gWandMouseEvents.HasPendingPress(button, [&](const WandMousePointer& pointer) {
+										return pointer.controller == controller;
+									});
+				if (hasOwnedInput) {
+					CancelWandMouseInput(*this);
+					break;
+				}
+			}
+			for (std::size_t edge = 0; edge < edges.count; ++edge)
+				QueueWandMouseButton(controller, ImGuiMouseButton_Left, edges.states[edge]);
+		}
+	}
+	io.MousePos = desktopPosition;
+	io.WantSetMousePos = desktopWantPosition;
 }
 
 ControllerDevice VR::GetImGuiLeftClickWandController() const
@@ -575,8 +762,11 @@ void VR::ResetComboRecordingState()
 
 void VR::ReleaseMenuImGuiInputState()
 {
-	ResetVRImGuiButtonState();
-	gLastVRInputHandedness = lastKnownLeftHandedMode;
+	ReleaseOCUPointerState();
+	gHasOCUPointerInputSource = false;
+	gUsingOCUPointerInput = false;
+	CancelWandMouseInput(*this);
+	gBlockRawTriggerUntilRelease.fill(true);
 	gVRScrollAccums.clear();
 	gHasLastMenuNavigationMode = false;
 	gLastMenuNavigationUsesWand = false;
@@ -627,7 +817,8 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 		if (desktopCursorUsable &&
 			mouseButtonDown &&
 			!gLastObservedMouseButtonDown[button] &&
-			!gVRMouseButtonDown[button]) {
+			!gVRMouseButtonDown[button] &&
+			!gDispatchedWandMouseButtonDown[button]) {
 			desktopMouseClicked = true;
 		}
 		gLastObservedMouseButtonDown[button] = mouseButtonDown;
@@ -665,7 +856,14 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 
 	bool wandHandledCursor = false;
 	if (useWandPointing) {
-		UpdateCursorFromWandPointing(false);
+		if (gWandClaimedCursorThisFrame) {
+			// A queued edge preserves the presented position, including a released miss.
+			io.MousePos = gLastControllerCursorPos;
+			io.AddMousePosEvent(io.MousePos.x, io.MousePos.y);
+			io.WantSetMousePos = gHasLastControllerCursorPos && wandState.isIntersecting;
+		} else {
+			UpdateCursorFromWandPointing(false);
+		}
 		wandHandledCursor = wandState.isIntersecting;
 		const bool wandMovedWithoutHit =
 			!wandState.isIntersecting &&
@@ -781,7 +979,8 @@ void VR::ProcessControllerInputForMouseNavigationPath(bool testMode, float mouse
 		if (desktopCursorUsable &&
 			mouseButtonDown &&
 			!gLastObservedMouseButtonDown[button] &&
-			!gVRMouseButtonDown[button]) {
+			!gVRMouseButtonDown[button] &&
+			!gDispatchedWandMouseButtonDown[button]) {
 			desktopMouseClicked = true;
 		}
 		if (gVRMouseButtonDown[button]) {
@@ -885,7 +1084,7 @@ void VR::ProcessControllerInputForImGui()
 	customVRCursorOverlayType = OverlayType::HMD;
 
 	const bool useWandNavigation = CanUseWandPointing();
-	const bool navigationModeChanged = UpdateMenuNavigationPathState(useWandNavigation);
+	const bool navigationModeChanged = UpdateMenuNavigationPathState(useWandNavigation && !testMode);
 	if (navigationModeChanged) {
 		for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
 			io.AddMouseButtonEvent(button, false);
@@ -896,11 +1095,67 @@ void VR::ProcessControllerInputForImGui()
 	}
 
 	if (useWandNavigation) {
+		if (!testMode)
+			ProcessOCUPointerInput();
+		else
+			ReleaseOCUPointerState();
+		if (gWandInputCancelledThisFrame) {
+			// Keep the cancellation position last in the batch consumed by ImGui::NewFrame.
+			io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+			io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+			io.WantSetMousePos = false;
+			wandState = {};
+			gLastPresentedWandPointer = {};
+			gWandClaimedCursorThisFrame = false;
+			UpdateOCUPointerOwnership(true);
+			gWandInputCancelledThisFrame = false;
+			return;
+		}
+		ControllerDevice dispatchedController = ControllerDevice::Both;
+		if (const auto event = gWandMouseEvents.PopForFrame(ImGui::GetFrameCount() + 1)) {
+			io.AddMouseButtonEvent(event->button, event->down);
+			gDispatchedWandMouseButtonDown[event->button] = event->down;
+			gDispatchedWandMouseButtonOwners[event->button] = event->down ? event->pointer.controller : ControllerDevice::Both;
+			dispatchedController = event->pointer.controller;
+			if (event->down)
+				RecordQueuedWandClickOwner(event->button, event->pointer.controller);
+			activeWandController = event->pointer.controller;
+			wandState = event->pointer.state;
+			gCursorOwner = CursorOwner::Wand;
+			gLastControllerCursorPos = event->pointer.position;
+			gHasLastControllerCursorPos = HasUsableCursorPos(event->pointer.position);
+			gWandClaimedCursorThisFrame = true;
+		}
 		ProcessControllerInputForWandPointingPath(testMode, mouseDeadzone, io);
+		gLastPresentedWandPointer = { activeWandController, io.MousePos, wandState };
+		UpdateOCUPointerOwnership(true);
+		if (ocuPointerAvailable) {
+			const auto ownsController = [&](ControllerDevice controller) {
+				if (controller == ControllerDevice::Both)
+					return true;
+				const auto slot = controller == ControllerDevice::Primary ? 0u : 1u;
+				return wandHandStates[slot].ocuOwnsInput &&
+				       wandHandStates[slot].ocuOwnershipGeneration == gOCUInputHandGenerations[slot];
+			};
+			bool lostInput = !ocuPointerValid || gOCUPointerInputGeneration != ocuPointerGeneration ||
+			                 !ownsController(capturedWandController) || !ownsController(dispatchedController);
+			for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+				lostInput = lostInput || (gDispatchedWandMouseButtonDown[button] &&
+											 !ownsController(gDispatchedWandMouseButtonOwners[button]));
+			if (lostInput) {
+				CancelWandMouseInput(*this);
+				io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+				io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+				io.WantSetMousePos = false;
+				customVRCursorVisible = false;
+				wandState = {};
+			}
+		}
 	} else {
 		ProcessControllerInputForMouseNavigationPath(testMode, mouseDeadzone, mouseSpeed, io);
 	}
 	gWandClaimedCursorThisFrame = false;
+	gWandInputCancelledThisFrame = false;
 }
 
 bool VR::IsMenuPointerInHeadset() const

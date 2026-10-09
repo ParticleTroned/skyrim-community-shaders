@@ -347,6 +347,7 @@ foreach(
     _required_action
     IN
     ITEMS
+        set_wand_settings
         set_depth_culling_settings
         set_depth_culling_legacy_mode
         set_grass_optimizations_enabled
@@ -452,6 +453,47 @@ foreach(
         )
     endif()
 endforeach()
+
+string(JSON _wand_schema GET "${_descriptor}" inputSchema properties wand)
+string(JSON _minimum_fields GET "${_wand_schema}" minProperties)
+string(JSON _additional_fields GET "${_wand_schema}" additionalProperties)
+string(JSON _field_count LENGTH "${_wand_schema}" properties)
+string(JSON _enable_type GET "${_wand_schema}" properties enableWandPointing type)
+string(JSON _pitch_type GET "${_wand_schema}" properties aimPitchTrimDegrees type)
+string(JSON _pitch_minimum GET "${_wand_schema}" properties aimPitchTrimDegrees minimum)
+string(JSON _pitch_maximum GET "${_wand_schema}" properties aimPitchTrimDegrees maximum)
+if(NOT _minimum_fields EQUAL 1 OR _additional_fields OR NOT _field_count EQUAL 2 OR
+    NOT _enable_type STREQUAL "boolean" OR NOT _pitch_type STREQUAL "number" OR
+    NOT _pitch_minimum EQUAL -90 OR NOT _pitch_maximum EQUAL 90)
+    message(FATAL_ERROR "Wand update must be nonempty with known bounded fields")
+endif()
+string(FIND "${_bridge}" "ValidateWandSettings(wandUpdate)" _wand_validate)
+string(FIND "${_bridge}" "return RunOnMainThread([action, path, enabled, resolution," _wand_dispatch)
+string(FIND "${_bridge}" "action == \"set_wand_settings\" && !globals::game::isVR" _wand_runtime_guard)
+string(FIND "${_bridge}" "vr.settings.WandAimPitchTrimDegrees = pitch;" _wand_apply)
+if(_wand_validate EQUAL -1 OR _wand_dispatch EQUAL -1 OR _wand_runtime_guard EQUAL -1 OR _wand_apply EQUAL -1 OR
+    _wand_validate GREATER _wand_dispatch OR _wand_dispatch GREATER _wand_runtime_guard OR _wand_runtime_guard GREATER _wand_apply)
+    message(FATAL_ERROR "Wand mutation must follow complete validation, main-thread dispatch and a VR guard")
+endif()
+foreach(_field IN ITEMS ocuPointerAvailable ocuPointerValid ocuPointerGeneration ocuPointerFrameId ocuPointerOwnedHands)
+    string(JSON _field_type GET "${_descriptor}" outputSchema "$defs" wandStatus properties "${_field}" type)
+    string(FIND "${_bridge}" "{ \"${_field}\", vr.${_field} }" _status_field)
+    if(NOT _field_type OR _status_field EQUAL -1)
+        message(FATAL_ERROR "Shared OCU pointer status must expose ${_field}")
+    endif()
+endforeach()
+foreach(_field IN ITEMS usingOCUPointer ocuOwnsInput ocuTriggerDown ocuTriggerSequence ocuOwnershipGeneration)
+    string(JSON _field_type GET "${_descriptor}" outputSchema "$defs" wandStatus properties hands items properties "${_field}" type)
+    string(FIND "${_bridge}" "{ \"${_field}\", hand.${_field} }" _status_field)
+    if(NOT _field_type OR _status_field EQUAL -1)
+        message(FATAL_ERROR "Shared OCU pointer hand status must expose ${_field}")
+    endif()
+endforeach()
+string(JSON _pitch_description GET "${_wand_schema}" properties aimPitchTrimDegrees description)
+if(NOT _pitch_description MATCHES "standalone" OR NOT _pitch_description MATCHES "OCU")
+    message(FATAL_ERROR "Wand pitch schema must identify the standalone and shared OCU behavior")
+endif()
+message(STATUS "Wand DevBench settings and shared OCU pointer contracts are coherent")
 
 string(JSON _culling_schema GET "${_descriptor}" inputSchema properties depthCulling)
 string(JSON _minimum_fields GET "${_culling_schema}" minProperties)

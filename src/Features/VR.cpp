@@ -258,12 +258,13 @@ namespace
 		return true;
 	}
 
-	void AppendCustomVRCursorDot(ImDrawList& drawList, const ImVec2& center)
+	void AppendCustomVRCursorDot(ImDrawList& drawList, const ImVec2& center, ImVec4 beamColor, const ImVec4& dotColor)
 	{
 		const float radius = GetCustomVRCursorDotRadius();
-		const ImU32 glowColor = IM_COL32(72, 240, 230, 92);
-		const ImU32 outerColor = IM_COL32(44, 222, 236, 220);
-		const ImU32 innerColor = IM_COL32(186, 255, 248, 255);
+		const ImU32 outerColor = ImGui::ColorConvertFloat4ToU32(beamColor);
+		beamColor.w *= 0.4f;
+		const ImU32 glowColor = ImGui::ColorConvertFloat4ToU32(beamColor);
+		const ImU32 innerColor = ImGui::ColorConvertFloat4ToU32(dotColor);
 
 		drawList.AddCircleFilled(center, radius * 1.9f, glowColor, 24);
 		drawList.AddCircleFilled(center, radius, outerColor, 20);
@@ -1575,6 +1576,7 @@ namespace
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Rotates the pointer around the controller aim pose's local X axis.");
 				ImGui::TextUnformatted("Positive values pitch the pointer from local forward toward local up.");
+				ImGui::TextUnformatted("Shared OCU pointing applies this trim once in OCU, then shares its smoothed ray and laser.");
 			}
 		}
 	}
@@ -2859,13 +2861,30 @@ namespace
 				ImGui::TableSetColumnIndex(0);
 				ImGui::Text("Aim Pose Source");
 				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("%s", vr.wandState.usingOCUAimPose ? "OCU OpenXR aim via render-model tip" : "Raw controller pose fallback");
+				ImGui::Text("%s", vr.wandState.usingOCUPointer   ? "OCU shared pointer" :
+								  vr.wandState.usingAimComponent ? "Render-model tip component" :
+																   "Raw controller pose fallback");
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("OCU Shared Pointer");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%s", vr.ocuPointerValid ? "Ready" : vr.ocuPointerAvailable ? "Waiting for valid sample" :
+																						  "Unavailable");
+
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("OCU Input Ownership");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("Primary: %s | Secondary: %s",
+					vr.wandHandStates[0].ocuOwnsInput ? "CSX" : "Unclaimed",
+					vr.wandHandStates[1].ocuOwnsInput ? "CSX" : "Unclaimed");
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
 				ImGui::Text("Aim Pitch Trim");
 				ImGui::TableSetColumnIndex(1);
-				ImGui::Text("%+.1f degrees", settings.WandAimPitchTrimDegrees);
+				ImGui::Text("%+.1f degrees%s", settings.WandAimPitchTrimDegrees, vr.ocuPointerAvailable ? " (applied by OCU)" : "");
 
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
@@ -3719,7 +3738,9 @@ void VR::SubmitOverlayFrame()
 
 	const bool shouldUseInSceneOverlay = ShouldUseInSceneOverlay();
 	const bool presentationUpscalingActive = globals::features::upscaling.IsPresentationUpscalingActive();
-	if (shouldUseInSceneOverlay || presentationUpscalingActive) {
+	const bool standaloneWandBeam = CanUseWandPointing() && !ocuPointerAvailable &&
+	                                globals::menu->IsEnabled && !globals::features::renderDoc.ShouldBlockUpscaling();
+	if (shouldUseInSceneOverlay || presentationUpscalingActive || standaloneWandBeam) {
 		InstallSubmitHook();
 	}
 	const bool useInSceneOverlay =
@@ -3820,7 +3841,7 @@ void VR::SubmitOverlayFrame()
 		(!wantsHMDOverlay || menuOverlayHandle != vr::k_ulOverlayHandleInvalid) &&
 		(!wantsControllerOverlay || menuControllerOverlayHandle != vr::k_ulOverlayHandleInvalid);
 	const bool canUseIVROverlay = useIVROverlay && gameOverlay && cleanOverlay && hasRequiredOverlayHandles;
-	if (shouldRenderOverlay && wantsAnyVROverlay && useInSceneOverlay) {
+	if (shouldRenderOverlay && wantsAnyVROverlay && (useInSceneOverlay || standaloneWandBeam)) {
 		if (!inSceneResources.initialized) {
 			InitInSceneResources();
 		}
@@ -3860,7 +3881,7 @@ void VR::SubmitOverlayFrame()
 				cursorDrawList._ResetForNewFrame();
 				cursorDrawList.PushTextureID(io.Fonts->TexID);
 				cursorDrawList.PushClipRectFullScreen();
-				AppendCustomVRCursorDot(cursorDrawList, customCursorPos);
+				AppendCustomVRCursorDot(cursorDrawList, customCursorPos, GetWandPointerColor(), GetWandPointerDotColor());
 				cursorDrawList.PopClipRect();
 				cursorDrawList.PopTextureID();
 				cursorDrawList._PopUnusedDrawCmd();

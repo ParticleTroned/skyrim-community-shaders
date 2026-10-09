@@ -1,4 +1,6 @@
 #include "Features/VR.h"
+#include "Features/VR/OCUPointerClient.h"
+#include "Features/VR/WandCursorFilter.h"
 #include "Features/VR/WandInteractionPolicy.h"
 #include "Features/VR/WandSurfaceGeometry.h"
 #include "RE/B/BSOpenVR.h"
@@ -7,6 +9,7 @@
 #include <SimpleMath.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <imgui_internal.h>
 #include <openvr.h>
@@ -38,12 +41,25 @@ namespace
 	constexpr std::uint32_t kWandCursorActiveFrames = 24;
 	constexpr float kWandIdlePositionMotionThresholdSq = 0.0075f * 0.0075f;
 	constexpr float kWandIdleDirectionMotionThreshold = 0.00008f;
-	constexpr float kWandScreenMotionThresholdSq = 1.5f * 1.5f;
 	constexpr float kWandHoverHapticDuration = 4.0f;
 
+	OCUPointer::Client g_ocuPointerClient;
+	OCUPointer::Client::Frame g_ocuPointerFrame;
+	std::uint64_t g_ocuPointerSession = 0;
+	bool g_ocuNeedsPresentedSurface = false;
 	std::array<WandPoseHistory, 2> g_wandPoseHistory{};
-	std::array<ImVec2, 2> g_previousWandScreenPos{};
-	std::array<bool, 2> g_hasPreviousWandScreenPos{};
+	struct WandCursorHistory
+	{
+		WandCursorFilter::Filter filter;
+		WandCursorFilter::Position filteredPosition{};
+		int sampleFrame = -1;
+		vr::TrackedDeviceIndex_t controllerIndex = vr::k_unTrackedDeviceIndexInvalid;
+		VR::OverlayType overlayType = VR::OverlayType::HMD;
+		ImVec2 displaySize{};
+		float pitchTrimDegrees = 0.0f;
+		bool usingAimComponent = false;
+	};
+	std::array<WandCursorHistory, 2> g_wandCursorHistory{};
 	std::array<std::string, vr::k_unMaxTrackedDeviceCount> g_controllerRenderModelNames{};
 
 	bool IsIndividualController(ControllerDevice a_controller)
@@ -54,6 +70,35 @@ namespace
 	std::size_t GetControllerSlot(ControllerDevice a_controller)
 	{
 		return a_controller == ControllerDevice::Secondary ? 1u : 0u;
+	}
+
+	std::uint32_t GetPhysicalHand(const VR& a_vr, ControllerDevice a_controller)
+	{
+		const bool left = (a_controller == ControllerDevice::Primary) == a_vr.lastKnownLeftHandedMode;
+		return left ? 0u : 1u;
+	}
+
+	constexpr float kWandBeamColors[2][4]{
+		{ 1.0f, 240.0f / 255.0f, 220.0f / 255.0f, 200.0f / 255.0f },
+		{ 55.0f / 255.0f, 145.0f / 255.0f, 1.0f, 220.0f / 255.0f }
+	};
+	constexpr float kWandDotColors[2][4]{
+		{ 1.0f, 250.0f / 255.0f, 240.0f / 255.0f, 0.95f },
+		{ 225.0f / 255.0f, 245.0f / 255.0f, 1.0f, 0.95f }
+	};
+
+	ImVec4 ResolveWandPointerColor(const VR& a_vr, bool a_dot)
+	{
+		bool pressed = ImGui::GetCurrentContext() && ImGui::GetIO().MouseDown[ImGuiMouseButton_Left];
+		if (g_ocuPointerFrame.valid) {
+			pressed = IsIndividualController(a_vr.activeWandController) &&
+			          (g_ocuPointerFrame.snapshot.hands[GetPhysicalHand(a_vr, a_vr.activeWandController)].flags & ocu_pointer::TriggerDown);
+			const auto& style = g_ocuPointerFrame.snapshot.style;
+			const auto* color = a_dot ? style.dotColor[pressed ? 1 : 0] : style.beamColor[pressed ? 1 : 0];
+			return ImVec4(color[0], color[1], color[2], color[3]);
+		}
+		const auto* color = a_dot ? kWandDotColors[pressed ? 1 : 0] : kWandBeamColors[pressed ? 1 : 0];
+		return ImVec4(color[0], color[1], color[2], color[3]);
 	}
 
 	PolicyHand ToPolicyHand(ControllerDevice a_controller)
@@ -88,8 +133,11 @@ namespace
 		}
 
 		history.controllerIndex = a_controllerIndex;
-		history.rayOrigin = a_rayOrigin;
-		history.rayDirection = a_rayDirection;
+		// Accumulate deliberate slow movement instead of losing it below a per-sample threshold.
+		if (moved) {
+			history.rayOrigin = a_rayOrigin;
+			history.rayDirection = a_rayDirection;
+		}
 		history.valid = true;
 
 		if (a_forceCursorUpdate || moved) {
@@ -106,8 +154,7 @@ namespace
 	void ResetWandPoseTracking()
 	{
 		g_wandPoseHistory = {};
-		g_previousWandScreenPos = {};
-		g_hasPreviousWandScreenPos = {};
+		g_wandCursorHistory = {};
 	}
 
 	bool TryGetControllerRenderModelName(vr::TrackedDeviceIndex_t a_controllerIndex, std::string& a_name)
@@ -126,7 +173,8 @@ namespace
 		vr::ETrackedPropertyError error = vr::TrackedProp_Success;
 		const std::uint32_t requiredLength = system->GetStringTrackedDeviceProperty(
 			a_controllerIndex, vr::Prop_RenderModelName_String, nullptr, 0, &error);
-		if (requiredLength <= 1 || error != vr::TrackedProp_BufferTooSmall)
+		if (requiredLength <= 1 || requiredLength > vr::k_unMaxPropertyStringSize ||
+			(error != vr::TrackedProp_BufferTooSmall && error != vr::TrackedProp_Success))
 			return false;
 
 		std::vector<char> buffer(requiredLength);
@@ -171,10 +219,8 @@ namespace
 		std::string hardwareRenderModelName;
 		TryGetControllerRenderModelName(a_controllerIndex, hardwareRenderModelName);
 
-		// OCU associates its live OpenXR aim component with these canonical hand
-		// names. Its physical controller property name is accepted but resolves to
-		// an identity component, which is only the raw grip pose. SteamVR normally
-		// wants the physical model name, so preserve that as the first choice there.
+		// OpenComposite resolves component transforms through canonical hand names;
+		// SteamVR resolves them through the controller's physical render model.
 		const bool preferCanonicalHandName =
 			globals::features::vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 		if (preferCanonicalHandName) {
@@ -206,25 +252,67 @@ namespace
 		return false;
 	}
 
+	using WandPoses = std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount>;
+
+	bool TryGetWandPoses(WandPoses& a_poses)
+	{
+		auto* compositor = RE::BSOpenVR::GetIVRCompositor();
+		return compositor && compositor->GetLastPoses(a_poses.data(),
+								 static_cast<std::uint32_t>(a_poses.size()), nullptr, 0) == vr::VRCompositorError_None;
+	}
+
+	bool TryGetWandDeviceWorld(vr::TrackedDeviceIndex_t a_index, Matrix& a_world, const WandPoses* a_sampledPoses = nullptr)
+	{
+		WandPoses localPoses{};
+		if (!a_sampledPoses) {
+			// Input must never advance or block the compositor's frame lifecycle.
+			if (!TryGetWandPoses(localPoses))
+				return false;
+			a_sampledPoses = &localPoses;
+		}
+		if (a_index >= a_sampledPoses->size())
+			return false;
+		const auto& pose = (*a_sampledPoses)[a_index];
+		if (!pose.bPoseIsValid || !pose.bDeviceIsConnected)
+			return false;
+		a_world = Util::HmdMatrix34ToMatrix(pose.mDeviceToAbsoluteTracking);
+		return true;
+	}
+
 	bool TryGetControllerPointingRay(
 		vr::TrackedDeviceIndex_t a_controllerIndex,
 		float a_pitchAdjustmentDegrees,
 		Vector3& a_rayOrigin,
 		Vector3& a_rayDirection,
-		bool& a_usedOCUAimPose)
+		bool& a_usedAimComponent,
+		const WandPoses* a_sampledPoses = nullptr)
 	{
-		float controllerM[3][4];
-		if (!Util::GetControllerWorldMatrix(a_controllerIndex, controllerM))
-			return false;
+		if (g_ocuPointerFrame.providerAvailable) {
+			a_usedAimComponent = false;
+			auto* system = RE::BSOpenVR::GetIVRSystem();
+			if (!g_ocuPointerFrame.valid || !system)
+				return false;
+			const auto role = system->GetControllerRoleForTrackedDeviceIndex(a_controllerIndex);
+			if (role != vr::TrackedControllerRole_LeftHand && role != vr::TrackedControllerRole_RightHand)
+				return false;
+			const auto& hand = g_ocuPointerFrame.snapshot.hands[role == vr::TrackedControllerRole_LeftHand ? 0 : 1];
+			if ((hand.flags & (ocu_pointer::RayValid | ocu_pointer::InputAvailable)) !=
+				(ocu_pointer::RayValid | ocu_pointer::InputAvailable))
+				return false;
+			a_rayOrigin = Vector3(hand.origin[0], hand.origin[1], hand.origin[2]);
+			a_rayDirection = Vector3(hand.direction[0], hand.direction[1], hand.direction[2]);
+			return true;
+		}
 
-		const Matrix controllerWorld = Util::HmdMatrix34ToMatrix(Util::Float3x4ToHmdMatrix34(controllerM));
+		Matrix controllerWorld;
+		if (!TryGetWandDeviceWorld(a_controllerIndex, controllerWorld, a_sampledPoses))
+			return false;
 		Matrix pointingWorld = controllerWorld;
 		Matrix controllerToAim;
-		// OCU's render-model "tip" is a stable grip-relative transform calculated
-		// from the OpenXR aim space. Its shared OC_AIM_POSES slot can transiently
-		// contain the raw grip/render pose, whose -Z axis exits the controller face.
-		a_usedOCUAimPose = TryGetControllerAimTransform(a_controllerIndex, controllerToAim);
-		if (a_usedOCUAimPose)
+		// A render-model tip may be a fixed profile transform. It does not include
+		// OpenComposite's independent menu-laser calibration or smoothing.
+		a_usedAimComponent = TryGetControllerAimTransform(a_controllerIndex, controllerToAim);
+		if (a_usedAimComponent)
 			pointingWorld = controllerToAim * controllerWorld;
 		if (std::abs(a_pitchAdjustmentDegrees) > 1e-4f) {
 			const Matrix pitchAdjustment = Matrix::CreateRotationX(
@@ -253,10 +341,9 @@ namespace
 			if (a_vr.UseFixedWorldMenuPositioning()) {
 				a_overlayWorld = a_vr.fixedWorldOverlayPosition.m;
 			} else {
-				vr::TrackedDevicePose_t hmdPose;
-				if (!Util::GetDeviceToAbsoluteTrackingPoseCompatible(vr::TrackingUniverseStanding, 0, &hmdPose, 1) || !hmdPose.bPoseIsValid)
+				Matrix hmdWorld;
+				if (!TryGetWandDeviceWorld(vr::k_unTrackedDeviceIndex_Hmd, hmdWorld))
 					return false;
-				const Matrix hmdWorld = Util::HmdMatrix34ToMatrix(hmdPose.mDeviceToAbsoluteTracking);
 				const Matrix offset = Matrix::CreateTranslation(a_vr.GetEffectiveHMDMenuOffset());
 				a_overlayWorld = offset * hmdWorld;
 			}
@@ -265,10 +352,9 @@ namespace
 				a_vr.GetEffectiveMenuAttachController(), a_vr.lastKnownLeftHandedMode);
 			if (attachIndex == vr::k_unTrackedDeviceIndexInvalid)
 				return false;
-			float attachM[3][4];
-			if (!Util::GetControllerWorldMatrix(attachIndex, attachM))
+			Matrix attachWorld;
+			if (!TryGetWandDeviceWorld(attachIndex, attachWorld))
 				return false;
-			const Matrix attachWorld = Util::HmdMatrix34ToMatrix(Util::Float3x4ToHmdMatrix34(attachM));
 			const Matrix offset = Matrix::CreateTranslation(a_vr.GetEffectiveControllerMenuOffset());
 			a_overlayWorld = offset * attachWorld;
 		}
@@ -292,6 +378,9 @@ namespace
 		VR::PresentedMenuSurface presentedSurface;
 		a_outUsedPresentedSurface = a_vr.TryGetPresentedMenuSurface(a_type, presentedSurface);
 		if (!a_outUsedPresentedSurface) {
+			if ((!a_vr.ShouldUseInSceneOverlay() && a_vr.openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR) ||
+				(g_ocuPointerFrame.providerAvailable && g_ocuNeedsPresentedSurface))
+				return false;
 			// Startup and legacy IVROverlay fallback. The in-scene renderer replaces
 			// this with the exact world-space vertices after its first presentation.
 			Matrix overlayWorld;
@@ -358,10 +447,56 @@ namespace
 		return intersected;
 	}
 
-	void SampleWandHand(VR& a_vr, ControllerDevice a_controller, bool a_forceCursorUpdate)
+	void UpdateWandScreenPosition(VR& a_vr, ControllerDevice a_controller, double a_sampleSeconds, bool a_holdPosition)
+	{
+		const auto slot = GetControllerSlot(a_controller);
+		auto& hand = a_vr.wandHandStates[slot];
+		auto& history = g_wandCursorHistory[slot];
+		const auto displaySize = ImGui::GetIO().DisplaySize;
+		if (!hand.isIntersecting || !std::isfinite(hand.uvCoordinates.x) || !std::isfinite(hand.uvCoordinates.y) ||
+			!std::isfinite(displaySize.x) || !std::isfinite(displaySize.y) ||
+			displaySize.x <= 0.0f || displaySize.y <= 0.0f) {
+			history = {};
+			return;
+		}
+		if (history.controllerIndex != hand.controllerIndex || history.overlayType != hand.overlayType ||
+			history.displaySize.x != displaySize.x || history.displaySize.y != displaySize.y ||
+			history.pitchTrimDegrees != a_vr.settings.WandAimPitchTrimDegrees ||
+			history.usingAimComponent != hand.usingAimComponent) {
+			history = {};
+			history.controllerIndex = hand.controllerIndex;
+			history.overlayType = hand.overlayType;
+			history.displaySize = displaySize;
+			history.pitchTrimDegrees = a_vr.settings.WandAimPitchTrimDegrees;
+			history.usingAimComponent = hand.usingAimComponent;
+		}
+		if (hand.usingOCUPointer) {
+			// The shared ray already includes OCU smoothing; its beam and this cursor must agree.
+			history = {};
+			hand.screenPosition = ImVec2(hand.uvCoordinates.x * displaySize.x, hand.uvCoordinates.y * displaySize.y);
+			hand.hasScreenPosition = true;
+			return;
+		}
+		const WandCursorFilter::Position input{
+			hand.uvCoordinates.x * displaySize.x / displaySize.y, hand.uvCoordinates.y
+		};
+		const int sampleFrame = ImGui::GetFrameCount();
+		if (history.sampleFrame != sampleFrame) {
+			history.filteredPosition = history.filter.Update(input, a_sampleSeconds, a_holdPosition);
+			history.sampleFrame = sampleFrame;
+		}
+		const auto filtered = history.filteredPosition;
+		hand.screenPosition = ImVec2(
+			std::clamp(filtered.x * displaySize.y, 0.0f, displaySize.x),
+			std::clamp(filtered.y * displaySize.y, 0.0f, displaySize.y));
+		hand.hasScreenPosition = true;
+	}
+
+	void SampleWandHand(VR& a_vr, ControllerDevice a_controller, bool a_forceCursorUpdate, const WandPoses& a_poses)
 	{
 		auto& hand = a_vr.wandHandStates[GetControllerSlot(a_controller)];
 		hand = {};
+		hand.usingOCUPointer = a_vr.ocuPointerAvailable;
 		hand.controllerIndex = Util::GetControllerIndexForDevice(a_controller, a_vr.lastKnownLeftHandedMode);
 		if (hand.controllerIndex == vr::k_unTrackedDeviceIndexInvalid)
 			return;
@@ -370,7 +505,7 @@ namespace
 				a_vr.settings.WandAimPitchTrimDegrees,
 				hand.rayOrigin,
 				hand.rayDirection,
-				hand.usingOCUAimPose))
+				hand.usingAimComponent, &a_poses))
 			return;
 
 		hand.poseValid = true;
@@ -396,15 +531,17 @@ bool VR::ComputeWandIntersectionForOverlayType(OverlayType a_type, vr::TrackedDe
 {
 	Vector3 rayOrigin = Vector3::Zero;
 	Vector3 rayDirection = Vector3::Zero;
-	bool usedOCUAimPose = false;
-	if (!TryGetControllerPointingRay(a_controllerIndex, settings.WandAimPitchTrimDegrees, rayOrigin, rayDirection, usedOCUAimPose))
+	bool usedAimComponent = false;
+	if (!TryGetControllerPointingRay(a_controllerIndex, settings.WandAimPitchTrimDegrees, rayOrigin, rayDirection, usedAimComponent))
 		return false;
 	float distance = 0.0f;
 	bool usedPresentedSurface = false;
 	const bool intersected = TryComputeOverlayIntersection(*this, a_type, rayOrigin, rayDirection, a_outUV, distance, usedPresentedSurface);
 	wandState.rayOrigin = rayOrigin;
 	wandState.rayDirection = rayDirection;
-	wandState.usingOCUAimPose = usedOCUAimPose;
+	wandState.usingAimComponent = usedAimComponent;
+	wandState.usingOCUPointer = ocuPointerAvailable;
+	wandState.ocuFrameId = ocuPointerFrameId;
 	wandState.usingPresentedSurface = usedPresentedSurface;
 	return intersected;
 }
@@ -413,8 +550,8 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t a_controllerIndex, ImV
 {
 	Vector3 rayOrigin = Vector3::Zero;
 	Vector3 rayDirection = Vector3::Zero;
-	bool usedOCUAimPose = false;
-	if (!TryGetControllerPointingRay(a_controllerIndex, settings.WandAimPitchTrimDegrees, rayOrigin, rayDirection, usedOCUAimPose)) {
+	bool usedAimComponent = false;
+	if (!TryGetControllerPointingRay(a_controllerIndex, settings.WandAimPitchTrimDegrees, rayOrigin, rayDirection, usedAimComponent)) {
 		wandState.isIntersecting = false;
 		return false;
 	}
@@ -424,7 +561,9 @@ bool VR::ComputeWandIntersection(vr::TrackedDeviceIndex_t a_controllerIndex, ImV
 	const bool intersected = TryComputeNearestIntersection(*this, rayOrigin, rayDirection, a_outUV, distance, overlayType, usedPresentedSurface);
 	wandState.rayOrigin = rayOrigin;
 	wandState.rayDirection = rayDirection;
-	wandState.usingOCUAimPose = usedOCUAimPose;
+	wandState.usingAimComponent = usedAimComponent;
+	wandState.usingOCUPointer = ocuPointerAvailable;
+	wandState.ocuFrameId = ocuPointerFrameId;
 	wandState.usingPresentedSurface = usedPresentedSurface;
 	wandState.isIntersecting = intersected;
 	if (intersected) {
@@ -455,13 +594,28 @@ vr::TrackedDeviceIndex_t VR::GetWandPointingControllerIndex() const
 
 void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate, ControllerDevice a_preferredController)
 {
+	RefreshOCUPointerState();
 	if (!CanUseWandPointing() || !globals::menu || !globals::menu->IsEnabled)
 		return;
 	ImGuiIO& io = ImGui::GetIO();
 	io.WantSetMousePos = false;
 
-	SampleWandHand(*this, ControllerDevice::Primary, a_forceCursorUpdate && a_preferredController == ControllerDevice::Primary);
-	SampleWandHand(*this, ControllerDevice::Secondary, a_forceCursorUpdate && a_preferredController == ControllerDevice::Secondary);
+	WandPoses poses{};
+	if (!ocuPointerAvailable && !TryGetWandPoses(poses)) {
+		wandState = {};
+		wandHandStates = {};
+		ResetWandPoseTracking();
+		g_controllerRenderModelNames = {};
+		return;
+	}
+	const double sampleSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	for (const ControllerDevice controller : { ControllerDevice::Primary, ControllerDevice::Secondary }) {
+		const bool pressed = a_forceCursorUpdate && a_preferredController == controller;
+		SampleWandHand(*this, controller, pressed, poses);
+		if (!wandHandStates[GetControllerSlot(controller)].poseValid)
+			g_wandPoseHistory[GetControllerSlot(controller)] = {};
+		UpdateWandScreenPosition(*this, controller, sampleSeconds, pressed && activeWandController == controller);
+	}
 	const auto& primary = wandHandStates[GetControllerSlot(ControllerDevice::Primary)];
 	const auto& secondary = wandHandStates[GetControllerSlot(ControllerDevice::Secondary)];
 	const WandInteractionPolicy::Candidate primaryCandidate{ primary.isIntersecting, primary.moved, primary.hitDistance };
@@ -473,6 +627,7 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate, ControllerDevice
 		primaryCandidate,
 		secondaryCandidate));
 
+	UpdateOCUPointerOwnership();
 	if (!IsIndividualController(activeWandController)) {
 		wandState = {};
 		return;
@@ -485,26 +640,16 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate, ControllerDevice
 	wandState.controllerIndex = activeHand.controllerIndex;
 	wandState.rayOrigin = activeHand.rayOrigin;
 	wandState.rayDirection = activeHand.rayDirection;
-	wandState.usingOCUAimPose = activeHand.usingOCUAimPose;
+	wandState.usingAimComponent = activeHand.usingAimComponent;
+	wandState.usingOCUPointer = activeHand.usingOCUPointer;
+	wandState.ocuFrameId = ocuPointerFrameId;
 	wandState.usingPresentedSurface = activeHand.usingPresentedSurface;
 	if (!activeHand.isIntersecting)
 		return;
 
-	const std::size_t slot = GetControllerSlot(activeWandController);
-	const ImVec2 rawScreenPosition(
-		std::clamp(activeHand.uvCoordinates.x * io.DisplaySize.x, 0.0f, io.DisplaySize.x),
-		std::clamp(activeHand.uvCoordinates.y * io.DisplaySize.y, 0.0f, io.DisplaySize.y));
-	ImVec2 screenPosition = rawScreenPosition;
-	if (!a_forceCursorUpdate && g_hasPreviousWandScreenPos[slot]) {
-		const float dx = rawScreenPosition.x - g_previousWandScreenPos[slot].x;
-		const float dy = rawScreenPosition.y - g_previousWandScreenPos[slot].y;
-		if (dx * dx + dy * dy <= kWandScreenMotionThresholdSq)
-			screenPosition = g_previousWandScreenPos[slot];
-	}
-	g_previousWandScreenPos[slot] = screenPosition;
-	g_hasPreviousWandScreenPos[slot] = true;
-	activeHand.screenPosition = screenPosition;
-	activeHand.hasScreenPosition = true;
+	if (!activeHand.hasScreenPosition)
+		return;
+	const ImVec2 screenPosition = activeHand.screenPosition;
 	io.MousePos = screenPosition;
 	io.AddMousePosEvent(screenPosition.x, screenPosition.y);
 	io.WantSetMousePos = true;
@@ -519,8 +664,8 @@ bool VR::UpdateWandPoseOwnershipSignal()
 			continue;
 		Vector3 rayOrigin = Vector3::Zero;
 		Vector3 rayDirection = Vector3::Zero;
-		bool usedOCUAimPose = false;
-		if (!TryGetControllerPointingRay(controllerIndex, settings.WandAimPitchTrimDegrees, rayOrigin, rayDirection, usedOCUAimPose))
+		bool usedAimComponent = false;
+		if (!TryGetControllerPointingRay(controllerIndex, settings.WandAimPitchTrimDegrees, rayOrigin, rayDirection, usedAimComponent))
 			continue;
 		auto& history = g_wandPoseHistory[GetControllerSlot(controller)];
 		const bool hadPreviousPose = history.valid && history.controllerIndex == controllerIndex;
@@ -541,6 +686,8 @@ bool VR::IsWandControllerIntersecting(ControllerDevice a_controller) const
 bool VR::TryCaptureWandController(ControllerDevice a_controller)
 {
 	if (!IsIndividualController(a_controller) || !IsWandControllerIntersecting(a_controller))
+		return false;
+	if (ocuPointerAvailable && !wandHandStates[GetControllerSlot(a_controller)].ocuOwnsInput)
 		return false;
 	if (IsIndividualController(capturedWandController) && capturedWandController != a_controller)
 		return false;
@@ -586,6 +733,7 @@ void VR::UpdateWandHoverFeedback()
 
 void VR::ResetWandPointingRuntimeState()
 {
+	ReleaseOCUPointerState();
 	InvalidatePresentedMenuSurfaces();
 	wandState = {};
 	wandHandStates = {};
@@ -594,4 +742,96 @@ void VR::ResetWandPointingRuntimeState()
 	lastWandHoveredID = 0;
 	lastWandHoveredController = ControllerDevice::Both;
 	ResetWandPoseTracking();
+	g_controllerRenderModelNames = {};
+}
+
+void VR::RefreshOCUPointerState()
+{
+	const bool enabled = CanUseWandPointing() && !settings.VRMenuControllerDiagnosticsTestMode &&
+	                     globals::menu && globals::menu->IsEnabled;
+	auto* compositor = enabled ? RE::BSOpenVR::GetIVRCompositor() : nullptr;
+	const auto trackingOrigin = compositor ? static_cast<std::uint32_t>(compositor->GetTrackingSpace()) : 0u;
+	g_ocuPointerFrame = g_ocuPointerClient.ReadForFrame(static_cast<std::uint64_t>(ImGui::GetFrameCount() + 1),
+		trackingOrigin, settings.WandAimPitchTrimDegrees, enabled && compositor);
+	ocuPointerAvailable = g_ocuPointerFrame.providerAvailable;
+	ocuPointerValid = g_ocuPointerFrame.valid;
+	ocuPointerGeneration = g_ocuPointerClient.GetGeneration();
+	ocuPointerFrameId = ocuPointerValid ? g_ocuPointerFrame.snapshot.frameId : 0;
+	ocuPointerOwnedHands = g_ocuPointerClient.GetOwnedHands();
+	if (ocuPointerValid) {
+		const auto session = g_ocuPointerFrame.snapshot.sessionId;
+		if (g_ocuPointerSession != 0 && g_ocuPointerSession != session) {
+			InvalidatePresentedMenuSurfaces();
+			ResetWandPoseTracking();
+			g_ocuNeedsPresentedSurface = true;
+		}
+		g_ocuPointerSession = session;
+	}
+}
+
+void VR::UpdateOCUPointerOwnership(bool a_presentationResolved)
+{
+	if (!ocuPointerAvailable)
+		return;
+	std::uint32_t handMask = 0;
+	std::uint32_t hitMask = 0;
+	float distances[2]{};
+	for (const auto controller : { ControllerDevice::Primary, ControllerDevice::Secondary }) {
+		const auto& hand = wandHandStates[GetControllerSlot(controller)];
+		const auto physicalHand = GetPhysicalHand(*this, controller);
+		if (hand.poseValid && (hand.isIntersecting || capturedWandController == controller))
+			handMask |= 1u << physicalHand;
+		const bool currentDisplayedHit = a_presentationResolved && IsMenuPointerInHeadset() &&
+		                                 customVRCursorVisible && wandState.isIntersecting && wandState.usingOCUPointer &&
+		                                 wandState.ocuFrameId == ocuPointerFrameId && hand.hasScreenPosition &&
+		                                 customVRCursorPos.x == hand.screenPosition.x && customVRCursorPos.y == hand.screenPosition.y &&
+		                                 customVRCursorOverlayType == hand.overlayType;
+		if (currentDisplayedHit && hand.isIntersecting && activeWandController == controller) {
+			hitMask |= 1u << physicalHand;
+			distances[physicalHand] = hand.hitDistance;
+		}
+	}
+	g_ocuPointerClient.UpdateOwnership(handMask, hitMask, distances);
+	g_ocuPointerFrame = g_ocuPointerClient.GetFrame();
+	ocuPointerValid = g_ocuPointerFrame.valid;
+	ocuPointerOwnedHands = g_ocuPointerClient.GetOwnedHands();
+	ocuPointerGeneration = g_ocuPointerClient.GetGeneration();
+	for (const auto controller : { ControllerDevice::Primary, ControllerDevice::Secondary }) {
+		auto& hand = wandHandStates[GetControllerSlot(controller)];
+		const auto physicalHand = GetPhysicalHand(*this, controller);
+		hand.ocuOwnsInput = (ocuPointerOwnedHands & (1u << physicalHand)) != 0;
+		hand.ocuTriggerDown = g_ocuPointerClient.TriggerDown(physicalHand);
+		hand.ocuTriggerEligible = g_ocuPointerClient.TriggerEligible(physicalHand);
+		hand.ocuTriggerSequence = g_ocuPointerClient.TriggerSequence(physicalHand);
+		hand.ocuOwnershipGeneration = g_ocuPointerClient.GetHandGeneration(physicalHand);
+		if (!hand.ocuOwnsInput) {
+			hand.isIntersecting = false;
+			hand.hasScreenPosition = false;
+		}
+	}
+}
+
+void VR::ReleaseOCUPointerState()
+{
+	g_ocuPointerClient.Release();
+	g_ocuPointerFrame = {};
+	ocuPointerAvailable = false;
+	ocuPointerValid = false;
+	ocuPointerGeneration = g_ocuPointerClient.GetGeneration();
+	ocuPointerFrameId = 0;
+	ocuPointerOwnedHands = 0;
+	wandState = {};
+	wandHandStates = {};
+	g_ocuPointerSession = 0;
+	g_ocuNeedsPresentedSurface = false;
+}
+
+ImVec4 VR::GetWandPointerColor() const
+{
+	return ResolveWandPointerColor(*this, false);
+}
+
+ImVec4 VR::GetWandPointerDotColor() const
+{
+	return ResolveWandPointerColor(*this, true);
 }

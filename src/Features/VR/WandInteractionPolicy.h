@@ -25,9 +25,9 @@ namespace WandInteractionPolicy
 
 	constexpr Hand OtherHand(Hand a_hand)
 	{
-		return a_hand == Hand::Primary ? Hand::Secondary :
+		return a_hand == Hand::Primary   ? Hand::Secondary :
 		       a_hand == Hand::Secondary ? Hand::Primary :
-		                                  Hand::None;
+		                                   Hand::None;
 	}
 
 	constexpr Hand SelectActiveHand(
@@ -47,11 +47,9 @@ namespace WandInteractionPolicy
 			const auto& current = GetCandidate(a_current, a_primary, a_secondary);
 			const Hand otherHand = OtherHand(a_current);
 			const auto& other = GetCandidate(otherHand, a_primary, a_secondary);
-			if (current.hit) {
-				if (other.hit && other.moved && !current.moved)
-					return otherHand;
+			// Tracking noise in the other hand must not move an already aimed cursor.
+			if (current.hit)
 				return a_current;
-			}
 			if (other.hit)
 				return otherHand;
 		}

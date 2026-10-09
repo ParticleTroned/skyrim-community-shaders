@@ -16,9 +16,10 @@ namespace
 		       SelectActiveHand(Hand::None, Hand::Secondary, Hand::Primary, Hit(0.3f), {}) == Hand::Primary;
 	}
 
-	constexpr bool CoversStableTakeover()
+	constexpr bool CoversStableOwnership()
 	{
-		return SelectActiveHand(Hand::None, Hand::None, Hand::Primary, Hit(0.7f), Hit(0.4f, true)) == Hand::Secondary &&
+		return SelectActiveHand(Hand::None, Hand::None, Hand::Primary, Hit(0.7f), Hit(0.4f, true)) == Hand::Primary &&
+		       SelectActiveHand(Hand::None, Hand::None, Hand::Secondary, Hit(0.4f, true), Hit(0.7f)) == Hand::Secondary &&
 		       SelectActiveHand(Hand::None, Hand::None, Hand::Primary, Hit(0.7f, true), Hit(0.4f, true)) == Hand::Primary &&
 		       SelectActiveHand(Hand::None, Hand::None, Hand::Primary, Hit(0.7f), Hit(0.4f)) == Hand::Primary;
 	}
@@ -31,11 +32,11 @@ namespace
 	}
 
 	static_assert(CoversCaptureAndPreference());
-	static_assert(CoversStableTakeover());
+	static_assert(CoversStableOwnership());
 	static_assert(CoversInitialAndMissSelection());
 }
 
 int main()
 {
-	return CoversCaptureAndPreference() && CoversStableTakeover() && CoversInitialAndMissSelection() ? 0 : 1;
+	return CoversCaptureAndPreference() && CoversStableOwnership() && CoversInitialAndMissSelection() ? 0 : 1;
 }

@@ -109,7 +109,7 @@ public:
 		static constexpr float kDefaultComboTimeout = 3.0f;   ///< Default timeout for button combos (seconds)
 		static constexpr float kDefaultMouseDeadzone = 0.1f;  ///< Default thumbstick deadzone for mouse input
 		static constexpr float kDefaultMouseSpeed = 10.0f;    ///< Default mouse speed multiplier
-		static constexpr float kDefaultWandAimPitchTrimDegrees = 0.0f;
+		static constexpr float kDefaultWandAimPitchTrimDegrees = -25.0f;
 		static constexpr float kMinWandAimPitchTrimDegrees = -90.0f;
 		static constexpr float kMaxWandAimPitchTrimDegrees = 90.0f;
 		static constexpr int kDefaultAutoHideSeconds = 30;  ///< Default auto-hide timeout for overlay messages
@@ -466,6 +466,20 @@ public:
 	void TriggerWandHaptic(ControllerDevice a_controller, float a_duration);
 	void UpdateWandHoverFeedback();
 	void ResetWandPointingRuntimeState();
+	/** Refresh the optional OCU pointer once per UI frame before processing trigger input. */
+	void RefreshOCUPointerState();
+	/** Renew pointer ownership for intersecting hands and preserve an active drag. */
+	void UpdateOCUPointerOwnership(bool a_presentationResolved = false);
+	/** Release the optional runtime lease when the menu or input source closes. */
+	void ReleaseOCUPointerState();
+	/** Queue a wand button edge with the cursor position and owning controller. */
+	void QueueWandMouseButton(ControllerDevice a_controller, int a_button, bool a_down);
+	/** Validate wand tracking and consume optional OCU triggers before ImGui dispatch. */
+	void ProcessOCUPointerInput();
+	/** Current beam colour in unpremultiplied sRGB, shared with OCU when available. */
+	[[nodiscard]] ImVec4 GetWandPointerColor() const;
+	/** Matching cursor core colour for the same idle or pressed pointer state. */
+	[[nodiscard]] ImVec4 GetWandPointerDotColor() const;
 	void UpdateOverlayMenuStateFromInput();
 	/** Tests a binding against the current physical controller states. */
 	bool IsControllerComboPressed(const std::vector<ButtonCombo>& a_combos) const;
@@ -691,7 +705,9 @@ public:
 	{
 		bool isIntersecting = false;
 		bool isActivelyDrivingCursor = false;
-		bool usingOCUAimPose = false;
+		bool usingAimComponent = false;
+		bool usingOCUPointer = false;
+		std::uint64_t ocuFrameId = 0;
 		bool usingPresentedSurface = false;
 		ImVec2 uvCoordinates = ImVec2(0.0f, 0.0f);
 		OverlayType overlayType = OverlayType::HMD;
@@ -705,7 +721,13 @@ public:
 		bool isIntersecting = false;
 		bool moved = false;
 		bool hasScreenPosition = false;
-		bool usingOCUAimPose = false;
+		bool usingAimComponent = false;
+		bool usingOCUPointer = false;
+		bool ocuOwnsInput = false;
+		bool ocuTriggerDown = false;
+		bool ocuTriggerEligible = false;
+		std::uint64_t ocuTriggerSequence = 0;
+		std::uint64_t ocuOwnershipGeneration = 0;
 		bool usingPresentedSurface = false;
 		ImVec2 uvCoordinates = ImVec2(0.0f, 0.0f);
 		ImVec2 screenPosition = ImVec2(0.0f, 0.0f);
@@ -716,6 +738,11 @@ public:
 		float hitDistance = (std::numeric_limits<float>::max)();
 	};
 	std::array<WandHandState, 2> wandHandStates{};
+	bool ocuPointerAvailable = false;
+	bool ocuPointerValid = false;
+	std::uint64_t ocuPointerGeneration = 0;
+	std::uint64_t ocuPointerFrameId = 0;
+	std::uint32_t ocuPointerOwnedHands = 0;
 	std::array<PresentedMenuSurface, 2> presentedMenuSurfaces{};
 	ControllerDevice activeWandController = ControllerDevice::Both;
 	ControllerDevice capturedWandController = ControllerDevice::Both;

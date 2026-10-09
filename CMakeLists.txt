@@ -3402,6 +3402,15 @@ if(BUILD_CONTROLLER_TESTS)
         ocu_effect_foveation_client_test
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
     )
+    add_controller_test(
+        ocu_pointer_client_test
+        OCUPointerClient
+        tests/ocu_pointer_client_test.cpp
+    )
+    target_include_directories(
+        ocu_pointer_client_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
     set(_ocu_effect_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/ocu-effect")
     set(_ocu_effect_test_headers
         "${_ocu_effect_test_dir}/ocu_shader_batch_under_test.h"
@@ -3582,6 +3591,23 @@ if(BUILD_CONTROLLER_TESTS)
         vr_wand_interaction_policy_test
         VRWandInteractionPolicy
         tests/vr_wand_interaction_policy_test.cpp
+    )
+    add_controller_test(
+        vr_wand_mouse_queue_test
+        VRWandMouseQueue
+        tests/vr_wand_mouse_queue_test.cpp
+    )
+    target_link_libraries(vr_wand_mouse_queue_test PRIVATE imgui::imgui)
+    add_controller_test(
+        vr_wand_beam_test
+        VRWandBeam
+        tests/vr_wand_beam_test.cpp
+    )
+    target_link_libraries(vr_wand_beam_test PRIVATE d3dcompiler.lib)
+    add_controller_test(
+        vr_wand_cursor_filter_test
+        VRWandCursorFilter
+        tests/vr_wand_cursor_filter_test.cpp
     )
     add_controller_test(
         vr_wand_surface_geometry_test

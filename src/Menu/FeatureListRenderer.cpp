@@ -54,6 +54,7 @@ namespace
 	};
 
 	constexpr float featureDescriptionScale = 1.4f;
+	constexpr float featureTitleScale = (4.0f / 3.0f) * .82f;
 	constexpr float footerTextScale = 14.0f / 12.0f;
 	constexpr float footerButtonPadding = 1.85f;
 	constexpr float footerButtonHeight = 2.1f;
@@ -544,7 +545,7 @@ namespace
 		const float titleStartY = ImGui::GetCursorPosY();
 		{
 			MenuFonts::FontRoleGuard titleGuard(Menu::FontRole::Title);
-			ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * titleScale * (4.0f / 3.0f));
+			ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * titleScale * featureTitleScale);
 			ImGui::PushTextWrapPos(wrapPosX);
 			const SKSE::stl::scope_exit restoreTitle([] { ImGui::PopTextWrapPos(); ImGui::PopFont(); });
 			ImGui::TextUnformatted(featureName.c_str());
@@ -566,7 +567,7 @@ namespace
 			ImGui::PopStyleColor();
 		}
 
-		ImGui::Dummy({ 0, ImGui::GetTextLineHeight() * .7f });
+		ImGui::Dummy({ 0, ImGui::GetTextLineHeight() * .3f });
 
 		return titleOnlyHeight;
 	}

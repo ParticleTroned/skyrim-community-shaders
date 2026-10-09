@@ -19,7 +19,7 @@ namespace Util::Widgets
 	{
 		thread_local int controlLayout = 0;
 		constexpr float controlTextScale = 14.0f / 12.0f;
-		constexpr float controlPadding = .55f;
+		constexpr float controlPadding = .35f;
 		constexpr float numberTargetWidth = 4.5f;
 		constexpr float handleRadius = .6f;
 
@@ -375,32 +375,60 @@ namespace Util::Widgets
 
 	float CheckboxSize()
 	{
-		constexpr float headerFrameRatio = 37.0f / 27.0f;
-		constexpr float requestedScale = 1.25f;
+		constexpr float checkboxBodyScale = 185.0f / 144.0f;
 		const float bodySize = ImGui::GetDefaultFont()->LegacySize * GImGui->FontSize / GImGui->FontSizeBase;
-		return bodySize * headerFrameRatio * requestedScale;
+		return bodySize * checkboxBodyScale;
 	}
 
 	bool Checkbox(const char* label, bool* value)
 	{
-		// The square stays the same size when detail labels use a larger font.
-		std::optional<ControlStyle> style;
+		auto& g = *GImGui;
+		auto* window = ImGui::GetCurrentWindow();
+		if (window->SkipItems)
+			return false;
+		std::optional<ControlStyle> controlStyle;
 		if (controlLayout)
-			style.emplace(true);
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { ImGui::GetStyle().FramePadding.x, std::max(0.0f, (CheckboxSize() - ImGui::GetFontSize()) * .5f) });
-		const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
-		const bool checked = *value;
-		if (checked) {
-			const auto accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
-			const float luminance = accent.x * .2126f + accent.y * .7152f + accent.z * .0722f;
-			const ImVec4 tick = luminance > .5f ? ImVec4(.12f, .12f, .10f, 1) : ImVec4(1, 1, 1, 1);
-			ImGui::PushStyleColor(ImGuiCol_FrameBg, accent);
-			ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, accent);
-			ImGui::PushStyleColor(ImGuiCol_FrameBgActive, accent);
-			ImGui::PushStyleColor(ImGuiCol_CheckMark, tick);
+			controlStyle.emplace(true);
+		const auto& style = ImGui::GetStyle();
+		const auto id = window->GetID(label);
+		const auto labelSize = ImGui::CalcTextSize(label, nullptr, true);
+		const float square = CheckboxSize();
+		const float height = std::max(square, labelSize.y);
+		const auto origin = window->DC.CursorPos;
+		const ImRect bounds(origin, { origin.x + square + (labelSize.x > 0 ? style.ItemInnerSpacing.x + labelSize.x : 0), origin.y + height });
+		ImGui::ItemSize(bounds, (height - labelSize.y) * .5f);
+		if (!ImGui::ItemAdd(bounds, id))
+			return false;
+		bool hovered, held;
+		const bool changed = ImGui::ButtonBehavior(bounds, id, &hovered, &held);
+		if (changed) {
+			*value = !*value;
+			ImGui::MarkItemEdited(id);
 		}
-		const SKSE::stl::scope_exit restore([checked] { if (checked) ImGui::PopStyleColor(4); });
-		const bool changed = ImGui::Checkbox(label, value);
+		ImGui::RenderNavCursor(bounds, id);
+		// Label fonts can exceed the shared square without changing its hit area.
+		const ImRect box({ origin.x, origin.y + (height - square) * .5f }, { origin.x + square, origin.y + (height + square) * .5f });
+		const auto accent = style.Colors[ImGuiCol_CheckMark];
+		const float luminance = accent.x * .2126f + accent.y * .7152f + accent.z * .0722f;
+		const ImVec4 checkedTick = luminance > .5f ? ImVec4(.12f, .12f, .10f, 1) : ImVec4(1, 1, 1, 1);
+		const ImU32 tick = ImGui::GetColorU32(*value ? checkedTick : accent);
+		const ImU32 background = *value ? ImGui::GetColorU32(accent) : ImGui::GetColorU32(held && hovered ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered :
+																																			   ImGuiCol_FrameBg);
+		ImGui::RenderFrame(box.Min, box.Max, background, true, style.FrameRounding);
+		const bool mixed = (g.LastItemData.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
+		if (mixed) {
+			const float padding = std::max(1.0f, std::floor(square / 3.6f));
+			window->DrawList->AddRectFilled({ box.Min.x + padding, box.Min.y + padding }, { box.Max.x - padding, box.Max.y - padding }, tick, style.FrameRounding);
+		} else if (*value) {
+			const float padding = std::max(1.0f, std::floor(square / 6));
+			ImGui::RenderCheckMark(window->DrawList, { box.Min.x + padding, box.Min.y + padding }, tick, square - padding * 2);
+		}
+		if (g.LogEnabled)
+			ImGui::LogRenderedText(&origin, mixed ? "[~]" : *value ? "[x]" :
+																	 "[ ]");
+		if (labelSize.x > 0)
+			ImGui::RenderText({ box.Max.x + style.ItemInnerSpacing.x, origin.y + (height - labelSize.y) * .5f }, label);
+		IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags | ImGuiItemStatusFlags_Checkable | (*value ? ImGuiItemStatusFlags_Checked : 0));
 		const std::string name(label, ImGui::FindRenderedTextEnd(label));
 		if (!name.empty())
 			Util::AddTooltip(std::format("Turn {} on or off.", name).c_str());

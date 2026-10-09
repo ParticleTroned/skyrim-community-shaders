@@ -107,7 +107,7 @@ namespace MenuUI
 		Feature* previous;
 	};
 
-	/** Shared overview, tabs and independently scrolling detail area. */
+	/** Shared overview and tabs, with a fixed detail heading above scrolling controls. */
 	class SettingsPage
 	{
 	public:
@@ -119,7 +119,7 @@ namespace MenuUI
 		bool Is(std::string_view a_section) const;
 		static bool Select(const char* a_page, const char* a_section);
 		static std::string Selected(const char* a_page);
-		/** Horizontal insets of the overview cards, including the content scrollbar. */
+		/** Horizontal insets of the active page content, including the scrollbar. */
 		static ImVec2 OverviewCardInsets(const char* a_page, float a_panelWidth);
 		/** Left edge of the last overview column within its owning feature panel. */
 		static float OverviewLastColumnInset(const char* a_page, float a_panelWidth);
@@ -140,6 +140,7 @@ namespace MenuUI
 		std::string overviewTitle;
 		std::string overviewGuidance;
 		bool contentVisible = false;
+		bool detailContent = false;
 		float contentLeftPadding = 0;
 		std::vector<Section> sections;
 		void DrawOverview();

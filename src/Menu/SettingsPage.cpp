@@ -36,12 +36,14 @@ namespace MenuUI
 		constexpr float stageNumberScale = 1.25f;
 		constexpr float stageRailWidth = 8.25f;
 		constexpr float overviewTitleScale = 20.0f / 12.0f;
-		constexpr float cardTitleScale = 19.0f / 12.0f;
+		constexpr float cardTitleScale = 17.0f / 12.0f;
 		constexpr float cardSummaryScale = 14.0f / 12.0f;
 		constexpr float stageTextScale = 1.25f;
-		constexpr float detailTitleScale = 2.0f;
+		constexpr float detailTitleScale = 1.7f;
 		constexpr float cardOpacity = .94f * SettingsSurfaceOpacityScale;
-		constexpr float maximumOverviewCardHeight = 7.0f;
+		constexpr float maximumOverviewCardHeight = 6.0f;
+		constexpr float tabVerticalPadding = .5f;
+		constexpr float cardTextGap = .22f;
 
 		bool DrawSettingsCard(const Section& step, ImVec2 minimum, ImVec2 size, int ordinal, bool selected);
 
@@ -58,15 +60,15 @@ namespace MenuUI
 		CardTextLayout MeasureCardText(const Section& step, float width, int ordinal)
 		{
 			const float line = ImGui::GetTextLineHeight();
-			const float inset = line * .75f;
+			const float inset = line * .60f;
 			const float textWidth = std::max(1.0f, width - inset * 2);
 			auto* font = ImGui::GetFont();
 			const float titleOffset = ordinal > 0 ? font->CalcTextSizeA(line * stageNumberScale, FLT_MAX, 0, std::format("{:02}", ordinal).c_str()).x + line * .6f : 0;
 			const float titleWidth = std::max(1.0f, textWidth - titleOffset);
 			const auto* title = step.cardTitle ? step.cardTitle : step.title;
 			const float titleHeight = font->CalcTextSizeA(line * cardTitleScale, FLT_MAX, titleWidth, title).y;
-			const float summaryY = inset + titleHeight + line * .3f;
-			const float summaryHeight = step.summary.empty() ? 0 : font->CalcTextSizeA(line * cardSummaryScale, FLT_MAX, textWidth, step.summary.c_str()).y + line * .3f;
+			const float summaryY = inset + titleHeight + line * cardTextGap;
+			const float summaryHeight = step.summary.empty() ? 0 : font->CalcTextSizeA(line * cardSummaryScale, FLT_MAX, textWidth, step.summary.c_str()).y + line * cardTextGap;
 			const float descriptionY = summaryY + summaryHeight;
 			const float descriptionHeight = *step.description ? font->CalcTextSizeA(line, FLT_MAX, textWidth, step.description).y : 0;
 			return { inset, titleOffset, titleWidth, summaryY, descriptionY, descriptionY + descriptionHeight + inset };
@@ -100,8 +102,10 @@ namespace MenuUI
 		const bool hasCards = found == navigation.end() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
 		const float right = found == navigation.end() ? 0 : found->second.contentScrollbarWidth;
-		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
-		return { padding + grid.rail, right };
+		const bool detail = found != navigation.end() && found->second.selected != "overview";
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - (detail ? ImGui::GetStyle().ScrollbarSize : right) - padding), hasCards);
+		const float left = detail ? (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0) : grid.rail;
+		return { padding + left, right };
 	}
 
 	float SettingsPage::OverviewLastColumnInset(const char* a_page, float a_panelWidth)
@@ -123,7 +127,8 @@ namespace MenuUI
 		// Match the initial header to the setup grid before its first content frame.
 		const bool hasCards = found == navigation.end() || found->second.sections.empty() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const float right = found == navigation.end() ? 0 : found->second.contentScrollbarWidth;
+		const float right = found == navigation.end() ? 0 : found->second.selected != "overview" ? ImGui::GetStyle().ScrollbarSize :
+		                                                                                           found->second.contentScrollbarWidth;
 		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
 		return padding + (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0);
 	}
@@ -209,7 +214,7 @@ namespace MenuUI
 			const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
 			const float tabCount = 1.0f + static_cast<float>(std::ranges::count_if(sections, [](const Section& step) { return step.visible; }));
 			const float tabWidth = ImGui::GetContentRegionAvail().x / tabCount;
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { font * .75f, font * .7f });
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { font * .75f, font * tabVerticalPadding });
 			ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 0);
 			ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0);
 			ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, { 1, ImGui::GetStyle().ItemInnerSpacing.y });
@@ -226,9 +231,9 @@ namespace MenuUI
 					const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 					const auto flags = restoreSelection && requested == id ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
 					const float titleWidth = ImGui::CalcTextSize(title).x;
-					const float width = std::max(tabWidth - 1, titleWidth + font * .7f);
+					const float width = std::max(tabWidth - 1, titleWidth + font * .5f);
 					ImGui::SetNextItemWidth(width);
-					ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { (width - titleWidth) * .5f, font * .7f });
+					ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { (width - titleWidth) * .5f, font * tabVerticalPadding });
 					ImGui::PushStyleColor(ImGuiCol_Text, { 0, 0, 0, 0 });
 					const bool active = ImGui::BeginTabItem(title, nullptr, flags);
 					ImGui::PopStyleColor();
@@ -252,7 +257,7 @@ namespace MenuUI
 						auto* draw = ImGui::GetWindowDrawList();
 						draw->PushClipRect(clipMin, clipMax, true);
 						const SKSE::stl::scope_exit unclip([draw] { draw->PopClipRect(); });
-						draw->AddText({ minimum.x + (maximum.x - minimum.x - titleWidth) * .5f, minimum.y + font * .7f },
+						draw->AddText({ minimum.x + (maximum.x - minimum.x - titleWidth) * .5f, minimum.y + font * tabVerticalPadding },
 							ImGui::GetColorU32(active ? accent : ImGui::GetStyleColorVec4(ImGuiCol_Text)), title);
 					}
 					Util::AddTooltip(help);
@@ -269,7 +274,19 @@ namespace MenuUI
 		{
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, ImGui::GetStyle().WindowPadding.y });
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
-			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
+			const auto flags = selected == "overview" ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding, flags);
+		}
+		if (contentLeftPadding > 0)
+			ImGui::Indent(contentLeftPadding);
+		if (contentVisible && selected != "overview") {
+			DrawDetailHeader(a_id, a_summary);
+			// Keep section navigation outside the independently scrolling controls.
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, 0 });
+			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
+			contentVisible = ImGui::BeginChild("##DetailControls", { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
+			detailContent = true;
+			controlLayout = std::make_unique<Util::Widgets::ControlLayout>();
 		}
 		state.contentScrollbarWidth = ImGui::GetCurrentWindow()->ScrollbarSizes.x;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -278,12 +295,6 @@ namespace MenuUI
 #endif
 		if (!contentVisible || (selected != "performance" && !(pageId == "PerformanceTuning" && selected == "compare")))
 			PerformanceTuningRenderer::NotifyOverviewInactive();
-		if (contentLeftPadding > 0)
-			ImGui::Indent(contentLeftPadding);
-		if (contentVisible && selected != "overview") {
-			DrawDetailHeader(a_id, a_summary);
-			controlLayout = std::make_unique<Util::Widgets::ControlLayout>();
-		}
 		if (contentVisible && selected == "performance")
 			PerformanceTuningRenderer::RenderMeasurementSuite(activeFeature);
 		if (contentVisible && selected == "profiling") {
@@ -311,6 +322,8 @@ namespace MenuUI
 		devBenchViewport.reset();
 #endif
 		controlLayout.reset();
+		if (detailContent)
+			ImGui::EndChild();
 		if (contentLeftPadding > 0)
 			ImGui::Unindent(contentLeftPadding);
 		ImGui::EndChild();
@@ -329,11 +342,15 @@ namespace MenuUI
 			return;
 		const float line = ImGui::GetTextLineHeight();
 		const bool hasCards = std::ranges::any_of(sections, [](const Section& item) { return item.visible && item.overview; });
-		if (GetOverviewGrid(ImGui::GetContentRegionAvail().x, hasCards).rail > 0) {
+		if (GetOverviewGrid(ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize, hasCards).rail > 0) {
 			const float inset = line * stageGuideInset;
 			ImGui::Indent(inset);
 			contentLeftPadding += inset;
 		}
+		// Reserve the scroll gutter so the back button cannot move as content changes.
+		const float available = std::max(1.0f, ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize);
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + available);
+		const SKSE::stl::scope_exit restoreWrap([] { ImGui::PopTextWrapPos(); });
 		std::string summary(a_summary);
 		if (summary.empty()) {
 			for (const auto& item : sections) {
@@ -345,16 +362,13 @@ namespace MenuUI
 			}
 		}
 		if (!summary.empty()) {
-			ImGui::Dummy({ 0, line * .35f });
-			ImGui::PushTextWrapPos(0);
+			ImGui::Dummy({ 0, line * .15f });
 			ImGui::TextColored(Util::Color::SecondaryText(), "%s", summary.c_str());
-			ImGui::PopTextWrapPos();
-			ImGui::Dummy({ 0, line * .35f });
+			ImGui::Dummy({ 0, line * .15f });
 			ImGui::Separator();
 		}
-		ImGui::Dummy({ 0, line * .5f });
+		ImGui::Dummy({ 0, line * .3f });
 		const auto start = ImGui::GetCursorScreenPos();
-		const float available = ImGui::GetContentRegionAvail().x;
 		const int ordinal = step->overview ? 1 + static_cast<int>(std::count_if(sections.begin(), step, [](const Section& item) { return item.visible && item.overview; })) : 0;
 		const char* label = step->cardTitle ? step->cardTitle : step->title;
 		const auto title = ordinal > 0 ? std::format("{:02} · {}", ordinal, label) : std::string(label);
@@ -368,8 +382,7 @@ namespace MenuUI
 		const bool sameLine = titleWidth + buttonWidth + rightGap + line < available;
 		{
 			ImGui::PushFont(ImGui::GetFont(), line * detailTitleScale);
-			ImGui::PushTextWrapPos(0);
-			const SKSE::stl::scope_exit restore([] { ImGui::PopTextWrapPos(); ImGui::PopFont(); });
+			const SKSE::stl::scope_exit restore([] { ImGui::PopFont(); });
 			ImGui::TextUnformatted(title.c_str());
 		}
 		if (sameLine) {
@@ -392,9 +405,9 @@ namespace MenuUI
 			ImGui::PushFont(ImGui::GetFont(), line * cardSummaryScale);
 			ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::SecondaryText());
 			const SKSE::stl::scope_exit restore([] { ImGui::PopStyleColor(); ImGui::PopFont(); });
-			ImGui::TextWrapped("%s", step->guidance ? step->guidance : step->description);
+			ImGui::TextUnformatted(step->guidance ? step->guidance : step->description);
 		}
-		ImGui::Dummy({ 0, line * .65f });
+		ImGui::Dummy({ 0, line * .3f });
 	}
 
 	int ChoiceCards(const char* a_id, int a_selected, std::span<const Choice> a_choices)
@@ -427,7 +440,7 @@ namespace MenuUI
 		}
 		const int rows = (count + columns - 1) / columns;
 		ImGui::SetCursorScreenPos({ origin.x, origin.y + rows * height + (rows - 1) * gap });
-		ImGui::Dummy({ available, line * .5f });
+		ImGui::Dummy({ available, line * .25f });
 		return clicked;
 	}
 
@@ -511,7 +524,7 @@ namespace MenuUI
 		const float font = ImGui::GetFontSize();
 		const float minimumWidth = a_minColumnWidth > 0 ? a_minColumnWidth : font * 24;
 		const int columns = std::clamp(static_cast<int>(ImGui::GetContentRegionAvail().x / minimumWidth), 1, std::max(1, a_maxColumns));
-		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, { font * .6f, font * .4f });
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, { font * .6f, font * .22f });
 		table = ImGui::BeginTable(a_id, columns, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX);
 	}
 	DetailGrid::~DetailGrid()
@@ -601,14 +614,39 @@ namespace MenuUI
 		const int rows = (static_cast<int>(cards.size()) + columns - 1) / columns;
 		const int toolRows = (static_cast<int>(tools.size()) + columns - 1) / columns;
 		const int totalRows = rows + toolRows;
-		float minimumHeight = line * 5.5f;
+		float minimumHeight = line * 5.0f;
 		for (size_t index = 0; index < cards.size(); ++index)
 			minimumHeight = std::max(minimumHeight, MeasureCardText(*cards[index], width, static_cast<int>(index) + 1).height);
+		struct StageText
+		{
+			std::string label;
+			ImVec2 size;
+		};
+		std::vector<StageText> stages;
+		const float stageWidth = rail - line * (stageDescriptionInset + .4f);
+		const float stageFontSize = ImGui::GetFontSize() * stageTextScale;
+		if (rail > 0) {
+			for (int row = 0; row < rows; ++row) {
+				const auto& first = *cards[row * columns];
+				std::string label = first.cardTitle ? first.cardTitle : first.title;
+				if (first.stage)
+					label = first.stage;
+				else if (columns == 2 && row * columns + 1 < static_cast<int>(cards.size())) {
+					const auto& next = *cards[row * columns + 1];
+					label += std::format(" & {}", next.cardTitle ? next.cardTitle : next.title);
+				}
+				const auto size = ImGui::GetFont()->CalcTextSizeA(stageFontSize, FLT_MAX, stageWidth, label.c_str());
+				minimumHeight = std::max(minimumHeight, size.y + line * .8f);
+				stages.push_back({ std::move(label), size });
+			}
+		}
+		// Tool explanations may wrap without making every setup row taller.
+		float toolHeight = 0;
 		for (const auto* step : tools)
-			minimumHeight = std::max(minimumHeight, MeasureCardText(*step, width, 0).height);
+			toolHeight = std::max(toolHeight, MeasureCardText(*step, width, 0).height);
 		const float availableHeight = ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ItemSpacing.y;
-		const float rowGap = std::clamp((availableHeight - minimumHeight * totalRows) / std::max(1, totalRows - 1), line * .5f, line);
-		const float height = std::clamp((availableHeight - (totalRows - 1) * rowGap) / totalRows, minimumHeight, std::max(minimumHeight, line * maximumOverviewCardHeight));
+		const float rowGap = std::clamp((availableHeight - minimumHeight * rows - toolHeight * toolRows) / std::max(1, totalRows - 1), line * .5f, line);
+		const float height = std::clamp((availableHeight - toolHeight * toolRows - (totalRows - 1) * rowGap) / std::max(1, rows), minimumHeight, std::max(minimumHeight, line * maximumOverviewCardHeight));
 		const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
 		const auto origin = ImGui::GetCursorScreenPos();
 		auto* draw = ImGui::GetWindowDrawList();
@@ -625,17 +663,8 @@ namespace MenuUI
 				const float numberFontSize = line * stageNumberScale;
 				const auto numberSize = ImGui::GetFont()->CalcTextSizeA(numberFontSize, FLT_MAX, 0, number.c_str());
 				draw->AddText(nullptr, numberFontSize, { centre.x - numberSize.x * .5f, centre.y - numberSize.y * .5f }, ImGui::GetColorU32(accent), number.c_str());
-				const auto& first = *cards[row * columns];
-				std::string labels = first.cardTitle ? first.cardTitle : first.title;
-				if (columns == 2 && row * columns + 1 < static_cast<int>(cards.size())) {
-					const auto& next = *cards[row * columns + 1];
-					labels += std::format(" & {}", next.cardTitle ? next.cardTitle : next.title);
-				}
-				const auto* stage = first.stage ? first.stage : labels.c_str();
-				const float stageWidth = rail - line * (stageDescriptionInset + .4f);
-				const float stageFontSize = ImGui::GetFontSize() * stageTextScale;
-				const auto stageSize = ImGui::GetFont()->CalcTextSizeA(stageFontSize, FLT_MAX, stageWidth, stage);
-				draw->AddText(nullptr, stageFontSize, { origin.x + line * stageDescriptionInset, centre.y - stageSize.y * .5f }, muted, stage, nullptr, stageWidth);
+				const auto& stage = stages[row];
+				draw->AddText(nullptr, stageFontSize, { origin.x + line * stageDescriptionInset, centre.y - stage.size.y * .5f }, muted, stage.label.c_str(), nullptr, stageWidth);
 			}
 			for (int column = 0; column < columns; ++column) {
 				const int index = row * columns + column;
@@ -656,10 +685,10 @@ namespace MenuUI
 		}
 		const float toolsY = origin.y + rows * (height + rowGap);
 		for (int index = 0; index < static_cast<int>(tools.size()); ++index) {
-			const ImVec2 minimum{ origin.x + rail + (columns == 2 ? index * (width + arrow) : 0), toolsY + (columns == 1 ? index * (height + rowGap) : 0) };
-			DrawCard(*tools[index], minimum, { width, height });
+			const ImVec2 minimum{ origin.x + rail + (columns == 2 ? index * (width + arrow) : 0), toolsY + (columns == 1 ? index * (toolHeight + rowGap) : 0) };
+			DrawCard(*tools[index], minimum, { width, toolHeight });
 		}
-		ImGui::SetCursorScreenPos({ origin.x, origin.y + totalRows * height + (totalRows - 1) * rowGap });
+		ImGui::SetCursorScreenPos({ origin.x, origin.y + rows * height + toolRows * toolHeight + (totalRows - 1) * rowGap });
 		ImGui::Dummy({ available, 0 });
 	}
 

@@ -195,6 +195,8 @@ struct ProfilingRenderer
 			throw std::runtime_error("missing profiler");
 		feature = prefix;
 		++draws;
+		if (inspect)
+			inspect();
 	}
 };
 struct PerformanceTuningRenderer
@@ -471,6 +473,13 @@ void require(bool condition, const char* reason)
 }
 void frame(const std::function<void()>& draw)
 {
+	// The headless legacy backend must rebuild after a new font size is baked.
+	if (!ImGui::GetIO().Fonts->IsBuilt()) {
+		unsigned char* pixels;
+		int width, height;
+		ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+		ImGui::GetIO().Fonts->SetTexID(ImTextureID(1));
+	}
 	ImGui::NewFrame();
 	ImGui::SetNextWindowPos({ 0, 0 });
 	ImGui::SetNextWindowSize({ 900, 700 });
@@ -478,6 +487,7 @@ void frame(const std::function<void()>& draw)
 	draw();
 	ImGui::End();
 	ImGui::Render();
+	require(GImGui->ErrorCountCurrentFrame == 0, "UI frame leaves ImGui windows, IDs and styles balanced");
 }
 void click(const ImVec2& point, const std::function<void()>& draw)
 {
@@ -547,6 +557,7 @@ int main()
 		}
 
 		ImGui::CreateContext();
+		GImGui->ErrorCallback = [](ImGuiContext*, void*, const char* message) { throw std::runtime_error(message); };
 		auto& io = ImGui::GetIO();
 		io.DisplaySize = { 1000, 800 };
 		io.DeltaTime = 1.0f / 60;
@@ -747,7 +758,7 @@ int main()
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
 		const auto measurementCard = Util::controls.at("Measures in-game frame times and FPS with the current feature settings.");
 		const auto setupCard = Util::controls.at("Appearance");
-		require(measurementCard.Min.x == setupCard.Min.x && measurementCard.GetSize().x == setupCard.GetSize().x && measurementCard.GetSize().y == setupCard.GetSize().y, "measurement card matches setup card size and column alignment");
+		require(measurementCard.Min.x == setupCard.Min.x && measurementCard.GetSize().x == setupCard.GetSize().x && measurementCard.Min.y > setupCard.Max.y, "measurement card keeps setup column width and follows its independently sized row");
 		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement suite owns profiling instead of a second tab");
 		const int measurementsBefore = PerformanceTuningRenderer::draws;
 		int profilingBefore = ProfilingRenderer::draws;
@@ -834,6 +845,55 @@ int main()
 		require(ProfilingRenderer::draws > profilingBefore && PerformanceTuningRenderer::draws == nrMeasurementBefore, "NR profiling tab draws independent controls without starting measurement");
 		require(MenuUI::SettingsPage::Navigate("NeuralRendering", "performance") && MenuUI::SettingsPage::Navigate("NeuralRendering", "mode"), "NR independent profiling preserves measurement and route navigation");
 
+		ProfilingRenderer::inspect = PerformanceTuningRenderer::inspect = [] { ImGui::Dummy({ 0, 1000 }); };
+		for (const float font : { 13.0f, 21.0f })
+			for (const float panelWidth : { 850.0f, 420.0f }) {
+				const auto draw = [&] {
+					ImGui::PushFont(ImGui::GetFont(), font);
+					ImGui::BeginChild("CompleteNR", { panelWidth, 600 });
+					{
+						MenuUI::FeatureScope scope(&neuralRendering);
+						DrawUiReviewPage("NeuralRendering", false);
+					}
+					ImGui::EndChild();
+					ImGui::PopFont();
+				};
+				MenuUI::SettingsPage::Select("NeuralRendering", "overview");
+				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				const auto first = Util::controls.at("Where NR runs");
+				const auto last = Util::controls.at("Optional: distance, focus and edges");
+				const auto measurement = Util::controls.at("Measures in-game frame times and FPS with the current feature settings.");
+				const auto profiling = Util::controls.at("Choose CPU, GPU or Off to inspect timings.");
+				require(measurement.Min.y > last.Max.y && profiling.Min.y > last.Max.y, "NR tools follow all six setup cards without overlap");
+				require(std::abs(measurement.Min.x - first.Min.x) < 1 && std::abs(profiling.Max.x - last.Max.x) < 1, "NR tool cards align with the setup grid");
+				require(measurement.Max.x <= profiling.Min.x || measurement.Max.y <= profiling.Min.y, "NR profiling and measurement cards do not overlap");
+				for (const char* help : { "Measures in-game frame times and FPS with the current feature settings.", "Choose CPU, GPU or Off to inspect timings." }) {
+					MenuUI::SettingsPage::Select("NeuralRendering", "overview");
+					for (int settle = 0; settle < 3; ++settle) frame(draw);
+					require(Viewport::Scroll("NeuralRendering", "overview", 1), "NR tool cards remain reachable by scrolling");
+					frame(draw);
+					frame(draw);
+					click(Util::controls.at(help).GetCenter(), draw);
+					frame(draw);
+					frame(draw);
+					const bool profilingCard = std::string_view(help).starts_with("Choose CPU");
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == (profilingCard ? "profiling" : "performance"), "each NR tool card opens its own section");
+					const auto back = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+					require(Viewport::Scroll("NeuralRendering", profilingCard ? "profiling" : "performance", 1), "NR tool body scrolls beneath its fixed heading");
+					frame(draw);
+					frame(draw);
+					const auto fixedBack = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+					require(std::abs(back.Min.y - fixedBack.Min.y) < 1 && fixedBack.Max.y < 600, "NR tool Overview button remains fixed and visible after scrolling");
+					click(fixedBack.GetCenter(), draw);
+					frame(draw);
+					frame(draw);
+					if (MenuUI::SettingsPage::Selected("NeuralRendering") != "overview")
+						throw std::runtime_error(std::format("NR tool back failed: font {}, width {}, selected {}, bounds ({}, {})-({}, {}), hovered {}", font, panelWidth, MenuUI::SettingsPage::Selected("NeuralRendering"), fixedBack.Min.x, fixedBack.Min.y, fixedBack.Max.x, fixedBack.Max.y, GImGui->HoveredWindow ? GImGui->HoveredWindow->Name : "none"));
+				}
+			}
+
+		ProfilingRenderer::inspect = PerformanceTuningRenderer::inspect = nullptr;
+
 		bool draft = true;
 		auto drawGuarded = [&] {
 			MenuUI::SettingsPage page("CompanionDraft", { { "profiles", "Profiles", "Edit profiles" }, { "commands", "Commands", "Edit commands" } }, "Your setup", "Choose an editor", {}, [&](std::string_view target) { return !draft || target != "commands"; });
@@ -889,6 +949,65 @@ int main()
 		for (int i = 0; i < 3; ++i) frame(drawIsolation);
 		require(firstScroll == 350, "returning to tab preserves its own scroll position");
 
+		for (const float font : { 13.0f, 21.0f }) {
+			for (const float panelWidth : { 850.0f, 420.0f }) {
+				float value = .75f, controlY = 0;
+				bool overflow = true;
+				ImRect viewportBounds;
+				const auto draw = [&] {
+					ImGui::PushFont(ImGui::GetFont(), font);
+					ImGui::BeginChild("PinnedPage", { panelWidth, 600 });
+					{
+						MenuUI::SettingsPage page("PinnedPage", { { "selection", "Selection", "Choose where the enhancement appears and adjust its strength." } });
+						if (page.Is("selection")) {
+							viewportBounds = ImGui::GetCurrentWindow()->InnerClipRect;
+							controlY = ImGui::GetCursorScreenPos().y;
+							Util::Widgets::SliderFloat("Strength", &value, 0, 1);
+							if (overflow)
+								ImGui::Dummy({ 0, 1800 });
+							require(ImGui::GetCurrentWindow()->ParentWindow->Scroll.y == 0, "fixed detail header never inherits the body scroll offset");
+						}
+					}
+					ImGui::EndChild();
+					ImGui::PopFont();
+				};
+				MenuUI::SettingsPage::Select("PinnedPage", "selection");
+				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				require(Viewport::Scroll("PinnedPage", "selection", 0), "fixed-header content accepts a top scroll");
+				frame(draw);
+				frame(draw);
+				const auto back = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+				const float topControlY = controlY;
+				require(back.Min.y >= 8 && back.Max.y < viewportBounds.Min.y, "Overview stays above the independently clipped controls");
+				io.AddMousePosEvent(viewportBounds.GetCenter().x, viewportBounds.GetCenter().y);
+				frame(draw);
+				io.AddMouseWheelEvent(0, -4);
+				frame(draw);
+				frame(draw);
+				require(Viewport::Describe(true)["scrollY"].get<float>() > 0 && controlY < topControlY, "mouse wheel scrolls the settings below the fixed heading");
+				require(Viewport::Scroll("PinnedPage", "selection", 1), "fixed-header content accepts a bottom scroll");
+				frame(draw);
+				frame(draw);
+				const auto scrolledBack = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+				require(std::abs(back.Min.x - scrolledBack.Min.x) < .1f && std::abs(back.Min.y - scrolledBack.Min.y) < .1f && std::abs(back.Max.x - scrolledBack.Max.x) < .1f && std::abs(back.Max.y - scrolledBack.Max.y) < .1f, "Overview button remains fixed at the bottom of a long detail page");
+				const auto scrolled = Viewport::Describe(true);
+				require(scrolled["scrollMaxY"].get<float>() > 0 && std::abs(scrolled["scrollY"].get<float>() - scrolled["scrollMaxY"].get<float>()) < 1, "DevBench still targets the scrolling settings body");
+				overflow = false;
+				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				const auto shortBack = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+				require(std::abs(back.Min.x - shortBack.Min.x) < .1f && std::abs(back.Min.y - shortBack.Min.y) < .1f, "fixed heading does not move when controls no longer need a scrollbar");
+				overflow = true;
+				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				require(Viewport::Scroll("PinnedPage", "selection", 1), "dynamic detail content can scroll after it grows again");
+				frame(draw);
+				frame(draw);
+				click(scrolledBack.GetCenter(), draw);
+				frame(draw);
+				frame(draw);
+				require(MenuUI::SettingsPage::Selected("PinnedPage") == "overview" && value == .75f, "fixed Overview button works after scrolling and preserves settings");
+			}
+		}
+
 		VolumetricLighting lighting;
 		lighting.name = "VolumetricLighting";
 		{
@@ -916,6 +1035,44 @@ int main()
 		PerformanceTuningRenderer::inspect = {};
 
 		{
+			for (const float labelScale : { 1.0f, 1.4f, 2.0f }) {
+				bool checked = true;
+				float squareHeight = 0;
+				ImRect hit;
+				const auto draw = [&] {
+					ImGui::PushFont(ImGui::GetFont(), ImGui::GetDefaultFont()->LegacySize * labelScale);
+					auto* list = ImGui::GetWindowDrawList();
+					const int firstVertex = list->VtxBuffer.Size;
+					ImGui::PushStyleColor(ImGuiCol_NavCursor, { .1f, .2f, .3f, 1 });
+					Util::Widgets::Checkbox("Uniform square with a larger label", &checked);
+					hit = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+					if (checked) {
+						const auto fill = ImGui::GetColorU32(ImGuiCol_CheckMark);
+						float top = FLT_MAX, bottom = -FLT_MAX;
+						for (int i = firstVertex; i < list->VtxBuffer.Size; ++i) {
+							const auto& vertex = list->VtxBuffer[i];
+							if (vertex.col == fill) {
+								top = std::min(top, vertex.pos.y);
+								bottom = std::max(bottom, vertex.pos.y);
+							}
+						}
+						squareHeight = bottom - top;
+					}
+					ImGui::PopStyleColor();
+					ImGui::PopFont();
+				};
+				frame(draw);
+				frame(draw);
+				require(std::abs(squareHeight - Util::Widgets::CheckboxSize()) < 1, "checkbox squares keep their shared size when label fonts grow");
+				click({ hit.Max.x - 2, hit.GetCenter().y }, draw);
+				require(!checked, "the full checkbox label remains clickable at each font role");
+				key(ImGuiKey_Tab, draw);
+				key(ImGuiKey_Space, draw);
+				require(checked, "keyboard activation remains available for every checkbox label size");
+			}
+		}
+
+		{
 			float first = .5f, second = .75f;
 			ImRect firstNumber, secondNumber, headerToggle, detailToggle;
 			int commits = 0;
@@ -937,7 +1094,7 @@ int main()
 			frame(form);
 			require(std::abs(headerToggle.GetHeight() - detailToggle.GetHeight()) < 1, "header and detail square toggles have identical sizes");
 			require(std::abs(firstNumber.Min.x - secondNumber.Min.x) < 1 && std::abs(firstNumber.Max.x - secondNumber.Max.x) < 1, "detail values align independently of label lengths");
-			require(firstNumber.GetHeight() >= ImGui::GetFontSize() * 2.4f && firstNumber.GetWidth() >= ImGui::GetFontSize() * 5, "numeric entry has a large HMD target");
+			require(firstNumber.GetHeight() >= ImGui::GetFontSize() * 1.95f && firstNumber.GetWidth() >= ImGui::GetFontSize() * 5, "compact numeric entry retains a padded HMD target and full value-column width");
 			const ImVec2 paddedCorner{ firstNumber.Min.x + 2, firstNumber.Min.y + 2 };
 			click(paddedCorner, form);
 			click(paddedCorner, form);
@@ -1317,7 +1474,7 @@ int main()
 				Util::Widgets::InputTextMultiline("Description", description, sizeof(description), { 0, 60 });
 				const auto bounds = ImGui::GetCurrentWindow()->InnerRect;
 				for (const auto& entry : { firstBounds, secondBounds })
-					if (!(entry.Min.x >= bounds.Min.x && entry.Max.x <= bounds.Max.x + .1f && entry.GetHeight() >= ImGui::GetFontSize() * 2))
+					if (!(entry.Min.x >= bounds.Min.x && entry.Max.x <= bounds.Max.x + .1f && entry.GetHeight() >= ImGui::GetFontSize() * 1.95f))
 						throw std::runtime_error(std::format("Entry bounds {}..{} height {} panel {}..{} font {}", entry.Min.x, entry.Max.x, entry.GetHeight(), bounds.Min.x, bounds.Max.x, ImGui::GetFontSize()));
 				require(std::abs(firstBounds.Max.x - secondBounds.Max.x) < 1, "entry widths align independently of label length");
 				require(styles == GImGui->StyleVarStack.Size && fonts == GImGui->FontStack.Size && ids == ImGui::GetCurrentWindow()->IDStack.Size, "text, numeric and color entries restore every shared style and ID scope");
@@ -1546,14 +1703,16 @@ int main()
 				const auto draw = [&] {
 					ImGui::PushFont(ImGui::GetFont(), font);
 					ImGui::BeginChild("CompactOverview", { 850, 600 });
-					MenuUI::SettingsPage page("General", { { "compact", "Coverage", "Configure this step.", "Shared controls" } });
+					{
+						MenuUI::SettingsPage page("General", { { "compact", "Coverage", "Configure this step.", "Shared controls" } });
+					}
 					ImGui::EndChild();
 					ImGui::PopFont();
 				};
 				frame(draw);
 				frame(draw);
 				const auto compactCard = Util::controls.at("Configure this step.");
-				require(compactCard.GetHeight() <= font * 7 + .1f && compactCard.GetHeight() >= font * 5.5f, "overview cards use the shorter height without consuming spare vertical space");
+				require(compactCard.GetHeight() <= font * 6 + .1f && compactCard.GetHeight() >= font * 5.0f, "overview cards use the shorter height without consuming spare vertical space");
 			}
 		}
 
@@ -1583,6 +1742,91 @@ int main()
 					frame(draw);
 					frame(draw);
 				}
+		}
+
+		{
+			const char* stage = "Choose appearance and reflections";
+			float stageHeight = 0;
+			const auto draw = [&] {
+				const float font = ImGui::GetFontSize();
+				stageHeight = ImGui::GetFont()->CalcTextSizeA(font * 1.25f, FLT_MAX, font * 5.65f, stage).y;
+				ImGui::BeginChild("StageRail", { 850, 320 });
+				{
+					MenuUI::SettingsPage page("General", { { "water", "Water", "Water step", {}, true, true, stage }, { "reflection", "Reflections", "Reflection step" },
+															 { "depth", "Depth", "Depth step" }, { "foam", "Foam", "Foam step" }, { "waves", "Waves", "Waves step" }, { "lighting", "Lighting", "Lighting step" } });
+				}
+				ImGui::EndChild();
+			};
+			MenuUI::SettingsPage::Select("General", "overview");
+			frame(draw);
+			frame(draw);
+			require(Util::controls.at("Water step").GetHeight() >= stageHeight + ImGui::GetFontSize() * .4f, "compact overview rows reserve space around the full stage label");
+		}
+
+		{
+			const char* explanation = "This longer tool explanation must wrap inside its own card while preserving every word and keeping the normal setup cards compact. Compare the current scene, then review the complete measurement report before applying any changes.";
+			for (const float panelWidth : { 850.0f, 420.0f }) {
+				bool toolsOnly = false;
+				const auto draw = [&] {
+					ImGui::BeginChild("IndependentToolRows", { panelWidth, 600 });
+					{
+						MenuUI::SettingsPage page("General", {
+																 { "compact", "Coverage", "Short setup.", "Shared", !toolsOnly },
+																 { "performance", "Performance", explanation, "Measured results", true, false },
+																 { "profiling", "Profiling", "Inspect timing information.", "CPU and GPU", true, false },
+															 });
+					}
+					ImGui::EndChild();
+				};
+				MenuUI::SettingsPage::Select("General", "overview");
+				frame(draw);
+				frame(draw);
+				const auto setup = Util::controls.at("Short setup.");
+				const auto tool = Util::controls.at(explanation);
+				require(setup.GetHeight() <= ImGui::GetFontSize() * 6 + .1f, "long tool copy cannot inflate the setup row");
+				require(tool.Min.y > setup.Max.y, "tool rows follow compact setup rows without overlap");
+				toolsOnly = true;
+				frame(draw);
+				frame(draw);
+				const auto first = Util::controls.at(explanation);
+				const auto second = Util::controls.at("Inspect timing information.");
+				require(std::isfinite(first.GetHeight()) && first.GetHeight() > ImGui::GetFontSize() * 2, "a tools-only overview retains finite text-sized cards");
+				require(first.Max.x <= second.Min.x || first.Max.y <= second.Min.y, "tool cards remain separate in one- and two-column overviews");
+			}
+		}
+
+		{
+			for (const float font : { 13.0f, 21.0f })
+				for (const float panelWidth : { 850.0f, 420.0f, font * 36 + ImGui::GetStyle().WindowPadding.x * 3 + ImGui::GetStyle().ScrollbarSize - 1, font * 36 + ImGui::GetStyle().WindowPadding.x * 3 + ImGui::GetStyle().ScrollbarSize + 1 })
+					for (const bool overflow : { false, true }) {
+						MenuUI::SettingsPage::Select("DetailFooter", "mode");
+						ImRect content;
+						float footerLeft = 0, footerRight = 0;
+						const auto draw = [&] {
+							ImGui::PushFont(ImGui::GetFont(), font);
+							ImGui::BeginChild("DetailFooter", { panelWidth, 650 }, ImGuiChildFlags_Borders);
+							ImGui::BeginChild("DetailBody", { 0, -SettingsFooterHeight("DetailFooter") - ImGui::GetStyle().ItemSpacing.y });
+							{
+								MenuUI::SettingsPage page("DetailFooter", { { "mode", "Mode", "Choose a mode." } });
+								const MenuUI::Choice choices[]{ { "first", "First", "First description", "Detail edge" } };
+								MenuUI::ChoiceCards("DetailChoices", 0, choices);
+								content = Util::controls.at("Detail edge");
+								if (overflow)
+									ImGui::Dummy({ 0, 1000 });
+							}
+							ImGui::EndChild();
+							const auto origin = ImGui::GetCursorScreenPos();
+							const auto layout = GetSettingsFooterLayout("DetailFooter");
+							footerLeft = origin.x + layout.backgroundLeft;
+							footerRight = origin.x + ImGui::GetContentRegionAvail().x - layout.backgroundRight;
+							DrawSettingsFooter("DetailFooter");
+							ImGui::EndChild();
+							ImGui::PopFont();
+						};
+						for (int settle = 0; settle < 3; ++settle) frame(draw);
+						require(std::abs(content.Min.x - footerLeft) < 1, "detail footer starts at its controls, not the overview stage rail");
+						require(std::abs(content.Max.x - footerRight) < 1, "detail footer ends at its controls and leaves room for the scrollbar");
+					}
 		}
 
 		int saves = 0, discards = 0, applies = 0;
@@ -1651,9 +1895,10 @@ int main()
 			for (const float panel : { 850.0f, 420.0f }) {
 				for (const auto& route : uiReviewRoutes) {
 					bool conditional = true;
+					float panelHeight = 600;
 					const auto draw = [&] {
 						ImGui::PushFont(ImGui::GetFont(), font);
-						ImGui::BeginChild("RegisteredPage", { panel, 600 });
+						ImGui::BeginChild("RegisteredPage", { panel, panelHeight });
 						DrawUiReviewPage(route.page, conditional);
 						ImGui::EndChild();
 						ImGui::PopFont();
@@ -1666,12 +1911,16 @@ int main()
 					frame(draw);
 					if (MenuUI::SettingsPage::Selected(route.page) != route.section)
 						throw std::runtime_error(std::format("Route {}/{} selected {} at font {} and width {}", route.page, route.section, MenuUI::SettingsPage::Selected(route.page), font, panel));
+					panelHeight = 360;
+					for (int settle = 0; settle < 3; ++settle) frame(draw);
 					const auto back = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
 					require(back.Min.x >= 0 && back.Max.x <= panel + 10, "back action stays inside wide and narrow panels");
+					require(back.Min.y >= 8 && back.Max.y <= panelHeight + 8, "fixed back action remains visible when a production panel becomes shorter");
 					click(back.GetCenter(), draw);
 					frame(draw);
 					frame(draw);
-					require(MenuUI::SettingsPage::Selected(route.page) == "overview", "every detail back button returns to the same production page");
+					if (MenuUI::SettingsPage::Selected(route.page) != "overview")
+						throw std::runtime_error(std::format("Back action {}/{} at font {}, width {}, bounds ({}, {})-({}, {})", route.page, route.section, font, panel, back.Min.x, back.Min.y, back.Max.x, back.Max.y));
 					if (route.conditional) {
 						conditional = false;
 						frame(draw);

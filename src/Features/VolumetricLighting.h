@@ -83,7 +83,7 @@ public:
 	void RequestRuntimeReset();
 	bool IsPerformanceCostMeasurementReady() const override;
 	const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for volumetric lighting transition"; }
-	/** @return The active context's sanitized tuning, or a neutral profile when unavailable. */
+	/** @return Active standalone tuning composed with Adaptive Balance, or neutral when unavailable. */
 	GodrayProfile GetRuntimeGodrayProfile() const;
 	virtual void PostPostLoad() override;
 	virtual void SetupResources() override;

@@ -48,6 +48,25 @@ namespace VolumetricLightingTuning
 		return result;
 	}
 
+	/** Multiplies tuning and overlays custom colour without changing the authored profile. */
+	inline Profile ComposeProfiles(const Profile& a_base, const Profile& a_layer)
+	{
+		auto result = SanitizeProfile(a_base);
+		const auto layer = SanitizeProfile(a_layer);
+		result.ShaftIntensity *= layer.ShaftIntensity;
+		result.Opacity *= layer.Opacity;
+		result.Saturation *= layer.Saturation;
+		if (layer.CustomColorContribution > 0.0f) {
+			const float baseWeight = result.CustomColorContribution * (1.0f - layer.CustomColorContribution);
+			const float amount = baseWeight + layer.CustomColorContribution;
+			result.CustomColorRed = (result.CustomColorRed * baseWeight + layer.CustomColorRed * layer.CustomColorContribution) / amount;
+			result.CustomColorGreen = (result.CustomColorGreen * baseWeight + layer.CustomColorGreen * layer.CustomColorContribution) / amount;
+			result.CustomColorBlue = (result.CustomColorBlue * baseWeight + layer.CustomColorBlue * layer.CustomColorContribution) / amount;
+			result.CustomColorContribution = amount;
+		}
+		return SanitizeProfile(result);
+	}
+
 	inline float ApplyOpacityCurve(float a_value, float a_opacity)
 	{
 		// This reference curve stays aligned with the final volumetric composite shader.

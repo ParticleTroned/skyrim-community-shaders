@@ -216,6 +216,10 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+#			if defined(HORIZFADE)
+	baseColor.xyz = AdaptiveBalanceAppearance::ApplyColor(baseColor.xyz, 1.0,
+		SharedData::adaptiveBalanceSettings.appearance.starsCurve, 1.0, 1.0.xxx);
+#			endif
 	if (!composeAuthoredSky)
 		baseColor.xyz = Color::Sky(baseColor.xyz);
 #			ifdef TEXFADE
@@ -304,6 +308,19 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 	if (saturation != 1.0)
 		psout.Color.xyz = Color::Saturation(psout.Color.xyz, saturation);
+#	endif
+
+#	if !defined(OCCLUSION)
+#		if defined(CLOUDS)
+	psout.Color.xyz = AdaptiveBalanceAppearance::ApplyColor(psout.Color.xyz, 1.0, 1.0, 1.0,
+		SharedData::adaptiveBalanceSettings.appearance.cloudTint);
+	const float cloudOpacity = SharedData::adaptiveBalanceSettings.appearance.cloudOpacity;
+	if (Color::IsSceneColorDraw() && cloudOpacity != 1.0)
+		psout.Color.w = saturate(psout.Color.w * cloudOpacity);
+#		elif defined(HORIZFADE)
+	psout.Color.xyz = AdaptiveBalanceAppearance::ApplyColor(psout.Color.xyz,
+		SharedData::adaptiveBalanceSettings.appearance.starsIntensity, 1.0, 1.0, 1.0.xxx);
+#		endif
 #	endif
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition, eyeIndex);

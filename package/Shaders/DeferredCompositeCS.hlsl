@@ -148,17 +148,17 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #			endif
 		sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
 		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse) * albedo;
+		directionalAmbientColor = AdaptiveBalanceAppearance::ApplyAmbientSaturation(ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse)) * albedo;
 #		else
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS) * albedo;
+		directionalAmbientColor = AdaptiveBalanceAppearance::ApplyAmbientSaturation(ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS)) * albedo;
 #		endif
 	} else
 #	endif
 	{
-		directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+		directionalAmbientColor = AdaptiveBalanceAppearance::ApplyAmbientSaturation(Color::Ambient(max(0, SharedData::GetAmbient(normalWS))));
 		directionalAmbientColor *= albedo;
 	}
-	directionalAmbientColor = Color::ApplyAmbientBalance(directionalAmbientColor);
+	directionalAmbientColor *= Color::AmbientBalanceMultiplier();
 	directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
 	directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
 	directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);

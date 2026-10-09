@@ -47,12 +47,16 @@ namespace RE
 		std::array<float, 3> values{};
 		bool operator==(const NiColor&) const = default;
 		float operator[](std::size_t i) const { return values[i]; }
+		float& operator[](std::size_t i) { return values[i]; }
 		NiColor operator*(float scale) const { return { { values[0] * scale, values[1] * scale, values[2] * scale } }; }
 	};
 	struct TESWeather
 	{
 		enum ColorTypes
 		{
+			kSkyUpper = 0,
+			kSkyLower = 1,
+			kHorizon = 2,
 			kEffectLighting = 9,
 			kSkyStatics = 13
 		};
@@ -171,6 +175,9 @@ struct WeatherUpdateHook
 	static inline void (*func)(RE::Sky*, float) = [](RE::Sky*, float) {};
 	static inline WeatherColorAdjustment<RE::NiColor> effect;
 	static inline WeatherColorAdjustment<RE::NiColor> statics;
+	static inline WeatherColorAdjustment<RE::NiColor> upper;
+	static inline WeatherColorAdjustment<RE::NiColor> middle;
+	static inline WeatherColorAdjustment<RE::NiColor> horizon;
 	static inline bool loggedFailure = false;
 };
 
@@ -359,6 +366,257 @@ void CheckColorControls()
 	assert(balance.GetCommonBufferData().saturation == 0.0f);
 }
 
+void CheckPointLightSaturation()
+{
+	AdaptiveBrightness balance;
+	auto& global = balance.settings.globalProfile;
+	assert(global.pointLightSaturation == 1.0f);
+	assert(SharedLightingSettings{}.pointLightSaturation == 1.0f);
+	assert(AdaptiveBrightness::ProfileSettings::AdjustmentDefaults().pointLightSaturation == 1.0f);
+	assert(balance.GetCommonBufferData().pointLightSaturation == 1.0f);
+	global.pointLightSaturation = 1.5f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.advanced = night.advanced = true;
+	day.pointLightSaturation = 0.5f;
+	night.pointLightSaturation = 1.0f;
+	balance.testProfileBlend = { &day, &night, 0.25f };
+	assert(Close(balance.GetCommonBufferData().pointLightSaturation, 0.9375f));
+	day.advanced = false;
+	assert(Close(balance.GetCommonBufferData().pointLightSaturation, 1.5f));
+	day.advanced = true;
+	global.advanced = false;
+	assert(Close(balance.GetCommonBufferData().pointLightSaturation, 0.625f));
+	global.advanced = true;
+
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.pointLightSaturation = 0.5f;
+	balance.testLocationLayers = { &location };
+	assert(Close(balance.GetCommonBufferData().pointLightSaturation, 0.75f));
+	location.layered = true;
+	assert(Close(balance.GetCommonBufferData().pointLightSaturation, 0.46875f));
+	balance.SetEnabled(false);
+	assert(balance.GetCommonBufferData().pointLightSaturation == 1.0f);
+	balance.SetEnabled(true);
+	assert(Close(balance.GetCommonBufferData().pointLightSaturation, 0.46875f));
+	balance.testLocationLayers.clear();
+
+	global.pointLightSaturation = day.pointLightSaturation = night.pointLightSaturation = 2.0f;
+	assert(balance.GetCommonBufferData().pointLightSaturation == 2.0f);
+	global.pointLightSaturation = 0.0f;
+	assert(balance.GetCommonBufferData().pointLightSaturation == 0.0f);
+	balance.testProfileBlend = {};
+	global.pointLightSaturation = 0.4f;
+	global.brightness = 2.0f;
+	global.pointLightMult = 0.3f;
+	global.linearPointLightMult = 3.0f;
+	assert(Close(balance.GetCommonBufferData().pointLightSaturation, 0.4f));
+
+	for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+		global.pointLightSaturation = invalid;
+		assert(balance.GetCommonBufferData().pointLightSaturation == 1.0f);
+		ClampProfileSettings(global);
+		assert(global.pointLightSaturation == 1.0f);
+	}
+	for (const auto [input, expected] : std::array<std::array<float, 2>, 2>{ { { -1.0f, 0.0f }, { 20.0f, 2.0f } } }) {
+		global.pointLightSaturation = input;
+		assert(balance.GetCommonBufferData().pointLightSaturation == expected);
+		ClampProfileSettings(global);
+		assert(global.pointLightSaturation == expected);
+	}
+	global.advanced = false;
+	assert(balance.GetCommonBufferData().pointLightSaturation == 1.0f);
+
+	for (const float value : { 0.0f, 1.0f, 2.0f })
+		assert(ValidateAdaptiveBalanceVisuals({ { "pointLightSaturation", value } }).empty());
+	for (const auto& value : std::vector<json>{ -0.001, 2.001, std::numeric_limits<double>::quiet_NaN(),
+			 std::numeric_limits<double>::infinity(), true, "1", nullptr })
+		assert(!ValidateAdaptiveBalanceVisuals({ { "pointLightSaturation", value } }).empty());
+	assert(!ValidateAdaptiveBalanceVisuals({ { "pointLightSaturation", 0.5 }, { "unknown", 1 } }).empty());
+}
+
+void CheckPointLightCurve()
+{
+	AdaptiveBrightness balance;
+	auto& global = balance.settings.globalProfile;
+	assert(global.pointLightCurve == 1.0f);
+	assert(SharedLightingSettings{}.pointLightCurve == 1.0f);
+	assert(AdaptiveBrightness::ProfileSettings::AdjustmentDefaults().pointLightCurve == 1.0f);
+	assert(balance.GetCommonBufferData().pointLightCurve == 1.0f);
+	global.pointLightCurve = 2.0f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.advanced = night.advanced = true;
+	day.pointLightCurve = 0.5f;
+	night.pointLightCurve = 1.5f;
+	balance.testProfileBlend = { &day, &night, 0.25f };
+	assert(Close(balance.GetCommonBufferData().pointLightCurve, 1.5f));
+	day.advanced = false;
+	assert(Close(balance.GetCommonBufferData().pointLightCurve, 2.25f));
+	day.advanced = true;
+	global.advanced = false;
+	assert(Close(balance.GetCommonBufferData().pointLightCurve, 0.75f));
+	global.advanced = true;
+
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.pointLightCurve = 0.5f;
+	balance.testLocationLayers = { &location };
+	assert(Close(balance.GetCommonBufferData().pointLightCurve, 1.0f));
+	location.layered = true;
+	assert(Close(balance.GetCommonBufferData().pointLightCurve, 0.75f));
+	balance.SetEnabled(false);
+	assert(balance.GetCommonBufferData().pointLightCurve == 1.0f);
+	balance.SetEnabled(true);
+	assert(Close(balance.GetCommonBufferData().pointLightCurve, 0.75f));
+	balance.SetPerformanceCostMeasurementEnabled(false);
+	assert(balance.GetCommonBufferData().pointLightCurve == 1.0f);
+	balance.SetPerformanceCostMeasurementEnabled(true);
+	assert(Close(balance.GetCommonBufferData().pointLightCurve, 0.75f));
+	balance.testLocationLayers.clear();
+
+	for (const float edge : { 0.1f, 4.0f }) {
+		global.pointLightCurve = day.pointLightCurve = night.pointLightCurve = edge;
+		assert(balance.GetCommonBufferData().pointLightCurve == edge);
+	}
+	balance.testProfileBlend = {};
+	global.pointLightCurve = 2.0f;
+	global.brightness = 0.5f;
+	global.pointLightMult = global.pointLightSaturation = 0.0f;
+	assert(balance.GetCommonBufferData().pointLightCurve == 2.0f);
+	for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity() }) {
+		global.pointLightCurve = invalid;
+		assert(balance.GetCommonBufferData().pointLightCurve == 1.0f);
+		ClampProfileSettings(global);
+		assert(global.pointLightCurve == 1.0f);
+		SharedLightingSettings shared;
+		shared.pointLightCurve = invalid;
+		SanitizeSharedLightingSettings(shared);
+		assert(shared.pointLightCurve == 1.0f);
+	}
+	for (const auto& [input, expected] : std::array<std::array<float, 2>, 2>{ { { -1.0f, 0.1f }, { 20.0f, 4.0f } } }) {
+		global.pointLightCurve = input;
+		assert(balance.GetCommonBufferData().pointLightCurve == expected);
+		ClampProfileSettings(global);
+		assert(global.pointLightCurve == expected);
+	}
+	global.advanced = false;
+	assert(balance.GetCommonBufferData().pointLightCurve == 1.0f);
+
+	for (const float value : { 0.1f, 1.0f, 4.0f })
+		assert(ValidateAdaptiveBalanceVisuals({ { "pointLightCurve", value } }).empty());
+	for (const auto& value : std::vector<json>{ 0.099, 4.001, std::numeric_limits<double>::quiet_NaN(),
+			 std::numeric_limits<double>::infinity(), true, "1", nullptr })
+		assert(!ValidateAdaptiveBalanceVisuals({ { "pointLightCurve", value } }).empty());
+	assert(!ValidateAdaptiveBalanceVisuals({ { "pointLightCurve", 0.5 }, { "unknown", 1 } }).empty());
+}
+
+void CheckFireControls()
+{
+	AdaptiveBrightness balance;
+	auto expect = [&](float intensity, float saturation, float curve) {
+		const auto data = balance.GetCommonBufferData();
+		assert(Close(data.fireIntensity, intensity));
+		assert(Close(data.fireSaturation, saturation));
+		assert(Close(data.fireCurve, curve));
+	};
+	expect(1.0f, 1.0f, 1.0f);
+	auto& global = balance.settings.globalProfile;
+	global.fireIntensity = 2.0f;
+	global.fireSaturation = 1.5f;
+	global.fireCurve = 0.5f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.advanced = night.advanced = true;
+	day.fireIntensity = day.fireSaturation = day.fireCurve = 0.5f;
+	night.fireIntensity = 1.5f;
+	night.fireSaturation = 1.0f;
+	night.fireCurve = 2.0f;
+	balance.testProfileBlend = { &day, &night, 0.25f };
+	expect(1.5f, 0.9375f, 0.4375f);
+	day.advanced = false;
+	expect(2.25f, 1.5f, 0.625f);
+	day.advanced = true;
+	global.advanced = false;
+	expect(0.75f, 0.625f, 0.875f);
+	global.advanced = true;
+
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.fireIntensity = location.profile.fireSaturation = 0.5f;
+	location.profile.fireCurve = 2.0f;
+	balance.testLocationLayers = { &location };
+	expect(1.0f, 0.75f, 1.0f);
+	location.layered = true;
+	expect(0.75f, 0.46875f, 0.875f);
+	balance.SetEnabled(false);
+	expect(1.0f, 1.0f, 1.0f);
+	balance.SetEnabled(true);
+	expect(0.75f, 0.46875f, 0.875f);
+	balance.SetPerformanceCostMeasurementEnabled(false);
+	expect(1.0f, 1.0f, 1.0f);
+	balance.SetPerformanceCostMeasurementEnabled(true);
+	expect(0.75f, 0.46875f, 0.875f);
+
+	balance.testLocationLayers.clear();
+	balance.testProfileBlend = {};
+	global.brightness = 2.0f;
+	global.pointLightMult = global.pointLightSaturation = 0.0f;
+	expect(2.0f, 1.5f, 0.5f);
+	global.advanced = false;
+	expect(1.0f, 1.0f, 1.0f);
+
+	using Profile = AdaptiveBrightness::ProfileSettings;
+	using Buffer = AdaptiveBrightness::PerFrameData;
+	struct FireControl
+	{
+		const char* name;
+		float Profile::* profile;
+		float SharedLightingSettings::* shared;
+		float Buffer::* buffer;
+		float minimum;
+		float maximum;
+	};
+	const std::array controls{
+		FireControl{ "fireIntensity", &Profile::fireIntensity, &SharedLightingSettings::fireIntensity, &Buffer::fireIntensity, 0.0f, 5.0f },
+		FireControl{ "fireSaturation", &Profile::fireSaturation, &SharedLightingSettings::fireSaturation, &Buffer::fireSaturation, 0.0f, 2.0f },
+		FireControl{ "fireCurve", &Profile::fireCurve, &SharedLightingSettings::fireCurve, &Buffer::fireCurve, 0.25f, 4.0f }
+	};
+	for (const auto& control : controls) {
+		assert(Profile::AdjustmentDefaults().*control.profile == 1.0f);
+		assert(Profile::GlobalDefaults().*control.profile == 1.0f);
+		assert(SharedLightingSettings{}.*control.shared == 1.0f);
+		AdaptiveBrightness bounds;
+		auto& profile = bounds.settings.globalProfile;
+		for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity() }) {
+			profile.*control.profile = invalid;
+			assert(bounds.GetCommonBufferData().*control.buffer == 1.0f);
+			ClampProfileSettings(profile);
+			assert(profile.*control.profile == 1.0f);
+			SharedLightingSettings shared;
+			shared.*control.shared = invalid;
+			SanitizeSharedLightingSettings(shared);
+			assert(shared.*control.shared == 1.0f);
+		}
+		for (const float edge : { control.minimum, control.maximum }) {
+			profile.*control.profile = edge == control.minimum ? edge - 1.0f : edge + 1.0f;
+			assert(bounds.GetCommonBufferData().*control.buffer == edge);
+			ClampProfileSettings(profile);
+			assert(profile.*control.profile == edge);
+			Profile layer;
+			layer.advanced = true;
+			layer.*control.profile = edge;
+			bounds.testProfileBlend = { &layer, &layer, 0.0f };
+			assert(bounds.GetCommonBufferData().*control.buffer == edge);
+			bounds.testProfileBlend = {};
+		}
+		for (const float value : { control.minimum, 1.0f, control.maximum })
+			assert(ValidateAdaptiveBalanceVisuals({ { control.name, value } }).empty());
+		for (const auto& value : std::vector<json>{ control.minimum - 0.001f, control.maximum + 0.001f,
+				 std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), true, "1", nullptr })
+			assert(!ValidateAdaptiveBalanceVisuals({ { control.name, value } }).empty());
+		assert(!ValidateAdaptiveBalanceVisuals({ { control.name, 1.0f }, { "unknown", 1 } }).empty());
+	}
+}
+
 void CheckVisualControls()
 {
 	WaterAppearance::Profile invalid;
@@ -462,6 +720,9 @@ void CheckOff(AdaptiveBrightness& balance, const LinearLighting::Settings& indep
 	assert(lights.contrast == 1.0f && lights.saturation == 1.0f);
 	assert(lights.ambientMult == 1.0f);
 	assert(lights.pointLightMult == 1.0f && lights.linearPointLightMult == 1.0f);
+	assert(lights.pointLightSaturation == 1.0f);
+	assert(lights.pointLightCurve == 1.0f);
+	assert(lights.fireIntensity == 1.0f && lights.fireSaturation == 1.0f && lights.fireCurve == 1.0f);
 	assert(lights.spotlightMult == 1.0f && lights.linearSpotlightMult == 1.0f);
 	assert(lights.omnidirectionalBulbMult == 1.0f && lights.linearOmnidirectionalBulbMult == 1.0f);
 	const auto bloom = balance.GetEffectiveBloomSettings();
@@ -721,14 +982,156 @@ void CheckAtmosphereMigrationAndValidation()
 	assert(!ValidateAdaptiveBalanceVisuals({ { "cloudBrightness", 1 }, { "unknown", 1 } }).empty());
 }
 
+void CheckAppearanceProfiles()
+{
+	using namespace AdaptiveBalanceAppearance;
+	const Settings defaults;
+	const json defaultJson = defaults;
+	assert(defaultJson == json(defaultJson.get<Settings>()));
+	assert(!defaultJson.contains("moonIntensity") && !defaultJson.contains("auroraIntensity"));
+	for (const auto& field : kScalars) {
+		assert(defaults.*field.member == field.neutral);
+		Settings invalid;
+		invalid.*field.member = std::numeric_limits<float>::quiet_NaN();
+		Sanitize(invalid);
+		assert(invalid.*field.member == field.neutral);
+		invalid.*field.member = field.maximum + 10.0f;
+		Sanitize(invalid);
+		assert(invalid.*field.member == field.maximum);
+		invalid.*field.member = field.minimum - 10.0f;
+		Sanitize(invalid);
+		assert(invalid.*field.member == field.minimum);
+		const auto low = AdaptiveBalanceAppearanceBound(field.minimum);
+		const auto high = AdaptiveBalanceAppearanceBound(field.maximum);
+		for (const double value : { low, high, double(field.neutral) })
+			assert(ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, value } } } }).empty());
+		for (const auto& value : std::vector<json>{ low - 0.001, high + 0.001, true, "1", nullptr, std::numeric_limits<double>::infinity() })
+			assert(!ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, value } } } }).empty());
+		if (field.neutral == 0.0f)
+			continue;
+		AdaptiveBrightness balance;
+		balance.settings.globalProfile.appearance.*field.member = 1.25f;
+		AdaptiveBrightness::ProfileSettings day, night;
+		day.advanced = night.advanced = true;
+		day.appearance.*field.member = 0.5f;
+		night.appearance.*field.member = 1.5f;
+		balance.testProfileBlend = { &day, &night, 0.25f };
+		assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.9375f));
+		AdaptiveBrightness::LocationOverride location;
+		location.profile.advanced = true;
+		location.profile.appearance.*field.member = 0.4f;
+		balance.testLocationLayers = { &location };
+		assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.5f));
+		location.layered = true;
+		assert(Close(balance.GetCommonBufferData().appearance.*field.member, 0.375f));
+		balance.SetEnabled(false);
+		assert(balance.GetCommonBufferData().appearance.*field.member == 1.0f);
+		balance.SetEnabled(true);
+		balance.testLocationLayers.clear();
+		balance.testProfileBlend = {};
+		balance.settings.globalProfile.advanced = false;
+		assert(balance.GetCommonBufferData().appearance.*field.member == 1.0f);
+	}
+	for (const auto& field : kTints) {
+		assert(ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, { 0.0, 0.5, 1.0 } } } } }).empty());
+		for (const auto& value : std::vector<json>{ 1.0, json::array({ 1, 1 }), json::array({ 1, 1, 1, 1 }), json::array({ 1, -0.1, 1 }), json::array({ 1, true, 1 }), json::array({ 1, field.maximum + 0.01, 1 }) })
+			assert(!ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, value } } } }).empty());
+		Settings layer;
+		layer.*field.member = { 0.25f, 0.5f, 0.75f };
+		const json encoded = layer;
+		const auto decoded = encoded.get<Settings>();
+		assert((decoded.*field.member).y == 0.5f);
+	}
+	for (const auto& value : std::vector<json>{ nullptr, true, json::array(), 1.0, json{ { "missingControl", 1.0 } }, json{ { "moonIntensity", 1.0 } }, json{ { "auroraIntensity", 1.0 } } })
+		assert(!ValidateAdaptiveBalanceVisuals({ { "appearance", value } }).empty());
+
+	for (const auto& malformed : std::vector<json>{ nullptr, true, json::array(),
+			 json{ { "directionalCurve", true } }, json{ { "cloudTint", { 1, 1 } } },
+			 json{ { "fogTint", { 1, 1, 1, 1 } } }, json{ { "skyTopTint", { 1, "1", 1 } } }, json{ { "directionalCurve", 3 }, { "cloudTint", { 1, 1 } } } }) {
+		Settings retained;
+		retained.directionalCurve = 2;
+		const json before = retained;
+		bool rejected = false;
+		try {
+			from_json(malformed, retained);
+		} catch (const json::exception&) {
+			rejected = true;
+		}
+		assert(rejected && json(retained) == before);
+	}
+	assert(json::object().get<Settings>().directionalCurve == 1);
+	Settings red, blue;
+	red.godrayTint = { 1, 0, 0 };
+	red.godrayTintAmount = 0.5f;
+	blue.godrayTint = { 0, 0, 1 };
+	blue.godrayTintAmount = 0.5f;
+	const auto unchanged = Compose(red, {});
+	assert(json(unchanged) == json(red));
+	const auto overlay = Compose(red, blue);
+	assert(Close(overlay.godrayTintAmount, 0.75f));
+	assert(Close(overlay.godrayTint.x, 1.0f / 3.0f) && Close(overlay.godrayTint.z, 2.0f / 3.0f));
+	const auto midpoint = Lerp({}, red, 0.5f);
+	assert(Close(midpoint.godrayTintAmount, 0.25f));
+	assert(midpoint.godrayTint.x == 1 && midpoint.godrayTint.y == 0);
+	Settings tinted;
+	tinted.directionalTint = { 0.5f, 1.5f, 0.75f };
+	const auto twice = Compose(tinted, tinted);
+	assert(Close(twice.directionalTint.x, 0.25f) && twice.directionalTint.y == 2.0f);
+
+	const auto schema = BuildAdaptiveBalanceAppearanceSchema();
+	for (const auto& field : kScalars) {
+		const auto& property = schema.at("properties").at(field.name);
+		assert(property.at("minimum") == AdaptiveBalanceAppearanceBound(field.minimum));
+		assert(property.at("maximum") == AdaptiveBalanceAppearanceBound(field.maximum));
+	}
+	std::cout << "Appearance profiles: neutral defaults, all field bounds, JSON/schema, day/night and location composition passed\n";
+}
+
+void CheckSkyGradientOwnership()
+{
+	auto& balance = globals::features::adaptiveBrightness;
+	balance = {};
+	RE::Weather weather;
+	RE::Sky sky;
+	sky.currentWeather = &weather;
+	const RE::NiColor source{ { 0.25f, 0.5f, 0.75f } };
+	sky.skyColor[RE::TESWeather::kSkyUpper] = source;
+	auto& appearance = balance.settings.globalProfile.appearance;
+	appearance.skyTopIntensity = 2.0f;
+	appearance.skyTopCurve = 2.0f;
+	appearance.skyTopTint = { 1.0f, 0.5f, 0.0f };
+	for (int frame = 0; frame < 3; ++frame) {
+		WeatherUpdateHook::thunk(&sky, 0);
+		const auto& color = sky.skyColor[RE::TESWeather::kSkyUpper];
+		assert(Close(color[0], 0.125f) && Close(color[1], 0.25f) && color[2] == 0.0f);
+	}
+	balance.SetEnabled(false);
+	WeatherUpdateHook::thunk(&sky, 0);
+	assert(sky.skyColor[RE::TESWeather::kSkyUpper] == source);
+	balance.SetEnabled(true);
+	WeatherUpdateHook::thunk(&sky, 0);
+	const RE::NiColor external{ { 0.3f, 0.3f, 0.3f } };
+	sky.skyColor[RE::TESWeather::kSkyUpper] = external;
+	balance.SetEnabled(false);
+	WeatherUpdateHook::thunk(&sky, 0);
+	assert(sky.skyColor[RE::TESWeather::kSkyUpper] == external);
+	WeatherUpdateHook::thunk(nullptr, 0);
+	balance = {};
+}
+
 int main()
 {
+	CheckAppearanceProfiles();
+	CheckSkyGradientOwnership();
 	CheckWeatherColors();
 	CheckWeatherBrightnessComposition();
 	CheckAtmosphereControls();
 	CheckAmbientEffectLighting();
 	CheckAtmosphereMigrationAndValidation();
 	CheckColorControls();
+	CheckPointLightSaturation();
+	CheckPointLightCurve();
+	CheckFireControls();
 	CheckAmbientComposition();
 	CheckVisualControls();
 	// Keep zero-identity guards exercised at runtime under Release optimization.
@@ -744,6 +1147,11 @@ int main()
 	global.skyBrightnessMult = 1.3f;
 	global.advanced = true;
 	global.skySaturation = 0.8f;
+	global.pointLightSaturation = 0.3f;
+	global.pointLightCurve = 1.5f;
+	global.fireIntensity = 2.0f;
+	global.fireSaturation = 0.5f;
+	global.fireCurve = 1.5f;
 	global.ambientMult = 0.5f;
 	global.water.CausticsStrength = 1.5f;
 	global.water.CausticsTiling = 2.0f;
@@ -797,6 +1205,11 @@ int main()
 		assert(after.CausticsSpeed == before.CausticsSpeed && after.CausticsDispersion == before.CausticsDispersion);
 		assert(after.ParallaxStrength == before.ParallaxStrength && after.ParallaxQuality == before.ParallaxQuality);
 		assert(balance.GetCommonBufferData().skySaturation == beforeLight.skySaturation);
+		assert(balance.GetCommonBufferData().pointLightSaturation == beforeLight.pointLightSaturation);
+		assert(balance.GetCommonBufferData().pointLightCurve == beforeLight.pointLightCurve);
+		assert(balance.GetCommonBufferData().fireIntensity == beforeLight.fireIntensity);
+		assert(balance.GetCommonBufferData().fireSaturation == beforeLight.fireSaturation);
+		assert(balance.GetCommonBufferData().fireCurve == beforeLight.fireCurve);
 		assert(balance.GetCommonBufferData().ambientMult == beforeLight.ambientMult);
 		assert(Close(balance.GetEffectiveSharedLightingSettings().directionalLightMult, beforeLight.directionalLightMult));
 	}

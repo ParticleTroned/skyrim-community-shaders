@@ -128,9 +128,15 @@ namespace
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
-	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 80);
+	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 320);
+	static_assert(offsetof(AdaptiveBalanceSettingsCB, appearance) == 112);
 	static_assert(offsetof(AdaptiveBalanceSettingsCB, skySaturation) == 32);
 	static_assert(offsetof(AdaptiveBalanceSettingsCB, ambientMult) == 36);
+	static_assert(offsetof(AdaptiveBalanceSettingsCB, pointLightSaturation) == 80);
+	static_assert(offsetof(AdaptiveBalanceSettingsCB, fireIntensity) == 84);
+	static_assert(offsetof(AdaptiveBalanceSettingsCB, fireSaturation) == 88);
+	static_assert(offsetof(AdaptiveBalanceSettingsCB, fireCurve) == 92);
+	static_assert(offsetof(AdaptiveBalanceSettingsCB, pointLightCurve) == 96);
 	static_assert(sizeof(LinearLightingSettingsCB) == 112);
 	static_assert(offsetof(LinearLightingSettingsCB, enableAdaptiveBrightnessColorAdjustments) == 100);
 	static_assert(sizeof(TerrainBlendingSettingsCB) == 16);
@@ -253,7 +259,7 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::wetnessEffects.GetCommonBufferData(),
 		wetternessSettings,
 		globals::features::skylighting.GetCommonBufferData(a_inWorld),
-		globals::features::cloudShadows.settings,
+		globals::features::cloudShadows.GetCommonBufferData(),
 		globals::features::lodBlending.GetCommonBufferData(),
 		globals::features::hairSpecular.settings,
 		globals::features::terrainVariation.settings,

@@ -1,6 +1,8 @@
 #include "CloudShadows.h"
+#include "AdaptiveBrightness.h"
 #include "GpuPass.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -23,6 +25,14 @@ namespace
 			a_settings.Enabled = enabled ? 1u : 0u;
 		return enabled;
 	}
+}
+
+CloudShadows::Settings CloudShadows::GetCommonBufferData() const
+{
+	auto effective = settings;
+	const auto appearance = globals::features::adaptiveBrightness.GetEffectiveSharedLightingSettings().appearance;
+	effective.Opacity = Util::ClampFinite(settings.Opacity * appearance.cloudShadowStrength, 0.0f, 1.0f, 0.8f);
+	return effective;
 }
 
 void CloudShadows::DrawSettings()

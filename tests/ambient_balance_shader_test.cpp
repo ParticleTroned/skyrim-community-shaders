@@ -1,7 +1,10 @@
 #include "Utils/ShaderInclude.h"
+#include "adaptive_balance_test_settings.h"
 #include "d3d11_shader_test.h"
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -102,12 +105,14 @@ namespace
 			Check(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
 			Util::SetResourceName(shader.Get(), "AmbientTest::CS");
 			feature = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::FeatureData");
+			feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", AdaptiveBalanceTest::NeutralAppearance());
+			feature->SetMember("SharedData::adaptiveBalanceSettings", "pointLightCurve", 1.0f);
 			auto* balance = feature->reflection->GetVariableByName("SharedData::adaptiveBalanceSettings");
 			D3D11_SHADER_VARIABLE_DESC balanceDesc{};
 			D3D11_SHADER_TYPE_DESC ambientDesc{};
 			Check(balance->GetDesc(&balanceDesc));
 			Check(balance->GetType()->GetMemberTypeByName("ambientMult")->GetDesc(&ambientDesc));
-			if (balanceDesc.Size != 80 || ambientDesc.Offset != 36)
+			if (balanceDesc.Size != 320 || ambientDesc.Offset != 36)
 				throw std::runtime_error("Adaptive Balance shader layout differs from the CPU buffer");
 			shared = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::SharedData");
 			permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");
@@ -208,6 +213,58 @@ namespace
 		}
 		return cases;
 	}
+	unsigned VerifySaturation(Fixture& fixture)
+	{
+		unsigned cases = 0;
+		for (uint32_t scene : { 0u, 1u, 2u }) {
+			fixture.permutation->SetVariable("Permutation::ExtraShaderDescriptor", scene);
+			for (bool linear : { false, true }) {
+				fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+				for (uint32_t interior : { 0u, 1u }) {
+					fixture.shared->SetVariable("SharedData::InInterior", interior);
+					for (uint32_t mode : { 0u, 1u, 2u, 3u }) {
+						fixture.feature->SetMember("SharedData::iblSettings", "DALCMode", mode);
+						fixture.feature->SetMember("SharedData::iblSettings", "DALCAmount", 0.5f);
+						auto appearance = AdaptiveBalanceTest::NeutralAppearance();
+						fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", appearance);
+						const auto baseline = fixture.Draw(1.7f);
+						for (float saturation : { 0.0f, 1.0f, 2.0f }) {
+							appearance[2] = saturation;
+							fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", appearance);
+							const auto actual = fixture.Draw(1.7f);
+							for (size_t output = 0; output < actual.size(); ++output) {
+								const bool unchanged = scene == 0 || saturation == 1 || (output >= 4 && output < 8);
+								for (size_t channel = 0; channel < 3; ++channel) {
+									const float value = actual[output][channel];
+									if (!std::isfinite(value) || (unchanged && std::bit_cast<uint32_t>(value) != std::bit_cast<uint32_t>(baseline[output][channel])))
+										throw std::runtime_error("Ambient saturation changed neutral or unrelated lighting");
+									if (!unchanged && saturation == 0) {
+										// Fog contains the unchanged weather contribution plus the graded IBL contribution.
+										const float fog = output == 9 ? (0.2f + 0.1f * static_cast<float>(channel)) * 0.6f : 0.0f;
+										const float gray = actual[output][0] - (output == 9 ? 0.12f : 0.0f);
+										if (std::abs(value - fog - gray) > 2e-4f * (1.0f + std::abs(gray)))
+											throw std::runtime_error("Ambient desaturation missed a diffuse, specular or fog IBL path");
+									}
+								}
+							}
+							if (scene != 0 && saturation == 2) {
+								const auto chroma = [](const Pixel& pixel) {
+									const auto [low, high] = std::minmax_element(pixel.begin(), pixel.begin() + 3);
+									return (*high - *low) / *high;
+								};
+								if (!(chroma(actual[0]) > chroma(baseline[0])))
+									throw std::runtime_error("Ambient saturation did not increase chroma");
+							}
+							++cases;
+						}
+					}
+				}
+			}
+		}
+		fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", AdaptiveBalanceTest::NeutralAppearance());
+		return cases;
+	}
+
 }
 
 int main()
@@ -223,6 +280,7 @@ int main()
 			for (uint32_t ibl : { 0u, 1u }) {
 				fixture.feature->SetMember("SharedData::iblSettings", "EnableIBL", ibl);
 				cases += Verify(fixture);
+				cases += VerifySaturation(fixture);
 			}
 		}
 		std::cout << cases << " D3D11 ambient cases passed (SE/AE and VR).\n";

@@ -18,7 +18,7 @@ extract_between("${source}"
     "profiling_columns.h")
 extract_between("${source}"
     "ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData"
-    "void ProfilingRenderer::RenderStatistics" "profiling_views.h")
+    "bool ProfilingRenderer::RenderEnabledControl" "profiling_views.h")
 extract_between("${source}"
     "void ProfilingRenderer::RenderFeatureTimers"
     "ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary"

@@ -175,6 +175,8 @@ public:
 	// Returns true only when the main settings file and every required
 	// persistence layer have been saved successfully.
 	bool Save(ConfigMode a_configMode = ConfigMode::USER);
+	/** Applies installed defaults in memory, preserving saved files and the dirty baseline. */
+	bool RestoreDefaultSettings(std::string& a_error);
 
 	static constexpr uint32_t kSaveLoadSafeModeGraceFrames = 120;
 	static constexpr uint32_t kSaveLoadSafeModeFallbackFrames = 36000;

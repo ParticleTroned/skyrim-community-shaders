@@ -1572,14 +1572,6 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 		MenuUI::SettingsPage::Select("AdaptiveBrightness", "profiles");
 	else if (contextSectionToSelect == ContextSection::Locations)
 		MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
-	bool enabled = settings.enabled;
-	if (Util::Widgets::Checkbox("Enabled", &enabled))
-		SetEnabled(enabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable all Adaptive Balance adjustments across Global, profile, and location layers.");
-		ImGui::Text("When off, its lighting, color, Bloom, water appearance, and wind response adjustments are bypassed.");
-		ImGui::Text("Engine wind and independent renderer features keep their own settings.");
-	}
 
 	if (settings.enabled) {
 		const auto contextLabel = GetContextLabel();

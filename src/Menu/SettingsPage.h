@@ -22,6 +22,8 @@ namespace Util::Widgets
 
 namespace MenuUI
 {
+	inline constexpr float SettingsSurfaceOpacityScale = .75f;
+
 	/** An ordered setup step. Navigation never applies or resets settings. */
 	struct Section
 	{
@@ -117,6 +119,8 @@ namespace MenuUI
 		bool Is(std::string_view a_section) const;
 		static bool Select(const char* a_page, const char* a_section);
 		static std::string Selected(const char* a_page);
+		/** Horizontal insets of the overview cards, including the content scrollbar. */
+		static ImVec2 OverviewCardInsets(const char* a_page, float a_panelWidth);
 		/** Left edge of the last overview column within its owning feature panel. */
 		static float OverviewLastColumnInset(const char* a_page, float a_panelWidth);
 		/** Align surrounding text with the line through the overview step markers. */

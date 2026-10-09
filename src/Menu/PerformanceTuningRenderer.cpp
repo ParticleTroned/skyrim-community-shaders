@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <imgui.h>
 #include <string>
@@ -1638,7 +1639,9 @@ namespace
 		ImGui::PushID(label);
 		const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 		const float font = ImGui::GetFontSize();
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+		auto background = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+		background.w *= MenuUI::SettingsSurfaceOpacityScale;
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { font * .75f, font * .6f });
 		const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleVar(); ImGui::PopStyleColor(); });
 		const float height = font * 3.8f + ImGui::GetStyle().ItemSpacing.y;
@@ -1648,12 +1651,16 @@ namespace
 		if (!visible)
 			return;
 		ImGui::TextColored(Util::Color::SecondaryText(), "%s", label);
-		ImGui::PushFont(ImGui::GetFont(), font * 1.6f);
+		char text[64];
+		std::snprintf(text, sizeof(text), valid ? format : "--", value);
+		const float textWidth = ImGui::GetFont()->CalcTextSizeA(font * 1.6f, FLT_MAX, 0, text).x;
+		const float textScale = std::min(1.0f, ImGui::GetContentRegionAvail().x / std::max(1.0f, textWidth));
+		ImGui::PushFont(ImGui::GetFont(), font * 1.6f * textScale);
 		const SKSE::stl::scope_exit restoreFont([] { ImGui::PopFont(); });
 		if (valid)
-			ImGui::Text(format, value);
+			ImGui::TextUnformatted(text);
 		else
-			ImGui::TextDisabled("--");
+			ImGui::TextDisabled("%s", text);
 	}
 
 	void RenderTopPerformanceCounters(const ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -1663,7 +1670,7 @@ namespace
 		float displayCpuMs = 0.0f;
 		const bool hasDisplayCpu = TryGetDisplayCpuMs(summary, displayCpuMs);
 
-		const float minimumWidth = ImGui::GetFontSize() * 10;
+		const float minimumWidth = ImGui::GetFontSize() * 7;
 		const int columns = ImGui::GetContentRegionAvail().x >= minimumWidth * 4 ? 4 : 2;
 		MenuUI::DetailGrid counters("##PerformanceTuningTopCounters", columns, minimumWidth);
 		counters.Next();

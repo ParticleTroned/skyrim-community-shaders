@@ -251,6 +251,12 @@ public:
 		Active
 	};
 
+	/** Stable render-scale states do not block streaming restoration. */
+	[[nodiscard]] static constexpr bool IsVRRenderScaleTransitionPending(VRRenderScaleTransitionState state) noexcept
+	{
+		return state != VRRenderScaleTransitionState::Idle && state != VRRenderScaleTransitionState::Active;
+	}
+
 	// Orthogonal diagnostic state. These fields deliberately have no behavioral
 	// authority yet; they expose ownership mistakes without creating a second
 	// controller during the stabilization work.
@@ -482,6 +488,7 @@ public:
 		bool neuralRenderingBatchedStereo = true;
 		bool neuralRenderingDirectCommit = true;
 		uint neuralRenderingModelResolutionPercent = 100;
+		bool neuralRenderingPressureResolutionEnabled = false;
 		uint neuralRenderingCentralAreaPercent = NeuralRendering::kMaximumCentralAreaPercent;
 		uint neuralRenderingCentralFeatherPixels = NeuralRendering::kDefaultCentralFeatherPixels;
 		uint neuralRenderingPreset = 3;

@@ -1910,6 +1910,54 @@ if(NOT _reset_get_proc EQUAL -1)
     message(FATAL_ERROR "NR feature reset must use its cached release export")
 endif()
 
+string(FIND "${_runtime_source}" "bool Runtime::ReleasePassResources()"
+    _runtime_warm_release_begin)
+if(_runtime_warm_release_begin EQUAL -1 OR
+    NOT _runtime_warm_release_begin LESS _runtime_shutdown_begin)
+    message(FATAL_ERROR "NR warm resource release could not be isolated")
+endif()
+math(EXPR _runtime_warm_release_length
+    "${_runtime_shutdown_begin} - ${_runtime_warm_release_begin}")
+string(SUBSTRING "${_runtime_source}" ${_runtime_warm_release_begin}
+    ${_runtime_warm_release_length} _runtime_warm_release)
+foreach(_warm_release_contract IN ITEMS
+    [[std::scoped_lock lock(mutex_);]]
+    [[abandonRequested_.load(std::memory_order_acquire) || abandoned_]]
+    [[status_ != RuntimeStatus::Initialized || failureStage_ != RuntimeFailureStage::None]]
+    [[!device_ || !module_ || !coreModule_ || !parameters_]]
+    [[if (!ResetFeaturesLocked(true) || abandonRequested_.load(std::memory_order_acquire))]]
+)
+    string(FIND "${_runtime_warm_release}" "${_warm_release_contract}"
+        _warm_release_position)
+    if(_warm_release_position EQUAL -1)
+        message(FATAL_ERROR "NR warm release must reject incomplete or unsafe ownership: ${_warm_release_contract}")
+    endif()
+endforeach()
+string(FIND "${_runtime_warm_release}" "ResetFeaturesLocked(true)"
+    _warm_release_features)
+string(FIND "${_runtime_warm_release}" "static_cast<NVSDK_NGX_Parameter*>(parameters_)->Reset();"
+    _warm_release_bindings)
+if(_warm_release_bindings EQUAL -1 OR
+    NOT _warm_release_features LESS _warm_release_bindings)
+    message(FATAL_ERROR "NR warm release must clear parameter bindings after every feature retires")
+endif()
+foreach(_warm_release_forbidden IN ITEMS
+    [[ShutdownLocked(]] [[FreeLibrary(]] [[device_ = nullptr]]
+    [[parameters_ = nullptr]] [[module_ = nullptr]] [[coreModule_ = nullptr]]
+)
+    string(FIND "${_runtime_warm_release}" "${_warm_release_forbidden}"
+        _warm_release_position)
+    if(NOT _warm_release_position EQUAL -1)
+        message(FATAL_ERROR "NR warm release must preserve the initialized backend: ${_warm_release_forbidden}")
+    endif()
+endforeach()
+string(REGEX MATCH
+    "if [(]a_stopOnFailure[)][ \t\r\n]+return false;"
+    _warm_release_fail_fast "${_runtime_reset}")
+if(NOT _warm_release_fail_fast)
+    message(FATAL_ERROR "NR warm release must preserve the first failed native release")
+endif()
+
 string(FIND "${_runtime_shutdown}" "shutdown(static_cast<ID3D12Device*>(device_))"
     _runtime_shutdown_call)
 string(FIND "${_runtime_shutdown}" "UninstallRuntimeCallerPathHook(runtime)"

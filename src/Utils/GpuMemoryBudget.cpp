@@ -46,6 +46,7 @@ namespace Util
 			snapshot.generation = generation;
 			pending.fill(0);
 			priority.fill(false);
+			recoveryDemand.fill(0);
 		}
 		if (force || !snapshot.sequence || now < snapshot.sampledAtMs || now - snapshot.sampledAtMs >= maxAgeMs) {
 			snapshot.local = {};
@@ -74,6 +75,9 @@ namespace Util
 		snapshot.pendingBytes = 0;
 		for (auto bytes : pending)
 			snapshot.pendingBytes = Add(snapshot.pendingBytes, bytes);
+		snapshot.recoveryDemandBytes = 0;
+		for (auto bytes : recoveryDemand)
+			snapshot.recoveryDemandBytes = Add(snapshot.recoveryDemandBytes, bytes);
 		snapshot.priorityWork = priority[0] || priority[1];
 		return snapshot;
 	}
@@ -104,7 +108,7 @@ namespace Util
 		std::scoped_lock lock(mutex);
 		const auto observation = SampleLocked(source, 0, true);
 		if (!observation.Fresh(GetTickCount64()) || !StreamingFits(observation.local.Budget,
-														observation.local.CurrentUsage, observation.pendingBytes, bytes, refill, required, observation.priorityWork))
+														observation.local.CurrentUsage, observation.pendingBytes, bytes, refill, required, observation.priorityWork, observation.recoveryDemandBytes))
 			return {};
 		return ReserveLocked(Owner::Streaming, bytes);
 	}
@@ -118,10 +122,29 @@ namespace Util
 		value -= std::min(value, bytes);
 	}
 
+	void GpuMemoryBudget::SetOwnerWorkLocked(Owner owner, bool priorityWork, std::uint64_t recoveryDemandBytes) noexcept
+	{
+		const auto index = static_cast<std::size_t>(owner);
+		priority[index] = priorityWork;
+		recoveryDemand[index] = recoveryDemandBytes;
+	}
+
+	void GpuMemoryBudget::SetOwnerWork(Owner owner, bool priorityWork, std::uint64_t recoveryDemandBytes)
+	{
+		std::scoped_lock lock(mutex);
+		SetOwnerWorkLocked(owner, priorityWork, recoveryDemandBytes);
+	}
+
 	void GpuMemoryBudget::SetPriorityWork(Owner owner, bool value)
 	{
 		std::scoped_lock lock(mutex);
-		priority[static_cast<std::size_t>(owner)] = value;
+		SetOwnerWorkLocked(owner, value, recoveryDemand[static_cast<std::size_t>(owner)]);
+	}
+
+	void GpuMemoryBudget::SetRecoveryDemand(Owner owner, std::uint64_t bytes)
+	{
+		std::scoped_lock lock(mutex);
+		SetOwnerWorkLocked(owner, priority[static_cast<std::size_t>(owner)], bytes);
 	}
 
 	std::uint64_t GpuMemoryBudget::PendingBytes(Owner excluding) const

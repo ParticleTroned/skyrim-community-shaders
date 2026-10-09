@@ -20,6 +20,21 @@ foreach(_target _test IN ZIP_LISTS _nr_model_targets _nr_model_tests)
 endforeach()
 target_compile_definitions(nr_model_resolution_shader_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 add_controller_test(neural_memory_recovery_test NeuralMemoryRecovery tests/neural_memory_recovery_test.cpp)
+add_controller_test(neural_memory_retirement_test NeuralMemoryRetirement tests/neural_memory_retirement_test.cpp)
+set(_neural_runtime_retirement_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_runtime_retirement")
+add_custom_command(
+    OUTPUT "${_neural_runtime_retirement_dir}/neural_runtime_retirement_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_runtime_retirement_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_runtime_retirement.cmake"
+    DEPENDS src/Features/Upscaling/NeuralRendering/Runtime.cpp
+        tests/extract_neural_runtime_retirement.cmake tests/extract_source_region.cmake
+    VERBATIM)
+add_controller_test(neural_runtime_retirement_test NeuralRuntimeRetirement
+    tests/neural_runtime_retirement_test.cpp)
+target_sources(neural_runtime_retirement_test PRIVATE
+    "${_neural_runtime_retirement_dir}/neural_runtime_retirement_under_test.h")
+target_include_directories(neural_runtime_retirement_test PRIVATE "${_neural_runtime_retirement_dir}")
 add_test(NAME NeuralMemoryRecoveryContract COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_memory_recovery_contract_test.py")
 set_tests_properties(NeuralMemoryRecoveryContract PROPERTIES LABELS "ControllerTests" TIMEOUT 30)

@@ -1811,14 +1811,17 @@ namespace NeuralRendering
 		return ResetFeatureLocked(a_slot);
 	}
 
-	bool Runtime::ResetFeaturesLocked()
+	bool Runtime::ResetFeaturesLocked(bool a_stopOnFailure)
 	{
 		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_)
 			return false;
 		bool succeeded = true;
 		for (std::uint32_t slot = 0; slot < kFeatureSlotCount; ++slot) {
-			if (!ResetFeatureLocked(slot))
+			if (!ResetFeatureLocked(slot)) {
+				if (a_stopOnFailure)
+					return false;
 				succeeded = false;
+			}
 		}
 		if (succeeded)
 			successfulFrames_ = 0;
@@ -1829,6 +1832,28 @@ namespace NeuralRendering
 	{
 		std::scoped_lock lock(mutex_);
 		return ResetFeaturesLocked();
+	}
+
+	bool Runtime::ReleasePassResources()
+	{
+		std::scoped_lock lock(mutex_);
+		if (abandonRequested_.load(std::memory_order_acquire) || abandoned_ ||
+			status_ != RuntimeStatus::Initialized || failureStage_ != RuntimeFailureStage::None)
+			return false;
+		if (!device_ || !module_ || !coreModule_ || !parameters_) {
+			SetFailureLocked(
+				RuntimeStatus::FeatureReleaseFailed,
+				RuntimeFailureStage::FeatureRelease,
+				"Pass resource release requires a fully initialized NGX runtime");
+			return false;
+		}
+		if (!ResetFeaturesLocked(true) || abandonRequested_.load(std::memory_order_acquire))
+			return false;
+
+		// Parameter bindings must not outlive the caller's retired shared textures.
+		static_cast<NVSDK_NGX_Parameter*>(parameters_)->Reset();
+		detail_ = "NGX Feature 18 pass resources released; initialized runtime retained";
+		return true;
 	}
 
 	bool Runtime::ShutdownLocked()

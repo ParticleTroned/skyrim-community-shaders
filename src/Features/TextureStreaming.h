@@ -27,7 +27,7 @@ struct TextureStreaming : Feature
 	void RestoreDefaultSettings() override;
 	/** Thread-safe settings update; GPU work remains owned by the completed-frame service. */
 	void Configure(bool enabled, std::uint32_t maximumDrop);
-	/** Shared observations and logical allocations, never an estimate of physical bytes reclaimed. */
+	/** Explicit diagnostic snapshot; counters and logical capacities do not measure physical VRAM relief. */
 	nlohmann::json GetStatus() const;
 
 private:

@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/MemoryResolutionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 
 #include <array>
@@ -13,6 +14,159 @@ namespace
 	{
 		if (!condition)
 			throw std::runtime_error(message);
+	}
+	NeuralRendering::MemoryBudgetSample ResolutionSample(std::uint64_t time)
+	{
+		using NeuralRendering::MemoryRecoveryPolicy;
+		return { 16384 * MemoryRecoveryPolicy::kMiB, 8192 * MemoryRecoveryPolicy::kMiB, true, 0, false, time };
+	}
+
+	void CheckMemoryResolution()
+	{
+		using namespace NeuralRendering;
+		MemoryResolutionPolicy reset;
+		reset.MarkResourcesRetired(1000);
+		Require(!reset.retired && reset.EffectivePercent(100) == 100, "Disabled retirement changed adaptive state");
+		reset.SetEnabled(true);
+		reset.MarkResourcesRetired(1000);
+		Require(reset.retired && reset.EffectivePercent(100) == 100 && reset.reductions == 0,
+			"An ordinary reset lowered quality without pressure");
+		Require(!reset.WhileWaiting(100, ResolutionSample(5999), 5999, true), "Reset skipped the blocked-admission dwell");
+		Require(!reset.WhileWaiting(100, ResolutionSample(6000), 6000, false), "Reset lowered quality despite healthy admission");
+		Require(reset.WhileWaiting(100, ResolutionSample(6000), 6000, true) && reset.EffectivePercent(100) == 90,
+			"Retired reset capacity prevented a smaller blocked retry");
+
+		MemoryResolutionPolicy policy;
+		Require(!policy.enabled && policy.EffectivePercent(67) == 67, "Automatic reduction must be opt-in");
+		Require(!policy.OnRetired(67, 0) && !policy.WhileWaiting(67, ResolutionSample(5000), 5000, true),
+			"Disabled adaptation changed the requested quality");
+		for (std::uint32_t requested = 30; requested <= 100; ++requested) {
+			MemoryResolutionPolicy item;
+			item.SetEnabled(true);
+			Require(item.EffectivePercent(requested) == requested, "Enabling adaptation changed quality without pressure");
+			Require(item.OnRetired(requested, 0) == (requested > 30), "Retirement changed an unexpected scale");
+			Require(item.EffectivePercent(requested) == std::max(30u, requested - 10), "Reduction ignored the actual requested scale");
+			for (std::uint64_t time = 5000; time <= 50000; time += 5000)
+				(void)item.WhileWaiting(requested, ResolutionSample(time), time, true);
+			Require(item.EffectivePercent(requested) == 30, "Repeated pressure escaped the minimum model resolution");
+			Require(!item.WhileWaiting(requested, ResolutionSample(55000), 55000, true), "Minimum scale reported another reduction");
+		}
+		policy.SetEnabled(true);
+		for (const auto invalid : { 0u, 29u, 101u, std::numeric_limits<std::uint32_t>::max() }) {
+			Require(policy.EffectivePercent(invalid) == invalid && !policy.OnRetired(invalid, 0),
+				"Adaptive policy concealed invalid settings from renderer validation");
+		}
+		Require(!policy.WhileWaiting(100, ResolutionSample(5000), 5000, true), "Reduced capacity before retirement");
+		Require(policy.OnRetired(100, 1000) && policy.EffectivePercent(100) == 90, "Safe retirement did not select a smaller retry");
+		Require(!policy.WhileWaiting(100, ResolutionSample(5999), 5999, true), "Waiting reduction ignored its dwell");
+		Require(!policy.WhileWaiting(100, ResolutionSample(6000), 6000, false), "Healthy admission reduced quality");
+		Require(!policy.WhileWaiting(100, ResolutionSample(5499), 6000, true), "Stale sample lowered the waiting scale");
+		Require(!policy.WhileWaiting(100, ResolutionSample(6001), 6000, true), "Future sample lowered the waiting scale");
+		Require(policy.WhileWaiting(100, ResolutionSample(6000), 6000, true) && policy.EffectivePercent(100) == 80,
+			"Blocked fresh admission did not select the next smaller retry");
+		Require(!policy.WhileWaiting(100, ResolutionSample(6000), 6000, true), "One waiting sample reduced multiple steps");
+		Require(!policy.WhileWaiting(100, ResolutionSample(5999), 5999, true), "Clock reversal skipped waiting dwell");
+		Require(policy.EffectivePercent(67) == 67, "Pressure ceiling exceeded a lower requested setting");
+		Require(policy.OnRetired(67, 7000) && policy.EffectivePercent(67) == 57, "Pressure step used the ceiling instead of actual quality");
+		policy.SetEnabled(false);
+		Require(policy.EffectivePercent(67) == 67 && policy.ceilingPercent == 100 && !policy.healthyWindow,
+			"Disabling adaptation retained its quality override");
+		policy.SetEnabled(true);
+		Require(policy.EffectivePercent(100) == 100, "Explicit re-enable retained the preceding pressure episode");
+
+		Require(policy.OnRetired(67, 0), "Restoration setup failed");
+		for (std::uint64_t time = 0; time < MemoryResolutionPolicy::kRestoreWindowMs; time += 250)
+			Require(!policy.ObserveSuccess(67, ResolutionSample(time), time, 0, false, true), "Quality restored before sustained active headroom");
+		Require(policy.ObserveSuccess(67, ResolutionSample(30000), 30000, 0, false, true) && policy.EffectivePercent(67) == 67,
+			"Sustained active headroom did not restore the requested quality");
+		Require(!policy.ObserveSuccess(67, ResolutionSample(30250), 30250, 0, false, true), "Restoration exceeded requested quality");
+
+		MemoryResolutionPolicy rejected;
+		rejected.SetEnabled(true);
+		Require(rejected.OnRetired(100, 0), "Rejected restoration setup failed");
+		for (std::uint64_t time = 0; time < 30000; time += 250)
+			(void)rejected.ObserveSuccess(100, ResolutionSample(time), time, 0, false, true);
+		Require(rejected.ObserveSuccess(100, ResolutionSample(30000), 30000, 0, false, true) && rejected.EffectivePercent(100) == 100,
+			"Healthy restoration did not propose a larger candidate");
+		const MemoryBudgetSample replacementPeak{ 8192 * MemoryRecoveryPolicy::kMiB, 5500 * MemoryRecoveryPolicy::kMiB, true, 0, false, 30250 };
+		MemoryRecoveryPolicy workingRecovery;
+		auto preview = workingRecovery;
+		Require(!preview.Admit(replacementPeak, 2048 * MemoryRecoveryPolicy::kMiB, 30250), "Full replacement peak unexpectedly fit");
+		Require(workingRecovery.phase == MemoryRecoveryPhase::Ready && workingRecovery.suspensions == 0,
+			"Candidate preflight suspended the working recovery policy");
+		Require(rejected.RejectRestoration(90) && rejected.EffectivePercent(100) == 90 && !rejected.healthyWindow,
+			"Rejected restoration did not retain working quality");
+		Require(workingRecovery.Admit(replacementPeak, 0, 30250) && workingRecovery.phase == MemoryRecoveryPhase::Ready,
+			"Rejected growth prevented the healthy existing model from rendering");
+		for (std::uint64_t time = 30500; time < 60500; time += 250)
+			Require(!rejected.ObserveSuccess(100, ResolutionSample(time), time, 0, false, true), "Rejected growth retried without earning another healthy window");
+		Require(rejected.ObserveSuccess(100, ResolutionSample(60500), 60500, 0, false, true), "Rejected growth could never be reconsidered");
+		for (const auto invalid : { 0u, 29u, 100u, 101u, std::numeric_limits<std::uint32_t>::max() })
+			Require(!rejected.RejectRestoration(invalid) && rejected.EffectivePercent(100) == 100,
+				"Invalid restoration rejection changed quality");
+		rejected.SetEnabled(false);
+		Require(!rejected.RejectRestoration(90) && rejected.EffectivePercent(100) == 100, "Disabled restoration changed requested quality");
+
+		MemoryResolutionPolicy delayed;
+		delayed.SetEnabled(true);
+		Require(delayed.OnRetired(100, 0), "Delayed sample test setup failed");
+		Require(!delayed.ObserveSuccess(100, ResolutionSample(0), 500, 0, false, true) && delayed.healthySinceMs == 500,
+			"A budget sample predating successful rendering counted as active recovery");
+		for (std::uint64_t time = 750; time < 30500; time += 250)
+			Require(!delayed.ObserveSuccess(100, ResolutionSample(time == 750 ? 500 : time), time, 0, false, true), "Delayed sample restored quality before active continuity");
+		Require(delayed.ObserveSuccess(100, ResolutionSample(30500), 30500, 0, false, true), "Delayed sample continuity never restored quality");
+		MemoryResolutionPolicy gradual;
+		gradual.SetEnabled(true);
+		Require(gradual.OnRetired(100, 0) && gradual.OnRetired(100, 1), "Gradual restoration setup failed");
+		for (std::uint64_t time = 0; time <= 60000; time += 250) {
+			const bool changed = gradual.ObserveSuccess(100, ResolutionSample(time), time, 0, false, true);
+			Require(changed == (time == 30000), "Restoration reused a previous healthy window");
+		}
+		Require(gradual.EffectivePercent(100) == 90 && gradual.ObserveSuccess(100, ResolutionSample(60250), 60250, 0, false, true) &&
+					gradual.EffectivePercent(100) == 100,
+			"Each restoration step must earn a complete new healthy window");
+
+		for (std::uint32_t blocker = 0; blocker < 8; ++blocker) {
+			MemoryResolutionPolicy interrupted;
+			interrupted.SetEnabled(true);
+			Require(interrupted.OnRetired(100, 0), "Interrupted restoration setup failed");
+			for (std::uint64_t time = 0; time <= 15000; time += 250)
+				Require(!interrupted.ObserveSuccess(100, ResolutionSample(time), time, 0, false, true), "Restoration advanced early");
+			auto blocked = ResolutionSample(15250);
+			if (blocker == 0)
+				blocked.valid = false;
+			if (blocker == 1)
+				blocked.usageBytes = blocked.budgetBytes * 3 / 4;
+			if (blocker == 2) {
+				blocked.budgetBytes = 4096 * MemoryRecoveryPolicy::kMiB;
+				blocked.usageBytes = 2560 * MemoryRecoveryPolicy::kMiB;
+			}
+			if (blocker == 3)
+				blocked.sampledAtMs = 14749;
+			if (blocker == 4)
+				blocked.sampledAtMs = 15251;
+			Require(!interrupted.ObserveSuccess(100, blocked, 15250, blocker == 5 ? 1 : 0, blocker == 6, blocker != 7) &&
+						!interrupted.healthyWindow,
+				"Invalid, pressured, reserved, conserving or recovering input did not break restoration continuity");
+			for (std::uint64_t time = 15500; time < 45500; time += 250)
+				Require(!interrupted.ObserveSuccess(100, ResolutionSample(time), time, 0, false, true), "Interrupted headroom counted toward restoration");
+			Require(interrupted.ObserveSuccess(100, ResolutionSample(45500), 45500, 0, false, true), "Fresh restored continuity never recovered quality");
+		}
+
+		MemoryResolutionPolicy gaps;
+		gaps.SetEnabled(true);
+		Require(gaps.OnRetired(100, 0), "Gap test setup failed");
+		for (std::uint64_t time = 0; time <= 15000; time += 250)
+			(void)gaps.ObserveSuccess(100, ResolutionSample(time), time, 0, false, true);
+		Require(!gaps.ObserveSuccess(100, ResolutionSample(20000), 20000, 0, false, true) && gaps.healthySinceMs == 20000,
+			"Inactive rendering counted toward the restoration window");
+		for (std::uint64_t time = 20001; time <= 20500; ++time)
+			Require(!gaps.ObserveSuccess(100, ResolutionSample(20000), time, 0, false, true), "Repeated samples advanced restoration");
+		Require(gaps.lastHealthySampleMs == 20000, "Duplicate budget samples gained observation time");
+		Require(!gaps.ObserveSuccess(100, ResolutionSample(19999), 20001, 0, false, true) && gaps.healthySinceMs == 20001,
+			"Reversed observation time retained an old healthy window");
+		gaps.ClearHealthyWindow();
+		Require(!gaps.healthyWindow && gaps.EffectivePercent(100) == 90, "History reset erased pressure quality memory");
 	}
 	void CheckGeometry()
 	{
@@ -174,6 +328,7 @@ int main()
 			const auto extent = BuildModelResolutionExtent(100, 100, percent);
 			Require(extent.width == 0 && extent.height == 0, "Invalid model scale reached allocation");
 		}
+		CheckMemoryResolution();
 		CheckGeometry();
 		CheckCentralAreaGeometry();
 		std::cout << "PASS: NR model scale boundaries, all routes, conservative extents and overflow rejection\n";

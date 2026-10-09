@@ -140,6 +140,9 @@ namespace NeuralRendering
 
 		bool ResetFeature(std::uint32_t a_slot);
 		bool ResetFeatures();
+		/** Releases features and parameter bindings after the caller drains both APIs.
+		 *  Retains only a healthy initialized backend; failure forbids warm reuse. */
+		[[nodiscard]] bool ReleasePassResources();
 		bool Shutdown();
 		/** Permanently detaches unsafe NGX ownership without releasing it. */
 		void AbandonUnsafe() noexcept;
@@ -195,7 +198,7 @@ namespace NeuralRendering
 
 		bool ProbeLocked(const std::filesystem::path& a_explicitPath);
 		bool ResetFeatureLocked(std::uint32_t a_slot);
-		bool ResetFeaturesLocked();
+		bool ResetFeaturesLocked(bool a_stopOnFailure = false);
 		bool ShutdownLocked();
 		void AbandonLocked() noexcept;
 		void LogOnceLocked(bool& a_emitted, const char* a_operation, bool a_succeeded);

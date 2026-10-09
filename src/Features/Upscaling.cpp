@@ -334,71 +334,72 @@ namespace FSRTemporalTuningPolicy
 	}
 }
 
-#define UPSCALING_SETTINGS_JSON_FIELDS(OP)    \
-	OP(fsrSharedGuideInputs)                  \
-	OP(fsrTemporalTuning)                     \
-	OP(motionAdaptiveRCAS)                    \
-	OP(motionSharpnessAdjustment)             \
-	OP(motionSharpnessThreshold)              \
-	OP(motionSharpnessCap)                    \
-	OP(upscaleMethod)                         \
-	OP(upscaleMethodNoDLSS)                   \
-	OP(qualityMode)                           \
-	OP(dlssPreset)                            \
-	OP(renderScaleMode)                       \
-	OP(renderScaleLinkedToUpscaling)          \
-	OP(perfMode)                              \
-	OP(frameLimitMode)                        \
-	OP(frameGenerationMode)                   \
-	OP(frameGenerationForceEnable)            \
-	OP(frameGenerationAllowInMenus)           \
-	OP(streamlineLogLevel)                    \
-	OP(sharpnessFSR)                          \
-	OP(sharpnessDLSS)                         \
-	OP(dlssSharpener)                         \
-	OP(fsr4RuntimeEnable)                     \
-	OP(fsr4RuntimeSelectionSchemaVersion)     \
-	OP(foveatedVendorDispatch)                \
-	OP(neuralRenderingEnabled)                \
-	OP(neuralRenderingMode)                   \
-	OP(neuralRenderingFovOnly)                \
-	OP(neuralRenderingRenderscaleFov)         \
-	OP(neuralRenderingInsertionPoint)         \
-	OP(neuralRenderingBatchedStereo)          \
-	OP(neuralRenderingDirectCommit)           \
-	OP(neuralRenderingModelResolutionPercent) \
-	OP(neuralRenderingCentralAreaPercent)     \
-	OP(neuralRenderingCentralFeatherPixels)   \
-	OP(neuralRenderingPreset)                 \
-	OP(neuralRenderingIntensity)              \
-	OP(neuralRenderingLocalTone)              \
-	OP(neuralRenderingLocalStructure)         \
-	OP(neuralRenderingSkinStructure)          \
-	OP(neuralRenderingStyle)                  \
-	OP(neuralRenderingAutoMask)               \
-	OP(neuralRenderingUICorrection)           \
-	OP(neuralRenderingSingleSubrectScale)     \
-	OP(neuralRenderingBlendFeather)           \
-	OP(foveatedOuterBlendFeather)             \
-	OP(foveatedCenterArea)                    \
-	OP(foveatedCenterHorizontalScale)         \
-	OP(foveatedBlendCurveEnabled)             \
-	OP(foveatedBlendFalloff)                  \
-	OP(foveatedLeftEyeMaskOffsetX)            \
-	OP(foveatedLeftEyeMaskOffsetY)            \
-	OP(foveatedRightEyeMaskOffsetX)           \
-	OP(foveatedRightEyeMaskOffsetY)           \
-	OP(periphery_taa_center_area)             \
-	OP(foveatedPeripheryMaskVisualization)    \
-	OP(foveatedCalibrationReference)          \
-	OP(foveatedAutomaticMaskScaling)          \
-	OP(periphery_taa_enable)                  \
-	OP(periphery_taa_outer_scale)             \
-	OP(periphery_taa_center_blend_feather)    \
-	OP(reflexLowLatencyMode)                  \
-	OP(reflexLowLatencyBoost)                 \
-	OP(reflexUseMarkersToOptimize)            \
-	OP(reflexUseFPSLimit)                     \
+#define UPSCALING_SETTINGS_JSON_FIELDS(OP)       \
+	OP(fsrSharedGuideInputs)                     \
+	OP(fsrTemporalTuning)                        \
+	OP(motionAdaptiveRCAS)                       \
+	OP(motionSharpnessAdjustment)                \
+	OP(motionSharpnessThreshold)                 \
+	OP(motionSharpnessCap)                       \
+	OP(upscaleMethod)                            \
+	OP(upscaleMethodNoDLSS)                      \
+	OP(qualityMode)                              \
+	OP(dlssPreset)                               \
+	OP(renderScaleMode)                          \
+	OP(renderScaleLinkedToUpscaling)             \
+	OP(perfMode)                                 \
+	OP(frameLimitMode)                           \
+	OP(frameGenerationMode)                      \
+	OP(frameGenerationForceEnable)               \
+	OP(frameGenerationAllowInMenus)              \
+	OP(streamlineLogLevel)                       \
+	OP(sharpnessFSR)                             \
+	OP(sharpnessDLSS)                            \
+	OP(dlssSharpener)                            \
+	OP(fsr4RuntimeEnable)                        \
+	OP(fsr4RuntimeSelectionSchemaVersion)        \
+	OP(foveatedVendorDispatch)                   \
+	OP(neuralRenderingEnabled)                   \
+	OP(neuralRenderingMode)                      \
+	OP(neuralRenderingFovOnly)                   \
+	OP(neuralRenderingRenderscaleFov)            \
+	OP(neuralRenderingInsertionPoint)            \
+	OP(neuralRenderingBatchedStereo)             \
+	OP(neuralRenderingDirectCommit)              \
+	OP(neuralRenderingModelResolutionPercent)    \
+	OP(neuralRenderingPressureResolutionEnabled) \
+	OP(neuralRenderingCentralAreaPercent)        \
+	OP(neuralRenderingCentralFeatherPixels)      \
+	OP(neuralRenderingPreset)                    \
+	OP(neuralRenderingIntensity)                 \
+	OP(neuralRenderingLocalTone)                 \
+	OP(neuralRenderingLocalStructure)            \
+	OP(neuralRenderingSkinStructure)             \
+	OP(neuralRenderingStyle)                     \
+	OP(neuralRenderingAutoMask)                  \
+	OP(neuralRenderingUICorrection)              \
+	OP(neuralRenderingSingleSubrectScale)        \
+	OP(neuralRenderingBlendFeather)              \
+	OP(foveatedOuterBlendFeather)                \
+	OP(foveatedCenterArea)                       \
+	OP(foveatedCenterHorizontalScale)            \
+	OP(foveatedBlendCurveEnabled)                \
+	OP(foveatedBlendFalloff)                     \
+	OP(foveatedLeftEyeMaskOffsetX)               \
+	OP(foveatedLeftEyeMaskOffsetY)               \
+	OP(foveatedRightEyeMaskOffsetX)              \
+	OP(foveatedRightEyeMaskOffsetY)              \
+	OP(periphery_taa_center_area)                \
+	OP(foveatedPeripheryMaskVisualization)       \
+	OP(foveatedCalibrationReference)             \
+	OP(foveatedAutomaticMaskScaling)             \
+	OP(periphery_taa_enable)                     \
+	OP(periphery_taa_outer_scale)                \
+	OP(periphery_taa_center_blend_feather)       \
+	OP(reflexLowLatencyMode)                     \
+	OP(reflexLowLatencyBoost)                    \
+	OP(reflexUseMarkersToOptimize)               \
+	OP(reflexUseFPSLimit)                        \
 	OP(reflexFPSLimit)
 
 void to_json(json& a_json, const Upscaling::Settings& a_settings)
@@ -6679,6 +6680,7 @@ FOV area saved compares mask coverage, including feather support, with the full 
 		add(a_settings.neuralRenderingBatchedStereo);
 		add(a_settings.neuralRenderingDirectCommit);
 		add(NeuralRendering::EffectiveModelResolutionPercent(mode, a_settings.neuralRenderingModelResolutionPercent));
+		add(a_settings.neuralRenderingPressureResolutionEnabled);
 		add(a_settings.neuralRenderingCentralAreaPercent);
 		if (a_settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent)
 			add(a_settings.neuralRenderingCentralFeatherPixels);
@@ -18545,6 +18547,8 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 		Util::Text::WrappedError("Neural Rendering cannot recover safely in this session. Restart the game to try again.");
 	} else if (status.failureLatched) {
 		Util::Text::WrappedError("Neural Rendering is paused after an error. Use Reset Neural Rendering Runtime below to try again. Your settings are retained.");
+	} else if (IsNeuralRenderingRequested() && status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Probation) {
+		Util::Text::WrappedWarning("Neural Rendering is active while memory stability is being checked.");
 	} else if (IsNeuralRenderingRequested() && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready) {
 		const char* recoveryStage = "rebuilding resources and resetting history";
 		if (status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Retiring)
@@ -18556,6 +18560,8 @@ void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
 	} else if (IsNeuralRenderingRequested() && status.memoryConservation.active) {
 		Util::Text::WrappedWarning("Neural Rendering memory saving is active: releasing unused resources and oversized buffers. Image quality is unchanged. Normal caching will resume automatically when GPU memory pressure eases.");
 	}
+	if (IsNeuralRenderingRequested() && status.pressureResolutionEnabled && status.effectiveModelResolutionPercent < settings.neuralRenderingModelResolutionPercent)
+		ImGui::TextWrapped("NR resolution under memory pressure: %u%% (requested %u%%).", status.effectiveModelResolutionPercent, settings.neuralRenderingModelResolutionPercent);
 	if ((status.failureLatched || status.quarantined) && !status.detail.empty())
 		ImGui::TextWrapped("Reason: %s", status.detail.c_str());
 	if (runtimeInstalled && (a_showDiagnostics || status.failureLatched) && !status.quarantined) {
@@ -18672,6 +18678,9 @@ namespace
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Scales NR processing in every mode independently of scene resolution, upscaling and enhancement strength. Lower values may soften fine detail. Applies when released; 100% uses the original NR resolution.");
+		ImGui::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted("Temporarily reduces NR resolution in 10-point steps, down to 30%, when GPU memory is scarce. Restores it gradually after sustained headroom. The slider remains your desired resolution; scene resolution, texture detail and enhancement strength are retained.");
 	}
 
 	void DrawNeuralCentralAreaSettings(Upscaling::Settings& settings)
@@ -20845,7 +20854,7 @@ bool Upscaling::HandleNeuralRenderingSettingsTransition(
 
 	NeuralRendering::CharacterRendering::Instance().Invalidate();
 	neuralTemporalAdmissionLatch.store(0, std::memory_order_release);
-	const bool resetSucceeded = neuralRenderer.Reset();
+	const bool resetSucceeded = neuralRenderer.Reset(false, NeuralRendering::BackendRetirementPolicy::RetainHealthyBackend);
 	if (a_backendResetSucceeded)
 		*a_backendResetSucceeded = resetSucceeded;
 	if (!resetSucceeded) {
@@ -20881,7 +20890,7 @@ bool Upscaling::IsTextureStreamingTransitionActive() const noexcept
 	return postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
 	       pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 	       perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-	       (globals::game::isVR && ((transition != VRRenderScaleTransitionState::Idle && transition != VRRenderScaleTransitionState::Active) ||
+	       (globals::game::isVR && (IsVRRenderScaleTransitionPending(transition) ||
 									   deferredVRRenderScalePostLoadRecoveryEpoch.load(std::memory_order_acquire) != 0 ||
 									   vrRenderScaleMemoryTrimPending.load(std::memory_order_acquire))) ||
 	       IsNeuralRenderingInsertionTransitionBlocked();
@@ -42814,7 +42823,7 @@ bool Upscaling::EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3
 			return false;
 		InvalidateVRRenderScaleStereoPresentationPacket(true);
 		if (texture && texture->resource &&
-			!NeuralRendering::Renderer::Instance().Reset()) {
+			!NeuralRendering::Renderer::Instance().Reset(false, NeuralRendering::BackendRetirementPolicy::RetainHealthyBackend)) {
 			static bool loggedUnsafeNeuralTextureReplacement = false;
 			LogWarnOnceFmt(
 				loggedUnsafeNeuralTextureReplacement,
@@ -51083,6 +51092,7 @@ void Upscaling::SetupRenderTargetResources()
 
 void Upscaling::Reset()
 {
+	NeuralRendering::Renderer::Instance().ServiceRetainedBackend(settings.neuralRenderingEnabled);
 	if (!globals::game::isVR)
 		return;
 
@@ -63898,7 +63908,7 @@ bool Upscaling::RecordVRRenderScaleTransitionPreparing(const VRRenderScaleDesire
 
 void Upscaling::StoreVRRenderScaleTransitionStateLocked(VRRenderScaleTransitionState a_state) noexcept
 {
-	Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::RenderScale, a_state != VRRenderScaleTransitionState::Idle);
+	Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::RenderScale, IsVRRenderScaleTransitionPending(a_state));
 	vrRenderScaleTransitionController.state = a_state;
 	vrRenderScaleTransitionState.store(a_state, std::memory_order_release);
 }

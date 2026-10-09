@@ -3,6 +3,7 @@
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
 #include "MemoryConservationPolicy.h"
+#include "MemoryRetirementPolicy.h"
 #include "ModelResolutionPolicy.h"
 #include "RoiDescriptor.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -153,6 +154,9 @@ namespace NeuralRendering
 		std::uint64_t generation = 0;
 		InsertionPoint insertionPoint = kDefaultInsertionPoint;
 		std::uint32_t modelResolutionPercent = 100;
+		bool pressureResolutionEnabled = false;
+		std::uint32_t requestedModelResolutionPercent = 100;
+		std::uint32_t effectiveModelResolutionPercent = 100;
 		bool modelSharedInputs = false;
 		std::uint32_t modelSourceWidth = 0, modelSourceHeight = 0;
 		std::uint32_t modelWidth = 0, modelHeight = 0;
@@ -187,6 +191,7 @@ namespace NeuralRendering
 		RendererPerformanceTelemetry performance{};
 		MemoryRecoveryPolicy memoryRecovery{};
 		MemoryConservationPolicy memoryConservation{};
+		MemoryRetirementPolicy memoryRetirement{};
 	};
 
 	struct RendererApplyArgs
@@ -214,6 +219,7 @@ namespace NeuralRendering
 		bool providerBlending = false;
 		ComputeSubrect actorSelectionSupport{};
 		std::uint32_t modelResolutionPercent = 100;
+		bool pressureResolutionEnabled = false;
 		CentralArea centralArea{};
 		/** Original sampling basis retained by independently scaled temporal inputs. */
 		std::optional<ModelResolutionHistory> modelResolutionHistory;
@@ -291,8 +297,11 @@ namespace NeuralRendering
 			const std::array<RendererApplyArgs, 2>& a_args,
 			RendererApplyOutcome* a_outcome = nullptr);
 
-		/** Performs a bounded idle wait before releasing runtime and interop ownership. */
-		bool Reset(bool a_clearTransportRejections = false);
+		/** Drains both APIs; optional retention applies only to a completely healthy backend. */
+		bool Reset(bool a_clearTransportRejections = false,
+			BackendRetirementPolicy a_policy = BackendRetirementPolicy::ReleaseBackend);
+		/** End-of-frame maintenance is inactive unless an empty initialized backend is retained. */
+		void ServiceRetainedBackend(bool a_requested);
 		void ResetShaderCache();
 
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;

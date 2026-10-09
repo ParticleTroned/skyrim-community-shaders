@@ -92,6 +92,7 @@ namespace globals
 				bool neuralCharacterCreaturesEnabled = true, neuralCharacterAnimalsEnabled = true, neuralCharacterOtherActorsEnabled = true;
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
+				bool neuralRenderingPressureResolutionEnabled = false;
 				unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = 0;
 				float neuralRenderingIntensity = 1.0f, neuralRenderingLocalTone = 1.0f;
@@ -520,6 +521,8 @@ namespace NeuralRendering
 		struct Snapshot
 		{
 			bool quarantined = false, failureLatched = false;
+			bool pressureResolutionEnabled = false;
+			unsigned effectiveModelResolutionPercent = 100;
 			std::string detail;
 			MemoryRecoveryPolicy memoryRecovery{};
 			MemoryConservationPolicy memoryConservation{};
@@ -612,6 +615,10 @@ int main()
 	};
 	{
 		Upscaling::Settings settings;
+		require(!settings.neuralRenderingPressureResolutionEnabled, "Automatic pressure resolution must be opt-in");
+		ImGui::Clear("Lower NR resolution under memory pressure");
+		DrawNeuralModelResolutionSettings(settings);
+		require(settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingModelResolutionPercent == 100, "Pressure toggle changed requested model resolution");
 		ImGui::Clear("NR Model Resolution");
 		ImGui::sliderEditValue = 75;
 		ImGui::itemActive = true;

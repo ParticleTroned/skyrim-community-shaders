@@ -1,16 +1,19 @@
 #include "Renderer.h"
 #include "DevelopmentDiagnostics.h"
+#include "Globals.h"
 #include "GpuPass.h"
 
 #include "CapacityFallback.h"
 #include "ColorPipeline.h"
 #include "ComputeStateGuard.h"
 #include "D3D12Interop.h"
+#include "MemoryResolutionPolicy.h"
 #include "ModelResolution.h"
 #include "PipelinePolicy.h"
 #include "Utils/ComIdentity.h"
 #include "Utils/D3D.h"
 #include "Utils/GpuMemoryBudget.h"
+#include "Utils/RendererContextAccess.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "BuildProvenance.h"
@@ -291,6 +294,7 @@ namespace NeuralRendering
 				left.insertionPoint == right.insertionPoint &&
 				left.featureUpscaling == right.featureUpscaling &&
 				left.modelResolutionPercent == right.modelResolutionPercent &&
+				left.pressureResolutionEnabled == right.pressureResolutionEnabled &&
 				left.renderingMode == right.renderingMode &&
 				left.providerBlending == right.providerBlending &&
 				left.reset == right.reset &&
@@ -670,7 +674,12 @@ namespace NeuralRendering
 			std::span<const RendererApplyArgs> a_args,
 			RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
 		bool ApplyRegionBatchLocked(std::span<const RendererApplyArgs> a_args, RendererApplyOutcome& a_outcome, bool a_memoryAdmitted = false);
-		bool ResetLocked(bool a_resetShader, bool a_destruction);
+		bool ResetLocked(bool a_resetShader, bool a_destruction,
+			BackendRetirementPolicy a_policy = BackendRetirementPolicy::ReleaseBackend);
+		bool ServiceRetainedBackendLocked(bool a_requested = true);
+		MemoryRetirementPolicy memoryRetirement_{};
+		std::atomic_bool retainedBackendPending_{ false };
+		std::uint64_t nextRetainedBackendCheckMs_ = 0;
 		bool RetireMemoryPressureLocked();
 		void FinishMemoryRecoveryLocked(bool a_succeeded, RendererApplyOutcome& a_outcome);
 		std::optional<std::uint64_t> EstimateAdditionalMemoryLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>) const;
@@ -680,6 +689,26 @@ namespace NeuralRendering
 		bool ReclaimMemoryLocked(std::span<const RendererApplyArgs>, std::span<const ValidatedResources>, std::uint64_t a_nowMs, bool& a_reclaimed);
 		MemoryConservationPolicy memoryConservation_{};
 		MemoryRecoveryPolicy memoryRecovery_{};
+		MemoryResolutionPolicy memoryResolution_{};
+		std::array<std::optional<ResourceKey>, Runtime::kFeatureSlotCount> memoryCapacityKeys_{};
+		struct ResolutionLatch
+		{
+			std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+			std::uint32_t sourceFrame = std::numeric_limits<std::uint32_t>::max();
+			std::uint32_t percent = 100;
+		};
+		std::array<ResolutionLatch, Runtime::kFeatureSlotCount / kEyeCount> resolutionLatches_{};
+		std::array<std::uint32_t, Runtime::kFeatureSlotCount> successfulResolutionPercents_{};
+		std::uint32_t restorationPreviousPercent_ = 0;
+		struct ResolutionRestoration
+		{
+			bool active = false, admitted = false, rejected = false;
+			std::uint32_t workingPercent = 0;
+		} resolutionRestoration_{};
+		bool RetryWorkingResolutionLocked(std::span<RendererApplyArgs> args);
+		void FinishMemoryResolutionLocked(std::span<const RendererApplyArgs> args, bool succeeded);
+		void PrepareMemoryResolutionLocked(std::span<RendererApplyArgs> args);
+		void ResolutionChangedLocked();
 		MemoryBudgetSample memorySample_{};
 		Util::GpuMemoryBudget::Reservation memoryReservation_;
 		ComPtr<ID3D11Device> memorySampleDevice_;
@@ -689,8 +718,17 @@ namespace NeuralRendering
 			if (memoryReservation_)
 				Util::GpuMemoryBudget::Get().Sample(memorySampleDevice_.Get(), 0, true);
 			memoryReservation_.Reset();
-			Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::NeuralRendering,
-				memoryRecovery_.phase != MemoryRecoveryPhase::Ready);
+			auto& budget = Util::GpuMemoryBudget::Get();
+			if (failureLatched_ || quarantined_) {
+				budget.SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering, false, 0);
+				return;
+			}
+			const auto phase = memoryRecovery_.phase;
+			budget.SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering,
+				phase == MemoryRecoveryPhase::Retiring || phase == MemoryRecoveryPhase::Rebuilding,
+				phase == MemoryRecoveryPhase::Waiting   ? memoryRecovery_.admissionDemandBytes :
+				phase == MemoryRecoveryPhase::Probation ? MemoryRecoveryPolicy::kMinimumHeadroom :
+														  0);
 		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -703,6 +741,7 @@ namespace NeuralRendering
 		{
 			RefreshInteropTelemetryLocked();
 			snapshot_.memoryConservation = memoryConservation_;
+			snapshot_.memoryRetirement = memoryRetirement_;
 			return snapshot_;
 		}
 		bool IsFailureLatchedLocked() const noexcept { return failureLatched_; }
@@ -850,7 +889,8 @@ namespace NeuralRendering
 		bool TeardownBackendLocked(
 			bool a_resetShader,
 			bool a_destruction,
-			bool a_countApplyFailure, const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
+			bool a_countApplyFailure, const std::shared_ptr<ExecutionEvidence>& a_evidence = {},
+			BackendRetirementPolicy a_policy = BackendRetirementPolicy::ReleaseBackend);
 		void AbandonRuntimeOwnershipNoexcept() noexcept;
 		void AbandonSlotsLocked() noexcept;
 		void QuarantineAfterUnexpectedFailureLocked(
@@ -1567,6 +1607,11 @@ namespace NeuralRendering
 		} else if (a_latch) {
 			failureLatched_ = true;
 		}
+		if (failureLatched_ || quarantined_) {
+			memoryRetirement_.Released();
+			retainedBackendPending_.store(false, std::memory_order_relaxed);
+			Util::GpuMemoryBudget::Get().SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering, false, 0);
+		}
 
 		snapshot_.failureStage = a_stage;
 		snapshot_.failureFeatureSlot = a_slot;
@@ -1626,8 +1671,16 @@ namespace NeuralRendering
 	bool Renderer::State::TeardownBackendLocked(
 		bool a_resetShader,
 		bool a_destruction,
-		bool a_countApplyFailure, const std::shared_ptr<ExecutionEvidence>& a_evidence)
+		bool a_countApplyFailure, const std::shared_ptr<ExecutionEvidence>& a_evidence,
+		BackendRetirementPolicy a_policy)
 	{
+		retainedBackendPending_.store(false, std::memory_order_relaxed);
+		const bool retainBackend = a_policy == BackendRetirementPolicy::RetainHealthyBackend &&
+		                           !a_resetShader && !a_destruction && !failureLatched_ && !quarantined_ &&
+		                           runtimeReady_ && interop_.IsInitialized() && Runtime::Instance().Status() == RuntimeStatus::Initialized &&
+		                           device_ && SUCCEEDED(device_->GetDeviceRemovedReason()) && SUCCEEDED(GetDeviceRemovalReasonLocked(S_OK));
+		// No admitted work has touched an already-empty backend since its completed drain.
+		const bool alreadyRetained = retainBackend && memoryRetirement_.backendRetained;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		LifetimeGuard lifetime(*this, LifetimeOperation::BackendRetirement);
 		if (lifetime.enabled) {
@@ -1647,7 +1700,7 @@ namespace NeuralRendering
 			return false;
 		}
 
-		if (interop_.IsRecording() && !interop_.AbortD3D12()) {
+		if (!alreadyRetained && interop_.IsRecording() && !interop_.AbortD3D12()) {
 			Increment(snapshot_.counters.resetFailures);
 			const bool failed = FailLocked(
 				RendererStage::CommandEnd,
@@ -1661,7 +1714,7 @@ namespace NeuralRendering
 				AbandonSlotsLocked();
 			return failed;
 		}
-		if (interop_.IsInitialized() && !interop_.WaitForIdle(a_evidence)) {
+		if (!alreadyRetained && interop_.IsInitialized() && !interop_.WaitForIdle(a_evidence)) {
 			Increment(snapshot_.counters.resetFailures);
 			const bool failed = FailLocked(
 				RendererStage::ResetWait,
@@ -1677,7 +1730,7 @@ namespace NeuralRendering
 		}
 
 		auto& runtime = Runtime::Instance();
-		if (runtimeReady_ && !runtime.ResetFeatures()) {
+		if (!alreadyRetained && runtimeReady_ && !(retainBackend ? runtime.ReleasePassResources() : runtime.ResetFeatures())) {
 			Increment(snapshot_.counters.resetFailures);
 			const bool failed = FailLocked(
 				RendererStage::RuntimeReset,
@@ -1691,7 +1744,7 @@ namespace NeuralRendering
 				AbandonSlotsLocked();
 			return failed;
 		}
-		if (runtimeTouched_ && !runtime.Shutdown()) {
+		if (!retainBackend && runtimeTouched_ && !runtime.Shutdown()) {
 			Increment(snapshot_.counters.resetFailures);
 			const bool failed = FailLocked(
 				RendererStage::RuntimeReset,
@@ -1705,7 +1758,7 @@ namespace NeuralRendering
 				AbandonSlotsLocked();
 			return failed;
 		}
-		if (interop_.IsInitialized() && !interop_.Shutdown(a_evidence)) {
+		if (!retainBackend && interop_.IsInitialized() && !interop_.Shutdown(a_evidence)) {
 			Increment(snapshot_.counters.resetFailures);
 			const bool failed = FailLocked(
 				RendererStage::InteropShutdown,
@@ -1723,8 +1776,10 @@ namespace NeuralRendering
 		slots_ = {};
 		colorPipeline_.Reset();
 		modelResolution_.Reset();
-		device_.Reset();
-		context_.Reset();
+		if (!retainBackend) {
+			device_.Reset();
+			context_.Reset();
+		}
 		if (a_resetShader) {
 			copyDepthGuideCS_.Reset();
 			actorProtectionCS_.Reset();
@@ -1735,12 +1790,23 @@ namespace NeuralRendering
 			copyDepthGuideCB_.Reset();
 			copyDepthGuideCompileFailed_ = false;
 		}
-		runtimeReady_ = false;
-		runtimeTouched_ = false;
+		runtimeReady_ = retainBackend;
+		runtimeTouched_ = retainBackend;
+		memoryRecovery_.SetStartupKind(retainBackend ? MemoryStartupKind::Warm : MemoryStartupKind::Cold);
+		if (retainBackend) {
+			const bool newlyRetained = !memoryRetirement_.backendRetained;
+			memoryRetirement_.Retained(GetTickCount64());
+			if (newlyRetained)
+				logger::info("[DLSSNR][Memory] Released NR textures and model features; retaining healthy initialized backend");
+			nextRetainedBackendCheckMs_ = 0;
+			retainedBackendPending_.store(true, std::memory_order_relaxed);
+		} else {
+			memoryRetirement_.Released();
+		}
 		failureLatched_ = false;
 		quarantined_ = false;
 		Increment(snapshot_.counters.resetSuccesses);
-		snapshot_.lastCompletedStage = RendererStage::InteropShutdown;
+		snapshot_.lastCompletedStage = retainBackend ? RendererStage::ResourceRetirement : RendererStage::InteropShutdown;
 		snapshot_.failureStage = RendererStage::None;
 		snapshot_.failureFeatureSlot = Runtime::kFeatureSlotCount;
 		snapshot_.lastResult = S_OK;
@@ -1788,6 +1854,9 @@ namespace NeuralRendering
 		bool a_applyFailure,
 		std::uint64_t a_failuresBefore) noexcept
 	{
+		memoryRetirement_.Released();
+		retainedBackendPending_.store(false, std::memory_order_relaxed);
+		Util::GpuMemoryBudget::Get().SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering, false, 0);
 		if (a_applyFailure && snapshot_.counters.failures == a_failuresBefore) {
 			Increment(snapshot_.counters.failures);
 			if (a_slot < Runtime::kFeatureSlotCount)
@@ -1934,26 +2003,174 @@ namespace NeuralRendering
 		return true;
 	}
 
+	void Renderer::State::ResolutionChangedLocked()
+	{
+		memoryRecovery_.InvalidateCapacityLearning();
+		restorationPreviousPercent_ = 0;
+		logger::info("[DLSSNR][Memory] Pressure resolution ceiling {}%; requested {}% (session only)",
+			memoryResolution_.ceilingPercent, snapshot_.requestedModelResolutionPercent);
+	}
+
+	void Renderer::State::PrepareMemoryResolutionLocked(std::span<RendererApplyArgs> args)
+	{
+		resolutionRestoration_ = {};
+		if (args.empty())
+			return;
+		const auto& first = args.front();
+		const auto requested = first.modelResolutionPercent;
+		if (!IsValidModelResolutionPercent(requested) || std::ranges::any_of(args, [&](const auto& arg) {
+				return arg.featureSlot >= Runtime::kFeatureSlotCount || arg.modelResolutionPercent != requested ||
+			           arg.pressureResolutionEnabled != first.pressureResolutionEnabled;
+			}))
+			return;
+		if (snapshot_.requestedModelResolutionPercent != requested || snapshot_.pressureResolutionEnabled != first.pressureResolutionEnabled) {
+			resolutionLatches_ = {};
+			successfulResolutionPercents_ = {};
+			restorationPreviousPercent_ = 0;
+			memoryResolution_.ClearHealthyWindow();
+		}
+		const bool enabling = first.pressureResolutionEnabled && !memoryResolution_.enabled;
+		memoryResolution_.SetEnabled(first.pressureResolutionEnabled);
+		snapshot_.requestedModelResolutionPercent = requested;
+		snapshot_.pressureResolutionEnabled = first.pressureResolutionEnabled;
+		if (enabling && memoryRecovery_.phase == MemoryRecoveryPhase::Waiting && memoryResolution_.OnRetired(requested, GetTickCount64()))
+			ResolutionChangedLocked();
+		const auto route = first.featureSlot / kEyeCount;
+		if (route >= resolutionLatches_.size())
+			return;
+		auto& latch = resolutionLatches_[route];
+		if (latch.frame != first.frameId || latch.sourceFrame != first.sourceWorldFrame) {
+			latch = { first.frameId, first.sourceWorldFrame, memoryResolution_.EffectivePercent(requested) };
+		}
+		auto workingPercent = kMaximumModelResolutionPercent;
+		for (const auto& arg : args) {
+			const auto previous = successfulResolutionPercents_[arg.featureSlot] ? successfulResolutionPercents_[arg.featureSlot] : restorationPreviousPercent_;
+			if (IsValidModelResolutionPercent(previous))
+				workingPercent = std::min(workingPercent, previous);
+		}
+		if (memoryResolution_.enabled && latch.percent > workingPercent &&
+			(!device_ || (SameIdentity(device_.Get(), first.device) && SameIdentity(context_.Get(), first.context))))
+			resolutionRestoration_ = { true, false, false, workingPercent };
+		snapshot_.effectiveModelResolutionPercent = latch.percent;
+		for (auto& arg : args) {
+			if (arg.modelResolutionPercent == requested && arg.pressureResolutionEnabled == first.pressureResolutionEnabled)
+				arg.modelResolutionPercent = latch.percent;
+		}
+	}
+
+	bool Renderer::State::RetryWorkingResolutionLocked(std::span<RendererApplyArgs> args)
+	{
+		if (!resolutionRestoration_.rejected || args.empty())
+			return false;
+		const auto workingPercent = resolutionRestoration_.workingPercent;
+		(void)memoryResolution_.RejectRestoration(workingPercent);
+		restorationPreviousPercent_ = 0;
+		const auto route = args.front().featureSlot / kEyeCount;
+		resolutionLatches_[route].percent = workingPercent;
+		for (auto& arg : args)
+			arg.modelResolutionPercent = workingPercent;
+		snapshot_.effectiveModelResolutionPercent = workingPercent;
+		resolutionRestoration_ = {};
+		logger::info("[DLSSNR][Memory] Retaining working NR at {}%; restoration replacement lacks headroom", workingPercent);
+		return true;
+	}
+
+	void Renderer::State::FinishMemoryResolutionLocked(std::span<const RendererApplyArgs> args, bool succeeded)
+	{
+		if (succeeded && !args.empty()) {
+			for (const auto& arg : args)
+				successfulResolutionPercents_[arg.featureSlot] = arg.modelResolutionPercent;
+			if (resolutionRestoration_.active)
+				modelResolution_.ReleaseUnscaledSlots(args);
+		}
+		resolutionRestoration_ = {};
+	}
+
 	bool Renderer::State::RetireMemoryPressureLocked()
 	{
 		if (memoryRecovery_.phase != MemoryRecoveryPhase::Retiring)
 			return true;
-		if (failureLatched_ || quarantined_ || !TeardownBackendLocked(false, false, false)) {
+		if (failureLatched_ || quarantined_ || !TeardownBackendLocked(false, false, false, {}, BackendRetirementPolicy::RetainHealthyBackend)) {
 			snapshot_.memoryRecovery = memoryRecovery_;
 			return false;
 		}
-		memoryRecovery_.Retired();
+		const auto now = GetTickCount64();
+		successfulResolutionPercents_ = {};
+		memoryRecovery_.Retired(now);
+		if (memoryResolution_.OnRetired(snapshot_.requestedModelResolutionPercent, now))
+			ResolutionChangedLocked();
 		snapshot_.memoryRecovery = memoryRecovery_;
 		nextMemorySampleMs_ = 0;
 		return true;
 	}
 
+	bool Renderer::State::ServiceRetainedBackendLocked(bool a_requested)
+	{
+		if (!memoryRetirement_.backendRetained)
+			return true;
+		if (failureLatched_ || quarantined_) {
+			memoryRetirement_.Released();
+			retainedBackendPending_.store(false, std::memory_order_relaxed);
+			return false;
+		}
+		auto now = GetTickCount64();
+		if (now < nextRetainedBackendCheckMs_)
+			return true;
+		nextRetainedBackendCheckMs_ = now + MemoryRecoveryPolicy::kSampleIntervalMs;
+		const auto sample = SampleMemoryBudgetLocked(device_.Get(), now, false);
+		now = GetTickCount64();
+		auto preview = memoryRecovery_;
+		const auto pending = Util::GpuMemoryBudget::Get().PendingBytes(Util::GpuMemoryBudget::Owner::NeuralRendering);
+		const bool recovering = a_requested && memoryRecovery_.phase == MemoryRecoveryPhase::Waiting;
+		if (!recovering)
+			preview.phase = MemoryRecoveryPhase::Ready;
+		(void)preview.Admit(sample, recovering ? memoryRecovery_.requiredBytes : 0, now, pending);
+		const bool blocked = preview.phase == MemoryRecoveryPhase::Retiring ||
+		                     (preview.phase == MemoryRecoveryPhase::Waiting && !preview.healthyWindow);
+		const auto reason = memoryRetirement_.Observe(sample, now, blocked, recovering);
+		if (reason == MemoryRetirementReason::None)
+			return true;
+		if (!TeardownBackendLocked(false, false, false))
+			return false;
+		memoryRetirement_.Released(reason);
+		memoryRecovery_.ResourcesRetired(GetTickCount64());
+		if (a_requested)
+			FinishMemoryAdmissionLocked();
+		else
+			Util::GpuMemoryBudget::Get().SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering, false, 0);
+		snapshot_.memoryRecovery = memoryRecovery_;
+		nextMemorySampleMs_ = 0;
+		logger::info("[DLSSNR][Memory] Released retained backend: {}; observed application usage {:.1f}/{:.1f} MiB before full teardown",
+			ToString(reason), static_cast<double>(sample.usageBytes) / MemoryRecoveryPolicy::kMiB,
+			static_cast<double>(sample.budgetBytes) / MemoryRecoveryPolicy::kMiB);
+		return true;
+	}
+
 	void Renderer::State::FinishMemoryRecoveryLocked(bool a_succeeded, RendererApplyOutcome& a_outcome)
 	{
-		if (a_succeeded)
-			memoryRecovery_.Succeeded(GetTickCount64());
-		else if (!RetireMemoryPressureLocked())
-			a_outcome.memoryPressureBypass = false;
+		if (a_succeeded) {
+			const auto previous = memoryRecovery_.phase;
+			const auto now = GetTickCount64();
+			memoryRecovery_.Succeeded(now);
+			if (previous != memoryRecovery_.phase)
+				logger::info("[DLSSNR][Memory] Recovery phase {} -> {}; demand {:.1f} MiB, rapid relapses={}",
+					ToString(previous), ToString(memoryRecovery_.phase),
+					static_cast<double>(memoryRecovery_.admissionDemandBytes) / MemoryRecoveryPolicy::kMiB, memoryRecovery_.rapidRelapses);
+			const auto previousCeiling = memoryResolution_.ceilingPercent;
+			if (memoryResolution_.enabled && memoryResolution_.ObserveSuccess(snapshot_.requestedModelResolutionPercent, memoryRecovery_.sample, now,
+												 Util::GpuMemoryBudget::Get().PendingBytes(Util::GpuMemoryBudget::Owner::NeuralRendering),
+												 memoryConservation_.active, memoryRecovery_.phase == MemoryRecoveryPhase::Ready))
+				restorationPreviousPercent_ = previousCeiling;
+		} else {
+			if (memoryRecovery_.phase != MemoryRecoveryPhase::Waiting)
+				memoryRecovery_.BreakActiveObservation();
+			else if (memoryResolution_.WhileWaiting(snapshot_.requestedModelResolutionPercent, memoryRecovery_.sample,
+						 GetTickCount64(), !memoryRecovery_.healthyWindow))
+				ResolutionChangedLocked();
+			memoryResolution_.ClearHealthyWindow();
+			if (!RetireMemoryPressureLocked())
+				a_outcome.memoryPressureBypass = false;
+		}
 		snapshot_.memoryRecovery = memoryRecovery_;
 	}
 
@@ -1997,6 +2214,9 @@ namespace NeuralRendering
 	MemoryBudgetSample Renderer::State::SampleMemoryBudgetLocked(ID3D11Device* a_device, std::uint64_t a_nowMs, bool a_force)
 	{
 		if (memorySampleDevice_.Get() != a_device) {
+			memoryRecovery_.InvalidateCapacityLearning();
+			memoryCapacityKeys_ = {};
+			memoryResolution_.ClearHealthyWindow();
 			memorySampleDevice_ = a_device;
 			memorySample_ = {};
 			nextMemorySampleMs_ = 0;
@@ -2120,6 +2340,8 @@ namespace NeuralRendering
 	{
 		const auto& first = a_args.front();
 		SetRequestTelemetryLocked(first);
+		if (!ServiceRetainedBackendLocked())
+			return false;
 		if (const HRESULT reason = first.device->GetDeviceRemovedReason(); FAILED(reason))
 			return FailLocked(RendererStage::DeviceRemoved, reason, "NR memory admission found a lost D3D11 device", first.featureSlot, true);
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason))
@@ -2134,6 +2356,14 @@ namespace NeuralRendering
 		nowMs = GetTickCount64();
 		const bool wasConserving = memoryConservation_.active;
 		const auto pendingBytes = Util::GpuMemoryBudget::Get().PendingBytes(Util::GpuMemoryBudget::Owner::NeuralRendering);
+		if (resolutionRestoration_.active && !resolutionRestoration_.admitted) {
+			auto preview = memoryRecovery_;
+			if (!sample.IsFresh(nowMs) || !preview.Admit(sample, *additionalBytes, nowMs, pendingBytes)) {
+				resolutionRestoration_.rejected = true;
+				return false;
+			}
+			resolutionRestoration_.admitted = true;
+		}
 		memoryConservation_.Update(sample, Util::GpuMemoryBudget::Add(*additionalBytes, pendingBytes), memoryRecovery_.phase != MemoryRecoveryPhase::Ready, nowMs);
 		if (wasConserving != memoryConservation_.active)
 			logger::info("[DLSSNR][Memory] {}", memoryConservation_.active ?
@@ -2153,13 +2383,31 @@ namespace NeuralRendering
 		}
 		nowMs = GetTickCount64();
 		const auto previous = memoryRecovery_.phase;
-		const bool admitted = memoryRecovery_.Admit(sample, Util::GpuMemoryBudget::Add(*additionalBytes, pendingBytes), nowMs);
-		Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::NeuralRendering, !admitted || *additionalBytes != 0);
+		bool capacityChanged = false;
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			auto& key = memoryCapacityKeys_[a_args[index].featureSlot];
+			capacityChanged |= key && *key != a_resources[index].resourceKey;
+			key = a_resources[index].resourceKey;
+		}
+		if (capacityChanged)
+			memoryRecovery_.InvalidateCapacityLearning();
+		const bool admitted = memoryRecovery_.Admit(sample, *additionalBytes, nowMs, pendingBytes);
+		if (admitted && memoryRetirement_.backendRetained) {
+			memoryRetirement_.Released();
+			retainedBackendPending_.store(false, std::memory_order_relaxed);
+		}
+		Util::GpuMemoryBudget::Get().SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering,
+			memoryRecovery_.phase == MemoryRecoveryPhase::Retiring || (admitted && *additionalBytes != 0),
+			admitted ? 0 : memoryRecovery_.admissionDemandBytes);
 		if (admitted && *additionalBytes)
 			memoryReservation_ = Util::GpuMemoryBudget::Get().Reserve(Util::GpuMemoryBudget::Owner::NeuralRendering, first.device, *additionalBytes);
 		if (memoryRecovery_.phase == MemoryRecoveryPhase::Retiring) {
 			if (previous != MemoryRecoveryPhase::Retiring)
-				logger::warn("[DLSSNR][Memory] Temporarily using the baseline while retiring NR under memory pressure");
+				logger::warn("[DLSSNR][Memory] Temporarily using the baseline while retiring NR under memory pressure: usage {:.1f}/{:.1f} MiB, additional {:.1f} MiB, recovery demand {:.1f} MiB, retry level={}",
+					static_cast<double>(sample.usageBytes) / MemoryRecoveryPolicy::kMiB,
+					static_cast<double>(sample.budgetBytes) / MemoryRecoveryPolicy::kMiB,
+					static_cast<double>(*additionalBytes) / MemoryRecoveryPolicy::kMiB,
+					static_cast<double>(memoryRecovery_.admissionDemandBytes) / MemoryRecoveryPolicy::kMiB, memoryRecovery_.retryLevel);
 			if (!RetireMemoryPressureLocked())
 				return false;
 		}
@@ -2167,7 +2415,11 @@ namespace NeuralRendering
 			++memoryRecovery_.bypasses;
 			snapshot_.outputCommitted = false;
 		} else if (previous == MemoryRecoveryPhase::Waiting) {
-			logger::info("[DLSSNR][Memory] Headroom recovered; rebuilding NR with fresh temporal history");
+			logger::info("[DLSSNR][Memory] Headroom recovered; rebuilding NR with fresh temporal history: usage {:.1f}/{:.1f} MiB, recovery demand {:.1f} MiB, pending {:.1f} MiB",
+				static_cast<double>(sample.usageBytes) / MemoryRecoveryPolicy::kMiB,
+				static_cast<double>(sample.budgetBytes) / MemoryRecoveryPolicy::kMiB,
+				static_cast<double>(memoryRecovery_.admissionDemandBytes) / MemoryRecoveryPolicy::kMiB,
+				static_cast<double>(pendingBytes) / MemoryRecoveryPolicy::kMiB);
 		}
 		snapshot_.memoryRecovery = memoryRecovery_;
 		return admitted;
@@ -2489,7 +2741,8 @@ namespace NeuralRendering
 		const RendererApplyArgs& a_args,
 		RendererApplyOutcome& a_outcome)
 	{
-		modelResolution_.ReleaseUnscaledSlots(std::span(&a_args, 1));
+		if (!resolutionRestoration_.active)
+			modelResolution_.ReleaseUnscaledSlots(std::span(&a_args, 1));
 		return ApplyBatchLocked(std::span(&a_args, 1), a_outcome);
 	}
 
@@ -2497,7 +2750,8 @@ namespace NeuralRendering
 		const std::array<RendererApplyArgs, 2>& a_args,
 		RendererApplyOutcome& a_outcome)
 	{
-		modelResolution_.ReleaseUnscaledSlots(a_args);
+		if (!resolutionRestoration_.active)
+			modelResolution_.ReleaseUnscaledSlots(a_args);
 		return ApplyBatchLocked(a_args, a_outcome);
 	}
 
@@ -2509,7 +2763,7 @@ namespace NeuralRendering
 		// Colour reconstruction commits both eyes against one immutable input snapshot.
 		if (ModelResolution::Required(a_args[0]) || ModelResolution::Required(a_args[1]))
 			return ApplyModelResolutionLocked(a_args, a_outcome, true);
-		if (!a_memoryAdmitted)
+		if (!a_memoryAdmitted && !resolutionRestoration_.active)
 			modelResolution_.ReleaseUnscaledSlots(a_args);
 		if (colorConfiguration_.Enabled())
 			return ApplyBatchLocked(a_args, a_outcome, a_memoryAdmitted);
@@ -3653,17 +3907,29 @@ namespace NeuralRendering
 	}
 #endif
 
-	bool Renderer::State::ResetLocked(bool a_resetShader, bool a_destruction)
+	bool Renderer::State::ResetLocked(bool a_resetShader, bool a_destruction, BackendRetirementPolicy a_policy)
 	{
-		if (!TeardownBackendLocked(a_resetShader, a_destruction, false))
+		if (!TeardownBackendLocked(a_resetShader, a_destruction, false, {}, a_policy))
 			return false;
 		memoryReservation_.Reset();
-		Util::GpuMemoryBudget::Get().SetPriorityWork(Util::GpuMemoryBudget::Owner::NeuralRendering, false);
-		memoryRecovery_ = {};
+		Util::GpuMemoryBudget::Get().SetOwnerWork(Util::GpuMemoryBudget::Owner::NeuralRendering, false, 0);
+		const bool pressureRetirement = memoryRecovery_.phase == MemoryRecoveryPhase::Retiring;
+		const auto now = GetTickCount64();
+		memoryRecovery_.ResourcesRetired(now);
+		if (pressureRetirement) {
+			if (memoryResolution_.OnRetired(snapshot_.requestedModelResolutionPercent, now))
+				ResolutionChangedLocked();
+		} else if (memoryRecovery_.phase == MemoryRecoveryPhase::Waiting) {
+			memoryResolution_.MarkResourcesRetired(now);
+		}
+		memoryResolution_.ClearHealthyWindow();
+		resolutionLatches_ = {};
+		successfulResolutionPercents_ = {};
+		restorationPreviousPercent_ = 0;
+		resolutionRestoration_ = {};
 		memoryConservation_ = {};
-		snapshot_.memoryRecovery = {};
+		snapshot_.memoryRecovery = memoryRecovery_;
 		memorySample_ = {};
-		memorySampleDevice_.Reset();
 		nextMemorySampleMs_ = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		simulatedPressureUntilMs_ = 0;
@@ -3720,9 +3986,14 @@ namespace NeuralRendering
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args.featureSlot);
 		try {
+			auto args = a_args;
+			state_->PrepareMemoryResolutionLocked({ &args, 1 });
 			state_->CaptureColorConfiguration(a_args);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRendering", state_->wholePass_);
-			const bool succeeded = state_->ApplyLocked(a_args, outcome);
+			bool succeeded = state_->ApplyLocked(args, outcome);
+			if (state_->RetryWorkingResolutionLocked({ &args, 1 }))
+				succeeded = state_->ApplyLocked(args, outcome);
+			state_->FinishMemoryResolutionLocked({ &args, 1 }, succeeded);
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			state_->FinishCapture(outcome);
 			if (a_outcome)
@@ -3758,9 +4029,14 @@ namespace NeuralRendering
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
+			auto args = a_args;
+			state_->PrepareMemoryResolutionLocked(args);
 			state_->CaptureColorConfiguration(a_args[0]);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingStereo", state_->wholePass_);
-			const bool succeeded = state_->ApplyStereoLocked(a_args, outcome);
+			bool succeeded = state_->ApplyStereoLocked(args, outcome);
+			if (state_->RetryWorkingResolutionLocked(args))
+				succeeded = state_->ApplyStereoLocked(args, outcome);
+			state_->FinishMemoryResolutionLocked(args, succeeded);
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			if (!outcome.memoryPressureBypass)
 				Increment(succeeded ? state_->snapshot_.counters.stereoSuccesses : state_->snapshot_.counters.stereoFailures);
@@ -3798,10 +4074,14 @@ namespace NeuralRendering
 		const auto failuresBefore = state_->snapshot_.counters.failures;
 		state_->SetActiveFeatureSlotLocked(a_args[0].featureSlot);
 		try {
+			auto args = a_args;
+			state_->PrepareMemoryResolutionLocked(args);
 			state_->CaptureColorConfiguration(a_args[0]);
 			CS_GPU_PASS_CAPTURE("Upscaling::DLSSNeuralRenderingSequentialStereo", state_->wholePass_);
-			const bool succeeded =
-				state_->ApplySequentialStereoLocked(a_args, outcome);
+			bool succeeded = state_->ApplySequentialStereoLocked(args, outcome);
+			if (state_->RetryWorkingResolutionLocked(args))
+				succeeded = state_->ApplySequentialStereoLocked(args, outcome);
+			state_->FinishMemoryResolutionLocked(args, succeeded);
 			state_->FinishMemoryRecoveryLocked(succeeded, outcome);
 			state_->FinishCapture(outcome);
 			if (a_outcome)
@@ -3831,11 +4111,11 @@ namespace NeuralRendering
 		return state_->captureInputs_;
 	}
 
-	bool Renderer::Reset(bool a_clearTransportRejections)
+	bool Renderer::Reset(bool a_clearTransportRejections, BackendRetirementPolicy a_policy)
 	{
 		std::scoped_lock lock(state_->mutex_);
 		try {
-			const bool reset = state_->ResetLocked(false, false);
+			const bool reset = state_->ResetLocked(false, false, a_policy);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (reset && a_clearTransportRejections) {
 				state_->capacityFallback_ = {};
@@ -3867,6 +4147,24 @@ namespace NeuralRendering
 			} catch (...) {
 			}
 			return false;
+		}
+	}
+
+	void Renderer::ServiceRetainedBackend(bool a_requested)
+	{
+		if (!state_->retainedBackendPending_.load(std::memory_order_relaxed))
+			return;
+		Util::RendererOwnership owner(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+		if (!owner)
+			return;
+		std::unique_lock lock(state_->mutex_, std::try_to_lock);
+		if (!lock.owns_lock())
+			return;
+		try {
+			(void)state_->ServiceRetainedBackendLocked(a_requested);
+		} catch (...) {
+			state_->QuarantineAfterUnexpectedFailureLocked(
+				RendererStage::Quarantined, Runtime::kFeatureSlotCount, false, 0);
 		}
 	}
 

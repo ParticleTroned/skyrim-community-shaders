@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/MemoryRetirementPolicy.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Features/Upscaling/NeuralRendering/Runtime.h"
 
@@ -45,6 +46,7 @@ namespace NeuralRendering
 		bool resetSucceeds = true, failed = false, quarantined = false;
 		bool resourcesRetained = true;
 		unsigned resets = 0;
+		BackendRetirementPolicy lastPolicy = BackendRetirementPolicy::ReleaseBackend;
 		static Renderer& Instance()
 		{
 			static Renderer instance;
@@ -52,8 +54,9 @@ namespace NeuralRendering
 		}
 		bool IsFailureLatched() const { return failed; }
 		bool IsQuarantined() const { return quarantined; }
-		bool Reset()
+		bool Reset(bool = false, BackendRetirementPolicy policy = BackendRetirementPolicy::ReleaseBackend)
 		{
+			lastPolicy = policy;
 			++resets;
 			if (!resetSucceeds) {
 				failed = true;
@@ -231,6 +234,8 @@ int main()
 			Require(accepted && !upscaling.settings.neuralRenderingEnabled, "Off must remain accepted even when retirement fails or no world frame exists");
 			Require(resetSucceeded == retirementSucceeds && renderer.resets == 1, "Retirement outcome must remain independent of configuration acceptance");
 			Require(renderer.resourcesRetained == !retirementSucceeds, "Off must not release resources retained by a failed reset");
+			Require(renderer.lastPolicy == NeuralRendering::BackendRetirementPolicy::RetainHealthyBackend,
+				"Settings transitions must request healthy resource-only retirement");
 			Require(upscaling.historyResets == 1 && upscaling.invalidations == 1, "Off must invalidate frame state and history");
 			Require(upscaling.mainFinalLdrNeuralState.value == 0 && upscaling.mainFinalLdrPresentationState.value == 0, "Off must drop pending neural presentation");
 			previous = upscaling.settings;

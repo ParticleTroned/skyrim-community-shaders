@@ -1,4 +1,5 @@
 #include "Features/TextureStreaming/ConsumerInventory.h"
+#include "Features/TextureStreaming/Diagnostics.h"
 #include "Features/TextureStreaming/Policy.h"
 #include "Features/TextureStreaming/Settings.h"
 #include "Utils/GpuMemoryBudget.h"
@@ -95,6 +96,21 @@ int main()
 		Require(Memory::StreamingFits(10000 * m, 9800 * m, 0, m, false, false, true), "Safe reclamation was blocked by critical pressure");
 		Require(!Memory::StreamingFits(10000 * m, 9900 * m, 0, m, false, false, false), "Reclamation consumed its overlap safety headroom");
 		Require(Memory::StreamingFits(10000 * m, 7500 * m, 0, 100 * m, true, true, false), "Required detail could not recover under moderate pressure");
+		Require(!Memory::StreamingFits(10000 * m, 6000 * m, 0, 500 * m, true, false, false, 600 * m), "Optional refill consumed future NR recovery headroom");
+		Require(Memory::StreamingFits(10000 * m, 7500 * m, 0, 100 * m, true, true, false, 4000 * m), "Waiting NR starved required visible detail");
+		Require(Memory::StreamingFits(10000 * m, 9800 * m, 0, m, false, false, false, UINT64_MAX), "Future NR demand blocked safe reclamation");
+		Require(!Memory::StreamingFits(10000 * m, 7500 * m, 1000 * m, 100 * m, true, true, false, 0), "Required detail ignored an actual outstanding allocation");
+		Require(!Memory::StreamingFits(10000 * m, 0, 0, m, true, false, false, UINT64_MAX), "Recovery demand overflow admitted optional refill");
+		StreamingTextures::PressureEpisode episode;
+		Require(!episode.SummaryDue(20000), "Inactive pressure emitted diagnostics");
+		episode.active = true;
+		episode.startedAtMs = 1000;
+		Require(!episode.SummaryDue(999) && !episode.SummaryDue(10999), "Pressure diagnostics reported before the observation window");
+		Require(episode.SummaryDue(11000), "Sustained pressure produced no effectiveness summary");
+		for (std::uint64_t now = 11000; now <= 120000; now += 10)
+			Require(!episode.SummaryDue(now), "Sustained pressure produced frame-rate-dependent logging");
+		episode = { true, false, false, 200000 };
+		Require(episode.SummaryDue(210000), "A new pressure episode inherited the old reporting limit");
 		Require(!Memory::StreamingFits(0, 0, 0, m, false, false, false), "Unknown budgets must fail closed");
 		Require(!Memory::StreamingFits(UINT64_MAX, UINT64_MAX - 10, 0, 20, false, false, false), "Allocation projection overflow admitted a texture");
 		std::cout << "PASS: stereo demand, DLSS bias, minimum detail, inventory publication, hysteresis, full overlap and priority admission\n";

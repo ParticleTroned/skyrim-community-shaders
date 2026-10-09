@@ -30,6 +30,7 @@ namespace Util
 			std::uint64_t sequence = 0;
 			std::uint64_t sampledAtMs = 0;
 			std::uint64_t pendingBytes = 0;
+			std::uint64_t recoveryDemandBytes = 0;
 			bool priorityWork = false;
 			HRESULT result = E_PENDING;
 			[[nodiscard]] bool Fresh(std::uint64_t now, std::uint64_t age = 500) const noexcept
@@ -65,7 +66,11 @@ namespace Util
 		Reservation Reserve(Owner owner, ID3D11Device* device, std::uint64_t bytes);
 		/** Atomically admit a bounded streaming replacement with a fresh budget observation. */
 		Reservation TryReserveStreaming(ID3D11Device* device, std::uint64_t bytes, bool refill, bool required = false);
+		/** Publish active priority and soft future demand together without touching allocation tickets. */
+		void SetOwnerWork(Owner owner, bool priorityWork, std::uint64_t recoveryDemandBytes);
 		void SetPriorityWork(Owner owner, bool pending);
+		/** Soft future allocations constrain optional refill, never required texture detail. */
+		void SetRecoveryDemand(Owner owner, std::uint64_t bytes);
 		[[nodiscard]] std::uint64_t PendingBytes(Owner excluding) const;
 		static constexpr std::uint64_t Add(std::uint64_t left, std::uint64_t right) noexcept
 		{
@@ -73,11 +78,11 @@ namespace Util
 		}
 		/** Test peak usage without credit for a future retirement. */
 		static constexpr bool StreamingFits(std::uint64_t budget, std::uint64_t usage, std::uint64_t outstanding,
-			std::uint64_t bytes, bool refill, bool required, bool priorityWork) noexcept
+			std::uint64_t bytes, bool refill, bool required, bool priorityWork, std::uint64_t recoveryDemandBytes = 0) noexcept
 		{
 			if (!budget || !bytes || (refill && priorityWork))
 				return false;
-			const auto projected = Add(Add(usage, outstanding), bytes);
+			const auto projected = Add(Add(Add(usage, outstanding), bytes), refill && !required ? recoveryDemandBytes : 0);
 			const auto reserve = (refill ? (required ? 1024 : 1536) : 128) * MiB;
 			const auto limit = budget / 100 * (refill ? (required ? 82 : 70) : 100);
 			return projected < limit && projected < budget && budget - projected > reserve;
@@ -87,11 +92,13 @@ namespace Util
 		Snapshot SampleLocked(ID3D11Device* device, std::uint64_t maxAgeMs, bool force);
 		Reservation ReserveLocked(Owner owner, std::uint64_t bytes);
 		void Release(Owner owner, std::uint64_t generation, std::uint64_t bytes) noexcept;
+		void SetOwnerWorkLocked(Owner owner, bool priorityWork, std::uint64_t recoveryDemandBytes) noexcept;
 		mutable std::mutex mutex;
 		Microsoft::WRL::ComPtr<ID3D11Device> device;
 		Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter;
 		Snapshot snapshot;
 		std::array<std::uint64_t, static_cast<std::size_t>(Owner::Count)> pending{};
 		std::array<bool, static_cast<std::size_t>(Owner::Count)> priority{};
+		std::array<std::uint64_t, static_cast<std::size_t>(Owner::Count)> recoveryDemand{};
 	};
 }

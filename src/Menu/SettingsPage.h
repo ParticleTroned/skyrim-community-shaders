@@ -36,8 +36,9 @@ namespace MenuUI
 		const char* stage = nullptr;
 		const char* cardTitle = nullptr;
 		const char* guidance = nullptr;
-		bool active = true;   // Inactive steps remain navigable for their explanation.
-		bool showTab = true;  // Card-only sections retain navigation and overview cards.
+		bool active = true;                    // Inactive appearance alone does not block navigation.
+		bool showTab = true;                   // Card-only sections retain navigation and overview cards.
+		const char* disabledReason = nullptr;  // Blocks entry and supplies help when unavailable.
 	};
 
 	/** One mutually exclusive option; disabled choices keep their own help. */
@@ -108,7 +109,7 @@ namespace MenuUI
 		Feature* previous;
 	};
 
-	/** Shared overview and tabs, with a fixed detail heading above scrolling controls. */
+	/** Shared tabs with Overview pinned, and a fixed detail heading above scrolling controls. */
 	class SettingsPage
 	{
 	public:
@@ -145,7 +146,7 @@ namespace MenuUI
 		float contentLeftPadding = 0;
 		std::vector<Section> sections;
 		void DrawOverview();
-		void DrawDetailHeader(const char* a_page, std::string_view a_summary);
+		void DrawDetailHeader(std::string_view a_summary);
 		void DrawCard(const Section& step, ImVec2 minimum, ImVec2 size, int a_ordinal = 0);
 	};
 }

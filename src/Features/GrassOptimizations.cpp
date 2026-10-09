@@ -132,8 +132,11 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 	constexpr auto tooltipFlags = ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
 	auto next = GetSettings();
 	const auto panel = [section](std::string_view id) { return section.empty() || section == id; };
-	bool changed = Util::Widgets::Checkbox("Grass optimizations", &next.Enabled);
-	Util::AddTooltip("Optimize grass drawing and visibility. Quality controls can trade grass density, range or detail for performance.", tooltipFlags);
+	bool changed = false;
+	if (section.empty()) {
+		changed = Util::Widgets::Checkbox("Grass optimizations", &next.Enabled);
+		Util::AddTooltip("Optimize grass drawing and visibility. Quality controls can trade grass density, range or detail for performance.", tooltipFlags);
+	}
 	auto guard = Util::DisableGuard(!next.Enabled);
 
 	if (panel("visibility")) {
@@ -161,6 +164,10 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 
 	if (panel("distance")) {
 		if (advanced) {
+			MenuUI::DetailGrid distanceGrid("GrassDistance", 2, ImGui::GetFontSize() * 32);
+			const Util::Widgets::ControlLayout controls(true);
+			distanceGrid.Next();
+			MenuUI::SectionHeading("Draw distance");
 			changed |= Util::Widgets::SliderFloat("Distant mesh cost bias", &next.MeshCostBias, 0.0f, 1.0f, "%.2f");
 			Util::AddTooltip("Give complex grass meshes less distant reach and, with density reduction on, thinner coverage to save work. Zero disables this adjustment.", tooltipFlags);
 			changed |= Util::Widgets::SliderFloat("Cost bias start distance", &next.CostBiasStartDistance, 0.0f, 20000.0f, "%.0f");
@@ -169,6 +176,8 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 			Util::AddTooltip("Set how far grass is visible. Shorter distances save rendering work; zero uses the game's setting. Limited to loaded grass.", tooltipFlags);
 			changed |= Util::Widgets::SliderFloat("Distance fade start", &next.EdgeFadeStart, 0.0f, 1.0f, "%.2f");
 			Util::AddTooltip("Choose where grass starts fading toward its distance limit. Lower values fade it sooner and more gradually; skipping faded grass can save work.", tooltipFlags);
+			distanceGrid.Next();
+			MenuUI::SectionHeading("Distant detail and collision");
 			changed |= Util::Widgets::SliderFloat("Skip nearly invisible grass", &next.InvisibleFadeCull, 0.0f, 1.0f, "%.3f");
 			Util::AddTooltip("Stop drawing grass below this fade value. Higher values save rendering work but can make grass disappear more abruptly.", tooltipFlags);
 			changed |= Util::Widgets::SliderFloat("Simpler shading below", &next.SimpleShadingPixelSize, 0.0f, 32.0f, "%.1f px");
@@ -213,7 +222,7 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 			logger::warn("Grass settings rejected: {}", error);
 	}
 	if (!renderer->IsRenderingAvailable())
-		ImGui::TextUnformatted("Native grass rendering: optimizations are unavailable.");
+		MenuUI::DetailNote("Native grass rendering is active; optimizations are unavailable.");
 }
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void GrassOptimizations::SetDiagnosticsEnabled(bool enabled) { renderer->SetDiagnosticsEnabled(enabled); }

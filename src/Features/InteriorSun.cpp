@@ -43,14 +43,6 @@ namespace
 	};
 }
 
-bool InteriorSun::DrawEnabledCheckbox()
-{
-	bool enabled = settings.Enabled;
-	if (Util::Widgets::Checkbox("Enabled", &enabled))
-		SetRuntimeEnabled(enabled);
-	return enabled;
-}
-
 void InteriorSun::DrawSettings()
 {
 	MenuUI::SettingsPage page("InteriorSun", {
@@ -59,7 +51,7 @@ void InteriorSun::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	const bool enabled = DrawEnabledCheckbox();
+	const bool enabled = settings.Enabled;
 	ImGui::BeginDisabled(!enabled);
 
 	Util::Widgets::Checkbox("Force Double-Sided Rendering", &settings.ForceDoubleSidedRendering);

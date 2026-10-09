@@ -35,7 +35,12 @@ namespace Util
 namespace MenuUI
 {
 	int chosenMode = 1;
-	int ChoiceCards(const char*, int, std::span<const Choice>) { return chosenMode; }
+	int choiceDraws = 0;
+	int ChoiceCards(const char*, int, std::span<const Choice>)
+	{
+		++choiceDraws;
+		return chosenMode;
+	}
 	void SectionHeading(const char* text) { ImGui::TextUnformatted(text); }
 	void DetailText(const char* text) { ImGui::TextWrapped("%s", text); }
 	bool DetailNote(const char* text, const char*)
@@ -50,11 +55,15 @@ namespace globals
 	{
 		bool enabled = true;
 		bool initialized = true;
-		int requests = 0;
+		int requests = 0, enableWrites = 0;
 		std::vector<Profiler::TimerResult> results;
 		bool IsUserEnabled() const { return enabled; }
 		bool IsInitialized() const { return initialized; }
-		void SetUserEnabled(bool value) { enabled = value; }
+		void SetUserEnabled(bool value)
+		{
+			enabled = value;
+			++enableWrites;
+		}
 		Profiler::CaptureMode requestedMode = Profiler::CaptureMode::None;
 		std::vector<Profiler::ExternalGpuTiming> externalGpuTimings;
 		void RequestCapture(Profiler::CaptureMode mode = Profiler::CaptureMode::Both)
@@ -108,9 +117,9 @@ namespace
 		globals::source.results.push_back(timer);
 	}
 
-	std::string Draw(const char* feature, int mode, float panelWidth = 1500, float fontSize = 13)
+	std::string Draw(const char* feature, int mode, float panelWidth = 1500, float fontSize = 13, bool selectMode = true)
 	{
-		MenuUI::chosenMode = mode;
+		MenuUI::chosenMode = selectMode ? mode : -1;
 		ImGui::NewFrame();
 		ImGui::SetNextWindowPos({ 0, 0 });
 		ImGui::SetNextWindowSize({ panelWidth, 1000 });
@@ -156,6 +165,31 @@ int main()
 
 		for (const auto& view : Util::FeatureProfiling::views)
 			Check(ProfilingRenderer::CanProfileFeature(view.feature), "registered view is hidden before samples exist");
+		Check(!ProfilingRenderer::GetProfilingDisabledReason() && ProfilingRenderer::featureTimingModes.empty() && globals::source.requests == 0, "overview availability query must not create modes or start capture");
+		Check(Draw("ImageBasedLighting", 0).contains("profiling is off"), "feature off mode starts profiling");
+		Draw("ImageBasedLighting", 1);
+		globals::source.enabled = false;
+		const auto inactiveRequests = globals::source.requests;
+		const auto inactiveChoices = MenuUI::choiceDraws;
+		const auto retainedModes = ProfilingRenderer::featureTimingModes;
+		Check(ProfilingRenderer::GetProfilingDisabledReason(), "globally disabled profiling appears available");
+		for (const auto& view : Util::FeatureProfiling::views)
+			for (const int mode : { 0, 1, 2 })
+				Check(Draw(std::string(view.feature).c_str(), mode).contains("main Profiling page"), "disabled feature view must explain the main profiling switch");
+		Check(!globals::source.enabled && globals::source.enableWrites == 0 && globals::source.requests == inactiveRequests && MenuUI::choiceDraws == inactiveChoices && ProfilingRenderer::featureTimingModes == retainedModes, "disabled feature views must not change modes, expose controls, start capture or enable the main switch");
+		globals::source.enabled = true;
+		Draw("ImageBasedLighting", 1, 1500, 13, false);
+		Check(globals::source.requests > inactiveRequests && ProfilingRenderer::featureTimingModes == retainedModes, "main-switch reactivation preserves the feature timing mode");
+		Draw("ImageBasedLighting", 2);
+		Check(ProfilingRenderer::featureTimingModes.at("ImageBasedLighting") == ProfilingRenderer::FeatureTimingMode::CPU && globals::source.enableWrites == 0, "feature mode selection must not write the main profiling switch");
+		globals::source.initialized = false;
+		Check(ProfilingRenderer::GetProfilingDisabledReason(), "uninitialized profiling appears available");
+		globals::profiler = nullptr;
+		Check(ProfilingRenderer::GetProfilingDisabledReason(), "missing profiler appears available");
+		for (const auto& view : Util::FeatureProfiling::views)
+			Check(ProfilingRenderer::CanProfileFeature(view.feature), "missing profiler hides a registered view");
+		globals::profiler = &globals::source;
+		globals::source.initialized = true;
 		// NR uses two timer namespaces; unrelated upscaling and lookalike names stay excluded.
 		for (const char* evaluation : { "Upscaling::DLSSNeuralRendering", "Upscaling::DLSSNeuralRenderingStereo", "Upscaling::DLSSNeuralRenderingSequentialStereo" }) {
 			globals::source.results.clear();
@@ -267,8 +301,14 @@ int main()
 		Check(sharedTables == 2, "CPU and GPU summaries must retain independent table identities");
 		Check(Draw("ImageBasedLighting", -1).contains("Feature GPU timings") && Draw("ImageBasedLighting", -1).contains("Feature CPU timings"), "summary must display both owned profiles");
 		Check(globals::source.requests == summaryRequests, "summary must leave capture ownership to its measurement suite");
+		globals::source.enabled = false;
+		Check(Draw("ImageBasedLighting", -1).contains("Enable it on the main Profiling page") && !globals::source.enabled, "performance summaries display the main-switch explanation instead of stale timings while profiling is off");
+		globals::source.enabled = true;
 		Check(Draw("Screenshot", -1).empty(), "excluded feature reopened the performance summary");
+		AddTimer("TextureStreaming::Upload", .1f, .01f);
 		const auto requests = globals::source.requests;
+		Check(!Util::FeatureProfiling::Find("TextureStreaming") && !ProfilingRenderer::CanProfileFeature("TextureStreaming") && !ProfilingRenderer::HasFeatureTimers("TextureStreaming"), "retained texture upload samples reopened profiling");
+		Check(Draw("TextureStreaming", 1).empty() && Draw("TextureStreaming", -1).empty() && globals::source.requests == requests, "excluded texture streaming started profiling or displayed timing controls");
 		Check(Draw("Screenshot", 1).empty() && !ProfilingRenderer::HasFeatureTimers("Screenshot"), "stale screenshot samples reopened profiling");
 		Check(Draw("Wetterness", 0).contains("profiling is off") && globals::source.requests == requests, "off mode or excluded feature requested capture");
 		const auto retained = globals::source.results;

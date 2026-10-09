@@ -144,7 +144,6 @@ private:
 	static RE::TESWorldSpace* enableInteriorSun;
 	static RE::TESWorldSpace* disableInteriorSun;
 
-	bool DrawEnabledCheckbox();
 	void SetRuntimeEnabled(bool a_enabled);
 
 	void ClearArrays();

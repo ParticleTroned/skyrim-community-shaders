@@ -201,23 +201,18 @@ void PerformanceOverlay::DrawSettingsEnabledControl()
 void PerformanceOverlay::DrawSettings()
 {
 	MenuUI::SettingsPage page("PerformanceOverlay", {
-														{ "counters", "Counters", "Choose which performance counters and graphs to show.", "FPS, draw calls and graphs", true, true, "Choose information and layout" },
-														{ "appearance", "Appearance", "Refine size, placement and update speed.", "Size, opacity and position", true, true, nullptr },
+														{ "counters", "Counters", "Choose which performance counters and graphs to show.", "FPS, draw calls and graphs", true, true, "Choose information and layout", nullptr, nullptr, settings.ShowInOverlay },
+														{ "appearance", "Appearance", "Refine size, placement and update speed.", "Size, opacity and position", true, true, nullptr, nullptr, nullptr, settings.ShowInOverlay },
 													});
 
 	if (!page.Is("counters") && !page.Is("appearance"))
 		return;
 
-	Util::Widgets::Checkbox("Show in HUD Overlay", &this->settings.ShowInOverlay);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		DrawPerformanceHUDOverlayHelp();
-	}
-
-	if (this->settings.ShowInOverlay) {
+	{
+		const auto disabled = Util::DisableGuard(!settings.ShowInOverlay);
 		if (page.Is("counters")) {
 			// Display options
-			ImGui::TextUnformatted("Display Options");
-			ImGui::Separator();
+			MenuUI::SectionHeading("Counters and graphs");
 
 			Util::Widgets::Checkbox("Show FPS Counter", &this->settings.ShowFPS);
 			Util::Widgets::Checkbox("Show Draw Calls", &this->settings.ShowDrawCalls);
@@ -243,8 +238,7 @@ void PerformanceOverlay::DrawSettings()
 		}
 		if (page.Is("appearance")) {
 			// Appearance settings
-			ImGui::TextUnformatted("Appearance");
-			ImGui::Separator();
+			MenuUI::SectionHeading("Size and timing");
 
 			Util::Widgets::SliderFloat("Text Size", &this->settings.TextSize, 0.8f, 1.2f, "%.2f");
 			Util::Widgets::SliderFloat("Background Opacity", &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
@@ -257,14 +251,6 @@ void PerformanceOverlay::DrawSettings()
 			ImGui::Text("Position:");
 			if (ImGui::Button("Reset Position")) {
 				ResetWindowPosition();
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Restore Defaults")) {
-				RestoreDefaultSettings();
-				globals::menu->RequestSettingsDirtyCheck();
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Restores Performance Overlay settings to defaults, including graphs, appearance, and update intervals.");
 			}
 		}
 	}

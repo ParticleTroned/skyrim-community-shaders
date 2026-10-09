@@ -97,47 +97,41 @@ void VolumetricLighting::DrawSettings()
 		std::scoped_lock lock(settingsMutex);
 		SanitizeSettings();
 	}
-
 	MenuUI::SettingsPage page("VolumetricLighting", {
-														{ "appearance", "Lighting", "Choose fog lighting, then refine strength and quality.", "Fog lighting and light shafts", true, true, "Balance atmosphere and cost" },
+														{ "coverage", "Coverage", "Choose where volumetric lighting runs.", "Interior, exterior and rain", true, true, "Choose coverage and quality" },
+														{ "quality", "Quality", "Balance volumetric detail and rendering cost.", "Interior and exterior resolution", true, true, nullptr },
+														{ "appearance", "Look", "Refine the colour and strength of light shafts.", "Interior and exterior godrays", true, true, "Shape the atmosphere" },
 													});
-	if (!page.Is("appearance"))
+	if (!page.Is("coverage") && !page.Is("quality") && !page.Is("appearance"))
 		return;
-
 	std::scoped_lock lock(settingsMutex);
-
-	auto drawVRRestartHint = [] {
-		if (!globals::game::isVR) {
-			return;
+	if (page.Is("coverage")) {
+		Util::Widgets::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
+		Util::Widgets::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
+		if (globals::game::isVR) {
+			Util::Widgets::Checkbox("Disable during rain", &settings.DisableWeatherInteractionDuringRain);
+			Util::AddTooltip("Disables weather-driven volumetric lighting during rain and restores it afterwards.");
+			MenuUI::DetailNote("In VR, changes to interior and exterior coverage require a game restart.");
 		}
-
-		ImGui::SameLine();
-		ImGui::TextDisabled("(VR restart required)");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("In VR, this change needs a restart before it fully applies.");
-		}
-	};
-
-	if (REL::Module::IsVR()) {
-		Util::Widgets::Checkbox("Disable Weather-Driven Volumetric Lighting During Rain", &settings.DisableWeatherInteractionDuringRain);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Turns off rain-driven volumetric lighting while it is raining, then restores it after rain.");
 	}
-
-	DrawGodrayTuningSettings();
-	ImGui::Separator();
-
-	Util::Widgets::Checkbox("Enable in Exteriors", &settings.ExteriorEnabled);
-	drawVRRestartHint();
-
-	if (settings.ExteriorEnabled)
-		DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false);
-
-	Util::Widgets::Checkbox("Enable in Interiors", &settings.InteriorEnabled);
-	drawVRRestartHint();
-
-	if (settings.InteriorEnabled)
-		DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true);
+	if (page.Is("quality")) {
+		MenuUI::DetailGrid grid("VolumetricQuality", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
+		grid.Next();
+		MenuUI::SectionHeading("Exteriors");
+		{
+			const auto disabled = Util::DisableGuard(!settings.ExteriorEnabled);
+			DrawVolumetricLightingSettings(settings.ExteriorQuality, settings.ExteriorCustomSize, false);
+		}
+		grid.Next();
+		MenuUI::SectionHeading("Interiors");
+		{
+			const auto disabled = Util::DisableGuard(!settings.InteriorEnabled);
+			DrawVolumetricLightingSettings(settings.InteriorQuality, settings.InteriorCustomSize, true);
+		}
+	}
+	if (page.Is("appearance"))
+		DrawGodrayTuningSettings();
 }
 
 void VolumetricLighting::DrawPerformanceSettings(bool a_advanced)
@@ -200,16 +194,19 @@ json VolumetricLighting::CapturePerformanceSettingsState() const
 
 void VolumetricLighting::DrawGodrayTuningSettings()
 {
-	ImGui::SeparatorText("Godray Tuning");
+	MenuUI::SectionHeading("Godray tuning");
 	const bool tuningAvailable = IsImageSpaceReplacementEnabled();
 	if (!tuningAvailable) {
 		ImGui::TextDisabled("Godray tuning requires ImageSpace pixel-shader replacement.");
 	}
 
-	ImGui::BeginDisabled(!tuningAvailable);
+	const auto disabled = Util::DisableGuard(!tuningAvailable);
+	MenuUI::DetailGrid grid("GodrayProfiles", 2, ImGui::GetFontSize() * 32);
+	const Util::Widgets::ControlLayout controls(true);
+	grid.Next();
 	DrawGodrayProfileSettings("Exterior Godrays", settings.ExteriorGodrays);
+	grid.Next();
 	DrawGodrayProfileSettings("Interior Godrays", settings.InteriorGodrays);
-	ImGui::EndDisabled();
 }
 
 void VolumetricLighting::DrawGodrayProfileSettings(const char* label, GodrayProfile& profile)

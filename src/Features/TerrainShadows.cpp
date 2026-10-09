@@ -27,12 +27,12 @@ void TerrainShadows::SaveSettings(json& o_json)
 void TerrainShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainShadows", {
-													{ "appearance", "Shadows", "Choose terrain shadow coverage and quality.", "Shadow coverage and quality", true, true, "Shape terrain shadows" },
+													{ "appearance", "How it works", "Learn how terrain shadows follow the landscape.", "Landscape shadow coverage", true, true, "Shape terrain shadows" },
 													{ "diagnostics", "Diagnostics", "Inspect terrain shadow diagnostics.", "Diagnostic terrain views", true, false, nullptr },
 												});
 
 	if (page.Is("appearance")) {
-		Util::Widgets::Checkbox("Enabled", &settings.EnableTerrainShadow);
+		MenuUI::DetailText("Terrain shadows follow the worldspace height map. Use Enabled in the header to switch them on or off, and Diagnostics to inspect the current terrain data.");
 	}
 	if (page.Is("diagnostics")) {
 		std::string curr_worldspace = "N/A";

@@ -138,11 +138,23 @@ void RenderDoc::Load()
 	logger::info("[RenderDoc] Successfully initialized");
 }
 
+Feature::SettingsHeaderStatus RenderDoc::GetSettingsHeaderStatus() const
+{
+	if (enableRenderDocCapture != IsAvailable())
+		return { "Restart required", true };
+	return { IsAvailable() ? "Ready" : "Off", false };
+}
+
 void RenderDoc::DrawSettings()
 {
 	static MenuUI::ActionFeedback feedback;
+	const bool captureReady = enableRenderDocCapture && IsAvailable();
+	if (enableRenderDocCapture && !IsAvailable())
+		Util::Text::WrappedWarning("RenderDoc capture is unavailable. Save settings and restart after enabling it. If it remains unavailable, check that Data/Renderdoc/renderdoc.dll is installed and loads successfully.");
+	else if (!enableRenderDocCapture && IsAvailable())
+		Util::Text::WrappedWarning("Save settings and restart to unload RenderDoc. Capture overhead remains until then.");
 	MenuUI::SettingsPage page("RenderDoc", {
-											   { "capture", "Capture", "Enable capture, then choose the frames to record.", "Capture activation and frames", true, true, "Choose capture and storage" },
+											   { "capture", "Capture", "Enable capture, then choose the frames to record.", "Capture activation and frames", true, true, "Choose capture and storage", nullptr, nullptr, captureReady },
 											   { "storage", "Storage", "Monitor storage and remove old captures.", "Disk usage and cleanup", true, true, nullptr },
 											   { "files", "Files", "Browse and open recorded captures.", "Recorded captures", true, true, "Review captured frames" },
 										   });
@@ -155,53 +167,20 @@ void RenderDoc::DrawSettings()
 	// Track section visibility for intelligent cache refreshing
 	bool isSectionVisible = false;
 
-	if (page.Is("capture"))
-		DrawCaptureEnableToggle();
-
-	// The rest of the UI renders only when capture is active
-	bool renderDocCaptureEnabled = enableRenderDocCapture;
-	bool renderDocActive = IsAvailable();
-
-	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
-
-	if (renderDocCaptureEnabled && !renderDocActive) {
-		Util::Text::WrappedWarning("Requires restart to enable RenderDoc capture.");
-		return;
-	}
-
-	if (!renderDocCaptureEnabled && renderDocActive) {
-		Util::Text::WrappedWarning("Requires restart to disable RenderDoc capture. Capture overhead remains until then.");
-		return;
-	}
-
-	if (!renderDocCaptureEnabled && !renderDocActive && !page.Is("capture")) {
-		if (MenuUI::DetailNote("Enable RenderDoc capture before reviewing storage and recorded files. Activation requires a game restart.", "Open Capture"))
-			MenuUI::SettingsPage::Select("RenderDoc", "capture");
-	}
-
-	if (renderDocCaptureEnabled && renderDocActive) {
+	if (page.Is("capture") && !captureReady)
+		MenuUI::DetailNote("Enable RenderDoc in the header, save settings, and restart the game before capturing. Existing capture files remain available in Storage and Files.");
+	{
 		isSectionVisible = true;
 		// Capture Control Section
 		{
 			if (page.Is("capture")) {
-				ImGui::TextColored(themeSettings.StatusPalette.InfoColor, "RenderDoc capture is active.");
-				ImGui::SameLine();
-
-				std::string enabledFeaturesPreview;
-				for (auto* feat : Feature::GetFeatureList()) {
-					if (!feat->loaded)
-						continue;
-
-					std::string ver = feat->version.empty() ? std::string("<unknown>") : feat->version;
-					if (!enabledFeaturesPreview.empty())
-						enabledFeaturesPreview += '\n';
-					enabledFeaturesPreview += std::format("- {} ({})", feat->GetShortName(), ver);
-				}
+				const auto disabled = Util::DisableGuard(!captureReady);
+				MenuUI::SectionHeading("Capture settings");
 
 				// Comments input for next capture
 				static char commentsBuffer[kCommentsBufferSize] = { 0 };
 
-				Util::Widgets::InputTextWithHint("##CaptureComments", "Additional comments for next capture (optional)", commentsBuffer, sizeof(commentsBuffer));
+				Util::Widgets::InputTextWithHint("Comments", "Additional comments for next capture (optional)", commentsBuffer, sizeof(commentsBuffer));
 				Util::AddTooltip("Additional comments will be appended to automatic metadata and embedded in the .rdc file");
 
 				int captureFrameCountUI = static_cast<int>(GetCaptureFrameCount());
@@ -248,7 +227,6 @@ void RenderDoc::DrawSettings()
 					ImGui::EndPopup();
 				}
 
-				ImGui::SameLine();
 				if (ImGui::Button("Open Capture Directory")) {
 					// Open the directory where captures are saved
 					try {
@@ -568,7 +546,7 @@ void RenderDoc::SaveSettings(json& o_json)
 void RenderDoc::LoadSettings(json& o_json)
 {
 	if (o_json.contains("Enable RenderDoc Capture") && o_json["Enable RenderDoc Capture"].is_boolean()) {
-		enableRenderDocCapture = o_json["Enable RenderDoc Capture"];
+		SetCaptureEnabled(o_json["Enable RenderDoc Capture"].get<bool>());
 	}
 	if (!o_json.contains("Capture Frame Count")) {
 		return;
@@ -587,18 +565,25 @@ void RenderDoc::LoadSettings(json& o_json)
 	}
 }
 
-void RenderDoc::DrawCaptureEnableToggle()
+void RenderDoc::SetCaptureEnabled(bool a_enabled)
 {
-	bool prevRenderDocCapture = enableRenderDocCapture;
-	if (Util::Widgets::Checkbox("Enable RenderDoc Capture", &enableRenderDocCapture)) {
-		if (enableRenderDocCapture && !prevRenderDocCapture) {
-			globals::state->useFrameAnnotations = globals::state->frameAnnotations;
-			globals::state->frameAnnotations = true;
-		}
-		if (!enableRenderDocCapture && prevRenderDocCapture) {
-			globals::state->frameAnnotations = globals::state->useFrameAnnotations;
+	if (auto* state = globals::state) {
+		if (a_enabled) {
+			if (!enableRenderDocCapture || !state->frameAnnotations)
+				state->useFrameAnnotations = state->frameAnnotations;
+			state->frameAnnotations = true;
+		} else if (enableRenderDocCapture && state->frameAnnotations) {
+			state->frameAnnotations = state->useFrameAnnotations;
 		}
 	}
+	enableRenderDocCapture = a_enabled;
+}
+
+void RenderDoc::DrawSettingsEnabledControl()
+{
+	bool enabled = enableRenderDocCapture;
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
+		SetCaptureEnabled(enabled);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Enable RenderDoc frame capture for providing debug captures to the CSX maintainers.");
@@ -608,7 +593,7 @@ void RenderDoc::DrawCaptureEnableToggle()
 
 void RenderDoc::RestoreDefaultSettings()
 {
-	enableRenderDocCapture = false;
+	SetCaptureEnabled(false);
 	SetCaptureFrameCount(1);
 }
 
@@ -756,7 +741,7 @@ bool RenderDoc::HandleCaptureHotkey(uint32_t a_vkKey)
 		return false;
 	}
 
-	if (!IsAvailable()) {
+	if (!enableRenderDocCapture || !IsAvailable()) {
 		return false;
 	}
 

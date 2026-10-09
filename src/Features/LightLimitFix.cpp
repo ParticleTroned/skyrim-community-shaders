@@ -1098,7 +1098,10 @@ void LightLimitFix::DrawSettings()
 
 			ImGui::Separator();
 			const auto particlesDisabled = Util::DisableGuard(!settings.EnableParticleLights);
-			MenuUI::SectionHeading("Particle Lights Performance");
+			MenuUI::DetailGrid particleGrid("ParticleControls", 2, ImGui::GetFontSize() * 32);
+			const Util::Widgets::ControlLayout controls(true);
+			particleGrid.Next();
+			MenuUI::SectionHeading("Visibility and cost");
 
 			Util::Widgets::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1144,7 +1147,8 @@ void LightLimitFix::DrawSettings()
 			ImGui::Spacing();
 			ImGui::Spacing();
 
-			ImGui::TextWrapped("Particle Lights Customisation");
+			particleGrid.Next();
+			MenuUI::SectionHeading("Appearance");
 			Util::Widgets::SliderFloat("Saturation", &settings.ParticleLightsSaturation, kParticleLightsSaturationMin, kParticleLightsSaturationMax, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Particle light saturation.");
@@ -1153,7 +1157,7 @@ void LightLimitFix::DrawSettings()
 			Util::Widgets::SliderFloat("Particle Radius", &settings.ParticleRadius, kParticleRadiusMin, kParticleRadiusMax, "%.2f");
 			Util::Widgets::SliderFloat("Billboard Brightness", &settings.BillboardBrightness, kBillboardBrightnessMin, kBillboardBrightnessMax, "%.2f");
 			Util::Widgets::SliderFloat("Billboard Radius", &settings.BillboardRadius, kBillboardRadiusMin, kBillboardRadiusMax, "%.2f");
-			Util::Widgets::Checkbox("v0.8.7 Particle Lights Legacy", &settings.UseParticleLights087LegacyMode);
+			Util::Widgets::Checkbox("Legacy particle appearance", &settings.UseParticleLights087LegacyMode);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Restores the v0.8.7 particle-light alpha model.\n"

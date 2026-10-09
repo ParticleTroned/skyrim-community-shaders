@@ -119,18 +119,28 @@ void WeatherPicker::EnsureWeatherListLoaded()
 void WeatherPicker::DrawSettings()
 {
 	MenuUI::SettingsPage page("WeatherPicker", {
-												   { "appearance", "Weather", "Choose the weather to preview in the world.", "Weather preview and analysis", true, true, "Choose the world atmosphere" },
+												   { "appearance", "Weather", "Choose and preview the weather.", "Weather selection and filters", true, true, "Choose weather and time" },
+												   { "time", "Time", "Set the time of day and simulation speed.", "Game time and speed", true, true, nullptr },
+												   { "analysis", "Analysis", "Inspect current weather and feature responses.", "Weather status and lighting response", true, true, "Inspect the result" },
 											   });
-	if (!page.Is("appearance"))
+	if (page.Is("time"))
+		DrawTimeControls();
+	if (!page.Is("appearance") && !page.Is("analysis"))
 		return;
 
 	EnsureWeatherListLoaded();
 
-	DrawTimeControls();
-	DrawWeatherPickerSection();
-
-	ImGui::Spacing();
-	DrawShowInOverlayToggle();
+	if (page.Is("appearance")) {
+		if (auto* sky = globals::game::sky; sky && sky->mode.get() == RE::Sky::Mode::kFull)
+			RenderWeatherControls(sky);
+		else
+			MenuUI::DetailNote("Weather selection is available after loading an exterior scene.");
+	}
+	if (page.Is("analysis")) {
+		RenderCoreWeatherDetails(true, false);
+		RenderFeatureWeatherAnalysis();
+		MenuUI::DetailNote("Enabled in the header shows or hides the separate weather-details overlay. It does not change weather or time.");
+	}
 }
 
 void WeatherPicker::DrawSettingsEnabledControl()
@@ -146,33 +156,6 @@ void WeatherPicker::SetOverlayVisible(bool a_enabled)
 	WeatherDetailsWindow.ShowInOverlay = a_enabled;
 	if (a_enabled && Menu::GetSingleton()->overlayVisible)
 		WeatherDetailsWindow.Enabled = true;
-}
-
-void WeatherPicker::DrawShowInOverlayToggle()
-{
-	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
-	const auto& menuSettings = Menu::GetSingleton()->GetSettings();
-
-	bool showInOverlay = WeatherDetailsWindow.ShowInOverlay;
-	if (Util::Widgets::Checkbox(T(TKEY("show_in_overlay"), "Show in Overlay"), &showInOverlay)) {
-		SetOverlayVisible(showInOverlay);
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("show_in_overlay_tooltip"),
-							  "Opens weather details in a separate window that stays open\neven when the main menu is closed. "));
-		ImGui::Text(T(TKEY("toggle_with"), "Toggle with "));
-		ImGui::SameLine();
-		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s", Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
-	}
-}
-
-void WeatherPicker::DrawWeatherPickerSection()
-{
-	ImGui::Spacing();
-
-	RenderCoreWeatherDetails(true);
-
-	RenderFeatureWeatherAnalysis();
 }
 
 void WeatherPicker::DrawTimeControls()
@@ -728,7 +711,7 @@ void WeatherPicker::RenderWeatherInformationDisplay(RE::Sky* sky, bool showInter
 	}
 }
 
-void WeatherPicker::RenderCoreWeatherDetails(bool showInteractiveElements)
+void WeatherPicker::RenderCoreWeatherDetails(bool showInteractiveElements, bool showSelectionControls)
 {
 	const auto showError = [](const char* msg) {
 		auto menu = Menu::GetSingleton();
@@ -738,7 +721,7 @@ void WeatherPicker::RenderCoreWeatherDetails(bool showInteractiveElements)
 
 	if (auto sky = globals::game::sky) {
 		if (sky->mode.get() == RE::Sky::Mode::kFull) {
-			if (showInteractiveElements) {
+			if (showInteractiveElements && showSelectionControls) {
 				RenderWeatherControls(sky);
 			}
 			DrawWeatherStatusPanel();

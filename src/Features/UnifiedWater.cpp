@@ -656,15 +656,8 @@ void UnifiedWater::DrawSettings()
 	SanitizeSettings(settings);
 
 	if (page.Is("look")) {
-		Util::Widgets::Checkbox("Use Optimised Meshes", &settings.UseOptimisedMeshes);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"Uses meshes with significantly lower tri-count for improved performance with no visual quality loss.\n"
-				"Will only affect newly created water - requires a change of location or game restart to take effect.");
-		}
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Water Appearance");
+		MenuUI::DetailText("Use Enabled in the header to switch optimized meshes. Mesh changes apply after a location change or restart.");
+		MenuUI::SectionHeading("Water appearance");
 		DrawWaterTintSettings(settings);
 
 		ImGui::Spacing();

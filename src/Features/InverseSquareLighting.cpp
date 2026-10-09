@@ -54,23 +54,15 @@ namespace
 	}
 }
 
-bool InverseSquareLighting::DrawEnabledCheckbox()
-{
-	bool enabled = settings.Enabled;
-	if (Util::Widgets::Checkbox("Enabled", &enabled))
-		SetRuntimeEnabled(enabled);
-	return enabled;
-}
-
 void InverseSquareLighting::DrawSettings()
 {
 	MenuUI::SettingsPage page("InverseSquareLighting", {
-														   { "appearance", "Lighting", "Enable physically based falloff for nearby lights.", "Nearby light falloff", true, true, "Shape nearby lighting" },
+														   { "appearance", "How it works", "Learn how nearby light falloff changes.", "Nearby light falloff", true, true, "Shape nearby lighting" },
 													   });
 	if (!page.Is("appearance"))
 		return;
 
-	DrawEnabledCheckbox();
+	MenuUI::DetailText("Nearby lights use physically based distance falloff. Use Enabled in the header to compare with the original lighting; there are no additional tuning controls.");
 }
 
 void InverseSquareLighting::LoadSettings(json& o_json)

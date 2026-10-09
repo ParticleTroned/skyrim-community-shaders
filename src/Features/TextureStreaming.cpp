@@ -1,7 +1,7 @@
 #include "TextureStreaming.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
-#include "GpuPass.h"
+#include "Menu/SettingsPage.h"
 #include "State.h"
 #include "TextureStreaming/ConsumerInventory.h"
 #include "TextureStreaming/Diagnostics.h"
@@ -750,7 +750,6 @@ void TextureStreaming::State::ServiceTransaction()
 		CancelTransaction();
 		return;
 	}
-	CS_GPU_PASS("TextureStreaming::Upload");
 	const auto hr = work.upload.Advance(context, work.payload.image, uploadBytesPerFrame);
 	if (FAILED(hr)) {
 		record.retryAfter = GetTickCount64() + 10000;
@@ -1025,14 +1024,33 @@ void TextureStreaming::DrawSettings()
 				logicalBytesRemoved += record.bytes[0] - record.bytes[record.drop];
 			}
 	}
-	if (Util::Widgets::SliderInt("Maximum mip levels removed", &maximum, 1, Policy::MaximumDrop))
-		Configure(enabled, maximum);
-	ImGui::TextWrapped("Only suitable static opaque DDS materials are streamed. Detail follows both eyes, output resolution and shader mip bias. Neural Rendering scale does not lower texture detail.");
-	ImGui::TextWrapped("Disabling restores textures gradually as memory headroom permits.");
-	if (!originHookReady.load())
-		ImGui::TextWrapped("DDS provenance is unavailable; streaming is inactive.");
-	ImGui::TextWrapped("%s", detail.c_str());
-	ImGui::Text("Reduced textures: %llu", reduced);
-	ImGui::Text("Logical texture capacity removed: %.1f MiB", static_cast<double>(logicalBytesRemoved) / Policy::MiB);
-	ImGui::TextWrapped("Logical capacity is not a measurement of physical VRAM reclaimed.");
+	const bool available = originHookReady.load();
+	if (!available)
+		Util::Text::WrappedWarning("Texture streaming is unavailable because texture source tracking could not start. Restart the game to try again.");
+	MenuUI::SettingsPage page("TextureStreaming", {
+													  { "quality", "Texture detail", "Choose how much texture detail can be reduced under memory pressure.", "Detail limit and restoration", true, true, "Balance detail and memory", nullptr, nullptr, available },
+													  { "status", "Status", "Inspect streaming activity and logical texture capacity.", "Activity and memory accounting", true, true, nullptr },
+												  });
+	if (page.Is("quality")) {
+		{
+			const auto disabled = Util::DisableGuard(!available);
+			if (Util::Widgets::SliderInt("Maximum mip levels removed", &maximum, 1, Policy::MaximumDrop))
+				Configure(enabled, maximum);
+		}
+		MenuUI::DetailNote("Detail follows both eyes, output resolution and shader mip bias. Neural Rendering scale does not lower texture detail.");
+		MenuUI::DetailText("Only suitable static opaque DDS materials are streamed. Disabling restores textures gradually as memory headroom permits.");
+	}
+	if (page.Is("status")) {
+		MenuUI::DetailNote(detail.c_str());
+		{
+			MenuUI::DetailGrid grid("StreamingStatus");
+			grid.Next();
+			MenuUI::SectionHeading("Texture activity");
+			MenuUI::DetailText(std::format("Reduced textures: {}", reduced).c_str());
+			grid.Next();
+			MenuUI::SectionHeading("Logical capacity");
+			MenuUI::DetailText(std::format("Capacity removed: {:.1f} MiB", static_cast<double>(logicalBytesRemoved) / Policy::MiB).c_str());
+		}
+		MenuUI::DetailText("Logical capacity is not a measurement of physical VRAM reclaimed.");
+	}
 }

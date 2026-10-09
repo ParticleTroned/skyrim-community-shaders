@@ -41,7 +41,8 @@ namespace MenuUI
 		constexpr float cardSummaryScale = 14.0f / 12.0f;
 		constexpr float stageTextScale = 1.25f;
 		constexpr float detailTitleScale = 1.7f;
-		constexpr float cardOpacity = .94f * SettingsSurfaceOpacityScale;
+		constexpr float cardOpacity = .846f * SettingsSurfaceOpacityScale;
+		constexpr float tabOpacityScale = 1.10f;
 		constexpr float maximumOverviewCardHeight = 6.0f;
 		constexpr float tabVerticalPadding = .5f;
 		constexpr float cardTextGap = .22f;
@@ -138,6 +139,9 @@ namespace MenuUI
 	{
 		std::scoped_lock lock(navigationMutex);
 		auto& state = navigation[a_page];
+		if ((std::string_view(a_section) == "profiling" && ProfilingRenderer::GetProfilingDisabledReason()) ||
+			(std::string_view(a_section) != "profiling" && std::ranges::any_of(state.sections, [&](const Section& step) { return step.disabledReason && std::string_view(a_section) == step.id; })))
+			return false;
 		if (state.canSelect && !state.canSelect(a_section))
 			return false;
 		state.selected = a_section;
@@ -172,11 +176,12 @@ namespace MenuUI
 		std::scoped_lock lock(navigationMutex);
 		auto result = nlohmann::json::array();
 		for (const auto& [id, state] : navigation) {
-			const bool showOverviewTab = std::ranges::any_of(state.sections, [](const Section& step) { return step.visible && step.showTab; });
-			auto tabs = nlohmann::json::array({ { { "id", "overview" }, { "title", "Overview" }, { "showTab", showOverviewTab } } });
+			auto tabs = nlohmann::json::array({ { { "id", "overview" }, { "title", "Overview" }, { "showTab", true }, { "enabled", true }, { "disabledReason", "" } } });
 			for (const auto& step : state.sections)
-				if (step.visible)
-					tabs.push_back({ { "id", step.id }, { "title", step.title }, { "summary", step.summary }, { "showTab", step.showTab } });
+				if (step.visible) {
+					const auto* reason = std::string_view(step.id) == "profiling" ? ProfilingRenderer::GetProfilingDisabledReason() : step.disabledReason;
+					tabs.push_back({ { "id", step.id }, { "title", step.title }, { "summary", step.summary }, { "showTab", step.showTab }, { "enabled", !reason }, { "disabledReason", reason ? reason : "" } });
+				}
 			result.push_back({ { "page", id }, { "selected", state.selected }, { "tabs", std::move(tabs) } });
 		}
 		return result;
@@ -190,10 +195,12 @@ namespace MenuUI
 		const std::string pageId = activeFeature ? activeFeature->GetShortName() : a_id;
 		a_id = pageId.c_str();
 		const bool measurementAvailable = activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning";
-		const bool profilingAvailable = globals::profiler && (activeFeature ? (!measurementAvailable || activeFeature->HasIndependentProfilingTab()) && ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning");
+		const bool profilingAvailable = activeFeature ? ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning";
 		if (activeFeature || (pageId != "Home" && pageId != "General" && pageId != "Advanced")) {
 			Section performance{ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" };
 			Section profiling{ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false };
+			profiling.disabledReason = ProfilingRenderer::GetProfilingDisabledReason();
+			profiling.active = !profiling.disabledReason;
 			performance.showTab = profiling.showTab = !activeFeature;
 			sections.push_back(std::move(performance));
 			sections.push_back(std::move(profiling));
@@ -210,7 +217,7 @@ namespace MenuUI
 		bool activatedTopTab = false;
 		state.sections = sections;
 		if (state.selected != "overview" && std::ranges::none_of(sections, [&](const Section& step) {
-				return step.visible && state.selected == step.id;
+				return step.visible && !step.disabledReason && state.selected == step.id;
 			})) {
 			state.selected = "overview";
 			state.pending = true;
@@ -219,7 +226,7 @@ namespace MenuUI
 			return step.visible && !step.showTab && state.selected == step.id;
 		});
 		const auto visibleTabCount = std::ranges::count_if(sections, [](const Section& step) { return step.visible && step.showTab; });
-		if (visibleTabCount > 0) {
+		{
 			const float font = ImGui::GetFontSize();
 			const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
 			const float tabCount = 1.0f + static_cast<float>(visibleTabCount);
@@ -228,10 +235,20 @@ namespace MenuUI
 			ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 0);
 			ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0);
 			ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, { 1, ImGui::GetStyle().ItemInnerSpacing.y });
-			ImGui::PushStyleColor(ImGuiCol_Tab, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-			ImGui::PushStyleColor(ImGuiCol_TabSelected, ImGui::GetStyleColorVec4(cardOnlySelection ? ImGuiCol_FrameBg : ImGuiCol_Header));
+			const std::pair<ImGuiCol, ImGuiCol> tabColors[]{
+				{ ImGuiCol_Tab, ImGuiCol_FrameBg },
+				{ ImGuiCol_TabSelected, cardOnlySelection ? ImGuiCol_FrameBg : ImGuiCol_Header },
+				{ ImGuiCol_TabHovered, ImGuiCol_TabHovered },
+				{ ImGuiCol_TabDimmed, ImGuiCol_TabDimmed },
+				{ ImGuiCol_TabDimmedSelected, ImGuiCol_TabDimmedSelected }
+			};
+			for (const auto& [tab, source] : tabColors) {
+				auto color = ImGui::GetStyleColorVec4(source);
+				color.w = std::clamp(color.w * tabOpacityScale, 0.0f, 1.0f);
+				ImGui::PushStyleColor(tab, color);
+			}
 			ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, { 0, 0, 0, 0 });
-			const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleColor(3); ImGui::PopStyleVar(4); });
+			const SKSE::stl::scope_exit restoreStyle([count = static_cast<int>(std::size(tabColors)) + 1] { ImGui::PopStyleColor(count); ImGui::PopStyleVar(4); });
 			if (ImGui::BeginTabBar("##SetupTabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
 				const SKSE::stl::scope_exit endTabs([] { ImGui::EndTabBar(); });
 				const auto requested = state.selected;
@@ -239,10 +256,13 @@ namespace MenuUI
 				auto* tabBar = ImGui::GetCurrentTabBar();
 				const auto retainedTab = tabBar->SelectedTabId;
 				const auto queuedTab = !restoreSelection ? tabBar->NextSelectedTabId : 0;
-				auto tab = [&](const char* id, const char* title, const char* help) {
+				auto tab = [&](const char* id, const char* title, const char* help, const char* disabledReason = nullptr) {
+					const auto disabled = Util::DisableGuard(disabledReason != nullptr);
 					ImGui::PushID(id);
 					const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
-					const auto flags = restoreSelection && requested == id ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+					const bool pinned = std::string_view(id) == "overview";
+					const ImGuiTabItemFlags flags = (pinned ? ImGuiTabItemFlags_Leading : ImGuiTabItemFlags_None) |
+					                                (restoreSelection && requested == id ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
 					const float titleWidth = ImGui::CalcTextSize(title).x;
 					const float width = std::max(tabWidth - 1, titleWidth + font * .5f);
 					ImGui::SetNextItemWidth(width);
@@ -263,32 +283,28 @@ namespace MenuUI
 								activatedTopTab = cardOnlySelection;
 						}
 					}
-					if (active) {
+					if (active)
 						ImGui::EndTabItem();
-						if (!cardOnlySelection) {
-							const auto minimum = ImGui::GetItemRectMin();
-							const auto maximum = ImGui::GetItemRectMax();
-							ImGui::GetWindowDrawList()->AddLine({ minimum.x, maximum.y - 1 }, { maximum.x, maximum.y - 1 }, ImGui::GetColorU32(accent), 2);
-						}
-					}
 					const auto minimum = ImGui::GetItemRectMin();
 					const auto maximum = ImGui::GetItemRectMax();
 					const auto* bar = ImGui::GetCurrentTabBar();
-					const ImVec2 clipMin{ std::max(minimum.x, bar->ScrollingRectMinX), minimum.y };
-					const ImVec2 clipMax{ std::min(maximum.x, bar->ScrollingRectMaxX), maximum.y };
+					const ImVec2 clipMin{ std::max(minimum.x, pinned ? bar->BarRect.Min.x : bar->ScrollingRectMinX), minimum.y };
+					const ImVec2 clipMax{ std::min(maximum.x, pinned ? bar->BarRect.Max.x : bar->ScrollingRectMaxX), maximum.y };
 					if (clipMin.x < clipMax.x) {
 						auto* draw = ImGui::GetWindowDrawList();
 						draw->PushClipRect(clipMin, clipMax, true);
 						const SKSE::stl::scope_exit unclip([draw] { draw->PopClipRect(); });
+						if (active && !cardOnlySelection)
+							draw->AddLine({ minimum.x, maximum.y - 1 }, { maximum.x, maximum.y - 1 }, ImGui::GetColorU32(accent), 2);
 						draw->AddText({ minimum.x + (maximum.x - minimum.x - titleWidth) * .5f, minimum.y + font * tabVerticalPadding },
 							ImGui::GetColorU32(active && !cardOnlySelection ? accent : ImGui::GetStyleColorVec4(ImGuiCol_Text)), title);
 					}
-					Util::AddTooltip(help);
+					Util::AddTooltip(disabledReason ? disabledReason : help, ImGuiHoveredFlags_AllowWhenDisabled);
 				};
 				tab("overview", "Overview", "Start here. Choose a card to open its settings.");
 				for (const auto& step : sections)
 					if (step.visible && step.showTab)
-						tab(step.id, step.title, step.description);
+						tab(step.id, step.title, step.description, step.disabledReason);
 			}
 		}
 		state.pending = rejectedSelection || activatedTopTab;
@@ -303,8 +319,8 @@ namespace MenuUI
 		if (contentLeftPadding > 0)
 			ImGui::Indent(contentLeftPadding);
 		if (contentVisible && selected != "overview") {
-			DrawDetailHeader(a_id, a_summary);
-			// Keep section navigation outside the independently scrolling controls.
+			DrawDetailHeader(a_summary);
+			// Keep the section heading outside the independently scrolling controls.
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, 0 });
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
 			contentVisible = ImGui::BeginChild("##DetailControls", { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
@@ -358,7 +374,7 @@ namespace MenuUI
 		return contentVisible && selected == a_section;
 	}
 
-	void SettingsPage::DrawDetailHeader(const char* a_page, std::string_view a_summary)
+	void SettingsPage::DrawDetailHeader(std::string_view a_summary)
 	{
 		const auto step = std::ranges::find_if(sections, [&](const Section& item) { return selected == item.id; });
 		if (step == sections.end())
@@ -370,7 +386,7 @@ namespace MenuUI
 			ImGui::Indent(inset);
 			contentLeftPadding += inset;
 		}
-		// Reserve the scroll gutter so the back button cannot move as content changes.
+		// Keep heading text aligned with the controls regardless of scrollbar visibility.
 		const float available = std::max(1.0f, ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize);
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + available);
 		const SKSE::stl::scope_exit restoreWrap([] { ImGui::PopTextWrapPos(); });
@@ -391,39 +407,14 @@ namespace MenuUI
 			ImGui::Separator();
 		}
 		ImGui::Dummy({ 0, line * .3f });
-		const auto start = ImGui::GetCursorScreenPos();
 		const int ordinal = step->overview ? 1 + static_cast<int>(std::count_if(sections.begin(), step, [](const Section& item) { return item.visible && item.overview; })) : 0;
 		const char* label = step->cardTitle ? step->cardTitle : step->title;
 		const auto title = ordinal > 0 ? std::format("{:02} · {}", ordinal, label) : std::string(label);
-		const char* back = "Overview";
-		const auto& style = ImGui::GetStyle();
-		constexpr float backScale = 1.25f;
-		const float buttonWidth = (ImGui::CalcTextSize(back).x + line * 1.15f + style.FramePadding.x * 2) * backScale;
-		const float buttonHeight = ImGui::GetFrameHeight() * backScale;
-		const float rightGap = line * .75f;
-		const float titleWidth = ImGui::GetFont()->CalcTextSizeA(line * detailTitleScale, FLT_MAX, 0, title.c_str()).x;
-		const bool sameLine = titleWidth + buttonWidth + rightGap + line < available;
 		{
 			ImGui::PushFont(ImGui::GetFont(), line * detailTitleScale);
 			const SKSE::stl::scope_exit restore([] { ImGui::PopFont(); });
 			ImGui::TextUnformatted(title.c_str());
 		}
-		if (sameLine) {
-			ImGui::SameLine();
-			ImGui::SetCursorScreenPos({ start.x + available - buttonWidth - rightGap, start.y + (line * detailTitleScale - buttonHeight) * .5f });
-		}
-		if (ImGui::Button("##BackToOverview", { buttonWidth, buttonHeight }))
-			Select(a_page, "overview");
-		const auto buttonStart = ImGui::GetItemRectMin();
-		auto* draw = ImGui::GetWindowDrawList();
-		const auto colour = ImGui::GetColorU32(ImGuiCol_Text);
-		const float arrowX = buttonStart.x + style.FramePadding.x * backScale;
-		const float arrowY = (buttonStart.y + ImGui::GetItemRectMax().y) * .5f;
-		draw->AddLine({ arrowX, arrowY }, { arrowX + line * .65f * backScale, arrowY }, colour, backScale);
-		draw->AddLine({ arrowX, arrowY }, { arrowX + line * .25f * backScale, arrowY - line * .25f * backScale }, colour, backScale);
-		draw->AddLine({ arrowX, arrowY }, { arrowX + line * .25f * backScale, arrowY + line * .25f * backScale }, colour, backScale);
-		draw->AddText(nullptr, line * backScale, { arrowX + line * 1.15f * backScale, buttonStart.y + style.FramePadding.y * backScale }, colour, back);
-		Util::AddTooltip("Return to this feature's setup overview. Your settings are kept.");
 		{
 			ImGui::PushFont(ImGui::GetFont(), line * cardSummaryScale);
 			ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::SecondaryText());
@@ -794,9 +785,10 @@ namespace MenuUI
 
 	void SettingsPage::DrawCard(const Section& step, ImVec2 minimum, ImVec2 size, int a_ordinal)
 	{
+		const auto disabled = Util::DisableGuard(step.disabledReason != nullptr);
 		if (DrawSettingsCard(step, minimum, size, a_ordinal, false))
 			ImGui::GetStateStorage()->SetBool(ImGui::GetID(step.id), true);
-		Util::AddTooltip(step.description);
+		Util::AddTooltip(step.disabledReason ? step.disabledReason : step.description, ImGuiHoveredFlags_AllowWhenDisabled);
 	}
 
 }

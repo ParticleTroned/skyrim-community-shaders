@@ -18678,7 +18678,7 @@ namespace
 			NeuralRendering::kMinimumModelResolutionPercent, NeuralRendering::kMaximumModelResolutionPercent, "%d%%");
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Scales NR processing in every mode independently of scene resolution, upscaling and enhancement strength. Lower values may soften fine detail. Applies when released; 100% uses the original NR resolution.");
-		ImGui::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
+		Util::Widgets::Checkbox("Lower NR resolution under memory pressure", &settings.neuralRenderingPressureResolutionEnabled);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Temporarily reduces NR resolution in 10-point steps, down to 30%, when GPU memory is scarce. Restores it gradually after sustained headroom. The slider remains your desired resolution; scene resolution, texture detail and enhancement strength are retained.");
 	}

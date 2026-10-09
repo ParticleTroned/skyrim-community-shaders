@@ -76,6 +76,12 @@ namespace Util::FeatureProfiling
 		{ "HairSpecular", "", materialPasses, false, materialCoverage },
 		{ "WaterEffects", "", waterPasses, false, "Water effects run inside shared shaders. The world and water-effects stages include vanilla rendering and other effects." } });
 
+	/** These utility features do not expose profiling controls, even with retained samples. */
+	inline bool IsExcluded(std::string_view feature)
+	{
+		return feature == "Screenshot" || feature == "TextureStreaming";
+	}
+
 	/** Returns stable coverage even before a scene has produced timing samples. */
 	inline const View* Find(std::string_view feature)
 	{

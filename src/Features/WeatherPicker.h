@@ -49,8 +49,9 @@ public:
 	/**
 	 * Renders the core weather details UI section.
 	 * @param showInteractiveElements Enables interactive controls when true.
+	 * @param showSelectionControls Includes the weather picker above the details.
 	 */
-	static void RenderCoreWeatherDetails(bool showInteractiveElements = true);
+	static void RenderCoreWeatherDetails(bool showInteractiveElements = true, bool showSelectionControls = true);
 
 	/** Renders weather analysis sections contributed by other features. */
 	static void RenderFeatureWeatherAnalysis();
@@ -78,9 +79,7 @@ private:
 	bool resetWindowSize = false;
 
 	void SetOverlayVisible(bool a_enabled);
-	void DrawShowInOverlayToggle();
 	void DrawTimeControls();
-	void DrawWeatherPickerSection();
 	static void DrawWeatherStatusPanel();
 
 	static constexpr float WIND_DIRECTION_OFFSET = 30.5f;

@@ -91,7 +91,6 @@ private:
 	static constexpr float ScaledUnitsSq = Scale * MetresToUnitsSq;
 	static constexpr float FadeZoneBase = 4.5f * Scale * MetresToUnits;
 
-	bool DrawEnabledCheckbox();
 	void SetRuntimeEnabled(bool a_enabled);
 	void ApplyRuntimeStateToActiveLights() const;
 

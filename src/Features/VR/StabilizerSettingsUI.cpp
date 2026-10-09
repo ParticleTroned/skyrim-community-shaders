@@ -1,4 +1,5 @@
 #include "Menu/ExternalSettingsPage.h"
+#include "Menu/SettingsPage.h"
 #include "StabilizerIntegration.h"
 #include "StabilizerSettings.h"
 #include "Utils/UI.h"
@@ -93,7 +94,6 @@ namespace VRFpsStabilizer
 			double number = 0;
 			const bool numeric = ParseNumber(*value, number);
 			bool changed = false;
-			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.4f);
 			if (setting.kind == SettingKind::Boolean && numeric && (number == 0 || number == 1)) {
 				bool enabled = number == 1;
 				changed = Util::Widgets::Checkbox(setting.label, &enabled);
@@ -268,17 +268,15 @@ namespace VRFpsStabilizer
 				editor.filter.Draw("Find a setting");
 				Tooltip("Filter this page by setting name or INI key. Clear the field to show all controls again.");
 				std::string_view lastSection;
-				bool open = true;
 				for (const auto& setting : kSettings) {
 					if (!Equal(setting.group, group))
 						continue;
 					const auto* section = SettingSection(setting);
 					if (lastSection != section) {
-						open = ImGui::CollapsingHeader(section, ImGuiTreeNodeFlags_DefaultOpen);
+						MenuUI::SectionHeading(section);
 						lastSection = section;
 					}
-					if (open || editor.filter.IsActive())
-						DrawSetting(editor, setting);
+					DrawSetting(editor, setting);
 				}
 			}
 		}

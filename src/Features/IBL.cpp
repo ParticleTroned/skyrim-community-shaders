@@ -149,6 +149,13 @@ void IBL::RestorePerformanceToggleState(const json& a_state)
 		SetPerformanceToggleEnabled(a_state.get<bool>());
 }
 
+void IBL::DrawSettingsEnabledControl()
+{
+	bool enabled = settings.EnableIBL != 0;
+	if (Util::WeatherUI::Checkbox("Enabled", this, "EnableIBL", &enabled))
+		SetPerformanceToggleEnabled(enabled);
+}
+
 void IBL::DrawSettings()
 {
 	MenuUI::SettingsPage page("IBL", {
@@ -159,16 +166,6 @@ void IBL::DrawSettings()
 
 	SanitizeSettings(settings);
 	std::set<std::string> changedWeatherBaselines;
-	if (page.Is("coverage")) {
-		bool enableIBL = settings.EnableIBL != 0;
-		if (Util::WeatherUI::Checkbox("Enabled", this, "EnableIBL", &enableIBL)) {
-			settings.EnableIBL = enableIBL ? 1u : 0u;
-			changedWeatherBaselines.insert("EnableIBL");
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Toggle IBL. When enabled, ambient lighting is derived from cubemap spherical harmonics instead of the vanilla system.");
-		}
-	}
 
 	ImGui::BeginDisabled(settings.EnableIBL == 0);
 	if (page.Is("coverage")) {

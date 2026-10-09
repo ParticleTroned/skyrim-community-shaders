@@ -47,6 +47,7 @@ public:
 	/** Uses the same runtime enable path as the feature's settings panel. */
 	void SetPerformanceCostMeasurementEnabled(bool a_enabled) override { settings.EnableIBL = a_enabled ? 1u : 0u; }
 
+	void DrawSettingsEnabledControl() override;
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;

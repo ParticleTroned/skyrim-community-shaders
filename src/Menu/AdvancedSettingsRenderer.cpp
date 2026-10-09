@@ -37,8 +37,10 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 		RenderShadersSection();
 	if (page.Is("diagnostics"))
 		RenderDiagnosticsSection();
-	if (page.Is("capture"))
-		globals::features::renderDoc.DrawSettings();
+	if (page.Is("capture")) {
+		if (MenuUI::DetailNote("RenderDoc has its own feature page for capture setup, storage and recorded files.", "Open RenderDoc"))
+			globals::menu->SelectFeatureMenu(globals::features::renderDoc.GetShortName());
+	}
 	if (page.Is("testing"))
 		RenderTestingSection();
 }

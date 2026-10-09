@@ -230,7 +230,7 @@ void TruePBR::DrawSettings()
 											 { "diagnostics", "Diagnostics", "Inspect material loading and diagnostic controls." },
 										 });
 
-	const bool enabled = page.Is("look") ? DrawEnabledCheckbox(settings) : settings.Enabled != 0;
+	const bool enabled = settings.Enabled != 0;
 	ImGui::BeginDisabled(!enabled);
 	if (page.Is("look")) {
 		{
@@ -320,7 +320,7 @@ void TruePBR::DrawSettings()
 				});
 			}
 			if (selectedPbrTextureSet != nullptr) {
-				if (ImGui::Button("Save")) {
+				if (ImGui::Button("Save texture set")) {
 					feedback.error = !PNState::SavePBRRecordConfig("Data\\PBRTextureSets", selectedPbrTextureSetName, *selectedPbrTextureSet, feedback.message);
 				}
 			}
@@ -386,7 +386,7 @@ void TruePBR::DrawSettings()
 				});
 			}
 			if (selectedPbrMaterialObject != nullptr) {
-				if (ImGui::Button("Save")) {
+				if (ImGui::Button("Save material object")) {
 					feedback.error = !PNState::SavePBRRecordConfig("Data\\PBRMaterialObjects", selectedPbrMaterialObjectName, *selectedPbrMaterialObject, feedback.message);
 				}
 			}

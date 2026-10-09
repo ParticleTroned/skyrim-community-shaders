@@ -1592,7 +1592,6 @@ void AdaptiveBrightness::DrawSettings()
 
 	if (page.Is("global")) {
 		ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments applied before the active profile and location layers.");
-		DrawGlobalPresetControls();
 		DrawGlobalSettings(true);
 	}
 
@@ -1609,29 +1608,30 @@ void AdaptiveBrightness::DrawSettings()
 		const auto contextScopeToSelect = profileTabToSelect ?
 		                                      GetCurrentContextOverrideScope(GetActiveLocationOverride()) :
 		                                      std::nullopt;
-		if (ImGui::BeginTabBar("##AdaptiveBrightnessProfiles", ImGuiTabBarFlags_None)) {
-			for (auto profile : kProfileOrder) {
-				const ImGuiTabItemFlags tabFlags =
-					!contextScopeToSelect && profileTabToSelect && *profileTabToSelect == profile ?
-						ImGuiTabItemFlags_SetSelected :
-						ImGuiTabItemFlags_None;
-				if (ImGui::BeginTabItem(GetProfileName(profile), nullptr, tabFlags)) {
-					DrawProfile(profile, settings.enabled);
-					ImGui::EndTabItem();
-				}
-
-				if (profile == Profile::Interior) {
-					for (auto scope : kContextProfileOrder) {
-						DrawCurrentContextProfileTab(
-							scope,
-							true,
-							settings.enabled,
-							contextScopeToSelect && *contextScopeToSelect == scope);
-					}
-				}
-			}
-			ImGui::EndTabBar();
+		constexpr int profileCount = static_cast<int>(std::size(kProfileOrder));
+		std::vector<const char*> profileNames;
+		for (auto profile : kProfileOrder)
+			profileNames.push_back(GetProfileName(profile));
+		for (auto scope : kContextProfileOrder)
+			profileNames.push_back(GetContextScopeTabLabel(scope));
+		const auto selectionId = ImGui::GetID("AdaptiveBalanceProfile");
+		auto* storage = ImGui::GetStateStorage();
+		int selected = std::clamp(storage->GetInt(selectionId), 0, static_cast<int>(profileNames.size()) - 1);
+		if (contextScopeToSelect) {
+			for (int i = 0; i < static_cast<int>(std::size(kContextProfileOrder)); ++i)
+				if (kContextProfileOrder[i] == *contextScopeToSelect)
+					selected = profileCount + i;
+		} else if (profileTabToSelect) {
+			for (int i = 0; i < profileCount; ++i)
+				if (kProfileOrder[i] == *profileTabToSelect)
+					selected = i;
 		}
+		Util::Widgets::Combo("Profile", &selected, profileNames.data(), static_cast<int>(profileNames.size()));
+		storage->SetInt(selectionId, selected);
+		if (selected < profileCount)
+			DrawProfile(kProfileOrder[selected], settings.enabled);
+		else
+			DrawCurrentContextProfileControls(kContextProfileOrder[selected - profileCount], true, settings.enabled);
 	}
 
 	if (page.Is("locations")) {
@@ -1642,42 +1642,62 @@ void AdaptiveBrightness::DrawSettings()
 	}
 
 	if (page.Is("presets")) {
-		ImGui::TextWrapped("Import or export location override collections and complete balance configurations. The Worldspace, Locations, and Cities profile tabs also provide JSON presets for their current scope.");
-		DrawLocationOverridePresetControls();
-		DrawFullPresetControls();
+		const auto selectionId = ImGui::GetID("PresetCollection");
+		auto* storage = ImGui::GetStateStorage();
+		int selected = std::clamp(storage->GetInt(selectionId), 0, 2);
+		constexpr const char* collections[] = { "Global profiles", "Location overrides", "Complete setup" };
+		if (MenuUI::ChoiceSetting("Preset contents", &selected, collections, IM_ARRAYSIZE(collections)))
+			storage->SetInt(selectionId, selected);
+		switch (selected) {
+		case 0:
+			DrawGlobalPresetControls();
+			break;
+		case 1:
+			DrawLocationOverridePresetControls();
+			break;
+		case 2:
+			DrawFullPresetControls();
+			break;
+		}
 	}
 }
 
-void AdaptiveBrightness::DrawProfileControlTabs(
+void AdaptiveBrightness::DrawProfileControls(
 	ProfileSettings& a_profile,
 	const char* a_tabBarID,
 	bool a_showAdvancedControls,
 	bool a_globalLayer,
 	bool a_allowEdits)
 {
-	if (ImGui::BeginTabBar(a_tabBarID, ImGuiTabBarFlags_FittingPolicyScroll)) {
-		const auto drawTab = [&](const char* a_label, const auto& a_drawControls) {
-			if (!ImGui::BeginTabItem(a_label))
-				return;
-
-			ImGui::BeginDisabled(!a_allowEdits);
-			a_drawControls();
-			ImGui::EndDisabled();
-			ImGui::EndTabItem();
-		};
-		drawTab("Lighting", [&] { DrawLightingSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
-		drawTab("Color", [&] { DrawColorSettings(a_profile); });
-		drawTab("Bloom", [&] { DrawBloomSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
-		drawTab("Water", [&] { DrawWaterSettings(a_profile, a_showAdvancedControls, a_globalLayer); });
-
-		ImGui::EndTabBar();
+	ImGui::PushID(a_tabBarID);
+	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+	auto* storage = ImGui::GetStateStorage();
+	const auto selectionId = ImGui::GetID("AdjustmentGroup");
+	int selected = std::clamp(storage->GetInt(selectionId), 0, 3);
+	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water" };
+	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, IM_ARRAYSIZE(groups)))
+		storage->SetInt(selectionId, selected);
+	const auto disabled = Util::DisableGuard(!a_allowEdits);
+	switch (selected) {
+	case 0:
+		DrawLightingSettings(a_profile, a_showAdvancedControls, a_globalLayer);
+		break;
+	case 1:
+		DrawColorSettings(a_profile);
+		break;
+	case 2:
+		DrawBloomSettings(a_profile, a_showAdvancedControls, a_globalLayer);
+		break;
+	case 3:
+		DrawWaterSettings(a_profile, a_showAdvancedControls, a_globalLayer);
+		break;
 	}
 }
 
 void AdaptiveBrightness::DrawGlobalSettings(bool a_showAdvancedControls)
 {
 	ClampProfileSettings(settings.globalProfile);
-	DrawProfileControlTabs(
+	DrawProfileControls(
 		settings.globalProfile,
 		"##AdaptiveBalanceGlobalSettings",
 		a_showAdvancedControls,
@@ -1929,32 +1949,17 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 	ImGui::PopID();
 }
 
-void AdaptiveBrightness::DrawCurrentContextProfileTab(
-	ContextProfileScope a_scope,
-	bool a_showAdvancedControls,
-	bool a_allowEdits,
-	bool a_select)
+void AdaptiveBrightness::DrawCurrentContextProfileControls(
+	ContextProfileScope a_scope, bool a_showAdvancedControls, bool a_allowEdits)
 {
-	const auto tabId = std::format(
-		"{}###AdaptiveBalanceContextProfile{}",
-		GetContextScopeTabLabel(a_scope),
-		ContextScopeIndex(a_scope));
-	const ImGuiTabItemFlags tabFlags = a_select ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-	const bool drawTab = ImGui::BeginTabItem(tabId.c_str(), nullptr, tabFlags);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", GetContextScopeDescription(a_scope));
-		ImGui::Text("Profiles continue into descendant locations and interiors.");
-		ImGui::Text("Exact-cell and more specific location profiles keep priority.");
-	}
-	if (!drawTab)
-		return;
+	ImGui::PushID(static_cast<int>(a_scope));
+	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 
 	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* target = GetContextTarget(targets, a_scope);
 	if (!target) {
 		ImGui::TextDisabled("The current cell has no associated %s scope.", GetContextScopeName(a_scope));
-		ImGui::TextWrapped("This tab remains available so the profile layout does not change while cells are loading or when this scope is not present in the current location hierarchy.");
-		ImGui::EndTabItem();
+		ImGui::TextWrapped("This profile remains available so the profile layout does not change while cells are loading or when this scope is not present in the current location hierarchy.");
 		return;
 	}
 
@@ -1977,7 +1982,6 @@ void AdaptiveBrightness::DrawCurrentContextProfileTab(
 			SaveCurrentLocationOverride(*target);
 		ImGui::EndDisabled();
 		DrawContextProfilePresetControls(a_scope, *target, nullptr, a_allowEdits);
-		ImGui::EndTabItem();
 		return;
 	}
 
@@ -1990,7 +1994,6 @@ void AdaptiveBrightness::DrawCurrentContextProfileTab(
 		"Save Profile",
 		false);
 	DrawContextProfilePresetControls(a_scope, *target, contextProfile, a_allowEdits);
-	ImGui::EndTabItem();
 }
 
 void AdaptiveBrightness::DrawContextProfilePresetControls(
@@ -2037,10 +2040,8 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 {
 	ClampProfileSettings(a_profile);
 
-	ImGui::SeparatorText(a_sectionTitle);
-	ImGui::Indent();
-	DrawProfileControlTabs(a_profile, "##ProfileControlSections", a_showAdvancedControls, false, a_allowEdits);
-	ImGui::Unindent();
+	MenuUI::SectionHeading(a_sectionTitle);
+	DrawProfileControls(a_profile, "##ProfileControlSections", a_showAdvancedControls, false, a_allowEdits);
 	ClampProfileSettings(a_profile);
 }
 
@@ -2079,8 +2080,10 @@ void AdaptiveBrightness::DrawLightingSettings(
 	if (!a_profile.advanced)
 		return;
 
-	ImGui::Indent();
-	ImGui::SeparatorText("Sky and Atmosphere");
+	MenuUI::DetailGrid grid("LightingGroups", 2, ImGui::GetFontSize() * 32);
+	const Util::Widgets::ControlLayout controls(true);
+	grid.Next();
+	MenuUI::SectionHeading("Sky and atmosphere");
 	Util::Widgets::SliderFloat("Sky Brightness", &a_profile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Sky Saturation", &a_profile.skySaturation, 0.0f, kSkySaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -2102,11 +2105,12 @@ void AdaptiveBrightness::DrawLightingSettings(
 	Util::Widgets::SliderFloat("Sun Glare Intensity", &a_profile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales glare already drawn by the engine. Zero removes it; one preserves its brightness. Does not restore missing glare or weather lens flares.");
-	ImGui::SeparatorText("Direct Lighting");
+	grid.Next();
+	MenuUI::SectionHeading("Direct lighting");
 	Util::Widgets::SliderFloat("Directional Light", &a_profile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Point Lights", &a_profile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	ImGui::SeparatorText("Point-light Type Balance");
+	MenuUI::SectionHeading("Point-light balance");
 	ImGui::TextWrapped("Subtype values multiply the Point Lights adjustment after the active layers are composed.");
 	Util::Widgets::SliderFloat("Spotlights", &a_profile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Omnidirectional Bulbs", &a_profile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -2115,7 +2119,8 @@ void AdaptiveBrightness::DrawLightingSettings(
 	Util::Widgets::SliderFloat("Linear Spotlights", &a_profile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Linear Omnidirectional Bulbs", &a_profile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	ImGui::SeparatorText("Indirect and Material Lighting");
+	grid.Next();
+	MenuUI::SectionHeading("Indirect and material lighting");
 	Util::Widgets::SliderFloat("Ambient", &a_profile.ambientMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scales ambient lighting after vanilla or image-based lighting is selected. One preserves the lighting; zero removes its ambient contribution.");
@@ -2123,13 +2128,13 @@ void AdaptiveBrightness::DrawLightingSettings(
 	Util::Widgets::SliderFloat("Glowmaps", &a_profile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Effects", &a_profile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-	ImGui::SeparatorText("Atmosphere Gamma Offsets");
+	grid.Next();
+	MenuUI::SectionHeading("Atmosphere gamma offsets");
 	Util::Widgets::SliderFloat("Sky", &a_profile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Clouds", &a_profile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Fog", &a_profile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Fog Transparency", &a_profile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	Util::Widgets::SliderFloat("Volumetric Lighting", &a_profile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::Unindent();
 }
 
 void AdaptiveBrightness::DrawBloomSettings(
@@ -2224,7 +2229,7 @@ void AdaptiveBrightness::DrawGlobalPresetControls()
 {
 	ImGui::SeparatorText("Global Presets");
 	DrawHintText("Global presets store the shared Lighting, Color, Bloom, Water, and wind adjustment layer, the five profiles, and exterior timing.");
-	DrawHintText("Import overwrites those profile tabs in the current settings. Saved location overrides are not changed.");
+	DrawHintText("Import overwrites those profiles in the current settings. Saved location overrides are not changed.");
 	ImGui::PushID("GlobalPresetControls");
 
 	const auto presetPath = GetPresetPath(globalPresetName, PresetKind::Global);
@@ -2523,7 +2528,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 void AdaptiveBrightness::DrawLocationOverridePresetControls()
 {
 	ImGui::SeparatorText("Override Presets");
-	DrawHintText("Override presets store all saved worldspace, regional location, city, specific location, and cell overrides. They do not include the five base profile tabs.");
+	DrawHintText("Override presets store all saved worldspace, regional location, city, specific location, and cell overrides. They do not include the five base profiles.");
 	ImGui::PushID("LocationOverridePresetControls");
 
 	const auto presetPath = GetPresetPath(locationOverridePresetName, PresetKind::Location);
@@ -2557,8 +2562,8 @@ void AdaptiveBrightness::DrawLocationOverridePresetControls()
 void AdaptiveBrightness::DrawFullPresetControls()
 {
 	ImGui::SeparatorText("Full Presets");
-	DrawHintText("Full presets store the global adjustment layer, exterior timing, the five profile tabs, and all saved worldspace, location, and cell overrides.");
-	DrawHintText("Import replaces the profile tabs and the saved override list in the current settings.");
+	DrawHintText("Full presets store the global adjustment layer, exterior timing, the five profiles, and all saved worldspace, location, and cell overrides.");
+	DrawHintText("Import replaces the profiles and the saved override list in the current settings.");
 	ImGui::PushID("FullPresetControls");
 
 	const auto presetPath = GetPresetPath(fullPresetName, PresetKind::Full);

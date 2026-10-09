@@ -359,11 +359,10 @@ struct AdaptiveBrightness : Feature
 		bool a_allowEdits,
 		const char* a_saveLabel,
 		bool a_closeWhenFinished);
-	void DrawCurrentContextProfileTab(
+	void DrawCurrentContextProfileControls(
 		ContextProfileScope a_scope,
 		bool a_showAdvancedControls,
-		bool a_allowEdits,
-		bool a_select);
+		bool a_allowEdits);
 	void DrawContextProfilePresetControls(
 		ContextProfileScope a_scope,
 		const LocationOverrideTarget& a_target,
@@ -374,7 +373,7 @@ struct AdaptiveBrightness : Feature
 		const char* a_sectionTitle = "Profile Values",
 		bool a_showAdvancedControls = true,
 		bool a_allowEdits = true);
-	void DrawProfileControlTabs(
+	void DrawProfileControls(
 		ProfileSettings& a_profile,
 		const char* a_tabBarID,
 		bool a_showAdvancedControls,

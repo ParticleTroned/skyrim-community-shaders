@@ -517,15 +517,6 @@ void TerrainBlending::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	bool enabled = settings.Enabled != 0;
-	if (Util::Widgets::Checkbox("Enabled", &enabled)) {
-		settings.Enabled = enabled ? 1u : 0u;
-	}
-
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable seamless blending between terrain and objects.");
-	}
-
 	Util::Widgets::SliderFloat("Blend Strength", &settings.BlendStrength, 0.125f, 1.25f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Scales blending strength. Lower values make blending tighter.");

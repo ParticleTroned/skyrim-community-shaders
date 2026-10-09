@@ -2882,9 +2882,10 @@ void PerformanceTuningRenderer::RenderMeasurementSuite(Feature* a_feature)
 {
 	if (a_feature && !a_feature->SupportsPerformanceCostMeasurement())
 		return;
-	CaptureProfilerStateForPerformanceTuning();
 	const auto features = a_feature ? std::vector<Feature*>{ a_feature } : BuildPerformanceFeatureList();
-	RenderTopPerformanceCounters(ProfilingRenderer::CapturePerformanceTimingSummary(BuildPerformanceFeaturePrefixes(features), true));
+	if (globals::profiler && globals::profiler->IsUserEnabled())
+		globals::profiler->RequestCapture();
+	RenderTopPerformanceCounters(ProfilingRenderer::CapturePerformanceTimingSummary(BuildPerformanceFeaturePrefixes(features), false));
 	if (!a_feature) {
 		MeasurementTableStyle tableStyle;
 		RenderFeatureSetMeasurement(features);

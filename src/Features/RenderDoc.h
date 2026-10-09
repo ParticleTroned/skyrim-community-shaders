@@ -54,7 +54,7 @@ public:
 	std::string GetShortName() override { return "RenderDoc"; }
 	std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	bool IsCore() const override { return true; }
-	bool IsInMenu() const override { return false; }
+	bool IsInMenu() const override { return true; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return { "Records rendering captures for inspection in RenderDoc.", { "Attach comments to captures that appear in RenderDoc UI", "Open captures folder", "Capture file management" } };
@@ -64,6 +64,8 @@ public:
 	bool HasShaderDefine(RE::BSShader::Type) override { return false; };
 
 	// Settings & UI
+	void DrawSettingsEnabledControl() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettings() override;
 	void RestoreDefaultSettings() override;
 	void LoadSettings(json& o_json) override;
@@ -90,7 +92,7 @@ public:
 	std::string GetOverlayWarningMessage() const;
 
 private:
-	void DrawCaptureEnableToggle();
+	void SetCaptureEnabled(bool a_enabled);
 	bool TriggerConfiguredCapture(bool a_checkDiskSpace = true);
 	uint32_t GetCaptureFrameCount() const;
 	void SetCaptureFrameCount(uint32_t a_frameCount);

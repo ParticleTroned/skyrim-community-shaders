@@ -1270,7 +1270,7 @@ void Wetterness::DrawSettings()
 
 	// Climate Preset Selection - Always visible at the top
 	if (page.Is("presets")) {
-		Util::DrawSectionHeader("Climate Presets", false, false);
+		MenuUI::SectionHeading("Climate");
 
 		// Extract names for combo box
 		const char* presetNames[CLIMATE_PRESET_INFO.size()];
@@ -1330,8 +1330,6 @@ void Wetterness::DrawSettings()
 
 		drawSectionDivider();
 
-		DrawEnabledCheckbox();
-
 		auto& weatherPicker = globals::features::weatherPicker;
 		if (weatherPicker.loaded) {
 			if (ImGui::Button("Open Weather Picker")) {
@@ -1342,32 +1340,23 @@ void Wetterness::DrawSettings()
 			}
 		}
 
-		ImGui::TextUnformatted("Wetterness Preset");
+		MenuUI::SectionHeading("Quality preset");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Quick profiles for Wetterness performance/quality balance.");
 		}
 
-		if (ImGui::BeginTable("WetternessPresetButtons", static_cast<int>(WETTERNESS_UI_PRESETS.size()), ImGuiTableFlags_SizingStretchProp)) {
-			for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
-				ImGui::TableSetupColumn(WETTERNESS_UI_PRESETS[i].name, ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			}
-
-			ImGui::TableNextRow();
-			for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
-				ImGui::TableNextColumn();
-				const auto& preset = WETTERNESS_UI_PRESETS[i];
-				const bool presetActive = IsWetternessUiPresetActive(*this, preset);
-				[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
-				if (ImGui::Button(preset.name, ImVec2(-1.0f, 0.0f))) {
+		{
+			MenuUI::DetailGrid presets("WetternessPresetButtons", static_cast<int>(WETTERNESS_UI_PRESETS.size()), ImGui::GetFontSize() * 12);
+			for (const auto& preset : WETTERNESS_UI_PRESETS) {
+				presets.Next();
+				const bool active = IsWetternessUiPresetActive(*this, preset);
+				[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(active);
+				if (ImGui::Button(preset.name, ImVec2(-1.0f, ImGui::GetFrameHeight()))) {
 					ApplyWetternessUiPreset(*this, preset);
 					DetectCurrentPreset();
 				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::TextUnformatted(preset.description);
-				}
+				Util::AddTooltip(preset.description);
 			}
-
-			ImGui::EndTable();
 		}
 
 		drawSectionDivider();
@@ -1412,86 +1401,91 @@ void Wetterness::DrawSettings()
 			Util::DrawMultiLineTooltip(tooltipLines);
 		}
 
-		if (page.Is("rain")) {
-			MenuUI::SectionHeading("Raindrops");
-			Util::Widgets::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
-			markPresetDirtyIfEdited();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				std::vector<std::string> tooltipLines = {
-					"Higher = raindrops are spaced farther apart.",
-					"Lower = denser raindrops and fuller rain coverage.",
-					"Lower values are more expensive.",
-					std::format("{:.1f} units", settings.RaindropGridSize)
-				};
-				Util::DrawMultiLineTooltip(tooltipLines);
-			}
-			Util::Widgets::SliderFloat("Interval", &settings.RaindropInterval, 0.1f, 2.0f, "%.1f sec");
-			markPresetDirtyIfEdited();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("How often new raindrops are added. Lower = more frequent updates, higher = slower updates. Lower values are more expensive.");
-			}
-			Util::Widgets::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			markPresetDirtyIfEdited();
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("How many possible drops actually appear. Higher = denser drops, lower = fewer drops. Higher values are more expensive.");
-			}
-		}
-
-		if (page.Is("rain")) {
-			MenuUI::SectionHeading("Splashes");
-			const auto groupDisabled = Util::DisableGuard(settings.EnableSplashes == 0);
-			Util::Widgets::SliderFloat("Strength##Splashes", &settings.SplashesStrength, 0.f, 2.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("How visible splash marks are. Higher = bolder splashes, lower = subtler splashes.");
-			}
-			if (Util::Widgets::SliderFloat("Min Radius", &settings.SplashesMinRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
-				settings.SplashesMaxRadius = std::max(settings.SplashesMaxRadius, settings.SplashesMinRadius);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Minimum splash size. Higher = no tiny splashes, lower = allows smaller splashes. Cannot exceed Max Radius.");
+		{
+			MenuUI::DetailGrid rainGrid("RainDetails", 3, ImGui::GetFontSize() * 32);
+			const Util::Widgets::ControlLayout controls(true);
+			{
+				rainGrid.Next();
+				MenuUI::SectionHeading("Raindrops");
+				Util::Widgets::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
+				markPresetDirtyIfEdited();
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					std::vector<std::string> tooltipLines = {
+						"Higher = raindrops are spaced farther apart.",
+						"Lower = denser raindrops and fuller rain coverage.",
+						"Lower values are more expensive.",
+						std::format("{:.1f} units", settings.RaindropGridSize)
+					};
+					Util::DrawMultiLineTooltip(tooltipLines);
+				}
+				Util::Widgets::SliderFloat("Interval", &settings.RaindropInterval, 0.1f, 2.0f, "%.1f sec");
+				markPresetDirtyIfEdited();
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("How often new raindrops are added. Lower = more frequent updates, higher = slower updates. Lower values are more expensive.");
+				}
+				Util::Widgets::SliderFloat("Chance", &settings.RaindropChance, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+				markPresetDirtyIfEdited();
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("How many possible drops actually appear. Higher = denser drops, lower = fewer drops. Higher values are more expensive.");
+				}
 			}
 
-			if (Util::Widgets::SliderFloat("Max Radius", &settings.SplashesMaxRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
-				settings.SplashesMinRadius = std::min(settings.SplashesMinRadius, settings.SplashesMaxRadius);
-			}
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Maximum splash size. Higher = bigger possible splashes, lower = caps splash size. Cannot go below Min Radius.");
+			{
+				rainGrid.Next();
+				MenuUI::SectionHeading("Splashes");
+				const auto groupDisabled = Util::DisableGuard(settings.EnableSplashes == 0);
+				Util::Widgets::SliderFloat("Strength##Splashes", &settings.SplashesStrength, 0.f, 2.f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("How visible splash marks are. Higher = bolder splashes, lower = subtler splashes.");
+				}
+				if (Util::Widgets::SliderFloat("Min Radius", &settings.SplashesMinRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+					settings.SplashesMaxRadius = std::max(settings.SplashesMaxRadius, settings.SplashesMinRadius);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Minimum splash size. Higher = no tiny splashes, lower = allows smaller splashes. Cannot exceed Max Radius.");
+				}
+
+				if (Util::Widgets::SliderFloat("Max Radius", &settings.SplashesMaxRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+					settings.SplashesMinRadius = std::min(settings.SplashesMinRadius, settings.SplashesMaxRadius);
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Maximum splash size. Higher = bigger possible splashes, lower = caps splash size. Cannot go below Min Radius.");
+				}
+
+				Util::Widgets::SliderFloat("Lifetime##Splashes", &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("How long each splash stays visible. Higher = lingers longer, lower = fades sooner.");
+				}
 			}
 
-			Util::Widgets::SliderFloat("Lifetime##Splashes", &settings.SplashesLifetime, 0.1f, 20.f, "%.1f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("How long each splash stays visible. Higher = lingers longer, lower = fades sooner.");
-			}
-		}
+			{
+				rainGrid.Next();
+				MenuUI::SectionHeading("Ripples");
+				const auto groupDisabled = Util::DisableGuard(settings.EnableRipples == 0);
+				Util::Widgets::SliderFloat("Strength##Ripples", &settings.RippleStrength, 0.f, 2.f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("How strong ripple rings look. Higher = stronger ripples, lower = softer ripples.");
+				}
 
-		if (page.Is("rain")) {
-			MenuUI::SectionHeading("Ripples");
-			const auto groupDisabled = Util::DisableGuard(settings.EnableRipples == 0);
-			Util::Widgets::SliderFloat("Strength##Ripples", &settings.RippleStrength, 0.f, 2.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("How strong ripple rings look. Higher = stronger ripples, lower = softer ripples.");
-			}
+				Util::Widgets::SliderFloat("Radius", &settings.RippleRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Ripple ring size. Higher = wider rings, lower = tighter rings.");
+				}
 
-			Util::Widgets::SliderFloat("Radius", &settings.RippleRadius, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Ripple ring size. Higher = wider rings, lower = tighter rings.");
-			}
+				Util::Widgets::SliderFloat("Breadth", &settings.RippleBreadth, 0.f, 1.f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("Ripple ring thickness. Higher = thicker rings, lower = thinner rings.");
+				}
 
-			Util::Widgets::SliderFloat("Breadth", &settings.RippleBreadth, 0.f, 1.f, "%.2f");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Ripple ring thickness. Higher = thicker rings, lower = thinner rings.");
-			}
-
-			Util::Widgets::SliderFloat("Lifetime##Ripples", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("How long each ripple remains visible. Higher = longer rings, lower = faster fade.");
+				Util::Widgets::SliderFloat("Lifetime##Ripples", &settings.RippleLifetime, 0.f, settings.RaindropInterval, "%.2f sec", ImGuiSliderFlags_AlwaysClamp);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::TextUnformatted("How long each ripple remains visible. Higher = longer rings, lower = faster fade.");
+				}
 			}
 		}
 
 		ImGui::EndDisabled();
 	}
-
-	drawSectionDivider();
 
 	if (page.Is("reflections")) {
 		int reflectionMode = 0;  // 0 = Off, 1 = Modern, 2 = Legacy
@@ -1536,8 +1530,6 @@ void Wetterness::DrawSettings()
 			"Non-PBR only. On = brighter/cleaner vanilla wet reflections, Off = neutral vanilla reflection response.");
 	}
 
-	drawSectionDivider();
-
 	if (page.Is("drying")) {
 		const auto drawDryingSlider = [](const char* label, float& value, const char* tooltip) {
 			Util::Widgets::SliderFloat(label, &value, DRYING_HOURS_MIN, DRYING_HOURS_MAX, "%.0f h", ImGuiSliderFlags_AlwaysClamp);
@@ -1557,8 +1549,10 @@ void Wetterness::DrawSettings()
 			ImGui::TextUnformatted("How fast wetness responds to weather changes. Higher = quicker wet/dry transitions, lower = slower transitions.");
 		}
 
-		ImGui::Separator();
-		ImGui::TextUnformatted("Drying Times");
+		MenuUI::DetailGrid dryingGrid("WetDrying", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
+		dryingGrid.Next();
+		MenuUI::SectionHeading("Material drying times");
 
 		ImGui::BeginDisabled(enableWeatherDrivenDryingModel);
 		drawDryingSlider("Stone Drying Time", settings.StoneDryingMultiplier, "Drying time for stone-like surfaces after rain. Higher = dries slower, lower = dries faster.");
@@ -1570,8 +1564,8 @@ void Wetterness::DrawSettings()
 			ImGui::TextDisabled("Manual drying-time sliders are disabled while weather-driven drying is enabled.");
 		}
 
-		ImGui::Separator();
-		ImGui::TextUnformatted("Grass");
+		dryingGrid.Next();
+		MenuUI::SectionHeading("Grass appearance");
 
 		auto& grassLightingSettings = globals::features::grassLighting.settings;
 		Util::Widgets::SliderFloat(
@@ -1647,6 +1641,10 @@ void Wetterness::DrawSettings()
 		}
 	}
 	if (page.Is("surface")) {
+		MenuUI::DetailGrid surfaceGrid("WetSurface", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
+		surfaceGrid.Next();
+		MenuUI::SectionHeading("Rain film and reflection");
 		Util::Widgets::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 2.5f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1678,6 +1676,8 @@ void Wetterness::DrawSettings()
 			ImGui::TextUnformatted("Boosts thin wet-film reflections outside standing puddles. Higher = stronger ground sheen between puddles.");
 		}
 
+		surfaceGrid.Next();
+		MenuUI::SectionHeading("Fade and skin");
 		Util::Widgets::SliderFloat("Wet Highlight Reduction", &settings.WetHighlightReduction, WET_HIGHLIGHT_REDUCTION_MIN, WET_HIGHLIGHT_REDUCTION_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Reduces bright white thin-film highlights. Higher = less white film glare, lower = brighter highlights. Deep puddles are not the target.");

@@ -629,8 +629,9 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 void Skylighting::DrawSettings()
 {
 	MenuUI::SettingsPage page("Skylighting", {
-												 { "quality", "Quality", "Choose a preset, then balance detail and update speed.", "Preset and probe update budget", true, true, "Choose detail and coverage" },
+												 { "quality", "Quality", "Choose a preset, then balance probe detail and coverage.", "Preset and probe resolution", true, true, "Choose detail and coverage" },
 												 { "coverage", "Coverage", "Set how far skylighting reaches.", "Skylight reach and occlusion", true, true, nullptr },
+												 { "updates", "Updates", "Balance refresh speed and work per frame.", "Update intervals and probe slices", true, true, nullptr },
 												 { "look", "Look", "Refine visibility and the direction of shadowing.", "Visibility and direction", true, true, "Refine the shared picture" },
 											 });
 
@@ -639,7 +640,7 @@ void Skylighting::DrawSettings()
 		ImGui::Separator();
 	}
 	if (page.Is("look")) {
-		ImGui::Text("Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections.");
+		MenuUI::DetailText("Diffuse visibility controls object darkness. Specular visibility controls sky reflections.");
 		Util::Widgets::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 		Util::Widgets::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
 		if (Util::Widgets::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
@@ -657,7 +658,7 @@ void Skylighting::DrawSettings()
 			ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
 
 		ImGui::Separator();
-		ImGui::Text("Performance options (highest impact first)");
+		MenuUI::SectionHeading("Probe resolution");
 
 		settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
 
@@ -676,7 +677,9 @@ void Skylighting::DrawSettings()
 			ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 		}
 		ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
-
+	}
+	if (page.Is("updates")) {
+		MenuUI::SectionHeading("Refresh frequency");
 		Util::Widgets::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Updates skylighting less often for a bigger FPS gain. Higher values can react a bit slower.");
@@ -717,6 +720,7 @@ void Skylighting::DrawSettings()
 				ImGui::Text("Probe refresh cadence: every %u frame(s)", GetProbeUpdateInterval(settings));
 		}
 
+		MenuUI::SectionHeading("Work per frame");
 		{
 			const bool previousIncrementalProbeUpdates = settings.EnableIncrementalProbeUpdates;
 			if (Util::Widgets::Checkbox("Enable Incremental Probe Updates", &settings.EnableIncrementalProbeUpdates) &&

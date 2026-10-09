@@ -451,7 +451,7 @@ void ScreenSpaceGI::DrawSettings()
 			}
 		}
 		if (page.Is("coverage")) {
-			MenuUI::SectionHeading("SSGI Effects & Resources");
+			MenuUI::SectionHeading("Effects and coverage");
 
 			const int previousResourceProfile = settings.ResourceProfile;
 			{
@@ -502,7 +502,7 @@ void ScreenSpaceGI::DrawSettings()
 			}
 		}
 		if (page.Is("quality")) {
-			MenuUI::SectionHeading("Quality/Performance");
+			MenuUI::SectionHeading("Resolution and samples");
 
 			if (isVR) {
 				Util::Widgets::SliderFloat("AO/IL Cull Distance", &settings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax, "%.0f units");
@@ -554,7 +554,7 @@ void ScreenSpaceGI::DrawSettings()
 
 	///////////////////////////////
 	if (page.Is("look")) {
-		MenuUI::SectionHeading("Visual");
+		MenuUI::SectionHeading("Shadow appearance");
 
 		{
 			auto visualGuard = Util::DisableGuard(!settings.Enabled);
@@ -626,7 +626,7 @@ void ScreenSpaceGI::DrawSettings()
 	if (page.Is("indirect")) {
 		if (!settings.EnableGI && MenuUI::DetailNote("Indirect-light tuning is inactive while GI is off. Enable indirect lighting in Coverage to use it.", "Open Coverage"))
 			MenuUI::SettingsPage::Select("ScreenSpaceGI", "coverage");
-		MenuUI::SectionHeading("Visual - IL");
+		MenuUI::SectionHeading("Indirect light");
 
 		{
 			auto visualILGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
@@ -645,7 +645,7 @@ void ScreenSpaceGI::DrawSettings()
 		///////////////////////////////
 	}
 	if (page.Is("smoothing")) {
-		MenuUI::SectionHeading("Denoising");
+		MenuUI::SectionHeading("Smoothing");
 
 		{
 			auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
@@ -697,7 +697,7 @@ void ScreenSpaceGI::DrawSettings()
 		///////////////////////////////
 	}
 	if (page.Is("diagnostics")) {
-		MenuUI::SectionHeading("Debug");
+		MenuUI::SectionHeading("Diagnostics");
 
 		if (ImGui::TreeNode("Buffer Viewer")) {
 			static float debugRescale = .3f;

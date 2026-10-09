@@ -1580,8 +1580,10 @@ void State::LoadFromJson(
 			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Use FileWatcher") && advanced["Use FileWatcher"].is_boolean())
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
-		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean())
+		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean()) {
 			frameAnnotations = advanced["Frame Annotations"];
+			useFrameAnnotations = frameAnnotations;
+		}
 		if (advanced.contains("Refraction Scale") && advanced["Refraction Scale"].is_number())
 			refractionScale = std::clamp(advanced["Refraction Scale"].get<float>(), 0.0f, 2.0f);
 		if (advanced.contains("PBR Metal Reflection Scale") && advanced["PBR Metal Reflection Scale"].is_number())

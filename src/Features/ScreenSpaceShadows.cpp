@@ -134,16 +134,8 @@ void ScreenSpaceShadows::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	bool enabled = IsEnabledRequested();
-	if (Util::Widgets::Checkbox("Enabled", &enabled))
-		SetEnabled(enabled);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Turns screen space shadows on or off.");
-	}
-
 	ImGui::Spacing();
-	ImGui::TextUnformatted("Performance");
-	ImGui::Separator();
+	MenuUI::SectionHeading("Quality");
 
 	int sampleCount = static_cast<int>(bendSettings.SampleCount);
 	if (Util::Widgets::SliderInt("Sample Count Multiplier", &sampleCount, static_cast<int>(kSampleCountMin), static_cast<int>(kSampleCountMax)))

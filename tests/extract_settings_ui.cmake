@@ -41,7 +41,7 @@ set(prefixes "")
 foreach(method IN ITEMS DrawSettings)
     string(FIND "${source}" "void VolumetricLighting::${method}()" start)
     string(SUBSTRING "${source}" ${start} -1 rest)
-    string(FIND "${rest}" "auto drawVRRestartHint" end)
+    string(FIND "${rest}" "\n\tif (page.Is(\"coverage\"))" end)
     if(start LESS 0 OR end LESS 0)
         message(FATAL_ERROR "Volumetric lighting page preamble is missing")
     endif()
@@ -72,6 +72,13 @@ math(EXPR length "${end} + 1")
 string(SUBSTRING "${rest}" 0 ${length} serializer)
 file(WRITE "${OUTPUT_DIRECTORY}/menu_settings_under_test.h"
     "struct Menu { using ThemeSettings = nlohmann::json; ${declaration} };\n${serializer}\n")
+
+# Exercise RenderDoc toggle/load/default transitions without loading its runtime DLL.
+file(READ "${PROJECT_ROOT}/src/Features/RenderDoc.cpp" source)
+extract_between("${source}" "void RenderDoc::LoadSettings(" "void RenderDoc::ClearShaderCache(" "settings_renderdoc_under_test.h")
+extract_between("${source}" "uint32_t RenderDoc::GetCaptureFrameCount()" "uint64_t RenderDoc::GetRequiredCaptureSpaceBytes()" "settings_renderdoc_frames_under_test.h")
+file(READ "${PROJECT_ROOT}/src/State.cpp" source)
+extract_between("${source}" "\t\tif (advanced.contains(\"Frame Annotations\")" "\t\tif (advanced.contains(\"Refraction Scale\")" "settings_annotations_under_test.h")
 
 # Exercise shared external actions and the Stabilizer's draft guard with real ImGui.
 file(READ "${PROJECT_ROOT}/src/Menu/FeatureListRenderer.cpp" source)
@@ -130,3 +137,8 @@ file(READ "${PROJECT_ROOT}/src/Menu/ProfilingRenderer.cpp" source)
 extract_between("${source}" "bool ProfilingRenderer::RenderEnabledControl()" "void ProfilingRenderer::RenderStatistics(" "settings_profiling_enabled_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/PerformanceTuningRenderer.cpp" source)
 extract_between("${source}" "\tvoid RenderMetricCounter(" "\tvoid RenderMeasurementStatus(" "settings_performance_counters_under_test.h")
+
+extract_between("${source}" "void PerformanceTuningRenderer::RenderMeasurementSuite(Feature* a_feature)" "\tif (!a_feature) {" "settings_performance_preview_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/settings_performance_preview_under_test.h" preview)
+string(REPLACE "PerformanceTuningRenderer::RenderMeasurementSuite" "RenderMeasurementPreview" preview "${preview}")
+file(APPEND "${OUTPUT_DIRECTORY}/settings_performance_counters_under_test.h" "\n${preview}}\n")

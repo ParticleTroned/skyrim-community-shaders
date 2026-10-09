@@ -62,17 +62,22 @@ void LinearLighting::DrawSettings()
 												});
 
 	if (page.Is("coverage")) {
-		Util::UIntCheckbox("Enabled", settings.enableLinearLighting);
 		Util::UIntCheckbox("Disable in interiors", settings.DisableInInteriors);
 		Util::UIntCheckbox("Disable in exteriors", settings.DisableInExteriors);
 	}
 
 	if (page.Is("colour")) {
+		MenuUI::DetailGrid colourGrid("colourGrid", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
+		colourGrid.Next();
+		MenuUI::SectionHeading("Light and surfaces");
 		Util::Widgets::SliderFloat("Ambient Gamma", &settings.ambientGamma, kGammaMin, kGammaMax, "%.2f");
-		Util::Widgets::SliderFloat("Color Gamma", &settings.colorGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Colour Gamma", &settings.colorGamma, kGammaMin, kGammaMax, "%.2f");
 		Util::Widgets::SliderFloat("Effect Gamma", &settings.effectGamma, kGammaMin, kGammaMax, "%.2f");
 		Util::Widgets::SliderFloat("Effect Transparency Gamma", &settings.effectAlphaGamma, kGammaMin, kGammaMax, "%.2f");
-		Util::Widgets::SliderFloat("Emissive Color Gamma", &settings.emitColorGamma, kGammaMin, kGammaMax, "%.2f");
+		Util::Widgets::SliderFloat("Emissive Colour Gamma", &settings.emitColorGamma, kGammaMin, kGammaMax, "%.2f");
+		colourGrid.Next();
+		MenuUI::SectionHeading("Atmosphere and effects");
 		Util::Widgets::SliderFloat("Fog Gamma", &settings.fogGamma, kGammaMin, kGammaMax, "%.2f");
 		Util::Widgets::SliderFloat("Fog Transparency Gamma", &settings.fogAlphaGamma, kGammaMin, kGammaMax, "%.2f");
 		Util::Widgets::SliderFloat("Glowmap Gamma", &settings.glowmapGamma, kGammaMin, kGammaMax, "%.2f");

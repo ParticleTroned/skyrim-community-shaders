@@ -142,7 +142,10 @@ void SubsurfaceScattering::DrawSettings()
 	}
 
 	if (page.Is("profiles") && settings.SSMode == 0) {
+		MenuUI::DetailGrid profileGrid("SeparableProfiles", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
 		{
+			profileGrid.Next();
 			MenuUI::SectionHeading("Base Profile");
 			ImGui::PushID("Base Profile");
 			Util::Widgets::SliderFloat("Blur Radius", &settings.BaseProfile.BlurRadius, 0, 3, "%.2f");
@@ -162,6 +165,7 @@ void SubsurfaceScattering::DrawSettings()
 		}
 
 		{
+			profileGrid.Next();
 			MenuUI::SectionHeading("Humanoid Profile");
 			ImGui::PushID("Humanoid Profile");
 			Util::Widgets::SliderFloat("Blur Radius", &settings.HumanProfile.BlurRadius, 0, 3, "%.2f");
@@ -183,7 +187,10 @@ void SubsurfaceScattering::DrawSettings()
 		int burleySamples = static_cast<int>(settings.BurleySamples);
 		if (Util::Widgets::SliderInt("Burley Samples", &burleySamples, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp))
 			settings.BurleySamples = static_cast<uint>(std::clamp(burleySamples, 1, 64));
+		MenuUI::DetailGrid profileGrid("BurleyProfiles", 2, ImGui::GetFontSize() * 32);
+		const Util::Widgets::ControlLayout controls(true);
 		{
+			profileGrid.Next();
 			MenuUI::SectionHeading("Base Profile");
 			ImGui::PushID("Base Profile");
 			Util::Widgets::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathBase);
@@ -198,6 +205,7 @@ void SubsurfaceScattering::DrawSettings()
 		}
 
 		{
+			profileGrid.Next();
 			MenuUI::SectionHeading("Humanoid Profile");
 			ImGui::PushID("Humanoid Profile");
 			Util::Widgets::ColorEdit3("Mean Free Path Color", (float*)&settings.MeanFreePathHuman);
@@ -209,7 +217,9 @@ void SubsurfaceScattering::DrawSettings()
 				ImGui::Text("Controls the distance that Mean Free Path Color goes into subsurface.");
 			}
 
+			profileGrid.Next();
 			DrawHumanSkinControls("Humanoid Skin (Male)", settings.HumanMaleSSSIntensity, settings.HumanMaleSSSSaturation, settings.HumanMaleSSSBrightness, settings.HumanMaleSSSBaseSaturation);
+			profileGrid.Next();
 			DrawHumanSkinControls("Humanoid Skin (Female)", settings.HumanFemaleSSSIntensity, settings.HumanFemaleSSSSaturation, settings.HumanFemaleSSSBrightness, settings.HumanFemaleSSSBaseSaturation);
 
 			ImGui::PopID();

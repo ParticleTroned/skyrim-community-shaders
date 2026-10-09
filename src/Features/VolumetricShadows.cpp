@@ -385,12 +385,12 @@ void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context)
 void VolumetricShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("VolumetricShadows", {
-													   { "appearance", "Shadows", "Choose whether light shafts cast shadows.", "Shadows through light shafts", true, true, "Shape volumetric shadows" },
+													   { "appearance", "How it works", "Learn how light shafts use directional shadows.", "Shadows through light shafts", true, true, "Shape volumetric shadows" },
 													   { "diagnostics", "Diagnostics", "Inspect shadow buffers.", "Diagnostic shadow buffers", true, false, nullptr },
 												   });
 
 	if (page.Is("appearance"))
-		DrawEnabledCheckbox(settings);
+		MenuUI::DetailText("Light shafts use the shared directional shadow maps. Use Enabled in the header to control this effect, and Diagnostics to inspect its shadow buffers.");
 
 	if (page.Is("diagnostics")) {
 		const auto disabled = Util::DisableGuard(!settings.Enabled);

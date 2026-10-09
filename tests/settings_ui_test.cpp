@@ -37,10 +37,8 @@ struct Feature
 {
 	std::string name;
 	bool supportsMeasurement = true;
-	bool independentProfiling = false;
 	std::string GetShortName() const { return name; }
 	bool SupportsPerformanceCostMeasurement() const { return supportsMeasurement; }
-	bool HasIndependentProfilingTab() const { return independentProfiling; }
 	std::string GetDisplayName() const { return name; }
 	static std::vector<Feature*> GetFeatureList() { return {}; }
 };
@@ -48,7 +46,9 @@ namespace globals
 {
 	struct FakeProfiler
 	{
-		bool enabled = false, initialized = true;
+		bool enabled = true, initialized = true;
+		int requests = 0;
+		void RequestCapture() { ++requests; }
 		bool IsUserEnabled() const { return enabled; }
 		bool IsInitialized() const { return initialized; }
 		void SetUserEnabled(bool value) { enabled = value; }
@@ -103,6 +103,11 @@ namespace globals
 			DEFAULT
 		};
 		bool blocked = false, snapshotFailure = false;
+		bool frameAnnotations = false, useFrameAnnotations = false;
+		void LoadFrameAnnotations(nlohmann::json& advanced)
+		{
+#include "settings_annotations_under_test.h"
+		}
 		int applyFailures = 0, saves = 0, loads = 0, snapshots = 0, applies = 0;
 		nlohmann::json settings{ { "current", true } };
 		void Save() { ++saves; }
@@ -178,6 +183,18 @@ struct ProfilingRenderer
 		bool hasGameGpu = true, hasGameCpu = true;
 	};
 	static inline bool eligible = true;
+	static inline bool summaryRequestedCapture = false;
+	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>&, bool requestCapture)
+	{
+		summaryRequestedCapture = requestCapture;
+		return {};
+	}
+	static const char* GetProfilingDisabledReason()
+	{
+		if (!globals::profiler || !globals::profiler->IsInitialized())
+			return "Profiler is unavailable.";
+		return globals::profiler->IsUserEnabled() ? nullptr : "Profiling is off. Enable it on the main Profiling page in the sidebar.";
+	}
 	static bool CanProfileFeature(std::string_view name) { return eligible && (name == "FeaturePage" || Util::FeatureProfiling::Find(name)); }
 	static inline int draws = 0;
 	static inline int globalDraws = 0;
@@ -341,6 +358,14 @@ bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summa
 	return summary.hasGameCpu;
 }
 #include "settings_footer_under_test.h"
+std::vector<Feature*> BuildPerformanceFeatureList() { return {}; }
+std::vector<std::string> BuildPerformanceFeaturePrefixes(const std::vector<Feature*>& features)
+{
+	std::vector<std::string> prefixes;
+	for (auto* feature : features)
+		prefixes.push_back(feature->GetShortName());
+	return prefixes;
+}
 #include "settings_performance_counters_under_test.h"
 #include "settings_stabilizer_navigation_under_test.h"
 struct Upscaling
@@ -348,10 +373,26 @@ struct Upscaling
 	struct Settings
 	{
 		uint32_t neuralRenderingModelResolutionPercent = 100;
+		bool neuralRenderingPressureResolutionEnabled = false;
 		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 	};
 };
 #include "settings_model_resolution_under_test.h"
+struct RenderDoc
+{
+	bool enableRenderDocCapture = false;
+	uint32_t captureFrameCount = 1;
+	static constexpr uint32_t kMinCaptureFrameCount = 1, kMaxCaptureFrameCount = 120;
+	void LoadSettings(nlohmann::json& value);
+	void SetCaptureEnabled(bool enabled);
+	void DrawSettingsEnabledControl();
+	void RestoreDefaultSettings();
+	uint32_t GetCaptureFrameCount() const;
+	void SetCaptureFrameCount(uint32_t count);
+};
+using json = nlohmann::json;
+#include "settings_renderdoc_frames_under_test.h"
+#include "settings_renderdoc_under_test.h"
 
 struct VolumetricLighting : Feature
 {
@@ -489,6 +530,22 @@ void frame(const std::function<void()>& draw)
 	ImGui::Render();
 	require(GImGui->ErrorCountCurrentFrame == 0, "UI frame leaves ImGui windows, IDs and styles balanced");
 }
+int VisibleTextIndices(const ImRect& bounds)
+{
+	int count = 0;
+	const auto white = ImGui::GetIO().Fonts->TexUvWhitePixel;
+	for (const auto* list : ImGui::GetDrawData()->CmdLists) {
+		for (const auto& command : list->CmdBuffer) {
+			const ImRect clip({ command.ClipRect.x, command.ClipRect.y }, { command.ClipRect.z, command.ClipRect.w });
+			for (unsigned int i = 0; i < command.ElemCount; ++i) {
+				const auto& vertex = list->VtxBuffer[command.VtxOffset + list->IdxBuffer[command.IdxOffset + i]];
+				if ((vertex.col & IM_COL32_A_MASK) && (vertex.uv.x != white.x || vertex.uv.y != white.y) && bounds.Contains(vertex.pos) && clip.Contains(vertex.pos))
+					++count;
+			}
+		}
+	}
+	return count;
+}
 void click(const ImVec2& point, const std::function<void()>& draw, int mouseButton = 0)
 {
 	auto& io = ImGui::GetIO();
@@ -510,6 +567,28 @@ void key(ImGuiKey keyCode, const std::function<void()>& draw)
 int main()
 {
 	try {
+		{
+			RenderDoc capture;
+			auto& state = globals::stateStorage;
+			capture.SetCaptureEnabled(true);
+			capture.SetCaptureEnabled(true);
+			require(state.frameAnnotations && !state.useFrameAnnotations, "repeated capture enable preserves the annotation baseline");
+			capture.RestoreDefaultSettings();
+			require(!capture.enableRenderDocCapture && !state.frameAnnotations && capture.GetCaptureFrameCount() == 1, "capture defaults restore the pre-capture annotation setting");
+			for (const bool annotations : { false, true }) {
+				capture.SetCaptureEnabled(true);
+				json advanced{ { "Frame Annotations", annotations } };
+				state.LoadFrameAnnotations(advanced);
+				json settings{ { "Enable RenderDoc Capture", false }, { "Capture Frame Count", 200 } };
+				capture.LoadSettings(settings);
+				require(!capture.enableRenderDocCapture && state.frameAnnotations == annotations && capture.GetCaptureFrameCount() == 120, "loading capture Off respects the loaded annotation preference and frame-count bounds");
+				settings["Enable RenderDoc Capture"] = true;
+				capture.LoadSettings(settings);
+				capture.RestoreDefaultSettings();
+				require(state.frameAnnotations == annotations, "loaded capture enable restores the loaded annotation preference when reset");
+			}
+			state.frameAnnotations = state.useFrameAnnotations = false;
+		}
 		using MenuUI::ParseNumber;
 		require(ParseNumber<float>("0.25", 0, 1) == .25f, "fraction parsing");
 		require(ParseNumber<int>("-2", -5, 5) == -2, "signed parsing");
@@ -673,10 +752,10 @@ int main()
 		frame(drawPage);
 		frame(drawPage);
 		require(MenuUI::SettingsPage::Selected("TestPage") == "mode", "card opens matching tab");
-		click(Util::controls.at("Return to this feature's setup overview. Your settings are kept.").GetCenter(), drawPage);
+		click(Util::controls.at("Start here. Choose a card to open its settings.").GetCenter(), drawPage);
 		frame(drawPage);
 		frame(drawPage);
-		require(MenuUI::SettingsPage::Selected("TestPage") == "overview", "detail back button returns to its own overview");
+		require(MenuUI::SettingsPage::Selected("TestPage") == "overview", "Overview tab returns to its own overview");
 
 		int selectedChoice = 0;
 		bool parentDisabled = false, narrowChoices = false;
@@ -759,13 +838,60 @@ int main()
 		const auto measurementCard = Util::controls.at("Measures in-game frame times and FPS with the current feature settings.");
 		const auto setupCard = Util::controls.at("Appearance");
 		require(measurementCard.Min.x == setupCard.Min.x && measurementCard.GetSize().x == setupCard.GetSize().x && measurementCard.Min.y > setupCard.Max.y, "measurement card keeps setup column width and follows its independently sized row");
-		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement suite owns profiling instead of a second tab");
+		require(MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "live profiling remains reachable alongside performance tuning");
+		MenuUI::SettingsPage::Select("FeaturePage", "overview");
 		const int measurementsBefore = PerformanceTuningRenderer::draws;
 		int profilingBefore = ProfilingRenderer::draws;
 		click(measurementCard.GetCenter(), drawPerformance);
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
 		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance" && PerformanceTuningRenderer::draws > measurementsBefore, "measurement card opens the shared suite");
 		require(ProfilingRenderer::draws == profilingBefore, "measurement suite does not invoke a separate profiling mode selector");
+		auto profilingCardIsActive = [&] {
+			const auto& sections = MenuUI::navigation.at("FeaturePage").sections;
+			const auto profilingCard = std::ranges::find_if(sections, [](const auto& section) { return std::string_view(section.id) == "profiling"; });
+			require(profilingCard != sections.end() && profilingCard->visible, "supported profiling card must remain visible");
+			return profilingCard->active;
+		};
+		globals::profilerStorage.enabled = false;
+		MenuUI::SettingsPage::Select("FeaturePage", "overview");
+		Util::controls.clear();
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		const auto* disabledProfilingHelp = ProfilingRenderer::GetProfilingDisabledReason();
+		require(!profilingCardIsActive(), "off profiling uses the shared dotted inactive card style");
+		require(Util::tooltipFlags.at(disabledProfilingHelp) & ImGuiHoveredFlags_AllowWhenDisabled, "disabled profiling retains its enable-on-main-page tooltip");
+		profilingBefore = ProfilingRenderer::draws;
+		click(Util::controls.at(disabledProfilingHelp).GetCenter(), drawPerformance);
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview" && ProfilingRenderer::draws == profilingBefore, "disabled profiling card must not open");
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling") && !MenuUI::SettingsPage::Select("FeaturePage", "profiling"), "direct navigation cannot bypass the main profiling switch");
+		globals::profilerStorage.enabled = true;
+		require(MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "enabling profiling unlocks direct navigation before cached cards redraw");
+		MenuUI::SettingsPage::Select("FeaturePage", "overview");
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		require(profilingCardIsActive(), "main profiling switch makes the feature controls available");
+		click(Util::controls.at("Choose CPU, GPU or Off to inspect timings.").GetCenter(), drawPerformance);
+		for (int i = 0; i < 3; ++i) frame(drawPerformance);
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "profiling" && ProfilingRenderer::draws > profilingBefore, "enabled profiling card opens its controls");
+		profilingBefore = ProfilingRenderer::draws;
+		globals::profilerStorage.enabled = false;
+		for (const auto& page : MenuUI::SettingsPage::Describe())
+			if (page["page"] == "FeaturePage")
+				for (const auto& tab : page["tabs"])
+					if (tab["id"] == "profiling")
+						require(tab["enabled"] == false && tab["disabledReason"] == disabledProfilingHelp, "inactive-page metadata follows the live main switch");
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "the live switch blocks navigation before cached card state refreshes");
+		frame(drawPerformance);
+		require(!profilingCardIsActive() && MenuUI::SettingsPage::Selected("FeaturePage") == "overview" && ProfilingRenderer::draws == profilingBefore, "switching profiling off closes an open feature view");
+		globals::profilerStorage.enabled = true;
+		globals::profilerStorage.initialized = false;
+		frame(drawPerformance);
+		require(!profilingCardIsActive() && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "uninitialized profiler keeps a visible disabled card");
+		globals::profiler = nullptr;
+		frame(drawPerformance);
+		require(!profilingCardIsActive() && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "unavailable profiler cannot be opened");
+		globals::profiler = &globals::profilerStorage;
+		globals::profilerStorage.initialized = true;
+		globals::profilerStorage.enabled = true;
 		feature.supportsMeasurement = true;
 		MenuUI::SettingsPage::Select("TestPage", "performance");
 		for (int i = 0; i < 3; ++i) frame(drawPage);
@@ -804,7 +930,7 @@ int main()
 		auto drawNoTuning = [&] { MenuUI::FeatureScope scope(&feature); MenuUI::SettingsPage page("Unused", {}); };
 		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
 		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "unsupported tools cannot be opened");
-		require(Util::controls.empty(), "a feature without tuning or eligible tools has an empty body");
+		require(Util::controls.size() == 1 && Util::controls.contains("Start here. Choose a card to open its settings."), "a feature without tuning or eligible tools keeps only Overview navigation");
 		feature.supportsMeasurement = true;
 		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
 		require(MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement eligibility is independent of profiling");
@@ -813,29 +939,54 @@ int main()
 		for (const auto& entry : MenuUI::SettingsPage::Describe())
 			if (entry["page"] == "FeaturePage")
 				for (const auto& tab : entry["tabs"])
-					require(!tab["showTab"].get<bool>(), "a feature with only tool cards reports no visible top tabs");
+					require(tab["showTab"].get<bool>() == (tab["id"] == "overview"), "a feature with only tool cards keeps Overview visible");
+		click(Util::controls.at("Start here. Choose a card to open its settings.").GetCenter(), drawNoTuning);
+		for (int settle = 0; settle < 3; ++settle) frame(drawNoTuning);
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "Overview returns from a page with only tool cards");
 		ProfilingRenderer::eligible = true;
 		auto drawGlobalPerformance = [&] { MenuUI::SettingsPage page("PerformanceTuning", { { "compare", "Compare total feature set", "Compare features" } }); };
 		frame(drawGlobalPerformance);
 		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "performance"), "global measurement view cannot recursively open itself");
 		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "profiling") && MenuUI::SettingsPage::Navigate("PerformanceTuning", "compare"), "global tuning exposes comparison without profiling");
 
-		for (const auto name : { "NeuralRendering", "ImageBasedLighting", "CSUtility", "CloudShadows", "InteriorSun", "Wetterness", "TruePBR", "ExtendedMaterials", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects", "VR", "Screenshot" }) {
-			Feature profiledFeature{ name, false };
-			auto drawProfiledPage = [&] {
-				MenuUI::FeatureScope scope(&profiledFeature);
-				MenuUI::SettingsPage page("Unused", { { "settings", "Settings", "Ordinary settings" } });
-			};
-			MenuUI::SettingsPage::Select(name, "overview");
-			Util::controls.clear();
-			for (int i = 0; i < 3; ++i) frame(drawProfiledPage);
-			const bool screenshot = std::string_view(name) == "Screenshot";
-			require(Util::controls.contains("Choose CPU, GPU or Off to inspect timings.") != screenshot, "profiling card must follow feature coverage without waiting for samples");
-			require(MenuUI::SettingsPage::Navigate(name, "profiling") != screenshot, "profiling tab eligibility differs from its overview card");
-			require(MenuUI::SettingsPage::Navigate(name, "settings"), "profiling changes must preserve ordinary settings");
+		std::vector<std::string> profilingPages{ "Screenshot", "TextureStreaming" };
+		for (const auto& view : Util::FeatureProfiling::views)
+			profilingPages.emplace_back(view.feature);
+		for (const bool enabled : { false, true }) {
+			globals::profilerStorage.enabled = enabled;
+			for (const auto& name : profilingPages) {
+				Feature profiledFeature{ name, name != "TextureStreaming" };
+				auto drawProfiledPage = [&] {
+					MenuUI::FeatureScope scope(&profiledFeature);
+					MenuUI::SettingsPage page("Unused", { { "settings", "Settings", "Ordinary settings" } });
+				};
+				MenuUI::SettingsPage::Select(name.c_str(), "overview");
+				Util::controls.clear();
+				for (int i = 0; i < 3; ++i) frame(drawProfiledPage);
+				const bool excluded = Util::FeatureProfiling::IsExcluded(name);
+				const auto* help = enabled ? "Choose CPU, GPU or Off to inspect timings." : disabledProfilingHelp;
+				require(Util::controls.contains(help) != excluded, "profiling cards remain visible independently of the main switch");
+				if (!excluded) {
+					const auto& sections = MenuUI::navigation.at(name).sections;
+					const auto profilingCard = std::ranges::find_if(sections, [](const auto& section) { return std::string_view(section.id) == "profiling"; });
+					require(profilingCard != sections.end() && profilingCard->active == enabled && !profilingCard->showTab && (profilingCard->disabledReason == nullptr) == enabled, "all connected features follow the main profiling switch");
+					for (const auto& page : MenuUI::SettingsPage::Describe())
+						if (page["page"] == name)
+							for (const auto& tab : page["tabs"])
+								if (tab["id"] == "profiling")
+									require(tab["enabled"] == enabled && tab["disabledReason"] == (enabled ? "" : disabledProfilingHelp), "DevBench exposes disabled tool availability and its explanation");
+					click(Util::controls.at(help).GetCenter(), drawProfiledPage);
+					for (int i = 0; i < 3; ++i) frame(drawProfiledPage);
+					require(MenuUI::SettingsPage::Selected(name.c_str()) == (enabled ? "profiling" : "overview"), "profiling cards obey the main switch when clicked");
+				}
+				require(MenuUI::SettingsPage::Navigate(name.c_str(), "profiling") == (enabled && !excluded), "direct profiling navigation obeys the main switch");
+				if (name == "TextureStreaming")
+					require(!MenuUI::SettingsPage::Navigate(name.c_str(), "performance") && !Util::controls.contains("Measures in-game frame times and FPS with the current feature settings."), "texture streaming must not expose performance tuning");
+				require(MenuUI::SettingsPage::Navigate(name.c_str(), "settings"), "profiling changes must preserve ordinary settings");
+			}
 		}
 
-		Feature neuralRendering{ "NeuralRendering", true, true };
+		Feature neuralRendering{ "NeuralRendering", true };
 		ImGuiID neuralTabBar = 0;
 		auto drawNeuralRendering = [&] {
 			ImGui::PushID("NeuralRendering");
@@ -885,7 +1036,7 @@ int main()
 					require(MenuUI::SettingsPage::Selected("NeuralRendering") == target, "right-clicks leave card-only tools even when ImGui already retains the clicked tab");
 				}
 
-		Feature toolNavigation{ "FeaturePage", true, true };
+		Feature toolNavigation{ "FeaturePage", true };
 		ImGuiID toolNavigationBar = 0;
 		bool allowTopNavigation = true, showRouteTab = true;
 		float toolPanelWidth = 850, toolTabFontSize = 0;
@@ -942,6 +1093,32 @@ int main()
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
 		}
 
+		for (const float font : { 13.0f, 21.0f }) {
+			for (const float panelWidth : { 210.0f, 420.0f }) {
+				toolPanelWidth = panelWidth;
+				const auto draw = [&] {
+					ImGui::PushFont(ImGui::GetFont(), font);
+					drawToolNavigation();
+					ImGui::PopFont();
+				};
+				require(MenuUI::SettingsPage::Navigate("FeaturePage", "overview"), "pinned tab fixture starts at Overview");
+				for (int settle = 0; settle < 8; ++settle) frame(draw);
+				const auto original = Util::controls.at("Start here. Choose a card to open its settings.");
+				for (const char* section : { "route", "look", "advanced", "performance", "profiling" }) {
+					require(MenuUI::SettingsPage::Navigate("FeaturePage", section), "pinned tab fixture selects settings and tools");
+					for (int settle = 0; settle < 8; ++settle) frame(draw);
+					const auto overview = Util::controls.at("Start here. Choose a card to open its settings.");
+					const auto* bar = GImGui->TabBars.GetByKey(toolNavigationBar);
+					require(bar && bar->ScrollButtonEnabled, "pinning retains scrolling for overflowing tabs");
+					require(std::abs(original.Min.x - overview.Min.x) < .1f && std::abs(original.Max.x - overview.Max.x) < .1f && std::abs(original.Min.y - overview.Min.y) < .1f, "Overview does not move when ordinary tabs scroll horizontally");
+					require(overview.Min.x >= bar->BarRect.Min.x && overview.Max.x <= bar->ScrollingRectMinX && VisibleTextIndices(overview) >= 8 * 6, "the entire Overview label stays visible outside the scrolling tabs");
+					click(overview.GetCenter(), draw);
+					for (int settle = 0; settle < 3; ++settle) frame(draw);
+					require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "pinned Overview returns from settings and card-only tools on narrow panels");
+				}
+			}
+		}
+
 		ProfilingRenderer::inspect = PerformanceTuningRenderer::inspect = [] { ImGui::Dummy({ 0, 1000 }); };
 		for (const float font : { 13.0f, 21.0f })
 			for (const float panelWidth : { 850.0f, 420.0f }) {
@@ -975,17 +1152,17 @@ int main()
 					frame(draw);
 					const bool profilingCard = std::string_view(help).starts_with("Choose CPU");
 					require(MenuUI::SettingsPage::Selected("NeuralRendering") == (profilingCard ? "profiling" : "performance"), "each NR tool card opens its own section");
-					const auto back = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+					const auto back = Util::controls.at("Start here. Choose a card to open its settings.");
 					require(Viewport::Scroll("NeuralRendering", profilingCard ? "profiling" : "performance", 1), "NR tool body scrolls beneath its fixed heading");
 					frame(draw);
 					frame(draw);
-					const auto fixedBack = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
-					require(std::abs(back.Min.y - fixedBack.Min.y) < 1 && fixedBack.Max.y < 600, "NR tool Overview button remains fixed and visible after scrolling");
+					const auto fixedBack = Util::controls.at("Start here. Choose a card to open its settings.");
+					require(std::abs(back.Min.y - fixedBack.Min.y) < 1 && fixedBack.Max.y < 600, "NR tool Overview tab remains fixed and visible after scrolling");
 					click(fixedBack.GetCenter(), draw);
 					frame(draw);
 					frame(draw);
 					if (MenuUI::SettingsPage::Selected("NeuralRendering") != "overview")
-						throw std::runtime_error(std::format("NR tool back failed: font {}, width {}, selected {}, bounds ({}, {})-({}, {}), hovered {}", font, panelWidth, MenuUI::SettingsPage::Selected("NeuralRendering"), fixedBack.Min.x, fixedBack.Min.y, fixedBack.Max.x, fixedBack.Max.y, GImGui->HoveredWindow ? GImGui->HoveredWindow->Name : "none"));
+						throw std::runtime_error(std::format("NR tool Overview tab failed: font {}, width {}, selected {}, bounds ({}, {})-({}, {}), hovered {}", font, panelWidth, MenuUI::SettingsPage::Selected("NeuralRendering"), fixedBack.Min.x, fixedBack.Min.y, fixedBack.Max.x, fixedBack.Max.y, GImGui->HoveredWindow ? GImGui->HoveredWindow->Name : "none"));
 				}
 			}
 
@@ -1073,7 +1250,7 @@ int main()
 				require(Viewport::Scroll("PinnedPage", "selection", 0), "fixed-header content accepts a top scroll");
 				frame(draw);
 				frame(draw);
-				const auto back = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+				const auto back = Util::controls.at("Start here. Choose a card to open its settings.");
 				const float topControlY = controlY;
 				require(back.Min.y >= 8 && back.Max.y < viewportBounds.Min.y, "Overview stays above the independently clipped controls");
 				io.AddMousePosEvent(viewportBounds.GetCenter().x, viewportBounds.GetCenter().y);
@@ -1085,13 +1262,13 @@ int main()
 				require(Viewport::Scroll("PinnedPage", "selection", 1), "fixed-header content accepts a bottom scroll");
 				frame(draw);
 				frame(draw);
-				const auto scrolledBack = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
-				require(std::abs(back.Min.x - scrolledBack.Min.x) < .1f && std::abs(back.Min.y - scrolledBack.Min.y) < .1f && std::abs(back.Max.x - scrolledBack.Max.x) < .1f && std::abs(back.Max.y - scrolledBack.Max.y) < .1f, "Overview button remains fixed at the bottom of a long detail page");
+				const auto scrolledBack = Util::controls.at("Start here. Choose a card to open its settings.");
+				require(std::abs(back.Min.x - scrolledBack.Min.x) < .1f && std::abs(back.Min.y - scrolledBack.Min.y) < .1f && std::abs(back.Max.x - scrolledBack.Max.x) < .1f && std::abs(back.Max.y - scrolledBack.Max.y) < .1f, "Overview tab remains fixed at the bottom of a long detail page");
 				const auto scrolled = Viewport::Describe(true);
 				require(scrolled["scrollMaxY"].get<float>() > 0 && std::abs(scrolled["scrollY"].get<float>() - scrolled["scrollMaxY"].get<float>()) < 1, "DevBench still targets the scrolling settings body");
 				overflow = false;
 				for (int settle = 0; settle < 3; ++settle) frame(draw);
-				const auto shortBack = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
+				const auto shortBack = Util::controls.at("Start here. Choose a card to open its settings.");
 				require(std::abs(back.Min.x - shortBack.Min.x) < .1f && std::abs(back.Min.y - shortBack.Min.y) < .1f, "fixed heading does not move when controls no longer need a scrollbar");
 				overflow = true;
 				for (int settle = 0; settle < 3; ++settle) frame(draw);
@@ -1101,7 +1278,7 @@ int main()
 				click(scrolledBack.GetCenter(), draw);
 				frame(draw);
 				frame(draw);
-				require(MenuUI::SettingsPage::Selected("PinnedPage") == "overview" && value == .75f, "fixed Overview button works after scrolling and preserves settings");
+				require(MenuUI::SettingsPage::Selected("PinnedPage") == "overview" && value == .75f, "pinned Overview tab works after scrolling and preserves settings");
 			}
 		}
 
@@ -1752,6 +1929,14 @@ int main()
 			PerformanceTuningRenderer::measuring = false;
 		}
 		{
+			for (const bool enabled : { false, true }) {
+				globals::profilerStorage.enabled = enabled;
+				const auto before = globals::profilerStorage.requests;
+				frame([] { RenderMeasurementPreview(nullptr); });
+				require(globals::profilerStorage.enabled == enabled && !ProfilingRenderer::summaryRequestedCapture, "browsing performance counters must not enable profiling through the summary collector");
+				require(globals::profilerStorage.requests == before + (enabled ? 1 : 0), "performance previews capture only when the main profiling switch is on");
+			}
+			globals::profilerStorage.enabled = false;
 			const auto draw = [] { ProfilingRenderer::RenderEnabledControl(); };
 			frame(draw);
 			frame(draw);
@@ -1763,6 +1948,7 @@ int main()
 			PerformanceTuningRenderer::measuring = false;
 			click(Util::controls.at("Enable runtime CPU and GPU profiling. No restart required.").GetCenter(), draw);
 			require(!globals::profilerStorage.enabled, "shared profiling switch disables runtime capture");
+			globals::profilerStorage.enabled = true;
 		}
 
 		{
@@ -2010,14 +2196,14 @@ int main()
 						throw std::runtime_error(std::format("Route {}/{} selected {} at font {} and width {}", route.page, route.section, MenuUI::SettingsPage::Selected(route.page), font, panel));
 					panelHeight = 360;
 					for (int settle = 0; settle < 3; ++settle) frame(draw);
-					const auto back = Util::controls.at("Return to this feature's setup overview. Your settings are kept.");
-					require(back.Min.x >= 0 && back.Max.x <= panel + 10, "back action stays inside wide and narrow panels");
-					require(back.Min.y >= 8 && back.Max.y <= panelHeight + 8, "fixed back action remains visible when a production panel becomes shorter");
+					const auto back = Util::controls.at("Start here. Choose a card to open its settings.");
+					require(back.Min.x >= 0 && back.Max.x <= panel + 10, "Overview tab stays inside wide and narrow panels");
+					require(back.Min.y >= 8 && back.Max.y <= panelHeight + 8, "pinned Overview tab remains visible when a production panel becomes shorter");
 					click(back.GetCenter(), draw);
 					frame(draw);
 					frame(draw);
 					if (MenuUI::SettingsPage::Selected(route.page) != "overview")
-						throw std::runtime_error(std::format("Back action {}/{} at font {}, width {}, bounds ({}, {})-({}, {})", route.page, route.section, font, panel, back.Min.x, back.Min.y, back.Max.x, back.Max.y));
+						throw std::runtime_error(std::format("Overview tab {}/{} at font {}, width {}, bounds ({}, {})-({}, {})", route.page, route.section, font, panel, back.Min.x, back.Min.y, back.Max.x, back.Max.y));
 					if (route.conditional) {
 						conditional = false;
 						frame(draw);

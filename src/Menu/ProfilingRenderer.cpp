@@ -1058,13 +1058,22 @@ bool ProfilingRenderer::RenderFeatureOverview()
 
 bool ProfilingRenderer::CanProfileFeature(std::string_view a_feature)
 {
-	return a_feature != "Screenshot" &&
+	return !Util::FeatureProfiling::IsExcluded(a_feature) &&
 	       (Util::FeatureProfiling::Find(a_feature) || HasFeatureTimers(std::string(a_feature)));
+}
+
+const char* ProfilingRenderer::GetProfilingDisabledReason()
+{
+	if (!globals::profiler || !globals::profiler->IsInitialized())
+		return "Profiler is unavailable.";
+	if (!globals::profiler->IsUserEnabled())
+		return "Profiling is off. Enable it on the main Profiling page in the sidebar.";
+	return nullptr;
 }
 
 bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 {
-	if (!globals::profiler || !globals::profiler->IsInitialized() || featurePrefix == "Screenshot")
+	if (!globals::profiler || !globals::profiler->IsInitialized() || Util::FeatureProfiling::IsExcluded(featurePrefix))
 		return false;
 
 	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
@@ -1112,8 +1121,9 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle, bo
 			ImGui::TextDisabled("Profiling is off. Turn on Enabled to capture timings.");
 			return;
 		}
-	} else if (!profiler.IsUserEnabled()) {
-		profiler.SetUserEnabled(true);
+	} else if (const auto* reason = GetProfilingDisabledReason()) {
+		ImGui::TextDisabled("%s", reason);
+		return;
 	}
 
 	profiler.RequestCapture();
@@ -1288,8 +1298,8 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 {
 	if (!CanProfileFeature(featurePrefix))
 		return;
-	if (!globals::profiler || !globals::profiler->IsInitialized()) {
-		ImGui::TextDisabled("Profiler is unavailable.");
+	if (const auto* reason = GetProfilingDisabledReason()) {
+		ImGui::TextDisabled("%s", reason);
 		return;
 	}
 	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
@@ -1299,7 +1309,6 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 	auto& featureMode = featureTimingModes[featurePrefix];
 
 	int mode = static_cast<int>(featureMode);
-	const int previousMode = mode;
 	const MenuUI::Choice choices[] = {
 		{ "off", "Off", "Stop live profiling", "No feature timing capture." },
 		{ "gpu", "GPU", "Graphics-card timings", "Show instrumented graphics-card pass timings." },
@@ -1310,19 +1319,11 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 		mode = chosen;
 
 	mode = std::clamp(mode, static_cast<int>(FeatureTimingMode::Off), static_cast<int>(FeatureTimingMode::CPU));
-	if (mode != previousMode) {
+	if (chosen >= 0)
 		featureMode = static_cast<FeatureTimingMode>(mode);
-		if (featureMode != FeatureTimingMode::Off)
-			profiler.SetUserEnabled(true);
-	}
 
 	if (featureMode == FeatureTimingMode::Off) {
 		ImGui::TextDisabled("Feature profiling is off.");
-		return;
-	}
-
-	if (!profiler.IsUserEnabled()) {
-		ImGui::TextDisabled("Runtime profiling is off.");
 		return;
 	}
 
@@ -1336,8 +1337,8 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(const std::string& featu
 {
 	if (!CanProfileFeature(featurePrefix))
 		return;
-	if (!globals::profiler || !globals::profiler->IsInitialized()) {
-		MenuUI::DetailText("Profiler is unavailable.");
+	if (const auto* reason = GetProfilingDisabledReason()) {
+		MenuUI::DetailText(reason);
 		return;
 	}
 	if (const auto* view = Util::FeatureProfiling::Find(featurePrefix))

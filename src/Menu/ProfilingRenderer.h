@@ -68,6 +68,8 @@ public:
 	static void RenderStatistics(bool showTable = true, bool showModeToggle = true, bool showEnabledToggle = true);
 	/** Identifies feature-owned and shared profiling views before samples exist. */
 	static bool CanProfileFeature(std::string_view a_feature);
+	/** Null when the main profiling switch permits live views; otherwise explains how to unlock them. */
+	static const char* GetProfilingDisabledReason();
 	static bool HasFeatureTimers(const std::string& featurePrefix);
 	/** Draws Off/GPU/CPU controls and live timing graphs for one feature. */
 	static void RenderFeatureTimers(const std::string& featurePrefix);

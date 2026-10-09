@@ -1109,7 +1109,7 @@ namespace
 	void DrawStereoSettings();
 	void DrawStereoSyncSettings();
 	void DrawStereoBlendSettings();
-	void DrawFoveationSettings();
+	void DrawFoveationSettings(bool maskOnly);
 	void DrawKeyBindings();
 	void DrawDebugSection();
 	bool pendingFovTabSelection = false;
@@ -1131,8 +1131,11 @@ void VR::DrawSettings()
 	if (pendingFovTabSelection)
 		MenuUI::SettingsPage::Select("VR", "fov");
 	MenuUI::SettingsPage page("VR", {
-										{ "general", "Menu", "Choose headset menu placement and interaction.", "Headset placement and interaction", true, true, "Set up view and interaction" },
+										{ "general", "General", "Choose navigation and visibility behavior.", "Navigation and visibility", true, true, "Set up view and interaction" },
+										{ "layout", "Menu", "Choose headset menu placement and presentation.", "Headset placement and scale", true, true, nullptr },
+										{ "input", "Input", "Refine pointer speed and controller interaction.", "Pointer response and instructions", true, true, "Refine interaction" },
 										{ "fov", "FOV", "Choose the area to render, then refine its edges.", "Foveated area and edges", true, true, nullptr },
+										{ "fov-effects", "FOV effects", "Choose which effects use the shared FOV mask.", "Effect coverage and detail budgets", true, true, nullptr },
 										{ "stereo", "Stereo", "Refine the appearance shared between your eyes.", "Shared stereo appearance", true, true, "Balance stereo appearance" },
 										{ "bindings", "Bindings", "Choose controller shortcuts.", "Controller shortcuts", openVRInfo.isCompatible, true, "Refine input" },
 										{ "diagnostics", "Diagnostics", "Inspect headset and controller diagnostics.", "Headset and controller state", true, false, nullptr },
@@ -1146,10 +1149,14 @@ void VR::DrawSettings()
 	if (page.Is("general")) {
 		{
 			DrawGeneralVRSettings();
-			DrawControllerInputInstructions();
-			DrawMenuSettings();
-			DrawMouseSettings();
 		}
+	}
+
+	if (page.Is("layout"))
+		DrawMenuSettings();
+	if (page.Is("input")) {
+		DrawMouseSettings();
+		DrawControllerInputInstructions();
 	}
 
 	if (page.Is("fov")) {
@@ -1158,9 +1165,12 @@ void VR::DrawSettings()
 				ImGui::SetScrollY(0.0f);
 				pendingFovTabSelection = false;
 			}
-			DrawFoveationSettings();
+			DrawFoveationSettings(true);
 		}
 	}
+
+	if (page.Is("fov-effects"))
+		DrawFoveationSettings(false);
 
 	if (page.Is("stereo")) {
 		{
@@ -1766,7 +1776,8 @@ namespace
 		DrawKeepDesktopWindowFocusedForVRMenuSetting();
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 		ImGui::Separator();
-		if (ImGui::CollapsingHeader("General Settings")) {
+		MenuUI::SectionHeading("Visibility");
+		{
 			DrawDepthCullingSettings(vr, "GeneralSettings");
 		}
 	}
@@ -1788,7 +1799,8 @@ namespace
 		auto& settings = vr.settings;
 		if (!CanConfigureMenuLayout())
 			return;
-		if (ImGui::CollapsingHeader("Menu Settings")) {
+		MenuUI::SectionHeading("Headset placement");
+		{
 			DrawMenuLayoutUnlockSetting();
 			if (!vr.openVRInfo.isCompatible) {
 				ImGui::TextDisabled("Headset controls require a compatible VR runtime; desktop layout unlocking remains available.");
@@ -1863,7 +1875,8 @@ namespace
 		if (!vr.openVRInfo.isCompatible)
 			return;
 		VR::Settings& settings = vr.settings;
-		if (ImGui::CollapsingHeader("Input Settings")) {
+		MenuUI::SectionHeading("Pointer response");
+		{
 			ImGui::Text("Joystick Settings");
 			Util::Widgets::SliderFloat("Mouse Deadzone", &settings.mouseDeadzone, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1888,7 +1901,8 @@ namespace
 		const bool screenSpaceShadowsEnabled = isVR && screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
 		const bool screenSpaceGIEnabled = isVR && screenSpaceGI.loaded && screenSpaceGI.settings.Enabled;
 
-		if (ImGui::CollapsingHeader("Screen Space Sync")) {
+		MenuUI::SectionHeading("Screen-space synchronization");
+		{
 			auto drawSyncToggle =
 				[](const char* a_label,
 					bool& a_enabled,
@@ -1975,7 +1989,8 @@ namespace
 		const bool screenSpaceEffectActive = VR::AnyScreenSpaceEffectActive();
 		const bool blendCanRun = settings.EnableStereoBlend && settings.StereoBlendMaxFactor > VR::Config::kMinStereoBlendMaxFactor && screenSpaceEffectActive;
 
-		if (ImGui::CollapsingHeader("Stereo Blending")) {
+		MenuUI::SectionHeading("Stereo blending");
+		{
 			ImGui::TextWrapped("Advanced fallback for VR screen-space mismatches. It is default-off and only runs when a supported screen-space effect is active.");
 			ImGui::Spacing();
 
@@ -2022,7 +2037,7 @@ namespace
 		}
 	}
 
-	void DrawFoveationSettings()
+	void DrawFoveationSettings(bool maskOnly)
 	{
 		auto& vr = globals::features::vr;
 		auto& settings = vr.settings;
@@ -2071,9 +2086,11 @@ namespace
 			ImGui::EndDisabled();
 		};
 
-		upscaling.DrawFoveatedSetupInstructions();
-		drawSection("Shared FOV Mask");
-		upscaling.DrawFoveatedSettings();
+		if (maskOnly) {
+			upscaling.DrawFoveatedSetupInstructions();
+			drawSection("Shared FOV Mask");
+			upscaling.DrawFoveatedSettings();
+		}
 
 		const auto profile = upscaling.loaded ? upscaling.GetActiveUpscalingFoveatedProfile() : Upscaling::ActiveUpscalingFoveatedProfile{};
 		const bool foveatedProfileActive = upscaling.IsSharedFoveatedMaskActive();
@@ -2112,6 +2129,9 @@ namespace
 		} else if (anySharedMaskConsumerEnabled) {
 			ImGui::TextDisabled("Shared-mask consumers require active foveated upscaling.");
 		}
+
+		if (maskOnly)
+			return;
 
 		const bool ssrFoveationEnabled = settings.EnableSSRFoveation && ssrAvailable;
 		const bool waterParallaxFoveationEnabled = settings.EnableWaterParallaxFoveation && waterParallaxAvailable;
@@ -2180,7 +2200,7 @@ namespace
 
 			{
 				auto masterGuard = Util::DisableGuard(!foveatedProfileActive || !anyFoveationFeatureAvailable);
-				if (Util::Widgets::Checkbox("Toggle ALL", &allAvailableFoveationFeaturesEnabled)) {
+				if (Util::Widgets::Checkbox("Enable all available shader effects", &allAvailableFoveationFeaturesEnabled)) {
 					const bool enableFoveationFeatures = allAvailableFoveationFeaturesEnabled;
 					auto applyMasterToggle = [&](const FoveationToggleRef& a_toggle) {
 						if (!a_toggle.enabled)
@@ -2205,7 +2225,6 @@ namespace
 				ImGui::TextUnformatted("Screen Space Shadows and SSGI have their own FOV toggles.");
 				ImGui::TextUnformatted("Turn it off to clear these options.");
 			}
-			ImGui::SameLine();
 			if (anyFoveationFeatureAvailable)
 				ImGui::TextDisabled("%d/%d available enabled", foveationFeatureCounts.enabled, foveationFeatureCounts.available);
 			else

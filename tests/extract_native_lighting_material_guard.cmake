@@ -74,13 +74,17 @@ if(
     )
 endif()
 
+# End at the last tested hook so unrelated profiling guards cannot truncate extraction.
 extract_between(
     "${_hooks}" "enum class VRLightingMaterialRejection"
-    "#ifdef TRACY_ENABLE" _guard
+    "void DrawRenderPassImmediately(" _guard
+)
+extract_between(
+    "${_hooks}" "void DrawRenderPassImmediately(" "\n\t}\n" _draw_entry
 )
 file(
     WRITE "${OUTPUT_DIRECTORY}/native_lighting_material_guard_under_test.h"
-    "${_guard}"
+    "${_guard}${_draw_entry}\n\t}\n"
 )
 extract_between(
     "${_game}" "[[nodiscard]] inline bool IsLikelyValidPointer("

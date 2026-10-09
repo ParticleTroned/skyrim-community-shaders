@@ -1895,7 +1895,7 @@ int main()
 						}
 						require(layout.statusLeft > layout.backgroundLeft, "status marker is padded inside the footer");
 						if (!layout.stacked)
-							require(height < font * 4, "wide footers remain compact");
+							require(std::abs(height - (1 + font * 3.3f) * .75f) < 1, "wide footers are 25 percent shorter while retaining readable text and button hit areas");
 						ImGui::EndChild();
 						ImGui::PopFont();
 					};

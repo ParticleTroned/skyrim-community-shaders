@@ -58,8 +58,10 @@ namespace
 	constexpr float footerTextScale = 14.0f / 12.0f;
 	constexpr float footerButtonPadding = 1.85f;
 	constexpr float footerButtonHeight = 2.1f;
-	constexpr float footerStatusHeight = 2.5f;
-	constexpr float footerVerticalPadding = .4f;
+	constexpr float footerDetailTextScale = .95f;
+	constexpr float footerStatusLineGap = .05f;
+	constexpr float footerStatusHeight = footerTextScale + footerStatusLineGap + footerDetailTextScale;
+	constexpr float footerVerticalPadding = .15f;
 	constexpr float footerStackGap = .5f;
 	constexpr float footerOpacity = MenuUI::SettingsSurfaceOpacityScale;
 
@@ -236,11 +238,11 @@ namespace
 		{
 			draw->PushClipRect({ statusStart.x - font * .2f, statusStart.y }, { statusStart.x + layout.statusWidth, statusStart.y + font * footerStatusHeight }, true);
 			const SKSE::stl::scope_exit restoreClip([draw] { draw->PopClipRect(); });
-			const ImVec2 marker{ statusStart.x + font * .35f, statusStart.y + font * 1.25f };
+			const ImVec2 marker{ statusStart.x + font * .35f, statusStart.y + font * footerStatusHeight * .5f };
 			draw->AddCircleFilled(marker, font * .52f, ImGui::GetColorU32({ statusColor.x, statusColor.y, statusColor.z, .10f }));
 			draw->AddCircleFilled(marker, font * .26f, ImGui::GetColorU32(statusColor));
-			draw->AddText(nullptr, font * footerTextScale, { statusStart.x + font, statusStart.y + font * .1f }, ImGui::GetColorU32(statusColor), status);
-			draw->AddText(nullptr, font * .95f, { statusStart.x + font, statusStart.y + font * 1.5f }, ImGui::GetColorU32(Util::Color::SecondaryText()), detail.c_str());
+			draw->AddText(nullptr, font * footerTextScale, { statusStart.x + font, statusStart.y }, ImGui::GetColorU32(statusColor), status);
+			draw->AddText(nullptr, font * footerDetailTextScale, { statusStart.x + font, statusStart.y + font * (footerTextScale + footerStatusLineGap) }, ImGui::GetColorU32(Util::Color::SecondaryText()), detail.c_str());
 		}
 		ImGui::SetCursorScreenPos(statusStart);
 		ImGui::Dummy({ layout.statusWidth, font * footerStatusHeight });

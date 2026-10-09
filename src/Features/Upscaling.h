@@ -5,6 +5,7 @@
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedMaskCalibration.h"
 #include "Upscaling/FoveatedMaskVisualization.h"
 #include "Upscaling/FoveatedRegionPlan.h"
 #include "Upscaling/LumaSharpen/LumaSharpen.h"
@@ -317,8 +318,8 @@ public:
 	// stay disabled to avoid stacking a second timed black hold.
 	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 0.0f;
 	static constexpr uint32_t kDLSSSharpenerModeMaxIndex = 2;
-	static constexpr float kFoveatedManualOffsetMin = -0.30f;
-	static constexpr float kFoveatedManualOffsetMax = 0.30f;
+	static constexpr float kFoveatedManualOffsetMin = FoveatedMaskCalibration::kMinimumOffset;
+	static constexpr float kFoveatedManualOffsetMax = FoveatedMaskCalibration::kMaximumOffset;
 	static constexpr float kFoveatedBlendFeatherMin = 0.0f;
 	static constexpr float kFoveatedBlendFeatherMax = 0.10f;
 	static constexpr float kPeripheryTAAOuterScaleMin = 0.30f;
@@ -552,6 +553,7 @@ public:
 		uint neuralCharacterMaskTestMode = static_cast<uint>(
 			NeuralRendering::CharacterMaskTestMode::Authored);
 		float foveatedCenterArea = 0.3f;
+		float foveatedOuterBlendFeather = FoveatedCommon::kCenterFeather;
 		float foveatedCenterHorizontalScale = 1.0f;
 		bool foveatedBlendCurveEnabled = false;
 		float foveatedBlendFalloff = 1.0f;
@@ -561,6 +563,8 @@ public:
 		float foveatedRightEyeMaskOffsetY = 0.0f;
 		float periphery_taa_center_area = 0.3f;
 		bool foveatedPeripheryMaskVisualization = false;
+		FoveatedMaskCalibration::Reference foveatedCalibrationReference;
+		float foveatedAutomaticMaskScaling = 100.0f;
 		bool periphery_taa_enable = false;
 		float periphery_taa_outer_scale = 0.80f;
 		float periphery_taa_center_blend_feather = 0.05f;
@@ -2596,6 +2600,11 @@ public:
 	bool SetFoveatedBlendCurve(bool a_enabled, float a_falloff);
 	/** Draw the shared FOV-only and FOV + TAA blend controls. */
 	void DrawFoveatedBlendSettings();
+	/** Prepares calibrated settings without mutation; missing projections or infeasible fits retain the caller settings. */
+	bool PrepareFoveatedMaskCalibration(Settings& a_candidate, bool a_captureReference, float a_percent, std::string& a_error) const;
+	void DrawFoveatedCalibration();
+	std::string foveatedCalibrationMessage;
+	std::optional<float> pendingFoveatedMaskScaling;
 	void DrawFoveatedSetupInstructions();
 	void DrawFoveatedSettings();
 	virtual void SaveSettings(json& o_json) override;

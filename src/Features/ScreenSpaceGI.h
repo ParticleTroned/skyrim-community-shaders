@@ -117,6 +117,7 @@ public:
 		uint frameHeight = 0;
 		bool isVR = false;
 		float scale = -1.0f;
+		float feather = -1.0f;
 		float horizontalScale = 1.0f;
 		std::array<float2, 2> centerOffsets{};
 		std::array<CenterDispatchRect, 2> rects{};

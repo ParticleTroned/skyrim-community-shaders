@@ -52,6 +52,7 @@ namespace
 		bool available = false;
 		bool active = false;
 		float centerScale = FoveatedCommon::kCenterScaleMax;
+		float centerFeather = FoveatedCommon::kCenterFeather;
 		float centerHorizontalScale = 1.0f;
 		std::array<float2, 2> centerOffsets{};
 	};
@@ -97,6 +98,7 @@ namespace
 			return state;
 
 		state.centerScale = FoveatedCommon::ClampCenterScale(profile.sharedVisibleScale);
+		state.centerFeather = profile.sharedVisibleFeather;
 		state.centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
 		state.centerOffsets = profile.centerOffsets;
 		state.available = FoveatedCommon::IsActiveCoverage(state.centerScale);
@@ -119,7 +121,7 @@ namespace
 			a_state.centerScale,
 			offset.x,
 			offset.y,
-			FoveatedCommon::kCenterFeather,
+			a_state.centerFeather,
 			a_state.centerHorizontalScale);
 	}
 }
@@ -623,7 +625,7 @@ void ScreenSpaceShadows::DrawShadows()
 				data.DynamicSampleCount = dynamicSampleCount;
 				data.DynamicReadCount = dynamicReadCount;
 				data.FoveatedData0[0] = foveatedState.centerScale;
-				data.FoveatedData0[1] = FoveatedCommon::kCenterFeather;
+				data.FoveatedData0[1] = foveatedState.centerFeather;
 				data.FoveatedData0[2] = foveatedState.centerHorizontalScale;
 				data.FoveatedData0[3] = foveatedState.active ? 1.0f : 0.0f;
 				const auto centerOffset = foveatedState.centerOffsets[std::min<size_t>(eyeIndex, foveatedState.centerOffsets.size() - 1)];
@@ -798,7 +800,7 @@ void ScreenSpaceShadows::DrawStereoSync()
 			cbData.DispatchExtent[0] = static_cast<float>(dispatchWidth);
 			cbData.DispatchExtent[1] = static_cast<float>(dispatchHeight);
 			cbData.FoveatedData0[0] = foveatedState.centerScale;
-			cbData.FoveatedData0[1] = FoveatedCommon::kCenterFeather;
+			cbData.FoveatedData0[1] = foveatedState.centerFeather;
 			cbData.FoveatedData0[2] = foveatedState.centerHorizontalScale;
 			cbData.FoveatedData0[3] = foveatedState.active ? 1.0f : 0.0f;
 			const auto centerOffset = foveatedState.centerOffsets[std::min<size_t>(eyeIndex, foveatedState.centerOffsets.size() - 1)];

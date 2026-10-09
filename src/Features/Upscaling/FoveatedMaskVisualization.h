@@ -18,7 +18,7 @@ namespace FoveatedMaskVisualization
 		if (!FoveatedCommon::IsActiveCoverage(centerScale))
 			return { 100.0f, 0.0f };
 		horizontalScale = FoveatedCommon::ClampCenterHorizontalScale(horizontalScale);
-		feather = std::isfinite(feather) ? std::clamp(feather, 1e-4f, 0.1f) : FoveatedCommon::kCenterFeather;
+		feather = std::isfinite(feather) ? std::clamp(feather, FoveatedCommon::kMinimumFeather, 0.1f) : FoveatedCommon::kCenterFeather;
 		const float centerX = std::isfinite(offsetX) ? std::clamp(0.5f + offsetX, 0.0f, 1.0f) : 0.5f;
 		const float centerY = std::isfinite(offsetY) ? std::clamp(0.5f + offsetY, 0.0f, 1.0f) : 0.5f;
 		const float supportScale = centerScale + 2.0f * feather;

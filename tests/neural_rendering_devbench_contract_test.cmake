@@ -902,9 +902,22 @@ string(JSON
     then
     anyOf
 )
-if(NOT _descriptor_configure_field_count EQUAL 13)
-    message(FATAL_ERROR "foveation_configure schema must require at least one of 13 controls")
+if(NOT _descriptor_configure_field_count EQUAL 16)
+    message(FATAL_ERROR "foveation_configure schema must require at least one of 16 controls")
 endif()
+string(JSON _outer_feather_min GET "${_descriptor_json}" inputSchema properties fovOnlyOuterFeather minimum)
+string(JSON _outer_feather_max GET "${_descriptor_json}" inputSchema properties fovOnlyOuterFeather maximum)
+string(JSON _scaling_conflicts LENGTH "${_descriptor_json}" inputSchema allOf 1 then allOf 0 then not anyOf)
+if(NOT _outer_feather_min EQUAL 0 OR NOT _outer_feather_max EQUAL 0.1 OR NOT _scaling_conflicts EQUAL 11)
+    message(FATAL_ERROR "Outer feather bounds and automatic/manual exclusions must match the runtime contract")
+endif()
+string(JSON _calibrate_true GET "${_descriptor_json}" inputSchema properties calibrateMasks const)
+string(JSON _scaling_min GET "${_descriptor_json}" inputSchema properties automaticMaskScaling minimum)
+string(JSON _scaling_max GET "${_descriptor_json}" inputSchema properties automaticMaskScaling maximum)
+if(NOT _calibrate_true OR NOT _scaling_min EQUAL 70 OR NOT _scaling_max EQUAL 130)
+    message(FATAL_ERROR "FOV calibration controls must advertise their accepted values")
+endif()
+
 string(JSON
     _descriptor_two_value_maximum
     GET
@@ -3094,6 +3107,7 @@ set(_foveation_configuration_fields
     foveatedEnabled
     peripheryTaaEnabled
     fovOnlyCenterScale
+    fovOnlyOuterFeather
     peripheryTaaCenterScale
     peripheryTaaOuterScale
     centerHorizontalScale
@@ -3104,6 +3118,8 @@ set(_foveation_configuration_fields
     peripheryTaaBlendFeather
     neuralFinalLdrBlendFeather
     maskVisualization
+    calibrateMasks
+    automaticMaskScaling
 )
 foreach(_foveation_field IN LISTS _foveation_configuration_fields)
     string(FIND "${_bridge}" "\"${_foveation_field}\"" _foveation_field_position)

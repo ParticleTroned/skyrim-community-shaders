@@ -5,6 +5,7 @@
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <atomic>
 #include <iostream>
 #include <limits>
@@ -13,6 +14,11 @@
 #include <unordered_map>
 
 using json = nlohmann::json;
+using uint = unsigned;
+struct float2
+{
+	float x = 0.0f, y = 0.0f;
+};
 
 namespace REL
 {
@@ -37,6 +43,8 @@ struct Menu
 };
 struct ScreenSpaceGI
 {
+#include "fov_ssgi_cache_types.h"
+	void UpdateFoveatedBounds();
 	struct Settings
 	{
 		bool Enabled = false, ExperimentalOCUEffectFoveation = false, EnableGI = false;
@@ -78,6 +86,9 @@ struct Upscaling
 	{
 		bool available = true;
 		float sharedVisibleScale = 0.8f;
+		float sharedVisibleFeather = FoveatedCommon::kCenterFeather;
+		float centerHorizontalScale = 1.0f;
+		std::array<float2, 2> centerOffsets{};
 	} testProfile;
 	Profile GetActiveUpscalingFoveatedProfile() const
 	{
@@ -86,6 +97,8 @@ struct Upscaling
 		return result;
 	}
 	float GetActiveFoveatedSharedVisibleScale() const { return testProfile.sharedVisibleScale; }
+	float GetActiveFoveatedCenterHorizontalScale() const { return testProfile.centerHorizontalScale; }
+	auto GetActiveResolvedFoveatedMaskCenterOffsets() const { return testProfile.centerOffsets; }
 	int method = 2, invalidations = 0;
 	std::string GetShortName() const { return "Upscaling"; }
 	int GetUpscaleMethod() const { return method; }
@@ -322,12 +335,51 @@ void TestBlendCurve()
 	Require(!ValidateFovBlendCurve(json::object()).empty() && !ValidateFovBlendCurve(json{ { "enabled", 1 } }).empty(), "Boolean enabled is required");
 }
 
+void TestSharedFeather()
+{
+	auto& up = globals::features::upscaling;
+	auto& gi = globals::features::screenSpaceGI;
+	auto& shadows = globals::features::screenSpaceShadows;
+	REL::Module::vr = globals::game::isVR = true;
+	up.loaded = true;
+	up.settings.foveatedVendorDispatch = true;
+	up.testProfile = { true, .5f };
+	gi.settings.EnableFoveated = true;
+	gi.settings.ExperimentalOCUEffectFoveation = false;
+	shadows.bendSettings.EnableFoveated = 1;
+	for (float feather : { .05f, .0001f, .1f, .01f, .0100005f, .05f }) {
+		up.testProfile.sharedVisibleFeather = feather;
+		Require(ShaderDetailFeather(up.testProfile) == feather && SsgiBufferFeather() == feather,
+			"Lighting and SSGI shader constants must follow the active shared outer feather");
+		const auto state = ResolveFoveatedShadowState(shadows.bendSettings);
+		for (float value : ShadowBufferFeathers(state))
+			Require(value == feather, "Shadow raymarch and stereo sync must use the same active outer feather");
+		gi.UpdateFoveatedBounds();
+		Require(gi.centerRectCache.feather == feather, "SSGI cache must retain the exact selected feather");
+		for (unsigned eye = 0; eye < 2; ++eye) {
+			const auto expected = FoveatedCommon::BuildCenteredDispatchBounds(0, 1000, 1000, .5f, 0, 0, feather);
+			const auto bounds = BuildFoveatedBounds(state, eye, 0, 1000, 1000);
+			Require(bounds.minX == expected.minX && bounds.maxX == expected.maxX &&
+						bounds.minY == expected.minY && bounds.maxY == expected.maxY,
+				"Shadow dispatch bounds must expand and shrink with the current feather");
+			const auto& rect = gi.centerRectCache.rects[eye];
+			Require(rect.x == eye * 1000 + expected.minX && rect.y == expected.minY &&
+						rect.width == expected.maxX - expected.minX && rect.height == expected.maxY - expected.minY,
+				"SSGI must refresh cached dispatch bounds when only the feather changes");
+		}
+	}
+	REL::Module::vr = globals::game::isVR = false;
+	Require(!ResolveFoveatedShadowState(shadows.bendSettings).active && !IsRuntimeFoveatedActive(gi.settings),
+		"Shared FOV feather consumers must remain disabled on flat runtimes");
+}
+
 int main()
 {
 	try {
 		TestTransitions();
 		TestBlendCurve();
 		TestUi();
+		TestSharedFeather();
 		std::cout << "PASS: FOV transitions, defaults, SSGI synchronization, 64 ImGui availability combinations, DevBench validation/status, FOV curve history/checkbox, and independent OCU controls\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

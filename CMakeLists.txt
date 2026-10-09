@@ -2387,6 +2387,12 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES TIMEOUT 30
     )
 
+    add_controller_test(foveated_mask_calibration_test FoveatedMaskCalibration tests/foveated_mask_calibration_test.cpp)
+    target_link_libraries(
+        foveated_mask_calibration_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     set(_foveated_mask_visualization_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/foveated-mask-visualization-test"
     )

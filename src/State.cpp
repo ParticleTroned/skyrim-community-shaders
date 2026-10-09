@@ -2311,7 +2311,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 					vr.settings.EnableWetternessFoveationHardCutoff));
 				const float centerHorizontalScale = FoveatedCommon::ClampCenterHorizontalScale(profile.centerHorizontalScale);
 				const float activeLightingMode = foveationActive ? lightingFoveationMode : disabledFoveationMode;
-				data.VRFoveationData0 = { centerScale, FoveatedCommon::kCenterFeather, centerHorizontalScale, activeLightingMode };
+				data.VRFoveationData0 = { centerScale, profile.sharedVisibleFeather, centerHorizontalScale, activeLightingMode };
 				data.VRFoveationModes = {
 					foveationActive ? ssrFoveationMode : disabledFoveationMode,
 					foveationActive ? waterParallaxFoveationMode : disabledFoveationMode,

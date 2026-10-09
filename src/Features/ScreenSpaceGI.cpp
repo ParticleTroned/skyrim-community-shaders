@@ -150,6 +150,11 @@ namespace
 		return globals::features::upscaling.GetActiveFoveatedSharedVisibleScale();
 	}
 
+	float GetSharedUpscalingCenterMaskFeather()
+	{
+		return globals::features::upscaling.GetActiveUpscalingFoveatedProfile().sharedVisibleFeather;
+	}
+
 	float GetSharedUpscalingCenterMaskHorizontalScale()
 	{
 		return globals::features::upscaling.GetActiveFoveatedCenterHorizontalScale();
@@ -1599,7 +1604,7 @@ void ScreenSpaceGI::UpdateSB()
 		data.VRCullDistance = isVR ? ClampVRCullDistance(settings.VRCullDistance) : 0.0f;
 		data.CenterFullResMaskScale = centerMaskScale;
 		data.CenterFullResMaskHorizontalScale = GetSharedUpscalingCenterMaskHorizontalScale();
-		data.CenterFullResMaskFeather = FoveatedCommon::kCenterFeather;
+		data.CenterFullResMaskFeather = GetSharedUpscalingCenterMaskFeather();
 		auto centerOffsets = GetSharedUpscalingMaskOffsetsForSsgi();
 		data.CenterFullResMaskOffsets = { centerOffsets[0].x, centerOffsets[0].y, centerOffsets[1].x, centerOffsets[1].y };
 		data.CenterDispatchOffsetX = 0.0f;
@@ -1848,6 +1853,7 @@ void ScreenSpaceGI::DrawSSGI()
 	using DispatchRect = CenterDispatchRect;
 	auto centerOffsets = GetSharedUpscalingMaskOffsetsForSsgi();
 	const float centerHorizontalScale = GetSharedUpscalingCenterMaskHorizontalScale();
+	const float centerFeather = GetSharedUpscalingCenterMaskFeather();
 
 	auto buildCenterDispatchRect = [&](uint a_eyeIndex) -> DispatchRect {
 		DispatchRect rect{};
@@ -1874,7 +1880,7 @@ void ScreenSpaceGI::DrawSSGI()
 			return rect;
 
 		const float2 centerOffset = centerOffsets[a_eyeIndex];
-		const auto bounds = FoveatedCommon::BuildCenteredDispatchBounds(eyeMinX, eyeMaxX, frameHeight, centerScale, centerOffset.x, centerOffset.y, FoveatedCommon::kCenterFeather, centerHorizontalScale);
+		const auto bounds = FoveatedCommon::BuildCenteredDispatchBounds(eyeMinX, eyeMaxX, frameHeight, centerScale, centerOffset.x, centerOffset.y, centerFeather, centerHorizontalScale);
 		const int minX = bounds.minX;
 		const int maxX = bounds.maxX;
 		const int minY = bounds.minY;
@@ -1896,6 +1902,7 @@ void ScreenSpaceGI::DrawSSGI()
 		cache.frameWidth != resolution[0] ||
 		cache.frameHeight != resolution[1] ||
 		cache.isVR != isVR ||
+		cache.feather != centerFeather ||
 		(centerScaleDelta < 0.0f ? -centerScaleDelta : centerScaleDelta) > 1e-6f ||
 		std::abs(cache.horizontalScale - centerHorizontalScale) > 1e-6f ||
 		std::abs(cache.centerOffsets[0].x - centerOffsets[0].x) > 1e-6f ||
@@ -1907,6 +1914,7 @@ void ScreenSpaceGI::DrawSSGI()
 		cache.frameHeight = resolution[1];
 		cache.isVR = isVR;
 		cache.scale = centerScale;
+		cache.feather = centerFeather;
 		cache.horizontalScale = centerHorizontalScale;
 		cache.centerOffsets = centerOffsets;
 		cache.rects[0] = buildCenterDispatchRect(0);

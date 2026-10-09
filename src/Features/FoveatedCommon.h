@@ -10,9 +10,12 @@
 // must stay in lock-step with FoveatedShaderDetail.hlsli.
 namespace FoveatedCommon
 {
+	constexpr float kMaskOffsetMin = -0.30f;
+	constexpr float kMaskOffsetMax = 0.30f;
 	constexpr float kCenterScaleMin = 0.25f;
 	constexpr float kCenterScaleMax = 1.0f;
 	constexpr float kCenterFeather = 0.05f;
+	constexpr float kMinimumFeather = 1e-4f;
 	constexpr float kCenterHorizontalScaleMin = 1.0f;
 	constexpr float kCenterHorizontalScaleMax = 2.0f;
 	constexpr float kFullCoverageThreshold = 0.999f;
@@ -85,6 +88,17 @@ namespace FoveatedCommon
 		if (!std::isfinite(value))
 			return 1.0f;
 		return std::clamp(value, kCenterHorizontalScaleMin, kCenterHorizontalScaleMax);
+	}
+
+	/** Resolves horizontal expansion exactly as the live VR mask, including offset saturation. */
+	inline float ResolveMaskOffsetX(float manualOffset, float centerScale, float horizontalScale, bool rightEye, bool vr)
+	{
+		float offset = std::isfinite(manualOffset) ? std::clamp(manualOffset, kMaskOffsetMin, kMaskOffsetMax) : 0.0f;
+		if (vr) {
+			const float expansion = ClampCenterScale(centerScale) * 0.5f * (ClampCenterHorizontalScale(horizontalScale) - 1.0f);
+			offset += rightEye ? expansion : -expansion;
+		}
+		return std::clamp(offset, kMaskOffsetMin, kMaskOffsetMax);
 	}
 
 	/** Shared superellipse distance; one is the FOV boundary in eye-local UVs. */

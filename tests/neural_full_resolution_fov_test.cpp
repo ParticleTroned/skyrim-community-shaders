@@ -42,6 +42,7 @@ struct Upscaling
 		uint neuralRenderingInsertionPoint = static_cast<uint>(NeuralRendering::InsertionPoint::FinalLdrPreUi);
 		float foveatedCenterArea = 0.50f, periphery_taa_center_area = 0.35f, periphery_taa_outer_scale = 0.8f;
 		float foveatedCenterHorizontalScale = 1.1f;
+		float foveatedOuterBlendFeather = FoveatedCommon::kCenterFeather;
 		float foveatedLeftEyeMaskOffsetX = 0.0f, foveatedLeftEyeMaskOffsetY = 0.0f;
 		float foveatedRightEyeMaskOffsetX = 0.0f, foveatedRightEyeMaskOffsetY = 0.0f;
 		float periphery_taa_center_blend_feather = 0.03f;
@@ -90,7 +91,7 @@ void CheckSharedPlan(Upscaling& upscaling)
 		"Shared mask planning failed");
 	const auto& cache = upscaling.foveatedRectCache;
 	Require(cache.plan.IsValid(), "Both eye plans must be valid");
-	Require(cache.centerScale == profile.sharedVisibleScale && cache.centerFeather == FoveatedCommon::kCenterFeather &&
+	Require(cache.centerScale == profile.sharedVisibleScale && cache.centerFeather == profile.sharedVisibleFeather &&
 				cache.centerHorizontalScale == profile.centerHorizontalScale,
 		"NR must borrow exact shared geometry and feather");
 	Require(cache.peripheryTAAOuterScale == 0.0f, "Shared outer boundary must become the NR center mask");
@@ -99,7 +100,7 @@ void CheckSharedPlan(Upscaling& upscaling)
 		Require(cache.plan.eyes[eye].centerOffset.x == offset.x && cache.plan.eyes[eye].centerOffset.y == offset.y,
 			"Active profile eye offsets must remain pinned");
 		const auto bounds = FoveatedCommon::BuildCenteredDispatchBounds(0, 1511, 1217,
-			profile.sharedVisibleScale, offset.x, offset.y, FoveatedCommon::kCenterFeather, profile.centerHorizontalScale);
+			profile.sharedVisibleScale, offset.x, offset.y, profile.sharedVisibleFeather, profile.centerHorizontalScale);
 		Require(Equal(cache.plan.eyes[eye].output,
 					{ uint(bounds.minX), uint(bounds.minY), uint(bounds.maxX), uint(bounds.maxY) }),
 			"Visible NR support must equal shared FOV support for each eye");
@@ -113,6 +114,23 @@ int main()
 {
 	try {
 		Upscaling upscaling;
+		const auto baseline = upscaling.GetActiveUpscalingFoveatedProfile();
+		for (float feather : { 0.0f, 0.001f, 0.01f, 0.0100005f, 0.05f, 0.10f }) {
+			upscaling.settings.foveatedOuterBlendFeather = feather;
+			Require(GetNormalFoveatedBlendFeather(upscaling.settings, false) == std::max(FoveatedCommon::kMinimumFeather, feather),
+				"FOV-only blend must use the selected outer feather");
+			Require(GetNormalFoveatedBlendFeather(upscaling.settings, true) == upscaling.settings.periphery_taa_center_blend_feather,
+				"Outer feather experiments must preserve the TAA transition");
+			Require(GetFoveatedReconstructionSupportFeather(upscaling.settings, feather, true) == 0.10f,
+				"Final-LDR NR must retain its wider independent support when needed");
+			CheckSharedPlan(upscaling);
+		}
+		upscaling.settings.foveatedOuterBlendFeather = 0.01f;
+		const auto narrow = upscaling.GetActiveUpscalingFoveatedProfile();
+		Require(narrow.sharedVisibleFeather < baseline.sharedVisibleFeather,
+			"Shared FOV geometry must expose narrower feather support");
+		upscaling.settings.foveatedOuterBlendFeather = FoveatedCommon::kCenterFeather;
+
 		CheckSharedPlan(upscaling);
 		const auto fullMasked = upscaling.foveatedRectCache.plan;
 		upscaling.method = Upscaling::UpscaleMethod::kFSR;

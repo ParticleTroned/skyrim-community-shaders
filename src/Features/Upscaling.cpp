@@ -1,6 +1,7 @@
 #include "Upscaling.h"
 #include "Api/AcceptedDrawService.h"
 #include "Menu/SettingsPage.h"
+#include "Upscaling/FoveatedMaskCalibrationJson.h"
 #include "Upscaling/NeuralRendering/FramebufferTransaction.h"
 #include "Utils/GpuMemoryBudget.h"
 
@@ -378,6 +379,7 @@ namespace FSRTemporalTuningPolicy
 	OP(neuralRenderingUICorrection)           \
 	OP(neuralRenderingSingleSubrectScale)     \
 	OP(neuralRenderingBlendFeather)           \
+	OP(foveatedOuterBlendFeather)             \
 	OP(foveatedCenterArea)                    \
 	OP(foveatedCenterHorizontalScale)         \
 	OP(foveatedBlendCurveEnabled)             \
@@ -388,6 +390,8 @@ namespace FSRTemporalTuningPolicy
 	OP(foveatedRightEyeMaskOffsetY)           \
 	OP(periphery_taa_center_area)             \
 	OP(foveatedPeripheryMaskVisualization)    \
+	OP(foveatedCalibrationReference)          \
+	OP(foveatedAutomaticMaskScaling)          \
 	OP(periphery_taa_enable)                  \
 	OP(periphery_taa_outer_scale)             \
 	OP(periphery_taa_center_blend_feather)    \
@@ -425,6 +429,15 @@ void from_json(const json& a_json, Upscaling::Settings& a_settings)
 	UPSCALING_SETTINGS_JSON_FIELDS(UPSCALING_READ_JSON_FIELD)
 #undef UPSCALING_READ_JSON_FIELD
 	NeuralRendering::ReadUpscalingCharacterSettingsJson(a_json, parsed);
+	if (const auto value = a_json.find("foveatedOuterBlendFeather"); value != a_json.end() && !value->is_number())
+		throw std::invalid_argument("FOV outer feather requires a numeric value");
+	if (!std::isfinite(parsed.foveatedOuterBlendFeather) || parsed.foveatedOuterBlendFeather < Upscaling::kFoveatedBlendFeatherMin ||
+		parsed.foveatedOuterBlendFeather > Upscaling::kFoveatedBlendFeatherMax)
+		throw std::invalid_argument("FOV outer feather is outside the supported range");
+	if ((parsed.foveatedCalibrationReference.version != 0 && !FoveatedMaskCalibration::IsValid(parsed.foveatedCalibrationReference)) ||
+		!std::isfinite(parsed.foveatedAutomaticMaskScaling) || parsed.foveatedAutomaticMaskScaling < FoveatedMaskCalibration::kMinimumPercent ||
+		parsed.foveatedAutomaticMaskScaling > FoveatedMaskCalibration::kMaximumPercent)
+		throw std::invalid_argument("Invalid FOV calibration reference or automatic scaling percentage");
 	a_settings = parsed;
 }
 
@@ -901,8 +914,8 @@ namespace
 	constexpr uint32_t kVRRaceSexPostClosePresentationTailFrames = 60u;
 	constexpr float kFoveatedMaskOffsetAdjustMin = Upscaling::kFoveatedManualOffsetMin;
 	constexpr float kFoveatedMaskOffsetAdjustMax = Upscaling::kFoveatedManualOffsetMax;
-	constexpr float kFoveatedMaskOffsetResolvedMin = -0.30f;
-	constexpr float kFoveatedMaskOffsetResolvedMax = 0.30f;
+	constexpr float kFoveatedMaskOffsetResolvedMin = FoveatedCommon::kMaskOffsetMin;
+	constexpr float kFoveatedMaskOffsetResolvedMax = FoveatedCommon::kMaskOffsetMax;
 	enum class VRStartupLoadKind : uint32_t
 	{
 		Unknown,
@@ -1961,19 +1974,32 @@ namespace
 
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupIntro = R"(Turn on FOV Mask Visualization.
-Transparent magenta = left FOV, green = right FOV, white = their overlap, charcoal = TAA.
-Solid yellow = a gap in either mask where the eye views overlap, or in this eye at a one-eye edge.
+Magenta = left FOV, green = right FOV, white = overlap, charcoal = TAA.
+Amber diagonal stripes with 80% opaque shading mark missing coverage. The world remains visible underneath.
+The solid coloured outline and dark border mark the outside of each mask. The feather transition is not drawn.
 
-Check each eye in your headset. Use the smallest mask area that leaves no yellow visible, including at the edges. Keep a little margin.
-FOV area saved compares the combined masks and feathering with the full CSX eye image. Higher is better, provided no yellow is visible. It is not a measured performance gain.)";
-	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Leave FOV + TAA off.
-2) Adjust FOV Only Visible Scale, Expand FOV Scale R/L and the per-eye offsets until no yellow is visible in either eye.
-3) Reduce the area carefully while keeping yellow out of view. A scale of 1.00 covers the full eye image.
-4) Turn visualization off and check scenery in motion. Increase coverage if peripheral shimmer is distracting.)";
-	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Enable FOV + TAA. The centre and TAA ring together provide coverage.
-2) Adjust FOV + TAA Visible Outer Scale, horizontal expansion and per-eye offsets until no yellow is visible.
-3) Keep total area as small as your view allows. Reduce FOV + TAA Center Scale separately to give more of that area to TAA.
-4) Turn visualization off and check scenery in motion. Increase centre or outer coverage if needed.)";
+Check one eye at a time. Fit the top, bottom, outward side and curved outer corners to everything you can see. Leave a little margin. Ignore the inward overlap while doing this.
+FOV area saved compares mask coverage, including feather support, with the full CSX eye image. It is approximate area, not measured performance.)";
+	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Leave FOV + TAA off. Use FOV Only Visible Scale, Expand FOV Scale R/L and per-eye offsets to fit the outer edges in each eye.
+2) Press Calibrate Masks. The saved outer coordinates guide a bounded minimum-area fit; eye projections supply central coverage. The ordinary sliders show the result.
+3) Automatic Mask Scaling changes the outside and refits the centre. 100% restores calibration; lower tightens coverage and higher expands it. Manual edits do not replace the reference; press Calibrate Masks again to capture them.
+4) Turn visualization off and inspect scenery in motion. Expand if peripheral flicker is visible. Recalibrate after changing headset fit or eye projection.)";
+	constexpr const char* kFoveatedUpscalingPeripheralTaaSetupInstructions = R"(1) Enable FOV + TAA and choose its centre scale and transition first.
+2) Fit the visible outside using FOV + TAA Visible Outer Scale, horizontal expansion and per-eye offsets. The centre and TAA ring together provide coverage.
+3) Press Calibrate Masks, then adjust Automatic Mask Scaling while checking scenery. Calibration preserves the selected centre scale and feather.
+4) Recalibrate after changing FOV mode, centre scale or transition. If the current controls cannot cover the target, the previous settings are retained.)";
+
+	Matrix GetFoveatedEyeClipProjection(uint32_t eyeIndex)
+	{
+		const auto& camera = globals::game::frameBufferCached;
+		const uint32_t otherEye = 1u - eyeIndex;
+		auto eyeToWorld = camera.GetCameraViewInverse(eyeIndex);
+		auto worldToOtherEye = camera.GetCameraView(otherEye);
+		// Compare viewing directions without adding scene-depth parallax from eye separation.
+		eyeToWorld._14 = eyeToWorld._24 = eyeToWorld._34 = 0.0f;
+		worldToOtherEye._14 = worldToOtherEye._24 = worldToOtherEye._34 = 0.0f;
+		return camera.GetCameraProjUnjittered(otherEye) * worldToOtherEye * eyeToWorld * camera.GetCameraProjUnjitteredInverse(eyeIndex);
+	}
 
 	uint ClampToggleUInt(uint value);
 
@@ -4871,7 +4897,7 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 		return usePeripheryTAAPath ?
 		           ClampPeripheryTAACenterBlendFeather(
 					   settings.periphery_taa_center_blend_feather) :
-		           FoveatedCommon::kCenterFeather;
+		           std::max(FoveatedCommon::kMinimumFeather, ClampFoveatedBlendFeather(settings.foveatedOuterBlendFeather));
 	}
 
 	bool UsesFinalLdrNeuralBlend(const Upscaling::Settings& settings)
@@ -5049,6 +5075,7 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 		settings.neuralRenderingUICorrection = false;
 		settings.foveatedBlendFalloff = FoveatedBlendPolicy::ClampFalloff(settings.foveatedBlendFalloff);
 		settings.foveatedCenterArea = ClampFoveatedCenterScale(settings.foveatedCenterArea);
+		settings.foveatedOuterBlendFeather = ClampFoveatedBlendFeather(settings.foveatedOuterBlendFeather);
 		settings.foveatedCenterHorizontalScale = ClampFoveatedCenterHorizontalScale(settings.foveatedCenterHorizontalScale);
 		settings.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetX);
 		settings.foveatedLeftEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(settings.foveatedLeftEyeMaskOffsetY);
@@ -5437,6 +5464,7 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 		settings.neuralCharacterMaskTestMode = static_cast<uint>(
 			NeuralRendering::CharacterMaskTestMode::Authored);
 		settings.foveatedCenterArea = 0.3f;
+		settings.foveatedOuterBlendFeather = FoveatedCommon::kCenterFeather;
 		settings.foveatedCenterHorizontalScale = 1.0f;
 		settings.foveatedBlendCurveEnabled = false;
 		settings.foveatedBlendFalloff = FoveatedBlendPolicy::NeutralFalloff;
@@ -5446,6 +5474,8 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 		settings.foveatedRightEyeMaskOffsetY = 0.0f;
 		settings.periphery_taa_center_area = 0.3f;
 		settings.foveatedPeripheryMaskVisualization = false;
+		settings.foveatedCalibrationReference = {};
+		settings.foveatedAutomaticMaskScaling = 100.0f;
 		settings.periphery_taa_enable = false;
 		settings.periphery_taa_outer_scale = 0.80f;
 		settings.periphery_taa_center_blend_feather = FoveatedCommon::kCenterFeather;
@@ -5509,6 +5539,7 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 		o_json.erase("neuralCharacterDebugView");
 		o_json.erase("neuralCharacterMaskTestMode");
 		o_json.erase("foveatedCenterArea");
+		o_json.erase("foveatedOuterBlendFeather");
 		o_json.erase("foveatedCenterHorizontalScale");
 		o_json.erase("foveatedBlendCurveEnabled");
 		o_json.erase("foveatedBlendFalloff");
@@ -5518,6 +5549,8 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 		o_json.erase("foveatedRightEyeMaskOffsetY");
 		o_json.erase("periphery_taa_center_area");
 		o_json.erase("foveatedPeripheryMaskVisualization");
+		o_json.erase("foveatedCalibrationReference");
+		o_json.erase("foveatedAutomaticMaskScaling");
 		o_json.erase("periphery_taa_enable");
 		o_json.erase("periphery_taa_outer_scale");
 		o_json.erase("periphery_taa_center_blend_feather");
@@ -6616,6 +6649,7 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 			}
 		} else {
 			addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
+			addFloat(ClampFoveatedBlendFeather(a_settings.foveatedOuterBlendFeather));
 		}
 		return hash;
 	}
@@ -6746,6 +6780,7 @@ FOV area saved compares the combined masks and feathering with the full CSX eye 
 				centerArea));
 		} else {
 			addFloat(ClampFoveatedCenterScale(a_settings.foveatedCenterArea));
+			addFloat(ClampFoveatedBlendFeather(a_settings.foveatedOuterBlendFeather));
 		}
 		return hash;
 	}
@@ -19335,6 +19370,123 @@ std::array<FoveatedMaskVisualization::Coverage, 2> Upscaling::GetFoveatedMaskCov
 	return result;
 }
 
+bool Upscaling::PrepareFoveatedMaskCalibration(Settings& a_candidate, bool a_captureReference, float a_percent, std::string& a_error) const
+{
+	using namespace FoveatedMaskCalibration;
+	a_error.clear();
+	if (!globals::game::isVR || !loaded || !globals::state || !a_candidate.foveatedVendorDispatch ||
+		!SupportsFoveatedVendorDispatch(GetUpscaleMethod())) {
+		a_error = "Calibration requires enabled VR FOV with DLSS or FSR.";
+		return false;
+	}
+	if (globals::state->pendingPostLoadRuntimeReset || IsMainMenuContextActive() || IsLoadingMenuContextActive() ||
+		IsVRLoadingSubmitProtectionContextActive(*this, globals::state) || IsVRMenuPresentationContextActive() ||
+		runtimeResolutionPlan.knownMenuContextActive || runtimeResolutionPlan.menuContextActive || runtimeResolutionPlan.loadingMenuActive) {
+		a_error = "Calibration requires a loaded scene. Close game menus and try again.";
+		return false;
+	}
+	const auto projection = FromClipProjection(GetFoveatedEyeClipProjection(0));
+	if (!Inverse(projection)) {
+		a_error = "Stereo projection is unavailable. Enter a loaded scene and try again.";
+		return false;
+	}
+	auto reference = a_candidate.foveatedCalibrationReference;
+	const bool taa = a_candidate.periphery_taa_enable;
+	if (a_captureReference) {
+		const auto profile = GetFoveatedMaskProfileParams(a_candidate, taa);
+		const float feather = GetNormalFoveatedBlendFeather(a_candidate, taa);
+		reference = {};
+		reference.version = 1;
+		reference.peripheryTaa = taa;
+		reference.centerScale = profile.centerScale;
+		reference.feather = feather;
+		reference.fullImage = !FoveatedCommon::IsActiveCoverage(profile.centerScale);
+		const float supportScale = profile.centerScale + 2.0f * std::max(feather, FoveatedCommon::kMinimumFeather);
+		reference.outer.scale = taa ? std::max(supportScale,
+										  ClampPeripheryTAAOuterScaleForCenter(a_candidate.periphery_taa_outer_scale, profile.centerScale)) :
+		                              supportScale;
+		reference.outer.horizontalScale = profile.centerHorizontalScale;
+		reference.outer.centers = {
+			0.5f + FoveatedCommon::ResolveMaskOffsetX(profile.leftOffsetX, profile.centerScale, profile.centerHorizontalScale, false, true),
+			0.5f + profile.leftOffsetY,
+			0.5f + FoveatedCommon::ResolveMaskOffsetX(profile.rightOffsetX, profile.centerScale, profile.centerHorizontalScale, true, true),
+			0.5f + profile.rightOffsetY
+		};
+		reference.leftToRight = projection;
+	} else {
+		if (!MatchesProfile(reference, taa, a_candidate.periphery_taa_center_area, GetNormalFoveatedBlendFeather(a_candidate, taa))) {
+			a_error = "Calibrate this FOV mode after setting its centre scale and transition.";
+			return false;
+		}
+		if (!MatchesProjection(reference.leftToRight, projection)) {
+			a_error = "Headset projection changed. Calibrate the outer edges again.";
+			return false;
+		}
+	}
+	const auto solution = Solve(reference, a_percent);
+	if (!solution) {
+		a_error = "No safe fit within the current controls. Check the outer edges or increase the FOV + TAA centre scale.";
+		return false;
+	}
+	const auto& geometry = solution->geometry;
+	if (taa)
+		a_candidate.periphery_taa_outer_scale = geometry.scale;
+	else
+		a_candidate.foveatedCenterArea = geometry.scale;
+	a_candidate.foveatedCenterHorizontalScale = geometry.horizontalScale;
+	const float centerScale = taa ? reference.centerScale : geometry.scale;
+	const float expansion = centerScale * 0.5f * (geometry.horizontalScale - 1.0f);
+	a_candidate.foveatedLeftEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(geometry.centers[0] - 0.5f + expansion);
+	a_candidate.foveatedLeftEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(geometry.centers[1] - 0.5f);
+	a_candidate.foveatedRightEyeMaskOffsetX = ClampFoveatedMaskOffsetAdjustment(geometry.centers[2] - 0.5f - expansion);
+	a_candidate.foveatedRightEyeMaskOffsetY = ClampFoveatedMaskOffsetAdjustment(geometry.centers[3] - 0.5f);
+	a_candidate.foveatedCalibrationReference = reference;
+	a_candidate.foveatedAutomaticMaskScaling = a_percent;
+	return true;
+}
+
+void Upscaling::DrawFoveatedCalibration()
+{
+	bool capture = ImGui::Button("Calibrate Masks");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextWrapped("First fit the top, bottom, outward sides and outer corners in each eye. Calibration saves these outer coordinates and fits the centre automatically. Existing inward overlap is not preserved.");
+	float percent = capture ? 100.0f : pendingFoveatedMaskScaling.value_or(settings.foveatedAutomaticMaskScaling);
+	bool scaleChanged = false;
+	{
+		const bool compatible = FoveatedMaskCalibration::MatchesProfile(settings.foveatedCalibrationReference,
+			settings.periphery_taa_enable, settings.periphery_taa_center_area,
+			GetNormalFoveatedBlendFeather(settings, settings.periphery_taa_enable));
+		if (!compatible)
+			pendingFoveatedMaskScaling.reset();
+		auto guard = Util::DisableGuard(!compatible);
+		scaleChanged = Util::Widgets::SliderFloat("Automatic Mask Scaling", &percent,
+			FoveatedMaskCalibration::kMinimumPercent, FoveatedMaskCalibration::kMaximumPercent, "%.1f%%");
+		if (scaleChanged)
+			pendingFoveatedMaskScaling = percent;
+		scaleChanged = pendingFoveatedMaskScaling.has_value() && !ImGui::IsItemActive();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextWrapped("Applies when released. 100%% restores the calibrated fit. Lower tightens the outside; higher expands it. Size and position are recalculated together to cover the centre. Check scenery for peripheral flicker. Manual edits do not replace the saved reference; Calibrate Masks does.");
+	if (capture || scaleChanged) {
+		pendingFoveatedMaskScaling.reset();
+		const auto previous = settings;
+		auto candidate = settings;
+		if (PrepareFoveatedMaskCalibration(candidate, capture, percent, foveatedCalibrationMessage)) {
+			settings = candidate;
+			InvalidateFrameScopedUpscalingState();
+			RequestHistoryReset();
+			if (!HandleNeuralRenderingSettingsTransition(previous, "FOV mask calibration"))
+				foveatedCalibrationMessage = "Mask settings applied; the NR transition did not complete. Check NR status.";
+			else
+				foveatedCalibrationMessage = settings.foveatedCenterArea >= FoveatedCommon::kFullCoverageThreshold && !settings.periphery_taa_enable ?
+				                                 "Full-eye coverage selected at the current control limits." :
+				                                 "Outer reference fitted; centre coverage checked. Inspect both eyes before saving.";
+		}
+	}
+	if (!foveatedCalibrationMessage.empty())
+		ImGui::TextWrapped("%s", foveatedCalibrationMessage.c_str());
+}
+
 void Upscaling::DrawFoveatedSetupInstructions()
 {
 	ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -19444,13 +19596,14 @@ void Upscaling::DrawFoveatedSettings()
 		ImGui::TextUnformatted("Use this while tuning FOV masks.");
 		ImGui::TextUnformatted("Also works at full coverage. Temporarily pauses during loading and game menus.");
 		ImGui::TextUnformatted("Magenta = left FOV, green = right FOV, white = overlap, charcoal = TAA.");
-		ImGui::TextUnformatted("Solid yellow flags a gap in either eye within their shared view. One-eye edges use that eye's mask.");
-		ImGui::TextUnformatted("Adjust both masks until no yellow is visible, then keep their area as small as possible.");
+		ImGui::TextUnformatted("Amber diagonal stripes (80% opaque) flag missing coverage. Solid outlines mark the outer mask edges.");
+		ImGui::TextUnformatted("Fit only the outer edges in each eye, then press Calibrate Masks to fit the centre.");
 	}
 
+	DrawFoveatedCalibration();
 	const auto coverage = GetFoveatedMaskCoverage();
 	ImGui::Text("FOV area saved (approx.): L %.1f%% / R %.1f%%", coverage[0].savedPercent, coverage[1].savedPercent);
-	ImGui::TextWrapped("Increase this value while keeping solid yellow out of view in both eyes. Includes all active masks and feathering; full CSX FOV saves 0%%. This is area, not measured performance.");
+	ImGui::TextWrapped("Keep outside stripes out of view at the outer edges, then calibrate the centre. Includes active masks and feathering; full CSX FOV saves 0%%. This is area, not measured performance.");
 
 	ImGui::Dummy(ImVec2(0.0f, 6.0f));
 	ImGui::Separator();
@@ -19549,7 +19702,7 @@ void Upscaling::DrawFoveatedSettings()
 			ImGui::TextUnformatted("Controls the shared HMD-visible boundary for FOV + TAA.");
 			ImGui::Text("Range: low %.2f (minimum allowed by current center scale) to high %.2f (full range).", taaOuterRangeMin, kPeripheryTAAOuterScaleMax);
 			ImGui::TextUnformatted("Lower values are faster.");
-			ImGui::TextUnformatted("Increase until the gold ring reaches the edge of your visible field of view.");
+			ImGui::TextUnformatted("Fit the solid outer outline to your visible edges, keeping the amber stripes just outside your view.");
 		}
 	}
 	ImGui::EndDisabled();
@@ -20494,6 +20647,8 @@ namespace
 
 void Upscaling::LoadSettings(json& o_json)
 {
+	pendingFoveatedMaskScaling.reset();
+	foveatedCalibrationMessage.clear();
 	const Settings previousSettings = settings;
 	const bool hasLegacyNeuralSettings = !NeuralRendering::RenderingSettings(o_json).empty();
 	const VRRenderScaleDesiredProfile currentDesiredProfile =
@@ -20612,6 +20767,8 @@ void Upscaling::LoadSettings(json& o_json)
 
 void Upscaling::RestoreDefaultSettings()
 {
+	pendingFoveatedMaskScaling.reset();
+	foveatedCalibrationMessage.clear();
 	const Settings previousSettings = settings;
 	const VRRenderScaleDesiredProfile currentDesiredProfile =
 		GetPendingVRRenderScaleDesiredProfile();
@@ -42385,6 +42542,8 @@ Upscaling::ActiveUpscalingFoveatedProfile Upscaling::GetActiveUpscalingFoveatedP
 		profile.sharedVisibleScale = maskParams.centerScale;
 	}
 
+	profile.sharedVisibleFeather = profile.usesPeripheryTAAOuterMask ? FoveatedCommon::kCenterFeather :
+	                                                                   GetNormalFoveatedBlendFeather(settings, false);
 	profile.centerHorizontalScale = maskParams.centerHorizontalScale;
 	profile.centerOffsets = GetResolvedFoveatedMaskCenterOffsets(profile.usesPeripheryTAAOuterMask);
 	if (!globals::game::isVR)
@@ -42421,12 +42580,8 @@ float2 Upscaling::GetResolvedFoveatedMaskCenterOffset(uint32_t eyeIndex, bool us
 	resolved.x += ClampFoveatedMaskOffsetAdjustment(userAdjustX);
 	resolved.y += ClampFoveatedMaskOffsetAdjustment(userAdjustY);
 
-	if (globals::game::isVR) {
-		const float centerScale = params.centerScale;
-		const float centerHorizontalScale = params.centerHorizontalScale;
-		const float outwardExpansion = centerScale * 0.5f * std::max(0.0f, centerHorizontalScale - 1.0f);
-		resolved.x += isLeftEye ? -outwardExpansion : outwardExpansion;
-	}
+	resolved.x = FoveatedCommon::ResolveMaskOffsetX(resolved.x, params.centerScale, params.centerHorizontalScale,
+		!isLeftEye, globals::game::isVR);
 
 	resolved.x = std::clamp(resolved.x, kFoveatedMaskOffsetResolvedMin, kFoveatedMaskOffsetResolvedMax);
 	resolved.y = std::clamp(resolved.y, kFoveatedMaskOffsetResolvedMin, kFoveatedMaskOffsetResolvedMax);
@@ -42524,7 +42679,7 @@ bool Upscaling::BuildFoveatedDispatchRects(uint32_t inputWidthPerEye, uint32_t i
 		cache.outputHeight != outputHeight ||
 		cache.isVR != isVR ||
 		std::abs(cache.centerScale - centerScale) > 1e-6f ||
-		std::abs(cache.centerFeather - centerFeather) > 1e-6f ||
+		cache.centerFeather != centerFeather ||
 		std::abs(cache.centerHorizontalScale - centerHorizontalScale) > 1e-6f ||
 		std::abs(cache.peripheryTAAOuterScale - taaOuterScale) > 1e-6f ||
 		std::abs(cache.centerOffsets[0].x - centerOffsets[0].x) > 1e-6f ||
@@ -43659,14 +43814,12 @@ bool Upscaling::DispatchFoveatedPeripheryPass(ID3D11ShaderResourceView* sourceSR
 		const uint32_t otherEye = 1u - eyeIndex;
 		cbData.preview = { offsets[otherEye].x, offsets[otherEye].y, static_cast<float>(eyeIndex),
 			FoveatedCommon::IsActiveCoverage(centerScale) ? 0.0f : 1.0f };
-		const auto& camera = globals::game::frameBufferCached;
-		auto eyeToWorld = camera.GetCameraViewInverse(eyeIndex);
-		auto worldToOtherEye = camera.GetCameraView(otherEye);
-		// Mask overlap compares viewing directions; eye separation must not add scene-depth parallax.
-		eyeToWorld._14 = eyeToWorld._24 = eyeToWorld._34 = 0.0f;
-		worldToOtherEye._14 = worldToOtherEye._24 = worldToOtherEye._34 = 0.0f;
-		cbData.previewClipToOtherEye = camera.GetCameraProjUnjittered(otherEye) * worldToOtherEye *
-		                               eyeToWorld * camera.GetCameraProjUnjitteredInverse(eyeIndex);
+		cbData.previewClipToOtherEye = GetFoveatedEyeClipProjection(eyeIndex);
+		cbData.previewArea.y = FoveatedMaskCalibration::Inverse(
+								   FoveatedMaskCalibration::FromClipProjection(cbData.previewClipToOtherEye))
+		                               .has_value() ?
+		                           1.0f :
+		                           0.0f;
 		cbData.previewArea.x = FoveatedMaskVisualization::MeasureCoverage(centerScale, centerFeather,
 			centerHorizontalScale, centerOffsetX, centerOffsetY, showThreeZoneMask, taaOuterScale)
 		                           .savedPercent;

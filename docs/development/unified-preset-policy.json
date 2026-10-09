@@ -18,16 +18,19 @@
         "sha256": "38688C5590AADCF339BF61B542E9920438FC602EE2D476BA1811E47079A115EB"
     },
     "runtimeSettingsContract": {
-        "revision": 8,
-        "sourceTreeSha256": "A9F65D5CDB486F61BDD6206F6D6C58E48ECA3F27C1CBBE547988A4DA30B7B4BC",
+        "revision": 9,
+        "sourceTreeSha256": "0561CCEEE3B3EA546A29A78CF6B5D626D97560F698C6F4F9B032DE0DA15AFED4",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
                 "src/Feature.cpp",
                 "src/Feature.h",
+                "src/Features/FoveatedCommon.h",
                 "src/Features/GrassOptimizations/GrassPolicy.h",
                 "src/Features/TextureStreaming/Policy.h",
                 "src/Features/TextureStreaming/Settings.h",
+                "src/Features/Upscaling/FoveatedMaskCalibration.h",
+                "src/Features/Upscaling/FoveatedMaskCalibrationJson.h",
                 "src/Features/Upscaling/NeuralRendering/CharacterSettings.h",
                 "src/Features/Upscaling/NeuralRendering/CharacterSettingsJson.h",
                 "src/Features/Upscaling/NeuralRendering/ColorPolicy.h",
@@ -76,6 +79,7 @@
             "src/Features/GrassCollision.h",
             "src/Features/GrassLighting.cpp",
             "src/Features/GrassLighting.h",
+            "src/Features/FoveatedCommon.h",
             "src/Features/GrassOptimizations.cpp",
             "src/Features/GrassOptimizations.h",
             "src/Features/GrassOptimizations/GrassPolicy.h",
@@ -128,6 +132,8 @@
             "src/Features/UnifiedWater.h",
             "src/Features/Upscaling.cpp",
             "src/Features/Upscaling.h",
+            "src/Features/Upscaling/FoveatedMaskCalibration.h",
+            "src/Features/Upscaling/FoveatedMaskCalibrationJson.h",
             "src/Features/Upscaling/NeuralRendering/CharacterSettings.h",
             "src/Features/Upscaling/NeuralRendering/CharacterSettingsJson.h",
             "src/Features/Upscaling/NeuralRendering/ColorPolicy.h",

@@ -92,7 +92,7 @@ float FoveatedPreviewGlyphInk(uint character, float2 position, float pixelsPerUn
 	return 1.0 - smoothstep(-0.5, 0.5, edge);
 }
 
-// The readout is restricted to covered pixels by the caller, so it cannot hide a yellow gap.
+// The readout is restricted to covered pixels by the caller, so it cannot hide an uncovered gap.
 float3 FoveatedPreviewAreaLabel(float3 color, float2 pixel, float2 dimensions, float2 center, float savedPercent)
 {
 	const float cellSize = max(1.0, min(dimensions.x, dimensions.y) / 440.0);

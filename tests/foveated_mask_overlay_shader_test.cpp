@@ -1,4 +1,6 @@
+#include <DirectXMath.h>
 #define NOMINMAX
+#include "Features/Upscaling/FoveatedMaskCalibration.h"
 #include "Features/Upscaling/FoveatedMaskVisualization.h"
 #include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
@@ -19,7 +21,16 @@ namespace
 	using Pair = std::array<float, 2>;
 	constexpr UINT kWidth = 512, kHeight = 384;
 	constexpr Pixel kScene{ 0.2f, 0.4f, 0.6f, 0.7f };
-	constexpr Pixel kYellow{ .55f, .5f, 0, 1 };
+	bool IsHatch(const Pixel& pixel, UINT x, UINT y)
+	{
+		const float width = std::max(6.0f, std::min(kWidth, kHeight) / 100.0f);
+		const bool stripe = static_cast<unsigned>(std::floor((x + y) / width)) % 2 == 0;
+		const Pixel tint = stripe ? Pixel{ .65f, .5f, .05f, 0 } : Pixel{ .08f, .06f, .02f, 0 };
+		for (unsigned channel = 0; channel < 3; ++channel)
+			if (std::abs(pixel[channel] - (kScene[channel] * .2f + tint[channel] * .8f)) > 2e-5f)
+				return false;
+		return std::abs(pixel[3] - kScene[3]) < 1e-5f;
+	}
 
 	void Require(bool condition, const char* message)
 	{
@@ -136,13 +147,19 @@ namespace
 		cb.SetVariable("SourceScale", Pair{ 0.5f, 0.5f });
 		cb.SetVariable("DispatchDim", Pair{ kWidth, kHeight });
 		const std::array<float, 16> identity{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
-		cb.SetVariable("PreviewClipToOtherEye", identity);
+		const auto setProjection = [&](const std::array<float, 16>& values) {
+			DirectX::XMFLOAT4X4 matrix;
+			std::memcpy(&matrix, values.data(), sizeof(matrix));
+			cb.SetVariable("PreviewClipToOtherEye", values);
+			cb.SetVariable("PreviewArea", Pixel{ 0, FoveatedMaskCalibration::Inverse(FoveatedMaskCalibration::FromClipProjection(matrix)).has_value() ? 1.0f : 0.0f, 0, 0 });
+		};
+		setProjection(identity);
 		cb.SetVariable("Tuning0", Pixel{ 0.5f, 0.05f, 1, 0.8f });
 		for (const auto& p : f.Draw(shader.Get(), cb))
 			for (size_t c = 0; c < p.size(); ++c)
 				Require(std::abs(p[c] - kScene[c]) < 1e-5f, "Ordinary sampling must remain unchanged and avoid unused allocation pixels");
 
-		unsigned seenOverlap = 0, seenTaa = 0, seenInk = 0;
+		unsigned seenOverlap = 0, seenTaa = 0, seenInk = 0, seenOutline = 0;
 		for (const auto geometry : { Pixel{ 0.25f, 0.0f, 1, 0.8f }, Pixel{ 0.55f, 0.05f, 1.5f, 0.9f },
 				 Pixel{ 0.9f, 0.1f, 2, 1 }, Pixel{ 0.998f, 0.1f, 1, 1 }, Pixel{ 0.999f, 0.05f, 1, 1 }, Pixel{ 1, 0.1f, 2, 1 } }) {
 			for (bool taa : { false, true }) {
@@ -157,7 +174,7 @@ namespace
 					cb.SetVariable("Tuning0", geometry);
 					cb.SetVariable("CenterAndMask", Pixel{ ox, oy, 1, taa ? 1.0f : 0.0f });
 					cb.SetVariable("Preview", Pixel{ ox, oy, float(eye), full ? 1.0f : 0.0f });
-					cb.SetVariable("PreviewArea", Pixel{ coverage.savedPercent, 0, 0, 0 });
+					cb.SetVariable("PreviewArea", Pixel{ coverage.savedPercent, 1, 0, 0 });
 					const auto pixels = f.Draw(shader.Get(), cb);
 					unsigned uncovered = 0;
 					for (UINT y = 0; y < kHeight; ++y) {
@@ -169,7 +186,7 @@ namespace
 							const float outer = std::min(1.0f, std::max(geometry[3], geometry[0] + 2 * std::max(geometry[1], 1e-4f)));
 							const bool inTaa = taa && FoveatedCommon::MaskDistanceUV(u, v, outer, geometry[2], ox, oy) <= 1;
 							if (!center && !inTaa) {
-								Require(p == kYellow, "Every own-eye gap must stay opaque yellow, regardless of peer mask or readout");
+								Require(IsHatch(p, x, y), "Every gap must retain static 80-percent hatching and scene context, without readout occlusion");
 								++uncovered;
 								continue;
 							}
@@ -178,12 +195,18 @@ namespace
 								seenInk += p[0] > .8f && p[1] > .8f && p[2] > .8f;
 								continue;
 							}
+							if ((std::abs(p[0] - .015f) < 1e-5f && std::abs(p[1] - .015f) < 1e-5f && std::abs(p[2] - .015f) < 1e-5f) ||
+								(std::abs(p[0] - (eye ? .1f : 1.0f)) < 1e-5f && std::abs(p[1] - (eye ? 1.0f : .1f)) < 1e-5f && std::abs(p[2] - (eye ? .1f : 1.0f)) < 1e-5f)) {
+								Require(!full, "Full coverage must not draw an internal mask edge");
+								++seenOutline;
+								continue;
+							}
 							const bool other = full || FoveatedCommon::MaskDistanceUV(u, v, geometry[0], geometry[2], ox, oy) <= support;
 							const Pixel tint = !center ? Pixel{ .04f, .04f, .04f, 0 } : other ? Pixel{ 1, 1, 1, 0 } :
 							                                                        eye       ? Pixel{ .1f, 1, .1f, 0 } :
 							                                                                    Pixel{ 1, .1f, 1, 0 };
 							for (unsigned c = 0; c < 3; ++c)
-								Require(std::abs(p[c] - (kScene[c] * .65f + tint[c] * .35f)) < 2e-5f, "Preview must keep scene detail under the correct zone tint");
+								Require(std::abs(p[c] - (kScene[c] * .82f + tint[c] * .18f)) < 2e-5f, "Preview must keep scene detail under the correct zone tint");
 							seenTaa += !center;
 							seenOverlap += center && other;
 						}
@@ -193,7 +216,7 @@ namespace
 				}
 			}
 		}
-		Require(seenOverlap && seenTaa && seenInk, "Fixtures must exercise overlap, TAA and readable lettering");
+		Require(seenOverlap && seenTaa && seenInk && seenOutline, "Fixtures must exercise overlap, TAA and readable lettering");
 
 		// Partially overlapping masks must not let binocular fusion hide either uncovered edge.
 		for (unsigned eye = 0; eye < 2; ++eye) {
@@ -202,19 +225,25 @@ namespace
 				cb.SetVariable("CenterAndMask", Pixel{ -.2f, 0, 1, taa ? 1.0f : 0.0f });
 				cb.SetVariable("Preview", Pixel{ .2f, 0, float(eye), 0 });
 				const auto pixels = f.Draw(shader.Get(), cb);
-				Require(pixels[(kHeight / 2) * kWidth + kWidth / 4] == kYellow,
-					"A covered own-eye region with a peer gap must be yellow in both modes");
+				Require(IsHatch(pixels[(kHeight / 2) * kWidth + kWidth / 4], kWidth / 4, kHeight / 2),
+					"A covered own-eye region with a peer gap must be hatched in both modes");
+				if (!taa) {
+					const auto& edge = pixels[(kHeight / 2) * kWidth + static_cast<UINT>(kWidth * .1f + 1)];
+					Require(std::abs(edge[0] - (eye ? .1f : 1.0f)) < 1e-5f &&
+								std::abs(edge[1] - (eye ? 1.0f : .1f)) < 1e-5f,
+						"The outer outline must remain visible across a peer gap during manual setup");
+				}
 			}
 			auto monocular = identity;
 			monocular[3] = 4;
-			cb.SetVariable("PreviewClipToOtherEye", monocular);
+			setProjection(monocular);
 			const auto pixels = f.Draw(shader.Get(), cb);
 			const auto& p = pixels[(kHeight / 2) * kWidth + kWidth / 4 - 16];
 			const Pixel tint = eye ? Pixel{ .1f, 1, .1f, 0 } : Pixel{ 1, .1f, 1, 0 };
 			for (unsigned c = 0; c < 3; ++c)
-				Require(std::abs(p[c] - (kScene[c] * .65f + tint[c] * .35f)) < 2e-5f,
+				Require(std::abs(p[c] - (kScene[c] * .82f + tint[c] * .18f)) < 2e-5f,
 					"Monocular edges must retain own-eye tint and coverage");
-			cb.SetVariable("PreviewClipToOtherEye", identity);
+			setProjection(identity);
 		}
 		cb.SetVariable("Tuning0", Pixel{ .5f, .05f, 1, .8f });
 		cb.SetVariable("CenterAndMask", Pixel{ 0, 0, 1, 0 });
@@ -223,29 +252,37 @@ namespace
 		asymmetric[0] = 1.2f;
 		asymmetric[3] = 0.6f;
 		asymmetric[12] = 0.2f;
-		cb.SetVariable("PreviewClipToOtherEye", asymmetric);
+		setProjection(asymmetric);
 		const auto shifted = f.Draw(shader.Get(), cb);
 		for (UINT x : { 180u, 350u }) {
 			const float clipX = (x + .5f) / kWidth * 2 - 1;
 			const float peerU = (1.2f * clipX + .6f) / (1 + .2f * clipX) * .5f + .5f;
 			const bool peerCovered = FoveatedCommon::MaskDistanceUV(peerU, .5f, .5f, 1, 0, 0) <= 1.2f;
-			Require((shifted[(kHeight / 2) * kWidth + x] == kYellow) == !peerCovered,
+			Require(IsHatch(shifted[(kHeight / 2) * kWidth + x], x, kHeight / 2) == !peerCovered,
 				"Shared-view coverage must use homogeneous peer projection, not equal eye UVs");
 		}
-		cb.SetVariable("PreviewClipToOtherEye", std::array<float, 16>{});
-		for (const auto& pixel : f.Draw(shader.Get(), cb))
-			Require(pixel == kYellow, "An uninitialized projection must not certify coverage");
+		auto singular = identity;
+		singular[0] = singular[5] = 0;
+		setProjection(singular);
+		const auto collapsed = f.Draw(shader.Get(), cb);
+		Require(IsHatch(collapsed[(kHeight / 2) * kWidth + kWidth / 2], kWidth / 2, kHeight / 2),
+			"A finite singular projection must not certify shared coverage");
+		setProjection(std::array<float, 16>{});
+		const auto unknown = f.Draw(shader.Get(), cb);
+		for (UINT y = 0; y < kHeight; ++y)
+			for (UINT x = 0; x < kWidth; ++x)
+				Require(IsHatch(unknown[y * kWidth + x], x, y), "An uninitialized projection must not certify coverage");
 		for (float peerW : { -1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN() }) {
 			auto invalid = identity;
 			invalid[15] = peerW;
-			cb.SetVariable("PreviewClipToOtherEye", invalid);
+			setProjection(invalid);
 			const auto pixels = f.Draw(shader.Get(), cb);
 			const auto& p = pixels[(kHeight / 2) * kWidth + kWidth / 2 + 60];
-			if (!std::isfinite(peerW)) {
-				Require(p == kYellow, "Unknown stereo mapping must not falsely certify shared coverage");
+			if (!std::isfinite(peerW) || peerW == 0.0f) {
+				Require(IsHatch(p, kWidth / 2 + 60, kHeight / 2), "Unknown stereo mapping must not falsely certify shared coverage");
 				continue;
 			}
-			Require(std::abs(p[0] - .48f) < 1e-5f && std::abs(p[1] - .295f) < 1e-5f && pixels.front() == kYellow,
+			Require(std::abs(p[0] - .344f) < 1e-5f && std::abs(p[1] - .346f) < 1e-5f && IsHatch(pixels.front(), 0, 0),
 				"Invalid peer projection must disable overlap without changing this eye's coverage");
 		}
 	}

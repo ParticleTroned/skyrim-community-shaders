@@ -2,6 +2,7 @@ set(_fov_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/fov-settings")
 set(_fov_test_headers
     "${_fov_test_dir}/fov_under_test.h"
     "${_fov_test_dir}/fov_defaults.h"
+    "${_fov_test_dir}/fov_ssgi_cache_types.h"
 )
 add_custom_command(
     OUTPUT ${_fov_test_headers}
@@ -18,6 +19,7 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/src/Features/ScreenSpaceShadows.h"
         "${PROJECT_SOURCE_DIR}/src/Features/VR.cpp"
         "${PROJECT_SOURCE_DIR}/src/MenuDevBenchBridge.cpp"
+        "${PROJECT_SOURCE_DIR}/src/State.cpp"
         "${PROJECT_SOURCE_DIR}/tests/extract_fov_settings.py"
         "${PROJECT_SOURCE_DIR}/tests/extract_adaptive_balance_toggle.py"
     VERBATIM

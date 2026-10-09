@@ -79,6 +79,18 @@ int main()
 	foveated.neuralRenderingEnabled = true;
 	foveated.neuralRenderingMode = static_cast<uint>(NeuralRendering::RenderingMode::Foveated);
 	const auto foveatedKey = BuildNeuralRenderingSettingsKey(foveated);
+	{
+		auto outer = foveated;
+		outer.foveatedOuterBlendFeather = 0.05f;
+		const auto original = BuildNeuralRenderingSettingsKey(outer);
+		outer.foveatedOuterBlendFeather = 0.01f;
+		require(BuildNeuralRenderingSettingsKey(outer) != original);
+		outer.periphery_taa_enable = true;
+		const auto taaKey = BuildNeuralRenderingSettingsKey(outer);
+		outer.foveatedOuterBlendFeather = 0.08f;
+		require(BuildNeuralRenderingSettingsKey(outer) == taaKey);
+	}
+
 	for (bool vr : { false, true }) {
 		globals::game::isVR = vr;
 		for (uint mode : { 0u, 1u, 2u }) {

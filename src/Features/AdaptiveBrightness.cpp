@@ -1613,7 +1613,6 @@ void AdaptiveBrightness::DrawSettings()
 													});
 
 	if (page.Is("global")) {
-		ImGui::TextWrapped("Set the shared Lighting, Color, Bloom, and Water adjustments applied before the active profile and location layers.");
 		DrawGlobalSettings(true);
 	}
 

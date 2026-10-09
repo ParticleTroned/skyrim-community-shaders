@@ -109,12 +109,12 @@ namespace MenuUI
 		Feature* previous;
 	};
 
-	/** Shared tabs with Overview pinned, and a fixed detail heading above scrolling controls. */
+	/** Shared pinned tabs with controls directly in each scrolling section. */
 	class SettingsPage
 	{
 	public:
 		/** The optional navigation guard is retained between frames and must outlive the page ID. */
-		SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle = "Your setup", const char* a_guidance = "Choose a step, then refine the result.", std::string_view a_summary = {}, std::function<bool(std::string_view)> a_canSelect = {});
+		SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle = "Your setup", const char* a_guidance = "Choose a step, then refine the result.", std::function<bool(std::string_view)> a_canSelect = {});
 		~SettingsPage();
 		SettingsPage(const SettingsPage&) = delete;
 		SettingsPage& operator=(const SettingsPage&) = delete;
@@ -142,11 +142,9 @@ namespace MenuUI
 		std::string overviewTitle;
 		std::string overviewGuidance;
 		bool contentVisible = false;
-		bool detailContent = false;
 		float contentLeftPadding = 0;
 		std::vector<Section> sections;
 		void DrawOverview();
-		void DrawDetailHeader(std::string_view a_summary);
 		void DrawCard(const Section& step, ImVec2 minimum, ImVec2 size, int a_ordinal = 0);
 	};
 }

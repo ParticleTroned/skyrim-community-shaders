@@ -40,7 +40,6 @@ namespace MenuUI
 		constexpr float cardTitleScale = 17.0f / 12.0f;
 		constexpr float cardSummaryScale = 14.0f / 12.0f;
 		constexpr float stageTextScale = 1.25f;
-		constexpr float detailTitleScale = 1.7f;
 		constexpr float cardOpacity = .846f * SettingsSurfaceOpacityScale;
 		constexpr float tabOpacityScale = 1.10f;
 		constexpr float maximumOverviewCardHeight = 6.0f;
@@ -188,7 +187,7 @@ namespace MenuUI
 	}
 #endif
 
-	SettingsPage::SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle, const char* a_guidance, std::string_view a_summary, std::function<bool(std::string_view)> a_canSelect) :
+	SettingsPage::SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle, const char* a_guidance, std::function<bool(std::string_view)> a_canSelect) :
 		overviewTitle(a_overviewTitle), overviewGuidance(a_guidance), sections(a_sections)
 	{
 		std::scoped_lock lock(navigationMutex);
@@ -304,29 +303,21 @@ namespace MenuUI
 				tab("overview", "Overview", "Start here. Choose a card to open its settings.");
 				for (const auto& step : sections)
 					if (step.visible && step.showTab)
-						tab(step.id, step.title, step.description, step.disabledReason);
+						tab(step.id, step.title, step.guidance ? step.guidance : step.description, step.disabledReason);
 			}
 		}
 		state.pending = rejectedSelection || activatedTopTab;
 		selected = state.selected;
-		contentLeftPadding = ImGui::GetStyle().WindowPadding.x;
+		contentLeftPadding = selected == "overview" ? ImGui::GetStyle().WindowPadding.x : OverviewTextInset(a_id, ImGui::GetContentRegionAvail().x);
 		{
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, ImGui::GetStyle().WindowPadding.y });
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
-			const auto flags = selected == "overview" ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding, flags);
+			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
 		}
 		if (contentLeftPadding > 0)
 			ImGui::Indent(contentLeftPadding);
-		if (contentVisible && selected != "overview") {
-			DrawDetailHeader(a_summary);
-			// Keep the section heading outside the independently scrolling controls.
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, 0 });
-			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
-			contentVisible = ImGui::BeginChild("##DetailControls", { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
-			detailContent = true;
+		if (contentVisible && selected != "overview")
 			controlLayout = std::make_unique<Util::Widgets::ControlLayout>();
-		}
 		state.contentScrollbarWidth = ImGui::GetCurrentWindow()->ScrollbarSizes.x;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (contentVisible)
@@ -361,8 +352,6 @@ namespace MenuUI
 		devBenchViewport.reset();
 #endif
 		controlLayout.reset();
-		if (detailContent)
-			ImGui::EndChild();
 		if (contentLeftPadding > 0)
 			ImGui::Unindent(contentLeftPadding);
 		ImGui::EndChild();
@@ -372,56 +361,6 @@ namespace MenuUI
 	bool SettingsPage::Is(std::string_view a_section) const
 	{
 		return contentVisible && selected == a_section;
-	}
-
-	void SettingsPage::DrawDetailHeader(std::string_view a_summary)
-	{
-		const auto step = std::ranges::find_if(sections, [&](const Section& item) { return selected == item.id; });
-		if (step == sections.end())
-			return;
-		const float line = ImGui::GetTextLineHeight();
-		const bool hasCards = std::ranges::any_of(sections, [](const Section& item) { return item.visible && item.overview; });
-		if (GetOverviewGrid(ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize, hasCards).rail > 0) {
-			const float inset = line * stageGuideInset;
-			ImGui::Indent(inset);
-			contentLeftPadding += inset;
-		}
-		// Keep heading text aligned with the controls regardless of scrollbar visibility.
-		const float available = std::max(1.0f, ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize);
-		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + available);
-		const SKSE::stl::scope_exit restoreWrap([] { ImGui::PopTextWrapPos(); });
-		std::string summary(a_summary);
-		if (summary.empty()) {
-			for (const auto& item : sections) {
-				if (!item.visible || !item.overview)
-					continue;
-				if (!summary.empty())
-					summary += " / ";
-				summary += item.title;
-			}
-		}
-		if (!summary.empty()) {
-			ImGui::Dummy({ 0, line * .15f });
-			ImGui::TextColored(Util::Color::SecondaryText(), "%s", summary.c_str());
-			ImGui::Dummy({ 0, line * .15f });
-			ImGui::Separator();
-		}
-		ImGui::Dummy({ 0, line * .3f });
-		const int ordinal = step->overview ? 1 + static_cast<int>(std::count_if(sections.begin(), step, [](const Section& item) { return item.visible && item.overview; })) : 0;
-		const char* label = step->cardTitle ? step->cardTitle : step->title;
-		const auto title = ordinal > 0 ? std::format("{:02} · {}", ordinal, label) : std::string(label);
-		{
-			ImGui::PushFont(ImGui::GetFont(), line * detailTitleScale);
-			const SKSE::stl::scope_exit restore([] { ImGui::PopFont(); });
-			ImGui::TextUnformatted(title.c_str());
-		}
-		{
-			ImGui::PushFont(ImGui::GetFont(), line * cardSummaryScale);
-			ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::SecondaryText());
-			const SKSE::stl::scope_exit restore([] { ImGui::PopStyleColor(); ImGui::PopFont(); });
-			ImGui::TextUnformatted(step->guidance ? step->guidance : step->description);
-		}
-		ImGui::Dummy({ 0, line * .3f });
 	}
 
 	int ChoiceCards(const char* a_id, int a_selected, std::span<const Choice> a_choices)

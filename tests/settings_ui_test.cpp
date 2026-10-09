@@ -1048,7 +1048,7 @@ int main()
 				toolNavigationBar = ImGui::GetID("##SetupTabs");
 				ImGui::PopID();
 				MenuUI::FeatureScope scope(&toolNavigation);
-				MenuUI::SettingsPage page("Unused", { { "route", "Choose the rendering route", "Navigation route", {}, showRouteTab }, { "look", "Adjust the rendering appearance", "Navigation appearance" }, { "advanced", "Configure additional rendering options", "Navigation options" } }, "Your setup", "", {}, [&](std::string_view target) {
+				MenuUI::SettingsPage page("Unused", { { "route", "Choose the rendering route", "Navigation route", {}, showRouteTab }, { "look", "Adjust the rendering appearance", "Navigation appearance" }, { "advanced", "Configure additional rendering options", "Navigation options" } }, "Your setup", "", [&](std::string_view target) {
 					return allowTopNavigation || target == "overview" || target == "performance" || target == "profiling";
 				});
 			}
@@ -1153,7 +1153,7 @@ int main()
 					const bool profilingCard = std::string_view(help).starts_with("Choose CPU");
 					require(MenuUI::SettingsPage::Selected("NeuralRendering") == (profilingCard ? "profiling" : "performance"), "each NR tool card opens its own section");
 					const auto back = Util::controls.at("Start here. Choose a card to open its settings.");
-					require(Viewport::Scroll("NeuralRendering", profilingCard ? "profiling" : "performance", 1), "NR tool body scrolls beneath its fixed heading");
+					require(Viewport::Scroll("NeuralRendering", profilingCard ? "profiling" : "performance", 1), "NR tool body scrolls beneath the pinned tabs");
 					frame(draw);
 					frame(draw);
 					const auto fixedBack = Util::controls.at("Start here. Choose a card to open its settings.");
@@ -1170,7 +1170,7 @@ int main()
 
 		bool draft = true;
 		auto drawGuarded = [&] {
-			MenuUI::SettingsPage page("CompanionDraft", { { "profiles", "Profiles", "Edit profiles" }, { "commands", "Commands", "Edit commands" } }, "Your setup", "Choose an editor", {}, [&](std::string_view target) { return !draft || target != "commands"; });
+			MenuUI::SettingsPage page("CompanionDraft", { { "profiles", "Profiles", "Edit profiles" }, { "commands", "Commands", "Edit commands" } }, "Your setup", "Choose an editor", [&](std::string_view target) { return !draft || target != "commands"; });
 		};
 		frame(drawGuarded);
 		require(MenuUI::SettingsPage::Select("CompanionDraft", "profiles"), "draft editor remains reachable");
@@ -1239,7 +1239,7 @@ int main()
 							Util::Widgets::SliderFloat("Strength", &value, 0, 1);
 							if (overflow)
 								ImGui::Dummy({ 0, 1800 });
-							require(ImGui::GetCurrentWindow()->ParentWindow->Scroll.y == 0, "fixed detail header never inherits the body scroll offset");
+							require(ImGui::GetCurrentWindow()->ParentWindow->Scroll.y == 0, "the tab bar never inherits the content scroll offset");
 						}
 					}
 					ImGui::EndChild();
@@ -1247,19 +1247,21 @@ int main()
 				};
 				MenuUI::SettingsPage::Select("PinnedPage", "selection");
 				for (int settle = 0; settle < 3; ++settle) frame(draw);
-				require(Viewport::Scroll("PinnedPage", "selection", 0), "fixed-header content accepts a top scroll");
+				require(Viewport::Scroll("PinnedPage", "selection", 0), "detail content accepts a top scroll");
 				frame(draw);
 				frame(draw);
 				const auto back = Util::controls.at("Start here. Choose a card to open its settings.");
 				const float topControlY = controlY;
 				require(back.Min.y >= 8 && back.Max.y < viewportBounds.Min.y, "Overview stays above the independently clipped controls");
+				require(viewportBounds.Min.y - back.Max.y <= ImGui::GetStyle().ItemSpacing.y + 1, "the controls viewport starts directly below the tabs without a repeated section header");
+				require(topControlY - viewportBounds.Min.y <= ImGui::GetStyle().WindowPadding.y + 1, "section controls start at the top of the viewport without repeated summary, title or guidance");
 				io.AddMousePosEvent(viewportBounds.GetCenter().x, viewportBounds.GetCenter().y);
 				frame(draw);
 				io.AddMouseWheelEvent(0, -4);
 				frame(draw);
 				frame(draw);
-				require(Viewport::Describe(true)["scrollY"].get<float>() > 0 && controlY < topControlY, "mouse wheel scrolls the settings below the fixed heading");
-				require(Viewport::Scroll("PinnedPage", "selection", 1), "fixed-header content accepts a bottom scroll");
+				require(Viewport::Describe(true)["scrollY"].get<float>() > 0 && controlY < topControlY, "mouse wheel scrolls the settings below the pinned tabs");
+				require(Viewport::Scroll("PinnedPage", "selection", 1), "detail content accepts a bottom scroll");
 				frame(draw);
 				frame(draw);
 				const auto scrolledBack = Util::controls.at("Start here. Choose a card to open its settings.");
@@ -1269,7 +1271,7 @@ int main()
 				overflow = false;
 				for (int settle = 0; settle < 3; ++settle) frame(draw);
 				const auto shortBack = Util::controls.at("Start here. Choose a card to open its settings.");
-				require(std::abs(back.Min.x - shortBack.Min.x) < .1f && std::abs(back.Min.y - shortBack.Min.y) < .1f, "fixed heading does not move when controls no longer need a scrollbar");
+				require(std::abs(back.Min.x - shortBack.Min.x) < .1f && std::abs(back.Min.y - shortBack.Min.y) < .1f, "pinned tabs do not move when controls no longer need a scrollbar");
 				overflow = true;
 				for (int settle = 0; settle < 3; ++settle) frame(draw);
 				require(Viewport::Scroll("PinnedPage", "selection", 1), "dynamic detail content can scroll after it grows again");

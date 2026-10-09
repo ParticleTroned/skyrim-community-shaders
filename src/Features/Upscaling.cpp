@@ -18798,7 +18798,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 														 { "actors", "Actors", "Optional: distance, focus and edges", settings.neuralCharacterRenderingEnabled ? "Actor coverage and edges" : "Not used in scene mode", true, true, nullptr, nullptr, "With Actors only selected, refine distance, coverage and edges.", settings.neuralCharacterRenderingEnabled && (!usesFov || fovAvailable) },
 														 { "diagnostics", "Diagnostics", "Inspect diagnostic controls and experiments.", {}, showDiagnostics, false },
 													 },
-			"Your NR setup", "Choose a mode, then refine the picture.", std::format("{} / {} / {} / {}", modeName, coverageName, blendingName, selectionName));
+			"Your NR setup", "Choose a mode, then refine the picture.");
 		if (page.Is("mode")) {
 			std::array<MenuUI::Choice, 3> renderingModes{ { { "full", "Full resolution", "Finished scene · higher cost", "Enhances the finished scene at full resolution. Offers the most detail and usually costs more performance. FOV restriction is optional." },
 				{ "foveated", "Foveated", "Finished scene · FOV required", "Enhances the finished scene inside your FOV selection. A smaller area can improve performance. Requires VR, FOV and DLSS or FSR." },

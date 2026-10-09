@@ -384,7 +384,7 @@ target_link_libraries(
 )
 
 if(DEVBENCH_BRIDGE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API)
+    target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API advapi32)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
 endif()
 
@@ -1981,6 +1981,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
 
     include("${PROJECT_SOURCE_DIR}/tests/gameft_stack_wait.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/engine_stutters.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/game_setting_persistence.cmake")
 
     add_controller_test(

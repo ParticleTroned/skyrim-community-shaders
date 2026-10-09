@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Utils/PassTimingCapture.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/EngineStutterMonitor.h"
+#endif
 
 #include <Tracy/Tracy.hpp>
 #include <Tracy/TracyD3D11.hpp>
@@ -28,6 +31,9 @@ struct ScopedGpuPass
 	ScopedGpuPass& operator=(ScopedGpuPass&&) = delete;
 
 private:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::optional<CSX::Diagnostics::Stutters::Scope> stutterScope;
+#endif
 #ifdef TRACY_ENABLE
 	std::optional<tracy::ScopedZone> cpuZone;
 	std::optional<tracy::D3D11ZoneScope> gpuZone;

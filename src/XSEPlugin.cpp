@@ -29,6 +29,9 @@
 #include "MenuDevBenchBridge.h"
 #include "PerformanceTuningDevBenchBridge.h"
 #include "ProfilerDevBenchBridge.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/EngineStutterMonitor.h"
+#endif
 #include "SceneSettingsManager.h"
 #include "ScreenshotDevBenchBridge.h"
 #include "ShaderCache.h"
@@ -297,6 +300,9 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				CSX::Api::InitializeFeatureService();
 				CSX::Api::FeatureDevBenchBridge::Install();
 				ProfilerDevBenchBridge::Install();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				CSX::Diagnostics::Stutters::Install();
+#endif
 				MenuDevBenchBridge::Install();
 				PerformanceTuningDevBenchBridge::Install();
 				ScreenshotDevBenchBridge::Install();

@@ -4097,6 +4097,7 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(FeatureProfilingUI PROPERTIES TIMEOUT 30)
 
     include(tests/profiler_capture.cmake)
+    include(tests/neural_gpu_timing.cmake)
 
     add_controller_test(
         ab_test_aggregator_test

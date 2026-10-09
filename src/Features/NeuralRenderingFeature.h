@@ -17,6 +17,7 @@ struct NeuralRenderingFeature : Feature
 	void RestoreDefaultSettings() override;
 	/** Uses the installed NR provider's native master toggle for on/off comparisons. */
 	bool SupportsPerformanceCostMeasurement() const override;
+	bool HasIndependentProfilingTab() const override { return true; }
 	bool IsPerformanceToggleEnabled() const override;
 	bool IsPerformanceCostMeasurementEnabled() const override;
 	bool IsPerformanceCostMeasurementReady() const override;

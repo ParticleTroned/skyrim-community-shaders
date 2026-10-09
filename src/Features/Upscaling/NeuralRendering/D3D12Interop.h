@@ -102,12 +102,12 @@ namespace NeuralRendering
 		bool CreateSharedTexture(const D3D11_TEXTURE2D_DESC& a_sourceDesc, SharedTexture& a_texture, const char* a_name);
 
 		bool BeginD3D12(ID3D12GraphicsCommandList** a_commandList, const std::shared_ptr<ExecutionEvidence>& a_evidence = {});
-		/** Opens the required Feature 18 submission-metadata scope and optional GPU timestamp. */
+		/** Opens optional timestamps and reports submission-scope ownership to the caller. */
 		bool BeginFeatureTiming(
 			ID3D12GraphicsCommandList* a_commandList,
-			const D3D12InteropSubmissionTiming& a_timing);
-		/** Closes the Feature 18 scope; EndD3D12 requires exactly one completed scope. */
-		bool EndFeatureTiming(ID3D12GraphicsCommandList* a_commandList);
+			const D3D12InteropSubmissionTiming& a_timing, bool& a_scopeOpened);
+		/** Closes an owned scope; cancelled GPU captures do not resolve timestamps. */
+		bool EndFeatureTiming(ID3D12GraphicsCommandList* a_commandList, bool a_scopeOpened);
 		/** Optional timestamps around the NGX evaluate call, excluding feature creation. */
 		void BeginEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept;
 		void EndEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept;
@@ -141,6 +141,7 @@ namespace NeuralRendering
 			std::uint64_t fenceValue = 0;
 			D3D12InteropSubmissionTiming timing{};
 			bool timingPending = false;
+			std::uint64_t gpuCaptureEpoch = 0;
 			std::uint32_t evaluationTimingOpenMask = 0, evaluationTimingMask = 0;
 			bool usable = true;
 		};
@@ -196,6 +197,8 @@ namespace NeuralRendering
 		std::shared_ptr<ExecutionEvidence> waitEvidence_;
 		std::atomic_bool executionTimingFailed_{ false };
 		std::uint64_t timestampFrequency_ = 0;
+		bool timingResourcesAttempted_ = false;
+		bool timingReadbackFailureLogged_ = false;
 		HRESULT lastError_ = S_OK;
 		std::string lastOperation_;
 		bool initialized_ = false;

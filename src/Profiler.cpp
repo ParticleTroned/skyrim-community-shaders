@@ -170,6 +170,7 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context, 
 
 void Profiler::Release()
 {
+	UpdateGpuCaptureEpoch(false, true);
 	if (flatTiming && frameActive && context)
 		context->End(frames[writeFrame].disjoint.get());
 	for (auto& frame : frames) {
@@ -226,6 +227,7 @@ void Profiler::SetUserEnabled(bool a_enabled)
 {
 	userEnabled.store(a_enabled, std::memory_order_release);
 	if (!a_enabled) {
+		UpdateGpuCaptureEpoch(false);
 		if (flatTiming) {
 			flatTiming->history.Reset();
 			flatTiming->cpuBeginMs = 0.0;
@@ -250,6 +252,62 @@ void Profiler::RequestCapture(CaptureMode a_mode)
 		captureRequested.fetch_or(sources, std::memory_order_release);
 }
 
+void Profiler::UpdateGpuCaptureEpoch(bool active, bool reset)
+{
+	if (!reset && active == (gpuCaptureEpoch.load(std::memory_order_acquire) != 0))
+		return;
+	std::scoped_lock lock(externalGpuMutex);
+	const auto previous = gpuCaptureEpoch.load(std::memory_order_relaxed);
+	if (reset || (active && previous == 0))
+		externalGpuTimings.clear();
+	if (active && (reset || previous == 0))
+		gpuCaptureEpoch.store(++nextGpuCaptureEpoch, std::memory_order_release);
+	else if (!active)
+		gpuCaptureEpoch.store(0, std::memory_order_release);
+}
+
+bool Profiler::PublishExternalGpuTiming(uint64_t epoch, std::string_view name, uint32_t frameId, float milliseconds)
+{
+	if (!epoch || epoch != GetGpuCaptureEpoch() || name.empty() || !IsValidProfilerSample(milliseconds))
+		return false;
+	std::scoped_lock lock(externalGpuMutex);
+	if (epoch != GetGpuCaptureEpoch())
+		return false;
+	auto found = std::find_if(externalGpuTimings.begin(), externalGpuTimings.end(), [&](const auto& timing) { return timing.published.name == name; });
+	if (found == externalGpuTimings.end()) {
+		if (externalGpuTimings.size() >= kMaxDetailTimers)
+			return false;
+		externalGpuTimings.push_back({ { std::string(name), {}, frameId }, frameId, milliseconds });
+		return true;
+	}
+	if (found->pendingFrameId == frameId) {
+		const float combined = found->pendingMilliseconds + milliseconds;
+		if (!IsValidProfilerSample(combined))
+			return false;
+		found->pendingMilliseconds = combined;
+	} else {
+		if (static_cast<int32_t>(frameId - found->pendingFrameId) < 0)
+			return false;
+		// Advancing the queue's frame closes all same-frame eye and region contributions.
+		found->published.history.PushSample(found->pendingMilliseconds);
+		found->published.frameId = found->pendingFrameId;
+		found->pendingFrameId = frameId;
+		found->pendingMilliseconds = milliseconds;
+	}
+	return true;
+}
+
+std::vector<Profiler::ExternalGpuTiming> Profiler::GetExternalGpuTimings() const
+{
+	std::scoped_lock lock(externalGpuMutex);
+	std::vector<ExternalGpuTiming> timings;
+	timings.reserve(externalGpuTimings.size());
+	for (const auto& timing : externalGpuTimings)
+		if (timing.published.history.count)
+			timings.push_back(timing.published);
+	return timings;
+}
+
 void Profiler::LatchCaptureRequest()
 {
 	gpuAcquisitionBlocked = false;
@@ -262,6 +320,7 @@ void Profiler::LatchCaptureRequest()
 	if (activeCaptureSessionId != 0)
 		activeCaptureMode = CaptureMode::Both;
 	captureActive.store(activeCaptureMode != CaptureMode::None, std::memory_order_release);
+	UpdateGpuCaptureEpoch(Captures(CaptureMode::GPU));
 }
 
 bool Profiler::StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId)
@@ -310,6 +369,7 @@ const std::vector<Profiler::TimerResult>* Profiler::GetBoundedCaptureResults(uin
 
 void Profiler::ClearTimers()
 {
+	UpdateGpuCaptureEpoch(GetGpuCaptureEpoch() != 0, true);
 	if (flatTiming) {
 		flatTiming->history.Reset();
 		flatTiming->cpuBeginMs = 0.0;
@@ -345,6 +405,12 @@ void Profiler::ClearTimers()
 void Profiler::ClearTimersForFeature(const std::string& featureName)
 {
 	std::string prefix = featureName + "::";
+	{
+		std::scoped_lock lock(externalGpuMutex);
+		std::erase_if(externalGpuTimings, [&prefix](const auto& timing) { return timing.published.name.starts_with(prefix); });
+		if (gpuCaptureEpoch.load(std::memory_order_relaxed))
+			gpuCaptureEpoch.store(++nextGpuCaptureEpoch, std::memory_order_release);
+	}
 	std::erase_if(immediateCpuTimers, [&prefix](const ImmediateCpuTimer& timer) {
 		return timer.name.starts_with(prefix);
 	});

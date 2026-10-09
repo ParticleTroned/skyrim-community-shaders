@@ -802,13 +802,14 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	bool cpuMode,
 	bool includePercentiles,
 	TimingAttribution attribution,
-	bool useSelfTimesForTotal)
+	bool useSelfTimesForTotal,
+	const std::vector<Profiler::TimerResult>* timingResults)
 {
 	FeatureTimingData data;
 	data.attribution = attribution;
 	if (!globals::profiler || !globals::profiler->IsInitialized())
 		return data;
-	const auto& results = globals::profiler->GetResults();
+	const auto& results = timingResults ? *timingResults : globals::profiler->GetResults();
 	DisplayTimingSampleAccumulator totalSamples;
 	const bool compactLabel = featurePrefixes.size() == 1;
 	for (const auto& r : results) {
@@ -975,6 +976,26 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 		MenuUI::SectionHeading(cpuMode ? "Feature CPU timings (ms)" : "Feature GPU timings (ms)");
 		const auto data = CollectFeatureTimingData(featurePrefix, cpuMode);
 		rendered = RenderTimingSection(featurePrefix, data, cpuMode, showTable);
+	}
+	if (!cpuMode && featurePrefix == "NeuralRendering") {
+		MenuUI::SectionHeading("NR inference GPU timings (D3D12, ms)");
+		MenuUI::DetailText("Latest completed NGX evaluation samples, summed across eyes and regions per frame. These overlap the feature GPU timings above and are excluded from their subtotal.");
+		const auto timings = globals::profiler->GetExternalGpuTimings();
+		const auto sampled = std::find_if(timings.begin(), timings.end(), [&](const auto& timing) { return timing.name.starts_with(featurePrefix + "::"); });
+		if (sampled != timings.end())
+			ImGui::TextDisabled("Latest sampled frame: %u", sampled->frameId);
+		std::vector<Profiler::TimerResult> results;
+		for (const auto& timing : timings) {
+			Profiler::TimerResult result;
+			result.name = timing.name;
+			result.valid = result.hasGpu = result.activeGpu = timing.history.count != 0;
+			result.historyBuffer = timing.history.history;
+			result.historyHead = timing.history.head;
+			result.historyCount = timing.history.count;
+			results.push_back(std::move(result));
+		}
+		const auto data = CollectFeatureTimingData({ featurePrefix }, false, true, TimingAttribution::Shared, true, &results);
+		rendered = RenderTimingSection(featurePrefix + "::inference", data, false, true) || rendered;
 	}
 	if (view && !view->sharedPrefixes.empty()) {
 		MenuUI::SectionHeading(cpuMode ? "Shared CPU pass timings (ms)" : "Shared GPU pass timings (ms)");
@@ -1305,7 +1326,9 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 		return;
 	}
 
-	profiler.RequestCapture();
+	profiler.RequestCapture(featurePrefix == "NeuralRendering" ?
+								(featureMode == FeatureTimingMode::GPU ? Profiler::CaptureMode::GPU : Profiler::CaptureMode::CPU) :
+								Profiler::CaptureMode::Both);
 	RenderFeatureTimingData(featurePrefix, featureMode, true);
 }
 

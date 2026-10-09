@@ -124,6 +124,8 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) { (void)a_advanced; }
 	virtual json CapturePerformanceSettingsState() const { return CapturePerformanceCostMeasurementState(); }
 	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
+	/** Keeps live profiling reachable alongside the on/off measurement suite. */
+	virtual bool HasIndependentProfilingTab() const { return false; }
 	/** Returns the requested on/off state, including features inactive in the current scene. */
 	virtual bool IsPerformanceToggleEnabled() const { return IsPerformanceCostMeasurementEnabled(); }
 	/** Applies the persistent runtime control used by the compact tuning overview. */

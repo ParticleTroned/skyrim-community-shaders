@@ -8,6 +8,7 @@
 #include <d3d11.h>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -118,6 +119,13 @@ public:
 		}
 	};
 
+	struct ExternalGpuTiming
+	{
+		std::string name;
+		RollingHistory history;
+		uint32_t frameId = 0;
+	};
+
 	enum class CaptureSessionState : uint32_t
 	{
 		None = 0,
@@ -148,6 +156,12 @@ public:
 	const std::vector<TimerResult>* GetBoundedCaptureResults(uint64_t a_sessionId) const;
 	bool IsEnabled() const { return IsUserEnabled() && captureActive.load(std::memory_order_acquire); }
 	bool IsInitialized() const { return initialized; }
+	/** @brief Thread-safe token for active GPU capture; zero disables external queries. */
+	uint64_t GetGpuCaptureEpoch() const { return IsUserEnabled() ? gpuCaptureEpoch.load(std::memory_order_acquire) : 0; }
+	/** @brief Accepts queue-ordered contributions; the next frame publishes their sum outside D3D11 totals. */
+	bool PublishExternalGpuTiming(uint64_t epoch, std::string_view name, uint32_t frameId, float milliseconds);
+	/** @brief Copies external histories so a submission thread cannot invalidate UI samples. */
+	std::vector<ExternalGpuTiming> GetExternalGpuTimings() const;
 
 	void SetPerfEventCallbacks(PerfEventCallback beginCb, PerfEventCallback endCb)
 	{
@@ -305,6 +319,17 @@ private:
 	std::atomic<uint8_t> captureRequested{ 0 };
 	std::atomic_bool captureActive{ false };
 	CaptureMode activeCaptureMode = CaptureMode::None;
+	std::atomic<uint64_t> gpuCaptureEpoch{ 0 };
+	uint64_t nextGpuCaptureEpoch = 0;
+	mutable std::mutex externalGpuMutex;
+	struct PendingExternalGpuTiming
+	{
+		ExternalGpuTiming published;
+		uint32_t pendingFrameId;
+		float pendingMilliseconds;
+	};
+	std::vector<PendingExternalGpuTiming> externalGpuTimings;
+	void UpdateGpuCaptureEpoch(bool active, bool reset = false);
 	uint64_t activeCaptureSessionId = 0;
 	bool gpuAcquisitionBlocked = false;
 	// Each successful BeginPass owns either a GPU interval or a CPU fallback scope.

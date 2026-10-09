@@ -55,7 +55,14 @@ namespace globals
 		bool IsUserEnabled() const { return enabled; }
 		bool IsInitialized() const { return initialized; }
 		void SetUserEnabled(bool value) { enabled = value; }
-		void RequestCapture() { ++requests; }
+		Profiler::CaptureMode requestedMode = Profiler::CaptureMode::None;
+		std::vector<Profiler::ExternalGpuTiming> externalGpuTimings;
+		void RequestCapture(Profiler::CaptureMode mode = Profiler::CaptureMode::Both)
+		{
+			++requests;
+			requestedMode = mode;
+		}
+		auto GetExternalGpuTimings() const { return externalGpuTimings; }
 		const auto& GetResults() const { return results; }
 	} source;
 	auto* profiler = &source;
@@ -164,6 +171,20 @@ int main()
 			Draw("NeuralRendering", 1);
 			Check(Draw("NeuralRendering", 1).contains(evaluation), "NR evaluation does not reach the profiling table");
 		}
+		globals::source.externalGpuTimings.push_back({ "NeuralRendering::Inference", {}, 1 });
+		for (int frame = 0; frame < 60; ++frame)
+			globals::source.externalGpuTimings.back().history.PushSample(1.25f);
+		for (const auto panelWidth : { 600.f, 1500.f }) {
+			const auto gpuText = Draw("NeuralRendering", 1, panelWidth);
+			Check(gpuText.contains("NR inference GPU timings (D3D12, ms)") && gpuText.contains("1.250"), "independent NR inference timing is missing from the GPU view");
+			Check(globals::source.requestedMode == Profiler::CaptureMode::GPU, "NR GPU view requests CPU timing unnecessarily");
+			const auto cpuText = Draw("NeuralRendering", 2, panelWidth);
+			Check(!cpuText.contains("NR inference GPU timings") && globals::source.requestedMode == Profiler::CaptureMode::CPU, "NR CPU-only view records or displays inference GPU timing");
+		}
+		const auto offRequests = globals::source.requests;
+		Draw("NeuralRendering", 0);
+		Check(globals::source.requests == offRequests, "NR off mode still requests capture");
+		globals::source.externalGpuTimings.clear();
 		globals::source.results.clear();
 		AddTimer("Upscaling::NeuralFinalLdrPreUi", .1f, .01f, 3.6f, .36f);
 		AddTimer("Upscaling::DLSSNeuralRenderingStereo", 2, .2f, 0, 0);

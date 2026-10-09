@@ -37,8 +37,10 @@ struct Feature
 {
 	std::string name;
 	bool supportsMeasurement = true;
+	bool independentProfiling = false;
 	std::string GetShortName() const { return name; }
 	bool SupportsPerformanceCostMeasurement() const { return supportsMeasurement; }
+	bool HasIndependentProfilingTab() const { return independentProfiling; }
 	std::string GetDisplayName() const { return name; }
 	static std::vector<Feature*> GetFeatureList() { return {}; }
 };
@@ -815,6 +817,22 @@ int main()
 			require(MenuUI::SettingsPage::Navigate(name, "profiling") != screenshot, "profiling tab eligibility differs from its overview card");
 			require(MenuUI::SettingsPage::Navigate(name, "settings"), "profiling changes must preserve ordinary settings");
 		}
+
+		Feature neuralRendering{ "NeuralRendering", true, true };
+		auto drawNeuralRendering = [&] {
+			MenuUI::FeatureScope scope(&neuralRendering);
+			MenuUI::SettingsPage page("Unused", { { "mode", "Mode", "NR route" } });
+		};
+		MenuUI::SettingsPage::Select("NeuralRendering", "overview");
+		Util::controls.clear();
+		for (int i = 0; i < 3; ++i) frame(drawNeuralRendering);
+		require(Util::controls.contains("Choose CPU, GPU or Off to inspect timings.") && Util::controls.contains("Measures in-game frame times and FPS with the current feature settings."), "NR must expose independent profiling and measurement tiles together");
+		require(MenuUI::SettingsPage::Navigate("NeuralRendering", "profiling"), "NR profiling tab is reachable through DevBench navigation with measurement available");
+		profilingBefore = ProfilingRenderer::draws;
+		const int nrMeasurementBefore = PerformanceTuningRenderer::draws;
+		for (int i = 0; i < 3; ++i) frame(drawNeuralRendering);
+		require(ProfilingRenderer::draws > profilingBefore && PerformanceTuningRenderer::draws == nrMeasurementBefore, "NR profiling tab draws independent controls without starting measurement");
+		require(MenuUI::SettingsPage::Navigate("NeuralRendering", "performance") && MenuUI::SettingsPage::Navigate("NeuralRendering", "mode"), "NR independent profiling preserves measurement and route navigation");
 
 		bool draft = true;
 		auto drawGuarded = [&] {

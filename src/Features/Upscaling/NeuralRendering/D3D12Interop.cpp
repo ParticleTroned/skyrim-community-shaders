@@ -3,6 +3,8 @@
 
 #include "PipelinePolicy.h"
 
+#include "Globals.h"
+#include "Profiler.h"
 #include "Utils/D3D.h"
 
 #include <algorithm>
@@ -63,6 +65,11 @@ namespace NeuralRendering
 				return;
 			const auto wideName = WidenName(a_name);
 			(void)a_object->SetName(wideName.c_str());
+		}
+
+		std::uint64_t CurrentGpuCaptureEpoch() noexcept
+		{
+			return globals::profiler ? globals::profiler->GetGpuCaptureEpoch() : 0;
 		}
 
 		void IncrementSaturating(std::uint64_t& a_value) noexcept
@@ -136,181 +143,210 @@ namespace NeuralRendering
 
 	bool D3D12Interop::CreateTimingResourcesLocked()
 	{
-		if constexpr (!kDevelopmentDiagnostics) {
-			return true;
-		} else {
-			if (!device12_ || !queue12_)
-				return RecordFailureLocked(E_UNEXPECTED, "CreateTimingResources state");
+		if (!device12_ || !queue12_)
+			return RecordFailureLocked(E_UNEXPECTED, "CreateTimingResources state");
 
-			D3D12_QUERY_HEAP_DESC queryDescription{};
-			queryDescription.Count = static_cast<UINT>(kCommandContextCount * kQueriesPerContext);
-			queryDescription.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-			HRESULT result = device12_->CreateQueryHeap(
-				&queryDescription, IID_PPV_ARGS(&timestampQueryHeap_));
-			if (FAILED(result))
-				return RecordFailureLocked(result, "ID3D12Device::CreateQueryHeap(timestamp)");
-			SetD3D12Name(timestampQueryHeap_.Get(), "NeuralRendering::TimestampQueryHeap");
+		D3D12_QUERY_HEAP_DESC queryDescription{};
+		queryDescription.Count = static_cast<UINT>(kCommandContextCount * kQueriesPerContext);
+		queryDescription.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+		HRESULT result = device12_->CreateQueryHeap(
+			&queryDescription, IID_PPV_ARGS(&timestampQueryHeap_));
+		if (FAILED(result))
+			return RecordFailureLocked(result, "ID3D12Device::CreateQueryHeap(timestamp)");
+		SetD3D12Name(timestampQueryHeap_.Get(), "NeuralRendering::TimestampQueryHeap");
 
-			D3D12_HEAP_PROPERTIES heapProperties{};
-			heapProperties.Type = D3D12_HEAP_TYPE_READBACK;
-			heapProperties.CreationNodeMask = 1;
-			heapProperties.VisibleNodeMask = 1;
-			D3D12_RESOURCE_DESC bufferDescription{};
-			bufferDescription.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-			bufferDescription.Width = sizeof(std::uint64_t) * queryDescription.Count;
-			bufferDescription.Height = 1;
-			bufferDescription.DepthOrArraySize = 1;
-			bufferDescription.MipLevels = 1;
-			bufferDescription.SampleDesc.Count = 1;
-			bufferDescription.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-			result = device12_->CreateCommittedResource(
-				&heapProperties,
-				D3D12_HEAP_FLAG_NONE,
-				&bufferDescription,
-				D3D12_RESOURCE_STATE_COPY_DEST,
-				nullptr,
-				IID_PPV_ARGS(&timestampReadback_));
-			if (FAILED(result))
-				return RecordFailureLocked(result, "ID3D12Device::CreateCommittedResource(timestamp readback)");
-			SetD3D12Name(timestampReadback_.Get(), "NeuralRendering::TimestampReadback");
+		D3D12_HEAP_PROPERTIES heapProperties{};
+		heapProperties.Type = D3D12_HEAP_TYPE_READBACK;
+		heapProperties.CreationNodeMask = 1;
+		heapProperties.VisibleNodeMask = 1;
+		D3D12_RESOURCE_DESC bufferDescription{};
+		bufferDescription.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		bufferDescription.Width = sizeof(std::uint64_t) * queryDescription.Count;
+		bufferDescription.Height = 1;
+		bufferDescription.DepthOrArraySize = 1;
+		bufferDescription.MipLevels = 1;
+		bufferDescription.SampleDesc.Count = 1;
+		bufferDescription.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		result = device12_->CreateCommittedResource(
+			&heapProperties,
+			D3D12_HEAP_FLAG_NONE,
+			&bufferDescription,
+			D3D12_RESOURCE_STATE_COPY_DEST,
+			nullptr,
+			IID_PPV_ARGS(&timestampReadback_));
+		if (FAILED(result))
+			return RecordFailureLocked(result, "ID3D12Device::CreateCommittedResource(timestamp readback)");
+		SetD3D12Name(timestampReadback_.Get(), "NeuralRendering::TimestampReadback");
 
-			result = queue12_->GetTimestampFrequency(&timestampFrequency_);
-			if (FAILED(result) || !timestampFrequency_) {
-				return RecordFailureLocked(
-					FAILED(result) ? result : E_FAIL,
-					"ID3D12CommandQueue::GetTimestampFrequency");
-			}
-			return true;
+		result = queue12_->GetTimestampFrequency(&timestampFrequency_);
+		if (FAILED(result) || !timestampFrequency_) {
+			return RecordFailureLocked(
+				FAILED(result) ? result : E_FAIL,
+				"ID3D12CommandQueue::GetTimestampFrequency");
 		}
+		return true;
 	}
 
 	void D3D12Interop::CollectCompletedTimingLocked(
 		std::size_t a_index,
 		std::uint64_t a_completedValue) noexcept
 	{
-		if constexpr (!kDevelopmentDiagnostics) {
+		if (a_index >= commandContexts_.size())
 			return;
-		} else {
-			if (a_index >= commandContexts_.size())
-				return;
-			auto& commandContext = commandContexts_[a_index];
-			if (!commandContext.timingPending || !commandContext.fenceValue ||
-				a_completedValue < commandContext.fenceValue || !timestampReadback_ ||
-				!timestampFrequency_) {
-				return;
-			}
-			const std::uint64_t timingFenceValue = commandContext.fenceValue;
-
-			const SIZE_T offset = sizeof(std::uint64_t) * a_index * kQueriesPerContext;
-			const D3D12_RANGE readRange{ offset, offset + sizeof(std::uint64_t) * kQueriesPerContext };
-			void* mapped = nullptr;
-			const HRESULT mapResult = timestampReadback_->Map(0, &readRange, &mapped);
-			if (SUCCEEDED(mapResult) && mapped) {
-				const auto* timestamps = reinterpret_cast<const std::uint64_t*>(
-					static_cast<const std::byte*>(mapped) + offset);
-				const bool validTimestamps = timestamps[1] >= timestamps[0];
-				const std::uint64_t elapsedTicks =
-					validTimestamps ? timestamps[1] - timestamps[0] : 0;
-				if (const auto& execution = commandContext.timing.execution) {
-					execution->Update([&](auto& evidence) {
-						const auto resolved = [&](std::uint32_t query) -> ExecutionTiming {
-							return ResolveExecutionGpuTiming(timestamps[query], timestamps[query + 1u], timestampFrequency_);
-						};
-						if (evidence.batchGpu.state == ExecutionTimingState::Pending)
-							evidence.batchGpu = resolved(0);
-						for (std::uint32_t region = 0; region < kMaximumExecutionRegions; ++region)
-							if ((commandContext.evaluationTimingMask & (1u << region)) != 0 &&
-								evidence.regions[region].evaluationGpu.state == ExecutionTimingState::Pending)
-								evidence.regions[region].evaluationGpu = resolved(2u + region * 2u);
-					});
-				}
-				const D3D12_RANGE writtenRange{ 0, 0 };
-				timestampReadback_->Unmap(0, &writtenRange);
-
-				if (validTimestamps) {
-					const std::uint64_t elapsedMicroseconds = static_cast<std::uint64_t>(
-						(static_cast<long double>(elapsedTicks) * 1000000.0L) /
-						static_cast<long double>(timestampFrequency_));
-					IncrementSaturating(telemetry_.featureGpuSamples);
-					AddSaturating(telemetry_.featureGpuMicroseconds, elapsedMicroseconds);
-					switch (ClassifyFeatureSlotMask(commandContext.timing.featureSlotMask)) {
-					case FeatureSlotRoute::Main:
-						IncrementSaturating(telemetry_.mainFeatureGpuSamples);
-						AddSaturating(telemetry_.mainFeatureGpuMicroseconds, elapsedMicroseconds);
-						break;
-					case FeatureSlotRoute::Submit:
-						IncrementSaturating(telemetry_.submitFeatureGpuSamples);
-						AddSaturating(telemetry_.submitFeatureGpuMicroseconds, elapsedMicroseconds);
-						break;
-					default:
-						break;
-					}
-					if (IsValidInsertionPoint(commandContext.timing.insertionPoint)) {
-						const auto insertionPointIndex = static_cast<std::size_t>(
-							commandContext.timing.insertionPoint);
-						IncrementSaturating(
-							telemetry_.featureGpuSamplesByInsertionPoint[insertionPointIndex]);
-						AddSaturating(
-							telemetry_.featureGpuMicrosecondsByInsertionPoint[insertionPointIndex],
-							elapsedMicroseconds);
-					} else {
-						IncrementSaturating(telemetry_.invalidInsertionPointSamples);
-					}
-					telemetry_.maximumFeatureGpuMicroseconds = std::max(
-						telemetry_.maximumFeatureGpuMicroseconds, elapsedMicroseconds);
-					if (timingFenceValue > lastCompletedTimingFenceValue_) {
-						lastCompletedTimingFenceValue_ = timingFenceValue;
-						telemetry_.lastFeatureGpuMicroseconds = elapsedMicroseconds;
-						telemetry_.lastFeaturePixelCount = commandContext.timing.pixelCount;
-						telemetry_.lastFeatureFrameId = commandContext.timing.frameId;
-						telemetry_.lastFeatureEvaluationCount =
-							commandContext.timing.evaluationCount;
-						telemetry_.lastFeatureLogicalEyeCount =
-							commandContext.timing.logicalEyeCount;
-						telemetry_.lastFeatureSlotMask =
-							commandContext.timing.featureSlotMask;
-						telemetry_.lastInsertionPoint =
-							commandContext.timing.insertionPoint;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-						const auto& execution = commandContext.timing.execution;
-						telemetry_.lastExecutionPlan = SummarizeExecutionPlan(execution ? &execution->Descriptor() : nullptr,
-							commandContext.timing.frameId, commandContext.timing.insertionPoint);
-#endif
-					}
-				} else {
-					IncrementSaturating(telemetry_.featureGpuReadbackFailures);
-				}
-			} else {
-				if (SUCCEEDED(mapResult)) {
-					const D3D12_RANGE writtenRange{ 0, 0 };
-					timestampReadback_->Unmap(0, &writtenRange);
-				}
-				IncrementSaturating(telemetry_.featureGpuReadbackFailures);
-			}
-			// A completed command cannot produce a missing end timestamp later.
+		auto& commandContext = commandContexts_[a_index];
+		if (commandContext.timingPending && commandContext.gpuCaptureEpoch != CurrentGpuCaptureEpoch()) {
 			if (commandContext.timing.execution)
 				commandContext.timing.execution->FailPendingTimings();
-			commandContext.timing = {};
 			commandContext.timingPending = false;
-			commandContext.evaluationTimingOpenMask = commandContext.evaluationTimingMask = 0;
+			commandContext.gpuCaptureEpoch = 0;
 		}
+		if (!commandContext.timingPending || !commandContext.fenceValue ||
+			a_completedValue < commandContext.fenceValue || !timestampReadback_ ||
+			!timestampFrequency_) {
+			return;
+		}
+		const std::uint64_t timingFenceValue = commandContext.fenceValue;
+
+		const SIZE_T offset = sizeof(std::uint64_t) * a_index * kQueriesPerContext;
+		const D3D12_RANGE readRange{ offset, offset + sizeof(std::uint64_t) * kQueriesPerContext };
+		void* mapped = nullptr;
+		const HRESULT mapResult = timestampReadback_->Map(0, &readRange, &mapped);
+		if (SUCCEEDED(mapResult) && mapped) {
+			const auto* timestamps = reinterpret_cast<const std::uint64_t*>(
+				static_cast<const std::byte*>(mapped) + offset);
+			std::optional<std::uint64_t> inferenceMicroseconds = 0;
+			if (static_cast<std::uint32_t>(std::popcount(commandContext.evaluationTimingMask)) != commandContext.timing.evaluationCount)
+				inferenceMicroseconds.reset();
+			for (std::uint32_t region = 0; region < kMaximumExecutionRegions && inferenceMicroseconds; ++region) {
+				if ((commandContext.evaluationTimingMask & (1u << region)) == 0)
+					continue;
+				const auto query = 2u + region * 2u;
+				const auto timing = ResolveExecutionGpuTiming(timestamps[query], timestamps[query + 1u], timestampFrequency_);
+				if (!timing.microseconds || *timing.microseconds > UINT64_MAX - *inferenceMicroseconds)
+					inferenceMicroseconds.reset();
+				else
+					*inferenceMicroseconds += *timing.microseconds;
+			}
+			const auto batchTiming = kDevelopmentDiagnostics ?
+			                             ResolveExecutionGpuTiming(timestamps[0], timestamps[1], timestampFrequency_) :
+			                             ExecutionTiming{};
+			if (const auto& execution = commandContext.timing.execution) {
+				execution->Update([&](auto& evidence) {
+					const auto resolved = [&](std::uint32_t query) -> ExecutionTiming {
+						return ResolveExecutionGpuTiming(timestamps[query], timestamps[query + 1u], timestampFrequency_);
+					};
+					if (evidence.batchGpu.state == ExecutionTimingState::Pending)
+						evidence.batchGpu = resolved(0);
+					for (std::uint32_t region = 0; region < kMaximumExecutionRegions; ++region)
+						if ((commandContext.evaluationTimingMask & (1u << region)) != 0 &&
+							evidence.regions[region].evaluationGpu.state == ExecutionTimingState::Pending)
+							evidence.regions[region].evaluationGpu = resolved(2u + region * 2u);
+				});
+			}
+			const D3D12_RANGE writtenRange{ 0, 0 };
+			timestampReadback_->Unmap(0, &writtenRange);
+			if (inferenceMicroseconds && globals::profiler) {
+				try {
+					globals::profiler->PublishExternalGpuTiming(commandContext.gpuCaptureEpoch,
+						"NeuralRendering::Inference", commandContext.timing.frameId,
+						static_cast<float>(*inferenceMicroseconds) / 1000.0f);
+				} catch (const std::exception& error) {
+					logger::warn("[DLSSNR] Cannot publish inference profiling: {}", error.what());
+				}
+			}
+
+			if (batchTiming.microseconds) {
+				const auto elapsedMicroseconds = *batchTiming.microseconds;
+				IncrementSaturating(telemetry_.featureGpuSamples);
+				AddSaturating(telemetry_.featureGpuMicroseconds, elapsedMicroseconds);
+				switch (ClassifyFeatureSlotMask(commandContext.timing.featureSlotMask)) {
+				case FeatureSlotRoute::Main:
+					IncrementSaturating(telemetry_.mainFeatureGpuSamples);
+					AddSaturating(telemetry_.mainFeatureGpuMicroseconds, elapsedMicroseconds);
+					break;
+				case FeatureSlotRoute::Submit:
+					IncrementSaturating(telemetry_.submitFeatureGpuSamples);
+					AddSaturating(telemetry_.submitFeatureGpuMicroseconds, elapsedMicroseconds);
+					break;
+				default:
+					break;
+				}
+				if (IsValidInsertionPoint(commandContext.timing.insertionPoint)) {
+					const auto insertionPointIndex = static_cast<std::size_t>(
+						commandContext.timing.insertionPoint);
+					IncrementSaturating(
+						telemetry_.featureGpuSamplesByInsertionPoint[insertionPointIndex]);
+					AddSaturating(
+						telemetry_.featureGpuMicrosecondsByInsertionPoint[insertionPointIndex],
+						elapsedMicroseconds);
+				} else {
+					IncrementSaturating(telemetry_.invalidInsertionPointSamples);
+				}
+				telemetry_.maximumFeatureGpuMicroseconds = std::max(
+					telemetry_.maximumFeatureGpuMicroseconds, elapsedMicroseconds);
+				if (timingFenceValue > lastCompletedTimingFenceValue_) {
+					lastCompletedTimingFenceValue_ = timingFenceValue;
+					telemetry_.lastFeatureGpuMicroseconds = elapsedMicroseconds;
+					telemetry_.lastFeaturePixelCount = commandContext.timing.pixelCount;
+					telemetry_.lastFeatureFrameId = commandContext.timing.frameId;
+					telemetry_.lastFeatureEvaluationCount =
+						commandContext.timing.evaluationCount;
+					telemetry_.lastFeatureLogicalEyeCount =
+						commandContext.timing.logicalEyeCount;
+					telemetry_.lastFeatureSlotMask =
+						commandContext.timing.featureSlotMask;
+					telemetry_.lastInsertionPoint =
+						commandContext.timing.insertionPoint;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+					const auto& execution = commandContext.timing.execution;
+					telemetry_.lastExecutionPlan = SummarizeExecutionPlan(execution ? &execution->Descriptor() : nullptr,
+						commandContext.timing.frameId, commandContext.timing.insertionPoint);
+#endif
+				}
+			} else {
+				IncrementSaturating(telemetry_.featureGpuReadbackFailures);
+			}
+		} else {
+			if (SUCCEEDED(mapResult)) {
+				const D3D12_RANGE writtenRange{ 0, 0 };
+				timestampReadback_->Unmap(0, &writtenRange);
+			}
+			IncrementSaturating(telemetry_.featureGpuReadbackFailures);
+			if (!timingReadbackFailureLogged_) {
+				logger::warn("[DLSSNR] Inference timestamp readback unavailable (hr=0x{:08X}); rendering will continue", static_cast<std::uint32_t>(mapResult));
+				timingReadbackFailureLogged_ = true;
+			}
+		}
+		// A completed command cannot produce a missing end timestamp later.
+		if (commandContext.timing.execution)
+			commandContext.timing.execution->FailPendingTimings();
+		commandContext.timing = {};
+		commandContext.timingPending = false;
+		commandContext.evaluationTimingOpenMask = commandContext.evaluationTimingMask = 0;
 	}
 
 	void D3D12Interop::CollectCompletedTimingsLocked(
 		std::uint64_t a_completedValue) noexcept
 	{
-		if constexpr (!kDevelopmentDiagnostics) {
+		if (!timestampReadback_)
 			return;
-		} else {
-			if (a_completedValue == UINT64_MAX) {
-				for (const auto& context : commandContexts_)
-					if (context.timing.execution)
-						context.timing.execution->FailPendingTimings();
-				return;
-			}
-			for (std::size_t index = 0; index < commandContexts_.size(); ++index)
-				CollectCompletedTimingLocked(index, a_completedValue);
+		if (a_completedValue == UINT64_MAX) {
+			for (const auto& context : commandContexts_)
+				if (context.timing.execution)
+					context.timing.execution->FailPendingTimings();
+			return;
 		}
+		std::array<std::size_t, kCommandContextCount> pending{};
+		std::size_t count = 0;
+		for (std::size_t index = 0; index < commandContexts_.size(); ++index)
+			if (commandContexts_[index].timingPending)
+				pending[count++] = index;
+		// Ring indices wrap independently of submission order and stereo frame identity.
+		std::sort(pending.begin(), pending.begin() + count, [&](auto left, auto right) {
+			return commandContexts_[left].fenceValue < commandContexts_[right].fenceValue;
+		});
+		for (std::size_t index = 0; index < count; ++index)
+			CollectCompletedTimingLocked(pending[index], a_completedValue);
 	}
 
 	bool D3D12Interop::Initialize(IDXGIAdapter* a_adapter, ID3D11Device* a_device, ID3D11DeviceContext* a_context,
@@ -354,15 +390,6 @@ namespace NeuralRendering
 				ReleaseObjectsLocked();
 				return false;
 			}
-		}
-		if (!CreateTimingResourcesLocked()) {
-			logger::warn(
-				"[DLSSNR] D3D12 timestamp telemetry unavailable at {} (hr=0x{:08X}); rendering will continue",
-				lastOperation_,
-				static_cast<std::uint32_t>(lastError_));
-			timestampReadback_.Reset();
-			timestampQueryHeap_.Reset();
-			timestampFrequency_ = 0;
 		}
 
 		result = device12_->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&fence12_));
@@ -651,161 +678,163 @@ namespace NeuralRendering
 
 	bool D3D12Interop::BeginFeatureTiming(
 		ID3D12GraphicsCommandList* a_commandList,
-		const D3D12InteropSubmissionTiming& a_timing)
+		const D3D12InteropSubmissionTiming& a_timing, bool& a_scopeOpened)
 	{
-		if constexpr (!kDevelopmentDiagnostics) {
+		a_scopeOpened = false;
+		const auto captureEpoch = CurrentGpuCaptureEpoch();
+		if (!kDevelopmentDiagnostics && !captureEpoch)
 			return true;
-		} else {
-			std::scoped_lock lock(mutex_);
-			if (!initialized_ || !recording_ ||
-				recordingContext_ >= commandContexts_.size() ||
-				recordingThread_ != std::this_thread::get_id() ||
-				a_commandList != commandContexts_[recordingContext_].commandList.Get()) {
-				return RecordFailureLocked(E_UNEXPECTED, "BeginFeatureTiming state");
-			}
-			if (featureTimingOpen_ || featureTimingCompleted_)
-				return RecordFailureLocked(E_UNEXPECTED, "BeginFeatureTiming scope already used");
-			const auto route = ClassifyFeatureSlotMask(a_timing.featureSlotMask);
-			const bool insertionPointValid = IsValidInsertionPoint(a_timing.insertionPoint);
-			if (a_timing.frameId == std::numeric_limits<std::uint32_t>::max() ||
-				!a_timing.pixelCount || !a_timing.evaluationCount ||
-				a_timing.evaluationCount > kMaximumRegionEvaluations ||
-				a_timing.logicalEyeCount == 0u || a_timing.logicalEyeCount > 2u ||
-				static_cast<std::uint32_t>(std::popcount(
-					LogicalRegionMask(a_timing.featureSlotMask))) !=
-					a_timing.logicalEyeCount ||
-				static_cast<std::uint32_t>(std::popcount(a_timing.featureSlotMask)) !=
-					a_timing.evaluationCount ||
-				route == FeatureSlotRoute::Unexpected ||
-				!insertionPointValid) {
-				if (route == FeatureSlotRoute::Unexpected)
-					IncrementSaturating(telemetry_.unexpectedFeatureSlotMaskSamples);
-				if (!insertionPointValid)
-					IncrementSaturating(telemetry_.invalidInsertionPointSamples);
-				return RecordFailureLocked(E_INVALIDARG, "BeginFeatureTiming metadata");
-			}
-
-			auto& commandContext = commandContexts_[recordingContext_];
-			commandContext.timing = a_timing;
-			commandContext.timingPending = false;
-			commandContext.evaluationTimingOpenMask = commandContext.evaluationTimingMask = 0;
-			featureTimingOpen_ = true;
-			if (a_timing.execution)
-				a_timing.execution->Update([&](auto& evidence) {
-					evidence.batchGpu = { timestampQueryHeap_ && timestampReadback_ && timestampFrequency_ ?
-											  ExecutionTimingState::Pending :
-											  ExecutionTimingState::Unavailable,
-						std::nullopt };
-				});
-			if (!timestampQueryHeap_ || !timestampReadback_ || !timestampFrequency_)
-				return true;
-
-			a_commandList->EndQuery(
-				timestampQueryHeap_.Get(),
-				D3D12_QUERY_TYPE_TIMESTAMP,
-				static_cast<UINT>(recordingContext_ * kQueriesPerContext));
-			timingRecording_ = true;
-			return true;
+		std::scoped_lock lock(mutex_);
+		if (!initialized_ || !recording_ ||
+			recordingContext_ >= commandContexts_.size() ||
+			recordingThread_ != std::this_thread::get_id() ||
+			a_commandList != commandContexts_[recordingContext_].commandList.Get()) {
+			return RecordFailureLocked(E_UNEXPECTED, "BeginFeatureTiming state");
 		}
+		if (featureTimingOpen_ || featureTimingCompleted_)
+			return RecordFailureLocked(E_UNEXPECTED, "BeginFeatureTiming scope already used");
+		const auto route = ClassifyFeatureSlotMask(a_timing.featureSlotMask);
+		const bool insertionPointValid = IsValidInsertionPoint(a_timing.insertionPoint);
+		if (a_timing.frameId == std::numeric_limits<std::uint32_t>::max() ||
+			!a_timing.pixelCount || !a_timing.evaluationCount ||
+			a_timing.evaluationCount > kMaximumRegionEvaluations ||
+			a_timing.logicalEyeCount == 0u || a_timing.logicalEyeCount > 2u ||
+			static_cast<std::uint32_t>(std::popcount(
+				LogicalRegionMask(a_timing.featureSlotMask))) !=
+				a_timing.logicalEyeCount ||
+			static_cast<std::uint32_t>(std::popcount(a_timing.featureSlotMask)) !=
+				a_timing.evaluationCount ||
+			route == FeatureSlotRoute::Unexpected ||
+			!insertionPointValid) {
+			if (route == FeatureSlotRoute::Unexpected)
+				IncrementSaturating(telemetry_.unexpectedFeatureSlotMaskSamples);
+			if (!insertionPointValid)
+				IncrementSaturating(telemetry_.invalidInsertionPointSamples);
+			return RecordFailureLocked(E_INVALIDARG, "BeginFeatureTiming metadata");
+		}
+
+		auto& commandContext = commandContexts_[recordingContext_];
+		commandContext.timing = a_timing;
+		commandContext.gpuCaptureEpoch = captureEpoch;
+		commandContext.timingPending = false;
+		if (captureEpoch && !timingResourcesAttempted_) {
+			timingResourcesAttempted_ = true;
+			if (!CreateTimingResourcesLocked()) {
+				logger::warn("[DLSSNR] Inference GPU profiling unavailable at {} (hr=0x{:08X}); rendering will continue", lastOperation_, static_cast<std::uint32_t>(lastError_));
+				timestampReadback_.Reset();
+				timestampQueryHeap_.Reset();
+				timestampFrequency_ = 0;
+			}
+		}
+		commandContext.evaluationTimingOpenMask = commandContext.evaluationTimingMask = 0;
+		featureTimingOpen_ = true;
+		a_scopeOpened = true;
+		if (a_timing.execution)
+			a_timing.execution->Update([&](auto& evidence) {
+				evidence.batchGpu = { captureEpoch && timestampQueryHeap_ && timestampReadback_ && timestampFrequency_ ?
+										  ExecutionTimingState::Pending :
+										  ExecutionTimingState::Unavailable,
+					std::nullopt };
+			});
+		if (!captureEpoch || !timestampQueryHeap_ || !timestampReadback_ || !timestampFrequency_)
+			return true;
+
+		if constexpr (kDevelopmentDiagnostics)
+			a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+				static_cast<UINT>(recordingContext_ * kQueriesPerContext));
+		timingRecording_ = true;
+		return true;
 	}
 
 	void D3D12Interop::BeginEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept
 	{
-		if constexpr (!kDevelopmentDiagnostics) {
+		if (!kDevelopmentDiagnostics && !CurrentGpuCaptureEpoch())
 			return;
-		} else {
-			try {
-				std::scoped_lock lock(mutex_);
-				if (!recording_ || recordingContext_ >= commandContexts_.size() || a_region >= kMaximumExecutionRegions)
-					return;
-				auto& context = commandContexts_[recordingContext_];
-				if (!context.timing.execution || a_commandList != context.commandList.Get())
-					return;
-				const bool available = featureTimingOpen_ && timingRecording_ && timestampQueryHeap_ && timestampReadback_ &&
-				                       timestampFrequency_ && recordingThread_ == std::this_thread::get_id() &&
-				                       ((context.evaluationTimingOpenMask | context.evaluationTimingMask) & (1u << a_region)) == 0;
+		try {
+			std::scoped_lock lock(mutex_);
+			if (!recording_ || recordingContext_ >= commandContexts_.size() || a_region >= kMaximumExecutionRegions)
+				return;
+			auto& context = commandContexts_[recordingContext_];
+			if (a_commandList != context.commandList.Get())
+				return;
+			const bool available = context.gpuCaptureEpoch != 0 && context.gpuCaptureEpoch == CurrentGpuCaptureEpoch() && featureTimingOpen_ && timingRecording_ && timestampQueryHeap_ && timestampReadback_ &&
+			                       timestampFrequency_ && recordingThread_ == std::this_thread::get_id() &&
+			                       ((context.evaluationTimingOpenMask | context.evaluationTimingMask) & (1u << a_region)) == 0;
+			if (context.timing.execution)
 				context.timing.execution->Update([&](auto& evidence) {
 					evidence.regions[a_region].evaluationGpu = { available ? ExecutionTimingState::Pending :
 																			 ExecutionTimingState::Unavailable,
 						std::nullopt };
 				});
-				if (!available)
-					return;
-				a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
-					ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), a_region));
-				context.evaluationTimingOpenMask |= 1u << a_region;
-			} catch (...) {
-				executionTimingFailed_.store(true, std::memory_order_relaxed);
-			}
+			if (!available)
+				return;
+			a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+				ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), a_region));
+			context.evaluationTimingOpenMask |= 1u << a_region;
+		} catch (...) {
+			executionTimingFailed_.store(true, std::memory_order_relaxed);
 		}
 	}
 
 	void D3D12Interop::EndEvaluationTiming(ID3D12GraphicsCommandList* a_commandList, std::uint32_t a_region) noexcept
 	{
-		if constexpr (!kDevelopmentDiagnostics) {
+		if (!CurrentGpuCaptureEpoch())
 			return;
-		} else {
-			try {
-				std::scoped_lock lock(mutex_);
-				if (!recording_ || recordingContext_ >= commandContexts_.size() || a_region >= kMaximumExecutionRegions)
-					return;
-				auto& context = commandContexts_[recordingContext_];
-				if (a_commandList != context.commandList.Get() || (context.evaluationTimingOpenMask & (1u << a_region)) == 0)
-					return;
-				const auto query = ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), a_region);
-				a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, query + 1u);
-				context.evaluationTimingOpenMask &= ~(1u << a_region);
-				context.evaluationTimingMask |= 1u << a_region;
-			} catch (...) {
-				executionTimingFailed_.store(true, std::memory_order_relaxed);
-			}
+		try {
+			std::scoped_lock lock(mutex_);
+			if (!recording_ || recordingContext_ >= commandContexts_.size() || a_region >= kMaximumExecutionRegions)
+				return;
+			auto& context = commandContexts_[recordingContext_];
+			if (a_commandList != context.commandList.Get() || !context.gpuCaptureEpoch || context.gpuCaptureEpoch != CurrentGpuCaptureEpoch() || (context.evaluationTimingOpenMask & (1u << a_region)) == 0)
+				return;
+			const auto query = ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), a_region);
+			a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, query + 1u);
+			context.evaluationTimingOpenMask &= ~(1u << a_region);
+			context.evaluationTimingMask |= 1u << a_region;
+		} catch (...) {
+			executionTimingFailed_.store(true, std::memory_order_relaxed);
 		}
 	}
 
-	bool D3D12Interop::EndFeatureTiming(ID3D12GraphicsCommandList* a_commandList)
+	bool D3D12Interop::EndFeatureTiming(ID3D12GraphicsCommandList* a_commandList, bool a_scopeOpened)
 	{
-		if constexpr (!kDevelopmentDiagnostics) {
+		if (!kDevelopmentDiagnostics && !a_scopeOpened)
 			return true;
-		} else {
-			std::scoped_lock lock(mutex_);
-			if (!initialized_ || !recording_ ||
-				recordingContext_ >= commandContexts_.size() ||
-				recordingThread_ != std::this_thread::get_id() ||
-				a_commandList != commandContexts_[recordingContext_].commandList.Get()) {
-				return RecordFailureLocked(E_UNEXPECTED, "EndFeatureTiming state");
-			}
-			if (!featureTimingOpen_)
-				return RecordFailureLocked(E_UNEXPECTED, "EndFeatureTiming not open");
-			featureTimingOpen_ = false;
-			if (!timestampQueryHeap_ || !timestampReadback_ || !timestampFrequency_) {
-				featureTimingCompleted_ = true;
-				return true;
-			}
-			if (!timingRecording_)
-				return RecordFailureLocked(E_UNEXPECTED, "EndFeatureTiming timestamp not recording");
-
-			const UINT queryIndex = static_cast<UINT>(recordingContext_ * kQueriesPerContext);
-			a_commandList->EndQuery(
-				timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, queryIndex + 1u);
-			a_commandList->ResolveQueryData(
-				timestampQueryHeap_.Get(),
-				D3D12_QUERY_TYPE_TIMESTAMP,
-				queryIndex,
-				2u,
-				timestampReadback_.Get(),
-				sizeof(std::uint64_t) * queryIndex);
-			for (std::uint32_t region = 0; region < kMaximumExecutionRegions; ++region) {
-				if ((commandContexts_[recordingContext_].evaluationTimingMask & (1u << region)) == 0)
-					continue;
-				const auto query = ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), region);
-				a_commandList->ResolveQueryData(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, query, 2u,
-					timestampReadback_.Get(), sizeof(std::uint64_t) * query);
-			}
-			commandContexts_[recordingContext_].timingPending = true;
+		std::scoped_lock lock(mutex_);
+		if (!initialized_ || !recording_ ||
+			recordingContext_ >= commandContexts_.size() ||
+			recordingThread_ != std::this_thread::get_id() ||
+			a_commandList != commandContexts_[recordingContext_].commandList.Get()) {
+			return RecordFailureLocked(E_UNEXPECTED, "EndFeatureTiming state");
+		}
+		if (!featureTimingOpen_)
+			return RecordFailureLocked(E_UNEXPECTED, "EndFeatureTiming not open");
+		featureTimingOpen_ = false;
+		if (!timingRecording_ || commandContexts_[recordingContext_].gpuCaptureEpoch != CurrentGpuCaptureEpoch()) {
 			timingRecording_ = false;
+			if (commandContexts_[recordingContext_].timing.execution)
+				commandContexts_[recordingContext_].timing.execution->FailPendingTimings();
 			featureTimingCompleted_ = true;
 			return true;
 		}
+
+		const UINT queryIndex = static_cast<UINT>(recordingContext_ * kQueriesPerContext);
+		if constexpr (kDevelopmentDiagnostics) {
+			a_commandList->EndQuery(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, queryIndex + 1u);
+			a_commandList->ResolveQueryData(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+				queryIndex, 2u, timestampReadback_.Get(), sizeof(std::uint64_t) * queryIndex);
+		}
+		for (std::uint32_t region = 0; region < kMaximumExecutionRegions; ++region) {
+			if ((commandContexts_[recordingContext_].evaluationTimingMask & (1u << region)) == 0)
+				continue;
+			const auto query = ExecutionEvaluationQuery(static_cast<std::uint32_t>(recordingContext_), region);
+			a_commandList->ResolveQueryData(timestampQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, query, 2u,
+				timestampReadback_.Get(), sizeof(std::uint64_t) * query);
+		}
+		commandContexts_[recordingContext_].timingPending = true;
+		timingRecording_ = false;
+		featureTimingCompleted_ = true;
+		return true;
 	}
 
 	bool D3D12Interop::EndD3D12()
@@ -993,6 +1022,8 @@ namespace NeuralRendering
 		recordingContext_ = kCommandContextCount;
 		recordingThread_ = {};
 		timestampFrequency_ = 0;
+		timingResourcesAttempted_ = false;
+		timingReadbackFailureLogged_ = false;
 		initialized_ = false;
 		recording_ = false;
 		featureTimingOpen_ = false;

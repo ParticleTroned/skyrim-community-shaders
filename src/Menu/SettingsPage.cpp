@@ -183,7 +183,7 @@ namespace MenuUI
 		const std::string pageId = activeFeature ? activeFeature->GetShortName() : a_id;
 		a_id = pageId.c_str();
 		const bool measurementAvailable = activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning";
-		const bool profilingAvailable = globals::profiler && (activeFeature ? !measurementAvailable && ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning");
+		const bool profilingAvailable = globals::profiler && (activeFeature ? (!measurementAvailable || activeFeature->HasIndependentProfilingTab()) && ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning");
 		if (activeFeature || (pageId != "Home" && pageId != "General" && pageId != "Advanced")) {
 			sections.push_back({ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" });
 			sections.push_back({ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false });

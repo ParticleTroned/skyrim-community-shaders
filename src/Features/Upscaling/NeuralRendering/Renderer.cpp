@@ -3260,9 +3260,10 @@ namespace NeuralRendering
 			.logicalEyeCount = logicalEyeCount,
 			.execution = execution,
 		};
+		bool timingScopeOpened = false;
 		const bool timingStarted = colorConfiguration_.experiments.transportBypass ?
 		                               interop_.RecordTransportSubmission(timing) :
-		                               interop_.BeginFeatureTiming(commandList, timing);
+		                               interop_.BeginFeatureTiming(commandList, timing, timingScopeOpened);
 		if (!timingStarted) {
 			const bool aborted = recordingGuard.Abort();
 			return FailLocked(
@@ -3399,7 +3400,7 @@ namespace NeuralRendering
 #else
 				execution ? &runtimeEvidence : nullptr,
 #endif
-				execution ? &interop_ : nullptr,
+				&interop_,
 				static_cast<std::uint32_t>(index), args.providerBlending);
 			if (evaluationAttempted) {
 				Increment(snapshot_.counters.featureEvaluations);
@@ -3442,7 +3443,7 @@ namespace NeuralRendering
 		}
 		snapshot_.lastCompletedStage = RendererStage::FeatureEvaluate;
 
-		if (!colorConfiguration_.experiments.transportBypass && !interop_.EndFeatureTiming(commandList)) {
+		if (!colorConfiguration_.experiments.transportBypass && !interop_.EndFeatureTiming(commandList, timingScopeOpened)) {
 			const bool aborted = recordingGuard.Abort();
 			return FailLocked(
 				RendererStage::CommandEnd,

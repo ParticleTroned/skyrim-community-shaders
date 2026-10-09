@@ -61,6 +61,45 @@ namespace
 		}
 	};
 
+	void ExternalGpuCaptureIsolation()
+	{
+		Fixture f;
+		Check(f.profiler.GetGpuCaptureEpoch() == 0, "idle profiler enables external queries");
+		f.Arm(Mode::CPU);
+		Check(f.profiler.GetGpuCaptureEpoch() == 0, "CPU-only capture enables external queries");
+		f.Arm(Mode::GPU);
+		const auto epoch = f.profiler.GetGpuCaptureEpoch();
+		Check(epoch != 0, "GPU capture lacks an external token");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 10, 1.5f), "external sample refused");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 10, 2.5f), "second-eye sample refused");
+		Check(f.profiler.GetExternalGpuTimings().empty(), "unfinished stereo frame entered the displayed history");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 11, 0), "measured zero was dropped");
+		auto snapshot = f.profiler.GetExternalGpuTimings();
+		Check(snapshot.size() == 1 && snapshot[0].history.count == 1, "two eyes produced two frame samples");
+		Near(snapshot[0].history.lastMs, 4, "per-frame inference did not sum both eyes");
+		Check(!f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 9, 3), "older completion replaced a later frame");
+		Check(!f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 11, -1), "invalid timing entered history");
+		Check(f.profiler.GetResults().empty() && f.profiler.GetTotalTimeMs() == 0, "external GPU time double-counted D3D11 totals");
+		f.Arm(Mode::Both);
+		Check(f.profiler.GetGpuCaptureEpoch() == epoch, "continuous GPU capture invalidated pending samples");
+		Check(f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 12, 1), "frame advance refused");
+		Check(f.profiler.GetExternalGpuTimings()[0].history.count == 2 && f.profiler.GetExternalGpuTimings()[0].history.lastMs == 0, "completed zero timing disappeared");
+		Near(snapshot[0].history.lastMs, 4, "external publication mutated a retained UI snapshot");
+		f.profiler.SetUserEnabled(false);
+		Check(f.profiler.GetGpuCaptureEpoch() == 0 && !f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 12, 2), "disabled profiler accepted a pending readback");
+		f.profiler.SetUserEnabled(true);
+		f.Arm(Mode::GPU);
+		const auto resumedEpoch = f.profiler.GetGpuCaptureEpoch();
+		Check(resumedEpoch && resumedEpoch != epoch && f.profiler.GetExternalGpuTimings().empty(), "new capture reused stale external history");
+		Check(!f.profiler.PublishExternalGpuTiming(epoch, "NeuralRendering::Inference", 12, 2), "previous session contaminated resumed capture");
+		f.profiler.ClearTimers();
+		Check(f.profiler.GetGpuCaptureEpoch() != resumedEpoch && !f.profiler.PublishExternalGpuTiming(resumedEpoch, "NeuralRendering::Inference", 13, 2), "clear admitted old pending timings");
+		f.Arm(Mode::CPU);
+		Check(f.profiler.GetGpuCaptureEpoch() == 0, "GPU-to-CPU mode transition retained external acquisition");
+		f.profiler.Release();
+		Check(f.profiler.GetGpuCaptureEpoch() == 0 && f.profiler.GetExternalGpuTimings().empty(), "release retained external history or acquisition");
+	}
+
 	void RetainedEvidenceModes()
 	{
 		using State = Util::PassTimingState;
@@ -371,6 +410,7 @@ namespace
 int main()
 {
 	try {
+		ExternalGpuCaptureIsolation();
 		RetainedEvidenceModes();
 		QueryAllocationFailure();
 		CpuOnlyAndModeSwitch();

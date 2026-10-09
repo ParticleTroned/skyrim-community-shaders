@@ -83,6 +83,8 @@ void Profiler::ResetFrameState(FrameQueries& frame)
 	frame.cpuTimers.clear();
 	frame.captureSessionId = 0;
 	frame.capturedCpu = false;
+	frame.gpuTimingsIncomplete = false;
+	frame.cpuTimingsIncomplete = false;
 	frame.flatPresentId = 0;
 	frame.wholeFrameStarted = false;
 }
@@ -323,7 +325,7 @@ void Profiler::LatchCaptureRequest()
 	UpdateGpuCaptureEpoch(Captures(CaptureMode::GPU));
 }
 
-bool Profiler::StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId)
+bool Profiler::StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId, bool a_alignInactiveFrames)
 {
 	a_sessionId = 0;
 	if (!initialized || !IsUserEnabled() || a_frameCount == 0 || a_frameCount > kHistorySize ||
@@ -339,6 +341,7 @@ bool Profiler::StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, u
 		.state = CaptureSessionState::Running,
 		.requestedFrames = a_frameCount,
 	};
+	boundedCaptureAlignInactiveFrames = a_alignInactiveFrames;
 	boundedCaptureTimers.clear();
 	boundedCaptureTimerIndex.clear();
 	boundedCaptureResults.clear();
@@ -499,10 +502,12 @@ bool Profiler::BeginPass(std::string_view name, bool fireCallbacks, const PassTi
 	auto& frame = frames[writeFrame];
 	if (frame.activeCount >= kMaxTimers) {
 		slotRefusals++;
+		frame.gpuTimingsIncomplete = true;
 		InvalidateCapture(claimedCapture, "query_capacity_exhausted");
 		return BeginFallbackCpuPass(name, fireCallbacks);
 	}
 	if (!frame.timers[frame.activeCount].begin || !frame.timers[frame.activeCount].end) {
+		frame.gpuTimingsIncomplete = true;
 		InvalidateCapture(claimedCapture, "query_creation_failed");
 		return BeginFallbackCpuPass(name, fireCallbacks);
 	}
@@ -512,6 +517,7 @@ bool Profiler::BeginPass(std::string_view name, bool fireCallbacks, const PassTi
 	try {
 		timer.name.assign(name);
 	} catch (const std::bad_alloc&) {
+		frame.gpuTimingsIncomplete = true;
 		InvalidateCapture(claimedCapture, "timing_allocation_failed");
 		return false;
 	}
@@ -742,6 +748,7 @@ try {
 	try {
 		timer.name.assign(name);
 	} catch (const std::bad_alloc&) {
+		frame.gpuTimingsIncomplete = true;
 		InvalidateCapture(claimedCapture, "timing_allocation_failed");
 		return false;
 	}
@@ -794,6 +801,8 @@ bool Profiler::BeginCpuPass(std::string_view name)
 
 	if (activeCpuTimers.size() + completedCpuTimers.size() >= kMaxTimers) {
 		cpuSlotRefusals++;
+		if (frameActive)
+			frames[writeFrame].cpuTimingsIncomplete = true;
 		return false;
 	}
 
@@ -826,8 +835,11 @@ void Profiler::EndCpuPass()
 	completed.cpuSelfMs = static_cast<float>(completion.selfMs);
 	AddCpuChildTime(timer.ordinal, completion.coveredMs);
 	completed.outermostCpuInRoot = timer.outermostCpuInRoot;
-	if (completed.name.empty() || !IsValidProfilerSample(completed.cpuMs))
+	if (completed.name.empty() || !IsValidProfilerSample(completed.cpuMs)) {
+		if (frameActive)
+			frames[writeFrame].cpuTimingsIncomplete = true;
 		return;
+	}
 	completedCpuTimers.push_back(std::move(completed));
 }
 
@@ -899,6 +911,8 @@ void Profiler::EndFrame(uint32_t a_frameCount)
 		acquiredSlots = 0;
 	}
 
+	if (!activeCpuTimers.empty())
+		frame.cpuTimingsIncomplete = true;
 	StoreCompletedCpuTimers(frame);
 	frame.capturedFrame = a_frameCount;
 	for (auto timers : { std::span(frame.timers).first(frame.activeCount), std::span(frame.detailTimers).first(frame.detailCount) }) {
@@ -1080,6 +1094,8 @@ bool Profiler::CollectResults()
 	float activeTotalMs = 0.0f;
 	float activeCpuTotalMs = 0.0f;
 	bool gpuFrameResolved = false;
+	bool gpuCaptureValid = !frame.gpuTimingsIncomplete && frame.inFlight;
+	bool cpuCaptureValid = frame.capturedCpu && !frame.cpuTimingsIncomplete;
 	float flatGpuMs = 0.0f;
 	const bool hadCpuTimers = !frame.cpuTimers.empty();
 
@@ -1136,6 +1152,7 @@ bool Profiler::CollectResults()
 				return false;
 			gpuFrameResolved = true;
 		} else {
+			gpuCaptureValid = false;
 			const char* reason = hr != S_OK ? "query_failed" : disjointData.Disjoint ? "gpu_clock_disjoint" :
 			                                                                           "invalid_gpu_frequency";
 			std::fill(failures.begin(), failures.end(), reason);
@@ -1154,10 +1171,14 @@ bool Profiler::CollectResults()
 		for (uint32_t i = 0; i < frame.activeCount; ++i) {
 			auto& timer = frame.timers[i];
 			CompleteCapturedGpu(timer, intervals[i].inclusiveMs, selfTimes[i], failures[i]);
-			if (timer.name.empty() || !timer.ended)
+			if (timer.name.empty() || !timer.ended) {
+				gpuCaptureValid = cpuCaptureValid = false;
 				continue;
+			}
 			const bool gpuValid = Util::ProfilerTiming::IsValidSample(intervals[i].inclusiveMs);
 			const bool cpuValid = IsValidProfilerSample(timer.cpuMs);
+			gpuCaptureValid = gpuCaptureValid && gpuValid;
+			cpuCaptureValid = cpuCaptureValid && cpuValid;
 			if (!gpuValid && !cpuValid)
 				continue;
 
@@ -1188,10 +1209,10 @@ bool Profiler::CollectResults()
 	}
 
 	for (const auto& timer : frame.cpuTimers) {
-		if (timer.name.empty())
+		if (timer.name.empty() || !IsValidProfilerSample(timer.cpuMs)) {
+			cpuCaptureValid = false;
 			continue;
-		if (!IsValidProfilerSample(timer.cpuMs))
-			continue;
+		}
 
 		auto& entry = activeTimers[timer.name];
 		entry.cpuMs += timer.cpuSelfMs;
@@ -1249,6 +1270,10 @@ bool Profiler::CollectResults()
 	capturedFrameCount = frame.capturedFrame;
 	if (boundedCapture.state == CaptureSessionState::Running &&
 		frame.captureSessionId == boundedCapture.sessionId) {
+		if (!gpuCaptureValid)
+			++boundedCapture.invalidGpuFrames;
+		if (!cpuCaptureValid)
+			++boundedCapture.invalidCpuFrames;
 		StoreBoundedCaptureResults(activeTimers, gpuFrameResolved, cpuCycleResolved);
 		boundedCapture.resolvedFrames++;
 		if (boundedCapture.resolvedFrames >= boundedCapture.requestedFrames)
@@ -1279,6 +1304,11 @@ void Profiler::StoreBoundedCaptureResults(
 		const bool freshGpu = found != a_activeTimers.end() && found->second.hasGpu;
 		const bool freshCpu = found != a_activeTimers.end() && found->second.hasCpu;
 		if (freshGpu) {
+			// Newly observed scopes were inactive on earlier valid session frames.
+			if (boundedCaptureAlignInactiveFrames && !timer.hasGpu && boundedCapture.invalidGpuFrames == 0) {
+				for (uint32_t i = 0; i < boundedCapture.resolvedFrames; ++i)
+					PushAlignedProfilerSamples(timer.gpu, timer.outermostGpu, 0.0f, 0.0f);
+			}
 			timer.hasGpu = true;
 			timer.topLevelMs = found->second.topLevelMs;
 			PushAlignedProfilerSamples(timer.gpu, timer.outermostGpu, found->second.gpuMs, found->second.outermostGpuMs);
@@ -1287,6 +1317,10 @@ void Profiler::StoreBoundedCaptureResults(
 			PushAlignedProfilerSamples(timer.gpu, timer.outermostGpu, 0.0f, 0.0f);
 		}
 		if (freshCpu) {
+			if (boundedCaptureAlignInactiveFrames && !timer.hasCpu && boundedCapture.invalidCpuFrames == 0) {
+				for (uint32_t i = 0; i < boundedCapture.resolvedFrames; ++i)
+					PushAlignedProfilerSamples(timer.cpu, timer.outermostCpu, 0.0f, 0.0f);
+			}
 			timer.hasCpu = true;
 			PushAlignedProfilerSamples(timer.cpu, timer.outermostCpu, found->second.cpuMs, found->second.outermostCpuMs);
 		} else if (a_cpuCycleResolved && timer.hasCpu) {

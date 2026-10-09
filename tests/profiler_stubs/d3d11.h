@@ -76,6 +76,7 @@ struct ID3D11DeviceContext
 	bool pending = false;
 	bool disjoint = false;
 	bool failed = false;
+	bool timestampsFailed = false;
 	UINT64 clock = 0;
 	UINT writes = 0;
 	UINT reads = 0;
@@ -104,7 +105,7 @@ struct ID3D11DeviceContext
 		++reads;
 		if (pending)
 			return S_FALSE;
-		if (failed)
+		if (failed || (timestampsFailed && query->type == D3D11_QUERY_TIMESTAMP))
 			return E_FAIL;
 		if (query->type == D3D11_QUERY_TIMESTAMP_DISJOINT) {
 			const D3D11_QUERY_DATA_TIMESTAMP_DISJOINT value{ 1000, disjoint };

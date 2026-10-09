@@ -330,6 +330,67 @@ namespace
 		Check(captured && captured->size() == 1 && captured->front().name == "Session::Owned", "mid-frame start contaminated bounded results");
 	}
 
+	void BoundedSparseTimings()
+	{
+		for (bool aligned : { false, true }) {
+			Fixture f;
+			uint64_t id = 0;
+			Check(f.profiler.StartBoundedCapture(4, false, id, aligned), "sparse capture refused");
+			f.profiler.EndFrame(0);
+			for (uint32_t frame = 1; frame <= 4; ++frame) {
+				Pass(f.profiler, "Base::Always");
+				if (frame == 2)
+					Pass(f.profiler, "Sparse::Late");
+				if (frame == 3) {
+					Check(f.profiler.BeginCpuPass("Sparse::Late"), "late CPU timer refused");
+					f.profiler.EndCpuPass();
+				}
+				f.profiler.EndFrame(frame);
+			}
+			f.Drain(5);
+			const auto progress = f.profiler.GetBoundedCaptureProgress();
+			const auto* results = f.profiler.GetBoundedCaptureResults(id);
+			Check(progress.state == Profiler::CaptureSessionState::Completed && !progress.invalidGpuFrames &&
+					  !progress.invalidCpuFrames && results,
+				"sparse valid frames were rejected");
+			const auto& sparse = Find(*results, "Sparse::Late");
+			Check(sparse.historyCount == (aligned ? 4u : 3u) && sparse.cpuHistoryCount == (aligned ? 4u : 3u),
+				"optional sparse alignment changed legacy captures or lost frames");
+			if (aligned) {
+				Near(sparse.GetHistorySample(0), 0, "GPU pre-observation idle frame was lost");
+				Near(sparse.GetCpuHistorySample(0), 0, "CPU pre-observation idle frame was lost");
+				Near(sparse.avgMs, .25f, "sparse GPU mean was biased toward active frames");
+				Near(sparse.cpuAvgMs, .5f, "sparse CPU mean was biased toward active frames");
+				Near(sparse.GetHistorySample(2), 0, "CPU-only update fabricated GPU work");
+			}
+		}
+	}
+
+	void BoundedInvalidTimings()
+	{
+		for (int failure = 0; failure < 5; ++failure) {
+			Fixture f(failure == 3 ? 1 : -1);
+			uint64_t id = 0;
+			Check(f.profiler.StartBoundedCapture(1, false, id, true), "invalid-data capture refused");
+			f.profiler.EndFrame(0);
+			Check(f.profiler.BeginPass("Measured::Pass", false), "pass refused instead of falling back to CPU");
+			if (failure == 4)
+				profilerTestClock -= 10;
+			f.profiler.EndPass(false);
+			f.profiler.EndFrame(1);
+			f.context.disjoint = failure == 0;
+			f.context.failed = failure == 1;
+			f.context.timestampsFailed = failure == 2;
+			f.Drain(2);
+			const auto progress = f.profiler.GetBoundedCaptureProgress();
+			Check(progress.state == Profiler::CaptureSessionState::Completed && progress.resolvedFrames == 1,
+				"invalid queries did not resolve bounded progress");
+			Check(progress.invalidGpuFrames == (failure == 4 ? 0u : 1u) &&
+					  progress.invalidCpuFrames == (failure == 4 ? 1u : 0u),
+				"query errors were silently converted to valid idle timings");
+		}
+	}
+
 	void RequestsRemovalAndReinitialization()
 	{
 		Fixture f;
@@ -418,6 +479,8 @@ int main()
 		CapacityAndMixedNesting();
 		PartialRingDrain();
 		BoundedCaptureIsolation();
+		BoundedSparseTimings();
+		BoundedInvalidTimings();
 		RequestsRemovalAndReinitialization();
 		LateGpuReadinessDoesNotClaimCpuFallback();
 		InvalidGpuAndOpenScopeReset();

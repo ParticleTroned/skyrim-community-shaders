@@ -33,6 +33,10 @@ if(_descriptor_error OR NOT _descriptor_type STREQUAL "OBJECT")
 endif()
 
 foreach(_schema_contract IN ITEMS
+    "start_quick_scan"
+    "invalidGpuFrames"
+    "invalidCpuFrames"
+    "renderConfiguration"
     "start_feature_cost"
     "start_feature_costs"
     "set_feature_enabled"
@@ -73,7 +77,7 @@ foreach(_index RANGE 0 ${_action_last})
     )
     list(APPEND _registered_actions "${_action}")
 endforeach()
-foreach(_required_action IN ITEMS start_feature_costs set_feature_enabled)
+foreach(_required_action IN ITEMS start_quick_scan start_feature_costs set_feature_enabled)
     list(FIND _registered_actions "${_required_action}" _required_action_index)
     if(_required_action_index EQUAL -1)
         message(FATAL_ERROR "Missing registered tuning action: ${_required_action}")
@@ -144,6 +148,7 @@ foreach(_bridge_contract IN ITEMS
     "PerformanceTuningRenderer::GetDevBenchMeasurementStatus("
     "PerformanceTuningRenderer::CancelDevBenchMeasurements()"
     "PerformanceTuningRenderer::StartDevBenchFeatureCostBatch()"
+    "PerformanceTuningRenderer::StartDevBenchQuickScan()"
     "PerformanceTuningRenderer::SetDevBenchFeatureEnabled(featureShortName, enabled)"
 )
     string(FIND "${_bridge}" "${_bridge_contract}" _bridge_position)
@@ -180,6 +185,8 @@ foreach(_renderer_contract IN ITEMS
     "constexpr double kFeatureCostRestartCooldownSeconds = 10.0"
     "constexpr double kFeatureCostTraceIntervalSeconds = 0.1"
     "kFeatureCostMeasurementBlockCount == 5"
+    "g_quickScan.controller.phase == PerformanceQuickScan::Phase::Complete"
+    "scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration())"
     "BuildNvidiaUpscalingCostSweepCases"
     "BuildAmdUpscalingCostSweepCases"
     "for (const bool fsr4RuntimeEnabled : { false, true })"

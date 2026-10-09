@@ -141,6 +141,9 @@ public:
 		uint32_t requestedFrames = 0;
 		uint32_t submittedFrames = 0;
 		uint32_t resolvedFrames = 0;
+		// A resolved frame can contain missing or invalid query data.
+		uint32_t invalidGpuFrames = 0;
+		uint32_t invalidCpuFrames = 0;
 	};
 
 	/** @brief Flat timing is opt-in; VR retains the original pass capture lifecycle. */
@@ -150,7 +153,8 @@ public:
 	bool IsUserEnabled() const { return userEnabled.load(std::memory_order_acquire); }
 	/** @brief Requests sources for the next frame; concurrent requests combine. */
 	void RequestCapture(CaptureMode a_mode = CaptureMode::Both);
-	bool StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId);
+	/** Optionally align newly observed scopes with preceding valid inactive frames. */
+	bool StartBoundedCapture(uint32_t a_frameCount, bool a_clearHistory, uint64_t& a_sessionId, bool a_alignInactiveFrames = false);
 	bool CancelBoundedCapture(uint64_t a_sessionId);
 	CaptureSessionProgress GetBoundedCaptureProgress() const;
 	const std::vector<TimerResult>* GetBoundedCaptureResults(uint64_t a_sessionId) const;
@@ -290,6 +294,8 @@ private:
 		uint32_t capturedFrame = 0;
 		uint64_t captureSessionId = 0;
 		bool capturedCpu = false;
+		bool gpuTimingsIncomplete = false;
+		bool cpuTimingsIncomplete = false;
 		bool inFlight = false;
 	};
 
@@ -390,6 +396,7 @@ private:
 	uint32_t slotRefusals = 0;
 	uint64_t nextCaptureSessionId = 1;
 	CaptureSessionProgress boundedCapture;
+	bool boundedCaptureAlignInactiveFrames = false;
 	std::vector<CaptureKnownTimer> boundedCaptureTimers;
 	std::unordered_map<std::string, size_t> boundedCaptureTimerIndex;
 	std::vector<TimerResult> boundedCaptureResults;

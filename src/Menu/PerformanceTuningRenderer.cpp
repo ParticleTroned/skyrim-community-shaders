@@ -17,21 +17,25 @@
 
 #include "CSEditor/EditorWindow.h"
 #include "Feature.h"
+#include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/PerformanceQuickScan.h"
 #include "Menu/PerformanceTuningController.h"
 #include "Menu/PerformanceTuningStatistics.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
+#include "ShaderCache.h"
 #include "Utils/RuntimeToggle.h"
 #include "Utils/UI.h"
 #include "Utils/VanityCamera.h"
 
 namespace
 {
+	static_assert(PerformanceQuickScan::kCaptureFrames <= Profiler::kHistorySize);
 	constexpr double kFeatureCostMeasurementSeconds = 5.0;
 	constexpr double kFeatureCostMeasurementMilliseconds = kFeatureCostMeasurementSeconds * 1000.0;
 	constexpr double kFeatureCostIntervalMilliseconds = 1000.0;
@@ -240,6 +244,35 @@ namespace
 	static FeatureCostBatchState g_featureCostBatch;
 	static std::string g_featureCostUiMessage;
 
+	struct QuickScanRow
+	{
+		std::string feature;
+		std::string label;
+		std::string coverage;
+		std::optional<double> gpuMs;
+		std::optional<double> cpuMs;
+	};
+	struct QuickScanState
+	{
+		PerformanceQuickScan::Controller controller;
+		bool devBenchOwned = false;
+		bool reopenMenu = false;
+		PerformanceQuickScan::CaptureOwnership<Profiler> capture;
+		RE::FormID cell = 0;
+		std::uint64_t captureId = 0;
+		std::uint32_t resolvedFrames = 0;
+		std::uint32_t invalidGpuFrames = 0;
+		std::uint32_t invalidCpuFrames = 0;
+		std::uint32_t gpuRefusals = 0;
+		std::uint32_t cpuRefusals = 0;
+		double captureSeconds = 0.0;
+		double captureStarted = 0.0;
+		json settings;
+		std::vector<QuickScanRow> rows;
+		std::string failure;
+	};
+	static QuickScanState g_quickScan;
+
 	void CaptureProfilerStateForPerformanceTuning()
 	{
 		if (g_profilerStateCaptured || !globals::profiler)
@@ -406,7 +439,7 @@ namespace
 	UpscalingCostSweepReadiness CaptureUpscalingCostSweepReadiness(double currentTime)
 	{
 		return {
-			.idle = !IsAnyFeatureCostMeasurementActive() && !IsUpscalingCostSweepRunning() && !g_featureCostBatch.active,
+			.idle = !PerformanceTuningRenderer::HasActiveMeasurements(),
 			.vr = globals::game::isVR,
 			.inGame = globals::state &&
 			          !globals::state->isMainMenuOpen &&
@@ -447,7 +480,7 @@ namespace
 
 	void SyncFeatureCostVanityCameraSuppression()
 	{
-		if (IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active)
+		if (PerformanceTuningRenderer::HasActiveMeasurements())
 			g_featureCostVanityCameraSuppression.Acquire();
 		else
 			g_featureCostVanityCameraSuppression.Release();
@@ -909,6 +942,233 @@ namespace
 		if (sceneSettings->HasActiveSettingsForFeature(name) && !sceneSettings->IsFeaturePaused(name))
 			return "Pause this feature's scene-specific settings before toggling or measuring it.";
 		return nullptr;
+	}
+
+	PerformanceQuickScan::RenderConfiguration CaptureQuickScanRenderConfiguration()
+	{
+		return {
+			.shadersEnabled = globals::shaderCache->IsEnabled(),
+			.shadersRequested = globals::shaderCache->IsEnableRequested(),
+			.definesGeneration = globals::state->GetShaderDefinesGeneration(),
+			.blockedShaderIndex = globals::shaderCache->blockedKeyIndex,
+		};
+	}
+
+	json CaptureQuickScanSettings()
+	{
+		json settings = json::object();
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->loaded)
+				feature->SaveSettings(settings[feature->GetShortName()]);
+		}
+		return settings;
+	}
+
+	const char* QuickScanPhaseName()
+	{
+		using enum PerformanceQuickScan::Phase;
+		switch (g_quickScan.controller.phase) {
+		case AwaitingMenuClose:
+			return "awaiting_menu_close";
+		case Settling:
+			return "settling";
+		case Capturing:
+			return "capturing";
+		case Complete:
+			return "complete";
+		case Failed:
+			return "failed";
+		case Cancelled:
+			return "cancelled";
+		default:
+			return "idle";
+		}
+	}
+
+	json QuickScanStatus()
+	{
+		json rows = json::array();
+		for (const auto& row : g_quickScan.rows) {
+			rows.push_back({ { "feature", row.feature }, { "label", row.label }, { "coverage", row.coverage },
+				{ "gpuMs", row.gpuMs ? json(*row.gpuMs) : json(nullptr) },
+				{ "cpuMs", row.cpuMs ? json(*row.cpuMs) : json(nullptr) } });
+		}
+		return { { "phase", QuickScanPhaseName() }, { "active", g_quickScan.controller.Active() },
+			{ "captureId", g_quickScan.captureId }, { "requestedFrames", PerformanceQuickScan::kCaptureFrames },
+			{ "renderConfiguration", { { "shadersEnabled", g_quickScan.controller.renderConfiguration.shadersEnabled },
+										 { "shaderEnableRequested", g_quickScan.controller.renderConfiguration.shadersRequested },
+										 { "shaderDefinesGeneration", g_quickScan.controller.renderConfiguration.definesGeneration },
+										 { "blockedShaderIndex", g_quickScan.controller.renderConfiguration.blockedShaderIndex } } },
+			{ "resolvedFrames", g_quickScan.resolvedFrames }, { "settleSeconds", PerformanceQuickScan::kSettleSeconds },
+			{ "invalidGpuFrames", g_quickScan.invalidGpuFrames }, { "invalidCpuFrames", g_quickScan.invalidCpuFrames },
+			{ "maximumSeconds", PerformanceQuickScan::kMaximumSeconds },
+			{ "excludedTimings", json::array({ "shared_shader_work", "other_gpu_queues", "uninstrumented_work" }) },
+			{ "captureSeconds", g_quickScan.captureSeconds }, { "timingSemantics", "instrumented_self_time_ms_per_frame" },
+			{ "isOnOffCost", false }, { "failure", g_quickScan.failure.empty() ? json(nullptr) : json(g_quickScan.failure) },
+			{ "results", std::move(rows) } };
+	}
+
+	void FinishQuickScan(PerformanceQuickScan::Phase phase, std::string failure = {}, bool reopen = true)
+	{
+		auto& scan = g_quickScan;
+		scan.capture.Release();
+		scan.controller.phase = phase;
+		scan.failure = std::move(failure);
+		if (phase != PerformanceQuickScan::Phase::Complete)
+			scan.rows.clear();
+		SyncFeatureCostVanityCameraSuppression();
+		if (reopen && scan.reopenMenu && globals::menu && !globals::menu->IsEnabled)
+			globals::menu->OpenMenu();
+	}
+
+	const char* StartQuickScan(bool devBenchOwned)
+	try {
+		if (const auto* error = GetFeatureCostStartError(ImGui::GetTime()))
+			return error;
+		if (!globals::profiler || !globals::profiler->IsInitialized())
+			return "profiler_unavailable";
+		if (!globals::shaderCache)
+			return "renderer_unavailable";
+		if (globals::profiler->GetBoundedCaptureProgress().state == Profiler::CaptureSessionState::Running)
+			return "profiler_busy";
+		if (ABTestingManager::GetSingleton()->IsEnabled())
+			return "ab_testing_active";
+		QuickScanState pending;
+		pending.devBenchOwned = devBenchOwned;
+		pending.cell = GetMeasurementCellId();
+		pending.settings = CaptureQuickScanSettings();
+		pending.reopenMenu = globals::menu->IsEnabled;
+		if (!g_featureCostVanityCameraSuppression.Acquire())
+			return "camera_suppression_failed";
+		RestoreProfilerStateAfterPerformanceTuning();
+		pending.controller.Begin(ImGui::GetTime(), pending.reopenMenu, CaptureQuickScanRenderConfiguration());
+		g_quickScan = std::move(pending);
+		if (g_quickScan.reopenMenu)
+			globals::menu->CloseMenu();
+		return nullptr;
+	} catch (const std::exception& error) {
+		logger::error("Quick scan could not start: {}", error.what());
+		if (g_quickScan.controller.Active())
+			FinishQuickScan(PerformanceQuickScan::Phase::Failed, "Quick scan initialization failed.");
+		else
+			SyncFeatureCostVanityCameraSuppression();
+		return "quick_scan_start_failed";
+	}
+
+	bool QuickScanReady()
+	{
+		if ((globals::game::ui && globals::game::ui->GameIsPaused()) ||
+			(globals::shaderCache && globals::shaderCache->IsCompiling()) ||
+			!globals::features::upscaling.IsPerformanceCostMeasurementReady())
+			return false;
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (feature->loaded && Util::FeatureProfiling::Find(feature->GetShortName()) &&
+				!PerformanceQuickScan::Ready(*feature))
+				return false;
+		}
+		return true;
+	}
+
+	void CollectQuickScanResults(const std::vector<Profiler::TimerResult>& timers)
+	{
+		for (auto* feature : Feature::GetFeatureList()) {
+			const auto name = feature->GetShortName();
+			const auto* view = Util::FeatureProfiling::Find(name);
+			if (!feature->loaded || !view)
+				continue;
+			const auto samples = std::span<const Profiler::TimerResult>(timers);
+			g_quickScan.rows.push_back({ name, feature->GetDisplayName(), view->OwnedCoverage(),
+				PerformanceQuickScan::Mean(*view, samples, false, PerformanceQuickScan::kCaptureFrames),
+				PerformanceQuickScan::Mean(*view, samples, true, PerformanceQuickScan::kCaptureFrames) });
+		}
+		std::stable_sort(g_quickScan.rows.begin(), g_quickScan.rows.end(), [](const auto& left, const auto& right) {
+			return left.gpuMs.value_or(-1.0) > right.gpuMs.value_or(-1.0);
+		});
+	}
+
+	void UpdateQuickScan(double now)
+	try {
+		using enum PerformanceQuickScan::Phase;
+		using enum PerformanceQuickScan::Action;
+		auto& scan = g_quickScan;
+		if (!scan.controller.Active())
+			return;
+		if (GetFeatureCostEnvironmentError() || GetMeasurementCellId() != scan.cell ||
+			ABTestingManager::GetSingleton()->IsEnabled() ||
+			(scan.controller.phase != AwaitingMenuClose && globals::menu->IsEnabled)) {
+			FinishQuickScan(Failed, "The scene or measurement ownership changed.");
+			return;
+		}
+		if (!globals::shaderCache) {
+			FinishQuickScan(Failed, "Shader settings changed during the quick scan.");
+			return;
+		}
+		if (!globals::profiler || !globals::profiler->IsInitialized()) {
+			FinishQuickScan(Failed, "The profiler became unavailable.");
+			return;
+		}
+		auto* profiler = globals::profiler;
+		const auto action = scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration());
+		if (action == ConfigurationChanged) {
+			FinishQuickScan(Failed, "Shader settings changed during the quick scan.");
+			return;
+		}
+		if (action == TimedOut || action == Interrupted) {
+			FinishQuickScan(Failed, action == TimedOut ? "The quick scan timed out." : "Rendering became unready during capture.");
+			return;
+		}
+		if (action == StartCapture) {
+			if (profiler->GetBoundedCaptureProgress().state == Profiler::CaptureSessionState::Running) {
+				FinishQuickScan(Failed, "Another profiler capture is active.");
+				return;
+			}
+			if (CaptureQuickScanSettings() != scan.settings) {
+				FinishQuickScan(Failed, "Feature settings changed while settling.");
+				return;
+			}
+			if (!scan.capture.Start(*profiler, PerformanceQuickScan::kCaptureFrames)) {
+				FinishQuickScan(Failed, "The profiler could not start the capture.");
+				return;
+			}
+			scan.captureId = scan.capture.SessionId();
+			scan.gpuRefusals = profiler->GetSlotRefusals();
+			scan.cpuRefusals = profiler->GetCpuSlotRefusals();
+			scan.captureStarted = now;
+			scan.controller.phase = Capturing;
+		}
+		if (scan.controller.phase != Capturing)
+			return;
+		const auto progress = profiler->GetBoundedCaptureProgress();
+		scan.captureSeconds = now - scan.captureStarted;
+		if (progress.sessionId != scan.captureId || progress.state == Profiler::CaptureSessionState::Cancelled ||
+			!profiler->IsUserEnabled()) {
+			FinishQuickScan(Failed, "The owned profiler capture was interrupted.");
+			return;
+		}
+		scan.resolvedFrames = progress.resolvedFrames;
+		scan.invalidGpuFrames = progress.invalidGpuFrames;
+		scan.invalidCpuFrames = progress.invalidCpuFrames;
+		if (scan.invalidGpuFrames || scan.invalidCpuFrames) {
+			FinishQuickScan(Failed, "Profiler queries were missing or invalid; results would be incomplete.");
+			return;
+		}
+		if (profiler->GetSlotRefusals() != scan.gpuRefusals || profiler->GetCpuSlotRefusals() != scan.cpuRefusals) {
+			FinishQuickScan(Failed, "Profiler capacity was exceeded; results would be incomplete.");
+			return;
+		}
+		if (progress.state == Profiler::CaptureSessionState::Completed) {
+			const auto* timers = profiler->GetBoundedCaptureResults(scan.captureId);
+			if (!timers || progress.resolvedFrames != PerformanceQuickScan::kCaptureFrames ||
+				CaptureQuickScanSettings() != scan.settings) {
+				FinishQuickScan(Failed, "Capture data or feature settings changed.");
+				return;
+			}
+			CollectQuickScanResults(*timers);
+			FinishQuickScan(Complete);
+		}
+	} catch (const std::exception& error) {
+		logger::error("Quick scan failed: {}", error.what());
+		FinishQuickScan(PerformanceQuickScan::Phase::Failed, "Quick scan data collection failed.");
 	}
 
 	bool BeginFeatureCostMeasurement(
@@ -2006,6 +2266,8 @@ namespace
 
 	void InvalidateFeatureCostResults()
 	{
+		if (g_quickScan.controller.phase == PerformanceQuickScan::Phase::Complete)
+			g_quickScan = {};
 		for (auto& [_, state] : g_costMeasurementStates)
 			ClearFinishedFeatureCostMeasurement(state);
 		if (!g_featureCostBatch.active)
@@ -2332,20 +2594,17 @@ namespace
 		const auto readiness = CaptureUpscalingCostSweepReadiness(currentTime);
 		const auto& fidelityFX = Upscaling::fidelityFX;
 		json response = json::object();
-		response["active"] = IsAnyFeatureCostMeasurementActive() || sweepRunning || g_featureCostBatch.active;
+		response["active"] = PerformanceTuningRenderer::HasActiveMeasurements();
+		response["quickScan"] = QuickScanStatus();
 		response["featureBatch"] = {
 			{ "active", g_featureCostBatch.active },
 			{ "features", g_featureCostBatch.features },
 			{ "startedCount", g_featureCostBatch.nextFeatureIndex },
 			{ "failure", g_featureCostBatch.failureMessage.empty() ? json(nullptr) : json(g_featureCostBatch.failureMessage) },
 		};
-		response["owner"] = g_featureCostBatch.active ?
-		                        (g_featureCostBatch.devBenchOwned ? "devbench_feature_batch" : "ui_feature_batch") :
-		                    sweepRunning ?
-		                        "devbench_upscaling_sweep" :
-		                        (activeMeasurement ?
-										(activeMeasurement->devBenchOwned ? "devbench_feature_cost" : "ui") :
-										"none");
+		response["owner"] = g_quickScan.controller.Active() ? (g_quickScan.devBenchOwned ? "devbench_quick_scan" : "ui_quick_scan") : g_featureCostBatch.active ? (g_featureCostBatch.devBenchOwned ? "devbench_feature_batch" : "ui_feature_batch") :
+		                                                                                                                          sweepRunning                  ? "devbench_upscaling_sweep" :
+		                                                                                                                                                          (activeMeasurement ? (activeMeasurement->devBenchOwned ? "devbench_feature_cost" : "ui") : "none");
 		response["sweepPhase"] = GetUpscalingCostSweepPhaseName(g_upscalingCostSweep.phase);
 		response["measurement"] = std::move(measurement);
 		response["currentCase"] = std::move(currentCase);
@@ -2411,11 +2670,60 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
 												"Turns this feature on or off while keeping your current tuning.");
 }
 
+namespace
+{
+	void RenderQuickScan()
+	{
+		MenuUI::SectionHeading("Quick scan");
+		MenuUI::DetailText("Keep the scene still. CS closes, waits five seconds for rendering to settle, then captures 300 frames for all instrumented features together.");
+		MenuUI::DetailText("These are instrumented CPU and GPU self times, not the savings from switching a feature off. The existing on/off comparisons are unchanged.");
+		{
+			auto disabled = Util::DisableGuard(PerformanceTuningRenderer::HasActiveMeasurements());
+			if (ImGui::Button("Start quick scan")) {
+				const char* error = StartQuickScan(false);
+				g_featureCostUiMessage = error ? fmt::format("Quick scan could not start: {}", error) : "";
+			}
+		}
+		if (!g_featureCostUiMessage.empty())
+			MenuUI::DetailText(g_featureCostUiMessage.c_str());
+		if (!g_quickScan.failure.empty())
+			MenuUI::DetailText(g_quickScan.failure.c_str());
+		if (g_quickScan.controller.phase != PerformanceQuickScan::Phase::Complete)
+			return;
+		ImGui::Text("Captured %u frames in %.1f seconds after settling.", g_quickScan.resolvedFrames, g_quickScan.captureSeconds);
+		MenuUI::DetailText("Sorted by GPU time. -- means shared-only, inactive, or incomplete timing coverage. Shared shader work and work on other GPU queues are not included.");
+		if (ImGui::BeginTable("##QuickScanResults", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
+			const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
+			ImGui::TableSetupColumn("Feature");
+			ImGui::TableSetupColumn("GPU (ms)");
+			ImGui::TableSetupColumn("CPU (ms)");
+			ImGui::TableSetupColumn("Coverage");
+			ImGui::TableHeadersRow();
+			for (const auto& row : g_quickScan.rows) {
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				ImGui::TextUnformatted(row.label.c_str());
+				for (const auto value : { row.gpuMs, row.cpuMs }) {
+					ImGui::TableNextColumn();
+					if (value)
+						ImGui::Text("%.3f", *value);
+					else
+						ImGui::TextDisabled("--");
+				}
+				ImGui::TableNextColumn();
+				ImGui::TextWrapped("%s", row.coverage.c_str());
+			}
+		}
+	}
+}
+
 void PerformanceTuningRenderer::Render()
 {
-	MenuUI::SettingsPage page("PerformanceTuning", { { "compare", "Compare total feature set", "Measure each enabled feature against Off or None in the current scene.", "Frame times, FPS and individual feature costs", true, true, "Compare your setup" } }, "Performance tuning", "Choose the comparison to measure your current feature set.");
+	MenuUI::SettingsPage page("PerformanceTuning", { { "quick_scan", "Quick scan", "Capture feature timings together without changing settings.", "Find expensive rendering work", true, true, "Scan your setup" }, { "compare", "Compare total feature set", "Measure each enabled feature against Off or None in the current scene.", "Frame times, FPS and individual feature costs", true, true, "Compare your setup" } }, "Performance tuning", "Scan feature timings or measure individual on/off savings.");
 	if (page.Is("compare"))
 		RenderMeasurementSuite();
+	else if (page.Is("quick_scan"))
+		RenderQuickScan();
 }
 
 namespace
@@ -2541,6 +2849,10 @@ void PerformanceTuningRenderer::RenderMeasurementSuite(Feature* a_feature)
 
 void PerformanceTuningRenderer::NotifyFeatureSettingsChanged(Feature* a_feature)
 {
+	if (g_quickScan.controller.Active())
+		FinishQuickScan(PerformanceQuickScan::Phase::Failed, "Feature settings changed during the quick scan.");
+	if (a_feature)
+		g_quickScan.rows.clear();
 	if (!a_feature || HasActiveMeasurements())
 		return;
 	InvalidateFeatureCostResults();
@@ -2549,6 +2861,7 @@ void PerformanceTuningRenderer::NotifyFeatureSettingsChanged(Feature* a_feature)
 void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 {
 	const double currentTime = ImGui::GetTime();
+	UpdateQuickScan(currentTime);
 	bool shouldReopenMenu = false;
 	bool completedDevBenchMeasurement = false;
 	for (auto& [shortName, state] : g_costMeasurementStates) {
@@ -2643,7 +2956,7 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 		break;
 	}
 	const bool sweepRunning = IsUpscalingCostSweepRunning();
-	if (!activeState && !sweepRunning && !g_featureCostBatch.active)
+	if (!activeState && !sweepRunning && !g_featureCostBatch.active && !g_quickScan.controller.Active())
 		return;
 
 	const double currentTime = ImGui::GetTime();
@@ -2667,6 +2980,11 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 		caseProgress = 0.99f;
 	}
 
+	if (g_quickScan.controller.Active()) {
+		const bool capturing = g_quickScan.controller.phase == PerformanceQuickScan::Phase::Capturing;
+		remainingSeconds = capturing ? 0.0 : std::max(0.0, PerformanceQuickScan::kSettleSeconds - (currentTime - g_quickScan.controller.readySince));
+		caseProgress = capturing ? static_cast<float>(g_quickScan.resolvedFrames) / PerformanceQuickScan::kCaptureFrames : 0.0f;
+	}
 	float progress = caseProgress;
 	if (g_featureCostBatch.active && !g_featureCostBatch.features.empty()) {
 		const std::size_t completed = g_featureCostBatch.nextFeatureIndex - (activeState ? 1 : 0);
@@ -2702,7 +3020,10 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 		ImGuiWindowFlags_NoSavedSettings |
 		ImGuiWindowFlags_NoInputs;
 	if (ImGui::Begin("ActualFeatureCostProgress", nullptr, flags)) {
-		if (sweepRunning) {
+		if (g_quickScan.controller.Active()) {
+			ImGui::TextUnformatted(g_quickScan.controller.phase == PerformanceQuickScan::Phase::Capturing ? "Quick scan: capturing all instrumented features" : "Quick scan: settling");
+			ImGui::Text("%u / %u frames", g_quickScan.resolvedFrames, PerformanceQuickScan::kCaptureFrames);
+		} else if (sweepRunning) {
 			if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::RestoringOriginal) {
 				ImGui::TextUnformatted("Upscaling sweep: restoring settings");
 			} else {
@@ -2724,11 +3045,15 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 			ImGui::TextUnformatted("Measuring");
 		}
 		ImGui::TextColored(Util::Colors::GetWarning(), "Keep still until measurement completes.");
-		if ((g_featureCostBatch.active && !g_featureCostBatch.devBenchOwned) || (activeState && !activeState->devBenchOwned))
+		if ((g_quickScan.controller.Active() && !g_quickScan.devBenchOwned) || (g_featureCostBatch.active && !g_featureCostBatch.devBenchOwned) || (activeState && !activeState->devBenchOwned))
 			ImGui::TextWrapped("Use the menu shortcut to cancel.");
-		const std::string progressText = g_featureCostBatch.active ?
-		                                     fmt::format("{:.0f}s {}", std::ceil(remainingSeconds), activeState ? "for this feature" : "until next feature") :
-		                                     fmt::format("{:.0f} seconds remaining", std::ceil(remainingSeconds));
+		std::string progressText;
+		if (g_quickScan.controller.phase == PerformanceQuickScan::Phase::Capturing)
+			progressText = "Capturing";
+		else if (g_featureCostBatch.active)
+			progressText = fmt::format("{:.0f}s {}", std::ceil(remainingSeconds), activeState ? "for this feature" : "until next feature");
+		else
+			progressText = fmt::format("{:.0f} seconds remaining", std::ceil(remainingSeconds));
 		ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0.0f), progressText.c_str());
 	}
 	ImGui::End();
@@ -2736,6 +3061,10 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 
 bool PerformanceTuningRenderer::CancelUserMeasurements()
 {
+	if (g_quickScan.controller.Active() && !g_quickScan.devBenchOwned) {
+		FinishQuickScan(PerformanceQuickScan::Phase::Cancelled, "Quick scan cancelled.", false);
+		return true;
+	}
 	return CancelOwnedFeatureMeasurements(false);
 }
 
@@ -2744,6 +3073,7 @@ void PerformanceTuningRenderer::NotifyConfigurationChanging()
 	// Restore owned state before a replacement configuration can take ownership.
 	if (HasActiveMeasurements())
 		CancelActiveMeasurements();
+	g_quickScan = {};
 	g_costMeasurementStates.clear();
 	g_disabledFeatureConfigurations.clear();
 	g_featureCostBatch = {};
@@ -2754,6 +3084,8 @@ void PerformanceTuningRenderer::NotifyConfigurationChanging()
 
 void PerformanceTuningRenderer::CancelActiveMeasurements()
 {
+	if (g_quickScan.controller.Active())
+		FinishQuickScan(PerformanceQuickScan::Phase::Cancelled, "Quick scan cancelled because the configuration changed.", false);
 	const bool sweepRunning = IsUpscalingCostSweepRunning();
 	g_featureCostBatch.active = false;
 	for (auto& [shortName, state] : g_costMeasurementStates) {
@@ -2775,6 +3107,7 @@ void PerformanceTuningRenderer::CancelActiveMeasurements()
 void PerformanceTuningRenderer::NotifyMenuClosed()
 {
 	const double currentTime = ImGui::GetTime();
+	g_quickScan.controller.MenuClosed(currentTime);
 	bool startedMeasurement = false;
 	for (auto& [shortName, state] : g_costMeasurementStates) {
 		if (state.phase != FeatureCostMeasurementPhase::AwaitingMenuClose)
@@ -2812,7 +3145,7 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 
 bool PerformanceTuningRenderer::HasActiveMeasurements()
 {
-	return IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active;
+	return g_quickScan.controller.Active() || IsAnyFeatureCostMeasurementActive() || IsUpscalingCostSweepRunning() || g_featureCostBatch.active;
 }
 
 nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
@@ -2865,6 +3198,16 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
 
 	SyncFeatureCostVanityCameraSuppression();
 	response["accepted"] = true;
+	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	return response;
+}
+
+nlohmann::json PerformanceTuningRenderer::StartDevBenchQuickScan()
+{
+	const auto* error = StartQuickScan(true);
+	json response = { { "action", "start_quick_scan" }, { "accepted", error == nullptr } };
+	if (error)
+		response["errorCode"] = error;
 	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
 	return response;
 }
@@ -3033,7 +3376,12 @@ nlohmann::json PerformanceTuningRenderer::GetDevBenchMeasurementStatus(
 nlohmann::json PerformanceTuningRenderer::CancelDevBenchMeasurements()
 {
 	const double currentTime = ImGui::GetTime();
-	bool cancelled = CancelUpscalingCostSweep(currentTime);
+	bool cancelled = false;
+	if (g_quickScan.controller.Active() && g_quickScan.devBenchOwned) {
+		FinishQuickScan(PerformanceQuickScan::Phase::Cancelled, "Quick scan cancelled.");
+		cancelled = true;
+	}
+	cancelled = CancelUpscalingCostSweep(currentTime) || cancelled;
 	cancelled = CancelOwnedFeatureMeasurements(true) || cancelled;
 	return {
 		{ "action", "cancel" },

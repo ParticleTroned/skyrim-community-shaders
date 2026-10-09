@@ -20,15 +20,15 @@ public:
 	static void RenderMeasurementSuite(Feature* a_feature = nullptr);
 	/** Invalidates measured costs when a feature's settings change. */
 	static void NotifyFeatureSettingsChanged(Feature* a_feature);
-	/** Advances an active cost test while the main settings window is closed. */
+	/** Advances active scans and cost tests while the main settings window is closed. */
 	static void UpdateClosedMenuMeasurement();
 	/** Draws the non-interactive progress widget used by a closed-menu cost test. */
 	static void RenderClosedMenuMeasurementOverlay();
-	/** Cancels UI-owned comparisons, restoring runtime state before reopening the menu. */
+	/** Cancels UI-owned scans or comparisons and restores their owned runtime state. */
 	static bool CancelUserMeasurements();
 	/** Invalidates saved toggle configurations and costs before loading settings. */
 	static void NotifyConfigurationChanging();
-	/** Cancels every cost test and restores any transient comparison state. */
+	/** Cancels every scan and cost test and restores transient measurement state. */
 	static void CancelActiveMeasurements();
 	/** Starts the closed-menu phase after the settings window has closed. */
 	static void NotifyMenuClosed();
@@ -36,6 +36,8 @@ public:
 	/** Starts one surfaced feature's closed-menu cost comparison. */
 	static nlohmann::json StartDevBenchFeatureCostMeasurement(
 		std::string_view a_featureShortName);
+	/** Captures all instrumented features together without changing feature settings. */
+	static nlohmann::json StartDevBenchQuickScan();
 	/** Measures each enabled runtime feature using the shared on/off protocol. */
 	static nlohmann::json StartDevBenchFeatureCostBatch();
 	/** Changes a runtime toggle, retaining its prior enabled configuration. */

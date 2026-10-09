@@ -249,6 +249,7 @@ struct TextureStreaming::State
 	std::optional<Transaction> transaction;
 	Reader reader;
 	Policy::Pressure pressure;
+	bool firstPressureReductionPending = false;
 	StreamingTextures::DemandContext demand;
 	std::uint64_t shrinks = 0, restores = 0, failures = 0, admissionDeferrals = 0, cancelled = 0;
 	std::string detail = "Disabled";
@@ -517,12 +518,18 @@ void TextureStreaming::State::Publish(Record& record, Transaction& work)
 		++restores;
 	else
 		++shrinks;
+	const auto previousDrop = record.drop;
 	record.drop = work.payload.request.drop;
 	record.stableSince = GetTickCount64();
 	context->End(work.retirement.Get());
 	work.published = true;
 	work.payload.image.Release();
 	detail = "Waiting for old texture GPU retirement";
+	if (firstPressureReductionPending && record.drop > previousDrop) {
+		firstPressureReductionPending = false;
+		logger::info("[TextureStreaming] First reduction under memory pressure committed: mip drop {} -> {}, logical capacity removed {:.2f} MiB; old resource awaiting GPU retirement",
+			previousDrop, record.drop, static_cast<double>(record.bytes[previousDrop] - record.bytes[record.drop]) / Policy::MiB);
+	}
 }
 
 void TextureStreaming::State::CancelTransaction()
@@ -668,13 +675,21 @@ void TextureStreaming::State::Tick()
 			record.consumers.Clear();
 		}
 	}
-	pressure.Update(GetTickCount64(), memory.sampledAtMs, memory.Fresh(GetTickCount64()), memory.local.Budget,
+	const auto now = GetTickCount64();
+	const auto pressureChange = pressure.Update(now, memory.sampledAtMs, memory.Fresh(now), memory.local.Budget,
 		Memory::Add(memory.local.CurrentUsage, memory.pendingBytes));
+	if (pressureChange != Policy::PressureChange::None) {
+		firstPressureReductionPending = pressure.conserving;
+		logger::info("[TextureStreaming] Memory pressure {}: usage {:.1f} MiB, budget {:.1f} MiB, pending {:.1f} MiB; enabled={}, paused={}",
+			pressure.conserving ? "entered" : "recovered; restoration remains subject to headroom and priority work",
+			static_cast<double>(memory.local.CurrentUsage) / Policy::MiB, static_cast<double>(memory.local.Budget) / Policy::MiB,
+			static_cast<double>(memory.pendingBytes) / Policy::MiB, enabled, blocked);
+	}
 	if (blocked) {
 		CancelTransaction();
 		ServiceTransaction();
 		Prune();
-		detail = "Waiting for world or render-scale transition";
+		detail = loading ? "Waiting for world loading" : "Waiting for render-scale or NR transition";
 		return;
 	}
 	if (enabled && originHookReady)
@@ -806,7 +821,7 @@ nlohmann::json TextureStreaming::GetStatus() const
 		{ "logicalBytesRemoved", full - resident }, { "physicalBytesReclaimed", nullptr },
 		{ "shrinks", state->shrinks }, { "restores", state->restores }, { "failures", state->failures },
 		{ "cancelled", state->cancelled }, { "admissionDeferrals", state->admissionDeferrals },
-		{ "reading", state->reading }, { "transactionActive", state->transaction.has_value() }, { "detail", state->detail },
+		{ "reading", state->reading }, { "transactionActive", state->transaction.has_value() }, { "paused", state->paused && (state->enabled || !state->records.empty() || state->reading || state->transaction.has_value()) }, { "detail", state->detail },
 		{ "memory", { { "valid", memory.Fresh(GetTickCount64()) }, { "budgetBytes", memory.local.Budget },
 						{ "usageBytes", memory.local.CurrentUsage }, { "pendingBytes", memory.pendingBytes }, { "priorityWork", memory.priorityWork },
 						{ "sampledAtMs", memory.sampledAtMs }, { "deviceGeneration", memory.generation }, { "sampleSequence", memory.sequence },
@@ -816,7 +831,7 @@ void TextureStreaming::DrawSettingsEnabledControl()
 {
 	auto status = GetStatus();
 	bool enabled = status["enabled"];
-	if (Util::Widgets::Checkbox("Enable texture streaming", &enabled))
+	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		Configure(enabled, status["maximumMipDrop"]);
 }
 void TextureStreaming::DrawSettings()

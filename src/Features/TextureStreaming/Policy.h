@@ -57,33 +57,45 @@ namespace TextureStreamingPolicy
 		return drop;
 	}
 
+	enum class PressureChange
+	{
+		None,
+		Entered,
+		Recovered
+	};
+
 	struct Pressure
 	{
 		bool conserving = false;
 		std::uint64_t healthySince = 0;
 		std::uint64_t lastSampleMs = 0;
 		/** Invalid or interrupted observations cannot authorize automatic refill. */
-		void Update(std::uint64_t now, std::uint64_t sampledAt, bool valid, std::uint64_t budget, std::uint64_t usage)
+		PressureChange Update(std::uint64_t now, std::uint64_t sampledAt, bool valid, std::uint64_t budget, std::uint64_t usage)
 		{
 			if (!valid || !budget || now < sampledAt || now - sampledAt > MaximumSampleAgeMs) {
 				healthySince = 0;
-				return;
+				return PressureChange::None;
 			}
 			if (sampledAt < lastSampleMs || sampledAt - lastSampleMs > MaximumSampleAgeMs)
 				healthySince = 0;
 			lastSampleMs = sampledAt;
 			const auto free = budget > usage ? budget - usage : 0;
 			if (usage >= budget / 100 * 80 || free <= 1024 * MiB) {
+				const bool entered = !conserving;
 				conserving = true;
 				healthySince = 0;
+				return entered ? PressureChange::Entered : PressureChange::None;
 			} else if (usage <= budget / 100 * 70 && free >= 1536 * MiB) {
 				if (!healthySince)
 					healthySince = sampledAt;
-				if (sampledAt >= healthySince && sampledAt - healthySince >= HealthyWindowMs)
+				if (conserving && sampledAt >= healthySince && sampledAt - healthySince >= HealthyWindowMs) {
 					conserving = false;
+					return PressureChange::Recovered;
+				}
 			} else {
 				healthySince = 0;
 			}
+			return PressureChange::None;
 		}
 	};
 }

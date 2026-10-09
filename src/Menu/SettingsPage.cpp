@@ -244,6 +244,10 @@ namespace MenuUI
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
 			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
 		}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (contentVisible)
+			devBenchViewport.emplace(pageId, selected, !PerformanceTuningRenderer::HasActiveMeasurements());
+#endif
 		if (!contentVisible || (selected != "performance" && !(pageId == "PerformanceTuning" && selected == "compare")))
 			PerformanceTuningRenderer::NotifyOverviewInactive();
 		if (contentLeftPadding > 0)
@@ -275,6 +279,9 @@ namespace MenuUI
 
 	SettingsPage::~SettingsPage()
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		devBenchViewport.reset();
+#endif
 		controlLayout.reset();
 		if (contentLeftPadding > 0)
 			ImGui::Unindent(contentLeftPadding);

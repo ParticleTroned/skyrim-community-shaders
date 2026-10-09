@@ -16,6 +16,10 @@ public:
 	/** Explicit sidebar choice takes precedence over automatic hover hiding. */
 	static void SetSidebarVisible(bool a_visible);
 	static bool IsSidebarVisible();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Queue an existing built-in page through the normal menu selection path. */
+	static bool TryQueueBuiltInPage(const std::string& a_page);
+#endif
 	/** Resume the user's automatic visibility preference. */
 	static void ResetSidebarVisibility();
 

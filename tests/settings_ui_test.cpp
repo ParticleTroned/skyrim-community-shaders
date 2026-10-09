@@ -128,6 +128,7 @@ struct ProfilingRenderer
 };
 struct PerformanceTuningRenderer
 {
+	static bool HasActiveMeasurements() { return false; }
 	static inline int draws = 0;
 	static inline int globalDraws = 0;
 	static inline int inactiveNotifications = 0;
@@ -429,6 +430,52 @@ int main()
 		int width, height;
 		io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 		io.Fonts->SetTexID(ImTextureID(1));
+
+		using Viewport = MenuUI::DevBenchViewport;
+		bool allowScroll = true;
+		auto drawScrollable = [&](const char* tab = "content") {
+			Viewport outer("ScrollTest", "legacy", allowScroll);
+			ImGui::BeginChild("ScrollContent", { 0, 250 });
+			{
+				Viewport inner("ScrollTest", tab, allowScroll);
+				ImGui::Dummy({ 1, 2000 });
+			}
+			ImGui::EndChild();
+		};
+		auto drawScroll = [&] { drawScrollable(); };
+		frame(drawScroll);
+		frame(drawScroll);
+		auto viewport = Viewport::Describe(true);
+		require(viewport["fresh"] && viewport["tab"] == "content" && viewport["scrollMaxY"].get<float>() > 1000, "innermost viewport owns scroll observation");
+		require(!Viewport::Describe(false)["fresh"].get<bool>(), "closed menu cannot report a fresh viewport");
+		for (double ratio : { -1.0, 1.001, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() })
+			require(!Viewport::Scroll("ScrollTest", "content", ratio), "invalid scroll ratio rejected");
+		require(!Viewport::Scroll("Missing", "content", 1) && !Viewport::Scroll("ScrollTest", "legacy", 1), "foreign or outer viewport scroll rejected");
+		require(Viewport::Scroll("ScrollTest", "content", 1), "bottom scroll accepted");
+		require(!Viewport::Scroll("ScrollTest", "content", 0), "pending request cannot be overwritten");
+		frame(drawScroll);
+		frame(drawScroll);
+		viewport = Viewport::Describe(true);
+		require(viewport["appliedGeneration"] == viewport["requestedGeneration"] && !viewport["pending"].get<bool>() &&
+					std::abs(viewport["scrollY"].get<float>() - viewport["scrollMaxY"].get<float>()) < 1,
+			"accepted scroll reaches the observed bottom");
+		const auto applied = viewport["appliedGeneration"];
+		require(Viewport::Scroll("ScrollTest", "content", 0), "navigation cancellation fixture accepted");
+		frame([&] { drawScrollable("other"); });
+		frame(drawScroll);
+		require(Viewport::Describe(true)["appliedGeneration"] == applied && !Viewport::Describe(true)["pending"].get<bool>(), "navigation cancels an unapplied scroll");
+		require(Viewport::Scroll("ScrollTest", "content", 0), "measurement guard fixture accepted");
+		allowScroll = false;
+		frame(drawScroll);
+		require(Viewport::Describe(true)["appliedGeneration"] == applied, "measurement begun before rendering blocks pending scroll");
+		allowScroll = true;
+		require(Viewport::Scroll("ScrollTest", "content", 0), "expired frame fixture accepted");
+		for (int i = 0; i < 3; ++i)
+			frame([] {});
+		frame(drawScroll);
+		require(Viewport::Describe(true)["appliedGeneration"] == applied, "request cannot survive an absent UI viewport");
+		frame([&] { Viewport legacy("LegacyTest", "legacy", true); ImGui::Dummy({ 1, 2000 }); });
+		require(Viewport::Describe(true)["page"] == "LegacyTest" && Viewport::Describe(true)["tab"] == "legacy", "untabbed content remains observable");
 
 		bool showExtra = true;
 		auto drawPage = [&] {

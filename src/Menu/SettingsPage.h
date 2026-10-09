@@ -1,9 +1,11 @@
 #pragma once
 
+#include "DevBenchViewport.h"
 #include <functional>
 #include <imgui.h>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -126,6 +128,9 @@ namespace MenuUI
 #endif
 
 	private:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::optional<DevBenchViewport> devBenchViewport;
+#endif
 		std::unique_ptr<Util::Widgets::ControlLayout> controlLayout;
 		std::string selected;
 		std::string overviewTitle;

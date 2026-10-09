@@ -69,13 +69,16 @@ int main()
 		Require(inventory.committed.empty() && inventory.scanning.empty() && !inventory.verified && !inventory.seen, "World invalidation retained consumers");
 		Require(inventory.Expired(0), "Invalidated full-size inventory pinned textures through loading");
 		P::Pressure pressure;
-		pressure.Update(1000, 1000, true, 10000 * P::MiB, 8100 * P::MiB);
+		Require(pressure.Update(1000, 1000, true, 10000 * P::MiB, 8100 * P::MiB) == P::PressureChange::Entered, "Pressure entry event missing");
+		for (unsigned frame = 0; frame < 1000; ++frame)
+			Require(pressure.Update(1000, 1000, true, 10000 * P::MiB, 8100 * P::MiB) == P::PressureChange::None, "Repeated pressure sample emitted another event");
 		Require(pressure.conserving, "High pressure did not request reclamation");
 		for (std::uint64_t time = 1250; time < 6250; time += 250) {
 			pressure.Update(time, time, true, 10000 * P::MiB, 6000 * P::MiB);
 			Require(pressure.conserving, "Refill started before the healthy observation window");
 		}
-		pressure.Update(6250, 6250, true, 10000 * P::MiB, 6000 * P::MiB);
+		Require(pressure.Update(6250, 6250, true, 10000 * P::MiB, 6000 * P::MiB) == P::PressureChange::Recovered, "Recovery event missing");
+		Require(pressure.Update(6250, 6250, true, 10000 * P::MiB, 6000 * P::MiB) == P::PressureChange::None, "Repeated recovery emitted another event");
 		Require(!pressure.conserving, "Sustained recovery never allowed refill");
 		pressure.Update(6500, 6500, true, 10000 * P::MiB, 8100 * P::MiB);
 		pressure.Update(7000, 7000, true, 10000 * P::MiB, 6000 * P::MiB);

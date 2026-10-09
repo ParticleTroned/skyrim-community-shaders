@@ -20720,10 +20720,11 @@ Upscaling::GetLatchedNeuralRenderingInsertionPoint() noexcept
 
 bool Upscaling::IsTextureStreamingTransitionActive() const noexcept
 {
+	const auto transition = vrRenderScaleTransitionState.load(std::memory_order_acquire);
 	return postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
 	       pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
 	       perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
-	       (globals::game::isVR && (vrRenderScaleTransitionState.load(std::memory_order_acquire) != VRRenderScaleTransitionState::Idle ||
+	       (globals::game::isVR && ((transition != VRRenderScaleTransitionState::Idle && transition != VRRenderScaleTransitionState::Active) ||
 									   deferredVRRenderScalePostLoadRecoveryEpoch.load(std::memory_order_acquire) != 0 ||
 									   vrRenderScaleMemoryTrimPending.load(std::memory_order_acquire))) ||
 	       IsNeuralRenderingInsertionTransitionBlocked();

@@ -4130,6 +4130,7 @@ if(BUILD_CONTROLLER_TESTS)
 
     include(NeuralRenderingTests)
     include(TextureStreamingTests)
+    add_controller_test(devbench_viewport_off_test DevBenchViewportOff tests/devbench_viewport_off_test.cpp)
 
     # Derive the aggregate from this block so new test executables cannot be omitted.
     get_property(_controller_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

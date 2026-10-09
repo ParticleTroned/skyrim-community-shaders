@@ -342,6 +342,11 @@ namespace
 		return PerformanceTuningRenderer::HasActiveMeasurements() && listId != selectedMenu;
 	}
 
+	const char* BuiltInPageId(const FeatureListRenderer::BuiltInMenu& menu)
+	{
+		return menu.name == PERFORMANCE_TUNING_MENU_NAME ? "PerformanceTuning" : menu.name.c_str();
+	}
+
 	std::string GetSelectableMenuEntryId(const FeatureListRenderer::MenuFuncInfo& menuInfo)
 	{
 		if (const auto* menu = std::get_if<FeatureListRenderer::BuiltInMenu>(&menuInfo))
@@ -742,12 +747,33 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	return menuList;
 }
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+bool FeatureListRenderer::TryQueueBuiltInPage(const std::string& a_page)
+{
+	std::map<std::string, bool> categories;
+	for (const auto& entry : BuildMenuList({}, categories, {}, {})) {
+		const auto* menu = std::get_if<BuiltInMenu>(&entry);
+		if (menu && a_page == BuiltInPageId(*menu)) {
+			globals::menu->SelectFeatureMenu(GetSelectableMenuEntryId(entry));
+			return true;
+		}
+	}
+	return false;
+}
+#endif
+
 void FeatureListRenderer::HandlePendingFeatureSelection(
 	std::string& pendingFeatureSelection,
 	const std::vector<MenuFuncInfo>& menuList,
 	size_t& selectedMenu)
 {
 	if (!pendingFeatureSelection.empty()) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (pendingFeatureSelection.starts_with("builtin:") && TrySelectMenuEntryById(menuList, pendingFeatureSelection, selectedMenu)) {
+			pendingFeatureSelection.clear();
+			return;
+		}
+#endif
 		for (size_t i = 0; i < menuList.size(); ++i) {
 			if (std::holds_alternative<Feature*>(menuList[i])) {
 				Feature* feature = std::get<Feature*>(menuList[i]);
@@ -993,7 +1019,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 	ImGui::PushID(menu.name.c_str());
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { MenuHeaderRenderer::GetFeaturePanelWidth(), 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-		const char* pageId = menu.name == PERFORMANCE_TUNING_MENU_NAME ? "PerformanceTuning" : menu.name.c_str();
+		const char* pageId = BuiltInPageId(menu);
 		const char* description = menu.name == "Home"           ? "Welcome to Community Shaders Expanded." :
 		                          menu.name == "General"        ? "Choose how the menu looks and responds." :
 		                          menu.name == "Advanced"       ? "Manage shader compilation, compatibility and diagnostics." :
@@ -1060,6 +1086,9 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		{
 			MenuUI::FeatureScope featureScope(feat);
 			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight(featureName.c_str(), true, externalFooter ? &*externalFooter : nullptr) - requirementHeight }, ImGuiChildFlags_None)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				MenuUI::DevBenchViewport viewport(featureName, "legacy", !PerformanceTuningRenderer::HasActiveMeasurements());
+#endif
 				if (external)
 					external->DrawSettings();
 				else

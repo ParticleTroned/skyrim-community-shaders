@@ -45,6 +45,15 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 ScopedGpuPass::ScopedGpuPass(std::string_view, const Util::PassTimingHandle&, bool) {}
 ScopedGpuPass::~ScopedGpuPass() = default;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+// Standalone shader tests keep game-thread diagnostics inert.
+namespace CSX::Diagnostics::Stutters
+{
+	Scope::Scope(std::string_view, Boundary) noexcept {}
+	Scope::~Scope() noexcept = default;
+}
+#endif
+
 namespace
 {
 	using D3D11ShaderTest::Check;

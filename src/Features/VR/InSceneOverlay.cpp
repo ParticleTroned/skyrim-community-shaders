@@ -7,6 +7,9 @@
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
 #include "Globals.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/EngineStutterMonitor.h"
+#endif
 #include "Hooks.h"
 #include "Menu.h"
 #include "State.h"
@@ -641,12 +644,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			vr::TrackedDevicePose_t* pGamePoseArray,
 			uint32_t unGamePoseArrayCount)
 		{
-			const auto result = func(
-				_this,
-				pRenderPoseArray,
-				unRenderPoseArrayCount,
-				pGamePoseArray,
-				unGamePoseArrayCount);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CSX::Diagnostics::Stutters::Scope stutterCycle("OpenVR::PoseCycle", CSX::Diagnostics::Stutters::Boundary::Compositor);
+#endif
+			vr::EVRCompositorError result;
+			{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				CSX::Diagnostics::Stutters::Scope stutterWait("OpenVR::WaitGetPoses");
+#endif
+				result = func(
+					_this,
+					pRenderPoseArray,
+					unRenderPoseArrayCount,
+					pGamePoseArray,
+					unGamePoseArrayCount);
+			}
 			{
 				const std::scoped_lock presentationWorkLock(
 					g_vrRenderScalePresentationWorkMutex);
@@ -683,6 +695,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 	{
 		static void thunk(RE::BSOpenVR* _this, ID3D11Texture2D* a_texture)
 		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CSX::Diagnostics::Stutters::Scope stutterSubmit("OpenVR::StereoSubmitHook");
+#endif
 			// Keep the full native stereo call and its relatch boundary serialized
 			// with nested eye work and compositor-cycle publication.
 			const std::scoped_lock presentationWorkLock(

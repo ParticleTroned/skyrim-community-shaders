@@ -10,6 +10,9 @@ ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, 
 {
 	if (detailOnly && !a_capture)
 		return;
+#	ifdef DEVBENCH_BRIDGE_ENABLED
+	stutterScope.emplace(a_name);
+#	endif
 	auto* profiler = globals::profiler;
 	auto* state = globals::state;
 
@@ -35,6 +38,9 @@ ScopedGpuPass::ScopedGpuPass(std::string_view a_name, const Util::PassTimingHand
 {
 	if (detailOnly && !a_capture)
 		return;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	stutterScope.emplace(a_name);
+#endif
 	auto* profiler = globals::profiler;
 	auto* state = globals::state;
 

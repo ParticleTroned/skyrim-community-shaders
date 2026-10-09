@@ -56,19 +56,23 @@ namespace
 	constexpr float featureDescriptionScale = 1.4f;
 	constexpr float footerTextScale = 14.0f / 12.0f;
 	constexpr float footerButtonPadding = 1.85f;
-	constexpr float footerButtonHeight = 2.8f;
+	constexpr float footerButtonHeight = 2.1f;
+	constexpr float footerStatusHeight = 2.5f;
+	constexpr float footerVerticalPadding = .4f;
+	constexpr float footerStackGap = .5f;
+	constexpr float footerOpacity = MenuUI::SettingsSurfaceOpacityScale;
 
 	float SettingsActionTextWidth(const char* label)
 	{
 		return ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize() * footerTextScale, FLT_MAX, 0, label).x;
 	}
 
-	std::array<const char*, 3> SettingsActionLabels(const MenuUI::SettingsFooter* external = nullptr)
+	std::array<const char*, 3> SettingsActionLabels(const MenuUI::SettingsFooter* external = nullptr, float availableWidth = 0)
 	{
 		const auto labels = external ? std::array{ external->actions[0].label, external->actions[1].label, external->actions[2].label } : std::array{ "Save settings", "Load saved", "Restore defaults" };
 		const float fullWidth = SettingsActionTextWidth(labels[0]) + SettingsActionTextWidth(labels[1]) + SettingsActionTextWidth(labels[2]) +
 		                        ImGui::GetFontSize() * footerButtonPadding * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
-		if (ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x * 2 >= fullWidth)
+		if ((availableWidth > 0 ? availableWidth : ImGui::GetContentRegionAvail().x) >= fullWidth)
 			return labels;
 		if (!external)
 			return { "Save", "Load", "Defaults" };
@@ -79,17 +83,17 @@ namespace
 		return compact;
 	}
 
-	float SettingsActionButtonWidth(size_t index, const MenuUI::SettingsFooter* external = nullptr)
+	float SettingsActionButtonWidth(size_t index, const MenuUI::SettingsFooter* external = nullptr, float availableWidth = 0)
 	{
-		const float width = SettingsActionTextWidth(SettingsActionLabels(external)[index]) + ImGui::GetFontSize() * footerButtonPadding;
-		return std::min(width, std::max(1.0f, ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x * 2));
+		const float width = SettingsActionTextWidth(SettingsActionLabels(external, availableWidth)[index]) + ImGui::GetFontSize() * footerButtonPadding;
+		return std::min(width, std::max(1.0f, availableWidth > 0 ? availableWidth : ImGui::GetContentRegionAvail().x));
 	}
 
-	bool SettingsActionButton(size_t a_index, const MenuUI::SettingsFooter* external = nullptr)
+	bool SettingsActionButton(size_t a_index, const MenuUI::SettingsFooter* external = nullptr, float availableWidth = 0)
 	{
-		const auto* label = SettingsActionLabels(external)[a_index];
+		const auto* label = SettingsActionLabels(external, availableWidth)[a_index];
 		const float font = ImGui::GetFontSize();
-		const float width = SettingsActionButtonWidth(a_index, external);
+		const float width = SettingsActionButtonWidth(a_index, external, availableWidth);
 		constexpr std::array glyphs{ Util::ActionGlyph::SaveSettings, Util::ActionGlyph::LoadSettings, Util::ActionGlyph::RestoreDefaults };
 		ImGui::PushFont(ImGui::GetFont(), font * footerTextScale);
 		ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, { 1, .5f });
@@ -105,6 +109,9 @@ namespace
 
 	struct SettingsFooterLayout
 	{
+		float backgroundLeft;
+		float backgroundRight;
+		float contentWidth;
 		float actionsLeft;
 		float statusLeft;
 		float statusWidth;
@@ -114,31 +121,34 @@ namespace
 		bool stacked;
 	};
 
-	SettingsFooterLayout GetSettingsFooterLayout(const char* a_page, bool a_restore, const MenuUI::SettingsFooter* external = nullptr)
+	SettingsFooterLayout GetSettingsFooterLayout(const char* a_page, const MenuUI::SettingsFooter* external = nullptr)
 	{
 		const float width = ImGui::GetContentRegionAvail().x;
 		const float font = ImGui::GetFontSize();
 		const float spacing = ImGui::GetStyle().ItemSpacing.x;
-		const size_t count = a_restore ? 3 : 2;
+		constexpr size_t count = 3;
+		const auto cardInsets = MenuUI::SettingsPage::OverviewCardInsets(a_page, width);
+		const float backgroundLeft = std::min(cardInsets.x, std::max(0.0f, width - cardInsets.y - font * 4));
+		const float gutter = std::min(font * .75f, (width - backgroundLeft - cardInsets.y) * .05f);
+		const float statusLeft = backgroundLeft + gutter;
+		const float right = width - cardInsets.y - gutter;
+		const float contentWidth = std::max(1.0f, right - statusLeft);
 		std::array<float, 3> buttonWidths{};
 		float actionsWidth = spacing * (count - 1);
 		for (size_t index = 0; index < count; ++index) {
-			buttonWidths[index] = SettingsActionButtonWidth(index, external);
+			buttonWidths[index] = SettingsActionButtonWidth(index, external, contentWidth);
 			actionsWidth += buttonWidths[index];
 		}
-		const bool wrapActions = actionsWidth > width;
-		const float inset = wrapActions ? 0 : std::min(MenuUI::SettingsPage::OverviewLastColumnInset(a_page, width), std::max(0.0f, width - actionsWidth));
-		const bool stacked = inset < font * 12;
-		const float textInset = MenuUI::SettingsPage::OverviewTextInset(a_page, width);
-		const float alignedStatus = std::max(0.0f, textInset - font);
-		const float statusLeft = stacked ? std::max(inset, alignedStatus) : alignedStatus;
-		const float statusWidth = stacked ? width - statusLeft : inset - statusLeft - font;
-		const float actionSpacing = spacing + (wrapActions ? 0 : std::max(0.0f, width - inset - actionsWidth) / (count - 1));
+		const bool wrapActions = actionsWidth > contentWidth;
+		const float inset = wrapActions ? statusLeft : std::clamp(MenuUI::SettingsPage::OverviewLastColumnInset(a_page, width), statusLeft, std::max(statusLeft, right - actionsWidth));
+		const bool stacked = inset - statusLeft < font * 12;
+		const float statusWidth = stacked ? contentWidth : inset - statusLeft - font;
+		const float actionSpacing = spacing + (wrapActions ? 0 : std::max(0.0f, right - inset - actionsWidth) / (count - 1));
 		std::array<ImVec2, 3> offsets{};
 		float x = 0, y = 0;
 		int rows = 1;
 		for (size_t index = 0; index < count; ++index) {
-			if (index && x + buttonWidths[index] > width - inset + .01f) {
+			if (index && x + buttonWidths[index] > right - inset + .01f) {
 				x = 0;
 				y += font * footerButtonHeight + ImGui::GetStyle().ItemSpacing.y;
 				++rows;
@@ -146,24 +156,28 @@ namespace
 			offsets[index] = { x, y };
 			x += buttonWidths[index] + actionSpacing;
 		}
-		return { inset, statusLeft, std::max(1.0f, statusWidth), y + font * footerButtonHeight, rows, offsets, stacked };
+		return { backgroundLeft, cardInsets.y, contentWidth, inset, statusLeft, std::max(1.0f, statusWidth), y + font * footerButtonHeight, rows, offsets, stacked };
 	}
 
-	float SettingsFooterHeight(const char* a_page, bool a_restore = false, const MenuUI::SettingsFooter* external = nullptr)
+	float SettingsFooterContentHeight(const SettingsFooterLayout& layout)
 	{
-		const auto layout = GetSettingsFooterLayout(a_page, a_restore, external);
-		return ImGui::GetTextLineHeight() * (layout.stacked ? 7.2f : 4.3f) + ImGui::GetStyle().ItemSpacing.y +
-		       (layout.actionRows - 1) * (ImGui::GetFontSize() * footerButtonHeight + ImGui::GetStyle().ItemSpacing.y);
+		const float statusHeight = ImGui::GetFontSize() * footerStatusHeight;
+		return layout.stacked ? layout.actionsHeight + ImGui::GetFontSize() * footerStackGap + statusHeight : std::max(layout.actionsHeight, statusHeight);
 	}
 
-	void DrawExternalAction(size_t index, const MenuUI::SettingsFooter& footer)
+	float SettingsFooterHeight(const char* a_page, const MenuUI::SettingsFooter* external = nullptr)
+	{
+		return 1 + ImGui::GetFontSize() * footerVerticalPadding * 2 + SettingsFooterContentHeight(GetSettingsFooterLayout(a_page, external));
+	}
+
+	void DrawExternalAction(size_t index, const MenuUI::SettingsFooter& footer, float availableWidth)
 	{
 		const auto& action = footer.actions[index];
 		ImGui::PushID(static_cast<int>(index));
 		const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 		{
 			const auto disabled = Util::DisableGuard(!action.enabled);
-			if (SettingsActionButton(index, &footer)) {
+			if (SettingsActionButton(index, &footer, availableWidth)) {
 				if (action.confirmation)
 					ImGui::OpenPopup("Confirm INI action");
 				else if (action.invoke)
@@ -187,21 +201,24 @@ namespace
 		}
 	}
 
-	void DrawSettingsFooter(const char* a_page, const std::function<void()>& a_defaults = {}, const MenuUI::SettingsFooter* external = nullptr)
+	void DrawSettingsFooter(const char* a_page, const std::function<void(float)>& a_defaults = {}, const MenuUI::SettingsFooter* external = nullptr)
 	{
 		const auto footerStart = ImGui::GetCursorScreenPos();
+		const auto layout = GetSettingsFooterLayout(a_page, external);
+		const float font = ImGui::GetFontSize();
+		const float height = SettingsFooterHeight(a_page, external);
 		const auto background = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
 		const bool light = background.x + background.y + background.z > 1.5f;
 		const ImVec4 lift = light ? ImVec4(-.02f, -.02f, -.02f, 0) : ImVec4(.09f, .105f, .11f, 0);
-		const ImVec4 footerColor{ std::clamp(background.x + lift.x, 0.0f, 1.0f), std::clamp(background.y + lift.y, 0.0f, 1.0f), std::clamp(background.z + lift.z, 0.0f, 1.0f), 1 };
-		ImGui::GetWindowDrawList()->AddRectFilled(footerStart,
-			{ footerStart.x + ImGui::GetContentRegionAvail().x, footerStart.y + SettingsFooterHeight(a_page, external || static_cast<bool>(a_defaults), external) }, ImGui::GetColorU32(footerColor));
-		ImGui::Separator();
-		const float font = ImGui::GetFontSize();
-		ImGui::Dummy({ 0, font * .6f });
-		const auto start = ImGui::GetCursorScreenPos();
-		const auto layout = GetSettingsFooterLayout(a_page, external || static_cast<bool>(a_defaults), external);
-		const ImVec2 statusStart{ start.x + layout.statusLeft, start.y + (layout.stacked ? layout.actionsHeight + font * .5f : 0) };
+		const ImVec4 footerColor{ std::clamp(background.x + lift.x, 0.0f, 1.0f), std::clamp(background.y + lift.y, 0.0f, 1.0f), std::clamp(background.z + lift.z, 0.0f, 1.0f), footerOpacity };
+		ImGui::GetWindowDrawList()->AddRectFilled({ footerStart.x + layout.backgroundLeft, footerStart.y },
+			{ footerStart.x + ImGui::GetContentRegionAvail().x - layout.backgroundRight, footerStart.y + height }, ImGui::GetColorU32(footerColor));
+		ImGui::GetWindowDrawList()->AddLine({ footerStart.x + layout.backgroundLeft, footerStart.y },
+			{ footerStart.x + ImGui::GetContentRegionAvail().x - layout.backgroundRight, footerStart.y }, ImGui::GetColorU32(ImGuiCol_Separator));
+		const float contentHeight = SettingsFooterContentHeight(layout);
+		const ImVec2 start{ footerStart.x, footerStart.y + 1 + font * footerVerticalPadding };
+		const float actionsY = start.y + (layout.stacked ? 0 : (contentHeight - layout.actionsHeight) * .5f);
+		const ImVec2 statusStart{ start.x + layout.statusLeft, start.y + (layout.stacked ? layout.actionsHeight + font * footerStackGap : (contentHeight - font * footerStatusHeight) * .5f) };
 		const auto& menu = *globals::menu;
 		const auto& palette = menu.GetTheme().StatusPalette;
 		const bool error = external ? external->error : menu.IsSettingsSaveMessageError() && !menu.GetSettingsSaveMessage().empty();
@@ -216,19 +233,26 @@ namespace
 		                                                         Util::Color::SecondaryText();
 		auto* draw = ImGui::GetWindowDrawList();
 		{
-			draw->PushClipRect({ statusStart.x - font * .2f, statusStart.y }, { statusStart.x + layout.statusWidth, statusStart.y + font * 2.8f }, true);
+			draw->PushClipRect({ statusStart.x - font * .2f, statusStart.y }, { statusStart.x + layout.statusWidth, statusStart.y + font * footerStatusHeight }, true);
 			const SKSE::stl::scope_exit restoreClip([draw] { draw->PopClipRect(); });
-			const ImVec2 marker{ statusStart.x + font * .35f, statusStart.y + font * 1.3f };
+			const ImVec2 marker{ statusStart.x + font * .35f, statusStart.y + font * 1.25f };
 			draw->AddCircleFilled(marker, font * .52f, ImGui::GetColorU32({ statusColor.x, statusColor.y, statusColor.z, .10f }));
 			draw->AddCircleFilled(marker, font * .26f, ImGui::GetColorU32(statusColor));
-			draw->AddText(nullptr, font * footerTextScale, { statusStart.x + font, statusStart.y + font * .2f }, ImGui::GetColorU32(statusColor), status);
-			draw->AddText(nullptr, font * .95f, { statusStart.x + font, statusStart.y + font * 1.7f }, ImGui::GetColorU32(Util::Color::SecondaryText()), detail.c_str());
+			draw->AddText(nullptr, font * footerTextScale, { statusStart.x + font, statusStart.y + font * .1f }, ImGui::GetColorU32(statusColor), status);
+			draw->AddText(nullptr, font * .95f, { statusStart.x + font, statusStart.y + font * 1.5f }, ImGui::GetColorU32(Util::Color::SecondaryText()), detail.c_str());
 		}
 		ImGui::SetCursorScreenPos(statusStart);
-		ImGui::Dummy({ layout.statusWidth, font * 2.8f });
+		ImGui::Dummy({ layout.statusWidth, font * footerStatusHeight });
 		Util::AddTooltip(detail.c_str());
-		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft, start.y });
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { font * .35f, font * .55f });
+		const char* blockedHelp = external ? nullptr : PerformanceTuningRenderer::HasActiveMeasurements() ? "Finish or cancel the performance comparison before saving, loading or restoring settings." :
+		                                           globals::state->IsPersistentMutationBlocked()          ? "Wait for the current game save or load to finish before changing settings." :
+		                                                                                                    nullptr;
+		const auto actionsGuard = Util::DisableGuard(blockedHelp != nullptr);
+		const auto addActionTooltip = [&](const char* help) {
+			Util::AddTooltip(blockedHelp ? blockedHelp : help, ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		};
+		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft, actionsY });
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { font * .35f, font * .35f });
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, font * .3f);
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1);
 		const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleVar(3); });
@@ -239,34 +263,46 @@ namespace
 			ImGui::PushStyleColor(ImGuiCol_Text, brightness > .55f ? ImVec4(.08f, .08f, .08f, 1) : ImVec4(1, 1, 1, 1));
 			const SKSE::stl::scope_exit restoreText([] { ImGui::PopStyleColor(); });
 			if (external)
-				DrawExternalAction(0, *external);
-			else if (SettingsActionButton(0))
+				DrawExternalAction(0, *external, layout.contentWidth);
+			else if (SettingsActionButton(0, nullptr, layout.contentWidth))
 				globals::state->Save();
 		}
 		if (!external)
-			Util::AddTooltip("Save all your CSX settings.");
-		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft + layout.actionOffsets[1].x, start.y + layout.actionOffsets[1].y });
+			addActionTooltip("Save all your CSX settings.");
+		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft + layout.actionOffsets[1].x, actionsY + layout.actionOffsets[1].y });
 		{
 			const float contrast = light ? -.04f : .05f;
-			const ImVec4 secondary{ std::clamp(footerColor.x + contrast, 0.0f, 1.0f), std::clamp(footerColor.y + contrast, 0.0f, 1.0f), std::clamp(footerColor.z + contrast, 0.0f, 1.0f), 1 };
+			const ImVec4 secondary{ std::clamp(footerColor.x + contrast, 0.0f, 1.0f), std::clamp(footerColor.y + contrast, 0.0f, 1.0f), std::clamp(footerColor.z + contrast, 0.0f, 1.0f), footerOpacity };
 			const auto secondaryStyle = Util::StyledButtonWrapper(secondary, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 			if (external)
-				DrawExternalAction(1, *external);
-			else if (SettingsActionButton(1)) {
+				DrawExternalAction(1, *external, layout.contentWidth);
+			else if (SettingsActionButton(1, nullptr, layout.contentWidth)) {
 				globals::state->Load();
 				globals::features::llf::particleLights.GetConfigs();
 			}
 		}
 		if (!external)
-			Util::AddTooltip("Replace current changes with your saved CSX settings.");
-		if (external || a_defaults) {
-			ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft + layout.actionOffsets[2].x, start.y + layout.actionOffsets[2].y });
+			addActionTooltip("Replace current changes with your saved CSX settings.");
+		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft + layout.actionOffsets[2].x, actionsY + layout.actionOffsets[2].y });
+		{
 			const auto outlineStyle = Util::StyledButtonWrapper({ 0, 0, 0, 0 }, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
 			if (external)
-				DrawExternalAction(2, *external);
-			else
-				a_defaults();
+				DrawExternalAction(2, *external, layout.contentWidth);
+			else if (a_defaults) {
+				a_defaults(layout.contentWidth);
+				if (blockedHelp)
+					addActionTooltip(blockedHelp);
+			} else {
+				if (SettingsActionButton(2, nullptr, layout.contentWidth)) {
+					std::string restoreError;
+					if (!globals::state->RestoreDefaultSettings(restoreError))
+						globals::menu->ReportSettingsSaveResult(false, std::move(restoreError));
+				}
+				addActionTooltip("Restore installed CSX defaults for the menu, shaders and loaded features. Save to keep these changes.");
+			}
 		}
+		ImGui::SetCursorScreenPos({ footerStart.x, footerStart.y + height });
+		ImGui::Dummy({ 0, 0 });
 	}
 
 	struct FeatureBannerTexture
@@ -658,7 +694,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() {
 														  MenuUI::SettingsPage page("Profiling", { { "timings", "Timings", "Enable profiling, then inspect CPU and GPU work.", "Live CPU and GPU timings", true, true, "Choose a timing view" } });
 														  if (page.Is("timings"))
-															  ProfilingRenderer::RenderStatistics();
+															  ProfilingRenderer::RenderStatistics(true, true, false);
 													  } });
 
 	{
@@ -1030,10 +1066,36 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 			const float inset = MenuUI::SettingsPage::OverviewTextInset(pageId, ImGui::GetContentRegionAvail().x);
 			ImGui::Indent(inset);
 			const SKSE::stl::scope_exit restoreIndent([inset] { ImGui::Unindent(inset); });
-			ImGui::TextColored(Util::Color::SecondaryText(), "SETTINGS");
-			DrawFeatureHeader(menu.name, description);
+			if (menu.name == "Profiling") {
+				const float font = ImGui::GetFontSize();
+				const float available = ImGui::GetContentRegionAvail().x;
+				const float toggleSize = Util::Widgets::CheckboxSize();
+				ImFont* controlFont;
+				float controlFontSize, width;
+				{
+					MenuFonts::FontRoleGuard subtextGuard(Menu::FontRole::Subtext);
+					controlFont = ImGui::GetFont();
+					controlFontSize = ImGui::GetFontSize() * featureDescriptionScale;
+					width = toggleSize + ImGui::GetStyle().ItemInnerSpacing.x + controlFont->CalcTextSizeA(controlFontSize, FLT_MAX, 0, "Enabled").x;
+				}
+				const bool stacked = available < width + font * 15;
+				const auto start = ImGui::GetCursorScreenPos();
+				const float titleHeight = DrawFeatureHeader(menu.name, description, stacked ? 0 : width + font);
+				const auto afterTitle = ImGui::GetCursorScreenPos();
+				if (!stacked)
+					ImGui::SetCursorScreenPos({ start.x + available - width, start.y + std::max(0.0f, (titleHeight - toggleSize) * .5f) });
+				{
+					ImGui::PushFont(controlFont, controlFontSize);
+					const SKSE::stl::scope_exit restoreFont([] { ImGui::PopFont(); });
+					ProfilingRenderer::RenderEnabledControl();
+				}
+				if (!stacked)
+					ImGui::SetCursorScreenPos(afterTitle);
+			} else {
+				DrawFeatureHeader(menu.name, description);
+			}
 		}
-		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight(pageId) }, ImGuiChildFlags_None))
+		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight(pageId) - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None))
 			menu.func();
 		ImGui::EndChild();
 		DrawSettingsFooter(pageId);
@@ -1085,7 +1147,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		const float requirementHeight = requirement.empty() ? 0 : ImGui::CalcTextSize(requirement.data(), requirement.data() + requirement.size(), false, requirementWidth).y + ImGui::GetStyle().ItemSpacing.y;
 		{
 			MenuUI::FeatureScope featureScope(feat);
-			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight(featureName.c_str(), true, externalFooter ? &*externalFooter : nullptr) - requirementHeight }, ImGuiChildFlags_None)) {
+			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight(featureName.c_str(), externalFooter ? &*externalFooter : nullptr) - requirementHeight - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None)) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				MenuUI::DevBenchViewport viewport(featureName, "legacy", !PerformanceTuningRenderer::HasActiveMeasurements());
 #endif
@@ -1111,7 +1173,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 			externalFooter = external->GetSettingsFooter();
 			DrawSettingsFooter(featureName.c_str(), {}, &*externalFooter);
 		} else {
-			DrawSettingsFooter(featureName.c_str(), [&] { RenderRestoreDefaultsButton(feat, isDisabled || sceneControlled, isLoaded); });
+			DrawSettingsFooter(featureName.c_str(), [&](float width) { RenderRestoreDefaultsButton(feat, isDisabled || sceneControlled, isLoaded, width); });
 		}
 		json performanceSettingsAfter;
 		feat->SaveSettings(performanceSettingsAfter);
@@ -1141,31 +1203,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	const float font = ImGui::GetFontSize();
 	const float spacing = ImGui::GetStyle().ItemSpacing.x;
 	const float availableWidth = ImGui::GetContentRegionAvail().x;
-	auto category = std::string(feat->GetCategory());
-	std::ranges::transform(category, category.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-	ImGui::TextColored(Util::Color::SecondaryText(), "%s", category.c_str());
-	const auto categoryRight = ImGui::GetItemRectMax().x;
-	auto* overrideManager = SettingsOverrideManager::GetSingleton();
-	if (!isDisabled && isLoaded && overrideManager && overrideManager->HasFeatureOverrides(featureName)) {
-		const char* label = "Apply Override";
-		const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
-		const float left = ImGui::GetCursorScreenPos().x + std::max(0.0f, availableWidth - width);
-		if (left > categoryRight + spacing)
-			ImGui::SameLine();
-		ImGui::SetCursorScreenPos({ left, ImGui::GetCursorScreenPos().y });
-		{
-			auto guard = Util::DisableGuard(sceneControlled || PerformanceTuningRenderer::HasActiveMeasurements());
-			if (ImGui::Button(label)) {
-				if (feat->ReapplyOverrideSettings())
-					logger::info("Successfully reapplied override settings for {}", featureName);
-				else
-					logger::warn("Failed to reapply override settings for {}", featureName);
-			}
-		}
-		Util::AddTooltip(sceneControlled ?
-							 "Pause scene settings before restoring settings supplied by a mod." :
-							 "Restore settings supplied by an installed mod, replacing your changes for this feature.");
-	}
 
 	auto status = feat->GetSettingsHeaderStatus();
 	if (!isLoaded)
@@ -1220,6 +1257,26 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 		ImGui::SetCursorScreenPos(afterTitle);
 	else
 		ImGui::Spacing();
+	auto* overrideManager = SettingsOverrideManager::GetSingleton();
+	if (!isDisabled && isLoaded && overrideManager && overrideManager->HasFeatureOverrides(featureName)) {
+		const char* label = "Apply Override";
+		const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+		const float left = ImGui::GetCursorScreenPos().x + std::max(0.0f, availableWidth - width);
+		ImGui::SetCursorScreenPos({ left, ImGui::GetCursorScreenPos().y });
+		{
+			auto guard = Util::DisableGuard(sceneControlled || PerformanceTuningRenderer::HasActiveMeasurements());
+			if (ImGui::Button(label)) {
+				if (feat->ReapplyOverrideSettings())
+					logger::info("Successfully reapplied override settings for {}", featureName);
+				else
+					logger::warn("Failed to reapply override settings for {}", featureName);
+			}
+		}
+		Util::AddTooltip(sceneControlled ?
+							 "Pause scene settings before restoring settings supplied by a mod." :
+							 "Restore settings supplied by an installed mod, replacing your changes for this feature.");
+	}
+
 	if (!isDisabled && isLoaded) {
 		auto guard = Util::DisableGuard(sceneControlled);
 		feat->DrawSettingsHeaderControls();
@@ -1377,10 +1434,10 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	}
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded)
+void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded, float availableWidth)
 {
 	const auto guard = Util::DisableGuard(isDisabled || !isLoaded);
-	const bool restoreDefaults = SettingsActionButton(2);
+	const bool restoreDefaults = SettingsActionButton(2, nullptr, availableWidth);
 
 	if (restoreDefaults) {
 		feat->RestoreDefaultSettings();

@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <future>
@@ -42,8 +44,16 @@ struct Feature
 };
 namespace globals
 {
-	int profilerStorage = 0;
+	struct FakeProfiler
+	{
+		bool enabled = false, initialized = true;
+		bool IsUserEnabled() const { return enabled; }
+		bool IsInitialized() const { return initialized; }
+		void SetUserEnabled(bool value) { enabled = value; }
+	} profilerStorage;
 	auto* profiler = &profilerStorage;
+	int shaderCacheStorage = 0;
+	auto* shaderCache = &shaderCacheStorage;
 	struct FakeMenu
 	{
 		struct Theme
@@ -58,18 +68,62 @@ namespace globals
 		struct Settings
 		{
 			bool SkipConstraintWarning = false;
+			bool FirstTimeSetupCompleted = true;
 		} settings;
 		Settings& GetSettings() { return settings; }
 		const Theme& GetTheme() const { return theme; }
-		bool IsSettingsSaveMessageError() const { return false; }
-		std::string GetSettingsSaveMessage() const { return {}; }
-		bool HasUnsavedSettings() const { return false; }
+		bool dirty = false, messageError = false;
+		std::string message;
+		int dirtyChecks = 0;
+		bool mutationAllowed = true;
+		std::optional<nlohmann::json> mutationBaseline;
+		bool PrepareSettingsMutation();
+		bool IsSettingsSaveMessageError() const { return messageError; }
+		std::string GetSettingsSaveMessage() const { return message; }
+		bool HasUnsavedSettings() const { return dirty; }
+		void RequestSettingsDirtyCheck() { ++dirtyChecks; }
+		void ClearSettingsSaveResult()
+		{
+			message.clear();
+			messageError = false;
+		}
+		void ReportSettingsSaveResult(bool success, std::string error)
+		{
+			messageError = !success;
+			message = std::move(error);
+		}
 	} menuStorage;
 	auto* menu = &menuStorage;
 	struct State
 	{
-		void Save() {}
-		void Load() {}
+		enum class ConfigMode
+		{
+			DEFAULT
+		};
+		bool blocked = false, snapshotFailure = false;
+		int applyFailures = 0, saves = 0, loads = 0, snapshots = 0, applies = 0;
+		nlohmann::json settings{ { "current", true } };
+		void Save() { ++saves; }
+		void Load() { ++loads; }
+		bool IsPersistentMutationBlocked() const { return blocked; }
+		static std::filesystem::path GetConfigPath(ConfigMode) { return "SettingsDefault.json"; }
+		void SaveToJson(nlohmann::json& value, bool)
+		{
+			++snapshots;
+			if (snapshotFailure)
+				throw std::runtime_error("Snapshot failed");
+			value = settings;
+		}
+		void LoadFromJson(nlohmann::json& value)
+		{
+			++applies;
+			settings = value;
+			if (applyFailures > 0) {
+				--applyFailures;
+				throw std::runtime_error("Apply failed");
+			}
+		}
+		bool RestoreDefaultSettings(std::string& error);
 	} stateStorage;
 	auto* state = &stateStorage;
 	namespace features
@@ -87,6 +141,14 @@ namespace globals
 			bool IsMenuPointerInHeadset() const { return headset; }
 		} vr;
 	}
+}
+bool globals::FakeMenu::PrepareSettingsMutation()
+{
+	if (!mutationAllowed)
+		return false;
+	if (!mutationBaseline)
+		mutationBaseline = stateStorage.settings;
+	return true;
 }
 namespace SKSE::stl
 {
@@ -106,6 +168,13 @@ namespace SKSE::stl
 }
 struct ProfilingRenderer
 {
+	static inline float timeSinceLastUpdate = 0;
+	static bool RenderEnabledControl();
+	struct PerformanceTimingSummary
+	{
+		float frameMs = 15.84f, gameGpuMs = 12.32f, gameCpuMs = 5.87f, fps = 63;
+		bool hasGameGpu = true, hasGameCpu = true;
+	};
 	static inline bool eligible = true;
 	static bool CanProfileFeature(std::string_view name) { return eligible && (name == "FeaturePage" || Util::FeatureProfiling::Find(name)); }
 	static inline int draws = 0;
@@ -128,10 +197,11 @@ struct ProfilingRenderer
 };
 struct PerformanceTuningRenderer
 {
-	static bool HasActiveMeasurements() { return false; }
 	static inline int draws = 0;
 	static inline int globalDraws = 0;
 	static inline int inactiveNotifications = 0;
+	static inline bool measuring = false;
+	static bool HasActiveMeasurements() { return measuring; }
 	static void NotifyOverviewInactive() { ++inactiveNotifications; }
 	static inline std::string feature;
 	static inline std::function<void()> inspect;
@@ -213,7 +283,61 @@ namespace MenuUI
 		bool HasUnsavedChanges() const { return dirty; }
 	};
 }
+namespace logger
+{
+	template <class... Args>
+	void warn(Args&&...)
+	{}
+}
+namespace Util::FileHelpers
+{
+	enum class JsonFileReadResult
+	{
+		Success,
+		NotFound,
+		Error
+	};
+	inline JsonFileReadResult result = JsonFileReadResult::Success;
+	inline nlohmann::json defaults = { { "Menu", nlohmann::json::object() }, { "General", nlohmann::json::object() }, { "Advanced", nlohmann::json::object() } };
+	inline int reads = 0;
+	JsonFileReadResult ReadJsonFile(const std::filesystem::path&, nlohmann::json& value, std::string& error)
+	{
+		++reads;
+		value = defaults;
+		if (result == JsonFileReadResult::Error)
+			error = "Read failed";
+		return result;
+	}
+}
+struct WeatherManager
+{
+	static inline int refreshes = 0;
+	static WeatherManager* GetSingleton()
+	{
+		static WeatherManager manager;
+		return &manager;
+	}
+	void RefreshFeatureOverrides() { ++refreshes; }
+};
+namespace globals
+{
+	using json = nlohmann::json;
+#include "settings_restore_under_test.h"
+}
+constexpr float kStatsRefreshSeconds = 1;
+#include "settings_profiling_enabled_under_test.h"
+bool TryGetDisplayGpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
+{
+	value = summary.gameGpuMs;
+	return summary.hasGameGpu;
+}
+bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summary, float& value)
+{
+	value = summary.gameCpuMs;
+	return summary.hasGameCpu;
+}
 #include "settings_footer_under_test.h"
+#include "settings_performance_counters_under_test.h"
 #include "settings_stabilizer_navigation_under_test.h"
 struct Upscaling
 {
@@ -1207,6 +1331,201 @@ int main()
 		require(!CanSelectEditor("targets") && CanSelectEditor("locations"), "location draft remains visible");
 		MenuUI::StabilizerPage::dirty = false;
 
+		{
+			using namespace Util::FileHelpers;
+			const auto validDefaults = defaults;
+			const nlohmann::json before = { { "current", true } };
+			auto& state = globals::stateStorage;
+			std::string error;
+			for (bool measurement : { false, true }) {
+				state.blocked = !measurement;
+				PerformanceTuningRenderer::measuring = measurement;
+				require(!state.RestoreDefaultSettings(error) && !error.empty() && reads == 0 && state.applies == 0, "defaults refuse during save/load and owned measurements before reading or changing state");
+			}
+			state.blocked = PerformanceTuningRenderer::measuring = false;
+			for (auto failure : { JsonFileReadResult::NotFound, JsonFileReadResult::Error }) {
+				result = failure;
+				require(!state.RestoreDefaultSettings(error) && !error.empty() && state.settings == before && state.applies == 0, "missing or unreadable defaults leave current settings intact");
+			}
+			result = JsonFileReadResult::Success;
+			for (auto invalid : { nlohmann::json::array(), nlohmann::json::object(), nlohmann::json{ { "Menu", false }, { "General", nlohmann::json::object() }, { "Advanced", nlohmann::json::object() } } }) {
+				defaults = invalid;
+				require(!state.RestoreDefaultSettings(error) && !error.empty() && state.applies == 0, "invalid core defaults fail before applying anything");
+			}
+			defaults = validDefaults;
+			globals::menuStorage.mutationAllowed = false;
+			require(!state.RestoreDefaultSettings(error) && state.applies == 0, "baseline capture must succeed before applying defaults");
+			globals::menuStorage.mutationAllowed = true;
+			state.snapshotFailure = true;
+			require(!state.RestoreDefaultSettings(error) && state.applies == 0, "a failed recovery snapshot cannot discard current settings");
+			state.snapshotFailure = false;
+			state.applyFailures = 1;
+			require(!state.RestoreDefaultSettings(error) && state.settings == before && state.applies == 2, "failed defaults application restores the previous runtime settings");
+			state.applyFailures = 2;
+			require(!state.RestoreDefaultSettings(error) && error.find("could not be recovered") != error.npos, "a recovery failure is explicitly reported");
+			require(state.RestoreDefaultSettings(error) && error.empty() && state.settings["Menu"]["FirstTimeSetupCompleted"] == true && state.settings["General"] == defaults["General"], "installed defaults apply in memory without reopening onboarding");
+			require(globals::menuStorage.mutationBaseline == before, "restoring defaults before opening the UI preserves the original baseline");
+			require(state.saves == 0 && state.loads == 0 && globals::menuStorage.dirtyChecks > 0, "restoration preserves saved files and requests a check against the existing dirty baseline");
+		}
+		{
+			for (const char* page : { "Home", "General", "Advanced" }) {
+				const auto draw = [&] { DrawUiReviewPage(page, true); };
+				frame(draw);
+				frame(draw);
+				require(!MenuUI::SettingsPage::Navigate(page, "performance") && !MenuUI::SettingsPage::Navigate(page, "profiling"), "Home, General and Advanced never register either measurement tool");
+				const auto pages = MenuUI::SettingsPage::Describe();
+				for (const auto& entry : pages)
+					if (entry["page"] == page)
+						for (const auto& tab : entry["tabs"])
+							require(tab["id"] != "performance" && tab["id"] != "profiling", "DevBench sees no measurement tools on ordinary built-in pages");
+			}
+			require(MenuUI::SettingsPage::Selected("Home") == "welcome", "Home defaults to Welcome on first draw");
+			MenuUI::SettingsPage::Select("Home", "cache");
+			frame([] { DrawUiReviewPage("Home", true); });
+			frame([] { DrawUiReviewPage("Home", true); });
+			require(MenuUI::SettingsPage::Selected("Home") == "cache", "Welcome default does not override later Home navigation");
+			MenuUI::SettingsPage::Select("Home", "overview");
+			for (float font : { 13.0f, 21.0f })
+				for (float panelWidth : { 850.0f, 450.0f, 180.0f }) {
+					const auto draw = [&] {
+						ImGui::PushFont(ImGui::GetFont(), font);
+						ImGui::BeginChild("BuiltInFooter", { panelWidth, 500 });
+						const auto start = ImGui::GetCursorScreenPos();
+						const auto layout = GetSettingsFooterLayout("Home");
+						const auto available = ImGui::GetContentRegionAvail().x;
+						const auto height = SettingsFooterHeight("Home");
+						DrawSettingsFooter("Home");
+						for (const char* help : { "Save all your CSX settings.", "Replace current changes with your saved CSX settings.", "Restore installed CSX defaults for the menu, shaders and loaded features. Save to keep these changes." }) {
+							const auto bounds = Util::controls.at(help);
+							require(bounds.Min.x > start.x + layout.backgroundLeft && bounds.Max.x < start.x + available, "all footer actions are inset from the aligned outer edges");
+							require(bounds.Max.y < start.y + height, "every footer action fits the reserved height");
+							require(std::abs(bounds.GetHeight() - font * 2.1f) < .1f, "footer buttons retain the compact reference height");
+						}
+						require(layout.statusLeft > layout.backgroundLeft, "status marker is padded inside the footer");
+						if (!layout.stacked)
+							require(height < font * 4, "wide footers remain compact");
+						ImGui::EndChild();
+						ImGui::PopFont();
+					};
+					frame(draw);
+					frame(draw);
+				}
+			const auto draw = [] { DrawSettingsFooter("Home"); };
+			frame(draw);
+			frame(draw);
+			const auto calls = globals::stateStorage.applies;
+			click(Util::controls.at("Restore installed CSX defaults for the menu, shaders and loaded features. Save to keep these changes.").GetCenter(), draw);
+			frame(draw);
+			require(globals::stateStorage.applies == calls + 1, "Home Restore defaults actually invokes the runtime restore once");
+			globals::stateStorage.applyFailures = 1;
+			click(Util::controls.at("Restore installed CSX defaults for the menu, shaders and loaded features. Save to keep these changes.").GetCenter(), draw);
+			require(globals::menuStorage.messageError && !globals::menuStorage.message.empty(), "restoration failures remain visible in the footer");
+			globals::menuStorage.ClearSettingsSaveResult();
+			frame(draw);
+			const std::array actionCentres{
+				Util::controls.at("Save all your CSX settings.").GetCenter(),
+				Util::controls.at("Replace current changes with your saved CSX settings.").GetCenter(),
+				Util::controls.at("Restore installed CSX defaults for the menu, shaders and loaded features. Save to keep these changes.").GetCenter()
+			};
+			for (const bool measurement : { false, true }) {
+				globals::stateStorage.blocked = !measurement;
+				PerformanceTuningRenderer::measuring = measurement;
+				const auto previousActions = std::array{ globals::stateStorage.saves, globals::stateStorage.loads, globals::stateStorage.applies };
+				for (const auto centre : actionCentres)
+					click(centre, draw);
+				require(previousActions == std::array{ globals::stateStorage.saves, globals::stateStorage.loads, globals::stateStorage.applies }, "footer cannot persist temporary measurements or mutate settings during a save/load");
+			}
+			globals::stateStorage.blocked = false;
+			PerformanceTuningRenderer::measuring = false;
+		}
+		{
+			const auto draw = [] { ProfilingRenderer::RenderEnabledControl(); };
+			frame(draw);
+			frame(draw);
+			click(Util::controls.at("Enable runtime CPU and GPU profiling. No restart required.").GetCenter(), draw);
+			require(globals::profilerStorage.enabled, "shared profiling switch enables runtime capture");
+			PerformanceTuningRenderer::measuring = true;
+			click(Util::controls.at("Enable runtime CPU and GPU profiling. No restart required.").GetCenter(), draw);
+			require(globals::profilerStorage.enabled, "profiling switch cannot disrupt an owned performance comparison");
+			PerformanceTuningRenderer::measuring = false;
+			click(Util::controls.at("Enable runtime CPU and GPU profiling. No restart required.").GetCenter(), draw);
+			require(!globals::profilerStorage.enabled, "shared profiling switch disables runtime capture");
+		}
+
+		{
+			for (const float font : { 13.0f, 21.0f }) {
+				ImRect measure;
+				const auto draw = [&] {
+					ImGui::PushFont(ImGui::GetFont(), font);
+					ImGui::BeginChild("PerformanceNumbers", { 850, 400 });
+					RenderTopPerformanceCounters({});
+					RenderMeasureButton(true);
+					measure = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+					ImGui::EndChild();
+					ImGui::PopFont();
+				};
+				frame(draw);
+				frame(draw);
+				int count = 0;
+				float rowY = -1;
+				for (auto* window : GImGui->Windows) {
+					if (!window->Active || std::string_view(window->Name).find("/##Counter_") == std::string_view::npos)
+						continue;
+					++count;
+					if (rowY < 0)
+						rowY = window->Pos.y;
+					require(std::abs(window->Pos.y - rowY) < .1f, "Game, GPU, CPU and FPS fit in one row at the requested panel proportions");
+					require(window->Pos.y + window->Size.y < measure.Min.y + .1f, "Measure follows the single row of timing numbers");
+				}
+				require(count == 4 && measure.Max.y < 400, "all four metrics and Measure are visible without scrolling");
+			}
+		}
+
+		{
+			MenuUI::SettingsPage::Select("General", "overview");
+			for (const float font : { 13.0f, 21.0f }) {
+				const auto draw = [&] {
+					ImGui::PushFont(ImGui::GetFont(), font);
+					ImGui::BeginChild("CompactOverview", { 850, 600 });
+					MenuUI::SettingsPage page("General", { { "compact", "Coverage", "Configure this step.", "Shared controls" } });
+					ImGui::EndChild();
+					ImGui::PopFont();
+				};
+				frame(draw);
+				frame(draw);
+				const auto compactCard = Util::controls.at("Configure this step.");
+				require(compactCard.GetHeight() <= font * 7 + .1f && compactCard.GetHeight() >= font * 5.5f, "overview cards use the shorter height without consuming spare vertical space");
+			}
+		}
+
+		{
+			for (const char* page : { "Home", "NeuralRendering" })
+				for (const float font : { 13.0f, 21.0f }) {
+					MenuUI::SettingsPage::Select(page, "overview");
+					const auto draw = [&] {
+						ImGui::PushFont(ImGui::GetFont(), font);
+						ImGui::BeginChild("AlignedFooter", { 850, 650 }, ImGuiChildFlags_Borders);
+						ImGui::BeginChild("AlignedBody", { 0, -SettingsFooterHeight(page) - ImGui::GetStyle().ItemSpacing.y });
+						DrawUiReviewPage(page, true);
+						ImGui::EndChild();
+						const auto start = ImGui::GetCursorScreenPos();
+						const auto layout = GetSettingsFooterLayout(page);
+						const auto right = start.x + ImGui::GetContentRegionAvail().x - layout.backgroundRight;
+						DrawSettingsFooter(page);
+						const auto first = Util::controls.at(std::string_view(page) == "Home" ? "About Community Shaders Expanded and its contributors." : "Where NR runs");
+						const auto last = Util::controls.at(std::string_view(page) == "Home" ? "Review changes affecting your compiled shaders." : "How selected edits are applied");
+						require(std::abs(first.Min.x - (start.x + layout.backgroundLeft)) < .1f, "footer left edge follows the first overview card");
+						if (std::abs(last.Max.x - right) >= .1f)
+							throw std::runtime_error(std::format("Footer right edge mismatch: page {}, font {}, card {}, footer {}", page, font, last.Max.x, right));
+						ImGui::EndChild();
+						ImGui::PopFont();
+					};
+					frame(draw);
+					frame(draw);
+					frame(draw);
+				}
+		}
+
 		int saves = 0, discards = 0, applies = 0;
 		MenuUI::SettingsFooter footer{
 			true, false, "Unsaved INI changes", "VRFpsStabilizer.ini",
@@ -1217,8 +1536,8 @@ int main()
 		float footerWidth = 850;
 		auto drawFooter = [&] {
 			ImGui::BeginChild("Footer", { footerWidth, 500 });
-			const auto layout = GetSettingsFooterLayout("External", true, &footer);
-			const float height = SettingsFooterHeight("External", true, &footer);
+			const auto layout = GetSettingsFooterLayout("External", &footer);
+			const float height = SettingsFooterHeight("External", &footer);
 			const float top = ImGui::GetCursorScreenPos().y;
 			const auto styles = GImGui->StyleVarStack.Size;
 			const auto colors = GImGui->ColorStack.Size;

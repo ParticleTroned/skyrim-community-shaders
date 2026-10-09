@@ -1,4 +1,5 @@
 #include "ProfilingRenderer.h"
+#include "PerformanceTuningRenderer.h"
 #include "SettingsPage.h"
 
 #include <algorithm>
@@ -1060,7 +1061,20 @@ bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 	return false;
 }
 
-void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
+bool ProfilingRenderer::RenderEnabledControl()
+{
+	const bool available = globals::profiler && globals::profiler->IsInitialized();
+	bool enabled = available && globals::profiler->IsUserEnabled();
+	const auto disabled = Util::DisableGuard(!available || PerformanceTuningRenderer::HasActiveMeasurements());
+	if (Util::Widgets::Checkbox("Enabled", &enabled)) {
+		globals::profiler->SetUserEnabled(enabled);
+		timeSinceLastUpdate = kStatsRefreshSeconds;
+	}
+	Util::AddTooltip(available ? "Enable runtime CPU and GPU profiling. No restart required." : "Profiler is unavailable.", ImGuiHoveredFlags_AllowWhenDisabled);
+	return enabled;
+}
+
+void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle, bool showEnabledToggle)
 {
 	if (!globals::profiler || !globals::profiler->IsInitialized()) {
 		ImGui::TextDisabled("Profiler is unavailable.");
@@ -1070,21 +1084,11 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 	const bool fullProfilerPage = showTable || showModeToggle;
 
 	if (fullProfilerPage) {
-		bool profilingEnabled = profiler.IsUserEnabled();
-		ImGui::TextUnformatted("Profiling");
-		ImGui::SameLine();
-		if (Util::Widgets::Checkbox("Enabled", &profilingEnabled)) {
-			profiler.SetUserEnabled(profilingEnabled);
-			timeSinceLastUpdate = kStatsRefreshSeconds;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Runtime profiling capture. No restart required.");
-			ImGui::TextUnformatted("When off, profiling capture requests are ignored and no timestamp/query timing scopes are recorded.");
-		}
-		ImGui::Separator();
-
+		const bool profilingEnabled = showEnabledToggle ? RenderEnabledControl() : profiler.IsUserEnabled();
+		if (showEnabledToggle)
+			ImGui::Separator();
 		if (!profilingEnabled) {
-			ImGui::TextDisabled("Profiling is off.");
+			ImGui::TextDisabled("Profiling is off. Turn on Enabled to capture timings.");
 			return;
 		}
 	} else if (!profiler.IsUserEnabled()) {

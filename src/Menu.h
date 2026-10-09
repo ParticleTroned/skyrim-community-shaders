@@ -129,6 +129,8 @@ public:
 	/** Whether a feature differs from the last successfully saved settings. */
 	bool HasUnsavedFeatureSettings(const std::string& name) const { return dirtySettingsSections.contains(name); }
 	void RequestSettingsDirtyCheck() { settingsDirtyCheckRequested = true; }
+	/** Establishes a clean baseline before a bulk change, including before the first menu frame. */
+	bool PrepareSettingsMutation() { return EnsureSettingsDirtyBaseline(); }
 	void ResetSettingsDirtyState();
 	void AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName);
 	void ReportSettingsSaveResult(bool a_success, std::string a_message);

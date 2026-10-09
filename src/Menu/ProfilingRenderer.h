@@ -63,7 +63,9 @@ public:
 		std::unordered_map<std::string, PerformanceTimingTotals> features;
 	};
 
-	static void RenderStatistics(bool showTable = true, bool showModeToggle = true);
+	/** Shared runtime capture switch; returns whether profiling is enabled. */
+	static bool RenderEnabledControl();
+	static void RenderStatistics(bool showTable = true, bool showModeToggle = true, bool showEnabledToggle = true);
 	/** Identifies feature-owned and shared profiling views before samples exist. */
 	static bool CanProfileFeature(std::string_view a_feature);
 	static bool HasFeatureTimers(const std::string& featurePrefix);

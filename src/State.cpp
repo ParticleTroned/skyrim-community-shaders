@@ -1110,6 +1110,70 @@ static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)
 	}
 }
 
+bool State::RestoreDefaultSettings(std::string& a_error)
+{
+	a_error.clear();
+	if (!globals::menu || !globals::shaderCache) {
+		a_error = "Settings are not ready to restore defaults.";
+		return false;
+	}
+	if (IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements()) {
+		a_error = "Defaults were not restored. Finish the current save, load or performance comparison first.";
+		return false;
+	}
+	json defaults;
+	const auto read = Util::FileHelpers::ReadJsonFile(GetConfigPath(ConfigMode::DEFAULT), defaults, a_error);
+	if (read != Util::FileHelpers::JsonFileReadResult::Success) {
+		a_error = read == Util::FileHelpers::JsonFileReadResult::NotFound ? "Defaults were not restored because SettingsDefault.json is missing." :
+		                                                                    std::format("Defaults could not be read: {}", a_error);
+		return false;
+	}
+	if (!defaults.is_object()) {
+		a_error = "Defaults were not restored because SettingsDefault.json must contain an object.";
+		return false;
+	}
+	for (const char* section : { "Menu", "General", "Advanced" }) {
+		if (!defaults.contains(section) || !defaults[section].is_object()) {
+			a_error = std::format("Defaults were not restored because the {} section is missing or invalid.", section);
+			return false;
+		}
+	}
+	// Restoring tuning must not reopen the first-time setup dialog.
+	if (globals::menu)
+		defaults["Menu"]["FirstTimeSetupCompleted"] = globals::menu->GetSettings().FirstTimeSetupCompleted;
+	if (!globals::menu->PrepareSettingsMutation()) {
+		a_error = "Could not preserve the saved-settings baseline before restoring defaults.";
+		return false;
+	}
+	json previous;
+	try {
+		SaveToJson(previous, false);
+	} catch (const std::exception& e) {
+		a_error = std::format("Could not preserve current settings before restoring defaults: {}", e.what());
+		return false;
+	}
+	bool restored = false;
+	try {
+		LoadFromJson(defaults);
+		restored = true;
+	} catch (const std::exception& e) {
+		a_error = std::format("Defaults could not be applied: {}", e.what());
+		try {
+			LoadFromJson(previous);
+		} catch (const std::exception& rollback) {
+			a_error += std::format(" Current settings could not be recovered: {}", rollback.what());
+		}
+		logger::warn("{}", a_error);
+	}
+	WeatherManager::GetSingleton()->RefreshFeatureOverrides();
+	if (globals::menu) {
+		globals::menu->RequestSettingsDirtyCheck();
+		if (restored)
+			globals::menu->ClearSettingsSaveResult();
+	}
+	return restored;
+}
+
 void State::Load(
 	ConfigMode a_configMode,
 	bool a_allowReload,

@@ -24,6 +24,7 @@ namespace MenuUI
 			std::function<bool(std::string_view)> canSelect;
 			bool pending = false;
 			std::vector<Section> sections;
+			float contentScrollbarWidth = 0;
 		};
 		std::unordered_map<std::string, Navigation> navigation;
 		Feature* activeFeature = nullptr;
@@ -39,6 +40,8 @@ namespace MenuUI
 		constexpr float cardSummaryScale = 14.0f / 12.0f;
 		constexpr float stageTextScale = 1.25f;
 		constexpr float detailTitleScale = 2.0f;
+		constexpr float cardOpacity = .94f * SettingsSurfaceOpacityScale;
+		constexpr float maximumOverviewCardHeight = 7.0f;
 
 		bool DrawSettingsCard(const Section& step, ImVec2 minimum, ImVec2 size, int ordinal, bool selected);
 
@@ -90,6 +93,17 @@ namespace MenuUI
 	FeatureScope::FeatureScope(Feature* a_feature) : previous(activeFeature) { activeFeature = a_feature; }
 	FeatureScope::~FeatureScope() { activeFeature = previous; }
 
+	ImVec2 SettingsPage::OverviewCardInsets(const char* a_page, float a_panelWidth)
+	{
+		std::scoped_lock lock(navigationMutex);
+		const auto found = navigation.find(a_page);
+		const bool hasCards = found == navigation.end() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
+		const float padding = ImGui::GetStyle().WindowPadding.x;
+		const float right = found == navigation.end() ? 0 : found->second.contentScrollbarWidth;
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
+		return { padding + grid.rail, right };
+	}
+
 	float SettingsPage::OverviewLastColumnInset(const char* a_page, float a_panelWidth)
 	{
 		std::scoped_lock lock(navigationMutex);
@@ -98,7 +112,7 @@ namespace MenuUI
 			return a_panelWidth;
 		const bool hasCards = std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - padding), hasCards);
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - found->second.contentScrollbarWidth - padding), hasCards);
 		return padding + grid.rail + (grid.columns - 1) * (grid.width + grid.gap);
 	}
 
@@ -109,7 +123,8 @@ namespace MenuUI
 		// Match the initial header to the setup grid before its first content frame.
 		const bool hasCards = found == navigation.end() || found->second.sections.empty() || std::ranges::any_of(found->second.sections, [](const Section& step) { return step.visible && step.overview; });
 		const float padding = ImGui::GetStyle().WindowPadding.x;
-		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - padding), hasCards);
+		const float right = found == navigation.end() ? 0 : found->second.contentScrollbarWidth;
+		const auto grid = GetOverviewGrid(std::max(1.0f, a_panelWidth - right - padding), hasCards);
 		return padding + (grid.rail > 0 ? ImGui::GetTextLineHeight() * stageGuideInset : 0);
 	}
 
@@ -127,7 +142,9 @@ namespace MenuUI
 	std::string SettingsPage::Selected(const char* a_page)
 	{
 		std::scoped_lock lock(navigationMutex);
-		return navigation[a_page].selected;
+		const auto found = navigation.find(a_page);
+		return found != navigation.end() ? found->second.selected : std::string_view(a_page) == "Home" ? "welcome" :
+		                                                                                                 "overview";
 	}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -164,10 +181,17 @@ namespace MenuUI
 		a_id = pageId.c_str();
 		const bool measurementAvailable = activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning";
 		const bool profilingAvailable = globals::profiler && (activeFeature ? !measurementAvailable && ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning");
-		sections.push_back({ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" });
-		sections.push_back({ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false });
+		if (activeFeature || (pageId != "Home" && pageId != "General" && pageId != "Advanced")) {
+			sections.push_back({ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" });
+			sections.push_back({ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false });
+		}
 		ImGui::PushID(a_id);
-		auto& state = navigation[a_id];
+		auto [entry, inserted] = navigation.try_emplace(a_id);
+		auto& state = entry->second;
+		if (inserted && pageId == "Home") {
+			state.selected = "welcome";
+			state.pending = true;
+		}
 		state.canSelect = std::move(a_canSelect);
 		bool rejectedSelection = false;
 		state.sections = sections;
@@ -244,6 +268,7 @@ namespace MenuUI
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
 			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding);
 		}
+		state.contentScrollbarWidth = ImGui::GetCurrentWindow()->ScrollbarSizes.x;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (contentVisible)
 			devBenchViewport.emplace(pageId, selected, !PerformanceTuningRenderer::HasActiveMeasurements());
@@ -580,7 +605,7 @@ namespace MenuUI
 			minimumHeight = std::max(minimumHeight, MeasureCardText(*step, width, 0).height);
 		const float availableHeight = ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ItemSpacing.y;
 		const float rowGap = std::clamp((availableHeight - minimumHeight * totalRows) / std::max(1, totalRows - 1), line * .5f, line);
-		const float height = std::clamp((availableHeight - (totalRows - 1) * rowGap) / totalRows, minimumHeight, std::max(minimumHeight, line * 8.5f));
+		const float height = std::clamp((availableHeight - (totalRows - 1) * rowGap) / totalRows, minimumHeight, std::max(minimumHeight, line * maximumOverviewCardHeight));
 		const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
 		const auto origin = ImGui::GetCursorScreenPos();
 		auto* draw = ImGui::GetWindowDrawList();
@@ -663,7 +688,7 @@ namespace MenuUI
 			                                                   1.0f;
 			const ImVec4 top{ std::clamp(background.x + lift.x * strength, 0.0f, 1.0f),
 				std::clamp(background.y + lift.y * strength, 0.0f, 1.0f),
-				std::clamp(background.z + lift.z * strength, 0.0f, 1.0f), .94f };
+				std::clamp(background.z + lift.z * strength, 0.0f, 1.0f), cardOpacity };
 			const auto bottom = ImLerp(top, ImVec4(background.x, background.y, background.z, top.w), .22f);
 			const int firstVertex = draw->VtxBuffer.Size;
 			draw->AddRectFilled(minimum, maximum, ImGui::GetColorU32(top), rounding);

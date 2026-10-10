@@ -542,6 +542,6 @@ void Feature::DrawSettings()
 			MenuUI::DetailNote(benefit.c_str());
 		MenuUI::DetailNote(SupportsPerformanceCostMeasurement() ?
 							   "This feature has no additional tuning controls. Use Enabled in the header to control it." :
-							   "This feature has no additional tuning controls. Change its startup toggle in the sidebar, then restart the game.");
+							   "This feature has no additional tuning controls. Change its startup setting in Advanced > Startup, save settings and restart the game.");
 	}
 }

@@ -24,6 +24,7 @@
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
 #include "Features/LightLimitFix/ParticleLights.h"
+#include "Features/VR.h"
 #include "Features/Wetterness.h"
 #include "Fonts.h"
 #include "Globals.h"
@@ -725,7 +726,13 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	// Sort features within each category
 	for (auto& [category, features] : categorizedFeatures) {
-		std::ranges::sort(features, [](Feature* a, Feature* b) {
+		std::ranges::sort(features, [vrFirst = category == utilityCategory](Feature* a, Feature* b) {
+			if (vrFirst) {
+				const bool aIsVR = a == &globals::features::vr;
+				const bool bIsVR = b == &globals::features::vr;
+				if (aIsVR != bIsVR)
+					return aIsVR;
+			}
 			return a->GetDisplayName() < b->GetDisplayName();
 		});
 	}
@@ -1012,10 +1019,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	const auto rowStart = ImGui::GetCursorScreenPos();
 	const float rowWidth = ImGui::GetContentRegionAvail().x;
 	const float rowHeight = ImGui::GetTextLineHeight() * 2;
-	const auto switchSize = Util::FeatureToggleSize();
-	const float switchWidth = switchSize.x;
-	const float switchLeft = rowStart.x + std::max(0.0f, rowWidth - switchWidth - ImGui::GetStyle().FramePadding.x);
-	const float labelWidth = std::max(1.0f, switchLeft - rowStart.x - ImGui::GetStyle().ItemSpacing.x);
+	const float trailingSpace = std::max(ImGui::GetStyle().FramePadding.x, ImGui::GetFontSize() * .5f);
+	const float labelWidth = std::max(1.0f, rowWidth - trailingSpace);
 	const bool selected = selectedMenuRef == listId;
 	if (selected) {
 		auto* draw = ImGui::GetWindowDrawList();
@@ -1036,19 +1041,9 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	ImGui::PopStyleColor();
 	if (external ? external->HasUnsavedChanges() : globals::menu->HasUnsavedFeatureSettings(feat->GetName())) {
 		const float radius = ImGui::GetFontSize() * .12f;
-		ImGui::GetWindowDrawList()->AddCircleFilled({ switchLeft - ImGui::GetStyle().ItemSpacing.x * .5f, rowStart.y + rowHeight * .5f }, radius, ImGui::GetColorU32(themeSettings.StatusPalette.Warning));
+		ImGui::GetWindowDrawList()->AddCircleFilled({ rowStart.x + rowWidth - trailingSpace * .5f, rowStart.y + rowHeight * .5f }, radius, ImGui::GetColorU32(themeSettings.StatusPalette.Warning));
 	}
 
-	ImGui::SetCursorScreenPos({ switchLeft, rowStart.y + (rowHeight - std::max(switchSize.y, ImGui::GetTextLineHeight())) * .5f });
-	bool bootEnabled = !isDisabled;
-	{
-		ImGui::PushStyleColor(ImGuiCol_CheckMark, themeSettings.Palette.Text);
-		const SKSE::stl::scope_exit restoreColor([] { ImGui::PopStyleColor(); });
-		const auto readOnly = Util::DisableGuard(external != nullptr);
-		if (Util::FeatureToggle("##BootToggleList", &bootEnabled, switchSize))
-			feat->ToggleAtBootSetting();
-	}
-	Util::AddTooltip(external ? "Detection status. Enable the companion mod and its INI in your mod manager, then restart Skyrim VR." : "Turn this feature on or off at startup. Changes take effect after restarting the game.");
 	ImGui::SetCursorScreenPos({ rowStart.x, rowStart.y + rowHeight });
 	ImGui::Dummy({ 0, 0 });
 	ImGui::EndDisabled();
@@ -1296,7 +1291,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (isDisabled) {
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled until restart.");
 		ImGui::Spacing();
-		ImGui::Text("Turn on this feature using its sidebar switch, then restart the game.");
+		ImGui::TextWrapped("Clear its checkbox in Advanced > Startup, save settings and restart the game.");
 		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
 			ImGui::Spacing();
 			ImGui::TextColored(

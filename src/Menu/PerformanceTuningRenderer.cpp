@@ -2724,7 +2724,7 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature)
 		}
 	}
 	Util::AddTooltip(reason ? reason : busy   ? "Wait for the current measurement to finish." :
-								   !supported ? "This feature has no separate runtime switch. Use its sidebar switch, then restart the game." :
+								   !supported ? "This feature has no separate runtime switch. Change its startup setting in Advanced > Startup, save settings and restart the game." :
 												"Turns this feature on or off while keeping your current tuning.");
 }
 

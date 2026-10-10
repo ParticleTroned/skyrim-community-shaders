@@ -17,16 +17,16 @@ namespace FeatureCategories
 	inline constexpr std::string_view kWater = "Water";
 
 	inline constexpr std::array kMenuOrder{
-		kDisplay,
 		kUtility,
-		kCharacters,
-		kFoliage,
+		kDisplay,
 		kLighting,
-		kMaterials,
-		kPostProcessing,
 		kSky,
 		kLandscapeAndTextures,
 		kWater,
+		kCharacters,
+		kMaterials,
+		kFoliage,
+		kPostProcessing,
 		kOther
 	};
 }

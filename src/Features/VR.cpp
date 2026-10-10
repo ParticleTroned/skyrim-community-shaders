@@ -1023,12 +1023,8 @@ bool VR::ShouldUseInSceneOverlay() const
 		return true;
 	case Settings::MenuOverlayPath::Auto:
 	default:
-		// At the Skyrim main menu the render-scale controller can legitimately
-		// remain pending until a world safe point exists. Presenting through the
-		// eye-submit copy is deterministic there and does not depend on an
-		// IVROverlay transform anchored to a game world that does not yet exist.
-		return (globals::state && globals::state->isMainMenuOpen) ||
-		       openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
+		// Choose by runtime capability so SteamVR keeps its native overlay through startup.
+		return openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite ||
 		       !openVRInfo.hasOverlayInterface;
 	}
 }
@@ -1863,7 +1859,7 @@ namespace
 				settings.menuOverlayPath = static_cast<VR::Settings::MenuOverlayPath>(menuOverlayPath);
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Auto uses in-scene at the main menu and for OpenComposite, otherwise IVROverlay when available.");
+				ImGui::Text("Auto uses IVROverlay on SteamVR from startup; OpenComposite and runtimes without IVROverlay use in-scene.");
 				ImGui::Text("RenderDoc uses IVROverlay on SteamVR while capture is enabled or loaded, regardless of this setting.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene is rendered into submitted eye textures and may appear in desktop VR mirror views.");
@@ -3923,11 +3919,21 @@ void VR::SubmitOverlayFrame()
 			UpdateFixedWorldPositioning();
 			HideAllOverlays(gameOverlay);
 		} else {
+			const auto synchronizeMouseScale = [&](vr::VROverlayHandle_t a_handle, ID3D11Texture2D* a_texture, const char* a_label) {
+				D3D11_TEXTURE2D_DESC textureDesc{};
+				a_texture->GetDesc(&textureDesc);
+				// Native coordinate queries derive the surface aspect from mouse scale.
+				const vr::HmdVector2_t mouseScale{ { float(textureDesc.Width), float(textureDesc.Height) } };
+				const auto error = cleanOverlay->SetOverlayMouseScale(a_handle, &mouseScale);
+				if (error != vr::VROverlayError_None)
+					logger::error("SetOverlayMouseScale failed for {} overlay: {} ({})", a_label, static_cast<int>(error), magic_enum::enum_name(error));
+			};
 			bool vrOverlayPresented = false;
 			// Update overlay position and submit to SteamVR
 			UpdateVROverlayPosition();
 			vr::Texture_t tex = { menuTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
 			if (wantsHMDOverlay) {
+				synchronizeMouseScale(menuOverlayHandle, menuTexture.get(), "menu");
 				Util::SetOverlayInputFlags(cleanOverlay, menuOverlayHandle);
 				const vr::EVROverlayError textureError = cleanOverlay->SetOverlayTexture(menuOverlayHandle, &tex);
 				if (textureError != vr::VROverlayError_None) {
@@ -3947,6 +3953,7 @@ void VR::SubmitOverlayFrame()
 				UpdateVROverlayControllerPosition();
 
 				vr::Texture_t controllerTex = { menuControllerTexture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
+				synchronizeMouseScale(menuControllerOverlayHandle, menuControllerTexture.get(), "controller");
 				Util::SetOverlayInputFlags(cleanOverlay, menuControllerOverlayHandle);
 				const vr::EVROverlayError textureError = cleanOverlay->SetOverlayTexture(menuControllerOverlayHandle, &controllerTex);
 				if (textureError != vr::VROverlayError_None) {

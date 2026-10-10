@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <limits>
+
 namespace WandSurfaceGeometry
 {
 	struct Vector
@@ -15,6 +18,39 @@ namespace WandSurfaceGeometry
 		Vector right;
 		Vector down;
 	};
+
+	struct Coordinate
+	{
+		float u = 0.0f;
+		float v = 0.0f;
+	};
+
+	struct Extent
+	{
+		float width = 0.0f;
+		float height = 0.0f;
+	};
+
+	/** Return native overlay dimensions after texture aspect and transform scaling. */
+	constexpr Extent GetNativeOverlayExtent(
+		float a_widthInMetres, float a_horizontalScale, float a_verticalScale, float a_textureAspect)
+	{
+		return { a_widthInMetres * a_horizontalScale, a_widthInMetres * a_textureAspect * a_verticalScale };
+	}
+
+	/** Return native bottom-origin corner coordinates in the overlay's mouse-scale units. */
+	constexpr bool TryGetOverlayCornerCoordinates(
+		const Coordinate& a_mouseScale,
+		std::array<Coordinate, 3>& a_corners)
+	{
+		if (!(a_mouseScale.u > 0.0f && a_mouseScale.v > 0.0f &&
+				a_mouseScale.u <= std::numeric_limits<float>::max() &&
+				a_mouseScale.v <= std::numeric_limits<float>::max()))
+			return false;
+		a_corners = { Coordinate{ 0.0f, a_mouseScale.v },
+			Coordinate{ a_mouseScale.u, a_mouseScale.v }, Coordinate{ 0.0f, 0.0f } };
+		return true;
+	}
 
 	struct Hit
 	{

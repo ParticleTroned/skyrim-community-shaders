@@ -29,11 +29,11 @@ public:
 	static void RenderSteamVRResizeHandles(float uiScale);
 	/** Width of a bordered feature panel whose content ends at the header close icon. */
 	static float GetFeaturePanelWidth();
-	/** Larger bottom-right grip using the existing window resize behaviour. */
-	static void RenderResizeGrip(float uiScale);
+	/** Bottom-right grip; custom controls bypass NoResize only when native resizing is suppressed. */
+	static void RenderResizeGrip(float uiScale, bool customResizeControls = false);
 
 private:
-	static void RenderResizeHandles(float uiScale, bool steamVRControls);
+	static void RenderResizeHandles(float uiScale, bool steamVRControls, bool customResizeControls = false);
 	static void DrawActionIcon(ImDrawList* a_draw, const ActionIcon& a_icon, ImVec2 a_min, ImVec2 a_max, ImU32 a_tint);
 	static std::vector<ActionIcon> BuildActionIcons(bool canShowIcons, const Menu::UIIcons& uiIcons);
 	static void RenderDockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);

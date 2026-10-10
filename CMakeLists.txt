@@ -3451,6 +3451,7 @@ if(BUILD_CONTROLLER_TESTS)
         tests/overlay_policy_test.cpp
     )
     include(tests/menu_frame_stability.cmake)
+    include(tests/menu_resize.cmake)
     add_controller_test(
         shader_cache_disable_policy_test
         ShaderCacheDisablePolicy
@@ -3614,6 +3615,7 @@ if(BUILD_CONTROLLER_TESTS)
         VRWandSurfaceGeometry
         tests/vr_wand_surface_geometry_test.cpp
     )
+    include(tests/vr_menu_presentation.cmake)
     add_controller_test(
         vr_menu_positioning_policy_test
         VRMenuPositioningPolicy

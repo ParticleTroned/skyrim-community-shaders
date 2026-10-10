@@ -1,6 +1,7 @@
 #pragma once
 #include "Buffer.h"
 #include "Features/VR/OpenVRDetection.h"
+#include "Features/VR/WandSurfaceGeometry.h"
 #include "Features/VRDepthCullingEnablePolicy.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
@@ -91,11 +92,14 @@ public:
 		static constexpr int kHMDOverlayHeight = static_cast<int>(kOverlayHeight * kHMDOverlayHeightScale);
 		static constexpr float kHMDOverlayAspect = static_cast<float>(kHMDOverlayHeight) / static_cast<float>(kHMDOverlayWidth);
 
+		/** Match IVROverlay's width, texture aspect and transform scaling on every menu path. */
 		static inline Matrix CreateOverlayScaleMatrix(float scale, float aspect = kOverlayAspect)
 		{
-			return Matrix::CreateScale(scale, scale * aspect, scale);
+			const auto extent = WandSurfaceGeometry::GetNativeOverlayExtent(scale, scale, scale * aspect, aspect);
+			return Matrix::CreateScale(extent.width, extent.height, scale);
 		}
 
+		/** Use the HMD texture aspect with the same dimensions as native IVROverlay. */
 		static inline Matrix CreateHMDOverlayScaleMatrix(float scale)
 		{
 			return CreateOverlayScaleMatrix(scale, kHMDOverlayAspect);

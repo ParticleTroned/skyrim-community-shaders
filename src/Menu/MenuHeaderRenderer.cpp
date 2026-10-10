@@ -530,15 +530,15 @@ void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
 	RenderResizeHandles(uiScale, true);
 }
 
-void MenuHeaderRenderer::RenderResizeGrip(float uiScale)
+void MenuHeaderRenderer::RenderResizeGrip(float uiScale, bool customResizeControls)
 {
-	RenderResizeHandles(uiScale, false);
+	RenderResizeHandles(uiScale, false, customResizeControls);
 }
 
-void MenuHeaderRenderer::RenderResizeHandles(float uiScale, bool steamVRControls)
+void MenuHeaderRenderer::RenderResizeHandles(float uiScale, bool steamVRControls, bool customResizeControls)
 {
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
-	if (!window || window->DockIsActive || (!steamVRControls && (window->Flags & (ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize))))
+	if (!window || window->DockIsActive || (!steamVRControls && ((window->Flags & ImGuiWindowFlags_AlwaysAutoResize) || (!customResizeControls && (window->Flags & ImGuiWindowFlags_NoResize)))))
 		return;
 
 	const ImVec2 windowPos = window->Pos;
@@ -546,16 +546,25 @@ void MenuHeaderRenderer::RenderResizeHandles(float uiScale, bool steamVRControls
 	const float topLeftSize = GetSteamVRResizeHandleSize(uiScale);
 	const float bottomRightSize = steamVRControls ? topLeftSize * 1.2f : std::max(ImGui::GetFontSize() * 1.5f, 18.0f) * uiScale;
 	const float handleInset = GetSteamVRResizeHandleInset(uiScale);
-	const float minWidth = steamVRControls ? 420.0f * uiScale : ImGui::GetStyle().WindowMinSize.x;
-	const float minHeight = steamVRControls ? 320.0f * uiScale : ImGui::GetStyle().WindowMinSize.y;
+	const bool headsetControls = steamVRControls || customResizeControls;
 	const float sensitivity = steamVRControls ? kSteamVRResizePointerSensitivity : 1.0f;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	const ImVec2 resizeBoundsMin = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
 	const ImVec2 resizeBoundsMax = viewport ?
 	                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y) :
 	                                   ImGui::GetIO().DisplaySize;
-
 	auto drawResizeHandle = [&](const char* id, const ImVec2& min, bool topLeft, float handleSize) {
+		const ImVec2 themeMinimum = ImGui::GetStyle().WindowMinSize;
+		float minWidth = themeMinimum.x;
+		float minHeight = themeMinimum.y;
+		if (headsetControls) {
+			// Available space extends from the fixed opposite corner toward the dragged edge.
+			const ImVec2 available = topLeft ?
+			                             ImVec2(windowPos.x + windowSize.x - resizeBoundsMin.x, windowPos.y + windowSize.y - resizeBoundsMin.y) :
+			                             ImVec2(resizeBoundsMax.x - windowPos.x, resizeBoundsMax.y - windowPos.y);
+			minWidth = ClampResizeValue(420.0f * uiScale, themeMinimum.x, available.x);
+			minHeight = ClampResizeValue(320.0f * uiScale, themeMinimum.y, available.y);
+		}
 		const ImGuiID itemId = window->GetID(id);
 		const ImRect bounds(min, ImVec2(min.x + handleSize, min.y + handleSize));
 		if (!ImGui::ItemAdd(bounds, itemId, nullptr, ImGuiItemFlags_NoNav))

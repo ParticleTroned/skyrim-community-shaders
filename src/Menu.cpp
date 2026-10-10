@@ -1096,7 +1096,7 @@ void Menu::DrawSettings()
 	// Determine window flags based on docking state
 	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 	if (lockVRMenuToCanvas) {
-		windowFlags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+		windowFlags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
 	}
 	const bool steamVRUndockedWindow = useSteamVRWindowControls && !willBeDocked;
 
@@ -1104,7 +1104,8 @@ void Menu::DrawSettings()
 	if (!willBeDocked) {
 		windowFlags |= ImGuiWindowFlags_NoTitleBar;
 	}
-	if (steamVRUndockedWindow) {
+	if (steamVRUndockedWindow || (useOpenCompositeStableHeader && !willBeDocked)) {
+		// Headset menus use one custom resize handler for the corner.
 		windowFlags |= ImGuiWindowFlags_NoResize;
 	}
 
@@ -1179,7 +1180,7 @@ void Menu::DrawSettings()
 		if (showSteamVRWindowControls) {
 			MenuHeaderRenderer::RenderSteamVRResizeHandles(uiScale);
 		} else {
-			MenuHeaderRenderer::RenderResizeGrip(uiScale);
+			MenuHeaderRenderer::RenderResizeGrip(uiScale, useOpenCompositeStableHeader && vrMenuLayoutUnlocked && !isDocked);
 		}
 	}
 	ImGui::End();

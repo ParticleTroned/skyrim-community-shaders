@@ -359,10 +359,13 @@ namespace
 			a_overlayWorld = offset * attachWorld;
 		}
 
-		if (a_vr.settings.VRMenuScale < 1e-4f)
+		const float menuScale = a_vr.GetEffectiveMenuScale();
+		if (!std::isfinite(menuScale) || menuScale < 1e-4f)
 			return false;
-		const float overlayAspect = a_type == VR::OverlayType::HMD ? VR::Config::kHMDOverlayAspect : VR::Config::kOverlayAspect;
-		a_overlayWorld = VR::Config::CreateOverlayScaleMatrix(a_vr.settings.VRMenuScale, overlayAspect) * a_overlayWorld;
+		const Matrix overlayScale = a_type == VR::OverlayType::HMD ?
+		                                VR::Config::CreateHMDOverlayScaleMatrix(menuScale) :
+		                                VR::Config::CreateOverlayScaleMatrix(menuScale);
+		a_overlayWorld = overlayScale * a_overlayWorld;
 		return true;
 	}
 

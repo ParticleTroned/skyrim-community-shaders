@@ -8,6 +8,7 @@
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
 #include "Features/VR/WandBeamRenderer.h"
+#include "Features/VR/WandSurfaceGeometry.h"
 #include "Globals.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/EngineStutterMonitor.h"
@@ -2513,13 +2514,25 @@ bool VR::TryGetPresentedMenuSurface(OverlayType a_type, PresentedMenuSurface& a_
 		const auto handle = a_type == OverlayType::HMD ? menuOverlayHandle : menuControllerOverlayHandle;
 		if (!overlay || !compositor || handle == vr::k_ulOverlayHandleInvalid || !overlay->IsOverlayVisible(handle))
 			return false;
+		auto* texture = a_type == OverlayType::HMD ? menuTexture.get() : menuControllerTexture.get();
+		if (!texture)
+			return false;
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		texture->GetDesc(&textureDesc);
+		vr::HmdVector2_t mouseScale{};
+		if (overlay->GetOverlayMouseScale(handle, &mouseScale) != vr::VROverlayError_None ||
+			mouseScale.v[0] != float(textureDesc.Width) || mouseScale.v[1] != float(textureDesc.Height))
+			return false;
+		std::array<WandSurfaceGeometry::Coordinate, 3> coordinates;
+		if (!WandSurfaceGeometry::TryGetOverlayCornerCoordinates({ mouseScale.v[0], mouseScale.v[1] }, coordinates))
+			return false;
 		PresentedMenuSurface surface;
-		const std::array coordinates{ vr::HmdVector2_t{ { 0, 1 } }, vr::HmdVector2_t{ { 1, 1 } }, vr::HmdVector2_t{ { 0, 0 } } };
 		const std::array points{ &surface.topLeft, &surface.topRight, &surface.bottomLeft };
 		for (std::size_t corner = 0; corner < coordinates.size(); ++corner) {
 			vr::HmdMatrix34_t transform{};
+			const vr::HmdVector2_t nativeCoordinates{ { coordinates[corner].u, coordinates[corner].v } };
 			if (overlay->GetTransformForOverlayCoordinates(handle, compositor->GetTrackingSpace(),
-					coordinates[corner], &transform) != vr::VROverlayError_None)
+					nativeCoordinates, &transform) != vr::VROverlayError_None)
 				return false;
 			*points[corner] = Util::HmdMatrix34ToMatrix(transform).Translation();
 			if (!std::isfinite(points[corner]->x) || !std::isfinite(points[corner]->y) || !std::isfinite(points[corner]->z))

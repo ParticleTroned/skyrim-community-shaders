@@ -110,6 +110,7 @@ struct BSShader_LoadShaders
 		auto state = globals::state;
 		auto shaderCache = globals::shaderCache;
 		if (shaderCache->IsDiskCache() || shaderCache->IsDump()) {
+			const bool materialCategoriesRequested = Deferred::MaterialCategoriesRequested();
 			if (shaderCache->IsDiskCache()) {
 				Feature::ForEachLoadedFeature("GenerateShaderPermutations", [shader](Feature* feature) {
 					feature->GenerateShaderPermutations(shader);
@@ -144,10 +145,7 @@ struct BSShader_LoadShaders
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
-				const auto categoryFlag = SIE::ShaderCache::GetMaterialCategoryFlag(shader->shaderType.get());
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor & ~categoryFlag);
-				if (categoryFlag)
-					shaderCache->GetPixelShader(*shader, pixelShaderDescriptor | categoryFlag);
+				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, materialCategoriesRequested);
 			}
 
 			if (shaderCache->IsDiskCache() && shader->shaderType.get() == RE::BSShader::Type::Effect) {
@@ -155,12 +153,10 @@ struct BSShader_LoadShaders
 					static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::MultBlend) |
 					static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::MotionVectorsNormals);
 				shaderCache->GetPixelShader(*shader, sharedRuntimeUnionDescriptor);
-				shaderCache->GetPixelShader(*shader,
+				shaderCache->PrewarmDeferredPixelShaders(*shader,
 					sharedRuntimeUnionDescriptor |
-						static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred));
-				shaderCache->GetPixelShader(*shader, sharedRuntimeUnionDescriptor |
-														 static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred) |
-														 SIE::ShaderCache::GetMaterialCategoryFlag(RE::BSShader::Type::Effect));
+						static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred),
+					materialCategoriesRequested);
 			}
 		}
 		BSShaderHooks::hk_LoadShaders(shader, stream);

@@ -2715,6 +2715,14 @@ namespace SIE
 		return nullptr;
 	}
 
+	void ShaderCache::PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories)
+	{
+		const auto categoryFlag = GetMaterialCategoryFlag(shader.shaderType.get());
+		GetPixelShader(shader, descriptor & ~categoryFlag);
+		if (categories && categoryFlag)
+			GetPixelShader(shader, descriptor | categoryFlag);
+	}
+
 	RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor)
 	{

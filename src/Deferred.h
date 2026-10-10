@@ -92,6 +92,8 @@ public:
 
 	/** @brief Begins deferred rendering by binding GBuffer targets and overriding blend states. */
 	void StartDeferred();
+	/** @brief Current feature demand, available before render targets are allocated. */
+	static bool MaterialCategoriesRequested();
 	/** @brief The allocated mask layout, latched before the deferred pass. */
 	bool IsMaterialCategoriesEnabled() const { return materialCategoriesEnabled.load(std::memory_order_relaxed); }
 	/** @brief Rejects the current pass's material lane after native shader fallback. */
@@ -158,7 +160,6 @@ public:
 	ID3D11SamplerState* pointSampler = nullptr;
 
 private:
-	static bool MaterialCategoriesRequested();
 	void UpdateMaterialCategoryTarget();
 	std::atomic_bool materialCategoriesEnabled{ false };
 	bool materialCategoriesValid = false;

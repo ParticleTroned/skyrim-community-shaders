@@ -176,8 +176,12 @@ namespace SIE
 {
 	struct ShaderCache
 	{
+		std::vector<uint32_t> requests;
+		void GetPixelShader(const RE::BSShader&, uint32_t descriptor) { requests.push_back(descriptor); }
+		void PrewarmDeferredPixelShaders(const RE::BSShader&, uint32_t, bool);
 #include "deferred_flag_under_test.h"
 	};
+#include "deferred_prewarm_under_test.h"
 }
 void SetupRenderTarget(RE::RENDER_TARGET, D3D11_TEXTURE2D_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_RENDER_TARGET_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC, DXGI_FORMAT, uint);
 
@@ -277,6 +281,34 @@ void AllocationCases(Renderer& renderer, Device& device, bool uav)
 	feature->categories = false;
 	ReleaseRenderTargetSlot(MASKS2);
 	Require(!target.texture && !target.SRV && !target.RTV && !target.UAV, "Retirement retained target slots");
+}
+void PrewarmCases()
+{
+	auto* feature = Feature::GetFeatureList()[0];
+	for (auto type : { RE::BSShader::Type::Lighting, RE::BSShader::Type::Grass, RE::BSShader::Type::DistantTree,
+			 RE::BSShader::Type::Sky, RE::BSShader::Type::Effect, RE::BSShader::Type::Water })
+		for (bool loaded : { false, true })
+			for (bool requested : { false, true })
+				for (bool previouslyWide : { false, true }) {
+					feature->loaded = loaded;
+					feature->categories = requested;
+					RE::BSShader shader;
+					shader.shaderType.value = type;
+					SIE::ShaderCache cache;
+					const auto flag = SIE::ShaderCache::GetMaterialCategoryFlag(type);
+					constexpr uint32_t narrow = 0x10001;
+					cache.PrewarmDeferredPixelShaders(shader, narrow | (previouslyWide ? flag : 0), Deferred::MaterialCategoriesRequested());
+					Require(cache.requests.front() == narrow, "AO-only prewarming retained category bits");
+					if (loaded && requested && flag) {
+						Require(cache.requests.size() == 2 && cache.requests.back() == (narrow | flag),
+							"Requested category variant was not prewarmed");
+					} else {
+						Require(cache.requests.size() == 1, "Unused category shader was prewarmed");
+					}
+				}
+	feature->loaded = true;
+	feature->categories = false;
+	std::cout << "Deferred prewarming: 48 demand/layout conditions passed\n";
 }
 void FallbackNotifications()
 {
@@ -482,6 +514,7 @@ int wmain(int argc, wchar_t** argv)
 		AllocationCases(renderer, device, true);
 		Require(logger::errors == 14, "Allocation failures were not reported exactly once");
 		AdmissionCases();
+		PrewarmCases();
 		FallbackNotifications();
 		AoPrecisionAndFill(device, context.get());
 		ShaderOutputs(argv[1]);

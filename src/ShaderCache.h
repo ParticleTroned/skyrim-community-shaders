@@ -703,6 +703,9 @@ namespace SIE
 		bool IsShaderKeyAbsent(const std::string& a_key);
 		std::string GetShaderStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 
+		/** @brief Warms AO-only shaders and, when requested, their deferred category variants. */
+		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories);
+
 		RE::BSGraphics::VertexShader* GetVertexShader(const RE::BSShader& shader, uint32_t descriptor);
 		/** @brief Reserved pixel-descriptor bit for the authored material-category output layout. */
 		static constexpr uint32_t GetMaterialCategoryFlag(RE::BSShader::Type type)

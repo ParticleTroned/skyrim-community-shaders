@@ -110,17 +110,24 @@ struct VR
 	std::array<RE::ButtonState, 64> primaryControllerState{}, secondaryControllerState{};
 	bool lastKnownLeftHandedMode = false;
 	bool isCapturingCombo = false, neuralRenderingToggleHeld = false;
-	void ResetMenuInputRuntimeState()
-	{
-		isCapturingCombo = false;
-		settings.VRMenuControllerDiagnosticsTestMode = false;
-	}
+	bool ocuPointerAvailable = false;
+	unsigned pointerRefreshes = 0, wandResets = 0;
+	void RefreshOCUPointerState() { ++pointerRefreshes; }
+	void ResetWandPointingRuntimeState() { ++wandResets; }
 	bool IsControllerComboPressed(const std::vector<ButtonCombo>&) const;
 	void UpdateNeuralRenderingToggleFromInput(bool);
 	void ProcessVREvents(std::vector<Menu::KeyEvent>&);
 	void ProcessVRButtonEvent(const Menu::KeyEvent&) {}
 	void UpdateControllerState(const Menu::KeyEvent&) {}
 };
+namespace
+{
+	std::array<bool, 2> gBlockRawTriggerUntilRelease{};
+	bool gUsingOCUPointerInput = false;
+	unsigned wandCancellations = 0, rawReleaseChecks = 0;
+	void CancelWandMouseInput(VR&) { ++wandCancellations; }
+	void ObserveRawTriggerReleases(const VR&) { ++rawReleaseChecks; }
+}
 #include "neural_controller_toggle_under_test.h"
 
 int main()
@@ -187,4 +194,15 @@ int main()
 	RE::BSOpenVRControllerDevice::leftHanded = true;
 	events({ { 0, 1, 0, true, true } });
 	require(count == 7);
+	require(wandCancellations == 2 && vr.wandResets == 2);
+	require(gBlockRawTriggerUntilRelease[0] && gBlockRawTriggerUntilRelease[1]);
+	gBlockRawTriggerUntilRelease.fill(false);
+	gUsingOCUPointerInput = true;
+	const auto refreshes = vr.pointerRefreshes, releases = rawReleaseChecks;
+	events({});
+	require(count == 7 && vr.pointerRefreshes == refreshes + 1 && rawReleaseChecks == releases + 1);
+	require(gBlockRawTriggerUntilRelease[0] && gBlockRawTriggerUntilRelease[1]);
+	vr.ocuPointerAvailable = true;
+	events({});
+	require(count == 7 && vr.pointerRefreshes == refreshes + 2 && rawReleaseChecks == releases + 1);
 }

@@ -1,3 +1,4 @@
+#include "Features/Upscaling/NeuralRendering/MemoryRetirementPolicy.h"
 #include "Features/Upscaling/VRSubmitTemporalSnapshot.h"
 
 #include <algorithm>
@@ -116,8 +117,9 @@ namespace NeuralRendering
 			static Renderer renderer;
 			return renderer;
 		}
-		bool Reset()
+		bool Reset(bool clearTransportRejections, BackendRetirementPolicy policy)
 		{
+			Require(!clearTransportRejections && policy == BackendRetirementPolicy::RetainHealthyBackend);
 			++neuralResets;
 			return resetSafe;
 		}

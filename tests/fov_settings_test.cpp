@@ -104,6 +104,13 @@ struct Upscaling
 	int GetUpscaleMethod() const { return method; }
 	static bool SupportsFoveatedVendorDispatch(int method) { return method == 2 || method == 3; }
 	void InvalidateFrameScopedUpscalingState() { ++invalidations; }
+	bool allowNeuralTransition = true;
+	int neuralTransitions = 0;
+	bool HandleNeuralRenderingSettingsTransition(const Settings&, const char*)
+	{
+		++neuralTransitions;
+		return allowNeuralTransition;
+	}
 	bool SetFoveatedUpscalingEnabled(bool enabled);
 	float GetFoveatedBlendFalloff() const;
 	bool SetFoveatedBlendCurve(bool enabled, float falloff);
@@ -215,6 +222,31 @@ void TestTransitions()
 		Require(!up.IsSharedFoveatedMaskActive(), "Full or invalid coverage must be inactive");
 	}
 	up.testProfile.sharedVisibleScale = 0.8f;
+}
+
+void TestRejectedTransitions()
+{
+	auto& up = globals::features::upscaling;
+	auto& gi = globals::features::screenSpaceGI;
+	auto& shadows = globals::features::screenSpaceShadows;
+	up.allowNeuralTransition = false;
+	for (bool enabled : { false, true }) {
+		up.settings.foveatedVendorDispatch = enabled;
+		gi.settings.EnableFoveated = false;
+		gi.recompileFlag = false;
+		gi.queuedResetHistory = false;
+		shadows.bendSettings.EnableFoveated = 1;
+		const int invalidations = up.invalidations, dirty = globals::ui.dirty;
+		const int transitions = up.neuralTransitions;
+		Require(!up.SetFoveatedUpscalingEnabled(!enabled), "Rejected NR transition must reject the FOV change");
+		Require(up.neuralTransitions == transitions + 1 && up.settings.foveatedVendorDispatch == enabled,
+			"Rejected FOV transition must restore the master setting");
+		Require(!gi.settings.EnableFoveated && !gi.recompileFlag && !gi.queuedResetHistory && shadows.bendSettings.EnableFoveated == 1,
+			"Rejected FOV transition must preserve child selections and their histories");
+		Require(up.invalidations == invalidations && globals::ui.dirty == dirty,
+			"Rejected FOV transition must not publish resources or dirty settings");
+	}
+	up.allowNeuralTransition = true;
 }
 
 void Click(const char* label, bool blendControls = false)
@@ -363,8 +395,8 @@ void TestSharedFeather()
 						bounds.minY == expected.minY && bounds.maxY == expected.maxY,
 				"Shadow dispatch bounds must expand and shrink with the current feather");
 			const auto& rect = gi.centerRectCache.rects[eye];
-			Require(rect.x == eye * 1000 + expected.minX && rect.y == expected.minY &&
-						rect.width == expected.maxX - expected.minX && rect.height == expected.maxY - expected.minY,
+			Require(static_cast<int>(rect.x) == static_cast<int>(eye * 1000) + expected.minX && static_cast<int>(rect.y) == expected.minY &&
+						static_cast<int>(rect.width) == expected.maxX - expected.minX && static_cast<int>(rect.height) == expected.maxY - expected.minY,
 				"SSGI must refresh cached dispatch bounds when only the feather changes");
 		}
 	}
@@ -377,6 +409,7 @@ int main()
 {
 	try {
 		TestTransitions();
+		TestRejectedTransitions();
 		TestBlendCurve();
 		TestUi();
 		TestSharedFeather();

@@ -121,24 +121,94 @@ namespace
 		}
 	};
 
+	struct ComputeShader
+	{
+		ComPtr<ID3D11ComputeShader> shader;
+		ComPtr<ID3D11ShaderReflection> reflection;
+
+		ComputeShader(ID3D11Device* device, const wchar_t* path, bool vr, const char* resourceName)
+		{
+			ShaderIncludes includes;
+			const D3D_SHADER_MACRO defines[]{ { "VR", "1" }, { nullptr, nullptr } };
+			ComPtr<ID3DBlob> code, errors;
+			const auto result = D3DCompileFromFile(path, vr ? defines : defines + 1, &includes, "main", "cs_5_0",
+				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+				0, code.GetAddressOf(), errors.GetAddressOf());
+			if (errors)
+				std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+			Check(result);
+			Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
+			Util::SetResourceName(shader.Get(), "%s", resourceName);
+			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+		}
+	};
+
+	void CheckCalibratedBlend(Fixture& f, bool vr)
+	{
+		using namespace FoveatedMaskCalibration;
+		ComputeShader program(f.device.Get(), L"features/Upscaling/Shaders/Upscaling/FoveatedCenterBlendCS.hlsl", vr,
+			"FovCalibrationTest::Blend CS");
+		ConstantBuffer cb(f.device.Get(), program.reflection.Get(), "FoveatedCenterBlendCB");
+		cb.SetVariable("InvOutputDim", Pair{ 1.0f / kWidth, 1.0f / kHeight });
+		cb.SetVariable("InvSourceDim", Pair{ 1.0f / kWidth, 1.0f / kHeight });
+		cb.SetVariable("DispatchDim", Pair{ kWidth, kHeight });
+		std::vector<Pixel> scene(kWidth * kHeight, kScene);
+		f.context->UpdateSubresource(f.input.Get(), 0, nullptr, scene.data(), kWidth * sizeof(Pixel), 0);
+		for (const Projection projection : { Projection{ 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+				 Projection{ .93, .04, .12, -.02, 1.03, .015, .08, .01, 1 } }) {
+			for (const float percent : { 70.0f, 100.0f, 130.0f }) {
+				for (const float feather : { 0.0001f, 0.05f, 0.1f }) {
+					const Reference reference{ .version = 1,
+						.outer = { .scale = 0.6f, .horizontalScale = 1.2f, .centers = { .4f, .48f, .6f, .52f } },
+						.leftToRight = projection,
+						.feather = feather };
+					const auto solution = Solve(reference, percent);
+					const auto targets = BuildTargets(reference, percent);
+					Require(solution && targets && !solution->fullImage, "Calibration regression must exercise a bounded fit, not full-image fallback");
+					const auto& g = solution->geometry;
+					cb.SetVariable("CenterScale", g.scale);
+					cb.SetVariable("CenterFeather", feather);
+					cb.SetVariable("CenterHorizontalScale", g.horizontalScale);
+					cb.SetVariable("FullImage", solution->fullImage ? 1u : 0u);
+					for (unsigned eye = 0; eye < 2; ++eye) {
+						cb.SetVariable("CenterOffset", Pair{ g.centers[eye * 2] - .5f, g.centers[eye * 2 + 1] - .5f });
+						const auto& target = (*targets)[eye];
+						std::vector<size_t> required;
+						for (UINT y = 0; y < kHeight; ++y) {
+							for (UINT x = 0; x < kWidth; ++x) {
+								const Point p{ (x + .5) / kWidth, (y + .5) / kHeight };
+								bool inside = true;
+								for (size_t i = 0; i < target.size(); ++i) {
+									const auto a = target[i], b = target[(i + 1) % target.size()];
+									inside &= (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) >= 0;
+								}
+								if (inside)
+									required.push_back(y * kWidth + x);
+							}
+						}
+						Require(required.size() > kWidth * kHeight / 10, "Calibration fixture must sample the filled centre and outer contours");
+						for (float falloff : { .5f, 1.0f, 2.0f }) {
+							cb.SetVariable("BlendFalloff", falloff);
+							for (const Pixel background : { Pixel{ .9f, .1f, .8f, .2f }, Pixel{ .0f, .9f, .1f, .9f } }) {
+								f.context->ClearUnorderedAccessViewFloat(f.uav.Get(), background.data());
+								const auto pixels = f.Draw(program.shader.Get(), cb);
+								for (const auto index : required)
+									for (unsigned channel = 0; channel < 4; ++channel)
+										Require(std::abs(pixels[index][channel] - kScene[channel]) < 1e-5f,
+											"Calibrated coverage must not flicker when untreated background changes under the production blend");
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	void CheckPreview(Fixture& f, bool vr)
 	{
-		ShaderIncludes includes;
-		const D3D_SHADER_MACRO defines[]{ { "VR", "1" }, { nullptr, nullptr } };
-		ComPtr<ID3DBlob> code, errors;
-		auto result = D3DCompileFromFile(L"features/Upscaling/Shaders/Upscaling/FoveatedPeripheryCS.hlsl",
-			vr ? defines : defines + 1, &includes, "main", "cs_5_0",
-			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-			0, code.GetAddressOf(), errors.GetAddressOf());
-		if (errors)
-			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-		Check(result);
-		ComPtr<ID3D11ComputeShader> shader;
-		Check(f.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
-		Util::SetResourceName(shader.Get(), "FovOverlayTest::CS");
-		ComPtr<ID3D11ShaderReflection> reflection;
-		Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
-		ConstantBuffer cb(f.device.Get(), reflection.Get(), "FoveatedPeripheryCB");
+		ComputeShader program(f.device.Get(), L"features/Upscaling/Shaders/Upscaling/FoveatedPeripheryCS.hlsl", vr,
+			"FovOverlayTest::CS");
+		ConstantBuffer cb(f.device.Get(), program.reflection.Get(), "FoveatedPeripheryCB");
 		Require(cb.bytes.size() == 192 && cb.Offset("Preview") == 96 && cb.Offset("PreviewClipToOtherEye") == 112 && cb.Offset("PreviewArea") == 176,
 			"CPU/HLSL preview constant buffer layout mismatch");
 		cb.SetVariable("OutputDim", Pair{ kWidth, kHeight });
@@ -155,7 +225,7 @@ namespace
 		};
 		setProjection(identity);
 		cb.SetVariable("Tuning0", Pixel{ 0.5f, 0.05f, 1, 0.8f });
-		for (const auto& p : f.Draw(shader.Get(), cb))
+		for (const auto& p : f.Draw(program.shader.Get(), cb))
 			for (size_t c = 0; c < p.size(); ++c)
 				Require(std::abs(p[c] - kScene[c]) < 1e-5f, "Ordinary sampling must remain unchanged and avoid unused allocation pixels");
 
@@ -175,7 +245,7 @@ namespace
 					cb.SetVariable("CenterAndMask", Pixel{ ox, oy, 1, taa ? 1.0f : 0.0f });
 					cb.SetVariable("Preview", Pixel{ ox, oy, float(eye), full ? 1.0f : 0.0f });
 					cb.SetVariable("PreviewArea", Pixel{ coverage.savedPercent, 1, 0, 0 });
-					const auto pixels = f.Draw(shader.Get(), cb);
+					const auto pixels = f.Draw(program.shader.Get(), cb);
 					unsigned uncovered = 0;
 					for (UINT y = 0; y < kHeight; ++y) {
 						for (UINT x = 0; x < kWidth; ++x) {
@@ -224,7 +294,7 @@ namespace
 				cb.SetVariable("Tuning0", Pixel{ .3f, .05f, 1, .65f });
 				cb.SetVariable("CenterAndMask", Pixel{ -.2f, 0, 1, taa ? 1.0f : 0.0f });
 				cb.SetVariable("Preview", Pixel{ .2f, 0, float(eye), 0 });
-				const auto pixels = f.Draw(shader.Get(), cb);
+				const auto pixels = f.Draw(program.shader.Get(), cb);
 				Require(IsHatch(pixels[(kHeight / 2) * kWidth + kWidth / 4], kWidth / 4, kHeight / 2),
 					"A covered own-eye region with a peer gap must be hatched in both modes");
 				if (!taa) {
@@ -237,7 +307,7 @@ namespace
 			auto monocular = identity;
 			monocular[3] = 4;
 			setProjection(monocular);
-			const auto pixels = f.Draw(shader.Get(), cb);
+			const auto pixels = f.Draw(program.shader.Get(), cb);
 			const auto& p = pixels[(kHeight / 2) * kWidth + kWidth / 4 - 16];
 			const Pixel tint = eye ? Pixel{ .1f, 1, .1f, 0 } : Pixel{ 1, .1f, 1, 0 };
 			for (unsigned c = 0; c < 3; ++c)
@@ -253,7 +323,7 @@ namespace
 		asymmetric[3] = 0.6f;
 		asymmetric[12] = 0.2f;
 		setProjection(asymmetric);
-		const auto shifted = f.Draw(shader.Get(), cb);
+		const auto shifted = f.Draw(program.shader.Get(), cb);
 		for (UINT x : { 180u, 350u }) {
 			const float clipX = (x + .5f) / kWidth * 2 - 1;
 			const float peerU = (1.2f * clipX + .6f) / (1 + .2f * clipX) * .5f + .5f;
@@ -264,11 +334,11 @@ namespace
 		auto singular = identity;
 		singular[0] = singular[5] = 0;
 		setProjection(singular);
-		const auto collapsed = f.Draw(shader.Get(), cb);
+		const auto collapsed = f.Draw(program.shader.Get(), cb);
 		Require(IsHatch(collapsed[(kHeight / 2) * kWidth + kWidth / 2], kWidth / 2, kHeight / 2),
 			"A finite singular projection must not certify shared coverage");
 		setProjection(std::array<float, 16>{});
-		const auto unknown = f.Draw(shader.Get(), cb);
+		const auto unknown = f.Draw(program.shader.Get(), cb);
 		for (UINT y = 0; y < kHeight; ++y)
 			for (UINT x = 0; x < kWidth; ++x)
 				Require(IsHatch(unknown[y * kWidth + x], x, y), "An uninitialized projection must not certify coverage");
@@ -276,7 +346,7 @@ namespace
 			auto invalid = identity;
 			invalid[15] = peerW;
 			setProjection(invalid);
-			const auto pixels = f.Draw(shader.Get(), cb);
+			const auto pixels = f.Draw(program.shader.Get(), cb);
 			const auto& p = pixels[(kHeight / 2) * kWidth + kWidth / 2 + 60];
 			if (!std::isfinite(peerW) || peerW == 0.0f) {
 				Require(IsHatch(p, kWidth / 2 + 60, kHeight / 2), "Unknown stereo mapping must not falsely certify shared coverage");
@@ -294,7 +364,9 @@ int main()
 		Fixture fixture;
 		CheckPreview(fixture, false);
 		CheckPreview(fixture, true);
-		std::cout << "PASS: production VR/flat overlay, tints, own-eye gaps, readout, feather area, full coverage and source bounds\n";
+		CheckCalibratedBlend(fixture, false);
+		CheckCalibratedBlend(fixture, true);
+		std::cout << "PASS: production VR/flat overlay, tints, own-eye gaps, readout, feather area, full coverage, source bounds and calibrated blend stability\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

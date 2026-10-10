@@ -395,7 +395,8 @@ namespace FoveatedMaskCalibration
 		const float minimumScale = reference.peripheryTaa ? std::min(1.0f, std::max(0.3f, reference.centerScale)) : 0.25f;
 		const auto fit = [&](float scale, float horizontal) -> std::optional<Solution> {
 			const float center = reference.peripheryTaa ? reference.centerScale : scale;
-			const float visible = reference.peripheryTaa ? std::max(scale, center + 2.0f * std::max(reference.feather, FoveatedCommon::kMinimumFeather)) : scale + 2.0f * std::max(reference.feather, FoveatedCommon::kMinimumFeather);
+			// FOV-only targets need full reconstruction; feather support still contains untreated scene pixels.
+			const float visible = reference.peripheryTaa ? std::max(scale, center + 2.0f * std::max(reference.feather, FoveatedCommon::kMinimumFeather)) : scale;
 			Solution result{ .geometry = { scale, horizontal, {} }, .areaPercent = 0.0f };
 			for (unsigned eye = 0; eye < 2; ++eye) {
 				const auto position = FitEye((*targets)[eye], visible * 0.5 - kCoverageMargin, horizontal, center, eye);

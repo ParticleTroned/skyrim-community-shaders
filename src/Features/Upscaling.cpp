@@ -1976,10 +1976,9 @@ namespace
 	constexpr const char* kFoveatedUpscalingMethodAvailabilityText = "VR FOV mask setup is available only with DLSS or FSR.";
 	constexpr const char* kFoveatedUpscalingSetupIntro = R"(Turn on FOV Mask Visualization. Preview bypasses DLSS/FSR, TAA and NR, so the scene may shimmer. Turn it off to check image quality.
 Magenta = left eye; green = right eye; white = overlap; charcoal = TAA.
-Amber stripes show gaps, with the scene visible underneath. Solid outlines and dark borders show mask edges; feathering is not drawn.
+Amber stripes show gaps, with the scene visible underneath. Solid outlines and dark borders show mask edges; feathering is not drawn. For a good setup, the mask border lines should no longer be visible at the outer edge of your headset view.
 
-Check one eye at a time. Fit the top, bottom, outer side and corners with a small margin. Ignore nose-side overlap.
-FOV area saved includes feathering: approximate coverage reduction versus the full CSX eye image, not measured performance.)";
+Check one eye at a time. Fit the top, bottom, outer side and corners with a small margin. Ignore nose-side overlap.)";
 	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Select FOV only. Fit each eye's outer edges using FOV Only Visible Scale, Expand FOV Scale R/L and per-eye offsets.
 2) Press Calibrate Masks to save the outer fit and cover the centre automatically. The sliders show the result.
 3) Automatic Mask Scaling: 100% restores calibration; lower shrinks coverage, higher expands it. The centre refits automatically. Recalibrate to capture manual edits.

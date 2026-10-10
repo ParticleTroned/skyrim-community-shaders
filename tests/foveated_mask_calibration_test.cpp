@@ -181,7 +181,10 @@ namespace
 			return true;
 		const auto& g = solution.geometry;
 		const float center = reference.peripheryTaa ? reference.centerScale : g.scale;
-		const double support = reference.peripheryTaa ? std::max(g.scale, center + 2.0f * std::max(reference.feather, 1e-4f)) : center + 2.0f * std::max(reference.feather, 1e-4f);
+		if (!reference.peripheryTaa)
+			return FoveatedCommon::MaskDistanceUV(static_cast<float>(point.x), static_cast<float>(point.y), center,
+					   g.horizontalScale, g.centers[eye * 2] - 0.5f, g.centers[eye * 2 + 1] - 0.5f) <= 1.0f;
+		const double support = std::max(g.scale, center + 2.0f * std::max(reference.feather, 1e-4f));
 		const double x = (point.x - g.centers[eye * 2]) / (support * g.horizontalScale * 0.5);
 		const double y = (point.y - g.centers[eye * 2 + 1]) / (support * 0.5);
 		return x * x * x * x + y * y * y * y <= 1.00001;
@@ -200,7 +203,7 @@ namespace
 				for (unsigned sample = 0; sample <= 64; ++sample) {
 					const double t = sample / 64.0;
 					Require(Covered(reference, *solution, eye, { start.x + t * (end.x - start.x), start.y + t * (end.y - start.y) }),
-						"All outer contour and central envelope segments must be covered in both eyes");
+						"All captured contours and filled centre must have full reconstruction coverage in both eyes");
 				}
 			}
 			const double centerScale = reference.peripheryTaa ? reference.centerScale : solution->geometry.scale;
@@ -275,10 +278,24 @@ int main()
 	Require(Covered(reference, gap, 0, { .5, .5 }) && Covered(reference, gap, 1, { .5, .5 }),
 		"Disjoint starting masks must gain central coverage");
 
-	reference.outer = { .scale = 0.6f, .horizontalScale = 1.8f, .centers = { .65f, .5f, .35f, .5f } };
+	reference.outer = { .scale = 0.6f, .horizontalScale = 1.8f, .centers = { .6f, .5f, .4f, .5f } };
 	const auto excess = CheckFit(reference, 100);
-	const float oldArea = FoveatedMaskVisualization::MeasureCoverage(.5f, .05f, 1.8f, .15f, 0, false, 1).totalPercent;
-	Require(excess.areaPercent < oldArea, "Unnecessary inward overlap must be removable without retaining whole starting masks");
+	Solution unoptimized{ .geometry = { .scale = .65f, .horizontalScale = reference.outer.horizontalScale } };
+	const auto targets = *BuildTargets(reference, 100);
+	float safeUnoptimizedArea = 0.0f;
+	for (unsigned eye = 0; eye < 2; ++eye) {
+		const float offset = FoveatedCommon::ResolveMaskOffsetX(eye == 0 ? kMaximumOffset : kMinimumOffset,
+			unoptimized.geometry.scale, unoptimized.geometry.horizontalScale, eye != 0, true);
+		unoptimized.geometry.centers[eye * 2] = .5f + offset;
+		for (const Point point : targets[eye])
+			Require(Covered(reference, unoptimized, eye, point), "The unoptimized area baseline must fully reconstruct both complete targets");
+		safeUnoptimizedArea += FoveatedMaskVisualization::MeasureCoverage(unoptimized.geometry.scale,
+								   reference.feather, unoptimized.geometry.horizontalScale, offset, 0, false, 1)
+		                           .totalPercent *
+		                       .5f;
+	}
+	Require(!excess.fullImage && excess.areaPercent < safeUnoptimizedArea,
+		"Fitting must reduce excess inward coverage relative to a fully reconstructed baseline within the live controls");
 
 	for (const Projection projection : { Projection{ 1, 0, .15, 0, 1, 0, 0, 0, 1 },
 			 Projection{ .93, .04, .12, -.02, 1.03, .015, .08, .01, 1 } }) {

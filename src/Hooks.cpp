@@ -143,7 +143,10 @@ struct BSShader_LoadShaders
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
+				const auto categoryFlag = SIE::ShaderCache::GetMaterialCategoryFlag(shader->shaderType.get());
+				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor & ~categoryFlag);
+				if (categoryFlag)
+					shaderCache->GetPixelShader(*shader, pixelShaderDescriptor | categoryFlag);
 			}
 
 			if (shaderCache->IsDiskCache() && shader->shaderType.get() == RE::BSShader::Type::Effect) {
@@ -154,6 +157,9 @@ struct BSShader_LoadShaders
 				shaderCache->GetPixelShader(*shader,
 					sharedRuntimeUnionDescriptor |
 						static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred));
+				shaderCache->GetPixelShader(*shader, sharedRuntimeUnionDescriptor |
+														 static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred) |
+														 SIE::ShaderCache::GetMaterialCategoryFlag(RE::BSShader::Type::Effect));
 			}
 		}
 		BSShaderHooks::hk_LoadShaders(shader, stream);
@@ -929,6 +935,13 @@ namespace Hooks
 						}
 					}
 				}
+			}
+
+			if (!state->settingCustomShader && a_pixelShader && state->currentShader) {
+				const auto type = state->currentShader->shaderType.get();
+				Feature::ForEachLoadedFeature("OnPixelShaderFallback", [type](Feature* feature) {
+					feature->OnPixelShaderFallback(type);
+				});
 			}
 
 			*globals::game::currentPixelShader = a_pixelShader;

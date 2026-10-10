@@ -28,6 +28,7 @@ namespace StreamingTextures
 		if (ReadOrigin(resource, previous)) {
 			merged.serial = previous.serial;
 			merged.protectedConsumer |= previous.protectedConsumer;
+			merged.requiredCategories |= previous.requiredCategories;
 		}
 		return resource->SetPrivateData(originKey, sizeof(merged), &merged);
 	}

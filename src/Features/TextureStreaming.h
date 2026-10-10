@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Feature.h"
+#include "TextureStreaming/Categories.h"
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 
-/** Pressure-driven residency for validated static opaque DDS material textures. */
+/** Pressure-driven residency for validated static DDS material textures. */
 struct TextureStreaming : Feature
 {
 	static TextureStreaming& Instance();
@@ -25,8 +27,9 @@ struct TextureStreaming : Feature
 	void LoadSettings(nlohmann::json&) override;
 	void SaveSettings(nlohmann::json&) override;
 	void RestoreDefaultSettings() override;
-	/** Thread-safe settings update; GPU work remains owned by the completed-frame service. */
-	void Configure(bool enabled, std::uint32_t maximumDrop);
+	/** Thread-safe settings update; omitted categories retain the current selection.
+	 * GPU work remains owned by the completed-frame service. */
+	void Configure(bool enabled, std::uint32_t maximumDrop, std::optional<StreamingTextures::Categories> categories = std::nullopt);
 	/** Explicit diagnostic snapshot; counters and logical capacities do not measure physical VRAM relief. */
 	nlohmann::json GetStatus() const;
 

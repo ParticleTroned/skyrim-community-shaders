@@ -1,4 +1,5 @@
 #pragma once
+#include "Categories.h"
 #include "Policy.h"
 #include <array>
 #include <cstdint>
@@ -10,8 +11,8 @@ namespace RE
 }
 namespace StreamingTextures
 {
-	/** Unknown, animated and special-sampling materials are ineligible. */
-	RE::BSLightingShaderMaterialBase* StaticMaterial(RE::BSGeometry* geometry);
+	/** Classify supported static materials; unknown and animated sampling stays protected. */
+	RE::BSLightingShaderMaterialBase* StaticMaterial(RE::BSGeometry* geometry, std::uint32_t* categories = nullptr);
 	/** Bound the largest world-space length per UV unit over every triangle. */
 	double UnitsPerUV(RE::BSGeometry* geometry, RE::BSLightingShaderMaterialBase* material);
 	struct DemandContext

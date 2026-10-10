@@ -1,3 +1,4 @@
+#include "Features/TextureStreaming/Categories.h"
 #include "Features/TextureStreaming/TextureData.h"
 #include "Utils/GpuMemoryBudget.h"
 #include "d3d11_shader_test.h"
@@ -32,12 +33,15 @@ void CheckMipChain(ID3D11Device* device, ID3D11DeviceContext* context, DXGI_FORM
 	Require(StreamingTextures::MatchesDDS(source, full), "DDS metadata rejected an exact original chain");
 	StreamingTextures::Upload upload;
 	Check(upload.Begin(device, full, view, drop));
-	const StreamingTextures::Origin origin{ 42, true };
+	const StreamingTextures::Origin origin{ 42, true, StreamingTextures::LandscapeStatics };
 	Check(StreamingTextures::WriteOrigin(upload.texture.Get(), origin));
 	StreamingTextures::Origin observed;
 	Require(StreamingTextures::ReadOrigin(upload.texture.Get(), observed) && observed.serial == 42 && observed.protectedConsumer, "Resource-owned provenance was lost");
-	Check(StreamingTextures::WriteOrigin(upload.texture.Get(), { 99, false }));
+	Check(StreamingTextures::WriteOrigin(upload.texture.Get(), { 99, false, StreamingTextures::AlphaTestedStatics }));
 	Require(StreamingTextures::ReadOrigin(upload.texture.Get(), observed) && observed.serial == 42 && observed.protectedConsumer, "A cached DDS load reset resource identity or special-consumer protection");
+	Require(observed.requiredCategories == (StreamingTextures::LandscapeStatics | StreamingTextures::AlphaTestedStatics), "A shared DDS load erased another consumer category");
+	Check(StreamingTextures::WriteOrigin(upload.texture.Get(), { 42, false, 0 }));
+	Require(StreamingTextures::ReadOrigin(upload.texture.Get(), observed) && observed.requiredCategories == (StreamingTextures::LandscapeStatics | StreamingTextures::AlphaTestedStatics), "A reload cleared category requirements");
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 	unsigned steps = 0;
 	HRESULT status = S_FALSE;
@@ -79,6 +83,8 @@ void CheckMipChain(ID3D11Device* device, ID3D11DeviceContext* context, DXGI_FORM
 	Require(!StreamingTextures::Suitable(full, view), "Render-target material entered static streaming");
 }
 
+#include "texture_streaming_publication_checks.h"
+
 int main()
 {
 	try {
@@ -88,6 +94,7 @@ int main()
 		for (auto format : { DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC3_UNORM_SRGB, DXGI_FORMAT_BC5_UNORM, DXGI_FORMAT_BC7_UNORM_SRGB })
 			for (UINT drop : { 0u, 1u, 2u })
 				CheckMipChain(device.Get(), context.Get(), format, drop);
+		CheckStreamingPublication(device.Get(), context.Get());
 		using Memory = Util::GpuMemoryBudget;
 		auto& memory = Memory::Get();
 		memory.Sample(device.Get(), 0, true);
@@ -133,7 +140,7 @@ int main()
 			Require(memory.PendingBytes(Memory::Owner::NeuralRendering) == 7, "Old-generation ticket corrupted a new device reservation");
 		}
 		Require(memory.PendingBytes(Memory::Owner::RenderScale) == 0, "A ticket leaked after cancellation");
-		std::cout << "PASS: WARP exact BC mip shrink/refill, bounded uploads, resource provenance and shared ticket lifetime\n";
+		std::cout << "PASS: WARP exact BC mip shrink/refill, bounded uploads, resource provenance, atomic publication and shared ticket lifetime\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

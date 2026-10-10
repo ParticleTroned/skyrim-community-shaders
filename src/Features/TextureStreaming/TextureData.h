@@ -13,9 +13,10 @@ namespace StreamingTextures
 	{
 		std::uint64_t serial = 0;
 		bool protectedConsumer = false;
+		std::uint32_t requiredCategories = 0;
 	};
 	bool ReadOrigin(ID3D11Resource* resource, Origin& origin);
-	/** Preserve an existing identity and sticky protection when a DDS load reuses its resource. */
+	/** Preserve identity and shared-consumer requirements when a DDS load reuses its resource. */
 	HRESULT WriteOrigin(ID3D11Resource* resource, const Origin& origin);
 	bool Suitable(const D3D11_TEXTURE2D_DESC& texture, const D3D11_SHADER_RESOURCE_VIEW_DESC& view);
 	std::uint64_t LogicalBytes(const D3D11_TEXTURE2D_DESC& full, std::uint32_t drop);

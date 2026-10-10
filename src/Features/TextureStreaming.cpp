@@ -56,17 +56,16 @@ namespace
 		return result;
 	}
 
-	std::optional<std::string> TexturePath(RE::NiSourceTexture* texture)
+	std::optional<std::string> TexturePath(RE::NiSourceTexture* texture, std::uint32_t& categories)
 	{
 		std::string path = texture->name.c_str();
 		std::ranges::transform(path, path.begin(), [](unsigned char c) { return c == '/' ? '\\' : static_cast<char>(std::tolower(c)); });
 		if (!path.starts_with("textures\\"))
 			path = "textures\\" + path;
-		if (path.size() > 260 || !path.ends_with(".dds") || path.find("..") != std::string::npos || path.find(':') != std::string::npos)
+		const auto required = StreamingTextures::PathCategories(path);
+		if (!required)
 			return std::nullopt;
-		for (const auto* excluded : { "actors\\", "landscape\\", "terrain\\", "effects\\", "interface\\", "cubemaps\\" })
-			if (path.find(excluded) != std::string::npos)
-				return std::nullopt;
+		categories = *required;
 		return path;
 	}
 
@@ -272,6 +271,7 @@ struct TextureStreaming::State
 	mutable std::mutex mutex;
 	bool enabled = false;
 	std::uint32_t maximumDrop = 2;
+	StreamingTextures::Categories categories;
 	std::uint64_t epoch = 1, scan = 0, completeScan = 0, nextScanMs = 0, deviceGeneration = 0;
 	std::uint32_t worldStart = 0, lastFrame = UINT32_MAX;
 	bool paused = false, reading = false;
@@ -291,7 +291,7 @@ struct TextureStreaming::State
 	std::string detail = "Disabled";
 	Memory::Snapshot memory;
 
-	void ObserveTexture(RE::NiSourceTexture* source, RE::BSGeometry* geometry, double metric, bool eligible);
+	void ObserveTexture(RE::NiSourceTexture* source, RE::BSGeometry* geometry, double metric, bool eligible, std::uint32_t requiredCategories);
 	void Scan();
 	void Prune();
 	std::uint32_t Demand(Record& record);
@@ -310,7 +310,7 @@ struct TextureStreaming::State
 	}
 };
 
-void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BSGeometry* geometry, double metric, bool eligible)
+void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BSGeometry* geometry, double metric, bool eligible, std::uint32_t requiredCategories)
 {
 	++diagnostics.textureObservations;
 	if (!source || !source->rendererTexture || !source->rendererTexture->texture) {
@@ -323,11 +323,13 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 		diagnostics.Exclude(Exclusion::MissingProvenance);
 		return;
 	}
-	if (!eligible) {
-		origin.protectedConsumer = true;
+	if ((!eligible && !origin.protectedConsumer) || (requiredCategories & ~origin.requiredCategories)) {
+		origin.protectedConsumer |= !eligible;
+		origin.requiredCategories |= requiredCategories;
 		if (FAILED(StreamingTextures::WriteOrigin(engine->texture, origin))) {
-			Fail("Could not protect a special texture consumer");
+			Fail("Could not preserve texture consumer requirements");
 			enabled = false;
+			return;
 		}
 	}
 	auto it = records.find(origin.serial);
@@ -340,9 +342,22 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 			diagnostics.Exclude(Exclusion::InventoryLimit);
 			return;
 		}
-		const auto path = TexturePath(source);
+		std::uint32_t pathCategories = 0;
+		const auto path = TexturePath(source, pathCategories);
 		if (!path) {
 			diagnostics.Exclude(Exclusion::ProtectedPath);
+			return;
+		}
+		if (pathCategories & ~origin.requiredCategories) {
+			origin.requiredCategories |= pathCategories;
+			if (FAILED(StreamingTextures::WriteOrigin(engine->texture, origin))) {
+				Fail("Could not preserve texture path requirements");
+				enabled = false;
+				return;
+			}
+		}
+		if (!categories.Allows(origin.requiredCategories)) {
+			diagnostics.Exclude(Exclusion::CategoryDisabled);
 			return;
 		}
 		ComPtr<ID3D11Texture2D> texture;
@@ -405,12 +420,15 @@ void TextureStreaming::State::Scan()
 		node.protectedHierarchy |= node.object->GetControllers() != nullptr;
 		if (auto* geometry = node.object->AsGeometry()) {
 			++diagnostics.geometryObservations;
-			auto* material = node.staticOwner && !node.protectedHierarchy ? StreamingTextures::StaticMaterial(geometry) : nullptr;
-			const double metric = material ? StreamingTextures::UnitsPerUV(geometry, material) : 0;
-			const bool eligible = material && std::isfinite(metric) && metric > 0;
+			std::uint32_t requiredCategories = 0;
+			auto* material = node.staticOwner && !node.protectedHierarchy ? StreamingTextures::StaticMaterial(geometry, &requiredCategories) : nullptr;
+			const bool categoryEnabled = categories.Allows(requiredCategories);
+			const double metric = material && categoryEnabled ? StreamingTextures::UnitsPerUV(geometry, material) : 0;
+			const bool measurable = material && std::isfinite(metric) && metric > 0;
+			const bool eligible = material && (!categoryEnabled || measurable);
 			diagnostics.staticGeometryObservations += node.staticOwner && !node.protectedHierarchy;
 			diagnostics.supportedMaterialObservations += material != nullptr;
-			diagnostics.measurableGeometryObservations += eligible;
+			diagnostics.measurableGeometryObservations += measurable;
 			if (auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get()) {
 				struct Visitor final : RE::BSShaderProperty::ForEachVisitor
 				{
@@ -419,15 +437,16 @@ void TextureStreaming::State::Scan()
 					RE::BSLightingShaderMaterialBase* material;
 					double metric;
 					bool eligible;
-					Visitor(State& s, RE::BSGeometry* g, RE::BSLightingShaderMaterialBase* m, double u, bool e) :
-						state(s), geometry(g), material(m), metric(u), eligible(e) {}
+					std::uint32_t requiredCategories;
+					Visitor(State& s, RE::BSGeometry* g, RE::BSLightingShaderMaterialBase* m, double u, bool e, std::uint32_t c) :
+						state(s), geometry(g), material(m), metric(u), eligible(e), requiredCategories(c) {}
 					std::uint32_t Accept(RE::NiSourceTexture* texture) override
 					{
 						const bool ordinarySlot = material && (texture == material->diffuseTexture.get() || texture == material->normalTexture.get());
-						state.ObserveTexture(texture, geometry, metric, eligible && ordinarySlot);
+						state.ObserveTexture(texture, geometry, metric, eligible && ordinarySlot, requiredCategories);
 						return 1;
 					}
-				} visitor(*this, geometry, material, metric, eligible);
+				} visitor(*this, geometry, material, metric, eligible, requiredCategories);
 				property->ForEachTexture(visitor);
 			}
 		}
@@ -470,10 +489,15 @@ std::uint32_t TextureStreaming::State::Demand(Record& record)
 		diagnostics.Defer(Block::SourceChanged);
 		return 0;
 	}
+	if (!categories.Allows(origin.requiredCategories)) {
+		diagnostics.Defer(Block::CategoryDisabled);
+		return 0;
+	}
 	double required = 0;
 	for (auto& consumer : record.consumers.committed) {
-		const auto* material = StreamingTextures::StaticMaterial(consumer.geometry.get());
-		if (!material || material->texCoordScale[0] != consumer.uvScale ||
+		std::uint32_t requiredCategories = 0;
+		const auto* material = StreamingTextures::StaticMaterial(consumer.geometry.get(), &requiredCategories);
+		if (!material || !categories.Allows(requiredCategories) || material->texCoordScale[0] != consumer.uvScale ||
 			(material->diffuseTexture.get() != record.source.get() && material->normalTexture.get() != record.source.get())) {
 			diagnostics.Defer(Block::ConsumerContract);
 			return 0;
@@ -583,24 +607,53 @@ void TextureStreaming::State::Publish(Record& record, Transaction& work)
 {
 	auto* context = globals::d3d::context;
 	auto* old = record.engine->resourceView;
-	const bool fullDetail = work.payload.request.drop == 0;
-	auto* replacement = fullDetail ? work.upload.view.Get() : nullptr;
-	bool specialBinding = false;
-	specialBinding |= VisitBindings(context, &ID3D11DeviceContext::VSGetShaderResources, &ID3D11DeviceContext::VSSetShaderResources, old, replacement);
-	specialBinding |= VisitBindings(context, &ID3D11DeviceContext::HSGetShaderResources, &ID3D11DeviceContext::HSSetShaderResources, old, replacement);
-	specialBinding |= VisitBindings(context, &ID3D11DeviceContext::DSGetShaderResources, &ID3D11DeviceContext::DSSetShaderResources, old, replacement);
-	specialBinding |= VisitBindings(context, &ID3D11DeviceContext::GSGetShaderResources, &ID3D11DeviceContext::GSSetShaderResources, old, replacement);
-	specialBinding |= VisitBindings(context, &ID3D11DeviceContext::CSGetShaderResources, &ID3D11DeviceContext::CSSetShaderResources, old, replacement);
-	if (specialBinding && !fullDetail) {
-		record.protectedConsumer = true;
+	StreamingTextures::Origin origin;
+	if (!StreamingTextures::ReadOrigin(record.current, origin) || origin.serial != work.payload.request.serial) {
+		record.retryAfter = GetTickCount64() + 10000;
+		Fail("Texture provenance changed before replacement publication");
 		CancelTransaction();
 		return;
 	}
-	// Complete fallible bookkeeping before transferring the engine's resource references.
+	origin.protectedConsumer |= record.protectedConsumer;
+	if (FAILED(StreamingTextures::WriteOrigin(work.upload.texture.Get(), origin))) {
+		record.retryAfter = GetTickCount64() + 10000;
+		Fail("Could not preserve replacement consumer requirements");
+		CancelTransaction();
+		return;
+	}
+	const auto visitSpecialBindings = [&](ID3D11ShaderResourceView* replacement) {
+		bool found = false;
+		found |= VisitBindings(context, &ID3D11DeviceContext::VSGetShaderResources, &ID3D11DeviceContext::VSSetShaderResources, old, replacement);
+		found |= VisitBindings(context, &ID3D11DeviceContext::HSGetShaderResources, &ID3D11DeviceContext::HSSetShaderResources, old, replacement);
+		found |= VisitBindings(context, &ID3D11DeviceContext::DSGetShaderResources, &ID3D11DeviceContext::DSSetShaderResources, old, replacement);
+		found |= VisitBindings(context, &ID3D11DeviceContext::GSGetShaderResources, &ID3D11DeviceContext::GSSetShaderResources, old, replacement);
+		found |= VisitBindings(context, &ID3D11DeviceContext::CSGetShaderResources, &ID3D11DeviceContext::CSSetShaderResources, old, replacement);
+		return found;
+	};
+	const auto hasCachedComputeView = [&](const auto& shadow) {
+		return std::ranges::find(shadow.CSTexture, old) != std::end(shadow.CSTexture);
+	};
+	const bool fullDetail = work.payload.request.drop == 0;
+	if (!fullDetail) {
+		const bool cachedCompute = globals::game::isVR ? hasCachedComputeView(globals::game::shadowState->GetVRRuntimeData()) :
+		                                                 hasCachedComputeView(globals::game::shadowState->GetRuntimeData());
+		if (visitSpecialBindings(nullptr) || cachedCompute) {
+			record.protectedConsumer = origin.protectedConsumer = true;
+			if (FAILED(StreamingTextures::WriteOrigin(record.current, origin))) {
+				enabled = false;
+				Fail("Could not protect a non-pixel texture consumer");
+			}
+			CancelTransaction();
+			return;
+		}
+	}
+	// Finish fallible preparation before changing live bindings or engine ownership.
 	if (work.payload.request.drop)
 		reducedRecords.insert(work.payload.request.serial);
 	else
 		reducedRecords.erase(work.payload.request.serial);
+	if (fullDetail)
+		visitSpecialBindings(work.upload.view.Get());
 	VisitBindings(context, &ID3D11DeviceContext::PSGetShaderResources, &ID3D11DeviceContext::PSSetShaderResources, old, work.upload.view.Get());
 	if (globals::game::isVR)
 		ReplaceCachedView(globals::game::shadowState->GetVRRuntimeData(), old, work.upload.view.Get());
@@ -881,7 +934,7 @@ TextureStreaming& TextureStreaming::Instance()
 std::pair<std::string, std::vector<std::string>> TextureStreaming::GetFeatureSummary()
 {
 	return { "Reduces resident texture mips when GPU memory is under pressure.",
-		{ "Static opaque DDS materials only", "Stereo and mip-bias aware detail", "Bounded restoration with shared NR and render-scale headroom" } };
+		{ "Conservative static DDS coverage with optional categories", "Stereo and mip-bias aware detail", "Bounded restoration with shared NR and render-scale headroom" } };
 }
 void TextureStreaming::PostPostLoad()
 {
@@ -933,11 +986,21 @@ void TextureStreaming::CaptureWorldDemand(float mipBias)
 			std::abs(camera.projMatrixUnjittered._11), std::abs(camera.projMatrixUnjittered._22), 0 };
 	}
 }
-void TextureStreaming::Configure(bool enabled, std::uint32_t maximumDrop)
+void TextureStreaming::Configure(bool enabled, std::uint32_t maximumDrop, std::optional<StreamingTextures::Categories> categories)
 {
 	if (maximumDrop < 1 || maximumDrop > Policy::MaximumDrop)
 		throw std::invalid_argument("MaximumMipDrop must be between 1 and 3");
 	std::scoped_lock lock(state->mutex);
+	if (categories && state->categories != *categories) {
+		state->categories = *categories;
+		++state->epoch;
+		state->frontier.clear();
+		state->visited.clear();
+		state->completeScan = 0;
+		state->nextScanMs = 0;
+		for (auto& [id, record] : state->records)
+			record.consumers.Clear();
+	}
 	state->enabled = enabled;
 	if (!enabled)
 		state->UpdatePressureDiagnostics(GetTickCount64());
@@ -948,7 +1011,7 @@ void TextureStreaming::LoadSettings(nlohmann::json& object)
 {
 	try {
 		const auto maximum = StreamingTextures::ParseMaximumMipDrop(object.value("MaximumMipDrop", nlohmann::json(2)));
-		Configure(object.value("Enabled", false), maximum);
+		Configure(object.value("Enabled", false), maximum, StreamingTextures::ParseCategories(object.value("Categories", nlohmann::json::object())));
 	} catch (const std::exception& error) {
 		logger::warn("[TextureStreaming] Invalid saved settings retained previous configuration: {}", error.what());
 	}
@@ -956,9 +1019,10 @@ void TextureStreaming::LoadSettings(nlohmann::json& object)
 void TextureStreaming::SaveSettings(nlohmann::json& object)
 {
 	std::scoped_lock lock(state->mutex);
-	object = { { "Enabled", state->enabled }, { "MaximumMipDrop", state->maximumDrop } };
+	object = { { "Enabled", state->enabled }, { "MaximumMipDrop", state->maximumDrop },
+		{ "Categories", StreamingTextures::SerializeCategories(state->categories) } };
 }
-void TextureStreaming::RestoreDefaultSettings() { Configure(false, 2); }
+void TextureStreaming::RestoreDefaultSettings() { Configure(false, 2, StreamingTextures::Categories{}); }
 nlohmann::json TextureStreaming::GetStatus() const
 {
 	std::scoped_lock lock(state->mutex);
@@ -972,7 +1036,8 @@ nlohmann::json TextureStreaming::GetStatus() const
 		desiredRestores += record.desired < record.drop;
 	}
 	const auto& memory = state->memory;
-	return { { "enabled", state->enabled }, { "maximumMipDrop", state->maximumDrop }, { "originHookReady", originHookReady.load() },
+	return { { "enabled", state->enabled }, { "maximumMipDrop", state->maximumDrop },
+		{ "categories", StreamingTextures::SerializeCategories(state->categories) }, { "originHookReady", originHookReady.load() },
 		{ "conserving", state->pressure.conserving }, { "records", state->records.size() }, { "protectedRecords", protectedCount },
 		{ "reducedTextures", reduced }, { "fullLogicalBytes", full }, { "residentLogicalBytes", resident },
 		{ "logicalBytesRemoved", full - resident }, { "physicalBytesReclaimed", nullptr },
@@ -1010,12 +1075,14 @@ void TextureStreaming::DrawSettings()
 {
 	bool enabled;
 	int maximum;
+	StreamingTextures::Categories categories;
 	std::string detail;
 	std::uint64_t reduced, logicalBytesRemoved = 0;
 	{
 		std::scoped_lock lock(state->mutex);
 		enabled = state->enabled;
 		maximum = state->maximumDrop;
+		categories = state->categories;
 		detail = state->detail;
 		reduced = state->reducedRecords.size();
 		for (const auto id : state->reducedRecords)
@@ -1029,6 +1096,7 @@ void TextureStreaming::DrawSettings()
 		Util::Text::WrappedWarning("Texture streaming is unavailable because texture source tracking could not start. Restart the game to try again.");
 	MenuUI::SettingsPage page("TextureStreaming", {
 													  { "quality", "Texture detail", "Choose how much texture detail can be reduced under memory pressure.", "Detail limit and restoration", true, true, "Balance detail and memory", nullptr, nullptr, available },
+													  { "categories", "Optional categories", "Enable additional static texture categories individually.", "Controlled coverage tests", true, false, nullptr, nullptr, nullptr, available },
 													  { "status", "Status", "Inspect streaming activity and logical texture capacity.", "Activity and memory accounting", true, true, nullptr },
 												  });
 	if (page.Is("quality")) {
@@ -1038,7 +1106,20 @@ void TextureStreaming::DrawSettings()
 				Configure(enabled, maximum);
 		}
 		MenuUI::DetailNote("Detail follows both eyes, output resolution and shader mip bias. Neural Rendering scale does not lower texture detail.");
-		MenuUI::DetailText("Only suitable static opaque DDS materials are streamed. Disabling restores textures gradually as memory headroom permits.");
+		MenuUI::DetailText("Streams suitable static DDS materials within the enabled categories. Disabling restores textures gradually as memory permits.");
+	}
+	if (page.Is("categories")) {
+		const auto disabled = Util::DisableGuard(!available);
+		bool changed = Util::Widgets::Checkbox("Landscape textures on static meshes", &categories.landscapeStatics);
+		MenuUI::DetailText("Includes ordinary static meshes using landscape-folder textures. Terrain and distant LOD remain protected.");
+		changed |= Util::Widgets::Checkbox("Alpha-tested static surfaces", &categories.alphaTestedStatics);
+		MenuUI::DetailText("Includes non-animated cutout surfaces. Reduced mips can change fine edges; blended transparency remains protected.");
+		changed |= Util::Widgets::Checkbox("Emissive static surfaces", &categories.emissiveStatics);
+		MenuUI::DetailText("Includes diffuse and normal maps on static emissive materials. Glow maps remain protected.");
+		if (changed)
+			Configure(enabled, maximum, categories);
+		MenuUI::DetailNote("All optional categories default off. Turning one off queues restoration as memory permits.");
+		MenuUI::DetailText("Characters, clothing, skin, terrain, LOD, water, parallax and runtime-generated textures remain protected.");
 	}
 	if (page.Is("status")) {
 		MenuUI::DetailNote(detail.c_str());

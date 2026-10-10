@@ -29,6 +29,35 @@ int main()
 			}
 			Require(rejected, "Malformed mip limit escaped boundary validation");
 		}
+		for (unsigned selected = 0; selected < 8; ++selected) {
+			StreamingTextures::Categories categories{ (selected & 1u) != 0, (selected & 2u) != 0, (selected & 4u) != 0 };
+			for (unsigned required = 0; required < 8; ++required)
+				Require(categories.Allows(required) == ((required & ~selected) == 0), "A shared consumer escaped category consent");
+			Require(!categories.Allows(8u), "Unknown category was admitted");
+			Require(StreamingTextures::ParseCategories(StreamingTextures::SerializeCategories(categories)) == categories, "Category settings lost a selection");
+		}
+		Require(StreamingTextures::ParseCategories(nlohmann::json::object()) == StreamingTextures::Categories{}, "Missing categories changed conservative defaults");
+		Require(StreamingTextures::ParseCategories({ { "emissiveStatics", true } }) == StreamingTextures::Categories{ false, false, true }, "Independent category selection enabled another category");
+		for (const auto& value : { nlohmann::json(nullptr), nlohmann::json(true), nlohmann::json::array(),
+				 nlohmann::json{ { "terrain", true } }, nlohmann::json{ { "alphaTestedStatics", 1 } },
+				 nlohmann::json{ { "landscapeStatics", "true" } }, nlohmann::json{ { "emissiveStatics", nullptr } } }) {
+			bool rejected = false;
+			try {
+				(void)StreamingTextures::ParseCategories(value);
+			} catch (const std::invalid_argument&) {
+				rejected = true;
+			}
+			Require(rejected, "Malformed or unknown category settings were accepted");
+		}
+		Require(StreamingTextures::PathCategories("textures\\architecture\\wall.dds") == 0u, "Ordinary texture became optional");
+		Require(StreamingTextures::PathCategories("textures\\landscape\\rocks\\rock.dds") == StreamingTextures::LandscapeStatics, "Static landscape texture lost its category");
+		for (const auto* path : { "textures\\terrain\\tamriel\\tamriel.4.0.0.dds", "textures\\landscape\\water\\water.dds",
+				 "textures\\water\\water.dds", "textures\\lod\\water.dds", "textures\\dyndolod\\atlas.dds",
+				 "textures\\architecture\\wall_lod.dds", "textures\\trees\\tamriel.treelod.dds", "textures\\trees\\tamriel.objects_n.dds",
+				 "textures\\actors\\character\\face.dds", "textures\\effects\\fire.dds", "textures\\cubemaps\\map.dds",
+				 "textures\\interface\\icon.dds", "textures\\sky\\cloud.dds", "textures\\..\\wall.dds",
+				 "textures\\wall.png", "textures\\d:wall.dds", "architecture\\wall.dds" })
+			Require(!StreamingTextures::PathCategories(path), "Protected water, LOD or special texture path was admitted");
 		std::array<P::Eye, 2> eyes{ P::Eye{ 2000, 2000, 2000, 2000, 1, 1, 1000 }, P::Eye{ 2000, 2000, 2000, 2000, 1, 1, 500 } };
 		const auto native = P::RequiredEdge(eyes, 2, 256, 0);
 		Require(native == 1024, "Demand must use the closer eye");

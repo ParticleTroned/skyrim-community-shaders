@@ -17,6 +17,7 @@ namespace StreamingTextures
 			InventoryLimit,
 			ProtectedPath,
 			TextureContract,
+			CategoryDisabled,
 			Count
 		};
 		enum class Block : std::uint8_t
@@ -40,11 +41,12 @@ namespace StreamingTextures
 			UploadPending,
 			RetirementPending,
 			RetirementFailed,
+			CategoryDisabled,
 			Count
 		};
 		static constexpr std::array exclusionNames{
 			std::string_view("missingTexture"), std::string_view("missingProvenance"), std::string_view("protectedConsumer"),
-			std::string_view("inventoryLimit"), std::string_view("protectedPath"), std::string_view("textureContract")
+			std::string_view("inventoryLimit"), std::string_view("protectedPath"), std::string_view("textureContract"), std::string_view("categoryDisabled")
 		};
 		static constexpr std::array blockNames{
 			std::string_view("worldLoading"), std::string_view("transition"), std::string_view("originUnavailable"),
@@ -52,7 +54,7 @@ namespace StreamingTextures
 			std::string_view("consumerContract"), std::string_view("fullDetailDemand"), std::string_view("demandSettling"),
 			std::string_view("retryBackoff"), std::string_view("priorityWork"), std::string_view("replacementHeadroom"),
 			std::string_view("recoveryHeadroom"), std::string_view("reducedLimit"), std::string_view("sourceChanged"),
-			std::string_view("readerPending"), std::string_view("uploadPending"), std::string_view("retirementPending"), std::string_view("retirementFailed")
+			std::string_view("readerPending"), std::string_view("uploadPending"), std::string_view("retirementPending"), std::string_view("retirementFailed"), std::string_view("categoryDisabled")
 		};
 		static_assert(exclusionNames.size() == static_cast<std::size_t>(Exclusion::Count));
 		static_assert(blockNames.size() == static_cast<std::size_t>(Block::Count));

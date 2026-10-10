@@ -12,27 +12,49 @@
 
 namespace StreamingTextures
 {
-	RE::BSLightingShaderMaterialBase* StaticMaterial(RE::BSGeometry* geometry)
+	RE::BSLightingShaderMaterialBase* StaticMaterial(RE::BSGeometry* geometry, std::uint32_t* categories)
 	{
+		std::uint32_t required = 0;
+		if (categories)
+			*categories = 0;
 		if (!geometry || geometry->GetType().underlying() != static_cast<std::uint8_t>(RE::BSGeometry::Type::kTriShape))
 			return nullptr;
 		const auto& data = geometry->GetGeometryRuntimeData();
 		const auto* property = data.shaderProperty.get();
-		if (!property || !property->material || data.skinInstance || data.alphaProperty || geometry->GetControllers())
+		if (!property || !property->material || data.skinInstance || geometry->GetControllers())
 			return nullptr;
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-		constexpr auto allowed = static_cast<std::uint64_t>(Flag::kSpecular) | static_cast<std::uint64_t>(Flag::kReceiveShadows) |
-		                         static_cast<std::uint64_t>(Flag::kCastShadows) | static_cast<std::uint64_t>(Flag::kZBufferTest) |
-		                         static_cast<std::uint64_t>(Flag::kZBufferWrite) | static_cast<std::uint64_t>(Flag::kUniformScale) |
-		                         static_cast<std::uint64_t>(Flag::kVertexColors) | static_cast<std::uint64_t>(Flag::kNoFade);
+		auto allowed = static_cast<std::uint64_t>(Flag::kSpecular) | static_cast<std::uint64_t>(Flag::kReceiveShadows) |
+		               static_cast<std::uint64_t>(Flag::kCastShadows) | static_cast<std::uint64_t>(Flag::kZBufferTest) |
+		               static_cast<std::uint64_t>(Flag::kZBufferWrite) | static_cast<std::uint64_t>(Flag::kUniformScale) |
+		               static_cast<std::uint64_t>(Flag::kVertexColors) | static_cast<std::uint64_t>(Flag::kNoFade);
+		if (const auto* alpha = data.alphaProperty.get()) {
+			if (alpha->GetControllers() || alpha->GetAlphaBlending() || !alpha->GetAlphaTesting())
+				return nullptr;
+			required |= AlphaTestedStatics;
+			allowed |= static_cast<std::uint64_t>(Flag::kTwoSided);
+		}
+		constexpr auto emissive = static_cast<std::uint64_t>(Flag::kOwnEmit) |
+		                          static_cast<std::uint64_t>(Flag::kExternalEmittance) | static_cast<std::uint64_t>(Flag::kGlowMap);
+		const auto feature = property->material->GetFeature();
+		if ((property->flags.underlying() & emissive) || feature == RE::BSShaderMaterial::Feature::kGlowMap)
+			required |= EmissiveStatics;
+		allowed |= emissive;
 		if ((property->flags.underlying() & ~allowed) || property->GetControllers() ||
 			property->material->GetType() != RE::BSShaderMaterial::Type::kLighting ||
-			property->material->GetFeature() != RE::BSShaderMaterial::Feature::kDefault)
+			(feature != RE::BSShaderMaterial::Feature::kDefault && feature != RE::BSShaderMaterial::Feature::kGlowMap))
 			return nullptr;
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(property->material);
 		if (material->diffuseRenderTargetSourceIndex != -1 || material->materialAlpha != 1.0f ||
 			material->refractionPower != 0 || material->rimSoftLightingTexture || material->specularBackLightingTexture)
 			return nullptr;
+		if (feature == RE::BSShaderMaterial::Feature::kGlowMap) {
+			const auto* glow = static_cast<RE::BSLightingShaderMaterialGlowmap*>(material)->glowTexture.get();
+			if (glow && (glow == material->diffuseTexture.get() || glow == material->normalTexture.get()))
+				return nullptr;
+		}
+		if (categories)
+			*categories = required;
 		return material;
 	}
 
